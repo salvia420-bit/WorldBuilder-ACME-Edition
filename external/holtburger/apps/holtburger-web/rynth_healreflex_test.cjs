@@ -28,25 +28,42 @@ const FOOD = { guid: 0x1003, name: "Bread", value: 1, itemType: FOOD_BIT, equipM
 const WORN = { guid: 0x1004, name: "Healing Kit Amulet", value: 999, itemType: 0, equipMask: 0x8 };
 
 // hpPct: 0..100 ; skill: Healing.current ; busy/ready/mode toggles.
+//
+// The mock's `.s.playerStats()` mirrors the LIVE wasm SessionHandle shape
+// rynth/vitals.js reads directly (raw stride-4 vitals / stride-6 skills
+// arrays) — heal_reflex now reads through the SAME path (02 D2 accessor
+// fix), not the higher-level TryGetPlayerStats() normalization.
 function makeHost(over = {}) {
   const calls = [];
   const hp = over.hp ?? 40;
   const skill = over.skill ?? 100;
   const inv = over.inventory ?? [KIT_CRUDE, KIT_GOLD, FOOD, WORN];
-  return {
+  const host = {
     calls,
     IsPlayerReady: () => over.ready ?? true,
     GetBusyState: () => over.busy ?? 0,
     GetCastBusyState: () => over.castBusy ?? 0,
     GetPlayerId: () => SELF,
-    TryGetPlayerStats: () => ({
-      vitals: { 1: { current: hp, base: 100, max: 100 } },
-      skills: { 21: { current: skill, base: skill, ranks: 0, training: 2, nextCost: 0 } },
-    }),
+    s: {
+      playerStats: () => ({
+        vitals: [1, hp, 100, 100], // [type, current, base, max] — VitalType.Health=1
+        skills: [21, skill, skill, 0, 2, 0], // [id, current, base, ranks, training, nextCost]
+      }),
+    },
     TryGetPlayerInventory: () => inv,
     UseItemOnTarget: (i, t) => { calls.push(["useOn", i >>> 0, t >>> 0]); return over.useOnFails ? false : true; },
     UseObject: (g) => { calls.push(["use", g >>> 0]); return over.useFails ? false : true; },
   };
+  if (over.castToken) {
+    // Minimal shared-cast-token double for the claim tests below.
+    let held = over.castToken.heldBy || null;
+    host.tryClaimCast = (owner) => {
+      if (held && held !== owner) return false;
+      held = owner;
+      return true;
+    };
+  }
+  return host;
 }
 
 (async () => {
@@ -146,11 +163,18 @@ function makeHost(over = {}) {
   {
     let threw = false;
     try {
-      const host = { TryGetPlayerStats: () => { throw new Error("boom"); } };
+      const host = { s: { playerStats: () => { throw new Error("boom"); } } };
       const r = new HealReflex(host, { enabled: true }).step(false);
       check("throwing host: degrades to no-op, no throw", r.acted === false && (r.reason === "hp-unknown" || r.reason === "error"), JSON.stringify(r));
     } catch { threw = true; }
     check("throwing host: step() never throws", threw === false);
+  }
+  // (9b) a host that lacks `.s` entirely (predates the accessor) degrades to
+  // hp-unknown, not a throw.
+  {
+    const host = { IsPlayerReady: () => true, GetBusyState: () => 0 };
+    const r = new HealReflex(host, { enabled: true }).step(false);
+    check("host without .s: hp-unknown, no throw", r.acted === false && r.reason === "hp-unknown", JSON.stringify(r));
   }
 
   // (10) send-failure paths don't throw and report the reason.
@@ -165,6 +189,71 @@ function makeHost(over = {}) {
     const host = makeHost({ hp: 40, skill: 100 });
     const r = new HealReflex(host, { enabled: true, skillOk: () => false }).step(false);
     check("custom skillOk=false forces food even with high skill", r.acted && r.action === "food", JSON.stringify(r));
+  }
+
+  // (12) give-up valve (02 C4 fix): HP that never actually improves across
+  // repeated uses (mocked host holds hp constant — the "weak kit vs. huge
+  // drain" case) must eventually park the reflex rather than burn the whole
+  // stack forever. Mirrors vitals.js's NO_PROGRESS_LIMIT=6 exactly: the
+  // FIRST use only establishes the baseline (no prior reading to compare
+  // against), so the 7th successive no-progress use is the one that trips
+  // the valve; the 8th call sees the park.
+  {
+    const host = makeHost({ hp: 40, skill: 100 });
+    let clock = 1_000;
+    const rf = new HealReflex(host, { enabled: true, cooldownMs: 100, now: () => clock });
+    let actedCount = 0;
+    for (let i = 0; i < 7; i++) {
+      const r = rf.step(false);
+      if (r.acted) actedCount++;
+      clock += 200; // clear the cooldown before the next tick
+    }
+    check("give-up valve: 7 no-progress uses all still act (valve trips AFTER firing)", actedCount === 7, `actedCount=${actedCount}`);
+    const r8 = rf.step(false);
+    check("give-up valve: 8th attempt is parked (no HP progress across 6+ uses)",
+      r8.acted === false && r8.reason === "parked", JSON.stringify(r8));
+    check("status.parked reflects the give-up", rf.status.parked === true, JSON.stringify(rf.status));
+  }
+  // (12b) give-up valve resets on real progress: an HP that climbs each use
+  // must never park.
+  {
+    let hp = 10;
+    const host = makeHost({ hp: 10, skill: 100 });
+    // Override the mock's static hp with one that climbs after each read.
+    host.s.playerStats = () => {
+      const snap = { vitals: [1, hp, 100, 100], skills: [21, 100, 100, 0, 2, 0] };
+      hp = Math.min(hp + 5, 74); // stays under healAtPct=75 so it keeps acting
+      return snap;
+    };
+    let clock = 1_000;
+    const rf = new HealReflex(host, { enabled: true, cooldownMs: 100, now: () => clock });
+    let actedCount = 0;
+    for (let i = 0; i < 10; i++) {
+      const r = rf.step(false);
+      if (r.acted) actedCount++;
+      clock += 200;
+    }
+    check("give-up valve: real per-use progress never parks", actedCount === 10 && !rf.status.parked, `actedCount=${actedCount} parked=${rf.status.parked}`);
+  }
+
+  // (13) shared cast token (02 C3 fix): a different owner's still-open claim
+  // defers this reflex's action this tick.
+  {
+    const host = makeHost({ hp: 40, skill: 100, castToken: { heldBy: "vitals" } });
+    const r = new HealReflex(host, { enabled: true }).step(false);
+    check("cast token held by another owner: defers (cast-claimed), no host action",
+      r.acted === false && r.reason === "cast-claimed" && host.calls.length === 0, JSON.stringify(r));
+  }
+  // (13b) an unclaimed token (or a host predating the API) does not block.
+  {
+    const host = makeHost({ hp: 40, skill: 100, castToken: { heldBy: null } });
+    const r = new HealReflex(host, { enabled: true }).step(false);
+    check("cast token free: claims it and acts normally", r.acted === true, JSON.stringify(r));
+  }
+  {
+    const host = makeHost({ hp: 40, skill: 100 }); // no tryClaimCast at all
+    const r = new HealReflex(host, { enabled: true }).step(false);
+    check("host without tryClaimCast: degrades open, acts normally", r.acted === true, JSON.stringify(r));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

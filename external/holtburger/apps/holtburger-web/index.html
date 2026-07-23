@@ -7246,6 +7246,29 @@
                         // like botKernel above (harmless without a director).
                         // Exact-match opt-in; default OFF.
                         if (botParams.get("explorePressure") === "1") cfg.explorePressure = true;
+                        // ?botCtlOwner= (P0 fix, rynth-review 13 #1 / P1
+                        // streamline #3, 2026-07-23): sender allowlist for
+                        // the in-game control channel (RynthControlChannel,
+                        // rynth/control_channel.js — refuses ALL commands
+                        // when its owner can't be resolved). Comma-split
+                        // into an array so a rig can name more than one
+                        // trusted account (e.g. the operator's own
+                        // character alongside the bot's login). Read
+                        // outside the cfg.ai guard, same as botKernel/
+                        // explorePressure above — the control channel is
+                        // independent of the AI director. Absent -> the
+                        // channel's own default applies (the logged-in
+                        // character; refuse-all if that's ever
+                        // unresolvable) — carrying this through a
+                        // reconnect just makes that default explicit and
+                        // future-proofs a multi-owner rig.
+                        const botCtlOwner = botParams.get("botCtlOwner");
+                        if (botCtlOwner) {
+                          cfg.control = {
+                            ...(cfg.control || {}),
+                            owner: botCtlOwner.split(",").map((s) => s.trim()).filter(Boolean),
+                          };
+                        }
                         if (cfg.ai !== false) {
                           // ?botPersona=explorer etc. — base-prompt persona
                           // (rynth/ai/director.js); URL-carried so reconnect
@@ -7254,20 +7277,53 @@
                           if (bp) cfg.ai = { ...(cfg.ai || {}), persona: bp };
                           const bm = botParams.get("botModel");
                           const bi = parseFloat(botParams.get("botInterval"));
+                          // Model-family provider-routing table (P1 #6 /
+                          // rynth-review 09 C1, 2026-07-23): the original pin
+                          // was a single `bm.startsWith("z-ai/")` literal, so
+                          // it silently did nothing the moment the live rig
+                          // rotated onto a different model family (STREAM-
+                          // RIG-OPS.md model history: z-ai/glm-5.2 ->
+                          // microsoft/phi-4 -> minimax/minimax-m3, the CURRENT
+                          // live model) — unpinned OpenRouter default routing
+                          // + the full 120s timeout + no cost floor, exactly
+                          // the fallthrough this pin exists to prevent. Add a
+                          // prefix entry here whenever the rig adopts a new
+                          // family; z-ai/* keeps its EXACT soak-8-proven
+                          // values unchanged.
+                          const PROVIDER_PIN_TABLE = [
+                            // z-ai/* (soak-8, unchanged): 3 fp8 sale
+                            // endpoints, fastest first (streamlake
+                            // 1.08s/52tps), never falling through to
+                            // 4x-price fp4 quants.
+                            { prefix: "z-ai/", provider: { order: ["streamlake", "novita", "baidu"], allow_fallbacks: false } },
+                            // minimax/minimax-m3 (2026-07-23): no soak-8-
+                            // style provider ranking exists yet for this
+                            // family — same INTENT as the z-ai pin (fast/
+                            // cheap hosts first, `allow_fallbacks:false` so
+                            // a bad first choice fails loud instead of
+                            // silently routing to an expensive default), not
+                            // the same literal providers. novita already
+                            // hosts sale-priced endpoints for other Chinese-
+                            // model families per the z-ai pin above; minimax
+                            // (the model's first-party host) is the natural
+                            // 2nd. Re-tune once minimax gets its own soak.
+                            { prefix: "minimax/", provider: { order: ["novita", "minimax"], allow_fallbacks: false } },
+                          ];
+                          const providerPinFor = (model) => {
+                            const hit = PROVIDER_PIN_TABLE.find((e) => model.startsWith(e.prefix));
+                            return hit ? { provider: hit.provider } : {};
+                          };
                           // 2026-07-20 latency fix: 4096-token budgets let GLM
                           // ramble ~2,400 completion tokens ≈ 50-80s per
                           // check-in at ~30-50tps — the director looked dead
                           // between calls. 1280 matches the documented
                           // discipline (soak-8 measured GLM at 400-800 tokens)
                           // and the llm_client retries once at double budget on
-                          // a "length" cutoff. For z-ai/* also pin the
-                          // soak-8-proven fast fp8 providers (streamlake
-                          // 1.08s/52tps first), never falling through to
-                          // 4x-price fp4 quants.
+                          // a "length" cutoff.
                           if (bm) cfg.ai = {
                             ...(cfg.ai || {}), model: bm, maxTokens: 1280,
                             reasoning: { effort: "low" }, timeoutMs: 120000,
-                            ...(bm.startsWith("z-ai/") ? { provider: { order: ["streamlake", "novita", "baidu"], allow_fallbacks: false } } : {}),
+                            ...providerPinFor(bm),
                           };
                           if (Number.isFinite(bi) && bi > 0) {
                             cfg.ai = {
@@ -7468,6 +7524,52 @@
                 try {
                   window.liveScene3d?.entityManager?.clearWorldEntities?.();
                 } catch (_) { /* best-effort */ }
+                // Bounded auto-reload (P1 #5a, rynth-review 15 C1 / 13 D2,
+                // 2026-07-23): the runbook already treats a kind=4 drop as
+                // "reload it" (STREAM-RIG-OPS.md "Reload/boot loop" — every
+                // reload corpse-collides with ACE's ~60s reap window once,
+                // "expect __bootState==='error' once, reload again, then
+                // in-world — two reloads is normal, not a failure"); this
+                // promotes that lore into code. Gated to the unattended
+                // stream/fleet contexts ONLY (?bot=1 or ?agent=1 in the URL)
+                // — a human dev tab carrying neither flag is NEVER yanked
+                // out from under them; they just see the red banner above
+                // and reload by hand. ~10s grace before reloading (matches
+                // the reap window so we don't hammer a still-reaping
+                // account). Retry budget lives in sessionStorage — it
+                // survives the reload itself (same tab, same session) so a
+                // wedged account or a bad URL can't reload-loop forever:
+                // max 5 reloads per rolling 10-minute window, then stop and
+                // leave the banner up for a human (never an infinite loop).
+                try {
+                  const rp = new URLSearchParams(location.search);
+                  if (rp.get("bot") === "1" || rp.get("agent") === "1") {
+                    const AUTO_RELOAD_KEY = "hbAutoReloadBudget";
+                    const AUTO_RELOAD_MAX = 5;
+                    const AUTO_RELOAD_WINDOW_MS = 10 * 60 * 1000; // 10 min
+                    const AUTO_RELOAD_GRACE_MS = 10 * 1000; // ACE reap window
+                    const now = Date.now();
+                    let budget = null;
+                    try { budget = JSON.parse(sessionStorage.getItem(AUTO_RELOAD_KEY) || "null"); } catch (_) { budget = null; }
+                    if (!budget || typeof budget.windowStart !== "number" || now - budget.windowStart > AUTO_RELOAD_WINDOW_MS) {
+                      budget = { windowStart: now, count: 0 };
+                    }
+                    if (budget.count < AUTO_RELOAD_MAX) {
+                      budget.count += 1;
+                      try { sessionStorage.setItem(AUTO_RELOAD_KEY, JSON.stringify(budget)); } catch (_) { /* quota/unavailable — reload still fires */ }
+                      console.warn(
+                        `[auto-reload] kind=4 disconnect in bot/agent context — reloading in ` +
+                        `${AUTO_RELOAD_GRACE_MS / 1000}s (attempt ${budget.count}/${AUTO_RELOAD_MAX} this 10-min window)`
+                      );
+                      setTimeout(() => location.reload(), AUTO_RELOAD_GRACE_MS);
+                    } else {
+                      console.warn(
+                        `[auto-reload] kind=4 disconnect — retry budget exhausted ` +
+                        `(${AUTO_RELOAD_MAX} reloads in 10 min); leaving the DISCONNECTED banner up for a human`
+                      );
+                    }
+                  }
+                } catch (_) { /* auto-reload must never throw out of the event loop */ }
                 return; // Stop polling.
               } else if (evt.kind === 20) {
                 // CharacterError — ACE wire-level signal. See

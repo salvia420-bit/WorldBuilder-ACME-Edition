@@ -275,38 +275,97 @@ impl WorldState {
                             .get(guid)
                             .map(|entity| entity.position.landblock_id)
                             .filter(|lb| *lb != Guid::NULL)
-                    })
-                    // WP-2 (last-known-good cell): the FINAL fallback — when
-                    // BOTH the working authoritative pose AND the entity
-                    // position are NULL (a null `posA` the arrival `posB` never
-                    // reconciled), heal the LOCAL player to its last-known
-                    // non-null cell so the source cell is reported, not 0.
-                    // Scoped to the local player — `last_valid_landblock` is the
-                    // local player's cell and must never leak onto a remote guid.
-                    .or_else(|| {
-                        (guid == self.player.guid)
-                            .then_some(self.player.last_valid_landblock)
-                            .flatten()
                     });
                 if let Some(landblock_id) = heal_landblock {
                     pose.landblock_id = landblock_id;
+                } else if guid == self.player.guid
+                    && let Some(last_valid_pose) = self.player.last_valid_pose
+                {
+                    // WP-2 (last-known-good cell), C2-fixed (rynth-review 07,
+                    // 2026-07-23): the FINAL fallback — when BOTH the working
+                    // authoritative pose AND the entity position are NULL (a
+                    // null `posA` the arrival `posB` never reconciled), heal
+                    // the LOCAL player to its last-known-good pose so the
+                    // source cell is reported, not 0. Swaps in the WHOLE
+                    // stored pose (cell + matching coords + rotation) rather
+                    // than splicing just the cell onto the CURRENT working
+                    // `pose.coords` — those coords can already have advanced
+                    // into a different cell's local frame while the landblock
+                    // is momentarily NULL, which would otherwise emit a mixed
+                    // cell+coords pose (see `PlayerState::last_valid_pose`
+                    // doc). Scoped to the local player — `last_valid_pose` is
+                    // the local player's own history and must never leak onto
+                    // a remote guid.
+                    pose = last_valid_pose;
                 }
             }
             return Some(pose);
         }
 
         // Body-absent arm: fall back to the authoritative entity position.
-        // WP-2 (last-known-good cell): if the body was retired and only a
-        // NULL-landblock entity pose remains, heal the LOCAL player to its
-        // last-known cell so the source cell is still reported (not 0).
+        // WP-2 (last-known-good cell), C2-fixed: if the body was retired and
+        // only a NULL-landblock entity pose remains, heal the LOCAL player to
+        // its last-known-good WHOLE pose (not just the cell spliced onto the
+        // stale entity coords) so the source cell is still reported (not 0)
+        // and the reported coords stay consistent with it.
         let mut pose = self.entities.get(guid).map(|entity| entity.position)?;
         if pose.landblock_id == Guid::NULL
             && guid == self.player.guid
-            && let Some(landblock_id) = self.player.last_valid_landblock
+            && let Some(last_valid_pose) = self.player.last_valid_pose
         {
-            pose.landblock_id = landblock_id;
+            pose = last_valid_pose;
         }
         Some(pose)
+    }
+
+    /// C1 fix (rynth-review 07/17-SYNTHESIS streamline #5, 2026-07-23) —
+    /// honest "is `guid`'s pose cell resolved RIGHT NOW?" query, bypassing
+    /// both retention layers stacked on top of the raw pose:
+    /// [`Self::runtime_pose_for_guid`]'s WP-2 `last_valid_pose` heal (this
+    /// fn), and the wasm-side WP-3 whole-pose shadow
+    /// (`lib.rs::next_local_pose_shadow`, never surfaced through
+    /// `WorldState` at all). Both are designed to NEVER regress the
+    /// reported `landblock_id`/`objCellId` to 0 once a good pose has been
+    /// seen — which silently voided the `objCellId==0` "position
+    /// unresolved, hold" sentinel the nav layer (`ai/actions.js`,
+    /// `ai/tools/dungeon_nav.js`, `ai/explore_memory.js`,
+    /// `indoor_router.js`) still depends on. Nav consumers should read
+    /// THIS instead of inferring resolution from `landblock_id == 0`.
+    ///
+    /// Mirrors the FIRST TWO heal sources in `runtime_pose_for_guid`
+    /// (`body.authoritative_pose`, then the entity position) as "still
+    /// genuinely resolved" — both read a CURRENTLY-accurate alternate
+    /// field, not history (see the `NavAtlas objCellId=0` doc above).
+    /// Only the WP-2 `last_valid_pose` fallback is excluded: THAT one
+    /// invents a cell from history when there is truly no live data
+    /// anywhere, which is exactly the case nav consumers need to see
+    /// honestly rather than have masked.
+    pub fn runtime_pose_cell_resolved_for_guid(&self, guid: Guid) -> bool {
+        let Some(body_id) = self.runtime_body_id_for_guid(guid) else {
+            return false;
+        };
+        let Some(body) = self.scene.body(body_id) else {
+            return self
+                .entities
+                .get(guid)
+                .is_some_and(|entity| entity.position.landblock_id != Guid::NULL);
+        };
+        if body.pose.landblock_id != Guid::NULL {
+            return true;
+        }
+        body.authoritative_pose
+            .is_some_and(|auth| auth.landblock_id != Guid::NULL)
+            || self
+                .entities
+                .get(guid)
+                .is_some_and(|entity| entity.position.landblock_id != Guid::NULL)
+    }
+
+    /// [`Self::runtime_pose_cell_resolved_for_guid`] scoped to the local
+    /// player — the wasm `getLocalPlayerPoseCellResolved` export's
+    /// backing query.
+    pub fn local_player_pose_cell_resolved(&self) -> bool {
+        self.runtime_pose_cell_resolved_for_guid(self.player.guid)
     }
 
     pub fn runtime_kinematics_for_guid(
@@ -973,6 +1032,11 @@ impl WorldState {
             // `objCellId` 0. Purely additive — a valid apply only records the
             // cell; nothing gates on it here.
             self.player.last_valid_landblock = Some(pos.landblock_id);
+            // C2 fix (rynth-review 07, 2026-07-23): stamp the WHOLE pose
+            // atomically alongside the cell — see `PlayerState::last_valid_pose`
+            // doc — so the FINAL heal fallback in `runtime_pose_for_guid` never
+            // has to splice a healed cell onto stale/mismatched working coords.
+            self.player.last_valid_pose = Some(pos);
             if let Some(body_id) = self.runtime_body_id_for_guid(guid) {
                 let working_cell_null = self
                     .scene

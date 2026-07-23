@@ -18,6 +18,29 @@
 //   - All capture pre-reqs (ACE, wsbridge, http server, dist baked).
 //   - WorldBuilder.Terminal built (Release).
 //
+// ── W4b (2026-07-23): settle-land regression scenario — SKIP, scaffold only ──
+// fixtures/physics/settle-land-hover-scaffold.json targets the settle-land
+// airborne-latch fix (commit ea2cc7c3, USE_SETTLE_LAND / LAND_SETTLE_EPS in
+// crates/holtburger-core/src/client/movement/system.rs:281-287). It is a
+// SCAFFOLD, not a verified repro: the live bug's precondition (is_airborne
+// latched true with vertical_velocity~=0 while hovering a few cm above
+// outdoor terrain, from a router seam-jump/teleport) cannot be scripted with
+// today's capture_physics_replay.cjs phase vocabulary (forward/strafe/turn/
+// jump key-holds only; no phase kind or wasm hook injects/observes
+// is_airborne or vertical_velocity directly; 'spawnCommand' in the scenario
+// JSON is descriptive only and is never read by the capture script). Do NOT
+// hand-author a trace-subject.json to fake a pass here — fixtures must be
+// real captured data, per project convention. To exercise the scaffold once
+// a real capture exists (or to run its exploratory seam-crossing hunt and
+// manually eyeball the resulting trace-subject.json for airborne dwell):
+//   PHYSICS_REPLAY_SCENARIO=fixtures/physics/settle-land-hover-scaffold.json \
+//     node validate_physics_replay.cjs
+// See that fixture's "missingCaptureCapability" field for exactly what a
+// deterministic repro would need (a capture-side hook this work item's file
+// scope does not cover). Rust unit-test coverage for the same fix lives in
+// crates/holtburger-core/src/client/movement/system/tests.rs
+// (settle_land_hover_lands_within_one_tick and neighbors).
+//
 // Run: `node validate_physics_replay.cjs`
 //   Env overrides:
 //     RUN_ID            — passed through to capture (default: auto_<base36>).

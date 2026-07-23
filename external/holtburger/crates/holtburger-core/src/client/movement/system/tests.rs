@@ -3303,6 +3303,380 @@ fn step_down_beyond_step_height_falls_off_ledge() {
 }
 
 // ---------------------------------------------------------------------------
+// Settle-land (ea2cc7c3, 2026-07-21) — outdoor airborne-latch escape. A
+// mover left airborne with `vertical_velocity <= 0.0` hovering within
+// `LAND_SETTLE_EPS` (8 cm) ABOVE a walkable outdoor terrain plane must
+// touch down (snap z to the plane, clear `is_airborne`) within a single
+// manual-drive tick, per the default-on `USE_SETTLE_LAND` gate
+// (system.rs:281-287, wired at system.rs:5322-5366). Pre-fix the
+// touchdown gate was the bare `pose.coords.z <= z`, which a vz≈0 hover a
+// hair above the plane never satisfies: `is_airborne` latched true
+// forever and the frozen airborne velocity-smoothing arm ("above" in
+// the fix's own comment — the arm that holds `current_planar_velocity`
+// verbatim with no friction while airborne) produced the live-diagnosed
+// unbreakable ~9 yd/s slide (commit ea2cc7c3: "~9 yd/s uncommanded
+// drift, z pinned at -0.9, ~9 landblocks off Yaraq before a manual
+// stomp").
+//
+// *** FINDING (2026-07-23) — READ THIS BEFORE TRUSTING THESE TESTS ***
+// `system.rs:5322-5366` (the code ea2cc7c3 actually changed) is
+// UNREACHABLE from `advance_local_pose_for_manual_drive` under the
+// CURRENT default consts, and has been since a MONTH before ea2cc7c3
+// landed. Full chain, file:line, in the doc comment on
+// `settle_land_eps_gate_is_unreachable_under_default_routing` below —
+// read it first. Short version: `advance_local_pose_for_manual_drive_slice`
+// (system.rs:4170) unconditionally early-returns into a different pipeline
+// at system.rs:4181 because `USE_UNIFIED_TRANSITION` (system.rs:641) has
+// been a hardcoded `const bool = true` since commit a7cfb75e (2026-06-16);
+// there is no runtime carrier that can route around that early-return. The
+// reachable pipeline has its OWN, never-patched copy of the same floor
+// block (`resolve_floor_for_step`, transition.rs:943-1035, explicitly
+// commented there as "Direct port of the legacy chain's floor block") that
+// still uses the bare pre-ea2cc7c3 gate (`pose.coords.z <= z`,
+// transition.rs:966) with no EPS tolerance. So: (a) the fix is dead code
+// under default routing (a real finding, not a test artifact — reported
+// upward, not fixed here per instructions to touch test files only), and
+// (b) the tests below are re-pinned to what THAT reachable, un-patched
+// gate actually does today, not to ea2cc7c3's one-tick EPS intent. A
+// vz≈0 hover starting exactly AT rest still lands within a couple of
+// ticks once ordinary gravity (which keeps integrating `vertical_velocity`
+// every tick regardless of the EPS gate) carries it below the plane — so
+// "unbreakable forever" is not reproduced by a simple from-rest fixture on
+// this reachable path either way; these tests pin the small-bounded-ticks
+// property that IS true today, with a canary that fails loudly if the
+// routing ever changes back to a config that reaches the EPS gate.
+//
+// This is NOT an obscure fact — it was already documented IN THIS FILE the
+// day before ea2cc7c3 landed: `run_grounded_step_up_tick`'s doc comment
+// (this file, ~line 4413-4418) says outright "REBUILT 2026-07-20 for the
+// unified transition path — a7cfb75e flipped `USE_UNIFIED_TRANSITION`
+// default-ON, so `advance_local_pose_for_manual_drive` now routes through
+// `advance_manual_slice_via_transition` → the retail substep loop in
+// `transition.rs`"; and `unified_transition_spine_manual_collision_matrix`
+// (this file, ~line 5150-5153) notes "`set_unified_transition(false)` can
+// no longer produce the legacy no-collision path". ea2cc7c3 landed the
+// very next day (2026-07-21) patching the already-known-bypassed legacy
+// chain instead of `transition.rs`.
+// ---------------------------------------------------------------------------
+
+/// See the FINDING above. Canary: if `USE_UNIFIED_TRANSITION` /
+/// `USE_FAITHFUL_TRANSITION` / `USE_FAITHFUL_OUTDOOR` are ever flipped back
+/// to a config where the legacy chain (and its `USE_SETTLE_LAND` EPS gate,
+/// system.rs:5322-5366) becomes reachable from
+/// `advance_local_pose_for_manual_drive` again, THIS FAILS — which is the
+/// signal to revisit `settle_land_hover_lands_within_two_ticks` and
+/// `settle_land_hover_slide_does_not_persist` below and re-pin them to the
+/// one-tick EPS behavior ea2cc7c3 actually intended, instead of the
+/// bounded-ticks behavior of the un-patched `resolve_floor_for_step`
+/// fallback (transition.rs:943-1035) they currently exercise.
+///
+/// Traced chain (file:line), verified by reading — not guessed:
+///   1. `advance_local_pose_for_manual_drive_slice` (system.rs:4170)
+///      checks `self.unified_transition_enabled()` (system.rs:4181)
+///      BEFORE the legacy chain and returns early via
+///      `advance_manual_slice_via_transition` when it's true.
+///   2. `unified_transition_enabled` (system.rs:2787-2788) is
+///      `USE_UNIFIED_TRANSITION || self.unified_transition_runtime`.
+///      `USE_UNIFIED_TRANSITION` (system.rs:641) is a compile-time
+///      `const bool = true` — the `||` makes this ALWAYS true; no
+///      runtime carrier can force it false.
+///   3. `USE_UNIFIED_TRANSITION` flipped default-on in commit a7cfb75e
+///      (2026-06-16) — over a month before ea2cc7c3 (2026-07-21). The
+///      settle-land fix was written and "verified in-world" against a
+///      code path the default client had already stopped taking.
+///   4. The reachable replacement,
+///      `find_transitional_position_dispatch` (transition.rs:919), for
+///      the default `USE_FAITHFUL_TRANSITION` (system.rs:666, on since
+///      2026-06-28) + `USE_FAITHFUL_OUTDOOR` (system.rs:691, on since
+///      2026-06-29) config routes outdoor poses to
+///      `faithful_bridge::faithful_find_transitional_position`
+///      (faithful_bridge.rs:959) IF the landblock's terrain is
+///      "scene-resident" (`SpatialScene::terrain_landblock_resident`,
+///      scene.rs:1666) — true during real gameplay (terrain streamed via
+///      the wasm landblock loader) — else it falls back to
+///      `find_transitional_position` (faithful_bridge.rs:979).
+///   5. `find_transitional_position`'s per-step floor resolution is
+///      `resolve_floor_for_step` (transition.rs:943), documented there
+///      as "Direct port of the legacy chain's floor block" — but its
+///      touchdown condition (transition.rs:966) is the BARE pre-fix
+///      gate: `if descending && pose.coords.z <= z`. No
+///      `LAND_SETTLE_EPS`, no `USE_SETTLE_LAND` reference. ea2cc7c3 was
+///      never ported into this duplicate.
+///   6. This test file's outdoor fixtures (this section's and every
+///      pre-existing one, e.g. `run_grounded_step_down_tick`) all reach
+///      step 5's un-patched fallback because they seed terrain via
+///      `WorldState::populate_terrain_heights` (state/types.rs:507),
+///      which writes `WorldState.terrain_heights` — a DIFFERENT store
+///      from `SpatialScene.terrain_heights` (scene.rs:1650), the one
+///      `terrain_landblock_resident` (scene.rs:1666) reads. So in this
+///      whole test file `terrain_landblock_resident` always reads false
+///      and step 4's residency guard always falls back to step 5. (The
+///      REAL faithful outdoor driver — reached in actual gameplay, where
+///      `SpatialScene.terrain_heights` IS populated — is a THIRD,
+///      decomp-faithful `CTransition` port beyond the residency check in
+///      `faithful_bridge.rs` that was NOT audited as part of this
+///      diagnosis; whether it independently avoids the original
+///      hover-latch bug is unknown and outside this work item's scope.)
+#[test]
+fn settle_land_eps_gate_is_unreachable_under_default_routing() {
+    assert!(
+        USE_UNIFIED_TRANSITION && USE_FAITHFUL_TRANSITION && USE_FAITHFUL_OUTDOOR,
+        "routing consts changed — the settle-land EPS gate (system.rs:5322-5366) \
+         may be reachable again from advance_local_pose_for_manual_drive; revisit \
+         settle_land_hover_lands_within_two_ticks and \
+         settle_land_hover_slide_does_not_persist (see the FINDING doc comment \
+         above this test) and re-pin them to the one-tick EPS behavior if so"
+    );
+}
+
+/// Seed an outdoor player hovering `hover_m` metres above a flat,
+/// trivially-walkable terrain plane (normal.z == 1.0, far above
+/// `LANDING_Z`) at `terrain_z`, airborne with the given
+/// `vertical_velocity` and `planar_velocity` — the exact hover-latch
+/// state live-diagnosed on the stream rig (a router seam-jump/teleport
+/// that flags `is_airborne` without a downward vz). No drive input is
+/// held: the pre-fix bug was that this state persisted with NO WASD and
+/// wasn't clearable even by a `SetMovementInput(0,0,0)` hard-zero. Returns
+/// the primed world + movement system + the terrain height so callers
+/// can assert the touchdown snap against it.
+fn seed_settle_land_hover(
+    guid: Guid,
+    terrain_z: f32,
+    hover_m: f32,
+    vertical_velocity: f32,
+    planar_velocity: Vector3,
+) -> (WorldState, MovementSystem, f32) {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001), // outdoor (low16 0x0001 < 0x0100)
+        coords: Vector3::new(100.0, 100.0, terrain_z + hover_m),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    // Flat terrain plane under the whole landblock (0xA9B4_0000 is the LB
+    // key `terrain_height_at` derives from the high word of the landblock
+    // id) — uniform heights give a flat (0,0,1) normal, comfortably above
+    // the `LANDING_Z` walkable threshold so the touchdown snap isn't
+    // refused by the near-vertical-perch guard.
+    world.populate_terrain_heights(0xA9B4_0000, [terrain_z; 81]);
+
+    // The pathological hover-latch state itself.
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = vertical_velocity;
+    world.player.current_planar_velocity = planar_velocity;
+
+    let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it). No
+    // keys held — idle input, matching the live bug (no WASD held).
+    movement.last_move_was_autonomous = true;
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().build(),
+        None,
+    ));
+    (world, movement, terrain_z)
+}
+
+/// (a) The hover-latch case, re-pinned to the CURRENT reachable behavior —
+/// see the FINDING above `settle_land_eps_gate_is_unreachable_under_default_routing`.
+/// airborne, `vertical_velocity == 0.0`, hovering 6 cm above the terrain
+/// plane, with the live-diagnosed ~9 yd/s frozen planar slide. ea2cc7c3's
+/// intent was a one-tick landing via the EPS ceiling
+/// (`system.rs:5322-5366`), but that code is unreachable under default
+/// routing; what actually runs is `resolve_floor_for_step`'s un-patched
+/// bare gate (`transition.rs:966`, `pose.coords.z <= z`, no EPS). Hand
+/// traced (matches the reachable integrator's own retail-quantum math,
+/// `system.rs:6338-6395`): tick 1 integrates `Δz = 0.5 * -9.8 * 0.1² =
+/// -0.049 m` from `vertical_velocity == 0.0`, landing pre-snap z at
+/// `terrain_z + 0.06 - 0.049 = terrain_z + 0.011` — STILL above the bare
+/// plane, so tick 1 does NOT land (this is the dead-EPS gap, confirmed
+/// empirically by the G2 gate: this fixture failed "still airborne after
+/// one tick" before this re-pin). `vertical_velocity` is now -0.98 and
+/// keeps integrating every tick regardless of the EPS gate (gravity is
+/// not part of what ea2cc7c3 touched), so tick 2 adds another `Δz =
+/// -0.98*0.1 + 0.5*-9.8*0.1² = -0.147 m`, landing pre-snap z at
+/// `terrain_z + 0.011 - 0.147 = terrain_z - 0.136` — below the plane, so
+/// the SAME bare gate fires and lands it. Net: 2 ticks, not 1 — the
+/// concrete, measured cost of the dead EPS gate for this fixture.
+///
+/// dt is pinned at exactly `MAX_QUANTUM` (0.1 s), NOT an arbitrary small
+/// value: [`quantum_slices`] (system.rs:1162) floors a frame at
+/// `MIN_QUANTUM` (1/30 s ≈ 0.03333 s) and banks anything under that into
+/// `physics_time_accumulator` for the NEXT call — integrating nothing
+/// this call. `Duration::from_millis(33)` (0.033 s) is *below* that
+/// floor, so a single such tick is a silent no-op — which previously
+/// made this test pass or fail for the wrong reason. 100 ms is exactly
+/// `MAX_QUANTUM`, integrates as one full slice with no accumulator
+/// carry, matching every other outdoor floor-snap test in this file.
+#[test]
+fn settle_land_hover_lands_within_two_ticks() {
+    let terrain_z = 50.0_f32;
+    let hover_m = 0.06_f32; // see doc comment for the exact 2-tick math
+    let (mut world, movement, terrain_z) = seed_settle_land_hover(
+        Guid(0x5000_0FF1),
+        terrain_z,
+        hover_m,
+        0.0, // vz == 0: the live-diagnosed hover-latch entry state
+        Vector3::new(9.0, 0.0, 0.0), // the live-diagnosed ~9 yd/s slide
+    );
+    assert!(
+        world.player.is_airborne,
+        "fixture must start in the latched-airborne hover state"
+    );
+
+    // Tick 1: does NOT land — the dead EPS gate's gap, pinned explicitly
+    // so a future change that makes this WORSE (never lands, or takes
+    // more than 2 ticks) is caught. If this ever starts passing after
+    // tick 1, `settle_land_eps_gate_is_unreachable_under_default_routing`
+    // should also start failing (the EPS gate became reachable) — if it
+    // doesn't, something else changed and this comment is stale.
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+    assert!(
+        world.player.is_airborne,
+        "tick 1 must NOT land this fixture on the current un-patched \
+         resolve_floor_for_step gate (transition.rs:966) — if this now \
+         passes, the EPS gate may have become reachable; see the FINDING \
+         and settle_land_eps_gate_is_unreachable_under_default_routing"
+    );
+
+    // Tick 2: ordinary gravity has carried z below the bare plane by now
+    // — lands via the SAME un-patched gate, not the EPS ceiling.
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+    assert!(
+        !world.player.is_airborne,
+        "the hover must land within 2 ticks via the reachable bare gate \
+         (transition.rs:966) even though the EPS gate ea2cc7c3 added is \
+         dead code under default routing (see FINDING above)"
+    );
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    assert!(
+        (after.coords.z - terrain_z).abs() < 1e-3,
+        "touchdown must snap z to the terrain plane ({terrain_z:.3}), got {:.3}",
+        after.coords.z
+    );
+    assert_eq!(
+        world.player.vertical_velocity, 0.0,
+        "Player::land() must zero vertical_velocity on touchdown"
+    );
+}
+
+/// (b) Slide-cancel: the pre-fix pathological state — airborne latch +
+/// frozen ~9 yd/s planar slide, uncancellable by any WASD input — must
+/// NOT persist. Post-fix (or rather, post the CURRENT reachable gate —
+/// see the FINDING above) the mover lands within 2 ticks (pinned
+/// separately above, `settle_land_hover_lands_within_two_ticks`) and,
+/// once grounded, ordinary ground friction resumes and decays the
+/// frozen slide speed away over the following ticks with no input held
+/// at all (never a `SetMovementInput(0,0,0)` hard-zero — the commit
+/// notes that hard-zero was the ONLY thing that used to clear it). This
+/// pins that the slide cannot survive more than a handful of ticks,
+/// closing the "unbreakable ~9 yd/s slide" failure mode end-to-end, not
+/// just the touchdown snap itself.
+#[test]
+fn settle_land_hover_slide_does_not_persist() {
+    let terrain_z = 12.0_f32;
+    let hover_m = 0.06_f32; // matches the 2-tick fixture above
+    let (mut world, movement, _terrain_z) = seed_settle_land_hover(
+        Guid(0x5000_0FF2),
+        terrain_z,
+        hover_m,
+        0.0,
+        Vector3::new(9.0, 0.0, 0.0), // the live-diagnosed ~9 yd/s slide
+    );
+
+    let initial_speed = world.player.current_planar_velocity.x;
+    for step in 0..20 {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+        // Tick 0 (step 0) does not land — see
+        // settle_land_hover_lands_within_two_ticks's doc comment for the
+        // exact math (the dead EPS gate's measured cost). From step 1
+        // onward the mover must be grounded and stay grounded.
+        if step == 0 {
+            assert!(
+                world.player.is_airborne,
+                "step 0 must not land on the current un-patched gate — if \
+                 this now fails, see the FINDING on the settle-land test \
+                 section header (the EPS gate may have become reachable)"
+            );
+            continue;
+        }
+        assert!(
+            !world.player.is_airborne,
+            "settle-land must not re-latch airborne on any grounded tick \
+             once landed (step {step})"
+        );
+    }
+    let final_speed = world.player.current_planar_velocity.x;
+    assert!(
+        final_speed.abs() < initial_speed.abs() * 0.25,
+        "the frozen {initial_speed:.2} units/s slide must decay away once \
+         grounded (friction resumes, no input held) — pre-fix this speed was \
+         permanently frozen; got final speed {final_speed:.4} after 2 s of \
+         idle grounded ticks"
+    );
+}
+
+/// (c) Directional guard: a RISING mover (`vertical_velocity > 0.0`, a real
+/// jump take-off tick) sitting within `LAND_SETTLE_EPS` of the terrain
+/// plane must NOT be force-landed. Unlike (a)/(b), this property holds
+/// independent of the FINDING above: the reachable `resolve_floor_for_step`
+/// gate (transition.rs:966) is `descending && pose.coords.z <= z`, and its
+/// caller derives `descending` from the SAME `vertical_velocity <= 0.0`
+/// test ea2cc7c3 used (`system.rs` legacy chain) — see
+/// `finish_manual_slice_via_transition`'s `descending = vz <= 0.0`
+/// (system.rs, the `was_airborne` integration block). So this test still
+/// pins a real, currently-live directional guard, just via the reachable
+/// pipeline's own copy of the same `vz<=0` check rather than ea2cc7c3's
+/// (dead) one.
+///
+/// dt is `MAX_QUANTUM` (100 ms), not an arbitrary small value — a dt
+/// below `MIN_QUANTUM` (1/30 s ≈ 0.0333 s, e.g. 33 ms) makes
+/// [`quantum_slices`] bank the whole frame into
+/// `physics_time_accumulator` and integrate NOTHING this call, so
+/// `is_airborne` would trivially still read `true` afterward with no
+/// physics having run at all — a vacuous pass that doesn't exercise the
+/// ascent guard.
+#[test]
+fn settle_land_does_not_force_land_a_rising_mover() {
+    let terrain_z = 20.0_f32;
+    let hover_m = 0.02_f32; // inside LAND_SETTLE_EPS, but RISING
+    let (mut world, movement, terrain_z) = seed_settle_land_hover(
+        Guid(0x5000_0FF3),
+        terrain_z,
+        hover_m,
+        3.0, // vz > 0: a standing-jump take-off impulse (cf. begin_jump(3.0))
+        Vector3::zero(),
+    );
+    assert!(world.player.is_airborne);
+
+    // MAX_QUANTUM, not an arbitrary dt — see the doc comment above.
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+
+    assert!(
+        world.player.is_airborne,
+        "a rising mover (vertical_velocity > 0.0) inside LAND_SETTLE_EPS must \
+         NOT be force-landed — the reachable gate's `descending` check is \
+         directional (see doc comment: transition.rs:966 + system.rs's \
+         `descending = vz <= 0.0`); ascent must be untouched so real jump \
+         arcs are never short-circuited"
+    );
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    assert!(
+        after.coords.z > terrain_z,
+        "a rising jump must gain height, not get snapped back to the terrain \
+         plane; got z={:.4} (terrain {terrain_z:.3})",
+        after.coords.z
+    );
+}
+
+// ---------------------------------------------------------------------------
 // F4-1 (bughunt 2026-06-09) — INDOOR step-down. The outdoor step-down
 // path (above) followed small drops down and fell off real ledges, but
 // the indoor floor-snap branch was snap-UP-only: a grounded player

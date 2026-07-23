@@ -6,7 +6,7 @@
 // walking through un-loaded geometry or driving into a landblock seam.
 //
 //   1. SUB-FLOOR-Z / un-solved pose (C6): an EnvCell pose whose z sits
-//      strictly BELOW the cell floor plane (default 0) − EPSILON is treated as
+//      strictly BELOW the cell's own floor plane − EPSILON is treated as
 //      NOT yet solved. z EQUAL to the plane is a SOLVED pose: retail's
 //      CTransition settle is geometrically exact (CPolygon::check_walkable →
 //      CPhysicsObj::SetPositionInternal commit no additive epsilon — decomp-
@@ -20,6 +20,17 @@
 //      shows as realized-distance≈0 under drive, which the stall watchdogs
 //      own — z-at-plane is not evidence of either. OUTDOOR poses are EXEMPT
 //      as before.
+//
+//      The plane is NOT a fixed world-z=0 (2026-07-23 fix): FLOOR_PLANE_Z=0
+//      is only the last-resort default for a cell nav_guard knows nothing
+//      about. The real per-cell floor (indoor_router.js's scanned
+//      node.floorZMin, ~:816) is pulled through setFloorPlaneProvider() — an
+//      injected getter, NOT an import of indoor_router.js (forbidden below,
+//      cycle) — so the sole caller (bot.js's `this.ir.guardLeg`, wired as a
+//      bare function reference with no opts) gets the CORRECT default for
+//      every EnvCell, including deep-dungeon floors well below world-z 0,
+//      without bot.js passing anything. opts.floorPlaneZ still overrides
+//      per-call when a caller does know better.
 //
 //   2. INDOOR->INDOOR CROSS-LANDBLOCK leg (C7): a single MoveToPosition cannot
 //      safely step across a dungeon landblock seam — the wasm nav/physics is
@@ -42,11 +53,42 @@
 import { isEnvCellId, landblockOf } from "./nav_frame.js";
 
 // EnvCell floor-plane reference + slack. A caller that knows the true floor
-// of this cell passes opts.floorPlaneZ. EPSILON is numerical tolerance BELOW
-// the plane before a pose counts as sub-floor (z=plane and z=plane−0.0001
-// proceed; z=plane−0.001 parks).
+// of this cell passes opts.floorPlaneZ; absent that, isSubFloorZ asks the
+// injected floor-plane provider (see setFloorPlaneProvider) for THIS cell's
+// own floor before ever falling back to FLOOR_PLANE_Z. EPSILON is numerical
+// tolerance BELOW the plane before a pose counts as sub-floor (z=plane and
+// z=plane−0.0001 proceed; z=plane−0.001 parks).
 export const FLOOR_PLANE_Z = 0;
 export const FLOOR_EPSILON = 0.0002;
+
+// Per-EnvCell floor lookup, dependency-INJECTED (this module must not import
+// indoor_router.js — see header). indoor_router.js registers itself with
+// setFloorPlaneProvider(fn) at load time, fn: (cellId:u32) => number|
+// undefined, backed by the node.floorZMin it already scans while building
+// the cell graph. A test double / older bundle that never registers one
+// degrades to the flat FLOOR_PLANE_Z=0 default — unchanged prior behavior.
+let _floorPlaneProvider = null;
+
+/** Inject (or, with a non-function arg, clear) the per-cell floor lookup. */
+export function setFloorPlaneProvider(fn) {
+  _floorPlaneProvider = typeof fn === "function" ? fn : null;
+}
+
+// Resolve the floor plane for `cellId`: an explicit finite floorPlaneZ wins
+// outright (the per-call override contract); otherwise ask the injected
+// provider for THIS cell; otherwise the flat default.
+function resolveFloorPlaneZ(cellId, floorPlaneZ) {
+  if (Number.isFinite(floorPlaneZ)) return floorPlaneZ;
+  if (_floorPlaneProvider) {
+    try {
+      const z = _floorPlaneProvider(cellId >>> 0);
+      if (Number.isFinite(z)) return z;
+    } catch {
+      /* provider threw — fall through to the flat default */
+    }
+  }
+  return FLOOR_PLANE_Z;
+}
 
 // verdict.reason values — stable strings; callers branch on these.
 export const NAV_OK = "ok";
@@ -75,11 +117,17 @@ function cellOf(o) {
  * gap is caught by the caller's own isEnvCellId gate before it ever reaches
  * leg issuance. A non-finite z is treated as un-solved (there is no solved
  * pose without a z).
+ *
+ * floorPlaneZ, if finite, is an explicit per-call override; otherwise the
+ * plane is resolved per-cellId via the injected floor-plane provider (this
+ * cell's real floor — deep-dungeon floors sit well below world-z 0), falling
+ * back to the flat FLOOR_PLANE_Z=0 only when no provider is registered or it
+ * has nothing for this cell yet.
  */
-export function isSubFloorZ(cellId, z, floorPlaneZ = FLOOR_PLANE_Z) {
+export function isSubFloorZ(cellId, z, floorPlaneZ = undefined) {
   if (!isEnvCellId(cellId >>> 0)) return false;
   if (typeof z !== "number" || !Number.isFinite(z)) return true;
-  const plane = Number.isFinite(floorPlaneZ) ? floorPlaneZ : FLOOR_PLANE_Z;
+  const plane = resolveFloorPlaneZ(cellId, floorPlaneZ);
   return z < plane - FLOOR_EPSILON;
 }
 
@@ -102,9 +150,14 @@ export function isCrossLandblockIndoor(startCellId, targetCellId) {
  * Never throws. Order: sub-floor (either endpoint) is checked BEFORE the
  * cross-landblock test — a z≈0 endpoint is un-solved regardless of which
  * landblock it claims to be in, so "holding" is the truthful verdict there.
+ *
+ * opts.floorPlaneZ, if given, overrides the plane for BOTH endpoints alike
+ * (the explicit per-call contract, unchanged). Otherwise each endpoint
+ * resolves its OWN floor independently via the injected provider — start
+ * and target need not share a cell (or a landblock).
  */
 export function guardLeg(start, target, opts = {}) {
-  const floorPlaneZ = opts && Number.isFinite(opts.floorPlaneZ) ? opts.floorPlaneZ : FLOOR_PLANE_Z;
+  const floorPlaneZ = opts && Number.isFinite(opts.floorPlaneZ) ? opts.floorPlaneZ : undefined;
   const s = start || {}, t = target || {};
   const sCell = cellOf(s), tCell = cellOf(t);
   if (isSubFloorZ(sCell, s.z, floorPlaneZ) || isSubFloorZ(tCell, t.z, floorPlaneZ)) {
@@ -140,6 +193,7 @@ export function legalIndoorReroute(ir, graph, fromCell, opts = {}) {
 export default {
   FLOOR_PLANE_Z,
   FLOOR_EPSILON,
+  setFloorPlaneProvider,
   NAV_OK,
   NAV_UNSOLVED,
   NAV_CROSS_LB,

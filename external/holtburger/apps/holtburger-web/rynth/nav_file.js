@@ -581,26 +581,55 @@ function splitNavTokens(line) {
   return tokens;
 }
 
+// name -> id, DERIVED from RECALL_SPELL_NAMES (the FULL retail table, above)
+// so the two tables can never drift again (the pre-2026-07-23 bug: a
+// hand-maintained copy of this map had 7 aliases pointing at wrong/
+// nonexistent spell ids — colosseum recall->4084 (Bur Recall), mhoire
+// forge->4213 (Colosseum Recall), facility hub->5541 (Neftet), rynthid->6321
+// (Viridian Rise), viridian rise->6322 (Great Tree), plus gear knight->5542
+// and neftet->5543 which aren't in the canonical table at all). Built once,
+// keyed by lowercased canonical name.
+const RECALL_NAME_TO_SPELL_ID = new Map(
+  Object.entries(RECALL_SPELL_NAMES).map(([id, displayName]) => [displayName.toLowerCase(), Number(id)]),
+);
+const RECALL_STOPWORDS = new Set(["the", "of", "to", "a", "an"]);
+function recallTokens(s) {
+  return String(s)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w && !RECALL_STOPWORDS.has(w));
+}
+
 // Common recall names -> spell ids (AfFileParser.RecallNameToSpellId port).
+// name->id is DERIVED from RECALL_SPELL_NAMES above (never hand-maintained
+// again). Matching order, preserving the old function's case-insensitive/
+// partial-alias semantics: (1) exact canonical text; (2) "<name> Recall"
+// exact, the common short-alias shape ("aerlinthe" -> "Aerlinthe Recall");
+// (3) a stopword-filtered token-subset match for reordered/partial aliases
+// ("sanctuary recall" -> "Recall the Sanctuary", "mhoire forge" -> "Call of
+// the Mhoire Forge"), preferring the most specific (fewest-token) canonical
+// match. Unresolved or ambiguous (tied token-count across different ids) ->
+// 0, same as the old function's unmapped-name fallback.
 function recallNameToSpellId(name) {
-  const map = {
-    "recall aphus lassel": 2931, "aphus lassel recall": 2931,
-    "lifestone recall": 1635, lifestone: 1635, "lifestone sending": 1635, "lifestone tie": 1635,
-    "primary portal recall": 48, "primary portal": 48,
-    "secondary portal recall": 2647, "secondary portal": 2647,
-    "portal recall": 2645,
-    "recall the sanctuary": 2023, "sanctuary recall": 2023,
-    "call of the mhoire forge": 4213, "mhoire forge": 4213,
-    "glenden wood recall": 3865, "glenden wood": 3865,
-    "aerlinthe recall": 2041, aerlinthe: 2041,
-    "colosseum recall": 4084, colosseum: 4084,
-    "facility hub recall": 5541, "facility hub": 5541,
-    "gear knight recall": 5542, "gear knight": 5542,
-    "neftet recall": 5543, neftet: 5543,
-    "rynthid recall": 6321, rynthid: 6321,
-    "viridian rise recall": 6322, "viridian rise": 6322,
-  };
-  return map[String(name).toLowerCase()] || 0;
+  const q = String(name).trim().toLowerCase();
+  if (!q) return 0;
+  if (RECALL_NAME_TO_SPELL_ID.has(q)) return RECALL_NAME_TO_SPELL_ID.get(q);
+  if (!q.endsWith(" recall")) {
+    const appended = `${q} recall`;
+    if (RECALL_NAME_TO_SPELL_ID.has(appended)) return RECALL_NAME_TO_SPELL_ID.get(appended);
+  }
+  const qTokens = recallTokens(q);
+  if (!qTokens.length) return 0;
+  const candidates = [];
+  for (const [canonName, id] of RECALL_NAME_TO_SPELL_ID) {
+    const cTokens = recallTokens(canonName);
+    if (qTokens.every((w) => cTokens.includes(w))) candidates.push({ id, len: cTokens.length });
+  }
+  if (!candidates.length) return 0;
+  candidates.sort((a, b) => a.len - b.len);
+  const [best, second] = candidates;
+  if (second && second.len === best.len && second.id !== best.id) return 0; // ambiguous, fail closed
+  return best.id;
 }
 
 export default { parseNav, writeNav, navToRoute, routeToNav, parseAfNavs, trailerLineCount, NavRouteType, NavPointType, NavPointTypeToken, RECALL_SPELL_NAMES };

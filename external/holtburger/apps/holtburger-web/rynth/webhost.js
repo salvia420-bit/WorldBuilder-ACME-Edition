@@ -33,6 +33,14 @@ const CAPABILITY_CANDIDATES = {
   GetUseDoneSeq: ["getUseDoneSeq"],
   ForceResetBusyCount: ["forceResetBusyCount"],
   GetPlayerPose: ["getLocalPlayerPose"],
+  // C1 fix (rynth-review 07 / 17-SYNTHESIS streamline #5, 2026-07-23):
+  // honest "is the pose's objCellId genuinely live data?" signal, bypassing
+  // the WP-2/WP-3 retention layers that made `objCellId===0` unreachable
+  // once a good pose has been seen. Absent on any pkg/ predating this
+  // export (graceful-degrade idiom below) — snap.pose.cellResolved is
+  // `null` in that case and nav consumers fall back to the legacy
+  // `objCellId===0` check.
+  GetPlayerPoseCellResolved: ["getLocalPlayerPoseCellResolved"],
   GetObjectName: ["objectName"],
   GetObjectWcid: ["objectWcid"],
   GetObjectState: ["objectPhysicsState"],
@@ -129,6 +137,15 @@ const CAPABILITY_CANDIDATES = {
 const ODF_PLAYER = 0x08;
 const ODF_ATTACKABLE = 0x10;
 
+// Shared cast-token clock (02 C3 / synthesis streamline #6): combat's
+// CAST_RESOLUTION_TIMEOUT_MS (combat_loop.js) and buff's
+// SELF_BUFF_GIVE_UP_MS (buff_loop.js) were two independent `2500` literals
+// that happened to agree. This is the one clock the shared token uses to
+// self-clear when UseDoneSeq is unavailable/missed; it does not replace
+// either module's own internal bookkeeping (P2 awaitingCast, B8 pending),
+// which keep their own timeout literals for their own purposes.
+const CAST_TOKEN_TIMEOUT_MS = 2500;
+
 export class RynthWebHost {
   constructor(sessionHandle, opts = {}) {
     if (!sessionHandle) throw new Error("RynthWebHost: sessionHandle required");
@@ -150,6 +167,7 @@ export class RynthWebHost {
     this._onTick = [];
     this._onEvent = []; // report 04 push plane
     this._worker = null;
+    this._castToken = null; // { owner, issuedAt, useDoneAtIssue } — 02 C3 shared serializer
     // Install the push-event tap: the page's pumpNetFrame forwards each
     // drained ClientEvent here (default-off hook in index.html). Events
     // are the PUSH complement to the poll snapshot — chat, kill notices,
@@ -182,6 +200,57 @@ export class RynthWebHost {
         (console.warn || console.log)("[RynthWebHost] onEvent threw:", err);
       }
     }
+  }
+
+  // ── shared cast token (02 C3 / synthesis streamline #6) ─────────────
+  // combat/buff/vitals each track "cast in flight" their own way, with
+  // their own definition of resolved (P2 UseDoneSeq vs B8 registry re-read
+  // vs vitals' none-at-all) — see the module headers. That is preserved;
+  // this token is an ADDITIONAL cross-module interlock so one module's
+  // cast GESTURE finishing (GetCastBusyState()===0) can't be mistaken by
+  // a DIFFERENT module for the cast being fully RESOLVED, which used to
+  // let a second cast fire inside the first one's still-open UseDone
+  // window. Arm it immediately before issuing a CastSpell/
+  // CastUntargetedSpell; it self-clears on the next UseDoneSeq advance
+  // (the real resolution signal) or after CAST_TOKEN_TIMEOUT_MS (never
+  // wedge if UseDone is unavailable/missed).
+  _castTokenLive() {
+    const t = this._castToken;
+    if (!t) return false;
+    if (this.has("GetUseDoneSeq") && this.GetUseDoneSeq() !== t.useDoneAtIssue) {
+      this._castToken = null;
+      return false;
+    }
+    if (Date.now() - t.issuedAt > CAST_TOKEN_TIMEOUT_MS) {
+      this._castToken = null;
+      return false;
+    }
+    return true;
+  }
+  /** Claim the shared cast token. Call immediately before issuing a cast.
+   *  Returns true if the caller may cast now — the token was free, or
+   *  already held by this SAME owner (a module re-arming its own still-open
+   *  cast doesn't self-block). Returns false when a DIFFERENT owner holds
+   *  an unresolved claim; the caller must skip casting this tick. */
+  tryClaimCast(owner) {
+    if (this._castTokenLive()) return this._castToken.owner === owner;
+    this._castToken = {
+      owner,
+      issuedAt: Date.now(),
+      useDoneAtIssue: this.has("GetUseDoneSeq") ? this.GetUseDoneSeq() : 0,
+    };
+    return true;
+  }
+  /** Release the token early once the owner's OWN bookkeeping (registry
+   *  re-read, health-fraction poll, etc.) confirms resolution before
+   *  UseDoneSeq/the timeout would have cleared it. No-op if a different
+   *  owner holds it (or nothing does). */
+  releaseCast(owner) {
+    if (this._castToken && this._castToken.owner === owner) this._castToken = null;
+  }
+  /** Read-only status snapshot for diagnostics (`__diag`-style callers). */
+  get castToken() {
+    return this._castToken ? { ...this._castToken } : null;
   }
 
   // ── capability probes (the RynthCoreHost Has* plane) ───────────────
@@ -227,6 +296,12 @@ export class RynthWebHost {
       }
     };
     const pose = c("GetPlayerPose") || null;
+    // C1 fix (rynth-review 07, 2026-07-23): `undefined` when the capability
+    // is absent (stale pkg/) — normalized to `null` below so
+    // `snap.pose.cellResolved` has exactly three JSON-stable states:
+    // `true`/`false` (honest signal) or `null` (unknown, caller must fall
+    // back to the legacy `objCellId===0` heuristic).
+    const poseCellResolved = c("GetPlayerPoseCellResolved");
     const pursuitNow = c("GetPursuitStatus"); // read-clear >=2: latch below
     const prev = this.snap;
     const snap = {
@@ -247,6 +322,9 @@ export class RynthWebHost {
             y: pose.y,
             z: pose.z,
             heading: pose.heading ?? null,
+            // C1 fix (rynth-review 07/17-SYNTHESIS #9): honest resolved
+            // signal — see `GetPlayerPoseCellResolved` doc above.
+            cellResolved: poseCellResolved === undefined ? null : poseCellResolved,
           }
         : null,
       pursuitNow: pursuitNow ?? 0,

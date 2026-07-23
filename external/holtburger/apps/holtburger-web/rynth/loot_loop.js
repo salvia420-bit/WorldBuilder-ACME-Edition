@@ -6,6 +6,19 @@
 // moveItem(item, player, 0) (RynthCoreHost MoveItemExternal, wire 0x0019)
 // → confirm via playerInventory. Paced on the busy gate; every action
 // fire-and-forget with poll-shaped confirmation.
+//
+// Movement claim (report 03 C4 fix): the corpse-approach MoveToPosition calls
+// below (SCAN's initial approach, APPROACH's progress-watchdog re-issue) have
+// no busy latch of their own — the kernel priority ladder already keeps
+// combat/buff from ticking concurrently, but the independent explore-pressure
+// ticker (bot.js ExplorePressureController) does NOT go through the kernel at
+// all. `state === "APPROACH"` IS that claim: bot.js's movementClaimed() reads
+// it directly (same established pattern as kernel.js's own
+// `loot.state !== "SCAN"` pin check) so a pressure hop can no longer fire
+// while a corpse approach is in flight. Kept intentionally narrow (only the
+// approach window, not OPEN/LOOT/CONFIRM which issue no movement) and adds NO
+// nav/guardLeg — the existing progress watchdog (20s timeout, 3s re-issue)
+// below is unchanged.
 
 const CORPSE_WCID = 21;
 const LOOTED_TTL_MS = 5 * 60_000;

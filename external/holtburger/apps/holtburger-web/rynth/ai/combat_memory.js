@@ -1,3 +1,29 @@
+// ═══════════════════════════════════════════════════════════════════════
+// PARKED — NOT WIRED. Do not call attach(host) from production code.
+//
+// rynth/combat_loop.js's kernel-driven P12 damage-learner remains the ONE
+// kill-truth for the live bot. Wiring this module today would create a
+// SECOND host.onEvent subscriber for the exact same kind=19 stream (review
+// 11 D-latent / 12 §1.1 / 17-SYNTHESIS "Dark-core wiring-order sanity
+// check"), and the two would disagree on what a "kill" even is:
+//   - combat_loop's kills come from polling TryGetTargetHealthFraction===0
+//     against a GUID-locked target — authoritative, guid-keyed.
+//   - CombatMemory.kills (below) is a SEVERITY-DERIVED, NAME-KEYED estimate
+//     (KILL_SEVERITY=0.999 crossing on a per-defender-name accumulator) —
+//     approximate by construction (the module's own comment on
+//     KILL_SEVERITY says so), and two same-named mobs killed back-to-back
+//     are indistinguishable from one engagement here.
+// Before this is ever wired: pick ONE kill-truth (almost certainly
+// combat_loop's guid-based polling — it's already live and authoritative),
+// and either delete CombatMemory's kill/TTK bookkeeping or clearly demote it
+// to "approximate, name-keyed, corroboration-only, never compared to the
+// kernel's kill count in any observe-block." Also note (12 §1.1): kind=19
+// currently has ZERO live consumers at all — the kernel drives loops via
+// `.tick()` and never calls the `startOn()` that subscribes combat_loop's
+// own `_onCombatEvent`, so combat_loop's push-event path is ALSO presently
+// dormant (it still functions via polling). Reconcile that seam first.
+// ═══════════════════════════════════════════════════════════════════════
+//
 // combat_memory.js — the combat-telemetry core (Phase-2 dark module, A3-1 §D4).
 // A pure, headless consumer of the kind=19 CombatEvent family (and kind=29
 // Death) that the wasm client already emits on the RynthWebHost push-event
@@ -46,6 +72,7 @@ const CLIENT_EVENT_DEATH = 29; // CLIENT_EVENT_KIND_DEATH
 // produce an unbounded spike). Once the group has run longer than its window,
 // the denominator is the full window: a true sustained-DPS reading.
 export const DPS_WINDOW_MS = 60_000;
+export { MAX_TRACKED_NAMES };
 const MIN_RATE_DENOM_MS = 1_000;
 
 export class ValueSnapShotGroup {
@@ -98,6 +125,36 @@ export class ValueSnapShotGroup {
 // only kill signal derivable from the name-keyed damage stream alone (the
 // kind=29 Death event is guid-keyed, so it can't be bridged to a name here).
 const KILL_SEVERITY = 0.999;
+
+// LRU cap for byTarget/byAttacker (name-keyed, unbounded pre-fix — synthesis
+// streamline #12 / review 11 §3 S3: "add an LRU before wiring"). Same
+// convention as indoor_router.js's _floorPlaneByCell: a plain Map used as an
+// insertion-ordered LRU — touch (get-or-create) deletes-then-re-sets the key
+// so it moves to the "most recent" end, and the least-recently-touched
+// entry (the Map's first key) is evicted once the cap is exceeded. 512
+// distinct names comfortably covers a long 24/7 soak's creature variety
+// (retail's per-landblock spawn tables are far smaller) while bounding worst
+// case (e.g. a name-spam griefer, or many uniquely-named NPCs) from growing
+// forever.
+const MAX_TRACKED_NAMES = 512;
+
+// get-or-create `key` in `map`, refreshing its LRU recency on every touch
+// (not just creation) — an active engagement must never be evicted out from
+// under itself while cold, rarely-touched names age out first.
+function lruTouch(map, key, makeDefault, maxSize) {
+  let r = map.get(key);
+  if (r !== undefined) {
+    map.delete(key);
+    map.set(key, r);
+    return r;
+  }
+  r = makeDefault();
+  map.set(key, r);
+  if (map.size > maxSize) {
+    map.delete(map.keys().next().value); // evict least-recently-touched
+  }
+  return r;
+}
 
 export class CombatMemory {
   constructor(opts = {}) {
@@ -164,26 +221,20 @@ export class CombatMemory {
 
   // ── per-event handlers ────────────────────────────────────────────────
   _target(name, now) {
-    let r = this.byTarget.get(name);
-    if (!r) {
-      r = {
-        hits: 0, misses: 0, damage: 0, crits: 0, severitySum: 0,
-        engagedAt: null, firstAt: now, lastAt: now,
-        kills: 0, ttkSum: 0, ttkCount: 0, lastTtkMs: 0,
-      };
-      this.byTarget.set(name, r);
-    }
+    const r = lruTouch(this.byTarget, name, () => ({
+      hits: 0, misses: 0, damage: 0, crits: 0, severitySum: 0,
+      engagedAt: null, firstAt: now, lastAt: now,
+      kills: 0, ttkSum: 0, ttkCount: 0, lastTtkMs: 0,
+    }), MAX_TRACKED_NAMES);
     if (r.engagedAt == null) r.engagedAt = now;
     r.lastAt = now;
     return r;
   }
 
   _attacker(name, now) {
-    let r = this.byAttacker.get(name);
-    if (!r) {
-      r = { taken: 0, evaded: 0, damage: 0, crits: 0, lastSeenDamage: 0, firstAt: now, lastAt: now };
-      this.byAttacker.set(name, r);
-    }
+    const r = lruTouch(this.byAttacker, name, () => (
+      { taken: 0, evaded: 0, damage: 0, crits: 0, lastSeenDamage: 0, firstAt: now, lastAt: now }
+    ), MAX_TRACKED_NAMES);
     r.lastAt = now;
     return r;
   }

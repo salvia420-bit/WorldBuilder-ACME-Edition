@@ -152,8 +152,16 @@ Bake provenance lands in `--out`: `bake-source.sha256`, `bake-params.json`
 - **Decimal objCellId**: JS must send `lb >>> 0`. A wrong decimal id from an unbaked
   LB still returns a plausible-looking `coverage:"straight"` route — sanity-check
   `coverage=="detour"` inside baked regions.
-- **maxTiles=256** in DetourRouter, no eviction — raise it before serving a region
-  larger than 256 tiles.
+- **maxTiles=1024** in DetourRouter (raised from 256, `DetourRouter.cs:131`,
+  2026-07-23 re-verification — this trap previously said 256/no-eviction and was
+  stale), **with LRU eviction**: `RYNTHNAV_TILE_HIGH_WATER` (default `maxTiles -
+  64`) is the eviction high-water mark — tiles outside the current request's
+  corridor bounding box are LRU-evicted once the loaded count crosses it; tiles
+  inside the current corridor are never evicted (`DetourRouter.cs` eviction
+  comments, ~L15-21). `RYNTHNAV_MAX_TILES` overrides the 1024 default. Still
+  worth raising for a region that legitimately needs a working set larger than
+  1024 tiles resident at once, but a single large region no longer silently
+  hard-fails the way an uncapped/no-eviction 256 would have.
 - **DtNavMeshQuery must be reconstructed after any tile add/remove** (upstream
   RynthNavPlugin.cs rule; already encoded in DetourRouter).
 - Vendored C# under `vendor/rynthsuite/` mirrors upstream at rev bf1fb52 with

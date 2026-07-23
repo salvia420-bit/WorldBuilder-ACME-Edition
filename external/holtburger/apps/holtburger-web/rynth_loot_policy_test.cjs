@@ -30,7 +30,7 @@ const P_MAX_DAMAGE = 54;
 
 (async () => {
   const mod = await import(pathToFileURL(path.join(__dirname, "rynth/loot_policy.js")).href);
-  const { evaluate, tier, preset, greedy, selective, survival, NODES } = mod;
+  const { evaluate, tier, preset, greedy, selective, survival, NODES, VERDICT_ACTION_MAP, actionForVerdict } = mod;
 
   // ── 1. value-floor parity: greedy reproduces the shipped loop verdict ──────
   // RynthLootLoop: value = Value(19) ?? 0; keep iff value >= minValue else leave.
@@ -46,6 +46,26 @@ const P_MAX_DAMAGE = 54;
   }
   eq("greedy default is minValue 0 -> keep any value", evaluate({ int: { [P_VALUE]: 0 } }, greedy()).verdict, "keep");
   eq("greedy string preset resolves via evaluate", evaluate({ int: { [P_VALUE]: 5 } }, "greedy").verdict, "keep");
+
+  // ── 1b. C1 fix: fractional minValue must match loot_loop's plain float
+  // compare (`value < this.minValue`), not a truncated/ceil'd threshold.
+  // minValue=100.5, item Value=100: shipped loop SKIPS (100 < 100.5).
+  eq("greedy(min=100.5): value 100 -> leave (fractional floor honored, no truncation)",
+    evaluate({ int: { [P_VALUE]: 100 } }, greedy({ minValue: 100.5 })).verdict, "leave");
+  eq("greedy(min=100.5): value 101 -> keep",
+    evaluate({ int: { [P_VALUE]: 101 } }, greedy({ minValue: 100.5 })).verdict, "keep");
+  eq("greedy(min=100.5): value 100.5 -> keep (>= is inclusive)",
+    evaluate({ int: { [P_VALUE]: 101 } }, greedy({ minValue: 100.5 })).verdict, "keep");
+
+  // ── 1c. C3 fix: canonical verdict -> action map (incl. `sell`, which the
+  // netBrain shadow's `keep||salvage` precedent silently drops).
+  eq("VERDICT_ACTION_MAP.keep -> pickup", VERDICT_ACTION_MAP.keep, "pickup");
+  eq("VERDICT_ACTION_MAP.salvage -> pickup", VERDICT_ACTION_MAP.salvage, "pickup");
+  eq("VERDICT_ACTION_MAP.sell -> pickup (dropped by the netBrain shadow's mapping — must not be inherited)",
+    VERDICT_ACTION_MAP.sell, "pickup");
+  eq("VERDICT_ACTION_MAP.leave -> skip", VERDICT_ACTION_MAP.leave, "skip");
+  eq("actionForVerdict('sell') -> pickup", actionForVerdict("sell"), "pickup");
+  eq("actionForVerdict(unknown) -> skip (survival default)", actionForVerdict("bogus"), "skip");
 
   // ── 2. TierCalculator ladder (Mag-LootParser/TierCalculator.cs) ────────────
   eq("no workmanship -> tier 0", tier({ int: {} }), 0);
@@ -74,11 +94,13 @@ const P_MAX_DAMAGE = 54;
     tier({ int: { [P_WORKMANSHIP]: 1 }, spellTiers: [{ buff: 8 }] }), 7);
   eq("spellTiers legendary cantrip -> tier 8",
     tier({ int: { [P_WORKMANSHIP]: 1 }, spellTiers: [{ cantrip: 3 }] }), 8);
-  // tierGE node routed through evaluate.
+  // tierGE node routed through evaluate. tierGE is appraisal-gated (03 C2),
+  // so these ladder-math checks mark the bag `appraised:true` explicitly —
+  // the presence-gate itself is tested separately below.
   eq("tierGE(4) matches a workmanship-8 item",
-    evaluate({ int: { [P_WORKMANSHIP]: 8 } }, [{ action: "keep", all: [{ type: "tierGE", min: 4 }] }]).verdict, "keep");
+    evaluate({ appraised: true, int: { [P_WORKMANSHIP]: 8 } }, [{ action: "keep", all: [{ type: "tierGE", min: 4 }] }]).verdict, "keep");
   eq("tierGE(5) leaves a workmanship-8 item (tier 4)",
-    evaluate({ int: { [P_WORKMANSHIP]: 8 } }, [{ action: "keep", all: [{ type: "tierGE", min: 5 }] }]).verdict, "leave");
+    evaluate({ appraised: true, int: { [P_WORKMANSHIP]: 8 } }, [{ action: "keep", all: [{ type: "tierGE", min: 5 }] }]).verdict, "leave");
 
   // ── 3. first-match ordering ────────────────────────────────────────────────
   const ordered = [
@@ -119,14 +141,58 @@ const P_MAX_DAMAGE = 54;
     check("explicit leave action: verdict leave but matched=true", r.verdict === "leave" && r.matched === true);
   }
 
-  // ── 5. degrade-to-value when appraisal absent (empty bag) ──────────────────
+  // ── 5. Value(19) degrades to 0 when unappraised (loot_loop's own gate
+  // already covers Value — valueGE is deliberately NOT appraisal-gated here).
   eq("un-appraised bag + greedy(0) -> keep", evaluate({}, greedy()).verdict, "keep");
   eq("un-appraised bag + greedy(100) -> leave (value reads 0)", evaluate({}, greedy({ minValue: 100 })).verdict, "leave");
-  eq("un-appraised bag: tier reads 0", tier({}), 0);
-  eq("un-appraised bag: armorLevelGE reads 0 -> leave",
-    evaluate({}, [{ action: "keep", all: [{ type: "armorLevelGE", min: 1 }] }]).verdict, "leave");
+  eq("un-appraised bag: tier() the pure function still reads 0 (trophy-item port semantics, unchanged)", tier({}), 0);
   // Convenience top-level `value` is honored when the int map lacks key 19.
   eq("top-level value convenience honored", evaluate({ value: 500 }, greedy({ minValue: 100 })).verdict, "keep");
+
+  // ── 5b. C2 fix: appraisal-gated rules (tier/armor/rating/damage) report
+  // PENDING — not a silent 0-comparison "leave" — on a bag with no Value(19)
+  // and no explicit `appraised` override observed yet.
+  {
+    const r = evaluate({}, [{ action: "keep", all: [{ type: "armorLevelGE", min: 1 }] }]);
+    check("un-appraised bag: armorLevelGE -> pending (not a silent 0-compare leave)",
+      r.pending === true && r.matched === false, JSON.stringify(r));
+  }
+  {
+    const r = evaluate({}, [{ action: "keep", all: [{ type: "tierGE", min: 1 }] }]);
+    check("un-appraised bag: tierGE -> pending", r.pending === true, JSON.stringify(r));
+  }
+  {
+    const r = evaluate({}, [{ action: "keep", all: [{ type: "totalRatingsGE", min: 1 }] }]);
+    check("un-appraised bag: totalRatingsGE -> pending", r.pending === true, JSON.stringify(r));
+  }
+  {
+    const r = evaluate({}, [{ action: "keep", all: [{ type: "medianDamageGE", min: 1 }] }]);
+    check("un-appraised bag: medianDamageGE -> pending", r.pending === true, JSON.stringify(r));
+  }
+  // Once Value(19) has streamed (or `appraised:true` is set), the SAME
+  // conditions resolve definitely instead of staying pending.
+  {
+    const r = evaluate({ int: { [P_VALUE]: 0 } }, [{ action: "keep", all: [{ type: "armorLevelGE", min: 1 }] }]);
+    check("appraised bag (Value present): armorLevelGE resolves definitely -> leave, pending=false",
+      r.verdict === "leave" && r.pending === false, JSON.stringify(r));
+  }
+  {
+    const r = evaluate({ appraised: true }, [{ action: "keep", all: [{ type: "tierGE", min: 1 }] }]);
+    check("appraised:true override resolves definitely -> leave, pending=false",
+      r.verdict === "leave" && r.pending === false, JSON.stringify(r));
+  }
+  // A known-false condition earlier/alongside an unknown one in the SAME AND
+  // rule still fails definitely — the rule can't possibly match either way,
+  // so there is nothing to defer.
+  {
+    const rule = [{ action: "keep", all: [{ type: "valueGE", min: 100000 }, { type: "armorLevelGE", min: 1 }] }];
+    // Fully empty (unappraised) bag: valueGE is NOT gated (getInt defaults to
+    // 0, a known/definite false against min=100000); armorLevelGE IS gated
+    // and unknown here. The known false must still win outright.
+    const r = evaluate({}, rule);
+    check("known-false condition short-circuits an otherwise-unknown AND rule -> leave, pending=false",
+      r.verdict === "leave" && r.pending === false, JSON.stringify(r));
+  }
 
   // ── other numeric node types ───────────────────────────────────────────────
   eq("objClass match", evaluate({ objClass: 5 }, [{ action: "keep", all: [{ type: "objClass", objClass: 5 }] }]).verdict, "keep");
@@ -137,14 +203,16 @@ const P_MAX_DAMAGE = 54;
   eq("intFlag set", evaluate({ int: { 300: 0b1010 } }, [{ action: "keep", all: [{ type: "intFlag", key: 300, flag: 0b0010 }] }]).verdict, "keep");
   eq("intFlag clear", evaluate({ int: { 300: 0b1010 } }, [{ action: "keep", all: [{ type: "intFlag", key: 300, flag: 0b0001 }] }]).verdict, "leave");
   // medianDamageGE (LootScoring.cs:453-461): maxD=0 => false; maxD=100 var .2 => 90.
+  // Both node types are appraisal-gated (03 C2); mark these ladder-math bags
+  // `appraised:true` (the gate itself is tested separately below).
   eq("medianDamageGE maxDamage 0 -> false",
-    evaluate({ int: { [P_MAX_DAMAGE]: 0 } }, [{ action: "keep", all: [{ type: "medianDamageGE", min: 1 }] }]).verdict, "leave");
+    evaluate({ appraised: true, int: { [P_MAX_DAMAGE]: 0 } }, [{ action: "keep", all: [{ type: "medianDamageGE", min: 1 }] }]).verdict, "leave");
   eq("medianDamageGE 100/var .2 -> median 90 >= 90",
-    evaluate({ int: { [P_MAX_DAMAGE]: 100 }, double: { 22: 0.2 } }, [{ action: "keep", all: [{ type: "medianDamageGE", min: 90 }] }]).verdict, "keep");
+    evaluate({ appraised: true, int: { [P_MAX_DAMAGE]: 100 }, double: { 22: 0.2 } }, [{ action: "keep", all: [{ type: "medianDamageGE", min: 90 }] }]).verdict, "keep");
   eq("totalRatingsGE sums the rating keys",
-    evaluate({ int: { 370: 5, 371: 6, 379: 4 } }, [{ action: "keep", all: [{ type: "totalRatingsGE", min: 15 }] }]).verdict, "keep");
+    evaluate({ appraised: true, int: { 370: 5, 371: 6, 379: 4 } }, [{ action: "keep", all: [{ type: "totalRatingsGE", min: 15 }] }]).verdict, "keep");
   eq("totalRatingsGE below floor -> leave",
-    evaluate({ int: { 370: 5 } }, [{ action: "keep", all: [{ type: "totalRatingsGE", min: 15 }] }]).verdict, "leave");
+    evaluate({ appraised: true, int: { 370: 5 } }, [{ action: "keep", all: [{ type: "totalRatingsGE", min: 15 }] }]).verdict, "leave");
   eq("spellCountGE via count", evaluate({ spellCount: 3 }, [{ action: "keep", all: [{ type: "spellCountGE", min: 3 }] }]).verdict, "keep");
   eq("spellCountGE via spells array", evaluate({ spells: [1, 2] }, [{ action: "keep", all: [{ type: "spellCountGE", min: 2 }] }]).verdict, "keep");
   eq("materialIn hit", evaluate({ int: { [P_MATERIAL]: 42 } }, [{ action: "keep", all: [{ type: "materialIn", materials: [10, 42] }] }]).verdict, "keep");
@@ -177,7 +245,10 @@ const P_MAX_DAMAGE = 54;
   // ── presets are well-formed and parameterized ──────────────────────────────
   check("selective preset returns rules array", Array.isArray(selective().rules) && selective().rules.length > 0);
   check("survival preset returns rules array", Array.isArray(survival().rules) && survival().rules.length > 0);
-  eq("selective keeps a high-tier item", evaluate({ int: { [P_WORKMANSHIP]: 8 } }, selective()).verdict, "keep");
+  eq("selective keeps a high-tier item (appraised)",
+    evaluate({ appraised: true, int: { [P_WORKMANSHIP]: 8 } }, selective()).verdict, "keep");
+  eq("selective on an UNAPPRAISED high-tier item -> pending, not a silent under-loot leave",
+    evaluate({ int: { [P_WORKMANSHIP]: 8 } }, selective()).pending, true);
   eq("survival leaves a low-value trash item", evaluate({ int: { [P_VALUE]: 10 } }, survival()).verdict, "leave");
   {
     let threw = false;

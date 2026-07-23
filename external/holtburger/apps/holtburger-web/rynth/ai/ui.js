@@ -7,6 +7,17 @@
 // { loadKey(), saveKey(k), clearKey() }. Every director/client touch is
 // try/caught — a broken or absent director must never break the page
 // (SPEC "Cost & safety": failure paths degrade to the bot grinding untouched).
+//
+// "Check now" and the durable operator-stop latch (report 10 #1): SPEC
+// §director defines checkNow() as "also [a] manual trigger", callable
+// regardless of `enabled` — so this panel does NOT gate the click on
+// director.status.enabled (that would break the documented manual-trigger
+// contract). It DOES refuse while the cross-reconnect operator_stop.js latch
+// is set: that latch means the operator deliberately stopped the AI and
+// expects it to STAY stopped, and checkNow() itself refuses on the same
+// latch — so this is belt-and-braces against the misleading UX of a button
+// that visibly "did something" while the real call silently no-ops.
+import { isOperatorStopLatched } from "./operator_stop.js";
 
 // Palette matches the app's overlay look — plugins/debug-overlay.js:84-101.
 const CSS_ROOT =
@@ -155,6 +166,9 @@ export function mountAiPanel(director, { client, models } = {}) {
     // Fire-and-forget (SPEC §ui): a failed check-in journals itself in the
     // director; the panel must never surface a rejection.
     try {
+      let latched = false;
+      try { latched = isOperatorStopLatched(); } catch { latched = false; }
+      if (latched) return; // durable operator stop — see header note above
       const p = director && director.checkNow ? director.checkNow() : null;
       if (p && typeof p.then === "function") p.then(renderStatus).catch(() => {});
     } catch {}

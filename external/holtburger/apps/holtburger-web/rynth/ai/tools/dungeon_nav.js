@@ -36,6 +36,7 @@ import {
   toLegs,
   buildPatrolRoute,
   buildGraphFromWasm,
+  isPoseCellUnresolved,
 } from "../../indoor_router.js";
 // World-frame + outdoor-LandCell math: the ONE copy (C3 Stage-0 dedup).
 import { worldX, worldY, worldToOutdoorCell } from "../../nav_frame.js";
@@ -90,7 +91,10 @@ function getPose(bot) {
   return safe(() => {
     const p = bot?.host?.TryGetPlayerPose?.();
     if (!p || typeof p.objCellId !== "number") return null;
-    return { cell: p.objCellId >>> 0, x: p.x, y: p.y, z: p.z };
+    // C1 fix (rynth-review 07/17-SYNTHESIS #9, 2026-07-23): carry the
+    // honest cellResolved signal through (see `isPoseCellUnresolved` doc,
+    // indoor_router.js) — `null` when the host predates the capability.
+    return { cell: p.objCellId >>> 0, x: p.x, y: p.y, z: p.z, cellResolved: p.cellResolved ?? null };
   });
 }
 
@@ -304,7 +308,9 @@ export class DungeonNavAdvisor {
     try {
       const pose = getPose(bot);
       if (!pose) return no("no-pose", "no player pose — cannot anchor an exit route");
-      if ((pose.cell >>> 0) === 0)
+      // C1 fix (rynth-review 07/17-SYNTHESIS #9): honest signal, legacy
+      // objCellId===0 fallback — see isPoseCellUnresolved doc.
+      if (isPoseCellUnresolved(pose))
         return no("cell-unresolved", "position unresolved (respawn/streaming gap — cell 0); not outdoors. Hold and re-read next check-in before routing.");
       if (!isEnvCellId(pose.cell))
         return no("outdoors", `already outdoors (cell ${hex(pose.cell)}) — exit_building n/a; use goto`);

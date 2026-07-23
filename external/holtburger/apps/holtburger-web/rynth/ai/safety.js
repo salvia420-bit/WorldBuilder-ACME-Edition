@@ -1,12 +1,13 @@
-// safety.js — standalone SAFETY / GOVERNOR layer for the AI director:
-// defense-in-depth action sanitizing over actions.js validateAction, a
-// rolling call/spend governor, and a plan filter the integrator can slot in
-// front of executePlan:
+// safety.js — standalone SAFETY layer for the AI director: defense-in-depth
+// action sanitizing over actions.js validateAction, and a plan filter the
+// integrator can slot in front of executePlan:
 //
-//   const gov = new RateGovernor({ maxSpendUsd: 1 });
-//   if (gov.allowCall().ok) { gov.recordCall(); /* client.chat(...) */ }
-//   const { actions, rejected } = guardPlan(plan.actions, { maxActions: gov.maxActionsPerCheck });
+//   const { actions, rejected } = guardPlan(plan.actions, { maxActions: 5 });
 //   await executePlan(bot, actions);
+//
+// (Call-count and $-spend budgeting live on the DIRECTOR's live path —
+// director.js maxCallsPerHour / maxSpendPerHourUsd — since 2026-07-23; the
+// never-instantiated RateGovernor duplicate that used to sit here is gone.)
 //
 // This module MODIFIES NO v1 file — it only calls the frozen actions.js
 // surface. Everything is pure / deterministic with an injected `now`, and
@@ -29,7 +30,6 @@ const PRIORITY_MAX = 99;
 const GENERIC_TEXT_MAX = 500;
 const RULE_NAME_MAX = 100;
 const MAX_PRIORITY_RULES = 64;
-const HOUR_MS = 3_600_000; // same rolling window as director.js:12
 
 // All C0/C1 controls (incl. \t \n \r — chat is single-line; a newline could
 // smuggle a second line starting with "@") plus the JS line separators.
@@ -171,71 +171,6 @@ export function sanitizeAction(a) {
 }
 
 const intAtLeast0 = (v, dflt) => (Number.isInteger(v) && v >= 0 ? v : dflt);
-
-/**
- * Deterministic call/spend budget with an injected clock. Window semantics
- * match director.js:123 (`now - t < 60min` keeps a call). `allowCall` /
- * `note` never mutate history except pruning expired stamps; `recordCall`
- * counts attempts, success or not (director.js:145). `allowSpend(usd)`
- * takes the CUMULATIVE spend estimate to date (the integrator prices
- * client.spend token counters); with a cap set, an unknown/non-finite spend
- * FAILS CLOSED. Defaults mirror SPEC "Cost & safety discipline".
- */
-export class RateGovernor {
-  constructor(opts = {}) {
-    const { maxCallsPerHour = 12, maxActionsPerCheck = 5, maxSpendUsd = null } = opts || {};
-    this.maxCallsPerHour = intAtLeast0(maxCallsPerHour, 12);
-    this.maxActionsPerCheck = intAtLeast0(maxActionsPerCheck, 5);
-    const cap = Number(maxSpendUsd);
-    this.maxSpendUsd = maxSpendUsd == null || !Number.isFinite(cap) || cap < 0 ? null : cap;
-    this._calls = [];
-  }
-
-  _inWindow(now) { return this._calls.filter((t) => now - t < HOUR_MS); }
-
-  /** -> { ok, reason? }. Check only — does not record. */
-  allowCall(now = Date.now()) {
-    try {
-      const n = Number(now);
-      if (!Number.isFinite(n)) return { ok: false, reason: "invalid now" }; // fail closed
-      this._calls = this._inWindow(n);
-      if (this._calls.length >= this.maxCallsPerHour)
-        return { ok: false, reason: `${this._calls.length} calls in last 60 min (max ${this.maxCallsPerHour})` };
-      return { ok: true };
-    } catch { return { ok: false, reason: "governor error" }; }
-  }
-
-  recordCall(now = Date.now()) {
-    try {
-      const n = Number(now);
-      if (!Number.isFinite(n)) return; // a poisoned stamp would corrupt the window
-      this._calls = this._inWindow(n);
-      this._calls.push(n);
-    } catch {}
-  }
-
-  /** -> { ok, reason? }. usd = cumulative spend estimate so far. */
-  allowSpend(usd) {
-    try {
-      if (this.maxSpendUsd == null) return { ok: true };
-      const n = Number(usd);
-      if (!Number.isFinite(n))
-        return { ok: false, reason: `spend unknown (${String(usd)}) with $${this.maxSpendUsd} cap set` };
-      if (n >= this.maxSpendUsd) return { ok: false, reason: `spend $${n} >= cap $${this.maxSpendUsd}` };
-      return { ok: true };
-    } catch { return { ok: false, reason: "governor error" }; }
-  }
-
-  /** One-line telemetry for journals/status lines. Non-mutating. */
-  note(now = Date.now()) {
-    try {
-      const n = Number(now);
-      const inWindow = Number.isFinite(n) ? this._inWindow(n).length : this._calls.length;
-      const spend = this.maxSpendUsd == null ? "off" : `$${this.maxSpendUsd}`;
-      return `governor: ${inWindow}/${this.maxCallsPerHour} calls in last 60 min; <=${this.maxActionsPerCheck} actions/check; spend cap ${spend}`;
-    } catch { return "governor: n/a"; }
-  }
-}
 
 /**
  * Filter a plan before executePlan: sanitize each action, keep at most

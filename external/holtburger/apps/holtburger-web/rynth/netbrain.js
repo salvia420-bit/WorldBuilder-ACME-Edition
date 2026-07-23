@@ -16,7 +16,10 @@
 // harnesses, no `location`) the default stays off — loops under unit tests
 // must not fetch bundles unless the test attaches one explicitly.
 //
-// The AppBundle is ~3.9 MB raw (InvariantGlobalization), loads once, lazily,
+// The AppBundle is ~4.3 MB raw (InvariantGlobalization; verified 2026-07-23
+// via `du -sh netbrain/AppBundle` — aligned with url-flags.md `netBrain` and
+// STATUS.md, which previously disagreed with this file's stale ~3.9 MB),
+// loads once, lazily,
 // off the critical boot path. Exports are synchronous string->string JSON
 // boundaries (see netbrain/BrainExports.cs); replay_fixtures.mjs is the
 // byte-for-byte gate proving the bundle matches native C#.

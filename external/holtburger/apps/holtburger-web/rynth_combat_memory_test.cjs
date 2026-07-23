@@ -20,7 +20,7 @@ const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
 (async () => {
   const modUrl = pathToFileURL(path.join(__dirname, "rynth", "ai", "combat_memory.js")).href;
   const mod = await import(modUrl);
-  const { CombatMemory, ValueSnapShotGroup, DPS_WINDOW_MS } = mod;
+  const { CombatMemory, ValueSnapShotGroup, DPS_WINDOW_MS, MAX_TRACKED_NAMES } = mod;
 
   // Controllable clock — tests set `t` explicitly.
   function makeClock(start = 1_000_000) {
@@ -257,6 +257,36 @@ const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
     check("combat_memory holds no ref to combat_loop.damageModel", mem.byTarget !== loop.damageModel);
     check("independent structures — mem did not write loop's model", loop.damageModel.size === 1 && mem.byTarget.size === 1);
     loop.stop();
+  }
+
+  // ── LRU eviction bound on byTarget/byAttacker (streamline #12 / review 11
+  // §3 S3 fix: the maps were unbounded — name-keyed, no cap) ──────────────
+  {
+    const m = new CombatMemory({ now: () => 5_000_000 });
+    check("MAX_TRACKED_NAMES is a sane positive cap", Number.isFinite(MAX_TRACKED_NAMES) && MAX_TRACKED_NAMES > 0);
+    for (let i = 0; i < MAX_TRACKED_NAMES + 50; i++) m.consume(dealt(`Mob${i}`, 1));
+    check("byTarget never exceeds MAX_TRACKED_NAMES", m.byTarget.size === MAX_TRACKED_NAMES, `size=${m.byTarget.size}`);
+    check("oldest names were evicted", !m.byTarget.has("Mob0") && !m.byTarget.has("Mob49"));
+    check("most recent names survive", m.byTarget.has(`Mob${MAX_TRACKED_NAMES + 49}`));
+
+    const ma = new CombatMemory({ now: () => 5_000_000 });
+    for (let i = 0; i < MAX_TRACKED_NAMES + 50; i++) ma.consume(taken(`Foe${i}`, 1));
+    check("byAttacker never exceeds MAX_TRACKED_NAMES", ma.byAttacker.size === MAX_TRACKED_NAMES, `size=${ma.byAttacker.size}`);
+  }
+  {
+    // Touching an existing (already-tracked) name refreshes its LRU
+    // recency — an active engagement must not be evicted merely for being
+    // the least-RECENTLY-CREATED entry while it keeps getting hit.
+    const m = new CombatMemory({ now: () => 5_000_000 });
+    m.consume(dealt("Veteran", 1)); // created first — would be evicted first under a naive insertion-only cap
+    for (let i = 1; i < MAX_TRACKED_NAMES; i++) m.consume(dealt(`Filler${i}`, 1));
+    // Map is now exactly at cap (Veteran + (MAX-1) fillers = MAX). Re-touch
+    // Veteran to refresh it, then push one more new name past the cap.
+    m.consume(dealt("Veteran", 1));
+    m.consume(dealt("OneMore", 1));
+    check("re-touched entry survives eviction ahead of a stale one",
+      m.byTarget.has("Veteran"), `has(Veteran)=${m.byTarget.has("Veteran")}`);
+    check("cap still enforced after the extra insert", m.byTarget.size === MAX_TRACKED_NAMES, `size=${m.byTarget.size}`);
   }
 
   console.log(`\ncombat_memory: ${pass} passed, ${fail} failed`);

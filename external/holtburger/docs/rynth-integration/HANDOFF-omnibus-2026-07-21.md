@@ -1,5 +1,40 @@
 # HANDOFF — Surveyor OMNIBUS (2026-07-21, session 6b): 2-phase buildbox fan-out DONE, apply+deploy PENDING
 
+> ## ✅ STATUS UPDATE (2026-07-23, rynth-review 16 B1 / 17-SYNTHESIS drift ledger): APPLIED, SOAKED — REMAINING-STEPS 1-5 ARE DONE
+> **This handoff's title and "Quick state recap" below are HISTORICAL — do not act on them.** Phase 2
+> WAS applied: `git apply`'d + committed as **`4118bf9d`** ("rynth+wasm: OMNIBUS — 16-package buildbox
+> fan-out"), then live-soaked the same evening (**`RESULTS-omnibus-soak-2026-07-21.md`**, commit
+> `39aacc79`). Status of REMAINING STEPS below, so a future session does not re-run `git apply` on
+> already-applied hunks or re-extract `p2-untracked.tgz` over files that already exist in the tree:
+> - **Step 1 (apply to laptop tree)** — ✅ DONE, `4118bf9d`. Do NOT re-run `git apply .../p2.diff` or
+>   re-`tar xzf .../p2-untracked.tgz` — the hunks are already in the tree; a re-apply will fail-or-worse
+>   (untracked-file re-drop can silently clobber files touched since).
+> - **Step 2 (verify locally)** — ✅ DONE at apply time; re-confirmed by the soak's own pre-flight
+>   ("all local gates matched the box: node 50/0/2, world 579/0, core 606/0/1-ignored").
+> - **Step 3 (rebuild release wasm)** — ✅ DONE; the soak ran release wasm **4.84 MB** (RESULTS doc,
+>   line 5) — well inside the "NOT ~18MB" dev-build tripwire this step warns about.
+> - **Step 4 (review WP*.md deviations)** — ✅ DONE as part of the same session (see "Ops notes" below,
+>   already written from that review).
+> - **Step 5 (commit + push)** — ✅ DONE — `4118bf9d` is pushed (see `git log`); this is the commit the
+>   soak doc names as "Post-apply of the 16-package omnibus."
+> - **Step 6 (relaunch rig)** — done at least once for the soak trial; rig state since then has moved on
+>   through further sessions (see `STREAM-RIG-OPS.md` / `STATUS.md` for current rig state — don't infer
+>   it from this handoff).
+> - **Step 7 (deploy-gate 30-min soak)** — ✅ RUN, **4 of 5 criteria PASS**; the coverage-growth
+>   criterion FAILED for a reason since fixed in code (`nav_guard.js` z=0 false-park, landed `8935e576`)
+>   — see `RESULTS-omnibus-soak-2026-07-21.md` for the full verdict and 17-SYNTHESIS drift-ledger item 1
+>   for the (still soak-unverified as of 2026-07-23) status of that follow-up fix.
+> - **Step 8 (wire the dark cores — loot_policy, combat_memory, heal_reflex, confirm_reflex, suit
+>   solver)** — the only step still genuinely open. `rynth-review` (2026-07-23, 17-SYNTHESIS S1)
+>   re-confirmed all five modules remain unimported anywhere outside their own files/tests — ~1,175
+>   lines of dead weight shipped to the live client, exactly as this handoff describes them
+>   ("flag-off, not wired to director"). Nothing below this banner needs re-running; only step 8's
+>   wiring work is still real future work.
+>
+> This banner intentionally does not delete the history below — the ops notes, deviations, and
+> per-package detail are still accurate as a record of what shipped in `4118bf9d`. Only the "PENDING"
+> framing in the title and the "NOT yet applied" line in the recap are stale.
+
 Operator is time-limited; this handoff covers everything AFTER tarball verification. The laptop tree
 is UNCHANGED by phase 2 so far — still at pushed commit `23936991` (Surveyor rounds 1+2). The stream
 rig is fully DOWN (operator request: RAM): chromiums + ffmpeg killed, `STOP` latched — the bot is
@@ -44,31 +79,42 @@ OFFLINE until relaunch. Buildbox powered off (billing stopped; disk kept).
 
 ## REMAINING STEPS (in order)
 
-1. **Apply to laptop tree** (repo root `/home/wbterminal/WorldBuilder-ACME-Edition`):
+**✅ DONE 2026-07-23 — steps 1-7 executed; do NOT re-run 1-3 (re-applying an already-applied diff /
+re-extracting an already-extracted tarball / re-running a build that already landed is at best wasted
+work, at worst destructive — see the banner at the top of this file). Kept verbatim below as the
+historical record of what each step was; only step 8 is still open.**
+
+1. ✅ DONE (`4118bf9d`) — **Apply to laptop tree** (repo root `/home/wbterminal/WorldBuilder-ACME-Edition`):
    `git apply --stat /mnt/wbterminal1/omnibus/p2/p2.diff` (inspect) → `git apply` it →
    `tar xzf /mnt/wbterminal1/omnibus/p2/p2-untracked.tgz -C .` (drops the 14 new files in place).
-2. **Verify locally:** from `external/holtburger/apps/holtburger-web`: `node rynth_test_all_node.cjs`
+2. ✅ DONE — **Verify locally:** from `external/holtburger/apps/holtburger-web`: `node rynth_test_all_node.cjs`
    → expect **50/0/2**. Rust via the OOM jail: `env PATH=... capped-build cargo test -p
    holtburger-world` (579/0) and `-p holtburger-core` (606/0). (kill rust-analyzer first.)
-3. **Rebuild release wasm** (pkg/ is stale vs new Rust): from apps/holtburger-web,
+3. ✅ DONE (release wasm measured 4.84 MB at soak time — `RESULTS-omnibus-soak-2026-07-21.md`) —
+   **Rebuild release wasm** (pkg/ is stale vs new Rust): from apps/holtburger-web,
    `env PATH="/home/wbterminal/.cargo/bin:/usr/local/bin:/usr/bin:/bin" capped-build wasm-pack build
    --target web --out-dir pkg --release` (~5-15min; verify ~4.6-4.9MB, NOT ~18MB).
-4. **Review** `p2/parts/WP*.md` deviations sections (WP-11 note: its first run wrote the files then
+4. ✅ DONE — **Review** `p2/parts/WP*.md` deviations sections (WP-11 note: its first run wrote the files then
    timed out reporting; the rerun VERIFIED rather than rewrote — legitimate).
-5. **Commit + push** (one omnibus commit; end message with the Claude trailer as before).
-6. **Relaunch rig:** wipe `holtburger_ai_journal_v1` + `holtburger_ai_scratchpad_v1` from Local
+5. ✅ DONE (`4118bf9d`, pushed) — **Commit + push** (one omnibus commit; end message with the Claude trailer as before).
+6. ✅ DONE (for the soak trial below; rig has since relaunched further times — see STREAM-RIG-OPS.md
+   for CURRENT rig state) — **Relaunch rig:** wipe `holtburger_ai_journal_v1` + `holtburger_ai_scratchpad_v1` from Local
    Storage (KEEP `holtburger_ai_key_v1`, `rynth.atlas.v1`) — must be done via CDP after first page
    load OR skip (journal was already wiped this morning); clear `profile-game/Default/{Cache,"Code
    Cache",GPUCache}`; `rm /mnt/wbterminal2/stream/STOP`; check `xrandr` still 1280x720; `bash
    /mnt/wbterminal2/stream/launch.sh`; expect ONE error-boot → reload → in-world; then
    `bash /mnt/wbterminal2/stream/go_live.sh &`. ⚠ YouTube will mint a NEW watch URL (the old
    broadcast ended when we killed ffmpeg) — check YT Studio.
-7. **DEPLOY GATE (from the plan):** 30-min cold-academy soak — no in-academy death (WP-4: explorer
+7. ✅ RUN, 4/5 PASS (`RESULTS-omnibus-soak-2026-07-21.md`; coverage-growth criterion failed for a
+   cause since code-fixed in `8935e576`, itself not yet re-soaked as of 2026-07-23 — see
+   17-SYNTHESIS drift-ledger item 1) — **DEPLOY GATE (from the plan):** 30-min cold-academy soak — no in-academy death (WP-4: explorer
    now boots combat OFF), leaves the start cell, `exploreMemory.coverage().tiles` strictly
    increases, no terminal wedge, and the ACE log shows NO `failed transition ... [.. 0]` z-embed
    lines (WP-1 oracle). Watch `[pressure]` journal lines: straight-line hops are gone; expect graph
    paths, portal ledger use, and honest "no reachable frontier" + escalation.
-8. **Next phase (not now):** wire the dark cores per the DEFERRED list order — loot_policy into
+8. **STILL OPEN as of 2026-07-23** (17-SYNTHESIS S1 re-confirmed all five modules remain unimported
+   anywhere outside their own files/tests) — **Next phase (not now):** wire the dark cores per the
+   DEFERRED list order — loot_policy into
    loot_loop, combat_memory observe line, suit upgrades DFS, reflex kernel registration, GoalStack —
    each gated behind the WP-15 budget governor proving out on soak.
 
@@ -90,8 +136,14 @@ OFFLINE until relaunch. Buildbox powered off (billing stopped; disk kept).
 
 ## Quick state recap for next session
 
+**⚠ HISTORICAL as of this handoff's original session — see the ✅ STATUS UPDATE banner at the top of
+this file. Every line below describes the state BEFORE apply; none of it is the current state.**
+
 - Laptop repo: commit `23936991` + this handoff file (uncommitted). Phase-2 NOT yet applied.
+  **[SUPERSEDED 2026-07-23: applied as `4118bf9d`, soaked as `39aacc79`, both pushed.]**
 - Stream rig: DOWN (STOP latched). ACE server: still running (untouched). Vendbot: logged out,
   Sanctuary STILL academy lifestone (re-bind happens on first real exit via portalnewbieexitholtburg).
+  **[SUPERSEDED: the rig has been relaunched and reconfigured multiple times since — see
+  `STREAM-RIG-OPS.md` for current rig state, not this line.]**
 - Buildbox: powered off; ~/vendor/Mag-Plugins-master + both phase workspaces remain on its disk.
 - Mag-Plugins vendored at /mnt/wbterminal1/vendor/file-kiwi-7efaa1ac/ (sha256 f26145f9…12ce93d).

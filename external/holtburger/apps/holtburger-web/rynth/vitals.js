@@ -49,6 +49,25 @@ const SPELLS = {
   revitalize: 1177, // Revitalize Self I (stamina)
 };
 
+// Magic-mode entry give-up valve (02 C1 / synthesis #11): toggleCombatMode()
+// is a NonCombat<->suggested BINARY flip that never yields Magic(8) for a
+// melee/archer character (get_suggested_combat_mode only returns Magic when
+// a caster item is the currently WIELDED weapon) — a hybrid who knows a
+// self-heal but fights with a melee weapon oscillated NonCombat<->Melee
+// forever with `return true` holding the WHOLE kernel tick every cycle.
+// Fix shape: enter Magic EXPLICITLY (ChangeCombatMode(8)) instead of the
+// toggle, AND bound the attempts — after MAGIC_MODE_ATTEMPT_LIMIT refusals,
+// stop asking and release the tick (`return false`) for MAGIC_MODE_PARK_MS
+// so combat/loot/buff get to run. A genuine non-caster (no wand/orb/staff
+// wielded) is refused by the wasm's own local gate either way (SetCombatMode
+// arm, lib.rs:45179 `is_wielding_caster`) — no JS-side workaround makes that
+// character castable; parking here only stops the livelock, it can't grant
+// Magic mode. See rynth-integration handoff notes for the Rust-side
+// possibility (auto-wield the best known caster item before the SetCombatMode
+// send) — out of scope here (lib.rs is off-limits to this change).
+const MAGIC_MODE_ATTEMPT_LIMIT = 5;
+const MAGIC_MODE_PARK_MS = 15_000;
+
 const CAST_INTERVAL_MS = 400;
 // Give-up valve (B9-analogue for vitals): if a vital's recovery spell fires
 // this many times without the fraction improving by MIN_PROGRESS_PCT, the
@@ -171,16 +190,39 @@ export class RynthVitals {
     if (!action) return false;
 
     // Casting needs Magic mode + the gates (same traps as the buff loop).
+    // Enter Magic EXPLICITLY (ChangeCombatMode(8)) rather than
+    // toggleCombatMode() — the equipment-derived toggle never reaches
+    // Magic for a non-caster (02 C1); see the give-up-valve comment above.
+    // This does NOT touch combat_loop's own equipment-derived toggle for
+    // its Melee/Missile ENGAGE stance (the bow/wand mode-revert trap,
+    // README "Live-verified traps") — only vitals'/buff's MAGIC entry
+    // becomes an explicit set.
     if (h.GetCurrentCombatMode() !== 8) {
-      if (Date.now() - (this._modeAt || 0) > 3000) {
-        if (h.s.toggleCombatMode) h.s.toggleCombatMode();
-        this._modeAt = Date.now();
+      const now0 = Date.now();
+      if (this._magicParkedUntil && now0 < this._magicParkedUntil) return false; // gave up — don't hold the tick
+      if (now0 - (this._modeAt || 0) > 3000) {
+        h.ChangeCombatMode(8);
+        this._modeAt = now0;
+        this._magicAttempts = (this._magicAttempts || 0) + 1;
+        if (this._magicAttempts > MAGIC_MODE_ATTEMPT_LIMIT) {
+          this._magicParkedUntil = now0 + MAGIC_MODE_PARK_MS;
+          this._magicAttempts = 0;
+          this.log(
+            `give up entering Magic mode after ${MAGIC_MODE_ATTEMPT_LIMIT} attempts (no caster wielded?) — parked ${MAGIC_MODE_PARK_MS / 1000}s`
+          );
+          return false; // release the tick instead of livelocking (02 C1)
+        }
       }
-      return true; // holding for mode — still "owns" the tick
+      return true; // still trying — holding for mode this tick
     }
+    this._magicAttempts = 0; // mode established — reset the guard
     const now = Date.now();
     if (now - this.lastCastAt < CAST_INTERVAL_MS) return true;
     if (h.GetCastBusyState() !== 0 || h.GetBusyState() !== 0) return true;
+    // C3 shared serializer: another module (combat/buff) may hold a still-
+    // open cast claim (gesture done, resolution not yet seen) — wait
+    // rather than overlap it. Degrade-open if the host predates the token.
+    if (typeof h.tryClaimCast === "function" && !h.tryClaimCast("vitals")) return true;
 
     h.CastSpell(0, action.spell); // untargeted = self
     this.lastCastAt = now;

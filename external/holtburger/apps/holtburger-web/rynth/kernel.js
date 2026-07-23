@@ -26,9 +26,24 @@ export class RynthBotKernel {
     this.action = "Idle"; // the B14 BotAction pin, observable
     this._running = false;
     this._tickInstalled = false;
+    // Operator-hold latch (report 01 C1 / 13 C3, the single-stop-authority
+    // fix): while true, start() is refused for EVERY caller — including the
+    // director's own `resume` action (actions.js) and its idle-guard
+    // (director.js _idleGuard) — not just the plain running/stopped flag.
+    // Previously any start() call silently un-paused an operator's
+    // `!bot pause` within one AI check-in; now only releaseOperatorHold()
+    // (control_channel `!bot resume`) can lift it. Distinct from the
+    // director-side durable operator_stop.js latch (that one gates the AI
+    // loop across reconnects via localStorage); this one gates the grind
+    // kernel itself, in-memory, for the life of this bot instance.
+    this._operatorHeld = false;
   }
 
   start() {
+    if (this._operatorHeld) {
+      this.log("start refused: operator hold is active (resume via the control channel)");
+      return false;
+    }
     this._running = true;
     if (this.buff && !this.buff.startedAt) this.buff.startedAt = Date.now();
     // Register the host closure ONCE — host.onTick has no removal API, so a
@@ -48,12 +63,32 @@ export class RynthBotKernel {
       });
     }
     this.log("started");
+    return true;
   }
   stop() {
     this._running = false;
   }
   get running() {
     return this._running;
+  }
+
+  /** Operator-only hard hold (control_channel `!bot pause`): stops the
+   * kernel and latches start() refused until releaseOperatorHold(). This is
+   * the single stop authority — a plain stop() (AI `pause` action, goto,
+   * followRoute) never sets this, so only an explicit operator pause can
+   * arm it, and only an explicit operator resume can clear it. */
+  holdForOperator() {
+    this._operatorHeld = true;
+    this.stop();
+  }
+  /** Explicit operator resume (control_channel `!bot resume`): lifts the
+   * hold so a subsequent start() can succeed. Does not itself start() —
+   * callers decide. */
+  releaseOperatorHold() {
+    this._operatorHeld = false;
+  }
+  get operatorHeld() {
+    return this._operatorHeld;
   }
 
   _threatAvailable() {

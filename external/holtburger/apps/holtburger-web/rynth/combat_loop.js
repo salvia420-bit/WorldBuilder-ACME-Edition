@@ -444,10 +444,12 @@ export class RynthCombatLoop {
     // E4: UseDoneSeq advance OR the hard deadline — never wedge.
     if (h.has("GetUseDoneSeq") && h.GetUseDoneSeq() !== this.useDoneAtIssue) {
       this.awaitingCast = false;
+      if (typeof h.releaseCast === "function") h.releaseCast("combat");
       return true;
     }
     if (Date.now() - this.castIssuedAt > CAST_RESOLUTION_TIMEOUT_MS) {
       this.awaitingCast = false;
+      if (typeof h.releaseCast === "function") h.releaseCast("combat");
       return true;
     }
     return false;
@@ -615,6 +617,11 @@ export class RynthCombatLoop {
         this.stop();
         return;
       }
+      // C3 shared serializer: another module (vitals/buff) may hold an
+      // still-open cast claim (gesture done, UseDone not yet resolved) —
+      // wait rather than overlap it. Degrade-open if the host predates
+      // the token (contract 0.1).
+      if (typeof h.tryClaimCast === "function" && !h.tryClaimCast("combat")) return;
       h.CastSpell(target, spell);
       this._markCastIssued();
     } else {

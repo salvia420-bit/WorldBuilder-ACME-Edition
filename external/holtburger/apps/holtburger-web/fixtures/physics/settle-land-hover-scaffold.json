@@ -1,0 +1,42 @@
+{
+  "name": "settle-land-hover-latch-scaffold",
+  "status": "SCAFFOLD_NEEDS_LIVE_CAPTURE",
+  "description": "SCAFFOLD, NOT a verified repro. Targets the settle-land airborne-latch fix (commit ea2cc7c3, crates/holtburger-core/src/client/movement/system.rs:281-287,5322-5366 — USE_SETTLE_LAND default-on, LAND_SETTLE_EPS=0.08). The live bug: a router seam-jump/teleport left the wasm client with is_airborne=true and vertical_velocity~=0 while hovering a few cm ABOVE outdoor terrain (z = terrain_z + ~0.08). That precondition is a client-side bookkeeping edge case at a landblock-seam crossing, not something the current capture harness (capture_physics_replay.cjs) can script: its 'phases' vocabulary only holds forward/strafe/turn/jump keys for a tick count, its ONE spawn action is the hardcoded '@telepoi Holtburg' + '@pk pk' sequence (the scenario JSON's own 'spawnCommand' field, see probe-scenario.json, is descriptive only -- capture_physics_replay.cjs never reads it), and there is no phase kind or wasm hook that injects/observes is_airborne or vertical_velocity directly. Do NOT hand-author trace-subject.json rows to fake a pass/fail here -- per project rule (test fixtures use real data), a captured trace must come from an actual live session.",
+  "missingCaptureCapability": [
+    "capture_physics_replay.cjs needs a phase kind (or a scenario-driven spawnCommand) that can trigger, or directly reproduce, an is_airborne=true / vertical_velocity<=0 hover within LAND_SETTLE_EPS of outdoor terrain -- e.g. a scripted landblock-seam crossing at running speed near a LB boundary on a known-flat outdoor LB, repeated across many seam crossings until the latch reproduces, OR a debug hook (would require a new wasm/SessionHandle export, out of scope for this test-only work item) that lets the capture script force the precondition deterministically instead of hunting for it.",
+    "Once a capture exists that contains at least one tick where the subject trace shows is_airborne (or the nearest available proxy: onGround=false with near-zero recorded vertical speed and small subsequent position delta) immediately preceding a same-tick or next-tick touchdown, this scaffold's phases/acceptance below can be replaced with the real captured window and the status flipped to VERIFIED.",
+    "A cheaper interim signal (does not require reproducing the exact latch): re-run the existing fixtures/physics/probe-scenario.json capture and grep the resulting trace-subject.json for any row where is_airborne/onGround stays false-then-true across more than 1-2 ticks with near-zero horizontal displacement -- if the fix ever regresses, ordinary jump-arc captures should start showing multi-tick airborne dwell at low speed even without a dedicated seam-jump scenario."
+  ],
+  "landblockId": "0xA9B4",
+  "spawnCommand": "@telepoi Holtburg",
+  "acceptance": {
+    "maxPositionDriftMeters": 0.10,
+    "onGroundMatchPercent": 100.0
+  },
+  "tickHz": 60,
+  "phases": [
+    {
+      "kind": "settle",
+      "ticks": 60,
+      "input": { "forward": 0, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "60 idle ticks so the player lands cleanly after spawn before the seam-hunt begins."
+    },
+    {
+      "kind": "walk-forward-seam-hunt",
+      "ticks": 1800,
+      "input": { "forward": 1, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "UNVERIFIED, exploratory only: hold W for 1800 ticks (~30 s at 60 Hz) on Holtburg's outdoor terrain to cross several landblock-seam boundaries at running speed, in case a seam crossing incidentally reproduces the live-diagnosed airborne-latch precondition (is_airborne=true, vertical_velocity~=0, hovering within LAND_SETTLE_EPS of terrain). This is a fishing expedition, not a deterministic repro -- the original bug was diagnosed on the stream rig during ordinary bot navigation, not summoned on demand. A capture run against this phase list may complete with zero latch occurrences; that is an inconclusive result; treat it as SKIP, not PASS, for the settle-land regression question specifically (the existing maxPositionDriftMeters/onGroundMismatchCount acceptance bar it WILL still validate is the general integrator-vs-oracle parity probe-scenario.json already covers)."
+    },
+    {
+      "kind": "settle",
+      "ticks": 120,
+      "input": { "forward": 0, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "2 s idle tail so any latched airborne state (if the seam-hunt phase triggered one) has time to show up as a multi-tick is_airborne/onGround=false dwell in the captured trace before the run ends."
+    }
+  ],
+  "sourceCitations": {
+    "fix": "external/holtburger/crates/holtburger-core/src/client/movement/system.rs:281-287 (USE_SETTLE_LAND, LAND_SETTLE_EPS) and :5322-5366 (touchdown gate)",
+    "reviewFindings": "rynth-review/parts/07.md (cold review: gate is is_airborne && vertical_velocity<=0.0 && pose.coords.z<=z+0.08) and rynth-review/parts/14.md #B-2 + 17-SYNTHESIS.md P1 row 14 (zero regression coverage finding this scaffold responds to)",
+    "harnessGap": "apps/holtburger-web/capture_physics_replay.cjs (phase.kind switch only special-cases \"jump\"; spawnCommand field unused; no is_airborne/vertical_velocity injection hook) and apps/holtburger-web/validate_physics_replay.cjs (probeScenarioPath only feeds acceptance.maxPositionDriftMeters/tickHz to the WBT oracle, per WorldBuilder.Terminal/CommandEngine.PhysicsParity.cs LoadProbeScenario -- phases are capture-side only)"
+  }
+}

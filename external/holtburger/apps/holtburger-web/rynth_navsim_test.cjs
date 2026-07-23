@@ -193,9 +193,22 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
   // Stage the ESM modules in a type:module tmpdir (see header).
   const srcDir = path.join(__dirname, "rynth");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rynth-navsim-"));
-  for (const f of fs.readdirSync(srcDir)) {
-    if (f.endsWith(".js") || f.endsWith(".json")) fs.copyFileSync(path.join(srcDir, f), path.join(tmpDir, f));
+  // Recursive (additive, for C5's real wireAiDirector(): bot.js dynamic-
+  // imports `${base}/ai/director.js` etc, so the ai/ subtree — and its own
+  // tools/ + eval/ subdirs — must be staged too, not just the flat rynth/
+  // top level the B*/C1-C4 tests needed). __pycache__ is a stray py cache
+  // dir under ai/tools/, never a module source.
+  function copyTree(src, dst) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+      if (ent.name === "__pycache__") continue;
+      const s = path.join(src, ent.name);
+      const d = path.join(dst, ent.name);
+      if (ent.isDirectory()) copyTree(s, d);
+      else if (ent.name.endsWith(".js") || ent.name.endsWith(".json")) fs.copyFileSync(s, d);
+    }
   }
+  copyTree(srcDir, tmpDir);
   fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ type: "module" }));
   const mod = (f) => import(pathToFileURL(path.join(tmpDir, f)).href);
   let RT, GR, BOT;
@@ -776,7 +789,12 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       buffs: [],
       loot: false,
       vitals: false,
-      control: { prefix: "!bot", log: quiet },
+      // owner allowlist (report 13 P0 fix, control_channel.js): the C* tells
+      // below come from "Boss"/"Uva"/"Spammer", none of which is this fake
+      // session's own character name (the new no-owner-configured default) —
+      // an unconfigured owner now REFUSES everyone rather than obeying
+      // anyone, so the fixture must explicitly allow the senders it exercises.
+      control: { prefix: "!bot", log: quiet, owner: ["Boss", "Uva", "Spammer"] },
       nav: { endpoint: "http://127.0.0.1:8767" },
       router: { legTimeoutMs: 400, settleMs: 20, reissueMs: 60, log: quiet },
     };
@@ -981,6 +999,61 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
         const replies = st.chats.filter((c) => c.startsWith("/t Spammer,"));
         assert.equal(bot.channel.commands.length, 10, "all commands were parsed");
         assert.equal(replies.length, 5, "replies capped at 5 per 5s window");
+      } finally {
+        bot.stop();
+      }
+    });
+
+    // C5 — paused-kernel wedge regression (W1a fix / rynth-review 17-SYNTHESIS
+    // rank #2, streamline #2): `!bot pause` latches kernel.holdForOperator();
+    // per rynth/kernel.js this refuses EVERY start() caller, including the
+    // AI director's own "resume" action (actions.js case "resume" now checks
+    // kernel.start()'s return value instead of assuming success). Wires a
+    // REAL RynthAiDirector (via bot.js's wireAiDirector — apiKey omitted,
+    // extensions/metrics/travelHold off to keep it to the plain v1 director)
+    // with client.chat monkey-patched to a stub so NO network call ever
+    // happens; the stub scripts a plan whose only action is "resume". This
+    // pins that a manual/forced director check-in run WHILE an operator
+    // pause is in effect cannot silently un-pause the kernel — the exact
+    // wedge a director-vs-operator race would otherwise reopen.
+    await t("C5", "paused-kernel wedge: director resume action refused while operator-held", async () => {
+      const st = world({ speed: 8 });
+      const bot = await BOT.createGrindBot(session(st), {
+        ...BOTCFG,
+        ai: { extensions: false, metrics: false, travelHold: false },
+      });
+      try {
+        assert.ok(bot.ai && bot.ai.director, "wireAiDirector must have built a real director for this test to mean anything");
+        // Stub the client so checkNow() never touches the network — scripts
+        // exactly one action: "resume".
+        let chatCalls = 0;
+        bot.ai.director.client.chat = async () => {
+          chatCalls++;
+          return {
+            text: JSON.stringify({ analysis: "operator paused us, but let's resume", actions: [{ type: "resume" }], next_check_minutes: 5 }),
+            usage: { prompt: 1, completion: 1 },
+            model: "stub-c5",
+            ms: 1,
+          };
+        };
+
+        tell(bot, "Boss", "!bot pause");
+        await until(() => bot.kernel.operatorHeld === true, 2000);
+        assert.equal(bot.kernel._running, false, "pause stopped the kernel");
+        assert.equal(bot.channel.paused, true, "!bot status reads [PAUSED] live off the hold");
+
+        const result = await bot.ai.director.checkNow({});
+        assert.equal(chatCalls, 1, "the stubbed client was actually invoked");
+        const resumeResult = (result.results || []).find((r) => r.type === "resume");
+        assert.ok(resumeResult, `no "resume" result in plan results: ${JSON.stringify(result.results)}`);
+        assert.equal(resumeResult.ok, false, `director's resume action must be refused: ${JSON.stringify(resumeResult)}`);
+        assert.match(String(resumeResult.error || ""), /operator hold/i, "refusal must name the operator hold");
+
+        // The wedge check itself: the kernel must still be down and still
+        // held after the director's check-in executed.
+        assert.equal(bot.kernel.operatorHeld, true, "operator hold must survive the director's own resume attempt");
+        assert.equal(bot.kernel._running, false, "kernel must NOT have been silently resumed by the director");
+        assert.equal(bot.channel.paused, true, "!bot status must still read [PAUSED] after the check-in");
       } finally {
         bot.stop();
       }

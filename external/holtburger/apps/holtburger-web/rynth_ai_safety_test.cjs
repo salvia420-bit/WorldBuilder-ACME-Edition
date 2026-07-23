@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // rynth_ai_safety_test.cjs — unit tests for rynth/ai/safety.js (the
 // standalone SAFETY / GOVERNOR layer). No infra, no network: sanitizeAction
-// is pure, RateGovernor takes an injected clock, guardPlan takes an injected
+// is pure, guardPlan takes an injected
 // sanitizer. actions.js is imported (safety.js layers over its frozen
 // validateAction) but no bot / LLM is involved.
 //
@@ -29,10 +29,10 @@ const FW_SLASH = ch(0xff0f); // ／ FULLWIDTH SOLIDUS (NFKC -> /)
 (async () => {
   const dir = path.join(__dirname, "rynth", "ai");
   const mod = await import(pathToFileURL(path.join(dir, "safety.js")).href);
-  const { sanitizeAction, RateGovernor, guardPlan } = mod;
+  const { sanitizeAction, guardPlan } = mod;
   const actionsMod = await import(pathToFileURL(path.join(dir, "actions.js")).href);
 
-  check("exports", typeof sanitizeAction === "function" && typeof RateGovernor === "function" && typeof guardPlan === "function");
+  check("exports", typeof sanitizeAction === "function" && typeof guardPlan === "function");
 
   // ================= sanitizeAction: admin-command rejection matrix =========
   const rejects = [
@@ -220,64 +220,6 @@ const FW_SLASH = ch(0xff0f); // ／ FULLWIDTH SOLIDUS (NFKC -> /)
       delete actionsMod.ACTIONS.lookup;
     }
     check("seam: cleanup restored the catalog", sanitizeAction({ type: "lookup", query: "x" }).ok === false);
-  }
-
-  // ================= RateGovernor ===========================================
-  {
-    const t0 = 1_000_000_000;
-    const g = new RateGovernor({ maxCallsPerHour: 3 });
-    check("gov: fresh allows", g.allowCall(t0).ok === true);
-    g.recordCall(t0);
-    g.recordCall(t0 + 600_000);
-    g.recordCall(t0 + 1_200_000);
-    const b = g.allowCall(t0 + 1_800_000);
-    check("gov: blocked at cap with reason", b.ok === false && /3/.test(b.reason) && /60 min/.test(b.reason), JSON.stringify(b));
-    check("gov: 59:59.999 still blocked", g.allowCall(t0 + 3_599_999).ok === false);
-    check("gov: first call ages out at exactly 60 min", g.allowCall(t0 + 3_600_000).ok === true);
-    check("gov: second call ages out too", g.allowCall(t0 + 600_000 + 3_600_000).ok === true);
-    g.recordCall(t0 + 4_000_000);
-    check("gov: 2 in refreshed window still allows", g.allowCall(t0 + 4_000_001).ok === true);
-    g.recordCall(t0 + 4_000_100);
-    check("gov: refilled window blocks again at cap", g.allowCall(t0 + 4_000_200).ok === false);
-    const g0 = new RateGovernor({ maxCallsPerHour: 0 });
-    check("gov: maxCallsPerHour 0 blocks everything", g0.allowCall(t0).ok === false);
-    check("gov: allowCall(NaN) fails closed", g.allowCall(NaN).ok === false);
-  }
-  {
-    // recordCall(NaN) must not poison the window; note() is non-mutating.
-    const t0 = 5_000_000;
-    const g = new RateGovernor({ maxCallsPerHour: 5, maxActionsPerCheck: 3, maxSpendUsd: 2 });
-    g.recordCall(NaN);
-    check("gov: recordCall(NaN) ignored", /0\/5/.test(g.note(t0)), g.note(t0));
-    g.recordCall(t0);
-    const line = g.note(t0 + 1000);
-    check("gov: note telemetry line", typeof line === "string" && line.includes("1/5") && line.includes("3") && line.includes("$2"), line);
-    g.note(t0 + 100 * 3_600_000); // far-future note must NOT prune history
-    check("gov: note non-mutating", /1\/5/.test(g.note(t0 + 1000)), g.note(t0 + 1000));
-  }
-  {
-    const g = new RateGovernor({ maxSpendUsd: 1.0 });
-    check("gov: spend under cap ok", g.allowSpend(0.5).ok === true);
-    check("gov: spend 0 ok", g.allowSpend(0).ok === true);
-    const at = g.allowSpend(1.0);
-    check("gov: spend AT cap blocked", at.ok === false && /1/.test(at.reason), JSON.stringify(at));
-    check("gov: spend over cap blocked", g.allowSpend(1.5).ok === false);
-    check("gov: NaN spend fails CLOSED with cap set", g.allowSpend(NaN).ok === false);
-    check("gov: undefined spend fails CLOSED with cap set", g.allowSpend(undefined).ok === false);
-    const free = new RateGovernor();
-    check("gov: defaults", free.maxCallsPerHour === 12 && free.maxActionsPerCheck === 5 && free.maxSpendUsd === null);
-    check("gov: no cap -> any spend ok", free.allowSpend(1e9).ok === true && free.allowSpend(NaN).ok === true);
-  }
-  {
-    let threw = 0;
-    try {
-      const g = new RateGovernor(null);
-      g.allowCall(); g.recordCall(); g.allowSpend(); g.note();
-      const g2 = new RateGovernor({ maxCallsPerHour: "x", maxActionsPerCheck: -1, maxSpendUsd: "y" });
-      check("gov: garbage config -> defaults", g2.maxCallsPerHour === 12 && g2.maxActionsPerCheck === 5 && g2.maxSpendUsd === null);
-      check("gov: garbage config still allows", g2.allowCall(1000).ok === true && g2.allowSpend(999).ok === true);
-    } catch { threw++; }
-    check("gov: never throws on garbage construction/args", threw === 0);
   }
 
   // ================= guardPlan ==============================================

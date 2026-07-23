@@ -23,6 +23,26 @@
 //   * NEVER THROWS. All host access is guarded; errors degrade to a safe
 //     {acted:false,...}.
 //   * NOT registered into the live kernel yet (deferred).
+//
+// BOUNDARY vs rynth/buff_loop.js's B8 (review 02 suspicion, checked and
+// re-verified here: NO overlap, NO double-confirm) — the two mechanisms
+// answer two DIFFERENT server questions over two DISJOINT host APIs:
+//   - buff_loop's B8 confirms that a SELF-BUFF SPELL LANDED, by re-reading
+//     the player's own enchantment registry ~600ms after casting (no
+//     TryGetPendingConfirmations/SendConfirmationResponse call anywhere in
+//     buff_loop.js — verified by grep against the live tree).
+//   - This module answers actual server MODAL DIALOGS (Character-
+//     ConfirmationRequest, GameEvent 0x0274) via TryGetPendingConfirmations/
+//     SendConfirmationResponse (sub-opcode 0x0275) — allegiance, skill/
+//     attribute/augmentation changes, fellowship invites, craft
+//     chance-of-success, generic yes/no. Casting a buff raises NO such
+//     dialog, so there is nothing here for this reflex to answer or race
+//     against B8 over.
+// Scope going forward: this module's job is confirmation DIALOGS ONLY. It
+// must never grow a second, competing "did my buff land" check — that stays
+// buff_loop's exclusive job (B8). If a future confirm type is ever found to
+// correlate with a buff/spell outcome, that is a signal the boundary above
+// has drifted and needs re-verifying before adding it to the allow-list.
 
 // holtburger-common character::ConfirmationType (wire enum 0..=7). These are
 // enum-derived constants, not content ids.

@@ -31780,6 +31780,39 @@ impl SessionHandle {
         *self.local_player_pose.borrow()
     }
 
+    /// C1 fix (rynth-review 07/17-SYNTHESIS streamline #5, 2026-07-23) —
+    /// honest "position resolved?" signal for nav consumers, bypassing
+    /// BOTH pose-retention layers that stack on top of
+    /// [`Self::get_local_player_pose`]: the WP-3 whole-pose shadow above
+    /// (`next_local_pose_shadow`, `lib.rs:37410-37425` — never regresses
+    /// `landblockId` to 0 once a good pose has been seen) and the WP-2
+    /// `last_valid_pose` heal underneath
+    /// (`holtburger_world::WorldState::runtime_pose_for_guid`,
+    /// `state/mutations.rs`). Reads straight through to
+    /// `WorldState::local_player_pose_cell_resolved` on every call — this
+    /// getter is NOT cached/shadowed, so it always reflects whether the
+    /// CURRENT pose is genuinely live data (never a stale last-known-cell
+    /// invention). `false` pre-spawn (no WorldState/body yet) — the same
+    /// case the old `objCellId==0` sentinel caught before WP-2/WP-3.
+    ///
+    /// JS: nav consumers (`ai/actions.js`, `ai/tools/dungeon_nav.js`,
+    /// `ai/explore_memory.js`, `indoor_router.js`) should gate their
+    /// "position unresolved — hold" branch on
+    /// `!getLocalPlayerPoseCellResolved()` instead of `objCellId === 0`,
+    /// which the retention layers above now make unreachable. Additive
+    /// export — rides the manifest unchanged (F18-2 policy); a stale
+    /// `pkg/` predating this method is absent from JS's `typeof` view, so
+    /// callers MUST feature-detect and fall back to the old `=== 0` check.
+    #[wasm_bindgen(js_name = getLocalPlayerPoseCellResolved)]
+    pub fn get_local_player_pose_cell_resolved(&self) -> bool {
+        match self.world.try_borrow() {
+            Ok(world) => world
+                .as_ref()
+                .is_some_and(|w| w.local_player_pose_cell_resolved()),
+            Err(_) => false,
+        }
+    }
+
     /// **Wave 10 Phase 10.4 (2026-05-26).** Synchronous, JS-readable
     /// gate that mirrors the substate + airborne checks inside the
     /// `SessionCommand::Jump` arm (see `lib.rs:27248-27286`). Returns

@@ -200,8 +200,18 @@ textContent/value/remove).
   come later).
 
 ## Cost & safety discipline (bake into prompts and code)
-- Default check-in 5 min; hard bounds 1..30; maxCallsPerHour 12.
+- Default check-in 5 min; hard bounds 1..30; maxCallsPerHour 12 (constructor
+  default only — ⚠ the live `?bot=1&botInterval=` boot path overrides this to
+  `min(70, ceil(70/botInterval))`, 70/hr on the actual stream rig; see
+  url-flags.md `botInterval`/`ai` rows and rynth/ai/README.md's cost table;
+  budget from the live number, not this line, 2026-07-23 correction — rynth-
+  review 16 C3 / 09).
 - maxTokens 1024 default; observation capped ~6k chars.
+- `maxSpendPerHourUsd` (director.js constructor opt, default $1) is a second,
+  dollar-denominated cap alongside `maxCallsPerHour`; `director.js` also
+  enforces a real minimum inter-call spacing floor between SCHEDULED fires
+  (`3600/maxCallsPerHour` seconds) so the rolling-hour count can't front-load
+  into a burst — see the Addendum below.
 - The LLM gets NO admin powers: `say` refuses "@..."; there is no raw-eval action.
 - Every director failure path degrades to "bot keeps grinding untouched".
 
@@ -284,3 +294,54 @@ bot.js's `ExplorePressureController` reads the director's busy/last-check state
 ONLY through these accessors (never the private `_running`/`_inflight`/
 `_lastCheckAt`), so the two files can no longer drift silently. Accessor cases
 appended to `rynth_ai_director_test.cjs`.
+
+## Addendum — operator-stop refusal on manual checkNow, spacing floor, control-channel sender allowlist, pinned scratchpad (2026-07-23, rynth-review remediation; ADDITIVE)
+
+### director.js (checkNow contract amendment — reads §"director.js" above's frozen
+### `async checkNow()` signature unchanged; behavior amended)
+- `checkNow()` — the SPEC's original text calls this "the interval body, also
+  manual trigger." That is still true, but as of this addendum it now ALSO
+  checks the durable operator-stop latch (`ai/operator_stop.js`,
+  `isOperatorStopLatched()`) FIRST, before anything else — including a manual
+  `checkNow()`/`!bot ai now`/UI "Check now" call. If the latch is set, it
+  returns `{ plan: null, results: [], skipped: "operator-stop" }` immediately
+  and journals a `note`, WITHOUT calling the LLM. Rationale: previously a
+  stopped/latched director's own manual trigger could still run a full LLM
+  plan and execute it — a durable stop that a UI click could route around is
+  not durable. This does NOT gate on `enabled` (unchanged from the original
+  contract — checkNow is still usable standalone in tests without start()).
+- **Minimum inter-call spacing floor** (constructor via `maxCallsPerHour`, no
+  new opt): a SCHEDULED fire (`opts.scheduled`, set by the internal
+  `_schedule` timer chain) additionally refuses if less than
+  `3600_000 / maxCallsPerHour` ms have elapsed since the last check-in,
+  journaling a `budget` entry and rescheduling for the remainder. `
+  maxCallsPerHour` was previously enforced only as a rolling 60-min COUNT,
+  which permits bursty front-loading (all N calls early in the hour, then
+  silence); the floor makes cadence actually smooth. Early checks
+  (`requestEarlyCheck`) and `checkNow({force:true})` are exempt — same
+  convention as the existing travel-hold bypass.
+- `maxSpendPerHourUsd` (constructor opt, default `1`; `null`/negative
+  disables): a rolling-60-min dollar-spend estimate (from token usage ×
+  provider pricing) that, like `maxCallsPerHour`, skips (not errors) an
+  over-cap check-in. Independent of the call-count cap — either can bind
+  first.
+
+### control_channel.js (sender allowlist — see also the P0 note in rynth/ai/README.md)
+- `RynthControlChannel` constructor opt `owner` (name string | array | unset):
+  unset resolves live, per dispatch, to the logged-in character's own name
+  (`host.GetPlayerId()` + `TryGetObjectName()`); unresolvable resolves to `[]`
+  — REFUSE EVERYONE, never "obey everyone." `bot.js` wires `config.control =
+  { owner }`, settable from the URL via `?botCtlOwner=name1,name2` (comma-
+  split). An unauthorized sender gets exactly one "unauthorized" reply per
+  session (`_unauthorizedLogged`), not silence and not a reply per attempt.
+
+### ai/extensions.js / ai/observe_assemble.js (pinned observation tier)
+- The scratchpad section (`ai/tools/memory.js`) is registered with
+  `tier: "STEADY"` AND `pinned: true` in `OBS_SECTION_TIERS`/
+  `OBS_PINNED_SECTIONS` (`extensions.js`). `observe_assemble.js`'s
+  `assembleObservation` treats any `pinned: true` section as exempt from tier-
+  based shedding, per-subsystem quotas, AND the final hard-slice — it is
+  always kept in full. This makes the scratchpad's long-documented "never
+  dropped" claim (see `ai/tools/memory.js`'s header comment) actually true
+  end to end, closing a gap where the comment predated the code that enforced
+  it.

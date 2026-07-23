@@ -52,7 +52,12 @@
 //   - No NearestSafeCell hazard evacuation (:230) — that's RynthAi combat
 //     behavior, not routing. findPath still honors a hazards set (:308
 //     semantics: goal allowed even if hazardous).
-
+//
+// STAYS IMPORT-FREE (bot.js:123's comment; rynth_indoorsim_test.cjs copies
+// ONLY this file to a tmpdir .mjs and imports it standalone): nav_guard.js
+// wiring below (floorPlaneZForCell) uses a SOFT dynamic import wrapped in
+// try/catch, not a static one — see the block right before asMap.
+//
 // Drop classification (DungeonPathfinder.cs:47-73). The C# converts /loc
 // degrees to raw units (×240, :66-67) so NS/EW share Z's scale; our graph pos
 // is already raw world metres, so the thresholds apply directly.
@@ -90,10 +95,94 @@ export function isEnvCellId(id) {
 // 2026-07-21 in the Holtburg training academy). It is NOT outdoors: the binary
 // EnvCell-or-outdoor split silently mislabels it. Callers that classify
 // indoor/outdoor must treat this as UNKNOWN, not as an outdoor LandCell.
-/** True if id encodes no resolved cell (respawn/streaming gap). */
+/** True if id encodes no resolved cell (respawn/streaming gap).
+ *
+ * LEGACY/fallback primitive (rynth-review 07 C1 / 17-SYNTHESIS #9,
+ * 2026-07-23): the wasm WP-2/WP-3 pose-retention layers (last-known-good
+ * cell heal + whole-pose shadow) never regress a resolved `objCellId` back
+ * to 0 once a good pose has been seen, so an `id` sourced from
+ * `getLocalPlayerPose()`/`TryGetPlayerPose()` alone can no longer surface
+ * this sentinel in practice. Prefer [`isPoseCellUnresolved`] on a pose
+ * object carrying the honest `cellResolved` signal
+ * (`getLocalPlayerPoseCellResolved`); this raw-id form is kept as the
+ * fallback for hosts predating that capability and for any caller that
+ * only has a bare id. */
 export function isUnresolvedCellId(id) {
   return (id >>> 0) === 0;
 }
+
+/** True if `pose`'s cell is unresolved — position not yet known well
+ * enough to navigate or classify indoor/outdoor. Prefers the honest
+ * `pose.cellResolved` boolean (bypasses the WP-2/WP-3 retention layers,
+ * see [`isUnresolvedCellId`] doc); falls back to the legacy
+ * `objCellId === 0` sentinel when `cellResolved` is `null`/`undefined`
+ * (host predates the capability) so HOLD semantics are unchanged there.
+ * Accepts either `{objCellId, cellResolved}` (webhost.js snap.pose shape)
+ * or `{cell, cellResolved}` (this module's own `getPose` shape). */
+export function isPoseCellUnresolved(pose) {
+  if (!pose) return true;
+  if (pose.cellResolved === true) return false;
+  if (pose.cellResolved === false) return true;
+  const id = typeof pose.objCellId === "number" ? pose.objCellId : pose.cell;
+  return isUnresolvedCellId(id);
+}
+
+// Per-cell floor-plane side index for nav_guard.js's sub-floor guard (2026-
+// 07-23 fix, review finding B1/#13): nav_guard's FLOOR_PLANE_Z=0 default is
+// only correct where a dungeon floor happens to sit at world-z≈0 (the
+// academy); any deeper EnvCell falsely reads a correctly-settled pose as
+// sub-floor and parks forever. collectLandblockIntoGraph below already scans
+// each cell's real walkable-floor Z span (floorZMin/floorZMax); this is NOT
+// the "no graph cache — callers cache" graph itself (see header) but a tiny
+// purpose-built cellId->floorZMin index, fed as a side effect of that scan,
+// so nav_guard can resolve the CORRECT default without importing this module
+// (forbidden cycle, nav_guard.js header) and without bot.js (which wires
+// nav_guard's guardLeg in as a bare function reference, no opts) needing any
+// change. LRU-capped (Map insertion order) for long-session hygiene, same
+// convention as bot.js's _seenPortals/_visitedDoors.
+const FLOOR_PLANE_CACHE_MAX = 4096;
+const _floorPlaneByCell = new Map();
+
+function rememberFloorPlane(cellId, floorZMin) {
+  if (typeof floorZMin !== "number" || !Number.isFinite(floorZMin)) return;
+  const id = cellId >>> 0;
+  _floorPlaneByCell.delete(id);
+  _floorPlaneByCell.set(id, floorZMin);
+  if (_floorPlaneByCell.size > FLOOR_PLANE_CACHE_MAX) {
+    _floorPlaneByCell.delete(_floorPlaneByCell.keys().next().value);
+  }
+}
+
+/**
+ * nav_guard.js's injected floor-plane provider: this cell's own scanned
+ * floor (floorZMin), or undefined when the cell hasn't been scanned yet (a
+ * fresh graph, or a mesh-less placement) — nav_guard falls back to its flat
+ * default in that case. Exported too, for direct use/tests.
+ */
+export function floorPlaneZForCell(cellId) {
+  const z = _floorPlaneByCell.get(cellId >>> 0);
+  return typeof z === "number" ? z : undefined;
+}
+
+// SOFT wiring, not a static `import` (this module stays import-free — see
+// header): the tmpdir-copy sim test (rynth_indoorsim_test.cjs) runs this
+// file alone, with no nav_guard.js beside it, so a static import would throw
+// ERR_MODULE_NOT_FOUND on load. A failed dynamic import here just means
+// nav_guard never gets a provider and falls back to its own flat
+// FLOOR_PLANE_Z=0 default — the same "test double / older bundle" degrade
+// its own header already documents. In the real app (files co-located) this
+// resolves normally and registers floorPlaneZForCell once, on first module
+// evaluation.
+(async () => {
+  try {
+    const navGuard = await import("./nav_guard.js");
+    if (navGuard && typeof navGuard.setFloorPlaneProvider === "function") {
+      navGuard.setFloorPlaneProvider(floorPlaneZForCell);
+    }
+  } catch {
+    /* nav_guard.js not colocated (sim test) — degrade to FLOOR_PLANE_Z=0 */
+  }
+})();
 
 // Normalize a caller graph (Map or plain object, string or number keys) into
 // Map<u32, node>. Dungeon graphs are tens-to-hundreds of cells; O(n) per call.
@@ -843,6 +932,7 @@ async function collectLandblockIntoGraph(fetchEnvCells, lbWord, graph) {
       if (typeof floorZMin === "number") {
         node.floorZMin = floorZMin;
         node.floorZMax = floorZMax;
+        rememberFloorPlane(id, floorZMin); // feed nav_guard's floor-plane provider
       }
       graph.set(id, node);
       added = true;
@@ -954,6 +1044,9 @@ export async function buildGraphFromWasm(sessionHandle, depth = 0, opts = {}) {
 
 export default {
   isEnvCellId,
+  isUnresolvedCellId,
+  isPoseCellUnresolved,
+  floorPlaneZForCell,
   isDropEdge,
   edgeKey,
   nearestCell,

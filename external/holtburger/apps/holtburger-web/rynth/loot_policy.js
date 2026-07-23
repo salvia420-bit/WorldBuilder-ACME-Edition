@@ -12,12 +12,37 @@
 //     (CorpseOpenController.cs:1394-1424). Rule priority is NOT used.
 //   - Within a rule, ALL conditions must hold (AND). Zero conditions => the
 //     rule matches unconditionally (VTankLootEvaluator.cs:143).
-//   - A missing property reads as the caller's default, exactly like
-//     Cache.Get*Property miss (AcStubs.cs:104-114) — so an UN-appraised item
-//     degrades to value 0 / armorLevel 0 / tier 0 rather than being skipped.
+//   - Value(19) is the one property RynthLootLoop's own appraisal gate
+//     already guarantees the caller has waited for (loot_loop.js
+//     APPRAISE_TIMEOUT_MS / HasAppraisalData — LootScoring finding #1); a
+//     still-missing Value legitimately degrades to 0, exactly like
+//     Cache.Get*Property miss (AcStubs.cs:104-114). Every OTHER property this
+//     module reads (workmanship/wield-*, armorLevel, the 370-379 ratings,
+//     max-damage/variance) streams on the SAME appraisal response as Value —
+//     but nothing upstream holds an item for THEM, so on a freshly-shifted
+//     corpse item they are indistinguishable from "genuinely absent" (a
+//     trophy item with no tier). Review 03 C2: silently reading these as 0
+//     is an under-loot bug, not a feature — see the presence model below.
 //   - Unmatched => verdict "leave" (no-loot => leave on corpse,
 //     CorpseOpenController.cs:1373-1379). VTank has no "leave" action; we add
 //     one as an explicit skip so a profile can positively drop an item.
+//
+// PRESENCE MODEL (03 C2 fix): a bag counts as fully appraised once its
+// caller has observed Value(19) (`bag.appraised === true` is an explicit
+// override for a caller that knows better, e.g. a test fixture). Every node
+// type in APPRAISAL_GATED_TYPES (tierGE, armorLevelGE, medianDamageGE,
+// totalRatingsGE — the exact "tier/armor/rating" rules 03 C2 named) treats
+// its property as UNKNOWN, not 0, on an unappraised bag: matchRule scans the
+// whole rule looking for an already-KNOWN failing condition (which fails the
+// rule outright, appraisal or not — AND-short-circuit is still sound), and
+// if none is found, the rule — and the whole evaluate() scan, since
+// first-match-wins means a later rule's outcome cannot be trusted either
+// until this one resolves — reports back PENDING rather than a verdict. A
+// caller wiring this in must treat `pending:true` exactly like loot_loop's
+// own Value gate: hold the item, request/await appraisal, re-evaluate next
+// tick. valueGE is deliberately NOT gated here (see above): loot_loop
+// already solved that one upstream, so re-gating it here would double the
+// hold with no new information.
 //
 // SURVIVAL INVARIANT: evaluate() never throws. A malformed condition (unknown
 // type, bad param) degrades to a non-match for that rule and the scan
@@ -26,7 +51,23 @@
 //
 // Presets: greedy | selective | survival. The `greedy` preset with minValue=0
 // reproduces RynthLootLoop's shipped behavior byte-for-byte: keep iff
-// Value(19) >= minValue, else leave.
+// Value(19) >= minValue, else leave — INCLUDING for a fractional minValue
+// (03 C1 fix: valueGE now compares the raw Number, matching loot_loop.js's
+// plain `value < this.minValue` float compare exactly; the previous `| 0`
+// truncation on the threshold made greedy(100.5) keep a Value-100 item that
+// the live loop would skip — untested because the parity suite only sampled
+// integer mins. The 32-bit truncation in `toInt`/`getInt` above is unrelated:
+// it is C#'s own int32 semantics for an item's *own* Value/int properties,
+// which are always integers on the wire; only the caller-supplied threshold
+// was ever wrongly truncated).
+//
+// VERDICT → ACTION (03 C3 fix): the only existing precedent for turning a
+// verdict into an executor action is loot_loop.js's netBrain shadow
+// (`csPickup = Verdict==="keep"||Verdict==="salvage"`), which silently drops
+// `sell`. That mapping is harmless there only because the shadow's one
+// hand-built rule never emits "sell" — it is NOT a valid template for a real
+// wire. VERDICT_ACTION_MAP below is the canonical map a future wiring must
+// use instead.
 
 // ── STypeInt property ids (Chorizite.Common/Enums/PropertyInt.cs) ───────────
 const P_VALUE = 19;             // :42
@@ -110,6 +151,17 @@ function spellCount(bag) {
   if (bag.spellCount != null) return bag.spellCount | 0;
   if (Array.isArray(bag.spells)) return bag.spells.length;
   return 0;
+}
+
+// isAppraised(bag): has this item's non-Value properties actually streamed?
+// Value(19) is universal (every AC object has one, even 0) and is exactly
+// the property loot_loop's own appraisal gate waits on — so "Value has been
+// observed" is the honest, already-anchored signal that a full appraisal
+// response landed, not just a bare spawn/ObjDesc. `bag.appraised === true`
+// is an explicit override for a caller (or test) that knows the bag is
+// complete without needing to stuff a Value key in it.
+function isAppraised(bag) {
+  return bag.appraised === true || hasInt(bag, P_VALUE);
 }
 
 // ── TierCalculator port (Mag-LootParser/TierCalculator.cs) ───────────────────
@@ -213,7 +265,11 @@ function tier(bag) {
 // rule (VTankLootEvaluator.cs:145-158 parity).
 const NODES = {
   // Value(19) >= min — the loop's floor rule (LootScoring finding #2 shape).
-  valueGE: (bag, c) => getInt(bag, P_VALUE, 0) >= (c.min | 0),
+  // 03 C1: compare the RAW threshold, not `c.min | 0` — loot_loop.js's own
+  // `value < this.minValue` is a plain float compare with no rounding, so a
+  // fractional minValue (e.g. 100.5) must be honored exactly, not truncated
+  // toward keeping more than the live loop would (see header note).
+  valueGE: (bag, c) => getInt(bag, P_VALUE, 0) >= Number(c.min),
   objClass: (bag, c) => (bag.objClass | 0) === (c.objClass | 0),
   intGE: (bag, c) => getInt(bag, c.key, 0) >= (c.value | 0),
   intLE: (bag, c) => getInt(bag, c.key, 0) <= (c.value | 0),
@@ -245,29 +301,78 @@ const NODES = {
 
 const VERDICTS = new Set(["keep", "salvage", "sell", "leave"]);
 
-// Evaluate one rule: all conditions must hold; unknown/throwing condition =>
-// the rule does not match (survival). Empty conditions => unconditional match.
+// Canonical verdict → executor-action map (03 C3). A future wire MUST
+// consume this — not the netBrain shadow's inert `keep||salvage` — so a
+// `sell`-tagged item ("grab it now, vendor it later", the entire rationale
+// for having a sell verdict at all) is actually picked up instead of quietly
+// left on the corpse.
+const VERDICT_ACTION_MAP = Object.freeze({
+  keep: "pickup",
+  salvage: "pickup",
+  sell: "pickup",
+  leave: "skip",
+});
+
+// actionForVerdict(verdict) -> "pickup" | "skip". Unknown/garbage verdicts
+// degrade to "skip" (survival invariant: never invent a pickup from data we
+// don't recognize).
+function actionForVerdict(verdict) {
+  return VERDICT_ACTION_MAP[verdict] || "skip";
+}
+
+// Node types whose property is NOT guaranteed by loot_loop's own appraisal
+// gate (that gate only covers Value(19) — see header PRESENCE MODEL). On an
+// unappraised bag these must report "unknown", not a false 0-comparison.
+const APPRAISAL_GATED_TYPES = new Set(["tierGE", "armorLevelGE", "medianDamageGE", "totalRatingsGE"]);
+
+// Evaluate one rule: all conditions must hold (AND); unknown node type or a
+// throwing condition fails the rule outright (survival — VTankLootEvaluator.
+// cs:145-158 parity). An appraisal-gated condition on an unappraised bag is
+// UNKNOWN rather than false: the rule can still be defeated by another,
+// already-KNOWN failing condition in the same AND (order doesn't matter —
+// every condition is checked), but if no known condition fails and at least
+// one was unknown, the rule's outcome is PENDING, not a verdict.
+// Returns { match: boolean, pending: boolean }.
 function matchRule(bag, rule) {
   const conds = (rule && (rule.all || rule.conditions)) || [];
+  let pending = false;
   for (const c of conds) {
-    const fn = c && NODES[c.type];
+    const type = c && c.type;
+    const fn = type ? NODES[type] : null;
+    if (!fn) return { match: false, pending: false }; // unknown node type => definite fail, no throw
+    if (APPRAISAL_GATED_TYPES.has(type) && !isAppraised(bag)) {
+      pending = true;
+      continue; // can't resolve yet; keep scanning for a definite (known) false
+    }
     let ok = false;
     try {
-      ok = fn ? !!fn(bag, c) : false; // unknown node type => no match, no throw
+      ok = !!fn(bag, c);
     } catch {
       ok = false; // bad data line => rule fails (VTankLootEvaluator.cs:155-158)
     }
-    if (!ok) return false;
+    if (!ok) return { match: false, pending: false }; // known false wins regardless of any unknown
   }
-  return true;
+  return { match: !pending, pending };
 }
 
 /**
- * evaluate(itemBag, profile[, opts]) -> { verdict, matched, ruleIndex, ruleName, action }
+ * evaluate(itemBag, profile[, opts])
+ *   -> { verdict, matched, pending, ruleIndex, ruleName, action }
  *
  * `profile` may be an array of rules, a { rules } object, or a preset NAME
  * ("greedy"|"selective"|"survival"), in which case `opts` parameterizes it.
  * verdict ∈ { keep, salvage, sell, leave }; unmatched => "leave".
+ *
+ * `pending` (03 C2): true when the scan hit a rule it cannot yet resolve —
+ * one of its appraisal-gated conditions (tier/armor/rating/damage; see
+ * APPRAISAL_GATED_TYPES) read UNKNOWN on this bag and no earlier condition
+ * in that same rule was a known, definite false. When `pending` is true the
+ * `verdict`/`action` fields are a SAFE DEFAULT ("leave"/"skip"), not a real
+ * decision — a wiring caller must treat this exactly like loot_loop's own
+ * Value(19) appraisal hold: do not act on the item yet, keep/re-request its
+ * appraisal, and re-evaluate once more properties have streamed. The scan
+ * stops at the first pending rule (first-match-wins means a later rule's
+ * verdict can't be trusted either until the earlier one resolves).
  */
 function evaluate(itemBag, profile, opts = {}) {
   const bag = itemBag || {};
@@ -279,19 +384,31 @@ function evaluate(itemBag, profile, opts = {}) {
   for (let i = 0; i < rules.length; i++) {
     const rule = rules[i];
     if (!rule) continue;
-    if (matchRule(bag, rule)) {
+    const r = matchRule(bag, rule);
+    if (r.pending) {
+      return {
+        verdict: "leave",
+        matched: false,
+        pending: true,
+        ruleIndex: i,
+        ruleName: rule.name || `#${i}`,
+        action: "",
+      };
+    }
+    if (r.match) {
       let action = String(rule.action || "keep").toLowerCase();
       if (!VERDICTS.has(action)) action = "keep"; // unknown action => keep (matched => loot)
       return {
         verdict: action,
         matched: true,
+        pending: false,
         ruleIndex: i,
         ruleName: rule.name || `#${i}`,
         action,
       };
     }
   }
-  return { verdict: "leave", matched: false, ruleIndex: -1, ruleName: "", action: "" };
+  return { verdict: "leave", matched: false, pending: false, ruleIndex: -1, ruleName: "", action: "" };
 }
 
 // ── presets (general-purpose; parameterized; no content literals) ────────────
@@ -339,5 +456,11 @@ function preset(name, opts = {}) {
   return b(opts);
 }
 
-export { evaluate, tier, preset, greedy, selective, survival, NODES, PRESET_BUILDERS };
-export default { evaluate, tier, preset, greedy, selective, survival };
+export {
+  evaluate, tier, preset, greedy, selective, survival, NODES, PRESET_BUILDERS,
+  VERDICT_ACTION_MAP, actionForVerdict, isAppraised, APPRAISAL_GATED_TYPES,
+};
+export default {
+  evaluate, tier, preset, greedy, selective, survival,
+  VERDICT_ACTION_MAP, actionForVerdict,
+};

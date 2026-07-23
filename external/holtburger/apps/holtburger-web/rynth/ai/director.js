@@ -7,6 +7,8 @@
 import { buildObservation } from "./observe.js";
 import { renderActionCatalog, validateAction, executePlan } from "./actions.js";
 import { extractJson } from "./llm_client.js";
+import { isOperatorStopLatched } from "./operator_stop.js";
+import { estimateCost } from "./providers.js";
 
 const MIN_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -224,6 +226,16 @@ export class RynthAiDirector {
     execute = executePlan, validate = validateAction,
     intervalMinutes = 5, minIntervalMinutes = 1, maxIntervalMinutes = 30,
     maxCallsPerHour = 12, maxErrorsBeforeDisable = 5,
+    // Rolling 60-min $ spend cap (09 C2/S1, additive 2026-07-23): the only
+    // dollar ceiling in the codebase used to live in safety.js's
+    // never-instantiated RateGovernor (dead code, byte-identical
+    // maxCallsPerHour default to this director's own live budget). Moved
+    // here onto the LIVE budget path instead of wiring a second governor —
+    // one budget authority. $1/hr default sits comfortably above every
+    // measured soak rate (GLM pinned ~$0.05/h, minimax-m3 unpinned ~$0.33/h
+    // per HANDOFF-playtester-soak-{4,8}.md) so it never trips at current
+    // usage; config.ai.maxSpendPerHourUsd overrides, null/negative disables.
+    maxSpendPerHourUsd = 1,
     systemPrompt = DEFAULT_SYSTEM_PROMPT, dryRun = false, log,
     // Travel-hold (additive 2026-07-18, SPEC-navatlas §3-W3.2): while
     // holdWhile() returns a truthy reason the scheduled check-in is skipped
@@ -243,6 +255,11 @@ export class RynthAiDirector {
     this.minIntervalMinutes = minIntervalMinutes;
     this.maxIntervalMinutes = maxIntervalMinutes;
     this.maxCallsPerHour = maxCallsPerHour;
+    const spendCap = Number(maxSpendPerHourUsd);
+    // null/undefined disables the guard (RateGovernor's own maxSpendUsd
+    // convention, safety.js:189-190) — checked before Number() so
+    // Number(null)===0 doesn't silently become "block everything".
+    this.maxSpendPerHourUsd = maxSpendPerHourUsd == null || !Number.isFinite(spendCap) || spendCap < 0 ? null : spendCap;
     this.maxErrorsBeforeDisable = maxErrorsBeforeDisable;
     this.systemPrompt = systemPrompt;
     this.dryRun = dryRun;
@@ -253,8 +270,14 @@ export class RynthAiDirector {
     this._lastCheckAt = null;
     this._inflight = null;
     this._running = false;
+    // Abort generation (report 10 #2): stop() bumps this; a check-in that
+    // captured the generation before the LLM call started discards its own
+    // plan on return if stop() ran meanwhile — the operator's stop doesn't
+    // wait out an up-to-120s in-flight round-trip.
+    this._generation = 0;
     this._calls = 0;        // cumulative chat attempts (incl. failed)
     this._callTimes = [];   // chat-attempt stamps for the rolling 60-min budget
+    this._costSamples = []; // { t, usd } estimated-cost samples for the rolling 60-min $ cap (09 C2/S1)
     this._consecutiveErrors = 0;
     this._lastSummary = null;
     this._aiPausedKernel = false; // set by an executed pause action; idle-guard input
@@ -277,6 +300,7 @@ export class RynthAiDirector {
   /** Idempotent: disables the loop and cancels any pending check-in. */
   stop() {
     this.enabled = false;
+    this._generation++; // report 10 #2: discard whatever plan an in-flight LLM call returns
     if (this._timer != null) { clearTimeout(this._timer); this._timer = null; }
     this._nextCheckAt = null;
   }
@@ -291,6 +315,10 @@ export class RynthAiDirector {
       consecutiveErrors: this._consecutiveErrors,
       lastSummary: this._lastSummary,
       spend: this._spend(),
+      // Additive (09 C2/S1): $ spend-cap telemetry alongside the call-count
+      // budget above — cap null means the guard is off.
+      spendCapUsd: this.maxSpendPerHourUsd,
+      estSpendLastHourUsd: this._costSamples.reduce((sum, s) => sum + s.usd, 0),
     };
   }
 
@@ -326,6 +354,21 @@ export class RynthAiDirector {
   async _checkOnce(opts = {}) {
     this._running = true;
     const now = Date.now();
+    const gen = this._generation; // report 10 #2: captured before the LLM call
+
+    // Durable operator-stop refusal (report 10 #1 / 13 C2): checkNow() is
+    // ALSO a deliberate manual trigger usable while `enabled` is false (SPEC
+    // §director: "the interval body, also manual trigger" — tests rely on
+    // calling it standalone without start()), so this does NOT gate on
+    // `enabled` — only on the durable cross-reconnect latch. That latch is
+    // the one a stopped/latched director must never let a UI "Check now"
+    // click or a `!bot ai now` tell bypass into an LLM call + executed plan.
+    let latched = false;
+    try { latched = isOperatorStopLatched(); } catch { latched = false; }
+    if (latched) {
+      this._journal("note", "check-in refused: operator-stop latch is set");
+      return { plan: null, results: [], skipped: "operator-stop" };
+    }
 
     // Travel-hold gate (SPEC-navatlas §3-W3.2): a plain scheduled fire while
     // the harness is mid-route burns a call to say "still walking" — skip it.
@@ -347,8 +390,30 @@ export class RynthAiDirector {
         // Held past the cap: fall through and check anyway.
       }
     }
+    const cameFromEarlyCheck = !!this._earlyPending; // 09 C3: early checks bypass the spacing floor below too
     this._holdSince = null;
     this._earlyPending = null;
+
+    // Minimum inter-call spacing floor (09 C3): maxCallsPerHour is a rolling
+    // COUNT — it lets calls burst in quick succession early in the window,
+    // then refuses every fire for the rest of the hour once exhausted, which
+    // is bursty, not the smooth "~51s sustained cadence" STREAM-RIG-OPS.md
+    // assumes (3600/70 is a rolling AVERAGE, not an enforced floor). Applies
+    // ONLY to the scheduler's own automatic fire (opts.scheduled, set by
+    // _schedule's setTimeout below) so the timer chain self-paces; a manual
+    // checkNow() (UI "Check now", `!bot ai now`, the SPEC "also manual
+    // trigger" contract) and an event-driven early check are exempt — same
+    // convention as the travel-hold's own force/earlyPending bypass above.
+    if (opts.scheduled && !cameFromEarlyCheck && this.maxCallsPerHour > 0 && this._lastCheckAt != null) {
+      const floorMs = HOUR_MS / this.maxCallsPerHour;
+      const sinceLast = now - this._lastCheckAt;
+      if (sinceLast < floorMs) {
+        const waitMin = Math.max(0.05, (floorMs - sinceLast) / MIN_MS);
+        this._journal("budget", `check-in spacing floor: ${Math.round(sinceLast / 1000)}s since last (floor ${Math.round(floorMs / 1000)}s at ${this.maxCallsPerHour}/hr) — retrying in ${waitMin.toFixed(2)}m`);
+        this._schedule(waitMin);
+        return { plan: null, results: [], skipped: "spacing" };
+      }
+    }
 
     // Rolling 60-min budget window (SPEC §director Budget): refuse, journal,
     // reschedule — no LLM call, not an error.
@@ -357,6 +422,24 @@ export class RynthAiDirector {
       this._journal("budget", `skipped check-in: ${this._callTimes.length} calls in last 60 min (max ${this.maxCallsPerHour})`);
       this._schedule(this.intervalMinutes);
       return { plan: null, results: [], skipped: "budget" };
+    }
+
+    // Rolling 60-min $ spend cap (09 C2/S1, additive): the only dollar
+    // ceiling in this codebase used to live in safety.js's never-instantiated
+    // RateGovernor (dead code) — moved onto this LIVE budget path instead of
+    // wiring a second governor, using the providers.js cost catalog. This is
+    // an ESTIMATE (providers.js pricing is list-price, not billing truth); a
+    // model missing from the catalog is simply not counted (fails open on
+    // unknown price, same as the catalog's own `known:false` contract) rather
+    // than blocking check-ins outright.
+    this._costSamples = this._costSamples.filter((s) => now - s.t < HOUR_MS);
+    if (this.maxSpendPerHourUsd != null) {
+      const spentUsd = this._costSamples.reduce((sum, s) => sum + s.usd, 0);
+      if (spentUsd >= this.maxSpendPerHourUsd) {
+        this._journal("budget", `skipped check-in: est. spend $${spentUsd.toFixed(4)} in last 60 min >= cap $${this.maxSpendPerHourUsd}/hr`);
+        this._schedule(this.intervalMinutes);
+        return { plan: null, results: [], skipped: "spend" };
+      }
     }
 
     this._lastCheckAt = now;
@@ -389,6 +472,29 @@ export class RynthAiDirector {
       ]);
     } catch (e) {
       return this._fail("llm", e);
+    }
+
+    // Record this completed call's estimated cost for the rolling $ cap above
+    // (09 C2/S1). Best-effort: an unknown model or missing usage just isn't
+    // counted (estimateCost -> known:false) — cost tracking must never affect
+    // whether this check-in's plan gets journaled/executed.
+    try {
+      const cost = estimateCost({
+        model: res?.model ?? this.client?.model,
+        promptTokens: res?.usage?.prompt,
+        completionTokens: res?.usage?.completion,
+      });
+      if (cost.known && Number.isFinite(cost.usd)) this._costSamples.push({ t: Date.now(), usd: cost.usd });
+    } catch { /* never let cost tracking break the check-in */ }
+
+    // Stale generation (report 10 #2): stop() ran while the LLM call was in
+    // flight (up to timeoutMs, default 120s) — discard this plan entirely.
+    // No journal-as-decision, no execute, no reschedule (stop() already
+    // cleared the timer; rescheduling here would silently re-arm a stopped
+    // director).
+    if (gen !== this._generation) {
+      this._journal("note", "check-in discarded: stopped mid-flight");
+      return { plan: null, results: [], skipped: "stopped" };
     }
 
     let plan = res?.json ?? null;
@@ -529,7 +635,10 @@ export class RynthAiDirector {
     this._nextCheckAt = Date.now() + ms;
     this._timer = setTimeout(() => {
       this._timer = null;
-      this.checkNow(); // never rejects
+      // scheduled:true marks this as the automatic timer fire (never set by
+      // an external caller) so _checkOnce's spacing floor (09 C3) applies
+      // only here, not to a manual checkNow().
+      this.checkNow({ scheduled: true }); // never rejects
     }, ms);
     if (typeof this._timer?.unref === "function") this._timer.unref(); // don't pin a node process
   }

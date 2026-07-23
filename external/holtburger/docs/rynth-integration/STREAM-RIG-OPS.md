@@ -31,11 +31,21 @@ boot-loop churn this runbook fights).
 ```
 nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
 &rain=off&snow=off&lightning=off&autoLogin=1&account=vendortest
-&password=vendortest&autoSpawn=first&kickDance=1&agent=1
+&password=vendortest&autoSpawn=first&agent=1
 &thoughtOverlay=1&bot=1&streamHud=1&botModel=minimax/minimax-m3
-&botInterval=0.5&botPersona=explorer&faithfulEntityCollision=on
+&botInterval=0.5&botPersona=explorer
 &explorePressure=1
 ```
+
+*(2026-07-23, rynth-review 13 D1 / 15 B2 / 16 S3: this block now shows the
+POST-removal shape — `kickDance=1` dropped (dead param, no reader since
+2026-06-14, see the `kickDance` row in url-flags.md) and
+`faithfulEntityCollision=on` dropped (the reader only ever tests `=off`; the
+feature has been default-ON since FU-3's 2026-07-20 promotion, so `=on` was a
+no-op relic of the pre-promotion opt-in string. A concurrent remediation pass
+is removing both from the live `launch.sh` — if you're reading this before
+that lands, `launch.sh` may still carry one or both; they do nothing either
+way.)*
 
 - `botModel=minimax/minimax-m3` pins the director LLM (2026-07-21 trial:
   within 6 min of a clean journal+scratchpad it routed to and used the
@@ -43,18 +53,31 @@ nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
   in the start apartment; launch.sh synced same day). Absent →
   `DEFAULT_MODEL=openai/gpt-oss-120b` (rynth/ai/llm_client.js:15). History:
   z-ai/glm-5.2 → microsoft/phi-4 (2026-07-20, via live location.href) →
-  minimax-m3. Setting botModel forces maxTokens:4096 + reasoning effort low
-  (url-flags.md §botModel).
+  minimax-m3. Setting botModel forces **maxTokens:1280** (2026-07-20 latency
+  fix — corrected here 2026-07-23; this line previously said 4096, which was
+  the pre-fix value and the axis this rig's cadence math actually depends on)
+  + reasoning effort low (url-flags.md §botModel).
 - `thoughtOverlay=1` = stream teleprompter for journal `plan` entries;
   `streamHud=1` = inventory pane + buffs-HUD reposition. Both exact-match `1`.
+- `botCtlOwner=<name>` (new 2026-07-23, P0 fix — rynth-review 13 #1): sets the
+  in-game control-channel sender allowlist (`!bot ...` tells). Not yet in the
+  baked flag block above — the channel's own default (the logged-in
+  character, refuse-all if unresolvable) already closes the P0 hole even
+  without it, but an operator running a second "trusted" character should add
+  it explicitly (comma-separated for more than one name). See url-flags.md
+  §botCtlOwner.
 - Full reference: `apps/holtburger-web/docs/url-flags.md` §1.
 - launch.sh and the live page are IN SYNC as of 2026-07-21 (the 2026-07-20
   drift is resolved). If you retune via `location.href` on the live page,
   re-sync launch.sh or a relaunch reverts it.
 - Cadence math: effective check-in ≈ (model asks max = 2×interval) + 15-20s
   call latency ≈ 78s at 0.5; the 70-calls/hr cap floors sustained cadence at
-  ~51s no matter how low the interval. The GLM fast-provider pin is
-  z-ai/*-only.
+  ~51s no matter how low the interval — `rynth/ai/director.js` now ALSO
+  enforces this as a real minimum inter-call spacing floor (`3600/
+  maxCallsPerHour` seconds, not just a rolling-window count), so a burst of
+  early check-ins can no longer front-load the hour. The GLM fast-provider
+  pin is z-ai/*-only; minimax/* gets its own (less battle-tested) pin as of
+  2026-07-23 — see the `PROVIDER_PIN_TABLE` note in url-flags.md §botModel.
 
 ## Six hard-won traps (soak-11 §2 — all live-diagnosed)
 
@@ -122,16 +145,50 @@ nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
 - **Window stacking check**: `DISPLAY=:0 xprop -root _NET_CLIENT_LIST_STACKING`
   — last id = topmost; the game window (0x32…) must be above the slate.
 - **Bot memory wipe** (fresh-context / clean model test — no reload needed):
-  `d=window.__bot.ai.director; d.journal.entries.length=0;
-  localStorage.removeItem(d.journal.storageKey); d._lastSummary='';
-  localStorage.removeItem('holtburger_ai_journal_v1');
-  localStorage.removeItem('holtburger_ai_scratchpad_v1')`.
-  KEEP `holtburger_ai_key_v1` (OpenRouter key) + `rynth.atlas.v1` (nav atlas).
+  the old hand-typed one-liner only ever cleared journal+scratchpad
+  *localStorage* and silently left several RAM survivors alive (stale
+  scratchpad RAM mirror, exploreMemory coverage/frontier, `_usedObjects`) —
+  those kept contaminating every "clean model" run. Use the one-call wipe
+  instead, which clears all of it and tells you exactly what it did:
+  ```js
+  const { wipeForCleanTest } = await import(new URL('rynth/ai/tools/memory.js', location.href).href);
+  console.log(wipeForCleanTest(window.__bot.ai));
+  ```
+  (Pending wiring: this isn't yet exposed as `window.rynthAI.wipeForCleanTest`
+  — that needs a one-line addition to bot.js's `window.rynthAI = {...}`
+  object; until then, import `rynth/ai/tools/memory.js` directly as above.)
+  Clears: journal entries (RAM array) + its localStorage key; the scratchpad
+  (RAM mirror + localStorage key — the old leak: the RAM mirror used to
+  survive a plain `localStorage.removeItem`, contaminating the next
+  check-in); `exploreMemory` coverage/frontier/history RAM (so the LOCATION
+  block stops showing the prior run's Covered/Frontier); `_usedObjects` /
+  `_triedTotal` (the "already tried here" tracker); `combatMemory` RAM if a
+  live instance is ever wired (dark/unattached today, so normally a no-op);
+  `director._lastSummary` (display-only, cosmetic).
+  Deliberately KEEPS untouched: `holtburger_ai_key_v1` (OpenRouter key) and
+  `rynth.atlas.v1` (nav atlas). Also deliberately does **not** clear the
+  `rynthAiOperatorStop` latch — a durable operator-stop must survive a
+  "clean model" wipe by design — it only warns you if the latch is set (via
+  the returned `warnings`); clear it separately with `window.rynthAI.start()`
+  if that's not what you want. Read the returned `{cleared, warnings}` — it
+  reports exactly what ran, so "was this actually clean?" has an answer.
 - **Un-stick tool**: `window.__sessionHandle.sendChat('@telepoi <town>')` /
   `@teleloc <cell> <x> <y> <z>` (landblock-frame — confirmed 2026-07-20).
   Since the same date the MoveTo driver also self-recovers from wall wedges
-  (±45° stall recovery, holtburger-core stall_recovery.rs); a bot standing
-  still for >30s against geometry is a NEW bug, not the old wedge.
+  (±45° stall recovery, holtburger-core stall_recovery.rs). **Updated
+  2026-07-23 (rynth-review 16 D4/07 — this diagnostic went stale the day
+  after it was written):** the ">30s = a NEW bug, not the old wedge" reading
+  is no longer safe on its own — `ea2cc7c3` ("settle-land", 2026-07-22, one
+  day after this line was written) fixed a DIFFERENT freeze mode: an outdoor
+  airborne latch that froze velocity into an unbreakable slide, which also
+  presents as "standing still against/near geometry for a long time." So a
+  >30s stall today is either (a) a genuinely new bug, or (b) a settle-land-
+  class freeze if you're on a build predating `ea2cc7c3` — check the commit
+  first before treating every long stall as novel. The general lesson
+  (cross-cutting smell, 17-SYNTHESIS): this exact wording — "the mover is
+  fixed now" — has been written and then quietly falsified four times
+  (soak-9→10→11→STREAM-RIG-OPS→`ea2cc7c3`); treat any "self-recovers" claim
+  about movement as "this leaf is fixed," not "movement freezes are solved."
 - **Live-state probes**: pose `window.__sessionHandle.getLocalPlayerPose()`
   (`.free()` it); route `window.__bot.router.status`; director
   `window.__bot.ai.director` (`client.model`, `_callTimes`, `journal`);

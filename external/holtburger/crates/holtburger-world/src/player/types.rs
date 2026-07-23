@@ -1666,6 +1666,25 @@ pub struct PlayerState {
     ///
     /// Default: `None` (no cell established before the first position apply).
     pub last_valid_landblock: Option<Guid>,
+
+    /// C2 fix (rynth-review 07/17-SYNTHESIS streamline #5, 2026-07-23):
+    /// the WHOLE last-known-good pose (cell + matching local coords +
+    /// rotation), stamped atomically in the SAME write as
+    /// [`Self::last_valid_landblock`]
+    /// (`state/mutations.rs::update_player_position_core`). Before this
+    /// fix, the FINAL heal fallback in `runtime_pose_for_guid` spliced
+    /// `last_valid_landblock`'s cell onto the CURRENT working
+    /// `body.pose.coords` — but those coords can already have advanced
+    /// into a DIFFERENT cell's local frame while the landblock is
+    /// momentarily NULL, yielding a self-consistent-looking but WRONG
+    /// world position (mixed cell+coords pose; a bogus `worldXY` can
+    /// spuriously trip the JS router's teleport-detection threshold).
+    /// `runtime_pose_for_guid` now swaps in this whole snapshot instead
+    /// of splicing, so the final fallback is atomic: cell and coords
+    /// always come from the SAME authoritative apply.
+    ///
+    /// Default: `None` (mirrors `last_valid_landblock`).
+    pub last_valid_pose: Option<holtburger_common::position::WorldPosition>,
 }
 
 impl Default for PlayerState {
@@ -1747,6 +1766,8 @@ impl PlayerState {
             teleport_arrival_pending: false,
             // WP-2: no last-known-good cell before the first position apply.
             last_valid_landblock: None,
+            // C2 fix: no last-known-good WHOLE pose before the first apply.
+            last_valid_pose: None,
         }
     }
 

@@ -49,7 +49,19 @@ list-*/describe/query/validate/diag/spell-get/asset-refs/…, curated from the
 live catalog and then code-audited 2026-07-17 — see `READ_ALLOW` in
 `wbt_sidecar.cjs`). Terrain/DAT/DB mutation, imports/exports, ingest jobs and
 `load` are operator-only; `quit` is always refused (it kills the child).
-`WBT_ALLOW=all` opens the command list for a trusted local setup.
+
+⚠ **`WBT_ALLOW=all` opens the ENTIRE 216-command WorldBuilder.Terminal REPL to
+whatever process talks to this sidecar — including every write/mutate/import/
+export/ingest command the read-only allowlist above exists to keep away from
+an LLM.** This is a trusted-local-operator escape hatch, not a director config
+knob (2026-07-23 addition — the review that prompted this note found no
+existing warning against the specific case that matters: running this sidecar
+with `WBT_ALLOW=all` while `rynth/ai/tools/wbt.js` is wired to a live AI
+director, i.e. an LLM gets a route to arbitrary DAT/DB mutation through
+`wbt_query`). **Never set `WBT_ALLOW=all` on a sidecar instance a director is
+pointed at** — run a second, `WBT_ALLOW`-unset (default allowlist) instance for
+the bot, and reserve an `all`-mode instance for a human operator's own tooling
+on a separate port/process.
 
 **Argument screening** (write-audit 2026-07-17, applied to EVERY /command
 regardless of WBT_ALLOW): output-path args (`out`, `outputPath`, …) are

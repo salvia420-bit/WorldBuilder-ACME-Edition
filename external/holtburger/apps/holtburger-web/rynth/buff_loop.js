@@ -73,6 +73,14 @@ const SILENT_NO_SHOW_COOLDOWN_MS = 30 * 60_000; // B9
 const PERIODIC_REFRESH_INTERVAL_MS = 30_000; // B13
 const SPELL_CAST_INTERVAL_MS = 400; // B14 (buffing is faster than combat)
 const PERMANENT_SENTINEL_S = 86_400 * 365; // B6
+// Magic-mode entry give-up valve (02 C1 / synthesis #11) — see vitals.js's
+// matching comment: toggleCombatMode() never yields Magic(8) for a
+// melee/archer character, so entering Magic to self-buff is now an
+// EXPLICIT ChangeCombatMode(8), bounded by attempts so a genuine non-caster
+// (refused locally by the wasm's own is_wielding_caster gate, lib.rs:45179)
+// parks instead of retrying forever.
+const MAGIC_MODE_ATTEMPT_LIMIT = 5;
+const MAGIC_MODE_PARK_MS = 15_000;
 
 export class RynthBuffLoop {
   /**
@@ -164,6 +172,7 @@ export class RynthBuffLoop {
       this._itemLastCast.set(key, Date.now());
       this.log(`item enchant confirmed: ${e.text.slice(0, 60)}`);
       this._itemPending = null;
+      if (typeof this.host.releaseCast === "function") this.host.releaseCast("buff"); // C3 shared serializer
     }
   }
   stop() {
@@ -698,6 +707,7 @@ export class RynthBuffLoop {
         }
         this.log(`confirmed ${spellId}`);
         this.pending = null;
+        if (typeof h.releaseCast === "function") h.releaseCast("buff"); // C3 shared serializer
       } else if (age > SELF_BUFF_GIVE_UP_MS) {
         // B9 tier-walk-down FIRST (finding 5): a silently-dropped cast means
         // this tier won't land (skill-capped / unknown real tier). Mark it
@@ -718,6 +728,7 @@ export class RynthBuffLoop {
         if (walked) {
           this.log(`tier-down ${spellId} unresolvable -> family ${fam} walking to a lower tier`);
           this.pending = null;
+          if (typeof h.releaseCast === "function") h.releaseCast("buff"); // C3 shared serializer
           return;
         }
         // B9 — silent no-show valve.
@@ -735,6 +746,7 @@ export class RynthBuffLoop {
           this.log(`parked ${spellId}`);
         }
         this.pending = null;
+        if (typeof h.releaseCast === "function") h.releaseCast("buff"); // C3 shared serializer
       }
       return;
     }
@@ -742,15 +754,30 @@ export class RynthBuffLoop {
     // Casting requires Magic combat mode (ACE Player_Magic mismatch gate —
     // the untargeted arm at :279 mirrors the targeted one; B14's
     // BotAction="Buffing" stance pin is this rule's native-side shadow).
-    // Equipment-derived toggle, same trap as combat: never blind-set.
+    // Enter Magic EXPLICITLY (ChangeCombatMode(8)) rather than
+    // toggleCombatMode() — the equipment-derived toggle never reaches
+    // Magic for a non-caster (02 C1). This is ONLY the Magic-entry path
+    // for self-buffing; combat's own equipment-derived toggle for its
+    // Melee/Missile ENGAGE stance (the bow/wand mode-revert trap, README
+    // "Live-verified traps") is untouched — never blind-set THAT one.
     if (h.GetCurrentCombatMode() !== 8) {
-      if (now - (this._modeRequestedAt || 0) > 3000) {
-        const s = h.s;
-        if (s.toggleCombatMode) s.toggleCombatMode();
-        this._modeRequestedAt = now;
+      const now0 = now;
+      if (this._magicParkedUntil && now0 < this._magicParkedUntil) return; // gave up — don't retry-storm
+      if (now0 - (this._modeRequestedAt || 0) > 3000) {
+        h.ChangeCombatMode(8);
+        this._modeRequestedAt = now0;
+        this._magicAttempts = (this._magicAttempts || 0) + 1;
+        if (this._magicAttempts > MAGIC_MODE_ATTEMPT_LIMIT) {
+          this._magicParkedUntil = now0 + MAGIC_MODE_PARK_MS;
+          this._magicAttempts = 0;
+          this.log(
+            `give up entering Magic mode after ${MAGIC_MODE_ATTEMPT_LIMIT} attempts (no caster wielded?) — parked ${MAGIC_MODE_PARK_MS / 1000}s`
+          );
+        }
       }
       return;
     }
+    this._magicAttempts = 0; // mode established — reset the guard
 
     // B14 — pacing + gates.
     if (now - this.lastCastAt < SPELL_CAST_INTERVAL_MS) return;
@@ -776,6 +803,11 @@ export class RynthBuffLoop {
       const fam = this._familyForSpell(spellId);
       if (fam !== undefined && (this._rejectParkedUntil.get(fam) ?? 0) > now) continue;
       if (this._isActive(spellId)) continue;
+      // C3 shared serializer: another module (combat/vitals) may hold a
+      // still-open cast claim (gesture done, resolution not yet seen) —
+      // wait rather than overlap it. Degrade-open if the host predates
+      // the token (contract 0.1).
+      if (typeof h.tryClaimCast === "function" && !h.tryClaimCast("buff")) return;
       h.CastSpell(0, spellId); // untargeted = self
       this.lastCastAt = now;
       this.pending = { spellId, issuedAt: now };
@@ -805,6 +837,7 @@ export class RynthBuffLoop {
       if (now - this._itemPending.issuedAt > 5000) {
         this.log(`item enchant no-chat timeout (${this._itemPending.spellId})`);
         this._itemPending = null;
+        if (typeof h.releaseCast === "function") h.releaseCast("buff"); // C3 shared serializer
       }
       return true;
     }
@@ -812,6 +845,8 @@ export class RynthBuffLoop {
       const key = `${ib.spellId}:${ib.itemGuid}`;
       const last = this._itemLastCast.get(key) ?? 0;
       if (now - last < this.itemRecastMs) continue; // still fresh (by interval)
+      // C3 shared serializer — see the self-buff cast site above.
+      if (typeof h.tryClaimCast === "function" && !h.tryClaimCast("buff")) return true;
       h.CastSpell(ib.itemGuid, ib.spellId); // targeted at the item
       this._itemPending = { spellId: ib.spellId, itemGuid: ib.itemGuid, issuedAt: now };
       this.lastCastAt = now;

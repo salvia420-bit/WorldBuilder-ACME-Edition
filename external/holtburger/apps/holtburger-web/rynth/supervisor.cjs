@@ -65,6 +65,37 @@ function bootUrl(cfg) {
   return `${BASE_URL}?${q}&v=${Date.now()}`;
 }
 
+// Readiness gate (rynth-review 14 B-1 / 15 C-3 / 17-SYNTHESIS #15, fixed
+// 2026-07-23): this used to accept `__bootState === "ready"` and wait only
+// for `__sessionHandle` PRESENCE — the exact pattern soak-11/12 forbade
+// ("gate on in-world+pose, NEVER ready"). Under the mandatory headless
+// `?nullRender` this supervisor always injects, `ready` (scene-bake-
+// complete) can fire BEFORE `in-world` (EnteredWorld kind=7) — the old gate
+// could hand installBot() a session that LOOKS live (handle attached early)
+// but hasn't actually entered the world, and (per C-3) could also abandon a
+// perfectly healthy but slow GPU boot the moment a transient `error` state
+// latched, burning a BOOT_ATTEMPT + the 20s relogin backoff for nothing.
+// Fixed the same way as rynth_boot_helper.cjs / harness/lib/boot.mjs: gate
+// on in-world (now OR anywhere in __bootStateHistory, to catch a brief
+// in-world->ready slip between polls) AND a real getLocalPlayerPose().
+async function pollTrulyInWorld(page) {
+  return page.evaluate(() => {
+    const hist = Array.isArray(window.__bootStateHistory) ? window.__bootStateHistory : [];
+    const reachedInWorld =
+      window.__bootState === "in-world" || hist.some((e) => e && e.state === "in-world");
+    if (window.__bootState === "error") return { ok: false, isError: true };
+    if (!reachedInWorld) return { ok: false, isError: false };
+    let pose;
+    try {
+      const h = window.__sessionHandle;
+      pose = h && typeof h.getLocalPlayerPose === "function" ? h.getLocalPlayerPose() : undefined;
+    } catch (_) {
+      pose = undefined;
+    }
+    return { ok: pose !== undefined && pose !== null, isError: false };
+  });
+}
+
 async function bootBot(browser, cfg, log) {
   for (let a = 1; a <= BOOT_ATTEMPTS; a++) {
     let page = null;
@@ -73,13 +104,12 @@ async function bootBot(browser, cfg, log) {
       await page.goto(bootUrl(cfg), { waitUntil: "domcontentloaded", timeout: 60_000 });
       let ok = false;
       for (let i = 0; i < 60; i++) {
-        const st = await page.evaluate(() => window.__bootState || "");
-        if (st === "in-world" || st === "ready") { ok = true; break; }
-        if (st === "error") break;
+        const r = await pollTrulyInWorld(page);
+        if (r.ok) { ok = true; break; }
+        if (r.isError) break;
         await sleep(2000);
       }
       if (ok) {
-        await page.waitForFunction(() => !!window.__sessionHandle, { timeout: 90_000 });
         await installBot(page, cfg);
         log(`${cfg.account}: booted + bot installed`);
         return page;
@@ -181,7 +211,7 @@ async function runFleet(configs, opts = {}) {
   return { browser, bots, summary };
 }
 
-module.exports = { runFleet, bootBot, installBot, health, sidecarHealth };
+module.exports = { runFleet, bootBot, installBot, health, sidecarHealth, pollTrulyInWorld };
 
 if (require.main === module) {
   const configs = JSON.parse(process.argv[2] || "[]");

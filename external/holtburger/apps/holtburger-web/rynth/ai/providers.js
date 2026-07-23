@@ -10,6 +10,13 @@
 // PRICING IS APPROXIMATE: inUsdPerMtok/outUsdPerMtok are rough mid-2026
 // list-price hints (USD per 1M tokens) for UI cost display only — never
 // billing truth. Providers reprice without notice; check docsUrl.
+//
+// `estimated: true` (09 S2/D1, 2026-07-23) marks an entry priced from
+// category/sibling-model comparison rather than a confirmed current
+// OpenRouter listing — still a real number (never null/0-by-default), just
+// lower-confidence; kept conservative (rounded up) so a $ spend guard reading
+// it (director.js) over-, never under-, estimates cost. Untagged entries are
+// the original catalog's own confidence level (unchanged).
 
 // Default model must stay in sync with llm_client.js DEFAULT_MODEL
 // ("openai/gpt-oss-120b") — asserted in rynth_ai_providers_test.cjs.
@@ -31,6 +38,25 @@ export const PROVIDERS = deepFreeze({
       { id: "anthropic/claude-sonnet-4.6", inUsdPerMtok: 3.0, outUsdPerMtok: 15.0 },
       { id: "openai/gpt-4o-mini", inUsdPerMtok: 0.15, outUsdPerMtok: 0.6 },
       { id: "google/gemini-2.0-flash-001", inUsdPerMtok: 0.1, outUsdPerMtok: 0.4 },
+      // Live-rig model history (09 S2/D1, STREAM-RIG-OPS.md): the fast-
+      // provider pin + this cost catalog only ever covered z-ai/gpt-oss, so
+      // `estimateCost` returned known:false for every model the rig actually
+      // ran — including the CURRENT live model. Added so the new $ spend
+      // guard (director.js) isn't blind to them.
+      // z-ai/glm-5.2: soak-8-pinned fast fp8 sale endpoints (streamlake/
+      // novita/baidu), ~$0.05/hour measured at 400-800 completion tok/call
+      // (HANDOFF-playtester-soak-8.md) — sale pricing, category estimate.
+      { id: "z-ai/glm-5.2", inUsdPerMtok: 0.14, outUsdPerMtok: 0.58, estimated: true },
+      // microsoft/phi-4: small-class open model, ran the director for the
+      // 2026-07-20 rig (HANDOFF-wedge-closeout-phi4-rig-2026-07-20.md);
+      // no soak $/hour figure recorded — conservative small-model estimate.
+      { id: "microsoft/phi-4", inUsdPerMtok: 0.07, outUsdPerMtok: 0.14, estimated: true },
+      // minimax/minimax-m3: CURRENT live rig model (STREAM-RIG-OPS.md), the
+      // subject of 09 C1 — was completely absent from this catalog. ~$0.33/
+      // hour measured, 3.5k completion tok/call, i.e. markedly pricier than
+      // the pinned z-ai run above (HANDOFF-playtester-soak-4.md) — priced at
+      // the high end of its size class, rounded up (conservative).
+      { id: "minimax/minimax-m3", inUsdPerMtok: 0.55, outUsdPerMtok: 2.2, estimated: true },
     ],
   },
   custom: {

@@ -52,7 +52,12 @@ const bot = await createGrindBot(window.__sessionHandle, {
   `window.rynthAI = { setKey, clearKey, start, stop, checkNow, status,
   journal, panel }`.
 - In-game chat control (via the control channel): `!bot ai status`,
-  `!bot ai on`, `!bot ai off`, `!bot ai now`.
+  `!bot ai on`, `!bot ai off`, `!bot ai now`. **Sender-allowlisted (2026-07-23,
+  P0 fix)** — `rynth/control_channel.js` refuses every `!bot ...` tell unless
+  the sender resolves as an owner (default: the logged-in character; explicit
+  override via `?botCtlOwner=name1,name2`; refuses ALL senders if unresolvable,
+  never fail-open). Before this fix any player on the ACE server could drive
+  the bot's AI (including `ai off`) via a `/tell`.
 
 ## The reply contract
 
@@ -95,11 +100,20 @@ Invalid actions are rejected per-action; the rest of the plan still runs
 |---|---|---|
 | Check-in interval | **5 min** | 1..30 min (model may retune via `next_check_minutes` / `set_checkin`, always clamped) |
 | Calls per hour | **12 max** | rolling 60-min window; over-budget check-ins are skipped + journaled (`budget`), not errored |
+| Spend per hour | **$1 max** (`maxSpendPerHourUsd`) | rolling 60-min estimate from token usage × provider pricing; over-cap check-ins skip the same way as the call-count cap; `null`/negative disables |
+| Min inter-call spacing | **`3600 / maxCallsPerHour` seconds** (enforced) | applies only to the scheduler's OWN automatic fire — manual `checkNow()`/`!bot ai now` and event-driven early checks are exempt (director.js "09 C3" fix) |
 | Completion tokens | **1024 max** per call | — |
 | Observation | ~**6000 chars** cap | threat lines truncate first |
 | Consecutive errors | **5** → director disables itself | re-enable via `window.rynthAI.start()` / `!bot ai on` |
 
-At the default Haiku-class pricing this is on the order of *cents per day*.
+At the default `12`/hr this is on the order of *cents per day* at Haiku-class pricing —
+**but this is the constructor DEFAULT, not necessarily the live number.** ⚠ The live
+`?bot=1&botInterval=0.5` boot path (see `docs/url-flags.md` `botInterval`) overrides
+`maxCallsPerHour` to `min(70, ceil(70/botInterval))` — **70/hr on the actual stream
+rig**, ~6× this table's headline number (rynth-review 2026-07-23, finding 16 C3 / 09).
+Budget from the live cadence (`STREAM-RIG-OPS.md` "Cadence math"), not from this table
+alone, when estimating real spend; the `maxSpendPerHourUsd` cap above is the actual
+dollar backstop regardless of call-rate.
 Spend counters: `window.rynthAI.status().spend`
 (`{calls, promptTokens, completionTokens, errors}`).
 
@@ -117,6 +131,14 @@ Spend counters: `window.rynthAI.status().spend`
 - **Nothing seems to happen** — `!bot ai status` / `window.rynthAI.status()`:
   check `enabled`, `nextCheckAt`, `consecutiveErrors`. Force one with
   `window.rynthAI.checkNow()` (or `!bot ai now`) and read the journal.
+- **`checkNow()` / `!bot ai now` returns `{plan:null, results:[], skipped:
+  "operator-stop"}` and does nothing** — this is by design (2026-07-2x fix): the
+  durable operator-stop latch (`rynth/ai/operator_stop.js`, survives a
+  session-takeover reconnect) now REFUSES a manual check-in too, not just the
+  scheduled timer. Before this fix a manual "Check now" click or `!bot ai now`
+  tell could run a full LLM plan through a durable stop, which defeated the point
+  of a durable stop. Clear the latch (`window.rynthAI.start()` or `!bot ai on`)
+  before forcing a check-in you actually want to run.
 - **Local/mock provider** — `config.ai = { baseUrl: "http://127.0.0.1:8899/v1",
   model: "mock", apiKey: "test-key" }` against
   `node rynth/ai/mock_llm_server.cjs` (used by `rynth_ai_smoke.cjs`).
@@ -138,6 +160,16 @@ The v2 layers compose through `ai/extensions.js` and are ON by default
   actions/check-in).
 - **Observation enrichment** — kill-rate trend, burden/free-slots, nearby
   portals, and a suggested-focus line appended to each observation.
+- **Persistent scratchpad** (`update_scratchpad` action, `ai/tools/memory.js`) — a
+  model-editable memory block (goals, known places, verified lessons, dead ends)
+  carried verbatim into EVERY observation, complementing the rolling journal tail
+  (recency-only, ~8 check-ins then gone). The scratchpad section is marked
+  `pinned: true` in the observation's salience/quota assembler
+  (`ai/observe_assemble.js`, wired via `ai/extensions.js` `OBS_PINNED_SECTIONS`)
+  — genuinely un-droppable: exempt from tier-based shedding, per-subsystem
+  quotas, and the final hard-slice when the observation would exceed budget, so a
+  tight `config.ai.observeTokens` squeeze truncates other sections first and
+  never silently drops the model's own notes.
 - **Economy hands** (2026-07-17) — `inventory` / `open_vendor` / `buy_items`
   / `sell_items` / `equip_item` / `unequip_item` / `use_item` actions over
   the RynthWebHost economy plane (webhost.js: `TryGetPlayerInventory`,

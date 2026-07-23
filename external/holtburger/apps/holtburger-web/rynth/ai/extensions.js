@@ -15,6 +15,7 @@
 import { buildObservation } from "./observe.js";
 import { validateAction, executePlan } from "./actions.js";
 import { sanitizeAction, guardPlan } from "./safety.js";
+import { isOperatorStopLatched } from "./operator_stop.js";
 import { enrichObservation } from "./observe_ext.js";
 import { assembleObservation } from "./observe_assemble.js";
 import { KnowledgeBase, FileKnowledgeProvider, registerKnowledge } from "./tools/knowledge.js";
@@ -48,6 +49,11 @@ const OBS_SECTION_TIERS = {
   deltas: "CHANGE", // routine since-last-check-in deltas
   scratchpad: "STEADY", // self-authored persistent notes (not ground truth)
 };
+// P1 #7 (review 08 C1 / 11): sections here are handed to assembleObservation
+// with pinned:true — never shed by tier, quota, or the final hard-slice. The
+// scratchpad is the bot's durable memory; a budget squeeze must not silently
+// drop it (tools/memory.js documents it as never-dropped).
+const OBS_PINNED_SECTIONS = new Set(["scratchpad"]);
 // ~12k chars: comfortably fits a maxed real observation (self-capped base +
 // full scratchpad + full heard buffer) yet caps pathological runaway. Operators
 // tightening to a small-context soak set cfg.observeTokens (e.g. 2048).
@@ -421,7 +427,11 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   const rawPoseOf = (b) => {
     try {
       const p = b?.host?.TryGetPlayerPose?.();
-      return p ? { objCellId: p.objCellId >>> 0, x: p.x, y: p.y, z: p.z } : null;
+      // cellResolved (W4a): honest "position resolved" signal; null when the
+      // wasm build predates getLocalPlayerPoseCellResolved.
+      return p
+        ? { objCellId: p.objCellId >>> 0, x: p.x, y: p.y, z: p.z, cellResolved: p.cellResolved ?? null }
+        : null;
     } catch { return null; }
   };
 
@@ -796,7 +806,12 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     const parts = [];
     const push = (subsystem, text) => {
       if (typeof text !== "string" || !text) return;
-      sections.push({ subsystem, tier: OBS_SECTION_TIERS[subsystem] || "STEADY", text });
+      sections.push({
+        subsystem,
+        tier: OBS_SECTION_TIERS[subsystem] || "STEADY",
+        ...(OBS_PINNED_SECTIONS.has(subsystem) ? { pinned: true } : {}),
+        text,
+      });
       parts.push(text);
     };
     // LOCATION is injected FIRST — highest authority (design doc WS-B).
@@ -978,6 +993,20 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
       };
       let prevSnap = guardSnap();
       for (const a of kept) {
+        // Mid-plan abort (report 10 #2): re-check the operator's stop
+        // surfaces BETWEEN actions, not just once before the loop starts —
+        // a multi-action plan (goto + buy + say, chained in one reply) must
+        // halt everything after the action in flight when the operator
+        // stops mid-execution, not run to completion. `b.ai.director` is
+        // absent in bare/unit-test bots, so an unwired director never blocks
+        // execution here (matches guardPlan's fail-open-on-absent-surface
+        // pattern elsewhere in this file).
+        let stopped = false;
+        try { stopped = isOperatorStopLatched() || b?.ai?.director?.enabled === false; } catch { stopped = false; }
+        if (stopped) {
+          results.push({ type: a?.type ?? "?", ok: false, error: "aborted: operator stop" });
+          continue;
+        }
         const cond = typeof a?.if === "string" ? a.if.trim() : "";
         let guardWarn = null;
         if (cond) {

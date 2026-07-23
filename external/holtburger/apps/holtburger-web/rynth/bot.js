@@ -176,9 +176,15 @@ export async function createGrindBot(sessionHandle, config = {}) {
   const doGoto = async (to, opts) => {
     if (!globalRouter) return { ok: false, error: "nav not configured (config.nav)" };
     // Refuse BEFORE touching the kernel: a rejected second goto must not
-    // stop/restart the kernel out from under the goto that owns it. composeActive
-    // covers indoor-only phases where globalRouter.busy is momentarily clear.
-    if (globalRouter.busy || composeActive) return { ok: false, error: "goto already active" };
+    // stop/restart the kernel out from under the mover that owns it. composeActive
+    // covers indoor-only phases where globalRouter.busy is momentarily clear;
+    // followBusy covers an in-flight followRoute atlas walk — same tier as a
+    // goto, so refused rather than raced (05 C1 / bot.movementClaimed below).
+    // NOTE: deliberately NOT the full movementClaimed() predicate here — a
+    // bare router WALK/PORTAL left by travel() (which sets none of these
+    // latches) is intentionally OVERRIDDEN a few lines down, not refused
+    // ("last command wins over a raw travel()", B4 test).
+    if (globalRouter.busy || composeActive || followBusy) return { ok: false, error: "goto already active" };
     // Last command wins over a raw travel() in progress.
     const rs = router.status.state;
     if (rs === "WALK" || rs === "PORTAL") {
@@ -268,8 +274,10 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // promise. Last command wins: a goto() cancels this walk (poll sees IDLE).
   let followBusy = false;
   const doFollowRoute = async (legs, { label = "route", pollMs = 500, timeoutMs = 15 * 60_000, reverse = false, fmt } = {}) => {
-    if (globalRouter && globalRouter.busy) return { ok: false, error: "goto active" };
-    if (followBusy) return { ok: false, error: "route already active" };
+    // 05 C1 fix: composeActive is added here (globalRouter.busy alone goes
+    // false mid-composeGoto indoor phase) — see bot.movementClaimed below,
+    // which both this guard and the explore-pressure gates now consult.
+    if (bot.movementClaimed()) return { ok: false, error: "goto active" };
     if (!Array.isArray(legs) || !legs.length) return { ok: false, error: "empty route" };
     // Contract v2 (task #17): derive portal/indoor flags (legacy routes replay
     // without re-recording), re-bucket indoor legs to the walkable frame + stamp
@@ -348,6 +356,13 @@ export async function createGrindBot(sessionHandle, config = {}) {
       : new cc.RynthControlChannel(host, kernel, {
           ...(config.control || {}),
           ...(globalRouter ? { onGoto: (to) => doGoto(to) } : {}),
+          // "come" bypass fix (report 01 C2): control_channel's _comeToSender
+          // reuses bot.travel — the lightest existing guarded mover (a
+          // single-leg router walk that stops+restores the kernel, item 2's
+          // fix) — instead of the old raw host.MoveToPosition with the
+          // kernel untouched. Unconditional: bot.travel needs only `router`,
+          // not config.nav (unlike onGoto/globalRouter above).
+          onCome: (leg) => bot.travel([leg]),
           // Lazy: the AI director is constructed AFTER the bot object below
           // (it observes the whole bot surface); events only pump once the
           // host heartbeat runs, so this closure never fires before `bot`.
@@ -371,14 +386,68 @@ export async function createGrindBot(sessionHandle, config = {}) {
     router,
     globalRouter,
     startedAt: Date.now(), // uptime anchor — ai/observe.js prefers bot.startedAt
-    /** Travel a raw route ([{lb,x,y,z}]) — pauses the grind; caller resumes.
-     *  Returns {ok}; refused while a goto() owns the router (a raw follow
-     *  would clobber the goto's walk loop). A later goto() cancels a raw
-     *  travel in progress (last command wins). */
+    // One movement-claim predicate (P1 fix, 05 C1 / 17-SYNTHESIS §1 "Character
+    // movement" #12): every OTHER actor that must yield while something else
+    // owns the character consults THIS instead of re-deriving a subset of it
+    // (re-deriving a subset is exactly how the composeGoto-indoor-phase race
+    // happened — globalRouter.busy alone goes false mid-indoor-phase while
+    // composeActive/followBusy/router are still live). Also sees loot's
+    // approach (03 C4 / item 4): kernel.action reads "Loot" for exactly the
+    // window loot_loop.js is actively working a corpse (its own SCAN/APPROACH
+    // raw MoveToPosition, loot_loop.js:161,191 — kernel.js's own
+    // _corpseAvailable/lootPinned gate), which has no busy latch of its own.
+    // doGoto is the one exception: it deliberately does NOT call this for its
+    // own early-refusal — a bare router WALK/PORTAL left by travel() (which
+    // sets none of these latches) is intentionally overridden there, not
+    // refused ("last command wins over a raw travel()", B4 test).
+    movementClaimed: () => {
+      if (globalRouter && globalRouter.busy) return true;
+      if (composeActive) return true;
+      if (followBusy) return true;
+      const rs = router.status?.state;
+      if (rs === "WALK" || rs === "PORTAL") return true;
+      if (loot && loot.state === "APPROACH") return true;
+      return false;
+    },
+    /** Travel a raw route ([{lb,x,y,z}]) — pauses the grind, restores its
+     *  prior run state when the walk reaches a terminal state (B1 fix, report
+     *  01: previously stopped the kernel with no restore at all, so a
+     *  kernel-on persona ground dead after exit_building/_escalateOut).
+     *  Fire-and-forget by design (callers don't await a walk here, unlike
+     *  goto/followRoute) — the restore runs off a background poll instead of
+     *  an awaited finally. Refused while a goto/followRoute/composeGoto phase
+     *  owns the router (a raw follow would clobber that walk); a later
+     *  goto() still cancels a raw travel in progress (last command wins,
+     *  unchanged). Returns {ok}. */
     travel: (route) => {
-      if (globalRouter && globalRouter.busy) return { ok: false, error: "goto active" };
+      if ((globalRouter && globalRouter.busy) || composeActive || followBusy) {
+        return { ok: false, error: "goto active" };
+      }
+      const wasRunning = kernel.running === true;
       kernel.stop();
       router.follow(route);
+      if (wasRunning) {
+        (async () => {
+          try {
+            for (;;) {
+              await new Promise((r) => setTimeout(r, 500));
+              const st = router.status.state;
+              if (st === "DONE" || st === "FAILED" || st === "IDLE") break;
+            }
+            // Handed off mid-walk to a goto/followRoute (cancelled us and took
+            // over) — that mover captured its own wasRunning and owns the
+            // restore now; restoring here too would race it (05 C1's
+            // two-writer class), so yield silently.
+            if (composeActive || followBusy || (globalRouter && globalRouter.busy)) return;
+            // Tolerant of kernel.js's operator-hold latch (prior-agent change):
+            // start() returning false just means the operator/pause authority
+            // wins — log it, never loop/retry.
+            if (!kernel.start()) kernel.log("travel: restore refused (operator hold active)");
+          } catch (e) {
+            kernel.log(`travel: restore watcher error: ${(e && e.message) || e}`);
+          }
+        })();
+      }
       return { ok: true };
     },
     /**
@@ -572,6 +641,7 @@ async function wireAiDirector(bot, aiConfig, base) {
     maxIntervalMinutes: aiCfg?.maxIntervalMinutes, // caps LLM-supplied next_check_minutes
     dryRun: aiCfg?.dryRun,
     maxCallsPerHour: aiCfg?.maxCallsPerHour, // undefined -> director defaults
+    maxSpendPerHourUsd: aiCfg?.maxSpendPerHourUsd, // undefined -> director default ($1/hr)
     // Travel-hold (SPEC-navatlas §3-W3.2): scheduled check-ins are skipped
     // while a mission (goto/followRoute) is in flight — the route-completion
     // early check above carries the decision instead. config.ai.travelHold
@@ -661,6 +731,12 @@ async function wireAiDirector(bot, aiConfig, base) {
       status: () => director.status,
       journal,
       panel: () => openPanel(),
+      // One-call honest clean-model wipe (ai/tools/memory.js): journal +
+      // scratchpad (RAM+LS) + explore/combat RAM + _usedObjects; keeps the
+      // OpenRouter key and nav atlas; WARNS (never clears) an operator-stop
+      // latch. Replaces the hand-typed localStorage recipe in STREAM-RIG-OPS.
+      wipeForCleanTest: () =>
+        import(`${base}/ai/tools/memory.js`).then((m) => m.wipeForCleanTest(bot.ai)),
     };
     if (wantPanel) openPanel();
     // ?thoughtOverlay=1 (2026-07-18) — stream-facing teleprompter: reveals
@@ -909,6 +985,14 @@ export class ExplorePressureController {
     if (this.bot.globalRouter?.busy) return false;
     const rs = this.router?.status?.state;
     if (rs !== "IDLE" && rs !== "DONE" && rs !== "FAILED") return false; // an active route owns movement
+    // 05 C1 fix: the two checks above alone go both "free" during a
+    // composeGoto INDOOR phase (globalRouter.busy false, router.state
+    // "DONE") and during a live loot approach (kernel-driven, no router
+    // involvement at all) — bot.movementClaimed() additionally sees
+    // composeActive/followBusy/loot-approaching. Optional chaining: absent
+    // on a plain test double (rynth_explore_pressure_test.cjs mocks), which
+    // degrades to exactly the checks above (no behavior change for those).
+    if (this.bot.movementClaimed?.()) return false;
     if (director.isBusy()) return false; // check-in in flight (director's public busy accessor)
     if (this._standDown) return false;
     if (now - this._lastMoveAt < 12_000) return false; // tuned 25s->12s 2026-07-20 (stream felt statue-y)
@@ -934,6 +1018,8 @@ export class ExplorePressureController {
     if (this.bot.globalRouter?.busy) return true;
     const rs = this.router?.status?.state;
     if (rs !== "IDLE" && rs !== "DONE" && rs !== "FAILED") return true;
+    // 05 C1 fix — see _gatesOpen's identical addition above.
+    if (this.bot.movementClaimed?.()) return true;
     if (director.isBusy()) return true; // check-in in flight (director's public busy accessor)
     return false;
   }

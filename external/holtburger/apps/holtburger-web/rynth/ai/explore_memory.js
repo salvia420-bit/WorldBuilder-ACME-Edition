@@ -171,6 +171,16 @@ export class ExploreMemory {
     this.frozenMs =
       (Number.isFinite(opts.frozenMinutes) ? opts.frozenMinutes : DEFAULT_FROZEN_MIN) * 60_000;
 
+    this._resetState();
+  }
+
+  // Session RAM state only — NOT the constructor-opts config (this.now,
+  // this.stallMs, this.frontierMaxRadius, this.frozenMs survive a reset()).
+  // Factored out of the constructor so reset() (P1 #8/08-B-1: a "no-reload
+  // clean model test" wipe must not leave stale coverage/frontier behind,
+  // since locationBlock's Covered/Frontier/CORRECTION render straight off
+  // this state) shares the exact same initial values, not a hand-kept copy.
+  _resetState() {
     this.tiles = new Map(); // tileKey -> {visits,firstT,lastT,cell,lb,tx,ty,zb,worldX,worldY,z}
     this.landblocks = new Set(); // 16-bit landblock numbers seen this session
     this._currentKey = null;
@@ -211,20 +221,47 @@ export class ExploreMemory {
     this._observesSincePoseChange = 0;
   }
 
+  /**
+   * Wipe all session RAM (coverage/frontier/history/caches/frozen-watchdog)
+   * back to a fresh instance's state, keeping the constructor config (now,
+   * stallMs, frontierMaxRadius, frozenMs). This is the RAM half of a "clean
+   * model test" — ExploreMemory has never persisted to localStorage (there
+   * is nothing to remove there), so a caller doing a no-reload memory wipe
+   * MUST call this or the prior run's Covered/Frontier/CORRECTION keep
+   * rendering into the LOCATION block (P1 #8, 08-B-1).
+   */
+  reset() {
+    this._resetState();
+    return this;
+  }
+
   /** Record the current tile from a raw pose; bumps visits; updates was/is. */
   observe(pose) {
     if (!pose || typeof pose.objCellId !== "number" || typeof pose.x !== "number" || typeof pose.y !== "number") {
       return this.current;
     }
     const cell = pose.objCellId >>> 0;
-    // objCellId===0 is a streaming/respawn gap (e.g. death -> academy respawn
-    // reports cell 0 for a beat), not a real location — (cell&0xffff) is 0,
-    // which the indoor/outdoor split (isIndoorCell) would otherwise wrongly
-    // read as OUTDOOR while the player is physically indoors. Treat as
-    // UNKNOWN: no-op entirely (no tile recorded, no visit/variation bump, no
-    // was/is transition) so a respawn beat can never masquerade as a real
-    // revisit or corrupt the frontier/loop math with garbage coordinates.
-    if (cell === 0) return this.current;
+    // A streaming/respawn gap (e.g. death -> academy respawn reports an
+    // unresolved position for a beat) is not a real location — objCellId=0's
+    // (cell&0xffff) is 0, which the indoor/outdoor split (isIndoorCell) would
+    // otherwise wrongly read as OUTDOOR while the player is physically
+    // indoors. Treat as UNKNOWN: no-op entirely (no tile recorded, no
+    // visit/variation bump, no was/is transition) so a respawn beat can never
+    // masquerade as a real revisit or corrupt the frontier/loop math with
+    // garbage coordinates.
+    //
+    // C1 fix (rynth-review 07/17-SYNTHESIS #9, 2026-07-23): the wasm
+    // WP-2/WP-3 pose-retention layers never regress a resolved objCellId
+    // back to 0 once a good pose has been seen, so a bare `cell === 0` check
+    // is now dead on a live host — the respawn beat instead reports the
+    // last-known (pre-death) cell. Prefer the honest `pose.cellResolved`
+    // signal (`getLocalPlayerPoseCellResolved`, carried through
+    // webhost.js/extensions.js's rawPoseOf); `cellResolved` undefined/null
+    // (host predates the capability, or a caller-built plain pose — e.g. the
+    // unit tests below) falls back to the legacy `cell === 0` check, so HOLD
+    // semantics are unchanged wherever the new signal isn't available.
+    const cellUnresolved = pose.cellResolved === false || (pose.cellResolved == null && cell === 0);
+    if (cellUnresolved) return this.current;
     const z = typeof pose.z === "number" && Number.isFinite(pose.z) ? pose.z : 0;
     const wx = worldX(cell, pose.x);
     const wy = worldY(cell, pose.y);

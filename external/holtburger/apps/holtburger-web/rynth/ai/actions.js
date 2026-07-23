@@ -148,7 +148,17 @@ export async function executeAction(bot, a, { log, journal } = {}) {
           );
         try {
           const p = bot?.host?.TryGetPlayerPose?.();
-          if (p && (p.objCellId >>> 0) === 0)
+          // C1 fix (rynth-review 07/17-SYNTHESIS #9, 2026-07-23): the wasm
+          // WP-2/WP-3 pose-retention layers never regress objCellId to 0
+          // once a good pose has been seen, so the old `=== 0` check below
+          // is now dead. Prefer the honest `p.cellResolved` signal (wasm
+          // `getLocalPlayerPoseCellResolved`, bypasses both retention
+          // layers); `cellResolved` is `null` on a pkg/ predating the
+          // export, in which case fall back to the legacy check (still
+          // correct there — same HOLD semantics either way).
+          const cellUnresolved =
+            p && (p.cellResolved === false || (p.cellResolved == null && (p.objCellId >>> 0) === 0));
+          if (cellUnresolved)
             return fail(
               "position unresolved (cell 0 — respawn/streaming gap; NOT outdoors). Do not route yet; wait a check-in for the cell to resolve, then act on your nearby list.",
             );
@@ -199,10 +209,19 @@ export async function executeAction(bot, a, { log, journal } = {}) {
         if (typeof bot?.kernel?.stop !== "function") return fail("unavailable");
         bot.kernel.stop();
         return { type, ok: true, result: "paused" };
-      case "resume":
+      case "resume": {
         if (typeof bot?.kernel?.start !== "function") return fail("unavailable");
-        bot.kernel.start();
+        // Handoff fix (2026-07-23): kernel.start() now returns `false` when
+        // refused by the operator-hold latch (kernel.js `holdForOperator`/
+        // `_operatorHeld` — only `!bot resume`'s releaseOperatorHold() can
+        // lift it). This used to report {ok:true,result:"resumed"}
+        // unconditionally, so the director/model believed a resume that the
+        // operator hold silently refused. Match the `bot.js:445`
+        // "tolerant of the refusal" idiom: report the real outcome instead.
+        const started = bot.kernel.start();
+        if (!started) return fail("resume refused: operator hold is active (resume via the control channel)");
         return { type, ok: true, result: "resumed" };
+      }
       case "say": {
         if (typeof bot?.host?.WriteToChat !== "function") return fail("unavailable");
         const text = a.text.trim().slice(0, SAY_MAX_CHARS);
