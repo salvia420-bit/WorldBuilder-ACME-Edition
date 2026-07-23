@@ -326,6 +326,30 @@ async function t(name, fn) {
     assert.ok(rescued && rescued.exitCell === id(0x121), JSON.stringify(rescued));
   });
 
+  await t("findExitPath: excludeEdges re-routes to the NEXT-nearest exit (egress ladder)", () => {
+    // Two exits: a near one behind edge A-B (the tavern serving-window class —
+    // a portal record that is not walkable at floor level), and a farther one
+    // via A-C-D. Excluding A-B must fall through to the D exit; excluding the
+    // whole frontier returns null (honest unreachable).
+    const g = mk({
+      0x130: [0, 0, 0, [0x131, 0x132]],
+      0x131: [4, 0, 0, [0x130]], // near exit, 1 hop
+      0x132: [0, 4, 0, [0x130, 0x133]],
+      0x133: [0, 8, 0, [0x132]], // far exit, 2 hops
+    });
+    g[id(0x131)].exits = [(LB | 0x0005) >>> 0];
+    g[id(0x133)].exits = [(LB | 0x0009) >>> 0];
+    const near = M.findExitPath(g, id(0x130));
+    assert.ok(near && near.exitCell === id(0x131), JSON.stringify(near));
+    const rerouted = M.findExitPath(g, id(0x130), { excludeEdges: new Set([ek(id(0x130), id(0x131))]) });
+    assert.ok(rerouted && rerouted.exitCell === id(0x133), JSON.stringify(rerouted));
+    assert.deepEqual(rerouted.path, [id(0x130), id(0x132), id(0x133)]);
+    const none = M.findExitPath(g, id(0x130), {
+      excludeEdges: new Set([ek(id(0x130), id(0x131)), ek(id(0x130), id(0x132))]),
+    });
+    assert.equal(none, null);
+  });
+
   await t("unreachable / missing endpoints return null", () => {
     assert.equal(M.findPath(split, id(0x100), id(0x121)), null);
     assert.equal(M.findPath(split, id(0x100), id(0x1ff)), null); // goal not in graph

@@ -290,6 +290,62 @@ const lastLb = (r) => r.legs[r.legs.length - 1].lb >>> 0;
       rBad.ok === true && rBad.result.surroundings.includes("unavailable"), JSON.stringify(rBad));
   }
 
+  // ---- exit_building (2026-07-23 egress fix): prefers the AWAITED bot.egress
+  // mover (honest multi-attempt result) over the legacy fire-and-forget
+  // exitRoute + bot.travel, which reported ok before the walk even ran.
+  {
+    const { exitBuildingAction } = mod;
+    const adv = new DungeonNavAdvisor({ graph: mkGraph() });
+    const def = exitBuildingAction(adv);
+
+    // bot.egress present -> it is awaited and its HONEST result is reported;
+    // the legacy travel path must NOT run.
+    {
+      const calls = [];
+      const bot = {
+        egress: async (o) => { calls.push(["egress", o]); return { ok: true, state: "DONE", attempts: 3, legsWalked: 9, exitCell: C, outdoorId: (LB | 0x0005) >>> 0 }; },
+        travel: () => { calls.push(["travel"]); return { ok: true }; },
+      };
+      const notes = [];
+      const r = await def.apply(bot, { type: "exit_building" }, { journal: { add: (k, t) => notes.push(t) } });
+      check("exit_building: awaited bot.egress result reported (attempts/legs)",
+        r.ok === true && r.result.attempts === 3 && r.result.legsWalked === 9 && r.result.outdoor === `0x${((LB | 0x0005) >>> 0).toString(16).toUpperCase()}`, JSON.stringify(r));
+      check("exit_building: legacy travel path NOT used when bot.egress exists",
+        calls.length === 1 && calls[0][0] === "egress", JSON.stringify(calls));
+      check("exit_building: journal note reports the OUTSIDE arrival", notes.length === 1 && /OUTSIDE now/.test(notes[0]), JSON.stringify(notes));
+    }
+
+    // bot.egress failing -> the action FAILS with the egress error (no more
+    // "PLAN-DONE but I only shifted 2m" false success).
+    {
+      const bot = { egress: async () => ({ ok: false, error: "walk stalled" }), travel: () => ({ ok: true }) };
+      const r = await def.apply(bot, { type: "exit_building" }, {});
+      check("exit_building: a wedged egress is an HONEST action failure", r.ok === false && r.error === "walk stalled", JSON.stringify(r));
+    }
+
+    // Already outdoors (per the egress mover) -> ok with the alreadyOutdoors marker.
+    {
+      const bot = { egress: async () => ({ ok: true, state: "DONE", alreadyOutdoors: true, legsWalked: 0 }) };
+      const r = await def.apply(bot, { type: "exit_building" }, {});
+      check("exit_building: alreadyOutdoors passes through", r.ok === true && r.result.alreadyOutdoors === true, JSON.stringify(r));
+    }
+
+    // Legacy fallback (no bot.egress, e.g. an older bot build): the old
+    // exitRoute + fire-and-forget travel path still works unchanged.
+    {
+      const calls = [];
+      const bot = {
+        host: { TryGetPlayerPose: () => poseAt(A, 200, 32450, 0) },
+        travel: (legs) => { calls.push(legs); return { ok: true }; },
+      };
+      const advExit = new DungeonNavAdvisor({ graph: mkGraph() });
+      advExit.exitRoute = async () => ({ ok: true, legs: [{ lb: A, x: 8, y: 2, z: 0 }], exitCell: A, outdoorId: (LB | 0x0001) >>> 0, reason: "1 cell(s) to exit" });
+      const legacyDef = exitBuildingAction(advExit);
+      const r = await legacyDef.apply(bot, { type: "exit_building" }, {});
+      check("exit_building: legacy exitRoute+travel fallback still works", r.ok === true && calls.length === 1 && r.result.legs === 1, JSON.stringify(r));
+    }
+  }
+
   // ---- registerDungeonNav
   {
     const adv = new DungeonNavAdvisor({ graph: mkGraph() });

@@ -601,6 +601,42 @@ export function exitBuildingAction(advisor) {
       try {
         const v = def.validate(a);
         if (!v.ok) return fail(v.error);
+        // 2026-07-23 egress fix (live Holtburg-tavern wedge loop): prefer the
+        // bot's AWAITED egress mover — bot.egress -> goto_compose.composeEgress:
+        // the FULL multi-door route to the nearest outdoor mouth with doorway
+        // pre-approach legs, closed-door opening (ACE auto-closes the doors the
+        // bot entered through), and bounded twice-wedged edge-exclusion retries
+        // (re-routes around unwalkable CellPortal edges like the tavern's
+        // bar-counter serving window). The legacy path below (exitRoute +
+        // fire-and-forget bot.travel) reported ok the moment the router
+        // ACCEPTED the legs, so a wedged exit still journaled as success —
+        // the "PLAN-DONE exit_building but I only shifted 2m" failure class.
+        if (typeof bot?.egress === "function") {
+          const r = await bot.egress();
+          if (!r || r.ok !== true) return fail((r && r.error) || "egress failed");
+          const outHex = r.outdoorId != null ? `0x${(r.outdoorId >>> 0).toString(16).toUpperCase()}` : "outdoors";
+          try {
+            ctx.journal?.add?.(
+              "note",
+              r.alreadyOutdoors
+                ? "exit_building: already outdoors — no walk needed"
+                : `exit_building: OUTSIDE now at ${outHex} (${r.legsWalked ?? "?"} leg(s), ${r.attempts ?? 1} attempt(s)) — grind paused; resume or goto next check-in`,
+            );
+          } catch {}
+          return {
+            type: "exit_building",
+            ok: true,
+            result: {
+              state: r.state ?? "DONE",
+              legsWalked: r.legsWalked ?? 0,
+              attempts: r.attempts ?? 1,
+              ...(r.alreadyOutdoors ? { alreadyOutdoors: true } : {}),
+              outdoor: outHex,
+            },
+          };
+        }
+        // Legacy fallback (older bot builds without bot.egress) — fire-and-
+        // forget: the result only means the walk STARTED, not that it worked.
         const adv = ctx.advisor ?? advisor;
         if (!adv || typeof adv.exitRoute !== "function") return fail("unavailable");
         if (typeof bot?.travel !== "function") return fail("unavailable (bot.travel)");

@@ -205,11 +205,17 @@ export async function walkLegs(router, legs, { pollMs = 500, stallMs = 45_000, l
 // final "just outside the door" outdoor leg that carries the walk THROUGH the
 // portal plane. Port of dungeon_nav.js exitRoute:316-358 (outdoor-target
 // derivation), but pure (no advisor/bot) and world-frame throughout.
-// Returns { legs, exitCell, outdoorId } or null (no reachable exit).
-function buildExitLegs(graph, nodes, fromCell, pose) {
-  const exit = findExitPath(graph, fromCell);
+// Returns { legs, path, exitCell, outdoorId } or null (no reachable exit).
+//
+// opts (2026-07-23, egress retry ladder — see exitToOutdoors):
+//   excludeEdges     Set<edgeKey> forwarded to findExitPath — re-route to the
+//                    NEXT-nearest exit around a wedged doorway edge.
+//   doorwayApproach  use toLegs' two-stage 30%/50% doorway pre-approach
+//                    (the offset-doorframe fix) instead of {midpoints}.
+function buildExitLegs(graph, nodes, fromCell, pose, opts = {}) {
+  const exit = findExitPath(graph, fromCell, opts.excludeEdges ? { excludeEdges: opts.excludeEdges } : {});
   if (!exit) return null;
-  const legs = toLegs(graph, exit.path, { midpoints: true });
+  const legs = toLegs(graph, exit.path, opts.doorwayApproach ? { doorwayApproach: true } : { midpoints: true });
   const exitNode = nodes.get(exit.exitCell >>> 0);
   if (!exitNode) return null;
   let outdoorId, ox, oy;
@@ -248,7 +254,7 @@ function buildExitLegs(graph, nodes, fromCell, pose) {
     oy = wy - lby * 192;
   }
   legs.push({ lb: outdoorId, x: ox, y: oy, z: exitNode.pos.z ?? pose.z });
-  return { legs, exitCell: exit.exitCell >>> 0, outdoorId };
+  return { legs, path: exit.path, exitCell: exit.exitCell >>> 0, outdoorId };
 }
 
 async function safeBuild(buildGraph, lbWord) {
@@ -808,29 +814,116 @@ function findUpcomingJumpLeg(legs, fromIdx) {
 
 /**
  * Walk OUT of whatever building/dungeon the pose is currently in (task #16
- * re-entrancy): a hop — the intended exit, a WRONG hallway portal, whatever —
- * can leave us parked in an EnvCell, and the sidecar HTTP-400s an indoor `from`.
- * findExitPath -> walk the exit legs (frame-normalized, long indoor watchdog).
- * Returns {ok:true, alreadyOutdoors} when the pose is already outdoors; honest
- * {ok:false, error} otherwise. Never throws.
+ * re-entrancy; upgraded 2026-07-23 to the bounded EGRESS RETRY LADDER — the
+ * live Holtburg-tavern egress fix). A hop — the intended exit, a WRONG
+ * hallway portal, whatever — can leave us parked in an EnvCell, and the
+ * sidecar HTTP-400s an indoor `from`; and a bot that WALKED deep into a
+ * furnished building (two doors to the tavern barkeeper) has to get back out
+ * through real interior obstructions.
+ *
+ * Ladder, per attempt (bounded by tune.egressAttempts, default 4):
+ *   1. Re-resolve the CURRENT cell/pose (a partial walk keeps its progress)
+ *      and findExitPath to the nearest outdoor mouth, honoring accumulated
+ *      excludeEdges. Legs use the two-stage doorway pre-approach
+ *      (toLegs {doorwayApproach} — offset doorframes), frame-normalized, with
+ *      the long indoor watchdog.
+ *   2. Walk. Success — or a "failed" walk that nonetheless left us outdoors
+ *      (the last legs straddle the door plane) — is egress complete.
+ *   3. On a wedge: best-effort OPEN the nearest closed door (ACE auto-closes
+ *      doors ~30s after use, so the doors the bot entered THROUGH are shut
+ *      again by the time it leaves — the live two-door tavern case), and
+ *      blame the stalled doorway edge (stalledEdgeFromWalk). An edge that
+ *      wedges TWICE gets excluded so findExitPath re-routes to the
+ *      NEXT-nearest exit — the live tavern wedge was a CellPortal edge that
+ *      is a serving-window opening over the bar counter (real in the DAT,
+ *      not walkable at floor level); exclusion is the only remedy there,
+ *      while a first wedge on a merely-closed door must NOT detour (the
+ *      repathIndoor door-before-exclusion lesson).
+ *   4. A retry that would repeat the identical path with no door opened and
+ *      no new exclusion is going nowhere — fail honestly instead of burning
+ *      attempts.
+ *
+ * Returns {ok:true, alreadyOutdoors} when the pose is already outdoors;
+ * {ok:true, state, attempts, legsWalked, exitCell, outdoorId} on egress;
+ * honest {ok:false, error} otherwise. Pushes ONE summary entry onto `phases`
+ * (labelled opts.label) when any walk ran. Never throws.
  */
-async function exitToOutdoors(ctx, tune, phases) {
+async function exitToOutdoors(ctx, tune, phases, { label = "re-exit" } = {}) {
   const { host, walk, buildGraph } = ctx;
-  const cell = currentCell(host);
-  if (!isEnvCellId(cell)) return { ok: true, alreadyOutdoors: true };
-  const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
-  if (!pose) return { ok: false, error: "no player pose" };
-  const graph = await safeBuild(buildGraph, cell & 0xffff0000);
-  const nodes = toMap(graph);
-  if (nodes.size === 0) return { ok: false, error: "indoor graph unavailable" };
-  const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
-  if (!fromCell) return { ok: false, error: "indoor graph unavailable" };
-  const exit = buildExitLegs(graph, nodes, fromCell, pose);
-  if (!exit) return { ok: false, error: "no reachable exit" };
-  const legs = exit.legs.map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
-  const w = await walk(legs, { label: "re-exit", stallMs: tune.indoorLegTimeoutMs + 15_000 });
-  if (phases) phases.push({ phase: "re-exit", ok: w.ok, state: w.state, legsWalked: w.legsWalked ?? 0 });
-  return { ok: w.ok, state: w.state, error: w.ok ? undefined : (w.error || "exit walk failed") };
+  if (!isEnvCellId(currentCell(host))) return { ok: true, alreadyOutdoors: true };
+  const maxAttempts = Math.max(1, tune.egressAttempts ?? 4);
+  const excludeEdges = new Set();
+  const wedgeCounts = new Map(); // canonical edgeKey -> stall count
+  let legsWalkedTotal = 0;
+  let lastError = null;
+  let lastState = "FAILED";
+  let lastSig = "";
+  const pushPhase = (ok, state, attempts) => {
+    if (phases) phases.push({ phase: label, ok, state, legsWalked: legsWalkedTotal, attempts });
+  };
+  const succeed = (state, attempt, exit) => {
+    pushPhase(true, state, attempt);
+    return {
+      ok: true,
+      state,
+      attempts: attempt,
+      legsWalked: legsWalkedTotal,
+      ...(exit ? { exitCell: exit.exitCell, outdoorId: exit.outdoorId } : {}),
+    };
+  };
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const cell = currentCell(host);
+    if (!isEnvCellId(cell)) return succeed("DONE", attempt - 1, null); // a prior attempt got us out
+    const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+    if (!pose) return { ok: false, error: "no player pose" };
+    const graph = await safeBuild(buildGraph, cell & 0xffff0000);
+    const nodes = toMap(graph);
+    if (nodes.size === 0) return { ok: false, error: "indoor graph unavailable" };
+    const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
+    if (!fromCell) return { ok: false, error: "indoor graph unavailable" };
+    const exit = buildExitLegs(graph, nodes, fromCell, pose, { excludeEdges, doorwayApproach: true });
+    if (!exit) {
+      // No walk ever ran -> genuinely no exit in the graph. After exclusions,
+      // prefer the honest walk error (the wedge is the story, not the BFS).
+      if (lastError) break;
+      return { ok: false, error: "no reachable exit" };
+    }
+    const legs = exit.legs.map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
+    const walkLabel = attempt === 1 ? label : `${label}-retry${attempt}`;
+    const w = await walk(legs, { label: walkLabel, stallMs: tune.indoorLegTimeoutMs + 15_000 });
+    legsWalkedTotal += w.legsWalked ?? 0;
+    if (w.ok) return succeed(w.state ?? "DONE", attempt, exit);
+    lastError = w.error || "exit walk failed";
+    lastState = w.state ?? "FAILED";
+    // A "failed" final leg can still have carried us through the door plane.
+    if (!isEnvCellId(currentCell(host))) return succeed(lastState, attempt, exit);
+    // Remedy 1 — closed door (checked from the FRESH wedge pose: the stalled
+    // walk usually parks us right against it). Best-effort; opening a door
+    // never hurts egress (attemptDoorOpen skips already-open doors).
+    const doorPose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
+    const dr = await attemptDoorOpen(host, doorPose);
+    if (dr.opened && ctx.log) ctx.log(`${label}: opened closed door ${dr.name} — retrying (attempt ${attempt})`);
+    // Remedy 2 — blame the stalled doorway edge; exclude only on the SECOND
+    // wedge of the SAME edge (a first wedge may have been just the door).
+    let newExclusion = false;
+    const stalled = stalledEdgeFromWalk(exit.path, w.legsWalked ?? 0);
+    if (stalled) {
+      const n = (wedgeCounts.get(stalled) || 0) + 1;
+      wedgeCounts.set(stalled, n);
+      if (n >= 2 && !excludeEdges.has(stalled)) {
+        excludeEdges.add(stalled);
+        newExclusion = true;
+        if (ctx.log) ctx.log(`${label}: doorway edge ${stalled} wedged twice — excluding, re-routing to the next exit`);
+      }
+    }
+    // No-progress guard: identical plan, nothing opened, nothing excluded —
+    // the next attempt would replay this wedge verbatim.
+    const sig = `${fromCell >>> 0}:${exit.path.join(",")}`;
+    if (sig === lastSig && !dr.opened && !newExclusion) break;
+    lastSig = sig;
+  }
+  pushPhase(false, lastState, undefined);
+  return { ok: false, state: lastState, error: lastError || "egress attempts exhausted", legsWalked: legsWalkedTotal };
 }
 
 /**
@@ -957,6 +1050,8 @@ export async function composeGoto(deps, to, opts = {}) {
     indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? 240_000,
     // Desperate-touch discovery radius after a wedged indoor walk.
     portalDesperateRangeM: opts.portalDesperateRangeM ?? 25,
+    // Bounded egress retry ladder (exitToOutdoors, 2026-07-23 tavern fix).
+    egressAttempts: opts.egressAttempts ?? 4,
   };
 
   const startCell = currentCell(host);
@@ -1005,17 +1100,18 @@ export async function composeGoto(deps, to, opts = {}) {
       };
     }
 
-    // Otherwise (goal outdoors, or a DIFFERENT dungeon): exit the building.
-    const exit = buildExitLegs(graph, nodes, fromCell, pose);
-    if (!exit) return fail("indoor graph unavailable (no reachable exit)", { phases, legsWalked });
-    const w = await walk(exit.legs, { label: "exit" });
-    legsWalked += w.legsWalked || 0;
-    phases.push({ phase: "exit", ok: w.ok, state: w.state, legsWalked: w.legsWalked || 0 });
-    if (!w.ok) {
+    // Otherwise (goal outdoors, or a DIFFERENT dungeon): exit the building via
+    // the bounded egress ladder (exitToOutdoors — doorway pre-approach legs,
+    // closed-door opening, twice-wedged edge exclusion; 2026-07-23 tavern fix).
+    // The ladder re-resolves cell/graph itself, so the graph built above for
+    // the Case-2 check is simply the first (cached-by-wasm) build.
+    const ex = await exitToOutdoors(ctx, tune, phases, { label: "exit" });
+    legsWalked += ex.legsWalked ?? 0;
+    if (!ex.ok) {
       return {
         ok: false,
-        state: w.state,
-        error: w.error || "exit walk failed",
+        state: ex.state ?? "FAILED",
+        error: ex.error || "exit walk failed",
         legsWalked,
         replans: 0,
         coverage: "indoor",
@@ -1097,6 +1193,51 @@ export async function composeGoto(deps, to, opts = {}) {
   };
 }
 
+/**
+ * Standalone building/dungeon EGRESS (2026-07-23, live Holtburg-tavern fix):
+ * the awaited "walk OUT to the nearest outdoor mouth" primitive, runnable
+ * WITHOUT the nav sidecar (indoor-only — no outdoorGoto needed, unlike
+ * composeGoto). This is what bot.egress() / the exit_building action drive:
+ * the full multi-door route to the mouth via exitToOutdoors' bounded retry
+ * ladder (doorway pre-approach legs, closed-door opening, twice-wedged edge
+ * exclusion re-routing to the next-nearest exit), with an HONEST awaited
+ * result — the predecessor (exitRoute + fire-and-forget bot.travel) reported
+ * ok the moment the router ACCEPTED the legs, wedged on the bar counter, and
+ * looped ("PLAN-DONE exit_building but I only shifted 2m").
+ *
+ * `deps`: { host, router, buildGraph?, walk?, fetchEnvCells?, log? } — same
+ * seams as composeGoto/replayRoute. `opts`: the shared tune knobs
+ * (egressAttempts, indoorLegTimeoutMs, ...) plus label (default "egress").
+ * Resolves { ok, state?, attempts?, legsWalked, exitCell?, outdoorId?,
+ * alreadyOutdoors?, composed:true, phases:[...] , error? }; never rejects.
+ */
+export async function composeEgress(deps, opts = {}) {
+  const { host, router } = deps;
+  const log = deps.log || (() => {});
+  const pollMs = opts.pollMs ?? 500;
+  const stallMs = opts.stallMs ?? 45_000;
+  const buildGraph =
+    deps.buildGraph ||
+    ((lb) => buildStitchedGraphFromWasm([lb], deps.fetchEnvCells ? { fetchEnvCells: deps.fetchEnvCells } : {}));
+  const walk = deps.walk || ((legs, wopts = {}) => walkLegs(router, legs, { pollMs, stallMs, log, ...wopts }));
+  const ctx = { host, router, walk, buildGraph, log };
+  // Building egress legs are metres long (cell-to-cell inside one structure),
+  // not Town-Network transit strides — default the per-leg watchdog to 60s
+  // (vs buildTune's 240s replay default) so a hopeless wedge fails a whole
+  // 4-attempt ladder in minutes, not tens of minutes. Callers can still
+  // override via opts.indoorLegTimeoutMs.
+  const tune = buildTune({ ...opts, indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? 60_000 }, router);
+  const phases = [];
+  try {
+    const r = await exitToOutdoors(ctx, tune, phases, { label: opts.label ?? "egress" });
+    return { legsWalked: 0, ...r, state: r.state ?? (r.ok ? "DONE" : "FAILED"), composed: true, phases };
+  } catch (e) {
+    // exitToOutdoors never throws by contract; this guard keeps the promise
+    // airtight against hostile injected deps (same belt as composeGoto).
+    return { ok: false, state: "FAILED", error: String((e && e.message) || e), legsWalked: 0, composed: true, phases };
+  }
+}
+
 // ── replay contract v2 (task #17) ───────────────────────────────────────────
 // deriveRouteFlags itself now lives in route_flags.js (imported above) —
 // shared with nav_import.js. Only the replay-side consumers stay here.
@@ -1119,6 +1260,8 @@ function buildTune(opts = {}, router = null) {
     // report #3: the one-shot repath found a real path, walked 2 of 3 legs,
     // then stalled on the 3rd and gave up entirely). See repathIndoor below.
     wedgeAttempts: opts.wedgeAttempts ?? 3,
+    // Bounded egress retry ladder (exitToOutdoors, 2026-07-23 tavern fix).
+    egressAttempts: opts.egressAttempts ?? 4,
     // Jump-leg tuning (2026-07-21, DESIGN-jump-primitive Phase 1). See
     // attemptJumpLeg's docblock for the field-mapping rationale.
     jumpHeadingToleranceRad: opts.jumpHeadingToleranceRad ?? 0.12, // ~6.9 deg
@@ -1474,4 +1617,4 @@ export async function replayRoute(deps, legs, opts = {}) {
   }
 }
 
-export default { composeGoto, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, routeHasJumps, replayRoute };
+export default { composeGoto, composeEgress, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, routeHasJumps, replayRoute };

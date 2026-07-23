@@ -162,10 +162,17 @@ export async function executeAction(bot, a, { log, journal } = {}) {
             return fail(
               "position unresolved (cell 0 — respawn/streaming gap; NOT outdoors). Do not route yet; wait a check-in for the cell to resolve, then act on your nearby list.",
             );
-          if (p && ((p.objCellId >>> 0) & 0xffff) >= 0x100)
-            return fail(
-              "you are indoors (dungeon cell) — outdoor goto cannot route from here; use exit_building to walk outside first, then goto",
-            );
+          // 2026-07-23 egress fix: an indoor START is no longer refused here.
+          // bot.goto composes via goto_compose.composeGoto, whose Phase A
+          // walks OUT of the building first (the bounded egress ladder:
+          // doorway pre-approach legs, closed-door opening, wedged-edge
+          // exclusion) and only then runs the outdoor plan — so the old
+          // refusal ("use exit_building first, then goto") just trapped the
+          // director in a refusal loop while it kept re-issuing the goto it
+          // was told to issue next anyway (live Holtburg-tavern
+          // "indoor-cell-refusal" loop). An indoor GOAL cell (guarded above)
+          // stays refused: that case is almost always a mis-derived object
+          // guid, not a real destination.
         } catch {}
         const to = a.type === "goto" ? { ns: a.ns, ew: a.ew } : { lb: lbNum, x: a.x, y: a.y, z: a.z };
         // bot.goto resolves {ok, state, legsWalked, replans} or {ok:false,

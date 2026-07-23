@@ -514,11 +514,23 @@ export function toLegs(graph, path, opts = {}) {
  * LandDefs::gid_to_lcoord, acclient.c:209521 — idx-1 = cx*8 + cy).
  *
  * opts.walkableOverrides — same escape hatch as findPath (edgeIsDrop above).
+ *
+ * opts.excludeEdges (Set<string>, default none) — the INVERSE escape hatch,
+ * mirroring findPath's option exactly (canonical `edgeKey(a,b)` pairs,
+ * checked BEFORE walkableOverrides/isDropEdge): force-treat these edges as
+ * IMPASSABLE. Added 2026-07-23 for goto_compose.js's egress retry ladder
+ * (the live Holtburg-tavern egress wedge): when an exit walk stalls on a
+ * specific portal edge — e.g. a CellPortal record that is a serving-window
+ * opening over the bar counter, real in the DAT but not walkable at floor
+ * level — the next attempt excludes that edge so the BFS re-routes to the
+ * NEXT-nearest exit (the tavern's south doors) instead of re-offering the
+ * same jammed transition forever.
  */
 export function findExitPath(graph, fromCell, opts = {}) {
   const nodes = asMap(graph);
   const from = Number(fromCell) >>> 0;
   const overrides = opts.walkableOverrides || null;
+  const excluded = opts.excludeEdges || null;
   if (!nodes.has(from)) return null;
   const prev = new Map([[from, 0]]);
   let frontier = [from];
@@ -538,6 +550,7 @@ export function findExitPath(graph, fromCell, opts = {}) {
       }
       for (const nb of node.neighbors) {
         if (prev.has(nb) || !nodes.has(nb)) continue;
+        if (excluded && excluded.has(edgeKey(id, nb))) continue; // exclusion wins over overrides
         if (edgeIsDrop(overrides, id, nb, node, nodes.get(nb))) continue;
         prev.set(nb, id);
         next.push(nb);

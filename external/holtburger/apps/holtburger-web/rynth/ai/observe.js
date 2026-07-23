@@ -231,7 +231,7 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
     const hasNav = safe(() => !!bot.globalRouter);
     head.push(
       hasNav
-        ? `nav: goto/goto_lb ONLINE (outdoor router)${indoors ? " — you are INDOORS: use exit_building first, goto only works outdoors" : ""}`
+        ? `nav: goto/goto_lb ONLINE (outdoor router)${indoors ? " — you are INDOORS: exit_building walks you out; an outdoor goto also auto-exits the building first" : ""}`
         : `nav: OFFLINE (no sidecar) — goto/goto_lb unavailable; move with goto_object${indoors ? " or exit_building" : ""}`
     );
     // Sense of place (soak-14): raw loc degrees left the model guessing

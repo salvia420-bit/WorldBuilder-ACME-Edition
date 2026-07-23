@@ -1246,6 +1246,147 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     }
   }
 
+  // ── composeEgress: the bounded egress retry ladder (2026-07-23, live
+  // Holtburg-tavern fix). A tavern-shaped world: the NEAREST exit path runs
+  // over a serving-window CellPortal edge (real in the DAT, never walkable at
+  // floor level — walks across it always wedge), and the alternate south
+  // route out is gated by a CLOSED door. The ladder must: wedge twice on the
+  // window edge, exclude it, re-route to the south exit, open the door when
+  // wedged against it, and finish OUTDOORS with an honest awaited result. ──
+  {
+    const { composeEgress } = mod;
+    const TLB = 0x11220000; // lbX=0x11 (world x base 3264), lbY=0x22 (y base 6528)
+    const BAR = TLB | 0x155, WIN = TLB | 0x15c, EXITE = TLB | 0x164;
+    const S1 = TLB | 0x153, S2 = TLB | 0x154, EXITS = TLB | 0x150;
+    const tavernGraph = () => new Map([
+      [BAR,   { pos: { x: 3274, y: 6538, z: 0 }, neighbors: [WIN, S1], exits: [] }],
+      [WIN,   { pos: { x: 3278, y: 6538, z: 0 }, neighbors: [BAR, EXITE], exits: [] }],
+      [EXITE, { pos: { x: 3282, y: 6538, z: 0 }, neighbors: [WIN], exits: [(TLB | 0xffff) >>> 0] }], // outside sentinel
+      [S1,    { pos: { x: 3274, y: 6534, z: 0 }, neighbors: [BAR, S2], exits: [] }],
+      [S2,    { pos: { x: 3274, y: 6530, z: 0 }, neighbors: [S1, EXITS], exits: [] }],
+      [EXITS, { pos: { x: 3274, y: 6526, z: 0 }, neighbors: [S2], exits: [(TLB | 0x0005) >>> 0] }], // direct LandCell
+    ]);
+    const DOOR_GUID = 0x70012345; // closed door on the S2->EXITS doorway (world 3274,6528)
+    function tavernWorld() {
+      const nodes = tavernGraph();
+      const state = { cell: BAR >>> 0, pos: { wx: 3274, wy: 6538, z: 0 }, doorOpen: false, used: [], walkLabels: [] };
+      const nearestGraphCell = (wx, wy) => {
+        let best = 0, bestD = Infinity;
+        for (const [cid, n] of nodes) {
+          const d = (n.pos.x - wx) ** 2 + (n.pos.y - wy) ** 2;
+          if (d < bestD) { bestD = d; best = cid; }
+        }
+        return best >>> 0;
+      };
+      const poseOf = () => {
+        // lb-local pose in the OUTDOOR frame of the world point (the sim walk
+        // normalizes legs the same way, so this matches what MoveTo would see).
+        const lbX = Math.floor(state.pos.wx / 192), lbY = Math.floor(state.pos.wy / 192);
+        return { objCellId: state.cell >>> 0, x: state.pos.wx - lbX * 192, y: state.pos.wy - lbY * 192, z: state.pos.z };
+      };
+      const host = {
+        s: { getCurrentCellId: () => state.cell >>> 0 },
+        TryGetPlayerPose: () => poseOf(),
+        NearbyGuids: () => [DOOR_GUID],
+        TryGetObjectDescFlags: (g) => (g === DOOR_GUID ? 0x1000 : 0), // ODF Door
+        TryGetObjectState: (g) => (g === DOOR_GUID && state.doorOpen ? 0x4 : 0), // Ethereal while open
+        TryGetObjectPosition: (g) =>
+          g === DOOR_GUID ? { objCellId: (TLB | 0x0001) >>> 0, x: 3274 - 0x11 * 192, y: 6528 - 0x22 * 192, z: 0 } : null,
+        TryGetObjectName: (g) => (g === DOOR_GUID ? "Sturdy Door" : "?"),
+        UseObject: (g) => {
+          state.used.push(g >>> 0);
+          if (g === DOOR_GUID) state.doorOpen = true;
+          return true;
+        },
+      };
+      // Physics sim: legs walk in order; a leg is BLOCKED when its world point
+      // is (a) past the serving window (y=6538 corridor, x > 3278.5 — the
+      // WIN->EXITE opening is never floor-walkable) or (b) past the closed
+      // door (x=3274 corridor, y < 6529 while the door is shut). A wedge
+      // leaves the pose at the last COMPLETED leg (partial progress persists);
+      // completing every leg lands the final (outdoor) point.
+      const walk = async (legs, o = {}) => {
+        state.walkLabels.push(o.label);
+        for (let i = 0; i < legs.length; i++) {
+          const wx = worldXf(legs[i].lb >>> 0, legs[i].x);
+          const wy = worldYf(legs[i].lb >>> 0, legs[i].y);
+          const windowBlocked = Math.abs(wy - 6538) < 1 && wx > 3278.5;
+          const doorBlocked = !state.doorOpen && Math.abs(wx - 3274) < 1 && wy < 6529;
+          if (windowBlocked || doorBlocked) return { ok: false, state: "FAILED", error: "walk stalled", legsWalked: i };
+          state.pos = { wx, wy, z: legs[i].z };
+          state.cell = i === legs.length - 1 ? legs[i].lb >>> 0 : nearestGraphCell(wx, wy); // final leg = the outdoor point
+        }
+        return { ok: true, state: "DONE", legsWalked: legs.length };
+      };
+      const buildGraph = async (lb) => ((((lb >>> 0) & 0xffff0000) >>> 0) === (TLB >>> 0) ? tavernGraph() : null);
+      return { state, deps: { host, router: null, walk, buildGraph } };
+    }
+
+    const EOPTS = { poseTimeoutMs: 60, pollMs: 2, egressAttempts: 5 };
+    {
+      const tw = tavernWorld();
+      const r = await composeEgress(tw.deps, EOPTS);
+      check("egress: tavern multi-door egress completes OUTDOORS", r.ok === true && r.composed === true, JSON.stringify(r));
+      check("egress: pose ended outdoors (LandCell, not EnvCell)", ((tw.state.cell & 0xffff) >>> 0) < 0x100, `cell=0x${tw.state.cell.toString(16)}`);
+      check("egress: converged in 4 attempts (window x2 -> exclude -> door -> out)", r.attempts === 4, JSON.stringify(r));
+      check(
+        "egress: walk labels egress, -retry2, -retry3, -retry4",
+        tw.state.walkLabels.join(",") === "egress,egress-retry2,egress-retry3,egress-retry4",
+        JSON.stringify(tw.state.walkLabels),
+      );
+      check("egress: the closed door was opened exactly once", tw.state.used.length === 1 && tw.state.used[0] === (DOOR_GUID >>> 0), JSON.stringify(tw.state.used));
+      check("egress: exited via the SOUTH exit (window edge excluded)", (r.exitCell >>> 0) === (EXITS >>> 0), JSON.stringify(r));
+      check("egress: one summary phase entry with the attempt count", r.phases.length === 1 && r.phases[0].phase === "egress" && r.phases[0].attempts === 4, JSON.stringify(r.phases));
+    }
+    {
+      // Already outdoors -> immediate no-walk success.
+      const tw = tavernWorld();
+      tw.state.cell = (TLB | 0x0001) >>> 0;
+      const r = await composeEgress(tw.deps, EOPTS);
+      check("egress: already outdoors -> ok, no walk", r.ok === true && r.alreadyOutdoors === true && tw.state.walkLabels.length === 0, JSON.stringify(r));
+    }
+    {
+      // Attempt budget too small to reach the door remedy -> honest failure
+      // carrying the LAST walk error, and never a throw.
+      const tw = tavernWorld();
+      const r = await composeEgress(tw.deps, { ...EOPTS, egressAttempts: 2 });
+      check("egress: exhausted budget fails honestly with the walk error", r.ok === false && r.error === "walk stalled", JSON.stringify(r));
+      check("egress: still indoors after the failed budget", ((tw.state.cell & 0xffff) >>> 0) >= 0x100, `cell=0x${tw.state.cell.toString(16)}`);
+    }
+    {
+      // No graph at all -> honest "indoor graph unavailable".
+      const tw = tavernWorld();
+      const r = await composeEgress({ ...tw.deps, buildGraph: async () => null }, EOPTS);
+      check("egress: no graph -> indoor graph unavailable", r.ok === false && r.error === "indoor graph unavailable", JSON.stringify(r));
+    }
+
+    // composeGoto Phase A now retries the exit walk through the same ladder:
+    // first exit walk wedges (transient), the retry threads it, then the
+    // outdoor phase runs — previously ANY exit-walk failure was terminal.
+    {
+      const R = recorders();
+      let exitWalks = 0;
+      const flakyWalk = async (legs, o = {}) => {
+        R.walks.push({ label: o.label, legs });
+        if (o.label && o.label.startsWith("exit") && ++exitWalks === 1) {
+          return { ok: false, state: "FAILED", error: "wedged on the doorframe", legsWalked: 0 };
+        }
+        return { ok: true, state: "DONE", legsWalked: legs.length };
+      };
+      const r = await composeGoto(
+        { host: mkHost(CX, poseCX()), router: null, outdoorGoto: R.okOutdoor, buildGraph: R.buildGraph({ [LBX]: graphX() }), walk: flakyWalk },
+        { ns: 5, ew: 5 }, OPTS,
+      );
+      check("phaseA-ladder: transient exit wedge is retried to success", r.ok === true, JSON.stringify(r));
+      check(
+        "phaseA-ladder: walks = exit, exit-retry2, then the outdoor phase ran",
+        R.walks.map((w) => w.label).join(",") === "exit,exit-retry2" && R.outdoors.length === 1,
+        JSON.stringify(R.walks.map((w) => w.label)),
+      );
+      check("phaseA-ladder: phases exit(attempt 2) then outdoor", r.phases.map((p) => p.phase).join(",") === "exit,outdoor" && r.phases[0].attempts === 2, JSON.stringify(r.phases));
+    }
+  }
+
   console.log(`\ngoto_compose: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

@@ -246,6 +246,61 @@ export async function createGrindBot(sessionHandle, config = {}) {
     }
   };
 
+  // Awaited indoor EGRESS (2026-07-23, live Holtburg-tavern fix): walk OUT of
+  // the current building/dungeon to the nearest outdoor mouth via
+  // goto_compose.composeEgress (doorway pre-approach legs, closed-door
+  // opening, bounded twice-wedged edge-exclusion retries — exitToOutdoors'
+  // ladder). Unlike doGoto this needs NO nav sidecar (indoor-only), and
+  // unlike the legacy exit_building path (dungeonNav.exitRoute +
+  // fire-and-forget bot.travel) it AWAITS the walk and reports the honest
+  // outcome — the old path returned ok the moment the router accepted the
+  // legs, so a wedged exit still journaled as a success ("PLAN-DONE
+  // exit_building but I only shifted 2m"). Kernel/mission semantics mirror
+  // doGoto: pause + prior-state restore, mission {kind:"egress"}, the
+  // composeActive latch for the whole duration, last-command-wins over a raw
+  // travel().
+  const doEgress = async (opts) => {
+    if ((globalRouter && globalRouter.busy) || composeActive || followBusy) {
+      return { ok: false, error: "goto already active" };
+    }
+    const rs0 = router.status.state;
+    if (rs0 === "WALK" || rs0 === "PORTAL") router.cancel(); // last command wins over travel()
+    const wasRunning = kernel.running === true;
+    kernel.stop();
+    const label = "exit building";
+    bot.mission = { kind: "egress", label, startedAt: Date.now(), interrupts: 0 };
+    try { bot._onTravelStart?.({ kind: "egress", label }); } catch { /* hook must not break travel */ }
+    let r = null;
+    composeActive = true;
+    try {
+      r = await gcMod.composeEgress(
+        {
+          host,
+          router,
+          ...(config.nav?.fetchEnvCells ? { fetchEnvCells: config.nav.fetchEnvCells } : {}),
+          log: (m) => (config.nav?.log || config.router?.log || (() => {}))(`[egress] ${m}`),
+        },
+        opts,
+      );
+      return r;
+    } finally {
+      composeActive = false;
+      if (wasRunning) kernel.start();
+      const m = bot.mission;
+      bot.mission = null;
+      if (m) bot.lastMission = { ...m, endedAt: Date.now(), result: r ? { ok: r.ok === true, state: r.state ?? null, coverage: "indoor" } : null };
+      try { bot._onTravelDone?.({ kind: "egress", label, result: r, mission: m }); } catch { /* hook must not break travel */ }
+      try {
+        bot.ai?.director?.requestEarlyCheck(
+          r?.ok
+            ? `egress complete: outdoors${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}`
+            : `egress FAILED (${r?.error ?? "?"})`,
+          { minGapSeconds: 10 },
+        );
+      } catch { /* event wiring must not break travel */ }
+    }
+  };
+
   // Blocked-fact probe (SPEC-navatlas §3-W2.5): when a route leg FAILs, a
   // sphere-sweep along the failed leg turns a mystery 30 s wall-grind into a
   // journal fact the director can act on. Lazy; absence/error degrades to no
@@ -458,6 +513,12 @@ export async function createGrindBot(sessionHandle, config = {}) {
      * {ok, state, legsWalked, replans}.
      */
     goto: (to, opts) => doGoto(to, opts),
+    /** Awaited indoor egress to the nearest outdoor mouth (doEgress above —
+     *  goto_compose.composeEgress retry ladder). Works WITHOUT config.nav.
+     *  Resolves {ok, state, attempts?, legsWalked, exitCell?, outdoorId?,
+     *  alreadyOutdoors?, error?}. One mover at a time (refused while a
+     *  goto/followRoute runs); cancels a raw travel() (last command wins). */
+    egress: (opts) => doEgress(opts),
     /** Walk pre-planned atlas legs with goto's kernel semantics; resolves
      *  {ok, state, legsWalked?}. One at a time; refused while a goto runs. */
     followRoute: (legs, opts) => doFollowRoute(legs, opts),
