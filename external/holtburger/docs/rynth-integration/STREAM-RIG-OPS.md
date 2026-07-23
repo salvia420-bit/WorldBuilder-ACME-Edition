@@ -29,7 +29,7 @@ boot-loop churn this runbook fights).
 ## Game URL flag set (baked into `launch.sh`)
 
 ```
-nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
+nosw=1&bakeWorker=1&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
 &rain=off&snow=off&lightning=off&autoLogin=1&account=vendortest
 &password=vendortest&autoSpawn=first&agent=1
 &thoughtOverlay=1&bot=1&streamHud=1&botModel=minimax/minimax-m3
@@ -46,6 +46,15 @@ no-op relic of the pre-promotion opt-in string. A concurrent remediation pass
 is removing both from the live `launch.sh` — if you're reading this before
 that lands, `launch.sh` may still carry one or both; they do nothing either
 way.)*
+
+*(2026-07-23 freeze fix: `bakeWorker` flipped `0` → `1`. `bakeWorker=0` ran ALL
+asset decode — model-mesh triangulation + surface-pixel — on the MAIN-thread
+wasm; on the 8GB rig that hot-looped/blocked the render thread while a new
+landblock streamed in, producing a recurring ~20-30 min main-thread FREEZE
+(diagnosed live: 4 in a single soak, each forcing a comprehension-monitor
+auto-recover, eventually a scene-ready boot-loop). The default-ON bake worker
+offloads decode to its own thread + wasm so the render thread stays responsive.
+Set `=0` again only to A/B the main-thread path.)*
 
 - `botModel=minimax/minimax-m3` pins the director LLM (2026-07-21 trial:
   within 6 min of a clean journal+scratchpad it routed to and used the
