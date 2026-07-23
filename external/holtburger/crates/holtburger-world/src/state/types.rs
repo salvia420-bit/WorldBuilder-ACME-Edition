@@ -508,6 +508,25 @@ impl WorldState {
         self.terrain_heights.insert(landblock_id, heights);
     }
 
+    /// Seed terrain heights on BOTH the `WorldState` floor sampler (above) AND
+    /// the `SpatialScene` residency store, so an outdoor manual-drive fixture
+    /// routes through `faithful_find_transitional_position` (the live-gameplay
+    /// path, taken when `SpatialScene::terrain_landblock_resident` is true and
+    /// `USE_FAITHFUL_OUTDOOR` is on) instead of the `resolve_floor_for_step`
+    /// fallback. OPT-IN: existing fixtures that call `populate_terrain_heights`
+    /// keep the fallback path and their pinned numbers — do NOT fold this into
+    /// that method, or ~every outdoor fixture silently reroutes to the faithful
+    /// driver (FINDING #2, 2026-07-23; the scene store masks `landblock_id`
+    /// internally, so pass the same landblock-high key to both).
+    pub fn populate_terrain_heights_scene_resident(
+        &mut self,
+        landblock_id: u32,
+        heights: [f32; 81],
+    ) {
+        self.populate_terrain_heights(landblock_id, heights);
+        self.scene.populate_terrain_heights(landblock_id, heights);
+    }
+
     /// F4-4 (bughunt 2026-06-09) — cache the per-vertex water-terrain flags for
     /// a landblock from its `CellLandblock` terrain TYPE codes (one byte per
     /// 9×9 vertex, range 0..31). A code is water iff it is one of the renderer's

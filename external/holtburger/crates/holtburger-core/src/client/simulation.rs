@@ -239,6 +239,7 @@ impl ClientSimulationSystem {
                 object,
                 airborne: world.player.is_airborne && !control.force_grounded,
                 descending: true,
+                entry_descending: true,
                 force_grounded: control.force_grounded,
                 gates,
                 last_known_wall_normal: world.player.last_known_wall_normal,

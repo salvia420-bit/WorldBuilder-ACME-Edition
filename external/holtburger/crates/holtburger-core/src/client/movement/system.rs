@@ -283,8 +283,10 @@ const USE_SETTLE_LAND: bool = true;
 /// Settle-land tolerance (metres) ABOVE the terrain plane at which an airborne,
 /// non-rising mover is grounded (see [`USE_SETTLE_LAND`]). 8 cm: comfortably
 /// larger than the frame-to-frame ballistic z step at locomotion speeds, far
-/// smaller than any jump-apex clearance.
-const LAND_SETTLE_EPS: f32 = 0.08;
+/// smaller than any jump-apex clearance. Re-exports the single source of truth in
+/// `holtburger_world::spatial` so this (legacy-chain) copy and the reachable
+/// `resolve_floor_for_step` gate can never drift.
+const LAND_SETTLE_EPS: f32 = holtburger_world::spatial::LAND_SETTLE_EPS;
 
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up) — gate for the
 /// edge_slide tangent-slide in the lateral-clamp + step-up path of
@@ -5961,6 +5963,7 @@ impl MovementSystem {
             step_up_down: USE_STEP_UP_DOWN,
             walkable_step_down: USE_WALKABLE_STEP_DOWN,
             landing_walkable: USE_LANDING_WALKABLE,
+            settle_land: USE_SETTLE_LAND,
             water_collision: USE_WATER_COLLISION,
             terrain_walkable_gate: USE_TERRAIN_WALKABLE_GATE,
             local_envcell_entry: USE_LOCAL_ENVCELL_ENTRY,
@@ -6337,6 +6340,11 @@ impl MovementSystem {
         let was_airborne = world.player.is_airborne;
         let mut raw_delta = raw_delta;
         let mut descending = true;
+        // Non-rising at TRUE slice entry (before the gravity add below). Gates
+        // the settle-land EPS band only, so a slow riser (entry vz in
+        // (0, |g|·dt]) is never force-landed mid-ascent by the 8 cm widening —
+        // unlike `descending`, which is measured post-gravity.
+        let mut entry_descending = true;
         let dz = if was_airborne {
             // Retail `UpdatePhysicsInternal` per-quantum order
             // (acclient.c:317701-317786): entry mag² (:317726) →
@@ -6350,6 +6358,9 @@ impl MovementSystem {
             let mut vx = world.player.current_planar_velocity.x;
             let mut vy = world.player.current_planar_velocity.y;
             let mut vz = world.player.vertical_velocity;
+            // Capture the entry sign BEFORE any clamp/stop/gravity mutation —
+            // "was the mover rising when the slice began?" (settle-land guard).
+            entry_descending = vz <= 0.0;
             let mut mag2 = vx * vx + vy * vy + vz * vz;
             let d;
             if mag2 > 0.0 {
@@ -6465,6 +6476,7 @@ impl MovementSystem {
             object,
             airborne: was_airborne,
             descending,
+            entry_descending,
             force_grounded: false,
             gates,
             last_known_wall_normal: world.player.last_known_wall_normal,

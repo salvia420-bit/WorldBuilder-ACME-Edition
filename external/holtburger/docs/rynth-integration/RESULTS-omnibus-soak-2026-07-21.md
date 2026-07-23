@@ -61,6 +61,11 @@ real facts (ace_world emote tables, wcid 29324 `academyguardexitholtburg`):
    Un-solved gaps remain covered by the existing `objCellId===0` sentinel and
    placement-diag failure count. JS-only (`nav_guard.js` + test), no wasm
    rebuild, no cross-LB guard change.
+   > NOTE (superseded 2026-07-23): the `objCellId===0` "pose unresolved" sentinel
+   > has since been replaced across all consumers by the honest `cellResolved`
+   > signal (wasm `getLocalPlayerPoseCellResolved`, with a raw-zero fallback only
+   > for a pkg predating it). Read `cellResolved`, not raw `objCellId===0`, in new
+   > code. See HANDOFF-remediation-2026-07-23.md.
 2. Escalation taxonomy: stop classifying NPCs as portals in the pressure
    ladder's escalation rung (portal-only), and surface inventory (or at least
    quest-relevant items like the Exit Token) in observations so the director

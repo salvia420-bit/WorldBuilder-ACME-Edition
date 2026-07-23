@@ -38,7 +38,7 @@
 use super::collision::{PlacementCollisionInfo, TransitionState, physics_globals};
 use super::entity_collision::{EntityCollider, clamp_delta_against_entities};
 use super::physics::{
-    FLOOR_Z, PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT,
+    FLOOR_Z, LAND_SETTLE_EPS, PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT,
     PLAYER_STEP_UP_HEIGHT, StepDownOutcome, check_walkable,
     clamp_delta_against_buildings_with_normal, clamp_delta_against_cell_walls_dispatch,
     clamp_delta_to_cell_interior,
@@ -139,6 +139,14 @@ pub struct TransitionGates {
     pub walkable_step_down: bool,
     /// `USE_LANDING_WALKABLE` (A7-R3) — airborne touchdown allowance.
     pub landing_walkable: bool,
+    /// `USE_SETTLE_LAND` (ea2cc7c3, ported to the reachable pipeline 2026-07-23) —
+    /// widen the outdoor airborne touchdown ceiling to `terrain_z +
+    /// LAND_SETTLE_EPS` (8 cm) for a non-rising mover, so a `vertical_velocity ≈
+    /// 0` hover a hair above the plane grounds instead of latching airborne and
+    /// sliding forever (the live-diagnosed "~9 yd/s uncommanded drift"). Read only
+    /// in `resolve_floor_for_step`'s outdoor descending-touchdown arm; `false` ⇒
+    /// ceiling `== terrain_z`, byte-identical to the pre-fix bare gate.
+    pub settle_land: bool,
     /// `USE_WATER_COLLISION` — EntirelyWater block + wading-depth raise.
     pub water_collision: bool,
     /// `USE_TERRAIN_WALKABLE_GATE` — F4-2 uphill cliff refusal + contour
@@ -271,9 +279,20 @@ pub struct TransitionInput {
     pub object: ObjectInfo,
     /// Mover is mid-jump/fall at slice entry.
     pub airborne: bool,
-    /// Vertical velocity ≤ 0 at slice entry (touchdown only triggers on
-    /// the way down, mirroring the legacy `vertical_velocity <= 0` gate).
+    /// Vertical velocity ≤ 0 as measured AFTER this quantum's gravity add
+    /// (`vz += az·dt`, system.rs) — i.e. the mover ends the slice non-rising.
+    /// Gates the bare below-plane touchdown (a mover that nets below the plane
+    /// this slice lands regardless of entry sign). NOTE: this is true for entry
+    /// velocities up to `|g|·dt` (~0.98 m/s at MAX_QUANTUM), so it is NOT a
+    /// "rising at entry" test — use [`Self::entry_descending`] for that.
     pub descending: bool,
+    /// Vertical velocity ≤ 0 at the TRUE slice entry (before this quantum's
+    /// gravity add / stop-check). Gates the settle-land EPS band (the 0..EPS
+    /// widening ABOVE the plane) so a mover genuinely rising at entry is never
+    /// force-landed mid-ascent — the below-plane touchdown still uses the
+    /// post-gravity [`Self::descending`]. For a grounded (non-airborne) entry
+    /// this is `true`.
+    pub entry_descending: bool,
     /// Server-projection / autonomous drives pin contact (legacy
     /// `LocalDriveControl::force_grounded`).
     pub force_grounded: bool,
@@ -839,6 +858,7 @@ pub fn find_transitional_position(
                 object,
                 gates,
                 input.descending,
+                input.entry_descending,
                 &mut pose,
                 &mut airborne,
                 step_entry_xy,
@@ -945,6 +965,7 @@ fn resolve_floor_for_step(
     object: &ObjectInfo,
     gates: &TransitionGates,
     descending: bool,
+    entry_descending: bool,
     pose: &mut WorldPosition,
     airborne: &mut bool,
     step_entry_xy: (f32, f32),
@@ -961,9 +982,29 @@ fn resolve_floor_for_step(
             z
         };
         if *airborne {
-            // Touchdown only on the way down, through the A7-R3 landing
-            // allowance.
-            if descending && pose.coords.z <= z {
+            // Touchdown only on the way down (post-gravity `descending`),
+            // through the A7-R3 landing allowance.
+            //
+            // Settle-land (`gates.settle_land`, USE_SETTLE_LAND): a BELOW-plane
+            // touchdown uses the bare `pose.coords.z <= z`; the EPS BAND (0..8 cm
+            // ABOVE the plane) additionally grounds a mover HOVERING a hair above
+            // it, so a `vz ≈ 0` airborne latch doesn't slide forever on frozen
+            // (no-friction) airborne velocity. The band requires `entry_descending`
+            // — non-rising at TRUE slice entry — because post-gravity `descending`
+            // stays true up to an entry vz of ≈ |g|·dt (~0.98 m/s at MAX_QUANTUM),
+            // and force-landing a slow riser mid-ascent would short-circuit real
+            // jump/hop arcs. Gate off ⇒ band empty, byte-identical to the
+            // pre-ea2cc7c3 bare gate. NOTE (flag interdependence): the
+            // near-vertical-perch refusal just below is itself gated on
+            // `landing_walkable`, so a mover is only kept off a too-steep face
+            // when that flag is also on — production runs `USE_SETTLE_LAND` and
+            // `USE_LANDING_WALKABLE` together; keep them enabled as a pair.
+            // Reachable duplicate of the legacy-chain fix in `movement/system.rs`;
+            // see the FINDING in that crate's settle-land test section.
+            let in_settle_band = gates.settle_land
+                && entry_descending
+                && pose.coords.z <= z + LAND_SETTLE_EPS;
+            if descending && (pose.coords.z <= z || in_settle_band) {
                 let landing_normal = if gates.landing_walkable {
                     env.terrain_normal_at(global.x, global.y)
                 } else {
@@ -1222,6 +1263,7 @@ mod tests {
             step_up_down: true,
             walkable_step_down: false,
             landing_walkable: false,
+            settle_land: false,
             water_collision: false,
             terrain_walkable_gate: false,
             local_envcell_entry: true,
@@ -1244,6 +1286,7 @@ mod tests {
             object: local_player_object(),
             airborne: false,
             descending: true,
+            entry_descending: true,
             force_grounded: false,
             gates: gates_default_on(),
             last_known_wall_normal: None,

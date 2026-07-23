@@ -629,7 +629,15 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
       }
     } catch { /* defensive read only */ }
 
-    if (!rawPose || (rawPose.objCellId >>> 0) === 0) {
+    // Prefer the honest `cellResolved` signal (wasm getLocalPlayerPoseCellResolved,
+    // carried through rawPoseOf); `cellResolved` is null on a pkg/ predating it, in
+    // which case fall back to the legacy raw objCellId===0 sentinel. Same idiom as
+    // actions.js / explore_memory.js / indoor_router.isPoseCellUnresolved.
+    const cellUnresolved =
+      rawPose &&
+      (rawPose.cellResolved === false ||
+        (rawPose.cellResolved == null && (rawPose.objCellId >>> 0) === 0));
+    if (!rawPose || cellUnresolved) {
       return [
         "LOCATION (harness ground truth — trust this over your own memory):",
         "  Here: position unknown (respawn/streaming gap) — hold and re-read next check-in.",

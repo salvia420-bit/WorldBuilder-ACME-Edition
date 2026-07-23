@@ -70,7 +70,8 @@ use holtburger_dat::transition::types::{
     object_info_state, CTransition, CellArray, LandDefs, ObjCellHandle, Position, SpherePath,
 };
 
-use super::collision::TransitionState;
+use super::collision::{physics_globals, TransitionState};
+use super::physics::{landing_allows_touchdown, LAND_SETTLE_EPS};
 use super::scene::{CellMembership, CellPhysicsBsp, SpatialScene};
 use super::transition::{
     find_transitional_position, TransitionEnv, TransitionInput, TransitionOutcome,
@@ -956,6 +957,39 @@ fn faithful_terrain_normal(scene: &SpatialScene, pose: &WorldPosition) -> Option
     find_terrain_poly(&polys, local).map(|p| p.plane.normal)
 }
 
+/// Sample the faithful terrain floor under `pose` from the SAME collision
+/// triangles `faithful_terrain_normal` uses: returns `(z, normal)` where `z` is
+/// the found poly's plane evaluated at the pose's landblock-local (x, y) — so it
+/// agrees exactly with the collision plane, not the separate `WorldState`
+/// heightfield sampler (`env.terrain_height_at`, a different store). `None` off
+/// resident terrain, or when no floor poly is found / the plane is vertical.
+/// Used only by the settle-land EPS hover-snap in
+/// [`faithful_find_transitional_position`] (FINDING #2, 2026-07-23).
+fn faithful_terrain_floor(scene: &SpatialScene, pose: &WorldPosition) -> Option<(f32, Vector3)> {
+    let cell_id = scene.current_cell(pose);
+    let heights = scene.terrain_cell_heights(cell_id)?;
+    let (lb_x, lb_y) = pose.landblock_coords();
+    let g = pose.global_coords();
+    let local = Vector3::new(
+        g.x - lb_x as f32 * METERS_PER_LANDBLOCK,
+        g.y - lb_y as f32 * METERS_PER_LANDBLOCK,
+        g.z,
+    );
+    let cell_x = (local.x / CELL_SIZE).floor().clamp(0.0, 7.0) as u32;
+    let cell_y = (local.y / CELL_SIZE).floor().clamp(0.0, 7.0) as u32;
+    let polys = cell_terrain_polys(heights, cell_id & 0xFFFF_0000, cell_x, cell_y);
+    let poly = find_terrain_poly(&polys, local)?;
+    let n = poly.plane.normal;
+    // Vertical plane (a wall, not a floor) has no well-defined height; the
+    // caller's `landing_allows_touchdown` gate would reject it anyway.
+    if n.z.abs() < 1e-4 {
+        return None;
+    }
+    // Plane equation `normal·p + d = 0` (holtburger-dat `make_plane`) → solve z.
+    let z = -(n.x * local.x + n.y * local.y + poly.plane.d) / n.z;
+    Some((z, n))
+}
+
 pub fn faithful_find_transitional_position(
     env: &dyn TransitionEnv,
     input: &TransitionInput,
@@ -1369,6 +1403,48 @@ pub fn faithful_find_transitional_position(
         (true, entry_walkable_contact)
     } else {
         (grounded, None)
+    };
+    // Settle-land EPS hover-snap (`input.gates.settle_land` / USE_SETTLE_LAND) —
+    // the faithful twin of `resolve_floor_for_step`'s touchdown-ceiling widening
+    // (transition.rs). The decomp terrain gate (`ObjectInfo::validate_walkable`,
+    // holtburger-dat `objectinfo.rs`) records CONTACT only once the sphere BOTTOM
+    // reaches the plane, and the airborne entry stamp strips CONTACT — so a
+    // non-rising airborne mover hovering within `LAND_SETTLE_EPS` ABOVE walkable
+    // terrain ends `grounded == false` and slides on frozen (no-friction)
+    // airborne velocity until gravity closes the cm gap over several ticks. Ground
+    // it THIS tick and snap the feet to the plane. `input.entry_descending`
+    // (non-rising at TRUE slice entry, not the post-gravity `descending`) keeps a
+    // slow riser mid-ascent untouched; `!input.force_grounded` mirrors the
+    // fallback's `airborne && !force_grounded`; and `landing_allows_touchdown` is
+    // the exact slope gate the fallback uses — steep faces (N.z < LANDING_Z) are
+    // refused so a mover pinned to a cliff isn't force-landed. `faithful_terrain_floor`
+    // samples the RAW terrain plane (no water-depth wade-raise); harmless because
+    // the `<= tz + LAND_SETTLE_EPS` band only fires within 8 cm of the actual
+    // floor, where any water depth is negligible. Off ⇒ no-op, byte-identical to
+    // the pre-fix faithful path. FINDING #2 of the 2026-07-23 remediation; see
+    // docs/rynth-integration/.
+    let (grounded, pose) = if input.gates.settle_land
+        && !grounded
+        && input.airborne
+        && !input.force_grounded
+        && input.descending
+        && input.entry_descending
+        && outdoor
+    {
+        match faithful_terrain_floor(scene, &pose) {
+            Some((tz, normal))
+                if pose.coords.z > tz
+                    && pose.coords.z <= tz + LAND_SETTLE_EPS
+                    && landing_allows_touchdown(Some(normal.z), physics_globals::LANDING_Z) =>
+            {
+                let mut p = pose;
+                p.coords.z = tz;
+                (true, p)
+            }
+            _ => (grounded, pose),
+        }
+    } else {
+        (grounded, pose)
     };
     // wall_normal ← COLLISIONINFO::last_known_contact_plane normal (Plane and
     // Vector3 are the shared holtburger_common types — no conversion).
@@ -1864,6 +1940,7 @@ mod drift {
             step_up_down: true,
             walkable_step_down: false,
             landing_walkable: false,
+            settle_land: false,
             water_collision: false,
             terrain_walkable_gate: false,
             local_envcell_entry: true,
@@ -1882,6 +1959,7 @@ mod drift {
             object: ObjectInfo::for_local_player(None, None, true, Guid(0x5000_0001)),
             airborne: false,
             descending: true,
+            entry_descending: true,
             force_grounded: false,
             gates: gates(),
             last_known_wall_normal: None,
@@ -4237,6 +4315,7 @@ mod drift {
                 object: player(),
                 airborne: is_airborne,
                 descending,
+                entry_descending: descending,
                 force_grounded: false,
                 gates: gg,
                 last_known_wall_normal: None,
@@ -4367,6 +4446,7 @@ mod drift {
                 object: player(),
                 airborne: is_airborne,
                 descending,
+                entry_descending: descending,
                 force_grounded: false,
                 gates: gg,
                 last_known_wall_normal: None,
@@ -4466,6 +4546,7 @@ mod drift {
                 object: player(),
                 airborne: is_airborne,
                 descending,
+                entry_descending: descending,
                 force_grounded: false,
                 gates: gg,
                 last_known_wall_normal: None,

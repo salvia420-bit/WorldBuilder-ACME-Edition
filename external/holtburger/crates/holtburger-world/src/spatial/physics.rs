@@ -487,6 +487,15 @@ use holtburger_common::Triangle;
 /// `cell_wall_normal` before invoking the seam-skid.
 pub const FLOOR_Z: f32 = 0.664_174_15;
 
+/// Settle-land tolerance (metres) ABOVE the terrain plane at which an airborne,
+/// non-rising outdoor mover is grounded (the EPS ceiling of the `USE_SETTLE_LAND`
+/// gate, threaded into the transition pipeline as `TransitionGates::settle_land`).
+/// 8 cm: comfortably larger than the frame-to-frame ballistic z step at
+/// locomotion speeds, far smaller than any jump-apex clearance. Single source of
+/// truth — `movement/system.rs`'s `LAND_SETTLE_EPS` re-uses this const so the
+/// legacy chain and the reachable `resolve_floor_for_step` gate can never drift.
+pub const LAND_SETTLE_EPS: f32 = 0.08;
+
 /// 2026-05-10 indoor collision (Phase 6 step G follow-on): return the
 /// highest "floor" Z below `(x, y)` from the given triangles, or
 /// `None` when no triangle qualifies. A triangle qualifies as a floor

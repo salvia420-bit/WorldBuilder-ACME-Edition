@@ -25,6 +25,44 @@ dark-core pre-wiring fixes + quarantine docs; full docs-drift batch; rig hardeni
 auto-reload, CDP recovery watchdog `scripts/stream-rig-watchdog.cjs`, launch.sh URL cleanup,
 DEFERRED-KILL-LIST rescued into this repo).
 
+## ✅ STATUS 2026-07-23 (later same day): FINDING items 1 & 2 RESOLVED, item 3 answered
+
+The three FINDING follow-ups below were then implemented (commit pending), then hardened by an
+adversarial physics review. Gates after: holtburger-core **612/0/1-ignored** (610 + faithful-path
+test + slow-riser regression test), holtburger-world **579/0**. What landed:
+
+> Review-driven refinement (both paths): the settle-land EPS **band** (0..8 cm ABOVE the plane) is
+> gated on a NEW `entry_descending` signal — vz ≤ 0 at TRUE slice entry — NOT the post-gravity
+> `descending` (which reads true for entry velocities up to ~0.98 m/s, so it would force-land a slow
+> riser mid-ascent and short-circuit a real hop). The below-plane touchdown keeps post-gravity
+> `descending`. This closes a latent over-reach that existed in ea2cc7c3's original design. Also:
+> the faithful snap now carries `!force_grounded` (fallback parity), and the fallback's
+> settle/`landing_walkable` flag interdependence + the faithful raw-terrain-vs-water sampling are
+> documented inline. New regression test `settle_land_does_not_force_land_a_slow_riser_within_eps`.
+
+- **Item 1 — DONE.** The EPS hover gate is ported into the reachable `resolve_floor_for_step`
+  (transition.rs): its outdoor touchdown ceiling is now `z + LAND_SETTLE_EPS` when the new
+  `TransitionGates::settle_land` is set, threaded from `USE_SETTLE_LAND` by the production gates
+  builder (system.rs). `LAND_SETTLE_EPS` now lives once in `holtburger_world::spatial` (re-exported
+  by core's copy) so the two chains can't drift. The canary was FLIPPED
+  (`settle_land_eps_gate_is_reachable_under_default_routing`) and the two hover tests re-pinned to
+  the one-tick EPS behavior; `settle_land_does_not_force_land_a_rising_mover` still guards ascent.
+- **Item 2 — DONE.** `faithful_bridge::faithful_find_transitional_position` audited (report:
+  `FINDING2-faithful-audit-2026-07-23.md`) and found conditionally-buggy (no one-tick EPS snap;
+  gravity-bounded, not a forever-latch — the decomp terrain gate records CONTACT only once the
+  sphere BOTTOM reaches the plane). Fixed with the faithful twin of the EPS snap at the marshalling
+  level (gated on the same `settle_land`, using a new `faithful_terrain_floor` collision-plane
+  sampler + the `landing_allows_touchdown` slope gate). The test-infra gap is closed with an OPT-IN
+  seeder `WorldState::populate_terrain_heights_scene_resident` (seeds BOTH the WorldState floor
+  sampler AND the SpatialScene residency store) — existing fixtures untouched, so the fallback
+  tests keep their pinned numbers; new test `settle_land_faithful_outdoor_hover_lands_in_one_tick`
+  exercises the faithful path.
+- **Item 3 — answered (no live rig needed).** The audit shows the faithful path is NOT independently
+  immune: like the fallback it self-terminates via gravity within a few ticks. So the 2026-07-21
+  slide most plausibly resolved by gravity reeling the mover below the plane after a few ticks of
+  bounded drift, not by the faithful path being immune. A live soak is no longer load-bearing for
+  this understanding, though a confirming soak is still cheap insurance once the rig is up.
+
 ## ⚠ FINDING (highest-value follow-up): settle-land ea2cc7c3 patched DEAD code
 
 Traced and pinned by test during gate G2: `USE_UNIFIED_TRANSITION` is const-true since `a7cfb75e`
@@ -81,14 +119,18 @@ Follow-up work, in order:
   combat_memory still needs the kill-truth decision (kernel P12 vs its name-keyed estimate) AND
   the kernel's dormant `startOn()`/kind=19 subscription seam fixed before wiring. All five remain
   import-quarantined (verified zero live imports; see rynth/README.md §Dark modules).
-- **`extensions.js` deltas-path pose signal**: `rawPoseOf` now carries `cellResolved`, but the
-  director-path consumers that re-shape poses downstream were only spot-converted — a sweep for
-  any remaining `objCellId === 0` comparisons after the wasm rebuild proves out is cheap insurance
-  (`rg -n 'objCellId ?=== ?0' rynth/`).
+- **`extensions.js` deltas-path pose signal** — ✅ DONE (2026-07-23). Swept `rynth/`; the last
+  unconverted dead cell-0 sentinel (`ai/extensions.js` `locationBlock`, the director-path pose
+  consumer) now prefers `cellResolved` with a legacy raw-zero fallback, matching
+  actions.js/explore_memory.js/indoor_router. All other `objCellId >>> N` sites are world-frame /
+  LB-word math, not sentinels (left as-is). `rynth_ai_extensions_test.cjs` 40/0.
 - **Test-infra gaps flagged by W5a, not in its file scope**: capture/diag smokes
   (`capture_wire_agent_hud_inventory.cjs`, `diag_icon_probe.cjs`, `diag_inventory_paperdoll.cjs`)
   still gate on `__bootState==="ready"`; index.html boot-loop `.free()`/`__connectEpoch` has no JS
-  regression test; `thought_overlay.js`/`route_flags.js` have no direct-import coverage.
+  regression test. ✅ PARTIAL (2026-07-23): `thought_overlay.js` + `route_flags.js` now have
+  direct-import coverage (`rynth_thought_overlay_test.cjs` 10/0, `rynth_route_flags_test.cjs`
+  14/0; node suite 52→54 pass / 0 fail / 32 skip). The capture/diag boot-gate and the boot-loop
+  regression test remain owed.
 - **Review coverage gaps** (surfaces NO review task owned — candidates for a future pass): scene3d
   render pipeline (the actual stream image), wasm world/physics beyond movement, economy/vendor/
   advancement action semantics, sidecar network exposure posture (:8767/:8768 bind/auth), and
