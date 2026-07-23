@@ -7320,8 +7320,16 @@
                           // discipline (soak-8 measured GLM at 400-800 tokens)
                           // and the llm_client retries once at double budget on
                           // a "length" cutoff.
+                          // 2026-07-23: heavy-reasoning models (minimax-m3) burn
+                          // the ENTIRE 1280 (and the 2560 retry) on hidden
+                          // reasoning and return an EMPTY completion every call
+                          // (finish_reason=length) — the director hit 5 such
+                          // errors and auto-disabled on the live rig. Give the
+                          // minimax family the room it needs; GLM/gpt-oss keep
+                          // the latency-tuned 1280.
+                          const bmMaxTokens = /minimax/i.test(bm) ? 8192 : 1280;
                           if (bm) cfg.ai = {
-                            ...(cfg.ai || {}), model: bm, maxTokens: 1280,
+                            ...(cfg.ai || {}), model: bm, maxTokens: bmMaxTokens,
                             reasoning: { effort: "low" }, timeoutMs: 120000,
                             ...providerPinFor(bm),
                           };
