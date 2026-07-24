@@ -207,6 +207,24 @@ const FIXED_GRID_PARK_ENABLED = (() => {
     return true;
   }
 })();
+// B1 (2026-07-24, S18 owed item / stream-soak): sealed-aware fixedGrid terrain
+// gate. Inside a SEALED dungeon (cells.js publishes `_sealedEvictLbKey`) the
+// outdoor ring is culled AND the sealed-evict LRU reclaims it — yet today the
+// slot grid keeps shifting/re-fetching that terrain every crossing (fighting
+// the LRU), which is pure main-thread waste in exactly the portal-only hubs
+// where the 8GB rig is already saturated. When sealed, FREEZE the grid (skip
+// update/fetch/assert); on the sealed→outdoor transition force a full re-seed
+// (center=null) because the LRU evicted our terrain while we were frozen, so a
+// plain shift would leave interior holes (fixed_grid.js header divergence note).
+// DEFAULT-ON-WITHIN-fixedGrid with an explicit off escape (house footgun rule).
+const FIXED_GRID_SEALED_FREEZE = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("fixedGridSealedFreeze");
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+})();
 // Hysteresis dwell before the vacated edge is parked (EdgeParkScheduler). ~one
 // LB crossing so a zig-zag over a boundary re-adopts (cancels) instead of
 // park/unpark-storming (the session-11 sealedKeepRing failure class); a
@@ -3154,6 +3172,20 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // grid access, leaving the flag-off path byte-identical to the pre-S15
       // ring driver (the escape / ship gate).
       if (FIXED_GRID_ENABLED && this._fixedGrid) {
+        // B1 sealed-aware gate: while inside a sealed dungeon the outdoor ring is
+        // culled + LRU-reclaimed, so shifting/re-fetching it is pure waste —
+        // FREEZE the grid (no update/fetch/assert). On the sealed→outdoor
+        // transition force a full re-seed: the sealed-evict LRU reclaimed our
+        // terrain while frozen, so the grid's residency record is stale and a
+        // plain shift would leave interior holes.
+        if (FIXED_GRID_SEALED_FREEZE && (this._sealedEvictLbKey || 0) !== 0) {
+          this._fixedGridSealedFrozen = true;
+          return;
+        }
+        if (this._fixedGridSealedFrozen) {
+          this._fixedGrid.center = null; // next update() takes the seed path (whole-ring re-fetch)
+          this._fixedGridSealedFrozen = false;
+        }
         const res = this._fixedGrid.update(cx, cy);
         // S15c vacated-edge → whole-LB park (docs/PLAN §5.4). The grid's
         // releaseEdge seam already fed `res.vacated` to the scheduler's
