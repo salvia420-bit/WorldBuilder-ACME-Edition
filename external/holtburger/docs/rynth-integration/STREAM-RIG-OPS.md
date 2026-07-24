@@ -47,14 +47,20 @@ is removing both from the live `launch.sh` — if you're reading this before
 that lands, `launch.sh` may still carry one or both; they do nothing either
 way.)*
 
-*(2026-07-23 freeze fix: `bakeWorker` flipped `0` → `1`. `bakeWorker=0` ran ALL
-asset decode — model-mesh triangulation + surface-pixel — on the MAIN-thread
-wasm; on the 8GB rig that hot-looped/blocked the render thread while a new
-landblock streamed in, producing a recurring ~20-30 min main-thread FREEZE
-(diagnosed live: 4 in a single soak, each forcing a comprehension-monitor
-auto-recover, eventually a scene-ready boot-loop). The default-ON bake worker
-offloads decode to its own thread + wasm so the render thread stays responsive.
-Set `=0` again only to A/B the main-thread path.)*
+*(2026-07-23 freeze — ROOT CAUSE CORRECTED. `bakeWorker` is flipped `0`→`1`
+(default-ON): `bakeWorker=0` runs asset decode on the MAIN-thread wasm, worth
+offloading on the 8GB rig — but this did **NOT** fix the recurring main-thread
+FREEZE, and the freeze was neither decode nor a fetch storm. Root cause: a
+per-transition collision-BSP deep-clone storm in `holtburger-world`
+`faithful_bridge::build_cell_inner` (BspNode::clone + hashbrown + dlmalloc,
+~50%+ CPU), triggered by standing in a DUNGEON / portal-only hub (e.g. the Town
+Network, landblock `0x0007`) where the stuck bot spams failed transitions;
+trivial outdoors. Fixed in the release wasm (commit `64b37e64`: Arc-shared cell
+BSP + cross-transition cell cache) — verified live, the exact frozen cell
+`0x00070178` went from eval >8 s / main-thread hot-loop to eval ~5 ms / 68 %
+idle. Keep `bakeWorker=1` for decode offload; set `=0` only to A/B the
+main-thread decode path. Full write-up:
+`docs/rynth-integration/HANDOFF-stream-soak-2026-07-23.md` §P0 CORRECTION.)*
 
 - `botModel=minimax/minimax-m3` pins the director LLM (2026-07-21 trial:
   within 6 min of a clean journal+scratchpad it routed to and used the
@@ -66,6 +72,14 @@ Set `=0` again only to A/B the main-thread path.)*
   fix — corrected here 2026-07-23; this line previously said 4096, which was
   the pre-fix value and the axis this rig's cadence math actually depends on)
   + reasoning effort low (url-flags.md §botModel).
+- `botPersona=explorer` (the "Surveyor"): as of 2026-07-23 the persona prompt
+  is GENERALIZED — it charts WHATEVER environment it is in (town buildings AND
+  streets, open country/roads, dungeons, portal-only hubs like the Town
+  Network), not just Holtburg building interiors. Previously it treated being
+  dumped in a portal hub as a failure and burned turns trying to get "back" to
+  a town; now the place it landed in IS the mission, and in a portal-only hub
+  "the portals ARE its roads." Source: `rynth/ai/director.js`
+  `EXPLORER_SYSTEM_PROMPT` (MISSION / METHOD / "ONE place" sections).
 - `thoughtOverlay=1` = stream teleprompter for journal `plan` entries;
   `streamHud=1` = inventory pane + buffs-HUD reposition. Both exact-match `1`.
 - `botCtlOwner=<name>` (new 2026-07-23, P0 fix — rynth-review 13 #1): sets the
