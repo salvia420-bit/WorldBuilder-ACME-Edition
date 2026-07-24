@@ -780,8 +780,11 @@ export function useItemOnAction() {
 export function dropItemAction() {
   const def = {
     type: "drop_item",
-    params: { item: "pack item name (substring) or guid (see your inventory line)" },
-    desc: "drop a pack item onto the ground at your feet — it becomes a world [item] anyone can take. Confirm via your inventory line next check-in.",
+    params: {
+      item: "pack item name (substring) or guid (see your inventory line)",
+      force: "optional boolean — set true to override the tool/attuned/bonded drop guard and drop deliberately",
+    },
+    desc: "drop a pack item onto the ground at your feet — it becomes a world [item] anyone can take. Confirm via your inventory line next check-in. GUARDED: usable tools (gem/key/portal/caster/manastone/lifestone/writable) and attuned/bonded items are refused unless force:true — USE such items instead of discarding them.",
     validate(a) {
       const b = baseValidate("drop_item")(a);
       if (!b.ok) return b;
@@ -797,6 +800,22 @@ export function dropItemAction() {
     if (!rows.length) return fail("inventory not streamed yet — try again next check-in");
     const it = resolveItem(rows, { item: a.item });
     if (it.error) return fail(it.error);
+    // Planning guard: don't discard an item the director likely wants to USE.
+    // Rows from TryGetPlayerInventory carry itemType/attuned/bonded directly.
+    // Attuned = bound (server rejects the drop anyway). Usable tools / bonded =
+    // very likely a mistake to drop before using. `force:true` overrides.
+    if (a.force !== true) {
+      const row = it.row;
+      const itemType = row.itemType | 0;
+      // Gem|Key|Portal|Writable|Caster|ManaStone|LifeStone (ACE ItemType bits)
+      const TOOL_MASK = 0x00000800 | 0x00004000 | 0x00010000 | 0x00002000 | 0x00008000 | 0x00080000 | 0x10000000;
+      const attuned = (row.attuned | 0) >= 1;
+      const bonded = (row.bonded | 0) >= 1;
+      if (attuned)
+        return fail(`"${row.name}" is attuned (bound to you) — it cannot be dropped or traded; the server will reject this. Not dropping.`);
+      if ((itemType & TOOL_MASK) !== 0 || bonded)
+        return fail(`"${row.name}" looks like a usable tool${bonded ? " (bonded — kept on death)" : ""} — USE it first (use_object / use_item_on) rather than dropping it. To discard it deliberately, re-issue drop_item with force:true.`);
+    }
     const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
     if (!h.DropItem(itemGuid)) return fail("drop request failed to send");
     journalNote(ctx, `drop_item ${it.row.name} (${hex(itemGuid)}) — dropped at your feet; confirm via inventory next check-in`);

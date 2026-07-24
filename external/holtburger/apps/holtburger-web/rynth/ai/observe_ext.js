@@ -210,13 +210,35 @@ function advancementLine(a, uptimeMs) {
 // resolve by name substring); worn items are split out; big packs cap at
 // INVENTORY_LINE_MAX with an explicit "+N more" (no silent truncation).
 const INVENTORY_LINE_MAX = 24;
+// Item-property tags surfaced into the inventory line so the director reasons
+// from REAL properties (usable kind, attuned/bonded) instead of guessing a
+// name — e.g. it can tell a "Facility Hub Portal Gem" is a usable [gem] tool,
+// and that an [attuned] item is bound (can't be dropped/traded). The rows from
+// TryGetPlayerInventory() already carry itemType/attuned/bonded (no appraisal
+// round-trip needed). ItemType bits per ACE.Entity.Enum.ItemType.
+const ITEM_KIND = [
+  [0x00000800, "gem"], [0x00004000, "key"], [0x00010000, "portal"],
+  [0x00002000, "writable"], [0x00008000, "caster"], [0x00080000, "manastone"],
+  [0x10000000, "lifestone"], [0x00000020, "food"],
+];
+function itemTags(i) {
+  const t = [];
+  const kind = ITEM_KIND.find(([bit]) => ((i.itemType | 0) & bit) !== 0);
+  if (kind) t.push(kind[1]);
+  if ((i.attuned | 0) >= 1) t.push("attuned"); // bound: cannot be dropped/traded
+  if ((i.bonded | 0) >= 1) t.push("bonded");   // kept on death
+  return t;
+}
 function probeInventory(bot) {
   const h = bot?.host;
   if (!h || typeof h.TryGetPlayerInventory !== "function") return null;
   let inv = null;
   try { inv = h.TryGetPlayerInventory(); } catch { return null; }
   if (!Array.isArray(inv) || !inv.length) return null;
-  const fmt = (i) => `${i.name}${i.stackSize > 1 ? ` x${i.stackSize}` : ""}`;
+  const fmt = (i) => {
+    const tags = itemTags(i);
+    return `${i.name}${i.stackSize > 1 ? ` x${i.stackSize}` : ""}${tags.length ? ` [${tags.join(",")}]` : ""}`;
+  };
   return {
     count: inv.length,
     worn: inv.filter((i) => i.equipMask !== 0).map(fmt),
