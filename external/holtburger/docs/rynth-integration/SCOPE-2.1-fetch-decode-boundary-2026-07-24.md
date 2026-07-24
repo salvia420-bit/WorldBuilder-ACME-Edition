@@ -109,7 +109,7 @@ it is a **co-requisite**. Shipping §2.1 first produces a strictly worse client.
 | Step | Work | Size | Ships alone? |
 |---|---|---|---|
 | **2.1a** | **DONE** — `DecodeSource` (`src/decode_source.rs`): type-erased handle exposing only the sync `ResourceSource` surface; `global_source::decode_source()` is the sanctioned way across; both SAFETY comments rewritten to "owner-thread-confined". | **S** | ✅ landed, no behaviour change |
-| **2.1b** | Restructure `run_walk_loop` so the sync `walk` is a *relocatable unit*: walk + `take_misses` behind one call the driver invokes, initially in-place. Makes the round-trip explicit before any thread exists. | **M** | ✅ pure refactor, A/B-able today |
+| **2.1b** | **DONE** — `discovery_round()` in `prefetch.rs`: one round (walk + `take_misses`) behind one call, capturing no owner-thread state, returning owned `Send` misses. §2.1c replaces one line with a dispatch. | **M** | ✅ pure refactor, compile-verified only (see note) |
 | **2.2** | `MODEL_TRI_CACHE` **(done)** + `SURFACE_PIXEL_CACHE` → shared `LazyLock<RwLock<…>>`; `TEX_SWAP_ALIASES` → single locked registry. | **L** | ✅ ships safely alone, but buys nothing on its own — see §4 |
 | **2.1c** | Actually dispatch the walk to the pool; per-round results marshalled back. Needs the toolchain (§2.5) linked first. | **L** | ❌ requires 2.1a+2.1b+2.2 |
 | **2.3** | Move the `spawn_local` net `recv_loop` off the main thread. | **M** | independent |
