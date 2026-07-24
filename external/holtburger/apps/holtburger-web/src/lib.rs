@@ -52,9 +52,56 @@ extern "C" {
 // line 39 ("avoids dragging `web-sys` along"). Returns `""` on
 // environments without a `window` (workers, node tests).
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(inline_js = "export function js_location_search() { try { return (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') ? window.location.search : ''; } catch (_) { return ''; } }")]
+#[wasm_bindgen(inline_js = "export function flag_search() { try { return (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') ? window.location.search : ''; } catch (_) { return ''; } }")]
 extern "C" {
     fn js_location_search() -> String;
+}
+
+/// §2.2c (2026-07-24) — seeded query string for URL flags off the main thread.
+///
+/// `flag_search()` returns `""` wherever there is no `window` — which is
+/// EVERY Web Worker, including the bake worker today and every wasm-threads
+/// pool thread tomorrow. Since the house flag rule is "absent reads ON, only an
+/// explicit off-form is OFF", an unseeded worker silently reads every URL flag
+/// at its DEFAULT.
+///
+/// That is a live bug, not only a threads one: the bake worker is a separate
+/// wasm instance doing most of the surface decode, so an A/B arm run with
+/// `?surfaceCache=off` is honoured on the main thread and IGNORED in the
+/// worker. Under a thread pool it also becomes a race — the flag `OnceLock`s
+/// are initialised by whichever thread reads first.
+///
+/// Seeding lets the owner thread hand the real query string to another
+/// instance/thread. Inert until something calls [`seed_url_flag_search`], so
+/// this commit changes no behaviour.
+///
+/// ORDERING: the flag gates cache into `OnceLock`s on first read, so a seed
+/// must land BEFORE the first flag read in that instance to take effect.
+#[cfg(target_arch = "wasm32")]
+static SEEDED_FLAG_SEARCH: std::sync::LazyLock<std::sync::Mutex<Option<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// Hand this wasm instance the page's query string. Call from a worker's init
+/// path BEFORE any flag-gated work; harmless (and redundant) on the main
+/// thread, which can read `window.location` itself.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn seed_url_flag_search(search: String) {
+    *SEEDED_FLAG_SEARCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(search);
+}
+
+/// The query string URL-flag parsing should use: the seed when present,
+/// otherwise this instance's own `window.location.search`.
+#[cfg(target_arch = "wasm32")]
+fn flag_search() -> String {
+    if let Some(s) = SEEDED_FLAG_SEARCH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        return s;
+    }
+    js_location_search()
 }
 
 /// Parse `?seqDebug=1` (or `&seqDebug=1`) out of the URL query string.
@@ -381,7 +428,7 @@ fn placement_id_flag() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *FLAG.get_or_init(|| parse_placement_id_flag(&js_location_search()))
+        *FLAG.get_or_init(|| parse_placement_id_flag(&flag_search()))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -414,7 +461,7 @@ fn get_link_flag() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *FLAG.get_or_init(|| parse_get_link_flag(&js_location_search()))
+        *FLAG.get_or_init(|| parse_get_link_flag(&flag_search()))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -8766,7 +8813,7 @@ thread_local! {
 #[cfg(target_arch = "wasm32")]
 fn surface_cache_enabled() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| parse_surface_cache_flag(&js_location_search()))
+    *FLAG.get_or_init(|| parse_surface_cache_flag(&flag_search()))
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn surface_cache_enabled() -> bool {
@@ -8782,7 +8829,7 @@ fn surface_cache_enabled() -> bool {
 fn pal_surface_cache_enabled() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     surface_cache_enabled()
-        && *FLAG.get_or_init(|| parse_pal_surface_cache_flag(&js_location_search()))
+        && *FLAG.get_or_init(|| parse_pal_surface_cache_flag(&flag_search()))
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn pal_surface_cache_enabled() -> bool {
@@ -8804,7 +8851,7 @@ fn parse_batch_split_flag(search: &str) -> bool {
 #[cfg(target_arch = "wasm32")]
 fn batch_split_enabled() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| parse_batch_split_flag(&js_location_search()))
+    *FLAG.get_or_init(|| parse_batch_split_flag(&flag_search()))
 }
 
 /// A13a (S14): parse `?freezeHash`. DEFAULT-ON; only `freezeHash=off`
@@ -8819,7 +8866,7 @@ fn parse_freeze_hash_flag(search: &str) -> bool {
 #[cfg(target_arch = "wasm32")]
 fn freeze_hash_gate_enabled() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| parse_freeze_hash_flag(&js_location_search()))
+    *FLAG.get_or_init(|| parse_freeze_hash_flag(&flag_search()))
 }
 
 /// Refcount-aware LRU over a byte budget — the retail `DBOCache` analogue
@@ -9347,15 +9394,20 @@ const SURFACE_BATCH_SPLIT_CHUNK: usize = 16;
 // FAILs when solo (size-1) calls dominate — the 9-solo ring storm A4 fixed
 // must not regress. Exposed via `dat_decode_diag()` as `hmBatchHist`.
 #[cfg(target_arch = "wasm32")]
-thread_local! {
-    static HM_BATCH_HIST: std::cell::RefCell<std::collections::BTreeMap<u32, u32>> =
-        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+/// §2.2c: shared, not `thread_local!` — this feeds `dat_decode_diag()` as
+/// `hmBatchHist` alongside `DECODE_DIAG` (§2.2b). Leaving one half of the same
+/// measurement surface per-thread would make the ci-smoke S5b solo-call gate
+/// read only the recording thread's batches.
+static HM_BATCH_HIST: std::sync::LazyLock<std::sync::Mutex<std::collections::BTreeMap<u32, u32>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+
+#[cfg(target_arch = "wasm32")]
+fn hm_batch_hist() -> std::sync::MutexGuard<'static, std::collections::BTreeMap<u32, u32>> {
+    HM_BATCH_HIST.lock().unwrap_or_else(|e| e.into_inner())
 }
 #[cfg(target_arch = "wasm32")]
 fn hm_batch_record(n: usize) {
-    HM_BATCH_HIST.with(|h| {
-        *h.borrow_mut().entry(n as u32).or_insert(0) += 1;
-    });
+    *hm_batch_hist().entry(n as u32).or_insert(0) += 1;
 }
 
 /// 5b canary (S14): THIS wasm instance's linear-memory size. The renderer
@@ -9488,13 +9540,13 @@ pub fn dat_decode_diag() -> String {
         sc_entries,
         sc_pal_entries,
     ) = surface_cache_stats();
-    let hm_hist = HM_BATCH_HIST.with(|h| {
-        h.borrow()
+    let hm_hist = {
+        hm_batch_hist()
             .iter()
             .map(|(&n, &count)| format!("[{n},{count}]"))
             .collect::<Vec<_>>()
             .join(",")
-    });
+    };
     {
         let d = decode_diag();
         let hex_list = |ids: &mut dyn Iterator<Item = u32>| {
@@ -14512,7 +14564,7 @@ fn drain_pending_outdoor_overlap_bakes_into(
         if set.is_empty() {
             return (0, 0);
         }
-        let overlap_enabled = parse_building_overlap_flag(&js_location_search());
+        let overlap_enabled = parse_building_overlap_flag(&flag_search());
         let mut baked = 0usize;
         let mut registrations = 0usize;
         set.retain(|&lb| {
@@ -14775,7 +14827,7 @@ async fn populate_building_aabbs_for_landblock_impl(
     // to disable (door-leaf caveat — see `parse_building_bsp_02_flag`). Read
     // once; the 0x01 path stages unconditionally (the doorway gap is baked into
     // the single GfxObj mesh, so there is no door-leaf part to wrongly block).
-    let stage_bsp_02 = parse_building_bsp_02_flag(&js_location_search());
+    let stage_bsp_02 = parse_building_bsp_02_flag(&flag_search());
 
     for (sequence, build_info) in info.buildings.iter().enumerate() {
         let model_id = build_info.model_id;
@@ -37901,13 +37953,13 @@ async fn recv_loop(
     // spine's simulation solve) through the retail transition pipeline.
     // Default OFF = byte-identical legacy paths; see
     // `parse_unified_transition_flag`.
-    movement.set_unified_transition(parse_unified_transition_flag(&js_location_search()));
+    movement.set_unified_transition(parse_unified_transition_flag(&flag_search()));
     // Phase 3 B4 Phase B (2026-06-28): `?faithfulTransition=on` — route the
     // local player's INDOOR collision through the decomp-faithful CTransition
     // BSP driver (via `find_transitional_position_dispatch`). Default OFF =
     // the approximate flat-triangle pipeline, byte-identical; see
     // `parse_faithful_transition_flag`.
-    movement.set_faithful_transition(parse_faithful_transition_flag(&js_location_search()));
+    movement.set_faithful_transition(parse_faithful_transition_flag(&flag_search()));
     // FU-3 (2026-07-20): `?faithfulEntityCollision=on` — clamp the live faithful
     // slice's realized lateral residual against collidable dynamic entities
     // (doors/monsters/players) the faithful driver otherwise never blocks.
@@ -37915,57 +37967,57 @@ async fn recv_loop(
     // are exempt. Read only when `?faithfulTransition` is also on; see
     // `parse_faithful_entity_collision_flag`.
     movement
-        .set_faithful_entity_collision(parse_faithful_entity_collision_flag(&js_location_search()));
+        .set_faithful_entity_collision(parse_faithful_entity_collision_flag(&flag_search()));
     // Phase 3 Phase D (2026-06-28): `?faithfulOutdoor=off` — roll the faithful
     // driver's OUTDOOR terrain path back to the approximate heightfield (default
     // ON). Read only when `?faithfulTransition` is also on; see
     // `parse_faithful_outdoor_flag`.
-    movement.set_faithful_outdoor(parse_faithful_outdoor_flag(&js_location_search()));
+    movement.set_faithful_outdoor(parse_faithful_outdoor_flag(&flag_search()));
     // Phase 3 Phase E1 / WS-D (2026-06-29): `?stepUp=off` — roll walkable
     // step-up / slope & ledge climbing back to the pre-E1 stop-at-base behavior
     // (default ON). Read only when `?faithfulTransition` is also on; see
     // `parse_faithful_stepup_flag`.
-    movement.set_faithful_stepup(parse_faithful_stepup_flag(&js_location_search()));
+    movement.set_faithful_stepup(parse_faithful_stepup_flag(&flag_search()));
     // (2026-06-30): `?roofGrounding=off` — roll the outdoor static/building roof
     // grounded-latch back to the pre-2026-06-30 indoor-only behavior (default ON,
     // so jumping onto a building roof STAYS). Read only when `?faithfulTransition`
     // is also on; see `parse_roof_grounding_flag`.
-    movement.set_outdoor_static_grounding(parse_roof_grounding_flag(&js_location_search()));
+    movement.set_outdoor_static_grounding(parse_roof_grounding_flag(&flag_search()));
     // Phase 3 Phase D (2026-06-28, Option C): `?buildingOverlap=off` — register
     // each outdoor building/static BSP into its HOME cell only (the retail
     // walk-through repro) instead of every overlapped cell (default ON, the
     // off-center fix); see `parse_building_overlap_flag`.
-    movement.set_building_overlap(parse_building_overlap_flag(&js_location_search()));
+    movement.set_building_overlap(parse_building_overlap_flag(&flag_search()));
     // (2026-07-02): `?retailGround=off` — roll the retail outdoor ground
     // movement (FLOOR_Z cliff refusal + cliff_slide, step-down downhill
     // stick, lip block/slide) back to the pre-2026-07-02 behavior (default
     // ON). Read only when `?faithfulTransition` is also on; see
     // `parse_retail_ground_flag`.
-    movement.set_retail_ground(parse_retail_ground_flag(&js_location_search()));
+    movement.set_retail_ground(parse_retail_ground_flag(&flag_search()));
     // (2026-07-02): `?castMove=off` — disable the retail cast-movement
     // arbitration (default ON: a server-played cast gesture suppresses held
     // locomotion until an input edge / gesture end); see
     // `parse_cast_move_flag`.
-    movement.set_cast_move(parse_cast_move_flag(&js_location_search()));
+    movement.set_cast_move(parse_cast_move_flag(&flag_search()));
     // (2026-07-12, WS04 S3a): `?castHoldReclaim=on` — hold the FORWARD slot
     // dead across a whole known cast chain (default OFF, eye-test gated); the
     // JS cast chain stamps `noteLocalCastWindow`. See
     // `parse_cast_hold_reclaim_flag`.
-    movement.set_cast_hold_reclaim(parse_cast_hold_reclaim_flag(&js_location_search()));
+    movement.set_cast_hold_reclaim(parse_cast_hold_reclaim_flag(&flag_search()));
     // (2026-07-03): `?slideCast` — held-strafe/turn persistence through
     // ACE's General cast-gesture stomps. ADJ-8 (2026-07-04): default
     // OFF (authentic burst, user ruling); `=on` is the modern opt-in;
     // see `parse_slide_cast_flag`.
-    movement.set_slide_cast(parse_slide_cast_flag(&js_location_search()));
+    movement.set_slide_cast(parse_slide_cast_flag(&flag_search()));
     // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` — the
     // retail CommandInterpreter input lane (default OFF, dark; PENDING
     // eye-test); see `parse_cmd_interp_flag`.
-    movement.set_cmd_interp(parse_cmd_interp_flag(&js_location_search()));
+    movement.set_cmd_interp(parse_cmd_interp_flag(&flag_search()));
     // Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum=on` —
     // the retail update_object slice schedule in both integrator shapes
     // (default OFF: ACE 0.1-slice shapes per DECISIONS-A1-O5); see
     // `parse_retail_quantum_flag`.
-    movement.set_retail_quantum(parse_retail_quantum_flag(&js_location_search()));
+    movement.set_retail_quantum(parse_retail_quantum_flag(&flag_search()));
     // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
     // the `ClientSimulationSystem` this recv loop otherwise lacks.
     // Constructed unconditionally (cheap empty Vec); driven ONLY when
@@ -38045,7 +38097,7 @@ async fn recv_loop(
     // — read once here and stashed; the flag is checked before every
     // `check_sequence_gap` call so production builds with the flag
     // off pay zero cost beyond a single `bool` check.
-    let seq_debug: bool = parse_seq_debug_flag(&js_location_search());
+    let seq_debug: bool = parse_seq_debug_flag(&flag_search());
     // "why not both" (2026-06-09): seed the SPAWN EntityUpdate's
     // `motion_command` from the ObjectCreate's CURRENT motion state
     // (`movement_data` forward_command) instead of always defaulting to Ready —
@@ -38129,17 +38181,17 @@ async fn recv_loop(
     // (a) synthesize the missing KIND_SPAWN from the cached world entity at
     // ParentEvent time, for (b) emit the kind=7 ATTACH from the ObjectCreate
     // PhysicsDesc parent fields. Default OFF pending a 1070 eye-test.
-    let wielded_spawn_on: bool = parse_wielded_spawn_flag(&js_location_search());
+    let wielded_spawn_on: bool = parse_wielded_spawn_flag(&flag_search());
     // A8-M1 (2026-06-11): `?worldLifecycle=on` — route the lifecycle
     // message family through the canonical world dispatcher (single
     // CObjectMaint-style owner) instead of the apply_inventory_object_*
     // bypass copies. Default OFF; see should_route_message_to_world.
-    let world_lifecycle_on: bool = parse_world_lifecycle_flag(&js_location_search());
+    let world_lifecycle_on: bool = parse_world_lifecycle_flag(&flag_search());
     // A1-O1 (2026-06-11): `?unifiedTick=on` — drive the canonical
     // movement → world → simulation tick spine from the TickMovement arm
     // instead of bare `movement.tick`. Default OFF; see
     // `parse_unified_tick_flag` and the arm below.
-    let unified_tick_on: bool = parse_unified_tick_flag(&js_location_search());
+    let unified_tick_on: bool = parse_unified_tick_flag(&flag_search());
     // A8-M2 (2026-06-11): `?maintPrune=on` — forward the unified
     // spine's despawn reports (25 s out-of-visibility prune + swept
     // explicit deletes, liveness.rs ↔ acclient.c:310666) to the JS rig
@@ -38147,13 +38199,13 @@ async fn recv_loop(
     // runs inside the unified spine) — inert without it. Default OFF;
     // see `parse_maint_prune_flag` and the TickMovement arm.
     let maint_prune_on: bool =
-        unified_tick_on && parse_maint_prune_flag(&js_location_search());
+        unified_tick_on && parse_maint_prune_flag(&flag_search());
     // A1-O2 (2026-06-11): `?posePublishPostTick=on` — publish the
     // pose/can-jump/cell-scene shadows AFTER the integrator tick
     // (retail post-update callback order, acclient.c:311375). Default
     // OFF; see `parse_pose_publish_post_tick_flag` and the arm below.
     let pose_publish_post_tick_on: bool =
-        parse_pose_publish_post_tick_flag(&js_location_search());
+        parse_pose_publish_post_tick_flag(&flag_search());
     // A13-W1 (2026-06-11): `?wireStatePacks=stage1` — route the
     // quartet-bearing movement messages (UpdatePosition / VectorUpdate /
     // UpdateMotion / PlayerTeleport) through the canonical world
@@ -38161,13 +38213,13 @@ async fn recv_loop(
     // writes. Default OFF; see `parse_wire_state_packs_flag` and
     // `should_route_message_to_world`.
     let wire_state_packs_stage1_on: bool =
-        parse_wire_state_packs_flag(&js_location_search());
+        parse_wire_state_packs_flag(&flag_search());
     // Movement bughunt 2026-06-19 ("stall → pull-back"): `?routinePosGuard=off`
     // (DEFAULT ON). Routine non-forced self UpdatePosition/PrivateUpdatePosition
     // for the local player → authoritative bookkeeping only (no runtime-body
     // reconcile), so a backlog-stale echo can't ease the avatar backward. See
     // `parse_routine_pos_guard_flag`.
-    let routine_pos_guard_on: bool = parse_routine_pos_guard_flag(&js_location_search());
+    let routine_pos_guard_on: bool = parse_routine_pos_guard_flag(&flag_search());
     console_log_str(&format!(
         "[movement] routinePosGuard {} (?routinePosGuard=off to disable)",
         if routine_pos_guard_on { "ON" } else { "OFF" },
@@ -38179,7 +38231,7 @@ async fn recv_loop(
     // (manager step rides the spine's simulation phase; ingest rides the
     // routed remote UpdatePosition arm). Default OFF; see
     // `parse_remote_interp_flag`.
-    let remote_interp_requested: bool = parse_remote_interp_flag(&js_location_search());
+    let remote_interp_requested: bool = parse_remote_interp_flag(&flag_search());
     let remote_interp_on: bool =
         remote_interp_requested && unified_tick_on && wire_state_packs_stage1_on;
     if remote_interp_requested && !remote_interp_on {
@@ -38191,7 +38243,7 @@ async fn recv_loop(
     // REMOTE sticky parity on the A2-P2 remote bodies. COMPOSES on the
     // effective remoteInterp composite AND the USE_STICKY_MANAGER
     // const; see `parse_sticky_retail_flag` for the full compose rule.
-    let sticky_retail_requested: bool = parse_sticky_retail_flag(&js_location_search());
+    let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
         && remote_interp_on
         && holtburger_world::spatial::USE_STICKY_MANAGER;
@@ -38203,7 +38255,7 @@ async fn recv_loop(
     // Physics-parity 2026-07-03 (dossier A F9/F14): `?retailLeash=on` —
     // the retail LOCAL position lattice. Standalone flag (no composite),
     // default OFF; see `parse_retail_leash_flag`.
-    let retail_leash_on: bool = parse_retail_leash_flag(&js_location_search());
+    let retail_leash_on: bool = parse_retail_leash_flag(&flag_search());
     if retail_leash_on {
         console_log_str(
             "[parity] retailLeash ON — retail local constraint/interp lattice (every-echo ConstrainTo, server-control-gated InterpolateTo, teleport zero-velocity, persistent leash, one-frame interp heading)",
@@ -38214,7 +38266,7 @@ async fn recv_loop(
     // mirror. Standalone flag, DEFAULT-ON since F-2026-07-04 (1070
     // confirm capture green); `?leashEchoGate=off` is the escape — see
     // `parse_leash_echo_gate_flag`.
-    let leash_echo_gate_on: bool = parse_leash_echo_gate_flag(&js_location_search());
+    let leash_echo_gate_on: bool = parse_leash_echo_gate_flag(&flag_search());
     if !leash_echo_gate_on {
         console_log_str(
             "[bug-A] leashEchoGate OFF (escape) — routine self-echo InterpolateTo re-gated on the legacy controlled_by_server mirror; expect the targeted-cast snapback on vanilla ACE",
