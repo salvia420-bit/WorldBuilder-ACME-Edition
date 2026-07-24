@@ -69,3 +69,10 @@ mod env840_seam_tests;
 /// absent. Reports the outcome via `eprintln!`; does not assert the bug.
 #[cfg(test)]
 mod academy_wedge_tests;
+
+/// Offline repro + regression coverage for the LIVE-confirmed Town Network
+/// arrival wedge (EnvCell 0x00070178, landblock-frame arrival (121,-70,0)):
+/// post-arrival walk refusal after the JS residency/pose fix. Driven from
+/// the real portal/cell DATs; DAT-gated; skips when absent.
+#[cfg(test)]
+mod townnetwork_wedge_tests;

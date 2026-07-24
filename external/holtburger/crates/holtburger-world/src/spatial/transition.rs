@@ -38,7 +38,7 @@
 use super::collision::{PlacementCollisionInfo, TransitionState, physics_globals};
 use super::entity_collision::{EntityCollider, clamp_delta_against_entities};
 use super::physics::{
-    FLOOR_Z, LAND_SETTLE_EPS, PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT,
+    FLOOR_Z, LAND_SETTLE_EPS, PLAYER_STEP_DOWN_HEIGHT,
     PLAYER_STEP_UP_HEIGHT, StepDownOutcome, check_walkable,
     clamp_delta_against_buildings_with_normal, clamp_delta_against_cell_walls_dispatch,
     clamp_delta_to_cell_interior,
@@ -67,6 +67,34 @@ pub mod object_info_state {
     pub const IGNORE_CREATURES: u32 = 0x400;
 }
 
+/// The RETAIL player collision spheres, verbatim from Setup `0x02000001`
+/// (client_portal.dat: `spheres: [{origin (0,0,0.475), r 0.48},
+/// {origin (0,0,1.35), r 0.48}]`, setup height 1.835). Retail — and vanilla
+/// ACE (`PartArray`/`SpherePath` read the Setup's sphere list) — collide the
+/// player with THESE spheres, not a synthetic capsule.
+///
+/// Town-Network wedge root cause (2026-07-24, `fix/indoor-nav-no-pose`
+/// residual): the faithful transition previously built the player capsule
+/// from the hand-tuned `PLAYER_CAPSULE_RADIUS`/`_HEIGHT` (0.4 / 1.8 →
+/// spheres r 0.40 at z 0.40/1.40). That capsule is ~8-10 cm SLIMMER than
+/// retail's near waist-height geometry, so a slide/settle against e.g. the
+/// TN market-stall counter (slab z 0.835..1.275) left the client at poses
+/// (contact reach 0.387) that sit ~9 cm INSIDE the retail-sphere contact
+/// envelope (reach 0.474). Vanilla ACE then starts every
+/// `UpdatePlayerPosition` transition embedded and rejects it (`failed
+/// transition from …` forever) — the body wedges. Matching the retail
+/// spheres makes the client resolve to poses ACE can transition from.
+///
+/// Note the low sphere's centre sits 5 mm BELOW its radius: its bottom is at
+/// z −0.005, so a grounded settle leaves the feet at floor + 0.005 — exactly
+/// the `+0.005` z every retail content position carries.
+pub const PLAYER_SETUP_SPHERE_RADIUS: f32 = 0.48;
+pub const PLAYER_SETUP_SPHERE_LOW_Z: f32 = 0.475;
+pub const PLAYER_SETUP_SPHERE_HIGH_Z: f32 = 1.35;
+/// Setup `0x02000001` height (1.835) — the capsule-height figure consistent
+/// with the retail sphere stack above.
+pub const PLAYER_SETUP_HEIGHT: f32 = 1.835;
+
 /// Retail `OBJECTINFO` — the mover description cached ONCE per transition
 /// (`OBJECTINFO::init`, acclient.c:314128-314132: step heights from
 /// `CPartArray::GetStepUpHeight/-Down` acclient.c:325400-325424, ethereal
@@ -85,6 +113,15 @@ pub struct ObjectInfo {
     pub ethereal: bool,
     pub radius: f32,
     pub height: f32,
+    /// The mover's two-sphere collision capsule as `(centre_z, radius)`
+    /// pairs, LOCAL to the feet — the retail Setup sphere list
+    /// (`CSetup::sphere`, what `SPHEREPATH::init_sphere` is fed). For the
+    /// local player these are the verbatim Setup `0x02000001` spheres
+    /// ([`PLAYER_SETUP_SPHERE_LOW_Z`]/[`PLAYER_SETUP_SPHERE_HIGH_Z`] at
+    /// [`PLAYER_SETUP_SPHERE_RADIUS`]); vanilla ACE collides the player
+    /// with exactly these, so the faithful driver MUST too or the server
+    /// rejects the client's settled poses (the TN market-stall wedge).
+    pub capsule: [(f32, f32); 2],
     /// The mover's own guid — excluded from the entity-collider sweep.
     pub self_guid: Guid,
 }
@@ -110,8 +147,16 @@ impl ObjectInfo {
             step_up_height: step_up.unwrap_or(PLAYER_STEP_UP_HEIGHT),
             step_down_height: step_down.unwrap_or(PLAYER_STEP_DOWN_HEIGHT),
             ethereal: false,
-            radius: PLAYER_CAPSULE_RADIUS,
-            height: PLAYER_CAPSULE_HEIGHT,
+            // Retail Setup 0x02000001 dimensions — MUST match the sphere
+            // list below (and therefore vanilla ACE's player collision), not
+            // the legacy hand-tuned PLAYER_CAPSULE_* pair; see the
+            // PLAYER_SETUP_SPHERE_* doc (TN market-stall wedge, 2026-07-24).
+            radius: PLAYER_SETUP_SPHERE_RADIUS,
+            height: PLAYER_SETUP_HEIGHT,
+            capsule: [
+                (PLAYER_SETUP_SPHERE_LOW_Z, PLAYER_SETUP_SPHERE_RADIUS),
+                (PLAYER_SETUP_SPHERE_HIGH_Z, PLAYER_SETUP_SPHERE_RADIUS),
+            ],
             self_guid,
         }
     }
@@ -1455,7 +1500,12 @@ mod tests {
         input.object.self_guid = player_guid;
         input.object.state |= object_info_state::IGNORE_CREATURES;
         let outcome = find_transitional_position(&world, &input);
-        assert!((outcome.pose.coords.x - end.coords.x).abs() < 1e-5);
+        // Tolerance note (2026-07-24 retail-spheres fix): the 3.0 m walk now
+        // subdivides into 7 steps of 3/7 (radius 0.48) instead of 8 exactly-
+        // representable steps of 0.375 (radius 0.4), so f32 accumulation on a
+        // ~50 m-magnitude coordinate leaves ~1e-5-scale round-off. 1e-3 still
+        // proves the pass-through (a collision would stop ~0.9 m short).
+        assert!((outcome.pose.coords.x - end.coords.x).abs() < 1e-3);
     }
 
     // ---- A6/A7-R2 (W5): check_walkable re-insert probe lanes ----

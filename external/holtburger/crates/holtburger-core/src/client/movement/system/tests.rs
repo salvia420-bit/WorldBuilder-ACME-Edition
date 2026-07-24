@@ -9355,7 +9355,13 @@ mod arrival_placement_z_clamp {
     /// the adopted z stays at/above the arrival z so the next slice has ground.
     #[test]
     fn downward_settle_is_clamped_up_to_arrival_z() {
-        let arrival_z = FLOOR_WZ + 0.005;
+        // 0.05 hover (was 0.005 pre-2026-07-24): under the retail-spheres
+        // capsule (low sphere bottom 5 mm BELOW the feet, Setup 0x02000001)
+        // a grounded settle rests the feet at floor + 0.005 — so a 0.005
+        // hover settles to EXACTLY the arrival z and no longer exercises a
+        // downward settle. A 5 cm hover still settles down to +0.005,
+        // keeping the clamp scenario (raw < arrival) intact.
+        let arrival_z = FLOOR_WZ + 0.05;
         let (system, mut world, pose) = world_at_arrival_z(arrival_z);
 
         let raw_z = raw_placement_z(&system, &world, &pose);

@@ -87,6 +87,31 @@ const METERS_PER_LANDBLOCK: f32 = 192.0;
 /// The transpose (`globaltolocalvec`) is the orthonormal inverse, so
 /// `Frame::globaltolocal` reproduces `orientation⁻¹·(p − origin)` — exactly the
 /// scene's `world_to_local`.
+/// The mover's two-sphere transition capsule, from `ObjectInfo::capsule` —
+/// the retail Setup sphere list (`CSetup::sphere`, fed to
+/// `SPHEREPATH::init_sphere`). Centres are object-local (Z-only), so an
+/// identity frame places them vertically above the world feet position.
+///
+/// TN market-stall wedge (2026-07-24): this replaced the synthetic
+/// `[(0,0,r) r; (0,0,(h−r).max(r)) r]` capsule at every driver-construction
+/// site. Vanilla ACE collides the player with the SETUP spheres (r 0.48 at
+/// z 0.475/1.35), ~9 cm fatter than the old hand-tuned 0.4-radius capsule
+/// near waist height — a client sliding at ITS OWN contact envelope was
+/// therefore parking inside ACE's, and the server refused every subsequent
+/// transition. See `super::transition::PLAYER_SETUP_SPHERE_RADIUS`.
+fn capsule_spheres(object: &super::transition::ObjectInfo) -> [Sphere; 2] {
+    [
+        Sphere {
+            center: Vector3::new(0.0, 0.0, object.capsule[0].0),
+            radius: object.capsule[0].1,
+        },
+        Sphere {
+            center: Vector3::new(0.0, 0.0, object.capsule[1].0),
+            radius: object.capsule[1].1,
+        },
+    ]
+}
+
 fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
     let cx = orientation.rotate_vector(Vector3::new(1.0, 0.0, 0.0));
     let cy = orientation.rotate_vector(Vector3::new(0.0, 1.0, 0.0));
@@ -1090,21 +1115,11 @@ pub fn faithful_find_transitional_position(
         frame: end_frame,
     };
 
-    // Two-sphere capsule (ACE NumSphere == 2): low at feet+radius, high at
-    // head−radius, both of `radius`. Centers are object-local (Z-only), so the
+    // Two-sphere capsule (ACE NumSphere == 2): the retail Setup sphere list
+    // (see `capsule_spheres`). Centers are object-local (Z-only), so the
     // identity frame places them vertically at the world feet position.
     let radius = input.object.radius;
-    let height = input.object.height;
-    let spheres = [
-        Sphere {
-            center: Vector3::new(0.0, 0.0, radius),
-            radius,
-        },
-        Sphere {
-            center: Vector3::new(0.0, 0.0, (height - radius).max(radius)),
-            radius,
-        },
-    ];
+    let spheres = capsule_spheres(&input.object);
 
     let mut t = CTransition::new();
     t.object_info.scale = 1.0;
@@ -1651,25 +1666,36 @@ pub fn faithful_find_placement_position(
     // LANDBLOCK-local coords (world − landblock origin), which is now a pure
     // round-trip for the XY the server sent.
     let arrival_world = pose.global_coords();
+    // Placement seed-clearance lift (TN wedge fix 2026-07-24, retail-spheres
+    // follow-up). The retail LOW sphere's bottom sits BELOW the feet
+    // (Setup 0x02000001: centre z 0.475, r 0.48 → bottom −0.005), so a
+    // server-authored arrival whose z equals the floor plane starts every
+    // placement probe 5 mm EMBEDDED in the floor. Retail's placement insert
+    // absorbs that via the BSP placement-adjust (push-out → Adjusted →
+    // re-seat, acclient.c:312620-312623); our resolver's insert reports a
+    // plain Collided instead, which failed the whole radial search (every
+    // probe shares the same z). Seed the search a few cm ABOVE the arrival
+    // so the capsule starts clear of the floor; the retail `step_down`
+    // settle at the end of `find_placement_position` then plants the feet
+    // back at contact — floor + 0.005 for the player, the exact `+0.005` z
+    // every retail content position carries. Lateral geometry is unaffected
+    // (a 5 cm lift does not change which probes clear walls/counters), and
+    // an airborne arrival just settles through the same step_down.
+    let seed_lift: f32 =
+        (object.capsule[0].1 - object.capsule[0].0).max(0.0) + 0.045;
+    let seed_world = Vector3::new(
+        arrival_world.x,
+        arrival_world.y,
+        arrival_world.z + seed_lift,
+    );
     let mut frame = Frame::identity();
-    frame.origin = arrival_world;
+    frame.origin = seed_world;
     let pos = Position {
         objcell_id: begin_cell,
         frame,
     };
 
-    let radius = object.radius;
-    let height = object.height;
-    let spheres = [
-        Sphere {
-            center: Vector3::new(0.0, 0.0, radius),
-            radius,
-        },
-        Sphere {
-            center: Vector3::new(0.0, 0.0, (height - radius).max(radius)),
-            radius,
-        },
-    ];
+    let spheres = capsule_spheres(object);
 
     let mut t = CTransition::new();
     t.object_info.scale = 1.0;
@@ -1816,17 +1842,7 @@ pub(crate) fn faithful_diag_step(
     };
 
     let radius = input.object.radius;
-    let height = input.object.height;
-    let spheres = [
-        Sphere {
-            center: Vector3::new(0.0, 0.0, radius),
-            radius,
-        },
-        Sphere {
-            center: Vector3::new(0.0, 0.0, (height - radius).max(radius)),
-            radius,
-        },
-    ];
+    let spheres = capsule_spheres(&input.object);
 
     let mut t = CTransition::new();
     t.object_info.scale = 1.0;
@@ -2980,18 +2996,7 @@ mod drift {
             objcell_id: end_cell,
             frame: ef,
         };
-        let r = input.object.radius;
-        let h = input.object.height;
-        let spheres = [
-            Sphere {
-                center: v(0.0, 0.0, r),
-                radius: r,
-            },
-            Sphere {
-                center: v(0.0, 0.0, (h - r).max(r)),
-                radius: r,
-            },
-        ];
+        let spheres = super::capsule_spheres(&input.object);
         let mut t = CTransition::new();
         t.object_info.scale = 1.0;
         t.object_info.state = input.object.state;
@@ -3329,26 +3334,36 @@ mod drift {
         let o = cell_origin();
         let mut scene = SpatialScene::new();
         // NO insert_cell_physics_bsp — forces the approximate-pipeline fallback.
+        //
+        // Seam at o.x + 0.3 (was + 0.5 when the transition capsule radius was
+        // the hand-tuned 0.4): the fallback's doorway-straddle relax suppresses
+        // the low-word flip while the pose is within one capsule RADIUS of the
+        // seam, and the retail-spheres fix (2026-07-24) widened that band to
+        // 0.48 — with the old + 0.5 seam the 1.3 m walk stalled INSIDE the
+        // band (floor tris are keyed per owning cell, so an unflipped pose
+        // past the seam runs out of CELL floor). The nearer seam keeps the
+        // walk's settle comfortably beyond the band, preserving the test's
+        // intent (the fallback re-derives the low word after a real transit).
         scene.insert_cell_aabb(
             CELL_ID,
             Aabb::new(
                 v(o.x - HE, o.y - HE, FLOOR_WZ - LEDGE_DROP - 0.5),
-                v(o.x + 0.5, o.y + HE, FLOOR_WZ + 10.0),
+                v(o.x + 0.3, o.y + HE, FLOOR_WZ + 10.0),
             ),
         );
         scene.insert_cell_aabb(
             NEXT_ID,
             Aabb::new(
-                v(o.x + 0.5, o.y - HE, FLOOR_WZ - LEDGE_DROP - 0.5),
+                v(o.x + 0.3, o.y - HE, FLOOR_WZ - LEDGE_DROP - 0.5),
                 v(o.x + HE, o.y + HE, FLOOR_WZ + 10.0),
             ),
         );
         // Floor triangles keyed per owning cell (the approximate pipeline looks
         // them up by `current_cell`).
-        for t in floor_tris_world(o.x - HE, o.x + 0.5, o.y - HE, o.y + HE, FLOOR_WZ) {
+        for t in floor_tris_world(o.x - HE, o.x + 0.3, o.y - HE, o.y + HE, FLOOR_WZ) {
             scene.insert_cell_triangle(CELL_ID, t);
         }
-        for t in floor_tris_world(o.x + 0.5, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ) {
+        for t in floor_tris_world(o.x + 0.3, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ) {
             scene.insert_cell_triangle(NEXT_ID, t);
         }
         scene.insert_cell_portal(CELL_ID, NEXT_ID);
@@ -3360,12 +3375,17 @@ mod drift {
         let f = faithful_find_transitional_position(&env, &input, true, true);
         assert!(f.pose.coords.x > begin.coords.x, "walk advanced");
         assert!(
-            f.pose.coords.x > FCX + 0.5,
+            f.pose.coords.x > FCX + 0.3,
             "walk crossed the cell seam (x = {})",
             f.pose.coords.x
         );
         assert!(f.pose.is_indoors(), "still indoors");
-        assert!(f.cell_changed, "transit reported as a cell change");
+        assert!(
+            f.cell_changed,
+            "transit reported as a cell change (x = {}, low word {:?})",
+            f.pose.coords.x,
+            f.pose.landblock_id
+        );
         assert_eq!(
             f.pose.landblock_id,
             Guid(NEXT_ID),
