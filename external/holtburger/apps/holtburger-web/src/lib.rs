@@ -840,6 +840,13 @@ mod world_bootstrap_cache;
 #[cfg(any(target_arch = "wasm32", test))]
 mod walk_dedup;
 
+// §2.1a (SCOPE-2.1 §1c) — the pool-facing decode handle that keeps the
+// `!Send` fetch machinery unreachable from worker threads. Same
+// `wasm32 OR test` gate so the cross-thread property is testable natively,
+// on real threads, before any wasm pool exists.
+#[cfg(any(target_arch = "wasm32", test))]
+mod decode_source;
+
 // Phase 1.5 — surface override JSON. Gate mirrors
 // `fetch_surface_pixels_impl` (wasm32 OR test) so the native test target
 // can drive the loader without a separate path.

@@ -108,7 +108,7 @@ it is a **co-requisite**. Shipping §2.1 first produces a strictly worse client.
 
 | Step | Work | Size | Ships alone? |
 |---|---|---|---|
-| **2.1a** | Narrow pool-facing handle: `Arc<dyn ResourceSource + Send + Sync>` exposing only the sync trio; assert `ManifestResourceSource` never crosses. Amend the two SAFETY comments to "owner-thread-confined". | **S** | ✅ no behaviour change, single-threaded-safe |
+| **2.1a** | **DONE** — `DecodeSource` (`src/decode_source.rs`): type-erased handle exposing only the sync `ResourceSource` surface; `global_source::decode_source()` is the sanctioned way across; both SAFETY comments rewritten to "owner-thread-confined". | **S** | ✅ landed, no behaviour change |
 | **2.1b** | Restructure `run_walk_loop` so the sync `walk` is a *relocatable unit*: walk + `take_misses` behind one call the driver invokes, initially in-place. Makes the round-trip explicit before any thread exists. | **M** | ✅ pure refactor, A/B-able today |
 | **2.2** | `MODEL_TRI_CACHE` **(done)** + `SURFACE_PIXEL_CACHE` → shared `LazyLock<RwLock<…>>`; `TEX_SWAP_ALIASES` → single locked registry. | **L** | ✅ ships safely alone, but buys nothing on its own — see §4 |
 | **2.1c** | Actually dispatch the walk to the pool; per-round results marshalled back. Needs the toolchain (§2.5) linked first. | **L** | ❌ requires 2.1a+2.1b+2.2 |
@@ -163,7 +163,12 @@ Costs to watch, since there is no upside to offset them: one lock acquisition pe
    again → it FAILS with the eviction test still passing, so the gate is specific, not decorative).
    Remaining: `SURFACE_PIXEL_CACHE` (7 sites), `TEX_SWAP_ALIASES` (2 sites + the alias-collision
    redesign, which is the only genuinely semantic piece).
-2. Land **2.1a** alongside it — S-sized, no behaviour change, makes confinement explicit.
+2. **2.1a DONE** — `DecodeSource` handle + SAFETY-comment rewrite. Two gates, the forwarding one
+   negative-controlled (drop the `key_known_absent` forward -> FAILS). Note the residual hazard
+   recorded in `decode_source.rs`: confinement is not compiler-checked for the *concrete* type, and
+   an off-owner-thread drop of the LAST `Arc<ManifestResourceSource>` would run `!Send` destructors
+   off-thread — safe today only because the owner's `thread_local!` holds a ref for the page
+   lifetime.
 3. Defer 2.1c until the §2.5 toolchain links; treat first successful atomics link as the milestone
    gate before any further Rust restructuring.
 4. Before ANY measurement: rebuild `pkg/` — `serve.py` reports the current wasm **predates the

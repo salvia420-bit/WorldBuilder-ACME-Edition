@@ -172,3 +172,33 @@ pub fn global_source() -> Arc<ManifestResourceSource> {
 pub fn try_global_source() -> Option<Arc<ManifestResourceSource>> {
     SOURCE.with(|cell| cell.borrow().as_ref().cloned())
 }
+
+/// §2.1a — a pool-safe view of the global source.
+///
+/// Returns a [`DecodeSource`](crate::decode_source::DecodeSource): the same
+/// underlying source, type-erased down to the SYNCHRONOUS `ResourceSource`
+/// accessors only. This is what a worker thread may hold; the concrete
+/// `Arc<ManifestResourceSource>` from [`global_source`] must NOT cross a
+/// thread boundary, because its inherent `prefetch`/`connect` methods own the
+/// `!Send` `JsFuture` machinery and the `unsafe impl Send/Sync` dedup maps
+/// (`inflight.rs`, `walk_dedup.rs`) that are sound only while
+/// owner-thread-confined.
+///
+/// The `thread_local!` `SOURCE` above is the structural half of that
+/// confinement — a pool thread simply cannot reach it — and this function is
+/// the sanctioned way across. See `decode_source.rs` for the full argument,
+/// including why the owner keeping its own `Arc` for the page lifetime is
+/// what makes an off-thread drop safe.
+#[allow(dead_code)] // wired up in §2.1c when walks dispatch to the pool
+pub fn decode_source() -> crate::decode_source::DecodeSource {
+    crate::decode_source::DecodeSource::new(global_source())
+}
+
+/// Non-panicking twin of [`decode_source`].
+#[allow(dead_code)]
+pub fn try_decode_source() -> Option<crate::decode_source::DecodeSource> {
+    // Closure, not `.map(DecodeSource::new)` — the `Arc<ManifestResourceSource>`
+    // -> `Arc<dyn ResourceSource>` unsizing coercion applies at a call site but
+    // not when naming a function item as a value (E0631).
+    try_global_source().map(|s| crate::decode_source::DecodeSource::new(s))
+}
