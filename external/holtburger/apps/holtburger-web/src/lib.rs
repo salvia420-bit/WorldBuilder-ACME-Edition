@@ -5961,35 +5961,63 @@ fn triangulate_setup_model_per_part_with_rest_pose<
 // `surface_neg_cache_insert` refuses the whole alias block so an
 // unresolvable alias can never be memoised as "absent".
 const TEX_SWAP_ALIAS_BASE: u32 = 0x08F0_0000;
+
+/// Alias registry: `(alias → (base, tex_override), (base, tex_override) → alias)`.
+///
+/// §2.2 (2026-07-24): was `thread_local!` + `RefCell`. This is the registry the
+/// SAB handoff §2.2 flags as an identity-collision risk under threads — mints
+/// are `BASE + len`, so two threads minting concurrently against per-thread (or
+/// split-lock) state would hand the SAME alias to DIFFERENT `(base, tex)` pairs
+/// and render wrong pixels rather than crash. A single `Mutex` makes the
+/// lookup-or-mint one critical section, so `len` cannot be read stale and the
+/// collision class is closed by construction.
+///
+/// What this does NOT fix: aliases are still minted on the main thread while
+/// pixel decode may run in the bake worker's SEPARATE wasm instance, whose
+/// registry never minted them. A `Mutex` cannot span two linear memories —
+/// `bake_worker_client` still splits alias DIDs back to the main-thread wasm
+/// (fix R-1, 2026-07-10), and `surface_neg_cache_insert` still refuses the whole
+/// alias block so an unresolvable alias is never memoised as "absent". That
+/// split-back dance goes away only when threads REPLACE the worker instance.
 #[cfg(any(target_arch = "wasm32", test))]
-thread_local! {
-    static TEX_SWAP_ALIASES: std::cell::RefCell<(
-        std::collections::HashMap<u32, (u32, u32)>,
-        std::collections::HashMap<(u32, u32), u32>,
-    )> = std::cell::RefCell::new((
-        std::collections::HashMap::new(),
-        std::collections::HashMap::new(),
-    ));
+type TexSwapAliases = (
+    std::collections::HashMap<u32, (u32, u32)>,
+    std::collections::HashMap<(u32, u32), u32>,
+);
+
+#[cfg(any(target_arch = "wasm32", test))]
+static TEX_SWAP_ALIASES: std::sync::LazyLock<std::sync::Mutex<TexSwapAliases>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new((
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        ))
+    });
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn tex_swap_aliases() -> std::sync::MutexGuard<'static, TexSwapAliases> {
+    TEX_SWAP_ALIASES.lock().unwrap_or_else(|e| e.into_inner())
 }
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn tex_swap_alias_for(base_surface: u32, tex_override: u32) -> u32 {
-    TEX_SWAP_ALIASES.with(|c| {
-        let mut c = c.borrow_mut();
-        if let Some(&a) = c.1.get(&(base_surface, tex_override)) {
-            return a;
-        }
-        let a = TEX_SWAP_ALIAS_BASE + c.0.len() as u32;
-        c.0.insert(a, (base_surface, tex_override));
-        c.1.insert((base_surface, tex_override), a);
-        a
-    })
+    // Lookup-or-mint MUST stay one critical section — see the type doc.
+    let mut c = tex_swap_aliases();
+    if let Some(&a) = c.1.get(&(base_surface, tex_override)) {
+        return a;
+    }
+    let a = TEX_SWAP_ALIAS_BASE + c.0.len() as u32;
+    c.0.insert(a, (base_surface, tex_override));
+    c.1.insert((base_surface, tex_override), a);
+    a
 }
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn resolve_tex_swap_alias(did: u32) -> Option<(u32, u32)> {
     if !is_tex_swap_alias(did) {
         return None;
     }
-    TEX_SWAP_ALIASES.with(|c| c.borrow().0.get(&did).copied())
+    tex_swap_aliases().0.get(&did).copied()
 }
 
 /// True when `did` sits in the reserved tex-swap alias slice of the 0x08
@@ -7982,26 +8010,51 @@ fn model_tri_bytes(tris: &[Tri]) -> usize {
 /// survived re-init, a latent staleness hole) and available to probes.
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn model_tri_cache_clear_all() -> u32 {
-    MODEL_TRI_CACHE.with(|c| c.borrow_mut().clear())
+    model_tri_cache().clear()
 }
 
+/// Cross-LB triangulation memo (retail `DBOCache` analogue): a static
+/// model's substitution-free triangulation is deterministic in `model_id`
+/// against the immutable DAT, so decode it ONCE per wasm instance and reuse
+/// it for every landblock it appears in — instead of the JS bake path
+/// re-decoding the same tree/rock/wall model per LB (the per-LB movement
+/// jank root cause). The bake worker's wasm instance persists across all
+/// bakes, so the memo spans the whole session there. S14: bounded by the
+/// shared refcount-aware `ByteBudgetLru` (was clear-on-overflow at 4096
+/// entries) so wasm linear-memory growth is byte-accounted and eviction
+/// sheds the coldest entries instead of flushing everything.
+///
+/// §2.2 (2026-07-24, `SCOPE-2.1-fetch-decode-boundary`): was `thread_local!`
+/// + `RefCell` + `Rc`. Under a wasm-threads (SAB) rayon pool `thread_local`
+/// means PER-POOL-THREAD, so an N-thread pool would hold N × 64 MiB of memo
+/// and re-decode each DID once per thread — raising RSS and breaking the
+/// `decodeAmp == 1.00` invariant, i.e. exactly the per-instance duplication
+/// that got a second independent bake worker (Path C) rejected. A shared
+/// container is therefore a CO-REQUISITE of the pool, not a follow-on.
+/// Single-threaded this is behaviour-neutral: one instance, one cache, same
+/// eviction order — `Rc` → `Arc` only because `Rc` is `!Send`.
 #[cfg(any(target_arch = "wasm32", test))]
-thread_local! {
-    /// Cross-LB triangulation memo (retail `DBOCache` analogue): a static
-    /// model's substitution-free triangulation is deterministic in `model_id`
-    /// against the immutable DAT, so decode it ONCE per wasm instance and reuse
-    /// it for every landblock it appears in — instead of the JS bake path
-    /// re-decoding the same tree/rock/wall model per LB (the per-LB movement
-    /// jank root cause). The bake worker's wasm instance persists across all
-    /// bakes, so the memo spans the whole session there. S14: bounded by the
-    /// shared refcount-aware `ByteBudgetLru` (was clear-on-overflow at 4096
-    /// entries) so wasm linear-memory growth is byte-accounted and eviction
-    /// sheds the coldest entries instead of flushing everything.
-    static MODEL_TRI_CACHE: std::cell::RefCell<ByteBudgetLru<u32, std::rc::Rc<Vec<Tri>>>> =
-        std::cell::RefCell::new(ByteBudgetLru::new(
+type ModelTriLru = ByteBudgetLru<u32, std::sync::Arc<Vec<Tri>>>;
+
+#[cfg(any(target_arch = "wasm32", test))]
+static MODEL_TRI_CACHE: std::sync::LazyLock<std::sync::RwLock<ModelTriLru>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::RwLock::new(ByteBudgetLru::new(
             MODEL_TRI_CACHE_BUDGET_BYTES,
             MODEL_TRI_CACHE_ENTRY_CAP_BYTES,
-        ));
+        ))
+    });
+
+/// Write-guard accessor. Every operation takes the WRITE lock — including
+/// `get`, because `ByteBudgetLru::get` bumps the recency tick and hit/miss
+/// counters, so it is `&mut self` by construction. A read-mostly `RwLock`
+/// split would need a lock-free tick (deferred: it changes eviction order,
+/// which must not ride along with a behaviour-neutral container swap).
+#[cfg(any(target_arch = "wasm32", test))]
+fn model_tri_cache() -> std::sync::RwLockWriteGuard<'static, ModelTriLru> {
+    MODEL_TRI_CACHE
+        .write()
+        .expect("model-tri cache lock poisoned")
 }
 
 /// Miss-counting `ResourceSource` adapter for the triangulation memo's
@@ -8083,7 +8136,7 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     let subst_free =
         model_changes.is_empty() && texture_changes.is_empty() && mtable_override.is_none();
     if subst_free {
-        if let Some(cached) = MODEL_TRI_CACHE.with(|c| c.borrow_mut().get(&model_id)) {
+        if let Some(cached) = model_tri_cache().get(&model_id) {
             return Some((*cached).clone());
         }
     }
@@ -8125,14 +8178,12 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     let complete = counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0;
     if subst_free && complete {
         let bytes = model_tri_bytes(&tris);
-        MODEL_TRI_CACHE.with(|c| {
-            c.borrow_mut().insert(
-                model_id,
-                std::rc::Rc::new(tris.clone()),
-                bytes,
-                |v| std::rc::Rc::strong_count(v) == 1,
-            );
-        });
+        model_tri_cache().insert(
+            model_id,
+            std::sync::Arc::new(tris.clone()),
+            bytes,
+            |v| std::sync::Arc::strong_count(v) == 1,
+        );
     }
     Some(tris)
 }
@@ -8928,16 +8979,59 @@ struct ComposedCacheCounters {
     inserts: u64,
 }
 
+/// §2.2 (2026-07-24): was `thread_local!` + `RefCell`. See the `MODEL_TRI_CACHE`
+/// note — under a rayon pool `thread_local` is PER-POOL-THREAD, which would give
+/// N copies of this 96 MiB store and re-decode each surface once per thread,
+/// breaking `decodeAmp == 1.00`. Behaviour-neutral single-threaded.
+///
+/// Unlike the tri memo, this store has genuine read-only callers
+/// (`surface_memo_contains`, `surface_cache_stats`) that must NOT bump recency
+/// or hit/miss counters, so they take the READ lock and the split is real.
 #[cfg(any(target_arch = "wasm32", test))]
-thread_local! {
-    static SURFACE_PIXEL_CACHE: std::cell::RefCell<
-        ByteBudgetLru<SurfaceCacheKey, std::sync::Arc<SurfacePixels>>,
-    > = std::cell::RefCell::new(ByteBudgetLru::new(
-        SURFACE_CACHE_BUDGET_BYTES,
-        SURFACE_CACHE_ENTRY_CAP_BYTES,
-    ));
-    static COMPOSED_CACHE_COUNTERS: std::cell::Cell<ComposedCacheCounters> =
-        const { std::cell::Cell::new(ComposedCacheCounters { hits: 0, misses: 0, inserts: 0 }) };
+type SurfaceLru = ByteBudgetLru<SurfaceCacheKey, std::sync::Arc<SurfacePixels>>;
+
+#[cfg(any(target_arch = "wasm32", test))]
+static SURFACE_PIXEL_CACHE: std::sync::LazyLock<std::sync::RwLock<SurfaceLru>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::RwLock::new(ByteBudgetLru::new(
+            SURFACE_CACHE_BUDGET_BYTES,
+            SURFACE_CACHE_ENTRY_CAP_BYTES,
+        ))
+    });
+
+/// Write guard — `get`/`insert`/`clear` all mutate (recency tick, counters).
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_cache() -> std::sync::RwLockWriteGuard<'static, SurfaceLru> {
+    SURFACE_PIXEL_CACHE
+        .write()
+        .expect("surface pixel cache lock poisoned")
+}
+
+/// Read guard — presence probes and diag reads only.
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_cache_ro() -> std::sync::RwLockReadGuard<'static, SurfaceLru> {
+    SURFACE_PIXEL_CACHE
+        .read()
+        .expect("surface pixel cache lock poisoned")
+}
+
+/// Composed-class diag counters. `Cell` → `Mutex` for the same reason: these
+/// feed `dat_decode_diag`, and per-thread counters would silently under-report
+/// the pool's real traffic. Taken AFTER the LRU guard is released at each site
+/// — never nested, so the two locks cannot deadlock.
+#[cfg(any(target_arch = "wasm32", test))]
+static COMPOSED_CACHE_COUNTERS: std::sync::Mutex<ComposedCacheCounters> =
+    std::sync::Mutex::new(ComposedCacheCounters {
+        hits: 0,
+        misses: 0,
+        inserts: 0,
+    });
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn composed_counters() -> std::sync::MutexGuard<'static, ComposedCacheCounters> {
+    COMPOSED_CACHE_COUNTERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// Manual deep clone — `SurfacePixels` is a `wasm_bindgen` struct and is
@@ -8988,8 +9082,8 @@ fn surface_memo_get(did: u32) -> Option<SurfacePixels> {
     if !surface_cache_enabled() {
         return None;
     }
-    SURFACE_PIXEL_CACHE
-        .with(|c| c.borrow_mut().get(&SurfaceCacheKey::PaletteFree(did)))
+    surface_cache()
+        .get(&SurfaceCacheKey::PaletteFree(did))
         .map(|arc| clone_surface_pixels(&arc))
 }
 
@@ -9000,7 +9094,7 @@ fn surface_memo_contains(did: u32) -> bool {
     if !surface_cache_enabled() {
         return false;
     }
-    SURFACE_PIXEL_CACHE.with(|c| c.borrow().contains(&SurfaceCacheKey::PaletteFree(did)))
+    surface_cache_ro().contains(&SurfaceCacheKey::PaletteFree(did))
 }
 
 /// Completeness-gated insert (see module comment). `decode_misses` is the
@@ -9014,14 +9108,12 @@ fn surface_memo_insert(did: u32, sp: &SurfacePixels, decode_misses: u32) {
         return;
     }
     let bytes = surface_pixels_bytes(sp);
-    SURFACE_PIXEL_CACHE.with(|c| {
-        c.borrow_mut().insert(
-            SurfaceCacheKey::PaletteFree(did),
-            std::sync::Arc::new(clone_surface_pixels(sp)),
-            bytes,
-            |v| std::sync::Arc::strong_count(v) == 1,
-        )
-    });
+    surface_cache().insert(
+        SurfaceCacheKey::PaletteFree(did),
+        std::sync::Arc::new(clone_surface_pixels(sp)),
+        bytes,
+        |v| std::sync::Arc::strong_count(v) == 1,
+    );
 }
 
 /// S16 (B-executor): composed-class twin of `surface_memo_get`. Keyed on the
@@ -9043,16 +9135,15 @@ fn surface_memo_get_composed(
         base_palette_id,
         sub_palettes: sub_palettes.to_vec(),
     };
-    let hit = SURFACE_PIXEL_CACHE.with(|c| c.borrow_mut().get(&key));
-    COMPOSED_CACHE_COUNTERS.with(|c| {
-        let mut v = c.get();
+    let hit = surface_cache().get(&key);
+    {
+        let mut c = composed_counters();
         if hit.is_some() {
-            v.hits += 1;
+            c.hits += 1;
         } else {
-            v.misses += 1;
+            c.misses += 1;
         }
-        c.set(v);
-    });
+    }
     hit.map(|arc| clone_surface_pixels(&arc))
 }
 
@@ -9079,28 +9170,44 @@ fn surface_memo_insert_composed(
         sub_palettes: sub_palettes.to_vec(),
     };
     let bytes = surface_pixels_bytes(sp);
-    let newly = SURFACE_PIXEL_CACHE.with(|c| {
-        c.borrow_mut().insert(
-            key,
-            std::sync::Arc::new(clone_surface_pixels(sp)),
-            bytes,
-            |v| std::sync::Arc::strong_count(v) == 1,
-        )
-    });
+    let newly = surface_cache().insert(
+        key,
+        std::sync::Arc::new(clone_surface_pixels(sp)),
+        bytes,
+        |v| std::sync::Arc::strong_count(v) == 1,
+    );
     if newly {
-        COMPOSED_CACHE_COUNTERS.with(|c| {
-            let mut v = c.get();
-            v.inserts += 1;
-            c.set(v);
-        });
+        composed_counters().inserts += 1;
     }
 }
 
 /// Drop every positive-cache entry. Shared by the wasm export and the
 /// `init_resource_source` re-init hook (a new manifest invalidates decodes).
+/// Deliberately does NOT reset the hit/miss/insert counters — `dat_decode_diag`
+/// reports them across the whole session, including across re-inits.
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn surface_pixel_cache_clear_all() -> u32 {
-    SURFACE_PIXEL_CACHE.with(|c| c.borrow_mut().clear())
+    surface_cache().clear()
+}
+
+/// Test-only hard reset: entries AND counters, both classes.
+///
+/// §2.2 fallout: the store used to be `thread_local!`, so cargo-test's parallel
+/// harness handed every test its own pristine cache and counters for free. Now
+/// that it is process-global the tests genuinely share it, and any test
+/// asserting absolute `surface_cache_stats()` values sees other tests' traffic.
+/// Pair this with `SURFACE_TEST_GUARD` (see `surface_test_lock`) — reset alone
+/// is not enough, because a concurrent test can insert between the reset and
+/// the assertion.
+#[cfg(test)]
+fn surface_cache_reset_for_test() {
+    let mut c = surface_cache();
+    c.clear();
+    c.hits = 0;
+    c.misses = 0;
+    c.inserts = 0;
+    c.evictions = 0;
+    *composed_counters() = ComposedCacheCounters::default();
 }
 
 /// Console/probe escape hatch, mirroring `surface_neg_cache_clear`.
@@ -9120,23 +9227,21 @@ pub fn surface_cache_clear() -> u32 {
 /// B1 whenever no composed traffic has occurred.
 #[cfg(any(target_arch = "wasm32", test))]
 fn surface_cache_stats() -> (u64, u64, u64, u64, u64, u64, u64, usize, usize, usize) {
-    let comp = COMPOSED_CACHE_COUNTERS.with(|c| c.get());
-    SURFACE_PIXEL_CACHE.with(|c| {
-        let c = c.borrow();
-        let pal_entries = c.count_keys(|k| k.is_composed());
-        (
-            c.hits.saturating_sub(comp.hits),
-            c.misses.saturating_sub(comp.misses),
-            c.inserts.saturating_sub(comp.inserts),
-            comp.hits,
-            comp.misses,
-            comp.inserts,
-            c.evictions,
-            c.total_bytes,
-            c.len(),
-            pal_entries,
-        )
-    })
+    let comp = *composed_counters();
+    let c = surface_cache_ro();
+    let pal_entries = c.count_keys(|k| k.is_composed());
+    (
+        c.hits.saturating_sub(comp.hits),
+        c.misses.saturating_sub(comp.misses),
+        c.inserts.saturating_sub(comp.inserts),
+        comp.hits,
+        comp.misses,
+        comp.inserts,
+        c.evictions,
+        c.total_bytes,
+        c.len(),
+        pal_entries,
+    )
 }
 
 /// B1 memo-through decode of one surface DID: memo hit → clone out (zero
@@ -56046,6 +56151,7 @@ mod tests_surface_cache {
 
     #[test]
     fn memo_hit_is_byte_identical_and_reads_zero_records() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0001u32;
         let source = textured_fixture(did, 0xFF11_2233);
@@ -56080,6 +56186,7 @@ mod tests_surface_cache {
 
     #[test]
     fn incomplete_decode_is_not_memoised_then_recovers() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0002u32;
         let full = textured_fixture(did, 0xFF44_5566);
@@ -56100,6 +56207,7 @@ mod tests_surface_cache {
 
     #[test]
     fn entity_palette_free_parity_with_static_path() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0003u32;
         let source = textured_fixture(did, 0xFF77_8899);
@@ -56134,6 +56242,7 @@ mod tests_surface_cache {
 
     #[test]
     fn composed_cached_result_is_byte_identical_to_uncached_compose() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0004u32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
@@ -56154,6 +56263,7 @@ mod tests_surface_cache {
 
     #[test]
     fn composed_hit_reads_zero_records() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0007u32;
         let mut source = textured_fixture(did, 0xFF01_0203);
@@ -56172,6 +56282,7 @@ mod tests_surface_cache {
 
     #[test]
     fn composed_distinct_palettes_do_not_cross_contaminate() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0008u32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
@@ -56195,6 +56306,7 @@ mod tests_surface_cache {
 
     #[test]
     fn composed_and_palette_free_coexist_independently() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0009u32;
         let mut source = textured_fixture(did, 0xFF12_3456);
@@ -56217,6 +56329,7 @@ mod tests_surface_cache {
 
     #[test]
     fn composed_incomplete_and_sentinel_never_memoised() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_000Au32;
         let full = textured_fixture(did, 0xFF44_5566);
@@ -56284,6 +56397,7 @@ mod tests_surface_cache {
 
     #[test]
     fn flag_matrix_pal_off_bypasses_composed_only_master_off_bypasses_all() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_000Bu32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
@@ -56338,6 +56452,7 @@ mod tests_surface_cache {
 
     #[test]
     fn composed_stats_split_keeps_palette_free_fields_intact() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_000Cu32;
         let mut source = textured_fixture(did, 0xFF33_4455);
@@ -56367,6 +56482,7 @@ mod tests_surface_cache {
 
     #[test]
     fn alias_dids_are_positively_cached() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let base_did = 0x0810_0006u32;
         let mut source = textured_fixture(base_did, 0xFF31_4159);
@@ -56409,6 +56525,7 @@ mod tests_surface_cache {
 
     #[test]
     fn empty_and_magenta_sentinel_never_memoised() {
+        let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0005u32;
         let mut empty = empty_fixture_pixels();
@@ -56519,8 +56636,133 @@ mod tests_surface_cache {
         }
     }
 
+    /// Serialises every test that touches the process-global surface store, and
+    /// hands each one a pristine cache + counters. Before §2.2 the store was
+    /// `thread_local!` so the parallel harness isolated them for free; it no
+    /// longer does. Hold the returned guard for the whole test body.
+    static SURFACE_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[must_use = "hold the guard for the test body — dropping it early unserialises the test"]
+    fn surface_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        let g = SURFACE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        surface_cache_reset_for_test();
+        g
+    }
+
+    /// §2.2 regression gate for the alias-identity collision class (SAB handoff
+    /// §2.2 — "wrong here = corrupted textures, not a crash"). Mints the SAME
+    /// overlapping `(base, tex)` pairs from many threads at once and asserts the
+    /// registry stayed a bijection. Under a per-thread or split-lock registry the
+    /// `BASE + len` mint reads a stale length and hands one alias to two
+    /// different pairs — which renders wrong pixels silently.
+    #[test]
+    fn tex_swap_alias_mint_is_collision_free_under_concurrency() {
+        const THREADS: u32 = 8;
+        const PAIRS: u32 = 64;
+        // Distinct from any other test's ids so the append-only registry (no
+        // clear API by design — aliases must never remap once minted) can't be
+        // perturbed by unrelated tests running in parallel.
+        let base_of = |i: u32| 0x0500_0000 + i;
+        let tex_of = |i: u32| 0x0600_0000 + i;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    (0..PAIRS)
+                        .map(|i| (i, tex_swap_alias_for(base_of(i), tex_of(i))))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let results: Vec<Vec<(u32, u32)>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("minting thread panicked"))
+            .collect();
+
+        // 1. Every thread must agree on the alias for a given pair.
+        let reference = &results[0];
+        for (t, r) in results.iter().enumerate().skip(1) {
+            assert_eq!(
+                r, reference,
+                "thread {t} minted different aliases for the same pairs — the \
+                 lookup-or-mint critical section was split"
+            );
+        }
+        // 2. Distinct pairs must hold distinct aliases (the corruption class).
+        let mut seen = std::collections::HashMap::new();
+        for &(i, alias) in reference {
+            if let Some(prev) = seen.insert(alias, i) {
+                panic!("alias 0x{alias:08X} minted for BOTH pair {prev} and pair {i} — \
+                        two surfaces would render each other's pixels");
+            }
+            // 3. And each must resolve back to exactly its own pair.
+            assert_eq!(
+                resolve_tex_swap_alias(alias),
+                Some((base_of(i), tex_of(i))),
+                "alias 0x{alias:08X} did not resolve back to its minting pair"
+            );
+            assert!(
+                is_tex_swap_alias(alias),
+                "alias 0x{alias:08X} escaped the reserved 0x08Fxxxxx slice"
+            );
+        }
+    }
+
+    /// Serialises the tests that mutate the process-global `MODEL_TRI_CACHE`.
+    /// Before §2.2 the memo was `thread_local!`, so cargo-test's parallel
+    /// harness handed each test its own copy and no guard was needed; a SHARED
+    /// cache makes them contend. `into_inner()` on poisoning keeps one failing
+    /// test from cascading into the others.
+    static MODEL_TRI_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// §2.2 regression gate: the memo must be ONE cache for the whole process,
+    /// not one per thread. Native `std::thread` stands in for the wasm-threads
+    /// rayon pool — under the old `thread_local!` memo the spawned thread wrote
+    /// into its own copy and this `get` returned `None`, which is exactly the
+    /// N-copies/N-decodes failure that would break `decodeAmp == 1.00` and
+    /// inflate RSS once a pool exists.
+    #[test]
+    fn model_tri_cache_is_shared_across_threads() {
+        let _guard = MODEL_TRI_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        model_tri_cache_clear_all();
+        const KEY: u32 = 0x0200_BEEF;
+
+        std::thread::spawn(|| {
+            let tri = Tri {
+                pos: [[1.0; 3]; 3],
+                uv: [[0.0; 2]; 3],
+                normals: [[0.0; 3]; 3],
+                surface_did: 7,
+                sides_type: 0,
+                polygon_id: 0,
+                side_kind: SideKind::Positive,
+            };
+            let tris = vec![tri; 4];
+            let bytes = model_tri_bytes(&tris);
+            model_tri_cache().insert(KEY, std::sync::Arc::new(tris), bytes, |v| {
+                std::sync::Arc::strong_count(v) == 1
+            });
+        })
+        .join()
+        .expect("writer thread panicked");
+
+        let seen = model_tri_cache().get(&KEY);
+        assert!(
+            seen.is_some(),
+            "memo written on another thread must be visible here — a per-thread \
+             cache would re-decode this DID once per pool thread"
+        );
+        assert_eq!(seen.unwrap().len(), 4, "same triangulation, not a re-decode");
+        model_tri_cache_clear_all();
+    }
+
     #[test]
     fn model_tri_cache_byte_budget_eviction() {
+        let _guard = MODEL_TRI_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         model_tri_cache_clear_all();
         let tri = Tri {
             pos: [[0.0; 3]; 3],
@@ -56534,14 +56776,14 @@ mod tests_surface_cache {
         let per_entry_tris = 1000usize;
         let bytes = model_tri_bytes(&vec![tri.clone(); per_entry_tris]);
         let fit = MODEL_TRI_CACHE_BUDGET_BYTES / bytes;
-        MODEL_TRI_CACHE.with(|c| {
-            let mut c = c.borrow_mut();
+        {
+            let mut c = model_tri_cache();
             for k in 0..(fit as u32 + 3) {
                 c.insert(
                     k,
-                    std::rc::Rc::new(vec![tri.clone(); per_entry_tris]),
+                    std::sync::Arc::new(vec![tri.clone(); per_entry_tris]),
                     bytes,
-                    |v| std::rc::Rc::strong_count(v) == 1,
+                    |v| std::sync::Arc::strong_count(v) == 1,
                 );
             }
             assert!(
@@ -56550,7 +56792,7 @@ mod tests_surface_cache {
             );
             assert!(c.evictions > 0, "evicted the coldest, not everything");
             assert!(c.len() > 0, "did not flush the whole memo");
-        });
+        }
         model_tri_cache_clear_all();
     }
 }
