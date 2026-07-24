@@ -420,6 +420,52 @@ impl CellMembership {
     }
 }
 
+// PERF Fix 2 (2026-07-23): identity + generation stamp for the faithful
+// bridge's PERSISTENT (thread-local) built-cell handle cache. The cache is
+// valid only for (this exact scene instance, this exact revision of its
+// collision-geometry tables):
+//   * `scene_id` is unique per instance PER THREAD (the cache is
+//     thread-local, so per-thread uniqueness suffices). `Clone` deliberately
+//     assigns a FRESH id — a clone is a different instance that can diverge,
+//     and a fresh id can never falsely hit cache entries built from another
+//     instance (the per-tick `collision_scene` JS-shadow clone is never used
+//     for transitions, so its fresh id costs nothing).
+//   * `rev` bumps on EVERY mutation of a table the faithful bridge's
+//     `build_cell` / `get_landcell` path reads (cell physics/static BSPs,
+//     membership, portal graph, cell AABBs, terrain heights/water codes,
+//     outdoor statics) — see `bump_collision_rev` callers. Over-bumping is
+//     safe (a spurious cache clear); under-bumping is NOT (stale collision
+//     geometry), so mutators of non-consumed tables may still bump.
+thread_local! {
+    static NEXT_SCENE_COLLISION_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+#[derive(Debug)]
+struct CollisionRevStamp {
+    scene_id: u64,
+    rev: u64,
+}
+
+impl CollisionRevStamp {
+    fn fresh() -> Self {
+        let scene_id = NEXT_SCENE_COLLISION_ID.with(|c| {
+            let v = c.get();
+            c.set(v + 1);
+            v
+        });
+        Self { scene_id, rev: 0 }
+    }
+}
+
+impl Clone for CollisionRevStamp {
+    /// A clone is a DIFFERENT scene instance — fresh id, so cached handles
+    /// keyed to the source instance can never be served for the clone (and
+    /// vice versa) even though their content is identical at clone time.
+    fn clone(&self) -> Self {
+        Self::fresh()
+    }
+}
+
 // F4-5 (grind-loop G-2, 2026-06-11): the wasm recv-loop snapshots this
 // whole struct into the JS-readable camera-sweep shadow EVERY TickMovement
 // (`*collision_scene.borrow_mut() = w.scene.clone()`). The immutable
@@ -490,7 +536,15 @@ pub struct SpatialScene {
     /// geometry; the query sphere is transformed into the cell frame
     /// (see [`CellPhysicsBsp::world_to_local`]). Cleared on landblock
     /// unload alongside `cell_physics_index`.
-    cell_physics_bsp: Arc<HashMap<u32, CellPhysicsBsp>>,
+    ///
+    /// PERF (2026-07-23): values are `Arc<CellPhysicsBsp>` so consumers that
+    /// need an owned `'static` handle (the faithful bridge's [`super::
+    /// faithful_bridge::SceneObjCell`]) share the parsed BSP tree with an O(1)
+    /// refcount bump instead of deep-cloning it. The per-transition
+    /// `build_cell_inner` deep-clone of every visited cell's tree was the
+    /// dominant main-thread cost in portal dungeons (~18% hashbrown clone +
+    /// ~15% BspNode::clone in the frozen-bot profile).
+    cell_physics_bsp: Arc<HashMap<u32, Arc<CellPhysicsBsp>>>,
     /// Phase C (2026-06-28): per-cell PRECISE physics BSPs for an EnvCell's
     /// resident STATIC OBJECTS (the `stab_list` — furniture, doors, props),
     /// keyed by full 32-bit cell id. The indoor twin of `statics_physics_bsp`
@@ -507,7 +561,11 @@ pub struct SpatialScene {
     /// render-only `StaticObjectPlacement`s. A populate pass mirroring the
     /// outdoor `populateStaticsAabbsForLandblock` BSP extraction must push each
     /// stab's resolved physics BSP here for the gap to close on the live path.
-    cell_static_physics_bsp: Arc<HashMap<u32, Vec<CellPhysicsBsp>>>,
+    ///
+    /// PERF (2026-07-23): `Arc` values — see [`Self::cell_physics_bsp`]. Also
+    /// makes the WS7 overlap bake's multi-cell registration of one static a
+    /// refcount bump per cell instead of a deep copy per cell.
+    cell_static_physics_bsp: Arc<HashMap<u32, Vec<Arc<CellPhysicsBsp>>>>,
     /// Terrain→EnvCell entry (2026-06-02): per-cell MEMBERSHIP bsp
     /// (`CellStruct.cell_bsp`) + cell frame, keyed by full 32-bit cell
     /// id (parallel to `cell_physics_bsp`). Populated by
@@ -518,7 +576,11 @@ pub struct SpatialScene {
     /// `check_building_transit` — instead of waiting for the server
     /// `UpdatePosition`. Cleared on landblock unload alongside
     /// `cell_aabbs` / `cell_physics_bsp`.
-    cell_membership: Arc<HashMap<u32, CellMembership>>,
+    ///
+    /// PERF (2026-07-23): `Arc` values — see [`Self::cell_physics_bsp`] (the
+    /// membership tree is a `BspNode` too, cloned per neighbour per transition
+    /// on the old path).
+    cell_membership: Arc<HashMap<u32, Arc<CellMembership>>>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world space, for screen-space portal-frustum clipping. Keyed by
     /// the EnvCell's full 32-bit cell id; each entry is a list of
@@ -585,7 +647,13 @@ pub struct SpatialScene {
     /// landblock on unload. Consulted only when `USE_STATIC_BSP` is on, via
     /// [`Self::resolve_static_bsp_pushout`] — the AABB stays the default /
     /// gate-off path, so this is a pure additive runtime switch.
-    statics_physics_bsp: Arc<HashMap<u32, Vec<CellPhysicsBsp>>>,
+    /// PERF (2026-07-23): `Arc` values — see [`Self::cell_physics_bsp`].
+    statics_physics_bsp: Arc<HashMap<u32, Vec<Arc<CellPhysicsBsp>>>>,
+    /// PERF Fix 2 (2026-07-23): identity + generation for the faithful
+    /// bridge's persistent built-cell cache (see [`CollisionRevStamp`]).
+    /// Bumped by [`Self::bump_collision_rev`] from every mutator of a
+    /// collision-geometry table; read via [`Self::collision_cache_key`].
+    collision_stamp: CollisionRevStamp,
     /// Workstream C (3D camera collision, 2026-05-11): per-landblock
     /// world-space physics triangles for building interiors / basements.
     /// **This is the building-side parallel of `cell_physics_index`.**
@@ -780,6 +848,7 @@ impl SpatialScene {
             building_origins: Arc::new(HashMap::new()),
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
+            collision_stamp: CollisionRevStamp::fresh(),
             building_physics_index: Arc::new(HashMap::new()),
             terrain_heights: Arc::new(HashMap::new()),
             terrain_water_codes: Arc::new(HashMap::new()),
@@ -795,6 +864,28 @@ impl SpatialScene {
             leash_echo_gate: USE_LEASH_ECHO_GATE,
             local_use_position_from_server: false,
         }
+    }
+
+    /// PERF Fix 2 (2026-07-23): invalidate the faithful bridge's persistent
+    /// built-cell handle cache. MUST be called by every `&mut self` method
+    /// that mutates a table `faithful_bridge`'s `build_cell_inner` /
+    /// `build_outdoor_cell` / `get_landcell` reads: `cell_physics_bsp`,
+    /// `cell_static_physics_bsp`, `cell_membership`, `cell_portal_graph`,
+    /// `cell_aabbs`, `terrain_heights`, `terrain_water_codes`,
+    /// `statics_physics_bsp`. Missing a call site ⇒ STALE collision geometry
+    /// (walk-through / phantom walls); an extra call ⇒ only a spurious cache
+    /// rebuild.
+    #[inline]
+    fn bump_collision_rev(&mut self) {
+        self.collision_stamp.rev = self.collision_stamp.rev.wrapping_add(1);
+    }
+
+    /// PERF Fix 2 (2026-07-23): `(scene_id, rev)` validity key for the
+    /// faithful bridge's thread-local built-cell cache. Different scene
+    /// instance OR any collision-geometry mutation ⇒ different key ⇒ the
+    /// cache clears itself.
+    pub fn collision_cache_key(&self) -> (u64, u64) {
+        (self.collision_stamp.scene_id, self.collision_stamp.rev)
     }
 
     /// Physics-parity 2026-07-03: flip the retail LOCAL lattice switch
@@ -1221,6 +1312,7 @@ impl SpatialScene {
     /// both directions. The graph itself is directed so test fixtures
     /// can synthesize asymmetric topologies if needed.
     pub fn insert_cell_portal(&mut self, from: u32, to: u32) {
+        self.bump_collision_rev();
         let entry = Arc::make_mut(&mut self.cell_portal_graph).entry(from).or_default();
         if !entry.contains(&to) {
             entry.push(to);
@@ -1234,6 +1326,7 @@ impl SpatialScene {
     /// trick Phase B uses for buildings). Outdoor cells are not
     /// stored here — `current_cell` derives them from the 8x8 grid.
     pub fn insert_cell_aabb(&mut self, cell_id: u32, aabb: Aabb) {
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.cell_aabbs).insert(cell_id, aabb);
     }
 
@@ -1254,6 +1347,7 @@ impl SpatialScene {
     /// expected to be the full landblock high word
     /// (e.g. `0xA9B40000`) — the comparison masks the low 16 bits.
     pub fn clear_cells_for_landblock(&mut self, landblock_id: u32) -> (usize, usize) {
+        self.bump_collision_rev();
         let lb_high = landblock_id & 0xFFFF_0000;
         let mut edges_removed = 0usize;
         Arc::make_mut(&mut self.cell_portal_graph).retain(|from, edges| {
@@ -1439,12 +1533,15 @@ impl SpatialScene {
     /// cell-local. Idempotent overwrite per cell (a re-bake after LRU
     /// eviction replaces).
     pub fn insert_cell_physics_bsp(&mut self, cell_id: u32, bsp: CellPhysicsBsp) {
-        Arc::make_mut(&mut self.cell_physics_bsp).insert(cell_id, bsp);
+        self.bump_collision_rev();
+        Arc::make_mut(&mut self.cell_physics_bsp).insert(cell_id, Arc::new(bsp));
     }
 
     /// BSP collision (PASS 1): read access to the physics BSP for
     /// `cell_id` (or `None` if not registered / not yet baked).
-    pub fn cell_physics_bsp(&self, cell_id: u32) -> Option<&CellPhysicsBsp> {
+    /// PERF (2026-07-23): returns the `Arc` so `'static` consumers can
+    /// `.cloned()` an O(1) shared handle instead of deep-copying the tree.
+    pub fn cell_physics_bsp(&self, cell_id: u32) -> Option<&Arc<CellPhysicsBsp>> {
         self.cell_physics_bsp.get(&cell_id)
     }
 
@@ -1459,16 +1556,17 @@ impl SpatialScene {
     /// clear on unload keeps it bounded. Mirrors `insert_static_physics_bsp`
     /// (the outdoor twin) but keyed by full cell id.
     pub fn insert_cell_static_physics_bsp(&mut self, cell_id: u32, bsp: CellPhysicsBsp) {
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.cell_static_physics_bsp)
             .entry(cell_id)
             .or_default()
-            .push(bsp);
+            .push(Arc::new(bsp));
     }
 
     /// Phase C: the resident static physics BSPs for `cell_id` (or `&[]` when
     /// the cell has none / isn't loaded). Iterated by the faithful driver's
     /// per-cell `find_obj_collisions`.
-    pub fn cell_static_physics_bsp(&self, cell_id: u32) -> &[CellPhysicsBsp] {
+    pub fn cell_static_physics_bsp(&self, cell_id: u32) -> &[Arc<CellPhysicsBsp>] {
         self.cell_static_physics_bsp
             .get(&cell_id)
             .map(|v| v.as_slice())
@@ -1532,6 +1630,7 @@ impl SpatialScene {
         landblock_high: u32,
         overlap_enabled: bool,
     ) -> usize {
+        self.bump_collision_rev();
         let lb_high = landblock_high & 0xFFFF_0000;
         // Idempotency: drop this landblock's prior OUTDOOR per-cell entries so a
         // re-bake (the live STATIC_BSP_PENDING drain runs per landblock load)
@@ -1624,6 +1723,7 @@ impl SpatialScene {
     /// [`Self::clear_cells_for_landblock`] also clears these on landblock unload).
     /// Returns the removed static count.
     pub fn clear_outdoor_static_overlap_for_landblock(&mut self, landblock_high: u32) -> usize {
+        self.bump_collision_rev();
         let lb_high = landblock_high & 0xFFFF_0000;
         let mut removed = 0usize;
         Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, v| {
@@ -1648,12 +1748,14 @@ impl SpatialScene {
     /// terrain-triangle build (WS2/WS3) reads. Mirrors the Phase C BSP staging
     /// (fed by the wasm landblock-load path, WS8).
     pub fn populate_terrain_heights(&mut self, landblock_id: u32, heights: [f32; 81]) {
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.terrain_heights).insert(landblock_id & 0xFFFF_0000, heights);
     }
 
     /// Phase D / WS1: drop a landblock's terrain heights on unload (parallel to
     /// `clear_*_for_landblock`). Returns `true` if an entry was removed.
     pub fn clear_terrain_heights_for_landblock(&mut self, landblock_id: u32) -> bool {
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.terrain_heights)
             .remove(&(landblock_id & 0xFFFF_0000))
             .is_some()
@@ -1684,12 +1786,14 @@ impl SpatialScene {
     /// [`Self::populate_terrain_heights`]; the wasm feed passes the same
     /// `terrain_codes` array it already computes for the render heightmap.
     pub fn populate_terrain_water_codes(&mut self, landblock_id: u32, codes: [u8; 81]) {
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.terrain_water_codes).insert(landblock_id & 0xFFFF_0000, codes);
     }
 
     /// Phase E3.6: drop a landblock's terrain water codes on unload (parallel to
     /// [`Self::clear_terrain_heights_for_landblock`]). `true` if an entry existed.
     pub fn clear_terrain_water_codes_for_landblock(&mut self, landblock_id: u32) -> bool {
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.terrain_water_codes)
             .remove(&(landblock_id & 0xFFFF_0000))
             .is_some()
@@ -1706,7 +1810,8 @@ impl SpatialScene {
     /// the wasm bundle's `CELL_MEMBERSHIP_PENDING` pile each TickMovement,
     /// the same cadence as the physics-BSP drain.
     pub fn insert_cell_membership(&mut self, cell_id: u32, membership: CellMembership) {
-        Arc::make_mut(&mut self.cell_membership).insert(cell_id, membership);
+        self.bump_collision_rev();
+        Arc::make_mut(&mut self.cell_membership).insert(cell_id, Arc::new(membership));
     }
 
     /// Count of cells with a registered membership tree. Diagnostic only.
@@ -1718,7 +1823,7 @@ impl SpatialScene {
     /// resident. Phase E3.2: drives `SceneObjCell::point_in_cell` (replacing the
     /// looser AABB) so `find_cell_list` re-seats `check_cell` precisely across
     /// portal boundaries.
-    pub fn cell_membership(&self, cell_id: u32) -> Option<&CellMembership> {
+    pub fn cell_membership(&self, cell_id: u32) -> Option<&Arc<CellMembership>> {
         self.cell_membership.get(&cell_id)
     }
 
@@ -2624,16 +2729,18 @@ impl SpatialScene {
     /// cadence as the static-AABB drain. Append-only; the per-landblock
     /// clear on unload keeps it bounded.
     pub fn insert_static_physics_bsp(&mut self, landblock_high: u32, bsp: CellPhysicsBsp) {
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.statics_physics_bsp)
             .entry(landblock_high)
             .or_default()
-            .push(bsp);
+            .push(Arc::new(bsp));
     }
 
     /// B4 Tier-2: drop every static physics BSP for `landblock_high`
     /// (mirror of `clear_static_aabbs_for_landblock`). Returns the removed
     /// count for diagnostic logging.
     pub fn clear_static_physics_bsps_for_landblock(&mut self, landblock_high: u32) -> usize {
+        self.bump_collision_rev();
         match Arc::make_mut(&mut self.statics_physics_bsp).remove(&landblock_high) {
             Some(v) => v.len(),
             None => 0,
@@ -2661,6 +2768,7 @@ impl SpatialScene {
         if landblocks.is_empty() {
             return (0, 0, 0, 0, 0);
         }
+        self.bump_collision_rev();
         let lbs: HashSet<u32> = landblocks.iter().map(|lb| lb & 0xFFFF_0000).collect();
         let in_set = |id: u32| lbs.contains(&(id & 0xFFFF_0000));
 

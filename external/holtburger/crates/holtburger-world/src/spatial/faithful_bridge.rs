@@ -54,6 +54,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Aabb, Quaternion, Sphere, Vector3};
@@ -106,28 +107,32 @@ fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
 /// the gate prunes any neighbour the spheres don't actually reach.
 const MAX_PORTAL_HOPS: u32 = 2;
 
-/// One loaded EnvCell as the faithful driver's `CObjCell`. Owns a CLONE of the
-/// cell's physics BSP (the `Rc<dyn CObjCell>` handle the driver wants is
-/// `'static`, so the cell cannot borrow the scene). The clone is bounded to
-/// once per distinct cell per transition by [`SceneWorld`]'s cache.
+/// One loaded EnvCell as the faithful driver's `CObjCell`. Owns SHARED
+/// (`Arc`) handles to the cell's physics/membership BSPs (the
+/// `Rc<dyn CObjCell>` handle the driver wants is `'static`, so the cell
+/// cannot borrow the scene; `Arc<T>` where `T: 'static` satisfies that
+/// without copying the tree). PERF (2026-07-23): these were deep CLONES —
+/// the per-transition clone storm over a 205-cell portal dungeon (BspNode +
+/// poly-HashMap copies under `build_cell_inner`) saturated the main thread.
 pub struct SceneObjCell {
     /// `this->m_DID.id` — the full 32-bit cell id.
     cell_id: u32,
     /// `this->pos` — the cell frame (WORLD origin + orientation basis). Identity
     /// when the cell has no physics BSP (the find_collisions identity branch).
     pos: Position,
-    /// The cell's physics BSP (cell-local tree + resolved polys + frame), cloned
-    /// out of [`SpatialScene::cell_physics_bsp`]. `None` ⇒ no narrow-phase
+    /// The cell's physics BSP (cell-local tree + resolved polys + frame), an
+    /// `Arc` shared with [`SpatialScene::cell_physics_bsp`] (O(1) refcount
+    /// bump, not a deep tree copy). `None` ⇒ no narrow-phase
     /// geometry → `find_collisions` is identity (statics / outdoor are handled
     /// elsewhere).
-    bsp: Option<CellPhysicsBsp>,
+    bsp: Option<Arc<CellPhysicsBsp>>,
     /// Phase C: the cell's resident STATIC objects' physics BSPs (each framed to
-    /// WORLD via its own origin/orientation), cloned out of
+    /// WORLD via its own origin/orientation), `Arc`-shared with
     /// [`SpatialScene::cell_static_physics_bsp`]. The faithful analogue of the
     /// decomp's `CEnvCell` shadow-object list — iterated by [`Self::find_obj_collisions`]
     /// after the env-cell geometry, so static walls/doors/props stop the mover
     /// instead of being walked through.
-    statics: Vec<CellPhysicsBsp>,
+    statics: Vec<Arc<CellPhysicsBsp>>,
     /// The cell's WORLD-space AABB (from [`SpatialScene::cell_aabb`]). Drives
     /// [`Self::point_in_cell`] so `find_cell_list` re-seats `check_cell` to this
     /// cell each step instead of nulling it (the base trait `point_in_cell`
@@ -138,11 +143,11 @@ pub struct SceneObjCell {
     /// — adequate for the single-cell indoor sweep, refine for cross-portal.
     aabb: Option<Aabb>,
     /// Phase E3.2 — the precise cell-membership BSP (`CellStruct.cell_bsp`,
-    /// cloned from [`SpatialScene::cell_membership`]). When present,
+    /// `Arc`-shared with [`SpatialScene::cell_membership`]). When present,
     /// [`Self::point_in_cell`] walks it (`BspNode::point_inside_cell`, the
     /// faithful `BSPNODE::point_inside_cell_bsp` port, acclient.c:362944) instead
     /// of the looser AABB — precise cross-portal re-seat. `None` ⇒ AABB fallback.
-    membership: Option<CellMembership>,
+    membership: Option<Arc<CellMembership>>,
     /// `((CEnvCell*)this)->stab_list` — the portal-visible neighbour cell ids
     /// (the cell ring `find_transit_cells` floods). Kept for the
     /// `do_not_load_cells` stab-list prune (`visible_cells()`).
@@ -162,7 +167,7 @@ pub struct SceneObjCell {
     /// Empty for leaf-depth neighbours and outdoor cells. Each cell collides in its
     /// OWN world frame (non-Euclidean-safe: portal connectivity, not spatial
     /// overlap — gmriggs/trevis).
-    resolved_neighbours: Vec<(u32, ObjCellHandle, Option<CellMembership>)>,
+    resolved_neighbours: Vec<(u32, ObjCellHandle, Option<Arc<CellMembership>>)>,
     /// Phase D / WS3: the OUTDOOR land cell's two collision triangles
     /// (`CLandCell::polygons`), in this cell's LANDBLOCK-local frame (WS2's
     /// [`cell_terrain_polys`]). `Some` ⇒ this is an outdoor `CLandCell` and
@@ -499,25 +504,46 @@ impl CObjCell for SceneObjCell {
 
 // ─── SceneWorld — the CellWorld seam over a borrowed SpatialScene ────────────
 
-/// `CellWorld` adapter over a borrowed [`SpatialScene`]. Caches the built
-/// `Rc<dyn CObjCell>` handles so each distinct cell's BSP is cloned at most once
-/// per transition.
+/// PERF Fix 2 (2026-07-23): PERSISTENT (thread-local) built-cell handle cache
+/// — the retail-residency "DBOCache" pattern (same idea as the thread_local
+/// triangulation memo in the wasm crate). A FRESH `SceneWorld` (with, before
+/// this fix, an EMPTY per-instance cache) is created for EVERY physics
+/// transition, so each tick re-built every cell handle the flood touched;
+/// this cache keeps `get_visible` results across transitions.
+///
+/// Validity is keyed by [`SpatialScene::collision_cache_key`] `(scene_id,
+/// rev)`: `rev` bumps on every mutation of a collision-geometry table
+/// (landblock stream in/out, cell bake, terrain load) and `scene_id` is
+/// unique per scene instance per thread, so a key mismatch clears the whole
+/// map. Entries store `Option<...>` — a cached `None` ("cell not resident")
+/// is also correct until the next geometry mutation bumps `rev`.
+///
+/// Thread-local (not global) because the handles are `Rc` and wasm is
+/// single-threaded; native `cargo test` gives each test its own thread AND
+/// each scene its own `scene_id`, so tests cannot cross-contaminate.
+type CellHandleMap = HashMap<u32, Option<Rc<dyn CObjCell>>>;
+
+thread_local! {
+    static CELL_HANDLE_CACHE: RefCell<(u64, u64, CellHandleMap)> =
+        RefCell::new((0, 0, HashMap::new()));
+}
+
+/// `CellWorld` adapter over a borrowed [`SpatialScene`]. `get_visible` serves
+/// built `Rc<dyn CObjCell>` handles from the persistent [`CELL_HANDLE_CACHE`]
+/// (valid across transitions until the scene's collision geometry changes).
 pub struct SceneWorld<'a> {
     scene: &'a SpatialScene,
-    cache: RefCell<HashMap<u32, Option<Rc<dyn CObjCell>>>>,
 }
 
 impl<'a> SceneWorld<'a> {
     pub fn new(scene: &'a SpatialScene) -> Self {
-        Self {
-            scene,
-            cache: RefCell::new(HashMap::new()),
-        }
+        Self { scene }
     }
 
     /// Build the `CObjCell` handle for `cell_id`, or `None` when the cell is not
-    /// resident (no physics BSP and not in the portal graph). The handle owns a
-    /// CLONE of the cell's physics BSP (`'static` requirement).
+    /// resident (no physics BSP and not in the portal graph). The handle holds
+    /// `Arc`s sharing the scene's BSP data (`'static` requirement — the handle
+    /// owns refcounts, not borrows).
     fn build_cell(&self, cell_id: u32) -> Option<Rc<dyn CObjCell>> {
         self.build_cell_inner(cell_id, MAX_PORTAL_HOPS)
     }
@@ -557,7 +583,7 @@ impl<'a> SceneWorld<'a> {
         // world frame (non-Euclidean-safe) AND its cell-membership BSP, which
         // `find_transit_cells` uses to gate the flood (sphere-vs-cell). Resolving
         // neighbours at `hops - 1` lets the flood reach multi-hop transit cells.
-        let resolved_neighbours: Vec<(u32, ObjCellHandle, Option<CellMembership>)> = if hops > 0 {
+        let resolved_neighbours: Vec<(u32, ObjCellHandle, Option<Arc<CellMembership>>)> = if hops > 0 {
             portal_neighbours
                 .iter()
                 .filter_map(|&nb| {
@@ -597,15 +623,39 @@ impl CellWorld for SceneWorld<'_> {
     /// driver's `insert_into_cell(check_cell)` collides the player's CURRENT
     /// outdoor cell against its terrain (Phase D / WS3). Cached either way.
     fn get_visible(&self, cell_id: u32) -> Option<ObjCellHandle> {
-        if let Some(cached) = self.cache.borrow().get(&cell_id) {
-            return cached.clone();
+        // PERF Fix 2 (2026-07-23): consult the PERSISTENT thread-local cache,
+        // keyed by the scene's (instance, revision) stamp. Borrows are scoped
+        // so the (cache-miss) build below never holds the RefCell.
+        let key = self.scene.collision_cache_key();
+        let cached: Option<Option<ObjCellHandle>> = CELL_HANDLE_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if (c.0, c.1) != key {
+                // Different scene instance or mutated collision geometry:
+                // every cached handle (including cached `None`s) is suspect.
+                c.0 = key.0;
+                c.1 = key.1;
+                c.2.clear();
+                return None;
+            }
+            c.2.get(&cell_id).cloned()
+        });
+        if let Some(hit) = cached {
+            return hit;
         }
         let built = if (cell_id & 0xFFFF) >= 0x100 {
             self.build_cell(cell_id)
         } else {
             self.scene.get_landcell(cell_id)
         };
-        self.cache.borrow_mut().insert(cell_id, built.clone());
+        CELL_HANDLE_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            // Only store under the key we validated above (defensive: the
+            // build path cannot mutate the scene, but keep the invariant
+            // explicit).
+            if (c.0, c.1) == key {
+                c.2.insert(cell_id, built.clone());
+            }
+        });
         built
     }
 
@@ -4998,5 +5048,95 @@ mod ws1_outdoor_seam {
         // (0x100..=0xFFFD) cell → cell_in_range false → None.
         let mut loc = Vector3::new(12.0, 12.0, 0.0);
         assert!(scene.adjust_to_outside(0x1010_0000, &mut loc).is_none());
+    }
+}
+
+// ─── PERF Fix 1+2 (2026-07-23): shared-BSP handles + persistent cell cache ───
+#[cfg(test)]
+mod cell_cache_tests {
+    use super::*;
+    use holtburger_dat::physics::{BspLeaf, BspNode};
+
+    const CELL_ID: u32 = 0x0101_0100;
+
+    /// A one-leaf empty cell whose frame origin is `origin` — the origin is
+    /// observable through `CObjCell::pos()`, which lets the tests below see
+    /// WHICH registered BSP a served handle was built from.
+    fn bsp_at(origin: Vector3) -> CellPhysicsBsp {
+        CellPhysicsBsp {
+            tree: BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![1],
+            }),
+            polys: HashMap::new(),
+            origin,
+            orientation: Default::default(),
+            scale: 1.0,
+        }
+    }
+
+    /// Fix 2: the built handle persists across SceneWorld instances (the
+    /// per-transition rebuild storm is gone), IS invalidated by a geometry
+    /// mutation, and is never served to a cloned (different) scene instance.
+    #[test]
+    fn persistent_cache_hits_invalidates_and_isolates_clones() {
+        let mut scene = SpatialScene::new();
+        let origin_a = Vector3::new(10.0, 20.0, 30.0);
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_at(origin_a));
+
+        // Transition 1: build + cache.
+        let h1 = SceneWorld::new(&scene).get_visible(CELL_ID).expect("resident");
+        assert_eq!(h1.pos().frame.origin, origin_a);
+
+        // Transition 2 (fresh SceneWorld, unchanged scene): SAME handle — the
+        // persistent cache hit (Rc identity proves no rebuild).
+        let h2 = SceneWorld::new(&scene).get_visible(CELL_ID).expect("resident");
+        assert!(
+            Rc::ptr_eq(&h1, &h2),
+            "fresh SceneWorld over an unchanged scene must serve the cached handle"
+        );
+
+        // Geometry mutation (re-bake of the cell) bumps the revision: the next
+        // transition must see the NEW geometry, not the cached handle.
+        let origin_b = Vector3::new(-5.0, 7.0, 2.0);
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_at(origin_b));
+        let h3 = SceneWorld::new(&scene).get_visible(CELL_ID).expect("resident");
+        assert!(!Rc::ptr_eq(&h1, &h3), "mutation must invalidate the cache");
+        assert_eq!(h3.pos().frame.origin, origin_b);
+
+        // A cached miss (`None`) is also invalidated: an unseen cell becomes
+        // resident once its BSP is registered.
+        const OTHER: u32 = 0x0101_0101;
+        assert!(SceneWorld::new(&scene).get_visible(OTHER).is_none());
+        scene.insert_cell_physics_bsp(OTHER, bsp_at(origin_a));
+        assert!(SceneWorld::new(&scene).get_visible(OTHER).is_some());
+
+        // A CLONE is a different scene instance: it must not be served the
+        // original's cached handles (fresh scene_id ⇒ rebuild), and content
+        // must match its own tables.
+        let cloned = scene.clone();
+        let hc = SceneWorld::new(&cloned).get_visible(CELL_ID).expect("resident");
+        assert_eq!(hc.pos().frame.origin, origin_b);
+        // And the ORIGINAL scene rebuilds after the clone reset the
+        // thread-local key — still correct content.
+        let h4 = SceneWorld::new(&scene).get_visible(CELL_ID).expect("resident");
+        assert_eq!(h4.pos().frame.origin, origin_b);
+    }
+
+    /// Fix 1: the served handle SHARES the scene's BSP allocation (Arc
+    /// refcount bump), it does not deep-clone the tree.
+    #[test]
+    fn handle_shares_bsp_via_arc_not_deep_clone() {
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_at(Vector3::zero()));
+        let stored = scene.cell_physics_bsp(CELL_ID).expect("stored").clone();
+        let base = Arc::strong_count(&stored);
+        let _h = SceneWorld::new(&scene).get_visible(CELL_ID).expect("resident");
+        assert!(
+            Arc::strong_count(&stored) > base,
+            "built cell must hold an Arc to the scene's BSP (share, not copy)"
+        );
     }
 }
