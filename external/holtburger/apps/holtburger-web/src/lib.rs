@@ -8591,7 +8591,7 @@ fn warn_surface_dep_unavailable(surface_did: u32, dep_kind: &str, dep_id: u32) {
     if dep_kind == "Surface record" {
         decode_diag_first_hop_miss(surface_did);
     } else {
-        DECODE_DIAG.with(|d| d.borrow_mut().dep_miss += 1);
+        decode_diag().dep_miss += 1;
     }
     // R-18: the shared JS fallback material is GREY 0x888888, not white —
     // pure white comes from a mapless/luminous material, a different class.
@@ -8630,15 +8630,21 @@ fn warn_surface_dep_unavailable(_surface_did: u32, _dep_kind: &str, _dep_id: u32
 // counters, and the last-N missing DIDs — including from inside the worker
 // via the bake_worker `datDecodeDiag` message.
 #[cfg(target_arch = "wasm32")]
-thread_local! {
-    static MISSING_SURFACES: std::cell::RefCell<std::collections::HashSet<u32>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+/// §2.2b (2026-07-24): was `thread_local!`. Per-pool-thread absence proofs
+/// would fragment — each thread re-attempts and re-warns for DIDs another
+/// already proved absent. Behaviour-neutral single-threaded.
+static MISSING_SURFACES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<u32>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+#[cfg(target_arch = "wasm32")]
+fn missing_surfaces() -> std::sync::MutexGuard<'static, std::collections::HashSet<u32>> {
+    MISSING_SURFACES.lock().unwrap_or_else(|e| e.into_inner())
 }
 #[cfg(target_arch = "wasm32")]
 fn surface_neg_cache_contains(did: u32) -> bool {
-    let hit = MISSING_SURFACES.with(|s| s.borrow().contains(&did));
+    let hit = missing_surfaces().contains(&did);
     if hit {
-        DECODE_DIAG.with(|d| d.borrow_mut().neg_cache_hits += 1);
+        decode_diag().neg_cache_hits += 1;
     }
     hit
 }
@@ -8651,23 +8657,26 @@ fn surface_neg_cache_insert(did: u32) {
     if is_tex_swap_alias(did) {
         return;
     }
-    MISSING_SURFACES.with(|s| {
-        if s.borrow_mut().insert(did) {
-            DECODE_DIAG.with(|d| d.borrow_mut().neg_cache_inserts += 1);
-        }
-    });
+    // Two locks, taken SEQUENTIALLY and never nested. Bound the insert to a
+    // `let` so the neg-cache guard is unambiguously released before the diag
+    // lock is taken — relying on if-condition temporary-drop order here would
+    // be a lock-ordering hazard hiding in a subtlety.
+    let newly_absent = missing_surfaces().insert(did);
+    if newly_absent {
+        decode_diag().neg_cache_inserts += 1;
+    }
 }
 /// Clear the whole memo. Shared by the wasm export and the
 /// `init_resource_source` re-init hook (global_source.rs). Returns the
 /// number of entries dropped.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn surface_neg_cache_clear_all() -> u32 {
-    MISSING_SURFACES.with(|s| {
-        let mut s = s.borrow_mut();
+    {
+        let mut s = missing_surfaces();
         let n = s.len() as u32;
         s.clear();
         n
-    })
+    }
 }
 
 /// Surgically un-poison surface DIDs from THIS wasm instance's negative
@@ -8676,10 +8685,10 @@ pub(crate) fn surface_neg_cache_clear_all() -> u32 {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn surface_neg_cache_remove(dids: Vec<u32>) -> u32 {
-    MISSING_SURFACES.with(|s| {
-        let mut s = s.borrow_mut();
+    {
+        let mut s = missing_surfaces();
         dids.iter().filter(|d| s.remove(d)).count() as u32
-    })
+    }
 }
 
 /// Drop every entry in THIS wasm instance's negative cache. Returns the
@@ -9396,27 +9405,35 @@ struct DecodeDiag {
 #[cfg(target_arch = "wasm32")]
 const DECODE_DIAG_RECENT_CAP: usize = 32;
 #[cfg(target_arch = "wasm32")]
-thread_local! {
-    static DECODE_DIAG: std::cell::RefCell<DecodeDiag> =
-        std::cell::RefCell::new(DecodeDiag::default());
+/// §2.2b (2026-07-24): was `thread_local!`. This is the MEASUREMENT surface —
+/// `dat_decode_diag()` feeds `decodeAmp` and the RSS canary, i.e. the handoff's
+/// own §3 validation gates. Per-pool-thread counters would make those gates
+/// report only the calling thread's traffic and silently UNDER-report, which is
+/// worse than no gate. Behaviour-neutral single-threaded.
+static DECODE_DIAG: std::sync::LazyLock<std::sync::Mutex<DecodeDiag>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(DecodeDiag::default()));
+
+#[cfg(target_arch = "wasm32")]
+fn decode_diag() -> std::sync::MutexGuard<'static, DecodeDiag> {
+    DECODE_DIAG.lock().unwrap_or_else(|e| e.into_inner())
 }
 #[cfg(target_arch = "wasm32")]
 fn decode_diag_first_hop_miss(did: u32) {
-    DECODE_DIAG.with(|d| {
-        let mut d = d.borrow_mut();
+    {
+        let mut d = decode_diag();
         d.first_hop_miss += 1;
         if d.recent_missing.len() == DECODE_DIAG_RECENT_CAP {
             d.recent_missing.pop_front();
         }
         d.recent_missing.push_back(did);
-    });
+    }
 }
 #[cfg(target_arch = "wasm32")]
 fn decode_diag_parse_fail() {
     if crate::prefetch::in_discovery_walk() {
         return; // discovery rounds re-run the walk; only final decodes count
     }
-    DECODE_DIAG.with(|d| d.borrow_mut().parse_fail += 1);
+    decode_diag().parse_fail += 1;
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn decode_diag_parse_fail() {}
@@ -9425,7 +9442,7 @@ fn decode_diag_decode_fail() {
     if crate::prefetch::in_discovery_walk() {
         return;
     }
-    DECODE_DIAG.with(|d| d.borrow_mut().decode_fail += 1);
+    decode_diag().decode_fail += 1;
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn decode_diag_decode_fail() {}
@@ -9435,11 +9452,11 @@ fn decode_diag_decode_fail() {}
 /// included: counting the walk's re-decodes is the point of the canary).
 #[cfg(target_arch = "wasm32")]
 fn decode_diag_surface_decoded(did: u32) {
-    DECODE_DIAG.with(|d| {
-        let mut d = d.borrow_mut();
+    {
+        let mut d = decode_diag();
         d.surface_decode_total += 1;
         d.surface_decode_dids.insert(did);
-    });
+    }
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn decode_diag_surface_decoded(_did: u32) {}
@@ -9451,12 +9468,12 @@ fn decode_diag_surface_decoded(_did: u32) {}
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn dat_decode_diag() -> String {
-    let (size, entries) = MISSING_SURFACES.with(|s| {
-        let s = s.borrow();
+    let (size, entries) = {
+        let s = missing_surfaces();
         let mut v: Vec<u32> = s.iter().copied().collect();
         v.sort_unstable();
         (s.len() as u32, v)
-    });
+    };
     // S14 additive fields (B1 / G2 / G3 / 5b canary). All probes parse by
     // name — existing fields keep their exact names and positions.
     let (
@@ -9478,8 +9495,8 @@ pub fn dat_decode_diag() -> String {
             .collect::<Vec<_>>()
             .join(",")
     });
-    DECODE_DIAG.with(|d| {
-        let d = d.borrow();
+    {
+        let d = decode_diag();
         let hex_list = |ids: &mut dyn Iterator<Item = u32>| {
             ids.map(|id| format!("\"0x{id:08X}\""))
                 .collect::<Vec<_>>()
@@ -9520,7 +9537,7 @@ pub fn dat_decode_diag() -> String {
             hm_hist,
             wasm_memory_bytes(),
         )
-    })
+    }
 }
 
 // --- P2↔P3 ABI (net-fixwave 2026-07-10): call-level decode audit -----------
@@ -9718,7 +9735,7 @@ mod surface_neg_cache_gate_tests {
 /// Stamp the two ABI fields onto a call-level JS result object.
 #[cfg(target_arch = "wasm32")]
 fn stamp_surface_audit(target: &JsValue, decode_misses: u32, proven_absent: &[u32]) {
-    DECODE_DIAG.with(|d| d.borrow_mut().decode_misses_total += decode_misses);
+    decode_diag().decode_misses_total += decode_misses;
     let pa = js_sys::Array::new();
     for did in proven_absent {
         pa.push(&JsValue::from_str(&format!("0x{did:08X}")));
@@ -12302,7 +12319,7 @@ pub async fn fetch_entity_surfaces_pixels_batch(
         }
         payloads.push(Some(out));
     }
-    DECODE_DIAG.with(|d| d.borrow_mut().decode_misses_total += decode_misses);
+    decode_diag().decode_misses_total += decode_misses;
     Ok(EntitySurfacesPixelsBatch {
         payloads,
         decode_misses,

@@ -111,7 +111,9 @@ it is a **co-requisite**. Shipping §2.1 first produces a strictly worse client.
 | **2.1a** | **DONE** — `DecodeSource` (`src/decode_source.rs`): type-erased handle exposing only the sync `ResourceSource` surface; `global_source::decode_source()` is the sanctioned way across; both SAFETY comments rewritten to "owner-thread-confined". | **S** | ✅ landed, no behaviour change |
 | **2.1b** | **DONE** — `discovery_round()` in `prefetch.rs`: one round (walk + `take_misses`) behind one call, capturing no owner-thread state, returning owned `Send` misses. §2.1c replaces one line with a dispatch. | **M** | ✅ pure refactor, compile-verified only (see note) |
 | **2.2** | `MODEL_TRI_CACHE` **(done)** + `SURFACE_PIXEL_CACHE` → shared `LazyLock<RwLock<…>>`; `TEX_SWAP_ALIASES` → single locked registry. | **L** | ✅ ships safely alone, but buys nothing on its own — see §4 |
-| **2.1c** | Actually dispatch the walk to the pool; per-round results marshalled back. Needs the toolchain (§2.5) linked first. | **L** | ❌ requires 2.1a+2.1b+2.2 |
+| **2.2b** | **DONE** — `DECODE_DIAG` + `MISSING_SURFACES` → shared `LazyLock<Mutex<…>>`. Discovered while starting 2.1c: §2.2 covered the three CACHES but the walk path touches more `thread_local`s. | **M** | ✅ behaviour-neutral |
+| **2.2c** | `SURFACE_CACHE_ENABLED_OVERRIDE` + `PAL_SURFACE_CACHE_ENABLED_OVERRIDE` (12 sites) — JS-set A/B flags read on the decode hot path; per-thread means pool threads read DEFAULTS, so flags would be silently ineffective off-thread. Audit `ANIM_CACHE` (3) + `HM_BATCH_HIST` (2) too. | **S/M** | ✅ prerequisite for 2.1c |
+| **2.1c** | Actually dispatch the walk to the pool; per-round results marshalled back. Needs 2.2b+2.2c, `wasm-bindgen-rayon` (crates.io reachable, v1.3.0), pool init from JS in BOTH entry points, and 69 walk closures proven `Send`. | **L→XL** | ❌ blocked on the above |
 | **2.3** | Move the `spawn_local` net `recv_loop` off the main thread. | **M** | independent |
 
 Net: the handoff's "1 XL" is really **S + M + L + L**, and the L that must come first (2.2) is the
