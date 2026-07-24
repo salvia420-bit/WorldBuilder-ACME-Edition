@@ -617,7 +617,9 @@ async function attemptMetaPortalTouch(ctx, leg, tune) {
  * Never throws.
  */
 const RECALL_TELEPORT_MS = 20_000; // server-side cast + fade animation before the hop
-async function attemptRecallCast(ctx, leg, tune) {
+// Exported (2026-07-24): unwedge.js's last-resort extraction reuses this as
+// THE recall primitive rather than growing a second cast-and-await-teleport.
+export async function attemptRecallCast(ctx, leg, tune) {
   const { host } = ctx;
   const meta = leg && leg.meta;
   const spellId = (meta && meta.spellId) >>> 0;
@@ -1617,4 +1619,4 @@ export async function replayRoute(deps, legs, opts = {}) {
   }
 }
 
-export default { composeGoto, composeEgress, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, routeHasJumps, replayRoute };
+export default { composeGoto, composeEgress, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, routeHasJumps, replayRoute, attemptRecallCast };

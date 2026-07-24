@@ -22,10 +22,13 @@ const explorerBlock = director.split("EXPLORER_SYSTEM_PROMPT")[1] || "";
 for (const section of ["ACTIONS", "REPLY CONTRACT", "MEMORY", "GROUND TRUTH", "_catalog"]) {
   check(`explorer prompt carries ${section}`, explorerBlock.includes(section));
 }
-// 2026-07-20 operator re-aim: the explorer mission is building interiors +
-// verticality (commit e5fbc81a), not open-world discovery.
-check("explorer prompt has MISSION framing", explorerBlock.includes("MISSION — BUILDINGS, INSIDE AND UP"));
-check("explorer prompt scores interiors/verticality", explorerBlock.includes("every staircase climbed"));
+// 2026-07-24 generalization: the explorer mission is now CHART WHATEVER GROUND
+// YOU ARE ON — town buildings, open country, dungeons, portal hubs — not just
+// building interiors (which regressed into a portal-hub egress trap). Interiors
+// + verticality remain a rewarded part of coverage, just no longer the only score.
+check("explorer prompt has generalized MISSION framing", explorerBlock.includes("MISSION — CHART WHATEVER GROUND YOU ARE ON"));
+check("explorer prompt still scores interiors/verticality", explorerBlock.includes("verticality counts"));
+check("explorer prompt is location-agnostic (no home to return to)", explorerBlock.includes("have no home to return to"));
 check("explorer prompt demotes combat/shopping", explorerBlock.includes("NOT goals"));
 check("explorer prompt forbids healing/vitals", explorerBlock.includes("NEVER heal"));
 check("explorer prompt has no survival section", !explorerBlock.includes("SURVIVAL FLOOR"));

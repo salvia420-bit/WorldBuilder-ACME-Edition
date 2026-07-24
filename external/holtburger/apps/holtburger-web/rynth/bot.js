@@ -23,14 +23,14 @@
 // static relative import resolves against this module's own URL, so it works
 // both from the served page and under file:// (node fixture tests) — the same
 // property the runtime `base` gives the dynamic sibling imports below.
-import { worldX, worldY, worldToOutdoorCell } from "./nav_frame.js";
+import { worldX, worldY, worldToOutdoorCell, normalizeLegWorldFrame } from "./nav_frame.js";
 
 export async function createGrindBot(sessionHandle, config = {}) {
   // Sibling-module base derived from THIS module's URL: identical to the
   // old hardcoded "/apps/holtburger-web/rynth" when served from the page,
   // and additionally resolves under file:// (node fixture tests).
   const base = new URL(".", import.meta.url).href.replace(/\/$/, "");
-  const [wh, cl, bl, ll, vt, kn, cc, rt] = await Promise.all([
+  const [wh, cl, bl, ll, vt, kn, cc, rt, uw] = await Promise.all([
     import(`${base}/webhost.js`),
     import(`${base}/combat_loop.js`),
     import(`${base}/buff_loop.js`),
@@ -39,6 +39,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
     import(`${base}/kernel.js`),
     import(`${base}/control_channel.js`),
     import(`${base}/router.js`),
+    import(`${base}/unwedge.js`),
   ]);
 
   const host = new wh.RynthWebHost(sessionHandle, config.hostOpts || {});
@@ -74,7 +75,18 @@ export async function createGrindBot(sessionHandle, config = {}) {
       : new ll.RynthLootLoop(host, { ...lootOpts, enabled: lootOpts.enabled ?? !isExplorer });
   const vitals = config.vitals === false ? null : new vt.RynthVitals(host, { thresholds: config.vitals || {} });
 
-  const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals });
+  // Wedge self-recovery reflex (unwedge.js, 2026-07-24) — general,
+  // location-agnostic: detects "movement commanded but the pose isn't
+  // translating" anywhere, retreats to a breadcrumb of recently-free poses,
+  // escalates to recall. DEFAULT ON (core recovery, not a behavior change
+  // for a healthy bot — it only ever acts once wedged); config.unwedge ===
+  // false disables, an object passes threshold overrides through.
+  const unwedge =
+    config.unwedge === false
+      ? null
+      : new uw.UnwedgeReflex(host, typeof config.unwedge === "object" && config.unwedge ? config.unwedge : {});
+
+  const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals, unwedge });
 
   // netBrain (D1 path A′): opt-in .NET-wasm brain slices behind the same
   // seam — config.netBrain ("shadow"|"on") wins over the ?netBrain URL flag;
@@ -102,6 +114,12 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // RynthRouter timing overrides through (tests / live tuning).
   const router = new rt.RynthRouter(host, config.router || {});
   host.onTick(() => router.tick());
+  // The unwedge reflex ticks off the HOST heartbeat, not the kernel tick —
+  // every mover (goto/egress/followRoute/travel/cruise) stops the kernel for
+  // the duration of its walk, which is exactly when a wedge happens; a
+  // kernel-driven reflex would be blind then. Registered AFTER the router's
+  // tick so detection reads this tick's router state.
+  if (unwedge) host.onTick(() => unwedge.tick());
 
   // Explore pressure (task #15, ?explorePressure=1 — index.html bot-param
   // block; exact-match opt-in, default OFF): today the bot is 100% statue
@@ -184,6 +202,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
     // bare router WALK/PORTAL left by travel() (which sets none of these
     // latches) is intentionally OVERRIDDEN a few lines down, not refused
     // ("last command wins over a raw travel()", B4 test).
+    if (unwedge && unwedge.active()) return { ok: false, error: "unwedge recovery active" };
     if (globalRouter.busy || composeActive || followBusy) return { ok: false, error: "goto already active" };
     // Last command wins over a raw travel() in progress.
     const rs = router.status.state;
@@ -260,6 +279,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // composeActive latch for the whole duration, last-command-wins over a raw
   // travel().
   const doEgress = async (opts) => {
+    if (unwedge && unwedge.active()) return { ok: false, error: "unwedge recovery active" };
     if ((globalRouter && globalRouter.busy) || composeActive || followBusy) {
       return { ok: false, error: "goto already active" };
     }
@@ -344,6 +364,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
       const cruiseOnly =
         explorePressure?.cruising?.() === true &&
         !(globalRouter && globalRouter.busy) && !composeActive && !followBusy &&
+        !(unwedge && unwedge.active()) &&
         (rs === "WALK" || rs === "PORTAL") &&
         !(loot && loot.state === "APPROACH");
       if (!cruiseOnly) return { ok: false, error: "goto active" };
@@ -456,6 +477,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
     vitals,
     router,
     globalRouter,
+    unwedge, // wedge self-recovery reflex (introspection/testing seam; null when config.unwedge === false)
     startedAt: Date.now(), // uptime anchor — ai/observe.js prefers bot.startedAt
     // One movement-claim predicate (P1 fix, 05 C1 / 17-SYNTHESIS §1 "Character
     // movement" #12): every OTHER actor that must yield while something else
@@ -472,6 +494,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
     // sets none of these latches) is intentionally overridden there, not
     // refused ("last command wins over a raw travel()", B4 test).
     movementClaimed: () => {
+      if (unwedge && unwedge.active()) return true; // wedge recovery owns the body until freed
       if (globalRouter && globalRouter.busy) return true;
       if (composeActive) return true;
       if (followBusy) return true;
@@ -491,6 +514,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
      *  goto() still cancels a raw travel in progress (last command wins,
      *  unchanged). Returns {ok}. */
     travel: (route) => {
+      if (unwedge && unwedge.active()) return { ok: false, error: "unwedge recovery active" };
       if ((globalRouter && globalRouter.busy) || composeActive || followBusy) {
         return { ok: false, error: "goto active" };
       }
@@ -556,6 +580,9 @@ export async function createGrindBot(sessionHandle, config = {}) {
     explorePressure.bot = bot;
     bot.explorePressure = explorePressure; // introspection/testing seam
   }
+  // Same capture-now-use-later binding as explorePressure: the reflex's
+  // tick() only fires off the host heartbeat, after this constructor body.
+  if (unwedge) unwedge.bot = bot;
 
   // AI director (rynth/ai/SPEC.md §Wiring) — opt-in by key presence or an
   // explicit config.ai object; config.ai === false skips even the key probe.
@@ -1450,6 +1477,12 @@ export class ExplorePressureController {
     let legs = null;
     try { legs = this.ir.toLegs(graph, path, { doorwayApproach: true }); } catch { legs = null; }
     if (!Array.isArray(legs) || !legs.length) return false;
+    // Indoor-leg frame fix (2026-07-24, Town Network no-walk wedge): issue
+    // legs in the normalized world frame (nav_frame.js — the goto_compose.js
+    // convention, live-proven in this dungeon). Raw EnvCell frames can carry
+    // cell-local coords outside [0,192) (Town Network y ≈ −70), the
+    // documented MoveToPosition "cell re-derivation garbage" class.
+    try { legs = legs.map(normalizeLegWorldFrame); } catch { /* keep raw legs */ }
     if (this._routeClaimed()) return true; // claimed mid-plan -> handled, no further rung
     if (legs.length > 1) {
       // Recovery-capable executor (WP-10, D5+D1): bot.followRoute

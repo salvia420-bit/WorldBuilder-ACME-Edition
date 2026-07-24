@@ -284,8 +284,15 @@ function makeHost() {
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
     const legs = bot.router.followed;
     check("cross-room use routes legs", r.ok && Array.isArray(legs) && legs.length === 2, JSON.stringify(legs));
-    check("route ends at the object's own position",
-      legs && legs[legs.length - 1].lb === 0x860201b0 && legs[legs.length - 1].x === 60 && legs[legs.length - 1].y === 50,
+    // 2026-07-24 Town-Network frame fix: legs are now world-frame NORMALIZED
+    // (nav_frame.normalizeLegWorldFrame — the goto_compose convention), so the
+    // final leg carries the containing landblock's outdoor cell id, not the
+    // raw EnvCell id. Assert the WORLD point (unchanged) + the normalized lb.
+    check("route ends at the object's own position (world frame)",
+      legs &&
+        ((legs[legs.length - 1].lb >>> 24) & 0xff) * 192 + legs[legs.length - 1].x === LBX + 60 &&
+        ((legs[legs.length - 1].lb >>> 16) & 0xff) * 192 + legs[legs.length - 1].y === LBY + 50 &&
+        (legs[legs.length - 1].lb & 0xffff) < 0x100,
       JSON.stringify(legs));
     check("first leg is the doorway midpoint", legs && legs[0].x === 55 && legs[0].y === 50, JSON.stringify(legs));
     check("walk tag carries routed()", String(r.result?.walk).startsWith("routed(2)+"), JSON.stringify(r.result));
@@ -374,9 +381,16 @@ function makeHost() {
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
     const legs = bot.router.followed;
     check("cross-LB use routes stitched legs", r.ok && Array.isArray(legs) && legs.length === 4, JSON.stringify(legs));
+    // 2026-07-24 Town-Network frame fix: normalized world frame (see the
+    // cross-room case above) — the target's landblock (0x87) still owns the
+    // final leg because the world point sits inside it.
     check(
       "cross-LB route ends at target pos in its OWN landblock frame",
-      legs && legs[legs.length - 1].lb === 0x87020100 && legs[legs.length - 1].x === 12 && legs[legs.length - 1].y === 50,
+      legs &&
+        ((legs[legs.length - 1].lb >>> 24) & 0xff) === 0x87 &&
+        ((legs[legs.length - 1].lb >>> 24) & 0xff) * 192 + legs[legs.length - 1].x === LBX2 + 12 &&
+        ((legs[legs.length - 1].lb >>> 16) & 0xff) * 192 + legs[legs.length - 1].y === LBY + 50 &&
+        (legs[legs.length - 1].lb & 0xffff) < 0x100,
       JSON.stringify(legs)
     );
     check(

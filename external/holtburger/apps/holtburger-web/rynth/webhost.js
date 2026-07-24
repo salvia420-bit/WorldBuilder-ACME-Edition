@@ -41,6 +41,14 @@ const CAPABILITY_CANDIDATES = {
   // `null` in that case and nav consumers fall back to the legacy
   // `objCellId===0` check.
   GetPlayerPoseCellResolved: ["getLocalPlayerPoseCellResolved"],
+  // Indoor-spawn fix (2026-07-23, Town Network no-walk wedge): the cell-scene
+  // snapshot's carried cell — the ONE accessor that stays correct when the
+  // raw pose's landblockId reads 0 (login/teleport straight into a dungeon
+  // where no good pose was ever seen, so the WP-3 shadow has nothing to
+  // retain — HANDOFF-surveyor-round2 §OPEN). Used by _tick() to heal
+  // snap.pose.objCellId so nav consumers (router worldXY frames, indoor
+  // classification, indoorLegsTo) don't run on a garbage lb-0 frame.
+  GetCurrentCellId: ["getCurrentCellId"],
   GetObjectName: ["objectName"],
   GetObjectWcid: ["objectWcid"],
   GetObjectState: ["objectPhysicsState"],
@@ -296,6 +304,20 @@ export class RynthWebHost {
       }
     };
     const pose = c("GetPlayerPose") || null;
+    // Indoor-spawn heal (2026-07-23, Town Network no-walk wedge): a raw pose
+    // with landblockId 0 means "no good cell was EVER seen" (the WP-3 shadow
+    // retains any prior good cell, so 0 here is the login/teleport-into-
+    // dungeon gap, not a transient). The coords are still the spawn cell's
+    // landblock-local frame, so pairing them with the cell-scene snapshot's
+    // carried cell (`getCurrentCellId` — server-truth, live-verified correct
+    // in the 0x00070178 wedge while the raw accessor carried nothing)
+    // reconstructs a correct pose. `cellResolved` below stays UNTOUCHED —
+    // this heals the frame, it does not fake the honest resolution signal.
+    let healedCell = 0;
+    if (pose && (pose.landblockId >>> 0) === 0) {
+      const cur = c("GetCurrentCellId");
+      if (typeof cur === "number" && (cur >>> 0) !== 0) healedCell = cur >>> 0;
+    }
     // C1 fix (rynth-review 07, 2026-07-23): `undefined` when the capability
     // is absent (stale pkg/) — normalized to `null` below so
     // `snap.pose.cellResolved` has exactly three JSON-stable states:
@@ -317,7 +339,7 @@ export class RynthWebHost {
       groundContainerId: c("GetGroundContainerId") ?? 0,
       pose: pose
         ? {
-            objCellId: pose.landblockId >>> 0,
+            objCellId: healedCell || (pose.landblockId >>> 0),
             x: pose.x,
             y: pose.y,
             z: pose.z,

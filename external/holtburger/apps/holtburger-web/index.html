@@ -3605,7 +3605,29 @@
           } finally {
             p.free?.();
           }
-          if ((cellId & 0xffff) < 0x100) return; // outdoors — normal path owns it
+          // Indoor-spawn fix (2026-07-23, Town Network no-walk wedge): the raw
+          // pose accessor is EXACTLY the reader that breaks in the scenario
+          // this watchdog exists for — after a teleport-ish arrival (or a
+          // login straight into a dungeon) `getLocalPlayerPose().landblockId`
+          // can read 0, or retain the STALE pre-portal outdoor cell, for the
+          // whole session (HANDOFF-surveyor-round2-2026-07-21 §OPEN). The
+          // `< 0x100` gate below then returns forever, the EnvCell fetch never
+          // fires, the wasm scene gets no cell BSPs, and the movement pipeline
+          // stays on the geometry-less pre-bake fallback: the bot is frozen in
+          // the dungeon with every MoveToPosition a no-op (live 2026-07-23:
+          // Vendbot wedged at 0x00070178, `getCurrentCellId()` correct while
+          // the raw pose carried no cell). Fall back to the cell-scene
+          // snapshot (`getCurrentCellId` — server-truth carried cell, the one
+          // accessor verified correct in that wedge) whenever the raw pose
+          // does not read as an interior cell.
+          if ((cellId & 0xffff) < 0x100) {
+            let snapCell = 0;
+            try {
+              snapCell = typeof h.getCurrentCellId === "function" ? h.getCurrentCellId() >>> 0 : 0;
+            } catch (_) { snapCell = 0; }
+            if ((snapCell & 0xffff) < 0x100) return; // genuinely outdoors — normal path owns it
+            cellId = snapCell;
+          }
           const lbId = (cellId & 0xffff0000) >>> 0;
           if (
             cellContainersPopulatedLbs.has(lbId)
@@ -7385,11 +7407,37 @@
                 // trigger (which still covers in-world movement + teleports).
                 try {
                   const spawnPose = handle.getLocalPlayerPose?.();
-                  const spawnLb = (((spawnPose?.landblockId ?? 0) >>> 16) << 16) >>> 0;
+                  let spawnCell = (spawnPose?.landblockId ?? 0) >>> 0;
+                  // Indoor-spawn fix (2026-07-23, Town Network no-walk wedge):
+                  // the raw pose accessor can read cell 0 (or a stale
+                  // pre-teleport cell) right at EnteredWorld — precisely on a
+                  // login/respawn INTO a dungeon (HANDOFF-surveyor-round2
+                  // §OPEN "raw getLocalPlayerPose() cell stays 0x0"). The old
+                  // code then skipped the kick entirely, and a stationary solo
+                  // player gets no follow-up UpdatePosition to retrigger the
+                  // load: no EnvCells → no cell BSPs → movement pipeline
+                  // wedged on the pre-bake fallback. Fall back to the
+                  // cell-scene snapshot (`getCurrentCellId`, server-truth
+                  // carried cell) so the spawn landblock is always kicked.
+                  if (spawnCell === 0) {
+                    try {
+                      spawnCell = typeof handle.getCurrentCellId === "function"
+                        ? handle.getCurrentCellId() >>> 0 : 0;
+                    } catch (_) { /* keep 0 — the cell-watchdog retries */ }
+                  }
+                  const spawnLb = ((spawnCell >>> 16) << 16) >>> 0;
                   if (spawnLb !== 0) {
                     ensureTerrainAroundLandblock(spawnLb);
                     ensureBuildingAabbsAroundLandblock(spawnLb);
                     ensureCellContainersForLandblock(spawnLb);
+                    // Indoor spawn: also kick the 3D EnvCell mesh bake for the
+                    // dungeon we spawned inside (the position-update trigger
+                    // that normally owns this never fires for a stationary
+                    // spawn). Idempotent per-LB; optional-chained — the
+                    // cell-watchdog above covers a not-yet-built liveScene3d.
+                    if ((spawnCell & 0xffff) >= 0x100) {
+                      window.liveScene3d?.loadEnvCellsForLandblock?.(spawnLb);
+                    }
                     console.log(
                       `[spawn-kick] kicked ring populate for spawn landblock 0x${spawnLb.toString(16).padStart(8, "0")}`
                     );

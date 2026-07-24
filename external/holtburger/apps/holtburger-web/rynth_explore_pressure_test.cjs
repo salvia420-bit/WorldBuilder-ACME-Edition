@@ -772,17 +772,26 @@ const flush = () => new Promise((r) => setImmediate(r));
     check("BFS pathing: multi-leg travel issued via bot.travel, not a single MoveToPosition",
       bot._travelCalls.length === 1 && host._moves.length === 0,
       JSON.stringify({ travel: bot._travelCalls, moves: host._moves }));
-    check("BFS pathing: doorway pre-approach expands the 4-cell path to 7 waypoint legs ending at D",
-      bot._travelCalls[0]?.length === 7 && (bot._travelCalls[0][6]?.lb >>> 0) === D,
-      JSON.stringify(bot._travelCalls[0]));
+    // 2026-07-24 Town-Network frame fix: _walkGraphPath legs are now
+    // world-frame NORMALIZED (nav_frame.normalizeLegWorldFrame — the
+    // goto_compose convention), so legs carry the CONTAINING landblock's
+    // outdoor cell id + in-range locals rather than the raw destination
+    // EnvCell stamp. Assert the WORLD points (unchanged) instead.
+    {
+      const l6 = bot._travelCalls[0]?.[6];
+      const worldX6 = l6 ? l6.x + ((l6.lb >>> 24) & 0xff) * 192 : NaN;
+      check("BFS pathing: doorway pre-approach expands the 4-cell path to 7 waypoint legs ending at D's centre",
+        bot._travelCalls[0]?.length === 7 && Math.abs(worldX6 - 72) < 0.01,
+        JSON.stringify(bot._travelCalls[0]));
+    }
     // The first leg is the 30% A->B line-up point (world x = 0 + 24*0.3 = 7.2)
-    // stamped with the DESTINATION cell B — proof the doorway waypoints are
-    // present, not just the raw cell centres. Reconstruct world x from the lb.
+    // — proof the doorway waypoints are present, not just the raw cell
+    // centres. Reconstruct world x from the (normalized, outdoor-bucketed) lb.
     {
       const l0 = bot._travelCalls[0]?.[0];
       const worldX0 = l0 ? l0.x + ((l0.lb >>> 24) & 0xff) * 192 : NaN;
-      check("BFS pathing: first leg is the 30% pre-approach point stamped with destination B",
-        (l0?.lb >>> 0) === B && Math.abs(worldX0 - 7.2) < 0.01, `lb=${l0?.lb?.toString(16)}, worldX=${worldX0}`);
+      check("BFS pathing: first leg is the 30% pre-approach point (normalized frame)",
+        ((l0?.lb ?? 0) & 0xffff) < 0x100 && Math.abs(worldX0 - 7.2) < 0.01, `lb=${l0?.lb?.toString(16)}, worldX=${worldX0}`);
     }
     check("BFS pathing: journal mentions the multi-leg route", bot._notes[0].text.includes("leg route"));
   }
@@ -866,12 +875,17 @@ const flush = () => new Promise((r) => setImmediate(r));
       legs.length === 5, JSON.stringify(legs));
     // First leg = the 30% A->B line-up point (world x = 0 + 24*0.3 = 7.2),
     // stamped with the DESTINATION cell B, reconstructed from the lb offset.
+    // 2026-07-24 Town-Network frame fix: legs are world-frame normalized (see
+    // the BFS-pathing case above) — assert world points, not EnvCell stamps.
     const firstWorldX = legs[0] ? legs[0].x + ((legs[0].lb >>> 24) & 0xff) * 192 : NaN;
-    check("WP-10 doorway pre-approach: first leg is the 30% line-up point stamped with destination B",
-      (legs[0]?.lb >>> 0) === B && Math.abs(firstWorldX - 7.2) < 0.01,
+    check("WP-10 doorway pre-approach: first leg is the 30% line-up point (normalized frame)",
+      ((legs[0]?.lb ?? 0) & 0xffff) < 0x100 && Math.abs(firstWorldX - 7.2) < 0.01,
       `lb=${legs[0]?.lb?.toString(16)}, worldX=${firstWorldX}`);
-    check("WP-10 doorway pre-approach: final leg lands on the frontier cell C",
-      (legs[legs.length - 1]?.lb >>> 0) === C);
+    const lastWorldX = legs.length
+      ? legs[legs.length - 1].x + ((legs[legs.length - 1].lb >>> 24) & 0xff) * 192
+      : NaN;
+    check("WP-10 doorway pre-approach: final leg lands on the frontier cell C's centre",
+      Math.abs(lastWorldX - 48) < 0.01, `worldX=${lastWorldX}`);
     check("WP-10 recovery: journal names the multi-leg route", bot._notes[0].text.includes("leg route"));
     check("WP-10 recovery: never touches InvokeChatParser", host._chatCalls.length === 0);
   }

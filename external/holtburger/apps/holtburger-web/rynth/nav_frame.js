@@ -63,3 +63,23 @@ export function worldToOutdoorCell(wx, wy, z = 0) {
   const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
   return { lb, x: lx, y: ly, z };
 }
+
+// ── router-leg world-frame normalization (goto_compose.js convention) ───────
+// Re-bucket a router leg ({lb,x,y,z,...}) to the landblock whose base actually
+// contains its world point — the sidecar WorldToLeg convention, and the
+// live-proven treatment for dungeon EnvCell frames whose cell-local coords sit
+// OUTSIDE [0,192) (live: Town Network 0x0007xxxx legs carry y ≈ −70; feeding
+// those raw to MoveToPosition is the "internal cell re-derivation garbage"
+// class goto_compose.js documents). goto_compose.js applies this to every
+// indoor leg it issues (portal-approach, egress, wedge-repath — all
+// live-proven in the Town Network); this shared copy lets the OTHER indoor leg
+// producers (ai/tools/world.js indoorLegsTo, bot.js _walkGraphPath) issue the
+// SAME frame instead of the raw EnvCell one. World-point identical (router.js
+// worldXY of the result equals worldXY of the input); extra leg fields
+// (portal/stitch/timeoutMs) are preserved by the spread.
+export function normalizeLegWorldFrame(leg) {
+  const wx = worldX(leg.lb >>> 0, leg.x);
+  const wy = worldY(leg.lb >>> 0, leg.y);
+  const cell = worldToOutdoorCell(wx, wy, leg.z);
+  return { ...leg, lb: cell.lb, x: cell.x, y: cell.y };
+}

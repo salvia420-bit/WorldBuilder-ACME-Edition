@@ -47,6 +47,14 @@ const FROZEN_MIN_OBSERVES = 2; // ≥2 accepted observes confirming the freeze (
 
 const DEFAULT_FRONTIER_MAX_RADIUS = 120; // tiles (~1440m) — a "sane radius"
 
+// Wedge-avoid set (2026-07-24, unwedge.js): world positions where the bot got
+// physically wedged against static geometry. frontier()/frontierChain() skip
+// candidate tiles inside an avoid radius so the explorer doesn't immediately
+// path back into the same furniture and re-wedge in a loop. Location-agnostic
+// by construction — positions only, never cell/landblock ids.
+const WEDGE_AVOID_RADIUS_M = 8;
+const WEDGE_AVOID_CAP = 32; // long-session hygiene (FIFO), same spirit as _seenPortals
+
 // town catchment radius (degrees) used by townFrontier()'s "has a visited tile"
 // test — coarse on purpose (townFrontier is an escalation-target picker, not a
 // precise boundary check).
@@ -196,6 +204,8 @@ export class ExploreMemory {
     // frontier candidate landing in one of these must never be offered as a
     // walkable outdoor target (it's an ocean-parked slot, not real terrain).
     this._dungeonLandblocks = new Set();
+    // Wedge-avoid set (unwedge.js markWedge) — [{wx,wy,r}], FIFO-capped.
+    this._wedgeAvoid = [];
 
     // Per-observe-cycle memo (C5-5) for the two derived queries whose cost or
     // consistency the reports flag: frontier() (an O(r) ring search) and the
@@ -397,6 +407,35 @@ export class ExploreMemory {
     return result;
   }
 
+  /**
+   * ADDITIVE (2026-07-24, unwedge.js — same additive tier as frontierChain/
+   * reset): record a world position where the bot got physically WEDGED
+   * against static geometry. frontier()/frontierChain() then skip candidate
+   * tiles within `radiusM` of it, so the explorer never immediately re-targets
+   * the wedge spot. Purely positional — no cell/landblock/content ids.
+   */
+  markWedge(wx, wy, radiusM = WEDGE_AVOID_RADIUS_M) {
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) return;
+    this._wedgeAvoid.push({ wx, wy, r: Number.isFinite(radiusM) && radiusM > 0 ? radiusM : WEDGE_AVOID_RADIUS_M });
+    if (this._wedgeAvoid.length > WEDGE_AVOID_CAP) this._wedgeAvoid.shift();
+    // The avoid set changed outside an observe() cycle — the per-cycle memo
+    // would otherwise keep serving a frontier that now sits inside the wedge.
+    this._frontierCache = null;
+    this._verdictCache = null;
+  }
+
+  /** Snapshot of the wedge-avoid set (introspection/tests). */
+  wedgeAvoids() {
+    return this._wedgeAvoid.slice();
+  }
+
+  _nearWedge(wx, wy) {
+    for (const w of this._wedgeAvoid) {
+      if (Math.hypot(wx - w.wx, wy - w.wy) <= w.r) return true;
+    }
+    return false;
+  }
+
   _computeFrontier(maxR) {
     const cur = this.current;
     if (!cur) return null;
@@ -426,6 +465,7 @@ export class ExploreMemory {
         const candLb = landblockOf(candLbRaw);
         if (restrictToLb != null && candLb !== restrictToLb) continue;
         if (restrictToLb == null && this._dungeonLandblocks.has(candLb)) continue;
+        if (this._nearWedge(wx, wy)) continue; // never re-offer a known wedge spot
         const dist = Math.hypot(wx - cur.worldX, wy - cur.worldY);
         if (!best || dist < best.dist) best = { worldX: wx, worldY: wy, dist };
       }
@@ -501,6 +541,7 @@ export class ExploreMemory {
           const candLb = landblockOf(worldToOutdoorCell(wxc, wyc, cur.z).lb);
           if (restrictToLb != null && candLb !== restrictToLb) continue;
           if (restrictToLb == null && this._dungeonLandblocks.has(candLb)) continue;
+          if (this._nearWedge(wxc, wyc)) continue; // never chain through a known wedge spot
           const d = Math.hypot(wxc - px, wyc - py);
           if (d > maxLegM) continue;
           if (!best || d < best.d) best = { worldX: wxc, worldY: wyc, d };

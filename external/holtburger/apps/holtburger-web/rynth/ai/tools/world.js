@@ -21,6 +21,15 @@ import {
   buildStitchedGraphFromWasm,
 } from "../../indoor_router.js";
 import { RUN_SPEED_MS } from "../../atlas.js";
+// Indoor-leg frame fix (2026-07-24, Town Network no-walk wedge): every indoor
+// leg producer must issue legs in the normalized world frame (the ONE copy,
+// nav_frame.js — the goto_compose.js convention). Dungeon EnvCell frames can
+// carry cell-local coords OUTSIDE [0,192) (Town Network 0x0007xxxx: y ≈ −70);
+// the raw frame is exactly what goto_compose.js documents as feeding
+// MoveToPosition "internal cell re-derivation garbage". goto_compose's own
+// paths (portal-approach / egress / wedge-repath) already normalize and are
+// live-proven in this dungeon; these approach() routes were the ones left raw.
+import { normalizeLegWorldFrame } from "../../nav_frame.js";
 
 const JOURNAL_CLIP = 800;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
@@ -177,7 +186,11 @@ async function indoorLegsTo(bot, guid) {
   const legs = toLegs(graph, path, { midpoints: true }).slice(1); // drop own cell centre
   legs.pop(); // target cell centre -> replaced by the object's actual position
   legs.push({ lb: tc, x: tp.x, y: tp.y, z: tp.z });
-  return legs.length ? legs : null;
+  // World-frame normalize (see the nav_frame import note): identical world
+  // points, but the lb/local pair MoveToPosition receives is re-bucketed to
+  // the containing landblock — required for dungeons whose EnvCell frames
+  // carry out-of-range locals (Town Network).
+  return legs.length ? legs.map(normalizeLegWorldFrame) : null;
 }
 
 /** One router.follow pass over `legs`. -> { tag, walked, retryable } */
@@ -338,7 +351,7 @@ async function enterLegsTo(bot, tc, tp) {
   const legs = [doorOutsidePoint(exitNode, insideRef), ...toLegs(graph, walkOrder, { midpoints: true })];
   legs.pop(); // target cell centre -> the object's actual position
   legs.push({ lb: tc, x: tp.x, y: tp.y, z: tp.z });
-  return legs;
+  return legs.map(normalizeLegWorldFrame); // world-frame normalize (nav_frame note)
 }
 
 /** INDOOR player -> OUTDOOR target: interior path to exit cell, door-outside point, target. */
@@ -360,7 +373,7 @@ async function leaveLegsTo(bot, pc, pose, tp) {
   const legs = toLegs(graph, exit.path, { midpoints: true }).slice(1); // drop own cell centre
   legs.push(doorOutsidePoint(exitNode, insideRef));
   legs.push({ lb: tp.objCellId >>> 0, x: tp.x, y: tp.y, z: tp.z });
-  return legs;
+  return legs.map(normalizeLegWorldFrame); // world-frame normalize (nav_frame note)
 }
 
 /** Cross-room leg walk when applicable; null tag when routing didn't engage. */

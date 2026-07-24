@@ -16,12 +16,13 @@
 // moment a threat appears (survival beats inventory).
 
 export class RynthBotKernel {
-  constructor(host, { combat, buff, loot, vitals }, opts = {}) {
+  constructor(host, { combat, buff, loot, vitals, unwedge }, opts = {}) {
     this.host = host;
     this.combat = combat;
     this.buff = buff;
     this.loot = loot;
     this.vitals = vitals; // B15/B16 vital-emergency policy (optional)
+    this.unwedge = unwedge; // wedge self-recovery reflex (unwedge.js, optional)
     this.log = opts.log || ((m) => console.log(`[kernel] ${m}`));
     this.action = "Idle"; // the B14 BotAction pin, observable
     this._running = false;
@@ -141,6 +142,21 @@ export class RynthBotKernel {
         }
         return;
       }
+    }
+
+    // Unwedge (wedge self-recovery, unwedge.js) — below Vitals (hard
+    // survival still wins the tick) and above every grind pin: while the
+    // reflex is actively extracting a physically wedged character, the
+    // kernel yields the whole tick. The reflex drives its own retreat off
+    // the host heartbeat; this yield just keeps combat/loot/buff from
+    // issuing competing movement mid-extraction.
+    if (this.unwedge && typeof this.unwedge.active === "function" && this.unwedge.active()) {
+      if (this.action !== "Unwedge") {
+        this.log(`${this.action} -> Unwedge`);
+        if (this.action === "Combat") this.host.StopStick();
+        this.action = "Unwedge";
+      }
+      return;
     }
 
     // Ownership pins (mid-transaction loops keep the tick)…
