@@ -95,6 +95,19 @@ const DEFAULT_RECALL_SPELLS = Object.freeze([
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Livelock escape (2026-07-24, stream-soak diagnosis): retreat-to-breadcrumb
+// FREES the body locally but the explorer immediately re-pursues the SAME
+// off-mesh frontier (a rooftop / town-center building / portal-only cell the
+// navmesh can't route to) and re-wedges a few metres away. Each retreat
+// "succeeds", so the trail never exhausts and the terminal recall never fires
+// — the bot livelocks in one cell for many minutes (live: ~20min at Shoushi
+// 0xDA55 during the 2026-07-24 hour soak). When we have FREED this many times
+// near the same spot inside the window WITHOUT escaping the area, skip retreat
+// and force the recall/teleport escalation immediately.
+const LIVELOCK_FREE_THRESHOLD = 3;      // frees near here within the window -> force recall
+const LIVELOCK_WINDOW_MS = 240_000;     // 4 min lookback
+const LIVELOCK_RADIUS_M = 40;           // "same area" ~= one outdoor landblock
+
 export class UnwedgeReflex {
   constructor(host, opts = {}) {
     this.host = host;
@@ -121,6 +134,18 @@ export class UnwedgeReflex {
     this.cooldownMs = opts.cooldownMs ?? COOLDOWN_MS;
     this.avoidRadiusM = opts.avoidRadiusM ?? AVOID_RADIUS_M;
     this.adminTeleFallback = opts.adminTeleFallback ?? true;
+    // Livelock escape — DEFAULT-ON with an explicit off escape (house footgun
+    // rule: only `=off|0|false` disables; absent === on). `?unwedgeLivelockRecall=off`.
+    this.livelockRecall = (() => {
+      if (opts.livelockRecall != null) return opts.livelockRecall !== false;
+      let raw = null;
+      try { raw = new URLSearchParams(globalThis.location?.search || "").get("unwedgeLivelockRecall"); } catch { raw = null; }
+      const v = (raw ?? "").toLowerCase();
+      return !(v === "off" || v === "0" || v === "false");
+    })();
+    this.livelockFreeThreshold = opts.livelockFreeThreshold ?? LIVELOCK_FREE_THRESHOLD;
+    this.livelockWindowMs = opts.livelockWindowMs ?? LIVELOCK_WINDOW_MS;
+    this.livelockRadiusM = opts.livelockRadiusM ?? LIVELOCK_RADIUS_M;
     this.recallSpells = Array.isArray(opts.recallSpells) ? opts.recallSpells : DEFAULT_RECALL_SPELLS;
     // attemptRecallCast tune (goto_compose.js buildTune field names); tests
     // shrink these so the recall path runs in milliseconds.
@@ -155,6 +180,8 @@ export class UnwedgeReflex {
     this.wedges = 0;
     this.freedCount = 0;
     this.recalls = 0;
+    this.livelockRecalls = 0;   // frees-without-escape that forced a recall
+    this._freedHistory = [];    // [{wx,wy,cell,at}] recent FREED positions (livelock detector)
     this.lastResult = null; // {ok, why, at}
   }
 
@@ -208,6 +235,7 @@ export class UnwedgeReflex {
     if (this._last && Math.hypot(wx - this._last.wx, wy - this._last.wy) >= this.teleportJumpM) {
       this._crumbs = [];
       this._fails = [];
+      this._freedHistory = []; // teleported clear — the livelock streak is broken
       this._anchor = { wx, wy };
       this._lastProgressAt = now;
       this._commandedAt = null;
@@ -332,6 +360,17 @@ export class UnwedgeReflex {
     return -1;
   }
 
+  // How many times we have been FREED near (wx,wy) inside the livelock window.
+  // Prunes the history to the window as a side effect.
+  _livelockCount(now, wx, wy) {
+    this._freedHistory = this._freedHistory.filter((f) => now - f.at <= this.livelockWindowMs);
+    let n = 0;
+    for (const f of this._freedHistory) {
+      if (Math.hypot(f.wx - wx, f.wy - wy) <= this.livelockRadiusM) n += 1;
+    }
+    return n;
+  }
+
   _begin(pose, wx, wy, why) {
     const now = this.now();
     this.wedges += 1;
@@ -348,6 +387,23 @@ export class UnwedgeReflex {
       this.bot?.router?.cancel?.();
     } catch { /* cancel is best-effort */ }
     this.log(`WEDGED: ${why} — beginning recovery (${this._crumbs.length}-crumb trail)`);
+    // Livelock guard: if retreat has already freed us this many times near here
+    // inside the window, the frontier we keep re-pursuing is off-mesh — another
+    // retreat just re-wedges. Skip it and force the recall/teleport escalation.
+    if (this.livelockRecall) {
+      const freedNear = this._livelockCount(now, wx, wy);
+      if (freedNear >= this.livelockFreeThreshold) {
+        this.livelockRecalls += 1;
+        this._freedHistory = []; // consume the streak so we don't re-trigger every wedge
+        this._journal(
+          `[unwedge] LIVELOCK: freed ${freedNear}× within ${Math.round(this.livelockWindowMs / 60000)}min near here ` +
+            `without escaping the area (off-mesh frontier) — forcing recall instead of another retreat`,
+        );
+        this.state = "RECALL";
+        this._startRecall();
+        return;
+      }
+    }
     this._journal(`[unwedge] WEDGED (${why}) — retreating to the last open breadcrumb`);
     const idx = this._pickCrumb(this._crumbs.length - 1);
     if (idx < 0) {
@@ -515,6 +571,9 @@ export class UnwedgeReflex {
 
   _finish(ok, why) {
     const now = this.now();
+    // Capture the wedge position BEFORE it is cleared below — the livelock
+    // detector keys on WHERE we kept getting freed.
+    const wpos = this._wedge || this._last || null;
     this.state = "MONITOR";
     this._retreat = null;
     this._wedge = null;
@@ -523,7 +582,14 @@ export class UnwedgeReflex {
     this._anchor = this._last ? { wx: this._last.wx, wy: this._last.wy } : null;
     this._lastProgressAt = now;
     this._cooldownUntil = now + this.cooldownMs;
-    if (ok) this.freedCount += 1;
+    if (ok) {
+      this.freedCount += 1;
+      if (wpos && Number.isFinite(wpos.wx) && Number.isFinite(wpos.wy)) {
+        this._freedHistory.push({ wx: wpos.wx, wy: wpos.wy, cell: wpos.cell, at: now });
+        // bound the buffer; the window filter in _livelockCount does the real pruning
+        if (this._freedHistory.length > 32) this._freedHistory.shift();
+      }
+    }
     this.lastResult = { ok, why, at: now };
     this.log(ok ? `freed — ${why}` : `recovery FAILED — ${why}`);
     this._journal(`[unwedge] ${ok ? "FREED" : "recovery FAILED"} — ${why}`);
@@ -543,6 +609,7 @@ export class UnwedgeReflex {
       wedges: this.wedges,
       freed: this.freedCount,
       recalls: this.recalls,
+      livelockRecalls: this.livelockRecalls,
       cooldownUntil: this._cooldownUntil,
       lastResult: this.lastResult,
     };

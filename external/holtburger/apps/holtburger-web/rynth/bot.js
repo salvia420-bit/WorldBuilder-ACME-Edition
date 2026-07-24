@@ -163,7 +163,36 @@ export async function createGrindBot(sessionHandle, config = {}) {
   let composeGoto = null; // outdoor<->indoor goto composition (goto_compose.js)
   if (config.nav) {
     const gr = await import(`${base}/global_router.js`);
-    globalRouter = new gr.GlobalRouter(host, { endpoint: config.nav.endpoint });
+    // Off-mesh frontier gate (2026-07-24, stream-soak diagnosis): when a plan
+    // comes back off-mesh (the navmesh can't route to the GOAL — a rooftop /
+    // building interior / portal-only cell), avoid-mark that goal so the
+    // explorer's frontier() stops re-offering it and grinding a straight-line
+    // stitch into a wall. Reuses the existing exploreMemory wedge-avoid set.
+    // DEFAULT-ON with an explicit off escape (house footgun rule).
+    let offMeshGate = true;
+    try {
+      const raw = (new URLSearchParams(globalThis.location?.search || "").get("offMeshFrontierGate") || "").toLowerCase();
+      offMeshGate = !(raw === "off" || raw === "0" || raw === "false");
+    } catch { offMeshGate = true; }
+    let _lastOffMeshMark = null; // {wx,wy} — light dedupe so one goal isn't re-marked every replan
+    const onPlan = offMeshGate
+      ? ({ goalWorld, coverage, stitchedLegs, legCount }) => {
+          if (!goalWorld) return;
+          const em = bot?.ai?.extensions?.exploreMemory;
+          if (!em || typeof em.markWedge !== "function") return;
+          if (_lastOffMeshMark && Math.hypot(goalWorld.wx - _lastOffMeshMark.wx, goalWorld.wy - _lastOffMeshMark.wy) < 6) return;
+          _lastOffMeshMark = { wx: goalWorld.wx, wy: goalWorld.wy };
+          em.markWedge(goalWorld.wx, goalWorld.wy, 10);
+          try {
+            bot?.ai?.journal?.add?.(
+              "note",
+              `[offmesh] frontier goal is off the navmesh (coverage=${coverage}, ${stitchedLegs}/${legCount} stitch) — ` +
+                `avoid-marked so it stops being re-picked`,
+            );
+          } catch { /* journal loss is not fatal */ }
+        }
+      : null;
+    globalRouter = new gr.GlobalRouter(host, { endpoint: config.nav.endpoint, onPlan });
     composeGoto = gcMod.composeGoto;
   }
   // Concurrency guard for doGoto that also covers INDOOR-only compositions:

@@ -37,6 +37,22 @@
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8767";
 
+// Off-mesh classification (2026-07-24, stream-soak diagnosis): a plan is
+// "off-mesh" — the GOAL cannot be cleanly reached over the navmesh — when the
+// sidecar fell all the way back to a straight line, or a partial plan is mostly
+// stitch legs (straight-line fallback). A normal cross-landblock route carries
+// 1–2 seam stitches in a long detour plan (low ratio) and is NOT off-mesh; the
+// live wedge target at Shoushi was 54/55 stitch (0.98). Consumers use this to
+// stop re-picking a frontier the mesh can't route to (bot.js onPlan -> markWedge).
+const OFFMESH_STITCH_RATIO = 0.6;
+function classifyOffMesh({ coverage, stitchedLegs, partial, legCount }) {
+  if (coverage === "straight") return true;
+  if (partial === true && Number.isFinite(stitchedLegs) && legCount > 0) {
+    return stitchedLegs / legCount >= OFFMESH_STITCH_RATIO;
+  }
+  return false;
+}
+
 // World-frame (metres) from a full objCellId + landblock-local x,y — the ONE
 // copy now lives in nav_frame.js (avoid circles are placed at a blocked leg's
 // world pose). C3 Stage-0 dedup.
@@ -56,11 +72,16 @@ function plansIdentical(a, b, eps = 0.5) {
 
 export class GlobalRouter {
   /** @param host RynthWebHost (pose source); opts { endpoint, log } */
-  constructor(host, { endpoint = DEFAULT_ENDPOINT, log } = {}) {
+  constructor(host, { endpoint = DEFAULT_ENDPOINT, log, onPlan } = {}) {
     this.host = host;
     this.endpoint = endpoint.replace(/\/+$/, "");
     this.log = log || ((m) => console.log(`[gnav] ${m}`));
     this._active = false; // the one-goto-at-a-time busy latch
+    // Optional per-plan hook: called once per accepted plan with
+    // { to, offMesh, coverage, stitchedLegs, legCount, partial }. bot.js uses it
+    // to mark an off-mesh GOAL avoid so the explorer stops re-picking it. Never
+    // throws into the walk loop (guarded at the call site).
+    this.onPlan = typeof onPlan === "function" ? onPlan : null;
   }
 
   /** True while a goto() is planning/walking — a second goto() is refused. */
@@ -195,12 +216,29 @@ export class GlobalRouter {
       partial = typeof res.partial === "boolean" ? res.partial : null;
       // First-class plan state for the W3 mission line (bot.globalRouter.lastPlan);
       // refreshed on the initial plan AND every replan. Read defensively downstream.
+      const legCount = res.legs.length;
+      const offMesh = classifyOffMesh({ coverage, stitchedLegs, partial, legCount });
       this.lastPlan = {
-        estUnits, coverage, portalsUsed, stitchedLegs, partial,
-        legCount: res.legs.length,
+        estUnits, coverage, portalsUsed, stitchedLegs, partial, offMesh,
+        legCount,
         plannedAt: Date.now(),
         replan: replans,
       };
+      // Off-mesh feedback: tell the consumer (bot.js) so it can mark this GOAL
+      // avoid — the mesh can't route here, so re-picking it just re-wedges.
+      // Guarded: a throwing hook must never break the walk loop.
+      if (offMesh && this.onPlan) {
+        // Recover the goal's world (metres) position for a {lb,x,y} target so the
+        // consumer can avoid-mark it. A {ns,ew} target is a far-travel town goal,
+        // not a frontier tile — leave goalWorld null (nothing to mark).
+        let goalWorld = null;
+        if (to && Number.isFinite(to.lb) && Number.isFinite(to.x) && Number.isFinite(to.y)) {
+          const [gwx, gwy] = worldXY(to.lb >>> 0, to.x, to.y);
+          goalWorld = { wx: gwx, wy: gwy };
+        }
+        try { this.onPlan({ to, goalWorld, offMesh, coverage, stitchedLegs, legCount, partial }); }
+        catch (e) { this.log(`onPlan hook threw (ignored): ${(e && e.message) || e}`); }
+      }
       const straight = coverage === "straight";
       this.log(
         `route: ${res.legs.length} legs, ~${Math.round(res.estUnits)}u, ` +
