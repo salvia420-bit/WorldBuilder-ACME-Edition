@@ -9584,17 +9584,30 @@ const SURFACE_BATCH_SPLIT_CHUNK: usize = 16;
 // can never enqueue a waiter (see `decode_admission.rs`), so every `admit()` at
 // the §2.3 call sites returns on the fast path and the slice is neutral BY
 // CONSTRUCTION — it only produces numbers. The host-supplied bound
-// (`set_decode_admission`, called from BOTH entry points per §2.5) is S4;
-// deliberately no config setter and no Rust-side URL flag here.
+// (per §2.5, supplied by BOTH entry points through JS globals) landed in S4,
+// below; there is still no Rust-side URL flag, by design.
 //
 // Shared (`LazyLock`), not `thread_local!`, for the same reason as
 // `HM_BATCH_HIST` above: this feeds `dat_decode_diag()`, and a per-thread half
 // of one measurement surface reads only the recording thread's jobs.
+// S4 (2026-07-25): the bound is now HOST-SUPPLIED, read lazily off this
+// instance's `js_sys::global()` at first use — see
+// `decode_admission::configured_decode_admission`. Absent `__hbDecodeMaxJobs`
+// ⇒ `new(usize::MAX, usize::MAX, 0)`, i.e. bit-for-bit the S1 gate, so the
+// default page is unchanged.
+//
+// ORDERING (why the lazy read is safe): the only touchers of this static are
+// `decode_admit` — reached exclusively from `fetch_*` exports, all of which
+// panic unless `init_resource_source` already ran — and `dat_decode_diag`.
+// Both hosts set the globals strictly before that point: `index.html` calls
+// `applyDecodeAdmission()` in the same pre-`init_resource_source` block as
+// `applyShardBudget`/`applyFetchConcurrencySplit`, and `bake_worker.js`
+// `handleInit` assigns them alongside `__hbShardBudgetBytes`, before
+// `init_resource_source` and before `ready = true` (its `datDecodeDiag`
+// handler refuses to run while `!ready`).
 #[cfg(target_arch = "wasm32")]
 static DECODE_ADMISSION: std::sync::LazyLock<decode_admission::DecodeAdmission> =
-    std::sync::LazyLock::new(|| {
-        decode_admission::DecodeAdmission::new(usize::MAX, usize::MAX, 0)
-    });
+    std::sync::LazyLock::new(decode_admission::configured_decode_admission);
 
 /// Take a decode lease in the caller's lane. Every §2.3 acquisition point
 /// funnels through here so the urgent flag is threaded, not re-derived.

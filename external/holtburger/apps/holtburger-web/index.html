@@ -1298,6 +1298,7 @@
         getBakeWorkerClient,
         applyFetchConcurrencySplit,
         applyShardBudget,
+        applyDecodeAdmission,
       } from "./scene3d/bake_worker_client.js";
       // keepaliveFix (2026-07-07): dedicated-worker heartbeat that keeps a
       // keepalive packet flowing even when the tab is hidden/occluded (main-
@@ -2277,6 +2278,21 @@
           );
         } catch (e) {
           console.warn("[A15] shard budget setup failed (non-fatal):", e);
+        }
+        // A15 §2 (a) / S4 (2026-07-25) — the decode-admission bound for THIS
+        // instance, and the worker's spec stashed for its `init` message. Must
+        // precede `init_resource_source`: the Rust gate's LazyLock reads these
+        // globals at first use, and every `fetch_*` is downstream of init.
+        // Unbounded unless `?decodeAdmission[Main|Worker]=` is authored.
+        try {
+          const adm = applyDecodeAdmission();
+          const fmt = (s) =>
+            s ? `${s.jobs} jobs / ${s.bytes ? (s.bytes / 1048576).toFixed(0) + " MiB" : "no byte cap"} / reserve ${s.reserve}` : "unbounded";
+          console.log(
+            `[A15] decode admission: main=${fmt(adm.main)} worker=${fmt(adm.worker)}`
+          );
+        } catch (e) {
+          console.warn("[A15] decode admission setup failed (non-fatal):", e);
         }
         try {
           const split = applyFetchConcurrencySplit();

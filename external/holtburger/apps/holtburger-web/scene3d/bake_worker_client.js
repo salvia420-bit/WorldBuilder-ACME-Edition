@@ -104,6 +104,106 @@ export function applyShardBudget(g = globalThis) {
   return { mb, bytes: g.__hbShardBudgetBytes ?? 0 };
 }
 
+// A15 §2 (a) decode admission — S4 host-supplied bound (2026-07-25).
+//
+// The Rust decode gate (`apps/holtburger-web/src/decode_admission.rs`) ships
+// UNBOUNDED; a host arms it per wasm INSTANCE through three globals read at the
+// gate's `LazyLock` init (`configured_decode_admission()`):
+//   __hbDecodeMaxJobs / __hbDecodeMaxBytes / __hbDecodeUrgentReserve
+// `__hbDecodeMaxJobs` is the arming switch — absent ⇒ pre-S4 behaviour exactly.
+//
+// Spec grammar (one token):  <jobs>[x<MB>][+<urgentReserve>]     e.g. 4x192+2
+//   jobs   concurrent decode leases (the hard guard)
+//   MB     estimated live decode bytes (the shaping guard; omitted ⇒ count-only)
+//   +res   slots reserved for the urgent lane, which the normal lane can never
+//          consume (§2.3 — a single-lane gate re-creates the FIFO starvation
+//          `prefetch_urgent` exists to fix). Clamped Rust-side to jobs-1.
+//
+// URL params, most specific wins:
+//   ?decodeAdmissionMain=<spec>    this page's wasm instance
+//   ?decodeAdmissionWorker=<spec>  the bake worker's instance
+//   ?decodeAdmission=<spec>        shorthand: WORKER takes the spec verbatim,
+//                                  MAIN takes half of each field (min 1 where
+//                                  the field was non-zero).
+// The asymmetry is §2.5: post-R-1 aliasSplit the worker carries the bulk
+// mesh/surface load and the main thread the alias residue, so a 50/50 split
+// starves the worker. `?decodeAdmission=4x192+2` therefore means worker 4x192+2,
+// main 2x96+1 — the design's recommended arm, in one token.
+//
+// FOOTGUN, handled here: `URLSearchParams` decodes a literal `+` in a query
+// string as a SPACE, so a hand-typed `?decodeAdmission=4x192+2` arrives as
+// "4x192 2" and would silently lose the urgent reserve. The grammar therefore
+// accepts either separator; `%2B` also works but nobody types that.
+const DECODE_SPEC_RE = /^(\d+)(?:[xX](\d+(?:\.\d+)?))?(?:[+ ](\d+))?$/;
+
+/** Parse one spec token. Returns null for absent/garbage (⇒ unbounded). */
+export function parseDecodeAdmissionSpec(raw) {
+  if (raw === null || raw === undefined) return null;
+  const m = DECODE_SPEC_RE.exec(String(raw).trim());
+  if (!m) return null;
+  const jobs = Number(m[1]);
+  if (!Number.isFinite(jobs) || jobs < 1) return null;
+  const mb = m[2] === undefined ? 0 : Number(m[2]);
+  const reserve = m[3] === undefined ? 0 : Number(m[3]);
+  return {
+    jobs: Math.floor(jobs),
+    // 0 ⇒ leave __hbDecodeMaxBytes unset ⇒ Rust's usize::MAX (count-only bound).
+    bytes: Number.isFinite(mb) && mb > 0 ? Math.floor(mb * 1024 * 1024) : 0,
+    reserve: Number.isFinite(reserve) && reserve > 0 ? Math.floor(reserve) : 0,
+  };
+}
+
+/** Halve a spec for the main thread (shorthand form). */
+function halveDecodeSpec(s) {
+  if (!s) return null;
+  const half = (v) => (v > 0 ? Math.max(1, Math.floor(v / 2)) : 0);
+  return { jobs: Math.max(1, Math.floor(s.jobs / 2)), bytes: half(s.bytes), reserve: half(s.reserve) };
+}
+
+/**
+ * Resolve the three params into `{main, worker}` specs (either may be null =
+ * unbounded). Pure — takes the query string, touches no globals.
+ */
+export function resolveDecodeAdmission(search = "") {
+  let both = null, main = null, worker = null;
+  try {
+    const p = new URLSearchParams(search || "");
+    both = parseDecodeAdmissionSpec(p.get("decodeAdmission"));
+    main = parseDecodeAdmissionSpec(p.get("decodeAdmissionMain"));
+    worker = parseDecodeAdmissionSpec(p.get("decodeAdmissionWorker"));
+  } catch (_) {
+    /* unbounded */
+  }
+  return {
+    main: main ?? halveDecodeSpec(both),
+    worker: worker ?? both,
+  };
+}
+
+/**
+ * Apply the MAIN thread's spec to `g` and return both halves; the worker's is
+ * forwarded in the `init` message (its `globalThis` is not the page's).
+ * MUST run before `init_resource_source` — see the ordering note in lib.rs.
+ */
+export function applyDecodeAdmission(g = globalThis) {
+  const cfg = resolveDecodeAdmission(g.location?.search || "");
+  const s = cfg.main;
+  if (s) {
+    g.__hbDecodeMaxJobs = s.jobs;
+    if (s.bytes > 0) g.__hbDecodeMaxBytes = s.bytes;
+    else delete g.__hbDecodeMaxBytes;
+    if (s.reserve > 0) g.__hbDecodeUrgentReserve = s.reserve;
+    else delete g.__hbDecodeUrgentReserve;
+  } else {
+    // Leave every global unset so Rust takes the unbounded S1 default.
+    delete g.__hbDecodeMaxJobs;
+    delete g.__hbDecodeMaxBytes;
+    delete g.__hbDecodeUrgentReserve;
+  }
+  g.__hbDecodeAdmissionWorker = cfg.worker || undefined;
+  return cfg;
+}
+
 export function applyFetchConcurrencySplit(g = globalThis) {
   let total = DEFAULT_FETCH_CONCURRENCY;
   try {
@@ -313,6 +413,10 @@ export class BakeWorkerClient {
       // cache would stay unbounded while the main thread's was capped. Same
       // per-instance value (see applyShardBudget); `undefined` → unbounded.
       shardBudgetBytes: globalThis.__hbShardBudgetBytes,
+      // A15 §2.5 (S4): the WORKER's own decode-admission spec — deliberately
+      // the larger half (it carries the bulk mesh/surface load). `undefined`
+      // → the worker leaves its globals unset → Rust's unbounded default.
+      decodeAdmission: globalThis.__hbDecodeAdmissionWorker,
     });
     return this._readyPromise;
   }

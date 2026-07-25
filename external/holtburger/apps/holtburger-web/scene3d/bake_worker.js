@@ -13,8 +13,8 @@
 // Protocol (postMessage):
 //   in : {type:'init', id, manifestUrl, sceneryBaseUrl,
 //              locationSearch, verifyShards?, fetchConcurrency?,
-//              shardBudgetBytes?}
-//        (the last three are the page's host flags — see handleInit)
+//              shardBudgetBytes?, decodeAdmission?:{jobs,bytes,reserve}}
+//        (the last four are the page's host flags — see handleInit)
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
 //        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...], urgent?}
@@ -70,6 +70,19 @@ async function handleInit(msg) {
   // `init_resource_source`, which sizes the cache once at connect.
   if (typeof msg.shardBudgetBytes === "number" && msg.shardBudgetBytes >= 1) {
     self.__hbShardBudgetBytes = msg.shardBudgetBytes;
+  }
+  // A15 §2.5 (S4): THIS instance's decode-admission bound (`?decodeAdmission*`,
+  // parsed page-side by `resolveDecodeAdmission`). Unset ⇒ Rust's unbounded
+  // default, i.e. the S1 gate. Must precede `init_resource_source`/any
+  // `fetch_*`, which is where the gate's LazyLock first reads these.
+  if (msg.decodeAdmission && typeof msg.decodeAdmission.jobs === "number") {
+    self.__hbDecodeMaxJobs = msg.decodeAdmission.jobs;
+    if (msg.decodeAdmission.bytes > 0) {
+      self.__hbDecodeMaxBytes = msg.decodeAdmission.bytes;
+    }
+    if (msg.decodeAdmission.reserve > 0) {
+      self.__hbDecodeUrgentReserve = msg.decodeAdmission.reserve;
+    }
   }
   // EXPERIMENT (threads-lite, 2026-07-24): when the main thread hands us its
   // compiled module + shared memory, initialise INTO that memory — this worker

@@ -324,6 +324,66 @@ impl DecodeLease {
     }
 }
 
+// --- A15 §2.5 (S4): host-supplied configuration --------------------------------
+//
+// The bound is NEVER a Rust-side URL flag (design §4 S0 hard constraint):
+// `js_location_search()` returns "" with no `window`, so a Rust-side read would
+// be silently unbounded in the bake worker — the exact defect-2/4 shape. The
+// host parses `?decodeAdmission*` JS-side and hands each instance its own
+// numbers through three globals, mirroring `__hbFetchConcurrency` /
+// `__hbShardBudgetBytes` (`manifest_source.rs::configured_shard_budget_bytes`):
+//
+//   globalThis.__hbDecodeMaxJobs        u32  ≥ 1   — absent ⇒ UNBOUNDED
+//   globalThis.__hbDecodeMaxBytes       f64  ≥ 1   — absent ⇒ usize::MAX
+//   globalThis.__hbDecodeUrgentReserve  u32  ≥ 1   — absent ⇒ 0
+//
+// `__hbDecodeMaxJobs` is the arming switch: with it absent the whole gate stays
+// at `(usize::MAX, usize::MAX, 0)`, which can never enqueue a waiter, so an
+// unauthored page is bit-for-bit the S1 behaviour.
+
+/// Pure resolution of the three raw JS values into `DecodeAdmission::new`
+/// arguments. Split out from the `js_sys` read so it is testable natively.
+pub fn config_from_raw(
+    jobs: Option<f64>,
+    bytes: Option<f64>,
+    reserve: Option<f64>,
+) -> (usize, usize, usize) {
+    let max_jobs = match jobs {
+        Some(n) if n >= 1.0 && n.is_finite() => n as usize,
+        // Not armed: byte/reserve values alone never bound anything, because a
+        // job larger than `max_bytes` is admitted when nothing is live.
+        _ => return (usize::MAX, usize::MAX, 0),
+    };
+    let max_bytes = match bytes {
+        Some(n) if n >= 1.0 && n.is_finite() => n as usize,
+        _ => usize::MAX,
+    };
+    let urgent_reserve = match reserve {
+        Some(n) if n >= 1.0 && n.is_finite() => n as usize,
+        _ => 0,
+    };
+    (max_jobs, max_bytes, urgent_reserve)
+}
+
+/// Read this instance's host-supplied bound off `js_sys::global()` — which in
+/// the bake worker is the WORKER's scope, so each instance gets its own budget
+/// (§2.5 (ii)). Called once, at the `DECODE_ADMISSION` `LazyLock` init.
+#[cfg(target_arch = "wasm32")]
+pub fn configured_decode_admission() -> DecodeAdmission {
+    let g = js_sys::global();
+    let num = |k: &str| {
+        js_sys::Reflect::get(g.as_ref(), &wasm_bindgen::JsValue::from_str(k))
+            .ok()
+            .and_then(|v| v.as_f64())
+    };
+    let (jobs, bytes, reserve) = config_from_raw(
+        num("__hbDecodeMaxJobs"),
+        num("__hbDecodeMaxBytes"),
+        num("__hbDecodeUrgentReserve"),
+    );
+    DecodeAdmission::new(jobs, bytes, reserve)
+}
+
 impl Drop for DecodeLease {
     fn drop(&mut self) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -517,5 +577,101 @@ mod tests {
         assert_eq!(s.max_jobs, 4);
         assert_eq!(s.max_bytes, 1024);
         assert_eq!(s.max_queue_ms, 0.0);
+    }
+
+    // --- S4: host-supplied config -------------------------------------------
+
+    #[test]
+    fn config_absent_jobs_is_unbounded_bit_for_bit_s1() {
+        // The arming switch is `__hbDecodeMaxJobs` ALONE. Bytes/reserve without
+        // it must not bound anything, or an unauthored page silently changes.
+        for raw in [
+            (None, None, None),
+            (None, Some(64.0 * 1048576.0), Some(2.0)),
+            (Some(0.0), Some(1024.0), Some(1.0)),
+            (Some(f64::NAN), None, None),
+            (Some(-4.0), None, None),
+        ] {
+            let (j, b, r) = config_from_raw(raw.0, raw.1, raw.2);
+            assert_eq!((j, b, r), (usize::MAX, usize::MAX, 0), "raw {raw:?}");
+        }
+        // …and the gate built from it is the S1 gate.
+        let (j, b, r) = config_from_raw(None, None, None);
+        let a = DecodeAdmission::new(j, b, r);
+        let mut held = Vec::new();
+        for _ in 0..64 {
+            held.push(block(a.admit(1 << 20)));
+        }
+        assert_eq!(a.stats().queued, 0);
+    }
+
+    #[test]
+    fn config_armed_values_reach_the_gate() {
+        let (j, b, r) = config_from_raw(Some(4.0), Some(192.0 * 1048576.0), Some(2.0));
+        assert_eq!((j, b, r), (4, 192 * 1048576, 2));
+        let s = DecodeAdmission::new(j, b, r).stats();
+        assert_eq!(s.max_jobs, 4);
+        assert_eq!(s.max_bytes, 192 * 1048576);
+
+        // Bytes omitted but jobs armed => count-only bound.
+        assert_eq!(
+            config_from_raw(Some(1.0), None, None),
+            (1, usize::MAX, 0),
+            "jobs alone is a legal (count-only) arming"
+        );
+        // Reserve is clamped to max_jobs-1 by `new` so the normal lane is never
+        // fully starved: 1x8MiB+1 (the Arm-T shape) keeps one usable slot.
+        let s = DecodeAdmission::new(1, 8 * 1048576, 1).stats();
+        assert_eq!(s.max_jobs, 1);
+    }
+
+    #[test]
+    fn urgent_reserve_accounting_under_a_bound() {
+        // Arm-B shape at small scale: 4 jobs, 2 reserved for urgent.
+        let a = DecodeAdmission::new(4, usize::MAX, 2);
+        let n0 = block(a.admit(10));
+        let _n1 = block(a.admit(10));
+        // Normal lane is capped at max_jobs - urgent_reserve = 2.
+        let mut n2 = Box::pin(a.admit(10));
+        assert!(poll_once(&mut n2).is_none(), "normal lane stops at 2 of 4");
+        assert_eq!(a.stats().queued, 1);
+
+        // Both reserved slots are still reachable by the urgent lane.
+        let u0 = block(a.admit_urgent(100));
+        let u1 = block(a.admit_urgent(100));
+        let s = a.stats();
+        assert_eq!(s.live_jobs, 4);
+        assert_eq!(s.live_bytes, 220);
+        assert_eq!(s.urgent_admits, 2);
+        assert_eq!(s.admits, 4);
+
+        // A third urgent job has nothing left and parks (the reserve is a
+        // reserve, not an exemption).
+        let mut u2 = Box::pin(a.admit_urgent(100));
+        assert!(poll_once(&mut u2).is_none());
+
+        // Freeing an URGENT slot hands off to the urgent waiter at the FRONT,
+        // never to the normal waiter parked earlier.
+        drop(u0);
+        let u2 = poll_once(&mut u2).expect("urgent waiter takes the freed urgent slot");
+        assert!(poll_once(&mut n2).is_none(), "normal still below the reserve line");
+
+        // Freeing a NORMAL slot is NOT enough: the normal lane's ceiling is
+        // `max_jobs - urgent_reserve` on TOTAL live jobs, so with two urgent
+        // jobs still running the normal waiter stays parked. That is the point
+        // of a reserve — urgent occupancy is never billed to the normal lane's
+        // budget, but it does consume the machine.
+        drop(n0);
+        assert_eq!(a.stats().live_jobs, 3);
+        assert!(poll_once(&mut n2).is_none(), "3 live >= the normal ceiling of 2");
+
+        // Drain the urgent lane and the normal waiter finally gets in.
+        drop((u1, u2));
+        let _n2 = poll_once(&mut n2).expect("normal lane re-opens once live drops below 2");
+        let s = a.stats();
+        assert_eq!(s.live_jobs, 2);
+        assert_eq!(s.urgent_admits, 3);
+        assert_eq!(s.peak_live_jobs, 4);
+        assert!(s.queued >= 2, "an armed gate queues: {}", s.queued);
     }
 }
