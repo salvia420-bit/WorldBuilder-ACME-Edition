@@ -308,17 +308,48 @@ surface DIDs ever seen** — precisely a quantity that grows with route length a
   `pushBuffer`), so there is no linear memory to be detached and the copy is pure waste —
   a cheap, independent follow-on.
 
-The step shape (flat, then 37× in a few stops) is the one part this does not explain on its
-own; a monotone retainer should ramp. Two readings, and one field distinguishes them:
+The step shape (flat, then 37× in a few stops) is the one part a monotone retainer does not
+explain on its own — but **the soak's own trap list already resolves it**:
+`RESULTS-s5-soak-2026-07-25.md` records *"`performance.memory.usedJSHeapSize` is coarsely
+quantized (identical readings for ~40 stops, then a jump) — treat it as a step detector, not a
+gauge."* A step detector over a monotone retainer produces exactly the observed trace. That
+makes H1 the leading reading, but it is still worth discriminating, and one field does it:
 
 | | reading | what `materialCache.materials.size` per stop does |
 |---|---|---|
-| **H1** | real monotone retention, under-reported by the sampler until a major-GC / heap-growth event exposed it | grows ~**linearly from stop 1**, long before the heap number moves ⇒ H1, and the fix is an LRU + `dispose()` on `MaterialCache` (a different lever from this branch) |
+| **H1** (leading) | real monotone retention, invisible until the quantized sampler stepped | grows ~**linearly from stop 1**, long before the heap number moves ⇒ H1, and the fix is an LRU + `dispose()` on `MaterialCache` (a different lever from this branch) |
 | **H2** | genuine late regime change — one stop introduces a new allocation class (EnvCell/dungeon-dense town, a retry storm, a per-frame allocation that only starts under some condition) | roughly **flat across the jump** ⇒ H1 refuted; bisect the route on the Timaru boundary |
 
 **Confirming signal for a future fix**: `jsHeapPeakMB` per stop staying flat across the whole
 62-POI route (no step, no monotone climb), with `materialCache.materials.size` bounded by
 whatever cap the fix installs — and time-to-first-renderer-death extending past the full route.
+
+### ⚠ Disagreement to settle before the next battery is interpreted
+
+`RESULTS-s5-soak-2026-07-25.md` disposition item 2 nominates **259dbd5a as "the primary lever
+against BOTH the age collapse and late deaths"**, with the falsifier *"after the handle-release
+fix, `jsHeapPeakMB` stays flat over a 40-stop session"*. **On the code, that falsifier will
+fire, and it should not be read as the fix being worthless.** The reasoning (§2 addendum):
+
+- a deferred `free()` retains the Rust `Box` in **wasm linear memory**, which
+  `performance.memory` does not count in any implementation; the JS wrapper is held **weakly**
+  by the FinalizationRegistry and was always collectible;
+- the gap was in the **bake worker**, whose wasm high-water the soak measured at 247–301 MB
+  (`maxWkr`) — three orders off 3.6 GB;
+- the soak's own s1 row says wasm-side *nothing moved* while the heap went 37×. A wasm-side fix
+  cannot explain a metric that moved while wasm did not.
+
+What 259dbd5a **does** predict, and how to score it fairly:
+
+| prediction | metric |
+|---|---|
+| lower worker wasm high-water | per-session max **worker** `wasmMemoryBytes` (§4 armF vs armM) |
+| less GC/finaliser work in the worker isolate — thousands of pending FinalizationRegistry entries per burst become zero | worker-side settle contribution / the age-collapse curve; this is the *only* channel by which it could touch the age collapse, and it is indirect |
+| **nothing** about main-thread `jsHeapPeakMB` | — |
+
+So: keep 259dbd5a in the validation battery, but score it on worker wasm memory, and keep the
+`MaterialCache` retention (H1) as the separate, still-unlanded candidate for the 3.6 GB kill.
+Bundling them would make both unfalsifiable.
 
 This is a **separate lever from `?bakeBatchMax`** and should not be bundled with it: batching
 bounds a transient in wasm linear memory; this is a retained set in the JS heap. Recommend it
