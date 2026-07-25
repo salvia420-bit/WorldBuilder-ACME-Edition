@@ -132,6 +132,46 @@ impl Drop for DiscoveryWalkGuard {
 /// block in [`run_walk_loop`].
 const PREFETCH_ROUND_TRIES: u32 = 3;
 
+/// §2.1b — ONE discovery round, extracted as a **relocatable unit**.
+///
+/// This is the entire poolable half of [`run_walk_loop`]: a synchronous walk
+/// against a `RecordingSource`, returning the records the walk missed. Per
+/// `SCOPE-2.1-fetch-decode-boundary-2026-07-24.md` §1b the pipeline is
+/// decode-as-DISCOVERY — round N's misses are round N+1's fetch list — so the
+/// thread boundary cannot be a single fetch-then-decode handoff. It has to be
+/// this unit, invoked once per round.
+///
+/// Deliberately captures NO owner-thread state, so §2.1c can dispatch it to a
+/// worker without touching its body:
+///
+/// - `source` is a plain `&dyn ResourceSource`. Today the driver passes the
+///   `ManifestResourceSource`; under the pool it will be a `DecodeSource`
+///   (§2.1a), which cannot name the `!Send` prefetch machinery.
+/// - the returned misses are OWNED `(String, u32)` pairs — `Send` data, ready
+///   to message back to the owner thread.
+/// - `RecordingSource`'s miss set is a `Mutex<HashSet<_>>`, already thread-safe.
+///
+/// `DiscoveryWalkGuard` stays `thread_local!` on purpose: it suppresses decode
+/// warnings *for the walk currently on this stack*, so per-thread depth is the
+/// correct semantics under a pool, not a §2.2-style bug.
+///
+/// Behaviour note: the driver used to build ONE `RecordingSource` outside the
+/// loop and drain it per round. A fresh recorder per round is equivalent —
+/// `take_misses` fully drains — and is what makes the unit self-contained.
+fn discovery_round<F>(source: &dyn ResourceSource, walk: &F) -> Vec<(String, u32)>
+where
+    F: Fn(&dyn ResourceSource) + ?Sized,
+{
+    let recorder = RecordingSource::new(source);
+    {
+        // Mark the walk as a discovery run so decode impls keep their
+        // per-failure console warns quiet (see `in_discovery_walk`).
+        let _discovery = DiscoveryWalkGuard::new();
+        walk(&recorder);
+    }
+    recorder.take_misses()
+}
+
 thread_local! {
     /// Process-global walk-dedup map. Wasm32 is single-threaded so
     /// `thread_local!` is the canonical "global state" pattern —
@@ -331,16 +371,11 @@ where
     }
     let inner: &ManifestResourceSource = source.as_ref();
     let inner_dyn: &dyn ResourceSource = inner;
-    let recorder = RecordingSource::new(inner_dyn);
     let mut prev_misses: Vec<(String, u32)> = Vec::new();
     for _round in 0..8 {
-        {
-            // Mark the walk as a discovery run so decode impls keep their
-            // per-failure console warns quiet (see `in_discovery_walk`).
-            let _discovery = DiscoveryWalkGuard::new();
-            walk(&recorder);
-        }
-        let misses = recorder.take_misses();
+        // §2.1b: the poolable half. Runs in-place today; §2.1c replaces this
+        // one line with a dispatch, and the driver below is unchanged.
+        let misses = discovery_round(inner_dyn, &walk);
         if misses.is_empty() {
             break;
         }
@@ -351,10 +386,7 @@ where
         // re-walking + re-prefetching the same keys. (The old `prev_total +
         // misses.len() == prev_total` guard was dead code: `misses` is
         // non-empty past the check above, so the sum always grew.)
-        let mut this_misses: Vec<(String, u32)> = misses
-            .iter()
-            .map(|(ns, id)| (ns.as_str().to_string(), *id))
-            .collect();
+        let mut this_misses: Vec<(String, u32)> = misses.clone();
         this_misses.sort();
         this_misses.dedup();
         if this_misses == prev_misses {

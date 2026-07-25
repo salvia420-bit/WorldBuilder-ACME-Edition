@@ -278,8 +278,18 @@ impl Transport for WsTransport {
             ));
         }
         let frame = frame::encode_frame(addr.port(), buf)?;
+        // wasm-threads (SAB): `send_with_u8_array` hands the socket a Uint8Array
+        // VIEW over wasm linear memory. Once that memory is shared, the view is
+        // SharedArrayBuffer-backed and the DOM rejects it outright —
+        // "Failed to execute 'send' on 'WebSocket': The provided ArrayBufferView
+        // value must not be shared." (measured 2026-07-24, threads-lite probe).
+        // Copy into a JS-heap array so the buffer handed out is never shared.
+        // Correct and cheap on the non-threaded path too: one memcpy of a
+        // <=MAX_PACKET_BYTES frame, on the outbound packet path only.
+        let js_frame = Uint8Array::new_with_length(frame.len() as u32);
+        js_frame.copy_from(&frame);
         self.ws
-            .send_with_u8_array(&frame)
+            .send_with_array_buffer_view(&js_frame)
             .map_err(|e| anyhow!("ws send: {}", jsval_string(&e)))?;
         Ok(buf.len())
     }

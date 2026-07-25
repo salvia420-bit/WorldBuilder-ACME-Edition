@@ -267,6 +267,14 @@ def die_loud(failures: list[str], root: Path) -> None:
     sys.exit(1)
 
 
+# Cross-origin isolation (--coi). SharedArrayBuffer — and therefore the
+# wasm-threads (SAB) work, HANDOFF-wasm-threads-SAB-2026-07-20 §2.4 — requires
+# the document be cross-origin isolated. Off by default: `require-corp` changes
+# how EVERY cross-origin subresource loads, so the daily loop keeps today's
+# behaviour until the threaded build actually needs it.
+COI = False
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Serve the external/holtburger/ tree with dev no-cache headers (the reason
     the old /tmp/nocache-server.py existed — Firefox/Chrome ES-module + wasm
@@ -301,6 +309,13 @@ class Handler(SimpleHTTPRequestHandler):
         # production proxy.cjs precedent (shards-only, 200-gated, same header).
         path = self.path.split("?", 1)[0]
         status = getattr(self, "_hb_status", 0)
+        if COI:
+            # Both headers are required — COOP alone does not isolate. Same-origin
+            # workers (bake_worker, net worker) inherit isolation; the wsbridge
+            # WebSocket is COEP-exempt. Cross-origin subresources must then supply
+            # CORP or pass a CORS check (jsdelivr importmap / Servers.xml).
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         if path.startswith("/dist/shards/") and 200 <= status < 300:
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         elif path.endswith((".js", ".mjs", ".wasm", ".bin", ".hba")) and not path.endswith("manifest.json"):
@@ -333,7 +348,13 @@ def main() -> None:
     ap.add_argument("--allow-missing", action="store_true", help="serve even if a baked layer is absent")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
     ap.add_argument("--bind", default="127.0.0.1")
+    ap.add_argument("--coi", action="store_true",
+                    help="send COOP/COEP cross-origin-isolation headers (required for "
+                         "SharedArrayBuffer / wasm threads; changes cross-origin loads)")
     args = ap.parse_args()
+
+    global COI
+    COI = args.coi
 
     root = canonical_root()
     ensure_dist_symlink(root, args.allow_missing)
@@ -383,6 +404,11 @@ def main() -> None:
     httpd = Srv((args.bind, args.port), Handler)
     url = f"http://{args.bind}:{args.port}/apps/holtburger-web/index.html"
     print(f"[serve] serving {HOLT_ROOT} (threaded, no-cache)\n[serve] open {url}", file=sys.stderr)
+    if COI:
+        print("[serve] --coi: COOP=same-origin COEP=require-corp (crossOriginIsolated).\n"
+              "[serve]   Use ?nosw=1 — SW-cached responses predate these headers and silently\n"
+              "[serve]   un-isolate the document (service-worker.js CONTENT_CACHE needs a bump).",
+              file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

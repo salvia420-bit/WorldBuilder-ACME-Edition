@@ -54,11 +54,15 @@ where
     map: RefCell<HashMap<K, DedupFuture<T, E>>>,
 }
 
-// The wasm-bindgen module that drives wasm32 use of this primitive
-// is single-threaded; the unsafe Send/Sync mirrors
-// `inflight::InflightMap`'s recipe — required to satisfy static
-// trait bounds (e.g. `ResourceSource: Send + Sync`) inherited from
-// upstream consumers without actually crossing threads.
+// SAFETY: OWNER-THREAD-CONFINED — mirrors `inflight::InflightMap`'s recipe
+// and its full SAFETY note (`crates/holtburger-resource-http/src/inflight.rs`).
+// The stored `Shared<LocalBoxFuture>` values are genuinely `!Send`; this impl
+// only satisfies static bounds inherited from upstream consumers.
+//
+// Sound because this map is reachable only from the prefetch driver on the
+// owner thread. Under wasm-threads (SAB, §2.1) worker threads get a
+// `DecodeSource` (`decode_source.rs`, §2.1a), which cannot name it. Breaking
+// that confinement is silently unsound — the compiler will not catch it.
 #[cfg(target_arch = "wasm32")]
 unsafe impl<K: Eq + Hash, T, E> Send for WalkDedupMapT<K, T, E> {}
 #[cfg(target_arch = "wasm32")]

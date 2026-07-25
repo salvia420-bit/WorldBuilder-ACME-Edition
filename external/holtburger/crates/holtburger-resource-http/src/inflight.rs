@@ -106,12 +106,24 @@ pub struct InflightMap<E: 'static> {
     inner: InflightInner<E>,
 }
 
-// SAFETY: wasm32 is single-threaded. The `Send + Sync` trait bounds
-// inherited from `ResourceSource: Send + Sync` are static-only — no
-// actual cross-thread access happens in a browser/Node wasm runtime.
-// The inner `JsFuture`/`Promise` types are `!Send` for this reason
-// but in our deployment they live and resolve on the single event
-// loop thread.
+// SAFETY: OWNER-THREAD-CONFINED. The inner `JsFuture`/`Promise` types are
+// genuinely `!Send` and cannot be made otherwise; this impl exists only to
+// satisfy the static `Send + Sync` bounds inherited from
+// `ResourceSource: Send + Sync`. It is sound because nothing ever touches this
+// map from another thread:
+//
+//   - Today: wasm32 is single-threaded, so there IS no other thread.
+//   - Under wasm-threads (SAB, §2.1): this map is reachable only through
+//     `ManifestResourceSource`'s inherent async methods (`prefetch`,
+//     `prefetch_urgent`, `connect`). Worker threads are handed a
+//     `DecodeSource` (`apps/holtburger-web/src/decode_source.rs`, §2.1a)
+//     instead — a type-erased handle exposing ONLY the synchronous
+//     `ResourceSource` accessors, through which this map cannot be named.
+//
+// IF THAT CHANGES, THIS BECOMES UNSOUND AND THE COMPILER WILL NOT SAY SO.
+// Do not hand an `Arc<ManifestResourceSource>` to a pool thread; do not drop
+// the last `Arc` to one off the owner thread (that would run this map's
+// destructor there). See `SCOPE-2.1-fetch-decode-boundary-2026-07-24.md` §1c.
 #[cfg(target_arch = "wasm32")]
 unsafe impl<E: 'static> Send for InflightInner<E> {}
 #[cfg(target_arch = "wasm32")]

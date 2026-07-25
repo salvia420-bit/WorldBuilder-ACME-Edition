@@ -194,9 +194,16 @@ export class BakeWorkerClient {
         return u;
       }
     };
+    // EXPERIMENT (threads-lite, 2026-07-24): hand the worker THIS instance's
+    // compiled module + shared memory so it initialises into the same linear
+    // memory instead of minting a second one. Set by index.html only under
+    // `?sharedWasm=on`; absent -> unchanged two-instance path.
+    const shared = globalThis.__hbSharedWasm || null;
     this._readyPromise = this._request("init", {
       manifestUrl: abs(this.manifestUrl),
       sceneryBaseUrl: abs(this.sceneryBaseUrl),
+      sharedModule: shared?.module ?? null,
+      sharedMemory: shared?.memory ?? null,
     });
     return this._readyPromise;
   }
