@@ -28,6 +28,7 @@
 // materials.js sees the same fields as on the main-thread path.
 
 import init, {
+  initSync,
   dat_decode_diag,
   fetch_model_meshes,
   fetch_surfaces_pixels,
@@ -46,8 +47,20 @@ import {
 let ready = false;
 
 async function handleInit(msg) {
-  // Instantiate the wasm module in this worker's context.
-  await init();
+  // EXPERIMENT (threads-lite, 2026-07-24): when the main thread hands us its
+  // compiled module + shared memory, initialise INTO that memory — this worker
+  // becomes a second thread of one wasm instance rather than a second instance.
+  // Absent -> the unchanged path below (own module, own memory).
+  if (msg.sharedModule && msg.sharedMemory) {
+    initSync({ module: msg.sharedModule, memory: msg.sharedMemory });
+    console.log(
+      "[threads-lite] worker initSync into shared memory; SAB:",
+      msg.sharedMemory.buffer instanceof SharedArrayBuffer,
+    );
+  } else {
+    // Instantiate the wasm module in this worker's context.
+    await init();
+  }
   // `init_resource_source` is async (fetches the manifest) and MUST precede
   // any `fetch_*` call — the wasm panics otherwise.
   await init_resource_source(msg.manifestUrl);

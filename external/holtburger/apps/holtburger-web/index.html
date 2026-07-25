@@ -2004,7 +2004,28 @@
         // dist/manifest.json. The user-visible status lets them tell
         // wasm-stuck from manifest-stuck.
         root.innerHTML = "<p class=\"hint\">Initializing wasm bundle (1.5 MB)…</p>";
-        await init();
+        // EXPERIMENT (threads-lite, 2026-07-24): `?sharedWasm=on` makes the
+        // bake worker JOIN this instance's linear memory instead of minting its
+        // own. Requires a threaded pkg (SCOPE-2.5b recipe) + COOP/COEP.
+        // Default OFF — absent/anything-else takes the unchanged path.
+        if (new URLSearchParams(window.location.search).get("sharedWasm") === "on") {
+          // The glue keeps its compiled module private, so compile it here and
+          // pass it in; `memory` comes back out of InitOutput, which avoids
+          // hardcoding the module's minimum page count.
+          const __hbWasmUrl = new URL(
+            "./pkg/holtburger_web_bg.wasm?v=netrev-20260709",
+            window.location.href,
+          );
+          const __hbModule = await WebAssembly.compileStreaming(fetch(__hbWasmUrl));
+          const __hbOut = await init({ module_or_path: __hbModule });
+          window.__hbSharedWasm = { module: __hbModule, memory: __hbOut.memory };
+          console.log(
+            "[threads-lite] main wasm init shared; memory.buffer is SAB:",
+            __hbOut.memory?.buffer instanceof SharedArrayBuffer,
+          );
+        } else {
+          await init();
+        }
 
         // Wasm provenance banner (net-review A15-F1): pkg/ is gitignored, so a
         // dev-profile wasm (~4x slower) can ship silently. Size is same-origin
