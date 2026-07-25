@@ -154,6 +154,23 @@ pub trait StaticResourceKey {
 pub trait ResourceSource: Send + Sync {
     fn get_file_by_key(&self, key: ResourceKey<'_>) -> Result<Vec<u8>>;
 
+    /// Shared-ownership read (A15 S2, design §3c). Semantically identical to
+    /// [`Self::get_file_by_key`] — same bytes, same errors — but a source that
+    /// already holds the record resident (e.g. the manifest shard cache) can
+    /// hand back a refcount bump instead of a full `Vec<u8>` copy. The walk
+    /// loop re-reads every record up to 9× per cold landblock, so the copies
+    /// this removes are the dominant transient-allocation term.
+    ///
+    /// The default is a copy, which keeps every impl compiling and is never
+    /// worse than calling `get_file_by_key` directly. **Wrappers must forward
+    /// explicitly**: an unforwarded wrapper silently falls back to this default
+    /// and re-introduces the copy with no error — the same quiet-degradation
+    /// trap documented on [`Self::key_known_absent`]. Guarded by
+    /// `get_file_shared_forwards_through_every_wrapper` in `apps/holtburger-web`.
+    fn get_file_shared(&self, key: ResourceKey<'_>) -> Result<std::sync::Arc<Vec<u8>>> {
+        Ok(std::sync::Arc::new(self.get_file_by_key(key)?))
+    }
+
     fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata>;
 
     fn has_namespace(&self, namespace: &str) -> bool;

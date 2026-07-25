@@ -60,7 +60,7 @@ impl DecodeSource {
     }
 }
 
-// Forwards ALL FIVE methods, including the two provided ones. `exists_by_key`
+// Forwards ALL SIX methods, including the three provided ones. `exists_by_key`
 // and `key_known_absent` have defaults, but concrete sources override them
 // (the trait docs for `key_known_absent` say "wrappers forward to their inner
 // source"), so relying on the defaults here would silently change behaviour —
@@ -69,6 +69,13 @@ impl DecodeSource {
 impl ResourceSource for DecodeSource {
     fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
         self.0.get_file_by_key(key)
+    }
+
+    /// A15 S2 forward. Without it this wrapper would fall back to the trait
+    /// default and re-copy every record the pool reads — silently, since the
+    /// default is correct, just slow.
+    fn get_file_shared(&self, key: ResourceKey<'_>) -> DatResult<Arc<Vec<u8>>> {
+        self.0.get_file_shared(key)
     }
 
     fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {

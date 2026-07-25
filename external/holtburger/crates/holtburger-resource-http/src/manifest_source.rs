@@ -275,7 +275,10 @@ pub struct V2Source {
     manifest: ManifestV2,
     boot: HbaReader<Vec<u8>>,
     catalogs: Arc<Mutex<HashMap<String, NamespaceCatalog>>>,
-    shards: Arc<Mutex<HashMap<OwnedKey, Vec<u8>>>>,
+    /// A15 S2: values are `Arc<Vec<u8>>` so [`ResourceSource::get_file_shared`]
+    /// hands out refcount bumps instead of full record copies. The map is
+    /// otherwise unchanged (still unbounded — see `cached_shard_bytes`).
+    shards: Arc<Mutex<HashMap<OwnedKey, Arc<Vec<u8>>>>>,
     base_url: String,
     /// F.35: in-flight URL-fetch dedup map. When N concurrent
     /// `prefetch(keys)` calls overlap on a shard URL or catalog URL,
@@ -411,6 +414,18 @@ impl ResourceSource for ManifestResourceSource {
         match self {
             Self::V1(s) => s.get_file_by_key(key),
             Self::V2(s) => s.get_file_by_key(key),
+        }
+    }
+
+    /// A15 S2 forward. V2 shares its cached `Arc`; **V1 deliberately falls back
+    /// to a copy** — `ManifestResourceSourceV1` is the deprecated 203 MB-JSON
+    /// path (see the `connect` warning), no shipped bake uses it, and its shard
+    /// map would need the same type change for zero live benefit. The V1 arm is
+    /// exactly the trait default, so it is never worse than pre-S2.
+    fn get_file_shared(&self, key: ResourceKey<'_>) -> DatResult<Arc<Vec<u8>>> {
+        match self {
+            Self::V1(s) => Ok(Arc::new(s.get_file_by_key(key)?)),
+            Self::V2(s) => s.get_file_shared(key),
         }
     }
 
@@ -768,7 +783,7 @@ impl V2Source {
                         }
                     }
                 }
-                cache.insert(task.key, bytes);
+                cache.insert(task.key, Arc::new(bytes));
             }
         }
         if !failed.is_empty() {
@@ -800,6 +815,9 @@ impl V2Source {
             .lock()
             .expect("shard cache mutex poisoned")
             .values()
+            // A15 S2: values are `Arc<Vec<u8>>`; `.len()` derefs through to the
+            // record length, so this still reports resident RECORD bytes (the
+            // `Arc` header is not counted, matching the pre-S2 number exactly).
             .map(|v| v.len())
             .sum()
     }
@@ -818,6 +836,8 @@ impl V2Source {
         }
     }
 
+    /// Legacy owned-bytes read. Kept byte-for-byte identical for every caller
+    /// that still wants a `Vec<u8>`; hot readers use [`Self::get_file_shared`].
     fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
         if let Ok(bytes) = self.boot.get_file_by_key(key) {
             return Ok(bytes);
@@ -828,7 +848,29 @@ impl V2Source {
             .expect("shard cache mutex poisoned")
             .get(&owned(key))
         {
-            return Ok(bytes.clone());
+            return Ok((**bytes).clone());
+        }
+        Err(DatError::Other(format!(
+            "ManifestResourceSource(v2): record not prefetched: {}:0x{:08X}; call prefetch() first",
+            key.namespace, key.file_id
+        )))
+    }
+
+    /// A15 S2 (design §3c) — the shared-ownership read. A cached shard costs
+    /// one refcount bump; the boot pack has no resident `Arc` to share (the
+    /// `HbaReader` copies out of its backing buffer), so that path allocates
+    /// exactly as it did before, no worse than the trait default.
+    fn get_file_shared(&self, key: ResourceKey<'_>) -> DatResult<Arc<Vec<u8>>> {
+        if let Ok(bytes) = self.boot.get_file_by_key(key) {
+            return Ok(Arc::new(bytes));
+        }
+        if let Some(bytes) = self
+            .shards
+            .lock()
+            .expect("shard cache mutex poisoned")
+            .get(&owned(key))
+        {
+            return Ok(Arc::clone(bytes));
         }
         Err(DatError::Other(format!(
             "ManifestResourceSource(v2): record not prefetched: {}:0x{:08X}; call prefetch() first",
@@ -919,64 +961,4 @@ fn hex_encode_16(bytes: &[u8; 16]) -> String {
     out
 }
 
-/// `ResourceSource` wrapper that records every key whose
-/// `get_file_by_key` call returns `Err`. Lets a caller run a
-/// best-effort sync walk against an under-hydrated source, collect
-/// every key the walk asked for and missed, prefetch them, and
-/// re-run the walk. Repeat until the miss set is empty.
-///
-/// Used by Phase 5.0b's `fetch_*` exports to drive iterative
-/// shard discovery without async-ifying every helper function in
-/// `apps/holtburger-web`. Phase 5.1's `dat-shard` boot-pack
-/// transitive walk uses the same pattern against `HbaReader`-backed
-/// sources where misses are permanent (then the recorded set tells
-/// the caller which records to skip rather than prefetch).
-pub struct RecordingSource<'a> {
-    inner: &'a (dyn ResourceSource + 'a),
-    misses: Mutex<HashSet<(String, u32)>>,
-}
-
-impl<'a> RecordingSource<'a> {
-    pub fn new(inner: &'a (dyn ResourceSource + 'a)) -> Self {
-        Self {
-            inner,
-            misses: Mutex::new(HashSet::new()),
-        }
-    }
-
-    /// Drain the recorded miss set, returning each
-    /// `(namespace, file_id)` pair the wrapped source returned
-    /// `Err` for since the last `take_misses` call.
-    pub fn take_misses(&self) -> Vec<(String, u32)> {
-        let mut guard = self.misses.lock().expect("recording-source mutex poisoned");
-        std::mem::take(&mut *guard).into_iter().collect()
-    }
-}
-
-impl<'a> ResourceSource for RecordingSource<'a> {
-    fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
-        match self.inner.get_file_by_key(key) {
-            Ok(b) => Ok(b),
-            Err(e) => {
-                self.misses
-                    .lock()
-                    .expect("recording-source mutex poisoned")
-                    .insert((key.namespace.to_owned(), key.file_id));
-                Err(e)
-            }
-        }
-    }
-
-    fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
-        self.inner.get_metadata_by_key(key)
-    }
-
-    fn has_namespace(&self, namespace: &str) -> bool {
-        self.inner.has_namespace(namespace)
-    }
-
-    fn key_known_absent(&self, key: ResourceKey<'_>) -> bool {
-        self.inner.key_known_absent(key)
-    }
-}
 

@@ -113,6 +113,12 @@ async-trait = { workspace = true }
 [dev-dependencies]
 holtburger-dat = { workspace = true }
 holtburger-common = { workspace = true }
+# A15 S2 (2026-07-24) — `get_file_shared_forwards_through_every_wrapper`
+# asserts Arc pointer identity through the WHOLE wrapper stack in one test,
+# and `RecordingSource` is one of the four wrappers. The wasm32 dep block
+# above already pulls this crate for the live build; this is the native-test
+# mirror (the crate builds for the host — its own `cargo test` does).
+holtburger-resource-http = { workspace = true }
 # Wave C.2 (2026-05-27) — native tests for `compute_{vital,skill}_*_impl`
 # need `holtburger_core::client::{attribute_info, vital_info, skill_info,
 # skill_formula, character_info}` available natively. The helpers are

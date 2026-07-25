@@ -8181,6 +8181,21 @@ impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
         }
         r
     }
+    /// A15 S2 forward — MUST count misses identically. The memo-completeness
+    /// gate above is what this wrapper exists for; a hot reader moved to the
+    /// shared path that stopped counting would let partial decodes poison
+    /// `MODEL_TRI_CACHE` forever (the triCount=0 portal-donut class).
+    fn get_file_shared(
+        &self,
+        key: holtburger_dat::ResourceKey<'_>,
+    ) -> holtburger_dat::Result<std::sync::Arc<Vec<u8>>> {
+        let r = self.inner.get_file_shared(key);
+        if r.is_err() {
+            self.misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        r
+    }
     fn get_metadata_by_key(
         &self,
         key: holtburger_dat::ResourceKey<'_>,
@@ -8189,6 +8204,140 @@ impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
     }
     fn has_namespace(&self, namespace: &str) -> bool {
         self.inner.has_namespace(namespace)
+    }
+}
+
+/// A15 S2 gate (design §3c). `get_file_shared` has a *correct* default — it
+/// copies — so a wrapper that forgets to forward degrades silently: right
+/// bytes, right errors, just the churn back. Nothing else in the tree can
+/// catch that. This asserts pointer identity end-to-end: the `Arc` the leaf
+/// source owns must be the *same allocation* the outermost wrapper hands back.
+///
+/// The leaf stands in for `V2Source`, the only real sharer (its shard map
+/// values are `Arc<Vec<u8>>`); `V2Source` itself needs a fetched manifest +
+/// boot pack to construct, so it is not natively instantiable here.
+///
+/// Negative-controlled 2026-07-24: each of the three forwards was deleted in
+/// turn and this test failed on exactly that wrapper —
+/// "DecodeSource must share, not copy" / "MissCountingSource must share, not
+/// copy" / "RecordingSource must share, not copy" — then restored.
+#[cfg(test)]
+mod a15_s2_shared_read_gate {
+    use holtburger_dat::{FileMetadata, ResourceKey, ResourceSource, Result as DatResult};
+    use std::sync::Arc;
+
+    struct SharingLeaf {
+        record: Arc<Vec<u8>>,
+    }
+
+    impl ResourceSource for SharingLeaf {
+        fn get_file_by_key(&self, _key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            Ok((*self.record).clone())
+        }
+        fn get_file_shared(&self, _key: ResourceKey<'_>) -> DatResult<Arc<Vec<u8>>> {
+            Ok(Arc::clone(&self.record))
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            Some(FileMetadata {
+                id: key.file_id,
+                size: self.record.len() as u32,
+                is_pruned: false,
+            })
+        }
+        fn has_namespace(&self, _namespace: &str) -> bool {
+            true
+        }
+    }
+
+    const KEY: ResourceKey<'static> = ResourceKey::new("eor/portal", 0x0600_0001);
+
+    fn shares(src: &dyn ResourceSource, expect: &Arc<Vec<u8>>) -> bool {
+        match src.get_file_shared(KEY) {
+            Ok(got) => Arc::ptr_eq(&got, expect),
+            Err(_) => false,
+        }
+    }
+
+    #[test]
+    fn get_file_shared_forwards_through_every_wrapper() {
+        let record = Arc::new(vec![0xAAu8; 4096]);
+        let leaf = SharingLeaf {
+            record: Arc::clone(&record),
+        };
+
+        // Leaf itself (the V2Source stand-in).
+        assert!(shares(&leaf, &record), "leaf stub must share");
+
+        // DecodeSource — the pool-facing type-erased handle.
+        let decode = crate::decode_source::DecodeSource::new(Arc::new(SharingLeaf {
+            record: Arc::clone(&record),
+        }));
+        assert!(
+            shares(&decode, &record),
+            "DecodeSource must share, not copy"
+        );
+
+        // MissCountingSource — must share AND still count misses.
+        let counting = super::MissCountingSource {
+            inner: &decode,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        assert!(
+            shares(&counting, &record),
+            "MissCountingSource must share, not copy"
+        );
+
+        // RecordingSource — must share AND still record misses.
+        let recording = holtburger_resource_http::RecordingSource::new(&counting);
+        assert!(
+            shares(&recording, &record),
+            "RecordingSource must share, not copy"
+        );
+
+        // Full stack, one call: leaf → DecodeSource → MissCounting → Recording.
+        let stacked = holtburger_resource_http::RecordingSource::new(&counting);
+        let got = stacked.get_file_shared(KEY).expect("stacked read");
+        assert!(
+            Arc::ptr_eq(&got, &record),
+            "the whole wrapper stack must pass one allocation through"
+        );
+        assert_eq!(&*got, &*record, "bytes must be unchanged");
+    }
+
+    /// The miss-side contract the forwards must not break: a failing shared
+    /// read still counts / records, exactly as `get_file_by_key` does.
+    #[test]
+    fn shared_read_misses_are_still_counted_and_recorded() {
+        struct AlwaysMissing;
+        impl ResourceSource for AlwaysMissing {
+            fn get_file_by_key(&self, _key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+                Err(holtburger_dat::DatError::Other("missing".into()))
+            }
+            fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, _namespace: &str) -> bool {
+                true
+            }
+        }
+
+        let missing = AlwaysMissing;
+        let counting = super::MissCountingSource {
+            inner: &missing,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        let recording = holtburger_resource_http::RecordingSource::new(&counting);
+        assert!(recording.get_file_shared(KEY).is_err());
+        assert_eq!(
+            counting.misses.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "MissCountingSource must count a failed shared read"
+        );
+        assert_eq!(
+            recording.take_misses(),
+            vec![("eor/portal".to_string(), 0x0600_0001u32)],
+            "RecordingSource must record a failed shared read"
+        );
     }
 }
 
@@ -8239,10 +8388,12 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     let mut tris = Vec::new();
     match (model_id >> 24) as u8 {
         0x01 => {
+            // A15 S2: shared read — the walk loop re-reads this record up to 9×
+            // per cold landblock; each is now a refcount bump, not a copy.
             let bytes = counting
-                .get_file_by_key(ResourceKey::new("eor/portal", model_id))
+                .get_file_shared(ResourceKey::new("eor/portal", model_id))
                 .ok()?;
-            let gfx = GfxObj::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+            let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes.as_slice())).ok()?;
             append_gfx_tris(
                 &mut tris,
                 &gfx,
@@ -9978,7 +10129,10 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     if !crate::prefetch::in_discovery_walk() && surface_neg_cache_contains(surface_did) {
         return empty_surface_pixels();
     }
-    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
+    // A15 S2: Surface / SurfaceTexture / Texture / Palette are the four
+    // records the walk loop re-reads most; shared reads make each a refcount
+    // bump. Byte-identical input to the same `unpack`.
+    let Ok(bytes) = source.get_file_shared(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
         // R-7: memoise ONLY a catalog-proven absence — a transient
         // unhydrated key errs identically here and must stay retryable.
@@ -9990,7 +10144,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         }
         return empty;
     };
-    let Ok(surface) = Surface::unpack(&bytes) else {
+    let Ok(surface) = Surface::unpack(bytes.as_slice()) else {
         decode_diag_parse_fail();
         return empty;
     };
@@ -10044,11 +10198,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         return empty;
     };
     let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
-    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
+    let Ok(stb) = source.get_file_shared(ResourceKey::new("eor/portal", surf_tex_id)) else {
         warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
         return empty;
     };
-    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else {
+    let Ok(surf_tex) = SurfaceTexture::unpack(stb.as_slice()) else {
         decode_diag_parse_fail();
         return empty;
     };
@@ -10056,11 +10210,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         decode_diag_parse_fail();
         return empty;
     };
-    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
+    let Ok(tb) = source.get_file_shared(ResourceKey::new("eor/portal", rs_id)) else {
         warn_surface_dep_unavailable(surface_did, "Texture", rs_id);
         return empty;
     };
-    let Ok(tex) = Texture::unpack(&tb) else {
+    let Ok(tex) = Texture::unpack(tb.as_slice()) else {
         decode_diag_parse_fail();
         return empty;
     };
@@ -10087,9 +10241,9 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     let rgba = tex
         .to_rgba8_with_palette_override(surf_pal_id, clipmap, |pal_id| {
             let pb = source
-                .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                .get_file_shared(ResourceKey::new("eor/portal", pal_id))
                 .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
-            Palette::unpack(&pb).map_err(|e| {
+            Palette::unpack(pb.as_slice()).map_err(|e| {
                 TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
             })
         });
@@ -11864,7 +12018,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     if !crate::prefetch::in_discovery_walk() && surface_neg_cache_contains(surface_did) {
         return empty_surface_pixels();
     }
-    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
+    // A15 S2: shared reads (entity twin of fetch_surface_pixels_impl).
+    let Ok(bytes) = source.get_file_shared(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
         // R-7: memoise ONLY a catalog-proven absence — a transient
         // unhydrated key errs identically here and must stay retryable.
@@ -11876,7 +12031,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         }
         return empty;
     };
-    let Ok(surface) = Surface::unpack(&bytes) else {
+    let Ok(surface) = Surface::unpack(bytes.as_slice()) else {
         decode_diag_parse_fail();
         return empty;
     };
@@ -11918,11 +12073,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         return empty;
     };
     let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
-    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
+    let Ok(stb) = source.get_file_shared(ResourceKey::new("eor/portal", surf_tex_id)) else {
         warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
         return empty;
     };
-    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else {
+    let Ok(surf_tex) = SurfaceTexture::unpack(stb.as_slice()) else {
         decode_diag_parse_fail();
         return empty;
     };
@@ -11930,11 +12085,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         decode_diag_parse_fail();
         return empty;
     };
-    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
+    let Ok(tb) = source.get_file_shared(ResourceKey::new("eor/portal", rs_id)) else {
         warn_surface_dep_unavailable(surface_did, "Texture", rs_id);
         return empty;
     };
-    let Ok(tex) = Texture::unpack(&tb) else {
+    let Ok(tex) = Texture::unpack(tb.as_slice()) else {
         decode_diag_parse_fail();
         return empty;
     };
@@ -11964,9 +12119,9 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             tex_palette_id
         };
         let pb = source
-            .get_file_by_key(ResourceKey::new("eor/portal", chosen_base))
+            .get_file_shared(ResourceKey::new("eor/portal", chosen_base))
             .map_err(|e| TextureDecodeError::PaletteFetch(format!("base {chosen_base:#010X}: {e}")))?;
-        let mut composed = Palette::unpack(&pb)
+        let mut composed = Palette::unpack(pb.as_slice())
             .map_err(|e| TextureDecodeError::PaletteFetch(format!("Palette::unpack base {chosen_base:#010X}: {e}")))?;
         // Apply per-overlay sub-palette splices. Per-overlay failures
         // are silently skipped — a missing or malformed sub-palette
@@ -11974,8 +12129,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         // creature renders with an unblended palette, which is what
         // the unsubstituted path produces anyway).
         for (sub_id, offset, length) in sub_palettes {
-            let Ok(spb) = source.get_file_by_key(ResourceKey::new("eor/portal", *sub_id)) else { continue; };
-            let Ok(sp) = Palette::unpack(&spb) else { continue; };
+            let Ok(spb) = source.get_file_shared(ResourceKey::new("eor/portal", *sub_id)) else { continue; };
+            let Ok(sp) = Palette::unpack(spb.as_slice()) else { continue; };
             // Wire ObjDesc sub-palettes pack offset/numColors as /8 bytes
             // (acclient Subpalette::UnPack: offset = byte*8;
             // numColors = (byte==0 ? 256 : byte) * 8). The copy is dst[i] = src[i]
@@ -13880,10 +14035,11 @@ fn triangulate_model_per_part_buckets<S: holtburger_dat::ResourceSource + ?Sized
     use holtburger_dat::ResourceKey;
     match (model_id >> 24) as u8 {
         0x01 => {
+            // A15 S2: shared read (see triangulate_model_with_substitutions_and_mtable).
             let bytes = source
-                .get_file_by_key(ResourceKey::new("eor/portal", model_id))
+                .get_file_shared(ResourceKey::new("eor/portal", model_id))
                 .ok()?;
-            let gfx = GfxObj::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+            let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes.as_slice())).ok()?;
             let mut tris = Vec::new();
             append_gfx_tris(
                 &mut tris,

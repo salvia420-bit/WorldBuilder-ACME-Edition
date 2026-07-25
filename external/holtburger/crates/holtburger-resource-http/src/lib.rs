@@ -38,6 +38,10 @@
 
 pub(crate) mod concurrency;
 pub(crate) mod inflight;
+// A15 S2: target-agnostic (pure std + the ResourceSource trait) so its
+// `get_file_shared` forward can be gate-tested natively. See recording.rs.
+pub mod recording;
+pub use recording::RecordingSource;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod http;
@@ -52,7 +56,7 @@ mod source;
 pub use http::{HttpError, fetch_bytes, join_url};
 #[cfg(target_arch = "wasm32")]
 pub use manifest_source::{
-    ManifestConnectError, ManifestResourceSource, PrefetchError, RecordingSource,
+    ManifestConnectError, ManifestResourceSource, PrefetchError,
     configured_fetch_concurrency, shard_verify_enabled,
 };
 #[cfg(target_arch = "wasm32")]
