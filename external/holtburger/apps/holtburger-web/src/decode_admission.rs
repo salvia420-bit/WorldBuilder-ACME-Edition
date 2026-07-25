@@ -66,6 +66,11 @@ fn now_ms() -> f64 {
     EPOCH.elapsed().as_secs_f64() * 1000.0
 }
 
+/// §2.2 item 3: "sample at most once per 250 ms inside `admit`". The sample is
+/// a JS `WebAssembly.Memory` read on the decode hot path; the ceiling is what
+/// keeps it off the fast path's cost.
+pub const PRESSURE_SAMPLE_INTERVAL_MS: f64 = 250.0;
+
 struct Waiter {
     tx: oneshot::Sender<()>,
     bytes: usize,
@@ -76,6 +81,21 @@ struct Inner {
     max_jobs: usize,
     max_bytes: usize,
     urgent_reserve: usize,
+
+    /// §2.2 item 3 (S5): sampled-`wasm_memory_bytes()` step thresholds. Above
+    /// `t1_bytes` the effective caps halve; above `t2_bytes` they quarter.
+    /// `u64::MAX` (the default) is INERT — the comparison is strictly `>`, so
+    /// no sample can ever trip it.
+    t1_bytes: u64,
+    t2_bytes: u64,
+    /// 0/1/2. MONOTONE by construction: `pressure_input` only ever raises it.
+    /// That is the honest reading of a monotone signal — `WebAssembly.Memory`
+    /// only grows, so a sample is a HIGH-WATER MARK, not current occupancy. A
+    /// gate that let the level fall would be pretending the mark had receded.
+    /// The shrink is therefore permanent once tripped, and that is intended.
+    pressure_level: u32,
+    /// `now_ms()` of the last accepted sample (see `maybe_sample_pressure`).
+    last_sample_ms: f64,
 
     live_jobs: usize,
     live_bytes: usize,
@@ -92,13 +112,43 @@ struct Inner {
 }
 
 impl Inner {
+    /// The configured job cap after the §2.2-item-3 pressure step. Shrink-ONLY
+    /// and never below 1 (a cap of 0 would wedge the gate shut forever, which
+    /// is precisely the failure mode the monotone signal makes irreversible).
+    /// Note `usize::MAX / 4` is still unbounded in practice, so pressure on an
+    /// unarmed gate stays neutral by construction.
+    fn effective_max_jobs(&self) -> usize {
+        match self.pressure_level {
+            0 => self.max_jobs,
+            1 => (self.max_jobs / 2).max(1),
+            _ => (self.max_jobs / 4).max(1),
+        }
+    }
+
+    fn effective_max_bytes(&self) -> usize {
+        match self.pressure_level {
+            0 => self.max_bytes,
+            1 => (self.max_bytes / 2).max(1),
+            _ => (self.max_bytes / 4).max(1),
+        }
+    }
+
     /// Job cap visible to the lane. The normal lane may never consume the
     /// private urgent reserve; the urgent lane sees the whole cap.
+    ///
+    /// S5: the reserve itself is NEVER scaled by pressure — starvation safety
+    /// beats memory at the margin. `prefetch_urgent` exists because FIFO
+    /// queuing starved interior loads for MINUTES; shrinking the reserve under
+    /// memory pressure would re-create that failure exactly when the session is
+    /// most fragile, to save at most one job's worth of bytes. It is only
+    /// clamped to `effective_jobs - 1` — the same clamp `new()` already applies
+    /// against `max_jobs` — so the normal lane always keeps one usable slot.
     fn job_cap(&self, urgent: bool) -> usize {
+        let jobs = self.effective_max_jobs();
         if urgent {
-            self.max_jobs
+            jobs
         } else {
-            self.max_jobs.saturating_sub(self.urgent_reserve)
+            jobs - self.urgent_reserve.min(jobs.saturating_sub(1))
         }
     }
 
@@ -108,7 +158,7 @@ impl Inner {
         }
         // `live_jobs == 0` escape: a lone job bigger than the whole byte budget
         // must still run, or the gate wedges permanently.
-        self.live_bytes.saturating_add(bytes) <= self.max_bytes || self.live_jobs == 0
+        self.live_bytes.saturating_add(bytes) <= self.effective_max_bytes() || self.live_jobs == 0
     }
 
     /// Account an admission. Callers must have checked [`Self::can_admit`]
@@ -177,6 +227,11 @@ pub struct DecodeLease {
 pub struct AdmissionStats {
     pub max_jobs: usize,
     pub max_bytes: usize,
+    /// S5: the caps actually enforced right now = configured ÷ 2^pressure_level
+    /// (min 1). Equal to `max_jobs`/`max_bytes` at level 0. `pressure_level`
+    /// alone cannot tell a probe what the gate is doing; these can.
+    pub effective_max_jobs: usize,
+    pub effective_max_bytes: usize,
     pub live_jobs: usize,
     pub live_bytes: usize,
     pub peak_live_jobs: usize,
@@ -192,11 +247,28 @@ pub struct AdmissionStats {
 
 impl DecodeAdmission {
     pub fn new(max_jobs: usize, max_bytes: usize, urgent_reserve: usize) -> Self {
+        Self::with_pressure(max_jobs, max_bytes, urgent_reserve, u64::MAX, u64::MAX)
+    }
+
+    /// S5. `t1_bytes`/`t2_bytes` are sampled-`wasm_memory_bytes()` thresholds;
+    /// `u64::MAX` (what `new` passes) is inert. `t2` is clamped up to `t1` so a
+    /// swapped pair degrades to a single step rather than to nonsense.
+    pub fn with_pressure(
+        max_jobs: usize,
+        max_bytes: usize,
+        urgent_reserve: usize,
+        t1_bytes: u64,
+        t2_bytes: u64,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 max_jobs: max_jobs.max(1),
                 max_bytes,
                 urgent_reserve: urgent_reserve.min(max_jobs.saturating_sub(1)),
+                t1_bytes,
+                t2_bytes: t2_bytes.max(t1_bytes),
+                pressure_level: 0,
+                last_sample_ms: f64::NEG_INFINITY,
                 live_jobs: 0,
                 live_bytes: 0,
                 peak_live_jobs: 0,
@@ -272,11 +344,60 @@ impl DecodeAdmission {
         }
     }
 
+    /// Feed one `wasm_memory_bytes()` sample (§2.2 item 3, S5).
+    ///
+    /// **This is not an occupancy input.** `WebAssembly.Memory` only grows, so
+    /// `sampled_bytes` is a high-water mark; it may only ever RAISE the
+    /// pressure level, i.e. only ever SHRINK the effective bounds. A falling
+    /// input is meaningless here and is ignored, which is why the level is
+    /// `max`-ed rather than assigned. Comparisons are strictly `>`, so the
+    /// `u64::MAX` default thresholds can never trip.
+    ///
+    /// No waiter wake-up: raising the level can only make `can_admit` stricter,
+    /// so no parked waiter can newly become admissible.
+    pub fn pressure_input(&self, sampled_bytes: u64) {
+        let mut g = self.lock();
+        let level = if sampled_bytes > g.t2_bytes {
+            2
+        } else if sampled_bytes > g.t1_bytes {
+            1
+        } else {
+            0
+        };
+        g.pressure_level = g.pressure_level.max(level);
+    }
+
+    /// Rate-limited wrapper for the hot path: takes the sample at most once per
+    /// [`PRESSURE_SAMPLE_INTERVAL_MS`], and only CALLS `sample` when it is due
+    /// — so the `js_sys` read never happens inside `admit`'s fast path, and
+    /// `decode_admission` itself stays free of any JS dependency (native tests
+    /// pass a plain closure).
+    pub fn maybe_sample_pressure(&self, sample: impl FnOnce() -> u64) {
+        {
+            let mut g = self.lock();
+            // Inert gate: with both thresholds at the default, no sample can
+            // change anything, so do not even pay for the closure.
+            if g.t1_bytes == u64::MAX && g.t2_bytes == u64::MAX {
+                return;
+            }
+            let now = now_ms();
+            if now - g.last_sample_ms < PRESSURE_SAMPLE_INTERVAL_MS {
+                return;
+            }
+            g.last_sample_ms = now;
+        }
+        // Lock released before the callback: it reaches out to the host.
+        let bytes = sample();
+        self.pressure_input(bytes);
+    }
+
     pub fn stats(&self) -> AdmissionStats {
         let g = self.lock();
         AdmissionStats {
             max_jobs: g.max_jobs,
             max_bytes: g.max_bytes,
+            effective_max_jobs: g.effective_max_jobs(),
+            effective_max_bytes: g.effective_max_bytes(),
             live_jobs: g.live_jobs,
             live_bytes: g.live_bytes,
             peak_live_jobs: g.peak_live_jobs,
@@ -285,7 +406,7 @@ impl DecodeAdmission {
             queued: g.queued,
             max_queue_ms: g.max_queue_ms,
             urgent_admits: g.urgent_admits,
-            pressure_level: 0,
+            pressure_level: g.pressure_level,
         }
     }
 
@@ -336,23 +457,87 @@ impl DecodeLease {
 //   globalThis.__hbDecodeMaxJobs        u32  ≥ 1   — absent ⇒ UNBOUNDED
 //   globalThis.__hbDecodeMaxBytes       f64  ≥ 1   — absent ⇒ usize::MAX
 //   globalThis.__hbDecodeUrgentReserve  u32  ≥ 1   — absent ⇒ 0
+//   globalThis.__hbDecodePressureT1MB   f64  > 0   — absent ⇒ INERT  (S5)
+//   globalThis.__hbDecodePressureT2MB   f64  > 0   — absent ⇒ INERT  (S5)
 //
 // `__hbDecodeMaxJobs` is the arming switch: with it absent the whole gate stays
 // at `(usize::MAX, usize::MAX, 0)`, which can never enqueue a waiter, so an
 // unauthored page is bit-for-bit the S1 behaviour.
 
-/// Pure resolution of the three raw JS values into `DecodeAdmission::new`
-/// arguments. Split out from the `js_sys` read so it is testable natively.
+/// Resolved host configuration. S5 turned the S4 3-tuple into a struct so the
+/// two pressure thresholds are named at every call site rather than being the
+/// fourth and fifth anonymous number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecodeConfig {
+    pub max_jobs: usize,
+    pub max_bytes: usize,
+    pub urgent_reserve: usize,
+    /// `u64::MAX` = inert (the default; see `Inner::t1_bytes`).
+    pub t1_bytes: u64,
+    pub t2_bytes: u64,
+}
+
+impl DecodeConfig {
+    /// The S1 gate, bit for bit: unbounded and pressure-inert.
+    pub const UNBOUNDED: Self = Self {
+        max_jobs: usize::MAX,
+        max_bytes: usize::MAX,
+        urgent_reserve: 0,
+        t1_bytes: u64::MAX,
+        t2_bytes: u64::MAX,
+    };
+
+    pub fn build(self) -> DecodeAdmission {
+        DecodeAdmission::with_pressure(
+            self.max_jobs,
+            self.max_bytes,
+            self.urgent_reserve,
+            self.t1_bytes,
+            self.t2_bytes,
+        )
+    }
+}
+
+/// Pure resolution of the raw JS values into a [`DecodeConfig`]. Split out from
+/// the `js_sys` read so it is testable natively.
+///
+/// `t1_mb`/`t2_mb` are in MEGABYTES (the globals are named `…T1MB`/`…T2MB`, and
+/// a byte count is not a thing anyone types); absent/garbage ⇒ `u64::MAX` ⇒
+/// inert. They are parsed independently of the `__hbDecodeMaxJobs` arming
+/// switch: on an unarmed gate the caps are `usize::MAX`, and `usize::MAX / 4`
+/// is still unbounded, so pressure on an unarmed gate remains neutral.
 pub fn config_from_raw(
     jobs: Option<f64>,
     bytes: Option<f64>,
     reserve: Option<f64>,
-) -> (usize, usize, usize) {
+    t1_mb: Option<f64>,
+    t2_mb: Option<f64>,
+) -> DecodeConfig {
+    // MB → bytes, saturating; anything non-finite/≤0 is inert.
+    let thresh = |mb: Option<f64>| match mb {
+        Some(n) if n > 0.0 && n.is_finite() => {
+            let b = n * 1_048_576.0;
+            if b >= u64::MAX as f64 {
+                u64::MAX
+            } else {
+                b as u64
+            }
+        }
+        _ => u64::MAX,
+    };
+    let (t1_bytes, t2_bytes) = (thresh(t1_mb), thresh(t2_mb));
+
     let max_jobs = match jobs {
         Some(n) if n >= 1.0 && n.is_finite() => n as usize,
         // Not armed: byte/reserve values alone never bound anything, because a
         // job larger than `max_bytes` is admitted when nothing is live.
-        _ => return (usize::MAX, usize::MAX, 0),
+        _ => {
+            return DecodeConfig {
+                t1_bytes,
+                t2_bytes,
+                ..DecodeConfig::UNBOUNDED
+            }
+        }
     };
     let max_bytes = match bytes {
         Some(n) if n >= 1.0 && n.is_finite() => n as usize,
@@ -362,7 +547,13 @@ pub fn config_from_raw(
         Some(n) if n >= 1.0 && n.is_finite() => n as usize,
         _ => 0,
     };
-    (max_jobs, max_bytes, urgent_reserve)
+    DecodeConfig {
+        max_jobs,
+        max_bytes,
+        urgent_reserve,
+        t1_bytes,
+        t2_bytes,
+    }
 }
 
 /// Read this instance's host-supplied bound off `js_sys::global()` — which in
@@ -376,12 +567,14 @@ pub fn configured_decode_admission() -> DecodeAdmission {
             .ok()
             .and_then(|v| v.as_f64())
     };
-    let (jobs, bytes, reserve) = config_from_raw(
+    config_from_raw(
         num("__hbDecodeMaxJobs"),
         num("__hbDecodeMaxBytes"),
         num("__hbDecodeUrgentReserve"),
-    );
-    DecodeAdmission::new(jobs, bytes, reserve)
+        num("__hbDecodePressureT1MB"),
+        num("__hbDecodePressureT2MB"),
+    )
+    .build()
 }
 
 impl Drop for DecodeLease {
@@ -592,12 +785,11 @@ mod tests {
             (Some(f64::NAN), None, None),
             (Some(-4.0), None, None),
         ] {
-            let (j, b, r) = config_from_raw(raw.0, raw.1, raw.2);
-            assert_eq!((j, b, r), (usize::MAX, usize::MAX, 0), "raw {raw:?}");
+            let c = config_from_raw(raw.0, raw.1, raw.2, None, None);
+            assert_eq!(c, DecodeConfig::UNBOUNDED, "raw {raw:?}");
         }
         // …and the gate built from it is the S1 gate.
-        let (j, b, r) = config_from_raw(None, None, None);
-        let a = DecodeAdmission::new(j, b, r);
+        let a = config_from_raw(None, None, None, None, None).build();
         let mut held = Vec::new();
         for _ in 0..64 {
             held.push(block(a.admit(1 << 20)));
@@ -607,15 +799,19 @@ mod tests {
 
     #[test]
     fn config_armed_values_reach_the_gate() {
-        let (j, b, r) = config_from_raw(Some(4.0), Some(192.0 * 1048576.0), Some(2.0));
-        assert_eq!((j, b, r), (4, 192 * 1048576, 2));
-        let s = DecodeAdmission::new(j, b, r).stats();
+        let c = config_from_raw(Some(4.0), Some(192.0 * 1048576.0), Some(2.0), None, None);
+        assert_eq!(
+            (c.max_jobs, c.max_bytes, c.urgent_reserve),
+            (4, 192 * 1048576, 2)
+        );
+        let s = c.build().stats();
         assert_eq!(s.max_jobs, 4);
         assert_eq!(s.max_bytes, 192 * 1048576);
 
         // Bytes omitted but jobs armed => count-only bound.
+        let c = config_from_raw(Some(1.0), None, None, None, None);
         assert_eq!(
-            config_from_raw(Some(1.0), None, None),
+            (c.max_jobs, c.max_bytes, c.urgent_reserve),
             (1, usize::MAX, 0),
             "jobs alone is a legal (count-only) arming"
         );
@@ -673,5 +869,210 @@ mod tests {
         assert_eq!(s.urgent_admits, 3);
         assert_eq!(s.peak_live_jobs, 4);
         assert!(s.queued >= 2, "an armed gate queues: {}", s.queued);
+    }
+
+    // --- S5: wasm-memory pressure hysteresis (§2.2 item 3) -------------------
+
+    const MB: u64 = 1_048_576;
+
+    /// 8 jobs / 1 MiB of estimate budget / 1 urgent slot, tripping at 100 MB
+    /// and 200 MB of sampled linear memory.
+    fn pressured() -> DecodeAdmission {
+        DecodeAdmission::with_pressure(8, 1024, 1, 100 * MB, 200 * MB)
+    }
+
+    #[test]
+    fn pressure_below_t1_leaves_full_caps() {
+        let a = pressured();
+        for sample in [0, 1, 50 * MB, 100 * MB] {
+            a.pressure_input(sample);
+            let s = a.stats();
+            assert_eq!(s.pressure_level, 0, "sample {sample} must not trip T1");
+            assert_eq!(s.effective_max_jobs, 8);
+            assert_eq!(s.effective_max_bytes, 1024);
+        }
+        // …and the gate admits the full eight (7 normal + the urgent reserve).
+        let mut held = Vec::new();
+        for _ in 0..7 {
+            held.push(block(a.admit(1)));
+        }
+        held.push(block(a.admit_urgent(1)));
+        assert_eq!(a.stats().live_jobs, 8);
+    }
+
+    #[test]
+    fn crossing_t1_halves_the_caps_for_newcomers_not_for_running_jobs() {
+        let a = pressured();
+        // Fill to the un-pressured normal cap (8 - 1 reserved = 7).
+        let mut held: Vec<DecodeLease> = (0..7).map(|_| block(a.admit(1))).collect();
+        assert_eq!(a.stats().live_jobs, 7);
+
+        a.pressure_input(150 * MB);
+        let s = a.stats();
+        assert_eq!(s.pressure_level, 1);
+        assert_eq!(s.effective_max_jobs, 4, "8 / 2");
+        assert_eq!(s.effective_max_bytes, 512, "1024 / 2");
+        assert_eq!(s.max_jobs, 8, "the CONFIGURED cap is not rewritten");
+
+        // Running jobs are not evicted — the gate has no such power — but they
+        // are now over the new cap, so the next newcomer parks…
+        assert_eq!(a.stats().live_jobs, 7, "already-admitted work runs on");
+        let mut newcomer = Box::pin(a.admit(1));
+        assert!(poll_once(&mut newcomer).is_none(), "newcomer sees the new cap");
+
+        // …and stays parked until live drops below the HALVED normal cap of 3,
+        // i.e. four drains, not one.
+        for _ in 0..4 {
+            held.pop();
+            assert!(poll_once(&mut newcomer).is_none(), "still ≥ 3 live");
+        }
+        assert_eq!(a.stats().live_jobs, 3);
+        held.pop();
+        let _n = poll_once(&mut newcomer).expect("2 live < the halved normal cap of 3");
+    }
+
+    #[test]
+    fn crossing_t2_quarters_the_caps_min_one() {
+        let a = pressured();
+        a.pressure_input(500 * MB);
+        let s = a.stats();
+        assert_eq!(s.pressure_level, 2);
+        assert_eq!(s.effective_max_jobs, 2, "8 / 4");
+        assert_eq!(s.effective_max_bytes, 256, "1024 / 4");
+
+        // Floor of 1: a cap of 0 would wedge the gate shut forever, and the
+        // monotone level means "forever" is not an exaggeration.
+        let tiny = DecodeAdmission::with_pressure(2, 3, 0, MB, 2 * MB);
+        tiny.pressure_input(9 * MB);
+        let s = tiny.stats();
+        assert_eq!(s.pressure_level, 2);
+        assert_eq!(s.effective_max_jobs, 1, "2 / 4 floors at 1, never 0");
+        assert_eq!(s.effective_max_bytes, 1, "3 / 4 floors at 1, never 0");
+        let _l = block(tiny.admit(0));
+        assert_eq!(tiny.stats().live_jobs, 1, "a quartered gate still admits");
+    }
+
+    #[test]
+    fn pressure_level_is_monotone_because_the_signal_is() {
+        let a = pressured();
+        a.pressure_input(250 * MB);
+        assert_eq!(a.stats().pressure_level, 2);
+        // `wasm_memory_bytes()` is a HIGH-WATER MARK: it cannot actually fall,
+        // and a host that reports a smaller number (a fresh instance, a relay
+        // mixing the two instances' samples, a rounding artefact) must NOT be
+        // able to re-open the gate. If this ever fails, someone has started
+        // treating the sample as live occupancy.
+        for sample in [150 * MB, 50 * MB, 0] {
+            a.pressure_input(sample);
+            assert_eq!(
+                a.stats().pressure_level,
+                2,
+                "level fell after a smaller sample ({sample}) — the monotone \
+                 ratchet has been broken; wasm memory NEVER shrinks, so a \
+                 falling sample is noise, not recovery"
+            );
+            assert_eq!(a.stats().effective_max_jobs, 2);
+        }
+    }
+
+    #[test]
+    fn urgent_reserve_is_untouched_at_every_pressure_level() {
+        // Reserve 1 of 8: still 1 at level 1 (4 jobs) and level 2 (2 jobs), so
+        // the urgent lane keeps a slot the normal lane can never take. It is
+        // never SCALED — starvation safety beats memory at the margin.
+        for (sample, jobs, normal_cap) in [(0u64, 8usize, 7usize), (150 * MB, 4, 3), (250 * MB, 2, 1)]
+        {
+            let a = pressured();
+            a.pressure_input(sample);
+            assert_eq!(a.stats().effective_max_jobs, jobs);
+
+            let _held: Vec<DecodeLease> = (0..normal_cap).map(|_| block(a.admit(0))).collect();
+            let mut over = Box::pin(a.admit(0));
+            assert!(
+                poll_once(&mut over).is_none(),
+                "normal lane must stop at {normal_cap} under sample {sample}"
+            );
+            // The reserved slot is still there for the urgent lane.
+            let _u = block(a.admit_urgent(0));
+            let s = a.stats();
+            assert_eq!(s.live_jobs, normal_cap + 1);
+            assert_eq!(s.urgent_admits, 1);
+        }
+    }
+
+    #[test]
+    fn default_thresholds_are_inert_and_the_sampler_is_rate_limited() {
+        // `new` ⇒ u64::MAX thresholds ⇒ even an absurd sample changes nothing,
+        // and the closure is never even called (comparison is strictly `>`).
+        let a = DecodeAdmission::new(4, 1024, 1);
+        a.pressure_input(u64::MAX);
+        assert_eq!(a.stats().pressure_level, 0);
+        let mut calls = 0u32;
+        for _ in 0..10 {
+            a.maybe_sample_pressure(|| {
+                calls += 1;
+                u64::MAX
+            });
+        }
+        assert_eq!(calls, 0, "an inert gate must not pay for the JS sample");
+
+        // Armed: the first call samples, the rest are inside the 250 ms window.
+        let b = pressured();
+        let mut calls = 0u32;
+        for _ in 0..10 {
+            b.maybe_sample_pressure(|| {
+                calls += 1;
+                150 * MB
+            });
+        }
+        assert_eq!(calls, 1, "at most one sample per {PRESSURE_SAMPLE_INTERVAL_MS} ms");
+        assert_eq!(b.stats().pressure_level, 1, "the one sample did land");
+    }
+
+    #[test]
+    fn config_parses_pressure_thresholds_in_megabytes() {
+        // `?decodePressure=1024:1536` shape, alongside an armed cap.
+        let c = config_from_raw(Some(4.0), None, Some(1.0), Some(1024.0), Some(1536.0));
+        assert_eq!(c.max_jobs, 4);
+        assert_eq!(c.t1_bytes, 1024 * MB);
+        assert_eq!(c.t2_bytes, 1536 * MB);
+
+        // Absent / garbage ⇒ inert, and inert is the DEFAULT.
+        for raw in [
+            (None, None),
+            (Some(0.0), Some(0.0)),
+            (Some(-1.0), Some(f64::NAN)),
+            (Some(f64::INFINITY), None),
+        ] {
+            let c = config_from_raw(Some(4.0), None, None, raw.0, raw.1);
+            assert_eq!((c.t1_bytes, c.t2_bytes), (u64::MAX, u64::MAX), "raw {raw:?}");
+        }
+        assert_eq!(
+            config_from_raw(None, None, None, None, None),
+            DecodeConfig::UNBOUNDED
+        );
+
+        // Thresholds are independent of the arming switch, and remain neutral
+        // on an unarmed gate because usize::MAX/4 is still unbounded.
+        let c = config_from_raw(None, None, None, Some(1.0), Some(2.0));
+        assert_eq!(c.max_jobs, usize::MAX);
+        let a = c.build();
+        a.pressure_input(64 * MB);
+        assert_eq!(a.stats().pressure_level, 2);
+        let mut held = Vec::new();
+        for _ in 0..64 {
+            held.push(block(a.admit(1 << 20)));
+        }
+        assert_eq!(a.stats().queued, 0, "quartered infinity is still unbounded");
+
+        // A swapped pair degrades to one step rather than to nonsense.
+        let s = config_from_raw(Some(4.0), None, None, Some(200.0), Some(100.0))
+            .build()
+            .stats();
+        assert_eq!(s.pressure_level, 0);
+        let a = config_from_raw(Some(4.0), None, None, Some(200.0), Some(100.0)).build();
+        a.pressure_input(250 * MB);
+        assert_eq!(a.stats().pressure_level, 2, "t2 clamped up to t1");
+        assert_eq!(a.stats().effective_max_jobs, 1);
     }
 }

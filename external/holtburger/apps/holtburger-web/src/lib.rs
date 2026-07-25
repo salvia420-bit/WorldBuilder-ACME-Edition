@@ -9613,6 +9613,14 @@ static DECODE_ADMISSION: std::sync::LazyLock<decode_admission::DecodeAdmission> 
 /// funnels through here so the urgent flag is threaded, not re-derived.
 #[cfg(target_arch = "wasm32")]
 async fn decode_admit(estimate_bytes: usize, urgent: bool) -> decode_admission::DecodeLease {
+    // S5 (§2.2 item 3): feed the gate one linear-memory sample before taking
+    // the lease. `maybe_sample_pressure` is a no-op unless the host armed
+    // `__hbDecodePressureT1MB`/`T2MB`, and rate-limits the JS read to one per
+    // `PRESSURE_SAMPLE_INTERVAL_MS` (250 ms) — the closure is not even called
+    // otherwise. The sample is a HIGH-WATER MARK, never live occupancy: it can
+    // only shrink the effective caps, permanently, which is the honest
+    // semantics of a monotone signal (see `decode_admission::pressure_input`).
+    DECODE_ADMISSION.maybe_sample_pressure(|| wasm_memory_bytes() as u64);
     if urgent {
         DECODE_ADMISSION.admit_urgent(estimate_bytes).await
     } else {
@@ -9826,7 +9834,8 @@ pub fn dat_decode_diag() -> String {
              \"decodeAdmission\":{{\"maxJobs\":{},\"maxBytes\":{},\
              \"liveJobs\":{},\"liveBytes\":{},\"peakLiveJobs\":{},\"peakLiveBytes\":{},\
              \"admits\":{},\"queued\":{},\"maxQueueMs\":{:.3},\"urgentAdmits\":{},\
-             \"pressureLevel\":{}}},\"shardCacheBytes\":{}}}",
+             \"pressureLevel\":{},\"effectiveMaxJobs\":{},\"effectiveMaxBytes\":{}}},\
+             \"shardCacheBytes\":{}}}",
             d.first_hop_miss,
             d.dep_miss,
             d.parse_fail,
@@ -9862,6 +9871,8 @@ pub fn dat_decode_diag() -> String {
             adm.max_queue_ms,
             adm.urgent_admits,
             adm.pressure_level,
+            adm.effective_max_jobs,
+            adm.effective_max_bytes,
             shard_cache_bytes,
         )
     }

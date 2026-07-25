@@ -180,13 +180,77 @@ export function resolveDecodeAdmission(search = "") {
   };
 }
 
+// A15 §2.2 item 3 / S5 (2026-07-25) — wasm-memory PRESSURE hysteresis.
+//
+// Two more globals, read at the same `LazyLock` init, in MEGABYTES:
+//   __hbDecodePressureT1MB / __hbDecodePressureT2MB
+// Above T1 the instance's effective decode caps halve; above T2 they quarter
+// (min 1). Absent ⇒ INERT — the Rust default is `u64::MAX` on both and the
+// comparison is strictly `>`, so an unauthored page is bit-for-bit S4.
+//
+// The sampled signal is `WebAssembly.Memory.buffer.byteLength`, which only ever
+// GROWS. It is therefore a high-water mark, NOT live occupancy, and the level
+// only ever rises: once tripped the shrink is permanent. That is intended and
+// honest for a monotone signal — what would be wrong is treating the sample as
+// current usage, which would ratchet the gate shut on memory that has since
+// been freed.
+//
+// Spec grammar (one token):  <t1MB>[:<t2MB>]     e.g. 1024:1536
+// A lone `<t1MB>` arms only the halving step. The thresholds are PER INSTANCE
+// but the same pair is given to both, because each wasm instance samples its
+// OWN linear memory — one number means the same thing on either side of the
+// worker boundary (unlike `?decodeAdmission`, whose caps are asymmetric).
+//
+// Separator note: `:` survives `URLSearchParams` untouched, so this token has
+// none of `?decodeAdmission`'s `+`→space footgun; a space is accepted anyway
+// for the same-shaped mistake.
+const DECODE_PRESSURE_RE = /^(\d+(?:\.\d+)?)(?:[: ](\d+(?:\.\d+)?))?$/;
+
+/** Parse one pressure token. Returns null for absent/garbage (⇒ inert). */
+export function parseDecodePressureSpec(raw) {
+  if (raw === null || raw === undefined) return null;
+  const m = DECODE_PRESSURE_RE.exec(String(raw).trim());
+  if (!m) return null;
+  const t1MB = Number(m[1]);
+  if (!Number.isFinite(t1MB) || t1MB <= 0) return null;
+  const t2raw = m[2] === undefined ? 0 : Number(m[2]);
+  // A lone T1 (or a T2 below T1) leaves the quarter step unarmed; Rust clamps
+  // `t2 = max(t1, t2)` too, so a swapped pair degrades to one step either way.
+  const t2MB = Number.isFinite(t2raw) && t2raw > t1MB ? t2raw : 0;
+  return { t1MB, t2MB };
+}
+
+/** Resolve `?decodePressure=` into a spec or null. Pure; touches no globals. */
+export function resolveDecodePressure(search = "") {
+  try {
+    return parseDecodePressureSpec(new URLSearchParams(search || "").get("decodePressure"));
+  } catch (_) {
+    return null; /* inert */
+  }
+}
+
 /**
  * Apply the MAIN thread's spec to `g` and return both halves; the worker's is
  * forwarded in the `init` message (its `globalThis` is not the page's).
  * MUST run before `init_resource_source` — see the ordering note in lib.rs.
+ *
+ * S5: also applies `?decodePressure` (same pair to both instances) and stashes
+ * it for the worker's `init`, so the single pre-init call site covers both.
  */
 export function applyDecodeAdmission(g = globalThis) {
   const cfg = resolveDecodeAdmission(g.location?.search || "");
+  const pressure = resolveDecodePressure(g.location?.search || "");
+  if (pressure) {
+    g.__hbDecodePressureT1MB = pressure.t1MB;
+    if (pressure.t2MB > 0) g.__hbDecodePressureT2MB = pressure.t2MB;
+    else delete g.__hbDecodePressureT2MB;
+  } else {
+    // Leave both unset so Rust keeps u64::MAX on each ⇒ inert.
+    delete g.__hbDecodePressureT1MB;
+    delete g.__hbDecodePressureT2MB;
+  }
+  g.__hbDecodePressureWorker = pressure || undefined;
+  cfg.pressure = pressure;
   const s = cfg.main;
   if (s) {
     g.__hbDecodeMaxJobs = s.jobs;
@@ -417,6 +481,10 @@ export class BakeWorkerClient {
       // the larger half (it carries the bulk mesh/surface load). `undefined`
       // → the worker leaves its globals unset → Rust's unbounded default.
       decodeAdmission: globalThis.__hbDecodeAdmissionWorker,
+      // A15 §2.2 item 3 (S5): the same pressure thresholds — each instance
+      // samples its OWN linear memory, so one pair means the same thing on
+      // both sides. `undefined` → the worker leaves its globals unset → inert.
+      decodePressure: globalThis.__hbDecodePressureWorker,
     });
     return this._readyPromise;
   }
