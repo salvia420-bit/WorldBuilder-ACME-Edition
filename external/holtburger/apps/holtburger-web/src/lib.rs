@@ -52,7 +52,13 @@ extern "C" {
 // line 39 ("avoids dragging `web-sys` along"). Returns `""` on
 // environments without a `window` (workers, node tests).
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(inline_js = "export function flag_search() { try { return (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') ? window.location.search : ''; } catch (_) { return ''; } }")]
+// NOTE: the JS function name here MUST stay `js_location_search` to match the
+// extern below. A §2.2c refactor renamed Rust call sites to `flag_search()` with
+// a regex that also rewrote this opaque string, so the snippet exported
+// `flag_search` while the extern imported `js_location_search` — a boot-time
+// "does not provide an export named" failure that `cargo check` CANNOT see,
+// because inline_js is just a string literal to the compiler.
+#[wasm_bindgen(inline_js = "export function js_location_search() { try { return (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') ? window.location.search : ''; } catch (_) { return ''; } }")]
 extern "C" {
     fn js_location_search() -> String;
 }
