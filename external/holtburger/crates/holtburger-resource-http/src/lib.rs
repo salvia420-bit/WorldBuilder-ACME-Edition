@@ -38,6 +38,10 @@
 
 pub(crate) mod concurrency;
 pub(crate) mod inflight;
+// A15 §1: target-agnostic byte-budgeted LRU behind the v2 shard record cache,
+// so its eviction logic is unit-testable natively (the wasm-only
+// `manifest_source` just holds one).
+pub(crate) mod shard_cache;
 // A15 S2: target-agnostic (pure std + the ResourceSource trait) so its
 // `get_file_shared` forward can be gate-tested natively. See recording.rs.
 pub mod recording;

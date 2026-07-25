@@ -12,7 +12,8 @@
 //
 // Protocol (postMessage):
 //   in : {type:'init', id, manifestUrl, sceneryBaseUrl,
-//              locationSearch, verifyShards?, fetchConcurrency?}
+//              locationSearch, verifyShards?, fetchConcurrency?,
+//              shardBudgetBytes?}
 //        (the last three are the page's host flags — see handleInit)
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
@@ -63,6 +64,12 @@ async function handleInit(msg) {
   }
   if (msg.verifyShards !== undefined && msg.verifyShards !== null) {
     self.__hbVerifyShards = msg.verifyShards;
+  }
+  // A15 §1: shard-record cache byte budget for THIS instance's resource source
+  // (`?shardBudgetMB=`). Unset → Rust's unbounded default. Must precede
+  // `init_resource_source`, which sizes the cache once at connect.
+  if (typeof msg.shardBudgetBytes === "number" && msg.shardBudgetBytes >= 1) {
+    self.__hbShardBudgetBytes = msg.shardBudgetBytes;
   }
   // EXPERIMENT (threads-lite, 2026-07-24): when the main thread hands us its
   // compiled module + shared memory, initialise INTO that memory — this worker

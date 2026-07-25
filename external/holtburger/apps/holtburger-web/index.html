@@ -1297,6 +1297,7 @@
         configureBakeWorker,
         getBakeWorkerClient,
         applyFetchConcurrencySplit,
+        applyShardBudget,
       } from "./scene3d/bake_worker_client.js";
       // keepaliveFix (2026-07-07): dedicated-worker heartbeat that keeps a
       // keepalive packet flowing even when the tab is hidden/occluded (main-
@@ -2264,6 +2265,19 @@
         // from `__hbFetchConcurrency`. The page runs two resource sources (here
         // + the bake worker); without the split each took the full 32 and the
         // real page cap was 64, half defeating the F1 stutter fix.
+        // A15 §1 (2026-07-25) — MUST precede `init_resource_source`, which
+        // sizes this instance's shard-record cache. Unbounded unless
+        // `?shardBudgetMB=N` is authored, so the default path is unchanged.
+        try {
+          const budget = applyShardBudget();
+          console.log(
+            budget.mb > 0
+              ? `[A15] shard cache budget: ${budget.mb} MB/instance (${budget.bytes} bytes)`
+              : "[A15] shard cache budget: unbounded (default)"
+          );
+        } catch (e) {
+          console.warn("[A15] shard budget setup failed (non-fatal):", e);
+        }
         try {
           const split = applyFetchConcurrencySplit();
           console.log(

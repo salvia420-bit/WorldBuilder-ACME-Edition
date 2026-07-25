@@ -58,6 +58,7 @@ use holtburger_manifest::{
 use crate::concurrency::{DEFAULT_FETCH_CONCURRENCY, Semaphore};
 use crate::http::{FetchPriority, HttpError, fetch_bytes, fetch_bytes_with_priority, join_url};
 use crate::inflight::InflightMap;
+use crate::shard_cache::ShardCache;
 use crate::manifest_source_v1::ManifestResourceSourceV1;
 
 /// F1 tuning hook: a JS global `globalThis.__hbFetchConcurrency` (a positive
@@ -113,6 +114,33 @@ pub fn shard_verify_enabled() -> bool {
         Ok(v) if v.is_undefined() || v.is_null() => true, // unset → verify (default)
         Ok(v) => !v.is_falsy(),                           // false/0 → skip; else verify
         Err(_) => true,
+    }
+}
+
+/// A15 §1 memory hook (2026-07-25): JS global `globalThis.__hbShardBudgetBytes`
+/// (a positive number set before `init_resource_source`) caps the resident bytes
+/// of this instance's shard record cache. Absent / non-numeric / < 1 →
+/// `usize::MAX`, i.e. the pre-A15 unbounded map, so the default ships
+/// behaviour-neutral (the eviction branch is unreachable at that budget).
+///
+/// Host-side, not a Rust-side URL flag (S0 lesson): JS parses `?shardBudgetMB=`
+/// and sets the global. PER-INSTANCE, like the fetch cap — the page runs two
+/// `ManifestResourceSource`s (main + bake worker) with independent caches, so
+/// the page total is at most twice this. `index.html` sets it on the main
+/// thread and forwards the same value in the bake worker's `init` message
+/// (defect-4 pattern: `js_sys::global()` in a worker is the WORKER's global,
+/// which the page never touched).
+pub fn configured_shard_budget_bytes() -> usize {
+    let g = js_sys::global();
+    let v = js_sys::Reflect::get(
+        g.as_ref(),
+        &wasm_bindgen::JsValue::from_str("__hbShardBudgetBytes"),
+    )
+    .ok()
+    .and_then(|val| val.as_f64());
+    match v {
+        Some(n) if n >= 1.0 => n as usize,
+        _ => usize::MAX,
     }
 }
 
@@ -276,9 +304,14 @@ pub struct V2Source {
     boot: HbaReader<Vec<u8>>,
     catalogs: Arc<Mutex<HashMap<String, NamespaceCatalog>>>,
     /// A15 S2: values are `Arc<Vec<u8>>` so [`ResourceSource::get_file_shared`]
-    /// hands out refcount bumps instead of full record copies. The map is
-    /// otherwise unchanged (still unbounded — see `cached_shard_bytes`).
-    shards: Arc<Mutex<HashMap<OwnedKey, Arc<Vec<u8>>>>>,
+    /// hands out refcount bumps instead of full record copies.
+    ///
+    /// A15 §1 (2026-07-25): now a byte-budgeted LRU ([`ShardCache`]) instead of
+    /// a never-evicting `HashMap`. DEFAULT budget is `usize::MAX` — the eviction
+    /// path cannot fire unless the host sets `__hbShardBudgetBytes`, so this
+    /// ships behaviour-neutral. See [`configured_shard_budget_bytes`] and the
+    /// `shard_cache` module doc for the eviction-soundness argument.
+    shards: Arc<Mutex<ShardCache<OwnedKey>>>,
     base_url: String,
     /// F.35: in-flight URL-fetch dedup map. When N concurrent
     /// `prefetch(keys)` calls overlap on a shard URL or catalog URL,
@@ -479,7 +512,7 @@ impl V2Source {
             manifest,
             boot,
             catalogs: Arc::new(Mutex::new(HashMap::new())),
-            shards: Arc::new(Mutex::new(HashMap::new())),
+            shards: Arc::new(Mutex::new(ShardCache::new(configured_shard_budget_bytes()))),
             base_url,
             inflight: Arc::new(InflightMap::new()),
             fetch_sem: Semaphore::new(configured_fetch_concurrency()),
@@ -502,12 +535,15 @@ impl V2Source {
         // Step A: filter out boot-served + already-cached keys.
         let mut work_keys: Vec<OwnedKey> = Vec::new();
         {
-            let cached = self.shards.lock().expect("shard cache mutex poisoned");
+            let mut cached = self.shards.lock().expect("shard cache mutex poisoned");
             for key in keys {
                 if self.boot_serves(*key) {
                     continue;
                 }
-                if cached.contains_key(&owned(*key)) {
+                // `contains_touch`: "already cached, skip the fetch" IS a use of
+                // the record — bumping recency here keeps the LRU from evicting
+                // exactly the records this walk round just decided it needs.
+                if cached.contains_touch(&owned(*key)) {
                     continue;
                 }
                 work_keys.push(owned(*key));
@@ -754,6 +790,11 @@ impl V2Source {
         let mut first_detail: Option<String> = None;
         {
             let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
+            // A15 §1: bracket the round so a batch larger than the whole budget
+            // cannot evict its OWN earlier results before the caller reads them
+            // (`prefetch` returning Ok must mean every landed key is readable).
+            // `end_round` below drops the protection and trims to budget.
+            cache.begin_round();
             for (task, result) in shard_tasks.into_iter().zip(results) {
                 let bytes = match result {
                     Ok(Some(bytes)) => bytes,
@@ -785,7 +826,9 @@ impl V2Source {
                 }
                 cache.insert(task.key, Arc::new(bytes));
             }
+            cache.end_round();
         }
+        self.publish_shard_cache_diag();
         if !failed.is_empty() {
             return Err(PrefetchError::PartialRound {
                 failed,
@@ -809,17 +852,61 @@ impl V2Source {
         self.shards.lock().expect("shard cache mutex poisoned").len()
     }
 
+    /// A15 §1 diag surface, published to `globalThis.__hbShardCache` at the end
+    /// of every prefetch round. A JS global rather than a `#[wasm_bindgen]`
+    /// export because the page runs TWO instances and the bake worker's exports
+    /// are not reachable from the page — this way each context reports its own
+    /// cache into its own global, and the worker's numbers can ride the existing
+    /// worker→page message channel if a later commit wants them merged into
+    /// `dat_decode_diag()`.
+    fn publish_shard_cache_diag(&self) {
+        let (bytes, count, evictions, evicted_bytes, budget) = {
+            let c = self.shards.lock().expect("shard cache mutex poisoned");
+            (
+                c.total_bytes(),
+                c.len(),
+                c.evictions(),
+                c.evicted_bytes(),
+                c.budget(),
+            )
+        };
+        let obj = js_sys::Object::new();
+        let set = |k: &str, v: f64| {
+            let _ = js_sys::Reflect::set(
+                &obj,
+                &wasm_bindgen::JsValue::from_str(k),
+                &wasm_bindgen::JsValue::from_f64(v),
+            );
+        };
+        set("shardCacheBytes", bytes as f64);
+        set("shardCacheCount", count as f64);
+        set("shardCacheEvictions", evictions as f64);
+        set("shardCacheEvictedBytes", evicted_bytes as f64);
+        // `usize::MAX` would round-trip as a meaningless 1.8e19; report the
+        // unbounded default as -1 so JS can test for it cheaply.
+        set(
+            "shardCacheBudget",
+            if budget == usize::MAX { -1.0 } else { budget as f64 },
+        );
+        let g = js_sys::global();
+        let _ = js_sys::Reflect::set(
+            g.as_ref(),
+            &wasm_bindgen::JsValue::from_str("__hbShardCache"),
+            &obj,
+        );
+    }
+
     /// See [`ManifestResourceSource::cached_shard_bytes`].
     fn cached_shard_bytes(&self) -> usize {
+        // A15 §1: now the LRU's running counter rather than an O(n) re-sum. It
+        // counts exactly the same thing — resident record payload, no `Arc`
+        // header, no map overhead — so the number stays comparable with the
+        // S1/S2 measurements. `ShardCache`'s `byte_accounting_exact_*` tests
+        // pin the counter against a recomputed ground truth so it cannot drift.
         self.shards
             .lock()
             .expect("shard cache mutex poisoned")
-            .values()
-            // A15 S2: values are `Arc<Vec<u8>>`; `.len()` derefs through to the
-            // record length, so this still reports resident RECORD bytes (the
-            // `Arc` header is not counted, matching the pre-S2 number exactly).
-            .map(|v| v.len())
-            .sum()
+            .total_bytes()
     }
 
     fn loaded_catalog_count(&self) -> usize {
@@ -848,7 +935,7 @@ impl V2Source {
             .expect("shard cache mutex poisoned")
             .get(&owned(key))
         {
-            return Ok((**bytes).clone());
+            return Ok((*bytes).clone());
         }
         Err(DatError::Other(format!(
             "ManifestResourceSource(v2): record not prefetched: {}:0x{:08X}; call prefetch() first",
@@ -870,7 +957,7 @@ impl V2Source {
             .expect("shard cache mutex poisoned")
             .get(&owned(key))
         {
-            return Ok(Arc::clone(bytes));
+            return Ok(bytes);
         }
         Err(DatError::Other(format!(
             "ManifestResourceSource(v2): record not prefetched: {}:0x{:08X}; call prefetch() first",
@@ -883,9 +970,11 @@ impl V2Source {
             return Some(meta);
         }
         let cache = self.shards.lock().expect("shard cache mutex poisoned");
-        cache.get(&owned(key)).map(|bytes| FileMetadata {
+        // `peek_len` (no recency bump): a metadata probe is not a record read,
+        // and the data read that follows will do its own touch.
+        cache.peek_len(&owned(key)).map(|size| FileMetadata {
             id: key.file_id,
-            size: bytes.len() as u32,
+            size: size as u32,
             is_pruned: false,
         })
     }

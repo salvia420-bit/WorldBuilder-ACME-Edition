@@ -68,6 +68,42 @@ function urlFlagEnabled() {
 const DEFAULT_FETCH_CONCURRENCY = 32; // mirrors concurrency.rs DEFAULT_FETCH_CONCURRENCY
 const WORKER_FETCH_SHARE_FRACTION = 0.25;
 
+// A15 §1 shard-cache budget (2026-07-25).
+//
+// `V2Source::shards` — the resource source's DAT-record cache — never evicted:
+// S1/S2 measured it ratcheting to ~58 MB (main) + ~21 MB (worker) over four town
+// hops and never falling, the dominant tracked RSS ratchet. Rust now backs it
+// with a byte-budgeted LRU whose DEFAULT budget is unbounded, so nothing changes
+// until a host sets `globalThis.__hbShardBudgetBytes` (read by
+// `configured_shard_budget_bytes()` in `manifest_source.rs`, exactly like
+// `__hbFetchConcurrency`).
+//
+// The knob is authored as `?shardBudgetMB=N` and is PER wasm INSTANCE (each of
+// the two instances owns a separate cache), so the page total is at most 2N.
+// Deliberately NOT split like the fetch cap: that budget is a page-wide browser
+// resource, this one is per-instance working set and halving it would starve
+// both caches. Absent / 0 / non-numeric → unbounded (pre-A15 behaviour).
+//
+// MUST be called before `init_resource_source` on the main thread; that call
+// sizes this instance's cache.
+export function applyShardBudget(g = globalThis) {
+  let mb = 0;
+  try {
+    const raw = new URLSearchParams(g.location?.search || "").get("shardBudgetMB");
+    const n = Number(raw);
+    if (raw !== null && Number.isFinite(n) && n > 0) mb = n;
+  } catch (_) {
+    /* unbounded */
+  }
+  if (mb > 0) {
+    g.__hbShardBudgetBytes = Math.floor(mb * 1024 * 1024);
+  } else {
+    // Leave the global unset so Rust takes the unbounded default.
+    delete g.__hbShardBudgetBytes;
+  }
+  return { mb, bytes: g.__hbShardBudgetBytes ?? 0 };
+}
+
 export function applyFetchConcurrencySplit(g = globalThis) {
   let total = DEFAULT_FETCH_CONCURRENCY;
   try {
@@ -273,6 +309,10 @@ export class BakeWorkerClient {
       // `undefined` → leave the worker global unset → Rust default (verify ON).
       verifyShards: globalThis.__hbVerifyShards,
       fetchConcurrency: globalThis.__hbFetchConcurrencyWorker,
+      // A15 §1: the worker's own `globalThis` is not the page's, so its shard
+      // cache would stay unbounded while the main thread's was capped. Same
+      // per-instance value (see applyShardBudget); `undefined` → unbounded.
+      shardBudgetBytes: globalThis.__hbShardBudgetBytes,
     });
     return this._readyPromise;
   }
