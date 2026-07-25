@@ -19,6 +19,8 @@
 //!
 //! See §Phase 1.1 of `docs/visual-fidelity-push-prompt-2026-05-13.md`.
 
+use crate::scratch::ScratchBuf;
+
 const LOW_RES_THRESHOLD: u32 = 64;
 
 /// Per-texel gain applied to the 3x3 luminance std-dev before clamping
@@ -217,6 +219,152 @@ pub fn height_from_luminance(rgba: &[u8], w: u32, h: u32, strength: f32) -> Vec<
     out
 }
 
+/// A15 §3b — fused normal + height derivation, one luminance pass, zero
+/// fresh scratch allocation.
+///
+/// Produces byte-for-byte the same output as calling
+/// [`normal_from_luminance`] and [`height_from_luminance`] separately with
+/// the same arguments — that equivalence is gated by
+/// `fused_matches_originals_*` in this module's tests and is the whole
+/// contract of this function. The originals are deliberately left as
+/// independent implementations so those tests compare two real code paths
+/// rather than a wrapper against itself.
+///
+/// What is saved per 512² surface: one of the two identical `lum` builds
+/// (−1.0 MiB), plus `gx_buf` and `height_buf` leased rather than allocated
+/// (−2.0 MiB). See `DESIGN-A15-ab-2026-07-24.md` §1 sites B/C/K.
+///
+/// `scratch` supplies three f32 slots, each resized-and-zeroed here (see
+/// [`ScratchBuf::f32_zeroed3`] — a leased buffer holds the previous user's
+/// bytes, so this function never reads a slot before writing it).
+///
+/// `normal_out` is cleared and filled to `w*h*3`, or left **empty** on
+/// malformed input. `height_out` is cleared and filled to `w*h`, or left
+/// **empty** on malformed input *or* on constant luminance (span ≈ 0),
+/// exactly matching `height_from_luminance`'s "skip POM" signal.
+pub fn normal_and_height_from_luminance(
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+    strength: f32,
+    scratch: &mut ScratchBuf,
+    normal_out: &mut Vec<u8>,
+    height_out: &mut Vec<u8>,
+) {
+    normal_out.clear();
+    height_out.clear();
+
+    let pixel_count = (w as usize).saturating_mul(h as usize);
+    let needed_rgba = pixel_count.saturating_mul(4);
+    if pixel_count == 0 || rgba.len() < needed_rgba {
+        return;
+    }
+
+    // Slot A = luminance, slot B = blur target then Sobel-X gradient,
+    // slot C = the integrated height. All three come back zeroed.
+    let (lum, scratch_b, height_buf) =
+        scratch.f32_zeroed3(pixel_count, pixel_count, pixel_count);
+
+    // --- The single luminance build (was done identically twice). ---
+    for i in 0..pixel_count {
+        let r = rgba[i * 4] as f32 / 255.0;
+        let g = rgba[i * 4 + 1] as f32 / 255.0;
+        let b = rgba[i * 4 + 2] as f32 / 255.0;
+        lum[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+
+    // --- Low-res pre-blur. Both consumers read the BLURRED buffer, which
+    // is what the two originals each do independently. Blurring for only
+    // one consumer is the negative control for the byte-equality gate.
+    if w <= LOW_RES_THRESHOLD || h <= LOW_RES_THRESHOLD {
+        gaussian_blur_3x3_into(lum, scratch_b, w, h);
+        lum.copy_from_slice(scratch_b);
+    }
+
+    let width = w as i32;
+    let height = h as i32;
+
+    // --- Normal map (mirrors `normal_from_luminance`). ---
+    normal_out.resize(pixel_count * 3, 0u8);
+    for y in 0..height {
+        for x in 0..width {
+            let l00 = sample_clamped(lum, x - 1, y - 1, width, height);
+            let l10 = sample_clamped(lum, x, y - 1, width, height);
+            let l20 = sample_clamped(lum, x + 1, y - 1, width, height);
+            let l01 = sample_clamped(lum, x - 1, y, width, height);
+            let l21 = sample_clamped(lum, x + 1, y, width, height);
+            let l02 = sample_clamped(lum, x - 1, y + 1, width, height);
+            let l12 = sample_clamped(lum, x, y + 1, width, height);
+            let l22 = sample_clamped(lum, x + 1, y + 1, width, height);
+
+            let gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
+            let gy = (l02 + 2.0 * l12 + l22) - (l00 + 2.0 * l10 + l20);
+
+            let nx_raw = -gx * strength;
+            let ny_raw = -gy * strength;
+
+            let mag_sq = nx_raw * nx_raw + ny_raw * ny_raw;
+            let (nx, ny) = if mag_sq > 1.0 {
+                let scale = 1.0 / mag_sq.sqrt();
+                (nx_raw * scale * 0.999, ny_raw * scale * 0.999)
+            } else {
+                (nx_raw, ny_raw)
+            };
+            let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
+
+            let idx = ((y as usize) * (w as usize) + x as usize) * 3;
+            normal_out[idx] = ((nx + 1.0) * 0.5 * 255.0).round().clamp(0.0, 255.0) as u8;
+            normal_out[idx + 1] = ((ny + 1.0) * 0.5 * 255.0).round().clamp(0.0, 255.0) as u8;
+            normal_out[idx + 2] = (nz * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    // --- Heightmap (mirrors `height_from_luminance`). Slot B is reused as
+    // `gx_buf`; every index is written before it is read.
+    let gx_buf = scratch_b;
+    for y in 0..height {
+        for x in 0..width {
+            let l00 = sample_clamped(lum, x - 1, y - 1, width, height);
+            let l20 = sample_clamped(lum, x + 1, y - 1, width, height);
+            let l01 = sample_clamped(lum, x - 1, y, width, height);
+            let l21 = sample_clamped(lum, x + 1, y, width, height);
+            let l02 = sample_clamped(lum, x - 1, y + 1, width, height);
+            let l22 = sample_clamped(lum, x + 1, y + 1, width, height);
+            let gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
+            gx_buf[(y as usize) * (w as usize) + x as usize] = gx * strength;
+        }
+    }
+
+    for y in 0..(h as usize) {
+        let row = y * (w as usize);
+        height_buf[row] = 0.0;
+        for x in 1..(w as usize) {
+            height_buf[row + x] = height_buf[row + x - 1] + gx_buf[row + x];
+        }
+    }
+
+    let mut min_h = f32::INFINITY;
+    let mut max_h = f32::NEG_INFINITY;
+    for &v in height_buf.iter() {
+        if v < min_h { min_h = v; }
+        if v > max_h { max_h = v; }
+    }
+    let span = max_h - min_h;
+    if !span.is_finite() || span.abs() < 1e-6 {
+        // Constant luminance → no height variation → empty, so the JS side
+        // skips POM on this surface. `height_out` is already cleared.
+        return;
+    }
+
+    height_out.resize(pixel_count, 0u8);
+    for i in 0..pixel_count {
+        let n = ((height_buf[i] - min_h) / span * 255.0)
+            .round()
+            .clamp(0.0, 255.0);
+        height_out[i] = n as u8;
+    }
+}
+
 /// Build a Rec.601 luminance buffer (f32 in [0,1]) from RGBA8 pixels.
 ///
 /// Shared by the Phase-5 roughness/AO generators. The pre-existing
@@ -341,6 +489,17 @@ pub fn ao_from_luminance(rgba: &[u8], w: u32, h: u32, strength: f32) -> Vec<u8> 
 fn gaussian_blur_3x3(buf: &[f32], w: u32, h: u32) -> Vec<f32> {
     let pixel_count = (w as usize) * (h as usize);
     let mut out = vec![0.0f32; pixel_count];
+    gaussian_blur_3x3_into(buf, &mut out, w, h);
+    out
+}
+
+/// Same kernel as [`gaussian_blur_3x3`], writing into a caller-owned
+/// buffer instead of allocating. `out.len()` must be `w * h`.
+///
+/// The arithmetic here is the single source of truth — `gaussian_blur_3x3`
+/// is a thin allocating wrapper over it — so the fused pass and the
+/// original per-map passes cannot drift apart.
+fn gaussian_blur_3x3_into(buf: &[f32], out: &mut [f32], w: u32, h: u32) {
     let width = w as i32;
     let height = h as i32;
     for y in 0..height {
@@ -360,12 +519,12 @@ fn gaussian_blur_3x3(buf: &[f32], w: u32, h: u32) -> Vec<f32> {
             out[(y as usize) * (w as usize) + x as usize] = sum / 16.0;
         }
     }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::ScratchPool;
 
     fn solid(w: u32, h: u32, r: u8, g: u8, b: u8) -> Vec<u8> {
         let mut out = Vec::with_capacity((w * h * 4) as usize);
@@ -803,6 +962,183 @@ mod tests {
             lo[i],
             hi[i]
         );
+    }
+
+    // A15 §3b — fused normal+height byte-identity gate.
+
+    /// Cheap deterministic noise (LCG) so the fixtures exercise real
+    /// gradients rather than only synthetic patterns.
+    fn noise(w: u32, h: u32, seed: u32) -> Vec<u8> {
+        let mut s = seed | 1;
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            let mut next = || {
+                s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (s >> 24) as u8
+            };
+            let (r, g, b) = (next(), next(), next());
+            out.extend_from_slice(&[r, g, b, 0xFF]);
+        }
+        out
+    }
+
+    fn ramp(w: u32, h: u32, span: f32) -> Vec<u8> {
+        let mut buf = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..h {
+            for x in 0..w {
+                let denom = if w > 1 { (w - 1) as f32 } else { 1.0 };
+                let v = (x as f32 / denom * span).round() as u8;
+                buf.extend_from_slice(&[v, v, v, 0xFF]);
+            }
+        }
+        buf
+    }
+
+    /// Every fixture the equality gate runs over: (label, rgba, w, h).
+    fn fused_fixtures() -> Vec<(&'static str, Vec<u8>, u32, u32)> {
+        vec![
+            // Tiny — every neighbour fetch is an edge clamp.
+            ("1x1 solid", solid(1, 1, 200, 30, 90), 1, 1),
+            ("1x1 black", solid(1, 1, 0, 0, 0), 1, 1),
+            ("2x2 checker", checker(2, 2, [0, 0, 0], [255, 255, 255]), 2, 2),
+            ("2x2 noise", noise(2, 2, 7), 2, 2),
+            ("1x9 column", noise(1, 9, 11), 1, 9),
+            ("9x1 row", noise(9, 1, 13), 9, 1),
+            // Below LOW_RES_THRESHOLD → Gaussian pre-blur branch.
+            ("8x8 checker (blur)", checker(8, 8, [0, 0, 0], [255, 255, 255]), 8, 8),
+            ("16x16 noise (blur)", noise(16, 16, 3), 16, 16),
+            ("7x13 odd (blur)", noise(7, 13, 5), 7, 13),
+            ("13x7 odd (blur)", noise(13, 7, 17), 13, 7),
+            // Exactly AT the threshold — `<=` means this still blurs.
+            ("64x64 noise (at threshold)", noise(64, 64, 23), 64, 64),
+            ("64x65 (h>64, w==64 → blur)", noise(64, 65, 29), 64, 65),
+            ("65x64 (w>64, h==64 → blur)", noise(65, 64, 31), 65, 64),
+            // Strictly above on both axes → no blur.
+            ("65x65 noise (no blur)", noise(65, 65, 37), 65, 65),
+            ("128x128 checker (no blur)", checker(128, 128, [0, 0, 0], [255, 255, 255]), 128, 128),
+            ("71x131 odd (no blur)", noise(71, 131, 41), 71, 131),
+            ("128x128 ramp", ramp(128, 128, 255.0), 128, 128),
+            ("33x33 ramp (blur)", ramp(33, 33, 200.0), 33, 33),
+            // Constant luminance → height_from_luminance returns EMPTY.
+            ("128x128 solid (empty height)", solid(128, 128, 80, 80, 80), 128, 128),
+            ("16x16 solid (empty height, blur)", solid(16, 16, 80, 80, 80), 16, 16),
+        ]
+    }
+
+    /// THE byte-identity gate (design §3b): the fused pass must reproduce
+    /// `normal_from_luminance` + `height_from_luminance` exactly, for every
+    /// fixture × strength.
+    ///
+    /// Negative control: feed the height consumer the UNBLURRED luminance
+    /// (i.e. blur into slot B and read `lum` for the gx pass) and this must
+    /// fail on the ≤ LOW_RES_THRESHOLD fixtures.
+    #[test]
+    fn fused_matches_originals_byte_for_byte() {
+        let pool = ScratchPool::new(2);
+        for (label, rgba, w, h) in fused_fixtures() {
+            for strength in [0.5f32, 1.0, 2.0, 4.0] {
+                let want_n = normal_from_luminance(&rgba, w, h, strength);
+                let want_h = height_from_luminance(&rgba, w, h, strength);
+
+                let mut lease = pool.lease();
+                let mut got_n = Vec::new();
+                let mut got_h = Vec::new();
+                normal_and_height_from_luminance(
+                    &rgba,
+                    w,
+                    h,
+                    strength,
+                    lease.buf_mut(),
+                    &mut got_n,
+                    &mut got_h,
+                );
+
+                assert_eq!(
+                    got_n, want_n,
+                    "fused NORMAL differs from normal_from_luminance for {label} @ strength {strength}"
+                );
+                assert_eq!(
+                    got_h, want_h,
+                    "fused HEIGHT differs from height_from_luminance for {label} @ strength {strength}"
+                );
+            }
+        }
+    }
+
+    /// Malformed / degenerate inputs must EMPTY both outputs, including
+    /// when the output vecs arrive non-empty (they are reused buffers).
+    #[test]
+    fn fused_empties_outputs_on_malformed_input() {
+        let mut buf = ScratchBuf::new();
+        for (rgba, w, h) in [
+            (Vec::new(), 0u32, 0u32),
+            (vec![0u8; 8], 4, 4),
+            (solid(4, 4, 9, 9, 9), 0, 4),
+            (solid(4, 4, 9, 9, 9), 4, 0),
+        ] {
+            let mut n = vec![0xAAu8; 64];
+            let mut hh = vec![0xBBu8; 64];
+            normal_and_height_from_luminance(&rgba, w, h, 1.0, &mut buf, &mut n, &mut hh);
+            assert!(n.is_empty(), "normal_out must be emptied for {w}x{h}");
+            assert!(hh.is_empty(), "height_out must be emptied for {w}x{h}");
+            assert_eq!(normal_from_luminance(&rgba, w, h, 1.0), n);
+            assert_eq!(height_from_luminance(&rgba, w, h, 1.0), hh);
+        }
+    }
+
+    /// Buffer reuse must not contaminate results: run a size-varying
+    /// sequence through ONE pooled ScratchBuf and one pair of output vecs,
+    /// and require each result to still match the originals. This is the
+    /// end-to-end version of `scratch_lease_is_always_zeroed`.
+    #[test]
+    fn fused_is_clean_across_reused_scratch_and_outputs() {
+        let pool = ScratchPool::new(1);
+        let mut got_n = Vec::new();
+        let mut got_h = Vec::new();
+        let fixtures = fused_fixtures();
+        // Two passes, so every fixture also runs on a buffer previously
+        // used by a LARGER one (the stale-tail case).
+        for _ in 0..2 {
+            for (label, rgba, w, h) in &fixtures {
+                let mut lease = pool.lease();
+                normal_and_height_from_luminance(
+                    rgba,
+                    *w,
+                    *h,
+                    1.0,
+                    lease.buf_mut(),
+                    &mut got_n,
+                    &mut got_h,
+                );
+                assert_eq!(
+                    got_n,
+                    normal_from_luminance(rgba, *w, *h, 1.0),
+                    "reused-scratch normal drift for {label}"
+                );
+                assert_eq!(
+                    got_h,
+                    height_from_luminance(rgba, *w, *h, 1.0),
+                    "reused-scratch height drift for {label}"
+                );
+            }
+        }
+        assert_eq!(pool.idle_len(), 1);
+    }
+
+    /// The pre-blur branch is a `<=` on EITHER axis. Pin that the fused
+    /// path agrees with the originals right across the boundary, so a
+    /// blur-branch mismatch cannot hide behind fixture choice.
+    #[test]
+    fn fused_low_res_threshold_boundary_matches() {
+        let mut buf = ScratchBuf::new();
+        for (w, h) in [(63u32, 63u32), (64, 64), (64, 128), (128, 64), (65, 65)] {
+            let rgba = noise(w, h, w * 131 + h);
+            let mut n = Vec::new();
+            let mut hh = Vec::new();
+            normal_and_height_from_luminance(&rgba, w, h, 1.0, &mut buf, &mut n, &mut hh);
+            assert_eq!(n, normal_from_luminance(&rgba, w, h, 1.0), "normal @ {w}x{h}");
+            assert_eq!(hh, height_from_luminance(&rgba, w, h, 1.0), "height @ {w}x{h}");
+        }
     }
 
     #[test]

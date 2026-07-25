@@ -7,6 +7,7 @@ pub mod landblock;
 pub mod manifest;
 pub mod normal_gen;
 pub mod physics;
+pub mod scratch;
 pub mod surface_classify;
 pub mod terrain_merge;
 pub mod terrain_subdiv;
@@ -23,7 +24,11 @@ use binrw::{BinRead, io::Cursor};
 pub use error::{DatError, Result};
 pub use file_type::{DatFileType, DatKind};
 pub use manifest::StripperManifest;
-pub use normal_gen::{ao_from_luminance, normal_from_luminance, roughness_from_luminance};
+pub use normal_gen::{
+    ao_from_luminance, height_from_luminance, normal_and_height_from_luminance,
+    normal_from_luminance, roughness_from_luminance,
+};
+pub use scratch::{ScratchBuf, ScratchLease, ScratchPool, Slot as ScratchSlot};
 pub use surface_classify::{SurfaceCategory, SurfaceStats, classify, compute_stats};
 use std::collections::HashMap;
 use std::fs::File;
