@@ -358,6 +358,82 @@ function queueCapFlag() {
   }
 }
 
+// A16 (2026-07-25) — per-SUBMISSION batch cap: `?bakeBatchMax=N`.
+//
+// WHY A SIZE CAP AND NOT ANOTHER CONCURRENCY CAP. Every stage of the decode
+// pipeline already bounds how many things run AT ONCE — the wasm fetch
+// semaphore (`concurrency.rs`), the S4 decode gate (`decode_admission.rs`),
+// this file's `_queueCap`, and cells.js's `?pvsStreamQueue` in-flight target.
+// Nothing bounds how BIG one submission is, and the batched wasm exports
+// materialise their ENTIRE decoded output before returning:
+//   - `fetch_surfaces_pixels` (src/lib.rs) fills `results: Vec<Option<
+//     SurfacePixels>>` sized to the input. `SURFACE_BATCH_SPLIT_CHUNK = 16`
+//     chunks only the walk + the decode lease (dropped per chunk) — `results`
+//     keeps growing across chunks, so the decoded peak is invisible to the gate.
+//   - `fetch_model_meshes` (src/lib.rs) takes ONE lease for the whole call,
+//     sized by `estimate_record_bytes` (WIRE bytes, never `revise`d), and its
+//     `out: Vec<ModelMesh>` holds every packed mesh — the in-code comment says
+//     so: "the peak this bounds is the whole `out` vector".
+// A concurrency gate therefore cannot shrink a single submission: one call is
+// one lease no matter how tight the cap. That is the mechanical reason S4's
+// battery found the tightest arm matching unbounded
+// (`RESULTS-s4-battery-2026-07-25.md` finding 3) — and why the remaining lever
+// is the batch SIZE, which only the submitter can change.
+//
+// Behaviour: with `?bakeBatchMax=N` a worker-routed surface / model-mesh
+// request longer than N is split into ceil(len/N) SEQUENTIAL waves (await
+// between them — concurrent waves would rebuild the very peak we are cutting),
+// and the per-wave results are concatenated in input order. Absent / `off` /
+// `0` / garbage ⇒ 0 ⇒ every request takes the pre-A16 single-call path with the
+// caller's ORIGINAL argument object, i.e. bit-for-bit today's behaviour.
+//
+// Scope: the two worker-routed funnels every landblock bake goes through
+// (`fetchSurfacesPixels`, `fetchModelMeshes`). It is INERT under
+// `?bakeWorker=0` — that branch must keep returning the exact wasm export
+// reference (see `modelMeshFetcher`'s contract). Entity-surface paths are
+// per-entity/per-LB shaped and are deliberately left alone.
+//
+// The cap binds only at COLD BOOT in practice: a steady-state per-LB bake
+// submits far fewer DIDs than any useful N, so the waves collapse to one call
+// and the flag costs nothing once the world is warm.
+const DEFAULT_BAKE_BATCH_MAX = 0; // 0 = uncapped (pre-A16)
+
+/** Parse one `?bakeBatchMax=` token. Returns 0 for absent/off/garbage. */
+export function parseBakeBatchMax(raw) {
+  if (raw === null || raw === undefined) return DEFAULT_BAKE_BATCH_MAX;
+  const s = String(raw).trim();
+  if (s === "" || s === "off" || s === "false") return DEFAULT_BAKE_BATCH_MAX;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_BAKE_BATCH_MAX;
+  return Math.floor(n);
+}
+
+/** Resolve `?bakeBatchMax=` from a query string. Pure; touches no globals. */
+export function resolveBakeBatchMax(search = "") {
+  try {
+    return parseBakeBatchMax(new URLSearchParams(search || "").get("bakeBatchMax"));
+  } catch (_) {
+    return DEFAULT_BAKE_BATCH_MAX;
+  }
+}
+
+/**
+ * Split `len` items into contiguous `[lo, hi)` wave ranges of at most `cap`.
+ * `cap <= 0` (or `len <= cap`) degrades to ONE whole-batch range, which is what
+ * keeps the unauthored page on the original single-call path. Mirrors the Rust
+ * `batch_split_ranges` (src/lib.rs) shape so the two split notions read alike.
+ * Exported for the unit suite.
+ */
+export function splitBatchWaves(len, cap) {
+  if (len <= 0) return [];
+  if (!Number.isFinite(cap) || cap <= 0 || len <= cap) return [[0, len]];
+  const out = [];
+  for (let start = 0; start < len; start += cap) {
+    out.push([start, Math.min(start + cap, len)]);
+  }
+  return out;
+}
+
 /** Dispatch lane for a worker message. Exported for the unit suite. */
 export function laneForBakeMessage(type, body) {
   if (type === "init") return 0;
@@ -407,15 +483,21 @@ export class BakeWorkerClient {
     this._queueCap = queueCapFlag();
     this._lanes = [[], [], []];
     this._inFlightPosted = 0;
+    // A16 (2026-07-25) — `?bakeBatchMax=N`; 0 = uncapped (pre-A16 behaviour).
+    this.batchMax = DEFAULT_BAKE_BATCH_MAX;
   }
 
   /**
-   * @param {{enabled?:boolean, manifestUrl?:string, sceneryBaseUrl?:string, aliasSplit?:boolean}} [opts]
+   * @param {{enabled?:boolean, manifestUrl?:string, sceneryBaseUrl?:string, aliasSplit?:boolean, batchMax?:number}} [opts]
    */
   configure(opts = {}) {
     this.enabled = typeof opts.enabled === "boolean" ? opts.enabled : urlFlagEnabled();
     this.aliasSplit =
       typeof opts.aliasSplit === "boolean" ? opts.aliasSplit : aliasSplitFlagEnabled();
+    this.batchMax =
+      typeof opts.batchMax === "number"
+        ? parseBakeBatchMax(opts.batchMax)
+        : resolveBakeBatchMax(globalThis.location?.search || "");
     if (opts.manifestUrl != null) this.manifestUrl = opts.manifestUrl;
     if (opts.sceneryBaseUrl != null) this.sceneryBaseUrl = opts.sceneryBaseUrl;
     return this;
@@ -660,6 +742,28 @@ export class BakeWorkerClient {
    */
   async fetchModelMeshes(wasmExports, ids, urgent) {
     if (!this.active) return wasmExports.fetch_model_meshes(ids, urgent);
+    // A16: split an oversized submission into sequential waves. `splitBatchWaves`
+    // returns a single whole-batch range whenever the cap is unset or unreached,
+    // and that range takes the `ids` object through UNTOUCHED.
+    const arr = this.batchMax > 0 ? Array.from(ids, (v) => v >>> 0) : null;
+    const waves = arr ? splitBatchWaves(arr.length, this.batchMax) : null;
+    if (waves && waves.length > 1) {
+      const out = [];
+      for (const [lo, hi] of waves) {
+        const part = await this._fetchModelMeshesOnce(
+          wasmExports,
+          Uint32Array.from(arr.slice(lo, hi)),
+          urgent,
+        );
+        for (const m of part) out.push(m);
+      }
+      return out;
+    }
+    return this._fetchModelMeshesOnce(wasmExports, ids, urgent);
+  }
+
+  /** One worker round-trip for model meshes (the pre-A16 body). */
+  async _fetchModelMeshesOnce(wasmExports, ids, urgent) {
     try {
       await this._ensureWorker();
       const res = await this._request("fetchModelMeshes", {
@@ -676,6 +780,46 @@ export class BakeWorkerClient {
   /** Surface pixels off-thread. Drop-in for the surface consumers. */
   async fetchSurfacesPixels(wasmExports, dids, urgent) {
     if (!this.active) return wasmExports.fetch_surfaces_pixels(dids, urgent);
+    // A16: sequential waves when `?bakeBatchMax=N` is armed and exceeded. The
+    // per-wave results concatenate in input order (every consumer binds by
+    // index into the DID list it passed), and the CALL-LEVEL decode audit is
+    // merged the same way `_stitchSplit` merges the two alias legs: misses sum,
+    // provenAbsent unions. A single wave (the unarmed case) passes `dids`
+    // through untouched.
+    const arr = this.batchMax > 0 ? Array.from(dids, (d) => d >>> 0) : null;
+    const waves = arr ? splitBatchWaves(arr.length, this.batchMax) : null;
+    if (waves && waves.length > 1) {
+      const out = [];
+      let misses;
+      let absent = null;
+      for (const [lo, hi] of waves) {
+        const part = await this._fetchSurfacesPixelsOnce(
+          wasmExports,
+          Uint32Array.from(arr.slice(lo, hi)),
+          urgent,
+        );
+        const a = extractSurfaceAudit(part);
+        if (a) {
+          if (typeof a.decodeMisses === "number") misses = (misses ?? 0) + a.decodeMisses;
+          if (Array.isArray(a.provenAbsent)) {
+            absent = absent ? [...absent, ...a.provenAbsent] : [...a.provenAbsent];
+          }
+        }
+        for (const sp of part) out.push(sp);
+      }
+      if (misses !== undefined || absent) {
+        applySurfaceAudit(out, {
+          ...(misses !== undefined ? { decodeMisses: misses } : {}),
+          ...(absent ? { provenAbsent: [...new Set(absent)] } : {}),
+        });
+      }
+      return out;
+    }
+    return this._fetchSurfacesPixelsOnce(wasmExports, dids, urgent);
+  }
+
+  /** One worker round-trip for surface pixels (the pre-A16 body). */
+  async _fetchSurfacesPixelsOnce(wasmExports, dids, urgent) {
     try {
       await this._ensureWorker();
       // R-1 alias split: statics/cells/buildings never carry aliases (no
@@ -900,7 +1044,8 @@ export function getBakeWorkerClient() {
               maxQueueMs: Math.round(b.maxQueueMs),
             })),
           };
-          if (!s) return { active: !!_singleton?.active, byType: {}, maxPending: 0, queue };
+          const batchMax = _singleton?.batchMax ?? 0;
+          if (!s) return { active: !!_singleton?.active, batchMax, byType: {}, maxPending: 0, queue };
           const byType = {};
           for (const [type, b] of Object.entries(s.byType)) {
             byType[type] = {
@@ -917,7 +1062,7 @@ export function getBakeWorkerClient() {
               totalDepth: b.totalDepth,
             };
           }
-          return { active: !!_singleton?.active, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType, queue };
+          return { active: !!_singleton?.active, batchMax, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType, queue };
         };
       }
     } catch (_) {}
