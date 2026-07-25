@@ -104,6 +104,92 @@ export function applyShardBudget(g = globalThis) {
   return { mb, bytes: g.__hbShardBudgetBytes ?? 0 };
 }
 
+// Surface-cache budget — S2 host plumbing (DESIGN-surface-budget-2026-07-25).
+//
+// `SURFACE_PIXEL_CACHE` (apps/holtburger-web/src/lib.rs) is a byte-budget LRU
+// sized from the COMPILE-TIME `SURFACE_CACHE_BUDGET_BYTES` = 96 MiB. The page
+// runs two wasm instances (main + bake worker), each with its own linear memory
+// and therefore its OWN store, so the page holds 2 × 96 MiB ≈ 192 MiB of
+// decoded pixels from hop 1 — both stores saturate and evict every session, so
+// the constant is a BUDGET, not an observation of demand (design §1). This
+// knob turns that constant into the DEFAULT of a host-supplied budget read at
+// the store's `LazyLock` init (`configured_surface_budget_bytes()`), so an
+// unauthored page is bit-for-bit unchanged.
+//
+// Grammar:  ?surfaceBudgetMB=N     both instances get N MB
+//           ?surfaceBudgetMB=N:M   main gets N MB, the bake worker gets M MB
+// The split is design §2 option (B): the roles are asymmetric. The worker
+// carries the bulk statics/scenery/entity decode plus the composed (dyed)
+// class, while the main thread's cross-call hits are largely suppressed by the
+// never-evicted JS `MaterialCache` in front of it — so main plausibly needs
+// only the intra-call walk window (`SURFACE_BATCH_SPLIT_CHUNK` = 16 DIDs).
+// `:` survives `URLSearchParams` untouched, so this token has none of
+// `?decodeAdmission`'s `+`→space footgun; a space is accepted anyway.
+//
+// Absent / garbage / <= 0 → both globals are DELETED and Rust keeps 96 MiB.
+//
+// MUST be called before `init_resource_source` on the main thread — really
+// before the first surface decode, which that ordering guarantees. FOOTGUN:
+// the budget is fixed at the `LazyLock` init and `surface_pixel_cache_clear_all()`
+// clears entries WITHOUT resizing, so setting the global after boot is a
+// silent no-op (same as `__hbShardBudgetBytes`).
+const SURFACE_BUDGET_RE = /^(\d+(?:\.\d+)?)(?:[: ](\d+(?:\.\d+)?))?$/;
+
+/** Parse one `surfaceBudgetMB` token. Returns null for absent/garbage (⇒ default). */
+export function parseSurfaceBudgetSpec(raw) {
+  if (raw === null || raw === undefined) return null;
+  const m = SURFACE_BUDGET_RE.exec(String(raw).trim());
+  if (!m) return null;
+  const mainMB = Number(m[1]);
+  if (!Number.isFinite(mainMB) || mainMB <= 0) return null;
+  const wRaw = m[2] === undefined ? 0 : Number(m[2]);
+  // A lone `N` means BOTH instances get N — unlike `?decodeAdmission`, whose
+  // shorthand halves the main share. Here the asymmetry must be authored
+  // explicitly: a silent halving would make `=48` mean 48+24, which reads as
+  // a page total of 96 and is exactly the confusion this flag exists to end.
+  const workerMB = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : mainMB;
+  return { mainMB, workerMB };
+}
+
+/** Resolve `?surfaceBudgetMB=` into a spec or null. Pure; touches no globals. */
+export function resolveSurfaceBudget(search = "") {
+  try {
+    return parseSurfaceBudgetSpec(new URLSearchParams(search || "").get("surfaceBudgetMB"));
+  } catch (_) {
+    return null; /* default */
+  }
+}
+
+/**
+ * Apply the resolved budget: `__hbSurfaceBudgetBytes` for THIS instance,
+ * `__hbSurfaceBudgetBytesWorker` stashed for the worker's `init` message
+ * (defect-4 pattern — `js_sys::global()` in a worker is the WORKER's global,
+ * which the page never touched). Returns null when unauthored.
+ */
+export function applySurfaceBudget(g = globalThis) {
+  let spec = null;
+  try {
+    spec = resolveSurfaceBudget(g.location?.search || "");
+  } catch (_) {
+    /* default */
+  }
+  if (!spec) {
+    // Leave both globals unset so Rust takes SURFACE_CACHE_BUDGET_BYTES.
+    delete g.__hbSurfaceBudgetBytes;
+    delete g.__hbSurfaceBudgetBytesWorker;
+    return null;
+  }
+  const toBytes = (mb) => Math.max(1, Math.floor(mb * 1024 * 1024));
+  g.__hbSurfaceBudgetBytes = toBytes(spec.mainMB);
+  g.__hbSurfaceBudgetBytesWorker = toBytes(spec.workerMB);
+  return {
+    mainMB: spec.mainMB,
+    workerMB: spec.workerMB,
+    mainBytes: g.__hbSurfaceBudgetBytes,
+    workerBytes: g.__hbSurfaceBudgetBytesWorker,
+  };
+}
+
 // A15 §2 (a) decode admission — S4 host-supplied bound (2026-07-25).
 //
 // The Rust decode gate (`apps/holtburger-web/src/decode_admission.rs`) ships
@@ -477,6 +563,12 @@ export class BakeWorkerClient {
       // cache would stay unbounded while the main thread's was capped. Same
       // per-instance value (see applyShardBudget); `undefined` → unbounded.
       shardBudgetBytes: globalThis.__hbShardBudgetBytes,
+      // Surface-budget S2: the WORKER's half of `?surfaceBudgetMB=N:M` (a lone
+      // `N` gives both instances N). Same defect-4 reason as the shard budget —
+      // the worker's `globalThis` is not the page's, so its surface store would
+      // keep the 96 MiB default while the main thread's was capped.
+      // `undefined` → the worker leaves its global unset → Rust's 96 MiB.
+      surfaceBudgetBytes: globalThis.__hbSurfaceBudgetBytesWorker,
       // A15 §2.5 (S4): the WORKER's own decode-admission spec — deliberately
       // the larger half (it carries the bulk mesh/surface load). `undefined`
       // → the worker leaves its globals unset → Rust's unbounded default.
