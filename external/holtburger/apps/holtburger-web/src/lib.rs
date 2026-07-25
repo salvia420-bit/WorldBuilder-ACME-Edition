@@ -10085,12 +10085,55 @@ fn empty_surface_pixels() -> SurfacePixels {
     }
 }
 
+/// A15 §3a/§3b — the process-wide scratch pool for the fused
+/// luminance→normal+height derivative pass.
+///
+/// One pool per wasm instance (main thread and bake worker each have their
+/// own linear memory, so each gets its own). `cap = 4` matches the design's
+/// at-rest bound: four 512²-shaped `ScratchBuf`s ≈ 12 MiB retained worst
+/// case, and the pool only reaches that under four concurrent decodes.
+///
+/// Deliberately **not** a `thread_local!` (design §3a): a `Mutex`-guarded
+/// pool is `Send + Sync`, is capped, and survives a future rayon dispatch
+/// unchanged.
+static NORMAL_HEIGHT_SCRATCH: std::sync::LazyLock<holtburger_dat::ScratchPool> =
+    std::sync::LazyLock::new(|| holtburger_dat::ScratchPool::new(4));
+
+/// Run the fused derivative pass over one decoded surface, returning
+/// `(normal_pixels, height_pixels)`.
+///
+/// Byte-identical to the pair of calls it replaces
+/// (`normal_from_luminance(px, w, h, 1.0)` + `height_from_luminance(px, w,
+/// h, 1.0)`) — both call sites used strength `1.0` for **both** maps, which
+/// is what makes the single-`strength` fused signature applicable here.
+/// `holtburger-dat`'s `fused_matches_originals_byte_for_byte` carries the
+/// equality burden.
+///
+/// The empty-output semantics are load-bearing and pass through unchanged:
+/// a constant-luminance surface (height span < 1e-6) yields an **empty**
+/// `height_pixels`, which is how the JS material decoder knows to skip POM
+/// on that surface. Malformed input yields both empty.
+fn normal_and_height_pixels(pixels: &[u8], w: u32, h: u32) -> (Vec<u8>, Vec<u8>) {
+    let mut normal_pixels = Vec::new();
+    let mut height_pixels = Vec::new();
+    let mut lease = NORMAL_HEIGHT_SCRATCH.lease();
+    holtburger_dat::normal_gen::normal_and_height_from_luminance(
+        pixels,
+        w,
+        h,
+        1.0,
+        lease.buf_mut(),
+        &mut normal_pixels,
+        &mut height_pixels,
+    );
+    (normal_pixels, height_pixels)
+}
+
 fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     surface_did: u32,
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
-    use holtburger_dat::normal_gen::{height_from_luminance, normal_from_luminance};
     use holtburger_dat::surface_classify::{compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     // Generic (12) is the natural empty / "no opinion" fallback for
@@ -10266,10 +10309,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             let (normal_pixels, height_pixels) = if (surface_type & LUMINOUS) != 0 {
                 (Vec::new(), Vec::new())
             } else {
-                (
-                    normal_from_luminance(&pixels, tex_w, tex_h, 1.0),
-                    height_from_luminance(&pixels, tex_w, tex_h, 1.0),
-                )
+                // A15 §3b — one fused pass: luminance built once, the
+                // low-res gaussian pre-blur shared by both consumers, and
+                // the three f32 scratch buffers leased instead of freshly
+                // allocated. Byte-identical to the two calls it replaces.
+                normal_and_height_pixels(&pixels, tex_w, tex_h)
             };
             SurfacePixels {
                 width: tex_w,
@@ -11983,7 +12027,6 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     sub_palettes: &[(u32, u8, u8)],
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
-    use holtburger_dat::normal_gen::{height_from_luminance, normal_from_luminance};
     use holtburger_dat::surface_classify::{compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     let generic_cat = SurfaceCategory::Generic.as_u8();
@@ -12163,10 +12206,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             let (normal_pixels, height_pixels) = if (surface_type & LUMINOUS) != 0 {
                 (Vec::new(), Vec::new())
             } else {
-                (
-                    normal_from_luminance(&pixels, tex_w, tex_h, 1.0),
-                    height_from_luminance(&pixels, tex_w, tex_h, 1.0),
-                )
+                // A15 §3b — one fused pass: luminance built once, the
+                // low-res gaussian pre-blur shared by both consumers, and
+                // the three f32 scratch buffers leased instead of freshly
+                // allocated. Byte-identical to the two calls it replaces.
+                normal_and_height_pixels(&pixels, tex_w, tex_h)
             };
             SurfacePixels {
                 width: tex_w,
