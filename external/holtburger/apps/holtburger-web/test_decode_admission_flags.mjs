@@ -12,6 +12,8 @@ import {
   parseDecodeAdmissionSpec,
   resolveDecodeAdmission,
   applyDecodeAdmission,
+  parseDecodePressureSpec,
+  resolveDecodePressure,
 } from "./scene3d/bake_worker_client.js";
 
 let passed = 0, failed = 0;
@@ -97,6 +99,63 @@ g = fakeGlobal("?decodeAdmissionMain=4");
 applyDecodeAdmission(g);
 check("count-only arming leaves the byte/reserve globals unset",
   g.__hbDecodeMaxJobs === 4 && !("__hbDecodeMaxBytes" in g) && !("__hbDecodeUrgentReserve" in g));
+
+// ---- S5: `?decodePressure` grammar + the inert-by-default contract ----
+check("1024:1536 parses both steps",
+  eq(parseDecodePressureSpec("1024:1536"), { t1MB: 1024, t2MB: 1536 }),
+  JSON.stringify(parseDecodePressureSpec("1024:1536")));
+check("a lone T1 arms only the halving step",
+  eq(parseDecodePressureSpec("1024"), { t1MB: 1024, t2MB: 0 }));
+check("fractional MB allowed", eq(parseDecodePressureSpec("0.5:1.5"), { t1MB: 0.5, t2MB: 1.5 }));
+check("whitespace tolerated", eq(parseDecodePressureSpec("  1024:1536 "), { t1MB: 1024, t2MB: 1536 }));
+check("a space separator (the `+`-shaped mistake) is accepted",
+  eq(parseDecodePressureSpec("1024 1536"), { t1MB: 1024, t2MB: 1536 }));
+check("t2 <= t1 degrades to one step, not to nonsense",
+  eq(parseDecodePressureSpec("1536:1024"), { t1MB: 1536, t2MB: 0 }) &&
+  eq(parseDecodePressureSpec("1024:1024"), { t1MB: 1024, t2MB: 0 }));
+for (const bad of [null, undefined, "", "off", "0", "0:0", "-1:2", "1024:", ":1536", "1024:1536:2048", "abc"]) {
+  check(`garbage ${JSON.stringify(bad)} => null (inert)`, parseDecodePressureSpec(bad) === null,
+    JSON.stringify(parseDecodePressureSpec(bad)));
+}
+check("no param => inert", resolveDecodePressure("?nosw=1") === null);
+check("resolve reads the decodePressure param",
+  eq(resolveDecodePressure("?decodePressure=1024:1536"), { t1MB: 1024, t2MB: 1536 }));
+
+const PGLOBALS = ["__hbDecodePressureT1MB", "__hbDecodePressureT2MB"];
+function fakePGlobal(search) {
+  return { location: { search }, __hbDecodePressureT1MB: 7, __hbDecodePressureT2MB: 7 };
+}
+g = fakePGlobal("");
+applyDecodeAdmission(g);
+check("no param: both pressure globals are DELETED (inert, bit-for-bit S4)",
+  PGLOBALS.every((k) => !(k in g)), JSON.stringify(PGLOBALS.map((k) => [k, g[k]])));
+check("no param: no pressure spec forwarded to the worker",
+  g.__hbDecodePressureWorker === undefined);
+
+g = fakePGlobal("?decodePressure=1024:1536");
+const withP = applyDecodeAdmission(g);
+check("armed: both pressure globals set, in MB",
+  g.__hbDecodePressureT1MB === 1024 && g.__hbDecodePressureT2MB === 1536,
+  `${g.__hbDecodePressureT1MB}/${g.__hbDecodePressureT2MB}`);
+check("armed: the SAME pair is forwarded to the worker (each instance measures itself)",
+  eq(g.__hbDecodePressureWorker, { t1MB: 1024, t2MB: 1536 }));
+check("armed: applyDecodeAdmission returns the pressure spec", eq(withP.pressure, { t1MB: 1024, t2MB: 1536 }));
+
+g = fakePGlobal("?decodePressure=1024");
+applyDecodeAdmission(g);
+check("lone T1: the T2 global stays unset (Rust keeps u64::MAX)",
+  g.__hbDecodePressureT1MB === 1024 && !("__hbDecodePressureT2MB" in g));
+
+// Pressure and the cap bound are independent params: arming one must not arm
+// the other, in either direction.
+g = { location: { search: "?decodePressure=1024:1536" } };
+applyDecodeAdmission(g);
+check("pressure alone does not arm the cap globals",
+  !("__hbDecodeMaxJobs" in g) && g.__hbDecodePressureT1MB === 1024);
+g = { location: { search: "?decodeAdmission=4x192+2" } };
+applyDecodeAdmission(g);
+check("caps alone leave pressure inert",
+  g.__hbDecodeMaxJobs === 2 && !("__hbDecodePressureT1MB" in g));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

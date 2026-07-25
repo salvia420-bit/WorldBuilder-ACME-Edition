@@ -2288,8 +2288,13 @@
           const adm = applyDecodeAdmission();
           const fmt = (s) =>
             s ? `${s.jobs} jobs / ${s.bytes ? (s.bytes / 1048576).toFixed(0) + " MiB" : "no byte cap"} / reserve ${s.reserve}` : "unbounded";
+          // S5: `applyDecodeAdmission` also applies `?decodePressure` (same
+          // pre-init ordering requirement — the Rust gate reads all five
+          // globals at one LazyLock init). Absent ⇒ inert.
+          const p = adm.pressure;
           console.log(
-            `[A15] decode admission: main=${fmt(adm.main)} worker=${fmt(adm.worker)}`
+            `[A15] decode admission: main=${fmt(adm.main)} worker=${fmt(adm.worker)}` +
+              ` pressure=${p ? `T1 ${p.t1MB} MB / T2 ${p.t2MB ? p.t2MB + " MB" : "unarmed"}` : "inert"}`
           );
         } catch (e) {
           console.warn("[A15] decode admission setup failed (non-fatal):", e);

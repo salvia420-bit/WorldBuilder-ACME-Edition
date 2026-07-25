@@ -13,8 +13,9 @@
 // Protocol (postMessage):
 //   in : {type:'init', id, manifestUrl, sceneryBaseUrl,
 //              locationSearch, verifyShards?, fetchConcurrency?,
-//              shardBudgetBytes?, decodeAdmission?:{jobs,bytes,reserve}}
-//        (the last four are the page's host flags — see handleInit)
+//              shardBudgetBytes?, decodeAdmission?:{jobs,bytes,reserve},
+//              decodePressure?:{t1MB,t2MB}}
+//        (the last five are the page's host flags — see handleInit)
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
 //        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...], urgent?}
@@ -82,6 +83,15 @@ async function handleInit(msg) {
     }
     if (msg.decodeAdmission.reserve > 0) {
       self.__hbDecodeUrgentReserve = msg.decodeAdmission.reserve;
+    }
+  }
+  // A15 §2.2 item 3 (S5): THIS instance's wasm-memory pressure thresholds, in
+  // MB (`?decodePressure=<t1>:<t2>`, parsed page-side). Unset ⇒ inert. Same
+  // ordering requirement as above — the gate's LazyLock reads these once.
+  if (msg.decodePressure && msg.decodePressure.t1MB > 0) {
+    self.__hbDecodePressureT1MB = msg.decodePressure.t1MB;
+    if (msg.decodePressure.t2MB > 0) {
+      self.__hbDecodePressureT2MB = msg.decodePressure.t2MB;
     }
   }
   // EXPERIMENT (threads-lite, 2026-07-24): when the main thread hands us its
