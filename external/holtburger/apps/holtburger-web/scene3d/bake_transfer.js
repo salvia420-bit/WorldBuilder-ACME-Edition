@@ -83,6 +83,45 @@ function pushBuffer(seen, out, ta) {
 }
 
 /**
+ * Release a list of wasm-bindgen handles whose payload has already been
+ * copied out (every `serialize*` here reads each getter exactly once, and
+ * every getter `.clone()`s out of linear memory — `lib.rs` `ModelMesh::
+ * positions` / `SurfacePixels::pixels` — so nothing reads them afterwards).
+ *
+ * WHY THIS IS NOT OPTIONAL (first-bake spike, 2026-07-25). wasm-bindgen only
+ * reclaims an unfreed handle through a `FinalizationRegistry`
+ * (`SurfacePixelsFinalization` / `ModelMeshFinalization` in
+ * `pkg/holtburger_web.js`), i.e. **at JS GC time**. `serializeEntitySurfaces
+ * Batch` below has always freed explicitly; `serializeSurfacePixelsBatch` /
+ * `serializeModelMeshes` did not, so in the bake worker every completed
+ * batch's decoded planes (~8 B/px for surfaces) stayed resident in that
+ * instance's linear memory until a GC that a cold-boot decode burst is
+ * precisely the worst case for. Since `WebAssembly.Memory` never shrinks,
+ * one deferred sweep sets the instance high-water permanently — and no
+ * batch-size cap can lower it while the previous wave's corpses are still
+ * live. Best-effort + guarded: a plain reconstructed object has no `free`,
+ * and `free()` self-`unregister`s so a later finaliser cannot double-free.
+ *
+ * @param {Iterable<*>} handles
+ * @returns {number} how many handles were actually freed (test hook)
+ */
+export function freeWasmHandles(handles) {
+  let n = 0;
+  if (!handles) return n;
+  for (const h of handles) {
+    try {
+      if (h && typeof h.free === "function") {
+        h.free();
+        n += 1;
+      }
+    } catch (_) {
+      /* best-effort: a double-consumed handle must never fail a bake */
+    }
+  }
+  return n;
+}
+
+/**
  * Serialize one wasm-bindgen `ModelMesh` (or any object exposing the same
  * JS getters) into a transferable payload + the `ArrayBuffer`s to transfer.
  * Each getter is read exactly once (one copy out of WASM memory).
@@ -404,13 +443,7 @@ export function serializeEntitySurfacesBatch(batch) {
       }
     }
     // Pixels are copied out; the wasm handles can go now.
-    for (const sp of payload) {
-      try {
-        if (sp && typeof sp.free === "function") sp.free();
-      } catch (_) {
-        /* best-effort */
-      }
-    }
+    freeWasmHandles(payload);
   }
   try {
     if (batch && typeof batch.free === "function") batch.free();
