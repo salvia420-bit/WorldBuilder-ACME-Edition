@@ -26,6 +26,7 @@ const {
   serializeSurfacePixelsBatch,
   reconstructSurfacePixels,
   reconstructSurfacePixelsBatch,
+  freeWasmHandles,
 } = mod;
 
 let passed = 0;
@@ -215,6 +216,32 @@ console.log("\nM2 bake_transfer — SurfacePixels transferable serialization");
   check("surface batch length preserved", rs.length === 3);
   check("surface batch transfer = 3×3 distinct buffers", transfer.length === 9, `got ${transfer.length}`);
   check("surface batch buffers all distinct", new Set(transfer).size === transfer.length);
+}
+
+// 9. freeWasmHandles (first-bake spike, 2026-07-25) — the worker must release
+//    the decoded handles it just copied out instead of waiting for
+//    wasm-bindgen's FinalizationRegistry (a GC the cold-boot burst starves).
+{
+  const freed = [];
+  const handles = [0, 1, 2].map((i) => ({ id: i, free() { freed.push(i); } }));
+  check("freeWasmHandles frees every handle", freeWasmHandles(handles) === 3 && freed.join(",") === "0,1,2",
+    freed.join(","));
+
+  // Plain reconstructed payloads (the main-thread worker route) have no
+  // `free` — the helper must skip them silently, never throw.
+  check("plain objects without free() are skipped", freeWasmHandles([{}, null, undefined, 7]) === 0);
+
+  // A throwing free() (double-consumed handle) must never fail a bake, and
+  // must not stop the remaining handles from being released.
+  const after = [];
+  const mixed = [
+    { free() { throw new Error("null pointer passed to rust"); } },
+    { free() { after.push("b"); } },
+  ];
+  check("a throwing free() is swallowed and the rest still free",
+    freeWasmHandles(mixed) === 1 && after.join(",") === "b", after.join(","));
+
+  check("null/undefined input is a no-op", freeWasmHandles(null) === 0 && freeWasmHandles(undefined) === 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

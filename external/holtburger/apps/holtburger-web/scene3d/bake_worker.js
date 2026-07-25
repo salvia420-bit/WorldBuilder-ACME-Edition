@@ -45,6 +45,7 @@ import init, {
 } from "../pkg/holtburger_web.js?v=netrev-20260709";
 
 import {
+  freeWasmHandles,
   serializeModelMeshes,
   serializeSurfacePixelsBatch,
   serializeEntitySurfacesBatch,
@@ -152,12 +153,20 @@ async function handleModelMeshes(msg) {
   // teleports. Absent/false = pre-fix normal lane.
   const meshes = await fetch_model_meshes(Uint32Array.from(msg.ids), msg.urgent === true);
   const { meshes: payload, transfer } = serializeModelMeshes(meshes);
+  // first-bake spike (2026-07-25): geometry is copied out; release the wasm
+  // handles NOW instead of at the next GC — see `freeWasmHandles`.
+  freeWasmHandles(meshes);
   self.postMessage({ type: "result", id: msg.id, kind: "modelMeshes", payload }, transfer);
 }
 
 async function handleSurfaces(msg) {
   const surfaces = await fetch_surfaces_pixels(Uint32Array.from(msg.dids), msg.urgent === true);
   const { surfaces: payload, transfer, audit } = serializeSurfacePixelsBatch(surfaces);
+  // first-bake spike (2026-07-25): the call-level audit is already extracted
+  // (it lives on the Array, not the elements) and every plane is copied out,
+  // so the decoded entries can leave linear memory now — see
+  // `freeWasmHandles`. Without this the whole batch waits for a GC.
+  freeWasmHandles(surfaces);
   self.postMessage({ type: "result", id: msg.id, kind: "surfaces", payload, audit }, transfer);
 }
 
@@ -175,6 +184,7 @@ async function handleEntitySurfaces(msg) {
     msg.urgent === true,
   );
   const { surfaces: payload, transfer, audit } = serializeSurfacePixelsBatch(surfaces);
+  freeWasmHandles(surfaces); // same contract as handleSurfaces
   self.postMessage({ type: "result", id: msg.id, kind: "entitySurfaces", payload, audit }, transfer);
 }
 
