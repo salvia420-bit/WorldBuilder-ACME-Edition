@@ -116,6 +116,28 @@ handle-backed) and is extracted inside `serialize*` before the free; duplicate D
 distinct objects (`fetch_surfaces_pixels` uses `clone_surface_pixels` for repeat positions),
 so there is no double-free; and `free()` self-`unregister`s from the FinalizationRegistry.
 
+### What this fix does NOT address: the late-session 3.6 GB JS-heap kill
+
+A battery soak finished after this branch was written: on the 62-POI route the renderer's
+`performance.memory` JS heap sat at ~98 MB for ~40 stops of a long session, then jumped to
+**~3.6 GB** from stop *Timaru* onward, and the renderer died a few stops later — while wasm
+main memory stayed flat at 384–440 MB throughout. **The handle release above is not the fix
+for that**, and it is worth being explicit about why rather than claiming an adjacent win:
+
+- `FinalizationRegistry.register(obj, ptr, obj)` holds its **target weakly**. A deferred
+  `free()` therefore retains no JS-heap bytes — it retains the Rust `Box` in **wasm linear
+  memory**. `performance.memory` reports the JS heap only; `WebAssembly.Memory` is accounted
+  separately in Chrome.
+- The gap was in the **bake worker**, which is a separate V8 isolate. A main-thread
+  `performance.memory` sample never saw it in the first place.
+- The soak's own numbers say the same thing from the other side: wasm main was *flat* while
+  the heap went 37×. Two different arenas, and this fix is aimed at the one that did not move.
+
+So 259dbd5a stands on its own evidence (worker wasm linear memory, §2) and must be measured on
+its own metric (per-session max **worker** `wasmMemoryBytes` — §4 armF, §5 criterion 1). It
+predicts **nothing** about `jsHeapPeakMB`, and an arm that shows no JS-heap change is not
+evidence against it. The 3.6 GB observation is carried as an open item in §6.
+
 ### Noted, not taken: option (E), the 2× clone transient
 
 `DESIGN-surface-budget-2026-07-25.md` option (E) is real and read-verified —
@@ -206,11 +228,19 @@ boot town swings maxMain 383↔681 MB on its own):
    `byType.fetchSurfacesPixels.count` / `byType.fetchModelMeshes.count` (wave proof — armed
    counts must exceed armN's; equal counts mean the flag never bound and the arm is void).
 
-Per the S4 handoff's move 1, extend the relay's field list with `performance.memory` (JS heap)
-before running: the S4 traps record that the cold-spike killer may not be wasm linear memory
-at all, and this lever's whole claim is about wasm linear memory. If JS heap is what kills the
-renderer, this lever will show a clean wasm-memory win and *no* crash-cadence improvement —
-which is a legitimate, informative outcome, not a failure of measurement.
+**Fields to add to the relay before running** (the JS-heap one is now known to be load-bearing
+— see §6):
+
+- `performance.memory.usedJSHeapSize` → `jsHeapPeakMB` per stop. **This lever predicts nothing
+  about it.** It is relayed so §6's separate leak stays visible, not as an artifact of this arm.
+- `materialCache.materials.size` / `.textures.size` — the §6 discriminator. There is no diag
+  for these today (`diag/assets.js` exposes only `materialCache.pendingFetches.size`), so this
+  is a small new field, and it is the single most valuable addition to the relay right now.
+- `decodeAdmission.*` and `shardCacheBytes` per the S4 handoff's move 1.
+
+If the JS heap is what kills the renderer, this lever will show a clean **worker** wasm-memory
+win and *no* crash-cadence improvement — a legitimate, informative outcome, not a failure of
+measurement.
 
 ---
 
@@ -247,7 +277,59 @@ monotonically across that same order at flat settle.
 
 ---
 
-## 6. What changed
+## 6. OPEN ITEM — the late-session 3.6 GB JS-heap kill (not this lever)
+
+**Observation** (62-POI battery, per-500 ms `performance.memory` poll): JS heap flat at ~98 MB
+for ~40 stops, step to ~3.6 GB from *Timaru* onward, renderer death a few stops later; wasm
+main flat 384–440 MB throughout. 3.6 GB is right against Chrome's typical ~4 GB
+`jsHeapSizeLimit`, so this is a straightforward renderer OOM, and it is **late-session and
+route-length-dependent** — the opposite shape to the cold-boot spike this branch targets.
+
+### Best-evidence hypothesis (read-verified this session, `scene3d/`)
+
+`MaterialCache` is an **unbounded, monotone, never-evicted JS-heap retainer keyed on distinct
+surface DIDs ever seen** — precisely a quantity that grows with route length and not with boot:
+
+- `materials.js` declares `this.materials` / `this.textures` / `this.normalTextures` /
+  `this.heightTextures` as plain `Map`s. A grep for `.delete(` / `.clear()` on any of the four
+  returns **zero hits** — only `palettedMaterials` / `vfxPalettedVariants` are capped
+  (`PALETTED_CACHE_CAP = 256`), and only page-teardown `dispose()` frees anything.
+- `adapter.js` `surfacePixelsToTexture` **always copies**: *"Always copy: the wasm side can
+  re-allocate linear memory between this call and the GPU upload, detaching the original
+  buffer."* The copy becomes `THREE.DataTexture.image.data` and is retained by the Map above.
+  So each cached DID pins ~8 B/px of JS heap (RGBA8 + RGB8 normal + R8 height) — ~2 MiB for a
+  512² surface. **~1,800 distinct surface DIDs ≈ 3.6 GB**, which a 40+ town roam reaches
+  comfortably.
+- The battery runs `?nullRender=1`, which skips `render()` — so these DataTextures are never
+  uploaded and never GPU-disposed. In this rig the retention is a **pure JS-heap** accumulator,
+  which is exactly the arena that died.
+- Note also that the always-copy rationale is **stale for the default path**: worker-routed
+  pixels arrive as *transferred*, non-wasm-backed `ArrayBuffer`s (`bake_transfer.js`
+  `pushBuffer`), so there is no linear memory to be detached and the copy is pure waste —
+  a cheap, independent follow-on.
+
+The step shape (flat, then 37× in a few stops) is the one part this does not explain on its
+own; a monotone retainer should ramp. Two readings, and one field distinguishes them:
+
+| | reading | what `materialCache.materials.size` per stop does |
+|---|---|---|
+| **H1** | real monotone retention, under-reported by the sampler until a major-GC / heap-growth event exposed it | grows ~**linearly from stop 1**, long before the heap number moves ⇒ H1, and the fix is an LRU + `dispose()` on `MaterialCache` (a different lever from this branch) |
+| **H2** | genuine late regime change — one stop introduces a new allocation class (EnvCell/dungeon-dense town, a retry storm, a per-frame allocation that only starts under some condition) | roughly **flat across the jump** ⇒ H1 refuted; bisect the route on the Timaru boundary |
+
+**Confirming signal for a future fix**: `jsHeapPeakMB` per stop staying flat across the whole
+62-POI route (no step, no monotone climb), with `materialCache.materials.size` bounded by
+whatever cap the fix installs — and time-to-first-renderer-death extending past the full route.
+
+This is a **separate lever from `?bakeBatchMax`** and should not be bundled with it: batching
+bounds a transient in wasm linear memory; this is a retained set in the JS heap. Recommend it
+as the next slice, ahead of the surface-budget work — `DESIGN-surface-budget-2026-07-25.md`
+already found the same cache from the other direction ("main has an unbounded JS cache in front
+of it") but scoped its recommendation to the *wasm* budget, which this soak now shows is not
+where the process dies.
+
+---
+
+## 7. What changed
 
 | file | symbol | change |
 |---|---|---|
