@@ -381,11 +381,12 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
       ensureResizeScratch();
       tileCanvas.width = w;
       tileCanvas.height = h;
-      const clamped = new Uint8ClampedArray(
-        px.buffer,
-        px.byteOffset,
-        px.byteLength
-      );
+      // COPY, not a view over `px.buffer` (AUDIT-sab-views-2026-07-24
+      // must-fix 3): `ImageData` HARD-REJECTS a shared-backed
+      // `Uint8ClampedArray`, and under a threaded wasm build `px` could be a
+      // view into shared linear memory. The TypedArray-from-TypedArray
+      // constructor copies element-wise into a fresh non-shared buffer.
+      const clamped = new Uint8ClampedArray(px);
       tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
       lctx.clearRect(0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
       lctx.drawImage(
@@ -406,16 +407,11 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
       roadCanvas.width = w;
       roadCanvas.height = h;
       const rctx = roadCanvas.getContext("2d");
-      const clamped = new Uint8ClampedArray(
-        px.buffer,
-        px.byteOffset,
-        px.byteLength
-      );
-      rctx.putImageData(
-        new ImageData(new Uint8ClampedArray(clamped), w, h),
-        0,
-        0
-      );
+      // COPY (see the slow-path note above) — this also subsumes the
+      // second `new Uint8ClampedArray(clamped)` that used to guard the
+      // `ImageData` here, since `clamped` is now already owned + non-shared.
+      const clamped = new Uint8ClampedArray(px);
+      rctx.putImageData(new ImageData(clamped, w, h), 0, 0);
     }
 
     if (typeof tex.free === "function") tex.free();
@@ -496,7 +492,9 @@ export function buildTerrainDetailArrayBytes(slices) {
       ensureResizeScratch();
       tileCanvas.width = w;
       tileCanvas.height = h;
-      const clamped = new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength);
+      // COPY, not a view: `ImageData` rejects shared-backed arrays and `px`
+      // may be a wasm-memory view under a threaded build (AUDIT-sab-views).
+      const clamped = new Uint8ClampedArray(px);
       tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
       lctx.clearRect(0, 0, DETAIL_TILE_PX, DETAIL_TILE_PX);
       lctx.drawImage(tileCanvas, 0, 0, w, h, 0, 0, DETAIL_TILE_PX, DETAIL_TILE_PX);
@@ -567,7 +565,9 @@ export function buildAlphaMaskArrayBytes(orderedMasks) {
       ensureResizeScratch();
       tileCanvas.width = w;
       tileCanvas.height = h;
-      const clamped = new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength);
+      // COPY, not a view: `ImageData` rejects shared-backed arrays and `px`
+      // may be a wasm-memory view under a threaded build (AUDIT-sab-views).
+      const clamped = new Uint8ClampedArray(px);
       tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
       lctx.clearRect(0, 0, ALPHA_MASK_TILE_PX, ALPHA_MASK_TILE_PX);
       lctx.drawImage(tileCanvas, 0, 0, w, h, 0, 0, ALPHA_MASK_TILE_PX, ALPHA_MASK_TILE_PX);

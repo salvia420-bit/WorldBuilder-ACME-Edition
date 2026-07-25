@@ -47,16 +47,39 @@
  * Collect a typed array's backing buffer into `out` (deduped) — defensive
  * against multiple views sharing one `ArrayBuffer`, which would throw
  * ("ArrayBuffer at index N is already detached") if transferred twice.
+ *
+ * SAB GUARD (AUDIT-sab-views-2026-07-24 must-fix 1). Under a threaded
+ * (shared-memory) wasm build a getter could hand back a view into wasm
+ * linear memory, i.e. a `SharedArrayBuffer`. A SAB can NEVER appear in a
+ * `postMessage` transfer list (unconditional throw), and even cloned it
+ * would alias live wasm memory on the far side. So when the backing buffer
+ * is shared we copy the VIEW into a fresh, non-shared buffer and transfer
+ * that instead — `TypedArray.prototype.slice()` always allocates a fresh
+ * non-shared `ArrayBuffer`. The SAB itself never enters `out`.
+ *
+ * Because the copy is per view, callers MUST use the returned typed array
+ * in the payload they post (the original still points at wasm memory).
+ * Dedup is unaffected: distinct views get distinct fresh buffers, and in
+ * the non-shared case this is byte-for-byte the previous behavior.
+ *
  * @param {Set<ArrayBuffer>} seen
  * @param {ArrayBuffer[]} out
- * @param {{buffer: ArrayBuffer}} ta
+ * @param {*} ta typed array
+ * @returns {*} the typed array to put in the payload (`ta`, or its copy)
  */
 function pushBuffer(seen, out, ta) {
+  if (
+    typeof SharedArrayBuffer !== "undefined" &&
+    ta.buffer instanceof SharedArrayBuffer
+  ) {
+    ta = ta.slice();
+  }
   const buf = ta.buffer;
   if (!seen.has(buf)) {
     seen.add(buf);
     out.push(buf);
   }
+  return ta;
 }
 
 /**
@@ -68,13 +91,18 @@ function pushBuffer(seen, out, ta) {
  * @returns {{ mesh: ModelMeshPayload, transfer: ArrayBuffer[] }}
  */
 export function serializeModelMesh(wasmMesh) {
-  const positions = wasmMesh.positions; // Float32Array
-  const uvs = wasmMesh.uvs; // Float32Array
-  const normals = wasmMesh.normals; // Float32Array
-  const surfaceIndices = wasmMesh.surfaceIndices; // Uint8Array
-  const sidesTypes = wasmMesh.sidesTypes; // Uint8Array
-  const surfaces = wasmMesh.surfaces; // Uint32Array
-  const bbox = wasmMesh.bbox; // Float32Array(6)
+  // Each getter is read EXACTLY ONCE and routed through `pushBuffer`, which
+  // both collects the buffer to transfer and returns the array to put in the
+  // payload (identical object today; a non-shared copy under a SAB build).
+  const seen = new Set();
+  const transfer = [];
+  const positions = pushBuffer(seen, transfer, wasmMesh.positions); // Float32Array
+  const uvs = pushBuffer(seen, transfer, wasmMesh.uvs); // Float32Array
+  const normals = pushBuffer(seen, transfer, wasmMesh.normals); // Float32Array
+  const surfaceIndices = pushBuffer(seen, transfer, wasmMesh.surfaceIndices); // Uint8Array
+  const sidesTypes = pushBuffer(seen, transfer, wasmMesh.sidesTypes); // Uint8Array
+  const surfaces = pushBuffer(seen, transfer, wasmMesh.surfaces); // Uint32Array
+  const bbox = pushBuffer(seen, transfer, wasmMesh.bbox); // Float32Array(6)
   const didDegrade = wasmMesh.didDegrade >>> 0; // u32
   // geom-audit — decode-starvation flag (0 = complete decode). typeof-
   // guarded so a stale pkg without the getter serializes 0.
@@ -92,16 +120,6 @@ export function serializeModelMesh(wasmMesh) {
     didDegrade,
     decodeMisses,
   };
-
-  const seen = new Set();
-  const transfer = [];
-  pushBuffer(seen, transfer, positions);
-  pushBuffer(seen, transfer, uvs);
-  pushBuffer(seen, transfer, normals);
-  pushBuffer(seen, transfer, surfaceIndices);
-  pushBuffer(seen, transfer, sidesTypes);
-  pushBuffer(seen, transfer, surfaces);
-  pushBuffer(seen, transfer, bbox);
 
   return { mesh, transfer };
 }
@@ -254,9 +272,13 @@ export function applySurfaceAudit(target, audit) {
  * @returns {{ surface: SurfacePixelsPayload, transfer: ArrayBuffer[] }}
  */
 export function serializeSurfacePixels(sp) {
-  const pixels = sp.pixels; // Uint8Array
-  const normalPixels = sp.normalPixels; // Uint8Array (maybe empty)
-  const heightPixels = sp.heightPixels; // Uint8Array (maybe empty)
+  // Read each getter once, through the SAB-guarded `pushBuffer` (see its
+  // doc comment): the returned array is what goes in the payload.
+  const seen = new Set();
+  const transfer = [];
+  const pixels = pushBuffer(seen, transfer, sp.pixels); // Uint8Array
+  const normalPixels = pushBuffer(seen, transfer, sp.normalPixels); // Uint8Array (maybe empty)
+  const heightPixels = pushBuffer(seen, transfer, sp.heightPixels); // Uint8Array (maybe empty)
 
   const surface = {
     width: sp.width >>> 0,
@@ -278,12 +300,6 @@ export function serializeSurfacePixels(sp) {
   // alphaTest 0.5, so leaving the key absent on a stale pkg preserves
   // the exact `undefined` fallback semantics across the worker boundary.
   if (typeof sp.hasPalette === "boolean") surface.hasPalette = sp.hasPalette;
-
-  const seen = new Set();
-  const transfer = [];
-  pushBuffer(seen, transfer, pixels);
-  pushBuffer(seen, transfer, normalPixels);
-  pushBuffer(seen, transfer, heightPixels);
 
   return { surface, transfer };
 }

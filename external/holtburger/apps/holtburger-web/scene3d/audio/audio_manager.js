@@ -301,13 +301,18 @@ export class AudioManager {
       if (!bytes || bytes.length === 0) {
         return null;
       }
-      // Take a private ArrayBuffer copy — decodeAudioData detaches its
-      // input on some browsers, which would invalidate the wasm-side
-      // Uint8Array view.
-      const ab = bytes.buffer.slice(
-        bytes.byteOffset,
-        bytes.byteOffset + bytes.byteLength
-      );
+      // Take a private ArrayBuffer copy. `takeRiffBytes()` already returns
+      // an OWNED copy (the wasm-bindgen glue `.slice()`s every owned-Vec
+      // return out of linear memory) — it is NOT a wasm-memory view. The
+      // copy exists because `decodeAudioData` DETACHES its input buffer,
+      // which would destroy the caller's array.
+      // Use the typed array's `.slice()`, never `bytes.buffer.slice()`:
+      // `SharedArrayBuffer.prototype.slice` returns another SAB, and
+      // decodeAudioData requires a detachable non-shared buffer, so the
+      // buffer-level slice would NOT be an escape hatch under a threaded
+      // build. `TypedArray.prototype.slice()` always allocates a fresh
+      // non-shared ArrayBuffer (AUDIT-sab-views-2026-07-24 must-fix 4).
+      const ab = bytes.slice().buffer;
       try {
         const buf = await this._ctx.decodeAudioData(ab);
         return buf;

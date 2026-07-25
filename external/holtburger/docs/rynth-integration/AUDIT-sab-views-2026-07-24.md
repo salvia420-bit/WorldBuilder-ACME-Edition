@@ -115,3 +115,54 @@ finding 3 (`transport.rs` `send_to`). Anchored by symbol; every row was read, no
 5. **Write the rule down:** any new Rust code handing `&[u8]` to a web-sys API must first copy into
    a JS-heap `Uint8Array` (`new_with_length` + `copy_from`), per `transport.rs` `send_to`. Any new
    JS transfer list must go through a SAB-guarded helper.
+
+## Status (2026-07-24, follow-up commit)
+
+Must-fix 1, 3, 4 are **LANDED**; 5 is written down below. Must-fix 2 (the build gate) is still
+open — it is a per-build check, not a code change; its checklist is item C of the house rules.
+
+- **1** — `bake_transfer.js` `pushBuffer` now copies a SAB-backed view into a fresh non-shared
+  buffer via `TypedArray.prototype.slice()` and transfers THAT; the SAB never enters the transfer
+  list. Because the copy is per view, `pushBuffer` now RETURNS the array to put in the payload and
+  `serializeModelMesh` / `serializeSurfacePixels` read each wasm getter exactly once THROUGH it.
+  Dedup-by-buffer-identity is unchanged (distinct views get distinct fresh buffers).
+- **3** — the three `adapter.js` `ImageData` slow paths (terrain atlas ×2 incl. the code-32 road
+  tile, terrain detail, alpha mask) build the `Uint8ClampedArray` by copy (`new Uint8ClampedArray(px)`)
+  instead of aliasing `px.buffer`. Fast paths and `DataTexture` paths untouched. This ADDS a copy on
+  the slow path only — acceptable: those paths are defensive (retail emits 512x512) and already
+  round-trip through a canvas resample.
+- **4** — `audio_manager.js` `fetchWave` uses `bytes.slice().buffer`; the stale "would invalidate
+  the wasm-side Uint8Array view" comment is corrected (`takeRiffBytes()` returns an owned copy; the
+  copy exists only because `decodeAudioData` detaches its input).
+
+## House rules (SAB hygiene)
+
+**A. New Rust `&[u8]` → web-sys must copy.** Never hand a `Uint8Array::view` / raw slice view of
+wasm linear memory to a web-sys API. Allocate a JS-heap array and copy in first — the
+`transport.rs` `send_to` pattern:
+
+```rust
+let buf = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+buf.copy_from(bytes);
+ws.send_with_array_buffer_view(&buf)?;
+```
+
+This is mandatory even when the API is spec'd `[AllowShared]`, so the call site does not silently
+become a break the day the memory turns shared.
+
+**B. New JS transfer lists go through `pushBuffer`.** Any new `postMessage(payload, transfer)` must
+collect its buffers via `scene3d/bake_transfer.js` `pushBuffer` (import it) or replicate its guard
+verbatim: if `typeof SharedArrayBuffer !== "undefined" && ta.buffer instanceof SharedArrayBuffer`,
+`ta = ta.slice()` and transfer the copy's buffer. Use the RETURNED array in the payload — posting
+the original view while transferring a copy silently ships a wasm-memory alias. Transferring a SAB
+is illegal unconditionally, so this is a throw, not a degradation. Currently un-guarded (they take
+their bytes from `Uint8Array::from`, which copies): `net_worker.js` `postToMain` and
+`net_worker_client.js` `outboundSink` — convert them if their marshalling ever changes.
+
+**C. After EVERY threaded build, run the must-fix-2 gate checks** before trusting any measurement:
+(a) `scripts/wasm-memcheck.py` reports `shared=True`; (b) `pkg/holtburger_web.js` has ZERO unsliced
+`getArray*FromWasm0(ret[0], ret[1])` return sites (grep it — every owned-vec return must end in
+`.slice()`); (c) the `getRandomValues` shim hands a JS-heap `Uint8Array`, not a raw
+`getArrayU8FromWasm0(...)` view; (d) `getStringFromWasm0`'s `TextDecoder.decode` input is sliced
+under shared memory. A failure in (b) means the copy-out invariant — which every "invariant"-class
+row in the table above rests on — is broken, and the whole table must be re-walked.
