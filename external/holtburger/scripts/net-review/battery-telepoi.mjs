@@ -100,7 +100,9 @@ if (RESUME && OUT && fs.existsSync(OUT)) {
   try {
     const prev = JSON.parse(fs.readFileSync(OUT, "utf8"));
     priorRows = Array.isArray(prev.rows) ? prev.rows : [];
-    const done = new Set(priorRows.map((r) => r.poi));
+    // kind:"abort" rows are die-stop telemetry, NOT completed stops — the poi
+    // must be retried on resume (boot rows have no poi and are harmless here).
+    const done = new Set(priorRows.filter((r) => r.kind !== "abort").map((r) => r.poi));
     POIS = POIS.filter((p) => !done.has(p));
     console.error(`[battery] resume: ${priorRows.length} prior rows kept, ${POIS.length} POIs remain`);
   } catch (_) { priorRows = []; }
@@ -139,10 +141,10 @@ function finalize() {
   const allRows = [...priorRows, ...rows];
   // Kind-aware: legacy rows have no `kind` and are stops; boot rows are excluded
   // from every stop metric so counts stay back-compat with the pre-boot-row shape.
-  const stopRows = allRows.filter((r) => r.kind !== "boot");
+  const stopRows = allRows.filter((r) => r.kind !== "boot" && r.kind !== "abort");
   const bootRows = allRows.filter((r) => r.kind === "boot");
   const ok = stopRows.filter((r) => r.landed);
-  const priorStop = priorRows.filter((r) => r.kind !== "boot").length;
+  const priorStop = priorRows.filter((r) => r.kind !== "boot" && r.kind !== "abort").length;
   const totalPois = priorStop + POIS.length;
   const cycleMs = Date.now() - cycleT0;
   const sess = [...new Set(stopRows.map((r) => r.sessionIdx ?? 0))].sort((a, b) => a - b);
@@ -166,6 +168,19 @@ function finalize() {
     wasmMemMainMaxMB: mx(ok.map((r) => r.wasmMemMainMB).filter((v) => v != null)),
     wasmMemWorkerMedMB: med(ok.map((r) => r.wasmMemWorkerMB).filter((v) => v != null)),
     wasmMemWorkerMaxMB: mx(ok.map((r) => r.wasmMemWorkerMB).filter((v) => v != null)),
+    // S5-soak relay-extension aggregates (2026-07-25): renderer JS-heap peak,
+    // per-instance shard/surface cache residency, and pressure/queue extremes.
+    // All null when no row carried the field (legacy pkg / pre-extension rows).
+    jsHeapPeakMedMB: med(ok.map((r) => r.jsHeapPeakMB).filter((v) => v != null)),
+    jsHeapPeakMaxMB: mx(ok.map((r) => r.jsHeapPeakMB).filter((v) => v != null)),
+    shardMainMaxMB: mx(ok.map((r) => r.shardMainMB).filter((v) => v != null)),
+    shardWkrMaxMB: mx(ok.map((r) => r.shardWkrMB).filter((v) => v != null)),
+    surfMainMaxMB: mx(ok.map((r) => r.surfMainMB).filter((v) => v != null)),
+    surfWkrMaxMB: mx(ok.map((r) => r.surfWkrMB).filter((v) => v != null)),
+    pressureMaxMain: mx(ok.map((r) => r.pressureMain).filter((v) => v != null)),
+    pressureMaxWkr: mx(ok.map((r) => r.pressureWkr).filter((v) => v != null)),
+    maxQueueMsMaxMain: mx(ok.map((r) => r.maxQueueMsMain).filter((v) => v != null)),
+    maxQueueMsMaxWkr: mx(ok.map((r) => r.maxQueueMsWkr).filter((v) => v != null)),
     settleWorkMin: SETTLE_WORK_MIN, settleFloorMs: SETTLE_FLOOR_MS,
     lowWorkSettles: ok.filter((r) => r.lowWork).length,
     settleGuardWork: ok.filter((r) => r.settleGuard === "work").length,
@@ -341,6 +356,20 @@ const sample = () => raced(helpers.evalInPage(() => {
     // would-have-been true-dispose).
     trackMerged: st.trackMergedWhileParked ?? null,
     reclaimDeferred: st.reclaimDeferredInFlight ?? null,
+    // S5-soak relay extension (2026-07-25, HANDOFF-s4-battery-s5-preview move 1):
+    // renderer-process JS heap, sampled on EVERY poll so the stop row can
+    // carry a PEAK — the cold-spike killer was invisible to the once-post-
+    // settle wasm sample (wasm main read only 120–680 MB at death). Chrome-
+    // only API; null elsewhere. Bytes here; MB conversion at row time.
+    jsu: (typeof performance !== "undefined" && performance.memory)
+      ? performance.memory.usedJSHeapSize : null,
+    // MaterialCache-retainer discriminator (2026-07-25, RESULTS-s5-soak): the
+    // materials map is never evicted and each entry retains a full RGBA copy
+    // (adapter.js surfacePixelsToTexture "Always copy"); linear growth from
+    // stop 1 confirms it as the late-session JS-heap killer, flat-across-the-
+    // jump refutes it. Spread into every stop row as `mats`/`texs`.
+    mats: s?.materialCache?.materials?.size ?? null,
+    texs: s?.materialCache?.textures?.size ?? null,
   };
 }));
 const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c));
@@ -356,15 +385,37 @@ const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHa
 // nulls rather than rejecting, so it never enters the arm-abort path. Rounded
 // to whole MB to match the S5b report.
 const WASM_MEM_TIMEOUT_MS = 3000;
+// S5-soak field-list extension (2026-07-25, HANDOFF-s4-battery-s5-preview move 1
+// + DESIGN-surface-budget §3 rig note): same fail-soft once-post-settle relay
+// read, now also carrying per-instance shardCacheBytes / surfaceCacheBytes /
+// surfaceDecodeTotal+Dids and the decodeAdmission gate view
+// (pressureLevel/effectiveMaxJobs/queued/maxQueueMs/peakLiveJobs), so the
+// cold-spike killer and any budget thrash are directly observable rather than
+// inferred. Every field independently null on a legacy pkg / absent worker.
+const NULL_DIAG = { main: null, worker: null, ext: null };
 async function sampleWasmMemMB() {
   try {
     const ev = helpers.evalInPage(async () => {
       try {
-        if (typeof window.__diag?.datDecode !== "function") return { main: null, worker: null };
+        if (typeof window.__diag?.datDecode !== "function") return { main: null, worker: null, ext: null };
         const r = await window.__diag.datDecode();
         const toMb = (b) => (typeof b === "number" && Number.isFinite(b)) ? Math.round(b / 1048576) : null;
-        return { main: toMb(r?.main?.wasmMemoryBytes), worker: toMb(r?.worker?.wasmMemoryBytes) };
-      } catch (_) { return { main: null, worker: null }; }
+        const num = (v) => (typeof v === "number" && Number.isFinite(v)) ? v : null;
+        const inst = (i) => (i == null) ? null : {
+          shardMB: toMb(i.shardCacheBytes),
+          surfMB: toMb(i.surfaceCacheBytes),
+          sdTot: num(i.surfaceDecodeTotal), sdDids: num(i.surfaceDecodeDids),
+          pressure: num(i.decodeAdmission?.pressureLevel),
+          effJobs: num(i.decodeAdmission?.effectiveMaxJobs),
+          queued: num(i.decodeAdmission?.queued),
+          maxQueueMs: num(i.decodeAdmission?.maxQueueMs),
+          peakLiveJobs: num(i.decodeAdmission?.peakLiveJobs),
+        };
+        return {
+          main: toMb(r?.main?.wasmMemoryBytes), worker: toMb(r?.worker?.wasmMemoryBytes),
+          ext: { main: inst(r?.main), worker: inst(r?.worker) },
+        };
+      } catch (_) { return { main: null, worker: null, ext: null }; }
     });
     // Swallow a LATE rejection (evalInPage failing after the timeout already
     // won the race) — otherwise it is an unhandledRejection, which kills the
@@ -373,10 +424,10 @@ async function sampleWasmMemMB() {
     ev.catch(() => {});
     return await Promise.race([
       ev,
-      new Promise((res) => setTimeout(() => res({ main: null, worker: null }), WASM_MEM_TIMEOUT_MS)),
+      new Promise((res) => setTimeout(() => res(NULL_DIAG), WASM_MEM_TIMEOUT_MS)),
     ]);
   } catch (_) {
-    return { main: null, worker: null };
+    return NULL_DIAG;
   }
 }
 
@@ -418,8 +469,18 @@ cycleT0 = Date.now();
 const LAND_MAX_MS = 12_000;
 const LAND_ITERS = Math.max(1, Math.ceil(LAND_MAX_MS / LAND_POLL_MS));
 for (const poi of POIS) {
+  // JS-heap PEAK over every poll in this stop (before + land + settle): the
+  // cold-spike killer is likely JS-side and a single post-settle sample
+  // misses the transient. Bytes accumulated; MB at row time. Hoisted OUTSIDE
+  // the try so the abort path can flush a kind:"abort" row carrying the peak
+  // observed up to the crash — the die-stop was previously invisible.
+  let jsPeak = null;
+  const seeJsu = (s) => {
+    if (s && typeof s.jsu === "number") jsPeak = jsPeak == null ? s.jsu : Math.max(jsPeak, s.jsu);
+  };
   try {
   const before = await sample();
+  seeJsu(before);
   const t0 = Date.now();
   await chat("@telepoi " + poi);
   // land = landblock changed (high-16 OR full id — dungeons can share hi16)
@@ -434,6 +495,7 @@ for (const poi of POIS) {
   for (let i = 0; i < LAND_ITERS; i++) {
     await page.waitForTimeout(LAND_POLL_MS);
     const s = await sample();
+    seeJsu(s);
     if (s.lb != null && before.lb != null && s.lb !== before.lb) { landed = true; landMs = Date.now() - t0; break; }
     if (s.px != null && before.px != null
         && Math.hypot(s.px - before.px, s.py - before.py) > 8) {
@@ -448,6 +510,7 @@ for (const poi of POIS) {
     for (let i = 0; i < (DWELL_MAX_S * 2); i++) {
       await page.waitForTimeout(500);
       const s = await sample();
+      seeJsu(s);
       endStats = s;
       const step = settleStep(st, s, before.work, Date.now() - s0,
         { workMin: SETTLE_WORK_MIN, floorMs: SETTLE_FLOOR_MS });
@@ -469,11 +532,15 @@ for (const poi of POIS) {
   // wasm linear-memory per-stop column (docs/1122.md §5.6, S15). Sampled once
   // AFTER settle for a landed stop; null for an unlanded (no-move) stop. Fully
   // fail-soft — never aborts or slows the stop (see sampleWasmMemMB).
-  let wasmMemMainMB = null, wasmMemWorkerMB = null;
+  let wasmMemMainMB = null, wasmMemWorkerMB = null, diagExt = null;
   if (landed) {
     const wm = await sampleWasmMemMB();
-    wasmMemMainMB = wm.main; wasmMemWorkerMB = wm.worker;
+    wasmMemMainMB = wm.main; wasmMemWorkerMB = wm.worker; diagExt = wm.ext;
   }
+  // Flattened per-instance relay-extension columns (all null on legacy pkg /
+  // absent worker / unlanded stop) — see sampleWasmMemMB's header comment.
+  const dm = diagExt?.main ?? null, dw = diagExt?.worker ?? null;
+  const jsHeapPeakMB = jsPeak != null ? Math.round(jsPeak / 1048576) : null;
   // Per-stop deltas (before → settled): streamed-work = bake-worker requests
   // issued; reclaimOps = evictions + parks (the ping-pong metric — baseline
   // ~75/stop pre-gate, target <10).
@@ -485,10 +552,22 @@ for (const poi of POIS) {
     : null;
   rows.push({ kind: "stop", poi, sessionIdx: SESSION_IDX, landed, sameLb, noMove, landMs, settleMs,
     settleGuard, lowWork, workDelta, reclaimDelta, ...(endStats ?? {}),
-    wasmMemMainMB, wasmMemWorkerMB });
+    wasmMemMainMB, wasmMemWorkerMB,
+    jsHeapPeakMB,
+    shardMainMB: dm?.shardMB ?? null, shardWkrMB: dw?.shardMB ?? null,
+    surfMainMB: dm?.surfMB ?? null, surfWkrMB: dw?.surfMB ?? null,
+    sdTotMain: dm?.sdTot ?? null, sdDidsMain: dm?.sdDids ?? null,
+    sdTotWkr: dw?.sdTot ?? null, sdDidsWkr: dw?.sdDids ?? null,
+    pressureMain: dm?.pressure ?? null, pressureWkr: dw?.pressure ?? null,
+    effJobsMain: dm?.effJobs ?? null, effJobsWkr: dw?.effJobs ?? null,
+    queuedMain: dm?.queued ?? null, queuedWkr: dw?.queued ?? null,
+    maxQueueMsMain: dm?.maxQueueMs ?? null, maxQueueMsWkr: dw?.maxQueueMs ?? null,
+    peakLiveJobsMain: dm?.peakLiveJobs ?? null, peakLiveJobsWkr: dw?.peakLiveJobs ?? null });
   console.error(`[battery] ${poi}: landed=${landed}${sameLb ? " (same-LB)" : ""}${noMove ? " (no-move dup)" : ""} ` +
     `land=${landMs}ms settle=${settleMs}ms guard=${settleGuard}${lowWork ? " (lowWork)" : ""} ` +
-    `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta}`);
+    `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta} ` +
+    `js=${jsHeapPeakMB}MB press=${dm?.pressure ?? "-"}/${dw?.pressure ?? "-"} ` +
+    `shard=${dm?.shardMB ?? "-"}/${dw?.shardMB ?? "-"}MB surf=${dm?.surfMB ?? "-"}/${dw?.surfMB ?? "-"}MB`);
   // --maxStops K: fixed-length sessions. After K stops in THIS session close and
   // exit for-relaunch (exit 3 → wrapper --resume), so every session holds K
   // stops and settleMedBySession[j] is age-matched across arms by construction.
@@ -499,7 +578,16 @@ for (const poi of POIS) {
   }
   } catch (e) {
     aborted = `${poi}: ${e?.message ?? e}`;
-    console.error(`[battery] ABORT at ${poi}: ${aborted} — writing partial results`);
+    // kind:"abort" row (2026-07-25 S5 soak): best-effort telemetry from the
+    // DYING stop — the crash stop never reached rows.push, so the killer's
+    // last observed JS-heap peak was invisible. Excluded from stop metrics
+    // (finalize filters it out) and from the --resume done-set (the poi is
+    // retried on relaunch, same as before this row existed).
+    rows.push({ kind: "abort", poi, sessionIdx: SESSION_IDX, aborted,
+      jsHeapPeakMB: jsPeak != null ? Math.round(jsPeak / 1048576) : null,
+      rendererCrashed });
+    console.error(`[battery] ABORT at ${poi}: ${aborted} — writing partial results ` +
+      `(die-stop jsHeapPeak=${jsPeak != null ? Math.round(jsPeak / 1048576) : null}MB)`);
     break;
   }
 }
