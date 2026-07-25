@@ -367,6 +367,25 @@ impl ManifestResourceSource {
         }
     }
 
+    /// Total record bytes resident in the shard cache (excludes the boot
+    /// pack). A15 §1 "not transient": this map has only `insert` / `get` /
+    /// `len` — **no eviction, no budget, ever** — so every DAT record the
+    /// session touches stays resident for the page lifetime, in EACH of the
+    /// two wasm instances. That is a memory ratchet independent of the
+    /// transient decode peak, and A15's instrumentation must be able to tell
+    /// them apart before a disappointing bounded-decode result is blamed on
+    /// the decode bound. Reported as `shardCacheBytes` by `dat_decode_diag()`.
+    ///
+    /// O(n) over resident records per call — fine for a diag poll (seconds
+    /// apart), deliberately not a running counter so it cannot drift from the
+    /// map it describes.
+    pub fn cached_shard_bytes(&self) -> usize {
+        match self {
+            Self::V1(s) => s.cached_shard_bytes(),
+            Self::V2(s) => s.cached_shard_bytes(),
+        }
+    }
+
     /// Manifest format version: 1 or 2. Lets callers branch on
     /// which wire format the connected source loaded.
     pub fn manifest_version(&self) -> u32 {
@@ -773,6 +792,16 @@ impl V2Source {
 
     fn cached_shard_count(&self) -> usize {
         self.shards.lock().expect("shard cache mutex poisoned").len()
+    }
+
+    /// See [`ManifestResourceSource::cached_shard_bytes`].
+    fn cached_shard_bytes(&self) -> usize {
+        self.shards
+            .lock()
+            .expect("shard cache mutex poisoned")
+            .values()
+            .map(|v| v.len())
+            .sum()
     }
 
     fn loaded_catalog_count(&self) -> usize {

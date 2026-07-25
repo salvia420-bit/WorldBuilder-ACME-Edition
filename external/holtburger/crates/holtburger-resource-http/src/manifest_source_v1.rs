@@ -165,6 +165,16 @@ impl ManifestResourceSourceV1 {
         self.shards.lock().expect("shard cache mutex poisoned").len()
     }
 
+    /// See [`crate::ManifestResourceSource::cached_shard_bytes`].
+    pub(crate) fn cached_shard_bytes(&self) -> usize {
+        self.shards
+            .lock()
+            .expect("shard cache mutex poisoned")
+            .values()
+            .map(|v| v.len())
+            .sum()
+    }
+
     fn base_url_with_slash(&self) -> String {
         if self.base_url.is_empty() {
             String::new()

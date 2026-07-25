@@ -924,6 +924,14 @@ mod walk_dedup;
 #[cfg(any(target_arch = "wasm32", test))]
 mod decode_source;
 
+// A15 §2.1 (slice S1) — admission control for decode jobs. Same
+// `wasm32 OR test` gate as `decode_source` so the FIFO / urgent-reserve /
+// byte-accounting invariants are proven by native unit tests. S1 installs it
+// UNBOUNDED (`DECODE_ADMISSION` below), which can never enqueue a waiter, so
+// the leases taken at the four §2.3 call sites are pure instrumentation.
+#[cfg(any(target_arch = "wasm32", test))]
+mod decode_admission;
+
 // Phase 1.5 — surface override JSON. Gate mirrors
 // `fetch_surface_pixels_impl` (wasm32 OR test) so the native test target
 // can drive the loader without a separate path.
@@ -9419,6 +9427,53 @@ fn batch_split_ranges(len: usize, chunk: usize) -> Vec<(usize, usize)> {
 #[cfg(any(target_arch = "wasm32", test))]
 const SURFACE_BATCH_SPLIT_CHUNK: usize = 16;
 
+// --- A15 §2.1 (S1): decode admission ----------------------------------------
+// The page-wide (per-wasm-instance) decode gate. S1 installs it UNBOUNDED:
+// `max_jobs = max_bytes = usize::MAX`, `urgent_reserve = 0`. An unbounded gate
+// can never enqueue a waiter (see `decode_admission.rs`), so every `admit()` at
+// the §2.3 call sites returns on the fast path and the slice is neutral BY
+// CONSTRUCTION — it only produces numbers. The host-supplied bound
+// (`set_decode_admission`, called from BOTH entry points per §2.5) is S4;
+// deliberately no config setter and no Rust-side URL flag here.
+//
+// Shared (`LazyLock`), not `thread_local!`, for the same reason as
+// `HM_BATCH_HIST` above: this feeds `dat_decode_diag()`, and a per-thread half
+// of one measurement surface reads only the recording thread's jobs.
+#[cfg(target_arch = "wasm32")]
+static DECODE_ADMISSION: std::sync::LazyLock<decode_admission::DecodeAdmission> =
+    std::sync::LazyLock::new(|| {
+        decode_admission::DecodeAdmission::new(usize::MAX, usize::MAX, 0)
+    });
+
+/// Take a decode lease in the caller's lane. Every §2.3 acquisition point
+/// funnels through here so the urgent flag is threaded, not re-derived.
+#[cfg(target_arch = "wasm32")]
+async fn decode_admit(estimate_bytes: usize, urgent: bool) -> decode_admission::DecodeLease {
+    if urgent {
+        DECODE_ADMISSION.admit_urgent(estimate_bytes).await
+    } else {
+        DECODE_ADMISSION.admit(estimate_bytes).await
+    }
+}
+
+/// Pre-decode byte estimate: sum of the `FileMetadata.size` the source already
+/// knows for these records, which is cheap (a hash lookup per id) and zero for
+/// anything not yet fetched. §2.2 is explicit that estimates are BAD — a 4 KB
+/// DXT record decodes to 1 MiB — which is why the surface path revises its
+/// lease to the true decoded size once the pixels exist. S1's job is the
+/// plumbing and the numbers, not estimate quality.
+#[cfg(target_arch = "wasm32")]
+fn estimate_record_bytes(src: &dyn holtburger_dat::ResourceSource, ids: &[u32]) -> usize {
+    use holtburger_dat::ResourceKey;
+    ids.iter()
+        .map(|&id| {
+            src.get_metadata_by_key(ResourceKey::new("eor/portal", id))
+                .map(|m| m.size as usize)
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
 // --- A10 G3 (S14): heightmap batch-shape histogram --------------------------
 // `fetch_landblock_heightmaps` records its per-call batch size; ci-smoke S5b
 // FAILs when solo (size-1) calls dominate — the 9-solo ring storm A4 fixed
@@ -9570,6 +9625,16 @@ pub fn dat_decode_diag() -> String {
         sc_entries,
         sc_pal_entries,
     ) = surface_cache_stats();
+    // A15 §2.6 (S1). `decodeAdmission` is THIS instance's decode gate; the
+    // bake worker's instance reports its own through the `datDecodeDiag`
+    // relay, so a probe reading `{main,worker}` sees the page-wide picture.
+    // `shardCacheBytes` is what separates §1's unbounded-`shards` ratchet from
+    // the transient decode peak — do not attribute a disappointing bounded-
+    // decode result to the bound until these two are compared.
+    let adm = DECODE_ADMISSION.stats();
+    let shard_cache_bytes = global_source::try_global_source()
+        .map(|s| s.cached_shard_bytes())
+        .unwrap_or(0);
     let hm_hist = {
         hm_batch_hist()
             .iter()
@@ -9593,7 +9658,11 @@ pub fn dat_decode_diag() -> String {
              \"surfaceCachePalHits\":{},\"surfaceCachePalMisses\":{},\"surfaceCachePalInserts\":{},\
              \"surfaceCachePalEntries\":{},\
              \"surfaceDecodeTotal\":{},\"surfaceDecodeDids\":{},\
-             \"hmBatchHist\":[{}],\"wasmMemoryBytes\":{}}}",
+             \"hmBatchHist\":[{}],\"wasmMemoryBytes\":{},\
+             \"decodeAdmission\":{{\"maxJobs\":{},\"maxBytes\":{},\
+             \"liveJobs\":{},\"liveBytes\":{},\"peakLiveJobs\":{},\"peakLiveBytes\":{},\
+             \"admits\":{},\"queued\":{},\"maxQueueMs\":{:.3},\"urgentAdmits\":{},\
+             \"pressureLevel\":{}}},\"shardCacheBytes\":{}}}",
             d.first_hop_miss,
             d.dep_miss,
             d.parse_fail,
@@ -9618,6 +9687,18 @@ pub fn dat_decode_diag() -> String {
             d.surface_decode_dids.len(),
             hm_hist,
             wasm_memory_bytes(),
+            adm.max_jobs,
+            adm.max_bytes,
+            adm.live_jobs,
+            adm.live_bytes,
+            adm.peak_live_jobs,
+            adm.peak_live_bytes,
+            adm.admits,
+            adm.queued,
+            adm.max_queue_ms,
+            adm.urgent_admits,
+            adm.pressure_level,
+            shard_cache_bytes,
         )
     }
 }
@@ -10406,6 +10487,16 @@ pub async fn fetch_surfaces_pixels(
     };
     for (lo, hi) in batch_split_ranges(uncached.len(), chunk) {
         let chunk_dids: Vec<u32> = uncached[lo..hi].to_vec();
+        // A15 §2.3: acquire BEFORE `ensure_walk_prefetched*` — the walk loop is
+        // where the site-A record churn lives, so admitting after it would bound
+        // the wrong thing. Per-chunk, because SURFACE_BATCH_SPLIT_CHUNK is
+        // already the natural unit and already an await boundary. The lease is
+        // an RAII guard held across the awaits below (sound: it is `Send`).
+        let mut _lease = decode_admit(
+            estimate_record_bytes(source.as_ref(), &chunk_dids),
+            urgent,
+        )
+        .await;
         let initial: Vec<ResourceKey<'_>> = chunk_dids
             .iter()
             .map(|id| ResourceKey::new("eor/portal", *id))
@@ -10441,9 +10532,16 @@ pub async fn fetch_surfaces_pixels(
         }
         // Decode this chunk now (memo hit for the common complete case) —
         // per-DID audits sum into the call-level ABI misses field.
+        let mut decoded_bytes = 0usize;
         for &id in &chunk_dids {
             let (sp, misses) = fetch_surface_pixels_cached(source.as_ref(), id);
             total_misses += misses;
+            // §2.2 / §5: the pre-decode estimate is the record size; the real
+            // occupancy is the decoded RGBA + normal + height planes (a 4 KB DXT
+            // record becomes 1 MiB). Revise while the lease is still live, so
+            // `peakLiveBytes` measures decoded footprint, not wire footprint.
+            decoded_bytes += sp.pixels.len() + sp.normal_pixels.len() + sp.height_pixels.len();
+            _lease.revise(decoded_bytes);
             if let Some(positions) = owed_positions.remove(&id) {
                 let mut sp_opt = Some(sp);
                 let last = positions.len() - 1;
@@ -11988,6 +12086,13 @@ pub async fn fetch_entity_surfaces_pixels(
         .map(|c| (c[0], c[1] as u8, c[2] as u8))
         .collect();
     let source = global_source::global_source();
+    // A15 §2.3: entity twin of `fetch_surfaces_pixels` — one lease per call
+    // (this path has no chunk split), acquired before the walk.
+    let _lease = decode_admit(
+        estimate_record_bytes(source.as_ref(), &surface_dids),
+        urgent,
+    )
+    .await;
     // Prefetch: the surfaces themselves, the base palette (if
     // overridden), and every overlay palette. Surface→tex→intrinsic-
     // palette walks ride into the surface prefetch already.
@@ -12292,6 +12397,12 @@ pub async fn fetch_entity_surfaces_pixels_batch(
     }
 
     let source = global_source::global_source();
+    // A15 §2.3: per batch (the batch IS the unit here).
+    let _lease = decode_admit(
+        estimate_record_bytes(source.as_ref(), &flat_surface_dids),
+        urgent,
+    )
+    .await;
 
     // Initial seed: union of every referenced record across all
     // groups. Surface → SurfaceTexture → Texture → palette walks are
@@ -12670,6 +12781,15 @@ pub async fn fetch_model_meshes(
     use holtburger_dat::ResourceKey;
     let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
+    // A15 §2.3: one lease per call, estimate summed over `model_ids`, acquired
+    // before the walk (see `fetch_surfaces_pixels` for the rationale). Held to
+    // the end of the function — the peak this bounds is the whole `out` vector
+    // of packed meshes, not any single triangulation.
+    let _lease = decode_admit(
+        estimate_record_bytes(source.as_ref(), &model_ids),
+        urgent,
+    )
+    .await;
     let initial: Vec<ResourceKey<'_>> = model_ids
         .iter()
         .map(|id| ResourceKey::new("eor/portal", *id))
@@ -12884,6 +13004,12 @@ pub async fn fetch_building_placement(
     use holtburger_dat::ResourceKey;
     let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
+    // A15 §2.3: one lease per call, acquired before the walk.
+    let _lease = decode_admit(
+        estimate_record_bytes(source.as_ref(), &[model_id]),
+        urgent,
+    )
+    .await;
     let initial = [ResourceKey::new("eor/portal", model_id)];
     // F.37 walk-result dedup. Two concurrent
     // `fetchBuildingPlacement(0x02000123)` calls (e.g. when two
