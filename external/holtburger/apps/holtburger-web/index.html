@@ -1298,6 +1298,7 @@
         getBakeWorkerClient,
         applyFetchConcurrencySplit,
         applyShardBudget,
+        applySurfaceBudget,
         applyDecodeAdmission,
       } from "./scene3d/bake_worker_client.js";
       // keepaliveFix (2026-07-07): dedicated-worker heartbeat that keeps a
@@ -2278,6 +2279,23 @@
           );
         } catch (e) {
           console.warn("[A15] shard budget setup failed (non-fatal):", e);
+        }
+        // Surface-budget S2 (2026-07-25) — the wasm surface-pixel cache's byte
+        // budget for THIS instance, plus the worker's half stashed for its
+        // `init` message. Same pre-`init_resource_source` requirement as the
+        // shard budget, for a stronger reason: `SURFACE_PIXEL_CACHE` sizes
+        // itself once at its `LazyLock` init and is never resized (clearing it
+        // does not resize), so a later assignment is silently ignored.
+        // Unauthored ⇒ both globals deleted ⇒ Rust's 96 MiB constant.
+        try {
+          const sb = applySurfaceBudget();
+          console.log(
+            sb
+              ? `[surfaceBudget] main=${sb.mainMB} MB (${sb.mainBytes} B) worker=${sb.workerMB} MB (${sb.workerBytes} B)`
+              : "[surfaceBudget] default (96 MiB/instance)"
+          );
+        } catch (e) {
+          console.warn("[surfaceBudget] setup failed (non-fatal):", e);
         }
         // A15 §2 (a) / S4 (2026-07-25) — the decode-admission bound for THIS
         // instance, and the worker's spec stashed for its `init` message. Must

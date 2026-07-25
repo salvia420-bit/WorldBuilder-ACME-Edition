@@ -9181,6 +9181,60 @@ const SURFACE_CACHE_BUDGET_BYTES: usize = 96 * 1024 * 1024;
 #[cfg(any(target_arch = "wasm32", test))]
 const SURFACE_CACHE_ENTRY_CAP_BYTES: usize = 16 * 1024 * 1024;
 
+/// Host-supplied override for [`SURFACE_CACHE_BUDGET_BYTES`], resolved ONCE at
+/// the `SURFACE_PIXEL_CACHE` `LazyLock` init. `raw` is
+/// `globalThis.__hbSurfaceBudgetBytes`, set page-side by `applySurfaceBudget`
+/// (`scene3d/bake_worker_client.js`) from `?surfaceBudgetMB=N[:M]` and
+/// forwarded to the bake worker in its `init` message — `js_sys::global()` in a
+/// worker is the WORKER's global, which the page never touched (defect-4
+/// pattern, same as `__hbShardBudgetBytes`).
+///
+/// Absent / non-numeric / `< 1` → the compile-time constants, so an unauthored
+/// page is bit-for-bit the pre-flag build.
+///
+/// The entry cap is clamped to `budget / 4` so one pathological 16 MB texture
+/// cannot dominate a small budget. At the 96 MiB default the clamp is inert:
+/// `min(16 MiB, 24 MiB) == 16 MiB`.
+///
+/// The budget is ADVISORY, not a hard cap. `ByteBudgetLru::insert` only evicts
+/// entries whose `Arc::strong_count == 1` and runs OVER budget rather than
+/// break a live holder — the same "no evictable victim → run over" stance
+/// `shard_cache.rs` documents for its round protection. `surfaceCacheBytes` is
+/// the residency truth; the budget is only the target.
+///
+/// Resolved once and never re-read: `surface_pixel_cache_clear_all()` (which
+/// the `init_resource_source` re-init hook calls) clears entries but does NOT
+/// resize, so setting the global after boot is a silent no-op.
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_budget_from_raw(raw: Option<f64>) -> (usize, usize) {
+    let budget = match raw {
+        Some(n) if n >= 1.0 => n as usize,
+        _ => SURFACE_CACHE_BUDGET_BYTES,
+    };
+    (budget, SURFACE_CACHE_ENTRY_CAP_BYTES.min(budget / 4))
+}
+
+/// Reads the host global; see [`surface_budget_from_raw`].
+#[cfg(target_arch = "wasm32")]
+fn configured_surface_budget_bytes() -> (usize, usize) {
+    let g = js_sys::global();
+    let raw = js_sys::Reflect::get(
+        g.as_ref(),
+        &wasm_bindgen::JsValue::from_str("__hbSurfaceBudgetBytes"),
+    )
+    .ok()
+    .and_then(|v| v.as_f64());
+    surface_budget_from_raw(raw)
+}
+
+/// Native test builds have no JS global, so they always take the compile-time
+/// default — which is exactly the identity `surface_budget_default_identity`
+/// pins on the live store.
+#[cfg(all(not(target_arch = "wasm32"), test))]
+fn configured_surface_budget_bytes() -> (usize, usize) {
+    surface_budget_from_raw(None)
+}
+
 /// S16 (B-executor): exact composite key for the shared surface store.
 ///
 /// DESIGN — SHARED store, not a sibling. The one `ByteBudgetLru` (single
@@ -9245,10 +9299,10 @@ type SurfaceLru = ByteBudgetLru<SurfaceCacheKey, std::sync::Arc<SurfacePixels>>;
 #[cfg(any(target_arch = "wasm32", test))]
 static SURFACE_PIXEL_CACHE: std::sync::LazyLock<std::sync::RwLock<SurfaceLru>> =
     std::sync::LazyLock::new(|| {
-        std::sync::RwLock::new(ByteBudgetLru::new(
-            SURFACE_CACHE_BUDGET_BYTES,
-            SURFACE_CACHE_ENTRY_CAP_BYTES,
-        ))
+        // Host override read HERE and only here — see the footgun note on
+        // `surface_budget_from_raw`.
+        let (budget, entry_cap) = configured_surface_budget_bytes();
+        std::sync::RwLock::new(ByteBudgetLru::new(budget, entry_cap))
     });
 
 /// Write guard — `get`/`insert`/`clear` all mutate (recency tick, counters).
@@ -9797,6 +9851,19 @@ pub fn dat_decode_diag() -> String {
         sc_entries,
         sc_pal_entries,
     ) = surface_cache_stats();
+    // Surface-budget S3: THIS instance's resolved surface-cache budget, so an
+    // A/B arm can prove `?surfaceBudgetMB=` actually gated (the S4 lesson) and
+    // that `surfaceCacheBytes` is being held under it. `-1` = the compile-time
+    // default, mirroring `shardCacheBudget`'s "-1 = unbounded default" so JS can
+    // test for "unauthored" with one cheap comparison on either field.
+    let sc_budget: i64 = {
+        let b = surface_cache_ro().budget;
+        if b == SURFACE_CACHE_BUDGET_BYTES {
+            -1
+        } else {
+            b as i64
+        }
+    };
     // A15 §2.6 (S1). `decodeAdmission` is THIS instance's decode gate; the
     // bake worker's instance reports its own through the `datDecodeDiag`
     // relay, so a probe reading `{main,worker}` sees the page-wide picture.
@@ -9828,7 +9895,7 @@ pub fn dat_decode_diag() -> String {
              \"surfaceCacheHits\":{},\"surfaceCacheMisses\":{},\"surfaceCacheInserts\":{},\
              \"surfaceCacheEvictions\":{},\"surfaceCacheBytes\":{},\"surfaceCacheEntries\":{},\
              \"surfaceCachePalHits\":{},\"surfaceCachePalMisses\":{},\"surfaceCachePalInserts\":{},\
-             \"surfaceCachePalEntries\":{},\
+             \"surfaceCachePalEntries\":{},\"surfaceCacheBudget\":{},\
              \"surfaceDecodeTotal\":{},\"surfaceDecodeDids\":{},\
              \"hmBatchHist\":[{}],\"wasmMemoryBytes\":{},\
              \"decodeAdmission\":{{\"maxJobs\":{},\"maxBytes\":{},\
@@ -9856,6 +9923,7 @@ pub fn dat_decode_diag() -> String {
             sc_pal_misses,
             sc_pal_inserts,
             sc_pal_entries,
+            sc_budget,
             d.surface_decode_total,
             d.surface_decode_dids.len(),
             hm_hist,
@@ -57250,5 +57318,196 @@ mod tests_surface_cache {
             assert!(c.len() > 0, "did not flush the whole memo");
         }
         model_tri_cache_clear_all();
+    }
+
+    // ---- surface-cache budget (`?surfaceBudgetMB=`) -----------------------
+    //
+    // The host half (grammar, main/worker split, absent ⇒ unset) is pinned by
+    // `apps/holtburger-web/test_surface_budget_flags.mjs`. These pin the Rust
+    // half: the resolution table, the entry-cap clamp, and the two eviction
+    // behaviours a smaller budget makes reachable.
+
+    const MB: usize = 1024 * 1024;
+
+    /// A cache-shaped `SurfacePixels` of a requested `pixels` length. Only the
+    /// byte accounting matters here, so the derived planes stay empty and the
+    /// caller passes the size to `insert` explicitly.
+    fn budget_test_pixels(bytes: usize) -> SurfacePixels {
+        SurfacePixels {
+            width: 1,
+            height: 1,
+            pixels: vec![0u8; bytes],
+            surface_type: 0,
+            category: 0,
+            normal_pixels: Vec::new(),
+            height_pixels: Vec::new(),
+            roughness_override: f32::NAN,
+            normal_scale_override: f32::NAN,
+            translucency: 0.0,
+            luminosity: 0.0,
+            diffuse: 1.0,
+            has_palette: false,
+        }
+    }
+
+    fn budget_test_lru(budget: usize, entry_cap: usize) -> SurfaceLru {
+        ByteBudgetLru::new(budget, entry_cap)
+    }
+
+    fn evictable_when_unheld(v: &std::sync::Arc<SurfacePixels>) -> bool {
+        std::sync::Arc::strong_count(v) == 1
+    }
+
+    /// THE negative control for the whole slice: with no host global the
+    /// resolved pair must be the pre-flag constants, and the live process
+    /// store must actually be sized from them. If this regresses, every
+    /// "default" measurement arm silently runs at some other budget.
+    #[test]
+    fn surface_budget_default_identity() {
+        assert_eq!(
+            surface_budget_from_raw(None),
+            (SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_ENTRY_CAP_BYTES),
+            "unset host global must resolve to the compile-time constants"
+        );
+        // Garbage / too-small is treated as absent, never as a 0-byte budget —
+        // 0 would make every insert evict itself and read as a silent
+        // `?surfaceCache=off` that no flag readback would show.
+        for raw in [
+            Some(0.0),
+            Some(-1.0),
+            Some(0.5),
+            Some(f64::NAN),
+            Some(f64::NEG_INFINITY),
+        ] {
+            assert_eq!(
+                surface_budget_from_raw(raw),
+                (SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_ENTRY_CAP_BYTES),
+                "raw {raw:?} must fall back to the default, not to 0"
+            );
+        }
+        // And the store the process actually runs on (native builds read no
+        // global, so this is the unauthored path by construction).
+        let _guard = surface_test_lock();
+        let c = surface_cache_ro();
+        assert_eq!(c.budget, SURFACE_CACHE_BUDGET_BYTES, "live store budget");
+        assert_eq!(
+            c.entry_cap, SURFACE_CACHE_ENTRY_CAP_BYTES,
+            "live store entry cap"
+        );
+    }
+
+    /// `entry_cap = min(SURFACE_CACHE_ENTRY_CAP_BYTES, budget / 4)`, and the
+    /// clamp is load-bearing: above the cap an entry is refused outright, so
+    /// one pathological texture cannot occupy a whole small budget.
+    #[test]
+    fn surface_budget_entry_cap_clamps_to_a_quarter() {
+        // Inert at the default and at the 64 MiB break-even point.
+        assert_eq!(
+            surface_budget_from_raw(Some(SURFACE_CACHE_BUDGET_BYTES as f64)).1,
+            SURFACE_CACHE_ENTRY_CAP_BYTES,
+            "min(16 MiB, 24 MiB) — no behaviour change at the default"
+        );
+        assert_eq!(
+            surface_budget_from_raw(Some((64 * MB) as f64)).1,
+            SURFACE_CACHE_ENTRY_CAP_BYTES,
+            "64 MiB is the break-even: budget/4 == the constant"
+        );
+        // Below break-even the quarter wins.
+        let (budget, entry_cap) = surface_budget_from_raw(Some((32 * MB) as f64));
+        assert_eq!(budget, 32 * MB);
+        assert_eq!(entry_cap, 8 * MB);
+        assert_eq!(surface_budget_from_raw(Some((24 * MB) as f64)).1, 6 * MB);
+
+        // The refusal itself.
+        let mut lru = budget_test_lru(budget, entry_cap);
+        let admitted = lru.insert(
+            SurfaceCacheKey::PaletteFree(0x0810_0001),
+            std::sync::Arc::new(budget_test_pixels(0)),
+            entry_cap + 1,
+            evictable_when_unheld,
+        );
+        assert!(!admitted, "an over-cap entry must be refused");
+        assert_eq!(lru.len(), 0, "and must not be resident");
+        assert!(lru.insert(
+            SurfaceCacheKey::PaletteFree(0x0810_0002),
+            std::sync::Arc::new(budget_test_pixels(0)),
+            entry_cap,
+            evictable_when_unheld,
+        ));
+        assert_eq!(lru.len(), 1, "exactly at the cap is admitted");
+    }
+
+    /// A smaller budget evicts down to it rather than clearing the store — the
+    /// same already-exercised path both instances run at 96 MiB today, just
+    /// reached sooner.
+    #[test]
+    fn surface_budget_evicts_down_to_a_small_budget() {
+        let (budget, entry_cap) = surface_budget_from_raw(Some((4 * MB) as f64));
+        assert_eq!((budget, entry_cap), (4 * MB, MB));
+        let mut lru = budget_test_lru(budget, entry_cap);
+        let per_entry = 512 * 1024;
+        for k in 0..16u32 {
+            lru.insert(
+                SurfaceCacheKey::PaletteFree(0x0810_0000 + k),
+                std::sync::Arc::new(budget_test_pixels(0)),
+                per_entry,
+                evictable_when_unheld,
+            );
+        }
+        assert!(
+            lru.total_bytes <= budget,
+            "held {} B over a {budget} B budget",
+            lru.total_bytes
+        );
+        assert!(lru.evictions > 0, "evicted the coldest");
+        assert!(lru.len() > 0, "did not flush the whole store");
+        // Recency, not insertion order: the newest keys survive.
+        assert!(
+            lru.contains(&SurfaceCacheKey::PaletteFree(0x0810_000F)),
+            "the most recent insert must be resident"
+        );
+    }
+
+    /// The budget is ADVISORY. When every resident entry is still held by a
+    /// live consumer there is no evictable victim, and the store runs over
+    /// budget rather than break a holder — so a probe must read
+    /// `surfaceCacheBytes`, never the budget, as residency truth.
+    #[test]
+    fn surface_budget_runs_over_when_nothing_is_evictable() {
+        let (budget, entry_cap) = surface_budget_from_raw(Some((4 * MB) as f64));
+        let mut lru = budget_test_lru(budget, entry_cap);
+        let per_entry = 512 * 1024;
+        let mut held = Vec::new();
+        for k in 0..16u32 {
+            let arc = std::sync::Arc::new(budget_test_pixels(0));
+            held.push(arc.clone()); // stand-in for an outstanding consumer
+            lru.insert(
+                SurfaceCacheKey::PaletteFree(0x0820_0000 + k),
+                arc,
+                per_entry,
+                evictable_when_unheld,
+            );
+        }
+        assert_eq!(lru.len(), 16, "nothing was evicted");
+        assert_eq!(lru.evictions, 0);
+        assert!(
+            lru.total_bytes > budget,
+            "expected the store to run over its {budget} B budget, held {}",
+            lru.total_bytes
+        );
+        // Once the holders go away the next insert reclaims down to budget —
+        // the over-run is transient, not a permanent leak of the bound.
+        drop(held);
+        lru.insert(
+            SurfaceCacheKey::PaletteFree(0x0820_00FF),
+            std::sync::Arc::new(budget_test_pixels(0)),
+            per_entry,
+            evictable_when_unheld,
+        );
+        assert!(
+            lru.total_bytes <= budget,
+            "reclaimed to {budget} B once holders dropped, held {}",
+            lru.total_bytes
+        );
     }
 }

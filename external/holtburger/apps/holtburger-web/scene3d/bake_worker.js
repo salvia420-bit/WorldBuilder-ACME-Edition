@@ -73,6 +73,15 @@ async function handleInit(msg) {
   if (typeof msg.shardBudgetBytes === "number" && msg.shardBudgetBytes >= 1) {
     self.__hbShardBudgetBytes = msg.shardBudgetBytes;
   }
+  // Surface-budget S2: THIS instance's surface-pixel cache byte budget
+  // (`?surfaceBudgetMB=`, the worker half of an `N:M` split). Unset → Rust's
+  // 96 MiB `SURFACE_CACHE_BUDGET_BYTES` default. Must precede `init()` below:
+  // the budget is read ONCE at the `SURFACE_PIXEL_CACHE` LazyLock init and
+  // `surface_pixel_cache_clear_all()` clears without resizing, so a later
+  // assignment is a silent no-op.
+  if (typeof msg.surfaceBudgetBytes === "number" && msg.surfaceBudgetBytes >= 1) {
+    self.__hbSurfaceBudgetBytes = msg.surfaceBudgetBytes;
+  }
   // A15 §2.5 (S4): THIS instance's decode-admission bound (`?decodeAdmission*`,
   // parsed page-side by `resolveDecodeAdmission`). Unset ⇒ Rust's unbounded
   // default, i.e. the S1 gate. Must precede `init_resource_source`/any
