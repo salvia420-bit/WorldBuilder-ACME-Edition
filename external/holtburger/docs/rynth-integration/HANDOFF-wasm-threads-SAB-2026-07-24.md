@@ -57,6 +57,17 @@ options (a)/(b) attack directly and which nobody has started.
 
 ## Known defects left ON PURPOSE (do these before more shared-memory work)
 
+> **STATUS 2026-07-24 (later same day): defects 1–4 are FIXED.** The page's query string,
+> `__hbVerifyShards` and the worker's fetch-concurrency share now ride the bake worker's `init`
+> message (`bake_worker_client.js` → `bake_worker.js` `handleInit`, applied before `init()` /
+> `init_resource_source`). The F1 budget is split in JS before either instance connects
+> (`applyFetchConcurrencySplit()`, main 24 / worker 8 of 32) so the page cap is honest again.
+> A new wasm export `url_flag_diag()` is logged by both instances at init — a live boot shows
+> identical `search` and `verifyShards` with `fetchConcurrency` 24 (main) vs 8 (worker).
+> **Behaviour change:** the worker now honours Rust-side URL flags it used to ignore.
+> Defect 2's audit found the perf-league / baseline evidence chain CLEAN (no entry toggles a
+> Rust-side flag); the audit verdict is annotated in those files. Defects 5–11 remain open.
+
 1. **`seed_url_flag_search` is called from no JS.** So under shared memory the URL-flag
    `OnceLock`s race — first reader wins, and a worker reads `""`. One call in `bake_worker.js`
    `handleInit`, *before* any flag-gated work, fixes it. **It is a behaviour change** (the worker

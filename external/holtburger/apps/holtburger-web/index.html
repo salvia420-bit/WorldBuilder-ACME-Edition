@@ -1293,7 +1293,11 @@
 
       // pixi.js import REMOVED 2026-06-18 (item 8) — the 2D PIXI renderer is
       // retired to legacy/. Zero live PIXI.* references remain in index.html.
-      import { configureBakeWorker, getBakeWorkerClient } from "./scene3d/bake_worker_client.js";
+      import {
+        configureBakeWorker,
+        getBakeWorkerClient,
+        applyFetchConcurrencySplit,
+      } from "./scene3d/bake_worker_client.js";
       // keepaliveFix (2026-07-07): dedicated-worker heartbeat that keeps a
       // keepalive packet flowing even when the tab is hidden/occluded (main-
       // thread timers get throttled/paused → ACE 60s "Network Timeout").
@@ -2255,12 +2259,36 @@
         // (MANIFEST_URL is declared at module-top-level so it's also in
         // scope for the character-creation error hint downstream.)
         root.innerHTML = "<p class=\"hint\">Fetching manifest (v2: ~2 KB top-level + lazy per-namespace catalogs; v1: ~200 MB and slower on mobile/Tailscale)…</p>";
+        // F1 split (defect 3, 2026-07-24) — MUST precede
+        // `init_resource_source`, which sizes this instance's fetch semaphore
+        // from `__hbFetchConcurrency`. The page runs two resource sources (here
+        // + the bake worker); without the split each took the full 32 and the
+        // real page cap was 64, half defeating the F1 stutter fix.
+        try {
+          const split = applyFetchConcurrencySplit();
+          console.log(
+            `[F1] fetch-concurrency split: total=${split.total} main=${split.main} worker=${split.worker}`
+          );
+        } catch (e) {
+          console.warn("[F1] fetch-concurrency split failed (non-fatal):", e);
+        }
         try {
           await init_resource_source(MANIFEST_URL);
           console.log(
             "[Phase 5.0/5.2] manifest-mode source initialized from",
             MANIFEST_URL
           );
+          // Host-flag readback (defects 1/4) — same shape the bake worker logs
+          // at the end of its init, so the two are directly diffable. Namespace
+          // access (not a named import) so a stale pkg yields undefined instead
+          // of a module-link error.
+          try {
+            if (typeof __hbWasmNs.url_flag_diag === "function") {
+              console.log("[main] flags:", __hbWasmNs.url_flag_diag());
+            }
+          } catch (_) {
+            /* diagnostics must never break boot */
+          }
           // M2 (worker-based asset bake): register the manifest URL with the
           // bake worker. DEFAULT-ON as of 2026-07-01 (configure() reads the
           // flag via urlFlagEnabled(), now opt-OUT with `?bakeWorker=0`). The

@@ -4,6 +4,12 @@
 > Axis = CPU decode/bake/residency, NOT draw calls or fps (both ruled out —
 > see docs/rynth-integration/perf-loop-reaim-2026-07-19.md). decodeVol = bakes
 > attributed here; queueMs = pre-admission starvation; wasmΔ = residency growth.
+> tainted-worker-flags-2026-07-24: AUDITED CLEAN — no entry here toggles a Rust-side URL flag
+> (no query string appears in this file at all; these are single-arm runs at compiled defaults).
+> Before 2026-07-24 the bake worker ignored all Rust-side URL flags, so any A/B that DID toggle one
+> measured a half-honouring system — see the note in `perf-baseline-2026-07-20.md`. This line is
+> hand-added and will be lost when `perf_loop.cjs rank` regenerates the file; the JSON carries the
+> same note in a top-level key.
 > source: `agg.jsonl`  ·  samples: 772
 > generated: 2026-07-20T05:16:13.112Z
 

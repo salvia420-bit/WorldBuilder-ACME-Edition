@@ -96,6 +96,30 @@ pub fn seed_url_flag_search(search: String) {
     *SEEDED_FLAG_SEARCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(search);
 }
 
+/// Readback of everything this wasm instance believes about its host-supplied
+/// flags — the query string URL flags parse from, plus the two `js_sys::global()`
+/// knobs that historically differed between the main thread and the bake worker
+/// (defects 3 + 4 of `HANDOFF-wasm-threads-SAB-2026-07-24.md`).
+///
+/// Exists so the worker's answers can be diffed against the main thread's
+/// without a bespoke probe: `bake_worker.js` logs it at the end of `handleInit`
+/// and `index.html` logs it after `init_resource_source`. Returns JSON.
+///
+/// NOTE: `fetchConcurrency` is this instance's SHARE of the page budget, not the
+/// page total — see `concurrency.rs`. Both globals are re-read on each call, so
+/// this reports what a source created NOW would get; it matches the live source
+/// only because the split is applied before `init_resource_source`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn url_flag_diag() -> String {
+    format!(
+        "{{\"search\":{:?},\"fetchConcurrency\":{},\"verifyShards\":{}}}",
+        flag_search(),
+        holtburger_resource_http::configured_fetch_concurrency(),
+        holtburger_resource_http::shard_verify_enabled(),
+    )
+}
+
 /// The query string URL-flag parsing should use: the seed when present,
 /// otherwise this instance's own `window.location.search`.
 #[cfg(target_arch = "wasm32")]

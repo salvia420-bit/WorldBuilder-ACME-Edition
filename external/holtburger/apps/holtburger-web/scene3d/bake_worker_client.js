@@ -43,6 +43,56 @@ function urlFlagEnabled() {
   }
 }
 
+// F1 fetch-concurrency split (defect 3, 2026-07-24).
+//
+// `concurrency.rs` documents ONE `Semaphore(32)` "per page", but the page runs
+// two wasm instances — this thread and the bake worker — and BOTH call
+// `init_resource_source`, so both mint a semaphore and the real page-wide fetch
+// ceiling was 64: half the F1 stutter fix, silently.
+//
+// Fix without shared memory: divide the budget before either instance connects.
+// The authored knob `globalThis.__hbFetchConcurrency` (or the Rust default 32)
+// is the PAGE total; this leaves the main share in `__hbFetchConcurrency` (which
+// is what `configured_fetch_concurrency()` reads on this thread) and publishes
+// the worker's share for the `init` message. `__hbFetchConcurrencyTotal` keeps
+// the authored value so A/B tooling can still see what was asked for.
+//
+// Share: a quarter to the worker (8 of 32). The worker only fetches shards it
+// needs for model/surface decode and dedups against nothing on this side, while
+// the main thread carries terrain/statics/scenery/buildings prefetch fan-out —
+// so the asymmetry matches the traffic. When the worker is disabled
+// (`?bakeWorker=0`) or unavailable, the main thread keeps the whole budget.
+//
+// MUST be called before `init_resource_source` on the main thread; after that
+// the main semaphore is already sized.
+const DEFAULT_FETCH_CONCURRENCY = 32; // mirrors concurrency.rs DEFAULT_FETCH_CONCURRENCY
+const WORKER_FETCH_SHARE_FRACTION = 0.25;
+
+export function applyFetchConcurrencySplit(g = globalThis) {
+  let total = DEFAULT_FETCH_CONCURRENCY;
+  try {
+    const authored = Number(g.__hbFetchConcurrencyTotal ?? g.__hbFetchConcurrency);
+    if (Number.isFinite(authored) && authored >= 1) total = Math.floor(authored);
+  } catch (_) {
+    /* keep the default */
+  }
+  let workerActive = false;
+  try {
+    workerActive = urlFlagEnabled() && typeof Worker !== "undefined";
+  } catch (_) {
+    workerActive = false;
+  }
+  // At least 1 for the worker when active, and never starve the main thread.
+  const worker = workerActive
+    ? Math.min(Math.max(1, Math.round(total * WORKER_FETCH_SHARE_FRACTION)), total - 1)
+    : 0;
+  const main = total - worker;
+  g.__hbFetchConcurrencyTotal = total;
+  g.__hbFetchConcurrencyWorker = worker;
+  g.__hbFetchConcurrency = main;
+  return { total, main, worker };
+}
+
 // R-1 alias split (2026-07-09). `walk_setup_parts` (src/lib.rs) publishes
 // texture-swapped surfaces under synthetic alias DIDs in a reserved slice of
 // the 0x08 space (`TEX_SWAP_ALIAS_BASE + n`) — but the registry that resolves
@@ -199,11 +249,30 @@ export class BakeWorkerClient {
     // memory instead of minting a second one. Set by index.html only under
     // `?sharedWasm=on`; absent -> unchanged two-instance path.
     const shared = globalThis.__hbSharedWasm || null;
+    // Host-flag plumbing (defects 1/3/4, 2026-07-24). A worker has no `window`
+    // and its `globalThis` is NOT the page's, so three things the page controls
+    // never reached the worker's wasm: the URL query string (Rust
+    // `js_location_search()` returned ""), `__hbVerifyShards` and
+    // `__hbFetchConcurrency` (both read via `js_sys::global()`). All three ride
+    // the init message and are applied in `handleInit` BEFORE any flag-gated
+    // work. BEHAVIOUR CHANGE: the worker now honours Rust-side URL flags
+    // (e.g. `?surfaceCache=off`) that it silently ignored before.
+    const locationSearch = (() => {
+      try {
+        return globalThis.location?.search || "";
+      } catch (_) {
+        return "";
+      }
+    })();
     this._readyPromise = this._request("init", {
       manifestUrl: abs(this.manifestUrl),
       sceneryBaseUrl: abs(this.sceneryBaseUrl),
       sharedModule: shared?.module ?? null,
       sharedMemory: shared?.memory ?? null,
+      locationSearch,
+      // `undefined` → leave the worker global unset → Rust default (verify ON).
+      verifyShards: globalThis.__hbVerifyShards,
+      fetchConcurrency: globalThis.__hbFetchConcurrencyWorker,
     });
     return this._readyPromise;
   }

@@ -8,6 +8,18 @@
 - did NOT land (4): Hotel Swank, HotelSwank, NightClub, TownNetwork
 - settle by session-age: [{'sessionIdx': 0, 'n': 58, 'settleMedMs': 21323, 'reclaimMedMs': 152}]
 
+**tainted-worker-flags-2026-07-24 — AUDIT RESULT: this baseline is CLEAN.** Until 2026-07-24 the bake
+worker ignored every Rust-side URL flag (`js_location_search()` returns `""` with no `window`, and the
+house rule is "absent reads ON"), so *any* A/B arm that toggled one of the 32 Rust-parsed flags
+(`surfaceCache`, `palSurfaceCache`, `batchSplit`, `freezeHash`, `remoteInterp`, … — the full list is the
+`parse_*_flag` fns in `apps/holtburger-web/src/lib.rs`) measured a system that honoured it on the main
+thread and IGNORED it in the worker, i.e. roughly half the decode volume. Same for `__hbVerifyShards`,
+which the worker never saw. **Audited 2026-07-24: this file, `perf-league.md` and `perf-league.json`
+contain no query string and no Rust-side flag name at all** — they are single-arm runs at compiled
+defaults (`battery-telepoi.mjs` passes no query), so nothing here needs discarding. The taint applies to
+any *earlier or external* evidence that did toggle such a flag; treat those as invalid. Runs from
+2026-07-24 onward are unaffected — the worker is now seeded with the page's query string.
+
 **CONFOUND (per docs 1121/1123):** single-session — residency accumulates (lru→203, wasm→587MB), so LATER stops starve. settle-cap != clean per-POI cost; it's the residency-accumulation signal. For clean per-POI A/B use fixed-length sessions + session-age-matched medians.
 
 ## Worst settle (top 15)

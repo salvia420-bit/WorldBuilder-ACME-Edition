@@ -12,9 +12,21 @@
 //!
 //! Bounding each `prefetch()` call independently does NOT bound the
 //! global peak (the *overlap* is the problem), so the limiter lives on
-//! the source instance (one per page) and is acquired *inside* each
-//! fetch closure — deduped waiters latch onto the in-flight `Shared`
-//! future via `InflightMap` without consuming a permit.
+//! the source instance and is acquired *inside* each fetch closure —
+//! deduped waiters latch onto the in-flight `Shared` future via
+//! `InflightMap` without consuming a permit.
+//!
+//! NOT "one per page" (defect 3, 2026-07-24): the page runs TWO wasm
+//! instances — main thread + bake worker — and each calls
+//! `init_resource_source`, so each mints its own `Semaphore`. Read
+//! literally, that made the real page-wide ceiling 2×32 = 64 and half
+//! defeated this fix. The budget is now SPLIT in JS before either
+//! instance connects (`applyFetchConcurrencySplit()` in
+//! `scene3d/bake_worker_client.js`): the main instance keeps the larger
+//! share, the worker's share rides its `init` message, and the two sum
+//! to [`DEFAULT_FETCH_CONCURRENCY`] (or the authored
+//! `__hbFetchConcurrency`). The permit count below is therefore a
+//! PER-INSTANCE share, not the page cap.
 //!
 //! Single-thread note: under wasm32 the executor is single-threaded,
 //! but the primitive uses `Arc<Mutex<_>>` + `oneshot` (not `Rc`) so the

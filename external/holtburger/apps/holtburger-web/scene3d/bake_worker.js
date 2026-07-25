@@ -11,7 +11,9 @@
 // browser HTTP cache serves it warm after the main thread's fetch.
 //
 // Protocol (postMessage):
-//   in : {type:'init', id, manifestUrl, sceneryBaseUrl}
+//   in : {type:'init', id, manifestUrl, sceneryBaseUrl,
+//              locationSearch, verifyShards?, fetchConcurrency?}
+//        (the last three are the page's host flags — see handleInit)
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
 //        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...], urgent?}
@@ -36,6 +38,8 @@ import init, {
   fetchEntitySurfacesPixelsBatch,
   init_resource_source,
   init_scenery_base_url,
+  seed_url_flag_search,
+  url_flag_diag,
 } from "../pkg/holtburger_web.js?v=netrev-20260709";
 
 import {
@@ -47,6 +51,19 @@ import {
 let ready = false;
 
 async function handleInit(msg) {
+  // Host-flag plumbing (defects 1/3/4 of HANDOFF-wasm-threads-SAB-2026-07-24).
+  // These two globals are read by Rust via `js_sys::global()`, which in a worker
+  // is THIS scope — never the page's — so they were unset here and the worker
+  // ignored the page's settings (it kept sha256-verifying shards after
+  // `__hbVerifyShards = false`, and minted its own full-size fetch semaphore on
+  // top of the main thread's → a real page cap of 64). Set BEFORE `init()` so
+  // the values are in place before any wasm read.
+  if (typeof msg.fetchConcurrency === "number" && msg.fetchConcurrency >= 1) {
+    self.__hbFetchConcurrency = msg.fetchConcurrency;
+  }
+  if (msg.verifyShards !== undefined && msg.verifyShards !== null) {
+    self.__hbVerifyShards = msg.verifyShards;
+  }
   // EXPERIMENT (threads-lite, 2026-07-24): when the main thread hands us its
   // compiled module + shared memory, initialise INTO that memory — this worker
   // becomes a second thread of one wasm instance rather than a second instance.
@@ -61,6 +78,17 @@ async function handleInit(msg) {
     // Instantiate the wasm module in this worker's context.
     await init();
   }
+  // Seed the page's query string into this instance (defect 1). Rust's
+  // `js_location_search()` returns "" with no `window`, and the house flag rule
+  // is "absent reads ON, only an explicit off-form is OFF" — so every Rust-side
+  // URL flag read at its DEFAULT in here, and an A/B arm like `?surfaceCache=off`
+  // was honoured on the main thread and ignored in the worker. MUST run after
+  // wasm init (it is a wasm export) and before ANY flag-gated work: the flags
+  // cache into `OnceLock`s on first read, and `init_resource_source` below is
+  // already flag-gated work.
+  if (typeof seed_url_flag_search === "function") {
+    seed_url_flag_search(msg.locationSearch || "");
+  }
   // `init_resource_source` is async (fetches the manifest) and MUST precede
   // any `fetch_*` call — the wasm panics otherwise.
   await init_resource_source(msg.manifestUrl);
@@ -73,6 +101,16 @@ async function handleInit(msg) {
     }
   }
   ready = true;
+  // One-line readback so the worker's view of the host flags can be diffed
+  // against the main thread's (index.html logs the same shape after
+  // `init_resource_source`). This is the evidence that defects 1 + 4 are fixed.
+  try {
+    if (typeof url_flag_diag === "function") {
+      console.log("[bake_worker] flags:", url_flag_diag());
+    }
+  } catch (_) {
+    /* diagnostics must never fail init */
+  }
   self.postMessage({ type: "ready", id: msg.id });
 }
 

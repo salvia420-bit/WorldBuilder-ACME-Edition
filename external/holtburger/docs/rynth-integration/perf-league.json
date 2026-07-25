@@ -1,4 +1,11 @@
 {
+  "tainted-worker-flags-2026-07-24": {
+    "verdict": "clean",
+    "scope": "whole run (no per-entry taint; ranked[] keyset intentionally unchanged)",
+    "defect": "Before 2026-07-24 the bake worker ignored every Rust-side URL flag (js_location_search() returns \"\" with no window; house rule is 'absent reads ON') and never saw __hbVerifyShards/__hbFetchConcurrency, so any A/B toggling one of those measured a system that honoured it on the main thread only.",
+    "audit": "No query string and no Rust-side flag name appears in this file, perf-league.md, or perf-baseline-2026-07-20.md. These are single-arm measurements at compiled defaults, so no entry is invalidated.",
+    "note": "Hand-added; perf_loop.cjs `rank` will drop this key on regeneration. Kept also in perf-baseline-2026-07-20.md, which is not generated."
+  },
   "generatedAt": "2026-07-20T05:16:13.115Z",
   "source": "agg.jsonl",
   "samples": 772,

@@ -65,7 +65,17 @@ use crate::manifest_source_v1::ManifestResourceSourceV1;
 /// per-source shard-fetch cap, so the value can be A/B-tuned without a wasm
 /// rebuild. Absent / non-numeric / < 1 → the compiled default. Reads the
 /// global via `js_sys::global()` so it works in both window + worker contexts.
-pub(crate) fn configured_fetch_concurrency() -> usize {
+///
+/// SPLIT (defect 3, 2026-07-24): this is a PER-INSTANCE cap, and the page runs
+/// two `ManifestResourceSource`s (main + bake worker). The page-wide budget is
+/// therefore divided in JS before either instance connects —
+/// `applyFetchConcurrencySplit()` in `scene3d/bake_worker_client.js` stashes the
+/// authored total in `__hbFetchConcurrencyTotal`, leaves the MAIN share in
+/// `__hbFetchConcurrency`, and posts the worker share in the worker's `init`
+/// message (the worker sets it on its own global before wasm init). So this
+/// function still reads "my share" in both contexts, and main + worker now sum
+/// to the documented page cap instead of doubling it.
+pub fn configured_fetch_concurrency() -> usize {
     let g = js_sys::global();
     let v = js_sys::Reflect::get(
         g.as_ref(),
@@ -88,7 +98,13 @@ pub(crate) fn configured_fetch_concurrency() -> usize {
 /// sha256 over ~25 MB across ~2 k shards. Absent / null / non-falsy → verify
 /// (default ON, behaviour unchanged). Reads the global via `js_sys::global()` so it
 /// works in both window + worker contexts (same pattern as the fetch-concurrency hook).
-pub(crate) fn shard_verify_enabled() -> bool {
+///
+/// WORKER (defect 4, 2026-07-24): `js_sys::global()` in a Web Worker is the
+/// worker's own global, which the page never touched — so the bake worker used
+/// to verify regardless of the page setting. The value is now forwarded in the
+/// worker's `init` message and set on `self` before wasm init, so both
+/// instances read the same setting.
+pub fn shard_verify_enabled() -> bool {
     let g = js_sys::global();
     match js_sys::Reflect::get(
         g.as_ref(),
