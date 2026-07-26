@@ -171,8 +171,13 @@ function finalize() {
     // S5-soak relay-extension aggregates (2026-07-25): renderer JS-heap peak,
     // per-instance shard/surface cache residency, and pressure/queue extremes.
     // All null when no row carried the field (legacy pkg / pre-extension rows).
-    jsHeapPeakMedMB: med(ok.map((r) => r.jsHeapPeakMB).filter((v) => v != null)),
-    jsHeapPeakMaxMB: mx(ok.map((r) => r.jsHeapPeakMB).filter((v) => v != null)),
+    // Renamed from jsHeapPeak* (RETRACTION-jsheap-step-2026-07-26): the old
+    // column carried Blink's quantized/20-min-cached value on every run before
+    // 2026-07-26 and must not be compared against. jsV8Peak* is precise (the
+    // harness now launches with --enable-precise-memory-info) but is V8-heap
+    // ONLY — ArrayBuffer externals live in matMB/palMB/entMB.
+    jsV8PeakMedMB: med(ok.map((r) => r.jsV8PeakMB).filter((v) => v != null)),
+    jsV8PeakMaxMB: mx(ok.map((r) => r.jsV8PeakMB).filter((v) => v != null)),
     shardMainMaxMB: mx(ok.map((r) => r.shardMainMB).filter((v) => v != null)),
     shardWkrMaxMB: mx(ok.map((r) => r.shardWkrMB).filter((v) => v != null)),
     surfMainMaxMB: mx(ok.map((r) => r.surfMainMB).filter((v) => v != null)),
@@ -609,7 +614,7 @@ for (const poi of POIS) {
   // Flattened per-instance relay-extension columns (all null on legacy pkg /
   // absent worker / unlanded stop) — see sampleWasmMemMB's header comment.
   const dm = diagExt?.main ?? null, dw = diagExt?.worker ?? null;
-  const jsHeapPeakMB = jsPeak != null ? Math.round(jsPeak / 1048576) : null;
+  const jsV8PeakMB = jsPeak != null ? Math.round(jsPeak / 1048576) : null;
   // Per-stop deltas (before → settled): streamed-work = bake-worker requests
   // issued; reclaimOps = evictions + parks (the ping-pong metric — baseline
   // ~75/stop pre-gate, target <10).
@@ -622,7 +627,7 @@ for (const poi of POIS) {
   rows.push({ kind: "stop", poi, sessionIdx: SESSION_IDX, landed, sameLb, noMove, landMs, settleMs,
     settleGuard, lowWork, workDelta, reclaimDelta, ...(endStats ?? {}),
     wasmMemMainMB, wasmMemWorkerMB,
-    jsHeapPeakMB,
+    jsV8PeakMB,
     shardMainMB: dm?.shardMB ?? null, shardWkrMB: dw?.shardMB ?? null,
     surfMainMB: dm?.surfMB ?? null, surfWkrMB: dw?.surfMB ?? null,
     sdTotMain: dm?.sdTot ?? null, sdDidsMain: dm?.sdDids ?? null,
@@ -635,7 +640,7 @@ for (const poi of POIS) {
   console.error(`[battery] ${poi}: landed=${landed}${sameLb ? " (same-LB)" : ""}${noMove ? " (no-move dup)" : ""} ` +
     `land=${landMs}ms settle=${settleMs}ms guard=${settleGuard}${lowWork ? " (lowWork)" : ""} ` +
     `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta} ` +
-    `js=${jsHeapPeakMB}MB press=${dm?.pressure ?? "-"}/${dw?.pressure ?? "-"} ` +
+    `jsV8=${jsV8PeakMB}MB press=${dm?.pressure ?? "-"}/${dw?.pressure ?? "-"} ` +
     `shard=${dm?.shardMB ?? "-"}/${dw?.shardMB ?? "-"}MB surf=${dm?.surfMB ?? "-"}/${dw?.surfMB ?? "-"}MB ` +
     `mats=${endStats?.mats ?? "-"}@${endStats?.matMB ?? "-"}MB/${endStats?.matBudgetMB ?? "unbounded"} evict=${endStats?.matEvict ?? "-"} ` +
     `ent=${endStats?.entMB ?? "-"}MB hi=${endStats?.entHi ?? "-"}MB ` +
@@ -656,10 +661,10 @@ for (const poi of POIS) {
     // (finalize filters it out) and from the --resume done-set (the poi is
     // retried on relaunch, same as before this row existed).
     rows.push({ kind: "abort", poi, sessionIdx: SESSION_IDX, aborted,
-      jsHeapPeakMB: jsPeak != null ? Math.round(jsPeak / 1048576) : null,
+      jsV8PeakMB: jsPeak != null ? Math.round(jsPeak / 1048576) : null,
       rendererCrashed });
     console.error(`[battery] ABORT at ${poi}: ${aborted} — writing partial results ` +
-      `(die-stop jsHeapPeak=${jsPeak != null ? Math.round(jsPeak / 1048576) : null}MB)`);
+      `(die-stop jsV8Peak=${jsPeak != null ? Math.round(jsPeak / 1048576) : null}MB)`);
     break;
   }
 }

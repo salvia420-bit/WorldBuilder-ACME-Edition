@@ -201,6 +201,15 @@ export async function launchAndEnter({ query, timeoutMs = 60000 } = {}) {
       "--disable-renderer-backgrounding",
       "--disable-backgrounding-occluded-windows",
       "--disable-features=CalculateNativeWinOcclusion",
+      // RETRACTION-jsheap-step-2026-07-26: without this flag,
+      // performance.memory.usedJSHeapSize is quantized onto a coarse rung
+      // ladder AND cached for 20 minutes — three nights of batteries chased a
+      // phantom "3.6 GB step" that was this cache expiring. Precise mode makes
+      // the field byte-accurate. NOTE it still measures the V8 heap ONLY:
+      // ArrayBuffer backing stores (texture image.data, the bulk of our JS
+      // payload) are V8-external and invisible here — use the per-pool
+      // byte-sum tallies (matMB/palMB/entMB) for those.
+      "--enable-precise-memory-info",
     ],
   });
 
