@@ -3622,6 +3622,27 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       );
       return { main, worker, jsMissing };
     };
+
+    // `?matBudgetMB=N` residency view (2026-07-25, RESULTS-validation-battery
+    // next-move 1). The battery relay already samples
+    // `liveScene3d.materialCache.materials.size` per stop as `mats`/`texs` —
+    // the discriminator that CONFIRMED this cache as the 3.6 GB late-session
+    // retainer (armLong: 6 → 479 → 1,117 → 1,777 → 1,802, heap step to
+    // 3,586 MB). Those two columns cannot see the budget, the estimated
+    // bytes, or whether eviction fired, so the falsifier rerun ("31+ bucket
+    // stops capping", "mats bounded at cap") reads them from here instead.
+    // Synchronous, read-only, allocation-light; null before the first bake
+    // installs the cache and on any legacy page whose cache predates
+    // `materialCacheStats`.
+    window.__diag.materialCache = () => {
+      try {
+        const mc2 = scene3dForBuilders && scene3dForBuilders.materialCache;
+        if (!mc2 || typeof mc2.materialCacheStats !== "function") return null;
+        return mc2.materialCacheStats();
+      } catch (_) {
+        return null; /* diagnostic only — never throw */
+      }
+    };
   }
 
   // A11-S3 =sim: ONE clock for mixers + particles + script queues. Retail

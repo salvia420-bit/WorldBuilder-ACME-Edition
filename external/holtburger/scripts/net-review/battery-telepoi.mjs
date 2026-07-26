@@ -370,6 +370,25 @@ const sample = () => raced(helpers.evalInPage(() => {
     // jump refutes it. Spread into every stop row as `mats`/`texs`.
     mats: s?.materialCache?.materials?.size ?? null,
     texs: s?.materialCache?.textures?.size ?? null,
+    // `?matBudgetMB=N` falsifier columns (2026-07-25, next-move 1). `mats`
+    // alone cannot tell "bounded at cap" from "nothing to evict yet", so
+    // carry the estimated bytes, the armed budget (null = unbounded, i.e.
+    // the unauthored baseline arm) and the cumulative eviction count from
+    // the same `__diag.materialCache()` snapshot the eviction loop uses.
+    // Fail-soft: null on any page whose cache predates `materialCacheStats`.
+    ...(() => {
+      try {
+        const st2 = s?.materialCache?.materialCacheStats?.();
+        if (!st2) return { matMB: null, matBudgetMB: null, matEvict: null };
+        return {
+          matMB: Math.round(st2.bytes / 1048576),
+          matBudgetMB: st2.budgetMB ?? null,
+          matEvict: st2.evictions ?? null,
+        };
+      } catch (_) {
+        return { matMB: null, matBudgetMB: null, matEvict: null };
+      }
+    })(),
   };
 }));
 const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c));
@@ -567,7 +586,8 @@ for (const poi of POIS) {
     `land=${landMs}ms settle=${settleMs}ms guard=${settleGuard}${lowWork ? " (lowWork)" : ""} ` +
     `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta} ` +
     `js=${jsHeapPeakMB}MB press=${dm?.pressure ?? "-"}/${dw?.pressure ?? "-"} ` +
-    `shard=${dm?.shardMB ?? "-"}/${dw?.shardMB ?? "-"}MB surf=${dm?.surfMB ?? "-"}/${dw?.surfMB ?? "-"}MB`);
+    `shard=${dm?.shardMB ?? "-"}/${dw?.shardMB ?? "-"}MB surf=${dm?.surfMB ?? "-"}/${dw?.surfMB ?? "-"}MB ` +
+    `mats=${endStats?.mats ?? "-"}@${endStats?.matMB ?? "-"}MB/${endStats?.matBudgetMB ?? "unbounded"} evict=${endStats?.matEvict ?? "-"}`);
   // --maxStops K: fixed-length sessions. After K stops in THIS session close and
   // exit for-relaunch (exit 3 → wrapper --resume), so every session holds K
   // stops and settleMedBySession[j] is age-matched across arms by construction.
