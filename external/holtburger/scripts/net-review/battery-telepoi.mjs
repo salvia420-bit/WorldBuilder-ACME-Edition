@@ -412,12 +412,19 @@ const sample = () => raced(helpers.evalInPage(() => {
     })(),
     // Paletted (recolored) surface-cache columns (2026-07-26). THE lead
     // Swank suspect: `palettedMaterials`/`palettedTextures` are keyed by
-    // outfit SIGNATURE and capped by COUNT (256), never charged to the
-    // `_matLru` that `matMB`/`matBudgetMB` bound — so the falsifier's budget
-    // intervention could not touch them. Above the cap the cache thrashes and
-    // the shared recolor degenerates into per-wearer duplication. The
-    // confirming pattern at Swank is `palEvict` spiking + `palMB` (and the
-    // heap) climbing while `matMB` stays flat. Fail-soft nulls like matMB.
+    // outfit SIGNATURE and are never charged to the `_matLru` that
+    // `matMB`/`matBudgetMB` bound — so the falsifier's budget intervention
+    // could not touch them. They WERE capped by COUNT (256), which thrashed
+    // (evicting on signature count while the bytes were still small) and the
+    // shared recolor degenerated into per-wearer duplication; as of the same
+    // day they have their own BYTE budget, `?palBudgetMB=N` (default 64 MiB;
+    // `off` restores the count cap). The confirming pattern at Swank is
+    // `palEvict` spiking + `palMB` (and the heap) climbing while `matMB`
+    // stays flat.
+    //
+    // ⚠ `palHiMB` IS THE GATING NUMBER for the 64 MiB default: settling well
+    // under 64 ⇒ bring the default down; `palEvict` still spiking at 64 ⇒
+    // raise it. Fail-soft nulls like matMB.
     ...(() => {
       try {
         const ps = window.__diag?.palettedCache?.();

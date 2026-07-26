@@ -256,6 +256,14 @@ check("ownedTextureBytes survives a throwing getter",
 // faithful harness: the same insertion-order Map semantics, the same
 // `oldestKey === key` guard, the same incremental charge/discharge, verified
 // line-by-line against materials.js below (PART 5 pins the source).
+//
+// ⚠ 2026-07-26: this harness models the COUNT-cap arm, which is now the
+// `?palBudgetMB=off` LEGACY escape rather than the default. The tally
+// arithmetic under test (charge / discharge / high-water / evictedBytes /
+// the just-installed guard / oldest-by-insertion order) is IDENTICAL in both
+// arms — only the loop CONDITION differs — so these assertions still pin live
+// behaviour. The default byte-budget arm is covered end-to-end against the
+// real `MaterialCache` in `test_pal_budget_bytes.mjs`.
 // ===========================================================================
 console.log("\n-- PART 4: paletted-cache tally (signatures / bytes / evictions / hiwater) --");
 
@@ -429,8 +437,17 @@ check("materials.js tracks the paletted high-water",
   /this\._palHiWaterBytes = this\._palBytes/.test(materialsSrc));
 check("MaterialCache exposes palettedCacheStats()",
   /palettedCacheStats\(\) \{/.test(materialsSrc));
-check("palettedCacheStats reports the cap (so 'at cap' is readable)",
-  /cap: PALETTED_CACHE_CAP/.test(materialsSrc));
+// 2026-07-26: the bound became a BYTE budget (`?palBudgetMB=`, default 64 MiB)
+// and `cap` now reports the armed instrument — bytes when armed, the legacy
+// 256-COUNT cap under `?palBudgetMB=off`. This assertion used to pin the
+// literal `cap: PALETTED_CACHE_CAP`, i.e. count-cap semantics as CURRENT
+// behaviour; it now pins the shape that keeps "at cap" readable in EITHER
+// arm. Full coverage of the budget lives in `test_pal_budget_bytes.mjs`.
+check("palettedCacheStats reports the armed cap (so 'at cap' is readable)",
+  /cap: armed \? this\._palBudgetBytes : PALETTED_CACHE_CAP/.test(materialsSrc));
+check("palettedCacheStats labels which instrument is armed",
+  /budgetMode: armed \? "bytes" : "count"/.test(materialsSrc) &&
+  /legacyCountCap: armed \? null : PALETTED_CACHE_CAP/.test(materialsSrc));
 
 check("__diag.entityOwned() exists", /window\.__diag\.entityOwned = \(\) =>/.test(indexSrc));
 check("__diag.entityOwned() labels the ?recolor arm",

@@ -100,8 +100,16 @@ function spy(tag) {
 
 // Read the live cap baked into the module so the test tracks the constant.
 // Construct a cache, fill it past cap, infer cap from the survivor count.
+//
+// ⚠ 2026-07-26 (`?palBudgetMB=`): the paletted cache's DEFAULT bound is now a
+// BYTE budget (64 MiB), not `PALETTED_CACHE_CAP = 256`. This suite is the
+// count-cap suite — its spies carry no `image.data`, so they charge 0 bytes
+// and a byte budget would never evict them. `palBudgetBytes: 0` pins the
+// LEGACY arm (`?palBudgetMB=off`) explicitly, which is exactly what these
+// assertions are about; the byte-budget arm is covered by
+// `test_pal_budget_bytes.mjs`.
 function freshCache() {
-    return new MaterialCache({});
+    return new MaterialCache({ palBudgetBytes: 0 });
 }
 
 // ----------------------------------------------------------------------

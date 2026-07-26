@@ -8626,6 +8626,26 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
 #[cfg(any(target_arch = "wasm32", test))]
 type PixelPlane = std::sync::Arc<Vec<u8>>;
 
+/// The one shared empty plane. Every "this class stores no normal/height"
+/// site hands out a clone of THIS `Arc`, so an empty plane costs one refcount
+/// bump and zero allocations — not one `Arc::new(Vec::new())` per decode.
+///
+/// `is_empty()` / `len() == 0` read through it exactly as they read through a
+/// freshly-minted `Vec::new().into()`, so the load-bearing empty-plane
+/// semantics (`DESIGN-surface-budget-2026-07-25.md` §2D: "empty height plane
+/// ⇒ JS skips POM") are unchanged — this is an allocation detail only.
+/// Deliberately NOT `ptr_eq`-load-bearing anywhere: nothing may infer "same
+/// entry" from two empty planes sharing an allocation.
+#[cfg(any(target_arch = "wasm32", test))]
+static EMPTY_PIXEL_PLANE: std::sync::LazyLock<PixelPlane> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(Vec::new()));
+
+/// Clone of the shared empty plane — O(1), no allocation.
+#[cfg(any(target_arch = "wasm32", test))]
+fn empty_plane() -> PixelPlane {
+    PixelPlane::clone(&EMPTY_PIXEL_PLANE)
+}
+
 /// One surface's decoded pixels — output of [`fetch_surface_pixels`]
 /// / [`fetch_surfaces_pixels`]. Used by Phase 3 step 6's in-browser
 /// rasterizer to UV-map per-poly textures into the model's tile.
@@ -8671,6 +8691,14 @@ pub struct SurfacePixels {
     /// Phase 1.1 — procedural normal map (RGB8, length = w*h*3) from
     /// diffuse luminance via a 3x3 Sobel kernel. Empty Vec for Luminous
     /// surfaces (per Phase 1.1 hand-off #3) and empty/fallback surfaces.
+    ///
+    /// ALSO ALWAYS EMPTY for the **palette-composed** class (2026-07-26,
+    /// "composed-slim"): a decode with `base_palette_id != 0` or a non-empty
+    /// sub-palette list is the dyed-ENTITY path, and all three entity
+    /// consumers read `sp.pixels` only (`scene3d/entities.js` :3793, :4914,
+    /// :9649). The procedural planes were computed, cached, and shipped
+    /// across the bake-worker transfer with no reader — see
+    /// `fetch_entity_surface_pixels_impl`.
     normal_pixels: PixelPlane,
     /// Phase 3.1 — procedural heightmap (R8, length = w*h) for parallax
     /// occlusion mapping. Sobel-X gradient integrated by horizontal
@@ -8678,6 +8706,11 @@ pub struct SurfacePixels {
     /// Luminous surfaces (POM doesn't apply to emissive), constant-
     /// luminance surfaces (no gradient → no depth), and the empty
     /// fallback. JS skips POM patch installation when empty.
+    ///
+    /// ALSO ALWAYS EMPTY for the palette-composed class — see
+    /// [`SurfacePixels::normal_pixels`]. An empty height plane has always
+    /// meant "no POM here", so the composed class simply lands in the
+    /// already-handled branch; it is NOT an error signal.
     height_pixels: PixelPlane,
     /// Phase 1.5 — roughness override sourced from
     /// `surface_overrides.json` (`f32::NAN` = "no override" — Vec<u8>
@@ -9416,6 +9449,18 @@ fn clone_surface_pixels(sp: &SurfacePixels) -> SurfacePixels {
 ///    `fetch_entity_surface_pixels_impl` allocate fresh plane `Vec`s), and the
 ///    palette-free and composed classes are inserted from different decodes.
 ///    So there is no double-counting *within* the store to correct for.
+///
+/// "composed-slim" note (2026-07-26): the two classes now charge DIFFERENTLY
+/// by design, and that asymmetry is real, not an accounting bug. A
+/// palette-free entry carries all three planes (4 + 3 + 1 B/px ≈ 8 B/px); a
+/// COMPOSED entry stores **pixels only** (4 B/px) because
+/// `fetch_entity_surface_pixels_impl` no longer computes normal/height for
+/// that class — nothing reads them (all three dyed-entity consumers take
+/// `sp.pixels`), and retail likewise composites RGBA-only per recolor. So a
+/// composed entry charges ~half what the same DID's palette-free entry does,
+/// and `surfaceCacheBytes` / `?surfaceBudgetMB=` hold ~2× the dye variants per
+/// megabyte. The function itself is unchanged — it still sums whatever plane
+/// lengths the entry actually has.
 #[cfg(any(target_arch = "wasm32", test))]
 fn surface_pixels_bytes(sp: &SurfacePixels) -> usize {
     sp.pixels.len() + sp.normal_pixels.len() + sp.height_pixels.len() + 64
@@ -9532,6 +9577,13 @@ fn surface_memo_get_composed(
 /// Composed-class completeness-gated insert. Same discipline as B1: memoise
 /// ONLY a complete decode (audit misses == 0, width > 0, not the magenta
 /// sentinel). Shares the one byte budget/LRU with the palette-free class.
+///
+/// "composed-slim" (2026-07-26): entries stored here ALWAYS have empty
+/// `normal_pixels` / `height_pixels` — the class is pixels-only by design (see
+/// `fetch_entity_surface_pixels_impl`'s `is_composed` gate and
+/// `surface_pixels_bytes`). Empty planes are the long-standing "no normal
+/// map / no POM" signal, never an error signal, so no completeness check
+/// looks at them.
 #[cfg(any(target_arch = "wasm32", test))]
 fn surface_memo_insert_composed(
     surface_did: u32,
@@ -12197,6 +12249,23 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::surface_classify::{compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
+    // === composed-class predicate (2026-07-26, "composed-slim") =============
+    // THE gate for the pixels-only store class. A request is COMPOSED iff it
+    // actually asks for a palette composition: an explicit base override, or
+    // at least one sub-palette overlay. Everything else is the PALETTE-FREE
+    // class, which this function shares byte-for-byte with the static path
+    // (`fetch_surface_pixels_impl`, pinned by
+    // `tests_surface_cache::entity_palette_free_parity_with_static_path`) and
+    // whose consumers DO read the procedural planes
+    // (`MaterialCache._installFromPixels` → `surfacePixelsToNormalTexture` /
+    // `HeightTexture`, materials.js :3577/:3583/:4257/:4259).
+    //
+    // ⚠ This predicate must stay EXACTLY `base != 0 || !subs.is_empty()`.
+    // Widening it (e.g. "any entity request") would strip the normal/POM
+    // planes off the STATIC surface path too, greying out every building and
+    // scenery surface's normal map. Narrowing it re-introduces the dead
+    // weight this change removes.
+    let is_composed = base_palette_id != 0 || !sub_palettes.is_empty();
     let generic_cat = SurfaceCategory::Generic.as_u8();
     let empty = SurfacePixels {
         width: 0,
@@ -12204,8 +12273,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         pixels: Vec::new().into(),
         surface_type: 0,
         category: generic_cat,
-        normal_pixels: Vec::new().into(),
-        height_pixels: Vec::new().into(),
+        normal_pixels: empty_plane(),
+        height_pixels: empty_plane(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
         translucency: 0.0,
@@ -12362,23 +12431,42 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // with a distinct output, not amplification (the first S5b
             // run read dyed-NPC re-decodes as workerAmp 2.19). The
             // palette-free class is exactly what B1 dedupes.
-            if base_palette_id == 0 && sub_palettes.is_empty() {
+            if !is_composed {
                 decode_diag_surface_decoded(g2_requested_did);
             }
             // Phase 1.5 — overrides applied via classify_with_overrides.
             let stats = compute_stats(&pixels, tex_w, tex_h);
             let (category, roughness_override, normal_scale_override) =
                 classify_with_overrides(&stats, surface_type, surface_did);
-            // Phase 1.1 — Sobel normal map; skip Luminous (emissive).
-            // Phase 3.1 — same skip rule for the heightmap.
-            let (normal_pixels, height_pixels) = if (surface_type & LUMINOUS) != 0 {
-                (Vec::new(), Vec::new())
+            // === composed-slim (2026-07-26) ============================
+            // The COMPOSED class stores pixels only. `normal_and_height_
+            // pixels` is a full Sobel + gaussian + integrate pass over
+            // w*h and its output (3 B/px normal + 1 B/px height) is
+            // cached, `Arc`-cloned on every hit, and copied across the
+            // bake-worker structured transfer (`scene3d/bake_transfer.js`
+            // :319-329) — for NO reader. All three dyed-entity consumers
+            // take `sp.pixels` and nothing else (entities.js :3793,
+            // :4914/:5004, :9649); `surfacePixelsToNormalTexture` /
+            // `...HeightTexture` are reached only from the palette-free
+            // `MaterialCache` install path (materials.js :3577/:3583,
+            // :4257/:4259). Retail agrees in spirit: a recolor composites
+            // the RGBA texture only — the bump/height authoring is a
+            // property of the base surface, not of the dye.
+            //
+            // Palette-free requests through this same function keep
+            // today's behaviour byte-for-byte (the `else` arm below is
+            // the pre-change code, unmoved).
+            let (normal_pixels, height_pixels) = if is_composed || (surface_type & LUMINOUS) != 0 {
+                // Phase 1.1/3.1 — Luminous (emissive) surfaces skip both
+                // planes; the composed class skips them by design.
+                (empty_plane(), empty_plane())
             } else {
                 // A15 §3b — one fused pass: luminance built once, the
                 // low-res gaussian pre-blur shared by both consumers, and
                 // the three f32 scratch buffers leased instead of freshly
                 // allocated. Byte-identical to the two calls it replaces.
-                normal_and_height_pixels(&pixels, tex_w, tex_h)
+                let (n, h) = normal_and_height_pixels(&pixels, tex_w, tex_h);
+                (n.into(), h.into())
             };
             SurfacePixels {
                 width: tex_w,
@@ -12386,8 +12474,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 pixels: pixels.into(),
                 surface_type,
                 category,
-                normal_pixels: normal_pixels.into(),
-                height_pixels: height_pixels.into(),
+                normal_pixels,
+                height_pixels,
                 roughness_override,
                 normal_scale_override,
                 translucency: surface.translucency,
@@ -57207,6 +57295,216 @@ mod tests_surface_cache {
         );
         assert_eq!((ph2, pm2, pi2), (1, 1, 1), "composed hit/miss/insert counted");
         assert_eq!((ent2, pal_ent2), (2, 1), "two entries, one composed");
+        surface_pixel_cache_clear_all();
+    }
+
+    // =======================================================================
+    // "composed-slim" (2026-07-26) — the COMPOSED class stores pixels only.
+    //
+    // `fetch_entity_surface_pixels_impl` gates the Sobel normal + integrated
+    // height planes on `is_composed = base_palette_id != 0 ||
+    // !sub_palettes.is_empty()`. The planes had no reader on that class: all
+    // three dyed-entity consumers take `sp.pixels` alone (entities.js :3793,
+    // :4914/:5004, :9649), and `surfacePixelsToNormalTexture` /
+    // `...HeightTexture` are called only from the palette-free
+    // `MaterialCache` install path (materials.js :3577/:3583, :4257/:4259).
+    //
+    // The load-bearing invariant these tests protect from BOTH sides:
+    //   composed  ⇒ both planes empty (dead weight gone);
+    //   palette-free through the SAME entry point ⇒ planes unchanged
+    //     (that class is shared with the STATIC path, which DOES read them —
+    //     widening the predicate greys out every building's normal/POM).
+    // =======================================================================
+
+    /// A composed (dyed) decode emits NO procedural planes, through the raw
+    /// impl and through the cache, cold and on a hit.
+    #[test]
+    fn composed_class_stores_pixels_only_no_normal_or_height_planes() {
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0020u32;
+        let mut source = textured_fixture(did, 0xFF12_3456);
+        let dye = 0x0400_2020u32;
+        add_palette(&mut source, dye, 0xFFAB_CDEF);
+
+        let reference = fetch_entity_surface_pixels_impl(&source, did, dye, &[]);
+        assert_eq!(reference.width, 1, "composed fixture decodes");
+        assert!(
+            reference.normal_pixels.is_empty(),
+            "impl: composed decode emits NO normal plane"
+        );
+        assert!(
+            reference.height_pixels.is_empty(),
+            "impl: composed decode emits NO height plane"
+        );
+
+        let (cold, misses) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        assert_eq!(misses, 0, "complete composed decode");
+        assert!(cold.normal_pixels.is_empty(), "cold: normal stays empty");
+        assert!(cold.height_pixels.is_empty(), "cold: height stays empty");
+
+        let hit = surface_memo_get_composed(did, dye, &[]).expect("memoised");
+        assert!(hit.normal_pixels.is_empty(), "hit: normal stays empty");
+        assert!(hit.height_pixels.is_empty(), "hit: height stays empty");
+        // `clone_surface_pixels` must not resurrect bytes either.
+        let cloned = clone_surface_pixels(&hit);
+        assert_eq!(cloned.normal_pixels.len(), 0, "clone: normal len 0");
+        assert_eq!(cloned.height_pixels.len(), 0, "clone: height len 0");
+        surface_pixel_cache_clear_all();
+    }
+
+    /// ⚠ THE SCOPE GUARD. The palette-free class runs through this same
+    /// function and is shared byte-for-byte with the static path, whose
+    /// consumers read the procedural planes. A regression that widened
+    /// `is_composed` to "any entity request" would empty THIS plane and grey
+    /// out static normal maps / POM scene-wide.
+    #[test]
+    fn palette_free_entity_decode_keeps_its_procedural_planes() {
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0021u32;
+        let source = textured_fixture(did, 0xFF65_4321);
+        let via_static = fetch_surface_pixels_impl(&source, did);
+        let via_entity = fetch_entity_surface_pixels_impl(&source, did, 0, &[]);
+        assert!(
+            !via_static.normal_pixels.is_empty(),
+            "precondition: the static decode of this fixture HAS a normal plane"
+        );
+        // Byte-for-byte parity, planes included (assert_pixels_eq compares the
+        // plane slices, not the Arc identities).
+        assert_pixels_eq(&via_entity, &via_static, "entity(0,[]) vs static");
+        assert!(
+            !via_entity.normal_pixels.is_empty(),
+            "palette-free entity decode KEEPS its normal plane"
+        );
+        // ...and so does the value that comes back out of the cache.
+        let (cold, m) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        assert_eq!(m, 0);
+        assert_pixels_eq(&cold, &via_static, "palette-free cached vs static");
+        let hit = surface_memo_get(did).expect("memoised in the palette-free class");
+        assert_pixels_eq(&hit, &via_static, "palette-free hit vs static");
+        surface_pixel_cache_clear_all();
+    }
+
+    /// The predicate is `base != 0 || !subs.is_empty()` — NOT "base != 0".
+    /// A sub-palette-only overlay (base 0, one overlay triple) is a genuine
+    /// composition and must take the pixels-only class.
+    #[test]
+    fn composed_predicate_covers_sub_palette_only_requests() {
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0022u32;
+        let mut source = textured_fixture(did, 0xFF0F_0F0F);
+        let overlay = 0x0400_2022u32;
+        add_palette(&mut source, overlay, 0xFF77_6655);
+
+        let subs_only = fetch_entity_surface_pixels_impl(&source, did, 0, &[(overlay, 0, 1)]);
+        assert_eq!(subs_only.width, 1, "sub-palette-only fixture decodes");
+        assert!(
+            subs_only.normal_pixels.is_empty() && subs_only.height_pixels.is_empty(),
+            "base==0 with a sub-palette overlay IS composed → pixels-only"
+        );
+        // Base-override-only is composed too (the other half of the `||`).
+        let base_only = fetch_entity_surface_pixels_impl(&source, did, overlay, &[]);
+        assert!(
+            base_only.normal_pixels.is_empty() && base_only.height_pixels.is_empty(),
+            "base override alone IS composed → pixels-only"
+        );
+        // And neither ⇒ palette-free ⇒ planes present.
+        let neither = fetch_entity_surface_pixels_impl(&source, did, 0, &[]);
+        assert!(
+            !neither.normal_pixels.is_empty(),
+            "base==0 AND no subs ⇒ palette-free ⇒ planes present"
+        );
+        surface_pixel_cache_clear_all();
+    }
+
+    /// The budget consequence: a composed entry charges `pixels + 64` while
+    /// the same DID's palette-free entry additionally charges its normal (and,
+    /// on a gradient-bearing texture, height) plane. On the real 256²/512²
+    /// mix that is 4 B/px vs 8 B/px — the composed class holds ~2× the dye
+    /// variants per MiB of `?surfaceBudgetMB=`. (The 1×1 fixture is
+    /// constant-luminance, so its height plane is empty in BOTH classes; the
+    /// discriminating term here is the normal plane.)
+    #[test]
+    fn composed_entry_charges_only_its_pixels() {
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0023u32;
+        let mut source = textured_fixture(did, 0xFF24_6801);
+        let dye = 0x0400_2023u32;
+        add_palette(&mut source, dye, 0xFF13_5790);
+
+        let pf = fetch_entity_surface_pixels_impl(&source, did, 0, &[]);
+        let comp = fetch_entity_surface_pixels_impl(&source, did, dye, &[]);
+        assert_eq!(
+            comp.pixels.len(),
+            pf.pixels.len(),
+            "same geometry → same pixel-plane length in both classes"
+        );
+        assert_eq!(
+            surface_pixels_bytes(&comp),
+            comp.pixels.len() + 64,
+            "composed charge is pixels + the fixed 64 B header, nothing else"
+        );
+        assert_eq!(
+            surface_pixels_bytes(&pf),
+            pf.pixels.len() + pf.normal_pixels.len() + pf.height_pixels.len() + 64,
+            "palette-free charge still includes both procedural planes"
+        );
+        assert!(
+            surface_pixels_bytes(&comp) < surface_pixels_bytes(&pf),
+            "composed strictly cheaper: {} vs {}",
+            surface_pixels_bytes(&comp),
+            surface_pixels_bytes(&pf)
+        );
+        // The saving is exactly the two dropped planes.
+        assert_eq!(
+            surface_pixels_bytes(&pf) - surface_pixels_bytes(&comp),
+            pf.normal_pixels.len() + pf.height_pixels.len(),
+            "the delta IS the dropped normal+height planes"
+        );
+        surface_pixel_cache_clear_all();
+    }
+
+    /// A composed cache round-trip is still byte-identical on the plane that
+    /// matters — dropping normal/height must not perturb the pixels, and two
+    /// dye variants must still key apart.
+    #[test]
+    fn composed_hit_round_trips_pixels_byte_identically_after_slimming() {
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0024u32;
+        let mut source = textured_fixture(did, 0xFF0A_0B0C);
+        let dye_a = 0x0400_2024u32;
+        let dye_b = 0x0400_2025u32;
+        add_palette(&mut source, dye_a, 0xFFAA_0000);
+        add_palette(&mut source, dye_b, 0xFF00_BB00);
+
+        let ref_a = fetch_entity_surface_pixels_impl(&source, did, dye_a, &[]);
+        let ref_b = fetch_entity_surface_pixels_impl(&source, did, dye_b, &[]);
+        assert_ne!(
+            ref_a.pixels.as_slice(),
+            ref_b.pixels.as_slice(),
+            "precondition: the two dyes really do produce different pixels"
+        );
+
+        let (cold_a, _) = fetch_entity_surface_pixels_cached(&source, did, dye_a, &[]);
+        let (cold_b, _) = fetch_entity_surface_pixels_cached(&source, did, dye_b, &[]);
+        assert_pixels_eq(&cold_a, &ref_a, "composed cold A");
+        assert_pixels_eq(&cold_b, &ref_b, "composed cold B");
+        // Hits (zero record reads) return the same bytes.
+        let c = counting(&source);
+        let (hit_a, _) = fetch_entity_surface_pixels_cached(&c, did, dye_a, &[]);
+        let (hit_b, _) = fetch_entity_surface_pixels_cached(&c, did, dye_b, &[]);
+        assert_eq!(reads_of(&c), 0, "composed memo hits read zero records");
+        assert_pixels_eq(&hit_a, &ref_a, "composed hit A");
+        assert_pixels_eq(&hit_b, &ref_b, "composed hit B");
+        // The pixel plane is SHARED (option E), the empty planes are inert.
+        assert!(
+            std::sync::Arc::ptr_eq(&cold_a.pixels, &hit_a.pixels),
+            "pixels plane still shared, not copied"
+        );
         surface_pixel_cache_clear_all();
     }
 

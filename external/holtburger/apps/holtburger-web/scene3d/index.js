@@ -3678,10 +3678,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // `palMB` — the paletted (recolored) surface cache (2026-07-26). Sibling
     // to `__diag.materialCache()` and the pool `matBudgetMB` structurally
     // CANNOT bound: `_matLru` charges only the four per-DID maps, while
-    // `palettedMaterials` / `palettedTextures` are keyed by outfit SIGNATURE
-    // and capped by COUNT (`PALETTED_CACHE_CAP = 256`), not bytes. Above the
-    // cap the cache thrashes and the "shared" recolor degenerates into
-    // per-wearer duplication — the current lead suspect for the Swank step.
+    // `palettedMaterials` / `palettedTextures` are keyed by outfit SIGNATURE.
+    // Since 2026-07-26 this pool has its OWN byte budget, `?palBudgetMB=N`
+    // (default 64 MiB); `?palBudgetMB=off` restores the old
+    // `PALETTED_CACHE_CAP = 256` COUNT cap, under which the cache thrashed
+    // (evicting on signature count while the bytes were still small) and the
+    // "shared" recolor degenerated into per-wearer duplication — the lead
+    // suspect for the Swank step. Read `budgetMode`/`cap` to see which
+    // instrument is armed.
     // See `MaterialCache.palettedCacheStats()` for the full reading guide.
     window.__diag.palettedCache = () => {
       try {
