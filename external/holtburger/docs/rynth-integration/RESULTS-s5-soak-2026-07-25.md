@@ -158,6 +158,16 @@ position; n per bucket 4–22):
   chromium + the stream kiosk exceed the 8 GB box; settle numbers taken during a
   concurrent build are garbage. (The same-day host reboot was thermal — a rain
   cover blocking the fans — not build-induced; don't cite it as an OOM datum.)
+- **`cargo fmt`/rustfmt needs the capped-build jail too** — same evening, a
+  rustfmt run over the ~10-kloc lib.rs (outside the cgroup, inheriting the
+  agent tree's oom_score_adj −900 protection) ballooned to 6.5 GB anon-RSS;
+  the kernel OOM killer spared it *because* of the protection and shot
+  unprotected system daemons instead — mariadb among the casualties (auth DB
+  down ⇒ every subsequent ACE login hung with "session created, auth never
+  runs, Network Timeout" while the world ran normally off the entity cache).
+  Any Rust toolchain invocation — build, test, fmt, clippy — goes through
+  `capped-build`, no exceptions; and an ACE login timeout with a healthy-looking
+  world should be answered with `ss -tlpn | grep 3306` first.
 - **Session length is a confounder for every per-arm median.** Compare
   age-matched (`--maxStops`) or bucket by in-session index; a "better" arm may
   just be an arm that crashed earlier.
