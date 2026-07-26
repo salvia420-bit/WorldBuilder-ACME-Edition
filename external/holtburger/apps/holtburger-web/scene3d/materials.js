@@ -119,6 +119,17 @@ const _SURFACE_WRAP_CLAMP = (() => {
 // insertion order), disposing the material AND its paired owned texture
 // together. This is NOT the page-teardown `dispose()` path — the LRU
 // never calls `dispose()`.
+//
+// ⚠ SUPERSEDED AS THE DEFAULT (2026-07-26, `?palBudgetMB=`). A COUNT cap
+// bounds signatures, not BYTES, and the bytes are what OOMs the renderer: a
+// 512² dyed surface is 1 MiB and a 64² one is 16 KiB, so 256 signatures is
+// anywhere between 4 MiB and 256 MiB of `DataTexture.image.data`. The cap now
+// governs only two things:
+//   1. `?palBudgetMB=off` — the legacy-behaviour escape hatch;
+//   2. `vfxPalettedVariants` (`getCachedVariantFromPaletted`), which caches
+//      MATERIAL CLONES that share the base's texture and therefore carry ~no
+//      bytes of their own — a count cap is the right shape there.
+// See the `?palBudgetMB` block below for the replacement.
 const PALETTED_CACHE_CAP = 256;
 
 // Phase 0.1 — shadow casting gate. Translucent and Additive surfaces
@@ -1900,6 +1911,113 @@ export function matBudgetBytesFromLocation() {
   }
 }
 
+// ===========================================================================
+// `?palBudgetMB=N` — BYTE budget for the paletted (recolored) surface cache
+// (2026-07-26, retail-palette research #1 / `RESULTS-matcache-falsifier-
+// 2026-07-26.md` next-move 1).
+//
+// WHAT IT REPLACES. `palettedMaterials` / `palettedTextures` are keyed by
+// outfit SIGNATURE (`did|paletteId|subPalettes`) and were bounded by
+// `PALETTED_CACHE_CAP = 256` — a COUNT. `matBudgetMB` structurally cannot see
+// this pool (`_matLru` charges only the four per-DID maps), so these two maps
+// were the one unbudgeted per-surface retainer in the tree. A count cap is the
+// wrong instrument here because the per-signature cost is not a constant: at
+// 256² a dyed surface pins 256 KiB of `DataTexture.image.data`, at 512² it
+// pins 1 MiB, at 64² 16 KiB. 256 signatures is therefore anywhere from 4 MiB
+// to 256 MiB — and at Hotel Swank (an item museum: hundreds of distinct dye
+// signatures in one stop) the cap was hit while the bytes were still small,
+// so the "shared" cache THRASHED (`palEvict` spiking) and each next wearer
+// re-minted a full-size copy. Both failure modes — thrash below the byte
+// ceiling, and blowing past it on big surfaces — come from measuring the
+// wrong quantity.
+//
+// DEFAULT 64 MiB, and it is a real default, not "unbounded" (that is the one
+// deliberate difference from `matBudgetMB`'s default-neutral grammar): the
+// pool was ALREADY bounded, so shipping unbounded-by-default would be a
+// regression. 64 MiB is the byte-equivalent of the old 256-count cap at the
+// 256² modal surface size (256 × 256 KiB = 64 MiB) — i.e. the default is
+// chosen to be behaviour-preserving at the size the cap was implicitly tuned
+// for, while sizing correctly for the 64²/512² tails the count cap got wrong.
+// ⚠ PROVISIONAL: confirm/adjust from the Swank rerun's `palHiMB` (the
+// high-water the relay reports). If `palHiMB` settles well under 64 the
+// default can come down; if `palEvict` is still spiking at 64 it must go up.
+//
+// GRAMMAR (mirrors `matBudgetMB`'s explicit-positive-number reader, so it is
+// NOT the `!== "off"` shape that reads ON when the param is absent):
+//   absent            ⇒ 64 MiB   (the default)
+//   `?palBudgetMB=N`  ⇒ N MiB     (positive decimals OK; `0.5` = 512 KiB)
+//   `?palBudgetMB=off`⇒ LEGACY    (the 256-COUNT cap, bit-for-bit pre-change)
+//   garbage / `0` / negative ⇒ 64 MiB (the default — a typo must not silently
+//                                      unbound or unbind the cache)
+// `off` is the escape hatch, and it is the ONLY way back to count semantics.
+//
+// WHAT DOES NOT CHANGE. Eviction order (oldest-by-insertion — Map iteration
+// order), the `oldestKey === key` protect-the-just-installed guard, the
+// dispose pairing (material + its owned texture together), and every tally
+// (`_palEvictions`, `_palEvictedBytes`, `_palBytes`, `_palHiWaterBytes`,
+// `_palHiWaterSigs`, `_palInstalls`). `__diag.palettedCache()` and the relay
+// columns (`palMB` / `palHiMB` / `palEvict` / `palSigs`) keep working
+// unchanged; only `cap` changes meaning (it now reports the BYTE budget) and
+// `legacyCountCap` / `budgetMode` are added so a reader can tell which
+// instrument is armed.
+//
+// SAME FOOTGUN as `matBudgetMB` / `?surfaceBudgetMB`: a budget below one
+// bake's live working set re-introduces the thrash it exists to remove (and,
+// at the extreme, an evicted-then-refetched signature renders undyed for a
+// frame). The two structural guards are unchanged: eviction is
+// oldest-by-insertion and the entry installed by the current call is never
+// the one evicted.
+// ===========================================================================
+
+/** `?palBudgetMB` default, in MiB. See the block comment for the derivation. */
+export const PAL_BUDGET_DEFAULT_MB = 64;
+
+/**
+ * Parse one `palBudgetMB` token → MB (positive number), or the string
+ * `"off"` for LEGACY count-cap mode.
+ *
+ * Absent / empty / garbage / `0` / negative ⇒ `PAL_BUDGET_DEFAULT_MB`.
+ * Only the literal `off` (case-insensitive, trimmed) selects legacy.
+ */
+export function parsePalBudgetMB(raw) {
+  if (raw === null || raw === undefined) return PAL_BUDGET_DEFAULT_MB;
+  const s = String(raw).trim();
+  if (s.toLowerCase() === "off") return "off";
+  if (!/^\d+(?:\.\d+)?$/.test(s)) return PAL_BUDGET_DEFAULT_MB;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return PAL_BUDGET_DEFAULT_MB;
+  return n;
+}
+
+/**
+ * Resolve `?palBudgetMB=` out of a query string into BYTES.
+ * Returns `0` for LEGACY (count-cap) mode — the one sentinel, mirroring
+ * `resolveMatBudgetBytes`'s "0 means the other regime". Pure: touches no
+ * globals, so every arm is testable in node.
+ */
+export function resolvePalBudgetBytes(search = "") {
+  let mb;
+  try {
+    mb = parsePalBudgetMB(new URLSearchParams(search || "").get("palBudgetMB"));
+  } catch (_) {
+    mb = PAL_BUDGET_DEFAULT_MB;
+  }
+  if (mb === "off") return 0; /* legacy count cap */
+  return Math.max(1, Math.floor(mb * 1024 * 1024));
+}
+
+/** The live page's paletted budget in bytes; the default anywhere without a location. */
+export function palBudgetBytesFromLocation() {
+  try {
+    if (typeof window === "undefined" || !window.location) {
+      return PAL_BUDGET_DEFAULT_MB * 1024 * 1024;
+    }
+    return resolvePalBudgetBytes(window.location.search);
+  } catch (_) {
+    return PAL_BUDGET_DEFAULT_MB * 1024 * 1024;
+  }
+}
+
 /**
  * JS-heap bytes a `THREE.DataTexture` pins through `image.data`. This is the
  * honest number — it is measured AFTER `?textureDownscale` decimation and
@@ -2073,14 +2191,17 @@ export class MaterialCache {
     // held an unknown amount — which is why the falsifier's budget
     // intervention pinned the wrong maps and the 3.6 GB step survived it.
     //
-    // These counters are the discriminator. `PALETTED_CACHE_CAP = 256`
-    // signatures is a COUNT cap, not a byte cap, and past it the cache
-    // THRASHES: an evicted texture is `dispose()`d (GPU handles only — the JS
-    // `image.data` stays alive as long as a live mesh still references the
-    // material), and the next wearer with the same signature mints a fresh
-    // full-size copy. An item museum like Hotel Swank blows through 256
-    // distinct `(did|paletteId|subPalettes)` signatures in one stop, so above
-    // the cap the "shared" cache degenerates into per-wearer duplication.
+    // These counters are the discriminator — and, since 2026-07-26, also the
+    // budget's own input: `?palBudgetMB=N` evicts on `_palBytes`, not on
+    // signature count. The old `PALETTED_CACHE_CAP = 256` was a COUNT cap, and
+    // past it the cache THRASHED: an evicted texture is `dispose()`d (GPU
+    // handles only — the JS `image.data` stays alive as long as a live mesh
+    // still references the material), and the next wearer with the same
+    // signature mints a fresh full-size copy. An item museum like Hotel Swank
+    // blows through 256 distinct `(did|paletteId|subPalettes)` signatures in
+    // one stop while the BYTES were still small, so above the cap the "shared"
+    // cache degenerated into per-wearer duplication. The count cap now lives
+    // on only as `?palBudgetMB=off`.
     //
     // Confirming signal at Swank: `palEvict` spiking and `palMB`/heap
     // climbing while `matMB` stays flat.
@@ -2095,6 +2216,17 @@ export class MaterialCache {
     this._palHiWaterSigs = 0;    // max palettedMaterials.size ever observed
     /** @type {Map<string, number>} charged bytes per live paletted key */
     this._palKeyBytes = new Map();
+    // `?palBudgetMB=N` — BYTE budget over `palettedMaterials`/`palettedTextures`
+    // (see the block comment above the class). `0` = LEGACY `PALETTED_CACHE_CAP`
+    // count mode (`?palBudgetMB=off`). `opts.palBudgetBytes` is the
+    // test/embedder seam and accepts 0 (to request legacy explicitly), so the
+    // guard is `>= 0` rather than `> 0`; anything else takes the URL path,
+    // which is the 64 MiB default on a page without the flag.
+    const _optPalBudget = Number(opts.palBudgetBytes);
+    this._palBudgetBytes =
+      Number.isFinite(_optPalBudget) && _optPalBudget >= 0
+        ? Math.floor(_optPalBudget)
+        : palBudgetBytesFromLocation();
     /**
      * 2026-06-20 ParticleViewer parity — cache-owned UNLIT particle materials
      * keyed by surfaceDid. Particles render unlit (texture × opacity, additive/
@@ -2503,7 +2635,11 @@ export class MaterialCache {
    * wrong maps: the cache was pinned at 64 MB with 5,723 evictions and the
    * 3.6 GB heap step fired anyway, at the same POI.
    *
-   * `PALETTED_CACHE_CAP` (256) is a COUNT cap. Above it the cache thrashes —
+   * WHAT BOUNDS IT NOW (2026-07-26): `?palBudgetMB=N`, a BYTE budget
+   * (default 64 MiB), not the old `PALETTED_CACHE_CAP` COUNT of 256 — which
+   * survives only as the `?palBudgetMB=off` escape. `budgetMode` reports
+   * which instrument is armed and `cap` reports its value in the matching
+   * unit (bytes when armed, signatures in legacy mode). Either way
    * `evictions` climbing means same-signature wearers are re-minting
    * full-size textures, i.e. the "shared" cache has degenerated into
    * per-wearer duplication. Reading:
@@ -2517,11 +2653,24 @@ export class MaterialCache {
    * incrementally at insert/evict. Never walks the maps.
    */
   palettedCacheStats() {
+    // 2026-07-26 `?palBudgetMB`: `cap` now reports the armed instrument — the
+    // BYTE budget by default, the legacy 256-COUNT cap under
+    // `?palBudgetMB=off`. `budgetMode` says which, and `legacyCountCap` is
+    // non-null only in the legacy arm, so a reader can never mistake a byte
+    // number for a signature number. Every other field is unchanged: the
+    // relay's `palMB`/`palHiMB`/`palEvict`/`palSigs` columns read
+    // `bytes`/`hiWaterBytes`/`evictions`/`signatures` exactly as before.
+    const armed = this._palBudgetBytes > 0;
     return {
       signatures: this.palettedMaterials.size,
       textures: this.palettedTextures.size,
-      cap: PALETTED_CACHE_CAP,
-      atCap: this.palettedMaterials.size >= PALETTED_CACHE_CAP,
+      budgetMode: armed ? "bytes" : "count",
+      cap: armed ? this._palBudgetBytes : PALETTED_CACHE_CAP,
+      capMB: armed ? +(this._palBudgetBytes / 1048576).toFixed(2) : null,
+      legacyCountCap: armed ? null : PALETTED_CACHE_CAP,
+      atCap: armed
+        ? this._palBytes >= this._palBudgetBytes
+        : this.palettedMaterials.size >= PALETTED_CACHE_CAP,
       bytes: this._palBytes,
       bytesMB: +(this._palBytes / 1048576).toFixed(2),
       hiWaterBytes: this._palHiWaterBytes,
@@ -2727,6 +2876,42 @@ export class MaterialCache {
     return this.palettedMaterials.get(key) ?? null;
   }
 
+  /** True when `?palBudgetMB` is armed (byte mode); false = legacy count cap. */
+  palBudgetArmed() {
+    return this._palBudgetBytes > 0;
+  }
+
+  /**
+   * The paletted-cache eviction condition — the ONE place the two regimes
+   * differ. O(1): two `Map.size` reads and an integer compare, on a path that
+   * already walks the maps.
+   *
+   * BYTE MODE (`?palBudgetMB=N`, default 64 MiB): over budget iff the live
+   * charge `_palBytes` exceeds `_palBudgetBytes`.
+   *
+   * ...plus a count valve for entries that carry NO charge. `installPaletted`
+   * accepts a null texture (and `estimateTextureBytes` reads 0 for anything
+   * without `image.data`), which stores a signature contributing zero bytes
+   * forever — a pure byte budget could never evict it, so the map would grow
+   * unbounded. `palettedMaterials.size - _palKeyBytes.size` is exactly that
+   * uncharged population and it stays bounded by the old count cap. Neither
+   * production call site can reach this (entities.js :3864 and :5025 both
+   * pass a real `DataTexture`); it exists so the degenerate case is bounded
+   * instead of silently leaking, and it can never evict a charged entry
+   * early — a fully-charged cache has `size === _palKeyBytes.size`, i.e. an
+   * uncharged population of 0.
+   *
+   * LEGACY MODE (`?palBudgetMB=off`, `_palBudgetBytes === 0`): the
+   * pre-2026-07-26 count cap, verbatim.
+   */
+  _palOverBudget() {
+    if (this._palBudgetBytes <= 0) {
+      return this.palettedMaterials.size > PALETTED_CACHE_CAP;
+    }
+    if (this._palBytes > this._palBudgetBytes) return true;
+    return this.palettedMaterials.size - this._palKeyBytes.size > PALETTED_CACHE_CAP;
+  }
+
   /**
    * Install a freshly-fetched paletted material into the cache.
    * The caller is responsible for building the THREE.Material; we
@@ -2758,16 +2943,22 @@ export class MaterialCache {
     if (this.palettedMaterials.size > this._palHiWaterSigs) {
       this._palHiWaterSigs = this.palettedMaterials.size;
     }
-    // #22 — insertion-order LRU cap. Map iteration is insertion-ordered,
-    // so the FIRST key is the oldest. Evict oldest-first while over cap,
-    // disposing the material AND its paired owned texture together. The
+    // #22 — insertion-order LRU. Map iteration is insertion-ordered, so the
+    // FIRST key is the oldest. Evict oldest-first while over budget, disposing
+    // the material AND its paired owned texture together. The
     // `oldestKey === key` guard ensures the entry we just installed this
     // call is never the one evicted (so a same-frame-baked material stays
     // retrievable same frame). Re-inserting an existing key keeps its
     // original position in the Map (it does NOT move to the end), so that
     // guard also covers the degenerate "the entry we just re-set is also
     // the oldest" case. Fail-soft: a throwing dispose() must not abort.
-    while (this.palettedMaterials.size > PALETTED_CACHE_CAP) {
+    //
+    // 2026-07-26 `?palBudgetMB` — "over cap" became "over BYTE budget"
+    // (`_palBytes`, charged just above from `image.data.byteLength`). Order,
+    // guard, dispose pairing and every tally are untouched; only the LOOP
+    // CONDITION changed. `?palBudgetMB=off` (`_palBudgetBytes === 0`) restores
+    // the count cap bit-for-bit.
+    while (this._palOverBudget()) {
       const oldestKey = this.palettedMaterials.keys().next().value;
       if (oldestKey === undefined || oldestKey === key) break;
       const oldMat = this.palettedMaterials.get(oldestKey);
