@@ -179,3 +179,37 @@ rename is merged and pushed (`9a6e2ade`).
    existing, unrelated — triage separately); fresh worktrees need
    `external/chorizite` symlinks before Rust builds; the YouTube stream key
    used tonight passed through chat and disk — rotate it in Studio.
+
+## Addendum — remote-play console triage (2026-07-26 morning, cloudflared session)
+
+First real remote-player session on the merged build (serve.py + wsbridge over
+two cloudflared quick tunnels; interactive login via `?bridge_url=`; flags
+`clouds=on&rain=off&snow=off&lightning=off&textureScale=2&nosw=1`). Console
+findings, triaged:
+
+1. **`/dist/scenery/0x9FBF.scenery.jsonl` + `/dist/events/…` 404s — NOT bugs.**
+   Landblock 0x9FBF has no `LandBlockInfo` record in the cell DAT at all
+   (probe-verified: `0x9FBFFFFE` absent from `client_cell_1.dat`; ~33 blocks of
+   the 0x9Fxx row likewise empty). The bake rightly emits nothing; the client
+   fetches per-LB layers unconditionally and treats 404 as an empty layer.
+   Cosmetic console noise; optional fix is a client-side manifest presence
+   check before fetch.
+2. **`[motion-link] no MotionTable link for attack 0x4d (stance 0x3d, mtable
+   0x0900000C) on 0x8000cca7` — real data gap, minor.** NOT the known-benign
+   `0x13xxxxxx` QuickEmote class: a swing-family command with no link in that
+   creature's table for that stance ⇒ the swing anim silently doesn't play.
+   Retail clamps/falls back (`retail-clamps-never-empties`); if frozen-mid-
+   combat creatures get reported, add a stance-fallback chain to the motion
+   linker. One creature observed, low priority.
+3. **`[particle-owner] addEmitter failed: TypeError … 'morphAttributes' of
+   null` ×4 — REAL BUG, unfixed.** `ParticleEmitter._meshFactory`
+   (particle_manager.js:974) constructs `new THREE.Mesh` with a NULL geometry —
+   the emitter's particle-model geometry failed to resolve (missing/failed
+   GfxObj decode or a null cache return) and nothing guards it. Fail-soft
+   upstream (owner_registry.js:182 catches), so the cost is a static's
+   particle effect silently missing via `_runStaticParticleChain`
+   (statics.js:4109). Two defects: the null-geometry source, and the factory
+   not guarding null before mesh construction. JS-only fix; queued.
+
+Session otherwise: remote play over the tunnels worked end-to-end (login,
+world, combat), on the full night's merged build.
