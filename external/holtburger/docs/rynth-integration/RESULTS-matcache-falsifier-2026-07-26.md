@@ -213,3 +213,201 @@ findings, triaged:
 
 Session otherwise: remote play over the tunnels worked end-to-end (login,
 world, combat), on the full night's merged build.
+
+## Execution log — 2026-07-26 afternoon session (working the outstanding list)
+
+Status key: ✅ done · 🔶 partial/narrowed · ⏳ in flight · ⛔ blocked-on-user.
+
+**End state: all 8 outstanding items + both addendum code items worked to
+completion or explicit closure.** Items 1, 2, 3, 4, 5, 8 done (1 = pair run +
+analysis, mechanism now a two-suspect pre-registered intervention); 6 closed
+workaround-permanent per user (no Xorg restart); 7 deliberately deferred by
+design (unchanged); YouTube-key rotation dropped per user. Commits this
+session (master, **unpushed**): `ff0634bc` test fix, `f1ac9e83` particle
+guard, `16bb8fb8` bakeBatchMax entity legs, `a78d4c90` rynth-ai auth
+hardening, `44597a5d` liveness abort, `c9496dfd`+`718be1c3` palRemint,
+`b707d665` residency checkpoints, + this doc. Remaining user actions:
+provision a new OpenRouter key (item 4). Next-session queue: the GC-vs-NOGC
+armLong intervention (item 1), decoded-mesh-bytes lease column (item 2
+follow-on), `sgEntities` one-liner, settle-criterion first-stop fix.
+
+- **Item 8a ✅ MEMORY.md trim** — 24,835 → 23,954 B (budget 24,400). Lossless:
+  the six §4 lines removed were already duplicated verbatim in
+  `memory/recall-overflow.md` (the 2026-07-02 spill that never removed its
+  sources); replaced with one `spilled-recalls →` pointer line.
+- **Item 8b ✅ `composes_part_and_texture` triaged AND fixed** (`ff0634bc`).
+  Not a code bug: the test predated the wire-TMChange semantic fix (TMChanges
+  carry SurfaceTexture 0x05 ids, resolved through the part's Surface records
+  into minted `tex_swap_alias_for` dids — the chain-shirt fix). It fed a
+  Surface 0x08 did with no Surface record in the MockSource, so the swap
+  correctly no-opped. Test now synthesizes the Surface record, swaps by 0x05
+  ids, asserts the alias + its resolution. `cargo test -p holtburger-web
+  --lib`: **197 passed / 0 failed** — master's lib suite is fully green.
+- **Item 6 🔶 stream-rig root-capture black — narrowed, escalation is user's.**
+  Probes this session: root reads pure black (mean 0.0) via BOTH x11grab and
+  `xwd -root` ⇒ not an ffmpeg bug; persists with xfwm4 compositing OFF ⇒ not
+  the compositor; persists across a 1080p→720p re-modeset cycle ⇒ not a stale
+  mode. Per-window capture works. Fault is X-server-level screen-pixmap
+  readback (modesetting+glamor on HD520) since the 07-25 thermal reboot. Next
+  step would be an Xorg restart — **user declined (2026-07-26): it would kill
+  the live desktop session; do NOT restart X.** CLOSED as workaround-permanent:
+  `go_live-window.sh` is the capture path until a natural reboot; if root
+  capture works again after one, `go_live.sh` is usable again.
+- **Item 8c — YouTube stream key rotation: DROPPED per user (2026-07-26).**
+- **Item 7 (options B/C)** — unchanged, deliberately deferred by design doc.
+- **Item 5 ✅ armSlim "teleport wedge" — NOT a character/state bug.** Shard DB
+  state for the battery char (`+Tester2`, 0x5000011E, acct tailnet1) is fully
+  clean — no corpses, no PK timer, no stuck flags; `Teleporting` is never
+  persisted. Root cause: a SECOND `tailnet1` login at 03:51:36 (another
+  browser session on the box) triggered ACE's `account_login_boots_in_use`
+  eviction (`AuthenticationHandler.cs:182-193`); after its retry won, every
+  battery packet was discarded by the endpoint check
+  (`NetworkManager.cs:152-155`) — `@telepoi` never reached a handler, and the
+  WS↔UDP bridge gave the page no close signal. Correction: first lost stop was
+  **Sawato** (19 consecutive losses Sawato→Zaikhal); `Hotel Swank`/`Swank`/
+  `NightClub` no-move dups are the harness's legitimate duplicate-POI class
+  present in every healthy run. Verified live: 6/6 teleports incl. the Swank
+  cluster; char re-parked at Samsur; nothing changed in DB/ACE. Re-wedge risk:
+  recurs ONLY under concurrent same-account logins — mitigations: (a)
+  dedicated battery account via `HARNESS_ACCOUNT`/`HARNESS_PASSWORD`
+  (boot.mjs:75-76), (b) harness liveness-abort instead of `no-move dup` on
+  frozen pose (queued for the next battery run), (c) optional
+  `account_login_boots_in_use=0`.
+- **Addendum item 3 ✅ particle null-geometry bug fixed** (`f1ac9e83`). Root
+  cause is DATA, not a race: the four live `zero-tri` setups (e.g.
+  `0x02000363` → GfxObj `0x010008A8`) are pure light/emitter ANCHOR objects —
+  their only polygon is `NoPos`-stippled, so the decoder correctly emits zero
+  triangles and `meshToGeometryGroups` yields no geometry; retail doesn't draw
+  them either (same family as the 2026-06-20 null-material white-box guard).
+  Guard added in `addEmitter` + meshFactory with one rate-limited warn per
+  (emitter, gfxobj); `test_particles.mjs` 58→64/64; boot smoke 0 errors.
+- **Item 2b ✅ `bakeBatchMax` now covers the entity decode legs** (`16bb8fb8`).
+  `fetchEntitySurfacesPixels` uses the A16 wave split;
+  `fetchEntitySurfacesPixelsBatch` gets a group-boundary-preserving splitter
+  (`splitEntityBatchGroupWaves` — flat cuts would desync the five parallel
+  arrays; bound is `max(N, longest group)`). Unarmed path byte-identical;
+  urgent + main-thread fallbacks untouched. Live proof at `bakeBatchMax=8`:
+  entity-leg submissions 15→27. Note: the `Batch` leg is unit-covered but not
+  live-exercised at the boot spawn (F.41 pre-warm doesn't fire there).
+- **Item 4 ✅ LLM director failures diagnosed — the OpenRouter key is REVOKED.**
+  Captured error (journal + live repro): `HTTP 401 {"error":{"message":"User
+  not found.","code":401}}` on every call since the last good plan 07-24
+  20:44. NOT model-id drift (`minimax/minimax-m3` live, 1M ctx), NOT provider
+  routing (novita/minimax pin valid), NOT maxTokens/timeout (GLM-style tuning
+  already applied + confirmed on the wire), NOT rate/credit. ONE cause for
+  boot+idle failures — "calls 6, errs 1" was a misread: `calls` counts
+  attempts, panel `errs` is the CONSECUTIVE counter reset by re-arm; all six
+  failed. Undiagnosable before because LlmClient/director logs were no-ops —
+  failures lived only in the localStorage journal. Fix `a78d4c90`: auth
+  (401/403) is terminal on the FIRST strike with an actionable journal
+  message; LLM failures now hit the console (`[rynthAI] …`); 86/86 tests.
+  Client path proven end-to-end vs the mock LLM server (2× checkNow → 200 →
+  parsed plan → executed). ⛔ REMAINING USER ACTION: provision a new
+  OpenRouter key (`rynthAI.setKey(…)` in the rig profile + update
+  `/mnt/wbterminal2/stream/.keys/openrouter-key`) — until then the director
+  is dead on arrival (and now says so immediately). Operator notes: the
+  breaker does NOT survive `?bot=1` reconnect re-arms (only `rynthAI.stop()`
+  latches), and `?botInterval=0.5`+`maxCallsPerHour=70` ⇒ ~70 calls/hr floor.
+- **Addendum item 1 (404-noise manifest check): WONTFIX-for-now, verified** —
+  `dist/manifest.json` (v2) has no per-LB layer enumeration and `_health.json`
+  is layer-level only; a presence check would require changing the bake,
+  which is out of scope. Console noise stays cosmetic.
+- **Item 1 ✅ settle age-collapse: instrumented pair run, field narrowed to
+  two suspects, decisive intervention designed.** armLong vs 5-session
+  age-matched control, 58 landed stops each, full instrument set (raw:
+  `/mnt/wbterminal2/settle-age-pair-2026-07-26/`; new default-OFF battery
+  instruments `--sceneCensus`/`--checkpointEvery`, commit `b707d665`).
+  - **The collapse is a THRESHOLD at ~stop 40, not a drift**: paired-by-POI
+    settle ratio 1.14 through stop 39, **3.24** from stop 40 (per-decade
+    paired deltas −0.1/+0.0/+0.6/+0.0/+7.3/+5.8/+32.1 s). Same work, more
+    time: streamed bake units per stop identical (+7% route total), settle
+    per work-unit 1.0→1.54→2.99. First-stop settle floor confirmed (N=1
+    excluded; criterion fields stamp at +14–18 s).
+  - **Exonerated**: decode/re-decode churn (sdTot/sdDids = 1.000 everywhere),
+    renderer RSS (falls late-route), main wasm (pinned 680 MB from stop 1 —
+    the "residency" number never grows in-session), surface+pal cache bytes
+    (budget-pinned), scene-graph size (rho ≈ 0 despite 4×), LRU resident
+    count.
+  - **Standing, inseparable by correlation** (the collinearity trap again —
+    every route-cumulative metric scores rho ≈ .33): **H1 major-GC cost
+    scaling with live JS heap** (honest post-GC V8: 16 → **310 MB** in one
+    session, resets every control boot; only large non-ArrayBuffer grower)
+    and **H2 landblock-LRU park/evict bookkeeping** (evicted 0 in the ENTIRE
+    control vs **4,108** in armLong; parked 118 → 5,578; consistent with the
+    matBudget=64 churn datum).
+  - **`jsV8PeakMB` mystery RESOLVED — retire or rename the column**: precise
+    `usedJSHeapSize` read 9,462 MB against a 2,144 MB heap limit and 3,284 MB
+    whole-browser RSS — it is V8's external-memory ledger, a monotone
+    ALLOCATION ODOMETER (ArrayBuffers registered on alloc, never decremented
+    across worker transfer), not residency. Honest V8 = `Runtime.getHeapUsage`
+    after `collectGarbage`; footprint = renderer RSS. (Item-3's 866→1,921 MB
+    reading was the same odometer.)
+  - **Next experiment (pre-registered, ~1 h, no new code)**: armLong ×2 —
+    arm GC `--checkpointEvery 1` (forced full GC per stop, outside the settle
+    window) vs arm NOGC. Late-route ratio collapsing toward 1.0 ⇒ H1
+    confirmed (fix = drop the geometry/material retainers parked LBs hold);
+    unchanged ⇒ H1 refuted by intervention, H2 owns it (follow with
+    `?fixedGridPark=off` + `?lbCap` sweep). Caveats on record: checkpoint
+    GCs 8 vs 13 (mild pro-control bias); `sgEntities` column dead (reads 2D
+    `entityMap` before the 3D fallback — one-line fix next touch).
+- **Item 2 ✅ cold-spike probes both executed — verdicts in, with mechanisms.**
+  Cold-boot A/B (6 boots, acct tailnet1-baseline, spawn `0xCE940035`, fresh
+  profile each; raw: `/mnt/wbterminal2/optE-coldboot-ab-2026-07-26/`):
+  - **Instrument finding first**: `decodeAdmission.peakLiveBytes` is
+    structurally INVARIANT to option E — the only site that revises with
+    decoded bytes charges plane LENGTHS (lib.rs:10962), which E preserves
+    byte-identically; the entity/mesh/building lease sites never `revise()`
+    at all (wire-estimate only). The "≈halving" prediction targeted a blind
+    instrument. Measured: main peakLiveBytes 51,120 B bit-identical in all
+    six boots.
+  - **Option E's real effect**: bake-worker wasm high-water 92.0 MiB (E) vs
+    104.0 MiB (E surgically reverted on HEAD — a `81ad4891^` worktree build
+    would have confounded 4 other memory-relevant commits) = **−12 MiB /
+    −11.5%, ranges disjoint at n=2**. Main wasm unmoved (380–382 MiB in every
+    arm): main never runs the decode path E touches — the 678–986 MB main
+    spike is NOT option-E-addressable, and decode admission explains ~none of
+    main's residency (peakLiveBytes 51 KB, shardCache 43 MB vs 381 MiB).
+  - **`bakeBatchMax=16` on the now-covered entity legs: refutation
+    RECONFIRMED, mechanism found** — the flag bites (worker admits 156→217)
+    but the wasm already splits `fetch_surfaces_pixels` internally at
+    `SURFACE_BATCH_SPLIT_CHUNK = 16` (lib.rs:9761), so a 16-DID JS cap is a
+    no-op for the dominant funnel; worker peak = 1–2 such chunks exactly.
+    Moving it needs `bakeBatchMax < 16` or a smaller internal chunk.
+  - Live `pkg/` restored byte-identical (sha `fcbefe2f`, post-restore smoke
+    boot in arm-A band). **Identified next instrument** (future session, not
+    in tonight's scope): main's 8.4–9.0k admits are `fetch_model_meshes`/
+    building leases charged by wire estimate and never revised — a decoded-
+    mesh-bytes column there is the missing probe for main's 680 MB.
+- **Item 3 ✅ `palBudgetMB=64` CONFIRMED as default at museum density.**
+  Swank-cluster A/B (14 stops, 4× Hotel Swank incl. evict-then-return, fixed
+  40 s dwell; raw: `/mnt/wbterminal2/palbudget-museum-2026-07-26/`): the
+  raise-trigger did NOT fire — 64 arm ended 58.35 MB / 555 sigs with
+  **0 evictions, 0 remints, 0 fallback events**; the `off` (count-cap) arm
+  capped at 28.3 MB — 20 MB BELOW the 48.7 MB museum working set — paying 386
+  evictions + **89 remints** (wearers re-rendering unrecolored = the headless
+  form of the fallback flash). ~105 KB/signature measured (design est. ~100).
+  Churn cost: none either way (palQuiet 110.6 s vs 107.3 s) — unlike
+  matBudget's +7 s. New instrument `palRemint` (`c9496dfd` bounded FIFO of
+  evicted keys + counter, 101/101 tests; relay column `718be1c3`). Watch
+  line: a route holding two Town-Network-class hubs concurrently showing
+  `palHiMB`→64 with `palRemint`>0 is the signal to raise to 96 MiB.
+  ⚠ Two harness findings for item 1: (a) battery settle inference reads
+  `liveScene3d` fields that stamp ~20 s post-in-world — on a fast boot every
+  early stop "settles" at the 3 s floor (short-dwell arms are silently
+  wrong; museum run used a fixed-dwell driver `museum-arm.mjs` instead);
+  (b) precise `jsV8PeakMB` reads 866→1,921 MB over one 14-stop session,
+  identical in both arms — ~40× the retraction's CDP-measured ~50 MB "real
+  V8 heap"; instrument discrepancy unresolved, live lead for item 1.
+- **Item 5 mitigation (b) ✅ battery session-liveness abort** (`44597a5d`,
+  31/31 unit tests). Signal: `sessionLastRecvAgeMs()` — wasm transport stamps
+  `last_recv_instant` at exactly one site (lib.rs:38956, inbound frames only),
+  truthful on `?nullRender=1`, no `__diag` needed. A no-move stop with
+  freshest-inbound-frame age ≥15 s (`--recvDeadMs`) counts toward a 3-stop
+  streak (`--sessionLostStops`) → abort with **exit code 4** (deliberately not
+  3 — the wrapper's `--resume` arm must not re-login into the eviction fight),
+  `abortReason:"session-lost"`, loud stderr line. Legit duplicate-POI dups
+  (server traffic flowing) never count; existing fields/log-lines unchanged,
+  new fields additive (`deadNoMoveStops` is the early-warning column). Replay
+  of the Sawato→Zaikhal wedge aborts at stop 3 instead of wasting 16 stops.
+  Operator note: rows with `sessionLive:false` must be discarded before a
+  manual `--resume`.
