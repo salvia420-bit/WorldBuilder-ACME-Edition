@@ -1,5 +1,12 @@
 # RESULTS — MaterialCache falsifier reruns: the 3.6 GB step is NOT the cache's pixel bytes (2026-07-26)
 
+> **⚠ PARTIAL RETRACTION (same night, later):** the "3,586 MB step" itself was an
+> instrument artifact — unflagged `performance.memory` is quantized and cached for
+> 20 minutes, and 3,586 MB exceeds this box's V8 heap limit. See
+> `RETRACTION-jsheap-step-2026-07-26.md`. The INTERVENTION findings below stand
+> (cache pinned at 64 MB, settle worsened, tracked bytes honest); every sentence
+> about "the step" and its POI position is void.
+
 Executes next-move 1's falsifier from `RESULTS-validation-battery-2026-07-25.md`
 (bounded-cache armLong rerun) against the merged `feat/matcache-budget`
 (`?matBudgetMB=N` byte-budget LRU, commit `207b0468`) + `feat/arc-surface-pixels`

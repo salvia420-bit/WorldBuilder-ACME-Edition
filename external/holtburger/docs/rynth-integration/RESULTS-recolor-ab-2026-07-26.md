@@ -1,5 +1,13 @@
 # RESULTS — recolor A/B: the thrash leak is real, the 3.6 GB step is neither cache — it's the Town Network (2026-07-26)
 
+> **⚠ PARTIAL RETRACTION (same night, later):** the Town Network attribution
+> (finding 4) is VOID — the "step" was `performance.memory`'s 20-minute cache
+> expiring, not an allocation (see `RETRACTION-jsheap-step-2026-07-26.md`; a
+> DAT census independently shows TN is content-light and costs ~20 MB measured
+> precisely). Findings 1–2 (palEvict thrash, entMB=0) stand as churn/counter
+> facts, but the "1–2 GB retained duplicates" MB attribution is withdrawn —
+> retained-byte truth awaits the fixed instrument.
+
 Executes the consequence/memory experiment from the "dye" terminology audit (see
 `DESIGN-recolor-residency-2026-07-26.md` §0) with the new instruments from merge
 `4965f2d5` (`?recolor=off`, `__diag.palettedCache()`, `__diag.entityOwned()`,
