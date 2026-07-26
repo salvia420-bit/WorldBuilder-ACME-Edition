@@ -109,6 +109,37 @@ const SETTLE_MODE = arg("settleMode", "default");
 // resets the streak, so healthy routes are recorded exactly as before.
 const SESSION_LOST_STOPS = Number(arg("sessionLostStops", "3"));
 const RECV_DEAD_MS = Number(arg("recvDeadMs", "15000"));
+// ── Residency checkpoints (2026-07-26; settle age-collapse hunt, item 1 of
+// RESULTS-matcache-falsifier-2026-07-26). BOTH default OFF — unarmed, the
+// driver's behaviour is byte-identical to before.
+//
+//   --sceneCensus            once-per-landed-stop THREE scene-graph census
+//                            (sgObjects/sgDrawables/sgGeoms/sgMats/sgLights,
+//                            live entity count) + renderer-process RSS read
+//                            from /proc. Scene-graph growth is a named
+//                            age-collapse suspect with no relay column, and
+//                            RSS is the only instrument that sees the whole
+//                            footprint (V8 + wasm + ArrayBuffer externals +
+//                            GPU-process share). Cheap: one extra evaluate
+//                            AFTER settle, so it cannot perturb settleMs.
+//   --checkpointEvery K      every Kth stop (plus the first and the last, plus
+//                            one immediately post-boot) additionally take an
+//                            HONEST V8 heap reading over CDP —
+//                            HeapProfiler.collectGarbage then
+//                            Runtime.getHeapUsage — alongside the PRECISE
+//                            performance.memory triple. Those two disagree by
+//                            ~17× (RETRACTION-jsheap-step: 53 MB vs 905 MB at
+//                            the same instant on a fresh boot) because Blink's
+//                            usedJSHeapSize adds V8's EXTERNAL memory
+//                            (ArrayBuffer backing stores + WebAssembly.Memory)
+//                            to the heap; recording both plus the per-pool
+//                            byte tallies decomposes it.
+//                            ⚠ The forced GC is a real perturbation (it is the
+//                            point — GC pressure was the retired mechanism);
+//                            keep K large (≥8) and identical across compared
+//                            arms.
+const SCENE_CENSUS = process.argv.includes("--sceneCensus");
+const CHECKPOINT_EVERY = Number(arg("checkpointEvery", "0"));
 
 if (!POIS_FILE) { console.error("--pois <file> required"); process.exit(2); }
 // --settleMode workplateau (Tier-2): NOT IMPLEMENTED. The s11 settle-guard keys
@@ -133,10 +164,18 @@ let POIS = fs.readFileSync(POIS_FILE, "utf8").split("\n").map((s) => s.trim()).f
 // The wrapper loop re-invokes with the same --out until exit != 3.
 const RESUME = process.argv.includes("--resume");
 let priorRows = [];
+// Residency checkpoints survive --resume the same way rows do (they are
+// per-ROUTE, not per-session, and a --maxStops arm produces one file across
+// several driver invocations).
+let priorCheckpoints = [];
+// Declared here (not beside cdpCheckpoint) so the early boot-stall finalize()
+// path can read it without hitting a temporal-dead-zone ReferenceError.
+const checkpoints = [];
 if (RESUME && OUT && fs.existsSync(OUT)) {
   try {
     const prev = JSON.parse(fs.readFileSync(OUT, "utf8"));
     priorRows = Array.isArray(prev.rows) ? prev.rows : [];
+    priorCheckpoints = Array.isArray(prev.summary?.checkpoints) ? prev.summary.checkpoints : [];
     // kind:"abort" rows are die-stop telemetry, NOT completed stops — the poi
     // must be retried on resume (boot rows have no poi and are harmless here).
     const done = new Set(priorRows.filter((r) => r.kind !== "abort").map((r) => r.poi));
@@ -267,6 +306,10 @@ function finalize() {
         reclaimMedMs: med(seg.map((r) => r.reclaimDelta).filter((v) => v != null)),
       };
     }),
+    // Residency checkpoints (2026-07-26, --checkpointEvery): empty array when
+    // the instrument is unarmed, so the summary shape is unchanged in practice.
+    checkpoints: [...priorCheckpoints, ...checkpoints],
+    sceneCensus: SCENE_CENSUS, checkpointEvery: CHECKPOINT_EVERY,
     final: allRows[allRows.length - 1] ?? null,
   };
   if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, rows: allRows }, null, 2));
@@ -589,6 +632,111 @@ async function sampleWasmMemMB() {
   }
 }
 
+// ── <residency-checkpoints> (2026-07-26, --sceneCensus / --checkpointEvery;
+// see the flag block at the top). Every read here is fail-soft and runs AFTER
+// the settle loop, so an armed instrument can never move settleMs.
+
+// Renderer-process RSS from /proc. The playwright browser is the only
+// `chrome-headless-shell` on this box during a battery (the chrome-devtools-MCP
+// helper is a node process and does not match), so a cmdline scan is
+// unambiguous and needs no pid plumbing. Returns MB: the largest single
+// renderer, and the whole browser process tree.
+function readChromiumRss() {
+  try {
+    let rendMax = 0, total = 0, n = 0;
+    for (const d of fs.readdirSync("/proc")) {
+      if (!/^\d+$/.test(d)) continue;
+      let cl = "";
+      try { cl = fs.readFileSync(`/proc/${d}/cmdline`, "utf8"); } catch (_) { continue; }
+      if (!cl.includes("chrome-headless-shell")) continue;
+      let kb = 0;
+      try { kb = Number(/VmRSS:\s+(\d+) kB/.exec(fs.readFileSync(`/proc/${d}/status`, "utf8"))?.[1] ?? 0); } catch (_) {}
+      total += kb; n++;
+      if (cl.includes("--type=renderer")) rendMax = Math.max(rendMax, kb);
+    }
+    if (!n) return { rssRendMB: null, rssTotalMB: null };
+    return { rssRendMB: Math.round(rendMax / 1024), rssTotalMB: Math.round(total / 1024) };
+  } catch (_) { return { rssRendMB: null, rssTotalMB: null }; }
+}
+
+// THREE scene-graph census. `renderer.info.memory` is useless under
+// ?nullRender=1 (nothing is ever uploaded, so geometries/textures read 0) —
+// the JS-side traversal counts are the real scene-graph-growth instrument.
+const CENSUS_TIMEOUT_MS = 5000;
+const NULL_CENSUS = { sgObjects: null, sgDrawables: null, sgInstanced: null,
+  sgLights: null, sgGeoms: null, sgMats: null, sgEntities: null };
+async function sampleSceneCensus() {
+  if (!SCENE_CENSUS) return NULL_CENSUS;
+  try {
+    const ev = helpers.evalInPage(() => {
+      try {
+        const s = window.liveScene3d, scene = s?.scene;
+        if (!scene) return null;
+        let objects = 0, drawables = 0, inst = 0, lights = 0;
+        const geoms = new Set(), mats = new Set();
+        scene.traverse((o) => {
+          objects++;
+          if (o.isLight) lights++;
+          if (o.isMesh || o.isPoints || o.isLine || o.isSprite) {
+            drawables++;
+            if (o.isInstancedMesh) inst++;
+            if (o.geometry) geoms.add(o.geometry.uuid);
+            const mm = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+            for (const m of mm) mats.add(m.uuid);
+          }
+        });
+        return { sgObjects: objects, sgDrawables: drawables, sgInstanced: inst,
+          sgLights: lights, sgGeoms: geoms.size, sgMats: mats.size,
+          sgEntities: window.entityMap?.size ?? s?.entityManager?.entityMap?.size ?? null };
+      } catch (_) { return null; }
+    });
+    ev.catch(() => {});
+    const r = await Promise.race([ev, new Promise((res) => setTimeout(() => res(null), CENSUS_TIMEOUT_MS))]);
+    return r ?? NULL_CENSUS;
+  } catch (_) { return NULL_CENSUS; }
+}
+
+// Honest-V8 checkpoint: force a full GC over CDP, then read the heap. Also
+// grabs the PRECISE performance.memory triple at the same instant so the two
+// instruments can be differenced (the gap is V8 external memory: ArrayBuffer
+// backing stores + WebAssembly.Memory). Local mode uses a page CDP session;
+// cdp mode reuses the same API. Fail-soft to nulls everywhere.
+let cdpSession = null;
+async function cdpCheckpoint(tag, extra) {
+  if (!CHECKPOINT_EVERY) return null;
+  const out = { tag, t: Date.now(), sessionIdx: SESSION_IDX, ...(extra ?? {}) };
+  try {
+    if (!cdpSession) cdpSession = await page.context().newCDPSession(page);
+    const gcT0 = Date.now();
+    await cdpSession.send("HeapProfiler.collectGarbage");
+    out.gcMs = Date.now() - gcT0;
+    const h = await cdpSession.send("Runtime.getHeapUsage");
+    out.v8UsedMB = h?.usedSize != null ? Math.round(h.usedSize / 1048576) : null;
+    out.v8TotalMB = h?.totalSize != null ? Math.round(h.totalSize / 1048576) : null;
+  } catch (e) { out.cdpErr = String(e?.message ?? e).slice(0, 120); }
+  try {
+    const pm = await helpers.evalInPage(() => {
+      const m = (typeof performance !== "undefined") ? performance.memory : null;
+      if (!m) return null;
+      return { u: m.usedJSHeapSize, t: m.totalJSHeapSize, l: m.jsHeapSizeLimit };
+    });
+    if (pm) {
+      out.preciseUsedMB = Math.round(pm.u / 1048576);
+      out.preciseTotalMB = Math.round(pm.t / 1048576);
+      out.heapLimitMB = Math.round(pm.l / 1048576);
+    }
+  } catch (_) {}
+  Object.assign(out, readChromiumRss());
+  Object.assign(out, await sampleSceneCensus());
+  try { Object.assign(out, await sampleWasmMemMB().then((w) => ({ wasmMainMB: w.main, wasmWkrMB: w.worker }))); } catch (_) {}
+  checkpoints.push(out);
+  console.error(`[battery] CHECKPOINT ${tag}: v8=${out.v8UsedMB}MB(gc ${out.gcMs}ms) precise=${out.preciseUsedMB}MB ` +
+    `rss=${out.rssRendMB}/${out.rssTotalMB}MB wasm=${out.wasmMainMB}/${out.wasmWkrMB}MB ` +
+    `sg=${out.sgObjects}obj/${out.sgGeoms}geo/${out.sgMats}mat ent=${out.sgEntities}`);
+  return out;
+}
+// </residency-checkpoints>
+
 // <settle-guard> (session 11, 2026-07-10 — extends 1113 finding 5; docs/1118.md
 // §2 false-settle finding). Pure per-sample reducer for the settle window,
 // factored out so /tmp harnesses can drive it with synthetic sample sequences.
@@ -666,6 +814,11 @@ cycleT0 = Date.now();
 // --landPollMs (finer poll → less landMs quantization bias).
 const LAND_MAX_MS = 12_000;
 const LAND_ITERS = Math.max(1, Math.ceil(LAND_MAX_MS / LAND_POLL_MS));
+// Route-wide stop numbering for --checkpointEvery (a --maxStops arm spreads one
+// route over several driver invocations, so this counts prior rows too).
+const PRIOR_STOPS = priorRows.filter((r) => r.kind !== "boot" && r.kind !== "abort").length;
+const TOTAL_STOPS = PRIOR_STOPS + POIS.length;
+await cdpCheckpoint("post-boot", { stopNo: PRIOR_STOPS });
 for (const poi of POIS) {
   // JS-heap PEAK over every poll in this stop (before + land + settle): the
   // cold-spike killer is likely JS-side and a single post-settle sample
@@ -744,6 +897,10 @@ for (const poi of POIS) {
     const wm = await sampleWasmMemMB();
     wasmMemMainMB = wm.main; wasmMemWorkerMB = wm.worker; diagExt = wm.ext;
   }
+  // Scene-graph census + renderer RSS (2026-07-26, --sceneCensus). Post-settle
+  // like the wasm sample, so it cannot perturb settleMs; all-null when unarmed.
+  const census = landed ? await sampleSceneCensus() : NULL_CENSUS;
+  const rss = (landed && SCENE_CENSUS) ? readChromiumRss() : { rssRendMB: null, rssTotalMB: null };
   // Flattened per-instance relay-extension columns (all null on legacy pkg /
   // absent worker / unlanded stop) — see sampleWasmMemMB's header comment.
   const dm = diagExt?.main ?? null, dw = diagExt?.worker ?? null;
@@ -778,7 +935,8 @@ for (const poi of POIS) {
     effJobsMain: dm?.effJobs ?? null, effJobsWkr: dw?.effJobs ?? null,
     queuedMain: dm?.queued ?? null, queuedWkr: dw?.queued ?? null,
     maxQueueMsMain: dm?.maxQueueMs ?? null, maxQueueMsWkr: dw?.maxQueueMs ?? null,
-    peakLiveJobsMain: dm?.peakLiveJobs ?? null, peakLiveJobsWkr: dw?.peakLiveJobs ?? null });
+    peakLiveJobsMain: dm?.peakLiveJobs ?? null, peakLiveJobsWkr: dw?.peakLiveJobs ?? null,
+    ...census, ...rss });
   console.error(`[battery] ${poi}: landed=${landed}${sameLb ? " (same-LB)" : ""}${noMove ? " (no-move dup)" : ""} ` +
     `land=${landMs}ms settle=${settleMs}ms guard=${settleGuard}${lowWork ? " (lowWork)" : ""} ` +
     `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta} ` +
@@ -787,7 +945,20 @@ for (const poi of POIS) {
     `mats=${endStats?.mats ?? "-"}@${endStats?.matMB ?? "-"}MB/${endStats?.matBudgetMB ?? "unbounded"} evict=${endStats?.matEvict ?? "-"} ` +
     `ent=${endStats?.entMB ?? "-"}MB hi=${endStats?.entHi ?? "-"}MB ` +
     `pal=${endStats?.palSigs ?? "-"}@${endStats?.palMB ?? "-"}MB hi=${endStats?.palHiMB ?? "-"}MB palEvict=${endStats?.palEvict ?? "-"} palRemint=${endStats?.palRemint ?? "-"} ` +
-    `recv=${recvMin ?? "-"}ms live=${lv.live ?? "?"}${lv.state.streak ? ` deadStreak=${lv.state.streak}` : ""}`);
+    `recv=${recvMin ?? "-"}ms live=${lv.live ?? "?"}${lv.state.streak ? ` deadStreak=${lv.state.streak}` : ""}` +
+    (SCENE_CENSUS
+      ? ` sg=${census.sgObjects ?? "-"}obj/${census.sgGeoms ?? "-"}geo/${census.sgMats ?? "-"}mat ` +
+        `ent=${census.sgEntities ?? "-"} rss=${rss.rssRendMB ?? "-"}/${rss.rssTotalMB ?? "-"}MB`
+      : ""));
+  // --checkpointEvery K: honest-V8 (forced-GC) checkpoint on stop 1, every Kth
+  // stop, and the last stop of the route. Placed AFTER the row so a checkpoint
+  // can never be mistaken for part of the stop's own timing.
+  if (CHECKPOINT_EVERY) {
+    const stopNo = PRIOR_STOPS + rows.filter((r) => r.kind === "stop").length;
+    if (stopNo === 1 || stopNo % CHECKPOINT_EVERY === 0 || stopNo === TOTAL_STOPS) {
+      await cdpCheckpoint(`stop${stopNo}`, { stopNo, poi });
+    }
+  }
   // Session lost: ACE booted this account (a second login on the same account)
   // and the bridge never told the page — every further @telepoi would be
   // recorded as a bogus `no-move dup`. Stop the run NOW with a named reason
