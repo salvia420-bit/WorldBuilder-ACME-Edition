@@ -1201,6 +1201,102 @@ check(
   );
 }
 
+// ============================================================
+// Test 24: null-geometry guard (2026-07-26)
+// ------------------------------------------------------------
+// Remote-play regression: `[particle-owner] addEmitter failed: TypeError …
+// reading 'morphAttributes' of null` ×4. A geometryFactory that resolves
+// null (missing GfxObj record / a part that decoded to triCount 0) used to
+// reach `new THREE.Mesh(null, mat)` in the per-slot meshFactory, whose
+// `updateMorphTargets()` dereferences `geometry.morphAttributes` and throws
+// out of addEmitter. Assert the emitter is now SKIPPED (returns 0, nothing
+// installed, no throw), that a real geometry still installs normally, and
+// that hwGfxObjId==0 still short-circuits to 0 silently.
+// ============================================================
+{
+  mockTime = 0;
+  const scene = new THREE.Scene();
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => { warns.push(a.join(" ")); };
+
+  const nullGeomMgr = new ParticleManager({
+    scene,
+    geometryFactory: async (_) => null,
+    materialFactory: async (_) => new THREE.MeshBasicMaterial({ transparent: true }),
+  });
+  const req = (overrides = {}) => ({
+    emitterInfo: makeBaseInfo({
+      particleType: ParticleType.Still,
+      maxParticles: 2, totalParticles: 0, totalSeconds: 100,
+      ...overrides,
+    }),
+    parent: { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() },
+    partIndex: -1,
+  });
+
+  let threw = null;
+  let nullId = -1;
+  try {
+    nullId = await nullGeomMgr.addEmitter(req());
+  } catch (e) {
+    threw = e;
+  }
+  check(
+    "null geometry: addEmitter does NOT throw (was TypeError morphAttributes of null)",
+    threw === null,
+    threw ? `threw=${threw}` : "no throw"
+  );
+  check(
+    "null geometry: addEmitter returns 0 and installs nothing",
+    nullId === 0 && nullGeomMgr.getNumEmitters() === 0,
+    `id=${nullId} count=${nullGeomMgr.getNumEmitters()}`
+  );
+  check(
+    "null geometry: warns exactly once, naming the emitter + gfxobj DIDs",
+    warns.length === 1
+      && warns[0].includes("id=0x32000456")
+      && warns[0].includes("hwGfxObjId=0x1001a62"),
+    `warns=${warns.length} first=${JSON.stringify(warns[0] ?? null)}`
+  );
+
+  // Rate limit: a SECOND null-geometry emitter with the same DID pair is
+  // silent (emitters re-attach on every landblock re-bake).
+  await nullGeomMgr.addEmitter(req());
+  check(
+    "null geometry: repeat of the same (emitter,gfxobj) pair is rate-limited",
+    warns.length === 1,
+    `warns=${warns.length}`
+  );
+
+  // hwGfxObjId == 0 short-circuits BEFORE the factories, silently (the
+  // entities path deliberately went quiet for id 0 on 2026-06-29).
+  const warnsBefore = warns.length;
+  let geomCalls = 0;
+  const zeroMgr = new ParticleManager({
+    scene,
+    geometryFactory: async (_) => { geomCalls += 1; return new THREE.BufferGeometry(); },
+    materialFactory: async (_) => new THREE.MeshBasicMaterial({ transparent: true }),
+  });
+  const zeroId = await zeroMgr.addEmitter(req({ hwGfxObjId: 0 }));
+  check(
+    "hwGfxObjId==0 returns 0 without calling the factories or warning",
+    zeroId === 0 && geomCalls === 0 && warns.length === warnsBefore
+      && zeroMgr.getNumEmitters() === 0,
+    `id=${zeroId} geomCalls=${geomCalls} newWarns=${warns.length - warnsBefore}`
+  );
+
+  // Control: a real geometry through the SAME manager still installs.
+  const okId = await zeroMgr.addEmitter(req());
+  check(
+    "control: a non-null geometry still installs the emitter normally",
+    okId !== 0 && zeroMgr.getNumEmitters() === 1 && geomCalls === 1,
+    `id=${okId} count=${zeroMgr.getNumEmitters()} geomCalls=${geomCalls}`
+  );
+
+  console.warn = realWarn;
+}
+
 // ---- Summary --------------------------------------------------------
 console.log("=========================");
 if (failed === 0) {

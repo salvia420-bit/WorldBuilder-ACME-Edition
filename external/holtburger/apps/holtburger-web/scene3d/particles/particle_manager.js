@@ -85,6 +85,11 @@ function noSurfaceParticleMaterial() {
 // still hold the same GPU resource.
 const _doubleTagWarned = new Set();
 
+// 2026-07-26 — rate-limit set for the null-geometry emitter skip in
+// `addEmitter` (one warn per `<emitterDid>|<gfxObjDid>` pair). See the long
+// note at the guard itself for the trace of why the geometry resolves null.
+const _nullGeometryWarned = new Set();
+
 // =====================================================================
 // RP6 (2026-06-08) — off-screen emitter culling.
 // =====================================================================
@@ -828,8 +833,92 @@ export class ParticleManager {
       ? emitterInfo
       : new ParticleEmitterInfo(emitterInfo);
 
+    // hwGfxObjId == 0 is ACE's "destroy this emitter" sentinel — `setInfo`
+    // already returns false for it and this method already documents a 0
+    // return. Hoisted ABOVE the factories (2026-07-26) so it stays distinct
+    // from the null-geometry guard below: without this, a 0 id would fall
+    // through to that guard and emit its warn on the entities path, which
+    // deliberately went silent for id 0 on 2026-06-29 (`fetchBuildingPlacement`
+    // (0x0) always fails wasm-side and spammed the console). Also saves two
+    // pointless wasm round-trips on the statics path. Return value unchanged.
+    if ((info.hwGfxObjId >>> 0) === 0) {
+      return 0;
+    }
+
     // Build the shared geometry + per-slot material clones.
     const geometry = await this._geometryFactory(info.hwGfxObjId);
+
+    // 2026-07-26 null-geometry guard — the TWIN of the 2026-06-20 white-box
+    // null-MATERIAL guard at the top of this file, and the fix for the
+    // `[particle-owner] addEmitter failed: TypeError … reading
+    // 'morphAttributes' of null` ×4 seen in the remote-play session.
+    //
+    // `new THREE.Mesh(null, mat)` is an unconditional throw: the Mesh
+    // constructor calls `updateMorphTargets()`, which reads
+    // `this.geometry.morphAttributes` (three.module.js, Mesh) — so a null
+    // geometry has NEVER been survivable, it just failed loudly one frame
+    // later inside the per-slot meshFactory instead of here. Unlike a null
+    // material (which has a meaningful "render nothing" substitute), a null
+    // geometry means we literally have no particle to draw, so the whole
+    // emitter is skipped: return 0, the documented failure code that every
+    // caller already handles (owner_registry.js prunes its pending token,
+    // statics.js `_runStaticParticleChain` skips the `attached += 1`).
+    //
+    // WHY it resolves null (traced 2026-07-26): both production factories
+    // (statics.js `resolveGfxObj` and entities.js `_ensureWorldParticleManager`
+    // → `resolveGfxObj`) end in `r?.geometry ?? null`, and their shared
+    // resolve chain returns null on FOUR conditions, three of them silent:
+    //   1. `wasmExports.fetchBuildingPlacement(did)` throws — logged upstream.
+    //   2. `bundle.partCount === 0` — the SetupModel/GfxObj decoded to no parts.
+    //   3. `takePartMeshes()[0]` is absent.
+    //   4. `meshToGeometryGroups(wasmMesh)` returns zero groups, which
+    //      adapter.js does for `triCount === 0` AND for a wasm wrapper whose
+    //      Rust pointer is already null.
+    // Cases 2-4 collapse into the SAME wasm behaviour: `fetch_building_placement`
+    // (src/lib.rs) never errors on a bad part — it "preserves the slot as an
+    // empty mesh (triCount == 0)" so part indices stay stable for door lookups,
+    // after ONE prefetch retry. So the null carries two populations, and the
+    // statics bake already names them (`statics.js` fetchPrimaryGeometries →
+    // `[geom-audit] statics: N/M models dropped from bake`):
+    //   - `decode-starved` (wasm reported record misses even after ITS retry) —
+    //     transient fetch saturation. Not repairable here: a JS-side retry would
+    //     re-run the very walk that already retried.
+    //   - `zero-tri` with ZERO misses — the record decoded perfectly and is
+    //     GENUINELY EMPTY. This is the dominant class and it is DATA. Probed
+    //     2026-07-26 on a live boot's three drops: e.g. Setup 0x02000363 →
+    //     part[0] GfxObj 0x010008A8, whose ONLY polygon is
+    //     `stippling = NoPos, sidesType = Landblock, negSurface = -1`. The
+    //     triangulator skips NoPos polys (lib.rs `if (poly.stippling & NO_POS)
+    //     { continue; }`) and only emits a back face for `sides_type == 0x2`,
+    //     so the model correctly yields zero triangles. These are pure LIGHT /
+    //     EMITTER ANCHOR objects (0x02000363 also carries a `lights` entry and
+    //     nothing else) — retail never draws them either. Same family as the
+    //     "per-vertex scenery anchor setups" the 2026-06-20 null-MATERIAL guard
+    //     at the top of this file already had to absorb.
+    // Neither population is fixable upstream in JS, so the guard IS the fix.
+    // The warn is the diagnostic: it names the GfxObj DID so a repeat offender
+    // can be probed against the DATs, and a wasm-side `[geom-audit] …
+    // fetchBuildingPlacement … decode INCOMPLETE after retry` for the same DID
+    // is what distinguishes the starved case from the genuinely-empty one.
+    //
+    // Rate-limited to one warn per (emitter DID, gfxobj DID) pair — emitters
+    // re-attach on every landblock (re)bake and the spam would swamp the
+    // console, exactly as for `_doubleTagWarned` above.
+    if (!geometry) {
+      const key = `${(info.id >>> 0)}|${(info.hwGfxObjId >>> 0)}`;
+      if (!_nullGeometryWarned.has(key)) {
+        _nullGeometryWarned.add(key);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[particle_manager] skipping emitter id=0x${(info.id >>> 0).toString(16)}` +
+            ` hwGfxObjId=0x${(info.hwGfxObjId >>> 0).toString(16)}` +
+            ` — geometryFactory returned null (GfxObj missing or decoded to 0 triangles);` +
+            ` the effect will not render. (further occurrences for this pair silenced)`,
+        );
+      }
+      return 0;
+    }
+
     const baseMaterial = await this._materialFactory(info.hwGfxObjId);
 
     // Perf FU4 (2026-05-18) — classify additive-vs-alpha BEFORE the
@@ -967,6 +1056,18 @@ export class ParticleManager {
         // convention, cache-owned geometries are NOT disposed by us; we
         // leave them alone and let the cache outlive the emitter.
         //
+        // 2026-07-26 defence in depth: `addEmitter` already refuses to build
+        // an emitter whose geometry resolved null (see the guard there), so
+        // this branch is unreachable on the production paths. Kept because
+        // `new THREE.Mesh(null, …)` throws inside `updateMorphTargets()`, and
+        // a null slot mesh is a case `_createSlots` / `onMeshActive` already
+        // tolerate (`if (mesh) …`) — a silently absent slot beats a throw that
+        // takes the whole emitter (and, pre-2026-07-07, the whole static
+        // particle chain) down with it. No warn here: the one at the
+        // `addEmitter` guard is the diagnostic, and this factory runs once per
+        // slot (up to 2048×) so warning here would be the spam that guard
+        // exists to avoid.
+        if (!geometry) return null;
         // 2026-06-20 white-box guard: `mat` is null when the particle gfxobj
         // has no Surface (materialFactory → null). Do NOT pass null — THREE
         // would substitute its default white MeshBasicMaterial (the white
