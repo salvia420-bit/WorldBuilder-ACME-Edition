@@ -124,3 +124,58 @@ that path's peak. Not yet measured.
 5. Cold spike: `decodeAdmission.peakLiveBytes` cold-boot A/B for option E on a
    boot-town-matched pair, plus extend `bakeBatchMax` to the two entity fetch
    paths it never covered (option E analysis, `81ad4891`).
+
+## Outstanding items (end-of-night 2026-07-26 ~05:30, post-retraction)
+
+Where the remaining open work stands after the full night (see also
+`RETRACTION-jsheap-step-2026-07-26.md`, `RESULTS-recolor-ab-2026-07-26.md`,
+`DESIGN-recolor-residency-2026-07-26.md`). Everything through the dye→recolor
+rename is merged and pushed (`9a6e2ade`).
+
+1. **Settle age-collapse: mechanism OPEN again.** The GC-pressure-from-JS-heap
+   story died with the retraction (real V8 heap ~50 MB). Facts that survive:
+   collapse is session-age-dependent (armLong 17.1 s vs age-matched 9.8 s),
+   worsens under matcache eviction churn (23.8 s at 64 MB), and is NOT
+   surface-budget-related (ABAB). Remaining suspects: wasm-side caches/
+   allocator behaviour at 680 MB residency, scene-graph growth, eviction/park
+   churn. Instrument first: the fixed `jsV8Peak*` column plus per-pool byte
+   tallies over an armLong pair.
+2. **Wasm main 680 MB cold-boot residency** — now THE memory number that
+   matters. Next probes: `decodeAdmission.peakLiveBytes` cold-boot A/B for
+   option E (accumulator-sharing prediction, commit `81ad4891`), and extending
+   `bakeBatchMax` to `fetchEntitySurfacesPixels`/`Batch` (`bake_worker_client`
+   ~:972/:1044) — verdict 4's refutation never armed the entity legs.
+3. **`palBudgetMB=64` default is provisional.** Live-verified gating (714 sigs
+   @ 64 MB pinned, evictions flowing, boot clean) but the museum-density
+   confirmation arm never landed (see 5). If a future Swank-cluster run shows
+   heavy `palEvict` with visual fallback flashes, raise the default; escape is
+   `?palBudgetMB=off` (legacy 256-count).
+4. **LLM director call failures — genuine, undiagnosed.** During the eyetest
+   soak `rynthAI` errored 5× on boot (plausibly CPU-starved timeouts) and self-
+   disabled, but a post-restart call ALSO failed on an idle box (calls 6,
+   errs 1) — so `minimax/minimax-m3` via OpenRouter has a real problem
+   (candidates: model id drift, the GLM-style maxTokens/timeout needs from the
+   soak-13 notes, provider routing). The stream ended before a console capture
+   caught the actual error string. Repro: `rynthAI.checkNow()` with a CDP
+   console listener attached.
+5. **armSlim teleport wedge.** Both the fresh run and the resume hit
+   `no-move dup` on all 22 POIs from Hotel Swank onward — `@teleloc` accepted
+   but position never changed, session boots fine (ACE + wsbridge probe-proven
+   healthy). Character/server-state bug (corpse-window family?); it blocked the
+   slim build's museum-cluster datapoints. Investigate vendortest/+Vendbot…
+   actually the battery char is tailnet1's — check the char's state in the
+   shard DB before the next battery.
+6. **Stream rig root-capture black** — since the 07-25 thermal reboot, root
+   x11grab reads black while windows render (scanout bypass). Workaround
+   shipped: `go_live-window.sh` (window-id capture, per-iteration re-resolve).
+   Root cause unfound; if a later reboot fixes root capture, the original
+   `go_live.sh` still works. STREAM-RIG-OPS.md step 1 (xrandr 720p) remains
+   mandatory and was the first of two independent black-frame causes tonight.
+7. **Retail-parity residency options B/C** (GPU-side composite per signature;
+   shader palette lookup) — designed and ranked in
+   `DESIGN-recolor-residency-2026-07-26.md` §2; deliberately not started.
+8. **Housekeeping:** MEMORY.md is ~435 B over its self-imposed load budget;
+   `tests_substitution::…composes_part_and_texture` fails on master (pre-
+   existing, unrelated — triage separately); fresh worktrees need
+   `external/chorizite` symlinks before Rust builds; the YouTube stream key
+   used tonight passed through chat and disk — rotate it in Studio.
