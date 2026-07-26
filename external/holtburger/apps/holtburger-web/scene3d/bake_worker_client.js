@@ -126,7 +126,9 @@ export function applyShardBudget(g = globalThis) {
 // `:` survives `URLSearchParams` untouched, so this token has none of
 // `?decodeAdmission`'s `+`→space footgun; a space is accepted anyway.
 //
-// Absent / garbage / <= 0 → both globals are DELETED and Rust keeps 96 MiB.
+// Absent / garbage / <= 0 → the ARMED default 24:64 (see the constants below);
+// only the explicit `off` token deletes both globals so Rust keeps its
+// compile-time 96 MiB constant.
 //
 // MUST be called before `init_resource_source` on the main thread — really
 // before the first surface decode, which that ordering guarantees. FOOTGUN:
@@ -152,11 +154,35 @@ export function parseSurfaceBudgetSpec(raw) {
 }
 
 /** Resolve `?surfaceBudgetMB=` into a spec or null. Pure; touches no globals. */
+// Default ARMED 2026-07-26 (`RESULTS-abab-surface-budget-2026-07-26.md`): the
+// ABAB interleave met the ship criterion — settle-within-noise at n=2 with a
+// sign flip (−1.4 s / +0.3 s within-pair vs 3 s ambient drift between pairs),
+// decodeAmp exactly 1.000 on both instances in all four arms, gate provably
+// pinned, ~104 MB resident + ~33 MB worker-wasm high-water saved. An
+// unauthored page now gets 24 (main) : 64 (worker); `?surfaceBudgetMB=off`
+// is the escape back to the compile-time 96 MiB constant (pre-flag,
+// bit-for-bit), and explicit `96:96` reproduces the same bytes through the
+// configured path.
+export const SURFACE_BUDGET_DEFAULT_MAIN_MB = 24;
+export const SURFACE_BUDGET_DEFAULT_WORKER_MB = 64;
+
 export function resolveSurfaceBudget(search = "") {
   try {
-    return parseSurfaceBudgetSpec(new URLSearchParams(search || "").get("surfaceBudgetMB"));
+    const raw = new URLSearchParams(search || "").get("surfaceBudgetMB");
+    if (raw !== null && String(raw).trim().toLowerCase() === "off") {
+      return null; /* legacy escape: Rust compile-time 96 MiB constant */
+    }
+    return (
+      parseSurfaceBudgetSpec(raw) ?? {
+        mainMB: SURFACE_BUDGET_DEFAULT_MAIN_MB,
+        workerMB: SURFACE_BUDGET_DEFAULT_WORKER_MB,
+      }
+    );
   } catch (_) {
-    return null; /* default */
+    return {
+      mainMB: SURFACE_BUDGET_DEFAULT_MAIN_MB,
+      workerMB: SURFACE_BUDGET_DEFAULT_WORKER_MB,
+    };
   }
 }
 

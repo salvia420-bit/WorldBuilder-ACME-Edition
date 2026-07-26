@@ -2,9 +2,9 @@
 //
 // The store itself is Rust (`SURFACE_PIXEL_CACHE` / `configured_surface_budget_bytes`
 // in src/lib.rs, native tests in `tests_surface_cache`); this pins the HOST
-// half: the `N` / `N:M` grammar, the main/worker split, and above all that an
-// unauthored page leaves BOTH globals unset — which is what makes the slice
-// default-neutral (Rust keeps its 96 MiB `SURFACE_CACHE_BUDGET_BYTES`).
+// half: the `N` / `N:M` grammar, the main/worker split, and the ARMED default
+// (2026-07-26): an unauthored page gets 24:64, and only the explicit `off`
+// token leaves both globals unset (Rust's 96 MiB `SURFACE_CACHE_BUDGET_BYTES`).
 //
 //   node apps/holtburger-web/test_surface_budget_flags.mjs
 
@@ -44,8 +44,18 @@ for (const bad of [null, undefined, "", "off", "0", "0:0", "-1:2", "24:", ":64",
 }
 
 // ---- resolution ----
-check("no param => default", resolveSurfaceBudget("") === null);
-check("unrelated params => default", resolveSurfaceBudget("?nosw=1&agent=1") === null);
+// Default ARMED 2026-07-26 (RESULTS-abab-surface-budget-2026-07-26.md): absent
+// now resolves to 24:64; only the explicit `off` token restores the legacy
+// compile-time 96 MiB constant.
+const ARMED_DEFAULT = { mainMB: 24, workerMB: 64 };
+check("no param => armed default 24:64", eq(resolveSurfaceBudget(""), ARMED_DEFAULT),
+  JSON.stringify(resolveSurfaceBudget("")));
+check("unrelated params => armed default 24:64",
+  eq(resolveSurfaceBudget("?nosw=1&agent=1"), ARMED_DEFAULT));
+check("off => null (legacy 96 MiB escape)", resolveSurfaceBudget("?surfaceBudgetMB=off") === null);
+check("OFF is case-insensitive", resolveSurfaceBudget("?surfaceBudgetMB=OFF") === null);
+check("garbage => armed default, same as absent",
+  eq(resolveSurfaceBudget("?surfaceBudgetMB=abc"), ARMED_DEFAULT));
 check("resolve reads the surfaceBudgetMB param",
   eq(resolveSurfaceBudget("?surfaceBudgetMB=24:64"), { mainMB: 24, workerMB: 64 }));
 check("`:` survives URLSearchParams untouched (no %3A needed)",
@@ -57,21 +67,31 @@ function fakeGlobal(search) {
   return { location: { search }, __hbSurfaceBudgetBytes: 99, __hbSurfaceBudgetBytesWorker: 99 };
 }
 
-// THE negative control: absent ⇒ unset. If this regresses, every "default"
-// measurement arm silently runs at some other budget.
+// THE negative control, post-arming: absent ⇒ the ARMED 24:64 default; only
+// `off` deletes the globals (legacy 96 MiB). If this regresses, every
+// "default" measurement arm silently runs at some other budget.
 let g = fakeGlobal("");
-check("no param: applySurfaceBudget returns null", applySurfaceBudget(g) === null);
-check("no param: both Rust-read globals are DELETED (Rust keeps 96 MiB, bit-for-bit)",
+check("no param: applySurfaceBudget applies the armed default",
+  eq(applySurfaceBudget(fakeGlobal("")), { mainMB: 24, workerMB: 64, mainBytes: 24 * MB, workerBytes: 64 * MB }));
+applySurfaceBudget(g);
+check("no param: globals carry 24:64",
+  g.__hbSurfaceBudgetBytes === 24 * MB && g.__hbSurfaceBudgetBytesWorker === 64 * MB,
+  JSON.stringify(GLOBALS.map((k) => [k, g[k]])));
+
+g = fakeGlobal("?surfaceBudgetMB=off");
+check("off: applySurfaceBudget returns null", applySurfaceBudget(g) === null);
+check("off: both Rust-read globals are DELETED (Rust keeps 96 MiB, bit-for-bit)",
   GLOBALS.every((k) => !(k in g)), JSON.stringify(GLOBALS.map((k) => [k, g[k]])));
 
 g = fakeGlobal("?nosw=1");
 applySurfaceBudget(g);
-check("unrelated param: still unset", GLOBALS.every((k) => !(k in g)));
+check("unrelated param: armed default 24:64",
+  g.__hbSurfaceBudgetBytes === 24 * MB && g.__hbSurfaceBudgetBytesWorker === 64 * MB);
 
 g = fakeGlobal("?surfaceBudgetMB=garbage");
 applySurfaceBudget(g);
-check("garbage value: unset, never a 0-byte budget (which would disable the cache)",
-  GLOBALS.every((k) => !(k in g)));
+check("garbage value: armed default, never a 0-byte budget (which would disable the cache)",
+  g.__hbSurfaceBudgetBytes === 24 * MB && g.__hbSurfaceBudgetBytesWorker === 64 * MB);
 
 g = fakeGlobal("?surfaceBudgetMB=24:64");
 const split = applySurfaceBudget(g);
