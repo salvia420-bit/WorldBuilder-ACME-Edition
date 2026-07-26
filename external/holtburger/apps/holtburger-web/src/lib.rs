@@ -8599,6 +8599,33 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
     }
 }
 
+/// Option (E) (2026-07-25, `DESIGN-surface-budget-2026-07-25.md` §2E) — the
+/// storage type of a [`SurfacePixels`] pixel plane.
+///
+/// Was a plain `Vec<u8>`. The three planes are **immutable once a
+/// `SurfacePixels` is built** (nothing anywhere mutates them in place — the
+/// `Arc` makes that a compile-time guarantee rather than a convention), and
+/// they are copied twice per cold decode by [`clone_surface_pixels`]:
+/// `surface_memo_insert` did `Arc::new(clone_surface_pixels(sp))` *while the
+/// caller kept the original*, so a cold decode transiently held 2× the entry;
+/// every cache hit allocated a third full copy. Sharing the planes behind an
+/// `Arc` makes both paths an O(1) refcount bump and removes the transient —
+/// the target of `RESULTS-validation-battery-2026-07-25.md` verdict 4 /
+/// next-move 3 (the 678–986 MB main-instance cold-boot spike).
+///
+/// **The JS boundary is unchanged by construction.** The `wasm_bindgen`
+/// getters still return owned `Vec<u8>` (`self.pixels.as_ref().clone()`),
+/// which is the same copy JS always paid; `AUDIT-sab-views-2026-07-24.md`
+/// ground truth 1 (wasm-bindgen copies owned `Vec`s out) still holds.
+///
+/// `Arc<Vec<u8>>` rather than `Arc<[u8]>` deliberately: `Vec<u8> → Arc<Vec<u8>>`
+/// is a pointer move, whereas `Vec<u8> → Arc<[u8]>` *copies* the whole buffer
+/// at construction — which would reintroduce exactly the transient this
+/// removes. The double indirection costs one extra load per plane access, all
+/// of which are off the per-pixel hot path.
+#[cfg(any(target_arch = "wasm32", test))]
+type PixelPlane = std::sync::Arc<Vec<u8>>;
+
 /// One surface's decoded pixels — output of [`fetch_surface_pixels`]
 /// / [`fetch_surfaces_pixels`]. Used by Phase 3 step 6's in-browser
 /// rasterizer to UV-map per-poly textures into the model's tile.
@@ -8625,7 +8652,7 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
 pub struct SurfacePixels {
     width: u32,
     height: u32,
-    pixels: Vec<u8>, // RGBA8, length = width * height * 4
+    pixels: PixelPlane, // RGBA8, length = width * height * 4
     /// Raw `Surface.surface_type` bitfield from the DAT. 0 for empty
     /// fallbacks so the JS material decoder treats it as opaque.
     /// (See `ACE.Entity.Enum.SurfaceType` for the canonical bit list.)
@@ -8644,14 +8671,14 @@ pub struct SurfacePixels {
     /// Phase 1.1 — procedural normal map (RGB8, length = w*h*3) from
     /// diffuse luminance via a 3x3 Sobel kernel. Empty Vec for Luminous
     /// surfaces (per Phase 1.1 hand-off #3) and empty/fallback surfaces.
-    normal_pixels: Vec<u8>,
+    normal_pixels: PixelPlane,
     /// Phase 3.1 — procedural heightmap (R8, length = w*h) for parallax
     /// occlusion mapping. Sobel-X gradient integrated by horizontal
     /// scan, then globally normalised to [0, 255]. Empty Vec for
     /// Luminous surfaces (POM doesn't apply to emissive), constant-
     /// luminance surfaces (no gradient → no depth), and the empty
     /// fallback. JS skips POM patch installation when empty.
-    height_pixels: Vec<u8>,
+    height_pixels: PixelPlane,
     /// Phase 1.5 — roughness override sourced from
     /// `surface_overrides.json` (`f32::NAN` = "no override" — Vec<u8>
     /// can't carry an `Option<f32>` over wasm-bindgen).
@@ -8703,7 +8730,7 @@ impl SurfacePixels {
     pub fn height(&self) -> u32 { self.height }
     /// `Uint8Array(width * height * 4)` of straight-RGBA pixels.
     #[wasm_bindgen(getter)]
-    pub fn pixels(&self) -> Vec<u8> { self.pixels.clone() }
+    pub fn pixels(&self) -> Vec<u8> { self.pixels.as_ref().clone() }
     /// Raw `Surface.surface_type` bitfield (see `ACE.Entity.Enum.SurfaceType`).
     /// 0 for the empty fallback surface — the JS material decoder
     /// treats 0 as "no flags set → fully opaque".
@@ -8725,13 +8752,13 @@ impl SurfacePixels {
     /// JS skips `normalMap` assignment when empty. Packed [r,g,b]
     /// with `(0.5, 0.5, 1.0)` = "flat up" in tangent space.
     #[wasm_bindgen(getter, js_name = normalPixels)]
-    pub fn normal_pixels(&self) -> Vec<u8> { self.normal_pixels.clone() }
+    pub fn normal_pixels(&self) -> Vec<u8> { self.normal_pixels.as_ref().clone() }
     /// Phase 3.1 — procedural heightmap as R8 (length = w*h). Empty for
     /// Luminous surfaces, constant-luminance surfaces, and the empty-
     /// fallback surface; JS skips POM shader patch installation when
     /// empty. See `holtburger_dat::normal_gen::height_from_luminance`.
     #[wasm_bindgen(getter, js_name = heightPixels)]
-    pub fn height_pixels(&self) -> Vec<u8> { self.height_pixels.clone() }
+    pub fn height_pixels(&self) -> Vec<u8> { self.height_pixels.as_ref().clone() }
     /// Phase 1.5 — roughness override (`NaN` = use category default).
     #[wasm_bindgen(getter, js_name = roughnessOverride)]
     pub fn roughness_override(&self) -> f32 { self.roughness_override }
@@ -9340,18 +9367,30 @@ fn composed_counters() -> std::sync::MutexGuard<'static, ComposedCacheCounters> 
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Manual deep clone — `SurfacePixels` is a `wasm_bindgen` struct and is
+/// Manual clone — `SurfacePixels` is a `wasm_bindgen` struct and is
 /// intentionally not `Clone` (JS holds handles). Cache-internal only.
+///
+/// Option (E) (2026-07-25): this used to deep-copy all three pixel planes on
+/// **every insert and every hit**. Since [`PixelPlane`] is an `Arc`, it is now
+/// three refcount bumps plus a dozen scalar copies — O(1), no allocation of
+/// pixel bytes at all. Output stays byte-identical (same buffers, literally).
+///
+/// Consequence to keep in mind: the value handed back from a hit, and the
+/// value the cache holds, now **share** their plane buffers. That is safe only
+/// because the planes are immutable after construction — enforced by the type
+/// (mutating through an `Arc` requires `Arc::get_mut`/`make_mut`, which appears
+/// nowhere). Replacing a whole plane (`sp.pixels = other.into()`) is still
+/// fine: it swaps the pointer, it does not write through it.
 #[cfg(any(target_arch = "wasm32", test))]
 fn clone_surface_pixels(sp: &SurfacePixels) -> SurfacePixels {
     SurfacePixels {
         width: sp.width,
         height: sp.height,
-        pixels: sp.pixels.clone(),
+        pixels: PixelPlane::clone(&sp.pixels),
         surface_type: sp.surface_type,
         category: sp.category,
-        normal_pixels: sp.normal_pixels.clone(),
-        height_pixels: sp.height_pixels.clone(),
+        normal_pixels: PixelPlane::clone(&sp.normal_pixels),
+        height_pixels: PixelPlane::clone(&sp.height_pixels),
         roughness_override: sp.roughness_override,
         normal_scale_override: sp.normal_scale_override,
         translucency: sp.translucency,
@@ -9361,6 +9400,22 @@ fn clone_surface_pixels(sp: &SurfacePixels) -> SurfacePixels {
     }
 }
 
+/// Byte cost charged to the `?surfaceBudgetMB=` byte budget for one entry.
+///
+/// Option (E) note (2026-07-25): the planes are now `Arc`-shared
+/// ([`PixelPlane`]), so while a decode is in flight the same bytes are
+/// reachable from both the cache entry and the caller's `SurfacePixels`. This
+/// function deliberately keeps charging the **full plane lengths**:
+///  - it is what `surfaceCacheBytes` has always reported, so the budget knob's
+///    gating evidence (`RESULTS-validation-battery-2026-07-25.md` verdict 5,
+///    "provably pinned at 24/64 MB") stays comparable across the change;
+///  - the sharing is transient on the *caller* side (JS frees the handle), so
+///    the resident steady-state charge is exact, not an over-count;
+///  - two distinct cache entries never share a plane: each key's value comes
+///    from its own decode (`fetch_surface_pixels_impl` /
+///    `fetch_entity_surface_pixels_impl` allocate fresh plane `Vec`s), and the
+///    palette-free and composed classes are inserted from different decodes.
+///    So there is no double-counting *within* the store to correct for.
 #[cfg(any(target_arch = "wasm32", test))]
 fn surface_pixels_bytes(sp: &SurfacePixels) -> usize {
     sp.pixels.len() + sp.normal_pixels.len() + sp.height_pixels.len() + 64
@@ -9405,6 +9460,27 @@ fn surface_memo_contains(did: u32) -> bool {
 
 /// Completeness-gated insert (see module comment). `decode_misses` is the
 /// per-DID `DecodeAuditSource` count for exactly this decode.
+///
+/// Option (E) (2026-07-25) — two `Arc` layers now, do not confuse them:
+///
+///  - the **outer** `Arc<SurfacePixels>` is the LRU's value. The
+///    `|v| Arc::strong_count(v) == 1` argument below is the *round-protection
+///    eviction predicate* on THAT arc, unchanged: `ByteBudgetLru::get` hands
+///    out a cloned outer `Arc`, so an entry a caller is still holding reads
+///    `strong_count > 1` and is not evicted mid-use. (Both `surface_memo_get*`
+///    drop that clone at the end of the expression, so it is transient.)
+///  - the **inner** [`PixelPlane`] arcs are new and are NOT part of that
+///    predicate. Consequence worth knowing: evicting an entry no longer
+///    necessarily frees its pixel bytes at that instant — if a caller-side
+///    `SurfacePixels` from an earlier hit is still alive, the planes live until
+///    it drops. That is strictly better for the peak (it is the same buffer,
+///    not a second copy) but it does mean `surfaceCacheBytes` falling is a
+///    statement about the *store*, not a guarantee the allocator gave memory
+///    back yet.
+///
+/// The insert itself no longer copies pixels: `clone_surface_pixels(sp)` is now
+/// three refcount bumps, so this call and the caller's `sp` share buffers
+/// instead of the store transiently holding a second full copy of the entry.
 #[cfg(any(target_arch = "wasm32", test))]
 fn surface_memo_insert(did: u32, sp: &SurfacePixels, decode_misses: u32) {
     if !surface_cache_enabled() {
@@ -10163,11 +10239,11 @@ fn empty_surface_pixels() -> SurfacePixels {
     SurfacePixels {
         width: 0,
         height: 0,
-        pixels: Vec::new(),
+        pixels: Vec::new().into(),
         surface_type: 0,
         category: SurfaceCategory::Generic.as_u8(),
-        normal_pixels: Vec::new(),
-        height_pixels: Vec::new(),
+        normal_pixels: Vec::new().into(),
+        height_pixels: Vec::new().into(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
         translucency: 0.0,
@@ -10234,11 +10310,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     let empty = SurfacePixels {
         width: 0,
         height: 0,
-        pixels: Vec::new(),
+        pixels: Vec::new().into(),
         surface_type: 0,
         category: generic_cat,
-        normal_pixels: Vec::new(),
-        height_pixels: Vec::new(),
+        normal_pixels: Vec::new().into(),
+        height_pixels: Vec::new().into(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
         translucency: 0.0,
@@ -10311,11 +10387,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         return SurfacePixels {
             width: 1,
             height: 1,
-            pixels,
+            pixels: pixels.into(),
             surface_type,
             category,
-            normal_pixels: Vec::new(),
-            height_pixels: Vec::new(),
+            normal_pixels: Vec::new().into(),
+            height_pixels: Vec::new().into(),
             roughness_override,
             normal_scale_override,
             translucency: surface.translucency,
@@ -10410,11 +10486,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             SurfacePixels {
                 width: tex_w,
                 height: tex_h,
-                pixels,
+                pixels: pixels.into(),
                 surface_type,
                 category,
-                normal_pixels,
-                height_pixels,
+                normal_pixels: normal_pixels.into(),
+                height_pixels: height_pixels.into(),
                 roughness_override,
                 normal_scale_override,
                 translucency: surface.translucency,
@@ -10459,11 +10535,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 SurfacePixels {
                     width: 1,
                     height: 1,
-                    pixels: vec![255, 0, 255, 255],
+                    pixels: vec![255, 0, 255, 255].into(),
                     surface_type,
                     category: generic_cat,
-                    normal_pixels: Vec::new(),
-                    height_pixels: Vec::new(),
+                    normal_pixels: Vec::new().into(),
+                    height_pixels: Vec::new().into(),
                     roughness_override: f32::NAN,
                     normal_scale_override: f32::NAN,
                     translucency: surface.translucency,
@@ -11656,11 +11732,11 @@ pub async fn fetch_dye_preview_pixels(
     let empty = SurfacePixels {
         width: 0,
         height: 0,
-        pixels: Vec::new(),
+        pixels: Vec::new().into(),
         surface_type: 0,
         category: generic_cat,
-        normal_pixels: Vec::new(),
-        height_pixels: Vec::new(),
+        normal_pixels: Vec::new().into(),
+        height_pixels: Vec::new().into(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
         translucency: 0.0,
@@ -11751,11 +11827,11 @@ pub async fn fetch_dye_preview_pixels(
             Ok(SurfacePixels {
                 width: tex_w,
                 height: tex_h,
-                pixels,
+                pixels: pixels.into(),
                 surface_type: 0,
                 category,
-                normal_pixels: Vec::new(),
-                height_pixels: Vec::new(),
+                normal_pixels: Vec::new().into(),
+                height_pixels: Vec::new().into(),
                 roughness_override: f32::NAN,
                 normal_scale_override: f32::NAN,
                 translucency: 0.0,
@@ -12125,11 +12201,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     let empty = SurfacePixels {
         width: 0,
         height: 0,
-        pixels: Vec::new(),
+        pixels: Vec::new().into(),
         surface_type: 0,
         category: generic_cat,
-        normal_pixels: Vec::new(),
-        height_pixels: Vec::new(),
+        normal_pixels: Vec::new().into(),
+        height_pixels: Vec::new().into(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
         translucency: 0.0,
@@ -12186,11 +12262,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         return SurfacePixels {
             width: 1,
             height: 1,
-            pixels,
+            pixels: pixels.into(),
             surface_type,
             category,
-            normal_pixels: Vec::new(),
-            height_pixels: Vec::new(),
+            normal_pixels: Vec::new().into(),
+            height_pixels: Vec::new().into(),
             roughness_override,
             normal_scale_override,
             translucency: surface.translucency,
@@ -12307,11 +12383,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             SurfacePixels {
                 width: tex_w,
                 height: tex_h,
-                pixels,
+                pixels: pixels.into(),
                 surface_type,
                 category,
-                normal_pixels,
-                height_pixels,
+                normal_pixels: normal_pixels.into(),
+                height_pixels: height_pixels.into(),
                 roughness_override,
                 normal_scale_override,
                 translucency: surface.translucency,
@@ -51340,7 +51416,7 @@ mod tests_substitution {
         let out = fetch_entity_surface_pixels_impl(&source, surface_id, 0, &[]);
         assert_eq!(out.width, 1);
         assert_eq!(out.height, 1);
-        assert_eq!(out.pixels, vec![0xFF, 0, 0, 0xFF], "expected red (intrinsic palette)");
+        assert_eq!(*out.pixels, vec![0xFF, 0, 0, 0xFF], "expected red (intrinsic palette)");
     }
 
     /// base_palette_id = override + no overlays = override wins.
@@ -51350,7 +51426,7 @@ mod tests_substitution {
     fn entity_surface_pixels_base_override_replaces_intrinsic() {
         let (source, surface_id, override_pal_id, _) = build_palette_overlay_source();
         let out = fetch_entity_surface_pixels_impl(&source, surface_id, override_pal_id, &[]);
-        assert_eq!(out.pixels, vec![0, 0, 0xFF, 0xFF], "expected blue (override palette wins)");
+        assert_eq!(*out.pixels, vec![0, 0, 0xFF, 0xFF], "expected blue (override palette wins)");
     }
 
     /// base override + an overlay splice covering the sampled index → the
@@ -51372,7 +51448,7 @@ mod tests_substitution {
             &[(overlay_pal_id, 5u8, 1u8)], // wire bytes: offset 5 (→40), count 1 (→8)
         );
         assert_eq!(
-            out.pixels,
+            *out.pixels,
             vec![0, 0xFF, 0, 0xFF],
             "expected green: overlay.colors[42] spliced into [40,48) via offset-byte×8"
         );
@@ -51781,7 +51857,7 @@ mod tests_substitution {
             &[(overlay_pal_id, 42u8, 200u8)], // abs range [336,1936) ≫ 256 → rejected
         );
         assert_eq!(
-            out.pixels,
+            *out.pixels,
             vec![0, 0, 0xFF, 0xFF],
             "expected blue: out-of-range splice rejected wholesale, base override survives"
         );
@@ -54274,7 +54350,7 @@ mod tests_entity_surfaces_pixels_batch {
                 // SurfacePixels for two distinct (entity, surface) pairs
                 // — a bug a too-greedy dedup pass could introduce).
                 assert_eq!(
-                    bp.pixels,
+                    *bp.pixels,
                     entities[i].expected_rgba[j].to_vec(),
                     "[entity {i}, surface {j}] expected RGBA encoding"
                 );
@@ -54500,8 +54576,8 @@ mod tests_entity_surfaces_pixels_batch {
         let sp_a = fetch_entity_surface_pixels_impl(&source, surface_id, red_pal_id, &[]);
         let sp_b = fetch_entity_surface_pixels_impl(&source, surface_id, blue_pal_id, &[]);
 
-        assert_eq!(sp_a.pixels, vec![0xFF, 0, 0, 0xFF], "entity A: red");
-        assert_eq!(sp_b.pixels, vec![0, 0, 0xFF, 0xFF], "entity B: blue");
+        assert_eq!(*sp_a.pixels, vec![0xFF, 0, 0, 0xFF], "entity A: red");
+        assert_eq!(*sp_b.pixels, vec![0, 0, 0xFF, 0xFF], "entity B: blue");
         // Same surface, different palette → must produce different RGBs.
         // Proves the batch must thread per-entity palette through.
         assert_ne!(
@@ -56662,11 +56738,23 @@ mod tests_surface_cache {
     fn assert_pixels_eq(a: &SurfacePixels, b: &SurfacePixels, what: &str) {
         assert_eq!(a.width, b.width, "{what}: width");
         assert_eq!(a.height, b.height, "{what}: height");
-        assert_eq!(a.pixels, b.pixels, "{what}: pixels");
+        // Option (E): the planes are `Arc`-shared, and `Arc`'s `PartialEq`
+        // short-circuits on pointer equality. Compare the SLICES so this
+        // helper keeps making a byte-identity claim rather than an
+        // identity-of-allocation one.
+        assert_eq!(a.pixels.as_slice(), b.pixels.as_slice(), "{what}: pixels");
         assert_eq!(a.surface_type, b.surface_type, "{what}: surface_type");
         assert_eq!(a.category, b.category, "{what}: category");
-        assert_eq!(a.normal_pixels, b.normal_pixels, "{what}: normal_pixels");
-        assert_eq!(a.height_pixels, b.height_pixels, "{what}: height_pixels");
+        assert_eq!(
+            a.normal_pixels.as_slice(),
+            b.normal_pixels.as_slice(),
+            "{what}: normal_pixels"
+        );
+        assert_eq!(
+            a.height_pixels.as_slice(),
+            b.height_pixels.as_slice(),
+            "{what}: height_pixels"
+        );
         assert_eq!(a.has_palette, b.has_palette, "{what}: has_palette");
         assert_eq!(a.translucency, b.translucency, "{what}: translucency");
         assert_eq!(a.luminosity, b.luminosity, "{what}: luminosity");
@@ -56705,6 +56793,124 @@ mod tests_surface_cache {
             "memo hit reads ZERO records"
         );
         assert_pixels_eq(&second, &reference, "memo hit vs impl");
+        surface_pixel_cache_clear_all();
+    }
+
+    /// Option (E) (`DESIGN-surface-budget-2026-07-25.md` §2E, landed 2026-07-25
+    /// as `RESULTS-validation-battery` next-move 3) — the whole point of the
+    /// change: an insert and every subsequent hit must SHARE the plane
+    /// allocations rather than copy them.
+    ///
+    /// This is the falsifier for a regression back to deep-copying
+    /// `clone_surface_pixels`: if anyone reverts `PixelPlane` to `Vec<u8>` (or
+    /// slips a `.to_vec()` / `Arc::make_mut` into the hit path) the `ptr_eq`
+    /// assertions fail loudly instead of the cold-boot transient silently
+    /// doubling again.
+    #[test]
+    fn memo_hit_shares_plane_allocations_with_the_cache_entry() {
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0011u32;
+        let source = textured_fixture(did, 0xFF11_2233);
+        let reference = fetch_surface_pixels_impl(&source, did);
+        assert_eq!(reference.width, 1, "fixture decodes");
+
+        // Cold: decodes and inserts. The value the caller keeps and the value
+        // the cache holds share the SAME buffers (this is the 2× transient
+        // that option E removes — proven here, not just documented).
+        let (cold, misses) = fetch_surface_pixels_cached(&source, did);
+        assert_eq!(misses, 0, "complete decode");
+        assert!(surface_memo_contains(did), "memoised");
+
+        // Two independent hits. Each is a fresh `SurfacePixels` handle (JS
+        // still gets its own object) but the planes are the same allocation.
+        let hit_a = surface_memo_get(did).expect("hit a");
+        let hit_b = surface_memo_get(did).expect("hit b");
+        for (x, y, what) in [
+            (&cold, &hit_a, "cold↔hit"),
+            (&hit_a, &hit_b, "hit↔hit"),
+        ] {
+            assert!(
+                std::sync::Arc::ptr_eq(&x.pixels, &y.pixels),
+                "{what}: pixels plane must be shared, not copied"
+            );
+            assert!(
+                std::sync::Arc::ptr_eq(&x.normal_pixels, &y.normal_pixels),
+                "{what}: normal plane must be shared, not copied"
+            );
+            assert!(
+                std::sync::Arc::ptr_eq(&x.height_pixels, &y.height_pixels),
+                "{what}: height plane must be shared, not copied"
+            );
+        }
+        // Sharing must not have changed the CONTENT.
+        assert_pixels_eq(&cold, &reference, "cold vs impl");
+        assert_pixels_eq(&hit_a, &reference, "hit vs impl");
+        // ...nor the byte accounting the `?surfaceBudgetMB=` knob gates on:
+        // shared bytes are still charged at full plane length.
+        assert_eq!(
+            surface_pixels_bytes(&hit_a),
+            reference.pixels.len()
+                + reference.normal_pixels.len()
+                + reference.height_pixels.len()
+                + 64,
+            "shared planes are charged at full length (surfaceCacheBytes parity)"
+        );
+        surface_pixel_cache_clear_all();
+    }
+
+    /// Option (E) — the load-bearing empty-`height_pixels` semantics
+    /// (`DESIGN-surface-budget-2026-07-25.md` §2D: "constant luminance → JS
+    /// skips POM"). An empty plane must stay EMPTY through insert, hit, and
+    /// clone; `Arc<Vec<u8>>` must not turn `Vec::new()` into a non-empty
+    /// buffer, and `is_empty()` must keep reading through the `Arc`.
+    ///
+    /// The fixture is the discriminating one: a 1×1 P8 texture is
+    /// **constant-luminance**, so `normal_and_height_pixels` emits a NON-empty
+    /// normal plane and an EMPTY height plane. That asymmetry is exactly the
+    /// §2D signal — a bug that made empty planes non-empty (or vice versa)
+    /// would break one assertion without touching the other.
+    #[test]
+    fn empty_height_plane_semantics_survive_the_arc() {
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0012u32;
+        let source = textured_fixture(did, 0xFF44_5566);
+        let reference = fetch_surface_pixels_impl(&source, did);
+        assert!(
+            reference.height_pixels.is_empty(),
+            "precondition: constant-luminance decode yields an EMPTY height plane (JS skips POM)"
+        );
+        assert!(
+            !reference.normal_pixels.is_empty(),
+            "precondition: the normal plane is non-empty — the asymmetry under test"
+        );
+
+        let (cold, _) = fetch_surface_pixels_cached(&source, did);
+        assert!(cold.height_pixels.is_empty(), "cold: height stays empty");
+        assert_eq!(
+            cold.normal_pixels.as_slice(),
+            reference.normal_pixels.as_slice(),
+            "cold: normal plane byte-identical"
+        );
+        let hit = surface_memo_get(did).expect("memoised");
+        assert!(hit.height_pixels.is_empty(), "hit: height stays empty");
+        assert_eq!(
+            hit.normal_pixels.as_slice(),
+            reference.normal_pixels.as_slice(),
+            "hit: normal plane byte-identical"
+        );
+        // `clone_surface_pixels` (the cache-internal clone) must not resurrect
+        // bytes either.
+        let cloned = clone_surface_pixels(&hit);
+        assert!(cloned.height_pixels.is_empty(), "clone: height stays empty");
+        assert_eq!(cloned.height_pixels.len(), 0, "clone: height len 0");
+        // And the byte charge for an empty height plane is zero (+64 hdr).
+        assert_eq!(
+            surface_pixels_bytes(&hit),
+            reference.pixels.len() + reference.normal_pixels.len() + 64,
+            "the empty height plane contributes zero bytes"
+        );
         surface_pixel_cache_clear_all();
     }
 
@@ -56879,7 +57085,7 @@ mod tests_surface_cache {
         );
         empty.width = 1;
         empty.height = 1;
-        empty.pixels = vec![255, 0, 255, 255];
+        empty.pixels = vec![255, 0, 255, 255].into();
         empty.has_palette = true;
         surface_memo_insert_composed(did, dye, &[], &empty, 0);
         assert!(
@@ -57058,12 +57264,12 @@ mod tests_surface_cache {
         // Magenta decode-fail sentinel: 1×1 [255,0,255,255] + has_palette.
         empty.width = 1;
         empty.height = 1;
-        empty.pixels = vec![255, 0, 255, 255];
+        empty.pixels = vec![255, 0, 255, 255].into();
         empty.has_palette = true;
         surface_memo_insert(did, &empty, 0);
         assert!(!surface_memo_contains(did), "magenta sentinel refused");
         // Non-zero audit misses refuse even real-looking pixels.
-        empty.pixels = vec![1, 2, 3, 255];
+        empty.pixels = vec![1, 2, 3, 255].into();
         empty.has_palette = false;
         surface_memo_insert(did, &empty, 1);
         assert!(!surface_memo_contains(did), "missy decode refused");
@@ -57076,11 +57282,11 @@ mod tests_surface_cache {
         SurfacePixels {
             width: 0,
             height: 0,
-            pixels: Vec::new(),
+            pixels: Vec::new().into(),
             surface_type: 0,
             category: 12,
-            normal_pixels: Vec::new(),
-            height_pixels: Vec::new(),
+            normal_pixels: Vec::new().into(),
+            height_pixels: Vec::new().into(),
             roughness_override: f32::NAN,
             normal_scale_override: f32::NAN,
             translucency: 0.0,
@@ -57336,11 +57542,11 @@ mod tests_surface_cache {
         SurfacePixels {
             width: 1,
             height: 1,
-            pixels: vec![0u8; bytes],
+            pixels: vec![0u8; bytes].into(),
             surface_type: 0,
             category: 0,
-            normal_pixels: Vec::new(),
-            height_pixels: Vec::new(),
+            normal_pixels: Vec::new().into(),
+            height_pixels: Vec::new().into(),
             roughness_override: f32::NAN,
             normal_scale_override: f32::NAN,
             translucency: 0.0,
