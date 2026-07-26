@@ -628,6 +628,15 @@ import {
 // urgent — lane-0 dispatch in the bake-worker queue + fetch-semaphore bypass
 // in the decoding wasm instance, same signal statics/buildings/terrain use.
 import { isNearPlayerLb } from "./landblock_lru.js";
+// `entMB` instrument (2026-07-26, RESULTS-matcache-falsifier next-move 1):
+// count + byte-sum every entity-OWNED texture/material across ALL live
+// instances. Charged O(1) at register time; a poll never walks the rigs.
+import { entityOwnedTally } from "./entity_owned_tally.js";
+// `?recolor=off` (2026-07-26): the entity subpalette-recolor escape hatch.
+// Default ON (absent ⇒ today's behaviour bit-for-bit); `off` forces every
+// entity surface fetch to the palette-free base class. See recolor_flag.js.
+// (The boot readback lives in recolor_flag.js, fired on module load.)
+import { gatePaletteId, gateSubPalettes } from "./recolor_flag.js";
 // A12 (S14): spawns.js pre-warms LOD degrade bands per wave; _spawnImpl
 // consults this memo before paying a per-entity wasm await.
 import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
@@ -2678,12 +2687,20 @@ class EntityInstance {
     this.geometries.push(geom);
   }
 
+  // `entMB` (2026-07-26) — THE two registration points for the entity-owned
+  // pool. Every owned texture/material in the client passes through here (the
+  // hot-swap commit in `_applyAppearanceHotSwap` routes its
+  // `_pendingOwned*` arrays through these methods too, rather than pushing
+  // raw, so the tally has no blind side door). The tally charge is O(1):
+  // `image.data.byteLength` read once, cached in a WeakMap.
   registerOwnedTexture(tex) {
     this.ownedTextures.push(tex);
+    entityOwnedTally.registerTexture(tex, this);
   }
 
   registerOwnedMaterial(mat) {
     this.ownedMaterials.push(mat);
+    entityOwnedTally.registerMaterial(mat, this);
   }
 
   setPose(x, y, z, qw, qx, qy, qz) {
@@ -2929,16 +2946,25 @@ class EntityInstance {
         g.dispose();
       } catch (_) {}
     }
+    // `entMB` (2026-07-26) — teardown half of the tally. NOTE what this does
+    // and does NOT prove: `Texture.dispose()` frees the GPU handle only, so
+    // decrementing `liveBytes` here records that the CLIENT released its
+    // reference, not that the JS bytes came back. If the heap keeps stepping
+    // while `entMB` returns to baseline, the retainer is a holder that keeps
+    // these objects reachable past dispose (see the module docstring).
     for (const t of this.ownedTextures) {
+      entityOwnedTally.disposeTexture(t);
       try {
         t.dispose();
       } catch (_) {}
     }
     for (const m of this.ownedMaterials) {
+      entityOwnedTally.disposeMaterial(m);
       try {
         m.dispose();
       } catch (_) {}
     }
+    entityOwnedTally.releaseOwner(this);
     this.actions.clear();
     this.actionLastUsedMs.clear();
     // Task E (2026-05-12): drop hook timeline state alongside the
@@ -3446,8 +3472,18 @@ export class EntityManager {
       modelChanges = withLod;
     }
     const textureChanges = meta.textureChanges ?? new Uint32Array(0);
-    const paletteId = (meta.paletteId ?? 0) >>> 0;
-    const subPalettes = meta.subPalettes ?? new Uint32Array(0);
+    // `?recolor=off` CHOKE POINT 1 of 3 — the spawn path (2026-07-26).
+    // `*Raw` keeps the wire's true palette state for the ANIMATION bake
+    // (`bakeOpts.paletteSubsFlat` below) so the AnimationCache key, the
+    // keyframe fetch and therefore the whole rig/mesh half stay byte-identical
+    // across both arms of the experiment; only the SURFACE half is gated.
+    // Gated to (0, []) the surface branch's `hasPaletteSubs` is false, so the
+    // entity takes the plain shared-MaterialCache path: the palette-free base
+    // class, no composed decode, no per-wearer owned texture.
+    const paletteIdRaw = (meta.paletteId ?? 0) >>> 0;
+    const subPalettesRaw = meta.subPalettes ?? new Uint32Array(0);
+    const paletteId = gatePaletteId(paletteIdRaw);
+    const subPalettes = gateSubPalettes(subPalettesRaw);
     // A9-Stage1: wire placement id rides only under ?placementId=on so
     // the default cache keys/fetch args stay byte-identical.
     const placementId = PLACEMENT_ID_ON ? ((meta.placementId ?? 0) >>> 0) : 0;
@@ -3471,8 +3507,10 @@ export class EntityManager {
     const bakeOpts = {
       modelChanges,
       textureChanges,
-      paletteId,
-      paletteSubsFlat: subPalettes,
+      // RAW, deliberately — see the `?recolor=off` choke-point note above.
+      // The animation/mesh half is not part of the recolor experiment.
+      paletteId: paletteIdRaw,
+      paletteSubsFlat: subPalettesRaw,
       placementId,
     };
     // P11 (2026-07-04) — the spawn-time bake used to be FATAL on reject: a
@@ -4886,8 +4924,15 @@ export class EntityManager {
     if (!inst || !inst.root || !spec || attempt >= DELAYS_MS.length) return;
     if (typeof this.wasmExports?.fetchEntitySurfacesPixels !== "function") return;
     if (inst._dyedRefreshTimer) return; // per-entity dedupe — one ladder at a time
-    const paletteId = (spec.paletteId ?? 0) >>> 0;
-    const subPalettes = spec.subPalettes ?? new Uint32Array(0);
+    // `?recolor=off` CHOKE POINT 3 of 3 — the dyed recovery ladder
+    // (2026-07-26). Belt-and-braces: both arming sites (spawn commit,
+    // hot-swap commit) already pass gated values, so under `off` this ladder
+    // is never armed at all (`hasPaletteSubs` is false there and the PLAIN
+    // ladder arms instead). Gating here as well means a future arming site —
+    // or a stale `spec` captured before a flag flip — cannot re-open the
+    // composed decode behind the experiment's back.
+    const paletteId = gatePaletteId((spec.paletteId ?? 0) >>> 0);
+    const subPalettes = gateSubPalettes(spec.subPalettes ?? new Uint32Array(0));
     const key = `${paletteId}|${Array.from(subPalettes).join(",")}`;
     if (attempt === 0) inst._dyedRefreshKey = key;
     const needsTex = (mat) => !!mat && !mat.map;
@@ -9547,8 +9592,15 @@ export class EntityManager {
       if (!pg) continue;
       for (const did of pg.surfaceDids) allSurfaceDids.add(did >>> 0);
     }
-    const paletteId = (newMeta.paletteId ?? 0) >>> 0;
-    const subPalettes = newMeta.subPalettes ?? new Uint32Array(0);
+    // `?recolor=off` CHOKE POINT 2 of 3 — the re-dress (appearance hot-swap)
+    // path (2026-07-26). Same contract as the spawn twin: the animation bake
+    // above still reads `newMeta` RAW (byte-identical rig in both arms); only
+    // these two locals — which feed `hasPaletteSubs`, the
+    // `fetchEntitySurfacesPixels` call, and the dyed-ladder arm at the bottom
+    // of this method — are gated. Off ⇒ the swap takes the plain
+    // `materialCache.preload` branch and registers NO owned textures.
+    const paletteId = gatePaletteId((newMeta.paletteId ?? 0) >>> 0);
+    const subPalettes = gateSubPalettes(newMeta.subPalettes ?? new Uint32Array(0));
     const hasPaletteSubs = paletteId !== 0 || subPalettes.length > 0;
     // R-8 (net-fixwave 2026-07-09) — an appearance change supersedes any
     // pending dyed-surface refresh (its captured palette state is stale);
@@ -9694,21 +9746,29 @@ export class EntityManager {
 
     // Commit new owned-asset registry; dispose old ones now that
     // nothing references them.
+    // `entMB` (2026-07-26) — the re-dress swap is the SECOND registration
+    // path into the owned pool (a busy town re-dresses constantly: equip,
+    // unequip, dye preview). Route the commit through `registerOwned*`
+    // instead of a raw `push` so the tally charges these exactly like the
+    // spawn path; clearing the array is not a release (the old objects are
+    // released by the dispose loops just below, keyed by identity).
     if (inst._pendingOwnedMaterials) {
       inst.ownedMaterials.length = 0;
-      for (const m of inst._pendingOwnedMaterials) inst.ownedMaterials.push(m);
+      for (const m of inst._pendingOwnedMaterials) inst.registerOwnedMaterial(m);
       delete inst._pendingOwnedMaterials;
     }
     if (inst._pendingOwnedTextures) {
       inst.ownedTextures.length = 0;
-      for (const t of inst._pendingOwnedTextures) inst.ownedTextures.push(t);
+      for (const t of inst._pendingOwnedTextures) inst.registerOwnedTexture(t);
       delete inst._pendingOwnedTextures;
     }
     inst._entityMaterials = entityMaterials;
     for (const m of oldOwnedMaterials) {
+      entityOwnedTally.disposeMaterial(m);
       try { m.dispose(); } catch (_) {}
     }
     for (const t of oldOwnedTextures) {
+      entityOwnedTally.disposeTexture(t);
       try { t.dispose(); } catch (_) {}
     }
 
