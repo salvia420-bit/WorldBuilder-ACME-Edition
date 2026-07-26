@@ -499,11 +499,27 @@ function queueCapFlag() {
 // `0` / garbage ⇒ 0 ⇒ every request takes the pre-A16 single-call path with the
 // caller's ORIGINAL argument object, i.e. bit-for-bit today's behaviour.
 //
-// Scope: the two worker-routed funnels every landblock bake goes through
-// (`fetchSurfacesPixels`, `fetchModelMeshes`). It is INERT under
-// `?bakeWorker=0` — that branch must keep returning the exact wasm export
-// reference (see `modelMeshFetcher`'s contract). Entity-surface paths are
-// per-entity/per-LB shaped and are deliberately left alone.
+// Scope: ALL FOUR worker-routed decode funnels — `fetchSurfacesPixels` and
+// `fetchModelMeshes` (the landblock-bake pair, A16 2026-07-25) plus
+// `fetchEntitySurfacesPixels` and `fetchEntitySurfacesPixelsBatch` (the entity
+// pair, added 2026-07-26). The entity legs were originally left out as
+// "per-entity/per-LB shaped", which turned out to be an assumption rather than
+// a measurement: `fetch_entity_surfaces_pixels` materialises its whole `Vec`
+// before returning exactly like the non-entity twin, and the F.41 batch hands
+// a whole spawn set over in ONE call. The consequence is that verdict 4's
+// cold-boot refutation (`RESULTS-validation-battery-2026-07-25.md`) was never
+// armed over the entity submissions at all — arming them is what makes a rerun
+// of that falsifier meaningful.
+//
+// It is INERT under `?bakeWorker=0` — that branch must keep returning the exact
+// wasm export reference (see `modelMeshFetcher`'s contract, and the same
+// contract spelled out on `entitySurfacePixelsFetcher` /
+// `entitySurfacesBatchFetcher`).
+//
+// The flat legs (`fetchSurfacesPixels`, `fetchModelMeshes`,
+// `fetchEntitySurfacesPixels`) cut with `splitBatchWaves`. The GROUP-encoded
+// `fetchEntitySurfacesPixelsBatch` cuts with `splitEntityBatchGroupWaves`
+// instead — same DID-counted budget, but only on group boundaries.
 //
 // The cap binds only at COLD BOOT in practice: a steady-state per-LB bake
 // submits far fewer DIDs than any useful N, so the waves collapse to one call
@@ -544,6 +560,132 @@ export function splitBatchWaves(len, cap) {
     out.push([start, Math.min(start + cap, len)]);
   }
   return out;
+}
+
+/**
+ * A16 entity-batch variant (2026-07-26). `fetchEntitySurfacesPixelsBatch` is
+ * GROUP-encoded (`flatDids` is the concatenation of per-group DID lists,
+ * `lens[g]` is group g's length, and `basePals`/`tripleCounts` are per-group),
+ * so `splitBatchWaves` — which slices a flat list at arbitrary indices — cannot
+ * be used on it: a cut inside a group would desync every parallel array and the
+ * wasm's own `surface_dids_lens sum != flat_surface_dids length` validator would
+ * reject the call.
+ *
+ * Splits instead on GROUP boundaries, greedily packing whole groups until the
+ * accumulated DID count would exceed `cap`. Returns `[gLo, gHi)` GROUP ranges.
+ * Two deliberate properties:
+ *   - The cap is counted in DIDs, not groups, so it means the same thing here
+ *     as on the flat legs (it bounds the decoded output of one submission, which
+ *     is what the whole A16 rationale is about — see the block comment above).
+ *   - A single group LONGER than `cap` ships alone in its own wave rather than
+ *     being split. Splitting it would be decode-equivalent per DID (the wasm
+ *     applies the group's palette state uniformly), but the result is shaped
+ *     per group, so the halves would have to be re-merged inside one
+ *     `payloadAt(g)` slot for no memory win beyond what shipping it alone
+ *     already gives. The bound is therefore `max(cap, longest group)` DIDs.
+ * `cap <= 0` degrades to ONE whole-batch range, which is what keeps the
+ * unauthored page on the original single-call path. Exported for the unit suite.
+ *
+ * @param {ArrayLike<number>} lens per-group DID counts
+ * @param {number} cap
+ * @returns {Array<[number, number]>} group ranges
+ */
+export function splitEntityBatchGroupWaves(lens, cap) {
+  const n = lens ? lens.length : 0;
+  if (n <= 0) return [];
+  if (!Number.isFinite(cap) || cap <= 0) return [[0, n]];
+  const out = [];
+  let start = 0;
+  let acc = 0;
+  for (let g = 0; g < n; g += 1) {
+    const l = lens[g] >>> 0;
+    // Close the open wave BEFORE adding a group that would overflow it — but
+    // never emit an empty wave (a lone oversized group must still ship).
+    if (acc > 0 && acc + l > cap) {
+      out.push([start, g]);
+      start = g;
+      acc = 0;
+    }
+    acc += l;
+  }
+  out.push([start, n]);
+  return out;
+}
+
+/**
+ * Prefix-sum offsets for a per-group length array: `off[g]` is the start of
+ * group g's slice and `off[n]` is the total. `stride` is 1 for the DID lists
+ * and 3 for the flat sub-palette triples (wasm reads
+ * `sub_palettes_triple_counts[i] * 3` — src/lib.rs).
+ */
+function groupOffsets(lens, stride = 1) {
+  const n = lens ? lens.length : 0;
+  const off = new Array(n + 1);
+  let acc = 0;
+  for (let g = 0; g < n; g += 1) {
+    off[g] = acc;
+    acc += (lens[g] >>> 0) * stride;
+  }
+  off[n] = acc;
+  return off;
+}
+
+/**
+ * Concatenate the per-wave results of a split `fetchEntitySurfacesPixelsBatch`
+ * into ONE object with the same consumer surface the wasm handle exposes
+ * (`len` / single-shot `payloadAt(i)` / `wasDrained(i)` / `free()`), so
+ * `materials.js::preloadBatch` cannot tell a split call from a whole one.
+ *
+ * Each wave is drained EAGERLY here, which is the point: draining releases that
+ * wave's wasm-side `Vec` (and, on a worker wave, lets the reconstructed payloads
+ * be the only copy) before the next wave decodes — the peak this whole flag
+ * exists to cut. Group order across waves is input order by construction.
+ */
+function concatEntitySurfaceBatches(parts) {
+  const groups = [];
+  let misses;
+  let absent = null;
+  for (const part of parts) {
+    // Audit getters must be read BEFORE the handle is freed below.
+    const a = extractSurfaceAudit(part);
+    if (a) {
+      if (typeof a.decodeMisses === "number") misses = (misses ?? 0) + a.decodeMisses;
+      if (Array.isArray(a.provenAbsent)) {
+        absent = absent ? [...absent, ...a.provenAbsent] : [...a.provenAbsent];
+      }
+    }
+    const n = part.len >>> 0;
+    for (let i = 0; i < n; i += 1) groups.push(part.payloadAt(i) ?? null);
+    try {
+      if (typeof part.free === "function") part.free();
+    } catch (_) {
+      /* best-effort — the payloads are already moved out */
+    }
+  }
+  const merged = {
+    get len() {
+      return groups.length;
+    },
+    payloadAt(i) {
+      if (i < 0 || i >= groups.length) return null;
+      const g = groups[i];
+      groups[i] = null; // single-shot MOVE, matching the wasm handle
+      return g;
+    },
+    wasDrained(i) {
+      return i < 0 || i >= groups.length || groups[i] === null;
+    },
+    free() {
+      /* plain object — nothing wasm-backed to release */
+    },
+  };
+  if (misses !== undefined || absent) {
+    applySurfaceAudit(merged, {
+      ...(misses !== undefined ? { decodeMisses: misses } : {}),
+      ...(absent ? { provenAbsent: [...new Set(absent)] } : {}),
+    });
+  }
+  return merged;
 }
 
 /** Dispatch lane for a worker message. Exported for the unit suite. */
@@ -989,6 +1131,67 @@ export class BakeWorkerClient {
     if (!this.active) {
       return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes, urgent);
     }
+    // A16 entity leg (2026-07-26). The original A16 scoped itself to
+    // `fetchSurfacesPixels` / `fetchModelMeshes` and called the entity paths
+    // "per-entity/per-LB shaped", so the cold-boot refutation (verdict 4,
+    // `RESULTS-validation-battery-2026-07-25.md`) was never actually ARMED over
+    // them — an entity preload can submit an unbounded DID list, and
+    // `fetch_entity_surfaces_pixels` materialises its whole `Vec` before
+    // returning exactly like the non-entity twin. Same wave shape as
+    // `fetchSurfacesPixels` above: sequential waves (concurrent ones would
+    // rebuild the peak), results concatenated in input order because every
+    // consumer binds by index into the DID list it passed, and the call-level
+    // audit merged the way `_stitchSplit` merges the alias legs (misses sum,
+    // provenAbsent unions). `urgent` rides through each wave unchanged, so an
+    // urgent submission stays urgent for every one of its waves.
+    //
+    // Unarmed (`batchMax === 0`, the default) this is the pre-A16 body reached
+    // with the caller's ORIGINAL argument object — bit-for-bit today. The
+    // `!this.active` main-thread branch above is untouched and is never capped:
+    // `entitySurfacePixelsFetcher` contractually hands back the EXACT
+    // `wasmExports.fetchEntitySurfacesPixels` reference there.
+    const arr = this.batchMax > 0 ? Array.from(dids, (d) => d >>> 0) : null;
+    const waves = arr ? splitBatchWaves(arr.length, this.batchMax) : null;
+    if (waves && waves.length > 1) {
+      const out = [];
+      let misses;
+      let absent = null;
+      for (const [lo, hi] of waves) {
+        const part = await this._fetchEntitySurfacesPixelsOnce(
+          wasmExports,
+          Uint32Array.from(arr.slice(lo, hi)),
+          paletteId,
+          subPalettes,
+          urgent,
+        );
+        const a = extractSurfaceAudit(part);
+        if (a) {
+          if (typeof a.decodeMisses === "number") misses = (misses ?? 0) + a.decodeMisses;
+          if (Array.isArray(a.provenAbsent)) {
+            absent = absent ? [...absent, ...a.provenAbsent] : [...a.provenAbsent];
+          }
+        }
+        for (const sp of part) out.push(sp);
+      }
+      if (misses !== undefined || absent) {
+        applySurfaceAudit(out, {
+          ...(misses !== undefined ? { decodeMisses: misses } : {}),
+          ...(absent ? { provenAbsent: [...new Set(absent)] } : {}),
+        });
+      }
+      return out;
+    }
+    return this._fetchEntitySurfacesPixelsOnce(
+      wasmExports,
+      dids,
+      paletteId,
+      subPalettes,
+      urgent,
+    );
+  }
+
+  /** One worker round-trip for entity surface pixels (the pre-A16 body). */
+  async _fetchEntitySurfacesPixelsOnce(wasmExports, dids, paletteId, subPalettes, urgent) {
     try {
       await this._ensureWorker();
       // R-1 alias split. Both legs carry the SAME (paletteId, subPalettes):
@@ -1059,6 +1262,76 @@ export class BakeWorkerClient {
         urgent,
       );
     }
+    // A16 entity-batch leg (2026-07-26) — see the note on
+    // `fetchEntitySurfacesPixels`. This submission is the biggest of the four:
+    // the F.41 spawn pre-warm hands the whole spawn set's surfaces over in ONE
+    // call, and the wasm holds every group's decoded `Vec<SurfacePixels>` in the
+    // returned handle. Waves are cut on GROUP boundaries with a DID budget (see
+    // `splitEntityBatchGroupWaves` — a flat cut would desync the parallel
+    // per-group arrays and the wasm's own length validator would reject it),
+    // each wave re-slicing all five parallel inputs through the prefix-sum
+    // offsets so every wave is a self-consistent, independently-valid batch.
+    //
+    // The per-wave results are re-exposed as ONE handle-shaped object
+    // (`concatEntitySurfaceBatches`) in input group order, so
+    // `materials.js::preloadBatch` is unchanged. Unarmed ⇒ single call with the
+    // caller's ORIGINAL five argument objects, bit-for-bit today; the
+    // `!this.active` branch above stays the raw wasm export per
+    // `entitySurfacesBatchFetcher`'s contract.
+    //
+    // The alias check lives in `…Once`, so under waves it is evaluated PER WAVE:
+    // a wave carrying an alias DID routes that wave (not the whole submission)
+    // to the main-thread wasm. That is strictly finer-grained than the unarmed
+    // whole-batch divert and preserves the same "correctness over offload"
+    // rule, since group decode is independent.
+    const gWaves =
+      this.batchMax > 0 ? splitEntityBatchGroupWaves(lens, this.batchMax) : null;
+    if (gWaves && gWaves.length > 1) {
+      const didOff = groupOffsets(lens, 1);
+      const subOff = groupOffsets(tripleCounts, 3);
+      const dArr = Array.from(flatDids, (d) => d >>> 0);
+      const lArr = Array.from(lens, (v) => v >>> 0);
+      const pArr = Array.from(basePals, (v) => v >>> 0);
+      const sArr = Array.from(flatSubs || [], (v) => v >>> 0);
+      const tArr = Array.from(tripleCounts, (v) => v >>> 0);
+      const parts = [];
+      for (const [gLo, gHi] of gWaves) {
+        parts.push(
+          // eslint-disable-next-line no-await-in-loop
+          await this._fetchEntitySurfacesPixelsBatchOnce(
+            wasmExports,
+            Uint32Array.from(dArr.slice(didOff[gLo], didOff[gHi])),
+            Uint32Array.from(lArr.slice(gLo, gHi)),
+            Uint32Array.from(pArr.slice(gLo, gHi)),
+            Uint32Array.from(sArr.slice(subOff[gLo], subOff[gHi])),
+            Uint32Array.from(tArr.slice(gLo, gHi)),
+            urgent,
+          ),
+        );
+      }
+      return concatEntitySurfaceBatches(parts);
+    }
+    return this._fetchEntitySurfacesPixelsBatchOnce(
+      wasmExports,
+      flatDids,
+      lens,
+      basePals,
+      flatSubs,
+      tripleCounts,
+      urgent,
+    );
+  }
+
+  /** One worker round-trip for the F.41 entity-surface batch (pre-A16 body). */
+  async _fetchEntitySurfacesPixelsBatchOnce(
+    wasmExports,
+    flatDids,
+    lens,
+    basePals,
+    flatSubs,
+    tripleCounts,
+    urgent,
+  ) {
     try {
       await this._ensureWorker();
       // R-1 alias split. The flat/lens group encoding makes a per-DID
