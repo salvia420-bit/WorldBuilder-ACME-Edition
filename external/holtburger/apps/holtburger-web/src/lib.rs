@@ -51331,15 +51331,23 @@ mod tests_substitution {
 
     /// Both substitutions composed: model_changes swaps part 1's
     /// gfx, AND texture_changes rewrites the substituted gfx's
-    /// surface_did. End state: part 0's surface_did unchanged, part
-    /// 1's surface_did is the texture-swap target (NOT the
-    /// substituted gfx's intrinsic surface_did).
+    /// texture. Wire TMChanges carry SurfaceTexture (0x05) ids — the
+    /// walker resolves each part surface (0x08) to its SurfaceTexture,
+    /// applies the change chain, and publishes a minted alias did
+    /// (`tex_swap_alias_for`) the pixel fetchers resolve back to
+    /// (base surface, overridden texture). End state: part 0's
+    /// surface_did unchanged, part 1's surface_did is the alias for
+    /// (substituted gfx's surface, new SurfaceTexture) — NOT the
+    /// substituted gfx's intrinsic surface_did.
     #[test]
     fn triangulate_setup_model_with_substitutions_composes_part_and_texture() {
         let setup_id: u32 = 0x02000099;
         let part_default_a: u32 = 0x0100000A;
         let part_default_b: u32 = 0x0100000B;
         let part_replacement: u32 = 0x0100000C;
+        let sub_surface: u32 = 0xCCCCCCCC; // replacement gfx's surface (0x08 space)
+        let st_old: u32 = 0x0500000C; // sub_surface's SurfaceTexture
+        let st_new: u32 = 0x0500000D; // wire TMChange target
 
         let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
         files.insert(
@@ -51356,7 +51364,13 @@ mod tests_substitution {
         );
         files.insert(
             ("eor/portal".into(), part_replacement),
-            synth_gfx_obj_one_triangle(part_replacement, 0xCCCCCCCC, 0.0),
+            synth_gfx_obj_one_triangle(part_replacement, sub_surface, 0.0),
+        );
+        // The walker resolves the part's Surface record to find its
+        // SurfaceTexture; a missing/untextured Surface means no swap.
+        files.insert(
+            ("eor/portal".into(), sub_surface),
+            pack_textured_surface(0x02, st_old, 0),
         );
         let source = MockSource { files };
 
@@ -51365,15 +51379,22 @@ mod tests_substitution {
             &source,
             setup_id,
             &[(1u8, part_replacement)],
-            &[(1u8, 0xCCCCCCCC, 0xDDDDDDDD)], // swap the SUBSTITUTED gfx's surface
+            &[(1u8, st_old, st_new)], // swap the SUBSTITUTED gfx's texture (0x05 ids)
             &mut tris,
         )
         .expect("triangulate");
+        let expected_alias = tex_swap_alias_for(sub_surface, st_new);
         let surf: std::collections::HashSet<u32> = tris.iter().map(|t| t.surface_did).collect();
         assert_eq!(
             surf,
-            [0xAAAAAAAAu32, 0xDDDDDDDD].iter().copied().collect(),
-            "after composing part + texture swaps, part 0 stays at 0xAAAAAAAA and part 1 reads as the swap target 0xDDDDDDDD",
+            [0xAAAAAAAAu32, expected_alias].iter().copied().collect(),
+            "after composing part + texture swaps, part 0 stays at 0xAAAAAAAA and part 1 reads as the minted (surface, new-texture) alias",
+        );
+        assert!(is_tex_swap_alias(expected_alias));
+        assert_eq!(
+            resolve_tex_swap_alias(expected_alias),
+            Some((sub_surface, st_new)),
+            "alias must resolve back to (base surface, overridden SurfaceTexture)",
         );
     }
 
