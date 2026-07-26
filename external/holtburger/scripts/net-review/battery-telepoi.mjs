@@ -510,15 +510,22 @@ const sample = () => raced(helpers.evalInPage(() => {
     ...(() => {
       try {
         const ps = window.__diag?.palettedCache?.();
-        if (!ps) return { palSigs: null, palMB: null, palHiMB: null, palEvict: null };
+        if (!ps) return { palSigs: null, palMB: null, palHiMB: null, palEvict: null, palRemint: null };
         return {
           palSigs: ps.signatures ?? null,
           palMB: Math.round(ps.bytes / 1048576),
           palHiMB: Math.round(ps.hiWaterBytes / 1048576),
           palEvict: ps.evictions ?? null,
+          // `palRemint` (2026-07-26 museum arm) — evictions that were RE-NEEDED.
+          // `palEvict` alone cannot separate "the budget dropped something
+          // nobody wanted again" from thrash; a remint is one wearer that paid
+          // a decode round-trip and rendered unrecolored across it, i.e. the
+          // headless proxy for a visual fallback flash. Null on a pkg/page
+          // predating the counter, exactly like the columns above.
+          palRemint: ps.remints ?? null,
         };
       } catch (_) {
-        return { palSigs: null, palMB: null, palHiMB: null, palEvict: null };
+        return { palSigs: null, palMB: null, palHiMB: null, palEvict: null, palRemint: null };
       }
     })(),
   };
@@ -779,7 +786,7 @@ for (const poi of POIS) {
     `shard=${dm?.shardMB ?? "-"}/${dw?.shardMB ?? "-"}MB surf=${dm?.surfMB ?? "-"}/${dw?.surfMB ?? "-"}MB ` +
     `mats=${endStats?.mats ?? "-"}@${endStats?.matMB ?? "-"}MB/${endStats?.matBudgetMB ?? "unbounded"} evict=${endStats?.matEvict ?? "-"} ` +
     `ent=${endStats?.entMB ?? "-"}MB hi=${endStats?.entHi ?? "-"}MB ` +
-    `pal=${endStats?.palSigs ?? "-"}@${endStats?.palMB ?? "-"}MB hi=${endStats?.palHiMB ?? "-"}MB palEvict=${endStats?.palEvict ?? "-"} ` +
+    `pal=${endStats?.palSigs ?? "-"}@${endStats?.palMB ?? "-"}MB hi=${endStats?.palHiMB ?? "-"}MB palEvict=${endStats?.palEvict ?? "-"} palRemint=${endStats?.palRemint ?? "-"} ` +
     `recv=${recvMin ?? "-"}ms live=${lv.live ?? "?"}${lv.state.streak ? ` deadStreak=${lv.state.streak}` : ""}`);
   // Session lost: ACE booted this account (a second login on the same account)
   // and the bridge never told the page — every further @telepoi would be
