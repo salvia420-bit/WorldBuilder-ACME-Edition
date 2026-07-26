@@ -72,6 +72,10 @@ import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnF
 import { particleClockMode, setCurrentTime } from "./particles/time_rng.js";
 import { ownerRegistry as particleOwnerRegistry } from "./particles/owner_registry.js"; // P3.8 __diag.particles() bridge
 import { EntityManager } from "./entities.js";
+// `entMB` instrument + `?recolor` arm label for `__diag.entityOwned()`
+// (2026-07-26, RESULTS-matcache-falsifier next-move 1).
+import { entityOwnedTally } from "./entity_owned_tally.js";
+import { RECOLOR_ON } from "./recolor_flag.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import {
@@ -3639,6 +3643,51 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         const mc2 = scene3dForBuilders && scene3dForBuilders.materialCache;
         if (!mc2 || typeof mc2.materialCacheStats !== "function") return null;
         return mc2.materialCacheStats();
+      } catch (_) {
+        return null; /* diagnostic only — never throw */
+      }
+    };
+
+    // `entMB` — the entity-owned recolored-texture pool (2026-07-26,
+    // RESULTS-matcache-falsifier-2026-07-26.md next-move 1). Sibling to
+    // `__diag.materialCache()` above and the DISCRIMINATOR against it: the
+    // `?matBudgetMB=64` intervention pinned the four bounded cache maps at
+    // 64 MB and the 3.6 GB heap step fired anyway, at the same POI (Swank,
+    // an item museum). The remaining route-cumulative suspect is this pool —
+    // per-WEARER recolored textures registered via `registerOwnedTexture` /
+    // `registerOwnedMaterial`, outside every bounded map and, until now,
+    // uncounted by `matMB`.
+    //
+    // Reading: `entMB` stepping at Swank while `matMB` stays flat CONFIRMS
+    // the pool. `entMB` returning to baseline while the heap stays at
+    // 3,586 MB REFUTES the live pool and moves the hunt to post-dispose
+    // reachability (`dispose()` frees GPU handles only).
+    //
+    // Synchronous, allocation-light, O(1) — the tally is charged at
+    // registration time, so this never walks the entity map. Also carries
+    // `recolorEnabled` so a relay row is self-describing about which arm of
+    // the `?recolor` A/B produced it.
+    window.__diag.entityOwned = () => {
+      try {
+        return { ...entityOwnedTally.snapshot(), recolorEnabled: RECOLOR_ON };
+      } catch (_) {
+        return null; /* diagnostic only — never throw */
+      }
+    };
+
+    // `palMB` — the paletted (recolored) surface cache (2026-07-26). Sibling
+    // to `__diag.materialCache()` and the pool `matBudgetMB` structurally
+    // CANNOT bound: `_matLru` charges only the four per-DID maps, while
+    // `palettedMaterials` / `palettedTextures` are keyed by outfit SIGNATURE
+    // and capped by COUNT (`PALETTED_CACHE_CAP = 256`), not bytes. Above the
+    // cap the cache thrashes and the "shared" recolor degenerates into
+    // per-wearer duplication — the current lead suspect for the Swank step.
+    // See `MaterialCache.palettedCacheStats()` for the full reading guide.
+    window.__diag.palettedCache = () => {
+      try {
+        const mc3 = scene3dForBuilders && scene3dForBuilders.materialCache;
+        if (!mc3 || typeof mc3.palettedCacheStats !== "function") return null;
+        return mc3.palettedCacheStats();
       } catch (_) {
         return null; /* diagnostic only — never throw */
       }

@@ -389,6 +389,49 @@ const sample = () => raced(helpers.evalInPage(() => {
         return { matMB: null, matBudgetMB: null, matEvict: null };
       }
     })(),
+    // Entity-owned recolored-texture columns (2026-07-26,
+    // RESULTS-matcache-falsifier next-move 1). `matMB` above cannot see this
+    // pool at all — entity-owned textures are per-WEARER and live outside all
+    // four bounded MaterialCache maps — and the `?matBudgetMB=64`
+    // intervention refuted those maps as the 3.6 GB retainer while the step
+    // kept firing at Swank. `entMB` = live entity-owned bytes, `entHi` = the
+    // high-water mark (so a burst that has since been disposed still shows up
+    // in a once-per-stop sample). Additive + fail-soft exactly like matMB:
+    // null on any page whose scene3d predates `__diag.entityOwned`.
+    ...(() => {
+      try {
+        const es = window.__diag?.entityOwned?.();
+        if (!es) return { entMB: null, entHi: null };
+        return {
+          entMB: Math.round(es.liveBytes / 1048576),
+          entHi: Math.round(es.hiWaterBytes / 1048576),
+        };
+      } catch (_) {
+        return { entMB: null, entHi: null };
+      }
+    })(),
+    // Paletted (recolored) surface-cache columns (2026-07-26). THE lead
+    // Swank suspect: `palettedMaterials`/`palettedTextures` are keyed by
+    // outfit SIGNATURE and capped by COUNT (256), never charged to the
+    // `_matLru` that `matMB`/`matBudgetMB` bound — so the falsifier's budget
+    // intervention could not touch them. Above the cap the cache thrashes and
+    // the shared recolor degenerates into per-wearer duplication. The
+    // confirming pattern at Swank is `palEvict` spiking + `palMB` (and the
+    // heap) climbing while `matMB` stays flat. Fail-soft nulls like matMB.
+    ...(() => {
+      try {
+        const ps = window.__diag?.palettedCache?.();
+        if (!ps) return { palSigs: null, palMB: null, palHiMB: null, palEvict: null };
+        return {
+          palSigs: ps.signatures ?? null,
+          palMB: Math.round(ps.bytes / 1048576),
+          palHiMB: Math.round(ps.hiWaterBytes / 1048576),
+          palEvict: ps.evictions ?? null,
+        };
+      } catch (_) {
+        return { palSigs: null, palMB: null, palHiMB: null, palEvict: null };
+      }
+    })(),
   };
 }));
 const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c));
@@ -587,7 +630,9 @@ for (const poi of POIS) {
     `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta} ` +
     `js=${jsHeapPeakMB}MB press=${dm?.pressure ?? "-"}/${dw?.pressure ?? "-"} ` +
     `shard=${dm?.shardMB ?? "-"}/${dw?.shardMB ?? "-"}MB surf=${dm?.surfMB ?? "-"}/${dw?.surfMB ?? "-"}MB ` +
-    `mats=${endStats?.mats ?? "-"}@${endStats?.matMB ?? "-"}MB/${endStats?.matBudgetMB ?? "unbounded"} evict=${endStats?.matEvict ?? "-"}`);
+    `mats=${endStats?.mats ?? "-"}@${endStats?.matMB ?? "-"}MB/${endStats?.matBudgetMB ?? "unbounded"} evict=${endStats?.matEvict ?? "-"} ` +
+    `ent=${endStats?.entMB ?? "-"}MB hi=${endStats?.entHi ?? "-"}MB ` +
+    `pal=${endStats?.palSigs ?? "-"}@${endStats?.palMB ?? "-"}MB hi=${endStats?.palHiMB ?? "-"}MB palEvict=${endStats?.palEvict ?? "-"}`);
   // --maxStops K: fixed-length sessions. After K stops in THIS session close and
   // exit for-relaunch (exit 3 → wrapper --resume), so every session holds K
   // stops and settleMedBySession[j] is age-matched across arms by construction.

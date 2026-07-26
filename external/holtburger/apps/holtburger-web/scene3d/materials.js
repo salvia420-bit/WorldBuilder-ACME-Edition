@@ -2066,6 +2066,35 @@ export class MaterialCache {
     this.palettedMaterials = new Map();
     /** @type {Map<string, THREE.DataTexture>} — cache-owned paletted textures. */
     this.palettedTextures = new Map();
+    // === `palMB` instrument (2026-07-26, RESULTS-matcache-falsifier next-move 1) ===
+    // The paletted maps are the ONLY per-surface caches `matBudgetMB` cannot
+    // see: `_matLru` is populated exclusively for the four per-DID maps
+    // (:2255/:2282/:2296), so `matMB` reported 261–355 MB while these two
+    // held an unknown amount — which is why the falsifier's budget
+    // intervention pinned the wrong maps and the 3.6 GB step survived it.
+    //
+    // These counters are the discriminator. `PALETTED_CACHE_CAP = 256`
+    // signatures is a COUNT cap, not a byte cap, and past it the cache
+    // THRASHES: an evicted texture is `dispose()`d (GPU handles only — the JS
+    // `image.data` stays alive as long as a live mesh still references the
+    // material), and the next wearer with the same signature mints a fresh
+    // full-size copy. An item museum like Hotel Swank blows through 256
+    // distinct `(did|paletteId|subPalettes)` signatures in one stop, so above
+    // the cap the "shared" cache degenerates into per-wearer duplication.
+    //
+    // Confirming signal at Swank: `palEvict` spiking and `palMB`/heap
+    // climbing while `matMB` stays flat.
+    //
+    // Charged incrementally, O(1) per insert/evict (`image.data.byteLength`,
+    // the same honest measure as `estimateTextureBytes`) — never a walk.
+    this._palBytes = 0;          // live Σ bytes over palettedTextures
+    this._palHiWaterBytes = 0;   // max _palBytes ever observed
+    this._palEvictions = 0;      // cap-driven evictions, cumulative
+    this._palEvictedBytes = 0;   // Σ bytes evicted, cumulative
+    this._palInstalls = 0;       // installPaletted calls that stored a texture
+    this._palHiWaterSigs = 0;    // max palettedMaterials.size ever observed
+    /** @type {Map<string, number>} charged bytes per live paletted key */
+    this._palKeyBytes = new Map();
     /**
      * 2026-06-20 ParticleViewer parity — cache-owned UNLIT particle materials
      * keyed by surfaceDid. Particles render unlit (texture × opacity, additive/
@@ -2453,6 +2482,55 @@ export class MaterialCache {
       handedOut: this._matHandedOut.size,
       missingSurfaces: this.missingSurfaces.size,
       palettedMaterials: this.palettedMaterials.size,
+      // `palMB` cross-link (2026-07-26) — so a relay row that reads only
+      // `materialCacheStats()` still carries the paletted pool's headline
+      // numbers. Full view: `palettedCacheStats()` / `__diag.palettedCache()`.
+      palettedBytes: this._palBytes,
+      palettedEvictions: this._palEvictions,
+    };
+  }
+
+  /**
+   * `palMB` — the paletted (recolored) surface cache's residency view
+   * (2026-07-26, RESULTS-matcache-falsifier-2026-07-26.md next-move 1).
+   *
+   * WHY IT IS SEPARATE FROM `materialCacheStats()`: `_matLru` — and therefore
+   * `matMB` / `matBudgetMB` — covers ONLY the four per-DID maps (`materials`,
+   * `textures`, `normalTextures`, `heightTextures`; charged at :2255/:2282/
+   * :2296). The paletted maps are keyed by `(did|paletteId|subPalettes)`, a
+   * per-OUTFIT-SIGNATURE space, and were never charged to that LRU at all.
+   * The falsifier's `?matBudgetMB=64` intervention therefore bounded the
+   * wrong maps: the cache was pinned at 64 MB with 5,723 evictions and the
+   * 3.6 GB heap step fired anyway, at the same POI.
+   *
+   * `PALETTED_CACHE_CAP` (256) is a COUNT cap. Above it the cache thrashes —
+   * `evictions` climbing means same-signature wearers are re-minting
+   * full-size textures, i.e. the "shared" cache has degenerated into
+   * per-wearer duplication. Reading:
+   *
+   *   palEvict spiking + palMB/heap climbing, matMB flat  ⇒ CONFIRMS this pool.
+   *   palEvict ~0 across the step                          ⇒ refutes it; the
+   *     bytes are elsewhere (post-dispose reachability, or the entity-owned
+   *     pool — see `__diag.entityOwned()`).
+   *
+   * Synchronous, allocation-light, O(1): every number is maintained
+   * incrementally at insert/evict. Never walks the maps.
+   */
+  palettedCacheStats() {
+    return {
+      signatures: this.palettedMaterials.size,
+      textures: this.palettedTextures.size,
+      cap: PALETTED_CACHE_CAP,
+      atCap: this.palettedMaterials.size >= PALETTED_CACHE_CAP,
+      bytes: this._palBytes,
+      bytesMB: +(this._palBytes / 1048576).toFixed(2),
+      hiWaterBytes: this._palHiWaterBytes,
+      hiWaterMB: +(this._palHiWaterBytes / 1048576).toFixed(2),
+      hiWaterSignatures: this._palHiWaterSigs,
+      evictions: this._palEvictions,
+      evictedBytes: this._palEvictedBytes,
+      evictedMB: +(this._palEvictedBytes / 1048576).toFixed(2),
+      installs: this._palInstalls,
     };
   }
 
@@ -2661,9 +2739,25 @@ export class MaterialCache {
     material.userData = { ...(material.userData || {}), __cacheOwned: true, __paletteKey: key };
     if (texture) {
       texture.userData = { ...(texture.userData || {}), __cacheOwned: true };
+      // `palMB` — a re-install under an existing key REPLACES the stored
+      // texture, so discharge the old charge before charging the new one
+      // (the R-8 dyed ladder deliberately re-installs a signature that an
+      // incomplete decode poisoned).
+      const prevBytes = this._palKeyBytes.get(key);
+      if (prevBytes !== undefined) this._palBytes -= prevBytes;
+      const bytes = estimateTextureBytes(texture);
+      this._palKeyBytes.set(key, bytes);
+      this._palBytes += bytes;
+      this._palInstalls += 1;
+      if (this._palBytes > this._palHiWaterBytes) {
+        this._palHiWaterBytes = this._palBytes;
+      }
       this.palettedTextures.set(key, texture);
     }
     this.palettedMaterials.set(key, material);
+    if (this.palettedMaterials.size > this._palHiWaterSigs) {
+      this._palHiWaterSigs = this.palettedMaterials.size;
+    }
     // #22 — insertion-order LRU cap. Map iteration is insertion-ordered,
     // so the FIRST key is the oldest. Evict oldest-first while over cap,
     // disposing the material AND its paired owned texture together. The
@@ -2680,6 +2774,19 @@ export class MaterialCache {
       const oldTex = this.palettedTextures.get(oldestKey);
       this.palettedMaterials.delete(oldestKey);
       this.palettedTextures.delete(oldestKey);
+      // `palMB` — discharge the evicted key. ⚠ READING NOTE: this decrements
+      // the LIVE byte count, which tracks what the CACHE holds, not what the
+      // heap holds: `oldTex.dispose()` frees the GPU handle only, and any
+      // live mesh still pointing at `oldMat` keeps `image.data` reachable.
+      // `palEvict` is therefore the thrash counter — every eviction above the
+      // cap is a signature that the NEXT wearer will re-mint from scratch.
+      const evictedBytes = this._palKeyBytes.get(oldestKey);
+      if (evictedBytes !== undefined) {
+        this._palKeyBytes.delete(oldestKey);
+        this._palBytes -= evictedBytes;
+        this._palEvictedBytes += evictedBytes;
+      }
+      this._palEvictions += 1;
       try { oldMat?.dispose?.(); } catch (_) {}
       try { oldTex?.dispose?.(); } catch (_) {}
     }
@@ -4327,6 +4434,12 @@ export class MaterialCache {
     // Cache-owned paletted materials + their paired owned textures.
     _disposeEach(this.palettedMaterials, (m) => m);
     _disposeEach(this.palettedTextures, (t) => t);
+    // `palMB` — page teardown zeroes the LIVE charge (the maps are now
+    // empty). The CUMULATIVE counters (`_palEvictions`, `_palEvictedBytes`,
+    // `_palInstalls`) and the high-water marks are deliberately preserved:
+    // a scene rebuild must not erase the session's thrash history.
+    if (this._palKeyBytes) this._palKeyBytes.clear();
+    this._palBytes = 0;
     // anim-frames (#22 fold-in) — the per-surface animated-frame
     // DataTextures. `entry.mat` is the SAME object held in `this.materials`
     // (guarded by the build path), already disposed above, so dispose ONLY
