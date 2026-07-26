@@ -1774,6 +1774,154 @@ export function installLightClampShaderPatch(material) {
   _installLightClampShaderPatch(material);
 }
 
+// ===========================================================================
+// `?matBudgetMB=N` — byte-budget LRU over the four per-surface-DID maps
+// (2026-07-25, RESULTS-validation-battery next-move 1 / DESIGN-first-bake-
+// batches §6).
+//
+// WHAT THIS BOUNDS. `materials` / `textures` / `normalTextures` /
+// `heightTextures` are keyed by surface DID and, before this, were never
+// deleted or cleared — a monotone retainer over "distinct surface DIDs ever
+// seen", which is a function of ROUTE LENGTH, not of boot. Each cached DID
+// pins its decoded planes in the JS heap through
+// `THREE.DataTexture.image.data`: RGBA8 albedo (4 B/px) + the RGB→RGBA-padded
+// procedural normal (4 B/px, `surfacePixelsToNormalTexture` pads for
+// three r152+) + R8 height (1 B/px) ≈ **9 B/px**, i.e. ~2.25 MiB for a 512²
+// surface. The 2026-07-25 armLong arm measured `mats` 6 → 479 → 1,117 →
+// 1,777 → 1,802 with `usedJSHeapSize` stepping to **3,586 MB at mats≈1,777**
+// (≈2.0 MiB/DID averaged over the real 256²/512² mix) — right against
+// Chrome's ~4 GB `jsHeapSizeLimit`, i.e. the renderer OOM.
+//
+// DEFAULT-NEUTRAL. Absent / garbage / `<= 0` ⇒ budget 0 ⇒ **unbounded**, the
+// pre-flag behaviour bit-for-bit: `_enforceMatBudget` returns before looking
+// at a single entry and nothing is ever deleted or disposed. The reader is
+// an explicit positive-number parse — deliberately NOT the `!== "off"` shape
+// that reads ON when the param is absent (the standing footgun in this tree,
+// see `scripts/lint-url-flags.mjs` OFF-SPELLING). The only unconditional
+// change is the size bookkeeping (`_matLru`, one `Map<did, bytes>`), which is
+// what lets an UNBUDGETED falsifier arm report the bytes it would have
+// capped at.
+//
+// ---------------------------------------------------------------------------
+// DISPOSE POLICY (the design risk; read before changing anything here)
+// ---------------------------------------------------------------------------
+// 1. **The reference drop IS the reclaim.** The arena that died is the JS
+//    heap, and it is held by `DataTexture.image.data`. `Texture.dispose()` /
+//    `Material.dispose()` free GPU objects and the compiled program — they do
+//    **not** release `image.data`. So evicting the Map entry (dropping the
+//    cache's last reference so GC can take the buffer once no mesh holds it)
+//    is both necessary and sufficient for the 3.6 GB step. Dispose is a
+//    separate, GPU-only concern and is never load-bearing for the budget.
+// 2. **Never dispose inline something that was handed out.** Every consumer
+//    in this tree is built on the `__cacheOwned` convention: cache materials
+//    and their textures are NEVER disposed by whoever holds them —
+//    `scene3d/landblock_lru.js:1063-1077` (LB eviction skips `__cacheOwned`
+//    geometries/materials/textures), `scene3d/buildings.js:245-250`,
+//    `scene3d/particles/particle_manager.js:628`, `scene3d/terrain.js:3043`,
+//    entities.js `_disposeMaterialIfOwned`. A live mesh keeps its material
+//    for its whole lifetime, and nothing tells us when the last one goes.
+//    Disposing under a live mesh is not a crash (three re-uploads the texture
+//    from `image.data` and recompiles the program on the next render) but it
+//    is a shader recompile + GPU re-upload storm for **zero** heap benefit —
+//    the exact trade this flag exists to avoid.
+// 3. So: an evicted entry is disposed IMMEDIATELY only when it is **provably
+//    unreferenced** — the DID was installed but never handed to a caller
+//    (`_matHandedOut`). That is the common `preload()` over-fetch case (a
+//    bake warms a building's part DIDs, the ring never draws half of them)
+//    and it is the whole `?nullRender=1` measurement rig, where no texture
+//    ever reached the GPU anyway.
+// 4. A handed-out entry goes to `_matGraveyard` as a **WeakRef** (weak, or it
+//    would re-create the very leak we are evicting) and is disposed only by
+//    the explicit `releaseEvictedGpu()` hook, which has NO default caller.
+//    Call it only at a point where the scene provably no longer references
+//    the old materials (a full scene rebuild / teardown). Left uncalled, the
+//    GPU-side objects of evicted-and-still-referenced entries are leaked
+//    exactly as they are leaked today — this flag cannot make GPU residency
+//    worse than the unbounded status quo, only better.
+// 5. Eviction also drops the per-DID DERIVED clones (`frontSideMaterials`,
+//    `floorBiasMaterials`, `staticBiasMaterials`, `particleUnlitMaterials`,
+//    the `did|set|config` `vfxVariants`) and the animated-frame entry, all of
+//    which share or wrap the base's textures. Leaving them behind would keep
+//    the evicted bytes alive through a back door and would let a stale clone
+//    outlive its base.
+//
+// FOOTGUN, same class as `?surfaceBudgetMB`: a budget below one bake's live
+// working set re-introduces the grey-surface failure mode (a `getCached()`
+// after an eviction returns the shared fallback until something re-preloads
+// the DID). Two structural guards: eviction is strictly least-recently-USED
+// (a DID just preloaded/drawn is the newest, evicted last), and the entry
+// installed by the current call is never the one evicted (the same
+// `oldestKey === key` guard `installPaletted` uses). Set the budget above one
+// town's live surface set — see the url-flags.md row for the measured floor.
+// ===========================================================================
+
+/** Bookkeeping overhead charged per cached DID (mirrors Rust `surface_pixels_bytes`'s +64). */
+export const MAT_ENTRY_OVERHEAD_BYTES = 64;
+
+/** How many evicted-but-handed-out entries the deferred-release list holds. */
+const MAT_GRAVEYARD_CAP = 1024;
+
+/**
+ * Parse one `matBudgetMB` token → MB (number) or 0 for "unbounded".
+ * Absent / empty / `off` / `0` / negative / non-numeric ⇒ 0. Positive
+ * decimals are accepted (`0.5` = 512 KiB) so a deliberately-tiny negative
+ * control arm is expressible.
+ */
+export function parseMatBudgetMB(raw) {
+  if (raw === null || raw === undefined) return 0;
+  const s = String(raw).trim();
+  if (!/^\d+(?:\.\d+)?$/.test(s)) return 0;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n;
+}
+
+/**
+ * Resolve `?matBudgetMB=` out of a query string into BYTES; `0` = unbounded.
+ * Pure — touches no globals, so the negative control is testable in node.
+ */
+export function resolveMatBudgetBytes(search = "") {
+  let mb = 0;
+  try {
+    mb = parseMatBudgetMB(new URLSearchParams(search || "").get("matBudgetMB"));
+  } catch (_) {
+    return 0; /* unbounded */
+  }
+  return mb > 0 ? Math.max(1, Math.floor(mb * 1024 * 1024)) : 0;
+}
+
+/** The live page's budget in bytes; 0 (unbounded) anywhere without a location. */
+export function matBudgetBytesFromLocation() {
+  try {
+    if (typeof window === "undefined" || !window.location) return 0;
+    return resolveMatBudgetBytes(window.location.search);
+  } catch (_) {
+    return 0;
+  }
+}
+
+/**
+ * JS-heap bytes a `THREE.DataTexture` pins through `image.data`. This is the
+ * honest number — it is measured AFTER `?textureDownscale` decimation and
+ * after the normal map's RGB→RGBA padding, rather than derived from the
+ * surface's nominal w×h. Excludes the GPU-side mip chain (~+33%), which the
+ * JS heap does not hold. Non-DataTexture / absent ⇒ 0.
+ */
+export function estimateTextureBytes(tex) {
+  const d = tex && tex.image ? tex.image.data : null;
+  return d && typeof d.byteLength === "number" ? d.byteLength : 0;
+}
+
+/** Per-DID entry size: albedo + normal + height planes + fixed overhead. */
+export function estimateMatEntryBytes(tex, normalTex, heightTex) {
+  return (
+    estimateTextureBytes(tex) +
+    estimateTextureBytes(normalTex) +
+    estimateTextureBytes(heightTex) +
+    MAT_ENTRY_OVERHEAD_BYTES
+  );
+}
+
 export class MaterialCache {
   /**
    * @param {{
@@ -2052,6 +2200,260 @@ export class MaterialCache {
     // textures resolved vs fell back without a separate probe.
     this.fallbackHits = 0;
     this.realHits = 0;
+
+    // === `?matBudgetMB=N` byte-budget LRU (see the block comment above the
+    // class for the full contract + dispose policy). `opts.matBudgetBytes`
+    // is the test/embedder seam; it is only consulted when it parses to a
+    // positive finite number, so `{}` (and every existing call site) takes
+    // the URL path, which is 0 = unbounded on any page without the flag.
+    const _optBudget = Number(opts.matBudgetBytes);
+    this._matBudgetBytes =
+      Number.isFinite(_optBudget) && _optBudget > 0
+        ? Math.floor(_optBudget)
+        : matBudgetBytesFromLocation();
+    /**
+     * did → estimated bytes, in LRU order (Map iteration is insertion order;
+     * a touch deletes + re-sets so the FIRST key is the least-recently-used).
+     * Maintained even when unbounded — sizing data for the falsifier arm.
+     * @type {Map<number, number>}
+     */
+    this._matLru = new Map();
+    this._matLruBytes = 0;
+    /** DIDs whose material has been handed to a caller (see dispose policy 3). */
+    this._matHandedOut = new Set();
+    /** WeakRefs to evicted-but-handed-out disposables; see releaseEvictedGpu(). */
+    this._matGraveyard = [];
+    this._matEvictions = 0;
+    this._matEvictedBytes = 0;
+    this._matDisposedImmediate = 0;
+    this._matDeferredDisposals = 0;
+  }
+
+  // --- `?matBudgetMB` LRU internals ---------------------------------------
+
+  /** True when a positive budget is armed (i.e. eviction can happen at all). */
+  matBudgetArmed() {
+    return this._matBudgetBytes > 0;
+  }
+
+  /**
+   * Mark `did` as most-recently-used. Called on every cache HIT (the
+   * synchronous render path `_getCachedDouble`, the async `get()` fast path,
+   * and `preload()`'s already-cached skip) so recency tracks real use rather
+   * than install order. No-op for a DID that isn't resident.
+   */
+  _touchMatEntry(did) {
+    // Unarmed is the default and `_getCachedDouble` is a bake hot path, so
+    // the recency bookkeeping is skipped entirely when no budget can consume
+    // it — default-neutral in cycles as well as in behaviour. (Consequence:
+    // in an unbounded run `_matLru` stays in INSTALL order. Nothing reads the
+    // order unless a budget is armed, and the budget is fixed at construction.)
+    if (this._matBudgetBytes <= 0) return;
+    const bytes = this._matLru.get(did);
+    if (bytes === undefined) return;
+    this._matLru.delete(did);
+    this._matLru.set(did, bytes);
+  }
+
+  /**
+   * Record that `did`'s material has left the cache, which switches its
+   * eviction from inline-dispose to deferred (dispose policy 3/4). Same
+   * unarmed short-circuit as `_touchMatEntry`.
+   */
+  _noteHandout(did) {
+    if (this._matBudgetBytes <= 0) return;
+    this._matHandedOut.add(did);
+  }
+
+  /**
+   * Install one freshly-built entry into the four per-DID maps and account
+   * for its bytes. The single write path — `get()` and `_installFromPixels`
+   * both route through here, so the LRU can never drift from the maps.
+   */
+  _installCacheEntry(did, mat, tex, normalTex, heightTex) {
+    this.textures.set(did, tex);
+    if (normalTex) this.normalTextures.set(did, normalTex);
+    if (heightTex) this.heightTextures.set(did, heightTex);
+    this.materials.set(did, mat);
+    const bytes = estimateMatEntryBytes(tex, normalTex, heightTex);
+    const prev = this._matLru.get(did);
+    if (prev !== undefined) this._matLruBytes -= prev;
+    this._matLru.delete(did);
+    this._matLru.set(did, bytes);
+    this._matLruBytes += bytes;
+    this._enforceMatBudget(did);
+    return mat;
+  }
+
+  /**
+   * Add `delta` bytes to an already-resident entry's accounting (the animated
+   * SurfaceTexture frames land asynchronously, long after install, and are a
+   * real multi-MB retainer per animated DID). Does not change recency.
+   */
+  _addMatEntryBytes(did, delta) {
+    const prev = this._matLru.get(did);
+    if (prev === undefined || !Number.isFinite(delta) || delta <= 0) return;
+    this._matLru.set(did, prev + delta);
+    this._matLruBytes += delta;
+    this._enforceMatBudget(did);
+  }
+
+  /**
+   * Evict the least-recently-used entries until the estimate is within
+   * budget. Unbounded (the default) returns immediately, before touching a
+   * single entry — this is the negative control the whole flag rests on.
+   * `protectDid` is never evicted (the entry the current call just
+   * installed), mirroring `installPaletted`'s `oldestKey === key` guard.
+   * @returns {number} entries evicted this call
+   */
+  _enforceMatBudget(protectDid = -1) {
+    if (this._matBudgetBytes <= 0) return 0;
+    let n = 0;
+    while (this._matLruBytes > this._matBudgetBytes && this._matLru.size > 1) {
+      const oldest = this._matLru.keys().next().value;
+      if (oldest === undefined || oldest === protectDid) break;
+      this._evictMatEntry(oldest);
+      n += 1;
+    }
+    return n;
+  }
+
+  /**
+   * Drop every reference this cache holds for `did` — the four base maps, the
+   * per-DID derived clones, and the animated-frame entry — then apply the
+   * dispose policy documented above the class: dispose NOW only if the DID
+   * was never handed out (provably unreferenced), otherwise hand the GPU
+   * objects to the weak deferred-release list.
+   */
+  _evictMatEntry(did) {
+    const bytes = this._matLru.get(did) ?? 0;
+    this._matLru.delete(did);
+    this._matLruBytes -= bytes;
+    if (this._matLruBytes < 0) this._matLruBytes = 0;
+
+    const disposables = [];
+    const take = (map) => {
+      const v = map.get(did);
+      if (v !== undefined) {
+        map.delete(did);
+        if (v) disposables.push(v);
+      }
+    };
+    // Base entry: the material and its three owned planes.
+    take(this.materials);
+    take(this.textures);
+    take(this.normalTextures);
+    take(this.heightTextures);
+    // Derived per-DID clones. These SHARE the base's textures (THREE's
+    // Material.clone copies map references), so only the material objects
+    // are disposables here — but they must be dropped or a stale clone
+    // outlives its base and keeps the evicted bytes reachable.
+    take(this.frontSideMaterials);
+    take(this.floorBiasMaterials);
+    take(this.staticBiasMaterials);
+    take(this.particleUnlitMaterials);
+    // VFX component variants are keyed `${did}|${setKey}|${configKey}`.
+    if (this.vfxVariants.size > 0) {
+      const prefix = `${did}|`;
+      for (const k of [...this.vfxVariants.keys()]) {
+        if (typeof k === "string" && k.startsWith(prefix)) {
+          const v = this.vfxVariants.get(k);
+          this.vfxVariants.delete(k);
+          if (v) disposables.push(v);
+        }
+      }
+    }
+    // Animated SurfaceTexture frames (a per-DID array of DataTextures, the
+    // largest hidden retainer). `entry.mat` is the base material, already
+    // collected above — push only the frames.
+    const anim = this._animatedMaterials.get(did);
+    if (anim) {
+      this._animatedMaterials.delete(did);
+      if (Array.isArray(anim.frames)) {
+        for (const f of anim.frames) if (f) disposables.push(f);
+      }
+    }
+    // Let a re-install re-check animation for this DID.
+    this._animChecked.delete(did);
+
+    const wasHandedOut = this._matHandedOut.delete(did);
+    this._matEvictions += 1;
+    this._matEvictedBytes += bytes;
+
+    if (!wasHandedOut) {
+      // Provably unreferenced: nothing outside this cache ever received the
+      // material, so disposing now cannot force a recompile on a live mesh.
+      for (const d of disposables) {
+        try { d?.dispose?.(); } catch (_) { /* fail-soft */ }
+      }
+      this._matDisposedImmediate += 1;
+      return;
+    }
+    // Handed out: a live mesh may still be drawing with it. Defer the GPU
+    // free to `releaseEvictedGpu()` and hold the objects WEAKLY so this list
+    // can never be the retainer we are here to remove.
+    this._matDeferredDisposals += 1;
+    if (typeof WeakRef !== "function") return;
+    for (const d of disposables) {
+      try { this._matGraveyard.push(new WeakRef(d)); } catch (_) { /* fail-soft */ }
+    }
+    if (this._matGraveyard.length > MAT_GRAVEYARD_CAP) {
+      // Oldest-first drop. Dropping a WeakRef only forfeits the chance to
+      // free that object's GPU handle later — the same position the
+      // unbounded pre-flag cache is in for every entry, forever.
+      this._matGraveyard.splice(0, this._matGraveyard.length - MAT_GRAVEYARD_CAP);
+    }
+  }
+
+  /**
+   * Deferred-release hook for the GPU objects of evicted entries that HAD
+   * been handed out (dispose policy 4). No default caller: the caller must
+   * be able to promise the scene no longer references them — e.g. after a
+   * full scene rebuild. Entries already collected by GC are skipped.
+   * @returns {number} objects disposed
+   */
+  releaseEvictedGpu() {
+    let n = 0;
+    for (const ref of this._matGraveyard) {
+      let obj = null;
+      try { obj = ref?.deref?.() ?? null; } catch (_) { obj = null; }
+      if (!obj) continue;
+      try { obj.dispose?.(); n += 1; } catch (_) { /* fail-soft */ }
+    }
+    this._matGraveyard.length = 0;
+    return n;
+  }
+
+  /**
+   * Read-only budget/residency snapshot. Surfaced as `__diag.materialCache()`
+   * (scene3d/index.js) so the battery relay can verify "mats bounded at cap"
+   * against the same numbers the eviction loop uses. `budgetBytes: 0` (and
+   * `budgetMB: null`) is the unauthored/unbounded default, mirroring
+   * `shardCacheBudget`'s `-1 = unbounded` convention on the Rust side.
+   */
+  materialCacheStats() {
+    return {
+      entries: this.materials.size,
+      lruEntries: this._matLru.size,
+      textures: this.textures.size,
+      normalTextures: this.normalTextures.size,
+      heightTextures: this.heightTextures.size,
+      bytes: this._matLruBytes,
+      bytesMB: +(this._matLruBytes / (1024 * 1024)).toFixed(2),
+      budgetBytes: this._matBudgetBytes,
+      budgetMB: this._matBudgetBytes > 0
+        ? +(this._matBudgetBytes / (1024 * 1024)).toFixed(2)
+        : null,
+      armed: this._matBudgetBytes > 0,
+      evictions: this._matEvictions,
+      evictedBytes: this._matEvictedBytes,
+      disposedImmediate: this._matDisposedImmediate,
+      deferredDisposals: this._matDeferredDisposals,
+      graveyard: this._matGraveyard.length,
+      handedOut: this._matHandedOut.size,
+      missingSurfaces: this.missingSurfaces.size,
+      palettedMaterials: this.palettedMaterials.size,
+    };
   }
 
   /**
@@ -2211,6 +2613,11 @@ export class MaterialCache {
     const m = this.materials.get(surfaceDid >>> 0);
     if (m) {
       this.realHits += 1;
+      // `?matBudgetMB` LRU: this IS the render-path use — bump recency, and
+      // record that the material has left the cache (so eviction can never
+      // dispose it out from under the mesh that is about to hold it).
+      this._touchMatEntry(surfaceDid >>> 0);
+      this._noteHandout(surfaceDid >>> 0);
       return m;
     }
     this.fallbackHits += 1;
@@ -3010,6 +3417,8 @@ export class MaterialCache {
     }
     const did = surfaceDid >>> 0;
     if (this.materials.has(did)) {
+      this._touchMatEntry(did);
+      this._noteHandout(did);
       return this.materials.get(did);
     }
     // Negative cache: a DID known to be catalog-absent renders the shared
@@ -3019,6 +3428,10 @@ export class MaterialCache {
       return this.fallbackMaterial;
     }
     if (this.pendingFetches.has(did)) {
+      // The in-flight promise resolves to the material and it goes to THIS
+      // caller — mark handed-out now (the DID is not resident yet, so the
+      // mark simply pre-arms the deferred-dispose branch for it).
+      this._noteHandout(did);
       return this.pendingFetches.get(did);
     }
     const p = (async () => {
@@ -3097,10 +3510,10 @@ export class MaterialCache {
         // the convention block.
         __cacheOwned: true,
       };
-      this.textures.set(did, tex);
-      if (normalTex) this.normalTextures.set(did, normalTex);
-      if (heightTex) this.heightTextures.set(did, heightTex);
-      this.materials.set(did, mat);
+      this._installCacheEntry(did, mat, tex, normalTex, heightTex);
+      // This material is being RETURNED to the caller below — handed out, so
+      // a later eviction must not dispose it inline (dispose policy 3).
+      this._noteHandout(did);
       if (this._negCacheEnabled) this.missingSurfaces.delete(did);
       // 2026-05-30 — a real (textured) material just landed for this surface;
       // drop any stale FrontSide clone that getCached(did,false) minted from
@@ -3210,7 +3623,13 @@ export class MaterialCache {
     for (const did of surfaceDids) {
       const d = did >>> 0;
       if (d === FALLBACK_SURFACE_DID) continue;
-      if (this.materials.has(d)) continue;
+      if (this.materials.has(d)) {
+        // A skipped-because-cached DID is a USE (the caller is about to
+        // `getCached` it) — bump recency so the bake's own working set is
+        // the last thing the LRU would evict.
+        this._touchMatEntry(d);
+        continue;
+      }
       // Negative cache: skip a known catalog-absent DID (no wasm fetch, no
       // re-warn). Checked after materials.has so a real material always wins.
       if (this._negCacheEnabled && this.missingSurfaces.has(d)) continue;
@@ -3649,6 +4068,8 @@ export class MaterialCache {
     // double-consume; preload() itself no longer double-consumes (see below).
     if (this.materials.has(did)) {
       try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+      this._touchMatEntry(did);
+      this._noteHandout(did);
       return this.materials.get(did);
     }
     // wasm-bindgen wrappers around a null Rust pointer throw on every
@@ -3754,10 +4175,7 @@ export class MaterialCache {
       // E3 read the same tag.
       __cacheOwned: true,
     };
-    this.textures.set(did, tex);
-    if (normalTex) this.normalTextures.set(did, normalTex);
-    if (heightTex) this.heightTextures.set(did, heightTex);
-    this.materials.set(did, mat);
+    this._installCacheEntry(did, mat, tex, normalTex, heightTex);
     if (this._negCacheEnabled) this.missingSurfaces.delete(did);
     // 2026-05-30 — invalidate the stale fallback-derived FrontSide clone (see
     // the 6-space twin in get()) so getCached(did,false) re-clones from this
@@ -3822,6 +4240,13 @@ export class MaterialCache {
         }
         mat.map = frames[0];
         this._animatedMaterials.set(d, { mat, frames, idx: 0, accumS: 0 });
+        // `?matBudgetMB` accounting: the frame set is `frameCount × w×h×4`
+        // JS-heap bytes hanging off this DID — by far the largest per-entry
+        // retainer when it exists. Charge it to the entry (recency
+        // unchanged; the entry is protected from its own enforcement pass).
+        let animBytes = 0;
+        for (const f of frames) animBytes += estimateTextureBytes(f);
+        this._addMatEntryBytes(d, animBytes);
       })
       .catch(() => {
         // Fail-soft: surface stays static on its highest-res frame.
@@ -3922,5 +4347,14 @@ export class MaterialCache {
     if (this._animChecked) this._animChecked.clear();
     this.pendingFetches.clear();
     if (this.pendingStartTimes) this.pendingStartTimes.clear();
+    // `?matBudgetMB` state. Page teardown IS the safe point for the deferred
+    // list (nothing may reference these afterwards), so drain it here; then
+    // reset the accounting so a re-used cache object starts from zero. The
+    // cumulative counters are deliberately NOT reset — they are the session
+    // totals the battery relay reports.
+    try { this.releaseEvictedGpu(); } catch (_) {}
+    if (this._matLru) this._matLru.clear();
+    this._matLruBytes = 0;
+    if (this._matHandedOut) this._matHandedOut.clear();
   }
 }

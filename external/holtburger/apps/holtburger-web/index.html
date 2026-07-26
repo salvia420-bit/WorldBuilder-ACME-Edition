@@ -2026,12 +2026,20 @@
           const __hbModule = await WebAssembly.compileStreaming(fetch(__hbWasmUrl));
           const __hbOut = await init({ module_or_path: __hbModule });
           window.__hbSharedWasm = { module: __hbModule, memory: __hbOut.memory };
+          window.__hbWasmMemory = __hbOut.memory ?? null;
           console.log(
             "[threads-lite] main wasm init shared; memory.buffer is SAB:",
             __hbOut.memory?.buffer instanceof SharedArrayBuffer,
           );
         } else {
-          await init();
+          // Keep `InitOutput.memory` — `scene3d/adapter.js` needs the identity
+          // of this instance's linear memory to tell a wasm-backed view from a
+          // JS-owned buffer, which is what lets the surface-pixel helpers skip
+          // their defensive copy on the (default) worker-transferred and
+          // `.slice()`d-getter paths. Absent ⇒ the helpers copy unconditionally,
+          // exactly as before.
+          const __hbOutMain = await init();
+          window.__hbWasmMemory = __hbOutMain?.memory ?? null;
         }
 
         // Wasm provenance banner (net-review A15-F1): pkg/ is gitignored, so a

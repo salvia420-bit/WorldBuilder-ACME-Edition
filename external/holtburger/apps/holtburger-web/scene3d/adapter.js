@@ -64,6 +64,96 @@ export function getAdapterMaxAnisotropy() {
   return _maxAnisotropy;
 }
 
+// ---- wasm-linear-memory registration (defensive-copy elision) -------
+// 2026-07-25 (DESIGN-first-bake-batches §6 follow-on). The pixel helpers
+// below copy their input before handing it to a `THREE.DataTexture`, with
+// the rationale "the wasm side can re-allocate linear memory between this
+// call and the GPU upload, detaching the original buffer". That rationale
+// is STALE on BOTH of today's paths:
+//
+//   - worker-routed pixels arrive as TRANSFERRED `ArrayBuffer`s
+//     (`scene3d/bake_transfer.js` `pushBuffer` → `postMessage` transfer
+//     list). A transferred buffer is JS-owned on this side; no wasm memory
+//     backs it and nothing can detach it.
+//   - main-thread `SurfacePixels.pixels` is ALREADY a copy: wasm-bindgen's
+//     generated getter is `getArrayU8FromWasm0(...).slice()`
+//     (`pkg/holtburger_web.js`), i.e. it slices out of linear memory into a
+//     fresh JS-owned buffer before we ever see it.
+//
+// So the copy is a full extra RGBA8 allocation + memcpy per surface, and —
+// because the copy is what `MaterialCache` retains — it also doubles the
+// transient during install. Eliding it is only sound if we can PROVE the
+// buffer is not wasm linear memory, so the elision is proof-gated: with no
+// memory registered, every helper copies exactly as before (bit-for-bit
+// default). `index.html` registers `InitOutput.memory` at boot.
+//
+// The `WebAssembly.Memory.buffer` OBJECT IDENTITY is re-read on every check —
+// growing the memory swaps in a brand-new `ArrayBuffer`, so a cached
+// reference would go stale and start mis-classifying real wasm views as
+// safe. `SharedArrayBuffer` (a threaded pkg under `?sharedWasm=on`) always
+// counts as unsafe.
+let _wasmMemory = null;
+
+/**
+ * Register the wasm instance's `WebAssembly.Memory` so the pixel helpers can
+ * tell a wasm-backed view from a JS-owned buffer. Pass `null` to un-register
+ * (restores unconditional copying). Anything without a `.buffer` is ignored.
+ */
+export function setAdapterWasmMemory(mem) {
+  _wasmMemory = mem && typeof mem === "object" && "buffer" in mem ? mem : null;
+}
+
+/** The registered memory, resolving the page-set global as a fallback. */
+function _resolveWasmMemory() {
+  if (_wasmMemory) return _wasmMemory;
+  try {
+    const g = globalThis;
+    return g.__hbWasmMemory ?? g.__hbSharedWasm?.memory ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * True unless we can PROVE `buf` is not wasm linear memory. Conservative by
+ * construction: unknown ⇒ true ⇒ the caller copies (today's behaviour).
+ */
+export function isWasmBackedBuffer(buf) {
+  if (!buf) return true;
+  try {
+    if (typeof SharedArrayBuffer !== "undefined" && buf instanceof SharedArrayBuffer) {
+      return true;
+    }
+    const mem = _resolveWasmMemory();
+    if (!mem) return true; // nothing registered — cannot prove anything
+    return buf === mem.buffer;
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * Return `ta` itself when its backing buffer is provably JS-owned, else a
+ * fresh copy. The returned array is what the `DataTexture` will own, so the
+ * caller must not reuse `ta` afterwards — every call site in this tree
+ * passes a per-call `sp.pixels` / locally-built buffer and drops it.
+ */
+function _detachedCopyIfNeeded(ta) {
+  // `byteOffset === 0 && byteLength === buffer.byteLength` keeps the elision
+  // to arrays that OWN their whole buffer — a partial view would leave the
+  // texture aliasing bytes some other view may still write.
+  if (
+    ta.byteOffset === 0 &&
+    ta.byteLength === ta.buffer.byteLength &&
+    !isWasmBackedBuffer(ta.buffer)
+  ) {
+    return ta;
+  }
+  const copy = new Uint8Array(ta.byteLength);
+  copy.set(ta);
+  return copy;
+}
+
 // ---- Module-wide texture downscale divisor ------------------------
 // 2026-05-21 — "low agentic mode" experiment. When >1, surface +
 // normal textures are decimated by box-filter through a canvas before
@@ -904,10 +994,12 @@ export function surfacePixelsToTexture(rgba8, width, height) {
       `surfacePixelsToTexture: bad input (w=${width}, h=${height}, hasPixels=${!!rgba8})`
     );
   }
-  // Always copy: the wasm side can re-allocate linear memory between
-  // this call and the GPU upload, detaching the original buffer.
-  const copy = new Uint8Array(rgba8.byteLength);
-  copy.set(rgba8);
+  // Copy off wasm linear memory (it can grow between this call and the GPU
+  // upload, detaching the view) — but ONLY when the buffer is not provably
+  // JS-owned already. Worker-transferred buffers and wasm-bindgen's
+  // `.slice()`d getters are both JS-owned, so the armed path skips a full
+  // RGBA8 alloc + memcpy per surface. See `isWasmBackedBuffer`.
+  const copy = _detachedCopyIfNeeded(rgba8);
 
   // 2026-05-21 — optional low-agentic-mode downscale. Tradeoff is
   // shipped behind `setAdapterTextureDownscale(div)`; default div=1 is
@@ -1015,10 +1107,20 @@ export function surfacePixelsToHeightTexture(heightR8, width, height) {
   if (heightR8.byteLength < expected) {
     return null;
   }
-  // Copy off the wasm-bindgen view so a future memory growth doesn't
-  // detach the buffer the GPU is reading from.
-  const copy = new Uint8Array(width * height);
-  copy.set(heightR8.subarray(0, expected));
+  // Copy off the wasm-bindgen view so a future memory growth doesn't detach
+  // the buffer the GPU is reading from — skipped when the buffer is provably
+  // JS-owned (see `isWasmBackedBuffer`) AND exactly the expected length, so
+  // the texture never aliases a longer shared buffer.
+  const copy =
+    heightR8.byteLength === expected &&
+    heightR8.byteOffset === 0 &&
+    !isWasmBackedBuffer(heightR8.buffer)
+      ? heightR8
+      : (() => {
+          const c = new Uint8Array(expected);
+          c.set(heightR8.subarray(0, expected));
+          return c;
+        })();
 
   const tex = new THREE.DataTexture(
     copy,
