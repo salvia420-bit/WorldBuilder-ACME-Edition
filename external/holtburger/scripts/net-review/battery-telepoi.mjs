@@ -13,6 +13,12 @@
 //         --label armA --out out.json --dwellMax 25 --shots <dir> (cdp only)
 //         --cdp http://127.0.0.1:9333 --account tailnet1
 //         --settleWorkMin 5 --settleFloorMs 3000 (settle-guard knobs, below)
+//         --sessionLostStops 3 --recvDeadMs 15000 (liveness-abort knobs, below)
+//
+// Exit codes: 0 all POIs accounted for · 1 partial · 2 setup/boot failure ·
+// 3 renderer-death abort or maxStops cap WITH POIs remaining (wrapper should
+// --resume) · 4 SESSION LOST (see the liveness-abort block below; summary
+// carries abortReason:"session-lost" — do NOT resume into it).
 //
 // Settle criterion: (terrainBakedLbs.size, staticsGroup.children.length,
 // cellContainers3d.size) unchanged across 3 consecutive 500 ms samples —
@@ -72,6 +78,37 @@ const LAND_POLL_MS = Number(arg("landPollMs", "100"));
 const QUIET_GAP_MS = Number(arg("quietGapMs", "65000"));
 const MAX_STOPS = Number(arg("maxStops", "0"));
 const SETTLE_MODE = arg("settleMode", "default");
+// ── Session-liveness abort (2026-07-26; mitigation (b) of the armSlim
+// teleport wedge, RESULTS-matcache-falsifier-2026-07-26.md execution-log
+// item 5). ACE's `account_login_boots_in_use=1` evicts the incumbent session
+// when the SAME account logs in a second time; from that moment every battery
+// packet is discarded by the endpoint check (NetworkManager.cs:152-155) and
+// the WS↔UDP bridge hands the page no close signal — so `@telepoi` silently
+// does nothing and the land loop records stop after stop as `no-move dup`.
+// That cost 19 consecutive POIs (Sawato→Zaikhal) of worthless route on
+// 2026-07-25 before anyone noticed.
+//
+// `no-move dup` is ALSO a legitimate class (Hotel Swank / Swank / NightClub
+// resolve to identical points_of_interest rows — ~4 per healthy full route),
+// so the no-move count alone cannot separate "duplicate destination" from "we
+// lost the server". The discriminator is a provably server-driven liveness
+// signal: `SessionHandle.sessionLastRecvAgeMs()` — ms since the most recent
+// INBOUND WS frame, stamped in exactly one place, the transport recv arm on
+// `SessionEvent::Message` (apps/holtburger-web/src/lib.rs:38956). Nothing
+// client-side can refresh it; it needs no JS drain, so a `?nullRender=1`
+// session reports it truthfully; it is one wasm call per poll.
+// (`sessionLastPingRttMs()` is NOT usable here — it is a last-MEASURED value
+// that freezes at its last good number instead of ageing, so a dead session
+// is indistinguishable from a healthy one. Pose is out too: landblockId
+// legitimately lags/freezes.)
+//
+// Abort when SESSION_LOST_STOPS consecutive no-move stops each failed to see
+// a single inbound frame within RECV_DEAD_MS across the WHOLE stop (~12 s of
+// land polling ⇒ the freshest frame the stop ever saw was already stale when
+// the stop began). A no-move stop with traffic still flowing — the legit dup —
+// resets the streak, so healthy routes are recorded exactly as before.
+const SESSION_LOST_STOPS = Number(arg("sessionLostStops", "3"));
+const RECV_DEAD_MS = Number(arg("recvDeadMs", "15000"));
 
 if (!POIS_FILE) { console.error("--pois <file> required"); process.exit(2); }
 // --settleMode workplateau (Tier-2): NOT IMPLEMENTED. The s11 settle-guard keys
@@ -133,6 +170,13 @@ if (RESUME && priorRows.length) {
 const rows = [];            // rows produced by THIS session (boot + stops)
 let aborted = null;
 let stopsCapped = false;
+// Session-liveness abort state (2026-07-26). `aborted` is deliberately LEFT
+// ALONE by this path: it means renderer-death to every downstream parser and
+// drives exit 3 / wrapper --resume, which is the wrong response to a booted
+// session. The new class gets its own fields + exit 4.
+let abortReason = null;     // null | "session-lost"
+let sessionLost = null;     // null | { reason, stops, sincePoi, atPoi, recvMinMs }
+let liveState = { streak: 0, firstPoi: null };
 let cycleT0 = Date.now();   // reset at the POI-loop start; guards finalize pre-loop
 const med = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
 const mx = (a) => (a.length ? Math.max(...a) : null);
@@ -159,6 +203,20 @@ function finalize() {
     settleCapped: ok.filter((r) => r.settleMs >= DWELL_MAX_S * 1000).length,
     sameLb: ok.filter((r) => r.sameLb).length,
     noMove: stopRows.filter((r) => r.noMove).length,
+    // ── Session-liveness abort columns (2026-07-26, ALL additive; every field
+    // above keeps its meaning). `abortReason` is null on a healthy run;
+    // "session-lost" means the run was cut short because SESSION_LOST_STOPS
+    // consecutive no-move stops saw ZERO inbound server frames — ACE had
+    // booted us and `@telepoi` was going nowhere. `sessionLost` carries the
+    // detail (first + last dead POI, streak length, freshest recv age seen).
+    // `deadNoMoveStops` counts every stop classified dead even when the run
+    // was not aborted, and `recvAgeMed/MaxMs` are the per-stop freshest-frame
+    // ages (null on a pkg without `sessionLastRecvAgeMs`).
+    abortReason, sessionLost,
+    sessionLostStops: SESSION_LOST_STOPS, recvDeadMs: RECV_DEAD_MS,
+    deadNoMoveStops: stopRows.filter((r) => r.sessionLive === false).length,
+    recvAgeMedMs: med(stopRows.map((r) => r.recvMinMs).filter((v) => v != null)),
+    recvAgeMaxMs: mx(stopRows.map((r) => r.recvMinMs).filter((v) => v != null)),
     workDeltaMedian: med(ok.map((r) => r.workDelta).filter((v) => v != null)),
     reclaimDeltaMedian: med(ok.map((r) => r.reclaimDelta).filter((v) => v != null)),
     // wasm linear-memory per-stop residency (docs/1122.md §5.6, S15): med/max
@@ -220,7 +278,12 @@ function finalize() {
     `sessions=${summary.sessions} sessionIdx=${SESSION_IDX} lowWork=${summary.lowWorkSettles} ` +
     `boots=${summary.boots}(iw=${summary.bootOutcomes.inWorld}/stall=${summary.bootOutcomes.stall}/err=${summary.bootOutcomes.error}) bootMed=${summary.bootMedMs}ms` +
     (stopsCapped ? ` STOPS-CAPPED(${MAX_STOPS})` : "") +
-    (aborted ? ` ABORTED(${aborted})` : ""));
+    (aborted ? ` ABORTED(${aborted})` : "") +
+    (sessionLost
+      ? ` SESSION-LOST(${sessionLost.stops} dead no-move stops ${sessionLost.sincePoi}→${sessionLost.atPoi}; ` +
+        `freshest inbound frame ${sessionLost.recvMinMs}ms old ≥ ${RECV_DEAD_MS}ms — ` +
+        `another login almost certainly booted this account)`
+      : ""));
   return summary;
 }
 
@@ -351,6 +414,20 @@ const sample = () => raced(helpers.evalInPage(() => {
     lru: st.resident ?? null, parked: st.parked ?? null,
     parkedTotal: st.parkedTotal ?? null, unparkedTotal: st.unparkedTotal ?? null,
     evicted: st.evicted ?? null,
+    // Session liveness (2026-07-26): ms since the most recent INBOUND WS
+    // frame. Stamped in exactly one place — the wasm transport recv arm on
+    // `SessionEvent::Message` (src/lib.rs:38956) — so it is provably
+    // server-driven and cannot be refreshed by anything the client does.
+    // null on a pkg without the accessor (fail-soft ⇒ the liveness abort
+    // never arms); 4294967295 (u32::MAX) means "nothing has EVER arrived /
+    // post-disconnect" and is passed through as the huge value it is.
+    recvAge: (() => {
+      try {
+        const h = window.__sessionHandle;
+        if (typeof h?.sessionLastRecvAgeMs !== "function") return null;
+        return h.sessionLastRecvAgeMs() >>> 0;
+      } catch (_) { return null; }
+    })(),
     // Streamed-work + reclaim-gate telemetry (2026-07-10 follow-up #4):
     // settle-stability alone can't tell settled from streaming-starved.
     work: (typeof window.__bakeWorkerSeq === "function") ? window.__bakeWorkerSeq() : null,
@@ -535,6 +612,46 @@ function settleStep(state, s, beforeWork, elapsedMs, opts) {
 }
 // </settle-guard>
 
+// <liveness-abort> (2026-07-26 — mitigation (b) of the armSlim teleport wedge;
+// see the SESSION_LOST_STOPS block at the top for the WHY and for why
+// `sessionLastRecvAgeMs()` is the signal). Pure per-stop reducer, factored out
+// exactly like settleStep so it can be driven with synthetic stop sequences by
+// scripts/net-review/test_battery_liveness_abort.mjs (no browser, no boot).
+//
+//   state = { streak, firstPoi }
+//   stop  = { poi, noMove, recvMinMs }   recvMinMs = the SMALLEST recvAge seen
+//           across every sample of that stop (before + land + settle) — i.e.
+//           the freshest inbound server frame the stop ever observed. null =
+//           no telemetry (legacy pkg / eval failure).
+//   opts  = { stops, deadMs }
+//
+// Per-stop classification:
+//   landed (noMove false)         → alive by construction        → reset
+//   no-move, recvMinMs == null    → UNKNOWN; fail-soft           → reset
+//                                   (never abort on a missing instrument)
+//   no-move, recvMinMs <  deadMs  → LEGIT DUPLICATE POI: the server is still
+//                                   talking to us (Hotel Swank / Swank /
+//                                   NightClub class, ~4 per healthy route)
+//                                                                → reset
+//   no-move, recvMinMs >= deadMs  → dead window                  → streak++
+// Abort fires the moment the streak reaches opts.stops. Returns
+// { state, live, abort }, where `live` is the tri-state the stop row records
+// as `sessionLive` and `abort` is null or the summary's `sessionLost` object.
+function livenessStep(state, stop, opts) {
+  const live = stop.recvMinMs == null ? null : (stop.recvMinMs < opts.deadMs);
+  if (!stop.noMove || live !== false) {
+    return { state: { streak: 0, firstPoi: null }, live, abort: null };
+  }
+  const streak = state.streak + 1;
+  const next = { streak, firstPoi: state.firstPoi ?? stop.poi };
+  const abort = streak >= opts.stops
+    ? { reason: "session-lost", stops: streak, sincePoi: next.firstPoi,
+        atPoi: stop.poi, recvMinMs: stop.recvMinMs }
+    : null;
+  return { state: next, live, abort };
+}
+// </liveness-abort>
+
 // rows / aborted / cycleT0 are hoisted above the boot section (so a boot stall
 // can flush). Reset cycleT0 to the active-cycle start here.
 cycleT0 = Date.now();
@@ -552,9 +669,18 @@ for (const poi of POIS) {
   const seeJsu = (s) => {
     if (s && typeof s.jsu === "number") jsPeak = jsPeak == null ? s.jsu : Math.max(jsPeak, s.jsu);
   };
+  // Freshest inbound server frame observed anywhere in this stop (MIN of the
+  // recv AGE, so smaller = more alive). Sampled on every poll for the same
+  // reason jsPeak is: a single post-settle read would miss a stop that was
+  // alive at the start and dead by the end (and, for a no-move stop, there is
+  // no post-settle read at all — the settle loop is skipped).
+  let recvMin = null;
+  const seeRecv = (s) => {
+    if (s && typeof s.recvAge === "number") recvMin = recvMin == null ? s.recvAge : Math.min(recvMin, s.recvAge);
+  };
   try {
   const before = await sample();
-  seeJsu(before);
+  seeJsu(before); seeRecv(before);
   const t0 = Date.now();
   await chat("@telepoi " + poi);
   // land = landblock changed (high-16 OR full id — dungeons can share hi16)
@@ -569,7 +695,7 @@ for (const poi of POIS) {
   for (let i = 0; i < LAND_ITERS; i++) {
     await page.waitForTimeout(LAND_POLL_MS);
     const s = await sample();
-    seeJsu(s);
+    seeJsu(s); seeRecv(s);
     if (s.lb != null && before.lb != null && s.lb !== before.lb) { landed = true; landMs = Date.now() - t0; break; }
     if (s.px != null && before.px != null
         && Math.hypot(s.px - before.px, s.py - before.py) > 8) {
@@ -584,7 +710,7 @@ for (const poi of POIS) {
     for (let i = 0; i < (DWELL_MAX_S * 2); i++) {
       await page.waitForTimeout(500);
       const s = await sample();
-      seeJsu(s);
+      seeJsu(s); seeRecv(s);
       endStats = s;
       const step = settleStep(st, s, before.work, Date.now() - s0,
         { workMin: SETTLE_WORK_MIN, floorMs: SETTLE_FLOOR_MS });
@@ -624,8 +750,17 @@ for (const poi of POIS) {
     ? (endStats.evicted - before.evicted)
       + ((endStats.parkedTotal ?? 0) - (before.parkedTotal ?? 0))
     : null;
+  // Session-liveness verdict for THIS stop (2026-07-26). Pure reducer, see the
+  // <liveness-abort> block: a no-move stop that saw NO inbound server frame for
+  // the whole stop advances the dead streak; anything else (landed, a no-move
+  // with traffic = the legit duplicate POI, or no telemetry at all) resets it.
+  const lv = livenessStep(liveState, { poi, noMove, recvMinMs: recvMin },
+    { stops: SESSION_LOST_STOPS, deadMs: RECV_DEAD_MS });
+  liveState = lv.state;
   rows.push({ kind: "stop", poi, sessionIdx: SESSION_IDX, landed, sameLb, noMove, landMs, settleMs,
     settleGuard, lowWork, workDelta, reclaimDelta, ...(endStats ?? {}),
+    // AFTER the endStats spread so they can never be clobbered by a sample key.
+    recvMinMs: recvMin, sessionLive: lv.live, deadStreak: lv.state.streak,
     wasmMemMainMB, wasmMemWorkerMB,
     jsV8PeakMB,
     shardMainMB: dm?.shardMB ?? null, shardWkrMB: dw?.shardMB ?? null,
@@ -644,7 +779,23 @@ for (const poi of POIS) {
     `shard=${dm?.shardMB ?? "-"}/${dw?.shardMB ?? "-"}MB surf=${dm?.surfMB ?? "-"}/${dw?.surfMB ?? "-"}MB ` +
     `mats=${endStats?.mats ?? "-"}@${endStats?.matMB ?? "-"}MB/${endStats?.matBudgetMB ?? "unbounded"} evict=${endStats?.matEvict ?? "-"} ` +
     `ent=${endStats?.entMB ?? "-"}MB hi=${endStats?.entHi ?? "-"}MB ` +
-    `pal=${endStats?.palSigs ?? "-"}@${endStats?.palMB ?? "-"}MB hi=${endStats?.palHiMB ?? "-"}MB palEvict=${endStats?.palEvict ?? "-"}`);
+    `pal=${endStats?.palSigs ?? "-"}@${endStats?.palMB ?? "-"}MB hi=${endStats?.palHiMB ?? "-"}MB palEvict=${endStats?.palEvict ?? "-"} ` +
+    `recv=${recvMin ?? "-"}ms live=${lv.live ?? "?"}${lv.state.streak ? ` deadStreak=${lv.state.streak}` : ""}`);
+  // Session lost: ACE booted this account (a second login on the same account)
+  // and the bridge never told the page — every further @telepoi would be
+  // recorded as a bogus `no-move dup`. Stop the run NOW with a named reason
+  // rather than "completing" a worthless route. Exit 4, NOT 3: a wrapper that
+  // --resumes would just re-login into the same fight.
+  if (lv.abort) {
+    sessionLost = lv.abort;
+    abortReason = lv.abort.reason;
+    console.error(`[battery] SESSION LOST at ${poi}: ${lv.abort.stops} consecutive no-move stops ` +
+      `(${lv.abort.sincePoi}→${lv.abort.atPoi}) with ZERO inbound server frames ` +
+      `(freshest ${lv.abort.recvMinMs}ms old ≥ recvDeadMs=${RECV_DEAD_MS}). ` +
+      `Almost certainly a second login on account '${ACCOUNT}' (ACE account_login_boots_in_use). ` +
+      `Aborting — writing partial results.`);
+    break;
+  }
   // --maxStops K: fixed-length sessions. After K stops in THIS session close and
   // exit for-relaunch (exit 3 → wrapper --resume), so every session holds K
   // stops and settleMedBySession[j] is age-matched across arms by construction.
@@ -674,8 +825,13 @@ try { await raced(closeFn()); } catch (_) { /* dead browser — exit anyway */ }
 // no-move duplicates are accounted-for stops, not misses (see the land loop).
 // Exit 3 both on a renderer-death abort AND on a clean maxStops cap with POIs
 // still remaining, so the wrapper relaunches (--resume) a fresh session.
+// Exit 4 for a lost session — a DISTINCT code so the wrapper's `ec == 3 →
+// --resume` arm does not fire (resuming would re-login into the same eviction
+// fight and record more bogus no-move dups); summary.abortReason tells the
+// operator why. Checked first: the liveness abort never sets `aborted`.
 process.exit(
-  aborted ? 3
+  sessionLost ? 4
+  : aborted ? 3
   : (stopsCapped && summary.attempted < summary.pois) ? 3
   : (summary.landed + summary.noMove) === summary.pois ? 0 : 1
 );
