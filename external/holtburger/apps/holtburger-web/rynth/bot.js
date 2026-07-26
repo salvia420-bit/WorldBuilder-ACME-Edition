@@ -739,7 +739,16 @@ async function wireAiDirector(bot, aiConfig, base) {
     import(`${base}/ai/director.js`),
     import(`${base}/ai/operator_stop.js`),
   ]);
+  // Failure log (2026-07-26): both the client and the director default their
+  // `log` hook to a no-op, so every LLM failure lived ONLY in the journal —
+  // a CDP console listener on the live rig saw nothing, and the 2026-07-26
+  // soak's hour of HTTP 401s could not be read off the console at all. These
+  // hooks only fire on retry/failure paths (llm_client retry + chat-failed,
+  // director _fail, actions.js action-error/truncation), so the added console
+  // volume is bounded by the failures themselves.
+  const aiLog = (m) => { try { console.warn("[rynthAI]", m); } catch { /* no console */ } };
   const client = new lc.LlmClient({
+    log: aiLog,
     apiKey,
     baseUrl: aiCfg?.baseUrl, // undefined -> client defaults (OpenRouter)
     timeoutMs: aiCfg?.timeoutMs, // undefined -> client default (60s); slow fp8 providers need 120s
@@ -769,6 +778,7 @@ async function wireAiDirector(bot, aiConfig, base) {
   const director = new dr.RynthAiDirector(bot, {
     client,
     journal,
+    log: aiLog, // see aiLog above — failure paths only
     intervalMinutes: aiCfg?.intervalMinutes, // undefined -> director defaults
     minIntervalMinutes: aiCfg?.minIntervalMinutes,
     maxIntervalMinutes: aiCfg?.maxIntervalMinutes, // caps LLM-supplied next_check_minutes

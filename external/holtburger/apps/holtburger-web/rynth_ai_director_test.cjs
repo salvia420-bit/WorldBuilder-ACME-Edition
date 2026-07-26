@@ -225,6 +225,27 @@ const resp = (json) => ({ text: JSON.stringify(json), json, usage: { prompt: 10,
     check("disable: calls counted", d.status.calls === 3);
   }
 
+  // ---- Auth rejection disables on the FIRST failure (2026-07-26): a revoked
+  // key can't recover between check-ins, so the remaining strikes only buy
+  // look-alike errors that read as an intermittent model fault.
+  {
+    const journal = makeJournal();
+    const authErr = new Error('HTTP 401: {"error":{"message":"User not found.","code":401}}');
+    authErr.kind = "auth";
+    const d = new RynthAiDirector({}, {
+      client: makeClient([authErr]), journal, observe: mockObserve,
+      execute: makeExec(), validate: mockValidate,
+      maxErrorsBeforeDisable: 5, intervalMinutes: 5,
+    });
+    d.start();
+    await d.checkNow();
+    check("auth: disabled after ONE rejection",
+      d.status.enabled === false && d.status.nextCheckAt === null && d.status.consecutiveErrors === 1);
+    check("auth: journal names the key as the fault and the remedy",
+      journal.kinds("error").some((e) => /REJECTED the API key/.test(e.text) && /setKey/.test(e.text)),
+      JSON.stringify(journal.kinds("error")));
+  }
+
   // ---- Idle-guard: an AI-paused kernel is resumed when the director
   // self-disables (2026-07-16 live-soak finding: gpt-oss paused for mana,
   // the next model's failing check-ins left the bot parked forever).

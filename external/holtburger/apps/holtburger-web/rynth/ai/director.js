@@ -584,15 +584,29 @@ export class RynthAiDirector {
 
   /** Shared failure path: journal, count toward the CONSECUTIVE-error disable
    * (any check-in failure counts — LLM, observe, internal — so a persistently
-   * broken loop still self-disables), else retry at intervalMinutes. */
+   * broken loop still self-disables), else retry at intervalMinutes.
+   *
+   * Auth (llm_client kind "auth" = HTTP 401/403) disables on the FIRST
+   * failure instead of the 5th: a rejected key never fixes itself between
+   * check-ins, so the remaining strikes only buy silent, look-alike errors.
+   * The 2026-07-26 eyetest soak spent an hour re-running that pattern — the
+   * stored OpenRouter key had been revoked, every call came back
+   * `HTTP 401: {"error":{"message":"User not found."…}}`, and each 5-strike
+   * disable was silently re-armed by the next ?bot=1 reconnect reboot, so
+   * the journal read as an intermittent model problem rather than a dead
+   * credential. Fail loud, fail once, and name the remedy. */
   _fail(where, e) {
     this._consecutiveErrors++;
     const msg = `${where}: ${String((e && e.message) || e)}`;
     this._journal("error", msg);
     this._log(`[ai] director ${msg}`);
-    if (this._consecutiveErrors >= this.maxErrorsBeforeDisable) {
+    const authRejected = e != null && e.kind === "auth";
+    if (authRejected || this._consecutiveErrors >= this.maxErrorsBeforeDisable) {
       this.stop();
-      this._journal("error", `disabled after ${this._consecutiveErrors} consecutive errors`);
+      this._journal("error", authRejected
+        ? "disabled: the provider REJECTED the API key (HTTP 401/403) — the key is missing, revoked or wrong. "
+          + 'Fix: rynthAI.setKey("sk-or-…") then rynthAI.start() (or reload).'
+        : `disabled after ${this._consecutiveErrors} consecutive errors`);
       this._idleGuard();
     } else {
       this._schedule(this.intervalMinutes);
