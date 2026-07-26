@@ -343,6 +343,57 @@ console.log("\n[uncharged-signature valve]");
 }
 
 // ===========================================================================
+// 4b. REMINT COUNTER — `palRemint`, the churn COST (2026-07-26 museum arm)
+// ===========================================================================
+// `evictions` counts churn; a signature evicted and never wanted again costs
+// nothing. `remints` counts the evictions that were RE-NEEDED — each one is a
+// wearer that paid a full decode round-trip (and rendered unrecolored across
+// it) for something the cache used to hold. It is the headless proxy for the
+// "visual fallback flash" the palBudget decision rule turns on.
+console.log("\n[remint counter]");
+{
+  const mc = new MaterialCache({ palBudgetBytes: 4 * MB });
+  for (let i = 0; i < 6; i += 1) installSig(mc, i, 1 * MB);
+  const st0 = mc.palettedCacheStats();
+  check("evictions happened but nothing was re-needed yet ⇒ remints 0",
+    st0.evictions === 2 && st0.remints === 0,
+    `${st0.evictions}/${st0.remints}`);
+  // Signature 0 was evicted first; asking for it again is the thrash event.
+  installSig(mc, 0, 1 * MB);
+  const st1 = mc.palettedCacheStats();
+  check("re-installing an EVICTED signature counts one remint",
+    st1.remints === 1, String(st1.remints));
+  // A live key re-installed (the R-8 poisoned-decode replace path) is NOT a
+  // remint — nothing was lost, nothing re-decoded from a cache miss.
+  const liveKey = mc.palettedMaterials.keys().next().value;
+  const liveIdx = Number(String(liveKey).split("|")[0]);
+  installSig(mc, liveIdx, 1 * MB);
+  check("re-installing a still-LIVE signature is not a remint",
+    mc.palettedCacheStats().remints === 1,
+    String(mc.palettedCacheStats().remints));
+  // Evict→remint→evict→remint counts twice for the same key.
+  for (let i = 10; i < 16; i += 1) installSig(mc, i, 1 * MB);
+  installSig(mc, 0, 1 * MB);
+  check("a second evict→remint cycle for the same key counts again",
+    mc.palettedCacheStats().remints === 2,
+    String(mc.palettedCacheStats().remints));
+  check("the evicted-key ring stays bounded and is reported",
+    typeof mc.palettedCacheStats().evictedKeysTracked === "number" &&
+    mc.palettedCacheStats().evictedKeysTracked <= 8192,
+    String(mc.palettedCacheStats().evictedKeysTracked));
+}
+{
+  // A budget that fits the working set: evictions may still fire, remints must
+  // not — this is the shape a correctly-sized default produces.
+  const mc = new MaterialCache({ palBudgetBytes: 64 * MB });
+  for (let i = 0; i < 40; i += 1) installSig(mc, i, 1 * MB);
+  for (let i = 0; i < 40; i += 1) installSig(mc, i, 1 * MB); // second pass: all hits-worth
+  const st = mc.palettedCacheStats();
+  check("a budget above the working set ⇒ zero remints",
+    st.remints === 0 && st.evictions === 0, `${st.remints}/${st.evictions}`);
+}
+
+// ===========================================================================
 // 5. DIAG SURFACE — `__diag.palettedCache()` and the relay columns
 // ===========================================================================
 console.log("\n[diag fields]");
@@ -354,7 +405,7 @@ console.log("\n[diag fields]");
   const required = [
     "signatures", "textures", "cap", "atCap", "bytes", "bytesMB",
     "hiWaterBytes", "hiWaterMB", "hiWaterSignatures", "evictions",
-    "evictedBytes", "evictedMB", "installs",
+    "evictedBytes", "evictedMB", "installs", "remints", "evictedKeysTracked",
   ];
   check("palettedCacheStats keeps the whole pre-change contract",
     required.every((k) => k in st), JSON.stringify(Object.keys(st)));

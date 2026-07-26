@@ -132,6 +132,12 @@ const _SURFACE_WRAP_CLAMP = (() => {
 // See the `?palBudgetMB` block below for the replacement.
 const PALETTED_CACHE_CAP = 256;
 
+// How many recently-evicted paletted keys `_palEvictedKeys` remembers, so
+// `palRemint` (see the constructor) can tell a re-needed eviction from a
+// harmless one. Key strings are ~20-60 B, so the whole ring is well under
+// 1 MB — three orders below the budget it instruments.
+const PAL_EVICT_MEMORY_KEYS = 8192;
+
 // Phase 0.1 — shadow casting gate. Translucent and Additive surfaces
 // don't cast (shadow pass is depth-only — would render a solid box,
 // and three.js warns). Opaque + ClipMap honour alphaTest, so they cast.
@@ -2216,6 +2222,27 @@ export class MaterialCache {
     this._palHiWaterSigs = 0;    // max palettedMaterials.size ever observed
     /** @type {Map<string, number>} charged bytes per live paletted key */
     this._palKeyBytes = new Map();
+    // `palRemint` (2026-07-26, museum-density confirmation of the 64 MiB
+    // default) — the THRASH-COST counter, and the only headless proxy for the
+    // "visual fallback flash" the palBudget decision rule asks about.
+    //
+    // `_palEvictions` alone cannot answer it: evicting a signature no wearer
+    // ever asks for again is the budget working, and costs nothing. What costs
+    // is an eviction that is immediately re-needed — the next wearer with that
+    // signature takes the full `fetchEntitySurfacesPixels` round-trip (mean
+    // ~897 ms) instead of a cache hit, and renders untextured/unrecolored for
+    // that window (entities.js spawn path: a paletted miss goes to
+    // `missDids`; an empty/pending decode paints `fallbackMaterial`). A
+    // re-install of a signature THIS cache evicted is exactly that event.
+    //
+    // Bounded by construction: `_palEvictedKeys` is a FIFO of at most
+    // `PAL_EVICT_MEMORY_KEYS` recently-evicted key strings (insertion-ordered
+    // Set, oldest dropped), so the instrument can never become the leak it
+    // measures. A remint older than that window is simply not counted —
+    // the counter is a floor, never an over-count.
+    /** @type {Set<string>} recently-evicted keys (FIFO, bounded) */
+    this._palEvictedKeys = new Set();
+    this._palRemints = 0;        // installs of a signature this cache evicted
     // `?palBudgetMB=N` — BYTE budget over `palettedMaterials`/`palettedTextures`
     // (see the block comment above the class). `0` = LEGACY `PALETTED_CACHE_CAP`
     // count mode (`?palBudgetMB=off`). `opts.palBudgetBytes` is the
@@ -2680,6 +2707,13 @@ export class MaterialCache {
       evictedBytes: this._palEvictedBytes,
       evictedMB: +(this._palEvictedBytes / 1048576).toFixed(2),
       installs: this._palInstalls,
+      // `palRemint` — evictions that were re-needed (see the constructor).
+      // `evictions` is the churn count; THIS is the churn COST: each remint is
+      // one wearer that paid a decode round-trip and rendered unrecolored
+      // across it. A budget large enough for the working set drives it to ~0
+      // even while `evictions` is nonzero.
+      remints: this._palRemints,
+      evictedKeysTracked: this._palEvictedKeys.size,
     };
   }
 
@@ -2919,6 +2953,11 @@ export class MaterialCache {
    */
   installPaletted(surfaceDid, paletteId, subPalettes, material, texture = null) {
     const key = this._paletteKey(surfaceDid, paletteId, subPalettes);
+    // `palRemint` — this signature was evicted and is now being re-minted:
+    // a wearer paid a full decode round-trip (and rendered unrecolored across
+    // it) for something the cache used to hold. Delete-on-count so a second
+    // evict→remint cycle for the same key counts again.
+    if (this._palEvictedKeys.delete(key)) this._palRemints += 1;
     // Stash the exact dedup key so `getCachedVariantFromPaletted` can build a
     // VFX variant of this recolored base without re-plumbing (paletteId, subPalettes).
     material.userData = { ...(material.userData || {}), __cacheOwned: true, __paletteKey: key };
@@ -2978,6 +3017,13 @@ export class MaterialCache {
         this._palEvictedBytes += evictedBytes;
       }
       this._palEvictions += 1;
+      // Remember the key so a later re-install is counted as a remint (the
+      // thrash/flash event). Bounded FIFO — Set iteration is insertion-ordered,
+      // so the first key is the oldest.
+      this._palEvictedKeys.add(oldestKey);
+      if (this._palEvictedKeys.size > PAL_EVICT_MEMORY_KEYS) {
+        this._palEvictedKeys.delete(this._palEvictedKeys.keys().next().value);
+      }
       try { oldMat?.dispose?.(); } catch (_) {}
       try { oldTex?.dispose?.(); } catch (_) {}
     }
