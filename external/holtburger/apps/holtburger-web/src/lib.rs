@@ -8694,7 +8694,7 @@ pub struct SurfacePixels {
     ///
     /// ALSO ALWAYS EMPTY for the **palette-composed** class (2026-07-26,
     /// "composed-slim"): a decode with `base_palette_id != 0` or a non-empty
-    /// sub-palette list is the dyed-ENTITY path, and all three entity
+    /// sub-palette list is the recolored-ENTITY path, and all three entity
     /// consumers read `sp.pixels` only (`scene3d/entities.js` :3793, :4914,
     /// :9649). The procedural planes were computed, cached, and shipped
     /// across the bake-worker transfer with no reader — see
@@ -9017,7 +9017,7 @@ pub fn surface_neg_cache_clear() -> u32 {
 // (surfaceCache* fields) and disabled wholesale with `?surfaceCache=off`.
 //
 // S16 (B-executor): the SAME store now also memoises palette-COMPOSED
-// (dyed-entity) decodes under an exact `(did, base, subs)` composite key
+// (recolored-entity) decodes under an exact `(did, base, subs)` composite key
 // (`SurfaceCacheKey::Composed`), sharing the one 96 MiB byte budget/LRU with
 // the palette-free class. Composed admission rides its OWN escape
 // `?palSurfaceCache=off` (the master `?surfaceCache=off` still disables both);
@@ -9037,7 +9037,7 @@ fn parse_surface_cache_flag(search: &str) -> bool {
 }
 
 /// S16 (B-executor): parse `?palSurfaceCache`. DEFAULT-ON; independent escape
-/// for the palette-COMPOSED (dyed-entity) admission class only. Any of
+/// for the palette-COMPOSED (recolored-entity) admission class only. Any of
 /// `palSurfaceCache=off` / `=0` / `=false` disables composed get+insert; the
 /// palette-free class is untouched. House flag-footgun rule: ABSENT reads ON,
 /// only an explicit off-form is OFF.
@@ -9299,13 +9299,13 @@ fn configured_surface_budget_bytes() -> (usize, usize) {
 ///
 /// DESIGN — SHARED store, not a sibling. The one `ByteBudgetLru` (single
 /// 96 MiB budget, one LRU/eviction discipline) now holds both classes under
-/// this enum so a town's palette-free landscape decodes and its dyed-NPC
+/// this enum so a town's palette-free landscape decodes and its recolored-NPC
 /// composed decodes compete for the SAME byte budget and evict each other
 /// by true recency — exactly the retail `DBOCache` invariant. A sibling
 /// store would need its own budget (double the discipline, and two caches
 /// racing to OOM independently). Widening the key to an enum was chosen over
 /// a `u32` hash because the composite `(did, base, subs)` MUST be collision-
-/// free: two dye variants of the same surface DID differ only in the sub-
+/// free: two recolor variants of the same surface DID differ only in the sub-
 /// palette triples, and a hash collision would bleed one entity's colour
 /// onto another. The `PaletteFree(did)` variant is byte-for-byte the old B1
 /// key identity — the palette-free accessors are UNCHANGED at the API
@@ -9455,10 +9455,10 @@ fn clone_surface_pixels(sp: &SurfacePixels) -> SurfacePixels {
 /// palette-free entry carries all three planes (4 + 3 + 1 B/px ≈ 8 B/px); a
 /// COMPOSED entry stores **pixels only** (4 B/px) because
 /// `fetch_entity_surface_pixels_impl` no longer computes normal/height for
-/// that class — nothing reads them (all three dyed-entity consumers take
+/// that class — nothing reads them (all three recolored-entity consumers take
 /// `sp.pixels`), and retail likewise composites RGBA-only per recolor. So a
 /// composed entry charges ~half what the same DID's palette-free entry does,
-/// and `surfaceCacheBytes` / `?surfaceBudgetMB=` hold ~2× the dye variants per
+/// and `surfaceCacheBytes` / `?surfaceBudgetMB=` hold ~2× the recolor variants per
 /// megabyte. The function itself is unchanged — it still sums whatever plane
 /// lengths the entry actually has.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -9702,10 +9702,10 @@ fn fetch_surface_pixels_cached<S: holtburger_dat::ResourceSource + ?Sized>(
 /// byte-identical to the static path
 /// (`tests_surface_cache::entity_palette_free_parity_with_static_path`).
 ///
-/// S16 (B-executor): palette-COMPOSED (dyed-entity) requests now memoise too,
+/// S16 (B-executor): palette-COMPOSED (recolored-entity) requests now memoise too,
 /// under the exact `(did, base, subs)` composite key in the SAME store, gated
-/// on the independent `palSurfaceCache` escape. A hit for a given dye variant
-/// is a zero-record `Arc` clone-out; distinct dye variants of one DID key
+/// on the independent `palSurfaceCache` escape. A hit for a given recolor variant
+/// is a zero-record `Arc` clone-out; distinct recolor variants of one DID key
 /// distinctly and never cross-contaminate.
 #[cfg(any(target_arch = "wasm32", test))]
 fn fetch_entity_surface_pixels_cached<S: holtburger_dat::ResourceSource + ?Sized>(
@@ -11907,7 +11907,7 @@ pub async fn fetch_dye_preview_pixels(
 ///
 /// Wave 7.7 (2026-05-24). Used by the dye-preview foundation — Phase
 /// B of `handoff-clothing-table-2026-05-24.md` § C. The spawn-time
-/// dye compositor (lib.rs::fetch_entity_surface_pixels_impl) already
+/// recolor compositor (lib.rs::fetch_entity_surface_pixels_impl) already
 /// reads Palette records internally; this export is for any plugin
 /// that needs to inspect the raw colour table (dye picker thumbnails,
 /// character creation swatches, debug overlays).
@@ -12384,7 +12384,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     //
     // Base1ClipMap (surface_type & 0x4): paletted (P8/Index16) clip-map bodies
     // synthesize cutout transparency from palette index < 8 (retail
-    // ImgTex::CopyIntoData). This is the DYED-entity render path (dolls,
+    // ImgTex::CopyIntoData). This is the RECOLORED-entity render path (dolls,
     // Virindi energy clusters) — without the clip flag their bodies decode
     // fully opaque and render as solid boxes.
     let clipmap = (surface_type & 0x4) != 0;
@@ -12429,7 +12429,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // A10 G2 (S14): census counts PALETTE-FREE decodes only — a
             // palette-composed decode of the same DID is per-combo work
             // with a distinct output, not amplification (the first S5b
-            // run read dyed-NPC re-decodes as workerAmp 2.19). The
+            // run read recolored-NPC re-decodes as workerAmp 2.19). The
             // palette-free class is exactly what B1 dedupes.
             if !is_composed {
                 decode_diag_surface_decoded(g2_requested_did);
@@ -12444,14 +12444,14 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // w*h and its output (3 B/px normal + 1 B/px height) is
             // cached, `Arc`-cloned on every hit, and copied across the
             // bake-worker structured transfer (`scene3d/bake_transfer.js`
-            // :319-329) — for NO reader. All three dyed-entity consumers
+            // :319-329) — for NO reader. All three recolored-entity consumers
             // take `sp.pixels` and nothing else (entities.js :3793,
             // :4914/:5004, :9649); `surfacePixelsToNormalTexture` /
             // `...HeightTexture` are reached only from the palette-free
             // `MaterialCache` install path (materials.js :3577/:3583,
             // :4257/:4259). Retail agrees in spirit: a recolor composites
             // the RGBA texture only — the bump/height authoring is a
-            // property of the base surface, not of the dye.
+            // property of the base surface, not of the recolor.
             //
             // Palette-free requests through this same function keep
             // today's behaviour byte-for-byte (the `else` arm below is
@@ -12489,7 +12489,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         }
         Err(e) => {
             decode_diag_decode_fail();
-            // 2026-07-02 hardening: this arm was fully silent — a dyed-entity
+            // 2026-07-02 hardening: this arm was fully silent — a recolored-entity
             // decode failure (missing/corrupt palette, bad sub-palette splice)
             // fell back to the grey/white default material with zero console
             // evidence. Name it like the statics path does; quiet during
@@ -51509,7 +51509,7 @@ mod tests_substitution {
 
     /// base_palette_id = override + no overlays = override wins.
     /// Mirrors C# `objDesc.PaletteID = PaletteBaseDID.Value` with no
-    /// SubPalettes (a creature's PaletteBase but no clothing dyes).
+    /// SubPalettes (a creature's PaletteBase but no clothing sub-palette overlays).
     #[test]
     fn entity_surface_pixels_base_override_replaces_intrinsic() {
         let (source, surface_id, override_pal_id, _) = build_palette_overlay_source();
@@ -57056,7 +57056,7 @@ mod tests_surface_cache {
     // S16 (B-executor): composed-class cache tests. The palette-free entity
     // path (`base==0, subs empty`) keeps its own coexisting entries; a
     // palette-composed request memoises under the exact `(did, base, subs)`
-    // composite so dye variants of one DID never cross-contaminate.
+    // composite so recolor variants of one DID never cross-contaminate.
 
     #[test]
     fn composed_cached_result_is_byte_identical_to_uncached_compose() {
@@ -57064,16 +57064,16 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_0004u32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
-        let dye = 0x0400_2002u32;
-        add_palette(&mut source, dye, 0xFFD0_E0F0);
+        let recolor = 0x0400_2002u32;
+        add_palette(&mut source, recolor, 0xFFD0_E0F0);
         // Reference: straight through the impl, no cache.
-        let reference = fetch_entity_surface_pixels_impl(&source, did, dye, &[]);
+        let reference = fetch_entity_surface_pixels_impl(&source, did, recolor, &[]);
         assert_eq!(reference.width, 1, "composed fixture decodes");
         // Cached path: first call decodes + memoises, second is a hit.
-        let (first, m1) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let (first, m1) = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
         assert_eq!(m1, 0, "complete composed decode");
         assert_pixels_eq(&first, &reference, "composed cached vs impl");
-        let (second, m2) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let (second, m2) = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
         assert_eq!(m2, 0);
         assert_pixels_eq(&second, &reference, "composed memo hit vs impl");
         surface_pixel_cache_clear_all();
@@ -57085,14 +57085,14 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_0007u32;
         let mut source = textured_fixture(did, 0xFF01_0203);
-        let dye = 0x0400_2004u32;
-        add_palette(&mut source, dye, 0xFF77_2211);
+        let recolor = 0x0400_2004u32;
+        add_palette(&mut source, recolor, 0xFF77_2211);
         let c = counting(&source);
-        let (_first, m1) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        let (_first, m1) = fetch_entity_surface_pixels_cached(&c, did, recolor, &[]);
         assert_eq!(m1, 0);
         assert!(reads_of(&c) > 0, "first composed call decodes");
         c.reads.store(0, std::sync::atomic::Ordering::Relaxed);
-        let (_second, m2) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        let (_second, m2) = fetch_entity_surface_pixels_cached(&c, did, recolor, &[]);
         assert_eq!(m2, 0, "composed memo hit reports zero misses");
         assert_eq!(reads_of(&c), 0, "composed memo hit reads ZERO records");
         surface_pixel_cache_clear_all();
@@ -57104,21 +57104,21 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_0008u32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
-        let dye_a = 0x0400_2005u32;
-        let dye_b = 0x0400_2006u32;
-        add_palette(&mut source, dye_a, 0xFFAA_1111);
-        add_palette(&mut source, dye_b, 0xFFBB_2222);
-        let (a1, _) = fetch_entity_surface_pixels_cached(&source, did, dye_a, &[]);
-        let (b1, _) = fetch_entity_surface_pixels_cached(&source, did, dye_b, &[]);
-        assert_ne!(a1.pixels, b1.pixels, "different dyes → different pixels");
+        let recolor_a = 0x0400_2005u32;
+        let recolor_b = 0x0400_2006u32;
+        add_palette(&mut source, recolor_a, 0xFFAA_1111);
+        add_palette(&mut source, recolor_b, 0xFFBB_2222);
+        let (a1, _) = fetch_entity_surface_pixels_cached(&source, did, recolor_a, &[]);
+        let (b1, _) = fetch_entity_surface_pixels_cached(&source, did, recolor_b, &[]);
+        assert_ne!(a1.pixels, b1.pixels, "different recolors → different pixels");
         // Both are distinct cache entries; re-request each returns ITS OWN
         // colour (no bleed) with zero reads.
         let c = counting(&source);
-        let (a2, _) = fetch_entity_surface_pixels_cached(&c, did, dye_a, &[]);
-        let (b2, _) = fetch_entity_surface_pixels_cached(&c, did, dye_b, &[]);
-        assert_eq!(reads_of(&c), 0, "both dye variants are hits");
-        assert_eq!(a2.pixels, a1.pixels, "dye A entry unchanged by dye B");
-        assert_eq!(b2.pixels, b1.pixels, "dye B entry unchanged by dye A");
+        let (a2, _) = fetch_entity_surface_pixels_cached(&c, did, recolor_a, &[]);
+        let (b2, _) = fetch_entity_surface_pixels_cached(&c, did, recolor_b, &[]);
+        assert_eq!(reads_of(&c), 0, "both recolor variants are hits");
+        assert_eq!(a2.pixels, a1.pixels, "recolor A entry unchanged by recolor B");
+        assert_eq!(b2.pixels, b1.pixels, "recolor B entry unchanged by recolor A");
         surface_pixel_cache_clear_all();
     }
 
@@ -57128,17 +57128,17 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_0009u32;
         let mut source = textured_fixture(did, 0xFF12_3456);
-        let dye = 0x0400_2007u32;
-        add_palette(&mut source, dye, 0xFF65_4321);
+        let recolor = 0x0400_2007u32;
+        add_palette(&mut source, recolor, 0xFF65_4321);
         // Prime BOTH classes for the same DID.
         let (pf, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
-        let (comp, _) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let (comp, _) = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
         assert!(surface_memo_contains(did), "palette-free entry present");
         assert_ne!(pf.pixels, comp.pixels, "the two classes hold different pixels");
         // Both are independent hits; neither poisons the other.
         let c = counting(&source);
         let (pf2, _) = fetch_entity_surface_pixels_cached(&c, did, 0, &[]);
-        let (comp2, _) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        let (comp2, _) = fetch_entity_surface_pixels_cached(&c, did, recolor, &[]);
         assert_eq!(reads_of(&c), 0, "both classes hit for the same DID");
         assert_eq!(pf2.pixels, pf.pixels, "palette-free entry intact");
         assert_eq!(comp2.pixels, comp.pixels, "composed entry intact");
@@ -57151,33 +57151,33 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_000Au32;
         let full = textured_fixture(did, 0xFF44_5566);
-        let dye = 0x0400_2008u32;
+        let recolor = 0x0400_2008u32;
         let mut src = MockSource { files: full.files.clone() };
-        add_palette(&mut src, dye, 0xFF10_2030);
+        add_palette(&mut src, recolor, 0xFF10_2030);
         // Break the chain: drop the Texture record → dep miss → empty out.
         let mut broken = MockSource { files: src.files.clone() };
         broken.files.retain(|(_, id), _| *id >> 24 != 0x06);
-        let (sp, misses) = fetch_entity_surface_pixels_cached(&broken, did, dye, &[]);
+        let (sp, misses) = fetch_entity_surface_pixels_cached(&broken, did, recolor, &[]);
         assert_eq!(sp.width, 0, "broken composed chain → empty fallback");
         assert!(misses > 0, "audit counted the missing dep");
         // Not memoised: a re-request re-decodes (reads records again).
         let c = counting(&broken);
-        let (_sp2, _m2) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        let (_sp2, _m2) = fetch_entity_surface_pixels_cached(&c, did, recolor, &[]);
         assert!(reads_of(&c) > 0, "incomplete composed decode NOT memoised");
         // Direct insert of an empty and a magenta sentinel are both refused.
         let mut empty = empty_fixture_pixels();
-        surface_memo_insert_composed(did, dye, &[], &empty, 0);
+        surface_memo_insert_composed(did, recolor, &[], &empty, 0);
         assert!(
-            surface_memo_get_composed(did, dye, &[]).is_none(),
+            surface_memo_get_composed(did, recolor, &[]).is_none(),
             "empty (width 0) refused on composed path"
         );
         empty.width = 1;
         empty.height = 1;
         empty.pixels = vec![255, 0, 255, 255].into();
         empty.has_palette = true;
-        surface_memo_insert_composed(did, dye, &[], &empty, 0);
+        surface_memo_insert_composed(did, recolor, &[], &empty, 0);
         assert!(
-            surface_memo_get_composed(did, dye, &[]).is_none(),
+            surface_memo_get_composed(did, recolor, &[]).is_none(),
             "magenta sentinel refused on composed path"
         );
         surface_pixel_cache_clear_all();
@@ -57219,16 +57219,16 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_000Bu32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
-        let dye = 0x0400_2009u32;
-        add_palette(&mut source, dye, 0xFFC0_FFEE);
+        let recolor = 0x0400_2009u32;
+        add_palette(&mut source, recolor, 0xFFC0_FFEE);
 
         // --- palSurfaceCache=off: composed bypassed, palette-free untouched.
         PAL_SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(Some(false)));
         SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(Some(true)));
         surface_pixel_cache_clear_all();
-        let (_c1, _) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let (_c1, _) = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
         assert!(
-            surface_memo_get_composed(did, dye, &[]).is_none(),
+            surface_memo_get_composed(did, recolor, &[]).is_none(),
             "palSurfaceCache=off: composed NOT cached"
         );
         let (_pf, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
@@ -57240,9 +57240,9 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let (_pf2, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
         assert!(!surface_memo_contains(did), "master off: palette-free bypassed");
-        let (_c2, _) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let (_c2, _) = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
         assert!(
-            surface_memo_get_composed(did, dye, &[]).is_none(),
+            surface_memo_get_composed(did, recolor, &[]).is_none(),
             "master off: composed bypassed"
         );
 
@@ -57274,8 +57274,8 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_000Cu32;
         let mut source = textured_fixture(did, 0xFF33_4455);
-        let dye = 0x0400_200Au32;
-        add_palette(&mut source, dye, 0xFF99_8877);
+        let recolor = 0x0400_200Au32;
+        add_palette(&mut source, recolor, 0xFF99_8877);
         // Palette-free traffic: one miss+insert, then one hit.
         let _ = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
         let _ = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
@@ -57284,8 +57284,8 @@ mod tests_surface_cache {
         assert_eq!((ph, pm, pi), (0, 0, 0), "no composed traffic yet");
         assert_eq!((ent, pal_ent), (1, 0), "one entry, zero composed");
         // Composed traffic: one miss+insert, then one hit.
-        let _ = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
-        let _ = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let _ = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
+        let _ = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
         let (pf_h2, pf_m2, pf_i2, ph2, pm2, pi2, _ev2, _by2, ent2, pal_ent2) =
             surface_cache_stats();
         assert_eq!(
@@ -57304,7 +57304,7 @@ mod tests_surface_cache {
     // `fetch_entity_surface_pixels_impl` gates the Sobel normal + integrated
     // height planes on `is_composed = base_palette_id != 0 ||
     // !sub_palettes.is_empty()`. The planes had no reader on that class: all
-    // three dyed-entity consumers take `sp.pixels` alone (entities.js :3793,
+    // three recolored-entity consumers take `sp.pixels` alone (entities.js :3793,
     // :4914/:5004, :9649), and `surfacePixelsToNormalTexture` /
     // `...HeightTexture` are called only from the palette-free
     // `MaterialCache` install path (materials.js :3577/:3583, :4257/:4259).
@@ -57316,7 +57316,7 @@ mod tests_surface_cache {
     //     widening the predicate greys out every building's normal/POM).
     // =======================================================================
 
-    /// A composed (dyed) decode emits NO procedural planes, through the raw
+    /// A composed (recolored) decode emits NO procedural planes, through the raw
     /// impl and through the cache, cold and on a hit.
     #[test]
     fn composed_class_stores_pixels_only_no_normal_or_height_planes() {
@@ -57324,10 +57324,10 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_0020u32;
         let mut source = textured_fixture(did, 0xFF12_3456);
-        let dye = 0x0400_2020u32;
-        add_palette(&mut source, dye, 0xFFAB_CDEF);
+        let recolor = 0x0400_2020u32;
+        add_palette(&mut source, recolor, 0xFFAB_CDEF);
 
-        let reference = fetch_entity_surface_pixels_impl(&source, did, dye, &[]);
+        let reference = fetch_entity_surface_pixels_impl(&source, did, recolor, &[]);
         assert_eq!(reference.width, 1, "composed fixture decodes");
         assert!(
             reference.normal_pixels.is_empty(),
@@ -57338,12 +57338,12 @@ mod tests_surface_cache {
             "impl: composed decode emits NO height plane"
         );
 
-        let (cold, misses) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let (cold, misses) = fetch_entity_surface_pixels_cached(&source, did, recolor, &[]);
         assert_eq!(misses, 0, "complete composed decode");
         assert!(cold.normal_pixels.is_empty(), "cold: normal stays empty");
         assert!(cold.height_pixels.is_empty(), "cold: height stays empty");
 
-        let hit = surface_memo_get_composed(did, dye, &[]).expect("memoised");
+        let hit = surface_memo_get_composed(did, recolor, &[]).expect("memoised");
         assert!(hit.normal_pixels.is_empty(), "hit: normal stays empty");
         assert!(hit.height_pixels.is_empty(), "hit: height stays empty");
         // `clone_surface_pixels` must not resurrect bytes either.
@@ -57422,7 +57422,7 @@ mod tests_surface_cache {
     /// The budget consequence: a composed entry charges `pixels + 64` while
     /// the same DID's palette-free entry additionally charges its normal (and,
     /// on a gradient-bearing texture, height) plane. On the real 256²/512²
-    /// mix that is 4 B/px vs 8 B/px — the composed class holds ~2× the dye
+    /// mix that is 4 B/px vs 8 B/px — the composed class holds ~2× the recolor
     /// variants per MiB of `?surfaceBudgetMB=`. (The 1×1 fixture is
     /// constant-luminance, so its height plane is empty in BOTH classes; the
     /// discriminating term here is the normal plane.)
@@ -57432,11 +57432,11 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
         let did = 0x0810_0023u32;
         let mut source = textured_fixture(did, 0xFF24_6801);
-        let dye = 0x0400_2023u32;
-        add_palette(&mut source, dye, 0xFF13_5790);
+        let recolor = 0x0400_2023u32;
+        add_palette(&mut source, recolor, 0xFF13_5790);
 
         let pf = fetch_entity_surface_pixels_impl(&source, did, 0, &[]);
-        let comp = fetch_entity_surface_pixels_impl(&source, did, dye, &[]);
+        let comp = fetch_entity_surface_pixels_impl(&source, did, recolor, &[]);
         assert_eq!(
             comp.pixels.len(),
             pf.pixels.len(),
@@ -57469,34 +57469,34 @@ mod tests_surface_cache {
 
     /// A composed cache round-trip is still byte-identical on the plane that
     /// matters — dropping normal/height must not perturb the pixels, and two
-    /// dye variants must still key apart.
+    /// recolor variants must still key apart.
     #[test]
     fn composed_hit_round_trips_pixels_byte_identically_after_slimming() {
         let _guard = surface_test_lock();
         surface_pixel_cache_clear_all();
         let did = 0x0810_0024u32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
-        let dye_a = 0x0400_2024u32;
-        let dye_b = 0x0400_2025u32;
-        add_palette(&mut source, dye_a, 0xFFAA_0000);
-        add_palette(&mut source, dye_b, 0xFF00_BB00);
+        let recolor_a = 0x0400_2024u32;
+        let recolor_b = 0x0400_2025u32;
+        add_palette(&mut source, recolor_a, 0xFFAA_0000);
+        add_palette(&mut source, recolor_b, 0xFF00_BB00);
 
-        let ref_a = fetch_entity_surface_pixels_impl(&source, did, dye_a, &[]);
-        let ref_b = fetch_entity_surface_pixels_impl(&source, did, dye_b, &[]);
+        let ref_a = fetch_entity_surface_pixels_impl(&source, did, recolor_a, &[]);
+        let ref_b = fetch_entity_surface_pixels_impl(&source, did, recolor_b, &[]);
         assert_ne!(
             ref_a.pixels.as_slice(),
             ref_b.pixels.as_slice(),
-            "precondition: the two dyes really do produce different pixels"
+            "precondition: the two recolors really do produce different pixels"
         );
 
-        let (cold_a, _) = fetch_entity_surface_pixels_cached(&source, did, dye_a, &[]);
-        let (cold_b, _) = fetch_entity_surface_pixels_cached(&source, did, dye_b, &[]);
+        let (cold_a, _) = fetch_entity_surface_pixels_cached(&source, did, recolor_a, &[]);
+        let (cold_b, _) = fetch_entity_surface_pixels_cached(&source, did, recolor_b, &[]);
         assert_pixels_eq(&cold_a, &ref_a, "composed cold A");
         assert_pixels_eq(&cold_b, &ref_b, "composed cold B");
         // Hits (zero record reads) return the same bytes.
         let c = counting(&source);
-        let (hit_a, _) = fetch_entity_surface_pixels_cached(&c, did, dye_a, &[]);
-        let (hit_b, _) = fetch_entity_surface_pixels_cached(&c, did, dye_b, &[]);
+        let (hit_a, _) = fetch_entity_surface_pixels_cached(&c, did, recolor_a, &[]);
+        let (hit_b, _) = fetch_entity_surface_pixels_cached(&c, did, recolor_b, &[]);
         assert_eq!(reads_of(&c), 0, "composed memo hits read zero records");
         assert_pixels_eq(&hit_a, &ref_a, "composed hit A");
         assert_pixels_eq(&hit_b, &ref_b, "composed hit B");

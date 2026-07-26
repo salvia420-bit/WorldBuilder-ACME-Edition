@@ -224,15 +224,15 @@ export function buildFragVariant(materialCache, surfaceDid, entries, deps) {
 
 /**
  * Paletted twin of `buildFragVariant`: install the SAME frag SET onto a clone of
- * a DYED paletted base via `MaterialCache.getCachedVariantFromPaletted`, so
+ * a RECOLORED paletted base via `MaterialCache.getCachedVariantFromPaletted`, so
  * itemFx / catalog effects (magicGlow, enchantShimmer, glint, itemAura) reach
- * dyed gear — not just surfaceDid-keyed non-paletted entities. `paletteBase` must
+ * recolored gear — not just surfaceDid-keyed non-paletted entities. `paletteBase` must
  * be a paletted material tagged `__paletteKey` (installPaletted); otherwise the
  * cache returns it unchanged (byte-identical). Same setKey/configKey firewall ⇒
- * one compiled program per component SET regardless of dye.
+ * one compiled program per component SET regardless of recolor.
  *
  * @param {object} materialCache  MaterialCache (has getCachedVariantFromPaletted)
- * @param {object} paletteBase    a dyed paletted base material
+ * @param {object} paletteBase    a recolored paletted base material
  * @param {Array<{comp:object, config:object}>} entries  frag_attach plan.entries
  * @param {{globals?:object, installComponentPatch?:Function, sharedPrelude?:object}} [deps]
  * @returns {object|null} the cloned variant material, or null
