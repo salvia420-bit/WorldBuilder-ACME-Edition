@@ -1,5 +1,14 @@
 # DESIGN — first-bake batches: the cold-boot spike is a batch-SIZE problem (2026-07-25)
 
+> **STATUS (2026-07-25, post-validation-battery): cold-spike claim REFUTED — §5 criterion 3
+> fired.** `bakeBatchMax=16` left per-session cold-boot maxMain in the same 678–934 MB
+> lottery range as unbatched arms and cost settle (12.2 s vs 9.8 s). The handle-release fix
+> (§2) is the part that survived — scored positive on worker wasm high-water (234 MB over a
+> full 62-stop session, zero renderer deaths). The flag stays armable-but-off for
+> submission-size experiments. See `RESULTS-validation-battery-2026-07-25.md` verdicts 2/4.
+> §6's MaterialCache hypothesis was CONFIRMED (verdict 1) and is being landed as its own
+> slice.
+
 Executes move 2 of `HANDOFF-s4-battery-s5-preview-2026-07-25.md` ("admission is the wrong
 tool (proven); try smaller first-bake batches") against the numbers in
 `RESULTS-s4-battery-2026-07-25.md` and `HANDOFF-A15-landed-2026-07-25.md` verdict 2.
