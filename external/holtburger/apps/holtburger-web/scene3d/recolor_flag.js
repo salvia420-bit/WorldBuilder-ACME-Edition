@@ -17,9 +17,10 @@
 // visual value of the recolor path (judged live, by eye) can be weighed
 // against its measured cost (`__diag.entityOwned()` → `entMB` /
 // `jsHeapPeak`). It is also the escape hatch owed to the "dyed"-terminology
-// audit — the spawn path is named `dyed*` throughout entities.js, but dye is
-// only ONE producer of subpalette overlays; the flag is named for the general
-// mechanism (recolor), not the mislabel.
+// audit — the spawn path used to be named `dyed*` throughout entities.js, but
+// dye is only ONE producer of subpalette overlays; the flag is named for the
+// general mechanism (recolor), not the mislabel. (That rename landed
+// 2026-07-26: the path is now `_scheduleRecoloredSurfaceRefresh` et al.)
 //
 // GRAMMAR (⚠ read docs/url-flags.md's 2026-07-23 reader-idiom box)
 // ----------------------------------------------------------------

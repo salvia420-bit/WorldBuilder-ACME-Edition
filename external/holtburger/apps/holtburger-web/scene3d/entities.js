@@ -616,9 +616,9 @@ import {
   acToThree,
 } from "./adapter.js";
 import { AnimationCache, cycleTimeScale, hasRootMotion } from "./animation.js";
-// Routes the dyed/paletted entity-surface decode through the bake worker
+// Routes the recolored/paletted entity-surface decode through the bake worker
 // (off the main thread) with a transparent main-thread fallback.
-// `surfacePixelsFetcher` does the same for the non-dyed entity surface
+// `surfacePixelsFetcher` does the same for the non-recolored entity surface
 // preloads (statics decoder), matching the statics/buildings/cells offload.
 import {
   entitySurfacePixelsFetcher,
@@ -779,8 +779,8 @@ function _entityFragMat(base, materialCache, surfaceDid, fragPlan) {
   }
   return buildFragVariant(materialCache, surfaceDid, fragPlan.entries, _entityVfxFragDeps) || base;
 }
-// Paletted twin of _entityFragMat: layer the SAME frag plan onto a DYED paletted
-// base so itemFx / catalog effects reach dyed gear (the `_entityMaterials` path).
+// Paletted twin of _entityFragMat: layer the SAME frag plan onto a RECOLORED paletted
+// base so itemFx / catalog effects reach recolored gear (the `_entityMaterials` path).
 // Soft-degrades to the base material if the cache method is absent (stale pkg/)
 // or `base` isn't a __paletteKey-tagged paletted material (e.g. shared fallback).
 function _entityFragMatPaletted(base, materialCache, fragPlan) {
@@ -2897,15 +2897,15 @@ class EntityInstance {
     // 2026-05-30 — mark disposed + cancel any pending spawn-race surface
     // refresh (see EntityManager._scheduleEntitySurfaceRefresh) so a late
     // re-decode can't touch a torn-down rig. R-8 (2026-07-09): ditto for the
-    // dyed twin (_scheduleDyedSurfaceRefresh).
+    // recolored twin (_scheduleRecoloredSurfaceRefresh).
     this._disposed = true;
     if (this._surfaceRefreshTimer) {
       try { clearTimeout(this._surfaceRefreshTimer); } catch (_) {}
       this._surfaceRefreshTimer = null;
     }
-    if (this._dyedRefreshTimer) {
-      try { clearTimeout(this._dyedRefreshTimer); } catch (_) {}
-      this._dyedRefreshTimer = null;
+    if (this._recolorRefreshTimer) {
+      try { clearTimeout(this._recolorRefreshTimer); } catch (_) {}
+      this._recolorRefreshTimer = null;
     }
     try {
       this.mixer.stopAllAction();
@@ -3665,32 +3665,32 @@ export class EntityManager {
     const hasPaletteSubs =
       paletteId !== 0 ||
       (subPalettes && subPalettes.length > 0);
-    // R-8 (net-fixwave 2026-07-09) — decode-audit capture for the dyed-path
+    // R-8 (net-fixwave 2026-07-09) — decode-audit capture for the recolored-path
     // recovery ladder armed at the bottom of this function. `decodeMisses`
     // (P2↔P3 ABI; 0 on legacy wasm) flags an incomplete walk even when every
     // part decoded non-empty: a soft-skipped palette overlay is TEXTURED but
-    // undyed, invisible to the mapless-mesh probe.
-    let dyedDecodeMisses = 0;
+    // unrecolored, invisible to the mapless-mesh probe.
+    let composedDecodeMisses = 0;
     const _spawnTraceMatStart = SPAWN_TRACE ? performance.now() : 0;
     // 2026-05-28 perf: wire-agent mode discards the texture from
     // fetchEntitySurfacesPixels anyway (per-DID wireframe materials
     // are palette-independent), so route wire spawns through the
     // cheaper cache.preload branch below. Real-mode entities still
-    // take the palette path so their dyed surfaces look right.
+    // take the palette path so their recolored surfaces look right.
     if (hasPaletteSubs && !WIREFRAME_MODE && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
       try {
         const dids = new Uint32Array([...allSurfaceDids]);
         if (dids.length > 0) {
-          // Wave 7.7 — dye observability. Fires for every spawn that
+          // Wave 7.7 — recolor observability. Fires for every spawn that
           // arrives with non-trivial palette overlays (W7.3 server-
-          // pushed dyes + any local applyAppearance preview). Captures
+          // pushed recolors + any local applyAppearance preview). Captures
           // the (guid, surfaceDids, paletteId, subPalettes) triple so
           // the diag harness can audit which entities ARE actually
-          // paying the dye compositor cost vs spawning with empty
+          // paying the recolor compositor cost vs spawning with empty
           // overlays. Fires BEFORE the wasm call so we observe even
           // when the call throws.
           try {
-            window.__diag?.clothing?.onDyeApplication?.({
+            window.__diag?.clothing?.onRecolorApplication?.({
               guid,
               source: "spawn",
               surfaceDidCount: dids.length,
@@ -3745,11 +3745,11 @@ export class EntityManager {
             );
             // R-8 — call-level decode audit (both fields null/0 on legacy
             // wasm). Proven-absent DIDs seed the per-entity skip set so the
-            // dyed ladder never re-hammers a catalog-confirmed absence.
-            dyedDecodeMisses = surfaceResultDecodeMisses(results) ?? 0;
+            // recolored ladder never re-hammers a catalog-confirmed absence.
+            composedDecodeMisses = surfaceResultDecodeMisses(results) ?? 0;
             const absent = surfaceResultProvenAbsent(results);
             if (absent && absent.size) {
-              inst._dyedSurfaceAbsent = new Set(absent);
+              inst._recoloredSurfaceAbsent = new Set(absent);
             }
           }
 
@@ -3852,7 +3852,7 @@ export class EntityManager {
               // C1 (render-completeness wave 3) — apply Surface (0x08)
               // Tier-1 render-state (blend/opacity/alphaTest/emissive) +
               // tag userData.surfaceTypeFlags, mirroring the plain path's
-              // `_materialFromFlags`. Without this, dyed luminous/translucent/
+              // `_materialFromFlags`. Without this, recolored luminous/translucent/
               // clipmap gear rendered flat-opaque. Fail-soft on surfaceType=0.
               this._applyPalettedSurfaceRenderState(mat, palSurfaceState);
               mat.name = `paletted-${did.toString(16)}-${paletteId.toString(16)}`;
@@ -3914,9 +3914,9 @@ export class EntityManager {
     // `?visual && ?itemFx`; null plan ⇒ base material ⇒ byte-identical. Applied to
     // BOTH the surfaceDid-keyed `getCached` path (variant shared by surfaceDid) AND
     // the paletted `_entityMaterials` path (variant shared by exact paletteKey via
-    // MaterialCache.getCachedVariantFromPaletted), so dyed/recoloured gear gets the
+    // MaterialCache.getCachedVariantFromPaletted), so recolored gear gets the
     // aura too — previously the paletted branch returned the base verbatim, which is
-    // why dyed magic items showed no glow despite the effects being default-on.
+    // why recolored magic items showed no glow despite the effects being default-on.
     let _itemFxPlan = null;
     if (visualEnabled() && itemFxEnabled()) {
       try {
@@ -3949,9 +3949,9 @@ export class EntityManager {
       const did = g.surfaceDid >>> 0;
       if (inst._entityMaterials && inst._entityMaterials.has(did)) {
         const pbase = inst._entityMaterials.get(did);
-        // Dyed/paletted gear no longer skips the VFX plan: layer the same
-        // _entityPlan (itemFx aura + catalog effects) onto a clone of the dyed
-        // base. Keyed per dye × effect-SET so colours stay correct and programs
+        // Recolored/paletted gear no longer skips the VFX plan: layer the same
+        // _entityPlan (itemFx aura + catalog effects) onto a clone of the recolored
+        // base. Keyed per recolor × effect-SET so colours stay correct and programs
         // dedup; _entityPlan==null ⇒ returns pbase verbatim (byte-identical).
         return _entityPlan ? _entityFragMatPaletted(pbase, this.materialCache, _entityPlan) : pbase;
       }
@@ -4334,8 +4334,8 @@ export class EntityManager {
     // DATA is correct; the decode just lost the spawn race and the material
     // was never refreshed). Detect any mesh still on the fallback and schedule
     // a deferred re-decode + material swap once the resources arrive. Gated to
-    // NON-dyed entities (paletteId/subPalettes empty) so the plain re-decode
-    // can't strip a dye; dyed entities are rarer and left as-is.
+    // NON-recolored entities (paletteId/subPalettes empty) so the plain re-decode
+    // can't strip a recolor; recolored entities are rarer and left as-is.
     if (
       !hasPaletteSubs &&
       !WIREFRAME_MODE &&
@@ -4356,20 +4356,20 @@ export class EntityManager {
       });
       if (needsRefresh) this._scheduleEntitySurfaceRefresh(inst, 0);
     }
-    // R-8 (net-fixwave 2026-07-09) — dyed-path twin of the recovery arm above.
-    // Players/dyed NPCs take the fetchEntitySurfacesPixels path, which the
+    // R-8 (net-fixwave 2026-07-09) — recolored-path twin of the recovery arm above.
+    // Players/recolored NPCs take the fetchEntitySurfacesPixels path, which the
     // `!hasPaletteSubs` gate excludes — one swallowed prefetch round (empty
     // parts) or an incomplete walk (`decodeMisses > 0`) whitened the whole
     // outfit with no recovery until respawn. A parameter-preserving refetch
-    // (identical DIDs + palette state) cannot strip the dye, so schedule one
+    // (identical DIDs + palette state) cannot strip the recolor, so schedule one
     // on the same backoff ladder. Mapless probe mirrors the plain arm; the
-    // decodeMisses arm additionally catches textured-but-undyed parts.
+    // decodeMisses arm additionally catches textured-but-unrecolored parts.
     if (
       hasPaletteSubs &&
       !WIREFRAME_MODE &&
       typeof this.wasmExports?.fetchEntitySurfacesPixels === "function"
     ) {
-      let needsRefresh = dyedDecodeMisses > 0;
+      let needsRefresh = composedDecodeMisses > 0;
       if (!needsRefresh) {
         root.traverse((o) => {
           if (!needsRefresh && o.isMesh && o.material && !o.material.map &&
@@ -4379,11 +4379,11 @@ export class EntityManager {
         });
       }
       if (needsRefresh) {
-        this._scheduleDyedSurfaceRefresh(inst, {
+        this._scheduleRecoloredSurfaceRefresh(inst, {
           paletteId,
           subPalettes,
           dids: new Uint32Array([...allSurfaceDids]),
-          missArmed: dyedDecodeMisses > 0,
+          missArmed: composedDecodeMisses > 0,
         }, 0);
       }
     }
@@ -4822,9 +4822,9 @@ export class EntityManager {
    * refreshed — the permanent "white door / chest" (WB.Terminal confirmed the
    * surface DATA is intact; only the spawn-time decode lost the race). This
    * re-decodes the still-fallback surfaces and swaps the real material onto
-   * the mesh once they resolve, retrying with backoff. Plain (non-dyed) path
+   * the mesh once they resolve, retrying with backoff. Plain (non-recolored) path
    * only — the caller gates on `!hasPaletteSubs` so a plain re-decode can
-   * never strip a dye.
+   * never strip a recolor.
    */
   _scheduleEntitySurfaceRefresh(inst, attempt = 0) {
     // Backoff covering the slow tail of resource streaming: some entity
@@ -4878,30 +4878,30 @@ export class EntityManager {
   }
 
   /**
-   * R-8 (net-fixwave 2026-07-09) — cancel a pending dyed-surface refresh.
+   * R-8 (net-fixwave 2026-07-09) — cancel a pending recolored-surface refresh.
    * Called on appearance change (`_applyAppearanceHotSwap`): the captured
    * palette state is stale then, and the swap re-fetches + re-arms itself.
    * Despawn/respawn cancels via `EntityInstance.dispose()` (timer clear) +
    * the ladder's `entityMap.get(guid) !== inst` guard.
    */
-  _cancelDyedSurfaceRefresh(inst) {
+  _cancelRecoloredSurfaceRefresh(inst) {
     if (!inst) return;
-    if (inst._dyedRefreshTimer) {
-      try { clearTimeout(inst._dyedRefreshTimer); } catch (_) {}
-      inst._dyedRefreshTimer = null;
+    if (inst._recolorRefreshTimer) {
+      try { clearTimeout(inst._recolorRefreshTimer); } catch (_) {}
+      inst._recolorRefreshTimer = null;
     }
-    inst._dyedRefreshKey = null;
+    inst._recolorRefreshKey = null;
   }
 
   /**
-   * R-8 (net-fixwave 2026-07-09) — dyed-path twin of
+   * R-8 (net-fixwave 2026-07-09) — recolored-path twin of
    * `_scheduleEntitySurfaceRefresh` above. The plain ladder is gated
-   * `!hasPaletteSubs` (a plain re-decode would strip a dye), so every player
+   * `!hasPaletteSubs` (a plain re-decode would strip a recolor), so every player
    * (skin/hair subPalettes) and recoloured NPC had NO recovery: one transient
    * empty decode in the single fetchEntitySurfacesPixels call painted the
    * whole outfit with the mapless grey fallback until respawn. The safe
    * retry is a PARAMETER-PRESERVING refetch — identical DIDs + (paletteId,
-   * subPalettes) — which by construction cannot strip the dye.
+   * subPalettes) — which by construction cannot strip the recolor.
    *
    * `spec` = { paletteId, subPalettes, dids: Uint32Array (the spawn's full
    * surface-DID set), missArmed: bool }. Normally only the still-mapless
@@ -4909,22 +4909,22 @@ export class EntityManager {
    * `missArmed` sweep — armed when the spawn/hot-swap fetch reported
    * `decodeMisses > 0` (P2↔P3 ABI) — refetches the full set and, once a
    * COMPLETE decode lands (refetch decodeMisses === 0), also swaps textured
-   * meshes: a soft-skipped palette overlay leaves a textured-but-undyed
+   * meshes: a soft-skipped palette overlay leaves a textured-but-unrecolored
    * material the mapless probe can't see. Same backoff schedule, liveness
    * guards, and stop-when-healed shape as the plain ladder, plus:
-   *   - per-entity dedupe (`_dyedRefreshTimer` — one ladder per rig);
-   *   - appearance supersession (`_dyedRefreshKey` — hot-swap cancels);
-   *   - `_dyedSurfaceAbsent` skip set (catalog-proven absences never retry).
+   *   - per-entity dedupe (`_recolorRefreshTimer` — one ladder per rig);
+   *   - appearance supersession (`_recolorRefreshKey` — hot-swap cancels);
+   *   - `_recoloredSurfaceAbsent` skip set (catalog-proven absences never retry).
    * Healed materials install via `installPaletted` so every later entity
-   * with the same dye signature is a cache hit (and a signature poisoned by
+   * with the same recolor signature is a cache hit (and a signature poisoned by
    * an incomplete decode is replaced for future spawns).
    */
-  _scheduleDyedSurfaceRefresh(inst, spec, attempt = 0) {
+  _scheduleRecoloredSurfaceRefresh(inst, spec, attempt = 0) {
     const DELAYS_MS = [600, 1500, 3500, 8000, 16000, 32000, 60000, 90000];
     if (!inst || !inst.root || !spec || attempt >= DELAYS_MS.length) return;
     if (typeof this.wasmExports?.fetchEntitySurfacesPixels !== "function") return;
-    if (inst._dyedRefreshTimer) return; // per-entity dedupe — one ladder at a time
-    // `?recolor=off` CHOKE POINT 3 of 3 — the dyed recovery ladder
+    if (inst._recolorRefreshTimer) return; // per-entity dedupe — one ladder at a time
+    // `?recolor=off` CHOKE POINT 3 of 3 — the recolored recovery ladder
     // (2026-07-26). Belt-and-braces: both arming sites (spawn commit,
     // hot-swap commit) already pass gated values, so under `off` this ladder
     // is never armed at all (`hasPaletteSubs` is false there and the PLAIN
@@ -4934,16 +4934,16 @@ export class EntityManager {
     const paletteId = gatePaletteId((spec.paletteId ?? 0) >>> 0);
     const subPalettes = gateSubPalettes(spec.subPalettes ?? new Uint32Array(0));
     const key = `${paletteId}|${Array.from(subPalettes).join(",")}`;
-    if (attempt === 0) inst._dyedRefreshKey = key;
+    if (attempt === 0) inst._recolorRefreshKey = key;
     const needsTex = (mat) => !!mat && !mat.map;
     const skipAbsent = (did) =>
-      !!(inst._dyedSurfaceAbsent && inst._dyedSurfaceAbsent.has(did >>> 0));
-    inst._dyedRefreshTimer = setTimeout(async () => {
-      inst._dyedRefreshTimer = null;
+      !!(inst._recoloredSurfaceAbsent && inst._recoloredSurfaceAbsent.has(did >>> 0));
+    inst._recolorRefreshTimer = setTimeout(async () => {
+      inst._recolorRefreshTimer = null;
       // Same liveness guards as the plain ladder, plus appearance
       // supersession: a hot-swap cleared/replaced the key meanwhile.
       if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
-      if (inst._dyedRefreshKey !== key) return;
+      if (inst._recolorRefreshKey !== key) return;
       const cache = this.materialCache;
       const pendingDids = new Set();
       inst.root.traverse((o) => {
@@ -4954,7 +4954,7 @@ export class EntityManager {
       });
       const sweep = !!spec.missArmed;
       if (pendingDids.size === 0 && !sweep) {
-        inst._dyedRefreshKey = null; // every dyed surface resolved
+        inst._recolorRefreshKey = null; // every recolored surface resolved
         return;
       }
       // Refetch set: mapless DIDs always; the missArmed sweep takes the full
@@ -4984,12 +4984,12 @@ export class EntityManager {
       }
       // Re-check liveness across the await (mirrors the plain ladder).
       if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
-      if (inst._dyedRefreshKey !== key) return;
+      if (inst._recolorRefreshKey !== key) return;
       const refetchMisses = surfaceResultDecodeMisses(results);
       const absent = surfaceResultProvenAbsent(results);
       if (absent && absent.size) {
-        if (!inst._dyedSurfaceAbsent) inst._dyedSurfaceAbsent = new Set();
-        for (const d of absent) inst._dyedSurfaceAbsent.add(d >>> 0);
+        if (!inst._recoloredSurfaceAbsent) inst._recoloredSurfaceAbsent = new Set();
+        for (const d of absent) inst._recoloredSurfaceAbsent.add(d >>> 0);
       }
       // Only a COMPLETE refetch (misses === 0; null = legacy wasm, in which
       // case the sweep can never have been armed) may swap textured meshes.
@@ -5038,7 +5038,7 @@ export class EntityManager {
           if (needsTex(o.material)) {
             o.material = mat;
           } else if (sweepComplete && !o.material?.userData?.__vfxSetKey) {
-            // Sweep: replace possibly-undyed textured parts too — but never
+            // Sweep: replace possibly-unrecolored textured parts too — but never
             // a VFX variant clone (would drop the aura; colour staleness is
             // the lesser evil there).
             o.material = mat;
@@ -5058,13 +5058,28 @@ export class EntityManager {
       });
       const missStill = sweep && !sweepComplete;
       if (stillPending || missStill) {
-        this._scheduleDyedSurfaceRefresh(
+        this._scheduleRecoloredSurfaceRefresh(
           inst, { ...spec, missArmed: missStill }, attempt + 1
         );
       } else {
-        inst._dyedRefreshKey = null;
+        inst._recolorRefreshKey = null;
       }
     }, DELAYS_MS[attempt]);
+  }
+
+  /**
+   * DEPRECATED 2026-07-26 (dye→recolor terminology rename) — thin aliases so
+   * the out-of-tree probe `harness/surface-ladder-probe.mjs` (which arms this
+   * ladder by name on a live `EntityManager`) keeps working for one release.
+   * Remove after the harness is updated. No behaviour: pure delegation.
+   */
+  _scheduleDyedSurfaceRefresh(inst, spec, attempt = 0) {
+    return this._scheduleRecoloredSurfaceRefresh(inst, spec, attempt);
+  }
+
+  /** DEPRECATED 2026-07-26 — see `_scheduleDyedSurfaceRefresh` above. */
+  _cancelDyedSurfaceRefresh(inst) {
+    return this._cancelRecoloredSurfaceRefresh(inst);
   }
 
   /**
@@ -5078,7 +5093,7 @@ export class EntityManager {
    * palette path (dyed armour, skin/hair-tinted players, recolored
    * creatures — `hasPaletteSubs`) builds its `MeshStandardMaterial` inline
    * and historically dropped ALL of that, so luminous/translucent/clipmap
-   * dyed gear rendered flat-opaque and non-emissive. This replicates the
+   * recolored gear rendered flat-opaque and non-emissive. This replicates the
    * SAME render-state treatment as `_materialFromFlags` (materials.js
    * @1743-1820) inline (Agent C owns materials.js; we may not edit it) and
    * tags `userData.surfaceTypeFlags` so downstream AnimationHook material
@@ -5104,10 +5119,10 @@ export class EntityManager {
     const sfDiffuse = +(state.diffuse ?? 0.0);
     // === A10-M1 (2026-06-11) — delegate to the single decoder ================
     // When `?surfaceUnified=on`, route through the shared
-    // `applySurfaceRenderState` (materials.js) so the dyed/paletted path and the
+    // `applySurfaceRenderState` (materials.js) so the recolored/paletted path and the
     // cache path run ONE decoder. This ALSO attaches the luminous emissiveMap
     // (the diffuse-recoloured map, `mat.map`) — the resolved reading that fixes
-    // dyed luminous gear washing to white (A10 §3 row 2; ROADMAP §7 item 2).
+    // recolored luminous gear washing to white (A10 §3 row 2; ROADMAP §7 item 2).
     // Default OFF keeps the legacy inline ladder below (NO emissiveMap — the
     // wrong reading, kept for byte-identical rollback only). The userData
     // surfaceTypeFlags stamp above is preserved for the hook-ramp clock.
@@ -5137,8 +5152,8 @@ export class EntityManager {
       // Wave-3 M1 parity (2026-05-29): Alpha+Additive (0x10000|0x100) blends
       // SRCALPHA/ONE, not ONE/ONE — the additive contribution is weighted by
       // per-texel source alpha (retail acclient.c:454474). This MUST match
-      // `_materialFromFlags` (materials.js:1768) so a dyed/paletted glow
-      // blends identically to its un-dyed twin; otherwise the palette path
+      // `_materialFromFlags` (materials.js:1768) so a recolored/paletted glow
+      // blends identically to its un-recolored twin; otherwise the palette path
       // over-brightened Alpha+Additive surfaces with hard halo edges.
       mat.blending = THREE.CustomBlending;
       mat.blendSrc = THREE.SrcAlphaFactor;
@@ -5180,7 +5195,7 @@ export class EntityManager {
       // emissiveMap. NOTE — this is the WRONG reading: retail's grayscale
       // emissive is MODULATED by the diffuse texture in the FF combiner
       // (acclient.c:454691-454697 + 454429-454432), so omitting the emissiveMap
-      // washes a COLOURED dyed-luminous surface to white (A10 §3 row 2). The
+      // washes a COLOURED recolored-luminous surface to white (A10 §3 row 2). The
       // correct reading (emissiveMap = mat.map) lives in
       // `applySurfaceRenderState` (materials.js) and is taken when
       // `?surfaceUnified=on`. Kept here only for byte-identical flag-off
@@ -5188,10 +5203,10 @@ export class EntityManager {
       mat.emissive = new THREE.Color(0xffffff);
       mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
       // R1 (2026-06-24, `?luminousEmissiveMap`): attach the (recoloured)
-      // diffuse map as emissiveMap so a COLOURED dyed-luminous surface glows
+      // diffuse map as emissiveMap so a COLOURED recolored-luminous surface glows
       // in-colour (FF texture×emissive) instead of washing to white — the same
       // resolved reading `?surfaceUnified` takes, as a narrow opt-in. The
-      // non-dyed cache path already does this (applyFloatLumDiffuse:1284), so the
+      // non-recolored cache path already does this (applyFloatLumDiffuse:1284), so the
       // emissiveMap program variant already exists (no net new program expected).
       // Default OFF = byte-identical (flat white).
       if (readLuminousEmissiveMapFlag() && mat.map) mat.emissiveMap = mat.map;
@@ -5199,7 +5214,7 @@ export class EntityManager {
     // Diffuse-reflectance albedo tint — parity with _materialFromFlags
     // (materials.js:1839; retail acclient.c:454458). No-op at d≈1 (~96% of
     // surfaces); dims the d≠1 minority. Multiplies with the (recolored) map.
-    // C1 originally omitted this, so paletted/dyed gear skipped the dim that
+    // C1 originally omitted this, so paletted/recolored gear skipped the dim that
     // the plain path applies.
     if (sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
       mat.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
@@ -5207,7 +5222,7 @@ export class EntityManager {
     // Retail draws a surface ONCE (`?surfaceSinglePass`, materials.js
     // `applyRetailSinglePass`). THIS LADDER IS THE PATH THAT ACTUALLY RUNS:
     // `readSurfaceUnifiedFlag()` is default-OFF, so the `applySurfaceRenderState`
-    // delegate above is NOT taken and dyed/paletted entity materials never reach
+    // delegate above is NOT taken and recolored/paletted entity materials never reach
     // that funnel. Putting the parity call only on the funnel left the dominant
     // population (403 of 451 transparent DoubleSide meshes at Holtburg are
     // `paletted-*`) still double-submitted — caught by field verification, where
@@ -9527,7 +9542,7 @@ export class EntityManager {
     // Notify the plugin bus that this entity's visible appearance just
     // landed (despawn+respawn path). Wave 3.B's examine-target plugin
     // subscribes via `client.events.on("entityAppearanceChanged", ...)`
-    // to tear down + rebuild its embedded PaperdollViewport so the dyed
+    // to tear down + rebuild its embedded PaperdollViewport so the recolored
     // gear re-renders. Without this emit, the subscription never fires.
     // The hot-swap variant (`_applyAppearanceHotSwap`) carries a
     // matching emit at its `return true` site below.
@@ -9596,25 +9611,25 @@ export class EntityManager {
     // path (2026-07-26). Same contract as the spawn twin: the animation bake
     // above still reads `newMeta` RAW (byte-identical rig in both arms); only
     // these two locals — which feed `hasPaletteSubs`, the
-    // `fetchEntitySurfacesPixels` call, and the dyed-ladder arm at the bottom
+    // `fetchEntitySurfacesPixels` call, and the recolored-ladder arm at the bottom
     // of this method — are gated. Off ⇒ the swap takes the plain
     // `materialCache.preload` branch and registers NO owned textures.
     const paletteId = gatePaletteId((newMeta.paletteId ?? 0) >>> 0);
     const subPalettes = gateSubPalettes(newMeta.subPalettes ?? new Uint32Array(0));
     const hasPaletteSubs = paletteId !== 0 || subPalettes.length > 0;
     // R-8 (net-fixwave 2026-07-09) — an appearance change supersedes any
-    // pending dyed-surface refresh (its captured palette state is stale);
+    // pending recolored-surface refresh (its captured palette state is stale);
     // the arm at the bottom of this swap re-schedules against the new state.
-    this._cancelDyedSurfaceRefresh(inst);
+    this._cancelRecoloredSurfaceRefresh(inst);
     let hotSwapDecodeMisses = 0;
 
     let entityMaterials = null;
     if (hasPaletteSubs && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
       const dids = new Uint32Array([...allSurfaceDids]);
       if (dids.length > 0) {
-        // Wave 7.7 — dye observability on the hot-swap path too.
+        // Wave 7.7 — recolor observability on the hot-swap path too.
         try {
-          window.__diag?.clothing?.onDyeApplication?.({
+          window.__diag?.clothing?.onRecolorApplication?.({
             guid,
             source: "hot-swap",
             surfaceDidCount: dids.length,
@@ -9633,8 +9648,8 @@ export class EntityManager {
         hotSwapDecodeMisses = surfaceResultDecodeMisses(results) ?? 0;
         const hotSwapAbsent = surfaceResultProvenAbsent(results);
         if (hotSwapAbsent && hotSwapAbsent.size) {
-          if (!inst._dyedSurfaceAbsent) inst._dyedSurfaceAbsent = new Set();
-          for (const d of hotSwapAbsent) inst._dyedSurfaceAbsent.add(d >>> 0);
+          if (!inst._recoloredSurfaceAbsent) inst._recoloredSurfaceAbsent = new Set();
+          for (const d of hotSwapAbsent) inst._recoloredSurfaceAbsent.add(d >>> 0);
         }
         entityMaterials = new Map();
         const newOwnedMaterials = [];
@@ -9801,8 +9816,8 @@ export class EntityManager {
     // R-8 (net-fixwave 2026-07-09) — hot-swap twin of the spawn-commit
     // recovery arms: a transient empty decode during an appearance change
     // otherwise leaves the new outfit on the mapless fallback until the next
-    // respawn (the spawn-path arms never see hot-swapped meshes). Dyed swaps
-    // arm the dyed ladder; plain swaps arm the 2026-05-30 plain ladder.
+    // respawn (the spawn-path arms never see hot-swapped meshes). Recolored swaps
+    // arm the recolored ladder; plain swaps arm the 2026-05-30 plain ladder.
     if (!WIREFRAME_MODE && inst.root) {
       let needsRefresh = hasPaletteSubs && hotSwapDecodeMisses > 0;
       if (!needsRefresh) {
@@ -9815,7 +9830,7 @@ export class EntityManager {
       }
       if (needsRefresh) {
         if (hasPaletteSubs) {
-          this._scheduleDyedSurfaceRefresh(inst, {
+          this._scheduleRecoloredSurfaceRefresh(inst, {
             paletteId,
             subPalettes,
             dids: new Uint32Array([...allSurfaceDids]),

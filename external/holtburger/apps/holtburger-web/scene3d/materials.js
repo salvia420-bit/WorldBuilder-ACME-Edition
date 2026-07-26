@@ -108,7 +108,7 @@ const _SURFACE_WRAP_CLAMP = (() => {
   }
 })();
 
-// #22 (2026-06-07) — paletted-material LRU cap. Each dyed outfit
+// #22 (2026-06-07) — paletted-material LRU cap. Each recolored outfit
 // signature (surface|palette|subPalettes) mints one cache-owned
 // MeshStandardMaterial + (optionally) one owned DataTexture. Without a
 // cap a long crowded-town session grows `palettedMaterials` /
@@ -122,7 +122,7 @@ const _SURFACE_WRAP_CLAMP = (() => {
 //
 // ⚠ SUPERSEDED AS THE DEFAULT (2026-07-26, `?palBudgetMB=`). A COUNT cap
 // bounds signatures, not BYTES, and the bytes are what OOMs the renderer: a
-// 512² dyed surface is 1 MiB and a 64² one is 16 KiB, so 256 signatures is
+// 512² recolored surface is 1 MiB and a 64² one is 16 KiB, so 256 signatures is
 // anywhere between 4 MiB and 256 MiB of `DataTexture.image.data`. The cap now
 // governs only two things:
 //   1. `?palBudgetMB=off` — the legacy-behaviour escape hatch;
@@ -1157,10 +1157,10 @@ export function readFlatDiffuseRetailFlag() {
 // blend/emissive/diffuse ladder was decoded at TWO sites that had already
 // drifted: `MaterialCache._materialFromFlags` (cache path) attached the diffuse
 // texture as an `emissiveMap` for luminous surfaces, while
-// `EntityManager._applyPalettedSurfaceRenderState` (dyed/paletted path)
+// `EntityManager._applyPalettedSurfaceRenderState` (recolored/paletted path)
 // explicitly did NOT — both citing the SAME retail line (acclient.c:454691-454697)
-// with opposite readings (A10 survey §3 row 2; ROADMAP §7 item 2). A dyed luminous
-// item therefore washed to white while its undyed twin glowed correctly.
+// with opposite readings (A10 survey §3 row 2; ROADMAP §7 item 2). A recolored luminous
+// item therefore washed to white while its unrecolored twin glowed correctly.
 //
 // Resolution (ROADMAP §7 ruling, A10 §4 Stage M1): adopt the emissiveMap-attached
 // reading. Retail's grayscale D3D emissive (Emissive.rgb = luminosity,
@@ -1292,7 +1292,7 @@ export function applySurfaceRenderState(mat, state, opts) {
   // 0/6152 surfaces while 762 carry luminosity>0 and 6150 carry diffuse>0 — all
   // bit-independent). The legacy cache path (flag OFF) applies lum/diffuse on
   // `hasLum`/`sfDiffuse` regardless of flags, so a `flags === 0` early-return
-  // here dropped them ON (opposite of the dyed-luminous fix). So: skip ONLY the
+  // here dropped them ON (opposite of the recolored-luminous fix). So: skip ONLY the
   // blend ladder when flags===0 (empty/fallback surface stays opaque), then fall
   // through to the float-driven lum/diffuse so they match the legacy path.
   if (flags === 0) {
@@ -1386,7 +1386,7 @@ export function applySurfaceRenderState(mat, state, opts) {
   if (parityV2 && isAdditive) mat.fog = false;
   applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture);
   // Retail draws a surface ONCE (see applyRetailSinglePass). This is THE funnel
-  // for the unified/entity/dyed-paletted paths — the blend ladder above is what
+  // for the unified/entity/recolored-paletted paths — the blend ladder above is what
   // decides `transparent`, so the parity call has to come after it, not at the
   // construction sites (which all build `transparent: false` and are mutated
   // here later).
@@ -1422,8 +1422,8 @@ function applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture) {
 
 // === A10-M1 (unification, 2026-06-11) — `?surfaceUnified=on` opt-in =========
 // When ON, both Surface-flag decode sites delegate to the single
-// `applySurfaceRenderState` above (the dyed/paletted path then ALSO attaches the
-// luminous emissiveMap, fixing the dyed-luminous wash-to-white). Default OFF
+// `applySurfaceRenderState` above (the recolored/paletted path then ALSO attaches the
+// luminous emissiveMap, fixing the recolored-luminous wash-to-white). Default OFF
 // keeps the legacy dual-path (byte-identical on the cache path — only the
 // paletted path's emissiveMap differs). JS-live (reload to toggle).
 export function readSurfaceUnifiedFlag() {
@@ -1514,11 +1514,11 @@ export function surfaceResultDecodeMisses(result) {
 }
 
 // === R1 (2026-06-24) — `?luminousEmissiveMap` opt-in ========================
-// Narrow sibling of `?surfaceUnified`: on the DYED/paletted luminous path,
+// Narrow sibling of `?surfaceUnified`: on the RECOLORED/paletted luminous path,
 // attach the (recoloured) diffuse map as `emissiveMap` so a COLOURED
-// dyed-luminous surface glows in-colour instead of washing to flat white —
+// recolored-luminous surface glows in-colour instead of washing to flat white —
 // WITHOUT the rest of the surfaceUnified render-state unification. The
-// non-dyed (cache) path already does this via `applyFloatLumDiffuse`. Default
+// non-recolored (cache) path already does this via `applyFloatLumDiffuse`. Default
 // OFF = byte-identical (flat-white emissive). Also implied when
 // `?surfaceUnified=on` (that path already attaches the emissiveMap). Memoized.
 let _luminousEmissiveMap;
@@ -1528,7 +1528,7 @@ export function readLuminousEmissiveMapFlag() {
     try {
       if (typeof window !== "undefined" && window.location) {
         const v = new URLSearchParams(window.location.search).get("luminousEmissiveMap");
-        // 2026-06-24: DEFAULT-ON (retail-faithful dyed-luminous glow; `=off` to opt out)
+        // 2026-06-24: DEFAULT-ON (retail-faithful recolored-luminous glow; `=off` to opt out)
         _luminousEmissiveMap = (v == null)
           ? true
           : !(["off", "0", "false", "no"].includes(String(v).toLowerCase()));
@@ -1922,9 +1922,9 @@ export function matBudgetBytesFromLocation() {
 // this pool (`_matLru` charges only the four per-DID maps), so these two maps
 // were the one unbudgeted per-surface retainer in the tree. A count cap is the
 // wrong instrument here because the per-signature cost is not a constant: at
-// 256² a dyed surface pins 256 KiB of `DataTexture.image.data`, at 512² it
+// 256² a recolored surface pins 256 KiB of `DataTexture.image.data`, at 512² it
 // pins 1 MiB, at 64² 16 KiB. 256 signatures is therefore anywhere from 4 MiB
-// to 256 MiB — and at Hotel Swank (an item museum: hundreds of distinct dye
+// to 256 MiB — and at Hotel Swank (an item museum: hundreds of distinct recolor
 // signatures in one stop) the cap was hit while the bytes were still small,
 // so the "shared" cache THRASHED (`palEvict` spiking) and each next wearer
 // re-minted a full-size copy. Both failure modes — thrash below the byte
@@ -1963,7 +1963,7 @@ export function matBudgetBytesFromLocation() {
 //
 // SAME FOOTGUN as `matBudgetMB` / `?surfaceBudgetMB`: a budget below one
 // bake's live working set re-introduces the thrash it exists to remove (and,
-// at the extreme, an evicted-then-refetched signature renders undyed for a
+// at the extreme, an evicted-then-refetched signature renders unrecolored for a
 // frame). The two structural guards are unchanged: eviction is
 // oldest-by-insertion and the entry installed by the current call is never
 // the one evicted.
@@ -2154,10 +2154,10 @@ export class MaterialCache {
     // textures. Dormant until a frag/MECH-B component calls getCachedVariant.
     this.vfxVariants = new Map();
     // Paletted twin of vfxVariants: frag/MECH-B variant clones built ON TOP of a
-    // dyed/recoloured paletted base (the `_entityMaterials` path), so itemFx /
-    // catalog effects (magicGlow, enchantShimmer, glint, itemAura) reach dyed
+    // recolored paletted base (the `_entityMaterials` path), so itemFx /
+    // catalog effects (magicGlow, enchantShimmer, glint, itemAura) reach recolored
     // gear too — not just surfaceDid-keyed non-paletted entities. Keyed by the
-    // exact paletteKey × component-SET so dye stays correct and programs dedup.
+    // exact paletteKey × component-SET so the recolor stays correct and programs dedup.
     this.vfxPalettedVariants = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.textures = new Map();
@@ -2789,12 +2789,12 @@ export class MaterialCache {
 
   /**
    * Paletted twin of `getCachedVariant`: build a frag/MECH-B VFX variant ON TOP
-   * of an already-dyed paletted base (one tagged with `__paletteKey` by
-   * `installPaletted`). This is the fix for dyed/paletted gear getting NO itemFx
+   * of an already-recolored paletted base (one tagged with `__paletteKey` by
+   * `installPaletted`). This is the fix for recolored/paletted gear getting NO itemFx
    * aura / catalog glow — the `_entityMaterials` branch previously returned the
    * base verbatim. Keys by `${paletteKey}|${setKey}|${configKey}` so two items
-   * with the same dye + same effect SET share one clone + one program, while
-   * different dyes (different paletteKey) keep their own colours. Returns the
+   * with the same recolor + same effect SET share one clone + one program, while
+   * different recolors (different paletteKey) keep their own colours. Returns the
    * base unchanged if it isn't a tagged paletted material (e.g. the shared
    * fallback) so the caller stays byte-identical there.
    */
@@ -2920,13 +2920,13 @@ export class MaterialCache {
   installPaletted(surfaceDid, paletteId, subPalettes, material, texture = null) {
     const key = this._paletteKey(surfaceDid, paletteId, subPalettes);
     // Stash the exact dedup key so `getCachedVariantFromPaletted` can build a
-    // VFX variant of this dyed base without re-plumbing (paletteId, subPalettes).
+    // VFX variant of this recolored base without re-plumbing (paletteId, subPalettes).
     material.userData = { ...(material.userData || {}), __cacheOwned: true, __paletteKey: key };
     if (texture) {
       texture.userData = { ...(texture.userData || {}), __cacheOwned: true };
       // `palMB` — a re-install under an existing key REPLACES the stored
       // texture, so discharge the old charge before charging the new one
-      // (the R-8 dyed ladder deliberately re-installs a signature that an
+      // (the R-8 recolored ladder deliberately re-installs a signature that an
       // incomplete decode poisoned).
       const prevBytes = this._palKeyBytes.get(key);
       if (prevBytes !== undefined) this._palBytes -= prevBytes;
@@ -3426,7 +3426,7 @@ export class MaterialCache {
     // === A10-M1 (2026-06-11) — single-decoder delegation =====================
     // When `?surfaceUnified=on`, defer the blend/emissive/diffuse ladder to the
     // shared `applySurfaceRenderState` (post-construction, mutating the built
-    // material) so this path and the dyed/paletted path run ONE decoder. Default
+    // material) so this path and the recolored/paletted path run ONE decoder. Default
     // OFF keeps the inline `opts` ladder below — byte-identical output (the
     // unified function adopts this path's emissiveMap reading, and the inline
     // writes vs post-construction `needsUpdate` writes resolve to the same
@@ -4275,7 +4275,7 @@ export class MaterialCache {
       // A10-M2 (2026-06-11) — snapshot the trailing T/L/D float triplet BEFORE
       // `sp.free()` so the unified decoder can thread the render-state flags
       // through the entity-owned (F.41 recolour) path. Same read idiom as the
-      // cache path (materials.js:2343) and the dyed hot-swap path
+      // cache path (materials.js:2343) and the recolored hot-swap path
       // (entities.js:6733-6735).
       sfTranslucency = typeof sp.translucency === "number" ? sp.translucency : 0.0;
       sfLuminosity = typeof sp.luminosity === "number" ? sp.luminosity : 0.0;

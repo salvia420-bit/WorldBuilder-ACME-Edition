@@ -396,7 +396,7 @@ const flagsDoc = read("docs/url-flags.md");
 
 check("entities.js imports the recolor gate",
   /import \{[^}]*gateSubPalettes[^}]*\} from "\.\/recolor_flag\.js"/.test(entitiesSrc));
-check("entities.js gates all THREE choke points (spawn / re-dress / dyed ladder)",
+check("entities.js gates all THREE choke points (spawn / re-dress / recolor ladder)",
   countOf(entitiesSrc, "gateSubPalettes(") === 3, String(countOf(entitiesSrc, "gateSubPalettes(")));
 check("each gated subPalettes site pairs with a gated paletteId",
   countOf(entitiesSrc, "gatePaletteId(") === 3, String(countOf(entitiesSrc, "gatePaletteId(")));

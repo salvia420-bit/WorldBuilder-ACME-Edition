@@ -11,7 +11,7 @@ import { getDyePreviewDiagSnapshot } from "../../ui/ac_dye_preview.js";
 
 const DEFAULT_MAX_FAILURES = 20;
 const DEFAULT_MAX_APPEARANCE_CHANGES = 30;
-const DEFAULT_MAX_DYE_APPLICATIONS = 50;
+const DEFAULT_MAX_RECOLOR_APPLICATIONS = 50;
 
 function errStr(e) {
   if (e == null) return "(null)";
@@ -37,18 +37,21 @@ export function attachClothing(diag) {
     // errors out.
     appearanceChanges: 0,
     recentChanges: [],
-    // Wave 7.7 — dye observability. Fires from
+    // Wave 7.7 — recolor observability (renamed from `dye*` 2026-07-26:
+    // player dye is only ONE producer of ObjDesc sub-palette overlays —
+    // skin/hair/eye tones, loot colour variants, creature palette
+    // variants and corpses all take this path). Fires from
     // `EntityManager._spawnImpl` AND `_applyAppearanceHotSwap` when
     // `fetchEntitySurfacesPixels` is invoked with non-trivial
     // overlays (paletteId != 0 || sub_palettes.length > 0). Captures
     // (guid, surfaceDids, paletteId, subPaletteTripleCount, source)
     // so the harness can audit which entities are actually paying
-    // the dye compositor cost. Counter + ring; no diff against any
+    // the recolor compositor cost. Counter + ring; no diff against any
     // oracle (matches the rest of __diag.clothing's observation-
     // only discipline).
-    dyeApplications: 0,
-    recentDyes: [],
-    dyesBySource: { spawn: 0, "hot-swap": 0 },
+    recolorApplications: 0,
+    recentRecolors: [],
+    recolorsBySource: { spawn: 0, "hot-swap": 0 },
     // Wave 7.9 — Phase D plugin tooltip-shown counter. Fires from
     // `plugins/dye-preview.js::showTooltipFor` when a dye-pot is
     // dragged over a dyeable armor + the tooltip is rendered.
@@ -78,7 +81,7 @@ export function attachClothing(diag) {
     recentDyePreviews: [],
     maxFailures: DEFAULT_MAX_FAILURES,
     maxRecentChanges: DEFAULT_MAX_APPEARANCE_CHANGES,
-    maxRecentDyes: DEFAULT_MAX_DYE_APPLICATIONS,
+    maxRecentRecolors: DEFAULT_MAX_RECOLOR_APPLICATIONS,
     maxRecentPreviews: 30,
 
     onLoadSucceeded(meta) {
@@ -133,21 +136,21 @@ export function attachClothing(diag) {
      *   {guid, source: "spawn"|"hot-swap", surfaceDidCount,
      *    paletteId, subPaletteTripleCount}
      */
-    onDyeApplication(meta) {
+    onRecolorApplication(meta) {
       try {
         const m = meta || {};
-        clothing.dyeApplications += 1;
+        clothing.recolorApplications += 1;
         const source = m.source || "unknown";
-        if (source in clothing.dyesBySource) clothing.dyesBySource[source] += 1;
-        else clothing.dyesBySource[source] = 1;
-        pushCapped(clothing.recentDyes, {
+        if (source in clothing.recolorsBySource) clothing.recolorsBySource[source] += 1;
+        else clothing.recolorsBySource[source] = 1;
+        pushCapped(clothing.recentRecolors, {
           guid: hexId(m.guid ?? 0),
           source,
           surfaceDidCount: (m.surfaceDidCount ?? 0) | 0,
           paletteId: hexId(m.paletteId ?? 0),
           subPaletteTripleCount: (m.subPaletteTripleCount ?? 0) | 0,
           ts: performance.now(),
-        }, clothing.maxRecentDyes);
+        }, clothing.maxRecentRecolors);
       } catch (_) {}
     },
 
@@ -253,8 +256,13 @@ export function attachClothing(diag) {
         cached: cached.tables.length,
         failures: clothing.failures.length,
         appearanceChanges: clothing.appearanceChanges,
-        dyeApplications: clothing.dyeApplications,
-        dyesBySource: { ...clothing.dyesBySource },
+        recolorApplications: clothing.recolorApplications,
+        recolorsBySource: { ...clothing.recolorsBySource },
+        // DEPRECATED 2026-07-26 (dye→recolor rename) — mirrors of the two
+        // keys above, kept for one release so existing readers/relays keep
+        // working. Remove after 2026-08.
+        dyeApplications: clothing.recolorApplications,
+        dyesBySource: { ...clothing.recolorsBySource },
         dyePreviewsRendered: clothing.dyePreviewsRendered,
         dyePreviewCacheHits: clothing.dyePreviewCacheHits,
         dyePreviewFailures: clothing.dyePreviewFailures,
@@ -274,9 +282,14 @@ export function attachClothing(diag) {
         failures: [...clothing.failures],
         appearanceChanges: clothing.appearanceChanges,
         recentChanges: [...clothing.recentChanges],
-        dyeApplications: clothing.dyeApplications,
-        recentDyes: [...clothing.recentDyes],
-        dyesBySource: { ...clothing.dyesBySource },
+        recolorApplications: clothing.recolorApplications,
+        recentRecolors: [...clothing.recentRecolors],
+        recolorsBySource: { ...clothing.recolorsBySource },
+        // DEPRECATED 2026-07-26 (dye→recolor rename) — mirrors; remove after
+        // one release.
+        dyeApplications: clothing.recolorApplications,
+        recentDyes: [...clothing.recentRecolors],
+        dyesBySource: { ...clothing.recolorsBySource },
         dyePreviewsRendered: clothing.dyePreviewsRendered,
         dyePreviewCacheHits: clothing.dyePreviewCacheHits,
         dyePreviewFailures: clothing.dyePreviewFailures,
@@ -292,9 +305,9 @@ export function attachClothing(diag) {
       clothing.failures.length = 0;
       clothing.appearanceChanges = 0;
       clothing.recentChanges.length = 0;
-      clothing.dyeApplications = 0;
-      clothing.recentDyes.length = 0;
-      clothing.dyesBySource = { spawn: 0, "hot-swap": 0 };
+      clothing.recolorApplications = 0;
+      clothing.recentRecolors.length = 0;
+      clothing.recolorsBySource = { spawn: 0, "hot-swap": 0 };
       clothing.dyePreviewsRendered = 0;
       clothing.dyePreviewCacheHits = 0;
       clothing.dyePreviewFailures = 0;
@@ -307,6 +320,40 @@ export function attachClothing(diag) {
       clothing.dyePreviewWholeMeshReverted = 0;
     },
   };
+
+  // ---------------------------------------------------------------------
+  // DEPRECATED 2026-07-26 — dye→recolor terminology rename. `dye*` named a
+  // path that composes ALL ObjDesc sub-palette overlays (skin/hair/eye
+  // tones, loot colour variants, creature palette variants, corpses —
+  // player dye is 10 of 99 palette templates). The new names are
+  // `recolorApplications` / `recolorsBySource` / `recentRecolors` /
+  // `maxRecentRecolors` / `onRecolorApplication`; these aliases delegate
+  // to them so out-of-tree readers survive one release. REMOVE after
+  // 2026-08. Non-enumerable on purpose: JSON of the live object stays
+  // single-named (summary()/snapshot() emit explicit mirrors instead).
+  // ---------------------------------------------------------------------
+  const DEPRECATED_ALIASES = {
+    dyeApplications: "recolorApplications",
+    dyesBySource: "recolorsBySource",
+    recentDyes: "recentRecolors",
+    maxRecentDyes: "maxRecentRecolors",
+  };
+  for (const [oldKey, newKey] of Object.entries(DEPRECATED_ALIASES)) {
+    Object.defineProperty(clothing, oldKey, {
+      enumerable: false,
+      configurable: true,
+      get() { return clothing[newKey]; },
+      set(v) { clothing[newKey] = v; },
+    });
+  }
+  Object.defineProperty(clothing, "onDyeApplication", {
+    enumerable: false,
+    configurable: true,
+    writable: true,
+    value: function onDyeApplication(meta) {
+      return clothing.onRecolorApplication(meta);
+    },
+  });
 
   diag.clothing = clothing;
 }

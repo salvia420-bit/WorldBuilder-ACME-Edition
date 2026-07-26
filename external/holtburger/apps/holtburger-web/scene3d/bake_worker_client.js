@@ -119,7 +119,7 @@ export function applyShardBudget(g = globalThis) {
 // Grammar:  ?surfaceBudgetMB=N     both instances get N MB
 //           ?surfaceBudgetMB=N:M   main gets N MB, the bake worker gets M MB
 // The split is design §2 option (B): the roles are asymmetric. The worker
-// carries the bulk statics/scenery/entity decode plus the composed (dyed)
+// carries the bulk statics/scenery/entity decode plus the composed (recolored)
 // class, while the main thread's cross-call hits are largely suppressed by the
 // never-evicted JS `MaterialCache` in front of it — so main plausibly needs
 // only the intra-call walk window (`SURFACE_BATCH_SPLIT_CHUNK` = 16 DIDs).
@@ -941,7 +941,7 @@ export class BakeWorkerClient {
     try {
       await this._ensureWorker();
       // R-1 alias split: statics/cells/buildings never carry aliases (no
-      // wire texture changes), so this only fires on the non-dyed ENTITY
+      // wire texture changes), so this only fires on the non-recolored ENTITY
       // preload path (entities.js → materialCache.preload).
       const split = this.aliasSplit ? partitionTexSwapAliasDids(dids) : null;
       if (split && split.aliasIdx.length > 0) {
@@ -976,7 +976,7 @@ export class BakeWorkerClient {
   }
 
   /**
-   * Entity (dyed/paletted) surface pixels off-thread. Returns a plain
+   * Entity (recolored/paletted) surface pixels off-thread. Returns a plain
    * `Array<SurfacePixels-like>` — drop-in for the `fetchEntitySurfacesPixels`
    * consumers in `entities.js` (they read `.width/.pixels/.translucency/…`
    * and guard `.free()`). Falls back to the direct main-thread wasm call.
@@ -1215,7 +1215,7 @@ export function surfacePixelsFetcher(wasmExports) {
 }
 
 /**
- * Same contract for the single-call entity (dyed) surface decoder. Returns
+ * Same contract for the single-call entity (recolored) surface decoder. Returns
  * the EXACT `wasmExports.fetchEntitySurfacesPixels` reference when the
  * worker is inactive (byte-identical to pre-offload), OR when the wasm
  * bundle predates the export (so callers' `typeof … === "function"` guards
