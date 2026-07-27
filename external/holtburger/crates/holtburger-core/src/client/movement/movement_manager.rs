@@ -31,7 +31,18 @@ use holtburger_protocol::messages::{MovementEventData, MovementType, MovementTyp
 /// A3-D3 master gate — `unpack_movement` Stage-3 semantics (the DoMotion
 /// lattice on style change, per-entity `my_run_rate` install, MoveTo
 /// directive recording, standing_longjump consume, preamble
-/// cancel/unstick). Default OFF: the new structs are inert dead code —
+/// cancel/unstick).
+///
+/// F2/F5 (2026-07-27) — DEFAULT-DOC CORRECTION: this const is `true`
+/// (flipped in a7cfb75e). The paragraph below described the ORIGINAL
+/// landing default and had to be read against the value, not the prose.
+/// Its being ON is load-bearing: it is why a SERVER-commanded
+/// MoveToObject for the LOCAL player already installs a directive on
+/// the `MoveToManager` driver (the `SelfServerControlledMotion` arm
+/// below) even before `USE_SERVER_MOVETO_DRIVER` picks that lane's
+/// steering over the projection's.
+///
+/// OFF: the new structs are inert dead code —
 /// `MovementSystem::apply_movement_world_events` early-returns and
 /// nothing is constructed. Wasm coupling: on wasm these semantics are
 /// additionally behind `?wireStatePacks=stage1` (A13-W1) — without

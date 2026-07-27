@@ -425,6 +425,16 @@ impl ClientSimulationSystem {
             }
         }
 
+        // F2 follow-on (`USE_STICKY_IDLE_STEP`) — neither arm claimed
+        // this slice (no drive, no manual input). Retail still runs the
+        // sticky pull here: `PositionManager::adjust_offset` is part of
+        // the per-object physics pass, not of input handling
+        // (acclient.c:388287-388304 chained at :320029), and standing
+        // still while swinging is the case the glue exists for. Returns
+        // `false` either way so the legacy solve still runs its normal
+        // gravity/contact pass — from the sticky-updated pose.
+        movement.step_local_sticky_idle_slice(world, slice_dt);
+
         false
     }
 
@@ -629,6 +639,48 @@ impl ClientSimulationSystem {
                         .map_or(RUN_ANIM_SPEED, |c| c.base_run_forward_speed()),
                 );
 
+                // F2 (COL-21 structural) — the faithful driver owns this
+                // directive when [`USE_SERVER_MOVETO_DRIVER`] is
+                // effective AND the target entity resolves. Retail runs
+                // exactly one consumer for wire type 6 regardless of who
+                // asked (`unpack_movement` case 6 -> `PerformMovement`,
+                // acclient.c:346133-346145), and only that pipeline
+                // reaches the turn-then-move node order (:345859) and
+                // the Sticky-bit arrival handoff
+                // (`BeginNextNode` empty queue -> `StickTo`,
+                // :345553-345566). An unresolvable target degrades to the
+                // projection below, which can still drive to the wire
+                // `origin` rather than cancelling 0x37 next frame.
+                let driver_target = movement
+                    .server_moveto_driver_enabled()
+                    .then(|| world.get_visible_entity(mto.target).map(|_| mto.target))
+                    .flatten();
+                if let Some(target) = driver_target {
+                    movement.clear_server_controlled_projection();
+                    movement.enqueue_server_controlled_moveto(
+                        Some(target),
+                        mto.origin.cell_id,
+                        mto.origin.position,
+                        // Retail resolves the sought object's dims off
+                        // `CPartArray::GetRadius/GetHeight` with a 0.0
+                        // fallback (acclient.c:319808-319817); our entity
+                        // model surfaces `use_radius` only.
+                        target_use_radius.unwrap_or(0.0),
+                        0.0,
+                        MovementParameters::from_wire_moveto(&mto.params),
+                        capabilities
+                            .as_ref()
+                            .map_or(RUN_ANIM_SPEED, |c| c.base_run_forward_speed())
+                            * run_rate,
+                        mto.params.speed,
+                    );
+                    movement.arm_autonomous_position_heartbeat_schedule(Instant::now(), world);
+                    if USE_STICKY_MANAGER {
+                        apply_local_sticky_from_invalid(world, None);
+                    }
+                    return Ok(Vec::new());
+                }
+
                 movement.set_server_controlled_projection(ServerControlledProjection {
                     target_pose,
                     speed_mps,
@@ -638,6 +690,42 @@ impl ClientSimulationSystem {
                 // A2-P3: retail per-unpack preamble unstick subset
                 // (acclient.c:339518-339519) — a fresh MoveToObject for
                 // the local player releases any melee sticky.
+                if USE_STICKY_MANAGER {
+                    apply_local_sticky_from_invalid(world, None);
+                }
+                return Ok(Vec::new());
+            }
+            MovementTypeData::MoveToPosition(mtp)
+                if movement.server_moveto_driver_enabled() =>
+            {
+                // F2 — wire type 7 on the faithful driver. Pre-fix this
+                // arm fell through to `build_server_controlled_result`,
+                // which SNAPS the avatar onto `origin` in one frame; the
+                // driver walks it there with the same node order retail
+                // builds (`MoveToPosition` :345790-345857, sticky bit
+                // cleared at :345852) and the same fail-distance /
+                // progress give-ups.
+                let capabilities = world.resolve_self_movement_capabilities().ok();
+                let run_rate = if mtp.run_rate.is_finite() && mtp.run_rate > 0.0 {
+                    mtp.run_rate
+                } else {
+                    capabilities.as_ref().map_or(1.0, |c| c.run_rate_scalar)
+                };
+                movement.clear_server_controlled_projection();
+                movement.enqueue_server_controlled_moveto(
+                    None,
+                    mtp.origin.cell_id,
+                    mtp.origin.position,
+                    0.0,
+                    0.0,
+                    MovementParameters::from_wire_moveto(&mtp.params),
+                    capabilities
+                        .as_ref()
+                        .map_or(RUN_ANIM_SPEED, |c| c.base_run_forward_speed())
+                        * run_rate,
+                    mtp.params.speed,
+                );
+                movement.arm_autonomous_position_heartbeat_schedule(Instant::now(), world);
                 if USE_STICKY_MANAGER {
                     apply_local_sticky_from_invalid(world, None);
                 }

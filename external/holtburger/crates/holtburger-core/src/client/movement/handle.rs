@@ -291,6 +291,27 @@ impl MovementSystemHandle {
         self.inner.set_retail_ground(on);
     }
 
+    /// F2 (2026-07-27): install the `?serverMoveToDriver=off` runtime
+    /// carrier (default-ON — the LOCAL player's server-commanded MoveTo
+    /// 6/7 runs the faithful `MoveToManager` driver, giving turn-first
+    /// node order, the retail `get_command` gait and the Sticky-bit
+    /// arrival `StickTo`; `=off` returns it to the approximate
+    /// `ServerControlledProjection` lane). Forwards to
+    /// `MovementSystem::set_server_moveto_driver`.
+    pub fn set_server_moveto_driver(&mut self, on: bool) {
+        self.inner.set_server_moveto_driver(on);
+    }
+
+    /// F2 follow-on (2026-07-27): install the `?stickyIdleStep=off`
+    /// runtime carrier (default-ON — the LOCAL `StickyManager` step also
+    /// runs on frames no manual-drive slice claimed, so a standing
+    /// attacker's swing-echo/arrival sticky actually pulls; `=off`
+    /// restores the manual-slice-only reach). Forwards to
+    /// `MovementSystem::set_sticky_idle_step`.
+    pub fn set_sticky_idle_step(&mut self, on: bool) {
+        self.inner.set_sticky_idle_step(on);
+    }
+
     /// (2026-07-02): install the `?castMove=off` runtime carrier (default-ON
     /// retail cast-movement arbitration — a server-played cast gesture
     /// suppresses held locomotion until an input edge / gesture end; `=off`

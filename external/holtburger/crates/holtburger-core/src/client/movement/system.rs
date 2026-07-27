@@ -432,6 +432,130 @@ const AUTONOMOUS_POSE_HEADING_EPSILON_RAD: f32 = 0.0035;
 /// approach-to-cast while still bounding a stuck projection.
 const SERVER_PROJECTION_MAX_AGE: Duration = Duration::from_secs(8);
 
+/// F2 (COL-21 structural, 2026-07-27) — the LOCAL player's
+/// SERVER-COMMANDED `MoveToObject` / `MoveToPosition` runs on the
+/// faithful [`super::move_to::MoveToManager`] driver instead of the
+/// approximate [`ServerControlledProjection`] lane.
+///
+/// Retail has ONE consumer for movement types 6/7 regardless of who
+/// asked: `MovementManager::unpack_movement` case 6/7 →
+/// `MoveToManager::PerformMovement` → the node pipeline
+/// (acclient.c:346133-346145). The local player is not special-cased,
+/// and the arrival tail of that pipeline is the sticky handoff —
+/// `BeginNextNode` with an empty queue and the `Sticky (0x80)` bit set
+/// stashes the target dims, `CleanUp`s and calls
+/// `PositionManager::StickTo(top_level_id, radius, height)`
+/// (:345553-345566). The projection lane has no node queue, so it
+/// reaches neither the turn-then-move ordering (`MoveToObject_Internal`
+/// :345859 → `AddTurnToHeadingNode`/`AddMoveToPositionNode`) nor that
+/// handoff.
+///
+/// What this const actually flips is WHICH lane's steering REACHES the
+/// body. The wire directive already lands on the driver at HEAD — the
+/// `SelfServerControlledMotion` arm of
+/// [`Self::apply_movement_world_events`] runs
+/// `MovementManager::apply_unpacked_movement`, whose MoveToObject arm
+/// calls `MoveToManager::move_to_object` with the full wire params
+/// (`USE_UNPACK_MOVEMENT_SEMANTICS`, on) — but
+/// [`Self::current_local_drive_control`] returns the PROJECTION arm
+/// first, so the driver's per-frame steer was computed and DISCARDED
+/// while the projection drove the avatar, and the driver ran its node
+/// machine against a pose it did not control. Clearing the projection
+/// on this path is what lets the driver's output through; the explicit
+/// re-install ([`Self::enqueue_server_controlled_moveto`]) keeps the
+/// route self-sufficient if the unpack semantics or (on wasm)
+/// `?wireStatePacks=stage1` are off, so flipping this const on can
+/// never leave the avatar with no drive at all.
+///
+/// The driver also retires the [`SERVER_PROJECTION_MAX_AGE`] heuristic
+/// on this path — retail's own give-ups take over (`fail_distance`
+/// :345689-345692, `CheckProgressMade` :344833, target-gone 0x37
+/// :346086).
+///
+/// REMOTE entities are untouched: they have no `MoveToManager` (the
+/// driver is LOCAL-only, [`super::move_to::USE_MOVETO_DRIVER`]) and
+/// keep the wire-derived anim hint + server position stream.
+///
+/// Composition: this const only picks WHICH lane consumes the
+/// directive. Steering still requires `USE_MOVETO_DRIVER`; with that
+/// const off an install fast-fails 0x36 (the S10 compose rule), so the
+/// pair is checked together at the install site and the projection lane
+/// takes the directive when either is off. A `MoveToObject` whose
+/// target entity is not resolvable also degrades to the projection lane
+/// rather than cancelling 0x37 on the next frame — the projection can
+/// still drive to the wire `origin`.
+///
+/// ONE feature, TWO carriers (the [`USE_RETAIL_GROUND`] shape): this
+/// const (native default) + the `?serverMoveToDriver=off` URL flag
+/// ([`MovementSystem::set_server_moveto_driver`]). Effective predicate:
+/// [`MovementSystem::server_moveto_driver_enabled`].
+///
+/// `true` (DEFAULT): server MoveTo 6/7 for the local player runs the
+/// faithful driver (turn node first, `get_command` gait, aux-turn,
+/// fail-distance, arrival `StickTo`).
+/// `false` / `?serverMoveToDriver=off`: the pre-2026-07-27
+/// `ServerControlledProjection` behaviour, byte-identical.
+const USE_SERVER_MOVETO_DRIVER: bool = true;
+
+/// F2 follow-on (2026-07-27) — run the LOCAL `StickyManager` step on
+/// frames where NO manual drive slice ran.
+///
+/// Retail's sticky pull is part of the per-object physics pass, not of
+/// input handling: `PositionManager::adjust_offset` calls
+/// `StickyManager::adjust_offset` on the ONE per-frame offset while
+/// `target_id && initialized` (acclient.c:388287-388304 chained at
+/// :320029), and `UseTime` runs the 1.0 s timeout regardless of what
+/// the player is pressing (:388605-388623). Standing still and swinging
+/// is precisely the case the glue exists for.
+///
+/// Our port had the step wired ONLY inside the manual-drive slice
+/// ([`Self::advance_manual_slice_via_transition`], which returns early
+/// unless `active_drive` is `Manual`), so an idle player never stepped
+/// sticky — including the frame right after a MoveTo arrival, where
+/// `finish_pursuit_with_manual_restore` clears `active_drive` to `None`
+/// when no manual state is held. The F2 arrival handoff would install a
+/// sticky target that then never pulled, and the swing-echo install
+/// (`apply_local_sticky_from_invalid`) was inert for a stationary
+/// attacker. The step is idempotent per slice — the manual arms keep
+/// owning frames they run, this only covers the frames they skip.
+///
+/// `true` (DEFAULT): sticky steps on drive-less/idle frames too.
+/// `false` / `?stickyIdleStep=off`: the pre-2026-07-27 manual-slice-only
+/// reach.
+const USE_STICKY_IDLE_STEP: bool = true;
+
+/// F2 (COL-21) — realized forward speed for a SERVER-commanded MoveTo
+/// running on the faithful driver, resolved once at install from the
+/// wire envelope.
+///
+/// Retail chain (the three links F1 already cites on the projection
+/// lane): `unpack_movement` case 6 stores the wire `run_rate` into the
+/// mover's `my_run_rate` (acclient.c:339571);
+/// `CMotionInterp::apply_run_to_command` (:343439) promotes
+/// `WalkForward -> RunForward` and scales the interpreted forward speed
+/// by `my_run_rate` (:343463-343466) — the WALK arm never reaches that
+/// multiply; `MoveToManager::BeginMoveForward` (:345411-345414)
+/// installs `params.speed` as the interpreted forward speed, which
+/// multiplies BOTH arms.
+///
+/// The autonomous drive lane's own default
+/// (`resolved_manual_run_speed()`) carries the player's PROPERTY run
+/// rate and knows nothing about `params.speed`, so without this the
+/// driver route would run an ACE melee charge (`speed` 1.5) 1.5x slow
+/// and ignore a wire run-rate override — i.e. it would land SLOWER than
+/// the F1 projection lane it replaces.
+///
+/// `None` (the S10 pursuit lane, JS-issued autonomous drives) keeps
+/// that lane's landed speed policy untouched.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ServerMoveToDrive {
+    /// `RunForward` authored cycle base x the wire `my_run_rate` (m/s)
+    /// — the RUN arm's speed before `speed_modifier`.
+    run_forward_speed_mps: f32,
+    /// `MovementParameters::speed` (:345411) — multiplies both arms.
+    speed_modifier: f32,
+}
+
 /// Belt-and-braces stale-null-cell watchdog (2026-07-21, live death-respawn
 /// paralysis follow-up). `handlers/player.rs`'s `body_cell_null` backstop
 /// heals the runtime body the moment the NEXT accepted self `UpdatePosition`
@@ -1612,6 +1736,24 @@ pub(crate) struct MovementSystem {
     /// rolls the retail outdoor ground-movement port back (the A/B escape).
     /// Combined by [`Self::retail_ground_enabled`]. Default `None`.
     retail_ground_runtime: Option<bool>,
+    /// F2 (2026-07-27) — runtime carrier of the `?serverMoveToDriver=off`
+    /// URL flag. `None` = the [`USE_SERVER_MOVETO_DRIVER`] const default
+    /// (ON); `Some(false)` sends server MoveTo 6/7 back down the
+    /// `ServerControlledProjection` lane (the A/B escape). Combined by
+    /// [`Self::server_moveto_driver_enabled`]. Default `None`.
+    server_moveto_driver_runtime: Option<bool>,
+    /// F2 follow-on (2026-07-27) — runtime carrier of the
+    /// `?stickyIdleStep=off` URL flag. `None` = the
+    /// [`USE_STICKY_IDLE_STEP`] const default (ON). Combined by
+    /// [`Self::sticky_idle_step_enabled`]. Default `None`.
+    sticky_idle_step_runtime: Option<bool>,
+    /// F2 (2026-07-27) — the install-time speed resolution for the
+    /// SERVER-commanded MoveTo currently on the driver (see
+    /// [`ServerMoveToDrive`]). Cleared with the pursuit (arrival,
+    /// cancel, target loss, or any local/JS drive that replaces it), so
+    /// the S10 pursuit lane and JS autonomous drives keep their own
+    /// speed policy.
+    server_moveto_drive: Option<ServerMoveToDrive>,
     /// (2026-07-02) — runtime carrier of the `?castMove=off` URL flag.
     /// `None` = the [`USE_CAST_MOVE`] const default (ON); `Some(false)`
     /// disables the cast-gesture movement arbitration. Combined by
@@ -1874,6 +2016,27 @@ enum PendingPursuitCommand {
         position: holtburger_common::math::Vector3,
         run: bool,
     },
+    /// F2 ([`USE_SERVER_MOVETO_DRIVER`]) — a SERVER-commanded MoveTo
+    /// (wire types 6/7) for the local player. Distinct from the S10
+    /// entries above because those synthesize `MovementParameters`
+    /// from a `run` bool, while the wire carries the real block
+    /// (`MovementParameters::UnPackNet`, unpack cases 6/7) — the
+    /// `Sticky (0x80)` bit that arms the arrival handoff, the ACE
+    /// melee-charge `fail_distance` 15.0 / `speed` 1.5 /
+    /// `walk_run_threshhold`, and `distance_to_object`.
+    ServerMoveTo {
+        /// `Some` = type 6 (`MoveToObject`) with a resolved target;
+        /// `None` = type 7 (`MoveToPosition`).
+        target: Option<Guid>,
+        /// Wire `Origin`, split so this entry stays `Copy` (the
+        /// protocol `Origin` is not).
+        cell_id: Guid,
+        position: holtburger_common::math::Vector3,
+        object_radius: f32,
+        object_height: f32,
+        params: MovementParameters,
+        drive: ServerMoveToDrive,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1982,6 +2145,9 @@ impl MovementSystem {
             outdoor_static_grounding_runtime: None,
             building_overlap_runtime: None,
             retail_ground_runtime: None,
+            server_moveto_driver_runtime: None,
+            sticky_idle_step_runtime: None,
+            server_moveto_drive: None,
             cast_move_runtime: None,
             cast_hold_reclaim_runtime: None,
             local_cast_window_active: false,
@@ -2072,6 +2238,36 @@ impl MovementSystem {
     /// `TransitionGates::retail_ground` at the dispatch sites.
     pub(crate) fn set_retail_ground(&mut self, on: bool) {
         self.retail_ground_runtime = Some(on);
+    }
+
+    /// F2 (2026-07-27) — install the `?serverMoveToDriver=off` runtime
+    /// carrier (see [`USE_SERVER_MOVETO_DRIVER`]). The wasm recv-loop
+    /// init calls this once with the parsed flag (default-ON; `=off`
+    /// returns server MoveTo 6/7 to the `ServerControlledProjection`
+    /// lane).
+    pub(crate) fn set_server_moveto_driver(&mut self, on: bool) {
+        self.server_moveto_driver_runtime = Some(on);
+    }
+
+    /// [`USE_SERVER_MOVETO_DRIVER`] effective predicate. ANDed with
+    /// [`USE_MOVETO_DRIVER`] because nothing steers a directive the
+    /// driver shim is not running (the S10 compose rule).
+    pub(crate) fn server_moveto_driver_enabled(&self) -> bool {
+        USE_MOVETO_DRIVER
+            && self
+                .server_moveto_driver_runtime
+                .unwrap_or(USE_SERVER_MOVETO_DRIVER)
+    }
+
+    /// F2 follow-on (2026-07-27) — install the `?stickyIdleStep=off`
+    /// runtime carrier (see [`USE_STICKY_IDLE_STEP`]).
+    pub(crate) fn set_sticky_idle_step(&mut self, on: bool) {
+        self.sticky_idle_step_runtime = Some(on);
+    }
+
+    /// [`USE_STICKY_IDLE_STEP`] effective predicate.
+    pub(crate) fn sticky_idle_step_enabled(&self) -> bool {
+        self.sticky_idle_step_runtime.unwrap_or(USE_STICKY_IDLE_STEP)
     }
 
     /// (2026-07-02) — install the `?castMove=off` runtime carrier (see
@@ -2934,6 +3130,48 @@ impl MovementSystem {
         self.server_controlled_projection_installed_at = None;
     }
 
+    /// F2 ([`USE_SERVER_MOVETO_DRIVER`]) — queue a SERVER-commanded
+    /// MoveTo (wire type 6/7) for the LOCAL player onto the faithful
+    /// driver, replacing whatever the projection lane would have done.
+    ///
+    /// Queued rather than installed inline so it lands in the same
+    /// `tick` phase as the S10 pursuit entries
+    /// (`apply_pending_pursuit_commands_inner`) — that phase already
+    /// owns the retail `PerformMovement` preamble (`CancelMoveTo(0x36)`
+    /// + `unstick_from_object`, acclient.c:346123-346127) and the
+    /// same-tick manual-input arbitration (raw input cancels a MoveTo,
+    /// :339240).
+    ///
+    /// `object_radius`/`object_height` are the caller-resolved target
+    /// physics dims retail reads off `CPartArray` (0.0 fallback,
+    /// :319808-319817); they feed both the `UseSpheres` cylinder metric
+    /// and the arrival `StickTo` (:345553-345566).
+    pub(crate) fn enqueue_server_controlled_moveto(
+        &mut self,
+        target: Option<Guid>,
+        cell_id: Guid,
+        position: holtburger_common::math::Vector3,
+        object_radius: f32,
+        object_height: f32,
+        params: MovementParameters,
+        run_forward_speed_mps: f32,
+        speed_modifier: f32,
+    ) {
+        self.pending_pursuit_commands
+            .push(PendingPursuitCommand::ServerMoveTo {
+                target,
+                cell_id,
+                position,
+                object_radius,
+                object_height,
+                params,
+                drive: ServerMoveToDrive {
+                    run_forward_speed_mps,
+                    speed_modifier,
+                },
+            });
+    }
+
     fn clear_autonomous_position_heartbeat_schedule(&mut self) {
         self.next_autonomous_position_heartbeat_at = None;
     }
@@ -3104,6 +3342,9 @@ impl MovementSystem {
                 // DoMotions in retail — the latch rises with them.
                 self.last_move_was_autonomous = true;
                 self.active_drive = Some(ActiveDriveState::autonomous(intent));
+                // F2 — this drive is not the server MoveTo's steer, so
+                // it must not inherit that directive's wire speed.
+                self.server_moveto_drive = None;
             }
             QueuedDriveCommand::Transient(intent) => {
                 // One-shot local motion — a fresh `DoMotion` (:317325).
@@ -3630,6 +3871,9 @@ impl MovementSystem {
                     let was_active = manager.is_moveto_active();
                     let out = manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
                     self.local_pursuit_engaged = false;
+                    // F2 — the wire speed resolution dies with the
+                    // directive it was installed for.
+                    self.server_moveto_drive = None;
                     if was_active {
                         if restore_manual {
                             stop_requested |=
@@ -3670,6 +3914,13 @@ impl MovementSystem {
                     let target_guid = match entry {
                         PendingPursuitCommand::Pursue { target, .. }
                         | PendingPursuitCommand::TurnToObject { target } => Some(target),
+                        _ => None,
+                    };
+                    // F2 — a server MoveTo carries its OWN wire speed
+                    // resolution; every other entry uses the lane's
+                    // landed policy, so the slot is cleared for them.
+                    self.server_moveto_drive = match entry {
+                        PendingPursuitCommand::ServerMoveTo { drive, .. } => Some(drive),
                         _ => None,
                     };
                     let origin = target_guid
@@ -3739,6 +3990,36 @@ impl MovementSystem {
                                 params,
                             }
                         }
+                        PendingPursuitCommand::ServerMoveTo {
+                            target,
+                            cell_id,
+                            position,
+                            object_radius,
+                            object_height,
+                            params,
+                            ..
+                        } => {
+                            // F2 — the wire block rides VERBATIM
+                            // (`MovementParameters::UnPackNet`, unpack
+                            // cases 6/7): the Sticky 0x80 bit that arms
+                            // the arrival handoff (acclient.c:345553),
+                            // `fail_distance`, `speed`,
+                            // `walk_run_threshhold` and
+                            // `distance_to_object` all come from the
+                            // server, not from a synthesized default.
+                            let origin = Origin { cell_id, position };
+                            match target {
+                                Some(target) => MovementStruct::MoveToObject {
+                                    target,
+                                    target_exists: true,
+                                    origin,
+                                    object_radius,
+                                    object_height,
+                                    params,
+                                },
+                                None => MovementStruct::MoveToPosition { origin, params },
+                            }
+                        }
                         PendingPursuitCommand::Cancel { .. } => unreachable!("handled above"),
                     };
                     let manager = self.movement_managers.entry(guid).or_default();
@@ -3784,6 +4065,8 @@ impl MovementSystem {
     fn finish_pursuit_with_manual_restore(&mut self, stop_completely: bool) -> bool {
         self.local_pursuit_engaged = false;
         self.moveto_stall = MoveToStallRecovery::default();
+        // F2 — the wire speed resolution is scoped to the directive.
+        self.server_moveto_drive = None;
         if let Some(state) = self.last_manual_drive
             && !(state.is_locomotion_idle() && state.turning.is_none())
         {
@@ -3835,11 +4118,13 @@ impl MovementSystem {
         let Some(manager) = self.movement_managers.get_mut(&guid) else {
             self.local_pursuit_engaged = false;
             self.moveto_stall = MoveToStallRecovery::default();
+            self.server_moveto_drive = None;
             return false;
         };
         if !manager.is_moveto_active() {
             self.local_pursuit_engaged = false;
             self.moveto_stall = MoveToStallRecovery::default();
+            self.server_moveto_drive = None;
             return false;
         }
         let on_contact = !world.player.is_airborne;
@@ -3857,6 +4142,7 @@ impl MovementSystem {
             let _ = manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
             self.local_pursuit_engaged = false;
             self.moveto_stall = MoveToStallRecovery::default();
+            self.server_moveto_drive = None;
             return false;
         }
 
@@ -4114,6 +4400,31 @@ impl MovementSystem {
             // DAT walk-cycle base (2.6017 m/s), which under-ran retail and
             // ACE by 1.199x.
             crate::client::movement_types::Gait::Walk => super::motion_interp::WALK_ANIM_SPEED,
+        };
+        // F2 ([`ServerMoveToDrive`]) — a SERVER-commanded MoveTo on the
+        // driver overrides the RUN arm with the wire `my_run_rate`
+        // resolution (acclient.c:339571 -> :343463-343466) and scales
+        // BOTH arms by `params.speed` (:345411). `None` = the S10
+        // pursuit / JS autonomous lanes, unchanged.
+        let speed_mps = match self.server_moveto_drive {
+            Some(drive) => {
+                let base = match intent.gait {
+                    crate::client::movement_types::Gait::Run
+                        if drive.run_forward_speed_mps.is_finite()
+                            && drive.run_forward_speed_mps > 1e-3 =>
+                    {
+                        drive.run_forward_speed_mps
+                    }
+                    _ => speed_mps,
+                };
+                let modifier = if drive.speed_modifier.is_finite() && drive.speed_modifier > 0.0 {
+                    drive.speed_modifier
+                } else {
+                    1.0
+                };
+                (base * modifier).max(0.1)
+            }
+            None => speed_mps,
         };
         let turn_omega = {
             let base = capabilities.base_turn_right_speed_rad_per_sec();
@@ -6984,6 +7295,53 @@ impl MovementSystem {
         };
 
         let _ = world.set_local_player_runtime_pose(pose);
+    }
+
+    /// F2 follow-on ([`USE_STICKY_IDLE_STEP`]) — the LOCAL sticky step
+    /// for a slice no manual-drive arm claimed. Same body as the
+    /// manual-slice sticky tail: RAW manual run speed in (sticky
+    /// applies its own `x 5.0` / floor-15 model inside `adjust_offset`,
+    /// acclient.c:388569-388579), z held at this slice's value (sticky
+    /// z is zeroed by construction, :388557), timeout latched for the
+    /// next `tick` to drain. NO contact gate — retail sticky has none
+    /// (:388519-388601).
+    ///
+    /// Returns `true` when the pose moved.
+    pub(crate) fn step_local_sticky_idle_slice(
+        &self,
+        world: &mut WorldState,
+        dt: Duration,
+    ) -> bool {
+        if !USE_STICKY_MANAGER || !self.sticky_idle_step_enabled() {
+            return false;
+        }
+        if world.scene.local_sticky_target().is_none() {
+            return false;
+        }
+        let Some(pose) = world.local_player_runtime_pose() else {
+            return false;
+        };
+        let Ok(capabilities) = world.resolve_self_movement_capabilities() else {
+            return false;
+        };
+        let sticky_speed = capabilities.resolved_manual_run_speed();
+        match world
+            .scene
+            .step_local_sticky(pose, dt.as_secs_f32(), sticky_speed)
+        {
+            LocalStickyStep::Stepped(mut stepped) => {
+                stepped.coords.z = pose.coords.z;
+                let _ = world.set_local_player_runtime_pose(stepped.rebucket_outdoor_landblock());
+                true
+            }
+            LocalStickyStep::TimedOut => {
+                // Deferred ACE `ClearTarget -> cancel_moveto`; the next
+                // `tick()` consumes it (the manual-slice twin's shape).
+                self.sticky_timeout_pending.set(true);
+                false
+            }
+            LocalStickyStep::Inactive => false,
+        }
     }
 
     /// A6-T2 test seam + spine helper — whether a Manual drive is the

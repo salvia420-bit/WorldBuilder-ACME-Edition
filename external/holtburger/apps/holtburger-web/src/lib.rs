@@ -332,6 +332,35 @@ fn parse_retail_ground_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "retailGround=off")
 }
 
+/// F2 (2026-07-27): parse `?serverMoveToDriver=off` (or `&serverMoveToDriver=off`).
+/// DEFAULT-ON off-escape shape (mirrors `parse_retail_ground_flag`): returns
+/// `true` UNLESS `serverMoveToDriver=off` is present. When on, the LOCAL
+/// player's SERVER-commanded MoveTo 6/7 runs the faithful `MoveToManager`
+/// driver (turn-first node order, retail `get_command` gait, fail-distance,
+/// Sticky-bit arrival `StickTo`); `=off` returns it to the approximate
+/// `ServerControlledProjection` lane, byte-identical to pre-2026-07-27.
+/// Native carrier: `USE_SERVER_MOVETO_DRIVER` (movement/system.rs). Needs a
+/// wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_server_moveto_driver_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "serverMoveToDriver=off")
+}
+
+/// F2 follow-on (2026-07-27): parse `?stickyIdleStep=off` (or
+/// `&stickyIdleStep=off`). DEFAULT-ON off-escape shape: returns `true`
+/// UNLESS `stickyIdleStep=off` is present. When on, the LOCAL
+/// `StickyManager` step also runs on frames no manual-drive slice claimed,
+/// so a standing attacker's swing-echo/arrival sticky actually pulls;
+/// `=off` restores the manual-slice-only reach. Native carrier:
+/// `USE_STICKY_IDLE_STEP` (movement/system.rs). Needs a wasm rebuild; NO
+/// manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_sticky_idle_step_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "stickyIdleStep=off")
+}
+
 /// (2026-07-02): parse `?castMove=off` (or `&castMove=off`). DEFAULT-ON
 /// off-escape shape: returns `true` UNLESS `castMove=off` is present. When
 /// on, a server-played Magic cast gesture (windup / cast, non-autonomous)
@@ -620,9 +649,18 @@ fn parse_remote_interp_flag(search: &str) -> bool {
 /// `cyl_dist−0.3`, speed floor 15 m/s, heading toward target, 1.0 s
 /// timeout — acclient.c:388519-388720), the stepped rows export with a
 /// sticky flag, and JS hands those rows ownership (clearing the F3-4
-/// glue per flagged row). Default OFF / any compose miss / stale pkg =
-/// no flagged rows ⇒ the F3-4 JS glue keeps owning remote sticky,
-/// byte-identical.
+/// glue per flagged row). Any compose miss / stale pkg = no flagged
+/// rows ⇒ the F3-4 JS glue keeps owning remote sticky, byte-identical.
+///
+/// F5 (2026-07-27) — DEFAULT-DOC CORRECTION. The paragraph above said
+/// "Default OFF"; the reader below is `!contains("stickyRetail=off")`
+/// (F-2026-06-27 default-on flip) and so are `parse_remote_interp_flag`,
+/// `parse_unified_tick_flag` and `parse_wire_state_packs_flag`, while
+/// `USE_STICKY_MANAGER` is `true`. Every conjunct of the compose rule
+/// therefore holds on a bare-default load: REMOTE sticky is ALREADY the
+/// default path, and the un-gating F5 asked for is a no-op. `=off` on
+/// any one conjunct restores the JS glue. Trust the reader, not this
+/// comment and not url-flags.md.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_sticky_retail_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
@@ -6888,18 +6926,49 @@ fn motion_cycle_base_speed(
 /// (`apply_run_to_command`/`adjust_motion`). The MovementParams bits are
 /// (acclient.h:31425): bit0 `can_walk`, bit1 `can_run`, bit4 `can_charge`.
 ///
-/// The live `curr_distance` lives in the per-tick mover, NOT on the
-/// UpdateMotion wire packet, so we cannot evaluate the distance branch here.
-/// We collapse to the static decision: **Run** when the creature can run or
-/// charge, else **Walk**. (Previously this was an unconditional RunForward,
-/// which played the run cycle for walk-only creatures.) The walk-when-close
-/// refinement is deferred to a runtime gate that knows `curr_distance`.
+/// F6 (2026-07-27) — the distance branch is now evaluated. `curr_distance`
+/// is not a wire field, but both envelopes carry the DESTINATION
+/// (`MoveToObject.origin` is the target's position; `MoveToPosition.origin`
+/// is the destination) and the mover's own last-known pose is in the world
+/// state at this call site, so `distance(mover, origin)` reconstructs the
+/// same quantity retail's `GetCurrentDistance` (:344856) feeds `get_command`.
+/// The reconstruction is the POINT metric, not the `UseSpheres` cylinder one
+/// — remote entity radii are not modelled here, so a mover picks up run
+/// promotion up to `r_self + r_target` metres earlier than retail. That error
+/// is sub-metre and only ever affects which of two locomotion CLIPS plays;
+/// the position stream is untouched.
+///
+/// `curr_distance = None` (mover pose unresolvable) keeps the pre-F6 static
+/// answer verbatim: **Run** when the creature can run or charge, else
+/// **Walk**.
 #[cfg(any(target_arch = "wasm32", test))]
-fn moveto_locomotion_hint(movement_parameters: u32) -> u16 {
+fn moveto_locomotion_hint(
+    movement_parameters: u32,
+    curr_distance: Option<f32>,
+    distance_to_object: f32,
+    walk_run_threshold: f32,
+) -> u16 {
     use holtburger_protocol::messages::movement::InterpretedMotionCommand;
+    const CAN_WALK: u32 = 0x1;
     const CAN_RUN: u32 = 0x2;
     const CAN_CHARGE: u32 = 0x10;
-    if movement_parameters & (CAN_RUN | CAN_CHARGE) != 0 {
+    // `curr_distance - distance_to_object > walk_run_threshhold`
+    // (acclient.c:346217). Unknown distance keeps the landed static
+    // answer by treating the branch as satisfied.
+    let beyond_threshold = match curr_distance {
+        Some(distance)
+            if distance.is_finite()
+                && distance_to_object.is_finite()
+                && walk_run_threshold.is_finite() =>
+        {
+            distance - distance_to_object > walk_run_threshold
+        }
+        _ => true,
+    };
+    let run = movement_parameters & CAN_CHARGE != 0
+        || (movement_parameters & CAN_RUN != 0
+            && (movement_parameters & CAN_WALK == 0 || beyond_threshold));
+    if run {
         InterpretedMotionCommand::RUN_FORWARD.raw()
     } else {
         InterpretedMotionCommand::WALK_FORWARD.raw()
@@ -6930,11 +6999,64 @@ mod moveto_hint_tests {
     fn moveto_hint_runs_when_can_run_or_charge_else_walks() {
         let run = InterpretedMotionCommand::RUN_FORWARD.raw();
         let walk = InterpretedMotionCommand::WALK_FORWARD.raw();
-        assert_eq!(moveto_locomotion_hint(0x2), run, "can_run -> run");
-        assert_eq!(moveto_locomotion_hint(0x10), run, "can_charge -> run");
-        assert_eq!(moveto_locomotion_hint(0x1 | 0x2), run, "can_walk+can_run -> run (chase default)");
-        assert_eq!(moveto_locomotion_hint(0x1), walk, "walk-only -> walk");
-        assert_eq!(moveto_locomotion_hint(0x0), walk, "no flags -> walk");
+        // Unknown mover pose: the pre-F6 static answers, verbatim.
+        let hint = |bits: u32| moveto_locomotion_hint(bits, None, 0.6, 15.0);
+        assert_eq!(hint(0x2), run, "can_run -> run");
+        assert_eq!(hint(0x10), run, "can_charge -> run");
+        assert_eq!(hint(0x1 | 0x2), run, "can_walk+can_run -> run (chase default)");
+        assert_eq!(hint(0x1), walk, "walk-only -> walk");
+        assert_eq!(hint(0x0), walk, "no flags -> walk");
+    }
+
+    /// F6 — retail's hold-key distance branch (acclient.c:346217):
+    /// `can_charge | (can_run & (!can_walk | curr - distance_to_object >
+    /// walk_run_threshhold))`.
+    #[test]
+    fn moveto_hint_distance_branch_matches_get_command() {
+        let run = InterpretedMotionCommand::RUN_FORWARD.raw();
+        let walk = InterpretedMotionCommand::WALK_FORWARD.raw();
+        // CanWalk|CanRun, retail default walk_run_threshhold 15.0,
+        // distance_to_object 0.6 — the branch flips at 15.6 m.
+        let both = 0x1 | 0x2;
+        assert_eq!(
+            moveto_locomotion_hint(both, Some(20.0), 0.6, 15.0),
+            run,
+            "20 - 0.6 = 19.4 > 15 -> run"
+        );
+        assert_eq!(
+            moveto_locomotion_hint(both, Some(5.0), 0.6, 15.0),
+            walk,
+            "5 - 0.6 = 4.4 <= 15 -> walk (this is the G8 case: a close \
+             approach used to render as a run)"
+        );
+        assert_eq!(
+            moveto_locomotion_hint(both, Some(15.6), 0.6, 15.0),
+            walk,
+            "exactly at the threshold is NOT greater-than"
+        );
+        // CanCharge short-circuits the distance branch entirely.
+        assert_eq!(
+            moveto_locomotion_hint(0x1 | 0x2 | 0x10, Some(1.0), 0.6, 1.0),
+            run,
+            "can_charge ignores distance"
+        );
+        // No CanWalk: the distance branch is bypassed by `!can_walk`.
+        assert_eq!(
+            moveto_locomotion_hint(0x2, Some(1.0), 0.6, 15.0),
+            run,
+            "!can_walk -> run at any distance"
+        );
+        // ACE's melee charge broadcast copy carries threshold 1.0.
+        assert_eq!(
+            moveto_locomotion_hint(both, Some(2.0), 0.6, 1.0),
+            run,
+            "2 - 0.6 = 1.4 > 1.0 -> run"
+        );
+        assert_eq!(
+            moveto_locomotion_hint(both, Some(1.2), 0.6, 1.0),
+            walk,
+            "1.2 - 0.6 = 0.6 <= 1.0 -> walk"
+        );
     }
 
     /// F3-4 — the sticky bit is 0x80 and is independent of the locomotion
@@ -29049,6 +29171,22 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
     }
 
+    /// F2 (2026-07-27): `?serverMoveToDriver` / `?stickyIdleStep` parse
+    /// shapes — DEFAULT-ON; only an explicit `=off` disables (the
+    /// movement-flag house shape).
+    #[test]
+    fn server_moveto_driver_and_sticky_idle_step_flags_default_on_unless_off() {
+        use super::{parse_server_moveto_driver_flag, parse_sticky_idle_step_flag};
+        assert!(parse_server_moveto_driver_flag(""));
+        assert!(parse_server_moveto_driver_flag("?serverMoveToDriver=on"));
+        assert!(!parse_server_moveto_driver_flag("?serverMoveToDriver=off"));
+        assert!(!parse_server_moveto_driver_flag("?nosw=1&serverMoveToDriver=off"));
+        assert!(parse_sticky_idle_step_flag(""));
+        assert!(parse_sticky_idle_step_flag("?stickyIdleStep=on"));
+        assert!(!parse_sticky_idle_step_flag("?stickyIdleStep=off"));
+        assert!(!parse_sticky_idle_step_flag("?stickyRetail=off&stickyIdleStep=off"));
+    }
+
     /// Movement-port wave 1 step 5: `?cmdInterp` parse shape — DEFAULT
     /// FLIPPED ON (2026-07-03 A/B green; user ruling "its decent"); only
     /// an explicit `=off` restores the legacy lane.
@@ -39944,6 +40082,17 @@ async fn recv_loop(
     // ON). Read only when `?faithfulTransition` is also on; see
     // `parse_retail_ground_flag`.
     movement.set_retail_ground(parse_retail_ground_flag(&flag_search()));
+    // F2 (2026-07-27): `?serverMoveToDriver=off` — return the LOCAL player's
+    // server-commanded MoveTo 6/7 to the `ServerControlledProjection` lane
+    // (default ON: the faithful `MoveToManager` driver owns it — turn-first
+    // node order, retail gait, fail-distance, Sticky-bit arrival `StickTo`);
+    // see `parse_server_moveto_driver_flag`.
+    movement.set_server_moveto_driver(parse_server_moveto_driver_flag(&flag_search()));
+    // F2 follow-on: `?stickyIdleStep=off` — restore the manual-slice-only
+    // sticky reach (default ON: the local `StickyManager` also steps on
+    // drive-less frames, so a standing attacker's sticky pulls); see
+    // `parse_sticky_idle_step_flag`.
+    movement.set_sticky_idle_step(parse_sticky_idle_step_flag(&flag_search()));
     // (2026-07-02): `?castMove=off` — disable the retail cast-movement
     // arbitration (default ON: a server-played cast gesture suppresses held
     // locomotion until an input edge / gesture end); see
@@ -44102,16 +44251,46 @@ async fn recv_loop(
                                     // the MoveToParameters MovementParams flags
                                     // instead of hardcoding RunForward — a
                                     // walk-only creature now hints Walk. See
-                                    // `moveto_locomotion_hint`. (curr_distance is
-                                    // not on the wire, so the distance-dependent
-                                    // walk-when-close branch is deferred.)
+                                    // `moveto_locomotion_hint`.
+                                    // F6 (2026-07-27): the distance branch of
+                                    // retail's hold-key rule (acclient.c:346217)
+                                    // is evaluated too — `origin` is the
+                                    // destination and the mover's last-known pose
+                                    // reconstructs `curr_distance`.
                                     let params = match mtd {
-                                        MovementTypeData::MoveToObject(m) => Some(m.params.movement_parameters),
-                                        MovementTypeData::MoveToPosition(m) => Some(m.params.movement_parameters),
+                                        MovementTypeData::MoveToObject(m) => {
+                                            Some((&m.params, &m.origin))
+                                        }
+                                        MovementTypeData::MoveToPosition(m) => {
+                                            Some((&m.params, &m.origin))
+                                        }
                                         _ => None,
                                     };
                                     match params {
-                                        Some(mp) => moveto_locomotion_hint(mp),
+                                        Some((mp, origin)) => {
+                                            let curr_distance = world
+                                                .borrow()
+                                                .as_ref()
+                                                .and_then(|w| {
+                                                    w.entities.get(data.guid).map(|e| e.position)
+                                                })
+                                                .map(|mover| {
+                                                    mover.distance_to(
+                                                        &holtburger_common::position::WorldPosition {
+                                                            landblock_id: origin.cell_id,
+                                                            coords: origin.position,
+                                                            rotation:
+                                                                holtburger_common::Quaternion::identity(),
+                                                        },
+                                                    )
+                                                });
+                                            moveto_locomotion_hint(
+                                                mp.movement_parameters,
+                                                curr_distance,
+                                                mp.distance_to_object,
+                                                mp.walk_run_threshold,
+                                            )
+                                        }
                                         None => InterpretedMotionCommand::RUN_FORWARD.raw(),
                                     }
                                 }

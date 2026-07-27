@@ -139,9 +139,12 @@ impl WorldState {
     }
 
     /// A2-P3 R2: flip the scene's REMOTE sticky runtime switch (set once
-    /// at world creation from `?stickyRetail=on` AND the effective
-    /// `?remoteInterp=on` composite AND `USE_STICKY_MANAGER`; wasm-only
-    /// caller — native has no remote driver to compose with).
+    /// at world creation from `?stickyRetail` AND the effective
+    /// `?remoteInterp` composite AND `USE_STICKY_MANAGER`; wasm-only
+    /// caller — native has no remote driver to compose with). F5
+    /// (2026-07-27): all of those conjuncts read ON when their flag is
+    /// absent, so the shipped wasm default for this switch is `true` —
+    /// see the field doc on `SpatialScene::remote_sticky_enabled`.
     pub fn set_remote_sticky_enabled(&mut self, enabled: bool) {
         self.scene.set_remote_sticky_enabled(enabled);
     }

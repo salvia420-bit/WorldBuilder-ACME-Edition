@@ -772,9 +772,20 @@ pub struct SpatialScene {
     sky_desc: Option<Box<(SkyDesc, holtburger_dat::file_type::GameTime)>>,
     /// A2-P2 (2026-06-12, W3+ S8) — runtime switch for the REMOTE
     /// `MoveOrTeleport` lattice + per-frame remote manager step. Set
-    /// once at world creation from `?remoteInterp=on` (wasm; native
-    /// stays off this stage — S8 OPEN Q9). Default `false` =
-    /// byte-identical hard-snap reconcile for remote bodies.
+    /// once at world creation by the wasm caller; native has no remote
+    /// driver to compose with and leaves the struct default (S8 OPEN
+    /// Q9).
+    ///
+    /// F5 (2026-07-27) — DEFAULT-DOC CORRECTION. This field's default
+    /// is `false`, but on the SHIPPED wasm path the caller installs
+    /// `true` unless the URL says otherwise: `parse_remote_interp_flag`
+    /// / `parse_unified_tick_flag` / `parse_wire_state_packs_flag` are
+    /// all coded `!search.contains("<flag>=off")`, so an ABSENT flag
+    /// reads ON (F-2026-06-27 default-on flip). The prior wording
+    /// ("Default `false` = byte-identical hard-snap reconcile") named
+    /// the struct default and read as the SHIPPED default, which it has
+    /// not been since 2026-06-27. Trust the readers, not this comment
+    /// and not url-flags.md.
     remote_interp_enabled: bool,
     /// A2-P2: per-tick ledger of remote bodies the manager stepped this
     /// frame (guid → stepped pose), drained by the wasm TickMovement arm
@@ -793,13 +804,20 @@ pub struct SpatialScene {
     /// byte-identical default behavior.
     local_sticky_target: Option<Guid>,
     /// A2-P3 R2 (2026-06-12, W3+ S9 Stage R2) — runtime switch for
-    /// REMOTE-entity sticky (`?stickyRetail=on`). COMPOSES on top of
-    /// the A2-P2 triple: set once at world creation from
-    /// `?stickyRetail=on` AND the effective `?remoteInterp=on`
-    /// composite AND the `USE_STICKY_MANAGER` const (wasm-only caller,
-    /// same shape as [`Self::set_remote_interp_enabled`]). Default
-    /// `false` = the remote install/step sites below are inert and the
-    /// JS F3-4 glue keeps owning remote sticky, byte-identical.
+    /// REMOTE-entity sticky. COMPOSES on top of the A2-P2 triple: set
+    /// once at world creation from `?stickyRetail` AND the effective
+    /// `?remoteInterp` composite AND the `USE_STICKY_MANAGER` const
+    /// (wasm-only caller, same shape as
+    /// [`Self::set_remote_interp_enabled`]).
+    ///
+    /// F5 (2026-07-27) — DEFAULT-DOC CORRECTION. The struct default is
+    /// `false`, but every conjunct of that compose rule is ON in a
+    /// bare-default wasm load: `parse_sticky_retail_flag` is
+    /// `!contains("stickyRetail=off")`, ditto `remoteInterp`,
+    /// `unifiedTick` and `wireStatePacks`, and `USE_STICKY_MANAGER` is
+    /// `true`. So REMOTE sticky already runs by default and the JS F3-4
+    /// glue is already handing rows over — the previous wording said the
+    /// opposite. `=off` on any conjunct restores the glue path.
     remote_sticky_enabled: bool,
     /// A2-P3 R2 — holder guid → sticky target guid for REMOTE entities
     /// (retail keeps this on each `CPhysicsObj`'s own StickyManager;

@@ -946,15 +946,27 @@ mod tests {
 
         assert_eq!(client.world.player.server_control_sequence, 10);
         assert_eq!(client.world.player_position(), Some(start));
+        // F2 (2026-07-27) — wire type 7 for the LOCAL player is a MoveTo
+        // DIRECTIVE, not a reposition. Retail queues
+        // [TurnToHeading, MoveToPosition] and walks there
+        // (`MoveToManager::MoveToPosition`, acclient.c:345790-345857);
+        // the pre-F2 arm snapped the runtime body onto `origin` in one
+        // frame, which is the one thing retail never does with a
+        // MoveTo. The runtime body therefore stays put until the driver
+        // steers it (`?serverMoveToDriver=off` restores the snap).
         let body = client
             .world
             .scene
             .body(holtburger_world::SpatialBodyId::LocalPlayer(player_guid))
-            .expect("server-controlled movement should update the local runtime body");
-        assert_eq!(body.pose.landblock_id, destination.landblock_id);
-        assert_eq!(body.pose.coords, destination.coords);
-        assert!((body.pose.rotation.to_heading() - 90.0_f32.to_radians()).abs() < 1e-5);
-        assert_eq!(client.session.packet_sequence, 2);
+            .expect("the local runtime body exists");
+        assert_eq!(body.pose.coords, start.coords, "no arrival teleport");
+        assert!(
+            client.movement.moveto_is_active(player_guid),
+            "the directive must land on the faithful driver"
+        );
+        // No immediate autonomous-position flush either — the driver's
+        // own arrival/steering edges own the wire from here.
+        assert_eq!(client.session.packet_sequence, 1);
     }
 
     #[tokio::test]

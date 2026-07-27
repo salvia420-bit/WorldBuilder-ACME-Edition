@@ -9494,3 +9494,352 @@ mod arrival_placement_z_clamp {
         );
     }
 }
+
+// =====================================================================
+// F2 (2026-07-27, COL-21 structural) — the LOCAL player's
+// SERVER-commanded MoveTo on the faithful driver
+// (`USE_SERVER_MOVETO_DRIVER`) + the idle-frame sticky reach
+// (`USE_STICKY_IDLE_STEP`).
+// =====================================================================
+
+/// ACE's player melee charge parameter block (`Player_Move.cs:230-245`,
+/// broadcast :157-180) as it reaches `MovementParameters::UnPackNet`:
+/// CanWalk|CanRun|CanCharge|Sticky|MoveTowards|UseSpheres, `speed` 1.5,
+/// `distance_to_object` 0.6. Same block the landed F1 projection test
+/// pins (simulation.rs), so the two lanes are compared on equal wire.
+fn ace_melee_charge_params(fail_distance: f32) -> MovementParameters {
+    MovementParameters {
+        bitfield: 0x1 | 0x2 | 0x10 | 0x80 | 0x200 | 0x400,
+        speed: 1.5,
+        distance_to_object: 0.6,
+        min_distance: 0.0,
+        fail_distance,
+        walk_run_threshhold: 1.0,
+        ..Default::default()
+    }
+}
+
+/// Terrain-free integrator for one driver slice — the kinematic half of
+/// `ClientSimulationSystem::advance_local_player_via_transition`
+/// (simulation.rs): the turn-arrival snap edge, then the drive control's
+/// pre-scaled world delta plus its omega-limited heading realization, or
+/// the idle sticky step when no drive is active.
+fn drive_slice_for_test(movement: &mut MovementSystem, world: &mut WorldState, dt: Duration) {
+    if let Some(heading) = movement.pending_snap_facing.take()
+        && let Some(mut pose) = world.local_player_runtime_pose()
+    {
+        pose.rotation = Quaternion::from_heading(heading);
+        let _ = world.set_local_player_runtime_pose(pose);
+    }
+    let Some(control) = movement.current_local_drive_control(world, dt) else {
+        movement.step_local_sticky_idle_slice(world, dt);
+        return;
+    };
+    let Some(mut pose) = world.local_player_runtime_pose() else {
+        return;
+    };
+    pose.coords.x += control.desired_world_delta.x;
+    pose.coords.y += control.desired_world_delta.y;
+    pose.coords.z += control.desired_world_delta.z;
+    let current = pose.rotation.to_heading();
+    let desired = control.desired_heading.unwrap_or(current);
+    let realized = match control.turn_omega_rad_s {
+        Some(omega) if omega > 0.0 && desired != current => {
+            use std::f32::consts::{PI, TAU};
+            let mut diff = (desired - current).rem_euclid(TAU);
+            if diff > PI {
+                diff -= TAU;
+            }
+            let step = omega * dt.as_secs_f32();
+            let translating = control.desired_world_delta.length_squared() > 1e-12;
+            if translating && diff.abs() <= step {
+                desired
+            } else {
+                current + step.copysign(diff)
+            }
+        }
+        _ => desired,
+    };
+    pose.rotation = Quaternion::from_heading(realized);
+    let _ = world.set_local_player_runtime_pose(pose);
+}
+
+fn server_moveto_fixture(
+    start_heading_deg: f32,
+    target_x: f32,
+) -> (WorldState, MovementSystem, Guid, Guid) {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0123);
+    let target_guid = Guid(0x8000_0042);
+    let position = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(start_heading_deg.to_radians()),
+    };
+    let target_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(target_x, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    // Retail player MotionTable: RunForward 4.0 m/s authored base,
+    // TurnRight |Omega.Z| 1.5 rad/s; run_rate 1.0 so the wire rate is
+    // the only run-rate in play.
+    seed_self_movement_capabilities_override(&mut world, 1.0, 3.12, 4.0, 1.5);
+    world
+        .entities
+        .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
+    (world, MovementSystem::new(), guid, target_guid)
+}
+
+/// F2 primary — "from range: engage → turn in place → run to → stick".
+///
+/// Retail order (acclient.c): `MoveToObject_Internal` :345859 queues
+/// [TurnToHeading, MoveToPosition]; forward motion cannot begin before
+/// the turn node is consumed. `get_command` :346213 picks Run for a
+/// CanCharge block. `HandleMoveToPosition` :345663 arrives at the
+/// cylinder `distance_to_object`, and `BeginNextNode`'s empty-queue arm
+/// :345553-345566 hands off to `PositionManager::StickTo`.
+#[test]
+fn f2_server_moveto_object_turns_then_runs_then_sticks_at_arrival() {
+    // 90 deg of turn to make (AC heading 90 -> bearing 180 due east),
+    // then 12.0 m of approach.
+    let (mut world, mut movement, guid, target_guid) = server_moveto_fixture(90.0, 62.0);
+
+    movement.enqueue_server_controlled_moveto(
+        Some(target_guid),
+        Guid(0x1234_0019),
+        Vector3::new(62.0, 50.0, 0.0),
+        0.5,
+        1.8,
+        // fail_distance MAX: the retail ctor default (:339437). The ACE
+        // 15.0 charge value is exercised separately below.
+        ace_melee_charge_params(f32::MAX),
+        // base RunForward 4.0 m/s x wire run_rate 1.0.
+        4.0,
+        // params.speed (the charge modifier).
+        1.5,
+    );
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(movement.moveto_is_active(guid), "directive installed");
+
+    let dt = Duration::from_millis(20);
+    let mut turn_slices = 0usize;
+    let mut run_slices = 0usize;
+    let mut run_speeds: Vec<f32> = Vec::new();
+    let mut arrival_slice: Option<usize> = None;
+    let start = Instant::now();
+
+    for i in 0..600 {
+        let now = start + dt * (i as u32);
+        movement.drive_local_moveto(now, &mut world);
+        if let Some(control) = movement.current_local_drive_control(&world, dt) {
+            let step = control.desired_world_delta.length();
+            if step <= 1e-6 {
+                turn_slices += 1;
+                assert_eq!(
+                    turn_slices + run_slices,
+                    turn_slices,
+                    "turn-in-place slices must all precede forward motion \
+                     (retail node sequencing, acclient.c:345859)"
+                );
+            } else {
+                run_slices += 1;
+                assert_eq!(control.gait, LocalDriveGait::Run, "CanCharge -> Run");
+                run_speeds.push(step / dt.as_secs_f32());
+            }
+        }
+        drive_slice_for_test(&mut movement, &mut world, dt);
+        if !movement.moveto_is_active(guid) && arrival_slice.is_none() {
+            arrival_slice = Some(i);
+            break;
+        }
+    }
+
+    let arrival = arrival_slice.expect("the approach must complete");
+    // Turn: 90 deg at the authored 1.5 rad/s = 1.047 s = 53 slices.
+    let turn_secs = turn_slices as f32 * dt.as_secs_f32();
+    assert!(
+        (turn_secs - 1.047).abs() < 0.10,
+        "turn-in-place phase should sweep 90 deg at 1.5 rad/s (~1.047 s), got {turn_secs:.3} s"
+    );
+    // Run: 4.0 x run_rate 1.0 x params.speed 1.5 = 6.000 m/s.
+    for speed in &run_speeds {
+        assert!(
+            (speed - 6.0).abs() < 0.05,
+            "approach speed must be RunAnimSpeed x run_rate x params.speed = 6.0 m/s, got {speed:.3}"
+        );
+    }
+    // Travel: 12.0 m centre-to-centre minus the cylinder arrival band
+    // (distance_to_object 0.6 + self 0.4 + target 0.5 = 1.5 m) = 10.5 m
+    // at 6.0 m/s = 1.750 s.
+    let run_secs = run_slices as f32 * dt.as_secs_f32();
+    assert!(
+        (run_secs - 1.75).abs() < 0.10,
+        "approach should cover 10.5 m at 6.0 m/s (~1.750 s), got {run_secs:.3} s"
+    );
+    let total = (arrival + 1) as f32 * dt.as_secs_f32();
+    assert!(
+        (total - 2.8).abs() < 0.20,
+        "engage->arrive should take ~2.8 s, got {total:.3} s"
+    );
+
+    // The arrival handoff: sticky installed on the target, radius
+    // carried (acclient.c:345553-345566).
+    assert_eq!(movement.take_moveto_completion(guid), Some(0));
+    assert_eq!(
+        world.scene.local_sticky_target(),
+        Some(target_guid),
+        "Sticky (0x80) + empty node queue must hand off to StickTo"
+    );
+    let final_pose = world.local_player_runtime_pose().expect("pose");
+    let centre_distance = final_pose.coords.distance(&Vector3::new(62.0, 50.0, 0.0));
+    assert!(
+        centre_distance <= 1.5 + 0.15 && centre_distance > 1.0,
+        "arrival must land inside the cylinder band (<=1.5 m centres), got {centre_distance:.3} m"
+    );
+}
+
+/// The `?serverMoveToDriver=off` escape restores the projection lane:
+/// the directive is never queued onto the driver by the simulation arm
+/// (asserted at the predicate — the routing itself lives in
+/// simulation.rs and is covered by its own suite).
+#[test]
+fn f2_server_moveto_driver_escape_predicate() {
+    let mut movement = MovementSystem::new();
+    assert!(
+        movement.server_moveto_driver_enabled(),
+        "USE_SERVER_MOVETO_DRIVER ships default-ON"
+    );
+    movement.set_server_moveto_driver(false);
+    assert!(
+        !movement.server_moveto_driver_enabled(),
+        "?serverMoveToDriver=off"
+    );
+    movement.set_server_moveto_driver(true);
+    assert!(movement.server_moveto_driver_enabled());
+}
+
+/// Retail's fail-distance give-up, which the projection lane never had:
+/// ACE's melee charge ships `fail_distance` 15.0, so an engage that
+/// travels further than that cancels `YouChargedTooFar` (0x3D,
+/// `HandleMoveToPosition` LABEL_24, acclient.c:345689-345692) instead of
+/// running forever.
+#[test]
+fn f2_server_moveto_object_honours_ace_fail_distance() {
+    let (mut world, mut movement, guid, target_guid) = server_moveto_fixture(180.0, 90.0);
+    movement.enqueue_server_controlled_moveto(
+        Some(target_guid),
+        Guid(0x1234_0019),
+        Vector3::new(90.0, 50.0, 0.0),
+        0.5,
+        1.8,
+        ace_melee_charge_params(15.0),
+        4.0,
+        1.5,
+    );
+    let _ = movement.apply_pending_pursuit_commands_ungated(&mut world);
+
+    let dt = Duration::from_millis(20);
+    let start = Instant::now();
+    for i in 0..600 {
+        let now = start + dt * (i as u32);
+        movement.drive_local_moveto(now, &mut world);
+        drive_slice_for_test(&mut movement, &mut world, dt);
+        if !movement.moveto_is_active(guid) {
+            break;
+        }
+    }
+    assert_eq!(
+        movement.take_moveto_completion(guid),
+        Some(0x3D),
+        "40 m engage with fail_distance 15.0 must cancel YouChargedTooFar"
+    );
+    assert_eq!(
+        world.scene.local_sticky_target(),
+        None,
+        "a failed approach never reaches the sticky handoff"
+    );
+}
+
+/// F2 follow-on (`USE_STICKY_IDLE_STEP`) — sticky pulls on frames with
+/// NO drive at all. Retail runs `StickyManager::adjust_offset` from the
+/// per-object physics pass (acclient.c:388287-388304 chained at
+/// :320029), not from input handling; before this the step was wired
+/// only inside the manual-drive slice, so a standing attacker's sticky
+/// was installed and then never moved.
+///
+/// Standoff: `cylinder_distance_no_z(my_radius, target_radius) - 0.3`
+/// (StickyRadius, :388569-388579) — with the 0.0/0.0 radius fallback
+/// (spec S9 OPEN Q3) that is 0.3 m of centre separation.
+#[test]
+fn f2b_idle_sticky_step_maintains_standoff_against_a_moving_target() {
+    let (mut world, mut movement, _guid, target_guid) = server_moveto_fixture(180.0, 51.0);
+    // Arrival state: stuck, standing still, nothing driving.
+    world.scene.stick_local_player_to(target_guid, 0.0);
+    assert!(
+        movement.current_local_drive_control(&world, Duration::from_millis(20)).is_none(),
+        "no drive lane is active at rest"
+    );
+
+    let dt = Duration::from_millis(20);
+    // Target walks away at retail WalkAnimSpeed (3.12 m/s) for 0.9 s —
+    // inside the 1.0 s sticky window (`StickTo` :388665-388690).
+    let mut target_x = 51.0_f32;
+    let mut separations: Vec<f32> = Vec::new();
+    for _ in 0..45 {
+        target_x += 3.12 * dt.as_secs_f32();
+        let pose = WorldPosition {
+            landblock_id: Guid(0x1234_0019),
+            coords: Vector3::new(target_x, 50.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        world.scene.sticky_pose_feed(target_guid, pose);
+        movement.step_local_sticky_idle_slice(&mut world, dt);
+        let me = world.local_player_runtime_pose().expect("pose");
+        separations.push((target_x - me.coords.x).abs());
+    }
+
+    // Converges to the 0.3 standoff and HOLDS it while the target walks.
+    let settled = &separations[separations.len() - 20..];
+    for gap in settled {
+        assert!(
+            (gap - 0.3).abs() <= 0.2,
+            "sticky must hold the cyl-0.3 standoff within +/-0.2 m while the \
+             target moves, got {gap:.3} m (trace {separations:?})"
+        );
+    }
+
+    // 1.0 s timeout, never refreshed by target updates
+    // (`UseTime` :388605, `HandleUpdateTarget` :388691-388720).
+    for _ in 0..10 {
+        movement.step_local_sticky_idle_slice(&mut world, dt);
+    }
+    assert_eq!(
+        world.scene.local_sticky_target(),
+        None,
+        "sticky is a 1.0 s window per StickTo — persistence is server re-arming"
+    );
+}
+
+/// The idle sticky step must be inert when the escape is set — the
+/// pre-2026-07-27 manual-slice-only reach.
+#[test]
+fn f2b_idle_sticky_step_escape_is_inert() {
+    let (mut world, mut movement, _guid, target_guid) = server_moveto_fixture(180.0, 51.0);
+    world.scene.stick_local_player_to(target_guid, 0.0);
+    world.scene.sticky_pose_feed(
+        target_guid,
+        WorldPosition {
+            landblock_id: Guid(0x1234_0019),
+            coords: Vector3::new(55.0, 50.0, 0.0),
+            rotation: Quaternion::identity(),
+        },
+    );
+    movement.set_sticky_idle_step(false);
+    let before = world.local_player_runtime_pose().expect("pose").coords;
+    assert!(!movement.step_local_sticky_idle_slice(&mut world, Duration::from_millis(20)));
+    let after = world.local_player_runtime_pose().expect("pose").coords;
+    assert_eq!(before, after, "?stickyIdleStep=off keeps the landed reach");
+}
