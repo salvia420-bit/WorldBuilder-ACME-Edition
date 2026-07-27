@@ -39,6 +39,7 @@ fn public_types_construct_and_compare() {
         source_cell_y: 0,
         source_obj_idx: 0,
         identity: GeneratedSceneryIdentity::default(),
+        bounds: holtburger_scenery_bake::Aabb3D::new(0.0, 1.0, 2.0, 3.0, 4.0, 5.0),
     };
     let p2 = p1; // ScenicPlacement: Copy
     assert_eq!(p1, p2);

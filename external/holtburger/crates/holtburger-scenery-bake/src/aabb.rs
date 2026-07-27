@@ -62,6 +62,85 @@ impl Aabb2D {
     }
 }
 
+/// World-frame 3D axis-aligned bounding box for one placement.
+///
+/// DAT-01 phase 1 (2026-07-27). The bake has always computed a
+/// world-frame box per candidate placement in order to run ACE's
+/// `Collision` rejection — and has always thrown it away afterwards.
+/// This is the shipped form of that box, widened to carry the Z extent
+/// the collision consumer needs (`holtburger_world::StaticAabbEntry`
+/// takes a 3D `Aabb`; the rejection test only ever read XY).
+///
+/// **Rejection parity contract.** [`Self::xy`] is the box the bake feeds
+/// to `Collision`, and it is bit-identical to what the legacy
+/// [`transform_mesh_to_aabb`] returns for the same inputs: both walk the
+/// same vertex slice in the same order through the same
+/// `scale → yaw → translate` chain and accumulate the same XY min/max.
+/// Adding the Z accumulator cannot perturb the XY result. See
+/// `transform_mesh_to_aabb3_xy_matches_2d` for the pinned test.
+///
+/// Coordinates are LB-local metres on XY (`[0, 192]`-ish; a placement's
+/// mesh may overhang the landblock edge, which is legal and why the box
+/// is not clamped) and absolute world metres on Z (terrain-snapped
+/// placement Z plus the mesh's local Z extent).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Aabb3D {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub min_z: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+    pub max_z: f32,
+}
+
+impl Aabb3D {
+    pub fn new(min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32) -> Self {
+        Self {
+            min_x,
+            min_y,
+            min_z,
+            max_x,
+            max_y,
+            max_z,
+        }
+    }
+
+    /// The XY slice — the exact box ACE's `Collision` rejection reads.
+    pub fn xy(&self) -> Aabb2D {
+        Aabb2D {
+            min_x: self.min_x,
+            min_y: self.min_y,
+            max_x: self.max_x,
+            max_y: self.max_y,
+        }
+    }
+
+    /// Degenerate all-`+inf`/all-`-inf` sentinel — what an empty vertex
+    /// list accumulates to. Callers treat a missing mesh as "skip the
+    /// placement" before ever reaching here; this exists so test
+    /// fixtures and the `Default`-shaped construction sites have one
+    /// obviously-invalid value to name.
+    pub const EMPTY: Aabb3D = Aabb3D {
+        min_x: f32::INFINITY,
+        min_y: f32::INFINITY,
+        min_z: f32::INFINITY,
+        max_x: f32::NEG_INFINITY,
+        max_y: f32::NEG_INFINITY,
+        max_z: f32::NEG_INFINITY,
+    };
+
+    /// True when no vertex was ever folded in (any axis inverted).
+    pub fn is_empty(&self) -> bool {
+        self.min_x > self.max_x || self.min_y > self.max_y || self.min_z > self.max_z
+    }
+}
+
+impl Default for Aabb3D {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
 /// Mesh-local 3D bounds for an `ObjectDesc`'s `obj_id`. Caller-supplied
 /// via the `fetch_obj_bounds` closure — the bake doesn't load GfxObj
 /// vertex tables itself, that's outside its purview.
@@ -178,6 +257,51 @@ pub fn transform_mesh_to_aabb(
     Aabb2D::new(min_x, min_y, max_x, max_y)
 }
 
+/// Z-aware twin of [`transform_mesh_to_aabb`]: same per-vertex
+/// `scale → yaw-about-Z → translate` chain, same iteration order, but
+/// the Z axis is accumulated instead of discarded.
+///
+/// DAT-01 phase 1. This is the bake's production AABB builder from
+/// 2026-07-27 on. Its `.xy()` is bit-identical to
+/// [`transform_mesh_to_aabb`] for the same arguments — the Z rotation
+/// leaves `v.z` untouched, so the X/Y accumulators see exactly the same
+/// sequence of values. That identity is what lets us widen the shipped
+/// box without perturbing a single placement-rejection decision (and
+/// therefore without perturbing the E5 determinism freeze hash).
+pub fn transform_mesh_to_aabb3(
+    verts: &[Vector3],
+    tx: f32,
+    ty: f32,
+    tz: f32,
+    rotation_rad: f32,
+    scale: f32,
+) -> Aabb3D {
+    let (s, c) = rotation_rad.sin_cos();
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut min_z = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut max_z = f32::NEG_INFINITY;
+    for v in verts {
+        let sx = v.x * scale;
+        let sy = v.y * scale;
+        let rx = sx * c - sy * s;
+        let ry = sx * s + sy * c;
+        let wx = rx + tx;
+        let wy = ry + ty;
+        // Yaw is about Z, so Z is scale-then-translate only.
+        let wz = v.z * scale + tz;
+        if wx < min_x { min_x = wx; }
+        if wy < min_y { min_y = wy; }
+        if wz < min_z { min_z = wz; }
+        if wx > max_x { max_x = wx; }
+        if wy > max_y { max_y = wy; }
+        if wz > max_z { max_z = wz; }
+    }
+    Aabb3D::new(min_x, min_y, min_z, max_x, max_y, max_z)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,6 +398,65 @@ mod tests {
         let legacy_width = legacy.max_x - legacy.min_x;
         assert!(mesh_width < legacy_width,
             "mesh-vertex AABB ({mesh_width}) should be tighter than corner-rotation AABB ({legacy_width})");
+    }
+
+    // ---- DAT-01 phase 1: the Z-aware builder ----
+
+    /// THE load-bearing test for DAT-01 phase 1: widening the box to 3D
+    /// must not move a single XY bound, because the XY bound is what
+    /// ACE's `Collision` rejection reads and therefore what decides
+    /// which placements exist at all. Exercised over rotation, scale and
+    /// translation so a future refactor that reorders the accumulator
+    /// (or folds Z into the rotation) trips here rather than silently
+    /// re-shuffling the world.
+    #[test]
+    fn transform_mesh_to_aabb3_xy_matches_2d() {
+        let verts: Vec<Vector3> = (0..37)
+            .map(|i| {
+                let a = (i as f32) * 0.37;
+                Vector3::new(a.cos() * (1.0 + a * 0.05), a.sin() * 2.0, a * 0.11 - 1.0)
+            })
+            .collect();
+        for &(rot, scale, tx, ty, tz) in &[
+            (0.0f32, 1.0f32, 0.0f32, 0.0f32, 0.0f32),
+            (0.7, 1.0, 10.0, 20.0, 5.0),
+            (std::f32::consts::FRAC_PI_3, 1.75, 91.5, 3.25, -12.5),
+            (-2.4, 0.5, 191.9, 0.1, 200.0),
+        ] {
+            let a2 = transform_mesh_to_aabb(&verts, tx, ty, tz, rot, scale);
+            let a3 = transform_mesh_to_aabb3(&verts, tx, ty, tz, rot, scale);
+            assert_eq!(
+                a2,
+                a3.xy(),
+                "XY drift at rot={rot} scale={scale} t=({tx},{ty},{tz})"
+            );
+        }
+    }
+
+    #[test]
+    fn transform_mesh_to_aabb3_z_extent_scales_and_translates() {
+        let verts = vec![
+            Vector3::new(0.0, 0.0, -1.0),
+            Vector3::new(0.0, 0.0, 3.0),
+        ];
+        // Yaw must not touch Z: quarter turn, scale 2, lifted to z=10.
+        let a = transform_mesh_to_aabb3(
+            &verts,
+            0.0,
+            0.0,
+            10.0,
+            std::f32::consts::FRAC_PI_2,
+            2.0,
+        );
+        assert!((a.min_z - 8.0).abs() < 1e-5, "min_z {}", a.min_z);
+        assert!((a.max_z - 16.0).abs() < 1e-5, "max_z {}", a.max_z);
+    }
+
+    #[test]
+    fn aabb3d_empty_sentinel_reports_empty() {
+        assert!(Aabb3D::EMPTY.is_empty());
+        assert!(transform_mesh_to_aabb3(&[], 0.0, 0.0, 0.0, 0.0, 1.0).is_empty());
+        assert!(!Aabb3D::new(0.0, 0.0, 0.0, 1.0, 1.0, 1.0).is_empty());
     }
 
     #[test]

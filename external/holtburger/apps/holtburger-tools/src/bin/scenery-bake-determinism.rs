@@ -30,7 +30,8 @@ use holtburger_dat::DatDatabase;
 use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel};
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, transform_mesh_to_aabb,
+    Aabb2D, Aabb3D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock,
+    transform_mesh_to_aabb, transform_mesh_to_aabb3,
 };
 
 fn locate_dats() -> Result<(PathBuf, PathBuf)> {
@@ -229,9 +230,9 @@ fn bake_one(
     };
     let (sc_ref, mc_ref) = (scene_cache, mesh_cache);
     let fetch_scene = |id: u32| sc_ref.lookup(portal, id);
-    let compute_world_aabb = |px: PlacementXform| -> Option<Aabb2D> {
+    let compute_world_aabb = |px: PlacementXform| -> Option<Aabb3D> {
         let verts = mc_ref.lookup(portal, px.obj_id)?;
-        Some(transform_mesh_to_aabb(
+        Some(transform_mesh_to_aabb3(
             verts, px.lx, px.ly, px.lz, px.rotation_rad, px.scale,
         ))
     };

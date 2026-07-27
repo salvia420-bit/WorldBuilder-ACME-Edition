@@ -40,8 +40,8 @@ use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel, Surface};
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
 use holtburger_dat::walk::read_gfx_obj_surfaces;
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, placements_fingerprint,
-    transform_mesh_to_aabb,
+    Aabb2D, Aabb3D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock,
+    placements_fingerprint, transform_mesh_to_aabb, transform_mesh_to_aabb3,
 };
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
@@ -129,6 +129,18 @@ struct Cli {
     /// `--bits` mode) — diagnostic output only.
     #[arg(long)]
     bits: bool,
+
+    /// DAT-01 phase 1 escape hatch: suppress the V3 `aabb_*` fields.
+    ///
+    /// By default every placement line now carries the six world-frame
+    /// bounding-box components the bake already computes for ACE's
+    /// `Collision` rejection (and previously discarded) — they are the
+    /// broad-phase collision box for procedural scenery. They cost
+    /// roughly a third of the JSONL's size; pass this to reproduce a
+    /// pre-V3 byte-for-byte-comparable file, or for a size-constrained
+    /// bake whose consumer does not want collision.
+    #[arg(long)]
+    no_bounds: bool,
 }
 
 fn parse_hex_u32(s: &str) -> Result<u32> {
@@ -848,14 +860,24 @@ fn format_materials_sidecar(portal: &DatDatabase, surface_dids: &BTreeSet<u32>) 
 /// pre-V2 line) is what `#[serde(default)]` covers — but only on the
 /// known optional fields like `default_script_id`; an absent `stable_id`
 /// is likewise tolerated by any reader that doesn't model it.
+/// `aabb_*` (V3, DAT-01 phase 1, 2026-07-27) is APPENDED after
+/// `stable_id`: the six world-frame bounding-box components the bake has
+/// always computed for ACE's `Collision` rejection and always discarded
+/// (`ScenicPlacement::bounds`). Same append-only rule as V1/V2 — every
+/// prior field keeps its exact position and format, and a pre-V3 reader
+/// (the shipped wasm `ScenicPlacementJsonRaw`, which has no
+/// `deny_unknown_fields`) silently ignores the new keys. XY are in the
+/// same LB-local frame as `x`/`y`; Z is absolute world metres, the same
+/// frame as `z`. Suppressed entirely by `--no-bounds`.
 fn write_placement_line<W: Write>(
     mut w: W,
     p: &ScenicPlacement,
     default_script_id: u32,
+    emit_bounds: bool,
 ) -> Result<()> {
-    writeln!(
+    write!(
         w,
-        "{{\"obj_id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":{},\"source_cell_x\":{},\"source_cell_y\":{},\"source_obj_idx\":{},\"default_script_id\":\"0x{:08X}\",\"stable_id\":{:?}}}",
+        "{{\"obj_id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":{},\"source_cell_x\":{},\"source_cell_y\":{},\"source_obj_idx\":{},\"default_script_id\":\"0x{:08X}\",\"stable_id\":{:?}",
         p.obj_id,
         format_f32_six_sig(p.x),
         format_f32_six_sig(p.y),
@@ -871,6 +893,32 @@ fn write_placement_line<W: Write>(
         default_script_id,
         p.stable_id(),
     )?;
+    // A degenerate box (empty vertex list) would render as the bare
+    // `inf` / `-inf` tokens, which are not valid JSON numbers and would
+    // void the line. `bake_landblock` only accepts placements whose mesh
+    // resolved, so this cannot happen for real DAT input — but the guard
+    // keeps a hostile/corrupt record from poisoning the file, matching
+    // how the materials sidecar handles non-finite scalars.
+    let b = p.bounds;
+    let finite = b.min_x.is_finite()
+        && b.min_y.is_finite()
+        && b.min_z.is_finite()
+        && b.max_x.is_finite()
+        && b.max_y.is_finite()
+        && b.max_z.is_finite();
+    if emit_bounds && finite {
+        write!(
+            w,
+            ",\"aabb_min_x\":{},\"aabb_min_y\":{},\"aabb_min_z\":{},\"aabb_max_x\":{},\"aabb_max_y\":{},\"aabb_max_z\":{}",
+            format_f32_six_sig(b.min_x),
+            format_f32_six_sig(b.min_y),
+            format_f32_six_sig(b.min_z),
+            format_f32_six_sig(b.max_x),
+            format_f32_six_sig(b.max_y),
+            format_f32_six_sig(b.max_z),
+        )?;
+    }
+    writeln!(w, "}}")?;
     Ok(())
 }
 
@@ -908,6 +956,7 @@ fn bake_one(
     lb_key: u16,
     out_dir: &Path,
     mode: BakeMode,
+    emit_bounds: bool,
 ) -> Result<Option<usize>> {
     let lb_word = (lb_key as u32) << 16;
     let cell_id = lb_word | 0xFFFF;
@@ -943,9 +992,13 @@ fn bake_one(
         // `placement_aabb` for the equivalent building-side helper.
         let (scene_cache_ref, mesh_cache_ref) = (scene_cache, mesh_cache);
         let fetch_scene = |scene_id: u32| scene_cache_ref.lookup(portal, scene_id);
-        let compute_world_aabb = |px: PlacementXform| -> Option<Aabb2D> {
+        // DAT-01 phase 1: the Z-aware builder. Its `.xy()` is
+        // bit-identical to the 2D builder this replaced, so the
+        // rejection decisions — and therefore every baked placement —
+        // are unchanged; the Z extent simply stops being discarded.
+        let compute_world_aabb = |px: PlacementXform| -> Option<Aabb3D> {
             let verts = mesh_cache_ref.lookup(portal, px.obj_id)?;
-            Some(transform_mesh_to_aabb(
+            Some(transform_mesh_to_aabb3(
                 verts,
                 px.lx,
                 px.ly,
@@ -977,7 +1030,7 @@ fn bake_one(
         // `default_script` ambient-chain DID (0 for GfxObjs / scripts
         // none) and emit it as the trailing JSONL field.
         let default_script_id = script_cache.lookup(portal, p.obj_id);
-        write_placement_line(&mut w, p, default_script_id)?;
+        write_placement_line(&mut w, p, default_script_id, emit_bounds)?;
     }
     w.flush()?;
 
@@ -1122,6 +1175,7 @@ fn main() -> Result<()> {
             lb_key,
             &cli.out,
             mode,
+            !cli.no_bounds,
         )? {
             Some(n) => counts.push(n),
             None => skipped += 1,
@@ -1150,6 +1204,7 @@ fn main() -> Result<()> {
         counts.len(),
         skipped,
         mode,
+        !cli.no_bounds,
     );
     fs::write(&manifest_path, manifest)
         .with_context(|| format!("write {}", manifest_path.display()))?;
@@ -1183,9 +1238,10 @@ fn format_manifest(
     baked: usize,
     skipped: usize,
     mode: BakeMode,
+    emit_bounds: bool,
 ) -> String {
     format!(
-        "client_portal.dat\t{}\nclient_cell_1.dat\t{}\nclient_local_English.dat\t{}\nbake-tool-version\t{} + {}\nregion-did\t0x{:08X}\nbake-mode\t{}\nlandblocks\t{} baked, {} skipped\n",
+        "client_portal.dat\t{}\nclient_cell_1.dat\t{}\nclient_local_English.dat\t{}\nbake-tool-version\t{} + {}\nregion-did\t0x{:08X}\nbake-mode\t{}\nlandblocks\t{} baked, {} skipped\nplacement-bounds\t{}\n",
         portal_hash,
         cell_hash,
         local_hash,
@@ -1195,6 +1251,7 @@ fn format_manifest(
         mode.as_str(),
         baked,
         skipped,
+        if emit_bounds { "aabb3d-v3" } else { "none" },
     )
 }
 
@@ -1417,6 +1474,7 @@ mod tests {
             source_cell_y: 0,
             source_obj_idx: 0,
             identity: GeneratedSceneryIdentity::default(),
+            bounds: Aabb3D::new(0.0, 0.0, 0.0, 1.0, 1.0, 1.0),
         }
     }
 
@@ -1725,17 +1783,19 @@ mod tests {
             169,
             0,
             BakeMode::AceCompat,
+            true,
         );
         assert!(m.contains("client_portal.dat\t"));
         assert!(m.contains("client_cell_1.dat\t"));
         assert!(m.contains("client_local_English.dat\t"));
         assert!(m.contains("region-did\t0x13000000"));
         assert!(m.contains("bake-mode\tace-compat"));
+        assert!(m.contains("placement-bounds\taabb3d-v3"));
         assert!(m.contains("169 baked, 0 skipped"));
         assert!(m.contains(SCENERY_BAKE_LIB_VERSION));
         assert!(m.contains(SCENERY_BAKE_CLI_VERSION));
-        // Seven-line format (now includes `bake-mode`).
-        assert_eq!(m.lines().count(), 7);
+        // Eight-line format (`bake-mode`, plus DAT-01 `placement-bounds`).
+        assert_eq!(m.lines().count(), 8);
     }
 
     #[test]
@@ -1748,8 +1808,10 @@ mod tests {
             1,
             0,
             BakeMode::Strict,
+            false,
         );
         assert!(m.contains("bake-mode\tstrict"));
+        assert!(m.contains("placement-bounds\tnone"));
     }
 
     #[test]
@@ -1839,6 +1901,83 @@ mod tests {
         assert_eq!(nonzero, 5);
     }
 
+    /// V3 (DAT-01 phase 1, 2026-07-27) — the six `aabb_*` components are
+    /// APPENDED after `stable_id`, are valid JSON numbers in the bake's
+    /// `{:.6}` convention, and are omitted entirely under `--no-bounds`
+    /// so a pre-V3-shaped file can still be produced. The append-only
+    /// position is what makes the change forward-compatible with the
+    /// shipped wasm reader (`ScenicPlacementJsonRaw`, no
+    /// `deny_unknown_fields`).
+    #[test]
+    fn write_placement_line_v3_appends_bounds_last_and_no_bounds_suppresses() {
+        let p = ScenicPlacement {
+            obj_id: 0x0100_07AB,
+            x: 12.0,
+            y: 34.0,
+            z: 56.0,
+            qw: 1.0,
+            qx: 0.0,
+            qy: 0.0,
+            qz: 0.0,
+            scale: 1.0,
+            source_cell_x: 0,
+            source_cell_y: 1,
+            source_obj_idx: 2,
+            identity: GeneratedSceneryIdentity::default(),
+            bounds: Aabb3D::new(10.5, 32.25, 56.0, 13.5, 35.75, 62.5),
+        };
+
+        let mut with = Vec::new();
+        write_placement_line(&mut with, &p, 0, true).unwrap();
+        let s = String::from_utf8(with).unwrap();
+        assert_eq!(s.matches('\n').count(), 1, "still one line: {s:?}");
+        // Appended AFTER stable_id — every prior field keeps its place.
+        let sid = s.find("\"stable_id\"").expect("stable_id present");
+        let aabb = s.find("\"aabb_min_x\"").expect("aabb_min_x present");
+        assert!(aabb > sid, "aabb_* must follow stable_id in {s:?}");
+        for k in [
+            "\"aabb_min_x\":10.500000",
+            "\"aabb_min_y\":32.250000",
+            "\"aabb_min_z\":56.000000",
+            "\"aabb_max_x\":13.500000",
+            "\"aabb_max_y\":35.750000",
+            "\"aabb_max_z\":62.500000",
+        ] {
+            assert!(s.contains(k), "missing {k} in {s:?}");
+        }
+        assert!(s.trim_end().ends_with("\"aabb_max_z\":62.500000}"));
+
+        // --no-bounds reproduces the pre-V3 shape exactly.
+        let mut without = Vec::new();
+        write_placement_line(&mut without, &p, 0, false).unwrap();
+        let t = String::from_utf8(without).unwrap();
+        assert!(!t.contains("aabb_"), "bounds leaked under --no-bounds: {t:?}");
+        assert!(t.trim_end().ends_with(&format!("\"stable_id\":{:?}}}", p.stable_id())));
+
+        // The V3 prefix is byte-identical to the V2 line up to the close
+        // brace — nothing before the appended block moved.
+        assert!(
+            s.starts_with(t.trim_end().trim_end_matches('}')),
+            "V3 line diverges from V2 prefix"
+        );
+    }
+
+    /// The degenerate-box guard: a non-finite bound would emit the bare
+    /// `inf` token, which is not valid JSON. Such a placement cannot come
+    /// out of `bake_landblock` (a missing mesh skips the placement), but
+    /// the writer must not be the thing that produces an unparseable
+    /// file if one ever reaches it.
+    #[test]
+    fn write_placement_line_drops_non_finite_bounds() {
+        let mut p = mk_placement(0x0100_0001);
+        p.bounds = Aabb3D::EMPTY;
+        let mut buf = Vec::new();
+        write_placement_line(&mut buf, &p, 0, true).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(!s.contains("inf"), "non-finite token in {s:?}");
+        assert!(!s.contains("aabb_"), "emitted a degenerate box: {s:?}");
+    }
+
     #[test]
     fn write_placement_line_format_is_jsonl_one_line() {
         let p = ScenicPlacement {
@@ -1855,9 +1994,10 @@ mod tests {
             source_cell_y: 5,
             source_obj_idx: 2,
             identity: GeneratedSceneryIdentity::default(),
+            bounds: Aabb3D::new(0.0, 0.0, 0.0, 1.0, 1.0, 1.0),
         };
         let mut buf = Vec::new();
-        write_placement_line(&mut buf, &p, 0x330003EC).unwrap();
+        write_placement_line(&mut buf, &p, 0x330003EC, false).unwrap();
         let s = String::from_utf8(buf).unwrap();
         // One line.
         assert_eq!(s.matches('\n').count(), 1);
@@ -1902,9 +2042,10 @@ mod tests {
             source_cell_y: 5,
             source_obj_idx: 3,
             identity,
+            bounds: Aabb3D::new(0.0, 0.0, 0.0, 1.0, 1.0, 1.0),
         };
         let mut buf = Vec::new();
-        write_placement_line(&mut buf, &p, 0x330003EC).unwrap();
+        write_placement_line(&mut buf, &p, 0x330003EC, false).unwrap();
         let s = String::from_utf8(buf).unwrap();
 
         // The line carries `stable_id` and it equals the placement's
@@ -1945,9 +2086,10 @@ mod tests {
             source_cell_y: 0,
             source_obj_idx: 0,
             identity: GeneratedSceneryIdentity::default(),
+            bounds: Aabb3D::new(0.0, 0.0, 0.0, 1.0, 1.0, 1.0),
         };
         let mut buf = Vec::new();
-        write_placement_line(&mut buf, &p, 0).unwrap();
+        write_placement_line(&mut buf, &p, 0, false).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("\"default_script_id\":\"0x00000000\""));
     }
@@ -2052,6 +2194,7 @@ mod tests {
             source_cell_y: 2,
             source_obj_idx: 0,
             identity: GeneratedSceneryIdentity::default(),
+            bounds: Aabb3D::new(0.0, 0.0, 0.0, 1.0, 1.0, 1.0),
         };
         let placements = vec![mk(10.0), mk(20.123457), mk(30.0)];
 
@@ -2066,7 +2209,7 @@ mod tests {
         // Bake side: serialise EXACTLY as production does (lossy `{:.6}`).
         let mut buf = Vec::new();
         for p in &placements {
-            write_placement_line(&mut buf, p, 0).unwrap();
+            write_placement_line(&mut buf, p, 0, false).unwrap();
         }
         let jsonl = String::from_utf8(buf).unwrap();
 

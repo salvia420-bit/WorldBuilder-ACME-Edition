@@ -17,7 +17,7 @@ use holtburger_dat::graphics::Frame;
 use holtburger_dat::landblock::CellLandblock;
 use holtburger_common::{Quaternion, Vector3};
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, FNV1A_OFFSET, PlacementXform, ScenicPlacement, bake_landblock,
+    Aabb2D, Aabb3D, BakeMode, FNV1A_OFFSET, PlacementXform, ScenicPlacement, bake_landblock,
     bilinear_height_from_grid, fnv1a_fold, placements_fingerprint, transform_mesh_to_aabb,
     triangle_plane_height_from_grid, vertex_heights, wire_f32_bits,
 };
@@ -178,10 +178,12 @@ fn fixed_local_mesh() -> Vec<Vector3> {
 /// Build the bake's `compute_world_aabb` closure backed by a fixed
 /// mesh. Returns a closure that resolves any obj_id to the fixed cube
 /// mesh's transformed AABB — sufficient for synthetic tests.
-fn fixed_world_aabb_fn() -> impl FnMut(PlacementXform) -> Option<Aabb2D> {
+fn fixed_world_aabb_fn() -> impl FnMut(PlacementXform) -> Option<Aabb3D> {
     let verts = fixed_local_mesh();
     move |px: PlacementXform| {
-        Some(transform_mesh_to_aabb(&verts, px.lx, px.ly, px.lz, px.rotation_rad, px.scale))
+        Some(holtburger_scenery_bake::transform_mesh_to_aabb3(
+            &verts, px.lx, px.ly, px.lz, px.rotation_rad, px.scale,
+        ))
     }
 }
 

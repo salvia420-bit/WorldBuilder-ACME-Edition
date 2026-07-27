@@ -33,12 +33,30 @@
 //! - `fetch_scene(scene_id)` — must return the `Scene` for the given
 //!   `0x12xxxxxx` DID, or `None` if the scene isn't found. The bake
 //!   skips vertices whose scene can't be loaded.
-//! - `compute_world_aabb(params)` — must return the world-frame XY
-//!   AABB for the placement, computed by transforming the mesh's
+//! - `compute_world_aabb(params)` — must return the world-frame
+//!   [`Aabb3D`] for the placement, computed by transforming the mesh's
 //!   vertices through ACE's `scale * yaw * cellTranslate * inner`
-//!   stack (see [`aabb::transform_mesh_to_aabb`] for the canonical
+//!   stack (see [`aabb::transform_mesh_to_aabb3`] for the canonical
 //!   helper). Returns `None` when the mesh can't be loaded; the bake
 //!   skips placements without a usable AABB (no collision basis).
+//!
+//! # DAT-01 phase 1 (2026-07-27) — the box is shipped, not discarded
+//!
+//! ACE's `Collision` rejection only ever reads the XY slice, and until
+//! now the box was dropped the moment the decision was made. It is now
+//! retained on [`ScenicPlacement::bounds`] so procedural scenery can be
+//! given a collision representation downstream (retail makes every
+//! scenery instance a real `CPhysicsObj` — `CLandBlock::get_land_scenes`,
+//! `acclient.c:352708-352718`; we intend an AABB broad-phase feeding the
+//! existing per-static physics-BSP narrow phase).
+//!
+//! Two invariants make this safe to land ahead of any consumer:
+//! - **Acceptance is untouched.** The rejection test reads
+//!   `bounds.xy()`, which is bit-identical to what the old 2D builder
+//!   returned (`aabb::tests::transform_mesh_to_aabb3_xy_matches_2d`).
+//! - **The freeze hash is untouched.** [`placements_fingerprint`] still
+//!   folds only the twelve wire fields, so every shipped
+//!   `placements-hash` sidecar stays valid.
 //!
 //! `building_aabbs` is supplied by the caller; the bake doesn't load
 //! `LandblockInfo` itself. Caller is responsible for pre-computing the
@@ -54,7 +72,10 @@ pub mod aabb;
 pub mod height;
 pub mod noise;
 
-pub use aabb::{Aabb2D, LocalBounds, transform_local_aabb, transform_mesh_to_aabb};
+pub use aabb::{
+    Aabb2D, Aabb3D, LocalBounds, transform_local_aabb, transform_mesh_to_aabb,
+    transform_mesh_to_aabb3,
+};
 pub use height::{
     CELL_SIZE, LANDBLOCK_SIZE, VERTEX_DIM, bilinear_height, bilinear_height_from_grid,
     get_split_dir, normal_z_at, slope_at, triangle_plane_height_from_grid, vertex_heights,
@@ -218,6 +239,29 @@ pub struct ScenicPlacement {
     /// the `source_*` debug fields above and is decoupled from the bake
     /// math (adding it does not change which placements are emitted).
     pub identity: GeneratedSceneryIdentity,
+    /// DAT-01 phase 1 (2026-07-27) — the world-frame bounding box the
+    /// bake built for this placement, in the SAME frame as `(x, y, z)`
+    /// (LB-local metres on XY, absolute world metres on Z).
+    ///
+    /// This is not a new computation: the bake has always built this box
+    /// in order to run ACE's `Collision` rejection (`Scenery.cs:80-84`)
+    /// and has always discarded it afterwards. `bounds.xy()` is
+    /// literally the box that was tested against `building_aabbs` and
+    /// the already-placed set; the Z extent is the same per-vertex walk
+    /// with the third axis kept instead of thrown away.
+    ///
+    /// It exists so procedural scenery can get a collision
+    /// representation without the client re-deriving one per instance:
+    /// it is the broad-phase box for `holtburger_world::StaticAabbEntry`
+    /// (DAT-01 phase 2). Carrying it costs nothing at bake time and
+    /// guarantees the collision box and the placement-rejection box can
+    /// never drift apart.
+    ///
+    /// **It is deliberately excluded from [`placements_fingerprint`]** —
+    /// the freeze hash covers the twelve wire fields the client can
+    /// reconstruct, and widening it would invalidate every shipped
+    /// sidecar for a purely additive change.
+    pub bounds: Aabb3D,
 }
 
 /// FNV-1a/64 fingerprint primitives — re-exported from the unified
@@ -250,6 +294,12 @@ pub use holtburger_common::bake_fingerprint::{
 /// shared wire fields lets the bake CLI emit a `placements-hash` line
 /// in the per-LB sidecar and the client recompute the SAME value over
 /// the loaded placement array.
+///
+/// DAT-01 phase 1 (2026-07-27): [`ScenicPlacement::bounds`] is
+/// deliberately NOT folded either, for the same reason as the identity —
+/// it is an additive wire field, and widening the hash would invalidate
+/// every already-shipped `placements-hash` sidecar (40,197 of them in
+/// `dist/scenery/`) for a change that moves no placement.
 ///
 /// This fingerprint is **advisory**: a mismatch means the shipped
 /// `*.scenery.jsonl` diverged from what a fresh bake of the same DAT
@@ -295,8 +345,10 @@ impl ScenicPlacement {
 /// AABB-building closure. The closure is expected to load the mesh
 /// for `obj_id`, run each vertex through
 /// `scale * yaw(rotation_rad) * cellTranslate * translate(lx, ly, lz)`,
-/// and return the world-frame XY min/max — exactly what ACE's
-/// `BoundingBox.BuildBox` does.
+/// and return the world-frame min/max — exactly what ACE's
+/// `BoundingBox.BuildBox` does. Since DAT-01 phase 1 the closure returns
+/// an [`Aabb3D`]; the bake reads `.xy()` for ACE's rejection test and
+/// ships the whole box on the placement.
 #[derive(Debug, Clone, Copy)]
 pub struct PlacementXform {
     /// GfxObj (`0x01xxxxxx`) or SetupModel (`0x02xxxxxx`) DID.
@@ -331,9 +383,11 @@ pub struct PlacementXform {
 /// - `fetch_scene` — closure to resolve a `0x12xxxxxx` Scene DID to
 ///   its parsed `Scene`. Caller owns DAT access.
 /// - `compute_world_aabb` — closure to return the placement's
-///   world-frame XY AABB. Use [`transform_mesh_to_aabb`] inside the
+///   world-frame AABB. Use [`transform_mesh_to_aabb3`] inside the
 ///   closure to match ACE bit-for-bit. Return `None` when the mesh
-///   can't be resolved — the bake will skip the placement.
+///   can't be resolved — the bake will skip the placement. Only the
+///   `.xy()` slice participates in ACE's rejection test; the full box
+///   rides out on [`ScenicPlacement::bounds`] (DAT-01 phase 1).
 /// - `building_aabbs` — world-frame XY AABBs of all entries in
 ///   `LandblockInfo.Buildings` on this LB. Caller is responsible for
 ///   computing each one via the same per-vertex transform. **Do not
@@ -345,7 +399,7 @@ pub fn bake_landblock(
     landblock: &CellLandblock,
     landblock_id: u32,
     fetch_scene: impl FnMut(u32) -> Option<Scene>,
-    compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb2D>,
+    compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb3D>,
     building_aabbs: &[Aabb2D],
     mode: BakeMode,
 ) -> Vec<ScenicPlacement> {
@@ -365,7 +419,7 @@ fn bake_landblock_impl(
     landblock: &CellLandblock,
     landblock_id: u32,
     mut fetch_scene: impl FnMut(u32) -> Option<Scene>,
-    mut compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb2D>,
+    mut compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb3D>,
     building_aabbs: &[Aabb2D],
     mode: BakeMode,
 ) -> Vec<ScenicPlacement> {
@@ -539,7 +593,7 @@ fn bake_landblock_impl(
             // * cellTranslateInner` and take XY min/max. Closure owns
             // the mesh cache + the transform — see
             // `apps/holtburger-tools/src/bin/scenery-bake.rs::compute_world_aabb_for`.
-            let world_aabb = match compute_world_aabb(PlacementXform {
+            let world_bounds = match compute_world_aabb(PlacementXform {
                 obj_id: obj.obj_id,
                 lx,
                 ly,
@@ -550,6 +604,13 @@ fn bake_landblock_impl(
                 Some(a) => a,
                 None => continue,
             };
+            // DAT-01 phase 1: ACE's `Collision` is XY-only, so the
+            // rejection reads the `.xy()` slice and nothing else. The
+            // full 3D box is retained solely to be SHIPPED on the
+            // accepted placement — it never influences acceptance, which
+            // is why widening the closure's return type cannot move a
+            // single placement.
+            let world_aabb = world_bounds.xy();
 
             if noise::intersects_any(&world_aabb, building_aabbs) {
                 continue;
@@ -580,6 +641,7 @@ fn bake_landblock_impl(
                     template_index: j_u32,
                     source_did: obj.obj_id,
                 },
+                bounds: world_bounds,
             });
         }
     }
