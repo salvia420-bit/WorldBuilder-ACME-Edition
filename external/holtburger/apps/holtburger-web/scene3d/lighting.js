@@ -649,6 +649,128 @@ export function __resetLightPoolConfigForTest(next) {
   _lightPoolConfig = next === undefined ? undefined : next;
 }
 
+// === RND-05/03 (2026-07-27) — CELL-SCOPED light selection (?cellLights) ====
+// RQ-05 ("lamps light the nearest thing to the CAMERA, not their own room") /
+// RQ-07 ("walking behind benches turns off lights") root fix. Retail NEVER
+// selects lights by camera or per frame:
+//   - the STATIC pool is rebuilt only when the viewer's CELL ID changes
+//     (`CellManager::ChangePosition` acclient.c:146717 zeroes the pools and
+//     calls `CEnvCell::flush_cells` acclient.c:349880, which walks the loaded
+//     visible-cell table calling `CObjCell::add_static_to_global_lights`
+//     acclient.c:346859);
+//   - ranking inside the pool is squared distance from the VIEWER's global
+//     position (`Render::insert_light` acclient.c:380524, insertion sort,
+//     caps 40 static / 7 dynamic, acclient.c:45530);
+//   - camera ORIENTATION appears nowhere in selection.
+// Port: scope the pool candidates to the player's current cell + its
+// portal/PVS-visible cells (`sessionHandle.getRenderSet(1)` — the same
+// camera-independent BFS set the cell-visibility tick consumes), rebuild the
+// selection ONLY when that set (or the source count) changes, and rank
+// overflow by player distance² (retail's insert_light rule). Selection churn
+// disappears STRUCTURALLY, so the per-light hysteresis stick-band is not
+// needed on this path. The fixed pool slot count is untouched (relink-freeze
+// rule: slot COUNT never changes; unused slots idle at intensity 0).
+//
+//   ?cellLights=off        escape hatch → the 2026-07-05 player-distance +
+//                          hysteresis selection (byte-identical legacy path).
+//                          OPT-OUT ONLY: absent/any-other-value = ON (the
+//                          shipped default), and ONLY the explicit off-family
+//                          disables — mind the `!== "off"` footgun.
+//   ?viewerLight=on        OPT-IN: retail's hidden always-on player light
+//                          (SmartBox viewer_light: point, WHITE, falloff 10.0
+//                          [acclient.c:44837], default intensity 0.5*4.5=2.25
+//                          [acclient.c:765774], carried 2 m above the player
+//                          origin [SmartBox::set_viewer acclient.c:144016]).
+//                          Added to the candidate list at distance² = -1 so it
+//                          always wins slot 0 (retail adds it to the DYNAMIC
+//                          pool first on every viewer move, and dynamics get
+//                          HW slots before statics — minimize_object_lighting
+//                          acclient.c:380659). Default OFF until eye-tested.
+//   ?viewerLightIntensity=<f>  override the 2.25 (clamped to the LG1 cap).
+const VIEWER_LIGHT_FALLOFF = 10.0; // acclient.c:44837 SmartBox::s_fViewerLightFalloff
+const VIEWER_LIGHT_INTENSITY = 2.25; // acclient.c:765774 (0.5 * 4.5)
+
+let _cellLightsConfig;
+function getCellLightsConfig() {
+  if (_cellLightsConfig !== undefined) return _cellLightsConfig;
+  const cfg = {
+    // DEFAULT ON (explicit opt-out only). Requires the light pool — the
+    // legacy `.visible`-cap path keeps its historic behavior untouched.
+    enabled: true,
+    viewerLight: false,
+    viewerIntensity: VIEWER_LIGHT_INTENSITY,
+  };
+  const ps = _rp5ReadParams();
+  if (ps) {
+    const v = (ps.get("cellLights") || "").toLowerCase();
+    if (v === "off" || v === "false" || v === "0" || v === "no") cfg.enabled = false;
+    // Viewer light is a strict OPT-IN (only the on-family enables) so the
+    // bare default URL renders byte-identically until it's eye-tested.
+    const vl = (ps.get("viewerLight") || "").toLowerCase();
+    if (vl === "on" || vl === "1" || vl === "true" || vl === "yes") cfg.viewerLight = true;
+    const vi = parseFloat(ps.get("viewerLightIntensity"));
+    if (Number.isFinite(vi) && vi >= 0) {
+      cfg.viewerIntensity = Math.min(LIGHT_INTENSITY_CLAMP, vi);
+    }
+  }
+  _cellLightsConfig = cfg;
+  return _cellLightsConfig;
+}
+
+// Test seam — mirrors __resetLightPoolConfigForTest for the ?cellLights knobs.
+export function __resetCellLightsConfigForTest(next) {
+  _cellLightsConfig = next === undefined ? undefined : next;
+}
+
+// FNV-1a over a sorted Uint32Array — the cell-set identity key. getRenderSet
+// returns sorted-ascending ids, so equal sets hash equal without re-sorting.
+function hashCellSet(arr) {
+  let h = 0x811c9dc5 | 0;
+  for (let i = 0; i < arr.length; i += 1) {
+    h = (h ^ (arr[i] | 0)) | 0;
+    h = (h + ((h << 1) | 0) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) | 0;
+  }
+  // Mix the length so {} and {0} can't collide at 0.
+  return (h ^ (arr.length + 1)) | 0;
+}
+
+/**
+ * RND-05/03 — lazily build the synthetic VIEWER-LIGHT source (retail
+ * SmartBox viewer_light). It is NOT a THREE light and is never added to the
+ * scene graph — it's a plain source-carrier (the same duck-type
+ * `feedSelectedIntoPool` consumes) whose `getWorldPosition` reads the LIVE
+ * player reference point each frame (`scene3d._lightRefPos`, refreshed in
+ * `capActiveLightsByDistance`) + 2 m up (three.js Y-up; retail carries the
+ * light at z+2.0 in AC space — acclient.c:144016).
+ */
+function ensureViewerLightSource(scene3d, cfg) {
+  let v = scene3d._viewerLightSource;
+  if (!v) {
+    v = {
+      isViewerLightSource: true,
+      color: new THREE.Color(1, 1, 1),
+      intensity: cfg.viewerIntensity,
+      // Same falloff→distance convention as every other source in this file
+      // (the single L2 STATIC_LIGHT_FACTOR site multiplies DAT falloff by
+      // 1.3). NOTE: retail's LIVE hardware lights use rangeAdjust = 1.5
+      // (acclient.c:45742, config_hardware_light acclient.c:453178) — we
+      // keep the client-wide 1.3 for consistency; documented divergence.
+      distance: VIEWER_LIGHT_FALLOFF * STATIC_LIGHT_FACTOR,
+      decay: LIGHT_DECAY,
+      __lightPoolSel: false,
+      getWorldPosition(target) {
+        const ref = scene3d._lightRefPos;
+        if (ref) target.set(ref.x, ref.y + 2.0, ref.z);
+        else target.set(0, 2.0, 0);
+        return target;
+      },
+    };
+    scene3d._viewerLightSource = v;
+  }
+  v.intensity = cfg.viewerIntensity;
+  return v;
+}
+
 /**
  * Allocate the fixed light pool under `lightsGroup` (scene-root space — the
  * same three.js world frame the sun/ambient live in, so source world-positions
@@ -1054,7 +1176,10 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
   // We cap regardless of whether the indoor toggle ran (capture scripts
   // can validate the cap with a sessionHandle that has no
   // isCurrentCellIndoor — the cap exists on its own merits).
-  capActiveLightsByDistance(scene3d);
+  // RND-05/03 — the sessionHandle rides along so the ?cellLights path can
+  // read the camera-independent BFS cell set (getRenderSet). Legacy callers/
+  // tests that omit it fall through to the historic selection unchanged.
+  capActiveLightsByDistance(scene3d, sessionHandle);
 }
 
 /**
@@ -1315,6 +1440,116 @@ function resolvePlayerThreePos(scene3d) {
 }
 
 /**
+ * RND-05/03 — refresh the player reference point (`scene3d._lightRefPos`)
+ * every cell-mode call. The viewer-light source and the overflow sort both
+ * read it; the camera is only the PRE-SPAWN fallback (the player point is
+ * rotation-invariant — the RQ-07 guarantee).
+ */
+function refreshCellLightRef(scene3d, camera) {
+  let refPos = scene3d._lightRefPos;
+  if (!refPos || typeof refPos.set !== "function") {
+    refPos = new THREE.Vector3();
+    scene3d._lightRefPos = refPos;
+  }
+  const switcher = scene3d?.cameraSwitcher ?? null;
+  let haveRef = false;
+  if (switcher && typeof switcher.getPlayerWorldPosition === "function") {
+    haveRef = switcher.getPlayerWorldPosition(refPos) != null;
+  }
+  if (!haveRef) {
+    const cam = camera ?? scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
+    if (cam && cam.position) refPos.copy(cam.position);
+  }
+  return refPos;
+}
+
+/**
+ * RND-05/03 — the cell-scoped selection rebuild. Scope rule (retail
+ * `flush_cells` over the visible-cell table, acclient.c:349880):
+ *
+ *   - a source stamped `userData.__cellId` (EnvCell interior prop light) is
+ *     in scope iff its cell is in the current render set (own room + its
+ *     portal/PVS-visible rooms). A room the player cannot see contributes
+ *     NOTHING — this kills both RQ-05 (nearest-to-camera lamps in other
+ *     rooms stealing slots) and the through-wall leak.
+ *   - a source stamped `userData.__lbKey` only (outdoor building / static
+ *     lamp) is in scope unless the player is in a genuinely-ENCLOSED cell
+ *     (`scene3d._poolSunIndoor` — the same enclosed-indoor state the sun
+ *     mute uses; SeenOutside interiors keep outdoor lamps, mirroring retail
+ *     where building interiors see the outdoor light set).
+ *   - an unstamped source (entity/dynamic SetLight — spell glows etc.) is
+ *     always in scope (retail re-adds dynamics per viewer move).
+ *
+ * Overflow beyond the fixed pool budget ranks by player distance²
+ * (Render::insert_light's key). NO hysteresis — the selection is only
+ * rebuilt on set/count changes, so slot-boundary flicker cannot happen.
+ */
+function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc) {
+  let cellSet = scene3d._cellLightsSet;
+  if (!cellSet) {
+    cellSet = new Set();
+    scene3d._cellLightsSet = cellSet;
+  }
+  cellSet.clear();
+  for (let i = 0; i < renderSetArr.length; i += 1) cellSet.add(renderSetArr[i] >>> 0);
+  const enclosed = scene3d._poolSunIndoor === true;
+
+  const refPos = scene3d._lightRefPos;
+  const refX = refPos ? refPos.x : 0;
+  const refY = refPos ? refPos.y : 0;
+  const refZ = refPos ? refPos.z : 0;
+
+  let tmp = scene3d._lightTmpPos;
+  if (!tmp || typeof tmp.setFromMatrixPosition !== "function") {
+    tmp = new THREE.Vector3();
+    scene3d._lightTmpPos = tmp;
+  }
+
+  let scratch = scene3d._cellLightScratch;
+  if (!scratch) {
+    scratch = [];
+    scene3d._cellLightScratch = scratch;
+  }
+  scratch.length = 0;
+  if (viewerSrc) {
+    // Slot-0 priority: retail adds viewer_light to the DYNAMIC pool first
+    // and dynamics claim HW slots before statics (minimize_object_lighting).
+    scratch.push({ light: viewerSrc, distSq: -1 });
+  }
+  let scoped = 0;
+  for (let i = 0; i < lights.length; i += 1) {
+    const light = lights[i];
+    const ud = light.userData;
+    const cellId = ud && ud.__cellId != null ? ud.__cellId >>> 0 : null;
+    if (cellId != null) {
+      if (!cellSet.has(cellId)) continue; // out-of-scope room
+    } else if (ud && ud.__lbKey != null) {
+      if (enclosed) continue; // outdoor lamp can't reach an enclosed cell
+    }
+    // else: entity/dynamic source — always a candidate.
+    scoped += 1;
+    if (typeof light.getWorldPosition === "function") {
+      light.getWorldPosition(tmp);
+    } else if (light.position) {
+      tmp.set(light.position.x, light.position.y, light.position.z);
+    } else {
+      tmp.set(0, 0, 0);
+    }
+    const dx = tmp.x - refX;
+    const dy = tmp.y - refY;
+    const dz = tmp.z - refZ;
+    scratch.push({ light, distSq: dx * dx + dy * dy + dz * dz });
+  }
+  scratch.sort(sortByDistSq);
+  pickSelectedSources(pool, scratch);
+  const stats = scene3d._cellLightsStats;
+  if (stats) {
+    stats.scoped = scoped;
+    stats.candidates = lights.length;
+  }
+}
+
+/**
  * Cap `scene3d.activeLights` to `MAX_ACTIVE_LIGHTS` by squared
  * distance to the active camera. Lights beyond the cap stay in the
  * scene graph but `.visible = false` so they contribute zero work.
@@ -1330,13 +1565,42 @@ function resolvePlayerThreePos(scene3d) {
  * gives the post-rotation world position — the same frame the camera
  * lives in. No coord-transform needed.
  */
-function capActiveLightsByDistance(scene3d) {
+function capActiveLightsByDistance(scene3d, sessionHandle) {
   const lights = scene3d?.activeLights;
   const lightPool = scene3d?.lighting?.lightPool;
+  // RND-05/03 — cell-scoped selection is only meaningful in pool mode (the
+  // legacy `.visible`-cap path stays byte-identical), and only once the wasm
+  // session can report the camera-independent BFS cell set. Pre-spawn / test
+  // harnesses without a session fall through to the historic path.
+  const clCfg = getCellLightsConfig();
+  const cellMode = !!(lightPool && lightPool.enabled && clCfg.enabled);
+  let renderSetArr = null;
+  if (cellMode && sessionHandle && typeof sessionHandle.getRenderSet === "function") {
+    try {
+      renderSetArr = sessionHandle.getRenderSet(1);
+    } catch (_) {
+      renderSetArr = null;
+    }
+    if (renderSetArr && renderSetArr.length === 0) renderSetArr = null;
+  }
+  const viewerSrc =
+    cellMode && renderSetArr && clCfg.viewerLight
+      ? ensureViewerLightSource(scene3d, clCfg)
+      : null;
   if (!Array.isArray(lights) || lights.length === 0) {
     // Pool mode: no source lights → drive every pool slot dark (intensity 0),
     // which is NOT a count change (the slots stay visible). Legacy: nothing.
-    if (lightPool && lightPool.enabled) zeroLightPool(lightPool);
+    // Cell mode with the viewer light on: the player light still occupies
+    // slot 0 (retail's viewer_light exists with zero world lights too).
+    if (lightPool && lightPool.enabled) {
+      if (viewerSrc) {
+        refreshCellLightRef(scene3d);
+        selectCellScopedSources(scene3d, lightPool, [], renderSetArr, viewerSrc);
+        feedSelectedIntoPool(lightPool);
+      } else {
+        zeroLightPool(lightPool);
+      }
+    }
     return;
   }
 
@@ -1345,6 +1609,32 @@ function capActiveLightsByDistance(scene3d) {
     scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
   if (!camera || !camera.position) {
     // No camera to sort against. Leave .visible flags as-is.
+    return;
+  }
+
+  // === RND-05/03 cell-scoped path ====================================
+  // Retail parity: rebuild the selection ONLY when the visible-cell set or
+  // the source inventory changes (CellManager::ChangePosition semantics) —
+  // never per frame, never on camera motion. Between rebuilds the pool is
+  // still FED every frame so lights riding moving rigs track exactly.
+  if (cellMode && renderSetArr) {
+    refreshCellLightRef(scene3d, camera);
+    const key = hashCellSet(renderSetArr);
+    let stats = scene3d._cellLightsStats;
+    if (!stats) {
+      stats = { rebuilds: 0, key: 0, count: -1, scoped: 0, candidates: 0, built: false };
+      scene3d._cellLightsStats = stats;
+    }
+    if (stats.built && key === stats.key && stats.count === lights.length) {
+      feedSelectedIntoPool(lightPool);
+      return;
+    }
+    selectCellScopedSources(scene3d, lightPool, lights, renderSetArr, viewerSrc);
+    feedSelectedIntoPool(lightPool);
+    stats.rebuilds += 1;
+    stats.key = key;
+    stats.count = lights.length;
+    stats.built = true;
     return;
   }
 
@@ -1764,7 +2054,10 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
           entry = [];
           partsBySetupId.set(modelId, entry);
         }
-        entry.push({ partIndex: 0, object3D: mesh, lbKey });
+        // RND-05/03 — carry the OWNING EnvCell id so the attach loop can
+        // stamp `userData.__cellId` on every light instance; the cell-scoped
+        // selection keys on it (own room + visible rooms only).
+        entry.push({ partIndex: 0, object3D: mesh, lbKey, cellId: ud.cellId >>> 0 });
       }
     }
   }
@@ -1836,7 +2129,7 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // placement setups never pay the template cost.
       /** @type {ReturnType<typeof getOrBuildLightTemplate>|null} */
       let template = null;
-      for (const { partIndex, object3D, lbKey } of partEntries) {
+      for (const { partIndex, object3D, lbKey, cellId } of partEntries) {
         if (partIndex !== targetPartIndex) continue;
         // Per-placement instance. First placement reuses the source
         // light (zero allocation beyond what `makeThreeLightForSetupLight`
@@ -1888,6 +2181,13 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
             summary.lightsByLbKey.set(lbKey >>> 0, bucket);
           }
           bucket.push(inst);
+        }
+        // RND-05/03 — interior (EnvCell) prop lights carry their owning cell
+        // id; the ?cellLights selection scopes on it. Non-cell entries
+        // (buildings / outdoor statics / entity rigs) leave it undefined.
+        if (cellId != null) {
+          if (!inst.userData) inst.userData = {};
+          inst.userData.__cellId = cellId >>> 0;
         }
       }
       if (!attachedAny) {
@@ -2249,4 +2549,7 @@ export const LIGHTING_CONSTANTS = Object.freeze({
   // waves-2 (2026-05-29): L1 ambient floor + L2 light-range factor.
   LSCAPE_LIGHT_MINIMUM,
   STATIC_LIGHT_FACTOR,
+  // RND-05/03: retail viewer-light params (SmartBox viewer_light).
+  VIEWER_LIGHT_FALLOFF,
+  VIEWER_LIGHT_INTENSITY,
 });

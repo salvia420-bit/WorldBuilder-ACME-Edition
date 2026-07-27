@@ -574,6 +574,16 @@ export function tryAbsorbTerrainLbIntoBatch(scene3d, lbMesh, opts, extras) {
       if (srcGeom.getAttribute("vertexBrightness")) {
         names.push("vertexBrightness", "vertexSaturate", "vertexHue");
       }
+      // RND-20/21 — carry the retail calc_lighting normal into the batch, or
+      // hard-off the Gouraud term. The batch material is cloned from ONE LB's
+      // material before any geometry is admitted, so its uAcGouraudEnabled can
+      // disagree with the whitelist; without this the batched draw would sample
+      // an unbound attribute as (0,0,0) and light every LB by ambient alone.
+      if (srcGeom.getAttribute("acLightNormal")) {
+        names.push("acLightNormal");
+      } else if (state.material?.uniforms?.uAcGouraudEnabled) {
+        state.material.uniforms.uAcGouraudEnabled.value = 0.0;
+      }
       state.attrNames = names;
     }
     const shadow = new THREE.BufferGeometry();

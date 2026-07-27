@@ -750,6 +750,19 @@ try {
 // is faux *running* water visually); the conservative strict set drops it
 // per the SurfChar table, deferring the keep-22-scroll-only refinement (a
 // second mask) to the 1070 eye-test.
+// RND-20/21 — retail faceted-terrain Gouraud. DEFAULT ON; the only escape is
+// the exact string "off" (`?terrainGouraud=off`). Reader semantics are
+// `!== "off"`, so an ABSENT param is ON — do not infer the default from prose.
+export function readTerrainGouraudFlag() {
+  try {
+    return typeof window !== "undefined" && window.location
+      ? new URLSearchParams(window.location.search || "").get("terrainGouraud") !== "off"
+      : true;
+  } catch (_) { return true; }
+}
+
+export const TERRAIN_GOURAUD_ON = readTerrainGouraudFlag();
+
 function readStrictWaterCodesFlag() {
   try {
     return typeof window !== "undefined" && window.location &&
@@ -797,6 +810,14 @@ in float vertexBrightness;
 // no-op. See buildTerrainVertexModulation for math.
 in float vertexSaturate;
 in float vertexHue;
+// RND-20/21 — retail `CLandBlockStruct::calc_lighting` per-vertex normal
+// (acclient.c:353713): summed UNIT face normals, BLOCK-LOCAL (landblock seams
+// are a retail feature, not a bug), resampled onto the subdivided grid through
+// the same per-cell split diagonal the positions use. Distinct from `normal`,
+// which is seam-continuous and drives the detail/triplanar path. Supplied by
+// adapter.js only when the wasm bundle exports acLightNormals; the fragment
+// gate uAcGouraudEnabled is 0 otherwise, so a missing attribute is a no-op.
+in vec3 acLightNormal;
 
 uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
 uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of water terrain codes (bit i = code i)
@@ -819,6 +840,11 @@ out float vHue;                       // R1.A 2026-05-28 — TerrainTex hue modu
 // naturally to YZ + XZ planes.
 out vec3 vAcPos;
 out vec3 vAcNormal;
+// NOT normalised here or in the FS: retail interpolates the per-vertex COLOUR
+// linearly across each triangle, and colour is affine in `dot(N, sunVec)`.
+// Interpolating the raw normal keeps that dot linear, so the GPU's Gouraud
+// interpolation reproduces retail's lerp. Renormalising would bend it.
+out vec3 vAcLightNormal;
 // Phase 2.2 — 1.0 if the vertex is water, 0.0 otherwise. The fragment
 // shader uses this to decide whether to apply UV scroll + tint shift.
 // Flat-interpolated alongside vTerrainCode so the fragment sees the
@@ -965,6 +991,7 @@ void main() {
   // anchored to the bilinear-on-control 24 m surface).
   vAcPos = position;
   vAcNormal = normal;
+  vAcLightNormal = acLightNormal;
 }
 `;
 
@@ -1160,6 +1187,25 @@ uniform float uCloudShadowStrength;
 // (pre-populator) so terrain is never lit from (0,0,0).
 uniform vec3 uSunDir;
 
+// === RND-20/21 — retail terrain Gouraud (?terrainGouraud, default ON) ===
+// `ACRender::landPolyDraw` (acclient.c:719994) calls SetFFLighting(0): retail
+// terrain has NO hardware lighting. The only shading is the Gouraud-
+// interpolated per-vertex colour that `CLandBlockStruct::calc_lighting`
+// (acclient.c:353886-353899) baked on the light tick:
+//   L = max(0, N . sunlight_vec)          // |sunlight_vec| == dirBright
+//   c = min(1, sunColor*L + ambColor*ambLevel)   // per channel
+// Final pixel = terrain texture x c.
+// uAcSunVec therefore carries dirBright as its MAGNITUDE and must not be
+// normalised. uAcAmbLevel arrives already floored at LSCAPE_LIGHT_MINIMUM=0.2
+// (acclient.c:40344 / 307261) — the floor is on AMBIENT ONLY.
+// uAcGouraudEnabled is 0 unless the flag is on AND the geometry carries the
+// acLightNormal attribute, so the off path is bit-exact.
+uniform float uAcGouraudEnabled;
+uniform vec3 uAcSunVec;
+uniform vec3 uAcSunColor;
+uniform vec3 uAcAmbColor;
+uniform float uAcAmbLevel;
+
 // CSM-on-terrain. Mirror of materials.js's MeshStandardMaterial patch
 // at materials.js:267-445. Three cascade shadow maps, view-space-depth
 // selection, blend zones at boundaries. uCsmEnabled gates the whole
@@ -1223,6 +1269,7 @@ in float vViewDepth;                  // CSM-on-terrain: view-space depth for ca
 flat in int vTerrainCode;             // provoking-vertex terrain code
 in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
 in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
+in vec3 vAcLightNormal;               // RND-20/21 — retail calc_lighting normal, NOT renormalised
 flat in int vIsWater;                 // Phase 2.2 — 1 if water, 0 otherwise
 in float vBrightness;                 // 2026-05-28 — TerrainTex per-vertex brightness modulation factor
 in float vSaturate;                   // R1.A 2026-05-28 — TerrainTex per-vertex saturation modulation factor
@@ -1850,7 +1897,13 @@ void main() {
   vec3 baseN = vec3(0.5, 0.5, 1.0);    // flat pre-encoded base [0.5, 0.5, 1]
 
   float ndotl = 1.0;
-  if (uDetailNormalEnabled > 0.5) {
+  // Retail terrain runs with fixed-function lighting DISABLED, so under
+  // ?terrainGouraud the per-pixel sun terms (detail-normal NdotL and the
+  // FU-2 slope relief) are suppressed entirely and replaced by the vertex
+  // Gouraud colour below. The detail NORMAL still shapes nothing here — the
+  // detail/triplanar albedo path is untouched, only its NdotL contribution.
+  bool acGouraud = uAcGouraudEnabled > 0.5;
+  if (uDetailNormalEnabled > 0.5 && !acGouraud) {
     // 2026-07-02 — nearest-corner code (was flat vTerrainCode; see nearCode).
     int slice = uCodeToSlice[clamp(nearCode, 0, 31)];
     if (slice < 5) {
@@ -1935,7 +1988,7 @@ void main() {
   // geometry NdotL here gives true light/shade relief without ever passing
   // the world normal through the tangent-space RNM. Combined floor ~0.42
   // (0.65 * 0.65), never pure black.
-  if (slopeShading) {
+  if (slopeShading && !acGouraud) {
     float slopeNdotL = mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
     ndotl = mix(ndotl, ndotl * slopeNdotL, 1.0);
   }
@@ -2010,6 +2063,17 @@ void main() {
   // around — matches how a brightness-modulated diffuse channel would
   // sit in a PBR composition.
   vec3 modulated = result * mix(1.0, vBrightness, uTerrainModulationEnabled);
+  // RND-20/21 — retail Gouraud terrain colour. vAcLightNormal is the raw
+  // interpolated retail normal (see the varying decl); dot() with the
+  // dirBright-scaled sun vector is therefore linear across each retail
+  // triangle, matching acclient's per-vertex colour lerp. max()/min() are
+  // applied per fragment rather than per vertex, which differs from retail
+  // only inside the terminator band and never overshoots it.
+  if (acGouraud) {
+    float acL = max(0.0, dot(vAcLightNormal, uAcSunVec));
+    vec3 acC = min(vec3(1.0), uAcSunColor * acL + uAcAmbColor * uAcAmbLevel);
+    modulated *= acC;
+  }
   fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow, 1.0);
 }
 `;
@@ -3535,6 +3599,20 @@ export async function bakeTerrainForLandblock(
       // Initial sun direction = the prior hardcoded literal so the
       // pre-populator fallback matches old behavior exactly.
       uSunDir: { value: new THREE.Vector3(-0.4, -0.3, 1.0).normalize() },
+      // RND-20/21 — retail Gouraud terrain. Gated on BOTH the flag and the
+      // acLightNormal attribute actually being present on this geometry (the
+      // 9x9 non-subdivided path and any stale wasm bundle have no such
+      // attribute, and WebGL would feed it (0,0,0) → a sunless terrain).
+      // Seeded to the retail no-region fallback (ambient at
+      // LSCAPE_LIGHT_MINIMUM, sun dark) so the pre-populator frame before
+      // loop.js's first push is dim rather than black or blown out.
+      uAcGouraudEnabled: {
+        value: TERRAIN_GOURAUD_ON && geom.getAttribute("acLightNormal") ? 1.0 : 0.0,
+      },
+      uAcSunVec: { value: new THREE.Vector3(0, 0, 0) },
+      uAcSunColor: { value: new THREE.Color(1, 1, 1) },
+      uAcAmbColor: { value: new THREE.Color(1, 1, 1) },
+      uAcAmbLevel: { value: 0.2 },
       // CSM-on-terrain. Mirrors materials.js's MeshStandardMaterial
       // patch. Texture refs + matrices refreshed each frame by
       // csm.refreshCsmUniforms once the material is registered on

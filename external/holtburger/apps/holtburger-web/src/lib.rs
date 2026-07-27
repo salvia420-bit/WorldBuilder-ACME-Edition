@@ -1616,6 +1616,7 @@ pub async fn fetch_landblock_heightmaps(
 pub struct SubdividedLandblockMesh {
     positions: Vec<f32>,
     normals: Vec<f32>,
+    ac_light_normals: Vec<f32>,
     terrain_codes: Vec<u8>,
     road_codes: Vec<u8>,
     indices: Vec<u32>,
@@ -1636,6 +1637,16 @@ impl SubdividedLandblockMesh {
     #[wasm_bindgen(getter)]
     pub fn normals(&self) -> Vec<f32> {
         self.normals.clone()
+    }
+
+    /// RND-20/21 — retail `CLandBlockStruct::calc_lighting` per-vertex normals
+    /// (acclient.c:353713), block-local and barycentrically resampled onto the
+    /// subdivided grid. Consumed as the `acLightNormal` attribute by the
+    /// terrain Gouraud term; must NOT be renormalised in the shader or the
+    /// interpolation stops matching retail's per-vertex colour lerp.
+    #[wasm_bindgen(getter, js_name = acLightNormals)]
+    pub fn ac_light_normals(&self) -> Vec<f32> {
+        self.ac_light_normals.clone()
     }
 
     #[wasm_bindgen(getter, js_name = terrainCodes)]
@@ -1879,6 +1890,7 @@ pub async fn fetch_subdivided_landblocks(
         out.push(SubdividedLandblockMesh {
             positions: sub.positions,
             normals: sub.normals,
+            ac_light_normals: sub.ac_light_normals,
             terrain_codes: sub.terrain_codes,
             road_codes: sub.road_codes,
             indices: sub.indices,

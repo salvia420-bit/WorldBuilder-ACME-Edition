@@ -370,6 +370,19 @@ export function subdividedLandblockMeshToGeometry(wasmSub) {
     new THREE.BufferAttribute(positions, 3, false)
   );
   geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3, false));
+  // RND-20/21 — retail `CLandBlockStruct::calc_lighting` per-vertex normals
+  // (acclient.c:353713): block-local, summed unit face normals, resampled onto
+  // the subdivided grid through the retail per-cell split. Separate from
+  // "normal" (seam-continuous, drives the detail/triplanar path). Optional so
+  // a stale wasm bundle without the getter still yields a working geometry —
+  // terrain.js gates the Gouraud term on the attribute's presence.
+  const acLightNormalsRaw = wasmSub.acLightNormals;
+  if (acLightNormalsRaw) {
+    geom.setAttribute(
+      "acLightNormal",
+      new THREE.BufferAttribute(Float32Array.from(acLightNormalsRaw), 3, false)
+    );
+  }
   geom.setAttribute(
     "terrainCode",
     new THREE.BufferAttribute(terrainCodes, 1, false)

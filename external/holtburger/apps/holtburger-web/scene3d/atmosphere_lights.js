@@ -42,6 +42,77 @@ import {
 // physical (Bruneton SH) to avoid double-tinting the already-colored probe.
 const LSCAPE_LIGHT_MINIMUM = 0.2;
 
+// === RND-11/12 — retail sun drive (?retailSun, default ON) ===
+// `SkyDesc::GetLighting` (acclient.c:301485) interpolates dirBright /
+// dirColor / dirHeading / dirPitch between the bracketing DayGroup
+// SkyTimeOfDay keyframes and encodes brightness as the MAGNITUDE of the
+// sunlight vector (acclient.c:301548-301560); `LScape::set_landscape_lighting`
+// (acclient.c:307029-307039) hands that straight to the sun RenderLight.
+// LSCAPE_LIGHT_MINIMUM floors the AMBIENT level only (acclient.c:307261) —
+// dirBright is allowed to reach ~0 at night. Flag reads `!== "off"`: absent
+// param == ON.
+function readRetailSunFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search || "").get("retailSun") !== "off";
+  } catch (_) {
+    return true;
+  }
+}
+
+export const RETAIL_SUN_ON = readRetailSunFlag();
+
+/**
+ * Pure retail sun/ambient transform — no THREE, no DOM. Exported so the
+ * diurnal-curve validator can drive it directly from a DAT fixture.
+ *
+ * `dirColor` supplies HUE ONLY: retail carries sun brightness in the
+ * sunlight-vector magnitude (dirBright) and the color separately, so
+ * multiplying the raw 0-1 dirColor would apply the brightness twice
+ * (Dereth's authored dirColor is a near-neutral 220,220,220 for most
+ * keyframes — a raw multiply would dim every lit surface by 0.863 at
+ * noon). Normalising by the max channel keeps neutral keyframes at
+ * unity and preserves the warm chroma of dawn/dusk keyframes.
+ *
+ * @param {Object} p
+ * @param {number} p.dirBright     interpolated SkyTimeOfDay.dirBright
+ * @param {number} p.dirColorArgb  interpolated SkyTimeOfDay.dirColor, 0xAARRGGBB
+ * @param {number} p.ambBright     interpolated SkyTimeOfDay.ambBright
+ * @param {number} [p.worldLightScale=1]
+ * @param {boolean} [p.indoorMute=false]
+ * @returns {{sunIntensity:number, sunTint:{r:number,g:number,b:number},
+ *            probeIntensity:number, ambientLevel:number}}
+ */
+export function retailSunLighting({
+  dirBright,
+  dirColorArgb,
+  ambBright,
+  worldLightScale = 1,
+  indoorMute = false,
+}) {
+  const s = Number.isFinite(worldLightScale) ? worldLightScale : 1;
+
+  const db = Number.isFinite(+dirBright) ? Math.max(0, +dirBright) : 1;
+  const ab = Number.isFinite(+ambBright) ? +ambBright : 1.0;
+  const ambientLevel = Math.max(LSCAPE_LIGHT_MINIMUM, ab);
+
+  const argb = (dirColorArgb >>> 0);
+  const cr = ((argb >>> 16) & 0xff) / 255;
+  const cg = ((argb >>> 8) & 0xff) / 255;
+  const cb = (argb & 0xff) / 255;
+  const peak = Math.max(cr, cg, cb);
+  const sunTint = peak > 0
+    ? { r: cr / peak, g: cg / peak, b: cb / peak }
+    : { r: 1, g: 1, b: 1 };
+
+  return {
+    sunIntensity: indoorMute ? 0 : db * s,
+    sunTint,
+    probeIntensity: Math.max(LSCAPE_LIGHT_MINIMUM, ambientLevel * s),
+    ambientLevel,
+  };
+}
+
 /**
  * Owns the takram SunDirectionalLight + SkyLightProbe and updates them
  * each frame from an AC SkyState snapshot.
@@ -115,6 +186,19 @@ export class AtmosphereLights {
     this._sunDirScratch = new THREE.Vector3();
     this._tickCount = 0;
     this._lastState = null;
+
+    // RND-11/12 — retail sun drive. Instance-level so tests can flip it
+    // without reloading the module-scope flag.
+    this.retailSun = RETAIL_SUN_ON;
+    // takram's SunDirectionalLight.update() rewrites `color` from the
+    // transmittance LUT every tick, so the tint must be re-applied after
+    // update() and must never compound. `_sunBaseColor` caches the untinted
+    // radiance; it is only refreshed when update() actually wrote something
+    // different from the tinted value we installed last tick (LUT-not-ready
+    // frames leave `color` untouched, which would otherwise self-multiply).
+    this._sunBaseColor = new THREE.Color(1, 1, 1);
+    this._sunTintedColor = new THREE.Color(1, 1, 1);
+    this._sunTintApplied = false;
   }
 
   /**
@@ -167,8 +251,38 @@ export class AtmosphereLights {
     // indoors so dungeons aren't lit through the ceiling; the sky probe (ambient
     // fill) is left on for interior legibility, matching the legacy path's
     // intent that this owns now.
-    this.sun.intensity = this._indoorMute ? 0 : s;
-    this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, baseAmbient * s);
+    if (this.retailSun) {
+      // RND-11/12 — the sun is no longer a constant. Intensity tracks the
+      // interpolated dirBright (retail's sunlight-vector magnitude,
+      // acclient.c:301548-301560), hue tracks dirColor. Night keyframes in
+      // Dereth's DayGroups drop dirBright to ~0.0-0.05, so the directional
+      // term all but vanishes while the 0.2-floored probe keeps the scene
+      // readable — the retail day/night contract (acclient.c:307261).
+      const r = retailSunLighting({
+        dirBright: state.dirBright,
+        dirColorArgb: state.dirColorArgb,
+        ambBright,
+        worldLightScale: s,
+        indoorMute: !!this._indoorMute,
+      });
+      this.sun.intensity = r.sunIntensity;
+      this.skyProbe.intensity = r.probeIntensity;
+
+      if (!this._sunTintApplied || !this.sun.color.equals(this._sunTintedColor)) {
+        this._sunBaseColor.copy(this.sun.color);
+      }
+      this.sun.color.setRGB(
+        this._sunBaseColor.r * r.sunTint.r,
+        this._sunBaseColor.g * r.sunTint.g,
+        this._sunBaseColor.b * r.sunTint.b,
+      );
+      this._sunTintedColor.copy(this.sun.color);
+      this._sunTintApplied = true;
+    } else {
+      this.sun.intensity = this._indoorMute ? 0 : s;
+      this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, baseAmbient * s);
+      this._sunTintApplied = false;
+    }
 
     this._lastState = state;
     this._tickCount += 1;

@@ -35,6 +35,14 @@ use crate::surface_classify::SurfaceCategory;
 pub struct SubdividedLandblock {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
+    /// RND-20/21 — retail `CLandBlockStruct::calc_lighting` per-vertex normal
+    /// (acclient.c:353713), barycentrically resampled onto the subdivided grid.
+    /// BLOCK-LOCAL (no neighbour strips) and NOT renormalised after resampling:
+    /// `dot(n, sunVec)` is then linear over each retail triangle, so the GPU's
+    /// Gouraud interpolation reproduces retail's per-vertex colour lerp exactly.
+    /// Distinct from `normals`, which is deliberately seam-continuous for the
+    /// detail-normal / triplanar path. Flat `xyz`, length = 3 × vertex_count.
+    pub ac_light_normals: Vec<f32>,
     pub terrain_codes: Vec<u8>,
     pub road_codes: Vec<u8>,
     pub indices: Vec<u32>,
@@ -464,6 +472,147 @@ pub fn triangle_grad_in_cell(
     }
 }
 
+/// RND-20/21 — retail per-vertex terrain normals at the 9×9 control grid,
+/// **block-local** (no neighbour strips): the sum of the UNIT plane normals of
+/// every adjacent triangle, normalised.
+///
+/// Verbatim `CLandBlockStruct::calc_lighting` (acclient.c:353713):
+/// - zero a `side_vertex_count²` accumulator (acclient.c:353786-353799),
+/// - for each of the `2 * side_polygon_count²` polygons add
+///   `polygon.plane.N` — which is a UNIT normal, not area-weighted — into its
+///   three `vertex_ids` (acclient.c:353801-353830),
+/// - normalise, with `|v| < 0.00019999999` ⇒ `(0, 0, 1)`
+///   (acclient.c:353838-353853).
+///
+/// Block-local is load-bearing, not an oversight: retail's edge normals
+/// therefore differ on either side of a landblock seam, and that discontinuity
+/// is part of the shipped terrain look. Kept separate from
+/// [`control_grid_normals`], which intentionally removes that seam for the
+/// per-pixel detail-normal path.
+///
+/// Triangulation matches [`cell_swto_ne_cut`] exactly, so the accumulated
+/// normal set is the same one `ConstructPolygons` produced.
+///
+/// `landblock_id` supplies the global cell origin for the diagonal rule
+/// (`(id >> 24) & 0xff` and `(id >> 16) & 0xff`, each × 8).
+/// Returned as `[x][y]` unit vectors in AC space (+Z up).
+pub fn retail_land_normals(heights: &[[f32; 9]; 9], landblock_id: u32) -> [[[f32; 3]; 9]; 9] {
+    let lb_x_int = ((landblock_id >> 24) & 0xff) * 8;
+    let lb_y_int = ((landblock_id >> 16) & 0xff) * 8;
+
+    let mut acc = [[[0.0f32; 3]; 9]; 9];
+
+    // Face normal from the per-triangle gradient: the plane through a triangle
+    // whose vertices are a height field over the XY grid has normal
+    // `normalize(-dz/dx, -dz/dy, 1)`, which is exactly retail's upward-facing
+    // `plane.N`. Gradients come from `triangle_grad_in_cell` (cell-fraction
+    // units) divided by the 24 m cell size.
+    let add_face = |acc: &mut [[[f32; 3]; 9]; 9],
+                    grad: (f32, f32),
+                    corners: [(usize, usize); 3]| {
+        let nx = -grad.0 / CONTROL_SPACING_M;
+        let ny = -grad.1 / CONTROL_SPACING_M;
+        let mag = (nx * nx + ny * ny + 1.0).sqrt();
+        let f = [nx / mag, ny / mag, 1.0 / mag];
+        for (cx, cy) in corners {
+            acc[cx][cy][0] += f[0];
+            acc[cx][cy][1] += f[1];
+            acc[cx][cy][2] += f[2];
+        }
+    };
+
+    for cu in 0..8usize {
+        for cv in 0..8usize {
+            let z00 = heights[cu][cv];
+            let z10 = heights[cu + 1][cv];
+            let z01 = heights[cu][cv + 1];
+            let z11 = heights[cu + 1][cv + 1];
+            let sw_ne_cut = cell_swto_ne_cut(lb_x_int + cu as u32, lb_y_int + cv as u32);
+            let sw = (cu, cv);
+            let se = (cu + 1, cv);
+            let nw = (cu, cv + 1);
+            let ne = (cu + 1, cv + 1);
+            if sw_ne_cut {
+                // Sample each triangle's interior so `triangle_grad_in_cell`
+                // selects the matching branch (fx >= fy / fx < fy).
+                add_face(
+                    &mut acc,
+                    triangle_grad_in_cell(z00, z10, z01, z11, 0.75, 0.25, true),
+                    [sw, se, ne],
+                );
+                add_face(
+                    &mut acc,
+                    triangle_grad_in_cell(z00, z10, z01, z11, 0.25, 0.75, true),
+                    [sw, ne, nw],
+                );
+            } else {
+                add_face(
+                    &mut acc,
+                    triangle_grad_in_cell(z00, z10, z01, z11, 0.25, 0.25, false),
+                    [sw, se, nw],
+                );
+                add_face(
+                    &mut acc,
+                    triangle_grad_in_cell(z00, z10, z01, z11, 0.75, 0.75, false),
+                    [ne, nw, se],
+                );
+            }
+        }
+    }
+
+    let mut out = [[[0.0f32, 0.0, 1.0]; 9]; 9];
+    for x in 0..9usize {
+        for y in 0..9usize {
+            let v = acc[x][y];
+            let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            out[x][y] = if mag < 0.00019999999 {
+                [0.0, 0.0, 1.0]
+            } else {
+                [v[0] / mag, v[1] / mag, v[2] / mag]
+            };
+        }
+    }
+    out
+}
+
+/// RND-20/21 — retail terrain Gouraud vertex colour, verbatim
+/// `CLandBlockStruct::calc_lighting` (acclient.c:353886-353899):
+///
+/// ```text
+/// L = max(0, N · sunlight_vec)                 // sunlight_vec magnitude == dirBright
+/// c = min(1, sun_c * L + amb_c * ambient_level)  // per channel, no low clamp
+/// ```
+///
+/// `sun_color` / `amb_color` are `LScape::sunlight_color` / `ambient_color`
+/// as 0-1 floats (retail scales the ARGB bytes by 1/255 —
+/// acclient.c:353861-353871). `ambient_level` is already floored at
+/// `LSCAPE_LIGHT_MINIMUM = 0.2` by the caller (acclient.c:307261) — the floor
+/// applies to AMBIENT ONLY, never to the sun term. Note there is no clamp on
+/// the low side: a negative input would pass through, which cannot happen for
+/// non-negative colours.
+///
+/// The reference implementation for the GLSL in `scene3d/terrain.js`; kept
+/// here so both sides can be diffed against a DAT-driven fixture.
+#[inline]
+pub fn retail_vertex_color(
+    normal: [f32; 3],
+    sun_vec: [f32; 3],
+    sun_color: [f32; 3],
+    amb_color: [f32; 3],
+    ambient_level: f32,
+) -> [f32; 3] {
+    let mut l = normal[0] * sun_vec[0] + normal[1] * sun_vec[1] + normal[2] * sun_vec[2];
+    if l < 0.0 {
+        l = 0.0;
+    }
+    let mut out = [0.0f32; 3];
+    for k in 0..3 {
+        let c = sun_color[k] * l + amb_color[k] * ambient_level;
+        out[k] = if c > 1.0 { 1.0 } else { c };
+    }
+    out
+}
+
 /// Per-vertex terrain normals at the 9×9 control grid, **continuous
 /// across landblock seams**. Each normal is a central difference of the
 /// control heights; at an LB-edge vertex the sample one step past the
@@ -577,6 +726,11 @@ pub fn subdivide_landblock(
     // visual-vs-collision gap → no "half-sunk").
     let control_normals = control_grid_normals(heights, adjacent);
 
+    // RND-20/21 — retail's SEPARATE, block-local, summed-face-normal set. Fed
+    // only to the Gouraud terrain term; the seam-continuous `control_normals`
+    // above stay the shading normal for the detail/triplanar path.
+    let ac_light_control = retail_land_normals(heights, landblock_id);
+
     // Global cell coords of this LB's SW corner — picks the SAME per-cell
     // triangulation diagonal the collision sampler (`triangle_height_in_cell`
     // via `WorldState::terrain_height_at`) and the index buffer below use,
@@ -590,6 +744,7 @@ pub fn subdivide_landblock(
     let mut road_out = vec![0u8; vertex_count];
     let mut positions = vec![0.0f32; vertex_count * 3];
     let mut normals = vec![0.0f32; vertex_count * 3];
+    let mut ac_light_normals = vec![0.0f32; vertex_count * 3];
 
     for i in 0..n {
         for j in 0..n {
@@ -639,6 +794,23 @@ pub fn subdivide_landblock(
             normals[idx3] = nrm[0] / mag;
             normals[idx3 + 1] = nrm[1] / mag;
             normals[idx3 + 2] = nrm[2] / mag;
+            // RND-20/21 — resample the retail control normals through the SAME
+            // per-cell split triangle the position uses, so each component is
+            // the barycentric blend of the 3 enclosing retail corner normals.
+            // Deliberately NOT renormalised: `dot(n, sunVec)` must stay linear
+            // over the retail triangle for the GPU interpolation to reproduce
+            // retail's per-vertex colour lerp (acclient.c:353886-353899).
+            for k in 0..3 {
+                ac_light_normals[idx3 + k] = triangle_height_in_cell(
+                    ac_light_control[cu][cv][k],
+                    ac_light_control[cu + 1][cv][k],
+                    ac_light_control[cu][cv + 1][k],
+                    ac_light_control[cu + 1][cv + 1][k],
+                    fx,
+                    fy,
+                    sw_ne_cut,
+                );
+            }
             codes_out[idx] = terrain_codes[ci][cj];
             road_out[idx] = road_codes[ci][cj];
 
@@ -708,6 +880,7 @@ pub fn subdivide_landblock(
     SubdividedLandblock {
         positions,
         normals,
+        ac_light_normals,
         terrain_codes: codes_out,
         road_codes: road_out,
         indices,
@@ -1266,6 +1439,162 @@ mod tests {
         // cell (0,0) must stay SW↔NE so the legacy fixed-diagonal winding
         // test (`winding_is_consistent_ccw_post_mirror`) keeps passing.
         assert!(cell_swto_ne_cut(0xA9 * 8, 0xB4 * 8));
+    }
+
+    /// RND-20/21: `retail_land_normals` must reproduce
+    /// `CLandBlockStruct::calc_lighting`'s accumulator (acclient.c:353786-353857)
+    /// — unit face normals summed into the three corners, normalised, degenerate
+    /// → (0,0,1) — and must stay BLOCK-LOCAL (no `AdjacentHeights` input).
+    #[test]
+    fn retail_land_normals_matches_calc_lighting() {
+        // Flat block → every normal is +Z regardless of the split diagonal.
+        let flat = [[42.0f32; 9]; 9];
+        let n = retail_land_normals(&flat, 0xA9B4_0000);
+        for x in 0..9 {
+            for y in 0..9 {
+                assert!((n[x][y][0]).abs() < 1e-6, "flat nx {:?}", n[x][y]);
+                assert!((n[x][y][1]).abs() < 1e-6, "flat ny {:?}", n[x][y]);
+                assert!((n[x][y][2] - 1.0).abs() < 1e-6, "flat nz {:?}", n[x][y]);
+            }
+        }
+
+        // Constant east-west ramp: 24 m run per 24 m cell → 45 deg, so the
+        // normal is (-1, 0, 1)/sqrt(2) everywhere (interior AND edge — the
+        // summed-face-normal form is exact on a plane, unlike a central
+        // difference that would need neighbour strips).
+        let mut ramp = [[0.0f32; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                ramp[x][y] = x as f32 * CONTROL_SPACING_M;
+            }
+        }
+        let n = retail_land_normals(&ramp, 0xA9B4_0000);
+        let inv = 1.0 / 2.0f32.sqrt();
+        for x in 0..9 {
+            for y in 0..9 {
+                assert!((n[x][y][0] + inv).abs() < 1e-5, "ramp {:?}", n[x][y]);
+                assert!((n[x][y][1]).abs() < 1e-5, "ramp {:?}", n[x][y]);
+                assert!((n[x][y][2] - inv).abs() < 1e-5, "ramp {:?}", n[x][y]);
+            }
+        }
+
+        // Every normal is unit length and points up (heightfield plane normals
+        // are all +Z-facing, so a sum of them can never flip).
+        let mut bumpy = [[0.0f32; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                bumpy[x][y] = ((x * 7 + y * 13) % 11) as f32 * 6.0;
+            }
+        }
+        let n = retail_land_normals(&bumpy, 0xA9B4_0000);
+        for x in 0..9 {
+            for y in 0..9 {
+                let v = n[x][y];
+                let m = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                assert!((m - 1.0).abs() < 1e-5, "unit {:?}", v);
+                assert!(v[2] > 0.0, "up {:?}", v);
+            }
+        }
+    }
+
+    /// RND-20/21: the retail Gouraud combine (acclient.c:353886-353899) —
+    /// `min(1, sunColor*max(0, N.sunVec) + ambColor*ambLevel)` per channel,
+    /// with NO floor on the sun term (LSCAPE_LIGHT_MINIMUM is ambient-only,
+    /// acclient.c:307261).
+    #[test]
+    fn retail_vertex_color_matches_calc_lighting() {
+        let up = [0.0f32, 0.0, 1.0];
+        let amb = [0.8f32, 0.4, 1.0];
+
+        // Sun straight down onto flat ground: L == |sunVec| == dirBright.
+        let c = retail_vertex_color(up, [0.0, 0.0, 0.5], [0.5, 0.5, 0.5], amb, 0.2);
+        assert!((c[0] - (0.25 + 0.16)).abs() < 1e-6, "{:?}", c);
+        assert!((c[1] - (0.25 + 0.08)).abs() < 1e-6, "{:?}", c);
+        assert!((c[2] - (0.25 + 0.20)).abs() < 1e-6, "{:?}", c);
+
+        // Sun below the horizon → ambient only, never negative.
+        let c = retail_vertex_color(up, [0.0, 0.0, -0.9], [1.0, 1.0, 1.0], amb, 0.2);
+        assert!((c[0] - 0.16).abs() < 1e-6, "{:?}", c);
+
+        // Upper clamp is per channel at 1.0.
+        let c = retail_vertex_color(up, [0.0, 0.0, 1.0], [1.0, 1.0, 1.0], amb, 1.0);
+        assert_eq!(c, [1.0, 1.0, 1.0]);
+    }
+
+    /// RND-20/21: the resampled `ac_light_normals` must (a) equal the retail
+    /// control normal at every control vertex, and (b) make `dot(N, sunVec)`
+    /// AFFINE inside each retail triangle — that second property is what lets
+    /// the GPU's Gouraud interpolation reproduce retail's per-vertex COLOUR
+    /// lerp instead of merely approximating it.
+    #[test]
+    fn ac_light_normals_resample_is_exact_and_affine() {
+        let mut heights = [[0.0f32; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                heights[x][y] = ((x * 5 + y * 3) % 7) as f32 * 8.0;
+            }
+        }
+        let lb = 0xA9B4_0000u32;
+        let ctrl = retail_land_normals(&heights, lb);
+
+        // (a) factor 1 → the subdivided grid IS the control grid.
+        let sub = subdivide_landblock(
+            &heights,
+            &AdjacentHeights::default(),
+            1,
+            &[[0u8; 9]; 9],
+            &[[0u8; 9]; 9],
+            lb,
+            0,
+        );
+        assert_eq!(sub.ac_light_normals.len(), 81 * 3);
+        for x in 0..9usize {
+            for y in 0..9usize {
+                for k in 0..3 {
+                    let got = sub.ac_light_normals[(x * 9 + y) * 3 + k];
+                    assert!((got - ctrl[x][y][k]).abs() < 1e-6,
+                        "resample [{}][{}] ch{}: {} vs {}", x, y, k, got, ctrl[x][y][k]);
+                }
+            }
+        }
+
+        // (b) affine within each retail triangle: the midpoint of a segment
+        // that never crosses the split diagonal equals the endpoint mean.
+        let sun = [0.31f32, -0.44, 0.62];
+        let lbx = ((lb >> 24) & 0xff) * 8;
+        let lby = ((lb >> 16) & 0xff) * 8;
+        for cu in 0..8usize {
+            for cv in 0..8usize {
+                let cut = cell_swto_ne_cut(lbx + cu as u32, lby + cv as u32);
+                let dot_at = |fx: f32, fy: f32| -> f32 {
+                    (0..3)
+                        .map(|k| {
+                            triangle_height_in_cell(
+                                ctrl[cu][cv][k],
+                                ctrl[cu + 1][cv][k],
+                                ctrl[cu][cv + 1][k],
+                                ctrl[cu + 1][cv + 1][k],
+                                fx,
+                                fy,
+                                cut,
+                            ) * sun[k]
+                        })
+                        .sum()
+                };
+                // cut == true splits on fx == fy; cut == false on fx + fy == 1.
+                let segs: [(f32, f32, f32, f32); 2] = if cut {
+                    [(0.05, 0.02, 0.95, 0.60), (0.02, 0.05, 0.60, 0.95)]
+                } else {
+                    [(0.05, 0.02, 0.60, 0.30), (0.95, 0.60, 0.60, 0.95)]
+                };
+                for (ax, ay, bx, by) in segs {
+                    let mid = dot_at((ax + bx) * 0.5, (ay + by) * 0.5);
+                    let avg = 0.5 * (dot_at(ax, ay) + dot_at(bx, by));
+                    assert!((mid - avg).abs() < 1e-5,
+                        "not affine in cell ({}, {}): {} vs {}", cu, cv, mid, avg);
+                }
+            }
+        }
     }
 
     /// RC-1 (2026-06-20): the shared per-cell triangle interpolation must

@@ -987,6 +987,23 @@ function tickVfxWeatherInputs(scene3d) {
  * No-op pre-populator (state null) or pre-buildHoltburgTerrain (empty
  * registry); the material uniform's default literal covers that frame.
  */
+// === RND-20/21 — retail terrain light-tick state ===
+// `LSCAPE_LIGHT_MINIMUM` (acclient.c:40344) floors the AMBIENT level only.
+const AC_LSCAPE_LIGHT_MINIMUM = 0.2;
+// Dereth's Region DAT (portal 0x13000000) carries skyInfo.lightTickSize = 15.0
+// as an f64; acclient's no-region fallback is 3.0 (acclient.c:307294) and the
+// SkyDesc ctor seeds 20.0 (acclient.c:301477). 15 is what the shipped client
+// actually used in Dereth.
+const AC_LIGHT_TICK_SECONDS = 15.0;
+const _acTerrainGouraud = {
+  nextLightTick: -Infinity,
+  epoch: 0,
+  sun: [0, 0, 0],
+  sunColor: [1, 1, 1],
+  ambColor: [1, 1, 1],
+  ambLevel: AC_LSCAPE_LIGHT_MINIMUM,
+};
+
 function tickTerrainSunDir(scene3d) {
   if (!scene3d?.terrainMaterials || scene3d.terrainMaterials.length === 0) {
     return;
@@ -1001,11 +1018,58 @@ function tickTerrainSunDir(scene3d) {
   const sx = cp * Math.sin(heading * DEG);
   const sy = cp * Math.cos(heading * DEG);
   const sz = Math.sin(pitch * DEG);
+
+  // RND-20/21 — retail terrain Gouraud inputs. `LScape::UseTime`
+  // (acclient.c:307257) only re-lights the landscape when the light tick
+  // expires: Dereth's Region DAT carries skyInfo.lightTickSize = 15 s (the
+  // acclient no-region fallback is 3 s, acclient.c:307294, and the SkyDesc
+  // ctor default is 20 s, acclient.c:301477). Quantising to that cadence is
+  // not an optimisation — the visible stepping of terrain brightness IS the
+  // retail look, and a per-frame push would smooth it away.
+  const g = _acTerrainGouraud;
+  const nowSec = scene3d?.frameTime?.tsSec
+    ?? ((typeof performance !== "undefined" && performance.now)
+      ? performance.now() * 0.001
+      : Date.now() * 0.001);
+  const lightTickDue = !(nowSec < g.nextLightTick);
+  if (lightTickDue) {
+    g.nextLightTick = nowSec + AC_LIGHT_TICK_SECONDS;
+    g.epoch += 1;
+    // sunlight_vec carries dirBright as its MAGNITUDE
+    // (SkyDesc::GetLighting, acclient.c:301548-301560).
+    const db = Number.isFinite(+state.dirBright) ? Math.max(0, +state.dirBright) : 0;
+    g.sun[0] = sx * db;
+    g.sun[1] = sy * db;
+    g.sun[2] = sz * db;
+    const dc = (state.dirColorArgb >>> 0);
+    g.sunColor[0] = ((dc >>> 16) & 0xff) / 255;
+    g.sunColor[1] = ((dc >>> 8) & 0xff) / 255;
+    g.sunColor[2] = (dc & 0xff) / 255;
+    const ac = (state.ambColorArgb >>> 0);
+    g.ambColor[0] = ((ac >>> 16) & 0xff) / 255;
+    g.ambColor[1] = ((ac >>> 8) & 0xff) / 255;
+    g.ambColor[2] = (ac & 0xff) / 255;
+    // LSCAPE_LIGHT_MINIMUM floors AMBIENT ONLY (acclient.c:40344, 307261);
+    // dirBright above is deliberately left free to reach 0 at night.
+    const ab = +state.ambBright;
+    g.ambLevel = Math.max(AC_LSCAPE_LIGHT_MINIMUM, Number.isFinite(ab) ? ab : 0);
+  }
+
   for (const mat of scene3d.terrainMaterials) {
     const v = mat?.uniforms?.uSunDir?.value;
     if (v && typeof v.set === "function") {
       v.set(sx, sy, sz);
     }
+    const u = mat?.uniforms;
+    if (!u || !u.uAcSunVec) continue;
+    // Epoch guard, not `lightTickDue`: a landblock baked between ticks would
+    // otherwise render at the seed uniforms (black sun) for up to a full tick.
+    if (mat.userData && mat.userData.__acLightEpoch === g.epoch) continue;
+    if (mat.userData) mat.userData.__acLightEpoch = g.epoch;
+    u.uAcSunVec.value.set(g.sun[0], g.sun[1], g.sun[2]);
+    u.uAcSunColor.value.setRGB(g.sunColor[0], g.sunColor[1], g.sunColor[2]);
+    u.uAcAmbColor.value.setRGB(g.ambColor[0], g.ambColor[1], g.ambColor[2]);
+    u.uAcAmbLevel.value = g.ambLevel;
   }
 }
 
