@@ -86,18 +86,23 @@ const SKILL_NAME = Object.freeze({
 });
 
 // ─── Constants ───
-// Wire's start_time/duration are seconds since the AC Derethian epoch
-// (see `pkg/holtburger_web.d.ts` — "Server time (seconds, Derethian
-// epoch)"), NOT the Unix epoch `Date.now()` uses. Diffing the two
-// directly (`Date.now()/1000 - startTime`) yields a bogus multi-hundred-
-// -million-second "elapsed" for every timed buff (bug A1). Per
-// `Enchantment.cs:100-104` the correct formula is
-//   ExpiresAt = Duration < 0 ? MaxValue : ClientReceivedAt + Duration - StartTime
-// so instead of trusting the server epoch we stamp our own wall-clock
-// `receivedAt` (Unix seconds) the moment we first observe a given
-// (layeredId, startTime) pair — see `stampReceivedAt` below — and
-// compute remaining purely from our own clock, sidestepping the epoch
-// mismatch entirely.
+// Wire's start_time is RELATIVE and ≤ 0 — NOT an epoch timestamp (the
+// old "seconds since the AC Derethian epoch" claim here and in
+// `pkg/holtburger_web.d.ts` was wrong; P4.2 follow-up F2). ACE sets
+// StartTime = 0 at cast and decrements it per 5 s heartbeat
+// (`enchantment.StartTime -= heartbeatInterval`,
+// PropertiesEnchantmentRegistryExtensions.cs:251), so an enchantment
+// re-sent aged N seconds (relog registry dump) arrives with
+// start_time = −N. ACE's own remaining-lifetime formula, evaluated at
+// send time, is
+//   remaining = Duration + StartTime        (EnchantmentManager.cs:188)
+// (the `Enchantment.cs:100-104` "− StartTime" formula previously cited
+// here does not exist — those lines are Beneficial-flag plumbing). We
+// still stamp our own wall-clock `receivedAt` (Unix seconds) the moment
+// we first observe a given (layeredId, startTime) pair — see
+// `stampReceivedAt` below — as the "send time" anchor, then age the
+// ACE remaining from it; bug A1's Date.now()-vs-start_time diff stays
+// dead, and an aged re-send no longer restarts at full duration (F1).
 function nowSeconds() {
   return Date.now() / 1000;
 }
@@ -143,7 +148,13 @@ function remainingSeconds(ench) {
   // raw object handed straight to this function, as in unit tests).
   const receivedAt = Number.isFinite(ench.receivedAt) ? ench.receivedAt : nowSeconds();
   const elapsed = nowSeconds() - receivedAt;
-  return ench.duration - elapsed;
+  // F1: remaining-at-receive = duration + startTime (ACE
+  // EnchantmentManager.cs:188; startTime ≤ 0 — 0 fresh, −age when
+  // re-sent aged). Clamp positive values to 0: ACE never sends > 0, and
+  // clamping keeps synthetic/legacy fixtures on the old duration-only
+  // path (retail clamps out-of-range refs rather than failing).
+  const startTime = Math.min(0, Number(ench.startTime) || 0);
+  return ench.duration + startTime - elapsed;
 }
 
 function fmtRemaining(secs) {

@@ -25882,9 +25882,15 @@ impl PlayerEnchantmentJs {
     /// dispel.
     #[wasm_bindgen(getter, js_name = powerLevel)]
     pub fn power_level(&self) -> u32 { self.power_level }
-    /// Server time (seconds, Derethian epoch) when the effect went
-    /// active. UI computes `elapsed = now() - startTime` to render a
-    /// duration progress bar.
+    /// Relative seconds, ≤ 0 — NOT an epoch timestamp (the previous
+    /// "Derethian epoch" doc here was wrong; P4.2 follow-up F2). ACE
+    /// sends `StartTime = 0` at cast and decrements it per 5 s
+    /// heartbeat (PropertiesEnchantmentRegistryExtensions.cs:251), so
+    /// an aged re-send (relog registry dump) arrives as `-age`.
+    /// Remaining lifetime at send time = `duration + startTime`
+    /// (EnchantmentManager.cs:188). Do NOT diff this against
+    /// `Date.now()` or `serverTime()` — age it from a receipt stamp
+    /// (see `plugins/buffs-hud.js` `remainingSeconds`).
     #[wasm_bindgen(getter, js_name = startTime)]
     pub fn start_time(&self) -> f64 { self.start_time }
     /// Total lifetime in seconds. `0` = permanent (cantrip / equipment).
@@ -39690,6 +39696,19 @@ async fn recv_loop(
         holtburger_protocol::messages::GameMessage,
     > = None;
 
+    // P4.2 TIMESYNC (2026-07-27): latest server-clock sample from the
+    // session (CONNECT handshake time + every TIME_SYNC 0x1000000 optional
+    // header — ACE resends every 20 s, NetworkSession.cs:31/203-208). ACE
+    // stamps `Timers.PortalYearTicks` (seconds since the 2017-01-31 retail
+    // sunset), NOT Unix seconds, so this must become the world clock via
+    // `set_server_time_sync` (native parity: holtburger-core
+    // runtime.rs:118-120) and must never be diffed against `Date.now()`.
+    // Cached because the first sample lands during the handshake, before
+    // either world-construction arm has built the WorldState; both arms
+    // seed the new world from this cache (same pattern as
+    // `cached_player_description`).
+    let mut cached_time_sync: Option<(f64, web_time::Instant)> = None;
+
     // Sequence-gap observability (2026-05-25). Gated by `?seqDebug=1`
     // — read once here and stashed; the flag is checked before every
     // `check_sequence_gap` call so production builds with the flag
@@ -39933,7 +39952,25 @@ async fn recv_loop(
                     }
                 };
                 for event in events {
-                    let SessionEvent::Message(bytes) = event else { continue };
+                    let bytes = match event {
+                        SessionEvent::Message(bytes) => bytes,
+                        // P4.2 TIMESYNC (2026-07-27): adopt the server clock
+                        // (both lanes reach here — the direct `Session`
+                        // emits TimeSync natively; the `?netWorker=1` proxy
+                        // now forwards it as `RX_KIND_TIMESYNC`). Retail
+                        // parity: the client snaps `Timer::cur_time` to
+                        // every CTimeSyncHeader (ClientNet::HandleTimeSynch,
+                        // acclient.c:371516 → Timer::set_time,
+                        // acclient.c:75365) — snap, no slewing.
+                        SessionEvent::TimeSync(server_time) => {
+                            let stamped_at = web_time::Instant::now();
+                            cached_time_sync = Some((server_time, stamped_at));
+                            if let Some(w) = world.borrow_mut().as_mut() {
+                                let _ = w.set_server_time_sync(server_time, stamped_at);
+                            }
+                            continue;
+                        }
+                    };
                     // PR-SS 2026-05-23: stamp the recv timestamp for the
                     // link-status indicator. Any inbound server frame
                     // counts as "the link is alive" — staleness > 2s
@@ -41807,6 +41844,14 @@ async fn recv_loop(
                                 new_world.set_local_retail_leash(retail_leash_on);
                                 // Bug-A (2026-07-03): ?leashEchoGate=on.
                                 new_world.set_leash_echo_gate(leash_echo_gate_on);
+                                // P4.2 TIMESYNC: seed the server clock before
+                                // the world goes live so no lifecycle stamp
+                                // (prune deadlines etc.) is ever taken in the
+                                // Unix wall-clock fallback domain and later
+                                // compared in the PortalYearTicks domain.
+                                if let Some((t, at)) = cached_time_sync {
+                                    let _ = new_world.set_server_time_sync(t, at);
+                                }
                                 *world.borrow_mut() = Some(new_world);
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
@@ -46258,6 +46303,12 @@ async fn recv_loop(
                             new_world.set_local_retail_leash(retail_leash_on);
                             // Bug-A (2026-07-03): ?leashEchoGate=on.
                             new_world.set_leash_echo_gate(leash_echo_gate_on);
+                            // P4.2 TIMESYNC: seed the server clock before the
+                            // world goes live (symmetric with the
+                            // PlayerCreate arm above).
+                            if let Some((t, at)) = cached_time_sync {
+                                let _ = new_world.set_server_time_sync(t, at);
+                            }
                             *world.borrow_mut() = Some(new_world);
                             console_log_str(&format!(
                                 "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",

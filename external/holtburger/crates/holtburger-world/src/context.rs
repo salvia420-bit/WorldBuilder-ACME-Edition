@@ -110,8 +110,13 @@ pub const RETAIL_RUNRATE_EDGE: bool = false;
 /// must be 4 (PK) or 64 (PKLite), AND `LastPkAttackTimestamp`
 /// (float 0x91) must be present with `timestamp + 20.0 > now`.
 /// `now` must be in the SAME clock domain the server writes the
-/// timestamp in — for ACE that is Unix seconds
-/// (`WorldState::current_server_time`).
+/// timestamp in — for ACE that is UNIX seconds (Player_Combat.cs:998,
+/// `Time.GetUnixTime()`). Do NOT pass `WorldState::current_server_time`:
+/// once TimeSync is delivered (P4.2) that is the PACKET clock — ACE
+/// `Timers.PortalYearTicks`, seconds since 2017-01-31 (≈ 3.0e8), 47
+/// years behind Unix — and the predicate degrades to "always armed".
+/// Callers pin a Unix wall clock explicitly (see the movement-system
+/// callsite, P4.2 follow-up F3).
 pub fn pk_jump_stamina_arm(
     pk_status: Option<i32>,
     time_last_pk_attack: Option<f64>,
@@ -488,9 +493,11 @@ pub trait WorldContextExt: WorldContext {
     /// The `bPK` input for `PlayerState::jump_stamina_cost` — retail
     /// `CACQualities::JumpStaminaCost`'s predicate over the local
     /// player's wire properties (acclient.c:442887-442905; see
-    /// [`pk_jump_stamina_arm`]). `now_seconds` must be server-clock
-    /// seconds (`WorldState::current_server_time` — ACE writes
-    /// `LastPkAttackTimestamp` in Unix seconds). Both properties ride
+    /// [`pk_jump_stamina_arm`]). `now_seconds` must be UNIX seconds —
+    /// the domain ACE writes `LastPkAttackTimestamp` in
+    /// (Player_Combat.cs:998) — NOT `WorldState::current_server_time`,
+    /// which is the PortalYearTicks packet clock once TimeSync is
+    /// delivered (P4.2 F3). Both properties ride
     /// the ordinary property-update lane onto the player entity;
     /// absence resolves non-PK exactly like retail's failed inquiry.
     fn player_pk_jump_stamina_arm(&self, now_seconds: f64) -> bool {

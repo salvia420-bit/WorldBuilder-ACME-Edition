@@ -2745,8 +2745,24 @@ impl MovementSystem {
             .unwrap_or(100);
         let burden = world.player_burden().unwrap_or(0.5);
         // Retail PK arm (acclient.c:442887): PlayerKillerStatus in
-        // {4, 64} AND LastPkAttackTimestamp + 20 s > server-now.
-        let pk = world.player_pk_jump_stamina_arm(world.current_server_time());
+        // {4, 64} AND LastPkAttackTimestamp + 20 s > now.
+        //
+        // Domain pin (P4.2 follow-up F3, 2026-07-27): ACE writes
+        // `LastPkAttackTimestamp` in UNIX seconds (Player_Combat.cs:998,
+        // `Time.GetUnixTime()` ≈ 1.79e9 today), while the world clock
+        // (`current_server_time()`) is the PACKET-clock domain — ACE
+        // `Timers.PortalYearTicks`, seconds since the 2017-01-31 retail
+        // sunset (≈ 3.0e8 today). Comparing the Unix property against
+        // the PY packet clock leaves `timestamp + 20 > now` permanently
+        // true for any PK who ever attacked (PY "now" << Unix stamp),
+        // so this callsite is deliberately pinned to the local Unix
+        // wall clock: `web_time` = std `SystemTime` on native,
+        // `Date.now()` on wasm — the same domain ACE stamped.
+        let unix_now_seconds = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let pk = world.player_pk_jump_stamina_arm(unix_now_seconds);
         let cost = holtburger_world::player::PlayerState::jump_stamina_cost(extent, burden, pk);
         // Retail's zero-stamina fold (acclient.c:443838-443839):
         // jumpSkill treated as 0 in InqJumpVelocity → min-clamp hop,

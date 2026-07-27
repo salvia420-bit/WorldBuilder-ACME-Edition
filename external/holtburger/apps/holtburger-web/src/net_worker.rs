@@ -88,6 +88,13 @@ pub const TX_KIND_MESSAGE: u8 = 1;
 pub const RX_KIND_MESSAGE: u8 = 0;
 /// bytes = a UTF-8 reason string; the proxy surfaces it as a `recv_message` `Err`.
 pub const RX_KIND_DISCONNECT: u8 = 1;
+/// bytes = 8-byte little-endian `f64`: the server clock in seconds (ACE
+/// `Timers.PortalYearTicks` — seconds since the 2017-01-31 retail sunset,
+/// NOT Unix), from the CONNECT handshake time or a TIME_SYNC (0x1000000)
+/// optional header. The proxy surfaces it as `SessionEvent::TimeSync` so the
+/// main recv loop can stamp `WorldState::set_server_time_sync` — native
+/// parity: holtburger-core runtime.rs:118-120.
+pub const RX_KIND_TIMESYNC: u8 = 2;
 
 // ════════════════════════════════════════════════════════════════════════
 // MAIN THREAD — RemoteSessionProxy + LoopSession + inbound push exports
@@ -97,6 +104,7 @@ pub const RX_KIND_DISCONNECT: u8 = 1;
 /// into the proxy's inbound channel.
 enum InboundItem {
     Message(Vec<u8>),
+    TimeSync(f64),
     Disconnect(String),
 }
 
@@ -147,6 +155,7 @@ impl RemoteSessionProxy {
     pub async fn recv_message(&mut self) -> Result<Vec<SessionEvent>> {
         match self.inbound_rx.next().await {
             Some(InboundItem::Message(bytes)) => Ok(vec![SessionEvent::Message(bytes)]),
+            Some(InboundItem::TimeSync(t)) => Ok(vec![SessionEvent::TimeSync(t)]),
             Some(InboundItem::Disconnect(reason)) => Err(anyhow!("{reason}")),
             // Channel closed with the sender still registered would be a bug;
             // treat as a disconnect so the loop tears down cleanly.
@@ -248,6 +257,18 @@ pub fn net_proxy_push_inbound(bytes: Vec<u8>) {
     PROXY_INBOUND_TX.with(|c| {
         if let Some(tx) = c.borrow().as_ref() {
             let _ = tx.unbounded_send(InboundItem::Message(bytes));
+        }
+    });
+}
+
+/// Push a server-clock sample (seconds, ACE PortalYearTicks domain) from the
+/// worker into the proxy. Called by `net_worker_client.js` on
+/// `{t:'timesync', ...}` (worker post kind `RX_KIND_TIMESYNC`).
+#[wasm_bindgen]
+pub fn net_proxy_push_timesync(server_time: f64) {
+    PROXY_INBOUND_TX.with(|c| {
+        if let Some(tx) = c.borrow().as_ref() {
+            let _ = tx.unbounded_send(InboundItem::TimeSync(server_time));
         }
     });
 }
@@ -355,11 +376,23 @@ pub async fn net_worker_run(
                 match recv {
                     Ok(events) => {
                         for ev in events {
-                            // Only Message events carry game-message bytes the
-                            // main loop cares about; TimeSync is dropped (the
-                            // main recv loop ignores it too).
-                            if let SessionEvent::Message(bytes) = ev {
-                                worker_post(RX_KIND_MESSAGE, &bytes);
+                            match ev {
+                                SessionEvent::Message(bytes) => {
+                                    worker_post(RX_KIND_MESSAGE, &bytes);
+                                }
+                                // P4.2 TIMESYNC (2026-07-27): forward the
+                                // server clock instead of dropping it — the
+                                // browser otherwise never has a server-time
+                                // base and `WorldState::current_server_time`
+                                // free-runs on its Unix wall-clock fallback
+                                // (~47 years ahead of ACE's PortalYearTicks
+                                // domain).
+                                SessionEvent::TimeSync(server_time) => {
+                                    worker_post(
+                                        RX_KIND_TIMESYNC,
+                                        &server_time.to_le_bytes(),
+                                    );
+                                }
                             }
                         }
                     }

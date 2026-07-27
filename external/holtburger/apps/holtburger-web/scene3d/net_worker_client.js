@@ -36,6 +36,7 @@ import init, {
   net_worker_arm,
   net_proxy_push_inbound,
   net_proxy_push_disconnect,
+  net_proxy_push_timesync,
 } from "../pkg/holtburger_web.js?v=netrev-20260709";
 
 const READY_TIMEOUT_MS = 12000;
@@ -155,6 +156,9 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
     const m = ev.data || {};
     if (m.t === "rx") {
       net_proxy_push_inbound(m.bytes); // one game-message payload → proxy inbound
+    } else if (m.t === "timesync") {
+      // Server clock sample → SessionEvent::TimeSync in the main recv loop.
+      net_proxy_push_timesync(Number(m.time));
     } else if (m.t === "disconnect") {
       net_proxy_push_disconnect(String(m.reason || "net worker disconnect"));
     } else if (m.t === "error") {

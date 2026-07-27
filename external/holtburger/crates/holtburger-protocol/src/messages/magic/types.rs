@@ -15,7 +15,13 @@ pub struct Enchantment {
     pub has_spell_set_id: u16,
     /// Relative power; higher power wins ties in the same category.
     pub power_level: u32,
-    /// World time when the effect became active.
+    /// Relative seconds, ≤ 0 — NOT an epoch timestamp (f64 passthrough
+    /// from the wire). ACE sends `StartTime = 0` at cast and decrements
+    /// it per 5 s heartbeat (PropertiesEnchantmentRegistryExtensions
+    /// .cs:251), so an aged re-send (relog registry dump) arrives as
+    /// `-age`. Remaining lifetime at send time = `duration + start_time`
+    /// (EnchantmentManager.cs:188); do not diff against any wall or
+    /// server clock.
     pub start_time: f64,
     /// Total lifetime of the enchantment in seconds.
     pub duration: f64,

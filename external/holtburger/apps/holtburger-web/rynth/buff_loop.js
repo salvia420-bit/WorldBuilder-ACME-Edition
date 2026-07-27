@@ -6,7 +6,9 @@
 //       consecutive 1 s reads, or 20 s max wait) — never buff a
 //       half-streamed registry.
 //   B2  expiry truth = player enchantment registry keyed by FAMILY
-//       (spell_category), remaining = (start_time + duration) − serverNow.
+//       (spell_category), remaining = (duration + start_time) − elapsed
+//       since receipt (start_time is RELATIVE ≤ 0: 0 at cast, −age when
+//       re-sent aged — ACE EnchantmentManager.cs:188).
 //   B3  rebuff threshold: active while remaining > 300 s (uniform — the
 //       1200 s batch override in the source is a stale comment).
 //   B6  permanent enchants (remaining > 1 year) = presence-only.
@@ -265,13 +267,17 @@ export class RynthBuffLoop {
     // B2: registry truth via the seam's session handle.
     //
     // Time-domain trap (the buffs-hud "bug A1", already solved there):
-    // wire start_time/duration are DERETHIAN-epoch seconds, not Unix.
-    // Per ACE Enchantment.cs:100-104 the robust formula is
+    // wire start_time is RELATIVE and ≤ 0 (0 at cast, decremented per
+    // 5 s heartbeat — ACE PropertiesEnchantmentRegistryExtensions.cs:251
+    // — so an aged re-send arrives as −age), NOT epoch seconds of any
+    // kind. ACE's remaining formula (EnchantmentManager.cs:188):
     //   ExpiresAt = duration < 0 ? forever
-    //             : receivedAt + duration - startTime
+    //             : receivedAt + duration + startTime
     // with receivedAt = OUR wall clock stamped when a given
     // (spellId, startTime) pair first appears; carried forward while
-    // startTime is unchanged (recast re-stamps).
+    // startTime is unchanged (recast re-stamps). (P4.2 follow-up F1:
+    // the previous `− startTime` sign error made an aged buff's expiry
+    // estimate 2×age late.)
     const s = this.host.s;
     if (!s.playerEnchantments) return null;
     const nowS = Date.now() / 1000;
@@ -300,7 +306,8 @@ export class RynthBuffLoop {
         const receivedAt =
           prior && prior.start === start ? prior.at : nowS;
         this._receivedAt.set(key, { start, at: receivedAt });
-        expiresAtMs = (receivedAt + duration - start) * 1000;
+        // F1: `+ start` per ACE (start ≤ 0; clamp guards synthetic > 0).
+        expiresAtMs = (receivedAt + duration + Math.min(0, start)) * 1000;
         if (expiresAtMs - nowS * 1000 <= 0) continue; // B2: drop expired
       }
       const prev = out.get(family);
@@ -505,7 +512,8 @@ export class RynthBuffLoop {
           const prior = this._receivedAt.get(`${spellId}`);
           const receivedAt = prior && prior.start === start ? prior.at : nowS;
           this._receivedAt.set(`${spellId}`, { start, at: receivedAt });
-          remainingS = receivedAt + duration - start - nowS;
+          // F1: `+ start` per ACE EnchantmentManager.cs:188 (start ≤ 0).
+          remainingS = receivedAt + duration + Math.min(0, start) - nowS;
           if (remainingS <= 0) continue;
         }
         registry.push({

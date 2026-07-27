@@ -24,6 +24,7 @@
 //        {t:'tx', kind, bytes}                              one outbound wire msg
 //   out: {t:'ready'}                wasm instantiated OK (init handshake)
 //        {t:'rx', bytes}            one inbound game-message payload (transferable)
+//        {t:'timesync', time}       server clock sample (seconds, ACE PortalYearTicks)
 //        {t:'disconnect', reason}   socket/session ended (or connect failed)
 //        {t:'error', reason}        worker-level failure (init/import)
 
@@ -36,6 +37,7 @@ import init, {
 // Must match the RX_KIND_* tags in net_worker.rs.
 const RX_KIND_MESSAGE = 0;
 const RX_KIND_DISCONNECT = 1;
+const RX_KIND_TIMESYNC = 2;
 
 let ready = false; // wasm init done
 let started = false; // net_worker_run kicked off (once per worker lifetime)
@@ -47,6 +49,14 @@ function postToMain(kind, bytes) {
     // `bytes` is a fresh Uint8Array minted by the wasm side — transfer its
     // buffer so the hop is zero-copy.
     self.postMessage({ t: "rx", bytes }, [bytes.buffer]);
+  } else if (kind === RX_KIND_TIMESYNC) {
+    // 8-byte LE f64: server clock seconds (ACE PortalYearTicks domain).
+    // Decoded here so the main thread receives a plain number.
+    let time = NaN;
+    try {
+      time = new DataView(bytes.buffer, bytes.byteOffset, 8).getFloat64(0, true);
+    } catch (_) {}
+    if (Number.isFinite(time)) self.postMessage({ t: "timesync", time });
   } else if (kind === RX_KIND_DISCONNECT) {
     let reason = "";
     try {
