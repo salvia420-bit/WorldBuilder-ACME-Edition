@@ -5,6 +5,18 @@ orchestrator `VERIFICATION-LOG.md`, one headless live run
 (`PHY-07-LIVE-RUN-2026-07-26.md`), and a **256-question live questionnaire
 answered in full** (2026-07-27, all 20 KEY items answered, 72 free-text notes).
 
+> **🧾 2026-07-28 RECONCILIATION — this doc's statuses were audited against the
+> actual commit record `ab51df7f..9751c26c` (the 07-27 marathon + 07-28 session)
+> after three agents were dispatched onto already-landed items. Every P-item
+> below now carries a dated status stamp with its commit. TRUE REMAINING WORK:
+> scenery BSP rung (P1.1 residual, 0.5% of placements), RND-05/03 P2 seam
+> re-check + stars (Tier 2 residuals), COL-15/16/17 slope re-repro + COL-10
+> backwards-anim clip half (Tier 3), P6.1 follow-through, the batched 1070
+> eye-tests, and the NEW items from the 07-28 closures: client keepalive not
+> reaching ACE (sev 2 — the real cause of "frozen creatures"; suspect the
+> `?netWorker=1` proxy path), a visible client "disconnected" state, buffs-hud
+> beneficial-spell misclassification, and no HUD refresh on live casts.**
+
 The questionnaire is what makes this a plan rather than a list. Reading source
 can only establish what the code says; 36% of answers came back `unsure` and 12%
 `not tested`, and that is a feature — the 56 `yes` and 61 `no` answers that
@@ -48,6 +60,10 @@ shard/stream work (`pkg-s3w`, `pkg-shards`, `pkg-prof`, 07-23…07-25).
 ## TIER 0 — confirmed defect, named cause, small fix. Do these first.
 
 ### P0.1 — Gate outdoor landblock streaming off inside dungeons · PHY-25 · S
+**LANDED 2026-07-27 (`85433dd4`)** — `?dungeonStreamGate` (default ON) +
+`?loadPointShiftOnly`; no outdoor ring work while the position packet's cell
+low word is ≥ 0x100; collision bakes deliberately NOT gated. See the
+url-flags.md rows for observables.
 **The only severity-3 answer in the entire questionnaire.** TER-06: inside a
 dungeon the client still hitches as if streaming outdoor terrain — *"the most
 serious issue we have"*. TER-07 (sev 2) corroborates: dungeon frame rate is worse
@@ -88,6 +104,8 @@ third-person camera still clips on the coarse per-part building AABB
 S-sized deletion, needs a 1070 eye test.
 
 ### P0.3 — Guard the degenerate follow-camera basis · LIVE-03 · S
+**LANDED 2026-07-27 (`31dfb5a2`)** — degenerate-basis guard + last-valid
+heading synthesis; `__diag.cameraBasis` counts `degenerateFrames`.
 COL-08 (sev 2) confirms live what the headless run measured: the camera reaches a
 state with **no usable horizontal heading** — forward components exactly `(0,0)`
 — and turning stops working. Any consumer normalising that vector divides by
@@ -95,12 +113,18 @@ zero. This silently poisoned the headless harness's own turn loop, so it costs u
 test reliability as well as gameplay.
 
 ### P0.4 — Icon cache: cap it and stop latching failures · LEAK-03 · S/M
+**LANDED 2026-07-27 (`e4c86546`; decomp citations tightened `a5b98307`)** —
+LRU cap 400 (retail `m_nMaxSize`, acclient.c:92388-92391), failures in a
+TTL'd negative map (`?iconNegTtlMs`), observables via `__diag.iconCache()`.
 RQ-32 (sev 2): icons fail to load and then **stay broken for the whole session** —
 precisely the predicted symptom. `ui/ac_icon_cache.js:29` is an uncapped `Map` of
 base64 data URLs (~30 MB ceiling), never cleared, failures latch forever, and
 `iconCacheSize()` has zero consumers. Retail's parity ceiling is 400 shells.
 
 ### P0.5 — Fix the jump-block ordinal range · ERA-01 / ERA-02 · S
+**LANDED 2026-07-27 (`ab51df7f` — the marathon's first commit)** — window
+corrected to `0x12B..=0x134` at all three sites + tests re-pinned; ERA-02
+blocks (`Sanctuary 0x57`, `AI_TelegraphCast 0x19B`) added.
 Verified by the orchestrator against ACE's end-of-retail table: our range
 `0x10000128..=0x10000131` is the 2013 window applied to 2015 IDs. It blocks
 **TripleThrustLow/Med/High** and lets **MagicPowerUp08/09/10Purple**
@@ -142,7 +166,7 @@ six appended V3 `aabb_*` JSONL fields with zero placement drift (freeze hash
 unchanged); phases 2a-2e are the client consumption, and a full `dist/` re-bake
 (phase 3) is only needed once phase 2 validates.
 
-**PHASE 2 LANDED 2026-07-27 (2a-2e, uncommitted) — ledger in
+**PHASE 2 LANDED 2026-07-27 (2a-2e; committed as `3d466147`) — ledger in
 VERIFICATION-LOG §DAT-01 PHASE 2.** Client now carries a per-landblock
 `SceneryColliderBatch` (SoA, one row per primitive), the ported `CCylSphere`
 *and* `CSphere` narrow phases, a per-DID ladder classifier, the wasm
@@ -177,17 +201,28 @@ this file must ship an **unconditional** reachability counter (see
 `sceneryArmEvals`), because "flag off" and "flag in dead code" are otherwise
 indistinguishable.
 
-Remaining: **phase 3** — the full-world V3 re-bake is **DONE and staged** at
-`/mnt/wbterminal2/buildbox-2026-07-27/rebake/staging/` (195,076 files,
-validated additive, zero drift); it needs the `dist/` swap. **Phase 4** — flip
-`USE_SCENERY_COLLISION` to `true` and run the lateral-offset approach at a
-known tree plus the "can still walk through grass" negative test, reading
-`__diag.collision.residency().sceneryNarrowHits`; the arm's per-tick cost is
-still **unmeasured**, which is the sole reason it ships gated.
+**PHASES 3+4 LANDED 2026-07-27 — END-TO-END ON (`c6aaa436` bake V3 +
+design, `3d466147` client arm, `d8148a8e` flag ON; V3 dist swapped in,
+rollback at `dist/scenery.pre-v3-2026-07-27/`).** Trees block at the
+retail-exact distance (2 mm vs formula), 0 false blocks over 149 m — the
+COL-02 "walk through trees" era is over. SOLE RESIDUAL: the **scenery BSP
+rung** (~0.5% of placements), blocked on `CellPhysicsBsp.scale` hard-coded
+1.0 (pre-existing TODO, two staging sites).
 
 ---
 
 ## TIER 2 — the lighting and terrain-shading campaign
+
+> **CAMPAIGN SUBSTANTIALLY LANDED 2026-07-27:** `0f5a6530` RND-05/03
+> cell-scoped light selection (18/18) + RND-11/12 retail sun/night (1070:
+> dark nights + sunrise gradient) + RND-20/21 terrain Gouraud; `83e87ada`
+> RND-04 static-light vertex bake (4-venue reference agreement) + RND-33
+> stipple WRAP + RND-18/30 blend corner fix (0-mismatch replay); `244a0fde`
+> RND-08/33 ClipMap alpha parity (1070-confirmed, no halo); `c82b55b1`
+> texMerge + roadSlots DEFAULT ON (the RND-18/30 promotion). REMAINING:
+> RND-05/03 P2 seam re-check after the RND-04 bake soak (pool should now be
+> dynamics-only live), stars (`skyObjReplace`) if the sun/night work didn't
+> cover it, and the batched 1070 eye-tests.
 
 Five separate sev-2 answers share one root cause and should be run as one
 project, not five tickets. Retail **baked static lighting into vertex colours**
@@ -224,7 +259,7 @@ anyway). The real unimplemented retail behavior is ClipMap's
 `SetAlphaBlendEnable(1)` alongside the test — split that piece onto the legacy
 ladder + static_atlas after a hasPalette census (RND-08/33, new work).
 
-**RND-08/33 LANDED 2026-07-27 (uncommitted, JS only — see VERIFICATION-LOG
+**RND-08/33 LANDED 2026-07-27 (committed as `244a0fde`, JS only — see VERIFICATION-LOG
 §RND-08/33).** Census: 721 of 6,152 `client_portal.dat` surfaces carry
 `Base1ClipMap` — **518 paletted** (PFID_INDEX16 → ref 0.392) and **203
 non-paletted** (DXT5/A8R8G8B8/DXT1/DXT3/A4R4G4B4/R8G8B8 → ref 0.784), so the
@@ -243,6 +278,16 @@ not touched here. Newly opened residual: retail alpha-tests `ClipMap+Alpha`
 ---
 
 ## TIER 3 — movement fidelity
+
+> **LARGELY LANDED 2026-07-27/28:** `88fc3a9d` CQ-06 death-pose hold
+> (1070-confirmed) + COL-21 F1 approach speed + COL-19/20 F3/F4 remote
+> constant-omega turning + turn-phase anim gate; `64f9c4d9` (07-28) F2/F5/F6
+> reviewed + landed — server MoveTo on the faithful driver with the sticky
+> arrival handoff, idle sticky step, distance-aware gait hint → **COL-19/20/21
+> are closed client-side** (1070 feel test batched). `b1c30390` slope T1
+> precipice split-triangle fix. REMAINING: COL-15/16/17 slope re-repro per
+> TIER3-slope-slide-spec.md (⚠ use @teleloc hops, headless keyboard walk is
+> broken for this), and COL-10's backwards-ANIMATION half (speed half fixed).
 
 Live-confirmed, all sev 2 unless noted, and all pointing at the faithful
 transition driver's outdoor arm:
@@ -306,6 +351,16 @@ Do not count this against COL-09/COL-19.
 
 ## TIER 4 — state and lifetime correctness
 
+> **ALL FOUR SETTLED 2026-07-27/28:** P4.1 `f6b271a9` (nine bridge maps
+> pruned); P4.2 `1bdc1f72` TimeSync both lanes + buff arithmetic, and the
+> step-4 aged-buff relog validation **PASSED all 4 checks 07-28** (see
+> VERIFICATION-LOG §P4.2 — two NEW buffs-hud bugs filed out of the run);
+> P4.3 `f6b271a9` (park purge ordered, preCreateBuffer promoted ON);
+> P4.4 **CLOSED 07-28** (VERIFICATION-LOG §P4.4): moarsman = upstream
+> data + retail no-water-check spawn math (no defect); frozen creatures
+> RE-FILED as the sev-2 client keepalive bug (PingRequest not reaching ACE
+> → 60 s timeout → landblock dormancy freezes all monster AI).
+
 - **P4.1 · LEAK-01 · M** — NQ-19 (sev 2): *"items have been placed in packs and
   didn't appear later."* Nine per-GUID bridge maps have zero removals while the
   fan-out beside them prunes eight siblings. Via ACE guid reuse this is a
@@ -330,6 +385,13 @@ Do not count this against COL-09/COL-19.
 ---
 
 ## TIER 5 — instrumentation debt (unblocks everything above)
+
+> **ALL FIVE LANDED 2026-07-27:** P5.1 `60ed2dea` (`__diag.collision`
+> smokes + residency counters); P5.2 + P5.5 `0a8c2ff2` (precise-memory
+> instrument-validity gate; movement/heading sanity gates); P5.3 `f6b271a9`
+> (PAL-01 pinned counter); P5.4 symbols.tsv oracle built (buildbox
+> intelligence drop, `/mnt/wbterminal2/buildbox-2026-07-27/symbols/` —
+> ⚠ acclient.map is a DIFFERENT BUILD; map_xref.tsv translates).
 
 These are small, and every one of them is a case where we currently **cannot
 tell** whether something works:
@@ -360,6 +422,12 @@ tell** whether something works:
 ---
 
 ## TIER 6 — plugin API / rynthsuite
+
+> **SCAFFOLD LANDED 2026-07-27 (`0dace8b4`):** plugin facade scaffold +
+> the 0x02AE/0x02AF plugin-manifest wire (both directions) + P6.1 vtable
+> and design docs. REMAINING: the facade promotion follow-through (make
+> `rynth/webhost.js` the one versioned `client` facade, chat hooks both
+> directions, real `client.ui`, manifest capability declarations).
 
 **P6.1 · CORE-07 · M — promotion, not a rewrite.** Retail exposed ONE host object
 (`IAsheronsCall`, 52 slots, 16 `E_FAIL` stubs — with `GetCombatMode`/`GetVendorID`
