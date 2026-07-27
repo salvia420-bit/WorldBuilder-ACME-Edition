@@ -913,15 +913,13 @@ impl WorldState {
     /// from the SAME cached 9×9 grid [`Self::terrain_height_at`]
     /// samples. `None` when the landblock isn't cached.
     ///
-    /// This is the "walkable polygon" input to the precipice slide
-    /// (`CPolygon::find_crossed_edge`, acclient.c:360397): retail's
-    /// walkable is the land-cell TRIANGLE (the 24 m cell split along a
-    /// per-cell pseudo-random diagonal, which our heightmap cache does
-    /// not carry), so we use the full cell QUAD — its four edges are
-    /// exactly the retail outer edges; only the diagonal split edge is
-    /// missing, and a lip on the diagonal of a single cell is not
-    /// expressible by the bilinear sampler the rest of the outdoor
-    /// chain uses anyway (documented simplification, A7 §6 note).
+    /// NOT the walkable polygon. Retail's land cell carries TWO TRIANGLES
+    /// (`CLandBlockStruct::ConstructPolygons`, acclient.c:354001; per-cell split
+    /// hash @354046), never a quad, and this quad is NON-PLANAR wherever the
+    /// four corner heights are not coplanar — so it cannot be fed to
+    /// `CPolygon::find_crossed_edge` (acclient.c:360397), which projects onto a
+    /// single plane through `vertices[0]`. Edge-seeking must use
+    /// [`Self::terrain_cell_triangle_at`]; this quad is the cell FOOTPRINT only.
     pub fn terrain_cell_quad_at(
         &self,
         world_x: f32,
@@ -963,6 +961,84 @@ impl WorldState {
             holtburger_common::Vector3::new(x1, y1, z11),
             holtburger_common::Vector3::new(x0, y1, z01),
         ])
+    }
+
+    /// T1 (2026-07-27) — the retail terrain TRIANGLE under world-frame
+    /// `(x, y)` as a 3-vertex ring in GLOBAL coordinates, retail winding
+    /// (CCW about +Z), corner heights from the SAME cached 9×9 grid
+    /// [`Self::terrain_height_at`] samples. `None` when the landblock isn't
+    /// cached.
+    ///
+    /// This is the walkable-polygon input to the precipice slide:
+    /// `SPHEREPATH::precipice_slide` (acclient.c:313980) feeds its walkable
+    /// `CPolygon` to `CPolygon::find_crossed_edge` (acclient.c:360397), and a
+    /// land cell's walkable polygons are the two triangles
+    /// `CLandBlockStruct::ConstructPolygons` (acclient.c:354001) builds — the
+    /// diagonal chosen by the split hash @354046, ported as
+    /// [`holtburger_dat::terrain_subdiv::cell_swto_ne_cut`]. That hash is a pure
+    /// function of the GLOBAL cell coords, so no per-cell cache is required.
+    ///
+    /// INVARIANT: the ring is coplanar with the normal
+    /// [`Self::terrain_normal_at`] returns at the same `(x, y)` and with the
+    /// height [`Self::terrain_height_at`] returns there — all three route
+    /// through the one split rule
+    /// ([`holtburger_dat::terrain_subdiv::triangle_corner_indices_in_cell`] /
+    /// `triangle_height_in_cell` / `triangle_grad_in_cell`). `find_crossed_edge`
+    /// projects onto the plane through `vertices[0]` using the caller's normal,
+    /// so violating this makes the edge test geometrically undefined.
+    pub fn terrain_cell_triangle_at(
+        &self,
+        world_x: f32,
+        world_y: f32,
+    ) -> Option<[holtburger_common::Vector3; 3]> {
+        const LB_M: f32 = 192.0;
+        const VERT_M: f32 = 24.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return None;
+        }
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (world_y / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return None;
+        }
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let grid = self.terrain_heights.get(&landblock_id)?;
+
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = world_y - lb_y as f32 * LB_M;
+        // Clamp the CELL index to 0..=7 so the +1 corner stays in-grid
+        // (a point exactly on the 192 m edge belongs to the last cell).
+        let cx0 = ((local_x / VERT_M).floor() as i32).clamp(0, 7) as usize;
+        let cy0 = ((local_y / VERT_M).floor() as i32).clamp(0, 7) as usize;
+        let cx1 = cx0 + 1;
+        let cy1 = cy0 + 1;
+        let fx = (local_x / VERT_M - cx0 as f32).clamp(0.0, 1.0);
+        let fy = (local_y / VERT_M - cy0 as f32).clamp(0.0, 1.0);
+        let x0 = lb_x as f32 * LB_M + cx0 as f32 * VERT_M;
+        let y0 = lb_y as f32 * LB_M + cy0 as f32 * VERT_M;
+        let x1 = x0 + VERT_M;
+        let y1 = y0 + VERT_M;
+        // Layout matches CellLandblock: idx = vx * 9 + vy.
+        let z00 = grid[cx0 * 9 + cy0];
+        let z10 = grid[cx1 * 9 + cy0];
+        let z01 = grid[cx0 * 9 + cy1];
+        let z11 = grid[cx1 * 9 + cy1];
+        // Corner order `[SW, SE, NW, NE]` — the array
+        // `triangle_corner_indices_in_cell` indexes.
+        let corners = [
+            holtburger_common::Vector3::new(x0, y0, z00),
+            holtburger_common::Vector3::new(x1, y0, z10),
+            holtburger_common::Vector3::new(x0, y1, z01),
+            holtburger_common::Vector3::new(x1, y1, z11),
+        ];
+        // Global cell coords key the deterministic split — same expression
+        // `terrain_height_at` / `terrain_normal_at` use.
+        let gx = (lb_x as u32) * 8 + cx0 as u32;
+        let gy = (lb_y as u32) * 8 + cy0 as u32;
+        let sw_ne_cut = holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy);
+        let ring =
+            holtburger_dat::terrain_subdiv::triangle_corner_indices_in_cell(fx, fy, sw_ne_cut);
+        Some([corners[ring[0]], corners[ring[1]], corners[ring[2]]])
     }
 
     #[cfg(any(test, feature = "test-support"))]

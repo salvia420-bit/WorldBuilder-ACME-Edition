@@ -6101,3 +6101,150 @@ fn wp2_remote_entity_null_landblock_still_retires() {
         "a remote entity's NULL-landblock pose must still retire (world-exit)"
     );
 }
+
+/// T1 (2026-07-27) — the precipice edge test must run against the retail land-cell
+/// TRIANGLE, not the 24 m cell quad.
+///
+/// Venue: landblock 0, cell (0,0) — global cell coords (0,0), which the retail
+/// split hash `cell_swto_ne_cut` (acclient.c:354046) puts on the SW↔NE diagonal
+/// (`v8 = 0*inner − 0 − 1369149221 = 2925818075`; `2925818075/2^32 = 0.6812 ≥ 0.5`).
+/// Corner heights: SW = SE = NE = 0, NW = −30, so the SW↔NE diagonal IS the cliff
+/// lip: the lower-right triangle `[SW, SE, NE]` is a flat walkable plateau and the
+/// upper-left triangle `[SW, NE, NW]` drops away.
+///
+/// Standing at (14, 10) (`fx = 0.583 ≥ fy = 0.417` ⇒ lower-right triangle), a step
+/// to (13, 15) (`fx = 0.542 < fy = 0.625`) crosses the diagonal. The quad's four
+/// edges do not include the diagonal, so the quad reports "still inside" and no
+/// edge stop fires; the triangle reports the crossed diagonal.
+#[test]
+fn precipice_edge_test_uses_the_retail_triangle_not_the_cell_quad() {
+    let mut state = WorldState::synthetic();
+    let mut grid = [0.0f32; 81];
+    grid[1] = -30.0; // idx = vx*9 + vy ⇒ vertex (0,1) = NW corner of cell (0,0)
+    state.populate_terrain_heights(0u32, grid);
+
+    // The retail split rule must actually put this cell on SW↔NE, or the venue
+    // below is describing the wrong diagonal.
+    assert!(
+        holtburger_dat::terrain_subdiv::cell_swto_ne_cut(0, 0),
+        "venue assumes cell (0,0) is SW↔NE cut"
+    );
+
+    let stand = state
+        .terrain_cell_triangle_at(14.0, 10.0)
+        .expect("standing triangle");
+    assert_eq!(
+        [
+            (stand[0].x, stand[0].y, stand[0].z),
+            (stand[1].x, stand[1].y, stand[1].z),
+            (stand[2].x, stand[2].y, stand[2].z),
+        ],
+        [(0.0, 0.0, 0.0), (24.0, 0.0, 0.0), (24.0, 24.0, 0.0)],
+        "fx >= fy ⇒ retail lower-right ring [SW, SE, NE]"
+    );
+
+    let across = state
+        .terrain_cell_triangle_at(13.0, 15.0)
+        .expect("across-diagonal triangle");
+    assert_eq!(
+        [
+            (across[0].x, across[0].y, across[0].z),
+            (across[1].x, across[1].y, across[1].z),
+            (across[2].x, across[2].y, across[2].z),
+        ],
+        [(0.0, 0.0, 0.0), (24.0, 24.0, 0.0), (0.0, 24.0, -30.0)],
+        "fx < fy ⇒ retail upper-left ring [SW, NE, NW]"
+    );
+
+    // INVARIANT: the standing ring is coplanar with the normal + height the rest
+    // of the outdoor chain samples at the same point.
+    let n = state.terrain_normal_at(14.0, 10.0).expect("normal");
+    assert!(
+        (n.x).abs() < 1e-5 && (n.y).abs() < 1e-5 && (n.z - 1.0).abs() < 1e-5,
+        "flat plateau normal must be +Z, got ({}, {}, {})",
+        n.x,
+        n.y,
+        n.z
+    );
+    // `find_crossed_edge` anchors the plane at `vertices[0]` and projects with the
+    // caller's normal (acclient.c:360434), so every ring vertex must satisfy
+    // `N·v + d = 0` for `d = −(N · vertices[0])`.
+    let plane_d = -(n.x * stand[0].x + n.y * stand[0].y + n.z * stand[0].z);
+    for v in stand {
+        assert!(
+            (n.x * v.x + n.y * v.y + n.z * v.z + plane_d).abs() < 1e-3,
+            "ring vertex {v:?} off the terrain_normal_at plane"
+        );
+    }
+    // The quad is NOT coplanar with that normal — the defect this test pins.
+    let quad_check = state.terrain_cell_quad_at(14.0, 10.0).expect("quad");
+    assert!(
+        quad_check
+            .iter()
+            .any(|v| (n.x * v.x + n.y * v.y + n.z * v.z + plane_d).abs() > 1.0),
+        "venue must have a non-coplanar cell quad for the comparison to bite"
+    );
+
+    let up = Vector3::new(0.0, 0.0, 1.0);
+    let probe = Vector3::new(13.0, 15.0, 0.0);
+
+    // BEFORE (quad): the probe is inside all four cell-boundary edges — every
+    // `disp · (N × edge)` is positive (312 / 360 / 264 / 216) — so no edge stop
+    // fires and the mover keeps going to `begin_fall`.
+    let quad = state.terrain_cell_quad_at(14.0, 10.0).expect("quad");
+    assert!(
+        crate::spatial::find_crossed_edge(&quad, n, probe, up).is_none(),
+        "the 24 m quad has no diagonal edge, so it cannot detect this walk-off"
+    );
+
+    // AFTER (triangle): the closing edge NE → SW is the diagonal.
+    //   edge = SW − NE = (−24, −24, 0);  N × edge = (24, −24, 0)
+    //   disp = proj − NE = (−13, −11, 0);  disp · (N × edge) = −312 + 264 = −48 < 0
+    //   normal = (24, −24, 0)/|…| = (+0.70711, −0.70711, 0)   (inward, CCW ring)
+    let edge_n = crate::spatial::find_crossed_edge(&stand, n, probe, up)
+        .expect("the diagonal edge must be reported as crossed");
+    assert!(
+        (edge_n.x - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4
+            && (edge_n.y + std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4
+            && edge_n.z.abs() < 1e-4,
+        "diagonal lip normal must be (+1,−1,0)/√2, got ({}, {}, {})",
+        edge_n.x,
+        edge_n.y,
+        edge_n.z
+    );
+
+    // The slide keeps only the along-lip component, so an oblique walk-off rides
+    // the diagonal instead of dropping (`SPHEREPATH::precipice_slide`,
+    // acclient.c:314006-314036).
+    //   motion = (13, 15) − (14, 10) = (−1, 5, 0);  motion · n = −4.24264 ≤ 0
+    //   slid = motion − n(motion · n) = (−1, 5, 0) + (3, −3, 0) = (2, 2, 0)
+    let motion = Vector3::new(-1.0, 5.0, 0.0);
+    let slid = crate::spatial::precipice_slide_residual(motion, edge_n).expect("slide");
+    assert!(
+        (slid.x - 2.0).abs() < 1e-4 && (slid.y - 2.0).abs() < 1e-4 && slid.z.abs() < 1e-4,
+        "expected the along-diagonal component (2, 2, 0), got ({}, {}, {})",
+        slid.x,
+        slid.y,
+        slid.z
+    );
+    // …and the slid destination is back on the walkable plateau triangle.
+    let landed = state
+        .terrain_cell_triangle_at(14.0 + slid.x, 10.0 + slid.y)
+        .expect("landing triangle");
+    assert_eq!(
+        (landed[2].x, landed[2].y),
+        (24.0, 24.0),
+        "the slide must stay on the lower-right (plateau) triangle"
+    );
+
+    // A perpendicular walk-off (straight at the lip) slides to ~zero — retail's
+    // sticky lip.
+    let head_on = Vector3::new(-3.0, 3.0, 0.0);
+    let stuck = crate::spatial::precipice_slide_residual(head_on, edge_n).expect("slide");
+    assert!(
+        stuck.x.abs() < 1e-4 && stuck.y.abs() < 1e-4,
+        "a perpendicular walk-off must stop at the lip, got ({}, {})",
+        stuck.x,
+        stuck.y
+    );
+}

@@ -613,6 +613,39 @@ pub fn retail_vertex_color(
     out
 }
 
+/// Corner indices of the per-cell TRIANGLE containing `(fx, fy)`, into the
+/// fixed corner array `[SW, SE, NW, NE]` — the `z00`/`z10`/`z01`/`z11`
+/// convention [`triangle_height_in_cell`] and [`triangle_grad_in_cell`] use.
+///
+/// Same diagonal (`sw_ne_cut`, feed [`cell_swto_ne_cut`]) and same side test as
+/// those two, so the returned ring, the sampled height and the face normal all
+/// describe ONE plane — the invariant a `CPolygon::find_crossed_edge` caller
+/// (acclient.c:360397) depends on, since that routine projects onto the plane
+/// through `vertices[0]` using the supplied normal.
+///
+/// Winding is retail's `CLandBlockStruct::ConstructPolygons` (acclient.c:354001,
+/// split hash @354046; ACE `LandblockStruct.cs:220-244`), identical to the
+/// rings [`crate::transition::terrain_collision::cell_terrain_polys`] emits:
+/// - `sw_ne_cut == true`  (SW↔NE): `[SW, SE, NE]` for `fx >= fy`, else `[SW, NE, NW]`
+/// - `sw_ne_cut == false` (NW↔SE): `[SW, SE, NW]` for `fx + fy <= 1`, else `[NE, NW, SE]`
+///
+/// All four rings are CCW about +Z, so `find_crossed_edge`'s outside test
+/// `disp · (N × edge) < 0` (acclient.c:360463) carries the retail sign.
+#[inline]
+pub fn triangle_corner_indices_in_cell(fx: f32, fy: f32, sw_ne_cut: bool) -> [usize; 3] {
+    const SW: usize = 0;
+    const SE: usize = 1;
+    const NW: usize = 2;
+    const NE: usize = 3;
+    if sw_ne_cut {
+        if fx >= fy { [SW, SE, NE] } else { [SW, NE, NW] }
+    } else if fx + fy <= 1.0 {
+        [SW, SE, NW]
+    } else {
+        [NE, NW, SE]
+    }
+}
+
 /// Per-vertex terrain normals at the 9×9 control grid, **continuous
 /// across landblock seams**. Each normal is a central difference of the
 /// control heights; at an LB-edge vertex the sample one step past the
@@ -1633,6 +1666,107 @@ mod tests {
         assert!(!cut, "expected NW↔SE cut at (1353,1440)");
         let z = triangle_height_in_cell(z00, z10, z01, z11, 0.5, 0.5, cut);
         assert!((z - 10.0).abs() < 1e-6, "retail-cut center = {z}");
+    }
+
+    /// Unit-cell XY of the four corners in `[SW, SE, NW, NE]` order — the array
+    /// [`triangle_corner_indices_in_cell`] indexes.
+    const CORNER_XY: [(f32, f32); 4] = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
+
+    /// Height of the plane through a corner ring at unit-cell `(fx, fy)`.
+    fn ring_plane_height(ring: [usize; 3], zs: [f32; 4], fx: f32, fy: f32) -> f32 {
+        let p = |i: usize| (CORNER_XY[i].0, CORNER_XY[i].1, zs[i]);
+        let (ax, ay, az) = p(ring[0]);
+        let (bx, by, bz) = p(ring[1]);
+        let (cx, cy, cz) = p(ring[2]);
+        // n = (b-a) × (c-a)
+        let (ux, uy, uz) = (bx - ax, by - ay, bz - az);
+        let (vx, vy, vz) = (cx - ax, cy - ay, cz - az);
+        let (nx, ny, nz) = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+        az - (nx * (fx - ax) + ny * (fy - ay)) / nz
+    }
+
+    /// Signed doubled area of a ring in XY (positive ⇒ CCW about +Z).
+    fn ring_shoelace(ring: [usize; 3]) -> f32 {
+        let mut acc = 0.0;
+        for k in 0..3 {
+            let (x0, y0) = CORNER_XY[ring[k]];
+            let (x1, y1) = CORNER_XY[ring[(k + 1) % 3]];
+            acc += x0 * y1 - x1 * y0;
+        }
+        acc
+    }
+
+    fn point_in_ring_2d(ring: [usize; 3], fx: f32, fy: f32) -> bool {
+        (0..3).all(|k| {
+            let (x0, y0) = CORNER_XY[ring[k]];
+            let (x1, y1) = CORNER_XY[ring[(k + 1) % 3]];
+            (x1 - x0) * (fy - y0) - (y1 - y0) * (fx - x0) >= 0.0
+        })
+    }
+
+    /// T1 INVARIANT (non-negotiable): the ring
+    /// [`triangle_corner_indices_in_cell`] returns must be the SAME plane
+    /// [`triangle_height_in_cell`] samples, for both diagonals and on both sides
+    /// of each. A precipice edge test that uses a different polygon than the
+    /// height/normal sampler is `find_crossed_edge` on an inconsistent plane.
+    #[test]
+    fn triangle_corner_ring_matches_height_sampler() {
+        // Saddle (SW=NE=0, SE=NW=10) — no single plane fits all four corners, so
+        // a quad ring cannot satisfy this and the diagonal choice bites.
+        let zs = [0.0f32, 10.0, 10.0, 0.0]; // SW, SE, NW, NE
+        let (z00, z10, z01, z11) = (zs[0], zs[1], zs[2], zs[3]);
+        for &cut in &[true, false] {
+            for i in 0..=10 {
+                for j in 0..=10 {
+                    let (fx, fy) = (i as f32 / 10.0, j as f32 / 10.0);
+                    let ring = triangle_corner_indices_in_cell(fx, fy, cut);
+                    let sampled = triangle_height_in_cell(z00, z10, z01, z11, fx, fy, cut);
+                    let planar = ring_plane_height(ring, zs, fx, fy);
+                    assert!(
+                        (sampled - planar).abs() < 1e-4,
+                        "cut={cut} ({fx},{fy}): sampler={sampled} ring-plane={planar}"
+                    );
+                    assert!(
+                        point_in_ring_2d(ring, fx, fy),
+                        "cut={cut} ({fx},{fy}) not inside its own ring {ring:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `find_crossed_edge`'s `disp · (N × edge) < 0` outside test
+    /// (acclient.c:360463) only carries the retail sign for CCW-about-+Z rings.
+    #[test]
+    fn triangle_corner_rings_are_ccw() {
+        for &cut in &[true, false] {
+            for &(fx, fy) in &[(0.9f32, 0.1f32), (0.1, 0.9)] {
+                let ring = triangle_corner_indices_in_cell(fx, fy, cut);
+                assert!(
+                    ring_shoelace(ring) > 0.0,
+                    "cut={cut} ring {ring:?} is not CCW about +Z"
+                );
+            }
+        }
+    }
+
+    /// The quad-vs-triangle disagreement T1 fixes: a point across the diagonal
+    /// from the standing triangle is INSIDE the 24 m cell quad (quad edge test
+    /// finds no crossed edge ⇒ no edge stop) but OUTSIDE the retail triangle.
+    #[test]
+    fn across_diagonal_is_outside_the_standing_triangle() {
+        // SW↔NE cut: standing at (0.3, 0.2) ⇒ lower-right ring [SW, SE, NE].
+        let stand = triangle_corner_indices_in_cell(0.3, 0.2, true);
+        assert_eq!(stand, [0, 1, 3]);
+        // (0.2, 0.5) is inside the unit quad, but fx < fy ⇒ upper-left triangle.
+        assert!(!point_in_ring_2d(stand, 0.2, 0.5));
+        assert_eq!(triangle_corner_indices_in_cell(0.2, 0.5, true), [0, 3, 2]);
+
+        // NW↔SE cut: standing at (0.2, 0.2) ⇒ lower-left ring [SW, SE, NW].
+        let stand = triangle_corner_indices_in_cell(0.2, 0.2, false);
+        assert_eq!(stand, [0, 1, 2]);
+        assert!(!point_in_ring_2d(stand, 0.8, 0.8));
+        assert_eq!(triangle_corner_indices_in_cell(0.8, 0.8, false), [3, 2, 1]);
     }
 
     /// RC-1 follow-up: the per-cell gradient must equal the finite-difference of

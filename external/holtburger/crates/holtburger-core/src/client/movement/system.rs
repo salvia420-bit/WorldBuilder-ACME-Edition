@@ -88,7 +88,7 @@ const USE_STEP_UP_DOWN: bool = true;
 /// (`acclient.c:325400-325424`; ACE `PartArray.cs:236-248`, cached per
 /// transition at `ObjectInfo.cs:46-47` / `acclient.c:314128-314129`).
 ///
-/// `false` (default): the hardcoded human-body
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the hardcoded human-body
 /// [`holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT`] (0.6) /
 /// [`holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT`] (1.5) stay in
 /// effect — byte-identical for the player (its Setup `0x02000001`
@@ -127,10 +127,19 @@ fn player_step_down_height(world: &WorldState) -> f32 {
 /// against the motion, `slide_sphere` the move along the lip.
 ///
 /// Ours (single-pass solver, OUTDOOR terrain arm only this pass):
-/// - walkable poly = the 24 m terrain cell quad under the SLICE-ENTRY
-///   position ([`WorldState::terrain_cell_quad_at`]) with the bilinear
-///   gradient normal — the per-cell diagonal split is a documented
-///   simplification (the quad edges ARE the retail outer edges).
+/// - walkable poly = the retail terrain TRIANGLE under the SLICE-ENTRY
+///   position ([`WorldState::terrain_cell_triangle_at`]) — the land cell's
+///   two-triangle split from `CLandBlockStruct::ConstructPolygons`
+///   (acclient.c:354001, split hash @354046), so the DIAGONAL is a
+///   crossable edge. Paired with the triangle face normal
+///   ([`WorldState::terrain_normal_at`], `triangle_grad_in_cell`), which is
+///   the plane the ring lies in: `find_crossed_edge` projects the probe onto
+///   the plane through `vertices[0]` using this normal, so ring and normal
+///   MUST come from the same triangle. The 24 m cell QUAD this previously
+///   used is non-planar on any non-coplanar cell and has no diagonal edge,
+///   so it both mis-projected the probe and let a walk-off across the
+///   diagonal report "still inside" (no edge stop) until the outer cell
+///   boundary — up to 24·√2/2 ≈ 17 m late.
 /// - `backup` = the saved post-lateral / pre-descent pose (the retail
 ///   check position) — its global center is the crossed-edge probe.
 /// - the slid move re-probes the SAME step-down decision the original
@@ -155,12 +164,14 @@ fn attempt_precipice_slide(
     let off_y = global.y - backup.coords.y;
     let entry_gx = entry_local_xy.0 + off_x;
     let entry_gy = entry_local_xy.1 + off_y;
-    // Walkable poly + plane normal under the pre-step (walkable) pose.
-    let quad = world.terrain_cell_quad_at(entry_gx, entry_gy)?;
+    // Walkable poly + plane normal under the pre-step (walkable) pose. Both
+    // are the SAME retail land-cell triangle (acclient.c:354001) — required by
+    // `find_crossed_edge`'s plane projection (acclient.c:360434).
+    let tri = world.terrain_cell_triangle_at(entry_gx, entry_gy)?;
     let plane_n = world.terrain_normal_at(entry_gx, entry_gy)?;
     let up = Vector3::new(0.0, 0.0, 1.0);
     let center = Vector3::new(global.x, global.y, global.z);
-    let edge_n = holtburger_world::spatial::find_crossed_edge(&quad, plane_n, center, up)?;
+    let edge_n = holtburger_world::spatial::find_crossed_edge(&tri, plane_n, center, up)?;
     let motion = Vector3::new(
         backup.coords.x - entry_local_xy.0,
         backup.coords.y - entry_local_xy.1,
@@ -212,7 +223,7 @@ fn attempt_precipice_slide(
 /// face FALLS instead of snapping onto it (the downhill complement of
 /// F4-2's uphill gate).
 ///
-/// `false` (default): the shipped height-only
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the shipped height-only
 /// [`holtburger_world::spatial::step_down_decision`] — byte-identical.
 /// 1070-parked: downhill cliff-face feel check.
 const USE_WALKABLE_STEP_DOWN: bool = true;
@@ -232,7 +243,7 @@ const USE_WALKABLE_STEP_DOWN: bool = true;
 /// `holtburger_world::spatial::physics::check_walkable` +
 /// `check_walkable_probe_depth`) or the snap is refused → fall.
 ///
-/// `false` (default): the pipeline's step-down acceptance is unchanged
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the pipeline's step-down acceptance is unchanged
 /// — byte-identical. 1070-parked: steep-face descent feel (rides the
 /// `?unifiedTransition` eye-test).
 const USE_WALKABLE_REINSERT_PROBE: bool = true;
@@ -250,7 +261,7 @@ const USE_WALKABLE_REINSERT_PROBE: bool = true;
 /// Stage-1-style along the refused face's tangent
 /// (`slide_residual_along_wall_tangent`).
 ///
-/// `false` (default): touchdown snaps to any surface — byte-identical.
+/// `false` (rollback arm — NOT the default; the const below ships `true`): touchdown snaps to any surface — byte-identical.
 /// 1070-parked: cliff-face jump eye-test.
 const USE_LANDING_WALKABLE: bool = true;
 
@@ -328,7 +339,7 @@ const USE_EDGE_SLIDE: bool = true;
 /// retail `CTransition::save_check_pos` / `restore_check_pos`
 /// (`acclient.c:312499-312501`, `312685-312762`).
 ///
-/// `false` (DEFAULT): the pre-2026-06-02 behaviour — the step-down
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the pre-2026-06-02 behaviour — the step-down
 /// decision is applied directly with no backup pose maintained, so the
 /// shipped solver is byte-identical. `world.player.backup_pose_for_step_down`
 /// is never written or read.
@@ -357,11 +368,11 @@ const USE_PRECIPICE_SLIDE_REENTRY: bool = true;
 /// Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — gate for the
 /// retail SEAM-skid (`Transition.CliffSlide`,
 /// `external/ACE/Source/ACE.Server/Physics/Transition.cs:242-266`,
-/// `acclient.c:312005`). DEFAULT-OFF: the shipped Stage-1 single-plane
-/// edge_slide behaviour is bit-for-bit unchanged until this path is
-/// validated on the 1070.
+/// `acclient.c:312005`). SHIPS ON (const below is `true`); with
+/// `?cliffSlide=off` the Stage-1 single-plane edge_slide behaviour is
+/// bit-for-bit unchanged.
 ///
-/// `false` (DEFAULT): a refused step-up that needs to slide always uses
+/// `false` (rollback arm — NOT the default; the const below ships `true`): a refused step-up that needs to slide always uses
 /// the Stage-1 single-plane [`edge_slide_refused_step_up`] tangent slide
 /// (`residual - N·(residual·N)`), exactly the pre-2026-06-02 behaviour.
 /// `world.player.last_known_wall_normal` is still MAINTAINED (so flipping
@@ -446,7 +457,7 @@ const SERVER_PROJECTION_LANDBLOCK_TOLERANCE: u32 = 1;
 /// Physics deep-dive 2026-06-01 (Dimension 3, the contested friction
 /// *coefficient*) — A/B knob for the grounded ground-friction value.
 ///
-/// `false` (DEFAULT): keep the gentler hand-tuned
+/// `false` (rollback arm — NOT the default; the const below ships `true`): keep the gentler hand-tuned
 /// [`holtburger_world::movement_common`-side]
 /// [`super::common::PLAYER_GROUND_FRICTION_PER_SEC`] (`0.5`). This is the
 /// feel-affecting coefficient the wasm integrator has always used; the
@@ -524,7 +535,7 @@ const USE_RETAIL_QUANTUM: bool = false;
 /// target") IS this pipeline's grounded behaviour — it must not survive
 /// as a second competing speed source.
 ///
-/// `false` (DEFAULT): the legacy path, byte-identical pre-stage-1
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the legacy path, byte-identical pre-stage-1
 /// behaviour — `target_velocity` comes from `local_velocity_for_state`
 /// (`common.rs:686-734`) and each grounded slice friction-decays the
 /// stored planar velocity ([`super::common::PLAYER_GROUND_FRICTION_PER_SEC`]
@@ -551,8 +562,8 @@ const USE_RETAIL_QUANTUM: bool = false;
 /// never fights `calc_friction` — `MotionInterp.cs:506-523,678-699`).
 /// No accel-cap ramp, no skid; the small-velocity snap still stops
 /// instantly on release. Same speed_mod will drive the rig in stage 2 —
-/// the anti-ice-skating contract (`acclient.c:337465`). DEFAULT-OFF
-/// pending the 1070 gait eye-test (DESIGN.md §3 stage-1 eye-test plan:
+/// the anti-ice-skating contract (`acclient.c:337465`). SHIPS ON (const
+/// below is `true`); the 1070 gait eye-test (DESIGN.md §3 stage-1 eye-test plan:
 /// integrator speed == 4.0×run_rate, raw ACE UpdatePosition deltas
 /// agree, zero force-position sequence advances / no snapback); on PASS
 /// integrate always-on + mark DONE in url-flags.md per the passed-flag
@@ -574,7 +585,7 @@ const USE_INTERPRETED_VELOCITY: bool = true;
 /// `CPartArray::HandleMovement` (`acclient.c:322882` →
 /// `:325106-325112`).
 ///
-/// `false` (DEFAULT): the pump is skipped and — since nothing enqueues
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the pump is skipped and — since nothing enqueues
 /// until the A3-D2 `PerformMovement`/`motion_done` consumer and the
 /// A4-Q2 renderer `AnimationDone` wiring (`?mtQueue=` +
 /// `notifyAnimationDone` export) land — the queue is fully inert;
@@ -597,7 +608,7 @@ const USE_MOTION_TABLE_QUEUE: bool = true;
 /// DIFF-ALGO: the legacy freeze launched the UNCLAMPED diagonal
 /// run+strafe composition (~5.7 m/s vs retail's 4.0×rate cap).
 ///
-/// `false` (DEFAULT): the legacy trajectory-lock freeze — the planar
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the legacy trajectory-lock freeze — the planar
 /// store is left untouched at launch, byte-identical. Charged-jump
 /// departures (interpreted intent via `manual_intent_velocity`, the
 /// wasm Jump arm) are unchanged either way (DESIGN.md:487-488).
@@ -634,7 +645,7 @@ const USE_LEAVE_GROUND_VELOCITY: bool = true;
 ///     first browser configuration that is simultaneously
 ///     canonical-spine AND fully-collided.
 ///
-/// `false` (DEFAULT): every legacy path is untouched code —
+/// `false` (rollback arm — NOT the default; the const below ships `true`): every legacy path is untouched code —
 /// byte-identical, rollback is dropping the URL flag.
 ///
 /// Intended behavioral deltas under the flag (why promotion is
@@ -920,7 +931,8 @@ const USE_CAST_HOLD_RECLAIM: bool = false;
 /// Movement-port WAVE 1 step 4 (2026-07-03) — the retail
 /// `CommandInterpreter` INPUT LANE master gate (the strangler flag).
 ///
-/// OFF (DEFAULT): the existing input lane (`setMovementInput` →
+/// OFF (rollback arm — NOT the default; the const below ships `true`):
+/// the existing input lane (`setMovementInput` →
 /// `ManualSet` → castMove/slideCast) runs byte-identical — the
 /// live-validated strafecast behavior is the regression floor
 /// (docs/HANDOFF-physics-parity-mage-pvp-2026-07-03.md session 2).
@@ -966,7 +978,7 @@ const USE_BUILDING_OVERLAP: bool = true;
 
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
-/// `false` (DEFAULT): the legacy behaviour — outdoor grounded movement
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the legacy behaviour — outdoor grounded movement
 /// snaps Z onto the bilinear terrain height for ANY rise with no slope test
 /// (the `FLOOR_Z` walkable classifier was wired only into the INDOOR cell
 /// triangle path), so a player can run straight up an arbitrarily steep
@@ -993,7 +1005,7 @@ const USE_TERRAIN_WALKABLE_GATE: bool = true;
 
 /// F4-4 (bughunt 2026-06-09) — deep-water movement block.
 ///
-/// `false` (DEFAULT): the legacy behaviour — outdoor movement snaps Z to the
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the legacy behaviour — outdoor movement snaps Z to the
 /// raw heightmap (the LAKEBED height for water cells) and never reads terrain
 /// type, so a player runs straight across lake/ocean floors under the rendered
 /// water plane; the world boundaries retail enforces with water (island
@@ -1062,12 +1074,11 @@ const USE_RAMP_FLOOR_SNAP_FIX: bool = true;
 /// physics-BSP narrow-phase blocking test in the indoor lateral-clamp
 /// path of
 /// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
-/// DEFAULT-OFF so the shipped flat-triangle-bag solver
-/// ([`holtburger_world::spatial::clamp_delta_against_cell_walls_dispatch`])
-/// is the unchanged default; this is the opt-in `?bspCollide=on` path
-/// for later 1070 validation.
+/// SHIPS ON (const below is `true`); `?bspCollide=off` restores the
+/// flat-triangle-bag solver
+/// ([`holtburger_world::spatial::clamp_delta_against_cell_walls_dispatch`]).
 ///
-/// `false` (DEFAULT): the indoor clamp is exactly the pre-2026-06-02
+/// `false` (rollback arm — NOT the default; the const below ships `true`): the indoor clamp is exactly the pre-2026-06-02
 /// behaviour — per-poly flat-triangle wall clamp + cell-AABB
 /// containment net. The physics BSP is parsed + plumbed into
 /// `SpatialScene.cell_physics_bsp` regardless, but never consulted, so
@@ -1100,7 +1111,8 @@ const USE_PHYSICS_BSP: bool = true;
 /// B4 Tier-2 (2026-06-09): per-static physics-BSP push-out for OUTDOOR
 /// statics. SEPARATE from `USE_PHYSICS_BSP` (indoor cells) on purpose —
 /// the indoor-BSP authority question is unresolved, and entangling the two
-/// gates would block this. When OFF (DEFAULT) the static-collision path is
+/// gates would block this. When OFF (`?staticBsp=off`; the const below
+/// ships `true`, so ON is the default) the static-collision path is
 /// exactly the shipped Tier-1 coarse-AABB stop/slide; the per-static BSPs
 /// are parsed + plumbed into `SpatialScene.statics_physics_bsp` regardless
 /// but never consulted, so flipping this on is a pure runtime switch with
@@ -1164,7 +1176,8 @@ const USE_LOCAL_ENVCELL_ENTRY: bool = true;
 
 /// 2026-06-02 outdoor building-wall edge/cliff-slide (Phase 6 follow-on):
 /// gate for enabling edge-slide / cliff-slide on outdoor building AABB
-/// walls, not just indoor cell polygon walls. When OFF (DEFAULT) the
+/// walls, not just indoor cell polygon walls. When OFF (NOT the default —
+/// the const below ships `true`) the
 /// outdoor building clamp returns no wall normal and both stages stay
 /// indoor-only, preserving the shipped solver's byte-identical behaviour.
 /// When ON, the outdoor sweep's AABB face normal is captured into
@@ -1274,7 +1287,7 @@ fn retail_quantum_schedule(dt_secs: f32) -> (Vec<f32>, f32) {
 /// component). Otherwise returns `lateral_clamped` unchanged (retail's
 /// "no EdgeSlide flag ⇒ just stop").
 ///
-/// Cliff_slide Stage-2 (`USE_CLIFF_SLIDE`, DEFAULT-OFF): before the
+/// Cliff_slide Stage-2 (`USE_CLIFF_SLIDE`, ships ON): before the
 /// Stage-1 single-plane slide, attempt the retail SEAM-skid when this
 /// slice's wall (`wall_normal` = `N_new`) is a genuine WALL
 /// (`N_new.z < FLOOR_Z`) AND a previously-tracked wall
@@ -1536,13 +1549,13 @@ pub(crate) struct MovementSystem {
     /// `MotionTableManager` pending-animation queue
     /// (`acclient.h:31097-31104`; per-entity instances arrive with
     /// DESIGN.md Stage 3). Pumped per-tick under
-    /// [`USE_MOTION_TABLE_QUEUE`] (default-off → inert).
+    /// [`USE_MOTION_TABLE_QUEUE`] (ships ON → pumped; `?mtQueue=off` ⇒ inert).
     motion_table_manager: MotionTableManager,
     /// A3-D2 (2026-06-12) — the local player's `CMotionInterp`
     /// completion consumer: the pump routes the manager's `MotionDone`
     /// events into [`MotionInterp::motion_done`]
     /// (`acclient.c:317097` → `:339349` → `:343641-343676`). Same
-    /// default-off gate; per-entity instances arrive with Stage 3.
+    /// ships-ON gate; per-entity instances arrive with Stage 3.
     local_motion_interp: MotionInterp,
     /// A3-D3 (2026-06-12) — the per-entity `MovementManager` registry
     /// (retail: one `MovementManager` per `CPhysicsObj`; DESIGN.md
@@ -3414,8 +3427,8 @@ impl MovementSystem {
         // the queue still only fills via the Stage-2 ?interpRig=
         // enqueue arms).
         // Renderer-side events (RemoveLinkAnimations) stay with A4-Q2.
-        // DEFAULT-OFF ([`USE_MOTION_TABLE_QUEUE`]): queue inert, current
-        // paths untouched.
+        // [`USE_MOTION_TABLE_QUEUE`] ships ON; `?mtQueue=off` leaves the queue
+        // inert and current paths untouched.
         if USE_MOTION_TABLE_QUEUE {
             self.motion_table_manager.use_time(Some(now));
             for event in self.motion_table_manager.drain_events() {
@@ -4240,8 +4253,20 @@ impl MovementSystem {
         // pose.
         self.consume_pending_arrival_placement(world);
         // A6-T1 (W3+ S7) — under the unified-transition gate the slice
-        // routes through the retail substep pipeline; the legacy chain
-        // below runs UNTOUCHED when the gate is off (zero code motion).
+        // routes through the retail substep pipeline.
+        //
+        // DEAD UNDER CURRENT GATES: every statement after this `return`, to the
+        // end of this fn, is unreachable in the shipped build.
+        // `unified_transition_enabled()` is `USE_UNIFIED_TRANSITION ||
+        // self.unified_transition_runtime` — an OR-only carrier — and
+        // `USE_UNIFIED_TRANSITION` is `true`, so no URL flag
+        // (`?unifiedTransition=off` included) can reach the legacy body. It is
+        // retained as the A/B revert target: flipping that const to `false`
+        // restores it. Live edge/lip behaviour therefore comes from the dat-port
+        // `CTransition::edge_slide` (holtburger-dat transition/driver_spine.rs,
+        // acclient.c:312685), NOT from the `attempt_precipice_slide` /
+        // `USE_PRECIPICE_SLIDE_REENTRY` / `stamp_leave_ground_velocity` calls
+        // below, which now execute only under unit tests.
         if self.unified_transition_enabled() {
             let _ = self.advance_manual_slice_via_transition(world, dt);
             return;
@@ -5204,7 +5229,7 @@ impl MovementSystem {
         // exactly as our wall clamp's own single-iteration slide does.
         //
         // Stage-2 cliff_slide cross-product skid SHIPPED (gated behind
-        // [`USE_CLIFF_SLIDE`], DEFAULT-OFF):
+        // [`USE_CLIFF_SLIDE`], ships ON):
         //   - The retail `cliff_slide` cross-product skid
         //     (`N_new × N_last`, `Transition.CliffSlide`
         //     `Physics/Transition.cs:242-266`) that slides along the
@@ -6786,8 +6811,9 @@ impl MovementSystem {
         }
         if !was_airborne && !outcome.grounded {
             world.player.begin_fall();
-            // A3-D3-5: retail leave-ground launch velocity
-            // (default-off no-op).
+            // A3-D3-5: retail leave-ground launch velocity. LIVE —
+            // `USE_LEAVE_GROUND_VELOCITY` ships `true`, so this is NOT a no-op
+            // (`CMotionInterp::get_leave_ground_velocity`, acclient.c:343806).
             stamp_leave_ground_velocity(world, heading, state, capabilities);
         }
         // USE_SLIDE_FRAME_FRICTION (DEFAULT OFF — deviation escape hatch):
