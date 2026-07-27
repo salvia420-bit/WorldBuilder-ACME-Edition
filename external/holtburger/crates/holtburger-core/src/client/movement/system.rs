@@ -1158,7 +1158,7 @@ const USE_STATIC_BSP: bool = true;
 /// shape exactly: broad-phase AABB reject (the baked V3 `aabb_*` box) →
 /// swept `CCylSphere` narrow phase → stop-and-slide, then a depenetration
 /// pushout for the already-overlapping case.
-const USE_SCENERY_COLLISION: bool = false;
+const USE_SCENERY_COLLISION: bool = true;
 
 /// Terrain→EnvCell entry (2026-06-02): when ON (DEFAULT), the manual-
 /// drive integrator flips the local player indoors the tick its capsule
