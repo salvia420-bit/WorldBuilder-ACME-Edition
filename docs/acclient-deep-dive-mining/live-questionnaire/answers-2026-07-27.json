@@ -1,0 +1,1299 @@
+{
+  "schema": "holtburger-live-questionnaire/1",
+  "generatedAt": "2026-07-27T02:54:24.325Z",
+  "clientBuildNote": "1070 rain off snow off weather off lightning off low textures clouds on release build both with nosw 1 and without. bake worker too new to comment on",
+  "answers": {
+    "COL-01": {
+      "a": "no",
+      "severity": 1,
+      "note": ""
+    },
+    "COL-02": {
+      "a": "yes",
+      "severity": 0,
+      "note": ""
+    },
+    "COL-03": {
+      "a": "no",
+      "severity": 2,
+      "note": ""
+    },
+    "COL-04": {
+      "a": "unsure",
+      "severity": null,
+      "note": "i seem to be able to push monsters out of the way, normal retail behavior, not sure if they can block me like they should. they run up too close, there is a certain distance which may vary by either the size of creature or player rig which should control how close they get. npcs should be able to block"
+    },
+    "COL-05": {
+      "a": "partly",
+      "severity": 1,
+      "note": "seems to affect monsters more than my player rig nowadays, i can see them sinking into the ground but myself barely if ever."
+    },
+    "COL-06": {
+      "a": "no",
+      "severity": 0,
+      "note": "only time this was noticed was with an old doorway bug, worth mentioning because of the work you are doing on doors"
+    },
+    "COL-07": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "COL-08": {
+      "a": "yes",
+      "severity": 2,
+      "note": ""
+    },
+    "COL-09": {
+      "a": "unsure",
+      "severity": 1,
+      "note": "likely too fast on low level characters, unsure about high level"
+    },
+    "COL-10": {
+      "a": "yes",
+      "severity": 2,
+      "note": "particularly walking backwards breaks the animation completely, not a t pose but an idle pose, otherwise animation imperfect"
+    },
+    "COL-11": {
+      "a": "unsure",
+      "severity": null,
+      "note": "in retail you keep running when you run into walls etc"
+    },
+    "COL-12": {
+      "a": "no",
+      "severity": 0,
+      "note": "pretty sure they stop"
+    },
+    "COL-13": {
+      "a": "no",
+      "severity": 0,
+      "note": "standard retail behavior, doesnt mean we cant improve it, but maybe visually only, sounds would be annoying"
+    },
+    "COL-14": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "COL-15": {
+      "a": "no",
+      "severity": 2,
+      "note": "nothing seems to keep me held to the ground when going downhill, i dont hop into the air but inertia carries me into the air, lacking any sliding down cliffs like in retail"
+    },
+    "COL-16": {
+      "a": "partly",
+      "severity": 1,
+      "note": "stair behavior is a bit wonky, messing with it caused problems climbing hills before. cliff edges shouldnt let me run over them"
+    },
+    "COL-17": {
+      "a": "yes",
+      "severity": 2,
+      "note": "can just walk and jump up very steep cliffs i have no business being able to traverse"
+    },
+    "COL-18": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "COL-19": {
+      "a": "no",
+      "severity": 1,
+      "note": "not bad but not buttery smooth like retail"
+    },
+    "COL-20": {
+      "a": "no",
+      "severity": 1,
+      "note": "doesnt seem to fully turn like retail  a bit over eager to run before completely facing."
+    },
+    "COL-21": {
+      "a": "partly",
+      "severity": 2,
+      "note": "it worked more reliably before with sticky melee but suffered regressions, if i get up close its okay but from afar it wont do the sticky melee approach, maybe several iterations or more, to close the distance before the full sticky melee sequence can execute based on proximity"
+    },
+    "COL-22": {
+      "a": "yes",
+      "severity": 2,
+      "note": "doors are unreliable to click, or use action on. they want me to be close to attempt which isnt retail behavior. the hinge on town building door is on the left not right, like a door in the real world would be, overall very vibe coded "
+    },
+    "COL-23": {
+      "a": "partly",
+      "severity": 1,
+      "note": "flight path seems to vary based on movement or terrain for lightning arc spells"
+    },
+    "COL-24": {
+      "a": "yes",
+      "severity": 2,
+      "note": "could be problem with ace database that is getting worse, close to holtburg. i have even started noticing creatures that shouldnt be there like moarsman north of holtburg in the river. a corruption in ace server?"
+    },
+    "COL-25": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "COL-26": {
+      "a": "yes",
+      "severity": 1,
+      "note": "you can probably jump out of both in retail too, but the lifestone bind or complete war spell casting after jump will probably succeed in holtburger-web"
+    },
+    "COL-27": {
+      "a": "no",
+      "severity": 2,
+      "note": "not rubberbanding but seemingly slow down when moving in certain directions, has improved a bit with recent work but maybe not perfect."
+    },
+    "COL-28": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "COL-29": {
+      "a": "partly",
+      "severity": 2,
+      "note": "rocks in paths and its possible trees and such arent exactly where they should be. hard to quantify perfectly but noticed it around holtburg outpost. could be systemic"
+    },
+    "COL-30": {
+      "a": "yes",
+      "severity": 0,
+      "note": ""
+    },
+    "COL-31": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "COL-32": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "COL-33": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "COL-34": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "TER-01": {
+      "a": "yes",
+      "severity": 2,
+      "note": "seems to go away after playing for 10 minutes or less"
+    },
+    "TER-02": {
+      "a": "no",
+      "severity": 1,
+      "note": "its like a hitch. notably, occurs in retail! so replicating retail wont solve the issue. in certain dungeons like The Forbidden Crypts near Al-Jalima i got a similar hitch when a player entered the dungeon, giving me the heads up i shouldn't have had for PvP"
+    },
+    "TER-03": {
+      "a": "yes",
+      "severity": 2,
+      "note": "seemed to disappear as well but a recent commit seemed to have been working on it"
+    },
+    "TER-04": {
+      "a": "no",
+      "severity": 1,
+      "note": "seems to be an issue loading terrain at heights, like if its flat itll load more completely, if its a mountain itll be a smaller area loaded, inconsistent"
+    },
+    "TER-05": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "TER-06": {
+      "a": "yes",
+      "severity": 3,
+      "note": "note that a lot of work has been done on this recently with good improvement but town network and such were blocking until recently. a mountain and ocean loaded with it nearby and hitches like crazy, likely improved but still a concern due to being the most serious issue we have encountered in the project"
+    },
+    "TER-07": {
+      "a": "yes",
+      "severity": 2,
+      "note": "outdoors has always worked better despite being much more demanding on paper. many trees etc outside"
+    },
+    "TER-08": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "TER-09": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "TER-10": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "TER-11": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "TER-12": {
+      "a": "yes",
+      "severity": 2,
+      "note": ""
+    },
+    "TER-13": {
+      "a": "yes",
+      "severity": 2,
+      "note": "it has varied throughout our development because of new implementations with culling etc, seems to be on the shorter side recently"
+    },
+    "TER-14": {
+      "a": "no",
+      "severity": 1,
+      "note": "we have a vibe coded portalling animation. we tried to implement retails portalling sequence and its in the code (twisting creature portal relative to camera) but gave up "
+    },
+    "TER-15": {
+      "a": "partly",
+      "severity": 2,
+      "note": "it has occured in the past, not sure if we fixed it as a problem, we might have as nothing recently but possible it could occur again "
+    },
+    "TER-16": {
+      "a": "partly",
+      "severity": 2,
+      "note": "its happened before"
+    },
+    "TER-17": {
+      "a": "yes",
+      "severity": null,
+      "note": "usually things are loading based on proximity to be, nearer are loaded or loading first"
+    },
+    "TER-18": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "TER-19": {
+      "a": "yes",
+      "severity": 2,
+      "note": "rain and snow seem badly implemented, faster and heavier than retail, doesnt match the (currently broken and looping) takram clouds"
+    },
+    "TER-20": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-01": {
+      "a": "unsure",
+      "severity": null,
+      "note": "they could look better, seems worse than retail"
+    },
+    "RQ-02": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-03": {
+      "a": "no",
+      "severity": null,
+      "note": "crude GUI in general"
+    },
+    "RQ-04": {
+      "a": "yes",
+      "severity": 2,
+      "note": "nights are basically day. relates with takram atmosphere etc. but no stars or anything to indicate night"
+    },
+    "RQ-05": {
+      "a": "no",
+      "severity": 2,
+      "note": "lights only light up when it gets close, breaks immersion"
+    },
+    "RQ-06": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-07": {
+      "a": "yes",
+      "severity": 2,
+      "note": "meeting halls are great example for this. when walking behind the sitting benches it can turn off lights"
+    },
+    "RQ-08": {
+      "a": "no",
+      "severity": 2,
+      "note": "faint box in both wirerender=1 and textured, very bad look for wirerender but still noticeable in textured"
+    },
+    "RQ-09": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-10": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-11": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-12": {
+      "a": "no",
+      "severity": 1,
+      "note": "tried to implement it 100 times never ever have seen it"
+    },
+    "RQ-13": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-14": {
+      "a": "no",
+      "severity": 2,
+      "note": "we use takram clouds which is a custom solution, which was beautiful but broke and is in a loop, a regression caused to solve another issue that was blocking"
+    },
+    "RQ-15": {
+      "a": "yes",
+      "severity": 1,
+      "note": "rain and snow but its too heavy, should work with takram somehow"
+    },
+    "RQ-16": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-17": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-18": {
+      "a": "yes",
+      "severity": 2,
+      "note": "looks blocky. many dedicated sessions and no agent has ever successfully helped me"
+    },
+    "RQ-19": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-20": {
+      "a": "no",
+      "severity": 2,
+      "note": "flat and uniform, boring"
+    },
+    "RQ-21": {
+      "a": "yes",
+      "severity": null,
+      "note": "could always be better"
+    },
+    "RQ-22": {
+      "a": "partly",
+      "severity": null,
+      "note": "texmerge makes it all look similar up close but necessary because itd be too ugly up close"
+    },
+    "RQ-23": {
+      "a": "unsure",
+      "severity": null,
+      "note": "feels okay"
+    },
+    "RQ-24": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-25": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-26": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-27": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-28": {
+      "a": "no",
+      "severity": null,
+      "note": "they used to but seems fixed"
+    },
+    "RQ-29": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-30": {
+      "a": "no",
+      "severity": null,
+      "note": "doesnt seem right, doesnt look terrible however"
+    },
+    "RQ-31": {
+      "a": "yes",
+      "severity": null,
+      "note": "we fixed it, certain trees would miss their textures. those same trees now are missing their treeSway flag behavior and thats an outstanding bug, they do have texture however"
+    },
+    "RQ-32": {
+      "a": "yes",
+      "severity": 2,
+      "note": ""
+    },
+    "RQ-33": {
+      "a": "yes",
+      "severity": 1,
+      "note": "trees look fine. the windmills were animated in retail and look terrible here. havent seen any banners yet. trees swaying is our implementation"
+    },
+    "RQ-34": {
+      "a": "no",
+      "severity": null,
+      "note": "not enough water from fountains etc"
+    },
+    "RQ-35": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "RQ-36": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-01": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-02": {
+      "a": "yes",
+      "severity": null,
+      "note": "could be better"
+    },
+    "AQ-03": {
+      "a": "yes",
+      "severity": null,
+      "note": "maybe too much but retail was too much"
+    },
+    "AQ-04": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-05": {
+      "a": "no",
+      "severity": 1,
+      "note": ""
+    },
+    "AQ-06": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-07": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-08": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-09": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-10": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-11": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-12": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-13": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-14": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-15": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-16": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-17": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "AQ-18": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-01": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-02": {
+      "a": "yes",
+      "severity": null,
+      "note": "hang, latency indicator only then ghost workd"
+    },
+    "NQ-03": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-04": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-05": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-06": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-07": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-08": {
+      "a": "unsure",
+      "severity": null,
+      "note": "probably not working correctly"
+    },
+    "NQ-09": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-10": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-11": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-12": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-13": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-14": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-15": {
+      "a": "yes",
+      "severity": null,
+      "note": "combat has very annoying pattern with this when casting spells at creatures. object use maybe not a problem but buggy"
+    },
+    "NQ-16": {
+      "a": "no",
+      "severity": null,
+      "note": "used to be a big issue but nothing recently"
+    },
+    "NQ-17": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-18": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-19": {
+      "a": "yes",
+      "severity": 2,
+      "note": "items have been placed in packs and didnt appear later"
+    },
+    "NQ-20": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-21": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-22": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-23": {
+      "a": "yes",
+      "severity": null,
+      "note": "used to be a big problem and we made great progress on it"
+    },
+    "NQ-24": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "NQ-25": {
+      "a": "partly",
+      "severity": 1,
+      "note": "usually we made a lot of progress preventing blanked first logins"
+    },
+    "NQ-26": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-01": {
+      "a": "yes",
+      "severity": 1,
+      "note": "well the slider auto holds it for you so to speak, you can do either assuming its slid left for speed you can hold it to charge it right for power (or accuracy for missile)"
+    },
+    "CQ-02": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-03": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-04": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-05": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-06": {
+      "a": "no",
+      "severity": 1,
+      "note": "flicker back to idle after death animation before turning to corpse. breaks immersion"
+    },
+    "CQ-07": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-08": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-09": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-10": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-11": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-12": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-13": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-14": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-15": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-16": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-17": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-18": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-19": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-20": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-21": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-22": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-23": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-24": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-25": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-26": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-27": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-28": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-29": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "CQ-30": {
+      "a": "no",
+      "severity": 1,
+      "note": ""
+    },
+    "UQ-01": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-02": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-03": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-04": {
+      "a": "yes",
+      "severity": 1,
+      "note": "for the most part like hold w to run around etc"
+    },
+    "UQ-05": {
+      "a": "yes",
+      "severity": null,
+      "note": "while running but we might have fixed that bug already"
+    },
+    "UQ-06": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-07": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-08": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-09": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-10": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-11": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-12": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-13": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-14": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-15": {
+      "a": "no",
+      "severity": null,
+      "note": "they should"
+    },
+    "UQ-16": {
+      "a": "no",
+      "severity": null,
+      "note": "it should"
+    },
+    "UQ-17": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-18": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-19": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-20": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-21": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-22": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-23": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-24": {
+      "a": "partly",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-25": {
+      "a": "no",
+      "severity": null,
+      "note": "just appear"
+    },
+    "UQ-26": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-27": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-28": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-29": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-30": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-31": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "UQ-32": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-01": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-02": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-03": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-04": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-05": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-06": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-07": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-08": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-09": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-10": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-11": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-12": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-13": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-14": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-15": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-16": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-17": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-18": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-19": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-20": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-21": {
+      "a": "partly",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-22": {
+      "a": "partly",
+      "severity": null,
+      "note": "weapons and wands dont properly appear in hand"
+    },
+    "HQ-23": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "HQ-24": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-01": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-02": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-03": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-04": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-05": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-06": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-07": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-08": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-09": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-10": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-11": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-12": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-13": {
+      "a": "partly",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-14": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-15": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-16": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-17": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-18": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-19": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-20": {
+      "a": "partly",
+      "severity": null,
+      "note": "not fair comparison because of heavy takram clouds etc gpu helps"
+    },
+    "PQ-21": {
+      "a": "yes",
+      "severity": null,
+      "note": "release"
+    },
+    "PQ-22": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "PQ-23": {
+      "a": "partly",
+      "severity": null,
+      "note": "sometimes yes sometimes no"
+    },
+    "PQ-24": {
+      "a": "no",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-01": {
+      "a": "no",
+      "severity": null,
+      "note": "the plugin hud is obsolete generally"
+    },
+    "GQ-02": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-03": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-04": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-05": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-06": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-07": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-08": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-09": {
+      "a": "nottested",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-10": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-11": {
+      "a": "yes",
+      "severity": null,
+      "note": ""
+    },
+    "GQ-12": {
+      "a": "unsure",
+      "severity": null,
+      "note": ""
+    }
+  },
+  "unanswered": [],
+  "freeText": {
+    "missedSymptoms": "",
+    "topAnnoyances": "",
+    "otherNotes": ""
+  },
+  "meta": {
+    "answered": 256,
+    "total": 256,
+    "keyAnswered": 20,
+    "keyTotal": 20
+  }
+}
