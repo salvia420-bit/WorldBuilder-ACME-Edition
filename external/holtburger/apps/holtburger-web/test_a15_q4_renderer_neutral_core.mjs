@@ -167,7 +167,11 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     ws._debugState().lastLb === 0xa9b40000);
 
   // (iv) same-LB heartbeat → NO emit, Set-gated ensure* not re-called;
-  // the per-update (non-Set-gated) 3D loaders DO re-fire (legacy parity).
+  // PHY-25 effect (B) `?loadPointShiftOnly` (default ON, 2026-07-27): the
+  // per-update 3D loaders no longer re-fire either — retail's
+  // `LScape::update_loadpoint` rebuilds only on a real block shift
+  // (acclient.c:308340). `?loadPointShiftOnly=off` restores the legacy
+  // per-packet re-fire (arm (ix) below).
   deps.calls.length = 0;
   ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9b40042)); // same high16
   const names2 = deps.calls.map((c) => c[0]);
@@ -178,9 +182,18 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     !names2.includes("ensureBuildingAabbsAroundLandblock") &&
     !names2.includes("ensureCellContainersForLandblock") &&
     !names2.includes("ensureLandblockObjectsForLandblock"));
-  check("(iv) heartbeat → per-update 3D loaders still fire (legacy parity)",
-    names2.filter((x) => x === "loadTerrainRing").length === 1 &&
-    names2.includes("loadSpawnsForLandblock"));
+  check("(iv) heartbeat → outdoor ring NOT re-evaluated (PHY-25 effect B)",
+    !names2.includes("loadTerrainRing") &&
+    !names2.includes("loadBuildingsForLandblock") &&
+    !names2.includes("loadStaticsForLandblock") &&
+    !names2.includes("loadSpawnsForLandblock"),
+    names2.join(","));
+  check("(iv) heartbeat → indoor content hook still fires every packet",
+    names2.includes("loadEnvCellsForLandblock"));
+  check("(iv) heartbeat counted as a shift-skip, not a gate hold",
+    ws._debugState().shiftSkippedRingEvals === 1 &&
+    ws._debugState().heldRingEvals === 0,
+    JSON.stringify(ws._debugState()));
 
   // (v) LB transition → second emit(prev → new)
   deps.calls.length = 0;
@@ -237,6 +250,158 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     names.includes("ensureCellContainersForLandblock"));
   check("(vii) null liveScene3d → no 3D loader calls",
     !names.some((n) => n.startsWith("load")));
+}
+
+// ---------------------------------------------------------------------
+// (viii)/(ix) PHY-25 dungeon stream gate (P0.1, 2026-07-27)
+//
+// The flags are read ONCE at module load, so each arm re-imports
+// world_stream.js under a cache-busting query with a stubbed
+// `globalThis.location`. Cell low word >= 0x100 == indoors
+// (CellManager::UpdateLoadPoint, acclient.c:146439).
+// ---------------------------------------------------------------------
+console.log("");
+console.log("PART 1a-bis: PHY-25 dungeon stream gate");
+
+const OUTDOOR = 0xa9b40021; // cell 0x0021 → outdoor
+const INDOOR = 0xa9b40105;  // cell 0x0105 → EnvCell (dungeon / interior)
+
+async function loadStreamerArm(search, tag) {
+  const prev = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", {
+    value: { search },
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return (await import(`./scene3d/world_stream.js?arm=${tag}`)).createWorldStreamer;
+  } finally {
+    if (prev) Object.defineProperty(globalThis, "location", prev);
+    else delete globalThis.location;
+  }
+}
+
+// (viii) gate ON (the shipped default) — indoors admits nothing outdoor.
+{
+  const make = await loadStreamerArm("?", "default");
+  const deps = makeDeps();
+  const ws = make(deps);
+  // Arrive outdoors: full ring.
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, OUTDOOR));
+  const outNames = deps.calls.map((c) => c[0]);
+  check("(viii) gate ON, outdoors → full outdoor ring fires",
+    outNames.includes("loadTerrainRing") &&
+    outNames.includes("loadStaticsForLandblock") &&
+    outNames.includes("loadSpawnsForLandblock"));
+
+  // Now indoors in a DIFFERENT LB (a dungeon teleport) — a real block shift,
+  // so effect (B) would allow it; only the indoor gate can stop it.
+  deps.calls.length = 0;
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9c40105));
+  const inNames = deps.calls.map((c) => c[0]);
+  check("(viii) gate ON, indoors → ZERO outdoor render admissions",
+    !inNames.includes("loadTerrainRing") &&
+    !inNames.includes("loadTerrainForLandblock") &&
+    !inNames.includes("loadBuildingsForLandblock") &&
+    !inNames.includes("loadStaticsForLandblock") &&
+    !inNames.includes("loadSpawnsForLandblock") &&
+    !inNames.includes("ensureLandblockObjectsForLandblock"),
+    inNames.join(","));
+  check("(viii) gate ON, indoors → wasm collision bakes STILL fire (invariant 2)",
+    inNames.includes("ensureTerrainAroundLandblock") &&
+    inNames.includes("ensureBuildingAabbsAroundLandblock") &&
+    inNames.includes("ensureCellContainersForLandblock"));
+  check("(viii) gate ON, indoors → EnvCell (interior) load still fires",
+    inNames.includes("loadEnvCellsForLandblock"));
+  check("(viii) gate ON, indoors → landblockChanged still emitted",
+    inNames.includes("emitLandblockChanged"));
+
+  // 20 more indoor heartbeats: still flat.
+  deps.calls.length = 0;
+  for (let i = 0; i < 20; i += 1) ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9c40105 + i));
+  check("(viii) gate ON, 20 indoor heartbeats → still zero outdoor admissions",
+    deps.calls.filter((c) => c[0].startsWith("load") && c[0] !== "loadEnvCellsForLandblock")
+      .length === 0);
+  const st = ws._debugState();
+  check("(viii) counters: heldRingEvals == 21, indoorPackets == 21",
+    st.heldRingEvals === 21 && st.indoorPackets === 21, JSON.stringify(st));
+
+  // Leaving the dungeon out its own LB is NOT an `lbId` change but IS a real
+  // load-point shift — the ring must fire or the player stands in a void.
+  deps.calls.length = 0;
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9c40021)); // same LB, outdoor cell
+  const exitNames = deps.calls.map((c) => c[0]);
+  check("(viii) exit to outdoors in the SAME LB → ring resumes (lastRingLb, not lastLb)",
+    exitNames.includes("loadTerrainRing") &&
+    exitNames.includes("loadStaticsForLandblock"),
+    exitNames.join(","));
+
+  // Round trip A → dungeon B → A. The live probe (2026-07-27) hit exactly
+  // this: without the indoor load-point invalidation the return leg is
+  // `lbId === lastRingLb` and gets shift-skipped, while the sealed purge may
+  // have parked A's whole ring during the dwell.
+  const deps2 = makeDeps();
+  const ws2 = make(deps2);
+  ws2.onPositionUpdate(posUpd(LOCAL_GUID, OUTDOOR));            // A, outdoors
+  ws2.onPositionUpdate(posUpd(LOCAL_GUID, 0x00070143));         // dungeon B
+  ws2.onPositionUpdate(posUpd(LOCAL_GUID, 0x00070144));         // dwell
+  deps2.calls.length = 0;
+  ws2.onPositionUpdate(posUpd(LOCAL_GUID, OUTDOOR));            // back to A
+  const rtNames = deps2.calls.map((c) => c[0]);
+  check("(viii) round trip A→dungeon→A → ring re-evaluated on return to A",
+    rtNames.includes("loadTerrainRing") &&
+    rtNames.includes("loadStaticsForLandblock") &&
+    rtNames.includes("loadBuildingsForLandblock"),
+    rtNames.join(","));
+  check("(viii) indoor dwell invalidates the load point (lastRingLb cleared)",
+    ws2._debugState().ringEvals === 2, JSON.stringify(ws2._debugState()));
+}
+
+// (ix) `?dungeonStreamGate=off` + `?loadPointShiftOnly=off` — legacy behavior.
+{
+  const make = await loadStreamerArm("?dungeonStreamGate=off&loadPointShiftOnly=off", "off");
+  const deps = makeDeps();
+  const ws = make(deps);
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, INDOOR));
+  const n1 = deps.calls.map((c) => c[0]);
+  check("(ix) gate OFF, indoors → outdoor ring fires (legacy)",
+    n1.includes("loadTerrainRing") && n1.includes("loadSpawnsForLandblock"));
+  deps.calls.length = 0;
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, INDOOR + 1));
+  const n2 = deps.calls.map((c) => c[0]);
+  check("(ix) shiftOnly OFF → same-LB heartbeat re-fires the ring (legacy parity)",
+    n2.filter((x) => x === "loadTerrainRing").length === 1 &&
+    n2.includes("loadSpawnsForLandblock"));
+  const st = ws._debugState();
+  check("(ix) control arm still counts wouldHoldRingEvals for A/B comparison",
+    st.gateOn === false && st.wouldHoldRingEvals === 2 && st.heldRingEvals === 0,
+    JSON.stringify(st));
+}
+
+// (x) `?eagerDungeons=on` wins over the default-on gate (capture-script arm).
+{
+  const make = await loadStreamerArm("?eagerDungeons=on", "eager");
+  const deps = makeDeps();
+  const ws = make(deps);
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, INDOOR));
+  const n = deps.calls.map((c) => c[0]);
+  check("(x) ?eagerDungeons=on → indoor gate disabled, ring fires",
+    n.includes("loadTerrainRing") && n.includes("loadStaticsForLandblock"),
+    n.join(","));
+  check("(x) ?eagerDungeons=on → gateOn reported false",
+    ws._debugState().gateOn === false);
+}
+
+// (xi) an explicit `?dungeonStreamGate=on` beats `?eagerDungeons=on`? No —
+// documented precedence is eagerDungeons wins; pin it so it can't drift.
+{
+  const make = await loadStreamerArm("?dungeonStreamGate=garbage", "garbage");
+  const deps = makeDeps();
+  const ws = make(deps);
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, INDOOR));
+  check("(xi) unrecognised ?dungeonStreamGate value → still ON (default-on contract)",
+    ws._debugState().gateOn === true &&
+    !deps.calls.map((c) => c[0]).includes("loadTerrainRing"));
 }
 
 // ---------------------------------------------------------------------

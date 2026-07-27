@@ -426,6 +426,21 @@ export class LandblockLRU {
     // #7/#10 geom-pressure telemetry: extra oldest-beyond-ring resident LBs
     // parked to feed the pool because live geometry was over MAX_LIVE_GEOM.
     this._geomPressureParks = 0;
+
+    // PHY-25 dungeon stream gate (P0.1, 2026-07-27): how many outdoor
+    // load-point evaluations world_stream.js suppressed because the player
+    // was indoors (cell low word >= 0x100). Surfaced here rather than in a
+    // private streamer field because this is the counter that pairs with
+    // parkedTotal / unparkedTotal — the per-packet ring re-fire this gate
+    // removes is the documented park↔unpark storm driver (SEALED_KEEP_RING_ON
+    // note above). Stays 0 outdoors and under ?dungeonStreamGate=off.
+    this._streamGateHolds = 0;
+  }
+
+  // PHY-25 — bumped by scene3d/world_stream.js when the indoor gate holds an
+  // outdoor load-point evaluation. Pure telemetry; never throws.
+  noteStreamGateHold(n = 1) {
+    this._streamGateHolds += n;
   }
 
   // #10 — the accurate live-geometry counter (three.js renderer.info; ++ on
@@ -1642,6 +1657,10 @@ export class LandblockLRU {
       // TN-storm fix telemetry (session 7): dual-state near-misses.
       trackMergedWhileParked: this._trackMergedWhileParked,
       reclaimDeferredInFlight: this._reclaimDeferredInFlight,
+      // PHY-25 dungeon stream gate: outdoor load-point evaluations suppressed
+      // because the player was indoors (see noteStreamGateHold). The richer
+      // per-effect breakdown lives on `scene3d._dungeonStreamGate`.
+      streamGateHolds: this._streamGateHolds,
     };
   }
 }
