@@ -134,7 +134,11 @@ const fakeWindow = {
     getLocalPlayerGuid: () => TEST_GUID,
     liveScene3d: null,
     __movementConstants: {
-        FALLBACK_RUN_RATE_SCALAR: 4.5,
+        // 2026-07-27: renamed from `FALLBACK_RUN_RATE_SCALAR` — the 4.5 is the
+        // base RUN forward speed in m/s, not the dimensionless run-rate scalar
+        // (which Rust seeds to 1.0). Same effective 4.5 m/s: the mock session
+        // has no `player_run_rate()`, so camera.js uses the 1.0 scalar seed.
+        BASE_RUN_FORWARD_SPEED: 4.5,
         WALK_FORWARD_SPEED: 1.0,
         RUN_HELD_TURN_SPEED_RAD_PER_SEC: 1.5,
         NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC: 1.0,

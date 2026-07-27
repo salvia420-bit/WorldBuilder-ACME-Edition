@@ -1763,13 +1763,14 @@ export class CameraSwitcher {
     }
 
     // Constants from the 2D path's prediction block, hoisted onto
-    // window.__movementConstants by index.html. Hard-coded fallbacks
-    // mirror the values at `index.html:5346-5349` so the prediction
-    // doesn't silently no-op if the constants aren't exposed yet —
-    // but the eslint rule against magic numbers is appeased by the
-    // `??` rather than redeclared literals.
+    // window.__movementConstants by index.html (the `BASE_RUN_FORWARD_SPEED`
+    // / `WALK_FORWARD_SPEED` pair declared just above the
+    // `window.__movementConstants = {` assignment). Hard-coded fallbacks
+    // mirror those values so the prediction doesn't silently no-op if the
+    // constants aren't exposed yet — but the eslint rule against magic
+    // numbers is appeased by the `??` rather than redeclared literals.
     const consts = window.__movementConstants ?? {};
-    const RUN_SPEED = consts.FALLBACK_RUN_RATE_SCALAR ?? 4.5;
+    const BASE_RUN_SPEED = consts.BASE_RUN_FORWARD_SPEED ?? 4.5;
     const WALK_SPEED = consts.WALK_FORWARD_SPEED ?? 1.0;
 
     // Heading source. getLocalPlayerPose() is the post-Workstream-A
@@ -1793,6 +1794,31 @@ export class CameraSwitcher {
       } catch (_) {}
     }
     if (heading === null) heading = 0.0;
+
+    // 2026-07-27 — STAGE-1 run-rate retirement, ported from Rust. This used to
+    // read `consts.FALLBACK_RUN_RATE_SCALAR ?? 4.5` straight into a m/s slot,
+    // but a run RATE is a DIMENSIONLESS multiplier: the wasm body integrates
+    // `base_run_forward_speed (m/s) × run_rate_scalar`
+    // (`SelfMovementCapabilities::resolved_manual_run_speed`,
+    // crates/holtburger-world/src/state/self_movement.rs), consumed by
+    // `forward_axis_speed` in the movement crate's common.rs. Rust retired the
+    // same conflation by SPLITTING it: its `FALLBACK_RUN_RATE_SCALAR` const
+    // dropped 4.5 → 1.0 (retail `my_run_rate` initial), and the 4.5 m/s stayed
+    // where it belongs as the pre-MotionTable `base_run_forward_velocity.y` in
+    // `fallback_self_movement_capabilities()` (apps/holtburger-web/src/lib.rs).
+    // Same split here: the m/s base above × the live skill/burden rate from
+    // `SessionHandle.player_run_rate()` (ACE `GetRunRate` — run skill +
+    // burden, 18/4 cap). Feature-detected (a stale `pkg/` predates the getter)
+    // and seeded to the same 1.0 the Rust const uses, so pre-stats this is
+    // byte-identical to the retired flat 4.5.
+    let runRateScalar = 1.0;
+    if (handle && typeof handle.player_run_rate === "function") {
+      try {
+        const rr = +handle.player_run_rate();
+        if (Number.isFinite(rr) && rr > 0) runRateScalar = rr;
+      } catch (_) {}
+    }
+    const RUN_SPEED = BASE_RUN_SPEED * runRateScalar;
 
     // A14-I3: Shift XOR ToggleRun option under ?retailRunKeys=on;
     // flag-off = legacy !shift (byte-identical).

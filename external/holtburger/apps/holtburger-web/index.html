@@ -5879,7 +5879,17 @@
           // Constants mirror crates/holtburger-core/src/client/movement/
           // common.rs so the predicted motion matches what ACE simulates
           // server-side (FastTick path).
-          const FALLBACK_RUN_RATE_SCALAR = 4.5;        // m/s
+          // 2026-07-27 — this 4.5 was NEVER a run-rate scalar (a run rate is
+          // a dimensionless multiplier, not a speed): it is the pre-MotionTable
+          // base RUN forward speed, i.e. `base_run_forward_velocity.y` in
+          // `fallback_self_movement_capabilities()` (src/lib.rs). Rust retired
+          // the same conflation by splitting the two — its
+          // `FALLBACK_RUN_RATE_SCALAR` const is now 1.0, the retail
+          // `my_run_rate` initial — so the JS name follows the units here and
+          // the cross-read trap (same name, two different values/meanings)
+          // goes away. Run speed = this base × the run-rate scalar
+          // (`SelfMovementCapabilities::resolved_manual_run_speed`).
+          const BASE_RUN_FORWARD_SPEED = 4.5;          // m/s
           const WALK_FORWARD_SPEED = 1.0;              // m/s — also strafe + backstep
           const RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5;
           const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.0;
@@ -5892,7 +5902,11 @@
           // is also hoisted for symmetry.
           if (typeof window !== "undefined") {
             window.__movementConstants = {
-              FALLBACK_RUN_RATE_SCALAR,
+              // Deliberately NOT exporting a `FALLBACK_RUN_RATE_SCALAR` key:
+              // camera.js used to multiply dt by it as if it were m/s, and
+              // re-exporting the name would let a stale cached reader pick up
+              // the wrong half of the base × scalar product.
+              BASE_RUN_FORWARD_SPEED,
               WALK_FORWARD_SPEED,
               RUN_HELD_TURN_SPEED_RAD_PER_SEC,
               NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC,
@@ -9664,17 +9678,22 @@
                       let effHeading = heading;
                       // B3/D6/PRED-1: predict the local sprite at the SAME
                       // skill-derived run rate the wasm body integrates at
-                      // (`playerRunRate()`, exported lib.rs:25931), not the
-                      // hardcoded 4.5 m/s FALLBACK_RUN_RATE_SCALAR. The two
+                      // (`playerRunRate()`), not a hardcoded speed. The two
                       // predictors previously diverged (~1.8x), producing the
                       // forward-bias sawtooth; feeding the wasm rate keeps the
                       // rendered sprite and the authoritative wasm pose in step.
-                      // (playerRunRate() falls back to FALLBACK_RUN_RATE_SCALAR
-                      // until the skill-derived rate is known.)
+                      // 2026-07-27: `playerRunRate()` is the DIMENSIONLESS
+                      // run-rate scalar, not m/s — and once Rust retired its
+                      // `FALLBACK_RUN_RATE_SCALAR` 4.5 → 1.0 the bare getter
+                      // became a ~1.0 "speed". Restore the units the wasm body
+                      // actually integrates: base run forward speed × scalar
+                      // (`SelfMovementCapabilities::resolved_manual_run_speed`).
                       // NOTE: this is the 2D-sprite predictor; the 3D snapback
                       // fix lives in camera.js _advancePrediction (the 3D rig's
                       // X/Y comes from cameraSwitcher.predictedPlayerPos).
-                      let speed = run ? playerRunRate() : WALK_FORWARD_SPEED;
+                      let speed = run
+                        ? BASE_RUN_FORWARD_SPEED * playerRunRate()
+                        : WALK_FORWARD_SPEED;
                       if (forward < 0) {
                         effHeading = heading + Math.PI;
                         speed = WALK_FORWARD_SPEED;
