@@ -59,11 +59,16 @@ pain-to-cost ratio item in the plan. Caveat from the user's note: recent work ha
 improved it, so re-measure before and after rather than assuming the old baseline.
 
 ### P0.2 — Bisect the door-collision regression · COL-03 · S to M
-Doors blocked on 07-20 and do not now. The window is small and the archived
-`pkg*` builds in `/mnt/wbterminal2/holtburger-pkg-archive/` bracket it, so a
-bisect is cheap. Related and probably separate: COL-22 (sev 2) — doors are
-unreliable to click, demand you stand too close (not retail behaviour), and the
-town-building door hinge is on the wrong side.
+**RESOLVED 2026-07-27 — premise refuted; see VERIFICATION-LOG §COL-03.** The
+bisect ran over seven builds 07-20 → current: every arm blocks the door
+head-on; there is no regression and no suspect commit. The real defect is that
+the door collider is a swept circle at the door's origin
+(`entity_collision.rs:120-126` TODO) — only the degenerate head-on approach
+blocks; a ±0.45 m lateral approach slides around the circle into the shop.
+Replacement task: implement the entity physics-BSP sweep arm (M), regression
+test pinned at ±0.45 m offset, never head-on. COL-22 lead found in passing:
+door Setup `0x020019FF`'s selectionSphere (r 0.892) sits at the hinge, so
+far-side leaf clicks miss.
 
 ### P0.3 — Guard the degenerate follow-camera basis · LIVE-03 · S
 COL-08 (sev 2) confirms live what the headless run measured: the camera reaches a

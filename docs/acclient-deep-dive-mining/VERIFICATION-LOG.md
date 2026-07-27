@@ -258,3 +258,34 @@ over-claiming parity.
   false positive on `AtlatlCombat = 0x8000013b` by era-checking the shipped
   `client_portal.dat` and ACE against the 2013 doc's `0x138`. That check is now
   a standing instruction in every wave prompt.
+
+---
+
+## COL-03 — PREMISE REFUTED BY BISECT (2026-07-27). Not a regression; the door block never worked except head-on.
+
+The work plan filed P0.2 as "doors blocked on 07-20 and do not now — bisect the
+one-week window." The bisect ran (isolated rig, `/mnt/wbterminal2/door-bisect-2026-07-27/`,
+seven pkg builds 07-20 → current, movement-gated probe at the Holtburg grocer
+door `0x7A9B401F`): **every arm BLOCKED the head-on approach**, stop-gap
+0.80-0.88 m, including the current live build. `?faithfulEntityCollision=off`
+passes through (control), so the stop is the door-entity arm. No regression
+exists; no era-matched JS was ever needed; no suspect commit.
+
+**The real defect:** the door's collider is a swept **circle at the door's
+origin** (`entity_collision.rs:120-126`, explicit `TODO(acclient.h gap)` — the
+`has_physics_bsp` arm reduces to circle-vs-circle). Head-on, axis-locked
+approach ⇒ slide component exactly 0 ⇒ block holds. Any lateral offset ⇒ the
+tangent slide walks around the circle: at ±0.45 m from the door origin the
+probe ended **inside the shop** (env-cell `0x16A`) in ~1 s. The 07-20
+`d41b9143` "live functional block" measured the one degenerate geometry, as
+does the offline A/B in `system/tests.rs` — both pass while the feature is
+broken in the general case. The user's COL-03 = NO is the general case.
+
+Two traps for the fixer, verified against DAT `0x020019FF` via
+`chorizite-parse-dat-record`: the door Setup's physics sphere is r 0.1 at the
+base — letting `setup_collision_radius` populate would *shrink* the block, not
+fix it; and the `selectionSphere` (r 0.892) sits at the **hinge** (0, 0.06,
+1.35), a live COL-22 lead (far-side leaf clicks miss). Fix = implement the BSP
+arm (`StaticPartBsp` machinery already exists and is `any(wasm32, test)` since
+`d41b9143`); regression test MUST use a ±0.45 m offset approach, never the
+head-on one.
