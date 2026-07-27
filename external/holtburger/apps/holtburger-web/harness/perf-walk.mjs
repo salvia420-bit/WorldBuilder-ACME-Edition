@@ -21,6 +21,9 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { PLAYWRIGHT_CACHE } from "./lib/boot.mjs";
+// P5.5 — no "walk" conclusion without proof the player moved. See
+// lib/movement_gate.mjs for the standing rule and its provenance.
+import { movementGate } from "./lib/movement_gate.mjs";
 
 const require = createRequire(import.meta.url);
 const arg = (k, d) => {
@@ -159,8 +162,19 @@ async function main() {
     }
     const s = await page.evaluate(() => {
       const h = window.__sessionHandle;
-      let pose = null, lb = null;
-      try { pose = h?.getLocalPlayerPose?.() ?? null; lb = pose?.landblock ?? pose?.lb ?? null; } catch {}
+      // P5.5 — the pose fields are `landblockId / x / y / z / heading`
+      // (pkg/holtburger_web.d.ts `class LocalPlayerPose`). This used to read
+      // `pose.landblock ?? pose.lb`, neither of which exists, so `lb` was
+      // ALWAYS null and `landblocksVisited` always empty — a walk harness
+      // that could not see the player move.
+      let lb = null, px = null, py = null, pz = null, heading = null;
+      try {
+        const pose = h?.getLocalPlayerPose?.() ?? null;
+        if (pose) {
+          lb = pose.landblockId != null ? (pose.landblockId >>> 0) : null;
+          px = pose.x; py = pose.y; pz = pose.z; heading = pose.heading;
+        }
+      } catch {}
       const m = performance.memory;
       return {
         t: Math.round(performance.now()),
@@ -169,7 +183,7 @@ async function main() {
         heapMB: m ? +(m.usedJSHeapSize / 1048576).toFixed(1) : null,
         frames: window.__perf?.frames.length || 0,
         bootState: window.__bootState ?? null,
-        lb,
+        lb, px, py, pz, heading,
       };
     }).catch((e) => ({ evalError: String(e.message || e) }));
     s.rssMB = chromeRssMB();
@@ -185,8 +199,21 @@ async function main() {
 
   // Pull the full frame-time series and compute FPS stats.
   const frames = await page.evaluate(() => window.__perf?.frames || []).catch(() => []);
+  // Explicit field read: LocalPlayerPose is a wasm-bindgen class whose fields
+  // are prototype GETTERS, so returning the object itself serialises to `{}`
+  // across the CDP boundary. Same class of bug as the `pose.landblock` read
+  // above (P5.5).
   const finalPose = await page.evaluate(() => {
-    try { return window.__sessionHandle?.getLocalPlayerPose?.() ?? null; } catch { return null; }
+    try {
+      const p = window.__sessionHandle?.getLocalPlayerPose?.();
+      if (!p) return null;
+      return {
+        landblockId: p.landblockId >>> 0,
+        x: p.x, y: p.y, z: p.z,
+        heading: p.heading,
+        isOnGround: p.isOnGround,
+      };
+    } catch { return null; }
   }).catch(() => null);
 
   const dts = frames.filter((d) => d > 0 && d < 5000);
@@ -202,12 +229,23 @@ async function main() {
   const lastSync = [...samples].reverse().find((s) => s.sync)?.sync || null;
   const lbs = [...new Set(samples.map((s) => s.lb).filter((v) => v != null))];
 
+  // ── P5.5 — movement/heading sanity gate ────────────────────────────────
+  // Standing rule from PHY-07-LIVE-RUN-2026-07-26: a live rig reported
+  // `BLOCKED (plateau)` when the player had simply never moved. This harness
+  // holds W for DURATION_S and reports FPS/draw-calls as "a walk"; if the
+  // player never actually moved, every number here describes a STANDING
+  // client and must not be read as a walk. LIVE-01/LIVE-02 both reach that
+  // state with zero console errors, so the error count is no proxy for it.
+  // `requireHeading` is on because this loop taps A/D every iteration.
+  const movement = movementGate(samples, { inWorld, requireHeading: true });
+
   const report = {
     ts: new Date().toISOString(),
     durationS: DURATION_S,
     url: URL,
     inWorld,
     finalPose,
+    movement,
     landblocksVisited: lbs,
     fps: fps ? +fps.toFixed(1) : null,
     frameMs: { p50: pctile(dts, 50), p95: pctile(dts, 95), p99: pctile(dts, 99), worst: dts.length ? Math.max(...dts) : null },
@@ -234,6 +272,11 @@ async function main() {
   console.log("  ALL-FLAGS-ON PERF WALK — SUMMARY");
   console.log("=".repeat(70));
   console.log(`  in-world          : ${inWorld}`);
+  console.log(`  MOVEMENT GATE     : ${movement.verdict}  (path=${movement.pathM}m net=${movement.netDisplacementM}m turned=${movement.headingTurnedRad}rad over ${movement.poseSamples} pose samples)`);
+  if (movement.verdict.startsWith("INVALID")) {
+    console.log("      ! the player did not walk — treat FPS/draw-call numbers as a STANDING client,");
+    console.log("        not a walk, and do NOT conclude anything about streaming or collision.");
+  }
   console.log(`  landblocks        : ${lbs.length} visited ${lbs.length ? "(" + lbs.slice(0, 6).join(",") + (lbs.length > 6 ? "…" : "") + ")" : ""}`);
   console.log(`  FPS (software GL) : ${report.fps}  | frame ms p50=${report.frameMs.p50} p95=${report.frameMs.p95} p99=${report.frameMs.p99} worst=${report.frameMs.worst}`);
   console.log(`  spikes            : >33ms=${spikes33}  >100ms=${spikes100}  >500ms=${spikes500}  (of ${dts.length} frames)`);

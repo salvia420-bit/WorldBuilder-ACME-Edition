@@ -32,6 +32,33 @@
 //
 // Boot pattern mirrors capture_academy_envcells.cjs (canonical
 // academy-spawn).
+//
+// ---------------------------------------------------------------------
+// P5.2 / LEAK-09 (2026-07-27) — the heap instrument was broken, so every
+// verdict this script has ever emitted is unproven.
+//
+// `RETRACTION-jsheap-step-2026-07-26.md`: without
+// `--enable-precise-memory-info`, `performance.memory.usedJSHeapSize` is
+// quantized onto a coarse rung ladder AND cached for 20 minutes. Four
+// independent proofs, including bit-identical values across 48 samples over
+// 18 minutes and a direct-CDP 20.5 MB against a `performance.memory` reading
+// of a frozen 468 MB. This script sampled that field for 120 s — i.e. INSIDE
+// a single cache window — with the flag absent, so `heapGrowthMbPerMin` was
+// ~0 by construction and the `NO_ACTIONABLE_LEAK` arm could not fail. The
+// shared harness already passes the flag (`harness/lib/boot.mjs:212`); this
+// launcher did not.
+//
+// Two changes:
+//   (a) the flag is passed, so the field is byte-accurate;
+//   (b) an INSTRUMENT VALIDITY gate runs before the thresholds — if the
+//       sampled series is frozen or absent, the verdict is
+//       `INVALID (heap instrument dead)`, never a clean bill of health.
+//
+// Caveat that survives the fix: `usedJSHeapSize` measures the V8 heap ONLY.
+// ArrayBuffer backing stores (AudioBuffer PCM, texture image.data) are
+// V8-external and invisible here — the non-heap counters below
+// (`bufferCacheSize`, `stbCached`, `playCount`) are what catch those.
+// ---------------------------------------------------------------------
 
 const path = require("node:path");
 const fs = require("node:fs");
@@ -122,6 +149,12 @@ try {
       "--disable-gpu-sandbox",
       "--disable-features=PaintHoldingCrossOrigin,PaintHolding",
       "--js-flags=--expose-gc",
+      // P5.2 — REQUIRED for every `usedJSHeapSize` read below. Without it the
+      // field is quantized and cached for 20 minutes
+      // (RETRACTION-jsheap-step-2026-07-26.md), which is longer than this
+      // script's entire 120 s window, so the growth rate is structurally 0.
+      // Same flag, same reason as `harness/lib/boot.mjs:212`.
+      "--enable-precise-memory-info",
     ],
   });
   const context = await browser.newContext({
@@ -534,9 +567,35 @@ try {
   console.log(`gc() forced:           ${gcAvailable}`);
   console.log(`stress plays/sec:      ${STRESS_PLAYS_PER_SEC}`);
 
+  // ---- P5.2: instrument validity, checked BEFORE the thresholds ----------
+  // A verdict that cannot fail is not a verdict. Two ways the heap series is
+  // worthless: the field is absent (`-1`), or it is frozen — the exact
+  // signature of `--enable-precise-memory-info` being missing, where the
+  // 20-minute cache holds one value for the whole 120 s window
+  // (RETRACTION-jsheap-step-2026-07-26.md measured 48 bit-identical samples
+  // over 18 minutes). With the flag on, a live V8 heap moves by bytes between
+  // samples, so ≥3 distinct values is a floor a working instrument clears
+  // trivially and a frozen one cannot clear at all.
+  const heapValues = samples.map((s) => s.usedHeap);
+  const distinctHeapValues = new Set(heapValues).size;
+  const heapFieldPresent = heapValues.every((v) => v > 0);
+  const heapInstrumentValid = heapFieldPresent && distinctHeapValues >= 3;
+  console.log(`heap samples:          ${heapValues.length} (${distinctHeapValues} distinct)`);
+  console.log(`heap instrument valid: ${heapInstrumentValid}`);
+  if (!heapInstrumentValid) {
+    console.log(
+      "  ^ frozen/absent usedJSHeapSize — check that " +
+      "--enable-precise-memory-info is in the launch args."
+    );
+  }
+
   // Verdict per plan thresholds.
   let verdict;
-  if (heapGrowthMbPerMin > 5.0) {
+  if (!heapInstrumentValid) {
+    verdict =
+      `INVALID (heap instrument dead: ${distinctHeapValues} distinct value(s) ` +
+      `across ${heapValues.length} samples — no leak conclusion is possible)`;
+  } else if (heapGrowthMbPerMin > 5.0) {
     verdict = "LEAK_LIKELY (heap growth > 5 MB/min)";
   } else if (heapGrowthMbPerMin > 1.0) {
     verdict = "SUSPICIOUS (heap growth 1-5 MB/min, not actionable per plan)";
@@ -558,6 +617,10 @@ try {
       warmupMs: WARMUP_MS,
       gcAvailable,
       verdict,
+      // P5.2 — carry the instrument's own health into the artifact so a
+      // downstream reader never has to trust `verdict` on its own.
+      heapInstrumentValid,
+      distinctHeapValues,
       analysis: {
         elapsedSec,
         heapBaselineBytes: baseline.usedHeap,
