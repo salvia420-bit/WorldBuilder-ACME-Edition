@@ -6090,10 +6090,15 @@ async fn moveto_driver_walks_then_arrives_with_single_stop_edge() {
         .current_local_drive_control(&world, Duration::from_millis(16))
         .expect("walk steering must ride the autonomous drive lane");
     assert_eq!(drive.body_id, SpatialBodyId::LocalPlayer(guid));
-    // Forward toward the target, scaled by the authored gait speed × dt
-    // (this directive walks: base walk 1.0 m/s) — the seam's per-slice
-    // pre-scaling.
-    let expected_x = 1.0 * Duration::from_millis(16).as_secs_f32();
+    // Forward toward the target, scaled by the walk gait speed × dt —
+    // the seam's per-slice pre-scaling. COL-10 (2026-07-27): the
+    // autonomous MoveTo Walk lane realizes retail's `WalkAnimSpeed`
+    // (3.1199999 m/s, `acclient.c:343561`), NOT the fixture's authored
+    // base walk (1.0 m/s from
+    // `seed_self_movement_capabilities_override`) this used to pin —
+    // see the Walk arm of the autonomous speed resolve in `system.rs`.
+    let expected_x = super::super::motion_interp::WALK_ANIM_SPEED
+        * Duration::from_millis(16).as_secs_f32();
     assert!(
         (drive.desired_world_delta.x - expected_x).abs() < 1e-4
             && drive.desired_world_delta.y.abs() < 1e-4,
