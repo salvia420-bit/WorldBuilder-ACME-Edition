@@ -5661,6 +5661,24 @@
           // and method surfaces. Bump that schema's `version` whenever
           // a new load-bearing global is added/renamed (HUD rec #184).
           window.__sessionHandle = handle;
+          // P4.1 / LEAK-01 (2026-07-27): per-guid bridge-cache residency
+          // probe. Reads __sessionHandle DYNAMICALLY (same
+          // survives-reconnect pattern as the keepalive below), so one
+          // page-lifetime install covers every session.
+          //
+          // Headless soak contract: run N spawn/despawn cycles, then
+          // assert the nine sizes stay bounded by the live-entity count
+          // while `deletePrunes` strictly increased. Sizes flat AND
+          // deletePrunes flat means the fan-out never ran, which is a
+          // different failure from a correctly-bounded map.
+          if (!window.__diag) window.__diag = {};
+          window.__diag.bridgeIndexes = () => {
+            try {
+              const h = window.__sessionHandle;
+              if (typeof h?.bridgeIndexSizes !== "function") return null;
+              return JSON.parse(h.bridgeIndexSizes());
+            } catch (_) { return null; }
+          };
           // Keepalive interval (robustness fix 2026-07-04, always-on —
           // no URL flag per project convention for robustness fixes).
           // ACE drops a session after 60s with no inbound packet

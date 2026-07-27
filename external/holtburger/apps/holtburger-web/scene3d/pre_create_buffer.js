@@ -131,6 +131,16 @@ export function createPreCreateBuffer({ now = () => Date.now(), expiryMs = PRE_C
       buckets.delete(g);
     },
 
+    /** P4.3/LEAK-02 — drop every bucket (session teardown; the parked guids
+     *  belong to a guid space that no longer exists, so no future spawn can
+     *  drain them). Returns the number of guids dropped. */
+    clear() {
+      const n = buckets.size;
+      buckets.clear();
+      eventCount = 0;
+      return n;
+    },
+
     /** Expire whole buckets whose LAST enqueue is older than the 25 s
      *  window (retail destroys the placeholder + its queued blobs
      *  together when the destruction timer fires, acclient.c:310246-310278).

@@ -9221,6 +9221,12 @@ struct ByteBudgetLru<K, V> {
     misses: u64,
     inserts: u64,
     evictions: u64,
+    // PAL-01: monotonic high-water for `count_pinned`, since construction.
+    // Atomic so the read-guarded diag path can refresh it without escalating
+    // `surface_cache_ro()` to a write lock. NOT reset by `clear()` — a peak
+    // that a cache flush erases cannot answer "was this ever stuck?".
+    pinned_peak_entries: std::sync::atomic::AtomicUsize,
+    pinned_peak_bytes: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -9236,6 +9242,8 @@ impl<K: Clone + Eq + std::hash::Hash, V: Clone> ByteBudgetLru<K, V> {
             misses: 0,
             inserts: 0,
             evictions: 0,
+            pinned_peak_entries: std::sync::atomic::AtomicUsize::new(0),
+            pinned_peak_bytes: std::sync::atomic::AtomicUsize::new(0),
         }
     }
     fn get(&mut self, key: &K) -> Option<V> {
@@ -9292,7 +9300,15 @@ impl<K: Clone + Eq + std::hash::Hash, V: Clone> ByteBudgetLru<K, V> {
                 }
                 // Nothing evictable (every entry still refcounted by a live
                 // consumer) — run over budget rather than break holders.
-                None => break,
+                None => {
+                    // PAL-01: this is the give-up the budget cannot recover
+                    // from, so sample the pinned high-water HERE — otherwise
+                    // a pressure window with no diag poll in it leaves no
+                    // trace and the leak stays indistinguishable from
+                    // healthy over-budget operation.
+                    self.count_pinned(&evictable, |_| false);
+                    break;
+                }
             }
         }
         newly
@@ -9300,6 +9316,47 @@ impl<K: Clone + Eq + std::hash::Hash, V: Clone> ByteBudgetLru<K, V> {
     /// Count entries whose key satisfies `f` (per-class `palEntries` split).
     fn count_keys(&self, f: impl Fn(&K) -> bool) -> usize {
         self.map.keys().filter(|k| f(k)).count()
+    }
+    /// PAL-01: entries that FAIL `evictable` — the residency the byte budget
+    /// cannot reclaim. `insert` runs OVER budget rather than break a live
+    /// holder, so `total_bytes > budget` is legal by design and this is the
+    /// only signal separating a leaked pinned handle from healthy pressure.
+    /// `class` selects a sub-population reported alongside the total (the
+    /// composed/recolored split, matching `count_keys`' `palEntries`).
+    /// Returns `(entries, bytes, class_entries, class_bytes)` and refreshes
+    /// the monotonic high-water marks. Read-only w.r.t. the map: one walk,
+    /// paid per diag call and per over-budget give-up, never per insert.
+    fn count_pinned(
+        &self,
+        evictable: impl Fn(&V) -> bool,
+        class: impl Fn(&K) -> bool,
+    ) -> (usize, usize, usize, usize) {
+        let (mut entries, mut bytes) = (0usize, 0usize);
+        let (mut cls_entries, mut cls_bytes) = (0usize, 0usize);
+        for (k, (v, _, b)) in self.map.iter() {
+            if evictable(v) {
+                continue;
+            }
+            entries += 1;
+            bytes += *b;
+            if class(k) {
+                cls_entries += 1;
+                cls_bytes += *b;
+            }
+        }
+        use std::sync::atomic::Ordering;
+        self.pinned_peak_entries.fetch_max(entries, Ordering::Relaxed);
+        self.pinned_peak_bytes.fetch_max(bytes, Ordering::Relaxed);
+        (entries, bytes, cls_entries, cls_bytes)
+    }
+    /// PAL-01: monotonic `(entries, bytes)` high-water observed by
+    /// `count_pinned`, since construction.
+    fn pinned_peak(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering;
+        (
+            self.pinned_peak_entries.load(Ordering::Relaxed),
+            self.pinned_peak_bytes.load(Ordering::Relaxed),
+        )
     }
     fn clear(&mut self) -> u32 {
         let n = self.map.len() as u32;
@@ -9757,6 +9814,30 @@ fn surface_cache_stats() -> (u64, u64, u64, u64, u64, u64, u64, usize, usize, us
     )
 }
 
+/// PAL-01 — pinned (un-evictable) residency on the surface store. Separate
+/// from `surface_cache_stats` so that tuple, and the three call sites that
+/// destructure it, stay byte-identical.
+///
+/// An entry is pinned when a live consumer still holds its `Arc`, i.e. the
+/// eviction predicate `Arc::strong_count(v) == 1` fails. Design intent is
+/// that a cache hit is a TRANSIENT clone-out which JS frees, so a nonzero
+/// steady-state count is a leaked handle, not pressure. Returns
+/// `(entries, bytes, pal_entries, pal_bytes, peak_entries, peak_bytes)`;
+/// the `pal_` pair is the composed (recolored-entity) subset.
+///
+/// `cfg` matches its single caller `dat_decode_diag`; the counting itself is
+/// on `ByteBudgetLru::count_pinned`, which native tests do exercise.
+#[cfg(target_arch = "wasm32")]
+fn surface_cache_pinned_stats() -> (usize, usize, usize, usize, usize, usize) {
+    let c = surface_cache_ro();
+    let (entries, bytes, pal_entries, pal_bytes) = c.count_pinned(
+        |v| std::sync::Arc::strong_count(v) == 1,
+        |k| k.is_composed(),
+    );
+    let (peak_entries, peak_bytes) = c.pinned_peak();
+    (entries, bytes, pal_entries, pal_bytes, peak_entries, peak_bytes)
+}
+
 /// B1 memo-through decode of one surface DID: memo hit → clone out (zero
 /// record reads); miss → decode under a per-DID audit and memoise iff
 /// complete. Returns the pixels + this decode's non-provable miss count
@@ -10058,6 +10139,12 @@ pub fn dat_decode_diag() -> String {
         sc_entries,
         sc_pal_entries,
     ) = surface_cache_stats();
+    // PAL-01: over-budget operation is legal by design (`ByteBudgetLru::
+    // insert`'s `None` arm runs over budget rather than break a live
+    // holder), so `surfaceCacheBytes` above the budget cannot distinguish a
+    // leaked pinned handle from healthy pressure. These six can.
+    let (sc_pinned, sc_pinned_bytes, sc_pal_pinned, sc_pal_pinned_bytes, sc_pinned_peak, sc_pinned_peak_bytes) =
+        surface_cache_pinned_stats();
     // Surface-budget S3: THIS instance's resolved surface-cache budget, so an
     // A/B arm can prove `?surfaceBudgetMB=` actually gated (the S4 lesson) and
     // that `surfaceCacheBytes` is being held under it. `-1` = the compile-time
@@ -10103,6 +10190,9 @@ pub fn dat_decode_diag() -> String {
              \"surfaceCacheEvictions\":{},\"surfaceCacheBytes\":{},\"surfaceCacheEntries\":{},\
              \"surfaceCachePalHits\":{},\"surfaceCachePalMisses\":{},\"surfaceCachePalInserts\":{},\
              \"surfaceCachePalEntries\":{},\"surfaceCacheBudget\":{},\
+             \"surfaceCachePinnedEntries\":{},\"surfaceCachePinnedBytes\":{},\
+             \"surfaceCachePalPinnedEntries\":{},\"surfaceCachePalPinnedBytes\":{},\
+             \"surfaceCachePinnedPeakEntries\":{},\"surfaceCachePinnedPeakBytes\":{},\
              \"surfaceDecodeTotal\":{},\"surfaceDecodeDids\":{},\
              \"hmBatchHist\":[{}],\"wasmMemoryBytes\":{},\
              \"decodeAdmission\":{{\"maxJobs\":{},\"maxBytes\":{},\
@@ -10131,6 +10221,12 @@ pub fn dat_decode_diag() -> String {
             sc_pal_inserts,
             sc_pal_entries,
             sc_budget,
+            sc_pinned,
+            sc_pinned_bytes,
+            sc_pal_pinned,
+            sc_pal_pinned_bytes,
+            sc_pinned_peak,
+            sc_pinned_peak_bytes,
             d.surface_decode_total,
             d.surface_decode_dids.len(),
             hm_hist,
@@ -28969,12 +29065,17 @@ fn apply_inventory_object_create(
     physics_script_table_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     >,
+    per_guid: &PerGuidBridgeIndexes<'_>,
 ) -> bool {
     use holtburger_common::properties::{
         PhysicsState, PropertyFloat, PropertyInt, WorldObjectExt as _,
         WorldObjectPropertyAccessors as _,
     };
     let guid = data.public_weenie_desc.guid;
+    // P4.1 / LEAK-01: ACE recycles dynamic GUIDs. Any per-guid cache
+    // entry surviving into an `ObjectCreate` for this guid describes a
+    // previous occupant.
+    per_guid.prune_on_guid_reuse(u32::from(guid));
     let entity_name = data
         .public_weenie_desc
         .name
@@ -29302,8 +29403,13 @@ fn maintain_bridge_indexes_on_routed_create(
     physics_script_table_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     >,
+    per_guid: &PerGuidBridgeIndexes<'_>,
 ) {
     use holtburger_common::properties::{PhysicsState, WorldObjectExt as _};
+    // P4.1 / LEAK-01: ACE recycles dynamic GUIDs. Any per-guid cache
+    // entry surviving into an `ObjectCreate` for this guid describes a
+    // previous occupant.
+    per_guid.prune_on_guid_reuse(u32::from(guid));
     if let Some(entity) = world.entities.get_mut(guid) {
         let table_did = resolve_physics_script_table_did(entity);
         entity.physics_script_table_did = table_did;
@@ -29338,6 +29444,158 @@ fn maintain_bridge_indexes_on_routed_create(
     upsert_wielder_index(world, guid, wielder_index);
 }
 
+/// P4.1 / LEAK-01: cumulative `PerGuidBridgeIndexes` prune calls, split
+/// by trigger. A headless soak asserts `bridgeIndexSizes()` stops
+/// growing across spawn/despawn cycles while these keep rising — a flat
+/// size with a flat counter means the fan-out never ran, which is the
+/// failure mode this instrumentation exists to distinguish.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static BRIDGE_INDEX_DELETE_PRUNES: std::cell::Cell<u64> = std::cell::Cell::new(0);
+    static BRIDGE_INDEX_REUSE_PRUNES: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
+/// P4.1 / LEAK-01 (2026-07-27): the per-guid JS-facing caches that sit
+/// beside the eight indexes `maintain_bridge_indexes_on_delete` already
+/// prunes, bundled behind one borrow-struct. Adding a guid-keyed cache
+/// to `recv_loop` without also landing it here is now a compile error at
+/// every construction site — the omission this type exists to prevent.
+///
+/// `REMOTE_AIRBORNE_STATE` is a thread-local rather than a `recv_loop`
+/// param, so it is pruned inside the methods below rather than held as a
+/// field. That distinction matters for lifetime: the eight `Rc` maps are
+/// created per-session in `start_session` and die with the handle, while
+/// the thread-local outlives every `SessionHandle::free()` and is the
+/// only member of this set that can carry state across a relog.
+#[cfg(target_arch = "wasm32")]
+struct PerGuidBridgeIndexes<'a> {
+    latest_vendor_state: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, VendorState>>,
+    >,
+    latest_container_contents: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
+    >,
+    latest_object_icons: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
+    latest_inscriptions: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, String>>,
+    >,
+    latest_appraisals: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, String>>,
+    >,
+    identify_meta_index: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, (bool, u32)>>,
+    >,
+    door_part_snapshot: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
+    >,
+    rynth_id_times: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, f64>>,
+    >,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PerGuidBridgeIndexes<'_> {
+    /// Drop every per-guid cache entry keyed by `g`, and strip `g` from
+    /// every cached container GUID list.
+    ///
+    /// The list strip is the NQ-19 half: looting a corpse slot-by-slot
+    /// deletes the *contents*, never the container, so without it a
+    /// reopened container still renders items that are gone. Cost is
+    /// O(total cached container items), bounded by the handful of
+    /// containers opened per session.
+    ///
+    /// Every borrow is scoped to its own statement — callers routinely
+    /// hold a `world.borrow_mut()` across these calls, never one of
+    /// these maps.
+    fn prune_guid(&self, g: u32) {
+        self.latest_vendor_state.borrow_mut().remove(&g);
+        {
+            let mut contents = self.latest_container_contents.borrow_mut();
+            contents.remove(&g);
+            for items in contents.values_mut() {
+                items.retain(|item| *item != g);
+            }
+        }
+        self.latest_object_icons.borrow_mut().remove(&g);
+        self.latest_inscriptions.borrow_mut().remove(&g);
+        self.latest_appraisals.borrow_mut().remove(&g);
+        self.identify_meta_index.borrow_mut().remove(&g);
+        self.door_part_snapshot.borrow_mut().remove(&g);
+        self.rynth_id_times.borrow_mut().remove(&g);
+        REMOTE_AIRBORNE_STATE.with(|m| {
+            m.borrow_mut().remove(&g);
+        });
+    }
+
+    /// Delete-signal entry point (`ObjectDelete` / `InventoryRemoveObject`).
+    fn prune_on_delete(&self, g: u32) {
+        self.prune_guid(g);
+        BRIDGE_INDEX_DELETE_PRUNES.with(|c| c.set(c.get().wrapping_add(1)));
+    }
+
+    /// Create-signal entry point. ACE recycles dynamic GUIDs, so any
+    /// entry still keyed by `g` when an `ObjectCreate` for `g` arrives
+    /// describes a PREVIOUS occupant and must not stay readable through
+    /// the JS getters. Costs nothing in the common case: ACE sends
+    /// `ObjectDelete` when an object leaves visibility, so a re-create
+    /// is normally preceded by `prune_on_delete` and finds the maps
+    /// already empty.
+    ///
+    /// Ordering invariant: the `ViewContents` arm populates
+    /// `latest_object_icons` / `latest_container_contents` by reading
+    /// `world.entities`, which requires each item's `ObjectCreate` to
+    /// have already landed — so this purge cannot race ahead of the
+    /// inserts it would otherwise erase.
+    fn prune_on_guid_reuse(&self, g: u32) {
+        self.prune_guid(g);
+        BRIDGE_INDEX_REUSE_PRUNES.with(|c| c.set(c.get().wrapping_add(1)));
+    }
+
+    /// `(name, len)` for each per-guid store, in declaration order.
+    /// Backing for the `bridgeIndexSizes()` diag.
+    fn sizes(&self) -> [(&'static str, usize); 9] {
+        [
+            ("latestVendorState", self.latest_vendor_state.borrow().len()),
+            (
+                "latestContainerContents",
+                self.latest_container_contents.borrow().len(),
+            ),
+            ("latestObjectIcons", self.latest_object_icons.borrow().len()),
+            ("latestInscriptions", self.latest_inscriptions.borrow().len()),
+            ("latestAppraisals", self.latest_appraisals.borrow().len()),
+            ("identifyMetaIndex", self.identify_meta_index.borrow().len()),
+            ("doorPartSnapshot", self.door_part_snapshot.borrow().len()),
+            ("rynthIdTimes", self.rynth_id_times.borrow().len()),
+            (
+                "remoteAirborneState",
+                REMOTE_AIRBORNE_STATE.with(|m| m.borrow().len()),
+            ),
+        ]
+    }
+}
+
+/// P4.1 / LEAK-01: the `SessionHandle`-side view of the same nine
+/// stores. Kept adjacent to [`PerGuidBridgeIndexes`] so the field list
+/// exists in exactly one place — `bridgeIndexSizes()` and the recv-loop
+/// fan-out cannot drift apart.
+#[cfg(target_arch = "wasm32")]
+impl SessionHandle {
+    fn per_guid_bridge_indexes(&self) -> PerGuidBridgeIndexes<'_> {
+        PerGuidBridgeIndexes {
+            latest_vendor_state: &self.latest_vendor_state,
+            latest_container_contents: &self.latest_container_contents,
+            latest_object_icons: &self.latest_object_icons,
+            latest_inscriptions: &self.latest_inscriptions,
+            latest_appraisals: &self.latest_appraisals,
+            identify_meta_index: &self.identify_meta_index,
+            door_part_snapshot: &self.door_part_snapshot,
+            rynth_id_times: &self.rynth_id_times,
+        }
+    }
+}
+
 /// A8-M1 (2026-06-11): bridge-local index cleanup for an entity-removal
 /// signal (`ObjectDelete` / `InventoryRemoveObject`). Extracted
 /// verbatim from `apply_inventory_object_delete` (which now calls it)
@@ -29361,6 +29619,10 @@ fn maintain_bridge_indexes_on_delete(
     entity_enchantments_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
     >,
+    // P4.1 / LEAK-01 (2026-07-27): the nine per-guid JS-facing caches
+    // that had zero removal sites while the eight indexes below were
+    // pruned here since A8-M1.
+    per_guid: &PerGuidBridgeIndexes<'_>,
 ) {
     // CMT Wave 2 / Phase 5 (2026-05-26): wielder-index cleanup. The
     // deleted GUID can be either (a) a weapon item that was wielded by
@@ -29405,6 +29667,12 @@ fn maintain_bridge_indexes_on_delete(
     MOTION_ACTION_STAMPS.with(|m| {
         m.borrow_mut().remove(&g_u32);
     });
+
+    // P4.1 / LEAK-01 (2026-07-27): the per-guid JS-facing caches join the
+    // SAME fan-out rather than getting their own lifecycle. Zero removal
+    // sites existed before this call; ACE recycles dynamic GUIDs, so a
+    // survivor here is read back as the previous occupant's data.
+    per_guid.prune_on_delete(g_u32);
 }
 
 /// Phase 4 step 4 follow-on: spatial-bypass version of
@@ -29435,6 +29703,7 @@ fn apply_inventory_object_delete(
     entity_enchantments_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
     >,
+    per_guid: &PerGuidBridgeIndexes<'_>,
 ) -> bool {
     let was_owned = world.player.inventory.contains(&guid);
     if was_owned {
@@ -29454,6 +29723,7 @@ fn apply_inventory_object_delete(
         projectile_index,
         physics_script_table_index,
         entity_enchantments_index,
+        per_guid,
     );
 
     was_owned
@@ -29843,6 +30113,12 @@ pub struct SessionHandle {
     /// [`SessionHandle::get_object_inscription`] on demand at render
     /// time; no event drain needed.
     latest_inscriptions: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, String>>>,
+    /// P4.1 / LEAK-01 (2026-07-27): the recv loop's per-guid
+    /// `(IdentifyResponse.success, flags)` cache, held here purely so
+    /// `bridgeIndexSizes()` can report its residency alongside the other
+    /// eight. Same `Rc` the loop mutates — clone, not a copy.
+    identify_meta_index:
+        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, (bool, u32)>>>,
     /// EX-05 (2026-06-05): per-object AppraisalProfile snapshot keyed by
     /// object GUID. Each value is a JSON-serialized
     /// `AppraisalSnapshot` (see `build_appraisal_snapshot`) carrying the
@@ -36038,6 +36314,37 @@ impl SessionHandle {
         self.latest_appraisals.borrow().get(&guid).cloned()
     }
 
+    /// P4.1 / LEAK-01 (2026-07-27) — per-guid bridge-cache residency,
+    /// as a JSON object string. Keys are the nine store names plus
+    /// `deletePrunes` / `reusePrunes` (cumulative
+    /// `PerGuidBridgeIndexes` fan-out calls, split by trigger).
+    ///
+    /// Intended assertion for a headless spawn/despawn soak: the nine
+    /// sizes settle at the count of currently-live entities while
+    /// `deletePrunes` keeps climbing. Sizes flat AND `deletePrunes`
+    /// flat means the fan-out never ran, which is a different failure
+    /// from "the fan-out ran and the maps are correctly bounded".
+    ///
+    /// Hand-built JSON: all keys are static ASCII and all values are
+    /// integers, so there is nothing to escape.
+    #[wasm_bindgen(js_name = bridgeIndexSizes)]
+    pub fn bridge_index_sizes(&self) -> String {
+        let mut out = String::from("{");
+        for (name, len) in self.per_guid_bridge_indexes().sizes() {
+            out.push('"');
+            out.push_str(name);
+            out.push_str("\":");
+            out.push_str(&len.to_string());
+            out.push(',');
+        }
+        out.push_str("\"deletePrunes\":");
+        out.push_str(&BRIDGE_INDEX_DELETE_PRUNES.with(|c| c.get()).to_string());
+        out.push_str(",\"reusePrunes\":");
+        out.push_str(&BRIDGE_INDEX_REUSE_PRUNES.with(|c| c.get()).to_string());
+        out.push('}');
+        out
+    }
+
     /// Housing — purchase a house from the given slumlord NPC. Sends
     /// `GameAction::BuyHouse` (sub-opcode 0x021C). `item_guids` are the
     /// player-owned items being tendered as payment (pyreals, trade
@@ -37070,6 +37377,7 @@ pub async fn start_session(
         latest_container_contents,
         latest_object_icons,
         latest_inscriptions,
+        identify_meta_index,
         latest_appraisals,
         latest_enchantments,
         latest_fellowship,
@@ -40770,6 +41078,21 @@ async fn recv_loop(
                     // `state.player.equipment` stay current and
                     // `publish_player_inventory_snapshot` produces a
                     // populated snapshot.
+                    //
+                    // P4.1 / LEAK-01 (2026-07-27): built here so all four
+                    // lifecycle arms below share ONE prune surface. Holds
+                    // only `&Rc`, so it never conflicts with the
+                    // `world.borrow_mut()` held across the match.
+                    let per_guid_bridge_indexes = PerGuidBridgeIndexes {
+                        latest_vendor_state: &latest_vendor_state,
+                        latest_container_contents: &latest_container_contents,
+                        latest_object_icons: &latest_object_icons,
+                        latest_inscriptions: &latest_inscriptions,
+                        latest_appraisals: &latest_appraisals,
+                        identify_meta_index: &identify_meta_index,
+                        door_part_snapshot: &door_part_snapshot,
+                        rynth_id_times: &rynth_id_times,
+                    };
                     if let Some(w) = world.borrow_mut().as_mut() {
                         match &message {
                             // A8-M1 (2026-06-11): under `?worldLifecycle=on`
@@ -40792,6 +41115,7 @@ async fn recv_loop(
                                     &wielder_index,
                                     &projectile_index,
                                     &physics_script_table_index,
+                                    &per_guid_bridge_indexes,
                                 );
                             }
                             GameMessage::ObjectDelete(data) if world_lifecycle_on => {
@@ -40801,6 +41125,7 @@ async fn recv_loop(
                                     &projectile_index,
                                     &physics_script_table_index,
                                     &entity_enchantments_index,
+                                    &per_guid_bridge_indexes,
                                 );
                                 inventory_changed = true;
                             }
@@ -40811,23 +41136,24 @@ async fn recv_loop(
                                     &projectile_index,
                                     &physics_script_table_index,
                                     &entity_enchantments_index,
+                                    &per_guid_bridge_indexes,
                                 );
                                 inventory_changed = true;
                             }
                             GameMessage::ObjectCreate(data) => {
-                                if apply_inventory_object_create(w, data, &wielder_index, &projectile_index, &physics_script_table_index) {
+                                if apply_inventory_object_create(w, data, &wielder_index, &projectile_index, &physics_script_table_index, &per_guid_bridge_indexes) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::ObjectDelete(data) => {
                                 // === Wave 4.B — propagate to entity_enchantments_index (2026-05-28) ===
-                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index) {
+                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index, &per_guid_bridge_indexes) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::InventoryRemoveObject(data) => {
                                 // === Wave 4.B — propagate to entity_enchantments_index (2026-05-28) ===
-                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index) {
+                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index, &per_guid_bridge_indexes) {
                                     inventory_changed = true;
                                 }
                             }
@@ -58650,6 +58976,65 @@ mod tests_surface_cache {
         // Once released it becomes evictable again under pressure.
         lru.insert(6, std::sync::Arc::new(vec![0; 40]), 40, evictable);
         assert!(lru.total_bytes <= 100 || lru.len() >= 2);
+    }
+
+    /// PAL-01: the pinned counter must separate a leaked handle from healthy
+    /// pressure. Both arms below end OVER budget with `evictions == 0`
+    /// impossible to tell apart from `surfaceCacheBytes` alone.
+    #[test]
+    fn pinned_counter_discriminates_leak_from_healthy_pressure() {
+        let evictable = |v: &std::sync::Arc<Vec<u8>>| std::sync::Arc::strong_count(v) == 1;
+
+        // Arm A — a live holder blocks eviction: over budget AND pinned.
+        let mut leaked: ByteBudgetLru<u32, std::sync::Arc<Vec<u8>>> = ByteBudgetLru::new(100, 100);
+        leaked.insert(1, std::sync::Arc::new(vec![0; 60]), 60, evictable);
+        let held = leaked.get(&1).expect("just inserted");
+        leaked.insert(2, std::sync::Arc::new(vec![0; 60]), 60, evictable);
+        assert!(leaked.total_bytes > leaked.budget, "over budget is legal here");
+        assert_eq!(leaked.evictions, 0, "no holder was broken");
+        assert_eq!(
+            leaked.count_pinned(evictable, |_| false),
+            (1, 60, 0, 0),
+            "the held entry is reported pinned"
+        );
+        assert_eq!(
+            leaked.pinned_peak(),
+            (1, 60),
+            "the over-budget give-up recorded the peak with no diag read in the window"
+        );
+
+        // Arm B — same byte pressure, nothing held: evicts, zero pinned.
+        let mut healthy: ByteBudgetLru<u32, std::sync::Arc<Vec<u8>>> = ByteBudgetLru::new(100, 100);
+        healthy.insert(1, std::sync::Arc::new(vec![0; 60]), 60, evictable);
+        healthy.insert(2, std::sync::Arc::new(vec![0; 60]), 60, evictable);
+        assert_eq!(healthy.evictions, 1);
+        assert!(healthy.total_bytes <= healthy.budget);
+        assert_eq!(healthy.count_pinned(evictable, |_| false), (0, 0, 0, 0));
+        assert_eq!(healthy.pinned_peak(), (0, 0));
+
+        // Design intent: a hit is a TRANSIENT clone-out. Freeing it drains
+        // the live count, but the high-water must survive (PAL-02 asserts
+        // the former; a peak a drain erased could not answer the latter).
+        drop(held);
+        assert_eq!(leaked.count_pinned(evictable, |_| false), (0, 0, 0, 0));
+        assert_eq!(leaked.pinned_peak(), (1, 60), "high-water is monotonic");
+        leaked.clear();
+        assert_eq!(leaked.pinned_peak(), (1, 60), "clear() does not erase it");
+    }
+
+    /// PAL-01: the composed/recolored subset is a subset of the total, so a
+    /// `surfaceCachePalPinned*` reading can be attributed to the class that
+    /// the retail palette leak actually hit.
+    #[test]
+    fn pinned_counter_class_split_is_a_subset() {
+        let evictable = |v: &std::sync::Arc<Vec<u8>>| std::sync::Arc::strong_count(v) == 1;
+        let mut lru: ByteBudgetLru<u32, std::sync::Arc<Vec<u8>>> = ByteBudgetLru::new(1000, 1000);
+        lru.insert(1, std::sync::Arc::new(vec![0; 10]), 10, evictable);
+        lru.insert(2, std::sync::Arc::new(vec![0; 20]), 20, evictable);
+        let _a = lru.get(&1).expect("cached");
+        let _b = lru.get(&2).expect("cached");
+        // `|k| k % 2 == 0` stands in for `SurfaceCacheKey::is_composed`.
+        assert_eq!(lru.count_pinned(evictable, |k| k % 2 == 0), (2, 30, 1, 20));
     }
 
     #[test]

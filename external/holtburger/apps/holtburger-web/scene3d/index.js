@@ -3631,6 +3631,58 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       return { main, worker, jsMissing };
     };
 
+    // PAL-01 (2026-07-27) — pinned (un-evictable) residency on the wasm
+    // surface cache. `ByteBudgetLru::insert` (src/lib.rs) deliberately runs
+    // OVER budget rather than break a live `Arc` holder, so
+    // `surfaceCacheBytes` above `?surfaceBudgetMB=` is LEGAL and cannot
+    // discriminate a leaked pinned handle from healthy pressure. An entry is
+    // pinned when the eviction predicate `Arc::strong_count(v) == 1` fails.
+    //
+    // Reading: a cache hit is designed to be a TRANSIENT clone-out that JS
+    // frees, so `entries` must fall back to ~0 once the scene is idle — a
+    // nonzero steady state is a leaked handle, not pressure. `peakEntries`
+    // is monotonic since page load, so a pressure window that no poll landed
+    // in is still recorded. Sums both wasm instances (main + bake worker); a
+    // half whose pkg/ predates PAL-01 contributes nothing and is named in
+    // `missing`, so a stale build reads as UNKNOWN rather than as zero.
+    window.__diag.surfacePinned = async () => {
+      try {
+        const d = await window.__diag.datDecode();
+        const out = {
+          entries: 0, bytes: 0, palEntries: 0, palBytes: 0,
+          peakEntries: 0, peakBytes: 0, missing: [], per: {},
+        };
+        for (const name of ["main", "worker"]) {
+          const m = d && d[name];
+          if (!m || typeof m.surfaceCachePinnedEntries !== "number") {
+            out.missing.push(name);
+            continue;
+          }
+          const half = {
+            entries: m.surfaceCachePinnedEntries,
+            bytes: m.surfaceCachePinnedBytes,
+            palEntries: m.surfaceCachePalPinnedEntries,
+            palBytes: m.surfaceCachePalPinnedBytes,
+            peakEntries: m.surfaceCachePinnedPeakEntries,
+            peakBytes: m.surfaceCachePinnedPeakBytes,
+            cacheEntries: m.surfaceCacheEntries,
+            cacheBytes: m.surfaceCacheBytes,
+            cacheBudget: m.surfaceCacheBudget,
+          };
+          out.per[name] = half;
+          out.entries += half.entries;
+          out.bytes += half.bytes;
+          out.palEntries += half.palEntries;
+          out.palBytes += half.palBytes;
+          out.peakEntries += half.peakEntries;
+          out.peakBytes += half.peakBytes;
+        }
+        return out;
+      } catch (_) {
+        return null; /* diagnostic only — never throw */
+      }
+    };
+
     // `?matBudgetMB=N` residency view (2026-07-25, RESULTS-validation-battery
     // next-move 1). The battery relay already samples
     // `liveScene3d.materialCache.materials.size` per stop as `mats`/`texs` —

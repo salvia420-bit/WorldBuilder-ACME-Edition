@@ -134,28 +134,43 @@ function readSpawnHiddenStateFlag() {
   }
 }
 
-// A8-M4 (2026-06-11 unification survey) — `?preCreateBuffer=on` opt-in.
-// Default OFF → byte-identical: the per-kind `_pendingAttach` /
-// `_pendingVisibility` maps keep their exact legacy behavior and every
-// other pre-create event is dropped as before. On → events addressed to a
-// guid whose rig isn't built yet park in ONE generic guid-keyed FIFO
-// (`this._preCreate`, scene3d/pre_create_buffer.js), drained on spawn-commit
-// and expired 25 s after the bucket's last enqueue — the retail null-object
-// recovery (QueueBlobForObject acclient.c:310848-310860 + the 25.0 s
-// destruction stamp :310666). DELIBERATE retail-parity widening under the
-// flag: a kind=17 visibility for an unknown guid is buffered EVEN WITHOUT
+// A8-M4 (2026-06-11 unification survey); DEFAULT-ON since 2026-07-27
+// (P4.3 / LEAK-02), `?preCreateBuffer=off` is the escape.
+// ON → events addressed to a guid whose rig isn't built yet park in ONE
+// generic guid-keyed FIFO (`this._preCreate`, scene3d/pre_create_buffer.js),
+// drained on spawn-commit and expired 25 s after the bucket's last enqueue —
+// the retail null-object recovery (QueueBlobForObject acclient.c:310848-310860
+// + the 25.0 s destruction stamp :310666). OFF → the per-kind
+// `_pendingAttach` / `_pendingVisibility` maps keep their exact legacy
+// behavior, every other pre-create event is dropped, and NEITHER map has a
+// sweeper: a park for a guid that never spawns is retained for the lifetime
+// of the page. DELIBERATE retail-parity widening, now live at the default: a
+// kind=17 visibility for an unknown guid is buffered EVEN WITHOUT
 // `?spawnHiddenState=on` (retail parks ALL netblobs for unknown guids; the
 // per-kind opt-in was only ever a guard on the legacy map). The retail 20 s
 // SendForceObjdesc nag (acclient.c:310302-310308) is NOT implemented — ACE
-// support unresolved (ROADMAP bucket D). Same reader shape as
-// `readEntityLightsFlag`.
+// support unresolved (ROADMAP bucket D).
 function readPreCreateBufferFlag() {
+  // Both arms enumerate their tokens. A bare `!== "off"` reader answers ON
+  // for `=false` / `=0` / `=no`, so an operator who believed they had
+  // disabled the buffer would in fact still be running it.
+  const DEFAULT_ON = true;
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    const v = new URLSearchParams(window.location.search).get("preCreateBuffer");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    // No `window` (node harness, worker): report the shipped page's default
+    // rather than the opposite arm.
+    if (typeof window === "undefined" || !window.location) return DEFAULT_ON;
+    const raw = new URLSearchParams(window.location.search).get("preCreateBuffer");
+    if (raw === null) return DEFAULT_ON; // param absent
+    const v = raw.trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") return false;
+    if (v === "" || v === "on" || v === "1" || v === "true" || v === "yes") return true;
+    // Unrecognised token resolves to the default, never silently.
+    console.warn(
+      `[preCreateBuffer] unrecognised value "${raw}" — using default (on). Use ?preCreateBuffer=off to disable.`,
+    );
+    return DEFAULT_ON;
   } catch (_) {
-    return false;
+    return DEFAULT_ON;
   }
 }
 
@@ -10099,6 +10114,26 @@ export class EntityManager {
     if (this._spawnGen.has(g)) {
       this._spawnGen.set(g, ((this._spawnGen.get(g) | 0) + 1) | 0);
     }
+    // P4.3/LEAK-02 — purge the park maps BEFORE the `!inst` bail below.
+    // An event parks only because the guid has NO committed `entityMap`
+    // entry, so purging after the bail cannot reach the case the purge
+    // exists for: an ObjectDelete for a guid that never spawned leaves its
+    // bucket to the 25 s sweep at best, and to the process lifetime when
+    // `?preCreateBuffer=off` routes parks to the sweeperless legacy maps.
+    // Retail made the identical mistake in `CObjectMaint::DeleteObject`
+    // (acclient.c:309939): the `weenie_object_table` bucket miss at
+    // :309986-309988 jumps past the `null_weenie_object_table` removal at
+    // :309999, which sits inside the hit branch opened at :309995.
+    // Keyed by g only — no `inst` dependency.
+    this._pendingAttach.delete(g);
+    // F16-5 (2026-06-09): un-applied spawn-time draw gate.
+    this._pendingVisibility.delete(g);
+    // A8-M4 (2026-06-12): retail RemoveObjectToBeDestroyed cancels the
+    // placeholder's timer on real removal (acclient.c:309906-309915).
+    // Parked attaches keyed by OTHER child guids that name this guid as
+    // wielder are left to the 25 s expiry, matching the legacy
+    // `_pendingAttach` behavior. No-op when the buffer is empty.
+    this._preCreate.purgeGuid(g);
     const inst = this.entityMap.get(g);
     if (!inst) return;
     // F16-4 — clear the selected target when its entity despawns
@@ -10133,17 +10168,6 @@ export class EntityManager {
       const p = this.entityMap.get(inst._attachedParentGuid >>> 0);
       if (p && p._attachedChildren) p._attachedChildren.delete(g);
     }
-    this._pendingAttach.delete(g);
-    // F16-5 (2026-06-09): drop any un-applied spawn-time draw gate so a guid
-    // that despawned before its rig finished building doesn't leak.
-    this._pendingVisibility.delete(g);
-    // A8-M4 (2026-06-12): same despawn purge for the generic pre-create
-    // buffer (retail RemoveObjectToBeDestroyed cancels the placeholder's
-    // timer on real removal, acclient.c:309906-309915; parked attaches
-    // keyed by OTHER child guids that name this guid as wielder are left
-    // to the 25 s expiry, matching the legacy `_pendingAttach` behavior).
-    // No-op when the flag is off (buffer empty).
-    this._preCreate.purgeGuid(g);
     // F17-5 (2026-06-09): tear down any in-flight speech bubble so a despawn
     // mid-fade doesn't leak its texture/material (the fade loop would
     // otherwise keep the sprite alive under the detached root).
@@ -15283,6 +15307,14 @@ export class EntityManager {
     this._nameToGuid.clear();
     this.spawnInFlight.clear();
     this._spawnGen.clear();
+    // P4.3/LEAK-02 — the parks are keyed by the DEAD session's guid space.
+    // ACE re-creates objects under fresh dynamic guids on reconnect, so a
+    // surviving bucket can never be drained by a spawn; the legacy maps have
+    // no sweeper at all, and the buffer's 25 s sweep only runs while `tick`
+    // is live. Drop all three in lockstep with `entityMap`.
+    this._pendingAttach.clear();
+    this._pendingVisibility.clear();
+    this._preCreate.clear();
   }
 
   /**
