@@ -156,6 +156,10 @@ import {
   castBiasStep,
   CAST_CAM_BIAS_MAX,
   CAST_CAM_BIAS_TTL_MS,
+  // P0.3 / LIVE-03 (2026-07-27): the follow lookAt can collapse onto the
+  // camera origin in XY (camera clipped to the player's head), producing a
+  // camera basis with horizontal forward exactly (0, 0). Guarded below.
+  guardLookHorizontal,
 } from "./camera_math.js";
 // F17 (2026-07-03, physics-parity dossier A row 42) — `?rustPose=on`
 // (default OFF): camera framing reads the wasm integrator pose directly
@@ -578,6 +582,12 @@ export class CameraSwitcher {
     this._lastFollowPos = null; // {x,y} last frame, for the "is moving" test
     this._autoFollowDiagCount = 0; // one-time heading-convention diag budget
     this._autoFollowInvert = false; // negate heading if it trails the wrong way
+    // P0.3 / LIVE-03 runtime state — last horizontal camera→lookAt direction
+    // that was NOT degenerate (unit {x,y} in AC XY), plus a count of frames
+    // the guard had to synthesise one. Surfaced by `cameraBasisGuard()` so a
+    // harness can tell "the camera has no heading" from "the player is stuck".
+    this._lastGoodLookDir = null;
+    this._degenerateBasisFrames = 0;
     // C1 cast-bias runtime state.
     this._castBiasGuid = null; // active cast target guid (>>>0) or null
     this._castBiasExpiry = 0; // performance.now() past which the bias releases
@@ -930,6 +940,24 @@ export class CameraSwitcher {
     return this.activeCamera;
   }
 
+  /**
+   * P0.3 / LIVE-03 diagnostic — the state of the follow camera's horizontal
+   * basis. `degenerateFrames > 0` means `positionCamera` had to synthesise a
+   * heading because camera→lookAt collapsed to a vertical vector, so any
+   * heading a harness derives from the camera matrix during that window is
+   * fiction (read `getLocalPlayerPose().heading` instead). Never throws.
+   */
+  cameraBasisGuard() {
+    const d = this._lastGoodLookDir;
+    return {
+      degenerateFrames: this._degenerateBasisFrames | 0,
+      lastGoodDir: d ? { x: d.x, y: d.y } : null,
+      followYaw: this.followYaw,
+      followPitch: this.followPitch,
+      mode: this.mode,
+    };
+  }
+
   // ---- per-rAF tick -------------------------------------------------
 
   /**
@@ -1160,6 +1188,25 @@ export class CameraSwitcher {
             lookY += (tp.y - lookY) * b;
           }
         }
+      }
+      // P0.3 / LIVE-03 — never hand `lookAt` a purely vertical vector. The
+      // sweep chain above can clip the camera origin onto the player's head
+      // (`clipFinalTo` permits t = 0), and the follow lookAt is anchored at
+      // the player's XY, so camera→lookAt collapses to (0, 0, dz) and the
+      // resulting basis has NO yaw. Live-measured at
+      // PHY-07-LIVE-RUN-2026-07-26 §LIVE-03; it froze that run's turn loop.
+      // Ships direct (broken-behaviour fix, no flag): the guard is inert
+      // whenever the horizontal separation is healthy.
+      {
+        const g = guardLookHorizontal(
+          finalX, finalY, lookX, lookY,
+          { x: forwardX, y: forwardY },
+          this._lastGoodLookDir,
+        );
+        lookX = g.x;
+        lookY = g.y;
+        this._lastGoodLookDir = { x: g.dirX, y: g.dirY };
+        if (g.degenerate) this._degenerateBasisFrames += 1;
       }
       if (this._camStiffness != null) {
         // A12-C3 (?camStiffness=): exponential interpolation of the camera

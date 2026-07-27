@@ -190,6 +190,71 @@ async function main() {
     assert.match(CAMERA_SRC, /_applyCameraPlayerFade\(0\.0\)/);
   });
 
+  // ── P0.3 / LIVE-03: degenerate follow-camera basis guard ─────────────────
+  // PHY-07-LIVE-RUN-2026-07-26 §LIVE-03 measured a live camera whose world
+  // matrix had horizontal forward components exactly (0, 0). Reached when the
+  // sweep chain clips the camera origin onto the player's head (`clipFinalTo`
+  // permits t = 0) while the follow lookAt is anchored at the player's XY.
+  check('guardLookHorizontal is inert when the basis is healthy', () => {
+    const g = m.guardLookHorizontal(0, -5, 0, 0, { x: 0, y: 1 }, null);
+    assert.equal(g.degenerate, false);
+    assert.equal(g.x, 0);
+    assert.equal(g.y, 0);
+    assert.equal(g.dirX, 0);
+    assert.equal(g.dirY, 1);
+  });
+
+  check('guardLookHorizontal never returns a zero horizontal basis', () => {
+    // Camera origin === lookAt in XY: the exact LIVE-03 state.
+    const yaw = 0.7;
+    const g = m.guardLookHorizontal(
+      12, 34, 12, 34, { x: Math.sin(yaw), y: Math.cos(yaw) }, null);
+    assert.equal(g.degenerate, true);
+    const dx = g.x - 12, dy = g.y - 34;
+    const horiz = Math.hypot(dx, dy);
+    assert.ok(horiz > 0, 'horizontal separation must be nonzero');
+    assert.ok(Math.abs(horiz - m.MIN_LOOK_HORIZ_M) < 1e-9, `horiz=${horiz}`);
+    // Recovered heading must be followYaw, not an arbitrary axis.
+    assert.ok(Math.abs(dx / horiz - Math.sin(yaw)) < 1e-9);
+    assert.ok(Math.abs(dy / horiz - Math.cos(yaw)) < 1e-9);
+  });
+
+  check('guardLookHorizontal falls back through yaw → lastGood → world north', () => {
+    // Unusable followYaw (NaN) → cached last-good heading wins.
+    const g1 = m.guardLookHorizontal(
+      0, 0, 0, 0, { x: NaN, y: NaN }, { x: 1, y: 0 });
+    assert.equal(g1.degenerate, true);
+    assert.ok(Math.abs(g1.dirX - 1) < 1e-9 && Math.abs(g1.dirY) < 1e-9);
+    // Nothing usable at all → AC +Y north, still normalisable.
+    const g2 = m.guardLookHorizontal(0, 0, 0, 0, null, null);
+    assert.equal(g2.degenerate, true);
+    assert.equal(Math.hypot(g2.dirX, g2.dirY), 1);
+  });
+
+  check('guardLookHorizontal survives non-finite inputs', () => {
+    const g = m.guardLookHorizontal(NaN, NaN, NaN, NaN, null, null);
+    assert.equal(g.degenerate, true);
+    assert.ok(Number.isFinite(g.x) && Number.isFinite(g.y));
+    assert.equal(Math.hypot(g.dirX, g.dirY), 1);
+  });
+
+  check('camera.js runs the follow lookAt through the LIVE-03 guard', () => {
+    assert.match(CAMERA_SRC, /guardLookHorizontal,/);          // imported
+    assert.match(CAMERA_SRC, /const g = guardLookHorizontal\(/); // called
+    assert.match(CAMERA_SRC, /this\._lastGoodLookDir = \{ x: g\.dirX, y: g\.dirY \}/);
+    assert.match(CAMERA_SRC, /if \(g\.degenerate\) this\._degenerateBasisFrames \+= 1/);
+    // Guard must run BEFORE both the stiffness and hard-set branches, or the
+    // smoothed path keeps emitting the degenerate basis.
+    const guardAt = CAMERA_SRC.indexOf('const g = guardLookHorizontal(');
+    const stiffAt = CAMERA_SRC.indexOf('this._applyStiffness(dt, finalX');
+    assert.ok(guardAt > 0 && stiffAt > guardAt, 'guard must precede _applyStiffness');
+  });
+
+  check('camera.js exposes the basis-guard counter for harnesses', () => {
+    assert.match(CAMERA_SRC, /cameraBasisGuard\(\)\s*\{/);
+    assert.match(CAMERA_SRC, /degenerateFrames: this\._degenerateBasisFrames/);
+  });
+
   check('camera.js stiffness path replaces the hard-set only when flagged', () => {
     assert.match(CAMERA_SRC, /this\._camStiffness != null/);
     assert.match(CAMERA_SRC, /_applyStiffness\(dt, finalX, finalY, finalZ/);

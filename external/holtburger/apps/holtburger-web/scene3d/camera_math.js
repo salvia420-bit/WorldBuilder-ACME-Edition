@@ -293,3 +293,88 @@ export function castBiasStep(amt, active, dt, rate = CAST_CAM_BIAS_RATE) {
   const frac = 1 - Math.exp(-rate * (dt > 0 ? dt : 0));
   return amt + (goal - amt) * frac;
 }
+
+// ---- P0.3 / LIVE-03: degenerate follow-camera basis guard -----------------
+
+/**
+ * Minimum horizontal (AC XY) separation between the follow camera's origin
+ * and its lookAt point. Below this the `lookAt` basis carries no yaw at all
+ * and every heading consumer that normalises the camera forward divides by
+ * zero.
+ *
+ * PHY-07-LIVE-RUN-2026-07-26 §LIVE-03 measured exactly this state live: the
+ * camera world matrix's horizontal forward components were `(0, 0)`
+ * (`-m[8] = 0`, `-m[10] = 0`) and the run's turn loop silently froze at one
+ * constant heading error (`turnErrSeq` = -123.9 for all 24 iterations).
+ *
+ * How it happens: `_clipCameraAgainstWorld` clips the camera toward the
+ * player's head along the ideal offset, and `clipFinalTo` allows `t = 0`
+ * (`Math.max(0.0, hit.t - backoffT)`), which snaps the camera origin ONTO
+ * `(playerX, playerY, playerZ + 1.6)`. The follow lookAt is anchored at
+ * `(playerX, playerY, …)` too, so the camera→lookAt vector becomes purely
+ * vertical. Wedged-indoors (LIVE-01) and hard-clipped-against-a-wall are both
+ * ways to reach it.
+ *
+ * 0.5 m is chosen so the recovered basis still has a normalisable horizontal
+ * component (≥ ~0.12 against the largest possible ±4 m `LOOK_LIFT_DIST_M`
+ * vertical) without visibly swinging the view when the guard fires.
+ */
+export const MIN_LOOK_HORIZ_M = 0.5;
+
+/**
+ * Guard the follow camera's horizontal basis. Given the camera origin, the
+ * sought lookAt point, and the follow-yaw forward direction, return a lookAt
+ * whose horizontal offset from the origin is never degenerate.
+ *
+ * `fallback` is `{ x, y }` — normally `(sin followYaw, cos followYaw)`, which
+ * is a unit vector by construction and therefore the natural "last-good
+ * heading". `lastGood` is the caller's cached previous healthy direction, used
+ * only when `fallback` is itself unusable (NaN yaw). World AC north `(0, 1)`
+ * is the final backstop, so this function CANNOT return a zero basis.
+ *
+ * Returns `{ x, y, degenerate, dirX, dirY }` — `dirX/dirY` is the unit
+ * horizontal heading the caller should cache as its next `lastGood`.
+ * Pure — pinned by tests/camera_retail_math.test.cjs.
+ */
+export function guardLookHorizontal(
+  camX, camY, lookX, lookY, fallback, lastGood,
+) {
+  const dx = lookX - camX;
+  const dy = lookY - camY;
+  const horiz = Math.sqrt(dx * dx + dy * dy);
+  if (Number.isFinite(horiz) && horiz >= MIN_LOOK_HORIZ_M) {
+    return {
+      x: lookX, y: lookY, degenerate: false,
+      dirX: dx / horiz, dirY: dy / horiz,
+    };
+  }
+  // Degenerate (or non-finite): rebuild a heading from the first usable
+  // source. followYaw first, then the cached last-good, then AC +Y north.
+  const candidates = [
+    fallback,
+    // Preserve the (near-)degenerate direction's sign if it is at least
+    // finite and nonzero — a 1e-9 offset still says which way we were facing.
+    (Number.isFinite(horiz) && horiz > 0) ? { x: dx / horiz, y: dy / horiz } : null,
+    lastGood,
+    { x: 0, y: 1 },
+  ];
+  let dirX = 0, dirY = 1;
+  for (const c of candidates) {
+    if (!c) continue;
+    const cx = c.x, cy = c.y;
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+    const len = Math.sqrt(cx * cx + cy * cy);
+    if (!(len > 1e-6) || !Number.isFinite(len)) continue;
+    dirX = cx / len;
+    dirY = cy / len;
+    break;
+  }
+  const safeCamX = Number.isFinite(camX) ? camX : 0;
+  const safeCamY = Number.isFinite(camY) ? camY : 0;
+  return {
+    x: safeCamX + dirX * MIN_LOOK_HORIZ_M,
+    y: safeCamY + dirY * MIN_LOOK_HORIZ_M,
+    degenerate: true,
+    dirX, dirY,
+  };
+}
