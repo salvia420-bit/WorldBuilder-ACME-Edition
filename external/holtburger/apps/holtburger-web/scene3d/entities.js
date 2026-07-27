@@ -736,6 +736,7 @@ import {
   materialCanCastShadow,
   SURFACE_TYPE,
   applySurfaceRenderState,
+  applyClipMapRenderState,
   applyRetailSinglePass,
   readSurfaceUnifiedFlag,
   readLuminousEmissiveMapFlag,
@@ -5185,9 +5186,12 @@ export class EntityManager {
         mat.userData = { ...(mat.userData || {}), __baseTranslucency: sfTranslucency };
       }
     } else if (isClipMap) {
-      // Binary alpha mask (foliage, fences) — alphaTest cuts alpha=0 frags.
-      mat.alphaTest = 0.5;
-      mat.transparent = false;
+      // Binary alpha mask. RND-08/33 (2026-07-27): retail's ref is per-format
+      // (paletted 100/255, DDS 200/255) and the arm also enables
+      // ONE/INVSRCALPHA blending — shared with the two materials.js ladders via
+      // `applyClipMapRenderState` so a recoloured clipmap surface (dolls,
+      // Virindi) decodes identically to its un-recoloured twin.
+      applyClipMapRenderState(mat, state.hasPalette);
     }
     if (sfLuminosity > 0) {
       // Self-illumination driven by the luminosity FLOAT (not the 0x40 bit).

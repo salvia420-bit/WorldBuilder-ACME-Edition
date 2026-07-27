@@ -151,7 +151,9 @@ export const ARCHETYPE_WARM_ON = _defaultOnFlag("archetypeWarm");
 // hits. Axes derive from the entities.js mint sites (raw UN-patched
 // MeshStandardMaterial — a SEPARATE program population from the "hb|"-keyed
 // world materials, which the world bakes already warm): {map, mapless} ×
-// {alphaTest 0/0.5 — the clipmap USE_ALPHATEST fork} × {transparent on/off},
+// {alphaTest 0/0.5 — the clipmap USE_ALPHATEST fork; the nonzero value is
+// REPRESENTATIVE only, since three carries the ref as a uniform and RND-08/33
+// made the live clipmap ref per-format 0.392/0.784} × {transparent on/off},
 // plus the two particle-unlit MeshBasic blends (additive/alpha). Skinning is
 // NOT an axis (rigid part rigs — zero SkinnedMesh), and the paletted
 // luminous path sets only the emissive COLOR (a uniform, not a define) on

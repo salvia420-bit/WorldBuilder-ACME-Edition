@@ -131,9 +131,9 @@ const factory = new Function(
   "materialBakeEnabled",
   "SuiteAssetSource",
   "loadTexchanManifest",
-  `${patched}\n; return { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag };`,
+  `${patched}\n; return { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag, readClipMapParityMode };`,
 );
-const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag } =
+const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag, readClipMapParityMode } =
   factory(
     THREE,
     () => false,
@@ -227,12 +227,36 @@ check(
   `alphaTest=${matTrans.alphaTest}`,
 );
 
-// (c) Base1ClipMap — binary alpha mask.
+// (c) Base1ClipMap — binary alpha mask. RND-08/33 (2026-07-27): retail's arm
+// (acclient.c:454497-454511) alpha-tests at a PER-FORMAT ref AND blends
+// ONE/INVSRCALPHA with z-writes on; `?clipMapParity` is default-ON. With no
+// `hasPalette` supplied the ref keeps its stale-pkg fallback of 0.5.
 const matClip = cache._materialFromFlags(SURFACE_TYPE.Base1ClipMap, stubTex);
 check(
-  "Base1ClipMap (0x4): alphaTest=0.5, transparent=false",
-  matClip.alphaTest === 0.5 && matClip.transparent === false,
-  `alphaTest=${matClip.alphaTest}, transparent=${matClip.transparent}`,
+  "Base1ClipMap (0x4): alphaTest=0.5 (no hasPalette), ONE/INVSRCALPHA blend, depthWrite on",
+  matClip.alphaTest === 0.5 &&
+    matClip.transparent === true &&
+    matClip.depthWrite === true &&
+    matClip.blending === THREE.CustomBlending &&
+    matClip.blendSrc === THREE.OneFactor &&
+    matClip.blendDst === THREE.OneMinusSrcAlphaFactor &&
+    matClip.blendEquation === THREE.AddEquation,
+  `alphaTest=${matClip.alphaTest}, transparent=${matClip.transparent}, src=${matClip.blendSrc}, dst=${matClip.blendDst}`,
+);
+// Per-format ref on the LEGACY (non-unified) ladder — the RND-08 fix proper.
+const matClipPal = cache._materialFromFlags(
+  SURFACE_TYPE.Base1ClipMap, stubTex, undefined, undefined, undefined, undefined,
+  { hasPalette: true },
+);
+const matClipDds = cache._materialFromFlags(
+  SURFACE_TYPE.Base1ClipMap, stubTex, undefined, undefined, undefined, undefined,
+  { hasPalette: false },
+);
+check(
+  "Base1ClipMap legacy ladder: paletted → 100/255, non-paletted → 200/255",
+  Math.abs(matClipPal.alphaTest - 100 / 255) < 1e-9 &&
+    Math.abs(matClipDds.alphaTest - 200 / 255) < 1e-9,
+  `paletted=${matClipPal.alphaTest}, dds=${matClipDds.alphaTest}`,
 );
 
 // (d) Self-illumination — driven by the luminosity FLOAT, not the 0x40
@@ -963,15 +987,18 @@ function decode6(flags, floats, hasPalette) {
 
 setSearch("?surfaceUnified=on&surfaceParityV2=on");
 
-// (6.3) (b2) ClipMap alpha-test ref.
+// (6.3) ClipMap alpha-test ref — RND-08/33 graduated this out of parityV2 onto
+// the default-ON `?clipMapParity`, and added retail's blend half. The ref
+// assertions stay here (still the same acclient.c truth); the mode/blend
+// coverage is stage 7 below.
 {
   const mPal = decode6(F.Base1ClipMap, undefined, true);
-  check("M3b ClipMap + hasPalette=true → alphaTest=100/255 (paletted s_256AlphaTestRef)",
-    Math.abs(mPal.alphaTest - 100 / 255) < 1e-9 && mPal.transparent === false,
+  check("ClipMap + hasPalette=true → alphaTest=100/255 (paletted s_256AlphaTestRef)",
+    Math.abs(mPal.alphaTest - 100 / 255) < 1e-9 && mPal.transparent === true,
     `alphaTest=${mPal.alphaTest}`);
   const mDds = decode6(F.Base1ClipMap, undefined, false);
-  check("M3b ClipMap + hasPalette=false → alphaTest=200/255 (DDS s_ddsAlphaTestRef)",
-    Math.abs(mDds.alphaTest - 200 / 255) < 1e-9 && mDds.transparent === false,
+  check("ClipMap + hasPalette=false → alphaTest=200/255 (DDS s_ddsAlphaTestRef)",
+    Math.abs(mDds.alphaTest - 200 / 255) < 1e-9 && mDds.transparent === true,
     `alphaTest=${mDds.alphaTest}`);
   const mStale = decode6(F.Base1ClipMap, undefined, undefined);
   check("M3b ClipMap + hasPalette=undefined (stale pkg) → legacy alphaTest=0.5",
@@ -1104,6 +1131,64 @@ setSearch("?surfaceUnified=on&surfaceParityV2=on");
   check("M3b idempotency: decoder twice + clone-re-apply → identical props",
     cmpTwice.ok && cmpClone.ok,
     cmpTwice.ok ? (cmpClone.ok ? "" : `clone prop ${cmpClone.k}`) : `twice prop ${cmpTwice.k}`);
+}
+
+setSearch("");
+
+// ---- Stage 7: RND-08/33 — ClipMap blend parity + `?clipMapParity` --------
+// Retail's ClipMap arm (acclient.c:454497-454511) sets `surfacea = 1` →
+// SetAlphaBlendEnable(1) with SetBlendFunction(BLEND_ONE(2),
+// BLEND_INVSRCALPHA(6), BLENDOP_ADD) and leaves z-writes ON (the depth arg is
+// `singlePassDetailinga || !blendEnable`, and the arm sets alpha-test-enable=1).
+// NOTE 2 is BLEND_ONE, not SRCALPHA (enum acclient.h:5193-5211) — premultiplied
+// "over", which is a no-op for the alpha=255 interior.
+{
+  setSearch("");
+  check("no flag → readClipMapParityMode() 'full' (DEFAULT ON)",
+    readClipMapParityMode() === "full", `got=${readClipMapParityMode()}`);
+  setSearch("?clipMapParity=off");
+  check("?clipMapParity=off → 'legacy'",
+    readClipMapParityMode() === "legacy", `got=${readClipMapParityMode()}`);
+  setSearch("?clipMapParity=ref");
+  check("?clipMapParity=ref → 'ref'",
+    readClipMapParityMode() === "ref", `got=${readClipMapParityMode()}`);
+
+  // full (default): per-format ref + ONE/INVSRCALPHA + depthWrite on.
+  setSearch("");
+  const mFull = decode6(F.Base1ClipMap, undefined, true);
+  check("clipMapParity full: ONE/INVSRCALPHA blend, transparent, depthWrite ON",
+    mFull.blending === THREE.CustomBlending &&
+      mFull.blendSrc === THREE.OneFactor &&
+      mFull.blendDst === THREE.OneMinusSrcAlphaFactor &&
+      mFull.blendEquation === THREE.AddEquation &&
+      mFull.transparent === true && mFull.depthWrite === true &&
+      Math.abs(mFull.alphaTest - 100 / 255) < 1e-9,
+    `blending=${mFull.blending}, src=${mFull.blendSrc}, dst=${mFull.blendDst}, depthWrite=${mFull.depthWrite}`);
+
+  // ref: retail ref WITHOUT the blend (the A/B middle arm).
+  setSearch("?clipMapParity=ref");
+  const mRef = decode6(F.Base1ClipMap, undefined, false);
+  check("clipMapParity ref: 200/255 ref, NO blend (transparent=false)",
+    Math.abs(mRef.alphaTest - 200 / 255) < 1e-9 &&
+      mRef.transparent === false && mRef.blending === THREE.NormalBlending,
+    `alphaTest=${mRef.alphaTest}, transparent=${mRef.transparent}, blending=${mRef.blending}`);
+
+  // legacy: the exact pre-RND-08 state, even with hasPalette present.
+  setSearch("?clipMapParity=off");
+  const mLegacy = decode6(F.Base1ClipMap, undefined, true);
+  check("clipMapParity off: exact pre-RND-08 state (0.5, opaque, NormalBlending)",
+    mLegacy.alphaTest === 0.5 && mLegacy.transparent === false &&
+      mLegacy.blending === THREE.NormalBlending,
+    `alphaTest=${mLegacy.alphaTest}, transparent=${mLegacy.transparent}`);
+
+  // Translucent still WINS over ClipMap in both ladders (retail resets the
+  // clipmap state at :454513-454522), so the blend must not leak into it.
+  setSearch("");
+  const mCT = decode6(F.Base1ClipMap | F.Translucent, undefined, true);
+  check("ClipMap+Translucent: Translucent branch wins (no clipmap blend/test)",
+    mCT.alphaTest === 0 && mCT.blending === THREE.NormalBlending &&
+      mCT.transparent === true && mCT.depthWrite === false,
+    `alphaTest=${mCT.alphaTest}, blending=${mCT.blending}`);
 }
 
 setSearch("");

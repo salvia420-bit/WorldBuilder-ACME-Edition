@@ -15,7 +15,10 @@
 //   `external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs`):
 //     - Base1Solid    = 0x1
 //     - Base1Image    = 0x2
-//     - Base1ClipMap  = 0x4   → alphaTest = 0.5  (binary alpha mask)
+//     - Base1ClipMap  = 0x4   → binary alpha mask: alphaTest = 100/255 when the
+//                               source texture is paletted else 200/255, plus
+//                               ONE/INVSRCALPHA blend (RND-08/33; see
+//                               `applyClipMapRenderState`)
 //     - Translucent   = 0x10  → transparent + depthWrite = false
 //     - Diffuse       = 0x20  → matte (no specular highlight)
 //     - Luminous      = 0x40  → emissive map + colour
@@ -1285,11 +1288,12 @@ export function applySurfaceRenderState(mat, state, opts) {
   const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
   const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
   // === A10-M3b (2026-06-12) — `?surfaceParityV2=on` parity details =========
-  // Default OFF. The three sub-behaviours (ClipMap alpha-test ref 100/200,
-  // additive fog exemption, true InvAlpha blend) live ONLY inside this
-  // decoder, which is itself only reached when `?surfaceUnified=on` — so
-  // parityV2 is inert without surfaceUnified (documented in url-flags.md;
-  // deliberately no cross-flag enforcement).
+  // Default OFF. The remaining two sub-behaviours (additive fog exemption,
+  // true InvAlpha blend) live ONLY inside this decoder, which is itself only
+  // reached when `?surfaceUnified=on` — so parityV2 is inert without
+  // surfaceUnified (documented in url-flags.md; deliberately no cross-flag
+  // enforcement). The third (ClipMap alpha-test ref 100/200) graduated to the
+  // default-ON `?clipMapParity` in RND-08/33 and is no longer gated here.
   const parityV2 = readSurfaceParityV2Flag();
   // === FIXUP A10-M1 (2026-06-11) — float-driven lum/diffuse are BIT-INDEPENDENT.
   // The blend-state ladder below IS flag-driven, but luminosity-emissive and
@@ -1356,23 +1360,13 @@ export function applySurfaceRenderState(mat, state, opts) {
       mat.userData = { ...(mat.userData || {}), __baseTranslucency: sfTranslucency };
     }
   } else if (isClipMap) {
-    // Binary alpha mask (foliage, fences) — alphaTest cuts alpha=0 frags.
-    // A10-M3b (b2) — under `?surfaceParityV2=on`, use the retail per-texture
-    // alpha-test ref (acclient.c:454499-454511): paletted texture
-    // (curr_texture->m_pPalette non-null, acclient.h:31982) → s_256AlphaTestRef
-    // = 100; DDS / solid / no-texture → s_ddsAlphaTestRef = 200 (constants
-    // acclient.c:45764-45765), compared ALPHATESTFUNC_GREATEREQUAL
-    // (acclient.c:454546). three.js discards `a < alphaTest`, so `ref/255`
-    // preserves the >=-with-equality boundary exactly. FAIL-SOFT (load-bearing):
-    // `state.hasPalette` must be strictly boolean — `undefined` (stale pkg
-    // without the M3a wasm getter, or an unmigrated caller) keeps legacy 0.5
-    // so flipping the flag on a stale pkg can't silently shift foliage to a
-    // wrong 0.784-everywhere.
-    mat.alphaTest =
-      parityV2 && typeof state.hasPalette === "boolean"
-        ? (state.hasPalette ? 100 / 255 : 200 / 255)
-        : 0.5;
-    mat.transparent = false;
+    // Binary alpha mask (foliage, fences). RND-08/33 (2026-07-27): the
+    // per-format alpha-test ref GRADUATED out of `?surfaceParityV2` — it, and
+    // retail's `SetAlphaBlendEnable(1)` + ONE/INVSRCALPHA blend, now ship
+    // default-ON through the shared helper (see `applyClipMapRenderState` for
+    // the acclient.c anchors and the census). parityV2 keeps only (b1) the
+    // additive fog exemption and (b3) the true INVALPHA blend.
+    applyClipMapRenderState(mat, state.hasPalette);
   }
   // A10-M3b (b1) — additive surfaces are exempt from fog (retail
   // acclient.c:454551-454553: ADDITIVE 0x10000 → SetFFFogAlphaDisabled(1),
@@ -1563,6 +1557,89 @@ export function readSurfaceParityV2Flag() {
   } catch (_) {
     return false;
   }
+}
+
+// === RND-08/33 (2026-07-27) — ClipMap alpha-test ref + blend ===============
+// Retail's ClipMap arm in `D3DPolyRender::SetSurface` (acclient.c:454497-454511)
+// does THREE things the legacy ladder collapsed into `alphaTest = 0.5,
+// transparent = false`:
+//
+//  1. PER-FORMAT alpha-test ref. `if (!curr_texture_is_set || (v12 =
+//     s_256AlphaTestRef, !curr_texture->m_pPalette)) v12 = s_ddsAlphaTestRef;`
+//     — a PALETTED texture (`ImgTex::m_pPalette` non-null ⇔ P8/Index16) takes
+//     `s_256AlphaTestRef = 100`, everything else (DXT/uncompressed/no texture)
+//     takes `s_ddsAlphaTestRef = 200` (constants acclient.c:45764-45765).
+//     Compared `ALPHATESTFUNC_GREATEREQUAL` (:454546); three.js discards
+//     `a < alphaTest`, so `ref/255` reproduces the >=-with-equality boundary
+//     exactly. 0.5 was wrong for BOTH classes.
+//  2. ALPHA BLENDING IS ON: `surfacea = 1` → `SetAlphaBlendEnable(1)` (:454548)
+//     with `SetBlendFunction(v9, v10, BLENDOP_ADD)` (:454547) where the arm sets
+//     `v9 = 2, v10 = 6` when no earlier bit already enabled blending. Per
+//     `enum BlendMode` (acclient.h:5193-5211) 2 is **BLEND_ONE**, 6 is
+//     BLEND_INVSRCALPHA — i.e. premultiplied-alpha "over", NOT SRCALPHA/
+//     INVSRCALPHA. Identical to opaque for the alpha=255 interior; only the
+//     bilinear-filtered edge texels blend.
+//  3. DEPTH WRITES STAY ON. `SetDepthBufferMode(zfunc, curr_texturea)` (:454550)
+//     takes `curr_texturea = singlePassDetailinga || !v11` (:454541) and the
+//     ClipMap arm sets alpha-test-enable (`singlePassDetailinga`) to 1.
+//
+// Census (2026-07-27, `client_portal.dat`, 6152 surfaces): 721 carry
+// Base1ClipMap — 518 paletted (all PFID_INDEX16) → 0.392, 203 non-paletted
+// (DXT5 97, A8R8G8B8 71, DXT1 27, DXT3 5, A4R4G4B4 2, R8G8B8 1) → 0.784.
+//
+// SORTING IMPLICATION of `transparent = true`: three.js moves these draws into
+// the transparent list (rendered after opaque, painter-sorted). Correctness is
+// unaffected because `depthWrite` stays on and the surviving texels are ~opaque,
+// but per-object sorting is now paid; `static_atlas.js` therefore keeps
+// `sortObjects = false` for alpha-tested buckets.
+export const CLIPMAP_ALPHA_REF_PALETTED = 100 / 255; // s_256AlphaTestRef
+export const CLIPMAP_ALPHA_REF_DDS = 200 / 255;      // s_ddsAlphaTestRef
+export const CLIPMAP_ALPHA_REF_LEGACY = 0.5;         // pre-RND-08 hardcode
+
+// `?clipMapParity` — DEFAULT ON ("full"). `=off` restores the pre-RND-08 legacy
+// state (ref 0.5, no blend) and `=ref` takes the per-format ref WITHOUT the
+// blend, so the 1070 A/B can separate the two halves. NOT memoized: the ESM
+// harness re-stubs `globalThis.window` per case (same reason as
+// `readSurfaceParityV2Flag`).
+export function readClipMapParityMode() {
+  try {
+    if (typeof window === "undefined" || !window.location) return "full";
+    const v = new URLSearchParams(window.location.search).get("clipMapParity");
+    if (typeof v !== "string") return "full";
+    const lv = v.trim().toLowerCase();
+    if (lv === "off" || lv === "0" || lv === "false" || lv === "no") return "legacy";
+    if (lv === "ref") return "ref";
+    return "full";
+  } catch (_) {
+    return "full";
+  }
+}
+
+/**
+ * Write retail's ClipMap render state onto `target` — either a live material or
+ * the plain `opts` bag a `MeshStandardMaterial` is about to be constructed from
+ * (both take the same property names). `hasPalette` is the M3a
+ * `SurfacePixels.hasPalette` boolean; STRICT boolean-or-undefined, because an
+ * older pkg without the wasm getter must fall back to the legacy 0.5 ref rather
+ * than silently pin every clipmap at the wrong 0.784.
+ */
+export function applyClipMapRenderState(target, hasPalette) {
+  if (!target) return;
+  const mode = readClipMapParityMode();
+  target.alphaTest =
+    mode !== "legacy" && typeof hasPalette === "boolean"
+      ? (hasPalette ? CLIPMAP_ALPHA_REF_PALETTED : CLIPMAP_ALPHA_REF_DDS)
+      : CLIPMAP_ALPHA_REF_LEGACY;
+  if (mode !== "full") {
+    target.transparent = false;
+    return;
+  }
+  target.blending = THREE.CustomBlending;
+  target.blendSrc = THREE.OneFactor;              // BLEND_ONE (2)
+  target.blendDst = THREE.OneMinusSrcAlphaFactor; // BLEND_INVSRCALPHA (6)
+  target.blendEquation = THREE.AddEquation;       // BLENDOP_ADD
+  target.transparent = true;
+  target.depthWrite = true; // retail keeps z-writes on for the alpha-tested arm
 }
 
 // === 2026-06-20 — `?particleUnlit` (DEFAULT ON) ============================
@@ -3304,9 +3381,11 @@ export class MaterialCache {
    *   - Translucent (0x10): `transparent = true, depthWrite = false`.
    *     Wins over Base1ClipMap when both bits are set (true alpha blend
    *     supersedes binary alpha mask).
-   *   - Base1ClipMap (0x4): `alphaTest = 0.5, transparent = false`.
-   *     Binary alpha mask — the alpha channel cuts holes (foliage,
-   *     fence cutouts) without depth-sort issues.
+   *   - Base1ClipMap (0x4): binary alpha mask — the alpha channel cuts
+   *     holes (foliage, fence cutouts). `alphaTest` is the retail
+   *     per-format ref (paletted 100/255, else 200/255) and the arm
+   *     blends ONE/INVSRCALPHA with `depthWrite = true`
+   *     (`applyClipMapRenderState`, acclient.c:454497-454511).
    *   - Alpha (0x100): texture-alpha blend (SRCALPHA/INVSRCALPHA),
    *     `transparent = true, depthWrite = false`; opacity comes from the
    *     texture's own alpha channel. acclient.c SetSurface @454470.
@@ -3521,10 +3600,13 @@ export class MaterialCache {
         opts.opacity = Math.max(0, 1 - sfTranslucency);
       }
     } else if (!useUnifiedDecoder && isClipMap) {
-      // Binary alpha mask (foliage, fences). alphaTest cuts the
-      // alpha=0 fragments at rasterise time → no transparency sort.
-      opts.alphaTest = 0.5;
-      opts.transparent = false;
+      // Binary alpha mask (foliage, fences). RND-08/33 (2026-07-27): retail's
+      // ref is per-format (paletted 100/255, DDS 200/255) and the arm ALSO
+      // enables ONE/INVSRCALPHA blending with z-writes on — see
+      // `applyClipMapRenderState` for the acclient.c anchors, the census and
+      // the `?clipMapParity=off|ref` escapes. `opts` is the pre-construction
+      // bag; the helper writes the same property names a material takes.
+      applyClipMapRenderState(opts, surfaceFloats?.hasPalette);
     }
     if (!useUnifiedDecoder && hasLum) {
       // Self-illumination, driven by the per-surface luminosity FLOAT

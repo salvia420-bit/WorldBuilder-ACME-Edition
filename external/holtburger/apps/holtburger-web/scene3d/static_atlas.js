@@ -83,18 +83,59 @@ function buildDiffuseArray(textures, w, h, layerCount) {
   return arr;
 }
 
+// === RND-08/33 (2026-07-27) — buckets must carry the EXACT source render state.
+// The bucket key used to collapse the members' alpha-test ref to `>0 ? 0.5 : 0`
+// and to ignore blending entirely. That was survivable while every ClipMap
+// material was `alphaTest = 0.5, transparent = false`; it is not now that
+// ClipMap carries retail's per-format ref (100/255 paletted, 200/255 DDS) plus a
+// CustomBlending ONE/INVSRCALPHA state (materials.js `applyClipMapRenderState`,
+// acclient.c:454497-454511) — the collapse would silently re-cut every atlased
+// foliage prop at 0.5 and drop the blend. `_stateKeyOf` therefore encodes the
+// ref verbatim and the blend factors, and `_applyStateKey` replays them onto the
+// bucket material. `alphaTest` is a uniform (not a define) in three, so the
+// distinct refs still share one compiled program.
+function _stateKeyOf(mat) {
+  const at = +(mat.alphaTest || 0);
+  const dw = mat.depthWrite === false ? 0 : 1;
+  const b = mat.blending ?? THREE.NormalBlending;
+  const blend =
+    b === THREE.CustomBlending
+      ? `c${mat.blendSrc}.${mat.blendDst}.${mat.blendEquation}`
+      : `b${b}`;
+  // full precision, not toFixed — the key must round-trip the ref EXACTLY
+  // (100/255 and 200/255 are non-terminating) so the bucket material's cutoff
+  // is bit-identical to its members'.
+  return `${mat.transparent ? 1 : 0}|${String(at)}|${dw}|${blend}`;
+}
+
+function _applyStateKey(m, stateKey) {
+  const [tr, at, dw, blend] = String(stateKey).split("|");
+  m.transparent = tr === "1";
+  m.alphaTest = Number(at) || 0;
+  m.depthWrite = dw !== "0";
+  if (blend && blend[0] === "c") {
+    const [s, d, e] = blend.slice(1).split(".").map(Number);
+    m.blending = THREE.CustomBlending;
+    m.blendSrc = s;
+    m.blendDst = d;
+    m.blendEquation = e;
+  } else {
+    m.blending = Number(String(blend).slice(1));
+  }
+  return m;
+}
+
 // MeshStandardMaterial whose `map` is replaced by a sampler2DArray indexed per
 // vertex (aLayer). Shares ONE compiled program across buckets (customProgramCacheKey)
 // so the array variant compiles once; the array uniform differs per material.
-function makeArrayMaterial(diffArray, transparent, alphaTest) {
+function makeArrayMaterial(diffArray, stateKey) {
   const m = new THREE.MeshStandardMaterial({
     map: dummyMap(),
-    transparent: !!transparent,
-    alphaTest: alphaTest || 0,
     side: THREE.DoubleSide,
     roughness: 1.0,
     metalness: 0.0,
   });
+  _applyStateKey(m, stateKey);
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uDiffuseArray = { value: diffArray };
     shader.vertexShader = shader.vertexShader
@@ -169,7 +210,7 @@ export function consolidateSingletonsViaTexArray(nodes) {
     const w = img.width | 0, h = img.height | 0;
     if (!w || !h) { passthrough.push(n); continue; }
     const lb = (n.userData?.landblockId >>> 0) || 0;
-    const key = `${lb}|${w}x${h}|${mat.transparent ? 1 : 0}|${(mat.alphaTest || 0) > 0 ? 1 : 0}`;
+    const key = `${lb}|${w}x${h}|${_stateKeyOf(mat)}`;
     let a = buckets.get(key);
     if (!a) { a = []; buckets.set(key, a); }
     a.push(n);
@@ -180,8 +221,7 @@ export function consolidateSingletonsViaTexArray(nodes) {
       const parts = key.split("|");
       const lb = (Number(parts[0]) >>> 0);
       const [w, h] = parts[1].split("x").map(Number);
-      const transparent = parts[2] === "1";
-      const alphaTest = parts[3] === "1" ? 0.5 : 0;
+      const stateKey = parts.slice(2).join("|");
       // unique textures -> layer index
       const layerOf = new Map();
       const texList = [];
@@ -205,7 +245,7 @@ export function consolidateSingletonsViaTexArray(nodes) {
       for (const g of geos) g.dispose?.();
       if (!merged) { passthrough.push(...consumed); continue; }
       const diffArray = buildDiffuseArray(texList, w, h);
-      const mat = makeArrayMaterial(diffArray, transparent, alphaTest);
+      const mat = makeArrayMaterial(diffArray, stateKey);
       const mesh = new THREE.Mesh(merged, mat);
       mesh.castShadow = !!consumed[0].castShadow;
       mesh.receiveShadow = !!consumed[0].receiveShadow;
@@ -268,7 +308,7 @@ const _ATLAS_OPTIMIZE_FRAC = 0.30; // compact a bucket once >30% of its buffer i
 
 // Lazy module state — allocated only when the cross-LB path actually runs (i.e.
 // only under ?statAtlas=on). Flag-off, nothing here is ever touched.
-const _buckets = new Map();        // bucketKey -> { bm, w, h, transparent, alphaTest }
+const _buckets = new Map();        // bucketKey -> { bm, w, h, stateKey }
 const _lbMembership = new Map();   // lbKey -> Array<{ bucketKey, gid, texUuid }>
 const _atlasBakedLbs = new Set();  // lbKeys whose singletons are live in the buckets
 
@@ -283,7 +323,7 @@ if (typeof window !== "undefined") {
     atlasBakedLbs: _atlasBakedLbs.size,
     buckets: [..._buckets.entries()].map(([k, b]) => {
       const ud = (b.bm && b.bm.userData) || {};
-      return { key: k, w: b.w, h: b.h, transparent: b.transparent, nextLayer: ud.nextLayer ?? null,
+      return { key: k, w: b.w, h: b.h, stateKey: b.stateKey, nextLayer: ud.nextLayer ?? null,
         capacity: ud.capacity ?? null, layersUsed: ud.layerOf ? ud.layerOf.size : null,
         full: (ud.nextLayer != null && ud.capacity != null) ? ud.nextLayer >= ud.capacity : null };
     }),
@@ -295,8 +335,8 @@ function _lbKeyOfId(id) {
   return (((id >>> 0) & 0xffff0000) >>> 0);
 }
 
-function _bucketKeyFor(w, h, transparent, alphaTest) {
-  return `${w}x${h}|${transparent ? 1 : 0}|${alphaTest > 0 ? 1 : 0}`;
+function _bucketKeyFor(w, h, stateKey) {
+  return `${w}x${h}|${stateKey}`;
 }
 
 function _layerCapacityFor(w, h) {
@@ -312,16 +352,20 @@ export function hasAtlasLb(lbKey) {
   return _atlasBakedLbs.has((lbKey >>> 0));
 }
 
-function _getOrCreateBucket(bucketKey, w, h, transparent, alphaTest, scene3d) {
+function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d) {
   let b = _buckets.get(bucketKey);
   if (b) return b;
   const capacity = _layerCapacityFor(w, h);
   const diffArray = buildDiffuseArray([], w, h, capacity);
-  const material = makeArrayMaterial(diffArray, transparent, alphaTest);
+  const material = makeArrayMaterial(diffArray, stateKey);
   const bm = new THREE.BatchedMesh(_ATLAS_INIT_INST, _ATLAS_INIT_VERTS, _ATLAS_INIT_VERTS * 2, material);
   // OPAQUE: skip the per-frame depth sort of every instance (the CPU win we are
-  // here for). Transparent buckets keep the sort for correct blending order.
-  bm.sortObjects = !!transparent;
+  // here for). Transparent buckets keep the sort for correct blending order —
+  // EXCEPT alpha-tested ones (RND-08/33 made ClipMap `transparent = true`): the
+  // surviving texels are ~opaque and z-writes stay on, so their draw order is
+  // already independent and re-sorting every foliage instance per frame would
+  // hand back the CPU win for nothing.
+  bm.sortObjects = material.transparent === true && !(material.alphaTest > 0);
   bm.perObjectFrustumCulled = true; // cheap per-instance sphere cull trims the multidraw
   bm.frustumCulled = false;         // the whole batch spans the ring; never cull as one
   bm.castShadow = true;
@@ -343,7 +387,7 @@ function _getOrCreateBucket(bucketKey, w, h, transparent, alphaTest, scene3d) {
     gidVerts: new Map(), // gid -> vertexCount (to account dead space on delete)
   };
   bm.name = `stat-atlas-x-${bucketKey}`;
-  b = { bm, w, h, transparent, alphaTest };
+  b = { bm, w, h, stateKey };
   _buckets.set(bucketKey, b);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
@@ -422,10 +466,9 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       }
       const w = img.width | 0, h = img.height | 0;
       if (!w || !h) { _atlasStats.ptNoWH++; passthrough.push(n); continue; }
-      const transparent = !!mat.transparent;
-      const alphaTest = (mat.alphaTest || 0) > 0 ? 0.5 : 0;
-      const bucketKey = _bucketKeyFor(w, h, transparent, alphaTest);
-      const b = _getOrCreateBucket(bucketKey, w, h, transparent, alphaTest, scene3d);
+      const stateKey = _stateKeyOf(mat);
+      const bucketKey = _bucketKeyFor(w, h, stateKey);
+      const b = _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d);
       const bm = b.bm;
       const ud = bm.userData;
       const uuid = tex.uuid;
