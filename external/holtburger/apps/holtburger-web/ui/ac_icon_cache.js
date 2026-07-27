@@ -31,9 +31,11 @@
 //
 // Retail is the parity target and it got this right: the icon resource pool
 // (type 12 `DB_TYPE_RENDERSURFACE`) is registered with `m_nIdealSize = 100` /
-// `m_nMaxSize = 400` and is hard-capped AT INSERTION in `FreelistAdd`
-// (`acclient.c:83194-83200`). So retail's steady-state icon ceiling is 400
-// entries. Ours is now the same number, LRU-evicted at insertion.
+// `m_nMaxSize = 400` (`acclient.c:92388-92391`) and that cap is enforced AT
+// INSERTION — `DBOCache::FreelistAdd` appends, then evicts the oldest while
+// `m_nFree > m_nMaxSize` (`acclient.c:83193-83201`). So retail's steady-state
+// icon ceiling is 400 entries. Ours is the same number, LRU-evicted at
+// insertion.
 //
 // This is also the third occurrence in this codebase of
 // latch-a-transient-failure-as-truth. `src/lib.rs:8901-8925` already learned
@@ -74,7 +76,7 @@ let iconEvictions = 0;
 let iconRetries = 0;
 
 /** Retail parity: `m_nMaxSize = 400` for `DB_TYPE_RENDERSURFACE`
- *  (`acclient.c:83194-83200`). Overridable via `?iconCacheMax=N` — the only
+ *  (`acclient.c:92388-92391`). Overridable via `?iconCacheMax=N` — the only
  *  reason to raise it is `?preloadIcons=1`, which walks 4,224 ids and would
  *  otherwise leave only the last 400 resident. `?iconCacheMax=0` disables the
  *  cap (the pre-P0.4 behaviour, kept purely as an A/B escape). */

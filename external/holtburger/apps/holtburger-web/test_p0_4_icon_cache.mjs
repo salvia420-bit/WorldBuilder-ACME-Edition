@@ -4,7 +4,7 @@
 // (docs/acclient-deep-dive-mining/wave3-G-leaks-indextooling.md §LEAK-03):
 //
 //   1. The success cache is CAPPED at insertion (retail `FreelistAdd`
-//      parity, `acclient.c:83194-83200`, `m_nMaxSize = 400`) and evicts
+//      parity, `m_nMaxSize = 400`, `acclient.c:92388-92391`) and evicts
 //      least-recently-used, so the ~30 MB unbounded ceiling is gone.
 //   2. A failure is NEVER latched permanently — it goes into a separate
 //      TTL'd negative map, so a later request genuinely retries. This is the
