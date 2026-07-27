@@ -358,3 +358,478 @@ stale — `SurfacePixels.hasPalette` is live in shipped pkg.
   BSP arm live).
 - `collisionResidencyDiag` confirmed live in probe output (staticAabbs 234,
   cell physics 123/123/123).
+
+---
+
+## camera.js flat prediction speed — FIXED, but the premise's *impact* is refuted: the code is DEAD (2026-07-27)
+
+Handoff task 5. Cited `camera.js:1772`, `index.html:5882`, `lib.rs:36697-36707`.
+
+**Citations re-opened** (two of three were off): `scene3d/camera.js:1772` correct
+(`const RUN_SPEED = consts.FALLBACK_RUN_RATE_SCALAR ?? 4.5;`);
+`index.html:5882` correct (`const FALLBACK_RUN_RATE_SCALAR = 4.5;  // m/s`);
+the Rust retirement is **`src/lib.rs:36846-36903`**, not `:36697-36707`.
+
+**What Rust actually did** — it did *not* neutralize a scalar to 1.0 and stop
+there, it **split** the conflated 4.5 into its two real factors:
+`FALLBACK_RUN_RATE_SCALAR: f32 = 1.0` (`lib.rs:36856`, retail `my_run_rate`
+initial) and the 4.5 **m/s** kept as `base_run_forward_velocity.y` in
+`fallback_self_movement_capabilities()` (`lib.rs:36885-36889`). Run speed is
+their product — `SelfMovementCapabilities::resolved_manual_run_speed()`
+(`crates/holtburger-world/src/state/self_movement.rs:104-107`), consumed by
+`forward_axis_speed` (`movement/common.rs:841`).
+
+**The bug is real.** `RUN_SPEED = FALLBACK_RUN_RATE_SCALAR` fed a dimensionless
+multiplier into an m/s slot; had anyone synced the JS constant to Rust's
+retired 1.0 the camera would have predicted at 1 m/s.
+
+**But it can never fire.** `_advancePrediction` was retired from the runtime on
+2026-06-29 — `tick()` (`camera.js:981-995`) calls only `_smoothToIntegrator`,
+and the banner at `camera.js:1567-1578` says "DO NOT re-wire them into the
+runtime". Only the `.mjs` A/B harnesses still call it. The 2D sprite predictor
+it mirrors (`index.html:9604-9703`) is equally unreachable: **`entityMap` has
+zero `.set()` callers in `index.html`**, so `entityMap.get(guid)?.sprite` is
+always undefined. Both predictors are dead. Fix landed anyway (zero-risk,
+kills the cross-read trap of one name meaning 4.5 m/s in JS and 1.0
+dimensionless in Rust) — but **no live behaviour changed**, and the sawtooth /
+speed items in Tier 3 get no credit from it.
+
+**Changes** (JS only, no wasm rebuild, uncommitted):
+- `index.html` — `FALLBACK_RUN_RATE_SCALAR = 4.5 // m/s` renamed
+  `BASE_RUN_FORWARD_SPEED = 4.5 // m/s`; `window.__movementConstants` now
+  exports `BASE_RUN_FORWARD_SPEED` and **deliberately drops** the old key (a
+  stale service-worker-cached reader would otherwise multiply 4.5 × 4.5).
+- `scene3d/camera.js` — `RUN_SPEED = BASE_RUN_SPEED × runRateScalar`, the
+  scalar read from `SessionHandle.player_run_rate()` (confirmed present in the
+  shipped `pkg/`: `holtburger_web.js:10391`, `d.ts:4981`), feature-detected and
+  seeded to the same 1.0 Rust uses. Pre-stats this is byte-identical to the old
+  flat 4.5, so the `.mjs` harnesses' 4.5 m/s expectations still hold.
+- `index.html` 2D predictor — same bug, same fix: `speed = run ?
+  BASE_RUN_FORWARD_SPEED * playerRunRate() : WALK_FORWARD_SPEED`. The old line
+  used the bare `playerRunRate()` as m/s; that read ~4.5 when Rust's fallback
+  was 4.5 and silently became ~1.0 when Rust retired it — a latent 4× under-run
+  had the block been reachable.
+- Three `.mjs` mocks renamed to the new key (same value, same expectations).
+
+**Pre-existing breakage noticed, NOT touched:** `smoke_test.cjs:4885`'s
+`hasTickChain` regex still requires `_reconcilePrediction … _advancePrediction
+… _applyPredictionLerp` inside `tick()` — that chain was removed 2026-06-29, so
+the "Workstream B" smoke check has been failing since then and is asserting a
+contract the codebase deliberately reversed. `test_workstream_b_prediction.mjs`
+also fails to run at all (`Cannot use import statement outside a module` from
+its `new Function` shim) — verified pre-existing by stashing the edits.
+`fixtures/physics/probe-scenario.json:22,58` still describes
+`FALLBACK_RUN_RATE_SCALAR=4.5 m/s` with a stale line cite.
+
+---
+
+## RND-08/33 — ClipMap alpha parity LANDED (2026-07-27). Premise half-refuted: the blend is ONE/INVSRCALPHA, not SRCALPHA/INVSRCALPHA.
+
+Handoff task 4, the replacement for the RQ-08 flag flip (see §RQ-08 above).
+Cited `acclient.c:454497-454511`, `materials.js:3523-3527`, `static_atlas.js`,
+`url-flags.md:235`.
+
+**Citations re-opened.** `D3DPolyRender::SetSurface(CSurface*, bool, bool, bool)`
+starts at `acclient.c:454385` (not 454497); the ClipMap arm is
+`:454496-454511` and the state flush is `:454541-454550`. The legacy ladder is
+`materials.js:3523-3527` — correct. `static_atlas.js:426` — correct. A **third**
+legacy ClipMap site the plan did not name: `entities.js:5187-5191`
+(`_applyPalettedSurfaceRenderState`, the recoloured/paletted ladder), same
+hardcoded 0.5.
+
+**Decomp evidence** (`rg -a`, CRLF-safe; `enum BlendMode` = `acclient.h:5193`,
+`enum SurfaceType` = `acclient.h:5820`, `BASE1_CLIPMAP = 0x4`):
+
+```c
+  if ( Render::curr_surface_type & 4 && !overrideClipmap )
+  {
+    if ( !v11 )                       // no earlier bit already enabled blending
+    {
+      v9 = 2;                         // src = BLEND_ONE      (acclient.h:5196)
+      v10 = 6;                        // dst = BLEND_INVSRCALPHA (acclient.h:5200)
+    }
+    if ( !Render::curr_texture_is_set || (v12 = D3DPolyRender::s_256AlphaTestRef, !curr_texture->m_pPalette) )
+      v12 = D3DPolyRender::s_ddsAlphaTestRef;
+    v11 = 1;
+    testRef = v12;
+    surfacea = 1;                     // → SetAlphaBlendEnable(1)
+    singlePassDetailinga = 1;         // → SetAlphaTestEnable(1)
+  }
+  ...
+  curr_texturea = singlePassDetailinga || !v11;            // depth-WRITE enable
+  RenderDeviceD3D::SetAlphaTestEnable ((RenderDeviceD3D *)v4, singlePassDetailinga);
+  RenderDeviceD3D::SetAlphaTestRef    ((RenderDeviceD3D *)v4, testRef);
+  RenderDeviceD3D::SetAlphaTestFunction((RenderDeviceD3D *)v4, ALPHATESTFUNC_GREATEREQUAL);
+  RenderDeviceD3D::SetBlendFunction   ((RenderDeviceD3D *)v4, v9, v10, BLENDOP_ADD);
+  RenderDeviceD3D::SetAlphaBlendEnable((RenderDeviceD3D *)v4, surfacea);
+  RenderDeviceD3D::SetDepthBufferMode ((RenderDeviceD3D *)v4, v14, curr_texturea);
+```
+
+```c
+__int32 D3DPolyRender::s_256AlphaTestRef = 100;   // acclient.c:45764
+__int32 D3DPolyRender::s_ddsAlphaTestRef = 200;   // acclient.c:45765
+```
+
+**PREMISE REFUTED (the blend factors).** The task and `wave2-C` R52 both read
+"src/dst 2/6 = SRCALPHA/INVSRCALPHA". `enum BlendMode` (`acclient.h:5193-5211`)
+is **not** D3DBLEND: `BLEND_ZERO = 1, BLEND_ONE = 2, BLEND_SRCCOLOR = 3,
+BLEND_INVSRCCOLOR = 4, BLEND_SRCALPHA = 5, BLEND_INVSRCALPHA = 6`. So 2/6 is
+**ONE / INVSRCALPHA** — premultiplied-alpha "over", not the classic alpha blend.
+Cross-checked against the same function's ALPHA arm (`:454471`: `v9 = 5, v10 = 6`
+= SRCALPHA/INVSRCALPHA), which confirms 5 is SRCALPHA and confirms arg order is
+(src, dst). Consequence: for the alpha=255 interior the blend is a no-op
+(identical to opaque); only bilinear-filtered edge texels composite, and because
+the source colour is not premultiplied they read slightly BRIGHTER than a
+correct over — which is the retail look.
+
+**Depth writes stay ON** — `SetDepthBufferMode`'s write arg is
+`singlePassDetailinga || !v11`, and the ClipMap arm sets alpha-test-enable to 1.
+So retail's ClipMap is "blend-enabled but z-writing", not a sorted transparent.
+
+**hasPalette census** (2026-07-27, `~/ac_base_dats/client_portal.dat`, via
+WorldBuilder.Terminal `chorizite-list-dat-records` + `chorizite-parse-dat-record`
+over Surface → SurfaceTexture → highest-res RenderSurface):
+
+| | count |
+|---|---|
+| Surface (0x08) records total | 6,152 |
+| carrying `Base1ClipMap` (0x4) | **721** |
+| … paletted (`PFID_INDEX16`) → ref 100/255 = 0.392 | **518** |
+| … non-paletted → ref 200/255 = 0.784 | **203** |
+
+Non-paletted breakdown: DXT5 97, A8R8G8B8 71, DXT1 27, DXT3 5, A4R4G4B4 2,
+R8G8B8 1. Zero ClipMap surfaces have `origTextureId == 0`, and every chain
+resolved (673 unique SurfaceTextures → 671 unique textures, 0 parse failures).
+So the shipped 0.5 was wrong for **both** classes — too tight for the 518
+paletted majority (foliage/fences cut MORE than retail) and far too loose for
+the 203 DDS ones. By flag combination: 640 pure ClipMap, 27 +Translucent,
+22 +Alpha, 19 +Alpha+Additive, 12 +Additive, 1 +Translucent+Alpha+Additive.
+
+**`SurfacePixels.hasPalette` is LIVE** — `src/lib.rs:8824-8825`
+(`#[wasm_bindgen(getter, js_name = hasPalette)]`), present in the shipped
+`pkg/holtburger_web.d.ts:6681` and `pkg/holtburger_web.js:13400`. The
+`url-flags.md` claim that this half was "inert until the M3a wasm rebuild lands"
+was stale and has been corrected.
+
+**Changes** (JS only, no wasm rebuild, uncommitted):
+- `scene3d/materials.js` — new shared `applyClipMapRenderState(target, hasPalette)`
+  + `readClipMapParityMode()` (`?clipMapParity`, DEFAULT-ON; `=ref` takes the ref
+    without the blend, `=off` restores the exact pre-RND-08 state). Writes
+    `alphaTest` = per-format ref, `CustomBlending` One/OneMinusSrcAlpha/Add,
+    `transparent = true`, `depthWrite = true`. `hasPalette` keeps its strict
+    boolean-or-undefined fail-soft (stale pkg → 0.5).
+- `scene3d/materials.js` — both ladders now call it: the legacy `_materialFromFlags`
+  arm (was `alphaTest = 0.5; transparent = false`) and the unified
+  `applySurfaceRenderState` arm. The ref thereby **graduated out of
+  `?surfaceParityV2`**, which now guards only (b1) additive fog exemption and
+  (b3) true INVALPHA blend.
+- `scene3d/entities.js` — the third ladder (`_applyPalettedSurfaceRenderState`)
+  calls the same helper, so a recoloured clipmap body (dolls, Virindi) decodes
+  identically to its un-recoloured twin.
+- `scene3d/static_atlas.js` — the bucket key collapsed the members' state to
+  `alphaTest > 0 ? 0.5 : 0` and ignored blending, which would have silently
+  re-cut every atlased foliage prop at 0.5. Replaced with `_stateKeyOf` /
+  `_applyStateKey` (transparent · exact ref · depthWrite · blend factors), in
+  both the per-LB and cross-LB paths. Cross-LB buckets keep
+  `sortObjects = false` when `alphaTest > 0` so the new `transparent = true`
+  does not buy a per-frame instance sort for foliage.
+- `scene3d/bake_prewarm.js` — comment only (its `alphaTest ∈ {0, 0.5}` axis still
+  covers the USE_ALPHATEST fork; three carries the ref as a uniform).
+- `docs/url-flags.md` — stale "inert until M3a" note replaced with the graduation
+  note; new `clipMapParity` row.
+- `test_f7_8_surface_bitfield.mjs` — Stage 3 + 6.3 updated to the new contract,
+  new Stage 7 (mode reader, full/ref/legacy arms, blend factors, depthWrite,
+  Translucent-still-wins). **79/79 green**, including the untouched A10-M3b
+  regression lens (210/210) and the three-path equality checks.
+
+**Sorting implication (accepted).** `transparent = true` moves clipmap draws into
+three's transparent list — rendered after opaque and painter-sorted. Correctness
+is unaffected (z-writes stay on; surviving texels are ~opaque), and the atlas
+opt-out above removes the only measurable cost found by inspection. A second
+consequence: `applyRetailSinglePass` triggers on `transparent && DoubleSide`, so
+clipmap surfaces now also take retail's one-draw-per-surface path — which is the
+retail behaviour, not a regression.
+
+**Residual, NOT fixed (new finding, needs its own eye-test).** Retail applies the
+ClipMap alpha test *on top of* the blend ladder, so `ClipMap+Alpha` (22 surfaces)
+and `ClipMap+Additive` (31 incl. +Alpha) also get the alpha test **and keep
+depth writes**, whereas our `else if` ladder lets the Alpha/Additive arms swallow
+them (no alpha test, `depthWrite = false`). `ClipMap+Translucent` (27) is
+correct as-is: retail's Translucent block (`:454512-454522`) fires when
+`singlePassDetailinga == 1` and resets to SRCALPHA/INVSRCALPHA with the alpha
+test **off**, which is exactly what our Translucent branch does. Adding the test
+to the additive arms would clip 31 spell-glow surfaces at 0.392/0.784 — a visible
+change that should be measured, not assumed.
+
+**1070 eye-test owed** (queue with handoff task 3b): foliage/fence cutout fringe,
+three arms — default (ref+blend) vs `?clipMapParity=ref` vs `?clipMapParity=off`.
+Look for (a) the 518 paletted clipmaps cutting LOOSER than before (0.392 < 0.5 —
+more fringe kept, e.g. leaf silhouettes fuller), (b) the 203 DDS ones cutting
+TIGHTER (0.784), (c) no dark/bright halo box around foliage from the ONE/INVSRCALPHA
+edge composite, (d) no draw-order artefacts now that foliage is in the transparent
+pass, (e) `window.__atlasStats()` still bucketing (new `stateKey` field) and fps
+not regressing from the atlas change.
+
+---
+
+## COL-10 — DECIDED, FIXED, LIVE-VALIDATED (2026-07-27). Option 1: the BODY adopts retail's `WalkAnimSpeed` 3.1199999 m/s.
+
+**Decision (user).** The walk fork opened in §OQ-3 resolves in favour of the
+retail/ACE model: the player body walks at the `WalkAnimSpeed` constant, and the
+DAT's authored walk-cycle base (2.6017 m/s) is demoted to what it always was —
+the *animation's* authored speed, i.e. the `cycleBaseSpeed` denominator of the JS
+`cycleTimeScale`.
+
+**Decomp anchor.** `~/ac-headers/acclient.c:343539` `CMotionInterp::get_state_velocity`;
+walk arm at `:343561`:
+
+```
+if ( v5 == 1157627909 )        // 0x45000005 WalkForward
+  v6 = 3.1199999 * this->interpreted_state.forward_speed;
+else if ( v5 == 1140850695 )   // 0x44000007 RunForward
+  v6 = 4.0 * this->interpreted_state.forward_speed;
+```
+
+ACE mirrors it (`MotionInterp.cs:684-685`), so adopting 3.1199999 REMOVES
+client/server skew rather than adding it. RUN needed no change: the authored run
+cycle base IS 4.000, the same number retail hardcodes (§OQ-3: 7.785 vs 7.787).
+
+### Where the body speed actually came from (all citations re-opened)
+
+The handoff's `common.rs:844` is real but is the **legacy** lane.
+`USE_INTERPRETED_VELOCITY = true` (`system.rs:559`), so the LIVE source is
+`interpreted_velocity_for_state` (`motion_interp.rs:1800` pre-edit), which passed
+`capabilities.base_walk_forward_speed()` as `ground_velocity`'s walk base. That
+accessor (`holtburger-world/src/state/self_movement.rs:36,96`) is
+`base_walk_forward_velocity.length()`, sourced from the DAT MotionTable's
+WalkForward `MotionData.velocity` (`self_movement.rs:261,308-313`). Three call
+sites read it: the legacy lane (`common.rs:842,844,847`), the live interpreted
+lane (`motion_interp.rs:1801`), and the autonomous MoveTo lane
+(`system.rs:4041`).
+
+### Edits (holtburger-core only — the DAT kinematics struct stays honest)
+
+1. `movement/motion_interp.rs:1831` — `interpreted_velocity_for_state` passes the
+   existing `pub(crate) WALK_ANIM_SPEED` const (`:205`) as the walk base; the run
+   base still comes from the DAT.
+2. `movement/common.rs:854-858` — `forward_axis_speed`'s three walk arms
+   (walk-forward, walk-backstep, run-backstep) use `WALK_ANIM_SPEED`; imported at
+   `common.rs:3`.
+3. `movement/system.rs:4047` — autonomous MoveTo Walk arm likewise.
+4. Docs/tests re-pinned: const doc `motion_interp.rs:191-204`, `ground_velocity`
+   contract `:588-606`, gate doc `system.rs:541-546`,
+   `velocity_contract_walk_uses_authored_2_602_base` →
+   `..._uses_retail_walk_anim_speed` (`:2085`), diagonal test `common.rs:1093`.
+
+No literal was duplicated — all three sites reference the one const.
+`base_walk_forward_velocity` still carries DAT truth, it just no longer drives the
+body. (The web crate keeps its own `WALK_ANIM_SPEED` copy at `lib.rs:36840` with
+the identical value; unifying it needs cross-crate visibility work, not done.)
+
+### The anim timescale needed NO change — and the handoff's "0.78 vs correct 0.65" inverts
+
+`cycleTimeScale(actual, base)` = `stateGroundSpeed / cycleBaseSpeed`
+(`animation.js:355`, fed at `entities.js:12977`). `stateGroundSpeed` already
+returned 3.1199999 for walk (`lib.rs:7077`) and `3.1199999 × −0.65 = 2.028` for
+backstep; `cycleBaseSpeed` is the authored 2.6017 (`lib.rs:6672-6689`).
+
+| gait | body speed (post-fix) | clip base | timescale |
+|---|---|---|---|
+| walk fwd | 3.1200 | 2.6017 | 1.199x |
+| backstep | 2.0280 | 2.6017 | 0.779x |
+
+Both are now CORRECT: the feet track travel because the body finally moves at the
+speed the timescale was already derived from. "Backstep timescale 0.78 vs correct
+0.65" was the **option-2** target (body keeps 2.6017 → backstep 1.691 → 0.65x);
+under the adopted option 1, 0.78 is right and 0.65 would be the regression.
+`BACKWARDS_FACTOR` was already the correct `0.649_999_98`.
+
+### Sidestep — checked, NOT the same bug, unchanged
+
+`sidestep_axis_speed` (`common.rs:870-880`) and the interpreted lane already
+derive from the constant: `adjust_motion` scales by
+`SIDESTEP_FACTOR × (WALK_ANIM_SPEED / SIDESTEP_ANIM_SPEED) = 0.5 × 3.1199999/1.25
+≈ 1.248`, `get_state_velocity` converts via `SidestepAnimSpeed = 1.25` → walk
+strafe 1.56 m/s, run strafe `min(1.248 × run_rate, 3.0) × 1.25 ≤ 3.75`. That chain
+never touched the DAT walk base (fixed by F1-2, 2026-06-09), so the fork did not
+reach it.
+
+### Live validation (release wasm 4,947,030 B, `:8765`, `?nullRender=1`, account `doorbisect1`)
+
+Rig: `/mnt/wbterminal2/col10-speed-2026-07-27/` (`launch.sh` CDP :9336,
+`speed_probe.cjs` / `probe2..4.cjs`, `results-*.json`). In-page 50 ms pose
+sampler (so CDP round-trip jitter never enters the timebase); speed = LS slope of
+cumulative path vs time over a steady window, movement-gated on displacement.
+
+All six arms of the definitive run (`results-probe4c.json`, ONE teleport then
+keyboard-only, every arm movement-gated and `__bootState == 'in-world'`):
+
+| arm | keys | fit m/s | path÷t | median | target | pre-fix (§OQ-3) |
+|---|---|---|---|---|---|---|
+| walk forward | `shift+W` | **3.096** | 2.973 | 3.177 | 3.1200 | 2.6027 |
+| walk forward (repeat) | `shift+W` | **3.094** | 2.996 | 3.005 | 3.1200 | 2.6027 |
+| walk backstep | `shift+S` | **2.031** | 1.950 | 1.936 | 2.0280 | 1.691 (implied) |
+| walk backstep (repeat) | `shift+S` | **2.032** | 1.959 | 2.026 | 2.0280 | 1.691 (implied) |
+| run forward | `W` | 16.059 | 14.76 | 14.61 | 4.0 x run_rate | path unchanged |
+| run backstep | `S` | 8.908 | 8.34 | 8.18 | 2.028 x run_rate | path unchanged |
+
+**Walk lands within 0.8 % of 3.1199999 and backstep within 0.2 % of 2.0280.**
+Earlier independent runs agree: `setMovementInput(1,0,0,false)` gave 3.113
+(`results-col10-fixed.json`), `shift+W` gave 3.105 (`results-probe3.json`),
+`shift+S` gave 2.044 (`results-probe2.json`). Measured walk / pre-fix walk =
+3.096 / 2.6027 = **1.190**, against the predicted 3.1199999/2.6017 = 1.199.
+Cross-check on the two derived arms: run_forward/walk_forward = 5.19 implies
+run_rate 4.02, and 4.0 x 4.02 = 16.06 = the measured run — i.e. the run lane is
+internally consistent and untouched. The walk arms ran DOWNhill (dz −10.8, −6.6 m)
+and the backstep arms UPhill (dz +7.1, +5.3 m) yet both hit target, so terrain
+slope is not biasing the fit estimator.
+
+**Run control caveat.** Both characters on `doorbisect1` (`Doorbi1`, `Oq3low1`)
+carry `biota_properties_skill.init_Level = 5000` for Run (type 54) — the skill-105
+character the §OQ-3 7.787 m/s control used no longer exists there, so that exact
+control was NOT reproducible. Run measured 16.06–16.58 m/s, consistent with a maxed
+run rate near the documented ~18 m/s ceiling and with the deliberate ACE-matching
+divergence above skill 800 (`RETAIL_RUNRATE_EDGE=false`). The run path is
+untouched by this change (its DAT base 4.000 == retail's `RunAnimSpeed`).
+
+**Harness finding (cost 4 runs, save it).** Two independent ways a probe silently
+measures a frozen player, neither COL-10-related (they hit the untouched run lane
+too):
+1. **A pose is NOT an in-world gate.** `getLocalPlayerPose()` returns finite
+   coords while `__bootState == 'ready'`, but input is inert there — an entire
+   6-arm run read 0.00 m/s with the player merely sinking (z 96 → 90.1,
+   `results-probe4b.json`). Gate on `__bootState === 'in-world'` AND a pose.
+2. **`@teleloc` between arms.** With a teleport before every arm, 8 of 16 arms
+   froze: `[motion-link]` console lines still fired for
+   `0x45000005`/`0x44000007`/`0x45000006` (the motion issues and animates) but
+   pose XY never advanced. One teleport per session then W/S only: **6/6 valid**.
+
+Also re-confirmed:
+`?renderOnDemand=1` must be omitted, and `window.__wasmExports` does not exist —
+the free wasm exports (`playerRunRate`, `stateGroundSpeed`, `cycleBaseSpeed`) are
+NOT reachable from `window`, only from the `init3D` bag (the P5.1 instrumentation
+gap again).
+
+**Not rebuilt / not run.** `cargo test -p holtburger-core` was not run (8 GB box,
+workspace-test rule); the release wasm build is the compile check for non-test
+code, and the four test expectations that encoded the old model were re-pinned by
+hand. One post-build whitespace-only tidy landed in `system.rs:4047` (identical
+codegen).
+
+**Residual, JS side (untouched — index.html/camera.js are another agent's this
+session).** `index.html:5893` `WALK_FORWARD_SPEED = 1.0 // m/s — also strafe +
+backstep` is exported on `window.__movementConstants` and read by
+`camera.js:1774`; it is now wrong three ways (walk 3.12, strafe 1.56, backstep
+2.03). Both consumers are the dead predictors documented in
+§"camera.js flat prediction speed", so nothing live regresses — but the constant
+should be split/retired when that file is next touched.
+
+---
+
+## DAT-01 / P1.1 — PHASE 1 LANDED (2026-07-27). Two plan premises corrected: scenery has **no physics BSP**, and 42% of it must **never** collide.
+
+Design doc: `DAT-01-design.md` (this directory). Bake-side change is
+uncommitted in the working tree; nothing client-side was touched.
+
+### Decomp, re-opened and confirmed
+
+The plan's `acclient.c:352708-352718` citation is **correct**.
+`CLandBlock::get_land_scenes` (`:352530`) does
+`CPhysicsObj::makeObject(obj_id, 0, 0)` → `set_initial_frame` →
+`add_obj_to_cell` → `SetScaleStatic(ObjectDesc::ScaleObj(...))` →
+`CLandBlock::add_static_object` (`:351857`) — the **same** array
+hand-placed `LandblockInfo` statics land in. `bDynamic=0` sets
+`STATIC_PS` (`InitObjectBegin`, `:317273`). Lifecycle:
+`init_static_objs` (`:352787`, calls `get_land_scenes` at `:352888`
+behind `use_scene_files`) / `destroy_static_objects` (`:351931`) from
+`CLandBlock::Destroy` (`:351966`) and `notify_change_size` (`:352430`),
+all under `LScape::update_block`'s shifting refcounted slot grid
+(`:307786`). Filters include `ObjectDesc.weenie_obj == 0` (offset +108) —
+weenie-backed scenery is server-spawned, never client-instantiated.
+
+### PREMISE CORRECTION 1 — retail does **not** use a physics BSP for scenery
+
+`CPhysicsObj::FindObjCollisions` (`:316159`) picks a narrow phase by a
+four-rung ladder at `:316229-316281`: (1) `HAS_PHYSICS_BSP_PS 0x10000` →
+`CPartArray::FindObjCollisions`; (2) else cylsphere →
+`CCylSphere::intersects_sphere(cyl, &m_position, m_scale, transition)`;
+(3) else sphere; (4) else **no collision**.
+
+Measured against `~/ac_base_dats/client_portal.dat` via
+`chorizite-parse-dat-record`: every `GfxObj` part of the three most
+common scenery setups (`0x020002D3` → `0x01003AB5/6`, `0x02000258` →
+`0x010037A2/A1/9F`, `0x02001063` → `0x010031AE`) reports
+`physicsBSP: None, physicsPolygons: 0`. Rung 1 never fires. Trees
+collide as a **scaled cylinder** — `0x020002D3` cylsphere r 1.53 h 34.606
+at origin z −3.8.
+
+Consequence: the existing `insert_static_physics_bsp` /
+`resolve_static_bsp_pushout` machinery (`scene.rs:2731`,
+`system.rs:4858`) is the right *shape* but the wrong *feed* for scenery —
+there is no BSP to register. A cylsphere narrow phase has to be written
+(design §6 phase 2b).
+
+### PREMISE CORRECTION 2 — the bake AABB is a broad phase, never a collider
+
+The plan calls `aabb.rs`'s boxes "a natural starting point". They bound
+the **render mesh** (foliage canopy), not the trunk. Measured on the
+three test LBs:
+
+| Setup | AABB half-extent | cylsphere radius | ratio |
+|---|---|---|---|
+| `0x02000258` | 13.52 m | 1.09 m | **12.4×** |
+| `0x020002D3` | 6.82 m | 1.53 m | 4.5× |
+| `0x020002DB` | 6.94 m | 1.53 m | 4.5× |
+| `0x02000246` | 3.82 m | 0.85 m | 4.5× |
+
+An AABB-only feed turns one pine into a 27 m impassable wall.
+
+### PREMISE CORRECTION 3 — 42% of placements must not collide at all
+
+8 of the 16 distinct setups in the sample (`0x02001063`, `0x020007A2/3/4/5`,
+`0x020005AC`, `0x02000493/4`) have **no cylsphere, no sphere,
+`height = 0`, `radius = 0`** — retail's rung 4, i.e. no collision. By
+placement count that is **33 of 79 (42%)**, and the single most common
+model (`0x02001063`, 23 of 79) is one of them. A feed without this
+per-`CSetup` filter ships solid grass.
+
+### PREMISE CORRECTION 4 — COL-17 is not DAT-01
+
+"Walk/jump up very steep cliffs" is terrain slope handling
+(PHY-06/PHY-21, Tier 3). `ObjectDesc::CheckSlope` (`:351355`) only
+decides where scenery is *placed*; nothing in the scenery path affects
+the player's walkable-slope test. Do not expect DAT-01 to move it.
+
+### Bake-side change (phase 1 of 4)
+
+`Aabb3D` + `transform_mesh_to_aabb3` in
+`crates/holtburger-scenery-bake/src/aabb.rs`; `ScenicPlacement.bounds`
+carries the box the bake already computed for ACE's `Collision`
+rejection and previously discarded; JSONL gains six **appended** `aabb_*`
+fields (V3) with a `--no-bounds` opt-out and a `placement-bounds` line
+in `bake-source.sha256`.
+
+**Zero placement drift, proven three ways.** (a) The rejection test now
+reads `bounds.xy()`, pinned bit-identical to the old 2D builder by
+`aabb::tests::transform_mesh_to_aabb3_xy_matches_2d`. (b) A `--no-bounds`
+re-bake of `0xA9B3` / `0xAAB4` / `0xA9B4` is **line-for-line identical to
+the shipped `dist/scenery/` files** once V2's `stable_id` is stripped
+(the live dist predates V2); `0xA9B4` (0 placements) is byte-identical
+as-is. (c) `placements-hash` is unchanged between the bounds and
+no-bounds runs (`47429a5989dfd626` for `0xA9B3`,
+`a4d520dfa64951bb` for `0xAAB4`) — the freeze hash deliberately still
+folds only the twelve wire fields, so all 40,197 shipped sidecars stay
+valid.
+
+**Validation of the emitted boxes** (79 placements, 3 LBs): 79/79 carry
+bounds; 0 inverted; 0 with the placement's XY outside its own box; 0
+extending more than 15 m past the landblock edge. Cross-checked against
+the DAT: `0x020002DB`'s emitted Z extent 44.42 m vs the `CSetup`'s
+declared `height` **44.39 m**. Size cost +46% on a dense LB
+(21,884 → 31,862 B for 71 placements).
+
+Tests: `cargo test -p holtburger-scenery-bake --release` 8+9 pass
+(including `determinism_repeat`, `placements_fingerprint_is_stable`,
+`bake_output_fingerprint_is_stable`); `--bin scenery-bake` 26 pass;
+`--test scenery_bake_preflight` 2 pass. **No re-bake of `dist/` was
+performed** — scratch outputs only.

@@ -108,6 +108,23 @@ natural starting point, but it is currently discarded rather than shipped.
 Corroborating live answers: COL-17 (sev 2) *"can just walk and jump up very steep
 cliffs I have no business traversing"*; COL-29 (sev 2) rocks sitting in paths.
 
+**PHASE 1 LANDED 2026-07-27 — design in `DAT-01-design.md`, ledger in
+VERIFICATION-LOG §DAT-01. Four premises above are corrected:**
+(1) retail scenery has **no physics BSP** — every scenery `GfxObj` measured
+reports `physicsBSP: None`, so `CPhysicsObj::FindObjCollisions`
+(`acclient.c:316229-316281`) falls to its **cylsphere** rung. The existing
+`insert_static_physics_bsp` arm cannot be the feed; a cylsphere narrow phase
+must be written. (2) The `aabb.rs` boxes bound the *foliage*, not the trunk —
+4.5× to **12.4×** the cylsphere radius — so they are a broad phase only; shipped
+as the collider they would make one pine a 27 m wall. (3) **42% of placements
+(33/79 sampled, incl. the single most common model) have no collider at all** in
+retail and must be filtered per-`CSetup`, or we ship solid grass. (4) **COL-17
+does not belong here** — it is terrain slope (PHY-06/PHY-21, Tier 3); do not
+expect DAT-01 to move it. Bake side now emits the previously-discarded box as
+six appended V3 `aabb_*` JSONL fields with zero placement drift (freeze hash
+unchanged); phases 2a-2e are the client consumption, and a full `dist/` re-bake
+(phase 3) is only needed once phase 2 validates.
+
 ---
 
 ## TIER 2 — the lighting and terrain-shading campaign
@@ -147,6 +164,22 @@ anyway). The real unimplemented retail behavior is ClipMap's
 `SetAlphaBlendEnable(1)` alongside the test — split that piece onto the legacy
 ladder + static_atlas after a hasPalette census (RND-08/33, new work).
 
+**RND-08/33 LANDED 2026-07-27 (uncommitted, JS only — see VERIFICATION-LOG
+§RND-08/33).** Census: 721 of 6,152 `client_portal.dat` surfaces carry
+`Base1ClipMap` — **518 paletted** (PFID_INDEX16 → ref 0.392) and **203
+non-paletted** (DXT5/A8R8G8B8/DXT1/DXT3/A4R4G4B4/R8G8B8 → ref 0.784), so the
+shipped 0.5 was wrong for both classes. One shared
+`applyClipMapRenderState` now serves all THREE ladders (the plan named two; the
+third is `entities.js:5187` `_applyPalettedSurfaceRenderState`) and
+`static_atlas.js` buckets on the exact ref + blend state instead of a boolean.
+**Premise correction:** the blend is `BLEND_ONE`/`BLEND_INVSRCALPHA`, not
+SRCALPHA/INVSRCALPHA — `enum BlendMode` (`acclient.h:5193-5211`) is not
+D3DBLEND, and 2 is ONE. Depth writes stay ON. `?clipMapParity=off|ref` are the
+A/B arms; the 1070 fringe eye-test is queued with task 3b. RND-33
+(stipple→WRAP/CLAMP) is **still open** — it needs a new wasm-side bit and was
+not touched here. Newly opened residual: retail alpha-tests `ClipMap+Alpha`
+(22) and `ClipMap+Additive` (31) too, which our `else if` ladder still swallows.
+
 ---
 
 ## TIER 3 — movement fidelity
@@ -179,6 +212,35 @@ genuinely broken (body 2.60 m/s from the DAT anim vs stateGroundSpeed 3.12 →
 clip plays 1.2× travel = foot-slide; backstep worse) and is the likely COL-10
 root cause — but it is a client/server-skew FORK needing a decision, not a
 constant fix. Camera-side lead: `camera.js:1772` flat 4.5 m/s prediction speed.
+
+**COL-10 walk fork DECIDED + FIXED + LIVE-VALIDATED 2026-07-27 — Tier 3 is now
+fully unblocked on a sound speed baseline** (see VERIFICATION-LOG §COL-10). User
+picked option 1: the **body adopts retail's `WalkAnimSpeed` 3.1199999 m/s**
+(`acclient.c:343561`, ACE `MotionInterp.cs:684-685` identical → the fix REMOVES
+client/server skew). Three call sites in `holtburger-core` now read the existing
+`WALK_ANIM_SPEED` const instead of the DAT-derived `base_walk_forward_speed()`:
+the live interpreted lane (`motion_interp.rs:1831`), the legacy lane
+(`common.rs:854-858`), and the autonomous MoveTo Walk arm (`system.rs:4047`).
+Measured live on the release wasm (4,947,030 B), 6/6 movement-gated arms:
+**walk 3.094–3.113 m/s** (target 3.1200, was 2.6027) and **backstep
+2.031–2.044 m/s** (target 2.0280); run unchanged and internally consistent
+(16.06 = 4.0 × run_rate 4.02). The
+anim-side needed NO edit — `cycleTimeScale = stateGroundSpeed / cycleBaseSpeed`
+was already 3.12/2.6017 = 1.199x, which is only correct now that the body moves
+at 3.12; the handoff's "backstep timescale 0.78 vs correct 0.65" INVERTS under
+this decision (0.78 is the correct value; 0.65 was the option-2 target).
+Sidestep was checked and is NOT the same bug — it already derives from the
+constant (walk strafe 1.56 m/s), no change. Remaining COL-10 symptom to re-test
+with a renderer: the *backwards animation* complaint (idle pose) — the speed half
+is now right, the clip-selection half is unverified.
+
+**Camera-side lead DONE 2026-07-27 — but it was DEAD CODE** (see
+VERIFICATION-LOG §"camera.js flat prediction speed"). The unit conflation was
+real and is now fixed in three JS sites (base run speed × run-rate scalar,
+mirroring the Rust split), yet `_advancePrediction` was retired from `tick()`
+on 2026-06-29 and the 2D sprite predictor it mirrors is unreachable (nothing
+ever populates `entityMap` in `index.html`), so **no live behaviour changed**.
+Do not count this against COL-09/COL-19.
 
 ---
 
