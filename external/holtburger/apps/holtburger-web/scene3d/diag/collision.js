@@ -68,6 +68,28 @@ const RESIDENCY_FIELDS = [
   "doorParts",
   "openDoorExclusions",
   "terrainHeightLbs",
+  // DAT-01 phase 2e (2026-07-27) — baked procedural scenery (COL-01 trees /
+  // COL-29 rocks). APPENDED, never inserted: a stale pkg/ returns the old
+  // 13-field string, the extra names split to undefined -> null ("unknown"),
+  // and every pre-existing counter still lands on its own name. Reordering
+  // would silently mislabel all of them.
+  //
+  // Reading them: `sceneryColliders` is 0 on the shipped PRE-V3
+  // `dist/scenery/` (no `aabb_*` fields to ingest) — that is EXPECTED until
+  // the phase-3 re-bake, not a fault. `sceneryNarrowHits` stays 0 until
+  // `USE_SCENERY_COLLISION` is flipped on in phase 4, because nothing calls
+  // the narrow phase before then.
+  "sceneryColliderLbs",
+  "sceneryColliders",
+  "sceneryNarrowHits",
+  // REACHABILITY probe, bumped once per movement slice OUTSIDE the
+  // `USE_SCENERY_COLLISION` gate. The arm's first home was dead code (the
+  // legacy statics clamp chain, unreachable under USE_UNIFIED_TRANSITION), so
+  // "flag off, no effect" and "flag on, no effect" looked identical. Walk for
+  // a few seconds: nonzero here means the arm sits on the LIVE movement path.
+  // Zero while walking means it does not, and no amount of flag-flipping will
+  // change that.
+  "sceneryArmEvals",
 ];
 
 function _hbWasm() {
@@ -198,6 +220,14 @@ export function attachCollision(diag) {
           ? await hb.populateBuildingAabbsForLandblock(id)
           : null;
       } catch (e) { out.buildingsError = String(e?.message ?? e); }
+      // DAT-01 phase 2e — the third feed. `null` means the export is absent
+      // (stale pkg/); `0` means the populate ran and found nothing to stage,
+      // which on a pre-V3 `dist/scenery/` is the correct answer.
+      try {
+        out.scenery = typeof hb.populateSceneryCollidersForLandblock === "function"
+          ? await hb.populateSceneryCollidersForLandblock(id)
+          : null;
+      } catch (e) { out.sceneryError = String(e?.message ?? e); }
       // The inserts are STAGED here; they only land in the scene on the
       // next TickMovement drain, so residency is read a tick later.
       out.residencyBeforeDrain = this.residency();
@@ -231,6 +261,13 @@ export function attachCollision(diag) {
         cellStaticBsps: residency?.cellStaticBsps ?? null,
         terrainHeightLbs: residency?.terrainHeightLbs ?? null,
         staticsStarved,
+        // DAT-01 phase 2e. Deliberately NOT folded into `ok` — a zero here
+        // is the expected reading on the shipped pre-V3 bake, so gating the
+        // verdict on it would make every healthy client report DRIFT.
+        sceneryColliderLbs: residency?.sceneryColliderLbs ?? null,
+        sceneryColliders: residency?.sceneryColliders ?? null,
+        sceneryNarrowHits: residency?.sceneryNarrowHits ?? null,
+        sceneryArmEvals: residency?.sceneryArmEvals ?? null,
         verdict: out.ok ? "PASS" : "DRIFT",
       };
       this.lastResult = out;

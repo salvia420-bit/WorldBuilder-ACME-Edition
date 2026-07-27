@@ -1116,6 +1116,38 @@ const USE_PHYSICS_BSP: bool = true;
 /// SetupModel statics. See the static-sweep block below.
 const USE_STATIC_BSP: bool = true;
 
+/// DAT-01 phase 2d (2026-07-27): collision against BAKED PROCEDURAL SCENERY
+/// — the trees, rocks and bushes `holtburger-scenery-bake` emits into
+/// `dist/scenery/*.jsonl`, which have never had any collision at all
+/// (COL-01 "walk through trees" sev 1, COL-29 "rocks in paths don't block"
+/// sev 2). Separate from `USE_STATIC_BSP` because the two feeds are
+/// separate: that one is the `LandblockInfo` stab list, this one is the
+/// procedural bake.
+///
+/// **DEFAULT OFF — and this is a deliberate deviation from the project's
+/// default-on-no-eyetest-gate rule.** The rule's bar is "bare-default loads
+/// + spawns + 0 errors", which this passes trivially; what it does NOT cover
+/// is per-tick cost, and this arm adds a per-tick scan over a 13×13-ring
+/// resident set that nothing has measured yet. Turning it on before the
+/// measurement would ship an unmeasured frame-time regression to fix a
+/// walk-through bug. Phase 4 measures on the 1070 (lateral-offset approach
+/// at a known tree, plus a "can still walk through grass" negative test) and
+/// flips this to `true` in the same change that records the numbers.
+///
+/// The data lands regardless of the gate:
+/// `populateSceneryCollidersForLandblock` stages batches into
+/// `SpatialScene::scenery_colliders` on every landblock load whether this is
+/// `true` or `false`, so flipping it is a pure runtime switch with no
+/// re-bake — and `__diag.collision.residency()` reports the resident counts
+/// either way, which is what makes the phase-3 re-bake verifiable before the
+/// arm is live.
+///
+/// When ON, the arm runs AFTER the static-BSP push-out and mirrors its
+/// shape exactly: broad-phase AABB reject (the baked V3 `aabb_*` box) →
+/// swept `CCylSphere` narrow phase → stop-and-slide, then a depenetration
+/// pushout for the already-overlapping case.
+const USE_SCENERY_COLLISION: bool = false;
+
 /// Terrain→EnvCell entry (2026-06-02): when ON (DEFAULT), the manual-
 /// drive integrator flips the local player indoors the tick its capsule
 /// enters a loaded EnvCell, instead of waiting for the server's
@@ -6560,6 +6592,86 @@ impl MovementSystem {
                 // realized pose's local coords without a rebucket. Z untouched.
                 pose.coords.x += clamped.x - lateral.x;
                 pose.coords.y += clamped.y - lateral.y;
+            }
+        }
+        // DAT-01 phase 2d (2026-07-27) — BAKED PROCEDURAL SCENERY collision
+        // (COL-01 "walk through trees" sev 1, COL-29 "rocks don't block"
+        // sev 2). DEFAULT-OFF via `USE_SCENERY_COLLISION`; see that const's
+        // doc for why this one deliberately ships gated.
+        //
+        // SITED HERE, not in the legacy statics/building clamp chain in
+        // `advance_local_pose_for_manual_drive_slice`. That chain looks like
+        // the natural home — it is literally the outdoor-static AABB sweep
+        // plus the static-BSP push-out — but it is UNREACHABLE: the slice
+        // returns at `:4221` under `USE_UNIFIED_TRANSITION` (`:644`, true),
+        // so everything from `:4226` to the legacy entity pass is dead code.
+        // An arm added there would pass its flag-off smoke while doing
+        // nothing, and would keep passing after the flag was flipped on.
+        // The LIVE path is `find_transitional_position_dispatch` above, and
+        // this post-transition XY correction is the same shape the FU-3
+        // entity arm immediately above uses — the established way to add a
+        // collision family the faithful driver does not itself carry.
+        //
+        // Retail collides scenery INSIDE the transition, as a static
+        // `CPhysicsObj` in the landcell's shadow list
+        // (`CLandBlock::get_land_scenes` -> `add_obj_to_cell`,
+        // acclient.c:352708-352717) reached through
+        // `CObjCell::find_obj_collisions` -> rung 2
+        // `CCylSphere::intersects_sphere(cyl, &m_position, m_scale, …)`
+        // (acclient.c:316232-316272). Registering scenery as real
+        // `CObjCell` occupants of the ported driver is the faithful
+        // end-state and is deliberately NOT phase 2 — it needs a
+        // cylsphere-bearing occupant type the driver's narrow phase does not
+        // have yet. What ships here is the same geometry and the same time
+        // of impact, applied as a residual correction.
+        //
+        // CRITICAL, and inherited verbatim from FU-3: XY-ONLY. The
+        // grounding / contact-plane / frames_stationary_fall state below
+        // reads `outcome`, never `pose`, so a blocked tree cannot corrupt
+        // grounding.
+        //
+        // The reachability bump is OUTSIDE the gate on purpose: a counter
+        // that only moved when the flag was ON could never have distinguished
+        // "arm off" from "arm in dead code", which is precisely the mistake
+        // this siting corrects. Site reached + `const` true ⇒ body runs.
+        world.scene.note_scenery_arm_reached();
+        if USE_SCENERY_COLLISION {
+            let radius = input.object.radius;
+            let begin_g = input.begin.global_coords();
+            let realized_g = pose.global_coords();
+            // The lateral residual the transition actually realized.
+            let lateral = Vector3::new(
+                realized_g.x - begin_g.x,
+                realized_g.y - begin_g.y,
+                0.0,
+            );
+            let clamped =
+                world
+                    .scene
+                    .clamp_delta_against_scenery(&input.begin, lateral, radius);
+            pose.coords.x += clamped.x - lateral.x;
+            pose.coords.y += clamped.y - lateral.y;
+            // Depenetration at the corrected pose — a slice that STARTS
+            // inside a trunk (teleport, server force-position, a scenery
+            // batch draining under the player) has no swept solution, so the
+            // stop-and-slide above cannot recover it. Lateral only, same
+            // contract as the clamp.
+            let corrected = pose.global_coords();
+            let h = holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
+            // ACE two-sphere cylinder: low at feet+radius, high at head−radius.
+            let low = Vector3::new(corrected.x, corrected.y, corrected.z + radius);
+            let high = Vector3::new(
+                corrected.x,
+                corrected.y,
+                corrected.z + (h - radius).max(radius),
+            );
+            if let Some(disp) =
+                world
+                    .scene
+                    .resolve_scenery_pushout(&input.begin, &[low, high], radius, 2)
+            {
+                pose.coords.x += disp.x;
+                pose.coords.y += disp.y;
             }
         }
         // InitLastKnownContactPlane equivalent — a step with no wall

@@ -305,12 +305,12 @@ does not need it.
 | Phase | Scope | Size | State |
 |---|---|---|---|
 | **1** | Decomp grounding; `Aabb3D` + `transform_mesh_to_aabb3`; carry `bounds` on `ScenicPlacement`; V3 JSONL fields + `--no-bounds`; `placement-bounds` sidecar line; parity + wire tests | M | **done 2026-07-27** |
-| **2a** | `SceneryColliderBatch` + `insert_scenery_colliders` / `clear_scenery_colliders_for_landblock` in `holtburger-world`, with the per-LB clear wired into `clear_landblocks_collision` | M | next |
-| **2b** | Cylsphere narrow phase: port `CCylSphere::intersects_sphere` (`acclient.c`, rung 2) as a swept capsule-vs-scaled-cylinder test in `holtburger-world::spatial` | M | |
-| **2c** | wasm `populateSceneryCollidersForLandblock`: read V3 `aabb_*`, resolve each distinct Setup's cylsphere (memoised per DID), **drop setups with no cylsphere and no sphere**, stage the batch | M | |
-| **2d** | Integrator arm in `movement/system.rs` behind `USE_SCENERY_COLLISION` (default OFF until measured), after the static-BSP push-out | S | |
-| **2e** | JS hook at `index.html:3883` + eviction dedup at `:3676`; `__diag.collision` counters (P5.1 surface already exists) | S | |
-| **3** | Full re-bake of `dist/scenery/` with V3 (40,197 LBs), on the buildbox, into a staging dir; swap only after Phase 2 validates | M (mostly wall-clock) | |
+| **2a** | `SceneryColliderBatch` + `insert_scenery_colliders` / `clear_scenery_colliders_for_landblock` in `holtburger-world`, with the per-LB clear wired into `clear_landblocks_collision` | M | **done 2026-07-27** — SoA is one row per PRIMITIVE (retail walks the whole array; 5 DIDs carry 2-3 cylspheres) |
+| **2b** | Cylsphere narrow phase: port `CCylSphere::intersects_sphere` (`acclient.c`, rung 2) as a swept capsule-vs-scaled-cylinder test in `holtburger-world::spatial` | M | **done 2026-07-27** in `spatial/scenery.rs` — **plus rung 3 `CSphere`**, which §3.2/§5 never scoped and which is 6.1% of real placements |
+| **2c** | wasm `populateSceneryCollidersForLandblock`: read V3 `aabb_*`, resolve each distinct Setup's cylsphere (memoised per DID), **drop setups with no cylsphere and no sphere**, stage the batch | M | **done 2026-07-27** — classifies by the FULL exclusive ladder (`scenery_model_rung`), not by cylsphere-presence; rung 1 classified + **deferred** |
+| **2d** | Integrator arm in `movement/system.rs` behind `USE_SCENERY_COLLISION` (default OFF until measured), after the static-BSP push-out | S | **done 2026-07-27 — but NOT where this row says.** "After the static-BSP push-out" is DEAD CODE (`:4783-4886`, unreachable under `USE_UNIFIED_TRANSITION`). Sited after `find_transitional_position_dispatch`; reachability proven by `sceneryArmEvals` |
+| **2e** | JS hook at `index.html:3883` + eviction dedup at `:3676`; `__diag.collision` counters (P5.1 surface already exists) | S | **done 2026-07-27** — 4 counters: `sceneryColliderLbs`, `sceneryColliders`, `sceneryNarrowHits`, `sceneryArmEvals` |
+| **3** | Full re-bake of `dist/scenery/` with V3 (40,197 LBs), on the buildbox, into a staging dir; swap only after Phase 2 validates | M (mostly wall-clock) | **BAKED + STAGED 2026-07-27** at `/mnt/wbterminal2/buildbox-2026-07-27/rebake/staging/` (195,076 files, additive, zero drift). Phase 2 has now validated against it; the `dist/` swap is what remains |
 | **4** | Live validation: lateral-offset approach at a known tree (never head-on — the COL-03 lesson), plus a "can still walk through grass" negative test | S | |
 
 Phase 2 can be developed and unit-tested entirely against the three-LB
@@ -352,3 +352,46 @@ Recording these because the plan and handoff carry the older reading.
    of things standing on the terrain, and the collision feed must not be
    expected to cover weenie-backed scenery. Those arrive as entities and
    take the COL-03 entity arm.
+
+---
+
+## 8. Phase 2 corrections to this document (2026-07-27)
+
+Phase 2 was implemented against a world-scale collidability census
+(`/mnt/wbterminal2/buildbox-2026-07-27/census/census-summary.md`, 176 DIDs,
+calibrated on 115,415 real baked placements). It refutes two claims above and
+adds four constraints §§1-7 do not mention. The *decisions* in §3 all stand;
+several of the *numbers* and one *code location* do not.
+
+1. **§3.2 "There is no BSP to use" is false at world scale.** 23 of 176 DIDs
+   are rung 1 (0.5% of real placements). Retail's ladder short-circuits, and
+   **four models carry a BSP alongside cylspheres/spheres** (`0x020004BF`,
+   `0x0200068B`, `0x020003CB`, `0x0200086E`) — so the classifier must test
+   BSP FIRST or diverge on all four. Rung 1 is classified and **deferred**;
+   see the TODO on `populate_scenery_colliders_for_landblock_impl`.
+2. **§3.4 / correction 3: the no-collider share is 59.7%, not 42%** (95% CI
+   [58.05, 61.39]). The 3-landblock sample under-represented clutter.
+3. **§3.4's predicate is unsafe.** `height == 0 && radius == 0` is satisfied
+   by all 49 rung-4 DIDs *and by 19 colliding ones*. Classify by the ladder:
+   `has_physics_bsp ? 1 : num_cylsphere ? 2 : num_sphere ? 3 : 4`.
+4. **Rung 3 (`CSetup.spheres`) is missing from §5's scope** — 19 DIDs, 6.1%
+   of placements. §2c as written ("drop setups with no cylsphere and no
+   sphere") would have staged sphere-only setups with no test to run on them.
+   `CSphere::intersects_sphere` (`acclient.c:359390`) is now ported too.
+5. **§4's row shape assumes one primitive per placement.** Cylsphere counts
+   per DID are {1:82, 2:3, 3:2}; sphere counts {1:18, 2:2, 3:1}. The batch
+   emits one row per primitive.
+6. **Cylsphere origins are not at the model origin** — 23 of 87 have non-zero
+   XY, 26 negative Z. They must be **scaled and rotated**, not translated.
+   Scale reaches 8.0×.
+7. **§6's phase-2d location is dead code.** "After the static-BSP push-out"
+   (`system.rs:4783-4886`) is unreachable: the slice returns at `:4221` under
+   `USE_UNIFIED_TRANSITION`. The live path is
+   `find_transitional_position_dispatch`. An unconditional reachability
+   counter (`sceneryArmEvals`) now guards this permanently.
+8. **A swept contact point fails retail's own overlap predicate.**
+   `radsum` is `r − 2e-4 + sphere_r` but the swept solve uses
+   `radsuma = r + sphere_r`, so re-checking `collides_with_sphere` at the
+   contact rejects *every* true wall hit. Retail evaluates the predicate at
+   the START pose instead. The port applies the Z half only
+   (`cylsphere_z_slab_overlap`).

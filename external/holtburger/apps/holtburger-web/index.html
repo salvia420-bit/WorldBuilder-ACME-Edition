@@ -2264,6 +2264,15 @@
                   __hbWasmNs.populateBuildingAabbsForLandblock(lb >>> 0),
               }
             : {}),
+          // DAT-01 phase 2e (2026-07-27) — the scenery-collider populate,
+          // so `__diag.collision.populate(lb)` can re-run all three feeds
+          // for one landblock and report which one returned nothing.
+          ...(typeof __hbWasmNs?.populateSceneryCollidersForLandblock === "function"
+            ? {
+                populateSceneryCollidersForLandblock: (lb) =>
+                  __hbWasmNs.populateSceneryCollidersForLandblock(lb >>> 0),
+              }
+            : {}),
           hash32,
           has_resource_source,
         };
@@ -3631,6 +3640,18 @@
       // walks-through-walls regime.
       const buildingAabbsPopulatedLbs = new Set();
       const buildingAabbsPopulateInFlight = new Set();
+      // DAT-01 phase 2e (2026-07-27): landblocks whose BAKED PROCEDURAL
+      // SCENERY colliders (trees/rocks/bushes — COL-01 / COL-29) have been
+      // staged into the wasm spatial scene. Its own set rather than riding
+      // `buildingAabbsPopulatedLbs` because the scenery populate reads a
+      // DIFFERENT source (the `dist/scenery/*.jsonl` bake, not
+      // LandblockInfo) and can legitimately return 0 forever on a pre-V3
+      // bake while buildings populate fine — sharing the set would hide
+      // which half actually ran. Cleared by `__onLandblockEvicted` below;
+      // without that clear the LRU's evict + revisit would skip the
+      // re-populate and the player would walk through trees again on every
+      // second visit.
+      const sceneryCollidersPopulatedLbs = new Set();
       // 2026-05-09 follow-up: track which landblocks have had their
       // building meshes + non-building object sprites added to
       // outdoorContainer. Distinct from buildingAabbsPopulatedLbs
@@ -3677,6 +3698,12 @@
         buildingAabbsPopulateInFlight.delete(lb);
         cellContainersPopulatedLbs.delete(lb);
         cellContainersPopulateInFlight.delete(lb);
+        // DAT-01 phase 2e: the scenery colliders were purged wasm-side by
+        // `enqueueClearLandblockCollision` -> `clear_landblocks_collision`
+        // (the scenery family is wired into that batched clear), so the
+        // dedup entry MUST go too or the re-entry populate is skipped and
+        // the LB comes back with no tree collision.
+        sceneryCollidersPopulatedLbs.delete(lb);
       };
       async function ensureCellContainersForLandblock(centreLb) {
         // Phase 6 step C: lazy-fetch + bake the EnvCells in a single
@@ -3887,6 +3914,38 @@
             } catch (se) {
               console.warn(
                 `[b4] populateStaticsAabbsForLandblock(0x${lbId.toString(16)}) failed:`, se
+              );
+            }
+            // DAT-01 phase 2e: stage the BAKED PROCEDURAL SCENERY colliders
+            // (trees/rocks/bushes) for this landblock. Same trigger and its
+            // own try, for the same reason the statics call has one.
+            //
+            // Reached through `__hbWasmNs?.` rather than a static named
+            // import ON PURPOSE: a named import of a missing export is a
+            // module-link SyntaxError, which would turn "someone is running
+            // a stale pkg/" into a blank page instead of a missing feature.
+            // Optional access degrades to "no scenery collision", which is
+            // exactly the pre-DAT-01 behaviour.
+            //
+            // Returns 0 on the currently-shipped PRE-V3 `dist/scenery/`
+            // (no `aabb_*` fields to read) — that zero is expected until the
+            // phase-3 re-bake, and the LB is still marked populated so we
+            // don't re-walk 40k JSONL lines every LB entry for nothing.
+            try {
+              const scFn = __hbWasmNs?.populateSceneryCollidersForLandblock;
+              if (typeof scFn === "function"
+                  && !sceneryCollidersPopulatedLbs.has(lbId)) {
+                const scCount = await scFn(lbId >>> 0);
+                sceneryCollidersPopulatedLbs.add(lbId);
+                if (scCount > 0) {
+                  console.log(
+                    `[dat01] queued ${scCount} scenery colliders for landblock 0x${lbId.toString(16).padStart(8, "0")}`
+                  );
+                }
+              }
+            } catch (ce) {
+              console.warn(
+                `[dat01] populateSceneryCollidersForLandblock(0x${lbId.toString(16)}) failed:`, ce
               );
             }
           } catch (e) {

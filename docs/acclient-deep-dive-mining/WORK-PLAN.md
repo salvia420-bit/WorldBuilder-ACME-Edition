@@ -142,6 +142,49 @@ six appended V3 `aabb_*` JSONL fields with zero placement drift (freeze hash
 unchanged); phases 2a-2e are the client consumption, and a full `dist/` re-bake
 (phase 3) is only needed once phase 2 validates.
 
+**PHASE 2 LANDED 2026-07-27 (2a-2e, uncommitted) — ledger in
+VERIFICATION-LOG §DAT-01 PHASE 2.** Client now carries a per-landblock
+`SceneryColliderBatch` (SoA, one row per primitive), the ported `CCylSphere`
+*and* `CSphere` narrow phases, a per-DID ladder classifier, the wasm
+`populateSceneryCollidersForLandblock` ingest of the V3 `aabb_*` fields, and an
+integrator arm behind **`USE_SCENERY_COLLISION` = false**. Shipped wasm
+4,906,246 B release. Live-validated: boots clean on bare defaults with the arm
+inert on the pre-V3 `dist/`; against the real V3 rebake the ingest stages
+**exactly** the census-predicted collider counts (46/71 on `0xA9B3`, 0/8 on
+`0xAAB4`), drains, double-registers on re-stage, and purges to zero through
+`clear_landblocks_collision`.
+
+**Two more of this section's premises are now refuted, and one trap is worth
+carrying forward:**
+(5) *"scenery has no physics BSP"* — **REFUTED at world scale**: 23 of 176 DIDs
+do (0.5% of real placements). Rung 1 short-circuits retail's ladder and four
+models carry a BSP *alongside* cylspheres, so the classifier must test BSP
+FIRST. Rung 1 is classified and **DEFERRED** (blocked on `CellPhysicsBsp.scale`
+being hard-coded 1.0 and on that machinery being live-by-default — see the
+ledger's TODO).
+(6) *"42% of placements have no collider"* — **REFUTED, understated**: the real
+figure is **59.7%** (95% CI [58.05, 61.39]) over 115,415 real placements, and
+rung 3 (`CSetup.spheres`, 6.1%, 19 DIDs) exists and is now ported too. Also:
+`height == 0 && radius == 0` is NOT a valid no-collider predicate — 19
+*colliding* DIDs satisfy it. Ground truth:
+`/mnt/wbterminal2/buildbox-2026-07-27/census/census-summary.md`.
+(7) **TRAP — `system.rs:4783-4886` is DEAD CODE.** The outdoor-static AABB
+sweep + static-BSP push-out reads like the natural home for any new outdoor
+collision arm, but `advance_local_pose_for_manual_drive_slice` returns at
+`:4221` under `USE_UNIFIED_TRANSITION`. The live path is
+`find_transitional_position_dispatch`. Any flag-gated arm added anywhere in
+this file must ship an **unconditional** reachability counter (see
+`sceneryArmEvals`), because "flag off" and "flag in dead code" are otherwise
+indistinguishable.
+
+Remaining: **phase 3** — the full-world V3 re-bake is **DONE and staged** at
+`/mnt/wbterminal2/buildbox-2026-07-27/rebake/staging/` (195,076 files,
+validated additive, zero drift); it needs the `dist/` swap. **Phase 4** — flip
+`USE_SCENERY_COLLISION` to `true` and run the lateral-offset approach at a
+known tree plus the "can still walk through grass" negative test, reading
+`__diag.collision.residency().sceneryNarrowHits`; the arm's per-tick cost is
+still **unmeasured**, which is the sole reason it ships gated.
+
 ---
 
 ## TIER 2 — the lighting and terrain-shading campaign

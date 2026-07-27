@@ -2653,7 +2653,7 @@ impl ScenicPlacementJs {
 ///
 /// Pure-data struct (no wasm-bindgen) — only used inside
 /// `fetch_landblock_scenery` to deserialize one line at a time.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(serde::Deserialize)]
 struct ScenicPlacementJsonRaw {
     obj_id: String,
@@ -2676,6 +2676,60 @@ struct ScenicPlacementJsonRaw {
     /// parse — it's the whole reason V1 is safe to ship before a re-bake.
     #[serde(default)]
     default_script_id: Option<String>,
+    /// DAT-01 V3 (2026-07-27) — the placement's world-frame render-mesh AABB,
+    /// six floats appended after `stable_id` by `holtburger-scenery-bake`
+    /// (suppressible with the bake's `--no-bounds`). XY are in the SAME
+    /// LB-local frame as `x`/`y`; Z is in the same absolute world frame as
+    /// `z`. This is the BROAD phase for scenery collision — never the
+    /// collider itself: a pine's canopy box overstates its trunk by
+    /// 4.5-12.4x (design §3.1).
+    ///
+    /// All six are `Option`, and the ingest requires ALL SIX or drops the
+    /// placement from the collision feed. Pre-V3 bakes (which is what
+    /// `dist/` still ships until phase 3) simply omit them, so the whole
+    /// scenery-collision arm goes inert rather than mis-bounding anything —
+    /// that graceful degradation is the entire reason the fields are
+    /// optional rather than defaulted to zero.
+    #[serde(default)]
+    aabb_min_x: Option<f32>,
+    #[serde(default)]
+    aabb_min_y: Option<f32>,
+    #[serde(default)]
+    aabb_min_z: Option<f32>,
+    #[serde(default)]
+    aabb_max_x: Option<f32>,
+    #[serde(default)]
+    aabb_max_y: Option<f32>,
+    #[serde(default)]
+    aabb_max_z: Option<f32>,
+}
+
+/// DAT-01 V3 (2026-07-27) — collapse the six optional `aabb_*` fields into
+/// one all-or-nothing box, `[min_x, min_y, min_z, max_x, max_y, max_z]`.
+///
+/// ALL SIX or `None`. A line carrying a partial box is a bake bug, but a
+/// SILENT one if the missing axis defaulted to 0: the resulting broad-phase
+/// box would swallow the landblock origin and admit every placement in the
+/// tile. Treating partial as absent keeps the failure mode "no collision"
+/// (the pre-DAT-01 status quo) rather than "wrong collision".
+///
+/// A pre-V3 bake — which is what `dist/` still ships until phase 3 — omits
+/// all six, yielding `None` and an inert collision arm. That graceful
+/// degradation is why the fields are `Option` rather than `#[serde(default)]`
+/// zeros.
+#[cfg(any(target_arch = "wasm32", test))]
+fn scenic_bounds_from_raw(raw: &ScenicPlacementJsonRaw) -> Option<[f32; 6]> {
+    match (
+        raw.aabb_min_x,
+        raw.aabb_min_y,
+        raw.aabb_min_z,
+        raw.aabb_max_x,
+        raw.aabb_max_y,
+        raw.aabb_max_z,
+    ) {
+        (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) => Some([a, b, c, d, e, f]),
+        _ => None,
+    }
 }
 
 /// Parse a `0xXXXXXXXX` hex string back to u32. The bake CLI emits
@@ -2704,6 +2758,8 @@ mod scenery_fetch {
     use wasm_bindgen::prelude::*;
 
     use super::{ScenicPlacementJs, ScenicPlacementJsonRaw, obj_id_hex_to_u32};
+    #[allow(unused_imports)]
+    use super::scenic_bounds_from_raw;
 
     thread_local! {
         /// Scenery base URL, set once by `init_scenery_base_url`.
@@ -2752,6 +2808,13 @@ mod scenery_fetch {
         pub source_obj_idx: u32,
         /// V1 (2026-05-29) — SetupModel `default_script` DID, 0 when none.
         pub default_script_id: u32,
+        /// DAT-01 V3 (2026-07-27) — `[min_x, min_y, min_z, max_x, max_y,
+        /// max_z]` from the JSONL, or `None` on a pre-V3 bake / a
+        /// `--no-bounds` run / a line missing any one of the six. XY are
+        /// LB-local (add the landblock origin), Z is already absolute.
+        /// Consumed ONLY by `populateSceneryCollidersForLandblock`; the
+        /// renderer never reads it.
+        pub bounds: Option<[f32; 6]>,
     }
 
     /// Set the base URL for `/scenery/...` fetches. Mirrors the
@@ -2855,6 +2918,9 @@ mod scenery_fetch {
                 .filter(|s| !s.is_empty())
                 .and_then(|s| obj_id_hex_to_u32(s).ok())
                 .unwrap_or(0);
+            // DAT-01 V3 — the placement's world-frame render-mesh AABB
+            // (all-six-or-nothing; see `scenic_bounds_from_raw`).
+            let bounds = super::scenic_bounds_from_raw(&raw);
             out.push(CachedRecord {
                 obj_id,
                 x: raw.x,
@@ -2869,6 +2935,7 @@ mod scenery_fetch {
                 source_cell_y: raw.source_cell_y,
                 source_obj_idx: raw.source_obj_idx,
                 default_script_id,
+                bounds,
             });
         }
 
@@ -14829,6 +14896,23 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// DAT-01 phase 2c (2026-07-27): pending BAKED PROCEDURAL SCENERY
+    /// collider batches queued by `populateSceneryCollidersForLandblock` and
+    /// drained into `scene.scenery_colliders` each `TickMovement`, the same
+    /// cadence and for the same reason as `STATIC_AABB_PENDING` (the
+    /// collision scene is only mutable inside the recv loop).
+    ///
+    /// One `(landblock_high, SceneryColliderBatch)` per populate call — the
+    /// batch is already SoA, so unlike the statics piles this is a handful of
+    /// entries rather than one per placement. Cleared per landblock by the
+    /// `LANDBLOCK_CLEAR_PENDING` drain (via `clear_landblocks_collision`,
+    /// which the scenery family is wired into) so a re-entry re-bake REPLACES
+    /// rather than appends. Consulted only when `USE_SCENERY_COLLISION` is
+    /// on, so the data lands regardless of the gate.
+    static SCENERY_COLLIDER_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::SceneryColliderBatch)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// Phase C (2026-06-28): pending PRECISE physics BSPs for INDOOR env-cell
     /// resident STATIC OBJECTS — the cell-keyed twin of `STATIC_BSP_PENDING`
     /// (which is outdoor/landblock-keyed). Queued per stab by
@@ -15429,6 +15513,27 @@ fn drain_pending_static_bsps_into(scene: &mut holtburger_world::SpatialScene) ->
         let count = buf.len();
         for (landblock_high, bsp) in buf.drain(..) {
             scene.insert_static_physics_bsp(landblock_high, bsp);
+        }
+        count
+    })
+}
+
+/// DAT-01 phase 2c (2026-07-27): drain pending scenery collider batches into
+/// `scene.scenery_colliders`. Same `TickMovement` cadence as the static-AABB
+/// drain, and it must run AFTER the `LANDBLOCK_CLEAR_PENDING` purge for the
+/// same reason (the insert is append-only). Returns the number of COLLIDER
+/// INSTANCES inserted, not the number of batches — the instance count is what
+/// `__diag.collision` cross-checks against `scenery_collider_count()`.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_scenery_colliders_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> usize {
+    SCENERY_COLLIDER_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let mut count = 0usize;
+        for (landblock_high, batch) in buf.drain(..) {
+            count += batch.len();
+            scene.insert_scenery_colliders(landblock_high, batch);
         }
         count
     })
@@ -16213,6 +16318,365 @@ pub async fn populate_statics_aabbs_for_landblock(
     landblock_id: u32,
 ) -> Result<u32, JsValue> {
     populate_statics_aabbs_for_landblock_impl(landblock_id).await
+}
+
+// =====================================================================
+// DAT-01 phase 2c (2026-07-27) — baked procedural-scenery colliders.
+// =====================================================================
+
+/// Which retail narrow-phase rung a scenery model takes, plus the primitives
+/// the live rung contributes.
+///
+/// The ladder is `CPhysicsObj::FindObjCollisions` (`acclient.c:316229-316281`)
+/// and it is **exclusive and ordered**: rung 1 short-circuits, so a Setup
+/// carrying BOTH a physics BSP and cylspheres never runs the cylsphere test.
+/// Four scenery models are in exactly that position (`0x020004BF`,
+/// `0x0200068B` with 3 cylspheres each; `0x020003CB`, `0x0200086E` with a
+/// sphere) — testing cylsphere first would diverge from retail on all four.
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, PartialEq)]
+enum SceneryRung {
+    /// Rung 1 — `state & HAS_PHYSICS_BSP_PS`. 23 of 176 DIDs, 0.5% of real
+    /// placements. NOT staged into the cylsphere/sphere batch; see the
+    /// deferral note in `populate_scenery_colliders_for_landblock_impl`.
+    Bsp,
+    /// Rung 2 — the whole `CSetup.cyl_spheres` array (retail iterates,
+    /// `v10 += 20`). 85 DIDs, 33.7% of real placements.
+    CylSpheres(Vec<holtburger_world::SetupCylSphere>),
+    /// Rung 3 — the whole `CSetup.spheres` array (`v10 += 16`). 19 DIDs,
+    /// 6.1% of real placements.
+    Spheres(Vec<holtburger_world::SetupSphere>),
+    /// Rung 4 — no collision at all. 49 DIDs, **59.7% of real placements**.
+    None,
+}
+
+/// Classify a scenery model by retail's narrow-phase ladder, memoised for
+/// the page lifetime.
+///
+/// Evaluated once per DISTINCT model rather than once per instance — the
+/// property lives on the Setup, not the placement, which is exactly why the
+/// bake does not put it on the wire (design §5).
+///
+/// # Why the ladder and nothing else
+///
+/// The tempting shortcut, `CSetup.height == 0 && radius == 0`, is WRONG:
+/// all 49 rung-4 models satisfy it, but so do **19 colliding models** —
+/// every BSP-only scenery Setup and all 8 BSP bare GfxObjs, including
+/// `0x020007D9` at ~12k placements. Measured across all 176 scenery DIDs
+/// (`/mnt/wbterminal2/buildbox-2026-07-27/census/census-summary.md` §6.3).
+/// The only correct predicate is the ladder itself.
+///
+/// # Rung 1 without fetching a single part
+///
+/// Retail derives `HAS_PHYSICS_BSP_PS` from `CPartArray::CacheHasPhysicsBSP`
+/// (`acclient.c:325445`) — "any part GfxObj with a non-null `physics_bsp`".
+/// `SetupFlags.HasPhysicsBSP` (`0x8`) agrees with that ground truth on
+/// **167 / 167** scenery Setups, zero mismatches, so the flag word alone
+/// classifies rung 1. That matters: chasing every part GfxObj per model
+/// would turn a landblock populate into dozens of extra DAT fetches.
+///
+/// # Bare GfxObjs
+///
+/// 9 of the 176 scenery ObjectIds are `0x01XXXXXX` GfxObj DIDs, not Setups.
+/// Retail wraps them via `CSetup::makeSimpleSetup` (`acclient.c:334456`),
+/// which sets only `num_parts`, `parts[0]` and `sorting_sphere` — leaving
+/// `num_cylsphere == num_sphere == 0`. They can therefore reach ONLY rung 1
+/// or rung 4, never 2 or 3. Parsing one as a `SetupModel` would fault, so
+/// they take their own branch: `GfxObjFlags.HasPhysics` (`0x1`) ⇒ `Bsp`,
+/// else `None`. 8 of the 9 are rung 1.
+#[cfg(target_arch = "wasm32")]
+fn scenery_model_rung(
+    source: &dyn holtburger_dat::ResourceSource,
+    obj_id: u32,
+) -> SceneryRung {
+    use holtburger_dat::ResourceKey;
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_world::{SetupCylSphere, SetupSphere};
+
+    /// `SetupFlags.HasPhysicsBSP`. Perfect proxy for rung 1 (167/167).
+    const SETUP_FLAG_HAS_PHYSICS_BSP: u32 = 0x8;
+    /// `GfxObjFlags.HasPhysics` — the bare-GfxObj rung-1 tell.
+    const GFXOBJ_FLAG_HAS_PHYSICS: u32 = 0x1;
+
+    thread_local! {
+        static RUNG_CACHE: std::cell::RefCell<
+            std::collections::HashMap<u32, SceneryRung>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+
+    if let Some(hit) = RUNG_CACHE.with(|c| c.borrow().get(&obj_id).cloned()) {
+        return hit;
+    }
+
+    let resolved = (|| -> SceneryRung {
+        let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", obj_id)) else {
+            // Unfetchable: treat as no-collider rather than guessing. A
+            // wrong collider is worse than a missing one.
+            return SceneryRung::None;
+        };
+        match (obj_id >> 24) as u8 {
+            0x01 => {
+                // Bare GfxObj. Only the flags word matters — rung 1 or 4.
+                match holtburger_dat::file_type::GfxObj::unpack(&mut std::io::Cursor::new(&bytes))
+                {
+                    Ok(gfx) => {
+                        if gfx.flags.bits() & GFXOBJ_FLAG_HAS_PHYSICS != 0
+                            || gfx.physics_bsp.is_some()
+                        {
+                            SceneryRung::Bsp
+                        } else {
+                            SceneryRung::None
+                        }
+                    }
+                    Err(_) => SceneryRung::None,
+                }
+            }
+            0x02 => {
+                let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+                    return SceneryRung::None;
+                };
+                // Rung 1 FIRST — the short-circuit. Four scenery models carry
+                // a BSP alongside cylspheres/spheres; retail never reaches
+                // their rung 2/3, so neither may we.
+                if setup.flags & SETUP_FLAG_HAS_PHYSICS_BSP != 0 {
+                    return SceneryRung::Bsp;
+                }
+                // Rung 2 — the WHOLE array. Guard each primitive on positive
+                // extents (a zero-radius or zero-height cylinder is
+                // degenerate, not a collider); the smallest real scenery
+                // cylsphere height in the world is 0.050, so this guard drops
+                // nothing genuine.
+                let cyls: Vec<SetupCylSphere> = setup
+                    .cyl_spheres
+                    .iter()
+                    .filter(|c| c.radius > 0.0 && c.height > 0.0)
+                    .map(|c| SetupCylSphere {
+                        origin: c.origin,
+                        radius: c.radius,
+                        height: c.height,
+                    })
+                    .collect();
+                if !cyls.is_empty() {
+                    return SceneryRung::CylSpheres(cyls);
+                }
+                // Rung 3 — the whole sphere array.
+                let sphs: Vec<SetupSphere> = setup
+                    .spheres
+                    .iter()
+                    .filter(|s| s.radius > 0.0)
+                    .map(|s| SetupSphere {
+                        center: holtburger_common::Vector3::new(
+                            s.center.x, s.center.y, s.center.z,
+                        ),
+                        radius: s.radius,
+                    })
+                    .collect();
+                if !sphs.is_empty() {
+                    return SceneryRung::Spheres(sphs);
+                }
+                SceneryRung::None
+            }
+            // Not a model id we can classify.
+            _ => SceneryRung::None,
+        }
+    })();
+
+    RUNG_CACHE.with(|c| c.borrow_mut().insert(obj_id, resolved.clone()));
+    resolved
+}
+
+/// DAT-01 phase 2c — build one landblock's [`SceneryColliderBatch`] from the
+/// baked scenery JSONL and stage it for the next `TickMovement` drain.
+///
+/// The scenery twin of `populate_statics_aabbs_for_landblock_impl`, and the
+/// answer to COL-01 / COL-29: procedural scenery had no collision
+/// representation anywhere in the client.
+///
+/// Per placement:
+/// 1. Require the V3 `aabb_*` box. **Absent → skip.** The live `dist/` is
+///    still pre-V3 (phase 3 re-bakes it), so on today's data this returns 0
+///    for every landblock and the whole arm is inert. That is deliberate:
+///    an inert arm is correct, and a fabricated bound would not be.
+/// 2. Classify the model by retail's exclusive narrow-phase ladder via
+///    [`scenery_model_rung`] (memoised per DID). `None` → skip, the
+///    mandatory rung-4 filter that keeps 59.7% of real placements —
+///    grass, flowers, clutter — walkable.
+/// 3. Scale + frame EVERY primitive of the live rung with
+///    `cylsphere_to_world` / `sphere_to_world`, the ports of
+///    `CCylSphere::intersects_sphere(this, p, scale, …)`
+///    (`acclient.c:362244`) and `CSphere::intersects_sphere` (`:359390`),
+///    using the placement's per-instance scale — retail's `SetScaleStatic`
+///    value from `get_land_scenes` (`acclient.c:352716`). One batch ROW per
+///    primitive; retail iterates the whole array.
+///
+/// # DEFERRED: rung 1 (physics BSP)
+///
+/// 23 of 176 scenery DIDs carry a physics BSP — **0.5% of real placements**
+/// (599 of a 115,415-placement sample). They are CLASSIFIED here (so they
+/// can never be mis-tested as a cylsphere, which retail's short-circuit
+/// forbids for the four models carrying both) and then **skipped**, counted
+/// into the `[dat01]` log line so the omission is visible rather than
+/// silent.
+///
+/// TODO(DAT-01 phase 3/4): stage these into the existing
+/// `STATIC_BSP_PENDING` → `scene.statics_physics_bsp` machinery +
+/// `enqueue_outdoor_overlap_bake`, mirroring the 0x01/0x02 branches of
+/// `populate_statics_aabbs_for_landblock_impl`. NOT done here for two
+/// reasons, both of which need resolving first:
+///   1. **Scale.** That machinery's `CellPhysicsBsp.scale` is hard-coded
+///      `1.0` at both existing staging sites with its own TODO ("plumb the
+///      real scenery scale when the feed carries it"), and the part-frame
+///      composition there does not scale `b.offset` either. Scenery scale
+///      ranges 0.2×–8.0×, so a unit-scale assumption would place these
+///      BSPs visibly wrong — worse than no collision.
+///   2. **Gating.** `statics_physics_bsp` feeds the outdoor overlap bake
+///      into `cell_static_physics_bsp`, which the LIVE faithful transition
+///      driver consults UNCONDITIONALLY. Staging there would make scenery
+///      BSP collision live by default, defeating `USE_SCENERY_COLLISION`.
+///
+/// Coordinate frames, because they differ between the two halves of a JSONL
+/// line: `x`/`y` and `aabb_min_x`/`aabb_max_x`/… are LB-LOCAL metres (add the
+/// landblock origin); `z` and `aabb_*_z` are already ABSOLUTE.
+///
+/// Returns the count of collider ROWS staged (≥ the placement count for
+/// multi-primitive models). Same "missing data is zero, not a failure"
+/// contract as the statics path: a 404 / empty / unbaked landblock returns
+/// `Ok(0)`.
+#[cfg(target_arch = "wasm32")]
+async fn populate_scenery_colliders_for_landblock_impl(
+    landblock_id: u32,
+) -> Result<u32, JsValue> {
+    use holtburger_common::{Aabb, Quaternion, Vector3};
+    use holtburger_dat::ResourceKey;
+    use holtburger_world::{SceneryColliderBatch, cylsphere_to_world, sphere_to_world};
+
+    const LB_M: f32 = 192.0;
+
+    let landblock_high = landblock_id & 0xFFFF_0000;
+    let origin_x = ((landblock_high >> 24) & 0xFF) as f32 * LB_M;
+    let origin_y = ((landblock_high >> 16) & 0xFF) as f32 * LB_M;
+
+    let base_url = match scenery_fetch::base_url() {
+        Some(u) => u,
+        // No scenery source configured (a session that never called
+        // `init_scenery_base_url`, e.g. a protocol-only bot). Zero, not an
+        // error — the renderer's own scenery path would be dark too.
+        None => return Ok(0),
+    };
+
+    let recs = scenery_fetch::fetch_one_lb(&base_url, landblock_high)
+        .await
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "populateSceneryCollidersForLandblock: 0x{landblock_high:08X}: {e}"
+            ))
+        })?;
+    if recs.is_empty() {
+        return Ok(0);
+    }
+
+    // Nothing to do at all on a pre-V3 bake — bail before touching the DAT
+    // source so the inert case costs one pass over the cached records.
+    if !recs.iter().any(|r| r.bounds.is_some()) {
+        return Ok(0);
+    }
+
+    let source = global_source::global_source();
+
+    // Batch the DAT round-trip for the DISTINCT models, exactly as the
+    // statics path does: the standard pine appears dozens of times per
+    // landblock and in hundreds of landblocks.
+    let mut distinct: Vec<u32> = recs.iter().map(|r| r.obj_id).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let keys: Vec<ResourceKey<'_>> = distinct
+        .iter()
+        .map(|&id| ResourceKey::new("eor/portal", id))
+        .collect();
+    // Best-effort: a prefetch failure just means the per-model resolve below
+    // misses and those placements drop out, which is the same fail-soft
+    // contract as every other collision populate.
+    source.prefetch(&keys).await.ok();
+
+    let mut batch = SceneryColliderBatch::with_capacity(recs.len());
+    // Rung-1 placements we classified but did not stage — logged so the
+    // deferral is visible in the console rather than silent.
+    let mut bsp_deferred = 0u32;
+    for r in &recs {
+        let Some(b) = r.bounds else { continue };
+        if !(r.scale > 0.0) {
+            continue;
+        }
+        let aabb = Aabb::new(
+            Vector3::new(b[0] + origin_x, b[1] + origin_y, b[2]),
+            Vector3::new(b[3] + origin_x, b[4] + origin_y, b[5]),
+        );
+        if aabb.is_empty() {
+            continue;
+        }
+        let placement_origin = Vector3::new(r.x + origin_x, r.y + origin_y, r.z);
+        // The bake emits a yaw-only quaternion (qx == qy == 0), matching
+        // retail's `get_land_scenes` Z-rotation-only scenery frame — which is
+        // what lets the narrow phase keep the cylinder world-Z-aligned. See
+        // `cylsphere_to_world`'s doc.
+        let placement_rot = Quaternion {
+            w: r.qw,
+            x: r.qx,
+            y: r.qy,
+            z: r.qz,
+        };
+        match scenery_model_rung(source.as_ref(), r.obj_id) {
+            SceneryRung::Bsp => {
+                bsp_deferred += 1;
+            }
+            SceneryRung::CylSpheres(cyls) => {
+                for local in &cyls {
+                    let world_cyl =
+                        cylsphere_to_world(local, r.scale, placement_origin, placement_rot);
+                    batch.push_cylinder(r.obj_id, aabb, world_cyl, r.scale);
+                }
+            }
+            SceneryRung::Spheres(sphs) => {
+                for local in &sphs {
+                    let (center, radius) =
+                        sphere_to_world(local, r.scale, placement_origin, placement_rot);
+                    batch.push_sphere(r.obj_id, aabb, center, radius, r.scale);
+                }
+            }
+            SceneryRung::None => {}
+        }
+    }
+    if bsp_deferred > 0 {
+        log::debug!(
+            "populateSceneryCollidersForLandblock 0x{landblock_high:08X}: \
+             {bsp_deferred} rung-1 (physics BSP) placement(s) classified and \
+             DEFERRED — see the TODO on this function"
+        );
+    }
+    let staged = batch.len() as u32;
+    if staged > 0 {
+        SCENERY_COLLIDER_PENDING.with(|pile| {
+            pile.borrow_mut().push((landblock_high, batch));
+        });
+    }
+    Ok(staged)
+}
+
+/// DAT-01 phase 2c — public wasm export. JS fires this once per landblock
+/// load, beside `populateStaticsAabbsForLandblock`
+/// (`index.html`'s `populateOne`), and the JS-side dedup set plus the
+/// `LANDBLOCK_CLEAR_PENDING` purge make re-entry REPLACE rather than append.
+///
+/// `landblock_id` accepts either the bare landblock high word (`0xA9B40000`)
+/// or any cell id within it. Returns the number of colliders staged —
+/// **0 on the currently-shipped pre-V3 `dist/scenery/`**, which is the
+/// expected reading until phase 3 re-bakes.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = populateSceneryCollidersForLandblock)]
+pub async fn populate_scenery_colliders_for_landblock(
+    landblock_id: u32,
+) -> Result<u32, JsValue> {
+    populate_scenery_colliders_for_landblock_impl(landblock_id).await
 }
 
 /// Workstream Sky-B (parametric skybox, 2026-05-11): populate the
@@ -33144,12 +33608,20 @@ impl SessionHandle {
     ///
     /// `buildingAabbs,staticAabbs,staticBsps,buildingPhysics,cellAabbs,
     ///  cellPhysicsTris,cellPhysicsBsps,cellStaticBsps,cellMembership,
-    ///  cellPortalGraph,doorParts,openDoorExclusions,terrainHeightLbs`
+    ///  cellPortalGraph,doorParts,openDoorExclusions,terrainHeightLbs,
+    ///  sceneryColliderLbs,sceneryColliders,sceneryNarrowHits,sceneryArmEvals`
+    ///
+    /// DAT-01 phase 2e (2026-07-27) appended the last three. APPENDED, never
+    /// inserted: `scene3d/diag/collision.js` parses this positionally against
+    /// its `RESIDENCY_FIELDS` list, so a stale `pkg/` reading a new field
+    /// order would mislabel every counter. New fields go on the END, and the
+    /// JS side tolerates a short split (missing → `null`, i.e. "unknown",
+    /// which is the honest reading for a stale bundle).
     #[wasm_bindgen(js_name = collisionResidencyDiag)]
     pub fn collision_residency_diag(&self) -> String {
         let scene = self.collision_scene.borrow();
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             scene.building_aabb_count(),
             scene.static_aabb_count(),
             scene.static_physics_bsp_count(),
@@ -33163,6 +33635,10 @@ impl SessionHandle {
             scene.door_part_index_len(),
             scene.open_door_exclusion_len(),
             scene.terrain_heights_count(),
+            scene.scenery_collider_landblock_count(),
+            scene.scenery_collider_count(),
+            scene.scenery_narrow_phase_hits(),
+            scene.scenery_arm_eval_count(),
         )
     }
 
@@ -49108,6 +49584,25 @@ async fn recv_loop(
                                 w.scene.static_physics_bsp_count(),
                             ));
                         }
+                        // DAT-01 phase 2c (2026-07-27): drain the baked
+                        // procedural-scenery collider batches queued by
+                        // `populateSceneryCollidersForLandblock`. Same
+                        // cadence + ordering rationale as the two drains
+                        // above (after the LANDBLOCK_CLEAR purge, before the
+                        // integrator tick). Consulted only when
+                        // USE_SCENERY_COLLISION is on, so this is
+                        // inert-but-present by default — and reads 0 on the
+                        // shipped pre-V3 `dist/scenery/`.
+                        let drained_scenery =
+                            drain_pending_scenery_colliders_into(&mut w.scene);
+                        if drained_scenery > 0 {
+                            console_log_str(&format!(
+                                "[dat01] drained {drained_scenery} scenery colliders \
+                                 (total now {} across {} landblock(s))",
+                                w.scene.scenery_collider_count(),
+                                w.scene.scenery_collider_landblock_count(),
+                            ));
+                        }
                         // Phase 6 step E follow-up (2026-05-09): drain
                         // any pending building-origin entries queued by
                         // the same `populateBuildingAabbsForLandblock`
@@ -58530,5 +59025,194 @@ mod tests_surface_cache {
             "reclaimed to {budget} B once holders dropped, held {}",
             lru.total_bytes
         );
+    }
+}
+
+/// DAT-01 phase 2c (2026-07-27) — V3 scenery-bake wire-format ingest.
+///
+/// Covers the two halves the live path cannot be tested on today: the
+/// `aabb_*` parse (the shipped `dist/scenery/` is still PRE-V3, so a boot
+/// smoke can only ever prove the inert case), and the world-frame collider
+/// construction the wasm populate performs per placement.
+///
+/// The V3 fixtures are the real phase-1 test bake, per the project's
+/// "test-fixtures-real-data" rule. When that scratch directory is absent the
+/// file-driven tests SKIP rather than fail — the inline-literal tests below
+/// still pin the format.
+#[cfg(test)]
+mod tests_dat01_scenery_wire {
+    use super::{ScenicPlacementJsonRaw, scenic_bounds_from_raw};
+
+    /// The phase-1 three-LB scratch bake (0xA9B3 / 0xA9B4 / 0xAAB4).
+    const V3_DIR: &str = "/tmp/claude-1000/-home-wbterminal/\
+                          8241ea14-ef2c-4fd3-986e-f4128a83cd27/scratchpad/dat01/v3";
+    const NOBOUNDS_DIR: &str = "/tmp/claude-1000/-home-wbterminal/\
+                                8241ea14-ef2c-4fd3-986e-f4128a83cd27/scratchpad/dat01/nobounds";
+
+    /// A real V3 line, verbatim from `0xA9B3.scenery.jsonl`.
+    const V3_LINE: &str = r#"{"obj_id":"0x020002D3","x":3.179089,"y":6.491319,"z":88.163773,"qw":0.976121,"qx":0.000000,"qy":0.000000,"qz":0.217229,"scale":0.618017,"source_cell_x":0,"source_cell_y":0,"source_obj_idx":0,"default_script_id":"0x00000000","stable_id":"landblock-static/a9b30000/generatedscenery/120000bf/0/0/020002d3","aabb_min_x":-0.971416,"aabb_min_y":2.384231,"aabb_min_z":85.800140,"aabb_max_x":7.282176,"aabb_max_y":10.637819,"aabb_max_z":107.940384}"#;
+
+    /// The same placement as a PRE-V3 bake writes it (no `stable_id`, no
+    /// `aabb_*`) — i.e. what `dist/scenery/` still ships.
+    const V1_LINE: &str = r#"{"obj_id":"0x020002D3","x":3.179089,"y":6.491319,"z":88.163773,"qw":0.976121,"qx":0.000000,"qy":0.000000,"qz":0.217229,"scale":0.618017,"source_cell_x":0,"source_cell_y":0,"source_obj_idx":0,"default_script_id":"0x00000000"}"#;
+
+    #[test]
+    fn v3_line_parses_with_bounds() {
+        let raw: ScenicPlacementJsonRaw = serde_json::from_str(V3_LINE).expect("V3 line parses");
+        let b = scenic_bounds_from_raw(&raw).expect("V3 line carries all six aabb fields");
+        assert!((b[0] - -0.971_416).abs() < 1e-5, "min_x {}", b[0]);
+        assert!((b[2] - 85.800_14).abs() < 1e-3, "min_z {}", b[2]);
+        assert!((b[5] - 107.940_384).abs() < 1e-3, "max_z {}", b[5]);
+        // XY are LB-local, Z absolute: the box straddles the placement's
+        // local (x, y) and CONTAINS its absolute z.
+        assert!(b[0] <= raw.x && raw.x <= b[3]);
+        assert!(b[1] <= raw.y && raw.y <= b[4]);
+        assert!(b[2] <= raw.z && raw.z <= b[5]);
+    }
+
+    #[test]
+    fn pre_v3_line_parses_with_no_bounds() {
+        // The compatibility contract that let phase 1 ship before any
+        // consumer existed: unknown fields are ignored, absent fields are
+        // None, and the line still parses.
+        let raw: ScenicPlacementJsonRaw = serde_json::from_str(V1_LINE).expect("V1 line parses");
+        assert!(scenic_bounds_from_raw(&raw).is_none());
+        assert!((raw.scale - 0.618_017).abs() < 1e-6);
+    }
+
+    #[test]
+    fn partial_bounds_are_treated_as_absent() {
+        // Five of six. Defaulting the sixth to 0 would produce a box
+        // stretching to the landblock origin — a silently WRONG broad phase.
+        let line = r#"{"obj_id":"0x020002D3","x":1.0,"y":2.0,"z":3.0,"qw":1.0,"qx":0.0,"qy":0.0,"qz":0.0,"scale":1.0,"source_cell_x":0,"source_cell_y":0,"source_obj_idx":0,"aabb_min_x":0.0,"aabb_min_y":0.0,"aabb_min_z":0.0,"aabb_max_x":1.0,"aabb_max_y":1.0}"#;
+        let raw: ScenicPlacementJsonRaw = serde_json::from_str(line).expect("parses");
+        assert!(scenic_bounds_from_raw(&raw).is_none());
+    }
+
+    #[test]
+    fn unknown_future_fields_do_not_break_the_parse() {
+        // The append-only wire contract (design §5): a V4 field must not
+        // fail a V3 reader.
+        let line = format!(
+            "{}{}",
+            &V3_LINE[..V3_LINE.len() - 1],
+            r#","some_future_v4_field":123.456}"#
+        );
+        let raw: ScenicPlacementJsonRaw = serde_json::from_str(&line).expect("V4-ish line parses");
+        assert!(scenic_bounds_from_raw(&raw).is_some());
+    }
+
+    fn parse_file(path: &str) -> Option<Vec<ScenicPlacementJsonRaw>> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let mut out = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            out.push(
+                serde_json::from_str(t)
+                    .unwrap_or_else(|e| panic!("{path} line {}: {e}", i + 1)),
+            );
+        }
+        Some(out)
+    }
+
+    #[test]
+    fn real_v3_bake_every_line_carries_bounds() {
+        let path = format!("{V3_DIR}/0xA9B3.scenery.jsonl");
+        let Some(rows) = parse_file(&path) else {
+            eprintln!("SKIP: {path} absent (phase-1 scratch bake not staged)");
+            return;
+        };
+        assert!(rows.len() >= 70, "expected the dense LB, got {}", rows.len());
+        for (i, r) in rows.iter().enumerate() {
+            let b = scenic_bounds_from_raw(r)
+                .unwrap_or_else(|| panic!("row {i} missing aabb_* in a V3 bake"));
+            assert!(b[0] <= b[3] && b[1] <= b[4] && b[2] <= b[5], "row {i} inverted box");
+            assert!(r.scale > 0.0, "row {i} non-positive scale");
+        }
+    }
+
+    #[test]
+    fn real_no_bounds_bake_reproduces_the_pre_v3_shape() {
+        let path = format!("{NOBOUNDS_DIR}/0xA9B3.scenery.jsonl");
+        let Some(rows) = parse_file(&path) else {
+            eprintln!("SKIP: {path} absent (phase-1 scratch bake not staged)");
+            return;
+        };
+        assert!(!rows.is_empty());
+        for (i, r) in rows.iter().enumerate() {
+            assert!(
+                scenic_bounds_from_raw(r).is_none(),
+                "row {i}: --no-bounds must emit no aabb_* fields"
+            );
+        }
+    }
+
+    /// End-to-end shape of what `populateSceneryCollidersForLandblock` builds
+    /// per placement, minus the DAT fetch (which needs a resource source).
+    /// The cylsphere here is `0x020002D3`'s measured 1.53 m / ~20 m trunk.
+    #[test]
+    fn v3_line_builds_a_world_collider() {
+        use holtburger_common::{Aabb, Quaternion, Vector3};
+        use holtburger_world::{
+            SceneryColliderBatch, SetupCylSphere, cylsphere_to_world,
+        };
+
+        let raw: ScenicPlacementJsonRaw = serde_json::from_str(V3_LINE).unwrap();
+        let b = scenic_bounds_from_raw(&raw).unwrap();
+        // Landblock 0xA9B3 -> origin (0xA9 * 192, 0xB3 * 192).
+        let origin_x = 0xA9 as f32 * 192.0;
+        let origin_y = 0xB3 as f32 * 192.0;
+
+        // 0x020002D3's REAL cylsphere from the world-scale census
+        // (census-summary.md §4): r 1.530, h 34.606, origin z -3.800 — the
+        // cylinder is sunk 3.8 m BELOW the placement point, which is why the
+        // origin has to be scaled and rotated, not merely translated.
+        let local_cyl = SetupCylSphere {
+            origin: Vector3::new(0.0, 0.0, -3.800),
+            radius: 1.530,
+            height: 34.606,
+        };
+        let world_cyl = cylsphere_to_world(
+            &local_cyl,
+            raw.scale,
+            Vector3::new(raw.x + origin_x, raw.y + origin_y, raw.z),
+            Quaternion { w: raw.qw, x: raw.qx, y: raw.qy, z: raw.qz },
+        );
+        // Per-instance scale 0.618017 shrinks the trunk proportionally —
+        // this is the `m_scale` half of the retail port
+        // (acclient.c:362258), and getting it wrong is invisible until a
+        // player squeezes past a sapling.
+        assert!((world_cyl.radius - 1.530 * 0.618_017).abs() < 1e-4);
+        assert!((world_cyl.height - 34.606 * 0.618_017).abs() < 1e-3);
+        // Zero XY origin: low_pt sits over the placement in plan...
+        assert!((world_cyl.low_pt.x - (raw.x + origin_x)).abs() < 1e-3);
+        // ...but the SCALED sunk Z puts the cylinder base 3.8*0.618 m below
+        // it. A port that translated the origin without scaling would land
+        // 1.45 m too low here, and nothing visible would say so.
+        let want_z = raw.z + (-3.800 * 0.618_017);
+        assert!(
+            (world_cyl.low_pt.z - want_z).abs() < 1e-3,
+            "low_pt.z {} want {want_z}",
+            world_cyl.low_pt.z
+        );
+
+        let aabb = Aabb::new(
+            Vector3::new(b[0] + origin_x, b[1] + origin_y, b[2]),
+            Vector3::new(b[3] + origin_x, b[4] + origin_y, b[5]),
+        );
+        assert!(!aabb.is_empty());
+        // The broad-phase box must CONTAIN the collider it gates, or the
+        // reject would drop hits the narrow phase would have found.
+        assert!(aabb.min.x <= world_cyl.low_pt.x && world_cyl.low_pt.x <= aabb.max.x);
+        assert!(aabb.min.y <= world_cyl.low_pt.y && world_cyl.low_pt.y <= aabb.max.y);
+
+        let mut batch = SceneryColliderBatch::new();
+        batch.push_cylinder(0x0200_02D3, aabb, world_cyl, raw.scale);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch.cyl_at(0).radius, world_cyl.radius);
+        assert_eq!(batch.rung_counts(), (1, 0));
     }
 }

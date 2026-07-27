@@ -978,3 +978,219 @@ here.
 - Multiple `@teleloc` per session works (9 in this session); the freeze
   mentioned in the handoff was the airborne-teleport case above, not teleport
   count.
+
+---
+
+## DAT-01 / P1.1 — PHASE 2 LANDED (2026-07-27). Cylsphere + sphere narrow phase, per-LB batches, live-path integrator arm (DEFAULT-OFF). Two of phase 1's premises refuted at world scale; the arm's first siting was DEAD CODE.
+
+Design doc: `DAT-01-design.md`. Phase 1 (bake-side V3 `aabb_*`) is `c6aaa436`.
+Everything below is client-side and NOT committed by this pass.
+
+### What landed
+
+| sub | what | anchor |
+|---|---|---|
+| 2a | `SceneryColliderBatch` (SoA, one row per PRIMITIVE) + `insert_scenery_colliders` / `clear_scenery_colliders_for_landblock` / `scenery_collider_count` / `..._landblock_count`, and the scenery family wired into the batched `clear_landblocks_collision` | `holtburger-world/src/spatial/scenery.rs`; `spatial/scene.rs` `insert_scenery_colliders` / `clear_landblocks_collision` |
+| 2b | `CCylSphere` port (rungs 2) + `CSphere` port (rung 3): `cylsphere_to_world`, `cylsphere_collides_with_sphere`, `cylsphere_z_slab_overlap`, `cylsphere_normal_of_collision`, `sweep_sphere_against_cylsphere`, `cylsphere_pushout_xy`, `sphere_to_world`, `sphere_collides_with_sphere`, `sweep_sphere_against_sphere`, `sphere_pushout_xy` | `spatial/scenery.rs` |
+| 2c | `populateSceneryCollidersForLandblock` + `scenery_model_rung` (the exclusive ladder, memoised per DID) + V3 `aabb_*` on `ScenicPlacementJsonRaw`/`CachedRecord` + `scenic_bounds_from_raw` | `apps/holtburger-web/src/lib.rs` |
+| 2d | `USE_SCENERY_COLLISION` (**false**) + the arm, sited AFTER `find_transitional_position_dispatch` | `holtburger-core/src/client/movement/system.rs` |
+| 2e | JS load hook + `sceneryCollidersPopulatedLbs` evict dedup + 4 new `__diag.collision` counters | `index.html`; `scene3d/diag/collision.js` |
+
+### THE MISTAKE WORTH RECORDING: the obvious home for the arm is dead code
+
+`system.rs:4783-4886` — the outdoor-static AABB sweep plus the static-BSP
+push-out — reads exactly like the place a scenery arm belongs. It is
+**unreachable**. `advance_local_pose_for_manual_drive_slice` returns at
+`:4221` under `USE_UNIFIED_TRANSITION` (`:644`, `true`), so that whole block
+and everything down to the legacy entity pass never executes on the live
+path. An arm placed there passes its flag-off smoke *and would keep passing
+after the flag was flipped on*, because the code simply never runs.
+
+The live path is `find_transitional_position_dispatch` (`transition.rs:985`)
+→ `faithful_bridge::faithful_find_transitional_position` (both
+`USE_FAITHFUL_TRANSITION` `:669` and `USE_FAITHFUL_OUTDOOR` `:694` are
+`true`). The arm now sits immediately after it, in the same
+post-transition XY-correction shape the FU-3 entity arm uses
+(`system.rs`, `pose.coords.x += clamped.x - lateral.x`).
+
+**Generalised guard, added as a permanent probe:**
+`SpatialScene::note_scenery_arm_reached()` is called at the arm's site
+**OUTSIDE** the `USE_SCENERY_COLLISION` check, surfacing as
+`__diag.collision.residency().sceneryArmEvals`. A counter that only moved
+when the flag was ON could not have caught this — "flag off, no effect" and
+"flag in dead code" are indistinguishable from outside. Site reached plus a
+`const true` gate is a compile-time guarantee that the body runs. **Any
+future flag-gated arm in this codebase should ship the same unconditional
+reachability bump.**
+
+MEASURED: `sceneryArmEvals` 0 → 38 over a 6 s headless walk on the shipped
+wasm (0 → 178 → 239 on the prior build). Zero at the dead site, by
+construction.
+
+### PREMISE CORRECTIONS — phase 1's 3-landblock sample was wrong twice
+
+Ground truth: the world-scale census at
+`/mnt/wbterminal2/buildbox-2026-07-27/census/census-summary.md` — all 176
+scenery DIDs, calibrated against 115,415 real placements from the shipped
+bake.
+
+| rung | DIDs | real placements | phase-1 claim |
+|---|---:|---:|---|
+| 1 `bsp` | 23 | 0.5% | *"there is no BSP to use"* — **REFUTED** |
+| 2 `cylsphere` | 85 | 33.7% | correct |
+| 3 `sphere` | 19 | 6.1% | not mentioned — would have been staged with no test to run |
+| 4 `none` | 49 | **59.7%** (95% CI [58.05, 61.39]) | *"42%"* — **REFUTED, understated** |
+
+Three further corrections now honoured in code:
+
+1. **`CSetup.height == 0 && radius == 0` is NOT a valid "no collider" test.**
+   All 49 rung-4 DIDs satisfy it — but so do **19 colliding DIDs** (every
+   BSP-only Setup, all 8 BSP bare GfxObjs, incl. `0x020007D9` at ~12k
+   placements). Only the ladder itself is correct. `scenery_model_rung`
+   classifies by the ladder and nothing else.
+2. **The ladder is EXCLUSIVE and ORDERED.** Rung 1 short-circuits, and four
+   scenery models carry a BSP *alongside* cylspheres/spheres (`0x020004BF`,
+   `0x0200068B`, `0x020003CB`, `0x0200086E`). Testing cylsphere first would
+   diverge from retail on all four. Rung 1 is therefore classified FIRST via
+   `SetupFlags.HasPhysicsBSP` (`0x8`) — a perfect proxy for the real
+   `CPartArray::CacheHasPhysicsBSP` truth, 167/167 Setups, so no part GfxObj
+   fetch is needed.
+3. **9 of the 176 scenery ObjectIds are bare `0x01XXXXXX` GfxObjs, not
+   Setups.** `CSetup::makeSimpleSetup` (`acclient.c:334456`) leaves
+   `num_cylsphere == num_sphere == 0`, so they reach only rung 1 or 4 —
+   parsing one as a `SetupModel` would fault. They take their own branch on
+   `GfxObjFlags.HasPhysics`.
+4. **Multi-primitive arrays are real** (cylsphere counts {1:82, 2:3, 3:2};
+   sphere counts {1:18, 2:2, 3:1}) and retail walks the whole array
+   (`v10 += 20` / `+= 16`). The batch emits **one row per primitive**, not
+   per placement.
+5. **Cylsphere origins must be SCALED and ROTATED, not just translated** —
+   23 of 87 have non-zero XY, 26 have negative Z (`0x020002D3` sits at
+   z −3.8). Scale reaches **8.0×** via `ObjectDesc.MaxScale`, so a 3.639 m
+   radius becomes 29 m; the tests cover the scaled path.
+
+### The decomp math, and where the port deviates knowingly
+
+`CCylSphere::intersects_sphere(cyl, Position *p, float scale, CTransition *)`
+(`acclient.c:362244`) applies `m_scale` uniformly to `radius`, `height` AND
+`low_pt` — `low_pt` scaled in MODEL space, *then* transformed by the
+placement frame (`:362258-362266`). `cylsphere_to_world` reproduces that.
+
+`CCylSphere::collides_with_sphere` (`:361502`):
+`radsum² >= disp.x²+disp.y²` AND
+`sphere.r − 2e-4 + h/2 >= |h/2 − disp.z|`. The Z half reads as a puzzle but
+reduces to `−r <= disp.z <= height + r` — the cylinder's Z span extended by
+the sphere radius at both ends. It is a **slab** test, not a true capsule
+test: near a cap rim retail reports a hit the exact corner distance would
+not. Preserved deliberately.
+
+Swept solve = the quadratic inside `CCylSphere::collide_with_point`
+(`:361824-361840`, `:361896-361918`), including retail's root rule at
+`:361832` (near root; far root when the near one is negative, so an
+already-overlapping start yields a forward exit rather than a spurious
+backward hit) and the `t ∉ [0,1]` rejection at `:361887`.
+
+**One non-obvious constraint, found the hard way.** Re-asserting the full
+`collides_with_sphere` at the swept contact point rejects **every true wall
+hit**: retail's `radsum` is `radius − 2e-4 + sphere_radius` while the swept
+solve uses `radsuma = radius + sphere_radius`, so the exact contact point is
+epsilon-*outside* the predicate. Retail never notices because its caller
+evaluates the predicate at the *start* pose, before `collide_with_point`
+runs. The port therefore applies the **Z half only**
+(`cylsphere_z_slab_overlap`) at the contact. This cost two failing tests to
+find and is the single easiest place to reintroduce a silent
+never-collides bug.
+
+Rung 3: `CSphere::collides_with_sphere` (`:358509`) has its FPU compare
+**lost by the decompiler** (`return v5 == 0;` with `v3 = disp->z` dangling),
+so the predicate is taken from ACE's verbatim port
+(`Physics/Sphere.cs:215-221`, `LengthSquared() <= radsum²`) with
+`radsum = mover.r + sphere.r − EPS` (`Sphere.cs:302`). Both rungs treat
+exact contact as a hit, consistently.
+
+**Knowing deviations:** `slide_sphere` / `land_on_cylinder` /
+`step_sphere_up` / `step_sphere_down` are NOT ported — they are the retail
+`CTransition` resolution arms, and our integrator owns resolution
+(stop-and-slide + lateral depenetration, exactly like the `USE_STATIC_BSP`
+arm). Push-out is lateral-only so the floor-Z snap stays the sole vertical
+authority.
+
+### DEFERRED — rung 1 (physics BSP), 0.5% of placements
+
+Classified (so it can never be mis-tested as a cylsphere) and **skipped**,
+counted into a `[dat01]` debug log so the omission is visible rather than
+silent. TODO recorded on `populate_scenery_colliders_for_landblock_impl`.
+NOT staged into the existing `STATIC_BSP_PENDING` machinery for two
+blocking reasons:
+
+1. **Scale.** `CellPhysicsBsp.scale` is hard-coded `1.0` at *both* existing
+   staging sites (`lib.rs`, with its own pre-existing TODO "plumb the real
+   scenery scale when the feed carries it"), and the part-frame composition
+   there does not scale `b.offset` either. Scenery scale is 0.2×–8.0×, so a
+   unit-scale assumption would place these BSPs visibly wrong — worse than
+   no collision.
+2. **Gating.** `statics_physics_bsp` feeds the outdoor overlap bake into
+   `cell_static_physics_bsp`, which the live faithful driver consults
+   **unconditionally**. Staging there would make scenery BSP collision live
+   by default, defeating `USE_SCENERY_COLLISION`.
+
+### Validation
+
+Unit: **642** `holtburger-world` lib tests pass (48 scenery-specific), plus
+**7** `holtburger-web` native V3 wire tests. Hand-computed cylinder/sphere
+times, cap hits, the radsum boundary, the 0.050 m smallest real cylsphere,
+scaled-instance proportionality, and the census ground-truth params for
+`0x020002D3` / `0x02000258` / `0x02000246` at 8× scale.
+
+Live (headless, `:8765`, ACE on this box, bare defaults + the arm OFF
+against the shipped **pre-V3** `dist/`):
+- boots to `in-world` in 24 s, **zero console errors**, all five wasm
+  collision smokes pass;
+- `residency()` returns **17** fields (13 + 4 new), parsed positionally in
+  lockstep with `RESIDENCY_FIELDS`;
+- `populateSceneryCollidersForLandblock` returns **0** cleanly for every LB
+  — the arm is inert on pre-V3 data, by design, with no error path;
+- `sceneryArmEvals` 0 → 38 during a 6 s walk (reachability).
+
+Live V3 ingest, against the **real full-world rebake** at
+`/mnt/wbterminal2/buildbox-2026-07-27/rebake/staging/` (3 LBs copied under
+the served tree, `init_scenery_base_url` repointed, source restored after):
+
+| LB | placements | colliders staged | census-predicted | verdict |
+|---|---:|---:|---:|---|
+| `0xA9B3` | 71 | **46** | 46 (25 rung-4: `0x02001063`×23, `0x020005AC`×2) | **exact** |
+| `0xA9B4` | 0 | 0 | 0 | exact |
+| `0xAAB4` | 8 | **0** | 0 (all 8 rung-4) | **exact** |
+
+The 46 drained into the scene (`sceneryColliders` 46, `sceneryColliderLbs`
+1). Re-staging the same LB **doubled it to 92** — append semantics are real,
+which is precisely why the clear had to be wired — and
+`enqueueClearLandblockCollision(0xA9B3)` returned it to **0/0**, proving the
+scenery family is live inside the batched `clear_landblocks_collision`.
+
+NOT validated: live movement blocking with the flag ON. That is phase 4 and
+needs the lateral-offset approach at a known tree plus the
+"can-still-walk-through-grass" negative test. `sceneryNarrowHits` is the
+evidence to read.
+
+### Perf note (estimated, not measured — which is why the flag ships OFF)
+
+Flag OFF: one `Cell<u64>` increment per movement slice. Nothing else — the
+gate is a `const bool`, so the body is dead-code eliminated.
+
+Flag ON, at measured density: `0xA9B3` is 46 rows, so a 3×3 ring is
+~400 rows worst case. The swept path early-outs on an empty index and on a
+zero delta, then rejects on one AABB compare per row (a pine's render box
+is 4.5–12.4× its trunk, so almost everything rejects). The depenetration
+path has **no delta to early-out on** and runs every slice once anything is
+resident — it was given the same AABB pre-reject for exactly that reason.
+Estimated worst case ~400 AABB compares + a handful of quadratics per
+slice. Believed negligible; **unmeasured**, and the whole reason
+`USE_SCENERY_COLLISION` deviates from the project's default-on rule.
+
+### pkg/ state
+
+`pkg/holtburger_web_bg.wasm` = **4,906,246 B release**
+(sha256 `c51b83a0e6585329…`), containing all of the above.
+Pre-change backup: `…/scratchpad/pre-dat01-holtburger_web_bg.wasm`
+(4,947,030 B).

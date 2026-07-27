@@ -4323,3 +4323,311 @@ mod cur_cell_continuity {
         assert_eq!(scene.current_cell(&pose(stale, 15.0)), CELL_B);
     }
 }
+
+/// DAT-01 phase 2a/2b/2d (2026-07-27): baked-procedural-scenery collision —
+/// per-landblock batch residency, the unload purge (the double-registration
+/// failure mode), and the broad+narrow sweep through `SpatialScene`.
+mod scenery_colliders {
+    use super::*;
+    use crate::spatial::scenery::{SceneryColliderBatch, WorldCylSphere};
+    use holtburger_common::Aabb;
+
+    const LB: u32 = 0xA9B3_0000;
+    /// Landblock 0xA9B3's world origin in global metres: (0xA9 * 192,
+    /// 0xB3 * 192) = (32448, 34176).
+    const ORIGIN_X: f32 = 0xA9 as f32 * 192.0;
+    const ORIGIN_Y: f32 = 0xB3 as f32 * 192.0;
+
+    fn pose_at(local_x: f32, local_y: f32, z: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(LB),
+            coords: Vector3::new(local_x, local_y, z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    /// One tree at LB-local (20, 20): a 1.5 m-radius, 20 m-tall trunk with
+    /// the render-mesh AABB the V3 bake would emit around its canopy (±7 m,
+    /// the measured 4.5x overstatement for `0x020002D3`).
+    fn one_tree() -> SceneryColliderBatch {
+        let cx = ORIGIN_X + 20.0;
+        let cy = ORIGIN_Y + 20.0;
+        let mut b = SceneryColliderBatch::new();
+        b.push_cylinder(
+            0x0200_02D3,
+            Aabb::new(
+                Vector3::new(cx - 7.0, cy - 7.0, 0.0),
+                Vector3::new(cx + 7.0, cy + 7.0, 22.0),
+            ),
+            WorldCylSphere {
+                low_pt: Vector3::new(cx, cy, 0.0),
+                radius: 1.5,
+                height: 20.0,
+            },
+            1.0,
+        );
+        b
+    }
+
+    #[test]
+    fn insert_and_clear_round_trip() {
+        let mut scene = SpatialScene::new();
+        assert_eq!(scene.scenery_collider_count(), 0);
+        assert_eq!(scene.scenery_collider_landblock_count(), 0);
+        scene.insert_scenery_colliders(LB, one_tree());
+        assert_eq!(scene.scenery_collider_count(), 1);
+        assert_eq!(scene.scenery_collider_landblock_count(), 1);
+        assert_eq!(scene.clear_scenery_colliders_for_landblock(LB), 1);
+        assert_eq!(scene.scenery_collider_count(), 0);
+        assert_eq!(scene.scenery_collider_landblock_count(), 0);
+    }
+
+    #[test]
+    fn insert_accepts_a_full_cell_id_and_masks_it() {
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB | 0x0123, one_tree());
+        assert!(scene.scenery_colliders_for_landblock(LB).is_some());
+        assert_eq!(scene.clear_scenery_colliders_for_landblock(LB | 0xFFFE), 1);
+    }
+
+    #[test]
+    fn empty_batches_are_not_stored() {
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, SceneryColliderBatch::new());
+        assert_eq!(
+            scene.scenery_collider_landblock_count(),
+            0,
+            "an LB with zero collidable scenery must not count as resident"
+        );
+    }
+
+    #[test]
+    fn batched_landblock_clear_purges_scenery() {
+        // The failure mode this guards: `insert_scenery_colliders` is
+        // append-only, and the live drain purges through
+        // `clear_landblocks_collision` ONLY. If the scenery family is not
+        // wired into that batched form, an evict + re-enter leaves two
+        // cylinders per tree and the count climbs every LRU cycle.
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, one_tree());
+        let _ = scene.clear_landblocks_collision(&[LB | 0x0FFE]);
+        assert_eq!(scene.scenery_collider_count(), 0);
+        // Re-entry after the purge lands exactly one, not two.
+        scene.insert_scenery_colliders(LB, one_tree());
+        assert_eq!(scene.scenery_collider_count(), 1);
+    }
+
+    #[test]
+    fn sweep_stops_a_walk_into_the_trunk() {
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, one_tree());
+        // Walk east from local (14, 20) toward the trunk at (20, 20), at
+        // chest height. Player radius 0.5 (PLAYER_CAPSULE_RADIUS is what the
+        // arm passes; use it so the numbers match the live path).
+        let r = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        let pose = pose_at(14.0, 20.0, 1.0);
+        let hit = scene
+            .sweep_sphere_against_scenery(&pose, Vector3::new(6.0, 0.0, 0.0), r)
+            .expect("must hit the trunk");
+        // Contact at distance 1.5 + r from the axis -> travelled 6 - 1.5 - r.
+        let want_t = (6.0 - 1.5 - r) / 6.0;
+        assert!((hit.t - want_t).abs() < 1e-3, "t {} want {want_t}", hit.t);
+        assert!(hit.normal.x < -0.9, "normal points back west: {:?}", hit.normal);
+        assert_eq!(scene.scenery_narrow_phase_hits(), 1);
+    }
+
+    #[test]
+    fn sweep_that_passes_beside_the_trunk_misses() {
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, one_tree());
+        let r = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        // 4 m to the side of the axis: inside the 7 m render AABB (so the
+        // broad phase does NOT reject it) but well outside the 1.5 m trunk.
+        // This is the test that fails if anyone ever "simplifies" the narrow
+        // phase back to the AABB.
+        let pose = pose_at(14.0, 24.0, 1.0);
+        assert!(
+            scene
+                .sweep_sphere_against_scenery(&pose, Vector3::new(12.0, 0.0, 0.0), r)
+                .is_none()
+        );
+        assert_eq!(scene.scenery_narrow_phase_hits(), 0);
+    }
+
+    #[test]
+    fn sweep_above_the_canopy_misses() {
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, one_tree());
+        let r = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        // z = 40, twice the trunk height: the Z slab veto must reject even
+        // though the XY quadratic has a root.
+        let pose = pose_at(14.0, 20.0, 40.0);
+        assert!(
+            scene
+                .sweep_sphere_against_scenery(&pose, Vector3::new(12.0, 0.0, 0.0), r)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sweep_reaches_scenery_in_a_neighbour_landblock() {
+        // The 3x3 ring, same footprint as `statics_aabbs_near_pose`.
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, one_tree());
+        let r = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        // Stand in the landblock to the WEST (0xA8B3) near its east edge,
+        // and walk east across the seam into 0xA9B3's tree at local (20,20).
+        let pose = WorldPosition {
+            landblock_id: Guid(0xA8B3_0000),
+            coords: Vector3::new(190.0, 20.0, 1.0),
+            rotation: Quaternion::identity(),
+        };
+        // From global x = 0xA8*192 + 190 = ORIGIN_X - 2 to the trunk at
+        // ORIGIN_X + 20: 22 m away.
+        assert!(
+            scene
+                .sweep_sphere_against_scenery(&pose, Vector3::new(24.0, 0.0, 0.0), r)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn pushout_recovers_a_penetrating_start() {
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, one_tree());
+        let r = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        // Player centre 0.5 m off the trunk axis at chest height — deep
+        // inside the 1.5 m trunk (a teleport / force-position landing).
+        let pose = pose_at(20.5, 20.0, 0.0);
+        let centre = Vector3::new(ORIGIN_X + 20.5, ORIGIN_Y + 20.0, 1.0);
+        let disp = scene
+            .resolve_scenery_pushout(&pose, &[centre, centre], r, 2)
+            .expect("penetrating start must be resolved");
+        assert_eq!(disp.z, 0.0, "lateral only");
+        // Pushed further out along +X, and clear of the trunk afterwards.
+        assert!(disp.x > 0.0, "pushed away from the axis: {disp:?}");
+        let out = Vector3::new(centre.x + disp.x, centre.y + disp.y, centre.z);
+        let d = ((out.x - (ORIGIN_X + 20.0)).powi(2) + (out.y - (ORIGIN_Y + 20.0)).powi(2)).sqrt();
+        assert!(d >= 1.5 + r - 1e-3, "still inside: {d}");
+    }
+
+    #[test]
+    fn pushout_is_none_when_clear() {
+        let mut scene = SpatialScene::new();
+        scene.insert_scenery_colliders(LB, one_tree());
+        let r = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        let pose = pose_at(50.0, 50.0, 0.0);
+        let centre = Vector3::new(ORIGIN_X + 50.0, ORIGIN_Y + 50.0, 1.0);
+        assert!(
+            scene
+                .resolve_scenery_pushout(&pose, &[centre, centre], r, 2)
+                .is_none()
+        );
+    }
+
+    /// Rung 3 (`CSetup.spheres`) — 6.1% of real placements across 19 DIDs,
+    /// e.g. `0x02001064` (~111k placements, one sphere r=0.961 @ z=0.961).
+    /// A batch of sphere rows must be TESTED, not merely stored: the
+    /// original phase-2 scope ported only the cylsphere test, which would
+    /// have staged these with no test to run on them.
+    #[test]
+    fn sphere_rung_blocks_and_is_not_silently_dropped() {
+        use crate::spatial::scenery::SceneryPrimKind;
+        let mut scene = SpatialScene::new();
+        let cx = ORIGIN_X + 20.0;
+        let cy = ORIGIN_Y + 20.0;
+        let mut b = SceneryColliderBatch::new();
+        // 0x02001064's real params, scaled 1.5x.
+        let (centre, r) = crate::spatial::scenery::sphere_to_world(
+            &crate::spatial::SetupSphere {
+                center: Vector3::new(0.0, 0.0, 0.961),
+                radius: 0.961,
+            },
+            1.5,
+            Vector3::new(cx, cy, 0.0),
+            Quaternion::identity(),
+        );
+        b.push_sphere(
+            0x0200_1064,
+            Aabb::new(
+                Vector3::new(cx - 3.0, cy - 3.0, -1.0),
+                Vector3::new(cx + 3.0, cy + 3.0, 4.0),
+            ),
+            centre,
+            r,
+            1.5,
+        );
+        assert_eq!(b.kind[0], SceneryPrimKind::Sphere);
+        scene.insert_scenery_colliders(LB, b);
+        let pr = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        // Walk into it at the sphere's own height (centre z = 1.4415).
+        let pose = pose_at(14.0, 20.0, 1.4415);
+        assert!(
+            scene
+                .sweep_sphere_against_scenery(&pose, Vector3::new(12.0, 0.0, 0.0), pr)
+                .is_some(),
+            "a sphere-rung scenery model must block"
+        );
+        // And a pass well above it must not.
+        let high = pose_at(14.0, 20.0, 3.6);
+        assert!(
+            scene
+                .sweep_sphere_against_scenery(&high, Vector3::new(12.0, 0.0, 0.0), pr)
+                .is_none()
+        );
+    }
+
+    /// A multi-cylsphere placement contributes one ROW per primitive, and
+    /// the sweep must return the EARLIEST across them — not the first one
+    /// stored.
+    #[test]
+    fn multi_primitive_sweep_returns_the_earliest_row() {
+        let mut scene = SpatialScene::new();
+        let mut b = SceneryColliderBatch::new();
+        let aabb = Aabb::new(
+            Vector3::new(ORIGIN_X + 10.0, ORIGIN_Y + 15.0, 0.0),
+            Vector3::new(ORIGIN_X + 40.0, ORIGIN_Y + 25.0, 10.0),
+        );
+        // Far primitive stored FIRST, near one second.
+        for x in [30.0f32, 20.0] {
+            b.push_cylinder(
+                0x0200_04BF,
+                aabb,
+                crate::spatial::WorldCylSphere {
+                    low_pt: Vector3::new(ORIGIN_X + x, ORIGIN_Y + 20.0, 0.0),
+                    radius: 0.5,
+                    height: 8.0,
+                },
+                1.0,
+            );
+        }
+        scene.insert_scenery_colliders(LB, b);
+        let pr = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        let pose = pose_at(14.0, 20.0, 1.0);
+        let hit = scene
+            .sweep_sphere_against_scenery(&pose, Vector3::new(20.0, 0.0, 0.0), pr)
+            .expect("must hit");
+        // Nearer cylinder at local x=20 -> contact at 20 - 0.5 - pr.
+        let want_t = (20.0 - 0.5 - pr - 14.0) / 20.0;
+        assert!((hit.t - want_t).abs() < 1e-3, "t {} want {want_t}", hit.t);
+    }
+
+    #[test]
+    fn an_empty_index_is_free() {
+        // The gate-off / no-scenery-resident path must early-out before any
+        // ring walk — the reason the arm is cheap when nothing is baked.
+        let scene = SpatialScene::new();
+        let r = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        let pose = pose_at(20.0, 20.0, 0.0);
+        assert!(
+            scene
+                .sweep_sphere_against_scenery(&pose, Vector3::new(1.0, 0.0, 0.0), r)
+                .is_none()
+        );
+        assert!(
+            scene
+                .resolve_scenery_pushout(&pose, &[Vector3::zero(), Vector3::zero()], r, 2)
+                .is_none()
+        );
+    }
+}

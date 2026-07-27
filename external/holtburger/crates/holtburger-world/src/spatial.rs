@@ -15,6 +15,12 @@ mod force_position_interp;
 mod physics;
 mod position_manager;
 mod scene;
+/// DAT-01 phase 2a/2b (2026-07-27) — baked procedural-scenery collision:
+/// per-landblock `SceneryColliderBatch` SoA storage plus the ported
+/// `CCylSphere` narrow phase (retail rung 2 of `CPhysicsObj::
+/// FindObjCollisions`). Consumed by `holtburger-core`'s movement system
+/// under the default-off `USE_SCENERY_COLLISION` gate.
+pub mod scenery;
 mod types;
 
 pub use entity_collision::{
@@ -49,6 +55,13 @@ pub use physics::{
 pub use scene::{
     CellMembership, CellPhysicsBsp, LocalStickyStep, RemoteCorrectionCtx, SpatialScene,
     pview_clip_polygon_against_polygon, pview_project_polygon,
+};
+pub use scenery::{
+    CYLSPHERE_EPSILON, CylSphereHit, SceneryColliderBatch, SceneryPrimKind, SetupCylSphere,
+    SetupSphere, WorldCylSphere, cylsphere_collides_with_sphere, cylsphere_normal_of_collision,
+    cylsphere_pushout_xy, cylsphere_radsum, cylsphere_to_world, cylsphere_z_slab_overlap,
+    sphere_collides_with_sphere, sphere_pushout_xy, sphere_radsum, sphere_to_world,
+    sweep_sphere_against_cylsphere, sweep_sphere_against_sphere,
 };
 pub use types::*;
 

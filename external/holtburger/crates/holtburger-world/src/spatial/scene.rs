@@ -649,6 +649,55 @@ pub struct SpatialScene {
     /// gate-off path, so this is a pure additive runtime switch.
     /// PERF (2026-07-23): `Arc` values — see [`Self::cell_physics_bsp`].
     statics_physics_bsp: Arc<HashMap<u32, Vec<Arc<CellPhysicsBsp>>>>,
+    /// DAT-01 phase 2a (2026-07-27): per-landblock BAKED PROCEDURAL SCENERY
+    /// colliders — the trees/rocks/bushes `holtburger-scenery-bake` writes to
+    /// `dist/scenery/*.jsonl`, which had NO collision representation at all
+    /// (COL-01 / COL-29). Keyed by landblock high word, the same shape as
+    /// `statics_aabb_index`; one SoA [`SceneryColliderBatch`] per landblock
+    /// rather than a `Vec` of entries because the hot loop is an AABB reject
+    /// over one column (design §4).
+    ///
+    /// Distinct from `statics_aabb_index` on purpose even though retail keeps
+    /// both in ONE `CLandBlock::static_objects` array: ours arrive from
+    /// different feeds (LandblockInfo stabs vs. the scenery JSONL), carry
+    /// different narrow phases (AABB/BSP vs. cylsphere), and land on
+    /// different schedules. Merging them would couple the scenery gate to the
+    /// shipped statics path.
+    ///
+    /// Populated by the wasm bundle's `populateSceneryCollidersForLandblock`;
+    /// cleared per landblock on unload by
+    /// [`Self::clear_scenery_colliders_for_landblock`] and by the batched
+    /// [`Self::clear_landblocks_collision`]. Consulted only when
+    /// `USE_SCENERY_COLLISION` is on, so the data lands regardless of the
+    /// gate — flipping it is a pure runtime switch with no re-bake.
+    /// `Arc` values for the same per-tick-snapshot reason as the tables above.
+    scenery_colliders: Arc<HashMap<u32, Arc<super::scenery::SceneryColliderBatch>>>,
+    /// DAT-01 phase 2e: cumulative count of scenery narrow-phase CONTACTS
+    /// (a swept cylsphere hit or a pushout) since the scene was created.
+    /// `Cell` because the integrator holds `&SpatialScene` — the same
+    /// borrow shape `resolve_static_bsp_pushout` runs under. Diagnostics
+    /// only; read through `__diag.collision`. Survives the per-tick
+    /// `collision_scene` mirror clone (a `Cell<u64>` copies by value).
+    scenery_narrow_hits: std::cell::Cell<u64>,
+    /// DAT-01 phase 2d/2e — REACHABILITY probe. Bumped once per movement
+    /// slice at the scenery arm's site in
+    /// `MovementSystem::advance_manual_slice_via_transition`,
+    /// **unconditionally — outside the `USE_SCENERY_COLLISION` check**.
+    ///
+    /// This exists because the arm's first home was dead code: the legacy
+    /// statics/building clamp chain in
+    /// `advance_local_pose_for_manual_drive_slice` is unreachable under
+    /// `USE_UNIFIED_TRANSITION`, so a gated arm placed there would report
+    /// "off, no effect" while ON and while OFF, forever, identically. A
+    /// counter that only moved when the flag was ON could not have caught
+    /// that. Bumping unconditionally means a live client with the flag OFF
+    /// still proves the SITE runs — and because the gate is a `const bool`,
+    /// a reached site plus a `true` const is a compile-time guarantee that
+    /// the body runs.
+    ///
+    /// Read as `__diag.collision.residency().sceneryArmEvals`. Nonzero after
+    /// a few seconds of walking ⇒ the arm is live.
+    scenery_arm_evals: std::cell::Cell<u64>,
     /// PERF Fix 2 (2026-07-23): identity + generation for the faithful
     /// bridge's persistent built-cell cache (see [`CollisionRevStamp`]).
     /// Bumped by [`Self::bump_collision_rev`] from every mutator of a
@@ -848,6 +897,9 @@ impl SpatialScene {
             building_origins: Arc::new(HashMap::new()),
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
+            scenery_colliders: Arc::new(HashMap::new()),
+            scenery_narrow_hits: std::cell::Cell::new(0),
+            scenery_arm_evals: std::cell::Cell::new(0),
             collision_stamp: CollisionRevStamp::fresh(),
             building_physics_index: Arc::new(HashMap::new()),
             terrain_heights: Arc::new(HashMap::new()),
@@ -2747,11 +2799,361 @@ impl SpatialScene {
         }
     }
 
+    // =================================================================
+    // DAT-01 phase 2a — baked procedural-scenery colliders.
+    // =================================================================
+
+    /// Register one landblock's baked scenery colliders. Drained from the
+    /// wasm bundle's `SCENERY_COLLIDER_PENDING` each `TickMovement`, the same
+    /// cadence as the static-AABB drain.
+    ///
+    /// APPEND semantics, like every other collision index here: a second
+    /// call for the same landblock concatenates. Re-entry correctness comes
+    /// from the unload purge
+    /// ([`Self::clear_scenery_colliders_for_landblock`] /
+    /// [`Self::clear_landblocks_collision`]) running BEFORE the insert drain,
+    /// exactly as documented at the `LANDBLOCK_CLEAR_PENDING` drain site.
+    /// Empty batches are dropped rather than stored so
+    /// [`Self::scenery_collider_landblock_count`] means "landblocks with
+    /// collidable scenery", not "landblocks we looked at".
+    pub fn insert_scenery_colliders(
+        &mut self,
+        landblock_high: u32,
+        batch: super::scenery::SceneryColliderBatch,
+    ) {
+        if batch.is_empty() {
+            return;
+        }
+        self.bump_collision_rev();
+        let lb = landblock_high & 0xFFFF_0000;
+        let map = Arc::make_mut(&mut self.scenery_colliders);
+        match map.get_mut(&lb) {
+            Some(existing) => Arc::make_mut(existing).extend_from(&batch),
+            None => {
+                map.insert(lb, Arc::new(batch));
+            }
+        }
+    }
+
+    /// Drop every scenery collider for `landblock_high`. Mirror of
+    /// [`Self::clear_static_aabbs_for_landblock`]; returns the removed
+    /// instance count for diagnostic logging.
+    pub fn clear_scenery_colliders_for_landblock(&mut self, landblock_high: u32) -> usize {
+        self.bump_collision_rev();
+        match Arc::make_mut(&mut self.scenery_colliders).remove(&(landblock_high & 0xFFFF_0000)) {
+            Some(b) => b.len(),
+            None => 0,
+        }
+    }
+
+    /// Total scenery collider instances resident across all landblocks.
+    pub fn scenery_collider_count(&self) -> usize {
+        self.scenery_colliders.values().map(|b| b.len()).sum()
+    }
+
+    /// Number of landblocks carrying at least one scenery collider.
+    pub fn scenery_collider_landblock_count(&self) -> usize {
+        self.scenery_colliders.len()
+    }
+
+    /// Cumulative scenery narrow-phase contacts since scene creation
+    /// (swept hits + pushouts). Diagnostics only.
+    pub fn scenery_narrow_phase_hits(&self) -> u64 {
+        self.scenery_narrow_hits.get()
+    }
+
+    /// DAT-01 phase 2d/2e — record that the movement system reached the
+    /// scenery arm's site this slice. Called UNCONDITIONALLY, outside the
+    /// `USE_SCENERY_COLLISION` gate; see the `scenery_arm_evals` field doc
+    /// for why the reachability probe must not itself be gated.
+    #[inline]
+    pub fn note_scenery_arm_reached(&self) {
+        self.scenery_arm_evals
+            .set(self.scenery_arm_evals.get().wrapping_add(1));
+    }
+
+    /// Cumulative scenery-arm site evaluations. Nonzero ⇒ the arm is on the
+    /// live movement path. Diagnostics only.
+    pub fn scenery_arm_eval_count(&self) -> u64 {
+        self.scenery_arm_evals.get()
+    }
+
+    /// The batch resident for one landblock, if any. Exposed for tests and
+    /// for `__diag`-style introspection.
+    pub fn scenery_colliders_for_landblock(
+        &self,
+        landblock_high: u32,
+    ) -> Option<&super::scenery::SceneryColliderBatch> {
+        self.scenery_colliders
+            .get(&(landblock_high & 0xFFFF_0000))
+            .map(|b| b.as_ref())
+    }
+
+    /// DAT-01 phase 2b/2d — sweep the player's sphere of `radius` along
+    /// `delta` against the baked scenery near `pose`, returning the earliest
+    /// contact. The scenery twin of [`Self::sweep_sphere_against_statics`],
+    /// and the same 3×3 landblock ring
+    /// ([`Self::statics_aabbs_near_pose`]'s footprint) — retail's broad phase
+    /// is the 24 m landcell shadow list, ours is the landblock plus its
+    /// neighbours, which is strictly wider.
+    ///
+    /// Two-stage, exactly as designed:
+    /// 1. **Broad**: the baked render-mesh AABB vs. the swept-sphere bounds.
+    ///    A pine's AABB is 4.5–12.4× its trunk, so this rejects nearly
+    ///    everything for a walking-speed step without touching the cylinder
+    ///    columns.
+    /// 2. **Narrow**: [`super::scenery::sweep_sphere_against_cylsphere`], the
+    ///    `CCylSphere` port, gated by
+    ///    [`super::scenery::cylsphere_collides_with_sphere`] evaluated at the
+    ///    contact point — retail's `collide_with_point` is only ever entered
+    ///    from a `collides_with_sphere` that already passed, so the Z-slab
+    ///    veto has to be applied here or a sweep passing far above a bush
+    ///    would report a wall hit (see the module test
+    ///    `a_move_that_passes_over_the_top_does_not_wall_hit`).
+    pub fn sweep_sphere_against_scenery(
+        &self,
+        pose: &WorldPosition,
+        delta: Vector3,
+        radius: f32,
+    ) -> Option<crate::spatial::GenericSweptHit> {
+        use super::scenery::{
+            SceneryPrimKind, aabbs_overlap, cylsphere_z_slab_overlap,
+            sweep_sphere_against_cylsphere, sweep_sphere_against_sphere, swept_sphere_bounds,
+        };
+        if self.scenery_colliders.is_empty() || delta.length_squared() <= 1e-10 {
+            return None;
+        }
+        let start = pose.global_coords();
+        let probe = swept_sphere_bounds(start, delta, radius);
+        let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
+        let lb_x = ((lb_high >> 24) & 0xFF) as i32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as i32;
+        let mut best: Option<(f32, Vector3)> = None;
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let nx = lb_x + dx;
+                let ny = lb_y + dy;
+                if !(0..256).contains(&nx) || !(0..256).contains(&ny) {
+                    continue;
+                }
+                let key = ((nx as u32) << 24) | ((ny as u32) << 16);
+                let Some(batch) = self.scenery_colliders.get(&key) else {
+                    continue;
+                };
+                for i in 0..batch.len() {
+                    if !aabbs_overlap(&probe, &batch.aabb[i]) {
+                        continue;
+                    }
+                    let hit = match batch.kind[i] {
+                        SceneryPrimKind::Cylinder => {
+                            let cyl = batch.cyl_at(i);
+                            let Some(hit) =
+                                sweep_sphere_against_cylsphere(&cyl, start, delta, radius)
+                            else {
+                                continue;
+                            };
+                            // Z veto at the contact point. The Z HALF only —
+                            // see `cylsphere_z_slab_overlap`'s doc for why
+                            // re-asserting the full `collides_with_sphere`
+                            // here would reject every true wall hit by the
+                            // 2e-4 radsum epsilon.
+                            let contact_z = start.z + delta.z * hit.t;
+                            if !cylsphere_z_slab_overlap(&cyl, contact_z, radius) {
+                                continue;
+                            }
+                            hit
+                        }
+                        // Rung 3. No Z veto: the sphere solve is already 3-D,
+                        // so a pass above the boulder simply has no root.
+                        SceneryPrimKind::Sphere => {
+                            let Some(hit) = sweep_sphere_against_sphere(
+                                batch.prim_origin[i],
+                                batch.prim_radius[i],
+                                start,
+                                delta,
+                                radius,
+                            ) else {
+                                continue;
+                            };
+                            hit
+                        }
+                    };
+                    if best.is_none() || hit.t < best.unwrap().0 {
+                        best = Some((hit.t, hit.normal));
+                    }
+                }
+            }
+        }
+        let (t, normal) = best?;
+        self.scenery_narrow_hits
+            .set(self.scenery_narrow_hits.get().wrapping_add(1));
+        Some(crate::spatial::GenericSweptHit {
+            t,
+            point: Vector3::new(
+                start.x + delta.x * t,
+                start.y + delta.y * t,
+                start.z + delta.z * t,
+            ),
+            normal,
+        })
+    }
+
+    /// DAT-01 phase 2b/2d — clamp a lateral delta against the baked scenery
+    /// near `pose`: swept stop, then ONE slide iteration along the contact
+    /// normal. Same shape as [`crate::spatial::clamp_delta_against_buildings`]
+    /// and the statics clamp, so the caller reads identically whichever
+    /// family it is clamping against.
+    ///
+    /// Retail resolves this inside the `CTransition` state machine
+    /// (`CCylSphere::slide_sphere`, `acclient.c:361957`); we deliberately do
+    /// not reimplement that machine here — the ported piece is the geometry
+    /// and the time of impact, and stop-and-slide is the resolution every
+    /// other collision family in this client already uses.
+    ///
+    /// Returns `delta` unchanged when nothing is hit, so a caller can apply
+    /// `clamped - delta` as a pure correction.
+    pub fn clamp_delta_against_scenery(
+        &self,
+        pose: &WorldPosition,
+        delta: Vector3,
+        radius: f32,
+    ) -> Vector3 {
+        if delta.length_squared() <= 1e-10 {
+            return delta;
+        }
+        let Some(hit) = self.sweep_sphere_against_scenery(pose, delta, radius) else {
+            return delta;
+        };
+        const BACKOFF: f32 = 1e-3;
+        let safe_t = (hit.t - BACKOFF / delta.length().max(1e-6)).max(0.0);
+        let stopped = delta * safe_t;
+        let remaining = delta * (1.0 - safe_t);
+        let into_normal = remaining.dot(&hit.normal);
+        let slide = remaining - hit.normal * into_normal;
+        if slide.length_squared() <= 1e-10 {
+            return stopped;
+        }
+        let slide_pose = WorldPosition {
+            landblock_id: pose.landblock_id,
+            coords: Vector3::new(
+                pose.coords.x + stopped.x,
+                pose.coords.y + stopped.y,
+                pose.coords.z + stopped.z,
+            ),
+            rotation: pose.rotation,
+        };
+        let slide_clamped = match self.sweep_sphere_against_scenery(&slide_pose, slide, radius) {
+            Some(h) => slide * (h.t - BACKOFF / slide.length().max(1e-6)).max(0.0),
+            None => slide,
+        };
+        stopped + slide_clamped
+    }
+
+    /// DAT-01 phase 2b/2d — depenetrate the player's two-sphere cylinder out
+    /// of any baked scenery cylinder it is already inside at `pose`. The
+    /// scenery twin of [`Self::resolve_static_bsp_pushout`], down to the
+    /// running-centres detail (each resolved push advances the working
+    /// centres so a capsule wedged between two trunks converges) and the
+    /// lateral-only contract (Z is left to the floor snap).
+    ///
+    /// `world_sphere_centers` are GLOBAL-metre centres; `num_sphere` is ACE's
+    /// `NumSphere` (2 for the player). Returns the NET world displacement, or
+    /// `None` when nothing overlapped.
+    pub fn resolve_scenery_pushout(
+        &self,
+        pose: &WorldPosition,
+        world_sphere_centers: &[Vector3],
+        radius: f32,
+        num_sphere: u8,
+    ) -> Option<Vector3> {
+        use super::scenery::{
+            SceneryPrimKind, aabbs_overlap, cylsphere_pushout_xy, sphere_pushout_xy,
+            swept_sphere_bounds,
+        };
+        if self.scenery_colliders.is_empty() {
+            return None;
+        }
+        let n = (num_sphere as usize).min(2).min(world_sphere_centers.len());
+        if n == 0 {
+            return None;
+        }
+        const SKIN: f32 = 1e-3;
+        let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
+        let lb_x = ((lb_high >> 24) & 0xFF) as i32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as i32;
+        let mut centers = [Vector3::zero(); 2];
+        centers[..n].copy_from_slice(&world_sphere_centers[..n]);
+        // Broad-phase probe box: the capsule's own bounds, from the lowest
+        // sphere centre to the highest, inflated by the radius. UNLIKE the
+        // swept path this function has no delta to early-out on, so it runs on
+        // EVERY movement slice once any scenery is resident — including while
+        // standing still. Without this reject it would test all ~46 rows per
+        // landblock x 9 ring landblocks x 2 spheres per slice; with it, a
+        // player not standing in foliage rejects on one AABB compare per row.
+        let mut probe = Aabb::empty();
+        for c in centers.iter().take(n) {
+            probe.expand_to_include_point(*c);
+        }
+        // +2 m slack (the same figure the entity prefilter uses) because the
+        // running centres ADVANCE as each push resolves — a deep penetration
+        // can walk them out by up to a radsum before the loop ends, and the
+        // probe is computed once.
+        let probe = swept_sphere_bounds(probe.min, probe.max - probe.min, radius + 2.0);
+        let mut total = Vector3::zero();
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let nx = lb_x + dx;
+                let ny = lb_y + dy;
+                if !(0..256).contains(&nx) || !(0..256).contains(&ny) {
+                    continue;
+                }
+                let key = ((nx as u32) << 24) | ((ny as u32) << 16);
+                let Some(batch) = self.scenery_colliders.get(&key) else {
+                    continue;
+                };
+                for i in 0..batch.len() {
+                    if !aabbs_overlap(&probe, &batch.aabb[i]) {
+                        continue;
+                    }
+                    for j in 0..n {
+                        let push = match batch.kind[i] {
+                            SceneryPrimKind::Cylinder => {
+                                cylsphere_pushout_xy(&batch.cyl_at(i), centers[j], radius, SKIN)
+                            }
+                            SceneryPrimKind::Sphere => sphere_pushout_xy(
+                                batch.prim_origin[i],
+                                batch.prim_radius[i],
+                                centers[j],
+                                radius,
+                                SKIN,
+                            ),
+                        };
+                        if let Some(push) = push {
+                            total = total + push;
+                            for c in centers.iter_mut().take(n) {
+                                *c = *c + push;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if total.length_squared() < 1e-12 {
+            None
+        } else {
+            self.scenery_narrow_hits
+                .set(self.scenery_narrow_hits.get().wrapping_add(1));
+            Some(total)
+        }
+    }
+
     /// R-12/A11-F2 (net-fixwave P5, 2026-07-10): batched multi-landblock
     /// collision clear — semantically identical to calling
     /// `clear_cells_for_landblock` + `clear_building_aabbs_for_landblock` +
     /// `clear_static_aabbs_for_landblock` +
-    /// `clear_static_physics_bsps_for_landblock` once per landblock, but
+    /// `clear_static_physics_bsps_for_landblock` +
+    /// `clear_scenery_colliders_for_landblock` (DAT-01 phase 2a) once per
+    /// landblock, but
     /// each Arc-wrapped table is `Arc::make_mut`ed and retain-scanned ONCE
     /// for the whole batch. The per-LB forms pay one COW deep-clone per
     /// mutated table per `TickMovement` drain (the per-tick
@@ -2829,6 +3231,21 @@ impl SpatialScene {
                 if let Some(v) = idx.remove(lb) {
                     static_bsps_removed += v.len();
                 }
+            }
+        }
+
+        // DAT-01 phase 2a (2026-07-27): the SCENERY family. Wired here and
+        // not only into the per-LB form because this batched path is the ONE
+        // the live drain calls (`lib.rs` LANDBLOCK_CLEAR_PENDING). Missing it
+        // is the documented double-registration failure mode: the insert is
+        // append-only, so an evict + re-enter without this purge leaves two
+        // cylinders per tree and the count climbs on every LRU cycle. Not in
+        // the return tuple — five call sites read it positionally and the
+        // scenery count is available via `scenery_collider_count()`.
+        if !self.scenery_colliders.is_empty() {
+            let idx = Arc::make_mut(&mut self.scenery_colliders);
+            for lb in &lbs {
+                idx.remove(lb);
             }
         }
 
