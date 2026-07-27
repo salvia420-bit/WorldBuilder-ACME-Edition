@@ -139,10 +139,13 @@ WorldBuilder.Terminal and diff against ours numerically. This is a
 `ground-in-real-wire-data` problem, not a shader-tweaking problem.
 
 Also here: **RQ-08** (sev 2) foliage alpha shows a faint box/halo in both
-wireframe and textured — retail's alpha-test refs (100/200) are in
-`surfaceParityV2`, which is a strict `=== "on"` opt-in and therefore **off in the
-shipped default**. That may be a flag promotion rather than new work — check
-first (RND-08/33).
+wireframe and textured. **CHECKED 2026-07-27 — NOT a flag promotion (see
+VERIFICATION-LOG §RQ-08): do not flip `surfaceParityV2`** (it is inert without
+default-OFF `surfaceUnified`; the default ladder already alpha-tests at 0.5;
+retail's paletted ref 0.392 is *looser*; static_atlas hard-resets the ref
+anyway). The real unimplemented retail behavior is ClipMap's
+`SetAlphaBlendEnable(1)` alongside the test — split that piece onto the legacy
+ladder + static_atlas after a hasPalette census (RND-08/33, new work).
 
 ---
 
@@ -168,6 +171,14 @@ transition driver's outdoor arm:
 Sequencing: the walk-speed question (OQ-3) should be settled **first** — it is
 cheap, and if our base speed is wrong then every other movement judgement here is
 being made against a distorted baseline.
+
+**OQ-3 SETTLED 2026-07-27 (see VERIFICATION-LOG §OQ-3): base RUN speed is
+correct** (7.785 m/s measured vs 7.787 expected at run skill 105, 0.02%) —
+COL-09's premise is refuted and Tier 3 may proceed on this baseline. WALK is
+genuinely broken (body 2.60 m/s from the DAT anim vs stateGroundSpeed 3.12 →
+clip plays 1.2× travel = foot-slide; backstep worse) and is the likely COL-10
+root cause — but it is a client/server-skew FORK needing a decision, not a
+constant fix. Camera-side lead: `camera.js:1772` flat 4.5 m/s prediction speed.
 
 ---
 

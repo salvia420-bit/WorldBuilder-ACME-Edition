@@ -289,3 +289,55 @@ fix it; and the `selectionSphere` (r 0.892) sits at the **hinge** (0, 0.06,
 arm (`StaticPartBsp` machinery already exists and is `any(wasm32, test)` since
 `d41b9143`); regression test MUST use a ±0.45 m offset approach, never the
 head-on one.
+
+---
+
+## OQ-3 — SETTLED LIVE (2026-07-27). Base run speed is CORRECT; COL-09's premise refuted. The walk defect is real and is COL-10's likely root cause.
+
+Retail formula verified at `acclient.c:713790` (`GetRunRate`), `:296777`
+(`LoadMod`), `:343539` (`get_state_velocity`): run speed = `LoadMod·11·s/(s+200) + 4` m/s.
+Ours is formula-identical (`holtburger-world/src/context.rs:130-152`). Live,
+movement-gated: a fresh run-skill-105 character measures **7.785 m/s median vs
+7.78689 expected (0.02%)**. Tier 3 judgements may proceed on this baseline.
+Caveat: skill ≥ 800 runs +21% vs retail by *deliberate* ACE-matching
+(`RETAIL_RUNRATE_EDGE=false`, retail spikes only at `==800`) — do not "fix"
+client-only.
+
+**WALK is broken and self-inconsistent (likely COL-10):** the DAT's WalkForward
+cycle derives a body speed of **2.6017 m/s** (anim `0x03000003`: 36 frames, net
++Y 1.4, fps 66.9 — derivation validated by RunForward reproducing exactly 4.0),
+and the body uses it (`common.rs:844`), but `stateGroundSpeed` returns retail's
+`WalkAnimSpeed 3.1199999` (`lib.rs:6691`), so `cycleTimeScale` plays the walk
+clip **1.199× faster than travel** (foot-slide); backstep timescale 0.78 vs
+correct 0.65. Measured live: walk = 2.6027 m/s. This is a FORK, not a typo —
+either the body adopts retail's 3.12 (matches ACE's server model) or
+stateGroundSpeed adopts the DAT-derived base; opposite client/server-skew
+implications. Needs a decision before Tier 3's COL-10 work.
+
+Secondary lead: `scene3d/camera.js:1772` uses `FALLBACK_RUN_RATE_SCALAR ?? 4.5`
+as a flat camera-prediction *speed* (defined `index.html:5882` "= 4.5; // m/s");
+Rust retired exactly this 4.5→1.0 (`lib.rs:36697-36707`), the JS copy did not.
+
+Harness facts: `?renderOnDemand=1` prevents `window.liveScene3d` from ever
+being assigned (probed twice) — omit it from headless runs needing wasm
+getters; `playerRunRateInputs`/movement-trace getters are absent from the
+`init3D` bag (the P5.1-class instrumentation gap, again).
+
+---
+
+## RQ-08 — NOT a flag promotion (2026-07-27). Do not flip surfaceParityV2.
+
+The premise "retail's alpha-test refs are behind the strict opt-in" fails four
+ways: (1) every parityV2 branch is called only from `surfaceUnified`-gated
+sites, itself default-OFF — flipping parityV2 alone is a no-op; (2) the default
+ladder ALREADY alpha-tests foliage at 0.5 (`materials.js:3523-3527`); (3)
+retail's paletted ref is 100/255 ≈ **0.392** (`acclient.c:454499-454511`,
+constants `:45764-45765`) — *looser* than 0.5, so promotion keeps MORE fringe;
+(4) `static_atlas.js:426` hard-resets alphaTest to 0.5 and buckets on a boolean,
+so merged props can't carry per-surface refs anyway. The genuinely
+unimplemented retail behavior is different: ClipMap sets
+`SetAlphaBlendEnable(1)` (src/dst 2/6) *alongside* the test; our default path
+sets `transparent = false`. Recommended: split the ClipMap ref+blend piece onto
+the legacy ladder + static_atlas (hasPalette census first); leave fog/InvAlpha
+behind the flag. `docs/url-flags.md:235` "inert until M3a wasm rebuild" is
+stale — `SurfacePixels.hasPalette` is live in shipped pkg.
