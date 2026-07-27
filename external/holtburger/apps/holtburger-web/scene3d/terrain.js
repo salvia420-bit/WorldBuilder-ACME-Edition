@@ -811,10 +811,10 @@ in float vertexBrightness;
 // no-op. See buildTerrainVertexModulation for math.
 in float vertexSaturate;
 in float vertexHue;
-// RND-20/21 — retail `CLandBlockStruct::calc_lighting` per-vertex normal
+// RND-20/21 — retail CLandBlockStruct::calc_lighting per-vertex normal
 // (acclient.c:353713): summed UNIT face normals, BLOCK-LOCAL (landblock seams
 // are a retail feature, not a bug), resampled onto the subdivided grid through
-// the same per-cell split diagonal the positions use. Distinct from `normal`,
+// the same per-cell split diagonal the positions use. Distinct from normal,
 // which is seam-continuous and drives the detail/triplanar path. Supplied by
 // adapter.js only when the wasm bundle exports acLightNormals; the fragment
 // gate uAcGouraudEnabled is 0 otherwise, so a missing attribute is a no-op.
@@ -842,7 +842,7 @@ out float vHue;                       // R1.A 2026-05-28 — TerrainTex hue modu
 out vec3 vAcPos;
 out vec3 vAcNormal;
 // NOT normalised here or in the FS: retail interpolates the per-vertex COLOUR
-// linearly across each triangle, and colour is affine in `dot(N, sunVec)`.
+// linearly across each triangle, and colour is affine in dot(N, sunVec).
 // Interpolating the raw normal keeps that dot linear, so the GPU's Gouraud
 // interpolation reproduces retail's lerp. Renormalising would bend it.
 out vec3 vAcLightNormal;
@@ -1189,9 +1189,9 @@ uniform float uCloudShadowStrength;
 uniform vec3 uSunDir;
 
 // === RND-20/21 — retail terrain Gouraud (?terrainGouraud, default ON) ===
-// `ACRender::landPolyDraw` (acclient.c:719994) calls SetFFLighting(0): retail
+// ACRender::landPolyDraw (acclient.c:719994) calls SetFFLighting(0): retail
 // terrain has NO hardware lighting. The only shading is the Gouraud-
-// interpolated per-vertex colour that `CLandBlockStruct::calc_lighting`
+// interpolated per-vertex colour that CLandBlockStruct::calc_lighting
 // (acclient.c:353886-353899) baked on the light tick:
 //   L = max(0, N . sunlight_vec)          // |sunlight_vec| == dirBright
 //   c = min(1, sunColor*L + ambColor*ambLevel)   // per channel
