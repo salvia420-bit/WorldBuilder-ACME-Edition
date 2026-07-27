@@ -1021,7 +1021,7 @@ uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
 uniform float uRoadEnabled;           // 0 = no road overlay (back-compat / disable)
 uniform float uRoadPaintLegacy;       // 1 = pre-2026-07-02 bilinear+smoothstep lane (?roadPaint=legacy)
-uniform float uRoadSlotsEnabled;      // 1 = retail TexMerge road overlay slots 4..5 (?roadSlots=on)
+uniform float uRoadSlotsEnabled;      // 1 = retail TexMerge road overlay slots 4..5 (default; ?roadSlots=off disables)
 
 // Wave 2.A — 32x1 RGBA terrain palette LUT. One sRGB triple per retail
 // terrain code 0..31 from TerrainDesc.terrain_types[i].terrain_color
@@ -1664,9 +1664,9 @@ void main() {
       // near-full coverage" (two-lane highway) — that was the inverted mask
       // sense (see baseW below), NOT the masks: they are a dark lane on
       // white. With the retail sense restored they paint a single masked
-      // lane, enabled via ?roadSlots=on (default off pending the 1070
-      // eye-test vs the analytic segment-distance painter below, which
-      // stays the default road source and is gated OFF when slots are on).
+      // lane. DEFAULT ON (escape ?roadSlots=off); the analytic
+      // segment-distance painter below is now the fallback and is gated OFF
+      // whenever these slots are active, so the lane is painted once.
       for (int s = 1; s < 6; s++) {
         if (s >= 4 && uRoadSlotsEnabled < 0.5) break;
         vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
@@ -1815,15 +1815,13 @@ void main() {
   // separate road-overlay quad mesh — same painted appearance retail
   // had, naturally flush with the terrain surface.
   //
-  // This narrow smoothstep road painter is the SINGLE road source in BOTH the
-  // bilinear and texMerge paths (2026-06-21). The texMerge composite above now
-  // skips its road overlay slots (loop stops at s<4), because those near-full
-  // road masks painted a ~2-cell "two-lane highway"; the bilinear road-bit
-  // mask narrowed by smoothstep(0.85,0.95) gives the correct single ~5 m lane
-  // (retail _road_width=5.0, acclient.c:467318) on top of either terrain blend.
-  // Analytic road lane — the default road source. Gated OFF when the retail
-  // road overlay slots are active (?roadSlots=on composites the road in the
-  // TexMerge loop above instead; double-painting would widen the lane).
+  // SUPERSEDED as the default (see readRoadSlotsFlag): the retail TexMerge road
+  // overlay slots composite above are now the default road source, and this
+  // analytic lane is the FALLBACK for the bilinear path and for
+  // ?roadSlots=off. It stays because it has no retail counterpart but does
+  // give a clean single ~5 m lane (retail _road_width=5.0,
+  // acclient.c:467318) when the merge path is unavailable. Gated OFF whenever
+  // the merge road slots run, so the lane is never double-painted.
   if (uRoadEnabled > 0.5 && !(uTexMergeEnabled > 0.5 && uRoadSlotsEnabled > 0.5)) {
     float r00 = vertexRoadAt(iu,     iv    );
     float r10 = vertexRoadAt(iu + 1, iv    );
@@ -2927,18 +2925,36 @@ function readTerrainDetailTexMode() {
  * inverted, near-full-cell road = "two-lane highway". With the sense fixed
  * the composite renders organic masked transitions (1070-confirmed live);
  * the road overlay slots are re-armed behind ?roadSlots=on pending eye-test.
+ *
+ * NOTE: this docstring documents `?texMerge`, but the function immediately
+ * below it is `readRoadSlotsFlag`. `readTexMergeFlag` is further down. Left in
+ * place rather than moved so the history above stays greppable from both.
+ */
+
+/**
+ * Parse `?roadSlots`. Gates the retail TexMerge ROAD overlay slots (merge
+ * record slots 4..5, `pack_merge_record`) in the composite loop; when on, the
+ * analytic segment-distance lane painter is gated off so the road is painted
+ * exactly once (the `uRoadEnabled` guard in main()).
+ *
+ * DEFAULT ON (escape `?roadSlots=off`). The retail road overlays are the only
+ * road source retail itself had: `TexMerge::GetRoadCode` +
+ * `TexMerge::FindRoadAlpha` pick a hand-authored road alpha map per cell and
+ * `FillTempTexBuffer` composites it after the terrain overlays. The analytic
+ * painter is a stand-in with no retail counterpart and now becomes the
+ * fallback. The 2026-06-21 "two-lane highway" that got these slots abandoned
+ * was the inverted mask sense (fixed 2026-07-02) compounded by the wrong PRNG
+ * draw from an N-S-reversed pcode (fixed with the corner-order patch): the road
+ * rcode -> map choice is rcode-determined, so with a retail-exact pcode the
+ * map AND its rotation are now retail-exact on every cell of 0xA9B4/0xAAB4.
  */
 function readRoadSlotsFlag() {
-  // 2026-07-02 — ?roadSlots=on composites roads via the retail TexMerge road
-  // overlay slots (4..5) now that the mask sense is corrected (they were
-  // abandoned 2026-06-21 under the inverted read). Default off pending the
-  // 1070 eye-test vs the analytic lane painter.
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("roadSlots");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -2962,9 +2978,13 @@ function readTexMergeFlag() {
   // (39394a4e) muddied type boundaries world-wide. Independently, the
   // subdiv mesh path shipped no terrainMergeData until 2026-07-02, so even
   // ?texMerge=on was a silent no-op on every landblock — flag readers and
-  // uniforms all said "off" with zero console evidence. Both are fixed;
-  // roads still come from the analytic lane painter (see uRoadEnabled
-  // block), NOT the merge road slots (s<4 loop skip unchanged).
+  // uniforms all said "off" with zero console evidence. Both are fixed.
+  //
+  // The reader below is the AUTHORITY on the default, not this comment: the
+  // absent-param branch returns true, so texMerge is ON unless the URL says
+  // "off". (Superseded note: roads no longer come from the analytic lane
+  // painter by default — see readRoadSlotsFlag, also default-ON, and the
+  // s < 6 composite loop.)
   try {
     if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("texMerge");
