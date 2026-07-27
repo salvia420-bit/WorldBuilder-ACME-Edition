@@ -17,7 +17,10 @@ mod position_manager;
 mod scene;
 mod types;
 
-pub use entity_collision::{EntityCollider, clamp_delta_against_entities, spheres_overlap_xy};
+pub use entity_collision::{
+    EntityBsp, EntityCollider, EntityPhysicsGeometry, clamp_delta_against_entities,
+    spheres_overlap_xy,
+};
 pub use force_position_interp::{
     InterpStep, MAX_INTERPOLATED_VELOCITY, RetailForcePositionInterpolator,
 };

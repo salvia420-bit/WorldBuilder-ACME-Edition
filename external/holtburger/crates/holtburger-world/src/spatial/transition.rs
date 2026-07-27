@@ -305,6 +305,7 @@ impl TransitionEnv for WorldState {
                     center_xy: (g.x, g.y),
                     radius: self.entity_collision_radius(e),
                     has_physics_bsp: e.has_physics_bsp(),
+                    bsp: self.entity_physics_bsp(e),
                 })
             })
             .collect()

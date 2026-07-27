@@ -137,3 +137,10 @@ holtburger-core = { workspace = true }
 # single-task by design (RefCell-backed dedup map is `!Send`).
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 futures = { workspace = true }
+# COL-03 (2026-07-27) — `mod tests_entity_bsp_door_collision` drives
+# `holtburger_world::spatial::clamp_delta_against_entities` against the real
+# grocer door's DAT geometry, and `setup_entity_physics_geometry` returns
+# `holtburger_world::spatial::EntityPhysicsGeometry`. The wasm32 dep block
+# above already pulls this crate for the live recv loop; this is the
+# native-test mirror.
+holtburger-world = { workspace = true, features = ["test-support"] }

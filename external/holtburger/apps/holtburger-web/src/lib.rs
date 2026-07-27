@@ -15055,6 +15055,155 @@ fn setup_collision_radius(setup: &holtburger_dat::file_type::SetupModel) -> Opti
     None
 }
 
+/// COL-03 (2026-07-27): fan-triangulate a SetupModel's per-part physics
+/// polygons into the SETUP-LOCAL triangle bag the entity-collision BSP
+/// arm sweeps (`holtburger_world::spatial::EntityPhysicsGeometry`).
+///
+/// Reuses [`walk_setup_parts_with_geom_and_bsp`], so a part contributes
+/// only when its GfxObj carries BOTH a `physics_bsp` tree and a
+/// non-empty `physics_polygons` map — ACE's
+/// `GfxObj != null && GfxObj.PhysicsBSP != null` gate in
+/// `PhysicsPart.FindObjCollisions` (`PhysicsPart.cs:52`). Each part's
+/// `[offset, rot]` frame is composed in here, exactly as the static
+/// path composes it with the placement frame when staging a
+/// `CellPhysicsBsp`.
+///
+/// `None` for a setup with no physics-bearing part (most props, and
+/// every raw `0x01` GfxObj entity) — the caller must leave those on the
+/// swept-circle arm rather than caching an empty entry.
+#[cfg(any(target_arch = "wasm32", test))]
+fn setup_entity_physics_geometry<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Option<holtburger_world::spatial::EntityPhysicsGeometry> {
+    let parts = walk_setup_parts_with_geom_and_bsp(source, setup_id)?;
+    let mut tris: Vec<holtburger_common::Triangle> = Vec::new();
+    for (_aabb, part) in &parts {
+        let Some(part) = part.as_ref() else { continue };
+        // Emit in polygon-id order. `polys` is a HashMap, whose iteration
+        // order is randomised per process; the swept solver keeps the
+        // FIRST triangle at a tied time-of-impact, so an unordered walk
+        // makes edge/corner contacts — and therefore the whole slide
+        // trajectory — vary run to run.
+        let mut poly_ids: Vec<u16> = part.polys.keys().copied().collect();
+        poly_ids.sort_unstable();
+        for poly_id in poly_ids {
+            let poly = &part.polys[&poly_id];
+            if poly.vertices.len() < 3 {
+                continue;
+            }
+            let framed: Vec<holtburger_common::Vector3> = poly
+                .vertices
+                .iter()
+                .map(|v| {
+                    let p = quat_rotate(part.rot, *v);
+                    holtburger_common::Vector3::new(
+                        p.x + part.offset.x,
+                        p.y + part.offset.y,
+                        p.z + part.offset.z,
+                    )
+                })
+                .collect();
+            for i in 1..framed.len() - 1 {
+                tris.push(holtburger_common::Triangle::new(
+                    framed[0],
+                    framed[i],
+                    framed[i + 1],
+                ));
+            }
+        }
+    }
+    if tris.is_empty() {
+        return None;
+    }
+    Some(holtburger_world::spatial::EntityPhysicsGeometry::from_triangles(tris))
+}
+
+/// COL-03: pending per-SetupModel physics geometry, staged by the
+/// residency task below and drained into
+/// `WorldState::setup_physics_geometry` on the next `TickMovement`.
+/// Sibling to `SETUP_RADIUS_PENDING`; same rationale (a wasm task can't
+/// borrow `&mut WorldState` across awaits).
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static SETUP_BSP_PENDING: std::cell::RefCell<
+        Vec<(u32, std::sync::Arc<holtburger_world::spatial::EntityPhysicsGeometry>)>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// SetupModel ids the residency task has already claimed. Guards the
+    /// per-tick scan so each setup costs exactly one DAT walk per
+    /// session, INCLUDING setups that resolve to no physics geometry
+    /// (those must not be retried every tick).
+    static SETUP_BSP_ATTEMPTED: std::cell::RefCell<std::collections::HashSet<u32>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Drain staged entity physics geometry into `WorldState`. Returns the
+/// count inserted.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_setup_physics_geometry_into(
+    world: &mut holtburger_world::WorldState,
+) -> usize {
+    SETUP_BSP_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (setup_id, geometry) in buf.drain(..) {
+            world.register_setup_physics_geometry(setup_id, geometry);
+        }
+        count
+    })
+}
+
+/// COL-03: kick a DAT walk for every collidable `HAS_PHYSICS_BSP` entity
+/// whose SetupModel physics geometry is not resident yet.
+///
+/// Deliberately driven from the recv loop rather than from a render-side
+/// hook: the JS entity bake path is skipped under `?nullRender=1`, and
+/// `fetch_entity_model_render` (which stages the setup RADIUS) is only
+/// reached by the legacy 2D client — so hanging residency off either one
+/// would leave the BSP arm inert exactly where the collision probes run.
+/// One detached task per setup id, claimed through `SETUP_BSP_ATTEMPTED`
+/// before the await so a burst of doors in one landblock walks once.
+#[cfg(target_arch = "wasm32")]
+fn kick_entity_physics_geometry_loads(world: &holtburger_world::WorldState) {
+    let wanted: Vec<u32> = SETUP_BSP_ATTEMPTED.with(|cell| {
+        let mut seen = cell.borrow_mut();
+        world
+            .entities
+            .iter()
+            .filter(|e| e.is_collidable() && e.has_physics_bsp())
+            .filter_map(|e| e.gfx_id)
+            .filter(|id| (id >> 24) == 0x02)
+            .filter(|id| seen.insert(*id))
+            .collect()
+    });
+    for setup_id in wanted {
+        wasm_bindgen_futures::spawn_local(async move {
+            let source = global_source::global_source();
+            let initial = [holtburger_dat::ResourceKey::new("eor/portal", setup_id)];
+            if prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+                let _ = setup_entity_physics_geometry(s, setup_id);
+            })
+            .await
+            .is_err()
+            {
+                return;
+            }
+            let Some(geometry) = setup_entity_physics_geometry(source.as_ref(), setup_id) else {
+                return;
+            };
+            let tri_count = geometry.triangles.len();
+            SETUP_BSP_PENDING.with(|cell| {
+                cell.borrow_mut().push((setup_id, std::sync::Arc::new(geometry)));
+            });
+            console_log_str(&format!(
+                "[col03] entity physics geometry staged for setup 0x{setup_id:08X} \
+                 ({tri_count} tris)"
+            ));
+        });
+    }
+}
+
 /// Phase 6 step D: drain the pending cell-graph + cell-AABB pile
 /// into the spatial scene. Returns `(portals_inserted, aabbs_inserted)`.
 /// Called from the same `TickMovement` arm as the building-AABB
@@ -48861,6 +49010,23 @@ async fn recv_loop(
                         // `PhysicsObj.GetPhysicsRadius`) instead of
                         // the PLAYER_CAPSULE_RADIUS fallback.
                         let _drained_radii = drain_pending_setup_radii_into(w);
+                        // COL-03 (2026-07-27): same cadence for the
+                        // precise per-SetupModel physics geometry the
+                        // entity BSP arm sweeps. Drain first so a walk
+                        // that finished since the last tick is live for
+                        // this tick's clamp, then claim any newly
+                        // arrived HAS_PHYSICS_BSP entities.
+                        let drained_bsps =
+                            drain_pending_setup_physics_geometry_into(w);
+                        if drained_bsps > 0 {
+                            console_log_str(&format!(
+                                "[col03] {drained_bsps} SetupModel physics geometr\
+                                 {} resident ({} total) — entity BSP arm live",
+                                if drained_bsps == 1 { "y" } else { "ies" },
+                                w.setup_physics_geometry_len()
+                            ));
+                        }
+                        kick_entity_physics_geometry_loads(w);
                         // Phase 6 collision-leak fix (2026-05-29): purge any
                         // landblocks the JS LRU just evicted BEFORE the
                         // insert-drains below, so an evict+re-enter in the same
@@ -56752,6 +56918,296 @@ mod tests_stab_bsp_recursion {
             bsp.is_none(),
             "part 0 (0x01000695) has 0 physics polys — BSP must stay None, not substitute"
         );
+    }
+}
+
+// COL-03 (2026-07-27): DAT-gated regression for the entity physics-BSP
+// sweep arm, against the REAL Holtburg grocer door the bisect probed
+// (`/mnt/wbterminal2/door-bisect-2026-07-27/`, VERIFICATION-LOG §COL-03).
+//
+// Venue, from `ace_world.landblock_instance` LB 0xA9B4:
+//   0x7A9B401F  wcid 412 door-aluvian-house
+//               local (81.6744, 33.6286, 94)
+//               quat  (w 0.923879, z 0.382684) = +45° about z
+//   shop interior is NORTH (+y); outside is y < 33.63.
+// Setup 0x020019FF -> parts 0x010044B5 (leaf: 6 physics polys, physics
+// BSP present, 1.93 m wide x 0.26 m thick x 2.49 m tall) + two 0x010044B6
+// handle parts (0 physics polys). The leaf's part frame is
+// (-0.00643, 0.125, 1.275).
+//
+// The bisect's finding these tests exist to pin: the door's collider was
+// a swept CIRCLE at the door's origin, so only the head-on approach
+// (slide component exactly 0) blocked. At ±0.45 m lateral the tangent
+// slide walked the mover around the circle and into the shop in ~1 s
+// (`results/sweep2.json`). Both the 07-20 live measurement and the
+// offline A/B in `system/tests.rs mod faithful_entity_collision` used
+// the head-on approach only, so both passed while the feature was
+// broken — hence the ±0.45 m cases below are the load-bearing ones.
+//
+// Skips (passes) when the base DATs aren't on the box.
+#[cfg(test)]
+mod tests_entity_bsp_door_collision {
+    use super::*;
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Guid, Quaternion, Vector3};
+    use holtburger_world::spatial::{EntityBsp, EntityCollider, clamp_delta_against_entities};
+
+    const DOOR_SETUP: u32 = 0x0200_19FF;
+    const DOOR_LOCAL: (f32, f32, f32) = (81.6744, 33.6286, 94.0);
+    /// The mover's radius on the live faithful path
+    /// (`PLAYER_SETUP_SPHERE_RADIUS`).
+    const PLAYER_R: f32 = 0.48;
+    /// Leaf extent in SETUP-LOCAL x / y, post part frame (part 0's
+    /// vertex bounds x [-0.954154, 0.971082], y [-0.134218, 0.126761]
+    /// plus the part offset).
+    const LEAF_X: (f32, f32) = (-0.9606, 0.9647);
+    const LEAF_Y: (f32, f32) = (-0.0092, 0.2518);
+    /// Per-step lateral advance. ~0.05 m is one frame of a 4 m/s run at
+    /// 60 fps — the cadence the live probe actually clamps at.
+    const STEP: f32 = 0.05;
+    /// How far south of the door origin each walk starts. The leaf runs
+    /// diagonally (45°), so a 1 m start already sits inside the mover's
+    /// own radius of the leaf at the ±0.45 offsets — 2 m clears it.
+    const START_SOUTH: f32 = 2.0;
+
+    fn portal_db() -> Option<holtburger_dat::DatDatabase> {
+        let home = std::env::var("HOME").ok()?;
+        let p = std::path::PathBuf::from(home).join("ac_base_dats/client_portal.dat");
+        if !p.exists() {
+            eprintln!("[col03] SKIP — {} missing", p.display());
+            return None;
+        }
+        holtburger_dat::DatDatabase::new(&p).ok()
+    }
+
+    fn door_orientation() -> Quaternion {
+        Quaternion {
+            w: 0.923879,
+            x: 0.0,
+            y: 0.0,
+            z: 0.382684,
+        }
+    }
+
+    fn pose_at(x: f32, y: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid::from(0xA9B4_001Au32),
+            coords: Vector3::new(x, y, DOOR_LOCAL.2),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    fn door_global() -> Vector3 {
+        WorldPosition {
+            landblock_id: Guid::from(0xA9B4_0000u32),
+            coords: Vector3::new(DOOR_LOCAL.0, DOOR_LOCAL.1, DOOR_LOCAL.2),
+            rotation: door_orientation(),
+        }
+        .global_coords()
+    }
+
+    /// The live door collider. `with_bsp = false` reproduces the
+    /// pre-COL-03 arm exactly: radius 0.40 (`PLAYER_CAPSULE_RADIUS`,
+    /// the fallback the live session actually used — the door's own
+    /// 0.1 sphere never reached `setup_radii`) at the door's origin.
+    fn door_collider(db: &holtburger_dat::DatDatabase, with_bsp: bool) -> EntityCollider {
+        let g = door_global();
+        let bsp = with_bsp.then(|| {
+            let geometry = setup_entity_physics_geometry(db, DOOR_SETUP)
+                .expect("door Setup 0x020019FF must yield physics geometry");
+            EntityBsp {
+                geometry: std::sync::Arc::new(geometry),
+                origin: g,
+                orientation: door_orientation(),
+            }
+        });
+        EntityCollider {
+            center_xy: (g.x, g.y),
+            radius: 0.40,
+            has_physics_bsp: true,
+            bsp,
+        }
+    }
+
+    /// Landblock-local mover position expressed in the door's
+    /// SETUP-LOCAL frame. `p` is in the same local coords the walk keeps;
+    /// [`pose_at`] lifts it to global, which is the frame the door's
+    /// origin lives in.
+    fn to_door_local(p: (f32, f32), z: f32) -> Vector3 {
+        let g = door_global();
+        let mut pose = pose_at(p.0, p.1);
+        pose.coords.z = z;
+        let w = pose.global_coords();
+        let inv = door_orientation().conjugate();
+        inv.rotate_vector(Vector3::new(w.x - g.x, w.y - g.y, w.z - g.z))
+    }
+
+    /// Distance from the mover's LOW collision sphere centre (retail
+    /// Setup 0x02000001, `PLAYER_SETUP_SPHERE_LOW_Z` = 0.475 above the
+    /// feet) to the nearest point of the door leaf. The discriminator:
+    /// a mover that respects the leaf never gets closer than its own
+    /// radius; a mover colliding against a disc at the door's origin
+    /// ploughs straight through the leaf's polygons once it is clear of
+    /// that disc.
+    fn distance_to_leaf(
+        geom: &holtburger_world::spatial::EntityPhysicsGeometry,
+        p: (f32, f32),
+    ) -> f32 {
+        let c = to_door_local(p, DOOR_LOCAL.2 + 0.475);
+        geom.triangles
+            .iter()
+            .map(|t| (t.closest_point(c) - c).length())
+            .fold(f32::MAX, f32::min)
+    }
+
+    /// Walk due north in 0.05 m steps, re-clamping each step — the offline
+    /// mirror of the rig's `door_sweep.cjs` (hold W, sample the pose).
+    /// Returns `(end_xy, closest the mover ever came to the leaf)`.
+    fn walk_north(
+        db: &holtburger_dat::DatDatabase,
+        col: &EntityCollider,
+        start_x: f32,
+        steps: usize,
+    ) -> ((f32, f32), f32) {
+        let geom = setup_entity_physics_geometry(db, DOOR_SETUP).expect("door leaf geometry");
+        let mut p = (start_x, DOOR_LOCAL.1 - START_SOUTH);
+        let mut closest = distance_to_leaf(&geom, p);
+        for _ in 0..steps {
+            let out = clamp_delta_against_entities(
+                std::slice::from_ref(col),
+                &pose_at(p.0, p.1),
+                Vector3::new(0.0, STEP, 0.0),
+                PLAYER_R,
+            );
+            p = (p.0 + out.x, p.1 + out.y);
+            closest = closest.min(distance_to_leaf(&geom, p));
+        }
+        (p, closest)
+    }
+
+    #[test]
+    fn door_setup_yields_the_leaf_geometry() {
+        let Some(db) = portal_db() else { return };
+        let geom = setup_entity_physics_geometry(&db, DOOR_SETUP)
+            .expect("0x020019FF part 0 (0x010044B5) carries 6 physics polys + a BSP");
+        // 6 quads fan-triangulated -> 12 triangles. The two 0x010044B6
+        // handle parts have zero physics polys and must contribute none.
+        assert_eq!(geom.triangles.len(), 12, "unexpected triangle count");
+        let mut min = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
+        let mut max = Vector3::new(f32::MIN, f32::MIN, f32::MIN);
+        for t in &geom.triangles {
+            for v in [t.v0, t.v1, t.v2] {
+                min = Vector3::new(min.x.min(v.x), min.y.min(v.y), min.z.min(v.z));
+                max = Vector3::new(max.x.max(v.x), max.y.max(v.y), max.z.max(v.z));
+            }
+        }
+        // A leaf, not a post: ~1.93 m wide, ~0.26 m thick, ~2.49 m tall,
+        // sitting on the floor (the part frame lifts it to z 0.04..2.53).
+        assert!((max.x - min.x) > 1.9, "leaf too narrow: {}", max.x - min.x);
+        assert!((max.y - min.y) < 0.3, "leaf too thick: {}", max.y - min.y);
+        assert!((max.z - min.z) > 2.4, "leaf too short: {}", max.z - min.z);
+        assert!(min.z > 0.0 && min.z < 0.1, "leaf base off the floor: {}", min.z);
+        assert!(
+            (min.x - LEAF_X.0).abs() < 0.01 && (max.x - LEAF_X.1).abs() < 0.01,
+            "leaf x span drifted: {}..{}",
+            min.x,
+            max.x
+        );
+        assert!(
+            (min.y - LEAF_Y.0).abs() < 0.01 && (max.y - LEAF_Y.1).abs() < 0.01,
+            "leaf y span drifted: {}..{}",
+            min.y,
+            max.y
+        );
+    }
+
+    #[test]
+    fn lateral_offset_walk_never_penetrates_the_leaf() {
+        // THE COL-03 case. ±0.45 m either side of the door origin — the
+        // two rows of `results/sweep2.json` that ended inside the shop.
+        // The mover may slide along the leaf and eventually round its
+        // end (an isolated leaf has no door frame beside it), but it must
+        // never get inside the leaf's own polygons.
+        let Some(db) = portal_db() else { return };
+        let col = door_collider(&db, true);
+        for offset in [-0.45_f32, 0.45] {
+            let (end, closest) = walk_north(&db, &col, DOOR_LOCAL.0 + offset, 120);
+            // Measured 2026-07-27: -0.45 ends (81.224, 32.529) closest
+            // 0.472; +0.45 slides ~0.5 m along the leaf and ends
+            // (82.170, 33.433) closest 0.480. Neither reaches the shop.
+            eprintln!("[col03] bsp offset {offset:+.2} -> end {end:?} closest {closest:.3}");
+            assert!(
+                closest > 0.46,
+                "offset {offset:+.2}: mover penetrated the leaf to {closest:.3} m \
+                 (radius {PLAYER_R}), end={end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lateral_offset_walk_ploughs_through_the_leaf_on_the_circle_arm() {
+        // The pinned parity gap. Same walk with no resident geometry
+        // (the pre-COL-03 behaviour): the disc at the door's origin has
+        // radius 0.40 + 0.48 = 0.88, so the tangent slide carries the
+        // mover clear of it and then straight through the leaf's
+        // polygons. If this ever stops penetrating, the regression above
+        // has lost its teeth.
+        let Some(db) = portal_db() else { return };
+        let col = door_collider(&db, false);
+        for offset in [-0.45_f32, 0.45] {
+            let (end, closest) = walk_north(&db, &col, DOOR_LOCAL.0 + offset, 120);
+            // Measured 2026-07-27: -0.45 ends (80.793, 37.231) closest
+            // 0.000 — dead through the leaf; +0.45 ends (82.555, 37.233)
+            // closest 0.194. Both 3.6 m north of the door line, i.e. the
+            // shop interior, matching `results/sweep2.json`.
+            eprintln!("[col03] circle offset {offset:+.2} -> end {end:?} closest {closest:.3}");
+            assert!(
+                closest < 0.25,
+                "offset {offset:+.2}: circle arm was expected to plough through the \
+                 leaf, but stayed {closest:.3} m clear, end={end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn head_on_walk_clears_the_leaf_on_both_arms() {
+        // The degenerate geometry every previous measurement used — and
+        // the reason they all passed while the feature was broken. Both
+        // arms keep the mover off the leaf; only the mechanism differs
+        // (the circle stops it 0.88 m from the door ORIGIN, the leaf
+        // stops it 0.48 m from its own FACE and then lets it slide).
+        let Some(db) = portal_db() else { return };
+        for with_bsp in [true, false] {
+            let col = door_collider(&db, with_bsp);
+            let (end, closest) = walk_north(&db, &col, DOOR_LOCAL.0, 120);
+            // Measured 2026-07-27: the leaf stops the mover at y 32.937
+            // (0.69 m short of the door origin — 0.48 m off the leaf's
+            // own face); the circle stops it at y 32.749, the 0.88 m
+            // stop-gap every bisect arm reported live.
+            eprintln!("[col03] head-on bsp={with_bsp} -> end {end:?} closest {closest:.3}");
+            assert!(
+                closest > 0.46,
+                "head-on walk penetrated the leaf (bsp={with_bsp}): {closest:.3} m, end={end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_geometry_leaves_the_circle_arm_solid() {
+        // Residency is asynchronous: a BSP-flagged door whose SetupModel
+        // walk has not landed must still stop the head-on mover, never
+        // turn non-solid and never panic. 0.40 + 0.48 = 0.88 m short of
+        // the door origin — the live stop-gap every bisect arm measured.
+        let Some(db) = portal_db() else { return };
+        let col = door_collider(&db, false);
+        let out = clamp_delta_against_entities(
+            std::slice::from_ref(&col),
+            &pose_at(DOOR_LOCAL.0, DOOR_LOCAL.1 - 2.0),
+            Vector3::new(0.0, 2.0, 0.0),
+            PLAYER_R,
+        );
+        assert!(out.y < 1.13, "circle fallback stopped short of 0.88 m: {out:?}");
+        assert!(out.y > 1.11, "circle fallback stopped too early: {out:?}");
     }
 }
 

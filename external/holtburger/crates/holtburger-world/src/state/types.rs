@@ -114,6 +114,19 @@ pub struct WorldState {
     /// the player capsule radius (a reasonable default for unknown
     /// humanoid-scale entities).
     pub(crate) setup_radii: std::collections::HashMap<u32, f32>,
+    /// COL-03 (2026-07-27): precise physics geometry per SetupModel id
+    /// (`0x02xxxxxx`), in setup-local metres. Populated by the wasm
+    /// bundle via [`WorldState::register_setup_physics_geometry`] once
+    /// the Setup→parts→GfxObj walk has resolved a part carrying BOTH a
+    /// `physics_bsp` tree and non-empty `physics_polygons`. Read when
+    /// building [`crate::spatial::EntityCollider`] records so a
+    /// `HAS_PHYSICS_BSP` entity collides against its actual polygons
+    /// (ACE `PhysicsObj.FindObjCollisions`, `PhysicsObj.cs:412`)
+    /// instead of a circle at its origin. Absent ids keep the circle.
+    pub(crate) setup_physics_geometry: std::collections::HashMap<
+        u32,
+        std::sync::Arc<crate::spatial::EntityPhysicsGeometry>,
+    >,
     pub(crate) entity_lifecycle: EntityLifecycleStore,
     pub(crate) self_movement_capabilities_override: Option<SelfMovementCapabilities>,
     /// Wave A / PR1 (2026-06-06): item GUID → prior wielder GUID. Used
@@ -488,6 +501,7 @@ impl WorldState {
             terrain_heights: std::collections::HashMap::new(),
             terrain_water: std::collections::HashMap::new(),
             setup_radii: std::collections::HashMap::new(),
+            setup_physics_geometry: std::collections::HashMap::new(),
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
             prior_wielders: std::collections::HashMap::new(),
@@ -652,6 +666,49 @@ impl WorldState {
         }
     }
 
+    /// COL-03: cache a SetupModel's precise physics geometry (setup-local
+    /// triangles fan-triangulated from the parts' `physics_polygons`).
+    /// Called by the wasm bundle once the Setup→parts→GfxObj walk lands.
+    /// Geometry with no triangles is dropped rather than cached — an
+    /// empty entry would read as "resident" and silently disable the
+    /// circle fallback for that setup.
+    pub fn register_setup_physics_geometry(
+        &mut self,
+        setup_id: u32,
+        geometry: std::sync::Arc<crate::spatial::EntityPhysicsGeometry>,
+    ) {
+        if geometry.triangles.is_empty() {
+            return;
+        }
+        self.setup_physics_geometry.insert(setup_id, geometry);
+    }
+
+    /// Number of SetupModels with resident physics geometry. Diagnostic
+    /// only — the wasm `TickMovement` drain logs it whenever it inserts,
+    /// so a live session can tell "BSP arm active" from "still on the
+    /// circle fallback".
+    pub fn setup_physics_geometry_len(&self) -> usize {
+        self.setup_physics_geometry.len()
+    }
+
+    /// COL-03: the precise collision geometry for `entity`, bound to its
+    /// live wire frame, or `None` when the entity is not
+    /// `HAS_PHYSICS_BSP` or its SetupModel geometry has not landed yet.
+    /// Feeds [`crate::spatial::EntityCollider::bsp`]; `None` leaves the
+    /// caller on the swept-circle arm.
+    pub fn entity_physics_bsp(&self, entity: &Entity) -> Option<crate::spatial::EntityBsp> {
+        if !entity.has_physics_bsp() {
+            return None;
+        }
+        let gfx_id = entity.gfx_id?;
+        let geometry = self.setup_physics_geometry.get(&gfx_id)?;
+        Some(crate::spatial::EntityBsp {
+            geometry: geometry.clone(),
+            origin: entity.position.global_coords(),
+            orientation: entity.position.rotation,
+        })
+    }
+
     /// Best-known collision cylinder radius for an entity, in metres.
     /// Returns the cached SetupModel cyl-sphere radius when the
     /// entity's `gfx_id` is a `0x02xxxxxx` SetupModel and has been
@@ -660,10 +717,10 @@ impl WorldState {
     ///
     /// Mirrors ACE's `PhysicsObj.GetPhysicsRadius` at
     /// `Source/ACE.Server/Physics/PhysicsObj.cs:~590`. ACE returns
-    /// `0.0` for `HasPhysicsBSP` entities (caller uses BSP path
-    /// instead); we don't follow that today because the BSP path
-    /// isn't wired — see the TODO in
-    /// `crate::spatial::entity_collision`.
+    /// `0.0` for `HasPhysicsBSP` entities (caller uses the BSP path
+    /// instead); we keep the cylinder for them because our BSP arm is
+    /// residency-gated — [`Self::entity_physics_bsp`] returning `None`
+    /// has to leave a solid fallback behind.
     pub fn entity_collision_radius(&self, entity: &Entity) -> f32 {
         const DEFAULT: f32 = crate::spatial::PLAYER_CAPSULE_RADIUS;
         let Some(gfx_id) = entity.gfx_id else {

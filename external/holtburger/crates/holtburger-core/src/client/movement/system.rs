@@ -4885,9 +4885,11 @@ impl MovementSystem {
         // (`Source/ACE.Server/Physics/PhysicsObj.cs:~410`), which
         // tests the moving object against every nearby world object
         // and branches on `PhysicsState::HAS_PHYSICS_BSP` to pick
-        // BSP-polygon vs cylsphere collision. We only do the
-        // cylsphere fallback today; the BSP path is wired through
-        // `EntityCollider::has_physics_bsp` and is a follow-on.
+        // BSP-polygon vs cylsphere collision. Both arms are live
+        // (COL-03): the BSP arm engages when the entity carries the
+        // flag AND its SetupModel physics polygons are resident
+        // (`WorldState::entity_physics_bsp`); everything else takes
+        // the cylsphere bounds.
         //
         // Filtering rules (caller-side, before reaching the math):
         //   - Skip the local player itself.
@@ -4967,6 +4969,7 @@ impl MovementSystem {
                         center_xy: (g.x, g.y),
                         radius: world.entity_collision_radius(e),
                         has_physics_bsp: e.has_physics_bsp(),
+                        bsp: world.entity_physics_bsp(e),
                     })
                 })
                 .collect();
