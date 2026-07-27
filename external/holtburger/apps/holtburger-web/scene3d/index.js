@@ -109,7 +109,11 @@ import { installWebglContextRecovery } from "./webgl_context_recovery.js";
 // Populates the shared `ui/ac_icon_cache.js` cache so subsequent icon
 // fetches in inventory/vendor/container/trade/buffs/spell-research
 // return synchronously. See docs/wave-15-icon-preload-2026-05-26.md.
-import { preloadAllIcons as preloadAllIconsShared } from "../ui/ac_icon_cache.js";
+// `iconCacheStats` is P0.4/LEAK-03's instrument — see __diag.iconCache below.
+import {
+  preloadAllIcons as preloadAllIconsShared,
+  iconCacheStats,
+} from "../ui/ac_icon_cache.js";
 // 2026-06-09 — per-LB streaming-bake resilience (terrain/buildings/statics).
 // See stream_bake_guard.js: stops a shard-fetch failure from being hammered
 // into an OOM crash by the per-position-update ring driver.
@@ -3692,6 +3696,35 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         const mc3 = scene3dForBuilders && scene3dForBuilders.materialCache;
         if (!mc3 || typeof mc3.palettedCacheStats !== "function") return null;
         return mc3.palettedCacheStats();
+      } catch (_) {
+        return null; /* diagnostic only — never throw */
+      }
+    };
+
+    // P0.3 / LIVE-03 — is the follow camera's horizontal basis usable?
+    // PHY-07-LIVE-RUN-2026-07-26 spent a whole run with a camera whose
+    // forward had horizontal components exactly (0, 0), which silently froze
+    // the turn loop at a constant heading error. `degenerateFrames > 0` means
+    // camera.js had to synthesise a heading, so ANY heading a harness reads
+    // off the camera matrix is suspect — read the wasm pose instead.
+    window.__diag.cameraBasis = () => {
+      try {
+        const cs = scene3dForBuilders && scene3dForBuilders.cameraSwitcher;
+        if (!cs || typeof cs.cameraBasisGuard !== "function") return null;
+        return cs.cameraBasisGuard();
+      } catch (_) {
+        return null; /* diagnostic only — never throw */
+      }
+    };
+
+    // P0.4 / LEAK-03 — the UI icon cache (`ui/ac_icon_cache.js`). `iconMB` is
+    // the fourth byte-sum tally alongside `matMB` / `palMB` / `entMB`; it also
+    // answers wave3-G open question 3 ("does the lazy path ever get near the
+    // 30 MB ceiling?"). `negative` counts TRANSIENT failures now held in a
+    // TTL'd side map instead of being latched into the cache forever (RQ-32).
+    window.__diag.iconCache = () => {
+      try {
+        return iconCacheStats();
       } catch (_) {
         return null; /* diagnostic only — never throw */
       }
