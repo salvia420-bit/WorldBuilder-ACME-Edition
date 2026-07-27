@@ -33,6 +33,22 @@ jump/stamina spec, sticky/turn spec, slope/slide spec, P6.1 vtable + design.
 
 ## OPEN QUEUE (priority order)
 
+> **2026-07-28 STATUS ADDENDUM** (see VERIFICATION-LOG for the entries):
+> item 1 texMerge+roadSlots promotion LANDED (c82b55b1); item 2 F2/F5/F6
+> REVIEWED + LANDED (64f9c4d9 — review found and fixed a stolen doc comment
+> and unwired URL-flag escapes; 620/620 + 219/219 tests, live MoveTo probe
+> passed); item 6's aged-buff relog validation PASSED all 4 checks and the
+> deferred url-flags hunks LANDED (a5b98307). P4.4/COL-24 CLOSED as two
+> verdicts: moarsman = upstream data + retail spawn math (no defect, likely
+> a river Mosswart); frozen creatures = RE-FILED as a client keepalive bug —
+> the 5 s PingRequest is not reaching ACE (355 Network Timeout drops,
+> 62-66 s cluster; suspect the ?netWorker=1 proxy path) → session dies →
+> landblock dormancy freezes all monster AI while the browser keeps
+> rendering. NEW open items: keepalive egress instrumentation + visible
+> "disconnected" UI state; buffs-hud misclassification (beneficial spell
+> renders kind-debuff and is hidden by the default filter); HUD misses
+> live-cast enchantment adds.
+
 1. **texMerge+roadSlots default-ON promotion** — correctness fix is landed and
    0-mismatch; the promotion patch sits UNAPPLIED at
    `/mnt/wbterminal2/buildbox-2026-07-27/fanout-mini/fanout/out/11/02-*.patch`,

@@ -1194,3 +1194,64 @@ slice. Believed negligible; **unmeasured**, and the whole reason
 (sha256 `c51b83a0e6585329…`), containing all of the above.
 Pre-change backup: `…/scratchpad/pre-dat01-holtburger_web_bg.wasm`
 (4,947,030 B).
+
+---
+
+## P4.2 step 4 — aged-buff relog LIVE-VALIDATED: PASS all 4 checks (2026-07-28, Opus agent, zero-GPU bot, release wasm 4,952,101 B)
+
+Recipe = bufftime NOTES.md §6.1 verbatim (Strength Self I via
+`requestAppraisal(self)` + `@castspell 2` — bare `@castspell` fails without a
+prior appraisal target).
+
+- Fresh wire: `{id: 2, layer: 1, start: 0, dur: 1800}` — start exactly 0.
+- Relog at in-world age ≈155 s: wire re-sent `start: -155` (= 31 × 5 s
+  heartbeats; ACE decrements only while online, so age is IN-WORLD time, not
+  wall time). HUD resumed at **25:23**, not 30:00 (the pre-F1 failure), and
+  every `remainingSeconds` sample equalled `duration + startTime − elapsed`
+  to the millisecond.
+- serverTime 2.993e8 (PortalYearTicks ✓); drift −0.005 s and −0.003 s per
+  30 s, pre- and post-relog.
+
+NEW BUGS FILED OUT OF THE RUN (independent of the time math):
+1. **buffs-hud misclassification** — Strength Self I (`type 0x02008001`,
+   beneficial) renders `kind-debuff` + `set-spell (Set: id 0)` via
+   `classifyEnchantment` + a truthy-but-zero `hasSpellSetId`; under the
+   default `filter='buff'` the running buff is INVISIBLE ("No beneficial
+   spells active."). plugins/buffs-hud.js.
+2. **HUD misses live casts** — `enchantmentAdded`/`playerStatsUpdated` never
+   fired for the admin-command cast; only the relog remount populated
+   `state.enchantments`. Wire had the row all along (`playerEnchantments()`).
+
+## P4.4 / COL-24 — CLOSED as two separate verdicts (2026-07-28, Opus agent, read-only shard/world DB + log sweep)
+
+**Moarsman north of Holtburg: NOT A DEFECT — there is no moarsman.** Zero
+moarsman rows in `ace_world.landblock_instance` (0xA9xx column empty
+world-wide for that family), zero in the 0xA9B0–0xA9B9 `encounter`
+generators' create-lists, zero `ace_shard.biota`, zero in the LSD spawnMaps
+for that area (our world DB exactly matches the retail-era dump), zero in
+dist/spawns. ACE places encounter spawns at `cellX*24, cellY*24` with a
+building check but NO water check (`Landblock.cs:282-295`), and the
+newbie-town generator's table includes no-aggro Mosswart creepers — an
+amphibian frog-man at river z≈28 is the near-certain sighting. Leave
+`ace_world`/`ace_shard` alone; nothing to delete.
+
+**Frozen creatures: RE-FILED as a CLIENT networking bug (sev 2).** ACE log
+has 0 exceptions but **355 `Network Timeout` drops** (median session 116 s;
+29 die ≤70 s — the 62–66 s cluster is `DefaultSessionTimeout` 60 s + one
+tick). Chain, all vanilla: no inbound 60 s → session terminated
+(`NetworkSession.cs:329`, `Session.cs:140`) → no player → landblock dormant
+after 60 s (`Landblock.cs:113/546`) → `Monster_Tick` fully gated off
+(`Landblock.cs:451`); aggro additionally requires accepted movement packets
+(`Player_Monster.cs:17` call sites). The browser keeps rendering AND keeps
+transmitting into the dead session (~40 "Unsolicited Packet" lines in 1 s at
+17:38:43) — the exact "world renders, nothing moves" report. Our 5 s
+`PingRequest` keepalive (`apps/holtburger-web/src/lib.rs:46697-46755`,
+gated `LoopState::InWorld|EnteringWorld`) is demonstrably not reaching ACE —
+prime suspect: the `?netWorker=1` proxy path (`net_worker.rs:220-222`).
+Corroborated independently the same hour by the P4.2 run's unexplained
+66 s `Network Timeout`. NEXT: instrument keepalive egress in the netWorker
+path; surface a visible "disconnected" state client-side. Do NOT raise
+ACE's `DefaultSessionTimeout` to mask it (vanilla rule). Also noted:
+"no idle wander" is correct vanilla behavior (ACE has no wander AI) —
+only the statue-stillness (client-side idle motion) and the freeze chain
+above are defects.
