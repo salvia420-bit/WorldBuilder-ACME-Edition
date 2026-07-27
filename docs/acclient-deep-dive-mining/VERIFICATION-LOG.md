@@ -341,3 +341,20 @@ sets `transparent = false`. Recommended: split the ClipMap ref+blend piece onto
 the legacy ladder + static_atlas (hasPalette census first); leave fog/InvAlpha
 behind the flag. `docs/url-flags.md:235` "inert until M3a wasm rebuild" is
 stale — `SurfacePixels.hasPalette` is live in shipped pkg.
+
+### COL-03 fix live-validated (2026-07-27, bisect rig, release wasm 4,947,300 B)
+
+- **−0.45 m lateral: BLOCKED** at y 33.09 (was: through the circle into the
+  shop at y 37.79). Slide runs along the leaf (endX drifts west), never crosses
+  the plane.
+- **+0.45 m lateral: no longer enters the shop** — the mover slides NE along
+  the leaf, comes off the leaf's NE end (~82.36, 34.30), and continues over
+  outdoor terrain to y 67 without ever entering an interior cell. This is the
+  **doorframe/building-geometry gap** the implementation report predicted: past
+  the leaf's end nothing catches the mover. Separate pre-existing defect, filed
+  as follow-up; not the entity-BSP arm.
+- Head-on: still blocked (y 32.75 in this run — circle-arm value; the run
+  predates full geometry residency, and the lateral runs that followed show the
+  BSP arm live).
+- `collisionResidencyDiag` confirmed live in probe output (staticAabbs 234,
+  cell physics 123/123/123).
