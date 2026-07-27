@@ -1,3 +1,6 @@
+// COL-10 (2026-07-27): the walk body speed IS retail's `WalkAnimSpeed`
+// (`acclient.c:343561`) — see `forward_axis_speed`.
+use super::motion_interp::WALK_ANIM_SPEED;
 use crate::client::movement_types::{
     ForwardLocomotion, Gait, MotionState, MotionStyle, MovementPacketMetadata, SidestepLocomotion,
     Turn, planar_velocity_for_heading,
@@ -829,9 +832,18 @@ const BACKWARDS_FACTOR: f32 = 0.649_999_98;
 /// base speed scaled by `BackwardsFactor` (`WalkAnimSpeed * 0.65 ≈ 2.03`
 /// m/s for the canonical walk base), and the Run gait additionally applies
 /// the `run_factor` (`run_rate_scalar`) on top — see `BACKWARDS_FACTOR`.
-/// We derive the magnitude from `base_walk_forward_speed()` so backstep
-/// stays consistent with however the walk-forward base is sourced (the
-/// separate walk-forward-magnitude question is out of scope here).
+/// We derive the magnitude from the walk-forward base so backstep stays
+/// consistent with however the walk-forward base is sourced.
+///
+/// COL-10 (2026-07-27) — walk-forward magnitude resolved. The walk base is
+/// retail's `WalkAnimSpeed` constant [`WALK_ANIM_SPEED`] (3.1199999 m/s),
+/// NOT the authored DAT walk-cycle base (2.6017 m/s) this used to read off
+/// `capabilities.base_walk_forward_speed()`. Retail's `get_state_velocity`
+/// moves a `WalkForward` body at `3.1199999 * forward_speed`
+/// (`~/ac-headers/acclient.c:343561`) and ACE's server model matches, so
+/// the DAT-sourced base under-ran both by 1.199x. Backstep therefore lands
+/// on the retail `3.1199999 * 0.65 ≈ 2.028` m/s. RUN is unchanged — the
+/// authored run cycle base IS 4.000, the same number retail hardcodes.
 ///
 /// Sidestep additionally clamps at ±3.0 m/s per retail
 /// (`acclient.c:343474-343480` + `MotionInterp.cs:550-560`).
@@ -839,13 +851,11 @@ fn forward_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilitie
     match (state.gait, state.forward) {
         (_, None) => 0.0,
         (Gait::Run, Some(ForwardLocomotion::Forward)) => capabilities.resolved_manual_run_speed(),
-        (Gait::Walk, Some(ForwardLocomotion::Forward)) => capabilities.base_walk_forward_speed(),
+        (Gait::Walk, Some(ForwardLocomotion::Forward)) => WALK_ANIM_SPEED,
         (Gait::Run, Some(ForwardLocomotion::Backstep)) => {
-            capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR * capabilities.run_rate_scalar
+            WALK_ANIM_SPEED * BACKWARDS_FACTOR * capabilities.run_rate_scalar
         }
-        (Gait::Walk, Some(ForwardLocomotion::Backstep)) => {
-            capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR
-        }
+        (Gait::Walk, Some(ForwardLocomotion::Backstep)) => WALK_ANIM_SPEED * BACKWARDS_FACTOR,
     }
 }
 
@@ -1080,14 +1090,16 @@ mod tests {
         // returns (-cos*speed, sin*speed, 0) so heading=0 gives -X).
         let velocity = local_velocity_for_state(0.0, state, &capabilities);
 
-        // Forward at heading 0 contributes (-1.0, 0.0, 0.0) (walk speed = 1.0
-        // m/s by test capabilities `base_walk_forward_velocity`).
+        // Forward at heading 0 contributes (-WALK_ANIM_SPEED, 0, 0). COL-10
+        // (2026-07-27): the walk magnitude is retail's `WalkAnimSpeed`
+        // constant, no longer the fixture's `base_walk_forward_velocity`
+        // (1.0 m/s) — see `forward_axis_speed`.
         // StrafeRight at heading 0 contributes (0.0, walk_strafe, 0.0) where
         // walk_strafe = SIDESTEP_ANIM_SPEED × SIDESTEP_ADJUST_FACTOR = 1.56
         // m/s (F1-2 retail magnitude — fixed, not derived from the walk base).
         // Both axes non-zero.
         let walk_strafe = SIDESTEP_ANIM_SPEED * SIDESTEP_ADJUST_FACTOR;
-        assert!((velocity.x - (-1.0)).abs() < 1e-5);
+        assert!((velocity.x - (-WALK_ANIM_SPEED)).abs() < 1e-5);
         assert!((velocity.y - walk_strafe).abs() < 1e-5);
         assert!(velocity.z.abs() < 1e-5);
     }

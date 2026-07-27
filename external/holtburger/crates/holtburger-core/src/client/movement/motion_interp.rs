@@ -189,8 +189,19 @@ pub(crate) enum MotionMovementStruct {
 pub(crate) const RUN_ANIM_SPEED: f32 = 4.0;
 
 /// `MotionInterp.WalkAnimSpeed` (`MotionInterp.cs:32`) — precision is
-/// load-bearing: `3.1199999`, NOT `3.12`. Closed-form walk constant
-/// (airborne role); on-ground walk uses the authored cycle base (2.602).
+/// load-bearing: `3.1199999`, NOT `3.12`.
+///
+/// COL-10 (2026-07-27): this is THE walk body speed on the ground too,
+/// not just the airborne closed form. Retail `get_state_velocity`
+/// (`~/ac-headers/acclient.c:343561`) computes a `WalkForward` body
+/// velocity of `3.1199999 * forward_speed` and ACE's server-side model is
+/// the same, so the whole walk family (walk forward, backstep via
+/// `BACKWARDS_FACTOR`, and the sidestep adjust ratio) derives from this
+/// constant. The player MotionTable's authored walk cycle base (2.6017
+/// m/s) is now used ONLY as the animation's authored speed — the
+/// `cycleBaseSpeed` denominator of the JS `cycleTimeScale`, which
+/// consequently plays the walk clip at 3.1199999/2.6017 ≈ 1.199x so the
+/// feet track the (now faster) travel. See `VERIFICATION-LOG.md §COL-10`.
 pub(crate) const WALK_ANIM_SPEED: f32 = 3.1199999;
 
 /// `MotionInterp.SidestepAnimSpeed` (`MotionInterp.cs:30`) — m/s per
@@ -577,11 +588,19 @@ impl MotionInterp {
     /// (DESIGN.md §2): `velocity = AUTHORED MotionData cycle base speed ×
     /// speed_mod`, where the interpreted speed IS the speed_mod
     /// (`add_motion`, `acclient.c:337431-337474`; `apply_physics`,
-    /// `acclient.c:339860-339890`). Walk uses the authored walk base
-    /// (2.602 for the player MotionTable), run the authored run base
-    /// (4.000) — NOT the closed-form 3.1199999/4.0 constants, which are
-    /// the clamp/airborne approximations (see the walk note in DESIGN.md
-    /// §2). Sidestep has no authored straight-line cycle base in our
+    /// `acclient.c:339860-339890`). Run uses the authored run base
+    /// (4.000), which coincides with retail's `RunAnimSpeed`.
+    ///
+    /// COL-10 (2026-07-27): the WALK base is NO LONGER the authored walk
+    /// cycle base. Retail's `get_state_velocity` moves a `WalkForward`
+    /// body at the `WalkAnimSpeed` constant `3.1199999 * forward_speed`
+    /// (`acclient.c:343561`; ACE `MotionInterp.cs:684-685` identically),
+    /// while the player MotionTable's walk cycle only authors 2.6017 m/s.
+    /// The sole production caller
+    /// ([`interpreted_velocity_for_state`]) now passes
+    /// [`WALK_ANIM_SPEED`]; this function stays pure in its inputs so the
+    /// unit tests can still pin the authored-base arithmetic.
+    /// Sidestep has no authored straight-line cycle base in our
     /// profile; retail's `SidestepAnimSpeed` (1.25 m/s per anim-rate
     /// unit) is the conversion both retail and ACE use. NO magnitude
     /// clamp here — `add_motion` composition is unclamped (the legacy
@@ -1797,10 +1816,19 @@ pub(crate) fn interpreted_velocity_for_state(
         ..MotionInterp::default()
     };
     interp.apply_raw_movement(Some(capabilities.run_rate_scalar));
-    let body = interp.ground_velocity(
-        capabilities.base_walk_forward_speed(),
-        capabilities.base_run_forward_speed(),
-    );
+    // COL-10 (2026-07-27) — the WALK base is retail's `WalkAnimSpeed`
+    // constant, NOT the authored DAT walk-cycle base. `get_state_velocity`
+    // (`~/ac-headers/acclient.c:343561`) moves a `WalkForward` body at
+    // `3.1199999 * forward_speed`; ACE uses the same model
+    // (`MotionInterp.cs:684-685`). The player MotionTable's WalkForward
+    // cycle only derives 2.6017 m/s, so sourcing the body speed from the
+    // DAT walked 1.199x SLOWER than both retail and the server while the
+    // rig's `cycleTimeScale` (actual `stateGroundSpeed` 3.1199999 ÷
+    // authored `cycleBaseSpeed` 2.6017) already played the clip at the
+    // retail rate — the foot-slide. RUN is unchanged: its authored cycle
+    // base IS 4.000, identical to retail's `RunAnimSpeed`, so the DAT
+    // source stays correct there (OQ-3 measured 7.785 vs 7.787 expected).
+    let body = interp.ground_velocity(WALK_ANIM_SPEED, capabilities.base_run_forward_speed());
     planar_velocity_for_heading(heading, body.y)
         + planar_velocity_for_heading(heading + FRAC_PI_2, body.x)
 }
@@ -2051,17 +2079,26 @@ mod tests {
         );
     }
 
-    /// Walk ground speed is the AUTHORED walk cycle base — 2.602 m/s
-    /// exact (MOTK derivation), NOT the closed-form 3.1199999.
+    /// COL-10 (2026-07-27, decision recorded in `VERIFICATION-LOG.md
+    /// §COL-10): walk ground speed is retail's `WalkAnimSpeed` constant —
+    /// `3.1199999` m/s (`~/ac-headers/acclient.c:343561`, ACE
+    /// `MotionInterp.cs:684-685`) — and is INDEPENDENT of the authored
+    /// walk cycle base carried by the capabilities (2.602 here). The
+    /// authored base survives only as the animation's `cycleBaseSpeed`.
+    /// This test previously pinned the opposite (2.602 from the DAT).
     #[test]
-    fn velocity_contract_walk_uses_authored_2_602_base() {
+    fn velocity_contract_walk_uses_retail_walk_anim_speed() {
         let capabilities = authored_capabilities(1.9166666);
         let v = interpreted_velocity_for_state(
             0.0,
             MotionState::builder().walk().forward().build(),
             &capabilities,
         );
-        assert!((v.length() - 2.602).abs() < 1e-5, "got {}", v.length());
+        assert!(
+            (v.length() - WALK_ANIM_SPEED).abs() < 1e-5,
+            "walk must realize WalkAnimSpeed {WALK_ANIM_SPEED}, got {}",
+            v.length()
+        );
     }
 
     /// IDENTITY (DESIGN.md §1.4): for every (gait, locomotion, run_rate)

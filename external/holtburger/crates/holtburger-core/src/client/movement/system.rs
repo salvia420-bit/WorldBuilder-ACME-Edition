@@ -541,8 +541,9 @@ const USE_RETAIL_QUANTUM: bool = false;
 /// ([`super::motion_interp::interpreted_velocity_for_state`]):
 /// input → `RawMotionState` → `apply_raw_movement` (3× `adjust_motion` +
 /// `apply_run_to_command`, `acclient.c:343746-343803`/`:343439-343483`)
-/// → `InterpretedMotionState`, ground velocity = AUTHORED MotionData
-/// cycle base speed (run 4.000 / walk 2.602) × interpreted speed_mod
+/// → `InterpretedMotionState`, ground velocity = base speed (run 4.000
+/// from the authored MotionData cycle / walk 3.1199999 from retail's
+/// `WalkAnimSpeed` — COL-10) × interpreted speed_mod
 /// (already run-rate-multiplied) per `add_motion`
 /// (`acclient.c:337431-337474`) + `CSequence::apply_physics`
 /// (`acclient.c:339860-339890`); and the grounded planar velocity is set
@@ -4038,7 +4039,12 @@ impl MovementSystem {
         let capabilities = world.resolve_self_movement_capabilities().ok()?;
         let speed_mps = match intent.gait {
             crate::client::movement_types::Gait::Run => capabilities.resolved_manual_run_speed(),
-            crate::client::movement_types::Gait::Walk => capabilities.base_walk_forward_speed(),
+            // COL-10 (2026-07-27): walk realizes retail's `WalkAnimSpeed`
+            // (`acclient.c:343561`), the same source the manual lane's
+            // `interpreted_velocity_for_state` now uses — NOT the authored
+            // DAT walk-cycle base (2.6017 m/s), which under-ran retail and
+            // ACE by 1.199x.
+            crate::client::movement_types::Gait::Walk => super::motion_interp::WALK_ANIM_SPEED,
         };
         let turn_omega = {
             let base = capabilities.base_turn_right_speed_rad_per_sec();
