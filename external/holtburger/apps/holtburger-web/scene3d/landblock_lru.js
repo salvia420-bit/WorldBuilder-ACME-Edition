@@ -211,10 +211,14 @@ const PARK_USE_TIME_MS = (() => {
     return 30_000;
   }
 })();
-// The two cross-LB consolidators (both default-OFF) excise per-LB geometry
-// destructively — park has no hide/show seam for them in v1, so their
-// presence downgrades park to classic evict (correctness first; see W4
-// §3.6 risk table).
+// The two cross-LB consolidators excise per-LB geometry destructively —
+// park has no hide/show seam for them in v1, so their presence downgrades
+// park to classic evict (correctness first; see W4 §3.6 risk table).
+// ⚠ DESYNC (URL-flag audit 2026-07-27): terrain_batch.js has been
+// DEFAULT-ON since 2026-07-03, but this guard only detects an EXPLICIT
+// `?terrainBatch=on|1|true` — the default-ON case passes undetected, so
+// park can run concurrently with the terrain consolidator. Fixing the
+// guard is a product decision (not a comment fix).
 const WARM_PARK_SUPPORTED = (() => {
   try {
     const ps = new URLSearchParams(window.location?.search || "");

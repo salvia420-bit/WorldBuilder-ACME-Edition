@@ -246,7 +246,8 @@ function readHeadingEaseK() {
   return HEADING_EASE_DAMP_K_DEFAULT;
 }
 
-// A5-P3 (2026-06-12, W3+ S13) — `?rootMotionObject=1` opt-in, default OFF.
+// A5-P3 (2026-06-12, W3+ S13) — `?rootMotionObject` — DEFAULT-ON
+// (`!== "off"` reader; `=off` disables).
 // On overlay (one-shot link clip) COMPLETION, apply the clip's net rigid
 // root displacement (`rootMotionNet` from the A5-P3 wasm metadata export)
 // to the entity ANCHOR (`inst.root`), so a translating one-shot
@@ -534,7 +535,8 @@ const HEADING_EASE_EPSILON = 0.01; // settle (~0.6°) to avoid endless micro-sle
 // so a base constant stands in (human TurnRight cycle ≈ 3 rad/s; tune at
 // the 1070 with `?turnOmegaBase=<rad/s>`). Applies ONLY to turn-directive
 // targets — a KIND_POSITION heading stash clears the cap so position-
-// driven smoothing keeps its existing fixed-K feel. Default OFF.
+// driven smoothing keeps its existing fixed-K feel. DEFAULT-ON (reader is
+// `!== "off"`: absent reads ON; `?turnOmega=off` disables).
 const TURN_OMEGA_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -911,8 +913,8 @@ import { createPreCreateBuffer } from "./pre_create_buffer.js";
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
 // speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
-// actual ground speed / authored cycle speed (|MotionData.velocity|). Default
-// OFF (eye-test-tuned gait change); read once at module load. try/catch for
+// actual ground speed / authored cycle speed (|MotionData.velocity|); read
+// once at module load. try/catch for
 // the Node test harness (no `window`).
 // T1: default-ON as of 2026-06-05. The runtime `cycleBaseSpeed` denominator now
 // resolves (~4.0 run / 2.6 walk) after the prefetch fix in lib.rs cycle_base_speed
@@ -964,8 +966,9 @@ const TWEEN_CLOCK_DT = (() => {
 })();
 
 // F15-2 (2026-06-09) — `?signedMotionSpeed=on` gates REVERSE clip playback
-// for a backstep (negative forward_speed). Default OFF: a backstepping remote
-// otherwise moonwalks (forward walk anim while dead-reckoning backward). When
+// for a backstep (negative forward_speed). DEFAULT-ON (`!== "off"` reader;
+// `?signedMotionSpeed=off` reverts): when OFF a backstepping remote
+// moonwalks (forward walk anim while dead-reckoning backward). When
 // ON, the locomotion clip's final timeScale is negated for negative motion
 // speeds so three.js plays it in reverse. Magnitude for the gait still comes
 // from the velScale getter; this only flips direction. Needs a 1070 eye-test.
@@ -1067,13 +1070,14 @@ const CAST_GESTURE_LEN = (() => {
   }
 })();
 
-// F8-4 (2026-06-09) — `?castStateMachine=on` (default OFF). A minimal client
+// F8-4 (2026-06-09) — `?castStateMachine` (DEFAULT-ON — `!== "off"` reader;
+// `=off` disables). A minimal client
 // cast-state machine: while a cast is in flight, a REPEAT cast request for the
 // same caster is ignored instead of restarting the windup animation every
 // click (spam-clicking a target otherwise visibly "recasts" while the server
 // is still executing the first cast). The busy window auto-expires (cap) so a
 // dropped UseDone can't wedge casting; clearCastBusy / cancelCastSequence clear
-// it early. Default OFF pending a 1070 eye-test (cast feel).
+// it early. 1070 cast-feel eye-test still owed.
 const CAST_STATE_MACHINE = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
@@ -1219,7 +1223,8 @@ const CYCLE_OMEGA_ON = (() => {
 // MT_CLASS_FALLBACK (motion-dispatch audit §5, 2026-06-09) — `?mtClassFallback=on`
 // gates the Stage-1 generic class-mask fallback in `classifyMotionCommand`: when
 // no static command Set matches, derive a play-kind from the command class byte
-// instead of returning null. Default OFF pending a 1070 GPU eye-test.
+// instead of returning null. DEFAULT-ON (`!== "off"` reader; `=off` disables);
+// the 1070 GPU eye-test is still owed.
 const MT_CLASS_FALLBACK_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -1243,7 +1248,8 @@ const MT_CLASS_FALLBACK_ON = (() => {
 // fidget is JS-ONLY (no server packet, no Rust) and immediately yields to any
 // real server motion/action (the per-entity gate re-evaluates every coarse
 // timer check and cancels as soon as locomotion / a tween / a non-idle command
-// arrives). Default OFF pending a 1070 GPU eye-test.
+// arrives). DEFAULT-ON (`!== "off"` reader; `=off` disables); the 1070 GPU
+// eye-test is still owed.
 const IDLE_FIDGET_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -1304,8 +1310,8 @@ const PROJECTILE_GROUND_CLAMP_SKIP_ON = (() => {
 // `CreateParticleEmitter` replace path. Our walkers route hook type 26
 // (CreateBlockingParticle) identically to 13 (CreateParticle) into the
 // replace-semantics addEmitter, which restarts persistent effects retail
-// would leave running. Behind a default-off flag so the legacy (replace)
-// behavior is the off-path; on => hook 26 uses retail blocking semantics.
+// would leave running. DEFAULT-ON (`!== "off"` reader): hook 26 takes retail
+// blocking semantics unless `?blockingParticleParity=off` restores replace.
 const BLOCKING_PARTICLE_PARITY_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -1353,8 +1359,8 @@ const IDLE_FIDGET_COMMANDS = [
 // a degrade band once (frozen); this re-queries the band at the live distance
 // (throttled) and despawn+respawns the entity at the new band when it crosses
 // — the simplest correct way to "rebind the mixer" (the spawn path rebuilds
-// rig + mixer + actions). Default OFF (respawn flicker + a behaviour change at
-// distance). The spawn LOD distance frame-fix ships unconditionally; only the
+// rig + mixer + actions). DEFAULT-ON (`!== "off"` reader; `?dynLod=off`
+// disables — respawn flicker + distance behaviour change are the trade-off). The spawn LOD distance frame-fix ships unconditionally; only the
 // dynamic re-pick is gated.
 const DYN_LOD_ON = (() => {
   try {
@@ -1410,7 +1416,8 @@ import { rng as timeRng, currentTime, particleClockMode } from "./particles/time
 // Off-path = the legacy per-guid map below, byte-identical.
 import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
 // A11-S1 (unification survey 2026-06-11) — shared PhysicsScript executor.
-// `?scriptQueue=on` (default OFF) routes the entity chain walker's hooks
+// `?scriptQueue` (DEFAULT-ON — `!== "off"` reader; `=off` restores the
+// legacy walker) routes the entity chain walker's hooks
 // through a per-owner time-ordered `ScriptManager` that fires them via the
 // SHARED `_fireHook` executor (ROADMAP §2 seam: reuse, never a 4th copy),
 // instead of the legacy per-hook wall-clock `setTimeout` walk. Closes the
@@ -1429,7 +1436,8 @@ const SCRIPT_QUEUE_ON = (() => {
   }
 })();
 
-// A5-P1 (2026-06-12, W3+ S5) — `?hookDrain=on` (default OFF) routes the
+// A5-P1 (2026-06-12, W3+ S5) — `?hookDrain` (DEFAULT-ON — `!== "off"`
+// reader; `=off` disables) routes the
 // animation-timeline hook executor through the retail queue-then-drain
 // shape: (a) finish-drain — a LoopOnce overlay that crosses its clip end
 // between two rAFs still fires its trailing hooks in (lastTime, duration]
@@ -1457,7 +1465,8 @@ const HOOK_DRAIN_ON = (() => {
   }
 })();
 
-// A4-Q2 (2026-06-12, W3+ S5) — `?mtQueue=on` (default OFF) wires one-shot
+// A4-Q2 (2026-06-12, W3+ S5) — `?mtQueue` (DEFAULT-ON — `!== "off"` reader;
+// `=off` disables) wires one-shot
 // overlay COMPLETION across the wasm boundary: when a tagged
 // (`mtQueued`-played, see `_tryPlayLink`) overlay ends, JS calls
 // `window.__notifyAnimationDone(guid, true)` → the wasm
@@ -3076,7 +3085,8 @@ export class EntityManager {
         if (flag === "0" || flag === "off") this._hotSwapAppearance = false;
       }
     } catch (_) {}
-    // FU-1 (2026-06-11): wieldHandAttach — default-OFF opt-in that lets
+    // FU-1 (2026-06-11): wieldHandAttach — `=== "on"` FALLBACK (live default
+    // is ON: index.js overwrites with a `!== "off"` read) that lets
     // attachChildToParent retry the holding-location resolve with
     // Quiver(5)→RightHand(1) for an ammo child whose ParentEvent location
     // was 0 (instead of mounting it at the wielder root / feet). index.js
@@ -3090,7 +3100,9 @@ export class EntityManager {
         this._wieldHandAttach = (flag?.toLowerCase() === "on");
       }
     } catch (_) {}
-    // wieldedSpawn (2026-06-11): default-OFF opt-in. The wasm side
+    // wieldedSpawn (2026-06-11): `=== "on"` FALLBACK (live default is ON:
+    // index.js overwrites with a `!== "off"` read; wasm side is also
+    // default-ON). The wasm side
     // synthesizes a KIND_SPAWN for a wielded child that has no world
     // presence (pack→wield / login-wielded) with its kind=7 attach in the
     // same drain batch — the attach parks in `_pendingAttach` until the rig

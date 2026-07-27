@@ -44,9 +44,9 @@ import { pickSkillLevel, determineSpellRange, resolveRangeRingSpec, resolveCaste
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 
 // === Wave R3.C — projectile mechanics fidelity (2026-05-29) ===
-// `?projectileArc=on` opt-in. Default OFF → the Arc preview keeps its
-// original CMT-Wave-12 cubic-Bézier curve EXACTLY (byte-identical
-// render); every other shape is unchanged regardless of the flag. ON →
+// `?projectileArc` — DEFAULT-ON (`!== "off"` reader). `=off` keeps the
+// original CMT-Wave-12 cubic-Bézier curve EXACTLY (legacy render); every
+// other shape is unchanged regardless of the flag. ON →
 // the Arc preview is drawn as a true symmetric parabola with a
 // meaningful apex (peaks at the path midpoint, height proportional to
 // the ground distance and clamped so a far cast doesn't shoot off the
@@ -708,8 +708,9 @@ function _tryBind() {
 // TARGETED spell is armed in Magic stance, draw a flat ground torus at the
 // caster's feet sized to the spell's cast range (retail
 // SpellExamineUI::DetermineSpellRange, scene3d/spell_range.js; cap 75m),
-// school-coloured. Purely a visual reach hint — no gating. Default-OFF
-// (strict `?castRangeRing=on`) pending a 1070 eye-test (a large 75m torus
+// school-coloured. Purely a visual reach hint — no gating. DEFAULT-ON
+// (`!== "off"` reader; `?castRangeRing=off` disables) — 1070 eye-test still
+// owed (a large 75m torus
 // raises z-fighting / legibility questions on terrain). Self / untargeted
 // spells (range 0) draw nothing. Runs its OWN rAF loop (only when the flag
 // is on) so it tracks the running player; the ring geometry is rebuilt only

@@ -1820,10 +1820,10 @@ function renderAttackControls(bodyEl, state) {
     let refillStartMs = 0;
     let refillDurMs = 1500;
     let rafId = 0;
-    // F10-3 — opt in to driving the meter off the resolved swing-clip
-    // length (passed on the combatCommenceAttack detail by picking.js)
-    // instead of the pure-power heuristic. Default OFF → meter timing is
-    // byte-identical to pre-F10-3. (?powerMeterSwingDuration=on)
+    // F10-3 — DEFAULT-ON (`!== "off"` reader): the meter is driven off the
+    // resolved swing-clip length (passed on the combatCommenceAttack detail
+    // by picking.js); `?powerMeterSwingDuration=off` restores the
+    // pure-power heuristic (pre-F10-3 timing).
     const useSwingDuration = (() => {
       try {
         return new URLSearchParams(window.location.search).get("powerMeterSwingDuration") !== "off";

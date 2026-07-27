@@ -3,8 +3,9 @@
 // The ?visual master gate (vfx_catalog.js visualEnabled()) turns the
 // descriptor-catalog VFX path ON; these per-effect flags pick WHICH cheap-
 // fragment effects within that path are live. Every per-effect flag is a
-// NON-RETAIL enhancement and ships DEFAULT-OFF, so the frozen render stays
-// byte-identical until each is opted in.
+// NON-RETAIL enhancement and defaults to visualAllEffects() — DEFAULT-ON
+// since the 2026-06-24 suite validation (`?visualAll=off` drops them all,
+// a per-effect `=off` drops one; `?visual=off` kills the whole suite).
 //
 // THE FIREWALL AT THE FLAG LAYER: an effect is active iff
 //   visualEnabled()  AND  <its per-effect flag>
@@ -84,49 +85,49 @@ export function visualAllEffects() {
 }
 
 let _glint;
-/** `?glint=on` — emissive.glint specular sparkle on metal. DEFAULT-OFF. */
+/** `?glint=on` — emissive.glint specular sparkle on metal. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function glintEnabled() {
   if (_glint === undefined) _glint = _boolFlag("glint", visualAllEffects());
   return _glint;
 }
 
 let _magicGlow;
-/** `?magicGlow=on` — emissive.magicGlow ambient glow on magic items. DEFAULT-OFF. */
+/** `?magicGlow=on` — emissive.magicGlow ambient glow on magic items. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function magicGlowEnabled() {
   if (_magicGlow === undefined) _magicGlow = _boolFlag("magicGlow", visualAllEffects());
   return _magicGlow;
 }
 
 let _enchantShimmer;
-/** `?enchantShimmer=on` — emissive.enchantShimmer pulse on enchanted gear. DEFAULT-OFF. */
+/** `?enchantShimmer=on` — emissive.enchantShimmer pulse on enchanted gear. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function enchantShimmerEnabled() {
   if (_enchantShimmer === undefined) _enchantShimmer = _boolFlag("enchantShimmer", visualAllEffects());
   return _enchantShimmer;
 }
 
 let _tarnish;
-/** `?tarnish=on` — weathering.tarnish metal patina + crevice darkening. DEFAULT-OFF. */
+/** `?tarnish=on` — weathering.tarnish metal patina + crevice darkening. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function tarnishEnabled() {
   if (_tarnish === undefined) _tarnish = _boolFlag("tarnish", visualAllEffects());
   return _tarnish;
 }
 
 let _wetness;
-/** `?wetness=on` — weathering.wetness global rain sheen. DEFAULT-OFF. */
+/** `?wetness=on` — weathering.wetness global rain sheen. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function wetnessEnabled() {
   if (_wetness === undefined) _wetness = _boolFlag("wetness", visualAllEffects());
   return _wetness;
 }
 
 let _frost;
-/** `?frost=on` — weathering.frost winter-zone frost/ice. DEFAULT-OFF. */
+/** `?frost=on` — weathering.frost winter-zone frost/ice. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function frostEnabled() {
   if (_frost === undefined) _frost = _boolFlag("frost", visualAllEffects());
   return _frost;
 }
 
 let _flameFlicker;
-/** `?flameFlicker=on` — light.flameFlicker torch/brazier intensity jitter. DEFAULT-OFF. */
+/** `?flameFlicker=on` — light.flameFlicker torch/brazier intensity jitter. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function flameFlickerEnabled() {
   if (_flameFlicker === undefined) _flameFlicker = _boolFlag("flameFlicker", visualAllEffects());
   return _flameFlicker;
@@ -139,7 +140,7 @@ let _tipFlex;
  *  (a) as the tipFlex component's `enabled` gate — frag_attach.fragEntriesForDescriptor
  *  drops the MECH-B entry when off, so statics/entities stay byte-identical without a
  *  seam change; (b) at the entities.js catalog-plan seam (whether to resolve the plan
- *  at all). DEFAULT-OFF. */
+ *  at all). DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function tipFlexEnabled() {
   if (_tipFlex === undefined) _tipFlex = _boolFlag("tipFlex", visualAllEffects());
   return _tipFlex;
@@ -152,7 +153,7 @@ let _gemSparkle;
  *  the ?visual master gate (and lit by ?visual=all for the 1070 batch). Consumed as the
  *  gemSparkle component's `enabled` gate — particle_attach.particleEntriesForDescriptor
  *  drops the emitter entry when off, so statics/entities stay byte-identical (no emitter
- *  synthesized, no addEmitter call) without a seam change. DEFAULT-OFF. */
+ *  synthesized, no addEmitter call) without a seam change. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function gemSparkleEnabled() {
   if (_gemSparkle === undefined) _gemSparkle = _boolFlag("gemSparkle", visualAllEffects());
   return _gemSparkle;
@@ -164,29 +165,29 @@ let _brazier;
  *  anchored to the bowl part. Default-OFF, composed under ?visual (lit by ?visual=all).
  *  Consumed as the brazierEmbers component's `enabled` gate — off ⇒ no emitter ⇒
  *  byte-identical. The classifier gates this OUT for default_script-bearing DIDs
- *  (Track-B coexistence). DEFAULT-OFF. */
+ *  (Track-B coexistence). DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function brazierEnabled() {
   if (_brazier === undefined) _brazier = _boolFlag("brazier", visualAllEffects());
   return _brazier;
 }
 
 let _foliagePollen, _foliageFireflies, _foliageLeaves, _breathFog;
-/** `?foliagePollen=on` — particle.foliagePollen daytime soft motes. DEFAULT-OFF. */
+/** `?foliagePollen=on` — particle.foliagePollen daytime soft motes. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function foliagePollenEnabled() {
   if (_foliagePollen === undefined) _foliagePollen = _boolFlag("foliagePollen", visualAllEffects());
   return _foliagePollen;
 }
-/** `?foliageFireflies=on` — particle.foliageFireflies dusk/night additive swarm. DEFAULT-OFF. */
+/** `?foliageFireflies=on` — particle.foliageFireflies dusk/night additive swarm. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function foliageFirefliesEnabled() {
   if (_foliageFireflies === undefined) _foliageFireflies = _boolFlag("foliageFireflies", visualAllEffects());
   return _foliageFireflies;
 }
-/** `?foliageLeaves=on` — particle.foliageLeaves canopy falling leaves. DEFAULT-OFF. */
+/** `?foliageLeaves=on` — particle.foliageLeaves canopy falling leaves. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function foliageLeavesEnabled() {
   if (_foliageLeaves === undefined) _foliageLeaves = _boolFlag("foliageLeaves", visualAllEffects());
   return _foliageLeaves;
 }
-/** `?breathFog=on` — particle.breathFog creature head cold-breath puff. DEFAULT-OFF. */
+/** `?breathFog=on` — particle.breathFog creature head cold-breath puff. DEFAULT-ON via visualAllEffects(); `=off` opts out. */
 export function breathFogEnabled() {
   if (_breathFog === undefined) _breathFog = _boolFlag("breathFog", visualAllEffects());
   return _breathFog;

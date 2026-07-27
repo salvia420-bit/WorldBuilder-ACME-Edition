@@ -1001,9 +1001,9 @@ function doMount(parentEl, ctx) {
   //    analog in gmSpellbookUI 0x21000032) ────────────────────────
   // 7 numbered tabs. Clicking a tab activates it so the magic
   // combat-bar mirrors that tab's slots. Highlighting follows.
-  // P3-42 (cross-find SB-01): retail-parity mode hides this strip
-  // via `?retailParity=1` — retail's spellbook has no 7-bar tab
-  // selector. The slot data persistence stays in place; SPELL_BAR_TABS
+  // P3-42 (cross-find SB-01): retail-parity (DEFAULT-ON — `!== "off"`
+  // reader) hides this strip; `?retailParity=off` shows it — retail's
+  // spellbook has no 7-bar tab selector. The slot data persistence stays in place; SPELL_BAR_TABS
   // can still be cycled via combat-bar.js shortcuts.
   const retailParity = (() => {
     try { return new URLSearchParams(window.location.search).get("retailParity") !== "off"; }

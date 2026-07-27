@@ -796,6 +796,7 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::ChannelIndex(_) => 0x0149,
         GameEvent::UpdateHar(_) => 0x0257,
         GameEvent::HouseAvailableHouses(_) => 0x0271,
+        GameEvent::AdminQueryPluginList(_) => 0x02AE,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -1051,7 +1052,13 @@ pub fn build_info() -> String {
 // registry minterp's pending completion-node count, stored per
 // TickMovement) — live A/B legs assert the retail wire enqueue +
 // completion-clock drain with it; no product JS consumes it.
-pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 6;
+// v7 (2026-07-27, P6.1 plugin-manifest wire): + `SessionHandle.setPluginList`
+// (JS loader publishes the `id@version` roster used to answer GameEvent
+// 0x02AE) + `SessionHandle.pluginList` (diagnostic read-back). index.html's
+// EXPECTED stays 1 — `__publishPluginList` typeof-guards `setPluginList`, so a
+// v6 pkg soft-degrades to the retail "3rd party API not in use." reply (the
+// documented v2..v6 precedent).
+pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 7;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
 /// `>=` its compiled-in expectation at boot; a mismatch — or this function
@@ -30025,6 +30032,12 @@ pub struct SessionHandle {
     /// [`SessionHandle::pending_confirmations`] and answers via
     /// [`SessionHandle::send_confirmation_response`].
     pending_confirmations: std::rc::Rc<std::cell::RefCell<Vec<PendingConfirmation>>>,
+    /// P6.1 (2026-07-27): `id@version` manifest roster of the loaded plugin
+    /// set, pushed once by the JS loader via
+    /// [`SessionHandle::set_plugin_list`]. Read by the recv loop when
+    /// answering GameEvent 0x02AE. `None` (never set / no plugins) answers
+    /// with retail's `NO_PLUGIN_API_PLUGIN_LIST` literal.
+    plugin_list: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     /// HUD rec #83 (2026-06-16): most recent server info from
     /// `GameMessage::ServerName`. `None` until the post-login handshake
     /// arrives; refreshed if ACE re-sends (rare).
@@ -35621,6 +35634,32 @@ impl SessionHandle {
             })
     }
 
+    /// P6.1 (2026-07-27): publish the loaded-plugin roster used to answer an
+    /// admin plugin-manifest query (GameEvent 0x02AE -> GameAction 0x02AF).
+    /// `plugin_list` is the loader's `loaded` map rendered as comma-joined
+    /// `id@version`; pass `""` to mean "no plugin API", which sends retail's
+    /// `"3rd party API not in use."` verbatim. Idempotent — the JS loader
+    /// calls it once per session after `loadPlugins()` resolves, and again
+    /// on any later load/unload. Pure state push: no wire traffic here, the
+    /// reply is only sent when the server actually asks.
+    #[wasm_bindgen(js_name = setPluginList)]
+    pub fn set_plugin_list(&self, plugin_list: String) {
+        let trimmed = plugin_list.trim();
+        *self.plugin_list.borrow_mut() = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
+
+    /// P6.1: read back what [`SessionHandle::set_plugin_list`] last stored —
+    /// `null` until the loader publishes (0x02AE then answers with retail's
+    /// no-API string). Diagnostic only.
+    #[wasm_bindgen(js_name = pluginList)]
+    pub fn plugin_list(&self) -> Option<String> {
+        self.plugin_list.borrow().clone()
+    }
+
     /// Social — add `friend_name` to the player's friends list. Sends
     /// `GameAction::AddFriend` (sub-opcode 0x0018). Wire format is
     /// by-name (string16); ACE resolves the name server-side.
@@ -36864,6 +36903,10 @@ pub async fn start_session(
     // answer, stashed for JS polling via `pendingConfirmations()`.
     let pending_confirmations: std::rc::Rc<std::cell::RefCell<Vec<PendingConfirmation>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // P6.1 (2026-07-27): loaded-plugin roster for the 0x02AE answer, pushed
+    // from JS via `setPluginList()`.
+    let plugin_list: std::rc::Rc<std::cell::RefCell<Option<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     // HUD rec #83 (2026-06-16): server info from GameMessage::ServerName.
     let latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -37174,6 +37217,8 @@ pub async fn start_session(
         let character_list = character_list.clone();
         // Guild-moot (2026-07-16) — clone for recv_loop param.
         let pending_confirmations_inner = pending_confirmations.clone();
+        // P6.1 (2026-07-27) — clone for recv_loop param.
+        let plugin_list_inner = plugin_list.clone();
         // HUD rec #83 (2026-06-16) — clone for recv_loop param.
         let latest_server_info_inner = latest_server_info.clone();
         // HUD rec #56 (2026-06-16) — clone for recv_loop param.
@@ -37287,6 +37332,7 @@ pub async fn start_session(
                 terrain_heights_shadow_inner,
                 turbine_chat_state_inner,
                 pending_confirmations_inner,
+                plugin_list_inner,
                 world_state,
             )
             .await;
@@ -37370,6 +37416,7 @@ pub async fn start_session(
         queued_events,
         character_list,
         pending_confirmations,
+        plugin_list,
         latest_server_info,
         latest_sanctuary,
         latest_localization,
@@ -39525,6 +39572,10 @@ async fn recv_loop(
     // Guild-moot (2026-07-16): confirmation dialogs (GameEvent 0x0274)
     // stashed for the SessionHandle's pendingConfirmations() poll.
     pending_confirmations: std::rc::Rc<std::cell::RefCell<Vec<PendingConfirmation>>>,
+    // P6.1 (2026-07-27): loaded-plugin roster published by the JS loader
+    // through `SessionHandle::set_plugin_list`; the ONLY input to the
+    // GameEvent 0x02AE answer below.
+    plugin_list: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     // Option C (live use-predicates): the SAME WorldState this loop mutates,
     // shared by Rc clone with the SessionHandle. Named `world` so the ~50
     // in-loop access sites keep their identifier; only the access form changes
@@ -44624,6 +44675,43 @@ async fn recv_loop(
                                         context: data.context,
                                         text: data.text.clone(),
                                     });
+                                }
+                                // P6.1 (2026-07-27): admin plugin-manifest query.
+                                // Retail
+                                // `ClientAdminSystem::Handle_Admin__Recv_QueryPluginList`
+                                // (acclient.c 0x6B5EE0) answers UNCONDITIONALLY
+                                // and SYNCHRONOUSLY — the reply is never
+                                // suppressed, never deferred, and `context` is
+                                // echoed verbatim (it is the admin's only
+                                // correlation token). `plugin_list` is `None`
+                                // until the JS loader calls
+                                // `setPluginList()`; that case sends retail's
+                                // `NO_PLUGIN_API_PLUGIN_LIST` literal, matching
+                                // retail's `APIIsReady() == false` path.
+                                // Not routed through `queued_events`: no JS
+                                // round-trip is permitted to gate an admin
+                                // answer.
+                                holtburger_protocol::messages::GameEvent::AdminQueryPluginList(
+                                    data,
+                                ) => {
+                                    let roster = plugin_list.borrow().clone();
+                                    let reply = GameAction::QueryPluginListResponse(Box::new(
+                                        holtburger_protocol::messages::QueryPluginListResponseActionData::new(
+                                            data.context,
+                                            roster.as_deref(),
+                                        ),
+                                    ));
+                                    console_log_str(&format!(
+                                        "[plugin-query] 0x02AE ctx={} -> 0x02AF plugins={}",
+                                        data.context,
+                                        roster.as_deref().unwrap_or("<none>")
+                                    ));
+                                    if let Err(e) = session.send_action(reply).await {
+                                        log::warn!(
+                                            "recv_loop: send_action(QueryPluginListResponse ctx={}): {e}",
+                                            data.context
+                                        );
+                                    }
                                 }
                                 holtburger_protocol::messages::GameEvent::ChannelBroadcast(
                                     data,

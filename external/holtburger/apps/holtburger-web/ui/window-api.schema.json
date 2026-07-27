@@ -3,7 +3,7 @@
   "$id": "https://holtburger.local/ui/window-api.schema.json",
   "title": "Holtburger window-global API surface",
   "description": "Curated catalog of `window.*` globals that plugins, HUD widgets, and the renderer rely on. Generated during HUD rec #184 (D18 pane-mgmt). Not enforced at runtime — surface visible for feature planning and regression review. Bump `version` and edit this file whenever a new load-bearing global is added/renamed/removed; index.html links to this schema from the post-login assignment site (search for `__sessionHandle = handle`).",
-  "version": 1,
+  "version": 2,
   "lifecycle": {
     "preLogin": "All __session* / __plugin* / __mainPanel / __barInstance globals are absent or null until createClient resolves post-login. __hbWasm, getLocalPlayerPose, __pluginClientReady, and the debug-capture hooks exist from module init.",
     "postLogin": "index.html LoginComplete handler assigns __sessionHandle, __notifyAnimationDone, __pluginClient (via createClient(handle)), and resolves __pluginClientReady. Plugins should `await window.__pluginClientReady` rather than poll.",
@@ -27,11 +27,12 @@
         "getSkyObjectStates", "getSkyState", "hasSkyDesc", "isCurrentCellIndoor",
         "jump", "lookupMotionLinkForSwing", "missileAttack", "openTrade",
         "playerEnchantments", "playerInventory", "playerKnownSpells",
-        "playerResolvedModifiers", "playerStats", "playerTitle", "pollEntityUpdates",
+        "playerResolvedModifiers", "playerStats", "playerTitle", "pluginList",
+        "pollEntityUpdates",
         "pollMotionActions", "pollMotionAxes", "pollRemotePoses", "pursueEntity",
         "pursuitStatus", "raiseSkill", "removeSpellFromBook", "selectCharacter",
         "sendCharGenResult", "sendChat", "setCharacterOption", "setGameDayOverride",
-        "setMovementInput", "setSkyTimeOverride", "spellSetIds",
+        "setMovementInput", "setPluginList", "setSkyTimeOverride", "spellSetIds",
         "sweepSphereAgainstBuildingMesh", "sweepSphereAgainstCellMesh",
         "sweepSphereAgainstStatics", "teleToLifestone", "terrainHeightAt",
         "tickMovement", "toggleCombatMode", "trainSkill"
@@ -94,6 +95,22 @@
       "lifecycle": "Set when mountBar runs (pluginsDisabled gate); undefined when ?plugins=none.",
       "consumers": "Hotbar, examine flow, combat dispatcher.",
       "fallback": "When undefined, callers go straight to window.__sessionHandle (see ~L1797-1800 comment block)."
+    },
+    "__pluginListWire": {
+      "kind": "string",
+      "type": "string",
+      "source": "index.html — set from plugins/loader.js::formatPluginList(loaded) after loadPlugins resolves.",
+      "lifecycle": "\"\" from module init; the `id@version` roster once the loader resolves; stays \"\" under ?plugins=none (the loader never runs).",
+      "consumers": "window.__publishPluginList only — it is the JS-side staging value for the wasm 0x02AE answer, not a plugin API.",
+      "usage": "P6.1 plugin-manifest wire pair: GameEvent 0x02AE -> GameAction 0x02AF. \"\" means \"no plugin API\" and the wasm session replies with retail's \"3rd party API not in use.\"."
+    },
+    "__publishPluginList": {
+      "kind": "function",
+      "type": "() => boolean",
+      "source": "index.html — defined next to the pluginsDisabled probe.",
+      "lifecycle": "Exists from module init. Called after the loader resolves and again after every `window.__sessionHandle = handle` (a reconnect gets a fresh wasm session with an empty roster).",
+      "consumers": "index.html; safe for plugins to call after a manual load/unload.",
+      "fallback": "Returns false (no throw) when __sessionHandle is absent or the pkg/ predates SessionHandle.setPluginList — the wasm side then answers 0x02AE with the retail no-API string."
     },
     "__notifyAnimationDone": {
       "kind": "wasm-boundary-callback",

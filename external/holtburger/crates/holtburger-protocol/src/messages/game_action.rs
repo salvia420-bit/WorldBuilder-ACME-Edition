@@ -1,3 +1,4 @@
+pub use crate::messages::admin::actions::*;
 pub use crate::messages::book::actions::*;
 pub use crate::messages::chat::actions::*;
 pub use crate::messages::combat::actions::*;
@@ -115,6 +116,8 @@ pub enum GameAction {
     BookDeletePage(Box<BookDeletePageActionData>),
     SetInscription(Box<SetInscriptionActionData>),
     ConfirmationResponse(Box<ConfirmationResponseActionData>),
+    /// P6.1: reply to `GameEvent::AdminQueryPluginList` (`0x02AE`).
+    QueryPluginListResponse(Box<QueryPluginListResponseActionData>),
     OpenTradeNegotiations(Box<OpenTradeNegotiationsActionData>),
     CloseTradeNegotiations(Box<CloseTradeNegotiationsActionData>),
     AddToTrade(Box<AddToTradeActionData>),
@@ -407,6 +410,9 @@ impl ProtocolUnpack for GameActionMessage {
                 )),
                 GameActionOpcode::ConfirmationResponse => GameAction::ConfirmationResponse(
                     Box::new(ConfirmationResponseActionData::unpack(data, offset)?),
+                ),
+                GameActionOpcode::QueryPluginListResponse => GameAction::QueryPluginListResponse(
+                    Box::new(QueryPluginListResponseActionData::unpack(data, offset)?),
                 ),
                 GameActionOpcode::OpenTradeNegotiations => GameAction::OpenTradeNegotiations(
                     Box::new(OpenTradeNegotiationsActionData::unpack(data, offset)?),
@@ -881,6 +887,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::ConfirmationResponse(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::ConfirmationResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::QueryPluginListResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::QueryPluginListResponse as u32)
                     .unwrap();
                 data.pack(buf);
             }

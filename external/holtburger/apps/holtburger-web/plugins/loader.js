@@ -636,6 +636,51 @@ export async function loadPlugins(opts) {
 }
 
 /**
+ * Retail's verbatim reply when no third-party plugin API is loaded.
+ * `ClientAdminSystem::Handle_Admin__Recv_QueryPluginList` (acclient.c
+ * 0x6B5EE0) seeds its response with this literal and only overwrites it
+ * under `APIManager::APIIsReady()`. The trailing period is part of the
+ * string; an empty plugin set MUST send this, never "".
+ */
+export const NO_PLUGIN_API_PLUGIN_LIST = '3rd party API not in use.';
+
+/**
+ * P6.1 — render the loaded-plugin roster for the admin plugin-manifest
+ * query (GameEvent 0x02AE -> GameAction 0x02AF, `PluginList` field).
+ *
+ * Retail imposes NO format on this string (it forwards whatever
+ * `IACPlugin::QueryPluginList` hands back as a BSTR), so `id@version`
+ * comma-joined is our convention. `id` and `version` are the two manifest
+ * fields `validateManifest` guarantees are non-empty strings, so every
+ * loaded entry can be rendered; entries are sorted by id for a stable
+ * answer across reloads.
+ *
+ * Wire constraint: the field is a `PStringBase<char>` — 8-bit, WINDOWS-1252
+ * on the wire. Non-representable characters would be lossily transcoded
+ * wasm-side, and `id` is already restricted to `[a-z0-9-]` by the loader's
+ * ID_PATTERN, so only `version` could in principle carry one.
+ *
+ * @param {Map<string, {manifest: {id: string, version: string}}>|Iterable<{manifest: {id: string, version: string}}>} loaded
+ *   the `loaded` map returned by `loadPlugins`, or any iterable of its values.
+ * @returns {string} comma-joined `id@version`, or NO_PLUGIN_API_PLUGIN_LIST
+ *   when the set is empty.
+ */
+export function formatPluginList(loaded) {
+  if (!loaded) return NO_PLUGIN_API_PLUGIN_LIST;
+  const values = typeof loaded.values === 'function' ? [...loaded.values()] : [...loaded];
+  const parts = [];
+  for (const entry of values) {
+    const m = entry && entry.manifest ? entry.manifest : entry;
+    if (!m || typeof m.id !== 'string' || !m.id) continue;
+    const version = typeof m.version === 'string' && m.version ? m.version : '0.0.0';
+    parts.push(`${m.id}@${version}`);
+  }
+  if (parts.length === 0) return NO_PLUGIN_API_PLUGIN_LIST;
+  parts.sort();
+  return parts.join(',');
+}
+
+/**
  * Unload a previously-loaded plugin. Fires onBeforeUnload then onUnload.
  *
  * @param {{ manifest: PluginManifest, module: any }} entry

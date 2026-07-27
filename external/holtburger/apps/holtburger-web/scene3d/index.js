@@ -2569,19 +2569,20 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // manager when ?renderer=3d is active. Phase 7.5 will fully gate
   // the 2D drainEvents off the 3D path; for now we coexist via the
   // hook.
-  // FU-1 (2026-06-11): wieldHandAttach — default-OFF opt-in that fixes
+  // FU-1 (2026-06-11): wieldHandAttach — DEFAULT-ON (`!== "off"` reader;
+  // `=off` restores the legacy gate) — fixes
   // the in-session-equipped weapon/ammo "drops at the wielder's feet"
   // bug. When ON, flushWieldedDirty (below) admits MissileAmmo through
   // the held-item gate and maps it to Quiver(5)/RightHand(1) when the
   // item carries no ParentLocation, and attachChildToParent retries the
   // holding-location resolve with Quiver(5)→RightHand(1) for an ammo
-  // child whose ParentEvent location was 0. Default-OFF keeps the exact
-  // current gate / heuristic / root-origin fallback so nothing changes
-  // until the flag is set (pending 1070 eye-test). Read once here.
+  // child whose ParentEvent location was 0. `?wieldHandAttach=off` restores
+  // the legacy gate / heuristic / root-origin fallback. Read once here.
   const wieldHandAttach =
     new URLSearchParams(window.location.search).get("wieldHandAttach")?.toLowerCase() !== "off";
-  // wieldedSpawn (2026-06-11): default-OFF opt-in paired with the wasm-side
-  // `?wieldedSpawn=on` gate (synthetic KIND_SPAWN + attach for wielded items
+  // wieldedSpawn (2026-06-11): DEFAULT-ON (`!== "off"` reader) paired with
+  // the wasm-side gate, also default-ON (synthetic KIND_SPAWN + attach for
+  // wielded items
   // with no world presence). JS half: hide a freshly-committed rig whose own
   // attach is parked in `_pendingAttach` so the weapon never flashes at its
   // spawn pose before the async hand-mount lands. Read once here.

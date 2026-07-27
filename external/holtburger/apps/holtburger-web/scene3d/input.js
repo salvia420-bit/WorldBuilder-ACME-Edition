@@ -17,7 +17,8 @@
 // movers (picking.js charge/turn-to-face — that is Stage I2, out of scope).
 //
 // Behavior contract:
-//   - The flag `?inputFunnel=on` (default OFF) is the ONLY thing that routes
+//   - The flag `?inputFunnel` (DEFAULT-ON — `!== "off"` reader; `=off`
+//     disables) is the ONLY thing that routes
 //     either legacy site through this controller. With it OFF, both legacy
 //     `setMovementInput` call sites (index.html rAF block + camera.js
 //     `_dispatchMovement`) run exactly as before — byte-identical default
@@ -91,7 +92,7 @@ const LS_CHAR_OPTIONS_KEY = "holtburger_character_options_v1";
 
 let _retailRunKeysOn = null;
 
-/** Read `?retailRunKeys=on` (cached; defensive — never throw). */
+/** Read `?retailRunKeys` (DEFAULT-ON — `!== "off"`; cached; defensive — never throw). */
 export function readRetailRunKeysFlag(search) {
   try {
     const s =
@@ -190,7 +191,7 @@ export function resolveRunModifier(shiftHeld, handle) {
   return !!shiftHeld !== !!toggleRunOptionEnabled(handle);
 }
 
-/** Read `?inputFunnel=on` once (defensive — never throw at import time). */
+/** Read `?inputFunnel` (DEFAULT-ON — `!== "off"`) once (defensive — never throw at import time). */
 export function readInputFunnelFlag(search) {
   try {
     const s =

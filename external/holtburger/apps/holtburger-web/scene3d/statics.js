@@ -3787,7 +3787,8 @@ const _sealedNow = (scene3d) => {
 };
 const STATIC_SCRIPT_SLICE_MS = 6;
 
-// Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.
+// Survey A11-S0 (2026-06-11): `?blockingParticleParity` — DEFAULT-ON
+// (`!== "off"` reader; `=off` restores replace semantics).
 // When on, hook 26 (CreateBlockingParticle) takes retail blocking
 // semantics (acclient.c:329528-329565: no-replace if emitter id already
 // live). Mirrors entities.js BLOCKING_PARTICLE_PARITY_ON. Note: the

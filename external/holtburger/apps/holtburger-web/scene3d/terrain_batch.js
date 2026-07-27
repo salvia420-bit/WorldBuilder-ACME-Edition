@@ -48,7 +48,7 @@
 // tickTerrainBatchOptimize() (driven from loop.js next to
 // tickStatAtlasOptimize, >30% dead → bm.optimize()).
 //
-// DEFAULT OFF (`?terrainBatch=on` to enable) pending the 1070 eye-test.
+// DEFAULT-ON (2026-07-03 restore; `?terrainBatch=off` escapes).
 // Wireframe mode (?wireframe=1) is never batched (different material system);
 // quality=high LOD re-bakes flow through the eviction hook + re-absorb.
 
@@ -60,9 +60,9 @@ import { prewarmSubtree } from "./bake_prewarm.js";
 // ---------------------------------------------------------------------------
 
 let _flag;
-/** `?terrainBatch=on` enables the cross-LB terrain BatchedMesh. DEFAULT-OFF
- *  pending the 1070 eye-test; flag-off executes the legacy per-LB path with
- *  byte-identical shader source. */
+/** `?terrainBatch` — cross-LB terrain BatchedMesh, DEFAULT-ON (2026-07-03);
+ *  `=off` executes the legacy per-LB path with byte-identical shader
+ *  source. */
 export function terrainBatchEnabled() {
   if (_flag !== undefined) return _flag;
   let on = true; // DEFAULT-ON (2026-07-03, restored with the statBatchCrossLb re-feed fix); ?terrainBatch=off escapes

@@ -16,7 +16,7 @@ import { uiEffectsList } from "./ui_effects_registry.js";
 import "./components/itemAura.js"; // ensure the component self-registers
 
 let _itemFxOn;
-/** `?itemFx` URL flag (default OFF). Memoized. Safe in non-browser contexts. */
+/** `?itemFx` URL flag — DEFAULT-ON (`=off` opts out; see inline note). Memoized. Safe in non-browser contexts. */
 export function itemFxEnabled() {
   if (_itemFxOn === undefined) {
     _itemFxOn = false; // non-browser/test default

@@ -258,7 +258,8 @@ const TOPDOWN_ZOOM_MAX = 8.0;
  */
 const PRED_SMOOTH_SNAP_DIST_M = 5.0;
 
-// F17 (?rustPose=on, default OFF) — read once at module load, same
+// F17 (?rustPose — DEFAULT-ON since the F-2026-07-03 flip; `=off`
+// disables) — read once at module load, same
 // lifecycle as loop.js's RUST_POSE_ON (flags are frozen per page load).
 // ON: `_safePlayerPos` reads `_integratorWorldPose()` (the wasm pose,
 // world-converted) directly instead of the `predictedPlayerPos` mirror
@@ -527,7 +528,9 @@ export class CameraSwitcher {
     this._listeners = [];
     this._globalListeners = [];
 
-    // A12-C2/C3 (2026-06-12) — retail camera flags, all default-OFF. Read
+    // A12-C2/C3 (2026-06-12) — retail camera flags (retailCamZoom is
+    // DEFAULT-ON — `!== "off"` reader; the numeric/opt-in rest are
+    // inert-by-default). Read
     // once at construction (camera is rebuilt on reload; no live toggle).
     //   ?retailCamZoom=on      → C2 zoom continuum + in-head + near-fade.
     //   ?camStiffness=<0..1>   → C3 frame smoothing (absent/0 = hard-lock,

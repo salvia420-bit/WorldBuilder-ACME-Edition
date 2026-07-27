@@ -18,8 +18,8 @@
 // despawns). One bubble per entity at a time; a new utterance replaces the
 // old one.
 //
-// Entirely opt-in: nothing here runs unless `?speechBubbles=on` gates the
-// kind=55 handler (index.html). Render is byte-identical when off.
+// Integrated always-on since 2026-06-10 (the `?speechBubbles` gate on the
+// kind=55 handler in index.html was removed after the eye-test PASS).
 
 import * as THREE from "three";
 

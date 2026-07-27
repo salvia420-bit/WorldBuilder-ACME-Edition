@@ -1518,8 +1518,8 @@ export function surfaceResultDecodeMisses(result) {
 // attach the (recoloured) diffuse map as `emissiveMap` so a COLOURED
 // recolored-luminous surface glows in-colour instead of washing to flat white —
 // WITHOUT the rest of the surfaceUnified render-state unification. The
-// non-recolored (cache) path already does this via `applyFloatLumDiffuse`. Default
-// OFF = byte-identical (flat-white emissive). Also implied when
+// non-recolored (cache) path already does this via `applyFloatLumDiffuse`.
+// DEFAULT-ON since 2026-06-24 (`=off` restores flat-white emissive). Also implied when
 // `?surfaceUnified=on` (that path already attaches the emissiveMap). Memoized.
 let _luminousEmissiveMap;
 export function readLuminousEmissiveMapFlag() {

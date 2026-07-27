@@ -1312,6 +1312,11 @@
       // Default OFF; transparently falls back to the direct `start_session`.
       import { startNetWorkerSession, netWorkerEnabled } from "./scene3d/net_worker_client.js";
       import { createClient } from "./plugins/api.js";
+      // P6.1 (2026-07-27): the two retail chat hooks (eatable buses).
+      // Side-effect import sets window.__chatHooks; the drain loop and
+      // the chat-form submit handler below guard with `?.` so a missing
+      // module can never break chat.
+      import "./plugins/chat-hooks.js";
       import { mountBar } from "./ui/bar.js";
       // Polish A (2026-05-27) + J1.C (2026-05-27): PR 8 plugin loader
       // wired into runtime. J1.C consolidated the static-import set: only
@@ -1335,7 +1340,7 @@
       //
       // Truly orphan imports DELETED by J1.C (no reference anywhere):
       //   spellResearchPlugin (1100), debugOverlayPlugin (1102).
-      import { loadPlugins, fetchManifestIndex } from "./plugins/loader.js";
+      import { loadPlugins, fetchManifestIndex, formatPluginList } from "./plugins/loader.js";
       import {
         buildManifestBindings as buildManifestHotkeyBindings,
         setManifestBindings as setManifestHotkeyBindings,
@@ -1475,6 +1480,32 @@
         // eslint-disable-next-line no-console
         console.log("[plugins-disabled] ?plugins=none — skipping bar + main-panel registration");
       }
+
+      // P6.1 (2026-07-27) — plugin-manifest wire answer (GameEvent 0x02AE ->
+      // GameAction 0x02AF). The roster is computed once from the loader's
+      // `loaded` map and pushed into the wasm session, which owns the reply:
+      // an admin query must be answered synchronously off the recv loop, so
+      // no JS round-trip may sit in that path. `?plugins=none` never runs the
+      // loader, leaving the roster "" — wasm then sends retail's
+      // "3rd party API not in use." literal, matching retail's
+      // `APIIsReady() == false` branch.
+      //
+      // Called from both ends of the ordering: after the loader resolves (the
+      // handle may not exist yet — pre-login) and immediately after each
+      // session handle is installed (a reconnect gets a fresh wasm session
+      // whose roster starts empty).
+      window.__pluginListWire = "";
+      window.__publishPluginList = function publishPluginList() {
+        const h = window.__sessionHandle;
+        if (!h || typeof h.setPluginList !== "function") return false;
+        try {
+          h.setPluginList(window.__pluginListWire || "");
+          return true;
+        } catch (err) {
+          console.warn(`[plugin-query] setPluginList failed: ${err?.message ?? err}`);
+          return false;
+        }
+      };
 
       // 2026-05-17 history note (preserved):
       //  - the standalone `⚐ stance-toggle` slot was merged into
@@ -1761,6 +1792,16 @@
         // F-key now flows through a manifest hotkey (character-info F1,
         // options-panel F10, spell-research-panel Shift+F4 ship with their
         // own manifests as of J1.B).
+        // P6.1 — publish the `id@version` roster for the 0x02AE answer.
+        // `loaded` is the loader's own map, so this is the single source of
+        // truth for "which plugins does this client have".
+        try {
+          window.__pluginListWire = formatPluginList(loaded);
+          window.__publishPluginList();
+        } catch (err) {
+          console.warn(`[plugin-query] roster build skipped: ${err?.message ?? err}`);
+        }
+
         try {
           const manifestList = [...loaded.values()].map((v) => v.manifest);
           const { map: hotkeyMap, duplicates } = buildManifestHotkeyBindings(manifestList);
@@ -3297,8 +3338,9 @@
         const v = new URLSearchParams(window.location.search).get("unifiedClone");
         return v?.toLowerCase() !== "off";
       })();
-      // A8-M3 (2026-06-11 unification): `?unifiedClientEvent=on`
-      // (default-off; renamed from the spec's `?unifiedEntityDispatch` by
+      // A8-M3 (2026-06-11 unification): `?unifiedClientEvent`
+      // (DEFAULT-ON — `!== "off"` reader, `=off` escapes; renamed from the
+      // spec's `?unifiedEntityDispatch` by
       // the SQ3 §3 flag ruling — it gates ClientEvents, not EntityUpdates)
       // delegates the kind=17 EntityVisibilityChanged handler body to the
       // scene3d-owned dispatcher (`window.__scene3dClientEventHook`,
@@ -3329,7 +3371,8 @@
         const v = new URLSearchParams(window.location.search).get("unifiedDispatch");
         return v?.toLowerCase() !== "off";
       })();
-      // A1-O4 (2026-06-12 unification): `?singleDriver=on` (default-off)
+      // A1-O4 (2026-06-12 unification): `?singleDriver` (DEFAULT-ON —
+      // `!== "off"` reader, `=off` escapes)
       // — single frame driver. Inert unless `?renderer=3d` is also present
       // (RULINGS #2: 2D stays supported and 2D mode keeps its own rAF
       // driver). ON + 3D: once scene3d claims the frame
@@ -4888,6 +4931,11 @@
           chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
         if (nearBottom) chatLog.scrollTop = chatLog.scrollHeight;
       }
+      // P6.1 (2026-07-27): expose for client.ui.writeToChat — the retail
+      // IAsheronsCall::WriteToChat analogue (display echo only; local
+      // echoes deliberately do NOT traverse the chat.incoming hook,
+      // retail's sendToAPI=false rule).
+      window.__appendChatLine = appendChatLine;
       // Phase 4 step 4: tab switching. Updates `data-tab` on #chat-log
       // (which CSS uses to filter visible <li>s) and the `.active`
       // class on the chosen button. Layout-only — no per-message work.
@@ -5597,6 +5645,9 @@
       }
       setBootState("form-shown");
       loginForm.addEventListener("submit", async (e) => {
+          // P6.1 — a reconnect builds a NEW wasm session with an empty
+          // roster; re-push so 0x02AE keeps answering with the loaded set.
+          if (typeof window.__publishPluginList === "function") window.__publishPluginList();
         e.preventDefault();
         if (activeHandle) return;
         const fd = new FormData(loginForm);
@@ -6450,6 +6501,24 @@
             const message = chatInput.value.trim();
             if (!message) return;
 
+            // P6.1 chat hook — retail OnChatCommand parity
+            // (IACPlugin::OnChatBarEnter): fires on chat-bar submission
+            // BEFORE any prefix parsing (/, @, :, ;). Eat = no routing,
+            // no send, no echo; the input clears (the submission was
+            // consumed, as in retail). Retail's out-param was an eat
+            // flag, not a rewrite channel — a plugin wanting rewrite
+            // eats and re-injects via client.chat.send(). Bot/agent
+            // sendChat() calls never traverse this hook.
+            const outHookEv = window.__chatHooks?.outgoing?.emit(
+              "chatOutgoing",
+              { text: message },
+            );
+            if (outHookEv?.eaten) {
+              chatInput.value = "";
+              chatInput.focus();
+              return;
+            }
+
             // Try to route via slash-command first.
             const routed = routeSlashCommand(activeHandle, message);
             if (routed.dispatched) {
@@ -6653,7 +6722,8 @@
           // standstill roots the player (turn-only) while held, and the
           // release launches with the interpreted-intent planar velocity
           // (hold W during release → full-speed forward long jump from
-          // standing). Default OFF (movement); soft-guarded so a stale
+          // standing). DEFAULT-ON (`!== "off"` reader; `=off` disables);
+          // soft-guarded so a stale
           // pkg/ (pre-manifest-v2 jumpChargeBegin export) degrades to the
           // existing flat jump.
           const LONG_JUMP_ON = (() => {
@@ -6674,8 +6744,8 @@
           // keyup → jumpChargeRelease() (extent = wasm clock, never
           // handle.jump(power)), blur → jumpChargeAbort(), refusals print
           // retail-style chat text via the kind=56 event (silent-drop class
-          // gone). Default OFF (pending 1070 eye-test) — the legacy JS
-          // clock/curve/send path below stays byte-identical.
+          // gone). DEFAULT-ON (`!== "off"` reader; `=off` restores the
+          // legacy JS clock/curve/send path); 1070 eye-test still owed.
           const JUMP_PARITY_ON = (() => {
             try {
               return new URLSearchParams(window.location.search)
@@ -7447,10 +7517,27 @@
                   const m = text.match(/^(.+?) tells you, "/);
                   if (m) window.__chatLastIncomingTellSender = m[1];
                 }
-                appendChatLine(
-                  text,
-                  typeof category === "number" ? category : 0,
+                // P6.1 chat hook — retail AddTextToScroll parity
+                // (IACPlugin::OnChatWindowText): fires AFTER wire-state
+                // side effects (tell-sender parse above; the wire message
+                // already fully applied upstream) and BEFORE display.
+                // Eat = the line is never displayed anywhere; nothing
+                // else changes. Local echoes elsewhere in this file
+                // never traverse the hook (retail sendToAPI=false rule).
+                const chatHookEv = window.__chatHooks?.incoming?.emit(
+                  "chatIncoming",
+                  {
+                    text,
+                    chatType: evt.u32Payload >>> 0,
+                    category: typeof category === "number" ? category : 0,
+                  },
                 );
+                if (!chatHookEv?.eaten) {
+                  appendChatLine(
+                    text,
+                    typeof category === "number" ? category : 0,
+                  );
+                }
               } else if (evt.kind === 7) {
                 // EnteredWorld — server has fully spawned the
                 // player (PlayerDescription / StartGame fired). The
@@ -8586,10 +8673,9 @@
                 // 0x001D YoureTooBusy (the PREVIOUS cast is still live). Only acts
                 // when a local cast prediction is actually in flight
                 // (_castBusyUntilMs active) so a door/melee reuse of e.g.
-                // MissileOutOfRange can't cut a non-existent cast. DEFAULT-OFF
-                // (strict `?castRejectClears=on` opt-in) pending the batched 1070
-                // eye-test (E1-E4); flip to default-ON per the castFizzle /
-                // castStateMachine workflow once it passes.
+                // MissileOutOfRange can't cut a non-existent cast. DEFAULT-ON
+                // (`!== "off"` reader; `=off` disables); the batched 1070
+                // eye-test (E1-E4) is still owed.
                 else if (isTerminalCastReject(errCode)) {
                   try {
                     const flagOn = new URLSearchParams(window.location.search).get("castRejectClears")?.toLowerCase() !== "off";

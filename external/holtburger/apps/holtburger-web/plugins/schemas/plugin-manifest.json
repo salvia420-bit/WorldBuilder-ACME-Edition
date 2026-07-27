@@ -84,6 +84,21 @@
       "uniqueItems": true,
       "default": []
     },
+    "clientApi": {
+      "type": "string",
+      "description": "P6.1 (2026-07-27): semver range of the plugin-facing client facade API this plugin targets (compared against client.apiVersion / plugins/api.js API_VERSION). Absent = no constraint. Loader enforcement lands with migration step 6 of the P6.1 design doc; until then this is declarative.",
+      "minLength": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "description": "P6.1 (2026-07-27): capability names this plugin requires (CAPABILITY_CANDIDATES keys / client.capabilities entries). Trailing `?` marks a capability optional, same convention as dependencies. A required capability missing from client.capabilities skips the plugin with a logged reason — the observable version of retail IAsheronsCall's silent E_FAIL stubs. Also the data source for answering the retail plugin-manifest wire query (S->C GameEvent 0x02AE Admin_QueryPluginList -> C->S GameAction 0x02AF {context:u32, pluginList:string}).",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.\\-]+\\??$"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
     "hotkeys": {
       "type": "array",
       "description": "Declares default key bindings up-front so the settings UI can show them without instantiating the plugin. NEW vs Chorizite.",

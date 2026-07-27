@@ -506,8 +506,12 @@ pub enum GameActionOpcode {
     RemoveShortCut = 0x019D,
     // /// C2S: Response to a server confirmation dialog.
     ConfirmationResponse = 0x0275,
-    // /// C2S: Response to an admin plugin list query.
-    // QueryPluginListResponse = 0x02AF,
+    /// C2S: Response to an admin plugin list query (GameEvent 0x02AE).
+    /// Payload `u32 Context, string PluginList`; retail packer is
+    /// `CM_Admin::Event_QueryPluginListResponse`. ACE
+    /// `PacketOpCodeNames.cs:430` id 687 names it
+    /// `Evt_Admin__QueryPluginListResponse_ID` but ships no handler.
+    QueryPluginListResponse = 0x02AF,
     // /// C2S: Response to an admin plugin detail query.
     // QueryPluginResponse = 0x02B2,
     // /// C2S: Finalize character changes in a barber session.
@@ -1020,8 +1024,11 @@ pub enum GameEventOpcode {
     GameOver = 0x028C,
 
     // --- Admin & Plugins ---
-    // /// S2C: Admin-only query for the server's plugin list.
-    // AdminQueryPluginList = 0x02AE,
+    /// S2C: Admin-only query for THIS CLIENT's loaded plugin list.
+    /// Payload `u32 context`; answer with GameAction 0x02AF echoing it.
+    /// ACE `PacketOpCodeNames.cs:429` id 686
+    /// (`Evt_Admin__Recv_QueryPluginList_ID`), no handler, no sender.
+    AdminQueryPluginList = 0x02AE,
     // /// S2C: Admin-only query for a specific plugin's status.
     // AdminQueryPlugin = 0x02B1,
     // /// S2C: Admin-only response to a plugin query.

@@ -1,3 +1,4 @@
+pub use crate::messages::admin::events::*;
 pub use crate::messages::allegiance::events::*;
 pub use crate::messages::book::events::*;
 pub use crate::messages::chat::events::*;
@@ -174,6 +175,9 @@ pub enum GameEvent {
     UpdateHar(Box<UpdateHarEventData>),
     /// SG-C3: available houses to purchase (`0x0271`).
     HouseAvailableHouses(Box<HouseAvailableHousesEventData>),
+    /// P6.1: admin plugin-manifest query (`0x02AE`), answered by
+    /// `GameAction::QueryPluginListResponse` (`0x02AF`).
+    AdminQueryPluginList(Box<AdminQueryPluginListEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -505,6 +509,9 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::AvailableHouses => GameEvent::HouseAvailableHouses(Box::new(
                     HouseAvailableHousesEventData::unpack(data, offset)?,
                 )),
+                GameEventOpcode::AdminQueryPluginList => GameEvent::AdminQueryPluginList(
+                    Box::new(AdminQueryPluginListEventData::unpack(data, offset)?),
+                ),
             },
             None => {
                 log::warn!(
@@ -1001,6 +1008,11 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::HouseAvailableHouses(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::AvailableHouses as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::AdminQueryPluginList(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::AdminQueryPluginList as u32)
                     .unwrap();
                 data.pack(buf);
             }

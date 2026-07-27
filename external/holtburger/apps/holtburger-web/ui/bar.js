@@ -1189,6 +1189,31 @@ export function mountBar({ client, root, slots: slotsOpt }) {
   }
 
   return {
+    // P6.1 (2026-07-27): programmatic panel API — the backing for
+    // client.ui.openPanel/closePanel (plugins/api.js). openPanel takes
+    // the same path as an icon click, including the slot.activate()
+    // lifecycle and aria/active state.
+    /** Open a loaded plugin's panel by manifest id. False when the id
+     *  is unknown or the slot has no bar button (iconHidden slots). */
+    openPanel(pluginId) {
+      const slot = slots.find((s) => s.id === pluginId);
+      const btn = iconButtons.get(pluginId);
+      if (!slot || !btn) return false;
+      openPanel(slot, btn);
+      return true;
+    },
+    /** Close the open panel. With pluginId, only if that plugin owns
+     *  the open panel. False when nothing (matching) was open. */
+    closePanel(pluginId) {
+      if (!openState) return false;
+      if (pluginId && openState.slot.id !== pluginId) return false;
+      closePanel();
+      return true;
+    },
+    /** Manifest id of the currently open panel, or null. */
+    openPanelId() {
+      return openState ? openState.slot.id : null;
+    },
     destroy() {
       closePanel();
       closeSettings();

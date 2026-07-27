@@ -285,7 +285,8 @@ const MULTI_ACTION_ON = (() => {
   }
 })();
 
-// A15-Q2 (2026-06-11 unification survey) — `?unifiedClone=on` (default-off):
+// A15-Q2 (2026-06-11 unification survey) — `?unifiedClone` (DEFAULT-ON —
+// `!== "off"` reader; `=off` escapes):
 // route `toMeta` (and, in index.html, the backlog/deferred-spawn clones)
 // through the single shared `cloneEntityUpdate` schema instead of the
 // hand-copied per-site field lists. Off = legacy per-site clone (the
@@ -301,7 +302,8 @@ const UNIFIED_CLONE_ON = (() => {
   }
 })();
 
-// FU-3 (2026-06-11) — `?serverSwing=on`: picking.js suppresses its
+// FU-3 (2026-06-11) — `?serverSwing` (DEFAULT-ON — `!== "off"` reader;
+// `=off` escapes): picking.js suppresses its
 // optimistic click-time swing, so the server's KIND_MOTION_ACTION echo is
 // the ONLY swing trigger. setMotion's MT-link overlay doesn't animate the
 // LOCAL rig (the known local combat-anim gap), so for attack-class
@@ -319,7 +321,8 @@ const SERVER_SWING_ON = (() => {
   }
 })();
 
-// A15-Q3.2 (2026-06-12, SQ3 spec) — `?dispatchParity=on` (default-off):
+// A15-Q3.2 (2026-06-12, SQ3 spec) — `?dispatchParity` (DEFAULT-ON —
+// `!== "off"` reader; `=off` escapes):
 // gates the F6-2 swing-echo dedup port into the unified dispatcher
 // (`dispatchEntityUpdate` KIND_MOTION_ACTION arm). The dedup shipped in the
 // dead direct-drain arm only, so it was INERT in every live 3D session —
@@ -339,7 +342,8 @@ const DISPATCH_PARITY_ON = (() => {
   }
 })();
 
-// A15-Q4 (2026-06-12, S3 spec) — `?unifiedDispatch=on` (default-off):
+// A15-Q4 (2026-06-12, S3 spec) — `?unifiedDispatch` (DEFAULT-ON —
+// `!== "off"` reader; `=off` escapes):
 // renderer-neutral core extraction. ON: the shared-drain `dispatchOne`
 // delegates to a `createEntityDispatcher` "3d" backend table (built once
 // per installSharedDrainHook call) whose per-kind handlers are the SAME

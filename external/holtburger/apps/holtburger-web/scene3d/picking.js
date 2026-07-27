@@ -114,7 +114,8 @@ const CAST_RANGE_WARN = (() => {
   } catch { return false; }
 })();
 
-// FU-3 (2026-06-11) — server-timed swing. Default-OFF. Retail plays NO
+// FU-3 (2026-06-11) — server-timed swing. DEFAULT-ON (`!== "off"` reader;
+// `?serverSwing=off` restores the optimistic click-swing). Retail plays NO
 // local swing on attack input: `ClientCombatSystem::ExecuteAttack`
 // (acclient.c:408626) only sends Event_TargetedMeleeAttack; the swing
 // arrives as a server UpdateMotion that ACE broadcasts (to the attacker
@@ -123,7 +124,6 @@ const CAST_RANGE_WARN = (() => {
 // DoSwingMotion :398). When ON, the optimistic click-time swing is
 // suppressed so the server's KIND_MOTION_ACTION echo — which already
 // fires for the local guid — plays the swing at arrival, not at click.
-// (?serverSwing=on)
 const SERVER_SWING = (() => {
   try {
     return typeof window !== "undefined" &&

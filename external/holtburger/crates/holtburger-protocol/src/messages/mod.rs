@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod allegiance;
 pub mod book;
 pub mod character;

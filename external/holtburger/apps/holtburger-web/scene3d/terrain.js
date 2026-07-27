@@ -738,14 +738,15 @@ try {
 // Quality gate: only installed when `liveScene3d.quality.flags.subdivLevel
 // >= 2`. At subdivLevel=1, terrain verts are 24 m apart — the wavelength
 // would be larger than the screen and the wave would be invisible.
-// F12-5 — `?strictWaterCodes=on` restricts the animated-water set to retail's
+// F12-5 — `?strictWaterCodes` (DEFAULT-ON — `!== "off"` reader) restricts
+// the animated-water set to retail's
 // SurfChar water codes (16-20). The default set ALSO includes 22
 // (FauxWaterRunning) and 23 (SeaSlime), which retail's surface-characteristic
 // table marks NOT water — so marsh/slime terrain currently bobs ±0.25 m,
 // scrolls, and breathes blue like open sea. This single set feeds the
 // uWaterCodeMask that now drives all three sites (vertex displacement, the
 // per-corner UV scroll, and the blue tint), so the flag affects them
-// uniformly. Default OFF → set unchanged → byte-identical render. The
+// uniformly. `=off` restores the legacy 16-23 set (marsh/slime bobbing). The
 // doc hedges on 22 ("render with scroll/tint only if eye-test agrees" — it
 // is faux *running* water visually); the conservative strict set drops it
 // per the SurfChar table, deferring the keep-22-scroll-only refinement (a

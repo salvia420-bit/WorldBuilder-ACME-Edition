@@ -122,6 +122,19 @@
 // their own inventory scan.
 import { selfTargetGuidFor } from "../ui/ac_cast_spell.js";
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
+// P6.1 (2026-07-27): the two retail chat hooks (eatable buses backed by
+// the loader's createEatableBus — its first real consumers). Exposed as
+// client.chat.hooks below; index.html emits into them at the two retail
+// plumbing points (kind=2 drain / chat-form submit).
+import { chatHooks } from "./chat-hooks.js";
+
+/**
+ * P6.1 — version of the plugin-facing client facade. Semver; additive
+ * changes bump minor, capability renames/re-semantics or snapshot-shape
+ * changes bump major. Plugins declare a `clientApi` range in their
+ * manifest (schemas/plugin-manifest.json).
+ */
+export const API_VERSION = "1.0.0";
 
 let _componentCatalog = null;
 let _componentCatalogPromise = null;
@@ -599,6 +612,14 @@ export function createClient(sessionHandle) {
     on(eventName, handler) {
       events.on(eventName, handler);
     },
+    // P6.1 — the two retail chat hooks (see plugins/chat-hooks.js for
+    // exact retail semantics and event shapes):
+    //   hooks.incoming.on("chatIncoming", (ev) => { ... ev.eat(); })
+    //     — pre-display inbound line {text, chatType, category};
+    //       eat = never displayed (game state untouched).
+    //   hooks.outgoing.on("chatOutgoing", (ev) => { ... ev.eat(); })
+    //     — pre-parse chat-bar line {text}; eat = no route/send/echo.
+    hooks: chatHooks,
   });
 
   const characters = Object.freeze({
@@ -721,13 +742,54 @@ export function createClient(sessionHandle) {
     },
   });
 
+  // P6.1 (2026-07-27): client.ui made real (was three no-op stubs with
+  // zero callers). openPanel/closePanel/openPanelId delegate to the
+  // mounted bar (window.__barInstance — index.html stores mountBar()'s
+  // return there; ui/bar.js grew these members in the same change).
+  // registerBarSlot stays DEFERRED in v1: the bar builds its icon row
+  // once at mount, so dynamic slot injection is real work, not
+  // scaffolding — it warns once and returns false; ship a manifest
+  // under plugins/ instead. writeToChat is retail
+  // IAsheronsCall::WriteToChat (display echo only; deliberately does
+  // NOT traverse chat.hooks.incoming — retail's sendToAPI=false rule,
+  // which keeps plugin chat filtering loop-free). screenDimensions is
+  // retail slot 49 (GetScreenDimensions).
+  let warnedRegisterBarSlot = false;
   const ui = Object.freeze({
-    registerBarSlot(_manifest) {},
-    openPanel(_pluginId) {},
-    closePanel(_pluginId) {},
+    registerBarSlot(_manifest, _module) {
+      if (!warnedRegisterBarSlot) {
+        warnedRegisterBarSlot = true;
+        console.warn(
+          "[client.ui] registerBarSlot is deferred in API v1 — add a manifest under plugins/ instead",
+        );
+      }
+      return false;
+    },
+    openPanel(pluginId) {
+      return window.__barInstance?.openPanel?.(pluginId) ?? false;
+    },
+    closePanel(pluginId) {
+      return window.__barInstance?.closePanel?.(pluginId) ?? false;
+    },
+    openPanelId() {
+      return window.__barInstance?.openPanelId?.() ?? null;
+    },
+    writeToChat(text, category = null) {
+      try {
+        window.__appendChatLine?.(String(text), category);
+        return typeof window.__appendChatLine === "function";
+      } catch (_) {
+        return false;
+      }
+    },
+    screenDimensions() {
+      return { width: window.innerWidth, height: window.innerHeight };
+    },
   });
 
   const client = {
+    // P6.1 — facade version (see API_VERSION doc above).
+    apiVersion: API_VERSION,
     player,
     movement,
     chat,
