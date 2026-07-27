@@ -1,4 +1,8 @@
-use super::movement::{HUGE_QUANTUM, MAX_QUANTUM, MovementSystem, ServerControlledProjection};
+use super::movement::{
+    HUGE_QUANTUM, MAX_QUANTUM, MovementParameters, MovementSystem, RUN_ANIM_SPEED,
+    ServerControlledProjection, WALK_ANIM_SPEED,
+};
+use super::movement_types::Gait;
 use anyhow::Result;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::properties::WorldObjectExt;
@@ -40,6 +44,67 @@ fn approximate_move_to_object_projection_target(
 ) -> Vector3 {
     let conservative_center_distance = distance_to_object + target_use_radius.unwrap_or(0.0);
     calculate_arrival_position(source, target_pos, conservative_center_distance.max(0.0))
+}
+
+/// Wire `HoldKey::Run` (`MovementParameters::get_command` writes `2`;
+/// acclient.c:346217-346221).
+const HOLD_KEY_RUN: u32 = 2;
+
+/// F1 (COL-21) — the server-controlled `MoveToObject` projection's
+/// approach rate in REAL m/s, plus the gait retail's own gate picks.
+///
+/// Retail chain, all three links verified in the decomp:
+/// `MovementParameters::get_command` (acclient.c:346175) emits the base
+/// `WalkForward` plus a hold key — Run iff `CanCharge (0x10) ||
+/// (CanRun (0x2) && (!CanWalk (0x1) || curr_distance -
+/// distance_to_object > walk_run_threshhold))` (:346217).
+/// `CMotionInterp::apply_run_to_command` (:343439) then promotes
+/// `WalkForward -> RunForward` and scales the interpreted forward speed
+/// by `my_run_rate` (:343463-343466) — the WALK arm never reaches that
+/// multiply, so walk is NOT run-rate scaled. The on-ground body finally
+/// travels at the AUTHORED cycle base x that interpreted speed: 4.000
+/// m/s for the player MotionTable run cycle (numerically retail's
+/// `RunAnimSpeed`, `get_state_velocity` :343565) and
+/// [`WALK_ANIM_SPEED`] 3.1199999 for walk (:343561).
+///
+/// `params.speed` is the interpreted forward speed the MoveTo drive
+/// installs (`MoveToManager::BeginMoveForward` :345411-345414).
+///
+/// Pre-fix this lane multiplied the DIMENSIONLESS `run_rate` scalar by
+/// `params.speed` and used the product as m/s, so an ACE melee charge
+/// (`run_rate` ~1.0-2.0, `speed` 1.5) crawled at ~1.5-3 m/s instead of
+/// ~6-9. Past ~12-16 m that is slow enough for
+/// `SERVER_PROJECTION_MAX_AGE` (8 s) to abandon the projection before
+/// arrival — the reported "sticky melee fails from range".
+fn server_controlled_approach_drive(
+    params: &MovementParameters,
+    run_rate: f32,
+    curr_distance: f32,
+    base_run_forward_speed: f32,
+) -> (f32, Gait) {
+    // `get_command` never reads the heading argument (:346175) — facing
+    // is the turn node's job.
+    let (_, hold_key, _) = params.get_command(curr_distance, 0.0);
+    let speed_mod = if params.speed.is_finite() && params.speed > 0.0 {
+        params.speed
+    } else {
+        1.0
+    };
+    if hold_key == HOLD_KEY_RUN {
+        let base = if base_run_forward_speed.is_finite() && base_run_forward_speed > 1e-3 {
+            base_run_forward_speed
+        } else {
+            RUN_ANIM_SPEED
+        };
+        let rate = if run_rate.is_finite() && run_rate > 0.0 {
+            run_rate
+        } else {
+            1.0
+        };
+        ((base * rate * speed_mod).max(0.1), Gait::Run)
+    } else {
+        ((WALK_ANIM_SPEED * speed_mod).max(0.1), Gait::Walk)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -536,9 +601,38 @@ impl ClientSimulationSystem {
                     Quaternion::from_heading(mto.params.desired_heading)
                 };
 
+                // F1 (COL-21) — `get_command`'s hold-key rule measures to
+                // the TARGET OBJECT centre, not to the arrival standoff
+                // (`curr_distance - distance_to_object >
+                // walk_run_threshhold`, acclient.c:346217), so the
+                // distance fed here is player -> `origin`, NOT player ->
+                // `target_pose`.
+                let mut target_center = current_pos;
+                target_center.landblock_id = mto.origin.cell_id;
+                target_center.coords = mto.origin.position;
+                let capabilities = world.resolve_self_movement_capabilities().ok();
+                // Retail `unpack_movement` case 6 stores the wire
+                // `run_rate` into the mover's `my_run_rate`
+                // (acclient.c:339571); a non-positive wire value keeps the
+                // last resolved rate rather than freezing the approach.
+                let run_rate = if mto.run_rate.is_finite() && mto.run_rate > 0.0 {
+                    mto.run_rate
+                } else {
+                    capabilities.as_ref().map_or(1.0, |c| c.run_rate_scalar)
+                };
+                let (speed_mps, gait) = server_controlled_approach_drive(
+                    &MovementParameters::from_wire_moveto(&mto.params),
+                    run_rate,
+                    current_pos.distance_to(&target_center),
+                    capabilities
+                        .as_ref()
+                        .map_or(RUN_ANIM_SPEED, |c| c.base_run_forward_speed()),
+                );
+
                 movement.set_server_controlled_projection(ServerControlledProjection {
                     target_pose,
-                    speed_mps: (mto.run_rate * mto.params.speed.max(0.1)).max(0.1),
+                    speed_mps,
+                    gait,
                 });
                 movement.arm_autonomous_position_heartbeat_schedule(Instant::now(), world);
                 // A2-P3: retail per-unpack preamble unstick subset
@@ -985,6 +1079,85 @@ mod tests {
                 }),
             }
         ));
+    }
+
+    /// F1 (COL-21) — ACE's player melee charge
+    /// (`Player_Move.cs:230-245`): CanRun|CanCharge|Sticky, `speed`
+    /// 1.5, `distance_to_object` 0.6. Retail lands
+    /// `4.0 x run_rate x 1.5`; the pre-fix lane produced
+    /// `run_rate x 1.5` — 4x low, and low enough for the 8 s
+    /// `SERVER_PROJECTION_MAX_AGE` to abandon a 20 m approach.
+    #[test]
+    fn approach_drive_charge_uses_run_anim_speed_not_the_run_rate_scalar() {
+        let params = MovementParameters {
+            // CanWalk|CanRun|CanCharge|Sticky|MoveTowards|UseSpheres
+            bitfield: 0x1 | 0x2 | 0x10 | 0x80 | 0x200 | 0x400,
+            speed: 1.5,
+            distance_to_object: 0.6,
+            walk_run_threshhold: 1.0,
+            ..Default::default()
+        };
+
+        let (speed, gait) = server_controlled_approach_drive(&params, 1.0, 20.0, RUN_ANIM_SPEED);
+        assert_eq!(gait, Gait::Run);
+        assert!((speed - 6.0).abs() < 1e-4, "expected 4.0*1.0*1.5, got {speed}");
+
+        // run_rate scales the RUN arm (`apply_run_to_command`
+        // :343463-343466).
+        let (fast, _) = server_controlled_approach_drive(&params, 1.5, 20.0, RUN_ANIM_SPEED);
+        assert!((fast - 9.0).abs() < 1e-4, "expected 4.0*1.5*1.5, got {fast}");
+
+        // CanCharge (0x10) short-circuits the distance branch, so a
+        // 1 m charge still runs.
+        let (close, close_gait) =
+            server_controlled_approach_drive(&params, 1.0, 1.0, RUN_ANIM_SPEED);
+        assert_eq!(close_gait, Gait::Run);
+        assert!((close - 6.0).abs() < 1e-4);
+    }
+
+    /// The walk arm of `get_command` (no CanCharge, CanWalk set,
+    /// inside `walk_run_threshhold`) realizes `WALK_ANIM_SPEED` and is
+    /// NOT run-rate scaled — `apply_run_to_command`'s `* my_run_rate`
+    /// only runs on the WalkForward->RunForward promotion.
+    #[test]
+    fn approach_drive_walk_arm_is_walk_anim_speed_without_run_rate() {
+        let params = MovementParameters {
+            bitfield: 0x1 | 0x2 | 0x200 | 0x400, // CanWalk|CanRun|MoveTowards|UseSpheres
+            speed: 1.0,
+            distance_to_object: 0.6,
+            walk_run_threshhold: 15.0,
+            ..Default::default()
+        };
+
+        // 5 m out: 5 - 0.6 = 4.4 <= 15 -> hold key None -> walk.
+        let (speed, gait) = server_controlled_approach_drive(&params, 4.0, 5.0, RUN_ANIM_SPEED);
+        assert_eq!(gait, Gait::Walk);
+        assert!(
+            (speed - WALK_ANIM_SPEED).abs() < 1e-4,
+            "expected WALK_ANIM_SPEED, got {speed}"
+        );
+
+        // 20 m out: 20 - 0.6 = 19.4 > 15 -> hold key Run.
+        let (far, far_gait) = server_controlled_approach_drive(&params, 4.0, 20.0, RUN_ANIM_SPEED);
+        assert_eq!(far_gait, Gait::Run);
+        assert!((far - 16.0).abs() < 1e-4, "expected 4.0*4.0*1.0, got {far}");
+    }
+
+    /// Non-positive / non-finite inputs must never freeze the approach
+    /// (the projection drives the avatar every tick).
+    #[test]
+    fn approach_drive_degrades_to_the_retail_constants() {
+        let params = MovementParameters {
+            bitfield: 0x2 | 0x10 | 0x200,
+            speed: 0.0,
+            ..Default::default()
+        };
+        let (speed, gait) = server_controlled_approach_drive(&params, 0.0, 20.0, 0.0);
+        assert_eq!(gait, Gait::Run);
+        assert!(
+            (speed - RUN_ANIM_SPEED).abs() < 1e-4,
+            "expected the 4.0 fallback, got {speed}"
+        );
     }
 }
 

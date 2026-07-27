@@ -1907,6 +1907,12 @@ struct TransientMotionIntent {
 pub(crate) struct ServerControlledProjection {
     pub target_pose: holtburger_common::position::WorldPosition,
     pub speed_mps: f32,
+    /// F1 (COL-21) — retail's own `get_command` hold-key outcome for
+    /// this approach (acclient.c:346213-346221), resolved once at
+    /// install. The drive used to re-derive the gait from
+    /// `speed_mps > 1.0`, which cannot separate a real walk
+    /// (`WALK_ANIM_SPEED` 3.12 m/s) from a real run.
+    pub gait: crate::client::movement_types::Gait,
 }
 
 fn server_motion_intent(state: MotionState, motion_style: MotionStyle) -> ServerMotionIntent {
@@ -4044,10 +4050,12 @@ impl MovementSystem {
                 // Projection reconcile keeps the instant-heading shape.
                 turn_omega_rad_s: None,
                 target_hint: Some(projection.target_pose),
-                gait: if projection.speed_mps > 1.0 {
-                    LocalDriveGait::Run
-                } else {
-                    LocalDriveGait::Walk
+                // F1 (COL-21): carry the install-time `get_command` gait
+                // verbatim — `speed_mps` is now real m/s and a retail
+                // walk (3.12) sits above the old 1.0 threshold.
+                gait: match projection.gait {
+                    crate::client::movement_types::Gait::Walk => LocalDriveGait::Walk,
+                    crate::client::movement_types::Gait::Run => LocalDriveGait::Run,
                 },
                 force_grounded: true,
             });

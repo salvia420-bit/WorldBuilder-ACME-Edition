@@ -445,6 +445,52 @@ const ENTITY_STICKY_STANDOFF_M = 1.3;
 // 0.75 (radius-excluded) and a clear jump clears 1 m.
 const STICKY_AIRBORNE_RELEASE_M = 1.0;
 
+// === COL-20 / F4 (2026-07-27) — turn-phase ANIMATION gate for remote entities.
+// Retail cannot begin forward locomotion while a turn is outstanding: a MoveTo
+// builds its pending queue as [TurnToHeading, MoveToPosition]
+// (`MoveToManager::MoveToObject_Internal` acclient.c:345859 via
+// `AddTurnToHeadingNode` 0x00529530 / `AddMoveToPositionNode` 0x00529580), and
+// `BeginTurnToHeading` (:345456-345518) plays the TurnRight/TurnLeft
+// turn-in-place cycle (`_DoMotion` :345489/:345507) until that node is
+// consumed — the move node does not exist before then. Once forward motion HAS
+// begun, the tolerated heading error is 20.0 degrees; past it an aux turn runs
+// concurrently with the walk/run (`HandleMoveToPosition` :345636,
+// `if (v7 <= 20.0 || v7 >= 360.0 - 20.0)`).
+//
+// Remote entities here have no MoveToManager (the faithful driver is
+// local-player only), so node sequencing is not renderable. Retail's own
+// while-moving tolerance is the closest renderable analog: while the rendered
+// heading is further than 20 degrees from the server heading target, play the
+// turn cycle; the frame it crosses under, start the run/walk cycle.
+// ANIMATION SELECTION ONLY — the gate never touches position or physics.
+const MOVETO_FACING_TOLERANCE_RAD = (20.0 * Math.PI) / 180.0;
+// Deadline reference rate (rad/s) — the authored player-MotionTable TurnRight
+// |Omega.Z|. Used ONLY to bound how long the gate may hold; the rendered sweep
+// rate is whatever the heading ease/slew actually does, so this constant stays
+// correct whether or not the COL-19 constant-omega slew has landed.
+const MOVETO_TURN_GATE_OMEGA_REF_RAD = 1.5;
+// Slack for the arm frame + the first-frame animation resolve.
+const MOVETO_TURN_GATE_SLACK_S = 0.25;
+// Hard ceiling: a 180 degree sweep at the reference rate is pi/1.5 ~= 2.09 s,
+// so nothing legitimate reaches this. It exists so a creature whose
+// MotionTable has no turn-in-place cycle (null clip -> rest pose) can never be
+// held in that pose indefinitely by a stale heading target.
+const MOVETO_TURN_GATE_MAX_S = 3.5;
+// `?remoteTurnGate=off` is the escape hatch; absent ⇒ ON (the reader is
+// `!== "off"`, matching this comment — the flag IS on by default). Returns
+// false outside a browser so the Node harness sees the ungated path.
+const MOVETO_TURN_GATE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("remoteTurnGate")?.toLowerCase() !==
+      "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
 // === A2 Path A (2026-05-29) — remote-entity HEADING easing (DEFAULT-ON).
 // Remote entities used to SNAP their quaternion to each server heading
 // (~30 Hz), so a turning creature stepped through its facing. AC's MotionTable
@@ -8432,6 +8478,20 @@ export class EntityManager {
   }
 
   /**
+   * COL-20/F4 — angle (rad) between the RENDERED heading and the current
+   * server heading target. Returns 0 when no target is armed (just spawned,
+   * `?headingSnap=on`, local player, omega/jump owns the quaternion) so the
+   * turn gate fails OPEN: no target ⇒ no turn phase ⇒ locomotion starts
+   * immediately, exactly as before this gate existed.
+   */
+  _headingErrorRad(inst) {
+    if (!inst || !inst.root || !inst._headingEaseInit || !inst._serverTargetQuat) {
+      return 0;
+    }
+    return inst.root.quaternion.angleTo(inst._serverTargetQuat);
+  }
+
+  /**
    * Update motion command/stance. Triggers async fetch + crossFade
    * to a new action when needed. Idempotent: already-playing
    * (cmd, stance) is a no-op.
@@ -8452,6 +8512,53 @@ export class EntityManager {
   async setMotion(guid, motionCommand, motionStance, motionSpeed = 1.0) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
+    // COL-10 clip half (2026-07-27) — retail CMotionInterp::adjust_motion
+    // (acclient.c:343776): WalkBackwards (0x45000006) is NEVER resolved
+    // against the MotionTable — no `cycles[(stance, 0x0006)]` entry exists
+    // (player MT 0x09000001 dump-verified ABSENT). Retail rewrites the
+    // command to WalkForward with `speed *= -0.64999998` BEFORE the state
+    // machine looks, and the negative speed_mod plays the walk cycle in
+    // REVERSE (negative frame_quantum, CSequence::update_internal
+    // acclient.c:340730; hooks fire dir=-1). Ours passed 0x45000006 through
+    // to the cycle bake -> 0-frame miss -> the `!clip -> fadeOutCurrent`
+    // branch below -> idle/rest pose while the body backsteps at 2.028 m/s.
+    // Convert at this single setMotion boundary so the local input dispatch
+    // (index.html:8922/:9917) and any wire delivery both get the retail clip.
+    // Direction rides `_motionSpeedSign` (reverse playback), magnitude rides
+    // `_motionSpeed` (0.65 x walk framerate — retail change_cycle_speed).
+    if (((motionCommand >>> 0) & 0xffff) === CMD_LOW_WALK_BACKWARDS) {
+      motionCommand = 0x45000005; // WalkForward, full 32-bit command
+      const sIn = +motionSpeed;
+      motionSpeed =
+        -0.64999998 * (Number.isFinite(sIn) && sIn !== 0 ? Math.abs(sIn) : 1.0);
+    }
+    // CQ-06 (2026-07-27) — death-hold guard, retail refusal semantics. Once a
+    // sequence is in the Dead substate, retail REFUSES motions with no path
+    // out of it: the player MT has NO `links[(stance, Dead)]` (dump-verified,
+    // 0x09000001) so CMotionTable::GetObjectSequence returns 0, and
+    // StopSequenceMotion returns 0 unless the stopped motion IS the current
+    // substate (acclient.c:337928) — a corpse's Dead cycle (framerate 0,
+    // frozen) simply persists. Our pre-fix code freed the death hold below
+    // for ANY late broadcast (a trailing Stop, a Death-category emote or
+    // reaction one-shot), after which the tick fell back to mixer.update()
+    // with the pre-death idle/walk action still installed -> "corpses flicker
+    // back to idle after death animation". Refuse everything except an
+    // explicit revival locomotion/idle cycle (Ready / WalkForward /
+    // RunForward — what ACE broadcasts at resurrect); dead creatures never
+    // receive one and are removed on the death clock (`_deathEndAt`).
+    {
+      const heldDead =
+        (inst._unifiedSeq && inst._unifiedSeq.deathHold === true) ||
+        ((inst.lastMotionCommand ?? 0) & 0xffff) === CMD_LOW_DEAD;
+      if (heldDead) {
+        const lowIn = (motionCommand >>> 0) & 0xffff;
+        const isRevival =
+          lowIn === CMD_LOW_READY ||
+          lowIn === CMD_LOW_WALK_FORWARD ||
+          lowIn === CMD_LOW_RUN_FORWARD;
+        if (!isRevival) return; // refused — the death pose holds (retail parity)
+      }
+    }
     // A new locomotion/stance/motion command ends any in-progress unified
     // sequence (swing override, or a death hold on resurrect/correction) so
     // movement stays responsive. No-op when ?unifiedMotion is off (never set).
@@ -8464,7 +8571,13 @@ export class EntityManager {
     // and by the per-frame T11 velScale tick.
     {
       const ms = +motionSpeed;
-      inst._motionSpeed = Number.isFinite(ms) && ms > 0 ? ms : 1.0;
+      // COL-10 clip half — keep the backstep MAGNITUDE. The old
+      // `ms > 0 ? ms : 1.0` clamp threw |−0.65| away for negative speeds, so
+      // a reversed walk cycle played at full forward-walk rate (feet ~54%
+      // fast vs the 2.028 m/s body). Retail multiplies the cycle framerate by
+      // the SIGNED speed_mod (change_cycle_speed, acclient.c:337269, applied at :337775); we
+      // split it: magnitude here, direction in `_motionSpeedSign` below.
+      inst._motionSpeed = Number.isFinite(ms) && ms !== 0 ? Math.abs(ms) : 1.0;
       // F15-2 — remember a backstep's direction (raw ms < 0) so the
       // locomotion clip can play in reverse under ?signedMotionSpeed. The
       // magnitude above is unchanged (the gait still comes from the velScale
@@ -8550,7 +8663,53 @@ export class EntityManager {
       inst._deathAt = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
     }
-    const cls = classifyMotionCommand(cmd);
+    let cls = classifyMotionCommand(cmd);
+    // === COL-20 / F4 — turn-phase gate. A MoveTo* envelope arrives as a bare
+    // forward-locomotion hint (`moveto_locomotion_hint`, lib.rs:6710, emitted
+    // from the KIND_MOTION arm at lib.rs:42908) with no facing information, so
+    // pre-fix a remote creature started its run cycle the instant the chase
+    // was ordered — while still rotating. Hold the queued forward command and
+    // render the turn-in-place cycle until the facing error is inside retail's
+    // 20 degree while-moving tolerance; `tick` releases it (see
+    // MOVETO_FACING_TOLERANCE_RAD). Remote-only and animation-only: the
+    // server-driven position stream is untouched, so a gated creature still
+    // travels — only which clip plays changes.
+    if (
+      MOVETO_TURN_GATE_ON &&
+      !this._isLocalPlayerGuid(guid >>> 0) &&
+      cls !== "attack" &&
+      cls !== "cast"
+    ) {
+      if (cmdLow !== CMD_LOW_RUN_FORWARD && cmdLow !== CMD_LOW_WALK_FORWARD) {
+        // Any other command supersedes the queued locomotion — retail's
+        // per-unpack preamble cancels the pending queue wholesale before the
+        // case dispatch (acclient.c:339518-339519).
+        inst._turnGateCmd = 0;
+      } else if (this._headingErrorRad(inst) > MOVETO_FACING_TOLERANCE_RAD) {
+        if (inst._turnGateCmd !== cmd) {
+          // Fresh arm (a re-broadcast of the SAME command keeps the original
+          // deadline so a repeating envelope cannot extend the gate).
+          inst._turnGateUntilMs =
+            _entityNowMs() +
+            1000 *
+              Math.min(
+                MOVETO_TURN_GATE_MAX_S,
+                this._headingErrorRad(inst) / MOVETO_TURN_GATE_OMEGA_REF_RAD +
+                  MOVETO_TURN_GATE_SLACK_S,
+              );
+        }
+        inst._turnGateCmd = cmd;
+        inst._turnGateStance = stance;
+        inst._turnGateSpeed = Number.isFinite(+motionSpeed) ? +motionSpeed : 1.0;
+        // Substitute the turn-in-place cycle at the SAME stance. TurnLeft is
+        // already folded to TurnRight above, matching retail's carried code.
+        cmd = ((cmd & 0xffff0000) | CMD_LOW_TURN_RIGHT) >>> 0;
+        cmdLow = CMD_LOW_TURN_RIGHT;
+        cls = classifyMotionCommand(cmd);
+      } else {
+        inst._turnGateCmd = 0;
+      }
+    }
     if (cls === "stop" || cls === null) {
       inst.fadeOutCurrent(CROSSFADE_S);
       // Remember the last non-stop command we played so a follow-up
@@ -8610,7 +8769,10 @@ export class EntityManager {
           if (seq) {
             if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
             // clearOnDone:false → keep posing the clamped prone frame (held dead).
-            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, hooks: entry?.hooks || null, lastHookTime: -1 };
+            // deathHold:true → the CQ-06 guard at setMotion entry refuses any
+            // non-revival motion from freeing this hold (retail: no links out
+            // of the Dead substate — the corpse pose is sticky).
+            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, deathHold: true, hooks: entry?.hooks || null, lastHookTime: -1 };
             // (2026-07-06) Stamp the REAL collapse length so loop.js `_armRemove`
             // holds the rig for exactly this creature's authored death animation
             // (they vary — tusker ~1.3s, others longer) instead of the flat
@@ -12721,6 +12883,26 @@ export class EntityManager {
               e
             );
           }
+        }
+      }
+      // === COL-20 / F4 — turn-phase gate release. While `_turnGateCmd` holds,
+      // `setMotion` swapped the queued run/walk for the turn-in-place cycle;
+      // start the queued locomotion the frame the facing error crosses under
+      // retail's 20 degree while-moving tolerance (`HandleMoveToPosition`
+      // acclient.c:345636). The deadline is the unreachable-target valve only
+      // (MOVETO_TURN_GATE_MAX_S) — a real sweep always wins the angle test
+      // first. One falsy check per entity when no gate is armed.
+      if (inst._turnGateCmd) {
+        if (
+          this._headingErrorRad(inst) <= MOVETO_FACING_TOLERANCE_RAD ||
+          _entityNowMs() >= inst._turnGateUntilMs
+        ) {
+          const queuedCmd = inst._turnGateCmd >>> 0;
+          const queuedStance = inst._turnGateStance >>> 0;
+          const queuedSpeed = inst._turnGateSpeed;
+          // Clear BEFORE the re-entry so the gate cannot re-arm itself.
+          inst._turnGateCmd = 0;
+          this.setMotion(inst.guid >>> 0, queuedCmd, queuedStance, queuedSpeed);
         }
       }
       // === Wave R3.A (2026-05-28) — remote-entity motion smoothing.

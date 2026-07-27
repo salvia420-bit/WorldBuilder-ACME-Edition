@@ -1146,6 +1146,7 @@ fn server_controlled_projection_uses_landblock_aware_global_delta() {
     movement.set_server_controlled_projection(ServerControlledProjection {
         target_pose,
         speed_mps: 2.0,
+        gait: Gait::Run,
     });
 
     let drive = movement
@@ -1427,6 +1428,7 @@ async fn server_controlled_projection_becomes_current_local_drive_control() {
     movement.set_server_controlled_projection(ServerControlledProjection {
         target_pose,
         speed_mps: 2.0,
+        gait: Gait::Run,
     });
     movement.note_server_controlled_movement_started();
     movement.enqueue_drive_intent(
@@ -1492,6 +1494,7 @@ async fn clearing_server_controlled_projection_reasserts_autonomous_motion_inten
     movement.set_server_controlled_projection(ServerControlledProjection {
         target_pose,
         speed_mps: 2.0,
+        gait: Gait::Run,
     });
     movement.note_server_controlled_movement_started();
     movement.enqueue_drive_intent(PlayerDriveIntent::Autonomous(autonomous_intent), start);

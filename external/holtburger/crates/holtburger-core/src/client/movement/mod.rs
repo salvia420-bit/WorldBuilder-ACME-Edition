@@ -26,4 +26,10 @@ pub use jump_charge::{JumpOutcome, JumpRefusal};
 // stream, drained by the wasm TickMovement arm (ClientEvent kind 61).
 pub use system::CmdInterpEvent;
 pub(super) use common::{HUGE_QUANTUM, MAX_QUANTUM};
+// F1 (COL-21): the server-controlled MoveToObject lane in
+// `client::simulation` resolves its approach speed through retail's own
+// `get_command` hold-key rule plus the anim-speed constants, so both
+// leave this module.
+pub(super) use motion_interp::{RUN_ANIM_SPEED, WALK_ANIM_SPEED};
+pub(super) use params::MovementParameters;
 pub(super) use system::{MovementSystem, ServerControlledProjection};
