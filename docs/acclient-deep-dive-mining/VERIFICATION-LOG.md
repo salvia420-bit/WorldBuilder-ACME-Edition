@@ -833,3 +833,148 @@ Tests: `cargo test -p holtburger-scenery-bake --release` 8+9 pass
 `bake_output_fingerprint_is_stable`); `--bin scenery-bake` 26 pass;
 `--test scenery_bake_preflight` 2 pass. **No re-bake of `dist/` was
 performed** — scratch outputs only.
+
+---
+
+## Doorframe gap (HANDOFF task 2) — PREMISE REFUTED (2026-07-27). Building collision is intact; the "gap" is a misread of a 45°-rotated footprint.
+
+Rig: `/mnt/wbterminal2/door-bisect-2026-07-27/` on `:8766`, live `pkg/`
+(release, 4,947,030 B, includes COL-03 `3f380c50` + COL-10 walk speed).
+New probes `doorgap_probe{,2,3,4}.cjs`, results `results/doorgap-{A..E}.json`.
+Nine movement-gated walks + 32 static wasm sweeps.
+
+**The venue geometry, derived from the DAT rather than assumed.** LB `0xA9B4`
+`LandBlockInfo.buildings[8]` = GfxObj `0x01000BC3` at local (79.5, 37.5, 94),
+orientation `(0.92388,0,0,-0.382683)` = **yaw −45°**. Transforming its 47
+`physicsPolygons` through that frame (only the polys spanning z 94.3-96, i.e.
+player torso height) gives a rectangle rotated 45°, not an axis-aligned box:
+
+| wall | plane | doorway opening in it |
+|---|---|---|
+| SE | `x − y = 48.01` | **(80.98, 32.97) → (82.33, 34.32)**, 1.909 m — door `0x7A9B401F` |
+| SW | `x + y = 109.50` | (75.08, 34.42) → (76.42, 33.08), 1.90 m — door `0x7A9B401E` |
+| NW | `x − y = 35.99` | — |
+| NE | `x + y = 125.19` | — |
+
+Corners S(78.76, 30.75) E(86.60, 38.59) N(80.59, 44.60) W(72.75, 36.76). The
+vertex-array AABB (x 70.07..87.61, y 29.25..46.79) over-bounds this by up to
+4.9 m — that AABB is what `cameraSweepCollision` reports, and reading it as the
+footprint is what produced the "gap" reading.
+
+**What the +0.45 m lateral actually does.** Walk due north from (82.124, 26.5):
+it crosses the SE wall plane at (82.124, 34.11), 0.66 m along the wall from the
+door centre — outside the 1.909 m opening's passable band — so it is **deflected
+by the doorway's NE jamb at (82.33, 34.32)**, then slides NE along the OUTSIDE
+face of the SE wall holding `x − y = 48.70 ± 0.01` for ~5 m (= wall plane 48.01
++ 0.48·√2, i.e. exactly `PLAYER_CAPSULE_RADIUS`), rounds the E corner at
+**x = 87.08 = 86.60 + 0.48** (again exactly one radius), and then walks north
+over open terrain, downhill z 94 → 77. Nothing should stop it there: north of
+the E corner is outside the building. The handoff's "(82.36, 34.30) leaf NE end"
+is the **doorframe jamb** (82.33, 34.32) — the frame did catch the mover, which
+is why it was deflected.
+
+**No sample, in any run, is inside the building shell.** Across all 9 walks
+(offsets −0.45, −0.30, 0, +0.30, +0.45 at the door; x = 73, 77, 79.5 elsewhere;
+run and walk speeds; 24.7 m/s peak under `@god`), zero trace samples satisfy
+`35.99 < x−y < 48.01 && 109.50 < x+y < 125.19`. The x = 73 run that looked like
+a pass-through is the capsule rounding the **W** corner: it is pushed to
+x = 72.25 = 72.745 − 0.50 ≈ corner − radius and passes cleanly outside.
+
+**Verdict: none of (a)/(b)/(c) — (d) nothing is missing.** The building's
+physics BSP is loaded (`residency: staticBsps 89, cellStaticBsps 535,
+buildingAabbs 20`), the live driver consults it, and the mover is stopped by it
+at the correct offsets. There is no cell-transition bug either: the mover stays
+outdoors because it never crosses a portal — it is deflected outside the doorway.
+
+**Closed-door arithmetic (why every offset is blocked).** Doorway half-width
+0.955 m; the door entity's collider is a 0.40 m circle at the door origin, so
+with the 0.48 m capsule the mover cannot come within 0.88 m of (81.674, 33.629).
+0.955 − 0.88 = 0.075 m of tangent room on each side, less than one capsule
+radius ⇒ the closed doorway is fully sealed. Measured: head-on stops at
+y 32.746 (0.883 m from the door origin); −0.30 and −0.45 both enter the doorway
+reveal, slide west around the circle and wedge at (81.035, 33.023) — again
+**0.881 m** from the door origin; +0.30 and +0.45 are deflected outside.
+
+### Head-on 0.88 → 0.69 with BSP resident BEFORE contact: NO. Still 0.88.
+
+Measured with full residency read *before* the run (`staticBsps 89`,
+`cellStaticBsps 535`, `cellPhysicsBsps 123`): head-on stop **y 32.746**, gap to
+the door plane **0.8826 m** — identical to every 07-27 bisect arm. 0.883 =
+0.40 (default entity cyl radius) + 0.48 (`PLAYER_SETUP_SPHERE_RADIUS`). The
+predicted 0.69 would be the door-LEAF plane stop (leaf plane `x − y = 48.01`,
+capsule at 48.69 ⇒ y 32.985 ⇒ gap 0.64). It does not occur: the head-on stop is
+the **circle** arm, and residency is not what gates it.
+
+### Citation correction: the "integrator arm" at `system.rs:4783-4886` is DEAD CODE.
+
+The handoff and the COL-03 addendum both name
+`crates/holtburger-core/src/client/movement/system.rs` ~4783-4886 (the
+`clamp_delta_against_buildings` → statics-AABB → `resolve_static_bsp_pushout`
+chain) as the live collision arm. It is not reachable:
+`advance_local_pose_for_manual_drive_slice` (`system.rs:4210`) returns at
+`:4221-4224` whenever `unified_transition_enabled()`, and
+`USE_UNIFIED_TRANSITION = true` (`:644`). The live path is
+`advance_manual_slice_via_transition` →
+`find_transitional_position_dispatch` (`system.rs:6629`) with
+`USE_FAITHFUL_TRANSITION = true` (`:669`) and `USE_FAITHFUL_OUTDOOR = true`
+(`:695`) — the decomp-faithful `CTransition` port, which outdoors floods the
+land-cell ring and collides terrain triangles → `cell_static_physics_bsp` →
+entities. **Everything from `system.rs:4226` to ~`:4900` — the building-AABB
+clamp, the indoor per-poly clamp, the statics-AABB clamp, the static-BSP
+push-out and the legacy entity pass — is unreachable legacy.** Future collision
+work belongs in `spatial/transition.rs` + `spatial/faithful_bridge.rs`.
+
+Direct proof: `cameraSweepCollision` (the coarse building-AABB sweep, same
+`building_aabbs_near_pose` + `sweep_sphere_against_aabbs` the dead clamp uses)
+reports a block at local y 28.773 with normal (0,−1,0) on **every** approach
+line at the grocer — and no mover ever stops there.
+
+### Retail cross-ref (acclient.c)
+
+- `CLandBlock::init_buildings` (`:352114`): each `BuildInfo` becomes a
+  `CBuildingObj::makeBuilding(building_id, num_portals, portals, num_leaves)`
+  CPhysicsObj, added to the ONE land cell containing its frame origin
+  (`LandDefs::adjust_to_outside`) plus the landblock `stablist`. Our
+  `USE_BUILDING_OVERLAP` (register into every overlapped cell) is a deliberate,
+  documented widening of exactly this.
+- `CBuildingObj::find_building_collisions` (`:719116`): sets
+  `sphere_path.bldg_check = 1` and runs `CPhysicsPart::find_obj_collisions`
+  over the building's own part array — i.e. the building's GfxObj physics BSP,
+  the same data our `cell_static_physics_bsp` bake stages. Retail has **no
+  separate doorframe primitive**: the doorway is simply an opening in the
+  building's physics mesh, which the DAT confirms (SE-wall polys stop at
+  (80.98, 32.97) and resume at (82.33, 34.32)).
+- Outdoor dispatch `CLandCell::find_collisions` (`:354887`): terrain
+  (`vfptr[5]`) → `CSortCell::find_collisions` → `CObjCell::find_obj_collisions`
+  (`:347142`).
+- Cell transition: `CEnvCell::check_building_transit` (`:348110`) re-derives
+  interior membership from the building portals every frame; our
+  `entered_envcell_for_outdoor_pose` / `exited_envcell_to_outdoor`
+  (`USE_LOCAL_ENVCELL_ENTRY`) mirror it. Nothing to fix.
+
+### Genuine (out-of-scope) defect found: third-person camera over-clips rotated buildings
+
+`scene3d/camera.js:1353` runs `cameraSweepCollision` — the **coarse per-part
+building AABB** — as step 2 of the camera clip chain, ahead of step 3's precise
+`sweepSphereAgainstBuildingMesh` over the same building. For a 45°-rotated
+building the AABB over-bounds the real footprint by up to 4.9 m, so the camera
+pulls in that far short of the grocer's walls (measured: clip at local y 28.77
+vs the real wall at y 34.11 on the +0.45 line). Step 3 already covers what step
+2 was for. Proposed fix is one flag-gated deletion of the step-2 block
+(S-sized), but it is a camera/render change ⇒ needs a 1070 eye test; NOT made
+here.
+
+### Harness notes
+
+- `?renderOnDemand=1` is dropped from the rig's launch (`launch2.sh`); the
+  handoff's warning is right and `window.liveScene3d` is populated without it.
+- `__bootState` reaches `in-world` and is then **overwritten by `ready`** — gate
+  on `__bootStateHistory.includes('in-world')`, not on the current value.
+  `lib_cdp.cjs`'s pose-based gate happens to be right here but is not a proof.
+- `@teleloc … 95.0` sometimes lands the capsule hovering at z ≈ 94.41 with the
+  movement gate refusing input for the whole run (`vmax 0`, three occurrences).
+  Teleporting to **z 94.06** (just above the 94.005 terrain) fixed it. Always
+  check `vmax > 0` before reading a run.
+- Multiple `@teleloc` per session works (9 in this session); the freeze
+  mentioned in the handoff was the airborne-teleport case above, not teleport
+  count.

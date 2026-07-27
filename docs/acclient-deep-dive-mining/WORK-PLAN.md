@@ -70,6 +70,23 @@ test pinned at ±0.45 m offset, never head-on. COL-22 lead found in passing:
 door Setup `0x020019FF`'s selectionSphere (r 0.892) sits at the hinge, so
 far-side leaf clicks miss.
 
+**Follow-up "doorframe gap" also CLOSED 2026-07-27 — premise refuted; see
+VERIFICATION-LOG §"Doorframe gap".** The +0.45 m lateral that "continues over
+outdoor terrain to y 67" is correct behaviour: the grocer building is rotated
+**−45°**, its SE wall runs NE, and the mover is deflected by the doorway's NE
+jamb at (82.33, 34.32), slides along the OUTSIDE of that wall at exactly one
+capsule radius, and rounds the E corner (86.60, 38.59) into open ground. Zero
+trace samples across nine walks land inside the building shell. Head-on stays
+**0.883 m** (the 0.40 + 0.48 circle) with BSP fully resident before contact —
+no migration to 0.69. Two corrections that outlive the item: (1) the
+`system.rs:4783-4886` "integrator arm" everything cites is **dead code** —
+`USE_UNIFIED_TRANSITION` routes the live mover to
+`find_transitional_position_dispatch` (`system.rs:6629`), so collision work
+belongs in `spatial/transition.rs` + `spatial/faithful_bridge.rs`; (2) the
+third-person camera still clips on the coarse per-part building AABB
+(`camera.js:1353`), which over-bounds a 45°-rotated building by up to 4.9 m —
+S-sized deletion, needs a 1070 eye test.
+
 ### P0.3 — Guard the degenerate follow-camera basis · LIVE-03 · S
 COL-08 (sev 2) confirms live what the headless run measured: the camera reaches a
 state with **no usable horizontal heading** — forward components exactly `(0,0)`
