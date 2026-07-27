@@ -46,7 +46,7 @@ import {
   placementToMatrix4,
   acQuatToThree,
 } from "./adapter.js";
-import { materialCanCastShadow } from "./materials.js";
+import { materialCanCastShadow, VERTEX_BAKE } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { guardedCompileAsync } from "./bake_prewarm.js";
@@ -80,6 +80,21 @@ const CELL_STATIC_BIAS = (() => {
   } catch (_) {}
   return true;
 })();
+
+// RND-04 (2026-07-27) — pick the material for one EnvCell surface group.
+// `baked` is decided ONCE PER CELL (every group of a cell comes from the same
+// packed ModelMesh, so the `acBakedLight` attribute is present on all of them
+// or none) and must agree with whether the geometry handed to the Mesh
+// actually carries the attribute: under `?vertexBake`'s retail arm the baked
+// material drops its direct lighting, so a baked material on un-baked
+// geometry reads (0,0,0) and renders the surface black. Falls back to the
+// shared `getCached` material whenever the bake is unavailable, which is what
+// makes a pre-RND-04 wasm bundle a no-op rather than a blackout.
+function cellMaterialFor(scene3d, group, baked) {
+  return baked
+    ? scene3d.materialCache.getCachedCellBaked(group.surfaceDid)
+    : scene3d.materialCache.getCached(group.surfaceDid);
+}
 
 // C1 (2026-06-20 busted-world load fix): cap the per-frame PVS-ring bake
 // fan-out. `tickPvsLoadExpansion` otherwise fires the whole radius-N ring
@@ -800,8 +815,19 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       // exact; transparent cells lump glows together (rare in retail).
       const opaqueGroups = [];
       const transparentGroups = [];
+      // RND-04: cell-wide, because material choice and the fused attribute
+      // must agree (see cellMaterialFor). `VERTEX_BAKE.enabled` short-circuits
+      // so `?vertexBake=off` never even looks at the attribute.
+      const cellBaked =
+        VERTEX_BAKE.enabled &&
+        snap.surfaceGroups.length > 0 &&
+        snap.surfaceGroups.every((g) => g.geometry.getAttribute("acBakedLight"));
+      // RND-04 handshake with lighting.js: the pool only drops interior
+      // static lights once a real baked attribute has been seen, so a wasm
+      // bundle without the bake leaves dungeon lighting exactly as it was.
+      if (cellBaked) scene3d._acVertexBakeActive = true;
       for (const g of snap.surfaceGroups) {
-        const mat = scene3d.materialCache.getCached(g.surfaceDid);
+        const mat = cellMaterialFor(scene3d, g, cellBaked);
         if (mat && mat.transparent === true) {
           transparentGroups.push({ group: g, material: mat });
         } else {
@@ -845,6 +871,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         const mergedPos = new Float32Array(totalVerts * 3);
         const mergedUv = new Float32Array(totalVerts * 2);
         const mergedNormal = new Float32Array(totalVerts * 3);
+        // RND-04: fuse the baked colours alongside. ALL-OR-NOTHING per bucket
+        // — a partially-baked fusion would feed (0,0,0) to the un-baked runs,
+        // which under the suppress-direct arm renders them black.
+        const mergedBaked = cellBaked ? new Uint8Array(totalVerts * 3) : null;
 
         const fused = new THREE.BufferGeometry();
         let vertexOffset = 0;
@@ -858,6 +888,12 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           mergedPos.set(srcPos, vertexOffset * 3);
           mergedUv.set(srcUv, vertexOffset * 2);
           mergedNormal.set(srcNorm, vertexOffset * 3);
+          if (mergedBaked) {
+            mergedBaked.set(
+              srcGeom.getAttribute("acBakedLight").array,
+              vertexOffset * 3,
+            );
+          }
 
           // addGroup is in *vertex* units for non-indexed
           // geometry (the docs use "index/vertex" interchangeably
@@ -871,6 +907,12 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         fused.setAttribute("position", new THREE.BufferAttribute(mergedPos, 3, false));
         fused.setAttribute("uv", new THREE.BufferAttribute(mergedUv, 2, false));
         fused.setAttribute("normal", new THREE.BufferAttribute(mergedNormal, 3, false));
+        if (mergedBaked) {
+          fused.setAttribute(
+            "acBakedLight",
+            new THREE.BufferAttribute(mergedBaked, 3, true),
+          );
+        }
         fused.computeBoundingSphere();
         lbDisposableGeometries.push(fused);
 
@@ -906,8 +948,13 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       const transparentMesh = buildFusedMesh(transparentGroups, "transparent");
       if (transparentMesh) meshGroup.add(transparentMesh);
     } else {
+      const cellBakedUnfused =
+        VERTEX_BAKE.enabled &&
+        snap.surfaceGroups.length > 0 &&
+        snap.surfaceGroups.every((g) => g.geometry.getAttribute("acBakedLight"));
+      if (cellBakedUnfused) scene3d._acVertexBakeActive = true;
       for (const g of snap.surfaceGroups) {
-        const mat = scene3d.materialCache.getCached(g.surfaceDid);
+        const mat = cellMaterialFor(scene3d, g, cellBakedUnfused);
         const m = new THREE.Mesh(g.geometry, mat);
         m.name = `surface-${(g.surfaceDid >>> 0).toString(16).padStart(8, "0")}`;
         m.userData = {

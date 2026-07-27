@@ -953,6 +953,14 @@ mod motion_sequence;
 #[cfg(target_arch = "wasm32")]
 mod net_worker;
 
+// RND-04 — retail static-light vertex bake (`SetStaticLightingVertexColors`
+// acclient.c:454918 / `calc_point_light` acclient.c:454579). Gate mirrors
+// `motion_sequence` (wasm32 OR test) so the native test target exercises the
+// arithmetic without the wasm-bindgen stack. The module is intentionally
+// dependency-free so the offline Rust-vs-Python differ compiles it verbatim.
+#[cfg(any(target_arch = "wasm32", test))]
+mod vertex_bake;
+
 #[cfg(target_arch = "wasm32")]
 pub use global_source::{
     cached_shard_count, has_resource_source, init_resource_source,
@@ -1443,7 +1451,7 @@ fn build_mesh(
     // T1 — per-cell TexMerge data for the `?texMerge=on` shader path.
     // RGBA8 row-major for a 48×8 DataTexture: row = NS cell cy, columns
     // cx*6 + slot. Vertex (vx,vy) → index vx*9+vy; cell (cx,cy) corners in
-    // acclient order [NW, NE, SE, SW] = [(cx,cy+1),(cx+1,cy+1),(cx+1,cy),(cx,cy)].
+    // acclient order [SW, SE, NE, NW] = [(cx,cy),(cx+1,cy),(cx+1,cy+1),(cx,cy+1)].
     let terrain_merge_data =
         build_terrain_merge_data(&terrain_codes, &road_codes);
 
@@ -1461,10 +1469,12 @@ fn build_mesh(
 /// T1 — compute the per-cell TexMerge `DataTexture` bytes from a landblock's
 /// 9×9 per-vertex terrain + road codes. Returns RGBA8 in 48×8 row-major
 /// layout (see [`LandblockMesh::terrain_merge_data`]). Cell `(cx,cy)` corners
-/// are gathered in acclient's pcode order `[NW, NE, SE, SW]`; the road code at
-/// each corner marks that corner as road. A merge that fails to resolve
-/// (alpha mask can't rotate to match) degrades to a base-only slot using the
-/// SW corner's terrain so the cell still renders.
+/// are gathered in acclient's pcode order `[SW, SE, NE, NW]`
+/// (`CLandBlockStruct::GetCellRotation`: `terrain[9*ix+iy]` → pcode bit 15,
+/// `terrain[9*ix+iy+1]` → bit 0, so bit 15 is SW and bit 0 is NW); the road
+/// code at each corner marks that corner as road. A merge that fails to
+/// resolve (alpha mask can't rotate to match) degrades to a base-only slot
+/// using the SW corner's terrain so the cell still renders.
 #[cfg(target_arch = "wasm32")]
 fn build_terrain_merge_data(terrain_codes: &[u8], road_codes: &[u8]) -> Vec<u8> {
     use holtburger_dat::terrain_merge::{
@@ -1479,26 +1489,29 @@ fn build_terrain_merge_data(terrain_codes: &[u8], road_codes: &[u8]) -> Vec<u8> 
     let mut out = vec![0u8; W * H * 4];
     for cy in 0..8usize {
         for cx in 0..8usize {
-            // [NW, NE, SE, SW]
+            // [SW, SE, NE, NW] — acclient's pcode corner order (bit 15 = SW …
+            // bit 0 = NW). Reversing this mirrors the cell N↔S, which changes
+            // GetTerrain's first-duplicate base pick AND every PRNG draw.
             let corners = [
-                at(cx, cy + 1, terrain_codes),
-                at(cx + 1, cy + 1, terrain_codes),
-                at(cx + 1, cy, terrain_codes),
                 at(cx, cy, terrain_codes),
+                at(cx + 1, cy, terrain_codes),
+                at(cx + 1, cy + 1, terrain_codes),
+                at(cx, cy + 1, terrain_codes),
             ];
             let road = [
-                at(cx, cy + 1, road_codes),
-                at(cx + 1, cy + 1, road_codes),
-                at(cx + 1, cy, road_codes),
                 at(cx, cy, road_codes),
+                at(cx + 1, cy, road_codes),
+                at(cx + 1, cy + 1, road_codes),
+                at(cx, cy + 1, road_codes),
             ];
             let pcode = pack_pcode(corners, road);
             let slots = match texture_merge_info(pcode, &tables) {
                 Some(info) => pack_merge_record(&info),
-                // Degenerate fallback: base-only with the SW corner's terrain.
+                // Degenerate fallback: base-only with the SW corner's terrain
+                // (corners[0] in the [SW, SE, NE, NW] order above).
                 None => {
                     let mut s = [[0u8; 4]; MERGE_SLOTS];
-                    s[0] = [corners[3], 255, 0, 255];
+                    s[0] = [corners[0], 255, 0, 255];
                     s
                 }
             };
@@ -5525,11 +5538,47 @@ pub struct ModelMesh {
     /// geom-audit (2026-07-02): record misses counted during the FINAL
     /// decode (post-retry). `0` = fully-resident decode; `> 0` = the
     /// mesh is PARTIAL or EMPTY because records were unavailable —
+    /// RND-04 (2026-07-27): retail's burned-in static lighting — 3 bytes
+    /// (R,G,B) per VERTEX, so length = `tri_count * 9` positions ÷ 3 = one
+    /// triple per emitted vertex. Retail packs the same numbers into the D3D
+    /// vertex DIFFUSE of an FVF-594 mesh (acclient.c:455037) and applies them
+    /// as EMISSIVE (`SetFFEmissiveColorSource(FromVertex)` acclient.c:454724).
+    ///
+    /// EMPTY = "not baked" (every constructor but the EnvCell path leaves it
+    /// empty), which JS reads as "install no colour attribute" — the shader
+    /// gate then compiles the bake term out. An all-zero NON-empty buffer is
+    /// distinct and meaningful: it is a cell that WAS baked and has no static
+    /// light reaching it.
+    ///
+    /// Bytes are in the AUTHORED (sRGB) space, matching the DAT's ARGB — the
+    /// consumer decodes. Do not gamma-correct here or the per-channel clamp
+    /// to the lamp colour (acclient.c:454616) stops landing on the lamp's own
+    /// authored tint.
+    baked_light_rgb: Vec<u8>,
     /// consumers (`__diag.geometry`) use this to separate
     /// "authored-empty" (misses 0, tris 0) from "decode-starved".
     /// Only `fetch_model_meshes` populates it; other constructors
     /// leave 0.
     decode_misses: u32,
+    /// RND-33 (2026-07-27): one byte per entry of `surfaces` (same index space
+    /// as `surface_indices`), giving the texture-address mode retail derives
+    /// for that surface SUBSET:
+    ///   bit 0 — the batched `DrawMesh` reading: OR over the subset's polygons
+    ///           of `stippling > 0` (`acclient.c:456003` accumulates it,
+    ///           `:454676` forwards it to `SetSurface`).
+    ///   bit 1 — the side-specific `SetSurface(CPolygon*, Sidedness, int)`
+    ///           reading (`acclient.c:455236`): OR of `stippling & 1` over the
+    ///           subset's POSITIVE-side tris and `stippling & 2` over its
+    ///           NEGATIVE-side tris.
+    /// Set bit -> `TEXADDRESS_WRAP`; clear -> `TEXADDRESS_CLAMP`
+    /// (`acclient.c:454437`). Both readings ship because retail's two paths do
+    /// not agree (bit 0 also catches the `NoPos`/`NoNeg` UV-layout bits).
+    ///
+    /// ADDITIVE, all-or-nothing (the DAT-01 V3 `aabb_*` convention): a JS
+    /// consumer that sees a missing or wrong-length array must fall back to its
+    /// prior default rather than treat absent as "nothing is stippled", so a
+    /// stale `pkg-web` degrades inert instead of clamping every surface.
+    subset_stippled: Vec<u8>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -5570,6 +5619,13 @@ impl ModelMesh {
             self.bbox_max[1] - self.bbox_min[1],
         ]
     }
+    /// RND-04 — burned-in static lighting, 3 bytes per vertex (`Uint8Array`,
+    /// length = `triCount * 9`). EMPTY on every non-EnvCell path; JS installs
+    /// the `acBakedLight` attribute only when the length matches the position
+    /// vertex count, so a stale wasm bundle degrades to "no attribute" and
+    /// the shader gate stays 0.
+    #[wasm_bindgen(getter, js_name = bakedLightRgb)]
+    pub fn baked_light_rgb(&self) -> Vec<u8> { self.baked_light_rgb.clone() }
     /// Follow-on #5 (LOD) — the model's `did_degrade` chain entry
     /// (0 = no degraded variant). JS-side `statics.js` / `buildings.js`
     /// wrap the full + degraded variants in a `THREE.LOD` node when this
@@ -5594,6 +5650,11 @@ impl ModelMesh {
     /// >0 = mesh is decode-starved partial/empty). See the struct field.
     #[wasm_bindgen(getter, js_name = decodeMisses)]
     pub fn decode_misses(&self) -> u32 { self.decode_misses }
+    /// RND-33 — per-surface-subset texture-address flags (`Uint8Array`, length
+    /// = `surfaces.len()`). See the struct field for the bit meanings and the
+    /// all-or-nothing contract.
+    #[wasm_bindgen(getter, js_name = subsetStippled)]
+    pub fn subset_stippled(&self) -> Vec<u8> { self.subset_stippled.clone() }
 }
 
 /// E8 (2026-06-08): per-polygon-side material traceability tag. Mirrors
@@ -5663,6 +5724,43 @@ struct Tri {
     /// (front/positive vs back/negative). Pairs with `polygon_id` for the
     /// full (polygon, side) provenance of every emitted triangle.
     side_kind: SideKind,
+    /// RND-33 (2026-07-27): the source polygon's raw `Stippling` byte
+    /// (`holtburger_dat::graphics::Polygon::stippling`). Carried per-tri rather
+    /// than pre-reduced so `pack_model_mesh` can derive BOTH retail readings
+    /// (the side-specific `SetSurface` bits and the side-agnostic `DrawMesh`
+    /// mesh-buffer mask) from one source. `0` where there is no source polygon.
+    stippling: u8,
+}
+
+/// RND-33 (2026-07-27) — reduce one triangle's source-polygon `Stippling` byte
+/// to the two per-subset texture-address bits [`ModelMesh::subset_stippled`]
+/// accumulates.
+///
+/// bit 0 — `acclient.c:456003`: `isStippledOrAlphaedMask[subset] |=
+///         (stippling > 0)`, the side-agnostic reading `DrawMesh`
+///         (`acclient.c:454676`) forwards to `SetSurface`. Also catches the
+///         `NoPos` (0x4) / `NoNeg` (0x8) UV-layout bits.
+/// bit 1 — `acclient.c:455236`: `SetSurface(CPolygon*, Sidedness, int)` reads
+///         `stippling & 1` for the positive side and `stippling & 2` for the
+///         negative side. `PositiveReversed` is a positive-face draw and so
+///         reads bit 0x1.
+///
+/// Either bit set means `TEXADDRESS_WRAP` under that reading; clear means
+/// `TEXADDRESS_CLAMP` (`acclient.c:454437`, sampler stage 0 U and V).
+#[cfg(any(target_arch = "wasm32", test))]
+fn tri_stipple_bits(stippling: u8, side_kind: SideKind) -> u8 {
+    let mut bits = 0u8;
+    if stippling > 0 {
+        bits |= 0x1;
+    }
+    let side_bit = match side_kind {
+        SideKind::Negative => 0x2,
+        SideKind::Positive | SideKind::PositiveReversed => 0x1,
+    };
+    if (stippling & side_bit) != 0 {
+        bits |= 0x2;
+    }
+    bits
 }
 
 /// Walk a [`GfxObj`]'s polygons, fan-triangulate each, transform by
@@ -5867,6 +5965,9 @@ fn append_gfx_tris_with_tex_swaps(
                 // E8: front face → positive side of polygon `pid`.
                 polygon_id: pid,
                 side_kind: SideKind::Positive,
+                // RND-33: raw Stippling byte; reduced per surface subset in
+                // pack_model_mesh.
+                stippling: poly.stippling,
             });
             if emit_back_face {
                 // Reversed winding (A, C, B) + flipped normals so the back
@@ -5885,6 +5986,7 @@ fn append_gfx_tris_with_tex_swaps(
                     // E8: back face → negative side of the SAME polygon `pid`.
                     polygon_id: pid,
                     side_kind: SideKind::Negative,
+                    stippling: poly.stippling,
                 });
             }
         }
@@ -8621,6 +8723,10 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
     // emitted triangle, same order as positions/surface_indices.
     let mut polygon_ids: Vec<u16> = Vec::with_capacity(tris.len());
     let mut side_kinds: Vec<u8> = Vec::with_capacity(tris.len());
+    // RND-33: per-subset texture-address flags, grown alongside `surfaces`.
+    // The 0xFF "no surface" sentinel indexes nothing, so its tris contribute
+    // to no subset (they get the JS fallback material).
+    let mut subset_stippled: Vec<u8> = Vec::new();
 
     let mut bbox_min = [f32::INFINITY; 3];
     let mut bbox_max = [f32::NEG_INFINITY; 3];
@@ -8635,10 +8741,18 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
         } else {
             let idx = surfaces.len() as u8;
             surfaces.push(tri.surface_did);
+            subset_stippled.push(0);
             sidx_lookup.insert(tri.surface_did, idx);
             idx
         };
         surface_indices.push(sidx);
+        // RND-33: OR this tri's stipple bits into its subset. bit 0 mirrors
+        // acclient.c:456003 (`mask |= stippling > 0`, side-agnostic); bit 1
+        // mirrors acclient.c:455236 (positive side reads `stippling & 1`,
+        // negative side `stippling & 2`).
+        if sidx != 0xFF {
+            subset_stippled[sidx as usize] |= tri_stipple_bits(tri.stippling, tri.side_kind);
+        }
         sides_types.push(tri.sides_type);
         // E8: trace this tri to its source polygon + side.
         polygon_ids.push(tri.polygon_id);
@@ -8682,6 +8796,11 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
         // E8: per-tri (polygon, side) provenance.
         polygon_ids,
         side_kinds,
+        // RND-33: per-subset texture-address flags.
+        subset_stippled,
+        // RND-04: the generic pack has no cell frame and no light set;
+        // the EnvCell path post-fills this. Empty = "not baked".
+        baked_light_rgb: Vec::new(),
     }
 }
 
@@ -17554,7 +17673,11 @@ impl EnvCellPlacement {
             decode_misses: 0,
             // E8: empty replacement mesh — no triangles, no provenance.
             polygon_ids: Vec::new(),
+            // RND-04: no triangles, so no baked colours either.
+            baked_light_rgb: Vec::new(),
             side_kinds: Vec::new(),
+            // RND-33: no surfaces -> no per-subset flags.
+            subset_stippled: Vec::new(),
         })
     }
 }
@@ -17706,6 +17829,7 @@ fn append_environment_tris(
                     // E8: EnvCell polys emit the positive (front) side.
                     polygon_id: pid,
                     side_kind: SideKind::Positive,
+                    stippling: poly.stippling,
                 });
                 // G16 fix-2: emit the distinct back face. Reversed winding
                 // (A, C, B) + flipped normals + neg-UV ring, mirroring the
@@ -17723,6 +17847,7 @@ fn append_environment_tris(
                         // E8: back face → negative side of the SAME polygon.
                         polygon_id: pid,
                         side_kind: SideKind::Negative,
+                        stippling: poly.stippling,
                     });
                 }
             }
@@ -18972,6 +19097,80 @@ pub fn holtburg_test_door_rotation_keyframe() -> u32 {
 /// placements equals `LandblockInfo.num_cells` for the requested
 /// landblock — not all landblocks have EnvCells (open countryside
 /// returns []).
+/// Gather every EnvCell's static lights once per landblock, keyed by the
+/// cell's low 16 bits (the same index `EnvCell.visible_cells` uses).
+///
+/// Retail's static pool is fed by `CObjCell::add_static_to_global_lights`
+/// (acclient.c:346859) over the loaded visible-cell table; the DAT-side
+/// equivalent is "every stab in the cell that resolves to a `0x02` Setup
+/// with a light table". `collect_setup_model_lights` is REUSED verbatim so
+/// the bake and the live `fetchSetupModelLights` pool path can never
+/// disagree about a light's colour, intensity or falloff.
+#[cfg(target_arch = "wasm32")]
+fn collect_landblock_bake_lights<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    cells_raw: &[holtburger_dat::file_type::EnvCell],
+) -> std::collections::HashMap<u16, Vec<vertex_bake::PlacedLight>> {
+    let mut per_cell: std::collections::HashMap<u16, Vec<vertex_bake::PlacedLight>> =
+        std::collections::HashMap::new();
+    // Setups repeat heavily inside one landblock (a hall is the same sconce
+    // 30×) — memo the parse, mirroring `env_record_cache`.
+    let mut setup_memo: std::collections::HashMap<u32, std::rc::Rc<Vec<SetupLight>>> =
+        std::collections::HashMap::new();
+    for envcell in cells_raw {
+        let mut lights: Vec<vertex_bake::PlacedLight> = Vec::new();
+        for stab in &envcell.static_objects {
+            // 0x01 raw GfxObjs have no Setup and so no light table.
+            if (stab.stab_id >> 24) as u8 != 0x02 {
+                continue;
+            }
+            let setup_lights = setup_memo
+                .entry(stab.stab_id)
+                .or_insert_with(|| {
+                    std::rc::Rc::new(collect_setup_model_lights(source, stab.stab_id))
+                })
+                .clone();
+            for sl in setup_lights.iter() {
+                // acclient.c:454987 dispatches on `LIGHTINFO::type`: 0 →
+                // calc_point_light, 1 → directional, ANYTHING ELSE → no
+                // contribution at all (the `if (type)` arm has no else). A
+                // genuine spot therefore never enters the static bake and
+                // stays a live pool light. Our type proxy is the same one
+                // `makeThreeLightForSetupLight` uses (cone_angle > 0 ⇒
+                // SpotLight); all 285 lights in the four dat-dump venues
+                // carry an UNINITIALISED cone_angle (bit pattern
+                // 0xE6666660 ≈ -2.3e23), i.e. every shipped Setup light is
+                // a point light.
+                if sl.cone_angle.is_finite() && sl.cone_angle > 0.0 {
+                    continue;
+                }
+                if !(sl.falloff > 0.0) || !sl.intensity.is_finite() {
+                    continue;
+                }
+                let q = stab.position.orientation;
+                let rotated = vertex_bake::rotate_by(
+                    [q.w, q.x, q.y, q.z],
+                    [sl.x, sl.y, sl.z],
+                );
+                lights.push(vertex_bake::PlacedLight {
+                    pos: [
+                        stab.position.origin.x + rotated[0],
+                        stab.position.origin.y + rotated[1],
+                        stab.position.origin.z + rotated[2],
+                    ],
+                    color: [sl.color_r, sl.color_g, sl.color_b],
+                    intensity: sl.intensity,
+                    falloff: sl.falloff,
+                });
+            }
+        }
+        if !lights.is_empty() {
+            per_cell.insert((envcell.cell_id & 0xFFFF) as u16, lights);
+        }
+    }
+    per_cell
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchEnvCellsInLandblock)]
 pub async fn fetch_env_cells_in_landblock(
@@ -19122,6 +19321,15 @@ pub async fn fetch_env_cells_in_landblock(
         Option<std::rc::Rc<holtburger_dat::file_type::Environment>>,
     > = std::collections::HashMap::new();
 
+    // RND-04 — every static light in this landblock, landblock-local, keyed
+    // by owning cell index. Built ONCE (the per-cell bake below reads own +
+    // VisibleCells out of it), after the stab batch-prefetch above has
+    // already pulled every Setup into the shard cache, so this adds no
+    // network round-trips.
+    let bake_lights_by_cell = collect_landblock_bake_lights(source.as_ref(), &cells_raw);
+    let mut baked_cells: u32 = 0;
+    let mut bake_capped_cells: u32 = 0;
+
     let mut out: Vec<EnvCellPlacement> = Vec::with_capacity(cells_raw.len());
     for envcell in cells_raw {
         let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
@@ -19144,7 +19352,7 @@ pub async fn fetch_env_cells_in_landblock(
             surfaces.hash(&mut h);
             h.finish()
         };
-        let mesh = env_mesh_cache
+        let mut mesh = env_mesh_cache
             .entry((env_did, cell_structure, surfaces_hash))
             .or_insert_with(|| {
                 fetch_environment_mesh(source.as_ref(), env_did, &surfaces, cell_structure)
@@ -19157,6 +19365,75 @@ pub async fn fetch_env_cells_in_landblock(
             z: envcell.position.origin.z,
         };
         let cell_orientation = envcell.position.orientation;
+
+        // === RND-04 — burn the static lighting into the cell mesh ==========
+        // Retail: `DrawEnvCell` (acclient.c:456900) calls
+        // `SetStaticLightingVertexColors(cell->constructed_mesh, &cell->pos)`
+        // every draw; the body (acclient.c:454918) early-outs unless the
+        // static pool COUNT changed, converts each pooled light into the
+        // cell's frame (`LIGHTINFO::convert_to_local` acclient.c:454319) and
+        // accumulates per vertex. We do it ONCE here, over the cell's own +
+        // `VisibleCells` static lights, because that set is stable — retail's
+        // count-triggered re-burn exists only because its bake is lazy.
+        //
+        // MUST run on the per-cell `clone_for_take()` copy, never on the
+        // `env_mesh_cache` entry: sibling cells legitimately share geometry
+        // while having completely different light sets.
+        {
+            let cell_q = [
+                cell_orientation.w,
+                cell_orientation.x,
+                cell_orientation.y,
+                cell_orientation.z,
+            ];
+            let cell_lb_origin = [
+                envcell.position.origin.x,
+                envcell.position.origin.y,
+                envcell.position.origin.z,
+            ];
+            let own_index = (envcell.cell_id & 0xFFFF) as u16;
+            // Own cell first, then the DAT-baked PVS. `visible_cells` is the
+            // authored transitive portal closure, so this is a superset of
+            // every light that can reach the room through an opening —
+            // strictly more than retail's runtime pool would hold when the
+            // player stands elsewhere, and independent of where they stand.
+            let mut sources: Vec<u16> = Vec::with_capacity(1 + envcell.visible_cells.len());
+            sources.push(own_index);
+            for &vis in &envcell.visible_cells {
+                if vis != own_index && !sources.contains(&vis) {
+                    sources.push(vis);
+                }
+            }
+            let mut candidates: Vec<vertex_bake::PlacedLight> = Vec::new();
+            for src in &sources {
+                if let Some(list) = bake_lights_by_cell.get(src) {
+                    candidates.extend_from_slice(list);
+                }
+            }
+            let pool = vertex_bake::select_cell_pool(
+                cell_lb_origin,
+                cell_q,
+                &candidates,
+                mesh.bbox_min,
+                mesh.bbox_max,
+            );
+            if pool.dropped_by_cap > 0 {
+                // No silent caps: a truncated pool reads as "covered
+                // everything" when it did not.
+                log::warn!(
+                    "[RND-04] cell 0x{:08X}: {} reaching static lights dropped by Render::max_static_lights ({})",
+                    envcell.cell_id,
+                    pool.dropped_by_cap,
+                    vertex_bake::MAX_STATIC_LIGHTS
+                );
+                bake_capped_cells += 1;
+            }
+            mesh.baked_light_rgb =
+                vertex_bake::bake_vertex_colors(&mesh.positions, &mesh.normals, &pool.lights);
+            if !mesh.baked_light_rgb.is_empty() {
+                baked_cells += 1;
+            }
+        }
 
         let mut portal_cell_ids: Vec<u32> = Vec::with_capacity(envcell.portals.len());
         for portal in &envcell.portals {
@@ -19645,6 +19922,17 @@ pub async fn fetch_env_cells_in_landblock(
             mesh,
         });
     }
+    // RND-04: a landblock whose interiors all baked to zero lights is a
+    // legitimate outcome (unlit service cells) but is also exactly what a
+    // broken Setup-light join looks like — report both counts so the
+    // headless smoke can assert on them.
+    log::debug!(
+        "[RND-04] fetchEnvCellsInLandblock 0x{landblock_high:08X}: baked {}/{} cells, {} light-source cells, {} capped",
+        baked_cells,
+        out.len(),
+        bake_lights_by_cell.len(),
+        bake_capped_cells
+    );
     Ok(out)
 }
 
@@ -19759,6 +20047,14 @@ impl ModelMesh {
             // E8: per-tri (polygon, side) provenance survives the clone.
             polygon_ids: self.polygon_ids.clone(),
             side_kinds: self.side_kinds.clone(),
+            // RND-04: the env_mesh_cache entry is SHARED across sibling
+            // cells that select the same (env, cellstruct, surfaces); the
+            // bake is PER CELL (different light sets), so the cached entry
+            // stays unbaked and each clone is baked after this call.
+            baked_light_rgb: self.baked_light_rgb.clone(),
+            // RND-33: per-subset flags survive the clone (same length as
+            // `surfaces`, so the two must never diverge).
+            subset_stippled: self.subset_stippled.clone(),
         }
     }
 }
@@ -53530,6 +53826,40 @@ mod tests_substitution {
         assert_eq!(SideKind::Negative as u8, 2);
     }
 
+    /// RND-33 — `tri_stipple_bits` must keep retail's TWO disagreeing readings
+    /// of the per-polygon `Stippling` byte separate. StipplingType values per
+    /// `graphics.rs`: None=0x0, Positive=0x1, Negative=0x2, Both=0x3,
+    /// NoPos=0x4, NoNeg=0x8.
+    #[test]
+    fn tri_stipple_bits_separates_the_two_retail_readings() {
+        // Unstippled -> CLAMP under both readings.
+        assert_eq!(tri_stipple_bits(0x0, SideKind::Positive), 0x0);
+        assert_eq!(tri_stipple_bits(0x0, SideKind::Negative), 0x0);
+
+        // Positive(0x1): the positive-side draw WRAPs under both; the
+        // negative-side draw only under the side-agnostic DrawMesh reading.
+        assert_eq!(tri_stipple_bits(0x1, SideKind::Positive), 0x3);
+        assert_eq!(tri_stipple_bits(0x1, SideKind::PositiveReversed), 0x3);
+        assert_eq!(tri_stipple_bits(0x1, SideKind::Negative), 0x1);
+
+        // Negative(0x2): mirror image.
+        assert_eq!(tri_stipple_bits(0x2, SideKind::Negative), 0x3);
+        assert_eq!(tri_stipple_bits(0x2, SideKind::Positive), 0x1);
+
+        // Both(0x3): every side WRAPs under both readings.
+        assert_eq!(tri_stipple_bits(0x3, SideKind::Positive), 0x3);
+        assert_eq!(tri_stipple_bits(0x3, SideKind::Negative), 0x3);
+
+        // NoPos(0x4) / NoNeg(0x8) are UV-LAYOUT bits, not stipple flags. They
+        // are exactly where the two retail readings diverge: acclient.c:456003
+        // tests the whole byte (> 0) and so sets bit 0, while :455236 tests only
+        // 0x1 / 0x2 and so leaves bit 1 clear.
+        assert_eq!(tri_stipple_bits(0x4, SideKind::Positive), 0x1);
+        assert_eq!(tri_stipple_bits(0x8, SideKind::Negative), 0x1);
+        // NoUVS(0x14) likewise.
+        assert_eq!(tri_stipple_bits(0x14, SideKind::Positive), 0x1);
+    }
+
     // followup (2026-06-03) — minimal GfxObj that carries ONLY a
     // `did_degrade` ref (no drawing / physics / surfaces). Round-trips
     // through `GfxObj::pack`/`unpack` so `resolve_did_degrade` walks the
@@ -59314,6 +59644,7 @@ mod tests_surface_cache {
                 sides_type: 0,
                 polygon_id: 0,
                 side_kind: SideKind::Positive,
+                stippling: 0,
             };
             let tris = vec![tri; 4];
             let bytes = model_tri_bytes(&tris);
@@ -59348,6 +59679,7 @@ mod tests_surface_cache {
             sides_type: 0,
             polygon_id: 0,
             side_kind: SideKind::Positive,
+            stippling: 0,
         };
         let per_entry_tris = 1000usize;
         let bytes = model_tri_bytes(&vec![tri.clone(); per_entry_tris]);

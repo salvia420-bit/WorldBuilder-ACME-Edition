@@ -102,13 +102,25 @@ function _stateKeyOf(mat) {
     b === THREE.CustomBlending
       ? `c${mat.blendSrc}.${mat.blendDst}.${mat.blendEquation}`
       : `b${b}`;
+  // RND-33 — the sampler ADDRESS MODE is part of the render state: a surface
+  // batched into a texture ARRAY layer can only be addressed one way, and a
+  // WRAP member sharing a bucket with CLAMP members would sample the wrong
+  // texels once its UVs leave [0,1]. Keyed on the resolved wrapS (wrapT is
+  // always set with it -- SetSurface applies one mode to both U and V,
+  // acclient.c:454437) so WRAP and CLAMP surfaces never co-bucket.
+  const wr = mat.map?.wrapS === THREE.RepeatWrapping ? "w" : "c";
   // full precision, not toFixed — the key must round-trip the ref EXACTLY
   // (100/255 and 200/255 are non-terminating) so the bucket material's cutoff
   // is bit-identical to its members'.
-  return `${mat.transparent ? 1 : 0}|${String(at)}|${dw}|${blend}`;
+  return `${mat.transparent ? 1 : 0}|${String(at)}|${dw}|${blend}|${wr}`;
 }
 
 function _applyStateKey(m, stateKey) {
+  // RND-33: the trailing wrap field is deliberately NOT applied here. The
+  // bucket material samples the packed ATLAS ARRAY, whose own addressing must
+  // stay ClampToEdge (Repeat on a packed layer bleeds into the neighbouring
+  // tile); the field exists only to keep WRAP and CLAMP members in separate
+  // buckets. See _stateKeyOf.
   const [tr, at, dw, blend] = String(stateKey).split("|");
   m.transparent = tr === "1";
   m.alphaTest = Number(at) || 0;

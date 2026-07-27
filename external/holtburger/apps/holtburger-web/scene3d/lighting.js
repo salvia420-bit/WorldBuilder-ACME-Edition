@@ -722,6 +722,57 @@ export function __resetCellLightsConfigForTest(next) {
   _cellLightsConfig = next === undefined ? undefined : next;
 }
 
+// === RND-04 (2026-07-27) — baked statics leave the pool ====================
+// Once a cell's static lights are burned into its mesh vertices (Rust bake in
+// lib.rs, consumed by the materials.js emissive-add), keeping the same lights
+// live is a DOUBLE count of the same photons AND re-creates exactly the slot
+// competition RND-05/03 exists to kill. Retail's `Render::minimize_envcell_lighting`
+// (acclient.c:379652) enables dynamic lights ONLY for an EnvCell draw for the
+// same reason. So: interior cell statics stop being recorded at all — no
+// THREE.PointLight is constructed, nothing enters `scene3d.activeLights`, and
+// the pool is left to dynamics (entity SetLight, spell glows, viewer light),
+// which is under the slot budget by construction.
+//
+// SCOPE — this drops cell statics ONLY. Outdoor building/static lamps
+// (`__lbKey`-stamped) and entity lights are untouched.
+//
+// KNOWN DELTA, deliberately not papered over: retail's OBJECT draw path
+// (`Render::minimize_object_lighting` / `remove_object_light` @0x0054C1B0)
+// still walks the static pool, so retail's interior PROPS are lit by the same
+// lamps that the walls have baked. We bake the room mesh only, so props fall
+// back to ambient. `?vertexBakePool=keep` restores those lights to the pool
+// (props lit, walls double-lit) as the A/B arm until the prop bake lands.
+//
+// GATE — `scene3d._acVertexBakeActive` is set by cells.js only when a cell
+// mesh ACTUALLY carried the `acBakedLight` attribute. A wasm bundle that
+// predates the bake therefore leaves this path completely dormant instead of
+// darkening every dungeon.
+//
+// Reader semantics: `?vertexBake=off` (the off-family) and
+// `?vertexBakePool=keep` are the only strings that disable this; an ABSENT
+// param is ON.
+let _vertexBakePoolConfig;
+function getVertexBakePoolConfig() {
+  if (_vertexBakePoolConfig !== undefined) return _vertexBakePoolConfig;
+  const cfg = { dropCellStatics: true };
+  const ps = _rp5ReadParams();
+  if (ps) {
+    const bake = (ps.get("vertexBake") || "").toLowerCase();
+    if (bake === "off" || bake === "false" || bake === "0" || bake === "no") {
+      cfg.dropCellStatics = false;
+    }
+    const keep = (ps.get("vertexBakePool") || "").toLowerCase();
+    if (keep === "keep" || keep === "on" || keep === "1") cfg.dropCellStatics = false;
+  }
+  _vertexBakePoolConfig = cfg;
+  return _vertexBakePoolConfig;
+}
+
+// Test seam — mirrors the two above.
+export function __resetVertexBakePoolConfigForTest(next) {
+  _vertexBakePoolConfig = next === undefined ? undefined : next;
+}
+
 // FNV-1a over a sorted Uint32Array — the cell-set identity key. getRenderSet
 // returns sorted-ascending ids, so equal sets hash equal without re-sorting.
 function hashCellSet(arr) {
@@ -1878,6 +1929,10 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
     // (owned by entities.js remove()) so they never land here.
     /** @type {Map<number, THREE.Light[]>} */
     lightsByLbKey: new Map(),
+    // RND-04 — interior prop lights skipped because their cell's mesh
+    // carries the burned-in static lighting. Non-zero here plus a zero
+    // `__cellId` count in the pool is what the headless smoke asserts on.
+    cellStaticsBaked: 0,
   };
 
   if (!scene3d) return summary;
@@ -2036,6 +2091,12 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
   // contribute — exactly the lanterns we want.
   function recordCellStatics(cellsGroup) {
     if (!cellsGroup || !Array.isArray(cellsGroup.children)) return;
+    // RND-04 seam: the bake already carries these photons in the cell mesh's
+    // vertices, so the live twins never get constructed. Gated on the bake
+    // having actually produced an attribute (see getVertexBakePoolConfig).
+    const dropBaked =
+      getVertexBakePoolConfig().dropCellStatics &&
+      scene3d._acVertexBakeActive === true;
     for (const cellContainer of cellsGroup.children) {
       if (!cellContainer || !Array.isArray(cellContainer.children)) continue;
       for (const mesh of cellContainer.children) {
@@ -2045,6 +2106,10 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         if (!modelId) continue;
         if (ud.__setupLightScanned) continue;
         ud.__setupLightScanned = true;
+        if (dropBaked) {
+          summary.cellStaticsBaked += 1;
+          continue;
+        }
         // C3 #6 — resolve the cell static's lb-key from its cellId
         // (cellId & 0xffff_0000 === lbKey) so eviction can splice this
         // interior prop's lights.

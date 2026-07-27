@@ -830,6 +830,23 @@ export function meshToGeometryGroups(wasmMesh, opts) {
   const normals = wasmMesh.normals; // Float32Array, len = triCount * 9 (per-vertex, T6)
   const sIdx = wasmMesh.surfaceIndices; // Uint8Array, len = triCount
   const surfaces = wasmMesh.surfaces; // Uint32Array, unique DIDs
+  // RND-33 — per-surface-subset texture-address bits (bit 0 = the DrawMesh
+  // reading, bit 1 = the side-specific SetSurface reading; see
+  // ModelMesh::subset_stippled). ADDITIVE + ALL-OR-NOTHING, mirroring the
+  // DAT-01 V3 `aabb_*` convention: a stale `pkg-web` has no getter, and a
+  // wrong-length array means the wasm and JS views of `surfaces` disagree.
+  // Either way we hand back `null` so the consumer keeps its prior wrap
+  // default instead of reading "absent" as "nothing is stippled" and
+  // clamping every surface.
+  let subsetStippledSrc = null;
+  try {
+    const raw = wasmMesh.subsetStippled;
+    if (raw && raw.length === surfaces.length) {
+      subsetStippledSrc = Uint8Array.from(raw);
+    }
+  } catch (_) {
+    subsetStippledSrc = null;
+  }
 
   // T2 (2026-05-28): per-poly back-face culling. Default OFF — the renderer
   // has always drawn objects DoubleSide (so winding never mattered). When
@@ -850,6 +867,21 @@ export function meshToGeometryGroups(wasmMesh, opts) {
     } catch (_) {
       sidesTypes = null;
     }
+  }
+
+  // RND-04 — retail's burned-in static lighting (`bakedLightRgb`, 3 bytes per
+  // VERTEX = triCount * 9). Only the EnvCell pack path fills it; every other
+  // mesh (statics, entities, buildings) ships it empty. A wasm bundle that
+  // predates the getter throws or yields undefined, so the length check is
+  // what makes this soft-degrade to "no attribute", which the material gate
+  // reads as bake-off. A SHORT buffer is rejected rather than padded: a
+  // partial colour array would silently mis-shade the tail of the mesh.
+  let bakedLight = null;
+  try {
+    const raw = wasmMesh.bakedLightRgb;
+    if (raw && raw.length === triCount * 9) bakedLight = raw; // Uint8Array
+  } catch (_) {
+    bakedLight = null;
   }
 
   // Bucket triangles by surfaceIndex (cull off) or by (surfaceIndex,
@@ -895,6 +927,10 @@ export function meshToGeometryGroups(wasmMesh, opts) {
     const groupPositions = new Float32Array(n * 9);
     const groupUvs = new Float32Array(n * 6);
     const groupNormals = new Float32Array(n * 9); // per-vertex normals (T6)
+    // RND-04: same 9-per-tri vertex stride as position/normal, one byte per
+    // channel. Follows the SAME `order[]` permutation so a re-wound group
+    // keeps each vertex's own baked colour.
+    const groupBaked = bakedLight ? new Uint8Array(n * 9) : null;
 
     for (let i = 0; i < n; i += 1) {
       const t = triIndices[i];
@@ -911,6 +947,11 @@ export function meshToGeometryGroups(wasmMesh, opts) {
         groupNormals[i * 9 + d * 3 + 0] = normals[nSrc + sv * 3 + 0];
         groupNormals[i * 9 + d * 3 + 1] = normals[nSrc + sv * 3 + 1];
         groupNormals[i * 9 + d * 3 + 2] = normals[nSrc + sv * 3 + 2];
+        if (groupBaked) {
+          groupBaked[i * 9 + d * 3 + 0] = bakedLight[pSrc + sv * 3 + 0];
+          groupBaked[i * 9 + d * 3 + 1] = bakedLight[pSrc + sv * 3 + 1];
+          groupBaked[i * 9 + d * 3 + 2] = bakedLight[pSrc + sv * 3 + 2];
+        }
       }
     }
 
@@ -927,9 +968,23 @@ export function meshToGeometryGroups(wasmMesh, opts) {
       "normal",
       new THREE.BufferAttribute(groupNormals, 3, false)
     );
+    // RND-04: `normalized = true` so the u8 0..255 arrives in the shader as
+    // 0..1 with no extra uniform. Deliberately NOT named "color" — three's
+    // stock `vertexColors` path MULTIPLIES into diffuse, while retail applies
+    // this as an EMISSIVE ADD (`SetFFEmissiveColorSource(FromVertex)`
+    // acclient.c:454724). A custom name keeps the two from ever colliding.
+    if (groupBaked) {
+      geom.setAttribute(
+        "acBakedLight",
+        new THREE.BufferAttribute(groupBaked, 3, true)
+      );
+    }
     geom.computeBoundingSphere();
 
     let surfaceDid;
+    // RND-33 — null when the wasm did not supply the array (see above); the
+    // FALLBACK subset indexes nothing on the wasm side and so has no bits.
+    let subsetStippled = null;
     if (surfIdx === FALLBACK_SURFACE_INDEX) {
       surfaceDid = FALLBACK_SURFACE_DID;
     } else {
@@ -938,11 +993,12 @@ export function meshToGeometryGroups(wasmMesh, opts) {
       // index into this Uint32Array.
       surfaceDid = surfaces[surfIdx] >>> 0;
       surfaceDids.push(surfaceDid);
+      if (subsetStippledSrc) subsetStippled = subsetStippledSrc[surfIdx];
     }
-    groups.push({ geometry: geom, surfaceDid, doubleSided });
+    groups.push({ geometry: geom, surfaceDid, doubleSided, subsetStippled });
   }
 
-  return { groups, surfaceDids };
+  return { groups, surfaceDids, subsetStippled: subsetStippledSrc };
 }
 
 /**

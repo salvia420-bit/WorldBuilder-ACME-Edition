@@ -1334,16 +1334,25 @@ vec3 atlasUvFor(int code, vec2 cellUv) {
   return vec3(fract(cellUv * tiling), float(code));
 }
 
-// T1 — rotate an intra-cell UV ([0,1]²) by 90° steps around its centre, so a
-// single authored alpha mask covers all four corner orientations (the retail
-// LandDefs::Rotation the selection core resolves per overlay). The rotation
-// SIGN is a convention to confirm by eye-test on the 1070; flip the 90°/270°
-// branches if the masked overlays land on the wrong corner.
+// T1 — rotate an intra-cell UV ([0,1]^2) by 90 deg steps around its centre, so
+// a single authored alpha mask covers all four corner orientations (the retail
+// LandDefs::Rotation the selection core resolves per overlay).
 //
-// uMaskRotFlip (2026-06-21) swaps the 90°/270° steps at runtime so the correct
-// orientation can be A/B'd live (set material.uniforms.uMaskRotFlip.value=1)
-// without a reload+recompile. Once the right sign is eye-confirmed it becomes
-// the static default and this toggle can go.
+// The SIGN is now pinned numerically, not by eye. ImgTex::MergeTexture
+// (acclient.c:365632) reads the mask for dest pixel (row r, col c) at
+// rot0 a[r][c], rot1 a[c][w-1-r], rot2 a[h-1-r][w-1-c], rot3 a[h-1-c][r].
+// Authored row 0 = NORTH and col 0 = WEST (forced: the corner masks are dark in
+// the row0/col0 quadrant and carry TCode 8, and TCode bit 8 = NW per
+// GetCellRotation + BuildTCodes). Substituting the cell frame
+// (cellUv.x = east, cellUv.y = north, so r = 1 - y and c = x) gives the mask
+// texel each rot must read as (u = col, v = row):
+//   rot0 (x, 1-y)   rot1 (y, x)   rot2 (1-x, y)   rot3 (1-y, 1-x)
+// which is exactly maskUvFor()'s flip of the branches below. The dark corner
+// therefore walks NW -> SW -> SE -> NE per step, matching the TCode rol4 cycle
+// 8 -> 1 -> 2 -> 4.
+//
+// uMaskRotFlip / ?texMergeRot=flip restore the pre-fix (N-S mirrored) sign for
+// live A/B; default 0 is the retail-exact one.
 uniform float uMaskRotFlip;
 vec2 rotateCellUv(vec2 uv, int rot) {
   if (uMaskRotFlip > 0.5) {
@@ -1351,10 +1360,23 @@ vec2 rotateCellUv(vec2 uv, int rot) {
     else if (rot == 3) rot = 1;
   }
   vec2 c = uv - 0.5;
-  if (rot == 1) c = vec2(-c.y, c.x);        // 90°
-  else if (rot == 2) c = vec2(-c.x, -c.y);  // 180°
-  else if (rot == 3) c = vec2(c.y, -c.x);   // 270°
+  if (rot == 1) c = vec2(c.y, -c.x);        // 90
+  else if (rot == 2) c = vec2(-c.x, -c.y);  // 180
+  else if (rot == 3) c = vec2(-c.y, c.x);   // 270
   return c + 0.5;
+}
+
+// T1 — cell UV to alpha-mask texture UV for a given rotation. The mask array is
+// a DataArrayTexture uploaded row-major with no flipY (adapter.js
+// buildAlphaMaskArrayBytes copies source rows in order), so texture v = 0 is
+// authored row 0 = NORTH, while cellUv.y = 0 is the cell's SOUTH edge. The
+// 1.0 - y here is that N-S reflection; without it the sampling frame is a
+// vertical mirror of the authored frame, which used to cancel against the
+// N-S-reversed pcode corner gather in build_terrain_merge_data. Both were
+// fixed together -- reintroducing either alone mirrors every overlay.
+vec2 maskUvFor(vec2 cellUv, int rot) {
+  vec2 m = rotateCellUv(cellUv, rot);
+  return vec2(m.x, 1.0 - m.y);
 }
 
 int vertexTypeAt(int iu, int iv) {
@@ -1652,7 +1674,7 @@ void main() {
         int layer = int(t.r * 255.0 + 0.5);
         int maskIdx = int(t.g * 255.0 + 0.5);
         int rot = int(t.b * 255.0 + 0.5);
-        vec2 mUv = rotateCellUv(cellUv, rot);
+        vec2 mUv = maskUvFor(cellUv, rot);
         // 2026-07-02 — RETAIL MASK SENSE. ImgTex::MergeTexture
         // (acclient.c:365787) computes dst = (a*dst + (256-a)*src) >> 8 where
         // dst is the composited BASE tile and src the incoming OVERLAY: the
@@ -2637,7 +2659,7 @@ export async function resolveTerrainRingOpts(
     texMergeAlphaArray: texMergeState?.alphaArray ?? null,
     texMergeEnabled: !!texMergeState,
     // 2026-06-21 — ?texMergeRot=flip swaps the alpha-mask 90°/270° rotation
-    // (rotateCellUv) for the eye-test of the correct overlay orientation.
+    // (rotateCellUv) back to the pre-fix N-S-mirrored sign, for A/B only.
     // 2026-06-21 — ?paintMode=winner switches the per-fragment blend to
     // stochastic per-vertex winner-take-all (organic noise-shaped edges,
     // distinct textures, no blocks). ?paintNoiseFreq + ?paintNoiseStrength
@@ -3531,9 +3553,9 @@ export async function bakeTerrainForLandblock(
         value: opts.texMergeEnabled && mergeDataTex ? 1.0 : 0.0,
       },
       // 2026-06-21 — runtime A/B toggle for the alpha-mask rotation sign (see
-      // rotateCellUv). Default 0 (current convention); set to 1 live to swap
-      // the 90°/270° steps and eye-test which orientation lands the organic
-      // overlay masks on the correct corner. Honour ?texMergeRot=flip too.
+      // rotateCellUv). Default 0 is now the retail-exact sign (derived from
+      // MergeTexture's rotation addressing, not eye-tested); 1 restores the
+      // pre-fix N-S-mirrored sign. Honour ?texMergeRot=flip too.
       uMaskRotFlip: { value: opts.maskRotFlip ? 1.0 : 0.0 },
       // 2026-06-21 — per-vertex stochastic painting (?paintMode=winner).
       uPaintMode: { value: (opts.paintMode === "winner" || opts.paintMode === "warp") ? 1.0 : 0.0 },

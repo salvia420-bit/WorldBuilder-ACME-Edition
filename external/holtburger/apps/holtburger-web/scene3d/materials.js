@@ -98,8 +98,6 @@ const FALLBACK_SURFACE_DID = 0;
 // identical for UVs within [0,1], so defaulting to Repeat is safe for
 // non-tiling surfaces and fixes the tiling ones. Default-on;
 // `?surfaceWrapClamp=on` restores the old clamp-default for A/B.
-// TODO(faithful): drive wrap from per-polygon CPolygon.stippling, plumbed
-// through the wasm adapter → mesh builder, instead of this surface-wide default.
 const _SURFACE_WRAP_CLAMP = (() => {
   try {
     return (
@@ -110,6 +108,64 @@ const _SURFACE_WRAP_CLAMP = (() => {
     return false;
   }
 })();
+
+// === RND-33 (2026-07-27) — per-polygon-stipple wrap, the faithful source =====
+// The TODO the block above carried is now plumbed: the wasm ships
+// `ModelMesh.subsetStippled`, one byte per surface subset, OR-ed over that
+// subset's polygons (see `ModelMesh::subset_stippled` /
+// `tri_stipple_bits`). Bit 0 is the batched `DrawMesh` reading
+// (`acclient.c:456003` `mask |= stippling > 0`, forwarded at `:454676`); bit 1
+// is the side-specific `SetSurface(CPolygon*, Sidedness, int)` reading
+// (`acclient.c:455236`: positive side `stippling & 1`, negative `& 2`). Set ->
+// `TEXADDRESS_WRAP`, clear -> `TEXADDRESS_CLAMP` (`acclient.c:454437`).
+//
+// `?surfaceStippleWrap=` selects which reading drives the sampler:
+//   off (DEFAULT) — ignore the bits; keep the G2-fix Repeat default. Retail
+//                   fidelity here means CLAMPing every unstippled surface,
+//                   which is exactly what the 2026-06-19 G2-fix reverted after
+//                   the 1070 showed conifer bark (0x02000257 / surface
+//                   0x0800157e, UVs 0..4.7) rendering as a flat stretched
+//                   cylinder. Turning this on without first censusing the
+//                   Stippling byte across the DATs would re-break that.
+//   drawmesh      — bit 0 (what retail's batched path actually did).
+//   polygon       — bit 1 (side-correct, what our per-side triangulation can
+//                   represent and retail's non-batched path used).
+const _SURFACE_STIPPLE_WRAP = (() => {
+  try {
+    const v = (new URLSearchParams(globalThis.location.search).get("surfaceStippleWrap") || "")
+      .toLowerCase();
+    return v === "drawmesh" || v === "polygon" ? v : "off";
+  } catch {
+    return "off";
+  }
+})();
+
+/**
+ * RND-33 — the sampler address mode for one surface subset.
+ *
+ * `subsetStippled` is the wasm per-subset byte, or `null`/`undefined` when the
+ * wasm did not supply one (stale `pkg-web`, fused geometry, terrain). ABSENT IS
+ * NOT "UNSTIPPLED": with no bits to read this returns the pre-RND-33 default,
+ * so a stale pkg degrades inert rather than clamping the world.
+ *
+ * Terrain is deliberately out of scope: `CLandBlockStruct::ConstructUVs`
+ * (`acclient.c:354717-354718`) sets `polygon.stippling = 3` on both triangles
+ * of a cell iff `bSingleTextureCell`, i.e. uniform cells WRAP and blended cells
+ * CLAMP. Our atlas base tiles are already fract-tiled (WRAP-equivalent) and the
+ * alpha-mask array is ClampToEdge, so the per-cell distinction only starts to
+ * matter if we ever composite one texture per cell.
+ */
+export function wrapModeForSubsetStipple(subsetStippled) {
+  const legacy = _SURFACE_WRAP_CLAMP
+    ? THREE.ClampToEdgeWrapping
+    : THREE.RepeatWrapping;
+  if (_SURFACE_STIPPLE_WRAP === "off") return legacy;
+  if (typeof subsetStippled !== "number") return legacy;
+  const bit = _SURFACE_STIPPLE_WRAP === "polygon" ? 0x2 : 0x1;
+  return (subsetStippled & bit) !== 0
+    ? THREE.RepeatWrapping
+    : THREE.ClampToEdgeWrapping;
+}
 
 // #22 (2026-06-07) — paletted-material LRU cap. Each recolored outfit
 // signature (surface|palette|subPalettes) mints one cache-owned
@@ -479,6 +535,143 @@ export function applyStaticDepthBias(material) {
   });
   material.userData = material.userData ?? {};
   material.userData.__staticBiased = true;
+}
+
+// === RND-04 (2026-07-27) — BAKED STATIC LIGHT (retail vertex burn-in) ======
+//
+// Retail bakes every static light in the loaded cell set into the EnvCell
+// mesh's vertex DIFFUSE (`D3DPolyRender::SetStaticLightingVertexColors`
+// acclient.c:454918) and then draws that mesh with
+// `SetFFEmissiveColorSource(FromVertex)` (acclient.c:454724) — the baked
+// colour is an EMISSIVE ADD on top of ambient + the enabled hardware lights,
+// NOT a diffuse modulation. The wasm side ships the bytes as the
+// `acBakedLight` attribute (see adapter.js / lib.rs RND-04).
+//
+// Two retail behaviours, one flag:
+//   1. emissive-add of `albedo * bakedRGB` (always, when the bake is on);
+//   2. `Render::minimize_envcell_lighting` (acclient.c:379652) enables
+//      DYNAMIC lights only for an EnvCell draw — statics are already in the
+//      mesh, and the sun is not enabled indoors. three's light list is
+//      per-program, not per-draw, so the equivalent is to drop the DIRECT
+//      terms on this material and keep indirect + the bake.
+//
+//   ?vertexBake=off  everything off; cell meshes render exactly as today.
+//   ?vertexBake=lit  bake ADDS but direct light is kept (pure-additive A/B
+//                    arm — double-lights the walls, useful only for eyeball
+//                    diffing the bake against the live pool).
+//   (absent / anything else) = ON, both behaviours. Reader semantics are
+//   `=== "off"` / `=== "lit"`, so an ABSENT param is FULLY ON — do not infer
+//   the default from prose.
+export function readVertexBakeFlag() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      const raw = (
+        new URLSearchParams(globalThis.location.search || "").get("vertexBake") || ""
+      ).toLowerCase();
+      if (raw === "off" || raw === "false" || raw === "0" || raw === "no") {
+        return { enabled: false, suppressDirect: false };
+      }
+      if (raw === "lit" || raw === "add") {
+        return { enabled: true, suppressDirect: false };
+      }
+    }
+  } catch (_) {}
+  return { enabled: true, suppressDirect: true };
+}
+
+export const VERTEX_BAKE = readVertexBakeFlag();
+
+// Installs the bake term on a material. Idempotent (userData guard) and
+// chained, so it composes with the detail / CSM / light-clamp patches.
+//
+// Anchors chosen to not collide with anything else in this file: the light
+// clamp expands `<lights_pars_begin>` + `<lights_fragment_begin>`, so we take
+// `<lights_fragment_end>`, which nothing patches and which runs after every
+// RE_Direct/RE_IndirectDiffuse has accumulated into `reflectedLight`.
+export function applyBakedVertexLightPatch(material, opts = {}) {
+  if (!material || material.userData?.__acBakedLight) return;
+  const suppressDirect = opts.suppressDirect === true;
+  _chainBeforeCompile(material, (shader) => {
+    // Uniforms rather than #defines so a future light tick can cross-fade the
+    // bake without a shader relink (relink-freeze rule).
+    shader.uniforms.uAcBakedGain = { value: 1.0 };
+    shader.uniforms.uAcBakedSuppressDirect = { value: suppressDirect ? 1.0 : 0.0 };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        [
+          "#include <common>",
+          // three r184 aliases attribute/varying to in/out for GLSL3, so this
+          // one spelling compiles on both paths.
+          "attribute vec3 acBakedLight;",
+          "varying vec3 vAcBakedLight;",
+        ].join("\n"),
+      )
+      .replace(
+        "#include <begin_vertex>",
+        [
+          "#include <begin_vertex>",
+          // Gouraud by construction: retail interpolates the burned vertex
+          // diffuse across the triangle. No renormalisation, no clamping.
+          "vAcBakedLight = acBakedLight;",
+        ].join("\n"),
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        [
+          "#include <common>",
+          "varying vec3 vAcBakedLight;",
+          "uniform float uAcBakedGain;",
+          "uniform float uAcBakedSuppressDirect;",
+          // The baked bytes are in the AUTHORED (sRGB) space, exactly as the
+          // DAT stores the lamp ARGB and as retail writes the D3D diffuse.
+          // The live-light path decodes with setRGB(..., SRGBColorSpace) in
+          // lighting.js; decode here too or a baked lamp reads brighter and
+          // flatter than the same lamp run live. Piecewise EOTF is inlined
+          // rather than taken from a three chunk so this does not depend on
+          // colorspace_pars_fragment being included by the host material.
+          "vec3 acBakedEotf(vec3 c) {",
+          "  return mix(",
+          "    pow((c + 0.055) / 1.055, vec3(2.4)),",
+          "    c / 12.92,",
+          "    step(c, vec3(0.04045))",
+          "  );",
+          "}",
+        ].join("\n"),
+      )
+      .replace(
+        "#include <lights_fragment_end>",
+        [
+          "#include <lights_fragment_end>",
+          "{",
+          "  // acclient.c:379652 minimize_envcell_lighting: an EnvCell draw",
+          "  // enables DYNAMIC lights only. Statics live in the bake and the",
+          "  // sun is off indoors, so under the retail arm the direct terms",
+          "  // are dropped and indirect (ambient / IBL) plus the bake carry",
+          "  // the surface. uAcBakedSuppressDirect = 0 keeps them (?vertexBake=lit).",
+          "  float acKeepDirect = 1.0 - uAcBakedSuppressDirect;",
+          "  reflectedLight.directDiffuse *= acKeepDirect;",
+          "  reflectedLight.directSpecular *= acKeepDirect;",
+          "  // Emissive ADD, retail semantics: D3D fixed-function sums",
+          "  // emissive + ambient + lights into the vertex colour, then the",
+          "  // texture stage MODULATES by it, so the baked term arrives",
+          "  // scaled by the albedo. acclient.c:454724.",
+          "  reflectedLight.indirectDiffuse +=",
+          "    diffuseColor.rgb * acBakedEotf(vAcBakedLight) * uAcBakedGain;",
+          "}",
+        ].join("\n"),
+      );
+
+    // Stash for post-compile introspection by tests / capture scripts, same
+    // convention as lightClampShaderUniforms.
+    material.userData.acBakedLightUniforms = shader.uniforms;
+  });
+  material.userData = material.userData ?? {};
+  material.userData.__acBakedLight = true;
+  material.userData.__acBakedSuppressDirect = suppressDirect;
 }
 
 function _installDetailShaderPatch(material, detailTexture, opts = {}) {
@@ -2232,6 +2425,14 @@ export class MaterialCache {
     // coplanar depth tie against the cell surface behind them. Clones SHARE
     // textures; cache-owned; lazily minted; mirrors floorBiasMaterials lifecycle.
     this.staticBiasMaterials = new Map();
+    // RND-04 baked-static-light variants: .clone() of the DoubleSide base with
+    // applyBakedVertexLightPatch installed, used ONLY by EnvCell surface meshes
+    // (the geometries that carry `acBakedLight`). A separate map because the
+    // same surface DID is also drawn by props/buildings that have no bake and
+    // must keep their live lighting — sharing one material would leak the
+    // suppress-direct arm onto them. Clones SHARE textures; cache-owned;
+    // lazily minted; mirrors staticBiasMaterials lifecycle exactly.
+    this.cellBakedMaterials = new Map();
     // VFX component-variant clones (Visual-Behavior Suite). Keyed by
     // (surfaceDid|setKey|configKey); CLONES of the base material that share
     // textures. Dormant until a frag/MECH-B component calls getCachedVariant.
@@ -2616,6 +2817,7 @@ export class MaterialCache {
     take(this.frontSideMaterials);
     take(this.floorBiasMaterials);
     take(this.staticBiasMaterials);
+    take(this.cellBakedMaterials);
     take(this.particleUnlitMaterials);
     // VFX component variants are keyed `${did}|${setKey}|${configKey}`.
     if (this.vfxVariants.size > 0) {
@@ -2848,6 +3050,30 @@ export class MaterialCache {
    * sits flush against deterministically wins the GL_LESS depth tie instead of
    * flickering. Clone shares textures; cache-owned. Wire mode returns the base.
    */
+  /**
+   * RND-04 — the EnvCell variant of `getCached`: the shared base material
+   * plus the baked-static-light shader term. Call ONLY for geometry that
+   * carries the `acBakedLight` attribute; a mesh without it would read the
+   * attribute as (0,0,0) and, under the retail arm, lose its direct light
+   * with nothing replacing it (i.e. render black).
+   *
+   * Returns the plain base when the flag is off, so `?vertexBake=off` is
+   * byte-identical to the pre-RND-04 render.
+   */
+  getCachedCellBaked(surfaceDid) {
+    const base = this._getCachedDouble(surfaceDid);
+    if (this.wireframeMode || !VERTEX_BAKE.enabled) return base;
+    const key = surfaceDid >>> 0;
+    let v = this.cellBakedMaterials.get(key);
+    if (!v) {
+      v = base.clone();
+      v.userData = { ...(base.userData || {}), __cacheOwned: true };
+      applyBakedVertexLightPatch(v, { suppressDirect: VERTEX_BAKE.suppressDirect });
+      this.cellBakedMaterials.set(key, v);
+    }
+    return v;
+  }
+
   getCachedStaticBias(surfaceDid) {
     const base = this._getCachedDouble(surfaceDid);
     if (this.wireframeMode) return base;
@@ -3446,6 +3672,7 @@ export class MaterialCache {
       this.frontSideMaterials.delete(did >>> 0);
       this.floorBiasMaterials.delete(did >>> 0);
       this.staticBiasMaterials.delete(did >>> 0);
+      this.cellBakedMaterials.delete(did >>> 0);
     });
   }
 
@@ -3799,10 +4026,17 @@ export class MaterialCache {
     // G2-fix (2026-06-19, see _SURFACE_WRAP_CLAMP): default RepeatWrapping
     // (AC object textures tile; wrap is per-polygon stippling in retail, not the
     // surface Stippled bit). `?surfaceWrapClamp=on` restores the old clamp-default.
+    // RND-33: `overrides.subsetStippled` (the wasm per-subset byte, threaded by
+    // adapter.js meshToGeometryGroups) drives the sampler when
+    // ?surfaceStippleWrap is set; absent or flag-off keeps the G2-fix default.
+    // CACHE HAZARD: `this.materials` is keyed by surface DID alone, so one
+    // surface reused by a stippled and an unstippled subset shares ONE texture
+    // and the first caller wins. Extending the cache key is a prerequisite for
+    // making this the default -- see the flag block above.
     const isStippled = (flags & SURFACE_TYPE.Stippled) !== 0;
-    const wrapMode = (isStippled || !_SURFACE_WRAP_CLAMP)
+    const wrapMode = isStippled
       ? THREE.RepeatWrapping
-      : THREE.ClampToEdgeWrapping;
+      : wrapModeForSubsetStipple(overrides?.subsetStippled);
     if (texture) {
       texture.wrapS = texture.wrapT = wrapMode;
     }
@@ -3949,6 +4183,7 @@ export class MaterialCache {
       this.frontSideMaterials.delete(did);
       this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
       this.staticBiasMaterials.delete(did); // twin of the FrontSide invalidation
+      this.cellBakedMaterials.delete(did); // twin of the FrontSide invalidation
       // Render-completeness audit (2026-05-29) — kick animated-frame setup.
       this._maybeSetupSurfaceAnimation(did, mat, tex);
       return mat;
@@ -4453,10 +4688,13 @@ export class MaterialCache {
     // hardcodes RepeatWrapping; override per-surface. FAIL-SOFT: surfaceType
     // 0/missing → ClampToEdge. Only a base `tex` here (no normal/height).
     // G2-fix (2026-06-19, see _SURFACE_WRAP_CLAMP): default RepeatWrapping.
+    // RND-33: entity-owned recolour surfaces arrive without subset context
+    // (no ModelMesh in scope here), so `wrapModeForSubsetStipple(undefined)`
+    // returns the pre-RND-33 default -- inert by design, not a clamp.
     const isStippled = ((surfaceType >>> 0) & SURFACE_TYPE.Stippled) !== 0;
-    tex.wrapS = tex.wrapT = (isStippled || !_SURFACE_WRAP_CLAMP)
+    tex.wrapS = tex.wrapT = isStippled
       ? THREE.RepeatWrapping
-      : THREE.ClampToEdgeWrapping;
+      : wrapModeForSubsetStipple(undefined);
     // === A10-M2 (2026-06-11) — `?surfaceUnified=on` thread render-state flags ===
     // Retail funnels EVERY drawn surface — including recoloured/entity-owned ones
     // — through the SAME render-state decision (D3DPolyRender::SetSurface,
@@ -4609,6 +4847,7 @@ export class MaterialCache {
     this.frontSideMaterials.delete(did);
     this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
     this.staticBiasMaterials.delete(did); // twin of the FrontSide invalidation
+    this.cellBakedMaterials.delete(did); // twin of the FrontSide invalidation
     // Render-completeness audit (2026-05-29) — kick animated-frame setup.
     this._maybeSetupSurfaceAnimation(did, mat, tex);
     return mat;
@@ -4734,6 +4973,8 @@ export class MaterialCache {
     _disposeEach(this.floorBiasMaterials, (m) => m);
     // 2026-07-06 static-bias variants — clones (share textures, freed above).
     _disposeEach(this.staticBiasMaterials, (m) => m);
+    // RND-04 baked-static-light variants — clones (share textures, freed above).
+    _disposeEach(this.cellBakedMaterials, (m) => m);
     // VFX component-variant clones (share textures, freed above) — dispose the
     // material objects only.
     _disposeEach(this.vfxVariants, (m) => m);

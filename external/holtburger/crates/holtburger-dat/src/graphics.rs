@@ -195,6 +195,47 @@ impl BinRead for Polygon {
     }
 }
 
+/// Which side of a [`Polygon`] a stipple query is about. `Positive` is the
+/// front (`pos_surface`/`pos_uv_indices`) side, `Negative` the back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolygonSide {
+    Positive,
+    Negative,
+}
+
+impl Polygon {
+    /// RND-33 — the texture-address mode retail derives from this polygon's
+    /// `Stippling` byte, per `D3DPolyRender::SetSurface(CPolygon*, Sidedness,
+    /// int)` (`acclient.c:455236`): the `stippled` argument it forwards is
+    /// `stippling & 1` for the positive side and `stippling & 2` for the
+    /// negative side. `D3DPolyRender::SetSurface(CSurface*, bool stippled, …)`
+    /// (`acclient.c:454385`) then selects `TEXADDRESS_WRAP` when stippled and
+    /// `TEXADDRESS_CLAMP` otherwise, on sampler stage 0 U **and** V.
+    ///
+    /// NOT the Surface type's `STIPPLED` bit (`acclient.h:5833`, 0x40000000) —
+    /// that flag is derived state `SetSurface` writes back into
+    /// `Render::curr_surface_type`, never a source.
+    pub fn stipple_wraps(&self, side: PolygonSide) -> bool {
+        let bit = match side {
+            PolygonSide::Positive => 0x1,
+            PolygonSide::Negative => 0x2,
+        };
+        (self.stippling & bit) != 0
+    }
+
+    /// RND-33 — the same question as [`Polygon::stipple_wraps`] but as the
+    /// BATCHED mesh-buffer path asks it. `DrawMesh` (`acclient.c:454676`)
+    /// passes `isStippledOrAlphaedMask[subsetNum] & 1`, and bit 0 of that mask
+    /// is accumulated at `acclient.c:456003` as
+    /// `mask[subset] |= (stippling > 0)` — the WHOLE byte, side-agnostic, so it
+    /// also catches the `NoPos` (0x4) / `NoNeg` (0x8) UV-layout bits that
+    /// `stipple_wraps` excludes. Kept distinct because the two retail paths do
+    /// not agree and a consumer must pick deliberately.
+    pub fn stipple_wraps_meshbuffer(&self) -> bool {
+        self.stippling > 0
+    }
+}
+
 impl BinWrite for Polygon {
     type Args<'a> = ();
 
