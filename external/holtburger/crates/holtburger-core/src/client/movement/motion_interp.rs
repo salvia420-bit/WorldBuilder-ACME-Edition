@@ -258,16 +258,44 @@ pub(crate) struct PendingMotion {
 /// blocking ranges are the seated/crouched/sleeping emote substates plus
 /// `Fallen` (`0x40000008`); plain locomotion (`WalkForward` `0x45000005`,
 /// `RunForward` `0x44000007`) falls in the `> 0x41000014` arm → `0`.
+///
+/// ERA NOTE (2015 build 11.6096 — the era our DATs and ACE tables are
+/// from; TASK ERA-01/ERA-02 of `docs/acclient-deep-dive-mining/
+/// wave3-F-architecture-2015diff.md`). Three commands were inserted at
+/// ordinal `0x10F` between 11.4186 (2013) and 11.6096 (2015), shifting
+/// every higher ordinal by `+3`. The purple magic power-up windup
+/// window therefore reads `0x1000012B..=0x10000134`
+/// (`MagicPowerUp01Purple..MagicPowerUp10Purple`) here, NOT the 2013
+/// `0x10000128..=0x10000131` — at 2015 ordinals that older window
+/// blocks `TripleThrustLow/Med/High` (`0x128`-`0x12A`, which retail
+/// never blocked in either build) and lets
+/// `MagicPowerUp08/09/10Purple` (`0x132`-`0x134`) through. The adjacent
+/// `0x1000006F..=0x10000078` window is era-invariant because it sits
+/// below the `0x10F` boundary. Cross-checked against ACE's
+/// end-of-retail table (`external/ACE/Source/ACE.Entity/Enum/
+/// MotionCommand.cs:304-316`).
+///
+/// 11.6096 also added two exact blocks not present in 11.4186:
+/// `Sanctuary` (`0x10000057`, the lifestone-bind animation) and
+/// `AI_TelegraphCast` (`0x1000019B` — ACE's generated table still
+/// names this ordinal `WoahDuplicate2`, see TASK ERA-03). Retail added
+/// `Sanctuary` to all three of `motion_allows_jump`,
+/// `jump_charge_is_allowed` and `charge_jump` but `AI_TelegraphCast`
+/// only to `motion_allows_jump`; because holtburger routes the charge
+/// gate through this one predicate, `AI_TelegraphCast` over-applies to
+/// charging — harmless (it is a monster-only motion the local player
+/// never enters) but recorded here rather than rediscovered later.
 pub(crate) fn motion_allows_jump(substate: u32) -> u32 {
     let blocks = if substate > 0x4000_0018 {
         substate <= 0x4100_0014
             && (substate >= 0x4100_0012 || (0x4000_001E..=0x4000_0039).contains(&substate))
     } else if substate < 0x4000_0016 {
-        if substate > 0x1000_0131 {
-            substate == 0x4000_0008
+        if substate > 0x1000_0134 {
+            substate == 0x4000_0008 || substate == 0x1000_019B
         } else {
-            (0x1000_0128..=0x1000_0131).contains(&substate)
+            (0x1000_012B..=0x1000_0134).contains(&substate)
                 || (0x1000_006F..=0x1000_0078).contains(&substate)
+                || substate == 0x1000_0057
         }
     } else {
         // 0x40000016..=0x40000018 falls through both outer guards.
@@ -2308,6 +2336,8 @@ mod tests {
     /// `motion_allows_jump` blocking table (`acclient.c:343295-343316`):
     /// seated/crouched emote ranges + Fallen block with error 72; plain
     /// locomotion and one-shot actions outside the ranges permit.
+    /// Ordinals are the **2015** (11.6096) table — see the ERA NOTE on
+    /// [`motion_allows_jump`] (TASK ERA-01/ERA-02).
     #[test]
     fn motion_allows_jump_blocking_table() {
         // Permit arms.
@@ -2323,10 +2353,22 @@ mod tests {
         assert_eq!(motion_allows_jump(0x4100_0012), 72); // 0x12..=0x14 arm
         assert_eq!(motion_allows_jump(0x4100_0014), 72);
         assert_eq!(motion_allows_jump(0x1000_006F), 72); // 0x6F..=0x78 arm
-        assert_eq!(motion_allows_jump(0x1000_0128), 72); // 0x128..=0x131 arm
+        // 2015 purple power-up window 0x12B..=0x134 (ERA-01).
+        assert_eq!(motion_allows_jump(0x1000_012B), 72); // MagicPowerUp01Purple
+        assert_eq!(motion_allows_jump(0x1000_0131), 72); // MagicPowerUp07Purple
+        assert_eq!(motion_allows_jump(0x1000_0134), 72); // MagicPowerUp10Purple
+        // 2015 exact additions (ERA-02).
+        assert_eq!(motion_allows_jump(0x1000_0057), 72); // Sanctuary
+        assert_eq!(motion_allows_jump(0x1000_019B), 72); // AI_TelegraphCast
         // Range edges back to permit.
         assert_eq!(motion_allows_jump(0x4000_003A), 0);
         assert_eq!(motion_allows_jump(0x4100_0015), 0);
+        // TripleThrustLow/Med/High sit just BELOW the 2015 window and
+        // retail never blocked them — the ERA-01 regression guard.
+        assert_eq!(motion_allows_jump(0x1000_0128), 0); // TripleThrustLow
+        assert_eq!(motion_allows_jump(0x1000_0129), 0); // TripleThrustMed
+        assert_eq!(motion_allows_jump(0x1000_012A), 0); // TripleThrustHigh
+        assert_eq!(motion_allows_jump(0x1000_0135), 0); // just past the window
     }
 
     /// The accepted-motion enqueue derives the node's jump error per

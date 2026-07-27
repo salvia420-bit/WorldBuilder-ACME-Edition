@@ -45,8 +45,8 @@ pub mod MotionCommandCode {
 ///
 /// - `0x40000016..=0x40000018` — `Reload`, `Unload`, `Pickup`
 ///   (interactions in progress)
-/// - `0x10000128..=0x10000131` — `TripleThrustLow..MagicPowerUp07Purple`
-///   (multi-strike attack windups + colored magic powerups)
+/// - `0x1000012B..=0x10000134` — `MagicPowerUp01Purple..MagicPowerUp10Purple`
+///   (colored magic power-up windups) — see the ERA NOTE below
 /// - `0x1000006F..=0x10000078` — `MagicPowerUp01..MagicPowerUp10`
 ///   (war-magic cast windups)
 /// - `0x41000012..=0x41000014` — `Crouch`, `Sitting`, `Sleeping`
@@ -54,6 +54,33 @@ pub mod MotionCommandCode {
 /// - `0x4000001E..=0x40000039` — `AimLevel..MagicPray`
 ///   (aim states + magic spell substates)
 /// - `0x40000008` — `Fallen` (post-fall stagger)
+/// - `0x10000057` — `Sanctuary` (lifestone bind) — 2015 addition
+/// - `0x1000019B` — `AI_TelegraphCast` — 2015 addition
+///
+/// ERA NOTE (2015 build 11.6096 — TASK ERA-01/ERA-02 of
+/// `docs/acclient-deep-dive-mining/wave3-F-architecture-2015diff.md`).
+/// Three commands were inserted at ordinal `0x10F` between 11.4186
+/// (2013, which is what PhatSDK encodes) and 11.6096, shifting every
+/// higher ordinal by `+3`. Our DATs, ACE's enum and the wire data are
+/// all 2015, so the purple power-up window is `0x12B..=0x134`, not
+/// PhatSDK's `0x128..=0x131`. Read at 2015 ordinals the older window
+/// blocks `TripleThrustLow/Med/High` (`0x128`-`0x12A`, which retail
+/// never blocked in either build) and lets `MagicPowerUp08/09/10Purple`
+/// (`0x132`-`0x134`) through. `0x6F..=0x78` is era-invariant — it sits
+/// below the `0x10F` boundary. Authority:
+/// `external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:304-316`
+/// (`TripleThrustLow = 0x10000128`, `MagicPowerUp01Purple = 0x1000012b`,
+/// `MagicPowerUp10Purple = 0x10000134`).
+///
+/// 11.6096 additionally blocks `Sanctuary` (`0x10000057`) and
+/// `AI_TelegraphCast` (`0x1000019B` — ACE names that ordinal
+/// `WoahDuplicate2`, TASK ERA-03). Retail added `Sanctuary` to
+/// `motion_allows_jump`, `jump_charge_is_allowed` and `charge_jump`,
+/// but `AI_TelegraphCast` only to `motion_allows_jump`; holtburger
+/// routes the charge gate through this same predicate
+/// (`holtburger-core/src/client/movement/jump_charge.rs:142`), so
+/// `AI_TelegraphCast` over-applies to charging — harmless, it is a
+/// monster-only motion the local player never enters.
 ///
 /// Note: `Falling (0x40000015)` is NOT in this set per retail — the
 /// PhatSDK source does not block on it. Double-jump prevention runs
@@ -63,11 +90,13 @@ pub mod MotionCommandCode {
 #[inline]
 pub fn motion_allows_jump(substate: u32) -> bool {
     !(matches!(substate, 0x4000_0016..=0x4000_0018)
-        || matches!(substate, 0x1000_0128..=0x1000_0131)
+        || matches!(substate, 0x1000_012B..=0x1000_0134)
         || matches!(substate, 0x1000_006F..=0x1000_0078)
         || matches!(substate, 0x4100_0012..=0x4100_0014)
         || matches!(substate, 0x4000_001E..=0x4000_0039)
-        || substate == 0x4000_0008)
+        || substate == 0x4000_0008
+        || substate == 0x1000_0057
+        || substate == 0x1000_019B)
 }
 
 /// Wave 10 Phase 10.2 (2026-05-26) — expand a low-16
@@ -443,14 +472,12 @@ mod motion_allows_jump_tests {
         );
     }
 
-    /// PhatSDK `MovementManager.cpp:430` — `0x10000128..0x10000131` =
-    /// TripleThrustLow..MagicPowerUp07Purple.
+    /// PhatSDK `MovementManager.cpp:430` shifted into the 2015 command
+    /// table (ERA-01): `0x1000012B..0x10000134` =
+    /// MagicPowerUp01Purple..MagicPowerUp10Purple. PhatSDK's literal
+    /// `0x128..0x131` is the 2013 window and is WRONG for our data.
     #[test]
-    fn triple_thrust_and_purple_powerups_blocked() {
-        assert!(
-            !motion_allows_jump(0x1000_0128),
-            "TripleThrustLow must block"
-        );
+    fn purple_powerups_blocked() {
         assert!(
             !motion_allows_jump(0x1000_012B),
             "MagicPowerUp01Purple must block"
@@ -458,6 +485,43 @@ mod motion_allows_jump_tests {
         assert!(
             !motion_allows_jump(0x1000_0131),
             "MagicPowerUp07Purple must block"
+        );
+        assert!(
+            !motion_allows_jump(0x1000_0134),
+            "MagicPowerUp10Purple must block"
+        );
+    }
+
+    /// ERA-01 regression guard — TripleThrustLow/Med/High sit at
+    /// `0x128`-`0x12A` in the 2015 table, just below the purple
+    /// power-up window, and retail blocked jumping during them in
+    /// NEITHER build.
+    #[test]
+    fn triple_thrust_allows_jump() {
+        assert!(
+            motion_allows_jump(0x1000_0128),
+            "TripleThrustLow must allow jump"
+        );
+        assert!(
+            motion_allows_jump(0x1000_0129),
+            "TripleThrustMed must allow jump"
+        );
+        assert!(
+            motion_allows_jump(0x1000_012A),
+            "TripleThrustHigh must allow jump"
+        );
+    }
+
+    /// ERA-02 — 11.6096 added two exact jump blocks.
+    #[test]
+    fn sanctuary_and_telegraph_cast_blocked() {
+        assert!(
+            !motion_allows_jump(0x1000_0057),
+            "Sanctuary (lifestone bind) must block"
+        );
+        assert!(
+            !motion_allows_jump(0x1000_019B),
+            "AI_TelegraphCast must block"
         );
     }
 
@@ -505,10 +569,21 @@ mod motion_allows_jump_tests {
         assert!(motion_allows_jump(0x1300_0079), "ShakeFist is allowed");
         // Just past MagicPray
         assert!(motion_allows_jump(0x2000_003A), "StopTurning is allowed");
-        // Just past TripleThrust range
+        // Just below the 2015 purple power-up window (ERA-01)
         assert!(
-            motion_allows_jump(0x1000_0132),
-            "MagicPowerUp08Purple is allowed"
+            motion_allows_jump(0x1000_012A),
+            "TripleThrustHigh is allowed"
+        );
+        // Inside it — the 2013 window stopped at 0x131 and wrongly let
+        // these three through (ERA-01)
+        assert!(
+            !motion_allows_jump(0x1000_0132),
+            "MagicPowerUp08Purple must block"
+        );
+        // Just past the 2015 window
+        assert!(
+            motion_allows_jump(0x1000_0135),
+            "0x10000135 sits past MagicPowerUp10Purple and is allowed"
         );
     }
 }
