@@ -48,6 +48,7 @@ import { attachPalettes as _attachPalettes } from "./diag/palettes.js";
 import { attachLod as _attachLod } from "./diag/lod.js";
 import { attachClothing as _attachClothing } from "./diag/clothing.js";
 import { attachGeometry as _attachGeometry } from "./diag/geometry.js";
+import { attachCollision as _attachCollision } from "./diag/collision.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -485,6 +486,7 @@ export function installDiag() {
     ["lod",        _attachLod],
     ["clothing",   _attachClothing],
     ["geometry",   _attachGeometry],
+    ["collision",  _attachCollision],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console
@@ -505,6 +507,11 @@ export function installDiag() {
     // rig parts + envcell stab attachment). Oracle-free — audits the
     // live scene against the build-time stamps, so it always runs.
     try { if (this.geometry?.audit) out.surfaces.geometry = this.geometry.audit(); } catch (e) { out.surfaces.geometry = { error: String(e?.message ?? e) }; }
+    // P5.1 (2026-07-27): wasm collision smokes (synthetic, oracle-free,
+    // run pre-spawn) + live SpatialScene residency counters. DRIFT means
+    // either the collision math broke or terrain is resident with zero
+    // static AABBs behind it.
+    try { if (this.collision?.audit) out.surfaces.collision = this.collision.audit(); } catch (e) { out.surfaces.collision = { error: String(e?.message ?? e) }; }
     out.summary = Object.fromEntries(Object.entries(out.surfaces).map(([k, v]) => [k, v?.error ? "INFRA" : (v?.ok === false ? "DRIFT" : "PASS")]));
     return out;
   };

@@ -32977,6 +32977,46 @@ impl SessionHandle {
         Some(CollisionHit::from_generic(hit))
     }
 
+    /// P5.1 (2026-07-27) — collision **residency** counters, read on
+    /// demand off the per-tick `collision_scene` mirror. Zero cost until
+    /// called: one `RefCell` borrow plus a handful of `HashMap` folds
+    /// over already-resident indices; nothing is computed per tick for
+    /// this.
+    ///
+    /// The gap this closes (`docs/acclient-deep-dive-mining/WORK-PLAN.md`
+    /// P5.1): "is anything actually collidable here?" was previously only
+    /// answerable by scraping the `[bsp]` / `[phase6.G]` drain console
+    /// lines, so a landblock that silently baked **zero** statics looked
+    /// identical to one that baked thousands. Consumed by
+    /// `__diag.collision.residency()`.
+    ///
+    /// Comma-packed in this fixed order (same string-packing precedent as
+    /// `localPoseSnapDiag` / `leashEchoDiag`):
+    ///
+    /// `buildingAabbs,staticAabbs,staticBsps,buildingPhysics,cellAabbs,
+    ///  cellPhysicsTris,cellPhysicsBsps,cellStaticBsps,cellMembership,
+    ///  cellPortalGraph,doorParts,openDoorExclusions,terrainHeightLbs`
+    #[wasm_bindgen(js_name = collisionResidencyDiag)]
+    pub fn collision_residency_diag(&self) -> String {
+        let scene = self.collision_scene.borrow();
+        format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            scene.building_aabb_count(),
+            scene.static_aabb_count(),
+            scene.static_physics_bsp_count(),
+            scene.building_physics_count(),
+            scene.cell_aabb_count(),
+            scene.cell_physics_count(),
+            scene.cell_physics_bsp_count(),
+            scene.cell_static_physics_bsp_count(),
+            scene.cell_membership_count(),
+            scene.cell_portal_graph_len(),
+            scene.door_part_index_len(),
+            scene.open_door_exclusion_len(),
+            scene.terrain_heights_count(),
+        )
+    }
+
     /// Phase 6 step E follow-up (2026-05-09): resolve a door GUID to the
     /// building placement and part index it was registered against. The
     /// recv-loop populates this on ObjectCreate by sweeping

@@ -2188,6 +2188,82 @@
           ...(typeof __hbWasmNs?.leashEchoDiag === "function"
             ? { leashEchoDiag: () => String(__hbWasmNs.leashEchoDiag()) }
             : {}),
+          // P5.1 (2026-07-27, WORK-PLAN Tier 5) — the wasm collision
+          // self-test smokes. They have existed in `pkg/holtburger_web.d.ts`
+          // since Phase 6 step B/C but were unreachable from `window`, so
+          // "does collision work at all?" cost a 90-minute headless run
+          // instead of one console call. Same ADDITIVE namespace-rider
+          // contract as the diag riders above (typeof-guarded → a stale
+          // pkg/ yields `undefined`; nothing in product JS consumes them,
+          // rides v6, no manifest bump). Each returns 0 on success or a
+          // documented nonzero failure code; consumed by
+          // `__diag.collision.selfTest()`.
+          ...(typeof __hbWasmNs?.holtburg_test_collision_clamp_axis_aligned === "function"
+            ? {
+                holtburg_test_collision_clamp_axis_aligned: () =>
+                  __hbWasmNs.holtburg_test_collision_clamp_axis_aligned() >>> 0,
+              }
+            : {}),
+          ...(typeof __hbWasmNs?.holtburg_test_collision_slide_along_wall === "function"
+            ? {
+                holtburg_test_collision_slide_along_wall: () =>
+                  __hbWasmNs.holtburg_test_collision_slide_along_wall() >>> 0,
+              }
+            : {}),
+          ...(typeof __hbWasmNs?.holtburg_test_door_open_drops_aabb === "function"
+            ? {
+                holtburg_test_door_open_drops_aabb: () =>
+                  __hbWasmNs.holtburg_test_door_open_drops_aabb() >>> 0,
+              }
+            : {}),
+          ...(typeof __hbWasmNs?.holtburg_test_door_close_inserts_aabb === "function"
+            ? {
+                holtburg_test_door_close_inserts_aabb: () =>
+                  __hbWasmNs.holtburg_test_door_close_inserts_aabb() >>> 0,
+              }
+            : {}),
+          ...(typeof __hbWasmNs?.holtburg_test_door_part_registration_via_aabb_index === "function"
+            ? {
+                holtburg_test_door_part_registration_via_aabb_index: () =>
+                  __hbWasmNs.holtburg_test_door_part_registration_via_aabb_index() >>> 0,
+              }
+            : {}),
+          // Fixture-count companions to the smokes above: synthetic
+          // deterministic counts (no live ACE, no resource source), each
+          // with a documented floor the self-test asserts against.
+          ...(typeof __hbWasmNs?.holtburg_static_object_count === "function"
+            ? {
+                holtburg_static_object_count: () =>
+                  __hbWasmNs.holtburg_static_object_count() >>> 0,
+              }
+            : {}),
+          ...(typeof __hbWasmNs?.holtburg_townhall_aabb_count === "function"
+            ? {
+                holtburg_townhall_aabb_count: () =>
+                  __hbWasmNs.holtburg_townhall_aabb_count() >>> 0,
+              }
+            : {}),
+          ...(typeof __hbWasmNs?.holtburg_envcell_count === "function"
+            ? {
+                holtburg_envcell_count: () =>
+                  __hbWasmNs.holtburg_envcell_count() >>> 0,
+              }
+            : {}),
+          // P5.1 residency re-bake entry points — same functions the boot
+          // path calls per landblock, exposed so `__diag.collision` can
+          // re-run a populate for one LB and report the insert count.
+          ...(typeof __hbWasmNs?.populateStaticsAabbsForLandblock === "function"
+            ? {
+                populateStaticsAabbsForLandblock: (lb) =>
+                  __hbWasmNs.populateStaticsAabbsForLandblock(lb >>> 0),
+              }
+            : {}),
+          ...(typeof __hbWasmNs?.populateBuildingAabbsForLandblock === "function"
+            ? {
+                populateBuildingAabbsForLandblock: (lb) =>
+                  __hbWasmNs.populateBuildingAabbsForLandblock(lb >>> 0),
+              }
+            : {}),
           hash32,
           has_resource_source,
         };
