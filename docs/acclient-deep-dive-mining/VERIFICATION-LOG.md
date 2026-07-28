@@ -1576,3 +1576,44 @@ previously masked by ghost rows — now honestly visible as terrain churn;
 adjacent to the 07-27 "park-storm needs a LONG soak" item. (2) Monitors must
 watch `visibleRows`/`parkedRows`, not `slotsUsed` (legitimately 256 with
 reclaimable parked rows now).
+
+---
+
+## Park storm — TWO storms, one fixed, one exonerated (2026-07-28, Opus agent K, `cc5e3f92`)
+
+**Storm A (the user-visible churn) — geom-pressure feedback loop, FIXED.**
+`tickEviction`'s #7/#10 feed parks 6 extra resident LBs per tick whenever
+`renderer.info.memory.geometries > MAX_LIVE_GEOM`, but PARK CANNOT RELIEVE
+THE TRIGGER (the counter falls on `disposeParked`, never on `park`), so it
+re-fires every tick until only the bare 3×3 ring remains; with untracked
+entity/atlas geometry above the cap alone the feed is unsatisfiable and the
+collapse is permanent (streamer unparks, next tick re-parks). Live A/B (real
+render, cap 150): BEFORE pinned resident at 9 (bare ring) hops 2-8 and
+true-disposed all 66 parks; AFTER holds 13, `parksPerTickMax` 6≤8, 0 errors.
+Fix (retail `LScape::update_block` shape, no new flag):
+`MAX_PARKS_PER_TICK=8`, a pool-backlog gate (parking into an undisposed
+backlog can't lower liveGeom — the feedback break), a resident floor
+`(2·ringFloor+1)²+4`, hysteresis on a `_geomPressure()` latch (engage >cap,
+release 0.9×), farthest-first victims. 36-check unit suite added.
+
+**Storm B — the literal 32→1 is the SEALED-DUNGEON purge: intentional,
+measured healthy, untouched.** Per-tick histogram separates cleanly (normal
+1-8 parks; the 23/26/28/32/32 ticks are all sealed-flagged). No ping-pong
+(458 parks/19 unparks over 62 hops vs s11's pre-fix 3459/3445 in 25 s).
+Agent I read the two storms as one through the ghost-row lens.
+
+**Soak (62 hops, 4 sealed enter/exits, 10-hop revisit):** bound never
+exceeded, `ringParks` 0, terrain_batch invariants balanced, 0 console
+errors; bare-defaults boot is INERT (liveGeom 3340 < 8000 → 0 parks).
+Revisit parity 0.040% below-horizon. Ten suites green.
+
+**HANDOFF item "purgeKey stayed null" — CLOSED as repro-method artifact:**
+short transitions never entered a FULLY-ENCLOSED dungeon; the six sealed
+POIs (Town Network, Marketplace, Underground, Storage, Hotel, Night Club)
+engage it immediately (`sealedKeySeen 0x00070000`, 1527 sealed ticks) and
+the purge it gates measures healthy.
+
+**METHOD CAVEAT (propagate):** `?nullRender=1` BLINDS the geom governor —
+`renderer.info.memory.geometries` stays 0, so every nullRender tour measures
+a dead #7/#10 path (40-hop control: liveGeom 0 at all 41 samples). Residency
+work on that path needs a real-render session.
