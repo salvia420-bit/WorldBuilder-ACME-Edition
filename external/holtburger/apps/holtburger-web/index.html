@@ -1240,6 +1240,14 @@
         // the init3D opts block below.
         fetchEntitySurfacesPixelsBatch,
         fetchBuildingPlacement,
+        // Retail deg_mode particle facing (2026-07-28) — hw GfxObj →
+        // did_degrade chain DID lookup for the particle billboard-mode
+        // resolve (particle_manager.js `_billboardModeFor`). NOTE: the
+        // `fetchBuildingPlacement` ModelMesh path does NOT populate
+        // `didDegrade` (verified live: 0 for 0x010016FD whose DAT record
+        // carries 0x11000126), so this byte-level export is the working
+        // source. Listed here AND in the init3D opts block below.
+        fetchModelDidDegrades,
         // Task #7 — Animation (0x03) keyframe fetch for animated scenery
         // (?animScenery). Listed here AND in the init3D opts block below.
         fetchAnimation,
@@ -4801,6 +4809,11 @@
             // falls back to serial single-call (correct but slower).
             fetchEntitySurfacesPixelsBatch,
             fetchBuildingPlacement,
+            // Retail deg_mode particle facing (2026-07-28) — reaches
+            // statics.js / entities.js `degradeInfoFactory` (particle
+            // billboard-mode resolve). Typeof-guarded at the call sites, so
+            // a stale bundle soft-degrades to no facing.
+            fetchModelDidDegrades,
             // Task #7 — Animation (0x03) fetch reaches scene3d so
             // animated_scenery.js can build per-part AnimationClips (?animScenery).
             fetchAnimation,

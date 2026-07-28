@@ -11279,6 +11279,17 @@ export class EntityManager {
         const r = await resolveGfxObj(hwGfxObjId);
         return r?.geometry ?? null;
       },
+      // Retail deg_mode facing (2026-07-28) — hw GfxObj → did_degrade chain
+      // DID for the particle billboard-mode resolve (particle_manager.js
+      // `_billboardModeFor`; cached per-gfxobj, once per session). Byte-level
+      // `fetchModelDidDegrades` export — the `fetchBuildingPlacement`
+      // ModelMesh does NOT populate `.didDegrade` (verified live 2026-07-28).
+      // Typeof-guarded: a stale bundle resolves 0 → facing soft-off.
+      degradeInfoFactory: async (hwGfxObjId) => {
+        if (typeof ents_wasm?.fetchModelDidDegrades !== "function") return 0;
+        const r = await ents_wasm.fetchModelDidDegrades(new Uint32Array([hwGfxObjId >>> 0]));
+        return (r && r[0]) >>> 0;
+      },
       materialFactory: async (hwGfxObjId) => {
         if (!materialCache) return null;
         const r = await resolveGfxObj(hwGfxObjId);

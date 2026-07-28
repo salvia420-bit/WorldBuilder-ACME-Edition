@@ -3936,6 +3936,19 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
       const r = await resolveGfxObj(hwGfxObjId);
       return r?.geometry ?? null;
     },
+    // Retail deg_mode facing (2026-07-28) — hw GfxObj → did_degrade chain DID
+    // for the particle billboard-mode resolve (particle_manager.js
+    // `_billboardModeFor`). Cached per-gfxobj manager-side, so this runs once
+    // per unique particle gfxobj per session. Uses the byte-level
+    // `fetchModelDidDegrades` export: the `fetchBuildingPlacement` ModelMesh
+    // does NOT populate `.didDegrade` (verified live 2026-07-28 — 0 for
+    // 0x010016FD whose DAT record carries chain 0x11000126). Typeof-guarded:
+    // a stale bundle resolves 0 → facing soft-off.
+    degradeInfoFactory: async (hwGfxObjId) => {
+      if (typeof wasmExports?.fetchModelDidDegrades !== "function") return 0;
+      const r = await wasmExports.fetchModelDidDegrades(new Uint32Array([hwGfxObjId >>> 0]));
+      return (r && r[0]) >>> 0;
+    },
     materialFactory: async (hwGfxObjId) => {
       if (!materialCache) return null;
       const r = await resolveGfxObj(hwGfxObjId);

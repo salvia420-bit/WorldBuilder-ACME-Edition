@@ -441,10 +441,41 @@ function _rp6PrepareFrustum() {
 // particle shows such a quad EDGE-ON (≈0 projected pixels) from perpendicular
 // camera azimuths — the "particles attach + tick but draw no pixels" symptom
 // (HANDOFF-phase3-particle-render Bug 3). After each on-screen emitter's
-// updateParticles(), face every live part toward the active camera. Retail does
-// NOT billboard (acclient has no face-camera path — verified in the decomp), so
-// this runs ONLY for emitters that opt in via the POJO flag; DAT-replay emitters
-// are byte-untouched. `?particleBillboard=off` disables it for an A/B eye-test.
+// updateParticles(), face every live part toward the active camera.
+//
+// CORRECTION (2026-07-28): this block used to claim "retail does NOT
+// billboard". That is FALSE — retail's face-camera path just lives in the
+// PART DRAW pipeline, not the particle system. Every CPhysicsPart consults
+// its GfxObj's 0x11 GfxObjDegradeInfo chain each frame:
+//   CPhysicsPart::UpdateViewerDistance (acclient.c:315097) computes
+//   `viewer_heading` (viewer → part line, normalized) and calls
+//   GfxObjDegradeInfo::get_degrade (acclient.c:332356), which yields the
+//   distance band's `degrade_mode`; CPhysicsPart::calc_draw_frame
+//   (acclient.c:315066) then rewrites ONLY the draw frame:
+//     mode 1 → draw_pos = pos (no reorientation)
+//     mode 2 → Frame::set_vector_heading(draw frame, viewer_heading)
+//              (acclient.c:357668: yaw+pitch aim local +Y along the
+//              viewer line, roll pinned to 0 — full billboard)
+//     mode 3/4/5 → Frame::rotate_around_axis_to_vector(axis 0/1/2)
+//              (acclient.c:357520: keep local X/Y/Z, rotate about it so
+//              the retail prev[] axis — Z/X/Y respectively — points
+//              down the viewer line — axis-constrained billboard)
+// DAT survey (2026-07-28, all 2051 ParticleEmitters in client_portal.dat →
+// 341 unique hw GfxObjs → 238 with a degrade chain): band-0 modes are
+// 154x mode 2, 21x mode 5, 63x mode 1. The Nanto waterfall sheet
+// (0x32000829 → hw 0x010016FD → 0x11000126) is mode 2; its base mist
+// (0x3200002F → 0x01001689 → 0x11000127) and the water-golem spray
+// (0x3200048E/F → 0x01001BBE → 0x11000985) are mode 5. All these quads
+// are authored in the local X–Z plane (normal −Y), so without the
+// reorientation they render EDGE-ON from perpendicular azimuths — the
+// system-wide "particles look flat from the side" defect (waterfalls,
+// water golems, flames — the url-flags.md "retail flame 0x32 slivers"
+// follow-up is this same root cause). `_billboardEmitterRetail` below
+// applies modes 2-5 to DAT-replay emitters whose hw GfxObj carries a
+// degrade chain (resolved once per gfxobj via `_billboardModeFor`); the
+// POJO `billboard === true` synthesized path is unchanged. Both write
+// ONLY the render transform (mesh.quaternion) — VFX invariant respected.
+// `?particleBillboard=off` disables BOTH paths for an A/B eye-test.
 const BILLBOARD_DISABLED = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -532,6 +563,133 @@ function _billboardEmitter(emitter, camera) {
     }
     _bbNormal.copy(nLocal);
     mesh.quaternion.setFromUnitVectors(_bbNormal, _bbDir);
+  }
+}
+
+// Retail deg_mode facing (2026-07-28) — see the header block above for the
+// decomp trail and DAT survey. Module-level scratches + a per-gfxobj mode
+// cache shared by both managers (statics + entities); the mode is DAT data
+// keyed by hw GfxObj id, so cross-manager sharing is byte-safe.
+const _bbSceneInv = new THREE.Matrix4();
+const _bbBasis = new THREE.Matrix4();
+const _bbCamLocal = new THREE.Vector3();
+const _bbKeep = new THREE.Vector3();
+const _bbAim = new THREE.Vector3();
+const _bbThird = new THREE.Vector3();
+
+/** hwGfxObjId → band-0 degrade_mode (0 = none/mode-1). Value may transiently
+ *  be the in-flight Promise, mirroring `_degradeDistanceCache`. */
+const _billboardModeCache = new Map();
+
+/** Test seam. */
+export function _resetParticleBillboardModeForTest() {
+  _billboardModeCache.clear();
+}
+
+/**
+ * Resolve (and cache) the retail facing mode for one hw GfxObj: walk
+ * GfxObj.did_degrade (supplied by the manager's `degradeInfoFactory`, which
+ * wraps the byte-level `wasmExports.fetchModelDidDegrades` — NOT the
+ * fetchBuildingPlacement ModelMesh `.didDegrade` getter, which is not
+ * populated on that path) → `window.__hbWasm.fetch_gfx_obj_degrade_info`
+ * (0x11 record JSON) →
+ * band-0 `degrade_mode`. Returns 2-5, or 0 for "leave orientation alone"
+ * (no chain / mode 1 / stale pkg / any failure — all soft-off). Retail picks
+ * the band by camera distance, but for particle gfxobjs every band past 0 is
+ * `gfxobj_id 0` + mode 1 (= draw nothing; distance culling is RP6 +
+ * ?particleDegrade's job), so band 0 IS the facing authority.
+ */
+async function _billboardModeFor(hwGfxObjId, degradeInfoFactory) {
+  const key = hwGfxObjId >>> 0;
+  if (_billboardModeCache.has(key)) {
+    // May be a resolved number OR an in-flight Promise — await handles both.
+    return _billboardModeCache.get(key);
+  }
+  const inflight = (async () => {
+    const did = ((await degradeInfoFactory(key)) ?? 0) >>> 0;
+    if (!did) return 0;
+    const fn =
+      typeof window !== "undefined"
+        ? window.__hbWasm?.fetch_gfx_obj_degrade_info
+        : undefined;
+    if (typeof fn !== "function") return 0; // stale pkg — soft-off
+    const parsed = JSON.parse(await fn(did));
+    const m = (parsed?.degrades?.[0]?.degrade_mode ?? 0) | 0;
+    return m >= 2 && m <= 5 ? m : 0;
+  })().catch(() => 0);
+  _billboardModeCache.set(key, inflight);
+  const v = await inflight;
+  _billboardModeCache.set(key, v);
+  return v;
+}
+
+/**
+ * Retail CPhysicsPart::calc_draw_frame (acclient.c:315066) for one emitter's
+ * live parts. All math runs in `scene`-local space (`_scene` = the AC-axes
+ * Z-up group both the attached per-mesh path and the detached instanced-path
+ * carrier meshes position in — see `_appendInstances`), which is exactly
+ * retail's world frame, so world-up is (0,0,1) as in the decomp.
+ *
+ * dir = normalize(part − viewer): retail's `viewer_heading` points down the
+ * viewer→part line (Position::get_offset(&Render::viewer_pos, …, &pos) in
+ * UpdateViewerDistance). Mode 2 aims local +Y along it with roll 0
+ * (Frame::set_vector_heading), which turns the authored −Y front face of the
+ * X–Z-plane quads toward the camera. Modes 3/4/5 keep the part's local X/Y/Z
+ * and rotate about it so the retail prev[] axis (Z/X/Y) chases the viewer
+ * line (Frame::rotate_around_axis_to_vector). Degenerate projections skip
+ * the part (retail's normalize_check_small fallback keeps the prior axis —
+ * same visual result: orientation unchanged this frame).
+ *
+ * Writes mesh.quaternion ONLY (render transform; picked up by both the
+ * per-mesh path and `_appendInstances`' `m.updateMatrix()` read-back).
+ */
+function _billboardEmitterRetail(emitter, camera, mode, scene) {
+  const parts = emitter.parts;
+  if (!parts || !parts.length || !camera || !camera.position) return;
+  if (scene && scene.matrixWorld) {
+    _bbSceneInv.copy(scene.matrixWorld).invert();
+    _bbCamLocal.copy(camera.position).applyMatrix4(_bbSceneInv);
+  } else {
+    _bbCamLocal.copy(camera.position);
+  }
+  for (let i = 0; i < parts.length; i++) {
+    const mesh = parts[i];
+    if (!mesh || !mesh.visible) continue;
+    _bbDir.subVectors(mesh.position, _bbCamLocal);
+    if (_bbDir.lengthSq() < 1e-10) continue;
+    _bbDir.normalize();
+    if (mode === 2) {
+      // Full billboard: aim +Y = dir, roll 0 (local Z stays closest to up).
+      _bbAim.set(0, 0, 1).addScaledVector(_bbDir, -_bbDir.z); // up ⊥ dir
+      if (_bbAim.lengthSq() < 1e-10) continue; // viewer line ∥ up
+      _bbAim.normalize(); // local Z
+      _bbThird.crossVectors(_bbDir, _bbAim); // X = Y × Z
+      _bbBasis.makeBasis(_bbThird, _bbDir, _bbAim);
+      mesh.quaternion.setFromRotationMatrix(_bbBasis);
+      continue;
+    }
+    // Modes 3/4/5: keep the CURRENT local X/Y/Z axis, aim prev[] axis.
+    // (Mode 5's kept Z never changes across our own writes, so reading the
+    // axis back from mesh.quaternion is stable frame-over-frame.)
+    if (mode === 5) _bbKeep.set(0, 0, 1);
+    else if (mode === 4) _bbKeep.set(0, 1, 0);
+    else _bbKeep.set(1, 0, 0);
+    _bbKeep.applyQuaternion(mesh.quaternion).normalize();
+    _bbAim.copy(_bbDir).addScaledVector(_bbKeep, -_bbDir.dot(_bbKeep));
+    if (_bbAim.lengthSq() < 1e-10) continue; // viewer line ∥ kept axis
+    _bbAim.normalize();
+    _bbThird.crossVectors(_bbAim, _bbKeep);
+    if (mode === 5) {
+      // keep Z, aim Y; X = Y × Z
+      _bbBasis.makeBasis(_bbThird, _bbAim, _bbKeep);
+    } else if (mode === 4) {
+      // keep Y, aim X; Z = X × Y
+      _bbBasis.makeBasis(_bbAim, _bbKeep, _bbThird);
+    } else {
+      // mode 3: keep X, aim Z; Y = Z × X
+      _bbBasis.makeBasis(_bbKeep, _bbThird, _bbAim);
+    }
+    mesh.quaternion.setFromRotationMatrix(_bbBasis);
   }
 }
 
@@ -668,6 +826,12 @@ export class ParticleManager {
     this._scene = opts.scene;
     this._geometryFactory = opts.geometryFactory;
     this._materialFactory = opts.materialFactory;
+    // Retail deg_mode facing (2026-07-28) — optional. Resolves a hw GfxObj id
+    // to its `did_degrade` chain DID (0 = none). Callers read it off the same
+    // wasm ModelMesh bundle the geometry factory decodes (`.didDegrade`), so
+    // a stale pkg without the getter yields undefined → 0 → facing soft-off.
+    this._degradeInfoFactory =
+      typeof opts.degradeInfoFactory === "function" ? opts.degradeInfoFactory : null;
     // Opt-in per manager (see `particleInstancingEnabled`); still gated by the
     // URL flag, so a manager that opts in stays byte-identical until asked.
     this._instancing = opts.instancing === true;
@@ -1128,6 +1292,23 @@ export class ParticleManager {
     emitter.id = id;
     this.particleTable.set(id, emitter);
 
+    // Retail deg_mode facing (2026-07-28) — stamp the DAT-authored billboard
+    // mode (2-5, from the hw GfxObj's 0x11 degrade chain) onto DAT-replay
+    // emitters. Fire-and-forget like the degradeDistance stamp below: parts
+    // keep their fixed orientation until the cached resolve lands (typically
+    // one tick for a warm cache). POJO sprite emitters (`info.billboard`)
+    // keep their own path in tick(). See `_billboardEmitterRetail`.
+    emitter._bbMode = 0;
+    if (this._degradeInfoFactory && !info.billboard) {
+      _billboardModeFor(info.hwGfxObjId, this._degradeInfoFactory)
+        .then((mode) => {
+          if (mode && this.particleTable.get(id) === emitter) {
+            emitter._bbMode = mode;
+          }
+        })
+        .catch(() => {});
+    }
+
     // Foliage distance draw-cull (2026-07-04) — synthesized foliage ambient
     // emitters (pollen/fireflies/leaves) carry an authored `degradeDistanceMeters`
     // on their emitterInfo POJO. Stamp it onto the emitter with `_forceDegrade`
@@ -1279,10 +1460,17 @@ export class ParticleManager {
       if (!emitter.updateParticles()) {
         removeIds.push(id);
       } else {
-        if (bbCamera && emitter.info && emitter.info.billboard) {
-          // On-screen, still live, opted-in: face its flat sprite quads at the
-          // camera so they aren't edge-on invisible (HANDOFF Bug 3).
-          _billboardEmitter(emitter, bbCamera);
+        if (bbCamera && emitter.info) {
+          if (emitter.info.billboard) {
+            // On-screen, still live, opted-in: face its flat sprite quads at
+            // the camera so they aren't edge-on invisible (HANDOFF Bug 3).
+            _billboardEmitter(emitter, bbCamera);
+          } else if (emitter._bbMode) {
+            // Retail deg_mode 2-5 facing for DAT-replay emitters (waterfall
+            // sheets, golem spray, flames) — calc_draw_frame parity. See the
+            // billboard header block for the decomp trail.
+            _billboardEmitterRetail(emitter, bbCamera, emitter._bbMode, this._scene);
+          }
         }
         // AFTER the billboard pass — transforms are final for this frame.
         if (emitter._instKey !== null && emitter._instKey !== undefined) {
