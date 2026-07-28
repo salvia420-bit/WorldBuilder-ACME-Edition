@@ -21,6 +21,38 @@
 // Pursuit note: `pursuitStatus()` is read-clear for completion states. The
 // host latches completions into `snap.pursuitLast` — in bot pages the host
 // is the sole consumer; don't run it beside the picking.js pursuit monitor.
+//
+// ─────────────────────────────────────────────────────────────────────────
+// P6.1 PROMOTION (2026-07-28, CORE-07 "promotion, not a rewrite")
+// ─────────────────────────────────────────────────────────────────────────
+// This class is now THE substrate of the one versioned `client` facade:
+// `plugins/api.js::createClient` constructs exactly one RynthWebHost, hangs
+// it on `client.host`, and expresses every plugin-facing namespace
+// (`client.player/.movement/.chat/.characters/.scene/.sky/.collision`) as a
+// delegate over this object's capability table. There is now ONE place that
+// resolves a SessionHandle method, ONE degrade-not-throw rule, and ONE
+// owner of the raw handle.
+//
+// FILE LOCATION — deliberate deviation from the design doc, which called for
+// moving this file to `plugins/webhost.js`. It stays here because it must
+// keep ZERO top-level imports: two anti-drift node harnesses
+// (`rynth_host_contract_test.cjs`, `rynth_combatparity_test.cjs`) copy this
+// file's bytes to a temp `.mjs` and import it standalone — a re-export stub
+// would break both. `plugins/webhost.js` is instead the ALIAS (re-export)
+// so the plugins tree still has the canonical import path. Same one
+// implementation, alias pointing the other way. For the same reason the
+// page-side seams below (chat hooks, chat routing, selection) are read off
+// `window.*` lazily rather than imported.
+//
+// Two capability CLASSES (see `has()`):
+//   handle capabilities — probed ONCE at construction against the
+//     SessionHandle (design §2.3 semantics, unchanged).
+//   environment capabilities — page seams (`window.__chatHooks`,
+//     `window.__barInstance`, `window.liveScene3d`) that attach LATE
+//     (liveScene3d lands ~35s after in-world), so a construction-time probe
+//     would answer `false` forever. These are probed LIVE on each `has()`.
+//     Documented deviation; the fallback rule is unchanged — an absent
+//     capability's member returns its documented fallback and never throws.
 
 const CAPABILITY_CANDIDATES = {
   // RynthCoreHost member -> SessionHandle method candidates (first wins).
@@ -140,7 +172,121 @@ const CAPABILITY_CANDIDATES = {
   RaiseVital: ["raiseVital"],
   RaiseSkill: ["raiseSkill"],
   TrainSkill: ["trainSkill"],
+
+  // ── P6.1 promotion (2026-07-28) ────────────────────────────────────
+  // The surface `plugins/api.js`'s namespaces cover that this host had
+  // never mapped. Purely ADDITIVE (design §6: additive = minor bump).
+  // Every SessionHandle name below was verified present in
+  // pkg/holtburger_web.d.ts at promotion time; a stale pkg/ simply
+  // degrades the capability, as with every other entry here.
+  // player plane
+  ToggleCombatMode: ["toggleCombatMode"],
+  MissileAttack: ["missileAttack"],
+  RecallToLifestone: ["teleToLifestone"],
+  ForgetSpell: ["removeSpellFromBook"],
+  GetKnownSpells: ["playerKnownSpells"],
+  TickMovement: ["tickMovement"],
+  // characters plane (retail Begin/EndCharacterSession neighbourhood)
+  GetCharacterList: ["characterList"],
+  SelectCharacter: ["selectCharacter"],
+  CreateTestCharacter: ["createTestCharacter"],
+  GetCharacterGenCatalog: ["getCharacterGenCatalog"],
+  GetSkillCostsForHeritage: ["getSkillCostsForHeritage"],
+  GetCharacterGenAppearanceStrips: ["getCharacterGenAppearanceStrips"],
+  CreateCharacter: ["sendCharGenResult"],
+  // scene plane (retail GetIsOutdoors was E_NOTIMPL; ours is real)
+  IsCurrentCellIndoor: ["isCurrentCellIndoor"],
+  GetRenderSet: ["getRenderSet"],
+  TerrainHeightAt: ["terrainHeightAt"],
+  GetBuildingPartForDoor: ["getBuildingPartForDoor"],
+  // sky plane (no retail analogue — browser-side day/night control)
+  GetSkyState: ["getSkyState"],
+  GetSkyObjectStates: ["getSkyObjectStates"],
+  HasSkyDesc: ["hasSkyDesc"],
+  SetSkyTimeOverride: ["setSkyTimeOverride"],
+  SetGameDayOverride: ["setGameDayOverride"],
+  // collision plane (no retail analogue — the client-side physics probe)
+  SweepCollision: ["cameraSweepCollision"],
+  SweepBuildingMesh: ["sweepSphereAgainstBuildingMesh"],
+  SweepCellMesh: ["sweepSphereAgainstCellMesh"],
+  SweepStatics: ["sweepSphereAgainstStatics"],
+  // plugin-manifest wire (GameEvent 0x02AE -> GameAction 0x02AF); the
+  // roster string itself is built by plugins/loader.js::formatPluginList.
+  SetPluginList: ["setPluginList"],
+  GetPluginList: ["pluginList"],
 };
+
+/**
+ * Capability names as API surface (design §2.3): additive-only within a
+ * major version. Exported so the plugin loader can validate a manifest's
+ * declared `capabilities` against something real without constructing a
+ * host, and so tests can pin the set.
+ * @type {string[]}
+ */
+export const CAPABILITY_NAMES = Object.freeze(Object.keys(CAPABILITY_CANDIDATES).sort());
+
+/**
+ * ENVIRONMENT capabilities — page seams rather than SessionHandle methods.
+ * Probed LIVE (see the header note): every backing object here attaches
+ * after the host may already have been constructed.
+ */
+const ENV_CAPABILITY_PROBES = Object.freeze({
+  // Selection is owned by the 3D entity manager, which `window.liveScene3d`
+  // only exposes once init3D has run (MEMORY: ~35s after in-world).
+  SelectObject: () => typeof globalThis.liveScene3d?.entityManager?.setSelectedTarget === "function",
+  GetSelectedId: () => typeof globalThis.liveScene3d?.entityManager?.getSelectedTarget === "function",
+  // Retail WriteToChat's display half — index.html exposes appendChatLine.
+  WriteToChatWindow: () => typeof globalThis.__appendChatLine === "function",
+  // Retail IssueChatBarCommand was an E_FAIL stub; ours routes for real.
+  RouteChatCommand: () => typeof globalThis.__routeSlashCommand === "function",
+  // The two retail eatable chat hooks (plugins/chat-hooks.js).
+  ChatHooks: () => !!globalThis.__chatHooks,
+  // Retail slot 49 GetScreenDimensions.
+  GetScreenDimensions: () => typeof globalThis.innerWidth === "number",
+  // client.ui programmatic panel control (ui/bar.js mountBar return).
+  OpenPanel: () => typeof globalThis.__barInstance?.openPanel === "function",
+});
+
+/**
+ * Environment-capability names (see ENV_CAPABILITY_PROBES).
+ * @type {string[]}
+ */
+export const ENV_CAPABILITY_NAMES = Object.freeze(Object.keys(ENV_CAPABILITY_PROBES).sort());
+
+/**
+ * Probe an object (a live SessionHandle, or `SessionHandle.prototype` when
+ * no session exists yet) for the handle-capability set it would yield.
+ *
+ * The prototype form is what lets the plugin LOADER enforce manifest
+ * `capabilities` at page load — the loader runs long before login, so there
+ * is no handle to probe, but wasm-bindgen puts every method on the
+ * prototype, so the answer is identical. Only CAPABILITY_CANDIDATES names
+ * are touched (all plain methods), never the accessor properties
+ * (`accountName`, `playerBurden`, …) whose getters would throw on a
+ * pointer-less prototype.
+ *
+ * @param {object|null|undefined} handleLike
+ * @returns {string[]} sorted capability names
+ */
+export function probeCapabilities(handleLike) {
+  if (!handleLike) return [];
+  const out = [];
+  for (const [cap, candidates] of Object.entries(CAPABILITY_CANDIDATES)) {
+    for (const name of candidates) {
+      let fn;
+      try {
+        fn = handleLike[name];
+      } catch (_) {
+        continue;
+      }
+      if (typeof fn === "function") {
+        out.push(cap);
+        break;
+      }
+    }
+  }
+  return out.sort();
+}
 
 const ODF_PLAYER = 0x08;
 const ODF_ATTACKABLE = 0x10;
@@ -157,19 +303,10 @@ const CAST_TOKEN_TIMEOUT_MS = 2500;
 export class RynthWebHost {
   constructor(sessionHandle, opts = {}) {
     if (!sessionHandle) throw new Error("RynthWebHost: sessionHandle required");
-    this.s = sessionHandle;
     this.entityMap = opts.entityMap || (typeof window !== "undefined" ? window.entityMap : null);
     this._m = {}; // resolved capability -> bound method
     this._caps = new Set();
-    for (const [cap, candidates] of Object.entries(CAPABILITY_CANDIDATES)) {
-      for (const name of candidates) {
-        if (typeof sessionHandle[name] === "function") {
-          this._m[cap] = sessionHandle[name].bind(sessionHandle);
-          this._caps.add(cap);
-          break;
-        }
-      }
-    }
+    this.attach(sessionHandle);
     this.snap = null; // frozen per-tick snapshot
     this._tickSeq = 0;
     this._onTick = [];
@@ -187,6 +324,46 @@ export class RynthWebHost {
         this._dispatchEvent(evt);
       };
     }
+  }
+
+  /**
+   * (Re)bind this host to a SessionHandle and re-probe the capability
+   * table. Called once from the constructor, and again on every RECONNECT:
+   * a reconnect builds a brand-new wasm session, and a host still bound to
+   * the old handle would keep calling a freed one (the pre-P6.1 facade did
+   * exactly that — `createClient` captured the first handle for the page's
+   * lifetime, so after a kick/reconnect every `client.*` call went to a
+   * dead session; live-observed 2026-07-28 under `?kickDance=1`).
+   *
+   * The snapshot is dropped: it described the previous session.
+   * @param {object} sessionHandle
+   * @returns {this}
+   */
+  attach(sessionHandle) {
+    if (!sessionHandle) throw new Error("RynthWebHost.attach: sessionHandle required");
+    if (this.s === sessionHandle) return this;
+    this.s = sessionHandle;
+    const m = {};
+    const caps = new Set();
+    for (const [cap, candidates] of Object.entries(CAPABILITY_CANDIDATES)) {
+      for (const name of candidates) {
+        let fn;
+        try {
+          fn = sessionHandle[name];
+        } catch (_) {
+          continue;
+        }
+        if (typeof fn === "function") {
+          m[cap] = fn.bind(sessionHandle);
+          caps.add(cap);
+          break;
+        }
+      }
+    }
+    this._m = m;
+    this._caps = caps;
+    this.snap = null;
+    return this;
   }
 
   // ── push-event plane (report 04) ────────────────────────────────────
@@ -262,11 +439,52 @@ export class RynthWebHost {
   }
 
   // ── capability probes (the RynthCoreHost Has* plane) ───────────────
+  /**
+   * True iff `cap`'s backing exists. Handle capabilities answer from the
+   * construction-time probe (design §2.3); ENVIRONMENT capabilities are
+   * probed live because their backing seams attach late (see header).
+   * Never throws — an unknown name is simply `false`.
+   */
   has(cap) {
-    return this._caps.has(cap);
+    if (this._caps.has(cap)) return true;
+    const probe = ENV_CAPABILITY_PROBES[cap];
+    if (!probe) return false;
+    try {
+      return !!probe();
+    } catch (_) {
+      return false;
+    }
   }
+  /** Sorted capability names currently backed (handle + live environment). */
   get capabilities() {
-    return [...this._caps].sort();
+    const out = new Set(this._caps);
+    for (const name of ENV_CAPABILITY_NAMES) {
+      if (this.has(name)) out.add(name);
+    }
+    return [...out].sort();
+  }
+
+  // ── public capability seams (P6.1) ─────────────────────────────────
+  // The plugin-facing namespaces in plugins/api.js delegate through these
+  // two so capability resolution + degrade-not-throw lives in exactly one
+  // place. They are the SAME `_live`/`_act` the host's own members use;
+  // the underscore versions stay for the existing rynth call sites.
+  /** Live read through a capability. `undefined` when absent or throwing. */
+  call(cap, ...args) {
+    return this._live(cap, ...args);
+  }
+  /** Fire-and-forget through a capability. `false` when absent or throwing. */
+  act(cap, ...args) {
+    return this._act(cap, ...args);
+  }
+  /**
+   * The raw SessionHandle. Named to declare intent — this is the ONLY
+   * sanctioned raw access (design §2.1 `client._unsafeHandle`), for the
+   * accessor PROPERTIES (`accountName`, `playerBurden`, …) that cannot be
+   * expressed as capabilities because they are not methods.
+   */
+  get unsafeHandle() {
+    return this.s;
   }
 
   // ── tick adapter ────────────────────────────────────────────────────
@@ -803,11 +1021,88 @@ export class RynthWebHost {
   SetAutoRun(on) {
     return this._act("SetAutoRun", !!on);
   }
+  /**
+   * Retail `IAsheronsCall::WriteToChat` — send a line as the player. In
+   * retail this was the display-echo slot; here it goes to the wire
+   * (`sendChat`), which is what every rynth caller has always meant by it.
+   * The DISPLAY-only echo is `WriteToChatWindow` below (client.ui.writeToChat).
+   */
   WriteToChat(text) {
     return this._act("WriteToChat", text);
   }
+  /**
+   * Retail `IAsheronsCall::IssueChatBarCommand` — retail's was an E_FAIL
+   * stub, so a plugin that ate a chat line could never re-inject one. Ours
+   * is real: the line goes through the SAME slash/`@` router the chat bar
+   * uses (`window.__routeSlashCommand`, index.html) and falls through to a
+   * plain say. This is the "eat + re-inject" half of the outbound chat hook
+   * (design §3: retail's out-param was an eat flag, never a rewrite channel).
+   *
+   * Deliberately does NOT re-enter `chat.hooks.outgoing` — it is a chat-BAR
+   * hook, and re-entering it would be the loop retail's `sendToAPI=false`
+   * rule exists to prevent.
+   *
+   * @returns {boolean} true when the line was routed or sent.
+   */
   InvokeChatParser(text) {
-    return this._act("InvokeChatParser", text);
+    const line = String(text ?? "").trim();
+    if (!line) return false;
+    const route = typeof globalThis !== "undefined" ? globalThis.__routeSlashCommand : null;
+    if (typeof route === "function") {
+      try {
+        const routed = route(this.s, line);
+        if (routed && routed.dispatched) {
+          const echo = routed.error ? `[Chat] ${routed.error}` : routed.echo;
+          if (echo) this.WriteToChatWindow(echo, routed.error ? 10 : null);
+          return true;
+        }
+      } catch (e) {
+        (console.warn || console.log)("[RynthWebHost] InvokeChatParser route failed:", e);
+      }
+    }
+    return this._act("InvokeChatParser", line);
+  }
+  /**
+   * DISPLAY-only chat echo (retail's `WriteToChat` display half / the
+   * backing for `client.ui.writeToChat`). Deliberately does NOT traverse
+   * `chat.hooks.incoming`: host-originated echoes bypass the hook, which is
+   * exactly what makes plugin chat-rewriting loop-free (retail
+   * `sendToAPI=false`).
+   * @returns {boolean} false when no chat surface is mounted.
+   */
+  WriteToChatWindow(text, category = null) {
+    const append = typeof globalThis !== "undefined" ? globalThis.__appendChatLine : null;
+    if (typeof append !== "function") return false;
+    try {
+      append(String(text), category);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  /**
+   * Retail `IACPlugin::OnChatWindowText` — register an INBOUND chat hook.
+   * `fn(ev)` receives `{text, chatType, category, eat()}`; calling `ev.eat()`
+   * stops the line reaching any chat surface (and short-circuits the
+   * remaining handlers — the loader's eatable bus does the `break`).
+   * @returns {() => void} unsubscribe (no-op when the hook module is absent)
+   */
+  OnChatWindowText(fn) {
+    const hooks = typeof globalThis !== "undefined" ? globalThis.__chatHooks : null;
+    if (!hooks?.incoming?.on || typeof fn !== "function") return () => {};
+    return hooks.incoming.on("chatIncoming", fn);
+  }
+  /**
+   * Retail `IACPlugin::OnChatBarEnter` — register an OUTBOUND chat hook.
+   * `fn(ev)` receives `{text, eat()}` for each chat-BAR submission, before
+   * any prefix parsing. `ev.eat()` suppresses routing, send and echo; the
+   * plugin can then re-inject via `InvokeChatParser`.
+   * @returns {() => void} unsubscribe (no-op when the hook module is absent)
+   */
+  OnChatBarEnter(fn) {
+    const hooks = typeof globalThis !== "undefined" ? globalThis.__chatHooks : null;
+    if (!hooks?.outgoing?.on || typeof fn !== "function") return () => {};
+    return hooks.outgoing.on("chatOutgoing", fn);
   }
   RequestId(guid) {
     return this._act("RequestId", guid);
@@ -937,6 +1232,207 @@ export class RynthWebHost {
   }
   TrainSkill(skillId, credits) {
     return this._act("TrainSkill", skillId >>> 0, credits >>> 0);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // P6.1 promotion (2026-07-28) — the surface plugins/api.js's namespaces
+  // need, so `createClient` can be a pure delegate layer over this host.
+  // Every member follows the house rule: absent capability => documented
+  // fallback, never a throw.
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── player plane ───────────────────────────────────────────────────
+  /** Toggle combat/peace. Retail had `ChangeCombatMode` (an S_OK no-op liar). */
+  ToggleCombatMode() {
+    return this._act("ToggleCombatMode");
+  }
+  MissileAttack(targetGuid, attackHeight = 2, accuracyLevel = 1.0) {
+    return this._act("MissileAttack", targetGuid, attackHeight, accuracyLevel);
+  }
+  /** Untargeted cast — the explicit half of CastSpell's target-optional form. */
+  CastUntargetedSpell(spellId) {
+    return this._act("CastUntargetedSpell", spellId);
+  }
+  RecallToLifestone() {
+    return this._act("RecallToLifestone");
+  }
+  ForgetSpell(spellId) {
+    return this._act("ForgetSpell", spellId);
+  }
+  /** Known-spell id list; `[]` when the capability or the spellbook is absent. */
+  TryGetKnownSpells() {
+    const v = this._live("GetKnownSpells");
+    return v && typeof v.length === "number" ? Array.from(v) : [];
+  }
+  TickMovement() {
+    return this._act("TickMovement");
+  }
+  /** LIVE (not snapshot) pose read — the namespaced `client.player.pose`
+   *  view keeps retail-client "read it now" semantics; `TryGetPlayerPose()`
+   *  is the frozen per-tick read (design §2.4). */
+  TryGetPlayerPoseLive() {
+    return this._live("GetPlayerPose") ?? null;
+  }
+  /** Enchantment snapshot for the local player; `[]` on absence/error. */
+  TryGetEnchantments() {
+    const v = this._live("GetEnchantments");
+    return Array.isArray(v) ? v : [];
+  }
+
+  // ── characters plane (retail Begin/EndCharacterSession) ────────────
+  TryGetCharacterList() {
+    const v = this._live("GetCharacterList");
+    return v == null ? [] : v;
+  }
+  SelectCharacter(guid) {
+    return this._act("SelectCharacter", guid);
+  }
+  CreateTestCharacter(name) {
+    return this._act("CreateTestCharacter", name);
+  }
+  TryGetCharacterGenCatalog() {
+    return this._live("GetCharacterGenCatalog") ?? null;
+  }
+  TryGetSkillCostsForHeritage(heritageId, skillId) {
+    return this._live("GetSkillCostsForHeritage", heritageId, skillId) ?? null;
+  }
+  TryGetCharacterGenAppearanceStrips(heritageId, genderId) {
+    return this._live("GetCharacterGenAppearanceStrips", heritageId, genderId) ?? null;
+  }
+  /** Rich char-gen submit. THROWS on wasm-side validation failure — the one
+   *  deliberate exception to degrade-not-throw, because the validation
+   *  message IS the product surface (the wizard renders it). */
+  CreateCharacter(build) {
+    const f = this._m.CreateCharacter;
+    if (!f) return false;
+    f(build);
+    return true;
+  }
+
+  // ── scene plane ────────────────────────────────────────────────────
+  /** Current cell id (live read; the snapshot's healed copy is snap.pose). */
+  GetCurrentCellIdLive() {
+    return this._live("GetCurrentCellId") ?? 0;
+  }
+  /** `true` indoors, `false` outdoors, `null` when unknown. */
+  IsIndoors() {
+    const v = this._live("IsCurrentCellIndoor");
+    return typeof v === "boolean" ? v : null;
+  }
+  /** Retail slot `GetIsOutdoors` (E_NOTIMPL in retail) — the honest inverse. */
+  GetIsOutdoors() {
+    const v = this.IsIndoors();
+    return v === null ? null : !v;
+  }
+  GetRenderSet(depth = 1) {
+    return this._live("GetRenderSet", depth) ?? null;
+  }
+  TerrainHeightAt(x, y) {
+    return this._live("TerrainHeightAt", x, y) ?? null;
+  }
+  GetBuildingPartForDoor(guid) {
+    return this._live("GetBuildingPartForDoor", guid) ?? null;
+  }
+
+  // ── sky plane ──────────────────────────────────────────────────────
+  GetSkyState() {
+    return this._live("GetSkyState") ?? null;
+  }
+  GetSkyObjectStates() {
+    return this._live("GetSkyObjectStates") ?? null;
+  }
+  HasSkyDesc() {
+    return this._live("HasSkyDesc") ?? false;
+  }
+  SetSkyTimeOverride(t) {
+    return this._act("SetSkyTimeOverride", t);
+  }
+  SetGameDayOverride(day, year) {
+    return this._act("SetGameDayOverride", day, year);
+  }
+
+  // ── collision plane ────────────────────────────────────────────────
+  SweepCollision(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) {
+    return this._live("SweepCollision", fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) ?? null;
+  }
+  SweepBuildingMesh(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) {
+    return this._live("SweepBuildingMesh", fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) ?? null;
+  }
+  SweepCellMesh(fromX, fromY, fromZ, toX, toY, toZ, radius, cellIds) {
+    return this._live("SweepCellMesh", fromX, fromY, fromZ, toX, toY, toZ, radius, cellIds) ?? null;
+  }
+  SweepStatics(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) {
+    return this._live("SweepStatics", fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) ?? null;
+  }
+
+  // ── selection plane (retail slots Select / GetSelected) ────────────
+  // Backed by the 3D entity manager, an ENVIRONMENT capability (attaches
+  // late — see the header). Retail's Select was one of the few live slots.
+  /** @returns {boolean} false when no 3D scene is mounted yet. */
+  SelectObject(guid) {
+    const em = typeof globalThis !== "undefined" ? globalThis.liveScene3d?.entityManager : null;
+    if (typeof em?.setSelectedTarget !== "function") return false;
+    const prev = (em.getSelectedTarget?.() ?? 0) >>> 0;
+    const next = (guid ?? 0) >>> 0;
+    try {
+      em.setSelectedTarget(next);
+    } catch (_) {
+      return false;
+    }
+    if (next !== prev) {
+      try {
+        globalThis.__pluginClient?.events?.emit?.("selectionChanged", { guid: next, prevGuid: prev });
+      } catch (_) {}
+    }
+    return true;
+  }
+  /** Selected object guid, `0` when nothing is selected / no scene. */
+  GetSelectedId() {
+    const em = typeof globalThis !== "undefined" ? globalThis.liveScene3d?.entityManager : null;
+    if (typeof em?.getSelectedTarget !== "function") return 0;
+    try {
+      return (em.getSelectedTarget() ?? 0) >>> 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // ── UI plane (retail slot 49 + the bar's programmatic panel API) ───
+  /** Retail `GetScreenDimensions`. `null` outside a browser. */
+  GetScreenDimensions() {
+    if (typeof globalThis === "undefined" || typeof globalThis.innerWidth !== "number") return null;
+    return { width: globalThis.innerWidth, height: globalThis.innerHeight };
+  }
+  OpenPanel(pluginId) {
+    try {
+      return !!globalThis.__barInstance?.openPanel?.(pluginId);
+    } catch (_) {
+      return false;
+    }
+  }
+  ClosePanel(pluginId) {
+    try {
+      return !!globalThis.__barInstance?.closePanel?.(pluginId);
+    } catch (_) {
+      return false;
+    }
+  }
+  GetOpenPanelId() {
+    try {
+      return globalThis.__barInstance?.openPanelId?.() ?? null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── plugin-manifest wire (GameEvent 0x02AE -> GameAction 0x02AF) ───
+  /** Push the `id@version` roster the wasm session answers 0x02AE with. */
+  SetPluginList(list) {
+    return this._act("SetPluginList", String(list ?? ""));
+  }
+  /** Roster currently held wasm-side, or `null` when unavailable. */
+  GetPluginList() {
+    return this._live("GetPluginList") ?? null;
   }
 }
 

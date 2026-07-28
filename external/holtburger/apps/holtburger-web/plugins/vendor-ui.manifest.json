@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./vendor-ui.js",
   "environments": ["browser"],
-  "slots": ["panel", "overlay"]
+  "slots": ["panel", "overlay"],
+  "clientApi": "^1.0",
+  "capabilities": ["GetVendorState", "BuyFromVendor", "SellToVendor", "GetObjectAppraisal"]
 }

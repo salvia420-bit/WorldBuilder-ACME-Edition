@@ -86,12 +86,12 @@
     },
     "clientApi": {
       "type": "string",
-      "description": "P6.1 (2026-07-27): semver range of the plugin-facing client facade API this plugin targets (compared against client.apiVersion / plugins/api.js API_VERSION). Absent = no constraint. Loader enforcement lands with migration step 6 of the P6.1 design doc; until then this is declarative.",
+      "description": "P6.1: semver range of the plugin-facing client facade API this plugin targets (compared against client.apiVersion / plugins/api.js API_VERSION). Absent = no constraint. ENFORCED as of 2026-07-28 — loadPlugins({apiVersion}) skips a manifest whose range excludes the running facade version, with the reason logged. Ranges are the loader's own npm-style set: exact, ^, ~, >=, >, <=, <, =, *.",
       "minLength": 1
     },
     "capabilities": {
       "type": "array",
-      "description": "P6.1 (2026-07-27): capability names this plugin requires (CAPABILITY_CANDIDATES keys / client.capabilities entries). Trailing `?` marks a capability optional, same convention as dependencies. A required capability missing from client.capabilities skips the plugin with a logged reason — the observable version of retail IAsheronsCall's silent E_FAIL stubs. Also the data source for answering the retail plugin-manifest wire query (S->C GameEvent 0x02AE Admin_QueryPluginList -> C->S GameAction 0x02AF {context:u32, pluginList:string}).",
+      "description": "P6.1: capability names this plugin requires (rynth/webhost.js CAPABILITY_CANDIDATES keys / client.capabilities entries). Trailing `?` marks a capability optional, same convention as dependencies. ENFORCED as of 2026-07-28 — loadPlugins({capabilities}) skips a plugin whose REQUIRED capability is absent, with the reason logged: the observable version of retail IAsheronsCall's silent E_FAIL stubs. The host set is probed from the wasm SessionHandle (prototype pre-login, instance after), so a stale pkg/ degrades a plugin loudly instead of throwing mid-frame. When the caller passes no capability set the gate is inert — 'cannot tell' must never read as 'missing'. The loaded roster is also what answers the retail plugin-manifest wire query (S->C GameEvent 0x02AE Admin_QueryPluginList -> C->S GameAction 0x02AF {context:u32, pluginList:string}).",
       "items": {
         "type": "string",
         "pattern": "^[A-Za-z0-9_.\\-]+\\??$"

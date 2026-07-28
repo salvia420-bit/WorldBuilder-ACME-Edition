@@ -12,5 +12,6 @@
   "slots": ["panel"],
   "hotkeys": [
     { "id": "toggle", "default": "F3", "label": "Toggle Map" }
-  ]
+  ],
+  "clientApi": "^1.0"
 }

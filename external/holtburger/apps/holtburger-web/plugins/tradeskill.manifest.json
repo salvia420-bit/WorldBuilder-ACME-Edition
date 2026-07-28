@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./tradeskill.js",
   "environments": ["browser"],
-  "slots": ["overlay"]
+  "slots": ["overlay"],
+  "clientApi": "^1.0",
+  "capabilities": ["UseWithTarget"]
 }

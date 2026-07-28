@@ -12,5 +12,7 @@
   "slots": ["overlay"],
   "hotkeys": [
     { "id": "toggle", "default": "Shift+F4", "label": "Toggle Spell Research" }
-  ]
+  ],
+  "clientApi": "^1.0",
+  "capabilities": ["GetKnownSpells"]
 }

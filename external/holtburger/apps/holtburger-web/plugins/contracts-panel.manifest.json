@@ -12,5 +12,6 @@
   "slots": ["panel"],
   "hotkeys": [
     { "id": "toggle", "default": "F7", "label": "Toggle Contracts" }
-  ]
+  ],
+  "clientApi": "^1.0"
 }

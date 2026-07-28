@@ -13,5 +13,7 @@
   "hotkeys": [
     { "id": "toggle", "default": "F5", "label": "Toggle Spellbook" },
     { "id": "toggle-alt", "default": "F2", "label": "Toggle Spellbook (alt)" }
-  ]
+  ],
+  "clientApi": "^1.0",
+  "capabilities": ["GetKnownSpells", "ForgetSpell", "GetPlayerInventory"]
 }

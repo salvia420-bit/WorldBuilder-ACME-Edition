@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./hotbar.js",
   "environments": ["browser"],
-  "slots": ["hud", "overlay"]
+  "slots": ["hud", "overlay"],
+  "clientApi": "^1.0",
+  "capabilities": ["CastSpell", "UseObject", "GetPlayerInventory", "GetEnchantments"]
 }

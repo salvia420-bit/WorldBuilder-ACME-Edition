@@ -9,5 +9,6 @@
   "iconHidden": true,
   "entry": "./landblock-messages.js",
   "environments": ["browser"],
-  "slots": ["watcher"]
+  "slots": ["watcher"],
+  "clientApi": "^1.0"
 }

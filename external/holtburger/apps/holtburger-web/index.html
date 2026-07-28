@@ -1311,7 +1311,14 @@
       // main thread — the case the keepalive heartbeat above cannot cover.
       // Default OFF; transparently falls back to the direct `start_session`.
       import { startNetWorkerSession, netWorkerEnabled } from "./scene3d/net_worker_client.js";
-      import { createClient } from "./plugins/api.js";
+      import { createClient, API_VERSION as CLIENT_API_VERSION } from "./plugins/api.js";
+      // P6.1 promotion (2026-07-28): capability probe for the plugin
+      // loader's manifest `capabilities` gate. The loader runs long before
+      // login, so there is no SessionHandle to probe — but wasm-bindgen
+      // puts every method on SessionHandle.prototype, so probing the
+      // PROTOTYPE gives the identical answer for a set that only names
+      // methods. Falls back to `null` (gate inert) on a stale pkg/.
+      import { probeCapabilities } from "./plugins/webhost.js";
       // P6.1 (2026-07-27): the two retail chat hooks (eatable buses).
       // Side-effect import sets window.__chatHooks; the drain loop and
       // the chat-form submit handler below guard with `?.` so a missing
@@ -1767,6 +1774,22 @@
           if (mod) entry.module = mod;
         }
 
+        // P6.1 — the host half of the facade contract the loader enforces.
+        // `capabilities` comes from SessionHandle.prototype (see the import
+        // note): identical to a live probe for a method-only set, and
+        // available now, which a session is not. `null` => gate inert, so a
+        // stale/missing pkg/ can never mass-skip the plugin tree.
+        let __clientCapabilities = null;
+        try {
+          const proto = __hbWasmNs?.SessionHandle?.prototype;
+          if (proto) {
+            __clientCapabilities = probeCapabilities(proto);
+            window.__clientCapabilities = __clientCapabilities;
+          }
+        } catch (err) {
+          console.warn(`[plugin-loader] capability probe skipped: ${err?.message ?? err}`);
+        }
+
         // [c] Validate, resolve deps, run lifecycle hooks. The 5-stage
         // hooks (onBeforeLoad/onLoad) fire here; today no plugin exports
         // them so this is a no-op pass that just builds the `loaded` Map.
@@ -1774,6 +1797,8 @@
           entries,
           environment: "browser",
           context: { host: "holtburger-web" },
+          apiVersion: CLIENT_API_VERSION,
+          capabilities: __clientCapabilities,
           log: (level, msg) => {
             // Quiet info; warn/error → console.
             if (level === "warn") console.warn(`[plugin-loader] ${msg}`);
@@ -5645,9 +5670,12 @@
       }
       setBootState("form-shown");
       loginForm.addEventListener("submit", async (e) => {
-          // P6.1 — a reconnect builds a NEW wasm session with an empty
-          // roster; re-push so 0x02AE keeps answering with the loaded set.
-          if (typeof window.__publishPluginList === "function") window.__publishPluginList();
+        // P6.1 note: the roster re-push used to sit HERE, which ran before
+        // `preventDefault` and — fatally — before the new session's handle
+        // existed, so it always published to the previous (or no) handle
+        // and `pluginList()` read back `undefined` in-world. It now fires
+        // at the handle-install site below, where the roster can actually
+        // reach the session that will answer 0x02AE.
         e.preventDefault();
         if (activeHandle) return;
         const fd = new FormData(loginForm);
@@ -5712,6 +5740,17 @@
           // and method surfaces. Bump that schema's `version` whenever
           // a new load-bearing global is added/renamed (HUD rec #184).
           window.__sessionHandle = handle;
+          // P6.1 promotion (2026-07-28) — a reconnect builds a NEW wasm
+          // session, and the facade is created once per page. Rebind it
+          // here (one call re-probes capabilities and re-points every
+          // namespace + `_unsafeHandle`); without this every `client.*`
+          // call after a kick/reconnect went to the dead first session.
+          // Then push the plugin roster, which the new session's 0x02AE
+          // answer starts empty. Both are no-ops on the first login (the
+          // client doesn't exist yet / the roster is re-pushed below).
+          try { window.__pluginClient?.attachHandle?.(handle); }
+          catch (err) { console.warn(`[plugin-api] rebind failed: ${err?.message ?? err}`); }
+          if (typeof window.__publishPluginList === "function") window.__publishPluginList();
           // P4.1 / LEAK-01 (2026-07-27): per-guid bridge-cache residency
           // probe. Reads __sessionHandle DYNAMICALLY (same
           // survives-reconnect pattern as the keepalive below), so one

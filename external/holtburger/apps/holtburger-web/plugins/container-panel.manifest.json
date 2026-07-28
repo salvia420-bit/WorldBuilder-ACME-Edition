@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./container-panel.js",
   "environments": ["browser"],
-  "slots": ["panel"]
+  "slots": ["panel"],
+  "clientApi": "^1.0",
+  "capabilities": ["GetContainerContents", "MoveItem", "GetPlayerInventory"]
 }

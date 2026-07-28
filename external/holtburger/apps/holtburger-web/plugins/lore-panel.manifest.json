@@ -12,5 +12,7 @@
   "slots": ["panel"],
   "hotkeys": [
     { "id": "toggle", "default": "Shift+F8", "label": "Toggle Library" }
-  ]
+  ],
+  "clientApi": "^1.0",
+  "capabilities": ["GetPlayerInventory"]
 }

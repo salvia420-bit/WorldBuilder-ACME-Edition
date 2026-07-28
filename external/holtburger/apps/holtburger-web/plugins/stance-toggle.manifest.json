@@ -8,5 +8,6 @@
   "icon": "⚐",
   "entry": "./stance-toggle.js",
   "environments": ["browser"],
-  "slots": ["bar"]
+  "slots": ["bar"],
+  "clientApi": "^1.0"
 }

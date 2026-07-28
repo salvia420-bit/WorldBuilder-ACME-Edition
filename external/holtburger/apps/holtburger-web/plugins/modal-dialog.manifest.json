@@ -9,5 +9,6 @@
   "iconHidden": true,
   "entry": "./modal-dialog.js",
   "environments": ["browser"],
-  "slots": ["overlay"]
+  "slots": ["overlay"],
+  "clientApi": "^1.0"
 }

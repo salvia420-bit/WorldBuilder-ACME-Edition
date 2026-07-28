@@ -139,6 +139,20 @@ function _installProxy() {
   if (!h) return false;
   if (h.__hbWrappedForRejection) return true;
   try { window.__sessionHandle = _wrapHandle(h); } catch (_) { return false; }
+  // P6.1 (2026-07-28) — hand the PROXIED handle to the plugin facade too.
+  // This module runs ~100ms after login, by which time `createClient` has
+  // already captured the RAW handle; without this rebind every action
+  // routed through `client.*` / `client.host.*` bypassed the tracking
+  // above, while the same action issued via `window.__sessionHandle` was
+  // tracked (live-observed 2026-07-28: two JS wrappers, one wasm pointer).
+  // As plugins migrate off the raw global onto the facade — the whole
+  // point of P6.1 — that split would have silently disabled rejection
+  // feedback for them. `attachHandle` re-probes capabilities, and the
+  // proxy answers `typeof handle[name] === "function"` identically.
+  // KNOWN GAP: `_tryInit`'s poll stops after the first success, so a later
+  // RECONNECT installs a fresh unproxied handle and neither the global nor
+  // the facade is re-wrapped. Pre-existing; both stay consistent.
+  try { window.__pluginClient?.attachHandle?.(window.__sessionHandle); } catch (_) { /* never block install */ }
   return true;
 }
 

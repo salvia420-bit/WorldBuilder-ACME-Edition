@@ -127,6 +127,12 @@ import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 // client.chat.hooks below; index.html emits into them at the two retail
 // plumbing points (kind=2 drain / chat-form submit).
 import { chatHooks } from "./chat-hooks.js";
+// P6.1 promotion (2026-07-28): the ONE facade substrate. `createClient`
+// constructs exactly one RynthWebHost and expresses every namespace below
+// as a delegate over its capability table — one capability resolution, one
+// degrade-not-throw rule, one owner of the raw SessionHandle. See
+// plugins/webhost.js for why the implementation lives under rynth/.
+import { RynthWebHost } from "./webhost.js";
 
 /**
  * P6.1 — version of the plugin-facing client facade. Semver; additive
@@ -396,8 +402,40 @@ export const eventArgsFactories = Object.freeze({
 import { WorldState, bindWorldStateToClient } from './world-state.js';
 export { WorldState, bindWorldStateToClient } from './world-state.js';
 
-export function createClient(sessionHandle) {
+/**
+ * Build the plugin-facing `client` facade over a wasm SessionHandle.
+ *
+ * P6.1 SHAPE (design §2.1) — one object graph, three views:
+ *   client.host           the flat retail-named surface (= RynthWebHost);
+ *                         what rynth code targets, and the substrate every
+ *                         namespace below delegates through.
+ *   client.player/.chat/… the namespaced view plugins already write against.
+ *   client._unsafeHandle  the raw SessionHandle, renamed to declare intent —
+ *                         the ONLY sanctioned raw access, for the accessor
+ *                         PROPERTIES that cannot be capabilities.
+ *
+ * SNAPSHOT SEMANTICS — deliberate v1 deviation from the design doc. The
+ * doc proposed re-pointing per-tick reads (`client.player.pose`) at the
+ * host's frozen per-tick snapshot. We do NOT, in v1: the heartbeat is a
+ * dedicated Worker that only bot pages start, so with it stopped every
+ * snapshot read would answer its zero-fallback and `client.player.pose`
+ * would go null for the ~100 plugin call sites that read it per frame. So:
+ *   - `client.player.pose` / `.stats` / `.inventory` stay LIVE reads (the
+ *     retail-client "read it now" semantics they have always had),
+ *   - `client.host.TryGetPlayerPose()` is the frozen per-tick read, exact
+ *     as designed, available to anyone who calls `client.startHostTick()`.
+ * Both are honest and neither is a hole; the frozen-view flip is a v2
+ * decision that wants its own migration of the per-frame readers.
+ *
+ * @param {object} sessionHandle wasm SessionHandle
+ * @param {{host?: object}} [opts] `opts.host` is forwarded to RynthWebHost
+ *   (e.g. `{noEventTap: true}` in tests).
+ */
+export function createClient(sessionHandle, opts = {}) {
   const bus = new EventTarget();
+
+  // The one facade substrate. Capability probing happens here, once.
+  const host = new RynthWebHost(sessionHandle, opts.host || {});
 
   // Events fed externally by drainEvents loop in index.html — do not poll from here.
   // Coverage table above documents which Chorizite EventArgs each bus name maps to.
@@ -431,12 +469,17 @@ export function createClient(sessionHandle) {
   // TODO(coverage-table row 14): add "portalSpaceExited" bus event (kind=7 covers exit-equivalent only)
   // row 15: DONE (Q1a 2026-05-26) — kind=29 "death" {victimGuid,killerGuid,message}; combat-hud overlays self-deaths.
 
+  // P6.1 — every member below delegates through `host`. Where a host member
+  // exists it is called by its retail name; where only the capability table
+  // is needed (raw wasm return shapes plugins already depend on) the
+  // `host.call(cap, …)` seam is used so resolution + degrade-not-throw
+  // still happen in exactly one place.
   const player = Object.freeze({
     jump(power) {
-      sessionHandle.jump(power);
+      host.Jump(power);
     },
     useObject(guid) {
-      sessionHandle.useObject(guid);
+      host.UseObject(guid);
     },
     // === Wave 5.C / Agent 5.C — Tradeskill drag-and-drop dispatch (2026-05-28) ===
     // Wraps Wave 5.A's `sessionHandle.useWithTarget(item, target)` wasm
@@ -444,23 +487,24 @@ export function createClient(sessionHandle) {
     // (stale wasm pkg), the call is a no-op — plugins/tradeskill.js
     // surfaces a one-time console.warn so the user sees the staleness.
     useWithTarget(itemGuid, targetGuid) {
-      if (typeof sessionHandle.useWithTarget !== "function") return;
-      sessionHandle.useWithTarget(itemGuid >>> 0, targetGuid >>> 0);
+      // Capability-gated by the host (returns false on a stale pkg/ instead
+      // of throwing) — plugins/tradeskill.js surfaces the staleness warn.
+      host.UseItemOnTarget(itemGuid >>> 0, targetGuid >>> 0);
     },
     // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
     // Bind == `useObject(lifestoneGuid)` (server-decided by WeenieType).
     // Recall == `recallToLifestone()` — no payload, ACE owns cooldown.
     recallToLifestone() {
-      sessionHandle.teleToLifestone();
+      host.RecallToLifestone();
     },
     toggleCombatMode() {
-      sessionHandle.toggleCombatMode();
+      host.ToggleCombatMode();
     },
     attack(targetGuid, attackHeight = 2, powerLevel = 1.0) {
-      sessionHandle.attack(targetGuid, attackHeight, powerLevel);
+      host.MeleeAttack(targetGuid, attackHeight, powerLevel);
     },
     missileAttack(targetGuid, attackHeight = 2, accuracyLevel = 1.0) {
-      sessionHandle.missileAttack(targetGuid, attackHeight, accuracyLevel);
+      host.MissileAttack(targetGuid, attackHeight, accuracyLevel);
     },
     castSpell(spellId, targetGuid) {
       // null/undefined targetGuid → untargeted (recall / dispel /
@@ -481,10 +525,14 @@ export function createClient(sessionHandle) {
           resolvedTarget = null;
         }
       }
+      // P6.1: only the WIRE half moves to the host — the JS value-add above
+      // and below (self-target promotion, bus emit, local cast gesture) is
+      // this wrapper's own and is deliberately NOT pushed down into
+      // host.CastSpell, which rynth's loops call for the bare wire action.
       if (resolvedTarget == null) {
-        sessionHandle.castUntargetedSpell(spellId);
+        host.CastUntargetedSpell(spellId);
       } else {
-        sessionHandle.castTargetedSpell(resolvedTarget, spellId);
+        host.CastSpell(resolvedTarget, spellId);
       }
       // WS14 — cast-lifecycle begin for the non-picking paths (combat-bar /
       // hotbar / spell-research). Mirrors picking.js's spellCastInitiated
@@ -529,19 +577,27 @@ export function createClient(sessionHandle) {
       } catch (_) { /* never block the cast on the local animation */ }
     },
     forgetSpell(spellId) {
-      sessionHandle.removeSpellFromBook(spellId);
+      host.ForgetSpell(spellId);
     },
+    /**
+     * LIVE pose read (see createClient's SNAPSHOT SEMANTICS note): this
+     * getter answers now, every time. `client.host.TryGetPlayerPose()` is
+     * the frozen per-tick read.
+     */
     get pose() {
-      return sessionHandle.getLocalPlayerPose();
+      return host.TryGetPlayerPoseLive();
     },
     get stats() {
-      return sessionHandle.playerStats();
+      // Raw PlayerStatsSnapshot (stride arrays) — the shape plugins parse.
+      // `host.TryGetPlayerStats()` is the normalized projection.
+      return host.call("GetPlayerStats") ?? null;
     },
     get inventory() {
-      return sessionHandle.playerInventory();
+      // Raw InventoryItem rows; `host.TryGetPlayerInventory()` projects.
+      return host.call("GetPlayerInventory") ?? null;
     },
     knownSpells() {
-      return sessionHandle.playerKnownSpells();
+      return host.call("GetKnownSpells") ?? null;
     },
     /**
      * PR-2 surface — local player's active enchantment snapshot. Returns
@@ -552,11 +608,7 @@ export function createClient(sessionHandle) {
      * @returns {Array<object>}
      */
     enchantments() {
-      try {
-        return sessionHandle.playerEnchantments();
-      } catch (_) {
-        return [];
-      }
+      return host.TryGetEnchantments();
     },
     // === Wave 4.A — Train Skills (2026-05-28) ===
     // Surface the two progression GameActions next to combat / cast /
@@ -565,10 +617,10 @@ export function createClient(sessionHandle) {
     // `PrivateUpdateSkill` → `playerStatsUpdated` bus event, which the
     // `plugins/train-skills.js` plugin subscribes to for live re-render.
     raiseSkill(skillId, xpSpent) {
-      sessionHandle.raiseSkill(skillId >>> 0, xpSpent >>> 0);
+      host.RaiseSkill(skillId, xpSpent);
     },
     trainSkill(skillId, credits) {
-      sessionHandle.trainSkill(skillId >>> 0, credits >>> 0);
+      host.TrainSkill(skillId, credits);
     },
     /**
      * Current `AvailableSkillCredits` (PropertyInt 24) for the local
@@ -579,8 +631,10 @@ export function createClient(sessionHandle) {
      * @returns {number}
      */
     get skillCredits() {
+      // Accessor PROPERTY, not a method — cannot be a capability, so this
+      // is one of the documented `_unsafeHandle` reads.
       try {
-        return sessionHandle.playerSkillCredits >>> 0;
+        return host.unsafeHandle.playerSkillCredits >>> 0;
       } catch (_) {
         return 0;
       }
@@ -598,16 +652,37 @@ export function createClient(sessionHandle) {
 
   const movement = Object.freeze({
     setInput(forward, strafe, turn, run) {
-      sessionHandle.setMovementInput(forward, strafe, turn, run);
+      host.SetMovementInput(forward, strafe, turn, run);
     },
     tick() {
-      sessionHandle.tickMovement();
+      host.TickMovement();
+    },
+    /** Retail `StopCompletely` / `SetAutoRun` / `TurnToHeading`. */
+    stop() {
+      return host.StopCompletely();
+    },
+    setAutoRun(on) {
+      return host.SetAutoRun(on);
+    },
+    turnToHeading(headingRad) {
+      return host.TurnToHeading(headingRad);
     },
   });
 
   const chat = Object.freeze({
     send(message) {
-      sessionHandle.sendChat(message);
+      host.WriteToChat(message);
+    },
+    /**
+     * P6.1 — retail `IssueChatBarCommand` (an E_FAIL stub in retail; real
+     * here). Runs `text` through the SAME slash/`@` router the chat bar
+     * uses, then falls through to a plain say. This is the re-injection
+     * half of "eat + rewrite": a plugin that eats `chat.hooks.outgoing`
+     * calls this with its rewritten line. Does not re-enter the hook.
+     * @returns {boolean}
+     */
+    parse(text) {
+      return host.InvokeChatParser(text);
     },
     on(eventName, handler) {
       events.on(eventName, handler);
@@ -620,17 +695,25 @@ export function createClient(sessionHandle) {
     //   hooks.outgoing.on("chatOutgoing", (ev) => { ... ev.eat(); })
     //     — pre-parse chat-bar line {text}; eat = no route/send/echo.
     hooks: chatHooks,
+    /** Retail `OnChatWindowText` — subscribe inbound. Returns unsubscribe. */
+    onIncoming(fn) {
+      return host.OnChatWindowText(fn);
+    },
+    /** Retail `OnChatBarEnter` — subscribe outbound. Returns unsubscribe. */
+    onOutgoing(fn) {
+      return host.OnChatBarEnter(fn);
+    },
   });
 
   const characters = Object.freeze({
     list() {
-      return sessionHandle.characterList();
+      return host.TryGetCharacterList();
     },
     select(guid) {
-      sessionHandle.selectCharacter(guid);
+      host.SelectCharacter(guid);
     },
     createTest(name) {
-      sessionHandle.createTestCharacter(name);
+      host.CreateTestCharacter(name);
     },
     // Wave D.2 (2026-05-27) — rich char-gen wizard surface; mirrors
     // `gmCharGenMainUI` (external/chorizite/ACBindings/Generated/Game/
@@ -653,20 +736,21 @@ export function createClient(sessionHandle) {
     //     dispatches a CharacterCreate wire packet and resolves
     //     immediately. Outcome later via kind=5 / kind=6 events.
     getCatalog() {
-      return sessionHandle.getCharacterGenCatalog();
+      return host.TryGetCharacterGenCatalog();
     },
     skillCostsFor(heritageId, skillId) {
-      return sessionHandle.getSkillCostsForHeritage(heritageId, skillId);
+      return host.TryGetSkillCostsForHeritage(heritageId, skillId);
     },
     // Wave J4.B (2026-05-27) — per-(heritage, gender) appearance icon
     // strips so the wizard's swatch picker can render thumbnails. See
     // `apps/holtburger-web/src/lib.rs` `get_character_gen_appearance_strips`.
     appearanceStrips(heritageId, genderId) {
-      if (!sessionHandle?.getCharacterGenAppearanceStrips) return null;
-      return sessionHandle.getCharacterGenAppearanceStrips(heritageId, genderId);
+      return host.TryGetCharacterGenAppearanceStrips(heritageId, genderId);
     },
     createCharacter(build) {
-      sessionHandle.sendCharGenResult(build);
+      // Throws on wasm-side validation failure — the wizard renders the
+      // message, so this is the one documented non-degrading member.
+      host.CreateCharacter(build);
     },
   });
 
@@ -678,19 +762,23 @@ export function createClient(sessionHandle) {
   // attribute names defensively in case unbundled plugins reach for them.
   const sceneQueries = Object.freeze({
     currentCell() {
-      return sessionHandle.getCurrentCellId();
+      return host.GetCurrentCellIdLive();
     },
     isIndoor() {
-      return sessionHandle.isCurrentCellIndoor();
+      return host.IsIndoors();
+    },
+    /** Retail slot `GetIsOutdoors` (E_NOTIMPL in retail). */
+    isOutdoor() {
+      return host.GetIsOutdoors();
     },
     renderSet(depth = 1) {
-      return sessionHandle.getRenderSet(depth);
+      return host.GetRenderSet(depth);
     },
     terrainHeightAt(x, y) {
-      return sessionHandle.terrainHeightAt(x, y);
+      return host.TerrainHeightAt(x, y);
     },
     doorPart(guid) {
-      return sessionHandle.getBuildingPartForDoor(guid);
+      return host.GetBuildingPartForDoor(guid);
     },
   });
   const scene = sceneQueries;
@@ -711,34 +799,47 @@ export function createClient(sessionHandle) {
 
   const collision = Object.freeze({
     sweep(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) {
-      return sessionHandle.cameraSweepCollision(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId);
+      return host.SweepCollision(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId);
     },
     sweepBuilding(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) {
-      return sessionHandle.sweepSphereAgainstBuildingMesh(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId);
+      return host.SweepBuildingMesh(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId);
     },
     sweepCells(fromX, fromY, fromZ, toX, toY, toZ, radius, cellIds) {
-      return sessionHandle.sweepSphereAgainstCellMesh(fromX, fromY, fromZ, toX, toY, toZ, radius, cellIds);
+      return host.SweepCellMesh(fromX, fromY, fromZ, toX, toY, toZ, radius, cellIds);
     },
     sweepStatics(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) {
-      return sessionHandle.sweepSphereAgainstStatics(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId);
+      return host.SweepStatics(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId);
     },
   });
 
   const sky = Object.freeze({
     state() {
-      return sessionHandle.getSkyState();
+      return host.GetSkyState();
     },
     objects() {
-      return sessionHandle.getSkyObjectStates();
+      return host.GetSkyObjectStates();
     },
     hasDesc() {
-      return sessionHandle.hasSkyDesc();
+      return host.HasSkyDesc();
     },
     setTimeOverride(t) {
-      return sessionHandle.setSkyTimeOverride(t);
+      return host.SetSkyTimeOverride(t);
     },
     setDayOverride(d, y) {
-      return sessionHandle.setGameDayOverride(d, y);
+      return host.SetGameDayOverride(d, y);
+    },
+  });
+
+  // P6.1 — retail slots Select / GetSelected / GetPreviousSelected. Backed
+  // by the 3D entity manager (an ENVIRONMENT capability: it attaches long
+  // after login, so `client.has("SelectObject")` is probed live).
+  const selection = Object.freeze({
+    select(guid) {
+      return host.SelectObject(guid);
+    },
+    /** Selected guid, or 0 when nothing is selected / no 3D scene. */
+    get id() {
+      return host.GetSelectedId();
     },
   });
 
@@ -766,30 +867,88 @@ export function createClient(sessionHandle) {
       return false;
     },
     openPanel(pluginId) {
-      return window.__barInstance?.openPanel?.(pluginId) ?? false;
+      return host.OpenPanel(pluginId);
     },
     closePanel(pluginId) {
-      return window.__barInstance?.closePanel?.(pluginId) ?? false;
+      return host.ClosePanel(pluginId);
     },
     openPanelId() {
-      return window.__barInstance?.openPanelId?.() ?? null;
+      return host.GetOpenPanelId();
+    },
+    /** Toggle: open when closed (or when another plugin's panel is open),
+     *  close when this plugin's panel is the open one. Mirrors what an icon
+     *  click does, which is what a hotkey-driven plugin actually wants. */
+    togglePanel(pluginId) {
+      if (host.GetOpenPanelId() === pluginId) return host.ClosePanel(pluginId);
+      return host.OpenPanel(pluginId);
     },
     writeToChat(text, category = null) {
-      try {
-        window.__appendChatLine?.(String(text), category);
-        return typeof window.__appendChatLine === "function";
-      } catch (_) {
-        return false;
-      }
+      return host.WriteToChatWindow(text, category);
     },
     screenDimensions() {
-      return { width: window.innerWidth, height: window.innerHeight };
+      return host.GetScreenDimensions() ?? { width: 0, height: 0 };
     },
   });
 
   const client = {
     // P6.1 — facade version (see API_VERSION doc above).
     apiVersion: API_VERSION,
+    /**
+     * The ONE facade substrate — the flat retail-named surface
+     * (RynthWebHost). Everything else on this object delegates through it.
+     */
+    host,
+    /**
+     * Capability probe (design §2.3). `true` iff the backing exists; an
+     * absent capability's member returns its documented fallback and never
+     * throws. Environment capabilities (selection / chat / bar seams) are
+     * probed live because their backing attaches late.
+     */
+    has(cap) {
+      return host.has(cap);
+    },
+    /** Sorted capability names currently backed. */
+    get capabilities() {
+      return host.capabilities;
+    },
+    /**
+     * The raw SessionHandle. Named to declare intent: this is the ONLY
+     * sanctioned raw access, for the accessor PROPERTIES that cannot be
+     * capabilities. Reaching past the facade for anything a namespace or
+     * `host.call(cap, …)` already covers is the deprecated bypass
+     * (design §6) — `window.__sessionHandle` goes debug-only in v1.1.
+     *
+     * A GETTER, not a captured reference: a reconnect swaps the wasm
+     * session, and the pre-P6.1 facade captured the first handle for the
+     * page's lifetime — so after a kick/reconnect every `client.*` call
+     * went to a dead session (live-observed under `?kickDance=1`).
+     */
+    get _unsafeHandle() {
+      return host.unsafeHandle;
+    },
+    /**
+     * Rebind the whole facade to a new wasm session and re-probe
+     * capabilities. index.html calls this the moment a new handle is
+     * installed, so ONE call keeps every namespace, the host, and
+     * `_unsafeHandle` pointing at the live session.
+     */
+    attachHandle(newHandle) {
+      host.attach(newHandle);
+      return client;
+    },
+    /**
+     * Start the host's frozen-per-tick heartbeat (a dedicated Worker, so a
+     * backgrounded tab keeps ticking). Off by default — only callers that
+     * want the snapshot reads (`host.TryGetPlayerPose()`, `host.snap`)
+     * need it. Idempotent-ish: re-calling restarts at the new rate.
+     */
+    startHostTick(hz = 15) {
+      host.start(hz);
+      return host;
+    },
+    stopHostTick() {
+      host.stop();
+    },
     player,
     movement,
     chat,
@@ -798,6 +957,7 @@ export function createClient(sessionHandle) {
     scene,   // Pure scene-query surface (preferred for renderer plugins).
     collision,
     sky,
+    selection,
     ui,
     events: Object.freeze(events),
     AttackHeight,
@@ -807,11 +967,13 @@ export function createClient(sessionHandle) {
     ClientState,
     AddRemoveEventType,
     eventArgsFactories,
+    // Accessor PROPERTIES on the handle — not methods, so not capabilities;
+    // these are the documented `_unsafeHandle` reads.
     get account() {
-      return sessionHandle.accountName;
+      return host.unsafeHandle.accountName;
     },
     get canCreateCharacter() {
-      return sessionHandle.canCreateCharacter;
+      return host.unsafeHandle.canCreateCharacter;
     },
     // PR 4 (2026-05-27): `client.character` — typed `Character` instance
     // for the local player. Null pre-spawn / pre-PLAYER_SPAWNED. Once

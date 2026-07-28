@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./target-bar.js",
   "environments": ["browser"],
-  "slots": ["hud", "overlay"]
+  "slots": ["hud", "overlay"],
+  "clientApi": "^1.0",
+  "capabilities": ["ChangeCombatMode", "ToggleCombatMode", "UseObject"]
 }

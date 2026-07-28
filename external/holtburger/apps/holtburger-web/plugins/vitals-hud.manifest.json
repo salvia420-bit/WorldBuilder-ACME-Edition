@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./vitals-hud.js",
   "environments": ["browser"],
-  "slots": ["hud", "overlay"]
+  "slots": ["hud", "overlay"],
+  "clientApi": "^1.0",
+  "capabilities": ["GetPlayerStats", "GetEnchantments"]
 }

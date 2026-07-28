@@ -9,5 +9,6 @@
   "iconHidden": true,
   "entry": "./loading-screen.js",
   "environments": ["browser"],
-  "slots": ["overlay"]
+  "slots": ["overlay"],
+  "clientApi": "^1.0"
 }

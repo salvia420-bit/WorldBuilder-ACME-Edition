@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./examine-target.js",
   "environments": ["browser"],
-  "slots": ["watcher"]
+  "slots": ["watcher"],
+  "clientApi": "^1.0",
+  "capabilities": ["RequestId", "GetObjectAppraisal", "GetPlayerInventory"]
 }

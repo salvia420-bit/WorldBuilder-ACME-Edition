@@ -12,5 +12,6 @@
   "slots": ["panel"],
   "hotkeys": [
     { "id": "toggle", "default": "Shift+F6", "label": "Toggle House" }
-  ]
+  ],
+  "clientApi": "^1.0"
 }

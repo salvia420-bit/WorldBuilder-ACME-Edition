@@ -12,5 +12,7 @@
   "slots": ["panel"],
   "hotkeys": [
     { "id": "toggle", "default": "F1", "label": "Toggle Character" }
-  ]
+  ],
+  "clientApi": "^1.0",
+  "capabilities": ["GetPlayerStats", "RaiseSkill", "TrainSkill", "RaiseAttribute", "RaiseVital"]
 }

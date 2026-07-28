@@ -43,11 +43,77 @@
 
 import { createEatableBus } from "./loader.js";
 
+/** Canonical event names — one spelling, shared by every emitter. */
+export const CHAT_INCOMING = "chatIncoming";
+export const CHAT_OUTGOING = "chatOutgoing";
+
+const incoming = createEatableBus();
+const outgoing = createEatableBus();
+
+/**
+ * Emit an inbound (server -> display) chat line. Called from index.html's
+ * kind=2 ClientEvent drain, AFTER wire-state side effects and BEFORE
+ * display. Returns the event; `.eaten === true` means the caller must NOT
+ * display the line.
+ *
+ * @param {string} text      wasm-preformatted display line
+ * @param {number} chatType  wire ChatMessageType (evt.u32Payload)
+ * @param {number} category  display CHAT_CATEGORY (evt.u32Payload2)
+ * @returns {{text:string, chatType:number, category:number, eaten:boolean}}
+ */
+export function emitIncoming(text, chatType, category) {
+  return incoming.emit(CHAT_INCOMING, {
+    text,
+    chatType: (chatType ?? 0) >>> 0,
+    category: typeof category === "number" ? category : 0,
+  });
+}
+
+/**
+ * Emit an outbound (chat-bar submit) line. Called from index.html's chat
+ * form submit handler BEFORE any prefix parsing (`/`, `@`, `:`, `;`).
+ * `.eaten === true` means the caller must not route, send or echo.
+ *
+ * Only the chat BAR emits here. Bot/agent `sendChat()` and host-originated
+ * `InvokeChatParser()` re-injections deliberately bypass it — retail's
+ * `isBotOriginated` distinction, and what makes eat-then-rewrite loop-free.
+ *
+ * @param {string} text raw trimmed chat-bar line
+ * @returns {{text:string, eaten:boolean}}
+ */
+export function emitOutgoing(text) {
+  return outgoing.emit(CHAT_OUTGOING, { text });
+}
+
+/**
+ * Subscribe to inbound chat (retail `IACPlugin::OnChatWindowText`).
+ * @param {(ev:{text:string,chatType:number,category:number,eat:()=>void})=>void} fn
+ * @returns {() => void} unsubscribe
+ */
+export function onIncoming(fn) {
+  return incoming.on(CHAT_INCOMING, fn);
+}
+
+/**
+ * Subscribe to outbound chat (retail `IACPlugin::OnChatBarEnter`).
+ * @param {(ev:{text:string,eat:()=>void})=>void} fn
+ * @returns {() => void} unsubscribe
+ */
+export function onOutgoing(fn) {
+  return outgoing.on(CHAT_OUTGOING, fn);
+}
+
 export const chatHooks = {
   /** Eatable bus for inbound (server->display) chat lines. */
-  incoming: createEatableBus(),
+  incoming,
   /** Eatable bus for outbound (chat-bar submit) lines. */
-  outgoing: createEatableBus(),
+  outgoing,
+  emitIncoming,
+  emitOutgoing,
+  onIncoming,
+  onOutgoing,
+  CHAT_INCOMING,
+  CHAT_OUTGOING,
 };
 
 if (typeof window !== "undefined") {

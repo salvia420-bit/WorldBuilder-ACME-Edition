@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./dye-preview.js",
   "environments": ["browser"],
-  "slots": ["overlay", "watcher"]
+  "slots": ["overlay", "watcher"],
+  "clientApi": "^1.0",
+  "capabilities": ["GetPlayerInventory"]
 }

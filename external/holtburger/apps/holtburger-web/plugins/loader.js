@@ -82,6 +82,10 @@ const ID_PATTERN = /^[a-zA-Z0-9_.\-]+$/;
 // MAJOR.MINOR[.BUILD[.REVISION]]. We accept npm-style semver superset.
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?(-[0-9A-Za-z.\-]+)?(\+[0-9A-Za-z.\-]+)?$/;
 const DEP_PATTERN = /^([a-zA-Z0-9_.\-]+)(?:@([^?]+))?(\?)?$/;
+// P6.1 — manifest `capabilities` entries: a capability name, `?`-suffixed
+// when optional (same convention as dependencies). Must stay in sync with
+// schemas/plugin-manifest.json.
+const CAPABILITY_PATTERN = /^([A-Za-z0-9_.\-]+)(\?)?$/;
 
 // =============================================================================
 // [1] Validate — non-throwing manifest check (Chorizite §5 item 3)
@@ -195,6 +199,28 @@ export function validateManifest(manifest) {
     errors.push('entry: must be a string when present');
   }
 
+  // P6.1 — Optional: clientApi (semver RANGE against client.apiVersion).
+  if (m.clientApi != null) {
+    if (typeof m.clientApi !== 'string' || m.clientApi.length === 0) {
+      errors.push('clientApi: must be a non-empty semver range string when present');
+    }
+  }
+
+  // P6.1 — Optional: capabilities (`Name` or `Name?` for optional).
+  if (m.capabilities != null) {
+    if (!Array.isArray(m.capabilities)) {
+      errors.push('capabilities: must be an array of strings');
+    } else {
+      m.capabilities.forEach((cap, i) => {
+        if (typeof cap !== 'string') {
+          errors.push(`capabilities[${i}]: must be a string`);
+        } else if (!CAPABILITY_PATTERN.test(cap)) {
+          errors.push(`capabilities[${i}]: malformed (got ${JSON.stringify(cap)})`);
+        }
+      });
+    }
+  }
+
   // Optional scalars.
   for (const key of ['author', 'description', 'repo', 'icon']) {
     if (m[key] != null && typeof m[key] !== 'string') {
@@ -303,6 +329,63 @@ export function satisfiesRange(version, range) {
   if (r.startsWith('<')) return compareVersions(version, r.slice(1).trim()) < 0;
   if (r.startsWith('=')) return compareVersions(version, r.slice(1).trim()) === 0;
   return compareVersions(version, r) === 0;
+}
+
+/**
+ * P6.1 — parse one manifest `capabilities` entry.
+ * `"CastSpell"` → required; `"trade.open?"` → optional.
+ *
+ * @param {string} cap
+ * @returns {{ name: string, optional: boolean } | null} null when malformed
+ */
+export function parseCapability(cap) {
+  if (typeof cap !== 'string') return null;
+  const m = CAPABILITY_PATTERN.exec(cap.trim());
+  if (!m) return null;
+  return { name: m[1], optional: m[2] === '?' };
+}
+
+/**
+ * P6.1 — which of a manifest's REQUIRED capabilities are absent from the
+ * host's capability set. Optional (`?`-suffixed) entries are never
+ * reported. Returns `[]` when the manifest declares none, or when
+ * `available` is null/undefined — "we cannot tell" must never be reported
+ * as "missing" (the loader runs before a session exists, so an unknowable
+ * answer has to degrade to permissive, not to a silent mass-skip).
+ *
+ * @param {{capabilities?: string[]}} manifest
+ * @param {Iterable<string>|null|undefined} available client.capabilities
+ * @returns {string[]} sorted missing required capability names
+ */
+export function missingCapabilities(manifest, available) {
+  const declared = manifest && Array.isArray(manifest.capabilities) ? manifest.capabilities : null;
+  if (!declared || declared.length === 0) return [];
+  if (available == null) return [];
+  const have = available instanceof Set ? available : new Set(available);
+  const missing = [];
+  for (const raw of declared) {
+    const parsed = parseCapability(raw);
+    if (!parsed || parsed.optional) continue;
+    if (!have.has(parsed.name)) missing.push(parsed.name);
+  }
+  return missing.sort();
+}
+
+/**
+ * P6.1 — does a manifest's declared `clientApi` range admit `apiVersion`?
+ * A manifest with no `clientApi` imposes no constraint; an unknown
+ * `apiVersion` (null) also passes, for the same "cannot tell ⇒ permissive"
+ * reason as `missingCapabilities`.
+ *
+ * @param {{clientApi?: string}} manifest
+ * @param {string|null|undefined} apiVersion client.apiVersion
+ * @returns {boolean}
+ */
+export function clientApiSatisfied(manifest, apiVersion) {
+  const range = manifest && typeof manifest.clientApi === 'string' ? manifest.clientApi : null;
+  if (!range) return true;
+  if (!apiVersion) return true;
+  return satisfiesRange(apiVersion, range);
 }
 
 /**
@@ -511,6 +594,15 @@ export function applyDevManifest(manifest, dev) {
  *     loader pure relative to module loading.
  * @param {string} [opts.environment='browser']   browser / tui / cli.
  * @param {Object} [opts.context]                 Passed to lifecycle hooks.
+ * @param {string|null} [opts.apiVersion]  P6.1 — the host's `client.apiVersion`.
+ *     When given, a manifest whose `clientApi` range excludes it is skipped
+ *     with a reason. Omit/null to disable the check.
+ * @param {Iterable<string>|null} [opts.capabilities]  P6.1 — the host's
+ *     `client.capabilities`. When given, a manifest declaring a REQUIRED
+ *     capability absent from this set is skipped with a reason — the
+ *     observable version of retail IAsheronsCall's silent E_FAIL stubs.
+ *     Omit/null to disable the check (see `missingCapabilities`: "cannot
+ *     tell" degrades permissive, never to a mass-skip).
  * @param {(level:'info'|'warn'|'error', msg:string)=>void} [opts.log]
  * @returns {Promise<{ loaded: Map<string, {manifest:PluginManifest, module:any}>, skipped: {id?:string,reason:string,errors?:string[]}[] }>}
  */
@@ -522,6 +614,9 @@ export async function loadPlugins(opts) {
   const entries = Array.isArray(opts?.entries) ? opts.entries : [];
   const environment = opts?.environment || 'browser';
   const context = opts?.context || {};
+  // P6.1 facade contract (both null ⇒ the corresponding gate is inert).
+  const apiVersion = opts?.apiVersion ?? null;
+  const capabilitySet = opts?.capabilities == null ? null : new Set(opts.capabilities);
 
   // [a] Validate every manifest. Apply dev-sidecar overrides up front so
   // downstream resolves see the corrected `entry`.
@@ -541,6 +636,21 @@ export async function loadPlugins(opts) {
         id: finalManifest.id,
         reason: `environment mismatch: plugin wants ${(finalManifest.environments || []).join(',')} but host is ${environment}`,
       });
+      continue;
+    }
+    // P6.1 — facade-contract gates. Both are inert unless the caller
+    // supplied the host's side of the contract.
+    if (!clientApiSatisfied(finalManifest, apiVersion)) {
+      const reason = `clientApi mismatch: plugin wants ${finalManifest.clientApi} but client is ${apiVersion}`;
+      log('warn', `${finalManifest.id}: ${reason}`);
+      skipped.push({ id: finalManifest.id, reason });
+      continue;
+    }
+    const missingCaps = missingCapabilities(finalManifest, capabilitySet);
+    if (missingCaps.length) {
+      const reason = `missing required capabilities: ${missingCaps.join(', ')}`;
+      log('warn', `${finalManifest.id}: ${reason}`);
+      skipped.push({ id: finalManifest.id, reason, capabilities: missingCaps });
       continue;
     }
     validated.push({ ...entry, manifest: finalManifest });

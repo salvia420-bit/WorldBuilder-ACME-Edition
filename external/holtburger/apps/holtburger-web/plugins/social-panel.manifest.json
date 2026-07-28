@@ -10,5 +10,6 @@
   "entry": "./social-panel.js",
   "environments": ["browser"],
   "slots": ["panel"],
-  "hotkeys": [{ "id": "toggle", "default": "Shift+F3", "label": "Toggle Social" }]
+  "hotkeys": [{ "id": "toggle", "default": "Shift+F3", "label": "Toggle Social" }],
+  "clientApi": "^1.0"
 }

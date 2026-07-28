@@ -9,5 +9,7 @@
   "iconSprite": "0x06004D1C",
   "entry": "./combat-bar.js",
   "environments": ["browser"],
-  "slots": ["bar", "panel"]
+  "slots": ["bar", "panel"],
+  "clientApi": "^1.0",
+  "capabilities": ["GetPlayerStats", "ChangeCombatMode", "ToggleCombatMode", "GetPlayerInventory"]
 }

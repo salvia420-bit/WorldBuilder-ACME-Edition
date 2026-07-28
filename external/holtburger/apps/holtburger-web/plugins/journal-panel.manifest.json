@@ -12,5 +12,6 @@
   "slots": ["panel"],
   "hotkeys": [
     { "id": "toggle", "default": "F6", "label": "Toggle Journal" }
-  ]
+  ],
+  "clientApi": "^1.0"
 }

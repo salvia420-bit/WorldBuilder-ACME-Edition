@@ -12,5 +12,6 @@
   "slots": ["panel"],
   "hotkeys": [
     { "id": "toggle", "default": "F8", "label": "Toggle Allegiance" }
-  ]
+  ],
+  "clientApi": "^1.0"
 }

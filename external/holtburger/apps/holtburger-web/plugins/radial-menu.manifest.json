@@ -9,5 +9,7 @@
   "iconHidden": true,
   "entry": "./radial-menu.js",
   "environments": ["browser"],
-  "slots": ["overlay"]
+  "slots": ["overlay"],
+  "clientApi": "^1.0",
+  "capabilities": ["GetPlayerInventory", "MoveItem", "DropItem", "GiveObject", "UseObject", "UnwieldToPack"]
 }

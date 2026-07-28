@@ -9,5 +9,6 @@
   "iconHidden": true,
   "entry": "./book-panel.js",
   "environments": ["browser"],
-  "slots": ["panel"]
+  "slots": ["panel"],
+  "clientApi": "^1.0"
 }
