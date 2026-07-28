@@ -41,6 +41,25 @@ answered in full** (2026-07-27, all 20 KEY items answered, 72 free-text notes).
 > P6.1 v1.1 tail (migrate raw-handle plugins onto the facade; server half
 > of 0x02AE).**
 
+> **🧾 2026-07-28 THIRD PASS (two Opus agents + orchestrator; ledgers appended
+> to VERIFICATION-LOG) — Tier 3 is CLOSED client-side:** COL-17, COL-16 and the
+> isOnGround flicker were ONE bug (outdoor terrain contact planes stored
+> landblock-local, consumed world-frame) fixed `f5b2eabe`, three default-ON
+> flags + reachability counter; COL-10's anim half fixed `592fcdf2` (dual
+> local-rig dispatchers diverged — the rig was already playing the reversed
+> clip, the true defect was gait rate −1.199 vs 0.779; the T0 "no motion
+> command" reading was a diag blind spot). Camera building over-clip landed
+> `b79a59b2` (`?camAabbSweep=on` escape). RND-05/03 source-verified (pool is
+> 16+2 not 32; dungeon → dynamics-only, town lamps hold slots BY DESIGN;
+> live probe `probeL.cjs` ready, pass pending). Stars scoped, NOT implemented
+> (JS wiring gap; driving field is `transparent`, not the design doc's
+> `luminosity`) — needs a GPU eye-test session. Release wasm 4,954,209 B
+> shipped, boot-smoked. NEW BUG filed from live play: terrain_batch 256-slot
+> exhaustion + flicker on long tours (Neydisa `0x9EE5`); the same session's
+> zero-tri geom-audit drops were verified CORRECT against portal.dat.
+> REMAINING after this pass: scenery BSP rung (blocked), stars implementation,
+> P6.1 v1.1 tail, the R9 290/1070 eye-test batch, terrain_batch slot leak.**
+
 The questionnaire is what makes this a plan rather than a list. Reading source
 can only establish what the code says; 36% of answers came back `unsure` and 12%
 `not tested`, and that is a feature — the 56 `yes` and 61 `no` answers that

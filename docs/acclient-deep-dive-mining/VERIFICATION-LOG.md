@@ -1385,3 +1385,108 @@ jump-landing ground-acquisition defect (M); COL-16 narrowed to the
 sustained-push edge leak (S-M, likely T1's triangle fix); COL-10 anim half
 localized to the missing backstep motion application (S-M). All four have
 deterministic headless repros recorded above.
+
+---
+
+## TIER 3 FIXES LANDED — COL-17 + COL-16 + isOnGround were ONE BUG (2026-07-28, Opus agent A, `f5b2eabe`)
+
+Root cause: outdoor terrain contact planes were **stored in the cell's
+landblock-local frame** while every downstream consumer treats stored planes as
+world-frame (~1e4 m error at `0xADB1`). Three retail mechanisms silently never
+fired outdoors: (1) `validate_transition` BRANCH-A contact persistence
+(`acclient.c:312223`) — COL-16's leak; (2) `adjust_offset`'s plane projection +
+push-out — the walkability push-out LIFTED the airborne mover up the face at
+`run_speed·tan55° ≈ 8.6 m/s`, matching COL-17's 8-10 m/s; (3) the zero-offset
+contact echo (`calc_num_steps == 0` never runs `validate_transition`) — the
+stationary `isOnGround` flicker. Fix rebases the PLANE into world
+(`d_world = d_local − N·origin`), bit-stable inside `validate_walkable`.
+Riders (both COL-17): airborne entry contact uses retail's exact
+`check_contact` dot (`v·N > 2e-4`, `:316536`); GROUNDED + JUMP require true
+`ON_WALKABLE` (`floor_z`), per `jump_is_allowed` (`:343941`).
+
+Live A/B (headless, one session): cliff jump ×7 → z max 55.2, slides back,
+never grounds on the face (baseline summits 79.3 in 4.6 s); edge holds 12 s
+sustained W (baseline broke at 3.5 s); isOnGround 85/85 stable; COL-15 slope
+run zero flips (no regression); flat jumps and the head-on wall stop unchanged.
+Flags `terrainPlaneFrame` / `airborneContact` / `walkableGround` default ON with
+`=off` escapes; `terrainPlaneFrameArmEvals` unconditional reachability counter
+(0 → 384 in one run). Tests: holtburger-core 620/0, holtburger-world 643/0;
+`holtburger-dat terrain_subdiv::triangle_corner_ring_matches_height_sampler`
+fails PRE-EXISTING (verified on clean tree).
+
+Premise corrections (4 of 8 cited anchors were wrong): the landing tail at
+`system.rs:6747-6772` is the FRICTION tail; the `USE_LANDING_WALKABLE` tail sits
+in the dead legacy body (`:4581`–`:6340` — the dead zone is ~1,750 lines, far
+larger than the flagged `4783-4886`); `USE_PRECIPICE_SLIDE_REENTRY` /
+`attempt_precipice_slide` (`system.rs:351/355`) is dead (unit-test-only); the T1
+quad-vs-triangle item is NOT COL-16's cause (this venue's boundary is
+axis-aligned) — still open for diagonal cliff edges. Live grounding lives in
+`faithful_bridge.rs`.
+
+## COL-10 backstep — diag blind spot + wrong gait rate; FIXED (2026-07-28, Opus agent B, `592fcdf2`, JS-only)
+
+Premise corrections: the rig WAS playing the reversed clip all along — the T0
+"zero globalHistory applications" was a diag blind spot (`onMotionApplied`
+gated on `actionKey` alone; post-88fc3a9d a backstep resolves to the SAME
+WalkForward key as forward, differing only in timeScale sign). The real defect:
+backstep ran timeScale **−1.199** (negated forward-walk) instead of **0.779** —
+feet 54% fast vs the 2.028 m/s body. Cause: TWO local-rig dispatchers ~5 ms
+apart, last-write-wins; `camera.js::_dispatchLocalRigMotion` pre-converted to
+`0x45000005` at speed −1.0, which is NOT retail's post-adjust form
+(`acclient.c:343776`: `*speed = -0.64999998 * *speed`), so the `adjust_motion`
+port never fired. Fix: `camera.js:2371-2384` emits the raw WalkBackwards; both
+lanes converge. `diag/motion.js` records playback `sign`, sign flip = a
+transition. Measured (30 samples/arm): backstep −1.199 → −0.779, `_motionSpeed`
+1.0 → 0.64999998; walk/run/turn/sidestep unchanged; body speeds unregressed
+(walk 3.111, backstep 2.065 m/s).
+
+Filed, not fixed: stance high-bit churn (`0x3D` vs `0x8000003D`) duplicate
+cacheKeys (identical clips, verified); a WalkBackwards reaching the keyframe
+fetch returns no clip and once trapped the wasm; MEASUREMENT HAZARD — a session
+booting with `recoveries > 0` applies motions unreliably for ~60 s (likely a
+second contributor to the T0 reading). Gate motion measurements on
+`recoveries === 0`.
+
+## RND-05/03 P2 seam re-check — SOURCE-VERIFIED; live pass pending (2026-07-28, agent B)
+
+Corrections: the pool is **16 point + 2 spot** (not 32 — ticket stale), and the
+check needs NO render path (`tickLightingForCellState` is loop phase #5 outside
+`renderer.render()`, so `?nullRender=1` works). Source-verified: the RND-04 drop
+is default-ON gated on `_acVertexBakeActive`, baked cell statics never construct
+a light — but it covers **EnvCell statics only**; outdoor `__lbKey` lamps still
+hold slots. Expected live result: dungeon → dynamics-only; town at night → NOT,
+by design. Ready-to-run probe with exact observables: `probeL.cjs` (checked in).
+Live pass was aborted under the box-thrash resource directive.
+
+## Stars / skyObjReplace — UNIMPLEMENTED; scope grounded (2026-07-28, agent B)
+
+`0f5a6530` never touched `atmosphere_sky.js`; stars render (takram Yale
+catalog) and fade via a SYNTHETIC sun-altitude ramp, not the DAT curve. The
+wasm half already exists (`getSkyObjectStates()` exports the active
+`SkyObjectReplace`'s `transparent`/`luminosity`/`maxBright`; loop.js fetches it
+every frame) — purely a JS wiring gap. Grounded in a real Region dump:
+SkyObject index 1 = GfxObj `0x0100096F`, `transparent` 0 → 100 → 0 across the
+day (opaque only near midnight). SCOPE CORRECTION: the design doc says drive it
+from `luminosity`, but that field is 0 at EVERY keyframe for this object — the
+driving field is `transparent`. Deferred: retail curve asymmetric vs ours (GPU
+eye-test to accept), the 0-100 alpha → takram radiance mapping is a design
+call, index 1 inferred not proven, Region 1 has 3 DayGroups.
+
+## Camera building over-clip — LANDED (2026-07-28, orchestrator, `b79a59b2`)
+
+Step 2 of the clip chain (coarse per-part building AABB `cameraSweepCollision`)
+now default OFF — step 3's precise triangle sweep covers the same buildings
+without the rotated-footprint over-bound (up to 4.9 m). `?camAabbSweep=on`
+escape + `window.__setCamAabbSweep` live toggle. R9 290 eye-test queued
+(grocer walls).
+
+## NEW BUG (user live report 2026-07-28, phase4demo @ Neydisa Castle `0x9EE50039`)
+
+Long-tour session: `[terrain_batch] slot capacity exhausted (256 LBs live in
+batch)` + terrain flickering in/out + slow partial castle load (on a --dev
+wasm). Suspect: warm-park (default ON) parks LBs without releasing their
+terrain_batch rows → slot leak (full-ring resident cap is ~203 < 256, so >256
+live rows must include stale/parked LBs). The same session's
+`[geom-audit] envcells 0x9ee50000: 13/71 zero-tri drops` is CORRECT behavior —
+`0x020017D8` parses to 0 vertices / 0 polygons in `client_portal.dat`
+(drawingBSP + one surface ref only). Filed as an open investigation.
