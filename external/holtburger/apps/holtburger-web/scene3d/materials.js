@@ -350,6 +350,20 @@ function _patchSetCacheKey(material) {
     "|a" + (u.__aoPatched ? 1 : 0) +
     "|b" + (u.__depthBiased ? 1 : 0) +
     "|f" + (u.__floorBiased ? 1 : 0) +
+    // 2026-07-28 — the two patch flags that were shipped WITHOUT a key bit and
+    // therefore silently collapsed onto the un-patched program. `__staticBiased`
+    // (applyStaticDepthBias, 2026-07-06) and `__acBakedLight`
+    // (applyBakedVertexLightPatch, RND-04 `83e87ada`). The bake one was a
+    // LIGHTING regression, not a cosmetic one: three's program cache is keyed
+    // per (parameters + this string) RENDERER-WIDE and compiles from whichever
+    // material's onBeforeCompile ran first, so an EnvCell mesh sharing the key
+    // with any plain surface material got the plain program — no emissive add
+    // from `acBakedLight` — while lighting.js had ALREADY dropped that cell's
+    // static lamps from the live pool on the strength of the bake. Interiors
+    // rendered on ambient alone (measured: 28 programs live, zero carrying
+    // `uAcBakedGain`). One bit each; the un-patched key is unchanged.
+    "|s" + (u.__staticBiased ? 1 : 0) +
+    "|k" + (u.__acBakedLight ? 1 : 0) +
     // VFX component-SET key (Visual-Behavior Suite, spec §2.4). Encodes the
     // component SET + each component's linkVariant() — NEVER per-instance
     // config/hash — so program count ≈ distinct sets, not 10k DIDs. Empty ""

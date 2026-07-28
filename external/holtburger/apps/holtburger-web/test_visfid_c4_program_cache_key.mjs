@@ -60,6 +60,17 @@ function loadModule(relPath) {
         /^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m,
         ""
     );
+    // 2026-07-28 — strip EVERY sibling-module import, not just `./adapter.js`.
+    // materials.js grew `./vfx_flags.js` + `./suite_assets.js` imports after
+    // this test was written, and one un-stripped `import` makes the whole
+    // `new Function(...)` body a SyntaxError — the test then died on load
+    // (its only symptom a stack trace, no FAIL line) and stopped guarding the
+    // key. The stripped bindings are only referenced inside MaterialCache,
+    // which this test never constructs.
+    src = src.replace(
+        /^\s*import\s+(?:[\w*\s{},]+)\s+from\s+["']\.[^"']*["'];?\s*$/gm,
+        ""
+    );
     return src;
 }
 
@@ -162,12 +173,12 @@ check(
 );
 check(
     "CSM+POM key has the exact expected shape",
-    keyA === "hb|d0|c1|p1|l0|a0|b0",
+    keyA === "hb|d0|c1|p1|l0|a0|b0|f0|s0|k0|v",
     `keyA=${keyA}`
 );
 check(
     "CSM+lightClamp key has the exact expected shape",
-    keyB === "hb|d0|c1|p0|l1|a0|b0",
+    keyB === "hb|d0|c1|p0|l1|a0|b0|f0|s0|k0|v",
     `keyB=${keyB}`
 );
 
@@ -179,7 +190,7 @@ installCsmShaderPatch(matSingle, csmState);
 check(
     "single CSM-only patch still installs a customProgramCacheKey",
     typeof matSingle.customProgramCacheKey === "function" &&
-        matSingle.customProgramCacheKey() === "hb|d0|c1|p0|l0|a0|b0",
+        matSingle.customProgramCacheKey() === "hb|d0|c1|p0|l0|a0|b0|f0|s0|k0|v",
     `key=${typeof matSingle.customProgramCacheKey === "function" ? matSingle.customProgramCacheKey() : "(none)"}`
 );
 
@@ -189,7 +200,7 @@ applyWireVertexAOPatch(matAO);
 check(
     "AO patch installs a key reflecting __aoPatched",
     typeof matAO.customProgramCacheKey === "function" &&
-        matAO.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b0",
+        matAO.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b0|f0|s0|k0|v",
     `key=${typeof matAO.customProgramCacheKey === "function" ? matAO.customProgramCacheKey() : "(none)"}`
 );
 
@@ -198,13 +209,13 @@ applyFillDepthBias(matFill);
 applyWireVertexAOPatch(matFill);
 check(
     "depthBias + AO compose into ONE key with both bits set",
-    matFill.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b1",
+    matFill.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b1|f0|s0|k0|v",
     `key=${matFill.customProgramCacheKey()}`
 );
 
 // ---- lightClamp NO-OP path: flag OFF must NOT set the flag/key and must
 //      leave the shipped baseline byte-identical (no patch installed). ----
-globalThis.window = { location: { search: "" } };
+globalThis.window = { location: { search: "?lightClamp=off" } };
 const matsFactory2 = new Function(
     "THREE",
     matsPatched +
@@ -223,7 +234,7 @@ check(
 check(
     "lightClamp flag OFF: NO OWN customProgramCacheKey installed (inherits three's baseline)",
     !Object.prototype.hasOwnProperty.call(matNoop, "customProgramCacheKey") &&
-        matNoop.customProgramCacheKey() !== "hb|d0|c0|p0|l0|a0|b0",
+        matNoop.customProgramCacheKey() !== "hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v",
     `own=${Object.prototype.hasOwnProperty.call(matNoop, "customProgramCacheKey")}, key=${matNoop.customProgramCacheKey()}`
 );
 check(
@@ -241,8 +252,8 @@ installPomShaderPatch(matLazy, stubHeight, { forced: true });
 const keyAfterPom = matLazy.customProgramCacheKey();
 check(
     "key is read LAZILY: adding POM after CSM flips the p bit on the existing key",
-    keyBeforePom === "hb|d0|c1|p0|l0|a0|b0" &&
-        keyAfterPom === "hb|d0|c1|p1|l0|a0|b0",
+    keyBeforePom === "hb|d0|c1|p0|l0|a0|b0|f0|s0|k0|v" &&
+        keyAfterPom === "hb|d0|c1|p1|l0|a0|b0|f0|s0|k0|v",
     `before=${keyBeforePom}, after=${keyAfterPom}`
 );
 

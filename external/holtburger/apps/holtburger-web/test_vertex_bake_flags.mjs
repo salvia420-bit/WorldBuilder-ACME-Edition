@@ -134,6 +134,47 @@ for (const [search] of TABLE) {
   );
 }
 
+// === PROGRAM-CACHE-KEY COVERAGE (2026-07-28 regression) ====================
+// The OTHER route to the ambient-only dungeon: three.js caches compiled
+// programs RENDERER-WIDE by (parameters + `customProgramCacheKey()`) and
+// compiles from whichever material's `onBeforeCompile` ran first for that
+// key. A patch that is not represented in `_patchSetCacheKey` therefore
+// renders SOMEONE ELSE'S shader. RND-04 shipped `__acBakedLight` without a
+// bit, so EnvCell meshes drew with the un-patched program (no emissive add)
+// while their static lamps had already left the live pool. Every patch flag
+// that changes the shader STRING must move the key.
+const patchKeyFn = new Function(
+  "material",
+  slice("scene3d/materials.js", "function _patchSetCacheKey(material)", "\n}\n")
+    .replace("function _patchSetCacheKey(material) {", "") +
+    "\n",
+);
+const keyFor = (userData) => patchKeyFn({ userData });
+const BASE_KEY = keyFor({ lightClampRetail: true });
+const KEY_CASES = [
+  ["baked cell material (RND-04)", { lightClampRetail: true, __acBakedLight: true }],
+  ["static-bias décor prop", { lightClampRetail: true, __staticBiased: true }],
+  ["floor-bias surface", { lightClampRetail: true, __floorBiased: true }],
+  ["fill-depth-bias surface", { lightClampRetail: true, __depthBiased: true }],
+  ["wire vertex-AO", { lightClampRetail: true, __aoPatched: true }],
+  ["detail patch", { lightClampRetail: true, detailEnabled: true }],
+  ["CSM patch", { lightClampRetail: true, csmEnabled: true }],
+  ["POM patch", { lightClampRetail: true, pomEnabled: true }],
+];
+for (const [label, ud] of KEY_CASES) {
+  const k = keyFor(ud);
+  check(
+    `program-cache key separates ${label} from the un-patched material`,
+    k !== BASE_KEY,
+    `${k} vs ${BASE_KEY}`,
+  );
+}
+check(
+  "un-patched key shape unchanged (no gratuitous program split)",
+  BASE_KEY === "hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v",
+  BASE_KEY,
+);
+
 console.log("=========================================");
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
