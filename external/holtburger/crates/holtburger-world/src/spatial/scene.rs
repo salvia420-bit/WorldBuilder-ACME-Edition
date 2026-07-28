@@ -919,6 +919,53 @@ pub struct SpatialScene {
     /// ignores routine broadcast position echoes even while the control
     /// mirror is up. The setter is the autonomy lattice's landing pad.
     local_use_position_from_server: bool,
+    /// COMBAT-RADII (2026-07-28, `?combatRadii=off`) — runtime switch for
+    /// SIZE-AWARE combat standoffs. Retail resolves BOTH radii from the
+    /// objects' `CPartArray` before installing a stick or a MoveTo
+    /// (`CPhysicsObj::stick_to_object` acclient.c:319725-319763,
+    /// `CPhysicsObj::MoveToObject` :319767-319825, each reading
+    /// `CPartArray::GetRadius`/`GetHeight` = `setup->radius/height *
+    /// scale.z`, :325382-325391); `0.0` is only the CPartArray-null
+    /// fallback. Our port shipped `0.0` for BOTH radii permanently
+    /// (the old "spec S9 OPEN Q3: no client-side physics-radius source"
+    /// comments), so `StickyManager::adjust_offset`'s
+    /// `planar − my_radius − target_radius − 0.3` collapsed to
+    /// `planar − 0.3` — the player was dragged to 0.3 m from the
+    /// target's CENTER regardless of size (tusker-sized creatures
+    /// swallowed the player whole).
+    ///
+    /// Struct default is `false` (native/tests unchanged); the wasm
+    /// caller installs `parse_combat_radii_flag` at world creation,
+    /// which is `!search.contains("combatRadii=off")` — ON by default in
+    /// the browser.
+    combat_radii_enabled: bool,
+    /// COMBAT-RADII — the LOCAL player's `CPartArray::GetRadius`
+    /// (`setup->radius * scale.z`). Seeded from
+    /// [`super::transition::PLAYER_PART_RADIUS`] = the human-body Setup
+    /// `0x0200_0001` `.radius` FIELD (0.6788225, measured from the base
+    /// `client_portal.dat` 2026-07-28) at the player's `scale.z = 1.0`.
+    ///
+    /// NOT [`super::PLAYER_CAPSULE_RADIUS`] (0.4): despite that
+    /// constant's doc claiming otherwise, 0.4 is a hand-tuned
+    /// swept-circle figure and matches neither `.radius` (0.6788225) nor
+    /// the Setup's collision spheres (0.48). Seeding from it would
+    /// under-shoot every standoff by ~28 cm. Settable so a future
+    /// non-1.0 player scale can override it; see the residual note on
+    /// [`Self::set_local_player_part_radius`].
+    local_player_part_radius: f32,
+    /// COMBAT-RADII — UNCONDITIONAL reachability probe, bumped on every
+    /// combat-dims resolution attempt (`WorldState::combat_part_dims`)
+    /// and on every local sticky slice, OUTSIDE the
+    /// [`Self::combat_radii_enabled`] gate. Same rationale as
+    /// `scenery_arm_evals`: a gated counter cannot distinguish "flag
+    /// off" from "arm in dead code". Read via
+    /// `SessionHandle.combatRadiiStats()`.
+    combat_radii_evals: std::cell::Cell<u64>,
+    /// COMBAT-RADII — how many of those resolutions produced a REAL
+    /// per-setup radius (Setup resident + `0x02xxxxxx` gfx id). Nonzero
+    /// ⇒ the DAT-backed source is live, not just the residency
+    /// fallback.
+    combat_radii_resolved: std::cell::Cell<u64>,
 }
 
 /// A2-P3 (2026-06-12, W3+ S9) — outcome of one
@@ -989,6 +1036,10 @@ impl SpatialScene {
             local_server_controlled: false,
             leash_echo_gate: USE_LEASH_ECHO_GATE,
             local_use_position_from_server: false,
+            combat_radii_enabled: false,
+            local_player_part_radius: super::transition::PLAYER_PART_RADIUS,
+            combat_radii_evals: std::cell::Cell::new(0),
+            combat_radii_resolved: std::cell::Cell::new(0),
         }
     }
 
@@ -1116,6 +1167,11 @@ impl SpatialScene {
         if !self.local_retail_leash {
             return None;
         }
+        // COMBAT-RADII (2026-07-28) — same `my_radius` source as
+        // `step_local_sticky` (retail `CPartArray::GetRadius` on the
+        // sticking object); `?combatRadii=off` restores the `0.0`
+        // CPartArray-null fallback (acclient.c:319756-319763).
+        let local_part_radius = self.local_player_part_radius();
         let body = self.body_store.body_mut(body_id)?;
         let outcome = body.position_manager.adjust_offset_chain(
             current,
@@ -1123,9 +1179,7 @@ impl SpatialScene {
             quantum,
             interp_max_speed,
             sticky_max_speed,
-            // `my_radius = 0.0` fallback (acclient.c:319756-319763;
-            // spec S9 OPEN Q3 — same input `step_local_sticky` feeds).
-            0.0,
+            local_part_radius,
             on_contact,
         );
         if outcome.sticky_timed_out {
@@ -1134,6 +1188,69 @@ impl SpatialScene {
             self.local_sticky_target = None;
         }
         Some(outcome)
+    }
+
+    // === COMBAT-RADII (2026-07-28) — size-aware standoffs. ==============
+
+    /// Flip the size-aware combat-standoff switch (see the
+    /// `combat_radii_enabled` field doc). Installed once at world
+    /// creation by the wasm caller from `?combatRadii`.
+    pub fn set_combat_radii_enabled(&mut self, enabled: bool) {
+        self.combat_radii_enabled = enabled;
+    }
+
+    /// The size-aware combat-standoff switch.
+    pub fn combat_radii_enabled(&self) -> bool {
+        self.combat_radii_enabled
+    }
+
+    /// Override the LOCAL player's `CPartArray::GetRadius`
+    /// (`setup->radius * scale.z`). RESIDUAL: nothing calls this today —
+    /// the player's Setup is always `0x0200_0001` at `scale.z = 1.0`, so
+    /// the [`super::transition::PLAYER_PART_RADIUS`] seed IS the retail
+    /// value. A future scaled/polymorphed player (a non-1.0 wire
+    /// `obj_scale`, or a Setup swap) would install its own here.
+    pub fn set_local_player_part_radius(&mut self, radius: f32) {
+        if radius.is_finite() && radius >= 0.0 {
+            self.local_player_part_radius = radius;
+        }
+    }
+
+    /// The LOCAL player's physics radius as the sticky/MoveTo cylinder
+    /// metric sees it — `0.0` (the retail CPartArray-null fallback,
+    /// acclient.c:319756-319763) while the flag is off, so `=off` is
+    /// byte-identical to the pre-2026-07-28 standoff.
+    pub fn local_player_part_radius(&self) -> f32 {
+        if self.combat_radii_enabled {
+            self.local_player_part_radius
+        } else {
+            0.0
+        }
+    }
+
+    /// COMBAT-RADII — record that a combat-dims resolution site ran.
+    /// Called UNCONDITIONALLY, outside the enable gate (see the
+    /// `combat_radii_evals` field doc).
+    #[inline]
+    pub fn note_combat_radii_eval(&self) {
+        self.combat_radii_evals
+            .set(self.combat_radii_evals.get().wrapping_add(1));
+    }
+
+    /// COMBAT-RADII — record that a resolution produced a REAL
+    /// per-setup radius (not the residency fallback).
+    #[inline]
+    pub fn note_combat_radii_resolved(&self) {
+        self.combat_radii_resolved
+            .set(self.combat_radii_resolved.get().wrapping_add(1));
+    }
+
+    /// `(evals, resolved)` — the COMBAT-RADII reachability counters.
+    pub fn combat_radii_counters(&self) -> (u64, u64) {
+        (
+            self.combat_radii_evals.get(),
+            self.combat_radii_resolved.get(),
+        )
     }
 
     /// A2-P2: flip the remote-driver runtime switch (see the field doc).
@@ -4256,8 +4373,12 @@ impl SpatialScene {
 
     /// `CPhysicsObj::stick_to_object` for the LOCAL player
     /// (acclient.c:319725-319763 — retail resolves radius/height from
-    /// the target's `CPartArray`, else `0.0`; we pass the caller's best
-    /// radius, `0.0` fallback per spec S9 OPEN Q3) → `StickyManager::
+    /// the target's `CPartArray`, else `0.0`). COMBAT-RADII
+    /// (2026-07-28): callers now resolve `target_radius` through
+    /// [`crate::WorldState::combat_sticky_radius`] (Setup `.radius` ×
+    /// obj scale), so the caller-passed value IS retail's
+    /// `CPartArray::GetRadius`; `?combatRadii=off` passes `0.0` →
+    /// `StickyManager::
     /// StickTo` (:388665-388690). Seeds the pose stash immediately when
     /// the target's pose is already known (`entity_poses`) — the
     /// explicit-feed replacement for retail's TargetManager
@@ -4335,6 +4456,10 @@ impl SpatialScene {
         quantum: f32,
         max_speed: f32,
     ) -> LocalStickyStep {
+        // COMBAT-RADII reachability probe — bumped BEFORE the
+        // early-outs and outside the enable gate.
+        self.note_combat_radii_eval();
+        let local_part_radius = self.local_player_part_radius();
         if self.local_sticky_target.is_none() {
             return LocalStickyStep::Inactive;
         }
@@ -4350,13 +4475,18 @@ impl SpatialScene {
             self.local_sticky_target = None;
             return LocalStickyStep::TimedOut;
         }
-        // `my_radius = 0.0` fallback (acclient.c:319756-319763; spec S9
-        // OPEN Q3 — no client-side physics-radius source located yet;
-        // degrades the standoff toward `−0.3`-clamped, functional but
-        // not size-aware).
+        // COMBAT-RADII (2026-07-28) — `my_radius` is retail's
+        // `CPartArray::GetRadius` on the STICKING object
+        // (`setup->radius * scale.z`, acclient.c:325382-325384). The
+        // player's Setup `0x0200_0001` ships `.radius = 0.6788225` at
+        // `scale.z = 1.0` (transition::PLAYER_PART_RADIUS — NOT the
+        // hand-tuned 0.4 PLAYER_CAPSULE_RADIUS). `?combatRadii=off`
+        // returns the pre-fix `0.0` CPartArray-null fallback
+        // (:319756-319763).
+        let my_radius = local_part_radius;
         match body
             .position_manager
-            .step_sticky_pose(current, 0.0, max_speed, quantum)
+            .step_sticky_pose(current, my_radius, max_speed, quantum)
         {
             Some(pose) => LocalStickyStep::Stepped(pose),
             // Target pose not fed yet — retail-accurate `Initialized`

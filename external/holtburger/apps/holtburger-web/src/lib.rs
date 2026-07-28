@@ -402,6 +402,30 @@ fn parse_sticky_idle_step_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "stickyIdleStep=off")
 }
 
+/// COMBAT-RADII (2026-07-28): parse `?combatRadii=off` (or
+/// `&combatRadii=off`). DEFAULT-ON off-escape shape: returns `true`
+/// UNLESS `combatRadii=off` is present.
+///
+/// ON: melee standoffs are SIZE-AWARE — both radii in
+/// `StickyManager::adjust_offset`'s `planar − my_radius −
+/// target_radius − 0.3` (acclient.c:388559-388560) are the real
+/// `CPartArray::GetRadius` (`setup->radius * scale.z`,
+/// :325382-325384), the values retail's `stick_to_object`
+/// (:319749-319763) and `MoveToObject` (:319808-319817) resolve before
+/// installing. OFF: both collapse to `0.0` — the CPartArray-null
+/// fallback our port shipped permanently, which glued the player to
+/// 0.3 m from the target's CENTER (inside anything tusker-sized).
+///
+/// Carriers: `SpatialScene::combat_radii_enabled` (runtime switch,
+/// installed at world creation) + `WorldState::combat_part_dims` (the
+/// resolution, with the unconditional reachability counter). Needs a
+/// wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_combat_radii_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "combatRadii=off")
+}
+
 /// (2026-07-02): parse `?castMove=off` (or `&castMove=off`). DEFAULT-ON
 /// off-escape shape: returns `true` UNLESS `castMove=off` is present. When
 /// on, a server-played Magic cast gesture (windup / cast, non-autonomous)
@@ -15547,6 +15571,46 @@ fn drain_pending_setup_radii_into(world: &mut holtburger_world::WorldState) -> u
     })
 }
 
+/// COMBAT-RADII (2026-07-28) — pending `(setup_id, radius, height)`
+/// records: the RAW `CSetup.radius`/`.height` fields retail's
+/// `CPartArray::GetRadius`/`GetHeight` multiply by `scale.z`
+/// (acclient.c:325382-325391). Sibling of [`SETUP_RADIUS_PENDING`],
+/// staged on the same `fetch_entity_model_render` parse and drained by
+/// the same TickMovement arm.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static SETUP_PART_DIMS_PENDING: std::cell::RefCell<Vec<(u32, f32, f32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Stage a `(setup_id, radius, height)` CPartArray-dims record.
+/// All-zero / non-finite pairs are dropped — `WorldState` treats a
+/// cache MISS as retail's CPartArray-null fallback anyway.
+#[cfg(target_arch = "wasm32")]
+fn record_setup_part_dims_pending(setup_id: u32, radius: f32, height: f32) {
+    let ok = |v: f32| v.is_finite() && v > 0.0;
+    if !ok(radius) && !ok(height) {
+        return;
+    }
+    SETUP_PART_DIMS_PENDING.with(|cell| {
+        cell.borrow_mut().push((setup_id, radius, height));
+    });
+}
+
+/// Drain pending CPartArray dims into `WorldState::setup_part_dims`.
+/// Returns the count inserted. Idempotent on an empty buffer.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_setup_part_dims_into(world: &mut holtburger_world::WorldState) -> usize {
+    SETUP_PART_DIMS_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (setup_id, radius, height) in buf.drain(..) {
+            world.register_setup_part_dims(setup_id, radius, height);
+        }
+        count
+    })
+}
+
 /// Compute the collision radius for a SetupModel, mirroring ACE's
 /// `PhysicsObj.GetPhysicsRadius`. Returns `None` when the setup has
 /// no cyl-sphere, no sphere, and a zero `.radius` field (treat as
@@ -20405,6 +20469,15 @@ pub async fn fetch_entity_model_render(
                 if let Some(r) = setup_collision_radius(&setup) {
                     record_setup_radius_pending(setup_id, r);
                 }
+                // COMBAT-RADII (2026-07-28): the SAME parse also yields
+                // the RAW CSetup `(radius, height)` pair retail's
+                // `CPartArray::GetRadius`/`GetHeight` scale by `scale.z`
+                // (acclient.c:325382-325391) — a DIFFERENT quantity from
+                // the cyl-sphere cascade above (ACE keeps the same split:
+                // `PartArray.GetRadius()` vs
+                // `PhysicsObj.GetPhysicsRadius()`). Staged alongside, so
+                // one SetupModel fetch feeds both caches.
+                record_setup_part_dims_pending(setup_id, setup.radius, setup.height);
             }
         }
     }
@@ -22068,6 +22141,22 @@ pub async fn fetch_entity_animation_keyframes(
         );
         if let Ok(setup_bytes) = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) {
             if let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes)) {
+                // COMBAT-RADII (2026-07-28): THE live SetupModel parse for
+                // creature rigs. `fetch_entity_model_render` (which stages
+                // the same caches) is NOT on the shipped entity path any
+                // more — scene3d calls `fetchEntityAnimationKeyframes`, so
+                // both `setup_radii` (ACE GetPhysicsRadius) and the new
+                // `setup_part_dims` (CPartArray::GetRadius/GetHeight) went
+                // permanently unpopulated and every combat radius fell back
+                // to PLAYER_CAPSULE_RADIUS. Stage them here; the
+                // TickMovement arm drains both. Cheap and idempotent — the
+                // buffers are drained per tick and `register_*` overwrite.
+                if (setup_id >> 24) == 0x02 {
+                    if let Some(r) = setup_collision_radius(&setup) {
+                        record_setup_radius_pending(setup_id, r);
+                    }
+                    record_setup_part_dims_pending(setup_id, setup.radius, setup.height);
+                }
                 let _ = try_resolve_cycle_frames(s, &setup, mt_override, stance, motion_command);
                 // 2026-06-19: ALSO warm the LINK transition's anims (attack/cast/eat
                 // one-shots) when a from_motion is supplied. The walk previously followed
@@ -22340,6 +22429,15 @@ pub async fn fetch_entity_animation_keyframes_batch(
                     if let Ok(setup) =
                         SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
                     {
+                        // COMBAT-RADII (2026-07-28): stage the physics
+                        // dims from the batch walk too — same rationale
+                        // as the single-call path above.
+                        if let Some(r) = setup_collision_radius(&setup) {
+                            record_setup_radius_pending(setup_id, r);
+                        }
+                        record_setup_part_dims_pending(
+                            setup_id, setup.radius, setup.height,
+                        );
                         // Stance=0 + motion_command=0 walks the
                         // default MotionTable's first cycle; that's
                         // sufficient to prefetch the Animation chain
@@ -29306,6 +29404,23 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_sticky_idle_step_flag("?stickyRetail=off&stickyIdleStep=off"));
     }
 
+    /// COMBAT-RADII (2026-07-28): `?combatRadii` parse shape —
+    /// DEFAULT-ON with an `=off` escape. An absent flag MUST read ON
+    /// (this is the size-aware standoff; the old behavior dragged the
+    /// player inside large models).
+    #[test]
+    fn combat_radii_flag_defaults_on_unless_off() {
+        use super::parse_combat_radii_flag;
+        assert!(parse_combat_radii_flag(""));
+        assert!(parse_combat_radii_flag("?combatRadii=on"));
+        assert!(parse_combat_radii_flag("?combatRadii"));
+        assert!(!parse_combat_radii_flag("?combatRadii=off"));
+        assert!(!parse_combat_radii_flag("?nosw=1&combatRadii=off"));
+        assert!(!parse_combat_radii_flag("combatRadii=off"));
+        // A different flag ending in the same value must not match.
+        assert!(parse_combat_radii_flag("?stickyIdleStep=off"));
+    }
+
     /// Movement-port wave 1 step 5: `?cmdInterp` parse shape — DEFAULT
     /// FLIPPED ON (2026-07-03 A/B green; user ruling "its decent"); only
     /// an explicit `=off` restores the legacy lane.
@@ -31672,6 +31787,20 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = localStickyTarget)]
     pub fn local_sticky_target(&self) -> u32 {
         LOCAL_STICKY_TARGET.with(|c| c.get())
+    }
+
+    /// COMBAT-RADII (2026-07-28): `[evals, resolved, enabled]` — the
+    /// size-aware-standoff reachability counters. `evals` bumps
+    /// UNCONDITIONALLY (outside the `?combatRadii` gate) on every
+    /// combat-dims resolution and every local sticky slice, so a live
+    /// client proves the SITE runs even with the flag off; `resolved`
+    /// counts hits that produced a real `CPartArray::GetRadius` from a
+    /// resident SetupModel; `enabled` mirrors the runtime switch.
+    /// Diagnostic-only, purely additive — rides manifest v4, NO bump.
+    #[wasm_bindgen(js_name = combatRadiiStats)]
+    pub fn combat_radii_stats(&self) -> Vec<u32> {
+        let (evals, resolved, enabled) = COMBAT_RADII_STATS.with(|c| c.get());
+        vec![evals, resolved, enabled]
     }
 
     /// Snapshot of the most recent CharacterList. The recv loop updates
@@ -39734,6 +39863,20 @@ thread_local! {
     static LOCAL_STICKY_TARGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+// COMBAT-RADII (2026-07-28) — diagnostic mirror of
+// `WorldState::combat_radii_counters()`: `(evals, resolved, enabled)`.
+// `evals` is the UNCONDITIONAL reachability probe (bumped outside the
+// enable gate, so "flag off" and "arm in dead code" stay
+// distinguishable — the scenery_arm_evals lesson); `resolved` counts
+// resolutions that produced a REAL per-setup `CPartArray::GetRadius`
+// rather than the residency fallback. Published post-tick by the
+// TickMovement arm, read by `SessionHandle::combatRadiiStats`.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static COMBAT_RADII_STATS: std::cell::Cell<(u32, u32, u32)> =
+        const { std::cell::Cell::new((0, 0, 0)) };
+}
+
 /// A2-P2 — one frame of wasm-managed remote poses, three parallel
 /// arrays (the typed-array getter idiom): `guids[i]` / `landblocks[i]`
 /// pair with `poses[i*7 .. i*7+7]` = `[x, y, z, qw, qx, qy, qz]`
@@ -40493,6 +40636,17 @@ async fn recv_loop(
     if sticky_retail_requested && !remote_sticky_on {
         console_log_str(
             "[A2-P3 R2] ?stickyRetail=on requires the effective ?remoteInterp=on composite (?unifiedTick=on + ?wireStatePacks=stage1) AND the USE_STICKY_MANAGER const — treating stickyRetail as OFF (F3-4 JS glue keeps remote sticky)",
+        );
+    }
+    // COMBAT-RADII (2026-07-28): `?combatRadii=off` — size-aware melee
+    // standoffs (both radii in the sticky/MoveTo cylinder metric come
+    // from `CPartArray::GetRadius`). Standalone flag, DEFAULT-ON; see
+    // `parse_combat_radii_flag`. It composes with nothing: with the
+    // sticky lane off there is simply nothing to size.
+    let combat_radii_on: bool = parse_combat_radii_flag(&flag_search());
+    if !combat_radii_on {
+        console_log_str(
+            "[combat-radii] ?combatRadii=off — melee standoffs fall back to the 0.0/0.0 CPartArray-null pair (player glues 0.3 m from the target's CENTRE)",
         );
     }
     // Physics-parity 2026-07-03 (dossier A F9/F14): `?retailLeash=on` —
@@ -42466,6 +42620,9 @@ async fn recv_loop(
                                 // (stickyRetail × remoteInterp ×
                                 // USE_STICKY_MANAGER compose rule).
                                 new_world.set_remote_sticky_enabled(remote_sticky_on);
+                                // COMBAT-RADII (2026-07-28): size-aware
+                                // standoffs (?combatRadii, default ON).
+                                new_world.set_combat_radii_enabled(combat_radii_on);
                                 // Physics-parity 2026-07-03: retail
                                 // LOCAL lattice (?retailLeash=on).
                                 new_world.set_local_retail_leash(retail_leash_on);
@@ -44503,16 +44660,24 @@ async fn recv_loop(
                             // loop.js:1951/:2222 STAYS — the local rig
                             // is never JS-glued; its pose comes from the
                             // wasm pose getters (spec S9 §3 L1 step 2).
-                            // Radius fallback 0.0 (spec S9 OPEN Q3).
+                            // COMBAT-RADII (2026-07-28): the target
+                            // radius is retail's `CPartArray::GetRadius`
+                            // (acclient.c:319755) via
+                            // `combat_sticky_radius`; `?combatRadii=off`
+                            // restores the 0.0 CPartArray-null fallback.
                             if holtburger_world::spatial::USE_STICKY_MANAGER
                                 && let Some(w) = world.borrow_mut().as_mut()
                                 && w.player.guid != holtburger_common::Guid::NULL
                                 && data.guid == w.player.guid
                             {
                                 if sticky_target != 0 {
+                                    let target =
+                                        holtburger_common::Guid(sticky_target);
+                                    let target_radius =
+                                        w.combat_sticky_radius(target);
                                     w.scene.stick_local_player_to(
-                                        holtburger_common::Guid(sticky_target),
-                                        0.0,
+                                        target,
+                                        target_radius,
                                     );
                                 } else {
                                     w.scene.unstick_local_player();
@@ -46992,6 +47157,9 @@ async fn recv_loop(
                             // (stickyRetail × remoteInterp ×
                             // USE_STICKY_MANAGER compose rule).
                             new_world.set_remote_sticky_enabled(remote_sticky_on);
+                            // COMBAT-RADII (2026-07-28): size-aware
+                            // standoffs (?combatRadii, default ON).
+                            new_world.set_combat_radii_enabled(combat_radii_on);
                             // Physics-parity 2026-07-03: retail LOCAL
                             // lattice (?retailLeash=on).
                             new_world.set_local_retail_leash(retail_leash_on);
@@ -50219,18 +50387,22 @@ async fn recv_loop(
                         // 2026-07-06 — client melee = engage the LOCAL
                         // StickyManager on the target. Once armed, the
                         // per-frame `step_local_sticky` (system.rs) runs the
-                        // player UP to it (closing the 0.30 edge gap) and holds
-                        // + re-faces it — approach + stick as one. Radius 0.0
-                        // (no client-side physics radius source yet, spec S9
-                        // OPEN Q3 — the standoff degrades to the −0.3 clamp).
-                        // Needs the target resident in the spatial scene
-                        // (worldLifecycle default-on).
+                        // player UP to it (closing the 0.30 EDGE gap) and holds
+                        // + re-faces it — approach + stick as one.
+                        // COMBAT-RADII (2026-07-28): the target radius is
+                        // retail's `CPartArray::GetRadius` (`setup->radius *
+                        // scale.z`, acclient.c:325382-325384) resolved by
+                        // `combat_sticky_radius`, so the standoff is
+                        // `my_radius + target_radius + 0.3` — outside the
+                        // model. `?combatRadii=off` restores the old 0.0 pair
+                        // (0.3 m from the target's CENTRE). Needs the target
+                        // resident in the spatial scene (worldLifecycle
+                        // default-on).
                         if let Some(w) = world.borrow_mut().as_mut() {
                             if w.player.guid != holtburger_common::Guid::NULL {
-                                w.scene.stick_local_player_to(
-                                    holtburger_common::Guid(target_guid),
-                                    0.0,
-                                );
+                                let target = holtburger_common::Guid(target_guid);
+                                let target_radius = w.combat_sticky_radius(target);
+                                w.scene.stick_local_player_to(target, target_radius);
                             } else {
                                 console_log_str(
                                     "[sticky-melee] stickToEntity before player seeded — dropping",
@@ -50569,6 +50741,10 @@ async fn recv_loop(
                         // `PhysicsObj.GetPhysicsRadius`) instead of
                         // the PLAYER_CAPSULE_RADIUS fallback.
                         let _drained_radii = drain_pending_setup_radii_into(w);
+                        // COMBAT-RADII (2026-07-28): same cadence for
+                        // the raw CPartArray `(radius, height)` dims the
+                        // sticky standoff + MoveTo cylinder metric read.
+                        let _drained_part_dims = drain_pending_setup_part_dims_into(w);
                         // COL-03 (2026-07-27): same cadence for the
                         // precise per-SetupModel physics geometry the
                         // entity BSP arm sweeps. Drain first so a walk
@@ -51322,6 +51498,21 @@ async fn recv_loop(
                                         .map(u32::from)
                                         .unwrap_or(0);
                                     LOCAL_STICKY_TARGET.with(|c| c.set(sticky));
+                                }
+                                // COMBAT-RADII (2026-07-28): publish the
+                                // reachability counters post-tick.
+                                {
+                                    let (evals, resolved) =
+                                        w.combat_radii_counters();
+                                    let enabled =
+                                        u32::from(w.scene.combat_radii_enabled());
+                                    COMBAT_RADII_STATS.with(|c| {
+                                        c.set((
+                                            evals as u32,
+                                            resolved as u32,
+                                            enabled,
+                                        ))
+                                    });
                                 }
                                 if was_airborne_pre_tick && !w.player.is_airborne {
                                     // Wave 10 Phase 10.1 (2026-05-26):

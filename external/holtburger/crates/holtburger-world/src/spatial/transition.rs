@@ -95,6 +95,32 @@ pub const PLAYER_SETUP_SPHERE_HIGH_Z: f32 = 1.35;
 /// with the retail sphere stack above.
 pub const PLAYER_SETUP_HEIGHT: f32 = 1.835;
 
+/// COMBAT-RADII (2026-07-28) — Setup `0x02000001`'s own `.radius` FIELD
+/// (0.6788225, verbatim from the base `client_portal.dat`), the value
+/// retail's `CPartArray::GetRadius` returns for the player at
+/// `scale.z = 1.0` (`setup->radius * scale.z`, acclient.c:325382-325384;
+/// ACE `PartArray.GetRadius()` = `Setup._dat.Radius * Scale.Z`).
+///
+/// This is a THIRD, distinct player width, and the distinction is
+/// load-bearing:
+/// - [`PLAYER_SETUP_SPHERE_RADIUS`] (0.48) — the collision spheres the
+///   transition sweeps.
+/// - [`super::PLAYER_CAPSULE_RADIUS`] (0.4) — a HAND-TUNED figure whose
+///   doc-comment claim that "Setup 0x0200_0001 ships radius=0.4" is
+///   simply WRONG (measured 2026-07-28); it matches neither the `.radius`
+///   field nor the sphere radius. It stays as-is because the swept-circle
+///   collision path is tuned around it.
+/// - `PLAYER_PART_RADIUS` (0.6788225) — what the COMBAT lattice
+///   (`stick_to_object` / `MoveToObject` → `PositionManager::StickTo`,
+///   acclient.c:319755/:319815) actually reads. Using 0.4 here would
+///   under-shoot every melee standoff by ~28 cm.
+pub const PLAYER_PART_RADIUS: f32 = 0.6788225;
+/// COMBAT-RADII — Setup `0x02000001` `.height` (1.835) as
+/// `CPartArray::GetHeight` returns it (`setup->height * scale.z`).
+/// Same number as [`PLAYER_SETUP_HEIGHT`], named for the combat lane so
+/// the `GetRadius`/`GetHeight` pair reads together.
+pub const PLAYER_PART_HEIGHT: f32 = PLAYER_SETUP_HEIGHT;
+
 /// Retail `OBJECTINFO` — the mover description cached ONCE per transition
 /// (`OBJECTINFO::init`, acclient.c:314128-314132: step heights from
 /// `CPartArray::GetStepUpHeight/-Down` acclient.c:325400-325424, ethereal

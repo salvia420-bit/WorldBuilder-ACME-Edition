@@ -928,11 +928,16 @@ fn should_send_immediate_server_controlled_sync(data: &MovementEventData) -> boo
 /// UNCONDITIONALLY, local player included (acclient.c:339546-339560;
 /// RULINGS item 4). `None` = a fresh motion without the bit, or any
 /// non-Invalid movement type → the per-unpack preamble unstick subset
-/// (acclient.c:339518-339519). Radius fallback `0.0`
-/// (acclient.c:319756-319763; spec S9 OPEN Q3); the freshest known
-/// target pose is fed immediately (scene `entity_poses` auto-feed +
-/// the visible-entity record) — retail-`Initialized` no-op until one
-/// lands (acclient.c:388691-388720).
+/// (acclient.c:339518-339519).
+///
+/// COMBAT-RADII (2026-07-28): the target radius is now retail's
+/// `CPartArray::GetRadius` (`setup->radius * scale.z`) via
+/// [`WorldState::combat_sticky_radius`] — retail resolves it right here
+/// in `stick_to_object` (:319755) and `0.0` is only the CPartArray-null
+/// fallback (:319756-319763), which `?combatRadii=off` restores. The
+/// freshest known target pose is fed immediately (scene `entity_poses`
+/// auto-feed + the visible-entity record) — retail-`Initialized` no-op
+/// until one lands (acclient.c:388691-388720).
 pub(crate) fn apply_local_sticky_from_invalid(
     world: &mut WorldState,
     sticky_object: Option<Guid>,
@@ -940,7 +945,8 @@ pub(crate) fn apply_local_sticky_from_invalid(
     match sticky_object {
         Some(target) => {
             let target_pose = world.get_visible_entity(target).map(|e| e.position);
-            world.scene.stick_local_player_to(target, 0.0);
+            let target_radius = world.combat_sticky_radius(target);
+            world.scene.stick_local_player_to(target, target_radius);
             if let Some(pose) = target_pose {
                 world.scene.sticky_pose_feed(target, pose);
             }

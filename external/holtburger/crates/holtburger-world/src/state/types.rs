@@ -114,6 +114,26 @@ pub struct WorldState {
     /// the player capsule radius (a reasonable default for unknown
     /// humanoid-scale entities).
     pub(crate) setup_radii: std::collections::HashMap<u32, f32>,
+    /// COMBAT-RADII (2026-07-28) — the retail `CPartArray` dims per
+    /// SetupModel id (`0x02xxxxxx`): `(setup.radius, setup.height)`, the
+    /// two raw `CSetup` float fields at DAT offsets right after the
+    /// sphere lists (`acclient.h` `CSetup { … float height; float
+    /// radius; … }`; ACE `SetupModel.Height`/`.Radius`).
+    ///
+    /// DISTINCT from [`Self::setup_radii`]: that map mirrors ACE's
+    /// `PhysicsObj.GetPhysicsRadius` (first CYL-SPHERE radius — the
+    /// collision cylinder), while retail's combat lattice reads
+    /// `CPartArray::GetRadius`/`GetHeight` =
+    /// `setup->radius/height * scale.z` (acclient.c:325382-325391), the
+    /// values `stick_to_object` (:319749-319763) and `MoveToObject`
+    /// (:319808-319817) hand to `PositionManager::StickTo` /
+    /// `MoveToObject_Internal`. ACE keeps the same split
+    /// (`PartArray.GetRadius()` vs `PhysicsObj.GetPhysicsRadius()`).
+    ///
+    /// Populated by the wasm bundle via
+    /// [`WorldState::register_setup_part_dims`] on the same
+    /// SetupModel-parse pass that feeds `setup_radii`.
+    pub(crate) setup_part_dims: std::collections::HashMap<u32, (f32, f32)>,
     /// COL-03 (2026-07-27): precise physics geometry per SetupModel id
     /// (`0x02xxxxxx`), in setup-local metres. Populated by the wasm
     /// bundle via [`WorldState::register_setup_physics_geometry`] once
@@ -501,6 +521,7 @@ impl WorldState {
             terrain_heights: std::collections::HashMap::new(),
             terrain_water: std::collections::HashMap::new(),
             setup_radii: std::collections::HashMap::new(),
+            setup_part_dims: std::collections::HashMap::new(),
             setup_physics_geometry: std::collections::HashMap::new(),
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
@@ -666,6 +687,122 @@ impl WorldState {
         }
     }
 
+    /// COMBAT-RADII (2026-07-28) — cache a SetupModel's RAW `CSetup`
+    /// `(radius, height)` pair, the source retail's
+    /// `CPartArray::GetRadius`/`GetHeight` scale by `scale.z`
+    /// (acclient.c:325382-325391). Called by the wasm bundle on the
+    /// same parse pass as [`Self::register_setup_radius`]. Non-finite /
+    /// non-positive components are stored as `0.0` (retail's
+    /// "unresolved" value); an all-zero pair is dropped so a cache hit
+    /// always means "the DAT really said something".
+    pub fn register_setup_part_dims(&mut self, setup_id: u32, radius: f32, height: f32) {
+        let clean = |v: f32| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+        let (radius, height) = (clean(radius), clean(height));
+        if radius > 0.0 || height > 0.0 {
+            self.setup_part_dims.insert(setup_id, (radius, height));
+        }
+    }
+
+    /// Number of SetupModels with resident `CPartArray` dims.
+    /// Diagnostics only.
+    pub fn setup_part_dims_len(&self) -> usize {
+        self.setup_part_dims.len()
+    }
+
+    /// COMBAT-RADII — the entity's `0x02xxxxxx` SetupModel id.
+    ///
+    /// `Entity::gfx_id` is a TRAP: the field exists but NOTHING outside
+    /// unit tests ever assigns it (verified 2026-07-28 — `Entity::new`
+    /// sets `None` and there is no other write site), which is why
+    /// [`Self::entity_collision_radius`] has silently returned its
+    /// `PLAYER_CAPSULE_RADIUS` default for every entity since it landed.
+    /// The authoritative source is the wire
+    /// `ObjectDescriptionData.csetup_id`, hydrated onto the entity as
+    /// `PropertyDataId::Setup` (hydration.rs:212-213) — the same DID the
+    /// JS entity meta carries as `setupId`. Falls back to `gfx_id` so a
+    /// caller that DOES set it (the tests) still resolves.
+    ///
+    /// `None` unless the id is a SetupModel: a raw GfxObj (`0x01xxxxxx`)
+    /// has no `CSetup` and therefore no `CPartArray` dims.
+    pub(crate) fn entity_setup_did(entity: &Entity) -> Option<u32> {
+        let id = entity
+            .csetup_id()
+            .map(|g| u32::from(g))
+            .or(entity.gfx_id)?;
+        ((id >> 24) == 0x02).then_some(id)
+    }
+
+    /// COMBAT-RADII — retail `CPartArray::GetRadius`/`GetHeight` for a
+    /// live entity: `setup->radius/height * scale.z`
+    /// (acclient.c:325382-325391; ACE `PartArray.cs:189-206`). `scale.z`
+    /// is the wire `ObjectDescriptionData.obj_scale`, hydrated onto the
+    /// entity as `PropertyFloat::DefaultScale` (hydration.rs:232).
+    ///
+    /// `(0.0, 0.0)` when the entity carries no `0x02xxxxxx` Setup or its
+    /// SetupModel has not been parsed yet — the retail CPartArray-null
+    /// fallback (acclient.c:319756-319763), and also our residency miss.
+    pub fn entity_part_dims(&self, entity: &Entity) -> (f32, f32) {
+        let Some(setup_id) = Self::entity_setup_did(entity) else {
+            return (0.0, 0.0);
+        };
+        let Some(&(radius, height)) = self.setup_part_dims.get(&setup_id) else {
+            return (0.0, 0.0);
+        };
+        let scale = entity.obj_scale().unwrap_or(1.0) as f32;
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        (radius * scale, height * scale)
+    }
+
+    /// COMBAT-RADII — the `(radius, height)` pair the combat lattice
+    /// (sticky standoff + MoveTo cylinder metric) should use for
+    /// `guid`.
+    ///
+    /// - `?combatRadii=off` ⇒ `(0.0, 0.0)`, byte-identical to the
+    ///   pre-2026-07-28 behavior (retail's CPartArray-null fallback,
+    ///   which our port shipped permanently).
+    /// - Flag on + Setup resident ⇒ the real
+    ///   `CPartArray::GetRadius`/`GetHeight`.
+    /// - Flag on + Setup NOT resident yet ⇒ radius falls back to
+    ///   [`Self::entity_collision_radius`] (the cyl-sphere cache, itself
+    ///   defaulting to [`crate::spatial::PLAYER_CAPSULE_RADIUS`]) rather
+    ///   than to `0.0`: a residency miss is not retail's "no part
+    ///   array", and a humanoid-sized standoff beats standing inside the
+    ///   model. Height stays `0.0` (no second source).
+    ///
+    /// Bumps the UNCONDITIONAL reachability counter before the gate.
+    pub fn combat_part_dims(&self, guid: Guid) -> (f32, f32) {
+        self.scene.note_combat_radii_eval();
+        if !self.scene.combat_radii_enabled() {
+            return (0.0, 0.0);
+        }
+        let Some(entity) = self.entities.get(guid) else {
+            return (0.0, 0.0);
+        };
+        let (radius, height) = self.entity_part_dims(entity);
+        if radius > 0.0 {
+            self.scene.note_combat_radii_resolved();
+            return (radius, height);
+        }
+        (self.entity_collision_radius(entity), height)
+    }
+
+    /// COMBAT-RADII — the target radius for a sticky install
+    /// (`CPhysicsObj::stick_to_object` → `PositionManager::StickTo`,
+    /// acclient.c:319749-319763). See [`Self::combat_part_dims`].
+    pub fn combat_sticky_radius(&self, guid: Guid) -> f32 {
+        self.combat_part_dims(guid).0
+    }
+
+    /// COMBAT-RADII — `(evals, resolved)` reachability counters (see
+    /// `SpatialScene::combat_radii_counters`).
+    pub fn combat_radii_counters(&self) -> (u64, u64) {
+        self.scene.combat_radii_counters()
+    }
+
     /// COL-03: cache a SetupModel's precise physics geometry (setup-local
     /// triangles fan-triangulated from the parts' `physics_polygons`).
     /// Called by the wasm bundle once the Setup→parts→GfxObj walk lands.
@@ -723,17 +860,16 @@ impl WorldState {
     /// has to leave a solid fallback behind.
     pub fn entity_collision_radius(&self, entity: &Entity) -> f32 {
         const DEFAULT: f32 = crate::spatial::PLAYER_CAPSULE_RADIUS;
-        let Some(gfx_id) = entity.gfx_id else {
+        // COMBAT-RADII (2026-07-28) — was `entity.gfx_id`, a field
+        // NOTHING ever assigns, so this returned DEFAULT for every
+        // entity in a live session. Resolve the Setup DID the same way
+        // the combat lane does (see [`Self::entity_setup_did`]);
+        // SetupModel ids are `0x02xxxxxx`, raw GfxObjs have no cylinder
+        // and keep the default.
+        let Some(setup_id) = Self::entity_setup_did(entity) else {
             return DEFAULT;
         };
-        // SetupModel ids are 0x02xxxxxx; GfxObj ids are 0x01xxxxxx.
-        // Cylinder radii live in the SetupModel; raw GfxObj entities
-        // don't expose a cylinder so they fall through to the
-        // default.
-        if (gfx_id >> 24) != 0x02 {
-            return DEFAULT;
-        }
-        self.setup_radii.get(&gfx_id).copied().unwrap_or(DEFAULT)
+        self.setup_radii.get(&setup_id).copied().unwrap_or(DEFAULT)
     }
 
     /// A7-R6 (2026-06-12) — does the local player's collision cylinder

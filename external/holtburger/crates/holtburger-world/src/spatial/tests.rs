@@ -3543,6 +3543,92 @@ fn local_sticky_install_feed_step_converges_and_times_out() {
     ));
 }
 
+/// COMBAT-RADII (2026-07-28) — the standoff is `my_radius +
+/// target_radius + 0.3` (retail `StickyManager::adjust_offset`
+/// `cyl_dist_no_z − 0.3` over `planar − my_radius − target_radius`,
+/// acclient.c:388559-388560), NOT 0.3 m from the target's CENTRE.
+/// Drives the same scene surface at three target sizes and asserts the
+/// converged planar gap tracks the summed radii; the flag-off arm
+/// reproduces the pre-fix 0.3 m centre distance.
+#[test]
+fn local_sticky_standoff_is_radius_aware_and_flag_off_reproduces_centre_glue() {
+    // (target_radius, label) — shadow-child-sized, humanoid, tusker-sized.
+    for &(target_radius, label) in &[(0.3_f32, "small"), (0.6_f32, "medium"), (1.6_f32, "large")] {
+        for &enabled in &[true, false] {
+            let mut scene = SpatialScene::new();
+            scene.set_combat_radii_enabled(enabled);
+            let player_guid = Guid(0x5000_00AB);
+            let target_guid = Guid(0x8000_0001);
+            let lb = Guid(0x0102_0000);
+            let now = Instant::now();
+            let player_pose = make_position(50.0, 50.0, 0.0);
+            scene.upsert_runtime_body_snapshot(
+                SpatialBodyId::LocalPlayer(player_guid),
+                player_pose,
+                Vector3::zero(),
+                Vector3::zero(),
+                None,
+                now,
+            );
+            let target_pose = make_position(60.0, 50.0, 0.0);
+            scene.update_entity(target_guid, lb, target_pose);
+            // The install radius is what the CALLER resolved — with the
+            // flag off every call site passes 0.0 (the CPartArray-null
+            // fallback), so mirror that here.
+            scene.stick_local_player_to(target_guid, if enabled { target_radius } else { 0.0 });
+
+            let mut cur = player_pose;
+            for _ in 0..40 {
+                match scene.step_local_sticky(cur, 0.016, 4.0) {
+                    LocalStickyStep::Stepped(pose) => cur = pose,
+                    LocalStickyStep::Inactive => break,
+                    LocalStickyStep::TimedOut => break,
+                }
+            }
+            let gap = (cur.coords - target_pose.coords).length();
+            let expected = if enabled {
+                crate::spatial::transition::PLAYER_PART_RADIUS + target_radius + STICKY_RADIUS
+            } else {
+                STICKY_RADIUS
+            };
+            assert!(
+                (gap - expected).abs() < 0.05,
+                "{label} target, combatRadii={enabled}: gap {gap} != expected {expected}",
+            );
+            if enabled {
+                assert!(
+                    gap > target_radius,
+                    "{label} target: player must end OUTSIDE the model (gap {gap} vs radius {target_radius})",
+                );
+            }
+        }
+    }
+}
+
+/// COMBAT-RADII — the UNCONDITIONAL reachability counter bumps on every
+/// local sticky slice EVEN WITH THE FLAG OFF (the `scenery_arm_evals`
+/// lesson: a gated probe cannot distinguish "off" from "dead code").
+#[test]
+fn combat_radii_eval_counter_bumps_with_the_flag_off() {
+    let mut scene = SpatialScene::new();
+    assert_eq!(scene.combat_radii_counters(), (0, 0));
+    assert!(!scene.combat_radii_enabled());
+    // No body, no sticky — the probe still records that the site ran.
+    let pose = make_position(50.0, 50.0, 0.0);
+    for _ in 0..3 {
+        let _ = scene.step_local_sticky(pose, 0.016, 4.0);
+    }
+    assert_eq!(scene.combat_radii_counters().0, 3);
+    assert_eq!(scene.local_player_part_radius(), 0.0, "flag off ⇒ 0.0");
+    scene.set_combat_radii_enabled(true);
+    assert_eq!(
+        scene.local_player_part_radius(),
+        crate::spatial::transition::PLAYER_PART_RADIUS,
+        "flag on ⇒ retail Setup 0x02000001 .radius (0.6788225), NOT the \
+         hand-tuned 0.4 PLAYER_CAPSULE_RADIUS",
+    );
+}
+
 /// Spec S9 §4 tests 9+6 (scene half) — install without a known target
 /// pose no-ops until the first feed (retail `Initialized` semantics,
 /// acclient.c:388691-388720); unstick reports was-active exactly once

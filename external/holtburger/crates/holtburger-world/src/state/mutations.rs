@@ -149,6 +149,14 @@ impl WorldState {
         self.scene.set_remote_sticky_enabled(enabled);
     }
 
+    /// COMBAT-RADII (2026-07-28): flip the scene's size-aware
+    /// combat-standoff switch (set once at world creation from
+    /// `?combatRadii`, which is ON unless `=off`). See the field doc on
+    /// `SpatialScene::combat_radii_enabled`.
+    pub fn set_combat_radii_enabled(&mut self, enabled: bool) {
+        self.scene.set_combat_radii_enabled(enabled);
+    }
+
     /// Physics-parity 2026-07-03 (dossier A F9/F14): flip the scene's
     /// retail LOCAL position lattice (set once at world creation from
     /// `?retailLeash=on`; default off = shipped behavior).

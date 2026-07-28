@@ -9,10 +9,18 @@ use holtburger_protocol::messages::{GameMessage, MovementEventData, MovementType
 /// against `state.entities` — `(target_exists, object_radius,
 /// object_height)`. The dims are the case-6 target physics dims the
 /// retail caller reads from the target's `CPartArray`
-/// (`CPhysicsObj::MoveToObject`, acclient.c:319808-319817): radius via
-/// the cached SetupModel cyl-sphere (`entity_collision_radius`, the
-/// ACE `GetPhysicsRadius` mirror); height has no entity-side source
-/// yet → `0.0` — the retail CPartArray-null fallback
+/// (`CPhysicsObj::MoveToObject`, acclient.c:319808-319817).
+///
+/// COMBAT-RADII (2026-07-28): with `?combatRadii` on (default) these are
+/// the REAL `CPartArray::GetRadius`/`GetHeight` pair — `setup->radius/
+/// height * scale.z` (acclient.c:325382-325391) — so the F2 charge lane's
+/// `UseSpheres` cylinder metric (`GetCurrentDistance` :344856-344893 →
+/// `Position::cylinder_distance`) stops at the target's EDGE and the
+/// arrival `StickTo` handoff (:345553-345566) inherits the same dims.
+/// With the flag off (or the Setup not yet resident) this keeps the
+/// pre-fix value: radius via the cached SetupModel cyl-sphere
+/// (`entity_collision_radius`, the ACE `GetPhysicsRadius` mirror),
+/// height `0.0` — the retail CPartArray-null fallback
 /// (acclient.c:319810-319815).
 pub(crate) fn resolve_movement_target(
     state: &WorldState,
@@ -20,7 +28,14 @@ pub(crate) fn resolve_movement_target(
 ) -> (bool, f32, f32) {
     match &data.data {
         MovementTypeData::MoveToObject(moveto) => match state.entities.get(moveto.target) {
-            Some(entity) => (true, state.entity_collision_radius(entity), 0.0),
+            Some(entity) => {
+                let (radius, height) = state.combat_part_dims(moveto.target);
+                if radius > 0.0 {
+                    (true, radius, height)
+                } else {
+                    (true, state.entity_collision_radius(entity), 0.0)
+                }
+            }
             None => (false, 0.0, 0.0),
         },
         MovementTypeData::TurnToObject(turn) => {
@@ -353,5 +368,91 @@ mod tests {
                 ..
             } if *object_radius == 0.0 && *object_height == 0.0
         )));
+    }
+
+    /// COMBAT-RADII (2026-07-28): with `?combatRadii` on and the target's
+    /// SetupModel resident, the case-6 dims are retail's
+    /// `CPartArray::GetRadius`/`GetHeight` = `setup->radius/height ×
+    /// scale.z` (acclient.c:325382-325391) — NOT the cyl-sphere
+    /// `GetPhysicsRadius` value, and height is no longer pinned 0.0.
+    /// Flag off ⇒ byte-identical to the pre-fix pair.
+    #[test]
+    fn case6_dims_are_part_array_dims_under_combat_radii() {
+        use holtburger_common::properties::{
+            PropertyDataId, PropertyFloat, WorldObjectPropertyAccessorsMut as _,
+        };
+
+        let setup_id = 0x0200_1234u32;
+        let mut state = WorldState::synthetic();
+        state.player.guid = holtburger_common::Guid(0x5000_0001);
+        let remote = holtburger_common::Guid(0x8000_0077);
+        let target = holtburger_common::Guid(0x8000_0042);
+        state.entities.insert(Entity::new(
+            remote,
+            "Chaser".to_string(),
+            WorldPosition::default(),
+        ));
+        let mut tusker = Entity::new(target, "Tusker".to_string(), WorldPosition::default());
+        // The LIVE source: wire `ObjectDescriptionData.csetup_id` →
+        // `PropertyDataId::Setup` (hydration.rs:212-213). `Entity::gfx_id`
+        // is never assigned outside tests, so the resolver must not
+        // depend on it.
+        tusker.set_did_prop(PropertyDataId::Setup, holtburger_common::Guid(setup_id));
+        // Wire ObjectDescriptionData.obj_scale → PropertyFloat::DefaultScale
+        // (hydration.rs:232) — retail's `CPartArray::scale.z`.
+        tusker.set_float_prop(PropertyFloat::DefaultScale, 1.5);
+        state.entities.insert(tusker);
+        // The DAT pair the wasm SetupModel parse stages.
+        state.register_setup_part_dims(setup_id, 1.2, 2.4);
+        // The cyl-sphere cache says something DIFFERENT — proving which
+        // source the combat lane reads.
+        state.register_setup_radius(setup_id, 0.55);
+
+        // Flag off: the pre-fix cyl-sphere pair.
+        let events = state.handle_message(&moveto_message(remote, target));
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                WorldEvent::EntityMovementEvent {
+                    object_radius,
+                    object_height,
+                    ..
+                } if (*object_radius - 0.55).abs() < 1e-6 && *object_height == 0.0
+            )),
+            "flag off must keep the GetPhysicsRadius pair: {events:?}"
+        );
+
+        // Flag on: setup.radius/height × scale.
+        state.set_combat_radii_enabled(true);
+        let (r, h) = state.combat_part_dims(target);
+        assert!((r - 1.8).abs() < 1e-5, "radius = 1.2 × 1.5, got {r}");
+        assert!((h - 3.6).abs() < 1e-5, "height = 2.4 × 1.5, got {h}");
+        let events = state.handle_message(&moveto_message(remote, target));
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                WorldEvent::EntityMovementEvent {
+                    object_radius,
+                    object_height,
+                    ..
+                } if (*object_radius - 1.8).abs() < 1e-5 && (*object_height - 3.6).abs() < 1e-5
+            )),
+            "flag on must carry the CPartArray dims: {events:?}"
+        );
+
+        // Residency miss (Setup not parsed yet) falls back to the
+        // cyl-sphere radius, never to 0.0 — a miss is not retail's
+        // "no CPartArray".
+        let unknown = holtburger_common::Guid(0x8000_0099);
+        let mut bare = Entity::new(unknown, "Bare".to_string(), WorldPosition::default());
+        bare.set_did_prop(PropertyDataId::Setup, holtburger_common::Guid(0x0200_9999));
+        state.entities.insert(bare);
+        let (r, h) = state.combat_part_dims(unknown);
+        assert_eq!(h, 0.0);
+        assert!((r - crate::spatial::PLAYER_CAPSULE_RADIUS).abs() < 1e-6);
+
+        // The unconditional reachability counter moved.
+        assert!(state.combat_radii_counters().0 > 0);
+        assert!(state.combat_radii_counters().1 > 0);
     }
 }

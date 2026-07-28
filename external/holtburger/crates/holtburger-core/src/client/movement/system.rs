@@ -4318,8 +4318,25 @@ impl MovementSystem {
         let view = MoveToView {
             on_walkable_contact: on_contact,
             self_pos,
-            self_radius: PLAYER_CAPSULE_RADIUS,
-            self_height: PLAYER_CAPSULE_HEIGHT,
+            // COMBAT-RADII (2026-07-28): retail's `GetCurrentDistance`
+            // feeds `CPhysicsObj::GetRadius`/`GetHeight` — i.e. the
+            // CPartArray dims (`setup->radius/height * scale.z`,
+            // acclient.c:344877-344878 → :325382-325391) — into
+            // `Position::cylinder_distance`. Setup `0x0200_0001` ships
+            // `.radius = 0.6788225`, `.height = 1.835`; the hand-tuned
+            // 0.4/1.8 capsule (whose own doc mis-claims those ARE the
+            // Setup values) under-shoots the arrival distance by ~28 cm.
+            // `?combatRadii=off` keeps the pre-fix capsule pair.
+            self_radius: if world.scene.combat_radii_enabled() {
+                holtburger_world::spatial::transition::PLAYER_PART_RADIUS
+            } else {
+                PLAYER_CAPSULE_RADIUS
+            },
+            self_height: if world.scene.combat_radii_enabled() {
+                holtburger_world::spatial::transition::PLAYER_PART_HEIGHT
+            } else {
+                PLAYER_CAPSULE_HEIGHT
+            },
             target_pos,
             motions_pending: manager.moveto_motions_pending(),
             is_interpolating: world.scene.local_player_is_interpolating(),
@@ -4345,7 +4362,19 @@ impl MovementSystem {
             // only (position_manager.rs) — the retail height param
             // (acclient.c:345565) is DROPPED here; extending the S9
             // signature is S9's call (spec §7 Q2).
+            //
+            // COMBAT-RADII (2026-07-28): prefer the world-resolved
+            // `CPartArray::GetRadius` over the directive's stored
+            // `sought_object_radius`. Retail's two values are the same
+            // number (both `CPartArray::GetRadius` on the same object),
+            // but on OUR local-pursuit lane `object_radius` can be a
+            // JS-supplied CHARGE STOP RANGE (`pursueEntity(guid, range,
+            // reach, run)`), which must never become the standoff.
+            // `combat_sticky_radius` returns 0.0 with the flag off ⇒
+            // byte-identical fallback to the directive value.
             if USE_STICKY_MANAGER {
+                let resolved = world.combat_sticky_radius(target);
+                let radius = if resolved > 0.0 { resolved } else { radius };
                 world.scene.stick_local_player_to(target, radius);
             }
         }
