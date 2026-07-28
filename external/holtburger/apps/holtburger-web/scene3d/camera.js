@@ -578,6 +578,14 @@ export class CameraSwitcher {
       // Default-OFF (strict `=on`): it moves the view during a cast (a feel
       // change) → 1070 round-4 eye-test pending. `?castCamBias=on`.
       this._castCamBiasOn = params?.get("castCamBias")?.toLowerCase() === "on";
+      // Coarse per-part building AABB sweep (step 2 of the clip chain).
+      // Default OFF (2026-07-28): step 3's precise triangle sweep covers the
+      // same buildings, and the AABB over-bounds a 45°-rotated footprint by
+      // up to 4.9 m (grocer: clip at local y 28.77 vs the real wall at
+      // 34.11), pulling the camera in far short of the walls. `?camAabbSweep=on`
+      // restores the old behaviour for A/B.
+      this._camAabbSweepOn =
+        params?.get("camAabbSweep")?.toLowerCase() === "on";
     }
     // Autofollow runtime state.
     this._followDragging = false; // true while right-mouse HELD (free-look)
@@ -656,6 +664,10 @@ export class CameraSwitcher {
       window.__setIndoorCam = (on) => {
         this._indoorCamOn = !!on;
         return this._indoorCamOn;
+      };
+      window.__setCamAabbSweep = (on) => {
+        this._camAabbSweepOn = !!on;
+        return this._camAabbSweepOn;
       };
       // Retail-preference live setters (wired to the Camera options tab —
       // ui/camera_settings.js). Stiffness null = hard-lock (retail stiffness
@@ -1266,7 +1278,10 @@ export class CameraSwitcher {
    *      jitter on slopes — beats discrete poly-vs-poly tests on
    *      Holtburg's gentle hills.
    *   2. **Outdoor building AABB sweep** (`cameraSweepCollision`). Fast
-   *      Minkowski-sum slab test; rejects most frames.
+   *      Minkowski-sum slab test; rejects most frames. DEFAULT OFF
+   *      (`?camAabbSweep=on` restores): the coarse per-part AABB
+   *      over-bounds rotated buildings by up to 4.9 m and step 3
+   *      already covers them precisely.
    *   3. **Building-interior triangle sweep** (`sweepSphereAgainstBuilding-
    *      Mesh`). Per-`physics_polygon` triangle, lifted through the
    *      placement frame. Catches interior + basement walls the
@@ -1351,18 +1366,22 @@ export class CameraSwitcher {
     };
 
     if (landblockId !== 0 && !indoor) {
-      // ---- 2. Outdoor building AABB sweep ----
-      try {
-        if (typeof handle.cameraSweepCollision === "function") {
-          const hit = handle.cameraSweepCollision(
-            startX, startY, startZ,
-            finalX, finalY, finalZ,
-            CAM_RADIUS,
-            landblockId,
-          );
-          if (hit) clipFinalTo(hit);
-        }
-      } catch (_) {}
+      // ---- 2. Outdoor building AABB sweep (default OFF — see
+      // _camAabbSweepOn; step 3's triangle sweep covers the same
+      // buildings without the rotated-footprint over-bound) ----
+      if (this._camAabbSweepOn) {
+        try {
+          if (typeof handle.cameraSweepCollision === "function") {
+            const hit = handle.cameraSweepCollision(
+              startX, startY, startZ,
+              finalX, finalY, finalZ,
+              CAM_RADIUS,
+              landblockId,
+            );
+            if (hit) clipFinalTo(hit);
+          }
+        } catch (_) {}
+      }
 
       // ---- 3. Building-interior triangle sweep ----
       try {
