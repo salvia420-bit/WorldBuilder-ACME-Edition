@@ -31803,6 +31803,24 @@ impl SessionHandle {
         vec![evals, resolved, enabled]
     }
 
+    /// CREATURE-SEPARATION (2026-07-28): the per-SetupModel collision
+    /// radii + the retail player-radius/epsilon scalars the render-side
+    /// separation resolve needs. Republished by the TickMovement arm on
+    /// residency change; JS re-reads it on a slow cadence and memoises
+    /// per entity. Purely additive export — rides manifest v4, NO bump.
+    #[wasm_bindgen(js_name = creatureSeparationTable)]
+    pub fn creature_separation_table(&self) -> CreatureSeparationTable {
+        let (setup_ids, radii) =
+            CREATURE_SEPARATION_RADII.with(|c| c.borrow().clone());
+        CreatureSeparationTable {
+            setup_ids,
+            radii,
+            player_radius: holtburger_world::spatial::transition::PLAYER_SETUP_SPHERE_RADIUS,
+            // acclient.c:39545 `F_EPSILON_37`; ACE PhysicsGlobals.cs:9.
+            epsilon: 0.0002,
+        }
+    }
+
     /// Snapshot of the most recent CharacterList. The recv loop updates
     /// the inner state on every `CharacterList` re-fire (e.g. after a
     /// successful `CharacterCreate` or `CharacterDelete`); JS calls
@@ -39875,6 +39893,77 @@ thread_local! {
 thread_local! {
     static COMBAT_RADII_STATS: std::cell::Cell<(u32, u32, u32)> =
         const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+// CREATURE-SEPARATION (2026-07-28) — the per-SetupModel collision-radius
+// table published to JS so the render-side separation resolve can size a
+// remote creature's contact envelope. Republished by the TickMovement arm
+// only when `WorldState::setup_collision_radii_len` CHANGES (the cache
+// only grows as rigs stream in), so the steady state is a single `usize`
+// compare per tick rather than a re-flatten.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static CREATURE_SEPARATION_RADII: std::cell::RefCell<(Vec<u32>, Vec<f32>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+    static CREATURE_SEPARATION_PUBLISHED_LEN: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// CREATURE-SEPARATION (2026-07-28) — the render-side separation inputs:
+/// the per-SetupModel collision radii plus the two retail scalars the JS
+/// resolve needs.
+///
+/// `setupIds[i]` pairs with `radii[i]`. The radius is the part array's
+/// first cyl-sphere else its first sphere — the primitive
+/// `CPhysicsObj::FindObjCollisions` actually tests
+/// (acclient.c:316229-316281) — NOT `CSetup.radius`. JS scales it by the
+/// entity's wire `obj_scale` (retail applies `m_scale` at the call site,
+/// acclient.c:316244/:316266) and adds `playerRadius`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct CreatureSeparationTable {
+    setup_ids: Vec<u32>,
+    radii: Vec<f32>,
+    player_radius: f32,
+    epsilon: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl CreatureSeparationTable {
+    #[wasm_bindgen(getter, js_name = setupIds)]
+    pub fn setup_ids(&self) -> Vec<u32> {
+        self.setup_ids.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn radii(&self) -> Vec<f32> {
+        self.radii.clone()
+    }
+
+    /// The LOCAL player's collision-sphere radius —
+    /// `transition::PLAYER_SETUP_SPHERE_RADIUS` (0.48), Setup
+    /// `0x02000001`'s sphere radius, the primitive the transition
+    /// actually sweeps. Deliberately NOT `PLAYER_CAPSULE_RADIUS` (0.4,
+    /// hand-tuned) and NOT `PLAYER_PART_RADIUS` (0.6788, the combat
+    /// lattice's `CPartArray::GetRadius`) — see the three-way
+    /// distinction documented on those constants in
+    /// `spatial/transition.rs`.
+    #[wasm_bindgen(getter, js_name = playerRadius)]
+    pub fn player_radius(&self) -> f32 {
+        self.player_radius
+    }
+
+    /// `PhysicsGlobals::EPSILON` = 0.0002 (retail `F_EPSILON_37`,
+    /// acclient.c:39545; ACE `PhysicsGlobals.cs:9`). Retail SUBTRACTS one
+    /// epsilon from the radius sum before testing
+    /// (`CSphere::intersects_sphere` acclient.c:359211,
+    /// `CCylSphere::intersects_sphere` :362082), so it is the exact and
+    /// only interpenetration retail permits.
+    #[wasm_bindgen(getter)]
+    pub fn epsilon(&self) -> f32 {
+        self.epsilon
+    }
 }
 
 /// A2-P2 — one frame of wasm-managed remote poses, three parallel
@@ -51498,6 +51587,35 @@ async fn recv_loop(
                                         .map(u32::from)
                                         .unwrap_or(0);
                                     LOCAL_STICKY_TARGET.with(|c| c.set(sticky));
+                                }
+                                // CREATURE-SEPARATION (2026-07-28):
+                                // republish the per-SetupModel collision
+                                // radius table when residency CHANGED.
+                                // The cache only grows as creature rigs
+                                // stream in, so a `len` compare is a
+                                // sound (and free) change detector; the
+                                // steady state costs one usize compare
+                                // per tick and allocates nothing.
+                                {
+                                    let live = w.setup_collision_radii_len();
+                                    if CREATURE_SEPARATION_PUBLISHED_LEN
+                                        .with(|c| c.get())
+                                        != live
+                                    {
+                                        let mut ids = Vec::with_capacity(live);
+                                        let mut radii = Vec::with_capacity(live);
+                                        for (setup_id, r) in
+                                            w.setup_collision_radii()
+                                        {
+                                            ids.push(setup_id);
+                                            radii.push(r);
+                                        }
+                                        CREATURE_SEPARATION_RADII.with(|c| {
+                                            *c.borrow_mut() = (ids, radii);
+                                        });
+                                        CREATURE_SEPARATION_PUBLISHED_LEN
+                                            .with(|c| c.set(live));
+                                    }
                                 }
                                 // COMBAT-RADII (2026-07-28): publish the
                                 // reachability counters post-tick.

@@ -455,4 +455,61 @@ mod tests {
         assert!(state.combat_radii_counters().0 > 0);
         assert!(state.combat_radii_counters().1 > 0);
     }
+
+    /// CREATURE-SEPARATION (2026-07-28): the render-side separation table
+    /// publishes the COLLISION-PRIMITIVE radius cache
+    /// (`WorldState::setup_radii`, ACE `GetPhysicsRadius` = first cyl-sphere
+    /// else first sphere) — a DIFFERENT quantity from the `CPartArray`
+    /// dims the combat standoff reads, and the one retail's
+    /// `CPhysicsObj::FindObjCollisions` actually enforces
+    /// (acclient.c:316229-316281 reads `CPartArray::GetCylsphere`/`GetSphere`,
+    /// :325364-325376 — NOT `GetRadius` :325382).
+    ///
+    /// Also pins the retail floor arithmetic against the two creatures
+    /// measured out of the base `client_portal.dat`, so a future edit that
+    /// swaps the radius source or drops the epsilon fails here.
+    #[test]
+    fn separation_table_publishes_collision_primitive_radii_not_part_dims() {
+        // Measured 2026-07-28 (WorldBuilder.Terminal chorizite-parse-dat-record
+        // on client_portal.dat). Both setups ship ZERO cylspheres, so the
+        // SPHERE arm is the live one for creature-vs-player.
+        const PLAYER_SPHERE_R: f32 = 0.48; // Setup 0x02000001
+        const TUSKER_SPHERE_R: f32 = 0.996; // Setup 0x02000964
+        // acclient.c:39545 `F_EPSILON_37`; ACE PhysicsGlobals.cs:9.
+        const EPSILON: f32 = 0.0002;
+
+        let mut state = WorldState::synthetic();
+        let tusker_setup = 0x0200_0964u32;
+        let human_setup = 0x0200_0001u32;
+        // Collision primitives (what the separation table carries)...
+        state.register_setup_radius(tusker_setup, TUSKER_SPHERE_R);
+        state.register_setup_radius(human_setup, PLAYER_SPHERE_R);
+        // ...vs the CPartArray bounding radii (what `?combatRadii` reads).
+        // Deliberately different numbers so a source mix-up is visible.
+        state.register_setup_part_dims(tusker_setup, 1.408_556_7, 1.992);
+        state.register_setup_part_dims(human_setup, 0.678_822_5, 1.835);
+
+        let table: std::collections::HashMap<u32, f32> =
+            state.setup_collision_radii().into_iter().collect();
+        assert_eq!(state.setup_collision_radii_len(), 2);
+        assert!((table[&tusker_setup] - TUSKER_SPHERE_R).abs() < 1e-6);
+        assert!((table[&human_setup] - PLAYER_SPHERE_R).abs() < 1e-6);
+        // The table must NOT be the CPartArray radii — that would over-separate
+        // a Tusker by ~0.9 m (2.087 vs the real 1.476 contact floor).
+        assert!((table[&tusker_setup] - 1.408_556_7).abs() > 0.1);
+
+        // Retail radsum: `r_a + r_b - EPSILON`
+        // (`CSphere::intersects_sphere` acclient.c:359211,
+        // `CCylSphere::intersects_sphere` :362082).
+        let floor = |mob_r: f32, scale: f32| mob_r * scale + PLAYER_SPHERE_R - EPSILON;
+        // Tusker Guard at scale 1.0.
+        assert!((floor(table[&tusker_setup], 1.0) - 1.4758).abs() < 1e-3);
+        // Shadow Child: SAME human setup as the player, but ACE ships it at
+        // DefaultScale 0.5 — the scale term must halve its radius.
+        assert!((floor(table[&human_setup], 0.5) - 0.7198).abs() < 1e-3);
+        // The pre-fix hardcoded 1.3 m glue standoff was wrong in BOTH
+        // directions — that is the bug this table exists to retire.
+        assert!(floor(table[&tusker_setup], 1.0) > 1.3);
+        assert!(floor(table[&human_setup], 0.5) < 1.3);
+    }
 }

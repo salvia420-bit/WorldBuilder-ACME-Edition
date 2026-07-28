@@ -448,9 +448,96 @@ const REMOTE_INTERP_OWNERSHIP_FRAMES = 30;
 // sticky-attacking, ACE withholds its position broadcast and relies on the
 // client to keep it glued to the (moving) target. We track the target at this
 // horizontal contact distance so the mob sits at melee range instead of
-// inside the player. A fixed default for now; per-entity cyl-radii (mob radius
-// + target radius) is a refinement.
+// inside the player.
+//
+// CREATURE-SEPARATION (2026-07-28): this is now only the FALLBACK, used when
+// the retail contact envelope for the pair cannot be sized yet (no resident
+// SetupModel radius). The "per-entity cyl-radii (mob radius + target radius)
+// is a refinement" TODO this comment used to carry is now implemented —
+// `EntityManager._separationFloor` computes the real
+// `r_mob + r_player - EPSILON`, and a fixed 1.3 was wrong in BOTH directions
+// (a Tusker Guard needs 1.476, a half-scale Shadow Child only 0.720).
 const ENTITY_STICKY_STANDOFF_M = 1.3;
+
+// === CREATURE-SEPARATION (2026-07-28) — `?creatureSeparation=off`. ===
+//
+// THE BUG (measured live, headless vs ACE 127.0.0.1:9000): a Shadow Child
+// charging a STATIONARY player rendered 0.300 m from the player's centre
+// while the WIRE pose said 1.318 m — 1.019 m of pure client-side overshoot,
+// leaving the rig drawn deep inside the player. The wire was healthy; our
+// RENDER lane broke it, in two places:
+//
+//  (1) the dead-reckon extrapolation below (`tgt.x += lv.vx * dt`) is an
+//      ACCUMULATOR on `_serverTargetPos`, not a function of elapsed time. It
+//      keeps integrating every frame for the whole `ENTITY_VELOCITY_STALE_MS`
+//      window whether or not the mob is still moving — and a charging mob's
+//      velocity points straight AT the player, so the error is always
+//      inward. ACE stops broadcasting position the moment the mob goes
+//      sticky (see F3-4 above), so nothing ever snap-corrects it back.
+//  (2) nothing anywhere enforced a contact envelope on the rendered pose.
+//
+// WHY RETAIL DOESN'T HAVE THIS: retail runs FULL physics for every remote
+// creature, so a charging mob is blocked by `CPhysicsObj::FindObjCollisions`
+// (acclient.c:316159-316316) before it can interpenetrate. Creature-vs-player
+// is a HARD block there: the pass-through exemption (:316216-316224) requires
+// BOTH parties to be players, and `IgnoreCreatures` (0x400) is never set by
+// the client. Our remote creatures are never in the solver at all, so the
+// separation has to be re-imposed at the point the pose is rendered.
+//
+// THE RETAIL FLOOR. `CSphere::intersects_sphere` (acclient.c:359211-359214)
+// and `CCylSphere::intersects_sphere` (:362082) both build
+// `radsum = r_a + r_b - EPSILON` and declare contact inside it. EPSILON is
+// 0.0002 (`F_EPSILON_37` acclient.c:39545; ACE `PhysicsGlobals.cs:9`) and is
+// the ONLY interpenetration retail permits — there is no per-creature
+// allowance and no push-out (nothing in `handle_all_collisions` :321808 ever
+// writes the collidee's position; `PhysicsState.Pushable` 0x80 is declared
+// but never read by the engine). Death/collapse does NOT exempt: nothing
+// sets `Ethereal` on a dying creature, and corpses stay solid.
+//
+// The radii are the part array's collision PRIMITIVES (first cyl-sphere else
+// first sphere, `CPartArray::GetCylsphere`/`GetSphere` acclient.c:325364-325376,
+// scaled by `m_scale` at the call site :316244/:316266) — NOT `CSetup.radius`
+// (`CPartArray::GetRadius` :325382), which is the bounding/sorting scalar the
+// COMBAT lattice reads and `?combatRadii` correctly uses for the STANDOFF.
+// Those are different quantities and this is the smaller one: a Tusker Guard
+// blocks at 1.476 m but stands off at 2.388 m.
+//
+// WHAT WE ENFORCE (planar, z ignored — retail's cyl-sphere test is itself
+// XY-only, :361504, and the sphere test's z term only ever makes the pair
+// FURTHER apart, so a planar floor is the conservative projection of retail's
+// 3D test: equal when the sphere centres are coplanar, at most a few cm
+// stricter otherwise):
+//   (a) prediction may never carry the target CLOSER to the local player
+//       than the authoritative wire pose already is — fixing (1) at source;
+//   (b) the rendered pose is pushed out to `r_mob + r_player - EPSILON` —
+//       fixing (2), and the backstop for every other lane (sticky glue,
+//       wasm-managed poses) that also writes `root.position`.
+// Creature-vs-CREATURE separation is deliberately out of scope (see the
+// report residual): retail gets it from the same solver we don't run, and
+// doing it here would need an O(n^2) pass this choke point cannot afford.
+function readCreatureSeparationFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get(
+      "creatureSeparation"
+    );
+    // DEFAULT-ON; only an explicit `=off` disables. (Absent => on.)
+    return v == null || v.toLowerCase() !== "off";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Fallback radius (m) for a party whose SetupModel collision radius has not
+// landed yet. `PLAYER_SETUP_SPHERE_RADIUS` (0.48) — Setup `0x02000001`'s
+// sphere, i.e. a humanoid. A residency miss must never collapse the floor to
+// zero (that is the bug), so it degrades to human-sized rather than to
+// nothing.
+const SEPARATION_FALLBACK_RADIUS_M = 0.48;
+// Re-query cadence (frames) for the wasm radius table while an entity's own
+// radius is still unresolved. The table only grows as rigs stream in, so a
+// resolved entity is memoised permanently and never re-queried.
+const SEPARATION_RETRY_FRAMES = 30;
 
 // F3-4b (2026-06-27, ?stickyGroundZ=on) — vertical gap (m) past which a sticky
 // melee mob RELEASES its glue: the victim has left ground melee reach (jumped),
@@ -3169,6 +3256,35 @@ export class EntityManager {
     // A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` (default OFF). Read
     // once HERE; consumed in `applyManagedPose` / `setPose` / `tick`.
     this._remoteInterpOn = readRemoteInterpFlag();
+    // CREATURE-SEPARATION (2026-07-28) — `?creatureSeparation=off`. Read once
+    // HERE; consumed in `tick` (the prediction clamp + the contact-envelope
+    // push-out) and in the F3-4 sticky glue's standoff. See the flag-reader
+    // block for the full decomp grounding.
+    this._creatureSeparationOn = readCreatureSeparationFlag();
+    // Cached wasm radius table: setupId -> collision-primitive radius (m,
+    // UNSCALED). Refreshed on the `SEPARATION_RETRY_FRAMES` cadence only
+    // while some entity is still unresolved.
+    /** @type {Map<number, number>} */
+    this._separationRadii = new Map();
+    this._separationPlayerRadius = SEPARATION_FALLBACK_RADIUS_M;
+    this._separationEpsilon = 0.0002;
+    this._separationTableFrame = -1e9;
+    // UNCONDITIONAL reachability counters (the `sceneryArmEvals` lesson: a
+    // gated probe cannot distinguish "flag off" from "arm in dead code").
+    // `evals` bumps on every per-entity separation slice BEFORE the enable
+    // gate; `resolved` counts floors sized from a REAL resident SetupModel
+    // radius rather than the humanoid fallback; `clamped` counts prediction
+    // clamps (defect 1); `pushed` counts contact-envelope push-outs
+    // (defect 2). Read via `window.__creatureSeparationStats()`.
+    this._sepStats = { evals: 0, resolved: 0, clamped: 0, pushed: 0 };
+    // Diag surface for capture scripts / the 1070 eye-test. Registered here
+    // (not on `__diag`) so it is reachable the moment the manager exists,
+    // before the diag bundle attaches.
+    try {
+      if (typeof window !== "undefined") {
+        window.__creatureSeparationStats = () => this.creatureSeparationStats();
+      }
+    } catch (_) { /* non-browser harness */ }
     // A2 Path A (2026-05-29) — remote-entity heading ease. Default-on (browser);
     // `?headingSnap=on` reverts to the legacy snap, `?headingEaseK=` tunes rate.
     // Consumed in `setPose` (stash target / discontinuity-snap) + `tick` (slerp).
@@ -5359,6 +5475,26 @@ export class EntityManager {
     let tgt = inst._serverTargetPos;
     if (!tgt) tgt = inst._serverTargetPos = new THREE.Vector3();
     tgt.set(x, y, z);
+    // CREATURE-SEPARATION (2026-07-28) — the separation resolve in `tick`
+    // CANNOT cover this lane: `loop.js` runs `entityManager.tick(dt)`
+    // (loop.js:2089) and only THEN `drainRemotePoses` (loop.js:2102), so a
+    // wasm-managed row is the LAST write to `root.position` each frame and
+    // would be rendered un-separated. Measured live: a Tusker Guard pinned at
+    // the 1.476 m floor on tick frames but flicked to 0.300 m on managed-row
+    // frames — 0.3 is `StickyManager::adjust_offset`'s bare `STICKY_RADIUS`
+    // (acclient.c:388559), i.e. the Rust REMOTE sticky lane is still
+    // radius-blind the way `?combatRadii` found the LOCAL lane to be (both
+    // its radii are 0.0 there). Fixing that in Rust is the deeper repair and
+    // is filed as a residual; this is the render-side guarantee that holds
+    // regardless. Re-uses the same floor + push-out as `tick`.
+    // (Gate lives INSIDE `_applyCreatureSeparation` so the eval counter stays
+    // unconditionally reachable on this lane too; rows here are sparse — only
+    // bodies whose Rust manager stepped this tick — so the per-row player-pose
+    // resolve is a handful of calls per frame, not one per entity.)
+    if (!inst._deadFrozen) {
+      const pp = this._localPlayerWorldPose();
+      if (pp) this._applyCreatureSeparation(inst, pp);
+    }
     // A2-P3 R2 — sticky heading (only sticky-flagged rows carry a quat;
     // loop.js drainRemotePoses omits it otherwise).
     if (qw !== undefined && Number.isFinite(+qw)) {
@@ -5391,6 +5527,17 @@ export class EntityManager {
     // clear-on-resumed-position point for both KIND_POSITION drain paths
     // (EntityManager.setPose is only reached from a KIND_POSITION event).
     if (inst._stickyTarget) inst._stickyTarget = null;
+    // CREATURE-SEPARATION (2026-07-28): stash the AUTHORITATIVE wire pose
+    // before any of the branches below decide to ease, snap or defer it.
+    // `setPose` is reached ONLY from a KIND_POSITION drain (see the comment
+    // just above), so this is the raw server pose — the anchor the prediction
+    // clamp measures against. Kept for remotes only; the local player runs its
+    // own predictor and never reaches the separation resolve.
+    if (isRemote) {
+      let wp = inst._wirePos;
+      if (!wp) wp = inst._wirePos = new THREE.Vector3();
+      wp.set(x, y, z);
+    }
     // A5-P3 (?rootMotionObject=1): a fresh authoritative KIND_POSITION
     // replaces the anchor wholesale, making the applied-root-motion
     // ledger moot — clear it (diag-only; the existing dead-reckon
@@ -6863,6 +7010,194 @@ export class EntityManager {
       const lbY = (lbId >>> 16) & 0xff;
       return { x: pose.x + lbX * 192, y: pose.y + lbY * 192, z: pose.z };
     } catch (_) { return null; }
+  }
+
+  /**
+   * CREATURE-SEPARATION — reachability + effect counters.
+   *
+   * `evals` is bumped UNCONDITIONALLY (outside the `?creatureSeparation`
+   * gate) on every per-entity separation slice, so a live client can tell
+   * "flag off" from "this arm never runs" — the `sceneryArmEvals` lesson.
+   * `resolved` counts floors sized from a REAL resident SetupModel collision
+   * radius rather than the humanoid fallback (it is what proves the wasm
+   * radius table is actually reaching JS). `clamped` / `pushed` count the two
+   * corrections firing. `radiiCached` is the resident table size.
+   *
+   * @returns {{evals:number, resolved:number, clamped:number, pushed:number,
+   *            radiiCached:number, playerRadius:number, enabled:boolean}}
+   */
+  creatureSeparationStats() {
+    return {
+      ...this._sepStats,
+      radiiCached: this._separationRadii.size,
+      playerRadius: this._separationPlayerRadius,
+      enabled: !!this._creatureSeparationOn,
+    };
+  }
+
+  /**
+   * CREATURE-SEPARATION — refresh the wasm collision-radius table
+   * (`SessionHandle.creatureSeparationTable`) at most once every
+   * `SEPARATION_RETRY_FRAMES`. The table only GROWS as creature rigs stream
+   * in and their SetupModels parse, so an entity whose radius already
+   * resolved is memoised permanently and never re-reads this.
+   *
+   * Self-degrading: a stale `pkg/` with no such export leaves the map empty
+   * and every floor falls back to the humanoid radius (still far better than
+   * the pre-fix zero), so a JS/wasm version skew degrades rather than throws.
+   */
+  _refreshSeparationTable() {
+    if (this._smoothFrame - this._separationTableFrame < SEPARATION_RETRY_FRAMES) {
+      return;
+    }
+    this._separationTableFrame = this._smoothFrame;
+    try {
+      const sh = typeof window !== "undefined" ? window.__sessionHandle : null;
+      const t = sh?.creatureSeparationTable?.();
+      if (!t) return;
+      const ids = t.setupIds;
+      const radii = t.radii;
+      if (ids && radii && ids.length === radii.length) {
+        for (let i = 0; i < ids.length; i++) {
+          this._separationRadii.set(ids[i] >>> 0, radii[i]);
+        }
+      }
+      if (Number.isFinite(t.playerRadius) && t.playerRadius > 0) {
+        this._separationPlayerRadius = t.playerRadius;
+      }
+      if (Number.isFinite(t.epsilon)) this._separationEpsilon = t.epsilon;
+    } catch (_) {
+      /* stale pkg / pre-login — keep the fallback */
+    }
+  }
+
+  /**
+   * CREATURE-SEPARATION — the retail contact floor (m, planar centre-to-centre)
+   * between `inst` and the LOCAL player:
+   *
+   *     r_mob * scale  +  r_player  -  EPSILON
+   *
+   * exactly the `radsum` retail's `CSphere::intersects_sphere`
+   * (acclient.c:359211) / `CCylSphere::intersects_sphere` (:362082) build
+   * before declaring contact. `r_mob` is the SetupModel's collision primitive
+   * (first cyl-sphere else first sphere) as published by wasm; the scale is
+   * the entity's live `_baseScale` (retail's `m_scale`, applied at the
+   * `FindObjCollisions` call site :316244/:316266).
+   *
+   * Memoised on the instance. Returns 0 when the floor cannot be sized at all
+   * (no root / no meta), which callers treat as "no separation this frame".
+   */
+  _separationFloor(inst) {
+    // UNCONDITIONAL reachability probe — bumped before the enable gate so a
+    // live client can distinguish "flag off" from "this arm is dead code".
+    this._sepStats.evals++;
+    if (inst._sepFloor !== undefined && inst._sepFloorResolved) {
+      return inst._sepFloor;
+    }
+    this._refreshSeparationTable();
+    const setupId = (inst?.meta?.setupId ?? inst?.setupId ?? 0) >>> 0;
+    const r = this._separationRadii.get(setupId);
+    const resolved = Number.isFinite(r) && r > 0;
+    const base = resolved ? r : SEPARATION_FALLBACK_RADIUS_M;
+    // `_baseScale` is the rig's applied uniform scale (the wire `obj_scale`);
+    // a half-scale Shadow Child must halve its radius or it blocks like a
+    // full-size humanoid.
+    const scale =
+      Number.isFinite(inst?._baseScale) && inst._baseScale > 0
+        ? inst._baseScale
+        : 1;
+    inst._sepFloor =
+      base * scale + this._separationPlayerRadius - this._separationEpsilon;
+    inst._sepFloorResolved = resolved;
+    if (resolved) this._sepStats.resolved++;
+    return inst._sepFloor;
+  }
+
+  /**
+   * CREATURE-SEPARATION — the two render-side corrections, applied to one
+   * remote entity AFTER every lane that writes `root.position` has run
+   * (sticky glue / dead-reckon ease / wasm-managed pose) and BEFORE the
+   * velScale gait sampler reads the frame's position delta, so the gait
+   * reflects what is actually drawn.
+   *
+   * @param {object} inst  the entity instance (already known non-local)
+   * @param {{x:number,y:number,z:number}} pp  local player world pose
+   */
+  _applyCreatureSeparation(inst, pp) {
+    const floor = this._separationFloor(inst);
+    if (!this._creatureSeparationOn || !(floor > 0)) return;
+
+    // Planar push of `v` (an {x,y} carrier) out to `floor` from the player.
+    // Returns true when it moved. Dead-centre overlap has no axis to push
+    // along, so reuse the last bearing — a stable choice beats a per-frame
+    // random one, which would jitter.
+    const pushOut = (v) => {
+      const dx = v.x - pp.x;
+      const dy = v.y - pp.y;
+      const d = Math.hypot(dx, dy);
+      if (d >= floor) return false;
+      let ux;
+      let uy;
+      if (d > 1e-4) {
+        ux = dx / d;
+        uy = dy / d;
+      } else {
+        const h = inst._lastSepBearing || 0;
+        ux = Math.cos(h);
+        uy = Math.sin(h);
+      }
+      inst._lastSepBearing = Math.atan2(uy, ux);
+      v.x = pp.x + ux * floor;
+      v.y = pp.y + uy * floor;
+      return true;
+    };
+
+    // === (a) FIX THE PREDICTION AT SOURCE ===
+    // Both corrections are applied to `_serverTargetPos` — the thing the ease
+    // chases — NOT just to the rendered pose. Clamping only the render would
+    // leave a corrupted target dragging inward every frame while the clamp
+    // shoved outward: a per-frame fight, i.e. exactly the jitter/rubber-band
+    // this must not introduce. Fixing the TARGET lets the existing K=12 ease
+    // converge onto the floor naturally, so the approach stays smooth and the
+    // arrival is a settle rather than a collision with a clamp.
+    const tgt = inst._serverTargetPos;
+    const wire = inst._wirePos;
+    if (tgt) {
+      // (a1) BOUND THE EXTRAPOLATION LEAD. The dead-reckon block adds
+      // `lastVel * dt` to `tgt` EVERY frame for the whole
+      // `ENTITY_VELOCITY_STALE_MS` window — an accumulator, not a function of
+      // elapsed time — so a mob that stopped moving keeps sliding forward at
+      // its last speed, and a charging mob's velocity points at the player.
+      // Real dead reckoning can only claim the distance the last known
+      // velocity could actually have covered since the authoritative anchor,
+      // and the freshness window bounds that. Anything past it is not
+      // prediction, it is drift.
+      if (wire && inst.lastVel) {
+        const speed = Math.hypot(inst.lastVel.vx, inst.lastVel.vy);
+        const maxLead = speed * (ENTITY_VELOCITY_STALE_MS / 1000);
+        const lx = tgt.x - wire.x;
+        const ly = tgt.y - wire.y;
+        const lead = Math.hypot(lx, ly);
+        if (lead > maxLead && lead > 1e-4) {
+          const s = maxLead / lead;
+          tgt.x = wire.x + lx * s;
+          tgt.y = wire.y + ly * s;
+          this._sepStats.clamped++;
+        }
+      }
+      // (a2) The target may not sit inside the contact envelope either — a
+      // prediction that ends up inside the player is not a pose the mob could
+      // legally hold, so the ease must never be aimed there.
+      if (pushOut(tgt)) this._sepStats.clamped++;
+    }
+
+    // === (b) CONTACT ENVELOPE ON THE RENDERED POSE ===
+    // The hard backstop for EVERY lane, including the ones with no
+    // `_serverTargetPos` at all: the F3-4 sticky glue (which writes
+    // `root.position` directly) and `applyManagedPose` (the Rust
+    // PositionManager). Also covers the frames before the ease has caught up.
+    // Never pushes FURTHER than the floor, so releasing it cannot pop.
+    if (pushOut(inst.root.position)) this._sepStats.pushed++;
   }
 
   /**
@@ -12845,6 +13180,21 @@ export class EntityManager {
         }
       } catch (_) { /* fall through → no local-player exclusion this tick */ }
     }
+    // CREATURE-SEPARATION (2026-07-28) — resolve the local player's world
+    // pose ONCE per tick. `_localPlayerWorldPose()` crosses the wasm boundary
+    // (`SessionHandle.getLocalPlayerPose`), so calling it per entity would be
+    // ~30x the cost for a value that cannot change inside a single tick.
+    // `null` pre-spawn / on a throwing handle → the separation resolve is
+    // skipped this tick (bail-open, same convention as the stride gate).
+    // Resolved unconditionally so the arm stays reachable with the flag off
+    // and the eval counter keeps climbing.
+    const _sepPlayerPose = this._localPlayerWorldPose();
+    // Advance the frame counter the separation table's retry cadence reads.
+    // `_smoothFrame` is otherwise only advanced when a smoothing stride is
+    // configured (default: never), which would freeze the retry clock at 0
+    // and pin the table to its very first read — so bump it here too when the
+    // stride is off. Bounded-growth is fine (compared by subtraction).
+    if (!_smoothStrideOn) this._smoothFrame = (this._smoothFrame | 0) + 1;
     for (const inst of this.entityMap.values()) {
       // Perf B1 (2026-05-18) — distance + local-player + active-tween
       // gate. When false, skip mixer.update, hook execution, and the
@@ -13016,8 +13366,23 @@ export class EntityManager {
           // is right on top of the target (dh≈0) keep its current bearing.
           const ux = dh > 1e-3 ? dx / dh : 1;
           const uy = dh > 1e-3 ? dy / dh : 0;
-          const gx = tp.x + ux * ENTITY_STICKY_STANDOFF_M;
-          const gy = tp.y + uy * ENTITY_STICKY_STANDOFF_M;
+          // CREATURE-SEPARATION (2026-07-28): size the glue standoff from the
+          // PAIR's real contact envelope instead of the flat 1.3 m, which was
+          // wrong in both directions (a Tusker Guard blocks at 1.476, a
+          // half-scale Shadow Child at 0.720). Only meaningful when the target
+          // IS the local player — the floor is computed against the player's
+          // radius — so a mob-on-mob stick keeps the legacy constant. Falls
+          // back to the constant whenever the floor cannot be sized.
+          let standoff = ENTITY_STICKY_STANDOFF_M;
+          if (
+            this._creatureSeparationOn &&
+            this._isLocalPlayerGuid(inst._stickyTarget >>> 0)
+          ) {
+            const f = this._separationFloor(inst);
+            if (f > 0) standoff = f;
+          }
+          const gx = tp.x + ux * standoff;
+          const gy = tp.y + uy * standoff;
           // F3-4b (?stickyGroundZ=on): a monster can't follow/attack an airborne
           // victim. If the target jumped out of vertical melee reach, RELEASE the
           // glue (stickyGlued stays false → the dead-reckon ease below resumes
@@ -13071,6 +13436,26 @@ export class EntityManager {
         pos.x += (tgt.x - pos.x) * factor;
         pos.y += (tgt.y - pos.y) * factor;
         pos.z += (tgt.z - pos.z) * factor;
+      }
+      // === CREATURE-SEPARATION (2026-07-28, `?creatureSeparation=off`) ===
+      // Runs AFTER every lane that writes `root.position` this frame (the
+      // F3-4 sticky glue, the dead-reckon ease, and any wasm-managed pose
+      // `applyManagedPose` wrote before the tick) and BEFORE the velScale
+      // gait sampler below reads the frame's position delta — so the gait
+      // reflects what is actually drawn rather than a pose we then move.
+      // Clamps the prediction inward-drift and enforces retail's contact
+      // envelope. Skipped for the local player (owns its own prediction and
+      // its own swept-circle collision) and for corpses/dead rigs, which are
+      // parked by the collapse handoff and must not be shoved.
+      // `_separationFloor` bumps the UNCONDITIONAL eval counter, so keep this
+      // call outside the flag gate (the gate is inside).
+      if (
+        _sepPlayerPose &&
+        !inst._deadFrozen &&
+        inst.root &&
+        !this._isLocalPlayerGuid(inst.guid >>> 0)
+      ) {
+        this._applyCreatureSeparation(inst, _sepPlayerPose);
       }
       // === A2 Path A (2026-05-29) — remote-entity HEADING ease. Exponentially
       // slerp the rendered quaternion toward the server target stashed by

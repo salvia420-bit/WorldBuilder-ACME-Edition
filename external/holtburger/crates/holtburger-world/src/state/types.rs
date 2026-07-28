@@ -872,6 +872,37 @@ impl WorldState {
         self.setup_radii.get(&setup_id).copied().unwrap_or(DEFAULT)
     }
 
+    /// CREATURE-SEPARATION (2026-07-28) — snapshot of the per-SetupModel
+    /// collision-primitive radius cache as `(setup_id, radius)` pairs, so
+    /// the wasm bundle can publish it to JS once per residency change.
+    ///
+    /// This is the radius retail's `CPhysicsObj::FindObjCollisions`
+    /// actually enforces: the part array's first CYL-SPHERE, else its
+    /// first SPHERE (`CPartArray::GetCylsphere`/`GetSphere`,
+    /// acclient.c:325364-325376; scale applied at the call site
+    /// :316244/:316266). It is NOT `CSetup.radius` — that is
+    /// `CPartArray::GetRadius` (:325382), the bounding/sorting scalar the
+    /// COMBAT lattice reads. Both the player Setup `0x02000001` and the
+    /// Tusker `0x02000964` ship ZERO cylspheres, so the sphere arm is the
+    /// live one for creature-vs-player (measured from the base
+    /// `client_portal.dat` 2026-07-28: player sphere r = 0.48, Tusker
+    /// sphere r = 0.996).
+    ///
+    /// Unfiltered and ungated — it is inert data, and the consumer's
+    /// enable gate lives at the point of USE (the render-side separation
+    /// resolve) so the publish path stays unconditionally reachable.
+    pub fn setup_collision_radii(&self) -> Vec<(u32, f32)> {
+        self.setup_radii.iter().map(|(&k, &v)| (k, v)).collect()
+    }
+
+    /// CREATURE-SEPARATION — number of SetupModels with a resident
+    /// collision radius. Cheap change-detector for the per-tick publish
+    /// (the table only grows as rigs stream in), so the wasm arm can skip
+    /// re-flattening an unchanged table every tick.
+    pub fn setup_collision_radii_len(&self) -> usize {
+        self.setup_radii.len()
+    }
+
     /// A7-R6 (2026-06-12) — does the local player's collision cylinder
     /// overlap this entity's right now? The overlap input to the
     /// ethereal-expiry re-check (retail
