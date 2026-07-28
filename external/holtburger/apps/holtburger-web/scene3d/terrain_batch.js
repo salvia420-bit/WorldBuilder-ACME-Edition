@@ -48,6 +48,35 @@
 // tickTerrainBatchOptimize() (driven from loop.js next to
 // tickStatAtlasOptimize, >30% dead → bm.optimize()).
 //
+// PARK (2026-07-28 slot-leak fix). Phase 9a warm-park is DEFAULT-ON and, once
+// the LRU is at cap, it REPLACES eviction entirely — a 52-hop @telepoi tour
+// measured evicted=0 / parkedTotal=358, i.e. `_evictTerrainBatchForLb` fired
+// ZERO times end to end. park() detaches an LB's proxy mesh from terrainGroup
+// but left the batch row alive, so every parked LB became a GHOST: still drawn
+// by the multidraw at its world position, still holding its slot. Measured
+// (BEFORE): resident flat at 32, parked → 347, slotsUsed → 256 (of which 256
+// ghosts, `batched` = 0), the exhaustion warning at hop 30, and from that hop
+// on EVERY landblock the player actually stands in falls back to a visible
+// per-LB draw — which park DOES detach. That is the reported flicker: before
+// exhaustion a park is invisible (the ghost keeps painting), after exhaustion
+// the same park blanks the landblock until the next unpark re-attaches it, so
+// terrain strobes in and out with the at-cap park↔unpark churn.
+//
+// The fix mirrors static_atlas' park/unpark split, with the extra step the
+// hard 256-layer cap forces:
+//   - park   → `bm.setVisibleAt(iid, false)`: the row stops drawing THE SAME
+//              FRAME the proxy detaches (no ghost), but keeps its slot, so a
+//              park↔unpark ping-pong costs two flag writes and never re-uploads
+//              geometry.
+//   - unpark → `setVisibleAt(iid, true)`, or a re-absorb when the slot was
+//              stolen (below), or a visible per-LB draw if even that fails.
+//   - slot exhaustion → STEAL the oldest parked (hidden) row instead of
+//              falling back forever: parked rows are invisible by definition,
+//              so reclaiming one costs nothing on screen and the LB re-absorbs
+//              on unpark from the park pool's still-intact bake data. The
+//              capacity warning now only fires when the RESIDENT ring alone
+//              exceeds 256 LBs — a real signal, not an accumulation artifact.
+//
 // DEFAULT-ON (2026-07-03 restore; `?terrainBatch=off` escapes).
 // Wireframe mode (?wireframe=1) is never batched (different material system);
 // quality=high LOD re-bakes flow through the eviction hook + re-absorb.
@@ -366,6 +395,10 @@ function _createState(scene3d, lbMesh, opts, extras) {
     freeSlots: [],
     nextSlot: 0,
     byLb: new Map(),     // lbKey -> { gid, iid, slot }
+    // Warm-park bookkeeping: lbKeys whose row is alive but hidden
+    // (setVisibleAt false). Set iteration order == park order, so the first
+    // entry is the oldest park — the slot-steal victim.
+    parkedLbs: new Set(),
     gidVerts: new Map(), // gid -> vertexCount (dead-space accounting)
     usedVerts: 0,
     deadVerts: 0,
@@ -373,6 +406,17 @@ function _createState(scene3d, lbMesh, opts, extras) {
     maxVerts: TB_INIT_VERTS,
     maxIndices: TB_INIT_VERTS * TB_INIT_INDEX_RATIO,
     passthroughCount: 0,
+    // Unconditional lifecycle counters (NOT flag-gated, NOT debug-gated —
+    // the 2026-07-28 root cause was a release path that looked installed and
+    // never ran; `parkHides` growing on a live tour is the proof it fires).
+    absorbs: 0,
+    reabsorbs: 0,
+    evicts: 0,
+    parkHides: 0,
+    unparkShows: 0,
+    unparkReabsorbs: 0,
+    unparkFallbacks: 0,
+    slotSteals: 0,
   };
 
   state.material = _buildBatchMaterial(lbMesh.material, glsl, state, opts, extras);
@@ -437,6 +481,10 @@ function _createState(scene3d, lbMesh, opts, extras) {
         stats: () => ({
           enabled: true,
           instances: state.byLb.size,
+          // rows whose LB is parked: alive + slot-holding, but hidden
+          parkedRows: state.parkedLbs.size,
+          // rows actually contributing to the multidraw
+          visibleRows: state.byLb.size - state.parkedLbs.size,
           slotsUsed: state.nextSlot - state.freeSlots.length,
           slotCapacity: TB_SLOT_CAPACITY,
           usedVerts: state.usedVerts,
@@ -444,6 +492,17 @@ function _createState(scene3d, lbMesh, opts, extras) {
           maxVerts: state.maxVerts,
           passthrough: state.passthroughCount,
           mergeEnabled: !!state.mergeArray,
+          // lifecycle counters — see the state literal for why these are
+          // unconditional. parkHides/unparkShows prove the warm-park release
+          // path is wired to a facade the LRU actually holds.
+          absorbs: state.absorbs,
+          reabsorbs: state.reabsorbs,
+          evicts: state.evicts,
+          parkHides: state.parkHides,
+          unparkShows: state.unparkShows,
+          unparkReabsorbs: state.unparkReabsorbs,
+          unparkFallbacks: state.unparkFallbacks,
+          slotSteals: state.slotSteals,
         }),
       };
     }
@@ -474,6 +533,190 @@ function _ensureCapacity(state, vcount, icount) {
     state.maxVerts = newV;
     state.maxIndices = newI;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Hook installation. The LRU calls park/unpark/evict through
+// `this.scene3d.<hook>`, and `this.scene3d` is NOT guaranteed to be the same
+// facade the terrain bakers hand us (the documented liveScene3d /
+// scene3dForBuilders dual-facade footgun — and a hook installed on the wrong
+// facade is indistinguishable from a hook that never fires). Install on every
+// facade we can reach, INCLUDING the LRU's own scene3d back-reference, which
+// is the object that actually dispatches park()/unpark()/evict().
+// ---------------------------------------------------------------------------
+
+function _installHooksOn(target) {
+  if (!target) return;
+  try {
+    if (target._evictTerrainBatchForLb !== evictTerrainBatchForLb) {
+      target._evictTerrainBatchForLb = evictTerrainBatchForLb;
+    }
+    if (target._parkTerrainBatchForLb !== parkTerrainBatchForLb) {
+      target._parkTerrainBatchForLb = parkTerrainBatchForLb;
+    }
+    if (target._unparkTerrainBatchForLb !== unparkTerrainBatchForLb) {
+      target._unparkTerrainBatchForLb = unparkTerrainBatchForLb;
+    }
+  } catch (_) { /* fail-soft: frozen/proxied facade */ }
+}
+
+function _installHooks(scene3d) {
+  _installHooksOn(scene3d);
+  try { _installHooksOn(scene3d?.landblockLru?.scene3d); } catch (_) { /* fail-soft */ }
+  try {
+    const live = typeof window !== "undefined" ? window.liveScene3d : null;
+    _installHooksOn(live);
+    _installHooksOn(live?.landblockLru?.scene3d);
+  } catch (_) { /* fail-soft */ }
+}
+
+// ---------------------------------------------------------------------------
+// Slot allocation. Free list → fresh layer → STEAL the oldest parked row.
+// Parked rows are hidden by definition, so reclaiming one is invisible; the
+// LB re-absorbs from the park pool's intact bake data when it unparks (or
+// fails soft to a visible per-LB draw). Only a resident ring larger than the
+// layer capacity can now exhaust the batch.
+// ---------------------------------------------------------------------------
+
+function _allocSlot(state) {
+  if (state.freeSlots.length > 0) return state.freeSlots.pop();
+  if (state.nextSlot < TB_SLOT_CAPACITY) return state.nextSlot++;
+  const victim = state.parkedLbs.values().next().value;
+  if (victim !== undefined) {
+    evictTerrainBatchForLb(victim);
+    state.slotSteals += 1;
+    if (state.freeSlots.length > 0) return state.freeSlots.pop();
+  }
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Core absorb (state already exists). Shared by the fresh-bake entry point and
+// the unpark re-absorb path, which has no `opts`/`extras` to offer: merge
+// validity is derived from the mesh's own userData plus whether the batch was
+// built with a merge array at all, and the canonical attribute set was fixed
+// by the first absorb.
+// ---------------------------------------------------------------------------
+
+function _absorbMeshIntoState(state, lbMesh) {
+  const ud = lbMesh.userData;
+  const lbKey = _lbKeyOf(ud.lbX, ud.lbY);
+  // Re-bake of a still-batched LB (LOD swap raced, or an evict hook was
+  // missed): excise the stale entry first so the fresh geometry replaces it.
+  if (state.byLb.has(lbKey)) evictTerrainBatchForLb(lbKey);
+
+  // Slot allocation (layer index for both array textures).
+  const slot = _allocSlot(state);
+  if (slot < 0) {
+    state.passthroughCount += 1;
+    _warnOnce(
+      "slot capacity exhausted (256 resident LBs live in batch)",
+      "extra LBs draw per-LB",
+    );
+    return false;
+  }
+  const releaseSlot = () => state.freeSlots.push(slot);
+
+  // Per-LB data layers. Merge validity must match what the legacy material
+  // would have done: mergeDataTexture is only ever set when texMerge is on
+  // AND the wasm mesh carried merge data.
+  const mergeTex = ud.mergeDataTexture || null;
+  const mergeValid = !!(mergeTex && state.mergeArray);
+  if (!_writeVtLayer(state, slot, ud.vertexTypesTexture, mergeValid)) {
+    releaseSlot();
+    state.passthroughCount += 1;
+    _warnOnce("vertex-types texture shape mismatch");
+    return false;
+  }
+  if (!_writeMergeLayer(state, slot, mergeTex)) {
+    releaseSlot();
+    state.passthroughCount += 1;
+    _warnOnce("merge texture shape mismatch");
+    return false;
+  }
+
+  // Canonical attribute set: decided by the first absorbed geometry
+  // (modulation attributes are session-constant — present iff the wasm
+  // modulation-ranges table loaded). roadCode is intentionally dropped
+  // (unused by the shader; roads ride uVertexTypes.G).
+  const srcGeom = lbMesh.geometry;
+  if (!srcGeom?.attributes?.position || !srcGeom.index) {
+    releaseSlot();
+    state.passthroughCount += 1;
+    _warnOnce("geometry missing position/index");
+    return false;
+  }
+  if (!state.attrNames) {
+    const names = ["position", "normal", "terrainCode"];
+    if (srcGeom.getAttribute("vertexBrightness")) {
+      names.push("vertexBrightness", "vertexSaturate", "vertexHue");
+    }
+    // RND-20/21 — carry the retail calc_lighting normal into the batch, or
+    // hard-off the Gouraud term. The batch material is cloned from ONE LB's
+    // material before any geometry is admitted, so its uAcGouraudEnabled can
+    // disagree with the whitelist; without this the batched draw would sample
+    // an unbound attribute as (0,0,0) and light every LB by ambient alone.
+    if (srcGeom.getAttribute("acLightNormal")) {
+      names.push("acLightNormal");
+    } else if (state.material?.uniforms?.uAcGouraudEnabled) {
+      state.material.uniforms.uAcGouraudEnabled.value = 0.0;
+    }
+    state.attrNames = names;
+  }
+  const shadow = new THREE.BufferGeometry();
+  for (const name of state.attrNames) {
+    const attr = srcGeom.getAttribute(name);
+    if (!attr) {
+      releaseSlot();
+      state.passthroughCount += 1;
+      _warnOnce(`geometry attribute set mismatch (missing ${name})`);
+      return false;
+    }
+    shadow.setAttribute(name, attr); // shared ref; setGeometryAt copies the data out
+  }
+  const vcount = srcGeom.attributes.position.count;
+  shadow.setAttribute(
+    "aLbSlot",
+    new THREE.BufferAttribute(new Float32Array(vcount).fill(slot), 1, false),
+  );
+  shadow.setIndex(srcGeom.index);
+  // LB-local bounds for the per-instance frustum cull (instance matrix
+  // supplies the world placement). The adapter always computes one.
+  shadow.boundingSphere = srcGeom.boundingSphere
+    ? srcGeom.boundingSphere.clone()
+    : null;
+  if (!shadow.boundingSphere) shadow.computeBoundingSphere();
+
+  let gid = null;
+  let iid = null;
+  try {
+    _ensureCapacity(state, vcount, srcGeom.index.count);
+    gid = state.bm.addGeometry(shadow);
+    iid = state.bm.addInstance(gid);
+  } catch (e) {
+    if (gid != null && iid == null) {
+      try { state.bm.deleteGeometry(gid); } catch (_) { /* fail-soft */ }
+    }
+    releaseSlot();
+    state.passthroughCount += 1;
+    _warnOnce("BatchedMesh add failed", String(e?.message ?? e));
+    return false;
+  }
+  lbMesh.updateMatrix(); // terrainGroup-relative translation (lbX*192, lbY*192)
+  state.bm.setMatrixAt(iid, lbMesh.matrix);
+
+  state.gidVerts.set(gid, vcount);
+  state.usedVerts += vcount;
+  state.byLb.set(lbKey, { gid, iid, slot });
+  // A fresh row always starts visible: an absorb only ever happens for an LB
+  // the loaders just made (or re-made) resident.
+  state.parkedLbs.delete(lbKey);
+
+  // Hide the proxy: it stays in terrainGroup as the userData/LRU/LOD data
+  // carrier but never renders (and never uploads its VBOs).
+  lbMesh.visible = false;
+  ud.__terrainBatchGid = gid;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,131 +755,13 @@ export function tryAbsorbTerrainLbIntoBatch(scene3d, lbMesh, opts, extras) {
     }
     const state = _state;
 
-    // Install / refresh the per-LB eviction hook on every facade that might
-    // drive an eviction or a LOD re-bake teardown (mirrors static_atlas).
-    if (scene3d._evictTerrainBatchForLb !== evictTerrainBatchForLb) {
-      scene3d._evictTerrainBatchForLb = evictTerrainBatchForLb;
-    }
-    try {
-      const live = typeof window !== "undefined" ? window.liveScene3d : null;
-      if (live && live._evictTerrainBatchForLb !== evictTerrainBatchForLb) {
-        live._evictTerrainBatchForLb = evictTerrainBatchForLb;
-      }
-    } catch (_) { /* fail-soft */ }
+    // Install / refresh the residency hooks on every facade that might drive
+    // an eviction, a park/unpark or a LOD re-bake teardown.
+    _installHooks(scene3d);
 
-    const lbKey = _lbKeyOf(ud.lbX, ud.lbY);
-    // Re-bake of a still-batched LB (LOD swap raced, or an evict hook was
-    // missed): excise the stale entry first so the fresh geometry replaces it.
-    if (state.byLb.has(lbKey)) evictTerrainBatchForLb(lbKey);
-
-    // Slot allocation (layer index for both array textures).
-    let slot;
-    if (state.freeSlots.length > 0) slot = state.freeSlots.pop();
-    else if (state.nextSlot < TB_SLOT_CAPACITY) slot = state.nextSlot++;
-    else {
-      state.passthroughCount += 1;
-      _warnOnce("slot capacity exhausted (256 LBs live in batch)", "extra LBs draw per-LB");
-      return false;
-    }
-    const releaseSlot = () => state.freeSlots.push(slot);
-
-    // Per-LB data layers. Merge validity must match what the legacy material
-    // would have done: mergeDataTexture is only ever set when texMerge is on
-    // AND the wasm mesh carried merge data.
-    const mergeTex = ud.mergeDataTexture || null;
-    const mergeValid = !!(mergeTex && state.mergeArray);
-    if (!_writeVtLayer(state, slot, ud.vertexTypesTexture, mergeValid)) {
-      releaseSlot();
-      state.passthroughCount += 1;
-      _warnOnce("vertex-types texture shape mismatch");
-      return false;
-    }
-    if (!_writeMergeLayer(state, slot, mergeTex)) {
-      releaseSlot();
-      state.passthroughCount += 1;
-      _warnOnce("merge texture shape mismatch");
-      return false;
-    }
-
-    // Canonical attribute set: decided by the first absorbed geometry
-    // (modulation attributes are session-constant — present iff the wasm
-    // modulation-ranges table loaded). roadCode is intentionally dropped
-    // (unused by the shader; roads ride uVertexTypes.G).
-    const srcGeom = lbMesh.geometry;
-    if (!srcGeom?.attributes?.position || !srcGeom.index) {
-      releaseSlot();
-      state.passthroughCount += 1;
-      _warnOnce("geometry missing position/index");
-      return false;
-    }
-    if (!state.attrNames) {
-      const names = ["position", "normal", "terrainCode"];
-      if (srcGeom.getAttribute("vertexBrightness")) {
-        names.push("vertexBrightness", "vertexSaturate", "vertexHue");
-      }
-      // RND-20/21 — carry the retail calc_lighting normal into the batch, or
-      // hard-off the Gouraud term. The batch material is cloned from ONE LB's
-      // material before any geometry is admitted, so its uAcGouraudEnabled can
-      // disagree with the whitelist; without this the batched draw would sample
-      // an unbound attribute as (0,0,0) and light every LB by ambient alone.
-      if (srcGeom.getAttribute("acLightNormal")) {
-        names.push("acLightNormal");
-      } else if (state.material?.uniforms?.uAcGouraudEnabled) {
-        state.material.uniforms.uAcGouraudEnabled.value = 0.0;
-      }
-      state.attrNames = names;
-    }
-    const shadow = new THREE.BufferGeometry();
-    for (const name of state.attrNames) {
-      const attr = srcGeom.getAttribute(name);
-      if (!attr) {
-        releaseSlot();
-        state.passthroughCount += 1;
-        _warnOnce(`geometry attribute set mismatch (missing ${name})`);
-        return false;
-      }
-      shadow.setAttribute(name, attr); // shared ref; setGeometryAt copies the data out
-    }
-    const vcount = srcGeom.attributes.position.count;
-    shadow.setAttribute(
-      "aLbSlot",
-      new THREE.BufferAttribute(new Float32Array(vcount).fill(slot), 1, false),
-    );
-    shadow.setIndex(srcGeom.index);
-    // LB-local bounds for the per-instance frustum cull (instance matrix
-    // supplies the world placement). The adapter always computes one.
-    shadow.boundingSphere = srcGeom.boundingSphere
-      ? srcGeom.boundingSphere.clone()
-      : null;
-    if (!shadow.boundingSphere) shadow.computeBoundingSphere();
-
-    let gid = null;
-    let iid = null;
-    try {
-      _ensureCapacity(state, vcount, srcGeom.index.count);
-      gid = state.bm.addGeometry(shadow);
-      iid = state.bm.addInstance(gid);
-    } catch (e) {
-      if (gid != null && iid == null) {
-        try { state.bm.deleteGeometry(gid); } catch (_) { /* fail-soft */ }
-      }
-      releaseSlot();
-      state.passthroughCount += 1;
-      _warnOnce("BatchedMesh add failed", String(e?.message ?? e));
-      return false;
-    }
-    lbMesh.updateMatrix(); // terrainGroup-relative translation (lbX*192, lbY*192)
-    state.bm.setMatrixAt(iid, lbMesh.matrix);
-
-    state.gidVerts.set(gid, vcount);
-    state.usedVerts += vcount;
-    state.byLb.set(lbKey, { gid, iid, slot });
-
-    // Hide the proxy: it stays in terrainGroup as the userData/LRU/LOD data
-    // carrier but never renders (and never uploads its VBOs).
-    lbMesh.visible = false;
-    ud.__terrainBatchGid = gid;
-    return true;
+    const ok = _absorbMeshIntoState(state, lbMesh);
+    if (ok) state.absorbs += 1;
+    return ok;
   } catch (e) {
     _warnOnce("absorb threw", String(e?.message ?? e));
     if (_state) _state.passthroughCount += 1;
@@ -666,7 +791,86 @@ export function evictTerrainBatchForLb(lbKey) {
   }
   state.freeSlots.push(entry.slot);
   state.byLb.delete(key);
+  state.parkedLbs.delete(key);
   state.dirty = true;
+  state.evicts += 1;
+}
+
+/**
+ * Warm-park hook (installed as scene3d._parkTerrainBatchForLb; called by
+ * landblock_lru.park AFTER it detaches the LB's proxy meshes from
+ * terrainGroup). Hides the LB's row so the multidraw stops painting it the
+ * same frame the proxies leave the scene graph — WITHOUT dropping the row, so
+ * an unpark is two flag writes rather than a geometry re-upload (the sealed-
+ * purge park↔unpark storm measured thousands of round-trips in 25 s).
+ *
+ * The slot stays allocated but becomes reclaimable: `_allocSlot` steals the
+ * oldest parked row when the layer capacity is otherwise exhausted.
+ */
+export function parkTerrainBatchForLb(lbKey) {
+  const state = _state;
+  if (!state) return;
+  const key = ((lbKey >>> 0) & 0xffff0000) >>> 0;
+  const entry = state.byLb.get(key);
+  if (!entry) return;                 // never absorbed (passthrough / flag off)
+  if (state.parkedLbs.has(key)) return;
+  try { state.bm.setVisibleAt(entry.iid, false); } catch (_) { /* fail-soft */ }
+  state.parkedLbs.add(key);
+  state.parkHides += 1;
+}
+
+/**
+ * Warm-park re-attach hook (installed as scene3d._unparkTerrainBatchForLb;
+ * called by landblock_lru.unpark AFTER it re-adds the stashed proxy meshes to
+ * terrainGroup). `meshes` is the park pool's terrain stash.
+ *
+ * Three outcomes, in order of cost:
+ *   1. the row survived the park  → un-hide it (the common case);
+ *   2. the slot was stolen while parked → re-absorb from the stashed proxy
+ *      (park disposes nothing, so geometry + vertexTypes/TexMerge textures are
+ *      all still live);
+ *   3. re-absorb failed → drop the stale batch tag and let the proxy draw
+ *      per-LB, exactly like a first-bake absorb failure. Fail-soft: a parked
+ *      landblock coming back must never come back INVISIBLE.
+ */
+export function unparkTerrainBatchForLb(lbKey, meshes) {
+  const state = _state;
+  if (!state) return;
+  const key = ((lbKey >>> 0) & 0xffff0000) >>> 0;
+  const entry = state.byLb.get(key);
+  if (entry) {
+    if (state.parkedLbs.delete(key)) {
+      try { state.bm.setVisibleAt(entry.iid, true); } catch (_) { /* fail-soft */ }
+      state.unparkShows += 1;
+    }
+    return;
+  }
+  // Row gone (slot stolen, or a teardown ran while parked). Only meshes that
+  // WERE batched carry __terrainBatchGid; wire-fill companions and never-
+  // absorbed passthrough meshes are already drawing themselves.
+  if (!Array.isArray(meshes)) return;
+  for (const mesh of meshes) {
+    const ud = mesh?.userData;
+    if (!ud || ud.__terrainBatchGid == null) continue;
+    let ok = false;
+    try {
+      ok = typeof ud.lbX === "number" && typeof ud.lbY === "number"
+        && _absorbMeshIntoState(state, mesh);
+    } catch (e) {
+      _warnOnce("unpark re-absorb threw", String(e?.message ?? e));
+      ok = false;
+    }
+    if (ok) {
+      state.reabsorbs += 1;
+      state.unparkReabsorbs += 1;
+    } else {
+      // Legacy per-LB draw. Clearing the tag re-enables cullTerrainGroup for
+      // this mesh (it skips anything still tagged as a batched proxy).
+      delete ud.__terrainBatchGid;
+      mesh.visible = true;
+      state.unparkFallbacks += 1;
+    }
+  }
 }
 
 /**

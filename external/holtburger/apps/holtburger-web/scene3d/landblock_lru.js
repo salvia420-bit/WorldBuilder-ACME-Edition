@@ -211,19 +211,25 @@ const PARK_USE_TIME_MS = (() => {
     return 30_000;
   }
 })();
-// The two cross-LB consolidators excise per-LB geometry destructively —
-// park has no hide/show seam for them in v1, so their presence downgrades
-// park to classic evict (correctness first; see W4 §3.6 risk table).
-// ⚠ DESYNC (URL-flag audit 2026-07-27): terrain_batch.js has been
-// DEFAULT-ON since 2026-07-03, but this guard only detects an EXPLICIT
-// `?terrainBatch=on|1|true` — the default-ON case passes undetected, so
-// park can run concurrently with the terrain consolidator. Fixing the
-// guard is a product decision (not a comment fix).
+// The cross-LB consolidators excise per-LB geometry destructively — park has
+// no hide/show seam for them in v1, so their presence downgrades park to
+// classic evict (correctness first; see W4 §3.6 risk table).
+//
+// ?terrainBatch is NO LONGER in this list (2026-07-28). It was never actually
+// caught by the guard anyway — the URL-flag audit (2026-07-27) noted the
+// DESYNC: terrain_batch has been DEFAULT-ON since 2026-07-03 while this test
+// only detects an EXPLICIT `?terrainBatch=on|1|true`, so every default session
+// already ran park concurrently with the terrain consolidator. Rather than
+// disable warm-park for the whole default fleet, terrain_batch grew the
+// missing seam: `_parkTerrainBatchForLb` / `_unparkTerrainBatchForLb`
+// hide/show the LB's row (see park() and unpark() below), with a slot-steal
+// fallback for the hard 256-layer cap. Dropping the term here just makes the
+// EXPLICIT `?terrainBatch=on` session behave like the default one.
 const WARM_PARK_SUPPORTED = (() => {
   try {
     const ps = new URLSearchParams(window.location?.search || "");
     const on = (v) => v === "on" || v === "1" || v === "true";
-    return !(on(ps.get("statBatchCrossLb")) || on(ps.get("terrainBatch")));
+    return !on(ps.get("statBatchCrossLb"));
   } catch (_) {
     return true;
   }
@@ -1196,10 +1202,12 @@ export class LandblockLRU {
     if (typeof s._evictStaticBatchXForLb === "function") {
       try { s._evictStaticBatchXForLb(lbKey); } catch (_) { /* fail-soft */ }
     }
-    // ?terrainBatch (default-OFF) — excise this LB's terrain geometry from the
+    // ?terrainBatch (default-ON) — excise this LB's terrain geometry from the
     // cross-LB terrain BatchedMesh (per-instance deleteGeometry; same-frame, no
     // rebuild). The hidden per-LB proxy mesh was already removed by the terrain
-    // scan in step 1; this drops the batch copy. Hook installed by
+    // scan in step 1; this drops the batch copy. Covers a parked LB too
+    // (disposeParked re-enters the pool copy and runs this evict), which is
+    // where a hidden row's slot is finally returned. Hook installed by
     // terrain_batch.js on first absorb; absent ⇒ flag off ⇒ no-op. Mirrors the
     // _evictStaticAtlasForLb facade above.
     if (typeof s._evictTerrainBatchForLb === "function") {
@@ -1349,6 +1357,19 @@ export class LandblockLRU {
       }
     }
     for (const c of p.terrain) { try { s.terrainGroup?.remove(c); } catch (_) {} }
+    // ?terrainBatch (default-ON) — detaching the proxies is NOT enough: an
+    // absorbed LB renders from the cross-LB BatchedMesh, and its proxy is a
+    // hidden data-carrier. Without this the parked LB kept painting from the
+    // batch (a ghost) AND kept its DataArrayTexture slot, so a long tour
+    // exhausted all 256 slots with landblocks the player left minutes ago
+    // (measured 2026-07-28: resident 32, parked 347, slotsUsed 256, ghosts
+    // 256) and every LB baked after that fell back to a per-LB draw — which
+    // park DOES detach, so terrain started flickering with the park↔unpark
+    // churn. The hook HIDES the row (keeps the slot, reclaimable under
+    // pressure); unpark below un-hides or re-absorbs it. Absent ⇒ flag off.
+    if (typeof s._parkTerrainBatchForLb === "function") {
+      try { s._parkTerrainBatchForLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
 
     // ② buildings (+ buildingMap3d bookkeeping, restored on unpark).
     if (bucket) {
@@ -1473,6 +1494,14 @@ export class LandblockLRU {
     const s = this.scene3d;
 
     for (const c of p.terrain) { try { s.terrainGroup?.add(c); } catch (_) {} }
+    // ?terrainBatch — mirror of the park hook: un-hide the LB's batch row, or
+    // re-absorb it from the stashed proxy if its slot was reclaimed while
+    // parked, or fall back to a visible per-LB draw. Passing the stash lets
+    // the re-absorb read the still-live geometry + DataTextures (park disposes
+    // nothing). Absent ⇒ flag off ⇒ the proxies re-attach exactly as before.
+    if (typeof s._unparkTerrainBatchForLb === "function") {
+      try { s._unparkTerrainBatchForLb(lbKey, p.terrain); } catch (_) { /* fail-soft */ }
+    }
     for (const c of p.buildings) {
       try { s.buildingsGroup?.add(c); } catch (_) {}
       const k = c.userData?.placementKey;
