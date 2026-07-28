@@ -172,6 +172,29 @@ function fmtRemaining(secs) {
   return `${Math.floor(secs / 3600)}h`;
 }
 
+// ─── Set-spell (equipment set) discriminator ───
+//
+// P4.2 follow-up (2026-07-28, live-verified against vanilla ACE): the
+// wire's `has_spell_set_id` is NOT a usable "this is a set spell" flag.
+// ACE declares `public ushort HasSpellSetID = 1;` with the comment
+// "// default true?" (`Network/Structure/Enchantment.cs:18`) and never
+// assigns it anywhere else, so EVERY enchantment ACE sends carries
+// `hasSpellSetId = 1` and a trailing `SpellSetID` u32 that is `0` for
+// ordinary (non-equipment-set) spells. Live capture of a running
+// Strength Self I: `{spellId: 2, hasSpellSetId: 1, spellSetId: 0}` —
+// which lit the gold `set-spell` border and printed a bogus
+// "Set: id 0" tooltip line on every single buff.
+//
+// The real discriminator is therefore the id itself: a set spell has a
+// non-zero `EquipmentSet` id. `hasSpellSetId` is still honored as the
+// "field was present on the wire" gate so a server that DOES zero it
+// can't smuggle a stale id through.
+function isSetSpell(ench) {
+  if (!ench) return false;
+  if (!ench.hasSpellSetId) return false;
+  return ((ench.spellSetId ?? 0) >>> 0) !== 0;
+}
+
 // ─── Classification: buff vs debuff vs cooldown ───
 //
 // Per handoff §3 row "Critical semantics" #1: cooldown bit
@@ -289,21 +312,63 @@ function loadSpellCatalog() {
   return spellCatalogPromise;
 }
 
+// P4.2 follow-up (2026-07-28): per-spellId memo of the normalized wasm
+// record. `renderCell` + `classifyEnchantment` both call `spellRecord`
+// for every enchantment on every 1 Hz repaint; the lookup crosses the
+// wasm boundary and allocates a fresh Map each time. Only successful
+// wasm lookups are memoized — a pre-SpellTable-load miss must stay
+// retryable (same rule as `plugins/spellbook.js` spellRecordFromWasm).
+const wasmSpellRecordCache = new Map();  // spellId -> normalized record
+
 function spellRecord(spellId) {
+  const id = spellId >>> 0;
+  const memo = wasmSpellRecordCache.get(id);
+  if (memo) return memo;
   const handle = window.__sessionHandle;
   // Try wasm first (Wave F.1).
   if (handle?.getSpellRecord) {
     try {
-      const raw = handle.getSpellRecord(spellId >>> 0);
+      let raw = handle.getSpellRecord(id);
+      // P4.2 follow-up (2026-07-28): `getSpellRecord` builds a
+      // `serde_json::Value::Object` and ships it through
+      // `serde_wasm_bindgen::to_value` (`apps/holtburger-web/
+      // src/lib.rs` — `match serde_wasm_bindgen::to_value(&json)`),
+      // whose default serializer emits a JS **Map**, not a plain
+      // object. Live-verified this session: `getSpellRecord(2)
+      // instanceof Map === true`, `.get("name") === "Strength Self I"`,
+      // `.get("isBeneficial") === true`.
+      //
+      // Reading `raw.name` / `raw.iconId` / `raw.isBeneficial` off a
+      // Map yields `undefined`, so this plugin was silently rendering
+      // "Spell 2" with the fallback glyph and — because the old code
+      // collapsed the result with `!!raw.isBeneficial` — telling
+      // `classifyEnchantment` that EVERY enchantment was NOT beneficial.
+      // That is what filed Strength Self I as `kind-debuff` and left
+      // the buff row reading "No beneficial spells active.".
+      // (Same root cause + same fix as the 2026-07-01 pass over
+      // spellbook.js / ui/ac_entity_icon.js / examine-target.js; this
+      // file was missed then.)
+      if (raw instanceof Map) {
+        raw = Object.fromEntries(raw);
+        if (raw.flags instanceof Map) raw.flags = Object.fromEntries(raw.flags);
+      }
       if (raw) {
-        return {
+        const rec = {
           name: raw.name,
           icon: raw.iconId,
           desc: raw.description,
           school: raw.schoolName,
           level: raw.roughLevel ?? 0,
-          isBeneficial: !!raw.isBeneficial,
+          // Keep "unknown" distinguishable from "harmful": the
+          // classifier only trusts this when it is a real boolean, and
+          // falls back to the wire's BENEFICIAL bit otherwise. The old
+          // `!!raw.isBeneficial` turned every unknown into `false`.
+          isBeneficial: typeof raw.isBeneficial === "boolean"
+            ? raw.isBeneficial
+            : undefined,
         };
+        if (typeof rec.name === "string") wasmSpellRecordCache.set(id, rec);
+        return rec;
       }
     } catch (_) { /* fall through */ }
   }
@@ -637,7 +702,7 @@ export function getEntityBuffSummary(guid) {
     if (k === "buff") buffs += 1;
     else if (k === "debuff") debuffs += 1;
     else cooldowns += 1;
-    if (e.hasSpellSetId) hasSet = true;
+    if (isSetSpell(e)) hasSet = true;
   }
   return { buffs, debuffs, cooldowns, total: list.length, hasSet };
 }
@@ -678,7 +743,7 @@ function renderCell(ench, kind) {
   cell.className = `hb-buff kind-${kind}`;
   cell.dataset.spellId = String(ench.spellId);
   cell.dataset.kind = kind;
-  if (ench.hasSpellSetId) cell.classList.add("set-spell");
+  if (isSetSpell(ench)) cell.classList.add("set-spell");
 
   const meta = spellRecord(ench.spellId) || {};
   // Initial fallback glyph while icon loads.
@@ -728,7 +793,7 @@ function renderCell(ench, kind) {
   } else {
     lines.push(`Duration: permanent`);
   }
-  if (ench.hasSpellSetId) {
+  if (isSetSpell(ench)) {
     lines.push(`Set: id ${ench.spellSetId}`);
   }
   cell.title = lines.join("\n");
@@ -809,7 +874,28 @@ function syncIndicators() {
   window.__setStatusIndicator("debuffs", nDebuff > 0);
 }
 
-function toggleStrip(which) {
+// P4.2 follow-up (2026-07-28): the only production caller of
+// `window.__buffsHudToggle` is `plugins/status-indicators.js:367-369`,
+// which passes the INDICATOR id — `"buffs"` / `"debuffs"` (plural,
+// `status-indicators.js:111-112`). `renderAll` compares against the
+// ROW kinds `"buff"` / `"debuff"` / `"cooldown"` (singular), so a
+// plural filter matched no row and `showBuff`/`showDebuff`/
+// `showCooldown` all evaluated false: clicking the Beneficial Spells
+// indicator opened the strip with all three rows `display:none`
+// (live-verified: `filter:"buffs"` → every row hidden). Normalize here
+// so both spellings resolve to the row kind.
+const FILTER_ALIASES = Object.freeze({
+  buffs: "buff", buff: "buff",
+  debuffs: "debuff", debuff: "debuff",
+  cooldowns: "cooldown", cooldown: "cooldown",
+});
+function normalizeFilter(which) {
+  if (which == null || which === "") return null;
+  return FILTER_ALIASES[String(which)] ?? null;
+}
+
+function toggleStrip(rawWhich) {
+  const which = normalizeFilter(rawWhich);
   const ov = state.overlayEl;
   if (!ov) return;
   const isOpen = ov.dataset.open === "1";
@@ -868,15 +954,53 @@ export function mount(ctx) {
   let pollTimer = null;
   const unsubs = [];
   let tickTimer = null;
+  let watchdogTimer = null;
+  let boundHandle = null;   // the SessionHandle the current subs were wired against
+
+  function teardownSubs() {
+    for (const u of unsubs) { try { u(); } catch (_) { /* idempotent */ } }
+    unsubs.length = 0;
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  }
 
   function tryHook() {
     const client = ctx?.client ?? window.__pluginClient ?? null;
     const handle = window.__sessionHandle ?? null;
     if (!handle?.playerEnchantments) return false;
 
+    // P4.2 follow-up (2026-07-28) — do NOT latch on the session handle
+    // alone. The plugin bar mounts pre-login with `client: null`
+    // (index.html: `mountBar({ client: null, root, slots })`), so
+    // `ctx.client` is null for the entire session and the only event
+    // source is `window.__pluginClient`, which index.html creates a few
+    // statements AFTER `window.__sessionHandle`. The old code returned
+    // true as soon as the handle existed, cleared the 500 ms poll, and
+    // — whenever the poll landed in that window, or a kick-dance /
+    // reconnect retry rebuilt the client — left the strip with ZERO
+    // subscriptions for the rest of the session: the one-shot
+    // `refresh()` painted whatever was already running and no live cast
+    // ever reached the HUD, because the 1 Hz tick only re-rendered
+    // existing state and never re-pulled the wire snapshot. Only a page
+    // reload (fresh mount) recovered. Refuse to latch until there is a
+    // real event source to subscribe to.
+    const world = client?.world ?? null;
+    const canSubscribe = !!world?.addEventListener
+      || typeof client?.events?.on === "function";
+    if (!canSubscribe) return false;
+
+    // Re-entrant: the reconnect watchdog below calls us again with a
+    // new handle, so drop whatever the previous pass wired up first.
+    teardownSubs();
+    boundHandle = handle;
+
+    // Always resolve the CURRENT handle at call time. A kick-dance /
+    // relog inside the same page swaps `window.__sessionHandle`; a
+    // captured reference would keep querying the dead session forever.
+    const liveHandle = () => window.__sessionHandle ?? handle;
+
     state.getCasterName = (guid) => {
       try {
-        const ent = handle.entityByGuid?.(guid >>> 0);
+        const ent = liveHandle()?.entityByGuid?.(guid >>> 0);
         return ent?.name || null;
       } catch { return null; }
     };
@@ -890,7 +1014,7 @@ export function mount(ctx) {
         if (state.character && typeof state.character.getActiveEnchantments === "function") {
           refreshFromCharacter(state.character);
         } else {
-          const list = handle.playerEnchantments() || [];
+          const list = liveHandle()?.playerEnchantments() || [];
           refreshFromSnapshot(list);
         }
         syncIndicators();
@@ -901,7 +1025,6 @@ export function mount(ctx) {
     };
 
     // Primary: PR 4's `client.world` bus events.
-    const world = client?.world ?? null;
     if (world?.addEventListener) {
       const evRefresh = () => refresh();
       world.addEventListener("enchantmentAdded", evRefresh);
@@ -938,7 +1061,7 @@ export function mount(ctx) {
         const guid = (payload?.guid ?? 0) >>> 0;
         if (!guid) return;
         try {
-          const snapshot = handle.entityEnchantments?.(guid) || [];
+          const snapshot = liveHandle()?.entityEnchantments?.(guid) || [];
           refreshEntityFromSnapshot(guid, snapshot);
         } catch (e) {
           console.warn("[buffs-hud] entityEnchantments fetch failed", e);
@@ -949,9 +1072,18 @@ export function mount(ctx) {
     }
 
     refresh();
-    // 1Hz tick keeps remaining-time labels honest while open.
+    // 1 Hz tick keeps remaining-time labels honest while open. Every
+    // other tick (0.5 Hz) also RE-PULLS the wire snapshot so a dropped
+    // or never-delivered event can't strand the strip on stale state —
+    // `playerEnchantments()` returns a clone of a handful of rows, and
+    // the reconcile has to run even while the strip is closed because
+    // the Beneficial / Harmful status indicators are driven off the
+    // same `syncIndicators()` call inside `refresh()`.
+    let tick = 0;
     tickTimer = setInterval(() => {
-      if (overlay.dataset.open === "1") renderAll();
+      tick += 1;
+      if (tick % 2 === 0) refresh();
+      else if (overlay.dataset.open === "1") renderAll();
     }, 1000);
     return true;
   }
@@ -965,11 +1097,29 @@ export function mount(ctx) {
     }, 500);
   }
 
+  // Reconnect watchdog — a kick-dance retry or an in-page relog swaps
+  // `window.__sessionHandle` (index.html nulls it, then assigns the new
+  // one) without re-running plugin `mount()`. Re-wire against the new
+  // handle and drop the per-slot receipt stamps / remote-entity cache
+  // so timers restart from the fresh server snapshot instead of ageing
+  // off the dead session's receipt times.
+  watchdogTimer = setInterval(() => {
+    // `boundHandle === null` means the initial hook hasn't landed yet —
+    // that case belongs to `pollTimer`, not here.
+    if (!boundHandle) return;
+    const cur = window.__sessionHandle ?? null;
+    if (!cur || cur === boundHandle) return;
+    receivedAtSelf.clear();
+    clearEntityEnchantments();
+    tryHook();
+  }, 1000);
+
   return () => {
     if (pollTimer) clearInterval(pollTimer);
-    if (tickTimer) clearInterval(tickTimer);
-    for (const u of unsubs) u();
-    unsubs.length = 0;
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    watchdogTimer = null;
+    boundHandle = null;
+    teardownSubs();
     delete window.__buffsHudToggle;
     overlay.remove();
     state.overlayEl = null;
