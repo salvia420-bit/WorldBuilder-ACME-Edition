@@ -233,6 +233,39 @@ pub struct TransitionGates {
     /// acclient.c:315599/315612) so `adjust_offset`'s plane projection and
     /// `cliff_slide`'s `cross(N, lastKnownN)` see the prior frame's ground.
     pub retail_ground: bool,
+    /// `USE_WORLD_FRAME_TERRAIN_PLANE` (2026-07-28, `?terrainPlaneFrame=off`) —
+    /// store OUTDOOR terrain contact planes in the WORLD frame instead of the
+    /// cell's landblock-local frame, so the three downstream consumers of a
+    /// stored plane's `d` (`validate_transition` BRANCH-A contact restore,
+    /// `adjust_offset`'s penetration push-out, and this bridge's cross-frame
+    /// entry seed) compare against the driver's world-space spheres in the same
+    /// frame. See `SceneObjCell::find_terrain_collisions` for the full note; the
+    /// signed-distance computation inside `validate_walkable` is unchanged.
+    /// Faithful-arm only (the approximate pipeline never builds dat planes).
+    pub world_frame_terrain_plane: bool,
+    /// `USE_AIRBORNE_CHECK_CONTACT` (2026-07-28, `?airborneContact=off`) — use
+    /// retail's EXACT `CPhysicsObj::check_contact` test (`velocity · N >
+    /// 0.00019999999`, acclient.c:316536) for an AIRBORNE mover's entry contact
+    /// seed instead of the vertical-arc proxy. The proxy (`!descending`) exists
+    /// because grounded retail locomotion is animation-driven (near-zero physics
+    /// velocity) — but an airborne mover carries a REAL physics velocity
+    /// (`current_planar_velocity` + `vertical_velocity`), so the retail test is
+    /// directly available and strictly more faithful there. Fixes COL-17: a jump
+    /// arc pressed into a cliff face is `!descending` on the way up, so the proxy
+    /// dropped CONTACT, `adjust_offset` had no plane to project along, and the
+    /// frozen launch velocity drove into the face where `validate_walkable`'s
+    /// `!ON_WALKABLE` push-out lifted the sphere out of it.
+    pub airborne_check_contact: bool,
+    /// `USE_WALKABLE_LANDING_GROUND` (2026-07-28, `?walkableGround=off`) — the
+    /// settle-land hover-snap may only set GROUNDED on a WALKABLE plane
+    /// (`N.z >= FloorZ`), not merely a landable one (`N.z >= z_for_landing`,
+    /// cos 85°). Retail keeps the two thresholds distinct on purpose: the landing
+    /// allowance decides whether you may STOP FALLING on a face, while ON_WALKABLE
+    /// — the flag `SetPositionInternal` recomputes from the contact plane
+    /// (acclient.c:322598-322604) and the flag `jump_is_allowed` requires
+    /// (acclient.c:343941) — needs `floor_z`. Conflating them let a 55° cliff face
+    /// read as ground, which re-armed the jump and produced COL-17's ratchet.
+    pub walkable_landing_ground: bool,
 }
 
 /// Geometry/state reads the pipeline needs — solves the
@@ -355,6 +388,14 @@ pub struct TransitionInput {
     /// `init_contact_plane` (grounded) / `init_last_known_contact_plane`
     /// (stale), acclient.c:319085-319099. `None` = no prior ground known.
     pub last_contact_plane: Option<(Plane, u32)>,
+    /// The mover's PHYSICS velocity at slice entry (`current_planar_velocity`
+    /// x/y + `vertical_velocity` z), world frame. Read only by the
+    /// `airborne_check_contact` arm, which needs retail's exact
+    /// `CPhysicsObj::check_contact` dot (`v · contact_plane.N > 2e-4`,
+    /// acclient.c:316536). Grounded locomotion is animation-driven, so this is
+    /// ~zero for a walking mover — exactly as in retail, where the same test
+    /// therefore effectively only fires on the jump/launch impulse.
+    pub physics_velocity: Vector3,
 }
 
 /// Pipeline result. `grounded` is the FINAL contact state: the caller
@@ -1318,6 +1359,9 @@ mod tests {
             walkable_reinsert_probe: false,
             outdoor_static_grounding: false,
             retail_ground: false,
+            world_frame_terrain_plane: true,
+            airborne_check_contact: true,
+            walkable_landing_ground: true,
         }
     }
 
@@ -1338,6 +1382,7 @@ mod tests {
             last_known_wall_normal: None,
             frames_stationary_fall: 0,
             last_contact_plane: None,
+            physics_velocity: Vector3::zero(),
         }
     }
 

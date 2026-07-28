@@ -698,6 +698,16 @@ pub struct SpatialScene {
     /// Read as `__diag.collision.residency().sceneryArmEvals`. Nonzero after
     /// a few seconds of walking ⇒ the arm is live.
     scenery_arm_evals: std::cell::Cell<u64>,
+    /// TIER-3 (2026-07-28, COL-16/COL-17 + stationary `isOnGround`) — the same
+    /// unconditional-reachability probe for the WORLD-frame terrain contact-plane
+    /// arm in `faithful_bridge::faithful_find_transitional_position`. Bumped
+    /// OUTSIDE the `world_frame_terrain_plane` gate so "flag off" and "arm in dead
+    /// code" stay distinguishable (system.rs:4783-4886 is dead; a physics arm
+    /// added there would pass its smoke test while doing nothing).
+    ///
+    /// Read as `__diag.collision.residency().terrainPlaneFrameArmEvals`. Nonzero
+    /// after any faithful outdoor slice ⇒ the arm is on the live movement path.
+    terrain_plane_frame_arm_evals: std::cell::Cell<u64>,
     /// PERF Fix 2 (2026-07-23): identity + generation for the faithful
     /// bridge's persistent built-cell cache (see [`CollisionRevStamp`]).
     /// Bumped by [`Self::bump_collision_rev`] from every mutator of a
@@ -918,6 +928,7 @@ impl SpatialScene {
             scenery_colliders: Arc::new(HashMap::new()),
             scenery_narrow_hits: std::cell::Cell::new(0),
             scenery_arm_evals: std::cell::Cell::new(0),
+            terrain_plane_frame_arm_evals: std::cell::Cell::new(0),
             collision_stamp: CollisionRevStamp::fresh(),
             building_physics_index: Arc::new(HashMap::new()),
             terrain_heights: Arc::new(HashMap::new()),
@@ -2894,6 +2905,22 @@ impl SpatialScene {
     /// live movement path. Diagnostics only.
     pub fn scenery_arm_eval_count(&self) -> u64 {
         self.scenery_arm_evals.get()
+    }
+
+    /// TIER-3 (2026-07-28) — record that the faithful transition bridge reached
+    /// the WORLD-frame terrain contact-plane arm's site this slice. Called
+    /// UNCONDITIONALLY, outside the `world_frame_terrain_plane` gate; see the
+    /// `terrain_plane_frame_arm_evals` field doc.
+    #[inline]
+    pub fn note_terrain_plane_frame_arm_reached(&self) {
+        self.terrain_plane_frame_arm_evals
+            .set(self.terrain_plane_frame_arm_evals.get().wrapping_add(1));
+    }
+
+    /// Cumulative terrain-plane-frame arm site evaluations. Nonzero ⇒ the arm is
+    /// on the live movement path. Diagnostics only.
+    pub fn terrain_plane_frame_arm_eval_count(&self) -> u64 {
+        self.terrain_plane_frame_arm_evals.get()
     }
 
     /// The batch resident for one landblock, if any. Exposed for tests and

@@ -275,6 +275,58 @@ impl SceneObjCell {
         let mut check_pos = transition.sphere_path.global_sphere[0];
         check_pos.center = check_pos.center - self.landblock_origin;
         let cell_id = self.cell_id;
+        // COL-16/17 + isOnGround (2026-07-28) — WORLD-FRAME TERRAIN CONTACT PLANE.
+        //
+        // `cell_terrain_polys` builds the two triangles in the cell's LANDBLOCK-LOCAL
+        // frame, and the pair (plane, check_pos) above is rebased into that frame so
+        // `validate_walkable`'s signed distance and its push-out offset are correct —
+        // both are frame-invariant, which is why the terrain path has always worked
+        // *inside* this call. What was NOT correct is what `validate_walkable` STORES:
+        // `COLLISIONINFO::set_contact_plane` keeps the plane it was handed, so the
+        // stored `contact_plane.d` stayed landblock-local while EVERY downstream
+        // consumer treats planes as WORLD-frame (this bridge builds `begin_pos` /
+        // `end_pos` from `WorldPosition::global_coords`, so `global_sphere` /
+        // `global_curr_center` are world-absolute):
+        //   * `CTransition::validate_transition` BRANCH-A contact restore
+        //     (`|global_curr_center · N + d| < radius`, acclient.c:312223-312254);
+        //   * `CTransition::adjust_offset`'s penetration push-out
+        //     (`(center − block_offset) · N + d`, acclient.c:311955-311979 — its
+        //     `LandDefs::get_block_offset` reconciliation returns ZERO whenever the
+        //     mover and the plane share a landblock, i.e. essentially always);
+        //   * the bridge's own cross-frame entry seed `near` test below (whose doc
+        //     comment already recorded, as a known limitation, that it "never fires
+        //     outdoors" — that WAS this bug);
+        //   * `world.player.last_contact_plane`, stored and re-seeded per frame.
+        // With a landblock origin of e.g. (33216, 33984) the mismatch is ~1e4, so all
+        // four consumers silently failed outdoors: no contact persistence on a refused
+        // step (COL-16's edge stop leaking under sustained push), no contact echo on a
+        // zero-offset slice (the stationary `isOnGround` flicker), and no `adjust_offset`
+        // plane projection for a mover pressed against terrain (COL-17's airborne
+        // climb-ratchet: with no plane to project along, the frozen launch velocity
+        // drove straight into the cliff face and `validate_walkable`'s `!ON_WALKABLE`
+        // push-out lifted the sphere out of it every slice, ~run_speed·tanθ of z gain).
+        //
+        // Rebase the plane into WORLD instead of the sphere into the landblock:
+        // `N·(p − origin) + d_local = 0  ⇔  N·p + (d_local − N·origin) = 0`. The
+        // signed distance `validate_walkable` computes is IDENTICAL (both operands
+        // move together), so the in-call behaviour is bit-stable; only the frame of
+        // the plane that gets STORED changes. `find_terrain_poly` / `get_water_depth`
+        // keep the landblock-local low point — they index the height grid.
+        let (plane, check_pos) = if transition.world_frame_terrain_plane {
+            let n = walkable.plane.normal;
+            let d_world = walkable.plane.d - n.dot(&self.landblock_origin);
+            let mut world_check = transition.sphere_path.global_sphere[0];
+            world_check.center = transition.sphere_path.global_sphere[0].center;
+            (
+                holtburger_common::Plane {
+                    normal: n,
+                    d: d_world,
+                },
+                world_check,
+            )
+        } else {
+            (walkable.plane, check_pos)
+        };
         // ValidateWalkable(checkPos, walkable.Plane, isWater, waterDepth, .., ID).
         // Disjoint field borrows of `transition` (object_info shared, path /
         // collision_info mutable).
@@ -286,7 +338,7 @@ impl SceneObjCell {
         } = &mut *transition;
         object_info.validate_walkable(
             &check_pos,
-            &walkable.plane,
+            &plane,
             is_water,
             water_depth,
             sphere_path,
@@ -1136,6 +1188,14 @@ pub fn faithful_find_transitional_position(
     // plus the walkable-vs-steep discriminator: whether the mover BEGAN on walkable
     // terrain (only then does a run-off get HELD; a mid-slope slider keeps sliding).
     t.retail_ground = input.gates.retail_ground;
+    // USE_WORLD_FRAME_TERRAIN_PLANE (2026-07-28) — thread the frame gate into the
+    // driver so the outdoor terrain narrow-phase stores WORLD-frame contact planes.
+    // The reachability bump is OUTSIDE the gate on purpose (the `sceneryArmEvals`
+    // convention): a counter that only moved when the flag was ON could never
+    // distinguish "arm off" from "arm in dead code". Site reached + gate true ⇒
+    // the rebase runs.
+    scene.note_terrain_plane_frame_arm_reached();
+    t.world_frame_terrain_plane = input.gates.world_frame_terrain_plane;
     if input.gates.retail_ground {
         t.begin_on_walkable = faithful_terrain_normal(scene, &input.begin)
             .is_some_and(|n| n.z >= 0.664_174_1);
@@ -1265,7 +1325,25 @@ pub fn faithful_find_transitional_position(
             // Retail ground locomotion is animation-driven (near-zero physics
             // velocity), so the test effectively fires on the jump/launch
             // v_z — our faithful proxy is the vertical arc (`!descending`).
-            let moving_away = !input.descending && plane.normal.z > 0.0;
+            //
+            // USE_AIRBORNE_CHECK_CONTACT (2026-07-28, COL-17): an AIRBORNE mover is
+            // the one case where our integrator DOES carry a real physics velocity
+            // (`current_planar_velocity` + `vertical_velocity`), so retail's exact
+            // dot is available and strictly better than the proxy. The proxy is
+            // direction-blind: on the ASCENT of a jump aimed at a cliff face it
+            // reads `moving_away` from a face the mover is driving straight INTO
+            // (retail's `v·N` is strongly NEGATIVE there — the planar into-face
+            // component dominates the launch v_z), so CONTACT was dropped, the
+            // driver got no plane to project the offset along, and the frozen
+            // launch velocity penetrated the face every slice. Grounded entries
+            // keep the proxy verbatim (anim-driven ⇒ v ≈ 0 ⇒ the retail test is a
+            // no-op there anyway).
+            const CHECK_CONTACT_EPSILON: f32 = 0.000_199_999_99; // acclient.c:316539
+            let moving_away = if input.gates.airborne_check_contact && input.airborne {
+                input.physics_velocity.dot(&plane.normal) > CHECK_CONTACT_EPSILON
+            } else {
+                !input.descending && plane.normal.z > 0.0
+            };
             if near && !moving_away {
                 t.object_info.state |= object_info_state::CONTACT;
                 t.init_contact_plane(cell_id, plane, false);
@@ -1496,11 +1574,28 @@ pub fn faithful_find_transitional_position(
         && input.entry_descending
         && outdoor
     {
+        // USE_WALKABLE_LANDING_GROUND (2026-07-28, COL-17): the allowance this arm
+        // must test is `FloorZ`, not `z_for_landing`. Retail keeps the two apart on
+        // purpose — the landing allowance (cos 85°) only decides whether a falling
+        // mover may STOP on a face, whereas ON_WALKABLE (which is what `grounded`
+        // marshals to, and what `land()` clears `is_airborne` on) is recomputed
+        // from `N.z >= floor_z` every frame in `SetPositionInternal`
+        // (acclient.c:322598-322604). Landing on a 55° cliff face is legal in
+        // retail; being GROUNDED on it is not — you keep gravity, you cliff_slide,
+        // and `jump_is_allowed` refuses (`transient_state & 1 && & 2`,
+        // acclient.c:343941). With the laxer gate the face read as ground, the jump
+        // re-armed between arcs, and the mover ratcheted up the cliff (COL-17).
+        // Flag off ⇒ the pre-2026-07-28 LANDING_Z behaviour, byte-identical.
+        let settle_allowance = if input.gates.walkable_landing_ground {
+            physics_globals::FLOOR_Z
+        } else {
+            physics_globals::LANDING_Z
+        };
         match faithful_terrain_floor(scene, &pose) {
             Some((tz, normal))
                 if pose.coords.z > tz
                     && pose.coords.z <= tz + LAND_SETTLE_EPS
-                    && landing_allows_touchdown(Some(normal.z), physics_globals::LANDING_Z) =>
+                    && landing_allows_touchdown(Some(normal.z), settle_allowance) =>
             {
                 let mut p = pose;
                 p.coords.z = tz;
@@ -1852,6 +1947,7 @@ pub(crate) fn faithful_diag_step(
     t.object_info.ethereal = input.object.ethereal;
     t.faithful_stepup = faithful_stepup;
     t.retail_ground = input.gates.retail_ground;
+    t.world_frame_terrain_plane = input.gates.world_frame_terrain_plane;
     if input.gates.retail_ground {
         t.begin_on_walkable = faithful_terrain_normal(scene, &input.begin)
             .is_some_and(|n| n.z >= 0.664_174_1);
@@ -2015,6 +2111,9 @@ mod drift {
             walkable_reinsert_probe: false,
             outdoor_static_grounding: false,
             retail_ground: false,
+            world_frame_terrain_plane: true,
+            airborne_check_contact: true,
+            walkable_landing_ground: true,
         }
     }
 
@@ -2031,6 +2130,7 @@ mod drift {
             last_known_wall_normal: None,
             frames_stationary_fall: 0,
             last_contact_plane: None,
+            physics_velocity: Vector3::zero(),
         }
     }
 
@@ -4391,6 +4491,7 @@ mod drift {
                 last_known_wall_normal: None,
                 frames_stationary_fall: 0,
                 last_contact_plane: last_cp,
+                physics_velocity: Vector3::zero(),
             };
             let out = faithful_find_transitional_position(&env, &input, true, true);
             last_cp = out.contact_plane;
@@ -4522,6 +4623,7 @@ mod drift {
                 last_known_wall_normal: None,
                 frames_stationary_fall: 0,
                 last_contact_plane: last_cp,
+                physics_velocity: Vector3::zero(),
             };
             let out = faithful_find_transitional_position(&env, &input, true, true);
             last_cp = out.contact_plane;
@@ -4622,6 +4724,7 @@ mod drift {
                 last_known_wall_normal: None,
                 frames_stationary_fall: 0,
                 last_contact_plane: last_cp,
+                physics_velocity: Vector3::zero(),
             };
             let out = faithful_find_transitional_position(&env, &input, true, true);
             last_cp = out.contact_plane;

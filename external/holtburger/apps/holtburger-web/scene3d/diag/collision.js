@@ -90,6 +90,12 @@ const RESIDENCY_FIELDS = [
   // Zero while walking means it does not, and no amount of flag-flipping will
   // change that.
   "sceneryArmEvals",
+  // TIER-3 (2026-07-28) — same unconditional-reachability contract for the
+  // WORLD-frame outdoor terrain contact-plane arm (`?terrainPlaneFrame`), the
+  // shared fix for COL-16 / COL-17 / the stationary isOnGround flicker. Bumped
+  // once per faithful transition slice OUTSIDE the gate: nonzero after any
+  // outdoor movement means the arm is on the LIVE path.
+  "terrainPlaneFrameArmEvals",
 ];
 
 function _hbWasm() {
@@ -268,6 +274,7 @@ export function attachCollision(diag) {
         sceneryColliders: residency?.sceneryColliders ?? null,
         sceneryNarrowHits: residency?.sceneryNarrowHits ?? null,
         sceneryArmEvals: residency?.sceneryArmEvals ?? null,
+        terrainPlaneFrameArmEvals: residency?.terrainPlaneFrameArmEvals ?? null,
         verdict: out.ok ? "PASS" : "DRIFT",
       };
       this.lastResult = out;

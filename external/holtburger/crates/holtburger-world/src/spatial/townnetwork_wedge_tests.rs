@@ -108,6 +108,9 @@ fn gates() -> TransitionGates {
         walkable_reinsert_probe: true,
         outdoor_static_grounding: true,
         retail_ground: true,
+        world_frame_terrain_plane: true,
+        airborne_check_contact: true,
+        walkable_landing_ground: true,
     }
 }
 
@@ -140,6 +143,7 @@ fn input_for(
         last_known_wall_normal: None,
         frames_stationary_fall: 0,
         last_contact_plane: last_cp,
+        physics_velocity: Vector3::zero(),
     }
 }
 

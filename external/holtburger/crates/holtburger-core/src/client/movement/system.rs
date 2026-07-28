@@ -936,6 +936,86 @@ const USE_OUTDOOR_STATIC_GROUNDING: bool = true;
 /// cliffs, airborne-flicker downhill, emergent edge behavior).
 const USE_RETAIL_GROUND: bool = true;
 
+/// TIER-3 (2026-07-28) — WORLD-FRAME OUTDOOR TERRAIN CONTACT PLANE. The single
+/// root cause behind three separately-filed movement defects (COL-16 sustained-
+/// push edge leak, COL-17 jump climb-ratchet, stationary `isOnGround` flicker).
+///
+/// `cell_terrain_polys` builds the outdoor terrain triangles in the cell's
+/// LANDBLOCK-LOCAL frame, and `SceneObjCell::find_terrain_collisions` rebased the
+/// swept sphere into that frame before calling `OBJECTINFO::validate_walkable`.
+/// That call is correct (the distance and push-out are frame-invariant when both
+/// operands share a frame), but `COLLISIONINFO::set_contact_plane` STORES the
+/// plane it was handed — so the stored terrain `contact_plane.d` stayed landblock-
+/// local while every downstream consumer treats stored planes as WORLD (the bridge
+/// builds `begin_pos`/`end_pos` from `WorldPosition::global_coords()`). At a real
+/// landblock origin (e.g. `0xADB1` ⇒ (33216, 33984)) that is a ~1e4 m error, so
+/// three retail mechanisms silently never fired outdoors:
+///   1. `validate_transition` BRANCH-A contact restore (acclient.c:312223-312254)
+///      — retail's contact PERSISTENCE across a refused step. Its absence is
+///      COL-16: the precipice stop holds only while the driver's own `edge_held`
+///      latch happens to fire, and the first slice that reaches the
+///      step-down-retest arm with no contact plane ends contact-less ⇒
+///      `begin_fall` ⇒ ballistic.
+///   2. `adjust_offset`'s penetration push-out AND its slope projection
+///      (acclient.c:311941-311979) — the entry contact seed could never mark
+///      `near`, so `init_contact_plane` never ran and the offset was never
+///      projected along the ground. That is COL-17's climb: with no plane, an
+///      airborne mover's frozen launch velocity drove straight into the cliff face
+///      and `validate_walkable`'s `!ON_WALKABLE` push-out lifted the sphere out of
+///      it, ~`run_speed · tanθ` of Z per second.
+///   3. the cross-frame `world.player.last_contact_plane` echo on a ZERO-OFFSET
+///      slice (`calc_num_steps == 0` never runs `validate_transition`, so retail
+///      relies entirely on the `get_object_info` seed). That is the stationary
+///      `isOnGround` flicker: a standing mover's slice ended with no contact plane
+///      ⇒ `grounded == false` ⇒ `begin_fall`, then gravity re-landed it next slice.
+///
+/// ONE feature, TWO carriers (the [`USE_RETAIL_GROUND`] shape): this const plus
+/// the `?terrainPlaneFrame=off` URL flag
+/// ([`MovementSystem::terrain_plane_frame_runtime`]). Effective predicate:
+/// [`MovementSystem::terrain_plane_frame_enabled`], baked into
+/// `TransitionGates::world_frame_terrain_plane`. Reachability:
+/// `__diag.collision.residency().terrainPlaneFrameArmEvals` (bumped UNCONDITIONALLY
+/// at the site, outside the gate).
+///
+/// `true` (DEFAULT): stored terrain planes are world-frame; contact persistence,
+/// plane projection and the zero-offset contact echo all work outdoors.
+/// `false` / `?terrainPlaneFrame=off`: the pre-2026-07-28 landblock-local store.
+const USE_WORLD_FRAME_TERRAIN_PLANE: bool = true;
+
+/// TIER-3 (2026-07-28, COL-17) — retail `CPhysicsObj::check_contact`
+/// (acclient.c:316536) for AIRBORNE entry contact, in place of the vertical-arc
+/// proxy. The proxy (`!descending && N.z > 0`) exists because retail GROUND
+/// locomotion is animation-driven — the physics velocity is ~zero, so retail's
+/// `v · N > 2e-4` effectively only fires on the jump/launch v_z. That reasoning
+/// does not extend to the AIR: there our integrator carries a real physics
+/// velocity (`current_planar_velocity` + `vertical_velocity`), and the proxy is
+/// direction-blind — a jump arc aimed at a cliff face reads "moving away" on the
+/// way up from a face it is driving straight INTO (retail's dot is strongly
+/// negative there). Dropping CONTACT on those slices is what left `adjust_offset`
+/// with no plane to project along in COL-17.
+///
+/// Carrier: `?airborneContact=off` ([`MovementSystem::airborne_check_contact_runtime`]).
+/// `true` (DEFAULT): airborne entries use retail's exact velocity dot.
+/// `false`: the vertical-arc proxy for airborne too (pre-2026-07-28).
+const USE_AIRBORNE_CHECK_CONTACT: bool = true;
+
+/// TIER-3 (2026-07-28, COL-17) — ON_WALKABLE, not the landing allowance, decides
+/// GROUNDED. Two sites: the settle-land hover-snap in `faithful_bridge` (which
+/// grounded a mover on anything up to cos 85°) and the jump release gate in
+/// [`MovementSystem::execute_jump_release`] (which asked only `!is_airborne`).
+/// Retail keeps the thresholds distinct — `z_for_landing` (0.0871557) says whether
+/// you may STOP FALLING on a face, `floor_z` (0.66417415) says whether you are ON
+/// WALKABLE ground (`SetPositionInternal`, acclient.c:322598-322604) — and
+/// `CMotionInterp::jump_is_allowed` requires BOTH transient bits
+/// (`(v7 & 1) && v7 & 2`, acclient.c:343941), i.e. CONTACT *and* ON_WALKABLE.
+/// Landing on a 55° cliff face is legal; being grounded on it, and jumping off it,
+/// is not — that combination is COL-17's ratchet.
+///
+/// Carrier: `?walkableGround=off` ([`MovementSystem::walkable_landing_ground_runtime`]).
+/// `true` (DEFAULT): steep faces give contact, never ground, and never a jump.
+/// `false`: the pre-2026-07-28 LANDING_Z grounding + bare `!is_airborne` jump gate.
+const USE_WALKABLE_LANDING_GROUND: bool = true;
+
 /// (2026-07-02, mechanism replaced 2026-07-03) — retail MOVEMENT-AUTONOMY
 /// arbitration (the cast-movement feel: slidecast / fastcast / "fighting
 /// the cast"). The engine is retail's `last_move_was_autonomous` LATCH,
@@ -1736,6 +1816,18 @@ pub(crate) struct MovementSystem {
     /// rolls the retail outdoor ground-movement port back (the A/B escape).
     /// Combined by [`Self::retail_ground_enabled`]. Default `None`.
     retail_ground_runtime: Option<bool>,
+    /// TIER-3 (2026-07-28) — runtime carrier of `?terrainPlaneFrame=off`.
+    /// `None` = the [`USE_WORLD_FRAME_TERRAIN_PLANE`] const default (ON).
+    /// Combined by [`Self::terrain_plane_frame_enabled`].
+    terrain_plane_frame_runtime: Option<bool>,
+    /// TIER-3 (2026-07-28) — runtime carrier of `?airborneContact=off`.
+    /// `None` = the [`USE_AIRBORNE_CHECK_CONTACT`] const default (ON).
+    /// Combined by [`Self::airborne_check_contact_enabled`].
+    airborne_check_contact_runtime: Option<bool>,
+    /// TIER-3 (2026-07-28) — runtime carrier of `?walkableGround=off`.
+    /// `None` = the [`USE_WALKABLE_LANDING_GROUND`] const default (ON).
+    /// Combined by [`Self::walkable_landing_ground_enabled`].
+    walkable_landing_ground_runtime: Option<bool>,
     /// F2 (2026-07-27) — runtime carrier of the `?serverMoveToDriver=off`
     /// URL flag. `None` = the [`USE_SERVER_MOVETO_DRIVER`] const default
     /// (ON); `Some(false)` sends server MoveTo 6/7 back down the
@@ -2145,6 +2237,9 @@ impl MovementSystem {
             outdoor_static_grounding_runtime: None,
             building_overlap_runtime: None,
             retail_ground_runtime: None,
+            terrain_plane_frame_runtime: None,
+            airborne_check_contact_runtime: None,
+            walkable_landing_ground_runtime: None,
             server_moveto_driver_runtime: None,
             sticky_idle_step_runtime: None,
             server_moveto_drive: None,
@@ -2240,6 +2335,24 @@ impl MovementSystem {
         self.retail_ground_runtime = Some(on);
     }
 
+    /// TIER-3 (2026-07-28) — install the `?terrainPlaneFrame=off` runtime
+    /// carrier (see [`USE_WORLD_FRAME_TERRAIN_PLANE`]).
+    pub(crate) fn set_terrain_plane_frame(&mut self, on: bool) {
+        self.terrain_plane_frame_runtime = Some(on);
+    }
+
+    /// TIER-3 (2026-07-28) — install the `?airborneContact=off` runtime
+    /// carrier (see [`USE_AIRBORNE_CHECK_CONTACT`]).
+    pub(crate) fn set_airborne_check_contact(&mut self, on: bool) {
+        self.airborne_check_contact_runtime = Some(on);
+    }
+
+    /// TIER-3 (2026-07-28) — install the `?walkableGround=off` runtime
+    /// carrier (see [`USE_WALKABLE_LANDING_GROUND`]).
+    pub(crate) fn set_walkable_landing_ground(&mut self, on: bool) {
+        self.walkable_landing_ground_runtime = Some(on);
+    }
+
     /// F2 (2026-07-27) — install the `?serverMoveToDriver=off` runtime
     /// carrier (see [`USE_SERVER_MOVETO_DRIVER`]). The wasm recv-loop
     /// init calls this once with the parsed flag (default-ON; `=off`
@@ -2287,6 +2400,27 @@ impl MovementSystem {
     /// by the `?retailGround=off` runtime carrier).
     pub(crate) fn retail_ground_enabled(&self) -> bool {
         self.retail_ground_runtime.unwrap_or(USE_RETAIL_GROUND)
+    }
+
+    /// [`USE_WORLD_FRAME_TERRAIN_PLANE`] effective predicate
+    /// (`?terrainPlaneFrame=off` runtime carrier over the const default).
+    pub(crate) fn terrain_plane_frame_enabled(&self) -> bool {
+        self.terrain_plane_frame_runtime
+            .unwrap_or(USE_WORLD_FRAME_TERRAIN_PLANE)
+    }
+
+    /// [`USE_AIRBORNE_CHECK_CONTACT`] effective predicate
+    /// (`?airborneContact=off` runtime carrier over the const default).
+    pub(crate) fn airborne_check_contact_enabled(&self) -> bool {
+        self.airborne_check_contact_runtime
+            .unwrap_or(USE_AIRBORNE_CHECK_CONTACT)
+    }
+
+    /// [`USE_WALKABLE_LANDING_GROUND`] effective predicate
+    /// (`?walkableGround=off` runtime carrier over the const default).
+    pub(crate) fn walkable_landing_ground_enabled(&self) -> bool {
+        self.walkable_landing_ground_runtime
+            .unwrap_or(USE_WALKABLE_LANDING_GROUND)
     }
 
     /// [`USE_CAST_MOVE`] effective predicate.
@@ -2930,7 +3064,22 @@ impl MovementSystem {
         let allow_env = super::motion_interp::JumpAllowEnv {
             weenie_noncreature: false,
             has_gravity: true,
-            on_walkable_contact: !world.player.is_airborne,
+            // USE_WALKABLE_LANDING_GROUND (2026-07-28, COL-17): retail's gate is
+            // `(transient_state & 1) && transient_state & 2` — CONTACT *and*
+            // ON_WALKABLE (`CMotionInterp::jump_is_allowed`, acclient.c:343941).
+            // `!is_airborne` alone only carries the CONTACT half, so a mover that
+            // had come to rest against a too-steep face could re-jump off it and
+            // ratchet up a cliff. ON_WALKABLE is `N.z >= floor_z` on the STORED
+            // contact plane (retail `SetPositionInternal`, acclient.c:322598-
+            // 322604). Conservative on `None`: a grounded mover with no explicit
+            // plane (terrain snap paths that record none) keeps the old answer, so
+            // this can only ever REFUSE a jump we can prove is on a steep support —
+            // never refuse a legitimate one on flat ground.
+            on_walkable_contact: !world.player.is_airborne
+                && (!self.walkable_landing_ground_enabled()
+                    || world.player.last_contact_plane.is_none_or(|(plane, _)| {
+                        plane.normal.z >= holtburger_world::spatial::FLOOR_Z
+                    })),
             fully_constrained: world.local_player_fully_constrained(),
             forward_substate: world.player.current_substate,
             can_jump: true,
@@ -6373,6 +6522,9 @@ impl MovementSystem {
             walkable_reinsert_probe: USE_WALKABLE_REINSERT_PROBE,
             outdoor_static_grounding: USE_OUTDOOR_STATIC_GROUNDING,
             retail_ground: USE_RETAIL_GROUND,
+            world_frame_terrain_plane: USE_WORLD_FRAME_TERRAIN_PLANE,
+            airborne_check_contact: USE_AIRBORNE_CHECK_CONTACT,
+            walkable_landing_ground: USE_WALKABLE_LANDING_GROUND,
         };
         (object, gates)
     }
@@ -6862,6 +7014,10 @@ impl MovementSystem {
         gates.outdoor_static_grounding = self.outdoor_static_grounding_enabled();
         // (2026-07-02) — apply the `?retailGround=off` runtime carrier.
         gates.retail_ground = self.retail_ground_enabled();
+        // TIER-3 (2026-07-28) — the three COL-16/COL-17/isOnGround carriers.
+        gates.world_frame_terrain_plane = self.terrain_plane_frame_enabled();
+        gates.airborne_check_contact = self.airborne_check_contact_enabled();
+        gates.walkable_landing_ground = self.walkable_landing_ground_enabled();
         let end = holtburger_common::position::WorldPosition {
             landblock_id: pose.landblock_id,
             coords: Vector3::new(
@@ -6893,6 +7049,15 @@ impl MovementSystem {
             // USE_RETAIL_GROUND: seed the transition with the mover's stored
             // contact plane (retail `get_object_info` → `init_contact_plane`).
             last_contact_plane: world.player.last_contact_plane,
+            // USE_AIRBORNE_CHECK_CONTACT: the mover's PHYSICS velocity at slice
+            // entry, for retail's exact `check_contact` dot (acclient.c:316536).
+            // Read AFTER the airborne gravity/clamp block above, so it is the
+            // velocity the slice's offset was actually integrated from.
+            physics_velocity: Vector3::new(
+                world.player.current_planar_velocity.x,
+                world.player.current_planar_velocity.y,
+                world.player.vertical_velocity,
+            ),
         };
         let outcome = holtburger_world::spatial::transition::find_transitional_position_dispatch(
             &*world,

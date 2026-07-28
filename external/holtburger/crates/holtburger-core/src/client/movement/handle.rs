@@ -291,6 +291,33 @@ impl MovementSystemHandle {
         self.inner.set_retail_ground(on);
     }
 
+    /// TIER-3 (2026-07-28): install the `?terrainPlaneFrame=off` runtime
+    /// carrier (default-ON — outdoor terrain contact planes are stored in the
+    /// WORLD frame so retail's contact persistence, `adjust_offset` plane
+    /// projection and the zero-offset contact echo work outdoors; `=off`
+    /// restores the pre-2026-07-28 landblock-local store). Read only when
+    /// `?faithfulTransition` is also on. Forwards to
+    /// `MovementSystem::set_terrain_plane_frame`.
+    pub fn set_terrain_plane_frame(&mut self, on: bool) {
+        self.inner.set_terrain_plane_frame(on);
+    }
+
+    /// TIER-3 (2026-07-28): install the `?airborneContact=off` runtime carrier
+    /// (default-ON — an AIRBORNE mover's entry contact uses retail's exact
+    /// `check_contact` velocity dot instead of the vertical-arc proxy).
+    /// Forwards to `MovementSystem::set_airborne_check_contact`.
+    pub fn set_airborne_check_contact(&mut self, on: bool) {
+        self.inner.set_airborne_check_contact(on);
+    }
+
+    /// TIER-3 (2026-07-28): install the `?walkableGround=off` runtime carrier
+    /// (default-ON — GROUNDED and JUMP both require ON_WALKABLE `N.z >=
+    /// floor_z`, not merely the cos-85° landing allowance). Forwards to
+    /// `MovementSystem::set_walkable_landing_ground`.
+    pub fn set_walkable_landing_ground(&mut self, on: bool) {
+        self.inner.set_walkable_landing_ground(on);
+    }
+
     /// F2 (2026-07-27): install the `?serverMoveToDriver=off` runtime
     /// carrier (default-ON — the LOCAL player's server-commanded MoveTo
     /// 6/7 runs the faithful `MoveToManager` driver, giving turn-first

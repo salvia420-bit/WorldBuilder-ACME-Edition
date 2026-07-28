@@ -289,6 +289,11 @@ impl ClientSimulationSystem {
             gates.outdoor_static_grounding = movement.outdoor_static_grounding_enabled();
             // (2026-07-02) — apply the `?retailGround=off` runtime carrier.
             gates.retail_ground = movement.retail_ground_enabled();
+            // TIER-3 (2026-07-28) — the COL-16/COL-17/isOnGround carriers
+            // (system.rs twin).
+            gates.world_frame_terrain_plane = movement.terrain_plane_frame_enabled();
+            gates.airborne_check_contact = movement.airborne_check_contact_enabled();
+            gates.walkable_landing_ground = movement.walkable_landing_ground_enabled();
             let end = holtburger_common::position::WorldPosition {
                 landblock_id: pose.landblock_id,
                 coords: Vector3::new(
@@ -312,6 +317,13 @@ impl ClientSimulationSystem {
                 // USE_RETAIL_GROUND: same contact-plane carry as the manual
                 // slice (system.rs twin).
                 last_contact_plane: world.player.last_contact_plane,
+                // USE_AIRBORNE_CHECK_CONTACT: the mover's physics velocity for
+                // retail's exact `check_contact` dot (system.rs twin).
+                physics_velocity: Vector3::new(
+                    world.player.current_planar_velocity.x,
+                    world.player.current_planar_velocity.y,
+                    world.player.vertical_velocity,
+                ),
             };
             let outcome = transition::find_transitional_position_dispatch(
                 &*world,

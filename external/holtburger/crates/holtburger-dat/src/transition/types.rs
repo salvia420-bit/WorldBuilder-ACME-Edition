@@ -567,6 +567,23 @@ pub struct CTransition {
     /// recomputes it AFTER `edge_slide`. Default-OFF (unit tests keep faithful
     /// branch order).
     pub begin_on_walkable: bool,
+    /// `USE_WORLD_FRAME_TERRAIN_PLANE` input flag (2026-07-28, COL-16/COL-17 +
+    /// stationary-`isOnGround` root cause) — read by the OUTDOOR terrain
+    /// narrow-phase (`faithful_bridge.rs::SceneObjCell::find_terrain_collisions`).
+    /// When set, the terrain triangle's plane is rebased from the cell's
+    /// LANDBLOCK-local frame into the WORLD frame before it is handed to
+    /// `OBJECTINFO::validate_walkable`, so the plane that gets STORED in
+    /// `COLLISIONINFO::contact_plane` lives in the same frame as the driver's
+    /// world-space `global_sphere` / `global_curr_center`. Without it every
+    /// consumer of a stored terrain plane's `d` (validate_transition BRANCH-A
+    /// contact restore, adjust_offset's push-out, the bridge's cross-frame entry
+    /// seed) mis-compares by `N · landblock_origin` (~1e4 m) and silently never
+    /// fires outdoors. Bit-stable inside `validate_walkable` itself (the check
+    /// sphere is rebased with the plane, so the signed distance is unchanged).
+    /// Default-OFF here so the dat-crate unit tests (direct `CTransition::new()`,
+    /// landblock origin 0) keep their exact inputs; `faithful_bridge` sets it from
+    /// `TransitionGates::world_frame_terrain_plane` (ships ON).
+    pub world_frame_terrain_plane: bool,
 }
 
 impl Default for CTransition {
@@ -582,6 +599,7 @@ impl Default for CTransition {
             retail_ground: false,
             edge_held: false,
             begin_on_walkable: false,
+            world_frame_terrain_plane: false,
         }
     }
 }

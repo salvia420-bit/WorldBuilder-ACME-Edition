@@ -332,6 +332,47 @@ fn parse_retail_ground_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "retailGround=off")
 }
 
+/// TIER-3 (2026-07-28): parse `?terrainPlaneFrame=off` (or `&…`). DEFAULT-ON
+/// off-escape shape (mirrors `parse_retail_ground_flag`). When on, the faithful
+/// driver's OUTDOOR terrain narrow-phase stores contact planes in the WORLD frame
+/// rather than the cell's landblock-local frame, so retail's contact persistence
+/// (`validate_transition` BRANCH-A), `adjust_offset`'s plane projection/push-out
+/// and the zero-offset contact echo all work outdoors — the shared root cause of
+/// COL-16's sustained-push edge leak, COL-17's jump climb-ratchet and the
+/// stationary `isOnGround` flicker. Read ONLY when `?faithfulTransition` is also
+/// on. Native carrier: `USE_WORLD_FRAME_TERRAIN_PLANE` (movement/system.rs).
+/// Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_terrain_plane_frame_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "terrainPlaneFrame=off")
+}
+
+/// TIER-3 (2026-07-28): parse `?airborneContact=off` (or `&…`). DEFAULT-ON
+/// off-escape shape. When on, an AIRBORNE mover's entry contact seed uses retail's
+/// exact `CPhysicsObj::check_contact` dot (`v · N > 2e-4`, acclient.c:316536)
+/// instead of the vertical-arc proxy — the proxy reads "moving away" on the ASCENT
+/// of a jump aimed at a cliff face, dropping the very contact plane
+/// `adjust_offset` needs (COL-17). Native carrier: `USE_AIRBORNE_CHECK_CONTACT`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_airborne_contact_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "airborneContact=off")
+}
+
+/// TIER-3 (2026-07-28): parse `?walkableGround=off` (or `&…`). DEFAULT-ON
+/// off-escape shape. When on, GROUNDED (the settle-land hover-snap) and JUMP (the
+/// release gate) both require ON_WALKABLE — `N.z >= floor_z` (0.66417415) — rather
+/// than the laxer cos-85° landing allowance, matching retail's
+/// `SetPositionInternal` (acclient.c:322598-322604) and `jump_is_allowed`
+/// (`transient_state & 1 && & 2`, acclient.c:343941). Native carrier:
+/// `USE_WALKABLE_LANDING_GROUND`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_walkable_ground_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "walkableGround=off")
+}
+
 /// F2 (2026-07-27): parse `?serverMoveToDriver=off` (or `&serverMoveToDriver=off`).
 /// DEFAULT-ON off-escape shape (mirrors `parse_retail_ground_flag`): returns
 /// `true` UNLESS `serverMoveToDriver=off` is present. When on, the LOCAL
@@ -34362,7 +34403,7 @@ impl SessionHandle {
     pub fn collision_residency_diag(&self) -> String {
         let scene = self.collision_scene.borrow();
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             scene.building_aabb_count(),
             scene.static_aabb_count(),
             scene.static_physics_bsp_count(),
@@ -34380,6 +34421,9 @@ impl SessionHandle {
             scene.scenery_collider_count(),
             scene.scenery_narrow_phase_hits(),
             scene.scenery_arm_eval_count(),
+            // TIER-3 (2026-07-28) APPENDED (18th) — the WORLD-frame terrain
+            // contact-plane arm's unconditional reachability counter.
+            scene.terrain_plane_frame_arm_eval_count(),
         )
     }
 
@@ -40082,6 +40126,12 @@ async fn recv_loop(
     // ON). Read only when `?faithfulTransition` is also on; see
     // `parse_retail_ground_flag`.
     movement.set_retail_ground(parse_retail_ground_flag(&flag_search()));
+    // TIER-3 (2026-07-28): `?terrainPlaneFrame=off` / `?airborneContact=off` /
+    // `?walkableGround=off` — the three COL-16/COL-17/isOnGround escapes (all
+    // default ON). See the parse fns above for what each rolls back.
+    movement.set_terrain_plane_frame(parse_terrain_plane_frame_flag(&flag_search()));
+    movement.set_airborne_check_contact(parse_airborne_contact_flag(&flag_search()));
+    movement.set_walkable_landing_ground(parse_walkable_ground_flag(&flag_search()));
     // F2 (2026-07-27): `?serverMoveToDriver=off` — return the LOCAL player's
     // server-commanded MoveTo 6/7 to the `ServerControlledProjection` lane
     // (default ON: the faithful `MoveToManager` driver owns it — turn-first
