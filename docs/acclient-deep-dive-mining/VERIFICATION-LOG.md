@@ -1327,3 +1327,61 @@ this file; (2) ACE hard-ships `HasSpellSetID = 1` for every enchantment
 subscriptions after some boot orders — now re-entrant with a reconnect
 watchdog. Validation: live cast visible in HUD in 205 ms without relog;
 debuff negative-control correct; 34/34 unit tests; zero console errors.
+
+## TIER 3 T0 — slope/edge re-repro EXECUTED (2026-07-28, orchestrator, headless @teleloc + short key pulses per spec §6, default flags, live pose traces)
+
+Venues computed from `get-bulk-heightmap` (WB.Terminal, RetailSmoke project) —
+slope bands per TIER3-slope-slide-spec.md: steep-walkable `0xA5B4` cell (4,2)
+(N.z≈0.70, 35-45°), cliff face `0xADB1` row cy=5 (N.z≈0.55-0.61, ~55°),
+plateau-edge venue `0xADB1` (5,4)→(5,5). Movement via KeyboardEvent pulses
+(explicit keyups, verified no stuck-key runaway in 6 runs), pose sampled at
+4-5 Hz via `getLocalPlayerPose` (x/y/z/heading/isOnGround/landblockId).
+
+- **COL-15 (downhill glue): PASS — ticket does not reproduce on defaults.**
+  Continuous 4.5 s run down the 35-45° slope (z 93→54 over ~78 m): smooth
+  monotone terrain tracking, **zero grounded→airborne flips while moving**.
+  (An earlier pulsed run showed 1-sample flips exactly at pulse keyup gaps —
+  method artifact, not physics.) The 07-21→07-27 landings hold; the ticket
+  described the pre-landing era or the `?retailGround=off` arm.
+- **COL-17 (cliff climb): SPLIT.** Walking: **PASS** — held W 5 s into the 55°
+  face, hard-stopped at the cell boundary (y=144.00), zero z gain. Jump vector:
+  **FAIL, reproduces** — W held + a jump every ~1.35 s ratcheted straight up
+  the face and SUMMITED in ~3 s (z 45→79; per-second gains 8-10 m, far beyond
+  legit jump height). The client re-acquires jumpable ground on an unwalkable
+  (N.z≈0.58 < floor_z 0.664) face between arcs. Retail refuses ON_WALKABLE
+  there (validate_walkable @314235) so you slide back; our landing tail grants
+  it. Fix direction: spec §7 last bullet — stop acquiring ground on steep
+  triangles (landing `walkable_allowance` vs ON_WALKABLE distinction,
+  `USE_LANDING_WALKABLE` / landing tail system.rs:6747-6772), and jump must
+  require ON_WALKABLE.
+- **COL-16 (edge stop): ENGAGES, THEN LEAKS.** Sustained push (6 s) north off
+  the plateau: correct precipice stop at y=119.85 (the quad edge) held for
+  **3.5 s of continuous W**, then broke through in one step and went ballistic
+  down the face. So precipice_slide works per-step but leaks under sustained
+  pressure — consistent with the known T1 residual (quad-edge vs split
+  triangle, system.rs:132) and/or the re-entry path (system.rs:351/355).
+  Repro is deterministic and cheap (one teleloc + 6 s hold).
+- **COL-10 backwards-ANIMATION half: CONFIRMED headlessly, localized.** 1.5 s
+  of backstep (S) produced **zero new `__diag.motion.globalHistory` motion
+  applications** for the local player, while forward runs log start/stop key
+  changes — the backstep arm never applies a motion command, so the rig holds
+  whatever was last applied (idle). The defect is clip APPLICATION, not
+  playback speed (that half was fixed in the COL-10 walk-fork commit).
+- **NEW (small, filed here): `isOnGround` reads false while STATIONARY** after
+  movement ends (alternating/persistent false at a frozen pose, both on slopes
+  and after landings). Position is correct; the flag is what flickers. Poisons
+  P5.5-style sanity gates and possibly idle-motion selection — worth an S fix
+  before it generates phantom tickets.
+- **Method notes:** shift did not produce walk speed headlessly (walk-toggle
+  not wired for synthetic keys — the COL-16 result is therefore the RUN case,
+  which retail also stops); heading calibration: `qw=1` faces +y, `qz=-0.7071,
+  qw=0.7071` faces +x. Bonus: the entire ~25-min campaign ran on one
+  `?agent=1` session with the new auto-netWorker transport — zero Network
+  Timeouts across 8 teleports and 6 movement runs (live soak of the keepalive
+  fix).
+
+Net Tier 3 state: COL-15 CLOSED (verified fixed); COL-17 narrowed to the
+jump-landing ground-acquisition defect (M); COL-16 narrowed to the
+sustained-push edge leak (S-M, likely T1's triangle fix); COL-10 anim half
+localized to the missing backstep motion application (S-M). All four have
+deterministic headless repros recorded above.

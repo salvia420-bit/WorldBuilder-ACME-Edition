@@ -24,11 +24,22 @@ answered in full** (2026-07-27, all 20 KEY items answered, 72 free-text notes).
 > follow-through LANDED (one `RynthWebHost` substrate behind `createClient`,
 > chat hooks both directions live-verified, real `client.ui`, manifest
 > capability gating across 48 manifests + new 32-check contract suite).
+> The Tier 3 T0 re-repro also RAN (same day, VERIFICATION-LOG §TIER 3 T0):
+> COL-15 CLOSED (does not reproduce on defaults — zero airborne flips on a
+> continuous 4.5 s downhill run); COL-17 walking blocked correctly but the
+> JUMP-ratchet up a 55° face reproduces (ground wrongly re-acquired on
+> unwalkable triangles — landing tail); COL-16 edge-stop engages (3.5 s
+> hold at the quad edge) then LEAKS under sustained push (T1 triangle-edge
+> residual); COL-10 backwards-anim localized headlessly — backstep applies
+> NO motion command (idle rig), the clip-application arm is the defect.
+> NEW small bug: `isOnGround` flickers false while stationary.
 > TRUE REMAINING WORK: scenery BSP rung (P1.1 residual, 0.5% of placements),
-> RND-05/03 P2 seam re-check + stars (Tier 2 residuals), COL-15/16/17 slope
-> re-repro + COL-10 backwards-anim clip half (Tier 3), the batched 1070
-> eye-tests, and the P6.1 v1.1 tail (migrate raw-handle plugins onto the
-> facade; server half of 0x02AE).**
+> RND-05/03 P2 seam re-check + stars (Tier 2 residuals), the three narrowed
+> Tier 3 fixes (COL-17 jump-landing ground acquisition M; COL-16 sustained-
+> push edge leak S-M / T1; COL-10 backstep motion application S-M) + the
+> stationary isOnGround flicker (S), the batched 1070 eye-tests, and the
+> P6.1 v1.1 tail (migrate raw-handle plugins onto the facade; server half
+> of 0x02AE).**
 
 The questionnaire is what makes this a plan rather than a list. Reading source
 can only establish what the code says; 36% of answers came back `unsure` and 12%
