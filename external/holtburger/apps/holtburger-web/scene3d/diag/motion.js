@@ -91,6 +91,19 @@ function buildCurrent(inst, now) {
     time: act ? (+act.time || 0) : 0,
     weight: act ? (+act.weight || 0) : 0,
     enabled: act ? !!act.enabled : false,
+    // COL-10 (2026-07-28) — playback DIRECTION. Retail resolves a backstep by
+    // rewriting WalkBackwards → WalkForward and negating the speed
+    // (`CMotionInterp::adjust_motion` acclient.c:343746, arm :343776), so a
+    // backstep and a forward walk share ONE actionKey and differ only in the
+    // sign of the cycle's timeScale. Keyed on `actionKey` alone this surface
+    // was BLIND to backstep: a walk→backstep transition pushed nothing, which
+    // is how the 2026-07-28 Tier-3 T0 pass read "backstep applies no motion"
+    // off a rig that was in fact playing the reversed clip. `sign` is stamped
+    // synchronously by setMotion (`inst._motionSpeedSign`) so it is truthful
+    // at hook time; `timeScale` is informational only — under the default-on
+    // ?velScale the per-frame tick owns it and rewrites it next frame.
+    sign: (inst._motionSpeedSign ?? 1) < 0 ? -1 : 1,
+    timeScale: act ? (+act.getEffectiveTimeScale() || 0) : 0,
     appliedAt: now,
   };
 }
@@ -174,7 +187,14 @@ export function attachMotion(diag) {
       // setMotion can be re-entered with the same cacheKey for other
       // reasons (caller no-op safety); a non-changing snapshot here would
       // pollute the ring with noise.
-      const changed = !prior || prior.actionKey !== next.actionKey;
+      // COL-10: a playback-direction flip at an UNCHANGED actionKey is a real
+      // clip change (forward walk ⇄ backstep share the WalkForward cycle), so
+      // it counts as a transition — without this the surface silently drops
+      // every walk→backstep and backstep→walk edge.
+      const changed =
+        !prior ||
+        prior.actionKey !== next.actionKey ||
+        (prior.sign ?? 1) !== next.sign;
       if (changed) {
         const transition = {
           t: now,
@@ -184,6 +204,8 @@ export function attachMotion(diag) {
           newCmd: next.cmd,
           oldStance: prior?.stance ?? null,
           newStance: next.stance,
+          oldSign: prior?.sign ?? null,
+          newSign: next.sign,
         };
         pushPerGuid(entry, transition);
         pushGlobal(motion, {
@@ -194,6 +216,7 @@ export function attachMotion(diag) {
           oldActionKey: prior?.actionKey ?? null,
           cmd: next.cmd ?? 0,
           stance: next.stance ?? 0,
+          sign: next.sign,
         });
         // Wave 6 / Phase 6.1 (2026-05-26) — increment the coverage cell
         // on the SAME gate as the history push. We use the parsed

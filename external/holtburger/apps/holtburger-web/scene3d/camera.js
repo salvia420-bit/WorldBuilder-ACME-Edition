@@ -2347,11 +2347,11 @@ export class CameraSwitcher {
     // F15-3 (2026-06-27, ?localRigCombo=on) — compose the local rig from
     // INDEPENDENT forward + sidestep slots (retail CMotionInterp drives
     // forward/sidestep/turn commands concurrently, acclient.c:344147) instead of
-    // the single dominant clip below. Fixes (a) BACKWARD: emit WalkForward at
-    // motionSpeed -1 so the default-on ?signedMotionSpeed plays the forward clip
-    // in REVERSE (retail WalkBackwards = WalkForward negated, acclient.c:343746)
-    // — the legacy path sent the distinct WalkBackwards cmd at +1.0, which never
-    // triggers the reverse; and (b) COMBINATIONAL: layer the additive sidestep
+    // the single dominant clip below. Fixes (a) BACKWARD: emit the raw
+    // WalkBackwards command and let `setMotion`'s retail `adjust_motion` port
+    // rewrite it (see the COL-10 note at the backward arm below) so the forward
+    // clip plays in REVERSE under the default-on ?signedMotionSpeed; and
+    // (b) COMBINATIONAL: layer the additive sidestep
     // blend (setSidestepLayer) over the forward/backward base so backward-left /
     // forward-right diagonals animate both axes instead of collapsing to one
     // clip. Left-vs-right strafe reverse + a dedicated turn slot stay follow-ons
@@ -2368,7 +2368,21 @@ export class CameraSwitcher {
     if (this._localRigCombo) {
       let fwdCmd, fwdSpeed = 1.0;
       if (m.forward > 0) { fwdCmd = m.run ? 0x44000007 : 0x45000005; }   // Run / Walk Forward
-      else if (m.forward < 0) { fwdCmd = 0x45000005; fwdSpeed = -1.0; }  // WalkForward reversed
+      // COL-10 anim half (2026-07-28) — emit the RAW WalkBackwards command and
+      // let the single `setMotion` adjust_motion boundary do retail's rewrite
+      // (entities.js ~L8556; `CMotionInterp::adjust_motion` acclient.c:343746,
+      // backstep arm :343776-343779: `*motion = 1157627909` /
+      // `*speed = -0.64999998 * *speed`). Pre-fix this lane pre-converted to
+      // WalkForward with speed -1.0, which is NOT the retail post-adjust form:
+      // it skipped the 0.65 magnitude, so `inst._motionSpeed` landed at 1.0 and
+      // the velScale tick fed `stateGroundSpeed(WalkForward, 1.0)` = 3.12 m/s
+      // into `cycleTimeScale` — the rig played the reversed walk cycle at
+      // |1.199| while the body backstepped at 2.028 m/s (feet 54 % fast).
+      // The interpreter lane (index.html kind-61) already sent the raw 0x45000006,
+      // so the two local-rig dispatchers DISAGREED and whichever fired last won.
+      // With the raw command both lanes converge on speed 0.65 / sign -1 →
+      // timeScale -0.779 = -(2.028 / 2.6017), the COL-10 table's value.
+      else if (m.forward < 0) { fwdCmd = 0x45000006; }                   // WalkBackwards (adjust_motion at setMotion)
       else if (m.strafe !== 0) { fwdCmd = 0x41000003; }                 // idle base under a pure strafe
       else if (m.turn > 0) { fwdCmd = 0x6500000d; }                     // TurnRight
       else if (m.turn < 0) { fwdCmd = 0x6500000e; }                     // TurnLeft
