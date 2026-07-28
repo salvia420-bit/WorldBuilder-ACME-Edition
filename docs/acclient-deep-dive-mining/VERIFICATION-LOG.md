@@ -1539,3 +1539,40 @@ ramp: ON climbs 5.823, OFF walks through); holtburger-world 644/0, core
 620/0; release wasm 4,959,123 B shipped. Method traps: `__bootStateHistory`
 entries are objects not strings; same-account relog within ~60 s stalls the
 handshake.
+
+---
+
+## terrain_batch 256-slot exhaustion + flicker — ROOT-CAUSED + FIXED (2026-07-28, Opus agent I, `837145fc`). Counter-proven, not read-proven.
+
+Warm-park (default ON) REPLACES eviction at LRU cap, so `landblock_lru.evict`
+→ `_evictTerrainBatchForLb` — the only installed release path — fired ZERO
+times across a 52-hop tour (evicted=0, parkedTotal=358, hook calls 0).
+`park()` detached the LB's terrain proxies, but absorbed LBs render from the
+cross-LB BatchedMesh (the proxy is a hidden data-carrier), so every parked LB
+kept painting as a GHOST and held a slot: `slotsUsed == resident + parked`
+exactly at every sample (177@20 → 248@40 → cap@52, resident flat 32); the
+user's warning reproduced at hop 30. The in-tree `WARM_PARK_SUPPORTED` guard
+only detected an EXPLICIT `?terrainBatch=on` (URL-flag-audit desync, deferred
+07-27). FLICKER MECHANISM: at cap the batch inverts (batched 31→0, perLb
+0→32, ghosts 256) — per-LB meshes ARE detached by park, so terrain visibly
+vanishes/returns while the at-cap reclaim parks continuously (one storm took
+resident 32→1 in a tick). Warning onset == flicker onset; z-fighting refuted
+(double-draws and holes measured 0).
+
+Fix (capacity unchanged, no new flag): park → `setVisibleAt(iid,false)` (row
+keeps slot, stops painting same frame); unpark → un-hide / re-absorb / visible
+per-LB (never returns invisible); exhaustion → steal the oldest parked row
+instead of permanent fallback; hooks ALSO installed on
+`<facade>.landblockLru.scene3d` (the object that dispatches park/unpark/evict).
+Counters on `window.__terrainBatch.stats()`. Validation, 62-hop tour (2.1× the
+trigger): no warning, ghosts 0, per-LB fallbacks 0, parkHides 463 ==
+parkedTotal, unparkShows 4 + unparkReabsorbs 15 == unparkedTotal, holes 0,
+double-draws 0, 0 console errors; revisit-screenshot delta 0.030% below the
+horizon (99.7% of total delta = the revisit streaming MORE world). 11 unit
+suites green.
+
+RESIDUALS FILED: (1) the park STORM is real (resident 32→1 in a tick) and was
+previously masked by ghost rows — now honestly visible as terrain churn;
+adjacent to the 07-27 "park-storm needs a LONG soak" item. (2) Monitors must
+watch `visibleRows`/`parkedRows`, not `slotsUsed` (legitimately 256 with
+reclaimable parked rows now).
