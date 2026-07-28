@@ -1490,3 +1490,52 @@ live rows must include stale/parked LBs). The same session's
 `[geom-audit] envcells 0x9ee50000: 13/71 zero-tri drops` is CORRECT behavior —
 `0x020017D8` parses to 0 vertices / 0 polygons in `client_portal.dat`
 (drawingBSP + one surface ref only). Filed as an open investigation.
+
+---
+
+## Meeting-hall lanterns dark — FIXED (2026-07-28, Opus agent C, `3f50e896`, JS-only). NOT the bake, NOT the selection: a three.js program-cache key collision.
+
+User live report in the RQ-07 exemplar venue (Holtburg Meeting Hall `0x0125`).
+The RND-04 bake was working (hall attribute mean 93.8/255, 70.8% non-zero);
+its shader never reached the GPU: `_patchSetCacheKey()` (materials.js) had a
+key bit for every shader patch EXCEPT `applyBakedVertexLightPatch` (added
+`83e87ada` without one). three.js caches programs renderer-wide by
+(parameters + customProgramCacheKey) and compiles from whichever material's
+onBeforeCompile ran first — the baked EnvCell material is a `.clone()` with an
+identical key, so it got the PLAIN program (no `acBakedLight` term) while
+lighting.js had already dropped the cell's lantern lights from the live pool.
+Room lost both — the exact state `test_vertex_bake_flags.mjs` declares
+impossible (unreachable via flags, reachable via the cache). Fix: `|k` key bit
+for `__acBakedLight` + `|s` for `__staticBiased` (same missing-bit defect
+since 2026-07-06, silently eating décor depth-bias). A/B in the user's venue:
+programs carrying `uAcBakedGain` 0 of 28 → 2 of 45; post-fix screenshot shows
+lamp falloff; the `?vertexBake=off` arm (30 live lamps) blows out to white —
+the baked arm is the better one. Guard test `test_visfid_c4_program_cache_key`
+was DEAD (un-stripped relative import → silent SyntaxError) — revived, 15/15.
+Follow-up worth an eye-test: `?vertexBakePool=keep` now correctly lights
+interior props (retail's split) without double-lighting walls.
+
+## Walk-through-stairs in the meeting hall — FIXED (2026-07-28, Opus agent D, `0f9e08f0`). `f5b2eabe` EXONERATED; pre-existing structural gap.
+
+Bisection: repro byte-identical with all three f5b2eabe escapes off, and
+`terrainPlaneFrameArmEvals` reads 0 indoors (terrain arms are outdoor-gated).
+`85433dd4` also clear (71 cells / 158 cell-static BSPs staged). Root cause:
+`0x0125` has NO sloped physics polygon in any environment — every stair is a
+placed Setup, and our bridge staged each static ONLY under the EnvCell it was
+authored in. Retail keys a static to every cell its geometry REACHES:
+`calc_cross_cells_static` (acclient.c:322405) → `add_shadows_to_cells`
+(:321978); `find_obj_collisions` (:347142) sweeps `shadow_object_list`. The
+grand staircase (Setup `0x02000623`, authored in `0x0125010F`) starts 5.8 m
+into `0x0125010E` — players crossed it at floor level and jammed on the cell
+boundary; the side stairs (flush with their cells) always worked. Fix:
+`bake_envcell_static_overlap_for_landblock` — indoor twin of the outdoor
+`?buildingOverlap` bake, INDEX-ONLY (widens the table `find_obj_collisions`
+reads; resolver untouched), idempotent, bounded to resident envcells of the
+landblock. Flag `?envcellStaticOverlap=off` (default ON) + unconditional
+`envcellStaticOverlapArmEvals` counter. Validation: before z pinned 0.00 with
+a hard stop; after z 0.45 → 6.01 tracking the DAT ramp within 0.06 m; ALL
+f5b2eabe acceptance repros re-run and hold; new unit test (neighbour-cell
+ramp: ON climbs 5.823, OFF walks through); holtburger-world 644/0, core
+620/0; release wasm 4,959,123 B shipped. Method traps: `__bootStateHistory`
+entries are objects not strings; same-account relog within ~60 s stalls the
+handshake.
