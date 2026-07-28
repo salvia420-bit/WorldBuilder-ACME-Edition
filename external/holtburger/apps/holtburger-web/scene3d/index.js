@@ -80,6 +80,7 @@ import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import {
   adaptiveResEnabled,
+  adaptiveResSettleEnabled,
   computeInitialRenderScale,
   AdaptiveRenderScaleController,
 } from "./adaptive_render_scale.js";
@@ -1013,6 +1014,10 @@ export async function preInit3D(canvas) {
         },
         minScale: 0.35,
         maxScale: 1,
+        // 2026-07-28 — oscillation damper (`?adaptiveResSettle`, default ON;
+        // `=off` escape). Stops the endless up/down resolution churn on GPUs
+        // whose frame time jumps across the stable band (R9 290 @ 4K).
+        settle: adaptiveResSettleEnabled(),
         log: (m) => {
           try { console.log(m); } catch (_) { /* best-effort */ }
         },

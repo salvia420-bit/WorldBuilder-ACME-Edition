@@ -21,6 +21,33 @@
 // is disabled and the smart default is skipped. Also skipped under
 // `?nullRender` / `?renderOnDemand` (no real render → no meaningful frame time).
 
+/** `?adaptiveResSettle` — default ON; `=off`/`0`/`false` disables.
+ *
+ * Oscillation damper (2026-07-28, "screen resolution keeps changing" report,
+ * R9 290 @ 4K/200%): the stable band [targetLowMs, targetHighMs] assumes some
+ * scale lands INSIDE it, but frame time as a function of scale can jump right
+ * across the band (vsync-locked ~16 ms below a threshold scale, >55 ms above
+ * it). The controller then raises → drops frames → lowers → has headroom →
+ * raises … forever, a visible sharp/blurry resolution churn every
+ * cooldown+eval (~3 s) for the entire session. The damper watches the change
+ * history; when the last `settleFlips` changes strictly alternate direction
+ * inside `settleWindowMs`, it latches: snaps to the LOWEST scale of the
+ * flip-flop (the sustainable side), suppresses raises for `settleLockMs`
+ * (lowering stays allowed — safety first), and counts the latch in
+ * `controller.settleLatches` (reachable via `window.__adaptiveRenderScale`).
+ */
+export function adaptiveResSettleEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("adaptiveResSettle");
+    if (v == null) return true;
+    const lv = String(v).toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
 /** `?adaptiveRes` — default ON; `=off`/`0`/`false` disables. */
 export function adaptiveResEnabled() {
   try {
@@ -86,6 +113,13 @@ export class AdaptiveRenderScaleController {
     evalIntervalMs = 1000,
     cooldownMs = 2000,
     minSamples = 6,
+    // Oscillation damper (see adaptiveResSettleEnabled above). `settle`
+    // defaults ON here so headless/unit constructions get it; production
+    // wiring passes the URL-flag reader explicitly.
+    settle = true,
+    settleFlips = 4,
+    settleWindowMs = 120_000,
+    settleLockMs = 300_000,
     now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
     log = null,
   } = {}) {
@@ -107,6 +141,13 @@ export class AdaptiveRenderScaleController {
     this._cooldownUntil = 0;
     this._raf = null;
     this.changes = 0; // for tests/telemetry
+    this._settle = !!settle;
+    this._settleFlips = settleFlips;
+    this._settleWindowMs = settleWindowMs;
+    this._settleLockMs = settleLockMs;
+    this._settleUntil = 0;
+    this._dirHistory = []; // [{dir, to, t}] — last few applied changes
+    this.settleLatches = 0; // reachability counter for the damper
   }
 
   /** Call once per frame. Records the inter-frame delta and evaluates on cadence. */
@@ -160,6 +201,10 @@ export class AdaptiveRenderScaleController {
       const next = Math.max(this._minScale, Math.round((s - st) * 1000) / 1000);
       if (next < s) this._apply(next, t, p75, "down");
     } else if (p75 < this._lowMs && s < this._maxScale) {
+      // Settle latch: while latched, headroom does NOT raise (raising is
+      // exactly what re-enters the dropped-frames side of the flip-flop).
+      // Lowering stays allowed above — safety first.
+      if (this._settle && t < this._settleUntil) return;
       const next = Math.min(this._maxScale, Math.round((s + this._step) * 1000) / 1000);
       if (next > s) this._apply(next, t, p75, "up");
     }
@@ -174,6 +219,37 @@ export class AdaptiveRenderScaleController {
     this.changes += 1;
     this._cooldownUntil = t + this._cooldownMs;
     if (this._log) this._log(`[adaptive-res] ${dir} → scale=${scale} (p75 frame ${Math.round(p75)}ms)`);
+    if (this._settle) this._noteChangeForSettle(scale, t, dir);
+  }
+
+  /** Track applied changes; latch when the tail is a strict up/down flip-flop
+   *  inside the window. On latch: snap to the LOWEST scale of the flip-flop
+   *  (the sustainable side) and suppress raises for settleLockMs. */
+  _noteChangeForSettle(scale, t, dir) {
+    const h = this._dirHistory;
+    h.push({ dir, to: scale, t });
+    while (h.length && (h.length > 8 || t - h[0].t > this._settleWindowMs)) h.shift();
+    const n = this._settleFlips;
+    if (h.length < n) return;
+    if (t < this._settleUntil) return; // already latched
+    const tail = h.slice(-n);
+    for (let i = 1; i < tail.length; i++) {
+      if (tail[i].dir === tail[i - 1].dir) return; // not alternating
+    }
+    const floor = Math.min(...tail.map((e) => e.to));
+    this._settleUntil = t + this._settleLockMs;
+    this.settleLatches += 1;
+    const cur = this._getScale();
+    if (floor < cur) {
+      try { this._applyScale(floor); } catch (_) { /* keep latch anyway */ }
+      this.changes += 1;
+    }
+    if (this._log) {
+      this._log(
+        `[adaptive-res] oscillation latch #${this.settleLatches} — holding scale=${Math.min(floor, cur)} ` +
+        `(no raises for ${Math.round(this._settleLockMs / 1000)}s; ?adaptiveResSettle=off disables)`
+      );
+    }
   }
 
   /** Production: drive `recordFrame` from its own rAF loop. */

@@ -6741,6 +6741,13 @@
           const isTypingInForm = () => {
             const el = document.activeElement;
             if (!el) return false;
+            // evtGuard (2026-07-28): a stale activeElement that has been
+            // detached from the DOM (panel torn down mid-focus) must not
+            // keep eating movement keys — it can never receive them anyway.
+            // EVT_GUARD_ON is hoisted (const in this same scope, declared
+            // above pumpNetFrame); this arrow only runs long after scope
+            // init, so no TDZ hazard.
+            if (EVT_GUARD_ON && !el.isConnected) return false;
             const tag = el.tagName;
             return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
           };
@@ -7508,6 +7515,31 @@
           // `__rafTickCount++` stays in the drainEvents WRAPPER — it
           // counts 2D rAF driver ticks (the handoff acceptance signal:
           // it must FREEZE when the 2D driver parks), not pump runs.
+          // evtGuard (2026-07-28) — see the per-event try/catch inside
+          // pumpNetFrame's poll_events loop and the early gate-open in the
+          // kind=7 handler. Default ON; `?evtGuard=off` (also 0/false)
+          // restores both legacy behaviors byte-identical.
+          const EVT_GUARD_ON =
+            !/[?&]evtGuard=(?:off|0|false)(?:&|$)/i.test(location.search || "");
+          window.__evtGuardStats = { armed: EVT_GUARD_ON, catches: 0, byKind: {}, last: null };
+          // Live-capture surface for the intermittent login-input bug
+          // (State B: "in-world but keybinds dead"). One call answers: did
+          // the movement gate open, is a form eating keys, did evtGuard
+          // catch anything. Ask the reporter to run `__diag.bootInput()`.
+          if (!window.__diag) window.__diag = {};
+          window.__diag.bootInput = () => {
+            const el = document.activeElement;
+            return {
+              bootState: window.__bootState,
+              enteredWorld,
+              typingGate: isTypingInForm(),
+              activeEl: el ? el.tagName + (el.id ? `#${el.id}` : "") : null,
+              hasFocus: document.hasFocus(),
+              lastInputSig: window.__lastInputSig ?? null,
+              rafTicks: window.__rafTickCount ?? null,
+              evtGuard: window.__evtGuardStats,
+            };
+          };
           function pumpNetFrame() {
             // Heartbeat for the O4-c watchdog: stamped on EVERY pump run
             // regardless of which driver (2D rAF, 3D tickPerFrame phase
@@ -7536,6 +7568,21 @@
               // so forward each event to an optional hook it installs. No
               // behavior change when unset. (report 04's push plane.)
               try { window.__rynthOnEvent?.(evt); } catch (_) {}
+              // evtGuard (2026-07-28, login-input bug): isolate each
+              // ClientEvent handler. poll_events is a DESTRUCTIVE drain, so
+              // one throwing handler used to abort the whole batch — every
+              // event after it (including a same-batch kind=7 EnteredWorld,
+              // or the tail of the kind=7 handler itself past the
+              // `enteredWorld = true` line) was silently lost. Net effect
+              // live: `__bootState` says "in-world" and the world streams
+              // fine, but `enteredWorld` never flips → WASD/keybinds dead
+              // for the whole session (the intermittent "keys don't work at
+              // login" report; big tunnel-latency batches maximize the odds
+              // that kind=7 shares a batch with a poison event). Default ON;
+              // `?evtGuard=off` restores abort-the-batch. Catches are
+              // counted in `window.__evtGuardStats` (reachability counter)
+              // and surfaced via `__diag.bootInput()`.
+              try {
               if (evt.kind === 1) {
                 // PlayerSpawned — u32Payload = spawned player GUID.
                 spawnedPlayerGuid = evt.u32Payload >>> 0;
@@ -7626,6 +7673,23 @@
                 teleportBtn.disabled = false;
                 if (window.__bootState !== "in-world") {
                   setBootState("in-world", `guid=0x${playerGuid}`);
+                }
+                // evtGuard (2026-07-28): open the keyboard-movement gate the
+                // moment we KNOW we're in-world, instead of ~300 lines later
+                // at the end of this handler. Pre-fix, any exception in the
+                // bot-boot / spawn-kick / HUD blocks below (or in this
+                // handler's tail) left `enteredWorld` false forever while
+                // `__bootState` already said "in-world" — a fully playable-
+                // looking session with permanently dead WASD. The legacy
+                // assignments at the end of the handler stay (idempotent).
+                if (EVT_GUARD_ON) {
+                  // Gate FIRST, DOM second — the gate flip must not be
+                  // hostage to any DOM write throwing.
+                  enteredWorld = true;
+                  lastPredictionTime = null;
+                  chatPanel.hidden = false;
+                  chatInput.disabled = false;
+                  chatSendBtn.disabled = false;
                 }
                 // rynth auto-boot (2026-07-17): ?bot=1 starts the grind bot
                 // on the live session at first in-world — the client-side
@@ -9649,6 +9713,29 @@
                 // these; logging keeps the contract observable.
                 // eslint-disable-next-line no-console
                 console.log(`[step 2a] CharacterListReceived re-fire — count=${evt.u32Payload}`);
+              }
+              // evtGuard catch (see the `try {` at the top of this loop).
+              } catch (__evtErr) {
+                if (!EVT_GUARD_ON) throw __evtErr;
+                const __st = window.__evtGuardStats;
+                if (__st) {
+                  __st.catches++;
+                  const __k = String(evt?.kind);
+                  __st.byKind[__k] = (__st.byKind[__k] || 0) + 1;
+                  __st.last = {
+                    kind: evt?.kind,
+                    msg: String(__evtErr?.message ?? __evtErr),
+                    ts: Date.now(),
+                  };
+                  // Warn once per kind so a per-frame repeat can't flood.
+                  if (__st.byKind[__k] === 1) {
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                      `[evtGuard] ClientEvent kind=${__k} handler threw (rest of batch preserved):`,
+                      __evtErr,
+                    );
+                  }
+                }
               }
             }
             // Phase 4 step 2b: drain the parallel entity-update channel
