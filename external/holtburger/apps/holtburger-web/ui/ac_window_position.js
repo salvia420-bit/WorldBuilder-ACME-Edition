@@ -673,8 +673,17 @@ export const WINDOW_ID = Object.freeze({
   BUFFS:             0xFFFF0001, // gmEffectsUI (synthetic — TODO swap)
   // The "Empyrean Relief" orb HUD (plugins/vitals-orbs.js, ?vitalsOrbs=on)
   // is an original composition with no retail layout behind it, so it
-  // takes the next synthetic id rather than borrowing VITALS' —
+  // takes the next synthetic ids rather than borrowing VITALS' —
   // sharing would make the two presentations fight over one saved
   // position at very different box sizes.
-  VITALS_ORBS:       0xFFFF0002, // vitals-orbs (synthetic — no retail layout)
+  //
+  // 0xFFFF0002 was the single combined-panel id shipped in v1. v2 split
+  // the panel into three independently placed panes, so each vital owns
+  // its own key; 0xFFFF0002 is RETIRED rather than reused, so a session
+  // that dragged the old panel does not have that position silently
+  // reinterpreted as one of the three new ones.
+  VITALS_ORBS:       0xFFFF0002, // vitals-orbs v1 combined panel (RETIRED)
+  VITALS_ORB_HP:     0xFFFF0003, // vitals-orbs v2 health pane
+  VITALS_ORB_STAM:   0xFFFF0004, // vitals-orbs v2 stamina pane
+  VITALS_ORB_MANA:   0xFFFF0005, // vitals-orbs v2 mana pane
 });

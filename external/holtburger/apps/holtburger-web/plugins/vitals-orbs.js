@@ -49,14 +49,49 @@
 //   vitae     buffedMax < base → the fill ceiling is buffedMax/base,
 //             with a scummed waterline and dimmed hatched headspace
 //
-// === Perf === (measured, see scratchpad/agentH-report.md)
+// === v2 (2026-07-28) — three transparent panes ===
+// The opaque stone panel is GONE. Each vital is its own fixed overlay
+// (`#hb-vitals-orb-hp` / `-stam` / `-mana`) with its own WINDOW_ID, so
+// the three badges are positioned and persisted independently and no
+// chrome covers the world between them. The vessels themselves are
+// transparent above the waterline: the headspace is glass, not a dark
+// hole, so you see the game through a half-empty orb.
+//
+// Pointer policy: a pane is `pointer-events: none` by default and is
+// switched to `auto` only while the cursor is actually over VISIBLE ART
+// (the orb circle, tested analytically; the figure sprites, tested
+// against a coarse alpha grid sampled from their PNGs at mount). A
+// half-transparent HUD that still eats clicks over the world is exactly
+// what this revision exists to remove.
+//
+// === Perf === (measured, see scratchpad/agentJ-report.md)
 // ONE rAF drives every wave phase, meniscus and liquid clip path on the
 // page, at a 30 Hz CADENCE rather than at vsync (`?orbHz=N`). It is not
 // started under `prefers-reduced-motion` (a single still frame is
-// painted instead) and is cancelled while the tab is hidden. Only `d`
-// and `transform` attributes and CSS custom properties are written —
-// no layout is ever read, and the panel is `contain`-ed so the
-// invalidation cannot escape it.
+// painted instead) and is cancelled while the tab is hidden.
+//
+// Three rules keep the tick cheap, all trace-verified:
+//   1. NO style-invalidating writes in the tick. The waterline group is
+//      moved through `transform.baseVal` (an SVGTransform mutation,
+//      which marks the layout object's transform dirty) — NOT through
+//      `setAttribute("transform", …)`, which is a presentation
+//      attribute that maps into CSS style and forces a style recalc of
+//      the subtree on every one of the 30 ticks a second.
+//   2. Per-orb PAINT CONTAINMENT. Each vessel sits in its own
+//      `contain: layout paint style` box sized to the orb, so a wave
+//      tick dirties ~92×92 px instead of the whole badge. The figure
+//      sprites live OUTSIDE that box and are never re-rastered by a
+//      tick.
+//   3. The STATIC glass — dome vignette, the two blurred speculars, the
+//      inner shadow ring and the brass collar — is pre-composed into
+//      ONE baked raster (`<image>` from a self-contained SVG data URL)
+//      at mount. Live gradients/filters/blends are spent only on
+//      genuinely dynamic layers: the wave bodies, the caustics crop and
+//      the meniscus.
+// Every mix-blend-mode in the vessel is walled in by `isolation:
+// isolate` on the vessel's own <svg> root, so no screen/multiply layer
+// can reach past the orb and blend with the 3D canvas that is now
+// visible THROUGH the empty headspace.
 //
 // THE ONE THING NOT TO UNDO: the concept card drove the caustic
 // `feTurbulence baseFrequency` from its rAF. Re-evaluating a fractal-
@@ -64,14 +99,22 @@
 // group, which has the same effect — measured a hard 60 → 44 fps cliff
 // on this laptop. The noise here is STATIC and cacheable; the caustics
 // appear to crawl because they are clipped to the live wave path.
-// Even so the orbs are ~4.4 ms/frame of render pipeline against the
-// bars' ~0.1 ms: this is a rich HUD, and `?orbCaustics=off` /
-// `?orbHz=15` / `?orbScale=` are the levers if that is too much.
+// `?orbCaustics=off` / `?orbHz=15` / `?orbScale=` remain the levers.
 
-import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
+import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 
-const OVERLAY_ID = "hb-vitals-orbs";
+// One overlay PER VITAL. The ids are load-bearing: index.html's
+// agent-mode chrome strip exempts all three by id.
+const PANE_ID = {
+  hp: "hb-vitals-orb-hp",
+  stam: "hb-vitals-orb-stam",
+  mana: "hb-vitals-orb-mana",
+};
+const DEFS_ID = "hb-vitals-orbs-defs";
 const STYLE_ID = "hb-vitals-orbs-style";
+// Scoping selector for the stylesheet — one rule set, three panes.
+const PANE_SEL = `#${PANE_ID.hp}, #${PANE_ID.stam}, #${PANE_ID.mana}`;
+const P = ".hbo-pane";  // every rule below is `.hbo-pane <thing>`
 
 // Vital-type codes match `crates/holtburger-protocol/src/messages/
 // movement/types.rs::VitalsKind` (Health=1, Stamina=3, Mana=5), the
@@ -85,12 +128,29 @@ const ORB_PX = 92;            // rendered orb size inside the badge
 const VITAE_CY0 = VB - 0.85 * VB;  // the card baked its ceiling at 85%
 const LOW_HP_FRAC = 0.15;     // below this, health churns and fractures
 const GLARE_MS = 1150;        // one cycle of the hb-glare keyframe
-// The badge panel is authored at the concept card's 1:1 px scale (618×226)
-// and scaled as ONE unit, so every heraldic offset below stays a card
-// value. 0.72 lands it at ~445×163 in the bars' top-left region — it
-// clears buffs-hud (top 40, left 32) and the top-right radar.
+// Each badge is authored at the concept card's 1:1 px scale (196×168 per
+// vital) and scaled as ONE unit, so every heraldic offset below stays a
+// card value. 0.72 lands a pane at ~141×121.
+const PANE_W = 196;
+const PANE_H = 168;
 const DEFAULT_SCALE = 0.72;
 const DEFAULT_HZ = 30;
+
+// Where each pane sits the first time it is ever mounted. Side by side,
+// spanning roughly the region the old combined panel occupied
+// (left 260, top 6, 445×163) so an existing session sees the badges in
+// the same place — just with the stone gone from between them.
+const DEFAULT_POS = {
+  hp:   { left: "260px", top: "6px" },
+  stam: { left: "401px", top: "6px" },
+  mana: { left: "542px", top: "6px" },
+};
+// Independent m_eWindowID surrogates: one saved position per vital.
+const PANE_WINDOW_ID = {
+  hp: WINDOW_ID.VITALS_ORB_HP,
+  stam: WINDOW_ID.VITALS_ORB_STAM,
+  mana: WINDOW_ID.VITALS_ORB_MANA,
+};
 
 // ── URL flags ────────────────────────────────────────────────────────
 // Both are exact-match reads. `vitalsOrbs` is the opt-in; `orbCaustics`
@@ -159,23 +219,6 @@ const FRACTURE_SVG = `<g class="fx"><path class="fx-dark" d="M75.7 36.6 L69.4 38
 // still CSS-driven, so `prefers-reduced-motion` stops it.
 // numOctaves and the filter regions are trimmed for the same reason.
 const SHARED_DEFS = `
-<filter id="hbOrbCaustic" x="-12%" y="-12%" width="124%" height="124%"
-        color-interpolation-filters="sRGB">
-  <feTurbulence type="fractalNoise" baseFrequency="0.021 0.052"
-                numOctaves="2" seed="7" result="n"/>
-  <feDisplacementMap in="SourceGraphic" in2="n" scale="11"
-                     xChannelSelector="R" yChannelSelector="G"/>
-  <feGaussianBlur stdDeviation="0.8"/>
-</filter>
-<filter id="hbOrbSheen" x="-5%" y="-5%" width="110%" height="110%"
-        color-interpolation-filters="sRGB">
-  <feTurbulence type="fractalNoise" baseFrequency="0.045 0.09"
-                numOctaves="2" seed="19" result="n"/>
-  <feColorMatrix in="n" type="matrix" result="a"
-    values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0.9 0 0 0 -0.28"/>
-  <feComposite in="a" in2="SourceGraphic" operator="in"/>
-  <feGaussianBlur stdDeviation="0.6"/>
-</filter>
 <filter id="hbRefract" x="-15%" y="-15%" width="130%" height="130%"
         color-interpolation-filters="sRGB">
   <feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2"
@@ -187,6 +230,48 @@ const SHARED_DEFS = `
   <stop offset="0" stop-color="var(--hb-orb-crack-glint)" stop-opacity="0.75"/>
   <stop offset="1" stop-color="var(--hb-orb-crack-glint)" stop-opacity="0"/>
 </radialGradient>`;
+
+// ── the baked caustics ───────────────────────────────────────────────
+//
+// PERF item 3, and the single biggest one: ablation measured the live
+// caustics group at HALF the whole HUD's render pipeline. Two
+// feTurbulence fields, an feDisplacementMap and three blurs were being
+// re-evaluated every time the group repainted — which is every wave
+// tick, because the group is clipped to the LIVE wave path.
+//
+// But nothing inside the group moves. The noise is static (see the
+// do-not-undo note below), the ripple strokes are static, the pool and
+// the sheen veil are static; only the CLIP moves. So the whole stack is
+// pre-composed here into one self-contained raster and drawn as a
+// single <image> that is still clipped to the live wave path. Identical
+// on screen — the bands still slide under the surface — with the filter
+// chain evaluated once per session instead of 30 times a second.
+//
+// The `--hb-orb-caustic` token is inlined because a data-URL document
+// cannot see the page's custom properties. Keep the two in sync.
+const CAUSTIC_INK = "#fff8e2";
+const CAUSTIC_A = 0.9;
+const CAUSTIC_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+<defs>
+<filter id="c" x="-12%" y="-12%" width="124%" height="124%" color-interpolation-filters="sRGB">
+<feTurbulence type="fractalNoise" baseFrequency="0.021 0.052" numOctaves="2" seed="7" result="n"/>
+<feDisplacementMap in="SourceGraphic" in2="n" scale="11" xChannelSelector="R" yChannelSelector="G"/>
+<feGaussianBlur stdDeviation="0.8"/>
+</filter>
+<filter id="s" x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="sRGB">
+<feTurbulence type="fractalNoise" baseFrequency="0.045 0.09" numOctaves="2" seed="19" result="n"/>
+<feColorMatrix in="n" type="matrix" result="a" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0.9 0 0 0 -0.28"/>
+<feComposite in="a" in2="SourceGraphic" operator="in"/>
+<feGaussianBlur stdDeviation="0.6"/>
+</filter>
+<filter id="p" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="7"/></filter>
+</defs>
+<ellipse cx="60" cy="106" rx="34" ry="9" fill="${CAUSTIC_INK}" fill-opacity="${CAUSTIC_A}" opacity="0.26" filter="url(#p)"/>
+<g filter="url(#c)" fill="none" stroke="${CAUSTIC_INK}" stroke-opacity="${CAUSTIC_A}" stroke-linecap="round" opacity="0.32">
+<path stroke-width="1.9" d="M18 74 Q34 67 52 75"/><path stroke-width="1.3" d="M64 82 Q80 74 99 83"/><path stroke-width="1.2" d="M26 97 Q42 90 58 98"/><path stroke-width="1.0" d="M70 62 Q84 55 100 63"/><path stroke-width="0.9" d="M12 88 Q22 83 33 89"/><path stroke-width="1.5" d="M74 104 Q88 98 101 105"/></g>
+<rect x="4" y="30" width="112" height="86" fill="${CAUSTIC_INK}" fill-opacity="${CAUSTIC_A}" opacity="0.12" filter="url(#s)"/>
+</svg>`;
+const CAUSTIC_URL = "data:image/svg+xml," + encodeURIComponent(CAUSTIC_SVG.replace(/\n/g, ""));
 
 // The scummed vitae waterline. Built once at VITAE_CY0 and then simply
 // TRANSLATED to the live ceiling, so a vitae change costs one transform
@@ -215,6 +300,49 @@ function vitaeGroup(kind) {
 <g class="vitae-grime-dots">${dots}</g></g>`;
 }
 
+// ── the baked glass plate ────────────────────────────────────────────
+//
+// PERF item 3. The dome vignette, the two blurred speculars, the inner
+// shadow ring and the brass collar are STATIC — they never change for
+// the life of a session — but as live SVG they are four gradient/filter
+// stacking contexts per vessel that the compositor re-commits on every
+// wave tick. Pre-composed here into ONE self-contained SVG data URL and
+// drawn as a single <image>: one display item, no filter, no blend.
+//
+// It is authored TRANSPARENT. v1 painted an opaque `--hb-orb-void`
+// circle behind the liquid and a dome gradient that went to 50% black
+// at the rim; both are gone, because the whole point of v2 is that the
+// empty half of the vessel shows the world through it. What is left is
+// a whisper of top-left sheen, a soft edge darkening that reads as
+// glass thickness, and the collar.
+//
+// Everything is inside r=59.25 so the 0..120 viewBox clips nothing and
+// the orb box can carry `contain: paint` without shaving a hairline.
+const GLASS_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+<defs>
+<radialGradient id="d" cx="0.34" cy="0.26" r="0.80">
+<stop offset="0" stop-color="#ffffff" stop-opacity="0.15"/>
+<stop offset="0.42" stop-color="#ffffff" stop-opacity="0.03"/>
+<stop offset="0.86" stop-color="#000000" stop-opacity="0.05"/>
+<stop offset="1" stop-color="#000000" stop-opacity="0.30"/>
+</radialGradient>
+<linearGradient id="c" x1="0" y1="0" x2="0.6" y2="1">
+<stop offset="0" stop-color="#d8b968"/>
+<stop offset="0.45" stop-color="#8a7544"/>
+<stop offset="1" stop-color="#3e3218"/>
+</linearGradient>
+<filter id="b1" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.2"/></filter>
+<filter id="b2" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2"/></filter>
+</defs>
+<circle cx="60" cy="60" r="55.5" fill="url(#d)"/>
+<ellipse cx="42" cy="33" rx="16" ry="10" transform="rotate(-24 42 33)" fill="#ffffff" fill-opacity="0.5" filter="url(#b1)"/>
+<ellipse cx="80" cy="88" rx="12" ry="5" transform="rotate(-18 80 88)" fill="#ffffff" fill-opacity="0.26" filter="url(#b2)"/>
+<circle cx="60" cy="60" r="54.7" fill="none" stroke="#000000" stroke-opacity="0.34" stroke-width="1.6"/>
+<circle cx="60" cy="60" r="56.9" fill="none" stroke="url(#c)" stroke-opacity="0.72" stroke-width="3.2"/>
+<circle cx="60" cy="60" r="58.8" fill="none" stroke="#8a7544" stroke-opacity="0.6" stroke-width="0.9"/>
+</svg>`;
+const GLASS_URL = "data:image/svg+xml," + encodeURIComponent(GLASS_SVG.replace(/\n/g, ""));
+
 // One vessel. `--orb-a` / `--orb-b` are set per kind on the <svg> so the
 // low-HP variant is a two-token CSS override rather than a rebuild.
 function orbSvg(kind) {
@@ -228,11 +356,9 @@ function orbSvg(kind) {
   const shimmer = kind === "mana"
     ? '<ellipse class="shimmer" cx="58" cy="74" rx="30" ry="20"/>' : "";
 
-  const rip = causticsEnabled() ? `<g class="caustics" clip-path="url(#lqc-${kind})">
-<ellipse class="pool" cx="60" cy="106" rx="34" ry="9"/>
-<g filter="url(#hbOrbCaustic)"><path class="rip" stroke-width="1.9" d="M18 74 Q34 67 52 75"/><path class="rip" stroke-width="1.3" d="M64 82 Q80 74 99 83"/><path class="rip" stroke-width="1.2" d="M26 97 Q42 90 58 98"/><path class="rip" stroke-width="1.0" d="M70 62 Q84 55 100 63"/><path class="rip" stroke-width="0.9" d="M12 88 Q22 83 33 89"/><path class="rip" stroke-width="1.5" d="M74 104 Q88 98 101 105"/></g>
-<rect class="sheen" x="4" y="30" width="112" height="86" filter="url(#hbOrbSheen)"/>
-</g>` : "";
+  const rip = causticsEnabled()
+    ? `<g class="caustics" clip-path="url(#lqc-${kind})"><image href="${CAUSTIC_URL}" x="0" y="0" width="120" height="120"/></g>`
+    : "";
 
   return `<svg class="orb" data-kind="${kind}" viewBox="0 0 ${VB} ${VB}" width="${ORB_PX}" height="${ORB_PX}" aria-hidden="true">
 <defs>
@@ -253,17 +379,7 @@ function orbSvg(kind) {
 <stop offset="0.32" stop-color="#fff" stop-opacity="1"/>
 <stop offset="0.78" stop-color="#a08c78" stop-opacity="1"/>
 <stop offset="1" stop-color="#3a2c22" stop-opacity="1"/></radialGradient>
-<radialGradient id="gl-${kind}" cx="0.34" cy="0.26" r="0.80">
-<stop offset="0" stop-color="#fff" stop-opacity="0.26"/>
-<stop offset="0.42" stop-color="#fff" stop-opacity="0.04"/>
-<stop offset="0.86" stop-color="#000" stop-opacity="0.16"/>
-<stop offset="1" stop-color="#000" stop-opacity="0.5"/></radialGradient>
-<linearGradient id="col-${kind}" x1="0" y1="0" x2="0.6" y2="1">
-<stop offset="0" style="stop-color:var(--hb-orb-collar-hi)"/>
-<stop offset="0.45" style="stop-color:var(--hb-orb-collar)"/>
-<stop offset="1" style="stop-color:var(--hb-orb-collar-deep)"/></linearGradient>
 </defs>
-<circle cx="60" cy="60" r="55.5" fill="var(--hb-orb-void)"/>
 <g class="liquid" clip-path="url(#c-${kind})" style="--rise:-60px">
 <path class="w-back" fill="url(#lqb-${kind})" opacity="0.85" d=""/>
 <path class="w-front" fill="url(#lq-${kind})" d=""/>
@@ -271,7 +387,6 @@ ${rip}
 <circle class="lqwall" cx="60" cy="60" r="55.5" fill="url(#wal-${kind})" clip-path="url(#lqc-${kind})"/>
 ${shimmer}${bubbles}
 <g class="wsurf">
-<ellipse class="bounce" cx="60" cy="-17" rx="40" ry="13" fill="url(#sub-${kind})"/>
 <ellipse class="subglow" cx="60" cy="11" rx="46" ry="11" fill="url(#sub-${kind})"/>
 <ellipse class="sspec" cx="52" cy="1.5" rx="21" ry="2.2"/>
 <path class="men-wall" d="M4 -1 q4.5 3.4 9.5 3.9"/>
@@ -280,21 +395,16 @@ ${shimmer}${bubbles}
 <path class="men men-sh" d=""/><path class="men men-hi" d=""/><path class="men men-sp" d=""/>
 ${vitaeGroup(kind)}
 </g>
-<circle cx="60" cy="60" r="55.5" fill="url(#gl-${kind})"/>
-<ellipse class="spec" cx="42" cy="33" rx="16" ry="10" transform="rotate(-24 42 33)"/>
-<ellipse class="spec-2" cx="80" cy="88" rx="12" ry="5" transform="rotate(-18 80 88)"/>
+<image class="glassplate" href="${GLASS_URL}" x="0" y="0" width="120" height="120"/>
 <ellipse class="glare" cx="46" cy="40" rx="30" ry="17" transform="rotate(-28 46 40)"/>
-<circle class="rim-inner" cx="60" cy="60" r="54.2"/>
 <g class="hbo-fx"></g>
-<circle cx="60" cy="60" r="57.5" fill="none" stroke="url(#col-${kind})" stroke-width="5.5"/>
-<circle class="rim-thin" cx="60" cy="60" r="60.6" stroke-width="1"/>
 </svg>`;
 }
 
 // The heraldry around each vessel — supporters, charges, aureole, glow.
 const HERALDRY = {
   hp: '<div class="hbo-glow g-hp"></div>'
-    + '<div class="aureole r" style="background:var(--hb-orb-hp)"></div>'
+    + '<div class="aureole r g-hp"></div>'
     + '<div class="fig fig-asheron sup-l"></div>'
     + '<div class="fig fig-sword chg-r front"></div>',
   stam: '<div class="hbo-glow g-stam"></div>'
@@ -302,7 +412,7 @@ const HERALDRY = {
     + '<div class="fig fig-tent-r tent r front"></div>'
     + '<div class="fig fig-bow"></div>',
   mana: '<div class="hbo-glow g-mana"></div>'
-    + '<div class="aureole l" style="background:var(--hb-orb-mana)"></div>'
+    + '<div class="aureole l g-mana"></div>'
     + '<div class="fig fig-wand chg-l front"></div>'
     + '<div class="fig fig-bael sup-r"></div>',
 };
@@ -314,18 +424,26 @@ const HERALDRY = {
 // index.html's :root block, exactly as the concept card assumed.
 function styleText() {
   return `
-#${OVERLAY_ID} {
+${P} {
   position: fixed;
-  top: 6px;
-  left: 260px;
   z-index: 50;
+  /* DEFAULT-OFF pointer target. mount() flips this to auto only while
+     the cursor is over visible art (orb circle / figure alpha), so an
+     empty corner of a pane never eats a click meant for the world. */
   pointer-events: none;
-  /* the badge panel is authored at the card's 1:1 px scale and then
-     scaled as a unit — every offset below is a card value, unchanged.
+  /* each badge is authored at the card's 1:1 px scale and then scaled
+     as a unit — every offset below is a card value, unchanged.
      Keep in sync with DEFAULT_SCALE. */
   --hbo-scale: 0.72;
-  width: calc(618px * var(--hbo-scale));
-  height: calc(226px * var(--hbo-scale));
+  --hbo-inv: calc(1 / var(--hbo-scale));
+  width: ${PANE_W}px;
+  height: ${PANE_H}px;
+  transform: scale(var(--hbo-scale));
+  transform-origin: top left;
+  /* No paint containment on the PANE: the figures' drop-shadows are
+     allowed to spill. The invalidation wall that matters is one level
+     down, on .hbo-core (see below). */
+  contain: layout style;
 
   --hb-orb-hp: #c8181e;
   --hb-orb-hp-deep: #45060a;
@@ -345,7 +463,7 @@ function styleText() {
   --hb-orb-collar: #8a7544;
   --hb-orb-collar-hi: #d8b968;
   --hb-orb-collar-deep: #3e3218;
-  --hb-orb-vitae-dim: rgba(0, 0, 0, 0.5);
+  --hb-orb-vitae-dim: rgba(0, 0, 0, 0.26);
   --hb-orb-vitae-scum: #86825a;
   --hb-orb-men-shadow: rgba(0, 0, 0, 0.55);
   --hb-orb-men-spec: rgba(255, 252, 244, 0.95);
@@ -357,136 +475,141 @@ function styleText() {
   --hb-orb-read-hp: #f0b8b0;
   --hb-orb-read-stam: #f0dca8;
   --hb-orb-read-mana: #b8cdf4;
-  --hb-badge-fig-filter: saturate(0.92) brightness(0.94) contrast(1.06);
-  --hb-badge-fig-shadow: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.75));
+  /* The figures are no longer knocked back behind a lit stone panel —
+     there is no panel — so the grading is just a hair of desaturation
+     plus a shadow that separates them from the world behind. */
+  --hb-badge-fig-filter: saturate(0.95) contrast(1.04);
+  --hb-badge-fig-shadow: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.85))
+                         drop-shadow(0 0 2px rgba(0, 0, 0, 0.6));
   --hb-badge-aureole: 0.13;
-  --hb-badge-plinth-top: #4a412a;
-  --hb-badge-plinth-bottom: #221d12;
 }
-#${OVERLAY_ID}[hidden] { display: none; }
-#${OVERLAY_ID} .hbo-defs { position: absolute; width: 0; height: 0; }
+${P}[hidden] { display: none; }
+${P}.hbo-drag { cursor: move; }
 
-#${OVERLAY_ID} .hbo-panel {
-  transform: scale(var(--hbo-scale));
-  transform-origin: top left;
-  /* The wave writes dirty a subtree full of blurs and blend modes.
-     CSS containment walls that invalidation into this box so the rest
-     of the HUD (and the canvas' own compositing) is never re-examined.
-     No will-change here: promoting the panel MEASURED WORSE (extra
-     Layerize/Commit every frame for a subtree that is repainted, not
-     transformed). (No backticks in this stylesheet — template literal.) */
+/* ── the invalidation wall ───────────────────────────────────────────
+   PERF item 2. Every wave tick dirties this box and NOTHING else: the
+   vessel is 92x92 and lives alone inside a paint-contained square, so
+   Blink's Paint clip is the orb rather than the union of orb + four
+   filtered sprite layers + a readout. v1 put containment on the whole
+   618x226 panel and measured a 618x192 Paint clip on every one of the
+   30 ticks a second; this is the fix. The figures and the readout are
+   SIBLINGS of this box, so a tick cannot reach them. */
+${P} .hbo-core {
+  position: absolute; left: 50%; bottom: 28px; margin-left: -${ORB_PX / 2}px;
+  width: ${ORB_PX}px; height: ${ORB_PX}px;
+  z-index: 4;
   contain: layout paint style;
-  display: flex; gap: 2px; align-items: flex-end; padding: 12px;
-  width: 594px;
-  box-sizing: content-box;
-  background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
-  border: 1px solid var(--hb-border-brass-deep);
-  border-radius: var(--hb-radius-panel);
-  box-shadow: var(--hb-shadow-panel), inset 0 1px 0 var(--hb-edge-light);
-  overflow: hidden;
 }
-#${OVERLAY_ID} .hbo-group {
-  position: relative; width: 196px; height: 168px;
-  display: flex; justify-content: center; align-items: flex-end;
-}
-#${OVERLAY_ID} .hbo-core { position: relative; z-index: 4; }
 
 /* supporters and charges are DAT setup renders in their own DAT
-   colours; the only grading is a light knock-back so they sit behind
-   the gauge. Extracted from the concept card into data/orb-sprites/. */
-#${OVERLAY_ID} .fig {
+   colours. Extracted from the concept card into data/orb-sprites/.
+   pointer-events stays NONE on every sprite: the pane as a whole is the
+   drag target and mount() gates it on an alpha test, so the hit region
+   follows the silhouette rather than these boxes. */
+${P} .fig {
   position: absolute; bottom: 38px; z-index: 2; pointer-events: none;
   background-repeat: no-repeat; background-size: contain;
   background-position: bottom center;
   filter: var(--hb-badge-fig-filter) var(--hb-badge-fig-shadow);
 }
-#${OVERLAY_ID} .fig.front { z-index: 5; }
-#${OVERLAY_ID} .fig-asheron { background-image: url("./data/orb-sprites/asheron.png");       width: 54.3px; height: 116px; }
-#${OVERLAY_ID} .fig-bael    { background-image: url("./data/orb-sprites/baelzharon-se.png"); width: 65.9px; height: 98px; }
-#${OVERLAY_ID} .fig-tent-l  { background-image: url("./data/orb-sprites/tentacle-l.png");    width: 46.3px; height: 78px; }
-#${OVERLAY_ID} .fig-tent-r  { background-image: url("./data/orb-sprites/tentacle-r.png");    width: 46.3px; height: 78px; }
-#${OVERLAY_ID} .fig-sword   { background-image: url("./data/orb-sprites/atlan-sword.png");   width: 15.6px; height: 124px; }
-#${OVERLAY_ID} .fig-wand    { background-image: url("./data/orb-sprites/weeping-wand.png");  width: 18.2px; height: 120px; }
-#${OVERLAY_ID} .fig-bow     { background-image: url("./data/orb-sprites/composite-bow.png"); width: 150px;  height: 38.8px; }
+${P} .fig.front { z-index: 5; }
+${P} .fig-asheron { background-image: url("./data/orb-sprites/asheron.png");       width: 54.3px; height: 116px; }
+${P} .fig-bael    { background-image: url("./data/orb-sprites/baelzharon-se.png"); width: 65.9px; height: 98px; }
+${P} .fig-tent-l  { background-image: url("./data/orb-sprites/tentacle-l.png");    width: 46.3px; height: 78px; }
+${P} .fig-tent-r  { background-image: url("./data/orb-sprites/tentacle-r.png");    width: 46.3px; height: 78px; }
+${P} .fig-sword   { background-image: url("./data/orb-sprites/atlan-sword.png");   width: 15.6px; height: 124px; }
+${P} .fig-wand    { background-image: url("./data/orb-sprites/weeping-wand.png");  width: 18.2px; height: 120px; }
+${P} .fig-bow     { background-image: url("./data/orb-sprites/composite-bow.png"); width: 150px;  height: 38.8px; }
 
-/* placement — supporters and charges stand ON the plinth line
-   (bottom:38px == plinth top) so nothing floats. */
-#${OVERLAY_ID} .sup-l { left: 10px; }
-#${OVERLAY_ID} .sup-r { right: 6px; }
-#${OVERLAY_ID} .chg-l { left: 26px; }
-#${OVERLAY_ID} .chg-r { right: 26px; }
-/* the weapons are planted, so they cant slightly outward off the plinth */
-#${OVERLAY_ID} .fig-sword.chg-r { transform: rotate(7deg); transform-origin: 50% 100%; }
-#${OVERLAY_ID} .fig-wand.chg-l { transform: rotate(-7deg); transform-origin: 50% 100%; }
+/* placement — the plinth is gone with the rest of the panel chrome, but
+   its line (bottom:38px) is kept as the common ground the supporters
+   and charges stand on, so the heraldry reads exactly as the card. */
+${P} .sup-l { left: 10px; }
+${P} .sup-r { right: 6px; }
+${P} .chg-l { left: 26px; }
+${P} .chg-r { right: 26px; }
+/* the weapons are planted, so they cant slightly outward */
+${P} .fig-sword.chg-r { transform: rotate(7deg); transform-origin: 50% 100%; }
+${P} .fig-wand.chg-l { transform: rotate(-7deg); transform-origin: 50% 100%; }
 /* the bow lies in base, arced under the vessel, cradling it; its
    recurved tips rise just inside the tendrils so the charges nest */
-#${OVERLAY_ID} .fig-bow { left: 50%; bottom: 31px; margin-left: -75px; z-index: 5; }
-/* tendrils grip the lower quadrants, thick end rooted on the plinth,
-   thin tip sweeping UP and INWARD. Splayed outward they read as spider
-   legs — which is what killed the first pass; the sprite's whip tip was
+${P} .fig-bow { left: 50%; bottom: 31px; margin-left: -75px; z-index: 5; }
+/* tendrils grip the lower quadrants, thick end rooted low, thin tip
+   sweeping UP and INWARD. Splayed outward they read as spider legs —
+   which is what killed the first pass; the sprite's whip tip was
    morphologically opened away, and -r is a pre-mirrored PNG so the CSS
    never has to compose scaleX(-1) with a rotation origin. */
-#${OVERLAY_ID} .tent { bottom: 36px; }
-#${OVERLAY_ID} .tent.l { left: 1px; transform: rotate(-6deg); }
-#${OVERLAY_ID} .tent.r { right: 1px; transform: rotate(6deg); }
+${P} .tent { bottom: 36px; }
+${P} .tent.l { left: 1px; transform: rotate(-6deg); }
+${P} .tent.r { right: 1px; transform: rotate(6deg); }
 
 /* an aureole behind a lone charge — just enough veiled mass for a slim
    weapon to answer a whole figure across the vessel. Kept very low: at
-   any real opacity it stops being a halo and becomes a coloured panel. */
-#${OVERLAY_ID} .aureole {
-  position: absolute; bottom: 46px; width: 52px; height: 96px; z-index: 1;
-  border-radius: 50%; filter: blur(17px); opacity: var(--hb-badge-aureole);
+   any real opacity it stops being a halo and becomes a coloured panel.
+   PERF: painted as a radial-gradient rather than a blurred solid, so it
+   is a plain background instead of a filter layer per pane. */
+${P} .aureole {
+  position: absolute; bottom: 46px; width: 78px; height: 122px; z-index: 1;
+  opacity: var(--hb-badge-aureole);
 }
-#${OVERLAY_ID} .aureole.r { right: 10px; }
-#${OVERLAY_ID} .aureole.l { left: 10px; }
-#${OVERLAY_ID} .hbo-glow {
-  position: absolute; left: 50%; bottom: 46px; width: 130px; height: 84px;
-  transform: translateX(-50%); border-radius: 50%; z-index: 0;
-  filter: blur(24px); opacity: 0.10;
+${P} .aureole.r { right: -3px; }
+${P} .aureole.l { left: -3px; }
+/* Also the only thing that seats the badge against a BRIGHT sky: the
+   colour reads as the vital's humour, and the dark core under it keeps
+   the vessel from dissolving into a white background. */
+${P} .hbo-glow {
+  position: absolute; left: 50%; bottom: 34px; width: 168px; height: 116px;
+  transform: translateX(-50%); z-index: 0; opacity: 0.5;
 }
-#${OVERLAY_ID} .g-hp { background: var(--hb-orb-hp); }
-#${OVERLAY_ID} .g-stam { background: var(--hb-orb-stam); }
-#${OVERLAY_ID} .g-mana { background: var(--hb-orb-mana); }
-#${OVERLAY_ID} .hbo-plinth {
-  position: absolute; left: 50%; bottom: 30px; width: 178px; height: 8px;
-  transform: translateX(-50%); z-index: 3;
-  background: linear-gradient(180deg, var(--hb-badge-plinth-top) 0%,
-              var(--hb-badge-plinth-bottom) 100%);
-  border-top: 1px solid var(--hb-edge-light);
-  border-radius: 1px;
-}
+${P} .g-hp { background: radial-gradient(closest-side, rgba(200,24,30,0.30), rgba(20,6,6,0.20) 55%, rgba(0,0,0,0) 78%); }
+${P} .g-stam { background: radial-gradient(closest-side, rgba(240,192,36,0.24), rgba(24,18,4,0.20) 55%, rgba(0,0,0,0) 78%); }
+${P} .g-mana { background: radial-gradient(closest-side, rgba(47,110,226,0.28), rgba(6,10,32,0.20) 55%, rgba(0,0,0,0) 78%); }
 
 /* ── orb engine ─────────────────────────────────────────────────────
    Only the wavy TOP edge of each closed wave path can draw: the bottom
-   and side edges of the path fall outside the clip circle. */
-#${OVERLAY_ID} .orb { display: block; overflow: visible; }
-#${OVERLAY_ID} .orb.hp   { --orb-a: var(--hb-orb-hp);   --orb-b: var(--hb-orb-hp-deep); }
-#${OVERLAY_ID} .orb.hp.low { --orb-a: var(--hb-orb-hp-low); --orb-b: var(--hb-orb-hp-low-deep); }
-#${OVERLAY_ID} .orb.stam { --orb-a: var(--hb-orb-stam); --orb-b: var(--hb-orb-stam-deep); }
-#${OVERLAY_ID} .orb.mana { --orb-a: var(--hb-orb-mana); --orb-b: var(--hb-orb-mana-deep); }
-#${OVERLAY_ID} .orb .rim-thin { fill: none; stroke: var(--hb-orb-collar); stroke-width: 1.4; opacity: 0.85; }
-#${OVERLAY_ID} .orb .rim-inner { fill: none; stroke: #000; stroke-width: 3; opacity: 0.55; }
-#${OVERLAY_ID} .orb .spec { fill: var(--hb-orb-glass-spec); opacity: 0.5; filter: blur(2.2px); }
-#${OVERLAY_ID} .orb .spec-2 { fill: var(--hb-orb-glass-spec-soft); filter: blur(2px); opacity: 0.5; }
+   and side edges of the path fall outside the clip circle.
+
+   TRANSPARENCY: there is no backdrop circle and no dome fill any more.
+   Above the waterline the vessel is glass — the baked glass plate's
+   sheen and rim, and nothing else — so the world shows through the
+   empty half. Every mix-blend-mode in here is isolated by the
+   contain:paint on .hbo-core (a stacking context isolates blending), so
+   no screen/multiply layer can reach past the orb and read back the 3D
+   canvas now visible through it. An explicit isolation:isolate on the
+   svg is redundant AND measured worse: it widened the Paint clip from
+   the 92x92 orb box back out to the whole pane. */
+${P} .orb { display: block; }
+${P} .orb.hp   { --orb-a: var(--hb-orb-hp);   --orb-b: var(--hb-orb-hp-deep); }
+${P} .orb.hp.low { --orb-a: var(--hb-orb-hp-low); --orb-b: var(--hb-orb-hp-low-deep); }
+${P} .orb.stam { --orb-a: var(--hb-orb-stam); --orb-b: var(--hb-orb-stam-deep); }
+${P} .orb.mana { --orb-a: var(--hb-orb-mana); --orb-b: var(--hb-orb-mana-deep); }
+/* PERF item 3: the dome vignette, both blurred speculars, the inner
+   shadow ring and the brass collar, pre-composed into one raster at
+   mount (GLASS_SVG). Five static gradient/filter layers become one
+   image display item that a wave tick never has to re-examine. */
+${P} .orb .glassplate { pointer-events: none; }
 
 /* meniscus — three strokes of one path. The dark one sits BELOW the
    waterline (light is absorbed just under the surface), the bright one
    on it, the hairline specular just above it. */
-#${OVERLAY_ID} .orb .men { fill: none; stroke-linejoin: round; }
-#${OVERLAY_ID} .orb .men-sh { stroke: var(--hb-orb-men-shadow); stroke-width: 3.2; opacity: 0.75; transform: translateY(1.6px); }
-#${OVERLAY_ID} .orb .men-hi { stroke: var(--hb-orb-surface); stroke-width: 1.1; }
-#${OVERLAY_ID} .orb .men-sp { stroke: var(--hb-orb-men-spec); stroke-width: 0.55; opacity: 0.7; transform: translateY(-0.7px); }
-#${OVERLAY_ID} .orb .men-wall { fill: none; stroke: var(--hb-orb-surface); stroke-width: 1.2; opacity: 0.55; }
+${P} .orb .men { fill: none; stroke-linejoin: round; }
+${P} .orb .men-sh { stroke: var(--hb-orb-men-shadow); stroke-width: 3.2; opacity: 0.75; transform: translateY(1.6px); }
+${P} .orb .men-hi { stroke: var(--hb-orb-surface); stroke-width: 1.1; }
+${P} .orb .men-sp { stroke: var(--hb-orb-men-spec); stroke-width: 0.55; opacity: 0.7; transform: translateY(-0.7px); }
+${P} .orb .men-wall { fill: none; stroke: var(--hb-orb-surface); stroke-width: 1.2; opacity: 0.55; }
 
-/* subsurface scattering under the surface, and the coloured light that
-   bounces back OFF the liquid onto the dome above it — the tell that
-   the empty half is glass and not a hole */
-#${OVERLAY_ID} .orb .subglow { filter: blur(6px); mix-blend-mode: screen; opacity: 0.5; }
-#${OVERLAY_ID} .orb .bounce { filter: blur(9px); mix-blend-mode: screen; opacity: 0.4; }
+/* subsurface scattering just under the surface. v1 also had a .bounce
+   ellipse throwing coloured light back onto the dome ABOVE the water —
+   the tell that the empty half was glass and not a hole. v2 deletes it:
+   the empty half is now genuinely see-through, and a screen-blended
+   colour blob floating over the world is exactly the "big opaque pane"
+   read this revision exists to remove. One blur + one blend layer per
+   vessel goes with it. */
+${P} .orb .subglow { filter: blur(6px); mix-blend-mode: screen; opacity: 0.5; }
 /* the liquid is optically thicker toward the glass wall, so it goes
    darker there; this is what stops the body reading as flat poster colour */
-#${OVERLAY_ID} .orb .lqwall { mix-blend-mode: multiply; }
-#${OVERLAY_ID} .orb .sspec {
+${P} .orb .lqwall { mix-blend-mode: multiply; }
+${P} .orb .sspec {
   fill: var(--hb-orb-men-spec); filter: blur(2.6px); mix-blend-mode: screen;
   opacity: 0.4; animation: hbo-sspec 9s ease-in-out infinite;
 }
@@ -494,24 +617,23 @@ function styleText() {
   0%, 100% { transform: translate(-9px, 0) scaleX(0.86); opacity: 0.26; }
   50%      { transform: translate(11px, 0) scaleX(1.14); opacity: 0.5; }
 }
-#${OVERLAY_ID} .orb .caustics { mix-blend-mode: screen; }
-#${OVERLAY_ID} .orb .rip { fill: none; stroke: var(--hb-orb-caustic); stroke-linecap: round; opacity: 0.32; }
+${P} .orb .caustics { mix-blend-mode: screen; }
+${P} .orb .caustics image { pointer-events: none; }
 /* MEASURED REGRESSION, do not re-add: animating a transform on the
-   FILTERED group (or the filter's own baseFrequency) re-evaluates the
-   fractal-noise field every vsync — a 60→44 fps cliff on this laptop.
-   The caustics are static geometry; their apparent crawl comes from the
-   live wave path they are clipped to, which moves at the orb cadence. */
-#${OVERLAY_ID} .orb .pool { fill: var(--hb-orb-caustic); filter: blur(7px); opacity: 0.26; }
-#${OVERLAY_ID} .orb .sheen { fill: var(--hb-orb-caustic); mix-blend-mode: screen; opacity: 0.12; }
+   caustics (or the filter own baseFrequency) re-evaluates the fractal-
+   noise field every vsync — a 60-to-44 fps cliff on this laptop. The
+   caustics are static geometry AND static noise, which is why they can
+   be baked (CAUSTIC_SVG); their apparent crawl comes from the live wave
+   path they are clipped to, which moves at the orb cadence. */
 
-#${OVERLAY_ID} .orb .bub { fill: var(--hb-orb-bubble); animation: hbo-bub var(--bd, 7s) linear infinite; }
+${P} .orb .bub { fill: var(--hb-orb-bubble); animation: hbo-bub var(--bd, 7s) linear infinite; }
 @keyframes hbo-bub {
   0%   { transform: translateY(0) scale(0.7); opacity: 0; }
   12%  { opacity: 0.55; }
   85%  { opacity: 0.4; }
   100% { transform: translateY(var(--rise, -60px)) scale(1.05); opacity: 0; }
 }
-#${OVERLAY_ID} .orb .shimmer {
+${P} .orb .shimmer {
   fill: var(--hb-orb-mana-shimmer); opacity: 0.3; filter: blur(6px);
   animation: hbo-shimmer 7.5s ease-in-out infinite;
 }
@@ -520,15 +642,23 @@ function styleText() {
   50%      { transform: translate(10px, -6px) scale(1.25); opacity: 0.4; }
 }
 
-/* vitae ceiling — a fill ceiling the liquid cannot rise past */
-#${OVERLAY_ID} .orb .vitae-dim { fill: var(--hb-orb-vitae-dim); }
-#${OVERLAY_ID} .orb .vitae-scum-band { fill: var(--hb-orb-vitae-scum); opacity: 0.4; }
-#${OVERLAY_ID} .orb .vitae-grime { fill: none; stroke: var(--hb-orb-vitae-scum); stroke-width: 1.6; opacity: 0.95; }
-#${OVERLAY_ID} .orb .vitae-grime-dots { fill: var(--hb-orb-vitae-scum); opacity: 0.75; }
+/* vitae ceiling — a fill ceiling the liquid cannot rise past.
+   REWORKED for transparency: v1 dimmed the dead band with 50% black,
+   which only read because there was an opaque vessel behind it. Over a
+   see-through headspace that would be a black smear on the world, so
+   the dim drops to a light stain and the READ moves onto the hatch,
+   the scum band and the grime line — marks ON the glass, which stay
+   legible against anything behind them. */
+${P} .orb .vitae-dim { fill: var(--hb-orb-vitae-dim); }
+${P} .orb .vitae-scum-band { fill: var(--hb-orb-vitae-scum); opacity: 0.55; }
+${P} .orb .vitae-grime { fill: none; stroke: var(--hb-orb-vitae-scum); stroke-width: 1.8; opacity: 1; }
+${P} .orb .vitae-grime-dots { fill: var(--hb-orb-vitae-scum); opacity: 0.85; }
 
-/* damage glare flicker — one cycle, armed by the .glaring class */
-#${OVERLAY_ID} .orb .glare { fill: var(--hb-orb-glare); opacity: 0; mix-blend-mode: screen; }
-#${OVERLAY_ID} .orb.glaring .glare { animation: hbo-glare 1.15s steps(1, end) 1; }
+/* damage glare flicker — one cycle, armed by the .glaring class.
+   display:none at rest so the blend layer only exists during the
+   1.15 s a hit is being shown, instead of on every commit forever. */
+${P} .orb .glare { display: none; fill: var(--hb-orb-glare); opacity: 0; mix-blend-mode: screen; }
+${P} .orb.glaring .glare { display: block; animation: hbo-glare 1.15s steps(1, end) 1; }
 @keyframes hbo-glare {
   0%, 100% { opacity: 0; }
   2%  { opacity: 0.62; }
@@ -543,29 +673,29 @@ function styleText() {
    A real impact web, not hairlines: radials that branch and taper,
    lateral cracks bridging them, a crushed rosette at the impact point.
    Four passes give the glass some thickness. */
-#${OVERLAY_ID} .orb .fx-dark {
+${P} .orb .fx-dark {
   fill: none; stroke: var(--hb-orb-crack-dark); stroke-linecap: round;
   opacity: 0.85; transform: translate(0.9px, 1.1px);
 }
-#${OVERLAY_ID} .orb .fx-refract {
+${P} .orb .fx-refract {
   fill: none; stroke: var(--hb-orb-crack-refract); stroke-linecap: round;
   opacity: 0.34; filter: url(#hbRefract);
 }
-#${OVERLAY_ID} .orb .fx-main { fill: none; stroke: var(--hb-orb-crack); stroke-linecap: round; }
-#${OVERLAY_ID} .orb .fx-shard { fill: var(--hb-orb-crack); opacity: 0.16; stroke: none; }
-#${OVERLAY_ID} .orb .fx-glint {
+${P} .orb .fx-main { fill: none; stroke: var(--hb-orb-crack); stroke-linecap: round; }
+${P} .orb .fx-shard { fill: var(--hb-orb-crack); opacity: 0.16; stroke: none; }
+${P} .orb .fx-glint {
   fill: none; stroke: var(--hb-orb-crack-glint); stroke-linecap: round;
   stroke-width: 0.9; opacity: 0; animation: hbo-glint 3.6s ease-in-out infinite;
 }
-#${OVERLAY_ID} .orb .fx-glint:nth-of-type(2) { animation-delay: -1.2s; }
-#${OVERLAY_ID} .orb .fx-glint:nth-of-type(3) { animation-delay: -2.4s; }
-#${OVERLAY_ID} .orb .fx-glint:nth-of-type(4) { animation-delay: -0.6s; }
+${P} .orb .fx-glint:nth-of-type(2) { animation-delay: -1.2s; }
+${P} .orb .fx-glint:nth-of-type(3) { animation-delay: -2.4s; }
+${P} .orb .fx-glint:nth-of-type(4) { animation-delay: -0.6s; }
 @keyframes hbo-glint { 0%, 72%, 100% { opacity: 0.06; } 84% { opacity: 0.95; } }
-#${OVERLAY_ID} .orb .fx-bloom { mix-blend-mode: screen; animation: hbo-bloom 3.6s ease-in-out infinite; }
+${P} .orb .fx-bloom { mix-blend-mode: screen; animation: hbo-bloom 3.6s ease-in-out infinite; }
 @keyframes hbo-bloom { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.7; } }
 
 /* heartbeat — applied to the orb wrapper on low HP */
-#${OVERLAY_ID} .hbo-core.beat { animation: hbo-beat 1.15s ease-out infinite; transform-origin: 50% 50%; }
+${P} .hbo-core.beat { animation: hbo-beat 1.15s ease-out infinite; transform-origin: 50% 50%; }
 @keyframes hbo-beat {
   0%   { transform: scale(1); filter: drop-shadow(0 0 0 rgba(200, 24, 30, 0)); }
   8%   { transform: scale(1.045); filter: drop-shadow(0 0 9px rgba(200, 24, 30, 0.75)); }
@@ -574,17 +704,44 @@ function styleText() {
   45%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(200, 24, 30, 0)); }
 }
 
-/* readout — the vital NAME is gone; the liquid colour identifies the
-   orb, so only the number is left and it carries a tint of its humour */
-#${OVERLAY_ID} .orb-read { text-align: center; margin-top: 12px; font-family: var(--hb-font-serif); }
-#${OVERLAY_ID} .orb-read .v {
-  display: block; font-size: 12.5px; font-variant-numeric: tabular-nums;
+/* ── readout ─────────────────────────────────────────────────────────
+   The vital NAME is gone; the liquid colour identifies the orb, so only
+   the number is left and it carries a tint of its humour.
+
+   With the stone panel removed the number has to hold up over ANY world
+   pixel — a night sky and a noon sky in the same session — so it is
+   painted twice: a thick dark -webkit-text-stroke laid down FIRST by a
+   ::before clone (z-index:-1 puts it behind the fill; paint-order is
+   an SVG property and is not dependable for HTML text), then the tinted
+   fill on top, then a tight multi-layer shadow to soften the transition
+   into whatever is behind. Sizes are divided back out of --hbo-scale so
+   the glyphs land at a constant on-screen size whatever ?orbScale= is.
+   Judged from screenshots over a night sky and over bare noon sky. */
+${P} .orb-read {
+  position: absolute; left: 0; right: 0; bottom: 2px; z-index: 6;
+  text-align: center; font-family: var(--hb-font-serif);
+  pointer-events: none;
+}
+${P} .orb-read .v {
+  position: relative; display: inline-block;
+  font-size: calc(13.5px * var(--hbo-inv));
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
   color: var(--hbo-read, var(--hb-text-cream-bright));
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+  text-shadow:
+    0 0 calc(2px * var(--hbo-inv)) rgba(0, 0, 0, 0.95),
+    0 calc(1px * var(--hbo-inv)) calc(2px * var(--hbo-inv)) rgba(0, 0, 0, 0.95),
+    0 0 calc(7px * var(--hbo-inv)) rgba(0, 0, 0, 0.75);
+}
+${P} .orb-read .v::before {
+  content: attr(data-v);
+  position: absolute; left: 0; top: 0; z-index: -1;
+  color: transparent;
+  -webkit-text-stroke: calc(2.8px * var(--hbo-inv)) rgba(0, 0, 0, 0.88);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #${OVERLAY_ID} .orb *, #${OVERLAY_ID} .hbo-core { animation: none !important; }
+  ${P} .orb *, ${P} .hbo-core { animation: none !important; }
 }
 `;
 }
@@ -655,9 +812,16 @@ function createDriver(orbs, reducedMotion, hz) {
       o.body.setAttribute("d", d);
       if (o.clip) o.clip.setAttribute("d", d);
       for (let j = 0; j < o.men.length; j++) o.men[j].setAttribute("d", d);
-      if (o.surf) {
+      // PERF item 1. `setAttribute("transform", …)` writes a
+      // PRESENTATION ATTRIBUTE, and presentation attributes map into
+      // CSS style — so it invalidated the whole vessel's style on every
+      // one of the 30 ticks a second and UpdateLayoutTree was a quarter
+      // of the HUD's render pipeline. Mutating the SVGTransform in
+      // `transform.baseVal` marks the layout object's transform dirty
+      // and nothing else. DO NOT put the attribute back.
+      if (o.surfXform) {
         const sy = (H - o.level * H) + Math.sin(ph) * amp * 0.5;
-        o.surf.setAttribute("transform", "translate(0," + sy.toFixed(2) + ")");
+        o.surfXform.setTranslate(0, sy);
       }
     }
   }
@@ -707,42 +871,279 @@ function createDriver(orbs, reducedMotion, hz) {
   };
 }
 
-// ── the overlay ──────────────────────────────────────────────────────
-function buildOverlay() {
-  const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
-  overlay.hidden = true;
-  const scale = orbScale();
-  if (scale !== DEFAULT_SCALE) overlay.style.setProperty("--hbo-scale", String(scale));
+// ── the panes ────────────────────────────────────────────────────────
+//
+// The shared filter defs are ONE hidden zero-size SVG on <body>, not a
+// copy inside each pane: `url(#hbRefract)` resolves document-wide, so
+// three panes share one refraction filter between them.
+// ── raster baking ────────────────────────────────────────────────────
+//
+// THE TRAP, measured 2026-07-28: pointing an <image> at an SVG data URL
+// does NOT get you a bitmap. Blink keeps an SVG image as a PaintRecord
+// and REPLAYS it on every raster, so a baked-to-SVG caustics layer still
+// ran its feTurbulence + feDisplacementMap on every wave tick — the
+// first attempt at this measured slightly WORSE than the live filter
+// group it replaced. The bake only pays once the vector is drawn
+// through a <canvas> and read back as a PNG, which is a real bitmap.
+//
+// 240 px covers ?orbScale= up to its 2.0 ceiling (ORB_PX 92 x 2) with
+// room to spare; both rasters are shared by all three vessels.
+const BAKE_PX = 240;
+const bakedRaster = new Map();  // svg data url -> Promise<png data url>
 
-  const defs = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  defs.setAttribute("class", "hbo-defs");
+function bakeRaster(svgUrl) {
+  let pending = bakedRaster.get(svgUrl);
+  if (pending) return pending;
+  pending = new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = BAKE_PX; c.height = BAKE_PX;
+        c.getContext("2d").drawImage(img, 0, 0, BAKE_PX, BAKE_PX);
+        resolve(c.toDataURL("image/png"));
+      } catch (_) {
+        resolve(svgUrl);  // tainted / no canvas: the vector still draws
+      }
+    };
+    img.onerror = () => resolve(svgUrl);
+    img.src = svgUrl;
+  });
+  bakedRaster.set(svgUrl, pending);
+  return pending;
+}
+
+/** Swap every vector placeholder for its baked bitmap, once. */
+function bakeRasters(paneList) {
+  for (const [sel, url] of [[".glassplate", GLASS_URL], [".caustics image", CAUSTIC_URL]]) {
+    bakeRaster(url).then((png) => {
+      if (png === url) return;
+      for (const pane of paneList) {
+        for (const el of pane.querySelectorAll(sel)) el.setAttribute("href", png);
+      }
+    }).catch(() => {});
+  }
+}
+
+function ensureSharedDefs() {
+  let defs = document.getElementById(DEFS_ID);
+  if (defs) return defs;
+  defs = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  defs.id = DEFS_ID;
   defs.setAttribute("width", "0");
   defs.setAttribute("height", "0");
   defs.setAttribute("aria-hidden", "true");
+  defs.style.cssText = "position:fixed;width:0;height:0;pointer-events:none";
   defs.innerHTML = `<defs>${SHARED_DEFS}</defs>`;
-  overlay.appendChild(defs);
-
-  const panel = document.createElement("div");
-  panel.className = "hbo-panel";
-  panel.innerHTML = KINDS.map((kind) =>
-    `<div class="hbo-group" data-kind="${kind}">${HERALDRY[kind]}`
-    + `<div class="hbo-plinth"></div>`
-    + `<div class="hbo-core">${orbSvg(kind)}`
-    + `<div class="orb-read" style="--hbo-read:var(--hb-orb-read-${kind})"><span class="v"></span></div>`
-    + `</div></div>`).join("");
-  overlay.appendChild(panel);
-  return overlay;
+  document.body.appendChild(defs);
+  return defs;
 }
 
-/** Per-orb mutable state + the DOM refs the driver writes to. */
-function collectOrbs(overlay) {
+/** One vital = one independently placed, independently persisted pane. */
+function buildPane(kind) {
+  const pane = document.createElement("div");
+  pane.id = PANE_ID[kind];
+  pane.className = "hbo-pane";
+  pane.dataset.kind = kind;
+  // NOT hidden yet — mount() hides it only after attachWindowPosition has
+  // measured it. `hidden` is display:none, so a pane hidden at attach time
+  // has a zero rect and ac_window_position's viewport clamp falls back to
+  // its 300 px guess, which drags a saved position left by up to ~160 px
+  // on every reload. (Caught by the persistence test: 829 -> 800.)
+  const scale = orbScale();
+  if (scale !== DEFAULT_SCALE) pane.style.setProperty("--hbo-scale", String(scale));
+  pane.innerHTML = HERALDRY[kind]
+    + `<div class="hbo-core">${orbSvg(kind)}</div>`
+    + `<div class="orb-read" style="--hbo-read:var(--hb-orb-read-${kind})">`
+    + `<span class="v" data-v=""></span></div>`;
+  return pane;
+}
+
+// ── the pointer gate ─────────────────────────────────────────────────
+//
+// A HUD you can see the world through must also let clicks through.
+// The panes are `pointer-events: none` in CSS and are flipped to `auto`
+// only while the cursor is genuinely over art:
+//
+//   • the vessel — an analytic circle test against the glass rim, so
+//     the corners of the orb's own 92×92 box are NOT part of it;
+//   • the figures — a coarse alpha grid sampled once per sprite PNG at
+//     mount, so the hollow between Asheron's arm and the vessel, or the
+//     wide empty span the bow's 150×39 box spends being an arc, is
+//     transparent to the game underneath.
+//
+// Nothing here reads layout on a pointermove: the pane rect and the
+// per-pane geometry are cached and only re-read on resize or after a
+// drag. A miss writes nothing at all (the style write is guarded on an
+// actual change), so waving the mouse across the HUD is free.
+const MASK_N = 32;      // alpha grid is MASK_N × MASK_N per sprite
+const MASK_ALPHA = 10;  // 0-255; low, because downsampling thins strokes
+const spriteMasks = new Map();  // url → {w,h,bits} | null (absent/failed)
+
+function loadSpriteMask(url) {
+  if (!url || spriteMasks.has(url)) return;
+  spriteMasks.set(url, null);  // in flight; a miss until it resolves
+  const img = new Image();
+  img.decoding = "async";
+  img.onload = () => {
+    try {
+      const n = MASK_N;
+      const c = document.createElement("canvas");
+      c.width = n; c.height = n;
+      const g = c.getContext("2d", { willReadFrequently: true });
+      g.drawImage(img, 0, 0, n, n);
+      const d = g.getImageData(0, 0, n, n).data;
+      const raw = new Uint8Array(n * n);
+      for (let i = 0; i < n * n; i++) raw[i] = d[i * 4 + 3] > MASK_ALPHA ? 1 : 0;
+      // One cell of dilation: a silhouette you have to hit dead-on is
+      // worse than one that is a pixel generous.
+      const bits = new Uint8Array(n * n);
+      for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+          let on = 0;
+          for (let j = -1; j <= 1 && !on; j++) {
+            for (let i = -1; i <= 1 && !on; i++) {
+              const yy = y + j, xx = x + i;
+              if (yy >= 0 && yy < n && xx >= 0 && xx < n && raw[yy * n + xx]) on = 1;
+            }
+          }
+          bits[y * n + x] = on;
+        }
+      }
+      spriteMasks.set(url, { n, bits });
+    } catch (_) { spriteMasks.set(url, null); }
+  };
+  img.onerror = () => { spriteMasks.set(url, null); };
+  img.src = url;
+}
+
+// The masks are wanted before the first pointermove, not on the first
+// hit test — otherwise the very first grab at a figure misses while the
+// PNG decodes. Kicked off at mount; the panes are still hidden then, so
+// this is the only place the sprite list has to be named in JS.
+const SPRITE_FILES = ["asheron.png", "baelzharon-se.png", "tentacle-l.png",
+  "tentacle-r.png", "atlan-sword.png", "weeping-wand.png", "composite-bow.png"];
+function preloadSpriteMasks() {
+  for (const f of SPRITE_FILES) {
+    try { loadSpriteMask(new URL("./data/orb-sprites/" + f, document.baseURI).href); }
+    catch (_) { /* exotic base URL — the lazy path in measure() still runs */ }
+  }
+}
+
+function figUrl(el) {
+  const m = /url\(["']?(.*?)["']?\)/.exec(getComputedStyle(el).backgroundImage || "");
+  return m ? m[1] : null;
+}
+
+function installHitGate(paneList) {
+  const recs = paneList.map((el) => ({ el, rect: null, geo: null, on: false }));
+  let dragging = false;
+
+  function measure(r) {
+    const el = r.el;
+    if (el.hidden || !el.offsetWidth) return null;
+    const core = el.querySelector(".hbo-core");
+    if (!core) return null;
+    const scale = parseFloat(getComputedStyle(el).getPropertyValue("--hbo-scale"))
+                  || DEFAULT_SCALE;
+    const figs = [...el.querySelectorAll(".fig")].map((f) => {
+      const url = figUrl(f);
+      loadSpriteMask(url);
+      return { x: f.offsetLeft, y: f.offsetTop, w: f.offsetWidth, h: f.offsetHeight, url };
+    });
+    return {
+      scale,
+      cx: core.offsetLeft + core.offsetWidth / 2,
+      cy: core.offsetTop + core.offsetHeight / 2,
+      // the outermost glass rim is r=58.8 of the 0..120 viewBox
+      cr: (58.8 / VB) * core.offsetWidth,
+      figs,
+    };
+  }
+
+  function hits(r, px, py) {
+    if (r.el.hidden) { r.geo = null; r.rect = null; return false; }
+    if (!r.geo) r.geo = measure(r);
+    if (!r.geo) return false;
+    if (!r.rect) r.rect = r.el.getBoundingClientRect();
+    const g = r.geo;
+    const x = (px - r.rect.left) / g.scale;
+    const y = (py - r.rect.top) / g.scale;
+    if (x < 0 || y < 0 || x > PANE_W || y > PANE_H) return false;
+    const dx = x - g.cx, dy = y - g.cy;
+    if (dx * dx + dy * dy <= g.cr * g.cr) return true;
+    for (const f of g.figs) {
+      if (!f.w || x < f.x || y < f.y || x >= f.x + f.w || y >= f.y + f.h) continue;
+      const m = spriteMasks.get(f.url);
+      if (!m) continue;
+      const gx = Math.min(m.n - 1, ((x - f.x) / f.w * m.n) | 0);
+      const gy = Math.min(m.n - 1, ((y - f.y) / f.h * m.n) | 0);
+      if (m.bits[gy * m.n + gx]) return true;
+    }
+    return false;
+  }
+
+  const onMove = (ev) => {
+    if (dragging) return;  // never yank pointer-events out from under a capture
+    for (const r of recs) {
+      const on = hits(r, ev.clientX, ev.clientY);
+      if (on === r.on) continue;
+      r.on = on;
+      r.el.style.pointerEvents = on ? "auto" : "none";
+      r.el.classList.toggle("hbo-drag", on);
+    }
+  };
+  const onDown = (ev) => {
+    if (ev.target?.closest?.(".hbo-pane")) dragging = true;
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    for (const r of recs) r.rect = null;  // it may have just moved
+  };
+  const onResize = () => { for (const r of recs) { r.rect = null; r.geo = null; } };
+
+  document.addEventListener("pointermove", onMove, { passive: true, capture: true });
+  document.addEventListener("pointerdown", onDown, true);
+  document.addEventListener("pointerup", onUp, true);
+  document.addEventListener("pointercancel", onUp, true);
+  window.addEventListener("resize", onResize);
+
+  // Exposed for the headless tests: "is (x, y) over art?" without a
+  // synthetic pointer event.
+  installHitGate.probe = (x, y) => recs.map((r) => hits(r, x, y));
+
+  return () => {
+    document.removeEventListener("pointermove", onMove, { capture: true });
+    document.removeEventListener("pointerdown", onDown, true);
+    document.removeEventListener("pointerup", onUp, true);
+    document.removeEventListener("pointercancel", onUp, true);
+    window.removeEventListener("resize", onResize);
+    installHitGate.probe = null;
+  };
+}
+
+/** Per-orb mutable state + the DOM refs the driver writes to.
+ *  `panes` is the kind → pane element map built by mount(). */
+function collectOrbs(panes) {
   const orbs = [];
   KINDS.forEach((kind, i) => {
-    const group = overlay.querySelector(`.hbo-group[data-kind="${kind}"]`);
+    const group = panes[kind];
     const svg = group.querySelector("svg.orb");
     svg.classList.add(kind);
     const liquid = svg.querySelector(".liquid");
+    const surf = liquid.querySelector(".wsurf");
+    // One SVGTransform, created once and mutated in place by the driver
+    // (see PERF item 1 in tick()). `createSVGTransform` must come off an
+    // <svg> element; the list then owns the object.
+    let surfXform = null;
+    if (surf) {
+      const list = surf.transform.baseVal;
+      list.clear();
+      surfXform = svg.createSVGTransform();
+      surfXform.setTranslate(0, 0);
+      list.appendItem(surfXform);
+    }
     orbs.push({
       kind,
       type: TYPE_BY_KIND[kind],
@@ -758,7 +1159,8 @@ function collectOrbs(overlay) {
       // for a build; see agentG-report §2).
       clip: svg.querySelector("defs .w-clip"),
       men: [...liquid.querySelectorAll(".men")],
-      surf: liquid.querySelector(".wsurf"),
+      surf,
+      surfXform,
       vitae: liquid.querySelector(".hbo-vitae"),
       fx: svg.querySelector(".hbo-fx"),
       num: group.querySelector(".orb-read .v"),
@@ -828,6 +1230,8 @@ function applyVital(orb, current, buffedMax, base, oldValue, driver) {
   const nums = `${current} / ${buffedMax}`;
   if (orb.lastNums !== nums) {
     orb.num.textContent = nums;
+    // The ::before clone that lays down the dark stroke reads this.
+    orb.num.dataset.v = nums;
     orb.lastNums = nums;
   }
 
@@ -887,14 +1291,35 @@ export function mount(ctx) {
   if (!isVitalsOrbsActive()) return () => {};
 
   ensureStyles();
-  const existing = document.getElementById(OVERLAY_ID);
-  if (existing) existing.remove();
-  const overlay = buildOverlay();
-  document.body.appendChild(overlay);
-  attachDefaultTopDragHandle(overlay, WINDOW_ID.VITALS_ORBS);
+  ensureSharedDefs();
+  preloadSpriteMasks();
 
-  const orbs = collectOrbs(overlay);
+  const panes = {};
+  const paneList = [];
+  for (const kind of KINDS) {
+    const old = document.getElementById(PANE_ID[kind]);
+    if (old) old.remove();
+    const pane = buildPane(kind);
+    document.body.appendChild(pane);
+    // The pane IS its own drag handle — see hitGate() below, which only
+    // lets a pointer reach it when it is over visible art, so "drag it
+    // by the orb or by Asheron" works without a titlebar and without a
+    // rectangle of dead space that swallows clicks meant for the world.
+    attachWindowPosition(pane, {
+      windowId: PANE_WINDOW_ID[kind],
+      dragHandle: pane,
+      defaultPos: DEFAULT_POS[kind],
+    });
+    pane.hidden = true;  // see buildPane: measured first, then hidden
+    panes[kind] = pane;
+    paneList.push(pane);
+  }
+  const setHidden = (h) => { for (const p of paneList) p.hidden = h; };
+
+  const orbs = collectOrbs(panes);
   const byType = new Map(orbs.map((o) => [o.type, o]));
+  const stopHitGate = installHitGate(paneList);
+  bakeRasters(paneList);
 
   const reduceQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
   const reduced = !!reduceQuery?.matches;
@@ -914,7 +1339,7 @@ export function mount(ctx) {
   // renderVitals: `[type, current, base, buffed_max] × N`.
   function renderVitals(vitals) {
     if (!vitals || vitals.length === 0) {
-      overlay.hidden = true;
+      setHidden(true);
       return;
     }
     for (let i = 0; i + 3 < vitals.length; i += 4) {
@@ -922,7 +1347,7 @@ export function mount(ctx) {
       if (!orb) continue;
       applyVital(orb, vitals[i + 1], vitals[i + 3], vitals[i + 2], undefined, driver);
     }
-    overlay.hidden = false;
+    setHidden(false);
   }
 
   let pollTimer = null;
@@ -938,7 +1363,7 @@ export function mount(ctx) {
       } catch (_) {
         // Stats accessor throws before the player biota lands — stay
         // hidden until the next event, same contract as vitals-hud.
-        overlay.hidden = true;
+        setHidden(true);
       }
     };
     client.events.on("playerStatsUpdated", render);
@@ -952,7 +1377,7 @@ export function mount(ctx) {
       if (!orb) return;
       applyVital(orb, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0,
                  undefined, e.detail?.oldValue, driver);
-      if (overlay.hidden) overlay.hidden = false;
+      if (paneList[0].hidden) setHidden(false);
     };
     const onHealth = perVital(1);
     const onStamina = perVital(3);
@@ -963,7 +1388,7 @@ export function mount(ctx) {
 
     const onSharedCooldown = (e) => {
       const active = ((e?.activeCount ?? e?.detail?.activeCount) ?? 0) >>> 0;
-      overlay.dataset.cooldownActive = active > 0 ? "1" : "0";
+      for (const p of paneList) p.dataset.cooldownActive = active > 0 ? "1" : "0";
     };
     client.events.on("sharedCooldownChanged", onSharedCooldown);
 
@@ -1000,6 +1425,15 @@ export function mount(ctx) {
     window.__diag = window.__diag || {};
     window.__diag.vitalsOrbs = {
       running: () => driver.running,
+      // Which pane ids exist, and where they sit — the split-pane test
+      // hook (each pane persists its own position under its own key).
+      panes: () => paneList.map((p) => ({
+        id: p.id, hidden: p.hidden,
+        left: p.style.left, top: p.style.top,
+        pointerEvents: getComputedStyle(p).pointerEvents,
+      })),
+      // "would a click at (x, y) land on the HUD or go to the world?"
+      hitAt: (x, y) => (installHitGate.probe ? installHitGate.probe(x, y) : null),
       // EMA of the shared rAF's JS self-time, in ms per frame.
       tickMs: () => +driver.tickMs.toFixed(4),
       frames: () => driver.frames,
@@ -1012,7 +1446,7 @@ export function mount(ctx) {
         const orb = orbs.find((o) => o.kind === kind);
         if (!orb) return false;
         applyVital(orb, current, buffedMax, base, oldValue, driver);
-        overlay.hidden = false;
+        setHidden(false);
         return true;
       },
     };
@@ -1024,7 +1458,9 @@ export function mount(ctx) {
     document.removeEventListener("visibilitychange", onVisibility);
     for (const o of orbs) if (o.glareTimer) clearTimeout(o.glareTimer);
     driver.stop();
+    stopHitGate();
     try { delete window.__diag?.vitalsOrbs; } catch (_) {}
-    overlay.remove();
+    for (const p of paneList) p.remove();
+    document.getElementById(DEFS_ID)?.remove();
   };
 }

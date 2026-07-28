@@ -456,12 +456,16 @@
          (incl. the 1070 desktop shortcut) could ever see the spell
          panel it just clicked open. Panels only exist after an explicit
          icon click, so headless perf agents are unaffected. */
-      /* `#hb-vitals-orbs` joined the exclusion list 2026-07-28: the
-         Empyrean Relief orb HUD (?vitalsOrbs=on) is the vitals surface
-         when it is on, and autoLogin=1 implies agent-mode — without the
+      /* The orb HUD joined the exclusion list 2026-07-28: the Empyrean
+         Relief orbs (?vitalsOrbs=on) are the vitals surface when they
+         are on, and autoLogin=1 implies agent-mode — without the
          exemption every auto-logged-in session (incl. the eye-test
-         shortcut) would show NO vitals at all. */
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(#hb-vitals-orbs):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip):not(.hb-panel):not(#hb-spell-strip):not(#hb-thought-overlay) { display: none !important; }
+         shortcut) would show NO vitals at all. v2 split the one panel
+         into THREE independently placed panes, so all three ids are
+         listed; `#hb-vitals-orbs-defs` is the zero-size shared <defs>
+         SVG the vessels' filters resolve against and must stay in the
+         render tree with them. */
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(#hb-vitals-orb-hp):not(#hb-vitals-orb-stam):not(#hb-vitals-orb-mana):not(#hb-vitals-orbs-defs):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip):not(.hb-panel):not(#hb-spell-strip):not(#hb-thought-overlay) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
