@@ -1796,3 +1796,44 @@ RESIDUAL (filed): the Rust REMOTE sticky lane is still radius-blind (both
 0.0) — the JS backstop corrects the result; threading Rust is the
 follow-up. NOTE: agent O's `d9a4fd63` swept this fix's url-flags.md row
 into its own commit (content correct, message doesn't mention it).
+
+---
+
+## Unified input funnel — one gate, shared fate (2026-07-28, Opus agent P, `83fbc9cb`)
+
+Delete-dead ROOT CAUSE: not the evtGuard class (WASD worked). **Delete has
+no gameplay binding outside magic stance** — its only consumers were
+combat-bar's retail MagicCombat map (gated `stance !== 0x49 → return`) and
+spellbook's row-delete (listener exists only while the panel is mounted).
+In peace/melee/missile it was a DESIGNED no-op while movement sat behind a
+different gate 200 lines away. Confirmed live: stance 0x3d, gate wide
+open, Delete increments `unmatched`, never `gateClosed`. Two related
+defects found: a silent-swallow (`api?.selectDelta()` + unconditional
+preventDefault) and a latent DOUBLE-DISPATCH (spellbook open in magic
+stance → one Delete fired both consumers).
+
+Funnel (`ui/input-funnel.js`, `?inputFunnelV2=off` escape, default ON):
+ONE document-capture keydown/keyup pair — fault seam → text-entry
+deference (ev.target ∪ CONNECTED activeElement) → ONE gate (the same
+`enteredWorld && !isTypingInForm()` injected by index.html) → raw
+subscribers → actions, first-match-wins through ui/keymap.js incl. user
+rebinds. Migrated: movement, camera keystate + C, picking abort,
+combat-bar's 18 MagicCombat actions, spellbook DELETE_SPELL, hotbar's 18
+quickslots. Per-action `when` predicates narrow which action wins —
+deliberately NOT a second gate. Exempt with reasons: per-panel
+Enter/Escape, the Options→Controls rebind capture, F-key panel hotkeys,
+chat. Registry on the P6.1 facade: `client.input.bindAction(labelHash,
+defaultCode, fn, {when, priority})` / bindRaw / bindRawUp.
+
+Shared fate PROVEN both ways: `__diag.input.poison("throw"|"gate")` kills
+WASD AND Delete AND hotbar/spellbook keys in the same breath;
+`unpoison()` restores all. 74/74 unit + 27/27 live checks vs real ACE
+(real page.keyboard), `=off` arm restores legacy listeners, 0 unexpected
+console errors.
+
+OPEN DECISION (user): there is NO "Attack" keybinding anywhere in the
+client — attacking is mouse-driven; "Delete = attack" cannot be honored
+literally today. An "Attack Selected Target" local action wired to
+`client.player.attack(...)` is a small clean follow-on. Also noted:
+`test_a14_i3_run_keys.mjs` has 5 stale retailRunKeys default-off baseline
+failures (pre-existing).
