@@ -15,6 +15,7 @@ import {
   matchesBinding,
   LOCAL_ACTION_IDS,
 } from "../ui/keymap.js";
+import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { setAcText } from "../ui/ac_font.js";
 import {
   classifySpell,
@@ -776,6 +777,107 @@ function installSpellBarHotkeys() {
     const cur = getActiveSpellBar();
     setActiveSpellBar((cur + dir + SPELL_BAR_TABS) % SPELL_BAR_TABS);
   };
+  // Magic stance only — retail scoped the whole MagicCombat input map to
+  // the casting stance (ClientCombatSystem::HandleMagicAction). THIS is the
+  // gate that made Delete look "dead" in melee/peace while WASD kept
+  // working: it is an action SCOPE, not a second gate on the funnel.
+  const inMagicStance = () => {
+    try {
+      return window.__getCurrentStanceLow?.() === 0x49;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  // Retail MagicCombat actions — every row from the acclient.keymap
+  // capture is its own rebindable entry in Options → Controls
+  // ("Magic: …" rows), defaults verbatim: Insert/PageUp tab cycling,
+  // Delete/PageDown spell selection, Ctrl+<key> First/Last (retail
+  // metakey 0x2 = Ctrl), End casts, Digit1..9 = UseSpellSlot_N.
+  // matchesBinding is exact on modifiers, so plain-Insert (prev)
+  // and Ctrl+Insert (first) rows coexist without special-casing.
+  // `__stripApi` is read at DISPATCH time (it is assigned later, by
+  // installSpellStrip) — never captured.
+  const actionRows = [
+    [LOCAL_ACTION_IDS.MAGIC_PREV_TAB, "Insert", () => cycleTab(-1)],
+    [LOCAL_ACTION_IDS.MAGIC_NEXT_TAB, "PageUp", () => cycleTab(+1)],
+    [LOCAL_ACTION_IDS.MAGIC_FIRST_TAB, { code: "Insert", ctrl: true },
+      () => setActiveSpellBar(0)],
+    [LOCAL_ACTION_IDS.MAGIC_LAST_TAB, { code: "PageUp", ctrl: true },
+      () => setActiveSpellBar(SPELL_BAR_TABS - 1)],
+    [LOCAL_ACTION_IDS.MAGIC_PREV_SPELL, "Delete", () => __stripApi?.selectDelta(-1)],
+    [LOCAL_ACTION_IDS.MAGIC_NEXT_SPELL, "PageDown", () => __stripApi?.selectDelta(+1)],
+    [LOCAL_ACTION_IDS.MAGIC_FIRST_SPELL, { code: "Delete", ctrl: true },
+      () => __stripApi?.selectEdge("first")],
+    [LOCAL_ACTION_IDS.MAGIC_LAST_SPELL, { code: "PageDown", ctrl: true },
+      () => __stripApi?.selectEdge("last")],
+    [LOCAL_ACTION_IDS.MAGIC_CAST, "End", () => __stripApi?.castCurrent()],
+  ];
+  for (let n = 1; n <= 9; n++) {
+    const slotIdx = n - 1;
+    actionRows.push([
+      LOCAL_ACTION_IDS[`MAGIC_SLOT_${n}`],
+      `Digit${n}`,
+      () => __stripApi?.fireSlot(slotIdx),
+    ]);
+  }
+
+  // Web-native aliases kept from v1 ([ ] cycle, { } first/last) + the
+  // storage-level digit fallback for a strip that failed to mount. Not
+  // rebindable, so they stay a small raw handler rather than actions.
+  const aliasBody = (ev) => {
+    if (ev.ctrlKey) return; // unbound Ctrl combos are not ours
+    const api = __stripApi;
+    const key = ev.key;
+    if (key === "[" || key === "]" || key === "{" || key === "}") {
+      if (key === "{") setActiveSpellBar(0);
+      else if (key === "}") setActiveSpellBar(SPELL_BAR_TABS - 1);
+      else cycleTab(key === "[" ? -1 : +1);
+      ev.preventDefault();
+      return;
+    }
+    if (!api && key >= "1" && key <= "9") {
+      const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
+      ev.preventDefault();
+      const spellId = (getSpellBarSlots()[slotIdx] | 0);
+      if (!spellId) return;
+      loadCatalog()
+        .then((catalog) => {
+          const meta = catalog?.[String(spellId)];
+          const untargeted = (meta?.untargeted ?? true) === true;
+          if (untargeted) {
+            castSpellViaHandle(spellId, null);
+          } else {
+            const state = loadState();
+            state.armedSpellId = state.armedSpellId === spellId ? 0 : spellId;
+            saveState(state);
+            syncWindowState(state);
+            window.dispatchEvent(new CustomEvent("hb-spellbar-changed"));
+          }
+        })
+        .catch(() => { /* catalog fetch failed — drop the keypress */ });
+    }
+  };
+
+  // P-unification (2026-07-28): register on the ONE funnel so the whole
+  // MagicCombat map shares fate with WASD. `?inputFunnelV2=off` restores
+  // the legacy standalone listener below, byte-identical.
+  if (inputFunnelV2On()) {
+    const funnel = getInputFunnel();
+    for (const [id, def, run] of actionRows) {
+      funnel.bindAction(id, def, run, {
+        when: inMagicStance,
+        source: "combat-bar",
+      });
+    }
+    funnel.bindRaw("combat-bar.aliases", (ev) => {
+      if (ev.altKey || ev.metaKey) return;
+      if (!inMagicStance()) return;
+      aliasBody(ev);
+    });
+    return;
+  }
+
   window.addEventListener("keydown", (ev) => {
     try {
       if (ev.altKey || ev.metaKey) return;
@@ -784,42 +886,8 @@ function installSpellBarHotkeys() {
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) {
         return;
       }
-      // Magic stance only — retail scoped the whole MagicCombat input
-      // map to the casting stance (ClientCombatSystem::HandleMagicAction).
-      if (window.__getCurrentStanceLow?.() !== 0x49) return;
-
-      // Retail MagicCombat actions — every row from the acclient.keymap
-      // capture is its own rebindable entry in Options → Controls
-      // ("Magic: …" rows), defaults verbatim: Insert/PageUp tab cycling,
-      // Delete/PageDown spell selection, Ctrl+<key> First/Last (retail
-      // metakey 0x2 = Ctrl), End casts, Digit1..9 = UseSpellSlot_N.
-      // matchesBinding is exact on modifiers, so plain-Insert (prev)
-      // and Ctrl+Insert (first) rows coexist without special-casing.
-      const api = __stripApi;
-      const actions = [
-        [LOCAL_ACTION_IDS.MAGIC_PREV_TAB, "Insert", () => cycleTab(-1)],
-        [LOCAL_ACTION_IDS.MAGIC_NEXT_TAB, "PageUp", () => cycleTab(+1)],
-        [LOCAL_ACTION_IDS.MAGIC_FIRST_TAB, { code: "Insert", ctrl: true },
-          () => setActiveSpellBar(0)],
-        [LOCAL_ACTION_IDS.MAGIC_LAST_TAB, { code: "PageUp", ctrl: true },
-          () => setActiveSpellBar(SPELL_BAR_TABS - 1)],
-        [LOCAL_ACTION_IDS.MAGIC_PREV_SPELL, "Delete", () => api?.selectDelta(-1)],
-        [LOCAL_ACTION_IDS.MAGIC_NEXT_SPELL, "PageDown", () => api?.selectDelta(+1)],
-        [LOCAL_ACTION_IDS.MAGIC_FIRST_SPELL, { code: "Delete", ctrl: true },
-          () => api?.selectEdge("first")],
-        [LOCAL_ACTION_IDS.MAGIC_LAST_SPELL, { code: "PageDown", ctrl: true },
-          () => api?.selectEdge("last")],
-        [LOCAL_ACTION_IDS.MAGIC_CAST, "End", () => api?.castCurrent()],
-      ];
-      for (let n = 1; n <= 9; n++) {
-        const slotIdx = n - 1;
-        actions.push([
-          LOCAL_ACTION_IDS[`MAGIC_SLOT_${n}`],
-          `Digit${n}`,
-          () => api?.fireSlot(slotIdx),
-        ]);
-      }
-      for (const [id, def, run] of actions) {
+      if (!inMagicStance()) return;
+      for (const [id, def, run] of actionRows) {
         const b = resolveLocalBinding(id, def);
         if (matchesBinding(ev, b)) {
           run();
@@ -827,41 +895,7 @@ function installSpellBarHotkeys() {
           return;
         }
       }
-      if (ev.ctrlKey) return; // unbound Ctrl combos are not ours
-
-      const key = ev.key;
-      // Web-native aliases kept from v1: [ ] cycle, { } first/last.
-      if (key === "[" || key === "]" || key === "{" || key === "}") {
-        if (key === "{") setActiveSpellBar(0);
-        else if (key === "}") setActiveSpellBar(SPELL_BAR_TABS - 1);
-        else cycleTab(key === "[" ? -1 : +1);
-        ev.preventDefault();
-        return;
-      }
-      // Storage-level digit fallback for the (shouldn't-happen) case
-      // where the strip failed to mount — the MAGIC_SLOT_N rows above
-      // already handled digits when the strip API exists.
-      if (!api && key >= "1" && key <= "9") {
-        const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
-        ev.preventDefault();
-        const spellId = (getSpellBarSlots()[slotIdx] | 0);
-        if (!spellId) return;
-        loadCatalog()
-          .then((catalog) => {
-            const meta = catalog?.[String(spellId)];
-            const untargeted = (meta?.untargeted ?? true) === true;
-            if (untargeted) {
-              castSpellViaHandle(spellId, null);
-            } else {
-              const state = loadState();
-              state.armedSpellId = state.armedSpellId === spellId ? 0 : spellId;
-              saveState(state);
-              syncWindowState(state);
-              window.dispatchEvent(new CustomEvent("hb-spellbar-changed"));
-            }
-          })
-          .catch(() => { /* catalog fetch failed — drop the keypress */ });
-      }
+      aliasBody(ev);
     } catch (_) {
       // Never break global input handling on a hotkey fault.
     }

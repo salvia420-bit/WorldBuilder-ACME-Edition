@@ -138,6 +138,7 @@ import {
   // acclient.c:716978). Flag-off returns the legacy `!shift`.
   resolveRunModifier,
 } from "./input.js";
+import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 // A12-C2/C3 (2026-06-12): retail camera math (zoom continuum / in-head /
 // near-fade / stiffness / mouse filter). Pure module, headless-tested by
 // tests/camera_retail_math.test.cjs. Only consulted behind the default-off
@@ -2489,14 +2490,27 @@ export class CameraSwitcher {
     const onBlur = () => {
       for (const key of Object.keys(this.keys)) this.keys[key] = false;
     };
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("keyup", onKeyUp);
+    // P-unification (2026-07-28): the camera's movement keystate mirror is a
+    // RAW subscriber of the ONE funnel — it is movement input, so it must die
+    // with WASD, not survive it. `?inputFunnelV2=off` restores the standalone
+    // document listeners, byte-identical.
+    if (inputFunnelV2On()) {
+      const funnel = getInputFunnel();
+      this._funnelUnbinds = this._funnelUnbinds || [];
+      this._funnelUnbinds.push(
+        funnel.bindRaw("camera.keystate", onKeyDown, { priority: 90 }),
+        funnel.bindRawUp("camera.keystate", onKeyUp, { priority: 90 }),
+      );
+    } else {
+      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keyup", onKeyUp);
+      this._globalListeners.push(["keydown", onKeyDown, document]);
+      this._globalListeners.push(["keyup", onKeyUp, document]);
+    }
     if (typeof window !== "undefined") {
       window.addEventListener("blur", onBlur);
       this._globalListeners.push(["blur", onBlur, window]);
     }
-    this._globalListeners.push(["keydown", onKeyDown, document]);
-    this._globalListeners.push(["keyup", onKeyUp, document]);
 
     // Wheel zoom for top-down mode.
     if (this.domElement) {
@@ -2540,8 +2554,16 @@ export class CameraSwitcher {
         console.log(`[cameraSwitcher] mode → ${next}`);
       }
     };
-    document.addEventListener("keydown", onKeyDown);
-    this._globalListeners.push(["keydown", onKeyDown, document]);
+    // P-unification (2026-07-28) — the C mode-toggle is a gameplay key.
+    if (inputFunnelV2On()) {
+      this._funnelUnbinds = this._funnelUnbinds || [];
+      this._funnelUnbinds.push(
+        getInputFunnel().bindRaw("camera.modeToggle", onKeyDown, { priority: 80 }),
+      );
+    } else {
+      document.addEventListener("keydown", onKeyDown);
+      this._globalListeners.push(["keydown", onKeyDown, document]);
+    }
   }
 
   // ---- helpers ------------------------------------------------------
@@ -2615,5 +2637,10 @@ export class CameraSwitcher {
     }
     this._listeners = [];
     this._globalListeners = [];
+    // P-unification (2026-07-28) — drop the funnel registrations too.
+    for (const un of this._funnelUnbinds || []) {
+      try { un(); } catch (_) {}
+    }
+    this._funnelUnbinds = [];
   }
 }

@@ -7,6 +7,7 @@ import {
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
+import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { pickSkillLevel, determineSpellRange, decideRangeWarn } from "./spell_range.js";
 import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 
@@ -1416,15 +1417,24 @@ export function setupClickPicking({
       console.warn(`[picking] cancelAttack: ${e?.message ?? e}`);
     }
   }
-  document.addEventListener("keydown", onKeyDownAbortCharge);
-
   // Group C: Esc cancels an in-flight use-on-target selection.
   function onKeyDownCancelUseTarget(ev) {
     if (ev.key === "Escape" && window.__useTargeting?.pending) {
       window.__useTargeting.cancel();
     }
   }
-  document.addEventListener("keydown", onKeyDownCancelUseTarget);
+  // P-unification (2026-07-28): both are gameplay keys (raw-input cancels the
+  // client move + server attack loop; Esc aborts targeting) — they ride the
+  // ONE funnel so they share fate with WASD. `?inputFunnelV2=off` restores the
+  // two standalone document listeners, byte-identical.
+  if (inputFunnelV2On()) {
+    const funnel = getInputFunnel();
+    funnel.bindRaw("picking.abortCharge", onKeyDownAbortCharge, { priority: 50 });
+    funnel.bindRaw("picking.cancelUseTarget", onKeyDownCancelUseTarget, { priority: 50 });
+  } else {
+    document.addEventListener("keydown", onKeyDownAbortCharge);
+    document.addEventListener("keydown", onKeyDownCancelUseTarget);
+  }
 
   // F6-4 — also stop the server attack loop when the target is cleared
   // (explicit deselect, or the target despawning mid-fight). ACE already

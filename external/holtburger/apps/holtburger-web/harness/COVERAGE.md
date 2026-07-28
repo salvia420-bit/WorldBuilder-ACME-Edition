@@ -41,6 +41,7 @@ this group is specifically the JS unit-test leg.
 | Flag | Harness file | Tier | Verifiable now (node)? | What it asserts | composeDeps | constReq |
 |---|---|---|---|---|---|---|
 | `inputFunnel` | `test_a14_i1_input_controller.mjs` | 1 | **YES** | Single `InputController` funnel: one `setMovementInput` boundary + one dedup signature; orbit-suppress policy applied at the funnel. Behavioral + static source-pin. | — | — |
+| `inputFunnelV2` | `test_input_funnel_v2.mjs` | 1 | **YES** | The ONE gameplay-keyboard funnel: one document-capture listener, one gate, one keymap resolution (user rebinds included). **Fault injection both ways (the acceptance criterion): poison the funnel — throw arm AND gate arm — and WASD + Delete + spellbook/hotbar keys all die together; unpoison and all live together.** Plus text-entry deference, ungated keyup, per-consumer error isolation, first-match-wins (kills the pre-existing Delete double-dispatch), `__diag.input()` shape, and source pins on every migrated listener site. | — | — |
 | `hookDrain` | `test_hook_windows.mjs` | 1 | **YES** | AnimationHook time-window open/close math (hook fire windows). | — | — |
 | `hookDrain` | `test_hook_fire_queue.mjs` | 1 | **YES** | AnimationHook fire-queue drain ordering/dedup. | — | — |
 | `surfaceUnified`+`surfaceParityV2` | `test_f7_8_surface_bitfield.mjs` | 1 | **YES** | Surface(0x08) flag→material fold; legacy-cache == unified-cache 70/70 flag×float matrix; parityV2 ClipMap alpha-ref / additive-fog-exempt / InVAlpha-blend (Stage 6). | `surfaceParityV2` requires `surfaceUnified` | — |

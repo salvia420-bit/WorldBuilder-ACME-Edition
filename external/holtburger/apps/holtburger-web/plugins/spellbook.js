@@ -74,6 +74,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
+import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { getIconImmediate } from "../ui/ac_icon_cache.js";
 
@@ -1607,7 +1608,27 @@ function doMount(parentEl, ctx) {
     if (tag === "INPUT" || tag === "TEXTAREA") return;
     forgetSelected();
   }
-  window.addEventListener("keydown", onDeleteKey);
+  // P-unification (2026-07-28): the forget-spell key is an ACTION on the ONE
+  // funnel — same gate as WASD. `when` = a row is selected in this mounted
+  // panel; priority 10 puts it ahead of combat-bar's MagicCombat "Previous
+  // Spell" (both default to Delete). Pre-funnel BOTH listeners fired on a
+  // single Delete press when the panel was open in magic stance with a row
+  // selected — a latent double-dispatch the first-match-wins funnel removes.
+  let unbindDeleteKey = null;
+  if (inputFunnelV2On()) {
+    unbindDeleteKey = getInputFunnel().bindAction(
+      LOCAL_ACTION_IDS.DELETE_SPELL,
+      "Delete",
+      onDeleteKey,
+      {
+        when: () => !!selectedRowId,
+        priority: 10,
+        source: "spellbook",
+      },
+    );
+  } else {
+    window.addEventListener("keydown", onDeleteKey);
+  }
   actionBtnEl.addEventListener("click", () => {
     if (actionBtnEl.disabled) return;
     forgetSelected();
@@ -1630,7 +1651,8 @@ function doMount(parentEl, ctx) {
       client.events.off("playerStatsUpdated", statsHandler);
     }
     window.removeEventListener("hb-spellbar-changed", spellbarHandler);
-    window.removeEventListener("keydown", onDeleteKey);
+    if (unbindDeleteKey) unbindDeleteKey();
+    else window.removeEventListener("keydown", onDeleteKey);
     window.removeEventListener("mousedown", onPopoverMouseDown, true);
     window.removeEventListener("keydown", onPopoverEsc);
     listEl.removeEventListener("scroll", onListScroll);

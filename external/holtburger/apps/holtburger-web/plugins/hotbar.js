@@ -39,6 +39,7 @@
 // (armed-spell + selected-target) vs ItemHolder::UseObject(itemID).
 
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
+import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import {
   attachFloatyFrame,
@@ -1044,7 +1045,40 @@ export function mount(ctx) {
       }
     }
   }
-  window.addEventListener("keydown", onKey);
+  // P-unification (2026-07-28): each quickslot is its own ACTION on the ONE
+  // funnel (rebindable via Options → Controls, per-slot dispatch counters in
+  // `__diag.input()`), sharing WASD's gate. The retail per-mode input-map
+  // partition survives as the action's `when`: in MAGIC stance a digit
+  // binding yields to combat-bar's `UseSpellSlot_N`. `?inputFunnelV2=off`
+  // restores the single legacy listener, byte-identical.
+  if (inputFunnelV2On()) {
+    const funnel = getInputFunnel();
+    const notDigitInMagic = (id, def) => () => {
+      const b = resolveLocalBinding(id, def);
+      if (!b || !b.code) return false;
+      if (!/^Digit[1-9]$/.test(b.code)) return true;
+      try { return window.__getCurrentStanceLow?.() !== 0x49; } catch (_) { return true; }
+    };
+    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
+      const id = LOCAL_ACTION_IDS[`HOTBAR_${slot}`];
+      const def = `Digit${slot}`;
+      const idx = slot - 1;
+      funnel.bindAction(id, def, () => fireSlot(idx), {
+        when: notDigitInMagic(id, def),
+        source: "hotbar",
+      });
+    }
+    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
+      const id = LOCAL_ACTION_IDS[`HOTBAR_R2_${slot}`];
+      const idx = SLOTS_PER_ROW + slot - 1;
+      funnel.bindAction(id, null, () => fireSlot(idx), {
+        when: notDigitInMagic(id, null),
+        source: "hotbar",
+      });
+    }
+  } else {
+    window.addEventListener("keydown", onKey);
+  }
 
   // P1-6 follow-up #2 (task #18): reconcile localStorage cache with the
   // server's authoritative shortcut state once PlayerDescription lands.

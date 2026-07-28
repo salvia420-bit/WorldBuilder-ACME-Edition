@@ -70,6 +70,7 @@ const APP_ROOT = path.resolve(HERE, "..");
 // ---------------------------------------------------------------------------
 const TIER1 = [
   { flag: "inputFunnel", file: "test_a14_i1_input_controller.mjs" },
+  { flag: "inputFunnelV2", file: "test_input_funnel_v2.mjs" },
   { flag: "hookDrain", file: "test_hook_windows.mjs" },
   { flag: "hookDrain", file: "test_hook_fire_queue.mjs" },
   { flag: "surfaceUnified+surfaceParityV2", file: "test_f7_8_surface_bitfield.mjs" },

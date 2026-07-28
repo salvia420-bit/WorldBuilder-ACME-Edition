@@ -274,14 +274,26 @@ check("camera.js keeps the legacy direct call on the else (flag-off) branch",
 
 // I1 must NOT touch the synthetic-mover (picking.js) call sites — that is I2,
 // and it must not regress the shipped F6-6 charge-pursuit lockout fix.
+// NOTE (P-unification, 2026-07-28): picking.js now imports `getInputFunnel` /
+// `inputFunnelV2On` from ui/input-funnel.js — that is the LISTENER funnel
+// (which document keydown owns the attack-abort / cancel-use-target handlers),
+// a different axis from A14-I1's MOVEMENT funnel. The I2 pin below is
+// therefore narrowed to what it was actually asserting: picking.js still owns
+// its synthetic `setMovementInput` movers and does NOT route them through the
+// A14-I1 `InputController`.
 check("picking.js synthetic-mover setMovementInput call sites are UNCHANGED (Stage I2)",
   /chargeTick/.test(picking) &&
   (picking.match(/setMovementInput/g) || []).length >= 4 &&
-  !/getInputController/.test(picking) && !/inputFunnel/.test(picking));
+  !/getInputController/.test(picking) && !/readInputFunnelFlag/.test(picking));
 
-// Flag default-off discipline.
-check("readInputFunnelFlag default is off (no param → false)",
-  readInputFunnelFlag("") === false &&
+// Flag discipline. STALE-ASSERTION FIX (2026-07-28): this used to assert
+// default-OFF, but `inputFunnel` was promoted to DEFAULT-ON in the 2026-07-12
+// unified-const block (url-flags.md:281 — reader `?.toLowerCase() !== "off"`,
+// `=off` is the escape). The reader has been `!== "off"` in scene3d/input.js
+// since that promotion; only this assertion was never updated, so it has been
+// failing red for its own reason. Assert the documented contract instead.
+check("readInputFunnelFlag is default-ON with an `=off` escape",
+  readInputFunnelFlag("") === true &&
   readInputFunnelFlag("?inputFunnel=off") === false &&
   readInputFunnelFlag("?inputFunnel=on") === true);
 

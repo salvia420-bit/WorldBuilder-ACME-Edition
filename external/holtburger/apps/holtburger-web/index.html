@@ -1377,6 +1377,16 @@
         matchesBinding as __matchesKeyBinding,
         LOCAL_ACTION_IDS as __LOCAL_ACTION_IDS,
       } from "./ui/keymap.js";
+      // P-unification (2026-07-28) — the ONE gameplay keyboard funnel.
+      // `?inputFunnelV2=off` restores every legacy per-site listener.
+      // See ui/input-funnel.js for the listener census this replaces.
+      import {
+        getInputFunnel as __getInputFunnel,
+        inputFunnelV2On as __inputFunnelV2On,
+      } from "./ui/input-funnel.js";
+      const __INPUT_FUNNEL_V2 = __inputFunnelV2On();
+      const __inputFunnel = __getInputFunnel();
+      if (__INPUT_FUNNEL_V2) __inputFunnel.install();
       import * as spellbookPlugin from "./plugins/spellbook.js";
       import * as inventoryPlugin from "./plugins/inventory.js";
       import * as examineTargetPlugin from "./plugins/examine-target.js";
@@ -6765,6 +6775,17 @@
             } catch (_) { /* never break input wiring on the funnel */ }
           }
 
+          // P-unification (2026-07-28) — the SAME condition is now THE ONE
+          // GATE for every gameplay key, not just the movement axes. The
+          // funnel applies it once at its single document-capture listener;
+          // combat-bar / spellbook / hotbar / picking / camera all dispatch
+          // from inside it, so they share fate with WASD by construction.
+          if (__INPUT_FUNNEL_V2) {
+            try {
+              __inputFunnel.setGate(() => enteredWorld && !isTypingInForm());
+            } catch (_) { /* never break input wiring on the funnel */ }
+          }
+
           // Wave 7.2 (2026-05-26) — jump-charge power meter. Pairs
           // with the variable-power spacebar handler below: keydown
           // calls show(); a rAF loop reads `__jumpKeydownTs` each frame
@@ -6982,8 +7003,14 @@
               );
             }
           };
-          document.addEventListener("keydown", (ev) => {
-            if (!enteredWorld || isTypingInForm()) return;
+          // P-unification (2026-07-28): the gameplay keystate handler is now a
+          // RAW subscriber of the ONE funnel instead of its own document
+          // listener with its own inline gate. The gate condition is
+          // unchanged — it just lives at the funnel now, shared with every
+          // other gameplay key. `?inputFunnelV2=off` re-registers the legacy
+          // listener with the inline gate, byte-identical.
+          const __gameplayKeyDown = (ev) => {
+            if (!__INPUT_FUNNEL_V2 && (!enteredWorld || isTypingInForm())) return;
             const k = ev.key.toLowerCase();
             if (movementKeys.has(k)) {
               // FU7 — stamp the press order on the EDGE only (held-key
@@ -7186,8 +7213,17 @@
               }
               ev.preventDefault();
             }
-          });
-          document.addEventListener("keyup", (ev) => {
+          };
+          if (__INPUT_FUNNEL_V2) {
+            // priority 100 — the movement keystate runs before every other
+            // raw subscriber (camera mirror, attack-abort watcher).
+            __inputFunnel.bindRaw("index.gameplay", __gameplayKeyDown, {
+              priority: 100,
+            });
+          } else {
+            document.addEventListener("keydown", __gameplayKeyDown);
+          }
+          const __gameplayKeyUp = (ev) => {
             // Don't gate keyup on enteredWorld — if the user was
             // holding a key when the gate flipped or if focus moved to
             // a form mid-press, we still want to clear the keystate
@@ -7273,7 +7309,14 @@
               }
               fireLocalJumpPrediction();
             }
-          });
+          };
+          if (__INPUT_FUNNEL_V2) {
+            __inputFunnel.bindRawUp("index.gameplay", __gameplayKeyUp, {
+              priority: 100,
+            });
+          } else {
+            document.addEventListener("keyup", __gameplayKeyUp);
+          }
           // Clear keystate if the page loses focus mid-press — Chrome
           // suppresses keyup events for some modifier combos when the
           // window blurs, which would leave the player walking forever.
@@ -7538,8 +7581,25 @@
               lastInputSig: window.__lastInputSig ?? null,
               rafTicks: window.__rafTickCount ?? null,
               evtGuard: window.__evtGuardStats,
+              inputFunnel: window.__inputFunnel?.snapshot?.() ?? null,
             };
           };
+          // P-unification (2026-07-28) — the ONE input surface.
+          // `__diag.input()` → gate state, registered action/raw counts, last
+          // dispatch, per-action counters. Fault-injection seam for the
+          // shared-fate proof:
+          //   __diag.input.poison("throw")  → WASD + Delete + spellbook keys
+          //                                   all die together
+          //   __diag.input.poison("gate")   → same, via the ONE gate
+          //   __diag.input.unpoison()       → all live together
+          // (keymap.js optionally calls `__diag.input.onRebind` / `.onStorageError`
+          // — undefined here, so those stay no-ops; a function may carry props.)
+          window.__diag.input = () =>
+            window.__inputFunnel?.snapshot?.() ?? { v2: __INPUT_FUNNEL_V2, installed: false };
+          window.__diag.input.poison = (mode) =>
+            window.__inputFunnel?.poison?.(mode) ?? null;
+          window.__diag.input.unpoison = () =>
+            window.__inputFunnel?.unpoison?.() ?? null;
           function pumpNetFrame() {
             // Heartbeat for the O4-c watchdog: stamped on EVERY pump run
             // regardless of which driver (2D rAF, 3D tickPerFrame phase

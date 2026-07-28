@@ -126,6 +126,7 @@ import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 // the loader's createEatableBus — its first real consumers). Exposed as
 // client.chat.hooks below; index.html emits into them at the two retail
 // plumbing points (kind=2 drain / chat-form submit).
+import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { chatHooks } from "./chat-hooks.js";
 // P6.1 promotion (2026-07-28): the ONE facade substrate. `createClient`
 // constructs exactly one RynthWebHost and expresses every namespace below
@@ -433,6 +434,26 @@ export { WorldState, bindWorldStateToClient } from './world-state.js';
  */
 export function createClient(sessionHandle, opts = {}) {
   const bus = new EventTarget();
+
+  // P-unification (2026-07-28) — the ONE gameplay keyboard funnel, exposed on
+  // the facade so plugins register actions instead of installing their own
+  // listener + their own gate (the structural cause of "WASD works but Delete
+  // is dead"). See ui/input-funnel.js.
+  const funnel = getInputFunnel();
+  const input = Object.freeze({
+    bindAction: (labelHash, defaultBinding, handler, o) =>
+      funnel.bindAction(labelHash, defaultBinding, handler, o),
+    bindRaw: (name, handler, o) => funnel.bindRaw(name, handler, o),
+    bindRawUp: (name, handler, o) => funnel.bindRawUp(name, handler, o),
+    /** The ONE gate — true iff gameplay keys are live right now. */
+    gateOpen: () => funnel.gateOpen(),
+    /** `__diag.input()` payload: gate, counts, last dispatch, per-action. */
+    snapshot: () => funnel.snapshot(),
+    /** True when the funnel owns dispatch (`?inputFunnelV2=off` → false). */
+    get enabled() {
+      return inputFunnelV2On();
+    },
+  });
 
   // The one facade substrate. Capability probing happens here, once.
   const host = new RynthWebHost(sessionHandle, opts.host || {});
@@ -959,6 +980,18 @@ export function createClient(sessionHandle, opts = {}) {
     sky,
     selection,
     ui,
+    // P-unification (2026-07-28) — the ONE gameplay-input registration
+    // surface. Plugins REGISTER actions/raw subscribers here instead of
+    // adding their own `keydown` listener with their own gate; the funnel
+    // owns the single document-capture listener, the single in-world gate,
+    // and the single keymap resolution (user rebinds included).
+    //
+    //   client.input.bindAction(labelHash, defaultCode, fn, { when, priority })
+    //   client.input.bindRaw(name, fn)          // every gated keydown
+    //   client.input.bindRawUp(name, fn)        // every keyup (ungated)
+    //
+    // All three return an `unbind()` to call from the plugin's cleanup.
+    input,
     events: Object.freeze(events),
     AttackHeight,
     CombatMode,
