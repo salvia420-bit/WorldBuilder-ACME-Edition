@@ -1655,3 +1655,42 @@ fallback walked saved x left ~160 px per reload; reproduced, now PASS.
 Validation: per-pane drag persistence, poke states, agent-mode all three
 (+ defs SVG in the exclusion list), flag-off = bars with zero residue, 0
 console errors every arm.
+
+---
+
+## Combat standoffs radius-aware — melee no longer drags the player inside large monsters (2026-07-28, Opus agent L, `26b66fc5`)
+
+Root cause (orchestrator investigation, agent-confirmed): retail sticky
+standoff is `dist − my_r − target_r − 0.3` with radii from
+`CPartArray::GetRadius/GetHeight` (acclient.c:325382-325391 =
+`setup->radius/height × scale.z` — the RAW CSetup fields × wire obj_scale,
+a DIFFERENT quantity from ACE's cyl-sphere GetPhysicsRadius);
+`MoveToManager::GetCurrentDistance` (:344856-344893) folds both radii via
+`cylinder_distance` (edge-based arrival). Our port hard-wired both radii
+0.0 → player glued 0.3 m from the target's CENTER regardless of size;
+latent until 64f9c4d9's idle-sticky step made standing attacks pull.
+
+TWO PRE-EXISTING DEAD PATHS repaired (invisible without counters):
+(1) the Setup cache staged only from `fetch_entity_model_render`, which
+scene3d NO LONGER CALLS (live path `fetchEntityAnimationKeyframes`) —
+`setup_radii` was empty for every creature; (2) `Entity::gfx_id` is NEVER
+ASSIGNED outside unit tests — `entity_collision_radius` returned its 0.4
+default for every live entity since it landed. New `entity_setup_did`
+resolves the wire csetup_id (PropertyDataId::Setup). FALSE-CONSTANT DOC
+fixed: the player's real CPartArray radius is 0.6788225 (Setup 0x02000001
+.radius), not the hand-tuned PLAYER_CAPSULE_RADIUS 0.4 whose comment
+claimed to be it; new PLAYER_PART_RADIUS/_HEIGHT carry the real pair.
+
+Live A/B vs ACE (8 samples each): Tusker Guard (r 1.409×1.0) predicted
+2.387 → ON **2.388**; Shadow Child (0.679×scale 0.5) predicted 1.318 → ON
+**1.318** (independently validates the ×scale.z term — shares the player's
+Setup, ACE DefaultScale 0.5); `=off` reproduces 0.300 both. Counters
+[evals,resolved,enabled] = [82,18,1] on / [144,0,0] off. Flag
+`?combatRadii=off` default ON. Tests 647+620+220 green; release wasm
+shipped.
+
+RESIDUALS: (1) **`entity_physics_bsp` still reads the dead `gfx_id` — the
+COL-03 entity-BSP door arm has likely NEVER engaged live** (filed);
+(2) player scale assumed 1.0 (setter unused); (3) stick_to height param
+unported (inert — standoff is planar, z zeroed); (4) 1070/R9-290 eye-test
+batched with serverMoveToDriver/stickyIdleStep.
