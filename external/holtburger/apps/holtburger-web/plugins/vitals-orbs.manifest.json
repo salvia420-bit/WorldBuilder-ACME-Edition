@@ -1,0 +1,15 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "vitals-orbs",
+  "name": "Vitals Orbs",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Empyrean Relief vitals orbs (?vitalsOrbs=on; replaces the bars)",
+  "icon": "🔮",
+  "iconHidden": true,
+  "entry": "./vitals-orbs.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"],
+  "clientApi": "^1.0",
+  "capabilities": ["GetPlayerStats", "GetEnchantments"]
+}

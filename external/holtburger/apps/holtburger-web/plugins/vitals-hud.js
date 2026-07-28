@@ -35,6 +35,16 @@
 //   0x100004A9 — fill marker    (varies; retail's "cursor" inside
 //                                the meter, x/w differs per bar)
 
+// === 2026-07-28 — mutual exclusion with the orb HUD ===
+// `plugins/vitals-orbs.js` renders the same three vitals as the
+// accepted "Empyrean Relief" liquid-orb concept. Exactly one vitals
+// presentation may be in the DOM, so both plugins read ONE selector
+// (`isVitalsOrbsActive()`, the strict `?vitalsOrbs=on` opt-in) and the
+// loser returns a no-op unmount from `mount()`. Importing the reader
+// rather than re-deriving the flag here is deliberate: two copies of a
+// flag check is how the two HUDs end up both-on or both-off. The import
+// is side-effect-free — vitals-orbs.js touches no DOM until mount().
+import { isVitalsOrbsActive } from "./vitals-orbs.js";
 import { applyLayoutRegions } from "../ui/ac_layout.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 
@@ -401,6 +411,12 @@ export const manifest = {
 };
 
 export function mount(ctx) {
+  // `?vitalsOrbs=on` hands the vitals slot to plugins/vitals-orbs.js.
+  // Return before ensureStyles() so not even the bar stylesheet is
+  // injected — the orb arm must be a clean room, and the flag-off arm
+  // must be byte-identical to the pre-orb client.
+  if (isVitalsOrbsActive()) return () => {};
+
   ensureStyles();
   const existing = document.getElementById(OVERLAY_ID);
   if (existing) existing.remove();

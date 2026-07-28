@@ -456,7 +456,12 @@
          (incl. the 1070 desktop shortcut) could ever see the spell
          panel it just clicked open. Panels only exist after an explicit
          icon click, so headless perf agents are unaffected. */
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip):not(.hb-panel):not(#hb-spell-strip):not(#hb-thought-overlay) { display: none !important; }
+      /* `#hb-vitals-orbs` joined the exclusion list 2026-07-28: the
+         Empyrean Relief orb HUD (?vitalsOrbs=on) is the vitals surface
+         when it is on, and autoLogin=1 implies agent-mode — without the
+         exemption every auto-logged-in session (incl. the eye-test
+         shortcut) would show NO vitals at all. */
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(#hb-vitals-orbs):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip):not(.hb-panel):not(#hb-spell-strip):not(#hb-thought-overlay) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -1571,7 +1576,12 @@
       };
 
       const BAR_SLOT_ORDER = [
-        "vitals-hud", "buffs-hud", "target-bar", "combat-hud", "sneak-hud",
+        // vitals-orbs sits next to vitals-hud because they are mutually
+        // exclusive (?vitalsOrbs=on) — whichever loses the flag mounts a
+        // no-op, so listing both here costs nothing and keeps the mount
+        // order deterministic instead of relying on the append-at-end
+        // fallback for unlisted candidate slots.
+        "vitals-hud", "vitals-orbs", "buffs-hud", "target-bar", "combat-hud", "sneak-hud",
         "radar", "chat-panel", "status-indicators", "hotbar", "main-panel",
         "dye-preview", "examine-target-watcher",
         // (rynthsuite + fullscreen ad-hoc slots get spliced here)

@@ -671,4 +671,10 @@ export const WINDOW_ID = Object.freeze({
   // collide with real layout DIDs. Swap to the real value once
   // gmEffectsUI's layout is parsed.
   BUFFS:             0xFFFF0001, // gmEffectsUI (synthetic — TODO swap)
+  // The "Empyrean Relief" orb HUD (plugins/vitals-orbs.js, ?vitalsOrbs=on)
+  // is an original composition with no retail layout behind it, so it
+  // takes the next synthetic id rather than borrowing VITALS' —
+  // sharing would make the two presentations fight over one saved
+  // position at very different box sizes.
+  VITALS_ORBS:       0xFFFF0002, // vitals-orbs (synthetic — no retail layout)
 });
