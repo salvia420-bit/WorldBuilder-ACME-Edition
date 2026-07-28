@@ -488,6 +488,26 @@ fn parse_building_overlap_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "buildingOverlap=off")
 }
 
+/// COL-27 (2026-07-28) — the INDOOR twin of `?buildingOverlap`. DEFAULT-ON,
+/// off-escape: returns `true` UNLESS `envcellStaticOverlap=off` is present.
+///
+/// ON: an ENVCELL static's physics BSP is registered into every envcell of its
+/// landblock whose AABB it overlaps, matching retail's
+/// `CPhysicsObj::calc_cross_cells_static` → `add_shadows_to_cells`
+/// (acclient.c:322405 / :321978) — `CObjCell::find_obj_collisions` sweeps the
+/// cell's SHADOW list, not an authoring-cell list.
+///
+/// OFF: the pre-fix owning-cell-only registration — the live walk-through
+/// repro (Holtburg Meeting Hall `0x0125`, cell `0x0125010E`, walk south:
+/// the grand staircase's ramp is authored in `0x0125010F` but starts 5.8 m
+/// inside `0x0125010E`, so the mover crosses it at floor level and hard-stops
+/// on the cell boundary at y = -34.5 instead of climbing to z = 6).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_envcell_static_overlap_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "envcellStaticOverlap=off")
+}
+
 /// 0x02 multi-part building per-part physics-BSP staging (companion to the
 /// 0x01 building BSP). DEFAULT-ON, off-escape: returns `true` UNLESS
 /// `buildingBsp02=off` is present. CAVEAT (not yet eye-tested): a multi-part
@@ -15351,6 +15371,19 @@ thread_local! {
         std::cell::RefCell<std::collections::HashSet<u32>> =
             std::cell::RefCell::new(std::collections::HashSet::new());
 
+    /// COL-27 (2026-07-28): landblocks queued for the INDOOR envcell-static
+    /// overlap bake (`SpatialScene::bake_envcell_static_overlap_for_landblock`).
+    /// Enqueued by `drain_pending_cell_static_bsps_into` for every landblock
+    /// whose ENVCELL statics just landed, and drained in the `TickMovement` arm
+    /// AFTER the cell-AABB drain so the bake sees this landblock's full set of
+    /// cell volumes. The bake is idempotent (clear + rebuild from
+    /// `envcell_statics_source`), so a landblock that loads its cells across
+    /// several ticks simply re-bakes and converges. HashSet for idempotent
+    /// enqueue (non-const init — `HashSet::new` isn't `const`).
+    static ENVCELL_OVERLAP_BAKE_PENDING:
+        std::cell::RefCell<std::collections::HashSet<u32>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
+
     /// Workstream Sky-B (parametric skybox, 2026-05-11): thread-local
     /// holding the parsed SkyDesc + GameTime + per-frame evaluator
     /// state. Populated once per session by `populateSkyDescFromRegion`
@@ -15764,9 +15797,54 @@ fn drain_pending_cell_static_bsps_into(scene: &mut holtburger_world::SpatialScen
         let mut buf = cell.borrow_mut();
         let count = buf.len();
         for (cell_id, bsp) in buf.drain(..) {
+            // COL-27 (2026-07-28): queue this landblock for the envcell-static
+            // overlap bake. Enqueued for ENVCELL ids only — outdoor cell ids
+            // arriving on this feed belong to the WS7 outdoor bake.
+            if (cell_id & 0xFFFF) >= 0x100 {
+                ENVCELL_OVERLAP_BAKE_PENDING.with(|c| {
+                    c.borrow_mut().insert(cell_id & 0xFFFF_0000);
+                });
+            }
             scene.insert_cell_static_physics_bsp(cell_id, bsp);
         }
         count
+    })
+}
+
+/// COL-27 (2026-07-28): the INDOOR twin of
+/// `drain_pending_outdoor_overlap_bakes_into`. For each queued landblock, run
+/// `SpatialScene::bake_envcell_static_overlap_for_landblock` so every ENVCELL
+/// static is testable from every envcell its geometry actually reaches —
+/// retail's `calc_cross_cells_static` → `add_shadows_to_cells` shadow
+/// registration (acclient.c:322405 / :321978), which is what
+/// `CObjCell::find_obj_collisions` (acclient.c:347142) sweeps.
+///
+/// Must run in the `TickMovement` arm AFTER `drain_pending_cell_graph_into`
+/// (cell AABBs) and `drain_pending_cell_static_bsps_into` (the statics) so the
+/// bake sees both. The bake is idempotent, so the queue is drained
+/// unconditionally — a landblock whose cells arrive across several ticks
+/// re-bakes on the tick its statics land and converges then.
+///
+/// The flag is read lazily (only when there is pending work) and mirrors
+/// `parse_envcell_static_overlap_flag`. Returns
+/// `(landblocks_baked, registrations_made)`.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_envcell_overlap_bakes_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> (usize, usize) {
+    ENVCELL_OVERLAP_BAKE_PENDING.with(|c| {
+        let mut set = c.borrow_mut();
+        if set.is_empty() {
+            return (0, 0);
+        }
+        let overlap_enabled = parse_envcell_static_overlap_flag(&flag_search());
+        let mut baked = 0usize;
+        let mut registrations = 0usize;
+        for lb in set.drain() {
+            registrations += scene.bake_envcell_static_overlap_for_landblock(lb, overlap_enabled);
+            baked += 1;
+        }
+        (baked, registrations)
     })
 }
 
@@ -34403,7 +34481,7 @@ impl SessionHandle {
     pub fn collision_residency_diag(&self) -> String {
         let scene = self.collision_scene.borrow();
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             scene.building_aabb_count(),
             scene.static_aabb_count(),
             scene.static_physics_bsp_count(),
@@ -34424,6 +34502,9 @@ impl SessionHandle {
             // TIER-3 (2026-07-28) APPENDED (18th) — the WORLD-frame terrain
             // contact-plane arm's unconditional reachability counter.
             scene.terrain_plane_frame_arm_eval_count(),
+            // COL-27 (2026-07-28) APPENDED (19th) — the INDOOR envcell-static
+            // overlap bake's unconditional reachability counter.
+            scene.envcell_static_overlap_arm_eval_count(),
         )
     }
 
@@ -50696,6 +50777,21 @@ async fn recv_loop(
                             console_log_str(&format!(
                                 "[bsp] baked {outdoor_static_regs} outdoor cell STATIC physics BSPs \
                                  across {outdoor_lbs_baked} landblock(s) ({} total)",
+                                w.scene.cell_static_physics_bsp_count(),
+                            ));
+                        }
+                        // COL-27 (2026-07-28): the INDOOR twin. Runs AFTER the
+                        // cell-AABB drain (above) and the indoor static drain so
+                        // the bake sees every envcell volume of the landblock
+                        // whose statics just landed. Fixes statics whose geometry
+                        // spills out of the cell they are authored in — the
+                        // Holtburg Meeting Hall staircase walk-through.
+                        let (envcell_lbs_baked, envcell_static_regs) =
+                            drain_pending_envcell_overlap_bakes_into(&mut w.scene);
+                        if envcell_lbs_baked > 0 {
+                            console_log_str(&format!(
+                                "[bsp] baked {envcell_static_regs} envcell STATIC physics BSP \
+                                 registrations across {envcell_lbs_baked} landblock(s) ({} total)",
                                 w.scene.cell_static_physics_bsp_count(),
                             ));
                         }

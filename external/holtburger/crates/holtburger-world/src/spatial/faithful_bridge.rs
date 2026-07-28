@@ -3639,6 +3639,152 @@ mod drift {
         assert_in_cell_aabb(&env, &with);
     }
 
+    // COL-27 (2026-07-28) — a static whose geometry OVERHANGS the cell it is
+    // authored in must still be collided from the cell it reaches into.
+    //
+    // Live repro this encodes (Holtburg Meeting Hall `0x0125`): the grand
+    // staircase (Setup `0x02000623` / GfxObj `0x0100189E`) is authored in EnvCell
+    // `0x0125010F`, but its ramp starts 5.8 m NORTH of that cell — inside
+    // `0x0125010E`. The player walking south from `0x0125010E` crossed the whole
+    // overhang at floor level (z stayed 0.00 from y=-29.1 to y=-34.4, where the
+    // ramp surface is already ≈2.7 m up) and then hard-stopped on the cell
+    // boundary. The side stairs (`0x02000621`/`0x02000622`), whose ramps start
+    // flush with their own cell edge, always worked — same step-up chain,
+    // different registration. Retail has no such asymmetry:
+    // `CPhysicsObj::calc_cross_cells_static` (acclient.c:322405) derives the
+    // static's OWN cell list from its bbox and `add_shadows_to_cells`
+    // (acclient.c:321978) registers a shadow in EVERY spanned cell, which is what
+    // `CObjCell::find_obj_collisions` (acclient.c:347142) sweeps.
+    //
+    // Here: a walkable RAMP (dz/dx = 0.25 ⇒ N.z = 0.970 ≫ FloorZ) authored in
+    // neighbour cell `NB_ID`, whose base overhangs 6 m back into `CELL_ID`.
+    // NO portal edge is inserted, so `NB_ID` is never flooded into the ring —
+    // the ONLY way the ramp can be tested is the overlap bake. Bake ON ⇒ the
+    // mover climbs; bake OFF ⇒ it walks straight through at floor level.
+    #[test]
+    fn envcell_static_overhang_ramp_climbs_only_with_overlap_bake() {
+        const NB_ID: u32 = 0x1234_0101; // same landblock, neighbour cell (no portal)
+        let o = cell_origin();
+        // Ramp in WORLD coords (identity frame ⇒ cell-local == world), rising in
+        // +x from the floor height at world x = o.x + 2 to +3 m at o.x + 14.
+        let ramp_x0 = o.x + 2.0;
+        let ramp_x1 = o.x + 14.0;
+        fn ramp_bsp(x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32) -> CellPhysicsBsp {
+            let mut polys = HashMap::new();
+            polys.insert(
+                1u16,
+                poly(vec![
+                    v(x0, y0, z0),
+                    v(x1, y0, z1),
+                    v(x1, y1, z1),
+                    v(x0, y1, z0),
+                ]),
+            );
+            CellPhysicsBsp {
+                tree: one_leaf(&polys),
+                polys,
+                origin: Vector3::zero(),
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+            }
+        }
+        let build = |overlap: bool| -> DriftEnv {
+            let mut scene = SpatialScene::new();
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            // The neighbour cell's own volume sits entirely EAST of CELL_ID.
+            scene.insert_cell_aabb(
+                NB_ID,
+                Aabb::new(
+                    v(o.x + HE, o.y - HE, FLOOR_WZ - 0.5),
+                    v(o.x + 3.0 * HE, o.y + HE, FLOOR_WZ + 10.0),
+                ),
+            );
+            // The ramp is AUTHORED in NB_ID but overhangs 6 m into CELL_ID.
+            scene.insert_cell_static_physics_bsp(
+                NB_ID,
+                ramp_bsp(
+                    ramp_x0,
+                    ramp_x1,
+                    o.y - HE,
+                    o.y + HE,
+                    FLOOR_WZ,
+                    FLOOR_WZ + 3.0,
+                ),
+            );
+            scene.bake_envcell_static_overlap_for_landblock(LB_ID, overlap);
+            DriftEnv { scene }
+        };
+
+        // INDEX proof: ON registers into home + the overhung neighbour; OFF is
+        // home-only; a re-bake is idempotent.
+        let on_env = build(true);
+        let off_env = build(false);
+        assert_eq!(
+            on_env.scene.cell_static_physics_bsp(NB_ID).len(),
+            1,
+            "ON: the authoring cell always holds the static"
+        );
+        assert_eq!(
+            on_env.scene.cell_static_physics_bsp(CELL_ID).len(),
+            1,
+            "ON: the OVERHUNG cell also holds the static (the fix)"
+        );
+        assert_eq!(
+            off_env.scene.cell_static_physics_bsp(CELL_ID).len(),
+            0,
+            "OFF: the overhung cell is EMPTY (the walk-through repro)"
+        );
+        let mut idem = build(true);
+        idem.scene
+            .bake_envcell_static_overlap_for_landblock(LB_ID, true);
+        assert_eq!(
+            idem.scene.cell_static_physics_bsp(CELL_ID).len(),
+            1,
+            "re-bake must not double-register"
+        );
+        assert!(
+            idem.scene.envcell_static_overlap_arm_eval_count() >= 2,
+            "the reachability counter bumps once per bake, outside the gate"
+        );
+
+        // DRIFT proof: walk +x from the floor centre across the ramp base.
+        let flat = |_x: f32| FLOOR_WZ;
+        let start = pose_at(FCX, FCY, FLOOR_WZ);
+        let on_last = *frame_walk(&on_env, start, 0.3, flat, 20, true).last().unwrap();
+        let off_last = *frame_walk(&off_env, start, 0.3, flat, 20, true)
+            .last()
+            .unwrap();
+        eprintln!(
+            "[col-27] ramp base local x={:.1}  ON  x={:.3} z={:.3}   OFF x={:.3} z={:.3}",
+            ramp_x0 - LB_BASE_X,
+            on_last.coords.x,
+            on_last.coords.z,
+            off_last.coords.x,
+            off_last.coords.z
+        );
+        assert!(
+            on_last.coords.z > FLOOR_WZ + 0.5,
+            "overlap ON: the mover must CLIMB the overhanging ramp (z={})",
+            on_last.coords.z
+        );
+        assert!(
+            off_last.coords.z <= FLOOR_WZ + 0.05,
+            "overlap OFF: the mover walks THROUGH the ramp at floor level (z={})",
+            off_last.coords.z
+        );
+        assert!(
+            on_last.coords.x > FCX + 1.0,
+            "overlap ON: the mover must still advance along the ramp (x={})",
+            on_last.coords.x
+        );
+    }
+
     /// Phase E3.4: per-static SCALE. The same static wall (local x=WALL_X_LOCAL)
     /// collides at its SCALED world position — a scale-2 static stops the mover
     /// ~2× farther than a scale-1 one. Retail caches the sweep into the part's

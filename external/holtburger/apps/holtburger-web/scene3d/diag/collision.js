@@ -96,6 +96,13 @@ const RESIDENCY_FIELDS = [
   // once per faithful transition slice OUTSIDE the gate: nonzero after any
   // outdoor movement means the arm is on the LIVE path.
   "terrainPlaneFrameArmEvals",
+  // COL-27 (2026-07-28) — same contract for the INDOOR envcell-static overlap
+  // bake (`?envcellStaticOverlap`), the fix for statics whose geometry spills
+  // out of the cell they are authored in (Holtburg Meeting Hall's grand
+  // staircase: the player walked THROUGH the flight). Bumped once per
+  // per-landblock bake OUTSIDE the gate: nonzero after entering any dungeon
+  // means the bake is on the LIVE path.
+  "envcellStaticOverlapArmEvals",
 ];
 
 function _hbWasm() {
@@ -275,6 +282,8 @@ export function attachCollision(diag) {
         sceneryNarrowHits: residency?.sceneryNarrowHits ?? null,
         sceneryArmEvals: residency?.sceneryArmEvals ?? null,
         terrainPlaneFrameArmEvals: residency?.terrainPlaneFrameArmEvals ?? null,
+        envcellStaticOverlapArmEvals:
+          residency?.envcellStaticOverlapArmEvals ?? null,
         verdict: out.ok ? "PASS" : "DRIFT",
       };
       this.lastResult = out;

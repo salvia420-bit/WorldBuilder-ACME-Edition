@@ -33,6 +33,29 @@ use web_time::Instant;
 /// layer ever converges the avatar. Retained for A/B comparison.
 const USE_LOCAL_FORCE_POSITION_CONSTRAINT: bool = true;
 
+/// COL-27 (2026-07-28): is `cell_id` an ENVCELL (indoor) id? Outdoor land cells
+/// occupy the low words `1..=64` (an 8x8 grid per landblock); everything from
+/// `0x0100` up is an EnvCell stab, exactly the split retail's
+/// `CellManager::UpdateLoadPoint` keys on (`(u16)objcell_id < 0x100`).
+#[inline]
+pub(crate) fn is_envcell_id(cell_id: u32) -> bool {
+    (cell_id & 0xFFFF) >= 0x100
+}
+
+/// COL-27 (2026-07-28): do two WORLD-space AABBs overlap (closed intervals on
+/// all three axes)? Touching faces count as overlapping — a static flush with a
+/// cell boundary must be testable from BOTH sides, which is the whole point of
+/// [`SpatialScene::bake_envcell_static_overlap_for_landblock`].
+#[inline]
+pub(crate) fn aabbs_overlap(a: &Aabb, b: &Aabb) -> bool {
+    a.min.x <= b.max.x
+        && a.max.x >= b.min.x
+        && a.min.y <= b.max.y
+        && a.max.y >= b.min.y
+        && a.min.z <= b.max.z
+        && a.max.z >= b.min.z
+}
+
 /// Physics deep-dive 2026-06-01 (gap 4, multi-pass) — opt-in faithful
 /// retail `PositionManager::InterpolateTo` / `ConstrainTo` reconciliation
 /// easing curve, DEFAULT-OFF.
@@ -566,6 +589,17 @@ pub struct SpatialScene {
     /// makes the WS7 overlap bake's multi-cell registration of one static a
     /// refcount bump per cell instead of a deep copy per cell.
     cell_static_physics_bsp: Arc<HashMap<u32, Vec<Arc<CellPhysicsBsp>>>>,
+    /// COL-27 (2026-07-28) — SOURCE list for the INDOOR twin of the WS7
+    /// outdoor overlap bake, keyed by landblock high word. Every ENVCELL
+    /// static staged through [`Self::insert_cell_static_physics_bsp`] is
+    /// recorded here as `(owning_cell_id, bsp)` so
+    /// [`Self::bake_envcell_static_overlap_for_landblock`] can rebuild this
+    /// landblock's indoor per-cell registrations from scratch (clear +
+    /// re-register), keeping the bake idempotent across the incremental
+    /// EnvCell drain. `Arc` values ⇒ a recorded source entry is a refcount
+    /// bump, not a tree copy. Cleared with the rest of the cell tables in
+    /// [`Self::clear_cells_for_landblock`].
+    envcell_statics_source: Arc<HashMap<u32, Vec<(u32, Arc<CellPhysicsBsp>)>>>,
     /// Terrain→EnvCell entry (2026-06-02): per-cell MEMBERSHIP bsp
     /// (`CellStruct.cell_bsp`) + cell frame, keyed by full 32-bit cell
     /// id (parallel to `cell_physics_bsp`). Populated by
@@ -708,6 +742,15 @@ pub struct SpatialScene {
     /// Read as `__diag.collision.residency().terrainPlaneFrameArmEvals`. Nonzero
     /// after any faithful outdoor slice ⇒ the arm is on the live movement path.
     terrain_plane_frame_arm_evals: std::cell::Cell<u64>,
+    /// COL-27 (2026-07-28) — the same unconditional-reachability probe for the
+    /// INDOOR envcell-static overlap bake. Bumped OUTSIDE the
+    /// `overlap_enabled` gate at the top of
+    /// [`Self::bake_envcell_static_overlap_for_landblock`] so "flag off" and
+    /// "bake never enqueued" stay distinguishable.
+    ///
+    /// Read as `__diag.collision.residency().envcellStaticOverlapArmEvals`.
+    /// Nonzero after entering any dungeon ⇒ the bake is on the live path.
+    envcell_static_overlap_arm_evals: std::cell::Cell<u64>,
     /// PERF Fix 2 (2026-07-23): identity + generation for the faithful
     /// bridge's persistent built-cell cache (see [`CollisionRevStamp`]).
     /// Bumped by [`Self::bump_collision_rev`] from every mutator of a
@@ -918,6 +961,7 @@ impl SpatialScene {
             cell_physics_index: Arc::new(HashMap::new()),
             cell_physics_bsp: Arc::new(HashMap::new()),
             cell_static_physics_bsp: Arc::new(HashMap::new()),
+            envcell_statics_source: Arc::new(HashMap::new()),
             cell_membership: Arc::new(HashMap::new()),
             cell_portal_polygons: Arc::new(HashMap::new()),
             door_part_index: HashMap::new(),
@@ -929,6 +973,7 @@ impl SpatialScene {
             scenery_narrow_hits: std::cell::Cell::new(0),
             scenery_arm_evals: std::cell::Cell::new(0),
             terrain_plane_frame_arm_evals: std::cell::Cell::new(0),
+            envcell_static_overlap_arm_evals: std::cell::Cell::new(0),
             collision_stamp: CollisionRevStamp::fresh(),
             building_physics_index: Arc::new(HashMap::new()),
             terrain_heights: Arc::new(HashMap::new()),
@@ -1465,6 +1510,10 @@ impl SpatialScene {
         // Phase C: per-cell static physics BSPs share the cell lifetime.
         Arc::make_mut(&mut self.cell_static_physics_bsp)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+        // COL-27 (2026-07-28): the envcell-static SOURCE list is keyed by
+        // landblock and shares that exact lifetime — drop it with the cells so
+        // a re-entry rebuilds it from the fresh EnvCell load.
+        Arc::make_mut(&mut self.envcell_statics_source).remove(&lb_high);
         // Terrain→EnvCell entry: cell-membership trees share the
         // EnvCell lifetime like the physics BSP.
         Arc::make_mut(&mut self.cell_membership)
@@ -1638,10 +1687,130 @@ impl SpatialScene {
     /// (the outdoor twin) but keyed by full cell id.
     pub fn insert_cell_static_physics_bsp(&mut self, cell_id: u32, bsp: CellPhysicsBsp) {
         self.bump_collision_rev();
+        let bsp = Arc::new(bsp);
+        // COL-27 (2026-07-28): record the ENVCELL source so the indoor overlap
+        // bake can rebuild this landblock's registrations idempotently. Outdoor
+        // cell ids (low word `1..=64`) already have their own source of truth in
+        // `statics_physics_bsp` and are rebuilt by the WS7 outdoor bake, so they
+        // are deliberately NOT recorded here.
+        if is_envcell_id(cell_id) {
+            Arc::make_mut(&mut self.envcell_statics_source)
+                .entry(cell_id & 0xFFFF_0000)
+                .or_default()
+                .push((cell_id, bsp.clone()));
+        }
         Arc::make_mut(&mut self.cell_static_physics_bsp)
             .entry(cell_id)
             .or_default()
-            .push(Arc::new(bsp));
+            .push(bsp);
+    }
+
+    /// COL-27 (2026-07-28) — INDOOR twin of
+    /// [`Self::bake_outdoor_static_overlap_for_landblock`]: register every
+    /// ENVCELL static of `landblock_high` into every OTHER envcell of the SAME
+    /// landblock whose world AABB its own world AABB overlaps.
+    ///
+    /// WHY (the bug this fixes, live-reproduced in Holtburg Meeting Hall
+    /// `0x0125`): retail does not key a static's collision to the cell it was
+    /// authored in. `CPhysicsObj::calc_cross_cells_static` (acclient.c:322405)
+    /// computes the static's OWN cell list from its bbox / cylspheres
+    /// (`find_bbox_cell_list` / `CObjCell::find_cell_list`) and then
+    /// `add_shadows_to_cells` (acclient.c:321978) registers a `CShadowObj` in
+    /// EVERY cell it spans — and `CObjCell::find_obj_collisions`
+    /// (acclient.c:347142) sweeps `shadow_object_list`, not an owning-cell list.
+    /// Our bridge staged each static ONLY under its authoring cell, so any
+    /// static whose geometry spills across a cell boundary was invisible to a
+    /// mover standing in the neighbour cell: `CEnvCell::find_transit_cells`
+    /// (acclient.c:348250) only floods a neighbour once a moving SPHERE
+    /// intersects that neighbour's own membership volume, which is far too late
+    /// for a 5.8 m overhang.
+    ///
+    /// The Meeting Hall's grand staircase (Setup `0x02000623` / GfxObj
+    /// `0x0100189E`) is authored in EnvCell `0x0125010F` but its ramp starts
+    /// 5.8 m NORTH of that cell, inside `0x0125010E` — so the player walked
+    /// straight THROUGH the first two thirds of the flight at floor level and
+    /// then hard-stopped on the cell boundary. The west/east side stairs
+    /// (`0x02000621` / `0x02000622`), whose ramps start flush with their own
+    /// cell edge, always worked: same step-up chain, different registration.
+    ///
+    /// Like its outdoor twin this is INDEX-ONLY — it widens the table
+    /// [`super::faithful_bridge::SceneObjCell::find_obj_collisions`] reads and
+    /// touches neither the resolver nor the sweep.
+    ///
+    /// LOADING-VIRUS BOUND: registration targets are restricted to envcells of
+    /// THIS landblock that already have a `cell_aabb` resident. Nothing is read
+    /// or loaded for another landblock, and every entry written stays keyed
+    /// inside `landblock_high` so [`Self::clear_cells_for_landblock`] removes
+    /// all of it on unload.
+    ///
+    /// Idempotent: clears this landblock's INDOOR per-cell static entries and
+    /// rebuilds them from [`Self::envcell_statics_source`], so the incremental
+    /// EnvCell drain may re-run the bake every tick without double-registering.
+    /// `overlap_enabled == false` (`?envcellStaticOverlap=off`) rebuilds the
+    /// owning-cell-only table — the pre-fix walk-through repro.
+    ///
+    /// Returns the number of `(cell, static)` registrations made.
+    pub fn bake_envcell_static_overlap_for_landblock(
+        &mut self,
+        landblock_high: u32,
+        overlap_enabled: bool,
+    ) -> usize {
+        // Unconditional reachability probe (the `sceneryArmEvals` /
+        // `terrainPlaneFrameArmEvals` convention) — bumped OUTSIDE the gate.
+        self.envcell_static_overlap_arm_evals
+            .set(self.envcell_static_overlap_arm_evals.get().wrapping_add(1));
+        self.bump_collision_rev();
+        let lb_high = landblock_high & 0xFFFF_0000;
+        let sources = match self.envcell_statics_source.get(&lb_high) {
+            Some(v) if !v.is_empty() => v.clone(),
+            _ => return 0,
+        };
+        // Snapshot this landblock's resident envcell AABBs once (the inner loop
+        // is O(statics x cells) and both are per-landblock bounded).
+        let cells: Vec<(u32, Aabb)> = self
+            .cell_aabbs
+            .iter()
+            .filter(|(id, _)| (**id & 0xFFFF_0000) == lb_high && is_envcell_id(**id))
+            .map(|(&id, &aabb)| (id, aabb))
+            .collect();
+
+        // Clear + rebuild this landblock's INDOOR per-cell static entries.
+        // Outdoor entries (low word `1..=64`) belong to the WS7 bake and are
+        // left alone, exactly as that bake leaves these alone.
+        Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, _| {
+            !((*cell_id & 0xFFFF_0000) == lb_high && is_envcell_id(*cell_id))
+        });
+
+        let mut registrations = 0usize;
+        let table = Arc::make_mut(&mut self.cell_static_physics_bsp);
+        for (home, bsp) in &sources {
+            table.entry(*home).or_default().push(bsp.clone());
+            registrations += 1;
+            if !overlap_enabled {
+                continue;
+            }
+            let aabb = bsp.world_aabb();
+            if aabb.is_empty() {
+                continue;
+            }
+            for (cell_id, cell_aabb) in &cells {
+                if cell_id == home || cell_aabb.is_empty() {
+                    continue;
+                }
+                if aabbs_overlap(&aabb, cell_aabb) {
+                    table.entry(*cell_id).or_default().push(bsp.clone());
+                    registrations += 1;
+                }
+            }
+        }
+        registrations
+    }
+
+    /// COL-27 (2026-07-28): cumulative envcell-static overlap bake site
+    /// evaluations. Nonzero ⇒ the bake is on the live dungeon-load path.
+    /// Diagnostics only.
+    pub fn envcell_static_overlap_arm_eval_count(&self) -> u64 {
+        self.envcell_static_overlap_arm_evals.get()
     }
 
     /// Phase C: the resident static physics BSPs for `cell_id` (or `&[]` when
@@ -3238,6 +3407,8 @@ impl SpatialScene {
         Arc::make_mut(&mut self.cell_physics_index).retain(|cell_id, _| !in_set(*cell_id));
         Arc::make_mut(&mut self.cell_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));
         Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));
+        // COL-27 (2026-07-28): same lifetime as the per-cell static table.
+        Arc::make_mut(&mut self.envcell_statics_source).retain(|lb, _| !in_set(*lb));
         Arc::make_mut(&mut self.cell_membership).retain(|cell_id, _| !in_set(*cell_id));
         Arc::make_mut(&mut self.cell_portal_polygons).retain(|cell_id, _| !in_set(*cell_id));
 
