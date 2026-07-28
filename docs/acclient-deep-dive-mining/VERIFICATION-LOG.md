@@ -1694,3 +1694,30 @@ COL-03 entity-BSP door arm has likely NEVER engaged live** (filed);
 (2) player scale assumed 1.0 (setter unused); (3) stick_to height param
 unported (inert — standoff is planar, z zeroed); (4) 1070/R9-290 eye-test
 batched with serverMoveToDriver/stickyIdleStep.
+
+---
+
+## Flat particles from the side — FIXED; "retail does not billboard" refuted (2026-07-28, Fable agent M, `48236510`, JS-only)
+
+The codebase's recorded claim "retail does NOT billboard (verified in the
+decomp)" is FALSE. Retail billboards in the part-DRAW pipeline, data-driven
+per GfxObj: `CPhysicsPart::UpdateViewerDistance` (acclient.c:315097) +
+`GfxObjDegradeInfo::get_degrade` (:332356) pick a `degrade_mode` from the
+0x11 degrade chain; `calc_draw_frame` (:315066) rewrites ONLY the draw
+frame — mode 2 = `Frame::set_vector_heading` (:357668, +Y at viewer, roll
+0 = full billboard); modes 3/4/5 = `rotate_around_axis_to_vector`
+(:357520, axis-constrained). DAT survey (all 2,051 ParticleEmitters → 341
+hw GfxObjs, 238 with chains): band-0 modes 154× mode-2, 21× mode-5, 63×
+mode-1. Particle quads are authored flat in local X-Z (normal −Y) → our
+fixed-orientation quads read edge-on from the side: waterfall sheets
+(0x010016FD, mode 2), mist + water-golem spray (0x01001689/0x01001BBE,
+mode 5), flames — the old "retail flame 0x32 slivers" follow-up was this
+same bug. Fix: particle_manager.js resolves band-0 degrade_mode per
+hwGfxObj (cached, via fetchModelDidDegrades + fetch_gfx_obj_degrade_info,
+both already in the shipped pkg — TRAP: fetchBuildingPlacement's ModelMesh
+`.didDegrade` getter is NOT populated), stamps `emitter._bbMode`, applies
+exact retail facing per tick writing `mesh.quaternion` only.
+`?particleBillboard=off` escape (default ON). Live: golem `@create 941`
+spray = full cloud from two orthogonal azimuths (needle-slivers with the
+flag off — the reported symptom); lantern mode-2 glow all azimuths;
+flag-off boot leaves quats identity; 0 console errors; 7 suites green.
