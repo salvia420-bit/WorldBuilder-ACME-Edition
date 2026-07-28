@@ -1754,3 +1754,45 @@ lowering still allowed; 9/9 unit suite.
 Post-fix 4K dpr2 boot on the user's exact URL: clean. If State B ever
 recurs live: `__diag.bootInput()` — `evtGuard.last` names the poison
 event.
+
+---
+
+## Monsters-inside-the-player, remote half — FIXED; ACE exonerated (2026-07-28, Opus agent N, `3b22938d`)
+
+Fork measured, not assumed: a charging Shadow Child RENDERED at 0.300 m
+while its WIRE pose said 1.318 m — **1.019 m of pure client-side
+overshoot**. ACE parks creatures correctly; ~/ace-server untouched. Two
+client defects: (1) the dead-reckon extrapolation (`tgt += lastVel*dt`) is
+an ACCUMULATOR — it integrates every frame for the whole 500 ms
+velocity-freshness window whether or not the mob still moves, and a
+charging mob's velocity points at the player; ACE stops broadcasting once
+the mob goes sticky, so nothing snap-corrects. (2) No contact envelope +
+hardcoded `ENTITY_STICKY_STANDOFF_M = 1.3` in the monster glue (own TODO
+admitted it) — wrong BOTH directions (Tusker needs 1.476, half-scale
+Shadow Child 0.720).
+
+Retail grounding: creature-vs-player is a HARD BLOCK in
+`FindObjCollisions` (pass-through requires BOTH parties players;
+`IgnoreCreatures` never set; retail never displaces the collidee —
+`Pushable` declared, never read; death/collapse doesn't exempt). Floor =
+`r_a + r_b − 0.0002`, radius = the collision PRIMITIVE (sphere/cylsphere),
+**NOT** `CSetup.radius` that `?combatRadii` uses — a Tusker BLOCKS at
+1.476 m but STANDS OFF at 2.388 m; both measured setups ship zero
+cylspheres so the sphere arm is live.
+
+Fix (`?creatureSeparation=off`, default ON): bound the extrapolation lead
+to what the last velocity could actually have covered, and push THE TARGET
+(not just the render) out of the envelope — clamping only the render
+leaves a corrupted target fighting the clamp every frame. Applied in BOTH
+`tick()` and `applyManagedPose()` (loop.js drains remote poses AFTER tick;
+the Rust-managed row is the last write — tick alone flicked 1.476→0.300).
+Live: Tusker settles at exactly 1.4758, Shadow Child exactly 0.7198 (its
+own envelope — shares the player's setup at ACE scale 0.5, proving the
+per-setup radius AND the ×scale term), jitter 0.0000, player push-through
+untouched, 0 console errors; `=off` reproduces 0.3001/jitter 0.67 with
+`evals` still climbing. Tests 648+620+220 green; release wasm shipped.
+
+RESIDUAL (filed): the Rust REMOTE sticky lane is still radius-blind (both
+0.0) — the JS backstop corrects the result; threading Rust is the
+follow-up. NOTE: agent O's `d9a4fd63` swept this fix's url-flags.md row
+into its own commit (content correct, message doesn't mention it).
