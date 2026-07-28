@@ -1721,3 +1721,36 @@ exact retail facing per tick writing `mesh.quaternion` only.
 spray = full cloud from two orthogonal azimuths (needle-slivers with the
 flag off — the reported symptom); lantern mode-2 glow all azimuths;
 flag-off boot leaves quats identity; 0 console errors; 7 suites green.
+
+---
+
+## 4K login bistability — BOTH faces root-caused, fixed, fault-injection-proven (2026-07-28, Fable agent O, `d9a4fd63`)
+
+**State B (stable resolution, dead keybinds):** `pumpNetFrame` dispatches
+the destructive `poll_events()` drain with NO per-event isolation, and the
+only opener of the WASD gate (`enteredWorld = true`, index.html:7919) sat
+~300 lines below `setBootState("in-world")` (:7627) in the same kind=7
+handler — any exception in between (or in an earlier event of the same
+batch) ⇒ boot reports in-world, world streams, keys dead all session, one
+swallowed warn. The cloudflared tunnel batches the login flood = the
+intermittency coin flip. PROVEN by fault injection vs live ACE: a one-shot
+throw reproduces the exact signature with the fix off and is absorbed with
+it on. Fix `?evtGuard` (default ON): per-event try/catch (batch preserved,
+`__evtGuardStats`), gate opens immediately after the in-world bootState,
+stale-detached-activeElement hardening, `__diag.bootInput()` one-call live
+capture.
+
+**State A (resolution churn + working keys):** the `?adaptiveRes`
+controller (built 2026-07-08 for this very R9 290) oscillates forever when
+frame time crosses its [35,55] ms band — the "changing resolution" is its
+backing-store `setPixelRatio` steps every ~3 s. **The anticorrelation is
+CAUSAL:** dead keys ⇒ no movement ⇒ static frame times ⇒ no churn; working
+keys ⇒ play-load swings ⇒ perpetual churn. Original hypotheses (dpr resize
+loop; focus-eaten keys) audited and REFUTED (sizing idempotent,
+activeElement=BODY every boot). Fix `?adaptiveResSettle` (default ON):
+oscillation latch — snap to the sustainable scale, no raises for 300 s,
+lowering still allowed; 9/9 unit suite.
+
+Post-fix 4K dpr2 boot on the user's exact URL: clean. If State B ever
+recurs live: `__diag.bootInput()` — `evtGuard.last` names the poison
+event.
