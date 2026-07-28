@@ -71,13 +71,30 @@ function terminateActiveWorker() {
 const NET_WORKER_DEFAULT = false;
 
 /** `?netWorker=1|on|true` forces ON; `?netWorker=0|off|false` forces OFF;
- * absent → NET_WORKER_DEFAULT (OFF — s15 decided NOT to promote; see the seam
- * note above. The shipped keepalive heartbeat remains the default keepalive). */
+ * absent → ON for bot/agent contexts (`?agent=1` / `?bot=1`), else
+ * NET_WORKER_DEFAULT (OFF — s15 decided NOT to promote; see the seam note
+ * above. The shipped keepalive heartbeat remains the default keepalive for
+ * human sessions).
+ *
+ * Bot/agent auto-enable (keepalive stall fix 2026-07-28): every client-side
+ * keepalive path — the recv loop's 5s arm, the 2.5s setInterval, and the
+ * keepalive_worker pulse — needs the MAIN THREAD to run wasm, so a ≥60s
+ * main-thread stall (cold-load bake/stream saturation, SwiftShader render
+ * on a no-GPU box, swap pressure) starves them all together and ACE reaps
+ * the session at DefaultSessionTimeout 60s while the page keeps rendering.
+ * Measured live 2026-07-28: an identical 70s synchronous stall killed the
+ * direct-path session at stall+62s and the ?netWorker=1 session survived it
+ * (the worker owns the socket + an autonomous 2.5s ping on its own thread).
+ * Bot/agent sessions are exactly the "main-thread freezes are common"
+ * population the s15 note reserved the flag for, and they don't care about
+ * the +24% cold-load settle tax that blocked whole-default promotion. */
 export function netWorkerEnabled() {
   try {
-    const v = new URLSearchParams(globalThis.location?.search || "").get("netWorker");
+    const q = new URLSearchParams(globalThis.location?.search || "");
+    const v = q.get("netWorker");
     if (v === "0" || v === "off" || v === "false") return false;
     if (v === "1" || v === "on" || v === "true") return true;
+    if (q.get("agent") === "1" || q.get("bot") === "1") return true;
     return NET_WORKER_DEFAULT;
   } catch (_) {
     return false;
@@ -198,7 +215,13 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
   });
 
   net_worker_arm(outboundSink);
-  console.log("[net_worker_client] session transport running in a dedicated worker (?netWorker=1)");
+  {
+    const q = new URLSearchParams(globalThis.location?.search || "");
+    const why = q.get("netWorker")
+      ? "?netWorker=" + q.get("netWorker")
+      : "auto-enabled for bot/agent context (?netWorker=0 to opt out)";
+    console.log(`[net_worker_client] session transport running in a dedicated worker (${why})`);
+  }
   const handle = await start_session(bridgeUrl, serverHost, serverPort, account, password);
   // Keep the worker referenced off the handle so it isn't GC'd; the module
   // singleton (`_activeWorker`) is what actually gets terminated on the next

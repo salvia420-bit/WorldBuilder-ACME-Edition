@@ -1255,3 +1255,75 @@ ACE's `DefaultSessionTimeout` to mask it (vanilla rule). Also noted:
 "no idle wander" is correct vanilla behavior (ACE has no wander AI) —
 only the statue-stillness (client-side idle motion) and the freeze chain
 above are defects.
+
+## Keepalive / frozen creatures — ROOT-CAUSED + FIXED (2026-07-28, orchestrator, live A/B on local ACE)
+
+**The 07-28 filing's prime suspect is REFUTED, twice over.** `?netWorker=1` is
+default-OFF (`NET_WORKER_DEFAULT = false`, `net_worker_client.js:71` — the
+explicit s15 no-promote decision), so the dying sessions never ran the proxy
+path at all; and the proxy path turns out to be the *cure*, not the cause.
+
+**Real root cause, proven by controlled A/B:** every client keepalive path —
+the recv loop's 5 s arm (`lib.rs:46697`), the 2.5 s `setInterval`
+(`index.html:5755`), and the `keepalive_worker` pulse — ultimately needs the
+MAIN THREAD to run wasm (`sendKeepalive` → cmd-channel → recv-loop poll), so a
+≥60 s main-thread stall starves all of them together while ACE
+(`NetworkSession.cs:329` stamp) reaps the session at DefaultSessionTimeout 60 s.
+
+- Direct arm (session `127.0.0.1:56918`): idle in-world keepalive is HEALTHY
+  (control session survived 226 s+ idle); a 70 s synchronous busy-wait injected
+  via CDP killed it at **stall+62 s**. The unstall then flushed the buffered
+  timer backlog as a 37-packet burst 8 s AFTER removal — the "Unsolicited
+  Packet" flood — followed by ~1 Hz retransmits until the client's own 90 s
+  dead-session detector fired. This burst-after-drop signature is all over the
+  07-27 log (e.g. session 56959: last counted packet login+7 s, drop +67 s,
+  burst +97 s) — those were cold-load/bake-storm stalls, not missing pings.
+- Worker arm (`?netWorker=1`, session `127.0.0.1:55420`): **identical 70 s
+  stall, session SURVIVED** — the worker owns the socket + an autonomous 2.5 s
+  ping on its own thread (`net_worker.rs:371`).
+- Organic specimen, same hour: the P6.1 agent's SwiftShader-rendering bot
+  (`playtest_soak`/Varek) cycled login → Network Timeout at ~65 s → relogin,
+  live, with no injected stall — the render-saturated main thread IS the stall.
+
+**FIX LANDED:** `netWorkerEnabled()` now auto-enables the worker transport for
+bot/agent contexts (`?agent=1` / `?bot=1`; `?netWorker=0` opt-out), exactly the
+"main-thread freezes are common" population the s15 note reserved the flag for.
+Human bare-default sessions keep the direct path (s15 stands). Validated live:
+auto-enabled session `127.0.0.1:55716` logged the auto-enable line, survived
+the same 70 s stall (zero drops), and the bare-default page boots with zero
+console errors and no worker transport.
+
+**"Visible disconnected state" — ALREADY EXISTS, now live-verified.** The
+kind=4 handler (`index.html:7900-7993`, shipped 2026-06-11/07-23) raises the
+red `hbDisconnectBanner` and, in bot/agent contexts, a budgeted auto-reload.
+Verified end-to-end this session: stall-killed bot → `[auto-reload] kind=4
+disconnect… attempt 1/5` → clean re-login. The 07-28 "NEW open item" was filed
+without knowing this existed; the remaining gap for HUMAN sessions is only that
+the banner appears up to ~90 s after death (detector threshold), which is
+acceptable — no new work item.
+
+**ACE-side note for future bridge ideas:** `VerifyCRC` runs BEFORE the
+`TimeoutTick` stamp and `CryptoSystem.ConsumeKey` removes used ISAAC keys, so a
+bridge-replayed duplicate CANNOT reset the session timeout, and the cleartext
+NAK path early-returns before the stamp — a wsbridge-synthesized keepalive is
+not viable without full ISAAC tracking. Recorded so nobody re-derives it.
+
+## P4.2 relog run's "NEW BUGS" — bug 2 AMENDED after the buffs-hud fix pass (2026-07-28, Opus agent, live-validated)
+
+**"HUD misses live casts" DOES NOT REPRODUCE as filed** — the
+wasm→JS enchantment pipeline is intact end-to-end (instrumented live:
+`@castspell 18` → `enchantmentAdded:1`, snapshot calls 14→16, state grew 1→2).
+The buff was painting into a *hidden* row: filed bug 1's misclassification plus
+a plural/singular filter mismatch. Real defects found and fixed in
+`plugins/buffs-hud.js` (JS only, no flag gating): (1) `getSpellRecord` returns
+a JS `Map` (serde default) and buffs-hud read `.name`/`.isBeneficial` off it as
+properties → always `undefined`/`false` → everything classified debuff — the
+2026-07-01 Map-normalization fix that `spellbook.js:183` etc. got had missed
+this file; (2) ACE hard-ships `HasSpellSetID = 1` for every enchantment
+(`Enchantment.cs:18`, never reassigned) so the truthy check must be
+`spellSetId !== 0`; (3) `status-indicators.js` toggles pass plural ids
+(`"buffs"`) that the filter compared singular → all rows hidden; (4) fragile
+`tryHook` latched on the handle with `client === null`, leaving zero event
+subscriptions after some boot orders — now re-entrant with a reconnect
+watchdog. Validation: live cast visible in HUD in 205 ms without relog;
+debuff negative-control correct; 34/34 unit tests; zero console errors.

@@ -8,14 +8,27 @@ answered in full** (2026-07-27, all 20 KEY items answered, 72 free-text notes).
 > **🧾 2026-07-28 RECONCILIATION — this doc's statuses were audited against the
 > actual commit record `ab51df7f..9751c26c` (the 07-27 marathon + 07-28 session)
 > after three agents were dispatched onto already-landed items. Every P-item
-> below now carries a dated status stamp with its commit. TRUE REMAINING WORK:
-> scenery BSP rung (P1.1 residual, 0.5% of placements), RND-05/03 P2 seam
-> re-check + stars (Tier 2 residuals), COL-15/16/17 slope re-repro + COL-10
-> backwards-anim clip half (Tier 3), P6.1 follow-through, the batched 1070
-> eye-tests, and the NEW items from the 07-28 closures: client keepalive not
-> reaching ACE (sev 2 — the real cause of "frozen creatures"; suspect the
-> `?netWorker=1` proxy path), a visible client "disconnected" state, buffs-hud
-> beneficial-spell misclassification, and no HUD refresh on live casts.**
+> below now carries a dated status stamp with its commit.**
+>
+> **🧾 2026-07-28 SECOND PASS (later same day) — four of the remaining items
+> CLOSED; see VERIFICATION-LOG for each ledger:** the client-keepalive bug is
+> ROOT-CAUSED + FIXED (the "`?netWorker=1` proxy path" suspicion was refuted —
+> that flag is default-OFF and is in fact the cure; real cause = ≥60 s
+> main-thread stalls starving every keepalive path; fix = auto-enable the
+> worker transport for `?agent=1`/`?bot=1` sessions, A/B stall-proven); the
+> "visible disconnected state" already existed (kind=4 banner + bot
+> auto-reload, `index.html:7900`) and is now live-verified — no new work item;
+> the buffs-hud misclassification is FIXED (4 JS defects incl. the missed Map
+> normalization) and "no HUD refresh on live casts" was REFUTED as filed
+> (pipeline intact; symptom of the hidden row); P6.1 facade promotion
+> follow-through LANDED (one `RynthWebHost` substrate behind `createClient`,
+> chat hooks both directions live-verified, real `client.ui`, manifest
+> capability gating across 48 manifests + new 32-check contract suite).
+> TRUE REMAINING WORK: scenery BSP rung (P1.1 residual, 0.5% of placements),
+> RND-05/03 P2 seam re-check + stars (Tier 2 residuals), COL-15/16/17 slope
+> re-repro + COL-10 backwards-anim clip half (Tier 3), the batched 1070
+> eye-tests, and the P6.1 v1.1 tail (migrate raw-handle plugins onto the
+> facade; server half of 0x02AE).**
 
 The questionnaire is what makes this a plan rather than a list. Reading source
 can only establish what the code says; 36% of answers came back `unsure` and 12%
