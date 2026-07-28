@@ -1617,3 +1617,41 @@ the purge it gates measures healthy.
 `renderer.info.memory.geometries` stays 0, so every nullRender tour measures
 a dead #7/#10 path (40-hop control: liveGeom 0 at all 41 samples). Residency
 work on that path needs a real-render session.
+
+---
+
+## Vitals orbs v2 — perf diet + split transparent panes (2026-07-28, Opus agent J, `551f0b35`)
+
+Perf: all three orchestrator fixes landed, trace-verified with an
+interleaved A-B-A-B protocol. METHOD CORRECTION recorded: the 60 Hz-
+normalised metric (work ÷ seconds×60) is NOT frame-rate independent — an
+arm that renders more frames scores worse; HUD-isolation traces report ms
+per RENDERED frame instead. v1 35.2 ms/frame (Paint clip 618×192) → v2
+**20.8 ms (−41%), clip 92×92**, fps +46% (SwiftShader; bars floor 0.18).
+(1) `setAttribute("transform")` → `transform.baseVal` mutation (style
+recalc killed); (2) containment per-vessel; `isolation: isolate` found to
+WIDEN the clip and be redundant under `contain: paint` — removed;
+(3) glass AND caustics baked — ablation put the live caustics group at
+half the whole HUD. ⚠ TRAP: baking to an SVG data URL is NOT a bake —
+Blink keeps SVG images as a PaintRecord replayed every raster (the
+feTurbulence still ran; measured WORSE, 37.1 ms). Vector → canvas → PNG is
+the real bake (32.1 → 18.2 ms). ≤1 ms not met: 78% of residual is
+SwiftShader rasterising surviving blur/blend layers; best untaken lever =
+bubble/sheen keyframes repaint at vsync not the 30 Hz cadence (untestable
+on a box that never exceeds 21 fps — left unshipped rather than
+unvalidated).
+
+Split panes: three overlays, own WINDOW_IDs (0xFFFF0003/4/5, v1 id
+retired). Panel chrome deleted; headspace transparent (grass visible
+through a 7.7%-full orb). Hit area follows the art: pointer-events none +
+analytic circle (vessel) + 32×32 alpha grid per sprite (figures) — 34% of
+the pane rect takes clicks, 66% passes to the world. Numerals: tinted fill
++ ::before -webkit-text-stroke clone + shadow stack (paint-order is
+SVG-only, unreliable on HTML text); legible over noon sky and dark grass,
+no pill needed. Vitae headspace dim 50%→26%; the read moved onto the
+glass hatch/grime marks. LATENT BUG FIXED: `attachWindowPosition` clamped
+against a zero rect when panes attach while `display:none` → the 300 px
+fallback walked saved x left ~160 px per reload; reproduced, now PASS.
+Validation: per-pane drag persistence, poke states, agent-mode all three
+(+ defs SVG in the exclusion list), flag-off = bars with zero residue, 0
+console errors every arm.
