@@ -59,8 +59,15 @@ import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
 
 const OVERLAY_ID = "hb-hotbar";
 const WIDTH = 310;
-const HEIGHT = 100;           // Retail two-row default (gmFloatyToolbarUI
-                              // 0x10000602: 310×100). The retail panel-
+const HEIGHT = 132;           // Wraps BOTH retail slot rows: row 2 sits at
+                              // content y=90 (gmToolbarUI), so its bottom
+                              // is 5px chrome + 90 + 32 + 5px chrome = 132.
+                              // The DAT root (gmFloatyToolbarUI 0x10000602)
+                              // says 310×100, but 100 cannot contain the
+                              // row-2 rect it also declares — with the old
+                              // 100 the second bank of 9 hung below the
+                              // brass frame (design-card audit 2026-07-28).
+                              // The retail panel-
                               // button band that retail draws at y=0..57
                               // lives in `target-bar.js` as a separate
                               // overlay in our impl (P2-36 deviation):
@@ -322,12 +329,9 @@ function applyHotbarLayout(refs, attempt = 0) {
     let applied = 0;
     let slotUpdates = 0;
     // Outer panel — root element 0x10000602 (310×100). Apply WIDTH
-    // only; retail's 100px height covers TWO rows of 32×32 slots +
-    // the panel buttons + sel-object field (the full retail UI). Our
-    // single-row implementation is intentionally 40px tall (one slot
-    // row + 5px chrome) — overriding HEIGHT would push the bottom-
-    // anchored overlay upward and reveal the slots' empty space.
-    // Divergence noted in handoff.
+    // only: the DAT root's 100px height contradicts the row-2 slot
+    // rect the same layout declares (y=90 + 32px slot), so height
+    // stays our HEIGHT constant (132), sized to wrap both rows.
     if (floaty && refs.overlayEl) {
       const root = findElementById(floaty, HOTBAR_ELEM_ROOT);
       if (root && typeof root.width === "number") {

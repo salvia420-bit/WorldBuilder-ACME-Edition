@@ -257,15 +257,22 @@ function ensureStyles() {
       font-weight: 600;
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
     }
+    /* Name > bar > GUID: in the retail 140px field the old
+       grow-1 health bar + fixed-width GUID chip squeezed the
+       name to ~22px ("Gnawer Shreth" → "G…"). The chip
+       ellipsizes first, the bar is fixed, the name grows. */
     #${OVERLAY_ID} .htb-target-meta {
-      flex: 0 0 auto;
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       font-size: 9px;
       color: var(--hb-text-muted-2);
     }
     /* F10-1 — selected target health bar. */
     #${OVERLAY_ID} .htb-target-health {
-      flex: 1 1 auto;
-      min-width: 40px;
+      flex: 0 0 40px;
       height: 6px;
       margin-left: 6px;
       border: 1px solid rgba(0, 0, 0, 0.6);

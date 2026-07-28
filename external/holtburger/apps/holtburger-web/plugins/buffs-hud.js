@@ -842,20 +842,24 @@ export function renderAll() {
     if (r) r.style.display = "none";
   }
 
+  // P3-32: show = "contents", not "flex" — the stylesheet's
+  // display:contents on .hb-buff-row (the retail single-flow
+  // flattening) loses to any inline display, so an inline "flex"
+  // here silently re-nested the category rows on every refresh.
   if (showBuff && state.rowsEl.buff) {
-    state.rowsEl.buff.style.display = "flex";
+    state.rowsEl.buff.style.display = "contents";
     renderRow(state.rowsEl.buff, buffs, "buff",
               "No beneficial spells active.");
   }
   if (showDebuff && state.rowsEl.debuff) {
-    state.rowsEl.debuff.style.display = "flex";
+    state.rowsEl.debuff.style.display = "contents";
     renderRow(state.rowsEl.debuff, debuffs, "debuff",
               "No harmful spells active.");
   }
   if (showCooldown && state.rowsEl.cooldown) {
     state.rowsEl.cooldown.style.display = cooldowns.length === 0 && state.filter !== "cooldown"
       ? "none"   // hide if empty AND we aren't explicitly filtering to it
-      : "flex";
+      : "contents";
     renderRow(state.rowsEl.cooldown, cooldowns, "cooldown",
               "No active cooldowns.");
   }

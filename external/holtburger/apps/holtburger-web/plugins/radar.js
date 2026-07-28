@@ -266,7 +266,10 @@ function ensureStyles() {
     }
     #${OVERLAY_ID} .hb-radar-hostile-indicator {
       position: absolute;
-      top: 122px;
+      /* Mode badge at the disc's top-right — the old top:122px sat
+         directly on the coords strip (120×18 at y=120) and the two
+         texts collided (design-card audit 2026-07-28). */
+      top: 4px;
       right: 4px;
       font-family: var(--hb-font-serif, "Cinzel", "Trajan Pro", "Times New Roman", serif);
       font-size: 9px;
