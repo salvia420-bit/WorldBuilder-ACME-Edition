@@ -166,6 +166,63 @@ const MAX_LIVE_GEOM = (() => {
 // feed the pool — pool pressure then disposes them. Bounded so a big overage
 // drains over a few ticks, not one hitch.
 const GEOM_PRESSURE_PARK_PER_TICK = 6;
+
+// ── Bounded park / anti-storm (2026-07-28, "park storm" root-cause fix) ───────
+// Retail's residency answer is a fixed slot grid with INCREMENTAL, farthest-
+// first eviction (LScape::update_block: the grid shifts, only the row/column
+// that scrolled out is released — bounded work per step, never a bulk
+// collapse). Our reclaim had the DISPOSE half amortized
+// (WARM_PARK_MAX_DISPOSE_PER_TICK / PARK_DISPOSE_BUDGET_MS) but the PARK half
+// completely unbounded, in two independent ways:
+//
+//  (a) count-cap path — `toEvict = entries.size - maxResident` parks the whole
+//      overage in ONE tick. Measured 2026-07-28 (40-hop telepoi tour, agentic
+//      =low ⇒ maxResident 32): a single tick parked up to 8, but a teleport
+//      whose arriving ring lands in one frame can push the overage to dozens.
+//  (b) #7/#10 geom-pressure feed — parks GEOM_PRESSURE_PARK_PER_TICK extra
+//      resident LBs per tick from a trigger THAT PARK CANNOT RELIEVE:
+//      `renderer.info.memory.geometries` responds to disposeParked and NEVER
+//      to park (the MAX_LIVE_GEOM note above says exactly this). So the
+//      trigger is still true next tick, and the next, and the feed runs until
+//      the entire resident set outside the 3×3 is gone. Worse, a large
+//      fraction of live geometry is UNTRACKED (entities/atlas — the #11 note
+//      above), so once that baseline alone exceeds MAX_LIVE_GEOM the feed is
+//      UNSATISFIABLE and the collapse is PERMANENT: everything the streamer
+//      re-adds via the unpark fast-path is re-parked on the next tick. That is
+//      the park↔unpark storm, now user-visible as terrain churn since the
+//      terrain_batch ghost rows that masked it were fixed (2026-07-28).
+//      Reproduced deterministically in test_landblock_lru_park_storm.mjs.
+//
+// Three bounds, all retail-shaped:
+//  1. MAX_PARKS_PER_TICK — total reclaims per NORMAL-path tick (the park analog
+//     of WARM_PARK_MAX_DISPOSE_PER_TICK). A backlog drains over a few frames
+//     instead of collapsing in one. The sealed purge keeps its own
+//     time-budgeted burst (nothing outdoor is visible there, so a bulk park is
+//     correct) — its parks are counted separately (_sealedParksPerTickMax).
+//  2. GEOM_PRESSURE_MAX_POOL_BACKLOG — never feed the pool faster than it
+//     drains. Parking while the pool already holds this many undisposed LBs
+//     cannot lower liveGeom, so it is pure churn. THIS is the feedback break.
+//  3. GEOM_PRESSURE_RESIDENT_MARGIN + GEOM_PRESSURE_RELEASE_FRAC — geom
+//     pressure may never strip the resident set below the reclaim-exempt ring
+//     plus a margin (the streamer re-adds it the same second), and the
+//     governor latch releases only at a low-water mark so a budget crossing
+//     can't thrash park/unpark one LB at a time.
+//
+// No URL flag: this IS the fix, and `?maxLiveGeom=off` already disables the
+// geom-pressure feed entirely for anyone who wants the pre-governor arm.
+const MAX_PARKS_PER_TICK = 8;
+// Pool backlog above which the geom-pressure feed stops adding victims.
+// Sized above one tick's dispose throughput (PARK_DISPOSE_BUDGET_MS clears
+// well over 6 small LBs) so the drain is never starved, and far below a full
+// resident set so a stall can't cascade into a collapse.
+const GEOM_PRESSURE_MAX_POOL_BACKLOG = 16;
+// Headroom above the reclaim-exempt ring ((2·ringFloor+1)² LBs) that geom
+// pressure must leave resident — the trailing edge + in-flight arrivals the
+// streamer would immediately unpark.
+const GEOM_PRESSURE_RESIDENT_MARGIN = 4;
+// Governor hysteresis: engage above MAX_LIVE_GEOM, release at this fraction
+// of it (dispose keeps running down to the low-water mark).
+const GEOM_PRESSURE_RELEASE_FRAC = 0.9;
 // #8 dispose-rate time budget for pool pressure. The flat 2/tick couldn't keep up
 // with the ~2.5k-geom/POI inflow (dispose clumped → the 22.6 s Cragstone frame).
 // Dispose parked LBs until this elapsed budget is spent (min 1/tick so it always
@@ -433,9 +490,33 @@ export class LandblockLRU {
     this._trackMergedWhileParked = 0;
     this._reclaimDeferredInFlight = 0;
 
-    // #7/#10 geom-pressure telemetry: extra oldest-beyond-ring resident LBs
+    // #7/#10 geom-pressure telemetry: extra farthest-beyond-ring resident LBs
     // parked to feed the pool because live geometry was over MAX_LIVE_GEOM.
     this._geomPressureParks = 0;
+
+    // Park-storm bound telemetry (2026-07-28). UNCONDITIONAL — these are the
+    // counters that prove the bounded-park path fires, so they must never be
+    // flag- or debug-gated (the "flag off vs dead code" lesson).
+    //   _parksPerTickMax        peak reclaims in one NORMAL-path tick; must
+    //                           never exceed MAX_PARKS_PER_TICK.
+    //   _sealedParksPerTickMax  same for the sealed purge burst (deliberately
+    //                           unbounded in count, time-budgeted instead).
+    //   _parkBoundHits          ticks where the per-tick bound clipped the
+    //                           victim list = storms prevented.
+    //   _parksDeferredByBound   victims those ticks pushed to a later tick.
+    //   _geomPressureBacklogHolds / _geomPressureFloorHolds
+    //                           feed suppressed because the pool already had a
+    //                           dispose backlog / the resident set was already
+    //                           at its floor (an unsatisfiable trigger — live
+    //                           geometry the LRU does not own).
+    this._parksPerTickMax = 0;
+    this._sealedParksPerTickMax = 0;
+    this._parkBoundHits = 0;
+    this._parksDeferredByBound = 0;
+    this._geomPressureBacklogHolds = 0;
+    this._geomPressureFloorHolds = 0;
+    this._geomPressureEngagements = 0;
+    this._geomPressureActive = false;
 
     // PHY-25 dungeon stream gate (P0.1, 2026-07-27): how many outdoor
     // load-point evaluations world_stream.js suppressed because the player
@@ -459,6 +540,38 @@ export class LandblockLRU {
   _liveGeometries() {
     try { return this.scene3d?.renderer?.info?.memory?.geometries ?? 0; }
     catch (_) { return 0; }
+  }
+
+  // #10 governor WITH HYSTERESIS (2026-07-28 park-storm fix). Engages strictly
+  // above MAX_LIVE_GEOM and releases only once live geometry is back under
+  // GEOM_PRESSURE_RELEASE_FRAC of it. Without the low-water mark, a session
+  // sitting exactly at the cap re-crossed it on every bake and park/unpark
+  // ping-ponged one LB at a time forever. Latch state is read by BOTH the
+  // resident-side feed (tickEviction) and the pool-side drain
+  // (_tickParkPoolPressure), so the drain keeps going past the trigger point
+  // instead of stopping the instant the cap is met.
+  _geomPressure() {
+    if (!Number.isFinite(MAX_LIVE_GEOM)) {
+      this._geomPressureActive = false;
+      return false;
+    }
+    const live = this._liveGeometries();
+    if (this._geomPressureActive) {
+      if (live <= MAX_LIVE_GEOM * GEOM_PRESSURE_RELEASE_FRAC) this._geomPressureActive = false;
+    } else if (live > MAX_LIVE_GEOM) {
+      this._geomPressureActive = true;
+      this._geomPressureEngagements += 1;
+    }
+    return this._geomPressureActive;
+  }
+
+  // The resident floor the geom-pressure feed must never strip below: the
+  // reclaim-exempt ring ((2·ringFloor+1)² LBs) plus a margin for the trailing
+  // edge / in-flight arrivals. Parking inside the streamer's working set just
+  // feeds the loaders' unpark fast-path — the s11 park↔unpark ping-pong.
+  _geomPressureResidentFloor() {
+    const span = 2 * this.ringFloor + 1;
+    return span * span + GEOM_PRESSURE_RESIDENT_MARGIN;
   }
 
   // TN-storm fix (2026-07-10 session 7, 1114 §2b root cause): an LB with an
@@ -633,6 +746,9 @@ export class LandblockLRU {
           victims.push(key);
           if (victims.length >= SEALED_EVICT_PER_TICK) break;
         }
+        if (victims.length > this._sealedParksPerTickMax) {
+          this._sealedParksPerTickMax = victims.length;
+        }
         for (const key of victims) this._reclaim(key);
         this._tickParkPoolPressure(keep);
         return;
@@ -681,6 +797,11 @@ export class LandblockLRU {
         evicted += 1;
         if (performance.now() - t0 > budgetMs) break;
       }
+      // The sealed burst is deliberately UNBOUNDED IN COUNT (time-budgeted
+      // instead — R-12: one accepted loading blip beats six near-frozen
+      // frames, and nothing outdoor is visible to churn). Counted separately
+      // from _parksPerTickMax so the normal-path bound stays auditable.
+      if (evicted > this._sealedParksPerTickMax) this._sealedParksPerTickMax = evicted;
       if (evicted >= victims.length) this._sealedDrainActive = false;
       this._tickParkPoolPressure(keep);
       return;
@@ -741,7 +862,7 @@ export class LandblockLRU {
     // drained once resident > ~203). `overGeom` also forces candidate selection
     // below so resident LBs feed the pool when live geometry is over budget even
     // though the count cap hasn't fired.
-    const overGeom = this._liveGeometries() > MAX_LIVE_GEOM;
+    const overGeom = this._geomPressure();
     if (this.entries.size <= this.maxResident && !overGeom) {
       this._tickParkPoolPressure(currentLbKey);
       return;
@@ -769,26 +890,69 @@ export class LandblockLRU {
     candidates.sort((a, b) => a.ts - b.ts);
 
     // Victims = the count overage (oldest first) PLUS, when live geometry is
-    // over MAX_LIVE_GEOM, up to GEOM_PRESSURE_PARK_PER_TICK extra oldest LBs to
-    // feed the pool (#7/#10). One bucketed group scan for the whole tick (#6)
-    // instead of a full 4-group rescan per victim.
+    // over MAX_LIVE_GEOM, up to GEOM_PRESSURE_PARK_PER_TICK extra FARTHEST LBs
+    // to feed the pool (#7/#10). One bucketed group scan for the whole tick
+    // (#6) instead of a full 4-group rescan per victim.
+    //
+    // Both halves are now clipped to MAX_PARKS_PER_TICK (2026-07-28 park-storm
+    // fix — see the constant block). The count-overage half keeps its exact
+    // victim ORDER (oldest first); it is only spread across ticks.
     const victims = [];
     let toEvict = Math.max(0, this.entries.size - this.maxResident);
     for (const c of candidates) {
       if (toEvict <= 0) break;
+      if (victims.length >= MAX_PARKS_PER_TICK) break;
       victims.push(c.key);
       toEvict -= 1;
     }
+    let clipped = toEvict;
     if (overGeom) {
-      let extra = GEOM_PRESSURE_PARK_PER_TICK;
-      for (const c of candidates) {
-        if (extra <= 0) break;
-        if (victims.includes(c.key)) continue;
-        victims.push(c.key);
-        this._geomPressureParks += 1;
-        extra -= 1;
+      const floor = this._geomPressureResidentFloor();
+      const residentAfter = this.entries.size - victims.length;
+      if (this.parkPool.size >= GEOM_PRESSURE_MAX_POOL_BACKLOG) {
+        // The pool is the DRAIN, not a sink: live geometry only falls when
+        // disposeParked runs. Parking more while a dispose backlog is already
+        // queued cannot relieve the trigger — it is pure churn.
+        this._geomPressureBacklogHolds += 1;
+      } else if (residentAfter <= floor) {
+        // Already down to the streamer's working set. A trigger that survives
+        // this floor is fighting geometry the LRU does not own (entities /
+        // atlas — the #11 note); parking the ring only feeds the loaders'
+        // unpark fast-path and re-parks it next tick.
+        this._geomPressureFloorHolds += 1;
+      } else {
+        // FARTHEST-FIRST (retail LScape::update_block releases the row/column
+        // that scrolled out of the grid), oldest breaking ties. The pre-fix
+        // feed reused the plain oldest-first ordering, which victimizes LBs
+        // the player is walking back toward.
+        const chosen = new Set(victims);
+        const extras = candidates
+          .filter((c) => !chosen.has(c.key))
+          .sort((a, b) => {
+            const d = lbChebyshev(currentLbKey, b.key) - lbChebyshev(currentLbKey, a.key);
+            return d !== 0 ? d : a.ts - b.ts;
+          });
+        const want = Math.min(GEOM_PRESSURE_PARK_PER_TICK, extras.length);
+        let extra = Math.min(
+          want,
+          MAX_PARKS_PER_TICK - victims.length,
+          GEOM_PRESSURE_MAX_POOL_BACKLOG - this.parkPool.size,
+          residentAfter - floor,
+        );
+        if (extra < want) clipped += want - Math.max(0, extra);
+        for (const c of extras) {
+          if (extra <= 0) break;
+          victims.push(c.key);
+          this._geomPressureParks += 1;
+          extra -= 1;
+        }
       }
     }
+    if (clipped > 0) {
+      this._parkBoundHits += 1;
+      this._parksDeferredByBound += clipped;
+    }
+    if (victims.length > this._parksPerTickMax) this._parksPerTickMax = victims.length;
     const buckets = victims.length > 1 ? this._bucketGroupChildren(victims) : null;
     for (const key of victims) this._reclaim(key, buckets);
     this._tickParkPoolPressure(currentLbKey);
@@ -819,8 +983,12 @@ export class LandblockLRU {
     // Fire when EITHER the byte backstop OR the live-geometry governor is
     // exceeded. Re-evaluated each iteration so we stop the instant enough
     // parked LBs have been disposed to bring live geometry back under cap.
+    // 2026-07-28: the geom half now reads the HYSTERESIS LATCH (_geomPressure)
+    // rather than the bare `> MAX_LIVE_GEOM` test, so the drain keeps running
+    // down to the low-water mark instead of stopping the instant the cap is
+    // met and re-arming on the very next bake.
     const overBudget = () =>
-      this.parkedBytes > this.parkBudgetBytes || this._liveGeometries() > MAX_LIVE_GEOM;
+      this.parkedBytes > this.parkBudgetBytes || this._geomPressure();
     if (!overBudget()) return;
     const ref = refLbKey != null ? lbKeyOf(refLbKey >>> 0) : null;
     const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
@@ -831,7 +999,7 @@ export class LandblockLRU {
     // liveGeom stuck 2.7× over cap). Byte-only pressure still honors the floor;
     // only a genuine geometry-ceiling breach bypasses it (normal play, under the
     // high default cap, never engages this).
-    const overGeomAtEntry = this._liveGeometries() > MAX_LIVE_GEOM;
+    const overGeomAtEntry = this._geomPressure();
     const floorMs = overGeomAtEntry ? 0 : PARK_USE_TIME_MS;
     const order = [...this.parkPool.entries()].sort((a, b) => {
       if (ref != null) {
@@ -1676,6 +1844,20 @@ export class LandblockLRU {
       maxLiveGeom: Number.isFinite(MAX_LIVE_GEOM) ? MAX_LIVE_GEOM : null,
       geomPressureParks: this._geomPressureParks,
       parkDisposeBudgetMs: PARK_DISPOSE_BUDGET_MS,
+      // Park-storm bounds (2026-07-28). `parksPerTickMax` must never exceed
+      // `maxParksPerTick`; `parkBoundHits` > 0 proves the bound actually fired
+      // (a storm clipped), and the two *Holds counters prove the geom-pressure
+      // feed stopped instead of collapsing the resident set.
+      maxParksPerTick: MAX_PARKS_PER_TICK,
+      parksPerTickMax: this._parksPerTickMax,
+      sealedParksPerTickMax: this._sealedParksPerTickMax,
+      parkBoundHits: this._parkBoundHits,
+      parksDeferredByBound: this._parksDeferredByBound,
+      geomPressureBacklogHolds: this._geomPressureBacklogHolds,
+      geomPressureFloorHolds: this._geomPressureFloorHolds,
+      geomPressureEngagements: this._geomPressureEngagements,
+      geomPressureActive: this._geomPressureActive,
+      geomPressureResidentFloor: this._geomPressureResidentFloor(),
       // park→DBOCache UseTime floor (S15a): the floor value in effect + how
       // much pressure reclaim it deferred (young slots kept re-adoptable).
       parkUseTimeMs: PARK_USE_TIME_MS,
