@@ -2,17 +2,34 @@
 //
 // Three liquid vessels (blood-red health, yellow-bile stamina, blue
 // mana with a portal-purple shimmer) composed as heraldic badges:
-// each vital is one impresa with supporters flanking and a charge
-// balancing across the vessel, all standing on a shared plinth.
+// each vital is one impresa with a single figure attending the
+// vessel, all standing on the same ground line.
 //
-//   health   Asheron (supporter, dexter)       + Atlan sword (charge, sinister)
-//   stamina  two slithis tendrils (supporters) + composite bow (charge, in base)
-//   mana     weeping wand (charge, dexter)     + Bael'Zharon (supporter, sinister)
+//   health   Asheron       (supporter, dexter)
+//   stamina  composite bow (charge, in base)
+//   mana     Bael'Zharon   (supporter, sinister)
 //
 // The figures are real DAT Setup renders carrying their own Surface
 // colours, baked to PNG and shipped under `data/orb-sprites/`. Panel
 // order health / stamina / mana puts Asheron at the far left and
 // Bael'Zharon at the far right, so the panel itself gains supporters.
+//
+// === v3 (2026-07-29) — three figures, one plaque each ===
+// Four figures are GONE on the user's direction: the Atlan sword, the
+// weeping wand and both slithis tendrils, with their sprites, their
+// alpha-grid hit entries and their placement rules. Bael'Zharon is dark
+// again — the shipped sprite had been rendered from his Setup's raw
+// surfaces, which are a bone/putty grey, so he read as a white figure;
+// he is now remapped through his OWN palette (the Shade of Bael'zharon
+// weenie, LSD wcid 36928, names PaletteBase 0x04001071, whose 0..255
+// ramp is his black-to-crimson value ramp and whose 320..447 ramp is
+// his blood). The sprite's own shading is untouched; only its VALUES
+// were remapped through those two ramps, so the geometry, the silhouette
+// and the light on it are still the DAT render's.
+//
+// The readouts are no longer bare text over the world. Each vital now
+// carries a brass plate on an oak board — see the "readout: the plaque"
+// block in styleText() for the design and its perf contract.
 //
 // === Selection ===
 // STRICT opt-in: `?vitalsOrbs=on` (exact match — see the url-flags
@@ -59,10 +76,11 @@
 //
 // Pointer policy: a pane is `pointer-events: none` by default and is
 // switched to `auto` only while the cursor is actually over VISIBLE ART
-// (the orb circle, tested analytically; the figure sprites, tested
-// against a coarse alpha grid sampled from their PNGs at mount). A
-// half-transparent HUD that still eats clicks over the world is exactly
-// what this revision exists to remove.
+// (the orb circle, tested analytically; the plaque, tested as a plain
+// rect because it is opaque; the figure sprites, tested against a
+// coarse alpha grid sampled from their PNGs at mount). A half-
+// transparent HUD that still eats clicks over the world is exactly what
+// this revision exists to remove.
 //
 // === Perf === (measured, see scratchpad/agentJ-report.md)
 // ONE rAF drives every wave phase, meniscus and liquid clip path on the
@@ -401,19 +419,21 @@ ${vitaeGroup(kind)}
 </svg>`;
 }
 
-// The heraldry around each vessel — supporters, charges, aureole, glow.
+// The heraldry around each vessel — one supporter or charge per vital,
+// plus the seating glow.
+//
+// v3 (2026-07-29) cut the Atlan sword, the weeping wand and both slithis
+// tendrils on the user's direction. What is left is the reading the
+// panel order was always built around: Asheron supports health at the
+// far left, Bael'Zharon flanks mana at the far right, and the composite
+// bow lies in base under stamina between them — so the three badges
+// still compose as one achievement, with a supporter at each end.
 const HERALDRY = {
   hp: '<div class="hbo-glow g-hp"></div>'
-    + '<div class="aureole r g-hp"></div>'
-    + '<div class="fig fig-asheron sup-l"></div>'
-    + '<div class="fig fig-sword chg-r front"></div>',
+    + '<div class="fig fig-asheron sup-l"></div>',
   stam: '<div class="hbo-glow g-stam"></div>'
-    + '<div class="fig fig-tent-l tent l"></div>'
-    + '<div class="fig fig-tent-r tent r front"></div>'
     + '<div class="fig fig-bow"></div>',
   mana: '<div class="hbo-glow g-mana"></div>'
-    + '<div class="aureole l g-mana"></div>'
-    + '<div class="fig fig-wand chg-l front"></div>'
     + '<div class="fig fig-bael sup-r"></div>',
 };
 
@@ -435,7 +455,6 @@ ${P} {
      as a unit — every offset below is a card value, unchanged.
      Keep in sync with DEFAULT_SCALE. */
   --hbo-scale: 0.72;
-  --hbo-inv: calc(1 / var(--hbo-scale));
   width: ${PANE_W}px;
   height: ${PANE_H}px;
   transform: scale(var(--hbo-scale));
@@ -472,16 +491,36 @@ ${P} {
   --hb-orb-crack-dark: rgba(0, 0, 0, 0.62);
   --hb-orb-crack-refract: rgba(190, 220, 255, 0.5);
   --hb-orb-crack-glint: #fffaf0;
-  --hb-orb-read-hp: #f0b8b0;
-  --hb-orb-read-stam: #f0dca8;
-  --hb-orb-read-mana: #b8cdf4;
+  /* engraving ink. Dark enough to read as cut metal on the brass, tinted
+     just far enough toward each humour that the three plaques still
+     answer their vessels without breaking the matched set. */
+  --hb-orb-read-hp: #4a1210;
+  --hb-orb-read-stam: #40300a;
+  --hb-orb-read-mana: #16204c;
+  /* ── the plaque ───────────────────────────────────────────────────
+     A brass plate on an oak board, one per vital, all three identical
+     so the set reads as three signs off the same bench. Every layer is
+     a plain CSS gradient — no filter, no blend, nothing to bake and
+     nothing that can be re-rastered by a wave tick. */
+  --hbo-plaque-w: 160px;
+  --hbo-plaque-h: 36px;
+  --hb-oak-hi: #6d4e2c;
+  --hb-oak-mid: #4a3219;
+  --hb-oak-lo: #2b1c0d;
+  /* antiqued brass, NOT trophy gold: the yellow is pulled well down and
+     the core is olive-warm, so the plate reads as a metal that has been
+     handled rather than a UI colour ramp. */
+  --hb-brass-hi: #e8dcb6;
+  --hb-brass-mid: #c9b078;
+  --hb-brass-core: #9c8449;
+  --hb-brass-warm: #b79b5c;
+  --hb-brass-lo: #6a5629;
   /* The figures are no longer knocked back behind a lit stone panel —
      there is no panel — so the grading is just a hair of desaturation
      plus a shadow that separates them from the world behind. */
   --hb-badge-fig-filter: saturate(0.95) contrast(1.04);
   --hb-badge-fig-shadow: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.85))
                          drop-shadow(0 0 2px rgba(0, 0, 0, 0.6));
-  --hb-badge-aureole: 0.13;
 }
 ${P}[hidden] { display: none; }
 ${P}.hbo-drag { cursor: move; }
@@ -495,7 +534,7 @@ ${P}.hbo-drag { cursor: move; }
    30 ticks a second; this is the fix. The figures and the readout are
    SIBLINGS of this box, so a tick cannot reach them. */
 ${P} .hbo-core {
-  position: absolute; left: 50%; bottom: 28px; margin-left: -${ORB_PX / 2}px;
+  position: absolute; left: 50%; bottom: 38px; margin-left: -${ORB_PX / 2}px;
   width: ${ORB_PX}px; height: ${ORB_PX}px;
   z-index: 4;
   contain: layout paint style;
@@ -507,58 +546,29 @@ ${P} .hbo-core {
    drag target and mount() gates it on an alpha test, so the hit region
    follows the silhouette rather than these boxes. */
 ${P} .fig {
-  position: absolute; bottom: 38px; z-index: 2; pointer-events: none;
+  position: absolute; bottom: 48px; z-index: 2; pointer-events: none;
   background-repeat: no-repeat; background-size: contain;
   background-position: bottom center;
   filter: var(--hb-badge-fig-filter) var(--hb-badge-fig-shadow);
 }
-${P} .fig.front { z-index: 5; }
 ${P} .fig-asheron { background-image: url("./data/orb-sprites/asheron.png");       width: 54.3px; height: 116px; }
 ${P} .fig-bael    { background-image: url("./data/orb-sprites/baelzharon-se.png"); width: 65.9px; height: 98px; }
-${P} .fig-tent-l  { background-image: url("./data/orb-sprites/tentacle-l.png");    width: 46.3px; height: 78px; }
-${P} .fig-tent-r  { background-image: url("./data/orb-sprites/tentacle-r.png");    width: 46.3px; height: 78px; }
-${P} .fig-sword   { background-image: url("./data/orb-sprites/atlan-sword.png");   width: 15.6px; height: 124px; }
-${P} .fig-wand    { background-image: url("./data/orb-sprites/weeping-wand.png");  width: 18.2px; height: 120px; }
 ${P} .fig-bow     { background-image: url("./data/orb-sprites/composite-bow.png"); width: 150px;  height: 38.8px; }
 
 /* placement — the plinth is gone with the rest of the panel chrome, but
    its line (bottom:38px) is kept as the common ground the supporters
-   and charges stand on, so the heraldry reads exactly as the card. */
+   stand on, so the heraldry reads exactly as the card. v3 lifts every
+   ground line by 10px because the plaque now occupies the base of the
+   badge (--hbo-plaque-h, set in the pane block above). */
 ${P} .sup-l { left: 10px; }
 ${P} .sup-r { right: 6px; }
-${P} .chg-l { left: 26px; }
-${P} .chg-r { right: 26px; }
-/* the weapons are planted, so they cant slightly outward */
-${P} .fig-sword.chg-r { transform: rotate(7deg); transform-origin: 50% 100%; }
-${P} .fig-wand.chg-l { transform: rotate(-7deg); transform-origin: 50% 100%; }
-/* the bow lies in base, arced under the vessel, cradling it; its
-   recurved tips rise just inside the tendrils so the charges nest */
-${P} .fig-bow { left: 50%; bottom: 31px; margin-left: -75px; z-index: 5; }
-/* tendrils grip the lower quadrants, thick end rooted low, thin tip
-   sweeping UP and INWARD. Splayed outward they read as spider legs —
-   which is what killed the first pass; the sprite's whip tip was
-   morphologically opened away, and -r is a pre-mirrored PNG so the CSS
-   never has to compose scaleX(-1) with a rotation origin. */
-${P} .tent { bottom: 36px; }
-${P} .tent.l { left: 1px; transform: rotate(-6deg); }
-${P} .tent.r { right: 1px; transform: rotate(6deg); }
-
-/* an aureole behind a lone charge — just enough veiled mass for a slim
-   weapon to answer a whole figure across the vessel. Kept very low: at
-   any real opacity it stops being a halo and becomes a coloured panel.
-   PERF: painted as a radial-gradient rather than a blurred solid, so it
-   is a plain background instead of a filter layer per pane. */
-${P} .aureole {
-  position: absolute; bottom: 46px; width: 78px; height: 122px; z-index: 1;
-  opacity: var(--hb-badge-aureole);
-}
-${P} .aureole.r { right: -3px; }
-${P} .aureole.l { left: -3px; }
-/* Also the only thing that seats the badge against a BRIGHT sky: the
+/* the bow lies in base, arced under the vessel, cradling it */
+${P} .fig-bow { left: 50%; bottom: 41px; margin-left: -75px; z-index: 5; }
+/* The only thing that seats the badge against a BRIGHT sky: the
    colour reads as the vital's humour, and the dark core under it keeps
    the vessel from dissolving into a white background. */
 ${P} .hbo-glow {
-  position: absolute; left: 50%; bottom: 34px; width: 168px; height: 116px;
+  position: absolute; left: 50%; bottom: 44px; width: 168px; height: 116px;
   transform: translateX(-50%); z-index: 0; opacity: 0.5;
 }
 ${P} .g-hp { background: radial-gradient(closest-side, rgba(200,24,30,0.30), rgba(20,6,6,0.20) 55%, rgba(0,0,0,0) 78%); }
@@ -704,40 +714,99 @@ ${P} .hbo-core.beat { animation: hbo-beat 1.15s ease-out infinite; transform-ori
   45%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(200, 24, 30, 0)); }
 }
 
-/* ── readout ─────────────────────────────────────────────────────────
-   The vital NAME is gone; the liquid colour identifies the orb, so only
-   the number is left and it carries a tint of its humour.
+/* ── readout: the plaque ─────────────────────────────────────────────
+   v3 (2026-07-29). The old readout was bare text over a transparent
+   badge, and to survive both a noon sky and dark ground behind it, it
+   had to be painted TWICE — a thick dark -webkit-text-stroke clone laid
+   down by a ::before, then the tinted fill, then a three-layer shadow
+   stack. It was legible and it was ugly. Both are gone.
 
-   With the stone panel removed the number has to hold up over ANY world
-   pixel — a night sky and a noon sky in the same session — so it is
-   painted twice: a thick dark -webkit-text-stroke laid down FIRST by a
-   ::before clone (z-index:-1 puts it behind the fill; paint-order is
-   an SVG property and is not dependable for HTML text), then the tinted
-   fill on top, then a tight multi-layer shadow to soften the transition
-   into whatever is behind. Sizes are divided back out of --hbo-scale so
-   the glyphs land at a constant on-screen size whatever ?orbScale= is.
-   Judged from screenshots over a night sky and over bare noon sky. */
+   Instead the numbers sit on a solid object: a brass plate let into an
+   oak board, one per vital. Because the plaque is opaque, the text is a
+   SINGLE clean paint — a dark engraving ink with one 1px highlight
+   under it, which is what makes cut lettering read as cut rather than
+   printed. Nothing else is drawn: the digits and the "/", and no vital
+   name, because the vessel above already says which humour it is.
+
+   The three plaques are deliberately IDENTICAL — same box, same board,
+   same plate, same lettering, only the engraving ink shifts a few
+   degrees toward each humour — so three independently draggable panes
+   still read as one set of signs off the same bench. That is the
+   "joined" reading, chosen over docking adjacent panes: docking would
+   need each pane to watch the other two's rects on every drag and
+   resize, and it would come apart the moment a pane is moved, whereas a
+   matched set holds wherever the user puts them. The panes are NOT
+   re-merged into one panel: that was v1's layout and it cost 41% of the
+   render pipeline.
+
+   PERF: every layer here is a plain CSS gradient. No SVG, no filter, no
+   blend, no backdrop-filter — so there is nothing to bake through a
+   canvas (v2's trap: an SVG data URL is replayed as a PaintRecord on
+   every raster, it is not a bitmap) and nothing a wave tick can dirty.
+   The plaque is a SIBLING of the contain:paint .hbo-core, painted once
+   per commit and never again. Sizes are authored px and scale with the
+   badge, so ?orbScale= moves the sign and its lettering as one object.
+   The tick never writes a style here — only .v's textContent, and only
+   when the number actually changed. */
 ${P} .orb-read {
-  position: absolute; left: 0; right: 0; bottom: 2px; z-index: 6;
-  text-align: center; font-family: var(--hb-font-serif);
+  position: absolute; left: 50%; bottom: 0; z-index: 6;
+  width: var(--hbo-plaque-w); height: var(--hbo-plaque-h);
+  margin-left: calc(var(--hbo-plaque-w) / -2);
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: 3.5px;
   pointer-events: none;
+  /* quarter-sawn oak: three grain passes at incommensurate periods (5 /
+     9 / 17 px, tilted a degree or two off true so no pass lines up with
+     another), over a top-lit board gradient. Rejected: a 1px brushed
+     pattern on the plate — at ?orbScale=0.72 the 1px period aliased into
+     visible corduroy, which is the tell of a fake metal. */
+  background:
+    repeating-linear-gradient(178deg, rgba(0, 0, 0, 0.20) 0 1px, rgba(0, 0, 0, 0) 1px 5px),
+    repeating-linear-gradient(182deg, rgba(255, 206, 140, 0.09) 0 1px, rgba(0, 0, 0, 0) 1px 9px),
+    repeating-linear-gradient(179deg, rgba(0, 0, 0, 0.13) 0 2px, rgba(0, 0, 0, 0) 2px 17px),
+    linear-gradient(180deg, var(--hb-oak-hi), var(--hb-oak-mid) 45%, var(--hb-oak-lo));
+  /* one bevel, cut from the light: lit top edge, shaded bottom edge,
+     and a contact shadow that lifts the board off the world behind it */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 222, 170, 0.30),
+    inset 0 -1.5px 0 rgba(0, 0, 0, 0.65),
+    inset 1px 0 0 rgba(255, 222, 170, 0.11),
+    inset -1px 0 0 rgba(0, 0, 0, 0.40),
+    0 2px 5px rgba(0, 0, 0, 0.72);
+}
+/* the plate: brass, let in flush, with a dark seat line around it so the
+   board reads as routed out rather than painted gold. One soft raking
+   sheen across it is the whole of its "polish". */
+${P} .orb-read .plate {
+  width: 100%; height: 100%;
+  border-radius: 1.5px;
+  display: flex; align-items: center; justify-content: center;
+  background:
+    linear-gradient(100deg,
+      rgba(255, 255, 255, 0) 34%, rgba(255, 250, 232, 0.24) 47%,
+      rgba(255, 255, 255, 0) 60%),
+    linear-gradient(180deg,
+      var(--hb-brass-hi) 0%, var(--hb-brass-mid) 20%, var(--hb-brass-core) 50%,
+      var(--hb-brass-warm) 76%, var(--hb-brass-lo) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 250, 228, 0.80),
+    inset 0 -1px 0 rgba(58, 42, 12, 0.90),
+    0 0 0 1px rgba(32, 20, 5, 0.62),
+    0 1px 0 rgba(255, 228, 174, 0.16);
 }
 ${P} .orb-read .v {
-  position: relative; display: inline-block;
-  font-size: calc(13.5px * var(--hbo-inv));
-  line-height: 1.1;
+  font-family: var(--hb-font-serif);
+  font-size: 19px;
+  line-height: 1;
+  letter-spacing: 0.6px;
   font-variant-numeric: tabular-nums;
-  color: var(--hbo-read, var(--hb-text-cream-bright));
-  text-shadow:
-    0 0 calc(2px * var(--hbo-inv)) rgba(0, 0, 0, 0.95),
-    0 calc(1px * var(--hbo-inv)) calc(2px * var(--hbo-inv)) rgba(0, 0, 0, 0.95),
-    0 0 calc(7px * var(--hbo-inv)) rgba(0, 0, 0, 0.75);
-}
-${P} .orb-read .v::before {
-  content: attr(data-v);
-  position: absolute; left: 0; top: 0; z-index: -1;
-  color: transparent;
-  -webkit-text-stroke: calc(2.8px * var(--hbo-inv)) rgba(0, 0, 0, 0.88);
+  white-space: nowrap;
+  /* ONE paint. The engraving ink, plus the single hairline of light
+     that sits in the bottom of a cut letter. No stroke clone, no
+     shadow stack — the plate behind it is opaque. */
+  color: var(--hbo-read, #3a2a0c);
+  text-shadow: 0 1px 0 rgba(255, 246, 214, 0.45);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -955,7 +1024,7 @@ function buildPane(kind) {
   pane.innerHTML = HERALDRY[kind]
     + `<div class="hbo-core">${orbSvg(kind)}</div>`
     + `<div class="orb-read" style="--hbo-read:var(--hb-orb-read-${kind})">`
-    + `<span class="v" data-v=""></span></div>`;
+    + `<div class="plate"><span class="v"></span></div></div>`;
   return pane;
 }
 
@@ -1021,8 +1090,7 @@ function loadSpriteMask(url) {
 // hit test — otherwise the very first grab at a figure misses while the
 // PNG decodes. Kicked off at mount; the panes are still hidden then, so
 // this is the only place the sprite list has to be named in JS.
-const SPRITE_FILES = ["asheron.png", "baelzharon-se.png", "tentacle-l.png",
-  "tentacle-r.png", "atlan-sword.png", "weeping-wand.png", "composite-bow.png"];
+const SPRITE_FILES = ["asheron.png", "baelzharon-se.png", "composite-bow.png"];
 function preloadSpriteMasks() {
   for (const f of SPRITE_FILES) {
     try { loadSpriteMask(new URL("./data/orb-sprites/" + f, document.baseURI).href); }
@@ -1051,12 +1119,20 @@ function installHitGate(paneList) {
       loadSpriteMask(url);
       return { x: f.offsetLeft, y: f.offsetTop, w: f.offsetWidth, h: f.offsetHeight, url };
     });
+    // The plaque is opaque art, so unlike the sprites it needs no alpha
+    // grid — its own box IS the silhouette. Included so the badge drags
+    // by its sign, which is the part of it that looks most like a handle.
+    const read = el.querySelector(".orb-read");
     return {
       scale,
       cx: core.offsetLeft + core.offsetWidth / 2,
       cy: core.offsetTop + core.offsetHeight / 2,
       // the outermost glass rim is r=58.8 of the 0..120 viewBox
       cr: (58.8 / VB) * core.offsetWidth,
+      plaque: read && read.offsetWidth
+        ? { x: read.offsetLeft, y: read.offsetTop,
+            w: read.offsetWidth, h: read.offsetHeight }
+        : null,
       figs,
     };
   }
@@ -1072,6 +1148,8 @@ function installHitGate(paneList) {
     if (x < 0 || y < 0 || x > PANE_W || y > PANE_H) return false;
     const dx = x - g.cx, dy = y - g.cy;
     if (dx * dx + dy * dy <= g.cr * g.cr) return true;
+    const q = g.plaque;
+    if (q && x >= q.x && y >= q.y && x < q.x + q.w && y < q.y + q.h) return true;
     for (const f of g.figs) {
       if (!f.w || x < f.x || y < f.y || x >= f.x + f.w || y >= f.y + f.h) continue;
       const m = spriteMasks.get(f.url);
@@ -1230,8 +1308,6 @@ function applyVital(orb, current, buffedMax, base, oldValue, driver) {
   const nums = `${current} / ${buffedMax}`;
   if (orb.lastNums !== nums) {
     orb.num.textContent = nums;
-    // The ::before clone that lays down the dark stroke reads this.
-    orb.num.dataset.v = nums;
     orb.lastNums = nums;
   }
 
