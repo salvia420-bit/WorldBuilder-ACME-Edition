@@ -33,7 +33,7 @@ import {
   getAdapterMaxAnisotropy,
   loadPbrTerrainAtlasSet,
   applyPbrColorOverrides,
-  buildPbrNormalAoTexture,
+  buildPbrNraTexture,
 } from "./adapter.js";
 import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
 // streamFix urgent lane (2026-07-02) — near-player bake detection.
@@ -1019,11 +1019,12 @@ uniform sampler2DArray uAtlas;        // 33 layers of 256×256 retail terrain ti
 // 1× render. The atlas is ClampToEdge per layer (see uAtlas above), so the
 // fract() wrap is REQUIRED — a raw *tiling would clamp and cut the tile off.
 uniform int uBaseTexTiling[33];       // per-code base tex_tiling (retail 2; 1 = off/fallback)
-// T2 (2026-07-28, ?pbrTerrain=on) -- 33-layer normal+AO array parallel to
-// uAtlas (RGB = CC0 tangent-space NormalGL, A = ambient occlusion; uncurated
-// layers hold the flat texel 128,128,255,255). Same layer indexing and the
-// same atlasUvFor fract-tiling addressing as uAtlas so material normal and
-// albedo stay registered per cell. Linear (NoColorSpace) -- vector data.
+// T2 (2026-07-28, ?pbrTerrain on by default) -- 33-layer nra array parallel
+// to uAtlas: R/G = CC0 tangent-normal XY (Z reconstructed below), B =
+// roughness, A = ambient occlusion; uncurated layers hold 128,128,230,255
+// (flat normal, high rough -> no false sheen). Same layer indexing and the
+// same atlasUvFor fract-tiling addressing as uAtlas so material data and
+// albedo stay registered per cell. Linear (NoColorSpace) -- non-colour data.
 uniform sampler2DArray uAtlasNormalAo;
 uniform float uPbrEnabled;            // 0.0 OFF (default) / 1.0 ON
 // T3 (2026-07-28, ?ibl=on) -- mipmapped HDR sky cube rendered from
@@ -2051,8 +2052,11 @@ void main() {
     int pbrCode = clamp(nearCode, 0, 32);
     vec3 pbrUvw = atlasUvFor(pbrCode, cellUv);
     vec4 pbrTexel = texture(uAtlasNormalAo, pbrUvw);
-    vec3 rawN = pbrTexel.rgb * 2.0 - 1.0;
-    vec3 pbrN = (dot(rawN, rawN) > 1e-8) ? normalize(rawN) : vec3(0.0, 0.0, 1.0);
+    // nra pack: xy = tangent normal, z reconstructed (unit hemisphere),
+    // b = material roughness, a = AO.
+    vec2 pbrNxy = pbrTexel.rg * 2.0 - 1.0;
+    vec3 pbrN = normalize(vec3(pbrNxy, sqrt(max(1.0 - dot(pbrNxy, pbrNxy), 0.04))));
+    float pbrRough = pbrTexel.b;
     float pbrNdotl = mix(0.65, 1.0, clamp(dot(pbrN, sunDir), 0.0, 1.0));
     if (slopeShading) {
       pbrNdotl *= mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
@@ -2060,27 +2064,26 @@ void main() {
     ndotl = pbrNdotl;
     result *= mix(0.6, 1.0, pbrTexel.a);
 
-    // T3 (?ibl=on, requires the pbr normal above) -- env-specular gloss for
-    // the layers that read matte without it: Ice(2)/BlueIce(27) strong,
-    // Snow(15) subtle. Everything else 0 (water has its own path; rough
-    // ground gets its specular story when the roughness atlas ships).
+    // T3 -- env-specular for EVERY layer, driven by the material's own
+    // roughness map (nra B channel). Reflection sharpness = mip lod scaled
+    // by roughness (128px cube, mips 0..7); strength = fresnel x gloss^2 so
+    // high-rough ground (grass/dirt ~0.8+) keeps only a whisper of grazing
+    // sheen while low-rough ice reads glassy -- the Fiun-glacier look,
+    // data-driven instead of the old 3-code hardcoded gloss table.
     // Space bridge: pbrN is tangent~AC space (z-up); the env cube lives in
     // three world space (worldRoot rotation.x = -PI/2), so ac(x,y,z) ->
     // world(x,z,-y) -- same mapping as acToThree(). cameraPosition is the
-    // three.js built-in fragment uniform. The mip-2 lod stands in for a
-    // fixed medium roughness; Schlick fresnel keeps grazing angles hot.
-    // Added AFTER the lighting products (env light is ambient -- not sun-
-    // shadowed), tone-mapped by the AGX composer pass like all HDR output.
+    // three.js built-in fragment uniform. Added AFTER the lighting products
+    // (env light is ambient -- not sun-shadowed), tone-mapped by AGX.
     if (uIblEnabled > 0.5) {
-      float envGloss = (pbrCode == 2 || pbrCode == 27) ? 0.6
-                     : (pbrCode == 15 ? 0.2 : 0.0);
-      if (envGloss > 0.0) {
+      float envGloss = 1.0 - pbrRough;
+      if (envGloss > 0.03) {
         vec3 nWorld = normalize(vec3(pbrN.x, pbrN.z, -pbrN.y));
         vec3 viewW = normalize(vWorldPos - cameraPosition);
         vec3 reflW = reflect(viewW, nWorld);
-        vec3 envSample = textureLod(uEnvCube, reflW, 2.0).rgb;
+        vec3 envSample = textureLod(uEnvCube, reflW, pbrRough * 5.0).rgb;
         float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewW, nWorld), 0.0, 1.0), 5.0);
-        iblSpec = envSample * fres * envGloss * uEnvIntensity;
+        iblSpec = envSample * fres * envGloss * envGloss * uEnvIntensity;
       }
     }
   }
@@ -2383,8 +2386,8 @@ export async function resolveTerrainRingOpts(
             built.tileSize,
             pbrSet
           );
-          const normalAoTex = buildPbrNormalAoTexture(pbrSet);
-          scene3d.pbrTerrainState = { normalAoTex, applied };
+          const nraTex = buildPbrNraTexture(pbrSet);
+          scene3d.pbrTerrainState = { nraTex, applied };
           // eslint-disable-next-line no-console
           console.log(
             `[pbr-terrain] ${applied} CC0 albedo layers applied, ` +
@@ -2765,8 +2768,8 @@ export async function resolveTerrainRingOpts(
     // baked into atlasTexture above; these thread the normal+AO array + the
     // gate into the per-LB materials. Null/false when the flag is off or the
     // asset bake is absent → uPbrEnabled 0 → shader branch skipped.
-    pbrEnabled: !!scene3d.pbrTerrainState?.normalAoTex,
-    pbrNormalAoTex: scene3d.pbrTerrainState?.normalAoTex ?? null,
+    pbrEnabled: !!scene3d.pbrTerrainState?.nraTex,
+    pbrNormalAoTex: scene3d.pbrTerrainState?.nraTex ?? null,
     // 2026-06-21 — ?texMergeRot=flip swaps the alpha-mask 90°/270° rotation
     // (rotateCellUv) back to the pre-fix N-S-mirrored sign, for A/B only.
     // 2026-06-21 — ?paintMode=winner switches the per-fragment blend to
@@ -3107,17 +3110,20 @@ function readTexMergeFlag() {
 
 function readPbrTerrainFlag() {
   // T2 (2026-07-28, terrainplan.md) — curated CC0 PBR terrain layers:
-  // albedo overrides into uAtlas + the uAtlasNormalAo array (per-pixel
-  // material-normal NdotL + AO). DEFAULT OFF, strict `=== "on"` opt-in
-  // (the `!== "off"` reader shape reads ON when the param is absent —
-  // the known flag-default footgun; do not copy that shape here until
-  // the 1070 eye-test passes and the default deliberately flips).
+  // albedo overrides into uAtlas + the nra array (per-pixel material-normal
+  // NdotL, AO, roughness). DEFAULT ON as of 2026-07-28 (escape
+  // `?pbrTerrain=off`) after the off-screen 1070 pass: real ANGLE D3D11,
+  // zero console errors, grass/snow/ice biome shots approved. The
+  // `!== "off"` shape below is the DELIBERATE default-on idiom (url-flags.md
+  // 2026-07-23 box), flipped from the strict `=== "on"` opt-in it shipped
+  // with. Fail-soft stays: a checkout without the gitignored asset bake
+  // renders retail with one console warn.
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("pbrTerrain");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

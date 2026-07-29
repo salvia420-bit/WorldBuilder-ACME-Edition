@@ -1530,13 +1530,15 @@ export async function loadTerrainDetailNormalArray(opts = {}) {
 // docs/terrainplan.md §T2. Curated CC0 (ambientCG) replacements for the
 // 33 retail terrain layers, baked to `assets/pbr_terrain/` (gitignored,
 // regenerable — provenance in /mnt/wbterminal2/pbr-terrain/README.md):
-//   manifest.json          {tileSize, layers: {idx: {assetId, gain, hasAo}}}
+//   manifest.json          {tileSize, pack: "nra-v2", layers: {idx: {...}}}
 //   L<idx>_color.png       albedo, retail-luminance-gained at bake
-//   L<idx>_normalao.png    RGB = NormalGL tangent normal, A = AO
+//   L<idx>_nra.png         R/G = NormalGL tangent XY, B = roughness, A = AO
+//                          (normal Z is reconstructed in-shader — packing
+//                          roughness into B keeps ONE aux array, no VRAM
+//                          growth over the v1 normal+AO pack)
 // Layers absent from the manifest (retail keeps: 6 water types + olthoi)
-// fall back to the retail albedo already in the atlas + a flat normal.
-// Roughness is deliberately NOT shipped until a specular/IBL consumer
-// exists (terrainplan §T3) — no VRAM spent on an unread channel.
+// fall back to the retail albedo already in the atlas + a flat normal at
+// high roughness (no false sheen on water/olthoi).
 // ============================================================
 
 function _pbrTerrainUrl(name, baseUrl) {
@@ -1570,7 +1572,7 @@ async function _decodePngRgbaScaled(url, tileSize) {
 
 /**
  * Load the curated PBR layer set. Resolves to
- * `{ tileSize, layers: Map<int, {colorRgba, normalAoRgba}> }` or `null`
+ * `{ tileSize, layers: Map<int, {colorRgba, nraRgba}> }` or `null`
  * when the manifest is missing/unfetchable (flag stays a no-op — the
  * assets are gitignored, so a fresh checkout without the bake simply
  * renders retail).
@@ -1600,12 +1602,12 @@ export async function loadPbrTerrainAtlasSet({ tileSize, baseUrl } = {}) {
     if (!Number.isInteger(idx) || idx < 0 || idx >= ATLAS_DEPTH) return;
     const tag = `L${String(idx).padStart(2, "0")}`;
     try {
-      const [colorRgba, normalAoRgba] = await Promise.all([
+      const [colorRgba, nraRgba] = await Promise.all([
         _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_color.png`, baseUrl), size),
-        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_normalao.png`, baseUrl), size),
+        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_nra.png`, baseUrl), size),
       ]);
-      if (colorRgba && normalAoRgba) {
-        layers.set(idx, { colorRgba, normalAoRgba, assetId: meta?.assetId });
+      if (colorRgba && nraRgba) {
+        layers.set(idx, { colorRgba, nraRgba, assetId: meta?.assetId });
       }
     } catch (e) {
       // Per-layer fail-soft: that layer just stays retail.
@@ -1638,12 +1640,13 @@ export function applyPbrColorOverrides(atlasArrayBytes, tileSize, pbrSet) {
 }
 
 /**
- * Build the 33-layer normal+AO `DataArrayTexture` (RGB = tangent normal,
- * A = ambient occlusion). Uncurated layers get the flat-normal/full-AO
- * texel (128,128,255,255) so shader sampling is branch-free per layer.
- * Linear colour space — vector + weight data, never sRGB-decoded.
+ * Build the 33-layer nra `DataArrayTexture` (R/G = tangent-normal XY,
+ * B = roughness, A = ambient occlusion; normal Z reconstructed in-shader).
+ * Uncurated layers get the flat-normal / rough / full-AO texel
+ * (128,128,230,255) — high roughness so water/olthoi never pick up a
+ * false env sheen. Linear colour space — vector + scalar data.
  */
-export function buildPbrNormalAoTexture(pbrSet, ThreeOverride) {
+export function buildPbrNraTexture(pbrSet, ThreeOverride) {
   const T = ThreeOverride ?? THREE;
   if (!pbrSet || typeof T.DataArrayTexture !== "function") return null;
   const size = pbrSet.tileSize;
@@ -1652,11 +1655,11 @@ export function buildPbrNormalAoTexture(pbrSet, ThreeOverride) {
   for (let i = 0; i < data.length; i += 4) {
     data[i] = 128;
     data[i + 1] = 128;
-    data[i + 2] = 255;
+    data[i + 2] = 230;
     data[i + 3] = 255;
   }
   for (const [idx, layer] of pbrSet.layers) {
-    data.set(layer.normalAoRgba, idx * layerStride);
+    data.set(layer.nraRgba, idx * layerStride);
   }
   const tex = new T.DataArrayTexture(data, size, size, ATLAS_DEPTH);
   tex.format = T.RGBAFormat;
@@ -1671,7 +1674,7 @@ export function buildPbrNormalAoTexture(pbrSet, ThreeOverride) {
   tex.minFilter = T.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
   tex.anisotropy = _maxAnisotropy;
-  tex.name = "scene3d-pbr-terrain-normalao-array";
+  tex.name = "scene3d-pbr-terrain-nra-array";
   tex.needsUpdate = true;
   return tex;
 }

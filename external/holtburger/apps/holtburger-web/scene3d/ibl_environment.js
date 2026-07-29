@@ -30,14 +30,17 @@
 import * as THREE from "three";
 
 export function readIblFlag() {
-  // Strict opt-in (`=== "on"`) — see the url-flags.md footgun box: a new
-  // opt-in must never use the `!== "off"` shape.
+  // DEFAULT ON as of 2026-07-28 (escape `?ibl=off`) after the off-screen
+  // 1070 pass together with ?pbrTerrain — the `!== "off"` shape is the
+  // DELIBERATE default-on idiom (url-flags.md 2026-07-23 box). Still a
+  // no-op when the atmosphere stack is absent (construct site guards on
+  // skyDome.skyScene + atmosphereLights).
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("ibl");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
