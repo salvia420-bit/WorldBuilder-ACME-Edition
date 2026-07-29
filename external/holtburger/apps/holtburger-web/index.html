@@ -2522,6 +2522,27 @@
             "[Phase 5.0/5.2] manifest-mode source initialized from",
             MANIFEST_URL
           );
+          // X-track `?statTexOverride=on` — install per-RenderSurface pixel
+          // overrides into THIS instance before any scene decode runs (the
+          // bake worker installs into its own instance in handleInit).
+          // Fail-soft: flag-off or missing bundle boots identical to before.
+          // Namespace access (not named imports) — stale pkg bails loudly in
+          // the loader instead of module-link-erroring the page.
+          try {
+            const texOv = await import("./scene3d/tex_overrides.js");
+            const n = await texOv.installTextureOverrides(__hbWasmNs, {
+              label: "main",
+            });
+            if (
+              n > 0 &&
+              typeof __hbWasmNs.texture_override_stats === "function"
+            ) {
+              window.__texOverrideStats = () =>
+                JSON.parse(__hbWasmNs.texture_override_stats());
+            }
+          } catch (e) {
+            console.error("[tex-overrides:main] loader failed (non-fatal):", e);
+          }
           // Host-flag readback (defects 1/4) — same shape the bake worker logs
           // at the end of its init, so the two are directly diffable. Namespace
           // access (not a named import) so a stale pkg yields undefined instead

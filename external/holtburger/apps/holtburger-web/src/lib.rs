@@ -1061,6 +1061,7 @@ mod decode_admission;
 // can drive the loader without a separate path.
 #[cfg(any(target_arch = "wasm32", test))]
 mod surface_overrides;
+mod texture_overrides;
 
 // Animation consolidation (docs/animation-audit/ANIMATION-AUDIT.md §5): the
 // ported `CSequence`/`update_internal` motion authority. Gate mirrors
@@ -10996,7 +10997,25 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     // tex.width/tex.height directly here uploaded every JPEG-textured object at
     // 0x0 → empty DataTexture → white default material (the "white door / chest
     // / furniture" class). 2026-05-30.
-    let (tex_w, tex_h) = tex.actual_dimensions();
+    // X-track (`?statTexOverride`) — per-RenderSurface pixel override,
+    // consulted at the rs_id hop so every Surface sharing this texture is
+    // covered (singletons, statics atlas, EnvCells, bake worker). Paletted
+    // formats are NEVER overridden — the recolour hook must survive —
+    // `lookup_for` refuses and counts those. Downstream stats/classify/
+    // Sobel-normal/height all run on the overridden pixels.
+    let px_override =
+        crate::texture_overrides::lookup_for(rs_id, tex.format().needs_palette());
+    let (tex_w, tex_h) = match &px_override {
+        Some(o) => (o.width, o.height),
+        None => tex.actual_dimensions(),
+    };
+    // Authored planes riding the override (both optional): a GL-space normal
+    // map that replaces the Sobel-from-luminance plane, and a roughness
+    // scalar that lands in `roughness_override` below.
+    let ov_normal = px_override
+        .as_ref()
+        .and_then(|o| o.normal_rgba.as_ref().map(std::sync::Arc::clone));
+    let ov_roughness = px_override.as_ref().map(|o| o.roughness).unwrap_or(f32::NAN);
     // Apply the Surface's `orig_palette_id` recolour over the texture's
     // `default_palette_id` (retail CSurface::SetTextureAndPalette base1pal);
     // no-op when the override is 0 (the common case).
@@ -11009,15 +11028,20 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     // fully opaque and render as solid boxes. DXT clip-maps are unaffected
     // (they carry real punch-through alpha in the block data).
     let clipmap = (surface_type & 0x4) != 0;
-    let rgba = tex
-        .to_rgba8_with_palette_override(surf_pal_id, clipmap, |pal_id| {
+    let rgba = match px_override {
+        // Overridden: the pre-decoded RGBA replaces `to_rgba8` wholesale.
+        // One Vec clone per decode; the surface memo caches the result so
+        // steady-state cost is unchanged.
+        Some(o) => Ok(o.rgba.as_ref().clone()),
+        None => tex.to_rgba8_with_palette_override(surf_pal_id, clipmap, |pal_id| {
             let pb = source
                 .get_file_shared(ResourceKey::new("eor/portal", pal_id))
                 .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
             Palette::unpack(pb.as_slice()).map_err(|e| {
                 TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
             })
-        });
+        }),
+    };
     match rgba {
         Ok(pixels) => {
             // A10 G2 (S14): count the full decode, every phase (see fn doc).
@@ -11027,15 +11051,25 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // Phase 1.5 — consult `data/surface_overrides.json` first;
             // fall through to the heuristic when no override applies.
             let stats = compute_stats(&pixels, tex_w, tex_h);
-            let (category, roughness_override, normal_scale_override) =
+            let (category, mut roughness_override, normal_scale_override) =
                 classify_with_overrides(&stats, surface_type, surface_did);
+            // X-track override: an authored roughness scalar (from the CC0
+            // set's _Roughness map mean) beats the category default.
+            if ov_roughness.is_finite() {
+                roughness_override = ov_roughness;
+            }
             // Phase 1.1 — Sobel normal map from luminance. Skip Luminous
             // (emissive) per hand-off #3 — bump shading on glowing
             // surfaces looks wrong.
             // Phase 3.1 — same skip rule for the heightmap (POM doesn't
             // make sense on emissive surfaces).
+            // X-track override: an authored GL-space normal plane replaces
+            // the Sobel derivation entirely (height stays empty — no POM on
+            // statics today). LUMINOUS still wins: emissive stays unbumped.
             let (normal_pixels, height_pixels) = if (surface_type & LUMINOUS) != 0 {
                 (Vec::new(), Vec::new())
+            } else if let Some(n) = &ov_normal {
+                (n.as_ref().clone(), Vec::new())
             } else {
                 // A15 §3b — one fused pass: luminance built once, the
                 // low-res gaussian pre-blur shared by both consumers, and

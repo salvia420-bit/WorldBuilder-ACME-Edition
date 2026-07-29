@@ -90,6 +90,75 @@ statNra look + reconstructed-Z check), memory re-measure on a non-starved box.
 - **Awaiting the user's in-game eye test** (shots: session scratchpad
   `vitals-orbs-v3-*.png`, `shot-lowhp*.png`).
 
+## 5.5 statTexOverride — client-side per-rsId texture injection (added later on 2026-07-29)
+
+Injection-route decision: prototype client-side overrides at the wasm
+resource-source layer; bake winners into a **versioned dat copy** for ship.
+IMPLEMENTED behind `?statTexOverride=on` (exact-match, default OFF):
+`src/texture_overrides.rs` (override map + `add_texture_override` /
+`commit_texture_overrides` / `texture_override_stats` exports; paletted
+formats refused by construction), hook at the `rs_id` hop of
+`fetch_surface_pixels_impl` (covers singletons, statAtlas, EnvCells, Sobel
+normals→`?statNra`), loader `scene3d/tex_overrides.js` installed in BOTH
+instances (index.html post-`init_resource_source`; `bake_worker.js`
+`handleInit`, skipped under threads-lite shared memory). Pilot bundle
+`data/tex-overrides/` = 7 ESRGAN ×4 tiling heads (X2 ranks 3–10, ~189k
+placements). url-flags.md row added.
+
+VALIDATED headless (SwiftShader, nullRender): ON arm installs 7/7 in main
+**and** bake worker, overridden surface `0x0800032A` decodes 512² (hit
+counted), OFF arm decodes 128² with zero loader activity and 0 console
+errors; wasm-decode orientation proven identical to the exported PNGs
+(row-parity check, no flip needed). **Queued for the next 1070 session:**
+in-world eyetest of the 7 pilot overrides (A/B `?statTexOverride=on/off`,
+Holtburg + a dungeon), plus the statNra/vitals items below; memory
+re-measure with overrides on a non-starved box before any wider bundle
+(512² members land in the halved-capacity atlas buckets).
+
+LATER SAME DAY — **manifest v2 (PBR planes)**: entries now take optional
+`normalSrc` (authored GL normal, loader resizes to diffuse dims and repacks
+RGB8 — the plane is 3 B/px like the Sobel one, adapter reads stride 3),
+`roughness` (scalar → `roughness_override` → `material.roughness`), and
+`gain`/`tint` (pre-multiplied onto diffuse at INSTALL time — retail is baked
+dark, CC0 is daylight-bright; this also covers X3's hue-retint rows).
+Authored normals replace Sobel-from-luminance and flow into `?statNra`.
+Pilot entry `0x06003C25` now exercises the full path (Planks036B Color 1K +
+NormalGL + rough 0.509 + gain 0.566); headless-validated 7/7 both instances,
+0 errors. ALSO: the 1070 came back and the FULL X4 set was retrieved —
+`x4out-full.tgz`, 252/252 verified, extracted to `statics-x1/x4-output/`,
+complete A/B sheets at `sheets/x4-ab-full-01..21.png` (truncated partial
+artifacts deleted). Texture-picker v0 (GUI panel + ranking pipeline + full
+CC0 pool download) in flight on the session task list.
+POST-EYETEST (answering §5.6 note B — the authored-normal demo had only ever
+landed on an ambient-lit interior floor): an 8th, **sun-lit exterior** full-PBR
+entry `0x06003AD6` (Surface `0x08000233`, X3 `PavingStones146` 1K Color +
+NormalGL, `roughness 0.595`, `gain 0.569` = 99.313/174.660) was added to the
+bundle — 1400 exterior placements (the highest of any X3 pick not already in
+the bundle) and 21 outdoor static instances in the Holtburg landblock cluster
+(`0xA9B3`–`0xA9B6` …), so the existing `@telepoi Holtburg` A/B arm sees it in
+direct sun at grazing angles; headless-validated 8/8 (`normals: 2,
+roughness: 2`), `0x08000233` decodes 1024² with `normalPixels` 3 145 728 B =
+w·h·3 and `roughnessOverride 0.595`, gain byte-exact vs the source PNG, the
+other 7 entries unchanged, 0 console errors.
+
+## 5.6 1070 eyetest batch — RUN (agent, 2026-07-29 evening) ✅
+
+Real GPU asserted (ANGLE NVIDIA GTX 1070 D3D11), 13 arms, 0 console errors,
+full evidence in `/mnt/wbterminal2/pbr-terrain/eyetest-2026-07-29/`.
+**statTexOverride PASS** — ESRGAN heads a large clean win (Town Network
+interiors), no wrap seams; BUT `0x06003C25` Planks036B = character
+regression (modern laminate vs warm knotty retail; re-pick/re-grade before
+any dat bake) and the authored-normal demo landed on an ambient-lit
+interior floor where normals buy nothing (add a sun-lit exterior pilot
+entry). ESRGAN heads read ~1 value darker (resolved mortar) — mild gain
+candidate. **statNra PASS** — real relief, NO reconstructed-Z artifacts
+(the look half of the default-ON gate clears; memory re-measure still
+owed). **Vitals v3 renders clean** (user taste call still open).
+Runbook learnings: pin `camera.fov`+`updateProjectionMatrix` (drifts 60→55)
+for pixel A/Bs after neutering `cameraSwitcher.tick`; `__texOverrideStats()
+.hits` is PER-INSTANCE (bake-worker decodes don't tick the main counter) —
+not a liveness signal, use `__atlasStats()` new-size buckets instead.
+
 ## 6. Suggested next session order
 
 1. 1070 returns → pull X4 outputs (§3) → before/after contact sheets → review.

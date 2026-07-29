@@ -43,6 +43,11 @@ import init, {
   seed_url_flag_search,
   url_flag_diag,
 } from "../pkg/holtburger_web.js?v=netrev-20260709";
+// Namespace handle for OPTIONAL exports (X-track tex overrides) — named
+// imports of a new export would module-link-error this whole worker on a
+// stale pkg/; via the namespace the loader bails loudly instead.
+import * as __wasmNs from "../pkg/holtburger_web.js?v=netrev-20260709";
+import { installTextureOverrides } from "./tex_overrides.js";
 
 import {
   freeWasmHandles,
@@ -132,6 +137,22 @@ async function handleInit(msg) {
   // `init_resource_source` is async (fetches the manifest) and MUST precede
   // any `fetch_*` call — the wasm panics otherwise.
   await init_resource_source(msg.manifestUrl);
+  // X-track `?statTexOverride=on` — this worker decodes surfaces in its OWN
+  // wasm instance (`fetch_surfaces_pixels` above), so it must install the
+  // same override bundle or it bakes stale texels while the main thread
+  // renders new ones. threads-lite shared-memory mode is ONE instance — the
+  // main thread already installed there; skip. Re-fetches the bundle rather
+  // than widening the init-message ABI (HTTP cache absorbs it).
+  if (!(msg.sharedModule && msg.sharedMemory)) {
+    try {
+      await installTextureOverrides(__wasmNs, {
+        search: msg.locationSearch || "",
+        label: "bake-worker",
+      });
+    } catch (e) {
+      console.warn("[tex-overrides:bake-worker] install failed (non-fatal):", e);
+    }
+  }
   if (msg.sceneryBaseUrl && typeof init_scenery_base_url === "function") {
     // Scenery base is optional for the mesh/surface decoders; never fatal.
     try {

@@ -1,0 +1,46 @@
+{
+ "version": 1,
+ "note": "X-track pilot: ESRGAN x4 (realesrgan-x4plus) upscales of X2 tiling-class heads. Source PNGs: /mnt/wbterminal2/pbr-terrain/statics-x1/x4-output-partial (partial 1070 retrieval 2026-07-29). All PFID_DXT1 128x128 originals -> 512x512. NO INDEX16 entries by policy (recolour hook). v2 fields (normalSrc/roughness/gain/tint) exercised by the two full-PBR entries: 0x06003C25 (Planks036B, interior floor - eyetest NOTE A regression) and 0x06003AD6 (PavingStones146, added 2026-07-29 as the SUN-LIT EXTERIOR PBR demo answering eyetest NOTE B - the authored-normal path had only ever landed on an ambient-lit interior floor where relief buys nothing). Liveness caveat when eyetesting (5.6): __texOverrideStats().hits is PER-INSTANCE and stays 0 even when overrides are demonstrably rendering (bake-worker decodes do not tick the main counter) - do NOT use hits as an is-it-live signal; use __atlasStats() new-size buckets (1024x1024 / 512x512 layers that cannot otherwise exist) or a ?statAtlas=off probe traversal matching the roughness fingerprint.",
+ "overrides": [
+  {
+   "did": "0x06003C25",
+   "src": "Planks036B_Color.png",
+   "normalSrc": "Planks036B_NormalGL.png",
+   "roughness": 0.509,
+   "gain": 0.566,
+   "note": "X3 pick preview: full PBR-path test (CC0 Color+NormalGL+rough scalar+gain). 1070 eyetest 2026-07-29 NOTE A: character regression (modern laminate vs warm knotty retail) AND it only lands on an ambient-lit Holtburg interior floor - re-pick/re-grade before any dat bake; see 0x06003AD6 for the sun-lit PBR demo."
+  },
+  {
+   "did": "0x06003AD6",
+   "src": "PavingStones146_Color.png",
+   "normalSrc": "PavingStones146_NormalGL.png",
+   "roughness": 0.595,
+   "gain": 0.569,
+   "note": "SUN-LIT EXTERIOR PBR DEMO (added for the next 1070 pass, answers eyetest NOTE B). rs 0x06003AD6 / Surface 0x08000233, X2 rank 34, 1400 exterior placements (2nd-highest exterior after the plank) - X3 family paving-flagstone -> PavingStones146 1K. Chosen because it is the highest-exterior X3 pick NOT already in this bundle AND it is present outdoors in the Holtburg landblock cluster (21 static instances across 0xA9B3-0xA9B6 etc, the most of any X3-covered surface there), so the same @telepoi Holtburg arm sees it under direct sun at grazing angles - exactly where the authored NormalGL relief reads. gain = retailMean/candidateMean over RGB = 99.313/174.660; roughness = mean(_Roughness)/255 = 151.764/255."
+  },
+  {
+   "did": "0x06003CA5",
+   "src": "0x06003CA5.png"
+  },
+  {
+   "did": "0x06003C9A",
+   "src": "0x06003C9A.png"
+  },
+  {
+   "did": "0x06003C98",
+   "src": "0x06003C98.png"
+  },
+  {
+   "did": "0x06003AF5",
+   "src": "0x06003AF5.png"
+  },
+  {
+   "did": "0x060039F2",
+   "src": "0x060039F2.png"
+  },
+  {
+   "did": "0x06003AED",
+   "src": "0x06003AED.png"
+  }
+ ]
+}
