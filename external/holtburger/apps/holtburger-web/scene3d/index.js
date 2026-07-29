@@ -1080,6 +1080,17 @@ export async function preInit3D(canvas) {
         // eslint-disable-next-line no-console
         console.log(`[adapter] atlasTilePx=${n}`);
       }
+    } else {
+      // T2 1K tier (2026-07-28): high/ultra boots get the 1024 atlas —
+      // uAtlas + nra ≈ 350 MiB with mips (vs ~88 MiB at 512), fine on a
+      // real GPU, deliberately NOT default for low/mid. `?atlasTilePx=512`
+      // is the explicit escape at any quality.
+      const _q = (_ps.get("quality") ?? "").toLowerCase();
+      if (_q === "high" || _q === "ultra") {
+        setAtlasTilePx(1024);
+        // eslint-disable-next-line no-console
+        console.log("[adapter] atlasTilePx=1024 (quality " + _q + " 1K tier)");
+      }
     }
   } catch (_) { /* default off */ }
 

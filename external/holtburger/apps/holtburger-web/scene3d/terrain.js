@@ -1034,8 +1034,9 @@ uniform float uPbrEnabled;            // 0.0 OFF (default) / 1.0 ON
 // ibl-init order never matters). uEnvIntensity carries the retail diurnal
 // ambient term (L1 ambBright curve, 0.2 night floor).
 uniform samplerCube uEnvCube;
-uniform float uIblEnabled;            // 0.0 OFF (default) / 1.0 ON
+uniform float uIblEnabled;            // 0.0 OFF / 1.0 ON (default)
 uniform float uEnvIntensity;
+uniform float uWaterEnvEnabled;       // terrainplan s4 default tier: water sheen gate
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
@@ -1104,6 +1105,24 @@ uniform float uDetailTexCrossfade;
 uniform highp sampler2D uMergeData;       // per-LB 48×8 RGBA8 (NearestFilter)
 uniform sampler2DArray uAlphaMasks;       // 8 ordered A8 masks (R = weight)
 uniform float uTexMergeEnabled;           // 0.0 OFF / 1.0 ON
+// T1 (terrainplan, 2026-07-28) -- splat-noise borders. Perturbs the texMerge
+// overlay mask weight with world-space coherent value noise, band-limited by
+// w*(1-w) so ONLY the transition zone fingers (mask interiors and pure
+// cells are untouched, and amp 0 is a strict no-op). Kills the "transitions
+// follow the 24 m cell grid / fixed retail masks" read.
+uniform float uSplatNoiseAmp;             // 0 = off; ~0.6 default via flag
+uniform float uSplatNoiseFreq;            // world-space 1/m; ~0.35 default
+// T4 (terrainplan, 2026-07-28) -- parallax occlusion mapping. Material
+// height lives in uAtlas ALPHA (v3 bake; sRGB decode never touches A;
+// retail layers hold A=255 = flat = zero offset by construction). Steep-
+// parallax march of the nearest-corner layer's height field, 8 steps,
+// distance-faded, applied to cellUv BEFORE all sampling so albedo, nra,
+// masks and detail stay registered. Quality-gated high/ultra (SwiftShader-
+// hostile); escape ?pom=off.
+uniform float uPomEnabled;                // 0.0 OFF / 1.0 ON
+uniform float uPomScale;                  // UV offset amplitude (~0.012)
+uniform float uPomFadeStart;              // metres -- full effect nearer
+uniform float uPomFadeEnd;                // metres -- zero beyond
 // 2026-06-21 — per-vertex stochastic winner-take-all blend (?paintMode=winner).
 // uPaintMode 0=bilinear average (legacy default), 1=winner-take-all per vertex.
 // uPaintNoiseFreq: noise sampling rate over vGridUv (which is 1.0 per 24 m), so
@@ -1538,8 +1557,47 @@ void main() {
 
   int t00 = vertexTypeAt(iu,     iv    );  // SW
   int t10 = vertexTypeAt(iu + 1, iv    );  // SE
-  int t01 = vertexTypeAt(iu,     iv + 1);  // NW
+  int t01 = vertexTypeAt(iu, iv + 1);  // NW
   int t11 = vertexTypeAt(iu + 1, iv + 1);  // NE
+
+  // T4 POM -- computed here (before every texture sample) so the offset
+  // cellUv feeds the whole pipeline. Nearest-corner layer only (same
+  // single-sample convention as the detail layers); constant-height
+  // retail layers self-disable (alpha 255 everywhere -> march exits at
+  // step 0 with zero offset).
+  if (uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd) {
+    float pw00 = (1.0 - fu) * (1.0 - fv);
+    float pw10 = fu * (1.0 - fv);
+    float pw01 = (1.0 - fu) * fv;
+    float pw11 = fu * fv;
+    int pomCode = t00; float pnw = pw00;
+    if (pw10 > pnw) { pnw = pw10; pomCode = t10; }
+    if (pw01 > pnw) { pnw = pw01; pomCode = t01; }
+    if (pw11 > pnw) { pnw = pw11; pomCode = t11; }
+    pomCode = clamp(pomCode, 0, 32);
+    // world view -> AC tangent frame: world(x,y,z) = ac(x,z,-y), so
+    // ac = (w.x, -w.z, w.y). Only march when looking meaningfully down
+    // at the surface (grazing rays explode the offset).
+    vec3 vw = normalize(vWorldPos - cameraPosition);
+    vec3 vt = vec3(vw.x, -vw.z, vw.y);
+    if (vt.z < -0.15) {
+      float pomFade = 1.0 - clamp(
+        (vViewDepth - uPomFadeStart) / max(uPomFadeEnd - uPomFadeStart, 1e-3),
+        0.0, 1.0);
+      float tiling = float(uBaseTexTiling[pomCode]);
+      vec2 stepUv = (vt.xy / max(-vt.z, 0.3)) * (uPomScale * pomFade) * 0.125;
+      vec2 uvOff = vec2(0.0);
+      float layerH = 1.0;
+      for (int i = 0; i < 8; i++) {
+        float mapH = texture(uAtlas,
+          vec3(fract((cellUv + uvOff) * tiling), float(pomCode))).a;
+        if (mapH >= layerH) break;
+        layerH -= 0.125;
+        uvOff += stepUv;
+      }
+      cellUv += uvOff;
+    }
+  }
 
   // Per-corner cellUv: water-typed corners get the scrolled UV, others
   // stay on the static path. This keeps the blend across the water /
@@ -1678,6 +1736,12 @@ void main() {
     // anyway -- every overlay slot is invalid -- but the guard documents
     // the Chorizite FindRoadAlpha all-road semantics and avoids three
     // dead texelFetch / mask samples per all-road fragment).
+    // T1 splat-noise: one world-space noise sample shared by every slot
+    // this fragment composites (per-slot noise would decorrelate the same
+    // border across slots and shimmer).
+    float splatN = (uSplatNoiseAmp > 0.0)
+      ? (fragValueNoise2D(vWorldPos.xy * uSplatNoiseFreq) - 0.5)
+      : 0.0;
     if (baseLayer != 32) {
       // Slots 1..3 = terrain overlays; slots 4..5 = road overlays. The road
       // slots were abandoned on 2026-06-21 because the masks "decoded to
@@ -1711,6 +1775,12 @@ void main() {
           texture(uAlphaMasks, vec3(mUv, float(maskIdx))).r,
           uTexMergeAlphaRound
         );
+        // T1 splat-noise: shift the base/overlay balance inside the
+        // transition band only -- baseW*(1-baseW) peaks at the border and
+        // vanishes at 0/1, so authored full-coverage areas never change.
+        baseW = clamp(
+          baseW + splatN * uSplatNoiseAmp * 4.0 * baseW * (1.0 - baseW),
+          0.0, 1.0);
         vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32), cellUv)).rgb;
         merged = mix(overlayCol, merged, baseW);
       }
@@ -2057,6 +2127,21 @@ void main() {
     vec2 pbrNxy = pbrTexel.rg * 2.0 - 1.0;
     vec3 pbrN = normalize(vec3(pbrNxy, sqrt(max(1.0 - dot(pbrNxy, pbrNxy), 0.04))));
     float pbrRough = pbrTexel.b;
+    // terrainplan s4 (default tier) -- water sheen. Water layers are
+    // uncurated (flat normal, rough 230/255 -> no sheen), so give water-
+    // masked fragments a time-scrolled coherent-noise wave normal + low
+    // roughness: the T3 env cube then paints sky reflection and the sun
+    // NdotL below picks up glints. No extra pass, no new textures --
+    // finite-difference gradient of the existing fragValueNoise2D field.
+    if (uWaterEnvEnabled > 0.5 &&
+        pbrCode < 32 && (uWaterCodeMask & (1 << pbrCode)) != 0) {
+      vec2 wuv = vWorldPos.xy * 0.30 + vec2(uTime * 0.35, uTime * 0.22);
+      float h0 = fragValueNoise2D(wuv);
+      float hx = fragValueNoise2D(wuv + vec2(0.7, 0.0));
+      float hy = fragValueNoise2D(wuv + vec2(0.0, 0.7));
+      pbrN = normalize(vec3((h0 - hx) * 1.4, (h0 - hy) * 1.4, 1.0));
+      pbrRough = 0.12;
+    }
     float pbrNdotl = mix(0.65, 1.0, clamp(dot(pbrN, sunDir), 0.0, 1.0));
     if (slopeShading) {
       pbrNdotl *= mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
@@ -2303,6 +2388,10 @@ export async function resolveTerrainRingOpts(
       // T2 — wire mode never builds the terrain ShaderMaterial.
       pbrEnabled: false,
       pbrNormalAoTex: null,
+      waterEnvEnabled: false,
+      splatNoiseAmp: 0,
+      splatNoiseFreq: 0.35,
+      pomEnabled: false,
     };
   }
 
@@ -2770,6 +2859,18 @@ export async function resolveTerrainRingOpts(
     // asset bake is absent → uPbrEnabled 0 → shader branch skipped.
     pbrEnabled: !!scene3d.pbrTerrainState?.nraTex,
     pbrNormalAoTex: scene3d.pbrTerrainState?.nraTex ?? null,
+    // terrainplan s4 — water env sheen (default on; ?waterEnv=off escape).
+    waterEnvEnabled: readWaterEnvFlag(),
+    // T1 — splat-noise border tunables (?splatNoise=off, ?splatNoiseAmp=,
+    // ?splatNoiseFreq=).
+    splatNoiseAmp: readSplatNoiseAmp(),
+    splatNoiseFreq: readSplatNoiseFreq(),
+    // T4 — POM: high/ultra only (8 dependent atlas taps/fragment near
+    // camera; SwiftShader-hostile), needs the pbr height bake in uAtlas.A.
+    pomEnabled:
+      readPomFlag() &&
+      !!scene3d.pbrTerrainState?.nraTex &&
+      (scene3d.quality?.preset === "high" || scene3d.quality?.preset === "ultra"),
     // 2026-06-21 — ?texMergeRot=flip swaps the alpha-mask 90°/270° rotation
     // (rotateCellUv) back to the pre-fix N-S-mirrored sign, for A/B only.
     // 2026-06-21 — ?paintMode=winner switches the per-fragment blend to
@@ -3102,6 +3203,56 @@ function readTexMergeFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("texMerge");
+    return !(typeof v === "string" && v.toLowerCase() === "off");
+  } catch (_) {
+    return true;
+  }
+}
+
+function readSplatNoiseAmp() {
+  // T1 splat-noise borders — DEFAULT ON at amp 0.6 (?splatNoise=off → 0;
+  // ?splatNoiseAmp=N tunes). Amp 0 is a strict shader no-op.
+  try {
+    if (typeof window === "undefined" || !window.location) return 0.6;
+    const q = new URLSearchParams(window.location.search);
+    const off = (q.get("splatNoise") ?? "").toLowerCase() === "off";
+    if (off) return 0;
+    const v = Number.parseFloat(q.get("splatNoiseAmp"));
+    return Number.isFinite(v) && v >= 0 ? v : 0.6;
+  } catch (_) {
+    return 0.6;
+  }
+}
+
+function readSplatNoiseFreq() {
+  try {
+    const v = Number.parseFloat(
+      new URLSearchParams(window.location.search).get("splatNoiseFreq"));
+    return Number.isFinite(v) && v > 0 ? v : 0.35;
+  } catch (_) {
+    return 0.35;
+  }
+}
+
+function readPomFlag() {
+  // T4 POM — DEFAULT ON at quality high/ultra (`?pom=off` escape); the
+  // opts site adds the quality + pbr-asset gates.
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("pom");
+    return !(typeof v === "string" && v.toLowerCase() === "off");
+  } catch (_) {
+    return true;
+  }
+}
+
+function readWaterEnvFlag() {
+  // terrainplan s4 default tier — water reflection sheen off the T3 env
+  // cube. DEFAULT ON (`?waterEnv=off` escape) — rides pbrTerrain+ibl which
+  // are default-on; a no-op when either of those is off.
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("waterEnv");
     return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
     return true;
@@ -3592,6 +3743,15 @@ export async function bakeTerrainForLandblock(
       uEnvCube: { value: null },
       uIblEnabled: { value: 0.0 },
       uEnvIntensity: { value: 1.0 },
+      uWaterEnvEnabled: { value: opts.waterEnvEnabled ? 1.0 : 0.0 },
+      // T1 splat-noise borders (default on; ?splatNoise=off → amp 0 no-op).
+      uSplatNoiseAmp: { value: Number.isFinite(opts.splatNoiseAmp) ? opts.splatNoiseAmp : 0.0 },
+      uSplatNoiseFreq: { value: Number.isFinite(opts.splatNoiseFreq) ? opts.splatNoiseFreq : 0.35 },
+      // T4 POM (quality high/ultra + pbr assets; ?pom=off escape).
+      uPomEnabled: { value: opts.pomEnabled ? 1.0 : 0.0 },
+      uPomScale: { value: 0.012 },
+      uPomFadeStart: { value: 12.0 },
+      uPomFadeEnd: { value: 25.0 },
       // T1 (2026-05-29) — per-code base tex_tiling (retail all 2). Falls back
       // to the all-1 LUT (atlasUvFor no-op) when the wasm fetch failed, so the
       // default-on path is fail-soft to the prior 1× render. The int[33]

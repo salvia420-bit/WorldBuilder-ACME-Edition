@@ -245,8 +245,12 @@ const ATLAS_DEPTH = 33;
  * flags but BEFORE `bakeTerrainRing` runs. No-op if N is invalid.
  */
 export function setAtlasTilePx(n) {
+  // 2026-07-28 — cap raised 512 → 1024 for the T2 1K tier (quality
+  // high/ultra; the pbr_terrain bake ships _1k variants). Retail 512 tiles
+  // upscale through the canvas slow path at 1024 — the CC0 layers are the
+  // ones that gain real detail.
   const v = Number(n);
-  if (Number.isFinite(v) && v >= 16 && v <= 512 && (v & (v - 1)) === 0) {
+  if (Number.isFinite(v) && v >= 16 && v <= 1024 && (v & (v - 1)) === 0) {
     ATLAS_TILE_PX = v;
   }
 }
@@ -1601,10 +1605,14 @@ export async function loadPbrTerrainAtlasSet({ tileSize, baseUrl } = {}) {
     const idx = Number.parseInt(idxStr, 10);
     if (!Number.isInteger(idx) || idx < 0 || idx >= ATLAS_DEPTH) return;
     const tag = `L${String(idx).padStart(2, "0")}`;
+    // 1K tier: the bake ships both 512 (bare) and 1024 (`_1k`) variants —
+    // fetch the one matching the atlas tile size so no quality is lost to
+    // a canvas resample.
+    const sfx = size >= 1024 ? "_1k" : "";
     try {
       const [colorRgba, nraRgba] = await Promise.all([
-        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_color.png`, baseUrl), size),
-        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_nra.png`, baseUrl), size),
+        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_color${sfx}.png`, baseUrl), size),
+        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_nra${sfx}.png`, baseUrl), size),
       ]);
       if (colorRgba && nraRgba) {
         layers.set(idx, { colorRgba, nraRgba, assetId: meta?.assetId });
