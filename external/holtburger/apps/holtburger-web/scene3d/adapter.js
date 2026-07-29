@@ -1525,6 +1525,157 @@ export async function loadTerrainDetailNormalArray(opts = {}) {
   return { texture: tex, keys: [...TERRAIN_DETAIL_KEYS] };
 }
 
+// ============================================================
+// T2 (2026-07-28) — PBR terrain atlas set (?pbrTerrain=on).
+// docs/terrainplan.md §T2. Curated CC0 (ambientCG) replacements for the
+// 33 retail terrain layers, baked to `assets/pbr_terrain/` (gitignored,
+// regenerable — provenance in /mnt/wbterminal2/pbr-terrain/README.md):
+//   manifest.json          {tileSize, layers: {idx: {assetId, gain, hasAo}}}
+//   L<idx>_color.png       albedo, retail-luminance-gained at bake
+//   L<idx>_normalao.png    RGB = NormalGL tangent normal, A = AO
+// Layers absent from the manifest (retail keeps: 6 water types + olthoi)
+// fall back to the retail albedo already in the atlas + a flat normal.
+// Roughness is deliberately NOT shipped until a specular/IBL consumer
+// exists (terrainplan §T3) — no VRAM spent on an unread channel.
+// ============================================================
+
+function _pbrTerrainUrl(name, baseUrl) {
+  const base = baseUrl ?? "scene3d/assets/pbr_terrain";
+  return `${base}/${name}`;
+}
+
+/**
+ * Decode a PNG URL straight into `tileSize`² RGBA via a dom-canvas
+ * (drawImage rescales when the source is a different resolution, e.g.
+ * a low-agentic ATLAS_TILE_PX override below the baked 512).
+ */
+async function _decodePngRgbaScaled(url, tileSize) {
+  if (typeof Image === "undefined" || typeof document === "undefined") {
+    return null;
+  }
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.crossOrigin = "anonymous";
+    i.onload = () => resolve(i);
+    i.onerror = (e) => reject(e);
+    i.src = url;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = tileSize;
+  canvas.height = tileSize;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, tileSize, tileSize);
+  return ctx.getImageData(0, 0, tileSize, tileSize).data;
+}
+
+/**
+ * Load the curated PBR layer set. Resolves to
+ * `{ tileSize, layers: Map<int, {colorRgba, normalAoRgba}> }` or `null`
+ * when the manifest is missing/unfetchable (flag stays a no-op — the
+ * assets are gitignored, so a fresh checkout without the bake simply
+ * renders retail).
+ */
+export async function loadPbrTerrainAtlasSet({ tileSize, baseUrl } = {}) {
+  const size = Number.isInteger(tileSize) && tileSize > 0 ? tileSize : ATLAS_TILE_PX;
+  let manifest;
+  try {
+    const resp = await fetch(_pbrTerrainUrl("manifest.json", baseUrl));
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    manifest = await resp.json();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[pbr-terrain] manifest.json unavailable — ?pbrTerrain=on is a no-op " +
+        "(bake assets per terrainplan.md §T2):",
+      e
+    );
+    return null;
+  }
+  const entries = Object.entries(manifest?.layers ?? {});
+  if (entries.length === 0) return null;
+
+  const layers = new Map();
+  const jobs = entries.map(async ([idxStr, meta]) => {
+    const idx = Number.parseInt(idxStr, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= ATLAS_DEPTH) return;
+    const tag = `L${String(idx).padStart(2, "0")}`;
+    try {
+      const [colorRgba, normalAoRgba] = await Promise.all([
+        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_color.png`, baseUrl), size),
+        _decodePngRgbaScaled(_pbrTerrainUrl(`${tag}_normalao.png`, baseUrl), size),
+      ]);
+      if (colorRgba && normalAoRgba) {
+        layers.set(idx, { colorRgba, normalAoRgba, assetId: meta?.assetId });
+      }
+    } catch (e) {
+      // Per-layer fail-soft: that layer just stays retail.
+      // eslint-disable-next-line no-console
+      console.warn(`[pbr-terrain] layer ${tag} decode failed (stays retail):`, e);
+    }
+  });
+  await Promise.all(jobs);
+  if (layers.size === 0) return null;
+  return { tileSize: size, layers };
+}
+
+/**
+ * Overwrite curated layers of an already-built atlas byte block with the
+ * CC0 albedos (in place). Layers not in the set keep their retail bytes,
+ * so every downstream blend path (bilinear / winner / texMerge / roads)
+ * picks up the new albedo with zero shader changes.
+ */
+export function applyPbrColorOverrides(atlasArrayBytes, tileSize, pbrSet) {
+  if (!pbrSet || pbrSet.tileSize !== tileSize) return 0;
+  const layerStride = tileSize * tileSize * 4;
+  let applied = 0;
+  for (const [idx, layer] of pbrSet.layers) {
+    if ((idx + 1) * layerStride <= atlasArrayBytes.length) {
+      atlasArrayBytes.set(layer.colorRgba, idx * layerStride);
+      applied += 1;
+    }
+  }
+  return applied;
+}
+
+/**
+ * Build the 33-layer normal+AO `DataArrayTexture` (RGB = tangent normal,
+ * A = ambient occlusion). Uncurated layers get the flat-normal/full-AO
+ * texel (128,128,255,255) so shader sampling is branch-free per layer.
+ * Linear colour space — vector + weight data, never sRGB-decoded.
+ */
+export function buildPbrNormalAoTexture(pbrSet, ThreeOverride) {
+  const T = ThreeOverride ?? THREE;
+  if (!pbrSet || typeof T.DataArrayTexture !== "function") return null;
+  const size = pbrSet.tileSize;
+  const layerStride = size * size * 4;
+  const data = new Uint8Array(layerStride * ATLAS_DEPTH);
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = 128;
+    data[i + 1] = 128;
+    data[i + 2] = 255;
+    data[i + 3] = 255;
+  }
+  for (const [idx, layer] of pbrSet.layers) {
+    data.set(layer.normalAoRgba, idx * layerStride);
+  }
+  const tex = new T.DataArrayTexture(data, size, size, ATLAS_DEPTH);
+  tex.format = T.RGBAFormat;
+  tex.type = T.UnsignedByteType;
+  tex.colorSpace = T.NoColorSpace;
+  // Same addressing contract as uAtlas: ClampToEdge per layer + the
+  // shader's fract() tiling wrap (atlasUvFor) — RepeatWrapping here
+  // would double-wrap.
+  tex.wrapS = T.ClampToEdgeWrapping;
+  tex.wrapT = T.ClampToEdgeWrapping;
+  tex.magFilter = T.LinearFilter;
+  tex.minFilter = T.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = _maxAnisotropy;
+  tex.name = "scene3d-pbr-terrain-normalao-array";
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /**
  * Compose a `THREE.Matrix4` from an `ObjectPlacement`-shaped object.
  *

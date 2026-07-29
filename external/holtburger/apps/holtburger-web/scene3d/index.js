@@ -86,6 +86,8 @@ import {
 } from "./adaptive_render_scale.js";
 import { SkyLightingController } from "./sky_lighting.js";
 import { SkyDome } from "./sky_dome.js";
+// T3 (terrainplan.md) — sky IBL, opt-in ?ibl=on.
+import { IblEnvironment, readIblFlag, readIblRefreshMs } from "./ibl_environment.js";
 import { CloudOverlay } from "./cloud_overlay.js";
 import {
   acToThree,
@@ -4313,6 +4315,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               skyPromise,
             ]);
             liveScene3d.atmosphereLights = atmosphereLights;
+            // T3 (?ibl=on) — sky IBL. Constructed only when the atmosphere
+            // stack is live (it renders skyDome.skyScene into scene.environment
+            // + the terrain env cube). First refresh happens on the first
+            // loop tick; failure leaves scene.environment null (retail look).
+            if (readIblFlag() && skyDome?.skyScene && atmosphereLights) {
+              try {
+                liveScene3d.iblEnvironment = new IblEnvironment({
+                  renderer,
+                  scene,
+                  skyScene: skyDome.skyScene,
+                  atmosphereLights,
+                  refreshMs: readIblRefreshMs(),
+                });
+                // eslint-disable-next-line no-console
+                console.log(
+                  `[t3-ibl] IBL live: PMREM scene.environment + 128px terrain env cube, ` +
+                    `refresh every ${liveScene3d.iblEnvironment.refreshMs}ms; ` +
+                    "SkyLightProbe diffuse handed off to environmentIntensity"
+                );
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.warn("[t3-ibl] init failed (retail lighting kept):", e);
+              }
+            }
             // World-light calibration default (2026-06-27) — tame the
             // exposure=5 / AGX surface wash so buildings + terrain show their
             // texture albedo (retail-leaning) instead of blowing toward white.

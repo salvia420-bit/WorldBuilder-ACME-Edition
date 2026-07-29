@@ -57,3 +57,8 @@ scripts/.http2-cert/
 /go.html
 apps/holtburger-web/harness/*.json
 apps/holtburger-web/scratchpad/
+
+# T2 PBR terrain atlas sources (~30 MB, regenerable): baked from the CC0
+# ambientCG sets on /mnt/wbterminal2/pbr-terrain (see its README.md +
+# curation-manifest.json) by scratchpad prep — docs/terrainplan.md §T2.
+apps/holtburger-web/scene3d/assets/pbr_terrain/

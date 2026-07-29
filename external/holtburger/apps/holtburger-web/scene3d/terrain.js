@@ -31,6 +31,9 @@ import {
   buildTerrainDetailArrayBytes,
   buildAlphaMaskArrayBytes,
   getAdapterMaxAnisotropy,
+  loadPbrTerrainAtlasSet,
+  applyPbrColorOverrides,
+  buildPbrNormalAoTexture,
 } from "./adapter.js";
 import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
 // streamFix urgent lane (2026-07-02) — near-player bake detection.
@@ -1016,6 +1019,22 @@ uniform sampler2DArray uAtlas;        // 33 layers of 256×256 retail terrain ti
 // 1× render. The atlas is ClampToEdge per layer (see uAtlas above), so the
 // fract() wrap is REQUIRED — a raw *tiling would clamp and cut the tile off.
 uniform int uBaseTexTiling[33];       // per-code base tex_tiling (retail 2; 1 = off/fallback)
+// T2 (2026-07-28, ?pbrTerrain=on) -- 33-layer normal+AO array parallel to
+// uAtlas (RGB = CC0 tangent-space NormalGL, A = ambient occlusion; uncurated
+// layers hold the flat texel 128,128,255,255). Same layer indexing and the
+// same atlasUvFor fract-tiling addressing as uAtlas so material normal and
+// albedo stay registered per cell. Linear (NoColorSpace) -- vector data.
+uniform sampler2DArray uAtlasNormalAo;
+uniform float uPbrEnabled;            // 0.0 OFF (default) / 1.0 ON
+// T3 (2026-07-28, ?ibl=on) -- mipmapped HDR sky cube rendered from
+// skyDome.skyScene by IblEnvironment (three WORLD space, y-up). Sampled for
+// a per-layer env-specular gloss term on ice/snow. Uniforms are pushed each
+// frame by IblEnvironment.tick over scene3d.terrainMaterials (bake order vs
+// ibl-init order never matters). uEnvIntensity carries the retail diurnal
+// ambient term (L1 ambBright curve, 0.2 night floor).
+uniform samplerCube uEnvCube;
+uniform float uIblEnabled;            // 0.0 OFF (default) / 1.0 ON
+uniform float uEnvIntensity;
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
@@ -2014,6 +2033,58 @@ void main() {
     ndotl = mix(ndotl, ndotl * slopeNdotL, 1.0);
   }
 
+  // T2 (?pbrTerrain=on) -- per-pixel material relief from the CC0 set:
+  // one uAtlasNormalAo sample at the nearest-corner code (same single-sample
+  // convention as the detail layers -- the switch tracks the colour blend at
+  // cell midlines) through the same atlasUvFor tiling as the albedo, so
+  // normal and colour stay registered. The material NdotL REPLACES the
+  // detail-normal ndotl when both are on (the 1K material normal carries
+  // strictly more structure than the 5-slice category detail); the FU-2
+  // geometry slope factor is re-applied on top so hillsides keep their
+  // relief. AO multiplies the albedo with a 0.6 floor (crevice darkening,
+  // never black). Tangent frame: terrain is flat-Z-up at grid level and
+  // cellUv axes track AC east/north -- the same frame the detail-normal RNM
+  // path assumes; sign-of-green is eye-test territory on the 1070.
+  // acGouraud wins when both flags are set (retail-look mode stays retail).
+  vec3 iblSpec = vec3(0.0);
+  if (uPbrEnabled > 0.5 && !acGouraud) {
+    int pbrCode = clamp(nearCode, 0, 32);
+    vec3 pbrUvw = atlasUvFor(pbrCode, cellUv);
+    vec4 pbrTexel = texture(uAtlasNormalAo, pbrUvw);
+    vec3 rawN = pbrTexel.rgb * 2.0 - 1.0;
+    vec3 pbrN = (dot(rawN, rawN) > 1e-8) ? normalize(rawN) : vec3(0.0, 0.0, 1.0);
+    float pbrNdotl = mix(0.65, 1.0, clamp(dot(pbrN, sunDir), 0.0, 1.0));
+    if (slopeShading) {
+      pbrNdotl *= mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
+    }
+    ndotl = pbrNdotl;
+    result *= mix(0.6, 1.0, pbrTexel.a);
+
+    // T3 (?ibl=on, requires the pbr normal above) -- env-specular gloss for
+    // the layers that read matte without it: Ice(2)/BlueIce(27) strong,
+    // Snow(15) subtle. Everything else 0 (water has its own path; rough
+    // ground gets its specular story when the roughness atlas ships).
+    // Space bridge: pbrN is tangent~AC space (z-up); the env cube lives in
+    // three world space (worldRoot rotation.x = -PI/2), so ac(x,y,z) ->
+    // world(x,z,-y) -- same mapping as acToThree(). cameraPosition is the
+    // three.js built-in fragment uniform. The mip-2 lod stands in for a
+    // fixed medium roughness; Schlick fresnel keeps grazing angles hot.
+    // Added AFTER the lighting products (env light is ambient -- not sun-
+    // shadowed), tone-mapped by the AGX composer pass like all HDR output.
+    if (uIblEnabled > 0.5) {
+      float envGloss = (pbrCode == 2 || pbrCode == 27) ? 0.6
+                     : (pbrCode == 15 ? 0.2 : 0.0);
+      if (envGloss > 0.0) {
+        vec3 nWorld = normalize(vec3(pbrN.x, pbrN.z, -pbrN.y));
+        vec3 viewW = normalize(vWorldPos - cameraPosition);
+        vec3 reflW = reflect(viewW, nWorld);
+        vec3 envSample = textureLod(uEnvCube, reflW, 2.0).rgb;
+        float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewW, nWorld), 0.0, 1.0), 5.0);
+        iblSpec = envSample * fres * envGloss * uEnvIntensity;
+      }
+    }
+  }
+
   // Clouds-L — cloud-shadow modulation. Project world pos into cascade
   // 0's shadow space; sample the R channel (cloud optical depth along
   // sun ray); attenuate. Cascade 0 covers the closest ~10% of view
@@ -2095,7 +2166,7 @@ void main() {
     vec3 acC = min(vec3(1.0), uAcSunColor * acL + uAcAmbColor * uAcAmbLevel);
     modulated *= acC;
   }
-  fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow, 1.0);
+  fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow + iblSpec, 1.0);
 }
 `;
 
@@ -2226,6 +2297,9 @@ export async function resolveTerrainRingOpts(
       // T1 — wire mode never builds the terrain ShaderMaterial.
       texMergeAlphaArray: null,
       texMergeEnabled: false,
+      // T2 — wire mode never builds the terrain ShaderMaterial.
+      pbrEnabled: false,
+      pbrNormalAoTex: null,
     };
   }
 
@@ -2292,6 +2366,37 @@ export async function resolveTerrainRingOpts(
     const terrainTextures = await wasmExports.fetch_terrain_textures();
     const built = buildTerrainAtlasArrayBytes(terrainTextures);
     roadCanvas = built.roadCanvas;
+
+    // T2 (?pbrTerrain=on) — curated CC0 layer set. Loaded once per session
+    // and cached on scene3d (the lazy LB-entry path reuses atlasTexture AND
+    // this state). Albedo overrides are written into the atlas bytes BEFORE
+    // the DataArrayTexture upload so every blend path (bilinear / winner /
+    // texMerge / road slots) uses the new colour with zero shader changes;
+    // uncurated layers (water ×6, olthoi) keep their retail bytes. Load
+    // failure → null state → uPbrEnabled 0 → retail render, no-op.
+    if (readPbrTerrainFlag() && !scene3d.pbrTerrainState) {
+      try {
+        const pbrSet = await loadPbrTerrainAtlasSet({ tileSize: built.tileSize });
+        if (pbrSet) {
+          const applied = applyPbrColorOverrides(
+            built.atlasArrayBytes,
+            built.tileSize,
+            pbrSet
+          );
+          const normalAoTex = buildPbrNormalAoTexture(pbrSet);
+          scene3d.pbrTerrainState = { normalAoTex, applied };
+          // eslint-disable-next-line no-console
+          console.log(
+            `[pbr-terrain] ${applied} CC0 albedo layers applied, ` +
+              `normal+AO array ${pbrSet.tileSize}px × 33`
+          );
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[pbr-terrain] load failed (retail render):", e);
+        scene3d.pbrTerrainState = null;
+      }
+    }
 
     // 2026-05-28 — TerrainTex vertex-modulation ranges. Six u32s per
     // terrain type (33 × 6 = 198 values): min/max for brightness,
@@ -2656,6 +2761,12 @@ export async function resolveTerrainRingOpts(
     // shared mask array + the gate. Disabled → bilinear path unchanged.
     texMergeAlphaArray: texMergeState?.alphaArray ?? null,
     texMergeEnabled: !!texMergeState,
+    // T2 — PBR terrain (?pbrTerrain=on). The albedo overrides are already
+    // baked into atlasTexture above; these thread the normal+AO array + the
+    // gate into the per-LB materials. Null/false when the flag is off or the
+    // asset bake is absent → uPbrEnabled 0 → shader branch skipped.
+    pbrEnabled: !!scene3d.pbrTerrainState?.normalAoTex,
+    pbrNormalAoTex: scene3d.pbrTerrainState?.normalAoTex ?? null,
     // 2026-06-21 — ?texMergeRot=flip swaps the alpha-mask 90°/270° rotation
     // (rotateCellUv) back to the pre-fix N-S-mirrored sign, for A/B only.
     // 2026-06-21 — ?paintMode=winner switches the per-fragment blend to
@@ -2991,6 +3102,22 @@ function readTexMergeFlag() {
     return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
     return true;
+  }
+}
+
+function readPbrTerrainFlag() {
+  // T2 (2026-07-28, terrainplan.md) — curated CC0 PBR terrain layers:
+  // albedo overrides into uAtlas + the uAtlasNormalAo array (per-pixel
+  // material-normal NdotL + AO). DEFAULT OFF, strict `=== "on"` opt-in
+  // (the `!== "off"` reader shape reads ON when the param is absent —
+  // the known flag-default footgun; do not copy that shape here until
+  // the 1070 eye-test passes and the default deliberately flips).
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("pbrTerrain");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
   }
 }
 
@@ -3447,6 +3574,18 @@ export async function bakeTerrainForLandblock(
     // uniforms.
     uniforms: {
       uAtlas: { value: opts.atlasTexture },
+      // T2 (?pbrTerrain=on) — 33-layer normal+AO array (RGB = tangent
+      // normal, A = AO) parallel to uAtlas, same layer indexing + the same
+      // atlasUvFor addressing. Null + gate 0 when off → three.js skips the
+      // bind and the fragment branches around the samples.
+      uAtlasNormalAo: { value: opts.pbrNormalAoTex ?? null },
+      uPbrEnabled: { value: opts.pbrEnabled ? 1.0 : 0.0 },
+      // T3 (?ibl=on) — seeded off; IblEnvironment.tick (loop.js) pushes the
+      // env cube + enable + diurnal intensity over scene3d.terrainMaterials
+      // every frame, so bake order vs ibl-init order never matters.
+      uEnvCube: { value: null },
+      uIblEnabled: { value: 0.0 },
+      uEnvIntensity: { value: 1.0 },
       // T1 (2026-05-29) — per-code base tex_tiling (retail all 2). Falls back
       // to the all-1 LUT (atlasUvFor no-op) when the wasm fetch failed, so the
       // default-on path is fail-soft to the prior 1× render. The int[33]

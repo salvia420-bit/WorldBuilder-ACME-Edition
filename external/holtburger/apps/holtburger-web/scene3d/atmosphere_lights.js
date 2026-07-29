@@ -267,6 +267,12 @@ export class AtmosphereLights {
       });
       this.sun.intensity = r.sunIntensity;
       this.skyProbe.intensity = r.probeIntensity;
+      // T3 (?ibl=on) — scene.environment now feeds standard materials their
+      // indirect diffuse, so the probe must not double-count. Intensity 0,
+      // NEVER removal: the scene light list is frozen (lighting.js contract).
+      // The computed diurnal term is exported for environmentIntensity.
+      this.lastProbeIntensity = r.probeIntensity;
+      if (this.iblOwnsDiffuse) this.skyProbe.intensity = 0;
 
       if (!this._sunTintApplied || !this.sun.color.equals(this._sunTintedColor)) {
         this._sunBaseColor.copy(this.sun.color);
@@ -281,6 +287,9 @@ export class AtmosphereLights {
     } else {
       this.sun.intensity = this._indoorMute ? 0 : s;
       this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, baseAmbient * s);
+      // T3 (?ibl=on) — same handoff as the retail-sun branch above.
+      this.lastProbeIntensity = this.skyProbe.intensity;
+      if (this.iblOwnsDiffuse) this.skyProbe.intensity = 0;
       this._sunTintApplied = false;
     }
 

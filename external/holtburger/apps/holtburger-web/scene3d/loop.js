@@ -1993,6 +1993,26 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // T3 (?ibl=on) — sky IBL tick. Runs right after atmosphereLights.tick so
+  // `lastProbeIntensity` (the retail diurnal ambient term) is fresh for the
+  // environmentIntensity drive. Refreshes the PMREM + terrain env cube at
+  // its own low cadence (default 15 s — the retail light tick); on other
+  // frames it only writes environmentIntensity + terrain uniforms.
+  if (_rp3RunSky && scene3d?.iblEnvironment) {
+    try {
+      const nowMs =
+        (scene3d?.frameTime?.tsSec ?? null) !== null
+          ? scene3d.frameTime.tsSec * 1000
+          : performance.now();
+      scene3d.iblEnvironment.tick(nowMs, scene3d.terrainMaterials);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._iblTickWarned) {
+        scene3d._iblTickWarned = true;
+        console.warn("[t3-ibl] tick threw:", e);
+      }
+    }
+  }
   // Sky-K.4 — takram SkyMaterial + stars. Same SkyState source as the
   // physical lights so sun position in the sky matches the sunlight
   // direction. Stars are a fixed celestial backdrop (no per-frame
