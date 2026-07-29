@@ -141,6 +141,34 @@ roughness: 2`), `0x08000233` decodes 1024² with `normalPixels` 3 145 728 B =
 w·h·3 and `roughnessOverride 0.595`, gain byte-exact vs the source PNG, the
 other 7 entries unchanged, 0 console errors.
 
+**BUNDLE v2 — the 34 user-approved X3 picks (2026-07-29, replaces the pilot).**
+The user reviewed the X3 substitution set in the review UI and approved all 34
+x3 rows plus all three vitals items (`brass-plaques`, `bz-recolour`,
+`kept-trio`) — `/mnt/wbterminal2/pbr-terrain/review/decisions.json`. The bundle
+is now one full-PBR entry per approved rsId (CC0 ambientCG Color + NormalGL +
+scalar roughness + install-time gain), **512²-capped**: Color and NormalGL are
+Lanczos-downscaled from 1K because full 1K ×34 ×2 planes ×2 wasm instances is
+~480 MB resident, vs 59.5 MiB/instance at 512 (62,390,272 B measured). `gain`
+= retailMeanRGB/candidateMeanRGB on the full-res Color vs
+`statics-x1/x4-input/<rsId>.png`; `roughness` = mean(_Roughness)/255; both
+sanity anchors reproduce exactly (plank 0.566/0.509, paving 0.569/0.595).
+Per-channel `tint` = (retailMean_c/candidateMean_c)/gain, clamped [0.25,4], on
+the 3 X3 hue-retint rows (`0x060038FC`, `0x06003D72`, `0x060038F0`) **and on
+`0x06003C25` as the NOTE A warm regrade** (its channel ratio *is* the warm
+shift: `[1.129, 1.031, 0.741]` — judge the regrade next 1070 pass). The 6
+ESRGAN entries and the 1K PavingStones146 entry are superseded (`0x06003AD6` is
+among the 34 and keeps its sun-lit-exterior demo role); pilot v1 is backed up
+verbatim at `/mnt/wbterminal2/pbr-terrain/tex-overrides-pilot-v1/`. No wasm or
+JS change — the loader is data-driven. Headless-validated: ON arm installs
+34/34 in **both** instances, stats `{count:34, bytes:62390272, normals:34,
+roughness:34}`, four spot decodes (plank, a tint row, two plain rows) all 512²
+with `normalPixels` = w·h·3 and exact `roughnessOverride`, gain×tint byte-exact
+vs source within float→u8 rounding (worst 0.5); OFF arm decodes `0x0800032A` at
+retail 128² with no loader logs; 0 console errors in both. Full table + numbers:
+`/mnt/wbterminal2/pbr-terrain/review/BUNDLE-V2-REPORT.md`. The per-instance
+`hits` caveat below still applies, and a memory re-measure on a non-starved box
+is still owed before this ships wider.
+
 ## 5.6 1070 eyetest batch — RUN (agent, 2026-07-29 evening) ✅
 
 Real GPU asserted (ANGLE NVIDIA GTX 1070 D3D11), 13 arms, 0 console errors,

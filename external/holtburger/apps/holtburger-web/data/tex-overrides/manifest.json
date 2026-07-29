@@ -1,14 +1,250 @@
 {
- "version": 1,
- "note": "X-track pilot: ESRGAN x4 (realesrgan-x4plus) upscales of X2 tiling-class heads. Source PNGs: /mnt/wbterminal2/pbr-terrain/statics-x1/x4-output-partial (partial 1070 retrieval 2026-07-29). All PFID_DXT1 128x128 originals -> 512x512. NO INDEX16 entries by policy (recolour hook). v2 fields (normalSrc/roughness/gain/tint) exercised by the two full-PBR entries: 0x06003C25 (Planks036B, interior floor - eyetest NOTE A regression) and 0x06003AD6 (PavingStones146, added 2026-07-29 as the SUN-LIT EXTERIOR PBR demo answering eyetest NOTE B - the authored-normal path had only ever landed on an ambient-lit interior floor where relief buys nothing). Liveness caveat when eyetesting (5.6): __texOverrideStats().hits is PER-INSTANCE and stays 0 even when overrides are demonstrably rendering (bake-worker decodes do not tick the main counter) - do NOT use hits as an is-it-live signal; use __atlasStats() new-size buckets (1024x1024 / 512x512 layers that cannot otherwise exist) or a ?statAtlas=off probe traversal matching the roughness fingerprint.",
+ "version": 2,
+ "note": "BUNDLE v2 = the 34 user-approved X3 CC0 substitution picks (review UI 2026-07-29, decisions.json: all 34 x3 rows verdict=approve; the 3 vitals items \u2014 brass-plaques, bz-recolour, kept-trio \u2014 approved in the same pass). One entry per approved rsId, full PBR path for every entry: CC0 ambientCG 1K Color + NormalGL + scalar roughness + install-time gain (+ per-channel tint on 4 rows). 512x512 CAP: Color and NormalGL are Lanczos-downscaled from 1K before packing. Full 1K x34 x2 planes x2 wasm instances (main + bake worker) is ~480 MB of resident override bytes \u2014 not acceptable on the 8 GB box; the 512 cap costs ~59.5 MB per instance (34 x (512*512*4 rgba + 512*512*3 normal) = 62,390,272 B). Normals are plain-resized at this 2:1 ratio and deliberately NOT renormalized. roughness = mean(_Roughness)/255 (3dp). gain = retailMeanRGB / candidateMeanRGB computed on the FULL-RES Color vs the retail RenderSurface PNG (statics-x1/x4-input/<rsId>.png), 3dp. tint[c] = (retailMean_c / candidateMean_c) / gain, clamped [0.25,4], 3dp, so gain x tint reproduces the per-channel ratio exactly; applied to the 3 X3 hue-retint rows (0x060038FC, 0x06003D72, 0x060038F0) and to 0x06003C25 as the eyetest NOTE A warm regrade. SUPERSEDES pilot v1 (6 ESRGAN x4 diffuse-only heads + the 1K PavingStones146/Planks036B entries); pilot v1 backed up verbatim to /mnt/wbterminal2/pbr-terrain/tex-overrides-pilot-v1/. CAVEAT (unchanged from v1, 5.6): __texOverrideStats().hits is PER-INSTANCE and stays 0 even when overrides are demonstrably rendering (bake-worker decodes do not tick the main counter) \u2014 do NOT use hits as a liveness signal; use __atlasStats() new-size buckets (512x512 layers that cannot otherwise exist) or a ?statAtlas=off probe traversal matching the roughness fingerprint. Paletted (P8/Index16) records are refused by construction.",
  "overrides": [
+  {
+   "did": "0x06003CB9",
+   "src": "PavingStones131_Color.png",
+   "normalSrc": "PavingStones131_NormalGL.png",
+   "roughness": 0.502,
+   "gain": 0.172,
+   "note": "PavingStones131 (brick-overgrown) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003CB9 -> Surface 0x0800038A; 69621 placements (0 exterior); lumDelta 0.48, wrap X, flags wrap-X-only/luminance-gain. gain = 24.935/144.709."
+  },
   {
    "did": "0x06003C25",
    "src": "Planks036B_Color.png",
    "normalSrc": "Planks036B_NormalGL.png",
    "roughness": 0.509,
    "gain": 0.566,
-   "note": "X3 pick preview: full PBR-path test (CC0 Color+NormalGL+rough scalar+gain). 1070 eyetest 2026-07-29 NOTE A: character regression (modern laminate vs warm knotty retail) AND it only lands on an ambient-lit Holtburg interior floor - re-pick/re-grade before any dat bake; see 0x06003AD6 for the sun-lit PBR demo."
+   "tint": [
+    1.129,
+    1.031,
+    0.741
+   ],
+   "note": "Planks036B (wood-plank) \u2014 user-approved 2026-07-29 review; warm-regraded per eyetest note A (was character regression cool/uniform); judge regrade next 1070 pass"
+  },
+  {
+   "did": "0x06003CA5",
+   "src": "Concrete047A_Color.png",
+   "normalSrc": "Concrete047A_NormalGL.png",
+   "roughness": 0.599,
+   "gain": 0.534,
+   "note": "Concrete047A (plaster-stucco) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003CA5 -> Surface 0x0800037C; 33092 placements (291 exterior); lumDelta 0.245, wrap X, flags wrap-X-only/luminance-gain. gain = 70.377/131.733."
+  },
+  {
+   "did": "0x06003C9A",
+   "src": "PavingStones005_Color.png",
+   "normalSrc": "PavingStones005_NormalGL.png",
+   "roughness": 0.491,
+   "gain": 0.442,
+   "note": "PavingStones005 (stone-block-grey) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003C9A -> Surface 0x08000373; 29974 placements (0 exterior); lumDelta 0.319, wrap -, flags luminance-gain. gain = 60.244/136.368."
+  },
+  {
+   "did": "0x06003F76",
+   "src": "Planks033B_Color.png",
+   "normalSrc": "Planks033B_NormalGL.png",
+   "roughness": 0.508,
+   "gain": 0.689,
+   "note": "Planks033B (wood-plank) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003F76 -> Surface 0x08000539; 28648 placements (0 exterior); lumDelta 0.141, wrap X, flags wrap-X-only/luminance-gain. gain = 84.061/121.924."
+  },
+  {
+   "did": "0x06003C98",
+   "src": "Bricks091_Color.png",
+   "normalSrc": "Bricks091_NormalGL.png",
+   "roughness": 0.536,
+   "gain": 0.414,
+   "note": "Bricks091 (brick-tan) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003C98 -> Surface 0x08000372; 25414 placements (51 exterior); lumDelta 0.333, wrap XY, flags luminance-gain. gain = 54.468/131.419."
+  },
+  {
+   "did": "0x06003AF5",
+   "src": "Rock062_Color.png",
+   "normalSrc": "Rock062_NormalGL.png",
+   "roughness": 0.724,
+   "gain": 0.704,
+   "note": "Rock062 (carved-stone) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003AF5 -> Surface 0x08000245; 25306 placements (2 exterior); lumDelta 0.082, wrap XY, flags partial-fit. gain = 54.388/77.309."
+  },
+  {
+   "did": "0x060039F2",
+   "src": "Bricks076A_Color.png",
+   "normalSrc": "Bricks076A_NormalGL.png",
+   "roughness": 0.731,
+   "gain": 0.495,
+   "note": "Bricks076A (brick-grey) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x060039F2 -> Surface 0x080001A5; 25249 placements (1260 exterior); lumDelta 0.208, wrap XY, flags luminance-gain. gain = 52.277/105.53."
+  },
+  {
+   "did": "0x06003AED",
+   "src": "Rock033_Color.png",
+   "normalSrc": "Rock033_NormalGL.png",
+   "roughness": 0.698,
+   "gain": 0.682,
+   "note": "Rock033 (rock-dark) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003AED -> Surface 0x08000241; 24478 placements (0 exterior); lumDelta 0.049, wrap Y, flags wrap-Y-only. gain = 21.408/31.389."
+  },
+  {
+   "did": "0x060039A7",
+   "src": "Rock032_Color.png",
+   "normalSrc": "Rock032_NormalGL.png",
+   "roughness": 0.697,
+   "gain": 0.649,
+   "note": "Rock032 (stone-smooth) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x060039A7 -> Surface 0x0800017C; 23193 placements (0 exterior); lumDelta 0.126, wrap XY, flags luminance-gain. gain = 56.324/86.829."
+  },
+  {
+   "did": "0x06003AF7",
+   "src": "Rock054_Color.png",
+   "normalSrc": "Rock054_NormalGL.png",
+   "roughness": 0.553,
+   "gain": 0.567,
+   "note": "Rock054 (carved-stone) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003AF7 -> Surface 0x08000246; 23166 placements (0 exterior); lumDelta 0.268, wrap XY, flags luminance-gain/partial-fit. gain = 80.788/142.452."
+  },
+  {
+   "did": "0x060038FC",
+   "src": "Rock031_Color.png",
+   "normalSrc": "Rock031_NormalGL.png",
+   "roughness": 0.687,
+   "gain": 0.635,
+   "tint": [
+    1.051,
+    0.739,
+    1.226
+   ],
+   "note": "Rock031 (rock-dark-purple) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x060038FC -> Surface 0x08000112; 21615 placements (0 exterior); lumDelta 0.084, wrap XY, flags hue-retint. gain = 28.576/44.979; tint = per-channel [30.349, 21.622, 33.757]/[45.493, 46.076, 43.366] over gain (X3 hue-retint)."
+  },
+  {
+   "did": "0x0600398D",
+   "src": "Bricks099_Color.png",
+   "normalSrc": "Bricks099_NormalGL.png",
+   "roughness": 0.519,
+   "gain": 0.455,
+   "note": "Bricks099 (brick-tan) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x0600398D -> Surface 0x0800016F; 21266 placements (0 exterior); lumDelta 0.273, wrap XY, flags luminance-gain. gain = 53.706/118.005."
+  },
+  {
+   "did": "0x060039A3",
+   "src": "Rock060_Color.png",
+   "normalSrc": "Rock060_NormalGL.png",
+   "roughness": 0.756,
+   "gain": 0.471,
+   "note": "Rock060 (stone-smooth) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x060039A3 -> Surface 0x0800017A; 21070 placements (0 exterior); lumDelta 0.186, wrap XY, flags luminance-gain. gain = 43.13/91.609."
+  },
+  {
+   "did": "0x06003BD9",
+   "src": "Bricks068_Color.png",
+   "normalSrc": "Bricks068_NormalGL.png",
+   "roughness": 0.608,
+   "gain": 0.494,
+   "note": "Bricks068 (stone-ashlar) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003BD9 -> Surface 0x080002DD; 19581 placements (0 exterior); lumDelta 0.246, wrap -, flags luminance-gain. gain = 61.894/125.314."
+  },
+  {
+   "did": "0x060038F0",
+   "src": "PavingStones036_Color.png",
+   "normalSrc": "PavingStones036_NormalGL.png",
+   "roughness": 0.593,
+   "gain": 0.323,
+   "tint": [
+    0.937,
+    1.313,
+    0.707
+   ],
+   "note": "PavingStones036 (stone-mossy-slab) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x060038F0 -> Surface 0x0800010C; 19064 placements (0 exterior); lumDelta 0.352, wrap X, flags wrap-X-only/luminance-gain/hue-retint. gain = 45.391/140.681; tint = per-channel [44.063, 62.766, 29.342]/[145.625, 147.97, 128.448] over gain (X3 hue-retint)."
+  },
+  {
+   "did": "0x06003E7E",
+   "src": "Rock020_Color.png",
+   "normalSrc": "Rock020_NormalGL.png",
+   "roughness": 0.515,
+   "gain": 0.689,
+   "note": "Rock020 (rock-mottled) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003E7E -> Surface 0x080004A8; 18941 placements (0 exterior); lumDelta 0.088, wrap XY. gain = 52.466/76.107."
+  },
+  {
+   "did": "0x06003AF9",
+   "src": "Rock056_Color.png",
+   "normalSrc": "Rock056_NormalGL.png",
+   "roughness": 0.577,
+   "gain": 0.512,
+   "note": "Rock056 (carved-stone) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003AF9 -> Surface 0x08000247; 18283 placements (0 exterior); lumDelta 0.224, wrap XY, flags luminance-gain/partial-fit. gain = 52.978/103.503."
+  },
+  {
+   "did": "0x06003AFB",
+   "src": "Rock051_Color.png",
+   "normalSrc": "Rock051_NormalGL.png",
+   "roughness": 0.564,
+   "gain": 0.548,
+   "note": "Rock051 (carved-stone) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003AFB -> Surface 0x08000248; 18079 placements (0 exterior); lumDelta 0.189, wrap XY, flags luminance-gain/partial-fit. gain = 60.115/109.789."
+  },
+  {
+   "did": "0x06003E7C",
+   "src": "Gravel032_Color.png",
+   "normalSrc": "Gravel032_NormalGL.png",
+   "roughness": 0.674,
+   "gain": 0.949,
+   "note": "Gravel032 (ground-rubble) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003E7C -> Surface 0x080004A7; 17546 placements (2 exterior); lumDelta 0.026, wrap XY. gain = 128.469/135.345."
+  },
+  {
+   "did": "0x06003D76",
+   "src": "Rock050_Color.png",
+   "normalSrc": "Rock050_NormalGL.png",
+   "roughness": 0.565,
+   "gain": 0.533,
+   "note": "Rock050 (ground-rubble) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003D76 -> Surface 0x080003FC; 16867 placements (0 exterior); lumDelta 0.17, wrap XY, flags luminance-gain. gain = 47.065/88.381."
+  },
+  {
+   "did": "0x06003D0D",
+   "src": "Rock022_Color.png",
+   "normalSrc": "Rock022_NormalGL.png",
+   "roughness": 0.545,
+   "gain": 0.676,
+   "note": "Rock022 (rock-striated) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003D0D -> Surface 0x080003B8; 16171 placements (0 exterior); lumDelta 0.129, wrap X, flags wrap-X-only/luminance-gain. gain = 66.636/98.503."
+  },
+  {
+   "did": "0x06003D0F",
+   "src": "Rock061_Color.png",
+   "normalSrc": "Rock061_NormalGL.png",
+   "roughness": 0.683,
+   "gain": 0.422,
+   "note": "Rock061 (rock-striated) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003D0F -> Surface 0x080003B9; 15843 placements (0 exterior); lumDelta 0.18, wrap X, flags wrap-X-only/luminance-gain. gain = 34.509/81.811."
+  },
+  {
+   "did": "0x0600389E",
+   "src": "Bricks074_Color.png",
+   "normalSrc": "Bricks074_NormalGL.png",
+   "roughness": 0.63,
+   "gain": 0.213,
+   "note": "Bricks074 (brick-red) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x0600389E -> Surface 0x080000DA; 15749 placements (0 exterior); lumDelta 0.348, wrap XY, flags luminance-gain. gain = 24.398/114.544."
+  },
+  {
+   "did": "0x06003D72",
+   "src": "Rock034_Color.png",
+   "normalSrc": "Rock034_NormalGL.png",
+   "roughness": 0.682,
+   "gain": 0.589,
+   "tint": [
+    0.947,
+    0.905,
+    1.166
+   ],
+   "note": "Rock034 (rock-mottled) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003D72 -> Surface 0x080003FA; 15682 placements (0 exterior); lumDelta 0.141, wrap X, flags wrap-X-only/luminance-gain/hue-retint. gain = 45.343/76.96; tint = per-channel [44.624, 42.415, 48.991]/[79.961, 79.575, 71.343] over gain (X3 hue-retint)."
+  },
+  {
+   "did": "0x06003E80",
+   "src": "Ground051_Color.png",
+   "normalSrc": "Ground051_NormalGL.png",
+   "roughness": 0.681,
+   "gain": 1.207,
+   "note": "Ground051 (ground-dirt) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003E80 -> Surface 0x080004A9; 15204 placements (0 exterior); lumDelta -0.061, wrap XY. gain = 97.498/80.75."
+  },
+  {
+   "did": "0x060038F4",
+   "src": "Rock064_Color.png",
+   "normalSrc": "Rock064_NormalGL.png",
+   "roughness": 0.552,
+   "gain": 0.389,
+   "note": "Rock064 (stone-mossy-slab) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x060038F4 -> Surface 0x0800010E; 15075 placements (0 exterior); lumDelta 0.247, wrap XY, flags luminance-gain. gain = 38.529/98.99."
+  },
+  {
+   "did": "0x06003B09",
+   "src": "Ground048_Color.png",
+   "normalSrc": "Ground048_NormalGL.png",
+   "roughness": 0.669,
+   "gain": 0.815,
+   "note": "Ground048 (ground-dirt) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003B09 -> Surface 0x0800024F; 14660 placements (0 exterior); lumDelta 0.044, wrap XY. gain = 53.612/65.755."
   },
   {
    "did": "0x06003AD6",
@@ -16,31 +252,47 @@
    "normalSrc": "PavingStones146_NormalGL.png",
    "roughness": 0.595,
    "gain": 0.569,
-   "note": "SUN-LIT EXTERIOR PBR DEMO (added for the next 1070 pass, answers eyetest NOTE B). rs 0x06003AD6 / Surface 0x08000233, X2 rank 34, 1400 exterior placements (2nd-highest exterior after the plank) - X3 family paving-flagstone -> PavingStones146 1K. Chosen because it is the highest-exterior X3 pick NOT already in this bundle AND it is present outdoors in the Holtburg landblock cluster (21 static instances across 0xA9B3-0xA9B6 etc, the most of any X3-covered surface there), so the same @telepoi Holtburg arm sees it under direct sun at grazing angles - exactly where the authored NormalGL relief reads. gain = retailMean/candidateMean over RGB = 99.313/174.660; roughness = mean(_Roughness)/255 = 151.764/255."
+   "note": "PavingStones146 (paving-flagstone) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003AD6 -> Surface 0x08000233; 14498 placements (1400 exterior); lumDelta 0.298, wrap XY, flags luminance-gain. gain = 99.313/174.66. Carries over the SUN-LIT EXTERIOR PBR DEMO role from pilot v1 (answers eyetest NOTE B): 1400 exterior placements and 21 outdoor static instances in the Holtburg landblock cluster (0xA9B3-0xA9B6), so the @telepoi Holtburg A/B arm sees the authored NormalGL relief in direct sun at grazing angles."
   },
   {
-   "did": "0x06003CA5",
-   "src": "0x06003CA5.png"
+   "did": "0x06003F74",
+   "src": "Bricks096_Color.png",
+   "normalSrc": "Bricks096_NormalGL.png",
+   "roughness": 0.584,
+   "gain": 0.799,
+   "note": "Bricks096 (brick-grey) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003F74 -> Surface 0x08000538; 14329 placements (0 exterior); lumDelta 0.086, wrap XY. gain = 77.802/97.332."
   },
   {
-   "did": "0x06003C9A",
-   "src": "0x06003C9A.png"
+   "did": "0x06003B07",
+   "src": "Rock053_Color.png",
+   "normalSrc": "Rock053_NormalGL.png",
+   "roughness": 0.589,
+   "gain": 0.966,
+   "note": "Rock053 (rock-sandstone) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003B07 -> Surface 0x0800024E; 13755 placements (0 exterior); lumDelta 0.011, wrap XY. gain = 84.675/87.639."
   },
   {
-   "did": "0x06003C98",
-   "src": "0x06003C98.png"
+   "did": "0x06003E82",
+   "src": "Granite007A_Color.png",
+   "normalSrc": "Granite007A_NormalGL.png",
+   "roughness": 0.047,
+   "gain": 0.879,
+   "note": "Granite007A (rock-mottled) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003E82 -> Surface 0x080004AA; 13598 placements (0 exterior); lumDelta 0.062, wrap X, flags wrap-X-only. gain = 99.994/113.819."
   },
   {
-   "did": "0x06003AF5",
-   "src": "0x06003AF5.png"
+   "did": "0x06003A23",
+   "src": "Planks037A_Color.png",
+   "normalSrc": "Planks037A_NormalGL.png",
+   "roughness": 0.445,
+   "gain": 0.51,
+   "note": "Planks037A (wood-plank) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003A23 -> Surface 0x080001C8; 13204 placements (664 exterior); lumDelta 0.109, wrap Y, flags wrap-Y-only. gain = 31.829/62.388."
   },
   {
-   "did": "0x060039F2",
-   "src": "0x060039F2.png"
-  },
-  {
-   "did": "0x06003AED",
-   "src": "0x06003AED.png"
+   "did": "0x06003CA0",
+   "src": "Concrete040_Color.png",
+   "normalSrc": "Concrete040_NormalGL.png",
+   "roughness": 0.528,
+   "gain": 0.662,
+   "note": "Concrete040 (plaster-stucco) \u2014 user-approved 2026-07-29 review. X3 rec for rs 0x06003CA0 -> Surface 0x08000378; 11355 placements (0 exterior); lumDelta 0.166, wrap XY, flags luminance-gain. gain = 77.649/117.226."
   }
  ]
 }
