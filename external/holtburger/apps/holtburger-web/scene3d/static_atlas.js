@@ -148,6 +148,20 @@ function makeArrayMaterial(diffArray, stateKey) {
     metalness: 0.0,
   });
   _applyStateKey(m, stateKey);
+  // RND-33 follow-through (2026-07-28) — THE building/statics SMEAR fix. The
+  // stateKey's trailing wrap field kept WRAP and CLAMP members from
+  // co-bucketing, but the wrap bucket's sampler still addressed the
+  // ClampToEdge array RAW: every surface whose UVs tile past [0,1] (ALL
+  // retail buildings — roofs tile to u≈6.75, terrainplan §X3) clamped to the
+  // edge texel and smeared it across the face (Holtburg A/B: statAtlas=off
+  // crisp thatch, default arm brown goo — scratchpad ab-statatlas-*.png).
+  // Wrap buckets now sample fract(vMapUv) through textureGrad with the
+  // UNWRAPPED uv's derivatives, so mip selection stays continuous across the
+  // fract() seam (no per-tile min-mip seam lines). Residual known trade: the
+  // half-texel bilinear discontinuity at each tile repeat (a packed layer
+  // cannot cross-filter its own wrap seam) — invisible on the edge-matched
+  // retail tiles.
+  const wrapBucket = String(stateKey).split("|")[4] === "w";
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uDiffuseArray = { value: diffArray };
     shader.vertexShader = shader.vertexShader
@@ -172,15 +186,18 @@ function makeArrayMaterial(diffArray, stateKey) {
         "#include <map_fragment>",
         [
           "#ifdef USE_MAP",
-          "\tvec4 sampledDiffuseColor = texture( uDiffuseArray, vec3( vMapUv, vLayer ) );",
+          wrapBucket
+            ? "\tvec4 sampledDiffuseColor = textureGrad( uDiffuseArray, vec3( fract( vMapUv ), vLayer ), dFdx( vMapUv ), dFdy( vMapUv ) );"
+            : "\tvec4 sampledDiffuseColor = texture( uDiffuseArray, vec3( vMapUv, vLayer ) );",
           "\tdiffuseColor *= sampledDiffuseColor;",
           "#endif",
         ].join("\n")
       );
   };
-  // All atlas materials share one program; the per-material uDiffuseArray uniform
-  // is bound per-draw. Distinct from the stock MeshStandard key so it links once.
-  m.customProgramCacheKey = () => "statAtlasArrayMatV2";
+  // One program per address-mode variant (wrap buckets fract-sample); the
+  // per-material uDiffuseArray uniform is bound per-draw. Distinct from the
+  // stock MeshStandard key so each variant links once.
+  m.customProgramCacheKey = () => (wrapBucket ? "statAtlasArrayMatV3w" : "statAtlasArrayMatV3c");
   m.userData = { __statAtlasMat: true };
   return m;
 }
