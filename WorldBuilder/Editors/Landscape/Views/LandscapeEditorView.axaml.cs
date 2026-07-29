@@ -198,11 +198,12 @@ namespace WorldBuilder.Editors.Landscape.Views {
         private void CreateFloatingWindow(IDockable panel) {
             if (_floatingWindows.ContainsKey(panel)) return;
 
+            var dockable = panel as WorldBuilder.Lib.Docking.DockablePanelViewModel;
             var window = new Window {
                 Title = panel.Title,
                 Content = panel,
-                Width = 300,
-                Height = 400,
+                Width = dockable?.FloatWidth ?? 300,
+                Height = dockable?.FloatHeight ?? 400,
                 ShowInTaskbar = true,
                 SystemDecorations = SystemDecorations.BorderOnly,
                 ExtendClientAreaToDecorationsHint = true,

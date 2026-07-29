@@ -65,6 +65,9 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         private WorldMapPanelViewModel? _worldMapPanel;
 
         [ObservableProperty]
+        private TexturePickerPanelViewModel? _texturePickerPanel;
+
+        [ObservableProperty]
         private object? _leftPanelContent;
 
         [ObservableProperty]
@@ -232,6 +235,10 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             BookmarksPanel = new CameraBookmarksPanelViewModel(TerrainSystem, Settings);
             WorldMapPanel = new WorldMapPanelViewModel(TerrainSystem, TerrainSystem.Scene.SurfaceManager);
 
+            // X-track CC0 texture picker. Standalone (reads only the picker JSON on disk), so it is
+            // constructed like the bookmarks panel rather than wired into the terrain scene.
+            TexturePickerPanel = new TexturePickerPanelViewModel();
+
             LeftPanelContent = ObjectBrowser;
             LeftPanelTitle = "Object Browser";
 
@@ -289,7 +296,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         private void InitDocking() {
             var layouts = Settings.Landscape.UIState.DockingLayout;
 
-            void Register(string id, string title, object content, DockLocation defaultLoc) {
+            DockablePanelViewModel Register(string id, string title, object content, DockLocation defaultLoc) {
                 var panel = new DockablePanelViewModel(id, title, content, DockingManager);
                 var saved = layouts.FirstOrDefault(l => l.Id == id);
                 if (saved != null) {
@@ -300,6 +307,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                     panel.Location = defaultLoc;
                 }
                 DockingManager.RegisterPanel(panel);
+                return panel;
             }
 
             if (ObjectBrowser != null) Register("ObjectBrowser", "Object Browser", ObjectBrowser, DockLocation.Left);
@@ -308,6 +316,14 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             if (HistorySnapshotPanel != null) Register("History", "History", HistorySnapshotPanel, DockLocation.Right);
             if (BookmarksPanel != null) Register("Bookmarks", "Bookmarks", BookmarksPanel, DockLocation.Right);
             if (WorldMapPanel != null) Register("WorldMap", "World Map", WorldMapPanel, DockLocation.Right);
+            if (TexturePickerPanel != null) {
+                // Docked Left, where the editor grid gives it a 280 px column — which is what the
+                // panel's candidate grid (2 × 98 px tiles) is laid out for. Floating gets a wider,
+                // taller window than the 300x400 default so the worklist is usable torn off.
+                var pickerPanel = Register("TexturePicker", "Texture Picker", TexturePickerPanel, DockLocation.Left);
+                pickerPanel.FloatWidth = 340;
+                pickerPanel.FloatHeight = 820;
+            }
 
             Register("AceInstances", "ACE Instances", new AceInstancesPanelViewModel(this), DockLocation.Right);
 

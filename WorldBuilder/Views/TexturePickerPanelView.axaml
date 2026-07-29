@@ -1,0 +1,424 @@
+<UserControl
+    x:Class="WorldBuilder.Views.TexturePickerPanelView"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:i="using:Avalonia.Xaml.Interactivity"
+    xmlns:ia="using:Avalonia.Xaml.Interactions.Core"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:WorldBuilder.ViewModels"
+    d:DesignHeight="900"
+    d:DesignWidth="280"
+    x:CompileBindings="True"
+    x:DataType="vm:TexturePickerPanelViewModel"
+    Focusable="True"
+    mc:Ignorable="d"
+    MinWidth="248">
+
+    <UserControl.Styles>
+        <Style Selector="Button.candidate">
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="Button.candidate.selected">
+            <Setter Property="BorderBrush" Value="#FF4CAF50" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Opacity" Value="0.6" />
+        </Style>
+    </UserControl.Styles>
+
+    <DockPanel LastChildFill="True">
+
+        <!--  Header  -->
+        <StackPanel DockPanel.Dock="Top" Margin="10,8,10,4" Spacing="2">
+            <DockPanel>
+                <StackPanel
+                    DockPanel.Dock="Right"
+                    Orientation="Horizontal"
+                    Spacing="4">
+                    <Button
+                        Command="{Binding ReloadCommand}"
+                        Content="⟳"
+                        Focusable="False"
+                        ToolTip.Tip="Reload picker-recommendations.json / picker-picks.json" />
+                    <Button
+                        Command="{Binding ExportOverridesCommand}"
+                        Content="Export…"
+                        Focusable="False"
+                        ToolTip.Tip="Write a holtburger statTexOverride bundle (diffuse only)" />
+                </StackPanel>
+                <TextBlock
+                    FontSize="13"
+                    FontWeight="SemiBold"
+                    Text="Texture Picker"
+                    VerticalAlignment="Center" />
+            </DockPanel>
+            <TextBlock Classes="hint" Text="{Binding ProgressText}" />
+            <TextBox
+                FontSize="11"
+                Text="{Binding PickerDirectory, Mode=TwoWay}"
+                ToolTip.Tip="Directory holding picker-recommendations.json / picker-picks.json — press ⟳ after changing"
+                Watermark="picker data directory" />
+        </StackPanel>
+
+        <!--  Status line  -->
+        <StackPanel DockPanel.Dock="Bottom" Margin="10,4,10,8">
+            <TextBlock
+                Classes="hint"
+                Foreground="#FFCC8844"
+                IsVisible="{Binding AvailabilityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                Text="{Binding AvailabilityText}"
+                TextWrapping="Wrap" />
+            <TextBlock
+                Classes="hint"
+                Text="{Binding StatusText}"
+                TextWrapping="Wrap" />
+        </StackPanel>
+
+        <ScrollViewer>
+            <StackPanel Margin="10,4,10,4" Spacing="8">
+
+                <!--  Current surface  -->
+                <Border
+                    Background="{DynamicResource SystemControlBackgroundListLowBrush}"
+                    CornerRadius="3"
+                    Padding="8,6">
+                    <StackPanel Spacing="2">
+                        <TextBlock
+                            FontFamily="Consolas,Courier New,monospace"
+                            FontWeight="SemiBold"
+                            Text="{Binding SelectedRow.RsId, FallbackValue='(no row)'}" />
+                        <TextBlock Classes="hint">
+                            <Run Text="rank" />
+                            <Run Text="{Binding SelectedRow.X2Rank, FallbackValue=0}" />
+                            <Run Text="·" />
+                            <Run Text="{Binding SelectedRow.PlacementsText, FallbackValue=''}" />
+                            <Run Text="placements · wrap" />
+                            <Run Text="{Binding SelectedRow.WrapAxes, FallbackValue='-'}" />
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <!--  Preview: 2D tiled ImageBrush. Repeat N renders N tiles across.  -->
+                <DockPanel>
+                    <StackPanel
+                        DockPanel.Dock="Top"
+                        Orientation="Horizontal"
+                        Spacing="6">
+                        <Button
+                            Command="{Binding ToggleRetailCommand}"
+                            Content="A/B"
+                            Focusable="False"
+                            ToolTip.Tip="Toggle retail vs selected candidate (Space)" />
+                        <TextBlock
+                            Classes="hint"
+                            Text="{Binding PreviewSourceLabel}"
+                            VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Border
+                        BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                        BorderThickness="1"
+                        ClipToBounds="True"
+                        CornerRadius="3"
+                        Margin="0,4,0,0"
+                        MinHeight="240">
+                        <Border.Background>
+                            <ImageBrush
+                                AlignmentX="Left"
+                                AlignmentY="Top"
+                                DestinationRect="{Binding PreviewTileRect}"
+                                Source="{Binding PreviewBitmap}"
+                                Stretch="Fill"
+                                TileMode="Tile" />
+                        </Border.Background>
+                    </Border>
+                </DockPanel>
+
+                <!--  Repeat-factor stepper. An n/a axis reads "n/a" and its buttons are dead.  -->
+                <WrapPanel Orientation="Horizontal">
+                    <TextBlock
+                        Margin="0,0,4,0"
+                        Text="Repeat"
+                        VerticalAlignment="Center" />
+                    <TextBlock
+                        FontFamily="Consolas,Courier New,monospace"
+                        Margin="0,0,4,0"
+                        MinWidth="76"
+                        Text="{Binding RepeatText}"
+                        ToolTip.Tip="n/a = the ranking pipeline could not estimate this axis; it is persisted as null, never as 1"
+                        VerticalAlignment="Center" />
+                    <Button
+                        Command="{Binding StepRepeatXCommand}"
+                        CommandParameter="-0.25"
+                        Content="X−"
+                        Focusable="False"
+                        IsEnabled="{Binding HasRepeatX}"
+                        Margin="0,0,2,0"
+                        ToolTip.Tip="[" />
+                    <Button
+                        Command="{Binding StepRepeatXCommand}"
+                        CommandParameter="0.25"
+                        Content="X+"
+                        Focusable="False"
+                        IsEnabled="{Binding HasRepeatX}"
+                        Margin="0,0,2,0"
+                        ToolTip.Tip="]" />
+                    <Button
+                        Command="{Binding StepRepeatYCommand}"
+                        CommandParameter="-0.25"
+                        Content="Y−"
+                        Focusable="False"
+                        IsEnabled="{Binding HasRepeatY}"
+                        Margin="0,0,2,0"
+                        ToolTip.Tip="," />
+                    <Button
+                        Command="{Binding StepRepeatYCommand}"
+                        CommandParameter="0.25"
+                        Content="Y+"
+                        Focusable="False"
+                        IsEnabled="{Binding HasRepeatY}"
+                        Margin="0,0,2,0"
+                        ToolTip.Tip="." />
+                    <Button
+                        Command="{Binding ResetRepeatCommand}"
+                        Content="⟲"
+                        Focusable="False"
+                        ToolTip.Tip="Reset to the candidate's suggested repeat (R)" />
+                </WrapPanel>
+
+                <!--  Bake-time gain / tint. Both are optional: empty = leave the texture alone.  -->
+                <WrapPanel Orientation="Horizontal">
+                    <TextBlock
+                        Margin="0,0,4,0"
+                        Text="Gain"
+                        VerticalAlignment="Center" />
+                    <NumericUpDown
+                        AllowSpin="True"
+                        FormatString="0.00"
+                        Increment="0.05"
+                        Margin="0,0,4,0"
+                        Maximum="2.00"
+                        Minimum="0.10"
+                        MinWidth="96"
+                        ShowButtonSpinner="True"
+                        ToolTip.Tip="Bake-time brightness multiplier. Empty = untouched. Seeded from retail/candidate mean luminance."
+                        Value="{Binding Gain, Mode=TwoWay}"
+                        Watermark="1.00" />
+                    <Button
+                        Command="{Binding SuggestGainCommand}"
+                        Content="⌁"
+                        Focusable="False"
+                        Margin="0,0,2,0"
+                        ToolTip.Tip="Re-seed gain = retail mean luminance ÷ candidate mean luminance" />
+                    <Button
+                        Command="{Binding ClearGainAndTintCommand}"
+                        Content="∅"
+                        Focusable="False"
+                        ToolTip.Tip="Clear gain and tint (persist as null)" />
+                </WrapPanel>
+
+                <WrapPanel Orientation="Horizontal">
+                    <TextBlock
+                        Margin="0,0,4,0"
+                        Text="Tint"
+                        VerticalAlignment="Center" />
+                    <Border
+                        Background="{Binding TintSwatchBrush}"
+                        BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                        BorderThickness="1"
+                        CornerRadius="2"
+                        Height="18"
+                        Margin="0,0,4,0"
+                        ToolTip.Tip="{Binding TintSwatchHex}"
+                        VerticalAlignment="Center"
+                        Width="18" />
+                    <TextBox
+                        FontFamily="Consolas,Courier New,monospace"
+                        FontSize="11"
+                        MinWidth="132"
+                        Text="{Binding TintText, Mode=TwoWay}"
+                        ToolTip.Tip="R/G/B multipliers: '#8fa0b4', '0.9,0.95,1' or a single '0.9'. Empty = untouched."
+                        Watermark="#rrggbb or r,g,b" />
+                    <TextBlock
+                        Classes="hint"
+                        Foreground="#FFCC5555"
+                        IsVisible="{Binding !IsTintValid}"
+                        Margin="4,0,0,0"
+                        Text="unparseable"
+                        VerticalAlignment="Center" />
+                </WrapPanel>
+
+                <!--  Candidate sidebar: top-5, keys 1-5  -->
+                <TextBlock
+                    Classes="hint"
+                    Text="Candidates — flat colour maps, press 1-5 to preview" />
+                <ItemsControl ItemsSource="{Binding Candidates}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TexturePickerCandidateItem">
+                            <Button
+                                Classes="candidate"
+                                Classes.selected="{Binding IsSelected}"
+                                Command="{Binding Owner.SelectCandidateCommand}"
+                                CommandParameter="{Binding}"
+                                Focusable="False"
+                                Height="144"
+                                Margin="2"
+                                Padding="3"
+                                ToolTip.Tip="{Binding TooltipText}"
+                                Width="98">
+                                <StackPanel HorizontalAlignment="Center" Spacing="2">
+                                    <Panel Height="76" Width="88">
+                                        <Border
+                                            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                                            BorderThickness="1"
+                                            ClipToBounds="True"
+                                            CornerRadius="2">
+                                            <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                        </Border>
+                                        <Border
+                                            Background="#B0000000"
+                                            CornerRadius="2"
+                                            HorizontalAlignment="Left"
+                                            Margin="2"
+                                            Padding="4,0"
+                                            VerticalAlignment="Top">
+                                            <TextBlock
+                                                FontSize="10"
+                                                Foreground="White"
+                                                Text="{Binding Hotkey}" />
+                                        </Border>
+                                        <Border
+                                            Background="#B0B03030"
+                                            CornerRadius="2"
+                                            HorizontalAlignment="Right"
+                                            IsVisible="{Binding !HasFullResolution}"
+                                            Margin="2"
+                                            Padding="4,0"
+                                            ToolTip.Tip="{Binding ExportBlockedReason}"
+                                            VerticalAlignment="Top">
+                                            <TextBlock
+                                                FontSize="9"
+                                                Foreground="White"
+                                                Text="{Binding AvailabilityBadge}" />
+                                        </Border>
+                                    </Panel>
+                                    <TextBlock
+                                        FontSize="10"
+                                        HorizontalAlignment="Center"
+                                        MaxWidth="92"
+                                        Text="{Binding Label}"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        Classes="hint"
+                                        HorizontalAlignment="Center"
+                                        MaxWidth="92"
+                                        Text="{Binding CategoryText}"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <TextBlock
+                                        Classes="hint"
+                                        HorizontalAlignment="Center"
+                                        Text="{Binding ScoreText}" />
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!--  Decision actions  -->
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button
+                        Command="{Binding PickCurrentCommand}"
+                        Content="Pick"
+                        Focusable="False"
+                        ToolTip.Tip="Enter" />
+                    <Button
+                        Command="{Binding SkipCurrentCommand}"
+                        Content="Skip"
+                        Focusable="False"
+                        ToolTip.Tip="S" />
+                    <Button
+                        Command="{Binding ClearCurrentDecisionCommand}"
+                        Content="Clear"
+                        Focusable="False"
+                        ToolTip.Tip="C" />
+                    <Button
+                        Command="{Binding PrevRowCommand}"
+                        Content="▲"
+                        Focusable="False"
+                        ToolTip.Tip="Previous row (Up / K)" />
+                    <Button
+                        Command="{Binding NextRowCommand}"
+                        Content="▼"
+                        Focusable="False"
+                        ToolTip.Tip="Next row (Down / J)" />
+                    <Button
+                        Command="{Binding NextUndecidedRowCommand}"
+                        Content="⏭"
+                        Focusable="False"
+                        ToolTip.Tip="Next undecided row (N)" />
+                </StackPanel>
+
+                <!--  Worklist navigator  -->
+                <TextBlock Classes="hint" Text="Worklist — sorted by x2Rank" />
+                <ListBox
+                    x:Name="WorklistListBox"
+                    ItemsSource="{Binding Rows}"
+                    MaxHeight="260"
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    SelectedItem="{Binding SelectedRow}">
+                    <i:Interaction.Behaviors>
+                        <ia:EventTriggerBehavior EventName="SelectionChanged">
+                            <ia:InvokeCommandAction
+                                Command="{Binding GoToRowCommand}"
+                                CommandParameter="{Binding #WorklistListBox.SelectedItem}" />
+                        </ia:EventTriggerBehavior>
+                    </i:Interaction.Behaviors>
+                    <ListBox.Styles>
+                        <Style Selector="ListBoxItem">
+                            <Setter Property="Padding" Value="6,3" />
+                        </Style>
+                    </ListBox.Styles>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TexturePickerRowItem">
+                            <DockPanel>
+                                <TextBlock
+                                    DockPanel.Dock="Left"
+                                    MinWidth="16"
+                                    Text="{Binding DecisionGlyph}"
+                                    VerticalAlignment="Center" />
+                                <TextBlock
+                                    Classes="hint"
+                                    DockPanel.Dock="Right"
+                                    Text="{Binding PlacementsText}"
+                                    VerticalAlignment="Center" />
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock
+                                        FontFamily="Consolas,Courier New,monospace"
+                                        Text="{Binding RsId}" />
+                                    <TextBlock
+                                        Classes="hint"
+                                        Text="{Binding WrapAxes}" />
+                                    <TextBlock
+                                        Classes="hint"
+                                        Text="{Binding DecisionDetail}" />
+                                </StackPanel>
+                            </DockPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <TextBlock
+                    Classes="hint"
+                    Text="Keys: ↑/K prev · ↓/J next · N next undecided · 1-5 candidate · Space retail A/B · Enter pick · S skip · C clear · [ ] repeat X · , . repeat Y · - = repeat both · R reset"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

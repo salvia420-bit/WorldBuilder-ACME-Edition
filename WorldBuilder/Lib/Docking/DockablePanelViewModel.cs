@@ -20,6 +20,16 @@ namespace WorldBuilder.Lib.Docking {
 
         public object Content { get; }
 
+        /// <summary>
+        /// Optional size hint used ONLY when this panel is torn off into a floating window (the
+        /// docked regions are fixed-width by the editor's grid). Null = the floating window's
+        /// default 300x400. Panels whose content is genuinely wider — the Texture Picker's candidate
+        /// grid, for one — set it so floating does not chop a column off.
+        /// </summary>
+        public double? FloatWidth { get; set; }
+
+        public double? FloatHeight { get; set; }
+
         public IRelayCommand MoveUpCommand { get; }
         public IRelayCommand MoveDownCommand { get; }
 
