@@ -30,9 +30,18 @@ namespace DatReaderWriter.Extensions.DBObjs {
                 using var img = Image.Load(imageFilePath);
                 using var rgbaImg = img.CloneAs<Rgba32>();
                 if (shouldResize) {
-                    rgbaImg.Mutate([
-                        new ResizeProcessor(new(), new Size(renderSurface.Width, renderSurface.Height))
-                    ]);
+                    // NOTE: this used to be
+                    //   new ResizeProcessor(new(), new Size(Width, Height))
+                    // whose SECOND argument is the SOURCE size, not the target —
+                    // the target came from the default-constructed ResizeOptions,
+                    // i.e. 0x0, so every shouldResize:true call threw
+                    // "Target width 0 and height 0 must be greater than zero."
+                    if (renderSurface.Width <= 0 || renderSurface.Height <= 0) {
+                        return Result<bool, string>.FromError(
+                            $"shouldResize needs a target size, but the RenderSurface is " +
+                            $"{renderSurface.Width}x{renderSurface.Height}.");
+                    }
+                    rgbaImg.Mutate(ctx => ctx.Resize(renderSurface.Width, renderSurface.Height));
                 }
                 else {
                     renderSurface.Width = rgbaImg.Width;

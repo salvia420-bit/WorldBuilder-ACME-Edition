@@ -324,6 +324,8 @@ public class JsonCommandProcessor {
             ["ui-layout-render"]  = CmdUiLayoutRender,
             ["ui-element-edit"]   = CmdUiElementEdit,
             ["ui-image-replace"]  = CmdUiImageReplace,
+            ["render-surface-import"]    = CmdRenderSurfaceImport,
+            ["surface-texture-collapse"] = CmdSurfaceTextureCollapse,
             ["ui-pack-export"]    = CmdUiPackExport,
             // PR-V Skills view backing dump — see CommandEngine.SkillTableDump.cs
             ["chorizite-dump-skill-table"]      = CmdChoriziteDumpSkillTable,
@@ -788,6 +790,103 @@ public class JsonCommandProcessor {
             dryRun = r.DryRun,
             requestedCount = r.RequestedCount,
             writtenCount = r.WrittenCount,
+            failCount = r.FailCount,
+            records = r.Records,
+        });
+    }
+
+    private string CmdRenderSurfaceImport(System.Text.Json.Nodes.JsonNode node) {
+        string datPath = node["datPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'datPath' field (a portal-DAT COPY — writes to ~/ac_base_dats are refused)");
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+        bool allowCreate = node["allowCreate"]?.GetValue<bool>() ?? false;
+        // Command-level defaults: preserve the record's own format, take the
+        // new dimensions from the image.
+        string? format = node["format"]?.GetValue<string>();
+        bool allowResize = node["allowResize"]?.GetValue<bool>() ?? true;
+
+        var specs = new List<CommandEngine.RenderSurfaceImportSpec>();
+        var single = node["idHex"] ?? node["id"] ?? node["did"];
+        if (single != null) {
+            specs.Add(new CommandEngine.RenderSurfaceImportSpec(
+                Did: ParseUIntFlexible(single, "idHex"),
+                PngPath: node["pngPath"]?.GetValue<string>()
+                    ?? node["imagePath"]?.GetValue<string>()
+                    ?? throw new ArgumentException("Missing 'pngPath' field"),
+                Format: null, AllowResize: null));
+        }
+        // Batch forms — a full-scale bake must not reopen a 1.5 GB
+        // memory-mapped DAT once per record.
+        if (node["imports"] is System.Text.Json.Nodes.JsonArray arr) {
+            foreach (var e in arr) {
+                if (e == null) continue;
+                specs.Add(new CommandEngine.RenderSurfaceImportSpec(
+                    Did: ParseUIntFlexible(e["idHex"] ?? e["id"] ?? e["did"], "imports[].idHex"),
+                    PngPath: e["pngPath"]?.GetValue<string>()
+                        ?? throw new ArgumentException("Missing 'imports[].pngPath'"),
+                    Format: e["format"]?.GetValue<string>(),
+                    AllowResize: e["allowResize"]?.GetValue<bool>()));
+            }
+        }
+        string? fromDir = node["fromDir"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(fromDir)) {
+            if (!Directory.Exists(fromDir)) {
+                throw new ArgumentException($"fromDir not found: {fromDir}");
+            }
+            foreach (var f in Directory.EnumerateFiles(fromDir, "0x*.png").OrderBy(f => f)) {
+                var stem = Path.GetFileNameWithoutExtension(f);
+                if (stem.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                    && uint.TryParse(stem.Substring(2),
+                        System.Globalization.NumberStyles.HexNumber, null, out var did)) {
+                    specs.Add(new CommandEngine.RenderSurfaceImportSpec(did, f, null, null));
+                }
+            }
+        }
+
+        var r = _engine.RenderSurfaceImport(datPath, specs, format, allowResize, dryRun, allowCreate);
+        return Serialize(new {
+            success = true,
+            command = "render-surface-import",
+            datPath = r.DatPath,
+            dryRun = r.DryRun,
+            blockSize = r.BlockSize,
+            requestedCount = r.RequestedCount,
+            writtenCount = r.WrittenCount,
+            failCount = r.FailCount,
+            records = r.Records,
+        });
+    }
+
+    private string CmdSurfaceTextureCollapse(System.Text.Json.Nodes.JsonNode node) {
+        string datPath = node["datPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'datPath' field (a portal-DAT COPY — writes to ~/ac_base_dats are refused)");
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+
+        var specs = new List<CommandEngine.SurfaceTextureCollapseSpec>();
+        var single = node["idHex"] ?? node["id"];
+        if (single != null) {
+            specs.Add(new CommandEngine.SurfaceTextureCollapseSpec(
+                Did: ParseUIntFlexible(single, "idHex"),
+                KeepDid: ParseUIntFlexibleOpt(node["keepDid"])));
+        }
+        if (node["collapses"] is System.Text.Json.Nodes.JsonArray arr) {
+            foreach (var e in arr) {
+                if (e == null) continue;
+                specs.Add(new CommandEngine.SurfaceTextureCollapseSpec(
+                    Did: ParseUIntFlexible(e["idHex"] ?? e["id"], "collapses[].idHex"),
+                    KeepDid: ParseUIntFlexibleOpt(e["keepDid"])));
+            }
+        }
+
+        var r = _engine.SurfaceTextureCollapse(datPath, specs, dryRun);
+        return Serialize(new {
+            success = true,
+            command = "surface-texture-collapse",
+            datPath = r.DatPath,
+            dryRun = r.DryRun,
+            requestedCount = r.RequestedCount,
+            collapsedCount = r.CollapsedCount,
+            unchangedCount = r.UnchangedCount,
             failCount = r.FailCount,
             records = r.Records,
         });
@@ -3013,6 +3112,8 @@ public class JsonCommandProcessor {
             new { name = "ui-element-edit",    args = "datPath, layoutId, edits[{elementId, x?, y?, width?, height?, zLevel?}], dryRun?", description = "Move/resize UI elements in a LayoutDesc and write back to a local-DAT COPY (writes to ~/ac_base_dats refused)" },
             new { name = "ui-image-replace",   args = "datPath, replacements[{did, pngPath}] | fromDir, dryRun?, allowCreate?", description = "Write PNGs into a portal-DAT COPY as RenderSurfaces (format preserved for R8G8B8/A8R8G8B8; batch via a dir of 0x06XXXXXX.png)" },
             new { name = "ui-pack-export",     args = "outDir, layoutIds?, datPath?, includeImages?", description = "Export an AC_UI_Asset_Builder-compatible reference_pack.json + images/ (panels, nodes, widget kinds, state image sets, usage cross-ref)" },
+            new { name = "render-surface-import", args = "datPath, idHex, pngPath, format?, allowResize?, dryRun?, allowCreate? | imports[{idHex,pngPath,format?,allowResize?}] | fromDir", description = "Import a PNG into a portal-DAT COPY as a RenderSurface with the record's own PixelFormat PRESERVED by default (DXT1 stays DXT1 via the in-tree BCnEncoder path) or an explicit format (DXT1/A8R8G8B8/...); allowResize (default true) takes the new dims from the image. Reports old/new dims+format, bytes and blocks used. PREP THE TARGET COPY with bake/scripts/prep_dat.py (zeroed free arena) until the DatReaderWriter contiguous-free-list allocator bug is fixed upstream. Writes to ~/ac_base_dats refused" },
+            new { name = "surface-texture-collapse", args = "datPath, idHex, keepDid?, dryRun? | collapses[{idHex,keepDid?}]", description = "Rewrite a SurfaceTexture (0x05) texture list to a single entry (default keepDid = the LAST entry = the base-detail level that ships in client_portal.dat), so retail ImgTex::GetSurfaceDID takes the m_num==1 branch and cannot fall back to the client_highres.dat index-0 original. Same DAT-copy prep + ~/ac_base_dats refusal as render-surface-import" },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
