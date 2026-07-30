@@ -25,11 +25,11 @@ export const PRESETS = {
         // Wave 2.B (2026-05-28): procedural normal maps off on `low`.
         // Saves +texture memory and sampler bandwidth on integrated /
         // mobile GPUs where the Sobel-derived bumps don't visibly beat
-        // the flat-shading baseline. Wasm still bakes normal_pixels per
-        // surface (cheap, ~one-shot per DID); the gate at MaterialCache
-        // prevents GPU upload. Users can opt back in via the Graphics
-        // settings UI's "Normal maps" toggle.
-        normalMaps: false,
+        // 2026-07-30: flipped ON. Measured on a GTX 1070 at Dryreach,
+        // quality=mid, 400 frames/arm — normal maps + statNra + texBc7 together
+        // ran 35.2 ms median / 28.4 fps against 36.7 / 27.2 for the bare
+        // default, i.e. no cost to pay for. `?normalMaps=off` is the escape.
+        normalMaps: true,
         detailFlag: false,
         terrainDetailNormal: false,
         triplanar: false,
@@ -39,6 +39,18 @@ export const PRESETS = {
         // OFF on `low` for integrated/mobile/swiftshader perf-worker GPUs.
         anisotropy: 1,
         subdivLevel: 1,
+        // Geometry relief (gfx_subdiv.rs) — see docs/url-flags.md `gfxRelief`.
+        // `gfxRelief` is the MASTER opt-in and stays FALSE on every tier until
+        // the 1070 eye-test; the two numbers below are the ladder it will use
+        // when it flips. The decisive URL reader is scene3d/gfx_relief.js
+        // (STRICT `=== "on"`); `gfxRelief` is deliberately NOT in BOOL_FLAGS,
+        // because parseBool would also accept "1"/"true"/"yes" and widen an
+        // opt-in that the docs say must be exact-match.
+        // `low`: relief off entirely — the subdivided vertices are paid in
+        // full by the shadow depth pass, which is the vertex-bound one.
+        gfxRelief: false,
+        gfxSubdivLevel: 0,
+        gfxReliefScale: 0.6,
         hero: false,
         pom: false,
         pomStepsPrimary: 0,
@@ -53,11 +65,13 @@ export const PRESETS = {
     mid: {
         antialias: true,
         shadows: true,
-        // Wave 2.B (2026-05-28): procedural normal maps off on `mid`.
-        // The +texture memory + per-fragment normal-map work cost more
-        // FPS on mid-tier hardware than the visual delta returns. Users
-        // can opt in via Graphics settings or `?normalMaps=on`.
-        normalMaps: false,
+        // Wave 2.B (2026-05-28) turned these off on `mid`: the +texture memory
+        // and per-fragment normal-map work were measured to cost more FPS than
+        // the visual delta returned. RE-MEASURED 2026-07-30 on a GTX 1070 and
+        // that no longer holds — with texBc7 also on, the compressed textures
+        // cut enough bandwidth that the everything-on arm was FASTER (35.2 ms
+        // median / 28.4 fps vs 36.7 / 27.2). `?normalMaps=off` is the escape.
+        normalMaps: true,
         detailFlag: true,
         terrainDetailNormal: true,
         triplanar: true,
@@ -66,6 +80,12 @@ export const PRESETS = {
         // terrain/road textures from smearing without the full 16× cost.
         anisotropy: 4,
         subdivLevel: 2,
+        // 1 = 4x tris on world models. Shadows are ~half the GPU cost at
+        // quality=high and are the ONLY vertex-stage-bound pass, so mid/high
+        // both stop at 4x; 16x is an `ultra` opt-in.
+        gfxRelief: false,
+        gfxSubdivLevel: 1,
+        gfxReliefScale: 1.0,
         hero: false,
         pom: false,
         pomStepsPrimary: 8,
@@ -90,6 +110,9 @@ export const PRESETS = {
         // angles — the prior global `setAdapterMaxAnisotropy(1)` smeared them.
         anisotropy: 16,
         subdivLevel: 4,
+        gfxRelief: false,
+        gfxSubdivLevel: 1,
+        gfxReliefScale: 1.0,
         hero: true,
         pom: true,
         pomStepsPrimary: 16,
@@ -111,6 +134,11 @@ export const PRESETS = {
         triplanarSlopeThresholdPct: 30,
         anisotropy: 16,
         subdivLevel: 8,
+        // 2 = 16x tris. `ultra` is never auto-selected (see detectGpuTier), so
+        // the shadow-pass vertex bill here is always a deliberate opt-in.
+        gfxRelief: false,
+        gfxSubdivLevel: 2,
+        gfxReliefScale: 1.0,
         hero: true,
         pom: true,
         pomStepsPrimary: 24,
@@ -145,12 +173,26 @@ const BOOL_FLAGS = new Set([
 ]);
 
 // Integer-typed flags.
+//
+// NOTE `gfxRelief` (the MASTER geometry-relief opt-in) is deliberately absent
+// from BOOL_FLAGS: `parseBool` also accepts "1"/"true"/"yes", which would widen
+// an opt-in that docs/url-flags.md requires to be an exact `=== "on"` match.
+// Its one decisive reader is `scene3d/gfx_relief.js::resolveGfxRelief`. The two
+// NUMERIC knobs below are safe to expose here (they cannot turn the feature on
+// by themselves) so the Graphics-settings localStorage bag can carry them;
+// gfx_relief.js clamps whatever it reads, from either source.
 const INT_FLAGS = new Set([
     "subdivLevel",
+    "gfxSubdivLevel",
     "pomStepsPrimary",
     "pomStepsSelfShadow",
     "triplanarSlopeThresholdPct",
     "maxParticlesPerEmitter",
+]);
+
+// Float-typed flags.
+const FLOAT_FLAGS = new Set([
+    "gfxReliefScale",
 ]);
 
 function parseBool(raw) {
@@ -165,6 +207,11 @@ function parseInteger(raw) {
     return Number.isFinite(n) ? n : null;
 }
 
+function parseFloatFlag(raw) {
+    const n = Number.parseFloat(String(raw));
+    return Number.isFinite(n) ? n : null;
+}
+
 function parseOverrides(params) {
     const overrides = {};
     for (const flag of BOOL_FLAGS) {
@@ -175,6 +222,11 @@ function parseOverrides(params) {
     for (const flag of INT_FLAGS) {
         if (!params.has(flag)) continue;
         const v = parseInteger(params.get(flag));
+        if (v !== null) overrides[flag] = v;
+    }
+    for (const flag of FLOAT_FLAGS) {
+        if (!params.has(flag)) continue;
+        const v = parseFloatFlag(params.get(flag));
         if (v !== null) overrides[flag] = v;
     }
     return overrides;
@@ -385,6 +437,8 @@ export function getQuality(url, userAgent) {
             if (BOOL_FLAGS.has(k) && typeof v === "boolean") {
                 flags[k] = v;
             } else if (INT_FLAGS.has(k) && Number.isFinite(v)) {
+                flags[k] = v;
+            } else if (FLOAT_FLAGS.has(k) && Number.isFinite(v)) {
                 flags[k] = v;
             }
         }

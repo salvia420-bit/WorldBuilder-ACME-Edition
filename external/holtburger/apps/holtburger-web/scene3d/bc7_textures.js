@@ -64,7 +64,12 @@ let _flag;
  *  defaults to the page's own query string. */
 export function bc7Enabled(search) {
   if (_flag !== undefined && search === undefined) return _flag;
-  let on = false; // DEFAULT-OFF
+  // DEFAULT-ON since 2026-07-30 (1070, Dryreach, quality=mid, 400 frames/arm:
+  // everything-on measured 35.2 ms median / 28.4 fps vs 36.7 / 27.2 for the bare
+  // default — compressed textures cut enough bandwidth to more than pay for the
+  // normal-map fragment work). Still hard-gated on EXT_texture_compression_bptc
+  // below, so a GPU without BPTC falls back to the RGBA8 path regardless.
+  let on = true;
   try {
     const s =
       search !== undefined
@@ -75,10 +80,10 @@ export function bc7Enabled(search) {
     const v = new URLSearchParams(s).get("texBc7");
     if (v != null) {
       const t = String(v).toLowerCase();
-      on = t === "on" || t === "1" || t === "true" || t === "yes";
+      on = !(t === "off" || t === "0" || t === "false" || t === "no");
     }
   } catch (_) {
-    on = false;
+    on = true;
   }
   if (search === undefined) _flag = on;
   return on;

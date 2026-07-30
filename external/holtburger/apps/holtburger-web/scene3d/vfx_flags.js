@@ -68,6 +68,25 @@ export function materialBakeEnabled() {
   return (_materialBake = on);
 }
 
+let _aoIntensity;
+/** Cavity-AO strength for the Phase-5 texchan `aoMap` (materials.js
+ *  `_applyRough`) and the statics-atlas nra alpha channel (static_atlas.js).
+ *  Default 0.6 — the conservative value both paths hardcoded before this flag
+ *  existed, so an absent `?aoIntensity` is byte-identical to the old build.
+ *  AO can only darken, never brighten, so higher values deepen mortar lines and
+ *  crevices. Clamped to [0, 3]; a non-numeric value falls back to the default.
+ */
+export function aoMapIntensityValue() {
+  if (_aoIntensity !== undefined) return _aoIntensity;
+  let v = 0.6;
+  const raw = _strFlag("aoIntensity");
+  if (raw != null) {
+    const n = Number(raw);
+    if (Number.isFinite(n)) v = Math.min(3, Math.max(0, n));
+  }
+  return (_aoIntensity = v);
+}
+
 let _all;
 /** Per-effect default. DEFAULT-ON (2026-06-24: validated suite ships on). Every
  *  per-effect flag defaults to this, so absent any URL flag all effects are on

@@ -62,6 +62,7 @@ import {
   writeBc7ArrayLayer,
   _bumpBc7Stat,
 } from "./bc7_textures.js";
+import { aoMapIntensityValue } from "./vfx_flags.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -92,16 +93,21 @@ let _nraFlag;
  *  `customProgramCacheKey` keeps its v1 value. */
 export function statNraEnabled() {
   if (_nraFlag !== undefined) return _nraFlag;
-  let on = false; // DEFAULT-OFF (X5 development gate)
+  // DEFAULT-ON since 2026-07-30 (see bc7_textures.js `bc7Enabled` for the
+  // measurement). This is also what carries the Phase-5 texchan CAVITY AO to
+  // atlased statics: the atlas replaces the member material wholesale, so with
+  // the nra array absent every atlased static rendered with no aoMap at all —
+  // a regression hiding in a default, not a missing feature.
+  let on = true;
   try {
     if (typeof window !== "undefined" && window.location?.search) {
       const v = new URLSearchParams(window.location.search).get("statNra");
       if (v != null) {
         const s = String(v).toLowerCase();
-        on = s === "on" || s === "1" || s === "true" || s === "yes";
+        on = !(s === "off" || s === "0" || s === "false" || s === "no");
       }
     }
-  } catch (_) { on = false; }
+  } catch (_) { on = true; }
   return (_nraFlag = on);
 }
 
@@ -417,13 +423,14 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
             "\tnormal = normalize( tbn * mapN );",
           ].join("\n")
         )
-        // A channel = texchan cavity AO at the singleton path's 0.6 intensity
-        // (materials.js `_applyRough`). Body mirrors three's own aomap_fragment
+        // A channel = texchan cavity AO at the singleton path's intensity
+        // (materials.js `_applyRough`, `?aoIntensity`, default 0.6). Body mirrors
+        // three's own aomap_fragment
         // minus the clearcoat/sheen branches this material can never have.
         .replace(
           "#include <aomap_fragment>",
           [
-            "\tfloat ambientOcclusion = ( _statNraTexel.a - 1.0 ) * 0.6 + 1.0;",
+            `\tfloat ambientOcclusion = ( _statNraTexel.a - 1.0 ) * ${aoMapIntensityValue().toFixed(3)} + 1.0;`,
             "\treflectedLight.indirectDiffuse *= ambientOcclusion;",
             "\t#if defined( USE_ENVMAP ) && defined( STANDARD )",
             "\t\tfloat dotNV = saturate( dot( geometryNormal, geometryViewDir ) );",
@@ -439,7 +446,8 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
   // (nra on/off) — still per-BUCKET-CLASS, never per instance (the #1 cold-load
   // cost); with ?statNra absent the key is byte-identical to v1.
   m.customProgramCacheKey = () =>
-    (wrapBucket ? "statAtlasArrayMatV3w" : "statAtlasArrayMatV3c") + (nraArray ? "nra" : "");
+    (wrapBucket ? "statAtlasArrayMatV3w" : "statAtlasArrayMatV3c")
+    + (nraArray ? "nra" + aoMapIntensityValue().toFixed(3) : "");
   m.userData = { __statAtlasMat: true };
   return m;
 }

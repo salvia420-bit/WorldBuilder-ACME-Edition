@@ -53,7 +53,7 @@ import {
   surfacePixelsToRoughnessTexture,
   surfacePixelsToAoTexture,
 } from "./adapter.js";
-import { materialBakeEnabled } from "./vfx_flags.js";
+import { aoMapIntensityValue, materialBakeEnabled } from "./vfx_flags.js";
 import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 // X6 (`?texBc7=on`, DEFAULT-OFF) — direct BC7/BPTC albedo upload. Every entry
 // point below is inert unless the flag is on AND the GPU reports
@@ -3714,7 +3714,7 @@ export class MaterialCache {
     // can only darken, never chrome). Look-polish owed to a 1070 eye-test.
     if (tc.ao) {
       const atex = surfacePixelsToAoTexture(tc.ao, tc.width, tc.height);
-      if (atex) { mat.aoMap = atex; mat.aoMapIntensity = 0.6; touched = true; }
+      if (atex) { mat.aoMap = atex; mat.aoMapIntensity = aoMapIntensityValue(); touched = true; }
     }
     if (!touched) return;
     mat.needsUpdate = true;
