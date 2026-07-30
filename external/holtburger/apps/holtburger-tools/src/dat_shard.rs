@@ -269,10 +269,22 @@ pub struct TexBc7Ingest {
 /// `(width, height)` on success, an explanation on failure.
 ///
 /// Checks, in order: length ≥ header, magic, `blocks_x`/`blocks_y`
-/// equal `ceil(dim / 4)`, and the exact total length
-/// `20 + blocks_x * blocks_y * 16`. The exact-length rule is what
-/// catches a blob a concurrent encoder is still writing — a
-/// half-flushed file has a valid header and a short body.
+/// equal `ceil(dim / 4)`, then that the payload is a whole number of
+/// BC7 mip levels with NOTHING left over.
+///
+/// v2 (mips): the payload is level 0 followed by an OPTIONAL halving mip
+/// chain — each level `ceil(w/4) * ceil(h/4) * 16` bytes, dims halving via
+/// `max(1, n >> 1)`, terminating at 1x1. This mirrors the client's
+/// `parseHbc7` (`apps/holtburger-web/scene3d/bc7_textures.js`) EXACTLY;
+/// the two must agree or the bake publishes blobs the renderer rejects, or
+/// (as happened on 2026-07-30) silently publishes NOTHING while
+/// `serve.py --check` still reports OK because the namespace is declared.
+///
+/// The old rule demanded the exact level-0-only length, which rejected
+/// every mipped container. Requiring the chain to consume the payload
+/// exactly keeps the original protection intact — a blob a concurrent
+/// encoder is still writing has a valid header and a short body, so it
+/// either cannot fit level 0 or leaves a non-zero remainder.
 pub fn validate_hbc7(bytes: &[u8]) -> std::result::Result<(u32, u32), String> {
     if bytes.len() < HBC7_HEADER_LEN {
         return Err(format!(
@@ -304,14 +316,46 @@ pub fn validate_hbc7(bytes: &[u8]) -> std::result::Result<(u32, u32), String> {
             "block grid {blocks_x}x{blocks_y} does not cover {width}x{height} (expected {expect_bx}x{expect_by})"
         ));
     }
-    let expect_len = HBC7_HEADER_LEN
-        + (blocks_x as usize)
-            .saturating_mul(blocks_y as usize)
-            .saturating_mul(BC7_BLOCK_BYTES);
-    if bytes.len() != expect_len {
+    // Walk the (possibly mipped) level chain, exactly as the client does.
+    let level_bytes = |w: u32, h: u32| -> usize {
+        (w.div_ceil(4) as usize)
+            .saturating_mul(h.div_ceil(4) as usize)
+            .saturating_mul(BC7_BLOCK_BYTES)
+    };
+    let level0 = level_bytes(width, height);
+    let mut remaining = bytes.len().saturating_sub(HBC7_HEADER_LEN);
+    if remaining < level0 {
         return Err(format!(
-            "length {} != {expect_len} implied by the {blocks_x}x{blocks_y} block grid (truncated or padded?)",
-            bytes.len()
+            "truncated: {remaining} payload bytes < level-0 {level0} implied by the {blocks_x}x{blocks_y} block grid"
+        ));
+    }
+    let (mut lw, mut lh) = (width, height);
+    let mut levels = 0u32;
+    loop {
+        let need = level_bytes(lw, lh);
+        if remaining < need {
+            break;
+        }
+        remaining -= need;
+        levels += 1;
+        if lw == 1 && lh == 1 {
+            break;
+        }
+        lw = (lw >> 1).max(1);
+        lh = (lh >> 1).max(1);
+        if remaining == 0 {
+            break;
+        }
+    }
+    if levels == 0 {
+        return Err("no complete mip levels".to_string());
+    }
+    if remaining != 0 {
+        return Err(format!(
+            "length {} leaves {remaining} trailing byte(s) after {levels} complete level(s) \
+             (not a whole level-0{}mip chain — truncated or padded?)",
+            bytes.len(),
+            if levels > 1 { "+" } else { "/" }
         ));
     }
     Ok((width, height))
@@ -1227,6 +1271,64 @@ mod tests {
         let mut bad_grid = hbc7_blob(64, 64);
         bad_grid[12..16].copy_from_slice(&8u32.to_le_bytes()); // blocks_x 16 -> 8
         assert!(validate_hbc7(&bad_grid).is_err());
+    }
+
+    /// Level 0 followed by a halving mip chain, stopping after `levels`
+    /// levels (`0` = run all the way to 1x1). Body bytes are distinct per
+    /// level so a mis-sliced chain would not silently pass.
+    fn hbc7_mipped_blob(w: u32, h: u32, levels: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(HBC7_MAGIC);
+        for v in [w, h, w.div_ceil(4), h.div_ceil(4)] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        let (mut lw, mut lh) = (w, h);
+        let mut n = 0u32;
+        loop {
+            let need = (lw.div_ceil(4) as usize) * (lh.div_ceil(4) as usize) * BC7_BLOCK_BYTES;
+            for i in 0..need {
+                out.push((i as u8) ^ (n as u8) ^ 0xA5);
+            }
+            n += 1;
+            if (lw == 1 && lh == 1) || (levels != 0 && n == levels) {
+                break;
+            }
+            lw = (lw >> 1).max(1);
+            lh = (lh >> 1).max(1);
+        }
+        out
+    }
+
+    /// The v2 container. These cases are the contract with the client's
+    /// `parseHbc7` (`apps/holtburger-web/scene3d/bc7_textures.js`) — the two
+    /// walk the chain with identical break conditions, so a divergence here
+    /// means the bake publishes blobs the renderer rejects (and `serve.py
+    /// --check` still reports OK, because it only checks that the namespace
+    /// is declared).
+    #[test]
+    fn validate_hbc7_accepts_mip_chains() {
+        // Full chain to 1x1, square and non-square (which halves to 1 on one
+        // axis first and must keep going on the other).
+        assert_eq!(validate_hbc7(&hbc7_mipped_blob(256, 256, 0)), Ok((256, 256)));
+        assert_eq!(validate_hbc7(&hbc7_mipped_blob(64, 16, 0)), Ok((64, 16)));
+        // Non-multiple-of-4 dims: every level pads up to a whole block.
+        assert_eq!(validate_hbc7(&hbc7_mipped_blob(30, 6, 0)), Ok((30, 6)));
+        // A partial chain is legal — mips are OPTIONAL, so any prefix that
+        // lands exactly on a level boundary validates. Level 0 alone is the
+        // v1 container and must still pass.
+        assert_eq!(validate_hbc7(&hbc7_mipped_blob(256, 256, 1)), Ok((256, 256)));
+        assert_eq!(validate_hbc7(&hbc7_mipped_blob(256, 256, 4)), Ok((256, 256)));
+
+        // Trailing bytes past a complete chain are a hard error — this is the
+        // half-flushed-encoder guard that the old exact-length rule provided.
+        let mut trailing = hbc7_mipped_blob(64, 64, 0);
+        trailing.push(0);
+        assert!(validate_hbc7(&trailing).is_err());
+
+        // A level torn mid-way likewise leaves a remainder.
+        let mut torn = hbc7_mipped_blob(64, 64, 3);
+        torn.truncate(torn.len() - 1);
+        assert!(validate_hbc7(&torn).is_err());
     }
 
     #[test]
