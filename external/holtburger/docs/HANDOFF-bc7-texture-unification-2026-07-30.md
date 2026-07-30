@@ -9,6 +9,12 @@ aesthetic is verified** — the 1070 went offline mid-session and never returned
 Commits this session: `184ba776`, `0d8914f1`, `58ad2991`, `dff8d58b`, `0ca8ac6d`
 (+ this doc).
 
+**Follow-up session 2026-07-30 (later):** the mip validator that produced the
+shipped bake was never committed — now `ab56d786`, with tests. Both §5 exporter
+bugs are **fixed at source** (`6d1ffe91`, `494b1aea`) and their blast radius
+re-measured against the real DAT: **~702 rows, not 16**. §5 is rewritten; the
+numbers it used to carry were wrong. Nothing has been re-exported (§9.6).
+
 ---
 
 ## 1. THE PIVOT — read this first, it reframes everything
@@ -160,23 +166,70 @@ matching (**130,917 placements**, the single biggest recovery).
 
 ---
 
-## 5. ⚠ TWO EXPORTER BUGS — latent, not introduced here, NOT yet fixed at source
+## 5. ✅ TWO EXPORTER BUGS — FIXED AT SOURCE 2026-07-30 (`6d1ffe91`, `494b1aea`)
 
-1. **DXT1 punch-through alpha silently dropped.**
-   `DatReaderWriter.Extensions/.../RenderSurfaceExtensions.cs` decodes `PFID_DXT1`
-   via BCnEncoder.NET `CompressionFormat.Bc1` — the **opaque** variant — so
-   `c0 <= c1` index-3 clear pixels become `RGBA(0,0,0,255)`. Verified by re-decoding
-   raw `sourceData` with a spec-written decoder and cross-checking holtburger-dat's
-   Rust `decompress_dxt1` (RGB agrees to maxErr ≤ 1; only alpha differs).
-   Consequence: up to **54% of a quad drawing solid black**; `0x0600396B` is fully
-   transparent and would have become **1,329 black chips**.
-2. **Six `Base1ClipMap` paletted rows lost their index-<8 clip range.**
+Both are fixed in the exporter now. **The numbers below replace the ones this
+section carried at handoff — every one of them was wrong**, and the corpus has
+NOT been re-exported yet (see §9.6).
 
-**16 rows total had transparency missing from every downstream artifact.** The
-hazard agent worked around this for the affected rows (colour-bleed + re-upscale +
-nearest-×4 true 1-bit mask; band error 18.50 → 1.47). **The exporter itself is still
-wrong**, so anything exported in future inherits it. Fix at source = re-export the
-`tex/` corpus.
+1. **DXT1 punch-through alpha silently dropped** — fixed in `6d1ffe91`.
+   Every decode site asked BCnEncoder for `CompressionFormat.Bc1`, the **opaque**
+   variant, so `c0 <= c1` index-3 clear pixels became `RGBA(0,0,0,255)`.
+   Ground truth is retail's own `D3DXTex::D3DXDecodeDXT1` (`acclient.c:555285`):
+   `if (v4 > (unsigned __int16)v5)` picks 4-colour mode, and the else branch zeroes
+   all four floats — the fourth **is** alpha.
+   - **Four live sites, not one**: `RenderSurfaceExtensions.ToRgba8`,
+     `CommandEngine.TextureParity` (the client-parity *reference* — so it was
+     comparing a correct Rust decoder against an all-255 alpha channel),
+     `CommandEngine.UiSpriteExtract`, and `RenderSurfaceExtensions`'
+     **encode** path (`Bc1` never emits punch-through, so importing a PNG with a
+     cutout silently flattened it). `ObjectSpriteGenerator.DecompressDxt1` was
+     already correct and is the in-repo reference.
+   - **Blast radius is 257 records, not 1,905.** Of 20,684 RenderSurfaces, 1,971 are
+     DXT1 and 1,905 contain a `c0 <= c1` block — but only **257** actually use
+     index 3. `c0 <= c1` is *not* the trigger; flat-colour blocks satisfy it
+     trivially. 906,652 corrupted pixels; **246 of the 2,999 shipped BC7** records.
+   - `0x0600396B` fully transparent: **true** (the only such DXT1 record).
+     "**1,329 black chips**" is **unsourced — do not repeat it.** The asset graph
+     gives 1 SurfaceTexture → 1 Surface → 33 GfxObjs → 147 Setups. The qualitative
+     claim stands; the number does not.
+   - "up to 54%" is a shipped-set figure (`0x06003C4A`, 54.44%). Corpus-wide the
+     worst is **`0x06005B7E` at 75.33%**, and it plus 10 others are **outside** the
+     shipped BC7 set, so they need the non-BC7 path re-exported too.
+2. **`Base1ClipMap` paletted rows lost their index-<8 clip range** — fixed in
+   `494b1aea`. Retail `ImgTex::CopyIntoData` (`acclient.c:365959` INDEX16,
+   `:365980` P8) writes the destination DWORD as literal `0` — RGB zeroed too, not
+   just alpha. The threshold is 8 because `Palette::InitLoad` (`acclient.c:365035`)
+   expands 256 palette entries into 2048 by replicating each 8×, so "index < 8" is
+   exactly original entry 0.
+   - **"Six rows" was wrong — the real figure is 445 rows / 2,110,807 pixels.**
+     The six was a mis-transcription of the hazard agent's "6 of the 79" *held
+     paletted worklist*, and even there only four are clipmap-paletted;
+     `0x0600736C`/`0x0600736D` are `PFID_DXT1` with no palette — bug 1,
+     double-counted. All 445 exported PNGs were confirmed to have alpha range
+     (255,255): zero transparent pixels. 201 rows are >50% wrong; 5 are 100%
+     clipped and exported as a solid rectangle of palette colour 0.
+   - Clip-ness lives on the **Surface (0x08)**, not the RenderSurface, so the fix
+     threads an explicit flag and `ExportTextures` resolves ownership up front.
+     89 RenderSurfaces have both a clip-map and an image owner; "any owner is a
+     clip-map" wins — retail is itself ambiguous, its `texture_table` key omits the
+     clip-map bit (`acclient.c:367712`), so first-load wins.
+
+**So the two bugs together are ~702 rows (257 DXT1 + 445 INDEX16 — disjoint by
+format), not 16.** The hazard agent hand-repaired a handful (colour-bleed +
+re-upscale + nearest-×4 true 1-bit mask; band error 18.50 → 1.47); the rest are
+still wrong in `tex/` and in every artifact downstream of it.
+
+Verification (both fixes, real data, no `~/ac_base_dats` write — sha256 still
+`dc6e500b…d12e4`): bug 1 checked against 5 real-DAT fixtures with an
+independently written spec-correct Python decoder — alpha exact, max RGB delta 0,
+including a record with exactly **one** transparent pixel in 65,536 that any
+mean- or thumbnail-based check would pass while broken. Bug 2's ownership walk
+finds 721 clip-map Surfaces / 888 RenderSurfaces, matching an independent
+from-scratch Python b-tree reader; all 445 rows produce exactly the independently
+computed clipped-pixel count, decode to 0 transparent pixels with the flag off,
+and all 34 clip-map paletted rows with no index < 8 are byte-identical either way.
+Artifacts: `/mnt/wbterminal2/bug1-dxt1-agent/`, `/mnt/wbterminal2/bug2-clipmap-agent/`.
 
 Related client fact: `applyClipMapRenderState` alpha-tests at **200/255**. ESRGAN's
 soft edge erodes binary cutouts there (mask IoU 0.7654; one row lost 23% of its
@@ -262,3 +315,15 @@ that to *graded* rows measured **worse** (0.24), so those ship verbatim.
    test profile by `--user-data-dir` only; a person uses that box.
 5. Remaining coverage: 67 held paletted rows + 163 creature INDEX16 (palette-
    preserving path, user decided creatures stay indexed so recolour survives).
+6. **Re-export the `tex/` corpus** — the exporter is correct as of `6d1ffe91` /
+   `494b1aea`, but nothing downstream has been regenerated. ~702 rows change
+   (257 DXT1 punch-through + 445 clip-map paletted). Gate: a full re-export of
+   `~/ac_base_dats/client_portal.dat` must change **exactly** those rows and leave
+   every other PNG byte-identical. Then re-run the ESRGAN → gate → `bc7cli_v2`
+   pipeline for the changed rows and re-bake; 246 of the 2,999 shipped BC7
+   payloads carry the DXT1 fault, and the 441 clip-map rows the hazard agent did
+   not hand-repair were never audited. `export-textures` needs a project
+   (`RequireProject`), and it opens the dats **ReadWrite** — point it at a copy,
+   not `~/ac_base_dats`.
+7. The two exporter fixes "predict visible changes" (§7.6) and are still
+   **unverified visually** — the 1070 never came back this session.
