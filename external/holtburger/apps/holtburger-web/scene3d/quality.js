@@ -101,14 +101,19 @@ export const PRESETS = {
         gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
         hero: false,
-        pom: false,
+        // pom ON at mid (2026-07-30, second pass): EnvCell interiors and
+        // non-atlased singletons — i.e. EVERY dungeon wall — are not atlas
+        // members, so with `pom` off at mid they were the one surface class
+        // left flat while the outdoor world got `statPom`. Same 8/4 mid step
+        // counts, same 5-10 m fade; `?pom=off` escapes.
+        pom: true,
         pomStepsPrimary: 8,
         pomStepsSelfShadow: 4,
-        // statPom ON at mid (2026-07-30): unlike the legacy singleton `pom`
-        // (still off here), the atlas POM is fade-limited to <12 m, marches
-        // the mid-tier 8/4 step counts above, and the 2026-07-30 1070
-        // measurement showed the everything-on arm FASTER than bare default
-        // (BC7 bandwidth pays for the fragment work). `?statPom=off` escapes.
+        // statPom ON at mid (2026-07-30): unlike the legacy singleton `pom`,
+        // the atlas POM is fade-limited, marches the mid-tier 8/4 step counts
+        // above, and the 2026-07-30 1070 measurement showed the
+        // everything-on arm FASTER than bare default (BC7 bandwidth pays for
+        // the fragment work). `?statPom=off` escapes.
         statPom: true,
         csm: false,
         bloom: true,

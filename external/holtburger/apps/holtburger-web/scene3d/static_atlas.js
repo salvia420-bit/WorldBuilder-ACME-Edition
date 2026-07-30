@@ -142,11 +142,13 @@ export function statPomConfig() {
     if (Number.isFinite(f.pomStepsPrimary) && f.pomStepsPrimary > 0) steps = f.pomStepsPrimary;
     if (Number.isFinite(f.pomStepsSelfShadow) && f.pomStepsSelfShadow > 0) shadowSteps = f.pomStepsSelfShadow;
   } catch (_) { enabled = false; }
-  // UV-space depth scale: 0.04 of a tile ≈ 4-8 cm of apparent depth on the
-  // 1-2 m retail wall tiles — inside the amplitude band the rails use. The
-  // seam field is 1.0 on every broad face, so flat wall area gets ZERO offset
-  // regardless of this knob; only groove walls shift.
-  let depth = 0.04;
+  // UV-space depth scale: 0.07 of a tile ≈ 10-14 cm of apparent depth on the
+  // 1-2 m retail wall tiles. Raised from 0.04 with the relief_height pillow
+  // field (user: "not pronounced enough" vs the sculpted reference): the
+  // field now spends most of its range on rounded per-region volume, so the
+  // same knob buys visibly bulging stones rather than deeper hairlines.
+  // Genuinely flat surfaces still get ZERO offset (empty field ⇒ no height).
+  let depth = 0.07;
   try {
     if (typeof window !== "undefined" && window.location?.search) {
       const v = Number.parseFloat(new URLSearchParams(window.location.search).get("statPomDepth") ?? "");
@@ -159,7 +161,7 @@ export function statPomConfig() {
     shadowSteps: Math.min(12, Math.max(2, shadowSteps | 0)),
     depth,
     near: 5.0,   // full strength below (m)
-    far: 12.0,   // fully off beyond (m) — bounds the dependent-fetch loop cost
+    far: 14.0,   // fully off beyond (m) — bounds the dependent-fetch loop cost
     shadowDark: 0.55,
   };
   return _statPomCfg;

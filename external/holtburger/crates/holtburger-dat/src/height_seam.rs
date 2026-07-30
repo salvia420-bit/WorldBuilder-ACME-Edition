@@ -152,18 +152,14 @@ fn smoothstep01(x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Height field in `[0, 1]` from RGBA8 texels: **1 = proud face, 0 = the bottom
-/// of a groove**. Displacement is therefore `amplitude * height`, so grooves
-/// are carved by leaving them behind and everything still moves outward only.
-///
-/// Returns an empty `Vec` when the input is malformed or when the texture has
-/// no seams at all, which callers should treat as "leave this surface flat"
-/// rather than as an error — a blank stucco wall genuinely has no relief.
-pub fn seam_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
+/// Internal: the per-texel smoothstepped seam response `t` in `[0, 1]` (1 = a
+/// full-depth joint core) plus the alpha channel. `None` on malformed input.
+/// This is the shared front half of [`seam_height`] and [`relief_height`].
+fn seam_t(rgba: &[u8], w: u32, h: u32) -> Option<(Vec<f32>, Vec<f32>)> {
     let (wu, hu) = (w as usize, h as usize);
     let n = wu.saturating_mul(hu);
     if n == 0 || rgba.len() < n * 4 {
-        return Vec::new();
+        return None;
     }
 
     let mut lum = vec![0.0f32; n];
@@ -206,19 +202,151 @@ pub fn seam_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
         }
     }
 
-    let mut out = vec![0.0f32; n];
-    let mut carved = false;
     let span = (GROOVE_FULL - GROOVE_MIN).max(1e-6);
+    let mut t = vec![0.0f32; n];
     for i in 0..n {
-        let t = smoothstep01((strength[i] - GROOVE_MIN) / span);
         // Cutout texels are forced flat — never carve an alpha card.
-        out[i] = if alpha[i] < ALPHA_CUT { 1.0 } else { 1.0 - t };
-        if out[i] < 0.999 {
+        t[i] = if alpha[i] < ALPHA_CUT {
+            0.0
+        } else {
+            smoothstep01((strength[i] - GROOVE_MIN) / span)
+        };
+    }
+    Some((t, alpha))
+}
+
+/// Height field in `[0, 1]` from RGBA8 texels: **1 = proud face, 0 = the bottom
+/// of a groove**. Displacement is therefore `amplitude * height`, so grooves
+/// are carved by leaving them behind and everything still moves outward only.
+///
+/// Returns an empty `Vec` when the input is malformed or when the texture has
+/// no seams at all, which callers should treat as "leave this surface flat"
+/// rather than as an error — a blank stucco wall genuinely has no relief.
+pub fn seam_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
+    let Some((t, _alpha)) = seam_t(rgba, w, h) else {
+        return Vec::new();
+    };
+    let mut carved = false;
+    let out: Vec<f32> = t
+        .iter()
+        .map(|&ti| {
+            let v = 1.0 - ti;
+            if v < 0.999 {
+                carved = true;
+            }
+            v
+        })
+        .collect();
+    if !carved {
+        return Vec::new(); // genuinely flat — tell the caller to skip it
+    }
+    out
+}
+
+/// Pillow radius as a fraction of the texture's smaller side: how far from the
+/// nearest joint a region keeps rising before it plateaus. Small on purpose —
+/// it only has to round the SHOULDER of a stone/beam/plank; a large radius
+/// would turn a big plaster panel into a dome and re-introduce the asymmetry
+/// between narrow beams (low peak) and wide panels (high peak).
+pub const PILLOW_FRAC: f32 = 0.03;
+
+/// Seam response above which a texel seeds the distance transform (a "joint
+/// core"). Below it a texel still *carves* (via `1 - t`) but does not anchor
+/// the pillow field.
+pub const PILLOW_SEED_T: f32 = 0.5;
+
+/// Height field in `[0, 1]` with **per-region volume**: joints carve exactly
+/// like [`seam_height`], and every region BETWEEN joints rises with distance
+/// from its nearest joint into a rounded plateau — each stone reads as a
+/// pillowed block, each beam as a proud slab, instead of a flat face with
+/// engraved lines.
+///
+/// Same polarity immunity as the seam operator, by construction: the pillow is
+/// derived from the TOPOLOGY of the seam mask (a distance transform), never
+/// from brightness, so a dark timber beam and a light plaster panel pillow
+/// identically and only their shared joint recedes. Broad-region invariance is
+/// preserved: no seams ⇒ empty field ⇒ the caller leaves the surface flat —
+/// blank stucco still refuses to invent relief.
+///
+/// Empty-return semantics are identical to [`seam_height`].
+pub fn relief_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
+    let Some((t, alpha)) = seam_t(rgba, w, h) else {
+        return Vec::new();
+    };
+    let (wu, hu) = (w as usize, h as usize);
+    let n = wu * hu;
+
+    // Seed the distance transform at joint cores.
+    const INF: f32 = 1e9;
+    let mut dist = vec![INF; n];
+    let mut seeds = 0usize;
+    for i in 0..n {
+        if t[i] >= PILLOW_SEED_T {
+            dist[i] = 0.0;
+            seeds += 1;
+        }
+    }
+
+    let mut carved = false;
+    let out: Vec<f32> = if seeds == 0 {
+        // Seams exist but none reach core strength — pillowing has nothing to
+        // anchor to, so degrade gracefully to the pure seam field.
+        t.iter().map(|&ti| 1.0 - ti).collect()
+    } else {
+        // 3-4 chamfer distance transform with WRAPPED indexing (textures
+        // tile). One forward + one backward sweep is exact on a plane; the
+        // pair is run twice so distances propagate across the wrap seam —
+        // sufficient because the pillow radius is small (~3% of the tile).
+        let (wi, hi) = (w as i32, h as i32);
+        for _round in 0..2 {
+            // forward: left/up neighbourhood
+            for y in 0..hi {
+                for x in 0..wi {
+                    let i = y as usize * wu + x as usize;
+                    let mut d = dist[i];
+                    let nb = |xx: i32, yy: i32| dist[wrap(yy, hi) * wu + wrap(xx, wi)];
+                    d = d.min(nb(x - 1, y) + 1.0);
+                    d = d.min(nb(x, y - 1) + 1.0);
+                    d = d.min(nb(x - 1, y - 1) + 1.4);
+                    d = d.min(nb(x + 1, y - 1) + 1.4);
+                    dist[i] = d;
+                }
+            }
+            // backward: right/down neighbourhood
+            for y in (0..hi).rev() {
+                for x in (0..wi).rev() {
+                    let i = y as usize * wu + x as usize;
+                    let mut d = dist[i];
+                    let nb = |xx: i32, yy: i32| dist[wrap(yy, hi) * wu + wrap(xx, wi)];
+                    d = d.min(nb(x + 1, y) + 1.0);
+                    d = d.min(nb(x, y + 1) + 1.0);
+                    d = d.min(nb(x + 1, y + 1) + 1.4);
+                    d = d.min(nb(x - 1, y + 1) + 1.4);
+                    dist[i] = d;
+                }
+            }
+        }
+        let r = (PILLOW_FRAC * wu.min(hu) as f32).max(2.0);
+        (0..n)
+            .map(|i| {
+                // Cutout texels stay EXACTLY flat (never carve an alpha card),
+                // even when they sit next to a seam on the opaque side.
+                if alpha[i] < ALPHA_CUT {
+                    1.0
+                } else {
+                    smoothstep01(dist[i] / r) * (1.0 - t[i])
+                }
+            })
+            .collect()
+    };
+    for &v in &out {
+        if v < 0.999 {
             carved = true;
+            break;
         }
     }
     if !carved {
-        return Vec::new(); // genuinely flat — tell the caller to skip it
+        return Vec::new();
     }
     out
 }
@@ -419,6 +547,60 @@ mod tests {
         let ng = seam_normal_rgb8(&g, 32, 32, 1.0);
         let tilted = ng.chunks(3).any(|px| (px[0] as i32 - 128).abs() > 20);
         assert!(tilted, "a groove produced no normal tilt");
+    }
+
+    #[test]
+    fn relief_pillows_a_stone_between_joints() {
+        // Brick-like rows of dark mortar every 16 texels: the stone INTERIOR
+        // must sit higher than its SHOULDER (the texel band next to the
+        // joint), and the joint itself must be the lowest — that gradient is
+        // what makes each stone read as a rounded block instead of a flat
+        // plateau with an engraved line.
+        let t = tex(128, 128, |_, y| if y % 32 == 0 { 0.05 } else { 0.75 });
+        let hf = relief_height(&t, 128, 128);
+        assert!(!hf.is_empty(), "brick rows produced no relief");
+        let col = 64usize;
+        let joint = hf[0 * 128 + col];
+        let shoulder = hf[2 * 128 + col];
+        let interior = hf[16 * 128 + col];
+        assert!(joint < 0.3, "joint not carved: {joint}");
+        assert!(
+            shoulder < interior - 0.1,
+            "no rounding: shoulder {shoulder} vs interior {interior}"
+        );
+        assert!(interior > 0.95, "stone interior sank to {interior}");
+    }
+
+    #[test]
+    fn relief_keeps_the_tudor_polarity_property() {
+        // Same setup as tudor_joint_carves_without_sinking_the_beam: with the
+        // pillow stage on top, the beam interior and plaster interior must
+        // STILL sit level — the pillow comes from topology, not brightness.
+        let joint = |x: u32| (38..41).contains(&x) || (88..91).contains(&x);
+        let t = tex(128, 128, |x, _| {
+            if joint(x) {
+                0.03
+            } else if (41..88).contains(&x) {
+                0.20
+            } else {
+                0.80
+            }
+        });
+        let hf = relief_height(&t, 128, 128);
+        assert!(!hf.is_empty());
+        let row = 64 * 128;
+        let in_timber = hf[row + 64];
+        let in_plaster = hf[row + 10];
+        assert!(
+            (in_timber - in_plaster).abs() < 0.1,
+            "POLARITY INVERSION: timber {in_timber} vs plaster {in_plaster}"
+        );
+    }
+
+    #[test]
+    fn relief_on_a_flat_texture_is_still_empty() {
+        let t = tex(64, 64, |_, _| 0.5);
+        assert!(relief_height(&t, 64, 64).is_empty());
     }
 
     #[test]

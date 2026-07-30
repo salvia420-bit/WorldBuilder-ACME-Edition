@@ -78,6 +78,7 @@ const matsStubbed =
     "const surfacePixelsToNormalTexture = () => null;\n" +
     "const surfacePixelsToHeightTexture = () => null;\n" +
     "const aoMapIntensityValue = () => 0.6;\n" +
+    "const getQuality = () => null;\n" +
     "const materialBakeEnabled = () => false;\n" +
     "const SuiteAssetSource = class {};\n" +
     "const loadTexchanManifest = () => null;\n" +
@@ -191,13 +192,16 @@ check(
     `pomEnabled=${matTile.userData?.pomEnabled}`
 );
 
-// ---- Stage 4: Wood, Sand, Foliage do NOT get POM (category gate) ----
-for (const [name, cat] of [
-    ["Wood", SURFACE_CATEGORY.Wood],
-    ["Sand", SURFACE_CATEGORY.Sand],
-    ["Foliage", SURFACE_CATEGORY.Foliage],
-    ["Metal", SURFACE_CATEGORY.Metal],
-    ["Cloth", SURFACE_CATEGORY.Cloth],
+// ---- Stage 4: the category gate (widened 2026-07-30) ----
+// Solid architectural materials (incl. Wood/Metal — dungeon themes) APPLY;
+// Cloth (painted banners must not emboss), Foliage (alpha cards) and
+// fluid/organic categories still refuse.
+for (const [name, cat, applies] of [
+    ["Wood", SURFACE_CATEGORY.Wood, true],
+    ["Metal", SURFACE_CATEGORY.Metal, true],
+    ["Sand", SURFACE_CATEGORY.Sand, false],
+    ["Foliage", SURFACE_CATEGORY.Foliage, false],
+    ["Cloth", SURFACE_CATEGORY.Cloth, false],
 ]) {
     const m = cachePom._materialFromFlags(
         SURFACE_TYPE.Base1Image,
@@ -208,8 +212,8 @@ for (const [name, cat] of [
         heightTex,
     );
     check(
-        `${name} + pomEnabled: pomEnabled stays false (stone-only)`,
-        m.userData?.pomEnabled !== true,
+        `${name} + pomEnabled: pomEnabled ${applies ? "APPLIES (solid architectural)" : "stays false (excluded category)"}`,
+        (m.userData?.pomEnabled === true) === applies,
         `pomEnabled=${m.userData?.pomEnabled}`
     );
 }
@@ -272,25 +276,27 @@ check(
     `pomEnabled=${matTrans.userData?.pomEnabled}`
 );
 
-// ---- Stage 8: forcePom=true → POM on Wood ----
+// ---- Stage 8: forcePom=true → POM even on an excluded category (Cloth) ----
+// (Wood moved inside the widened gate 2026-07-30, so the bypass is now
+// exercised with Cloth, which stays excluded.)
 const cacheForce = new MaterialCache({ pomEnabled: true, forcePom: true });
-const matForcedWood = cacheForce._materialFromFlags(
+const matForcedCloth = cacheForce._materialFromFlags(
     SURFACE_TYPE.Base1Image,
     diffuseTex,
-    SURFACE_CATEGORY.Wood,
+    SURFACE_CATEGORY.Cloth,
     normalTex,
     null,
     heightTex,
 );
 check(
-    "forcePom + Wood: POM patch applies anyway",
-    matForcedWood.userData?.pomEnabled === true,
-    `pomEnabled=${matForcedWood.userData?.pomEnabled}`
+    "forcePom + Cloth: POM patch applies anyway",
+    matForcedCloth.userData?.pomEnabled === true,
+    `pomEnabled=${matForcedCloth.userData?.pomEnabled}`
 );
 check(
-    "forcePom + Wood: userData records pomForced=true",
-    matForcedWood.userData?.pomForced === true,
-    `pomForced=${matForcedWood.userData?.pomForced}`
+    "forcePom + Cloth: userData records pomForced=true",
+    matForcedCloth.userData?.pomForced === true,
+    `pomForced=${matForcedCloth.userData?.pomForced}`
 );
 
 // ---- Stage 9: simulate onBeforeCompile → assert shader patches injected ----

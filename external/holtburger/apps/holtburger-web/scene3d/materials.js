@@ -54,6 +54,7 @@ import {
   surfacePixelsToAoTexture,
 } from "./adapter.js";
 import { aoMapIntensityValue, materialBakeEnabled } from "./vfx_flags.js";
+import { getQuality } from "./quality.js";
 import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 // X6 (`?texBc7=on`, DEFAULT-OFF) — direct BC7/BPTC albedo upload. Every entry
 // point below is inert unless the flag is on AND the GPU reports
@@ -1025,11 +1026,18 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
   // Perf D2: pull primary + self-shadow step counts from the quality
   // preset (`pomStepsPrimary`, `pomStepsSelfShadow`) so `mid` can run
   // POM at ~50% the cost of `high`. Per-call `opts.steps` still wins
-  // if explicitly passed (test harness, A/B). Falls through to the
-  // POM_UNIFORM_DEFAULTS (16/8) when liveScene3d.quality isn't on
-  // window yet (Node test harness, very-early init).
-  const _qFlags =
-    typeof window !== "undefined" ? window.liveScene3d?.quality?.flags : null;
+  // if explicitly passed (test harness, A/B). 2026-07-30: resolve via
+  // getQuality() (memoized), NOT window.liveScene3d — that is stamped
+  // ~35 s after in-world, so every material built during boot silently
+  // took the 16/8 POM_UNIFORM_DEFAULTS instead of the tier's counts
+  // (2x the intended fragment cost at mid). liveScene3d stays as the
+  // fallback for harnesses that stub quality there.
+  let _qFlags = null;
+  try {
+    _qFlags = getQuality()?.flags || null;
+  } catch (_) {
+    _qFlags = typeof window !== "undefined" ? window.liveScene3d?.quality?.flags : null;
+  }
   const _qPrimary = Number.isFinite(_qFlags?.pomStepsPrimary)
     ? _qFlags.pomStepsPrimary
     : null;
@@ -3955,15 +3963,24 @@ export class MaterialCache {
     //   - normalTexture present (POM needs the per-pixel normal map to
     //     align with the perturbed UV; without it the bumps would
     //     light incorrectly)
-    //   - category is Stone/Brick/Tile (the look-right surfaces — POM
-    //     on Wood/Cloth/Foliage produces unconvincing artefacts)
+    //   - category is a SOLID ARCHITECTURAL material. Widened 2026-07-30
+    //     (was Stone/Brick/Tile): with the relief_height pillow field the
+    //     dungeon themes AC actually ships — wood-plank halls, metal vaults,
+    //     dirt warrens — carve correctly too, and leaving them out made
+    //     interiors read piecemeal next to statPom outdoors. Still excluded:
+    //     Cloth (a painted banner's emblem must not emboss — the §4b false-
+    //     positive), Foliage (alpha cards), Water/Lava/Snow (fluid/organic).
     //   - not Additive / Translucent (same reasoning as CSM)
     //   - texture present (POM samples the diffuse via perturbed UV)
     // Force-POM bypasses the category gate for visual-smoke testing.
     const stoneish =
       category === SURFACE_CATEGORY.Stone ||
       category === SURFACE_CATEGORY.Brick ||
-      category === SURFACE_CATEGORY.Tile;
+      category === SURFACE_CATEGORY.Tile ||
+      category === SURFACE_CATEGORY.Wood ||
+      category === SURFACE_CATEGORY.Metal ||
+      category === SURFACE_CATEGORY.Dirt ||
+      category === SURFACE_CATEGORY.Generic;
     const pomShouldApply =
       this.pomEnabled &&
       heightTexture &&

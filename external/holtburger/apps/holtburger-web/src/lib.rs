@@ -132,7 +132,9 @@ fn ensure_surface_height<S: holtburger_dat::ResourceSource + ?Sized>(source: &S,
     let entry = if sp.width == 0 || sp.height == 0 || sp.pixels.is_empty() {
         None
     } else {
-        let hf = holtburger_dat::height_seam::seam_height(&sp.pixels, sp.width, sp.height);
+        // relief_height (2026-07-30): seam + per-region pillow, so displaced
+        // geometry and the shader height/normal agree on the SAME field.
+        let hf = holtburger_dat::height_seam::relief_height(&sp.pixels, sp.width, sp.height);
         if hf.is_empty() {
             None
         } else {
@@ -11317,7 +11319,14 @@ fn normal_and_height_pixels(pixels: &[u8], w: u32, h: u32) -> (Vec<u8>, Vec<u8>)
     // broader than its kernel, so beams and plaster panels stay flat and only
     // the joint between them carves — and the normal then AGREES with the
     // displaced geometry instead of contradicting it.
-    let hf = holtburger_dat::height_seam::seam_height(pixels, w, h);
+    //
+    // relief_height (2026-07-30, "make it pronounced"): seam + per-region
+    // PILLOW — every region between joints rises with distance-from-joint
+    // into a rounded plateau, so each stone reads as a pillowed block and
+    // each beam as a proud slab (the reference look), not a flat face with
+    // engraved lines. Topology-derived (distance transform over the seam
+    // mask), so the polarity immunity above is preserved by construction.
+    let hf = holtburger_dat::height_seam::relief_height(pixels, w, h);
     if !hf.is_empty() {
         let normal_pixels = holtburger_dat::height_seam::seam_normal_rgb8(&hf, w, h, 1.0);
         if !normal_pixels.is_empty() {
