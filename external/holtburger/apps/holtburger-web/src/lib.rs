@@ -96,6 +96,71 @@ pub fn seed_url_flag_search(search: String) {
     *SEEDED_FLAG_SEARCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(search);
 }
 
+/// Per-surface height field for texture amplification, keyed by Surface DID.
+///
+/// `None` means "decoded, and genuinely flat" — a blank stucco wall has no
+/// seams and must not invent any, so a negative result is cached exactly like a
+/// positive one.
+#[cfg(any(target_arch = "wasm32", test))]
+static SURFACE_HEIGHT: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::HashMap<u32, Option<std::sync::Arc<SurfaceHeight>>>>,
+> = std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) struct SurfaceHeight {
+    pub w: u32,
+    pub h: u32,
+    pub data: Vec<f32>,
+}
+
+/// Decode a surface and cache its seam-height field. Idempotent.
+///
+/// This is the model-to-surface join: the triangulators know `surface_did` but
+/// have no `ResourceSource`, while the decode path has the source but no model
+/// context. Rather than thread the source through every triangulator call site,
+/// the callers that DO have a source prime this cache and the triangulators
+/// read it. A miss means no displacement — the correct fail-safe.
+#[cfg(any(target_arch = "wasm32", test))]
+fn ensure_surface_height<S: holtburger_dat::ResourceSource + ?Sized>(source: &S, did: u32) {
+    if did == 0 {
+        return;
+    }
+    if SURFACE_HEIGHT.read().map(|m| m.contains_key(&did)).unwrap_or(false) {
+        return;
+    }
+    let sp = fetch_surface_pixels_impl(source, did);
+    let entry = if sp.width == 0 || sp.height == 0 || sp.pixels.is_empty() {
+        None
+    } else {
+        let hf = holtburger_dat::height_seam::seam_height(&sp.pixels, sp.width, sp.height);
+        if hf.is_empty() {
+            None
+        } else {
+            Some(std::sync::Arc::new(SurfaceHeight { w: sp.width, h: sp.height, data: hf }))
+        }
+    };
+    if let Ok(mut m) = SURFACE_HEIGHT.write() {
+        m.insert(did, entry);
+    }
+}
+
+/// Prime the height cache for every surface a model uses. No-op when relief is
+/// off, so the decode cost is never paid on the default path.
+#[cfg(any(target_arch = "wasm32", test))]
+fn prime_surface_heights<S: holtburger_dat::ResourceSource + ?Sized>(source: &S, surfaces: &[u32]) {
+    if gfx_relief_config().is_none() {
+        return;
+    }
+    for did in surfaces.iter().copied() {
+        ensure_surface_height(source, did);
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_height(did: u32) -> Option<std::sync::Arc<SurfaceHeight>> {
+    SURFACE_HEIGHT.read().ok()?.get(&did)?.clone()
+}
+
 /// Geometric-relief config, set once per wasm instance by JS.
 ///
 /// Three atomics rather than a lock: this is read inside the per-polygon hot
@@ -106,20 +171,50 @@ static GFX_RELIEF_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomi
 /// `f32` bits — atomics have no float form.
 static GFX_RELIEF_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Resolved remodel config, or `None` when relief is off / a no-op — in which
+/// Everything the triangulators need when relief is on.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct ReliefCfg {
+    /// Structural rails (OP1 convex edges, OP3 material boundaries).
+    pub remodel: holtburger_dat::gfx_remodel::RemodelConfig,
+    /// Subdivision density for per-texture amplification.
+    pub subdiv: holtburger_dat::gfx_subdiv::ReliefConfig,
+    /// Outward displacement at height 1.0, metres.
+    pub amplitude_m: f32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl ReliefCfg {
+    #[inline]
+    pub fn amplitude_m(&self) -> f32 {
+        self.amplitude_m
+    }
+}
+
+/// Resolved relief config, or `None` when relief is off / a no-op — in which
 /// case the triangulators emit byte-identical output.
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) fn gfx_relief_config() -> Option<holtburger_dat::gfx_remodel::RemodelConfig> {
+pub(crate) fn gfx_relief_config() -> Option<ReliefCfg> {
     use std::sync::atomic::Ordering::Relaxed;
     if !GFX_RELIEF_ON.load(Relaxed) {
         return None;
     }
     let scale = f32::from_bits(GFX_RELIEF_SCALE.load(Relaxed));
-    let cfg = holtburger_dat::gfx_remodel::RemodelConfig {
-        scale,
-        ..Default::default()
-    };
-    if cfg.is_noop() { None } else { Some(cfg) }
+    if !(scale > 0.0) {
+        return None;
+    }
+    let level = GFX_RELIEF_LEVEL.load(Relaxed).min(5) as u8;
+    Some(ReliefCfg {
+        remodel: holtburger_dat::gfx_remodel::RemodelConfig {
+            scale,
+            ..Default::default()
+        },
+        subdiv: holtburger_dat::gfx_subdiv::ReliefConfig { level, scale },
+        // Grooves this deep on a wall are already pronounced; the ceiling is
+        // shared with the rails so "render protrudes past the unmoved collision
+        // hull by at most X" stays one number.
+        amplitude_m: (0.05 * scale).clamp(0.0, holtburger_dat::gfx_subdiv::MAX_AMPLITUDE_M),
+    })
 }
 
 /// Enable/disable geometric relief for this wasm instance.
@@ -139,7 +234,7 @@ pub fn set_gfx_relief(enabled: bool, subdiv_level: u32, scale: f32) {
     use std::sync::atomic::Ordering::Relaxed;
     let scale = if scale.is_finite() { scale.clamp(0.0, 2.0) } else { 0.0 };
     GFX_RELIEF_ON.store(enabled, Relaxed);
-    GFX_RELIEF_LEVEL.store(subdiv_level.min(2), Relaxed);
+    GFX_RELIEF_LEVEL.store(subdiv_level.min(5), Relaxed);
     GFX_RELIEF_SCALE.store(scale.to_bits(), Relaxed);
     // Decoded geometry is cached by model_id alone, so a config change must
     // invalidate it or the flip silently does nothing for anything already seen.
@@ -154,14 +249,15 @@ pub fn gfx_relief_diag() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let cfg = gfx_relief_config();
     format!(
-        "{{\"enabled\":{},\"subdivLevel\":{},\"scale\":{},\"active\":{},\"widthM\":{},\"heightM\":{},\"minEdgeM\":{}}}",
+        "{{\"enabled\":{},\"subdivLevel\":{},\"scale\":{},\"active\":{},\"segments\":{},\"amplitudeM\":{},\"railWidthM\":{},\"heightFields\":{}}}",
         GFX_RELIEF_ON.load(Relaxed),
         GFX_RELIEF_LEVEL.load(Relaxed),
         f32::from_bits(GFX_RELIEF_SCALE.load(Relaxed)),
         cfg.is_some(),
-        cfg.map(|c| c.width_m).unwrap_or(0.0),
-        cfg.map(|c| c.height_m).unwrap_or(0.0),
-        cfg.map(|c| c.min_edge_m).unwrap_or(0.0),
+        cfg.map(|c| c.subdiv.segments()).unwrap_or(0),
+        cfg.map(|c| c.amplitude_m).unwrap_or(0.0),
+        cfg.map(|c| c.remodel.width_m).unwrap_or(0.0),
+        SURFACE_HEIGHT.read().map(|m| m.values().filter(|v| v.is_some()).count()).unwrap_or(0),
     )
 }
 
@@ -6012,6 +6108,8 @@ fn append_gfx_tris_with_tex_swaps(
     const NO_POS: u8 = 0x04;
     const NO_NEG: u8 = 0x08;
     const CULL_CLOCKWISE: i32 = 0x2;
+    // Resolved once per model, not per polygon.
+    let relief_cfg = gfx_relief_config();
 
     // Sort polygon ids for deterministic output (HashMap iteration is
     // not stable; PIXI.Mesh draw order matches whatever order we feed
@@ -6149,19 +6247,67 @@ fn append_gfx_tris_with_tex_swaps(
             let n0 = ring_normal[0].unwrap_or(face);
             let n1 = ring_normal[i - 1].unwrap_or(face);
             let n2 = ring_normal[i].unwrap_or(face);
-            tris.push(Tri {
-                pos: [a, b, c],
-                uv: [ring_uv_pos[0], ring_uv_pos[i - 1], ring_uv_pos[i]],
-                normals: [n0, n1, n2],
-                surface_did: pos_surface_did,
-                sides_type: poly.sides_type as u8,
-                // E8: front face → positive side of polygon `pid`.
-                polygon_id: pid,
-                side_kind: SideKind::Positive,
-                // RND-33: raw Stippling byte; reduced per surface subset in
-                // pack_model_mesh.
-                stippling: poly.stippling,
-            });
+            // Per-texture 3D amplification. When relief is on and this
+            // surface has a seam-height field, subdivide the triangle and
+            // displace each sub-vertex outward by `amplitude * height(uv)`;
+            // otherwise emit the single flat tri exactly as before.
+            let mut emitted = false;
+            if let (Some(rcfg), Some(hf)) = (relief_cfg, surface_height(pos_surface_did)) {
+                use holtburger_dat::gfx_subdiv::{
+                    subdivide_displaced_triangle_sampled, ReliefSampler,
+                };
+                let amp = rcfg.amplitude_m();
+                if amp > 0.0 {
+                    let sampler = ReliefSampler {
+                        height: &|uv: [f32; 2]| {
+                            holtburger_dat::height_seam::sample_height(&hf.data, hf.w, hf.h, uv)
+                        },
+                        // The fan diagonals (ring[0]->ring[i-1] and
+                        // ring[i]->ring[0]) are interior to this polygon except
+                        // at the two ends of the fan; only ring[i-1]->ring[i] is
+                        // always an original polygon boundary. Pinning the
+                        // others would stamp a ridge down every quad.
+                        boundary: [i == 2, true, i == ring_pos.len() - 1],
+                    };
+                    subdivide_displaced_triangle_sampled(
+                        [a, b, c],
+                        [ring_uv_pos[0], ring_uv_pos[i - 1], ring_uv_pos[i]],
+                        [n0, n1, n2],
+                        [amp, amp, amp],
+                        amp,
+                        rcfg.subdiv,
+                        Some(&sampler),
+                        &mut |p, u, nn| {
+                            tris.push(Tri {
+                                pos: p,
+                                uv: u,
+                                normals: nn,
+                                surface_did: pos_surface_did,
+                                sides_type: poly.sides_type as u8,
+                                polygon_id: pid,
+                                side_kind: SideKind::Positive,
+                                stippling: poly.stippling,
+                            });
+                        },
+                    );
+                    emitted = true;
+                }
+            }
+            if !emitted {
+                tris.push(Tri {
+                    pos: [a, b, c],
+                    uv: [ring_uv_pos[0], ring_uv_pos[i - 1], ring_uv_pos[i]],
+                    normals: [n0, n1, n2],
+                    surface_did: pos_surface_did,
+                    sides_type: poly.sides_type as u8,
+                    // E8: front face → positive side of polygon `pid`.
+                    polygon_id: pid,
+                    side_kind: SideKind::Positive,
+                    // RND-33: raw Stippling byte; reduced per surface subset in
+                    // pack_model_mesh.
+                    stippling: poly.stippling,
+                });
+            }
             if emit_back_face {
                 // Reversed winding (A, C, B) + flipped normals so the back
                 // face's normals point the opposite way. UV ring follows the
@@ -6245,8 +6391,8 @@ fn append_gfx_tris_with_tex_swaps(
             // material transitions on flat walls. Disjoint by construction —
             // OP1 takes edges >= 60 degrees, OP3 takes edges below it — so an
             // edge never grows two rails.
-            topo.emit_convex_rails(&cfg, &mut push);
-            topo.emit_material_rails(&cfg, &mut push);
+            topo.emit_convex_rails(&cfg.remodel, &mut push);
+            topo.emit_material_rails(&cfg.remodel, &mut push);
         }
     }
 }
@@ -6350,6 +6496,7 @@ fn triangulate_setup_model_at_frame<S: holtburger_dat::ResourceSource + ?Sized>(
         pose_override,
         None,
         |_pi, gfx, offset, rot, swaps| {
+            prime_surface_heights(source, &gfx.surfaces);
             append_gfx_tris_with_tex_swaps(tris, gfx, offset, rot, swaps);
         },
     )
@@ -6386,6 +6533,7 @@ fn triangulate_setup_model_per_part<S: holtburger_dat::ResourceSource + ?Sized>(
         None,
         |pi, gfx, offset, rot, swaps| {
             if let Some(slot) = buckets.get_mut(pi) {
+                prime_surface_heights(source, &gfx.surfaces);
                 append_gfx_tris_with_tex_swaps(slot, gfx, offset, rot, swaps);
             }
         },
@@ -6469,6 +6617,7 @@ fn triangulate_setup_model_per_part_with_rest_pose<
                 }
                 // Append with identity so vertices stay part-local; the
                 // rest pose travels separately above.
+                prime_surface_heights(source, &gfx.surfaces);
                 append_gfx_tris_with_tex_swaps(
                     slot,
                     gfx,
@@ -8924,6 +9073,7 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
                 .get_file_shared(ResourceKey::new("eor/portal", model_id))
                 .ok()?;
             let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes.as_slice())).ok()?;
+            prime_surface_heights(&counting, &gfx.surfaces);
             append_gfx_tris(
                 &mut tris,
                 &gfx,
@@ -18525,7 +18675,7 @@ fn append_environment_tris(
                 &vuv,
             );
             if topo.passes_gate(&ModelGate::default()) {
-                topo.emit_material_rails(&cfg, &mut |pid, pos, uv, nrm| {
+                topo.emit_material_rails(&cfg.remodel, &mut |pid, pos, uv, nrm| {
                     let Some(poly) = cell.polygons.get(&pid) else { return };
                     let did = if poly.pos_surface >= 0
                         && (poly.pos_surface as usize) < surfaces.len()

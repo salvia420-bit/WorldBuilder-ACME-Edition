@@ -119,16 +119,17 @@ impl Default for ReliefConfig {
 }
 
 impl ReliefConfig {
-    /// Segments per triangle edge: 1, 2 or 4. Levels above 2 are clamped —
-    /// this is a visual-detail knob, not a tessellation benchmark, and the
-    /// measured budget (2026-07-30) puts the streaming/memory wall near 4x.
+    /// Segments per triangle edge: `2^level`, capped at level 5 (32 segments,
+    /// 1,024 triangles per source triangle).
+    ///
+    /// Levels above 2 exist because texture-scale relief NEEDS them. Measured
+    /// on town buildings: median source edge is 1.16-2.50 m while brick
+    /// coursing is ~10-15 cm, so resolving a mortar line takes roughly 16-32
+    /// segments per edge. Level 2 (4 segments) leaves ~0.6 m vertex spacing —
+    /// enough for metre-scale structure, nowhere near enough to carve a joint.
     #[inline]
     pub fn segments(&self) -> u32 {
-        match self.level {
-            0 => 1,
-            1 => 2,
-            _ => 4,
-        }
+        1u32 << self.level.min(5)
     }
 
     /// True when this config cannot change any vertex position, so callers can
@@ -492,7 +493,7 @@ mod tests {
 
     #[test]
     fn subdivision_emits_the_expected_triangle_counts() {
-        for (level, want) in [(0u8, 1usize), (1, 4), (2, 16)] {
+        for (level, want) in [(0u8, 1usize), (1, 4), (2, 16), (3, 64), (4, 256), (5, 1024), (9, 1024)] {
             let mut n = 0;
             subdivide_displaced_triangle(
                 [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
