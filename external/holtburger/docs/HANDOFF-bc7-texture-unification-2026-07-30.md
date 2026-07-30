@@ -323,7 +323,18 @@ that to *graded* rows measured **worse** (0.24), so those ship verbatim.
    pipeline for the changed rows and re-bake; 246 of the 2,999 shipped BC7
    payloads carry the DXT1 fault, and the 441 clip-map rows the hazard agent did
    not hand-repair were never audited. `export-textures` needs a project
-   (`RequireProject`), and it opens the dats **ReadWrite** — point it at a copy,
-   not `~/ac_base_dats`.
+   (`RequireProject`), and it opens the dats **ReadWrite** — it will even *create*
+   a missing `client_highres.dat` — so point it at a COPY, never `~/ac_base_dats`.
+
+   ⚠ **Do not feed the corrected PNGs straight to ESRGAN.** Cleared pixels are now
+   `RGBA(0,0,0,0)`, and upscaling that smears black into every cutout edge. Use the
+   hazard agent's `x4-alphafix` recipe (`HAZARD-ROWS-REPORT.md` §1.2): colour-bleed
+   the RGB under the cleared region → ESRGAN ×4 the resulting **opaque** RGB →
+   nearest-×4 the true 1-bit mask → recombine. Binary cutouts also want the alpha
+   re-binarised at 128 (`x4-alphabin`) so they survive the client's 200/255 alpha
+   test — but that measured *worse* on graded/blended rows (IoU 0.24), so it is
+   per-row, not global. The 445 clip-map rows are the bigger job: unlike the DXT1
+   rows, their **RGB changes too** (clipped texels drop palette colour 0), so none
+   of the existing ×4 output can be reused.
 7. The two exporter fixes "predict visible changes" (§7.6) and are still
    **unverified visually** — the 1070 never came back this session.
