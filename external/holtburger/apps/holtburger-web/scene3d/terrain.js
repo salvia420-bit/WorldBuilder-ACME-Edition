@@ -35,6 +35,18 @@ import {
   applyPbrColorOverrides,
   buildPbrNraTexture,
 } from "./adapter.js";
+// ?terrainBc7=on (DEFAULT OFF) — retail-derived BC7 terrain atlas. The A/B twin
+// of the CC0 `?pbrTerrain` arm above: same 33 layers, but the albedo is the art
+// AC shipped (4x realesrgan-x4plus, the statics model) delivered as BC7 with a
+// full mip chain, and normal/roughness/AO/height are derived from that same
+// retail albedo instead of coming from a CC0 set authored for different pixels.
+// Flag absent ⇒ every export here returns null before fetching ⇒ the CC0 path
+// below runs byte-for-byte unchanged. See scene3d/terrain_bc7.js.
+import {
+  terrainBc7Enabled,
+  buildTerrainBc7Atlas,
+  terrainBc7Stats,
+} from "./terrain_bc7.js";
 import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
 // streamFix urgent lane (2026-07-02) — near-player bake detection.
 import { isNearPlayerLb } from "./landblock_lru.js";
@@ -2459,6 +2471,44 @@ export async function resolveTerrainRingOpts(
     const built = buildTerrainAtlasArrayBytes(terrainTextures);
     roadCanvas = built.roadCanvas;
 
+    // ?terrainBc7=on (DEFAULT OFF) — retail-derived BC7 atlas arm. Resolved
+    // FIRST because it is mutually exclusive with the CC0 arm below: both write
+    // the albedo of the same 33 layers, and running both would mean one silently
+    // overwriting the other. Null for every failure reason (flag off, no BPTC,
+    // no bake, a missing/garbled/off-dimension payload) → the CC0 + retail RGBA8
+    // path below runs exactly as it does today. Cached on scene3d so a ring
+    // rebuild reuses the arrays instead of refetching ~20 MB of blocks —
+    // `undefined` means NOT YET ATTEMPTED and `null` means ATTEMPTED AND FAILED,
+    // so a failure is remembered rather than re-hammering the endpoint on every
+    // rebuild (the same negative-caching contract Bc7RecordSource uses).
+    let bc7Atlas = scene3d.terrainBc7State;
+    if (terrainBc7Enabled() && bc7Atlas === undefined) {
+      try {
+        bc7Atlas = await buildTerrainBc7Atlas({
+          anisotropy: getAdapterMaxAnisotropy(),
+        });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[terrain-bc7] build failed (RGBA8/CC0 path):", e);
+        bc7Atlas = null;
+      }
+      scene3d.terrainBc7State = bc7Atlas;
+      if (typeof window !== "undefined") {
+        window.__terrainBc7Stats = () => terrainBc7Stats();
+      }
+    }
+    const bc7Active = !!bc7Atlas?.atlasTexture;
+    if (bc7Active) {
+      // The nra array is derived from the SAME retail albedo (normal XY,
+      // roughness, AO), so uPbrEnabled can stay on with everything registered.
+      // If the nra channel failed to load we deliberately leave the PBR gate
+      // OFF rather than pairing retail albedo with the CC0 normals — that
+      // mismatch is the whole reason this arm derives its own.
+      scene3d.pbrTerrainState = bc7Atlas.nraTexture
+        ? { nraTex: bc7Atlas.nraTexture, applied: 33, bc7: true }
+        : null;
+    }
+
     // T2 (?pbrTerrain=on) — curated CC0 layer set. Loaded once per session
     // and cached on scene3d (the lazy LB-entry path reuses atlasTexture AND
     // this state). Albedo overrides are written into the atlas bytes BEFORE
@@ -2466,7 +2516,7 @@ export async function resolveTerrainRingOpts(
     // texMerge / road slots) uses the new colour with zero shader changes;
     // uncurated layers (water ×6, olthoi) keep their retail bytes. Load
     // failure → null state → uPbrEnabled 0 → retail render, no-op.
-    if (readPbrTerrainFlag() && !scene3d.pbrTerrainState) {
+    if (!bc7Active && readPbrTerrainFlag() && !scene3d.pbrTerrainState) {
       try {
         const pbrSet = await loadPbrTerrainAtlasSet({ tileSize: built.tileSize });
         if (pbrSet) {
@@ -2542,6 +2592,17 @@ export async function resolveTerrainRingOpts(
     atlasTexture.generateMipmaps = true;
     atlasTexture.anisotropy = getAdapterMaxAnisotropy();
     atlasTexture.needsUpdate = true;
+
+    // ?terrainBc7=on — swap in the compressed array. Done AFTER the RGBA8 build
+    // rather than instead of it, on purpose: `built.atlasArrayBytes` is needed
+    // for `roadCanvas` regardless, and leaving the default construction path
+    // untouched means the flag-off render cannot regress. The RGBA8 twin is
+    // disposed here and was never bound, so three never uploads it —
+    // `needsUpdate` only marks; the upload happens at first render.
+    if (bc7Active) {
+      atlasTexture.dispose();
+      atlasTexture = bc7Atlas.atlasTexture;
+    }
 
     if (roadCanvas) {
       roadTexture = new THREE.CanvasTexture(roadCanvas);

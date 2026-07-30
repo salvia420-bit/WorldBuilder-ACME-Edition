@@ -62,3 +62,4 @@ apps/holtburger-web/scratchpad/
 # ambientCG sets on /mnt/wbterminal2/pbr-terrain (see its README.md +
 # curation-manifest.json) by scratchpad prep — docs/terrainplan.md §T2.
 apps/holtburger-web/scene3d/assets/pbr_terrain/
+apps/holtburger-web/scene3d/assets/terrain_bc7/
