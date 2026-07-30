@@ -65,6 +65,10 @@ export const PRESETS = {
         pom: false,
         pomStepsPrimary: 0,
         pomStepsSelfShadow: 0,
+        // statPom — the ATLAS-side parallax (static_atlas.js): marches the
+        // per-surface seam-height field packed into the nra alpha channel.
+        // `low` exists to not pay per-fragment dependent-fetch loops.
+        statPom: false,
         csm: false,
         bloom: false,
         vignette: false,
@@ -100,6 +104,12 @@ export const PRESETS = {
         pom: false,
         pomStepsPrimary: 8,
         pomStepsSelfShadow: 4,
+        // statPom ON at mid (2026-07-30): unlike the legacy singleton `pom`
+        // (still off here), the atlas POM is fade-limited to <12 m, marches
+        // the mid-tier 8/4 step counts above, and the 2026-07-30 1070
+        // measurement showed the everything-on arm FASTER than bare default
+        // (BC7 bandwidth pays for the fragment work). `?statPom=off` escapes.
+        statPom: true,
         csm: false,
         bloom: true,
         vignette: false,
@@ -127,6 +137,7 @@ export const PRESETS = {
         pom: true,
         pomStepsPrimary: 16,
         pomStepsSelfShadow: 8,
+        statPom: true,
         csm: true,
         bloom: true,
         vignette: true,
@@ -153,6 +164,7 @@ export const PRESETS = {
         pom: true,
         pomStepsPrimary: 24,
         pomStepsSelfShadow: 12,
+        statPom: true,
         csm: true,
         bloom: true,
         vignette: true,
@@ -175,6 +187,7 @@ const BOOL_FLAGS = new Set([
     "triplanar",
     "hero",
     "pom",
+    "statPom",
     "csm",
     "bloom",
     "vignette",

@@ -28,7 +28,8 @@
 // `!== "off"` idiom silently reads ON when the param is absent or misspelled.
 // 20 flags shipped live that way by accident. `gfxRelief` therefore enables
 // ONLY on the exact string "on"; every other value, including "1"/"true"/"yes",
-// leaves it at the quality preset's value (false on every tier today).
+// leaves it at the quality preset's value (true on mid/high/ultra since
+// 2026-07-30; false on low).
 //
 // ONE RESOLUTION, TWO WASM INSTANCES. The bake worker owns its OWN wasm
 // instance (`bake_worker.js`), so it must be told the same numbers or the same

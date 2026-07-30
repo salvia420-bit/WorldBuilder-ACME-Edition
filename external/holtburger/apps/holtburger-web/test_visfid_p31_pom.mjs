@@ -61,22 +61,29 @@ function loadModule(relPath) {
 }
 
 const matsSrc = loadModule("scene3d/materials.js");
+// Strip EVERY static import (materials.js has grown vfx_flags/suite_assets/
+// bc7_textures imports since the original two-replace version of this test —
+// each new one broke the Function() eval identically) and de-export.
 const matsPatched = matsSrc
-    .replace(
-        /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
-        ""
-    )
+    .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?\s*$/gm, "")
     .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
     .replace(/^\s*export\s+function\s+/gm, "function ")
     .replace(/^\s*export\s+class\s+/gm, "class ")
     .replace(/^\s*export\s+const\s+/gm, "const ");
-// Stub the adapter import — _materialFromFlags doesn't call any of
-// these (the helpers are only used in get()/preload(), which we don't
-// exercise here).
+// Stub the stripped imports — _materialFromFlags + installPomShaderPatch use
+// only aoMapIntensityValue/materialBakeEnabled at install time; the rest are
+// get()/preload()-only, which this test never exercises.
 const matsStubbed =
     "const surfacePixelsToTexture = () => null;\n" +
     "const surfacePixelsToNormalTexture = () => null;\n" +
     "const surfacePixelsToHeightTexture = () => null;\n" +
+    "const aoMapIntensityValue = () => 0.6;\n" +
+    "const materialBakeEnabled = () => false;\n" +
+    "const SuiteAssetSource = class {};\n" +
+    "const loadTexchanManifest = () => null;\n" +
+    "const bc7Available = () => false;\n" +
+    "const bc7TextureBytes = () => 0;\n" +
+    "const upgradeMaterialToBc7 = () => false;\n" +
     matsPatched;
 
 const matsFactory = new Function(
@@ -326,15 +333,25 @@ check(
     "self-shadow function found"
 );
 check(
-    "patched fragment shader uses LOD ramp via smoothstep(uPomLodNear, uPomLodFar, vPomViewDepth)",
-    /smoothstep\(uPomLodNear,\s*uPomLodFar,\s*vPomViewDepth\)/.test(stubShader.fragmentShader),
+    "patched fragment shader uses LOD ramp via smoothstep(uPomLodNear, uPomLodFar, length(vViewPosition))",
+    /smoothstep\(uPomLodNear,\s*uPomLodFar,\s*length\(vViewPosition\)\)/.test(stubShader.fragmentShader),
     "LOD ramp injection"
 );
+// S4 fix (2026-07-30): the tangent frame moved to the FRAGMENT stage
+// (getTangentFrame — the fabricated vertex-stage TBN rotated with the
+// camera). The vertex shader is deliberately untouched now, and the
+// self-shadow marches toward directionalLights[0], not a camera proxy.
 check(
-    "patched vertex shader declares vPomTangentViewDir + vPomViewDepth varyings",
-    /varying\s+vec3\s+vPomTangentViewDir/.test(stubShader.vertexShader) &&
-        /varying\s+float\s+vPomViewDepth/.test(stubShader.vertexShader),
-    "vertex varyings declared"
+    "S4: fragment builds the tangent frame via getTangentFrame; vertex shader untouched",
+    /getTangentFrame\(-vViewPosition/.test(stubShader.fragmentShader) &&
+        !/vPomTangentViewDir/.test(stubShader.vertexShader) &&
+        !/vPomTangentViewDir/.test(stubShader.fragmentShader),
+    "fragment-stage TBN present, legacy varyings gone"
+);
+check(
+    "S4: self-shadow marches toward the REAL sun (directionalLights[0])",
+    /directionalLights\[0\]\.direction/.test(stubShader.fragmentShader),
+    "real light direction used"
 );
 check(
     "patched shader registers uPomMap into shader.uniforms",

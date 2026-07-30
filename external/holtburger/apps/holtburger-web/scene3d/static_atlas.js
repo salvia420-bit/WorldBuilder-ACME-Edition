@@ -38,7 +38,10 @@
 // Layers with no source read the flat texel (128,128,255,255) = flat normal,
 // roughness 1.0, no occlusion — i.e. byte-identical shading to albedo-only v1.
 // NOT carried: per-member `metalness` (no free channel; every atlas bucket has
-// always rendered metalness 0) and POM/height.
+// always rendered metalness 0).
+// S3 (2026-07-30): the A channel now PREFERS the per-surface seam-height field
+// over the texchan AO (see packNraLayer + the statPom block below) — height
+// and POM ARE carried now, at zero additional bytes.
 //
 // LRU-safe: bucketed PER landblock; each merged mesh carries userData.landblockId,
 // so the existing per-LB eviction (which scans staticsGroup.children by
@@ -63,6 +66,7 @@ import {
   _bumpBc7Stat,
 } from "./bc7_textures.js";
 import { aoMapIntensityValue } from "./vfx_flags.js";
+import { getQuality } from "./quality.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -84,13 +88,10 @@ export function statAtlasEnabled() {
 }
 
 let _nraFlag;
-/** X5 — `?statNra=on` adds the parallel normal/roughness/AO texture array to the
- *  cross-LB statics atlas (see the header). **DEFAULT-OFF** during development:
- *  the reader is an EXACT-MATCH opt-in (`on`/`1`/`true`/`yes`), never the
- *  `!== "off"` idiom (url-flags.md's flag-default footgun — that reads ON when
- *  the param is absent). Flag-absent ⇒ every byte of the v1 path is untouched:
- *  no second array is allocated, no shader chunk is replaced, and the material's
- *  `customProgramCacheKey` keeps its v1 value. */
+/** X5 — the parallel normal/roughness(/height, since S3) texture array for the
+ *  cross-LB statics atlas (see the header). **DEFAULT-ON** since 2026-07-30;
+ *  `?statNra=off` is the escape back to the albedo-only v1 path (no second
+ *  array allocated, no shader chunk replaced, v1 `customProgramCacheKey`). */
 export function statNraEnabled() {
   if (_nraFlag !== undefined) return _nraFlag;
   // DEFAULT-ON since 2026-07-30 (see bc7_textures.js `bc7Enabled` for the
@@ -110,6 +111,91 @@ export function statNraEnabled() {
   } catch (_) { on = true; }
   return (_nraFlag = on);
 }
+
+// === S3 (2026-07-30) — atlas POM over the seam-height field ("statPom") =====
+// The nra ALPHA channel now carries the per-surface seam height (255 = proud
+// face, grooves dip toward 0 — height_seam.rs, the operator that won the
+// 10-way comparison), packed from `mat.userData.heightTex` by `packNraLayer`.
+// `makeArrayMaterial` marches it per-fragment: a correct POM (derivative
+// tangent frame via three's own `getTangentFrame` — NOT the legacy
+// view-space fabrication that swam with the camera), a self-shadow ray toward
+// the REAL sun (`directionalLights[0]`), and cavity AO derived from the same
+// texel applied to indirect AND direct light. Costs 0 extra bytes, 0 extra
+// samplers, 0 capacity change: the alpha channel was already allocated.
+//
+// Resolution is (URL `?statPom=on|off` > quality preset `statPom` > off),
+// via quality.js's BOOL_FLAGS override path; step counts ride the preset's
+// existing `pomStepsPrimary`/`pomStepsSelfShadow`. Resolved ONCE, at first
+// bucket creation, through `getQuality()` (memoized, main-thread only) — NOT
+// through `window.liveScene3d`, which is stamped ~35 s after in-world and
+// would race every boot-ring bucket. `uStatPomOn` is a UNIFORM, not a define,
+// so `window.__statPom({on, depth, ...})` can A/B live without recompiling.
+let _statPomCfg;
+export function statPomConfig() {
+  if (_statPomCfg !== undefined) return _statPomCfg;
+  let enabled = false;
+  let steps = 8;
+  let shadowSteps = 4;
+  try {
+    const f = getQuality()?.flags || {};
+    enabled = f.statPom === true;
+    if (Number.isFinite(f.pomStepsPrimary) && f.pomStepsPrimary > 0) steps = f.pomStepsPrimary;
+    if (Number.isFinite(f.pomStepsSelfShadow) && f.pomStepsSelfShadow > 0) shadowSteps = f.pomStepsSelfShadow;
+  } catch (_) { enabled = false; }
+  // UV-space depth scale: 0.04 of a tile ≈ 4-8 cm of apparent depth on the
+  // 1-2 m retail wall tiles — inside the amplitude band the rails use. The
+  // seam field is 1.0 on every broad face, so flat wall area gets ZERO offset
+  // regardless of this knob; only groove walls shift.
+  let depth = 0.04;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      const v = Number.parseFloat(new URLSearchParams(window.location.search).get("statPomDepth") ?? "");
+      if (Number.isFinite(v)) depth = Math.min(0.15, Math.max(0, v));
+    }
+  } catch (_) { /* keep default */ }
+  _statPomCfg = {
+    enabled,
+    steps: Math.min(24, Math.max(4, steps | 0)),
+    shadowSteps: Math.min(12, Math.max(2, shadowSteps | 0)),
+    depth,
+    near: 5.0,   // full strength below (m)
+    far: 12.0,   // fully off beyond (m) — bounds the dependent-fetch loop cost
+    shadowDark: 0.55,
+  };
+  return _statPomCfg;
+}
+
+/**
+ * Live A/B seam: update the statPom uniforms on every existing bucket material
+ * (and the memoized config new buckets will read). `window.__statPom({on:false})`,
+ * `window.__statPom({depth:0.08})`, etc. Uniform-only — no shader recompile,
+ * no draw-call change, safe mid-frame.
+ */
+export function setStatPom(opts = {}) {
+  const cfg = statPomConfig();
+  if (typeof opts.on === "boolean") cfg.enabled = opts.on;
+  if (Number.isFinite(opts.depth)) cfg.depth = Math.min(0.15, Math.max(0, opts.depth));
+  if (Number.isFinite(opts.steps)) cfg.steps = Math.min(24, Math.max(4, opts.steps | 0));
+  if (Number.isFinite(opts.shadowSteps)) cfg.shadowSteps = Math.min(12, Math.max(2, opts.shadowSteps | 0));
+  if (Number.isFinite(opts.near)) cfg.near = opts.near;
+  if (Number.isFinite(opts.far)) cfg.far = opts.far;
+  if (Number.isFinite(opts.shadowDark)) cfg.shadowDark = Math.min(1, Math.max(0, opts.shadowDark));
+  let touched = 0;
+  for (const b of _buckets.values()) {
+    const u = b.bm?.material?.userData?._statPomUniforms;
+    if (!u) continue;
+    u.uStatPomOn.value = cfg.enabled ? 1 : 0;
+    u.uStatPomDepth.value = cfg.depth;
+    u.uStatPomSteps.value = cfg.steps;
+    u.uStatPomShadowSteps.value = cfg.shadowSteps;
+    u.uStatPomNear.value = cfg.near;
+    u.uStatPomFar.value = cfg.far;
+    u.uStatPomShadowDark.value = cfg.shadowDark;
+    touched++;
+  }
+  return { ...cfg, bucketsTouched: touched };
+}
+if (typeof window !== "undefined") window.__statPom = setStatPom;
 
 // One shared 1x1 white map forces USE_MAP so three emits the vMapUv plumbing the
 // injected array sampler reuses. Never sampled itself.
@@ -238,6 +324,16 @@ function packNraLayer(nraArray, layer, mat, w, h, stats) {
   const nG = nR ? _texChannel(mat.normalMap, 1, w, h) : null;
   const rgh = _texChannel(mat.roughnessMap, 1, w, h); // three reads roughnessMap.g
   const ao = _texChannel(mat.aoMap, 0, w, h);         // three reads aoMap.r (RedFormat)
+  // S3 — the seam-height field (materials.js stashes it per material; 255 =
+  // proud face, grooves dip). When present it OWNS the alpha channel: the
+  // bucket shader both marches it (statPom) and derives cavity AO from it
+  // (`ao = 1 - k*(1 - h)` — a groove darkens across its full width, which the
+  // 1-texel texchan luminance cavity never did). Surfaces with NO seam field
+  // (constant-luminance ⇒ wasm returns empty heightPixels) fall back to the
+  // texchan AO exactly as before — under the same shader formula both
+  // semantics shade correctly, and a near-flat AO field makes the POM march a
+  // no-op, so the fallback can never invent relief.
+  const hgt = _texChannel(mat.userData?.heightTex, 0, w, h);
 
   const roughScalar = Math.min(1, Math.max(0, Number.isFinite(mat.roughness) ? mat.roughness : 1));
   const roughFlat = Math.round(roughScalar * 255);
@@ -256,7 +352,7 @@ function packNraLayer(nraArray, layer, mat, w, h, stats) {
       dst[o + 1] = _NRA_FLAT_N;
     }
     dst[o + 2] = rgh ? Math.round((roughScalar * rgh.px[i]) ) : roughFlat;
-    dst[o + 3] = ao ? ao.px[i] : _NRA_FLAT_A;
+    dst[o + 3] = hgt ? hgt.px[i] : (ao ? ao.px[i] : _NRA_FLAT_A);
   }
 
   if (stats) {
@@ -264,7 +360,8 @@ function packNraLayer(nraArray, layer, mat, w, h, stats) {
     if (nR && nG) stats.nraWithNormal++;
     if (rgh) stats.nraWithRough++;
     if (ao) stats.nraWithAo++;
-    if ((nR && nR.resampled) || (rgh && rgh.resampled) || (ao && ao.resampled)) stats.nraResampled++;
+    if (hgt) stats.nraWithHeight++;
+    if ((nR && nR.resampled) || (rgh && rgh.resampled) || (ao && ao.resampled) || (hgt && hgt.resampled)) stats.nraResampled++;
     if ((mat.metalness || 0) > 0.01) stats.nraMetalDropped++;
   }
   return !!(nR || rgh || ao);
@@ -355,28 +452,66 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
   // cannot cross-filter its own wrap seam) — invisible on the edge-matched
   // retail tiles.
   const wrapBucket = String(stateKey).split("|")[4] === "w";
-  // ONE sampling convention for every array in the bucket (diffuse + nra): the
-  // wrap bucket's fract()+textureGrad, the clamp bucket's plain texture(). They
-  // MUST agree or the relief would slide off its albedo on tiling surfaces.
-  const sampleArray = (name) =>
-    wrapBucket
-      ? `textureGrad( ${name}, vec3( fract( vMapUv ), vLayer ), dFdx( vMapUv ), dFdy( vMapUv ) )`
-      : `texture( ${name}, vec3( vMapUv, vLayer ) )`;
+  // ONE addressing convention for every array in the bucket (diffuse + nra):
+  // the wrap bucket fract()s, the clamp bucket samples raw (ClampToEdge does
+  // the rest). They MUST agree or the relief would slide off its albedo on
+  // tiling surfaces. `addr` wraps an arbitrary uv EXPRESSION so the statPom
+  // march can reuse the convention at offset coordinates; every sample goes
+  // through textureGrad with derivatives of the UNWRAPPED base uv, which (a)
+  // keeps mip selection continuous across the fract() seam and (b) keeps the
+  // march loops legal — implicit-LOD sampling inside non-uniform control flow
+  // is undefined behaviour.
+  const addr = (uvExpr) => (wrapBucket ? `fract( ${uvExpr} )` : `( ${uvExpr} )`);
+  const sampleAt = (name, uvExpr) =>
+    `textureGrad( ${name}, vec3( ${addr(uvExpr)}, vLayer ), _statUvGx, _statUvGy )`;
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uDiffuseArray = { value: diffArray };
-    if (nraArray) shader.uniforms.uNraArray = { value: nraArray };
+    if (nraArray) {
+      shader.uniforms.uNraArray = { value: nraArray };
+      // S3 — statPom uniforms (uniforms, not defines: `window.__statPom` can
+      // A/B live, and quality resolution timing can never bake a stale gate
+      // into a compiled program).
+      const pc = statPomConfig();
+      shader.uniforms.uStatPomOn = { value: pc.enabled ? 1 : 0 };
+      shader.uniforms.uStatPomDepth = { value: pc.depth };
+      shader.uniforms.uStatPomNear = { value: pc.near };
+      shader.uniforms.uStatPomFar = { value: pc.far };
+      shader.uniforms.uStatPomSteps = { value: pc.steps };
+      shader.uniforms.uStatPomShadowSteps = { value: pc.shadowSteps };
+      shader.uniforms.uStatPomShadowDark = { value: pc.shadowDark };
+      m.userData._statPomUniforms = shader.uniforms;
+    }
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nattribute float aLayer;\nvarying float vLayer;")
       .replace("#include <uv_vertex>", "#include <uv_vertex>\n\tvLayer = aLayer;");
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        "#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray uDiffuseArray;\nvarying float vLayer;" +
+        "#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray uDiffuseArray;\nvarying float vLayer;\nvec2 _statUvGx;\nvec2 _statUvGy;" +
           // X5 — one global texel, sampled ONCE in <map_fragment> (the first of
           // our injected sites in main()) and reused by the roughness, normal
           // and AO sites further down. GLSL ES 3.0 forbids a non-constant
-          // initializer on a global, so it is declared here and assigned there.
-          (nraArray ? "\nuniform sampler2DArray uNraArray;\nvec4 _statNraTexel;" : "")
+          // initializer on a global — constants are fine, so the statPom state
+          // defaults here cover every early-out (POM off / too far / grazing /
+          // backface) without a second assignment site.
+          (nraArray
+            ? "\nuniform sampler2DArray uNraArray;" +
+              "\nuniform float uStatPomOn;" +
+              "\nuniform float uStatPomDepth;" +
+              "\nuniform float uStatPomNear;" +
+              "\nuniform float uStatPomFar;" +
+              "\nuniform int uStatPomSteps;" +
+              "\nuniform int uStatPomShadowSteps;" +
+              "\nuniform float uStatPomShadowDark;" +
+              "\nvec4 _statNraTexel;" +
+              "\nvec2 _statPomUv;" +
+              "\nfloat _statPomFade = 0.0;" +
+              "\nfloat _statPomHitDepth = 0.0;" +
+              "\nmat3 _statPomTbn;" +
+              // The seam-height field lives in the nra ALPHA channel
+              // (packNraLayer): 1.0 = proud face, grooves dip toward 0.
+              `\nfloat _statPomHeightAt( vec2 uv ) {\n\treturn ${sampleAt("uNraArray", "uv")}.a;\n}`
+            : "")
       )
       .replace(
         // onBeforeCompile runs BEFORE three resolves #include directives, so the
@@ -391,12 +526,74 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
         // hardware-side (SRGB8_ALPHA8 upload path), so no manual EOTF here.
         "#include <map_fragment>",
         [
-          nraArray ? `\t_statNraTexel = ${sampleArray("uNraArray")};` : null,
-          "#ifdef USE_MAP",
-          `\tvec4 sampledDiffuseColor = ${sampleArray("uDiffuseArray")};`,
-          "\tdiffuseColor *= sampledDiffuseColor;",
-          "#endif",
-        ].filter(Boolean).join("\n")
+          "\t_statUvGx = dFdx( vMapUv );",
+          "\t_statUvGy = dFdy( vMapUv );",
+          nraArray
+            ? [
+                // S3 — parallax-occlusion march over the seam-height field.
+                // The tangent frame is three's own derivative frame
+                // (getTangentFrame, declared by <normalmap_pars_fragment>) —
+                // UV-correct and camera-stable, unlike the retired legacy
+                // view-space fabrication. Computed UNCONDITIONALLY: dFdx
+                // inside the distance branch (non-uniform control flow) is
+                // undefined behaviour, and it is 4 derivatives — cheap.
+                "\t_statPomUv = vMapUv;",
+                "\tfloat _pomFace = gl_FrontFacing ? 1.0 : -1.0;",
+                "\tvec3 _pomN = normalize( vNormal );",
+                "\t#ifdef DOUBLE_SIDED",
+                "\t\t_pomN *= _pomFace;",
+                "\t#endif",
+                "\t_statPomTbn = getTangentFrame( - vViewPosition, _pomN, vMapUv );",
+                "\t#if defined( DOUBLE_SIDED ) && ! defined( FLAT_SHADED )",
+                "\t\t_statPomTbn[ 0 ] *= _pomFace;",
+                "\t\t_statPomTbn[ 1 ] *= _pomFace;",
+                "\t#endif",
+                "\tfloat _pomVd = length( vViewPosition );",
+                "\tif ( uStatPomOn > 0.5 && _pomVd < uStatPomFar ) {",
+                "\t\tvec3 _pomV = normalize( transpose( _statPomTbn ) * normalize( vViewPosition ) );",
+                // Grazing rays explode the uv offset (xy/z); the fade to zero
+                // strength happens via distance, the hard z gate via view angle
+                // — same pair of guards terrain.js's shipping POM uses.
+                "\t\tif ( _pomV.z > 0.15 ) {",
+                "\t\t\t_statPomFade = 1.0 - smoothstep( uStatPomNear, uStatPomFar, _pomVd );",
+                "\t\t\tvec2 _pomStep = ( _pomV.xy / _pomV.z ) * ( uStatPomDepth * _statPomFade ) / float( uStatPomSteps );",
+                "\t\t\tfloat _pomLayerStep = 1.0 / float( uStatPomSteps );",
+                "\t\t\tvec2 _pomUv = vMapUv;",
+                "\t\t\tfloat _pomLd = 0.0;",
+                "\t\t\tfloat _pomHd = 1.0 - _statPomHeightAt( _pomUv );",
+                "\t\t\tfor ( int i = 0; i < 24; i ++ ) {",
+                "\t\t\t\tif ( i >= uStatPomSteps || _pomLd >= _pomHd ) break;",
+                "\t\t\t\t_pomUv -= _pomStep;",
+                "\t\t\t\t_pomLd += _pomLayerStep;",
+                "\t\t\t\t_pomHd = 1.0 - _statPomHeightAt( _pomUv );",
+                "\t\t\t}",
+                // One secant refinement between the last two samples. Guarded
+                // denominator: a march that never crossed (flat seam field —
+                // the overwhelmingly common texel) keeps the base uv exactly.
+                "\t\t\tvec2 _pomPrev = _pomUv + _pomStep;",
+                "\t\t\tfloat _pomAfter = _pomHd - _pomLd;",
+                "\t\t\tfloat _pomBefore = ( 1.0 - _statPomHeightAt( _pomPrev ) ) - ( _pomLd - _pomLayerStep );",
+                "\t\t\tfloat _pomDen = _pomAfter - _pomBefore;",
+                "\t\t\tfloat _pomW = _pomDen < -1e-6 ? clamp( _pomAfter / _pomDen, 0.0, 1.0 ) : 0.0;",
+                "\t\t\t_statPomUv = mix( _pomUv, _pomPrev, _pomW );",
+                "\t\t\t_statPomHitDepth = 1.0 - _statPomHeightAt( _statPomUv );",
+                "\t\t}",
+                "\t}",
+                // Both arrays sample at the SAME (possibly offset) uv so the
+                // relief never slides off its albedo — terrain's rule.
+                `\t_statNraTexel = ${sampleAt("uNraArray", "_statPomUv")};`,
+                "#ifdef USE_MAP",
+                `\tvec4 sampledDiffuseColor = ${sampleAt("uDiffuseArray", "_statPomUv")};`,
+                "\tdiffuseColor *= sampledDiffuseColor;",
+                "#endif",
+              ].join("\n")
+            : [
+                "#ifdef USE_MAP",
+                `\tvec4 sampledDiffuseColor = ${sampleAt("uDiffuseArray", "vMapUv")};`,
+                "\tdiffuseColor *= sampledDiffuseColor;",
+                "#endif",
+              ].join("\n"),
+        ].join("\n")
       );
     if (nraArray) {
       shader.fragmentShader = shader.fragmentShader
@@ -423,10 +620,18 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
             "\tnormal = normalize( tbn * mapN );",
           ].join("\n")
         )
-        // A channel = texchan cavity AO at the singleton path's intensity
-        // (materials.js `_applyRough`, `?aoIntensity`, default 0.6). Body mirrors
-        // three's own aomap_fragment
-        // minus the clearcoat/sheen branches this material can never have.
+        // A channel = seam height (or the texchan AO fallback — same formula
+        // shades both correctly, see packNraLayer). Three terms land here:
+        //   1. cavity AO on indirect light (the pre-S3 behaviour, now derived
+        //      from the seam field: a groove darkens across its full width);
+        //   2. Frostbite-style micro-shadow on DIRECT light — the term that
+        //      turned a 6%-of-the-normal-map effect into a first-order cue;
+        //   3. the POM self-shadow ray toward the REAL sun (the single
+        //      largest measured "this is 3D" term, +0.61 on timber) — the
+        //      legacy patch marched toward a camera proxy, which is the most
+        //      reliable way to make relief read as painted-on.
+        // aomap_fragment runs AFTER lights_fragment_end, so directDiffuse is
+        // fully accumulated and `normal`/`directionalLights` are in scope.
         .replace(
           "#include <aomap_fragment>",
           [
@@ -435,6 +640,32 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
             "\t#if defined( USE_ENVMAP ) && defined( STANDARD )",
             "\t\tfloat dotNV = saturate( dot( geometryNormal, geometryViewDir ) );",
             "\t\treflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.roughness );",
+            "\t#endif",
+            "\t#if NUM_DIR_LIGHTS > 0",
+            "\tif ( uStatPomOn > 0.5 && _statPomFade > 0.001 ) {",
+            "\t\tvec3 _pomL = directionalLights[ 0 ].direction;",
+            "\t\tfloat _pomNdl = saturate( dot( normal, _pomL ) );",
+            // ao = 1 ⇒ saturate(ndl + 1) = 1: flat texels are untouched, so
+            // the term can only darken grooves, never shift overall exposure.
+            "\t\tfloat _pomMicro = clamp( _pomNdl + 2.0 * ambientOcclusion - 1.0, 0.0, 1.0 );",
+            "\t\tfloat _pomSun = 1.0;",
+            "\t\tvec3 _pomLt = normalize( transpose( _statPomTbn ) * _pomL );",
+            "\t\tif ( _pomLt.z > 0.05 && _statPomHitDepth > 0.001 ) {",
+            "\t\t\tvec2 _sunStep = ( _pomLt.xy / max( _pomLt.z, 0.05 ) ) * uStatPomDepth / float( uStatPomShadowSteps );",
+            "\t\t\tfloat _sunLayerStep = _statPomHitDepth / float( uStatPomShadowSteps );",
+            "\t\t\tvec2 _sunUv = _statPomUv + _sunStep;",
+            "\t\t\tfloat _sunD = _statPomHitDepth - _sunLayerStep;",
+            "\t\t\tfor ( int i = 0; i < 12; i ++ ) {",
+            "\t\t\t\tif ( i >= uStatPomShadowSteps || _sunD <= 0.0 ) break;",
+            "\t\t\t\tif ( 1.0 - _statPomHeightAt( _sunUv ) < _sunD ) { _pomSun = uStatPomShadowDark; break; }",
+            "\t\t\t\t_sunUv += _sunStep;",
+            "\t\t\t\t_sunD -= _sunLayerStep;",
+            "\t\t\t}",
+            "\t\t}",
+            "\t\tfloat _pomDirect = mix( 1.0, min( _pomMicro, _pomSun ), _statPomFade );",
+            "\t\treflectedLight.directDiffuse *= _pomDirect;",
+            "\t\treflectedLight.directSpecular *= _pomDirect;",
+            "\t}",
             "\t#endif",
           ].join("\n")
         );
@@ -446,7 +677,7 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
   // (nra on/off) — still per-BUCKET-CLASS, never per instance (the #1 cold-load
   // cost); with ?statNra absent the key is byte-identical to v1.
   m.customProgramCacheKey = () =>
-    (wrapBucket ? "statAtlasArrayMatV3w" : "statAtlasArrayMatV3c")
+    (wrapBucket ? "statAtlasArrayMatV4w" : "statAtlasArrayMatV4c")
     + (nraArray ? "nra" + aoMapIntensityValue().toFixed(3) : "");
   m.userData = { __statAtlasMat: true };
   return m;
@@ -618,6 +849,7 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   surfaceRefs: 0, layerAllocs: 0, layerHits: 0, layerRecycles: 0,
   // X5 nra pack tally (all zero unless ?statNra=on).
   nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0,
+  nraWithHeight: 0, // S3: layers whose alpha carries the seam-height field
   nraResampled: 0, nraMetalDropped: 0, nraRepacked: 0, nraPendingDropped: 0,
   // X6 BC7 tally (all zero unless ?texBc7=on AND the GPU has BPTC).
   bc7Buckets: 0, bc7Layers: 0, ptBc7Deferred: 0 };
@@ -635,6 +867,7 @@ if (typeof window !== "undefined") {
       dedupRatio: _atlasStats.surfaceRefs > 0
         ? +(_atlasStats.surfaceRefs / Math.max(1, _uniqueTexUuids.size)).toFixed(2) : 0,
       nraEnabled: statNraEnabled(),
+      statPom: _statPomCfg ? { ..._statPomCfg } : null, // S3; null = no bucket yet
       nraPending: _nraPending.length,
       bucketCount: _buckets.size,
       atlasBakedLbs: _atlasBakedLbs.size,
@@ -919,7 +1152,9 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
           touchedNra.add(ud.nraArray);
           // Phase-5 texchan roughness/AO attach asynchronously; if they were not
           // there yet, queue a re-pack rather than lose the relief for the session.
-          if (!mat.roughnessMap || !mat.aoMap) {
+          // S3: with a seam-height field in hand the alpha channel never wants
+          // the texchan AO, so only the roughness bake is worth waiting for.
+          if (!mat.roughnessMap || (!mat.userData?.heightTex && !mat.aoMap)) {
             _nraPending.push({ ud, layer: entry.layer, mat, w, h, texUuid: uuid, tries: 0, full });
           }
         }
@@ -1066,7 +1301,9 @@ function _drainNraPending() {
     const p = _nraPending[i];
     const cur = p.ud?.layerOf?.get(p.texUuid);
     if (!p.ud?.nraArray || !cur || cur.layer !== p.layer) { _nraPending.splice(i, 1); continue; }
-    const both = !!(p.mat?.roughnessMap && p.mat?.aoMap);
+    // S3 — with a seam-height field the alpha channel never takes the texchan
+    // AO, so only the roughness bake is worth waiting for on those entries.
+    const both = !!(p.mat?.roughnessMap && (p.mat?.userData?.heightTex || p.mat?.aoMap));
     const expired = ++p.tries > _NRA_PENDING_TRIES;
     if (!both && !expired) continue;
     const any = !!(p.mat?.roughnessMap || p.mat?.aoMap);

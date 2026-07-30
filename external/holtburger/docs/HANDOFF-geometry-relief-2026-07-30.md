@@ -244,3 +244,30 @@ Two corrections it produced that will bite silently otherwise:
 via `schtasks` + `launch-bc7.bat` (interactive session only — SSH-launched Chrome
 gets no GL context), tunnel `-L 9333 -R 8767`. A person uses that box: offscreen
 only, and match test Chrome by `--user-data-dir`, never `taskkill /IM chrome.exe`.
+
+---
+
+## 10. ADDENDUM (same day, follow-on session) — §4d overturned: POM ships
+
+§4d called POM "broken three independent ways"; all three were implementation
+bugs, not physics, and are now fixed. The per-texture per-texel treatment ships
+as **`?statPom`** (ON at mid/high/ultra):
+
+- the seam-height field rides the atlas **nra ALPHA channel** (`packNraLayer`
+  prefers `mat.userData.heightTex` over texchan AO; 0 extra bytes/samplers/
+  draw calls) — so height finally survives `makeArrayMaterial`'s wholesale
+  material replacement, the exact mechanism §4d(3) died on;
+- the bucket shader marches it with three's own **derivative tangent frame**
+  (`getTangentFrame` — UV-correct, camera-stable; the legacy patch's
+  view-space fabrication was the "rotates with the camera" bug), self-shadows
+  toward the **real sun** (`directionalLights[0]`), and derives cavity AO from
+  the same texel applied to indirect **and direct** light;
+- the legacy singleton POM (EnvCells/dungeons, high/ultra) got the same S4
+  fixes in place (`materials.js`), plus a real secant refinement (the old
+  denominator clamp degenerated the weight to 0 on every crossing).
+
+Verified live on the 1070 (mid, 8/4 steps, depth 0.04): 39/39 packed layers
+carried height, 0 shader errors, statics-crop mean |dRGB| 2.26 vs terrain
+control 0.000; uniform toggle `window.__statPom({on,depth,steps})` A/Bs live.
+Shots: `/mnt/wbterminal2/statpom-shots/`. §5 (window recesses) remains the
+strongest GEOMETRY lead — statPom is its per-texel complement, not a rival.

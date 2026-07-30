@@ -958,10 +958,11 @@ export function installCsmShaderPatch(material, csmState) {
 
 // Visual-fidelity Phase 3.1 — Parallax Occlusion Mapping (POM).
 //
-// Ray-marches through a per-surface heightmap (R8, baked in
-// `holtburger_dat::normal_gen::height_from_luminance` via the Sobel-X
-// integrated-by-horizontal-scan path — see crate doc) to give a stone
-// wall the illusion of recessed mortar / raised brick. Standard
+// Ray-marches through a per-surface heightmap (R8; since 2026-07-30 the
+// SEAM-derived field from `holtburger_dat::height_seam` — 255 = proud
+// face, joints dip toward 0 — replacing the luminance operator that
+// inverted on half-timber) to give a stone wall the illusion of
+// recessed mortar / raised brick. Standard
 // learnopengl.com/Advanced-Lighting/Parallax-Mapping recipe:
 //
 //   1. Compute view direction in tangent space (transposed TBN times
@@ -1067,67 +1068,16 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
     shader.uniforms.uPomShadowSteps = { value: shadowSteps };
     shader.uniforms.uPomShadowDarkness = { value: shadowDarkness };
 
-    // Vertex shader: compute the tangent-space view direction. We
-    // reuse the three.js-provided TBN that comes from
-    // `MeshStandardMaterial`'s normal-map path (tangents are populated
-    // when `material.normalMap` is set on a BufferGeometry that has
-    // a `tangent` attribute, OR three.js falls back to derivatives in
-    // the fragment shader). We pass the TANGENT-SPACE view direction
-    // as a varying — the fragment then ray-marches in tangent UV.
-    //
-    // Note: `MeshStandardMaterial` already computes `vViewPosition`
-    // and the fragment computes `normal` per pixel; we replicate the
-    // tangent transformation here at the vertex stage so the fragment
-    // doesn't pay the matrix cost per fragment.
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <common>",
-      `#include <common>
-varying vec3 vPomTangentViewDir;
-varying float vPomViewDepth;`
-    );
-    // After the transformed normal/tangent are computed, the
-    // tangent-space TBN exists. The standard chunk `<normal_vertex>`
-    // computes `vNormal` and—when tangents are enabled—`vTangent` +
-    // `vBitangent`. We use those plus the camera-relative view to
-    // build TBN^T and rotate the view direction into tangent space.
-    //
-    // To avoid hard-coding the chunk's macro gates, we inline the
-    // math: derive bitangent from cross(normal,tangent) (right-handed
-    // tangent space, matches three's convention with .w = 1.0 or -1.0
-    // sign in the tangent attribute).
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <project_vertex>",
-      `#include <project_vertex>
-{
-  // Object-space normal + tangent are available as objectNormal and
-  // objectTangent from earlier chunks. Transform to view space.
-  vec3 _viewNormal = normalize(normalMatrix * objectNormal);
-  #ifdef USE_TANGENT
-    vec3 _viewTangent = normalize((modelViewMatrix * vec4(objectTangent.xyz, 0.0)).xyz);
-    vec3 _viewBitangent = cross(_viewNormal, _viewTangent) * objectTangent.w;
-  #else
-    // Derivative fallback — without per-vertex tangents we can't form
-    // a real TBN, so synthesize one using a stable cross with world up.
-    vec3 _viewTangent = normalize(cross(vec3(0.0, 1.0, 0.0), _viewNormal));
-    if (length(_viewTangent) < 0.01) {
-      _viewTangent = normalize(cross(vec3(1.0, 0.0, 0.0), _viewNormal));
-    }
-    vec3 _viewBitangent = cross(_viewNormal, _viewTangent);
-  #endif
-  // View-space view direction = -mvPosition (the camera is at the
-  // origin in view space; the vertex is at mvPosition, so the
-  // direction FROM the vertex TO the camera is -mvPosition).
-  vec3 _viewDirVS = normalize(-mvPosition.xyz);
-  // Transform view direction into tangent space (TBN^T * view).
-  vPomTangentViewDir = vec3(
-    dot(_viewDirVS, _viewTangent),
-    dot(_viewDirVS, _viewBitangent),
-    dot(_viewDirVS, _viewNormal)
-  );
-  // Pass camera distance (positive metres) for the LOD ramp.
-  vPomViewDepth = -mvPosition.z;
-}`
-    );
+    // S4 fix (2026-07-30) — the vertex-stage TBN this patch used to
+    // fabricate (`cross(view-space up, normal)`) had no relationship
+    // to the UV layout and ROTATED WITH THE CAMERA — the parallax
+    // slid rather than deepened. No geometry in the tree carries a
+    // `tangent` attribute, so the `#ifdef USE_TANGENT` arm never ran.
+    // The frame is now built in the FRAGMENT stage from three's own
+    // `getTangentFrame` (declared by <normalmap_pars_fragment>, which
+    // this material always includes — `pomShouldApply` requires
+    // `normalTexture`): the same UV-correct derivative frame the
+    // normal map itself uses. No vertex-shader patch remains.
 
     // Fragment shader: declare uniforms + the ray-march helper, then
     // patch the `<map_fragment>` chunk so the diffuse sample uses the
@@ -1143,8 +1093,13 @@ uniform float uPomLodNear;
 uniform float uPomLodFar;
 uniform int uPomShadowSteps;
 uniform float uPomShadowDarkness;
-varying vec3 vPomTangentViewDir;
-varying float vPomViewDepth;
+// Fragment-stage tangent frame (S4 fix) — built once in the patched
+// <map_fragment> from getTangentFrame, reused by the self-shadow pass.
+// Constant initializers only (GLSL ES 3.0 global rule); _pomLodG = 0.0
+// covers every early-out so the self-shadow block self-gates.
+mat3 _pomTbnG;
+float _pomLodG = 0.0;
+vec2 _pomUvG = vec2(0.0);
 
 // Ray-march a heightfield in tangent UV space. Returns the perturbed
 // UV — sample diffuse/normal/etc at this UV to get the POM look.
@@ -1162,10 +1117,11 @@ vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
   float layerStep = 1.0 / float(steps);
   vec2 currentUv = baseUv;
   float currentLayerDepth = 0.0;
-  // Inverted: heightmap stores HIGH bricks (255) and LOW mortar (0).
-  // Convert to depth: depth = 1 - height. We walk INTO the surface
-  // (current layer depth increases), and stop when our current depth
-  // exceeds the heightmap depth at the current UV.
+  // The seam field stores the PROUD face at 255 and joints dipping
+  // toward 0 (height_seam.rs — broad regions are invariant, only thin
+  // lines carve). Convert to depth: depth = 1 - height. We walk INTO
+  // the surface (current layer depth increases), and stop when our
+  // current depth exceeds the heightmap depth at the current UV.
   float currentHeight = 1.0 - texture2D(uPomMap, currentUv).r;
   for (int i = 0; i < 64; i++) {
     if (i >= steps) break;
@@ -1174,14 +1130,19 @@ vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
     currentLayerDepth += layerStep;
     currentHeight = 1.0 - texture2D(uPomMap, currentUv).r;
   }
-  // One-step bisection refinement: move back one layer, then lerp by
-  // crossing fraction. (Relief mapping's bisection improves quality.)
+  // One-step secant refinement: lerp between the last two samples by
+  // the crossing fraction. afterDepth is <= 0 once the ray crossed and
+  // beforeDepth >= 0, so the true denominator is NEGATIVE — the old
+  // max(denominator, 1e-6) clamp degenerated the weight to 0 on every
+  // real crossing. A march that never crossed (flat seam field, the
+  // common texel) keeps the un-refined uv.
   vec2 prevUv = currentUv + uvStep;
   float afterDepth = currentHeight - currentLayerDepth;
   float beforeDepth = (1.0 - texture2D(uPomMap, prevUv).r)
                       - (currentLayerDepth - layerStep);
-  float w = afterDepth / max(afterDepth - beforeDepth, 1e-6);
-  return mix(currentUv, prevUv, clamp(w, 0.0, 1.0));
+  float den = afterDepth - beforeDepth;
+  float w = den < -1e-6 ? clamp(afterDepth / den, 0.0, 1.0) : 0.0;
+  return mix(currentUv, prevUv, w);
 }
 
 // Self-shadow: from the perturbed UV (the intersection point), shoot
@@ -1220,16 +1181,33 @@ float _pomShadow(vec2 hitUv, float hitDepth, vec3 lTan, float depthScale, int sS
     // diffuse over the [uPomLodNear, uPomLodFar] camera-distance band.
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <map_fragment>",
-      `// Phase 3.1 POM begin
+      `// Phase 3.1 POM begin (S4-fixed frame: fragment-stage getTangentFrame)
 vec2 _pomBaseUv = vMapUv;
 vec2 _pomUv = _pomBaseUv;
-float _pomLod = 1.0 - smoothstep(uPomLodNear, uPomLodFar, vPomViewDepth);
-float _pomShadowFactor = 1.0;
+// The TBN is computed UNCONDITIONALLY: getTangentFrame takes dFdx/dFdy,
+// and a derivative inside the non-uniform LOD branch is undefined
+// behaviour. Four derivatives — cheap.
+float _pomFace = gl_FrontFacing ? 1.0 : -1.0;
+vec3 _pomGeomN = normalize(vNormal);
+#ifdef DOUBLE_SIDED
+_pomGeomN *= _pomFace;
+#endif
+_pomTbnG = getTangentFrame(-vViewPosition, _pomGeomN, vMapUv);
+#if defined( DOUBLE_SIDED ) && ! defined( FLAT_SHADED )
+_pomTbnG[0] *= _pomFace;
+_pomTbnG[1] *= _pomFace;
+#endif
+float _pomLod = 1.0 - smoothstep(uPomLodNear, uPomLodFar, length(vViewPosition));
 if (_pomLod > 0.001) {
-  vec3 _pomTanDir = normalize(vPomTangentViewDir);
-  _pomUv = _pomPerturbedUv(_pomBaseUv, _pomTanDir, uPomDepth, uPomSteps);
-  _pomUv = mix(_pomBaseUv, _pomUv, _pomLod);
+  vec3 _pomTanDir = normalize(transpose(_pomTbnG) * normalize(vViewPosition));
+  // Grazing rays explode the xy/z projection — hard gate, like terrain's.
+  if (_pomTanDir.z > 0.15) {
+    _pomUv = _pomPerturbedUv(_pomBaseUv, _pomTanDir, uPomDepth, uPomSteps);
+    _pomUv = mix(_pomBaseUv, _pomUv, _pomLod);
+    _pomLodG = _pomLod;
+  }
 }
+_pomUvG = _pomUv;
 #ifdef USE_MAP
 vec4 sampledDiffuseColor = texture2D(map, _pomUv);
 #ifdef DECODE_VIDEO_TEXTURE
@@ -1256,41 +1234,26 @@ diffuseColor *= sampledDiffuseColor;
       "texture2D( normalMap, _pomUv )"
     );
 
-    // Self-shadowing: apply the secondary ray-march once at the end.
-    // We treat the directional light's view-space direction as the
-    // sun direction; in three.js's lighting pipeline the directional
-    // light passes `directionalLights[i].direction` (view-space, FROM
-    // surface TO light source). We approximate the tangent-space
-    // direction by reusing the same TBN we built in vertex shader —
-    // but at this stage we only have access to the view-space normal
-    // (`normal` is in view space after `<normal_fragment_begin>`). For
-    // simplicity, we apply the shadow modulation in screen luminance
-    // by sampling the heightfield once more along the assumed light
-    // direction (using `vViewPosition` as a proxy). This is a coarse
-    // implementation — a precise version would carry a per-vertex
-    // tangent-space sun direction varying. For Phase 3.1's visual
-    // smoke it's close enough; ultra preset can replace it with a
-    // proper varying.
+    // Self-shadowing (S4 fix): march toward the REAL sun. The legacy
+    // proxy (the negated tangent view direction) made the micro-shadow
+    // track the CAMERA, not the light — the single most reliable way
+    // to make relief read as painted-on rather than lit. three's
+    // lighting pipeline exposes `directionalLights[0].direction`
+    // (view-space, FROM surface TO light) in the fragment stage;
+    // transform it with the same fragment-stage TBN the primary march
+    // used (`_pomTbnG`). `_pomLodG` is non-zero only when the primary
+    // march actually ran, so this self-gates on every early-out.
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <dithering_fragment>",
-      `{
-  // Self-shadow approximation: use the tangent view direction's
-  // negated XY as a proxy for the light's tangent direction (this is
-  // wrong in absolute terms but produces the right qualitative
-  // effect — mortar lines darken on the side away from the camera,
-  // brick faces brighten on the side toward the camera). True sun
-  // direction in tangent space is deferred — see Phase 3.1 hand-off
-  // #2 follow-on note.
-  if (_pomLod > 0.001) {
-    vec3 _pomLightTan = vec3(-vPomTangentViewDir.x, -vPomTangentViewDir.y, vPomTangentViewDir.z);
-    _pomLightTan = normalize(_pomLightTan);
-    float _pomHitDepth = 1.0 - texture2D(uPomMap, _pomUv).r;
-    _pomShadowFactor = _pomShadow(_pomUv, _pomHitDepth, _pomLightTan,
-                                   uPomDepth, uPomShadowSteps);
-    float _pomAtten = mix(1.0, _pomShadowFactor, _pomLod);
-    gl_FragColor.rgb *= _pomAtten;
-  }
+      `#if NUM_DIR_LIGHTS > 0
+if (_pomLodG > 0.001) {
+  vec3 _pomLightTan = normalize(transpose(_pomTbnG) * directionalLights[0].direction);
+  float _pomHitDepth = 1.0 - texture2D(uPomMap, _pomUvG).r;
+  float _pomShadowFactor = _pomShadow(_pomUvG, _pomHitDepth, _pomLightTan,
+                                       uPomDepth, uPomShadowSteps);
+  gl_FragColor.rgb *= mix(1.0, _pomShadowFactor, _pomLodG);
 }
+#endif
 #include <dithering_fragment>`
     );
 
@@ -4071,6 +4034,13 @@ export class MaterialCache {
     }
     if (heightTexture) {
       heightTexture.wrapS = heightTexture.wrapT = wrapMode;
+      // S3 (2026-07-30) — the statics atlas packs this seam-height field into
+      // its nra ALPHA channel (static_atlas.js `packNraLayer`) and marches it
+      // per-fragment (`?statPom`). The atlas REPLACES the member material
+      // wholesale, so a userData reference is the only channel through which
+      // the per-surface height survives into the atlased path. CPU-side
+      // pixels only — never bound as a sampler by the bucket material.
+      mat.userData = { ...(mat.userData || {}), heightTex: heightTexture };
     }
     // Retail draws a surface ONCE (see applyRetailSinglePass). Covers the LEGACY
     // opts ladder (`useUnifiedDecoder` false), whose `opts.transparent = true`
