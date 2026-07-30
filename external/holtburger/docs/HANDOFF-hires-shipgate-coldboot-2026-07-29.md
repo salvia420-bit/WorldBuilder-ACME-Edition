@@ -167,6 +167,54 @@ user session is live, and checkpoint artifacts to the laptop as they land.
 4. Untouched: the 5 refused 4096² records, the 5 symlinked layers, and the
    **DatReaderWriter b-tree leaf-marker bug** (HIRES-DIST-REPORT §2/§5.5).
 
+## 5b. WHERE THE "THOUSANDS OF TEXTURES" EFFORT WENT — it is DONE and UNSHIPPED
+
+Recording this because the task list had drifted onto a 34-item side quest and made
+the main line look absent. **The at-scale auto-approved replacement happened.** It is
+baked, validated, and sitting in `/mnt/wbterminal2/holtburger-dist-hires`, not live.
+
+### The funnel (exterior/statics, X1→X4)
+| stage | n |
+|---|--:|
+| retail surfaces total (X1 census) | **6,152** (2,979 = 48% INDEX16) |
+| RGB-class candidates | **1,790** |
+| **auto-ship — classifier-approved, NO per-texture human review** | **1,501** |
+| permanent hazard exclusions | **252** (alpha 123 · dither 44 · tiny 85) |
+| residual no-upscale | **37** (22 quarantined + 15 fail the fidelity gate) |
+| **written into the hires DAT at 4×** | **1,500** (5 refused — DRW 5 MB record cap) |
+| static placements covered | **3,090,474** |
+
+### The auto-approval mechanism the effort was supposed to have — it exists
+`/mnt/wbterminal2/pbr-terrain/bake/full/classify_ship_final.py`. Four hazard gates plus
+a fidelity gate took 1,790 → 1,501 with **no per-texture eyetest**:
+1. **alpha** — alpha-test/blended cutouts, on two independent signals: retail
+   SurfaceType flags *and* pixel-alpha coverage. The flags matter because a colour-key
+   (`Base1ClipMap`) cutout has **zero pixel alpha**, so a pixel-only rule misses it.
+2. **dither** — intentional dither/speckle, which ESRGAN reads as compression noise and
+   "fixes" into invented veins or gradient mush. Thresholds calibrated against real
+   observed failures (`0x060041F5` coh 0.395, `0x06003A6A` 0.306, `0x060038AA` 0.236).
+3. **tiny** — `min(w,h) <= 32`.
+4. **no-upscale** — x4 output absent/unreadable/not actually 4×.
+5. **fidelity** — box-downsample the ×4 back to source size and require it to reproduce
+   the source.
+
+### Interiors came almost free
+All **729,888** EnvCells draw from only **804** distinct Surfaces (**3,861,366** slot
+refs), and **84.9% of those slot refs are already covered by the same X4 batch with zero
+additional upscale work**. Interiors are also far cleaner than the world at large: only
+36/804 (4.5%) are INDEX16 = 1.0% of slot refs, all in the tail.
+
+### So the confusion is a scope collision
+Two tracks, wildly different sizes, easy to conflate:
+- **X4 upscale — 1,500 surfaces, auto-approved, done.** Preserves character by
+  construction (it upscales the retail art), which is *why* it needs no human sign-off.
+- **X3 CC0 substitution — 34 surfaces, hand-approved.** *Replaces* the art, so character
+  can drift, which is why it needs eyetests. §6 below is about these 34 only.
+
+**The main line is therefore: ship the 1,500 (task #7), close the remainder — 5 refused
++ 37 + the 252 hazard rows that need a different treatment than ×4 ESRGAN (#8) — and
+take the interior 15.1% tail (#9).** The 34 CC0 picks are demoted.
+
 ## 6. Why the plank re-pick is piecemeal — and what replaces it
 `0x06003C25` (CC0 `Planks036B`, `roughness 0.509`, `gain 0.566`, tint
 `[1.129, 1.031, 0.741]`) failed the 1070 eyetest as a **character** regression —
