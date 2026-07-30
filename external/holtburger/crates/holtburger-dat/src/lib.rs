@@ -2,6 +2,7 @@ pub mod archive;
 pub mod boot_reachability;
 pub mod error;
 pub mod file_type;
+pub mod gfx_remodel;
 pub mod gfx_subdiv;
 pub mod graphics;
 pub mod landblock;
