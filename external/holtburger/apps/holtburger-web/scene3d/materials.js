@@ -55,6 +55,10 @@ import {
 } from "./adapter.js";
 import { materialBakeEnabled } from "./vfx_flags.js";
 import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
+// X6 (`?texBc7=on`, DEFAULT-OFF) — direct BC7/BPTC albedo upload. Every entry
+// point below is inert unless the flag is on AND the GPU reports
+// EXT_texture_compression_bptc, so the RGBA8 path is unchanged by default.
+import { bc7Available, bc7TextureBytes, upgradeMaterialToBc7 } from "./bc7_textures.js";
 
 // ACE SurfaceType bit constants (mirrored from ACE.Entity.Enum.SurfaceType,
 // see external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs). Exported so
@@ -2317,7 +2321,12 @@ export function palBudgetBytesFromLocation() {
  */
 export function estimateTextureBytes(tex) {
   const d = tex && tex.image ? tex.image.data : null;
-  return d && typeof d.byteLength === "number" ? d.byteLength : 0;
+  if (d && typeof d.byteLength === "number") return d.byteLength;
+  // X6 — a compressed texture keeps NO `image.data` (its `image` carries only
+  // the dims; the blocks live in `mipmaps[i].data`), so the read above returns
+  // 0 and `?matBudgetMB` would account a BC7 surface as free. Charge its real
+  // block bytes instead.
+  return bc7TextureBytes(tex);
 }
 
 /** Per-DID entry size: albedo + normal + height planes + fixed overhead. */
@@ -2856,6 +2865,9 @@ export class MaterialCache {
     }
     // Let a re-install re-check animation for this DID.
     this._animChecked.delete(did);
+    // X6 — same reason: a re-install must be allowed to re-ask for BC7 (the
+    // record source's own cache makes the retry free).
+    if (this._bc7Asked) this._bc7Asked.delete(did);
 
     const wasHandedOut = this._matHandedOut.delete(did);
     this._matEvictions += 1;
@@ -4170,6 +4182,11 @@ export class MaterialCache {
         // missing getter (stale pkg) → undefined → the decoder keeps 0.5.
         hasPalette: typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined,
       };
+      // X6 (`?texBc7=on`) — the RenderSurface (0x06) id behind these pixels.
+      // MUST be read before `sp.free()` (every getter throws on a freed handle).
+      // 0 on a stale pkg without the getter, and 0 for the 1x1 solid / empty
+      // fallback paths, both of which correctly disable the BC7 upgrade.
+      const rsIdV = typeof sp.rsId === "number" ? sp.rsId >>> 0 : 0;
       if (typeof sp.free === "function") sp.free();
       const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex, surfaceFloats);
       mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
@@ -4185,6 +4202,7 @@ export class MaterialCache {
         __cacheOwned: true,
       };
       this._installCacheEntry(did, mat, tex, normalTex, heightTex);
+      this._maybeUpgradeToBc7(did, mat, rsIdV); // X6: no-op unless ?texBc7=on + BPTC
       // This material is being RETURNED to the caller below — handed out, so
       // a later eviction must not dispose it inline (dispose policy 3).
       this._noteHandout(did);
@@ -4757,7 +4775,7 @@ export class MaterialCache {
     // shared fallback material exactly as for the zero-dim case.
     let w, h, pixels, surfaceType, category, normalPixels, heightPixels,
         roughnessOverride, normalScaleOverride,
-        translucencyF, luminosityF, diffuseF, hasPaletteB;
+        translucencyF, luminosityF, diffuseF, hasPaletteB, rsIdV = 0;
     try {
       w = sp.width;
       h = sp.height;
@@ -4816,6 +4834,9 @@ export class MaterialCache {
       // A10-M3 — palettedness for the parityV2 ClipMap alpha-test ref.
       // Strict boolean-or-undefined (stale-pkg fail-soft, see get() twin).
       hasPaletteB = typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined;
+      // X6 (`?texBc7=on`) — RenderSurface (0x06) id, read before `sp.free()`
+      // below. See the `get()` twin. 0 ⇒ no BC7 upgrade for this DID.
+      rsIdV = typeof sp.rsId === "number" ? sp.rsId >>> 0 : 0;
     } catch (_) {
       return this.fallbackMaterial;
     }
@@ -4854,6 +4875,7 @@ export class MaterialCache {
       __cacheOwned: true,
     };
     this._installCacheEntry(did, mat, tex, normalTex, heightTex);
+    this._maybeUpgradeToBc7(did, mat, rsIdV); // X6: no-op unless ?texBc7=on + BPTC
     if (this._negCacheEnabled) this.missingSurfaces.delete(did);
     // 2026-05-30 — invalidate the stale fallback-derived FrontSide clone (see
     // the 6-space twin in get()) so getCached(did,false) re-clones from this
@@ -4865,6 +4887,100 @@ export class MaterialCache {
     // Render-completeness audit (2026-05-29) — kick animated-frame setup.
     this._maybeSetupSurfaceAnimation(did, mat, tex);
     return mat;
+  }
+
+  /**
+   * X6 (2026-07-29, `?texBc7=on`) — swap a cache-resident surface's RGBA8
+   * albedo for a pre-encoded BC7 (BPTC) texture uploaded to the GPU verbatim
+   * (8 bpp instead of 32, zero CPU decode).
+   *
+   * WHY A POST-BUILD SWAP AND NOT A BUILD-TIME CHOICE: the surface is decoded
+   * and the material built on one synchronous pass from an already-resolved
+   * `SurfacePixels`; the BC7 record is a SEPARATE async resource fetch. Building
+   * RGBA8 first keeps frame 1 correct (retail texels) and makes the whole path
+   * fail-soft — an absent record, a malformed payload, or a GPU without BPTC all
+   * land on "nothing happens". The cost is a race with the statics atlas, which
+   * consumes `mat.map` synchronously; `static_atlas.js` defers a node whose BC7
+   * verdict is still in flight (`__bc7Pending`) rather than pinning it into an
+   * RGBA8 bucket, and a bucket's format is fixed at allocation so the deferral
+   * is the only correct answer there.
+   *
+   * KEYED BY RenderSurface (0x06), NOT Surface DID (0x08): several Surfaces can
+   * share one RenderSurface, and the atlas dedups layers by `map.uuid`. Keying
+   * the BC7 cache by rs id means those Surfaces share ONE `CompressedTexture`
+   * and therefore ONE atlas layer — strictly better dedup than the RGBA8 path,
+   * where each Surface decodes its own `DataTexture`.
+   *
+   * @param {number} did surface DID (cache key)
+   * @param {THREE.Material} mat the just-installed cache-owned material
+   * @param {number} rsId RenderSurface id, or 0 (solid/fallback/stale pkg)
+   */
+  _maybeUpgradeToBc7(did, mat, rsId) {
+    if (!bc7Available() || !mat) return;
+    const rs = rsId >>> 0;
+    if (!rs || rs >>> 24 !== 0x06) return;
+    const d = did >>> 0;
+    if (!this._bc7Asked) this._bc7Asked = new Set();
+    if (this._bc7Asked.has(d)) return;
+    this._bc7Asked.add(d);
+    upgradeMaterialToBc7(mat, rs)
+      .then((res) => {
+        if (!res || res.swapped !== true) return;
+        // Evicted / replaced between the ask and the land: leave everything
+        // alone (the new material has its own ask).
+        if (this.materials.get(d) !== mat) return;
+        const old = res.replaced || null;
+        const tex = mat.map;
+        if (!tex || tex === old) return;
+        // Clones share `map` BY REFERENCE (three's `.clone()` copies the ref),
+        // so every live per-DID variant must be re-pointed BEFORE the RGBA8
+        // twin is freed — otherwise a `?perPolyCull` FrontSide clone or an
+        // EnvCell floor/static-bias clone would sample a disposed texture.
+        for (const m of [
+          this.frontSideMaterials,
+          this.floorBiasMaterials,
+          this.staticBiasMaterials,
+          this.cellBakedMaterials,
+        ]) {
+          const clone = m && m.get(d);
+          if (clone && clone.map === old) {
+            clone.map = tex;
+            clone.needsUpdate = true;
+          }
+        }
+        // VFX component variants are keyed by a composite `(did|setKey|configKey)`
+        // string rather than the bare DID, so they have to be scanned. Dormant
+        // (size 0) unless a frag/MECH-B component built one for this surface.
+        if (this.vfxVariants && typeof this.vfxVariants.values === "function") {
+          for (const v of this.vfxVariants.values()) {
+            if (v && v.map === old) {
+              v.map = tex;
+              v.needsUpdate = true;
+            }
+          }
+        }
+        // Re-point cache ownership + rebalance the `?matBudgetMB` accounting
+        // before freeing: `textures` is what `dispose()` walks at teardown and
+        // `_matLru` is what the budget enforcer reads. BC7 is always SMALLER
+        // than its RGBA8 twin, so the delta is negative and `_addMatEntryBytes`
+        // (which ignores <= 0) cannot express it — adjust the entry directly.
+        if (this.textures.get(d) === old) this.textures.set(d, tex);
+        const delta = estimateTextureBytes(tex) - estimateTextureBytes(old);
+        const prev = this._matLru.get(d);
+        if (prev !== undefined && delta !== 0) {
+          const next = Math.max(0, prev + delta);
+          this._matLru.set(d, next); // re-set on an existing key keeps recency
+          this._matLruBytes += next - prev;
+        }
+        try {
+          if (old && typeof old.dispose === "function") old.dispose();
+        } catch (_) {
+          /* fail-soft */
+        }
+      })
+      .catch(() => {
+        /* fail-soft: the surface keeps its RGBA8 albedo */
+      });
   }
 
   /**

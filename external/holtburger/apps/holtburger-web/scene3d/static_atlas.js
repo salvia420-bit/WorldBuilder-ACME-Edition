@@ -44,8 +44,24 @@
 // so the existing per-LB eviction (which scans staticsGroup.children by
 // landblockId) tears it down identically to the singletons it replaces.
 
+// X6 (2026-07-29, `?texBc7=on`, DEFAULT-OFF) — BC7 buckets. A member whose
+// `material.map` is already a BC7 `CompressedTexture` (the direct-upload path in
+// bc7_textures.js) is batched into a `CompressedArrayTexture` bucket instead of a
+// `DataArrayTexture` one: same fixed (w, h), same fixed capacity, same refcounted
+// layer index, same `aLayer` attribute, same shader — only the array object and
+// the per-layer write differ. The bucket KEY gains a format field because a
+// compressed array's format is fixed at allocation and cannot be mixed with
+// RGBA8 layers. See BC7-CLIENT-REPORT.md for the compatibility analysis.
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import {
+  bc7Available,
+  bc7PendingOn,
+  bc7LevelBytes,
+  makeBc7ArrayTexture,
+  writeBc7ArrayLayer,
+  _bumpBc7Stat,
+} from "./bc7_textures.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -594,7 +610,9 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   surfaceRefs: 0, layerAllocs: 0, layerHits: 0, layerRecycles: 0,
   // X5 nra pack tally (all zero unless ?statNra=on).
   nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0,
-  nraResampled: 0, nraMetalDropped: 0, nraRepacked: 0, nraPendingDropped: 0 };
+  nraResampled: 0, nraMetalDropped: 0, nraRepacked: 0, nraPendingDropped: 0,
+  // X6 BC7 tally (all zero unless ?texBc7=on AND the GPU has BPTC).
+  bc7Buckets: 0, bc7Layers: 0, ptBc7Deferred: 0 };
 const _uniqueTexUuids = new Set(); // every distinct surface texture ever atlased
 if (typeof window !== "undefined") {
   window.__atlasStats = () => {
@@ -616,7 +634,7 @@ if (typeof window !== "undefined") {
         const ud = (b.bm && b.bm.userData) || {};
         return { key: k, w: b.w, h: b.h, stateKey: b.stateKey, nextLayer: ud.nextLayer ?? null,
           capacity: ud.capacity ?? null, layersUsed: ud.layerOf ? ud.layerOf.size : null,
-          nra: !!ud.nraArray,
+          nra: !!ud.nraArray, bc7: !!ud.bc7,
           full: (ud.nextLayer != null && ud.capacity != null) ? ud.nextLayer >= ud.capacity : null };
       }),
     };
@@ -640,11 +658,39 @@ function _lbKeyOfId(id) {
   return (((id >>> 0) & 0xffff0000) >>> 0);
 }
 
-function _bucketKeyFor(w, h, stateKey) {
-  return `${w}x${h}|${stateKey}`;
+// X6 — the trailing format field. `f8` = RGBA8 `DataArrayTexture` (every bucket
+// before X6, so a flag-off key is byte-identical to the pre-X6 string only if the
+// suffix is omitted — it is NOT omitted, see below); `f7` = BC7
+// `CompressedArrayTexture`. A compressed array's internal format is baked in by
+// `texStorage3D` at allocation, so a BC7 layer and an RGBA8 layer can NEVER share
+// a bucket; the key is the only place that can enforce it.
+// NOTE the deliberate asymmetry: the `f8` suffix is appended ONLY when the BC7
+// path is live, so with `?texBc7` absent every bucket key is character-identical
+// to the pre-X6 key (bucket identity is used in `bm.name` and `__atlasStats`).
+function _bucketKeyFor(w, h, stateKey, bc7) {
+  if (!bc7Available()) return `${w}x${h}|${stateKey}`;
+  return `${w}x${h}|${stateKey}|${bc7 ? "f7" : "f8"}`;
 }
 
-function _layerCapacityFor(w, h) {
+function _layerCapacityFor(w, h, bc7) {
+  // X6 — BC7 layers are 8 bpp, not 32, so the same byte budget buys 4x the
+  // layers. The RGBA8 arithmetic below is left untouched (flag-off parity).
+  if (bc7) {
+    const nra = statNraEnabled();
+    const per = Math.max(1, bc7LevelBytes(w, h) + (nra ? (w | 0) * (h | 0) * 4 : 0));
+    const ceiling = nra ? _ATLAS_NRA_MAX_LAYERS : _ATLAS_MAX_LAYERS;
+    let c = Math.floor(_ATLAS_LAYER_BUDGET_BYTES / per);
+    // BYTE-AWARE FLOOR (the trap the RGBA8 path never hit): the flat 32/16-layer
+    // minimum exists so a big tile still gets a usable bucket, but the x4-upscaled
+    // BC7 content reaches 2048x2048 = 4 MiB PER LAYER, where a 32-layer floor
+    // would allocate 128 MiB for one bucket (and the RGBA8 equivalent, 512 MiB,
+    // is exactly the shape of the OOM that killed the first ?statNra arm). Clamp
+    // the floor to what the budget actually affords, never below 4.
+    const floor = Math.min(nra ? _ATLAS_NRA_MIN_LAYERS : _ATLAS_MIN_LAYERS, Math.max(4, c));
+    if (c < floor) c = floor;
+    if (c > ceiling) c = ceiling;
+    return c;
+  }
   // X5: with the nra pack live a layer costs TWICE the bytes (diffuse + nra),
   // and the ceiling halves — see _ATLAS_NRA_MAX_LAYERS. Flag-off arithmetic is
   // unchanged (arrays === 1, ceiling === _ATLAS_MAX_LAYERS).
@@ -663,11 +709,18 @@ export function hasAtlasLb(lbKey) {
   return _atlasBakedLbs.has((lbKey >>> 0));
 }
 
-function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d) {
+function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
   let b = _buckets.get(bucketKey);
   if (b) return b;
-  const capacity = _layerCapacityFor(w, h);
-  const diffArray = buildDiffuseArray([], w, h, capacity);
+  const capacity = _layerCapacityFor(w, h, bc7);
+  // X6 — a BC7 bucket's array is a CompressedArrayTexture allocated EMPTY at the
+  // bucket's fixed (w, h, capacity); layers are written with
+  // `compressedTexSubImage3D` via `addLayerUpdate` (bc7_textures.js). That is
+  // strictly cheaper than the RGBA8 arm, which re-uploads the WHOLE array every
+  // time a layer is written (`needsUpdate` on a DataArrayTexture).
+  const diffArray = bc7
+    ? makeBc7ArrayTexture(w, h, capacity)
+    : buildDiffuseArray([], w, h, capacity);
   // X5 — parallel nra array at the SAME capacity as the diffuse array, so the
   // layer index addresses both (one `aLayer`, one `vMapUv`). `_layerCapacityFor`
   // has already halved that capacity for the nra-on case, so the PAIR fits the
@@ -692,6 +745,7 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d) {
   bm.userData = {
     __statAtlasCrossLb: true,
     diffArray,
+    bc7: !!bc7,          // X6: diffArray is a CompressedArrayTexture, not RGBA8
     nraArray,            // X5: null unless ?statNra=on
     layerOf: new Map(),  // texUuid -> { layer, refs }
     freeLayers: [],      // recycled layer indices (pixels overwritten on reuse)
@@ -705,7 +759,11 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d) {
     gidVerts: new Map(), // gid -> vertexCount (to account dead space on delete)
   };
   bm.name = `stat-atlas-x-${bucketKey}`;
-  b = { bm, w, h, stateKey };
+  b = { bm, w, h, stateKey, bc7: !!bc7 };
+  if (bc7) {
+    _atlasStats.bc7Buckets++;
+    _bumpBc7Stat("atlasBuckets");
+  }
   _buckets.set(bucketKey, b);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
@@ -769,8 +827,30 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const mat = n && n.material;
       const tex = mat && mat.map;
       const img = tex && tex.image;
-      if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !img.data || n.userData?.__staticBatch) {
+      // X6 — a BC7 map has NO `image.data` (its bytes live in `mipmaps[0].data`
+      // and `image` carries only the dims), so the pre-X6 `!img.data` gate would
+      // have silently passed every BC7 surface through as an unbatched singleton —
+      // exactly the ~5,400-draw-call wall the atlas exists to remove. Accept
+      // either pixel source.
+      const bc7Tex = !!(
+        tex &&
+        tex.isCompressedTexture &&
+        tex.format === THREE.RGBA_BPTC_Format &&
+        tex.mipmaps &&
+        tex.mipmaps[0] &&
+        tex.mipmaps[0].data
+      );
+      if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !(img.data || bc7Tex) || n.userData?.__staticBatch) {
         _atlasStats.ptFiltered++; passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
+      }
+      // X6 — a surface whose BC7 verdict is still IN FLIGHT must not be committed
+      // to an RGBA8 bucket: a bucket's array format is fixed by `texStorage3D` at
+      // allocation, so the wrong choice pins that surface at 32 bpp until its LB
+      // re-streams. Hold the node out for this round instead (unbatched, still
+      // rendered — fail-soft); the next per-LB feed after eviction/re-entry sees
+      // the resolved `mat.map`. Only reachable under `?texBc7=on`.
+      if (bc7Available() && !bc7Tex && bc7PendingOn(mat)) {
+        _atlasStats.ptBc7Deferred++; _bumpBc7Stat("deferredNodes"); passthrough.push(n); continue;
       }
       // A MECH-B vertex-deformed variant (deformation.windSwayGpu — swaying
       // trees/foliage) must NOT be consumed: the bucket's array material
@@ -786,8 +866,8 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const w = img.width | 0, h = img.height | 0;
       if (!w || !h) { _atlasStats.ptNoWH++; passthrough.push(n); continue; }
       const stateKey = _stateKeyOf(mat);
-      const bucketKey = _bucketKeyFor(w, h, stateKey);
-      const b = _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d);
+      const bucketKey = _bucketKeyFor(w, h, stateKey, bc7Tex);
+      const b = _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7Tex);
       const bm = b.bm;
       const ud = bm.userData;
       const uuid = tex.uuid;
@@ -802,9 +882,21 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         if (ud.freeLayers.length > 0) { layer = ud.freeLayers.pop(); _atlasStats.layerRecycles++; }
         else if (ud.nextLayer < ud.capacity) layer = ud.nextLayer++;
         else { _atlasStats.ptLayerFull++; passthrough.push(n); continue; } // layer pool full → unbatched (fail-soft)
-        const stride = w * h * 4;
-        const src = img.data;
-        if (src && src.length === stride) ud.diffArray.image.data.set(src, layer * stride);
+        if (ud.bc7) {
+          // X6 — one `compressedTexSubImage3D` for THIS layer (block-aligned by
+          // construction: every layer is `ceil(w/4)*ceil(h/4)*16` bytes and the
+          // array's dims equal the payload's, enforced by the bucket key).
+          const ok = writeBc7ArrayLayer(ud.diffArray, layer, {
+            width: w,
+            height: h,
+            levels: [{ data: tex.mipmaps[0].data, width: w, height: h }],
+          });
+          if (ok) { _atlasStats.bc7Layers++; _bumpBc7Stat("atlasLayers"); }
+        } else {
+          const stride = w * h * 4;
+          const src = img.data;
+          if (src && src.length === stride) ud.diffArray.image.data.set(src, layer * stride);
+        }
         entry = { layer, refs: 1 };
         ud.layerOf.set(uuid, entry);
         touchedDiff.add(ud.diffArray);

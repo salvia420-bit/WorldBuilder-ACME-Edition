@@ -99,6 +99,26 @@ pub const UI_FONT_ATLAS_BG_ID: u32 = 0x06005EE6;
 /// referenced by the Controls tab in the options panel.
 pub const DEFAULT_KEYMAP_ID: u32 = 0x14000000;
 
+/// Namespace the BC7 texture-block delivery path lives in. Records
+/// are keyed by the RenderSurface id they replace (e.g.
+/// `0x06003789`), payload is an `HBC7` container (see
+/// [`ingest_tex_bc7_dir`]). 18 bytes — well inside
+/// `holtburger_dat::RESOURCE_NAMESPACE_LEN` (32).
+pub const TEX_BC7_NAMESPACE: &str = "holtburger/tex-bc7";
+
+/// `HBC7` container magic. Little-endian header follows:
+/// `u32 width | u32 height | u32 blocks_x | u32 blocks_y`, then
+/// `blocks_x * blocks_y` BC7 blocks of 16 bytes each, row-major.
+/// `width`/`height` are TRUE pixel dims and need not be multiples
+/// of 4; the block grid covers the padded area.
+pub const HBC7_MAGIC: &[u8; 4] = b"HBC7";
+
+/// Byte length of the `HBC7` header (magic + 4 × u32).
+pub const HBC7_HEADER_LEN: usize = 20;
+
+/// Bytes per BC7 4×4 block.
+pub const BC7_BLOCK_BYTES: usize = 16;
+
 /// Caller-supplied dat-shard options. Mirrors the CLI argv shape.
 #[derive(Debug, Clone)]
 pub struct DatShardOptions {
@@ -112,6 +132,12 @@ pub struct DatShardOptions {
     /// defaults to [`DEFAULT_MANIFEST_VERSION`] (= 2). Set to 1 to
     /// produce the legacy v1 wire format.
     pub manifest_version: u32,
+    /// Directory of `<rsId>.hbc7` BC7 texture blobs to ingest into
+    /// [`TEX_BC7_NAMESPACE`]. v2 only. Streamed record-by-record —
+    /// the bytes never join the in-memory [`LoadedBundle`], because a
+    /// full BC7 set is ~2 GB and the bundle map is already the bake's
+    /// peak-RSS driver. See [`ingest_tex_bc7_dir`].
+    pub tex_bc7: Option<PathBuf>,
 }
 
 /// Result of [`read_input_bundle`] — every record in the source
@@ -130,6 +156,16 @@ pub struct V2BakeResult {
     pub unique_shard_count: usize,
     pub catalog_count: usize,
     pub boot_covers_count: usize,
+    /// `--tex-bc7` records shardable into [`TEX_BC7_NAMESPACE`].
+    /// Zero when the flag wasn't passed.
+    pub tex_bc7_records: usize,
+    /// Total `HBC7` payload bytes ingested from `--tex-bc7`.
+    pub tex_bc7_bytes: u64,
+    /// `--tex-bc7` files rejected by the header/size check — a
+    /// partially-written blob from a concurrent encode, or a stray
+    /// non-HBC7 file. Non-zero is a bake-quality signal, not a
+    /// hard failure: the run keeps the valid subset.
+    pub tex_bc7_skipped: usize,
 }
 
 /// Wrapped output of the unified bake dispatcher
@@ -198,10 +234,194 @@ pub fn read_input_bundle(opts: &DatShardOptions) -> Result<LoadedBundle> {
             hba_bundle.source_meta = dat_bundle.source_meta;
             Ok(hba_bundle)
         }
+        // `--tex-bc7` alone is a legitimate bake: a side-car bundle
+        // that carries ONLY the BC7 namespace (no retail records, so
+        // an empty boot pack). Any other no-input combination is a
+        // usage error.
+        (None, false) if opts.tex_bc7.is_some() => Ok(LoadedBundle {
+            records: BTreeMap::new(),
+            source_meta: SourceMeta {
+                portal_dat_iteration: 0,
+                cell_dat_iteration: 0,
+                local_dat_iteration: 0,
+            },
+        }),
         (None, false) => Err(ToolError::Validation(
-            "--input or one of --eor-portal/--eor-cell/--eor-local required".into(),
+            "--input or one of --eor-portal/--eor-cell/--eor-local/--tex-bc7 required".into(),
         )),
     }
+}
+
+/// Result of [`ingest_tex_bc7_dir`].
+pub struct TexBc7Ingest {
+    /// One catalog entry per accepted `<rsId>.hbc7` file.
+    pub entries: Vec<CatalogEntry>,
+    /// Distinct truncated digests written (identical blobs share a
+    /// shard file).
+    pub unique_shard_count: usize,
+    /// Sum of accepted payload sizes.
+    pub total_bytes: u64,
+    /// `(path, reason)` for every rejected file.
+    pub skipped: Vec<(PathBuf, String)>,
+}
+
+/// Validate an `HBC7` header against the blob length. Returns
+/// `(width, height)` on success, an explanation on failure.
+///
+/// Checks, in order: length ≥ header, magic, `blocks_x`/`blocks_y`
+/// equal `ceil(dim / 4)`, and the exact total length
+/// `20 + blocks_x * blocks_y * 16`. The exact-length rule is what
+/// catches a blob a concurrent encoder is still writing — a
+/// half-flushed file has a valid header and a short body.
+pub fn validate_hbc7(bytes: &[u8]) -> std::result::Result<(u32, u32), String> {
+    if bytes.len() < HBC7_HEADER_LEN {
+        return Err(format!(
+            "shorter than the {HBC7_HEADER_LEN}-byte HBC7 header ({} bytes)",
+            bytes.len()
+        ));
+    }
+    if &bytes[..4] != HBC7_MAGIC {
+        return Err(format!(
+            "bad magic {:02X?} (expected {:02X?} = \"HBC7\")",
+            &bytes[..4],
+            HBC7_MAGIC
+        ));
+    }
+    let u32_at = |off: usize| -> u32 {
+        u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+    };
+    let width = u32_at(4);
+    let height = u32_at(8);
+    let blocks_x = u32_at(12);
+    let blocks_y = u32_at(16);
+    if width == 0 || height == 0 {
+        return Err(format!("zero dimension {width}x{height}"));
+    }
+    let expect_bx = width.div_ceil(4);
+    let expect_by = height.div_ceil(4);
+    if blocks_x != expect_bx || blocks_y != expect_by {
+        return Err(format!(
+            "block grid {blocks_x}x{blocks_y} does not cover {width}x{height} (expected {expect_bx}x{expect_by})"
+        ));
+    }
+    let expect_len = HBC7_HEADER_LEN
+        + (blocks_x as usize)
+            .saturating_mul(blocks_y as usize)
+            .saturating_mul(BC7_BLOCK_BYTES);
+    if bytes.len() != expect_len {
+        return Err(format!(
+            "length {} != {expect_len} implied by the {blocks_x}x{blocks_y} block grid (truncated or padded?)",
+            bytes.len()
+        ));
+    }
+    Ok((width, height))
+}
+
+/// Parse a `<rsId>.hbc7` filename into its RenderSurface id. Accepts
+/// `0x06003789.hbc7`, `06003789.hbc7`, and either hex case.
+pub fn parse_hbc7_file_name(path: &Path) -> std::result::Result<u32, String> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "non-UTF-8 filename".to_string())?;
+    parse_hex_u32(stem)
+}
+
+/// Phase BC7 delivery — stream a directory of `<rsId>.hbc7` blobs
+/// straight into content-addressed shards under `output_dir` and
+/// return the [`TEX_BC7_NAMESPACE`] catalog entries.
+///
+/// Deliberately NOT routed through [`LoadedBundle`]: the bundle map
+/// holds every record's bytes for the whole bake, and a full BC7 set
+/// is ~2 GB on top of the retail DATs' ~1.5 GB. This loop's live set
+/// is one blob (≤ a few MB) plus 28-ish bytes of catalog entry per
+/// record, so adding the namespace costs ~0.1 MB of RSS instead of
+/// ~2 GB.
+///
+/// Shard layout, dedupe rule, and digest truncation match
+/// [`write_shards_v2`] exactly — same `shards/{prefix2}/{trunc}.bin`
+/// paths, same 16-byte truncated sha256 — so the client's v2 shard
+/// URL template resolves BC7 records with no special-casing.
+///
+/// Files that fail [`validate_hbc7`] are skipped and reported in
+/// [`TexBc7Ingest::skipped`] rather than aborting the bake: the
+/// expected cause is a blob a concurrent encoder is mid-write on.
+/// Non-`.hbc7` files are ignored silently (README, ledger, …).
+pub fn ingest_tex_bc7_dir(dir: &Path, output_dir: &Path) -> Result<TexBc7Ingest> {
+    let shards_dir = output_dir.join("shards");
+    std::fs::create_dir_all(&shards_dir)
+        .map_err(|e| ToolError::Validation(format!("create shards dir {shards_dir:?}: {e}")))?;
+
+    // Sorted for deterministic logs + a deterministic
+    // duplicate-id error message.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let read_dir = std::fs::read_dir(dir)
+        .map_err(|e| ToolError::Validation(format!("read --tex-bc7 dir {dir:?}: {e}")))?;
+    for entry in read_dir {
+        let entry =
+            entry.map_err(|e| ToolError::Validation(format!("scan --tex-bc7 dir {dir:?}: {e}")))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("hbc7") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut entries: Vec<CatalogEntry> = Vec::with_capacity(paths.len());
+    let mut seen_ids: HashSet<u32> = HashSet::new();
+    let mut written: HashSet<[u8; 16]> = HashSet::new();
+    let mut skipped: Vec<(PathBuf, String)> = Vec::new();
+    let mut total_bytes: u64 = 0;
+
+    for path in paths {
+        let file_id = match parse_hbc7_file_name(&path) {
+            Ok(id) => id,
+            Err(reason) => {
+                skipped.push((path, format!("filename is not a hex record id: {reason}")));
+                continue;
+            }
+        };
+        let bytes = std::fs::read(&path)
+            .map_err(|e| ToolError::Validation(format!("read {path:?}: {e}")))?;
+        if let Err(reason) = validate_hbc7(&bytes) {
+            skipped.push((path, reason));
+            continue;
+        }
+        // A duplicate id would silently shadow one blob (two files
+        // like `0x06003789.hbc7` and `6003789.hbc7`), so it is a hard
+        // error rather than a skip.
+        if !seen_ids.insert(file_id) {
+            return Err(ToolError::Validation(format!(
+                "--tex-bc7 dir {dir:?} has two files for record 0x{file_id:08X} (e.g. {path:?})"
+            )));
+        }
+
+        let (_full, trunc) = sha256_full_and_trunc(&bytes);
+        let trunc_hex = hex_encode_16(&trunc);
+        if written.insert(trunc) {
+            let prefix_dir = shards_dir.join(&trunc_hex[..2]);
+            std::fs::create_dir_all(&prefix_dir).map_err(|e| {
+                ToolError::Validation(format!("create shard prefix dir {prefix_dir:?}: {e}"))
+            })?;
+            let shard_path = prefix_dir.join(format!("{trunc_hex}.bin"));
+            std::fs::write(&shard_path, &bytes)
+                .map_err(|e| ToolError::Validation(format!("write {shard_path:?}: {e}")))?;
+        }
+
+        total_bytes += bytes.len() as u64;
+        entries.push(CatalogEntry {
+            file_id,
+            sha256_truncated: trunc,
+            size: bytes.len() as u64,
+        });
+    }
+
+    Ok(TexBc7Ingest {
+        unique_shard_count: written.len(),
+        entries,
+        total_bytes,
+        skipped,
+    })
 }
 
 fn read_from_hba(path: &Path) -> Result<LoadedBundle> {
@@ -724,8 +944,41 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
     let bundle = read_input_bundle(opts)?;
     let total_records = bundle.records.len();
 
-    let v2_shards = write_shards_v2(&bundle, &opts.output_dir)?;
-    let unique_shard_count = v2_shards.unique_shard_count;
+    let mut v2_shards = write_shards_v2(&bundle, &opts.output_dir)?;
+    let mut unique_shard_count = v2_shards.unique_shard_count;
+
+    // `--tex-bc7`: stream the BC7 blobs into the same shard layout and
+    // splice their catalog entries into the namespace map, BEFORE the
+    // catalog / symlink / manifest.json writes below. That ordering is
+    // what makes the namespace self-declaring: `write_namespace_catalogs`
+    // derives `manifest.namespaces` from this map's keys, and the client
+    // only fetches a catalog for a namespace the manifest declares
+    // (`manifest_source.rs:566`).
+    let mut tex_bc7_records = 0usize;
+    let mut tex_bc7_bytes = 0u64;
+    let mut tex_bc7_skipped = 0usize;
+    if let Some(tex_dir) = opts.tex_bc7.as_deref() {
+        let ingest = ingest_tex_bc7_dir(tex_dir, &opts.output_dir)?;
+        tex_bc7_records = ingest.entries.len();
+        tex_bc7_bytes = ingest.total_bytes;
+        tex_bc7_skipped = ingest.skipped.len();
+        for (path, reason) in &ingest.skipped {
+            log::warn!("--tex-bc7: skipped {path:?}: {reason}");
+        }
+        // The two dedupe sets are independent, so a BC7 blob whose
+        // bytes exactly equal a DAT record's would be counted twice
+        // here. Both writers emit identical bytes to the identical
+        // content-addressed path, so the only consequence is the
+        // count; a 20-byte "HBC7" header makes the collision
+        // impossible in practice anyway.
+        unique_shard_count += ingest.unique_shard_count;
+        v2_shards
+            .catalogs
+            .entry(TEX_BC7_NAMESPACE.to_string())
+            .or_default()
+            .extend(ingest.entries);
+    }
+
     let boot_pack_v1 = write_boot_pack(&bundle, opts.boot_landblock, &opts.output_dir)?;
     let boot_covers_count = boot_pack_v1.covers.len();
     // v2 wire format drops `covers` from BootPack — see
@@ -763,6 +1016,9 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
         unique_shard_count,
         catalog_count,
         boot_covers_count,
+        tex_bc7_records,
+        tex_bc7_bytes,
+        tex_bc7_skipped,
     })
 }
 
@@ -771,6 +1027,14 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
 /// 2 (the new wire format); `--manifest-version=1` keeps the
 /// legacy emission for one release cycle.
 pub fn shard_bundle_dispatch(opts: &DatShardOptions) -> Result<BakeOutput> {
+    if opts.manifest_version != MANIFEST_V2_VERSION && opts.tex_bc7.is_some() {
+        // v1 has no per-namespace catalogs and its top-level shard map
+        // is the 203 MB cliff v2 exists to fix. Rather than emit a
+        // manifest that silently omits the BC7 records, refuse.
+        return Err(ToolError::Validation(format!(
+            "--tex-bc7 requires --manifest-version={MANIFEST_V2_VERSION} (v1 has no per-namespace catalogs)"
+        )));
+    }
     match opts.manifest_version {
         1 => shard_bundle(opts).map(BakeOutput::V1),
         MANIFEST_V2_VERSION => shard_bundle_v2(opts).map(BakeOutput::V2),
@@ -922,6 +1186,126 @@ mod tests {
         assert_eq!(keep.len(), 10 + 18);
         // Far-away cells are not in the keep set.
         assert!(!keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0x0000_FFFF)));
+    }
+
+    /// Build a well-formed HBC7 blob for `w`×`h`.
+    fn hbc7_blob(w: u32, h: u32) -> Vec<u8> {
+        let (bx, by) = (w.div_ceil(4), h.div_ceil(4));
+        let mut out = Vec::with_capacity(HBC7_HEADER_LEN + (bx * by) as usize * BC7_BLOCK_BYTES);
+        out.extend_from_slice(HBC7_MAGIC);
+        for v in [w, h, bx, by] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        // Distinct per-dims body so two blobs never dedupe by accident.
+        for i in 0..(bx * by) as usize * BC7_BLOCK_BYTES {
+            out.push((i as u8) ^ (w as u8));
+        }
+        out
+    }
+
+    #[test]
+    fn validate_hbc7_accepts_padded_and_rejects_malformed() {
+        // Exact multiple of 4 and a non-multiple (the padded case the
+        // container spec calls out) both validate.
+        assert_eq!(validate_hbc7(&hbc7_blob(256, 256)), Ok((256, 256)));
+        assert_eq!(validate_hbc7(&hbc7_blob(30, 6)), Ok((30, 6)));
+
+        // Truncated body — the concurrent-encode case.
+        let mut short = hbc7_blob(64, 64);
+        short.truncate(short.len() - 16);
+        assert!(validate_hbc7(&short).is_err());
+
+        // Bad magic.
+        let mut wrong_magic = hbc7_blob(64, 64);
+        wrong_magic[0] = b'X';
+        assert!(validate_hbc7(&wrong_magic).is_err());
+
+        // Header-only, empty, and a block grid that doesn't cover the
+        // declared dims.
+        assert!(validate_hbc7(&hbc7_blob(64, 64)[..HBC7_HEADER_LEN]).is_err());
+        assert!(validate_hbc7(&[]).is_err());
+        let mut bad_grid = hbc7_blob(64, 64);
+        bad_grid[12..16].copy_from_slice(&8u32.to_le_bytes()); // blocks_x 16 -> 8
+        assert!(validate_hbc7(&bad_grid).is_err());
+    }
+
+    #[test]
+    fn parse_hbc7_file_name_accepts_both_spellings() {
+        assert_eq!(
+            parse_hbc7_file_name(Path::new("/x/0x06003789.hbc7")),
+            Ok(0x0600_3789)
+        );
+        assert_eq!(
+            parse_hbc7_file_name(Path::new("/x/06003789.hbc7")),
+            Ok(0x0600_3789)
+        );
+        assert_eq!(
+            parse_hbc7_file_name(Path::new("/x/0x0600378e.hbc7")),
+            Ok(0x0600_378E)
+        );
+        assert!(parse_hbc7_file_name(Path::new("/x/README.hbc7")).is_err());
+    }
+
+    #[test]
+    fn ingest_tex_bc7_dir_writes_content_addressed_shards() {
+        let tmp = std::env::temp_dir().join(format!(
+            "hb-tex-bc7-ingest-{}",
+            std::process::id()
+        ));
+        let src = tmp.join("blocks");
+        let out = tmp.join("out");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&src).expect("mk src");
+
+        let a = hbc7_blob(256, 256);
+        let b = hbc7_blob(64, 64);
+        std::fs::write(src.join("0x06003789.hbc7"), &a).expect("write a");
+        std::fs::write(src.join("0x0600378E.hbc7"), &b).expect("write b");
+        // A duplicate of `a` under a different id must dedupe to ONE
+        // shard file but still get its own catalog entry.
+        std::fs::write(src.join("0x06003790.hbc7"), &a).expect("write dup");
+        // Mid-write blob → skipped, not fatal.
+        std::fs::write(src.join("0x060037FF.hbc7"), &b[..b.len() - 16]).expect("write partial");
+        // Non-.hbc7 sibling → ignored silently.
+        std::fs::write(src.join("encode-ledger.jsonl"), b"{}\n").expect("write ledger");
+
+        let ingest = ingest_tex_bc7_dir(&src, &out).expect("ingest");
+        assert_eq!(ingest.entries.len(), 3);
+        assert_eq!(ingest.unique_shard_count, 2, "identical blobs share a shard");
+        assert_eq!(ingest.skipped.len(), 1);
+        assert_eq!(ingest.total_bytes, (a.len() * 2 + b.len()) as u64);
+
+        // Every entry's shard file exists at the v2 path and holds the
+        // exact source bytes.
+        for entry in &ingest.entries {
+            let hex = hex_encode_16(&entry.sha256_truncated);
+            let path = out.join("shards").join(&hex[..2]).join(format!("{hex}.bin"));
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+            assert_eq!(bytes.len() as u64, entry.size);
+            let expect = if entry.file_id == 0x0600_378E { &b } else { &a };
+            assert_eq!(&bytes, expect, "shard bytes for 0x{:08X}", entry.file_id);
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn tex_bc7_requires_manifest_v2() {
+        let opts = DatShardOptions {
+            input_hba: None,
+            eor_portal: None,
+            eor_cell: None,
+            eor_local: None,
+            boot_landblock: 0xA9B4,
+            output_dir: std::env::temp_dir().join("hb-tex-bc7-v1-reject"),
+            manifest_version: 1,
+            tex_bc7: Some(PathBuf::from("/nonexistent")),
+        };
+        let err = shard_bundle_dispatch(&opts).expect_err("v1 + --tex-bc7 must be refused");
+        assert!(
+            err.to_string().contains("--tex-bc7"),
+            "error should name the flag, got: {err}"
+        );
     }
 
     #[test]

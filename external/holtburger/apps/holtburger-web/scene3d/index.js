@@ -57,6 +57,11 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb } from "./static_batch_x.js";
+// X6 `?texBc7` (DEFAULT-OFF) — the BPTC capability probe. MUST run against the
+// app's real WebGL context before any BC7 texture is constructed: without the
+// extension three's `convert()` yields a null gl format and warns per texture,
+// so the whole path gates on this one probe (see bc7_textures.js header).
+import { initBc7 } from "./bc7_textures.js";
 import { buildEnvCellsForLandblock } from "./cells.js";
 // Phase D.1 — synthetic ACE entity-spawn injector. The third
 // placement stream (after `fetch_landblock_objects` DAT-explicit and
@@ -926,6 +931,13 @@ export async function preInit3D(canvas) {
   // stops emitting "Using format enabled by implicitly enabled extension"
   // warnings every frame the atmosphere LUTs are sampled.
   renderer.getContext().getExtension("EXT_float_blend");
+  // X6 `?texBc7=on` — probe EXT_texture_compression_bptc on THIS context. No-op
+  // (and silent) with the flag absent; with the flag on it logs which arm the
+  // boot took. Everything downstream reads `bc7Available()`, so an unsupported
+  // GPU (SwiftShader — the dev laptop) behaves exactly like flag-off.
+  try {
+    initBc7(renderer);
+  } catch (_) { /* capability probes must never break boot */ }
   // 2026-05-21 Phase A/D follow-on — kick off the atmosphere LUT load
   // CONCURRENTLY with everything else. The post-Connect `init3D` arm
   // awaits the result of this promise; bake/load runs in parallel with

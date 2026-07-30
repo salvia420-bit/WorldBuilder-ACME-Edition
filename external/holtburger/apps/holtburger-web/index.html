@@ -2543,6 +2543,47 @@
           } catch (e) {
             console.error("[tex-overrides:main] loader failed (non-fatal):", e);
           }
+          // X6 `?texBc7=on` — install the BC7 record source (namespace
+          // `holtburger/tex-bc7`, keyed by RenderSurface id) now that the
+          // manifest source is live; the wasm `bc7_blocks` export reads through
+          // the SAME source every other record goes through. `initBc7Source`
+          // self-gates on `bc7Available()` (flag AND the renderer's BPTC probe),
+          // so with the flag absent this is one function call and nothing else.
+          // Fail-soft, and loud about the two states an operator cares about:
+          // "flag on but wasm export missing" (stale pkg/) and "flag on but the
+          // manifest has no BC7 namespace" (delivery half not deployed).
+          try {
+            const bc7mod = await import("./scene3d/bc7_textures.js");
+            if (bc7mod.bc7Enabled()) {
+              if (typeof __hbWasmNs.bc7_blocks !== "function") {
+                console.error(
+                  "[bc7] ?texBc7=on but wasm export `bc7_blocks` is missing — stale pkg/ build? Rebuild wasm-pack."
+                );
+              } else {
+                // The BPTC probe (scene3d/index.js `initBc7`) runs LATER, inside
+                // the post-Connect init3D arm, so registering here is correct and
+                // the capability gate stays in `bc7Source()`.
+                bc7mod.initBc7Source({ wasmExports: __hbWasmNs });
+                const nsPresent =
+                  typeof __hbWasmNs.bc7_namespace_present === "function"
+                    ? __hbWasmNs.bc7_namespace_present()
+                    : null;
+                console.log(
+                  `[bc7] record source registered (namespace \`holtburger/tex-bc7\` present: ${nsPresent})`
+                );
+                if (nsPresent === false) {
+                  console.warn(
+                    "[bc7] ?texBc7=on but the manifest carries no `holtburger/tex-bc7` namespace — every lookup will miss (delivery half not deployed?)."
+                  );
+                }
+                if (typeof __hbWasmNs.bc7_diag === "function") {
+                  window.__bc7WasmDiag = () => JSON.parse(__hbWasmNs.bc7_diag());
+                }
+              }
+            }
+          } catch (e) {
+            console.error("[bc7] loader failed (non-fatal):", e);
+          }
           // Host-flag readback (defects 1/4) — same shape the bake worker logs
           // at the end of its init, so the two are directly diffable. Namespace
           // access (not a named import) so a stale pkg yields undefined instead

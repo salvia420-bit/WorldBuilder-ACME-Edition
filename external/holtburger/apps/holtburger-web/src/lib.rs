@@ -9165,6 +9165,23 @@ pub struct SurfacePixels {
     /// scene3d/materials.js); JS falls back to legacy alphaTest 0.5 when the
     /// getter is missing (stale pkg) — non-load-bearing, rides manifest v4.
     has_palette: bool,
+    /// X6 (2026-07-29, `?texBc7`) — the RenderSurface (`0x06______`) id this
+    /// decode's pixels came from, i.e. `SurfaceTexture::highest_res()` at the
+    /// `rs_id` hop. `0` for the 1x1 solid-colour path, the empty fallback, and
+    /// the magenta decode-fail sentinel (no source texture exists there).
+    ///
+    /// WHY JS NEEDS IT: the BC7 direct-upload path is keyed by RenderSurface id
+    /// (namespace `holtburger/tex-bc7`), but every JS-side material is keyed by
+    /// **Surface** DID (`0x08______`). Without this field JS would have to key
+    /// its BC7 cache by Surface DID, which would build a SEPARATE
+    /// `CompressedTexture` for each Surface sharing one RenderSurface — and the
+    /// statics atlas dedups layers by `map.uuid`, so that would cut one atlas
+    /// layer per Surface instead of per texture. Same reason
+    /// `texture_overrides::lookup_for` hooks at the `rs_id` hop and not per
+    /// Surface. Additive, non-load-bearing: JS reads it as
+    /// `typeof sp.rsId === "number" ? … : 0`, so a stale pkg simply never
+    /// upgrades a surface to BC7.
+    rs_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -9236,6 +9253,139 @@ impl SurfacePixels {
     /// non-load-bearing getter — rides manifest v4 (graceful 0.5 fallback).
     #[wasm_bindgen(getter, js_name = hasPalette)]
     pub fn has_palette(&self) -> bool { self.has_palette }
+    /// X6 — RenderSurface (`0x06______`) id behind these pixels, `0` when there
+    /// is no source texture (1x1 solid / empty fallback / decode-fail sentinel).
+    /// Keys the `?texBc7=on` BC7 block lookup; see the field docs.
+    #[wasm_bindgen(getter, js_name = rsId)]
+    pub fn rs_id(&self) -> u32 { self.rs_id }
+}
+
+// ===========================================================================
+// X6 (2026-07-29, `?texBc7=on`) — BC7 block records.
+//
+// The CLIENT half of the BC7 texture track: pre-encoded BC7 (BPTC) albedo
+// blocks are shipped as ordinary resource records so the renderer can hand
+// them to the GPU verbatim (`compressedTexImage2D` / `compressedTexImage3D`)
+// instead of decoding a RenderSurface to RGBA8 and uploading 32 bpp.
+//
+// This module is ONLY the read side. It does not decode, validate beyond the
+// container magic, or cache separately — the manifest shard cache already
+// caches records, and the parse/validate/upload lives in JS
+// (`scene3d/bc7_textures.js`, which owns the `HBC7` container reader).
+// ===========================================================================
+
+/// Resource namespace holding BC7 albedo blocks, keyed by RenderSurface
+/// (`0x06______`) id. Fixed by the transport contract; the bake/delivery half
+/// writes it, this reads it.
+pub const BC7_TEX_NAMESPACE: &str = "holtburger/tex-bc7";
+
+/// `HBC7` container magic, little-endian.
+#[cfg(target_arch = "wasm32")]
+const BC7_MAGIC: &[u8; 4] = b"HBC7";
+
+#[cfg(target_arch = "wasm32")]
+static BC7_NS_MISSING_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_arch = "wasm32")]
+static BC7_HITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(target_arch = "wasm32")]
+static BC7_MISSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(target_arch = "wasm32")]
+static BC7_BAD_MAGIC: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// X6 — whether the loaded manifest carries the BC7 namespace at all. JS logs
+/// this once at init so a flag-ON boot against an archive with no BC7 records
+/// says so instead of silently fetching nothing.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn bc7_namespace_present() -> bool {
+    use holtburger_dat::ResourceSource as _;
+    match global_source::try_global_source() {
+        Some(s) => s.has_namespace(BC7_TEX_NAMESPACE),
+        None => false,
+    }
+}
+
+/// X6 — the raw `HBC7` payload for one RenderSurface id, or an EMPTY `Vec`
+/// for "no BC7 for this surface" (absent record, wrong id namespace, BC7
+/// namespace not shipped, or a payload that fails the magic check).
+///
+/// Empty-means-absent mirrors `fetch_suite_artifact`'s convention and is what
+/// the JS `Bc7RecordSource` negative-caches on, so a surface without BC7 is
+/// asked for exactly once per session.
+///
+/// Hydrate-then-read, the documented `global_source` contract: `prefetch`
+/// (async) before the sync `get_file_by_key`. Errors are swallowed into the
+/// empty return — a missing BC7 record must never disturb a render.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn bc7_blocks(rs_id: u32) -> Vec<u8> {
+    use holtburger_dat::{ResourceKey, ResourceSource as _};
+    // Only RenderSurface ids are keys in this namespace (the contract). A
+    // Surface (0x08) id here would be a caller bug; refuse rather than fetch.
+    if rs_id >> 24 != 0x06 {
+        BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Vec::new();
+    }
+    let Some(source) = global_source::try_global_source() else {
+        return Vec::new();
+    };
+    if !source.has_namespace(BC7_TEX_NAMESPACE) {
+        // Once, loudly: flag ON against an archive with no BC7 namespace is a
+        // delivery-side gap, not an environment quirk, and silently rendering
+        // the retail texture everywhere would hide it.
+        if !BC7_NS_MISSING_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            // `console_warn_str` (the crate's own extern binding), NOT web_sys:
+            // Cargo.toml deliberately avoids pulling in web-sys.
+            console_warn_str(&format!(
+                "[bc7] namespace `{BC7_TEX_NAMESPACE}` is not in the loaded manifest — \
+                 every ?texBc7=on lookup will miss (delivery half not deployed?)"
+            ));
+        }
+        BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Vec::new();
+    }
+    // Provable absence (a loaded per-namespace catalog that lacks the key)
+    // short-circuits before the network hop. `key_known_absent` returns false
+    // for "not hydrated yet", so this never latches a transient.
+    if source.key_known_absent(ResourceKey::new(BC7_TEX_NAMESPACE, rs_id)) {
+        BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Vec::new();
+    }
+    let _ = source
+        .prefetch(&[ResourceKey::new(BC7_TEX_NAMESPACE, rs_id)])
+        .await;
+    let bytes = match source.get_file_by_key(ResourceKey::new(BC7_TEX_NAMESPACE, rs_id)) {
+        Ok(b) => b,
+        Err(_) => {
+            BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Vec::new();
+        }
+    };
+    // Cheapest possible sanity gate; the full container validation (block
+    // dims vs ceil(w/4), exact byte length) lives in the JS parser, which is
+    // also what the offline verifier exercises.
+    if bytes.len() < 20 || &bytes[..4] != BC7_MAGIC {
+        BC7_BAD_MAGIC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Vec::new();
+    }
+    BC7_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    bytes
+}
+
+/// X6 — JSON tally for `window.__bc7Stats()` (merged with the JS-side counts).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn bc7_diag() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    format!(
+        "{{\"namespace\":\"{}\",\"present\":{},\"hits\":{},\"misses\":{},\"badMagic\":{}}}",
+        BC7_TEX_NAMESPACE,
+        bc7_namespace_present(),
+        BC7_HITS.load(Relaxed),
+        BC7_MISSES.load(Relaxed),
+        BC7_BAD_MAGIC.load(Relaxed),
+    )
 }
 
 /// Phase 1.5 — cache the parsed `data/surface_overrides.json` for the
@@ -9900,6 +10050,7 @@ fn clone_surface_pixels(sp: &SurfacePixels) -> SurfacePixels {
         luminosity: sp.luminosity,
         diffuse: sp.diffuse,
         has_palette: sp.has_palette,
+        rs_id: sp.rs_id,
     }
 }
 
@@ -10811,6 +10962,7 @@ fn empty_surface_pixels() -> SurfacePixels {
         luminosity: 0.0,
         diffuse: 0.0,
         has_palette: false,
+        rs_id: 0,
     }
 }
 
@@ -10883,6 +11035,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         diffuse: 0.0,
         // A10-M3a — empty fallback: no texture → ddsRef-200 class (false).
         has_palette: false,
+        rs_id: 0,
     };
 
     // TMChange alias — resolve to the base Surface record + the swapped
@@ -10963,6 +11116,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // and !curr_texture_is_set short-circuits to the 200 ref
             // (acclient.c:454506-454507) → false.
             has_palette: false,
+            rs_id: 0,
         };
     }
     let Some((surf_tex_id, surf_pal_id)) = surface.textured() else {
@@ -11094,6 +11248,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 // (retail ImgTex::m_pPalette non-null → 256-ref 100,
                 // acclient.c:454506-454509).
                 has_palette: tex.format().needs_palette(),
+                rs_id: rs_id,
             }
         }
         Err(e) => {
@@ -11140,6 +11295,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                     luminosity: surface.luminosity,
                     diffuse: surface.diffuse,
                     has_palette: true,
+                    rs_id: rs_id,
                 }
             } else {
                 empty
@@ -12338,6 +12494,7 @@ pub async fn fetch_dye_preview_pixels(
         diffuse: 0.0,
         // A10-M3a — empty fallback: no texture → ddsRef-200 class (false).
         has_palette: false,
+        rs_id: 0,
     };
     if sub_palettes.len() % 3 != 0 {
         return Err(JsValue::from_str(
@@ -12434,6 +12591,7 @@ pub async fn fetch_dye_preview_pixels(
                 // A10-M3a — dye preview decodes a real Texture; report its
                 // palette-indexedness like the other textured sites.
                 has_palette: tex.format().needs_palette(),
+                rs_id: rs_id,
             })
         }
         Err(_) => Ok(empty),
@@ -12824,6 +12982,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         diffuse: 0.0,
         // A10-M3a — empty fallback: no texture → ddsRef-200 class (false).
         has_palette: false,
+        rs_id: 0,
     };
 
     // TMChange alias — resolve to the base Surface record + the swapped
@@ -12888,6 +13047,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // and !curr_texture_is_set short-circuits to the 200 ref
             // (acclient.c:454506-454507) → false.
             has_palette: false,
+            rs_id: 0,
         };
     }
     let Some((surf_tex_id, surf_pal_id)) = surface.textured() else {
@@ -13027,6 +13187,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 // (retail ImgTex::m_pPalette non-null → 256-ref 100,
                 // acclient.c:454506-454509).
                 has_palette: tex.format().needs_palette(),
+                rs_id: rs_id,
             }
         }
         Err(e) => {
@@ -60078,6 +60239,7 @@ mod tests_surface_cache {
             luminosity: 0.0,
             diffuse: 0.0,
             has_palette: false,
+            rs_id: 0,
         }
     }
 
@@ -60399,6 +60561,7 @@ mod tests_surface_cache {
             luminosity: 0.0,
             diffuse: 1.0,
             has_palette: false,
+            rs_id: 0,
         }
     }
 

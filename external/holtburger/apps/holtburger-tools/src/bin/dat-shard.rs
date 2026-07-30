@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use holtburger_tools::boot_verify::{EXIT_NOT_FULLY_PACKABLE, format_report, verify_boot_pack};
 use holtburger_tools::dat_shard::{
-    DEFAULT_MANIFEST_VERSION, DatShardOptions, parse_hex_u32, shard_bundle_dispatch,
+    BakeOutput, DEFAULT_MANIFEST_VERSION, DatShardOptions, parse_hex_u32, shard_bundle_dispatch,
 };
 use holtburger_tools::error::Result;
 
@@ -41,6 +41,18 @@ struct Args {
     /// `eor/local` namespace.
     #[arg(long, value_name = "DAT")]
     eor_local: Option<PathBuf>,
+
+    /// Directory of `<rsId>.hbc7` BC7 texture blobs (e.g.
+    /// `0x06003789.hbc7`) to publish into the `holtburger/tex-bc7`
+    /// namespace, addressed by RenderSurface id so the client can
+    /// fetch them lazily like any other shard. Streamed
+    /// record-by-record — the blobs never enter the in-memory bundle,
+    /// so a ~2 GB BC7 set costs ~0.1 MB of bake RSS. Requires
+    /// `--manifest-version=2`. Composable with `--input` /
+    /// `--eor-*`; also valid on its own, which produces a side-car
+    /// bundle holding only the BC7 namespace.
+    #[arg(long, value_name = "DIR")]
+    tex_bc7: Option<PathBuf>,
 
     /// Spawn-area landblock for boot-pack inclusion. Hex
     /// (`0xA9B4`, default Holtburg). String-default rather than
@@ -86,6 +98,7 @@ impl Args {
             boot_landblock: self.boot_landblock,
             output_dir: self.output,
             manifest_version: self.manifest_version,
+            tex_bc7: self.tex_bc7,
         }
     }
 }
@@ -107,6 +120,23 @@ fn main() -> Result<()> {
         bake.boot_covers_count(),
         opts.output_dir.join("manifest.json"),
     );
+    if let BakeOutput::V2(ref r) = bake
+        && opts.tex_bc7.is_some()
+    {
+        println!(
+            "dat-shard: tex-bc7 — {} records, {} bytes ({:.1} MB), {} skipped",
+            r.tex_bc7_records,
+            r.tex_bc7_bytes,
+            r.tex_bc7_bytes as f64 / (1024.0 * 1024.0),
+            r.tex_bc7_skipped,
+        );
+        if r.tex_bc7_skipped > 0 {
+            eprintln!(
+                "dat-shard: {} --tex-bc7 file(s) failed the HBC7 header/size check and were NOT published (re-run with RUST_LOG=warn for per-file reasons)",
+                r.tex_bc7_skipped
+            );
+        }
+    }
 
     if verify_boot {
         // The boot pack is always written to `<output>/boot.hba` by
@@ -157,6 +187,28 @@ mod tests {
         .expect("verify-boot-reachability args should parse");
         assert!(args.verify_boot_reachability);
         assert_eq!(args.boot_landblock, 0xA9B4);
+    }
+
+    #[test]
+    fn tex_bc7_flag_is_optional_and_parses() {
+        let bare = Args::try_parse_from(["dat-shard", "--input", "bundle.hba", "--output", "out"])
+            .expect("default args should parse");
+        assert!(bare.tex_bc7.is_none(), "--tex-bc7 must be opt-in");
+
+        let with_dir = Args::try_parse_from([
+            "dat-shard",
+            "--output",
+            "out",
+            "--tex-bc7",
+            "/mnt/blocks",
+        ])
+        .expect("--tex-bc7 alone should parse (side-car bundle)");
+        assert_eq!(
+            with_dir.tex_bc7.as_deref(),
+            Some(std::path::Path::new("/mnt/blocks"))
+        );
+        // Default manifest version must be the v2 the flag requires.
+        assert_eq!(with_dir.manifest_version, DEFAULT_MANIFEST_VERSION);
     }
 
     #[test]

@@ -339,6 +339,12 @@ export function serializeSurfacePixels(sp) {
   // alphaTest 0.5, so leaving the key absent on a stale pkg preserves
   // the exact `undefined` fallback semantics across the worker boundary.
   if (typeof sp.hasPalette === "boolean") surface.hasPalette = sp.hasPalette;
+  // X6 (`?texBc7`) — carry the RenderSurface (0x06) id the same presence-gated
+  // way: absent key on a stale pkg ⇒ `undefined` on the far side ⇒ the BC7
+  // upgrade simply never fires for worker-baked surfaces (RGBA8 as before).
+  // Without this the worker path could NEVER upgrade, since the reconstructed
+  // plain object is what materials.js sees.
+  if (typeof sp.rsId === "number") surface.rsId = sp.rsId >>> 0;
 
   return { surface, transfer };
 }
@@ -389,6 +395,9 @@ export function reconstructSurfacePixels(p) {
     // `undefined` when the payload omitted it (stale pkg) — matches the
     // consumers' `typeof … === "boolean" ? … : undefined` contract.
     hasPalette: p.hasPalette,
+    // X6 — `undefined` on a stale pkg; materials.js reads it as
+    // `typeof sp.rsId === "number" ? … : 0`, so absent ⇒ no BC7 upgrade.
+    rsId: p.rsId,
   };
 }
 

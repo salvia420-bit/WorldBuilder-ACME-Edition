@@ -82,6 +82,7 @@ fn shard_fixture() -> (tempfile::TempDir, holtburger_manifest::Manifest) {
         boot_landblock: BOOT_LANDBLOCK,
         output_dir,
         manifest_version: 1,
+        tex_bc7: None,
     })
     .expect("shard_bundle");
 
@@ -220,6 +221,7 @@ fn v2_shard_fixture() -> (tempfile::TempDir, std::path::PathBuf, V2BakeResult) {
         boot_landblock: BOOT_LANDBLOCK,
         output_dir: output_dir.clone(),
         manifest_version: 2,
+        tex_bc7: None,
     })
     .expect("shard_bundle_v2");
 
