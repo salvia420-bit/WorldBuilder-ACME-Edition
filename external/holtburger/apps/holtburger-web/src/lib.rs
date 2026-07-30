@@ -96,6 +96,75 @@ pub fn seed_url_flag_search(search: String) {
     *SEEDED_FLAG_SEARCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(search);
 }
 
+/// Geometric-relief config, set once per wasm instance by JS.
+///
+/// Three atomics rather than a lock: this is read inside the per-polygon hot
+/// path of the triangulators and written exactly once per instance, before any
+/// decode.
+static GFX_RELIEF_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static GFX_RELIEF_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// `f32` bits — atomics have no float form.
+static GFX_RELIEF_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Resolved remodel config, or `None` when relief is off / a no-op — in which
+/// case the triangulators emit byte-identical output.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn gfx_relief_config() -> Option<holtburger_dat::gfx_remodel::RemodelConfig> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !GFX_RELIEF_ON.load(Relaxed) {
+        return None;
+    }
+    let scale = f32::from_bits(GFX_RELIEF_SCALE.load(Relaxed));
+    let cfg = holtburger_dat::gfx_remodel::RemodelConfig {
+        scale,
+        ..Default::default()
+    };
+    if cfg.is_noop() { None } else { Some(cfg) }
+}
+
+/// Enable/disable geometric relief for this wasm instance.
+///
+/// MUST be called after `init()` and **before `init_resource_source`**, on BOTH
+/// the main thread and the bake worker. The triangulation memo is decode-once
+/// per instance, so a later flip would leave already-decoded models flat — which
+/// is why this clears the memo rather than trusting call order.
+///
+/// `subdiv_level` is reserved for the `gfx_subdiv` displacement path and is
+/// stored but not yet consumed. `scale` multiplies the rail dimensions and is
+/// clamped downstream; `0.0` is the A/B control arm (classification still runs,
+/// nothing is emitted).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn set_gfx_relief(enabled: bool, subdiv_level: u32, scale: f32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let scale = if scale.is_finite() { scale.clamp(0.0, 2.0) } else { 0.0 };
+    GFX_RELIEF_ON.store(enabled, Relaxed);
+    GFX_RELIEF_LEVEL.store(subdiv_level.min(2), Relaxed);
+    GFX_RELIEF_SCALE.store(scale.to_bits(), Relaxed);
+    // Decoded geometry is cached by model_id alone, so a config change must
+    // invalidate it or the flip silently does nothing for anything already seen.
+    let _ = model_tri_cache_clear_all();
+}
+
+/// Readback so a headless session can assert what actually took effect rather
+/// than assuming the flag arrived.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn gfx_relief_diag() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let cfg = gfx_relief_config();
+    format!(
+        "{{\"enabled\":{},\"subdivLevel\":{},\"scale\":{},\"active\":{},\"widthM\":{},\"heightM\":{},\"minEdgeM\":{}}}",
+        GFX_RELIEF_ON.load(Relaxed),
+        GFX_RELIEF_LEVEL.load(Relaxed),
+        f32::from_bits(GFX_RELIEF_SCALE.load(Relaxed)),
+        cfg.is_some(),
+        cfg.map(|c| c.width_m).unwrap_or(0.0),
+        cfg.map(|c| c.height_m).unwrap_or(0.0),
+        cfg.map(|c| c.min_edge_m).unwrap_or(0.0),
+    )
+}
+
 /// Readback of everything this wasm instance believes about its host-supplied
 /// flags — the query string URL flags parse from, plus the two `js_sys::global()`
 /// knobs that historically differed between the main thread and the bake worker
@@ -6113,6 +6182,65 @@ fn append_gfx_tris_with_tex_swaps(
                     stippling: poly.stippling,
                 });
             }
+        }
+    }
+
+    // OP1 — texture-blind convex-edge rails (`holtburger_dat::gfx_remodel`).
+    // Purely additive: everything above is already in `tris` and is not
+    // touched. Runs last so it sees the same part-transformed positions the
+    // fan loop emitted, and inside the caller's memo so the cost is paid once
+    // per distinct model rather than once per placement.
+    if let Some(cfg) = gfx_relief_config() {
+        use holtburger_dat::gfx_remodel::{ModelGate, ModelTopology};
+        let vpos = |raw: i16| -> Option<[f32; 3]> {
+            if raw < 0 {
+                return None;
+            }
+            let v = gfx.vertex_array.vertices.get(&(raw as u16))?;
+            let p = quat_rotate(part_rot, v.origin);
+            Some([p.x + part_offset.x, p.y + part_offset.y, p.z + part_offset.z])
+        };
+        let vuv = |raw: i16, _ring_idx: usize| -> Option<[f32; 2]> {
+            if raw < 0 {
+                return None;
+            }
+            let v = gfx.vertex_array.vertices.get(&(raw as u16))?;
+            v.uvs.first().map(|t| [t.u, t.v])
+        };
+        let topo = ModelTopology::build(&gfx.polygons, &[], &vpos, &vuv);
+        if topo.passes_gate(&ModelGate::default()) {
+            topo.emit_convex_rails(&cfg, &mut |pid, pos, uv, nrm| {
+                // Inherit the parent polygon's material identity so the new
+                // tris land in an EXISTING subset — no new surface entry, no
+                // new material, and critically no new draw call.
+                let Some(poly) = gfx.polygons.get(&pid) else { return };
+                let raw_did = if poly.pos_surface >= 0
+                    && (poly.pos_surface as usize) < gfx.surfaces.len()
+                {
+                    gfx.surfaces[poly.pos_surface as usize]
+                } else {
+                    0
+                };
+                if raw_did == 0 {
+                    return;
+                }
+                let did = tex_swaps
+                    .iter()
+                    .fold(raw_did, |d, (old, new)| if d == *old { *new } else { d });
+                tris.push(Tri {
+                    pos,
+                    uv,
+                    // Flat-shaded on purpose: a constant facet normal is what
+                    // makes a batten read as a batten. Smoothing would blend it
+                    // back into the wall and undo the point.
+                    normals: [nrm, nrm, nrm],
+                    surface_did: did,
+                    sides_type: poly.sides_type as u8,
+                    polygon_id: pid,
+                    side_kind: SideKind::Positive,
+                    stippling: poly.stippling,
+                });
+            });
         }
     }
 }
