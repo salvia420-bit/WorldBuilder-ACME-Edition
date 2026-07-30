@@ -948,7 +948,10 @@ public partial class CommandEngine {
             case DRW.Enums.PixelFormat.PFID_DXT3:
             case DRW.Enums.PixelFormat.PFID_DXT5: {
                 var fmt = rs.Format switch {
-                    DRW.Enums.PixelFormat.PFID_DXT1 => CompressionFormat.Bc1,
+                    // Bc1WithAlpha, NOT Bc1 — see RenderSurfaceExtensions.ToRgba8.
+                    // DXT1's c0 <= c1 blocks are punch-through: index 3 is
+                    // transparent. Bc1 (opaque) renders those texels solid black.
+                    DRW.Enums.PixelFormat.PFID_DXT1 => CompressionFormat.Bc1WithAlpha,
                     DRW.Enums.PixelFormat.PFID_DXT3 => CompressionFormat.Bc2,
                     DRW.Enums.PixelFormat.PFID_DXT5 => CompressionFormat.Bc3,
                     _ => throw new InvalidOperationException("unreachable"),

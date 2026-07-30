@@ -668,7 +668,12 @@ public partial class CommandEngine {
             case DRW.Enums.PixelFormat.PFID_DXT5: {
                 chainKind = "textured/clipmap";
                 var fmt = rs.Format switch {
-                    DRW.Enums.PixelFormat.PFID_DXT1 => CompressionFormat.Bc1,
+                    // Bc1WithAlpha, NOT Bc1 — see RenderSurfaceExtensions.ToRgba8.
+                    // Doubly load-bearing here: this decoder is the reference the
+                    // parity check compares the client against, so decoding
+                    // punch-through as opaque black made a correct client look
+                    // wrong (or, worse, matched a client with the same bug).
+                    DRW.Enums.PixelFormat.PFID_DXT1 => CompressionFormat.Bc1WithAlpha,
                     DRW.Enums.PixelFormat.PFID_DXT3 => CompressionFormat.Bc2,
                     DRW.Enums.PixelFormat.PFID_DXT5 => CompressionFormat.Bc3,
                     _ => throw new InvalidOperationException("unreachable"),

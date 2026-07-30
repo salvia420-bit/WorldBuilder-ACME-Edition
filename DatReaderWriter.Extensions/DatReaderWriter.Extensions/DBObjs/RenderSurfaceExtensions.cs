@@ -264,7 +264,15 @@ namespace DatReaderWriter.Extensions.DBObjs {
                 case PixelFormat.PFID_DXT3:
                 case PixelFormat.PFID_DXT5: {
                     var compressionFormat = renderSurface.Format switch {
-                        PixelFormat.PFID_DXT1 => CompressionFormat.Bc1,
+                        // Bc1WithAlpha, NOT Bc1: DXT1 carries punch-through 1-bit
+                        // alpha. When a block's c0 <= c1 the block is in 3-colour
+                        // mode and index 3 means TRANSPARENT, which is what D3D —
+                        // and therefore retail — does unconditionally. Bc1 is
+                        // BCnEncoder's opaque variant and turns those texels into
+                        // RGBA(0,0,0,255), so clipped regions exported as solid
+                        // black. Bc1WithAlpha is byte-identical for c0 > c1 blocks,
+                        // so opaque textures are unaffected.
+                        PixelFormat.PFID_DXT1 => CompressionFormat.Bc1WithAlpha,
                         PixelFormat.PFID_DXT3 => CompressionFormat.Bc2,
                         PixelFormat.PFID_DXT5 => CompressionFormat.Bc3,
                         _ => throw new InvalidOperationException("unreachable")
@@ -291,6 +299,21 @@ namespace DatReaderWriter.Extensions.DBObjs {
             }
 
             return output;
+        }
+
+        /// <summary>
+        /// True if any pixel is not fully opaque. Used to decide whether a
+        /// DXT1 encode needs the punch-through (alpha-preserving) encoder.
+        /// </summary>
+        private static bool HasTransparency(Image<Rgba32> rgbaImg) {
+            for (int y = 0; y < rgbaImg.Height; y++)
+            for (int x = 0; x < rgbaImg.Width; x++) {
+                if (rgbaImg[x, y].A != 255) {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -402,8 +425,20 @@ namespace DatReaderWriter.Extensions.DBObjs {
                 case PixelFormat.PFID_DXT1:
                 case PixelFormat.PFID_DXT3:
                 case PixelFormat.PFID_DXT5: {
+                    // DXT1 has punch-through 1-bit alpha, and BCnEncoder's plain
+                    // Bc1 encoder discards it outright — importing a PNG with a
+                    // cutout produced a fully opaque texture, silently. Bc1WithAlpha
+                    // preserves it, but the two do NOT agree byte-for-byte even on
+                    // opaque input, so pick by what the image actually contains:
+                    // opaque images keep their existing encoding exactly, and only
+                    // images that would otherwise LOSE data switch encoders.
+                    // Note DXT1 alpha is 1 bit — partial alpha gets thresholded.
+                    bool needsPunchThrough = format == PixelFormat.PFID_DXT1
+                                             && HasTransparency(rgbaImg);
                     var compressionFormat = format switch {
-                        PixelFormat.PFID_DXT1 => CompressionFormat.Bc1,
+                        PixelFormat.PFID_DXT1 => needsPunchThrough
+                            ? CompressionFormat.Bc1WithAlpha
+                            : CompressionFormat.Bc1,
                         PixelFormat.PFID_DXT3 => CompressionFormat.Bc2,
                         PixelFormat.PFID_DXT5 => CompressionFormat.Bc3,
                         _ => throw new InvalidOperationException("unreachable")
