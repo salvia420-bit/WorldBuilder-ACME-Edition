@@ -6252,7 +6252,21 @@ fn append_gfx_tris_with_tex_swaps(
             // displace each sub-vertex outward by `amplitude * height(uv)`;
             // otherwise emit the single flat tri exactly as before.
             let mut emitted = false;
-            if let (Some(rcfg), Some(hf)) = (relief_cfg, surface_height(pos_surface_did)) {
+            // `level == 0` disables per-texel displacement while leaving the
+            // rails (which do not subdivide) fully live. Retired as a default
+            // on 2026-07-30: measured on the 1070, a level-4 displaced wall
+            // differs from an undisplaced one by 0.211 mean-abs on the plaster
+            // panel — i.e. nothing — because a carved joint is ~1 texel (0.7-1.1
+            // cm) while the vertex grid at level 4 on a 2.5 m edge is ~15 cm.
+            // Representing that joint needs level 9-11 (250k-1M triangles per
+            // source triangle). The band where vertex geometry can carry detail
+            // and the band where AC's painted detail lives do not overlap.
+            // Fine detail belongs in the (now seam-derived) normal map, which is
+            // per-pixel and has no sampling floor.
+            if let (Some(rcfg), Some(hf)) = (
+                relief_cfg.filter(|c| c.subdiv.level > 0),
+                surface_height(pos_surface_did),
+            ) {
                 use holtburger_dat::gfx_subdiv::{
                     subdivide_displaced_triangle_sampled, ReliefSampler,
                 };

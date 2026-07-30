@@ -53,6 +53,11 @@ export const PRESETS = {
         // model gate leaves ~87% of GfxObjs byte-identical.
         // `low`: still off — added tris are paid TWICE at any tier with shadows
         // and low is the tier that exists to not pay.
+        //
+        // gfxSubdivLevel is 0 on EVERY tier: the rails do not subdivide, and
+        // per-texel displacement measured 0.211 mean-abs against undisplaced on
+        // the 1070 (a ~1 cm joint cannot exist on a ~15 cm vertex grid). Raise
+        // it explicitly with ?gfxSubdivLevel=N to experiment.
         gfxRelief: false,
         gfxSubdivLevel: 0,
         gfxReliefScale: 0.6,
@@ -89,7 +94,7 @@ export const PRESETS = {
         // quality=high and are the ONLY vertex-stage-bound pass, so mid/high
         // both stop at 4x; 16x is an `ultra` opt-in.
         gfxRelief: true,
-        gfxSubdivLevel: 1,
+        gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
         hero: false,
         pom: false,
@@ -116,7 +121,7 @@ export const PRESETS = {
         anisotropy: 16,
         subdivLevel: 4,
         gfxRelief: true,
-        gfxSubdivLevel: 1,
+        gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
         hero: true,
         pom: true,
@@ -142,7 +147,7 @@ export const PRESETS = {
         // 2 = 16x tris. `ultra` is never auto-selected (see detectGpuTier), so
         // the shadow-pass vertex bill here is always a deliberate opt-in.
         gfxRelief: true,
-        gfxSubdivLevel: 2,
+        gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
         hero: true,
         pom: true,
