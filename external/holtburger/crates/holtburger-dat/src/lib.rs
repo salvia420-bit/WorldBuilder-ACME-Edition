@@ -3,6 +3,7 @@ pub mod boot_reachability;
 pub mod error;
 pub mod file_type;
 pub mod gfx_remodel;
+pub mod height_seam;
 pub mod gfx_subdiv;
 pub mod graphics;
 pub mod landblock;

@@ -1,0 +1,367 @@
+//! Per-texel height from a texture — the "seam" operator.
+//!
+//! This is the signal that drives per-texture 3D amplification: every render
+//! surface in the world gets a height field, and [`crate::gfx_subdiv`]
+//! displaces a subdivided mesh by it. Ported from the operator that won a
+//! 10-way comparison over 46 real architectural textures and 13 ground-truth
+//! groups (`/mnt/wbterminal2/gfx-material-agent/relief_op.py`).
+//!
+//! # Why not the obvious approaches
+//!
+//! Every brightness-based method fails on real AC art, measured:
+//!
+//! | operator | Tudor inversion (0 = none) | row banding (1.0 = none) |
+//! |---|---|---|
+//! | `height_from_luminance` (shipped) | **-0.270** | **1.774** |
+//! | luminance directly | -0.231 | 1.000 |
+//! | 2D Poisson (Frankot-Chellappa) | **-0.248** | 1.000 |
+//! | **seam (this)** | **-0.058** | 1.248 |
+//!
+//! Poisson fixes the row banding and *not* the polarity — integrating ∇L
+//! reconstructs L, so a dark Tudor beam still sinks. That is the trap: on a
+//! half-timbered wall the timber is DARK and the plaster LIGHT, so any
+//! brightness-as-height pushes the beams *into* the wall.
+//!
+//! # The idea
+//!
+//! A joint is a thin **line**, and a thin line recedes whichever way it was
+//! painted. A morphological tophat is invariant on any region wider than its
+//! structuring element, so a broad timber beam, a plaster panel and a black
+//! banner field all contribute *nothing* — only the thin line where two
+//! regions meet carves. That is what makes it immune to the polarity trap
+//! rather than merely resistant to it.
+//!
+//! It is deliberately **sign-agnostic**: retail is not consistent about which
+//! side of a joint is darker. Mortar is darker than the brick in `0x080000DA`
+//! and *lighter* than the stone in `0x08000909`, so a dark-only detector finds
+//! nothing on the second. [`SEAM_WHITE`] weights the bright-line half; 1.0
+//! triples the Tudor penalty (retail paints a specular edge along beams), 0.0
+//! misses light mortar, and 0.5 was the measured knee.
+//!
+//! # Absolute, never per-texture normalised
+//!
+//! Every constant here is global. Min/max or percentile stretching per texture
+//! is what forces a blank stucco wall to use the full height range — the dead
+//! zone below [`GROOVE_MIN`] took the carved fraction on flat textures from
+//! 51% to 4%. Do not "improve" this by normalising.
+
+/// Pre-blur sigma in texels. Kills INDEX16 palette dither before any
+/// derivative is taken; without it the dither itself reads as seams.
+pub const PRE_BLUR: f32 = 0.6;
+
+/// Structuring-element radii, as a fraction of the texture's smaller side, and
+/// their weights. Multi-scale so both a fine mortar line and a broad plank gap
+/// respond.
+pub const GROOVE_FRACS: [f32; 3] = [0.006, 0.012, 0.020];
+pub const GROOVE_WEIGHT: [f32; 3] = [1.0, 0.85, 0.65];
+
+/// Dead zone: seam strength below this carves nothing at all. This is the
+/// single most important constant — it is what stops a flat wall inventing
+/// relief out of its own noise.
+pub const GROOVE_MIN: f32 = 0.05;
+/// Seam strength at which a groove reaches full depth.
+pub const GROOVE_FULL: f32 = 0.25;
+
+/// Weight of the bright-line half relative to the dark-line half.
+pub const SEAM_WHITE: f32 = 0.5;
+
+/// Texels below this alpha are cutout and forced flat — displacing an
+/// alpha-cutout card is meaningless.
+pub const ALPHA_CUT: f32 = 0.5;
+
+/// Wrapped index — textures tile, so the correct boundary everywhere in this
+/// module is periodic, not clamped.
+#[inline]
+fn wrap(i: i32, n: i32) -> usize {
+    (((i % n) + n) % n) as usize
+}
+
+/// Separable Gaussian blur with wrap boundary.
+fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+    if sigma <= 0.0 || w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    let r = (sigma * 3.0).ceil().max(1.0) as i32;
+    let mut k: Vec<f32> = (-r..=r)
+        .map(|d| (-(d * d) as f32 / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let sum: f32 = k.iter().sum();
+    for v in &mut k {
+        *v /= sum;
+    }
+    let (wi, hi) = (w as i32, h as i32);
+    let mut tmp = vec![0.0f32; src.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = 0.0;
+            for (j, kv) in k.iter().enumerate() {
+                acc += kv * src[y as usize * w + wrap(x + j as i32 - r, wi)];
+            }
+            tmp[y as usize * w + x as usize] = acc;
+        }
+    }
+    let mut out = vec![0.0f32; src.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = 0.0;
+            for (j, kv) in k.iter().enumerate() {
+                acc += kv * tmp[wrap(y + j as i32 - r, hi) * w + x as usize];
+            }
+            out[y as usize * w + x as usize] = acc;
+        }
+    }
+    out
+}
+
+/// Grey dilation (`max`) or erosion (`min`) over a `(2r+1)` square, wrapped.
+/// Separable, so cost is O(n·r) rather than O(n·r²).
+fn grey_morph(src: &[f32], w: usize, h: usize, r: i32, dilate: bool) -> Vec<f32> {
+    let (wi, hi) = (w as i32, h as i32);
+    let pick = |a: f32, b: f32| if dilate { a.max(b) } else { a.min(b) };
+    let mut tmp = vec![0.0f32; src.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = src[y as usize * w + x as usize];
+            for d in -r..=r {
+                acc = pick(acc, src[y as usize * w + wrap(x + d, wi)]);
+            }
+            tmp[y as usize * w + x as usize] = acc;
+        }
+    }
+    let mut out = vec![0.0f32; src.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = tmp[y as usize * w + x as usize];
+            for d in -r..=r {
+                acc = pick(acc, tmp[wrap(y + d, hi) * w + x as usize]);
+            }
+            out[y as usize * w + x as usize] = acc;
+        }
+    }
+    out
+}
+
+#[inline]
+fn smoothstep01(x: f32) -> f32 {
+    let t = x.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Height field in `[0, 1]` from RGBA8 texels: **1 = proud face, 0 = the bottom
+/// of a groove**. Displacement is therefore `amplitude * height`, so grooves
+/// are carved by leaving them behind and everything still moves outward only.
+///
+/// Returns an empty `Vec` when the input is malformed or when the texture has
+/// no seams at all, which callers should treat as "leave this surface flat"
+/// rather than as an error — a blank stucco wall genuinely has no relief.
+pub fn seam_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
+    let (wu, hu) = (w as usize, h as usize);
+    let n = wu.saturating_mul(hu);
+    if n == 0 || rgba.len() < n * 4 {
+        return Vec::new();
+    }
+
+    let mut lum = vec![0.0f32; n];
+    let mut alpha = vec![0.0f32; n];
+    for i in 0..n {
+        let r = rgba[i * 4] as f32 / 255.0;
+        let g = rgba[i * 4 + 1] as f32 / 255.0;
+        let b = rgba[i * 4 + 2] as f32 / 255.0;
+        lum[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+        alpha[i] = rgba[i * 4 + 3] as f32 / 255.0;
+    }
+
+    let pre = gaussian_blur(&lum, wu, hu, PRE_BLUR);
+
+    // Multi-scale sign-agnostic thin-line response.
+    let smaller = wu.min(hu) as f32;
+    let mut radii: Vec<(i32, f32)> = Vec::new();
+    for (f, wt) in GROOVE_FRACS.iter().zip(GROOVE_WEIGHT.iter()) {
+        let r = ((f * smaller).round() as i32).max(1);
+        // De-duplicate: on small textures several fractions collapse to r = 1.
+        if !radii.iter().any(|(rr, _)| *rr == r) {
+            radii.push((r, *wt));
+        }
+    }
+
+    let mut strength = vec![0.0f32; n];
+    for (r, wt) in radii {
+        // closing = erosion(dilation), opening = dilation(erosion).
+        let dil = grey_morph(&pre, wu, hu, r, true);
+        let closing = grey_morph(&dil, wu, hu, r, false);
+        let ero = grey_morph(&pre, wu, hu, r, false);
+        let opening = grey_morph(&ero, wu, hu, r, true);
+        for i in 0..n {
+            let dark = closing[i] - pre[i];
+            let bright = pre[i] - opening[i];
+            let s = wt * dark.max(SEAM_WHITE * bright);
+            if s > strength[i] {
+                strength[i] = s;
+            }
+        }
+    }
+
+    let mut out = vec![0.0f32; n];
+    let mut carved = false;
+    let span = (GROOVE_FULL - GROOVE_MIN).max(1e-6);
+    for i in 0..n {
+        let t = smoothstep01((strength[i] - GROOVE_MIN) / span);
+        // Cutout texels are forced flat — never carve an alpha card.
+        out[i] = if alpha[i] < ALPHA_CUT { 1.0 } else { 1.0 - t };
+        if out[i] < 0.999 {
+            carved = true;
+        }
+    }
+    if !carved {
+        return Vec::new(); // genuinely flat — tell the caller to skip it
+    }
+    out
+}
+
+/// Bilinear sample of a height field at a (tiling) UV.
+#[inline]
+pub fn sample_height(field: &[f32], w: u32, h: u32, uv: [f32; 2]) -> f32 {
+    if field.is_empty() || w == 0 || h == 0 {
+        return 1.0;
+    }
+    let (wi, hi) = (w as i32, h as i32);
+    // UVs tile (u > 1 is normal on AC walls), so wrap rather than clamp.
+    let fx = uv[0].fract();
+    let fy = uv[1].fract();
+    let fx = if fx < 0.0 { fx + 1.0 } else { fx };
+    let fy = if fy < 0.0 { fy + 1.0 } else { fy };
+    let x = fx * w as f32 - 0.5;
+    let y = fy * h as f32 - 0.5;
+    let x0 = x.floor();
+    let y0 = y.floor();
+    let tx = x - x0;
+    let ty = y - y0;
+    let (x0, y0) = (x0 as i32, y0 as i32);
+    let g = |xx: i32, yy: i32| field[wrap(yy, hi) * w as usize + wrap(xx, wi)];
+    let a = g(x0, y0) * (1.0 - tx) + g(x0 + 1, y0) * tx;
+    let b = g(x0, y0 + 1) * (1.0 - tx) + g(x0 + 1, y0 + 1) * tx;
+    a * (1.0 - ty) + b * ty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build an RGBA8 texture from a per-texel luminance closure.
+    fn tex(w: u32, h: u32, f: impl Fn(u32, u32) -> f32) -> Vec<u8> {
+        let mut v = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let l = (f(x, y).clamp(0.0, 1.0) * 255.0) as u8;
+                v.extend_from_slice(&[l, l, l, 255]);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn a_flat_texture_carves_nothing() {
+        // The single most important property: a blank wall must not invent
+        // relief out of its own noise. This is what a per-texture min/max
+        // stretch would destroy.
+        let t = tex(64, 64, |_, _| 0.5);
+        assert!(seam_height(&t, 64, 64).is_empty());
+    }
+
+    #[test]
+    fn a_dark_mortar_line_carves() {
+        // Thin dark line on a light field — the ordinary brick case.
+        let t = tex(64, 64, |_, y| if y % 16 == 0 { 0.10 } else { 0.75 });
+        let hf = seam_height(&t, 64, 64);
+        assert!(!hf.is_empty(), "dark mortar produced no relief");
+        let on_line = hf[0 * 64 + 5];
+        let off_line = hf[8 * 64 + 5];
+        assert!(on_line < off_line - 0.2, "line {on_line} vs field {off_line}");
+    }
+
+    #[test]
+    fn a_light_mortar_line_also_carves() {
+        // Retail is NOT consistent: 0x08000909 has mortar LIGHTER than the
+        // stone. A dark-only detector finds nothing here, which is why the
+        // operator is sign-agnostic.
+        let t = tex(64, 64, |_, y| if y % 16 == 0 { 0.90 } else { 0.30 });
+        let hf = seam_height(&t, 64, 64);
+        assert!(!hf.is_empty(), "light mortar produced no relief");
+        let on_line = hf[0 * 64 + 5];
+        let off_line = hf[8 * 64 + 5];
+        assert!(on_line < off_line - 0.1, "line {on_line} vs field {off_line}");
+    }
+
+    #[test]
+    fn a_pure_step_between_broad_regions_carves_nothing() {
+        // Half dark timber, half light plaster, no shadow line. A tophat is
+        // invariant on any region wider than its structuring element, and a
+        // morphological closing PRESERVES a step edge — so a bare step carves
+        // nothing at all. That is the anti-inversion property in its purest
+        // form: brightness-as-height would sink the entire dark half here.
+        let t = tex(64, 64, |x, _| if x < 32 { 0.15 } else { 0.80 });
+        assert!(
+            seam_height(&t, 64, 64).is_empty(),
+            "a bare step edge invented relief"
+        );
+    }
+
+    #[test]
+    fn tudor_joint_carves_without_sinking_the_beam() {
+        // THE Tudor test, realistic: a dark beam on light plaster with the thin
+        // shadow line retail actually paints at the joint. The LINE must carve;
+        // the beam's interior must stay level with the plaster's interior.
+        // The joint is 3 texels wide and darker than BOTH neighbours — a
+        // 1-texel line does not survive the 0.6 px pre-blur, which is itself
+        // why PRE_BLUR exists (it kills INDEX16 palette dither).
+        let joint = |x: u32| (38..41).contains(&x) || (88..91).contains(&x);
+        let t = tex(128, 128, |x, _| {
+            if joint(x) {
+                0.03
+            } else if (41..88).contains(&x) {
+                0.20 // broad dark timber
+            } else {
+                0.80 // broad light plaster
+            }
+        });
+        let hf = seam_height(&t, 128, 128);
+        assert!(!hf.is_empty(), "the joint line produced no relief");
+        let row = 64 * 128;
+        let joint_h = hf[row + 39];
+        let in_timber = hf[row + 64];
+        let in_plaster = hf[row + 10];
+        assert!(joint_h < 0.8, "joint did not carve: {joint_h}");
+        assert!(
+            (in_timber - in_plaster).abs() < 0.1,
+            "POLARITY INVERSION: timber interior {in_timber} vs plaster {in_plaster}"
+        );
+        assert!(in_timber > 0.9, "dark timber interior sank to {in_timber}");
+    }
+
+    #[test]
+    fn cutout_texels_are_forced_flat() {
+        let mut t = tex(32, 32, |_, y| if y % 8 == 0 { 0.1 } else { 0.9 });
+        for i in 0..(32 * 32) {
+            t[i * 4 + 3] = 0; // fully transparent everywhere
+        }
+        let hf = seam_height(&t, 32, 32);
+        assert!(hf.is_empty() || hf.iter().all(|v| *v >= 0.999));
+    }
+
+    #[test]
+    fn malformed_input_is_rejected() {
+        assert!(seam_height(&[], 0, 0).is_empty());
+        assert!(seam_height(&[0u8; 4], 8, 8).is_empty()); // too short
+    }
+
+    #[test]
+    fn sampling_wraps_and_is_bounded() {
+        let hf = vec![0.0f32, 1.0, 0.0, 1.0];
+        for uv in [[0.0, 0.0], [0.9, 0.9], [2.5, -3.25], [-0.1, 7.7]] {
+            let v = sample_height(&hf, 2, 2, uv);
+            assert!((0.0..=1.0).contains(&v), "uv {uv:?} -> {v}");
+        }
+        // Empty field must read as "fully proud", i.e. no displacement change.
+        assert_eq!(sample_height(&[], 2, 2, [0.5, 0.5]), 1.0);
+    }
+}
