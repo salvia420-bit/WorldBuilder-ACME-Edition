@@ -45,7 +45,11 @@ import { getQuality } from "./quality.js";
 
 /** Hard clamps. `subdivLevel` 0 = none, 1 = 4x tris, 2 = 16x tris. */
 export const GFX_SUBDIV_MIN = 0;
-export const GFX_SUBDIV_MAX = 2;
+export // 5 = 32 segments per edge (1,024 tris per source tri). Needed because
+// town buildings have a median source edge of 1.16-2.50 m while brick
+// coursing is ~10-15 cm — below ~16 segments a mortar line cannot exist
+// as geometry at all. The Rust side clamps to the same ceiling.
+const GFX_SUBDIV_MAX = 5;
 export const GFX_RELIEF_SCALE_MIN = 0;
 export const GFX_RELIEF_SCALE_MAX = 2;
 
