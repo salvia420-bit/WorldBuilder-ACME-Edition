@@ -152,5 +152,80 @@ export function attachGeometry(diag) {
       if (!this.lastResult) this.audit();
       return this.lastResult?.summary ?? null;
     },
+
+    /**
+     * `?gfxRelief` — what the geometry-relief gate ACTUALLY resolved to, plus
+     * live evidence that it reached both wasm instances and survived the
+     * statics atlas. A headless session asserts on this rather than on eyes:
+     *
+     *   const r = window.__diag.geometry.relief();
+     *   r.config.enabled === true && r.config.subdivLevel === 1
+     *   r.mainApplied.ok === true             // pkg/ is not stale
+     *   r.workerApplied?.applied["bake-worker"].ok === true   // no split brain
+     *   r.split === false
+     *
+     * `sampleVertexCounts` is the raw before/after signal: with relief ON the
+     * per-mesh vertex counts of atlased statics should be ~4x (level 1) or
+     * ~16x (level 2) the flag-off baseline for the same landblock.
+     */
+    relief() {
+      const cfg =
+        (typeof window !== "undefined" && window.__gfxRelief) || null;
+      const out = {
+        ts: new Date().toISOString(),
+        // Resolved on the MAIN thread by scene3d/gfx_relief.js.
+        config: cfg,
+        // Outcome of `set_gfx_relief` on the MAIN wasm instance. `ok:false` +
+        // `wasmExportPresent:false` = stale pkg/, the feature is a no-op.
+        mainApplied: (cfg && cfg.applied && cfg.applied.main) || null,
+        // The bake worker's OWN echo (it owns a SECOND wasm instance and would
+        // otherwise bake flat invisibly). null until the worker has spawned —
+        // it is lazy, so this stays null on a session that never baked, and
+        // under `?bakeWorker=0` it stays null forever, which is correct.
+        workerApplied:
+          (typeof globalThis !== "undefined" && globalThis.__hbGfxReliefWorkerAck) ||
+          null,
+        split: null,
+        sampleVertexCounts: null,
+      };
+      // Split-brain check: main-thread config vs what the worker ACKed.
+      const wa = out.workerApplied;
+      if (cfg && wa) {
+        out.split =
+          cfg.enabled !== wa.enabled ||
+          cfg.subdivLevel !== wa.subdivLevel ||
+          cfg.scale !== wa.scale;
+      }
+      // Vertex-count census over the statics graph — the load-bearing check
+      // that displaced positions actually reached the GPU buffers (the statics
+      // ATLAS is default-ON and merges into BatchedMesh, so we count both the
+      // plain singletons and the atlas buckets).
+      try {
+        const s3d = typeof window !== "undefined" ? window.liveScene3d : null;
+        const g = s3d && s3d.staticsGroup;
+        if (g) {
+          let meshes = 0;
+          let atlasBuckets = 0;
+          let verts = 0;
+          g.traverse((o) => {
+            if (!o) return;
+            if (o.isBatchedMesh) {
+              atlasBuckets += 1;
+              const ud = o.userData || {};
+              if (Number.isFinite(ud.usedVerts)) verts += ud.usedVerts;
+              return;
+            }
+            if (o.isMesh && o.geometry?.attributes?.position) {
+              meshes += 1;
+              verts += o.geometry.attributes.position.count;
+            }
+          });
+          out.sampleVertexCounts = { meshes, atlasBuckets, verts };
+        }
+      } catch (_) {
+        /* census is advisory */
+      }
+      return out;
+    },
   };
 }

@@ -14,8 +14,9 @@
 //   in : {type:'init', id, manifestUrl, sceneryBaseUrl,
 //              locationSearch, verifyShards?, fetchConcurrency?,
 //              shardBudgetBytes?, decodeAdmission?:{jobs,bytes,reserve},
-//              decodePressure?:{t1MB,t2MB}}
-//        (the last five are the page's host flags — see handleInit)
+//              decodePressure?:{t1MB,t2MB},
+//              gfxRelief?:{enabled,subdivLevel,scale}}
+//        (the last six are the page's host flags — see handleInit)
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
 //        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...], urgent?}
@@ -48,6 +49,7 @@ import init, {
 // stale pkg/; via the namespace the loader bails loudly instead.
 import * as __wasmNs from "../pkg/holtburger_web.js?v=netrev-20260709";
 import { installTextureOverrides } from "./tex_overrides.js";
+import { applyGfxReliefToWasm, GFX_RELIEF_FALLBACK } from "./gfx_relief.js";
 
 import {
   freeWasmHandles,
@@ -134,6 +136,30 @@ async function handleInit(msg) {
   if (typeof seed_url_flag_search === "function") {
     seed_url_flag_search(msg.locationSearch || "");
   }
+  // Geometry relief (`?gfxRelief=on`) — THIS instance's copy. Same ordering
+  // requirement as the main thread's call (index.html, right after `init()`):
+  // the Rust triangulation memo is decode-once per wasm instance, so it MUST
+  // be set before `init_resource_source` / any `fetch_model_meshes`.
+  //
+  // The values come from the MAIN THREAD (`msg.gfxRelief`, resolved once in
+  // `scene3d/gfx_relief.js`) rather than being re-resolved here — a worker has
+  // no GPU probe, so a local `getQuality()` could pick a different tier and
+  // silently give the same model a different subdivision level depending on
+  // which instance baked it. Absent (flag off, or a client that predates the
+  // field) ⇒ explicit OFF, which is also the safe default.
+  //
+  // NOTE threads-lite (`?sharedWasm=on`) is ONE instance — the main thread
+  // already set it there — but re-applying the identical values is a no-op, so
+  // this stays unconditional rather than growing another branch.
+  let gfxReliefAck = null;
+  try {
+    gfxReliefAck = msg.gfxRelief
+      ? { ...msg.gfxRelief }
+      : { ...GFX_RELIEF_FALLBACK, enabled: false, subdivLevel: 0, scale: 0 };
+    applyGfxReliefToWasm(__wasmNs, gfxReliefAck, "bake-worker");
+  } catch (e) {
+    console.warn("[gfxRelief:bake-worker] setup failed (non-fatal, baking FLAT):", e);
+  }
   // `init_resource_source` is async (fetches the manifest) and MUST precede
   // any `fetch_*` call — the wasm panics otherwise.
   await init_resource_source(msg.manifestUrl);
@@ -172,7 +198,10 @@ async function handleInit(msg) {
   } catch (_) {
     /* diagnostics must never fail init */
   }
-  self.postMessage({ type: "ready", id: msg.id });
+  // `gfxRelief` echoes what THIS instance applied (incl. `applied["bake-worker"]
+  // .wasmExportPresent`) so the page can prove the worker did not silently bake
+  // flat — see `__diag.geometry.relief().workerApplied`.
+  self.postMessage({ type: "ready", id: msg.id, gfxRelief: gfxReliefAck });
 }
 
 async function handleModelMeshes(msg) {

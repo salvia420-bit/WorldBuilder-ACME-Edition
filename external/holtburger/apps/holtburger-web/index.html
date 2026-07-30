@@ -2190,6 +2190,29 @@
           console.error("[F18-2] wasm export-manifest check failed:", e);
         }
 
+        // === geometry relief (`?gfxRelief=on`) — MUST land here ===============
+        // Between `init()` and `init_resource_source`/any `fetch_model_meshes`.
+        // The Rust triangulation memo is decode-once per wasm instance, so a
+        // later flip would leave already-decoded models flat. DEFAULT-OFF: with
+        // the flag absent this is one resolve + one `set_gfx_relief(false,0,0)`
+        // and the decode is byte-identical to pre-feature.
+        //
+        // The resolved config is ALSO stashed on `globalThis.__hbGfxRelief` so
+        // `bake_worker_client.js` can ride it through the worker `init` message
+        // — the bake worker owns its OWN wasm instance and would otherwise
+        // re-resolve without a GPU probe and possibly land on a different tier,
+        // giving the same model relief on one thread and flat on the other.
+        try {
+          const gfxReliefMod = await import("./scene3d/gfx_relief.js");
+          const gfxReliefCfg = gfxReliefMod.getGfxRelief();
+          globalThis.__hbGfxRelief = gfxReliefCfg;
+          gfxReliefMod.installGfxReliefOnWindow(gfxReliefCfg);
+          gfxReliefMod.applyGfxReliefToWasm(__hbWasmNs, gfxReliefCfg, "main");
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn("[gfxRelief] setup failed (non-fatal, rendering FLAT):", e);
+        }
+
         // Expose a small surface of named wasm exports under
         // `window.__hbWasm` for plugins that need to call into the
         // dat-fetch graph (vendor-ui needs `fetch_surface_pixels` for

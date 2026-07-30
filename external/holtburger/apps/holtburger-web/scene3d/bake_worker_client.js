@@ -827,6 +827,13 @@ export class BakeWorkerClient {
       // samples its OWN linear memory, so one pair means the same thing on
       // both sides. `undefined` → the worker leaves its globals unset → inert.
       decodePressure: globalThis.__hbDecodePressureWorker,
+      // Geometry relief (`?gfxRelief=on`) — the MAIN THREAD's resolved config,
+      // verbatim. This is deliberately NOT re-resolved worker-side: the worker
+      // has no GPU probe, so `getQuality()` there could pick a different tier
+      // and hand the same model a different subdivision level depending on
+      // which wasm instance happened to bake it. `undefined` (the default,
+      // flag absent) → the worker calls `set_gfx_relief(false, 0, 0)`.
+      gfxRelief: globalThis.__hbGfxRelief,
     });
     return this._readyPromise;
   }
@@ -919,7 +926,15 @@ export class BakeWorkerClient {
       this._inFlightPosted = Math.max(0, this._inFlightPosted - 1);
       this._pump();
     }
-    if (msg.type === "ready") return entry.resolve(true);
+    if (msg.type === "ready") {
+      // `?gfxRelief` ack — the worker echoes what IT applied to its OWN wasm
+      // instance. Without this the diag reader can only see what the page
+      // SENT, and a worker that silently baked flat (stale pkg/ in the worker's
+      // module graph, or an init ordering slip) would be invisible.
+      // `__diag.geometry.relief().workerApplied` reads this.
+      if (msg.gfxRelief) globalThis.__hbGfxReliefWorkerAck = msg.gfxRelief;
+      return entry.resolve(true);
+    }
     if (msg.type === "error") return entry.reject(new Error(msg.message));
     if (msg.type === "result") return entry.resolve(msg);
     entry.reject(new Error("bake worker: unknown reply " + msg.type));
