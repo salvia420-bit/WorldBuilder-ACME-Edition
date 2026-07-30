@@ -63,9 +63,13 @@ namespace DatReaderWriter.Extensions.DBObjs {
         /// <param name="renderSurface"></param>
         /// <param name="imageOutputPath"></param>
         /// <param name="writer"></param>
+        /// <param name="clipMap">
+        /// True when the owning <c>Surface</c> (0x08) has the <c>Base1ClipMap</c> (0x4) type bit;
+        /// see <see cref="ToRgba8"/>. A RenderSurface cannot know this on its own.
+        /// </param>
         /// <returns></returns>
         public static Result<bool, string> SaveToImageFile(this RenderSurface renderSurface, string imageOutputPath,
-            DatEasyWriter writer) {
+            DatEasyWriter writer, bool clipMap = false) {
             Image<Argb32> image;
             if (renderSurface.Format == PixelFormat.PFID_CUSTOM_RAW_JPEG) {
                 using var ms = new MemoryStream(renderSurface.SourceData);
@@ -74,7 +78,7 @@ namespace DatReaderWriter.Extensions.DBObjs {
             else {
                 image = new Image<Argb32>(renderSurface.Width, renderSurface.Height);
 
-                var pixelData = renderSurface.ToRgba8(writer);
+                var pixelData = renderSurface.ToRgba8(writer, clipMap);
 
                 image.ProcessPixelRows(accessor => {
                     int byteIndex = 0;
@@ -103,8 +107,20 @@ namespace DatReaderWriter.Extensions.DBObjs {
         /// </summary>
         /// <param name="renderSurface">The render surface to convert.</param>
         /// <param name="datEasyWriter">Used to resolve palettes for indexed formats.</param>
+        /// <param name="clipMap">
+        /// True when the owning <c>Surface</c> (0x08) carries the <c>Base1ClipMap</c> (0x4) type
+        /// bit. For the palette-indexed formats this reproduces retail
+        /// <c>ImgTex::CopyIntoData</c> (acclient.c:365959 INDEX16, acclient.c:365980 P8): a pixel
+        /// whose palette index is &lt; 8 is the transparent clip range. Retail writes the
+        /// destination DWORD as a literal 0, so RGB is zeroed too — not merely alpha.
+        /// Ignored for every non-palettized format, exactly as retail does
+        /// (<c>ImgTex::Combine</c>, acclient.c:367596, only admits formats 41 and 101).
+        /// A RenderSurface cannot know this: clip-ness lives on the Surface, so the caller
+        /// must supply it. Matches holtburger-dat's Rust <c>Texture::to_rgba8_impl</c>.
+        /// </param>
         /// <returns>A byte array of width * height * 4 bytes in RGBA order, or an empty array on failure.</returns>
-        public static byte[] ToRgba8(this RenderSurface renderSurface, DatEasyWriter datEasyWriter) {
+        public static byte[] ToRgba8(this RenderSurface renderSurface, DatEasyWriter datEasyWriter,
+            bool clipMap = false) {
             int width = renderSurface.Width;
             int height = renderSurface.Height;
             byte[] sourceData = renderSurface.SourceData;
@@ -199,6 +215,13 @@ namespace DatReaderWriter.Extensions.DBObjs {
                     for (int j = 0; j < width; j++) {
                         int srcIdx = i * width + j;
                         int dstIdx = srcIdx * 4;
+                        // Retail ImgTex::CopyIntoData (acclient.c:365980): on a clip-map
+                        // surface, palette index < 8 is the transparent clip range and the
+                        // whole destination DWORD is zeroed.
+                        if (clipMap && sourceData[srcIdx] < 8) {
+                            continue;
+                        }
+
                         var color = palette.Colors[sourceData[srcIdx]];
                         output[dstIdx + 0] = color.Red;
                         output[dstIdx + 1] = color.Green;
@@ -219,7 +242,17 @@ namespace DatReaderWriter.Extensions.DBObjs {
                     for (int j = 0; j < width; j++) {
                         int srcIdx = (i * width + j) * 2;
                         int dstIdx = (i * width + j) * 4;
-                        int palIndex = BitConverter.ToInt16(sourceData, srcIdx);
+                        // Unsigned: retail reads the index as a u16 and compares it
+                        // unsigned (acclient.c:365953-365959). Signed would make a
+                        // high index negative, which silently satisfies "< 8".
+                        int palIndex = BitConverter.ToUInt16(sourceData, srcIdx);
+                        // Retail ImgTex::CopyIntoData (acclient.c:365959): on a clip-map
+                        // surface, palette index < 8 is the transparent clip range and the
+                        // whole destination DWORD is zeroed.
+                        if (clipMap && palIndex < 8) {
+                            continue;
+                        }
+
                         var color = palette.Colors[palIndex];
                         output[dstIdx + 0] = color.Red;
                         output[dstIdx + 1] = color.Green;

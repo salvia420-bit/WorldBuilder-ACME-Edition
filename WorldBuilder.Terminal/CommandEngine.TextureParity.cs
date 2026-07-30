@@ -428,6 +428,7 @@ public partial class CommandEngine {
         int decodedWidth = rs.Width, decodedHeight = rs.Height;
         try {
             rgba = DecodeRenderSurfaceToRgba8(rs, dat, paletteCache, paletteType,
+                clipMap: (surface.Type & DRW.Enums.SurfaceType.Base1ClipMap) != 0,
                 out paletteIdUsed, out chainKind,
                 out decodedWidth, out decodedHeight);
         } catch (Exception ex) {
@@ -528,6 +529,7 @@ public partial class CommandEngine {
     private static byte[] DecodeRenderSurfaceToRgba8(
         DRW.DBObjs.RenderSurface rs, DRW.DatDatabase dat,
         Dictionary<uint, DRW.DBObjs.Palette> paletteCache, Type paletteType,
+        bool clipMap,
         out uint? paletteIdUsed, out string chainKind,
         out int decodedWidth, out int decodedHeight) {
         int width = rs.Width;
@@ -610,6 +612,8 @@ public partial class CommandEngine {
                 for (int x = 0; x < width; x++) {
                     int s = y * width + x;
                     int d = s * 4;
+                    // Retail ImgTex::CopyIntoData (acclient.c:365980) — clip range.
+                    if (clipMap && src[s] < 8) continue;
                     var c = pal.Colors[src[s]];
                     outp[d + 0] = c.Red;
                     outp[d + 1] = c.Green;
@@ -628,6 +632,8 @@ public partial class CommandEngine {
                     int d = (y * width + x) * 4;
                     int palIndex = BinaryPrimitives.ReadUInt16LittleEndian(
                         src.AsSpan(s, 2));
+                    // Retail ImgTex::CopyIntoData (acclient.c:365959) — clip range.
+                    if (clipMap && palIndex < 8) continue;
                     var c = pal.Colors[palIndex];
                     outp[d + 0] = c.Red;
                     outp[d + 1] = c.Green;

@@ -2813,6 +2813,33 @@ public partial class CommandEngine {
         // Open a separate read-write DatEasyWriter for palette resolution during export
         using var writer = new DatReaderWriter.Extensions.DatEasyWriter(datDir);
 
+        // Retail applies the index-<8 transparent clip range only to RenderSurfaces whose
+        // owning Surface (0x08) carries Base1ClipMap (0x4): CSurface::SetTextureAndPalette
+        // (acclient.c:357833) passes (type >> 2) & 1 into ImgTex::CreateCombinedTexture.
+        // Clip-ness is NOT recorded on the RenderSurface, so resolve the ownership map up
+        // front: Surface(0x08).OrigTextureId -> SurfaceTexture(0x05).Textures[] -> 0x06.
+        // Every entry in Textures[] counts — they are resolution variants of the same
+        // clip-map art, picked at runtime by ImgTex::fClipmapTextureScale.
+        //
+        // 89 RenderSurfaces are owned by BOTH a clip-map and an image Surface, and one PNG
+        // cannot represent both readings. "Any owner is a clip-map" wins: a clip-map
+        // consumer handed an opaque texture draws a solid box, whereas an image consumer
+        // handed a clipped one loses only the pixels mapping to palette colour 0, which is
+        // normally the reserved key colour. Retail is itself ambiguous here — its
+        // texture_table key is __PAIR__(textureDID, paletteDID) with no clip-map bit
+        // (acclient.c:367712), so whichever surface loads first wins.
+        var clipMapRenderSurfaces = new HashSet<uint>();
+        foreach (var sEntry in writer.Dats.Portal.Tree) {
+            if ((sEntry.Id & 0xFF000000u) != 0x08000000u) continue;
+            if (!writer.Dats.TryGet<DatReaderWriter.DBObjs.Surface>(sEntry.Id, out var surf)) continue;
+            if ((surf.Type & DatReaderWriter.Enums.SurfaceType.Base1ClipMap) == 0) continue;
+            if (surf.OrigTextureId == 0) continue;
+            if (!writer.Dats.TryGet<DatReaderWriter.DBObjs.SurfaceTexture>(
+                    surf.OrigTextureId, out var st)) continue;
+            if (st.Textures == null) continue;
+            foreach (var rsId in st.Textures) clipMapRenderSurfaces.Add(rsId);
+        }
+
         // Iterate Portal tree for RenderSurface entries
         foreach (var entry in writer.Dats.Portal.Tree) {
             if (entry.Id < rangeMin || entry.Id > rangeMax) continue;
@@ -2820,7 +2847,8 @@ public partial class CommandEngine {
             try {
                 if (writer.Dats.TryGet<DatReaderWriter.DBObjs.RenderSurface>(entry.Id, out var rs)) {
                     var outPath = Path.Combine(outputDirectory, $"0x{entry.Id:X8}.png");
-                    var result = rs.SaveToImageFile(outPath, writer);
+                    var result = rs.SaveToImageFile(outPath, writer,
+                        clipMap: clipMapRenderSurfaces.Contains(entry.Id));
                     if (result.Success) exported++;
                     else { failed++; errors.Add($"0x{entry.Id:X8}: {result.Error}"); }
                 }
@@ -2837,7 +2865,8 @@ public partial class CommandEngine {
             try {
                 if (writer.Dats.HighRes.TryGet<DatReaderWriter.DBObjs.RenderSurface>(entry.Id, out var rs)) {
                     var outPath = Path.Combine(outputDirectory, $"0x{entry.Id:X8}_hires.png");
-                    var result = rs.SaveToImageFile(outPath, writer);
+                    var result = rs.SaveToImageFile(outPath, writer,
+                        clipMap: clipMapRenderSurfaces.Contains(entry.Id));
                     if (result.Success) exported++;
                     else { failed++; errors.Add($"0x{entry.Id:X8}_hires: {result.Error}"); }
                 }
