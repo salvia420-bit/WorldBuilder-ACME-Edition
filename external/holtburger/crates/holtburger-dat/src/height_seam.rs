@@ -60,7 +60,12 @@ pub const GROOVE_WEIGHT: [f32; 3] = [1.0, 0.85, 0.65];
 /// relief out of its own noise.
 pub const GROOVE_MIN: f32 = 0.05;
 /// Seam strength at which a groove reaches full depth.
-pub const GROOVE_FULL: f32 = 0.25;
+///
+/// 0.25 until 2026-07-30, which was tuned for a POM height map where parallax
+/// exaggerates. Driving real geometry it was far too conservative: a typical
+/// mortar line only reached h~0.93, so mean realised depth over 25 real town
+/// surfaces was 6.7% of amplitude. 0.12 takes that to 18.6%.
+pub const GROOVE_FULL: f32 = 0.12;
 
 /// Weight of the bright-line half relative to the dark-line half.
 pub const SEAM_WHITE: f32 = 0.5;
@@ -218,6 +223,45 @@ pub fn seam_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
     out
 }
 
+/// Tangent-space normal map derived from a seam height field, as RGB8 with the
+/// usual `n * 0.5 + 0.5` encoding.
+///
+/// This replaces deriving the normal from raw luminance, which is the same
+/// polarity trap as the height: a dark Tudor beam produces a normal that tilts
+/// as though the beam were a trench. Deriving from the seam field instead means
+/// the normal agrees with the geometry by construction, and broad regions
+/// (which the tophat leaves flat) get a flat normal rather than a spurious one.
+///
+/// `strength` scales the gradient; 1.0 is neutral.
+pub fn seam_normal_rgb8(height: &[f32], w: u32, h: u32, strength: f32) -> Vec<u8> {
+    let (wu, hu) = (w as usize, h as usize);
+    let n = wu.saturating_mul(hu);
+    if n == 0 || height.len() < n {
+        return Vec::new();
+    }
+    let (wi, hi) = (w as i32, h as i32);
+    let at = |x: i32, y: i32| height[wrap(y, hi) * wu + wrap(x, wi)];
+    let mut out = vec![0u8; n * 3];
+    for y in 0..hi {
+        for x in 0..wi {
+            // Central differences, wrapped — textures tile.
+            let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5 * strength;
+            let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5 * strength;
+            // Height is in [0,1] over a texel grid; scale so a full-depth
+            // groove over one texel reads as a steep wall rather than a ripple.
+            let sx = -dx * (wu as f32).min(512.0) * 0.05;
+            let sy = -dy * (hu as f32).min(512.0) * 0.05;
+            let inv = 1.0 / (sx * sx + sy * sy + 1.0).sqrt();
+            let (nx, ny, nz) = (sx * inv, sy * inv, inv);
+            let i = (y as usize * wu + x as usize) * 3;
+            out[i] = ((nx * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+            out[i + 1] = ((ny * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+            out[i + 2] = ((nz * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
 /// Bilinear sample of a height field at a (tiling) UV.
 #[inline]
 pub fn sample_height(field: &[f32], w: u32, h: u32, uv: [f32; 2]) -> f32 {
@@ -352,6 +396,29 @@ mod tests {
     fn malformed_input_is_rejected() {
         assert!(seam_height(&[], 0, 0).is_empty());
         assert!(seam_height(&[0u8; 4], 8, 8).is_empty()); // too short
+    }
+
+    #[test]
+    fn seam_normal_is_flat_where_the_height_is_flat_and_tilts_at_a_groove() {
+        // A flat height field must give the neutral normal (128,128,255) — a
+        // broad Tudor beam must NOT tilt, which is exactly what deriving the
+        // normal from raw luminance got wrong.
+        let flat = vec![1.0f32; 32 * 32];
+        let nf = seam_normal_rgb8(&flat, 32, 32, 1.0);
+        assert_eq!(nf.len(), 32 * 32 * 3);
+        for px in nf.chunks(3) {
+            assert!((px[0] as i32 - 128).abs() <= 1, "flat tilted in x: {px:?}");
+            assert!((px[1] as i32 - 128).abs() <= 1, "flat tilted in y: {px:?}");
+            assert!(px[2] > 250, "flat normal not facing out: {px:?}");
+        }
+        // A vertical groove must tilt the normal in x somewhere.
+        let mut g = vec![1.0f32; 32 * 32];
+        for y in 0..32 {
+            g[y * 32 + 16] = 0.0;
+        }
+        let ng = seam_normal_rgb8(&g, 32, 32, 1.0);
+        let tilted = ng.chunks(3).any(|px| (px[0] as i32 - 128).abs() > 20);
+        assert!(tilted, "a groove produced no normal tilt");
     }
 
     #[test]

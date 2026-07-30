@@ -213,7 +213,7 @@ pub(crate) fn gfx_relief_config() -> Option<ReliefCfg> {
         // Grooves this deep on a wall are already pronounced; the ceiling is
         // shared with the rails so "render protrudes past the unmoved collision
         // hull by at most X" stays one number.
-        amplitude_m: (0.05 * scale).clamp(0.0, holtburger_dat::gfx_subdiv::MAX_AMPLITUDE_M),
+        amplitude_m: (0.10 * scale).clamp(0.0, holtburger_dat::gfx_subdiv::MAX_AMPLITUDE_M),
     })
 }
 
@@ -6268,6 +6268,16 @@ fn append_gfx_tris_with_tex_swaps(
                         // always an original polygon boundary. Pinning the
                         // others would stamp a ridge down every quad.
                         boundary: [i == 2, true, i == ring_pos.len() - 1],
+                        // Longest edge, so the boundary fade is a fixed few
+                        // centimetres in world space rather than a third of
+                        // whatever size this triangle happens to be.
+                        edge_len_m: {
+                            let d = |p: [f32; 3], q: [f32; 3]| {
+                                let v = [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+                                (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+                            };
+                            d(a, b).max(d(b, c)).max(d(c, a))
+                        },
                     };
                     subdivide_displaced_triangle_sampled(
                         [a, b, c],
@@ -11279,6 +11289,33 @@ static NORMAL_HEIGHT_SCRATCH: std::sync::LazyLock<holtburger_dat::ScratchPool> =
 /// `height_pixels`, which is how the JS material decoder knows to skip POM
 /// on that surface. Malformed input yields both empty.
 fn normal_and_height_pixels(pixels: &[u8], w: u32, h: u32) -> (Vec<u8>, Vec<u8>) {
+    // Derive BOTH from the seam field rather than from raw luminance.
+    //
+    // This one function is the choke point for the singleton `normalMap`, the
+    // statics atlas `nra` R,G channels and POM's height, so it decides what
+    // every lit static looks like at every quality tier.
+    //
+    // `normal_and_height_from_luminance` scored worst of ten operators on real
+    // art: it integrates each row independently (row banding 1.774) and it
+    // inverts on half-timber (-0.270), because on a Tudor wall the timber is
+    // DARK and the plaster LIGHT, so brightness-as-height tilts the normal as
+    // though the beam were a trench. `seam_height` is invariant on any region
+    // broader than its kernel, so beams and plaster panels stay flat and only
+    // the joint between them carves — and the normal then AGREES with the
+    // displaced geometry instead of contradicting it.
+    let hf = holtburger_dat::height_seam::seam_height(pixels, w, h);
+    if !hf.is_empty() {
+        let normal_pixels = holtburger_dat::height_seam::seam_normal_rgb8(&hf, w, h, 1.0);
+        if !normal_pixels.is_empty() {
+            let height_pixels: Vec<u8> = hf
+                .iter()
+                .map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8)
+                .collect();
+            return (normal_pixels, height_pixels);
+        }
+    }
+    // Genuinely flat surface (no seams at all) — fall back so callers still get
+    // a well-formed flat normal map rather than an empty one.
     let mut normal_pixels = Vec::new();
     let mut height_pixels = Vec::new();
     let mut lease = NORMAL_HEIGHT_SCRATCH.lease();

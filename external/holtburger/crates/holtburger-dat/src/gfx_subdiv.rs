@@ -71,6 +71,12 @@ use crate::graphics::Polygon;
 /// unmoved collision hull.
 pub const MAX_AMPLITUDE_M: f32 = 0.10;
 
+/// Width of the crack-safety fade at an original polygon boundary, metres.
+///
+/// Only wide enough to hide the seam where the neighbouring polygon samples
+/// the height field at a different uv. Everything beyond it gets full relief.
+pub const BOUNDARY_RAMP_M: f32 = 0.03;
+
 /// `Polygon::stippling` bit meaning "no positive side" — the polygon is not
 /// rendered front-facing. Mirrors the triangulators in `lib.rs`.
 const NO_POS: u8 = 0x04;
@@ -286,6 +292,9 @@ fn smoothstep01(x: f32) -> f32 {
 pub struct ReliefSampler<'a> {
     pub height: &'a dyn Fn([f32; 2]) -> f32,
     pub boundary: [bool; 3],
+    /// Longest edge of this triangle, metres. Converts the boundary fade from
+    /// a barycentric fraction into a fixed world-space width.
+    pub edge_len_m: f32,
 }
 
 pub fn subdivide_displaced_triangle<F>(
@@ -378,7 +387,22 @@ pub fn subdivide_displaced_triangle_sampled<F>(
                     if s.boundary[2] {
                         d = d.min(w1);
                     }
-                    let inner = smoothstep01(d * 3.0);
+                    // World-space ramp, not a barycentric fraction.
+                    //
+                    // `smoothstep01(d * 3.0)` fades over a THIRD of the
+                    // triangle in barycentric space, which on a 1.16-2.50 m
+                    // wall quad is a 40-80 cm dead band around every polygon
+                    // edge. Measured: mean `inner` over a fan-triangulated quad
+                    // was 0.467 and only 13.9% of its area reached full relief.
+                    // The fade exists to pin shared edges (the neighbouring
+                    // polygon samples a different uv and would tear), and that
+                    // needs a few centimetres, not a third of a wall.
+                    let ramp = if s.edge_len_m > 1e-6 {
+                        (s.edge_len_m / BOUNDARY_RAMP_M).max(3.0)
+                    } else {
+                        3.0
+                    };
+                    let inner = smoothstep01(d * ramp);
                     let h = (s.height)([t[0], t[1]]).clamp(0.0, 1.0);
                     welded * (1.0 - inner) + face_amp * h * inner
                 }
@@ -402,18 +426,71 @@ pub fn subdivide_displaced_triangle_sampled<F>(
         }
     }
 
+    // Emit with a normal derived from the DISPLACED positions.
+    //
+    // This is the whole feature. A `MeshStandardMaterial` fragment's radiance
+    // is a function of (normal, albedo, uv, light) — `position` enters only via
+    // silhouette, shadow map and aerial perspective. So emitting the
+    // interpolated AUTHORED normal, as this function did until 2026-07-30,
+    // makes displacement a BIT-EXACT NO-OP on the lit image: measured RMS
+    // against a flat wall was 0.00000 on brick, stone and timber, at every
+    // depth and every subdivision level. 91 million displaced vertices looked
+    // exactly like the flat wall they came from.
+    //
+    // The `gfx_remodel` rails read as convincingly 3D from four triangles for
+    // precisely this reason — they emit a fresh facet normal.
+    //
+    // The blend keeps AC's authored corner smoothing (which is real: AC
+    // smoothed vertex normals even on boxes) and adds only the relief delta,
+    // so a displaced wall does not turn into a faceted mess where it used to
+    // be smooth. `n_plane` is the un-displaced facet normal, so
+    // `n_geom - n_plane` is exactly what the displacement did.
+    let plane_n = norm3(cross(sub3(pos[1], pos[0]), sub3(pos[2], pos[0])));
+    let mut emit_tri = |ia: usize, ib: usize, ic: usize| {
+        let geo = norm3(cross(sub3(gp[ib], gp[ia]), sub3(gp[ic], gp[ia])));
+        let nrm = match (geo, plane_n) {
+            (Some(g), Some(pn)) => {
+                let d = [g[0] - pn[0], g[1] - pn[1], g[2] - pn[2]];
+                let blended = [gn[ia][0] + d[0], gn[ia][1] + d[1], gn[ia][2] + d[2]];
+                norm3(blended).unwrap_or(g)
+            }
+            // Degenerate sub-triangle (zero area): keep the interpolated
+            // authored normal rather than emit a garbage direction.
+            _ => gn[ia],
+        };
+        emit(
+            [gp[ia], gp[ib], gp[ic]],
+            [gu[ia], gu[ib], gu[ic]],
+            [nrm, nrm, nrm],
+        );
+    };
+
     for i in 0..n {
         for j in 0..(n - i) {
             let a = idx(i, j);
             let b = idx(i + 1, j);
             let c = idx(i, j + 1);
-            emit([gp[a], gp[b], gp[c]], [gu[a], gu[b], gu[c]], [gn[a], gn[b], gn[c]]);
+            emit_tri(a, b, c);
             if i + j + 1 < n {
                 let d = idx(i + 1, j + 1);
-                emit([gp[b], gp[d], gp[c]], [gu[b], gu[d], gu[c]], [gn[b], gn[d], gn[c]]);
+                emit_tri(b, d, c);
             }
         }
     }
+}
+
+#[inline]
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+#[inline]
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 #[cfg(test)]
@@ -586,7 +663,7 @@ mod tests {
         face_amp: f32,
     ) -> Vec<([f32; 3], [f32; 2])> {
         let mut out = vec![];
-        let s = ReliefSampler { height, boundary };
+        let s = ReliefSampler { height, boundary, edge_len_m: 1.0 };
         subdivide_displaced_triangle_sampled(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
@@ -602,6 +679,69 @@ mod tests {
             },
         );
         out
+    }
+
+    #[test]
+    fn displacement_changes_the_emitted_normal() {
+        // THE regression test. Until 2026-07-30 this function emitted the
+        // interpolated AUTHORED normal, so displacement was a bit-exact no-op
+        // on the lit image — a MeshStandardMaterial shades from the normal and
+        // `position` only reaches the picture via silhouette and shadows.
+        // Measured RMS against a flat wall was 0.00000 at every depth and
+        // every subdivision level: 91 million displaced vertices looked
+        // identical to the flat wall they came from.
+        let flat_n = [0.0f32, 0.0, 1.0];
+        let mut normals = vec![];
+        let s = ReliefSampler {
+            // A ramp across the triangle — a real height field, not a constant.
+            height: &|uv: [f32; 2]| uv[0].clamp(0.0, 1.0),
+            boundary: [false; 3],
+            edge_len_m: 1.0,
+        };
+        subdivide_displaced_triangle_sampled(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [flat_n; 3],
+            [0.05; 3],
+            0.05,
+            ReliefConfig { level: 3, scale: 1.0 },
+            Some(&s),
+            &mut |_p, _u, n| normals.push(n[0]),
+        );
+        assert!(!normals.is_empty());
+        // At least some emitted normal must have tilted away from the plane.
+        let worst_tilt = normals
+            .iter()
+            .map(|n| 1.0 - (n[0] * flat_n[0] + n[1] * flat_n[1] + n[2] * flat_n[2]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst_tilt > 1e-3,
+            "every emitted normal is still the authored plane normal — \
+             displacement would be invisible (max tilt {worst_tilt})"
+        );
+    }
+
+    #[test]
+    fn a_constant_height_field_keeps_the_authored_normal() {
+        // The other half: a uniform offset moves the wall out but does not
+        // change its shape, so shading must NOT change. This is what keeps a
+        // flat surface from turning into a faceted mess.
+        let flat_n = [0.0f32, 0.0, 1.0];
+        let mut normals = vec![];
+        let s = ReliefSampler { height: &|_| 1.0, boundary: [false; 3], edge_len_m: 1.0 };
+        subdivide_displaced_triangle_sampled(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [flat_n; 3],
+            [0.05; 3],
+            0.05,
+            ReliefConfig { level: 2, scale: 1.0 },
+            Some(&s),
+            &mut |_p, _u, n| normals.push(n[0]),
+        );
+        for n in &normals {
+            assert!((n[2].abs() - 1.0).abs() < 1e-3, "uniform offset tilted a normal: {n:?}");
+        }
     }
 
     #[test]
