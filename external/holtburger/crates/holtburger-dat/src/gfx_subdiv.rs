@@ -75,10 +75,27 @@ pub const MAX_AMPLITUDE_M: f32 = 0.10;
 /// rendered front-facing. Mirrors the triangulators in `lib.rs`.
 const NO_POS: u8 = 0x04;
 
-/// `Polygon::sides_type` value for a two-sided polygon. These are alpha cards
-/// (banners, foliage, fences); displacing them thickens a zero-thickness sheet
-/// and makes its two faces disagree.
-const SIDES_TWO_SIDED: i32 = 0x2;
+/// `Polygon::sides_type` == `CullMode::None` — the real TWO-SIDED marker.
+///
+/// These are alpha cards (banners, foliage, fences): displacing them thickens
+/// a zero-thickness sheet and makes its two faces disagree.
+///
+/// This was `0x2` until 2026-07-30, which was wrong and near-inert. Retail
+/// culls on `sides_type == 1 ? CULLMODE_NONE : CULLMODE_CW`
+/// (acclient `D3DPolyRender` @455346, mirrored at `Tri::sides_type` in
+/// `apps/holtburger-web/src/lib.rs` and at `adapter.js` `dbl = sidesTypes[t] === 1`).
+/// Measured over every GfxObj polygon in `client_portal.dat`:
+/// `Landblock(0x0)` 334,021 · **`None(0x1)` 65,508** · `Clockwise(0x2)` **1**.
+/// So the old constant excluded a single polygon in the entire dat and let
+/// every real alpha card through.
+const SIDES_CULL_NONE: i32 = 0x1;
+
+/// `Polygon::sides_type` == `CullMode::Clockwise` — the polygon's back face is
+/// drawn with its own DIFFERENT surface (`neg_surface`, and `neg_uv_indices` is
+/// populated only for this value). Also excluded: the front and back tris are
+/// emitted from the same source vertices with opposed normals, so an
+/// outward-only displacement would push them apart and split the sheet.
+const SIDES_DISTINCT_BACK: i32 = 0x2;
 
 /// How finely to subdivide, and how hard to push.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -161,7 +178,8 @@ pub fn weld_vertex_amplitudes(
         }
 
         let excluded = (poly.stippling & NO_POS) != 0
-            || poly.sides_type == SIDES_TWO_SIDED
+            || poly.sides_type == SIDES_CULL_NONE
+            || poly.sides_type == SIDES_DISTINCT_BACK
             || portals.contains(&pid);
 
         if excluded {
@@ -440,7 +458,7 @@ mod tests {
     fn excluded_polygons_pin_their_vertices_to_zero() {
         // A two-sided banner and a clipmap card must not move, and must also
         // stop any wall vertex they share from moving.
-        for (sides, stipple) in [(SIDES_TWO_SIDED, 0u8), (0, NO_POS)] {
+        for (sides, stipple) in [(SIDES_CULL_NONE, 0u8), (SIDES_DISTINCT_BACK, 0u8), (0, NO_POS)] {
             let mut polys = HashMap::new();
             polys.insert(0, poly(vec![0, 1, 2], 0, 0, 0)); // timber wall
             polys.insert(1, poly(vec![2, 3, 4], 0, sides, stipple)); // excluded
