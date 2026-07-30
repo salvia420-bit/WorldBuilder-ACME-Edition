@@ -245,6 +245,30 @@ fn smoothstep01(x: f32) -> f32 {
 /// winding as the input. Normals are the interpolated *authored* normals — the
 /// displaced surface is shaded as the original smooth surface, which is correct
 /// for small amplitudes and avoids a normal recompute the JS side does not do.
+/// Per-texel relief for one triangle.
+///
+/// `height` maps a UV to `[0, 1]`, where **1 is a proud face and 0 is the
+/// bottom of a groove**. Displacement becomes `face_amp * height(uv)`, so
+/// everything still moves outward only and grooves are carved by leaving them
+/// behind rather than by pushing inward.
+///
+/// `boundary` marks which of the triangle's three edges — `(0,1)`, `(1,2)`,
+/// `(2,0)` — lie on an original polygon boundary rather than being an interior
+/// fan diagonal.
+///
+/// That distinction is load-bearing. AC carries per-face UVs, so the polygon on
+/// the other side of a boundary edge samples the height field at a *different*
+/// UV and would displace the shared edge differently — a slit. So height
+/// modulation fades to the welded corner amplitude as a boundary edge is
+/// approached, which pins shared edges to a value both polygons agree on. Fan
+/// diagonals are interior to one polygon and share UVs, so they keep full
+/// relief; suppressing those instead would stamp a visible ridge down the
+/// middle of every quad.
+pub struct ReliefSampler<'a> {
+    pub height: &'a dyn Fn([f32; 2]) -> f32,
+    pub boundary: [bool; 3],
+}
+
 pub fn subdivide_displaced_triangle<F>(
     pos: [[f32; 3]; 3],
     uv: [[f32; 2]; 3],
@@ -256,10 +280,26 @@ pub fn subdivide_displaced_triangle<F>(
 ) where
     F: FnMut([[f32; 3]; 3], [[f32; 2]; 3], [[f32; 3]; 3]),
 {
+    subdivide_displaced_triangle_sampled(pos, uv, nrm, corner_amp, face_amp, cfg, None, emit)
+}
+
+/// [`subdivide_displaced_triangle`] with an optional per-texel height field.
+pub fn subdivide_displaced_triangle_sampled<F>(
+    pos: [[f32; 3]; 3],
+    uv: [[f32; 2]; 3],
+    nrm: [[f32; 3]; 3],
+    corner_amp: [f32; 3],
+    face_amp: f32,
+    cfg: ReliefConfig,
+    sampler: Option<&ReliefSampler<'_>>,
+    emit: &mut F,
+) where
+    F: FnMut([[f32; 3]; 3], [[f32; 2]; 3], [[f32; 3]; 3]),
+{
     let n = cfg.segments();
 
     // Fast path: nothing to subdivide and nothing to move.
-    if n == 1 && corner_amp == [0.0; 3] {
+    if n == 1 && corner_amp == [0.0; 3] && (sampler.is_none() || face_amp <= 0.0) {
         emit(pos, uv, nrm);
         return;
     }
@@ -293,12 +333,37 @@ pub fn subdivide_displaced_triangle<F>(
                 nrm[0][2] * w0 + nrm[1][2] * w1 + nrm[2][2] * w2,
             ];
 
-            // Blend toward this face's own amplitude away from the edges. `edge`
-            // is 0 on any edge (so corners and edge midpoints keep the welded
-            // value and stay crack-free) and 1 at the centroid.
             let welded = corner_amp[0] * w0 + corner_amp[1] * w1 + corner_amp[2] * w2;
-            let edge = smoothstep01(w0.min(w1).min(w2) * 3.0);
-            let amp = welded * (1.0 - edge) + face_amp * edge;
+            let amp = match sampler {
+                None => {
+                    // Per-material relief: blend toward this face's own
+                    // amplitude away from the edges. `edge` is 0 on any edge
+                    // (corners keep the welded value and stay crack-free) and
+                    // 1 at the centroid.
+                    let edge = smoothstep01(w0.min(w1).min(w2) * 3.0);
+                    welded * (1.0 - edge) + face_amp * edge
+                }
+                Some(s) => {
+                    // Per-texel relief. Fade to the welded amplitude only as an
+                    // ORIGINAL POLYGON boundary is approached — the barycentric
+                    // coordinate opposite an edge is zero on it, so edge (0,1)
+                    // is gated by w2, (1,2) by w0, and (2,0) by w1. Interior fan
+                    // diagonals are not boundaries and keep full relief.
+                    let mut d = 1.0f32;
+                    if s.boundary[0] {
+                        d = d.min(w2);
+                    }
+                    if s.boundary[1] {
+                        d = d.min(w0);
+                    }
+                    if s.boundary[2] {
+                        d = d.min(w1);
+                    }
+                    let inner = smoothstep01(d * 3.0);
+                    let h = (s.height)([t[0], t[1]]).clamp(0.0, 1.0);
+                    welded * (1.0 - inner) + face_amp * h * inner
+                }
+            };
 
             let p = match norm3(nv) {
                 // No authored normal to push along → leave the vertex where it
@@ -492,6 +557,78 @@ mod tests {
             &mut |q, _, _| out.push(q),
         );
         assert_eq!(out[0], p, "displaced along a degenerate normal");
+    }
+
+    /// Collect every emitted vertex as (position, uv).
+    fn run_sampled(
+        boundary: [bool; 3],
+        height: &dyn Fn([f32; 2]) -> f32,
+        corner_amp: [f32; 3],
+        face_amp: f32,
+    ) -> Vec<([f32; 3], [f32; 2])> {
+        let mut out = vec![];
+        let s = ReliefSampler { height, boundary };
+        subdivide_displaced_triangle_sampled(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [[0.0, 0.0, 1.0]; 3],
+            corner_amp,
+            face_amp,
+            ReliefConfig { level: 2, scale: 1.0 },
+            Some(&s),
+            &mut |p, u, _| {
+                for k in 0..3 {
+                    out.push((p[k], u[k]));
+                }
+            },
+        );
+        out
+    }
+
+    #[test]
+    fn per_texel_relief_carves_grooves_outward_only() {
+        // Height 1 = proud face, 0 = groove bottom. Nothing may move inward.
+        let pts = run_sampled([false; 3], &|uv| if uv[0] < 0.5 { 1.0 } else { 0.0 }, [0.05; 3], 0.05);
+        let zs: Vec<f32> = pts.iter().map(|(p, _)| p[2]).collect();
+        let hi = zs.iter().cloned().fold(f32::MIN, f32::max);
+        let lo = zs.iter().cloned().fold(f32::MAX, f32::min);
+        assert!((hi - 0.05).abs() < 1e-6, "proud face should reach face_amp, got {hi}");
+        assert!(lo >= -1e-6, "groove displaced INWARD: {lo}");
+    }
+
+    #[test]
+    fn boundary_edges_ignore_the_height_field() {
+        // The polygon across a boundary edge samples a DIFFERENT uv, so the
+        // shared edge must land on the welded amplitude regardless of height
+        // or a slit opens. Edge (1,2) is the hypotenuse; it is gated by w0.
+        let pts = run_sampled([false, true, false], &|_| 0.0, [0.04; 3], 0.04);
+        for (p, uv) in &pts {
+            // On edge (1,2), u + v == 1.
+            if (uv[0] + uv[1] - 1.0).abs() < 1e-6 {
+                assert!(
+                    (p[2] - 0.04).abs() < 1e-6,
+                    "boundary vertex at {uv:?} followed the height field: {p:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interior_diagonals_keep_full_relief() {
+        // Same geometry, but the hypotenuse is now an interior fan diagonal.
+        // It must NOT be pinned — otherwise every quad grows a ridge down its
+        // middle where the two fan triangles meet.
+        let pts = run_sampled([false; 3], &|_| 0.0, [0.04; 3], 0.04);
+        let on_diag: Vec<f32> = pts
+            .iter()
+            .filter(|(_, uv)| (uv[0] + uv[1] - 1.0).abs() < 1e-6)
+            .map(|(p, _)| p[2])
+            .collect();
+        assert!(!on_diag.is_empty());
+        assert!(
+            on_diag.iter().all(|z| *z < 0.04 - 1e-6),
+            "interior diagonal was pinned to the welded amplitude: {on_diag:?}"
+        );
     }
 
     #[test]
