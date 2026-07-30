@@ -39,15 +39,20 @@ export const PRESETS = {
         // OFF on `low` for integrated/mobile/swiftshader perf-worker GPUs.
         anisotropy: 1,
         subdivLevel: 1,
-        // Geometry relief (gfx_subdiv.rs) — see docs/url-flags.md `gfxRelief`.
-        // `gfxRelief` is the MASTER opt-in and stays FALSE on every tier until
-        // the 1070 eye-test; the two numbers below are the ladder it will use
-        // when it flips. The decisive URL reader is scene3d/gfx_relief.js
-        // (STRICT `=== "on"`); `gfxRelief` is deliberately NOT in BOOL_FLAGS,
-        // because parseBool would also accept "1"/"true"/"yes" and widen an
-        // opt-in that the docs say must be exact-match.
-        // `low`: relief off entirely — the subdivided vertices are paid in
-        // full by the shadow depth pass, which is the vertex-bound one.
+        // Geometry relief (gfx_remodel.rs OP1 — texture-blind convex-edge
+        // rails) — see docs/url-flags.md `gfxRelief`.
+        // DEFAULT-ON since 2026-07-30 after the 1070 eye-test: chamfer caps on
+        // hard convex edges give AC's razor-sharp building corners a lit
+        // transition band, so beams read as having thickness instead of being
+        // painted on. `?gfxRelief=off` is the escape (the resolver in
+        // scene3d/gfx_relief.js matches "on"/"off" EXACTLY and falls through to
+        // this preset otherwise; it stays out of BOOL_FLAGS so parseBool cannot
+        // widen it to "1"/"true"/"yes").
+        // The operation is PURELY ADDITIVE — no existing vertex moves, no draw
+        // call is added (rails inherit their parent's surface subset), and the
+        // model gate leaves ~87% of GfxObjs byte-identical.
+        // `low`: still off — added tris are paid TWICE at any tier with shadows
+        // and low is the tier that exists to not pay.
         gfxRelief: false,
         gfxSubdivLevel: 0,
         gfxReliefScale: 0.6,
@@ -83,7 +88,7 @@ export const PRESETS = {
         // 1 = 4x tris on world models. Shadows are ~half the GPU cost at
         // quality=high and are the ONLY vertex-stage-bound pass, so mid/high
         // both stop at 4x; 16x is an `ultra` opt-in.
-        gfxRelief: false,
+        gfxRelief: true,
         gfxSubdivLevel: 1,
         gfxReliefScale: 1.0,
         hero: false,
@@ -110,7 +115,7 @@ export const PRESETS = {
         // angles — the prior global `setAdapterMaxAnisotropy(1)` smeared them.
         anisotropy: 16,
         subdivLevel: 4,
-        gfxRelief: false,
+        gfxRelief: true,
         gfxSubdivLevel: 1,
         gfxReliefScale: 1.0,
         hero: true,
@@ -136,7 +141,7 @@ export const PRESETS = {
         subdivLevel: 8,
         // 2 = 16x tris. `ultra` is never auto-selected (see detectGpuTier), so
         // the shadow-pass vertex bill here is always a deliberate opt-in.
-        gfxRelief: false,
+        gfxRelief: true,
         gfxSubdivLevel: 2,
         gfxReliefScale: 1.0,
         hero: true,

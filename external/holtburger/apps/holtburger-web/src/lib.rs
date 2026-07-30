@@ -6207,9 +6207,9 @@ fn append_gfx_tris_with_tex_swaps(
             let v = gfx.vertex_array.vertices.get(&(raw as u16))?;
             v.uvs.first().map(|t| [t.u, t.v])
         };
-        let topo = ModelTopology::build(&gfx.polygons, &[], &vpos, &vuv);
+        let topo = ModelTopology::build(&gfx.polygons, &gfx.surfaces, &[], &vpos, &vuv);
         if topo.passes_gate(&ModelGate::default()) {
-            topo.emit_convex_rails(&cfg, &mut |pid, pos, uv, nrm| {
+            let mut push = |pid: u16, pos: [[f32; 3]; 3], uv: [[f32; 2]; 3], nrm: [f32; 3]| {
                 // Inherit the parent polygon's material identity so the new
                 // tris land in an EXISTING subset — no new surface entry, no
                 // new material, and critically no new draw call.
@@ -6240,7 +6240,13 @@ fn append_gfx_tris_with_tex_swaps(
                     side_kind: SideKind::Positive,
                     stippling: poly.stippling,
                 });
-            });
+            };
+            // OP1 gives razor corners a lit transition band; OP3 puts depth at
+            // material transitions on flat walls. Disjoint by construction —
+            // OP1 takes edges >= 60 degrees, OP3 takes edges below it — so an
+            // edge never grows two rails.
+            topo.emit_convex_rails(&cfg, &mut push);
+            topo.emit_material_rails(&cfg, &mut push);
         }
     }
 }
@@ -18478,6 +18484,70 @@ fn append_environment_tris(
                         stippling: poly.stippling,
                     });
                 }
+            }
+        }
+    }
+
+    // OP3 — material rails on interiors (`holtburger_dat::gfx_remodel`).
+    //
+    // OP1 is deliberately NOT run here. A dungeon room or building interior is
+    // an inside-out box: measured across all 2,858 cellstructs there are 719
+    // convex edges against 12,949 concave, so convex-edge rails find almost
+    // nothing indoors. Material boundaries, by contrast, are just as visible
+    // from inside as from outside — which is why OP3 is the operation that
+    // carries interiors.
+    //
+    // Purely additive, same as the GfxObj path: nothing above is touched.
+    if let Some(cfg) = gfx_relief_config() {
+        use holtburger_dat::gfx_remodel::{ModelGate, ModelTopology};
+        if let Some(cell) = env.cells.get(&(cell_structure as u32)) {
+            let vpos = |raw: i16| -> Option<[f32; 3]> {
+                if raw < 0 {
+                    return None;
+                }
+                let v = cell.vertex_array.vertices.get(&(raw as u16))?;
+                Some([v.origin.x, v.origin.y, v.origin.z])
+            };
+            let vuv = |raw: i16, _ring_idx: usize| -> Option<[f32; 2]> {
+                if raw < 0 {
+                    return None;
+                }
+                let v = cell.vertex_array.vertices.get(&(raw as u16))?;
+                v.uvs.first().map(|t| [t.u, t.v])
+            };
+            // `portal_poly_ids` are the doorway quads driving portal culling and
+            // the stencil renderer — they must never gain geometry.
+            let topo = ModelTopology::build(
+                &cell.polygons,
+                surfaces,
+                &cell.portal_poly_ids,
+                &vpos,
+                &vuv,
+            );
+            if topo.passes_gate(&ModelGate::default()) {
+                topo.emit_material_rails(&cfg, &mut |pid, pos, uv, nrm| {
+                    let Some(poly) = cell.polygons.get(&pid) else { return };
+                    let did = if poly.pos_surface >= 0
+                        && (poly.pos_surface as usize) < surfaces.len()
+                    {
+                        surfaces[poly.pos_surface as usize]
+                    } else {
+                        0
+                    };
+                    if did == 0 {
+                        return;
+                    }
+                    tris.push(Tri {
+                        pos,
+                        uv,
+                        normals: [nrm, nrm, nrm],
+                        surface_did: did,
+                        sides_type: poly.sides_type as u8,
+                        polygon_id: pid,
+                        side_kind: SideKind::Positive,
+                        stippling: poly.stippling,
+                    });
+                });
             }
         }
     }

@@ -82,11 +82,26 @@ pub struct RemodelConfig {
     /// Multiplier on `width_m`/`height_m`; 0.0 disables all emission while
     /// leaving classification intact (the A/B control arm).
     pub scale: f32,
+    /// OP3 — setback along each face from a material-boundary edge, metres.
+    pub rail_width_m: f32,
+    /// OP3 — how far the material rail stands proud, metres.
+    pub rail_height_m: f32,
+    /// Dihedral below which two faces count as "flat enough" to be a material
+    /// transition rather than a corner. Above this OP1 owns the edge.
+    pub coplanar_deg: f32,
 }
 
 impl Default for RemodelConfig {
     fn default() -> Self {
-        Self { width_m: 0.06, height_m: 0.05, min_edge_m: 1.0, scale: 1.0 }
+        Self {
+            width_m: 0.06,
+            height_m: 0.05,
+            min_edge_m: 1.0,
+            scale: 1.0,
+            rail_width_m: 0.05,
+            rail_height_m: 0.03,
+            coplanar_deg: 60.0,
+        }
     }
 }
 
@@ -98,6 +113,14 @@ impl RemodelConfig {
     #[inline]
     fn h(&self) -> f32 {
         (self.height_m * self.scale).clamp(0.0, MAX_AMPLITUDE_M)
+    }
+    #[inline]
+    fn rw(&self) -> f32 {
+        (self.rail_width_m * self.scale).clamp(0.0, MAX_AMPLITUDE_M)
+    }
+    #[inline]
+    fn rh(&self) -> f32 {
+        (self.rail_height_m * self.scale).clamp(0.0, MAX_AMPLITUDE_M)
     }
     /// True when nothing can be emitted, so callers keep byte-identical output.
     #[inline]
@@ -174,6 +197,12 @@ struct FaceRec {
     /// is the front face (the triangulators fan `ring[0], ring[i-1], ring[i]`
     /// as the positive side).
     n: [f32; 3],
+    /// Opaque material-identity token. Compared for EQUALITY only — this module
+    /// never asks what a material looks like, which is what makes it immune to
+    /// the painted-banner false positives that killed every pixel-based
+    /// approach. For `GfxObj` this is the resolved Surface DataID; for
+    /// `CellStruct` the caller passes the raw `pos_surface` index.
+    tok: u32,
     centroid: [f32; 3],
     /// In-plane affine mapping a projected point to (u, v). See
     /// [`FaceRec::uv_at`].
@@ -286,6 +315,7 @@ impl ModelTopology {
     /// reading is fine, writing would move collision.
     pub fn build(
         polygons: &HashMap<u16, Polygon>,
+        surfaces: &[u32],
         portal_poly_ids: &[u16],
         vertex_pos: &dyn Fn(i16) -> Option<[f32; 3]>,
         vertex_uv: &dyn Fn(i16, usize) -> Option<[f32; 2]>,
@@ -406,10 +436,16 @@ impl ModelTopology {
                 _ => None,
             };
 
+            let tok = if poly.pos_surface >= 0 && (poly.pos_surface as usize) < surfaces.len() {
+                surfaces[poly.pos_surface as usize]
+            } else {
+                u32::MAX
+            };
             faces.insert(
                 pid,
                 FaceRec {
                     n,
+                    tok,
                     centroid: c,
                     origin,
                     u_axis,
@@ -585,6 +621,109 @@ impl ModelTopology {
         self.verts.get(&vid).copied()
     }
 
+    /// OP3 — material rails.
+    ///
+    /// Where two NEARLY COPLANAR polygons carrying *different* materials meet,
+    /// add a small proud strip along the shared edge. A material change on a
+    /// flat wall is almost always a real architectural transition — timber
+    /// frame meeting plaster, a stone plinth meeting render — so this puts
+    /// physical depth exactly where the artist already drew a boundary, without
+    /// ever asking what either material is.
+    ///
+    /// This is the operation that carries INTERIORS. A dungeon room is an
+    /// inside-out box: 719 convex edges across all cellstructs against 12,949
+    /// concave, so OP1 does essentially nothing indoors, while material
+    /// boundaries are plentiful in both.
+    ///
+    /// Faces are near-coplanar here, so the two outward normals nearly agree
+    /// and the construction degenerates to a symmetric strip straddling the
+    /// edge — 2 quads, 4 triangles.
+    pub fn emit_material_rails<F>(&self, cfg: &RemodelConfig, emit: &mut F) -> u32
+    where
+        F: FnMut(u16, [[f32; 3]; 3], [[f32; 2]; 3], [f32; 3]),
+    {
+        if cfg.is_noop() || !(cfg.rw() > 0.0) || !(cfg.rh() > 0.0) {
+            return 0;
+        }
+        let (w, h) = (cfg.rw(), cfg.rh());
+        let mut n = 0u32;
+
+        let mut keys: Vec<(u16, u16)> = self.edges.keys().copied().collect();
+        keys.sort_unstable();
+
+        for key in keys {
+            let pids = &self.edges[&key];
+            if pids.len() != 2 {
+                continue;
+            }
+            if self.pinned.contains(&key.0) || self.pinned.contains(&key.1) {
+                continue;
+            }
+            let (Some(fa), Some(fb)) = (self.faces.get(&pids[0]), self.faces.get(&pids[1])) else {
+                continue;
+            };
+            // The whole trigger: DIFFERENT materials. Equality only — never a
+            // lookup of what the material is.
+            if fa.tok == fb.tok || fa.tok == u32::MAX || fb.tok == u32::MAX {
+                continue;
+            }
+            let (Some(p0), Some(p1)) = (self.vert(key.0), self.vert(key.1)) else {
+                continue;
+            };
+            let ev = sub(p1, p0);
+            let len = dot(ev, ev).sqrt();
+            if len < cfg.min_edge_m {
+                continue;
+            }
+            let Some(e) = norm(ev) else { continue };
+            // Flat enough to be a transition, not a corner. Corners are OP1's;
+            // emitting both on one edge would double the geometry there.
+            let ang = dot(fa.n, fb.n).clamp(-1.0, 1.0).acos().to_degrees();
+            if ang >= cfg.coplanar_deg {
+                continue;
+            }
+
+            let mut ta = match norm(cross(fa.n, e)) {
+                Some(t) => t,
+                None => continue,
+            };
+            let mid = mul(add(p0, p1), 0.5);
+            if dot(ta, sub(fa.centroid, mid)) < 0.0 {
+                ta = mul(ta, -1.0);
+            }
+            let mut tb = match norm(cross(fb.n, e)) {
+                Some(t) => t,
+                None => continue,
+            };
+            if dot(tb, sub(fb.centroid, mid)) < 0.0 {
+                tb = mul(tb, -1.0);
+            }
+
+            // Footprints sit IN each parent plane (watertight border, same
+            // argument as OP1); the crown rides above the shared edge.
+            let ai0 = add(p0, mul(ta, w));
+            let ai1 = add(p1, mul(ta, w));
+            let bi0 = add(p0, mul(tb, w));
+            let bi1 = add(p1, mul(tb, w));
+            let Some(no) = norm(add(fa.n, fb.n)) else { continue };
+            let k0 = add(p0, mul(no, h));
+            let k1 = add(p1, mul(no, h));
+
+            let na = norm(cross(sub(ai1, ai0), sub(k0, ai0))).unwrap_or(fa.n);
+            let nb = norm(cross(sub(k1, k0), sub(bi0, k0))).unwrap_or(fb.n);
+
+            let mut quad = |pid: u16, f: &FaceRec, q: [[f32; 3]; 4], nrm: [f32; 3]| {
+                let uv = |p: [f32; 3]| f.uv_at(p);
+                emit(pid, [q[0], q[1], q[2]], [uv(q[0]), uv(q[1]), uv(q[2])], nrm);
+                emit(pid, [q[0], q[2], q[3]], [uv(q[0]), uv(q[2]), uv(q[3])], nrm);
+            };
+            quad(pids[0], fa, [ai0, ai1, k1, k0], na);
+            quad(pids[1], fb, [k0, k1, bi1, bi0], nb);
+            n += 1;
+        }
+        n
+    }
+
     /// Rails that would be emitted for this model at `cfg` — the census hook,
     /// so trigger counts can be measured without building geometry.
     pub fn count_convex_rails(&self, cfg: &RemodelConfig) -> u32 {
@@ -609,6 +748,106 @@ mod tests {
             neg_uv_indices: vec![],
             vertex_ids,
         }
+    }
+
+    /// Two coplanar quads sharing one 4 m edge — the flat-wall case OP3 exists
+    /// for. `surf` picks each quad's `pos_surface`.
+    fn split_wall(surf_a: i16, surf_b: i16) -> (HashMap<u16, Polygon>, Vec<[f32; 3]>) {
+        let v = vec![
+            [0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 2.0, 0.0],
+            [0.0, 2.0, 0.0], [4.0, 4.0, 0.0], [0.0, 4.0, 0.0],
+        ];
+        let mut polys = HashMap::new();
+        let mut a = poly(vec![0, 1, 2, 3], 0, 0);
+        a.pos_surface = surf_a;
+        let mut b = poly(vec![3, 2, 4, 5], 0, 0);
+        b.pos_surface = surf_b;
+        polys.insert(0u16, a);
+        polys.insert(1u16, b);
+        (polys, v)
+    }
+
+    fn topo_for(polys: &HashMap<u16, Polygon>, v: &[[f32; 3]]) -> ModelTopology {
+        let pos = |i: i16| v.get(i as usize).copied();
+        let uv = |_i: i16, k: usize| Some([k as f32 * 0.25, 0.0]);
+        // surfaces[0] = 7, surfaces[1] = 9 — two distinct identity tokens.
+        ModelTopology::build(polys, &[7, 9], &[], &pos, &uv)
+    }
+
+    fn count_material_rails(t: &ModelTopology, cfg: &RemodelConfig) -> u32 {
+        let mut n = 0;
+        t.emit_material_rails(cfg, &mut |_, _, _, _| n += 1);
+        n / 4 // 4 triangles per rail
+    }
+
+    #[test]
+    fn material_rail_fires_on_a_flat_material_boundary() {
+        let (polys, v) = split_wall(0, 1);
+        let t = topo_for(&polys, &v);
+        assert_eq!(count_material_rails(&t, &RemodelConfig::default()), 1);
+    }
+
+    #[test]
+    fn material_rail_ignores_a_same_material_seam() {
+        // Both quads on surface index 0 → one material, no transition, and an
+        // internal tessellation seam must never grow a batten.
+        let (polys, v) = split_wall(0, 0);
+        let t = topo_for(&polys, &v);
+        assert_eq!(count_material_rails(&t, &RemodelConfig::default()), 0);
+    }
+
+    #[test]
+    fn material_rail_yields_corners_to_op1() {
+        // A 90-degree corner between two materials is a CORNER, not a flat
+        // transition. OP1 owns it; emitting both would double the geometry on
+        // that edge.
+        let (polys, v) = cube(6.0);
+        let mut polys = polys;
+        for (i, p) in polys.iter_mut() {
+            p.pos_surface = (*i % 2) as i16; // alternate materials around the cube
+        }
+        let pos = |i: i16| v.get(i as usize).copied();
+        let uv = |_i: i16, _k: usize| Some([0.0, 0.0]);
+        let t = ModelTopology::build(&polys, &[7, 9], &[], &pos, &uv);
+        assert_eq!(
+            count_material_rails(&t, &RemodelConfig::default()),
+            0,
+            "OP3 fired on 90-degree corners"
+        );
+        assert_eq!(t.count_convex_rails(&RemodelConfig::default()), 12);
+    }
+
+    #[test]
+    fn material_rails_work_inside_out_where_op1_cannot() {
+        // THE reason OP3 exists. A dungeon room is an inside-out box: OP1 finds
+        // no convex edges there, but material boundaries are just as visible
+        // from inside as from outside.
+        let (polys, v) = split_wall(0, 1);
+        let flipped: HashMap<u16, Polygon> = polys
+            .iter()
+            .map(|(k, p)| {
+                let mut q = p.clone();
+                q.vertex_ids.reverse();
+                (*k, q)
+            })
+            .collect();
+        let t = topo_for(&flipped, &v);
+        assert_eq!(t.count_convex_rails(&RemodelConfig::default()), 0, "OP1 should be blind here");
+        assert_eq!(count_material_rails(&t, &RemodelConfig::default()), 1, "OP3 must still fire");
+    }
+
+    #[test]
+    fn material_rails_stay_within_the_ceiling() {
+        let (polys, v) = split_wall(0, 1);
+        let t = topo_for(&polys, &v);
+        let mut worst: f32 = 0.0;
+        t.emit_material_rails(&RemodelConfig::default(), &mut |_p, q, _uv, _n| {
+            for pt in q {
+                worst = worst.max(pt[2].abs());
+            }
+        });
+        assert!(worst > 0.0, "rail never left the wall plane");
+        assert!(worst <= MAX_AMPLITUDE_M + 1e-4, "rail protruded {worst} m");
     }
 
     #[test]
@@ -658,7 +897,7 @@ mod tests {
             polys.insert(0u16, poly(vec![0, 1, 2], sides, 0));
             let pos = |v: i16| Some([v as f32, 0.0, 0.0]);
             let uv = |_v: i16, _i: usize| Some([0.0, 0.0]);
-            let t = ModelTopology::build(&polys, &[], &pos, &uv);
+            let t = ModelTopology::build(&polys, &[7, 9], &[], &pos, &uv);
             assert!(t.pinned.contains(&0), "sides_type {sides} did not pin");
             assert!(t.faces.is_empty());
         }
@@ -693,7 +932,7 @@ mod tests {
         let (polys, v) = cube(6.0);
         let pos = |i: i16| v.get(i as usize).copied();
         let uv = |_i: i16, k: usize| Some([k as f32 * 0.25, 0.0]);
-        let t = ModelTopology::build(&polys, &[], &pos, &uv);
+        let t = ModelTopology::build(&polys, &[7, 9], &[], &pos, &uv);
         assert_eq!(t.faces.len(), 6);
         assert_eq!(t.edges.len(), 12, "a cube has 12 edges");
         assert!(t.passes_gate(&ModelGate::default()), "a 6m cube is architecture");
@@ -716,7 +955,7 @@ mod tests {
             .collect();
         let pos = |i: i16| v.get(i as usize).copied();
         let uv = |_i: i16, _k: usize| Some([0.0, 0.0]);
-        let t = ModelTopology::build(&flipped, &[], &pos, &uv);
+        let t = ModelTopology::build(&flipped, &[7, 9], &[], &pos, &uv);
         assert_eq!(t.count_convex_rails(&RemodelConfig::default()), 0);
     }
 
@@ -727,7 +966,7 @@ mod tests {
         let (polys, v) = cube(6.0);
         let pos = |i: i16| v.get(i as usize).copied();
         let uv = |_i: i16, _k: usize| Some([0.0, 0.0]);
-        let t = ModelTopology::build(&polys, &[], &pos, &uv);
+        let t = ModelTopology::build(&polys, &[7, 9], &[], &pos, &uv);
         let cfg = RemodelConfig::default();
         let mut worst: f32 = 0.0;
         t.emit_convex_rails(&cfg, &mut |_pid, p, _uv, _n| {
@@ -750,7 +989,7 @@ mod tests {
         let (polys, v) = cube(0.5);
         let pos = |i: i16| v.get(i as usize).copied();
         let uv = |_i: i16, _k: usize| Some([0.0, 0.0]);
-        let t = ModelTopology::build(&polys, &[], &pos, &uv);
+        let t = ModelTopology::build(&polys, &[7, 9], &[], &pos, &uv);
         assert_eq!(t.count_convex_rails(&RemodelConfig::default()), 0);
     }
 
