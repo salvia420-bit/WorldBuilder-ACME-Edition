@@ -215,38 +215,50 @@ Two tracks, wildly different sizes, easy to conflate:
 + 37 + the 252 hazard rows that need a different treatment than ×4 ESRGAN (#8) — and
 take the interior 15.1% tail (#9).** The 34 CC0 picks are demoted.
 
-## 6. Why the plank re-pick is piecemeal — and what replaces it
-`0x06003C25` (CC0 `Planks036B`, `roughness 0.509`, `gain 0.566`, tint
-`[1.129, 1.031, 0.741]`) failed the 1070 eyetest as a **character** regression —
-"modern laminate vs warm knotty retail" — not a technical one (dims, normal
-stride and roughness all verified correct).
+## 6. CORRECTION — the plank "re-pick" was an agent's aesthetic veto, not a defect
 
-The v2 response was a per-channel **tint**, which is a pure colour-temperature
-correction: +13% R, +3% G, −26% B. But the complaint names **two** defects, and
-tint can only address one. Knots, grain irregularity and tonal variation are
-*spatial* properties of the image; no gain/tint scalar can add them. A tinted
-uniform laminate is a warmer uniform laminate. So the regrade fixes this only if
-the objection was mostly warmth.
+**Superseding what an earlier revision of this file argued.** `0x06003C25`
+(CC0 `Planks036B`, `roughness 0.509`, `gain 0.566`, tint `[1.129, 1.031, 0.741]`)
+was recorded as a "character regression — modern laminate vs warm knotty retail"
+by the **agent** running the 2026-07-29 1070 eyetest. That was the agent's taste
+judgement, not a technical finding and not the user's.
 
-**The piecemeal part is real:** all 34 picks were approved from A/B swatch
-sheets, i.e. judged texture-vs-texture, never texture-in-world. `0x06003C25`
-isn't special — it's simply the one a tour happened to fly past. Nothing has
-looked at the other 33 in situ, so one-rsId-at-a-time is symptom-chasing. (Note
-the ESRGAN upscales carry far less character risk by construction: they upscale
-the retail art rather than replace it. The 34 CC0 substitutions are where
-character can drift.)
+**The user approved all 34 X3 rows in the review UI**
+(`/mnt/wbterminal2/pbr-terrain/review/decisions.json`, verdict `approve` on every
+x3 row plus the three vitals items) and is content to **auto-approve** this class.
+Approval authority sits with the user, so the plank is **approved and ships**.
 
-The eyetest already exposed this blind spot **twice**: the plank, and the
-authored-normal demo that "landed on an ambient-lit interior floor where normals
-buy nothing" — a technically-correct normal map showing zero benefit purely
-because of where it sat (which is why sun-lit exterior `0x06003AD6` had to be
-added). Both are placement-dependent verdicts a swatch cannot produce.
+Consequences, so this does not regrow:
+- The "re-pick/re-grade `0x06003C25`" task is **deleted**, not deferred.
+- The "real-placement context shots" task is **deleted** as a taste gate. It was
+  invented to systematically catch more regressions of a kind the user had already
+  accepted — i.e. it existed to serve an agent's objection, not a requirement.
+  (If context shots are ever wanted, it should be for a stated purpose, not as a
+  standing aesthetic tribunal.)
+- Nothing technical was wrong with the entry: dims, normal stride (`w·h·3`) and
+  `roughnessOverride` were all verified correct, and gain×tint is byte-exact vs
+  source within float→u8 rounding.
 
-**Real-placement context shots** are therefore the fix, not a nicety: for each
-substituted rsId, render before/after at its actual in-world placements (real
-geometry, lighting, viewing angle, neighbours) and judge all 34 in one batched
-pass. The placement data already exists from the X4 work (e.g. `0x06003AD6` =
-1,400 exterior placements, 21 outdoor static instances in the `0xA9B3`–`0xA9B6`
-Holtburg cluster), so shot locations can be derived rather than guessed. Today's
-10-stop tour is a crude ancestor: right mechanism (real world, real GPU), but
-POI-driven rather than rsId-targeted.
+**Lesson worth keeping:** an agent eyetest can usefully report *technical* defects
+(wrap seams, reconstructed-Z artifacts, missing normals, decode dims). It should
+not convert a subjective preference into a work item that blocks a bake. Route
+taste to the user; keep agent gates mechanical.
+
+## 6b. Is the 34-pick track "the same process" as the 1,500? — essentially yes
+
+Structurally the same pipeline, and every parameter is machine-derived, not
+hand-tuned: CLIP-embedding match against the CC0 pool → `gain` =
+retailMeanRGB/candidateMeanRGB on full-res Color → per-channel `tint` =
+(retailMean_c/candidateMean_c)/gain clamped [0.25,4] → `roughness` =
+mean(`_Roughness`)/255 → 512²-capped Lanczos → bake. Same curation infra as T2.
+
+The **one** thing X4 has that X3 structurally cannot is the *fidelity gate*
+(box-downsample the ×4 back to source size and require it to reproduce the
+source). That gate is only meaningful because an upscale **derives from** its
+source, so consistency with the source is checkable. A CC0 substitute is a
+different image **on purpose** — "reproduces the source" is definitionally false
+for it, so no equivalent closed-loop check exists.
+
+That missing gate is the *only* reason a human review slot existed in X3 at all.
+With the user electing to auto-approve, that slot is filled and nothing else
+differs between the two tracks. So: **not off.** The 34 ride along with the 1,500.
