@@ -315,16 +315,24 @@ that to *graded* rows measured **worse** (0.24), so those ship verbatim.
    test profile by `--user-data-dir` only; a person uses that box.
 5. Remaining coverage: 67 held paletted rows + 163 creature INDEX16 (palette-
    preserving path, user decided creatures stay indexed so recolour survives).
-6. **Re-export the `tex/` corpus** — the exporter is correct as of `6d1ffe91` /
-   `494b1aea`, but nothing downstream has been regenerated. ~702 rows change
-   (257 DXT1 punch-through + 445 clip-map paletted). Gate: a full re-export of
-   `~/ac_base_dats/client_portal.dat` must change **exactly** those rows and leave
-   every other PNG byte-identical. Then re-run the ESRGAN → gate → `bc7cli_v2`
-   pipeline for the changed rows and re-bake; 246 of the 2,999 shipped BC7
-   payloads carry the DXT1 fault, and the 441 clip-map rows the hazard agent did
-   not hand-repair were never audited. `export-textures` needs a project
-   (`RequireProject`), and it opens the dats **ReadWrite** — it will even *create*
-   a missing `client_highres.dat` — so point it at a COPY, never `~/ac_base_dats`.
+6. ~~Re-export the `tex/` corpus~~ — **DONE**, and the gate passed exactly.
+   `/mnt/wbterminal2/tex-reexport-2026-07-30/` (20,684 exported, 0 failed; see its
+   `READ-ME-FIRST.txt`). Against the pre-fix `statics-x1/tex/`: **702 files changed
+   = 257 DXT1 + 445 clip-map (disjoint), 19,982 byte-identical, 0
+   changed-but-not-predicted, 0 predicted-but-unchanged, 0 added or removed.** The
+   two fixes therefore change exactly the rows they were predicted to and nothing
+   else — and the byte-identical majority also proves the PNG encoder did not drift.
+   Kept **separate from** `statics-x1/tex/` on purpose: every downstream artifact
+   (the ×4 corpus, `bc7/blocks-mip`, the shipped bake) came from the old tex/ and
+   has NOT been regenerated, so overwriting would silently break their provenance.
+   `export-textures` needs a project (`RequireProject`) and opens the dats
+   **ReadWrite** — it will even *create* a missing `client_highres.dat` — so it ran
+   against a copy at `/mnt/wbterminal2/reexport-proj/`. `~/ac_base_dats` untouched,
+   `client_portal.dat` still `dc6e500b…d12e4`.
+
+   **Still to do:** re-run ESRGAN → gate → `bc7cli_v2` for the 702 changed rows and
+   re-bake. 246 of the 2,999 shipped BC7 payloads carry the DXT1 fault, and the 441
+   clip-map rows the hazard agent did not hand-repair were never audited.
 
    ⚠ **Do not feed the corrected PNGs straight to ESRGAN.** Cleared pixels are now
    `RGBA(0,0,0,0)`, and upscaling that smears black into every cutout edge. Use the
