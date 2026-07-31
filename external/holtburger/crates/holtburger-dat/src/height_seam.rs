@@ -243,6 +243,26 @@ pub fn seam_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
     out
 }
 
+/// Line-vs-speckle gate (2026-07-30, the "battle-torn" fix). The tophat is a
+/// THIN-LINE detector but it cannot tell a mortar LINE from a plaster POCK —
+/// both are thin. On speckled plaster/stucco the pillow stage then turned
+/// every pock into a crater and the wall read as shot-up. The discriminator
+/// is connected-component SHAPE on the seam mask:
+///   - a mortar/joint network is ONE huge connected component (a net),
+///   - a plank gap or beam joint is a long, highly ELONGATED component,
+///   - speckle is thousands of tiny, round, isolated blobs.
+/// Components that are neither large nor elongated are dropped from BOTH the
+/// carve and the pillow seeding, so speckled surfaces return to flat without
+/// any per-texture label. Elongation is the sqrt of the second-moment
+/// eigenvalue ratio (a structure-tensor of the component's own texels).
+/// 1% of the tile. A real joint lattice covers several percent; a pock plus
+/// its bright tophat ring is well under 1% (measured: a 3-texel pock responds
+/// as ~81 texels on 128² = 0.5%). A lone straight line is under this floor
+/// too and survives via elongation instead — the area arm exists ONLY for
+/// nets, whose loops make their second moments read isotropic.
+pub const COMPONENT_MIN_AREA_FRAC: f32 = 0.01;
+pub const COMPONENT_MIN_ELONGATION: f32 = 3.0;
+
 /// Pillow radius as a fraction of the texture's smaller side: how far from the
 /// nearest joint a region keeps rising before it plateaus. Small on purpose —
 /// it only has to round the SHOULDER of a stone/beam/plank; a large radius
@@ -254,6 +274,99 @@ pub const PILLOW_FRAC: f32 = 0.03;
 /// core"). Below it a texel still *carves* (via `1 - t`) but does not anchor
 /// the pillow field.
 pub const PILLOW_SEED_T: f32 = 0.5;
+
+/// The line-vs-speckle gate (see [`COMPONENT_MIN_AREA_FRAC`]): zero the seam
+/// response of every connected component that is neither a NET (large area —
+/// a mortar/joint lattice) nor a LINE (elongated second moments — a plank
+/// gap, beam joint, thatch strand). What remains after suppression is
+/// structure; what was suppressed was speckle, and a speckle-only texture
+/// ends up with no response at all — i.e. flat, which is what stucco is.
+fn suppress_speckle(t: &mut [f32], w: usize, h: usize) {
+    // ANY nonzero response joins a component: the smoothstep fringe of a blob
+    // must be zeroed WITH its blob, or the leftover halo (t up to ~0.15)
+    // still reads as "carved" and the texture never exits flat.
+    const MEMBER_T: f32 = 0.01;
+    let n = w * h;
+    let (wi, hi) = (w as i32, h as i32);
+    let min_area = ((n as f32) * COMPONENT_MIN_AREA_FRAC).max(48.0) as usize;
+    let mut visited = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut texels: Vec<usize> = Vec::new();
+    for start in 0..n {
+        if visited[start] || t[start] < MEMBER_T {
+            continue;
+        }
+        // Flood-fill one component (4-connectivity, wrapped — textures tile).
+        texels.clear();
+        visited[start] = true;
+        stack.push(start);
+        while let Some(i) = stack.pop() {
+            texels.push(i);
+            let x = (i % w) as i32;
+            let y = (i / w) as i32;
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let j = wrap(y + dy, hi) * w + wrap(x + dx, wi);
+                if !visited[j] && t[j] >= MEMBER_T {
+                    visited[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+        if texels.len() >= min_area {
+            continue; // net → keep
+        }
+        // Elongation from the component's second moments. Coordinates are
+        // unwrapped into the half-tile window around the first texel so a
+        // component crossing the tile seam is measured contiguously (anything
+        // bigger than a half-tile is already kept by area above).
+        let (x0, y0) = ((texels[0] % w) as f32, (texels[0] / w) as f32);
+        let (hw, hh) = (w as f32 / 2.0, h as f32 / 2.0);
+        let unwrap1 = |v: f32, half: f32, full: f32| {
+            if v > half {
+                v - full
+            } else if v < -half {
+                v + full
+            } else {
+                v
+            }
+        };
+        let m = texels.len() as f32;
+        let (mut mx, mut my) = (0.0f32, 0.0f32);
+        let coords: Vec<(f32, f32)> = texels
+            .iter()
+            .map(|&i| {
+                let dx = unwrap1((i % w) as f32 - x0, hw, w as f32);
+                let dy = unwrap1((i / w) as f32 - y0, hh, h as f32);
+                mx += dx;
+                my += dy;
+                (dx, dy)
+            })
+            .collect();
+        mx /= m;
+        my /= m;
+        let (mut sxx, mut syy, mut sxy) = (0.0f32, 0.0, 0.0);
+        for &(x, y) in &coords {
+            let (dx, dy) = (x - mx, y - my);
+            sxx += dx * dx;
+            syy += dy * dy;
+            sxy += dx * dy;
+        }
+        sxx /= m;
+        syy /= m;
+        sxy /= m;
+        let tr = sxx + syy;
+        let det = sxx * syy - sxy * sxy;
+        let disc = ((tr * tr) / 4.0 - det).max(0.0).sqrt();
+        let l1 = tr / 2.0 + disc;
+        let l2 = (tr / 2.0 - disc).max(1e-6);
+        if (l1 / l2).sqrt() >= COMPONENT_MIN_ELONGATION {
+            continue; // line → keep
+        }
+        for &i in &texels {
+            t[i] = 0.0; // blob → speckle → suppress
+        }
+    }
+}
 
 /// Height field in `[0, 1]` with **per-region volume**: joints carve exactly
 /// like [`seam_height`], and every region BETWEEN joints rises with distance
@@ -270,11 +383,16 @@ pub const PILLOW_SEED_T: f32 = 0.5;
 ///
 /// Empty-return semantics are identical to [`seam_height`].
 pub fn relief_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
-    let Some((t, alpha)) = seam_t(rgba, w, h) else {
+    let Some((mut t, alpha)) = seam_t(rgba, w, h) else {
         return Vec::new();
     };
     let (wu, hu) = (w as usize, h as usize);
     let n = wu * hu;
+
+    // The battle-torn fix: drop blob-shaped (speckle) seam components before
+    // anything carves or seeds a pillow. A speckle-only texture (plaster,
+    // stucco) loses its entire response here and exits empty = flat.
+    suppress_speckle(&mut t, wu, hu);
 
     // Seed the distance transform at joint cores.
     const INF: f32 = 1e9;
@@ -601,6 +719,49 @@ mod tests {
     fn relief_on_a_flat_texture_is_still_empty() {
         let t = tex(64, 64, |_, _| 0.5);
         assert!(relief_height(&t, 64, 64).is_empty());
+    }
+
+    #[test]
+    fn speckled_plaster_is_suppressed_to_flat() {
+        // Dark pocks on a light field — the "battle-torn" case. Every pock is
+        // a small round blob (no net, no line), so the component gate drops
+        // the entire response and the texture reads FLAT.
+        let t = tex(128, 128, |x, y| {
+            if (x % 16 < 3) && (y % 16 < 3) { 0.10 } else { 0.80 }
+        });
+        assert!(
+            relief_height(&t, 128, 128).is_empty(),
+            "speckle invented relief"
+        );
+        // The pure seam operator (no gate) still responds — the gate is a
+        // relief_height policy, not a change to seam_height's contract.
+        assert!(!seam_height(&t, 128, 128).is_empty());
+    }
+
+    #[test]
+    fn speckle_gate_keeps_lines_while_dropping_dots() {
+        // Mortar lines AND pocks on one texture: the lines must still carve
+        // and pillow; the isolated pocks must not become craters.
+        let t = tex(128, 128, |x, y| {
+            if y % 32 == 0 {
+                0.05 // full-width mortar line — elongated/net, kept
+            } else if (x % 16 < 3) && (y % 16 < 3) {
+                0.10 // pock — round blob, dropped
+            } else {
+                0.75
+            }
+        });
+        let hf = relief_height(&t, 128, 128);
+        assert!(!hf.is_empty(), "gate killed the mortar lines too");
+        assert!(hf[0 * 128 + 64] < 0.3, "line no longer carves");
+        // A pock interior mid-field (y=17, inside a dot) must match a plain
+        // field texel at the same distance from the line — no crater.
+        let pock = hf[17 * 128 + 1];
+        let plain = hf[17 * 128 + 8];
+        assert!(
+            (pock - plain).abs() < 0.15,
+            "pock still carves: {pock} vs plain {plain}"
+        );
     }
 
     #[test]
