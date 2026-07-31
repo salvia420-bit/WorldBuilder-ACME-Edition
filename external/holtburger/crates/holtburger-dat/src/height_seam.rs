@@ -617,6 +617,54 @@ pub fn micro_height(class: ReliefClass, w: u32, h: u32, seed: u32, dir_u: bool) 
     field.iter().map(|v| 1.0 - amp * (1.0 - v.clamp(0.0, 1.0))).collect()
 }
 
+/// Luminance drop (vs the local pore-scale mean) at which the dark-detail
+/// micro component reaches full dip. Absolute, never per-texture normalised —
+/// same contract as [`GROOVE_MIN`]/[`GROOVE_FULL`].
+pub const MICRO_DETAIL_FULL: f32 = 0.12;
+/// Blend of texture-derived dark detail vs synthesized noise in the micro
+/// layer of macro-allowed classes. 0.0 = the pre-2026-07-31 pure-noise micro.
+pub const MICRO_DETAIL_MIX: f32 = 0.65;
+
+/// Per-class micro amplitude (the `amp` inside [`micro_height`]'s match).
+fn micro_amp(class: ReliefClass) -> f32 {
+    match class {
+        ReliefClass::Stone | ReliefClass::Brick | ReliefClass::Shingle => 0.12,
+        ReliefClass::Timber | ReliefClass::Plank => 0.10,
+        ReliefClass::Cloth => 0.05,
+        ReliefClass::Flush => 0.06,
+        ReliefClass::Unknown => 0.04,
+        ReliefClass::Foliage => 0.0,
+    }
+}
+
+/// Fine-scale dark-detail field in [0,1]: how much DARKER a texel is than its
+/// own pore-scale neighbourhood. This is the texture's actual grain — pores,
+/// pits, weathering — the same fine-scale-darkness signal the shipped texchan
+/// luminance cavity AO used, so it has visual precedent. It is restricted to
+/// pore scale (sigma ~0.8-2% of the tile) on purpose: the Tudor polarity trap
+/// lives at REGION scale (a broad dark beam vs a light panel), and a
+/// high-pass at pore scale is invariant on broad regions by construction.
+/// Only applied to macro-allowed (architectural) classes — painted flats,
+/// cloth and banners keep the content-blind synthesized grain so an emblem
+/// can never be embossed.
+fn micro_detail_dark(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
+    let (wu, hu) = (w as usize, h as usize);
+    let n = wu.saturating_mul(hu);
+    let mut lum = vec![0.0f32; n];
+    for i in 0..n {
+        lum[i] = (0.299 * rgba[i * 4] as f32
+            + 0.587 * rgba[i * 4 + 1] as f32
+            + 0.114 * rgba[i * 4 + 2] as f32)
+            / 255.0;
+    }
+    let sigma = (0.008 * wu.min(hu) as f32).max(0.8) * 2.5;
+    let lo = gaussian_blur(&lum, wu, hu, sigma);
+    lum.iter()
+        .zip(lo)
+        .map(|(l, m)| ((m - l) / MICRO_DETAIL_FULL).clamp(0.0, 1.0))
+        .collect()
+}
+
 /// Grain direction from gradient anisotropy: grain runs along the axis with
 /// the SMALLER mean |gradient| (plank gaps and painted grain lines cross the
 /// grain, not follow it). Direction only — no polarity is read.
@@ -674,6 +722,26 @@ pub fn relief_height_classed(
         _ => true,
     };
     let micro = micro_height(cls, w, h, seed, dir_u);
+    // 2026-07-31: for architectural classes the micro dip follows the
+    // texture's OWN fine dark detail (pores/pits), blended with the noise —
+    // "dents on the stones" land where the art painted them instead of at
+    // random. Painted classes keep pure noise (emblem safety, see
+    // micro_detail_dark).
+    let micro = if cls.allows_macro() && !micro.is_empty() {
+        let amp = micro_amp(cls);
+        let dark = micro_detail_dark(rgba, w, h);
+        micro
+            .iter()
+            .zip(dark)
+            .map(|(u, d)| {
+                let dip_noise = 1.0 - u; // in [0, amp]
+                1.0 - ((1.0 - MICRO_DETAIL_MIX) * dip_noise
+                    + MICRO_DETAIL_MIX * amp * d)
+            })
+            .collect()
+    } else {
+        micro
+    };
     match (macro_field.is_empty(), micro.is_empty()) {
         (true, true) => Vec::new(),
         (false, true) => macro_field,
@@ -1031,6 +1099,39 @@ mod tests {
             assert_eq!(a, b, "{cls:?} not deterministic");
             assert!(a.iter().all(|v| (0.8..=1.0).contains(v)), "{cls:?} out of band");
         }
+    }
+
+    #[test]
+    fn micro_dark_detail_follows_the_texture_on_architectural_classes() {
+        // Flat bright tile with one dark pore: the classed field must dip
+        // MORE at the pore than the plain-noise micro would anywhere, and a
+        // painted class (Cloth) must ignore the pore entirely.
+        let (w, h) = (64u32, 64u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&[200, 200, 200, 255]);
+        }
+        let pore = |x: u32, y: u32| ((y * w + x) * 4) as usize;
+        for dy in 30..34 {
+            for dx in 30..34 {
+                let i = pore(dx, dy);
+                rgba[i] = 40;
+                rgba[i + 1] = 40;
+                rgba[i + 2] = 40;
+            }
+        }
+        let stone = relief_height_classed(&rgba, w, h, Some(ReliefClass::Stone), 7);
+        assert!(!stone.is_empty());
+        let at_pore = stone[(32 * w + 32) as usize];
+        let far = stone[(8 * w + 8) as usize];
+        assert!(
+            at_pore < far - 0.02,
+            "pore should dip below flat field: pore={at_pore} far={far}"
+        );
+        // Cloth (painted class): byte-identical to the pure-noise micro.
+        let cloth = relief_height_classed(&rgba, w, h, Some(ReliefClass::Cloth), 7);
+        let noise = micro_height(ReliefClass::Cloth, w, h, 7, true);
+        assert_eq!(cloth, noise, "painted classes must stay content-blind");
     }
 
     #[test]
