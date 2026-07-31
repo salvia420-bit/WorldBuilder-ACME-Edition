@@ -74,6 +74,20 @@ export const PRESETS = {
         vignette: false,
         lensFlare: false,
         lightShafts: false,
+        // Terrain VFX (Wave 0B, docs/2026-07-31-terrain-vfx-plan.md §2.2/§5.8).
+        // `terrainTrail` = the shared stomp/footprint render-target trail map.
+        // SHIPS FALSE ON EVERY TIER (§5.9 "ship OFF, promote deliberately");
+        // the ladder that will be flipped on at promotion is high/ultra true,
+        // low/mid false. Deliberately NOT in BOOL_FLAGS — `parseBool` also
+        // accepts `1`/`true`/`yes`, which would widen the exact-`on` opt-in its
+        // decisive reader (`scene3d/vfx_flags.js::terrainTrailEnabled`)
+        // requires. The three NUMERIC knobs below are safe here (they cannot
+        // turn the feature on by themselves) so the Graphics-settings bag can
+        // carry them; the readers clamp whatever they get, from either source.
+        terrainTrail: false,
+        terrainTrailRes: 128,
+        terrainTrailRadius: 32,
+        terrainTrailFade: 4,
         maxParticlesPerEmitter: 64,
     },
     mid: {
@@ -120,6 +134,11 @@ export const PRESETS = {
         vignette: false,
         lensFlare: false,
         lightShafts: false,
+        // Terrain VFX trail map — see the `low` tier for the rationale.
+        terrainTrail: false,
+        terrainTrailRes: 128,
+        terrainTrailRadius: 48,
+        terrainTrailFade: 4,
         maxParticlesPerEmitter: 256,
     },
     high: {
@@ -148,6 +167,11 @@ export const PRESETS = {
         vignette: true,
         lensFlare: false,
         lightShafts: true,
+        // Terrain VFX trail map — see the `low` tier for the rationale.
+        terrainTrail: false,
+        terrainTrailRes: 256,
+        terrainTrailRadius: 48,
+        terrainTrailFade: 4,
         maxParticlesPerEmitter: 1024,
     },
     ultra: {
@@ -175,6 +199,11 @@ export const PRESETS = {
         vignette: true,
         lensFlare: false,
         lightShafts: true,
+        // Terrain VFX trail map — see the `low` tier for the rationale.
+        terrainTrail: false,
+        terrainTrailRes: 512,
+        terrainTrailRadius: 64,
+        terrainTrailFade: 4,
         maxParticlesPerEmitter: 2048,
     },
 };
@@ -216,11 +245,16 @@ const INT_FLAGS = new Set([
     "pomStepsSelfShadow",
     "triplanarSlopeThresholdPct",
     "maxParticlesPerEmitter",
+    // Terrain-VFX trail map (Wave 0B). `terrainTrail` itself is absent for the
+    // same reason `gfxRelief` is — see the PRESETS comment.
+    "terrainTrailRes",
 ]);
 
 // Float-typed flags.
 const FLOAT_FLAGS = new Set([
     "gfxReliefScale",
+    "terrainTrailRadius",
+    "terrainTrailFade",
 ]);
 
 function parseBool(raw) {

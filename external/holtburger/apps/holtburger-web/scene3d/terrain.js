@@ -750,9 +750,34 @@ try {
 // uses two sines summed (~0.25 m envelope); lava (future) would use
 // 2D value-noise at 0.4 m.
 //
-// Quality gate: only installed when `liveScene3d.quality.flags.subdivLevel
-// >= 2`. At subdivLevel=1, terrain verts are 24 m apart — the wavelength
-// would be larger than the screen and the wave would be invisible.
+// 2026-07-31 (water-fix) — the swell is now LATTICE-LOCKED: it is evaluated
+// at the four corners of the enclosing 24 m CONTROL cell and bilinearly
+// interpolated to the vertex, instead of being evaluated at the vertex
+// directly. Two consequences, both load-bearing:
+//
+//   1. CRACK-FREE ACROSS THE SUBDIV LOD BOUNDARY. `pickSubdivLevelForLb`
+//      gives the player's LB + ring-1 `halfLevel` and everything at
+//      Chebyshev distance >= 2 factor 1, so an LOD boundary sits ~2 LBs from
+//      the player and MOVES WITH HIM. The static heights are crack-free
+//      because the subdivided surface is linear along every cell edge
+//      (terrain_subdiv's lod_boundary_edges_coincide_across_factors), but a
+//      raw per-vertex sine is NOT linear: the fine side's edge midpoint sat
+//      up to ~0.23 m off the coarse side's straight chord, tearing open
+//      water along a seam that followed the player around. Bilinear over the
+//      control lattice restricted to a cell edge IS linear, so every LOD
+//      level reproduces exactly the same surface.
+//   2. LEVEL-INDEPENDENT, so the subdivLevel >= 2 quality gate is gone (see
+//      `readWaterWaveFlag`): at factor 1 the vertices ARE the lattice
+//      corners and the wave is exact, so low/mid quality and the distance
+//      >= 2 rings now bob identically to the centre LB instead of staying
+//      frozen (or, worse, bobbing out of phase with their neighbour).
+//
+// The wavelengths were lengthened to match (140 m / 101 m, from 63 m / 48 m)
+// so 24 m lattice sampling reconstructs a smooth swell — peak bilinear
+// facet error ~2-3 cm, invisible at 0.25 m amplitude. The high-frequency
+// surface motion the short wavelengths used to supply now comes from the
+// fragment-side UV scroll + the water sheen normal, which have no geometry
+// dependency and therefore no LOD constraint.
 // F12-5 — `?strictWaterCodes` (DEFAULT-ON — `!== "off"` reader) restricts
 // the animated-water set to retail's
 // SurfChar water codes (16-20). The default set ALSO includes 22
@@ -780,13 +805,44 @@ export function readTerrainGouraudFlag() {
 export const TERRAIN_GOURAUD_ON = readTerrainGouraudFlag();
 
 function readStrictWaterCodesFlag() {
+  // 2026-07-31 (water-fix) — the NO-BROWSER branch used to fall through to
+  // `false`, i.e. the Node harness resolved TERRAIN_WATER_CODES to the LEGACY
+  // 7-code set {16-20,22,23} while a real page resolved the strict 5-code set
+  // {16-20}. Every sibling reader in this file returns the BROWSER DEFAULT
+  // when `window` is absent; this one silently disagreed, so any node-side
+  // test or capture probe reasoning about the water mask was reasoning about
+  // a set the client never uses (live uniform dump: uWaterCodeMask ==
+  // 0x1F0000). Explicit try/catch shape now, matching the siblings.
   try {
-    return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("strictWaterCodes") !== "off";
-  } catch (_) { return false; }
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("strictWaterCodes") !== "off";
+  } catch (_) { return true; }
 }
 const TERRAIN_WATER_CODES = new Set(
   readStrictWaterCodesFlag() ? [16, 17, 18, 19, 20] : [16, 17, 18, 19, 20, 22, 23],
+);
+// 2026-07-31 (water-fix) — THE SECOND MASK F12-5 deferred ("keep-22-scroll-only
+// (faux running water) ... needs a 2nd mask", url-flags.md).
+//
+// Two questions, two answers:
+//   - "does it BEHAVE like water?" (the vertical swell) -> retail's
+//     surface-characteristic table. 22 FauxWaterRunning and 23 SeaSlime are
+//     NOT water there, so they must not bob. That is TERRAIN_WATER_CODES.
+//   - "does it LOOK like water?" (scroll, tint, sheen, POM bypass) -> the art.
+//     Code 22 is faux *running water*: on the BC7 arm it literally shares one
+//     retail RenderSurface with 16 WaterRunning (terrain_bc7.js layer->rsId
+//     dedupe). With one mask, two cells drawn from the SAME texture animated
+//     differently — a static "river" beside a flowing one. That is exactly the
+//     "water effect missing in places" symptom, and it is what this set fixes.
+//
+// So 22 gets the SURFACE animation and no swell. 23 SeaSlime stays out of both
+// (its art is slime, not water, and retail agrees). `?strictWaterCodes=off`
+// still widens BOTH sets to the legacy 16-23, so the escape keeps meaning
+// "restore the pre-F12-5 behaviour" exactly.
+const TERRAIN_WATER_SURFACE_CODES = new Set(
+  readStrictWaterCodesFlag()
+    ? [16, 17, 18, 19, 20, 22]
+    : [16, 17, 18, 19, 20, 22, 23],
 );
 // Region 0x13 lava codes: none (see comment above). Future region-aware
 // extension would populate this for, e.g., Volcanic Hills.
@@ -836,9 +892,9 @@ in float vertexHue;
 in vec3 acLightNormal;
 
 uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
-uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of water terrain codes (bit i = code i)
+uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of SWELL-eligible water codes (retail SurfChar set; the fragment stage uses the wider uWaterSurfaceCodeMask for the surface look)
 uniform int uLavaCodeMask;            // Phase 2.2 — bitmask of lava terrain codes (Region 0x13 = 0)
-uniform float uDisplacementEnabled;   // Phase 2.2 — 0.0 OFF / 1.0 ON (quality gate; off when subdivLevel < 2)
+uniform float uDisplacementEnabled;   // Phase 2.2 — 0.0 OFF / 1.0 ON (2026-07-31: plain ?waterWave=off escape; NO subdiv gate, the wave is lattice-locked and level-independent)
 uniform vec2 uLbOriginXy;             // Phase 2.2 — per-LB world-frame origin (lbX*192, lbY*192); ensures wave-phase continuity across LB seams
 
 out vec2 vGridUv;
@@ -866,15 +922,14 @@ out vec3 vAcLightNormal;
 // Flat-interpolated alongside vTerrainCode so the fragment sees the
 // same provoking-vertex classification.
 flat out int vIsWater;
-// Perf D1 — vertex-side fold of the two water-modulation sines that
-// the fragment shader used to evaluate per-pixel.
-//   .x = sin(uTime * 0.3)                       -- water tint breath (constant per draw)
-//   .y = sin(uTime * 0.5 + worldXy.x * 0.1)     -- one term of the displacement wave
-// Per-vertex linear interpolation across a 24 m cell is visually
-// indistinguishable from per-pixel evaluation at these slow
-// frequencies (worldXy.x advances by 0.1 rad per 1 m, so a 24 m cell
-// spans ~2.4 rad; the curve is still smooth enough that linear
-// interpolation across the cell looks identical to a half-pixel eye).
+// Perf D1 — vertex-side fold of the water modulation the fragment shader
+// used to evaluate per-pixel.
+//   .x = sin(uTime * 0.3)  -- water tint breath (constant per draw, so
+//        linear interpolation of it is exact)
+//   .y = 2026-07-31 (water-fix) this vertex's APPLIED swell height in
+//        metres (0.0 on non-water vertices). Interpolates across the
+//        triangle exactly the way the displaced geometry does, so the
+//        fragment stage reads a consistent crest/trough signal.
 out vec2 vWaveModulation;
 
 // 2026-05-30 — logarithmic depth buffer participation. The renderer runs
@@ -918,6 +973,45 @@ float valueNoise2D(vec2 p) {
   return mix(mix(a, b, u), mix(c, d, u), v) * 2.0 - 1.0;
 }
 
+// 2026-07-31 (water-fix) — the water swell, sampled at an arbitrary
+// WORLD-frame XY (metres). Two sines at ~140 m and ~101 m wavelength;
+// combined envelope ~0.25 m, inside the 0.4 m plan cap.
+float waterSwellAt(vec2 wxy) {
+  return sin(uTime * 0.5 + wxy.x * 0.045) * 0.15
+       + sin(uTime * 0.7 + wxy.y * 0.062) * 0.10;
+}
+
+// 2026-07-31 (water-fix) — LOD-safe evaluation of the swell: sample it on
+// the 24 m CONTROL lattice and bilinearly interpolate to the vertex. See
+// the long comment above the shader source for why this (and not a direct
+// per-vertex sine) is what keeps the water surface identical at every
+// subdivision factor, hence crack-free across the moving LOD ring and
+// phase-continuous across landblock seams (the lattice is world-frame and
+// 192 is a multiple of 24, so both LBs sharing a seam agree exactly).
+float waterSwellLattice(vec2 wxy) {
+  vec2 c0 = floor(wxy / 24.0) * 24.0;
+  vec2 f = (wxy - c0) / 24.0;
+  float s00 = waterSwellAt(c0);
+  float s10 = waterSwellAt(c0 + vec2(24.0, 0.0));
+  float s01 = waterSwellAt(c0 + vec2(0.0, 24.0));
+  float s11 = waterSwellAt(c0 + vec2(24.0, 24.0));
+  return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
+// 2026-07-31 (water-fix) — same lattice lock for the (currently inactive)
+// lava branch, so a region-aware extension that populates uLavaCodeMask
+// inherits the crack-free property instead of re-opening the seam.
+float lavaSwellLattice(vec2 wxy) {
+  vec2 c0 = floor(wxy / 24.0) * 24.0;
+  vec2 f = (wxy - c0) / 24.0;
+  vec2 t = vec2(uTime * 0.2, 0.0);
+  float s00 = valueNoise2D(c0 * 0.05 + t);
+  float s10 = valueNoise2D((c0 + vec2(24.0, 0.0)) * 0.05 + t);
+  float s01 = valueNoise2D((c0 + vec2(0.0, 24.0)) * 0.05 + t);
+  float s11 = valueNoise2D((c0 + vec2(24.0, 24.0)) * 0.05 + t);
+  return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
 void main() {
   vec3 displacedPos = position;
   // Retail zFightTerrainAdjust — lower every terrain vertex ~1 cm so at-grade
@@ -932,38 +1026,37 @@ void main() {
   // the displacement gate so Perf D1's vWaveModulation can read it
   // unconditionally below.
   vec2 worldXy = uLbOriginXy + position.xy;
-  // Perf D1 — compute both sine modulations at vertex rate (once per
-  // vertex instead of once per fragment). See varying declaration
-  // above for the rationale on interpolation fidelity.
+  // Perf D1 — the tint-breath sine at vertex rate (once per vertex instead
+  // of once per fragment). uTime is constant per draw so .x is literally the
+  // same value at every vertex and survives interpolation exactly.
+  // 2026-07-31 (water-fix) — .y used to carry one wavelet of the old
+  // per-vertex sine so the displacement could reuse it. The swell is now
+  // lattice-locked (see waterSwellLattice), so .y instead exports THIS
+  // vertex's applied swell height in metres — a value the fragment stage can
+  // read without re-deriving the wave. Zero on non-water vertices.
   float waveModX = sin(uTime * 0.3);
-  float waveModY = sin(uTime * 0.5 + worldXy.x * 0.1);
-  vWaveModulation = vec2(waveModX, waveModY);
-  // Phase 2.2 — quality-gated time-varying displacement on water + lava
-  // terrain. uDisplacementEnabled is 0.0 when subdivLevel < 2 (the
-  // vertices are 24 m apart at level 1 and the wave wavelength would
-  // exceed the screen). The bitmask lookups are 32-bit shifts; both
-  // masks are constructed JS-side from the TERRAIN_WATER_CODES /
-  // TERRAIN_LAVA_CODES sets so the GLSL stays free of per-code if/elif
-  // chains.
+  float appliedSwell = 0.0;
+  // Time-varying displacement on water + lava terrain, gated by
+  // uDisplacementEnabled (now a plain ?waterWave=off escape, NOT a subdiv
+  // quality gate — the lattice lock makes the surface level-independent).
+  // The bitmask lookups are 32-bit shifts; both masks are constructed
+  // JS-side from the TERRAIN_WATER_CODES / TERRAIN_LAVA_CODES sets so the
+  // GLSL stays free of per-code if/elif chains.
   if (uDisplacementEnabled > 0.5 && code >= 0 && code < 32) {
     int bit = 1 << code;
     if ((uWaterCodeMask & bit) != 0) {
-      // Two-wavelet sine sum at different frequencies + phases. Total
-      // envelope ~0.25 m, well under the 0.4 m plan-doc cap. waveModY
-      // reuses Perf D1's vertex-rate sine for the first wavelet so we
-      // do not pay for the same evaluation twice on this vertex.
-      float wave = waveModY * 0.15
-                 + sin(uTime * 0.7 + worldXy.y * 0.13) * 0.10;
-      displacedPos.z += wave;
+      appliedSwell = waterSwellLattice(worldXy);
+      displacedPos.z += appliedSwell;
       isWater = 1;
     } else if ((uLavaCodeMask & bit) != 0) {
       // Slow chunky 2D value-noise — 0.4 m max amplitude. Inactive for
       // Region 0x13 (no lava codes in the mask); kept here for forward
       // compat with region-aware extensions.
-      float n = valueNoise2D(worldXy * 0.05 + vec2(uTime * 0.2, 0.0));
-      displacedPos.z += n * 0.4;
+      appliedSwell = lavaSwellLattice(worldXy) * 0.4;
+      displacedPos.z += appliedSwell;
     }
   }
+  vWaveModulation = vec2(waveModX, appliedSwell);
   vIsWater = isWater;
 
   vWorldPos = (modelMatrix * vec4(displacedPos, 1.0)).xyz;
@@ -1203,24 +1296,32 @@ uniform float uTriplanarSharpness;
 // HI end remains the JS constant TRIPLANAR_SLOPE_HI baked into the
 // shader source — only the LO end varies per quality.
 uniform float uTriplanarSlopeLo;
-// Phase 2.2 — shared wall-clock seconds + water flag for UV scroll +
-// tint modulation. uDisplacementEnabled gates both effects so they
-// stay quiet at subdivLevel=1 (matches the vertex-shader gate).
+// Phase 2.2 — shared wall-clock seconds, pushed once per rAF by
+// loop.js::tickTerrainUTime over scene3d.terrainMaterials. ONE clock drives
+// the vertex swell, the UV scroll and the sheen, so all three stay
+// phase-locked with each other and across landblock seams.
 uniform float uTime;
-uniform float uDisplacementEnabled;
-// 2026-07-08 — water UV scroll gate, DECOUPLED from uDisplacementEnabled.
-// The vertex displacement (rise/fall) needs subdivided geometry so it stays
-// gated on uDisplacementEnabled (subdivLevel>=2); the per-pixel surface SCROLL
-// does NOT, but it used to share that gate — so the batched ring + distance>=2
-// LODs + low/mid quality left open water frozen ("moves far, freezes close").
-// This uniform (default 1.0) drives the scroll independently; ?waterScroll=off
-// sets it 0.0 (fully static) as a rollback escape.
+// 2026-07-08 — water UV scroll gate, DECOUPLED from the vertex displacement.
+// The scroll used to share uDisplacementEnabled, which is a geometry/subdiv
+// gate — so the batched ring, the distance >= 2 LODs and quality low/mid left
+// open water frozen ("moves far, freezes close").
+// 2026-07-31 (water-fix) — this is now the gate for the WHOLE per-pixel
+// surface animation: the UV scroll AND the blue tint breath (the tint was
+// still on uDisplacementEnabled and died at low/mid with it). The fragment
+// stage therefore no longer declares uDisplacementEnabled at all — it is a
+// vertex-stage-only uniform. ?waterScroll=off => static surface; the
+// separate ?waterWave=off => flat geometry; both off => fully static water.
 uniform float uWaterScrollEnabled;
-// F12-5 — same water-code bitmask the vertex shader uses for displacement
-// (bit i = terrain code i is animated water). The per-corner UV-scroll test
-// below reads it so the displacement / scroll / tint sites share ONE water
-// set; ?strictWaterCodes=on shrinks that set to retail's 16-20.
-uniform int uWaterCodeMask;
+// F12-5 + 2026-07-31 (water-fix) — the SURFACE water set (bit i = terrain code
+// i gets the water LOOK: scroll, tint, sheen, POM bypass). Deliberately WIDER
+// than the vertex stage's uWaterCodeMask, which drives the swell and follows
+// retail's surface-characteristic table: code 22 FauxWaterRunning shares a
+// retail RenderSurface with 16 WaterRunning, so it must FLOW like the texture
+// it is drawn from while not BOBBING like real water. See
+// TERRAIN_WATER_SURFACE_CODES on the JS side. Read only through
+// isWaterCode() below, the single water test for the whole fragment stage;
+// ?strictWaterCodes=off collapses both sets to the legacy 16-23.
+uniform int uWaterSurfaceCodeMask;
 
 // Clouds-L — sample the cloud effect's cascade-0 shadow buffer to dim
 // terrain ambient + diffuse where clouds occlude the sun. takram's
@@ -1347,10 +1448,12 @@ uniform float uTerrainModSatHue;
 //   .x = sin(uTime * 0.3)   tint breath (constant per draw, so this is
 //                           literally the same value at every vertex
 //                           and survives linear interpolation exactly)
-//   .y = sin(uTime * 0.5 + worldXy.x * 0.1) -- the displacement wave
-//                           term that the vertex shader already needs;
-//                           re-exported here so the tint path can read
-//                           it without re-evaluating sin() per pixel.
+//   .y = 2026-07-31 (water-fix) the APPLIED swell height in metres at this
+//                           fragment (0.0 off water). A crest/trough signal
+//                           matched to the real displaced geometry; the old
+//                           raw-sine export no longer exists because the
+//                           swell is now lattice-locked (see the vertex
+//                           stage's waterSwellLattice).
 in vec2 vWaveModulation;
 
 out vec4 fragColor;
@@ -1428,6 +1531,16 @@ vec2 rotateCellUv(vec2 uv, int rot) {
 vec2 maskUvFor(vec2 cellUv, int rot) {
   vec2 m = rotateCellUv(cellUv, rot);
   return vec2(m.x, 1.0 - m.y);
+}
+
+// 2026-07-31 (water-fix) — THE single water-code test for the whole fragment
+// stage. Every water site (UV scroll, POM bypass, TexMerge composite, blue
+// tint, surface sheen) now calls this, so ?strictWaterCodes and any future
+// region-aware mask edit move all of them together and none can silently
+// drift onto a hardcoded range again (the pre-F12-5 bug). Code 32 is the road
+// layer and is never water, so the < 32 bound is also the mask's domain.
+bool isWaterCode(int c) {
+  return c >= 0 && c < 32 && (uWaterSurfaceCodeMask & (1 << c)) != 0;
 }
 
 int vertexTypeAt(int iu, int iv) {
@@ -1562,22 +1675,41 @@ void main() {
   // open water on the batched ring + distance>=2 LODs + low/mid quality. The
   // per-corner uWaterCodeMask test below still restricts the scrolled UV to
   // water corners, so land stays static regardless.
-  vec2 waterCellUv = cellUv;
-  if (uWaterScrollEnabled > 0.5) {
-    waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
-  }
+  // 2026-07-31 (water-fix) — the scrolled UV is now derived BELOW, after the
+  // POM march, so it inherits the same parallax-offset cellUv every other
+  // sampler reads. Deriving it here (as it used to be) left the water tile
+  // off-registration against albedo / nra / masks whenever POM was live.
 
   int t00 = vertexTypeAt(iu,     iv    );  // SW
   int t10 = vertexTypeAt(iu + 1, iv    );  // SE
   int t01 = vertexTypeAt(iu, iv + 1);  // NW
   int t11 = vertexTypeAt(iu + 1, iv + 1);  // NE
 
+  // 2026-07-31 (water-fix) — per-corner water classification, resolved ONCE
+  // and reused by the POM bypass, the scroll UV selection, the TexMerge
+  // composite, the tint and the sheen.
+  bool wc00 = isWaterCode(t00);
+  bool wc10 = isWaterCode(t10);
+  bool wc01 = isWaterCode(t01);
+  bool wc11 = isWaterCode(t11);
+  bool cellTouchesWater = wc00 || wc10 || wc01 || wc11;
+
   // T4 POM -- computed here (before every texture sample) so the offset
   // cellUv feeds the whole pipeline. Nearest-corner layer only (same
   // single-sample convention as the detail layers); constant-height
   // retail layers self-disable (alpha 255 everywhere -> march exits at
   // step 0 with zero offset).
-  if (uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd) {
+  // 2026-07-31 (water-fix) — WATER BYPASSES POM. POM offsets cellUv by
+  // marching a height field sampled from the layer's own uAtlas alpha. On a
+  // scrolling water tile that is wrong twice over: the offset is derived from
+  // the UNSCROLLED cellUv (so relief and texels slide against each other),
+  // and a liquid surface has no parallax relief to begin with — the retail
+  // RGBA8 water layers self-disable (alpha 255 -> zero offset) but the BC7
+  // arm derives height from the retail albedo, so on ?terrainBc7=on water
+  // WOULD have marched and made the flow swim. Bypassing on any
+  // water-touching cell keeps both arms identical here and is a strict
+  // no-op wherever water is absent.
+  if (uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd && !cellTouchesWater) {
     float pw00 = (1.0 - fu) * (1.0 - fv);
     float pw10 = fu * (1.0 - fv);
     float pw01 = (1.0 - fu) * fv;
@@ -1611,21 +1743,39 @@ void main() {
     }
   }
 
+  // Phase 2.2 — water UV scroll. Apply a per-frame offset to the intra-cell
+  // UV so the water texture pattern drifts. fract() keeps it inside the cell;
+  // atlasUvFor's fract(uv * tex_tiling) then wraps cleanly inside the atlas
+  // layer because tex_tiling is an INTEGER (retail 2) — the wrap point of the
+  // outer fract lands on a wrap point of the inner one, so there is no seam.
+  //
+  // 2026-06-21 — dropped the "and vIsWater == 1" gate. vIsWater is FLAT (the
+  // triangle's provoking vertex), so on a shoreline cell whose provoking
+  // vertex is land it was 0 -> the cell's water corners stayed STATIC even
+  // though open-water neighbours scrolled, producing a hard per-cell
+  // flow/no-flow block right at the waterline. The per-corner selection below
+  // already scrolls only water-typed corners, so computing the drifted UV
+  // unconditionally makes the flow bilinear-continuous across the seam.
+  // 2026-07-31 (water-fix) — moved here (post-POM) so it rides the same
+  // parallax-adjusted cellUv every other sampler uses.
+  vec2 waterCellUv = cellUv;
+  if (uWaterScrollEnabled > 0.5) {
+    waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
+  }
+
   // Per-corner cellUv: water-typed corners get the scrolled UV, others
   // stay on the static path. This keeps the blend across the water /
   // land seam continuous because non-water corners contribute their
   // unscrolled tile while the water corners drift.
   //
   // F12-5 — was a hardcoded "t >= 16 && t <= 23 && t != 21" range (=
-  // {16-20,22,23}); now reads the shared uWaterCodeMask so this scroll
-  // site, the displacement mask, and the tint all use ONE water set.
-  // Byte-identical with the default mask; ?strictWaterCodes=on drops 22
-  // (FauxWaterRunning) + 23 (SeaSlime) — which retail's SurfChar table marks
-  // NOT water — so marsh/slime no longer scrolls like open sea.
-  vec2 uv00 = (t00 >= 0 && t00 < 32 && (uWaterCodeMask & (1 << t00)) != 0) ? waterCellUv : cellUv;
-  vec2 uv10 = (t10 >= 0 && t10 < 32 && (uWaterCodeMask & (1 << t10)) != 0) ? waterCellUv : cellUv;
-  vec2 uv01 = (t01 >= 0 && t01 < 32 && (uWaterCodeMask & (1 << t01)) != 0) ? waterCellUv : cellUv;
-  vec2 uv11 = (t11 >= 0 && t11 < 32 && (uWaterCodeMask & (1 << t11)) != 0) ? waterCellUv : cellUv;
+  // {16-20,22,23}); now reads the shared uWaterCodeMask (via isWaterCode)
+  // so this scroll site, the displacement mask, the TexMerge composite, the
+  // tint and the sheen all use ONE water set.
+  vec2 uv00 = wc00 ? waterCellUv : cellUv;
+  vec2 uv10 = wc10 ? waterCellUv : cellUv;
+  vec2 uv01 = wc01 ? waterCellUv : cellUv;
+  vec2 uv11 = wc11 ? waterCellUv : cellUv;
 
   vec3 c00 = texture(uAtlas, atlasUvFor(clamp(t00, 0, 32), uv00)).rgb;
   vec3 c10 = texture(uAtlas, atlasUvFor(clamp(t10, 0, 32), uv10)).rgb;
@@ -1636,6 +1786,15 @@ void main() {
   float w10 = fu * (1.0 - fv);
   float w01 = (1.0 - fu) * fv;
   float w11 = fu * fv;
+
+  // 2026-07-31 (water-fix) — bilinear WATER FRACTION for this fragment,
+  // computed once here and reused by the tint and the sheen. Weighting by
+  // the same 4-corner weights the texture blend uses is what makes the water
+  // treatments fade in across the land/water seam instead of switching on a
+  // per-cell (flat provoking-vertex) or per-half-cell (nearest-corner) step.
+  float waterW = clamp(
+    (wc00 ? w00 : 0.0) + (wc10 ? w10 : 0.0) +
+    (wc01 ? w01 : 0.0) + (wc11 ? w11 : 0.0), 0.0, 1.0);
 
   // Skip stochastic blending when all four corners are the same terrain type:
   // there is no boundary to draw, and picking between identical textures only
@@ -1737,7 +1896,17 @@ void main() {
     int colBase = iu * 6;
     vec4 baseTexel = texelFetch(uMergeData, ivec2(colBase, iv), 0);
     int baseLayer = int(baseTexel.r * 255.0 + 0.5);
-    vec3 merged = texture(uAtlas, atlasUvFor(clamp(baseLayer, 0, 32), cellUv)).rgb;
+    // 2026-07-31 (water-fix) — THE headline bug. This composite REPLACES the
+    // bilinear result wholesale (result = merged, below) and it sampled every
+    // slot at the unscrolled cellUv — so with ?texMerge on (the DEFAULT since
+    // 2026-07-02) the water UV scroll was dead world-wide. Live proof before
+    // the fix: freezing uDisplacementEnabled left open sea at meanAbsDiff
+    // 0.42 / 0% pixels changed over 5 s with texMerge on, and 2.50 / 45.7%
+    // with texMerge forced off. Each slot now picks the scrolled UV iff ITS
+    // OWN atlas layer is a water code, which is also what keeps a water
+    // overlay flowing over a static land base at a blended cell border.
+    vec3 merged = texture(uAtlas, atlasUvFor(clamp(baseLayer, 0, 32),
+      isWaterCode(baseLayer) ? waterCellUv : cellUv)).rgb;
     // R4.a 2026-05-28 — explicit all-road corner case. Per
     // terrain_merge.rs::road_code (mask == 0xF -> all_road = true) +
     // texture_merge_info, an all-road cell is packed with base layer
@@ -1793,7 +1962,12 @@ void main() {
         baseW = clamp(
           baseW + splatN * uSplatNoiseAmp * 4.0 * baseW * (1.0 - baseW),
           0.0, 1.0);
-        vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32), cellUv)).rgb;
+        // 2026-07-31 (water-fix) — per-slot water UV, same rule as the base
+        // slot above. The alpha MASK keeps reading the unscrolled cellUv:
+        // the mask is the cell's authored coverage shape and must not drift,
+        // only the water texels inside it do.
+        vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32),
+          isWaterCode(layer) ? waterCellUv : cellUv)).rgb;
         merged = mix(overlayCol, merged, baseW);
       }
     }
@@ -1833,15 +2007,16 @@ void main() {
   // per-cell block as the scroll). Now weighted by the bilinear per-corner
   // water fraction (waterW) so the tint fades in across the land/water seam
   // exactly like the texture blend — continuous, no block.
-  if (uDisplacementEnabled > 0.5) {
-    float waterW =
-      (t00 >= 0 && t00 < 32 && (uWaterCodeMask & (1 << t00)) != 0 ? w00 : 0.0) +
-      (t10 >= 0 && t10 < 32 && (uWaterCodeMask & (1 << t10)) != 0 ? w10 : 0.0) +
-      (t01 >= 0 && t01 < 32 && (uWaterCodeMask & (1 << t01)) != 0 ? w01 : 0.0) +
-      (t11 >= 0 && t11 < 32 && (uWaterCodeMask & (1 << t11)) != 0 ? w11 : 0.0);
+  // 2026-07-31 (water-fix) — was gated on uDisplacementEnabled, i.e. on
+  // subdivLevel >= 2, so the breath died entirely at quality low/mid even
+  // though it is a pure per-pixel effect with no geometry dependency. It now
+  // rides uWaterScrollEnabled with the rest of the SURFACE animation, which
+  // also gives ?waterScroll=off its documented meaning: one flag, fully
+  // static water. waterW is the hoisted bilinear water fraction.
+  if (uWaterScrollEnabled > 0.5 && waterW > 0.0) {
     vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
                     0.5 + 0.5 * vWaveModulation.x);
-    result *= mix(vec3(1.0), tint, clamp(waterW, 0.0, 1.0));
+    result *= mix(vec3(1.0), tint, waterW);
   }
 
   // T7 — terrain detail-diffuse modulation (near-camera, MODULATE2X).
@@ -2139,27 +2314,26 @@ void main() {
     vec2 pbrNxy = pbrTexel.rg * 2.0 - 1.0;
     vec3 pbrN = normalize(vec3(pbrNxy, sqrt(max(1.0 - dot(pbrNxy, pbrNxy), 0.04))));
     float pbrRough = pbrTexel.b;
-    // terrainplan s4 (default tier) -- water sheen. Water layers are
-    // uncurated (flat normal, rough 230/255 -> no sheen), so give water-
-    // masked fragments a time-scrolled coherent-noise wave normal + low
-    // roughness: the T3 env cube then paints sky reflection and the sun
-    // NdotL below picks up glints. No extra pass, no new textures --
-    // finite-difference gradient of the existing fragValueNoise2D field.
-    if (uWaterEnvEnabled > 0.5 &&
-        pbrCode < 32 && (uWaterCodeMask & (1 << pbrCode)) != 0) {
-      vec2 wuv = vWorldPos.xy * 0.30 + vec2(uTime * 0.35, uTime * 0.22);
-      float h0 = fragValueNoise2D(wuv);
-      float hx = fragValueNoise2D(wuv + vec2(0.7, 0.0));
-      float hy = fragValueNoise2D(wuv + vec2(0.0, 0.7));
-      pbrN = normalize(vec3((h0 - hx) * 1.4, (h0 - hy) * 1.4, 1.0));
-      pbrRough = 0.12;
-    }
+    // terrainplan s4 water sheen USED TO LIVE HERE, inside the
+    // uPbrEnabled && !acGouraud block. 2026-07-31 (water-fix): retail
+    // Gouraud (?terrainGouraud) is DEFAULT-ON and wins over PBR, so this
+    // branch never executed in a default session -- uWaterEnvEnabled read
+    // 1.0 while doing nothing at all (live uniform dump confirmed
+    // pbr=1, gouraud=1). The sheen now lives in its own block below the PBR
+    // block so it runs in BOTH shading modes; keeping it here as well would
+    // double-count it. Water also skips the material NdotL/AO substitution
+    // now: the nra layers for water codes are deliberately uncurated in both
+    // texture arms (flat normal, rough 230 -- see terrain_bc7.js "the water
+    // shader owns their normal and roughness"), so applying them to water
+    // just flattens what the sheen block is about to compute.
     float pbrNdotl = mix(0.65, 1.0, clamp(dot(pbrN, sunDir), 0.0, 1.0));
     if (slopeShading) {
       pbrNdotl *= mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
     }
-    ndotl = pbrNdotl;
-    result *= mix(0.6, 1.0, pbrTexel.a);
+    // 2026-07-31 (water-fix) — fade the material NdotL + AO back out over
+    // water by the bilinear waterW. Strict no-op off water (waterW == 0).
+    ndotl = mix(pbrNdotl, ndotl, waterW);
+    result *= mix(mix(0.6, 1.0, pbrTexel.a), 1.0, waterW);
 
     // T3 -- env-specular for EVERY layer, driven by the material's own
     // roughness map (nra B channel). Reflection sharpness = mip lod scaled
@@ -2180,9 +2354,73 @@ void main() {
         vec3 reflW = reflect(viewW, nWorld);
         vec3 envSample = textureLod(uEnvCube, reflW, pbrRough * 5.0).rgb;
         float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewW, nWorld), 0.0, 1.0), 5.0);
-        iblSpec = envSample * fres * envGloss * envGloss * uEnvIntensity;
+        // 2026-07-31 (water-fix) — (1 - waterW): the dedicated water sheen
+        // below owns the water reflection, so the generic material term
+        // stands down over water instead of adding a second, flat one.
+        iblSpec = envSample * fres * envGloss * envGloss * uEnvIntensity
+                * (1.0 - waterW);
       }
     }
+  }
+
+  // === 2026-07-31 (water-fix) — WATER SURFACE SHEEN =======================
+  // terrainplan s4's water sheen, lifted out of the PBR block so it runs in
+  // BOTH shading modes. It used to sit inside uPbrEnabled > 0.5 &&
+  // !acGouraud, and retail Gouraud is default-ON and wins that test, so the
+  // default-on uWaterEnvEnabled gate was a no-op in every normal session.
+  //
+  // The normal is a finite-difference gradient of the existing coherent
+  // value-noise field, scrolled in world space -- so it is the SECOND,
+  // higher-frequency half of the surface motion, running simultaneously with
+  // (and independently of) both the geometry swell and the UV scroll. No
+  // extra pass, no new textures, no light-count change (VFX invariant), and
+  // it reads only static data + the shared clock + world position.
+  //
+  // Weighted by waterW, so it fades across the shoreline exactly like the
+  // tint and the texture blend rather than switching at a cell midline.
+  // DISTANCE FADE is load-bearing, not polish. The wave normal is a
+  // finite-difference gradient of a ~3.3 m-period noise field sampled once per
+  // pixel with no derivative-aware filtering, so past a few tens of metres one
+  // pixel spans many wave periods and the specular term aliases hard: the
+  // first live shot of this block showed long white streaks radiating to the
+  // horizon across the whole sea (attributed by forcing uWaterEnvEnabled=0,
+  // which removed them exactly). Rather than filter the noise, the sheen is
+  // simply a NEAR-CAMERA effect: full strength inside 30 m, gone by 160 m,
+  // with the normal flattening toward vertical and the env reflection blurring
+  // up the mip chain on the way out. Beyond the fade the water reads as the
+  // plain retail tile it did before, which is also the conservative answer.
+  float sheenFade = 1.0 - smoothstep(30.0, 160.0, vViewDepth);
+  if (uWaterEnvEnabled > 0.5 && waterW > 0.0 && sheenFade > 0.001) {
+    vec2 wuv = vWorldPos.xy * 0.30 + vec2(uTime * 0.35, uTime * 0.22);
+    float wh0 = fragValueNoise2D(wuv);
+    float whx = fragValueNoise2D(wuv + vec2(0.7, 0.0));
+    float why = fragValueNoise2D(wuv + vec2(0.0, 0.7));
+    // AC tangent frame (z-up), same convention the PBR path assumes. The xy
+    // slope is scaled by sheenFade so the surface relaxes to flat with
+    // distance instead of shimmering.
+    vec3 wN = normalize(vec3((wh0 - whx) * 1.4 * sheenFade,
+                             (wh0 - why) * 1.4 * sheenFade,
+                             1.0));
+    // View direction in three world space, and the same vector in AC space:
+    // world(x,y,z) = ac(x,z,-y) so ac = (w.x, -w.z, w.y).
+    vec3 viewW = normalize(vWorldPos - cameraPosition);
+    vec3 viewAc = vec3(viewW.x, -viewW.z, viewW.y);
+    // Sun glint (Blinn half-vector). sunDir is the AC-z-up direction TO the
+    // sun; -viewAc is the direction to the eye.
+    vec3 halfAc = normalize(sunDir - viewAc);
+    float glint = pow(clamp(dot(wN, halfAc), 0.0, 1.0), 64.0);
+    vec3 waterSpec = uAcSunColor * glint * 0.30;
+    if (uIblEnabled > 0.5) {
+      vec3 nWorldW = normalize(vec3(wN.x, wN.z, -wN.y));
+      vec3 reflW = reflect(viewW, nWorldW);
+      // Near camera: low mip, near-mirror sky reflection (water is the one
+      // terrain layer that genuinely reflects the sky). Far: blur up the mip
+      // chain, which is the correct pre-filter for a shrinking footprint.
+      vec3 envSample = textureLod(uEnvCube, reflW, mix(4.0, 0.6, sheenFade)).rgb;
+      float fresW = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewW, nWorldW), 0.0, 1.0), 5.0);
+      waterSpec += envSample * fresW * uEnvIntensity * 0.55;
+    }
+    iblSpec += waterSpec * waterW * sheenFade;
   }
 
   // Clouds-L — cloud-shadow modulation. Project world pos into cascade
@@ -2285,6 +2523,25 @@ function pickSubdivLevel(scene3d) {
 }
 
 /**
+ * 2026-07-31 (water-fix) — the shared terrain wall-clock in seconds, read
+ * from the same `scene3d.frameTime.tsSec` snapshot `loop.js::tickTerrainUTime`
+ * pushes onto every material each rAF. Used to SEED a freshly built material's
+ * `uTime` so it is phase-locked with its already-resident neighbours on its
+ * very first drawn frame instead of starting at 0.
+ *
+ * Falls back to a fresh `performance.now()` (and finally 0) so the Node test
+ * harness and any pre-loop bake still get a sane value. Exported for tests.
+ */
+export function sharedTerrainTimeSec(scene3d) {
+  const snap = scene3d?.frameTime?.tsSec;
+  if (Number.isFinite(snap)) return snap;
+  if (typeof performance !== "undefined" && performance.now) {
+    return performance.now() * 0.001;
+  }
+  return 0;
+}
+
+/**
  * Phase 2.2 — pack a Set<int> of terrain codes into a 32-bit bitmask.
  * Bit `i` is set if code `i` is in the set. Used by the vertex shader's
  * displacement branch (`(uWaterCodeMask & (1 << code)) != 0`) so the
@@ -2308,6 +2565,8 @@ export function computeCodeBitmask(codeSet) {
 
 // Phase 2.2 — exported for tests + capture-script probes.
 export const PHASE_2_2_WATER_CODES = TERRAIN_WATER_CODES;
+// 2026-07-31 (water-fix) — the wider fragment-side surface set.
+export const WATER_SURFACE_CODES = TERRAIN_WATER_SURFACE_CODES;
 export const PHASE_2_2_LAVA_CODES = TERRAIN_LAVA_CODES;
 
 
@@ -2372,7 +2631,12 @@ export async function resolveTerrainRingOpts(
       subdivLevel: 1,
       canSubdivide: false,
       displacementEnabled: false,
+      // 2026-07-31 (water-fix) — present + off for shape parity with the full
+      // return below (wire mode builds a MeshBasicMaterial, never the water
+      // shader), so a reader can compare the two objects field-for-field.
+      waterScrollEnabled: false,
       waterCodeMask: 0,
+      waterSurfaceCodeMask: 0,
       lavaCodeMask: 0,
       atlasTexture: null,
       roadTexture: null,
@@ -2450,13 +2714,22 @@ export async function resolveTerrainRingOpts(
     subdivLevel >= 1 &&
     typeof wasmExports.fetch_subdivided_landblocks === "function";
 
-  // Phase 2.2 — animated water/lava displacement. Only enabled at
-  // subdivLevel >= 2 per plan hand-off note #3 (level=1 has 24 m vertex
-  // spacing; the wave wavelength would be larger than the screen).
-  // Materials still bind `uTime` / `uDisplacementEnabled` so the JS
-  // tick can flip the gate later without rebuilding the shader.
-  const displacementEnabled = subdivLevel >= 2;
+  // Phase 2.2 — animated water/lava displacement.
+  // 2026-07-31 (water-fix) — the `subdivLevel >= 2` quality gate is GONE.
+  // It existed because a raw per-vertex sine needs sub-cell vertices to look
+  // like a wave; the swell is now evaluated on the 24 m control lattice and
+  // bilinearly interpolated (waterSwellLattice), so factor 1, 2, 4 and 8 all
+  // reproduce the SAME surface. Keeping the gate only meant (a) no rise/fall
+  // at all on quality low/mid, and (b) — worse — the distance >= 2 rings and
+  // the player's own LB producing DIFFERENT surfaces from the same uniform,
+  // which is what tore open water along the moving LOD boundary.
+  // `?waterWave=off` is the rollback escape. Materials still bind `uTime` /
+  // `uDisplacementEnabled` so the JS tick can flip the gate live.
+  const displacementEnabled = readWaterWaveFlag();
   const waterCodeMask = computeCodeBitmask(TERRAIN_WATER_CODES);
+  // 2026-07-31 (water-fix) — wider SURFACE set (adds 22 FauxWaterRunning);
+  // see TERRAIN_WATER_SURFACE_CODES for why the two sets differ.
+  const waterSurfaceCodeMask = computeCodeBitmask(TERRAIN_WATER_SURFACE_CODES);
   const lavaCodeMask = computeCodeBitmask(TERRAIN_LAVA_CODES);
 
   // Atlas + road textures. Built from `fetch_terrain_textures()` when
@@ -2851,6 +3124,7 @@ export async function resolveTerrainRingOpts(
     // toggling at runtime needs a reload.
     waterScrollEnabled: readWaterScrollFlag(),
     waterCodeMask,
+    waterSurfaceCodeMask,
     lavaCodeMask,
     atlasTexture,
     roadTexture,
@@ -3099,6 +3373,31 @@ function readTerrainModulationFlag() {
  * shader gate to 0 → fully static water, a rollback escape. Any other/missing
  * value is on. try/catch for the non-browser Node harness, like the siblings.
  */
+/**
+ * 2026-07-31 (water-fix) — Parse `?waterWave` from the page URL. Gates the
+ * VERTICAL swell (the rise/fall). DEFAULT ON at every quality tier and every
+ * subdivision factor: the swell is lattice-locked so it is level-independent
+ * (see `waterSwellLattice` in TERRAIN_VERTEX_GLSL). `?waterWave=off` (or
+ * `0`/`false`) sets `uDisplacementEnabled` to 0 — flat water geometry, with
+ * the surface scroll + sheen still running. Same reader shape (and
+ * try/catch for the Node harness) as `readWaterScrollFlag`.
+ *
+ * The pair is deliberately independent: `?waterWave=off` isolates the
+ * surface effects, `?waterScroll=off` isolates the geometry, and both off is
+ * the fully-static rollback.
+ */
+function readWaterWaveFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("waterWave");
+    if (typeof v !== "string") return true;
+    const lv = v.toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
 function readWaterScrollFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return true;
@@ -3978,8 +4277,23 @@ export async function bakeTerrainForLandblock(
       // uLavaCodeMask are packed bitmasks (bit i = code i). Gate is
       // 1.0 only when subdivLevel >= 2. uLbOriginXy lets the wave
       // phase stay continuous across LB seams (world-frame XY).
-      uTime: { value: 0.0 },
+      // 2026-07-31 (water-fix) — SEEDED to the live shared clock, not 0.0.
+      // Every LB stream-in / LOD re-bake / LRU unpark builds a fresh material
+      // whose uTime stayed 0 until the next tickTerrainUTime, so its first
+      // rendered frame (the bake pre-warm draws it) showed water at t=0 while
+      // its neighbours were at t=now — a one-frame phase tear along the new
+      // LB's seam every time terrain rebaked around the player.
+      uTime: { value: sharedTerrainTimeSec(scene3d) },
       uWaterCodeMask: { value: opts.waterCodeMask },
+      // 2026-07-31 (water-fix) — the fragment stage's wider SURFACE set.
+      // Defaults to the swell set when a caller predates this field, so an
+      // older opts object degrades to the previous single-mask behaviour
+      // rather than to "no water at all".
+      uWaterSurfaceCodeMask: {
+        value: Number.isInteger(opts.waterSurfaceCodeMask)
+          ? opts.waterSurfaceCodeMask
+          : opts.waterCodeMask,
+      },
       uLavaCodeMask: { value: opts.lavaCodeMask },
       uDisplacementEnabled: {
         value: opts.displacementEnabled ? 1.0 : 0.0,
@@ -4149,6 +4463,11 @@ export async function bakeTerrainForLandblock(
     // per-LB GPU resource, not a cache-shared atlas).
     mergeDataTexture: mergeDataTex,
     terrainCodes: terrainCodesCopy,
+    // Terrain-VFX Wave 0A — the 81 control-grid Z values, column-major
+    // (`idx = vx*9 + vy`), so `scene3d/terrain_oracle.js` can cache exact
+    // ground height per LB and keep answering after `landblock_lru.park()`
+    // removes this mesh from terrainGroup.
+    heights: Float32Array.from(wasmMesh.heights),
     roadCodes: roadCodesCopy,
     hasRoads,
     // Phase 1.2 — capture probes inspect this to verify the detail-
@@ -4175,6 +4494,7 @@ export async function bakeTerrainForLandblock(
     // state at build time.
     displacementEnabled: opts.displacementEnabled,
     waterCodeMask: opts.waterCodeMask,
+    waterSurfaceCodeMask: opts.waterSurfaceCodeMask,
     lavaCodeMask: opts.lavaCodeMask,
   };
 

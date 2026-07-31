@@ -57,6 +57,10 @@ they accept the perf cost.
 | `pom` | off | off | on | on | 3.1 |
 | `ssao` | off | off | on | on | 3.2 |
 | `csm` | off | off | on | on | 3.3 |
+| `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
+| `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
+| `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
+| `terrainTrailFade` | 4 | 4 | 4 | 4 | Terrain VFX Wave 0B |
 
 ### Flag glossary
 
@@ -85,6 +89,33 @@ they accept the perf cost.
   surfaces.
 - **`ssao`** — Phase 3.2. Screen-space ambient occlusion post pass.
 - **`csm`** — Phase 3.3. Cascaded shadow maps.
+- **`terrainTrail`** — Terrain VFX Wave 0B
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §2.2/§3.1). The
+  shared stomp / footprint render-target trail map (`scene3d/trail_map.js`):
+  grass reads it to flatten blades where the player walks, snow to dent
+  drifts, mud to keep a print. **OFF on every tier today** — plan §5.9 ships
+  each terrain effect off and promotes it deliberately after the §6 bar; the
+  promotion target for this key is `high`/`ultra` on, `low`/`mid` off (it is a
+  render-target pass plus a fullscreen quad, so it is fill-bound and gets
+  cheaper at 25 % render scale, but `low` exists to not pay).
+  ⚠ Deliberately **NOT** in `BOOL_FLAGS`: `parseBool` also accepts
+  `1`/`true`/`yes`, which would widen the exact-`on` opt-in that its decisive
+  reader (`scene3d/vfx_flags.js::terrainTrailEnabled`) requires — the same
+  rule `gfxRelief` follows, for the same reason. The URL override is
+  `?terrainTrail=on` / `=off`; anything else warns and does not enable.
+- **`terrainTrailRes`** — Terrain VFX Wave 0B. Trail-map texels per side.
+  At the default 96 m extent, 256 squared is 0.375 m/texel — deliberately
+  coarse (plan §8 risk 7 flags it as too coarse for a single snow footprint;
+  Wave 2A decides whether snow gets a second, smaller, higher-res map rather
+  than re-purposing this one). `?terrainTrailRes=N`; cannot enable the
+  feature on its own.
+- **`terrainTrailRadius`** — Terrain VFX Wave 0B. Trail-map HALF-extent in
+  metres; the map covers twice this. Raising it trades texel density for
+  reach at a fixed `terrainTrailRes`. `?terrainTrailRadius=N`.
+- **`terrainTrailFade`** — Terrain VFX Wave 0B. Seconds for a full stomp to
+  recover to zero. 4 s is grass springback (plan §3.1); mud wants ~30 s
+  (§3.7) and snow effectively never (§3.4), so a family overrides per effect
+  rather than moving this global. `?terrainTrailFade=N`.
 
 ## Devtools inspection
 

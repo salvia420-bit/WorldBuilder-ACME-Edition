@@ -212,6 +212,102 @@ export function breathFogEnabled() {
   return _breathFog;
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN VFX (Wave 0B — docs/2026-07-31-terrain-vfx-plan.md §2.4).
+//
+// These do NOT default to visualAllEffects(). Every terrain-VFX flag is a
+// STRICT exact-match opt-in that ships OFF (plan §5.9) and is deliberately kept
+// out of `quality.js BOOL_FLAGS` so `parseBool` cannot widen `=== "on"` to
+// `1`/`true`/`yes` — the same rule `gfxRelief` follows and the same reason.
+// The ONE exception is the master kill switch, which is an opt-OUT by design.
+// ---------------------------------------------------------------------------
+
+/** Quality-preset bag, read through the canonical runtime idiom
+ *  (`particles/particle_emitter.js:213`). Null pre-init / in node. */
+function _presetFlags() {
+  try {
+    if (typeof window !== "undefined" && window.liveScene3d?.quality?.flags) {
+      return window.liveScene3d.quality.flags;
+    }
+  } catch (_) { /* fail-soft */ }
+  return null;
+}
+
+let _terrainVfx;
+/** `?terrainVfx=off` — THE master kill switch for the whole terrain-VFX
+ *  programme (grass, sand, rock, snow, swamp, volcano, dirt). DEFAULT-ON as an
+ *  opt-OUT because the spine (`scene3d/terrain_vfx.js`) is INERT until a family
+ *  provider registers, and every family flag ships OFF — so a bare default
+ *  boots byte-identical while `=off` guarantees one URL kills everything.
+ *  `?wireframe=1` is a second, independent kill (plan §8 risk 8), enforced once
+ *  in `terrain_vfx.js::wireframeActive`. */
+export function terrainVfxEnabled() {
+  if (_terrainVfx === undefined) _terrainVfx = _boolFlag("terrainVfx", true);
+  return _terrainVfx;
+}
+
+let _terrainTrail;
+let _terrainTrailWarned = false;
+/** `?terrainTrail=on` — the shared stomp/footprint trail map
+ *  (`scene3d/trail_map.js`): one R8 render target centred on the player that
+ *  grass reads to flatten blades, snow to dent drifts and mud to keep a print.
+ *  STRICT exact-match opt-in; anything unrecognised warns and does NOT enable
+ *  (a silent no-op here is indistinguishable from a broken decode —
+ *  `gfx_relief.js:137` makes exactly this argument). Absent ⇒ the quality
+ *  preset's `terrainTrail`, which is **false on all four tiers this wave**.
+ *  The preset branch is NOT memoized: it may be consulted before
+ *  `window.liveScene3d.quality` exists, and caching "not ready" would stick. */
+export function terrainTrailEnabled() {
+  if (_terrainTrail !== undefined) return _terrainTrail;
+  const raw = _strFlag("terrainTrail");
+  if (raw === "on") return (_terrainTrail = true);
+  if (raw === "off") return (_terrainTrail = false);
+  // One-shot: the preset branch below deliberately does not memoize, so this
+  // reader can run every init — the warn must not become a log flood.
+  if (raw !== null && !_terrainTrailWarned) {
+    _terrainTrailWarned = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainTrail] ignoring ?terrainTrail=${JSON.stringify(raw)} — the master flag is an EXACT-match opt-in; use ?terrainTrail=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainTrail = flags.terrainTrail === true);
+}
+
+/** Numeric knob shared shape: URL wins, then the quality preset, then a
+ *  hardcoded fallback (the `gfx_relief.js` `base` composition, minus the
+ *  static quality.js import that would give vfx_flags.js a new module edge). */
+function _terrainNum(name, key, def, min, max) {
+  const v = _numFlag(name, NaN, min, max);
+  if (Number.isFinite(v)) return v;
+  const flags = _presetFlags();
+  const q = flags ? Number(flags[key]) : NaN;
+  if (Number.isFinite(q) && q >= min && q <= max) return q;
+  return def;
+}
+
+/** `?terrainTrailRes` — trail-map texels per side. Preset key `terrainTrailRes`
+ *  (low 128 / mid 128 / high 256 / ultra 512). Fallback 256 = 0.375 m/texel at
+ *  the default 96 m extent (plan §8 risk 7 — coarse for one footprint). */
+export function terrainTrailResolution() {
+  return Math.round(_terrainNum("terrainTrailRes", "terrainTrailRes", 256, 16, 2048));
+}
+
+/** `?terrainTrailRadius` — HALF-extent in metres; the map covers 2× this.
+ *  Preset key `terrainTrailRadius`. Fallback 48 m (a 96 m square). */
+export function terrainTrailRadiusM() {
+  return _terrainNum("terrainTrailRadius", "terrainTrailRadius", 48, 4, 512);
+}
+
+/** `?terrainTrailFade` — seconds for a full stomp to recover to zero. Preset
+ *  key `terrainTrailFade`. Fallback 4 s (grass springback, plan §3.1); mud
+ *  wants ~30 s and snow effectively never, so families override per effect. */
+export function terrainTrailRecoverySec() {
+  return _terrainNum("terrainTrailFade", "terrainTrailFade", 4, 0.05, 300);
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -239,6 +335,16 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "particle.foliageFireflies": foliageFirefliesEnabled,
   "particle.foliageLeaves": foliageLeavesEnabled,
   "particle.breathFog": breathFogEnabled,
+  // Terrain VFX (Wave 0B). Registered so `?visual=off` kills the terrain
+  // programme too (the firewall composition rule in this file's header) and so
+  // `vfxEffectEnabled("terrain.trailMap")` resolves rather than falling through
+  // to visualAllEffects() — which, being DEFAULT-ON, would have turned a
+  // ship-OFF effect on. Note these readers do NOT track visualAllEffects(), so
+  // `?visual=all` does NOT light them: they are strict opt-ins (plan §2.4/§5.9)
+  // and the count of DEFAULT-ON effects is unchanged at 14.
+  // The MASTER kill switch `?terrainVfx` is deliberately absent — it is a
+  // master gate like `?visual`/`?visualAll`, not a per-effect row.
+  "terrain.trailMap": terrainTrailEnabled,
 });
 
 /**
@@ -263,4 +369,6 @@ export function vfxActiveEffectIds() {
 /** Reset memoized flag readers (tests only). */
 export function _resetVfxFlags() {
   _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _brazier = _foliagePollen = _foliageFireflies = _foliageLeaves = _breathFog = _budget = undefined;
+  _terrainVfx = _terrainTrail = undefined;
+  _terrainTrailWarned = false;
 }

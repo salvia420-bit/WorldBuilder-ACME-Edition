@@ -135,6 +135,12 @@ import { runTerrainRingBatch } from "./terrain_ring.js";
 // Pure injected-deps core; the loadTerrainRing facade below injects the live
 // deps (fetch → runTerrainRingBatch; release → the existing LRU path).
 import { FixedSlotGrid, EdgeParkScheduler, FIXED_GRID_TERRAIN_RADIUS } from "./fixed_grid.js";
+// Terrain-VFX spine (Wave 0B — docs/2026-07-31-terrain-vfx-plan.md §2.2). Owns
+// the per-landblock spawn/despawn lifecycle for every terrain effect family so
+// none of them touches landblock_lru.js or fixed_grid.js. THREE is INJECTED
+// (the module imports no three), and it installs its own park/unpark/evict
+// hooks by CHAINING onto terrain_batch.js's — never clobbering them.
+import { initTerrainVfx, terrainVfxNoteLandblockMesh } from "./terrain_vfx.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -3183,6 +3189,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             }
           } catch (_) {}
         }
+        // Terrain-VFX ATTACH seam (Wave 0B, plan §2.2.1). There is NO event on
+        // `terrainGroup.add` and we deliberately do not monkey-patch it, so
+        // this is the hook: `lbMesh` is the freshly-baked mesh (null on an
+        // idempotent re-call, which the spine ignores). Fail-soft — terrain
+        // must never depend on a VFX module.
+        try { terrainVfxNoteLandblockMesh(self, lbMesh); } catch (_) {}
         return lbMesh;
       }, _urgentSlot);
     },
@@ -3420,6 +3432,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     sessionHandle,
   };
   window.liveScene3d = liveScene3d;
+  // ── Terrain-VFX spine (Wave 0B, plan §2.2) ────────────────────────────
+  // Constructed HERE, immediately after `window.liveScene3d` is set, because
+  // (a) its facade-hook install must reach `window.liveScene3d` (the
+  // dual-facade footgun `terrain_batch.js:548` documents) and (b) its flag
+  // readers fall back to `liveScene3d.quality.flags` for their preset default.
+  // THREE and the renderer are INJECTED — the module imports no three, which
+  // is what keeps `test_terrain_vfx_lifecycle.mjs` a pure-node test. Parented
+  // as a SIBLING of terrainGroup under worldRoot (identical transform, AC
+  // space) so the LRU's `terrainGroup.children` park/evict scans and the LOD
+  // rebake's dispose loop never see VFX objects.
+  // Hard no-op under `?terrainVfx=off` and `?wireframe=1` (plan §8 risk 8 —
+  // the guard lives once inside the spine, not per family), and inert until a
+  // Wave-1+ family provider registers. Exposes `window.__terrainVfx`.
+  try {
+    initTerrainVfx({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+      renderer,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainVfx] initTerrainVfx threw (terrain VFX disabled):", e);
+  }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees
   // the latest fields (sessionHandle, cellContainers3d) — capture

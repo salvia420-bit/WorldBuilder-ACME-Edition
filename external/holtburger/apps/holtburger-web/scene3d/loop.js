@@ -116,6 +116,12 @@ import { tickOscillators, setMasterClock } from "./vfx/oscillators.js";
 // leaf like oscillators.js — but loop.js already pulls in materials.js, so no
 // new cycle. Ticked right after the oscillator so it shares the master clock.
 import { tickWeatherInputs } from "./vfx/weather_inputs.js";
+// Terrain-VFX spine (Wave 0B, docs/2026-07-31-terrain-vfx-plan.md §2.2). ONE
+// call per frame, right after the VFX weather inputs so a provider reads the
+// same clock and the same wind vector every other VFX component just got.
+// Returns immediately with no providers registered, and is never even reached
+// under `?terrainVfx=off` / `?wireframe=1`.
+import { terrainVfxTick } from "./terrain_vfx.js";
 setMasterClock(VFX_GLOBALS.uTime);
 
 // A15-Q4 (2026-06-12 unification survey) — the renderer-neutral
@@ -1864,6 +1870,19 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     if (!scene3d._vfxWeatherTickWarned) {
       scene3d._vfxWeatherTickWarned = true;
       console.warn("[vfx] tickVfxWeatherInputs threw:", e);
+    }
+  }
+  // Terrain-VFX spine (Wave 0B). AFTER the weather inputs so a provider's
+  // update() reads this frame's uWindDir/uWetness, and sharing the SAME
+  // `scene3d.frameTime` clock as the two ticks above (single time source).
+  // Same try/catch shape: a thrown provider never kills the tick.
+  try {
+    terrainVfxTick(scene3d?.frameTime?.dt ?? 0, scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._terrainVfxTickWarned) {
+      scene3d._terrainVfxTickWarned = true;
+      console.warn("[terrainVfx] terrainVfxTick threw:", e);
     }
   }
   // ── DEFERRABLE group SKY decision (#4 + #7-#12). ─────────────────────

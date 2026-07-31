@@ -1,0 +1,344 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>water shader harness</title>
+<style>body{margin:0;background:#111}canvas{display:block}</style>
+<canvas id="c" width="256" height="256"></canvas>
+<script type="module">
+// GPU regression harness for the terrain WATER animation (2026-07-31).
+//
+// Renders the REAL TERRAIN_VERTEX_GLSL / TERRAIN_FRAGMENT_GLSL, read live out
+// of scene3d/terrain.js, against synthetic uniforms seeded with the values
+// measured off an actual in-world material. That proves the water animation on
+// a GPU without a world, a login, or four minutes of SwiftShader terrain bake
+// -- and, because the shader source is fetched at runtime, it A/Bs cleanly by
+// swapping the file (git stash / git show HEAD > ...) and reloading.
+//
+// Run:
+//   python3 scripts/serve.py
+//   <headless chromium> http://127.0.0.1:8765/apps/holtburger-web/test_terrain_water_gpu.html
+//   then read window.__waterHarness (window.__waterHarnessDone gates it).
+//
+// Each arm renders the same mesh at uTime 0 and uTime 5 and reports the mean
+// absolute RGB delta plus the share of pixels that moved by more than 2/255.
+// What the numbers must say (see docs/2026-07-31-water-fix-report.md):
+//   scroll_texmerge_on       >0  -- the shipped default path must animate
+//   scroll_texmerge_off      ~=  scroll_texmerge_on (texMerge must not suppress)
+//   scroll_off               0   -- ?waterScroll=off is exactly static
+//   land_no_anim             0   -- land never animates
+//   sheen_*_gouraud          >0  -- the sheen runs in retail-Gouraud mode
+//   sheen_contribution_land  0   -- and contributes nothing off water
+//   swell_only_seg8 ~= swell_only_seg64 -- swell is subdivision-independent
+//   all_three                >  any single effect (they compose)
+//   lod_identity_t3          <= lod_identity_flat_baseline
+//                                -- the swell adds NO level-dependent
+//                                   difference: factor 1 and factor 8 render
+//                                   the same surface at the same instant.
+import * as THREE from "/apps/holtburger-web/node_modules/three/build/three.module.js";
+
+// ---- pull the two GLSL literals straight out of the module source --------
+const src = await (await fetch("/apps/holtburger-web/scene3d/terrain.js")).text();
+function glslBlock(marker) {
+  const lines = src.split("\n");
+  const i = lines.indexOf(marker);
+  let j = i + 1;
+  while (lines[j] !== "`;") j++;
+  return lines.slice(i + 1, j).join("\n");
+}
+let VERT = glslBlock("const TERRAIN_VERTEX_GLSL = `");
+let FRAG = glslBlock("const TERRAIN_FRAGMENT_GLSL = `");
+// Substitute the JS template interpolations with their real numeric values.
+VERT = VERT.replace(/\$\{[^}]*\}/g, "0.0100000000");
+FRAG = FRAG.replace(/\$\{[^}]*\}/g, "0.700");
+
+// ---- auto-build a uniforms map from the declarations --------------------
+const TEX = {};
+function makeAtlas(depth, size) {
+  const d = new Uint8Array(size * size * depth * 4);
+  for (let L = 0; L < depth; L++)
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) {
+        const o = ((L * size + y) * size + x) * 4;
+        // Strong per-texel variation so ANY UV drift shows as a pixel change.
+        d[o] = (x * 255) / (size - 1);
+        d[o + 1] = (y * 255) / (size - 1);
+        d[o + 2] = ((x ^ y) & 1) ? 240 : 20;
+        d[o + 3] = 255;
+      }
+  const t = new THREE.DataArrayTexture(d, size, size, depth);
+  t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType;
+  t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
+}
+function makeVertexTypes(code) {
+  const d = new Uint8Array(9 * 9 * 4);
+  for (let i = 0; i < 9 * 9; i++) { d[i * 4] = code; d[i * 4 + 3] = 255; }
+  const t = new THREE.DataTexture(d, 9, 9);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true;
+  return t;
+}
+function makeMergeData(layer) {
+  // 48x8 RGBA: [atlasLayer, maskIdx, rot, valid]. Slot 0 = base only.
+  const d = new Uint8Array(48 * 8 * 4);
+  for (let row = 0; row < 8; row++)
+    for (let cell = 0; cell < 8; cell++) {
+      const o = (row * 48 + cell * 6) * 4;
+      d[o] = layer; d[o + 1] = 0; d[o + 2] = 0; d[o + 3] = 255;
+    }
+  const t = new THREE.DataTexture(d, 48, 8);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true;
+  return t;
+}
+function makeCube() {
+  // Six strongly-distinct faces so ANY change in the reflection direction
+  // (i.e. any change in the water wave normal) lands on a different colour.
+  const size = 4;
+  const cols = [[255,0,0],[0,255,0],[0,0,255],[255,255,0],[255,0,255],[0,255,255]];
+  const images = [];
+  for (let f = 0; f < 6; f++) {
+    const d = new Uint8Array(size * size * 4);
+    for (let i = 0; i < size * size; i++) {
+      d[i*4] = cols[f][0]; d[i*4+1] = cols[f][1]; d[i*4+2] = cols[f][2]; d[i*4+3] = 255;
+    }
+    images.push({ data: d, width: size, height: size });
+  }
+  const t = new THREE.CubeTexture(images.map((im) => {
+    const dt = new THREE.DataTexture(im.data, im.width, im.height);
+    dt.needsUpdate = true;
+    return dt;               // three's setTextureCube keys off .isDataTexture
+  }));
+  t.format = THREE.RGBAFormat;
+  t.type = THREE.UnsignedByteType;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
+TEX.atlas = makeAtlas(33, 16);
+TEX.nra = makeAtlas(33, 16);
+TEX.masks = makeAtlas(8, 16);
+TEX.detailArr = makeAtlas(5, 16);
+TEX.detailTex = makeAtlas(4, 16);
+TEX.cube = makeCube();
+TEX.pal = (() => {
+  const d = new Uint8Array(32 * 4).fill(255);
+  const t = new THREE.DataTexture(d, 32, 1); t.needsUpdate = true; return t;
+})();
+TEX.road = (() => {
+  const d = new Uint8Array(4 * 4 * 4).fill(128);
+  const t = new THREE.DataTexture(d, 4, 4); t.needsUpdate = true; return t;
+})();
+
+function buildUniforms(code) {
+  const u = {};
+  const decl = /uniform\s+(highp\s+)?(\w+)\s+(\w+)(\s*\[\s*(\d+)\s*\])?\s*;/g;
+  for (const glsl of [VERT, FRAG]) {
+    let m;
+    while ((m = decl.exec(glsl))) {
+      const [, , type, name, , arr] = m;
+      if (u[name]) continue;
+      const n = arr ? Number(arr) : 0;
+      let v;
+      if (type === "float") v = 0.0;
+      else if (type === "int") v = 0;
+      else if (type === "vec2") v = new THREE.Vector2();
+      else if (type === "vec3") v = new THREE.Vector3(0, 0, 1);
+      else if (type === "mat4") v = new THREE.Matrix4();
+      else v = null;
+      if (n) v = new Array(n).fill(type === "int" ? 255 : 0);
+      u[name] = { value: v };
+    }
+  }
+  // Samplers.
+  u.uAtlas.value = TEX.atlas;
+  u.uAtlasNormalAo.value = TEX.nra;
+  u.uAlphaMasks.value = TEX.masks;
+  u.uTerrainDetailNormalArray.value = TEX.detailArr;
+  u.uTerrainDetailTex.value = TEX.detailTex;
+  u.uEnvCube.value = TEX.cube;
+  u.uTerrainPalette.value = TEX.pal;
+  u.uRoadTexture.value = TEX.road;
+  u.uVertexTypes.value = makeVertexTypes(code);
+  u.uMergeData.value = makeMergeData(code);
+  u.uCloudShadowMap.value = TEX.detailArr;
+  u.uCsmShadowMap0.value = TEX.pal;
+  u.uCsmShadowMap1.value = TEX.pal;
+  u.uCsmShadowMap2.value = TEX.pal;
+  // Integer LUT arrays the shader indexes.
+  u.uBaseTexTiling.value = new Array(33).fill(2);
+  u.uCodeToSlice.value = new Array(32).fill(255);
+  u.uCodeToDetailTexSlice.value = new Array(33).fill(255);
+  u.uDetailTexTiling.value = new Array(33).fill(1);
+  // Live-session defaults (measured off a real material, 2026-07-31).
+  u.uWaterCodeMask.value = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20);
+  // The wider SURFACE set: adds 22 FauxWaterRunning (same retail RenderSurface
+  // as 16 WaterRunning), which must FLOW without BOBBING.
+  u.uWaterSurfaceCodeMask.value = u.uWaterCodeMask.value | (1 << 22);
+  u.uTexMergeEnabled.value = 1.0;
+  u.uTexMergeAlphaRound.value = 1.0;
+  u.uRoadSlotsEnabled.value = 1.0;
+  u.uAcGouraudEnabled.value = 1.0;   // retail Gouraud DEFAULT-ON — the mode that hid the sheen
+  u.uAcSunColor.value = new THREE.Color(1, 1, 1);
+  u.uAcAmbColor.value = new THREE.Color(1, 1, 1);
+  u.uAcAmbLevel.value = 0.6;
+  u.uAcSunVec.value = new THREE.Vector3(0.3, 0.3, 0.9);
+  u.uSunDir.value = new THREE.Vector3(0.3, 0.3, 0.9).normalize();
+  u.uPbrEnabled.value = 1.0;
+  u.uIblEnabled.value = 1.0;
+  u.uEnvIntensity.value = 1.0;
+  u.uWaterEnvEnabled.value = 1.0;
+  u.uWaterScrollEnabled.value = 1.0;
+  u.uDisplacementEnabled.value = 1.0;
+  u.uLbOriginXy.value = new THREE.Vector2(0, 33408);
+  u.uCsmSplits.value = new THREE.Vector2(30, 100);
+  u.uCsmFar.value = 300;
+  u.uWindDir.value = new THREE.Vector2(1, 0);
+  return u;
+}
+
+// ---- a subdivided 192 m LB patch with a per-vertex terrainCode ----------
+function makeGeom(code, seg) {
+  const g = new THREE.PlaneGeometry(192, 192, seg, seg);
+  g.translate(96, 96, 0);           // LB-local 0..192, z = 0 (AC frame)
+  const n = g.attributes.position.count;
+  const f = (v) => new THREE.BufferAttribute(new Float32Array(n).fill(v), 1);
+  g.setAttribute("terrainCode", f(code));
+  g.setAttribute("vertexBrightness", f(1));
+  g.setAttribute("vertexSaturate", f(1));
+  g.setAttribute("vertexHue", f(1));
+  const ln = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { ln[i * 3 + 2] = 1; }
+  g.setAttribute("acLightNormal", new THREE.BufferAttribute(ln, 3));
+  return g;
+}
+
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setClearColor(0x000000, 1);
+const scene = new THREE.Scene();
+// Mirror the client's frame EXACTLY: geometry is authored in AC coords (z-up)
+// and hung under a worldRoot rotated -PI/2 about x, so modelMatrix performs the
+// same ac(x,y,z) -> world(x,z,-y) bridge the shader's sheen block assumes.
+const worldRoot = new THREE.Group();
+worldRoot.rotation.x = -Math.PI / 2;
+scene.add(worldRoot);
+// Oblique view across the patch: a vertical swell changes the projected
+// silhouette, so displacement alone produces a measurable pixel delta.
+// AC eye (96,-60,26) / target (96,130,0), expressed in three world coords.
+const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+cam.position.set(96, 26, 60);
+cam.lookAt(96, 0, -130);
+
+function render(mesh) {
+  worldRoot.clear();
+  worldRoot.add(mesh);
+  renderer.render(scene, cam);
+  const buf = new Uint8Array(256 * 256 * 4);
+  const gl = renderer.getContext();
+  gl.readPixels(0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  return buf;
+}
+function diff(a, b) {
+  let sum = 0, n = 0, moved = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    const d = (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])) / 3;
+    sum += d; n++; if (d > 2) moved++;
+  }
+  return { mean: +(sum / n).toFixed(4), pct: +(100 * moved / n).toFixed(2) };
+}
+
+const results = {};
+function arm(name, code, seg, tweak) {
+  const u = buildUniforms(code);
+  tweak(u);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: u, vertexShader: VERT, fragmentShader: FRAG,
+    glslVersion: THREE.GLSL3, side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(makeGeom(code, seg), mat);
+  u.uTime.value = 0.0;
+  const a = render(mesh);
+  u.uTime.value = 5.0;
+  const b = render(mesh);
+  results[name] = diff(a, b);
+  return mat;
+}
+
+const WATER = 20, LAND = 5;
+// 1. THE headline case: texMerge ON (the shipped default) + scroll on,
+//    swell frozen. Pre-fix this was pixel-identical.
+arm("scroll_texmerge_on", WATER, 8, (u) => { u.uDisplacementEnabled.value = 0; u.uWaterEnvEnabled.value = 0; });
+// 2. Control: same, texMerge forced off (the old bilinear path).
+arm("scroll_texmerge_off", WATER, 8, (u) => { u.uDisplacementEnabled.value = 0; u.uWaterEnvEnabled.value = 0; u.uTexMergeEnabled.value = 0; });
+// 3. Rollback escape must be exactly static.
+arm("scroll_off", WATER, 8, (u) => { u.uDisplacementEnabled.value = 0; u.uWaterEnvEnabled.value = 0; u.uWaterScrollEnabled.value = 0; });
+// 4. LAND must never animate.
+arm("land_no_anim", LAND, 8, (u) => { u.uDisplacementEnabled.value = 0; u.uWaterEnvEnabled.value = 0; });
+// 5. Sheen alone, in RETAIL GOURAUD mode (uAcGouraudEnabled = 1) — the mode
+//    that made it unreachable before the fix.
+arm("sheen_gouraud", WATER, 8, (u) => { u.uDisplacementEnabled.value = 0; u.uWaterScrollEnabled.value = 0; });
+// 6. Swell alone (surface effects off), at subdiv factor 1 (9x9) — the level
+//    that used to be gated off entirely.
+arm("swell_only_seg8", WATER, 8, (u) => { u.uWaterScrollEnabled.value = 0; u.uWaterEnvEnabled.value = 0; });
+// 7. Swell alone at factor 8 (65x65) — must match #6's surface, proving the
+//    lattice lock is level-independent (checked separately below).
+arm("swell_only_seg64", WATER, 64, (u) => { u.uWaterScrollEnabled.value = 0; u.uWaterEnvEnabled.value = 0; });
+// 8. All three together — the spec requirement.
+arm("all_three", WATER, 8, () => {});
+// 9. Code 22 FauxWaterRunning: SURFACE animation only. It must scroll...
+arm("faux22_scroll", 22, 8, (u) => { u.uDisplacementEnabled.value = 0; u.uWaterEnvEnabled.value = 0; });
+// ...and it must NOT bob (swell on, surface effects off -> zero delta).
+arm("faux22_no_swell", 22, 8, (u) => { u.uWaterScrollEnabled.value = 0; u.uWaterEnvEnabled.value = 0; });
+// 10. Code 23 SeaSlime is in neither set: nothing may animate.
+arm("slime23_static", 23, 8, () => {});
+
+// LOD-identity check: render the SAME frame (fixed t) at factor 1 and factor
+// 8 with only the swell on. If the swell is lattice-locked the two surfaces
+// are identical, so the images match to within rasterisation noise.
+function still(code, seg, t) {
+  const u = buildUniforms(code);
+  u.uWaterScrollEnabled.value = 0; u.uWaterEnvEnabled.value = 0;
+  u.uDisplacementEnabled.value = 1; u.uTime.value = t;
+  const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: FRAG, glslVersion: THREE.GLSL3, side: THREE.DoubleSide });
+  return render(new THREE.Mesh(makeGeom(code, seg), mat));
+}
+results.lod_identity_t3 = diff(still(WATER, 8, 3.0), still(WATER, 64, 3.0));
+// Baseline for that comparison: the same two meshes with the swell OFF.
+function stillFlat(code, seg) {
+  const u = buildUniforms(code);
+  u.uWaterScrollEnabled.value = 0; u.uWaterEnvEnabled.value = 0; u.uDisplacementEnabled.value = 0;
+  const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: FRAG, glslVersion: THREE.GLSL3, side: THREE.DoubleSide });
+  return render(new THREE.Mesh(makeGeom(code, seg), mat));
+}
+results.lod_identity_flat_baseline = diff(stillFlat(WATER, 8), stillFlat(WATER, 64));
+
+// Sheen CONTRIBUTION in retail-Gouraud mode: same still frame with the sheen
+// on vs off. Pre-fix this delta was exactly 0 (unreachable branch).
+function stillSheen(on) {
+  const u = buildUniforms(WATER);
+  u.uWaterScrollEnabled.value = 0; u.uDisplacementEnabled.value = 0;
+  u.uAcGouraudEnabled.value = 1;      // retail mode — the one that hid it
+  u.uWaterEnvEnabled.value = on ? 1 : 0;
+  u.uTime.value = 2.0;
+  const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: FRAG, glslVersion: THREE.GLSL3, side: THREE.DoubleSide });
+  return render(new THREE.Mesh(makeGeom(WATER, 8), mat));
+}
+results.sheen_contribution_gouraud = diff(stillSheen(true), stillSheen(false));
+// And on LAND the sheen must contribute nothing at all.
+function stillSheenLand(on) {
+  const u = buildUniforms(LAND);
+  u.uWaterScrollEnabled.value = 0; u.uDisplacementEnabled.value = 0;
+  u.uAcGouraudEnabled.value = 1;
+  u.uWaterEnvEnabled.value = on ? 1 : 0;
+  u.uTime.value = 2.0;
+  const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: FRAG, glslVersion: THREE.GLSL3, side: THREE.DoubleSide });
+  return render(new THREE.Mesh(makeGeom(LAND, 8), mat));
+}
+results.sheen_contribution_land = diff(stillSheenLand(true), stillSheenLand(false));
+
+window.__waterHarness = results;
+window.__waterHarnessDone = true;
+</script>

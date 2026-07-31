@@ -23,17 +23,27 @@ function clearUrl() { delete globalThis.window; _resetVfxCatalog(); _resetVfxFla
 const ALL_READERS = [glintEnabled, magicGlowEnabled, enchantShimmerEnabled,
   tarnishEnabled, wetnessEnabled, frostEnabled, flameFlickerEnabled, tipFlexEnabled];
 const ALL_IDS = Object.keys(VFX_EFFECT_FLAGS);
+// Terrain VFX (Wave 0B, 2026-07-31) added router rows that are NOT part of the
+// 2026-06-24 DEFAULT-ON suite: every terrain-VFX flag is a STRICT exact-match
+// opt-in that ships OFF (plan §2.4/§5.9), so it never tracks visualAllEffects()
+// and `?visual=all` does not light it. The DEFAULT-ON count below is therefore
+// still 14 — that is the number every "N effects active" assertion means.
+const SHIP_OFF_IDS = ALL_IDS.filter((id) => id.startsWith("terrain."));
+const DEFAULT_ON_IDS = ALL_IDS.filter((id) => !id.startsWith("terrain."));
 
 // ---- the router map is complete ----
-check("VFX_EFFECT_FLAGS maps all 14 effect ids", ALL_IDS.length === 14, ALL_IDS.join());
+check("VFX_EFFECT_FLAGS maps all 14 DEFAULT-ON effect ids", DEFAULT_ON_IDS.length === 14, DEFAULT_ON_IDS.join());
 check("every mapped id has a function reader", ALL_IDS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"));
+check("the ship-OFF terrain rows are registered (so they don't fall through to visualAllEffects)",
+  SHIP_OFF_IDS.length >= 1, SHIP_OFF_IDS.join());
+check("no flags: every ship-OFF terrain effect is OFF", SHIP_OFF_IDS.every((id) => vfxEffectEnabled(id) === false));
 
 // ---- DEFAULT-ON (no window / no flags) ----
 clearUrl();
 check("no flags: visualEnabled() true (default-on)", visualEnabled() === true);
 check("no flags: visualAllEffects() true (default-on)", visualAllEffects() === true);
 check("no flags: every per-effect reader true", ALL_READERS.every((f) => f() === true));
-check("no flags: vfxEffectEnabled(all ids) true", ALL_IDS.every((id) => vfxEffectEnabled(id) === true));
+check("no flags: vfxEffectEnabled(all default-on ids) true", DEFAULT_ON_IDS.every((id) => vfxEffectEnabled(id) === true));
 check("no flags: all 14 effects active", vfxActiveEffectIds().length === 14);
 check("no flags: visualBudget() === Infinity (uncapped)", visualBudget() === Infinity);
 
