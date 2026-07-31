@@ -11304,7 +11304,49 @@ static NORMAL_HEIGHT_SCRATCH: std::sync::LazyLock<holtburger_dat::ScratchPool> =
 /// a constant-luminance surface (height span < 1e-6) yields an **empty**
 /// `height_pixels`, which is how the JS material decoder knows to skip POM
 /// on that surface. Malformed input yields both empty.
-fn normal_and_height_pixels(pixels: &[u8], w: u32, h: u32) -> (Vec<u8>, Vec<u8>) {
+/// data/tex-relief-classes.compact.json baked in at compile time — the same
+/// `include_str!` pattern (and rationale) as surface_overrides.json: no
+/// runtime fetch, no bake-worker seam, both wasm instances agree by
+/// construction. rsId(0x06) -> single-letter class code; parsed once.
+#[cfg(any(target_arch = "wasm32", test))]
+const RELIEF_CLASSES_JSON: &str = include_str!("../../../data/tex-relief-classes.compact.json");
+
+#[cfg(any(target_arch = "wasm32", test))]
+static RELIEF_CLASSES: std::sync::LazyLock<
+    std::collections::HashMap<u32, holtburger_dat::height_seam::ReliefClass>,
+> = std::sync::LazyLock::new(|| {
+    let mut map = std::collections::HashMap::new();
+    // Parse failure degrades to an empty map = the legacy macro-only path
+    // for every surface (never a panic; the table is compile-time baked so
+    // a parse failure can only mean a corrupted checkout anyway).
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(RELIEF_CLASSES_JSON) else {
+        return map;
+    };
+    if let Some(obj) = doc.get("classes").and_then(|c| c.as_object()) {
+        for (k, v) in obj {
+            let Some(hex) = k.strip_prefix("0x") else { continue };
+            let Ok(did) = u32::from_str_radix(hex, 16) else { continue };
+            let Some(cls) = v
+                .as_str()
+                .and_then(|s| s.bytes().next())
+                .and_then(holtburger_dat::height_seam::ReliefClass::from_code)
+            else {
+                continue;
+            };
+            map.insert(did, cls);
+        }
+    }
+    map
+});
+
+/// Class for one RenderSurface, or None (fixtures / post-table content —
+/// those keep the legacy macro-only path byte-identical).
+#[cfg(any(target_arch = "wasm32", test))]
+fn relief_class_for(rs_id: u32) -> Option<holtburger_dat::height_seam::ReliefClass> {
+    RELIEF_CLASSES.get(&rs_id).copied()
+}
+
+fn normal_and_height_pixels(pixels: &[u8], w: u32, h: u32, rs_id: u32) -> (Vec<u8>, Vec<u8>) {
     // Derive BOTH from the seam field rather than from raw luminance.
     //
     // This one function is the choke point for the singleton `normalMap`, the
@@ -11326,7 +11368,22 @@ fn normal_and_height_pixels(pixels: &[u8], w: u32, h: u32) -> (Vec<u8>, Vec<u8>)
     // each beam as a proud slab (the reference look), not a flat face with
     // engraved lines. Topology-derived (distance transform over the seam
     // mask), so the polarity immunity above is preserved by construction.
-    let hf = holtburger_dat::height_seam::relief_height(pixels, w, h);
+    //
+    // relief_height_classed (same day, "get it to 100%"): two layers. The
+    // classifier table gates WHETHER the pixel-derived macro applies (painted
+    // flats — banners, signs, shields — suppress it), and every classified
+    // surface additionally gets a class-keyed SYNTHESIZED micro grain
+    // (weave on cloth, trowel on plaster, wood fiber on planks) that cannot
+    // read painted content by construction. Unclassified rs_ids keep the
+    // legacy macro-only path byte-identical.
+    #[cfg(any(target_arch = "wasm32", test))]
+    let class = relief_class_for(rs_id);
+    #[cfg(not(any(target_arch = "wasm32", test)))]
+    let class: Option<holtburger_dat::height_seam::ReliefClass> = {
+        let _ = rs_id;
+        None
+    };
+    let hf = holtburger_dat::height_seam::relief_height_classed(pixels, w, h, class, rs_id);
     if !hf.is_empty() {
         let normal_pixels = holtburger_dat::height_seam::seam_normal_rgb8(&hf, w, h, 1.0);
         if !normal_pixels.is_empty() {
@@ -11573,7 +11630,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 // low-res gaussian pre-blur shared by both consumers, and
                 // the three f32 scratch buffers leased instead of freshly
                 // allocated. Byte-identical to the two calls it replaces.
-                normal_and_height_pixels(&pixels, tex_w, tex_h)
+                normal_and_height_pixels(&pixels, tex_w, tex_h, rs_id)
             };
             SurfacePixels {
                 width: tex_w,
@@ -13511,7 +13568,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 // low-res gaussian pre-blur shared by both consumers, and
                 // the three f32 scratch buffers leased instead of freshly
                 // allocated. Byte-identical to the two calls it replaces.
-                let (n, h) = normal_and_height_pixels(&pixels, tex_w, tex_h);
+                let (n, h) = normal_and_height_pixels(&pixels, tex_w, tex_h, rs_id);
                 (n.into(), h.into())
             };
             SurfacePixels {

@@ -469,6 +469,223 @@ pub fn relief_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
     out
 }
 
+// ===========================================================================
+// Two-layer relief (2026-07-30, "get it to 100%"): MACRO structure comes from
+// the pixels (seam + pillow, above); MICRO material grain comes from the
+// surface's CLASS and is synthesized — content-blind, so it cannot emboss a
+// painted emblem or invert a dark beam BY CONSTRUCTION. Nothing renders flat:
+// cloth gets weave, stucco gets trowel, metal-ish unknowns get a whisper of
+// grain — and a misclassified surface merely gets the wrong subtle grain,
+// never a crater (micro amplitude is a fraction of macro).
+// ===========================================================================
+
+/// Classifier-assigned material class (SigLIP kNN over the texture corpus,
+/// seeded from 172 hand labels — see data/tex-relief-classes.compact.json).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliefClass {
+    Stone,
+    Brick,
+    Timber,
+    Plank,
+    Shingle,
+    Flush,
+    Cloth,
+    Foliage,
+    Unknown,
+}
+
+impl ReliefClass {
+    /// Single-letter code from the compact table.
+    pub fn from_code(c: u8) -> Option<ReliefClass> {
+        Some(match c {
+            b'S' => ReliefClass::Stone,
+            b'B' => ReliefClass::Brick,
+            b'T' => ReliefClass::Timber,
+            b'P' => ReliefClass::Plank,
+            b'H' => ReliefClass::Shingle,
+            b'F' => ReliefClass::Flush,
+            b'C' => ReliefClass::Cloth,
+            b'V' => ReliefClass::Foliage,
+            b'U' => ReliefClass::Unknown,
+            _ => return None,
+        })
+    }
+
+    /// Whether the pixel-derived MACRO layer (seam + pillow) may apply. The
+    /// painted classes suppress it — this is the per-surface WHETHER-AT-ALL
+    /// gate the operator itself provably cannot supply (relief_op.py: a
+    /// painted pennant has 4x the line contrast of real mortar).
+    pub fn allows_macro(self) -> bool {
+        matches!(
+            self,
+            ReliefClass::Stone
+                | ReliefClass::Brick
+                | ReliefClass::Timber
+                | ReliefClass::Plank
+                | ReliefClass::Shingle
+        )
+    }
+}
+
+/// Deterministic lattice hash -> [0, 1). Plain integer scramble; quality
+/// needs are minimal (material grain, heavily band-limited by interpolation).
+#[inline]
+fn hash01(seed: u32, x: u32, y: u32) -> f32 {
+    let mut h = seed ^ 0x9E37_79B9;
+    h = h.wrapping_mul(0x85EB_CA6B) ^ x.wrapping_mul(0xC2B2_AE35);
+    h = h.rotate_left(13).wrapping_mul(0x2545_F491);
+    h ^= y.wrapping_mul(0x27D4_EB2F);
+    h = (h ^ (h >> 15)).wrapping_mul(0x8DA6_B343);
+    ((h >> 8) & 0xFFFFFF) as f32 / 16_777_216.0
+}
+
+/// One octave of PERIODIC value noise: `cx` x `cy` lattice cells across the
+/// tile (period == tile, so the result wraps like the texture does).
+fn value_noise(w: usize, h: usize, cx: u32, cy: u32, seed: u32) -> Vec<f32> {
+    let mut out = vec![0.0f32; w * h];
+    for y in 0..h {
+        let fy = y as f32 / h as f32 * cy as f32;
+        let y0 = fy as u32;
+        let ty = smoothstep01(fy - y0 as f32);
+        for x in 0..w {
+            let fx = x as f32 / w as f32 * cx as f32;
+            let x0 = fx as u32;
+            let tx = smoothstep01(fx - x0 as f32);
+            let (x1, y1) = ((x0 + 1) % cx, (y0 + 1) % cy);
+            let a = hash01(seed, x0 % cx, y0 % cy);
+            let b = hash01(seed, x1, y0 % cy);
+            let c = hash01(seed, x0 % cx, y1);
+            let d = hash01(seed, x1, y1);
+            out[y * w + x] = (a + (b - a) * tx) * (1.0 - ty) + (c + (d - c) * tx) * ty;
+        }
+    }
+    out
+}
+
+/// Class-keyed MICRO height in `[1 - amp, 1]` (1 = proud face; the grain only
+/// dips). Returns an empty Vec for classes with no micro at all (Foliage —
+/// alpha cards must stay flat). `dir_u`: for grained classes, whether the
+/// grain runs along u (true) or v — derived from the texture's own gradient
+/// anisotropy by the caller (direction is polarity-free, so reading it from
+/// the pixels is safe).
+pub fn micro_height(class: ReliefClass, w: u32, h: u32, seed: u32, dir_u: bool) -> Vec<f32> {
+    let (wu, hu) = (w as usize, h as usize);
+    let n = wu.saturating_mul(hu);
+    // Grain needs texels: below 8px a "weave" is sub-texel noise, and the
+    // empty return keeps the load-bearing "tiny constant-luminance texture
+    // => EMPTY height plane => JS skips POM" contract intact (lib.rs
+    // empty_height_plane_semantics test uses a 1x1 fixture).
+    if n == 0 || wu.min(hu) < 8 {
+        return Vec::new();
+    }
+    let octave = |cx: u32, cy: u32, s: u32| value_noise(wu, hu, cx.max(1), cy.max(1), s);
+    let mix2 = |a: Vec<f32>, wa: f32, b: Vec<f32>, wb: f32| -> Vec<f32> {
+        a.iter().zip(b.iter()).map(|(x, y)| x * wa + y * wb).collect()
+    };
+    let (field, amp): (Vec<f32>, f32) = match class {
+        // rough-cut granular stone/brick face
+        ReliefClass::Stone | ReliefClass::Brick | ReliefClass::Shingle => {
+            (mix2(octave(16, 16, seed), 0.6, octave(32, 32, seed ^ 0x51), 0.4), 0.12)
+        }
+        // wood fiber: long cells along the grain, short across it
+        ReliefClass::Timber | ReliefClass::Plank => {
+            let g = if dir_u { octave(4, 48, seed) } else { octave(48, 4, seed) };
+            (mix2(g, 0.8, octave(24, 24, seed ^ 0x52), 0.2), 0.10)
+        }
+        // fabric: fine cross-hatch weave, content-blind — the emblem stays
+        // painted ON the weave, exactly like a real banner
+        ReliefClass::Cloth => {
+            let mut v = vec![0.0f32; n];
+            let f = 48.0 * std::f32::consts::TAU;
+            for y in 0..hu {
+                let sy = (y as f32 / hu as f32 * f).sin();
+                for x in 0..wu {
+                    let sx = (x as f32 / wu as f32 * f).sin();
+                    v[y * wu + x] = 0.5 + 0.5 * sx * sy;
+                }
+            }
+            (mix2(v, 0.7, octave(12, 12, seed ^ 0x53), 0.3), 0.05)
+        }
+        // troweled plaster / painted flats: soft, sparse undulation
+        ReliefClass::Flush => {
+            (mix2(octave(6, 6, seed), 0.6, octave(12, 12, seed ^ 0x54), 0.4), 0.06)
+        }
+        // not similar to anything we know: a whisper, never a statement
+        ReliefClass::Unknown => (octave(8, 8, seed), 0.04),
+        ReliefClass::Foliage => return Vec::new(),
+    };
+    field.iter().map(|v| 1.0 - amp * (1.0 - v.clamp(0.0, 1.0))).collect()
+}
+
+/// Grain direction from gradient anisotropy: grain runs along the axis with
+/// the SMALLER mean |gradient| (plank gaps and painted grain lines cross the
+/// grain, not follow it). Direction only — no polarity is read.
+pub fn grain_dir_u(rgba: &[u8], w: u32, h: u32) -> bool {
+    let (wu, hu) = (w as usize, h as usize);
+    let n = wu.saturating_mul(hu);
+    if n == 0 || rgba.len() < n * 4 || wu < 2 || hu < 2 {
+        return true;
+    }
+    let lum = |i: usize| {
+        0.299 * rgba[i * 4] as f32 + 0.587 * rgba[i * 4 + 1] as f32 + 0.114 * rgba[i * 4 + 2] as f32
+    };
+    let (mut gx, mut gy) = (0.0f64, 0.0f64);
+    for y in 0..hu - 1 {
+        for x in 0..wu - 1 {
+            let i = y * wu + x;
+            gx += (lum(i + 1) - lum(i)).abs() as f64;
+            gy += (lum(i + wu) - lum(i)).abs() as f64;
+        }
+    }
+    // more horizontal-gradient energy => structure runs vertically => grain v
+    gx <= gy
+}
+
+/// The 100%-coverage entry point: MACRO (seam + pillow, class-gated) composed
+/// with MICRO (class-keyed synthesized grain). Returns empty ONLY for classes
+/// that must stay flat (Foliage alpha cards) or malformed input — every other
+/// surface now carries relief.
+pub fn relief_height_classed(
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+    class: Option<ReliefClass>,
+    seed: u32,
+) -> Vec<f32> {
+    let n = (w as usize).saturating_mul(h as usize);
+    if n == 0 || rgba.len() < n * 4 {
+        return Vec::new();
+    }
+    // UNCLASSIFIED surfaces (test fixtures, post-table content) keep the
+    // legacy macro-only path BYTE-IDENTICAL — including the load-bearing
+    // "constant luminance => EMPTY height => JS skips POM" semantics
+    // (lib.rs empty_height_plane_semantics test). Micro grain is a privilege
+    // of a table entry, and the table covers the whole shipped corpus.
+    let Some(cls) = class else {
+        return relief_height(rgba, w, h);
+    };
+    if cls == ReliefClass::Foliage {
+        return Vec::new();
+    }
+    // Classified painted flats suppress the macro; architectural classes keep it.
+    let macro_field = if cls.allows_macro() { relief_height(rgba, w, h) } else { Vec::new() };
+    let dir_u = match cls {
+        ReliefClass::Timber | ReliefClass::Plank => grain_dir_u(rgba, w, h),
+        _ => true,
+    };
+    let micro = micro_height(cls, w, h, seed, dir_u);
+    match (macro_field.is_empty(), micro.is_empty()) {
+        (true, true) => Vec::new(),
+        (false, true) => macro_field,
+        (true, false) => micro,
+        (false, false) => macro_field
+            .iter()
+            .zip(micro.iter())
+            .map(|(m, u)| (m - (1.0 - u)).clamp(0.0, 1.0))
+            .collect(),
+    }
+}
+
 /// Tangent-space normal map derived from a seam height field, as RGB8 with the
 /// usual `n * 0.5 + 0.5` encoding.
 ///
@@ -762,6 +979,58 @@ mod tests {
             (pock - plain).abs() < 0.15,
             "pock still carves: {pock} vs plain {plain}"
         );
+    }
+
+    #[test]
+    fn classed_flush_suppresses_macro_but_never_goes_flat() {
+        // A brick pattern labeled Flush (think: painted brick on a banner):
+        // the macro carve must be suppressed, but the troweled micro grain
+        // must still be present — 100% coverage, no false embossing.
+        let t = tex(128, 128, |_, y| if y % 32 == 0 { 0.05 } else { 0.75 });
+        let hf = relief_height_classed(&t, 128, 128, Some(ReliefClass::Flush), 7);
+        assert!(!hf.is_empty(), "Flush went completely flat");
+        let mn = hf.iter().cloned().fold(1.0f32, f32::min);
+        assert!(mn > 0.9, "macro leaked through Flush: min={mn}");
+        assert!(mn < 0.999, "no micro grain at all: min={mn}");
+    }
+
+    #[test]
+    fn classed_stone_still_carves_and_gains_grain() {
+        let t = tex(128, 128, |_, y| if y % 32 == 0 { 0.05 } else { 0.75 });
+        let hf = relief_height_classed(&t, 128, 128, Some(ReliefClass::Stone), 7);
+        assert!(!hf.is_empty());
+        assert!(hf[0 * 128 + 64] < 0.3, "joint no longer carves under Stone class");
+        // interior texels are no longer a uniform plateau — grain varies them
+        let a = hf[16 * 128 + 10];
+        let b = hf[16 * 128 + 90];
+        assert!(a > 0.8 && b > 0.8, "interior sank: {a} {b}");
+    }
+
+    #[test]
+    fn classed_foliage_stays_flat_and_codes_round_trip() {
+        let t = tex(64, 64, |x, _| if x % 8 == 0 { 0.1 } else { 0.9 });
+        assert!(relief_height_classed(&t, 64, 64, Some(ReliefClass::Foliage), 1).is_empty());
+        for (c, want) in [
+            (b'S', ReliefClass::Stone), (b'B', ReliefClass::Brick),
+            (b'T', ReliefClass::Timber), (b'P', ReliefClass::Plank),
+            (b'H', ReliefClass::Shingle), (b'F', ReliefClass::Flush),
+            (b'C', ReliefClass::Cloth), (b'V', ReliefClass::Foliage),
+            (b'U', ReliefClass::Unknown),
+        ] {
+            assert_eq!(ReliefClass::from_code(c), Some(want));
+        }
+        assert_eq!(ReliefClass::from_code(b'Z'), None);
+    }
+
+    #[test]
+    fn micro_fields_are_bounded_and_deterministic() {
+        for cls in [ReliefClass::Stone, ReliefClass::Plank, ReliefClass::Cloth,
+                    ReliefClass::Flush, ReliefClass::Unknown] {
+            let a = micro_height(cls, 64, 64, 42, true);
+            let b = micro_height(cls, 64, 64, 42, true);
+            assert_eq!(a, b, "{cls:?} not deterministic");
+            assert!(a.iter().all(|v| (0.8..=1.0).contains(v)), "{cls:?} out of band");
+        }
     }
 
     #[test]
