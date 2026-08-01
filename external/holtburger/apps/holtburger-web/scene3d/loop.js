@@ -406,17 +406,60 @@ function actionStampIsNewer(seq, stamp) {
   return diff <= 0x3fff ? b < a : a < b;
 }
 
+// DRAIN-WIRING FIX (2026-08-01) — `pollMotionActions` / `pollMotionAxes` are
+// MODULE-LEVEL wasm exports (`#[wasm_bindgen(js_name = …)] pub fn …`,
+// src/lib.rs:40490 / :40515 → `export function pollMotionActions()` at
+// pkg/holtburger_web.d.ts:9290/:9297), NOT `SessionHandle` methods. Both drains
+// below used to guard on `typeof sessionHandle.pollMotionX === "function"`, which
+// is ALWAYS false, so they returned on line 1 every frame and the documented
+// default-ON `?multiAction` / `?castAxes` flags had never executed.
+//
+// loop.js cannot statically `import … from "../pkg/…"` (the node suites
+// source-transform this module with no pkg/ present, and the bake/net workers own
+// their own wasm instances), so we resolve the free function off the
+// `scene3d.wasmExports` bag that index.html already builds — the same
+// typeof-guarded "additive namespace rider" convention every other module-level
+// wasm export uses (index.html `dat_decode_diag`, `fetch_particle_degrade_distance`,
+// `MotionSequence`, …). A stale pkg/ simply yields `undefined` → the drain
+// no-ops exactly as it does today (F18-2 policy).
+//
+// A `SessionHandle` METHOD of the same name still wins if one ever exists, so a
+// future Rust move onto the handle needs no JS change here.
+//
+// CAVEAT (documented, not fixed here): under `?netWorker=1` the Session state
+// machine — and therefore the `MOTION_ACTIONS` / `MOTION_AXES` thread_locals —
+// lives in the net worker's wasm instance, so the main-thread poll returns empty.
+// That is unchanged from today (the drains were dead in both modes); routing the
+// side-channels across the worker port is a Rust/worker-side follow-on.
+function resolveMotionPollFn(scene3d, sessionHandle, name) {
+  const method = sessionHandle && sessionHandle[name];
+  if (typeof method === "function") return () => method.call(sessionHandle);
+  const free = scene3d && scene3d.wasmExports && scene3d.wasmExports[name];
+  if (typeof free === "function") return () => free();
+  return null;
+}
+
 // Drain the wasm multi-action side-channel (`pollMotionActions`, flat 4-u32
 // groups: [guid, command_low, packed_sequence, stance]) and FIFO-play each NEW
 // action per entity. No-op only when `?multiAction=off` (default-ON). Plays via `em.setMotion`
 // (same path the single motion_command uses) — Action-class commands resolve to
-// their one-shot clip; unresolved ones no-op harmlessly. Local guid is skipped.
+// their one-shot clip; unresolved ones no-op harmlessly. Local guid is skipped
+// (the local caster predicts its own windups via playCastSequence).
+//
+// This is the channel that carries a PK/PKLite ("FastTick") caster's FULL windup
+// gesture list: ACE packs every `spell.Formula.WindupGestures` entry into ONE
+// UpdateMotion's `commands` vector (Player_Magic.cs:645 `EnqueueMotionAction`
+// → WorldObject_Networking.cs:1231-1273), and the wasm main path emits only the
+// NEWEST of them as KIND_MOTION_ACTION (src/lib.rs:45716-45737) — every earlier
+// windup lands here. With the drain dead, a multi-scarab spell showed exactly one
+// arm-raise on a remote caster instead of one per scarab.
 function drainMotionActions(scene3d, sessionHandle) {
   if (!MULTI_ACTION_ON) return;
-  if (!sessionHandle || typeof sessionHandle.pollMotionActions !== "function") return;
+  const poll = resolveMotionPollFn(scene3d, sessionHandle, "pollMotionActions");
+  if (!poll) return;
   let flat;
   try {
-    flat = sessionHandle.pollMotionActions();
+    flat = poll();
   } catch (_) {
     return;
   }
@@ -459,10 +502,12 @@ const CAST_AXES_ON = (() => {
 
 function drainMotionAxes(scene3d, sessionHandle) {
   if (!CAST_AXES_ON) return;
-  if (!sessionHandle || typeof sessionHandle.pollMotionAxes !== "function") return;
+  // Same module-export resolution as drainMotionActions — see resolveMotionPollFn.
+  const poll = resolveMotionPollFn(scene3d, sessionHandle, "pollMotionAxes");
+  if (!poll) return;
   let flat;
   try {
-    flat = sessionHandle.pollMotionAxes();
+    flat = poll();
   } catch (_) {
     return;
   }
