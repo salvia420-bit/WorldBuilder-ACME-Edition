@@ -323,6 +323,19 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   let skyRenderPass = null;
   if (skyScene && skyCamera) {
     skyRenderPass = new RenderPass(skyScene, skyCamera);
+    // DEAD FULL-RES DEPTH BLIT (2026-08). pmndrs `RenderPass`'s ctor sets
+    // `needsDepthBlit = true` unconditionally (postprocessing 6.39.1,
+    // build/index.js:6722), so EffectComposer.render blits this pass's depth
+    // into `depthRenderTarget` right after it runs (index.js:1279-1283).
+    // That copy is WASTED here: the very next pass to touch depth is
+    // `worldRenderPass`, which runs with `clearDepth = true` in BOTH branches
+    // (see below and the per-frame sync further down) and blits again itself.
+    // Nothing in between reads composer depth -- `skyCapturePass` renders the
+    // sky scene into its own RT and ignores inputBuffer, and
+    // `worldMaskPass`/CameraLayerMaskPass only flips `camera.layers`.
+    // Skipping it drops one full-res depth blit per frame; the composer output
+    // is byte-identical.
+    skyRenderPass.needsDepthBlit = false;
     composer.addPass(skyRenderPass);
   }
 
