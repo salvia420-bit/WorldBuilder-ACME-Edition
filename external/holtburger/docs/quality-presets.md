@@ -79,6 +79,13 @@ they accept the perf cost.
 | `terrainVolcanoEmberCount` | 0 | 0 | 1 | 3 | Terrain VFX Wave 2B |
 | `terrainHazeStrength` | 0 | 0 | 1 | 1.25 | Terrain VFX Wave 2B |
 | `terrainVolcanoRadius` | 0 | 0 | 160 | 220 | Terrain VFX Wave 2B |
+| `terrainSwamp` | off | off | off | off | Terrain VFX Wave 3A |
+| `terrainGroundFogCount` | 0 | 8 | 16 | 24 | Terrain VFX Wave 3A |
+| `terrainGroundFogRadius` | 32 | 40 | 56 | 72 | Terrain VFX Wave 3A |
+| `terrainMarshGasCount` | 0 | 0 | 2 | 3 | Terrain VFX Wave 3A |
+| `terrainMarshWisps` | off | off | off | on | Terrain VFX Wave 3A |
+| `terrainSwampFireflies` | off | on | on | on | Terrain VFX Wave 3A |
+| `terrainSwampMidges` | off | on | on | on | Terrain VFX Wave 3A |
 | `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
@@ -247,6 +254,67 @@ they accept the perf cost.
   metres around the nearest RESIDENT volcanic landblock centre. Forced to 0
   when no volcanic LB is resident, so the shimmer does not follow the player
   out of the region. `?terrainVolcanoRadius=N`.
+- **`terrainSwamp`** — Terrain VFX Wave 3A
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.5). FAMILY
+  MASTER for SWAMP/MARSH: the shared ground fog, marsh-gas vents + their wisp
+  ignition, and the GROUND anchor sources for the existing firefly and pollen
+  components. Terrain code 4 (`MarshSparseSwamp`) = `FAM_SWAMP`, derived from
+  `scene3d/terrain_families.js`. ⚠ Code 23 (`SeaSlime`) is WATER by default
+  (plan §3.8.3) and joins this family ONLY under `?strictWaterCodes` — nothing
+  in the swamp code lists it. Ships **off on every tier** (§5.9) exactly like
+  `terrainGrass`/`terrainSand`/`terrainSnow`/`terrainVolcano`; `low` is `null`
+  in the plan's tier table, so every knob below is 0/false at `low` and even
+  `?terrainSwamp=on` there renders nothing. Nothing in this family touches the
+  terrain fragment shader. URL override `?terrainSwamp=on` / `=off`; the five
+  sub-effects gate further via `?terrainGroundFog` / `?terrainMarshGas` /
+  `?terrainMarshWisps` / `?terrainSwampFireflies` / `?terrainSwampMidges`.
+- **`terrainGroundFogCount`** — Terrain VFX Wave 3A. Cards in the camera-centred
+  fog ring (`scene3d/ground_fog.js`) — plan §3.5's tier table verbatim
+  (mid 8 / high 16 / ultra 24). ⚠ The shared scatter pool rounds the request UP
+  to a perfect square (8 ⇒ 9, 24 ⇒ 25); `__terrainSwamp.stats().fog.count` is
+  authoritative. Fill-bound, so it gets cheaper at 25 % render scale
+  automatically. `low` is 0 = disabled (§5.8). `?terrainGroundFogCount=N`.
+  ⚠ The flag NAME is deliberately `terrainGroundFog`, not `terrainSwampFog`:
+  the module is effect-agnostic and SNOW/VOLCANO compose it later with their
+  own palette and family set (plan §3.5 item 3).
+- **`terrainGroundFogRadius`** — Terrain VFX Wave 3A. Half-extent of the fog
+  ring in metres; it covers 2× this, fading over the last 35 %.
+  `?terrainGroundFogRadius=N`.
+- **`terrainMarshGasCount`** — Terrain VFX Wave 3A. Max bubble vents per swamp
+  landblock (hash-stable positions per lbKey, one distinct `FAM_SWAMP` vertex
+  each, owner key `staticOwnerKeyForLb(lb) + ":swamp"`).
+  `?terrainMarshGasCount=N`.
+- **`terrainMarshWisps`** — Terrain VFX Wave 3A. The rare ~2 s will-o'-the-wisp
+  ignition over a vent, on a 140 s timer. **ULTRA ONLY** per plan §3.5, and
+  composed with the gas (a wisp is an ignition OF the gas, so it is forced off
+  when `terrainMarshGasCount` is 0). A FINITE additive-sprite emitter that
+  self-expires — never a `PointLight` (§5.2). Strict exact-`on` URL override.
+- **`terrainSwampFireflies`** — Terrain VFX Wave 3A. Enables the GROUND anchor
+  source for the EXISTING `particle.foliageFireflies` component over swamp
+  landblocks (marsh-green additive sprite, lower drift). **Not a second firefly
+  system** (plan §3.5 item 1): the descriptor calls `foliageFireflies.emit()`
+  and reuses `firefliesGate` by identity, and `?foliageFireflies` still
+  independently owns the canopy anchors. On from `mid` because one synthesized
+  emitter per swamp landblock is the cheapest thing in this plan.
+  Strict exact-`on` URL override.
+- **`terrainSwampMidges`** — Terrain VFX Wave 3A. The same re-anchor contract
+  for `particle.foliagePollen`: a dark alpha midge column with a tighter orbit
+  (delivered through the ANCHOR RADIUS — `foliageAmbient.js` floors the sprite
+  scale to pollen's authored value and that clamp is not ours to move). A DAY
+  effect, since it reuses `pollenGate`. Strict exact-`on` URL override.
+- **`terrainGroundFogSoftness` — URL-ONLY, no preset key on any tier.** The fog
+  card's soft-particle fade against the scene depth buffer. The path is fully
+  implemented and tested (`test_ground_fog.mjs`): log-depth decode (plan trap
+  T4), NEAREST filtering forced on the supplied texture, and a sentinel-aware
+  threshold whose 0 default means "never sample" (`OPTICAL_EFFECTS_HANDOFF.md`,
+  the R9 290 HalfFloat/LINEAR regression). What is deliberately NOT wired is
+  the texture: `atmosphere_pipeline.js`'s `sceneDepthTexture` is attached to
+  BOTH composer ping-pong targets, i.e. it is the LIVE depth attachment while
+  the world pass these cards draw in is running, so sampling it from that pass
+  is a framebuffer feedback loop ANGLE may reject. No tier may arm it; the 1070
+  adjudication is `&terrainGroundFogSoftness=2` plus
+  `window.__terrainSwamp.setFogSceneDepthTexture(...)`. Without it the card
+  still fades analytically (height within the card, ring distance, near plane).
 - **ash fall — DEFERRED, no key.** Plan §3.6 item 4 lists an ultra-only ash
   drifter; plan §8 risk 9 says to parameterise `scene3d/weather/snow.js`
   `SnowSystem` rather than write a third falling-particle system, and to note
