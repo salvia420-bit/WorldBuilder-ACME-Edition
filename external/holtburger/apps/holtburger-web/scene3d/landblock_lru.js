@@ -1001,6 +1001,42 @@ export class LandblockLRU {
     // high default cap, never engages this).
     const overGeomAtEntry = this._geomPressure();
     const floorMs = overGeomAtEntry ? 0 : PARK_USE_TIME_MS;
+    // ── ALL-YOUNG FAST PATH (2026-08-01 outdoor-run scan-cost fix) ──────────
+    // Steady state during a continuous outdoor run is: byte budget exceeded,
+    // geometry governor NOT engaged, and every parked slot inside the 30 s
+    // UseTime floor. In that state the loop below disposes NOTHING, so its
+    // `disposed >= 1` precondition never lets the time budget break it — and
+    // it walks the ENTIRE pool, after allocating a spread copy of it and
+    // SORTING that copy, on EVERY frame. Measured on a 4000-frame simulated
+    // run (scratch probe, 30 geoms/LB): 564,450 pool entries examined across
+    // 3,423 pressure ticks ≈ 165 entries/frame, of which 562,863 (99.7%) were
+    // UseTime deferrals — pure churn, plus ~200 × [key,value] pairs of garbage
+    // per frame. Direct cost of the sort+scan alone: 18 µs/frame at pool=127,
+    // 94 µs/frame at pool=500 (node, isolated micro-benchmark) — i.e. per-frame
+    // work proportional to the PARKED (non-resident) pool, which grows the
+    // longer you run.
+    //
+    // The oldest parked slot bounds eligibility: if even IT is inside the
+    // floor, no slot can be disposed this tick, so the whole sort+scan is
+    // dead work. Detect that with one allocation-free min pass and take the
+    // exact same end state — the deferral counters are bumped for every pooled
+    // slot, which is precisely what the full scan did in this case (nothing
+    // disposed ⇒ `overBudget()` stayed true ⇒ no early break ⇒ every entry
+    // deferred). Behaviour-identical, no flag.
+    if (floorMs > 0) {
+      let oldest = Infinity;
+      for (const p of this.parkPool.values()) {
+        if (p.parkedAtMs < oldest) oldest = p.parkedAtMs;
+      }
+      if (nowMs - oldest < floorMs) {
+        // `parkedBytes` is by construction the sum of every pooled slot's
+        // `bytes` (park adds, unpark/disposeParked subtract), so it is exactly
+        // what the per-entry accumulation above would have produced.
+        this._useTimeDeferredCount += this.parkPool.size;
+        this._useTimeDeferredBytes += this.parkedBytes;
+        return;
+      }
+    }
     const order = [...this.parkPool.entries()].sort((a, b) => {
       if (ref != null) {
         const d = lbChebyshev(ref, b[0]) - lbChebyshev(ref, a[0]);
