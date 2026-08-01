@@ -92,6 +92,10 @@ they accept the perf cost.
 | `terrainMarshWisps` | off | off | off | on | Terrain VFX Wave 3A |
 | `terrainSwampFireflies` | off | on | on | on | Terrain VFX Wave 3A |
 | `terrainSwampMidges` | off | on | on | on | Terrain VFX Wave 3A |
+| `terrainRock` | off | off | off | off | Terrain VFX Wave 4A |
+| `terrainRockPebbleCount` | 0 | 3000 | 9000 | 18000 | Terrain VFX Wave 4A |
+| `terrainRockGritCount` | 0 | 160 | 400 | 600 | Terrain VFX Wave 4A |
+| `terrainRockRadius` | 32 | 40 | 56 | 72 | Terrain VFX Wave 4A |
 | `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
@@ -379,6 +383,45 @@ they accept the perf cost.
   adjudication is `&terrainGroundFogSoftness=2` plus
   `window.__terrainSwamp.setFogSceneDepthTexture(...)`. Without it the card
   still fades analytically (height within the card, ring distance, near plane).
+- **`terrainRock`** — Terrain VFX Wave 4A
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.3). THE family
+  master for ROCK/BARREN — terrain codes 0 `BarrenRock`, 13 `SedimentaryRock`,
+  14 `SemiBarrenRock`, 30 `olthoi`, derived from `terrain_families.js` and never
+  hardcoded. **OFF on every tier** (§5.9 ship-OFF); the promotion target is
+  `high`/`ultra` on. It composes with both sub-effects, so `?terrainRock=on`
+  lights the tier's intended set. `low` is `null` for the whole family: both
+  counts are 0, so `?terrainRock=on` there renders nothing and warns once.
+  Nothing in this family touches the terrain fragment shader, and plan §3.3's
+  third item (footfall dust puffs) is the wave-3B DIRT mechanism — it is not
+  re-implemented here and does not yet fire on rock. ⚠ Deliberately NOT in
+  `BOOL_FLAGS`, the `gfxRelief` rule. URL override `?terrainRock=on` / `=off`;
+  the two effect flags are `?terrainRockPebbles` / `?terrainRockGrit`.
+- **`terrainRockPebbleCount`** — Terrain VFX Wave 4A. Instances in the
+  pebble/rubble field, plan §3.3's tier table verbatim (`low: null` ⇒ 0, mid
+  3000, high 9000, ultra 18000). **THE degrade lever for this family**: pebbles
+  are the one OPAQUE, LIT scatter field in the programme, so they are
+  vertex+fragment bound and buy nothing from the 25 % render scale — count is
+  the only knob that moves them. The shared scatter pool rounds the request UP
+  to a perfect square (3000 ⇒ 3025, 18000 ⇒ 18225);
+  `__terrainRock.stats().pebbleField.pool.count` is authoritative.
+  `?terrainRockPebbleCount=N`.
+- **`terrainRockGritCount`** — Terrain VFX Wave 4A. Instances in the grit
+  streamer field. §3.3's own tier table names pebbles only, so this ladder is
+  §3.2's streamer ladder (800/2000/3000) at the **1/5 density** §3.3 item 2
+  asks for. Additive and fill-bound, so it DOES get cheaper at 25 % render
+  scale. Same square-rounding. `?terrainRockGritCount=N`.
+- **`terrainRockRadius`** — Terrain VFX Wave 4A. Half-extent in metres of BOTH
+  rock windows; each field covers 2× this. Tighter than the sand/snow ladder on
+  purpose — an opaque lit field wants a smaller window than an additive veil.
+  Pebbles fade over the outer 22 % by SHRINKING to zero scale (an alpha ramp
+  would drag the whole field into the transparent pass); grit fades over the
+  outer 25 %. `?terrainRockRadius=N`.
+- **`terrainRockDensity` — URL-ONLY, no preset key on any tier.** A 0..2
+  multiplier on BOTH rock counts, default 1.0, because plan §3.3 gives the
+  family one density knob and the per-effect levers are the two `*Count` keys.
+  Same contract as `terrainGrassDensity` / `terrainDirtDustDensity`: the tier
+  owns the shipped counts and this is the continuous A/B knob for the 1070 perf
+  sweep. `0` disables the family's geometry; out-of-range falls back to 1.0.
 - **`terrainTrail`** — Terrain VFX Wave 0B
   (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §2.2/§3.1). The
   shared stomp / footprint render-target trail map (`scene3d/trail_map.js`):
