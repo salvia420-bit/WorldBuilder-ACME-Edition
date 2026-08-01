@@ -157,6 +157,14 @@ import { initTerrainSand } from "./terrain_sand.js";
 // contract as the spine. `initTerrainSnow` returns null (registering nothing)
 // unless `?terrainSnow=on` or `?terrainIce=on`.
 import { initTerrainSnow } from "./terrain_snow.js";
+// Terrain VOLCANO/OBSIDIAN family (Wave 2B, plan §3.6) — heat-haze state +
+// landblock-scoped ember vents. Same injected-THREE contract; the heat-shimmer
+// EFFECT itself is constructed inside `atmosphere_pipeline.js` (it must go into
+// the EXISTING EffectPass, never a new pass) and the crack glow + obsidian
+// specular are terrain fragment-shader terms, so neither needs an import here.
+// `initTerrainVolcano` returns null (registering nothing) unless
+// `?terrainVolcano=on`.
+import { initTerrainVolcano } from "./terrain_volcano.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
 
@@ -3533,6 +3541,27 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainSnow] initTerrainSnow threw (snow/ice VFX disabled):", e);
+  }
+  // ── Terrain VOLCANO/OBSIDIAN family (Wave 2B, plan §3.6) ──────────────
+  // Registers the two landblock-scoped providers (heat-haze state over the
+  // resident volcanic ring, ember vents) with the spine above, and registers
+  // the crack glow's breathing oscillator in the shared `vfx/oscillators.js`
+  // tick. The other two volcano effects need no wiring here: the heat-shimmer
+  // Effect is constructed inside `atmosphere_pipeline.js` (into the EXISTING
+  // EffectPass), and the crack glow + obsidian specular live in the terrain
+  // fragment shader. Returns null — registering nothing, allocating nothing —
+  // unless `?terrainVolcano=on` (the family master ships OFF on every tier,
+  // plan §5.9), so a bare-default boot is byte-identical.
+  try {
+    const volcanoSurface = initTerrainVolcano({
+      THREE,
+      scene3d: liveScene3d,
+      readEnv: readParticleEnv,
+    });
+    if (volcanoSurface && typeof window !== "undefined") window.__terrainVolcano = volcanoSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainVolcano] initTerrainVolcano threw (volcano VFX disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees

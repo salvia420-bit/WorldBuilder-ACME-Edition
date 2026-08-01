@@ -73,6 +73,12 @@ they accept the perf cost.
 | `terrainSnowRadius` | 32 | 48 | 64 | 80 | Terrain VFX Wave 2A |
 | `terrainIce` | off | off | off | off | Terrain VFX Wave 2A |
 | `terrainIceRefraction` | off | off | off | on | Terrain VFX Wave 2A |
+| `terrainVolcano` | off | off | off | off | Terrain VFX Wave 2B |
+| `terrainHaze` | off | off | on | on | Terrain VFX Wave 2B |
+| `terrainCrackGlow` | off | on | on | on | Terrain VFX Wave 2B |
+| `terrainVolcanoEmberCount` | 0 | 0 | 1 | 3 | Terrain VFX Wave 2B |
+| `terrainHazeStrength` | 0 | 0 | 1 | 1.25 | Terrain VFX Wave 2B |
+| `terrainVolcanoRadius` | 0 | 0 | 160 | 220 | Terrain VFX Wave 2B |
 | `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
@@ -207,6 +213,51 @@ they accept the perf cost.
   POM march at a third of `uPomScale`. **ULTRA ONLY** — it is the only part of
   the ice treatment with a texture cost. Requires `terrainIce`. Not in
   `BOOL_FLAGS` (exact-`on` rule). `?terrainIceRefraction=on` / `=off`.
+- **`terrainVolcano`** — Terrain VFX Wave 2B
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.6). The
+  VOLCANO/OBSIDIAN family master (`scene3d/terrain_volcano.js`) over terrain
+  codes 6/25/26: a heat-shimmer pmndrs `Effect` inserted into the EXISTING
+  `EffectPass`, landblock-scoped ember vents re-anchored from
+  `vfx/components/brazierEmbers.js` (owners
+  `staticOwnerKeyForLb(lb) + ":volcano"`), and a crack-glow + obsidian-specular
+  term in the terrain fragment shader (reads `uVertexTypes`; no new geometry
+  attribute). **OFF on every tier today** (§5.9 ship-OFF; promotion target
+  `high`/`ultra` on). Not in `BOOL_FLAGS` (same exact-`on` rule as
+  `terrainGrass`). URL override `?terrainVolcano=on` / `=off`; the three
+  sub-effects gate further via `?terrainHaze` / `?terrainEmbers` /
+  `?terrainCrackGlow`.
+- **`terrainHaze`** — Terrain VFX Wave 2B. The heat-shimmer `Effect`.
+  ⚠ **The flag name is SHARED with the sand family by design** (plan §3.2 item
+  3 — sand's wave deferred the shimmer to wave 2B); it is deliberately NOT
+  `terrainVolcanoHaze`. On `high`/`ultra` because it is a fullscreen fill cost
+  (and therefore DOES get cheaper at reduced render scale). Not in
+  `BOOL_FLAGS` (exact-`on` rule). `?terrainHaze=on` / `=off`.
+- **`terrainCrackGlow`** — Terrain VFX Wave 2B. The terrain-shader crack-glow
+  vein term AND the code-6-only obsidian specular (one key: one fragment edit,
+  one eye-test). On from `mid` up — it is a handful of fragment ALU with no
+  POM dependency, so it degrades coherently where POM is off. Not in
+  `BOOL_FLAGS` (exact-`on` rule). `?terrainCrackGlow=on` / `=off`.
+- **`terrainVolcanoEmberCount`** — Terrain VFX Wave 2B. Max ember vents per
+  volcanic landblock (hash-stable positions per lbKey, one distinct
+  `FAM_VOLCANO` vertex each). `?terrainVolcanoEmberCount=N`.
+- **`terrainHazeStrength`** — Terrain VFX Wave 2B. Multiplier on the shimmer's
+  UV-warp amplitude; the 1070 tuning lever, mirrored live on
+  `window.__heatHaze.strength`. `?terrainHazeStrength=N`.
+- **`terrainVolcanoRadius`** — Terrain VFX Wave 2B. Heat-source radius in AC
+  metres around the nearest RESIDENT volcanic landblock centre. Forced to 0
+  when no volcanic LB is resident, so the shimmer does not follow the player
+  out of the region. `?terrainVolcanoRadius=N`.
+- **ash fall — DEFERRED, no key.** Plan §3.6 item 4 lists an ultra-only ash
+  drifter; plan §8 risk 9 says to parameterise `scene3d/weather/snow.js`
+  `SnowSystem` rather than write a third falling-particle system, and to note
+  it and move on if that proves invasive. It does: `SnowSystem` seeds and
+  re-seeds every particle through ten `Math.random()` calls (against the §5.5
+  determinism invariant every terrain-VFX effect is held to), is constructed
+  and disposed by `weather/manager.js` keyed on the weather profile's
+  `temperature_C` rather than on terrain, and has no notion of a terrain gate
+  anywhere in `scene3d/weather/`. Wave 2B therefore ships NO ash: no flag, no
+  preset key (a documented flag with no reader fails the url-flags lint, and a
+  preset key with no consumer is dead config).
 - **`terrainTrail`** — Terrain VFX Wave 0B
   (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §2.2/§3.1). The
   shared stomp / footprint render-target trail map (`scene3d/trail_map.js`):

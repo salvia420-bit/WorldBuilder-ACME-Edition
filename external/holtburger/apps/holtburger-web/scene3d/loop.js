@@ -110,7 +110,13 @@ import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
 // object getCachedVariant binds into every VFX-patched material. Dormant until an
 // effect registers a channel; the master clock advances every frame regardless.
 import { VFX_GLOBALS } from "./materials.js";
-import { tickOscillators, setMasterClock } from "./vfx/oscillators.js";
+import { tickOscillators, setMasterClock, getOscillator } from "./vfx/oscillators.js";
+// Wave 2B (plan §3.6 item 3) — the identity of the crack-glow BREATHING
+// oscillator, so `tickTerrainUTime` below can push its sampled value onto every
+// terrain material's `uCrackGlowBreath`. terrain_volcano.js is THREE-free and
+// registers the channel only under `?terrainVolcano=on&terrainCrackGlow=on`; an
+// unregistered channel leaves the uniform at its shader default.
+import { CRACK_GLOW_OSC_NAME } from "./terrain_volcano.js";
 // Phase 1 (VFX slice 12) — derives VFX_GLOBALS.uWetness/uFrost/uWindDir from the
 // client weather snapshot. Imports materials.js (VFX_GLOBALS) so it is NOT a
 // leaf like oscillators.js — but loop.js already pulls in materials.js, so no
@@ -931,9 +937,23 @@ function tickTerrainUTime(scene3d) {
     ((typeof performance !== "undefined" && performance.now)
       ? performance.now() * 0.001
       : Date.now() * 0.001);
+  // Wave 2B (plan §3.6 item 3) — the VOLCANO crack glow's slow breath, sampled
+  // from the shared oscillator registry and PUSHED here for the same reason
+  // uTime is pushed: `terrain_batch.js::_buildBatchMaterial` CLONES each uniform
+  // VALUE into a fresh `{value}` object, and `?terrainBatch` is DEFAULT-ON — a
+  // by-reference binding would silently freeze the breath on the batched path.
+  // `undefined` when the channel is unregistered (crack glow off), which leaves
+  // every `uCrackGlowBreath` at its shader default; the block is gated off then
+  // anyway. Reads LAST frame's sample (tickVfxOscillators runs after this one);
+  // at 0.07 Hz that is ~4e-4 rad of phase, i.e. nothing.
+  const breathOsc = getOscillator(CRACK_GLOW_OSC_NAME);
+  const breath = breathOsc ? breathOsc.value : undefined;
   for (const mat of scene3d.terrainMaterials) {
     if (mat?.uniforms?.uTime) {
       mat.uniforms.uTime.value = tSec;
+    }
+    if (breath !== undefined && mat?.uniforms?.uCrackGlowBreath) {
+      mat.uniforms.uCrackGlowBreath.value = breath;
     }
   }
 }

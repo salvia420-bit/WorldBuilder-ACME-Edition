@@ -128,6 +128,20 @@ export const PRESETS = {
         terrainSnowRadius: 32,
         terrainIce: false,
         terrainIceRefraction: false,
+        // Terrain VOLCANO/OBSIDIAN (Wave 2B, plan §3.6). `terrainVolcano` is the
+        // FAMILY MASTER and ships false on every tier (§5.9); `low` is `null` in
+        // the plan's tier table, so every knob here is 0/false and even
+        // `?terrainVolcano=on` at low renders nothing. The three BOOLEANS stay
+        // out of BOOL_FLAGS for the `gfxRelief` reason; the three numerics are
+        // safe in INT/FLOAT_FLAGS — they cannot turn the family on.
+        // NOTE: no ash key — ash fall is DEFERRED (plan §8 risk 9; see
+        // `vfx_flags.js`'s volcano block for the SnowSystem assessment).
+        terrainVolcano: false,
+        terrainHaze: false,
+        terrainCrackGlow: false,
+        terrainVolcanoEmberCount: 0,
+        terrainHazeStrength: 0,
+        terrainVolcanoRadius: 0,
         maxParticlesPerEmitter: 64,
     },
     mid: {
@@ -203,6 +217,16 @@ export const PRESETS = {
         terrainSnowRadius: 48,
         terrainIce: false,
         terrainIceRefraction: false,
+        // Terrain VOLCANO — see the `low` tier. mid = crack glow ONLY (plan §3.6
+        // "mid {crackGlow:true}"): no haze (a fullscreen fill cost), no embers.
+        // The crack glow degrades coherently with POM off at this tier — its POM
+        // correction term is then exactly zero (plan §2.7.3 point 4).
+        terrainVolcano: false,
+        terrainHaze: false,
+        terrainCrackGlow: true,
+        terrainVolcanoEmberCount: 0,
+        terrainHazeStrength: 0,
+        terrainVolcanoRadius: 0,
         maxParticlesPerEmitter: 256,
     },
     high: {
@@ -260,6 +284,15 @@ export const PRESETS = {
         terrainSnowRadius: 64,
         terrainIce: false,
         terrainIceRefraction: false,
+        // Terrain VOLCANO — see the `low` tier. plan §3.6 "high {crackGlow:true,
+        // haze:true, embers:1}". The haze is fill-bound, so it DOES get cheaper
+        // at 25 % render scale (plan §5.8).
+        terrainVolcano: false,
+        terrainHaze: true,
+        terrainCrackGlow: true,
+        terrainVolcanoEmberCount: 1,
+        terrainHazeStrength: 1,
+        terrainVolcanoRadius: 160,
         maxParticlesPerEmitter: 1024,
     },
     ultra: {
@@ -314,6 +347,15 @@ export const PRESETS = {
         terrainSnowRadius: 80,
         terrainIce: false,
         terrainIceRefraction: true,
+        // Terrain VOLCANO — see the `low` tier. plan §3.6 "ultra
+        // {crackGlow:true, haze:true, embers:3, ash:true}" MINUS ash, which is
+        // deferred (plan §8 risk 9) and therefore carries no key at all.
+        terrainVolcano: false,
+        terrainHaze: true,
+        terrainCrackGlow: true,
+        terrainVolcanoEmberCount: 3,
+        terrainHazeStrength: 1.25,
+        terrainVolcanoRadius: 220,
         maxParticlesPerEmitter: 2048,
     },
 };
@@ -371,6 +413,10 @@ const INT_FLAGS = new Set([
     // from BOOL_FLAGS for the `gfxRelief` reason (their readers require an
     // exact `=== "on"`).
     "terrainSnowSpindriftCount",
+    // Terrain VOLCANO (Wave 2B). Count only — `terrainVolcano`, `terrainHaze`
+    // and `terrainCrackGlow` are absent from BOOL_FLAGS for the `gfxRelief`
+    // reason (their readers require an exact `=== "on"`).
+    "terrainVolcanoEmberCount",
 ]);
 
 // Float-typed flags.
@@ -384,6 +430,10 @@ const FLOAT_FLAGS = new Set([
     // Terrain SNOW (Wave 2A) — spindrift-field half-extent in metres.
     // (`?terrainSnowSlope` is URL-ONLY, like `?terrainGrassDensity`.)
     "terrainSnowRadius",
+    // Terrain VOLCANO (Wave 2B) — heat-shimmer amplitude multiplier and the
+    // heat-source radius in metres around the nearest resident volcanic LB.
+    "terrainHazeStrength",
+    "terrainVolcanoRadius",
 ]);
 
 function parseBool(raw) {
