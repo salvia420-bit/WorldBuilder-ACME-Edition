@@ -173,6 +173,13 @@ import { initTerrainVolcano } from "./terrain_volcano.js";
 // contract as the spine. `initTerrainDirt` returns null (registering nothing)
 // unless `?terrainDirt=on`.
 import { initTerrainDirt } from "./terrain_dirt.js";
+// Terrain SWAMP/MARSH family (Wave 3A, plan §3.5) — the shared camera-scoped
+// ground fog (`scene3d/ground_fog.js`, which snow/volcano compose later) plus
+// landblock-scoped marsh-gas vents and the GROUND anchor source for the
+// existing firefly/pollen components. Same injected-THREE contract; nothing in
+// this family touches the terrain fragment shader. `initTerrainSwamp` returns
+// null (registering nothing) unless `?terrainSwamp=on`.
+import { initTerrainSwamp } from "./terrain_swamp.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
 
@@ -3594,6 +3601,29 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainDirt] initTerrainDirt threw (dirt/mud VFX disabled):", e);
+  }
+  // ── Terrain SWAMP/MARSH family (Wave 3A, plan §3.5) ───────────────────
+  // Registers up to four providers: the camera-scoped SHARED ground fog
+  // (`scene3d/ground_fog.js` — snow and volcano compose the same module later,
+  // which is why the flag is `?terrainGroundFog` and not `?terrainSwampFog`),
+  // and three landblock-scoped emitter providers (marsh-gas vents plus the
+  // GROUND anchor sources for the existing firefly and pollen components —
+  // plan §3.5 item 1: re-anchor, never a second firefly system). No terrain
+  // fragment-shader work in this family, so nothing else needs wiring. Returns
+  // null — registering nothing, allocating nothing — unless `?terrainSwamp=on`
+  // (the family master ships OFF on every tier, plan §5.9), so a bare-default
+  // boot is byte-identical.
+  try {
+    const swampSurface = initTerrainSwamp({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+      readEnv: readParticleEnv,
+    });
+    if (swampSurface && typeof window !== "undefined") window.__terrainSwamp = swampSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainSwamp] initTerrainSwamp threw (swamp VFX disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees

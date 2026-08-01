@@ -212,12 +212,52 @@ export function breathFogGate(env) {
   return clamp01(cold * nightBias);
 }
 
+/**
+ * MARSH GAS — sluggish bubbling over swamp ground (terrain-VFX Wave 3A, plan
+ * §3.5 item 2). Decomposing peat vents whether or not the sun is up, so unlike
+ * the four gates above this one has NO day/night hard cut — it is a slow,
+ * always-there phenomenon that three things modulate:
+ *  • frost (0..1)          ⇒ linearly to ZERO. A frozen marsh does not vent at
+ *                            all, so a hard freeze gates the effect OUT
+ *                            entirely (no emitter is synthesized — as cheap as
+ *                            flag-off). This reuses the SAME smoothed cold
+ *                            drive the frost wash and breath fog read, so the
+ *                            marsh stops bubbling exactly where the world
+ *                            rimes up.
+ *  • wind (`windStrength`) ⇒ a gust disperses the bubble column before it reads.
+ *                            The calm baseline is ~1.0 and a storm gust ~1.7
+ *                            (writeWindVector's envelope), so [1.0, 1.6] maps to
+ *                            [1.0, 0.4] — never to zero, because the bubbles
+ *                            still surface, they just do not linger.
+ *  • night (`nightFactor`) ⇒ mild 0.75 → 1.0 bias. A pale gas plume reads
+ *                            against dark water and washes out at noon.
+ * PURE and TOTAL, like every gate here: a null env reads as a calm, temperate,
+ * daylit marsh (1.0) rather than throwing.
+ * @param {ParticleEnv} env
+ * @returns {number} visibility ∈ [0,1]
+ */
+export function marshGasGate(env) {
+  if (!env) return 1;
+  const cold = clamp01(Number.isFinite(env.frost) ? env.frost : 0);
+  const gust = Number.isFinite(env.windStrength) ? env.windStrength : 1.0;
+  const disperse = 1 - 0.6 * smoothstep(1.0, 1.6, gust);
+  const night = Number.isFinite(env.nightFactor) ? env.nightFactor : nightFactor(env.sunAlt);
+  const nightBias = 0.75 + 0.25 * clamp01(night);
+  return clamp01((1 - cold) * disperse * nightBias);
+}
+
 /** Map gate id → gate fn (used by the components + tests). */
 export const PARTICLE_GATES = Object.freeze({
   "particle.foliagePollen": pollenGate,
   "particle.fireflies": firefliesGate,
   "particle.leaves": leavesGate,
   "particle.breathFog": breathFogGate,
+  // Terrain-VFX Wave 3A. The SWAMP family's fireflies and midges deliberately
+  // do NOT appear here: they re-anchor `foliageFireflies`/`foliagePollen` and
+  // reuse `firefliesGate`/`pollenGate` VERBATIM (that reuse is the point — plan
+  // §3.5 item 1 "do not write a second firefly system"). Only the marsh gas is
+  // a genuinely new phenomenon and therefore a genuinely new gate.
+  "terrain.marshGas": marshGasGate,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

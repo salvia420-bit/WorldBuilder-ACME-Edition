@@ -14,6 +14,7 @@ import { breathFog } from "./scene3d/vfx/components/breathFog.js";
 import { allComponents, validateComponent } from "./scene3d/vfx/registry.js";
 import {
   nightFactor, pollenGate, firefliesGate, leavesGate, breathFogGate,
+  marshGasGate, PARTICLE_GATES,
 } from "./scene3d/vfx/particle_env_gates.js";
 
 let pass = 0, fail = 0;
@@ -68,6 +69,30 @@ check("breath: warm=0", breathFogGate(noon) === 0);
 check("breath: cold>0", breathFogGate(winterNight) > 0);
 // determinism: pure fns return identical for identical input
 check("gate deterministic", firefliesGate(night) === firefliesGate({ ...night }));
+
+// 2026-08-01 (terrain-VFX Wave 3A): `marshGasGate` joins this module. It is the
+// ONE new gate the swamp family needed — its fireflies and midges deliberately
+// reuse firefliesGate/pollenGate verbatim (plan §3.5 item 1: re-anchor, never a
+// second system), so they get no gate of their own. Same shape checks the four
+// above get: pure, total, deterministic, in [0,1], and routed in PARTICLE_GATES.
+const marshCalm = { sunAlt: -0.4, nightFactor: 1, frost: 0, windStrength: 1.0 };
+const marshGusty = { ...marshCalm, windStrength: 1.8 };
+const marshFrozen = { ...marshCalm, frost: 1 };
+check("marshGas: routed in PARTICLE_GATES", PARTICLE_GATES["terrain.marshGas"] === marshGasGate);
+check("marshGas: total (null env ⇒ a finite baseline, no throw)", marshGasGate(null) === 1);
+check("marshGas: deterministic", marshGasGate(marshCalm) === marshGasGate({ ...marshCalm }));
+check("marshGas: calm night > 0", marshGasGate(marshCalm) > 0);
+check("marshGas: a gust disperses it", marshGasGate(marshGusty) < marshGasGate(marshCalm));
+check("marshGas: a hard freeze gates it OUT entirely", marshGasGate(marshFrozen) === 0);
+check("marshGas: stays in [0,1] over a NaN-bearing sweep", (() => {
+  for (const frost of [0, 0.5, 1, NaN]) {
+    for (const wind of [0, 1, 1.6, 4, NaN]) {
+      const v = marshGasGate({ frost, windStrength: wind, nightFactor: NaN, sunAlt: 0.3 });
+      if (!(v >= 0 && v <= 1)) return false;
+    }
+  }
+  return true;
+})());
 
 // ── 3. emit() — gate out / on / sprite wiring / persistence ───────────────────
 const sprites = { softDot: 0x0A001001, spark: 0x0A001002, leaf: 0x0A001003, smoke: 0x0A001004 };

@@ -154,6 +154,23 @@ export const PRESETS = {
         terrainMudWetness: false,
         terrainDirtDustCount: 0,
         terrainDirtRadius: 32,
+        // Terrain SWAMP/MARSH (Wave 3A, plan §3.5). `terrainSwamp` is the
+        // FAMILY MASTER and ships false on every tier (§5.9); `low` is `null`
+        // in the plan's tier table, so every knob here is 0/false and even
+        // `?terrainSwamp=on` at low renders nothing. The four BOOLEANS stay out
+        // of BOOL_FLAGS for the `gfxRelief` reason; the three numerics are safe
+        // in INT/FLOAT_FLAGS — they cannot turn the family on.
+        // NOTE: no `terrainGroundFogSoftness` key. That knob is URL-ONLY by
+        // design (see `vfx_flags.js::terrainGroundFogSoftnessM`): it arms the
+        // fog's scene-depth read, which is a framebuffer feedback loop against
+        // the composer's live depth attachment, so no tier may turn it on.
+        terrainSwamp: false,
+        terrainGroundFogCount: 0,
+        terrainGroundFogRadius: 32,
+        terrainMarshGasCount: 0,
+        terrainMarshWisps: false,
+        terrainSwampFireflies: false,
+        terrainSwampMidges: false,
         maxParticlesPerEmitter: 64,
     },
     mid: {
@@ -249,6 +266,17 @@ export const PRESETS = {
         terrainMudWetness: false,
         terrainDirtDustCount: 0,
         terrainDirtRadius: 40,
+        // Terrain SWAMP — see the `low` tier. plan §3.5 "mid {fog:8, gas:false,
+        // fireflies:true}": the two particle re-anchors (which cost one
+        // synthesized emitter per swamp landblock) and a thin 8-card fog ring,
+        // but NO gas vents and no wisps.
+        terrainSwamp: false,
+        terrainGroundFogCount: 8,
+        terrainGroundFogRadius: 40,
+        terrainMarshGasCount: 0,
+        terrainMarshWisps: false,
+        terrainSwampFireflies: true,
+        terrainSwampMidges: true,
         maxParticlesPerEmitter: 256,
     },
     high: {
@@ -324,6 +352,15 @@ export const PRESETS = {
         terrainMudWetness: false,
         terrainDirtDustCount: 800,
         terrainDirtRadius: 56,
+        // Terrain SWAMP — see the `low` tier. plan §3.5 "high {fog:16,
+        // gas:true, fireflies:true}". Wisps stay ultra-only.
+        terrainSwamp: false,
+        terrainGroundFogCount: 16,
+        terrainGroundFogRadius: 56,
+        terrainMarshGasCount: 2,
+        terrainMarshWisps: false,
+        terrainSwampFireflies: true,
+        terrainSwampMidges: true,
         maxParticlesPerEmitter: 1024,
     },
     ultra: {
@@ -397,6 +434,15 @@ export const PRESETS = {
         terrainMudWetness: true,
         terrainDirtDustCount: 2000,
         terrainDirtRadius: 72,
+        // Terrain SWAMP — see the `low` tier. plan §3.5 "ultra {fog:24,
+        // gas:true, wisps:true}".
+        terrainSwamp: false,
+        terrainGroundFogCount: 24,
+        terrainGroundFogRadius: 72,
+        terrainMarshGasCount: 3,
+        terrainMarshWisps: true,
+        terrainSwampFireflies: true,
+        terrainSwampMidges: true,
         maxParticlesPerEmitter: 2048,
     },
 };
@@ -464,6 +510,12 @@ const INT_FLAGS = new Set([
     // (`?terrainDirtDustDensity` and `?terrainFootfallPuffs` are URL-ONLY, like
     // `?terrainGrassDensity`.)
     "terrainDirtDustCount",
+    // Terrain SWAMP (Wave 3A). Counts only — `terrainSwamp`,
+    // `terrainMarshWisps`, `terrainSwampFireflies` and `terrainSwampMidges` are
+    // absent from BOOL_FLAGS for the `gfxRelief` reason (their readers require
+    // an exact `=== "on"`).
+    "terrainGroundFogCount",
+    "terrainMarshGasCount",
 ]);
 
 // Float-typed flags.
@@ -483,6 +535,9 @@ const FLOAT_FLAGS = new Set([
     "terrainVolcanoRadius",
     // Terrain DIRT (Wave 3B) — dry-dust-haze field half-extent in metres.
     "terrainDirtRadius",
+    // Terrain SWAMP (Wave 3A) — the fog ring's half-extent in metres.
+    // (`?terrainGroundFogSoftness` is URL-ONLY, like `?terrainSnowSlope`.)
+    "terrainGroundFogRadius",
 ]);
 
 function parseBool(raw) {
