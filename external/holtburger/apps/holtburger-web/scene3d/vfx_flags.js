@@ -1097,6 +1097,134 @@ export function terrainMarshGasCount() {
   return Math.round(_terrainNum("terrainMarshGasCount", "terrainMarshGasCount", 2, 0, 8));
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN ROCK / BARREN (Wave 4A — plan §3.3). Codes 0 (`BarrenRock`),
+// 13 (`SedimentaryRock`), 14 (`SemiBarrenRock`) and 30 (`olthoi`) = FAM_ROCK;
+// the OLTHOI sub-variant (chitinous shards + the faint sickly emissive) is
+// code 30 alone. Both sets are DERIVED in `terrain_rock.js`, never listed here.
+//
+// ONE family master + two effects, ALL strict exact-match opt-ins that ship OFF
+// (plan §2.4/§5.9), all kept out of `quality.js BOOL_FLAGS` for the `gfxRelief`
+// reason. Composition:
+//     pebbles = terrainRockEnabled() && terrainRockPebblesEnabled()
+//     grit    = terrainRockEnabled() && terrainRockGritEnabled()
+// `?terrainVfx=off`, `?visual=off` and `?wireframe=1` each kill both.
+//
+// ⚠ Plan §3.3's third item, FOOTFALL DUST PUFFS, is "shared with §3.7" and gets
+// NO flag here: the mechanism, the `entities.js` seam and the
+// `?terrainFootfall` flag all landed in wave 3B and are owned by
+// `terrain_dirt.js`. Extending it to dry rock is a DIRT-side change to
+// `puffForGround` (which gates on FAM_DIRT and has a suite lock saying so) —
+// see the `scene3d/terrain_rock.js` header.
+// ---------------------------------------------------------------------------
+
+let _terrainRock;
+const _terrainRockWarn = { hit: false };
+/** `?terrainRock=on` — THE family master for ROCK/BARREN (the opaque, lit
+ *  pebble/rubble scatter + the grey grit streamers; plan §3.3). STRICT
+ *  exact-match opt-in; absent ⇒ the quality preset's `terrainRock`, **false on
+ *  all four tiers** this wave (§5.9 ship-OFF; the promotion target is
+ *  high/ultra true). */
+export function terrainRockEnabled() {
+  if (_terrainRock !== undefined) return _terrainRock;
+  const r = _terrainStrictFlag("terrainRock", "terrainRock", false, _terrainRockWarn);
+  return r.memo ? (_terrainRock = r.value) : r.value;
+}
+
+let _terrainRockPebbles;
+const _terrainRockPebblesWarn = { hit: false };
+/** `?terrainRockPebbles=on` — the camera-scoped instanced pebble/rubble field
+ *  (`scene3d/terrain_rock.js`, on the shared `terrain_scatter.js` pool). The one
+ *  OPAQUE, LIT scatter field in the programme: it carries real fragment cost and
+ *  a real day/night response, and it is the only reason this family needs the
+ *  sky snapshot. Requires the family master. Absent ⇒ ON wherever the tier's
+ *  `terrainRockPebbleCount` is non-zero (low = 0 ⇒ off), the same shape
+ *  `terrainSandStreamers` and `terrainSnowSpindrift` use. */
+export function terrainRockPebblesEnabled() {
+  if (_terrainRockPebbles !== undefined) return _terrainRockPebbles;
+  const raw = _strFlag("terrainRockPebbles");
+  if (raw === "on") return (_terrainRockPebbles = true);
+  if (raw === "off") return (_terrainRockPebbles = false);
+  if (raw !== null && !_terrainRockPebblesWarn.hit) {
+    _terrainRockPebblesWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainRockPebbles] ignoring ?terrainRockPebbles=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainRockPebbles=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainRockPebbles = Number(flags.terrainRockPebbleCount) > 0);
+}
+
+let _terrainRockGrit;
+const _terrainRockGritWarn = { hit: false };
+/** `?terrainRockGrit=on` — the grey, short-lived grit streamers skittering over
+ *  hard ground: plan §3.3 item 2, "the §3.2 streamer module at 1/5 density,
+ *  greyer, shorter life. A parameter block, not a new module." It is a parameter
+ *  block of the SAND streamer maths, copied into `terrain_rock.js` exactly as
+ *  wave 2A copied them for spindrift (widening `terrain_sand.js`'s hardcoded
+ *  `families: [FAM_SAND]` would be a cross-family drive-by). Requires the family
+ *  master. Absent ⇒ ON wherever the tier's `terrainRockGritCount` is non-zero
+ *  (low = 0 ⇒ off). */
+export function terrainRockGritEnabled() {
+  if (_terrainRockGrit !== undefined) return _terrainRockGrit;
+  const raw = _strFlag("terrainRockGrit");
+  if (raw === "on") return (_terrainRockGrit = true);
+  if (raw === "off") return (_terrainRockGrit = false);
+  if (raw !== null && !_terrainRockGritWarn.hit) {
+    _terrainRockGritWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainRockGrit] ignoring ?terrainRockGrit=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainRockGrit=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainRockGrit = Number(flags.terrainRockGritCount) > 0);
+}
+
+/** `?terrainRockPebbleCount` — instances in the pebble pool at the live tier.
+ *  Preset key `terrainRockPebbleCount` (low 0 / mid 3000 / high 9000 /
+ *  ultra 18000 — plan §3.3's tier table verbatim). ⚠ The scatter pool rounds the
+ *  request UP to a perfect square, so 3000 becomes 3025 and 18000 becomes 18225;
+ *  `pool.count` is authoritative. An `INT_FLAGS` quality override — it cannot
+ *  turn the family on by itself. Fallback 9000 = the `high` tier. */
+export function terrainRockPebbleCount() {
+  return Math.round(_terrainNum("terrainRockPebbleCount", "terrainRockPebbleCount", 9000, 0, 200000));
+}
+
+/** `?terrainRockGritCount` — instances in the grit-streamer pool at the live
+ *  tier. Preset key `terrainRockGritCount` (low 0 / mid 160 / high 400 /
+ *  ultra 600) — plan §3.3 item 2's "1/5 density" applied to §3.2's streamer
+ *  ladder (800/2000/3000), because §3.3's own tier table names pebbles only.
+ *  An `INT_FLAGS` quality override. Fallback 400 = the `high` tier. */
+export function terrainRockGritCount() {
+  return Math.round(_terrainNum("terrainRockGritCount", "terrainRockGritCount", 400, 0, 20000));
+}
+
+/** `?terrainRockRadius` — HALF-extent (metres) of BOTH rock windows; each field
+ *  covers 2× this. Preset key `terrainRockRadius` (low 32 / mid 40 / high 56 /
+ *  ultra 72 — the `terrainDirtRadius` ladder: pebbles are opaque and lit, so
+ *  they buy nothing from render scale and want a tighter window than the
+ *  additive families). Fallback 56 m = the `high` tier. Cannot enable the
+ *  feature on its own. */
+export function terrainRockRadiusM() {
+  return _terrainNum("terrainRockRadius", "terrainRockRadius", 56, 8, 512);
+}
+
+/** `?terrainRockDensity` — 0..2 multiplier on BOTH tier counts (pebbles AND
+ *  grit), default 1.0. THE knob plan §3.3 names alongside the master. URL-ONLY
+ *  on purpose (no preset key), exactly like `?terrainGrassDensity`,
+ *  `?terrainSnowSlope` and `?terrainDirtDustDensity`: it is the continuous A/B
+ *  knob for the 1070 perf sweep, while the tier owns the shipped counts. 0
+ *  disables the whole family's geometry. Note it multiplies BOTH pools because
+ *  §3.3 gives the family ONE density knob — per-effect counts are the two
+ *  `*Count` flags above. */
+export function terrainRockDensity() {
+  return _numFlag("terrainRockDensity", 1, 0, 2);
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -1193,6 +1321,17 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.marshGas": () => terrainSwampEnabled() && terrainMarshGasEnabled(),
   "terrain.swampFireflies": () => terrainSwampEnabled() && terrainSwampFirefliesEnabled(),
   "terrain.swampMidges": () => terrainSwampEnabled() && terrainSwampMidgesEnabled(),
+  // Terrain ROCK / BARREN (Wave 4A, plan §3.3) — same contract again: strict
+  // ship-OFF opt-ins that do NOT track visualAllEffects(), so `?visual=all` does
+  // not light them and the DEFAULT-ON count stays 14. Each row composes the
+  // family master itself, so `vfxEffectEnabled` answers the same question the
+  // effect asks. `terrain.rockPebbles` and `terrain.rockGrit` are also the
+  // PROVIDER IDS registered with the terrain-VFX spine. There is deliberately
+  // NO `terrain.rockFootfall` row: plan §3.3 item 3 is the wave-3B dirt puff
+  // mechanism, whose row is `terrain.footfall`.
+  "terrain.rock": terrainRockEnabled,
+  "terrain.rockPebbles": () => terrainRockEnabled() && terrainRockPebblesEnabled(),
+  "terrain.rockGrit": () => terrainRockEnabled() && terrainRockGritEnabled(),
 });
 
 /**
@@ -1254,4 +1393,8 @@ export function _resetVfxFlags() {
   _terrainMarshWispsWarn.hit = false;
   _terrainSwampFirefliesWarn.hit = false;
   _terrainSwampMidgesWarn.hit = false;
+  _terrainRock = _terrainRockPebbles = _terrainRockGrit = undefined;
+  _terrainRockWarn.hit = false;
+  _terrainRockPebblesWarn.hit = false;
+  _terrainRockGritWarn.hit = false;
 }

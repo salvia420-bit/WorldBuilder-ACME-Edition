@@ -171,6 +171,20 @@ export const PRESETS = {
         terrainMarshWisps: false,
         terrainSwampFireflies: false,
         terrainSwampMidges: false,
+        // Terrain ROCK/BARREN (Wave 4A, plan §3.3). `terrainRock` is the FAMILY
+        // MASTER and ships false on every tier (§5.9); `low` is `null` in the
+        // plan's tier table, so both counts are 0 and even `?terrainRock=on` at
+        // low renders nothing. The master and the two effect booleans stay out
+        // of BOOL_FLAGS for the `gfxRelief` reason; the three numerics are safe
+        // in INT/FLOAT_FLAGS — they cannot turn the family on.
+        // NOTE: no `terrainRockDensity` key. That knob is URL-ONLY by design
+        // (see `vfx_flags.js::terrainRockDensity`), like `terrainGrassDensity`
+        // and `terrainDirtDustDensity`: the tier owns the shipped counts and
+        // the density knob is the continuous A/B lever on top of them.
+        terrainRock: false,
+        terrainRockPebbleCount: 0,
+        terrainRockGritCount: 0,
+        terrainRockRadius: 32,
         maxParticlesPerEmitter: 64,
     },
     mid: {
@@ -277,6 +291,13 @@ export const PRESETS = {
         terrainMarshWisps: false,
         terrainSwampFireflies: true,
         terrainSwampMidges: true,
+        // Terrain ROCK — see the `low` tier. plan §3.3 "mid {pebbles:3000}";
+        // the grit ladder is §3.2's streamer ladder at the "1/5 density" §3.3
+        // item 2 asks for (800 → 160).
+        terrainRock: false,
+        terrainRockPebbleCount: 3000,
+        terrainRockGritCount: 160,
+        terrainRockRadius: 40,
         maxParticlesPerEmitter: 256,
     },
     high: {
@@ -361,6 +382,12 @@ export const PRESETS = {
         terrainMarshWisps: false,
         terrainSwampFireflies: true,
         terrainSwampMidges: true,
+        // Terrain ROCK — see the `low` tier. plan §3.3 "high {pebbles:9000}";
+        // grit = §3.2's high streamer count (2000) at 1/5.
+        terrainRock: false,
+        terrainRockPebbleCount: 9000,
+        terrainRockGritCount: 400,
+        terrainRockRadius: 56,
         maxParticlesPerEmitter: 1024,
     },
     ultra: {
@@ -443,6 +470,12 @@ export const PRESETS = {
         terrainMarshWisps: true,
         terrainSwampFireflies: true,
         terrainSwampMidges: true,
+        // Terrain ROCK — see the `low` tier. plan §3.3 "ultra {pebbles:18000}";
+        // grit = §3.2's ultra streamer count (3000) at 1/5.
+        terrainRock: false,
+        terrainRockPebbleCount: 18000,
+        terrainRockGritCount: 600,
+        terrainRockRadius: 72,
         maxParticlesPerEmitter: 2048,
     },
 };
@@ -516,6 +549,12 @@ const INT_FLAGS = new Set([
     // an exact `=== "on"`).
     "terrainGroundFogCount",
     "terrainMarshGasCount",
+    // Terrain ROCK (Wave 4A). Counts only — `terrainRock`, `terrainRockPebbles`
+    // and `terrainRockGrit` are absent from BOOL_FLAGS for the `gfxRelief`
+    // reason (their readers require an exact `=== "on"`).
+    // (`?terrainRockDensity` is URL-ONLY, like `?terrainGrassDensity`.)
+    "terrainRockPebbleCount",
+    "terrainRockGritCount",
 ]);
 
 // Float-typed flags.
@@ -538,6 +577,9 @@ const FLOAT_FLAGS = new Set([
     // Terrain SWAMP (Wave 3A) — the fog ring's half-extent in metres.
     // (`?terrainGroundFogSoftness` is URL-ONLY, like `?terrainSnowSlope`.)
     "terrainGroundFogRadius",
+    // Terrain ROCK (Wave 4A) — the half-extent in metres shared by the pebble
+    // and grit windows.
+    "terrainRockRadius",
 ]);
 
 function parseBool(raw) {
