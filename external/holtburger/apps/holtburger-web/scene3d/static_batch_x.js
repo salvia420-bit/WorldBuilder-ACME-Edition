@@ -52,6 +52,167 @@ export function __resetStatBatchXForTest() {
   _lbMembership.clear();
   _dirtyBuckets.clear();
   _bucketSeq = 0;
+  _dedupStats.hits = 0;
+  _dedupStats.adds = 0;
+  _dedupStats.keyed = 0;
+}
+
+// ---------------------------------------------------------------------------
+// ?statGeomDedup — CONTENT-KEY geometry dedup inside a chunk bucket (2026-08-01)
+//
+// THE BUG THIS FIXES. The feed loop below dedups geometry by BufferGeometry
+// OBJECT IDENTITY, scoped to ONE feed (`gidOf`, ~:234). Within one LB feed all
+// placements of a model DO share one object (`fetchPrimaryGeometries` decodes
+// once per unique modelId and `buildSingletonNode` hands the same `g.geometry`
+// to every placement — statics.js :756/:2114), so per-feed identity is enough
+// there. But buckets are PERSISTENT and span a 3x3-LB region: the NEXT LB in
+// the same region re-decodes the same tree/wall/rock into a FRESH
+// BufferGeometry object, which the identity map cannot recognise, so its
+// vertices are copied into the bucket AGAIN. Up to 9 copies of every shared
+// model per region bucket, re-paid on every evict/re-approach cycle. The
+// pinned-pose census (perf-synthesis §3, net-review/singleton-dedupe-probe.mjs)
+// measured 17,774 batched instances over only 324 distinct geometries.
+//
+// THE KEY IS DECODE IDENTITY, NOT BYTES. A statics geometry is a pure function
+// of (modelId, surfaceDid, doubleSided): `fetch_model_meshes` takes ONLY model
+// ids (src/lib.rs :14331) and routes to the substitution-free
+// `triangulate_model` (:8769), which is memoised by model_id in the shared
+// MODEL_TRI_CACHE (:8813-8843) precisely BECAUSE it is deterministic against
+// the immutable DAT; `pack_model_mesh` (:9229) assigns surface indices in
+// insertion order, and `meshToGeometryGroups` (adapter.js :814) buckets tris by
+// (surfaceIndex, sides) with no per-LB input. Statics never pass substitutions
+// (those are character clothing/equipment) and never mutate a baked geometry.
+// So the key carries (modelId, surfaceDid, doubleSided) PLUS vertex/index counts
+// and a bounded FNV-1a fingerprint of the position buffer — the counts+
+// fingerprint are what make a PARTIAL decode (`decodeMisses > 0`, accepted
+// after STATICS_STARVED_RETRY_CAP) impossible to confuse with the complete one.
+// A substituted or otherwise non-statics geometry simply carries no stamp and
+// falls through to the legacy per-feed identity path.
+//
+// WHY IT IS BYTE-IDENTICAL UNDER THE FLAG. `BatchedMesh.addGeometry` COPIES the
+// source attributes into the batch's own buffers (three r184
+// BatchedMesh.js :694 → `setGeometryAt` :738-792) and returns an id; a draw is
+// then (geometryId, per-instance matrix) via `addInstance` (:560-607), which
+// allocates its OWN matrix slot and only STORES `geometryIndex`. Reusing an
+// existing id for a placement therefore reads the same vertex bytes that a
+// second `addGeometry` would have written, with that placement's own matrix
+// untouched. Nothing about instance count, per-instance culling, or multiDraw
+// range count changes — this is a memory/upload/bake-CPU win, NOT a draw-range
+// win (the range-merge half stays gated on the §3 ceiling probe).
+//
+// EVICTION. Buckets are cross-LB, so a shared id must outlive the LB that
+// first added it: entries are REFCOUNTED by lb-key, this LB's instances are
+// removed individually with `deleteInstance` (:860), and `deleteGeometry`
+// (whose documented side effect is deleting EVERY instance of the id, :834-844)
+// only runs when the last referencing LB leaves. The map lives on the bucket
+// (`userData.dedupGids`), so it can never outlive the BatchedMesh, and entries
+// are removed at last-ref — bounded by the bucket's live geometry count.
+//
+// DEFAULT-OFF, exact-match opt-in (`?statGeomDedup=on`). Flag off = not one
+// extra byte read on the feed path (no key is ever stamped, so `_contentKeyOf`
+// short-circuits on an absent property) and eviction takes the identical
+// legacy branch.
+let _dedupFlag;
+/** `?statGeomDedup=on` — content-key geometry dedup inside a chunk bucket.
+ *  EXACT-match opt-in (url-flags.md header rule: never `!== "off"` for an
+ *  opt-in). DEFAULT-OFF pending the 1070 re-base. */
+export function statGeomDedupEnabled() {
+  if (_dedupFlag !== undefined) return _dedupFlag;
+  let on = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("statGeomDedup") || "").toLowerCase();
+      on = v === "on";
+    }
+  } catch (_) { on = false; }
+  _dedupFlag = on;
+  return on;
+}
+// Test seam.
+export function __setStatGeomDedupForTest(v) { _dedupFlag = v; }
+
+const _dedupStats = { hits: 0, adds: 0, keyed: 0 };
+
+// Geometry-level stamp read by `_contentKeyOf`. Absent ⇒ legacy path.
+const STAT_CONTENT_KEY = "__statContentKey";
+
+// Float bit-pattern view for the fingerprint (avoids float→string formatting).
+const _fpF32 = new Float32Array(1);
+const _fpU32 = new Uint32Array(_fpF32.buffer);
+
+/**
+ * Bounded FNV-1a over the position buffer: <= 96 strided samples plus the
+ * length, so the cost is O(1) per GEOMETRY (not per placement) regardless of
+ * model size. This is the belt to the identity key's braces — it is what makes
+ * a partial decode (fewer/other triangles for the same modelId) key
+ * differently from the complete one.
+ */
+function _positionFingerprint(geom) {
+  const pos = geom.attributes && geom.attributes.position;
+  const a = pos && pos.array;
+  if (!a || a.length === 0) return 0;
+  const n = a.length;
+  const stride = Math.max(1, (n / 96) | 0);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < n; i += stride) {
+    _fpF32[0] = a[i];
+    h ^= _fpU32[0];
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= n;
+  h = Math.imul(h, 0x01000193);
+  return h >>> 0;
+}
+
+/**
+ * Stamp the content key on each `meshToGeometryGroups` output group of ONE
+ * model. Called from statics.js `fetchPrimaryGeometries` (the single decode
+ * seam both bakers share) where `modelId` is in scope and `doubleSided` has
+ * not yet been dropped — the node's `userData` carries modelId + surfaceDid
+ * but NOT `doubleSided`, and statics calls `materialCache.getCached(did)`
+ * without the side argument, so two same-DID groups that differ ONLY in
+ * sidedness land in the SAME bucket. Keying without `doubleSided` would fuse
+ * them; this is the reason the stamp is made here and not derived downstream.
+ *
+ * No-op when the flag is off (nothing stamped ⇒ the feed path is untouched).
+ * Returns the number of groups stamped (test/diag).
+ */
+export function stampStaticContentKeys(modelId, groups) {
+  if (!statGeomDedupEnabled() || !groups) return 0;
+  let stamped = 0;
+  for (const g of groups) {
+    const geom = g && g.geometry;
+    if (!geom) continue;
+    try {
+      const pos = geom.attributes && geom.attributes.position;
+      if (!pos) continue;
+      const ud = geom.userData || (geom.userData = {});
+      if (typeof ud[STAT_CONTENT_KEY] === "string") { stamped += 1; continue; }
+      ud[STAT_CONTENT_KEY] =
+        `${(modelId >>> 0).toString(16)}|${(g.surfaceDid >>> 0).toString(16)}` +
+        `|${g.doubleSided ? 1 : 0}|${pos.count}|${geom.index ? geom.index.count : 0}` +
+        `|${_positionFingerprint(geom).toString(16)}`;
+      stamped += 1;
+      _dedupStats.keyed += 1;
+    } catch (_) { /* fail-soft: an unstamped geometry just takes the legacy path */ }
+  }
+  return stamped;
+}
+
+/** Read the stamp off a mesh's geometry; null ⇒ legacy per-feed identity. */
+function _contentKeyOf(geom) {
+  try {
+    const k = geom && geom.userData && geom.userData[STAT_CONTENT_KEY];
+    return typeof k === "string" ? k : null;
+  } catch (_) { return null; }
+}
+
+/** Is `gid` still a live geometry slot in this bucket? (stale-entry guard) */
+function _gidLive(bm, gid) {
+  try {
+    const info = bm._geometryInfo;
+    return Array.isArray(info) && !!info[gid] && info[gid].active !== false;
+  } catch (_) { return false; }
 }
 
 const _INIT_VERTS = 1 << 14;      // 16,384 (chunk-scale); grows via setGeometrySize on demand
@@ -107,6 +268,10 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
     deadVerts: 0,        // vertices in deleted geometries awaiting optimize()
     gidVerts: new Map(), // gid -> vertexCount (dead-space accounting on delete)
     instances: 0,        // live instance count (diag/census)
+    // ?statGeomDedup only: contentKey -> { gid, refs:Set<lbKey> }. Created
+    // lazily on first keyed feed and scoped to THIS bucket object, so it dies
+    // with the BatchedMesh and can never key one bucket's ids into another.
+    dedupGids: null,
   };
   bm.name = `static-batch-c-r${regionKey}-s${surf.toString(16).padStart(8, "0")}-m${_bucketSeq++}`;
   b = { bm };
@@ -216,6 +381,8 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
     // automatically (addFillCompanions skips isBatchedMesh, materials.js ~2213).
     // Keep the punt untouched when wireframe is off (normal mode byte-identical).
     const wireframeMode = !!(scene3d && scene3d.wireframeMode);
+    // ?statGeomDedup (default OFF) — read ONCE per feed, not per node.
+    const dedupOn = statGeomDedupEnabled();
     let consumed = 0;
     let bucketsTouched = 0;
     for (const group of byMat.values()) {
@@ -232,19 +399,61 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
       // Within one feed all placements of a model share ONE BufferGeometry
       // object — add it once, instance it per placement.
       const gidOf = new Map(); // BufferGeometry -> gid (this feed only)
+      // ?statGeomDedup: gid -> this LB's membership record in THIS bucket, so
+      // the instance ids a shared geometry receives from THIS feed can be
+      // evicted without touching another LB's instances of the same id.
+      const recOf = dedupOn ? new Map() : null;
       let groupAdded = 0;
       for (const m of group) {
         try {
           m.updateMatrix();
           let gid = gidOf.get(m.geometry);
+          let rec = null;
           if (gid === undefined) {
-            gid = _addGeometryGrow(bm, m.geometry); // throws → catch → passthrough
+            // CONTENT-KEY LOOKUP (flag-gated). `shared` is the bucket-scoped
+            // map; a hit reuses the id whose vertex bytes a second
+            // addGeometry would have re-copied verbatim.
+            const ckey = dedupOn ? _contentKeyOf(m.geometry) : null;
+            let entry;
+            if (ckey !== null) {
+              const shared = ud.dedupGids || (ud.dedupGids = new Map());
+              entry = shared.get(ckey);
+              // Stale-entry guard: an id is removed from `shared` at last-ref
+              // eviction, so this can only fire if some other path deleted it.
+              if (entry !== undefined && !_gidLive(bm, entry.gid)) {
+                shared.delete(ckey);
+                entry = undefined;
+              }
+              if (entry !== undefined) {
+                gid = entry.gid;
+                _dedupStats.hits += 1;
+              } else {
+                gid = _addGeometryGrow(bm, m.geometry); // throws → catch → passthrough
+                entry = { gid, refs: new Set() };
+                shared.set(ckey, entry);
+                _dedupStats.adds += 1;
+              }
+            } else {
+              gid = _addGeometryGrow(bm, m.geometry); // throws → catch → passthrough
+            }
             gidOf.set(m.geometry, gid);
             let list = _lbMembership.get(lbKey);
             if (!list) { list = []; _lbMembership.set(lbKey, list); }
-            list.push({ bm, gid });
+            if (entry !== undefined) {
+              entry.refs.add(lbKey);
+              rec = { bm, gid, key: ckey, entry, iids: [] };
+              list.push(rec);
+              recOf.set(gid, rec);
+            } else {
+              list.push({ bm, gid }); // legacy record: deleteGeometry cascades
+            }
+          } else if (recOf) {
+            rec = recOf.get(gid) || null;
           }
           const iid = _addInstanceGrow(bm, gid);
+          // Track BEFORE setMatrixAt so a throw there can't orphan an instance
+          // that the dedup eviction path would then never reclaim.
+          if (rec) rec.iids.push(iid);
           bm.setMatrixAt(iid, m.matrix); // node is staticsGroup-relative, so is the bucket
           ud.instances += 1;
           groupAdded += 1;
@@ -282,6 +491,27 @@ export function evictStaticBatchXForLb(lbKey) {
   if (!list) return;
   for (const m of list) {
     const ud = m.bm.userData;
+    // ?statGeomDedup record — the geometry id may be SHARED with other LBs in
+    // this region, so `deleteGeometry` (which deletes every instance of the id,
+    // three r184 BatchedMesh.js :834-844) is only safe at the last reference.
+    // This LB's own instances go individually via `deleteInstance` (:860).
+    if (m.entry) {
+      let removed = 0;
+      for (const iid of m.iids) {
+        try { m.bm.deleteInstance(iid); removed += 1; } catch (_) { /* fail-soft */ }
+      }
+      if (removed > 0) ud.instances = Math.max(0, ud.instances - removed);
+      m.entry.refs.delete(key);
+      if (m.entry.refs.size === 0) {
+        try { m.bm.deleteGeometry(m.gid); } catch (_) { /* fail-soft */ }
+        try { if (ud.dedupGids) ud.dedupGids.delete(m.key); } catch (_) { /* fail-soft */ }
+        const deadV = ud.gidVerts.get(m.gid);
+        if (deadV) { ud.deadVerts += deadV; ud.gidVerts.delete(m.gid); }
+      }
+      m.bm.boundingSphere = null; // membership changed — lazy bounds recompute
+      _dirtyBuckets.add(m.bm);
+      continue;
+    }
     let removedInstances = 0;
     try {
       // count the gid's live instances before the cascade (diag/census only)
@@ -336,8 +566,25 @@ export function getStatBatchXStats() {
       deadVerts: ud.deadVerts,
       maxVerts: ud.maxVerts,
       maxInst: ud.maxInst,
+      // ?statGeomDedup: distinct content keys resident in this bucket. With the
+      // flag off this is 0 and `gidVerts.size` is the copy count — the two
+      // together ARE the duplication factor (`gidVerts.size / dedupGids`).
+      dedupGids: ud.dedupGids ? ud.dedupGids.size : 0,
+      gids: ud.gidVerts.size,
     });
     instances += ud.instances;
   }
-  return { buckets: buckets.length, instances, detail: buckets, lbsFed: _lbMembership.size };
+  return {
+    buckets: buckets.length,
+    instances,
+    detail: buckets,
+    lbsFed: _lbMembership.size,
+    dedup: {
+      enabled: statGeomDedupEnabled(),
+      // geometry copies AVOIDED / geometry copies MADE, since page load.
+      hits: _dedupStats.hits,
+      adds: _dedupStats.adds,
+      keyed: _dedupStats.keyed,
+    },
+  };
 }

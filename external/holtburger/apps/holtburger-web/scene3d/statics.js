@@ -97,7 +97,7 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb } from "./sta
 // ?statBatchCrossLb (default-OFF, 1070 eye-test pending) — cross-LB variant of the
 // per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
 // per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
-import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb } from "./static_batch_x.js";
+import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys } from "./static_batch_x.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -840,6 +840,14 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     // `materialCache.getCached(0)` (which returns fallbackMaterial).
     const { groups } = meshToGeometryGroups(m);
     if (groups && groups.length > 0) {
+      // ?statGeomDedup (default OFF; no-op + not one byte read when off) —
+      // stamp each surface group with its decode-identity content key HERE,
+      // the one seam both bakers share and the last point where
+      // `doubleSided` is still in scope (the node's userData carries modelId +
+      // surfaceDid but NOT sidedness, and statics calls getCached(did) without
+      // the side argument, so both sidedness variants share a batch bucket).
+      // Cost is O(1) per (model, surface) per LB feed — never per placement.
+      stampStaticContentKeys(id, groups);
       groupsByModel.set(id, groups);
     }
     if (typeof m.free === "function") m.free();
