@@ -90,6 +90,11 @@ const _spawnsInjectInFlight = new Set();
 // elapses rather than never.
 const _spawnsFailUntil = new Map();
 const _SPAWNS_FAIL_COOLDOWN_MS = 2500;
+// The scene3d facade the evict hook was installed on. `_evictSpawnsInjectedLb`
+// is invoked by landblock_lru as `s._evictSpawnsInjectedLb(lbKey)` (so `this`
+// happens to be that facade today), but this module owns per-scene state that
+// must be pruned there and an explicit ref is not hostage to the call form.
+let _scene3dRef = null;
 
 // `?spawns=` URL flag — controls whether the pre-baked synthetic
 // JSONL spawn records get injected. Background:
@@ -525,6 +530,7 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
   if (scene3d._evictSpawnsInjectedLb !== _evictSpawnsInjectedLb) {
     scene3d._evictSpawnsInjectedLb = _evictSpawnsInjectedLb;
   }
+  _scene3dRef = scene3d;
   if (!wasmExports || typeof wasmExports.fetch_landblock_spawns !== "function") {
     if (!scene3d._spawnsFetchUnavailableWarned) {
       scene3d._spawnsFetchUnavailableWarned = true;
@@ -949,6 +955,17 @@ export function _resetSpawnsInjectorState() {
 export function _evictSpawnsInjectedLb(lbKey) {
   _spawnsInjectedLbs.delete(lbKey);
   _spawnsFailUntil.delete(lbKey);
+  // `scene3d.spawnsByLb` (set below in ensureSpawnsForLandblock) is the
+  // per-LB diag record — `{fetched, injected, placeholdersCount, guids[]}`,
+  // and `guids` is one number per spawn. It was the only per-LB registry in
+  // this module with NO delete anywhere in the tree, so it grew one entry per
+  // landblock ever spawn-injected and never shrank for the whole session.
+  // Small in absolute terms, but it is stale the moment the LB is evicted
+  // (those guids are gone) and re-injection rewrites it, so dropping it here
+  // is both the leak fix and the correct semantics. Park deliberately does NOT
+  // reach this hook, matching the retained `_spawnsInjectedLbs` mark.
+  const s = _scene3dRef;
+  if (s && s.spawnsByLb instanceof Map) s.spawnsByLb.delete(lbKey);
 }
 
 /** Test helper — read-only view of injected LB keys. */
