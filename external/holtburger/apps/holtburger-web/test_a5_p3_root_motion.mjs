@@ -84,14 +84,22 @@ function loadModule(relPath) {
     }
     let src = readFileSync(full, "utf8");
     src = src
-        .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-        // Strip relative `import { … } from "./X.js"` / "../ui/X.js" lines —
-        // we splice the modules we need by hand instead.
-        .replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "")
-        // Strip bare relative side-effect imports `import "./X.js";` (e.g. the VFX
-        // component barrel that self-registers components). The eval sandbox does
-        // not need the side effect; spliced deps are shimmed by hand below.
-        .replace(/^\s*import\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
+        // HARNESS REPAIR 2026-08-01: the old three regexes anchored on `;` at
+        // END OF LINE, so any import carrying a trailing `// comment` survived
+        // the strip and `new Function` threw "Cannot use import statement
+        // outside a module". entities.js grew several such lines (e.g. the
+        // vfx/particle_env.js import), which had silently killed this whole
+        // suite. One tolerant rule now covers single-line, multi-line, and
+        // trailing-comment forms. Dynamic `await import(...)` is untouched: it
+        // never begins a line with `import` + whitespace.
+        .replace(/^[ \t]*import\s[\s\S]*?from\s+["'][^"']+["'];.*$/gm, "")
+        // Bare relative side-effect imports `import "./X.js";` (e.g. the VFX
+        // component barrel that self-registers components). The eval sandbox
+        // does not need the side effect; spliced deps are shimmed by hand.
+        .replace(/^[ \t]*import\s+["'][^"']+["'];.*$/gm, "")
+        // `import.meta.url` is a module-only form (entities.js
+        // `_prewarmCanonicalCastScripts`, never called from this harness).
+        .replace(/import\.meta\.url/g, '"file:///__spliced__"');
     return src;
 }
 
