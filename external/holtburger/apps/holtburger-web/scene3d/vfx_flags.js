@@ -519,6 +519,118 @@ export function terrainSandRadiusM() {
   return _terrainNum("terrainSandRadius", "terrainSandRadius", 64, 8, 512);
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN VOLCANO / OBSIDIAN (Wave 2B — plan §3.6). Codes 6 (`ObsidianPlain`),
+// 25 (`Volcano1`) and 26 (`Volcano2`) = FAM_VOLCANO.
+//
+// FOUR flags, one family master + three effects, ALL strict exact-match opt-ins
+// that ship OFF (plan §2.4/§5.9), all kept out of `quality.js BOOL_FLAGS` for
+// the `gfxRelief` reason. Composition:
+//     heat haze  = terrainVolcanoEnabled() && terrainHazeEnabled()
+//     embers     = terrainVolcanoEnabled() && terrainEmbersEnabled()
+//     crack glow = terrainVolcanoEnabled() && terrainCrackGlowEnabled()
+//
+// ⚠ `?terrainHaze` IS THE SHARED NAME, deliberately (plan §3.2 item 3 lists heat
+// shimmer as "shared with volcano (§3.6)" and wave 1B deferred it here). It is
+// NOT `terrainVolcanoHaze`. Today the ONLY arm that composes it is the volcano
+// master, because the sand family shipped no shimmer — a later sand arm adds
+// `terrainSandEnabled() && terrainHazeEnabled()` alongside, without renaming the
+// flag or re-documenting it.
+//
+// Ash fall (plan §3.6 item 4, `ultra` only) is DEFERRED — see plan §8 risk 9 and
+// the wave-2B handoff: parameterising `weather/snow.js SnowSystem` proved
+// invasive (10 `Math.random` sites vs the §5.5 determinism invariant, ownership
+// by `weather/manager.js` keyed on the weather profile rather than on terrain,
+// and no terrain gate anywhere in `weather/`), and the owner has explicitly
+// deferred refactoring. There is deliberately NO `terrainAsh` flag and NO ash
+// quality key: a documented flag with no reader fails the url-flags lint, and a
+// preset key with no consumer is dead config.
+// ---------------------------------------------------------------------------
+
+let _terrainVolcano;
+const _terrainVolcanoWarn = { hit: false };
+/** `?terrainVolcano=on` — THE family master for VOLCANO/OBSIDIAN (heat haze +
+ *  embers + crack glow + the obsidian specular; plan §3.6). STRICT exact-match
+ *  opt-in; absent ⇒ the quality preset's `terrainVolcano`, **false on all four
+ *  tiers** this wave (§5.9 ship-OFF; the promotion target is high/ultra true). */
+export function terrainVolcanoEnabled() {
+  if (_terrainVolcano !== undefined) return _terrainVolcano;
+  const r = _terrainStrictFlag("terrainVolcano", "terrainVolcano", false, _terrainVolcanoWarn);
+  return r.memo ? (_terrainVolcano = r.value) : r.value;
+}
+
+let _terrainHaze;
+const _terrainHazeWarn = { hit: false };
+/** `?terrainHaze=on` — the heat-shimmer postprocessing `Effect` (a pure `mainUv`
+ *  warp inserted into the EXISTING `EffectPass`, never a new pass). SHARED name
+ *  with the sand family by design (see the block comment above). Requires a
+ *  family master. Absent ⇒ the tier's `terrainHaze` (false low/mid, true
+ *  high/ultra). */
+export function terrainHazeEnabled() {
+  if (_terrainHaze !== undefined) return _terrainHaze;
+  const r = _terrainStrictFlag("terrainHaze", "terrainHaze", false, _terrainHazeWarn);
+  return r.memo ? (_terrainHaze = r.value) : r.value;
+}
+
+let _terrainEmbers;
+const _terrainEmbersWarn = { hit: false };
+/** `?terrainEmbers=on` — landblock-scoped rising embers over volcanic ground,
+ *  RE-ANCHORED from `vfx/components/brazierEmbers.js` (same builders, wider
+ *  footprint, terrain anchor). Requires the family master. Absent ⇒ ON wherever
+ *  the tier's `terrainVolcanoEmberCount` is non-zero (low/mid 0 ⇒ off). */
+export function terrainEmbersEnabled() {
+  if (_terrainEmbers !== undefined) return _terrainEmbers;
+  const raw = _strFlag("terrainEmbers");
+  if (raw === "on") return (_terrainEmbers = true);
+  if (raw === "off") return (_terrainEmbers = false);
+  if (raw !== null && !_terrainEmbersWarn.hit) {
+    _terrainEmbersWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainEmbers] ignoring ?terrainEmbers=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainEmbers=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;              // deliberately not memoized
+  return (_terrainEmbers = Number(flags.terrainVolcanoEmberCount) > 0);
+}
+
+let _terrainCrackGlow;
+const _terrainCrackGlowWarn = { hit: false };
+/** `?terrainCrackGlow=on` — the dull red glow breathing in the cracks underfoot:
+ *  a FRAGMENT term in the terrain shader gated on FAM_VOLCANO read from
+ *  `uVertexTypes` (plan trap T3), sited after the POM `cellUv` offset and
+ *  bypassed on any water-touching cell (plan §2.7.3). Also carries the
+ *  code-6-only OBSIDIAN specular (same block, same gate — one flag, because
+ *  they are one fragment edit and one eye-test). Requires the family master.
+ *  Absent ⇒ the tier's `terrainCrackGlow` (false on low, true mid/high/ultra). */
+export function terrainCrackGlowEnabled() {
+  if (_terrainCrackGlow !== undefined) return _terrainCrackGlow;
+  const r = _terrainStrictFlag("terrainCrackGlow", "terrainCrackGlow", false, _terrainCrackGlowWarn);
+  return r.memo ? (_terrainCrackGlow = r.value) : r.value;
+}
+
+/** Embers per volcanic landblock at the live tier. URL knob
+ *  `?terrainVolcanoEmberCount`. Fallback 1 = the `high` tier. */
+export function terrainVolcanoEmberCount() {
+  return Math.round(_terrainNum("terrainVolcanoEmberCount", "terrainVolcanoEmberCount", 1, 0, 8));
+}
+
+/** `?terrainHazeStrength` — UV-warp amplitude of the heat shimmer, in SCREEN
+ *  units (a 0.02 warp moves a pixel ~2 % of the frame). Fallback 1 = the `high`
+ *  tier multiplier. 0 disables the warp without removing the Effect. */
+export function terrainHazeStrength() {
+  return _terrainNum("terrainHazeStrength", "terrainHazeStrength", 1, 0, 4);
+}
+
+/** `?terrainVolcanoRadius` — the heat-source radius in METRES around the nearest
+ *  resident volcanic landblock's centre. Drives `uHeatRadius`, which is forced
+ *  to 0 whenever no volcanic LB is resident (plan §3.6: otherwise the distortion
+ *  follows the player out of the region). Fallback 160 m = the `high` tier. */
+export function terrainVolcanoRadiusM() {
+  return _terrainNum("terrainVolcanoRadius", "terrainVolcanoRadius", 160, 8, 1024);
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -567,6 +679,17 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.sandStreamers": () => terrainSandEnabled() && terrainSandStreamersEnabled(),
   "terrain.sandDevils": () => terrainSandEnabled() && terrainSandDevilsEnabled(),
   "terrain.sandSparkle": () => terrainSandEnabled() && terrainSandSparkleEnabled(),
+  // Terrain VOLCANO (Wave 2B, plan §3.6) — same contract again: strict ship-OFF
+  // opt-ins that do NOT track visualAllEffects(), so `?visual=all` does not
+  // light them and the DEFAULT-ON count stays 14. Each row composes the family
+  // master itself, so `vfxEffectEnabled` answers the same question the effect
+  // asks. `terrain.volcanoEmbers` is also the REGISTERED COMPONENT ID of
+  // `vfx/components/terrainVolcanoEmbers.js`, which is what makes
+  // `vfxEffectEnabled(component.id)` resolve for it.
+  "terrain.volcano": terrainVolcanoEnabled,
+  "terrain.volcanoHaze": () => terrainVolcanoEnabled() && terrainHazeEnabled(),
+  "terrain.volcanoEmbers": () => terrainVolcanoEnabled() && terrainEmbersEnabled(),
+  "terrain.volcanoCrackGlow": () => terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
 });
 
 /**
@@ -600,4 +723,9 @@ export function _resetVfxFlags() {
   _terrainSandStreamersWarn.hit = false;
   _terrainSandDevilsWarn.hit = false;
   _terrainSandSparkleWarn.hit = false;
+  _terrainVolcano = _terrainHaze = _terrainEmbers = _terrainCrackGlow = undefined;
+  _terrainVolcanoWarn.hit = false;
+  _terrainHazeWarn.hit = false;
+  _terrainEmbersWarn.hit = false;
+  _terrainCrackGlowWarn.hit = false;
 }
