@@ -518,6 +518,21 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         radius: 0.85,
       })
     : null;
+  if (bloom) {
+    // HALF-RES LUMINANCE PREPASS (2026-08). BloomEffect constructs its
+    // LuminancePass with only `{ colorOutput: true }` (postprocessing 6.39.1,
+    // build/index.js:4120), so `resolutionScale` defaults to 1.0 and the
+    // threshold/knee prepass runs at FULL drawing-buffer resolution every
+    // frame. Its one consumer is `mipmapBlurPass`, fed straight from
+    // `luminancePass.renderTarget` (index.js:4307-4311) — and that pass's first
+    // downsample level already halves the input, so sourcing it at half res is
+    // visually a wash while halving this pass's fill.
+    // `Resolution.scale`'s setter (index.js:1859) dispatches "change", which
+    // the pass's own listener (index.js:3710) turns into a setSize, so the
+    // render target resizes immediately and tracks every later composer
+    // setSize (BloomEffect.setSize → luminancePass.setSize, index.js:4334).
+    bloom.luminancePass.resolution.scale = 0.5;
+  }
 
   // Vignette — subtle dark frame edges. MUST run before tone mapping so
   // darkened pixels are still in HDR before AGX collapses them; placing

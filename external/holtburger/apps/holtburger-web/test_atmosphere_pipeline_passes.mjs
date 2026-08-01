@@ -2,21 +2,25 @@
 //
 // `createAtmosphereComposer` cannot be imported under plain node: it pulls in
 // `@takram/three-atmosphere` and every pass it builds wants a live WebGL
-// context. So this suite locks the cheap-but-invisible pass settings the
+// context. So this suite locks the two cheap-but-invisible pass settings the
 // module applies in TWO layers:
 //
 //   (A) the pmndrs BEHAVIOUR the settings rely on, exercised against the real
-//       installed `postprocessing` (no GL needed for construction), so a
-//       package bump that renames/re-defaults the property fails here rather
+//       installed `postprocessing` (no GL needed for either construction), so
+//       a package bump that renames/re-defaults the property fails here rather
 //       than silently reverting the saving; and
 //   (B) the SOURCE of atmosphere_pipeline.js, so removing the line fails too.
 //
-// Setting locked here (render-identical):
-//   skyRenderPass.needsDepthBlit = false — the blit is wiped one pass later by
-//   worldRenderPass's clearDepth, and nothing in between reads composer depth.
+// Both settings must be render-identical:
+//   1. skyRenderPass.needsDepthBlit = false — the blit is wiped one pass later
+//      by worldRenderPass's clearDepth, and nothing in between reads composer
+//      depth.
+//   2. bloom.luminancePass.resolution.scale = 0.5 — the luminance prepass's
+//      only consumer is mipmapBlurPass, whose first level halves the input
+//      anyway.
 
 import * as THREE from "three";
-import { RenderPass } from "postprocessing";
+import { RenderPass, BloomEffect } from "postprocessing";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +40,7 @@ function check(label, cond, extra = "") {
 console.log("atmosphere composer pass config");
 console.log("=========================");
 
-// ---- (A) pmndrs behaviour the fix depends on -------------------------------
+// ---- (A) pmndrs behaviour the fixes depend on ------------------------------
 const rp = new RenderPass(new THREE.Scene(), new THREE.PerspectiveCamera());
 check("pmndrs RenderPass still ctor-defaults needsDepthBlit = true (the waste)",
   rp.needsDepthBlit === true, `got ${rp.needsDepthBlit}`);
@@ -44,9 +48,43 @@ rp.needsDepthBlit = false;
 check("needsDepthBlit is a plain writable property (the opt-out works)",
   rp.needsDepthBlit === false, `got ${rp.needsDepthBlit}`);
 
-// ---- (B) the module actually applies it ------------------------------------
+const bloom = new BloomEffect({
+  intensity: 1.0,
+  luminanceThreshold: 0.85,
+  luminanceSmoothing: 0.1,
+  mipmapBlur: true,
+  radius: 0.85,
+});
+check("pmndrs BloomEffect exposes .luminancePass.resolution",
+  !!(bloom.luminancePass && bloom.luminancePass.resolution));
+check("★ BloomEffect still ctor-defaults its LuminancePass to scale 1.0 (full res)",
+  bloom.luminancePass.resolution.scale === 1.0,
+  `got ${bloom.luminancePass.resolution.scale}`);
+
+// The scale setter must resize the pass's render target, not just store a
+// number — Resolution dispatches "change" and LuminancePass listens.
+bloom.luminancePass.setSize(1920, 1080);
+const fullW = bloom.luminancePass.renderTarget.width;
+const fullH = bloom.luminancePass.renderTarget.height;
+check("baseline: luminance RT tracks the full drawing-buffer size",
+  fullW === 1920 && fullH === 1080, `got ${fullW}x${fullH}`);
+bloom.luminancePass.resolution.scale = 0.5;
+check("★ scale = 0.5 actually HALVES the luminance render target",
+  bloom.luminancePass.renderTarget.width === 960 &&
+  bloom.luminancePass.renderTarget.height === 540,
+  `got ${bloom.luminancePass.renderTarget.width}x${bloom.luminancePass.renderTarget.height}`);
+// …and keeps tracking later composer resizes at the reduced scale.
+bloom.setSize(1280, 720);
+check("★ the half-res scale survives a later composer setSize",
+  bloom.luminancePass.renderTarget.width === 640 &&
+  bloom.luminancePass.renderTarget.height === 360,
+  `got ${bloom.luminancePass.renderTarget.width}x${bloom.luminancePass.renderTarget.height}`);
+
+// ---- (B) the module actually applies them ----------------------------------
 check("★ atmosphere_pipeline.js sets skyRenderPass.needsDepthBlit = false",
   /skyRenderPass\.needsDepthBlit\s*=\s*false\s*;/.test(SRC));
+check("★ atmosphere_pipeline.js sets bloom.luminancePass.resolution.scale = 0.5",
+  /bloom\.luminancePass\.resolution\.scale\s*=\s*0\.5\s*;/.test(SRC));
 
 // The sky blit is only dead BECAUSE the world pass clears depth right after —
 // if that ever stops being unconditional, the opt-out has to be revisited.
