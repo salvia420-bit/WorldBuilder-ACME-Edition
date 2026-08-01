@@ -43,6 +43,57 @@ recipes and the ready-made driver
    (trees no longer vanish from revisited LBs); park-pool per-frame scan gone.
 5. **All 7 terrain-VFX families code-complete, ship-OFF** (waves 2–4A).
 
+## 1b. Landed LATER the same day (afternoon session, all pushed) — deltas to
+##     the lists below. Live-source arm (:8766) picks these up on a `?nosw=1`
+##     reload; the BC7 arm (:8769) serves a separate webroot and does NOT.
+##     The local pkg/ wasm was rebuilt --release (5.5 MB, scarab fix included).
+
+1. **Multi-scarab wind-up order FIXED** (`crates/holtburger-world` +
+   `lib.rs`): §A6 below should now show **first→last** raises (was
+   last-first; the main path claimed the newest-sequence scarab). Pinned by
+   3 Rust tests; single-action motions bit-identical. If §A6 still shows
+   last-first, the wasm is stale — reload with `?nosw=1`.
+2. **`?shaderPrewarm=on` + `?linkProbe=on`** (ship-OFF): every shader warm
+   was compiling the CANVAS program variant; the composer path uses the RT
+   variant — the 43 mid-walk 172-849 ms links are those re-links. Adds a
+   §E item: run `walk-stall-attrib.mjs` baseline with `&linkProbe=on`, then
+   the same walk `+&shaderPrewarm=on`; score = `__linkProbe.summary()`
+   LINK_STATUS forced-wait ms + longTasks. Win → flip default-ON. Cold-load
+   ~22 s freeze should also collapse under the flag.
+3. **Terrain-VFX promotion is now ONE LINE per family**
+   (`quality.js::TERRAIN_VFX_PROMOTED` switchboard, gate × {high,ultra}
+   ladder): when a §D family passes, say so — the laptop session flips one
+   boolean. Trail auto-implies when a writer family (grass stomp / snow
+   prints / mud prints) is on (explicit `&terrainTrail=off` still wins),
+   and fades resolve per-family automatically (snow 300 s, mud 30 s,
+   longest-wins co-tenancy). The §D recipes below still work unchanged;
+   `&terrainTrail=on` in them is now redundant but harmless. New caveat for
+   §D judging: the family eye-test arm now INCLUDES its implied trail RT —
+   that is what will ship.
+4. **`?statGeomDedup=on`** (ship-OFF): content-key geometry dedup inside
+   the persistent 3×3-LB statics buckets (census: 17,774 instances over
+   324 distinct geometries). Adds a §E item: pinned pose, A/B via
+   `__statBatchXStats()` (Σgids vs ΣdedupGids, ΣusedVerts) +
+   `renderer.info.memory.geometries`; `_multiDrawCount` must be UNCHANGED.
+   Memory/upload/bake-CPU win only — the range-merge stays gated on §E.1.
+5. **Canvas MSAA no longer requested at mid+** (it only multisampled the
+   canvas, which draws nothing but fullscreen quads; composer RTs were
+   never multisampled). Adds one §B glance: edges at mid+ should look
+   IDENTICAL to yesterday; `?canvasMsaa=on` restores the old request if
+   anything looks aliased.
+6. **`?stableDepthShare=on`** (ship-OFF): drops the duplicate bespoke depth
+   texture and feeds cloud/fog pmndrs' stable blitted copy — which also
+   removes the ground-fog read-while-attached feedback hazard. §D P6 (the
+   fog depth-read adjudication) should be run with this flag OFF and ON —
+   it is the deciding evidence for which depth source ships.
+7. Housekeeping (no eye-test needed): 1K-atlas tier now follows the
+   RESOLVED quality preset (gpu-probe high boots were stuck at 512 — the
+   1070 resolves mid, so invisible there); dead `shadows` preset key
+   removed; `retailSun`/`terrainGouraud` documented. Five new node suites
+   pin all of today: shader_prewarm 32 · synthesis4_leftovers 16 ·
+   terrain_vfx_promotion 100 · stat_geom_dedup 40 · quality_preset 32
+   (was stale-red since the 07-30 pom flip).
+
 ## 2. Vistest list, in priority order
 
 ### A. Mage combat (the thing you asked for) — live-source arm, Magic stance
