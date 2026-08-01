@@ -122,25 +122,36 @@ function mkScene(poolEnabled, withFlameSrc) {
   };
 }
 
-// (a) flag OFF → byte-identical (no intensity change, no visible change)
+// (a) DEFAULT-ON (2026-08 single-source-of-truth fix). The enable gate is
+//     vfx_flags.js's vfxEffectEnabled("light.flameFlicker") — visualEnabled()
+//     AND a _boolFlag defaulting to visualAllEffects() — so a BARE default URL
+//     lights the effect, exactly as url-flags.md row `flameFlicker` documents.
+//     (Before the fix this module parsed ?flameFlicker itself with a
+//     default-FALSE truthiness test, so the frame loop saw it OFF forever.)
 _resetVfxCatalog();
 _resetFlameFlickerFlagsForTest();
-check("flag OFF by default (no ?visual/?flameFlicker)", flameFlickerEnabled() === false);
+check("flag ON by default (bare URL — DEFAULT-ON via visualAllEffects)",
+  flameFlickerEnabled() === true);
+
+// (a2) `?flameFlicker=off` → the documented escape, byte-identical no-op.
+globalThis.window = { location: { search: "?flameFlicker=off" } };
+_resetVfxCatalog();
+_resetFlameFlickerFlagsForTest();
+check("?flameFlicker=off → flag OFF (the documented per-effect escape)",
+  flameFlickerEnabled() === false);
 const sOff = mkScene(true, true);
 const beforeOff = sOff.lighting.lightPool.point.map((p) => p.intensity);
 tickFlameFlicker(sOff);
 check("★ OFF → pool intensities byte-identical (no-op)",
   sOff.lighting.lightPool.point.every((p, i) => p.intensity === beforeOff[i]));
 
-// (b) Force-enable (simulate ?visual&?flameFlicker) by stubbing the flag reader's
-//     URL source. We can't set window here, so drive the post-pass via the
-//     pure path: enable through a temporary global URLSearchParams shim.
+// (b) Explicit-on URL still enables; the ?visual master gate still kills it.
 globalThis.window = { location: { search: "?visual=on&flameFlicker=on" } };
 _resetVfxCatalog();
 _resetFlameFlickerFlagsForTest();
 check("flag ON with ?visual=on&flameFlicker=on", flameFlickerEnabled() === true);
-check("flag requires ?visual too (?flameFlicker alone = off)", (() => {
-  globalThis.window = { location: { search: "?flameFlicker=on" } };
+check("★ the ?visual firewall still holds (?visual=off&flameFlicker=on = off)", (() => {
+  globalThis.window = { location: { search: "?visual=off&flameFlicker=on" } };
   _resetVfxCatalog(); _resetFlameFlickerFlagsForTest();
   const r = flameFlickerEnabled();
   globalThis.window = { location: { search: "?visual=on&flameFlicker=on" } };

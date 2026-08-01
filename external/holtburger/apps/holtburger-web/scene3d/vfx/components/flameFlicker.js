@@ -28,7 +28,7 @@
 // standalone-testable under plain node, like the other VFX component tests.
 
 import { registerComponent } from "../registry.js";
-import { visualEnabled } from "../../vfx_catalog.js";
+import { vfxEffectEnabled, _resetVfxFlags } from "../../vfx_flags.js";
 
 // Default flame parameters. amp = peak fractional intensity swing; floor =
 // hard lower clamp so a flame never goes dark (and so a high amp never crosses
@@ -131,8 +131,11 @@ export function flameSourcePhase(light) {
   return ph;
 }
 
-// --- URL flags (default OFF behind ?visual). Memoised, mirrors the
-// vfx_catalog.js / tree_wind.js flag idiom. -----------------------------------
+// --- URL flags. The ENABLE flag is NOT read here: it is owned by
+// vfx_flags.js (the one gate router), exactly like every other registered
+// component (brazierEmbers/gemSparkle import their reader from there). Only the
+// component-local TUNING flag (?flameFlickerAmp) is parsed below.
+// -----------------------------------------------------------------------------
 function _strFlag(name) {
   try {
     if (typeof window !== "undefined" && window.location) {
@@ -146,18 +149,21 @@ function _numFlag(name, dflt, lo, hi) {
   if (!Number.isFinite(v)) return dflt;
   return Math.max(lo, Math.min(hi, v));
 }
-function _truthy(v) {
-  if (v == null) return false;
-  const s = String(v).toLowerCase();
-  return s !== "off" && s !== "0" && s !== "false" && s !== "no" && s !== "";
-}
-
-let _enabled;
-/** ?flameFlicker — torch/brazier intensity jitter. Requires ?visual too. OFF. */
+/**
+ * `?flameFlicker` — torch/brazier intensity jitter. SINGLE SOURCE OF TRUTH:
+ * delegates to the gate router in vfx_flags.js, which composes the ?visual
+ * master gate with the per-effect flag (DEFAULT-ON via visualAllEffects();
+ * `?flameFlicker=off` opts out) — the same contract the flag's own doc row and
+ * `VFX_EFFECT_FLAGS["light.flameFlicker"]` already advertised.
+ *
+ * Until 2026-08 this module parsed `?flameFlicker` ITSELF with a default-FALSE
+ * truthiness test, so the frame loop (which calls THIS reader via
+ * tickFlameFlicker) saw the effect as OFF at bare default while vfx_flags.js —
+ * and every diag/count that reads it — reported it ON. The effect never ran.
+ * Do not reintroduce a local enable-flag read here.
+ */
 export function flameFlickerEnabled() {
-  if (_enabled !== undefined) return _enabled;
-  _enabled = visualEnabled() && _truthy(_strFlag("flameFlicker"));
-  return _enabled;
+  return vfxEffectEnabled("light.flameFlicker");
 }
 
 let _cfg;
@@ -171,7 +177,7 @@ export function flameFlickerConfig() {
 
 /** Test-only: clear the memoised flag/config (URL changed between cases). */
 export function _resetFlameFlickerFlagsForTest() {
-  _enabled = undefined;
+  _resetVfxFlags(); // the enable flag is memoised in vfx_flags.js now
   _cfg = undefined;
 }
 
