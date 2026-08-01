@@ -4869,6 +4869,20 @@
             dat_decode_diag: __hbWasmNs.dat_decode_diag,
             surface_neg_cache_remove: __hbWasmNs.surface_neg_cache_remove,
             surface_neg_cache_clear: __hbWasmNs.surface_neg_cache_clear,
+            // DRAIN-WIRING FIX (2026-08-01) — the two motion side-channel drains
+            // (`?multiAction` / `?castAxes`, both documented DEFAULT-ON) guarded
+            // on `sessionHandle.pollMotionActions` / `.pollMotionAxes` being
+            // METHODS, but Rust exports them as MODULE-LEVEL free functions
+            // (src/lib.rs:40490 / :40515 → `export function pollMotionActions()`
+            // at pkg/holtburger_web.d.ts:9290 / :9297). Both drains therefore
+            // returned on line 1 every frame and NEITHER flag had ever executed.
+            // Plumb them onto the same `wasmExports` bag every other
+            // module-level export rides; scene3d/loop.js `resolveMotionPollFn`
+            // resolves them off `scene3d.wasmExports`. NAMESPACE access so a
+            // stale pkg/ yields `undefined` and the drains no-op exactly as they
+            // do today, instead of a module-link error (F18-2).
+            pollMotionActions: __hbWasmNs.pollMotionActions,
+            pollMotionAxes: __hbWasmNs.pollMotionAxes,
             fetchEntityModelRender,
             fetchEntityCycleFrames,
             fetchEntityAnimationKeyframes,
