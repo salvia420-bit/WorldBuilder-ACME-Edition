@@ -151,6 +151,12 @@ import { initTerrainGrass } from "./terrain_grass.js";
 // fragment-shader term and needs no import here. `initTerrainSand` returns null
 // (registering nothing) unless `?terrainSand=on`.
 import { initTerrainSand } from "./terrain_sand.js";
+// Terrain SNOW/ICE family (Wave 2A, plan §3.4) — slope-biased spindrift ribbons
+// + persistent footprints. The crystal sparkle and the ice material treatment
+// are terrain fragment-shader terms and need no import here. Same injected-THREE
+// contract as the spine. `initTerrainSnow` returns null (registering nothing)
+// unless `?terrainSnow=on` or `?terrainIce=on`.
+import { initTerrainSnow } from "./terrain_snow.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
 
@@ -3505,6 +3511,28 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainSand] initTerrainSand threw (sand VFX disabled):", e);
+  }
+  // ── Terrain SNOW / ICE family (Wave 2A, plan §3.4) ────────────────────
+  // Registers up to two camera-scoped providers (slope-biased spindrift
+  // ribbons; the footprint stamp + the per-frame trail-uniform push onto
+  // scene3d.terrainMaterials). The other two effects — the crystal sparkle and
+  // the codes-2/27 ice material treatment — are terrain fragment-shader terms
+  // baked into the material by `resolveTerrainRingOpts`, so they need no wiring
+  // here at all. Returns null — registering nothing, allocating nothing —
+  // unless `?terrainSnow=on` or `?terrainIce=on` (both ship OFF on every tier,
+  // plan §5.9), so a bare-default boot is byte-identical.
+  try {
+    const snowSurface = initTerrainSnow({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+      globals: VFX_GLOBALS,
+      readEnv: readParticleEnv,
+    });
+    if (snowSurface && typeof window !== "undefined") window.__terrainSnow = snowSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainSnow] initTerrainSnow threw (snow/ice VFX disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees
