@@ -68,8 +68,14 @@ import {
 // readers that gate the grain sparkle. `terrain_families.js` is the single
 // source of truth for which CODES are sand; `vfx_flags.js` owns every
 // terrain-VFX flag reader (no second reader, plan §2.4).
-import { FAM_SAND, familyForCode } from "./terrain_families.js";
+import { FAM_SAND, FAM_VOLCANO, familyForCode } from "./terrain_families.js";
 import { terrainSandEnabled, terrainSandSparkleEnabled } from "./vfx_flags.js";
+// Wave 2B (plan §3.6) — deliberately a SECOND import statement from the SAME
+// module rather than widening the line above: `test_terrain_sand_sparkle.mjs`
+// locks that exact line as its "no second flag reader" anchor, and a wave-2
+// family must not rewrite a wave-1 test to land. Same module, same readers, no
+// second source of truth.
+import { terrainVolcanoEnabled, terrainCrackGlowEnabled } from "./vfx_flags.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -712,6 +718,42 @@ const DEFAULT_SAND_SPARKLE_DENSITY = 26.0;
 const DEFAULT_SAND_SPARKLE_FADE_START = 18.0;
 const DEFAULT_SAND_SPARKLE_FADE_END = 70.0;
 
+// ----- Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN (plan §3.6 items 3 + 5) ----
+//
+// CRACK GLOW is emissive, so unlike the sand sparkle it is NOT multiplied by
+// the shadow terms — lava glows in shadow. It is added to `iblSpec`, which the
+// final colour already adds un-shadowed, so the `fragColor` line is untouched.
+//
+// Vein DENSITY is deliberately LOW (cells per metre): these are metre-scale
+// fissures in the ground, not a micro-facet field, which is also why the
+// distance fade below can be so much wider than the sparkle's without aliasing.
+const DEFAULT_CRACK_GLOW_DENSITY = 0.55;      // ≈ 1.8 m period
+// Vein WIDTH as a threshold on the ridged noise: smaller = thinner, hotter
+// cracks. 0.06 reads as a hairline at the ground scale above.
+const DEFAULT_CRACK_GLOW_WIDTH = 0.06;
+// Emissive gain. Tuned to sit UNDER the bloom threshold (0.85, atmosphere_
+// pipeline.js) at the breath minimum and just over it at the peak, so the
+// cracks bloom on the inhale and not constantly.
+const DEFAULT_CRACK_GLOW_STRENGTH = 1.15;
+// Deep orange-red. Calibration target is the BC7 arm (:8767 with
+// `texBc7=on&terrainBc7=on`) — plan §8 risk 13.
+const DEFAULT_CRACK_GLOW_COLOR = Object.freeze([1.0, 0.30, 0.06]);
+const DEFAULT_CRACK_GLOW_FADE_START = 120.0;
+const DEFAULT_CRACK_GLOW_FADE_END = 420.0;
+// The breathing oscillator's neutral value. `loop.js::tickTerrainUTime` pushes
+// the live one from the shared `vfx/oscillators.js` registry; this literal is
+// what a frame before the first push (or with the oscillator unregistered)
+// reads, and it is the oscillator's own bias, so it is never a visible step.
+const DEFAULT_CRACK_GLOW_BREATH = 0.72;
+
+// OBSIDIAN — code 6 only. "roughness ↓↓, dark tight specular": a high-exponent
+// Blinn lobe at LOW intensity plus a sharp (low-mip) env reflection. It is a
+// specular-only treatment, added to `iblSpec` alongside the crack glow: the
+// albedo is left alone so the two texture arms both keep their own black.
+const DEFAULT_OBSIDIAN_SHININESS = 220.0;
+const DEFAULT_OBSIDIAN_SPECULAR = 0.55;
+const DEFAULT_OBSIDIAN_ENV = 0.35;
+
 // ----- Retail zFightTerrainAdjust (terrain drawn ~1 cm below grade) --
 //
 // Verified against the decomp: `float zFightTerrainAdjust = 0.0099999998;`
@@ -888,6 +930,27 @@ const TERRAIN_SAND_CODES = Object.freeze(
     return s;
   })(),
 );
+
+// Wave 2B — the VOLCANO set for the crack glow, DERIVED from
+// `terrain_families.js` (FAM_VOLCANO = codes 6/25/26 in Dereth) for exactly the
+// reason the sand set above is: family membership is a property of the CODE and
+// the family module is the single source of truth (plan §1.3 / §8 risk 12).
+// Volcanic codes are in no water set, so `?strictWaterCodes` cannot move them.
+const TERRAIN_VOLCANO_CODES = Object.freeze(
+  (() => {
+    const s = new Set();
+    for (let c = 0; c < 32; c += 1) if (familyForCode(c) === FAM_VOLCANO) s.add(c);
+    return s;
+  })(),
+);
+
+// Wave 2B — OBSIDIAN is CODE 6 ALONE (plan §3.6 item 5), not the whole family:
+// Volcano1/Volcano2 are cracked rock, ObsidianPlain is glass. Codes 0..0x14 are
+// NAMED in the retail `LandDefs::TerrainType` enum, so 6 IS ObsidianPlain
+// engine-wide — a retail-enum constant, not a name match against the Dereth
+// palette (which §8 risk 12 forbids). `terrain_volcano.js` exports the same
+// number as `TERRAIN_CODE_OBSIDIAN_PLAIN`; the node test locks them together.
+const TERRAIN_OBSIDIAN_CODES = Object.freeze(new Set([6]));
 
 // ----- GLSL — bilinear-blend shader, three.js port ------------------
 //
@@ -1381,6 +1444,37 @@ uniform float uSandSparkleDensity;   // grain cells per metre
 uniform float uSandSparkleFadeStart; // metres — full strength nearer than this
 uniform float uSandSparkleFadeEnd;   // metres — zero beyond
 
+// === 2026-08-01 (Wave 2B) — VOLCANO CRACK GLOW + OBSIDIAN ================
+// Terrain-VFX plan §3.6 items 3 + 5. A dull red glow breathing in the cracks
+// on FAM_VOLCANO ground (codes 6/25/26) plus a tight dark specular on
+// ObsidianPlain (code 6 only), keyed off the TERRAIN CODE read from
+// uVertexTypes — plan trap T3, the same reason the sand sparkle above does.
+// The masks are built on the JS side from terrain_families.js (FAM_VOLCANO)
+// and the retail enum (obsidian = 6), never from a hardcoded range here.
+// Strict no-op when uCrackGlowEnabled is 0 (?terrainVolcano / ?terrainCrackGlow
+// both ship OFF), and on every non-volcanic fragment.
+//
+// uCrackGlowBreath is the SLOW BREATHING OSCILLATOR, driven through the shared
+// vfx/oscillators.js registry (terrain_volcano.js::CRACK_GLOW_OSC_NAME, a
+// 0.07 Hz sine) and PUSHED here each frame by loop.js::tickTerrainUTime. It is
+// pushed rather than bound by reference because terrain_batch.js CLONES uniform
+// values into fresh objects when it builds the batched material, and
+// ?terrainBatch is default-ON -- a by-reference binding would silently freeze
+// the breath on the batched path.
+uniform float uCrackGlowEnabled;     // 0.0 OFF / 1.0 ON  (gates BOTH terms)
+uniform int uVolcanoCodeMask;        // bit i = terrain code i is FAM_VOLCANO
+uniform int uObsidianCodeMask;       // bit 6 — ObsidianPlain alone
+uniform float uCrackGlowStrength;    // emissive gain
+uniform float uCrackGlowDensity;     // vein cells per metre
+uniform float uCrackGlowWidth;       // ridged-noise threshold (vein thickness)
+uniform vec3 uCrackGlowColor;
+uniform float uCrackGlowBreath;      // 0.44..1.0, pushed each frame
+uniform float uCrackGlowFadeStart;   // metres — full strength nearer than this
+uniform float uCrackGlowFadeEnd;     // metres — zero beyond
+uniform float uObsidianShininess;    // Blinn exponent (roughness down-down)
+uniform float uObsidianSpecular;     // sun-lobe gain
+uniform float uObsidianEnv;          // env-cube reflection gain
+
 // Clouds-L — sample the cloud effect's cascade-0 shadow buffer to dim
 // terrain ambient + diffuse where clouds occlude the sun. takram's
 // cloud raymarch already produces these as a side effect of its
@@ -1606,6 +1700,17 @@ bool isWaterCode(int c) {
 // FAM_SAND. Code 32 is the road layer and is never sand.
 bool isSandCode(int c) {
   return c >= 0 && c < 32 && (uSandSparkleCodeMask & (1 << c)) != 0;
+}
+
+// Wave 2B — the single VOLCANO / OBSIDIAN code tests for the fragment stage,
+// same shape as isWaterCode / isSandCode above and reading masks built from
+// terrain_families.js FAM_VOLCANO and the retail ObsidianPlain enum value.
+// Code 32 is the road layer and is never volcanic.
+bool isVolcanoCode(int c) {
+  return c >= 0 && c < 32 && (uVolcanoCodeMask & (1 << c)) != 0;
+}
+bool isObsidianCode(int c) {
+  return c >= 0 && c < 32 && (uObsidianCodeMask & (1 << c)) != 0;
 }
 
 int vertexTypeAt(int iu, int iv) {
@@ -1870,6 +1975,18 @@ void main() {
   float sandW = clamp(
     (isSandCode(t00) ? w00 : 0.0) + (isSandCode(t10) ? w10 : 0.0) +
     (isSandCode(t01) ? w01 : 0.0) + (isSandCode(t11) ? w11 : 0.0), 0.0, 1.0);
+
+  // Wave 2B — bilinear VOLCANO and OBSIDIAN fractions, computed with the SAME
+  // four corner weights, for the same reason the water and sand fractions are:
+  // the crack glow and the obsidian specular then feather across a type
+  // boundary instead of switching on a per-half-cell nearest-corner step (plan
+  // §8 risk 2). Consumed by the VOLCANO CRACK GLOW block further down main().
+  float volcW = clamp(
+    (isVolcanoCode(t00) ? w00 : 0.0) + (isVolcanoCode(t10) ? w10 : 0.0) +
+    (isVolcanoCode(t01) ? w01 : 0.0) + (isVolcanoCode(t11) ? w11 : 0.0), 0.0, 1.0);
+  float obsidianW = clamp(
+    (isObsidianCode(t00) ? w00 : 0.0) + (isObsidianCode(t10) ? w10 : 0.0) +
+    (isObsidianCode(t01) ? w01 : 0.0) + (isObsidianCode(t11) ? w11 : 0.0), 0.0, 1.0);
 
   // Skip stochastic blending when all four corners are the same terrain type:
   // there is no boundary to draw, and picking between identical textures only
@@ -2498,6 +2615,77 @@ void main() {
     iblSpec += waterSpec * waterW * sheenFade;
   }
 
+  // === Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN ===========================
+  // Terrain-VFX plan §3.6 items 3 + 5. One gate, two terms, both keyed off the
+  // TERRAIN CODE from uVertexTypes (trap T3) and both weighted by a bilinear
+  // corner fraction so they feather at a type boundary.
+  //
+  // WHERE IT SITS AND WHY (plan §2.7.3):
+  //   • AFTER the POM march, and the vein field is anchored to the
+  //     PARALLAX-CORRECTED surface point — vWorldPos is the geometric (pre-POM)
+  //     position, so the POM offset (cellUv - the original vec2(fu, fv)) is
+  //     added back in cell units x 24 m. Without that, the cracks would slide
+  //     against the relief they are supposed to be cut into (plan §8 risk 14).
+  //   • It HONOURS the cellTouchesWater bypass. POM does not run on a
+  //     water-touching cell, so the correction term is zero there anyway — but
+  //     a shoreline volcanic cell must not glow THROUGH the water surface the
+  //     water agent owns, so the whole block stands down.
+  //   • It adds to iblSpec, NOT to the shadow-multiplied product: crack glow is
+  //     EMISSIVE (lava glows in shadow) and the obsidian env reflection is
+  //     ambient. That also means the final fragColor line is untouched.
+  //   • It never writes cellUv, waterCellUv, waterW or any water uniform.
+  // The mid-tier degrade is coherent by construction: POM is high/ultra only,
+  // and with POM off the correction term is exactly zero, leaving the same
+  // veins on an unrelieved surface (plan §2.7.3 point 4).
+  if (uCrackGlowEnabled > 0.5 && !cellTouchesWater && (volcW > 0.0 || obsidianW > 0.0)) {
+    // POM-corrected AC ground position (world(x,y,z) = ac(x,z,-y)).
+    vec2 pomShiftV = (cellUv - vec2(fu, fv)) * 24.0;
+    vec2 groundXy = vec2(vWorldPos.x, -vWorldPos.z) + pomShiftV;
+
+    if (volcW > 0.0) {
+      float crackFade = 1.0 - smoothstep(uCrackGlowFadeStart, uCrackGlowFadeEnd, vViewDepth);
+      if (crackFade > 0.001) {
+        // RIDGED noise: |2n-1| is 0 along the field's mid-level contour, so
+        // thresholding it draws thin connected LINES rather than blobs — the
+        // cheapest thing that reads as a crack network. Two octaves so the
+        // veins branch instead of running as smooth parallel curves.
+        vec2 veinXy = groundXy * uCrackGlowDensity;
+        float n1 = fragValueNoise2D(veinXy);
+        float f1 = abs(n1 * 2.0 - 1.0);
+        float vein = 1.0 - smoothstep(0.0, uCrackGlowWidth, f1);
+        float n2 = fragValueNoise2D(veinXy * 2.31 + vec2(11.7, 5.3));
+        float f2 = abs(n2 * 2.0 - 1.0);
+        vein *= 0.45 + 0.55 * (1.0 - smoothstep(0.0, uCrackGlowWidth * 2.5, f2));
+        if (vein > 0.001) {
+          iblSpec += uCrackGlowColor
+                   * (uCrackGlowStrength * vein * volcW * crackFade * uCrackGlowBreath);
+        }
+      }
+    }
+
+    if (obsidianW > 0.0) {
+      // ObsidianPlain (code 6) only: roughness DOWN-DOWN reads as a tight,
+      // low-intensity Blinn lobe plus a sharp (low-mip) env reflection. It runs
+      // in BOTH shading modes on purpose — the uPbrEnabled block above is dead
+      // in a default session because retail Gouraud is default-ON and wins that
+      // test, which is exactly the trap the 2026-07-31 water sheen fell into.
+      vec3 viewWo = normalize(vWorldPos - cameraPosition);
+      vec3 viewAcO = vec3(viewWo.x, -viewWo.z, viewWo.y);
+      vec3 halfAcO = normalize(sunDir - viewAcO);
+      float obsLobe = pow(clamp(dot(geomN, halfAcO), 0.0, 1.0), uObsidianShininess);
+      vec3 obsSpec = uAcSunColor * (obsLobe * uObsidianSpecular);
+      if (uIblEnabled > 0.5) {
+        vec3 nWorldO = normalize(vec3(geomN.x, geomN.z, -geomN.y));
+        vec3 reflO = reflect(viewWo, nWorldO);
+        // Mip 0.5 = near-mirror: glass, not stone.
+        vec3 envO = textureLod(uEnvCube, reflO, 0.5).rgb;
+        float fresO = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewWo, nWorldO), 0.0, 1.0), 5.0);
+        obsSpec += envO * fresO * uEnvIntensity * uObsidianEnv;
+      }
+      iblSpec += obsSpec * obsidianW;
+    }
+  }
+
   // Clouds-L — cloud-shadow modulation. Project world pos into cascade
   // 0's shadow space; sample the R channel (cloud optical depth along
   // sun ray); attenuate. Cascade 0 covers the closest ~10% of view
@@ -2780,6 +2968,10 @@ export async function resolveTerrainRingOpts(
       // enforced once in terrain_vfx.js::wireframeActive — plan §8 risk 8).
       sandSparkleEnabled: false,
       sandSparkleCodeMask: 0,
+      // Wave 2B — same shape-parity contract as the sand pair above.
+      crackGlowEnabled: false,
+      volcanoCodeMask: 0,
+      obsidianCodeMask: 0,
       atlasTexture: null,
       roadTexture: null,
       roadCanvas: null,
@@ -3277,6 +3469,16 @@ export async function resolveTerrainRingOpts(
     // range" rule `uWaterSurfaceCodeMask` follows.
     sandSparkleEnabled: terrainSandEnabled() && terrainSandSparkleEnabled(),
     sandSparkleCodeMask: computeCodeBitmask(TERRAIN_SAND_CODES),
+    // Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN (plan §3.6 items 3 + 5). Composed
+    // exactly like the sand gate above: the FAMILY MASTER and the per-effect
+    // flag (`scene3d/vfx_flags.js`, both STRICT `=== "on"` opt-ins that ship
+    // OFF), so an absent flag leaves `uCrackGlowEnabled` 0.0 and the fragment
+    // block is a strict no-op. ONE gate covers both terms: they are one edit
+    // and one eye-test. The masks are DERIVED — FAM_VOLCANO from
+    // terrain_families.js, obsidian from the retail ObsidianPlain enum value.
+    crackGlowEnabled: terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
+    volcanoCodeMask: computeCodeBitmask(TERRAIN_VOLCANO_CODES),
+    obsidianCodeMask: computeCodeBitmask(TERRAIN_OBSIDIAN_CODES),
     atlasTexture,
     roadTexture,
     roadCanvas,
@@ -4463,6 +4665,37 @@ export async function bakeTerrainForLandblock(
       uSandSparkleDensity: { value: DEFAULT_SAND_SPARKLE_DENSITY },
       uSandSparkleFadeStart: { value: DEFAULT_SAND_SPARKLE_FADE_START },
       uSandSparkleFadeEnd: { value: DEFAULT_SAND_SPARKLE_FADE_END },
+      // Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN (plan §3.6 items 3 + 5). Ships
+      // OFF: the gate is `?terrainVolcano=on && ?terrainCrackGlow` composed in
+      // resolveTerrainRingOpts, so an absent flag leaves the value 0.0 and the
+      // fragment block is a strict no-op. Masks derived from
+      // terrain_families.js FAM_VOLCANO / the retail ObsidianPlain enum.
+      uCrackGlowEnabled: { value: opts.crackGlowEnabled ? 1.0 : 0.0 },
+      uVolcanoCodeMask: {
+        value: Number.isInteger(opts.volcanoCodeMask) ? opts.volcanoCodeMask : 0,
+      },
+      uObsidianCodeMask: {
+        value: Number.isInteger(opts.obsidianCodeMask) ? opts.obsidianCodeMask : 0,
+      },
+      uCrackGlowStrength: { value: DEFAULT_CRACK_GLOW_STRENGTH },
+      uCrackGlowDensity: { value: DEFAULT_CRACK_GLOW_DENSITY },
+      uCrackGlowWidth: { value: DEFAULT_CRACK_GLOW_WIDTH },
+      uCrackGlowColor: {
+        value: new THREE.Vector3(
+          DEFAULT_CRACK_GLOW_COLOR[0],
+          DEFAULT_CRACK_GLOW_COLOR[1],
+          DEFAULT_CRACK_GLOW_COLOR[2],
+        ),
+      },
+      // Pushed each frame by loop.js::tickTerrainUTime from the shared
+      // oscillator registry — see the GLSL declaration for why it is a PUSH and
+      // not a by-reference binding (terrain_batch.js clones uniform values).
+      uCrackGlowBreath: { value: DEFAULT_CRACK_GLOW_BREATH },
+      uCrackGlowFadeStart: { value: DEFAULT_CRACK_GLOW_FADE_START },
+      uCrackGlowFadeEnd: { value: DEFAULT_CRACK_GLOW_FADE_END },
+      uObsidianShininess: { value: DEFAULT_OBSIDIAN_SHININESS },
+      uObsidianSpecular: { value: DEFAULT_OBSIDIAN_SPECULAR },
+      uObsidianEnv: { value: DEFAULT_OBSIDIAN_ENV },
       uDisplacementEnabled: {
         value: opts.displacementEnabled ? 1.0 : 0.0,
       },
