@@ -1086,6 +1086,7 @@ export class CameraSwitcher {
       if (pose && typeof pose.heading === "number" && Number.isFinite(pose.heading)) {
         poseH = pose.heading;
       }
+      pose?.free?.(); // wasm-boxed struct — release after copying (see _integratorWorldPose)
     } catch (_) {}
     let rigH = null;
     try {
@@ -1321,6 +1322,7 @@ export class CameraSwitcher {
       if (pose && typeof pose.landblockId === "number") {
         landblockId = pose.landblockId;
       }
+      pose?.free?.(); // wasm-boxed struct — release after copying (see _integratorWorldPose)
     } catch (_) {}
     // `?indoorCam=on`: when indoors, the outdoor collision layers (terrain
     // heightfield floor + building/static AABB sweeps) are WRONG — the terrain
@@ -1808,6 +1810,7 @@ export class CameraSwitcher {
             && Number.isFinite(pose.heading)) {
           heading = pose.heading;
         }
+        pose?.free?.(); // wasm-boxed struct — release after copying (see _integratorWorldPose)
       } catch (_) {}
     }
     if (heading === null && typeof this.getPlayerHeading === "function") {
@@ -1932,6 +1935,7 @@ export class CameraSwitcher {
           authX = lbX + pose.x;
           authY = lbY + pose.y;
         }
+        pose?.free?.(); // wasm-boxed struct — release after copying (see _integratorWorldPose)
       } catch (_) {}
       this._predictionTrace.push({
         t: now,
@@ -1998,13 +2002,21 @@ export class CameraSwitcher {
       return null;
     }
     if (!pose) return null;
+    // WASM-BOX LIFETIME: getLocalPlayerPose() returns a wasm-bindgen-boxed
+    // LocalPlayerPose (pkg/holtburger_web.js `class LocalPlayerPose` — __wrap +
+    // free()). Its only other reclaimer is the FinalizationRegistry, i.e. GC's
+    // leisure, so a per-frame read that never free()s orphans one wasm
+    // allocation per frame per call site. Copy every field out FIRST, then
+    // release the box on this frame. `?.` keeps the plain-object test mocks
+    // (which have no free) working.
     const lx = pose.x;
     const ly = pose.y;
     const lz = pose.z;
+    const lbId = (pose.landblockId >>> 0);
+    try { pose.free?.(); } catch (_) { /* already released */ }
     if (!Number.isFinite(lx) || !Number.isFinite(ly) || !Number.isFinite(lz)) {
       return null;
     }
-    const lbId = (pose.landblockId >>> 0);
     const lbX = (lbId >>> 24) & 0xff;
     const lbY = (lbId >>> 16) & 0xff;
     return {
