@@ -29,9 +29,9 @@ start work not listed here.**
 | 1B | SAND | ✅ landed 2026-07-31 (devils never seen live — needs desert → eye-test queue) |
 | **2A** | **SNOW/ICE** | ✅ merged to master 2026-08-01 (`4ff7494d..23dea459`, ff) — snow 186/0, ice 85/0, water 73/0 re-verified by orchestrator; look untested → eye-test queue N1–N10 |
 | **2B** | **VOLCANO** | ✅ merged to master 2026-08-01 (`77a23ac6`) — volcano 147/0 + shader 103/0; ash DEFERRED (plan §8 r9); look untested → eye-test queue V1–V7 |
-| **3A** | **SWAMP** | 🔶 IN FLIGHT (Opus agent, worktree) |
-| **3B** | **DIRT/MUD** | 🔶 IN FLIGHT (Opus agent, worktree) |
-| 4A | ROCK/BARREN | ⬜ |
+| **3A** | **SWAMP** | ✅ merged to master 2026-08-01 (`68ded1a6`) — swamp 204/0 + ground_fog 65/0; fog depth-read ships INERT (P6 adjudicates); look untested → eye-test queue P1–P10 |
+| **3B** | **DIRT/MUD** | ✅ merged to master 2026-08-01 (`ee436e06..0be231e4`, ff) — dirt 242/0 + shader 134/0; all wave-2 fragment suites re-verified; +1 flag `terrainMudWetness`; look untested → eye-test queue D1–D9 |
+| **4A** | **ROCK/BARREN** | 🔶 IN FLIGHT (Opus agent, worktree) |
 | 4B | promotion pass | ⬜ OWNER-GATED (needs the 1070 batch) |
 
 ## Wave 2 execution checklist (this session)
@@ -48,15 +48,23 @@ start work not listed here.**
 - [x] `lint-url-flags` exit 0 (468 flags); quality-presets.md rows present
 - [x] Append wave-2 items to Eye-test queue below
 - [x] Write HANDOFF-terrain-vfx-wave2-2026-08-01.md, commit, push
-- [ ] If session budget remains: launch Wave 3 (3A SWAMP ‖ 3B DIRT) same recipe
-      (3B depends 1A only; 3A depends wave 0; no terrain-fragment overlap
-      between them per plan — but 3B wetness may touch the fragment shader:
-      same water-suite duty)
+- [x] Wave 3 launched, merged (3B ff first, 3A resolved on top), battery 25
+      suites 0 failed, HANDOFF-terrain-vfx-wave3-2026-08-01.md written, pushed
+- [ ] 4A ROCK/BARREN in flight → verify, merge, battery, extend handoff, push
+- [ ] 4B promotion pass = OWNER-GATED (needs the 1070 batch; not this session)
 
 ## Eye-test queue (owner-run 1070 batch — append only, never execute here)
 
 Carried from wave 1 (`HANDOFF-terrain-vfx-wave1-2026-07-31.md` §5): W1 water
 sheen · W2 code 22 · G1 grass (incl. visibleBlades>0 revive reading) · S1 sand.
+- [ ] P1–P10 SWAMP (ground fireflies vs canopy · gas vents stable · wisp glow
+      no-light · fog hugs hollows no shear · P6 fog depth-read adjudication ·
+      mid coherence · midges by day · water boundary + strictWaterCodes ·
+      off boots) — full text in 3A report / wave-3 handoff §4
+- [ ] D1–D9 DIRT/MUD (puffs on footfall incl. night additive-tell · colour per
+      ground code · print dry vs rain amplitude · wet-mud sheen · clay read ·
+      dust haze + rain kill · mid coherence · off boots) — full text in 3B
+      report / wave-3 handoff when written
 - [ ] N1–N10 SNOW/ICE (sparkle motion/POM/mid · spindrift slope/weather/vs-sand
       · prints scallop test = the no-second-RT adjudication · ice read ·
       refraction ghosting · off-path boots) — full text in wave-2 handoff §4 /
