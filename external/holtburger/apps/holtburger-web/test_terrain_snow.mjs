@@ -561,9 +561,12 @@ check("the trail-RT decision is documented in the module, with the recommended "
   /THE TRAIL-RT DECISION/.test(SNOW_SRC)
   && SNOW_RECOMMENDED_FADE_SEC === 300
   && /terrainTrailFade=\$\{SNOW_RECOMMENDED_FADE_SEC\}/.test(SNOW_SRC));
-check("prints require ?terrainTrail=on and say so when it is missing",
+// 2026-08-01: prints now IMPLY the map (`vfx_flags.js::terrainTrailEnabled`),
+// so the only way to reach this branch is an EXPLICIT `?terrainTrail=off`. The
+// check still guards that the module never assumes the map is there.
+check("prints check the map and say so when an explicit off removed it",
   /terrainTrailEnabled\(\) !== true/.test(SNOW_CODE)
-  && /prints need \?terrainTrail=on as well/.test(SNOW_CODE));
+  && /EXPLICIT \?terrainTrail=off/.test(SNOW_CODE));
 check("this module NEVER constructs a trail map (no lazy-ensure, no second RT)",
   !/createTrailMap/.test(SNOW_CODE) && !/trail_map\.js/.test(SNOW_CODE));
 

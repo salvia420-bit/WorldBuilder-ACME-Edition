@@ -71,6 +71,8 @@ import {
   terrainTrailResolution,
   terrainTrailRadiusM,
   terrainTrailRecoverySec,
+  terrainTrailWriters,
+  terrainTrailFadeSource,
 } from "./vfx_flags.js";
 import { FAM_COUNT, familyForCode } from "./terrain_families.js";
 import { createTrailMap, resolveTrailMapConfig } from "./trail_map.js";
@@ -709,7 +711,10 @@ export function initTerrainVfx(opts = {}) {
     if (g) { try { parent.add(g); _spine.vfxGroup = g; } catch (_) {} }
   }
 
-  // Trail map — OFF on every tier this wave (plan §5.9). `?terrainTrail=on`.
+  // Trail map — OFF on every tier (plan §5.9). Built by `?terrainTrail=on`, by
+  // a tier that promotes it, or IMPLIED by a live trail-writing effect
+  // (vfx_flags.js `_trailFadeClaims`) so promoting a stamping family cannot
+  // leave it silently no-oping. `?terrainTrail=off` still suppresses it.
   const trailCfg = resolveTrailMapConfig({
     enabled: terrainTrailEnabled,
     resolution: terrainTrailResolution,
@@ -835,6 +840,11 @@ export function terrainVfxStats() {
     inited: !!_spine,
     oracle: _oracleState,
     trail: _trail ? _trail.stats() : null,
+    // WHY the map is (or is not) there, and which number the fade came from —
+    // "the flag is off but I never typed it" is a one-line read at promotion.
+    trailFlag: terrainTrailEnabled(),
+    trailWriters: terrainTrailWriters(),
+    trailFade: terrainTrailFadeSource(),
     tracked: _tracked.size,
     resident,
     parked,

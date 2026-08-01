@@ -13,6 +13,53 @@
 // module does not import from any renderer subsystem so it can be
 // loaded in isolation (Node test harness, devtools console).
 
+// ── TERRAIN-VFX PROMOTION SWITCHBOARD (2026-08-01) ─────────────────────────
+//
+// The nine terrain-VFX FAMILY MASTERS ship OFF on every tier (plan §5.9 "ship
+// OFF, promote deliberately"), and each one is promoted only after the owner
+// eye-tests it on the 1070. Before this switchboard that promotion was FOUR
+// edits per family (one per tier) with the intended ladder living only in
+// docs/url-flags.md prose — and `terrainIce` showed what that costs: it was
+// false on every tier while `ultra.terrainIceRefraction` said `true`, i.e. the
+// tier's stated intent was DEAD CONFIG that no tier could reach.
+//
+// So the two halves are separated. `TERRAIN_VFX_TIERS` is the LADDER — the
+// tier-by-tier intent each family will run at, written down and testable now.
+// `TERRAIN_VFX_PROMOTED` is the GATE — one boolean per family, all false, and
+// flipping ONE of them to `true` is the whole promotion. Nothing else moves:
+// the sub-effect keys below (`terrainGrassStomp`, `terrainSnowPrints`,
+// `terrainIceRefraction`, …) already carry their own per-tier intent and
+// compose with the master at every reader, so they become live exactly where
+// the ladder says and stay dead everywhere else.
+//
+// ⚠ These are the SHIPPED defaults. Flipping one is a ship-visible change and
+// needs the owner's approval — `?terrainGrass=on` etc. is the way to eye-test
+// without touching this table.
+export const TERRAIN_VFX_PROMOTED = Object.freeze({
+    trail: false,
+    grass: false,
+    sand: false,
+    snow: false,
+    ice: false,
+    volcano: false,
+    swamp: false,
+    dirt: false,
+    rock: false,
+});
+
+// The per-family ladder, from each flag's docs/url-flags.md promotion target
+// ("Promotion target `PRESETS.{high,ultra}.X = true`"). `low` and `mid` also
+// ship 0 counts for most families, so a promoted master renders nothing there
+// even if a tier is later added to this table.
+export const TERRAIN_VFX_TIERS = Object.freeze({
+    low: false, mid: false, high: true, ultra: true,
+});
+
+/** The shipped value of one family master at one tier: the ladder, GATED. */
+export function terrainMaster(family, tier) {
+    return TERRAIN_VFX_PROMOTED[family] === true && TERRAIN_VFX_TIERS[tier] === true;
+}
+
 // Preset table. Keys are the four supported quality tiers; values are
 // flat boolean/number bags consumed by per-phase gating code. Adding a
 // new feature flag means: (a) add it here with sensible defaults
@@ -21,7 +68,13 @@
 export const PRESETS = {
     low: {
         antialias: false,
-        shadows: false,
+        // `shadows` preset keys removed 2026-08-01 (perf-synthesis §4 dead
+        // config): nothing ever read `flags.shadows` — plain shadow maps are
+        // the independent `?shadows=on` opt-in (index.js `shadowsEnabled`)
+        // and real shadows at high tiers are the `csm` flag below. The
+        // Phase 0.1 "collapse into quality.flags.shadows" follow-on never
+        // happened; wiring it now would silently default shadow maps ON at
+        // mid+ — a deliberate NON-change without a 1070 measurement.
         // Wave 2.B (2026-05-28): procedural normal maps off on `low`.
         // Saves +texture memory and sampler bandwidth on integrated /
         // mobile GPUs where the Sobel-derived bumps don't visibly beat
@@ -91,11 +144,11 @@ export const PRESETS = {
         // render scale buys it nothing (§3.1) — 0 here means the `low` tier is
         // disabled outright, which is the §5.8 contract for every effect in
         // this plan. Counts are perfect squares (the scatter pool rounds up).
-        terrainGrass: false,
+        terrainGrass: terrainMaster("grass", "low"),
         terrainGrassBlades: 0,
         terrainGrassRadius: 32,
         terrainGrassStomp: false,
-        terrainTrail: false,
+        terrainTrail: terrainMaster("trail", "low"),
         terrainTrailRes: 128,
         terrainTrailRadius: 32,
         terrainTrailFade: 4,
@@ -106,7 +159,7 @@ export const PRESETS = {
         // the two BOOLEANS are deliberately NOT in BOOL_FLAGS (parseBool would
         // widen the exact-`on` opt-in their readers require); the three NUMERIC
         // knobs are safe in INT/FLOAT_FLAGS — they cannot turn the family on.
-        terrainSand: false,
+        terrainSand: terrainMaster("sand", "low"),
         terrainSandStreamerCount: 0,
         terrainSandDevilCount: 0,
         terrainSandSparkle: false,
@@ -120,12 +173,12 @@ export const PRESETS = {
         // `?terrainSnow=on` at low renders nothing. Neither boolean is in
         // BOOL_FLAGS (parseBool would widen the exact-`on` opt-in their readers
         // require); the two NUMERIC knobs are safe in INT/FLOAT_FLAGS.
-        terrainSnow: false,
+        terrainSnow: terrainMaster("snow", "low"),
         terrainSnowSpindriftCount: 0,
         terrainSnowSparkle: false,
         terrainSnowPrints: false,
         terrainSnowRadius: 32,
-        terrainIce: false,
+        terrainIce: terrainMaster("ice", "low"),
         terrainIceRefraction: false,
         // Terrain VOLCANO/OBSIDIAN (Wave 2B, plan §3.6). `terrainVolcano` is the
         // FAMILY MASTER and ships false on every tier (§5.9); `low` is `null` in
@@ -135,7 +188,7 @@ export const PRESETS = {
         // safe in INT/FLOAT_FLAGS — they cannot turn the family on.
         // NOTE: no ash key — ash fall is DEFERRED (plan §8 risk 9; see
         // `vfx_flags.js`'s volcano block for the SnowSystem assessment).
-        terrainVolcano: false,
+        terrainVolcano: terrainMaster("volcano", "low"),
         terrainHaze: false,
         terrainCrackGlow: false,
         terrainVolcanoEmberCount: 0,
@@ -147,7 +200,7 @@ export const PRESETS = {
         // `?terrainDirt=on` at low renders nothing. The four BOOLEANS stay out
         // of BOOL_FLAGS for the `gfxRelief` reason; the two numerics are safe in
         // INT/FLOAT_FLAGS — they cannot turn the family on.
-        terrainDirt: false,
+        terrainDirt: terrainMaster("dirt", "low"),
         terrainFootfall: false,
         terrainMudPrints: false,
         terrainMudWetness: false,
@@ -163,7 +216,7 @@ export const PRESETS = {
         // design (see `vfx_flags.js::terrainGroundFogSoftnessM`): it arms the
         // fog's scene-depth read, which is a framebuffer feedback loop against
         // the composer's live depth attachment, so no tier may turn it on.
-        terrainSwamp: false,
+        terrainSwamp: terrainMaster("swamp", "low"),
         terrainGroundFogCount: 0,
         terrainGroundFogRadius: 32,
         terrainMarshGasCount: 0,
@@ -180,7 +233,7 @@ export const PRESETS = {
         // (see `vfx_flags.js::terrainRockDensity`), like `terrainGrassDensity`
         // and `terrainDirtDustDensity`: the tier owns the shipped counts and
         // the density knob is the continuous A/B lever on top of them.
-        terrainRock: false,
+        terrainRock: terrainMaster("rock", "low"),
         terrainRockPebbleCount: 0,
         terrainRockGritCount: 0,
         terrainRockRadius: 32,
@@ -188,7 +241,6 @@ export const PRESETS = {
     },
     mid: {
         antialias: true,
-        shadows: true,
         // Wave 2.B (2026-05-28) turned these off on `mid`: the +texture memory
         // and per-fragment normal-map work were measured to cost more FPS than
         // the visual delta returned. RE-MEASURED 2026-07-30 on a GTX 1070 and
@@ -231,18 +283,18 @@ export const PRESETS = {
         lightShafts: false,
         // Terrain VFX grass — see the `low` tier for the rationale. 24336 =
         // 156²; stomp off at mid (the trail RT is a high/ultra promotion).
-        terrainGrass: false,
+        terrainGrass: terrainMaster("grass", "mid"),
         terrainGrassBlades: 24336,
         terrainGrassRadius: 32,
         terrainGrassStomp: false,
         // Terrain VFX trail map — see the `low` tier for the rationale.
-        terrainTrail: false,
+        terrainTrail: terrainMaster("trail", "mid"),
         terrainTrailRes: 128,
         terrainTrailRadius: 48,
         terrainTrailFade: 4,
         // Terrain SAND — see the `low` tier. mid = streamers + sparkle, no
         // devils (plan §3.2 "mid {streamers:800, devils:0, sparkle:true}").
-        terrainSand: false,
+        terrainSand: terrainMaster("sand", "mid"),
         terrainSandStreamerCount: 800,
         terrainSandDevilCount: 0,
         terrainSandSparkle: true,
@@ -251,18 +303,18 @@ export const PRESETS = {
         // "mid {sparkle:true, spindrift:0, prints:false}": the sparkle is the
         // WHOLE mid tier. Prints are off because POM is off at mid, so a print
         // would degrade to darkening-only — coherent, but not worth the RT.
-        terrainSnow: false,
+        terrainSnow: terrainMaster("snow", "mid"),
         terrainSnowSpindriftCount: 0,
         terrainSnowSparkle: true,
         terrainSnowPrints: false,
         terrainSnowRadius: 48,
-        terrainIce: false,
+        terrainIce: terrainMaster("ice", "mid"),
         terrainIceRefraction: false,
         // Terrain VOLCANO — see the `low` tier. mid = crack glow ONLY (plan §3.6
         // "mid {crackGlow:true}"): no haze (a fullscreen fill cost), no embers.
         // The crack glow degrades coherently with POM off at this tier — its POM
         // correction term is then exactly zero (plan §2.7.3 point 4).
-        terrainVolcano: false,
+        terrainVolcano: terrainMaster("volcano", "mid"),
         terrainHaze: false,
         terrainCrackGlow: true,
         terrainVolcanoEmberCount: 0,
@@ -272,7 +324,7 @@ export const PRESETS = {
         // (plan §3.7 "mid {footfall:true}"): no prints (POM is high/ultra, and
         // a darkening-only print is the degrade, not the shipped mid look), no
         // wetness, no haze (a fill cost this tier does not spend).
-        terrainDirt: false,
+        terrainDirt: terrainMaster("dirt", "mid"),
         terrainFootfall: true,
         terrainMudPrints: false,
         terrainMudWetness: false,
@@ -282,7 +334,7 @@ export const PRESETS = {
         // fireflies:true}": the two particle re-anchors (which cost one
         // synthesized emitter per swamp landblock) and a thin 8-card fog ring,
         // but NO gas vents and no wisps.
-        terrainSwamp: false,
+        terrainSwamp: terrainMaster("swamp", "mid"),
         terrainGroundFogCount: 8,
         terrainGroundFogRadius: 40,
         terrainMarshGasCount: 0,
@@ -292,7 +344,7 @@ export const PRESETS = {
         // Terrain ROCK — see the `low` tier. plan §3.3 "mid {pebbles:3000}";
         // the grit ladder is §3.2's streamer ladder at the "1/5 density" §3.3
         // item 2 asks for (800 → 160).
-        terrainRock: false,
+        terrainRock: terrainMaster("rock", "mid"),
         terrainRockPebbleCount: 3000,
         terrainRockGritCount: 160,
         terrainRockRadius: 40,
@@ -300,7 +352,6 @@ export const PRESETS = {
     },
     high: {
         antialias: true,
-        shadows: true,
         normalMaps: true,
         detailFlag: true,
         terrainDetailNormal: true,
@@ -322,22 +373,26 @@ export const PRESETS = {
         bloom: true,
         vignette: true,
         lensFlare: false,
+        // INERT without `?clouds=on` (perf-synthesis §4): the only reader is
+        // index.js `effect.lightShafts = !!quality.flags.lightShafts` on the
+        // cloud effect, which is only constructed under the `clouds` opt-in.
+        // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         // Terrain VFX grass — see the `low` tier. 60025 = 245², the plan's
         // reference budget (240k tris, one draw call, <= 3.5 ms on an R9 290 —
         // a hypothesis, §8 risk 6: measure before fixing this number).
-        terrainGrass: false,
+        terrainGrass: terrainMaster("grass", "high"),
         terrainGrassBlades: 60025,
         terrainGrassRadius: 48,
         terrainGrassStomp: true,
         // Terrain VFX trail map — see the `low` tier for the rationale.
-        terrainTrail: false,
+        terrainTrail: terrainMaster("trail", "high"),
         terrainTrailRes: 256,
         terrainTrailRadius: 48,
         terrainTrailFade: 4,
         // Terrain SAND — see the `low` tier. plan §3.2 "high {streamers:2000,
         // devils:1, sparkle:true}".
-        terrainSand: false,
+        terrainSand: terrainMaster("sand", "high"),
         terrainSandStreamerCount: 2000,
         terrainSandDevilCount: 1,
         terrainSandSparkle: true,
@@ -345,17 +400,17 @@ export const PRESETS = {
         // Terrain SNOW/ICE — see the `low` tier. plan §3.4
         // "high {sparkle:true, spindrift:1200, prints:true}". Prints need POM,
         // which is high/ultra only.
-        terrainSnow: false,
+        terrainSnow: terrainMaster("snow", "high"),
         terrainSnowSpindriftCount: 1200,
         terrainSnowSparkle: true,
         terrainSnowPrints: true,
         terrainSnowRadius: 64,
-        terrainIce: false,
+        terrainIce: terrainMaster("ice", "high"),
         terrainIceRefraction: false,
         // Terrain VOLCANO — see the `low` tier. plan §3.6 "high {crackGlow:true,
         // haze:true, embers:1}". The haze is fill-bound, so it DOES get cheaper
         // at 25 % render scale (plan §5.8).
-        terrainVolcano: false,
+        terrainVolcano: terrainMaster("volcano", "high"),
         terrainHaze: true,
         terrainCrackGlow: true,
         terrainVolcanoEmberCount: 1,
@@ -364,7 +419,7 @@ export const PRESETS = {
         // Terrain DIRT/MUD — see the `low` tier. plan §3.7 "high
         // {footfall:true, prints:true, dustHaze:800}". POM is live at this tier,
         // so the print gets its dent as well as its darkening.
-        terrainDirt: false,
+        terrainDirt: terrainMaster("dirt", "high"),
         terrainFootfall: true,
         terrainMudPrints: true,
         terrainMudWetness: false,
@@ -372,7 +427,7 @@ export const PRESETS = {
         terrainDirtRadius: 56,
         // Terrain SWAMP — see the `low` tier. plan §3.5 "high {fog:16,
         // gas:true, fireflies:true}". Wisps stay ultra-only.
-        terrainSwamp: false,
+        terrainSwamp: terrainMaster("swamp", "high"),
         terrainGroundFogCount: 16,
         terrainGroundFogRadius: 56,
         terrainMarshGasCount: 2,
@@ -381,7 +436,7 @@ export const PRESETS = {
         terrainSwampMidges: true,
         // Terrain ROCK — see the `low` tier. plan §3.3 "high {pebbles:9000}";
         // grit = §3.2's high streamer count (2000) at 1/5.
-        terrainRock: false,
+        terrainRock: terrainMaster("rock", "high"),
         terrainRockPebbleCount: 9000,
         terrainRockGritCount: 400,
         terrainRockRadius: 56,
@@ -389,7 +444,6 @@ export const PRESETS = {
     },
     ultra: {
         antialias: true,
-        shadows: true,
         normalMaps: true,
         detailFlag: true,
         terrainDetailNormal: true,
@@ -410,20 +464,24 @@ export const PRESETS = {
         bloom: true,
         vignette: true,
         lensFlare: false,
+        // INERT without `?clouds=on` (perf-synthesis §4): the only reader is
+        // index.js `effect.lightShafts = !!quality.flags.lightShafts` on the
+        // cloud effect, which is only constructed under the `clouds` opt-in.
+        // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         // Terrain VFX grass — see the `low` tier. 119716 = 346².
-        terrainGrass: false,
+        terrainGrass: terrainMaster("grass", "ultra"),
         terrainGrassBlades: 119716,
         terrainGrassRadius: 64,
         terrainGrassStomp: true,
         // Terrain VFX trail map — see the `low` tier for the rationale.
-        terrainTrail: false,
+        terrainTrail: terrainMaster("trail", "ultra"),
         terrainTrailRes: 512,
         terrainTrailRadius: 64,
         terrainTrailFade: 4,
         // Terrain SAND — see the `low` tier. plan §3.2 "ultra {streamers:3000,
         // devils:2, sparkle:true}".
-        terrainSand: false,
+        terrainSand: terrainMaster("sand", "ultra"),
         terrainSandStreamerCount: 3000,
         terrainSandDevilCount: 2,
         terrainSandSparkle: true,
@@ -431,17 +489,17 @@ export const PRESETS = {
         // Terrain SNOW/ICE — see the `low` tier. plan §3.4
         // "ultra {sparkle:true, spindrift:2500, prints:true, iceRefraction:true}".
         // 2500 = 50², already a perfect square, so the pool rounds nothing.
-        terrainSnow: false,
+        terrainSnow: terrainMaster("snow", "ultra"),
         terrainSnowSpindriftCount: 2500,
         terrainSnowSparkle: true,
         terrainSnowPrints: true,
         terrainSnowRadius: 80,
-        terrainIce: false,
+        terrainIce: terrainMaster("ice", "ultra"),
         terrainIceRefraction: true,
         // Terrain VOLCANO — see the `low` tier. plan §3.6 "ultra
         // {crackGlow:true, haze:true, embers:3, ash:true}" MINUS ash, which is
         // deferred (plan §8 risk 9) and therefore carries no key at all.
-        terrainVolcano: false,
+        terrainVolcano: terrainMaster("volcano", "ultra"),
         terrainHaze: true,
         terrainCrackGlow: true,
         terrainVolcanoEmberCount: 3,
@@ -451,7 +509,7 @@ export const PRESETS = {
         // {footfall:true, prints:true, dustHaze:2000, wetness:true}". The
         // wet-mud darkening + sheen is the ultra-only addition, exactly as the
         // plan's tier table has it.
-        terrainDirt: false,
+        terrainDirt: terrainMaster("dirt", "ultra"),
         terrainFootfall: true,
         terrainMudPrints: true,
         terrainMudWetness: true,
@@ -459,7 +517,7 @@ export const PRESETS = {
         terrainDirtRadius: 72,
         // Terrain SWAMP — see the `low` tier. plan §3.5 "ultra {fog:24,
         // gas:true, wisps:true}".
-        terrainSwamp: false,
+        terrainSwamp: terrainMaster("swamp", "ultra"),
         terrainGroundFogCount: 24,
         terrainGroundFogRadius: 72,
         terrainMarshGasCount: 3,
@@ -468,7 +526,7 @@ export const PRESETS = {
         terrainSwampMidges: true,
         // Terrain ROCK — see the `low` tier. plan §3.3 "ultra {pebbles:18000}";
         // grit = §3.2's ultra streamer count (3000) at 1/5.
-        terrainRock: false,
+        terrainRock: terrainMaster("rock", "ultra"),
         terrainRockPebbleCount: 18000,
         terrainRockGritCount: 600,
         terrainRockRadius: 72,
@@ -482,7 +540,9 @@ export const PRESET_NAMES = ["low", "mid", "high", "ultra"];
 // → false. Used by parseOverrides to coerce per-feature URL params.
 const BOOL_FLAGS = new Set([
     "antialias",
-    "shadows",
+    // "shadows" removed 2026-08-01 — see the PRESETS.low note: flags.shadows
+    // had no reader; `?shadows=on` keeps its own exact-match reader in
+    // index.js, unaffected by this parser.
     "normalMaps",
     "detailFlag",
     "terrainDetailNormal",

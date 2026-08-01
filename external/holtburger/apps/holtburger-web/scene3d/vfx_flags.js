@@ -327,23 +327,128 @@ export function terrainGrassDensity() {
   return _numFlag("terrainGrassDensity", 1, 0, 2);
 }
 
+// ---------------------------------------------------------------------------
+// THE TRAIL MAP AND ITS THREE WRITERS (promotion-readiness, 2026-08-01).
+//
+// Three effects stamp the shared map — grass stomp, snow prints, mud prints —
+// and every one of them is a SILENT no-op when the map was never built (the
+// families deliberately never lazy-create it). That is the exact failure
+// `gfx_relief.js:137` argues against, and it is the promotion trap: an owner
+// approves `?terrainSnow=on&terrainSnowPrints=on`, sees nothing, and cannot
+// tell a missing map from a broken decode.
+//
+// So the writers IMPLY the map. `_trailFadeClaims` is the one list both
+// `terrainTrailEnabled` (any claimant ⇒ build it) and `terrainTrailRecoverySec`
+// (longest claim wins) read, so the two can never disagree about who is live.
+// An EXPLICIT `?terrainTrail=off` still wins — it is the bisection knob — and
+// warns that the writers are now no-ops.
+//
+// The fade table lives HERE rather than in `trail_map.js` because
+// `terrain_snow.js` and `terrain_dirt.js` must read it while keeping their
+// "this module never imports trail_map.js" invariant (no lazy-ensure, no second
+// render target) — and they already import this file.
+// ---------------------------------------------------------------------------
+
+/**
+ * The fade each trail-writing family asks for. A texel in the map is ONE scalar
+ * in an R8 target: no room for a per-print age, owner or rate, and a second
+ * channel would need a sampler the terrain shader does not have (15 of a
+ * guaranteed 16 are bound — the wave-2A ruling in the `terrain_snow.js`
+ * header). So the three families share ONE fade and these three numbers, two
+ * orders of magnitude apart, have to be reconciled. One place, so no family
+ * can drift from the reader that applies its ask.
+ */
+export const TRAIL_FAMILY_FADE_SEC = Object.freeze({
+  grassStomp: 4,    // blade springback (plan §3.1)
+  mudPrints: 30,    // "slow recovery (~30 s)" (plan §3.7 item 2)
+  snowPrints: 300,  // effectively infinite; also the trail map's clamp ceiling
+});
+
+/**
+ * LONGEST WINS. Resolve the fade a set of simultaneous claims deserves.
+ *
+ * WHY THE MAXIMUM and not a per-print tag: with one scalar per texel a fade
+ * SHORTER than a family asked for DESTROYS that family's effect outright (a 4 s
+ * grass springback erases a snow footprint before it can be seen), while a fade
+ * LONGER than asked for only makes a shorter-lived effect linger — and the
+ * map's own `2R` extent already scrolls a print out of existence in ~24 s of
+ * running, which bounds "linger" for everyone. One direction of the error is
+ * unrecoverable and the other is not, so the max is the only correct pick.
+ *
+ * @param {Array<{id:string, sec:number}>} claims
+ * @returns {{sec:number|null, claimants:string[]}} `sec` null ⇒ nobody claimed.
+ */
+export function longestTrailFadeClaim(claims) {
+  let sec = null;
+  const claimants = [];
+  for (const c of claims || []) {
+    if (!c || !Number.isFinite(c.sec)) continue;
+    claimants.push(c.id);
+    if (sec === null || c.sec > sec) sec = c.sec;
+  }
+  return { sec, claimants };
+}
+
+/** The trail-writing effects that are live right now, with the fade each asks
+ *  for (`trail_map.js::TRAIL_FAMILY_FADE_SEC`). Each row composes its family
+ *  master exactly as the `VFX_EFFECT_FLAGS` row for the same id does. */
+function _trailFadeClaims() {
+  const out = [];
+  // `?visual=off` kills every one of these rows through `vfxEffectEnabled`, so
+  // a claim under it would imply a render target for effects that cannot draw.
+  if (!visualEnabled()) return out;
+  if (terrainGrassEnabled() && terrainGrassStompEnabled()) {
+    out.push({ id: "terrain.grassStomp", sec: TRAIL_FAMILY_FADE_SEC.grassStomp });
+  }
+  if (terrainSnowEnabled() && terrainSnowPrintsEnabled()) {
+    out.push({ id: "terrain.snowPrints", sec: TRAIL_FAMILY_FADE_SEC.snowPrints });
+  }
+  if (terrainDirtEnabled() && terrainMudPrintsEnabled()) {
+    out.push({ id: "terrain.mudPrints", sec: TRAIL_FAMILY_FADE_SEC.mudPrints });
+  }
+  return out;
+}
+
+/** Effect ids currently writing the trail map — `[]` on a bare default. The
+ *  diagnostic half of the implied promotion (`window.__terrainVfx.stats()`). */
+export function terrainTrailWriters() {
+  return _trailFadeClaims().map((c) => c.id);
+}
+
 let _terrainTrail;
 let _terrainTrailWarned = false;
+let _terrainTrailImpliedLogged = false;
+let _terrainTrailSuppressedWarned = false;
 /** `?terrainTrail=on` — the shared stomp/footprint trail map
  *  (`scene3d/trail_map.js`): one R8 render target centred on the player that
  *  grass reads to flatten blades, snow to dent drifts and mud to keep a print.
  *  STRICT exact-match opt-in; anything unrecognised warns and does NOT enable
  *  (a silent no-op here is indistinguishable from a broken decode —
- *  `gfx_relief.js:137` makes exactly this argument). Absent ⇒ the quality
- *  preset's `terrainTrail`, which is **false on all four tiers this wave**.
+ *  `gfx_relief.js:137` makes exactly this argument).
+ *  RESOLUTION ORDER: `=on` ⇒ on · `=off` ⇒ off (and the writers are told they
+ *  will no-op) · the quality preset's `terrainTrail` · IMPLIED by any live
+ *  trail-writing effect (see `_trailFadeClaims`, logged once) · off.
+ *  A bare default has no writers, so it resolves exactly as it did before the
+ *  implication existed.
  *  The preset branch is NOT memoized: it may be consulted before
  *  `window.liveScene3d.quality` exists, and caching "not ready" would stick. */
 export function terrainTrailEnabled() {
   if (_terrainTrail !== undefined) return _terrainTrail;
   const raw = _strFlag("terrainTrail");
   if (raw === "on") return (_terrainTrail = true);
-  if (raw === "off") return (_terrainTrail = false);
-  // One-shot: the preset branch below deliberately does not memoize, so this
+  if (raw === "off") {
+    // EXPLICIT off beats the implication below — but say what it costs, once.
+    const writers = terrainTrailWriters();
+    if (writers.length > 0 && !_terrainTrailSuppressedWarned) {
+      _terrainTrailSuppressedWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[terrainTrail] ?terrainTrail=off with ${writers.join(", ")} enabled — the map is NOT built, so those stamps and the shader reads they feed will silently no-op. Drop ?terrainTrail=off to let the family imply the map.`,
+      );
+    }
+    return (_terrainTrail = false);
+  }
+  // One-shot: the branches below deliberately do not always memoize, so this
   // reader can run every init — the warn must not become a log flood.
   if (raw !== null && !_terrainTrailWarned) {
     _terrainTrailWarned = true;
@@ -353,8 +458,20 @@ export function terrainTrailEnabled() {
     );
   }
   const flags = _presetFlags();
+  if (flags && flags.terrainTrail === true) return (_terrainTrail = true);
+  const writers = terrainTrailWriters();
+  if (writers.length > 0) {
+    if (!_terrainTrailImpliedLogged) {
+      _terrainTrailImpliedLogged = true;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[terrainTrail] implied ON by ${writers.join(", ")} — the shared trail map is a PROMOTION of those effects, not a default. ?terrainTrail=off suppresses it (and makes them no-ops).`,
+      );
+    }
+    return (_terrainTrail = true);
+  }
   if (!flags) return false;             // deliberately not memoized
-  return (_terrainTrail = flags.terrainTrail === true);
+  return (_terrainTrail = false);
 }
 
 /** Numeric knob shared shape: URL wins, then the quality preset, then a
@@ -382,11 +499,41 @@ export function terrainTrailRadiusM() {
   return _terrainNum("terrainTrailRadius", "terrainTrailRadius", 48, 4, 512);
 }
 
-/** `?terrainTrailFade` — seconds for a full stomp to recover to zero. Preset
- *  key `terrainTrailFade`. Fallback 4 s (grass springback, plan §3.1); mud
- *  wants ~30 s and snow effectively never, so families override per effect. */
+/**
+ * `?terrainTrailFade` — seconds for a full stomp to recover to zero, WITH its
+ * provenance. The four claimants, in order:
+ *
+ *   url     an explicit in-range `?terrainTrailFade=` ALWAYS wins. It is the
+ *           A/B knob; a number the operator typed must never be silently
+ *           raised by a family that happens to be on.
+ *   family  the LONGEST of the live trail-writing effects' asks
+ *           (`trail_map.js::TRAIL_FAMILY_FADE_SEC`, longest-wins rationale in
+ *           `longestTrailFadeClaim`) — but only when it beats the preset, so
+ *           the two lower layers compose as "longest wins" too.
+ *   preset  the tier's `terrainTrailFade`.
+ *   fallback 4 s = grass springback (plan §3.1).
+ *
+ * With no family live this is byte-identical to the old URL > preset > 4.
+ */
+export function terrainTrailFadeSource() {
+  const url = _numFlag("terrainTrailFade", NaN, 0.05, 300);
+  if (Number.isFinite(url)) return { sec: url, source: "url", claimants: terrainTrailWriters() };
+  const claim = longestTrailFadeClaim(_trailFadeClaims());
+  const flags = _presetFlags();
+  const q = flags ? Number(flags.terrainTrailFade) : NaN;
+  const preset = (Number.isFinite(q) && q >= 0.05 && q <= 300) ? q : null;
+  if (claim.sec !== null && (preset === null || claim.sec > preset)) {
+    return { sec: claim.sec, source: "family", claimants: claim.claimants };
+  }
+  if (preset !== null) return { sec: preset, source: "preset", claimants: claim.claimants };
+  return { sec: 4, source: "fallback", claimants: claim.claimants };
+}
+
+/** Seconds for a full stomp to recover to zero — see `terrainTrailFadeSource`
+ *  for the precedence. NOT memoized: the answer moves with the live family set,
+ *  exactly as the old preset lookup moved with `liveScene3d.quality`. */
 export function terrainTrailRecoverySec() {
-  return _terrainNum("terrainTrailFade", "terrainTrailFade", 4, 0.05, 300);
+  return terrainTrailFadeSource().sec;
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,7 +1504,7 @@ export function vfxActiveEffectIds() {
 export function _resetVfxFlags() {
   _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _brazier = _foliagePollen = _foliageFireflies = _foliageLeaves = _breathFog = _budget = undefined;
   _terrainVfx = _terrainTrail = undefined;
-  _terrainTrailWarned = false;
+  _terrainTrailWarned = _terrainTrailImpliedLogged = _terrainTrailSuppressedWarned = false;
   _terrainGrass = _terrainGrassStomp = undefined;
   _terrainGrassWarned = _terrainGrassStompWarned = false;
   _terrainSand = _terrainSandStreamers = _terrainSandDevils = _terrainSandSparkle = undefined;

@@ -113,6 +113,8 @@ import {
   terrainSnowSlopeBias,
   terrainTrailEnabled,
   terrainTrailRecoverySec,
+  terrainTrailFadeSource,
+  TRAIL_FAMILY_FADE_SEC,
 } from "./vfx_flags.js";
 
 /** Provider ids — also the `VFX_EFFECT_FLAGS` router rows. */
@@ -124,8 +126,13 @@ export const PRINT_PROVIDER_ID = "terrain.snowPrints";
  * per decision (c) in the header, is pixel-identical to a true infinity: the
  * map's 2R extent scrolls a print out of existence in ~24 s of running long
  * before a 300 s linear fade removes 8 % of it.
+ *
+ * Since 2026-08-01 this is no longer only a RECOMMENDATION: with prints live
+ * and no explicit `?terrainTrailFade=`, `vfx_flags.js::terrainTrailFadeSource`
+ * applies it automatically (longest claim wins). The number is owned by
+ * `trail_map.js` so the reader and this module cannot drift apart.
  */
-export const SNOW_RECOMMENDED_FADE_SEC = 300;
+export const SNOW_RECOMMENDED_FADE_SEC = TRAIL_FAMILY_FADE_SEC.snowPrints;
 
 /** Below this live `?terrainTrailFade`, prints visibly melt — warn (see above). */
 export const SNOW_SHORT_FADE_WARN_SEC = 30;
@@ -978,16 +985,17 @@ export function initTerrainSnow(opts = {}) {
       // eslint-disable-next-line no-console
       console.warn(
         "[terrainSnowPrints] ?terrainSnowPrints=on but the shared trail map is "
-        + "NOT enabled — prints need ?terrainTrail=on as well (this family never "
-        + "creates the map itself). Nothing will be drawn.",
+        + "NOT enabled — only an EXPLICIT ?terrainTrail=off can reach this now "
+        + "(prints otherwise imply the map). Nothing will be drawn.",
       );
     } else {
       const fade = terrainTrailRecoverySec();
       if (Number.isFinite(fade) && fade < SNOW_SHORT_FADE_WARN_SEC) {
         // eslint-disable-next-line no-console
         console.warn(
-          `[terrainSnowPrints] the shared trail recovery is ${fade}s (grass springback). `
-          + `Snow prints should persist: add ?terrainTrailFade=${SNOW_RECOMMENDED_FADE_SEC}. `
+          `[terrainSnowPrints] the shared trail recovery is ${fade}s — an EXPLICIT `
+          + `?terrainTrailFade beats snow's ${SNOW_RECOMMENDED_FADE_SEC}s claim, and prints `
+          + `will visibly melt. Drop the flag (or set ?terrainTrailFade=${SNOW_RECOMMENDED_FADE_SEC}). `
           + "The map is family-agnostic and has ONE fade — see the trail-RT decision in "
           + "scene3d/terrain_snow.js.",
         );
@@ -1030,6 +1038,9 @@ export function terrainSnowStats() {
     iceRefraction: iceOn && terrainIceRefractionEnabled(),
     trailFlag: terrainTrailEnabled(),
     trailFadeSec: terrainTrailRecoverySec(),
+    // WHERE the live fade came from: "family" ⇒ this module's own claim won,
+    // "url" ⇒ an explicit ?terrainTrailFade beat it, "preset" ⇒ the tier is longer.
+    trailFadeSource: terrainTrailFadeSource(),
     inited: !!_snow,
     slopeBias: _snow ? _snow.slopeBias : terrainSnowSlopeBias(),
     snowCodes: snowTerrainCodes(),

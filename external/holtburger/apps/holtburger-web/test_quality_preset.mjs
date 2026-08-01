@@ -50,33 +50,38 @@ console.log("\nGroup 1: preset table integrity");
             PRESET_NAMES.includes("ultra"),
         `names=${PRESET_NAMES.join(",")}`
     );
+    // 2026-08-01 truth-up: the dead `shadows` preset key was removed on every
+    // tier (perf-synthesis §4 — nothing ever read flags.shadows; `?shadows=on`
+    // has its own reader in index.js), and `pom` has been ON at mid since
+    // 3aa0565d (2026-07-30, POM indoors at mid). The suite had gone stale on
+    // both counts.
     check(
-        "low preset: all heavy features off",
-        PRESETS.low.shadows === false &&
+        "low preset: all heavy features off, no shadows key",
+        !("shadows" in PRESETS.low) &&
             PRESETS.low.pom === false &&
             PRESETS.low.csm === false &&
             PRESETS.low.triplanar === false &&
             PRESETS.low.subdivLevel === 1
     );
     check(
-        "mid preset: cheap features on, heavy features off",
-        PRESETS.mid.shadows === true &&
+        "mid preset: cheap features + POM on, csm off, no shadows key",
+        !("shadows" in PRESETS.mid) &&
             PRESETS.mid.triplanar === true &&
             PRESETS.mid.terrainDetailNormal === true &&
             PRESETS.mid.subdivLevel === 2 &&
-            PRESETS.mid.pom === false &&
+            PRESETS.mid.pom === true &&
             PRESETS.mid.csm === false
     );
     check(
         "high preset: all features on, subdivLevel=4",
-        PRESETS.high.shadows === true &&
+        !("shadows" in PRESETS.high) &&
             PRESETS.high.pom === true &&
             PRESETS.high.csm === true &&
             PRESETS.high.subdivLevel === 4
     );
     check(
         "ultra preset: all features on, subdivLevel=8",
-        PRESETS.ultra.shadows === true &&
+        !("shadows" in PRESETS.ultra) &&
             PRESETS.ultra.pom === true &&
             PRESETS.ultra.csm === true &&
             PRESETS.ultra.subdivLevel === 8
@@ -85,7 +90,7 @@ console.log("\nGroup 1: preset table integrity");
     // produces a render with all visual-fidelity features off. The
     // table here is the source for that — make sure no future edit
     // accidentally flips a "heavy" feature on at the low tier.
-    const heavy = ["shadows", "pom", "csm", "triplanar", "terrainDetailNormal", "detailFlag"];
+    const heavy = ["pom", "csm", "triplanar", "terrainDetailNormal", "detailFlag"];
     const allHeavyOffOnLow = heavy.every((f) => PRESETS.low[f] === false);
     check("low tier — every heavy feature flag is off", allHeavyOffOnLow);
 }
@@ -99,7 +104,7 @@ console.log("\nGroup 2: URL parsing");
         q1.preset === "low" && q1.source === "url",
         `got preset=${q1.preset} source=${q1.source}`
     );
-    check("?quality=low → flags match PRESETS.low", q1.flags.shadows === false && q1.flags.subdivLevel === 1);
+    check("?quality=low → flags match PRESETS.low", !("shadows" in q1.flags) && q1.flags.subdivLevel === 1);
 
     const q2 = getQuality("https://example.com/?quality=high", DESKTOP_UA);
     check(
@@ -186,8 +191,8 @@ console.log("\nGroup 3: per-feature overrides (A/B testing)");
     );
     check(
         "unparseable override is ignored (preset value retained)",
-        q6.preset === "mid" && q6.flags.pom === false,
-        `pom=${q6.flags.pom}`
+        q6.preset === "mid" && q6.flags.pom === PRESETS.mid.pom,
+        `pom=${q6.flags.pom} (preset=${PRESETS.mid.pom})`
     );
 }
 
@@ -253,7 +258,6 @@ console.log("\nGroup 5: edge cases");
         "acceptance #3: ?quality=mid&pom=on → pom on, all other mid-defaults retained",
         q4.preset === "mid" &&
             q4.flags.pom === true &&
-            q4.flags.shadows === true &&
             q4.flags.triplanar === true &&
             q4.flags.csm === false &&
             q4.flags.subdivLevel === 2
@@ -262,11 +266,11 @@ console.log("\nGroup 5: edge cases");
     // Returned flags object should be a fresh copy — mutating it must
     // not poison PRESETS for subsequent calls.
     const q5 = getQuality("https://example.com/?quality=mid", DESKTOP_UA);
-    q5.flags.shadows = false;
+    q5.flags.triplanar = false;
     const q6 = getQuality("https://example.com/?quality=mid", DESKTOP_UA);
     check(
         "PRESETS not mutated by caller's flag mutation",
-        q6.flags.shadows === true
+        q6.flags.triplanar === true
     );
 }
 

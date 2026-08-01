@@ -57,6 +57,15 @@ export const TRAIL_DEFAULTS = Object.freeze({
   teleportJumpM: 192,   // one landblock — beyond this a move is a teleport
 });
 
+// PER-FAMILY FADE. A texel here is ONE scalar in an R8 target — no room for a
+// per-print age, owner or fade rate, and a second channel would need a second
+// sampler the terrain shader does not have. So the three families that write
+// the map share `recoverySec`, and the numbers they each ask for plus the
+// longest-wins rule that reconciles them live in
+// `vfx_flags.js::TRAIL_FAMILY_FADE_SEC` / `terrainTrailFadeSource` — with the
+// flag readers, and NOT here, so the two families that consume them keep their
+// "this module never imports trail_map.js" invariant.
+
 /** Metres per texel for a given extent/resolution. */
 export function texelSizeM(radiusM, resolution) {
   const r = Number.isFinite(radiusM) && radiusM > 0 ? radiusM : TRAIL_DEFAULTS.radiusM;

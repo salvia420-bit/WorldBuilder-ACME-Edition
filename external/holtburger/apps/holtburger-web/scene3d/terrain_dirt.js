@@ -53,13 +53,17 @@
 // most fades do. Full rationale in the `terrain_snow.js` header.
 //
 // So mud resolves the tension WITHOUT a second constant:
-//   (a) THE FADE IS A URL NUMBER, and mud's is 30 s — `MUD_RECOMMENDED_FADE_SEC`
-//       — exactly the plan's "slow recovery (~30 s)". `initTerrainDirt` warns
-//       ONCE when the live fade is far below that (a 4 s grass springback makes
-//       a mud print flash and vanish) and notes ONCE when it is far above (a
-//       snow-tuned 300 s makes mud prints permanent, which is a legitimate
-//       co-tenancy but not what mud asked for). Never silently wrong — the
-//       `gfx_relief.js:137` rule.
+//   (a) THE FADE IS A PER-FAMILY CLAIM, and mud's is 30 s —
+//       `MUD_RECOMMENDED_FADE_SEC`, exactly the plan's "slow recovery (~30 s)".
+//       Since 2026-08-01 it APPLIES ITSELF: with mud prints live and no explicit
+//       `?terrainTrailFade=`, `vfx_flags.js::terrainTrailFadeSource` resolves
+//       the longest live claim, so mud alone runs at 30 s and mud beside snow
+//       runs at snow's 300 s (longest wins — a fade shorter than a family asked
+//       for destroys its effect, a longer one only makes it linger).
+//       `initTerrainDirt` still warns ONCE when the LIVE fade is far below the
+//       ask (only reachable by an explicit URL now) and notes ONCE when it is
+//       far above (snow co-tenancy — legitimate, just not what mud asked for).
+//       Never silently wrong — the `gfx_relief.js:137` rule.
 //   (b) THE RAIN DEPENDENCE IS NOT A FADE AT ALL. It rides amplitude, which is
 //       per-family and free: wet ground takes a DEEPER, STRONGER stamp
 //       (`mudStampFor`) and the shader scales the dent + darkening by the same
@@ -114,6 +118,8 @@ import {
   terrainFootfallPuffCount,
   terrainTrailEnabled,
   terrainTrailRecoverySec,
+  terrainTrailFadeSource,
+  TRAIL_FAMILY_FADE_SEC,
 } from "./vfx_flags.js";
 
 /** Provider ids — also the `VFX_EFFECT_FLAGS` router rows. */
@@ -126,7 +132,7 @@ export const DUST_HAZE_PROVIDER_ID = "terrain.dirtDust";
  * See decision (a) in the header — it is a URL number, not a second constant in
  * the map.
  */
-export const MUD_RECOMMENDED_FADE_SEC = 30;
+export const MUD_RECOMMENDED_FADE_SEC = TRAIL_FAMILY_FADE_SEC.mudPrints;
 /** Below this, a mud print flashes and vanishes (grass springback) — warn. */
 export const MUD_SHORT_FADE_WARN_SEC = 10;
 /** Above this, mud prints are effectively permanent (snow's 300 s) — note. */
@@ -1474,16 +1480,17 @@ export function initTerrainDirt(opts = {}) {
       // eslint-disable-next-line no-console
       console.warn(
         "[terrainMudPrints] ?terrainMudPrints=on but the shared trail map is "
-        + "NOT enabled — mud prints need ?terrainTrail=on as well (this family "
-        + "never creates the map itself). Nothing will be drawn.",
+        + "NOT enabled — only an EXPLICIT ?terrainTrail=off can reach this now "
+        + "(mud prints otherwise imply the map). Nothing will be drawn.",
       );
     } else {
       const fade = terrainTrailRecoverySec();
       if (Number.isFinite(fade) && fade < MUD_SHORT_FADE_WARN_SEC) {
         // eslint-disable-next-line no-console
         console.warn(
-          `[terrainMudPrints] the shared trail recovery is ${fade}s (grass springback). `
-          + `Mud should heal SLOWLY: add ?terrainTrailFade=${MUD_RECOMMENDED_FADE_SEC}. `
+          `[terrainMudPrints] the shared trail recovery is ${fade}s — an EXPLICIT `
+          + `?terrainTrailFade beats mud's ${MUD_RECOMMENDED_FADE_SEC}s claim, so prints `
+          + `will flash and vanish. Drop the flag (or set ?terrainTrailFade=${MUD_RECOMMENDED_FADE_SEC}). `
           + "The map is family-agnostic and has ONE fade — see the trail-fade decision in "
           + "scene3d/terrain_dirt.js.",
         );
@@ -1536,6 +1543,9 @@ export function terrainDirtStats() {
     dustHaze: on && terrainDustHazeEnabled(),
     trailFlag: terrainTrailEnabled(),
     trailFadeSec: terrainTrailRecoverySec(),
+    // WHERE the live fade came from: "family" ⇒ this module's own claim won,
+    // "url" ⇒ an explicit ?terrainTrailFade beat it, "preset" ⇒ the tier is longer.
+    trailFadeSource: terrainTrailFadeSource(),
     recommendedFadeSec: MUD_RECOMMENDED_FADE_SEC,
     inited: !!_dirt,
     dirtCodes: dirtTerrainCodes(),
