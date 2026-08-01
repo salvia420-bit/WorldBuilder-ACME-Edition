@@ -141,6 +141,13 @@ import { FixedSlotGrid, EdgeParkScheduler, FIXED_GRID_TERRAIN_RADIUS } from "./f
 // (the module imports no three), and it installs its own park/unpark/evict
 // hooks by CHAINING onto terrain_batch.js's — never clobbering them.
 import { initTerrainVfx, terrainVfxNoteLandblockMesh } from "./terrain_vfx.js";
+// Terrain SAND family (Wave 1B, plan §3.2) — streamers + dust devils. Same
+// injected-THREE contract as the spine above; the grain sparkle is a terrain
+// fragment-shader term and needs no import here. `initTerrainSand` returns null
+// (registering nothing) unless `?terrainSand=on`.
+import { initTerrainSand } from "./terrain_sand.js";
+import { VFX_GLOBALS } from "./materials.js";
+import { readParticleEnv } from "./vfx/particle_env.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -3455,6 +3462,29 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainVfx] initTerrainVfx threw (terrain VFX disabled):", e);
+  }
+  // ── Terrain SAND family (Wave 1B, plan §3.2) ──────────────────────────
+  // Registers the two providers (camera-scoped streamers, landblock-scoped
+  // dust devils) with the spine above; the third sand effect, the grain
+  // sparkle, lives in the terrain fragment shader and needs no wiring here.
+  // Returns null — registering nothing, allocating nothing — unless
+  // `?terrainSand=on` (the family master ships OFF on every tier, plan §5.9),
+  // so a bare-default boot is byte-identical. THREE, the shared VFX uniforms
+  // (uTime/uWindDir, BY REFERENCE) and the env producer are INJECTED so
+  // `scene3d/terrain_sand.js` imports no three and `test_terrain_sand.mjs`
+  // stays a pure-node test.
+  try {
+    const sandSurface = initTerrainSand({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+      globals: VFX_GLOBALS,
+      readEnv: readParticleEnv,
+    });
+    if (sandSurface && typeof window !== "undefined") window.__terrainSand = sandSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainSand] initTerrainSand threw (sand VFX disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees
