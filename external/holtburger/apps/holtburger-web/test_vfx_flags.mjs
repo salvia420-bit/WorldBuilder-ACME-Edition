@@ -11,6 +11,9 @@ import {
   visualAllEffects, visualBudget, _resetVfxFlags,
   terrainGrassEnabled, terrainGrassStompEnabled,
   terrainGrassBladeCount, terrainGrassRadiusM, terrainGrassDensity,
+  terrainSnowEnabled, terrainSnowSpindriftEnabled, terrainSnowSparkleEnabled,
+  terrainSnowPrintsEnabled, terrainIceEnabled, terrainIceRefractionEnabled,
+  terrainSnowSpindriftCount, terrainSnowRadiusM, terrainSnowSlopeBias,
 } from "./scene3d/vfx_flags.js";
 import { visualEnabled, _resetVfxCatalog } from "./scene3d/vfx_catalog.js";
 
@@ -137,6 +140,69 @@ clearUrl();
 check("no flags: blade count falls back to the 60025 (245²) high-tier default",
   terrainGrassBladeCount() === 60025);
 check("no flags: radius falls back to 48 m", terrainGrassRadiusM() === 48);
+
+// ---- TERRAIN SNOW / ICE (Wave 2A) — six STRICT opt-ins that ship OFF ----
+// TWO family masters on purpose (plan §3.4): `terrainSnow` is particles+shader,
+// `terrainIce` is a material change, and bisecting them separately matters.
+clearUrl();
+check("the SNOW/ICE rows are registered ship-OFF ids",
+  ["terrain.snow", "terrain.snowSpindrift", "terrain.snowSparkle",
+    "terrain.snowPrints", "terrain.ice", "terrain.iceRefraction"]
+    .every((id) => SHIP_OFF_IDS.includes(id)), SHIP_OFF_IDS.join());
+check("the DEFAULT-ON count is STILL 14 after the wave-2A rows",
+  DEFAULT_ON_IDS.length === 14, DEFAULT_ON_IDS.join());
+check("no flags: every snow/ice reader is false (ship-OFF)",
+  [terrainSnowEnabled, terrainSnowSpindriftEnabled, terrainSnowSparkleEnabled,
+    terrainSnowPrintsEnabled, terrainIceEnabled, terrainIceRefractionEnabled]
+    .every((f) => f() === false));
+setUrl("?visual=all");
+check("?visual=all does NOT light snow or ice (strict opt-ins, not suite effects)",
+  vfxEffectEnabled("terrain.snow") === false && vfxEffectEnabled("terrain.ice") === false
+  && vfxActiveEffectIds().length === 14);
+setUrl("?terrainSnow=on");
+check("?terrainSnow=on: reader true", terrainSnowEnabled() === true);
+check("?terrainSnow=on: vfxEffectEnabled(terrain.snow) true",
+  vfxEffectEnabled("terrain.snow") === true);
+check("?terrainSnow=on does NOT light ICE (separate master)",
+  terrainIceEnabled() === false && vfxEffectEnabled("terrain.ice") === false);
+setUrl("?terrainIce=on");
+check("?terrainIce=on: reader true, and SNOW stays off (bisectable both ways)",
+  terrainIceEnabled() === true && terrainSnowEnabled() === false);
+check("?terrainIce=on alone does not light the refraction (ultra-tier sub-flag)",
+  vfxEffectEnabled("terrain.iceRefraction") === false);
+setUrl("?terrainIce=on&terrainIceRefraction=on");
+check("?terrainIceRefraction=on composes with the ice master",
+  vfxEffectEnabled("terrain.iceRefraction") === true);
+for (const [flag, reader] of [
+  ["terrainSnow", terrainSnowEnabled],
+  ["terrainSnowSpindrift", terrainSnowSpindriftEnabled],
+  ["terrainSnowSparkle", terrainSnowSparkleEnabled],
+  ["terrainSnowPrints", terrainSnowPrintsEnabled],
+  ["terrainIce", terrainIceEnabled],
+  ["terrainIceRefraction", terrainIceRefractionEnabled],
+]) {
+  setUrl(`?${flag}=1`);
+  check(`?${flag}=1 does NOT enable (EXACT \`on\` only — the gfxRelief rule)`,
+    reader() === false);
+  setUrl(`?${flag}=on`);
+  check(`?${flag}=on does`, reader() === true);
+  setUrl(`?${flag}=off`);
+  check(`?${flag}=off forces off`, reader() === false);
+}
+setUrl("?visual=off&terrainSnow=on&terrainIce=on");
+check("?visual=off kills snow AND ice (the firewall composition rule)",
+  vfxEffectEnabled("terrain.snow") === false && vfxEffectEnabled("terrain.ice") === false
+  && vfxEffectEnabled("terrain.snowSparkle") === false);
+setUrl("?terrainSnowSpindriftCount=900&terrainSnowRadius=100&terrainSnowSlope=0.4");
+check("?terrainSnowSpindriftCount numeric override", terrainSnowSpindriftCount() === 900);
+check("?terrainSnowRadius numeric override", terrainSnowRadiusM() === 100);
+check("?terrainSnowSlope numeric override", terrainSnowSlopeBias() === 0.4);
+setUrl("?terrainSnowSlope=9");
+check("?terrainSnowSlope out of range (0..1) → default 0.12", terrainSnowSlopeBias() === 0.12);
+clearUrl();
+check("no flags: spindrift count falls back to the 1200 high-tier default",
+  terrainSnowSpindriftCount() === 1200);
+check("no flags: snow radius falls back to 64 m", terrainSnowRadiusM() === 64);
 
 // ---- memoization reset hygiene ----
 setUrl("?glint=off");

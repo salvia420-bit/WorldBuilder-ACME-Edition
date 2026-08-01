@@ -519,6 +519,147 @@ export function terrainSandRadiusM() {
   return _terrainNum("terrainSandRadius", "terrainSandRadius", 64, 8, 512);
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN SNOW / ICE (Wave 2A — plan §3.4). Codes 2 `Ice`, 15 `Snow`,
+// 27 `BlueIce` = FAM_SNOWICE; the ICE MATERIAL is codes 2/27 only.
+//
+// TWO masters, deliberately (plan §3.4 "separate — one is particles+shader, the
+// other a material change; bisecting matters"):
+//     spindrift = terrainSnowEnabled() && terrainSnowSpindriftEnabled()
+//     sparkle   = terrainSnowEnabled() && terrainSnowSparkleEnabled()
+//     prints    = terrainSnowEnabled() && terrainSnowPrintsEnabled()   (+ ?terrainTrail=on)
+//     ice       = terrainIceEnabled()
+//     refract   = terrainIceEnabled() && terrainIceRefractionEnabled()
+// All STRICT exact-match opt-ins that ship OFF (plan §2.4/§5.9), all kept out of
+// `quality.js BOOL_FLAGS` for the `gfxRelief` reason. `?terrainVfx=off`,
+// `?visual=off` and `?wireframe=1` each kill every one of them.
+// ---------------------------------------------------------------------------
+
+let _terrainSnow;
+const _terrainSnowWarn = { hit: false };
+/** `?terrainSnow=on` — THE family master for SNOW (spindrift ribbons + the
+ *  terrain-shader crystal sparkle + persistent footprints; plan §3.4). It does
+ *  NOT gate the ICE MATERIAL — that is `?terrainIce`, on purpose: one is
+ *  particles+shader and the other is a material change, and bisecting them
+ *  separately is the point. Absent ⇒ the quality preset's `terrainSnow`,
+ *  **false on all four tiers** this wave (§5.9 ship-OFF; the promotion target is
+ *  high/ultra true). */
+export function terrainSnowEnabled() {
+  if (_terrainSnow !== undefined) return _terrainSnow;
+  const r = _terrainStrictFlag("terrainSnow", "terrainSnow", false, _terrainSnowWarn);
+  return r.memo ? (_terrainSnow = r.value) : r.value;
+}
+
+let _terrainSnowSpindrift;
+const _terrainSnowSpindriftWarn = { hit: false };
+/** `?terrainSnowSpindrift=on` — the slope-biased white ribbon field blowing off
+ *  crests (a camera-scoped `terrain_scatter.js` pool, `scene3d/terrain_snow.js`).
+ *  Requires the family master. Absent ⇒ ON wherever the tier's
+ *  `terrainSnowSpindriftCount` is non-zero (low/mid = 0 ⇒ off), the same shape
+ *  `terrainSandStreamers` uses. */
+export function terrainSnowSpindriftEnabled() {
+  if (_terrainSnowSpindrift !== undefined) return _terrainSnowSpindrift;
+  const raw = _strFlag("terrainSnowSpindrift");
+  if (raw === "on") return (_terrainSnowSpindrift = true);
+  if (raw === "off") return (_terrainSnowSpindrift = false);
+  if (raw !== null && !_terrainSnowSpindriftWarn.hit) {
+    _terrainSnowSpindriftWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainSnowSpindrift] ignoring ?terrainSnowSpindrift=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainSnowSpindrift=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;              // deliberately not memoized
+  return (_terrainSnowSpindrift = Number(flags.terrainSnowSpindriftCount) > 0);
+}
+
+let _terrainSnowSparkle;
+const _terrainSnowSparkleWarn = { hit: false };
+/** `?terrainSnowSparkle=on` — sun-glitter that twinkles as the CAMERA moves, a
+ *  FRAGMENT term in the terrain shader gated on FAM_SNOWICE read from
+ *  `uVertexTypes` (plan trap T3), sited after the POM `cellUv` offset and
+ *  bypassed on any water-touching cell (plan §2.7.3). Requires the family
+ *  master. Absent ⇒ the tier's `terrainSnowSparkle` (false on low, true on
+ *  mid/high/ultra — it is the whole `mid` tier for this family). */
+export function terrainSnowSparkleEnabled() {
+  if (_terrainSnowSparkle !== undefined) return _terrainSnowSparkle;
+  const r = _terrainStrictFlag("terrainSnowSparkle", "terrainSnowSparkle", false, _terrainSnowSparkleWarn);
+  return r.memo ? (_terrainSnowSparkle = r.value) : r.value;
+}
+
+let _terrainSnowPrints;
+const _terrainSnowPrintsWarn = { hit: false };
+/** `?terrainSnowPrints=on` — persistent footprints: the shared trail map read in
+ *  the terrain fragment shader as a small parallax dent plus a darkening.
+ *  Requires the family master AND `?terrainTrail=on` — the map is built by
+ *  `terrain_vfx.js::initTerrainVfx` and this module NEVER lazily creates one
+ *  (the grass-stomp precedent); with the map absent `uSnowTrailEnabled` stays 0
+ *  and nothing is drawn, no error. Absent ⇒ the tier's `terrainSnowPrints`
+ *  (false low/mid — `mid` has no POM, so the print would be darkening-only —
+ *  true high/ultra).
+ *  ⚠ RECOVERY: the map's fade is GLOBAL (`?terrainTrailFade`, default 4 s =
+ *  grass springback). Snow wants effectively-infinite recovery, so the live URL
+ *  is `?terrainTrailFade=300`; `terrain_snow.js` warns once if it is short. */
+export function terrainSnowPrintsEnabled() {
+  if (_terrainSnowPrints !== undefined) return _terrainSnowPrints;
+  const r = _terrainStrictFlag("terrainSnowPrints", "terrainSnowPrints", false, _terrainSnowPrintsWarn);
+  return r.memo ? (_terrainSnowPrints = r.value) : r.value;
+}
+
+let _terrainIce;
+const _terrainIceWarn = { hit: false };
+/** `?terrainIce=on` — THE master for the ICE MATERIAL TREATMENT on codes 2
+ *  (`Ice`) and 27 (`BlueIce`) ONLY — never 15 (`Snow`), which stays matte.
+ *  Roughness down, a sharper specular and an env term off the `?ibl` cube.
+ *  Explicitly NOT `MeshTransmissionMaterial` (plan §3.4: that needs a second
+ *  full scene render per frame for a handful of texels). Absent ⇒ the quality
+ *  preset's `terrainIce`, **false on all four tiers** this wave. */
+export function terrainIceEnabled() {
+  if (_terrainIce !== undefined) return _terrainIce;
+  const r = _terrainStrictFlag("terrainIce", "terrainIce", false, _terrainIceWarn);
+  return r.memo ? (_terrainIce = r.value) : r.value;
+}
+
+let _terrainIceRefraction;
+const _terrainIceRefractionWarn = { hit: false };
+/** `?terrainIceRefraction=on` — the cheap fake refraction inside the ice
+ *  treatment: ONE extra atlas tap at a UV offset by the view vector times a
+ *  small depth constant, applied AFTER the POM march with an amplitude well
+ *  under `uPomScale` (0.012) so the two never fight. Requires `?terrainIce`.
+ *  Absent ⇒ the tier's `terrainIceRefraction` (ultra only — plan §3.4). */
+export function terrainIceRefractionEnabled() {
+  if (_terrainIceRefraction !== undefined) return _terrainIceRefraction;
+  const r = _terrainStrictFlag("terrainIceRefraction", "terrainIceRefraction", false, _terrainIceRefractionWarn);
+  return r.memo ? (_terrainIceRefraction = r.value) : r.value;
+}
+
+/** Instances in the spindrift ribbon pool at the live tier. URL knob
+ *  `?terrainSnowSpindriftCount` (an `INT_FLAGS` quality override — it cannot
+ *  turn the effect on by itself). Preset: low 0 / mid 0 / high 1200 /
+ *  ultra 2500. Fallback 1200 = the `high` tier. */
+export function terrainSnowSpindriftCount() {
+  return Math.round(_terrainNum("terrainSnowSpindriftCount", "terrainSnowSpindriftCount", 1200, 0, 20000));
+}
+
+/** `?terrainSnowRadius` — HALF-extent (metres) of the spindrift window; the
+ *  field covers 2× this. Preset key `terrainSnowRadius` (low 32 / mid 48 /
+ *  high 64 / ultra 80). Fallback 64. Cannot enable the feature on its own. */
+export function terrainSnowRadiusM() {
+  return _terrainNum("terrainSnowRadius", "terrainSnowRadius", 64, 8, 512);
+}
+
+/** `?terrainSnowSlope` — the slope-bias threshold for spindrift, as
+ *  `1 - normal.z` (0 = dead flat, ~0.5 ≈ 30°). Ribbons lift where the ground
+ *  tilts past this and thin out below it, which is where real spindrift comes
+ *  off. URL-ONLY on purpose (no preset key), exactly like
+ *  `?terrainGrassDensity`: it is the continuous A/B knob for the 1070 look
+ *  pass, while the tier owns the count. Default 0.12 ≈ 7°; 0 disables the bias
+ *  entirely (ribbons everywhere on snow). */
+export function terrainSnowSlopeBias() {
+  return _numFlag("terrainSnowSlope", 0.12, 0, 1);
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -567,6 +708,17 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.sandStreamers": () => terrainSandEnabled() && terrainSandStreamersEnabled(),
   "terrain.sandDevils": () => terrainSandEnabled() && terrainSandDevilsEnabled(),
   "terrain.sandSparkle": () => terrainSandEnabled() && terrainSandSparkleEnabled(),
+  // Terrain SNOW / ICE (Wave 2A, plan §3.4) — same contract again: strict
+  // ship-OFF opt-ins that do NOT track visualAllEffects(), so `?visual=all`
+  // does not light them and the DEFAULT-ON count stays 14. `terrain.snow` and
+  // `terrain.ice` are two independent family masters (particles+shader vs a
+  // material change), so both get a row.
+  "terrain.snow": terrainSnowEnabled,
+  "terrain.snowSpindrift": () => terrainSnowEnabled() && terrainSnowSpindriftEnabled(),
+  "terrain.snowSparkle": () => terrainSnowEnabled() && terrainSnowSparkleEnabled(),
+  "terrain.snowPrints": () => terrainSnowEnabled() && terrainSnowPrintsEnabled(),
+  "terrain.ice": terrainIceEnabled,
+  "terrain.iceRefraction": () => terrainIceEnabled() && terrainIceRefractionEnabled(),
 });
 
 /**
@@ -600,4 +752,12 @@ export function _resetVfxFlags() {
   _terrainSandStreamersWarn.hit = false;
   _terrainSandDevilsWarn.hit = false;
   _terrainSandSparkleWarn.hit = false;
+  _terrainSnow = _terrainSnowSpindrift = _terrainSnowSparkle = _terrainSnowPrints = undefined;
+  _terrainIce = _terrainIceRefraction = undefined;
+  _terrainSnowWarn.hit = false;
+  _terrainSnowSpindriftWarn.hit = false;
+  _terrainSnowSparkleWarn.hit = false;
+  _terrainSnowPrintsWarn.hit = false;
+  _terrainIceWarn.hit = false;
+  _terrainIceRefractionWarn.hit = false;
 }

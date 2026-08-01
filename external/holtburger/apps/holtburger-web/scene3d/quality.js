@@ -112,6 +112,22 @@ export const PRESETS = {
         terrainSandDevilCount: 0,
         terrainSandSparkle: false,
         terrainSandRadius: 32,
+        // Terrain SNOW/ICE (Wave 2A, plan §3.4). TWO masters — `terrainSnow`
+        // (spindrift + sparkle + prints) and `terrainIce` (the codes-2/27
+        // material treatment) — because one is particles+shader and the other
+        // is a material change, and bisecting them separately is the point.
+        // Both ship false on every tier (§5.9); `low` is additionally `null` in
+        // the plan's tier table, so every knob here is 0/false and even
+        // `?terrainSnow=on` at low renders nothing. Neither boolean is in
+        // BOOL_FLAGS (parseBool would widen the exact-`on` opt-in their readers
+        // require); the two NUMERIC knobs are safe in INT/FLOAT_FLAGS.
+        terrainSnow: false,
+        terrainSnowSpindriftCount: 0,
+        terrainSnowSparkle: false,
+        terrainSnowPrints: false,
+        terrainSnowRadius: 32,
+        terrainIce: false,
+        terrainIceRefraction: false,
         maxParticlesPerEmitter: 64,
     },
     mid: {
@@ -176,6 +192,17 @@ export const PRESETS = {
         terrainSandDevilCount: 0,
         terrainSandSparkle: true,
         terrainSandRadius: 48,
+        // Terrain SNOW/ICE — see the `low` tier. plan §3.4
+        // "mid {sparkle:true, spindrift:0, prints:false}": the sparkle is the
+        // WHOLE mid tier. Prints are off because POM is off at mid, so a print
+        // would degrade to darkening-only — coherent, but not worth the RT.
+        terrainSnow: false,
+        terrainSnowSpindriftCount: 0,
+        terrainSnowSparkle: true,
+        terrainSnowPrints: false,
+        terrainSnowRadius: 48,
+        terrainIce: false,
+        terrainIceRefraction: false,
         maxParticlesPerEmitter: 256,
     },
     high: {
@@ -223,6 +250,16 @@ export const PRESETS = {
         terrainSandDevilCount: 1,
         terrainSandSparkle: true,
         terrainSandRadius: 64,
+        // Terrain SNOW/ICE — see the `low` tier. plan §3.4
+        // "high {sparkle:true, spindrift:1200, prints:true}". Prints need POM,
+        // which is high/ultra only.
+        terrainSnow: false,
+        terrainSnowSpindriftCount: 1200,
+        terrainSnowSparkle: true,
+        terrainSnowPrints: true,
+        terrainSnowRadius: 64,
+        terrainIce: false,
+        terrainIceRefraction: false,
         maxParticlesPerEmitter: 1024,
     },
     ultra: {
@@ -267,6 +304,16 @@ export const PRESETS = {
         terrainSandDevilCount: 2,
         terrainSandSparkle: true,
         terrainSandRadius: 80,
+        // Terrain SNOW/ICE — see the `low` tier. plan §3.4
+        // "ultra {sparkle:true, spindrift:2500, prints:true, iceRefraction:true}".
+        // 2500 = 50², already a perfect square, so the pool rounds nothing.
+        terrainSnow: false,
+        terrainSnowSpindriftCount: 2500,
+        terrainSnowSparkle: true,
+        terrainSnowPrints: true,
+        terrainSnowRadius: 80,
+        terrainIce: false,
+        terrainIceRefraction: true,
         maxParticlesPerEmitter: 2048,
     },
 };
@@ -319,6 +366,11 @@ const INT_FLAGS = new Set([
     // reason (their readers require an exact `=== "on"`).
     "terrainSandStreamerCount",
     "terrainSandDevilCount",
+    // Terrain SNOW (Wave 2A). Count only — `terrainSnow`, `terrainSnowSparkle`,
+    // `terrainSnowPrints`, `terrainIce` and `terrainIceRefraction` are absent
+    // from BOOL_FLAGS for the `gfxRelief` reason (their readers require an
+    // exact `=== "on"`).
+    "terrainSnowSpindriftCount",
 ]);
 
 // Float-typed flags.
@@ -329,6 +381,9 @@ const FLOAT_FLAGS = new Set([
     "terrainTrailFade",
     // Terrain SAND (Wave 1B) — streamer-field half-extent in metres.
     "terrainSandRadius",
+    // Terrain SNOW (Wave 2A) — spindrift-field half-extent in metres.
+    // (`?terrainSnowSlope` is URL-ONLY, like `?terrainGrassDensity`.)
+    "terrainSnowRadius",
 ]);
 
 function parseBool(raw) {
