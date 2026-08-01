@@ -772,6 +772,185 @@ export function terrainVolcanoRadiusM() {
   return _terrainNum("terrainVolcanoRadius", "terrainVolcanoRadius", 160, 8, 1024);
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN SWAMP / MARSH (Wave 3A — plan §3.5). Terrain code 4
+// (`MarshSparseSwamp`) = FAM_SWAMP; code 23 (`SeaSlime`) joins it ONLY under
+// `?strictWaterCodes` (plan §3.8.3 — 23 is WATER by default and the water agent
+// owns it). Both are DERIVED from `terrain_families.js`, never listed here.
+//
+// SIX booleans, one family master + five effects, ALL strict exact-match
+// opt-ins that ship OFF (plan §2.4/§5.9), all kept out of `quality.js
+// BOOL_FLAGS` for the `gfxRelief` reason. Composition:
+//     ground fog = terrainSwampEnabled() && terrainGroundFogEnabled()
+//     marsh gas  = terrainSwampEnabled() && terrainMarshGasEnabled()
+//     wisps      = marsh gas             && terrainMarshWispsEnabled()
+//     fireflies  = terrainSwampEnabled() && terrainSwampFirefliesEnabled()
+//     midges     = terrainSwampEnabled() && terrainSwampMidgesEnabled()
+//
+// ⚠ `?terrainGroundFog` IS THE SHARED NAME, deliberately (plan §3.5 item 3:
+// "new shared `scene3d/ground_fog.js`", flag "`?terrainGroundFog` (shared with
+// snow/volcano)"). It is NOT `terrainSwampFog`. Today only the swamp master
+// composes it; a later snow or volcano arm adds
+// `terrainSnowEnabled() && terrainGroundFogEnabled()` alongside without
+// renaming the flag or re-documenting it — exactly the precedent
+// `?terrainHaze` set in wave 2B.
+//
+// ⚠ FIREFLIES ARE NOT A SECOND FIREFLY SYSTEM (plan §3.5 item 1). The existing
+// `?foliageFireflies` flag still owns the CANOPY emitters and is untouched;
+// `?terrainSwampFireflies` gates a terrain ANCHOR SOURCE for the SAME
+// registered behaviour (`vfx/components/terrainSwampAmbient.js` calls
+// `foliageFireflies.emit()`). The two flags are independent on purpose: a
+// player can have canopy fireflies without marsh ones and vice versa.
+// ---------------------------------------------------------------------------
+
+let _terrainSwamp;
+const _terrainSwampWarn = { hit: false };
+/** `?terrainSwamp=on` — THE family master for SWAMP/MARSH (ground fog + marsh
+ *  gas + the firefly/midge terrain anchors; plan §3.5). STRICT exact-match
+ *  opt-in; absent ⇒ the quality preset's `terrainSwamp`, **false on all four
+ *  tiers** this wave (§5.9 ship-OFF; the promotion target is high/ultra true). */
+export function terrainSwampEnabled() {
+  if (_terrainSwamp !== undefined) return _terrainSwamp;
+  const r = _terrainStrictFlag("terrainSwamp", "terrainSwamp", false, _terrainSwampWarn);
+  return r.memo ? (_terrainSwamp = r.value) : r.value;
+}
+
+let _terrainGroundFog;
+const _terrainGroundFogWarn = { hit: false };
+/** `?terrainGroundFog=on` — the SHARED camera-centred ring of soft
+ *  camera-facing fog cards (`scene3d/ground_fog.js`), anchored 0.2..1.5 m over
+ *  the sampled ground so it clings in hollows. Composed with the family master.
+ *  Absent ⇒ ON wherever the tier's `terrainGroundFogCount` is non-zero (low 0 ⇒
+ *  off), the same shape `terrainSandStreamers` uses. */
+export function terrainGroundFogEnabled() {
+  if (_terrainGroundFog !== undefined) return _terrainGroundFog;
+  const raw = _strFlag("terrainGroundFog");
+  if (raw === "on") return (_terrainGroundFog = true);
+  if (raw === "off") return (_terrainGroundFog = false);
+  if (raw !== null && !_terrainGroundFogWarn.hit) {
+    _terrainGroundFogWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainGroundFog] ignoring ?terrainGroundFog=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainGroundFog=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainGroundFog = Number(flags.terrainGroundFogCount) > 0);
+}
+
+let _terrainMarshGas;
+const _terrainMarshGasWarn = { hit: false };
+/** `?terrainMarshGas=on` — landblock-scoped stationary bubble vents at
+ *  hash-stable positions on the LB's swamp cells (≤ the tier's
+ *  `terrainMarshGasCount` per LB), synthesized through the EXISTING particle
+ *  system and owned through the owner registry. **Adds no light** (§5.2).
+ *  Absent ⇒ ON wherever the tier's `terrainMarshGasCount` is non-zero
+ *  (low/mid 0 ⇒ off). */
+export function terrainMarshGasEnabled() {
+  if (_terrainMarshGas !== undefined) return _terrainMarshGas;
+  const raw = _strFlag("terrainMarshGas");
+  if (raw === "on") return (_terrainMarshGas = true);
+  if (raw === "off") return (_terrainMarshGas = false);
+  if (raw !== null && !_terrainMarshGasWarn.hit) {
+    _terrainMarshGasWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainMarshGas] ignoring ?terrainMarshGas=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainMarshGas=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainMarshGas = Number(flags.terrainMarshGasCount) > 0);
+}
+
+let _terrainMarshWisps;
+const _terrainMarshWispsWarn = { hit: false };
+/** `?terrainMarshWisps=on` — the rare ~2 s ignition over a marsh-gas vent: a
+ *  FINITE additive-sprite emitter on a long host timer (never a PointLight —
+ *  §5.2). Composed with `terrainMarshGas`, because a wisp is an ignition OF the
+ *  gas: with no vents there is nothing to light. Absent ⇒ the tier's
+ *  `terrainMarshWisps` (**ultra only**, per plan §3.5). */
+export function terrainMarshWispsEnabled() {
+  if (_terrainMarshWisps !== undefined) return _terrainMarshWisps;
+  const r = _terrainStrictFlag("terrainMarshWisps", "terrainMarshWisps", false, _terrainMarshWispsWarn);
+  return r.memo ? (_terrainMarshWisps = r.value) : r.value;
+}
+
+let _terrainSwampFireflies;
+const _terrainSwampFirefliesWarn = { hit: false };
+/** `?terrainSwampFireflies=on` — the TERRAIN ANCHOR SOURCE for the existing
+ *  `particle.foliageFireflies` behaviour: FAM_SWAMP landblocks emit the same
+ *  registered firefly emitter from the GROUND at night, marsh-green (an
+ *  additive green sprite) and lower-drifting. **This is not a second firefly
+ *  system** (plan §3.5 item 1) — `?foliageFireflies` still independently owns
+ *  the canopy anchors and the shared `firefliesGate` still decides night/season
+ *  for both. Absent ⇒ the tier's `terrainSwampFireflies` (false on low, true on
+ *  mid/high/ultra). */
+export function terrainSwampFirefliesEnabled() {
+  if (_terrainSwampFireflies !== undefined) return _terrainSwampFireflies;
+  const r = _terrainStrictFlag("terrainSwampFireflies", "terrainSwampFireflies", false, _terrainSwampFirefliesWarn);
+  return r.memo ? (_terrainSwampFireflies = r.value) : r.value;
+}
+
+let _terrainSwampMidges;
+const _terrainSwampMidgesWarn = { hit: false };
+/** `?terrainSwampMidges=on` — the terrain anchor source for the existing
+ *  `particle.foliagePollen` behaviour, swamp-tinted (a small ALPHA mote, not a
+ *  glow) with a tighter orbit: a midge column over the marsh. Same reuse
+ *  contract as the fireflies above, same shared `pollenGate`. Absent ⇒ the
+ *  tier's `terrainSwampMidges` (false on low, true on mid/high/ultra). */
+export function terrainSwampMidgesEnabled() {
+  if (_terrainSwampMidges !== undefined) return _terrainSwampMidges;
+  const r = _terrainStrictFlag("terrainSwampMidges", "terrainSwampMidges", false, _terrainSwampMidgesWarn);
+  return r.memo ? (_terrainSwampMidges = r.value) : r.value;
+}
+
+/** `?terrainGroundFogCount` — fog cards in the ring. Preset key
+ *  `terrainGroundFogCount` (low 0 / mid 8 / high 16 / ultra 24 — plan §3.5's
+ *  tier table verbatim). ⚠ The scatter pool rounds the request UP to a perfect
+ *  square, so 8 becomes 9 and 24 becomes 25; `groundFog.count` is
+ *  authoritative. An `INT_FLAGS` quality override — it cannot turn the family
+ *  on. Fallback 16 = the `high` tier. */
+export function terrainGroundFogCount() {
+  return Math.round(_terrainNum("terrainGroundFogCount", "terrainGroundFogCount", 16, 0, 256));
+}
+
+/** `?terrainGroundFogRadius` — HALF-extent (metres) of the fog ring; the ring
+ *  covers 2× this and fades over the outer 35 %. Preset key
+ *  `terrainGroundFogRadius` (low 32 / mid 40 / high 56 / ultra 72). Fallback
+ *  56 m = the `high` tier. */
+export function terrainGroundFogRadiusM() {
+  return _terrainNum("terrainGroundFogRadius", "terrainGroundFogRadius", 56, 8, 512);
+}
+
+/** `?terrainGroundFogSoftness` — the soft-particle fade band in METRES for the
+ *  fog's depth-buffer read. **0 (the default) leaves the depth read OFF.**
+ *
+ *  ⚠ URL-ONLY on purpose, and 0 by default on purpose — this is not timidity,
+ *  it is the feedback-loop rule. The only scene-depth texture the client owns
+ *  (`atmosphere_pipeline.js`'s `sceneDepthTexture`) is attached to BOTH composer
+ *  ping-pong targets, i.e. it is the LIVE depth attachment while the world pass
+ *  the fog cards draw in is running; sampling it from that pass is a
+ *  framebuffer feedback loop and ANGLE may reject the draw. The soft-particle
+ *  path is fully implemented and tested in `scene3d/ground_fog.js` (log-depth
+ *  decode + NEAREST + a sentinel-aware threshold, all three mandated by plan
+ *  trap T4 and `OPTICAL_EFFECTS_HANDOFF.md`), and this knob is how the 1070
+ *  eye-test adjudicates it. Like `?terrainGrassDensity` and `?terrainSnowSlope`
+ *  it carries NO preset key, so no tier can turn it on behind your back.
+ *  Clamped 0..64. */
+export function terrainGroundFogSoftnessM() {
+  return _numFlag("terrainGroundFogSoftness", 0, 0, 64);
+}
+
+/** `?terrainMarshGasCount` — bubble vents per swamp landblock. Preset key
+ *  `terrainMarshGasCount` (low 0 / mid 0 / high 2 / ultra 3). Each vent takes a
+ *  distinct FAM_SWAMP vertex. An `INT_FLAGS` quality override — it cannot turn
+ *  the family on. Fallback 2 = the `high` tier. */
+export function terrainMarshGasCount() {
+  return Math.round(_terrainNum("terrainMarshGasCount", "terrainMarshGasCount", 2, 0, 8));
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -842,6 +1021,21 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.volcanoHaze": () => terrainVolcanoEnabled() && terrainHazeEnabled(),
   "terrain.volcanoEmbers": () => terrainVolcanoEnabled() && terrainEmbersEnabled(),
   "terrain.volcanoCrackGlow": () => terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
+  // Terrain SWAMP / MARSH (Wave 3A, plan §3.5) — same contract again: strict
+  // ship-OFF opt-ins that do NOT track visualAllEffects(), so `?visual=all`
+  // does not light them and the DEFAULT-ON count stays 14. Three of these rows
+  // are also the REGISTERED COMPONENT IDS of
+  // `vfx/components/terrainSwampAmbient.js` (`terrain.swampFireflies`,
+  // `terrain.swampMidges`, `terrain.marshGas`), which is what makes
+  // `vfxEffectEnabled(component.id)` resolve for them.
+  // ⚠ `terrain.swampFireflies` is a SECOND ANCHOR for the SAME registered
+  // firefly behaviour, not a second effect: `particle.foliageFireflies` above
+  // still independently gates the canopy anchors and is untouched.
+  "terrain.swamp": terrainSwampEnabled,
+  "terrain.groundFog": () => terrainSwampEnabled() && terrainGroundFogEnabled(),
+  "terrain.marshGas": () => terrainSwampEnabled() && terrainMarshGasEnabled(),
+  "terrain.swampFireflies": () => terrainSwampEnabled() && terrainSwampFirefliesEnabled(),
+  "terrain.swampMidges": () => terrainSwampEnabled() && terrainSwampMidgesEnabled(),
 });
 
 /**
@@ -888,4 +1082,12 @@ export function _resetVfxFlags() {
   _terrainHazeWarn.hit = false;
   _terrainEmbersWarn.hit = false;
   _terrainCrackGlowWarn.hit = false;
+  _terrainSwamp = _terrainGroundFog = _terrainMarshGas = _terrainMarshWisps = undefined;
+  _terrainSwampFireflies = _terrainSwampMidges = undefined;
+  _terrainSwampWarn.hit = false;
+  _terrainGroundFogWarn.hit = false;
+  _terrainMarshGasWarn.hit = false;
+  _terrainMarshWispsWarn.hit = false;
+  _terrainSwampFirefliesWarn.hit = false;
+  _terrainSwampMidgesWarn.hit = false;
 }
