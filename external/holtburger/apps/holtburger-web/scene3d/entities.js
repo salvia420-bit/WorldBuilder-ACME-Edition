@@ -14361,6 +14361,25 @@ export class EntityManager {
       // SoundTable — payload is a Sound enum. Resolve via the entity's
       // SoundTable to get a Wave DID + per-row volume.
       const soundEnum = hook.soundEnum >>> 0;
+      // Terrain-VFX Wave 3B (plan §3.7 item 1) — FOOTFALL NOTIFY. The plan asks
+      // the DIRT/MUD family to "hang off the existing footstep-audio trigger
+      // rather than re-deriving contact from velocity", and this hook IS that
+      // trigger: `Sound.Footstep1 = 0x37` / `Sound.Footstep2 = 0x38`
+      // (ACE.Entity/Enum/Sound.cs), fired by the animation timeline at the frame
+      // the foot lands. It is notified BEFORE the SoundTable guards below on
+      // purpose — a puff is a ground-contact event, not an audio one, so a muted
+      // session or an entity with no SoundTable must still kick up dust.
+      // `pos` is `inst.root.position`, i.e. the RAW AC frame (+Z up) the terrain
+      // oracle wants; no acToThree here (that transform belongs to the panner).
+      // The listener property is installed ONLY by
+      // `scene3d/terrain_dirt.js::installFootfallHook` under `?terrainDirt=on`,
+      // so with the family off this is one `typeof undefined` test.
+      if (soundEnum === 0x37 || soundEnum === 0x38) {
+        const onFootfall = this.scene3d?.onTerrainFootfall;
+        if (typeof onFootfall === "function") {
+          try { onFootfall(inst.guid >>> 0, pos.x, pos.y, pos.z); } catch (_) { /* never break audio */ }
+        }
+      }
       if (soundEnum === 0 || !cache || !audioMgr) return;
       let stbDid = inst.soundTableDid >>> 0;
       // WS12 (2026-07-12): mirror the 0xF750 GMSound + wasm-spawn local-player

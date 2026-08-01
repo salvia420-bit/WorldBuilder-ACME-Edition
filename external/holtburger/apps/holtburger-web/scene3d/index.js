@@ -165,6 +165,14 @@ import { initTerrainSnow } from "./terrain_snow.js";
 // `initTerrainVolcano` returns null (registering nothing) unless
 // `?terrainVolcano=on`.
 import { initTerrainVolcano } from "./terrain_volcano.js";
+// Terrain DIRT/MUD family (Wave 3B, plan §3.7) — footfall dust puffs + mud
+// prints + the dry dust haze. The mud dent/darkening and the wet-mud sheen are
+// terrain fragment-shader terms and need no import here; the puff trigger is the
+// `Sound.Footstep1/2` animation hook in `entities.js`, which calls the
+// `scene3d.onTerrainFootfall` property THIS module installs. Same injected-THREE
+// contract as the spine. `initTerrainDirt` returns null (registering nothing)
+// unless `?terrainDirt=on`.
+import { initTerrainDirt } from "./terrain_dirt.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
 
@@ -3562,6 +3570,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainVolcano] initTerrainVolcano threw (volcano VFX disabled):", e);
+  }
+  // ── Terrain DIRT/MUD family (Wave 3B, plan §3.7) ──────────────────────
+  // Registers up to four camera-scoped providers (the shared per-frame state
+  // read; the footfall puff ring buffer; the mud-print stamp + the per-frame
+  // trail/wetness uniform push onto scene3d.terrainMaterials; the dry-dust-haze
+  // scatter field) and installs `onTerrainFootfall` on every facade so the
+  // existing footstep-audio hook in `entities.js` can throw a puff. The mud dent
+  // + darkening and the wet-mud sheen are terrain fragment-shader terms baked
+  // into the material by `resolveTerrainRingOpts`, so they need no wiring here.
+  // Returns null — registering nothing, allocating nothing, installing no facade
+  // property — unless `?terrainDirt=on` (the family master ships OFF on every
+  // tier, plan §5.9), so a bare-default boot is byte-identical.
+  try {
+    const dirtSurface = initTerrainDirt({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+      globals: VFX_GLOBALS,
+      readEnv: readParticleEnv,
+    });
+    if (dirtSurface && typeof window !== "undefined") window.__terrainDirt = dirtSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainDirt] initTerrainDirt threw (dirt/mud VFX disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees
