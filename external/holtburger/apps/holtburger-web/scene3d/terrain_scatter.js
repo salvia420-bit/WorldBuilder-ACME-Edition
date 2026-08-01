@@ -57,6 +57,13 @@
 // CONSUMER's shader applies the blend. The pool builds no material and injects
 // no GLSL — `SCATTER_FADE_GLSL` at the bottom is an OPTIONAL copy-in helper so
 // grass and sand fade identically, not something this module installs.
+//   Pass `opts.uniforms` — the bag the consumer's ShaderMaterial was built with
+//   — and the pool publishes INTO it instead of minting its own. That is the
+//   wave-1B rough edge (handoff §6): a consumer must build its material BEFORE
+//   the pool (the pool needs the material to build the mesh), so without the
+//   in-parameter it had to construct placeholder uniforms and re-point them
+//   afterwards. `opts.randSalt` is the other one — it decorrelates
+//   `ctx.rand(channel)` between two pools that share a seed AND a world cell.
 //
 // INJECTED THREE (the `trail_map.js` / `particle_attach.js` idiom). This module
 // imports nothing. `createScatterPool({ THREE, ... })` takes THREE as an
@@ -221,6 +228,22 @@ function _num(v, fallback, lo, hi) {
  * @param {object|Function} [opts.oracle] the terrain oracle, or a GETTER
  *   returning it. Use the getter form with `terrain_vfx.js`: `ctx.oracle` is a
  *   LIVE getter there and must never be stashed.
+ * @param {object} [opts.uniforms]     an EXISTING uniform bag to publish the four
+ *   distance-blend uniforms into, instead of the pool minting its own. Wave-1B
+ *   rough edge (handoff §6): a consumer must build its `ShaderMaterial` BEFORE
+ *   the pool (the pool needs the material to build the mesh), which used to
+ *   force the placeholder-then-repoint dance in `terrain_sand.js`. Pass the bag
+ *   the material was constructed with and the pool ADOPTS whatever entries are
+ *   already there (writing only `.value`), so the shader has held the live
+ *   objects since compile time (plan §5.6 — bind by reference, never a copy).
+ *   Entries the bag does not carry are created here as before. Returned as
+ *   `pool.uniforms`, so an omitted bag behaves exactly as it always did.
+ * @param {number} [opts.randSalt]     decorrelates `ctx.rand(channel)` between
+ *   two pools that share a seed AND a world cell (handoff §6). Placement —
+ *   which cell a slot owns and the in-cell jitter — is deliberately NOT salted:
+ *   it stays a pure function of (world cell, seed) so two pools can still be
+ *   made to interleave on purpose. Default 0 ⇒ byte-identical to a pool that
+ *   never heard of it.
  * @param {number} [opts.count]        requested instances (rounded up square).
  * @param {number} [opts.radiusM]
  * @param {number} [opts.sliceSize]    max re-scatters per update().
@@ -275,6 +298,12 @@ export function createScatterPool(opts = {}) {
   const jitter = _num(opts.jitter, SCATTER_DEFAULTS.jitter, 0, 1);
   const shape = opts.shape === "square" ? "square" : "disc";
   const seed = (Number.isFinite(opts.seed) ? opts.seed : SCATTER_DEFAULTS.seed) | 0;
+  // Per-pool salt for the `ctx.rand` stream ONLY (see the opts doc). Folded
+  // into a separate seed with the same golden-ratio mix `scatterHashU32`
+  // avalanches, so salt 1 and salt 2 are as decorrelated as two unrelated
+  // seeds; salt 0 leaves `randSeed === seed`, i.e. bit-identical to Wave 1.
+  const randSalt = (Number.isFinite(opts.randSalt) ? opts.randSalt : 0) | 0;
+  const randSeed = randSalt === 0 ? seed : (seed ^ Math.imul(randSalt, 0x9e3779b9)) | 0;
   const heightOffsetM = _num(opts.heightOffsetM, SCATTER_DEFAULTS.heightOffsetM, -4096, 4096);
   const teleportJumpM = _num(opts.teleportJumpM, SCATTER_DEFAULTS.teleportJumpM, 1, 1e9);
   const maxUpdateRuns = Math.max(1, Math.round(_num(opts.maxUpdateRuns, SCATTER_DEFAULTS.maxUpdateRuns, 1, 64)));
@@ -415,15 +444,42 @@ export function createScatterPool(opts = {}) {
   }
 
   // --- uniforms, bound BY REFERENCE by the consumer (plan §5.6) -----------
-  const centerVec = THREE && typeof THREE.Vector3 === "function"
-    ? new THREE.Vector3(0, 0, 0)
-    : { x: 0, y: 0, z: 0 };
-  const uniforms = {
-    uScatterCenter: { value: centerVec },                        // AC world x,y,z
-    uScatterRadius: { value: radiusM },
-    uScatterFadeStart: { value: radiusM * (1 - fadeFraction) },
-    uScatterShape: { value: shape === "square" ? 1 : 0 },
-  };
+  //
+  // ADOPT-OR-MINT. `opts.uniforms`, when given, is the bag the consumer already
+  // handed to its ShaderMaterial (handoff §6): every entry it already carries is
+  // kept and only its `.value` is written, so the compiled shader has been
+  // holding the pool's live objects since before the pool existed. Anything
+  // missing is minted here exactly as it always was. With no bag this is the
+  // Wave-1 code path verbatim.
+  const uniforms = (opts.uniforms && typeof opts.uniforms === "object")
+    ? opts.uniforms
+    : {};
+  function _adopt(name, mint) {
+    const cur = uniforms[name];
+    if (cur && typeof cur === "object" && "value" in cur) return cur;
+    const slot = { value: mint() };
+    uniforms[name] = slot;
+    return slot;
+  }
+  const centerSlot = _adopt("uScatterCenter", () => (
+    THREE && typeof THREE.Vector3 === "function"
+      ? new THREE.Vector3(0, 0, 0)
+      : { x: 0, y: 0, z: 0 }
+  ));
+  // An adopted centre may have arrived as a bare `{value: null}` placeholder —
+  // give it a vector rather than silently never publishing the centre.
+  if (!centerSlot.value || typeof centerSlot.value !== "object") {
+    centerSlot.value = THREE && typeof THREE.Vector3 === "function"
+      ? new THREE.Vector3(0, 0, 0)
+      : { x: 0, y: 0, z: 0 };
+  }
+  const centerVec = centerSlot.value;
+  // The three scalars are pool-OWNED config: an adopted slot is re-pointed to
+  // this pool's values, because a stale radius in the shader is the exact bug
+  // the in-parameter exists to remove.
+  _adopt("uScatterRadius", () => radiusM).value = radiusM;
+  _adopt("uScatterFadeStart", () => 0).value = radiusM * (1 - fadeFraction);
+  _adopt("uScatterShape", () => 0).value = shape === "square" ? 1 : 0;
 
   const state = {
     name,
@@ -534,9 +590,11 @@ export function createScatterPool(opts = {}) {
     /** raw buffers + this instance's base index into each */
     arrays,
     offsets,
-    /** deterministic per-instance [0,1) stream; `channel` is any small int */
+    /** deterministic per-instance [0,1) stream; `channel` is any small int.
+     *  Salted per pool via `opts.randSalt` so two pools sharing a seed and a
+     *  world cell do not draw the same numbers (handoff §6). */
     rand(channel) {
-      return scatterHash01(_ctx.cellX, _ctx.cellY, (channel | 0) + 16, seed);
+      return scatterHash01(_ctx.cellX, _ctx.cellY, (channel | 0) + 16, randSeed);
     },
     /** write up to 4 components into a named attribute for this instance */
     set(attrName, v0, v1, v2, v3) {
@@ -839,6 +897,8 @@ export function createScatterPool(opts = {}) {
       scanBudget,
       fadeFraction,
       seed,
+      randSalt,
+      adoptedUniforms: uniforms === opts.uniforms,
       hasMesh: !!mesh,
       centered: state.centered,
       centerX: state.centerX,
@@ -874,6 +934,7 @@ export function createScatterPool(opts = {}) {
     shape,
     sliceSize,
     seed,
+    randSalt,
     get mesh() { return mesh; },
     uniforms,
     arrays,

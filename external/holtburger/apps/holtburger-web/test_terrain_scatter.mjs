@@ -710,6 +710,98 @@ console.log("\n-- L11: the optional GLSL fade helper --");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L12: opts.uniforms in-parameter (wave-1 handoff §6) --");
+{
+  // The consumer builds its ShaderMaterial FIRST (it has to — the pool needs a
+  // material to build the mesh), so the bag it passes must be the one the pool
+  // publishes into: same object identity, live values, no re-point dance.
+  const bag = {
+    uScatterCenter: { value: new THREE.Vector3(0, 0, 0) },
+    uScatterRadius: { value: -1 },
+    uScatterFadeStart: { value: -1 },
+    uScatterShape: { value: 7 },
+  };
+  const centreObj = bag.uScatterCenter.value;
+  const p = createScatterPool({
+    count: 64, radiusM: 40, fadeFraction: 0.25, shape: "square",
+    uniforms: bag,
+    oracle: makeStubOracle(),
+  });
+  check("pool.uniforms IS the bag the consumer passed (no copy)", p.uniforms === bag);
+  check("every slot object survived (the shader bound them at compile time)",
+    p.uniforms.uScatterCenter === bag.uScatterCenter
+    && p.uniforms.uScatterRadius === bag.uScatterRadius
+    && p.uniforms.uScatterFadeStart === bag.uScatterFadeStart
+    && p.uniforms.uScatterShape === bag.uScatterShape);
+  check("the centre VECTOR object is adopted too, not replaced",
+    p.uniforms.uScatterCenter.value === centreObj);
+  check("the pool re-points the three scalars to ITS config (a stale radius in "
+    + "the shader is the bug the in-parameter exists to remove)",
+    bag.uScatterRadius.value === 40 && bag.uScatterFadeStart.value === 30
+    && bag.uScatterShape.value === 1);
+  p.update(0.016, 500, 500, 12);
+  check("re-centring writes through the adopted vector",
+    centreObj.x === 500 && centreObj.y === 500);
+  check("stats report the adoption", p.stats().adoptedUniforms === true);
+
+  // A partially-filled bag: missing entries are minted, present ones adopted.
+  const partial = { uScatterRadius: { value: 0 } };
+  const p2 = createScatterPool({ count: 16, radiusM: 12, uniforms: partial });
+  check("a partial bag is completed in place",
+    p2.uniforms === partial && partial.uScatterRadius.value === 12
+    && partial.uScatterCenter && typeof partial.uScatterCenter.value === "object"
+    && partial.uScatterFadeStart && partial.uScatterShape);
+
+  // Omitted ⇒ the wave-1 behaviour, verbatim.
+  const p3 = createScatterPool({ count: 16, radiusM: 12 });
+  check("an omitted bag still mints all four (wave-1 behaviour unchanged)",
+    ["uScatterCenter", "uScatterRadius", "uScatterFadeStart", "uScatterShape"]
+      .every((n) => p3.uniforms[n] && "value" in p3.uniforms[n])
+    && p3.stats().adoptedUniforms === false);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- L12b: opts.randSalt decorrelates two pools on one cell --");
+{
+  // Two pools, SAME seed, SAME window: without a salt they draw identical
+  // numbers for the same cell (that is the documented wave-1 behaviour and the
+  // reason the salt exists), with a salt they do not — while PLACEMENT stays
+  // identical, because the salt deliberately does not touch the jitter.
+  function drawsFor(randSalt) {
+    const draws = [];
+    const cells = [];
+    const p = createScatterPool({
+      count: 25, radiusM: 24, seed: 0x1234abcd, randSalt,
+      oracle: makeStubOracle(),
+      attributes: [{ name: "aOffset", itemSize: 3 }, { name: "aScale", itemSize: 2 }],
+      fill(ctx) {
+        draws.push(ctx.rand(0), ctx.rand(1), ctx.rand(5));
+        cells.push(ctx.cellX, ctx.cellY, ctx.x, ctx.y);
+      },
+    });
+    p.rescatterAll(0, 0, 0);
+    return { draws, cells, salt: p.randSalt };
+  }
+  const a = drawsFor(0);
+  const b = drawsFor(0);
+  const c = drawsFor(1);
+  check("salt 0 is the wave-1 stream (two unsalted pools agree)",
+    a.draws.length > 0 && a.draws.every((v, i) => v === b.draws[i]));
+  check("pool.randSalt reports the salt", a.salt === 0 && c.salt === 1);
+  check("a salted pool draws DIFFERENT numbers on the same cells",
+    c.draws.length === a.draws.length && c.draws.some((v, i) => v !== a.draws[i]));
+  check("… on EVERY channel (not just one)",
+    [0, 1, 2].every((ch) => {
+      for (let i = ch; i < a.draws.length; i += 3) if (a.draws[i] !== c.draws[i]) return true;
+      return false;
+    }));
+  check("PLACEMENT is untouched by the salt (cells + jittered points identical)",
+    a.cells.length === c.cells.length && a.cells.every((v, i) => v === c.cells[i]));
+  check("the salted stream is still deterministic (pure in cell + seed + salt)",
+    drawsFor(1).draws.every((v, i) => v === c.draws[i]));
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- source-level invariants (plan §5) --");
 {
   const src = await (await import("node:fs/promises")).readFile("./scene3d/terrain_scatter.js", "utf8");
