@@ -13,12 +13,14 @@
 // "function"`, which is ALWAYS false, so `drainMotionActions` /
 // `drainMotionAxes` returned on their first line every frame and the two
 // documented DEFAULT-ON flags had never executed in production. That silently
-// dropped, among other things, every non-newest windup gesture of a PK
+// dropped, among other things, every windup gesture but one of a PK
 // ("FastTick") caster: ACE packs the whole `spell.Formula.WindupGestures` list
 // into ONE UpdateMotion's `commands` vector (Player_Magic.cs:645
 // `EnqueueMotionAction` → WorldObject_Networking.cs:1231-1273) and the wasm main
-// path emits only the NEWEST of them as KIND_MOTION_ACTION
-// (src/lib.rs:45716-45737) — every earlier windup is routed to this drain.
+// path emits only the FIRST of them as KIND_MOTION_ACTION — every LATER windup
+// is routed to this drain, in wire order (HANDOFF-1070-vistest-2026-08-01 §A6;
+// the Rust ordering contract is pinned by `cargo test -p holtburger-web
+// tests_windup_action_order`).
 //
 // The fix resolves the free function off `scene3d.wasmExports` (the same
 // typeof-guarded namespace-rider bag every other module-level wasm export rides

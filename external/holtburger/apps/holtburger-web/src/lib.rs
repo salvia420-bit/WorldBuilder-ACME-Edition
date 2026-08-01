@@ -40482,10 +40482,49 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// HANDOFF-1070-vistest-2026-08-01 §A6 — build the flat side-channel rows for
+/// ONE `UpdateMotion`'s action `commands` list, 4 u32 per queued action
+/// (`[guid, command_low, packed_sequence, stance]`), in WIRE ORDER.
+///
+/// `main_path_sequence` is the 15-bit sequence of the item the main
+/// `KIND_MOTION_ACTION` emit already owns (`EntityMotionSnapshot::
+/// action_sequence` — the HEAD of the run since the §A6 fix). It is skipped
+/// here so the two paths never double-play the same swing/eat; every other
+/// item keeps its wire position. Because JS drains this queue AFTER the
+/// entity-update drain that plays the main-path action
+/// (`scene3d/loop.js:2194` then `:2198`), "head on the main path + the rest
+/// in wire order" reproduces ACE's `spell.Formula.WindupGestures` order
+/// exactly: first scarab raises first.
+///
+/// Split out of the wasm arm below purely so the FIFO contract is
+/// host-testable (`cargo test -p holtburger-web`), using the same
+/// `cfg(any(target_arch = "wasm32", test))` convention as the other
+/// natively-exercised helpers in this crate.
+#[cfg(any(target_arch = "wasm32", test))]
+fn motion_action_queue_rows(
+    commands: &[holtburger_protocol::messages::movement::MotionItem],
+    main_path_sequence: Option<u16>,
+    guid: u32,
+    stance: u32,
+) -> Vec<u32> {
+    let mut rows = Vec::with_capacity(commands.len() * 4);
+    for item in commands {
+        if Some(item.sequence()) == main_path_sequence {
+            continue;
+        }
+        rows.push(guid);
+        rows.push(u32::from(item.command.raw()));
+        rows.push(u32::from(item.packed_sequence));
+        rows.push(stance);
+    }
+    rows
+}
+
 /// Multi-action queue (2026-06-06) — drain the queued Action-class motion
 /// commands as a flat `Vec<u32>`, 4 per action: `[guid, command_low,
 /// packed_sequence, stance]`. JS: `for (let i = 0; i < a.length; i += 4) {…}`.
 /// Empty in the steady state (most UpdateMotions carry no action list).
+/// Drain is `mem::take` — enqueue order is preserved end to end (§A6).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = pollMotionActions)]
 pub fn poll_motion_actions() -> Vec<u32> {
@@ -45591,8 +45630,9 @@ async fn recv_loop(
                             // local eat/drink B6, emote/gesture) that the
                             // locomotion `motion_command` emit above DROPS
                             // (`forward_command` and the action list are
-                            // independent slots on the wire). Surface the NEWEST
-                            // Action-class command — already EXPANDED to its full
+                            // independent slots on the wire). Surface the FIRST
+                            // (wire-order) Action-class command — §A6; already
+                            // EXPANDED to its full
                             // 32-bit `MotionCommand` by the shared Wave-2 expander
                             // (the MotionTable link inner key is the full value,
                             // C3) — as a dedicated `KIND_MOTION_ACTION`
@@ -45607,14 +45647,16 @@ async fn recv_loop(
                                 holtburger_world::entity::EntityMotionSnapshot::from_movement_event(
                                     &data,
                                 );
-                            let newest_action = action_snapshot
+                            // §A6: the snapshot's action is the HEAD of the wire
+                            // list, so a multi-scarab windup starts with scarab 1.
+                            let main_path_action = action_snapshot
                                 .and_then(|s| s.action_command.map(|cmd| (cmd, s)));
                             // 15-bit stamp-dedup: only emit when this action's
                             // sequence is NEWER than the last one played for this
                             // guid, so a re-broadcast UpdateMotion doesn't restart
                             // the swing/eat clip. An action with no sequence
                             // (shouldn't happen — the snapshot pairs them) emits.
-                            let action_is_new = match &newest_action {
+                            let action_is_new = match &main_path_action {
                                 Some((_, snap)) => match snap.action_sequence {
                                     Some(seq) => MOTION_ACTION_STAMPS.with(|m| {
                                         let mut m = m.borrow_mut();
@@ -45634,7 +45676,8 @@ async fn recv_loop(
                                 },
                                 None => false,
                             };
-                            if let Some((action_cmd, snap)) = newest_action.filter(|_| action_is_new)
+                            if let Some((action_cmd, snap)) =
+                                main_path_action.filter(|_| action_is_new)
                             {
                                 let action_speed = snap
                                     .action_speed
@@ -45690,14 +45733,15 @@ async fn recv_loop(
                             // `len() > 1` log is the reachability probe (does
                             // vanilla ACE ever pack >=2?).
                             //
-                            // Wave 2 (2026-06-08, C2): the NEWEST Action-class
-                            // command now plays via the `KIND_MOTION_ACTION`
-                            // main path above, so SKIP it here — otherwise the
+                            // Wave 2 (2026-06-08, C2): the main-path Action-class
+                            // command already plays via `KIND_MOTION_ACTION`
+                            // above, so SKIP it here — otherwise the
                             // side-channel (when `?multiAction=on`) and the main
-                            // path would double-play the same swing/eat. The
-                            // newest item is identified by its `(command,
-                            // sequence)`. Remaining items (cosmetic gestures in a
-                            // rare multi-action frame) still queue.
+                            // path would double-play the same swing/eat. That
+                            // item is identified by its 15-bit sequence.
+                            // Remaining items keep their WIRE order (§A6 — the
+                            // multi-scarab windup run), and are appended to the
+                            // FIFO the JS drain reads after the entity drain.
                             #[cfg(target_arch = "wasm32")]
                             {
                                 if let MovementTypeData::Invalid(inv) = &data.data {
@@ -45709,33 +45753,15 @@ async fn recv_loop(
                                             actions.len(),
                                         ));
                                     }
-                                    // C2: the main path owns the newest Action
-                                    // command — identify it so we don't re-queue.
-                                    let newest_seq =
-                                        newest_action.as_ref().map(|(_, s)| s.action_sequence);
-                                    let queueable: Vec<&_> = actions
-                                        .iter()
-                                        .filter(|item| {
-                                            // Skip the item the main path plays:
-                                            // the newest Action-class command,
-                                            // matched on its 15-bit sequence.
-                                            match newest_seq {
-                                                Some(Some(seq)) => item.sequence() != seq,
-                                                _ => true,
-                                            }
-                                        })
-                                        .collect();
-                                    if !queueable.is_empty() {
-                                        let guid = u32::from(data.guid);
-                                        let stance = u32::from(data.current_style);
+                                    let rows = motion_action_queue_rows(
+                                        actions,
+                                        main_path_action.as_ref().and_then(|(_, s)| s.action_sequence),
+                                        u32::from(data.guid),
+                                        u32::from(data.current_style),
+                                    );
+                                    if !rows.is_empty() {
                                         MOTION_ACTIONS.with(|q| {
-                                            let mut b = q.borrow_mut();
-                                            for item in queueable {
-                                                b.push(guid);
-                                                b.push(u32::from(item.command.raw()));
-                                                b.push(u32::from(item.packed_sequence));
-                                                b.push(stance);
-                                            }
+                                            q.borrow_mut().extend_from_slice(&rows);
                                         });
                                     }
                                     // Casting-ingredient axes: surface the remote
@@ -61378,5 +61404,135 @@ mod tests_dat01_scenery_wire {
         assert_eq!(batch.len(), 1);
         assert_eq!(batch.cyl_at(0).radius, world_cyl.radius);
         assert_eq!(batch.rung_counts(), (1, 0));
+    }
+}
+
+// HANDOFF-1070-vistest-2026-08-01 §A6 — remote multi-scarab windup ORDER.
+#[cfg(test)]
+mod tests_windup_action_order {
+    use super::motion_action_queue_rows;
+    use holtburger_common::Guid;
+    use holtburger_protocol::messages::MovementType;
+    use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+    use holtburger_protocol::messages::movement::types::InterpretedMotionState;
+    use holtburger_protocol::messages::movement::{
+        MotionItem, MotionStance, MovementEventData, MovementTypeData,
+    };
+    use holtburger_world::entity::EntityMotionSnapshot;
+
+    const GUID: u32 = 0x5000_00A6;
+    /// MagicPowerUp01..04 (low-16) — the four scarab windup gestures ACE
+    /// pulls out of `spell.Formula.WindupGestures`, in formula order.
+    const SCARABS: [u16; 4] = [0x006F, 0x0070, 0x0071, 0x0072];
+    /// ACE stamps each `MotionItem` with the NEXT motion sequence as it
+    /// writes it (`MotionItem.cs` `PackedCommandExtensions.Write` →
+    /// `GetNextSequence(SequenceType.Motion)`), so wire order is ascending.
+    const SEQS: [u16; 4] = [100, 101, 102, 103];
+
+    fn four_scarab_windup() -> (MovementEventData, Vec<MotionItem>) {
+        let commands: Vec<MotionItem> = SCARABS
+            .iter()
+            .zip(SEQS.iter())
+            .map(|(&cmd, &seq)| MotionItem::new(cmd, seq, false, 2.0))
+            .collect();
+        let event = MovementEventData {
+            guid: Guid(GUID),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::Magic.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state: InterpretedMotionState {
+                    commands: commands.clone(),
+                    ..InterpretedMotionState::default()
+                },
+                sticky_object: None,
+            }),
+        };
+        (event, commands)
+    }
+
+    /// Regression, HANDOFF-1070-vistest-2026-08-01 §A6 ("order may be
+    /// last-first — known Rust follow-up").
+    ///
+    /// A PK/PKLite ("FastTick") caster's multi-scarab spell arrives as ONE
+    /// `UpdateMotion` carrying every windup gesture (ACE
+    /// `Player_Magic.cs:623-645` `DoWindupGestures` →
+    /// `WorldObject_Networking.cs:1231` `EnqueueMotionAction`, which
+    /// `AddCommand`s them in `spell.Formula.WindupGestures` order). The
+    /// renderer plays that frame in two steps — the main-path
+    /// `KIND_MOTION_ACTION` action first (`scene3d/loop.js:2194`
+    /// `drainEntityEvents3D`), then this queue (`:2198`
+    /// `drainMotionActions`) — so the OBSERVED order is
+    /// `[main-path action] ++ [queue rows]`. That concatenation must equal
+    /// the enqueue (wire / formula) order, i.e. the first scarab raises
+    /// first. Before the fix the main path claimed the NEWEST item (the
+    /// LAST scarab), producing last-then-first-second-third.
+    #[test]
+    fn four_scarab_windup_drains_in_enqueue_order() {
+        let (event, commands) = four_scarab_windup();
+        let snapshot = EntityMotionSnapshot::from_movement_event(&event)
+            .expect("a windup-only UpdateMotion still yields a snapshot");
+
+        // The main path claims the HEAD of the run, not the tail.
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x1000_006F),
+            "main path must play the FIRST scarab (MagicPowerUp01)"
+        );
+        assert_eq!(snapshot.action_sequence, Some(SEQS[0]));
+
+        let stance = u32::from(event.current_style);
+        let rows = motion_action_queue_rows(&commands, snapshot.action_sequence, GUID, stance);
+
+        // 3 remaining scarabs × 4 u32 per row.
+        assert_eq!(rows.len(), 12, "the main-path item must be skipped exactly once");
+
+        // Rebuild what the client actually plays this frame: the main-path
+        // action, then the FIFO rows in drain order.
+        let mut played: Vec<u16> = vec![(snapshot.action_command.unwrap() & 0xFFFF) as u16];
+        for row in rows.chunks_exact(4) {
+            assert_eq!(row[0], GUID, "every row carries the caster guid");
+            assert_eq!(row[3], stance, "every row carries the Magic stance");
+            played.push(row[1] as u16);
+        }
+        assert_eq!(
+            played, SCARABS,
+            "wind-ups must play first-scarab-first (§A6), not last-first"
+        );
+
+        // The 15-bit sequences must come out strictly ascending too — that
+        // is what the JS `_actionStamps` newer-than dedup
+        // (`scene3d/loop.js:403` `actionStampIsNewer`) requires, and a
+        // reversed drain would make every queued item look stale.
+        let mut seqs: Vec<u16> = vec![snapshot.action_sequence.unwrap()];
+        for row in rows.chunks_exact(4) {
+            seqs.push((row[2] & 0x7FFF) as u16);
+        }
+        assert_eq!(seqs, SEQS, "played sequences must be ascending");
+    }
+
+    /// The queue is a plain FIFO: with NO main-path item to skip (e.g. a
+    /// list of pure cosmetic gestures the snapshot ignores), every command
+    /// is emitted in wire order.
+    #[test]
+    fn queue_rows_preserve_wire_order_with_no_main_path_item() {
+        let (_, commands) = four_scarab_windup();
+        let rows = motion_action_queue_rows(&commands, None, GUID, 0x49);
+        let played: Vec<u16> = rows.chunks_exact(4).map(|r| r[1] as u16).collect();
+        assert_eq!(played, SCARABS, "no skip ⇒ pure FIFO");
+    }
+
+    /// The single-item case — every swing / eat / emote vanilla ACE sends —
+    /// stays exactly as before: the main path owns it and the side-channel
+    /// queues nothing, so there is no double-play.
+    #[test]
+    fn single_action_frame_queues_nothing() {
+        let commands = vec![MotionItem::new(0x005Bu16, 41, false, 1.0)]; // SlashHigh
+        let rows = motion_action_queue_rows(&commands, Some(41), GUID, 0x3D);
+        assert!(rows.is_empty(), "the main path's own item must not re-queue");
     }
 }

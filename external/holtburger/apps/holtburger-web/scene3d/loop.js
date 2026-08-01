@@ -450,9 +450,18 @@ function resolveMotionPollFn(scene3d, sessionHandle, name) {
 // gesture list: ACE packs every `spell.Formula.WindupGestures` entry into ONE
 // UpdateMotion's `commands` vector (Player_Magic.cs:645 `EnqueueMotionAction`
 // → WorldObject_Networking.cs:1231-1273), and the wasm main path emits only the
-// NEWEST of them as KIND_MOTION_ACTION (src/lib.rs:45716-45737) — every earlier
-// windup lands here. With the drain dead, a multi-scarab spell showed exactly one
-// arm-raise on a remote caster instead of one per scarab.
+// FIRST of them as KIND_MOTION_ACTION — every LATER windup lands here. With the
+// drain dead, a multi-scarab spell showed exactly one arm-raise on a remote
+// caster instead of one per scarab.
+//
+// ORDER (HANDOFF-1070-vistest-2026-08-01 §A6): this drain runs AFTER
+// drainEntityEvents3D (see the call sites below), so the observed sequence is
+// [main-path action] then [these rows in array order]. The Rust side therefore
+// puts the HEAD of the wire list on the main path and queues the tail in wire
+// order — a scarab run plays first→last. Both halves of that contract are pinned
+// natively (`cargo test -p holtburger-web tests_windup_action_order`). This loop
+// must keep iterating FORWARD; reversing it re-breaks §A6 (and would make every
+// row fail the ascending-sequence `actionStampIsNewer` dedup below).
 function drainMotionActions(scene3d, sessionHandle) {
   if (!MULTI_ACTION_ON) return;
   const poll = resolveMotionPollFn(scene3d, sessionHandle, "pollMotionActions");

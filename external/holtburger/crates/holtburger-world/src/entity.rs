@@ -34,9 +34,9 @@ pub struct EntityMotionSnapshot {
     pub sidestep_speed: Option<OrderedMotionSpeed>,
     pub turn_speed: Option<OrderedMotionSpeed>,
     pub directive: Option<EntityMotionDirective>,
-    /// Wave 2 (2026-06-08) — the newest Action-class command from the
-    /// `UpdateMotion` action `commands` list, **already expanded to its
-    /// full 32-bit `MotionCommand`** via
+    /// Wave 2 (2026-06-08) — the FIRST (wire-order) Action-class command
+    /// from the `UpdateMotion` action `commands` list, **already expanded
+    /// to its full 32-bit `MotionCommand`** via
     /// [`crate::player::expand_motion_command_low16`]. This is the swing
     /// (B10 creature attacks) / eat-drink (B6) one-shot that rides in the
     /// action command list, distinct from the forward/sidestep/turn
@@ -98,7 +98,7 @@ impl EntityMotionSnapshot {
             .or(self.turn_command)
     }
 
-    /// Wave 2 (2026-06-08) — pull the NEWEST Action-class command out of
+    /// Wave 2 (2026-06-08) — pull the FIRST Action-class command out of
     /// an `UpdateMotion` action `commands` list and return it expanded to
     /// its full 32-bit `MotionCommand`, with its 15-bit sequence + speed.
     ///
@@ -109,13 +109,25 @@ impl EntityMotionSnapshot {
     /// dedicated forward/sidestep/turn axes, so we deliberately ignore any
     /// non-Action entry here to avoid double-driving the gait.
     ///
-    /// "Newest" = the item with the highest 15-bit sequence under the
-    /// retail half-range wrap compare (`is_newer_u16`), matching the
-    /// per-object `server_action_stamp` ordering the renderer dedups on.
-    /// In practice vanilla ACE packs a single action per `UpdateMotion`,
-    /// but picking the newest is correct if it ever packs more.
-    fn newest_action_command(commands: &[MotionItem]) -> Option<(u32, u16, f32)> {
-        let mut best: Option<&MotionItem> = None;
+    /// "First" = wire order, i.e. the head of the list as ACE packed it.
+    /// HANDOFF-1070-vistest-2026-08-01 §A6 — this used to pick the NEWEST
+    /// item (highest 15-bit sequence under `is_newer_u16`), which is fine
+    /// for the single-item lists vanilla ACE packs for a swing/eat but is
+    /// BACKWARDS for the one case that packs several: a PK/PKLite
+    /// ("FastTick") caster's multi-scarab windup. ACE builds that list by
+    /// iterating `spell.Formula.WindupGestures` in formula order
+    /// (`Player_Magic.cs:623-645` → `WorldObject_Networking.cs:1231-1273`
+    /// `EnqueueMotionAction`) and stamps each `MotionItem` with the NEXT
+    /// motion sequence at write time (`MotionItem.cs` `PackedCommandExtensions
+    /// .Write` → `GetNextSequence(SequenceType.Motion)`), so wire order is
+    /// ascending-by-sequence and "newest" == the LAST scarab. The renderer
+    /// plays this one on the main `KIND_MOTION_ACTION` path and FIFO-plays
+    /// the remaining items off the `pollMotionActions` side-channel
+    /// AFTERWARDS, so picking the newest inverted the run to last-then-
+    /// first-second-third. Taking the head keeps the whole run in retail
+    /// order (first scarab raises first). Single-item lists — every swing,
+    /// eat, emote — are unaffected: first == newest when there is only one.
+    fn first_action_command(commands: &[MotionItem]) -> Option<(u32, u16, f32)> {
         for item in commands {
             // Expand the low-16 to its full 32-bit value and keep it only
             // if it lands in an Action class (attack / use-emote). A miss
@@ -138,14 +150,10 @@ impl EntityMotionSnapshot {
             if !crate::player::is_action_motion_command(full) {
                 continue;
             }
-            best = match best {
-                Some(prev) if !is_newer_u16(item.sequence(), prev.sequence()) => Some(prev),
-                _ => Some(item),
-            };
+            // Head of the run wins — see the §A6 note above.
+            return Some((full, item.sequence(), item.speed));
         }
-        let item = best?;
-        let full = crate::player::expand_motion_command_low16(item.command.raw())?;
-        Some((full, item.sequence(), item.speed))
+        None
     }
 
     pub fn from_movement_event(data: &MovementEventData) -> Option<Self> {
@@ -175,9 +183,7 @@ impl EntityMotionSnapshot {
             // `UpdateMotion` whose `commands` we read here. If a future
             // wire revision attaches a command list to another variant,
             // extend this match alongside it.
-            if let Some((full, seq, speed)) =
-                Self::newest_action_command(&invalid.state.commands)
-            {
+            if let Some((full, seq, speed)) = Self::first_action_command(&invalid.state.commands) {
                 snapshot.action_command = Some(full);
                 snapshot.action_sequence = Some(seq);
                 snapshot.action_speed = OrderedMotionSpeed::from_f32(speed);
@@ -431,19 +437,25 @@ mod tests {
     /// `from_movement_event` must surface it on `action_command`, expanded
     /// to its full 32-bit value, with its sequence + speed — even when no
     /// locomotion axis is present (B10).
+    ///
+    /// HANDOFF-1070-vistest-2026-08-01 §A6 — the selector takes the HEAD of
+    /// the list (wire order), not the highest sequence. ACE stamps the items
+    /// with successive motion sequences as it writes them, so wire order is
+    /// ascending and "newest" would mean "last" — backwards for the
+    /// multi-scarab windup run. The two items below are in wire order.
     #[test]
-    fn invalid_movement_surfaces_newest_action_command_expanded() {
+    fn invalid_movement_surfaces_first_action_command_expanded() {
         use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
         use holtburger_protocol::messages::movement::types::{
             InterpretedMotionState, MotionItem,
         };
 
         let state = InterpretedMotionState {
-            // Two items: an older Thrust and a newer SlashHigh; the newest
-            // (highest sequence) must win.
+            // Two items in wire order: SlashHigh packed first (lower
+            // sequence), ThrustHigh after it. The HEAD must win.
             commands: vec![
-                MotionItem::new(0x005Au16, 4, false, 1.0), // ThrustHigh, seq 4
-                MotionItem::new(0x005Bu16, 7, false, 1.5), // SlashHigh, seq 7
+                MotionItem::new(0x005Bu16, 4, false, 1.5), // SlashHigh, seq 4
+                MotionItem::new(0x005Au16, 7, false, 1.0), // ThrustHigh, seq 7
             ],
             ..InterpretedMotionState::default()
         };
@@ -466,9 +478,9 @@ mod tests {
         assert_eq!(
             snapshot.action_command,
             Some(0x1000_005B),
-            "newest action (SlashHigh) must surface expanded to full 32-bit"
+            "first action (SlashHigh) must surface expanded to full 32-bit"
         );
-        assert_eq!(snapshot.action_sequence, Some(7));
+        assert_eq!(snapshot.action_sequence, Some(4));
         assert_eq!(
             snapshot.action_speed.map(|s| s.to_f32()),
             Some(1.5),
@@ -558,13 +570,15 @@ mod tests {
             "Stop (0x40000004) is a STATE command, never a one-shot action"
         );
 
-        // Stop + Eat + SlashHigh together: only the genuine actions are
-        // eligible; the newest of them (SlashHigh, seq 9) wins.
+        // Stop + SlashHigh + Eat together: only the genuine actions are
+        // eligible; the FIRST of those in wire order (SlashHigh) wins — the
+        // leading Stop is skipped, not merely out-ranked (§A6 head-of-run
+        // selection, so the skip has to be a real skip).
         let mixed = InterpretedMotionState {
             commands: vec![
-                MotionItem::new(0x0004u16, 8, false, 1.0), // Stop (STATE) — ignored
-                MotionItem::new(0x001Au16, 6, false, 1.0), // Eat (action)
-                MotionItem::new(0x005Bu16, 9, false, 1.0), // SlashHigh (action, newest)
+                MotionItem::new(0x0004u16, 6, false, 1.0), // Stop (STATE) — ignored
+                MotionItem::new(0x005Bu16, 8, false, 1.0), // SlashHigh (action, first)
+                MotionItem::new(0x001Au16, 9, false, 1.0), // Eat (action)
             ],
             ..InterpretedMotionState::default()
         };
@@ -586,7 +600,7 @@ mod tests {
         assert_eq!(
             snapshot.action_command,
             Some(0x1000_005B),
-            "the newest GENUINE action (SlashHigh) wins; Stop is never eligible"
+            "the first GENUINE action (SlashHigh) wins; Stop is never eligible"
         );
     }
 
@@ -762,12 +776,15 @@ mod tests {
 
     /// WS07 (2026-07-12, F12) — a PK/FastTick caster batches ALL windups into
     /// one broadcast's `commands` list (ACE `EnqueueMotionAction`).
-    /// `newest_action_command` keeps only the highest-stamp item, so the three
-    /// windups collapse to the newest (0x71, seq 7). This PINS the known PK
-    /// collapse so a future `mtQueue` sequencing fix has a baseline; it is not
-    /// a regression the non-PK live box exhibits.
+    ///
+    /// HANDOFF-1070-vistest-2026-08-01 §A6 — this used to pin the opposite
+    /// (`..._collapse_to_newest`, keeping 0x71/seq 7) while the side-channel
+    /// drain was dead. Now that `?multiAction` actually drains, the main path
+    /// must take the HEAD of the run (0x6F, seq 5) and let the remaining
+    /// windups FIFO out of `pollMotionActions` behind it, so the caster's
+    /// arms rise first-scarab-first instead of last-then-first.
     #[test]
-    fn magic_windups_batched_in_commands_collapse_to_newest() {
+    fn magic_windups_batched_in_commands_start_at_first() {
         use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
         use holtburger_protocol::messages::movement::types::{
             InterpretedMotionState, MotionItem,
@@ -775,9 +792,9 @@ mod tests {
 
         let state = InterpretedMotionState {
             commands: vec![
-                MotionItem::new(0x006Fu16, 5, false, 1.0), // MagicPowerUp01, seq 5
+                MotionItem::new(0x006Fu16, 5, false, 1.0), // MagicPowerUp01, seq 5 (first)
                 MotionItem::new(0x0070u16, 6, false, 1.0), // MagicPowerUp02, seq 6
-                MotionItem::new(0x0071u16, 7, false, 1.0), // MagicPowerUp03, seq 7 (newest)
+                MotionItem::new(0x0071u16, 7, false, 1.0), // MagicPowerUp03, seq 7
             ],
             ..InterpretedMotionState::default()
         };
@@ -798,10 +815,10 @@ mod tests {
         .expect("a batched-windup broadcast must yield a snapshot");
         assert_eq!(
             snapshot.action_command,
-            Some(0x1000_0071),
-            "batched windups collapse to the newest (F12 PK-only gap, pinned)"
+            Some(0x1000_006F),
+            "batched windups start at the FIRST scarab (§A6), not the last"
         );
-        assert_eq!(snapshot.action_sequence, Some(7));
+        assert_eq!(snapshot.action_sequence, Some(5));
     }
 
     /// Wave 2 (2026-06-08, review B6) — co-pack: RunForward on the
