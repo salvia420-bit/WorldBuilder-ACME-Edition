@@ -9,6 +9,8 @@ import {
   glintEnabled, magicGlowEnabled, enchantShimmerEnabled,
   tarnishEnabled, wetnessEnabled, frostEnabled, flameFlickerEnabled, tipFlexEnabled,
   visualAllEffects, visualBudget, _resetVfxFlags,
+  terrainGrassEnabled, terrainGrassStompEnabled,
+  terrainGrassBladeCount, terrainGrassRadiusM, terrainGrassDensity,
 } from "./scene3d/vfx_flags.js";
 import { visualEnabled, _resetVfxCatalog } from "./scene3d/vfx_catalog.js";
 
@@ -92,6 +94,43 @@ setUrl("?visualBudget=99999");
 check("?visualBudget out-of-range → Infinity (def)", visualBudget() === Infinity);
 setUrl("?visualBudget=abc");
 check("?visualBudget garbage → Infinity (def)", visualBudget() === Infinity);
+
+// ---- TERRAIN GRASS (Wave 1A) — STRICT opt-ins that ship OFF ----
+// Every terrain-VFX flag is an EXACT-match opt-in (plan §2.4/§5.9): it never
+// tracks visualAllEffects(), `?visual=all` does not light it, and an
+// unrecognised value warns rather than half-enabling. The DEFAULT-ON count
+// above must stay 14.
+clearUrl();
+check("terrain.grass + terrain.grassStomp are registered ship-OFF rows",
+  SHIP_OFF_IDS.includes("terrain.grass") && SHIP_OFF_IDS.includes("terrain.grassStomp"));
+check("no flags: terrainGrassEnabled() false (ship-OFF)", terrainGrassEnabled() === false);
+check("no flags: terrainGrassStompEnabled() false", terrainGrassStompEnabled() === false);
+setUrl("?visual=all");
+check("?visual=all does NOT light grass (strict opt-in, not a suite effect)",
+  vfxEffectEnabled("terrain.grass") === false && vfxActiveEffectIds().length === 14);
+setUrl("?terrainGrass=on");
+check("?terrainGrass=on: reader true", terrainGrassEnabled() === true);
+check("?terrainGrass=on: vfxEffectEnabled(terrain.grass) true", vfxEffectEnabled("terrain.grass") === true);
+check("?terrainGrass=on: stomp still off (independent bisection flag)",
+  terrainGrassStompEnabled() === false);
+setUrl("?terrainGrass=1");
+check("?terrainGrass=1 does NOT enable (EXACT `on` only — the gfxRelief rule)",
+  terrainGrassEnabled() === false);
+setUrl("?visual=off&terrainGrass=on");
+check("?visual=off kills grass too (the firewall composition rule)",
+  vfxEffectEnabled("terrain.grass") === false);
+setUrl("?terrainGrass=on&terrainGrassStomp=on");
+check("?terrainGrassStomp=on: stomp reader true", terrainGrassStompEnabled() === true);
+setUrl("?terrainGrassBlades=40000&terrainGrassRadius=64&terrainGrassDensity=0.5");
+check("?terrainGrassBlades numeric override", terrainGrassBladeCount() === 40000);
+check("?terrainGrassRadius numeric override", terrainGrassRadiusM() === 64);
+check("?terrainGrassDensity numeric override", terrainGrassDensity() === 0.5);
+setUrl("?terrainGrassDensity=9");
+check("?terrainGrassDensity out of range (0..2) → default 1", terrainGrassDensity() === 1);
+clearUrl();
+check("no flags: blade count falls back to the 60025 (245²) high-tier default",
+  terrainGrassBladeCount() === 60025);
+check("no flags: radius falls back to 48 m", terrainGrassRadiusM() === 48);
 
 // ---- memoization reset hygiene ----
 setUrl("?glint=off");
