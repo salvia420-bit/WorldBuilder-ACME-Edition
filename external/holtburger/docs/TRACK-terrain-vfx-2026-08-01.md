@@ -31,7 +31,7 @@ start work not listed here.**
 | **2B** | **VOLCANO** | ✅ merged to master 2026-08-01 (`77a23ac6`) — volcano 147/0 + shader 103/0; ash DEFERRED (plan §8 r9); look untested → eye-test queue V1–V7 |
 | **3A** | **SWAMP** | ✅ merged to master 2026-08-01 (`68ded1a6`) — swamp 204/0 + ground_fog 65/0; fog depth-read ships INERT (P6 adjudicates); look untested → eye-test queue P1–P10 |
 | **3B** | **DIRT/MUD** | ✅ merged to master 2026-08-01 (`ee436e06..0be231e4`, ff) — dirt 242/0 + shader 134/0; all wave-2 fragment suites re-verified; +1 flag `terrainMudWetness`; look untested → eye-test queue D1–D9 |
-| **4A** | **ROCK/BARREN** | 🔶 IN FLIGHT (Opus agent, worktree) |
+| **4A** | **ROCK/BARREN** | ✅ merged to master 2026-08-01 (`354c619e..07649dbc`, ff) — rock 237/0; terrain.js untouched; rock footfall puffs = contained dirt-side follow-up for 4B; look untested → eye-test queue R1–R9 |
 | 4B | promotion pass | ⬜ OWNER-GATED (needs the 1070 batch) |
 
 ## Wave 2 execution checklist (this session)
@@ -50,11 +50,15 @@ start work not listed here.**
 - [x] Write HANDOFF-terrain-vfx-wave2-2026-08-01.md, commit, push
 - [x] Wave 3 launched, merged (3B ff first, 3A resolved on top), battery 25
       suites 0 failed, HANDOFF-terrain-vfx-wave3-2026-08-01.md written, pushed
-- [ ] 4A ROCK/BARREN in flight → verify, merge, battery, extend handoff, push
+- [x] 4A ROCK/BARREN merged (ff); 26 suites 0 failed; lint 494 flags; ALL SEVEN
+      FAMILIES NOW LANDED — program is code-complete pending 4B promotion
 - [ ] 4B promotion pass = OWNER-GATED (needs the 1070 batch; not this session)
 
 ## Eye-test queue (owner-run 1070 batch — append only, never execute here)
 
+- [ ] R1–R9 ROCK (pebbles grounded/hash-stable · slope up-axis · 3 shapes ·
+      olthoi glow no-light · day/night steps with ground · grit vs sand wind ·
+      mid coherence · perf ≤1.5ms · off boots) — full text in 4A report
 Carried from wave 1 (`HANDOFF-terrain-vfx-wave1-2026-07-31.md` §5): W1 water
 sheen · W2 code 22 · G1 grass (incl. visibleBlades>0 revive reading) · S1 sand.
 - [ ] P1–P10 SWAMP (ground fireflies vs canopy · gas vents stable · wisp glow

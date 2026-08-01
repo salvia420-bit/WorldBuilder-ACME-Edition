@@ -109,3 +109,25 @@ Carried: W1 W2 (water) · G1 (grass) · S1 (sand) · N1–N10 (snow/ice) · V1�
 
 Wave-2 and wave-3 worktrees (agent-a6144…, a832…, a20b…, aab3…) merged — can
 be pruned with the wave-1 four. serve.py/ACE untouched this session.
+
+## 7. ADDENDUM (same session) — Wave 4A ROCK/BARREN landed
+
+`354c619e..07649dbc` (ff merge) — `scene3d/terrain_rock.js`: pebble/cobble/
+shale/shard scatter (ONE octahedron geometry, three hash-chosen proportion
+profiles + tilt — not three pools, see the report's deviation 1), grit
+streamers (sand maths at 1/5 density, copied not imported — the sand field
+hardcodes FAM_SAND), olthoi variant (code 30: shards + breathing chitin glow,
+no light). First LIT scatter field: sun/ambient from the cached sky state,
+quantised to the retail 15 s tick so pebbles step WITH the ground.
+`terrain.js` byte-untouched. Flags `terrainRock`/`terrainRockPebbles`/
+`terrainRockGrit` + counts/radius/URL-only density; tiers §3.3 verbatim
+(pebbles 0/3000/9000/18000). Suites: rock 237/0; full 26-suite battery 0
+failed; lint 494 flags; DEFAULT-ON still 14. Rock footfall puffs deliberately
+NOT built — they are a FAM_ROCK branch in dirt's ring buffer (wave-4B
+follow-up). Eye-test queue R1–R9 in the 4A report + tracker.
+
+**ALL SEVEN FAMILIES (grass, sand, snow/ice, volcano, swamp, dirt/mud, rock)
+ARE NOW CODE-COMPLETE AND ON MASTER.** What remains is 4B — the owner-gated
+promotion pass: the batched 1070 eye-test of the whole queue (W/G/S · N1–N10 ·
+V1–V7 · P1–P10 · D1–D9 · R1–R9), tuning the untuned constants each report
+lists, per-tier perf capture, then flipping validated defaults ON.
