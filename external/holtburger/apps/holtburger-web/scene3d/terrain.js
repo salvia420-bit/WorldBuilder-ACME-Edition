@@ -68,7 +68,7 @@ import {
 // readers that gate the grain sparkle. `terrain_families.js` is the single
 // source of truth for which CODES are sand; `vfx_flags.js` owns every
 // terrain-VFX flag reader (no second reader, plan §2.4).
-import { FAM_SAND, FAM_SNOWICE, FAM_VOLCANO, familyForCode } from "./terrain_families.js";
+import { FAM_SAND, FAM_SNOWICE, FAM_VOLCANO, FAM_DIRT, familyForCode } from "./terrain_families.js";
 import { terrainSandEnabled, terrainSandSparkleEnabled } from "./vfx_flags.js";
 // Wave 2A (SNOW/ICE) — a SECOND import statement from the same module rather
 // than widening the line above, deliberately: `test_terrain_sand_sparkle.mjs`
@@ -84,6 +84,8 @@ import {
 } from "./vfx_flags.js";
 // Wave 2B (plan §3.6) — same rationale, third statement (ESM dedupes).
 import { terrainVolcanoEnabled, terrainCrackGlowEnabled } from "./vfx_flags.js";
+// Wave 3B (plan §3.7, DIRT/MUD) — same rationale, fourth statement.
+import { terrainDirtEnabled, terrainMudPrintsEnabled, terrainMudWetnessEnabled } from "./vfx_flags.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -981,6 +983,37 @@ const TERRAIN_ICE_MATERIAL_CODES = Object.freeze(
   })(),
 );
 
+// Wave 3B — the DIRT set for the mud print and the wet-mud treatment, DERIVED
+// from `terrain_families.js` (FAM_DIRT = codes 5 `MudRichDirt`, 7 `PackedDirt`,
+// 8 `PatchyDirt`, 24 `Argila`, 31 `DesolateLands` in Dereth) for exactly the
+// reason the sand set above is. ⚠ This family is the sharpest illustration of
+// plan §2.7.2: retail shares ONE RenderSurface across `BarrenRock (0)`,
+// `Argila (24)` and `DesolateLands (31)`, and 0 is ROCK while 24 and 31 are
+// DIRT — so any test keyed off texture identity would wet BarrenRock too.
+// Dirt codes are in no water set, so `?strictWaterCodes` cannot move them.
+const TERRAIN_DIRT_CODES = Object.freeze(
+  (() => {
+    const s = new Set();
+    for (let c = 0; c < 32; c += 1) if (familyForCode(c) === FAM_DIRT) s.add(c);
+    return s;
+  })(),
+);
+
+// Wave 3B — the CLAY set: `Argila (24)` alone, a STRICT SUBSET of FAM_DIRT.
+// The plan asks for clay "redder and slicker after rain" (§3.7), which is a
+// per-code sub-variant, and §1.3 says a sub-variant is a table INSIDE the
+// family module — so the family stays the source of truth for membership and
+// `terrain_dirt.js::DIRT_VARIANTS[c].clay` is the source of truth for which
+// members are clay. Kept in lockstep by `test_terrain_dirt_shader.mjs`, the
+// same arrangement `TERRAIN_ICE_MATERIAL_CODES` has with `SNOWICE_VARIANTS`.
+const TERRAIN_CLAY_CODES = Object.freeze(
+  (() => {
+    const s = new Set();
+    for (const c of TERRAIN_DIRT_CODES) if (c === 24) s.add(c);
+    return s;
+  })(),
+);
+
 // ----- Wave 2A — SNOW CRYSTAL SPARKLE (terrain-VFX plan §3.4 item 2) --
 //
 // Louder than the sand grain sparkle on purpose: sand glitters at a grazing
@@ -1027,6 +1060,52 @@ const DEFAULT_ICE_ENV_STRENGTH = 0.65;
 // 0.004 cell-UV units = a third of uPomScale, i.e. well under it as the plan
 // requires — the two are applied in the same direction and must not fight.
 const DEFAULT_ICE_REFRACT_AMOUNT = 0.004;
+
+// ----- Wave 3B — MUD PRINTS + WET MUD (plan §3.7 items 2 + 4) ---------
+//
+// The print is the SNOW PRINT's twin — same shared trail map, same sampler,
+// same post-POM siting — with mud's amplitudes: a DEEPER dent than snow (mud
+// yields more than powder) and a slightly softer darkening (a snow print is a
+// hard blue shadow; a mud print is a wet smear). Still well under uPomScale
+// (0.012) so the dent reads as a depression IN the relief rather than fighting
+// it, exactly as §3.4 asks of snow.
+const DEFAULT_MUD_PRINT_DEPTH = 0.006;
+const DEFAULT_MUD_PRINT_DARKEN = 0.28;
+// THE RAIN-DEPENDENT PERSISTENCE (see the `terrain_dirt.js` header, decision
+// (b)): the shared trail fade is GLOBAL and mud cannot have its own, so the
+// rain dependence rides AMPLITUDE. At bone-dry wetness the print is scaled to
+// this fraction of full — faint, and gone from the eye long before the map's
+// fade removes it; at full wetness it is 1.0. The stamp side does the same
+// thing (`terrain_dirt.js::mudStampFor`), so the two compose.
+const DEFAULT_MUD_PRINT_DRY_SCALE = 0.35;
+//
+// WET MUD reuses the RESPONSE CURVE of `vfx/components/wetness.js` verbatim
+// (plan §3.7 item 2: "so puddled statics and puddled ground agree"): its
+// `smoothstep(0.05, 0.6, worldNormal.y)` up-facing weight — here the terrain's
+// AC-space geomN.z, which IS the world up component in this frame — times a
+// 0.62 diffuse darken and a 0.25 roughness multiplier. The numbers below are
+// that component's `defaults` object, not new tuning.
+const DEFAULT_MUD_WET_STRENGTH = 1.0;        // wetness.js defaults.strength
+const DEFAULT_MUD_WET_DARKEN = 0.62;         // wetness.js defaults.darken
+const DEFAULT_MUD_WET_ROUGH_DROP = 0.25;     // wetness.js defaults.roughDrop
+// Dry dirt's base roughness. The `nra` B channel carries a real per-layer
+// roughness, but it is only sampled inside the `uPbrEnabled && !acGouraud`
+// block, which retail Gouraud (DEFAULT-ON) makes dead in a normal session —
+// the same reason the water sheen and the ice treatment were lifted out of it.
+// So the wet lobe runs off a constant, and 0.86 is where curated dirt/gravel
+// albedo sits in both texture arms.
+const DEFAULT_MUD_BASE_ROUGH = 0.86;
+// Gains for the two halves of "glossier": a Blinn sun lobe and an env
+// reflection off the shared ?ibl cube. Deliberately well under the ice
+// treatment's 0.55/0.65 — wet mud is damp, not glazed.
+const DEFAULT_MUD_WET_SPEC = 0.22;
+const DEFAULT_MUD_WET_ENV = 0.28;
+// Clay (`Argila`, 24) "redder and slicker after rain" (plan §3.7): a warm tint
+// multiplied into the wet darkening, and a gloss bonus on top of the family's.
+// Calibration target is the BC7 arm (:8767 with `texBc7=on&terrainBc7=on`) —
+// plan §8 risk 13.
+const DEFAULT_CLAY_WET_TINT = Object.freeze([1.12, 0.92, 0.86]);
+const DEFAULT_CLAY_WET_GLOSS_BONUS = 0.35;
 
 // Wave 2B — OBSIDIAN is CODE 6 ALONE (plan §3.6 item 5), not the whole family:
 // Volcano1/Volcano2 are cracked rock, ObsidianPlain is glass. Codes 0..0x14 are
@@ -1601,6 +1680,51 @@ uniform float uObsidianShininess;    // Blinn exponent (roughness down-down)
 uniform float uObsidianSpecular;     // sun-lobe gain
 uniform float uObsidianEnv;          // env-cube reflection gain
 
+// === 2026-08-01 (Wave 3B) — MUD PRINTS + WET MUD =========================
+// Terrain-VFX plan §3.7 items 2 + 4. A deforming, darkening footprint on
+// FAM_DIRT ground (codes 5/7/8/24/31) plus the wet-mud darkening and sheen,
+// keyed off the TERRAIN CODE read from uVertexTypes — plan trap T3, the same
+// reason the sand sparkle, the snow print and the crack glow all do. The masks
+// are built on the JS side from terrain_families.js (FAM_DIRT) and its
+// sub-variant table (clay = Argila 24), never from a hardcoded range here.
+// Strict no-op when both gate uniforms are 0 (?terrainDirt, ?terrainMudPrints
+// and ?terrainMudWetness all ship OFF), and on every non-dirt fragment.
+//
+// ⚠ THE TRAIL SAMPLER IS SHARED, AND ITS NAME IS A WAVE-2A ARTEFACT. There is
+// ONE trail map (scene3d/trail_map.js) and ONE sampler2D for it in this shader.
+// Wave 2A landed first, so it is called uSnowTrailMap; renaming it for wave 3B
+// would be a cross-family churn edit for zero behaviour change, and binding a
+// SECOND sampler is precisely what wave 2A's budget ruling forbids (14 samplers
+// were bound before the print; this shader is at 15 of a guaranteed 16, and a
+// second map would sit on the floor with nothing left for anyone). So MUD reads
+// the same sampler, centre and radius that SNOW does — either family's
+// per-frame push writes them, identically — and gates itself with its OWN
+// float, uMudTrailEnabled. uSnowTrailEnabled stays snow's. Both families may
+// run at once; neither can disable the other.
+//
+// uMudWetness is the live 0..1 rain signal, PUSHED each frame by
+// scene3d/terrain_dirt.js from VFX_GLOBALS.uWetness (the already-smoothed
+// weather_inputs.js value — plan §3.7 item 4 forbids re-deriving it). Pushed
+// rather than bound by reference for the uCrackGlowBreath reason above:
+// terrain_batch.js CLONES uniform values and ?terrainBatch is default-ON.
+uniform float uMudPrintEnabled;      // 0.0 OFF / 1.0 ON  (the FLAG)
+uniform float uMudTrailEnabled;      // 0.0 = no map bound this frame (the PUSH)
+uniform int uDirtCodeMask;           // bit i = terrain code i is FAM_DIRT
+uniform int uClayCodeMask;           // bit 24 — Argila alone, a strict subset
+uniform float uMudPrintDepth;        // cell-UV dent amplitude (<< uPomScale)
+uniform float uMudPrintDarken;       // 0..1 fraction of lit colour removed
+uniform float uMudPrintDryScale;     // print amplitude at zero wetness
+uniform float uMudWetEnabled;        // 0.0 OFF / 1.0 ON
+uniform float uMudWetness;           // 0..1, pushed each frame
+uniform float uMudWetStrength;       // wetness.js defaults.strength
+uniform float uMudWetDarken;         // wetness.js defaults.darken (0.62)
+uniform float uMudWetRoughDrop;      // wetness.js defaults.roughDrop (0.25)
+uniform float uMudBaseRough;         // dry-dirt roughness the drop scales
+uniform float uMudWetSpec;           // Blinn sun-lobe gain
+uniform float uMudWetEnv;            // env-cube reflection gain (needs ?ibl)
+uniform vec3 uClayWetTint;           // Argila goes redder when wet
+uniform float uClayWetGloss;         // ...and slicker
+
 // Clouds-L — sample the cloud effect's cascade-0 shadow buffer to dim
 // terrain ambient + diffuse where clouds occlude the sun. takram's
 // cloud raymarch already produces these as a side effect of its
@@ -1851,6 +1975,19 @@ bool isObsidianCode(int c) {
   return c >= 0 && c < 32 && (uObsidianCodeMask & (1 << c)) != 0;
 }
 
+// Wave 3B — the DIRT / CLAY code tests for the fragment stage, same shape as
+// every mask test above and reading masks built from terrain_families.js
+// FAM_DIRT and its sub-variant table (clay = Argila 24). isClayCode's mask is a
+// STRICT SUBSET of isDirtCode's, exactly as isIceCode's is of isSnowCode's: all
+// dirt takes a print and goes dark when wet, only clay goes red and slick.
+// Code 32 is the road layer and is never dirt.
+bool isDirtCode(int c) {
+  return c >= 0 && c < 32 && (uDirtCodeMask & (1 << c)) != 0;
+}
+bool isClayCode(int c) {
+  return c >= 0 && c < 32 && (uClayCodeMask & (1 << c)) != 0;
+}
+
 int vertexTypeAt(int iu, int iv) {
   return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).r * 255.0 + 0.5);
 }
@@ -2012,6 +2149,15 @@ void main() {
   bool cellTouchesSnow = isSnowCode(t00) || isSnowCode(t10)
                       || isSnowCode(t01) || isSnowCode(t11);
 
+  // Wave 3B — per-cell DIRT presence, resolved here for exactly the reason
+  // cellTouchesSnow is: the MUD PRINT DENT has to run BEFORE the albedo taps
+  // (it shifts cellUv, like POM), and the smooth bilinear dirtW is not computed
+  // until after them. A binary cell test is the right gate for a UV shift; the
+  // SMOOTH fraction still governs the darkening and the sheen further down, so
+  // a print running off mud onto grass fades instead of ending at a cell edge.
+  bool cellTouchesDirt = isDirtCode(t00) || isDirtCode(t10)
+                      || isDirtCode(t01) || isDirtCode(t11);
+
   // T4 POM -- computed here (before every texture sample) so the offset
   // cellUv feeds the whole pipeline. Nearest-corner layer only (same
   // single-sample convention as the detail layers); constant-height
@@ -2105,6 +2251,54 @@ void main() {
     }
   }
 
+  // === Wave 3B — MUD PRINTS (terrain-VFX plan §3.7 item 2) ================
+  // The SNOW PRINT's twin on FAM_DIRT ground, reading the SAME shared trail map
+  // through the SAME sampler (see the uniform block for why the sampler carries
+  // a snow name and why there is no second one), with mud's amplitudes.
+  //
+  // WHERE IT SITS AND WHY (plan §2.7.3 point 1) — identical reasoning to snow:
+  //   - IMMEDIATELY AFTER the POM march (and after the snow dent, so the two
+  //     compose additively on the pathological cell that is both snowy and
+  //     dirty), so the trail is sampled at the PARALLAX-CORRECTED surface point.
+  //     Sampling at the raw point would slide the print against the relief it is
+  //     denting -- plan §8 risk 14.
+  //   - The DENT then shifts cellUv AGAIN along the same view-parallax vector,
+  //     so every downstream sampler rides it as one.
+  //   - It HONOURS the cellTouchesWater bypass: POM does not run there, and a
+  //     shoreline mud cell must not dent through the water surface.
+  //   - MID-TIER DEGRADE (plan §2.7.3 point 4): the dent is inside a uPomEnabled
+  //     test, so with POM off mudPrint is still computed and the print degrades
+  //     to DARKENING ONLY -- a coherent lesser effect. mudPrint stays in scope
+  //     for that darkening at the end.
+  //
+  // THE RAIN DEPENDENCE (plan §3.7 items 2 + 4) rides AMPLITUDE, not the map's
+  // fade: the shared fade is global and mud cannot have its own, so a dry print
+  // is scaled to uMudPrintDryScale and a soaked one to full. The stamp side
+  // scales the same way, so the two compose into "wet mud keeps a print, dry
+  // dirt barely takes one" without a second render target or a second constant.
+  float mudPrint = 0.0;
+  float mudWetAmt = 0.0;
+  if (uMudPrintEnabled > 0.5 && uMudTrailEnabled > 0.5
+      && cellTouchesDirt && !cellTouchesWater) {
+    // world(x,y,z) = ac(x,z,-y), so the AC ground point is (w.x, -w.z).
+    vec2 mudShift = (cellUv - vec2(fu, fv)) * 24.0;
+    vec2 mudXy = vec2(vWorldPos.x, -vWorldPos.z) + mudShift;
+    vec2 mudUv = (mudXy - uSnowTrailCenter) / (2.0 * uSnowTrailRadius) + 0.5;
+    // Outside the map footprint there is NO trail -- never a clamped smear
+    // (the trail_map.js contract).
+    if (mudUv.x >= 0.0 && mudUv.x <= 1.0 && mudUv.y >= 0.0 && mudUv.y <= 1.0) {
+      mudPrint = clamp(texture(uSnowTrailMap, mudUv).r, 0.0, 1.0);
+    }
+    mudPrint *= mix(uMudPrintDryScale, 1.0, clamp(uMudWetness, 0.0, 1.0));
+    if (mudPrint > 0.0 && uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd) {
+      vec3 mvw = normalize(vWorldPos - cameraPosition);
+      vec3 mvt = vec3(mvw.x, -mvw.z, mvw.y);
+      if (mvt.z < -0.15) {
+        cellUv += (mvt.xy / max(-mvt.z, 0.3)) * (uMudPrintDepth * mudPrint);
+      }
+    }
+  }
+
   // Phase 2.2 — water UV scroll. Apply a per-frame offset to the intra-cell
   // UV so the water texture pattern drifts. fract() keeps it inside the cell;
   // atlasUvFor's fract(uv * tex_tiling) then wraps cleanly inside the atlas
@@ -2192,6 +2386,21 @@ void main() {
   float obsidianW = clamp(
     (isObsidianCode(t00) ? w00 : 0.0) + (isObsidianCode(t10) ? w10 : 0.0) +
     (isObsidianCode(t01) ? w01 : 0.0) + (isObsidianCode(t11) ? w11 : 0.0), 0.0, 1.0);
+
+  // Wave 3B — bilinear DIRT and CLAY fractions, computed with the SAME four
+  // corner weights, for the same reason every fraction above is: the print
+  // darkening and the wet-mud treatment then feather across a type boundary
+  // instead of switching on a per-half-cell nearest-corner step (plan §8
+  // risk 2). clayW is a STRICT SUBSET of dirtW by construction (isClayCode's
+  // mask is a subset of isDirtCode's), so an Argila/PatchyDirt seam darkens
+  // continuously while only the clay half goes red and slick. Consumed by the
+  // MUD PRINT DARKENING and WET MUD blocks further down main().
+  float dirtW = clamp(
+    (isDirtCode(t00) ? w00 : 0.0) + (isDirtCode(t10) ? w10 : 0.0) +
+    (isDirtCode(t01) ? w01 : 0.0) + (isDirtCode(t11) ? w11 : 0.0), 0.0, 1.0);
+  float clayW = clamp(
+    (isClayCode(t00) ? w00 : 0.0) + (isClayCode(t10) ? w10 : 0.0) +
+    (isClayCode(t01) ? w01 : 0.0) + (isClayCode(t11) ? w11 : 0.0), 0.0, 1.0);
 
   // Skip stochastic blending when all four corners are the same terrain type:
   // there is no boundary to draw, and picking between identical textures only
@@ -3012,6 +3221,51 @@ void main() {
     modulated *= mix(1.0, 1.0 - uSnowPrintDarken, snowPrint * snowW);
   }
 
+  // === Wave 3B — MUD PRINT DARKENING (plan §3.7 item 2) ==================
+  // The other half of the mud print, sited and reasoned exactly as the snow
+  // one: weighted by the SMOOTH bilinear dirtW so a track running off mud onto
+  // grass fades out instead of ending at a cell edge, and applied to
+  // modulated (the lit colour, pre cloud/CSM) so a print inside a cloud
+  // shadow does not double-darken. This is also the whole mid degrade — with
+  // POM off there is no dent, and compressed wet earth reads as a print from
+  // the darkening alone.
+  if (uMudPrintEnabled > 0.5 && mudPrint > 0.0 && dirtW > 0.0) {
+    modulated *= mix(1.0, 1.0 - uMudPrintDarken, mudPrint * dirtW);
+  }
+
+  // === Wave 3B — WET MUD DARKENING (plan §3.7 items 2 + 4) ===============
+  // THE RESPONSE CURVE IS vfx/components/wetness.js's, REUSED RATHER THAN
+  // RE-INVENTED (plan §3.7 item 2: "so puddled statics and puddled ground
+  // agree"). That component computes, at the <map_fragment> seam:
+  //     _vfxWetUp  = smoothstep(0.05, 0.6, vVfxWorldNormal.y)
+  //     _vfxWetAmt = clamp(uWetness * uWetStrength, 0, 1) * _vfxWetUp
+  //     diffuseColor.rgb *= mix(1.0, uWetDarken, _vfxWetAmt)
+  // and the three lines below are that, verbatim, with two substitutions the
+  // frames force: geomN.z for vVfxWorldNormal.y (the terrain works in AC
+  // space, where +Z is world up — the same component would compute the same
+  // number), and modulated for diffuseColor (this shader has no
+  // <map_fragment> seam; modulated is the lit colour at the equivalent point,
+  // pre cloud/CSM, which is where the print darkening also lands so the two
+  // compose instead of fighting). uMudWetDarken/uMudWetStrength are the
+  // component's own defaults, not new tuning.
+  //
+  // CLAY goes REDDER (plan §3.7): the darkening is tinted by uClayWetTint,
+  // weighted by the strict-subset clayW, so Argila warms as it soaks while the
+  // rest of the family just goes dark.
+  //
+  // mudWetAmt is declared up at the print block so the SHEEN below reads the
+  // same weight this darkening used — the same main()-scope-local trick
+  // wetness.js uses to share _vfxWetAmt between its two seams.
+  if (uMudWetEnabled > 0.5 && dirtW > 0.0 && !cellTouchesWater) {
+    float mudWetUp = smoothstep(0.05, 0.6, geomN.z);
+    mudWetAmt = clamp(uMudWetness * uMudWetStrength, 0.0, 1.0) * mudWetUp * dirtW;
+    if (mudWetAmt > 0.0) {
+      vec3 mudDark = mix(vec3(1.0), vec3(uMudWetDarken) * mix(vec3(1.0), uClayWetTint, clayW),
+                         mudWetAmt);
+      modulated *= mudDark;
+    }
+  }
+
   // === Wave 2A — SNOW CRYSTAL SPARKLE (plan §3.4 item 2) =================
   // vfx/components/glint.js's maths -- a Blinn half-vector lobe times a
   // time+hash twinkle -- with the metalness gate replaced by the SNOW FRACTION
@@ -3114,6 +3368,62 @@ void main() {
       iceSpec += iceEnv * iceFres * uEnvIntensity * uIceEnvStrength;
     }
     iblSpec += iceSpec * iceW;
+  }
+
+  // === Wave 3B — WET MUD SHEEN (plan §3.7 items 2 + 4) ===================
+  // The second half of vfx/components/wetness.js's response curve. That
+  // component's other seam is:
+  //     roughnessFactor *= mix(1.0, uWetRoughDrop, _vfxWetAmt)
+  // i.e. wet surfaces keep a QUARTER of their dry roughness. This shader has no
+  // roughnessFactor to scale in the shading mode that actually runs (the nra
+  // roughness is read only inside the uPbrEnabled && !acGouraud block, which
+  // retail Gouraud — DEFAULT-ON — makes dead; the same reason the 07-31 water
+  // fix lifted the sheen out and wave 2A put the ice treatment here). So the
+  // drop is applied to a CONSTANT dry roughness and then spent the way the ice
+  // treatment spends its gloss: a Blinn sun lobe whose exponent tracks the
+  // roughness, plus an env reflection off the ?ibl cube at a matching mip. Same
+  // curve, same numbers, expressed in the terms this shader has.
+  //
+  // CLAY is SLICKER (plan §3.7): uClayWetGloss lifts the roughness drop further
+  // on the strict-subset clayW, so Argila glazes while PatchyDirt only damps.
+  //
+  // It sits HERE, next to the water sheen and the ice treatment and OUTSIDE the
+  // PBR block, for the reason above; it honours the cellTouchesWater bypass
+  // (a shoreline mud cell must not gloss THROUGH the water surface the water
+  // agent owns); it adds NO light (§5.2) and no geometry; and it is ADDED
+  // through iblSpec, so it touches no albedo, no cellUv and no water term and
+  // the final fragColor line is untouched. mudWetAmt is the SAME weight the
+  // darkening above used, so the two halves can never disagree.
+  if (uMudWetEnabled > 0.5 && mudWetAmt > 0.0 && !cellTouchesWater) {
+    // wetness.js: roughnessFactor *= mix(1.0, uWetRoughDrop, amt). Clay drops
+    // further still.
+    float clayDrop = uMudWetRoughDrop * (1.0 - clamp(uClayWetGloss, 0.0, 1.0) * clayW);
+    float mudRough = uMudBaseRough * mix(1.0, clayDrop, clamp(mudWetAmt, 0.0, 1.0));
+    mudRough = clamp(mudRough, 0.02, 1.0);
+    // A fine, still surface perturbation so the sheen has structure: wet earth
+    // is not a mirror. The same coherent value-noise field the ice treatment
+    // and the water sheen gradient, unscrolled (mud does not flow).
+    vec2 muv = vec2(vWorldPos.x, -vWorldPos.z) * 2.6;
+    float mh0 = fragValueNoise2D(muv);
+    float mhx = fragValueNoise2D(muv + vec2(0.55, 0.0));
+    float mhy = fragValueNoise2D(muv + vec2(0.0, 0.55));
+    vec3 mudN = normalize(vec3((mh0 - mhx) * 0.35, (mh0 - mhy) * 0.35, 1.0));
+    vec3 mudViewW = normalize(vWorldPos - cameraPosition);
+    vec3 mudViewAc = vec3(mudViewW.x, -mudViewW.z, mudViewW.y);
+    vec3 mudHalfAc = normalize(sunDir - mudViewAc);
+    float mudLobe = pow(clamp(dot(mudN, mudHalfAc), 0.0, 1.0),
+                        mix(12.0, 160.0, 1.0 - mudRough));
+    vec3 mudSpec = uAcSunColor * (mudLobe * uMudWetSpec);
+    if (uIblEnabled > 0.5) {
+      // ac(x,y,z) -> world(x,z,-y), the same space bridge the PBR env term, the
+      // water sheen and the ice treatment use.
+      vec3 mudNWorld = normalize(vec3(mudN.x, mudN.z, -mudN.y));
+      vec3 mudRefl = reflect(mudViewW, mudNWorld);
+      vec3 mudEnv = textureLod(uEnvCube, mudRefl, mudRough * 5.0).rgb;
+      float mudFres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-mudViewW, mudNWorld), 0.0, 1.0), 5.0);
+      mudSpec += mudEnv * mudFres * uEnvIntensity * uMudWetEnv;
+    }
+    iblSpec += mudSpec * mudWetAmt;
   }
 
   // === Wave 1B — SAND GRAIN SPARKLE ======================================
@@ -3853,6 +4163,21 @@ export async function resolveTerrainRingOpts(
     crackGlowEnabled: terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
     volcanoCodeMask: computeCodeBitmask(TERRAIN_VOLCANO_CODES),
     obsidianCodeMask: computeCodeBitmask(TERRAIN_OBSIDIAN_CODES),
+
+    // Wave 3B — MUD PRINTS + WET MUD (plan §3.7 items 2 + 4). Composed exactly
+    // like every terrain-VFX gate above: the FAMILY MASTER and the per-effect
+    // flag (`scene3d/vfx_flags.js`, both STRICT `=== "on"` opt-ins that ship
+    // OFF), so an absent flag leaves both gate uniforms at 0.0 and all three
+    // fragment blocks are strict no-ops. TWO gates, not one: the print is
+    // high/ultra and the wetness is ultra-only in the plan's own tier table, and
+    // they are separately bisectable for the eye-test. The print's SECOND gate
+    // (a trail map bound this frame) is pushed per frame by
+    // scene3d/terrain_dirt.js; this is only the flag. Both masks are DERIVED
+    // from terrain_families.js, never a hardcoded range.
+    mudPrintEnabled: terrainDirtEnabled() && terrainMudPrintsEnabled(),
+    mudWetnessEnabled: terrainDirtEnabled() && terrainMudWetnessEnabled(),
+    dirtCodeMask: computeCodeBitmask(TERRAIN_DIRT_CODES),
+    clayCodeMask: computeCodeBitmask(TERRAIN_CLAY_CODES),
     atlasTexture,
     roadTexture,
     roadCanvas,
@@ -5108,6 +5433,49 @@ export async function bakeTerrainForLandblock(
       uObsidianShininess: { value: DEFAULT_OBSIDIAN_SHININESS },
       uObsidianSpecular: { value: DEFAULT_OBSIDIAN_SPECULAR },
       uObsidianEnv: { value: DEFAULT_OBSIDIAN_ENV },
+
+      // Wave 3B — MUD PRINTS + WET MUD (plan §3.7 items 2 + 4). Ships OFF: the
+      // gates are `?terrainDirt=on && ?terrainMudPrints` / `?terrainMudWetness`
+      // composed in resolveTerrainRingOpts, so an absent flag leaves both values
+      // 0.0 and the fragment blocks are strict no-ops. Masks derived from
+      // terrain_families.js FAM_DIRT and its clay sub-variant.
+      //
+      // uMudTrailEnabled and uMudWetness are seeded INERT and refreshed each
+      // frame by scene3d/terrain_dirt.js over scene3d.terrainMaterials — the
+      // same per-frame push loop.js::tickTerrainUTime and IblEnvironment.tick
+      // use, so bake order vs trail-map construction order never matters, and
+      // the push (not a by-reference bind) is what makes it work on the
+      // ?terrainBatch path where uniform VALUES are cloned. NOTE there is no
+      // uMudTrailMap: the trail SAMPLER is shared with wave 2A's uSnowTrailMap
+      // (see the GLSL uniform block) — the sampler budget is 15/16 and a second
+      // one would sit on the WebGL2 floor.
+      uMudPrintEnabled: { value: opts.mudPrintEnabled ? 1.0 : 0.0 },
+      uMudTrailEnabled: { value: 0.0 },
+      uDirtCodeMask: {
+        value: Number.isInteger(opts.dirtCodeMask) ? opts.dirtCodeMask : 0,
+      },
+      uClayCodeMask: {
+        value: Number.isInteger(opts.clayCodeMask) ? opts.clayCodeMask : 0,
+      },
+      uMudPrintDepth: { value: DEFAULT_MUD_PRINT_DEPTH },
+      uMudPrintDarken: { value: DEFAULT_MUD_PRINT_DARKEN },
+      uMudPrintDryScale: { value: DEFAULT_MUD_PRINT_DRY_SCALE },
+      uMudWetEnabled: { value: opts.mudWetnessEnabled ? 1.0 : 0.0 },
+      uMudWetness: { value: 0.0 },
+      uMudWetStrength: { value: DEFAULT_MUD_WET_STRENGTH },
+      uMudWetDarken: { value: DEFAULT_MUD_WET_DARKEN },
+      uMudWetRoughDrop: { value: DEFAULT_MUD_WET_ROUGH_DROP },
+      uMudBaseRough: { value: DEFAULT_MUD_BASE_ROUGH },
+      uMudWetSpec: { value: DEFAULT_MUD_WET_SPEC },
+      uMudWetEnv: { value: DEFAULT_MUD_WET_ENV },
+      uClayWetTint: {
+        value: new THREE.Vector3(
+          DEFAULT_CLAY_WET_TINT[0],
+          DEFAULT_CLAY_WET_TINT[1],
+          DEFAULT_CLAY_WET_TINT[2],
+        ),
+      },
+      uClayWetGloss: { value: DEFAULT_CLAY_WET_GLOSS_BONUS },
       uDisplacementEnabled: {
         value: opts.displacementEnabled ? 1.0 : 0.0,
       },
