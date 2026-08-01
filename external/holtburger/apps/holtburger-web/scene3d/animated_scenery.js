@@ -231,6 +231,46 @@ function _isOrphaned(node) {
 }
 
 /**
+ * Is this node's landblock merely PARKED (warm-park), rather than evicted?
+ *
+ * ⚠ THE PARK TRAP (`landblock_lru.js` park(), DEFAULT-ON since 2026-07-10).
+ * Park detaches an LB's `staticsGroup` children into the pool, disposes
+ * NOTHING, and KEEPS the statics baked mark so re-entry is a pure re-attach.
+ * Our nodes carry `userData.landblockId`, so they ride into the pool — and
+ * `_isOrphaned` cannot tell that apart from a real eviction. Reclaiming a
+ * parked node strips its InstancedMesh slots, disposes the legacy path's
+ * per-instance geometry and drops its `_builtKeys` mark; unpark then
+ * re-attaches a DEAD anchor, and because the baked mark survived park nothing
+ * ever re-bakes it — the tree is invisible for the rest of the session.
+ *
+ * A parked node is detached, hence invisible and un-posed, so simply skipping
+ * it is free. When the pool later TRUE-disposes the LB (`disposeParked` →
+ * `evict`) the key leaves `parkPool`, this returns false again, and the very
+ * next frame reclaims the instance exactly as before — and by then `evict` has
+ * cleared `staticsBakedLbs`, so re-entry legitimately re-bakes the trees.
+ *
+ * Fail-soft `false` (today's behaviour) whenever the LRU isn't reachable —
+ * headless tests, capture paths, `?warmPark=off`.
+ *
+ * Exported purely as a test seam — the rAF reclaim loop that consumes it is
+ * module-private and needs a live wasm bake to drive, so
+ * `test_animated_scenery_park.mjs` locks the PREDICATE (masking, both facades,
+ * fail-soft) and the loop wiring is checked live (see the commit message).
+ */
+export function _isParkedLb(node) {
+  try {
+    const lb = node?.userData?.landblockId;
+    if (lb == null) return false;
+    if (typeof window === "undefined") return false;
+    const lru = window.liveScene3d?.landblockLru || window.__landblockLru || null;
+    // `isParked` masks the id to an lb-key itself (landblock_lru.js lbKeyOf).
+    return lru?.isParked?.(lb >>> 0) === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * Get-or-create the shared driver for an animation DID: fetch the keyframes
  * once, build the clip + a non-rendered template Group of part subgroups, and a
  * single AnimationMixer playing it. Returns the group or null (fail-soft).
@@ -950,6 +990,11 @@ function _ensureRaf() {
     for (let i = _instances.length - 1; i >= 0; i--) {
       const inst = _instances[i];
       if (_isOrphaned(inst.node)) {
+        // Detached ≠ evicted under warm-park: the pool still intends to
+        // re-attach this node. Skip it (it is invisible and un-posed while
+        // parked) and reclaim on the tick after the pool true-disposes it.
+        // See `_isParkedLb`.
+        if (_isParkedLb(inst.node)) continue;
         if (inst.instanced) _reclaimInstancedSlots(inst); // shared geometry — reclaim slots, dispose nothing
         try { inst.node.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); }); } catch (_) {}
         _builtKeys.delete(inst.key);
