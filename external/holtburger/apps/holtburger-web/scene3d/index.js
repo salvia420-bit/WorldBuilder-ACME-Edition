@@ -83,6 +83,7 @@ import { entityOwnedTally } from "./entity_owned_tally.js";
 import { RECOLOR_ON } from "./recolor_flag.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
+import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
 import {
   adaptiveResEnabled,
   adaptiveResSettleEnabled,
@@ -960,9 +961,28 @@ export async function preInit3D(canvas) {
   // A1 (perf plan 2026-05-18) — antialias is read from the quality
   // preset (with optional Graphics-tab override). MSAA costs ~25% of
   // frametime on weaker GPUs; off at `low`, on otherwise.
+  //
+  // 2026-08-01 (perf-synthesis §4 "MSAA allocated for nothing at mid+"):
+  // the context's `antialias` only multisamples the DEFAULT framebuffer
+  // (the canvas). With the composer active the canvas only ever receives
+  // fullscreen quads (composer output + cloud overlay) — no geometric
+  // edges — while world geometry renders into the composer's
+  // NON-multisampled RTs (no `multisampling` option is passed), so the
+  // MSAA storage + per-frame resolve was pure waste at mid+. Request it
+  // only for `?wireframe=1` (direct-to-canvas geometry, where it works)
+  // or the explicit `?canvasMsaa=on` escape. Note: the pre-composer boot
+  // window and the atmosphere-failure fallback render direct-to-canvas
+  // without AA under this default — loading frames / degraded mode only.
+  const _canvasMsaa = (() => {
+    try {
+      return new URLSearchParams(window.location.search).get("canvasMsaa") === "on";
+    } catch (_) {
+      return false;
+    }
+  })();
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: !!quality.flags.antialias,
+    antialias: !!quality.flags.antialias && (wireframeMode || _canvasMsaa),
     logarithmicDepthBuffer: true,
   });
   // Goal-1 (2026-06-22): three.js `renderer.debug.checkShaderErrors` defaults TRUE, which
@@ -992,6 +1012,18 @@ export async function preInit3D(canvas) {
   try {
     initBc7(renderer);
   } catch (_) { /* capability probes must never break boot */ }
+  // ?linkProbe=on — wrap gl.linkProgram/getProgramParameter to split the
+  // cheap COMPLETION_STATUS_KHR ready-polls from forced LINK_STATUS waits
+  // (the walk-stall score; see shader_prewarm.js). No-op with the flag off.
+  try {
+    installLinkProbe(renderer);
+    if (SHADER_PREWARM_ON) {
+      // eslint-disable-next-line no-console
+      console.log(
+        "[shader_prewarm] ?shaderPrewarm=on — all warms compile against the HalfFloat warm target (composer variant)"
+      );
+    }
+  } catch (_) { /* diag installs must never break boot */ }
   // 2026-05-21 Phase A/D follow-on — kick off the atmosphere LUT load
   // CONCURRENTLY with everything else. The post-Connect `init3D` arm
   // awaits the result of this promise; bake/load runs in parallel with
@@ -1151,7 +1183,11 @@ export async function preInit3D(canvas) {
       // uAtlas + nra ≈ 350 MiB with mips (vs ~88 MiB at 512), fine on a
       // real GPU, deliberately NOT default for low/mid. `?atlasTilePx=512`
       // is the explicit escape at any quality.
-      const _q = (_ps.get("quality") ?? "").toLowerCase();
+      // 2026-08-01 — gate on the RESOLVED preset, not the raw ?quality param:
+      // a gpu-probe- or localStorage-resolved high/ultra boot (no ?quality in
+      // the URL) was keeping the 512 atlas (perf-synthesis §0). Explicit
+      // `?atlasTilePx=512` above remains the escape at any tier.
+      const _q = quality.preset;
       if (_q === "high" || _q === "ultra") {
         setAtlasTilePx(1024);
         // eslint-disable-next-line no-console
@@ -1643,8 +1679,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // mirrored onto every builder's scene3d arg so per-phase gates can
     // read `scene3d.quality.flags.<feature>` without re-parsing the URL.
     quality,
-    // Phase 0.1 — `?shadows=on` URL toggle. Independent of `quality` for
-    // now; follow-on collapses it into `quality.flags.shadows`.
+    // Phase 0.1 — `?shadows=on` URL toggle. Deliberately independent of
+    // `quality`: the flags.shadows collapse was abandoned (2026-08-01) —
+    // presets carried shadows:true at mid+ with no reader, and collapsing
+    // would default plain shadow maps ON at mid+ unmeasured. CSM at high
+    // tiers is the separate `csm` flag.
     shadowsEnabled,
     // Phase 3.3 — Cascaded Shadow Maps bundle. Null when CSM is gated
     // off (low/mid quality OR `?shadows=off` explicit). Builders pick
@@ -4774,7 +4813,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             const doCompile = (label) => {
               try {
                 const t = performance.now();
-                renderer.compile(scene, camera);
+                // ?shaderPrewarm=on: compile with the HalfFloat warm target
+                // bound so these passes warm the composer-path program
+                // variant the world renders with (shader_prewarm.js). The
+                // composer exists by now (createAtmospherePipeline above),
+                // but the dummy target keeps this order-independent.
+                withWarmTarget(renderer, () => renderer.compile(scene, camera));
                 // eslint-disable-next-line no-console
                 console.log(
                   `[sky-k.3] renderer.compile ${label} ` +

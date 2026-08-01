@@ -22,6 +22,8 @@
 //
 // `?bakePrewarm=off` restores the legacy attach-then-lazy-compile behaviour.
 
+import { withWarmTarget } from "./shader_prewarm.js";
+
 export const BAKE_PREWARM = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
@@ -48,7 +50,10 @@ export const BAKE_PREWARM = (() => {
 export function guardedCompileAsync(renderer, object, camera, targetScene) {
   let materials;
   try {
-    materials = renderer.compile(object, camera, targetScene);
+    // ?shaderPrewarm=on: bind the HalfFloat warm target so the compiled
+    // variant is the composer-path one the world actually renders with
+    // (shader_prewarm.js). Flag off → compiles exactly as before.
+    materials = withWarmTarget(renderer, () => renderer.compile(object, camera, targetScene));
   } catch (e) {
     return Promise.reject(e);
   }

@@ -303,22 +303,49 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // renderer.getDrawingBufferSize above); a CSS-sized depth texture mismatches
   // whenever pixelRatio ≠ 1 (HiDPI or an explicit ?renderScale at boot) → an
   // incomplete FBO. See the setSize() note for the full failure mode.
-  const _depthBufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
-  const sceneDepthTexture = new THREE.DepthTexture(_depthBufSize.x, _depthBufSize.y);
-  if (portalStencil) {
-    // Depth + stencil must share ONE packed attachment when stencil is on;
-    // a depth-only texture can't coexist with a stencil buffer. AerialPerspective
-    // reads `.r`, which still returns the depth component of a packed texture.
-    sceneDepthTexture.format = THREE.DepthStencilFormat;
-    sceneDepthTexture.type = THREE.UnsignedInt248Type;
-  } else {
-    sceneDepthTexture.format = THREE.DepthFormat;
-    sceneDepthTexture.type = THREE.UnsignedIntType;
+  // `?stableDepthShare=on` (2026-08-01, ship-OFF pending the P6 fog
+  // adjudication): skip the bespoke attachment below and hand the depth
+  // consumers (cloud overlay, ground fog) the composer's OWN
+  // "EffectComposer.StableDepth" texture instead. pmndrs allocates that
+  // stable full-res target ANYWAY the moment any pass needsDepthTexture
+  // (postprocessing build/index.js:1047 createDepthTexture, :1201 addPass —
+  // AerialPerspective needs depth, so it always exists here) and blits depth
+  // into it each frame — so the bespoke texture is a SECOND full-res depth
+  // allocation (~8 MB at 1080p×DPR) holding the same bits. Sharing also moves
+  // the ground-fog read onto the stable COPY instead of the LIVE attachment
+  // of the FBO being rendered — removing the sample-while-attached feedback
+  // hazard the P6 swamp-fog adjudication (HANDOFF-1070-vistest §D) judges;
+  // run that adjudication with this flag in both positions. Off =
+  // byte-identical legacy. Stencil composes: createDepthTexture clones the
+  // packed DepthStencil format from inputBuffer.stencilBuffer (the ctor opt
+  // above), and composer.setSize resizes depthRenderTarget itself (:1325).
+  const stableDepthShare = (() => {
+    try {
+      if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+        return new URLSearchParams(globalThis.location.search).get("stableDepthShare") === "on";
+      }
+    } catch (_) {}
+    return false;
+  })();
+  let sceneDepthTexture = null;
+  if (!stableDepthShare) {
+    const _depthBufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
+    sceneDepthTexture = new THREE.DepthTexture(_depthBufSize.x, _depthBufSize.y);
+    if (portalStencil) {
+      // Depth + stencil must share ONE packed attachment when stencil is on;
+      // a depth-only texture can't coexist with a stencil buffer. AerialPerspective
+      // reads `.r`, which still returns the depth component of a packed texture.
+      sceneDepthTexture.format = THREE.DepthStencilFormat;
+      sceneDepthTexture.type = THREE.UnsignedInt248Type;
+    } else {
+      sceneDepthTexture.format = THREE.DepthFormat;
+      sceneDepthTexture.type = THREE.UnsignedIntType;
+    }
+    composer.inputBuffer.depthTexture = sceneDepthTexture;
+    composer.outputBuffer.depthTexture = sceneDepthTexture;
+    composer.inputBuffer.depthBuffer = true;
+    composer.outputBuffer.depthBuffer = true;
   }
-  composer.inputBuffer.depthTexture = sceneDepthTexture;
-  composer.outputBuffer.depthTexture = sceneDepthTexture;
-  composer.inputBuffer.depthBuffer = true;
-  composer.outputBuffer.depthBuffer = true;
 
   let skyRenderPass = null;
   if (skyScene && skyCamera) {
@@ -776,6 +803,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // const, which is never reassigned) so repeated resizes dispose the
       // right object + preserve the packed depth-stencil format when the
       // portal-stencil pass is on.
+      // stableDepthShare: no bespoke attachment exists — pmndrs resizes its
+      // own depthRenderTarget inside composer.setSize above (:1325).
+      if (stableDepthShare) return;
       const old = composer.inputBuffer.depthTexture || sceneDepthTexture;
       const dbs = renderer.getDrawingBufferSize(new THREE.Vector2());
       const next = new THREE.DepthTexture(dbs.x, dbs.y);
@@ -796,6 +826,12 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
      * through this accessor each frame.
      */
     getSceneDepthTexture() {
+      // stableDepthShare: the consumers read pmndrs' per-frame-blitted stable
+      // copy (null until a needsDepthTexture pass created it — the cloud
+      // overlay treats null as "not wired yet", its legacy behaviour).
+      if (stableDepthShare) {
+        return composer.depthRenderTarget ? composer.depthRenderTarget.depthTexture : null;
+      }
       return composer.inputBuffer.depthTexture;
     },
 
