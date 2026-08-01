@@ -1200,7 +1200,8 @@ const CAST_BUSY_SCOPE = (() => {
     return new URLSearchParams(window.location.search).get("castBusyScope")?.toLowerCase() !== "off";
   } catch (_) { return true; }
 })();
-// WS03 (2026-07-12, S2) — `?castOverlayGuard=on` (default OFF pending 1070 eye-test).
+// WS03 (2026-07-12, S2) — `?castOverlayGuard`. **DEFAULT-ON since 2026-08-01
+// (`?castOverlayGuard=off` escape restores the pre-flip behaviour byte-for-byte).**
 // Make mid-cast MOVEMENT stop breaking the cast VISUAL, mirroring retail's single-
 // playhead splice: (a) a locomotion base-cycle swap under an ACTIVE cast/swing overlay
 // installs the new base UNDER it (weight 0) instead of crossFadeTo-.stop()'ing the
@@ -1209,14 +1210,39 @@ const CAST_BUSY_SCOPE = (() => {
 // forward-edge anim-break (cancelCastSequence) HARD-CUTS the overlay + restores the base,
 // instead of relying on the incidental crossFadeTo stop (which misses link-keyed
 // _tryPlayLink overlays). A FORWARD edge still breaks the cast (retail fastcast); a
-// slidecast / steady hold / pump reclaim keeps it playing full-body. Default OFF: every
-// flag-off branch below is a verbatim copy of the shipped path.
+// slidecast / steady hold / pump reclaim keeps it playing full-body.
+//
+// WHY IT IS NOW DEFAULT-ON (owner report 2026-08-01: "the animation doesn't continue
+// when side-strafing … breaks the animation client side, on our own side"):
+//
+//   * The break was purely OURS. Every drive change — including a pure STRAFE, which
+//     leaves the forward axis at 0 and therefore re-issues Ready (0x41000003) — reaches
+//     `setMotion` (index.html kind-61 `DriveApplied` under the default-ON `?cmdInterp`,
+//     or the legacy sig-diff block when `?cmdInterp=off`). setMotion's tail calls
+//     `inst.crossFadeTo(action, key, 0)`, whose hard-cut branch does
+//     `this.currentAction.stop()` — and the local cast gesture IS `currentAction`
+//     (setSwingMotion stamps it). So strafing stopped our own windup.
+//
+//   * Retail does the opposite. `CMotionTable::GetObjectSequence`'s MOVEMENT branch
+//     calls `CSequence::clear_physics` + `remove_cyclic_anims` (acclient.c:337795-337796)
+//     and NEVER `clear_animations`; `remove_cyclic_anims` (:340154) starts at
+//     `first_cyclic`, so every one-shot link anim queued BEFORE it is untouched.
+//     `remove_redundant_links` (:330079) additionally aborts its backward truncation
+//     scan the moment it meets a queued action with anims. Sidestep specifically enters
+//     via `apply_interpreted_movement` (:344178) → `DoInterpretedMotion`, i.e. that same
+//     movement branch. Retail's strafe therefore cannot cancel an in-flight gesture.
+//     (Forward is different only because a cast gesture is a SubState-class command that
+//     OWNS the single forward slot — `InterpretedMotionState::ApplyMotion` :332759/:332890
+//     — which is the deliberate `?castMove` fastcast/anim-break we keep.)
+//
+// Every flag-off branch below is a verbatim copy of the pre-flip shipped path, so
+// `?castOverlayGuard=off` is a byte-identical rollback.
 const CAST_OVERLAY_GUARD = (() => {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     return new URLSearchParams(window.location.search)
-      .get("castOverlayGuard")?.toLowerCase() === "on";
-  } catch (_) { return false; }
+      .get("castOverlayGuard")?.toLowerCase() !== "off";
+  } catch (_) { return true; }
 })();
 // WS12 (2026-07-12) — `?castCancelStops=off` to disable (DEFAULT-ON, `!== "off"`
 // escape per the flag footgun; feel/visual change, eye-tested GTX-1070
@@ -9283,6 +9309,17 @@ export class EntityManager {
     // playback to actual ground travel. Only walk/run-family cycles (sidestep
     // / turn-in-place / fall also classify "walk"; their |velocity| is ~0 →
     // cycleTimeScale no-ops). Gated by ?velScale=on.
+    // WS03 ordering fix (2026-08-01) — the `?castOverlayGuard` block far below
+    // decides "same base cycle" vs "genuine base SWAP" by comparing `cacheKey`
+    // against `_locoCycleKey`. The VEL_SCALE_ON stamp on the very next line
+    // repoints `_locoCycleKey` to `cacheKey` FIRST, so for every walk/run swap
+    // the guard saw them equal and took its "leave it suppressed" early return:
+    // the new gait cycle was never played, and `_completeOverlay`'s restore then
+    // targeted an action that had never run (`cur.isRunning()` false) so the legs
+    // stayed dead after the cast. Capture the PRE-stamp key here and let the
+    // guard compare against that. With `?velScale=off` (or a non-locomotion cls)
+    // nothing below reassigns `_locoCycleKey`, so this is identical either way.
+    const preLocoCycleKey = inst._locoCycleKey;
     if (VEL_SCALE_ON && (cls === "walk" || cls === "run")) {
       inst._locoCycleKey = cacheKey;
       this._resolveCycleBaseSpeed(inst, mtableId, stance, cmd, cacheKey);
@@ -9517,12 +9554,17 @@ export class EntityManager {
       inst._baseSuppressAction !== action &&
       (cls === "walk" || cls === "run" || cls === "idle")
     ) {
-      if (cacheKey === inst._locoCycleKey) {
+      // NB: `preLocoCycleKey`, not `inst._locoCycleKey` — the VEL_SCALE_ON block
+      // above already repointed the live field to `cacheKey` for walk/run, which
+      // would make every gait swap look like a same-cycle re-issue (2026-08-01
+      // ordering fix; see the comment at the capture site).
+      if (cacheKey === preLocoCycleKey) {
         // same base cycle still driving under the overlay — leave it suppressed.
+        inst._locoCycleKey = preLocoCycleKey;
         try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
         return;
       }
-      const prevKey = inst._locoCycleKey;
+      const prevKey = preLocoCycleKey;
       if (prevKey && prevKey !== cacheKey) {
         const prev = inst.actions?.get(prevKey);
         if (prev && prev !== action) { try { prev.stop(); } catch (_) {} }
