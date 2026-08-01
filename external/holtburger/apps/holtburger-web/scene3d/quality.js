@@ -88,6 +88,18 @@ export const PRESETS = {
         terrainTrailRes: 128,
         terrainTrailRadius: 32,
         terrainTrailFade: 4,
+        // Terrain SAND/DESERT (Wave 1B, plan §3.2). `terrainSand` is the FAMILY
+        // MASTER and ships false on every tier (§5.9); `low` is additionally
+        // `null` in the plan's tier table — every sand knob here is 0/false, so
+        // even `?terrainSand=on` at low renders nothing. Like `terrainTrail`,
+        // the two BOOLEANS are deliberately NOT in BOOL_FLAGS (parseBool would
+        // widen the exact-`on` opt-in their readers require); the three NUMERIC
+        // knobs are safe in INT/FLOAT_FLAGS — they cannot turn the family on.
+        terrainSand: false,
+        terrainSandStreamerCount: 0,
+        terrainSandDevilCount: 0,
+        terrainSandSparkle: false,
+        terrainSandRadius: 32,
         maxParticlesPerEmitter: 64,
     },
     mid: {
@@ -139,6 +151,13 @@ export const PRESETS = {
         terrainTrailRes: 128,
         terrainTrailRadius: 48,
         terrainTrailFade: 4,
+        // Terrain SAND — see the `low` tier. mid = streamers + sparkle, no
+        // devils (plan §3.2 "mid {streamers:800, devils:0, sparkle:true}").
+        terrainSand: false,
+        terrainSandStreamerCount: 800,
+        terrainSandDevilCount: 0,
+        terrainSandSparkle: true,
+        terrainSandRadius: 48,
         maxParticlesPerEmitter: 256,
     },
     high: {
@@ -172,6 +191,13 @@ export const PRESETS = {
         terrainTrailRes: 256,
         terrainTrailRadius: 48,
         terrainTrailFade: 4,
+        // Terrain SAND — see the `low` tier. plan §3.2 "high {streamers:2000,
+        // devils:1, sparkle:true}".
+        terrainSand: false,
+        terrainSandStreamerCount: 2000,
+        terrainSandDevilCount: 1,
+        terrainSandSparkle: true,
+        terrainSandRadius: 64,
         maxParticlesPerEmitter: 1024,
     },
     ultra: {
@@ -204,6 +230,13 @@ export const PRESETS = {
         terrainTrailRes: 512,
         terrainTrailRadius: 64,
         terrainTrailFade: 4,
+        // Terrain SAND — see the `low` tier. plan §3.2 "ultra {streamers:3000,
+        // devils:2, sparkle:true}".
+        terrainSand: false,
+        terrainSandStreamerCount: 3000,
+        terrainSandDevilCount: 2,
+        terrainSandSparkle: true,
+        terrainSandRadius: 80,
         maxParticlesPerEmitter: 2048,
     },
 };
@@ -248,6 +281,11 @@ const INT_FLAGS = new Set([
     // Terrain-VFX trail map (Wave 0B). `terrainTrail` itself is absent for the
     // same reason `gfxRelief` is — see the PRESETS comment.
     "terrainTrailRes",
+    // Terrain SAND (Wave 1B). Counts only — `terrainSand` and
+    // `terrainSandSparkle` are absent from BOOL_FLAGS for the `gfxRelief`
+    // reason (their readers require an exact `=== "on"`).
+    "terrainSandStreamerCount",
+    "terrainSandDevilCount",
 ]);
 
 // Float-typed flags.
@@ -255,6 +293,8 @@ const FLOAT_FLAGS = new Set([
     "gfxReliefScale",
     "terrainTrailRadius",
     "terrainTrailFade",
+    // Terrain SAND (Wave 1B) — streamer-field half-extent in metres.
+    "terrainSandRadius",
 ]);
 
 function parseBool(raw) {
