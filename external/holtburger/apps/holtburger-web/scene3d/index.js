@@ -141,6 +141,11 @@ import { FixedSlotGrid, EdgeParkScheduler, FIXED_GRID_TERRAIN_RADIUS } from "./f
 // (the module imports no three), and it installs its own park/unpark/evict
 // hooks by CHAINING onto terrain_batch.js's — never clobbering them.
 import { initTerrainVfx, terrainVfxNoteLandblockMesh } from "./terrain_vfx.js";
+// Terrain-VFX family §3.1 GRASS (Wave 1A). Registers a camera-scoped provider
+// with the spine above — but ONLY under `?terrainGrass=on`: with the flag off
+// initTerrainGrass registers nothing, so a bare-default boot is byte-identical
+// (it does not even trigger the spine's on-demand terrain-oracle import).
+import { initTerrainGrass } from "./terrain_grass.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -3455,6 +3460,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainVfx] initTerrainVfx threw (terrain VFX disabled):", e);
+  }
+  // ── Terrain-VFX family: GRASS (Wave 1A, plan §3.1) ────────────────────
+  // Ship-OFF behind `?terrainGrass=on`; a no-op (no provider, no allocation)
+  // otherwise and under `?wireframe=1`. Camera-scoped, so it needs no landblock
+  // wiring at all — just THREE and worldRoot (the frame terrainGroup lives in,
+  // i.e. AC space) for its one InstancedMesh. Readback: `window.__terrainGrass`.
+  try {
+    initTerrainGrass({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainGrass] initTerrainGrass threw (grass disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees
