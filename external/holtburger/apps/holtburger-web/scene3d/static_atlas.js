@@ -1138,7 +1138,16 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         } else {
           const stride = w * h * 4;
           const src = img.data;
-          if (src && src.length === stride) ud.diffArray.image.data.set(src, layer * stride);
+          if (src && src.length === stride) {
+            ud.diffArray.image.data.set(src, layer * stride);
+            // 2026-08-01 — mark ONLY this layer dirty (terrain_batch.js:315
+            // precedent). Without it, `needsUpdate = true` below re-uploads the
+            // ENTIRE pre-allocated array (up to 128 layers × 2 arrays ≈ 16-32 MiB)
+            // on every per-LB feed — the measured walk-stall texture-upload cost
+            // (RESULTS-task12). With layerUpdates non-empty three emits one
+            // texSubImage3D per touched layer instead.
+            if (typeof ud.diffArray.addLayerUpdate === "function") ud.diffArray.addLayerUpdate(layer);
+          }
         }
         entry = { layer, refs: 1 };
         ud.layerOf.set(uuid, entry);
@@ -1151,6 +1160,8 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         // normalScale/roughness, so the first-writer choice carries no drift.
         if (ud.nraArray) {
           const full = packNraLayer(ud.nraArray, entry.layer, mat, w, h, _atlasStats);
+          // Same single-layer dirty mark as the diffuse write above.
+          if (typeof ud.nraArray.addLayerUpdate === "function") ud.nraArray.addLayerUpdate(entry.layer);
           touchedNra.add(ud.nraArray);
           // Phase-5 texchan roughness/AO attach asynchronously; if they were not
           // there yet, queue a re-pack rather than lose the relief for the session.
@@ -1314,6 +1325,9 @@ function _drainNraPending() {
       // only the newly-arrived rough/AO channels are added to the census.
       const s = { nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0, nraResampled: 0, nraMetalDropped: 0 };
       packNraLayer(p.ud.nraArray, p.layer, p.mat, p.w, p.h, s);
+      // Single-layer dirty mark — see the feed path; keeps the ~10 Hz repack
+      // from re-uploading the whole nra array per drained entry.
+      if (typeof p.ud.nraArray.addLayerUpdate === "function") p.ud.nraArray.addLayerUpdate(p.layer);
       _atlasStats.nraWithRough += s.nraWithRough;
       _atlasStats.nraWithAo += s.nraWithAo;
       _atlasStats.nraResampled += s.nraResampled;
