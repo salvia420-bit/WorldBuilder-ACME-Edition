@@ -68,8 +68,20 @@ import {
 // readers that gate the grain sparkle. `terrain_families.js` is the single
 // source of truth for which CODES are sand; `vfx_flags.js` owns every
 // terrain-VFX flag reader (no second reader, plan §2.4).
-import { FAM_SAND, familyForCode } from "./terrain_families.js";
+import { FAM_SAND, FAM_SNOWICE, familyForCode } from "./terrain_families.js";
 import { terrainSandEnabled, terrainSandSparkleEnabled } from "./vfx_flags.js";
+// Wave 2A (SNOW/ICE) — a SECOND import statement from the same module rather
+// than widening the line above, deliberately: `test_terrain_sand_sparkle.mjs`
+// locks that exact one-line form as its "no second reader" assertion, and one
+// family's test should not have to be rewritten for another family's landing.
+// ESM dedupes the module either way.
+import {
+  terrainSnowEnabled,
+  terrainSnowSparkleEnabled,
+  terrainSnowPrintsEnabled,
+  terrainIceEnabled,
+  terrainIceRefractionEnabled,
+} from "./vfx_flags.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -889,6 +901,82 @@ const TERRAIN_SAND_CODES = Object.freeze(
   })(),
 );
 
+// Wave 2A — the SNOW/ICE set for the crystal sparkle and the footprint dent,
+// DERIVED from `terrain_families.js` (FAM_SNOWICE = codes 2 `Ice`, 15 `Snow`,
+// 27 `BlueIce` in Dereth) for exactly the reason TERRAIN_SAND_CODES is. Snow is
+// in no water set, so `?strictWaterCodes` cannot move it.
+const TERRAIN_SNOW_CODES = Object.freeze(
+  (() => {
+    const s = new Set();
+    for (let c = 0; c < 32; c += 1) if (familyForCode(c) === FAM_SNOWICE) s.add(c);
+    return s;
+  })(),
+);
+
+// Wave 2A — the ICE MATERIAL set. A STRICT SUBSET of FAM_SNOWICE: hard, wet,
+// low-roughness ice is codes 2 (`Ice`) and 27 (`BlueIce`) only; 15 (`Snow`) is
+// matte and must never get the specular/refraction treatment (plan §3.4 "codes
+// 2/27"). This is the plan's "per-code parameter table INSIDE the family
+// module" rule (§1.3) expressed as a filter over the family rather than a
+// second hardcoded list: the family stays the source of truth for membership,
+// and the sub-variant table in `terrain_snow.js::SNOWICE_VARIANTS` is the
+// source of truth for which members are ICE. Kept in lockstep by
+// `test_terrain_ice.mjs`.
+const TERRAIN_ICE_MATERIAL_CODES = Object.freeze(
+  (() => {
+    const s = new Set();
+    for (const c of TERRAIN_SNOW_CODES) if (c === 2 || c === 27) s.add(c);
+    return s;
+  })(),
+);
+
+// ----- Wave 2A — SNOW CRYSTAL SPARKLE (terrain-VFX plan §3.4 item 2) --
+//
+// Louder than the sand grain sparkle on purpose: sand glitters at a grazing
+// angle, snow FLASHES — and the flash is what sells it. Camera-motion-dependent
+// twinkle is the whole effect (plan §3.4: "a static sparkle texture reads as
+// noise"), which is why the lobe exponent is enormous: a facet lights only when
+// the sun/eye half-vector lands almost exactly on it, so moving the camera
+// sweeps the half-vector across the facet field and different crystals pop.
+const DEFAULT_SNOW_SPARKLE_STRENGTH = 1.35;
+// Crystal cells per metre. Finer than sand's 26 — a snow glint is a point, not
+// a grain — which makes the distance fade below more load-bearing, not less.
+const DEFAULT_SNOW_SPARKLE_DENSITY = 42.0;
+// The lobe exponent. See above: this IS the camera-motion dependence.
+const DEFAULT_SNOW_SPARKLE_SHARPNESS = 420.0;
+// Distance fade, same reasoning as the sand sparkle and the water sheen: an
+// unfiltered per-pixel micro-facet aliases hard once one pixel spans many
+// cells. Snow's band is shorter than sand's because its cells are finer.
+const DEFAULT_SNOW_SPARKLE_FADE_START = 12.0;
+const DEFAULT_SNOW_SPARKLE_FADE_END = 55.0;
+
+// ----- Wave 2A — SNOW FOOTPRINTS (plan §3.4 item 3) -------------------
+//
+// The dent, in the same units the POM march works in: a UV shift along the view
+// parallax vector. Deliberately ~1/3 of uPomScale (0.012) so a print reads as a
+// depression IN the relief rather than fighting it (plan §3.4 "keep the
+// amplitude well under uPomScale").
+const DEFAULT_SNOW_PRINT_DEPTH = 0.004;
+// Fraction of the lit colour removed at a full-strength print. Compressed snow
+// is denser and shadowed, so darkening alone already reads as a print — which
+// is exactly the `mid`/no-POM degrade (plan §2.7.3 point 4).
+const DEFAULT_SNOW_PRINT_DARKEN = 0.32;
+
+// ----- Wave 2A — ICE MATERIAL (plan §3.4 item 4) ----------------------
+//
+// Gloss = 1 - roughness for the ice codes. 0.88 is "wet, hard, slightly
+// pitted": a sharp sun glint and a near-mirror env reflection at a low mip,
+// without the plastic look a flat 1.0 gives.
+const DEFAULT_ICE_GLOSS = 0.88;
+// Blinn sun-glint gain, and the env-reflection gain (the latter only does
+// anything with ?ibl on, which is default-ON).
+const DEFAULT_ICE_SPEC_STRENGTH = 0.55;
+const DEFAULT_ICE_ENV_STRENGTH = 0.65;
+// Fake refraction: ONE extra atlas tap at cellUv offset by the view vector.
+// 0.004 cell-UV units = a third of uPomScale, i.e. well under it as the plan
+// requires — the two are applied in the same direction and must not fight.
+const DEFAULT_ICE_REFRACT_AMOUNT = 0.004;
+
 // ----- GLSL — bilinear-blend shader, three.js port ------------------
 //
 // Vertex shader: drops the PIXI mat3 chain in favour of three.js's
@@ -1381,6 +1469,48 @@ uniform float uSandSparkleDensity;   // grain cells per metre
 uniform float uSandSparkleFadeStart; // metres — full strength nearer than this
 uniform float uSandSparkleFadeEnd;   // metres — zero beyond
 
+// === 2026-08-01 (Wave 2A) — SNOW / ICE ==================================
+// Terrain-VFX plan §3.4. THREE independent terms, three gates:
+//   1. uSnowSparkleEnabled — sun-glitter on FAM_SNOWICE (codes 2/15/27)
+//   2. uSnowPrintEnabled   — the shared trail map read as a dent + darkening
+//   3. uIceEnabled         — the codes-2/27-only hard/wet material treatment
+// Every mask is built on the JS side from terrain_families.js, never from a
+// hardcoded code range (plan §8 risk 12), and every code test goes through the
+// uVertexTypes 9x9 DataTexture, never the terrainCode ATTRIBUTE, which the
+// fragment stage does not read on the subdivided path (plan trap T3). All
+// three are strict no-ops when their gate is 0 and on every non-snow fragment.
+uniform float uSnowSparkleEnabled;   // 0.0 OFF / 1.0 ON
+uniform int uSnowSparkleCodeMask;    // bit i = terrain code i is FAM_SNOWICE
+uniform float uSnowSparkleStrength;
+uniform float uSnowSparkleDensity;   // crystal cells per metre
+uniform float uSnowSparkleSharpness; // half-vector lobe exponent
+uniform float uSnowSparkleFadeStart;
+uniform float uSnowSparkleFadeEnd;
+
+// Footprints. uSnowPrintEnabled is the FLAG (baked with the material);
+// uSnowTrailEnabled is "a trail map exists and is bound THIS FRAME", pushed by
+// scene3d/terrain_snow.js over scene3d.terrainMaterials — the same per-frame
+// push idiom loop.js::tickTerrainUTime and IblEnvironment.tick already use.
+// Both must be on: the map is built ONLY under ?terrainTrail=on and this family
+// never lazily creates one (the grass-stomp precedent).
+uniform float uSnowPrintEnabled;     // 0.0 OFF / 1.0 ON
+uniform float uSnowPrintDepth;       // cell-UV dent amplitude (<< uPomScale)
+uniform float uSnowPrintDarken;      // 0..1 fraction of lit colour removed
+uniform sampler2D uSnowTrailMap;     // R8 ping-ponged trail RT (trail_map.js)
+uniform vec2 uSnowTrailCenter;       // AC world centre of the map, texel-snapped
+uniform float uSnowTrailRadius;      // HALF-extent in metres
+uniform float uSnowTrailEnabled;     // 0.0 = no map bound this frame
+
+// Ice. The mask is a STRICT SUBSET of the snow mask: 2 (Ice) + 27 (BlueIce)
+// only, never 15 (Snow), which stays matte.
+uniform float uIceEnabled;           // 0.0 OFF / 1.0 ON
+uniform int uIceCodeMask;            // bit i = terrain code i is ICE MATERIAL
+uniform float uIceGloss;             // 1 - roughness
+uniform float uIceSpecStrength;      // Blinn sun-glint gain
+uniform float uIceEnvStrength;       // env-cube reflection gain (needs ?ibl)
+uniform float uIceRefractEnabled;    // 0.0 OFF / 1.0 ON (ultra tier)
+uniform float uIceRefractAmount;     // cell-UV offset amplitude (<< uPomScale)
+
 // Clouds-L — sample the cloud effect's cascade-0 shadow buffer to dim
 // terrain ambient + diffuse where clouds occlude the sun. takram's
 // cloud raymarch already produces these as a side effect of its
@@ -1608,6 +1738,18 @@ bool isSandCode(int c) {
   return c >= 0 && c < 32 && (uSandSparkleCodeMask & (1 << c)) != 0;
 }
 
+// Wave 2A — THE single snow test and THE single ice test for the fragment
+// stage, both the same shape as isWaterCode/isSandCode above and both reading a
+// mask built from terrain_families.js. isIceCode's mask is a STRICT SUBSET of
+// isSnowCode's (2/27 vs 2/15/27): snow sparkles, ice additionally goes hard and
+// wet. Code 32 is the road layer and is never snow or ice.
+bool isSnowCode(int c) {
+  return c >= 0 && c < 32 && (uSnowSparkleCodeMask & (1 << c)) != 0;
+}
+bool isIceCode(int c) {
+  return c >= 0 && c < 32 && (uIceCodeMask & (1 << c)) != 0;
+}
+
 int vertexTypeAt(int iu, int iv) {
   return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).r * 255.0 + 0.5);
 }
@@ -1759,6 +1901,16 @@ void main() {
   bool wc11 = isWaterCode(t11);
   bool cellTouchesWater = wc00 || wc10 || wc01 || wc11;
 
+  // Wave 2A — per-cell SNOW presence, resolved here for exactly the reason
+  // cellTouchesWater is: the FOOTPRINT DENT has to run BEFORE the albedo taps
+  // (it shifts cellUv, like POM), and the smooth bilinear snowW is not computed
+  // until after them. A binary cell test is the right gate for a UV shift (the
+  // dent either applies to this cell's sampling or it does not); the SMOOTH
+  // fraction still governs the darkening amplitude further down, so the print
+  // fades across a snow/rock boundary instead of stopping at a cell edge.
+  bool cellTouchesSnow = isSnowCode(t00) || isSnowCode(t10)
+                      || isSnowCode(t01) || isSnowCode(t11);
+
   // T4 POM -- computed here (before every texture sample) so the offset
   // cellUv feeds the whole pipeline. Nearest-corner layer only (same
   // single-sample convention as the detail layers); constant-height
@@ -1805,6 +1957,50 @@ void main() {
         uvOff += stepUv;
       }
       cellUv += uvOff;
+    }
+  }
+
+  // === Wave 2A — SNOW FOOTPRINTS (terrain-VFX plan §3.4 item 3) ===========
+  // The shared trail map (scene3d/trail_map.js, wave 0B) read as a small
+  // downward displacement plus a darkening. Prints persist because the map's
+  // recovery is a URL knob (?terrainTrailFade) that snow asks to be set long --
+  // the map is FAMILY-AGNOSTIC and nobody allocates a second one.
+  //
+  // WHERE IT SITS AND WHY (plan §2.7.3 point 1):
+  //   - IMMEDIATELY AFTER the POM march, so the trail is sampled at the
+  //     PARALLAX-CORRECTED surface point (the post-march cellUv offset is added
+  //     back to the world position in cell units x 24 m). Sampling at the raw
+  //     point would slide the print against the relief it is denting -- exactly
+  //     the registration bug the 07-31 water fix closed (plan §8 risk 14).
+  //   - The DENT then shifts cellUv AGAIN, along the same view-parallax vector
+  //     POM marches, so every downstream sampler (albedo, nra, masks, TexMerge,
+  //     detail) rides it as one -- which is the whole reason the water fix moved
+  //     the scroll derivation below the march. Amplitude is uSnowPrintDepth,
+  //     deliberately a third of uPomScale so the two never fight.
+  //   - It HONOURS the cellTouchesWater bypass: POM does not run there, and a
+  //     shoreline snow cell must not dent through the water surface.
+  //   - MID-TIER DEGRADE (plan §2.7.3 point 4): the dent is inside a
+  //     uPomEnabled test, so with POM off snowPrint is still computed and the
+  //     print degrades to DARKENING ONLY -- a coherent lesser effect, not a
+  //     broken one. snowPrint stays in scope for that darkening at the end.
+  float snowPrint = 0.0;
+  if (uSnowPrintEnabled > 0.5 && uSnowTrailEnabled > 0.5
+      && cellTouchesSnow && !cellTouchesWater) {
+    // world(x,y,z) = ac(x,z,-y), so the AC ground point is (w.x, -w.z).
+    vec2 printShift = (cellUv - vec2(fu, fv)) * 24.0;
+    vec2 printXy = vec2(vWorldPos.x, -vWorldPos.z) + printShift;
+    vec2 trailUv = (printXy - uSnowTrailCenter) / (2.0 * uSnowTrailRadius) + 0.5;
+    // Outside the map footprint there is NO trail -- never a clamped smear
+    // (the trail_map.js contract).
+    if (trailUv.x >= 0.0 && trailUv.x <= 1.0 && trailUv.y >= 0.0 && trailUv.y <= 1.0) {
+      snowPrint = clamp(texture(uSnowTrailMap, trailUv).r, 0.0, 1.0);
+    }
+    if (snowPrint > 0.0 && uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd) {
+      vec3 pvw = normalize(vWorldPos - cameraPosition);
+      vec3 pvt = vec3(pvw.x, -pvw.z, pvw.y);
+      if (pvt.z < -0.15) {
+        cellUv += (pvt.xy / max(-pvt.z, 0.3)) * (uSnowPrintDepth * snowPrint);
+      }
     }
   }
 
@@ -1870,6 +2066,19 @@ void main() {
   float sandW = clamp(
     (isSandCode(t00) ? w00 : 0.0) + (isSandCode(t10) ? w10 : 0.0) +
     (isSandCode(t01) ? w01 : 0.0) + (isSandCode(t11) ? w11 : 0.0), 0.0, 1.0);
+
+  // Wave 2A — bilinear SNOW and ICE fractions, same four corner weights again
+  // and for the same reason: the sparkle, the print darkening and the ice
+  // treatment all fade in across a boundary rather than switching at a cell
+  // midline. iceW is a STRICT SUBSET of snowW by construction (isIceCode's mask
+  // is a subset of isSnowCode's), so a BlueIce/Snow seam gets the sparkle
+  // continuously while only the ice half goes hard and wet.
+  float snowW = clamp(
+    (isSnowCode(t00) ? w00 : 0.0) + (isSnowCode(t10) ? w10 : 0.0) +
+    (isSnowCode(t01) ? w01 : 0.0) + (isSnowCode(t11) ? w11 : 0.0), 0.0, 1.0);
+  float iceW = clamp(
+    (isIceCode(t00) ? w00 : 0.0) + (isIceCode(t10) ? w10 : 0.0) +
+    (isIceCode(t01) ? w01 : 0.0) + (isIceCode(t11) ? w11 : 0.0), 0.0, 1.0);
 
   // Skip stochastic blending when all four corners are the same terrain type:
   // there is no boundary to draw, and picking between identical textures only
@@ -2119,6 +2328,33 @@ void main() {
     if (w10 > nw) { nw = w10; nearCode = t10; }
     if (w01 > nw) { nw = w01; nearCode = t01; }
     if (w11 > nw) { nw = w11; nearCode = t11; }
+  }
+
+  // === Wave 2A — ICE FAKE REFRACTION (terrain-VFX plan §3.4 item 4) =======
+  // A hint of refractive DEPTH for ~one texture tap: re-sample the nearest
+  // corner's albedo at a UV pushed along the view vector, and blend it under
+  // the real one by the ice fraction. That is the cheap stand-in the plan
+  // specifies, and it is EXPLICITLY NOT MeshTransmissionMaterial (which needs a
+  // second full scene render per frame for a handful of texels -- rejected on
+  // cost, plan §3.4).
+  //
+  // ORDERING (plan §3.4): applied AFTER the POM march (cellUv already carries
+  // the parallax offset here, and the snow-print dent too), and the amplitude
+  // uIceRefractAmount is a third of uPomScale (0.012) so the two offsets are in
+  // the same direction and never fight. Bypassed on water-touching cells, where
+  // POM did not run and the water agent owns the surface. Gated separately from
+  // the rest of the ice treatment because it is the only part with a texture
+  // cost -- the ultra tier turns it on alone.
+  if (uIceRefractEnabled > 0.5 && uIceEnabled > 0.5 && iceW > 0.0 && !cellTouchesWater) {
+    vec3 rvw = normalize(vWorldPos - cameraPosition);
+    vec3 rvt = vec3(rvw.x, -rvw.z, rvw.y);
+    if (rvt.z < -0.15) {
+      vec2 refrUv = cellUv + (rvt.xy / max(-rvt.z, 0.3)) * uIceRefractAmount;
+      vec3 refr = texture(uAtlas, atlasUvFor(clamp(nearCode, 0, 32), refrUv)).rgb;
+      // 0.55 keeps the surface tile dominant: this reads as something seen a
+      // few centimetres INTO the ice, not as a doubled texture.
+      result = mix(result, refr, iceW * 0.55);
+    }
   }
 
   if (uDetailTexEnabled > 0.5) {
@@ -2580,6 +2816,122 @@ void main() {
     modulated *= acC;
   }
 
+  // === Wave 2A — SNOW FOOTPRINT DARKENING (plan §3.4 item 3) =============
+  // The other half of the print. Compressed snow is denser and self-shadowed,
+  // so a darkening alone already reads as a footprint -- which is precisely why
+  // the mid degrade (no POM, hence no dent) is a coherent lesser effect and
+  // not a broken one. Weighted by the SMOOTH bilinear snowW so a print running
+  // off snow onto rock fades out instead of ending at a cell edge, and applied
+  // to modulated (the lit colour, pre cloud/CSM) so a print inside a cloud
+  // shadow does not double-darken.
+  if (uSnowPrintEnabled > 0.5 && snowPrint > 0.0 && snowW > 0.0) {
+    modulated *= mix(1.0, 1.0 - uSnowPrintDarken, snowPrint * snowW);
+  }
+
+  // === Wave 2A — SNOW CRYSTAL SPARKLE (plan §3.4 item 2) =================
+  // vfx/components/glint.js's maths -- a Blinn half-vector lobe times a
+  // time+hash twinkle -- with the metalness gate replaced by the SNOW FRACTION
+  // and the PER-INSTANCE hash replaced by a high-frequency WORLD-SPACE one
+  // (plan §3.4: "port that maths with a high-frequency world-space hash instead
+  // of the per-instance one"). There is no instance here: the terrain is one
+  // mesh, so vVfxHash does not exist and could not vary per crystal anyway.
+  //
+  // CAMERA-MOTION-DEPENDENT TWINKLE IS THE WHOLE EFFECT (plan §3.4: "a static
+  // sparkle texture reads as noise"). Two things produce it, and neither is the
+  // clock: (a) the lobe exponent is enormous (uSnowSparkleSharpness, 420 vs
+  // sand's 180), so a crystal flashes only when the sun/eye half-vector lands
+  // almost exactly on its facet -- walking or turning sweeps the half-vector
+  // across the field and different crystals pop; (b) the facet normals have a
+  // WIDE spread about the vertical, unlike sand's, because snow crystals lie at
+  // every angle and a flash must be able to come from any direction. The uTime
+  // term only keeps a STANDING camera from freezing into a static dot pattern.
+  //
+  // NO GRAZING GATE, deliberately -- that is sand's signature (dune faces catch
+  // the light at a low angle). Snow glitters from directly above too, and
+  // gating it out would remove the effect exactly where a walking player sees
+  // the ground.
+  //
+  // WHERE IT SITS AND WHY: after the POM march with its crystal field anchored
+  // to the PARALLAX-CORRECTED point (plan §2.7.3 point 2), honouring the
+  // cellTouchesWater bypass, multiplied by cloudShadow * csmShadow (a sparkle
+  // is sunlight -- it must go out under a cloud), and EMISSIVE-ONLY: it is
+  // ADDED through iblSpec and never touches albedo, cellUv or any water term.
+  // Nothing in this block reads uPomEnabled, so the mid degrade is the same
+  // sparkle on an unrelieved surface.
+  if (uSnowSparkleEnabled > 0.5 && snowW > 0.0 && !cellTouchesWater) {
+    float snowFade = 1.0 - smoothstep(uSnowSparkleFadeStart, uSnowSparkleFadeEnd, vViewDepth);
+    if (snowFade > 0.001) {
+      vec3 snowViewW = normalize(vWorldPos - cameraPosition);
+      vec3 snowViewAc = vec3(snowViewW.x, -snowViewW.z, snowViewW.y);
+      // POM-corrected AC ground position, quantised to crystal cells.
+      vec2 snowShift = (cellUv - vec2(fu, fv)) * 24.0;
+      vec2 crystalXy = (vec2(vWorldPos.x, -vWorldPos.z) + snowShift) * uSnowSparkleDensity;
+      vec2 ccell = floor(crystalXy);
+      float ch1 = fragHash21(ccell);
+      float ch2 = fragHash21(ccell + vec2(19.3, 71.9));
+      float ch3 = fragHash21(ccell + vec2(53.1, 7.7));
+      vec3 crystalN = normalize(vec3((ch1 - 0.5) * 2.4, (ch2 - 0.5) * 2.4, 0.45 + ch3 * 1.1));
+      vec3 snowHalfAc = normalize(sunDir - snowViewAc);
+      float snowLobe = pow(clamp(dot(crystalN, snowHalfAc), 0.0, 1.0), uSnowSparkleSharpness);
+      // glint.js's phase term: deterministic in (uTime + hash), no Math.random
+      // equivalent. Floored at 0.3 so a flashing crystal is never fully erased
+      // by the clock -- the camera owns the twinkle, the clock only animates it.
+      float snowPhase = uTime * 1.1 + ch1 * 6.2831853 + ch2 * 23.0;
+      float snowTwinkle = 0.3 + 0.7 * (0.5 + 0.5 * sin(snowPhase));
+      iblSpec += uAcSunColor * (uSnowSparkleStrength * snowW * snowFade
+                                * snowLobe * snowTwinkle)
+               * cloudShadow * csmShadow;
+    }
+  }
+
+  // === Wave 2A — ICE MATERIAL TREATMENT (plan §3.4 item 4) ===============
+  // Codes 2 (Ice) and 27 (BlueIce) ONLY -- never 15 (Snow). Roughness DOWN,
+  // specular UP, plus an env term off the ?ibl cube (scene3d/ibl_environment.js
+  // pushes uEnvCube / uIblEnabled / uEnvIntensity over scene3d.terrainMaterials
+  // every frame, so bake order never matters).
+  //
+  // It lives HERE, next to the water sheen and OUTSIDE the uPbrEnabled block,
+  // for the reason the 07-31 water fix moved the sheen out: retail Gouraud
+  // (?terrainGouraud) is DEFAULT-ON and wins the !acGouraud test, so anything
+  // inside that block never executes in a normal session. The PBR path's
+  // data-driven env term already glosses ice via the nra roughness map when it
+  // does run; this is the term that runs in BOTH shading modes, and it is
+  // ADDITIVE, so the two compose rather than fight.
+  //
+  // No new light (§5.2), no new geometry, no program-key change: it is a
+  // fragment term weighted by the bilinear iceW.
+  if (uIceEnabled > 0.5 && iceW > 0.0 && !cellTouchesWater) {
+    // A gentle high-frequency surface perturbation so the glint has structure
+    // (pack ice is not a mirror). Same coherent value-noise field the water
+    // sheen gradients, at a much finer scale and NOT scrolled -- ice is still.
+    vec2 iuv = vec2(vWorldPos.x, -vWorldPos.z) * 1.7;
+    float ih0 = fragValueNoise2D(iuv);
+    float ihx = fragValueNoise2D(iuv + vec2(0.6, 0.0));
+    float ihy = fragValueNoise2D(iuv + vec2(0.0, 0.6));
+    float iceRough = 1.0 - clamp(uIceGloss, 0.0, 1.0);
+    vec3 iceN = normalize(vec3((ih0 - ihx) * 0.5, (ih0 - ihy) * 0.5, 1.0));
+    vec3 iceViewW = normalize(vWorldPos - cameraPosition);
+    vec3 iceViewAc = vec3(iceViewW.x, -iceViewW.z, iceViewW.y);
+    vec3 iceHalfAc = normalize(sunDir - iceViewAc);
+    // Low roughness = a TIGHT lobe. Driven off uIceGloss so one uniform moves
+    // both the glint sharpness and the env mip together, which is what
+    // "roughness down" means physically.
+    float iceLobe = pow(clamp(dot(iceN, iceHalfAc), 0.0, 1.0),
+                        mix(24.0, 220.0, clamp(uIceGloss, 0.0, 1.0)));
+    vec3 iceSpec = uAcSunColor * (iceLobe * uIceSpecStrength);
+    if (uIblEnabled > 0.5) {
+      // ac(x,y,z) -> world(x,z,-y), the same space bridge the PBR env term and
+      // the water sheen use. Low mip = near-mirror; roughness pushes it up the
+      // chain, which is the correct pre-filter as the footprint shrinks.
+      vec3 iceNWorld = normalize(vec3(iceN.x, iceN.z, -iceN.y));
+      vec3 iceRefl = reflect(iceViewW, iceNWorld);
+      vec3 iceEnv = textureLod(uEnvCube, iceRefl, iceRough * 5.0).rgb;
+      float iceFres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-iceViewW, iceNWorld), 0.0, 1.0), 5.0);
+      iceSpec += iceEnv * iceFres * uEnvIntensity * uIceEnvStrength;
+    }
+    iblSpec += iceSpec * iceW;
+  }
+
   // === Wave 1B — SAND GRAIN SPARKLE ======================================
   // Terrain-VFX plan §3.2 item 4. Millions of quartz facets, each catching the
   // sun for an instant as the eye moves: a grazing-angle, per-grain-cell
@@ -2780,6 +3132,15 @@ export async function resolveTerrainRingOpts(
       // enforced once in terrain_vfx.js::wireframeActive — plan §8 risk 8).
       sandSparkleEnabled: false,
       sandSparkleCodeMask: 0,
+      // Wave 2A — present + off for shape parity, same reasoning as the sand
+      // row above (wire mode builds a MeshBasicMaterial, and terrain VFX is a
+      // hard no-op under ?wireframe=1 anyway — plan §8 risk 8).
+      snowSparkleEnabled: false,
+      snowSparkleCodeMask: 0,
+      snowPrintEnabled: false,
+      iceEnabled: false,
+      iceCodeMask: 0,
+      iceRefractionEnabled: false,
       atlasTexture: null,
       roadTexture: null,
       roadCanvas: null,
@@ -3277,6 +3638,21 @@ export async function resolveTerrainRingOpts(
     // range" rule `uWaterSurfaceCodeMask` follows.
     sandSparkleEnabled: terrainSandEnabled() && terrainSandSparkleEnabled(),
     sandSparkleCodeMask: computeCodeBitmask(TERRAIN_SAND_CODES),
+    // Wave 2A — SNOW / ICE (plan §3.4 items 2/3/4). Composed exactly like the
+    // sand row: a FAMILY MASTER and a per-effect flag, both STRICT `=== "on"`
+    // opt-ins that ship OFF, so an absent flag leaves every gate uniform at 0.0
+    // and all three fragment blocks are strict no-ops. SNOW and ICE are two
+    // INDEPENDENT masters on purpose (plan §3.4: one is particles+shader, the
+    // other a material change, and bisecting them separately matters). Both
+    // masks are DERIVED from terrain_families.js, never a hardcoded range.
+    snowSparkleEnabled: terrainSnowEnabled() && terrainSnowSparkleEnabled(),
+    snowSparkleCodeMask: computeCodeBitmask(TERRAIN_SNOW_CODES),
+    // The print's SECOND gate (a trail map bound this frame) is pushed per
+    // frame by scene3d/terrain_snow.js; this is only the flag.
+    snowPrintEnabled: terrainSnowEnabled() && terrainSnowPrintsEnabled(),
+    iceEnabled: terrainIceEnabled(),
+    iceCodeMask: computeCodeBitmask(TERRAIN_ICE_MATERIAL_CODES),
+    iceRefractionEnabled: terrainIceEnabled() && terrainIceRefractionEnabled(),
     atlasTexture,
     roadTexture,
     roadCanvas,
@@ -4463,6 +4839,43 @@ export async function bakeTerrainForLandblock(
       uSandSparkleDensity: { value: DEFAULT_SAND_SPARKLE_DENSITY },
       uSandSparkleFadeStart: { value: DEFAULT_SAND_SPARKLE_FADE_START },
       uSandSparkleFadeEnd: { value: DEFAULT_SAND_SPARKLE_FADE_END },
+      // Wave 2A — SNOW / ICE (plan §3.4). Ships OFF: every gate below is
+      // seeded from a flag that requires an exact `=== "on"`, so the three
+      // fragment blocks are strict no-ops on a bare-default boot.
+      uSnowSparkleEnabled: { value: opts.snowSparkleEnabled ? 1.0 : 0.0 },
+      uSnowSparkleCodeMask: {
+        value: Number.isInteger(opts.snowSparkleCodeMask) ? opts.snowSparkleCodeMask : 0,
+      },
+      uSnowSparkleStrength: { value: DEFAULT_SNOW_SPARKLE_STRENGTH },
+      uSnowSparkleDensity: { value: DEFAULT_SNOW_SPARKLE_DENSITY },
+      uSnowSparkleSharpness: { value: DEFAULT_SNOW_SPARKLE_SHARPNESS },
+      uSnowSparkleFadeStart: { value: DEFAULT_SNOW_SPARKLE_FADE_START },
+      uSnowSparkleFadeEnd: { value: DEFAULT_SNOW_SPARKLE_FADE_END },
+      // Footprints. uSnowTrailMap / uSnowTrailCenter / uSnowTrailRadius /
+      // uSnowTrailEnabled are seeded INERT and refreshed each frame by
+      // scene3d/terrain_snow.js over scene3d.terrainMaterials — the same
+      // per-frame push loop.js::tickTerrainUTime and IblEnvironment.tick use,
+      // so bake order vs trail-map construction order never matters. A null
+      // sampler binds three's empty texture; it is never read while
+      // uSnowTrailEnabled is 0.
+      uSnowPrintEnabled: { value: opts.snowPrintEnabled ? 1.0 : 0.0 },
+      uSnowPrintDepth: { value: DEFAULT_SNOW_PRINT_DEPTH },
+      uSnowPrintDarken: { value: DEFAULT_SNOW_PRINT_DARKEN },
+      uSnowTrailMap: { value: null },
+      uSnowTrailCenter: { value: new THREE.Vector2(0, 0) },
+      uSnowTrailRadius: { value: 48.0 },
+      uSnowTrailEnabled: { value: 0.0 },
+      // Ice material treatment — codes 2/27 only (a strict subset of the snow
+      // mask). Separate master (`?terrainIce`) from the snow family.
+      uIceEnabled: { value: opts.iceEnabled ? 1.0 : 0.0 },
+      uIceCodeMask: {
+        value: Number.isInteger(opts.iceCodeMask) ? opts.iceCodeMask : 0,
+      },
+      uIceGloss: { value: DEFAULT_ICE_GLOSS },
+      uIceSpecStrength: { value: DEFAULT_ICE_SPEC_STRENGTH },
+      uIceEnvStrength: { value: DEFAULT_ICE_ENV_STRENGTH },
+      uIceRefractEnabled: { value: opts.iceRefractionEnabled ? 1.0 : 0.0 },
+      uIceRefractAmount: { value: DEFAULT_ICE_REFRACT_AMOUNT },
       uDisplacementEnabled: {
         value: opts.displacementEnabled ? 1.0 : 0.0,
       },
