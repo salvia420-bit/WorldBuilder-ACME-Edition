@@ -64,6 +64,12 @@ import {
   terrainBatchEnabled,
   tryAbsorbTerrainLbIntoBatch,
 } from "./terrain_batch.js";
+// Wave 1B — the sand family LUT (leaf module, imports nothing) + the two flag
+// readers that gate the grain sparkle. `terrain_families.js` is the single
+// source of truth for which CODES are sand; `vfx_flags.js` owns every
+// terrain-VFX flag reader (no second reader, plan §2.4).
+import { FAM_SAND, familyForCode } from "./terrain_families.js";
+import { terrainSandEnabled, terrainSandSparkleEnabled } from "./vfx_flags.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -686,6 +692,26 @@ const TEXMERGE_ALPHA_ROUND = true;
 const TRIPLANAR_SLOPE_HI = 0.5;
 const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
 
+// ----- Wave 1B — SAND GRAIN SPARKLE (terrain-VFX plan §3.2 item 4) ----
+//
+// Tuned as a WHISPER: this is an additive term over every sand fragment in
+// view, so it must read as glitter caught at a grazing angle, not as a sheen.
+// All four are shader constants rather than URL flags — the two flags that
+// exist (`?terrainSand`, `?terrainSandSparkle`) gate the whole block, and the
+// plan reserves no numeric knob for it. Calibration target is the BC7 arm
+// (:8767 with `texBc7=on&terrainBc7=on`), per plan §8 risk 13.
+const DEFAULT_SAND_SPARKLE_STRENGTH = 0.55;
+// Grain cells per metre. High enough that a cell is well under a pixel at
+// range (which is why the distance fade below exists) and coarse enough near
+// the camera to read as individual glints rather than as noise.
+const DEFAULT_SAND_SPARKLE_DENSITY = 26.0;
+// Distance fade — the same reasoning as the 2026-07-31 water sheen's 30→160 m
+// band: a per-pixel hashed micro-facet with no derivative-aware filtering
+// aliases hard once one pixel spans many grain cells. Sand is a near-field
+// effect; beyond the band the ground reads as the plain tile it did before.
+const DEFAULT_SAND_SPARKLE_FADE_START = 18.0;
+const DEFAULT_SAND_SPARKLE_FADE_END = 70.0;
+
 // ----- Retail zFightTerrainAdjust (terrain drawn ~1 cm below grade) --
 //
 // Verified against the decomp: `float zFightTerrainAdjust = 0.0099999998;`
@@ -847,6 +873,21 @@ const TERRAIN_WATER_SURFACE_CODES = new Set(
 // Region 0x13 lava codes: none (see comment above). Future region-aware
 // extension would populate this for, e.g., Volcanic Hills.
 const TERRAIN_LAVA_CODES = new Set([]);
+
+// Wave 1B — the SAND set for the grain sparkle, DERIVED from
+// `terrain_families.js` (FAM_SAND = codes 10/11/12 in Dereth) rather than
+// written out here. Family membership is a property of the CODE and the family
+// module is the single source of truth for it (plan §1.3 / §8 risk 12); a
+// hardcoded 10..12 range here would be the same class of bug as the pre-F12-5
+// hardcoded water range. Sand is in no water set, so `?strictWaterCodes`
+// cannot move it and this can be computed once.
+const TERRAIN_SAND_CODES = Object.freeze(
+  (() => {
+    const s = new Set();
+    for (let c = 0; c < 32; c += 1) if (familyForCode(c) === FAM_SAND) s.add(c);
+    return s;
+  })(),
+);
 
 // ----- GLSL — bilinear-blend shader, three.js port ------------------
 //
@@ -1323,6 +1364,23 @@ uniform float uWaterScrollEnabled;
 // ?strictWaterCodes=off collapses both sets to the legacy 16-23.
 uniform int uWaterSurfaceCodeMask;
 
+// === 2026-07-31 (Wave 1B) — SAND GRAIN SPARKLE ==========================
+// Terrain-VFX plan §3.2 item 4. A grazing-angle specular twinkle on FAM_SAND
+// ground (codes 10/11/12), keyed off the TERRAIN CODE read from uVertexTypes
+// — plan trap T3: the per-vertex terrainCode ATTRIBUTE is not read by the
+// fragment stage at all on the subdivided path, so an attribute-keyed effect
+// would be silently dead. The mask is built on the JS side from
+// terrain_families.js (FAM_SAND), never from a hardcoded 10..12 range, so a
+// region whose palette moves sand moves this with it (plan §8 risk 12).
+// Strict no-op when uSandSparkleEnabled is 0 (?terrainSand / ?terrainSandSparkle
+// both ship OFF), and on every non-sand fragment.
+uniform float uSandSparkleEnabled;   // 0.0 OFF / 1.0 ON
+uniform int uSandSparkleCodeMask;    // bit i = terrain code i is FAM_SAND
+uniform float uSandSparkleStrength;  // additive specular gain
+uniform float uSandSparkleDensity;   // grain cells per metre
+uniform float uSandSparkleFadeStart; // metres — full strength nearer than this
+uniform float uSandSparkleFadeEnd;   // metres — zero beyond
+
 // Clouds-L — sample the cloud effect's cascade-0 shadow buffer to dim
 // terrain ambient + diffuse where clouds occlude the sun. takram's
 // cloud raymarch already produces these as a side effect of its
@@ -1541,6 +1599,13 @@ vec2 maskUvFor(vec2 cellUv, int rot) {
 // layer and is never water, so the < 32 bound is also the mask's domain.
 bool isWaterCode(int c) {
   return c >= 0 && c < 32 && (uWaterSurfaceCodeMask & (1 << c)) != 0;
+}
+
+// Wave 1B — THE single sand-code test for the fragment stage, exactly the same
+// shape as isWaterCode above and reading a mask built from terrain_families.js
+// FAM_SAND. Code 32 is the road layer and is never sand.
+bool isSandCode(int c) {
+  return c >= 0 && c < 32 && (uSandSparkleCodeMask & (1 << c)) != 0;
 }
 
 int vertexTypeAt(int iu, int iv) {
@@ -1795,6 +1860,16 @@ void main() {
   float waterW = clamp(
     (wc00 ? w00 : 0.0) + (wc10 ? w10 : 0.0) +
     (wc01 ? w01 : 0.0) + (wc11 ? w11 : 0.0), 0.0, 1.0);
+
+  // Wave 1B — bilinear SAND FRACTION, computed with the SAME four corner
+  // weights for the same reason the water fraction is: the grain sparkle then
+  // fades in across a sand/grass or sand/rock boundary instead of switching on
+  // a per-half-cell nearest-corner step (plan §8 risk 2 — a 24 m nearest-vertex
+  // quantisation draws visible square patches). Consumed by the SAND SPARKLE
+  // block at the end of main().
+  float sandW = clamp(
+    (isSandCode(t00) ? w00 : 0.0) + (isSandCode(t10) ? w10 : 0.0) +
+    (isSandCode(t01) ? w01 : 0.0) + (isSandCode(t11) ? w11 : 0.0), 0.0, 1.0);
 
   // Skip stochastic blending when all four corners are the same terrain type:
   // there is no boundary to draw, and picking between identical textures only
@@ -2504,7 +2579,68 @@ void main() {
     vec3 acC = min(vec3(1.0), uAcSunColor * acL + uAcAmbColor * uAcAmbLevel);
     modulated *= acC;
   }
-  fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow + iblSpec, 1.0);
+
+  // === Wave 1B — SAND GRAIN SPARKLE ======================================
+  // Terrain-VFX plan §3.2 item 4. Millions of quartz facets, each catching the
+  // sun for an instant as the eye moves: a grazing-angle, per-grain-cell
+  // specular twinkle. The maths is the vfx/components/glint.js lobe (a Blinn
+  // half-vector power) with the metalness gate replaced by the SAND FRACTION
+  // and the per-instance hash replaced by a per-grain-cell hash.
+  //
+  // WHERE IT SITS AND WHY (plan §2.7.3):
+  //   • AFTER the POM march, and its grain field is anchored to the
+  //     PARALLAX-CORRECTED surface point — vWorldPos is the geometric (pre-POM)
+  //     position, so the POM offset (cellUv - the original vec2(fu, fv)) is
+  //     added back in cell units x 24 m. Without that, the sparkle would slide
+  //     against the relief it is supposed to be sitting on, which is exactly
+  //     the registration bug the 07-31 water fix closed (plan §8 risk 14).
+  //   • It HONOURS the cellTouchesWater bypass. POM does not run on a
+  //     water-touching cell, so on those cells the correction term is zero
+  //     anyway — but a shoreline sand cell must not sparkle THROUGH the water
+  //     surface the water agent owns, so the whole term stands down there.
+  //   • It is added AFTER cloudShadow / csmShadow are resolved and is
+  //     MULTIPLIED by both: a sparkle is sunlight, so it must go out under a
+  //     cloud and inside a building's shadow.
+  //   • It never touches cellUv, waterCellUv, waterW or any water uniform.
+  // The mid-tier degrade is coherent by construction: POM is high/ultra only,
+  // and with POM off the correction term is exactly zero, leaving the same
+  // sparkle on an unrelieved surface (plan §2.7.3 point 4).
+  vec3 sandSparkle = vec3(0.0);
+  if (uSandSparkleEnabled > 0.5 && sandW > 0.0 && !cellTouchesWater) {
+    float sparkFade = 1.0 - smoothstep(uSandSparkleFadeStart, uSandSparkleFadeEnd, vViewDepth);
+    if (sparkFade > 0.001) {
+      // View direction in AC space (z-up): world(x,y,z) = ac(x,z,-y).
+      vec3 viewW = normalize(vWorldPos - cameraPosition);
+      vec3 viewAc = vec3(viewW.x, -viewW.z, viewW.y);
+      // GRAZING GATE: 1 when the eye skims the surface, 0 looking straight
+      // down. Real sand only flashes at a low angle; without this the whole
+      // dune glitters from above and reads as noise.
+      float graze = 1.0 - clamp(dot(geomN, -viewAc), 0.0, 1.0);
+      graze = graze * graze;
+      if (graze > 0.001) {
+        // POM-corrected AC ground position, then quantised to grain cells.
+        vec2 pomShift = (cellUv - vec2(fu, fv)) * 24.0;
+        vec2 grainXy = (vec2(vWorldPos.x, -vWorldPos.z) + pomShift) * uSandSparkleDensity;
+        vec2 gcell = floor(grainXy);
+        float gh1 = fragHash21(gcell);
+        float gh2 = fragHash21(gcell + vec2(37.7, 11.3));
+        // A hashed micro-facet about the vertical. Amplitude is deliberately
+        // wide: a facet that never faces the half-vector never flashes.
+        vec3 grainN = normalize(vec3((gh1 - 0.5) * 1.6, (gh2 - 0.5) * 1.6, 1.0));
+        vec3 halfAc = normalize(sunDir - viewAc);
+        float lobe = pow(clamp(dot(grainN, halfAc), 0.0, 1.0), 180.0);
+        // glint.js's phase term: time + hash, so a facet twinkles rather than
+        // holding a constant highlight. Deterministic (uTime + hash only).
+        float phase = uTime * 1.7 + gh1 * 6.2831853 + gh2 * 17.0;
+        float twinkle = 0.5 + 0.5 * sin(phase);
+        sandSparkle = uAcSunColor * (uSandSparkleStrength * sandW * graze
+                                     * sparkFade * lobe * twinkle);
+      }
+    }
+  }
+
+  fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow + iblSpec
+                   + sandSparkle * cloudShadow * csmShadow, 1.0);
 }
 `;
 
@@ -2638,6 +2774,12 @@ export async function resolveTerrainRingOpts(
       waterCodeMask: 0,
       waterSurfaceCodeMask: 0,
       lavaCodeMask: 0,
+      // Wave 1B — present + off for shape parity with the full return below
+      // (wire mode builds a MeshBasicMaterial, never the terrain shader; the
+      // whole terrain-VFX programme is a hard no-op under ?wireframe=1 anyway,
+      // enforced once in terrain_vfx.js::wireframeActive — plan §8 risk 8).
+      sandSparkleEnabled: false,
+      sandSparkleCodeMask: 0,
       atlasTexture: null,
       roadTexture: null,
       roadCanvas: null,
@@ -3126,6 +3268,15 @@ export async function resolveTerrainRingOpts(
     waterCodeMask,
     waterSurfaceCodeMask,
     lavaCodeMask,
+    // Wave 1B — SAND GRAIN SPARKLE (plan §3.2 item 4). Composed exactly like
+    // every other terrain-VFX gate: the FAMILY MASTER and the per-effect flag
+    // (`scene3d/vfx_flags.js`, both STRICT `=== "on"` opt-ins that ship OFF),
+    // so an absent flag leaves `uSandSparkleEnabled` 0.0 and the fragment block
+    // is a strict no-op. The code mask is DERIVED from terrain_families.js
+    // FAM_SAND through `sandCodeBitmask()` — the same "never hardcode a code
+    // range" rule `uWaterSurfaceCodeMask` follows.
+    sandSparkleEnabled: terrainSandEnabled() && terrainSandSparkleEnabled(),
+    sandSparkleCodeMask: computeCodeBitmask(TERRAIN_SAND_CODES),
     atlasTexture,
     roadTexture,
     roadCanvas,
@@ -4295,6 +4446,23 @@ export async function bakeTerrainForLandblock(
           : opts.waterCodeMask,
       },
       uLavaCodeMask: { value: opts.lavaCodeMask },
+      // Wave 1B — SAND GRAIN SPARKLE (plan §3.2 item 4). Ships OFF: the gate is
+      // `?terrainSand=on && ?terrainSandSparkle` composed in
+      // resolveTerrainRingOpts, so an absent flag leaves the value 0.0 and the
+      // fragment block is a strict no-op. The code mask is derived from
+      // terrain_families.js FAM_SAND (never a hardcoded 10..12 range).
+      uSandSparkleEnabled: { value: opts.sandSparkleEnabled ? 1.0 : 0.0 },
+      uSandSparkleCodeMask: {
+        value: Number.isInteger(opts.sandSparkleCodeMask) ? opts.sandSparkleCodeMask : 0,
+      },
+      uSandSparkleStrength: {
+        value: Number.isFinite(opts.sandSparkleStrength)
+          ? opts.sandSparkleStrength
+          : DEFAULT_SAND_SPARKLE_STRENGTH,
+      },
+      uSandSparkleDensity: { value: DEFAULT_SAND_SPARKLE_DENSITY },
+      uSandSparkleFadeStart: { value: DEFAULT_SAND_SPARKLE_FADE_START },
+      uSandSparkleFadeEnd: { value: DEFAULT_SAND_SPARKLE_FADE_END },
       uDisplacementEnabled: {
         value: opts.displacementEnabled ? 1.0 : 0.0,
       },

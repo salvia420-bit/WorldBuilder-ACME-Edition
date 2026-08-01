@@ -389,6 +389,136 @@ export function terrainTrailRecoverySec() {
   return _terrainNum("terrainTrailFade", "terrainTrailFade", 4, 0.05, 300);
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN SAND / DESERT (Wave 1B — plan §3.2). Codes 10, 11, 12 = FAM_SAND.
+//
+// FOUR flags, one family master + three effects, ALL strict exact-match opt-ins
+// that ship OFF (plan §2.4/§5.9), all kept out of `quality.js BOOL_FLAGS` for
+// the `gfxRelief` reason. Composition:
+//     streamers = terrainSandEnabled() && terrainSandStreamersEnabled()
+//     devils    = terrainSandEnabled() && terrainSandDevilsEnabled()
+//     sparkle   = terrainSandEnabled() && terrainSandSparkleEnabled()
+// The MASTER (`?terrainSand`) is what ships OFF on every tier; the three
+// sub-flags fall back to their quality-preset value when absent so that ONE
+// URL (`?terrainSand=on`) lights the tier's intended set for an eye-test,
+// exactly like `?gfxRelief=on` does for its sub-knobs. `?terrainSand=off`,
+// `?terrainVfx=off`, `?visual=off` and `?wireframe=1` each kill all three.
+// ---------------------------------------------------------------------------
+
+/** Shared strict `=== "on"` / `=== "off"` reader with a quality-preset
+ *  fallback. Copied from `terrainTrailEnabled` (which copies `gfx_relief.js`):
+ *  an unrecognised value WARNS ONCE and does NOT enable — a silent no-op here
+ *  is indistinguishable from a broken decode. The preset branch is deliberately
+ *  NOT memoized (it can be consulted before `window.liveScene3d.quality`
+ *  exists, and caching "not ready" would stick for the session). */
+function _terrainStrictFlag(name, presetKey, presetDefault, warned) {
+  const raw = _strFlag(name);
+  if (raw === "on") return { value: true, memo: true };
+  if (raw === "off") return { value: false, memo: true };
+  if (raw !== null && !warned.hit) {
+    warned.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[${name}] ignoring ?${name}=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?${name}=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return { value: presetDefault, memo: false };
+  const v = flags[presetKey];
+  return { value: typeof v === "boolean" ? v : presetDefault, memo: true };
+}
+
+let _terrainSand;
+const _terrainSandWarn = { hit: false };
+/** `?terrainSand=on` — THE family master for the SAND/DESERT programme
+ *  (streamers + dust devils + grain sparkle; plan §3.2). STRICT exact-match
+ *  opt-in; absent ⇒ the quality preset's `terrainSand`, **false on all four
+ *  tiers** this wave (§5.9 ship-OFF; the promotion target is high/ultra true). */
+export function terrainSandEnabled() {
+  if (_terrainSand !== undefined) return _terrainSand;
+  const r = _terrainStrictFlag("terrainSand", "terrainSand", false, _terrainSandWarn);
+  return r.memo ? (_terrainSand = r.value) : r.value;
+}
+
+let _terrainSandStreamers;
+const _terrainSandStreamersWarn = { hit: false };
+/** `?terrainSandStreamers=on` — ground-hugging wind-driven sand streaks
+ *  (camera-scoped instanced quad field, `scene3d/terrain_sand.js`). Requires
+ *  the family master. Absent ⇒ ON wherever the tier's
+ *  `terrainSandStreamerCount` is non-zero (low = 0 ⇒ off). */
+export function terrainSandStreamersEnabled() {
+  if (_terrainSandStreamers !== undefined) return _terrainSandStreamers;
+  const raw = _strFlag("terrainSandStreamers");
+  if (raw === "on") return (_terrainSandStreamers = true);
+  if (raw === "off") return (_terrainSandStreamers = false);
+  if (raw !== null && !_terrainSandStreamersWarn.hit) {
+    _terrainSandStreamersWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainSandStreamers] ignoring ?terrainSandStreamers=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainSandStreamers=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;              // deliberately not memoized
+  return (_terrainSandStreamers = Number(flags.terrainSandStreamerCount) > 0);
+}
+
+let _terrainSandDevils;
+const _terrainSandDevilsWarn = { hit: false };
+/** `?terrainSandDevils=on` — landblock-scoped dust devils (≤ the tier's
+ *  `terrainSandDevilCount` per LB, hash-stable, synthesized through the
+ *  EXISTING particle system + owner registry). Requires the family master.
+ *  Absent ⇒ ON wherever the tier's `terrainSandDevilCount` is non-zero
+ *  (low/mid = 0 ⇒ off). */
+export function terrainSandDevilsEnabled() {
+  if (_terrainSandDevils !== undefined) return _terrainSandDevils;
+  const raw = _strFlag("terrainSandDevils");
+  if (raw === "on") return (_terrainSandDevils = true);
+  if (raw === "off") return (_terrainSandDevils = false);
+  if (raw !== null && !_terrainSandDevilsWarn.hit) {
+    _terrainSandDevilsWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainSandDevils] ignoring ?terrainSandDevils=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainSandDevils=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;              // deliberately not memoized
+  return (_terrainSandDevils = Number(flags.terrainSandDevilCount) > 0);
+}
+
+let _terrainSandSparkle;
+const _terrainSandSparkleWarn = { hit: false };
+/** `?terrainSandSparkle=on` — grazing-angle grain sparkle, a FRAGMENT addition
+ *  in the terrain shader gated on FAM_SAND read from `uVertexTypes` (plan trap
+ *  T3) and placed after the POM `cellUv` offset, bypassed on any water-touching
+ *  cell (plan §2.7.3). Requires the family master. Absent ⇒ the tier's
+ *  `terrainSandSparkle` (false on low, true on mid/high/ultra). */
+export function terrainSandSparkleEnabled() {
+  if (_terrainSandSparkle !== undefined) return _terrainSandSparkle;
+  const r = _terrainStrictFlag("terrainSandSparkle", "terrainSandSparkle", false, _terrainSandSparkleWarn);
+  return r.memo ? (_terrainSandSparkle = r.value) : r.value;
+}
+
+/** Instance count for the streamer field at the live tier. URL knob
+ *  `?terrainSandStreamerCount` (an INT_FLAGS quality override — it cannot turn
+ *  the effect on by itself). Fallback 2000 = the `high` tier. */
+export function terrainSandStreamerCount() {
+  return Math.round(_terrainNum("terrainSandStreamerCount", "terrainSandStreamerCount", 2000, 0, 20000));
+}
+
+/** Dust devils per landblock at the live tier. URL knob
+ *  `?terrainSandDevilCount`. Fallback 1 = the `high` tier. */
+export function terrainSandDevilCount() {
+  return Math.round(_terrainNum("terrainSandDevilCount", "terrainSandDevilCount", 1, 0, 8));
+}
+
+/** `?terrainSandRadius` — HALF-extent (metres) of the streamer field window.
+ *  Fallback 64 m. Cannot enable the feature on its own. */
+export function terrainSandRadiusM() {
+  return _terrainNum("terrainSandRadius", "terrainSandRadius", 64, 8, 512);
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -428,6 +558,15 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.grass": terrainGrassEnabled,
   "terrain.grassStomp": terrainGrassStompEnabled,
   "terrain.trailMap": terrainTrailEnabled,
+  // Terrain SAND (Wave 1B, plan §3.2) — same contract as the row above: strict
+  // ship-OFF opt-ins that do NOT track visualAllEffects(), so `?visual=all`
+  // does not light them and the DEFAULT-ON count stays 14. The three effect
+  // rows compose the family master themselves, so `vfxEffectEnabled` answers
+  // the same question the effect asks.
+  "terrain.sand": terrainSandEnabled,
+  "terrain.sandStreamers": () => terrainSandEnabled() && terrainSandStreamersEnabled(),
+  "terrain.sandDevils": () => terrainSandEnabled() && terrainSandDevilsEnabled(),
+  "terrain.sandSparkle": () => terrainSandEnabled() && terrainSandSparkleEnabled(),
 });
 
 /**
@@ -456,4 +595,9 @@ export function _resetVfxFlags() {
   _terrainTrailWarned = false;
   _terrainGrass = _terrainGrassStomp = undefined;
   _terrainGrassWarned = _terrainGrassStompWarned = false;
+  _terrainSand = _terrainSandStreamers = _terrainSandDevils = _terrainSandSparkle = undefined;
+  _terrainSandWarn.hit = false;
+  _terrainSandStreamersWarn.hit = false;
+  _terrainSandDevilsWarn.hit = false;
+  _terrainSandSparkleWarn.hit = false;
 }

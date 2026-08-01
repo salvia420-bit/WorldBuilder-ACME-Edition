@@ -39,6 +39,12 @@ check("every mapped id has a function reader", ALL_IDS.every((id) => typeof VFX_
 check("the ship-OFF terrain rows are registered (so they don't fall through to visualAllEffects)",
   SHIP_OFF_IDS.length >= 1, SHIP_OFF_IDS.join());
 check("no flags: every ship-OFF terrain effect is OFF", SHIP_OFF_IDS.every((id) => vfxEffectEnabled(id) === false));
+// Wave 1B (SAND) — the four family rows must be in the ship-OFF set by name,
+// not merely by the `terrain.` prefix rule, so deleting a row is a test failure
+// rather than a silently smaller set.
+check("the SAND rows are registered ship-OFF ids",
+  ["terrain.sand", "terrain.sandStreamers", "terrain.sandDevils", "terrain.sandSparkle"]
+    .every((id) => SHIP_OFF_IDS.includes(id)), SHIP_OFF_IDS.join());
 
 // ---- DEFAULT-ON (no window / no flags) ----
 clearUrl();
