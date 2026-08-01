@@ -48,6 +48,7 @@ import { AerialPerspectiveEffect, AtmosphereParameters } from "@takram/three-atm
 import { DitheringEffect, LensFlareEffect } from "@takram/three-geospatial-effects";
 import { PortalStencilPass } from "./portal_stencil.js";
 import { PortalPunchPass } from "./portal_punch.js";
+import { createHeatHazeEffect, installHeatHazeHandle } from "./vfx/heat_haze_effect.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -517,19 +518,44 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       })
     : null;
 
-  // EffectPass composition order: AerialPerspective → LensFlare → Bloom →
-  // Vignette → ToneMapping → Dithering. Everything except ToneMapping +
+  // Terrain-VFX wave 2B — VOLCANO heat shimmer (plan §3.6 item 1). A custom
+  // pmndrs Effect implementing `mainUv` only (a pure UV warp, the cheapest
+  // effect class), declared with EffectAttribute.DEPTH so it can gate the warp
+  // by distance. `createHeatHazeEffect` returns NULL unless
+  // `?terrainVolcano=on&?terrainHaze=on` (both ship OFF, plan §5.9), so
+  // `filter(Boolean)` below drops the slot and the effect list — hence the
+  // compiled compound shader AND `composer.passes.length` — is byte-identical
+  // to the pre-feature pipeline. `opts.terrainHaze` (boolean) forces the gate
+  // either way so headless tests need no URL.
+  const heatHaze = createHeatHazeEffect({
+    cameraFar: camera.far,
+    ...(typeof opts?.terrainHaze === "boolean" ? { enabled: opts.terrainHaze } : {}),
+  });
+
+  // EffectPass composition order: HeatHaze → AerialPerspective → LensFlare →
+  // Bloom → Vignette → ToneMapping → Dithering. Everything except ToneMapping +
   // Dithering operates in HDR space. `filter(Boolean)` drops the disabled
   // slots without leaving holes in the pass.
   const fxPass = new EffectPass(
     camera,
+    // heatHaze is FIRST, before aerialPerspective (plan §3.6): pmndrs
+    // concatenates every effect's `mainUv` body ahead of any `mainImage`, so
+    // the distortion is applied to the raw scene and the fog/bloom/tone-mapping
+    // chain then operates on the distorted result rather than the other way
+    // round. (EffectPass re-sorts by `attributes` DESCENDING; Array#sort is
+    // stable and aerialPerspective also carries DEPTH, so first stays first.)
     // horizonDissolve sits right after aerialPerspective and before
     // lensFlare/bloom/vignette/toneMapping so the terrain→sky blend happens
     // in HDR (matching the captured sky's radiance space); null when
     // `?horizonFade=off` and dropped by filter(Boolean).
-    ...[aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
+    ...[heatHaze, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
   );
   composer.addPass(fxPass);
+
+  // Live tuning handle for the 1070 eye-test, mirroring `window.__horizonFade`:
+  // `__heatHaze.strength = 0.012`, `.freq`, `.speed`, and `.state` for a
+  // snapshot of what the terrain provider is publishing. No-op when off.
+  installHeatHazeHandle(heatHaze);
 
   // Live tuning handle for the 1070 eye-test — adjust the band without a
   // rebuild, e.g. `__horizonFade.start = 700; __horizonFade.end = 1050`.
@@ -548,6 +574,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     composer,
     aerialPerspective,
     horizonDissolve,
+    // null unless ?terrainVolcano=on&terrainHaze=on (wave 2B, plan §3.6).
+    heatHaze,
     skyCapturePass,
     lensFlare,
     bloom,
@@ -760,6 +788,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       lensFlare?.dispose?.();
       bloom?.dispose?.();
       vignette?.dispose?.();
+      heatHaze?.dispose?.();
       toneMapping.dispose?.();
       dithering.dispose?.();
     },
