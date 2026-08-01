@@ -61,6 +61,11 @@ they accept the perf cost.
 | `terrainGrassBlades` | 0 | 24336 | 60025 | 119716 | Terrain VFX Wave 1A |
 | `terrainGrassRadius` | 32 | 32 | 48 | 64 | Terrain VFX Wave 1A |
 | `terrainGrassStomp` | off | off | on | on | Terrain VFX Wave 1A |
+| `terrainSand` | off | off | off | off | Terrain VFX Wave 1B |
+| `terrainSandStreamerCount` | 0 | 800 | 2000 | 3000 | Terrain VFX Wave 1B |
+| `terrainSandDevilCount` | 0 | 0 | 1 | 2 | Terrain VFX Wave 1B |
+| `terrainSandSparkle` | off | on | on | on | Terrain VFX Wave 1B |
+| `terrainSandRadius` | 32 | 48 | 64 | 80 | Terrain VFX Wave 1B |
 | `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
@@ -123,6 +128,28 @@ they accept the perf cost.
   `BOOL_FLAGS` (same exact-`on` rule). It needs the map to exist: that is
   `terrainTrail` above, so the full live URL is
   `?terrainGrass=on&terrainTrail=on&terrainGrassStomp=on`.
+- **`terrainSand`** — Terrain VFX Wave 1B
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.2). The
+  SAND/DESERT family master (`scene3d/terrain_sand.js`) over terrain codes
+  10/11/12: camera-scoped wind-advected streamer field, landblock-scoped dust
+  devils (existing particle system, `staticOwnerKeyForLb(lb) + ":sand"`
+  owners), and a grazing-angle grain sparkle term in the terrain fragment
+  shader (reads `uVertexTypes`; no new geometry attribute). **OFF on every
+  tier today** (§5.9 ship-OFF; promotion target `mid`+ on). Not in
+  `BOOL_FLAGS` (same exact-`on` rule as `terrainGrass`). URL override
+  `?terrainSand=on` / `=off`; the three sub-effects gate further via
+  `?terrainSandStreamers` / `?terrainSandDevils` / `?terrainSandSparkle`.
+- **`terrainSandStreamerCount`** — Terrain VFX Wave 1B. Instances in the
+  streamer quad pool. Additive fill-bound quads, so unlike grass this DOES
+  get cheaper at reduced render scale; the tier count is still the primary
+  lever. `low` is 0 = disabled (§5.8). `?terrainSandStreamerCount=N`.
+- **`terrainSandDevilCount`** — Terrain VFX Wave 1B. Max dust devils per sand
+  landblock (hash-stable positions per lbKey). `?terrainSandDevilCount=N`.
+- **`terrainSandSparkle`** — Terrain VFX Wave 1B. The terrain-shader grain
+  sparkle term (glint.js maths, FAM_SAND gate). Not in `BOOL_FLAGS`
+  (exact-`on` rule). `?terrainSandSparkle=on` / `=off`.
+- **`terrainSandRadius`** — Terrain VFX Wave 1B. Half-extent of the streamer
+  field in metres, fading over the last 25 %. `?terrainSandRadius=N`.
 - **`terrainTrail`** — Terrain VFX Wave 0B
   (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §2.2/§3.1). The
   shared stomp / footprint render-target trail map (`scene3d/trail_map.js`):
