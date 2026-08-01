@@ -42,7 +42,11 @@ import * as THREE from "three";
 import { FAM_GRASS, FAM_WATER, familyForCode } from "./scene3d/terrain_families.js";
 import { PRESETS } from "./scene3d/quality.js";
 import { instanceCountFor } from "./scene3d/terrain_scatter.js";
+import { terrainVfxStats } from "./scene3d/terrain_vfx.js";
+import { _resetVfxFlags } from "./scene3d/vfx_flags.js";
 import {
+  initTerrainGrass,
+  _resetTerrainGrass,
   GRASS_VARIANTS,
   GRASS_CODES,
   GRASS_ATTRIBUTES,
@@ -512,6 +516,56 @@ console.log("\n-- unbaked landblocks stay degenerate and are RETRIED --");
   check("once the landblock bakes, later ticks revive the blades with no movement",
     provider._pool.stats().live > 0, String(provider._pool.stats().live));
   provider.dispose();
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- registration gate: ship-OFF registers NOTHING --");
+{
+  const providersNow = () => terrainVfxStats().providers.map((p) => p.id);
+  _resetTerrainGrass();
+  _resetVfxFlags();
+  check("no window / no flag: initTerrainGrass returns null",
+    initTerrainGrass({ THREE: THREE_SPY }) === null);
+  check("no window / no flag: nothing is registered with the spine",
+    !providersNow().includes("terrain.grass"));
+
+  // `?terrainGrass=on` at quality=low (blades 0) must refuse LOUDLY, not
+  // silently register a provider that can never draw.
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => { warns.push(a.join(" ")); };
+  globalThis.window = {
+    location: { search: "?terrainGrass=on" },
+    liveScene3d: { quality: { flags: { ...PRESETS.low } } },
+  };
+  _resetVfxFlags();
+  const lowHandle = initTerrainGrass({ THREE: THREE_SPY });
+  console.warn = realWarn;
+  check("quality=low + ?terrainGrass=on: refuses (blades 0 ⇒ null)", lowHandle === null);
+  check("quality=low: warns with an actionable message",
+    warns.some((w) => w.includes("terrainGrass") && w.includes("terrainGrassBlades")), warns.join(" | "));
+  check("quality=low: still nothing registered", !providersNow().includes("terrain.grass"));
+
+  // `?terrainGrass=on` at a tier that carries blades registers exactly once.
+  _resetTerrainGrass();
+  globalThis.window = {
+    location: { search: "?terrainGrass=on" },
+    liveScene3d: { quality: { flags: { ...PRESETS.high } } },
+  };
+  _resetVfxFlags();
+  const parent = new THREE.Group();
+  const handle = initTerrainGrass({ THREE: THREE_SPY, parent });
+  check("quality=high + ?terrainGrass=on: registers", !!handle);
+  check("the provider is visible to the spine", providersNow().includes("terrain.grass"));
+  check("window.__terrainGrass is exposed for the live probe",
+    globalThis.window.__terrainGrass === handle && typeof handle.stats === "function");
+  check("initTerrainGrass is idempotent", initTerrainGrass({ THREE: THREE_SPY }) === handle);
+  check("it took the tier's blade count", handle.stats().config.count === 60025);
+  handle.unregister();
+  check("unregister drops it from the spine", !providersNow().includes("terrain.grass"));
+  _resetTerrainGrass();
+  delete globalThis.window;
+  _resetVfxFlags();
 }
 
 console.log(`\nterrain grass scatter: ${passed} passed, ${failed} failed`);

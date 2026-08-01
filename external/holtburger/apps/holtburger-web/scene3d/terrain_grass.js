@@ -797,6 +797,19 @@ export function initTerrainGrass(opts = {}) {
   if (wireframeActive(opts.search)) return null;   // plan §8 risk 8
 
   const provider = createTerrainGrassProvider(opts);
+  if (provider.quality() === null) {
+    // The `low` tier ships `terrainGrassBlades: 0`, i.e. disabled (plan §5.8),
+    // and `?terrainGrassDensity=0` does the same. Say so ONCE: "I turned the
+    // flag on and nothing happened" is exactly the silence gfx_relief.js:137
+    // argues against, and the fix is a one-line URL.
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[terrainGrass] ?terrainGrass=on but the resolved blade count is 0 "
+      + "(quality=low ships terrainGrassBlades: 0, and terrainGrassDensity=0 also disables). "
+      + "Raise it with ?terrainGrassBlades=N or use ?quality=mid or higher.",
+    );
+    return null;
+  }
   const reg = registerTerrainVfx(provider);
   _handle = {
     provider,
