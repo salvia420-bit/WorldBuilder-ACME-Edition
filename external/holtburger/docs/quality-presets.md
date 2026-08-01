@@ -79,6 +79,12 @@ they accept the perf cost.
 | `terrainVolcanoEmberCount` | 0 | 0 | 1 | 3 | Terrain VFX Wave 2B |
 | `terrainHazeStrength` | 0 | 0 | 1 | 1.25 | Terrain VFX Wave 2B |
 | `terrainVolcanoRadius` | 0 | 0 | 160 | 220 | Terrain VFX Wave 2B |
+| `terrainDirt` | off | off | off | off | Terrain VFX Wave 3B |
+| `terrainFootfall` | off | on | on | on | Terrain VFX Wave 3B |
+| `terrainMudPrints` | off | off | on | on | Terrain VFX Wave 3B |
+| `terrainMudWetness` | off | off | off | on | Terrain VFX Wave 3B |
+| `terrainDirtDustCount` | 0 | 0 | 800 | 2000 | Terrain VFX Wave 3B |
+| `terrainDirtRadius` | 32 | 40 | 56 | 72 | Terrain VFX Wave 3B |
 | `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
@@ -247,6 +253,53 @@ they accept the perf cost.
   metres around the nearest RESIDENT volcanic landblock centre. Forced to 0
   when no volcanic LB is resident, so the shimmer does not follow the player
   out of the region. `?terrainVolcanoRadius=N`.
+- **`terrainDirt`** — Terrain VFX Wave 3B
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.7). THE family
+  master for DIRT/MUD: terrain codes 5 `MudRichDirt`, 7 `PackedDirt`,
+  8 `PatchyDirt`, 24 `Argila` and 31 `DesolateLands` (`FAM_DIRT`, derived from
+  `scene3d/terrain_families.js`). Ships **off on every tier** (plan §5.9);
+  promotion target is `high`/`ultra` true after the 1070 eye-test. Deliberately
+  NOT in `BOOL_FLAGS`, so `?terrainDirt=1` does not enable it — the reader
+  (`scene3d/vfx_flags.js::terrainDirtEnabled`) requires an exact `=== "on"`, the
+  `gfxRelief` rule. URL override `?terrainDirt=on` / `=off`; the four
+  sub-effects gate further via `?terrainFootfall` / `?terrainMudPrints` /
+  `?terrainMudWetness` / `?terrainDustHaze`.
+- **`terrainFootfall`** — Terrain VFX Wave 3B. The dust burst thrown where a
+  foot lands on dry dirt, hung off the EXISTING footstep-audio trigger (the
+  `Sound.Footstep1/2` animation hook in `scene3d/entities.js`) rather than a
+  velocity-derived contact test. On from `mid` because it is a handful of
+  alpha quads with no fill cost worth naming — it is the whole `mid` tier for
+  this family. Out of `BOOL_FLAGS` (exact-`on` rule).
+  `?terrainFootfall=on` / `=off`; `?terrainFootfallPuffs=N` sizes the ring.
+- **`terrainMudPrints`** — Terrain VFX Wave 3B. Deforming mud prints: the SHARED
+  trail map read in the terrain fragment shader as a dent plus a darkening.
+  `high`/`ultra` because the dent needs POM, which is `high`/`ultra` only; at
+  `mid` it would be darkening-only, which is the DEGRADE path, not the shipped
+  look. **Needs the map to exist**, so the live URL is
+  `?terrainDirt=on&terrainMudPrints=on&terrainTrail=on&terrainTrailFade=30` —
+  `terrainTrailFade` is GLOBAL and mud asks for 30 s where grass asks for 4 s
+  and snow for 300 s; the module warns once in either direction. The
+  rain-dependent persistence rides stamp/shader AMPLITUDE, not a second fade,
+  and there is still **no second trail render target** (wave 2A's sampler-budget
+  ruling). Out of `BOOL_FLAGS`. `?terrainMudPrints=on` / `=off`.
+- **`terrainMudWetness`** — Terrain VFX Wave 3B. Wet mud: a darkening plus a
+  specular/env sheen on `FAM_DIRT` ground, with clay (24) redder and slicker.
+  **`ultra` only**, exactly as plan §3.7's tier table has it — it is a second
+  fragment branch over every dirt fragment in view on top of the print's. It
+  REUSES the response curve of `scene3d/vfx/components/wetness.js` (same
+  up-facing weight, same 0.62 darken, same 0.25 roughness drop) so puddled
+  statics and puddled ground agree, and reads the already-smoothed
+  `VFX_GLOBALS.uWetness` — the lag is `vfx/weather_inputs.js`'s `WET_TAU` and
+  this family adds none. Out of `BOOL_FLAGS`. `?terrainMudWetness=on` / `=off`.
+- **`terrainDirtDustCount`** — Terrain VFX Wave 3B. Instances in the dry-dust
+  haze pool — plan §3.7's `dustHaze` tier numbers verbatim, and the degrade
+  lever for the veil. `low`/`mid` are 0 = disabled (§5.8), and
+  `?terrainDustHaze=on` at those tiers warns once rather than silently doing
+  nothing. `?terrainDirtDustCount=N`; `?terrainDirtDustDensity=0..2` is the
+  URL-only continuous multiplier for the 1070 sweep. Cannot enable the feature.
+- **`terrainDirtRadius`** — Terrain VFX Wave 3B. Half-extent of the dry-dust
+  haze field in metres, fading over the last 30 %. `?terrainDirtRadius=N`.
+  (`?terrainDustHaze` is the on/off; this only sizes the window.)
 - **ash fall — DEFERRED, no key.** Plan §3.6 item 4 lists an ultra-only ash
   drifter; plan §8 risk 9 says to parameterise `scene3d/weather/snow.js`
   `SnowSystem` rather than write a third falling-particle system, and to note
