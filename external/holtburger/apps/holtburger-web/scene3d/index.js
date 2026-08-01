@@ -180,6 +180,13 @@ import { initTerrainDirt } from "./terrain_dirt.js";
 // this family touches the terrain fragment shader. `initTerrainSwamp` returns
 // null (registering nothing) unless `?terrainSwamp=on`.
 import { initTerrainSwamp } from "./terrain_swamp.js";
+// Terrain ROCK/BARREN family (Wave 4A, plan §3.3) — the camera-scoped opaque,
+// LIT pebble/rubble scatter (the one scatter field in the programme that is not
+// an additive veil, so it reads the sky snapshot for its AC sun/ambient term)
+// plus the grey grit streamers. Same injected-THREE contract; nothing in this
+// family touches the terrain fragment shader. `initTerrainRock` returns null
+// (registering nothing) unless `?terrainRock=on`.
+import { initTerrainRock } from "./terrain_rock.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
 
@@ -3624,6 +3631,29 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainSwamp] initTerrainSwamp threw (swamp VFX disabled):", e);
+  }
+  // ── Terrain ROCK/BARREN family (Wave 4A, plan §3.3) ───────────────────
+  // Registers up to two camera-scoped providers: the instanced pebble/rubble
+  // field (OPAQUE and LIT — the only scatter field here that is not additive,
+  // so it takes the AC sun/ambient off `skyLightingController._lastState` on
+  // the retail 15 s light tick, adding NO light object) and the grey grit
+  // streamers. Plan §3.3's third item, footfall dust puffs, is the wave-3B
+  // DIRT mechanism and is not re-implemented here. No terrain fragment-shader
+  // work in this family, so nothing else needs wiring. Returns null —
+  // registering nothing, allocating nothing — unless `?terrainRock=on` (the
+  // family master ships OFF on every tier, plan §5.9), so a bare-default boot
+  // is byte-identical.
+  try {
+    const rockSurface = initTerrainRock({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+      globals: VFX_GLOBALS,
+    });
+    if (rockSurface && typeof window !== "undefined") window.__terrainRock = rockSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainRock] initTerrainRock threw (rock VFX disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees
