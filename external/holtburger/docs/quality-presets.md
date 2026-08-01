@@ -53,7 +53,6 @@ they accept the perf cost.
 | `terrainDetailNormal` | off | on | on | on | 1.2 |
 | `triplanar` | off | on | on | on | 1.3 |
 | `subdivLevel` | 1 | 2 | 4 | 8 | 2.1 |
-| `hero` | off | off | on | on | 2.3 |
 | `pom` | off | off | on | on | 3.1 |
 | `ssao` | off | off | on | on | 3.2 |
 | `csm` | off | off | on | on | 3.3 |
@@ -122,8 +121,10 @@ they accept the perf cost.
   1 = 9×9 (raw heightfield); 2 = 17×17; 4 = 33×33; 8 = 65×65.
   Bicubic interpolation + clamped procedural noise between control
   points. Collision math stays on the 9×9 grid per §4 constraints.
-- **`hero`** — Phase 2.3. Authored normal/roughness/AO maps for
-  hero surfaces (forge, lifestone, hero buildings).
+- **`hero`** — Phase 2.3, planned as authored normal/roughness/AO maps for
+  hero surfaces (forge, lifestone, hero buildings). **REMOVED 2026-08 — never
+  consumed:** the preset key and its "Hero models" settings checkbox shipped,
+  but no render path ever read the flag, so the checkbox toggled nothing.
 - **`pom`** — Phase 3.1. Parallax occlusion mapping on stone
   surfaces.
 - **`ssao`** — Phase 3.2. Screen-space ambient occlusion post pass.

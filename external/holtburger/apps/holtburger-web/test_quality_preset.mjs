@@ -55,7 +55,6 @@ console.log("\nGroup 1: preset table integrity");
         PRESETS.low.shadows === false &&
             PRESETS.low.pom === false &&
             PRESETS.low.csm === false &&
-            PRESETS.low.hero === false &&
             PRESETS.low.triplanar === false &&
             PRESETS.low.subdivLevel === 1
     );
@@ -66,15 +65,13 @@ console.log("\nGroup 1: preset table integrity");
             PRESETS.mid.terrainDetailNormal === true &&
             PRESETS.mid.subdivLevel === 2 &&
             PRESETS.mid.pom === false &&
-            PRESETS.mid.csm === false &&
-            PRESETS.mid.hero === false
+            PRESETS.mid.csm === false
     );
     check(
         "high preset: all features on, subdivLevel=4",
         PRESETS.high.shadows === true &&
             PRESETS.high.pom === true &&
             PRESETS.high.csm === true &&
-            PRESETS.high.hero === true &&
             PRESETS.high.subdivLevel === 4
     );
     check(
@@ -88,7 +85,7 @@ console.log("\nGroup 1: preset table integrity");
     // produces a render with all visual-fidelity features off. The
     // table here is the source for that — make sure no future edit
     // accidentally flips a "heavy" feature on at the low tier.
-    const heavy = ["shadows", "pom", "csm", "hero", "triplanar", "terrainDetailNormal", "detailFlag"];
+    const heavy = ["shadows", "pom", "csm", "triplanar", "terrainDetailNormal", "detailFlag"];
     const allHeavyOffOnLow = heavy.every((f) => PRESETS.low[f] === false);
     check("low tier — every heavy feature flag is off", allHeavyOffOnLow);
 }
@@ -153,8 +150,7 @@ console.log("\nGroup 3: per-feature overrides (A/B testing)");
         "?quality=high&csm=off&pom=off → high preset minus csm/pom",
         q2.preset === "high" &&
             q2.flags.csm === false &&
-            q2.flags.pom === false &&
-            q2.flags.hero === true
+            q2.flags.pom === false
     );
 
     const q3 = getQuality(
@@ -260,7 +256,6 @@ console.log("\nGroup 5: edge cases");
             q4.flags.shadows === true &&
             q4.flags.triplanar === true &&
             q4.flags.csm === false &&
-            q4.flags.hero === false &&
             q4.flags.subdivLevel === 2
     );
 

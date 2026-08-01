@@ -23,7 +23,6 @@ const QUALITY_BOOL_FLAGS = [
   "detailFlag",
   "triplanar",
   "pom",
-  "hero",
   "terrainDetailNormal",
   "bloom",
   "vignette",
@@ -272,9 +271,9 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   containerEl.appendChild(boolRow("Parallax occlusion (POM)", "pom", effective.pom, (v) => {
     setQualityFlag(state, "pom", v); markDirty();
   }));
-  containerEl.appendChild(boolRow("Hero models", "hero", effective.hero, (v) => {
-    setQualityFlag(state, "hero", v); markDirty();
-  }));
+  // "Hero models" checkbox REMOVED 2026-08: `hero` was a preset key with zero
+  // consumers repo-wide (never read by any render path), so the checkbox
+  // toggled nothing. See external/holtburger/docs/quality-presets.md.
 
   // --- Terrain -------------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Terrain"));
@@ -512,7 +511,6 @@ function effectiveFlags(state) {
     detailFlag: true,
     triplanar: true,
     pom: false,
-    hero: false,
     terrainDetailNormal: true,
     bloom: true,
     vignette: false,

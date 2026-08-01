@@ -61,7 +61,6 @@ export const PRESETS = {
         gfxRelief: false,
         gfxSubdivLevel: 0,
         gfxReliefScale: 0.6,
-        hero: false,
         pom: false,
         pomStepsPrimary: 0,
         pomStepsSelfShadow: 0,
@@ -211,7 +210,6 @@ export const PRESETS = {
         gfxRelief: true,
         gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
-        hero: false,
         // pom ON at mid (2026-07-30, second pass): EnvCell interiors and
         // non-atlased singletons — i.e. EVERY dungeon wall — are not atlas
         // members, so with `pom` off at mid they were the one surface class
@@ -316,7 +314,6 @@ export const PRESETS = {
         gfxRelief: true,
         gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
-        hero: true,
         pom: true,
         pomStepsPrimary: 16,
         pomStepsSelfShadow: 8,
@@ -405,7 +402,6 @@ export const PRESETS = {
         gfxRelief: true,
         gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
-        hero: true,
         pom: true,
         pomStepsPrimary: 24,
         pomStepsSelfShadow: 12,
@@ -491,7 +487,6 @@ const BOOL_FLAGS = new Set([
     "detailFlag",
     "terrainDetailNormal",
     "triplanar",
-    "hero",
     "pom",
     "statPom",
     "csm",
