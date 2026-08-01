@@ -66,6 +66,13 @@ they accept the perf cost.
 | `terrainSandDevilCount` | 0 | 0 | 1 | 2 | Terrain VFX Wave 1B |
 | `terrainSandSparkle` | off | on | on | on | Terrain VFX Wave 1B |
 | `terrainSandRadius` | 32 | 48 | 64 | 80 | Terrain VFX Wave 1B |
+| `terrainSnow` | off | off | off | off | Terrain VFX Wave 2A |
+| `terrainSnowSpindriftCount` | 0 | 0 | 1200 | 2500 | Terrain VFX Wave 2A |
+| `terrainSnowSparkle` | off | on | on | on | Terrain VFX Wave 2A |
+| `terrainSnowPrints` | off | off | on | on | Terrain VFX Wave 2A |
+| `terrainSnowRadius` | 32 | 48 | 64 | 80 | Terrain VFX Wave 2A |
+| `terrainIce` | off | off | off | off | Terrain VFX Wave 2A |
+| `terrainIceRefraction` | off | off | off | on | Terrain VFX Wave 2A |
 | `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
@@ -150,6 +157,56 @@ they accept the perf cost.
   (exact-`on` rule). `?terrainSandSparkle=on` / `=off`.
 - **`terrainSandRadius`** — Terrain VFX Wave 1B. Half-extent of the streamer
   field in metres, fading over the last 25 %. `?terrainSandRadius=N`.
+- **`terrainSnow`** — Terrain VFX Wave 2A
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.4). The SNOW
+  family master (`scene3d/terrain_snow.js`) over terrain codes 2/15/27
+  (`FAM_SNOWICE`): slope-biased spindrift ribbons, the terrain-shader crystal
+  sparkle, and persistent footprints. **OFF on every tier today** (§5.9
+  ship-OFF; the promotion target is `high`/`ultra` on). Deliberately NOT in
+  `BOOL_FLAGS`, for the `gfxRelief`/`terrainTrail` reason: `parseBool` would
+  widen the exact-`on` opt-in its decisive reader
+  (`scene3d/vfx_flags.js::terrainSnowEnabled`) requires. URL override
+  `?terrainSnow=on` / `=off`; the sub-effects gate further via
+  `?terrainSnowSpindrift` / `?terrainSnowSparkle` / `?terrainSnowPrints`.
+  It does **not** gate `terrainIce` — see that key.
+- **`terrainSnowSpindriftCount`** — Terrain VFX Wave 2A. Instances in the
+  spindrift ribbon pool, THE degrade lever for the ribbons (the pool rounds any
+  count up to a perfect square; 2500 = 50² already is one). `low` and `mid` are
+  0 = disabled, the §5.8 contract for every effect in this plan, and turning
+  the sub-flag on at those tiers warns once rather than doing nothing silently.
+  `?terrainSnowSpindriftCount=N`; cannot enable the feature on its own.
+- **`terrainSnowSparkle`** — Terrain VFX Wave 2A. The terrain-shader crystal
+  sparkle (`glint.js` maths, `FAM_SNOWICE` gate, a WORLD-SPACE hash, a lobe
+  exponent of 420 so the twinkle tracks CAMERA motion). It is the WHOLE `mid`
+  tier for this family. Not in `BOOL_FLAGS` (exact-`on` rule).
+  `?terrainSnowSparkle=on` / `=off`.
+- **`terrainSnowPrints`** — Terrain VFX Wave 2A. Persistent footprints: the
+  shared trail map read in the terrain fragment shader as a small parallax dent
+  plus a darkening. `low`/`mid` off because the dent needs POM, which is
+  `high`/`ultra` only — at `mid` the print would degrade to darkening-only,
+  which is coherent but not worth the render target. Needs `terrainTrail`
+  as well, so the full live URL is
+  `?terrainSnow=on&terrainSnowPrints=on&terrainTrail=on&terrainTrailFade=300`
+  (the long fade is snow's "recovery = infinity"; the map's fade is global and
+  defaults to 4 s grass springback). Wave 2A decided AGAINST a second high-res
+  trail RT — rationale in the `scene3d/terrain_snow.js` header.
+- **`terrainSnowRadius`** — Terrain VFX Wave 2A. Half-extent of the spindrift
+  field in metres, fading over the last 25 %. `?terrainSnowRadius=N`.
+  (`?terrainSnowSlope=0..1` biases placement toward crest faces and is
+  URL-only, like `?terrainGrassDensity`.)
+- **`terrainIce`** — Terrain VFX Wave 2A. The ICE MATERIAL TREATMENT on codes
+  2 (`Ice`) and 27 (`BlueIce`) ONLY — never 15 (`Snow`), which stays matte:
+  roughness down, sharper specular, an env term off the `?ibl` cube.
+  A SEPARATE master from `terrainSnow` on purpose (plan §3.4): one is
+  particles+shader, the other a material change, and bisecting them separately
+  matters. Explicitly NOT `MeshTransmissionMaterial`, and it changes no light
+  count (it is a fragment term). **OFF on every tier today** (§5.9). Not in
+  `BOOL_FLAGS` (exact-`on` rule). `?terrainIce=on` / `=off`.
+- **`terrainIceRefraction`** — Terrain VFX Wave 2A. The fake refraction inside
+  the ice treatment: ONE extra atlas tap at a view-offset UV, applied after the
+  POM march at a third of `uPomScale`. **ULTRA ONLY** — it is the only part of
+  the ice treatment with a texture cost. Requires `terrainIce`. Not in
+  `BOOL_FLAGS` (exact-`on` rule). `?terrainIceRefraction=on` / `=off`.
 - **`terrainTrail`** — Terrain VFX Wave 0B
   (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §2.2/§3.1). The
   shared stomp / footprint render-target trail map (`scene3d/trail_map.js`):
