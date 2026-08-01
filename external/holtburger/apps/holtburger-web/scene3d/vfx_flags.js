@@ -246,6 +246,87 @@ export function terrainVfxEnabled() {
   return _terrainVfx;
 }
 
+let _terrainGrass;
+let _terrainGrassWarned = false;
+/** `?terrainGrass=on` — the §3.1 GRASS family (`scene3d/terrain_grass.js`):
+ *  one camera-scoped instanced blade field over terrain codes 1/3/9/21/28/29,
+ *  wind-bent off the tree-wind gust function and crushed flat by the trail map.
+ *  STRICT exact-match opt-in (the `gfx_relief.js:137` argument: a silent no-op
+ *  on a typo is indistinguishable from a broken decode, so anything
+ *  unrecognised warns and does NOT enable). Absent ⇒ the quality preset's
+ *  `terrainGrass`, **false on all four tiers this wave** (§5.9 ship-OFF; the
+ *  promotion target is high/ultra true). The preset branch is NOT memoized: it
+ *  may be consulted before `window.liveScene3d.quality` exists and caching
+ *  "not ready" would stick. */
+export function terrainGrassEnabled() {
+  if (_terrainGrass !== undefined) return _terrainGrass;
+  const raw = _strFlag("terrainGrass");
+  if (raw === "on") return (_terrainGrass = true);
+  if (raw === "off") return (_terrainGrass = false);
+  if (raw !== null && !_terrainGrassWarned) {
+    _terrainGrassWarned = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainGrass] ignoring ?terrainGrass=${JSON.stringify(raw)} — the master flag is an EXACT-match opt-in; use ?terrainGrass=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainGrass = flags.terrainGrass === true);
+}
+
+let _terrainGrassStomp;
+let _terrainGrassStompWarned = false;
+/** `?terrainGrassStomp=on` — let the blades read the shared trail map and bend
+ *  down/splay where something walked. SEPARATE from the master flag so the
+ *  trail render target can be bisected independently of the blade field (plan
+ *  §3.1). STRICT exact-match opt-in, same shape as `terrainGrass`; absent ⇒ the
+ *  preset's `terrainGrassStomp` (false on low/mid, false on high/ultra this
+ *  wave; the promotion target is high/ultra true).
+ *  ⚠ It needs the map to EXIST: the trail map is constructed by
+ *  `terrain_vfx.js::initTerrainVfx` only under `?terrainTrail=on` (or a preset
+ *  with `terrainTrail: true`). With the map absent the blades simply never bend
+ *  — `uTrailEnabled` stays 0 — rather than erroring. */
+export function terrainGrassStompEnabled() {
+  if (_terrainGrassStomp !== undefined) return _terrainGrassStomp;
+  const raw = _strFlag("terrainGrassStomp");
+  if (raw === "on") return (_terrainGrassStomp = true);
+  if (raw === "off") return (_terrainGrassStomp = false);
+  if (raw !== null && !_terrainGrassStompWarned) {
+    _terrainGrassStompWarned = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainGrassStomp] ignoring ?terrainGrassStomp=${JSON.stringify(raw)} — the master flag is an EXACT-match opt-in; use ?terrainGrassStomp=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainGrassStomp = flags.terrainGrassStomp === true);
+}
+
+/** `?terrainGrassBlades` — instances in the blade pool (the DEGRADE LEVER for a
+ *  vertex-bound effect; render scale buys grass nothing — plan §3.1). Preset key
+ *  `terrainGrassBlades`: low 0 (the tier is disabled, §5.8) / mid 24336 (156²) /
+ *  high 60025 (245²) / ultra 119716 (346²). The pool rounds any count UP to a
+ *  perfect square. Fallback 60025. */
+export function terrainGrassBladeCount() {
+  return Math.round(_terrainNum("terrainGrassBlades", "terrainGrassBlades", 60025, 0, 1000000));
+}
+
+/** `?terrainGrassRadius` — HALF-extent of the blade field in metres (it covers
+ *  2x this). Preset key `terrainGrassRadius`: low 32 / mid 32 / high 48 /
+ *  ultra 64. Fallback 48. Raising it at a fixed blade count thins the field. */
+export function terrainGrassRadiusM() {
+  return _terrainNum("terrainGrassRadius", "terrainGrassRadius", 48, 4, 512);
+}
+
+/** `?terrainGrassDensity` — 0..2 multiplier on the tier blade count, default
+ *  1.0. URL-ONLY on purpose (no preset key): it is the continuous A/B knob for
+ *  the 1070 perf sweep, while the tier owns the shipped count. 0 disables. */
+export function terrainGrassDensity() {
+  return _numFlag("terrainGrassDensity", 1, 0, 2);
+}
+
 let _terrainTrail;
 let _terrainTrailWarned = false;
 /** `?terrainTrail=on` — the shared stomp/footprint trail map
@@ -344,6 +425,8 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   // and the count of DEFAULT-ON effects is unchanged at 14.
   // The MASTER kill switch `?terrainVfx` is deliberately absent — it is a
   // master gate like `?visual`/`?visualAll`, not a per-effect row.
+  "terrain.grass": terrainGrassEnabled,
+  "terrain.grassStomp": terrainGrassStompEnabled,
   "terrain.trailMap": terrainTrailEnabled,
 });
 
@@ -371,4 +454,6 @@ export function _resetVfxFlags() {
   _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _brazier = _foliagePollen = _foliageFireflies = _foliageLeaves = _breathFog = _budget = undefined;
   _terrainVfx = _terrainTrail = undefined;
   _terrainTrailWarned = false;
+  _terrainGrass = _terrainGrassStomp = undefined;
+  _terrainGrassWarned = _terrainGrassStompWarned = false;
 }

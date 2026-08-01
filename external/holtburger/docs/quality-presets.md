@@ -57,6 +57,10 @@ they accept the perf cost.
 | `pom` | off | off | on | on | 3.1 |
 | `ssao` | off | off | on | on | 3.2 |
 | `csm` | off | off | on | on | 3.3 |
+| `terrainGrass` | off | off | off | off | Terrain VFX Wave 1A |
+| `terrainGrassBlades` | 0 | 24336 | 60025 | 119716 | Terrain VFX Wave 1A |
+| `terrainGrassRadius` | 32 | 32 | 48 | 64 | Terrain VFX Wave 1A |
+| `terrainGrassStomp` | off | off | on | on | Terrain VFX Wave 1A |
 | `terrainTrail` | off | off | off | off | Terrain VFX Wave 0B |
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
@@ -89,6 +93,36 @@ they accept the perf cost.
   surfaces.
 - **`ssao`** — Phase 3.2. Screen-space ambient occlusion post pass.
 - **`csm`** — Phase 3.3. Cascaded shadow maps.
+- **`terrainGrass`** — Terrain VFX Wave 1A
+  (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.1). The GRASS
+  family (`scene3d/terrain_grass.js`): one camera-scoped instanced blade field
+  over terrain codes 1/3/9/21/28/29, wind-bent off the tree-wind gust function
+  and crushed flat by the trail map. **OFF on every tier today** (§5.9 ship-OFF;
+  the promotion target is `high`/`ultra` on). ⚠ Deliberately **NOT** in
+  `BOOL_FLAGS`, for the `gfxRelief`/`terrainTrail` reason: `parseBool` would
+  widen the exact-`on` opt-in its decisive reader
+  (`scene3d/vfx_flags.js::terrainGrassEnabled`) requires. URL override
+  `?terrainGrass=on` / `=off`; anything else warns and does not enable.
+- **`terrainGrassBlades`** — Terrain VFX Wave 1A. Instances in the blade pool,
+  and **THE degrade lever for this effect**: grass is VERTEX-bound, so 25 %
+  render scale buys it nothing and `adaptive_render_scale.js` must never drive
+  it (plan §3.1) — the tier does. `low` is **0 = disabled**, the §5.8 contract
+  that every effect in this plan is null on `low`. Counts are perfect squares
+  (156² / 245² / 346²) because the scatter pool's slot grid is square; any
+  other count is rounded up. `?terrainGrassBlades=N`; cannot enable the feature
+  on its own. The `high` budget (≤ 3.5 ms on an R9 290) is the plan's
+  hypothesis, not a measurement — §8 risk 6 says measure before fixing it.
+- **`terrainGrassRadius`** — Terrain VFX Wave 1A. HALF-extent of the blade
+  field in metres; it covers twice this, centred on the player, and blades fade
+  to zero scale over the last 20 %. Raising it at a fixed blade count thins the
+  field. `?terrainGrassRadius=N`. (`?terrainGrassDensity=0..2` scales the count
+  itself and is URL-only — there is deliberately no preset key for it.)
+- **`terrainGrassStomp`** — Terrain VFX Wave 1A. Whether the blades read the
+  trail map and bend/splay where something walked. A SEPARATE key from the
+  master so the trail render target can be bisected independently. Also not in
+  `BOOL_FLAGS` (same exact-`on` rule). It needs the map to exist: that is
+  `terrainTrail` above, so the full live URL is
+  `?terrainGrass=on&terrainTrail=on&terrainGrassStomp=on`.
 - **`terrainTrail`** — Terrain VFX Wave 0B
   (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §2.2/§3.1). The
   shared stomp / footprint render-target trail map (`scene3d/trail_map.js`):

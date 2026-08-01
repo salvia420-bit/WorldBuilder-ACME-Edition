@@ -84,6 +84,18 @@ export const PRESETS = {
         // requires. The three NUMERIC knobs below are safe here (they cannot
         // turn the feature on by themselves) so the Graphics-settings bag can
         // carry them; the readers clamp whatever they get, from either source.
+        // Terrain VFX — GRASS (Wave 1A, plan §3.1). `terrainGrass` is the
+        // master and, like `terrainTrail`/`gfxRelief`, is deliberately NOT in
+        // BOOL_FLAGS (parseBool would widen its exact-`on` opt-in). It ships
+        // FALSE on every tier (§5.9); the promotion target is high/ultra true.
+        // `terrainGrassBlades` is THE degrade lever: grass is vertex-bound, so
+        // render scale buys it nothing (§3.1) — 0 here means the `low` tier is
+        // disabled outright, which is the §5.8 contract for every effect in
+        // this plan. Counts are perfect squares (the scatter pool rounds up).
+        terrainGrass: false,
+        terrainGrassBlades: 0,
+        terrainGrassRadius: 32,
+        terrainGrassStomp: false,
         terrainTrail: false,
         terrainTrailRes: 128,
         terrainTrailRadius: 32,
@@ -134,6 +146,12 @@ export const PRESETS = {
         vignette: false,
         lensFlare: false,
         lightShafts: false,
+        // Terrain VFX grass — see the `low` tier for the rationale. 24336 =
+        // 156²; stomp off at mid (the trail RT is a high/ultra promotion).
+        terrainGrass: false,
+        terrainGrassBlades: 24336,
+        terrainGrassRadius: 32,
+        terrainGrassStomp: false,
         // Terrain VFX trail map — see the `low` tier for the rationale.
         terrainTrail: false,
         terrainTrailRes: 128,
@@ -167,6 +185,13 @@ export const PRESETS = {
         vignette: true,
         lensFlare: false,
         lightShafts: true,
+        // Terrain VFX grass — see the `low` tier. 60025 = 245², the plan's
+        // reference budget (240k tris, one draw call, <= 3.5 ms on an R9 290 —
+        // a hypothesis, §8 risk 6: measure before fixing this number).
+        terrainGrass: false,
+        terrainGrassBlades: 60025,
+        terrainGrassRadius: 48,
+        terrainGrassStomp: true,
         // Terrain VFX trail map — see the `low` tier for the rationale.
         terrainTrail: false,
         terrainTrailRes: 256,
@@ -199,6 +224,11 @@ export const PRESETS = {
         vignette: true,
         lensFlare: false,
         lightShafts: true,
+        // Terrain VFX grass — see the `low` tier. 119716 = 346².
+        terrainGrass: false,
+        terrainGrassBlades: 119716,
+        terrainGrassRadius: 64,
+        terrainGrassStomp: true,
         // Terrain VFX trail map — see the `low` tier for the rationale.
         terrainTrail: false,
         terrainTrailRes: 512,
@@ -245,6 +275,9 @@ const INT_FLAGS = new Set([
     "pomStepsSelfShadow",
     "triplanarSlopeThresholdPct",
     "maxParticlesPerEmitter",
+    // Terrain-VFX grass (Wave 1A). `terrainGrass` / `terrainGrassStomp` are
+    // absent for the same reason `gfxRelief` is — see the PRESETS comment.
+    "terrainGrassBlades",
     // Terrain-VFX trail map (Wave 0B). `terrainTrail` itself is absent for the
     // same reason `gfxRelief` is — see the PRESETS comment.
     "terrainTrailRes",
@@ -253,6 +286,7 @@ const INT_FLAGS = new Set([
 // Float-typed flags.
 const FLOAT_FLAGS = new Set([
     "gfxReliefScale",
+    "terrainGrassRadius",
     "terrainTrailRadius",
     "terrainTrailFade",
 ]);
