@@ -559,7 +559,7 @@ export function createSandStreamerField(opts = {}) {
     material.uniforms.uScatterShape = pool.uniforms.uScatterShape;
   }
 
-  const mesh = pool.mesh || null;
+  let mesh = pool.mesh || null;
   if (mesh) {
     mesh.name = "terrain-sand-streamers";
     mesh.castShadow = false;      // §5.7 — added geometry is paid twice
@@ -601,6 +601,7 @@ export function createSandStreamerField(opts = {}) {
       // The pool owns the mesh (it built it) and deliberately never disposes
       // the geometry/material it was handed — those are ours.
       try { pool.dispose(); } catch (_) { /* fail-soft */ }
+      mesh = null;
       if (geometry) { try { geometry.dispose(); } catch (_) {} geometry = null; }
       if (material) { try { material.dispose(); } catch (_) {} material = null; }
     },
