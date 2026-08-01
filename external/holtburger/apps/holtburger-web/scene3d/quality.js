@@ -142,6 +142,18 @@ export const PRESETS = {
         terrainVolcanoEmberCount: 0,
         terrainHazeStrength: 0,
         terrainVolcanoRadius: 0,
+        // Terrain DIRT/MUD (Wave 3B, plan §3.7). `terrainDirt` is the FAMILY
+        // MASTER and ships false on every tier (§5.9); `low` is `null` in the
+        // plan's tier table, so every knob here is 0/false and even
+        // `?terrainDirt=on` at low renders nothing. The four BOOLEANS stay out
+        // of BOOL_FLAGS for the `gfxRelief` reason; the two numerics are safe in
+        // INT/FLOAT_FLAGS — they cannot turn the family on.
+        terrainDirt: false,
+        terrainFootfall: false,
+        terrainMudPrints: false,
+        terrainMudWetness: false,
+        terrainDirtDustCount: 0,
+        terrainDirtRadius: 32,
         maxParticlesPerEmitter: 64,
     },
     mid: {
@@ -227,6 +239,16 @@ export const PRESETS = {
         terrainVolcanoEmberCount: 0,
         terrainHazeStrength: 0,
         terrainVolcanoRadius: 0,
+        // Terrain DIRT/MUD — see the `low` tier. mid = footfall puffs ONLY
+        // (plan §3.7 "mid {footfall:true}"): no prints (POM is high/ultra, and
+        // a darkening-only print is the degrade, not the shipped mid look), no
+        // wetness, no haze (a fill cost this tier does not spend).
+        terrainDirt: false,
+        terrainFootfall: true,
+        terrainMudPrints: false,
+        terrainMudWetness: false,
+        terrainDirtDustCount: 0,
+        terrainDirtRadius: 40,
         maxParticlesPerEmitter: 256,
     },
     high: {
@@ -293,6 +315,15 @@ export const PRESETS = {
         terrainVolcanoEmberCount: 1,
         terrainHazeStrength: 1,
         terrainVolcanoRadius: 160,
+        // Terrain DIRT/MUD — see the `low` tier. plan §3.7 "high
+        // {footfall:true, prints:true, dustHaze:800}". POM is live at this tier,
+        // so the print gets its dent as well as its darkening.
+        terrainDirt: false,
+        terrainFootfall: true,
+        terrainMudPrints: true,
+        terrainMudWetness: false,
+        terrainDirtDustCount: 800,
+        terrainDirtRadius: 56,
         maxParticlesPerEmitter: 1024,
     },
     ultra: {
@@ -356,6 +387,16 @@ export const PRESETS = {
         terrainVolcanoEmberCount: 3,
         terrainHazeStrength: 1.25,
         terrainVolcanoRadius: 220,
+        // Terrain DIRT/MUD — see the `low` tier. plan §3.7 "ultra
+        // {footfall:true, prints:true, dustHaze:2000, wetness:true}". The
+        // wet-mud darkening + sheen is the ultra-only addition, exactly as the
+        // plan's tier table has it.
+        terrainDirt: false,
+        terrainFootfall: true,
+        terrainMudPrints: true,
+        terrainMudWetness: true,
+        terrainDirtDustCount: 2000,
+        terrainDirtRadius: 72,
         maxParticlesPerEmitter: 2048,
     },
 };
@@ -417,6 +458,12 @@ const INT_FLAGS = new Set([
     // and `terrainCrackGlow` are absent from BOOL_FLAGS for the `gfxRelief`
     // reason (their readers require an exact `=== "on"`).
     "terrainVolcanoEmberCount",
+    // Terrain DIRT (Wave 3B). Count only — `terrainDirt`, `terrainFootfall`,
+    // `terrainMudPrints` and `terrainMudWetness` are absent from BOOL_FLAGS for
+    // the `gfxRelief` reason (their readers require an exact `=== "on"`).
+    // (`?terrainDirtDustDensity` and `?terrainFootfallPuffs` are URL-ONLY, like
+    // `?terrainGrassDensity`.)
+    "terrainDirtDustCount",
 ]);
 
 // Float-typed flags.
@@ -434,6 +481,8 @@ const FLOAT_FLAGS = new Set([
     // heat-source radius in metres around the nearest resident volcanic LB.
     "terrainHazeStrength",
     "terrainVolcanoRadius",
+    // Terrain DIRT (Wave 3B) — dry-dust-haze field half-extent in metres.
+    "terrainDirtRadius",
 ]);
 
 function parseBool(raw) {

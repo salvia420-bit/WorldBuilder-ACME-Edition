@@ -772,6 +772,152 @@ export function terrainVolcanoRadiusM() {
   return _terrainNum("terrainVolcanoRadius", "terrainVolcanoRadius", 160, 8, 1024);
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN DIRT / MUD (Wave 3B — plan §3.7). Codes 5 (`MudRichDirt`),
+// 7 (`PackedDirt`), 8 (`PatchyDirt`), 24 (`Argila`) and 31 (`DesolateLands`)
+// = FAM_DIRT; CLAY (the redder, slicker wet treatment) is code 24 alone.
+//
+// ONE family master + four effects, ALL strict exact-match opt-ins that ship
+// OFF (plan §2.4/§5.9), all kept out of `quality.js BOOL_FLAGS` for the
+// `gfxRelief` reason. Composition:
+//     footfall puffs = terrainDirtEnabled() && terrainFootfallEnabled()
+//     mud prints     = terrainDirtEnabled() && terrainMudPrintsEnabled()   (+ ?terrainTrail=on)
+//     wetness        = terrainDirtEnabled() && terrainMudWetnessEnabled()
+//     dry dust haze  = terrainDirtEnabled() && terrainDustHazeEnabled()
+// `?terrainVfx=off`, `?visual=off` and `?wireframe=1` each kill all of them.
+//
+// ⚠ `?terrainMudWetness` is a FOURTH flag where plan §3.7 names three. The
+// plan's own tier table carries `wetness: true` at `ultra` only, i.e. a knob
+// that ships on a different tier from the prints it rides with — and the house
+// rule is one knob, one reader, one docs row (an undocumented preset key is
+// dead config and an unbisectable effect is exactly what `?terrainIceRefraction`
+// was given its own flag to avoid in wave 2A). Same shape, same reason.
+// ---------------------------------------------------------------------------
+
+let _terrainDirt;
+const _terrainDirtWarn = { hit: false };
+/** `?terrainDirt=on` — THE family master for DIRT/MUD (footfall dust puffs +
+ *  mud prints + the wet-mud darkening/sheen + the dry dust haze; plan §3.7).
+ *  STRICT exact-match opt-in; absent ⇒ the quality preset's `terrainDirt`,
+ *  **false on all four tiers** this wave (§5.9 ship-OFF; the promotion target is
+ *  high/ultra true). */
+export function terrainDirtEnabled() {
+  if (_terrainDirt !== undefined) return _terrainDirt;
+  const r = _terrainStrictFlag("terrainDirt", "terrainDirt", false, _terrainDirtWarn);
+  return r.memo ? (_terrainDirt = r.value) : r.value;
+}
+
+let _terrainFootfall;
+const _terrainFootfallWarn = { hit: false };
+/** `?terrainFootfall=on` — the small dust burst thrown where a foot lands on
+ *  dry dirt (`scene3d/terrain_dirt.js`, a fixed-capacity billboard ring buffer).
+ *  It hangs off the EXISTING footstep-audio trigger — the `Sound.Footstep1/2`
+ *  (0x37/0x38) SoundTable animation hook in `entities.js::_fireHook` — rather
+ *  than re-deriving ground contact from velocity (plan §3.7 item 1). Requires
+ *  the family master. Absent ⇒ the tier's `terrainFootfall` (false on low, true
+ *  on mid/high/ultra — it is the whole `mid` tier for this family). */
+export function terrainFootfallEnabled() {
+  if (_terrainFootfall !== undefined) return _terrainFootfall;
+  const r = _terrainStrictFlag("terrainFootfall", "terrainFootfall", false, _terrainFootfallWarn);
+  return r.memo ? (_terrainFootfall = r.value) : r.value;
+}
+
+let _terrainMudPrints;
+const _terrainMudPrintsWarn = { hit: false };
+/** `?terrainMudPrints=on` — deforming mud prints: the SHARED trail map read in
+ *  the terrain fragment shader as a parallax dent plus a darkening. Requires the
+ *  family master AND `?terrainTrail=on` — the map is built by
+ *  `terrain_vfx.js::initTerrainVfx` and this module NEVER lazily creates one
+ *  (the grass-stomp precedent); with the map absent `uMudTrailEnabled` stays 0
+ *  and nothing is drawn, no error. Absent ⇒ the tier's `terrainMudPrints`
+ *  (false low/mid — `mid` has no POM, so the print would be darkening-only —
+ *  true high/ultra).
+ *  ⚠ RECOVERY: the map's fade is GLOBAL (`?terrainTrailFade`, default 4 s =
+ *  grass springback, snow runs 300 s). Mud asks for ~30 s and expresses its
+ *  RAIN-DEPENDENT persistence through stamp/shader AMPLITUDE instead, so no
+ *  second render target and no second fade constant — full rationale in the
+ *  `scene3d/terrain_dirt.js` header. `initTerrainDirt` warns once in each
+ *  direction when the live fade is far off 30 s. */
+export function terrainMudPrintsEnabled() {
+  if (_terrainMudPrints !== undefined) return _terrainMudPrints;
+  const r = _terrainStrictFlag("terrainMudPrints", "terrainMudPrints", false, _terrainMudPrintsWarn);
+  return r.memo ? (_terrainMudPrints = r.value) : r.value;
+}
+
+let _terrainMudWetness;
+const _terrainMudWetnessWarn = { hit: false };
+/** `?terrainMudWetness=on` — wet mud: a darkening plus a specular/env sheen on
+ *  FAM_DIRT ground, driven by the ALREADY-SMOOTHED `VFX_GLOBALS.uWetness` (plan
+ *  §3.7 item 4 — never re-derived from `weather/rain.js`) and reusing the
+ *  RESPONSE CURVE of `vfx/components/wetness.js` (the same up-facing
+ *  `smoothstep(0.05, 0.6, n_up)` weight, the same 0.62 darken, the same 0.25
+ *  roughness drop) so puddled statics and puddled ground agree. Clay (code 24)
+ *  goes redder and slicker than the rest of the family. Requires the family
+ *  master. Absent ⇒ the tier's `terrainMudWetness` (**ultra only** — plan §3.7's
+ *  tier table). */
+export function terrainMudWetnessEnabled() {
+  if (_terrainMudWetness !== undefined) return _terrainMudWetness;
+  const r = _terrainStrictFlag("terrainMudWetness", "terrainMudWetness", false, _terrainMudWetnessWarn);
+  return r.memo ? (_terrainMudWetness = r.value) : r.value;
+}
+
+let _terrainDustHaze;
+const _terrainDustHazeWarn = { hit: false };
+/** `?terrainDustHaze=on` — the low brown wind-lifted dust veil over dry dirt
+ *  (a camera-scoped `terrain_scatter.js` pool, `DesolateLands`-biased through
+ *  the per-code table in `terrain_dirt.js`, suppressed by rain and by cold).
+ *  Requires the family master. Absent ⇒ ON wherever the tier's
+ *  `terrainDirtDustCount` is non-zero (low/mid = 0 ⇒ off), the same shape
+ *  `terrainSandStreamers` and `terrainSnowSpindrift` use. */
+export function terrainDustHazeEnabled() {
+  if (_terrainDustHaze !== undefined) return _terrainDustHaze;
+  const raw = _strFlag("terrainDustHaze");
+  if (raw === "on") return (_terrainDustHaze = true);
+  if (raw === "off") return (_terrainDustHaze = false);
+  if (raw !== null && !_terrainDustHazeWarn.hit) {
+    _terrainDustHazeWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainDustHaze] ignoring ?terrainDustHaze=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainDustHaze=on (or =off).`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;              // deliberately not memoized
+  return (_terrainDustHaze = Number(flags.terrainDirtDustCount) > 0);
+}
+
+/** Instances in the dry-dust-haze pool at the live tier. URL knob
+ *  `?terrainDirtDustCount` (an `INT_FLAGS` quality override — it cannot turn
+ *  the effect on by itself). Preset: low 0 / mid 0 / high 800 / ultra 2000
+ *  (plan §3.7's `dustHaze` tier numbers). Fallback 800 = the `high` tier. */
+export function terrainDirtDustCount() {
+  return Math.round(_terrainNum("terrainDirtDustCount", "terrainDirtDustCount", 800, 0, 20000));
+}
+
+/** `?terrainDirtRadius` — HALF-extent (metres) of the dust-haze window; the
+ *  field covers 2× this. Preset key `terrainDirtRadius` (low 32 / mid 40 /
+ *  high 56 / ultra 72). Fallback 56. Cannot enable the feature on its own. */
+export function terrainDirtRadiusM() {
+  return _terrainNum("terrainDirtRadius", "terrainDirtRadius", 56, 8, 512);
+}
+
+/** `?terrainDirtDustDensity` — 0..2 multiplier on the tier haze count, default
+ *  1.0. URL-ONLY on purpose (no preset key), exactly like `?terrainGrassDensity`
+ *  and `?terrainSnowSlope`: it is the continuous A/B knob for the 1070 perf
+ *  sweep, while the tier owns the shipped count. 0 disables the haze. */
+export function terrainDirtDustDensity() {
+  return _numFlag("terrainDirtDustDensity", 1, 0, 2);
+}
+
+/** `?terrainFootfallPuffs` — capacity of the footfall ring buffer, i.e. the max
+ *  number of dust bursts alive at once. URL-ONLY (no preset key): a puff lives
+ *  under a second, so the pool is tiny and bounded by the emit rate rather than
+ *  by the tier — `terrainFootfall` is the tier's lever. Default 48. Cannot
+ *  enable the feature on its own. */
+export function terrainFootfallPuffCount() {
+  return Math.round(_numFlag("terrainFootfallPuffs", 48, 1, 512));
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -842,6 +988,17 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.volcanoHaze": () => terrainVolcanoEnabled() && terrainHazeEnabled(),
   "terrain.volcanoEmbers": () => terrainVolcanoEnabled() && terrainEmbersEnabled(),
   "terrain.volcanoCrackGlow": () => terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
+  // Terrain DIRT / MUD (Wave 3B, plan §3.7) — same contract again: strict
+  // ship-OFF opt-ins that do NOT track visualAllEffects(), so `?visual=all` does
+  // not light them and the DEFAULT-ON count stays 14. Each row composes the
+  // family master itself, so `vfxEffectEnabled` answers the same question the
+  // effect asks. `terrain.footfall`, `terrain.mudPrints` and `terrain.dirtDust`
+  // are also the PROVIDER IDS registered with the terrain-VFX spine.
+  "terrain.dirt": terrainDirtEnabled,
+  "terrain.footfall": () => terrainDirtEnabled() && terrainFootfallEnabled(),
+  "terrain.mudPrints": () => terrainDirtEnabled() && terrainMudPrintsEnabled(),
+  "terrain.mudWetness": () => terrainDirtEnabled() && terrainMudWetnessEnabled(),
+  "terrain.dirtDust": () => terrainDirtEnabled() && terrainDustHazeEnabled(),
 });
 
 /**
@@ -888,4 +1045,11 @@ export function _resetVfxFlags() {
   _terrainHazeWarn.hit = false;
   _terrainEmbersWarn.hit = false;
   _terrainCrackGlowWarn.hit = false;
+  _terrainDirt = _terrainFootfall = _terrainMudPrints = undefined;
+  _terrainMudWetness = _terrainDustHaze = undefined;
+  _terrainDirtWarn.hit = false;
+  _terrainFootfallWarn.hit = false;
+  _terrainMudPrintsWarn.hit = false;
+  _terrainMudWetnessWarn.hit = false;
+  _terrainDustHazeWarn.hit = false;
 }
