@@ -507,7 +507,10 @@ if (typeof window !== 'undefined') {
     // instead of the CloudLayers.DEFAULT collection. Use .copy() with
     // the static collection to restore the visually-correct config.
     co.volume.effect.cloudLayers.copy(CloudLayers.DEFAULT);
-    co.volume.effect.clouds.coverage = 0.3;
+    // Top-level property (same dead-knob trap as _applyWeatherToCloudLayers).
+    if (typeof co.volume.effect.coverage === 'number') {
+      co.volume.effect.coverage = 0.3;
+    }
     return true;
   };
   // Clouds-L knob: live tune cloud shadow darkness on terrain.

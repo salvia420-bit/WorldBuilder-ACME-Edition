@@ -144,8 +144,11 @@ export class CloudOverlay {
       // Bump default coverage from takram's 0.3 → 0.5 so there's more
       // cloud overhead in the default ?clouds=on view. Live tune via
       // `__setCloudCoverage(v)` in devtools (already exposed).
-      if (effect.clouds && 'coverage' in effect.clouds) {
-        effect.clouds.coverage = 0.5;
+      // Top-level property — the old `'coverage' in effect.clouds` guard
+      // was ALWAYS false (no such uniform key; see cloud_volume.js coverage
+      // note), so this intended default bump silently never applied.
+      if (typeof effect.coverage === 'number') {
+        effect.coverage = 0.5;
       }
     }
 

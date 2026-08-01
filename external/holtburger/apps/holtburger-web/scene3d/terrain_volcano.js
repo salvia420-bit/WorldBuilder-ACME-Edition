@@ -151,6 +151,14 @@ export const VOLCANO_TUNING = Object.freeze({
   // a single pixel (invisible) or the whole frame (a wobbling world).
   hazeMinScreenRadiusUv: 0.02,
   hazeMaxScreenRadiusUv: 1.8,
+  // Hard engagement ceiling on the player→field distance. `_hazeLbs` residency
+  // is LRU-driven (park/gone), and the LRU parks on capacity pressure, not
+  // distance — after a teleport a volcanic LB can stay cached for minutes,
+  // and the min-screen-radius clamp above then pins a full-strength shimmer
+  // blob on screen from ANYWHERE on the map (live-repro 2026-08-01: lbKey
+  // 0xC8ED0000 still driving haze from Holtburg, 10 km away). 8 LBs covers
+  // every legitimate approach sightline; past that the state clears.
+  hazeMaxEngageM: 1536,
 });
 
 // ---------------------------------------------------------------------------
@@ -574,6 +582,14 @@ export function updateHeatHazeState(quality, playerPos, camera) {
   }
   const radius = q.hazeRadiusM;
   const dist = Math.sqrt(bestD2);
+  // Distance gate (see VOLCANO_TUNING.hazeMaxEngageM): LRU residency is not
+  // distance-bounded, so a far-away cached field must not hold the shimmer up.
+  if (dist > VOLCANO_TUNING.hazeMaxEngageM) {
+    if (HEAT_HAZE_STATE.radiusM !== 0 || HEAT_HAZE_STATE.enabled !== 0) _stats.hazeClears += 1;
+    clearHeatHazeState();
+    HEAT_HAZE_STATE.residentLbs = _hazeLbs.size;
+    return HEAT_HAZE_STATE;
+  }
   const inside = Math.max(0, Math.min(1, 1 - dist / radius));
 
   HEAT_HAZE_STATE.enabled = 1;

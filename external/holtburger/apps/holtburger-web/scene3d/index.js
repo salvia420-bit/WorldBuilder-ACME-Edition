@@ -4316,7 +4316,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // default-defaults are in place first.
         const effect = cloudOverlay.volume.effect;
         if (Number.isFinite(coverageParam)) {
-          effect.clouds.coverage = Math.max(0, Math.min(1, coverageParam));
+          // Coverage is a TOP-LEVEL CloudsEffect property; `effect.clouds`
+          // is the material-uniform proxy and has NO `coverage` key (see
+          // cloud_volume.js `_applyWeatherToCloudLayers` — verified
+          // in-browser 2026-07-06, re-hit 2026-08-01: this knob wrote the
+          // dead path and `?cloudCoverage=` never applied).
+          effect.coverage = Math.max(0, Math.min(1, coverageParam));
         }
         if (qualityParam && ["low", "medium", "high", "ultra"].includes(qualityParam)) {
           effect.qualityPreset = qualityParam;
@@ -4377,8 +4382,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           // eslint-disable-next-line no-undef
           window.__setCloudCoverage = (v) => {
             const c = Math.max(0, Math.min(1, +v));
-            effect.clouds.coverage = c;
-            return effect.clouds.coverage;
+            // Top-level property — `effect.clouds.coverage` is a dead knob
+            // (no such uniform key; see cloud_volume.js coverage note).
+            effect.coverage = c;
+            return effect.coverage;
           };
           // eslint-disable-next-line no-undef
           window.__setCloudQuality = (p) => {
@@ -4399,7 +4406,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         console.log(
           "[clouds-d] CloudOverlay wired into SkyDome (?clouds=on). " +
             `noise=${cloudProcedural ? "procedural" : "prebaked"} ` +
-            `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"}. ` +
+            `coverage=${effect.coverage} qualityPreset=${effect.qualityPreset ?? "default"}. ` +
             `cloudShadow=${cloudShadowDisabled ? "off" : "on"} ` +
             `strength=${liveScene3d.__cloudShadowStrength ?? "default"} ` +
             `shadowMapSize=${effect.shadow?.mapSize?.x ?? "?"}. ` +

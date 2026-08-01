@@ -363,8 +363,10 @@ check("both families' 'map is missing' warnings now name the EXPLICIT off",
 console.log("\n-- P3 bare default is byte-identical ---------------------------");
 // ===========================================================================
 for (const tier of PRESET_NAMES) {
-  check(`${tier}: all nine terrain family masters are false`,
-    Object.keys(MASTERS).every((k) => PRESETS[tier][k] === false));
+  check(`${tier}: masters match the switchboard (ice promoted on the `
+    + `{high, ultra} ladder, the other eight false)`,
+    Object.keys(MASTERS).every((k) =>
+      PRESETS[tier][k] === terrainMaster(MASTERS[k], tier)));
 }
 check("no tier promotes the trail map",
   PRESET_NAMES.every((t) => PRESETS[t].terrainTrail === false));
@@ -419,9 +421,12 @@ check("no tier promotes the trail map",
 // ===========================================================================
 console.log("\n-- P4 ice reachability + the promotion switchboard -------------");
 // ===========================================================================
-check("every master is gated by TERRAIN_VFX_PROMOTED, all nine false today",
+check("every master is gated by TERRAIN_VFX_PROMOTED — ice promoted "
+  + "(USER 1070 SIGN-OFF 2026-08-01), the other eight still false",
   Object.keys(MASTERS).length === 9
-  && Object.values(MASTERS).every((f) => TERRAIN_VFX_PROMOTED[f] === false));
+  && TERRAIN_VFX_PROMOTED.ice === true
+  && Object.values(MASTERS).every((f) =>
+    TERRAIN_VFX_PROMOTED[f] === (f === "ice")));
 check("the gate and the ladder are both frozen",
   Object.isFrozen(TERRAIN_VFX_PROMOTED) && Object.isFrozen(TERRAIN_VFX_TIERS));
 check("the ladder is the documented {high, ultra} promotion target",
@@ -431,7 +436,7 @@ check("every tier's master value IS gate && ladder (no hand-written booleans)",
   PRESET_NAMES.every((t) =>
     Object.entries(MASTERS).every(([key, fam]) => PRESETS[t][key] === terrainMaster(fam, t))));
 check("promotion is ONE line: terrainMaster follows the gate for every tier",
-  terrainMaster("ice", "high") === false      // today
+  terrainMaster("ice", "high") === true       // promoted 2026-08-01
   && ["low", "mid", "high", "ultra"].every((t) =>
     terrainMaster("ice", t) === (TERRAIN_VFX_PROMOTED.ice && TERRAIN_VFX_TIERS[t])));
 check("each master line in quality.js is a terrainMaster() call, 4 tiers × 9",
@@ -443,10 +448,11 @@ check("ultra still STATES the refraction intent (it is no longer dead config)",
   && ["low", "mid", "high"].every((t) => PRESETS[t].terrainIceRefraction === false));
 check("the tier that states it IS on the promoted ladder — so promoting ice reaches it",
   TERRAIN_VFX_TIERS.ultra === true);
-check("refraction composes with the master, so it stays dead until ice is promoted",
+check("refraction composes with the master — ice IS promoted, so a bare "
+  + "ultra preset now lights both (the 2026-08-01 flip made this live)",
   (() => {
     setUrlWithPreset("", PRESETS.ultra);
-    return terrainIceEnabled() === false && (terrainIceEnabled() && terrainIceRefractionEnabled()) === false;
+    return terrainIceEnabled() === true && terrainIceRefractionEnabled() === true;
   })());
 check("the ultra preset alone lights refraction the moment ice is on",
   (() => {

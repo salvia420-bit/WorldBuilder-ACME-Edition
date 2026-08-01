@@ -627,8 +627,11 @@ for (const key of TIER_KEYS) {
     PRESET_NAMES.every((p) => Object.prototype.hasOwnProperty.call(PRESETS[p], key)),
     PRESET_NAMES.filter((p) => !(key in PRESETS[p])).join());
 }
-check("both family masters ship OFF on every tier (§5.9)",
-  PRESET_NAMES.every((p) => PRESETS[p].terrainSnow === false && PRESETS[p].terrainIce === false));
+check("snow ships OFF everywhere; ice PROMOTED on {high, ultra} "
+  + "(USER 1070 SIGN-OFF 2026-08-01)",
+  PRESET_NAMES.every((p) => PRESETS[p].terrainSnow === false)
+  && PRESETS.low.terrainIce === false && PRESETS.mid.terrainIce === false
+  && PRESETS.high.terrainIce === true && PRESETS.ultra.terrainIce === true);
 check("plan §3.4 tier table: low is NULL (nothing enabled at all)",
   resolveSnowQuality(PRESETS.low) === null);
 check("plan §3.4 tier table: mid = sparkle only",

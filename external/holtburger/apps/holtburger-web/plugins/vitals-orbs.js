@@ -186,7 +186,10 @@ function urlParam(name) {
  *  `plugins/vitals-hud.js` imports this and returns a no-op unmount
  *  when it is true — that is the whole mutual-exclusion mechanism. */
 export function isVitalsOrbsActive() {
-  return urlParam("vitalsOrbs") === "on";
+  // DEFAULT ON — USER 1070 SIGN-OFF 2026-08-01 (in-person vistest).
+  // `?vitalsOrbs=off` restores the classic bars (vitals-hud.js reads this
+  // same function for its no-op mount, so the exclusion stays two-sided).
+  return urlParam("vitalsOrbs") !== "off";
 }
 
 /** Caustics are the priciest layer (two feTurbulence + one

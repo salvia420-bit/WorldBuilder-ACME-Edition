@@ -410,6 +410,32 @@ check("H5: EVICT clears it (the plan's literal requirement)",
 check("H5: leaving the region is a CLEAR, not a stale carry — every field is inert",
   volc.HEAT_HAZE_STATE.enabled === 0 && volc.HEAT_HAZE_STATE.screenRadiusUv === 0
   && volc.HEAT_HAZE_STATE.strength === 0);
+
+// ===========================================================================
+console.log("\n-- H6 distance gate — LRU residency must not carry the shimmer --");
+// ===========================================================================
+// The LRU parks on capacity pressure, not distance, so after a teleport a
+// volcanic LB can stay in `_hazeLbs` for minutes (live repro 2026-08-01:
+// lbKey 0xC8ED0000 still driving a min-radius shimmer from Holtburg, 10 km
+// out). `hazeMaxEngageM` is the hard ceiling on player→field distance.
+vfx.terrainVfxNoteLandblockMesh(hazeScene, {
+  userData: { lbX: 0x02, lbY: 0x03, terrainCodes: g.codes, heights: g.heights },
+});
+vfx.terrainVfxTick(0.016, hazeScene);
+check("H6: near player ⇒ engaged", volc.HEAT_HAZE_STATE.enabled === 1);
+volc.updateHeatHazeState(qHigh,
+  { x: 0x02 * 192 + 96 + volc.VOLCANO_TUNING.hazeMaxEngageM + 1, y: 0x03 * 192 + 96, z: 14 },
+  fakeCam);
+effect.update(null, null, 0);
+check("H6: player beyond hazeMaxEngageM ⇒ CLEARED even with the LB resident",
+  volc.HEAT_HAZE_STATE.enabled === 0 && volc.HEAT_HAZE_STATE.radiusM === 0
+  && effect.uniforms.get("uHeatRadius").value === 0);
+check("H6: back inside the ceiling ⇒ re-engages",
+  (() => {
+    volc.updateHeatHazeState(qHigh,
+      { x: 0x02 * 192 + 96 + 500, y: 0x03 * 192 + 96, z: 14 }, fakeCam);
+    return volc.HEAT_HAZE_STATE.enabled === 1;
+  })());
 volc._resetTerrainVolcano();
 vfx._resetTerrainVfx();
 

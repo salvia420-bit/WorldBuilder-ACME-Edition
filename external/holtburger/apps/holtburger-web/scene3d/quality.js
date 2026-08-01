@@ -40,7 +40,8 @@ export const TERRAIN_VFX_PROMOTED = Object.freeze({
     grass: false,
     sand: false,
     snow: false,
-    ice: false,
+    // USER 1070 SIGN-OFF 2026-08-01 (in-person vistest): ice ships.
+    ice: true,
     volcano: false,
     swamp: false,
     dirt: false,
