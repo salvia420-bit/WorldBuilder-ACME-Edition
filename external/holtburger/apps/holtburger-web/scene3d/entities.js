@@ -945,6 +945,7 @@ import {
   datSelectionSphereFor,
   selectionSphereStats,
   blipColorForEntity,
+  readFellowshipRoster,
 } from "./selection_brackets.js";
 const SELECTION_INDICATOR_MODE = readSelectionIndicatorMode();
 // C2 (2026-07-12) — retail target-cycling ordering math (CPlayerSystem::
@@ -1747,7 +1748,10 @@ const MT_QUEUE_ON = (() => {
 // acclient.c:342324-342334, and missile env-collision DoCollision,
 // :436861-436870; ACE-era content authors DefaultScript as the ambient
 // spawn effect, hence the survey framing) plus the hook 17/18 PScriptType
-// fallback. Default OFF = byte-identical (0x33-only) behavior.
+// fallback. DEFAULT-ON — the reader below is `!== "off"`, so an ABSENT param
+// resolves ON. `?defaultScriptSpawn=off` is the escape, and THAT arm is the
+// byte-identical (0x33-only) behavior. (The old note here read "Default OFF",
+// which described the escape arm and not the default; audit 2026-08-02.)
 const DEFAULT_SCRIPT_SPAWN_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -2630,31 +2634,59 @@ function _isAttachedChildNode(obj) {
   return obj?.userData?.__attachedChildOf != null;
 }
 
-// `_disposeMeshChildren` walks the rig with `.traverse()` and frees
-// per-Mesh geometry + materials. FU3 (2026-05-18) — both dispose paths
-// are now gated by `userData.__disposable === true`: geometry via an
-// inline check (no shared "cache-owned" assertion needed because
-// AnimationCache doesn't tag, so a missing tag is the expected
-// "shared" signal), material via `_disposeMaterialIfOwned`. Call
-// BEFORE `root.parent.remove(root)` so the traverse path is still
-// intact.
+// `_disposeMeshChildren` walks the rig and frees per-Mesh geometry +
+// materials. FU3 (2026-05-18) — both dispose paths are gated by
+// `userData.__disposable === true`: geometry via an inline check (no
+// shared "cache-owned" assertion needed because AnimationCache doesn't
+// tag, so a missing tag is the expected "shared" signal), material via
+// `_disposeMaterialIfOwned`.
+//
+// ORDERING CONSTRAINT (load-bearing, was undocumented): call BEFORE
+// `root.parent.remove(root)` so the walk still has the part-Mesh subtree
+// attached. `dispose()` relies on this.
+//
+// OWNERSHIP CONSTRAINT (2026-08-02): because the walk runs while the rig
+// is still mounted, a WIELDED CHILD that has not been detached yet is
+// part of this subtree — `attachChildToParent` parents another entity's
+// root under one of THIS wielder's part groups, and `dispose()` does not
+// detach children first. A plain `.traverse()` therefore descended into
+// a live foreign entity and could free ITS `__disposable`-tagged
+// geometry/materials while that entity is still rendering. Hence the
+// hand-rolled walk below instead of `.traverse()`: it PRUNES at any node
+// tagged `userData.__attachedChildOf` (see `_isAttachedChildNode`), which
+// three.js's `traverse` has no way to express. The child's own
+// `dispose()` frees its resources when it despawns.
 function _disposeMeshChildren(root) {
   if (!root) return;
-  root.traverse((obj) => {
-    if (!obj.isMesh) return;
-    // FU3: only dispose __disposable-tagged geometries to avoid
-    // freeing shared cached geometries from AnimationCache.
-    if (obj.geometry?.userData?.__disposable === true) {
-      try {
-        obj.geometry.dispose();
-      } catch (_) {}
+  const stack = [root];
+  while (stack.length) {
+    const obj = stack.pop();
+    if (!obj) continue;
+    if (obj.isMesh) {
+      // FU3: only dispose __disposable-tagged geometries to avoid
+      // freeing shared cached geometries from AnimationCache.
+      if (obj.geometry?.userData?.__disposable === true) {
+        try {
+          obj.geometry.dispose();
+        } catch (_) {}
+      }
+      if (Array.isArray(obj.material)) {
+        for (const m of obj.material) _disposeMaterialIfOwned(m);
+      } else {
+        _disposeMaterialIfOwned(obj.material);
+      }
     }
-    if (Array.isArray(obj.material)) {
-      for (const m of obj.material) _disposeMaterialIfOwned(m);
-    } else {
-      _disposeMaterialIfOwned(obj.material);
+    const kids = obj.children;
+    if (!kids) continue;
+    for (let i = 0; i < kids.length; i += 1) {
+      // Do NOT descend into a mounted wielded child — it belongs to a
+      // different, possibly surviving, entity. (`root` itself is never
+      // pruned even if it is somebody's attached child: we were asked to
+      // dispose exactly this rig.)
+      if (_isAttachedChildNode(kids[i])) continue;
+      stack.push(kids[i]);
     }
-  });
+  }
 }
 
 // Convert AC's full motion command (u32) to a coarse category for
@@ -7362,7 +7394,32 @@ export class EntityManager {
         // acclient.c:289443 → `gmRadarUI::GetBlipColor` :262708); see
         // selection_brackets.js `blipColorForEntity` for the full branch
         // transcription. `?bracketBlipColor=off` pins the legacy red.
-        _selLayer.setColor(blipColorForEntity(inst));
+        //
+        // 2026-08-02 — feed the server-sent `_blipColor` byte
+        // (`PublicWeenieDesc::_blipColor`, PropertyInt::RadarBlipColor 95).
+        // Retail tests it FIRST and SHORT-CIRCUITS the whole type/relationship
+        // ladder on a non-zero value (`gmRadarUI::GetBlipColor` acclient.c:262708,
+        // switch at :262726) — that is what makes a lifestone BLUE and an NPC
+        // YELLOW rather than the type ladder's default gold.
+        //
+        // Read lazily HERE rather than in `toMeta`: the value is only needed
+        // for the one selected entity, the wasm lookup is an O(1) HashMap hit,
+        // and doing it at selection time keeps the per-frame meta hot path and
+        // loop.js untouched. Cached onto `meta` so a re-select is free.
+        // typeof-guarded: a stale `pkg/` (no `entityRadarBlipColor` export)
+        // leaves it 0, which is exactly retail's "use the type ladder"
+        // sentinel — so the pre-existing colours survive a wasm skew.
+        if (inst.meta && inst.meta.radarBlipColor === undefined) {
+          let _bc = 0;
+          try {
+            const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+            if (sh && typeof sh.entityRadarBlipColor === "function") {
+              _bc = sh.entityRadarBlipColor(next >>> 0) >>> 0;
+            }
+          } catch (_) { _bc = 0; }
+          inst.meta.radarBlipColor = _bc;
+        }
+        _selLayer.setColor(blipColorForEntity(inst, readFellowshipRoster()));
         // FU-2 — bracket BOUNDS. Prefer the real `CSetup.selection_sphere`
         // (CPartArray::GetSelectionSphere acclient.c:326293); the Box3
         // heuristic is only the fallback for setups that have none. The wasm

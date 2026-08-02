@@ -72,7 +72,7 @@ use holtburger_dat::transition::types::{
 };
 
 use super::collision::{physics_globals, TransitionState};
-use super::physics::{landing_allows_touchdown, LAND_SETTLE_EPS};
+use super::physics::{landing_allows_touchdown, FLOOR_Z, LAND_SETTLE_EPS};
 use super::scene::{CellMembership, CellPhysicsBsp, SpatialScene};
 use super::transition::{
     find_transitional_position, TransitionEnv, TransitionInput, TransitionOutcome,
@@ -1245,8 +1245,36 @@ pub fn faithful_find_transitional_position(
     // static BSP in the begin cell so the pure-terrain outdoor path (heightfield
     // cliff-stop, which `ON_WALKABLE` would regress — see the block above) is
     // unaffected. Carrier: `gates.outdoor_static_grounding` (`?roofGrounding=off`).
+    //
+    // 2026-08-02 — FLOOR_Z gate. The predicate above is entirely NON-GEOMETRIC:
+    // `grounded_entry` is `!airborne || force_grounded` (a bool, no normal), and
+    // the BSP test is mere PRESENCE of a static in the cell — never the polygon
+    // under the feet. So a mover pressed against a STEEP static face (a rock, a
+    // pitched roof, a building wall) latched `ON_WALKABLE` exactly like one
+    // standing on a flat roof, which re-arms `jump_is_allowed` (acclient.c:343941)
+    // on a surface retail calls a wall. Retail derives the flag from the CONTACT
+    // PLANE — `SetPositionInternal` recomputes it as `Normal.Z >= floor_z`
+    // (acclient.c:322586-322604; ACE `PhysicsObj.set_on_walkable`,
+    // PhysicsObj.cs:1232-1237) — so consult the carried plane here too.
+    //
+    // ABSENT plane ⇒ PERMIT, matching the convention the walkable-landing work
+    // (f05a542f) established on the terrain path: `transition.rs` uses
+    // `.is_none_or(|n| n.z >= FLOOR_Z)` (:1220-1223) and
+    // `.map(...).unwrap_or(true)` (:1137-1138). No evidence is not evidence of a
+    // wall — and the first frame after a mover lands on a roof legitimately has
+    // no carried plane yet, which is the case the 2026-06-30 latch exists for.
+    //
+    // Rides the existing `walkable_landing_ground` gate (`?walkableGround=off`)
+    // rather than adding a new one: that gate's whole contract is "grounding may
+    // only happen on a WALKABLE plane (`N.z >= FloorZ`), not merely a landable
+    // one" (transition.rs:285-294), which is precisely this fix.
+    let entry_plane_walkable = !input.gates.walkable_landing_ground
+        || input
+            .last_contact_plane
+            .is_none_or(|(p, _)| p.normal.z >= FLOOR_Z);
     let on_outdoor_static = input.gates.outdoor_static_grounding
         && outdoor
+        && entry_plane_walkable
         && !scene.cell_static_physics_bsp(begin_cell).is_empty();
     if t.faithful_stepup && grounded_entry && (input.begin.is_indoors() || on_outdoor_static) {
         t.object_info.state |= object_info_state::ON_WALKABLE;
@@ -1953,8 +1981,16 @@ pub(crate) fn faithful_diag_step(
             .is_some_and(|n| n.z >= 0.664_174_1);
     }
     let grounded_entry = !input.airborne || input.force_grounded;
+    // 2026-08-02 — MUST mirror the FLOOR_Z gate in
+    // `faithful_find_transitional_position` verbatim, or this diag probe reports
+    // a grounding the production path refuses. See the long note there.
+    let entry_plane_walkable = !input.gates.walkable_landing_ground
+        || input
+            .last_contact_plane
+            .is_none_or(|(p, _)| p.normal.z >= FLOOR_Z);
     let on_outdoor_static = input.gates.outdoor_static_grounding
         && !input.begin.is_indoors()
+        && entry_plane_walkable
         && !scene.cell_static_physics_bsp(begin_cell).is_empty();
     if t.faithful_stepup && grounded_entry && (input.begin.is_indoors() || on_outdoor_static) {
         t.object_info.state |= object_info_state::ON_WALKABLE;
@@ -5011,6 +5047,177 @@ mod drift {
             "ON height {} matches heightfield OFF {} within tolerance",
             on.pose.coords.z,
             off.pose.coords.z
+        );
+    }
+
+    // ── 2026-08-02: the outdoor-static grounding latch needs a FLOOR_Z gate ────
+    //
+    // `USE_OUTDOOR_STATIC_GROUNDING` (2026-06-30) stamps `ON_WALKABLE` for an
+    // outdoor mover whenever it is (a) not airborne and (b) standing in a cell
+    // that has ANY resident static BSP. Neither test looks at geometry: the
+    // "grounded" half is `!airborne || force_grounded` (a bool with no normal),
+    // and the BSP half is mere PRESENCE, never the polygon under the feet.
+    //
+    // So a mover pressed against a STEEP static face — a rock, a pitched roof,
+    // a building wall — latched walkable exactly like one standing on a flat
+    // roof. `ON_WALKABLE` is what `jump_is_allowed` requires (acclient.c:343941),
+    // so that re-armed the jump on a surface retail calls a wall. Retail derives
+    // the flag from the CONTACT PLANE (`SetPositionInternal` recomputes
+    // `Normal.Z >= floor_z`, acclient.c:322586-322604), which is what the gate
+    // added here consults.
+    //
+    // The convention for an ABSENT plane is PERMIT, matching the terrain side of
+    // the walkable-landing work (transition.rs `is_none_or(|n| n.z >= FLOOR_Z)`):
+    // a mover that just landed on a roof has no carried plane yet, and that is
+    // precisely the case the 2026-06-30 latch exists for.
+
+    /// A single horizontal static quad at `z`, spanning `[x0,x1] × [y0,y1]` in
+    /// WORLD coords (cell-local == world: identity origin/orientation, scale 1).
+    fn flat_static_bsp(x0: f32, x1: f32, y0: f32, y1: f32, z: f32) -> CellPhysicsBsp {
+        let mut polys = HashMap::new();
+        polys.insert(
+            1u16,
+            poly(vec![
+                v(x0, y0, z),
+                v(x1, y0, z),
+                v(x1, y1, z),
+                v(x0, y1, z),
+            ]),
+        );
+        CellPhysicsBsp {
+            tree: one_leaf(&polys),
+            polys,
+            origin: Vector3::zero(),
+            orientation: Quaternion::identity(),
+            scale: 1.0,
+        }
+    }
+
+    /// A carried contact plane with the given normal `z`, passing through
+    /// `(0,0,ground_z)`. `nz >= FLOOR_Z` (0.664) ⇒ walkable; below ⇒ a wall.
+    fn contact_plane_with_nz(nz: f32, ground_z: f32) -> (holtburger_common::Plane, u32) {
+        let nx = (1.0 - nz * nz).max(0.0).sqrt();
+        let normal = v(nx, 0.0, nz);
+        // d such that the plane contains (0, 0, ground_z): n·p + d == 0.
+        let d = -(normal.z * ground_z);
+        (holtburger_common::Plane { normal, d }, CELL_44)
+    }
+
+    /// Build the outdoor fixture: flat terrain at `Z`, one flat static roof quad
+    /// registered in the mover's own cell, mover grounded at the cell centre.
+    fn outdoor_static_fixture(
+        last_contact_plane: Option<(holtburger_common::Plane, u32)>,
+        walkable_landing_ground: bool,
+    ) -> (OutdoorEnv, TransitionInput) {
+        const Z: f32 = 50.0;
+        let (sx, sy) = outdoor_cell_center(4, 4);
+        let mut scene = outdoor_scene([Z; 81]);
+        // A roof-sized horizontal static covering the mover's cell.
+        scene.insert_cell_static_physics_bsp(
+            CELL_44,
+            flat_static_bsp(sx - 12.0, sx + 12.0, sy - 12.0, sy + 12.0, Z),
+        );
+        let begin = outdoor_pose(sx, sy, Z);
+        let end = outdoor_pose(sx + 1.0, sy, Z - 0.05);
+        let mut input = input_for(begin, end);
+        input.gates.outdoor_static_grounding = true;
+        input.gates.walkable_landing_ground = walkable_landing_ground;
+        input.airborne = false;
+        input.last_contact_plane = last_contact_plane;
+        (OutdoorEnv { scene, ground_z: Z }, input)
+    }
+
+    fn latched_on_walkable(env: &OutdoorEnv, input: &TransitionInput) -> bool {
+        let diag = faithful_diag_step(env, input, true);
+        // `state_in` is snapshotted AFTER the entry latch and BEFORE the driver
+        // runs, so it isolates exactly the stamp under test.
+        (diag.state_in & object_info_state::ON_WALKABLE) != 0
+    }
+
+    #[test]
+    fn outdoor_static_grounding_refuses_a_steep_entry_plane() {
+        // A 30°-from-vertical face: normal.z = 0.30 < FLOOR_Z (0.664). Retail
+        // calls this a wall, so the mover must NOT come out grounded — and so
+        // must not have its jump re-armed off it.
+        let (env, input) = outdoor_static_fixture(Some(contact_plane_with_nz(0.30, 50.0)), true);
+        assert!(
+            !latched_on_walkable(&env, &input),
+            "a steep static face (N.z 0.30 < FLOOR_Z {}) must not latch ON_WALKABLE", crate::spatial::physics::FLOOR_Z
+        );
+    }
+
+    #[test]
+    fn outdoor_static_grounding_accepts_a_walkable_entry_plane() {
+        // A flat roof: normal.z = 1.0. The 2026-06-30 latch must still fire, or
+        // gravity slides the mover off the roof and the pose reverts.
+        let (env, input) = outdoor_static_fixture(Some(contact_plane_with_nz(1.0, 50.0)), true);
+        assert!(
+            latched_on_walkable(&env, &input),
+            "a flat static roof (N.z 1.0) still latches ON_WALKABLE"
+        );
+    }
+
+    #[test]
+    fn outdoor_static_grounding_permits_an_absent_entry_plane() {
+        // First frame after landing on a roof: nothing carried yet. Absent is not
+        // evidence of a wall — same rule the terrain path uses.
+        let (env, input) = outdoor_static_fixture(None, true);
+        assert!(
+            latched_on_walkable(&env, &input),
+            "no carried plane ⇒ permit (matches transition.rs `is_none_or(n.z >= FLOOR_Z)`)"
+        );
+    }
+
+    #[test]
+    fn outdoor_static_grounding_gate_boundary_is_floor_z() {
+        // Straddle the constant itself, so a drifted threshold fails loudly.
+        let (env_below, in_below) =
+            outdoor_static_fixture(
+                Some(contact_plane_with_nz(crate::spatial::physics::FLOOR_Z - 0.01, 50.0)),
+                true,
+            );
+        let (env_at, in_at) =
+            outdoor_static_fixture(
+                Some(contact_plane_with_nz(crate::spatial::physics::FLOOR_Z, 50.0)),
+                true,
+            );
+        assert!(
+            !latched_on_walkable(&env_below, &in_below),
+            "just below FLOOR_Z is a wall"
+        );
+        assert!(
+            latched_on_walkable(&env_at, &in_at),
+            "exactly FLOOR_Z is walkable (retail's test is `>=`)"
+        );
+    }
+
+    #[test]
+    fn walkable_ground_off_restores_the_pre_gate_behavior() {
+        // `?walkableGround=off` is the escape hatch this gate rides; with it off
+        // the steep face latches again, exactly as before 2026-08-02.
+        let (env, input) = outdoor_static_fixture(Some(contact_plane_with_nz(0.30, 50.0)), false);
+        assert!(
+            latched_on_walkable(&env, &input),
+            "?walkableGround=off ⇒ ungated legacy latch"
+        );
+    }
+
+    #[test]
+    fn indoor_grounding_latch_is_untouched_by_the_outdoor_gate() {
+        // The gate sits on the OUTDOOR-static arm only. An indoor mover latches
+        // from `is_indoors()` regardless of the carried plane, as before.
+        let begin = pose_at(FCX, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 1.0, FCY, FLOOR_WZ - SINK);
+        let mut input = input_for(begin, end);
+        input.gates.outdoor_static_grounding = true;
+        input.gates.walkable_landing_ground = true;
+        input.airborne = false;
+        input.last_contact_plane = Some(contact_plane_with_nz(0.30, FLOOR_WZ));
+        let env = flat_floor_env();
+        let diag = faithful_diag_step(&env, &input, true);
+        assert!(
+            (diag.state_in & object_info_state::ON_WALKABLE) != 0,
+            "indoor latch is unconditional on the carried plane"
         );
     }
 

@@ -57,18 +57,24 @@
 // ## What this module does
 //
 // Same shape as `hud.js::NameplateLayer`: an absolutely-positioned DOM overlay
-// over the canvas, projected once per rAF. Four CSS-triangle corner brackets
-// are anchored to the corners of the projected box; a fifth element is the
-// off-screen direction arrow. `pointer-events: none` throughout, so picking is
-// untouched.
+// over the canvas, projected once per rAF. Four corner brackets are anchored to
+// the corners of the projected box; a fifth element is the off-screen direction
+// arrow. `pointer-events: none` throughout, so picking is untouched.
+//
+// Corner art: retail's OWN four 12x12 DAT bitmaps (0x06004C40-43, reached from
+// UI elements 0x10000039-3C), applied as a CSS alpha mask over a tinted
+// background so `setColor` reproduces `SetOnScreenColor`'s colorize blit. CSS
+// L-brackets remain the automatic fallback when the assets do not decode. See
+// `BRACKET_CORNER_ART_ON` (2026-08-02).
 //
 // Sphere source: `EntityManager` hands us `{ center: THREE.Vector3 (three
-// world space), radius }`. The DAT `CSetup.selection_sphere` is not surfaced
-// by the wasm bundle yet (only `fetchSetupPartSortCenters` exists), so the
-// caller derives it from the rig's Box3 — see `computeSelectionSphere`. Wiring
-// the real field is the follow-up noted in the handoff.
+// world space), radius }`. It PREFERS the real DAT `CSetup.selection_sphere`
+// (wasm `fetchSetupSelectionSphere`, wired FU-2 2026-08-02) and falls back to a
+// Box3-over-rig heuristic only for setups that carry no sphere — see
+// `computeSelectionSphere` / `datSelectionSphereFor` and `selectionSphereStats`.
 //
-// Flag: `?selectionIndicator=` brackets (default) | ring | both | none.
+// Flags: `?selectionIndicator=` brackets (default) | ring | both | none ·
+// `?bracketBlipColor=off` · `?bracketCornerArt=off`.
 // ============================================================================
 
 import * as THREE from "three";
@@ -76,8 +82,16 @@ import * as THREE from "three";
 /** Retail's fixed 8 px viewport margin (OnDraw :289789-:289816). */
 const EDGE_MARGIN_PX = 8;
 
-/** Corner bracket leg length in CSS px (retail reads the DAT image size). */
-const CORNER_PX = 10;
+/**
+ * Corner bracket box size in CSS px. Retail reads the DAT image size and blits
+ * 1:1 (`cw, ch = corner image width/height`, `m_rgOnScreenCorners[1]`), and the
+ * four VividIndicator corner surfaces measure 12x12 — so 12 is retail's own
+ * number and the corner bitmaps render UNSCALED. (Was 10, chosen freehand when
+ * the corners were CSS L-brackets; see `BRACKET_CORNER_ART_ON`.) Single-sourced
+ * on purpose: the projection math anchors every corner off this one constant,
+ * so the CSS fallback and the DAT art occupy the identical box.
+ */
+const CORNER_PX = 12;
 
 /** Corner bracket stroke thickness in CSS px. */
 const CORNER_THICKNESS_PX = 3;
@@ -89,10 +103,12 @@ const CORNER_THICKNESS_PX = 3;
 const BEHIND_CAMERA_NDC_Z = 1.0;
 
 /**
- * Default indicator colour. Retail pulls `gmRadarUI::GetBlipColor(iid)`
- * (:289444) so the brackets match the radar blip; until the blip-colour table
- * is ported, red is the right default (it is the hostile/creature blip colour
- * and the colour the user described).
+ * Fallback indicator colour, and what `?bracketBlipColor=off` pins. Retail
+ * pulls `gmRadarUI::GetBlipColor(iid)` (:289444) so the brackets match the
+ * radar blip — that table IS now ported (`blipColorForEntity` below, fed the
+ * server's `_blipColor` byte since 2026-08-02), so this is only the seed colour
+ * before the first `setColor` and the escape-hatch value. It is the
+ * hostile/creature red the pre-port brackets always wore.
  */
 const DEFAULT_COLOR = "#ff2a1a";
 
@@ -110,6 +126,91 @@ export const BRACKET_BLIP_COLOR_ON = (() => {
       .get("bracketBlipColor")?.toLowerCase() !== "off";
   } catch (_) { return true; }
 })();
+
+/**
+ * 2026-08-02 — `?bracketCornerArt=off` falls back to the CSS L-brackets.
+ * DEFAULT-ON: the four corners are now retail's own DAT bitmaps.
+ *
+ * Provenance (verified end-to-end against the decomp + the DATs, not guessed):
+ *   `VividTargetIndicator::VividTargetIndicator` (acclient.c:290050) fills
+ *   `m_rgSourceImages[i] = DBObj::GetByEnum(i, 0x10000009, 0xC)` for i=1..12 —
+ *   enum group `0x10000009` is the master EnumIDMap's "VividIndicators" table
+ *   (`0x25000000` → `0x2500000D`), `0xC` is `DB_TYPE_RENDERSURFACE`.
+ *   `Initialized` (:290085-:290098) binds children `0x10000039/3A/3B/3C` of the
+ *   on-screen container `0x10000038` to `m_rgOnScreenCorners[1..4]`, and
+ *   `SetOnScreenColor` (:289694) copies source→corner 1:1 by index. Resolving
+ *   the map in client_portal.dat gives:
+ *     idx 1 NW = 0x06004C40 · 2 NE = 0x06004C41 · 3 SW = 0x06004C42 · 4 SE = 0x06004C43
+ *   each a 12x12 PFID_A8R8G8B8 surface, exported to `assets/ui_brackets/`.
+ *
+ * The bracket SHAPE lives entirely in the ALPHA channel (a triangular corner
+ * wedge, correctly mirrored per quadrant); the RGB channel is dark grey noise
+ * because retail tints at runtime — `SetOnScreenColor` re-tints via `CopyImage`
+ * (:289470) with a colorize/multiply blit. So these are consumed as a CSS
+ * `mask-image` over a `background-color`, NOT as straight RGBA blits (which
+ * would render as dark grey smudges).
+ *
+ * FALLBACK: corners are built in CSS-L mode and only upgraded to the art once
+ * a probe `Image` actually decodes, so a missing/failed asset can never leave a
+ * blank bracket. See `_probeCornerArt`.
+ */
+const BRACKET_CORNER_ART_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search)
+      .get("bracketCornerArt")?.toLowerCase() !== "off";
+  } catch (_) { return true; }
+})();
+
+const CORNER_ART_URL = Object.freeze({
+  tl: new URL("./assets/ui_brackets/corner_tl.png", import.meta.url).href,
+  tr: new URL("./assets/ui_brackets/corner_tr.png", import.meta.url).href,
+  bl: new URL("./assets/ui_brackets/corner_bl.png", import.meta.url).href,
+  br: new URL("./assets/ui_brackets/corner_br.png", import.meta.url).href,
+});
+
+// `null` = not probed yet, `true`/`false` = the four bitmaps all decoded / did not.
+let _cornerArtReady = null;
+const _cornerArtWaiters = [];
+
+/**
+ * Decode-probe the four corner bitmaps ONCE. Resolves every registered waiter
+ * with the verdict. Never throws, never blocks: callers keep their CSS
+ * L-brackets until (and unless) this says yes.
+ */
+function _probeCornerArt() {
+  if (_cornerArtReady !== null) return;
+  if (!BRACKET_CORNER_ART_ON || typeof Image === "undefined") {
+    _cornerArtReady = false;
+    return;
+  }
+  let remaining = 4;
+  let failed = false;
+  const settle = () => {
+    if (remaining > 0) return;
+    _cornerArtReady = !failed;
+    if (!_cornerArtReady) {
+      // eslint-disable-next-line no-console
+      console.warn("[selection-brackets] corner bitmaps missing — CSS L-bracket fallback");
+    }
+    for (const w of _cornerArtWaiters.splice(0)) {
+      try { w(_cornerArtReady); } catch (_) { /* a waiter must not poison the rest */ }
+    }
+  };
+  for (const which of ["tl", "tr", "bl", "br"]) {
+    const img = new Image();
+    img.onload = () => { remaining -= 1; settle(); };
+    img.onerror = () => { failed = true; remaining -= 1; settle(); };
+    img.src = CORNER_ART_URL[which];
+  }
+}
+
+/** Register `fn` to run with the corner-art verdict (immediately if known). */
+function _onCornerArtVerdict(fn) {
+  if (_cornerArtReady !== null) { fn(_cornerArtReady); return; }
+  _cornerArtWaiters.push(fn);
+  _probeCornerArt();
+}
 
 /** Reused zero vector for the "no offset captured" path. */
 const _ZERO = new THREE.Vector3(0, 0, 0);
@@ -222,21 +323,26 @@ const BF_PKLITE_PKSTATUS = 0x02000000;
  * `PublicWeenieDescription.obj_desc_flags` (loop.js toMeta :2408 /
  * entity_update_clone.js:114).
  *
- * Two faithful gaps, both benign (they fall through to the flag branch, which
- * is exactly what retail does when `_blipColor == 0`):
+ * Both former gaps are now CLOSED (2026-08-02):
  *  - `_blipColor` — parsed by the protocol crate as
- *    `PublicWeenieDescription.radar_blip_color` and hydrated to
- *    `PropertyInt::RadarBlipColor` (holtburger-world/src/hydration.rs:143),
- *    but not surfaced on the entity meta by the wasm bundle. Honoured here
- *    when a caller can supply it (`meta.radarBlipColor`), so wiring it later
- *    is a one-field change. Without it, lifestones/NPCs read Default white.
- *  - fellowship — the leader/fellow override (:262842) needs the fellowship
- *    roster; skipped.
+ *    `PublicWeenieDescription.radar_blip_color` (description.rs:455) and
+ *    hydrated to `PropertyInt::RadarBlipColor`
+ *    (holtburger-world/src/hydration.rs:143). Now surfaced per-guid by the
+ *    wasm export `SessionHandle::entityRadarBlipColor` (src/lib.rs) and fed
+ *    onto `meta.radarBlipColor` by `entities.js` at selection time. This is
+ *    what makes a lifestone BLUE and an NPC YELLOW — without it both fell
+ *    through to the type ladder's gold/white.
+ *  - fellowship — the leader/fellow override (:262842) is applied from
+ *    `readFellowshipRoster()` (see below). Retail applies it LAST, after the
+ *    whole player ladder, but still only on the `_blipColor == 0` path
+ *    (the `_blipColor` switch returns before ever reaching it).
  *
  * @param {{meta?: object}|null} inst — an EntityManager entity record.
+ * @param {{leaderGuid: number, members: Set<number>}|null} [fellowship] —
+ *   roster from `readFellowshipRoster()`. Omit to skip the override.
  * @returns {string} a CSS colour; `BLIP_COLOR.Default` when unclassifiable.
  */
-export function blipColorForEntity(inst) {
+export function blipColorForEntity(inst, fellowship) {
   const meta = inst?.meta;
   if (!meta) return BLIP_COLOR.Default;
   const bits = (meta.objDescFlags ?? 0) >>> 0;
@@ -246,6 +352,15 @@ export function blipColorForEntity(inst) {
   // :262726 — the server-sent blip colour short-circuits EVERYTHING.
   const idx = (meta.radarBlipColor ?? 0) >>> 0;
   if (idx !== 0) return BLIP_COLOR_BY_INDEX[idx] || BLIP_COLOR.Default;
+  // :262841-262853 — the fellowship override is applied LAST in retail, after
+  // every branch below, so it wins over Portal/Vendor/Creature/PK/Admin alike.
+  // Evaluated up-front here (same result, one pass) but ONLY on the
+  // `_blipColor == 0` path, matching the early return above.
+  const fellowGuid = (meta.guid ?? inst?.guid ?? 0) >>> 0;
+  if (fellowship && fellowGuid !== 0) {
+    if (fellowGuid === (fellowship.leaderGuid >>> 0)) return BLIP_COLOR.FellowshipLeader;
+    if (fellowship.members?.has(fellowGuid)) return BLIP_COLOR.Fellowship;
+  }
   if (bits & BF_PORTAL) return BLIP_COLOR.Portal;                  // :262776
   if (bits & BF_VENDOR) return BLIP_COLOR.Vendor;                  // :262782
   const isPlayer = (bits & BF_PLAYER) !== 0;                       // IsPlayer :437199
@@ -260,6 +375,41 @@ export function blipColorForEntity(inst) {
   if (bits & BF_PKLITE_PKSTATUS) return BLIP_COLOR.PKLite;         // IsPKLite :262818
   if (bits & BF_FREE_PKSTATUS) return BLIP_COLOR.Creature;         // :262825
   return BLIP_COLOR.Default;
+}
+
+/**
+ * Pull the local player's fellowship roster for `blipColorForEntity`'s
+ * leader/fellow override (`ClientFellowshipSystem::IsFellowshipLeader` /
+ * `IsFellow`, acclient.c:262841-262853).
+ *
+ * Reads `SessionHandle::playerFellowship()`, which returns a
+ * `FellowshipSnapshotJs` whose `.members` accessor CLONES wasm-backed
+ * wrappers on every access — so each clone is `free()`d here rather than
+ * left to the FinalizationRegistry. Called once per selection change, not
+ * per frame.
+ *
+ * @returns {{leaderGuid: number, members: Set<number>}|null} `null` when the
+ *   player is not in a fellowship, the handle is absent, or the wasm bundle
+ *   predates `playerFellowship` (stale `pkg/` ⇒ override simply doesn't apply).
+ */
+export function readFellowshipRoster() {
+  try {
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh || typeof sh.playerFellowship !== "function") return null;
+    const snap = sh.playerFellowship();
+    if (!snap) return null;
+    const leaderGuid = (snap.leaderGuid ?? 0) >>> 0;
+    const members = new Set();
+    for (const m of snap.members ?? []) {
+      members.add((m.guid ?? 0) >>> 0);
+      if (typeof m.free === "function") m.free();
+    }
+    if (typeof snap.free === "function") snap.free();
+    if (leaderGuid === 0 && members.size === 0) return null;
+    return { leaderGuid, members };
+  } catch (_) {
+    return null;
+  }
 }
 
 /**
@@ -468,10 +618,12 @@ export class SelectionBracketLayer {
   }
 
   /**
-   * Build one corner bracket: two CSS borders on an empty div, forming an
-   * "L". Retail uses four DAT bitmaps (UI element ids 0x10000039-0x1000003C
-   * under the on-screen container 0x10000038, `Initialized` :290085-:290098);
-   * the L-bracket is the same silhouette without the DAT dependency.
+   * Build one corner bracket. Starts as two CSS borders forming an "L", and
+   * upgrades IN PLACE to retail's own 12x12 DAT bitmap (UI element ids
+   * 0x10000039-0x1000003C under the on-screen container 0x10000038,
+   * `Initialized` :290085-:290098) once `_probeCornerArt` confirms the asset
+   * decodes. Starting in CSS mode is what makes the fallback total: a missing
+   * or corrupt asset simply never triggers the upgrade.
    */
   _makeCorner(which) {
     const el = this.domRoot.ownerDocument.createElement("div");
@@ -482,13 +634,48 @@ export class SelectionBracketLayer {
     el.style.pointerEvents = "none";
     el.style.display = "none";
     el.style.boxSizing = "border-box";
-    const t = `${CORNER_THICKNESS_PX}px solid ${this.color}`;
+    this._applyCornerCss(el, which, this.color);
+    this.domRoot.appendChild(el);
+    _onCornerArtVerdict((ok) => {
+      if (ok) this._applyCornerArt(el, which, this.color);
+    });
+    return el;
+  }
+
+  /** Legacy CSS L-bracket styling (also the fallback). */
+  _applyCornerCss(el, which, color) {
+    const t = `${CORNER_THICKNESS_PX}px solid ${color}`;
     if (which === "tl") { el.style.borderTop = t; el.style.borderLeft = t; }
     if (which === "tr") { el.style.borderTop = t; el.style.borderRight = t; }
     if (which === "bl") { el.style.borderBottom = t; el.style.borderLeft = t; }
     if (which === "br") { el.style.borderBottom = t; el.style.borderRight = t; }
-    this.domRoot.appendChild(el);
-    return el;
+  }
+
+  /**
+   * Swap a corner over to the retail bitmap. The art's SHAPE is its alpha
+   * channel and its RGB is grey noise (retail colorizes at runtime — see the
+   * `BRACKET_CORNER_ART_ON` block), so it is applied as a MASK over a solid
+   * `background-color`. `setColor` then re-tints by writing that one property,
+   * which is the faithful analogue of `SetOnScreenColor`'s `CopyImage` blit.
+   */
+  _applyCornerArt(el, which, color) {
+    el.style.border = "";
+    const url = `url("${CORNER_ART_URL[which]}")`;
+    // `mask` is unprefixed in modern engines; keep the `-webkit-` twin for the
+    // 1070's Chrome build, which still wants it on some versions.
+    el.style.maskImage = url;
+    el.style.webkitMaskImage = url;
+    el.style.maskRepeat = "no-repeat";
+    el.style.webkitMaskRepeat = "no-repeat";
+    el.style.maskSize = "100% 100%";
+    el.style.webkitMaskSize = "100% 100%";
+    // The source is 12x12 and CORNER_PX is 12, so this is retail's 1:1 blit
+    // with no resampling at all. `pixelated` is belt-and-braces for any future
+    // CORNER_PX change: hard pixels are a smaller deviation than a smooth
+    // upscale of a 12 px sprite.
+    el.style.imageRendering = "pixelated";
+    el.style.backgroundColor = color;
+    el.dataset.cornerArt = "1";
   }
 
   /**
@@ -521,11 +708,15 @@ export class SelectionBracketLayer {
     if (!BRACKET_BLIP_COLOR_ON) return;
     if (!cssColor || cssColor === this.color) return;
     this.color = cssColor;
-    const t = `${CORNER_THICKNESS_PX}px solid ${cssColor}`;
-    this._tl.style.borderTop = t; this._tl.style.borderLeft = t;
-    this._tr.style.borderTop = t; this._tr.style.borderRight = t;
-    this._bl.style.borderBottom = t; this._bl.style.borderLeft = t;
-    this._br.style.borderBottom = t; this._br.style.borderRight = t;
+    // 2026-08-02: a corner running the retail bitmap is masked, so its tint is
+    // the background-colour, not a border. Per-element check (not a single
+    // flag) because the art upgrade is async — a colour change can land while
+    // some corners have swapped and others have not.
+    for (const [which, el] of [["tl", this._tl], ["tr", this._tr],
+      ["bl", this._bl], ["br", this._br]]) {
+      if (el.dataset.cornerArt === "1") el.style.backgroundColor = cssColor;
+      else this._applyCornerCss(el, which, cssColor);
+    }
     this._arrow.style.borderBottom = `14px solid ${cssColor}`;
   }
 

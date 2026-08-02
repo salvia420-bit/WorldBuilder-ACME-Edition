@@ -291,6 +291,15 @@ pub struct TransitionGates {
     /// (acclient.c:322598-322604) and the flag `jump_is_allowed` requires
     /// (acclient.c:343941) — needs `floor_z`. Conflating them let a 55° cliff face
     /// read as ground, which re-armed the jump and produced COL-17's ratchet.
+    ///
+    /// **Second consumer (2026-08-02):** the OUTDOOR-STATIC entry latch in
+    /// `faithful_bridge.rs::faithful_find_transitional_position`. That latch
+    /// stamped `ON_WALKABLE` from `!airborne` + "this cell contains some static
+    /// BSP" with NO geometry test at all, so a mover pressed against a steep
+    /// static face (rock, pitched roof, wall) grounded where retail would not.
+    /// It now requires the carried contact plane to satisfy `N.z >= FLOOR_Z`,
+    /// with an ABSENT plane permitted — the same `is_none_or` convention the
+    /// terrain arms below use. `?walkableGround=off` disables both consumers.
     pub walkable_landing_ground: bool,
 }
 

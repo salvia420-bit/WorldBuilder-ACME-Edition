@@ -30668,6 +30668,13 @@ fn apply_inventory_object_create(
             UI_EFFECTS_INDEX.with(|m| m.borrow_mut().insert(u32::from(guid), ue));
         }
     }
+    // 2026-08-02: stash RadarBlipColor (PropertyInt 95) for the retail
+    // selection-bracket blip colour (mirrors the UiEffects stash above).
+    if let Some(bc) = entity.radar_blip_color() {
+        if bc != 0 {
+            RADAR_BLIP_COLOR_INDEX.with(|m| m.borrow_mut().insert(u32::from(guid), bc));
+        }
+    }
 
     let container_id = entity.container_id();
     let wielder_id = entity.wielder_id();
@@ -30978,6 +30985,12 @@ fn maintain_bridge_indexes_on_routed_create(
                 UI_EFFECTS_INDEX.with(|m| m.borrow_mut().insert(g_u32, ue));
             }
         }
+        // 2026-08-02: same RadarBlipColor stash as the bypass path.
+        if let Some(bc) = entity.radar_blip_color() {
+            if bc != 0 {
+                RADAR_BLIP_COLOR_INDEX.with(|m| m.borrow_mut().insert(g_u32, bc));
+            }
+        }
         if entity.physics_state.contains(PhysicsState::MISSILE) {
             projectile_index.borrow_mut().insert(g_u32);
             if entity.physics_state.contains(PhysicsState::GRAVITY) {
@@ -31197,6 +31210,8 @@ fn maintain_bridge_indexes_on_delete(
     DEFAULT_SCRIPT_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
     // #16 (2026-06-24): symmetric prune of the UiEffects stash.
     UI_EFFECTS_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
+    // 2026-08-02: symmetric prune of the RadarBlipColor stash.
+    RADAR_BLIP_COLOR_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
 
     // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
     // cleanup — don't accumulate dead-GUID entries over a long session.
@@ -33552,6 +33567,28 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = entityUiEffects)]
     pub fn entity_ui_effects(&self, guid: u32) -> u32 {
         UI_EFFECTS_INDEX.with(|m| m.borrow().get(&guid).copied().unwrap_or(0))
+    }
+
+    /// **2026-08-02.** This entity's `PropertyInt::RadarBlipColor` (95) —
+    /// the server-sent `PublicWeenieDesc::_blipColor` byte, stashed at
+    /// ObjectCreate (`RADAR_BLIP_COLOR_INDEX`, same pattern as
+    /// `entityUiEffects`).
+    ///
+    /// Retail's `gmRadarUI::GetBlipColor` (acclient.c:262708) tests this
+    /// FIRST: a non-zero `_blipColor` enters the switch at :262726 and
+    /// short-circuits the whole object-type / relationship ladder below it.
+    /// That is why a lifestone is BLUE and an NPC YELLOW in retail while our
+    /// type-only fallback painted both the default gold.
+    ///
+    /// `0` for unknown GUIDs **and** for entities the server did not send a
+    /// blip colour for — retail treats both identically (`_blipColor == 0`
+    /// is the "use the type ladder" sentinel), so JS needs no null case.
+    /// Consumed by `scene3d/selection_brackets.js` `blipColorForEntity` via
+    /// `meta.radarBlipColor`; typeof-guarded in JS so a stale `pkg/`
+    /// soft-degrades to 0 (the pre-existing type-ladder colours).
+    #[wasm_bindgen(js_name = entityRadarBlipColor)]
+    pub fn entity_radar_blip_color(&self, guid: u32) -> u32 {
+        RADAR_BLIP_COLOR_INDEX.with(|m| m.borrow().get(&guid).copied().unwrap_or(0))
     }
 
     /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
@@ -39408,6 +39445,25 @@ thread_local! {
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static UI_EFFECTS_INDEX: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+// 2026-08-02 — per-entity `PropertyInt::RadarBlipColor` (95), populated at
+// ObjectCreate (mirrors UI_EFFECTS_INDEX) so `SessionHandle::entityRadarBlipColor`
+// can complete the retail selection-bracket blip colour. Retail's
+// `gmRadarUI::GetBlipColor` (acclient.c:262708) SHORT-CIRCUITS on a non-zero
+// server-sent `PublicWeenieDesc::_blipColor` (the switch at :262726) before it
+// ever consults object type/relationship — so a lifestone comes back BLUE and an
+// NPC YELLOW purely from this byte. The protocol crate parses it
+// (`description.rs:455`) and `holtburger-world` hydrates it into the object's int
+// map (`hydration.rs:143`); only the JS-facing accessor was missing.
+//
+// Zero is NOT stored: `_blipColor == 0` is precisely retail's "fall through to
+// the type/relationship ladder" sentinel, and an absent GUID must read the same
+// as an explicit 0 so `blipColorForEntity` takes its default branch either way.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static RADAR_BLIP_COLOR_INDEX: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 

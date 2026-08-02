@@ -2822,8 +2822,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   const wieldRetryStats = {
     armed: 0,        // spawns that opened a retry ladder
     fired: 0,        // timer-driven re-flushes
-    resolvedFirst: 0, // wielded items found on the original rAF pass
-    resolvedRetry: 0, // wielded items found only after a retry/inventory kick
+    // 2026-08-02: `resolvedFirst`/`resolvedRetry` are now discriminated by the
+    // LADDER RUNG at resolve time, not by whether a ladder existed — see the
+    // note at the resolve site. Before that they partitioned the wrong thing
+    // and `resolvedFirst` could never be non-zero.
+    resolvedFirst: 0, // all held items mounted at rung 0 (no retry timer spent)
+    resolvedRetry: 0, // mounted only after >= 1 retry rung / inventory kick
     exhausted: 0,    // ladders that ran out (entity wields nothing — benign)
     invKicks: 0,     // playerInventoryChanged re-marks
     noDataRetired: 0, // EQUIP-3: remote ladders retired at rung 0 (no snapshot)
@@ -2939,8 +2943,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           // attach pass). Nothing to wait for.
           wieldedRetry.delete(wielderGuid >>> 0);
         } else if (heldSeen > 0 && heldAttached === heldSeen) {
+          // 2026-08-02 — `resolvedFirst` used to live in the `else` arm below
+          // (the "no ladder armed" branch) and was therefore STRUCTURALLY
+          // always 0: `markWielderDirty({retry:true})` arms the ladder on the
+          // KIND_SPAWN *before* `flushWieldedDirty` ever runs, so a spawning
+          // wielder ALWAYS has `wieldedRetry.has(guid)` true on its first pass
+          // and could only ever be counted as `resolvedRetry`. Live captures
+          // read `armed 30 / exhausted 27 / resolvedFirst 0` and
+          // `40 / 40 / 0` — the zero was the stat, not the world.
+          //
+          // The rung IS the discriminator: `_armWieldRetry` seeds 0 and
+          // `_stepWieldRetry` increments before it schedules the timer, so
+          // rung 0 means no retry has been spent yet — i.e. this resolved on
+          // the original rAF pass. Anything above 0 cost at least one timer.
+          const _rung = wieldedRetry.get(wielderGuid >>> 0) | 0;
           wieldedRetry.delete(wielderGuid >>> 0);
-          wieldRetryStats.resolvedRetry++;
+          if (_rung === 0) wieldRetryStats.resolvedFirst++;
+          else wieldRetryStats.resolvedRetry++;
         } else if (
           items.length === 0 &&
           WIELD_NO_DATA_LOCAL_ONLY &&
@@ -2961,6 +2980,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             items.length === 0 ? WIELD_RUNGS_NO_DATA : undefined);
         }
       } else if (heldSeen > 0 && heldAttached === heldSeen) {
+        // No ladder was ever armed for this wielder — a live equip transition
+        // (kind=49/47), which `markWielderDirty` deliberately does not arm.
+        // Zero rungs by construction, so it belongs in `resolvedFirst` too.
         wieldRetryStats.resolvedFirst++;
       }
     }
@@ -3749,9 +3771,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     sessionHandle,
   };
   window.liveScene3d = liveScene3d;
-  // ── Dismemberment (Phase 3, ?dismember=on strict opt-in) ─────────────
-  // Lazily imported ONLY when the flag is exactly "on" so the default arm
-  // never loads the module or the vendored three-pinata slicer. Diag-driven
+  // ── Dismemberment (Phase 3, ?dismember=off escape) ───────────────────
+  // DEFAULT-ON since the 2026-08-02 owner flip: the reader is `!== "off"`, so
+  // an ABSENT param resolves ON and the module + vendored three-pinata slicer
+  // DO load on the default arm. Only `?dismember=off` skips the import.
+  // (This note previously claimed a strict `=on` opt-in — audit 2026-08-02.)
+  // Diag-driven
   // for now (window.__diag.dismember); death-event automation is queued in
   // DISMEMBERMENT_HANDOFF.md pending the owner's 1070 eye session.
   if (new URLSearchParams(window.location.search).get("dismember") !== "off") {
@@ -3759,7 +3784,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       .then((m) => m.installDismemberDiag())
       .catch((err) => console.warn("[dismember] failed to load:", err));
   }
-  // ── Carnage automation (Phase 5, ?carnage=on strict opt-in) ──────────
+  // ── Carnage automation (Phase 5, ?carnage=off escape) ────────────────
+  // DEFAULT-ON since 2026-08-02 (reader is `!== "off"`; absent ⇒ ON).
   // Hits accumulate per limb from broadcast splatter events → limp → sever →
   // death finisher (entities.js reaches it via window.__carnageOnDeath).
   // Wants ?limbDamage=on alongside for the limp to render, and pairs with
@@ -3780,7 +3806,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       .then((m) => m.installKillImpulse())
       .catch((err) => console.warn("[kill-impulse] failed to load:", err));
   }
-  // ── Blood decals (Phase 6, ?blood=on strict opt-in) ──────────────────
+  // ── Blood decals (Phase 6, ?blood=off escape) ────────────────────────
+  // DEFAULT-ON since 2026-08-02 (reader is `!== "off"`; absent ⇒ ON).
   // Persistent liquid stains on dungeon walls/floors/ceilings, terrain and
   // tree trunks from combat splatter; pools under settled bodies/pieces via
   // window.__bloodPools. One InstancedMesh, shader-side aging — additive

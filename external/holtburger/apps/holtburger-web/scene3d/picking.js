@@ -342,11 +342,27 @@ function emitActionRejected(message) {
 // with an armed spell only selects. Retail printed nothing here, but the
 // legacy client-cast behaviour was long-standing, so a single toast per
 // session explains where the cast moved to. Never repeats.
+//
+// DISCOVERABILITY AUDIT (2026-08-02): the surface this points at is the
+// `#hb-spell-strip` spell bar (plugins/combat-bar.js `installSpellStrip`).
+// Verified it CANNOT be collapsed away underneath this message — the strip has
+// exactly one visibility driver, `root.style.display = on ? "" : "none"` where
+// `on = window.__getCurrentStanceLow() === 0x49` (Magic). There is no user
+// collapse/close control. This hint only fires inside
+// `isInMagicStance?.() && armedSpellId > 0`, so the bar — and its Cast button —
+// is on screen by construction whenever the toast appears.
+//
+// The wording still names the two concrete inputs rather than just "your spell
+// bar": the Cast button at the right end of the strip (retail's
+// `CastCurrentSpell`) and the gold 1-9 digit hotkeys on the strip's first nine
+// slots. A user who has not yet noticed the strip gets a key to press.
 let selectThenCastHinted = false;
 function maybeHintSelectThenCast() {
   if (selectThenCastHinted) return;
   selectThenCastHinted = true;
-  emitActionRejected("Target selected — cast from your spell bar.");
+  emitActionRejected(
+    "Target selected — now cast: press the spell's 1-9 hotkey, or the Cast button on the spell bar.",
+  );
 }
 
 // WS05 (C4-rangewarn, 2026-07-12) — de-dup state for the pre-cast range
