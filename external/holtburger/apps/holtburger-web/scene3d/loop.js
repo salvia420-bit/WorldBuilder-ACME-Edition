@@ -90,6 +90,17 @@ import { createClientEventDispatcher } from "./client_event_dispatch.js";
 // unit half under plain node. Consumed only inside
 // `applyLocalPlayerPoseFromIntegrator` behind the default-off flag.
 import { parseRustPoseFlag, rustPoseWorldFromPose } from "./rust_pose.js";
+// FU-2 (2026-08-02, `?serverTurn=on`, DEFAULT OFF) — server turn authority +
+// the retail control handoff. Leaf module (imports nothing) shared with
+// picking.js; flag-off every export is inert.
+import {
+  SERVER_TURN_ON,
+  headingFromTurnQuat,
+  loseControlToServer,
+  tickServerTurnControl,
+  noteServerTurnApplied,
+  noteServerTurnDropped,
+} from "./server_turn.js";
 
 // Wire the per-domain cullers once at module load. Each fn is `(scene3d,
 // culler) => void` and is individually fail-soft (tickFrustumCull also
@@ -2219,6 +2230,42 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
         console.warn("[cohere-b] applyLocalPlayerPoseFromIntegrator threw:", e);
       }
     }
+    // FU-2 (2026-08-02, `?serverTurn=on`, DEFAULT OFF) — retail
+    // `CommandInterpreter::UseTime`'s reclaim poll (acclient.c:717600-717612)
+    // plus the `MovePlayer` press arm (:717938). Runs right after the local
+    // pose is applied so the convergence probe reads THIS frame's heading.
+    // Fully inert flag-off (the function early-returns on SERVER_TURN_ON).
+    if (SERVER_TURN_ON) {
+      try {
+        const mi = scene3d?.cameraSwitcher?.lastMoveIntent;
+        let heading = null;
+        if (sessionHandle && typeof sessionHandle.getLocalPlayerPose === "function") {
+          const p = sessionHandle.getLocalPlayerPose();
+          if (p && typeof p.heading === "number" && Number.isFinite(p.heading)) {
+            heading = p.heading;
+          }
+        }
+        tickServerTurnControl({
+          intentHeld: !!mi && ((mi.forward | 0) !== 0 || (mi.strafe | 0) !== 0 || (mi.turn | 0) !== 0),
+          heading,
+          applyCurrentMovement: () => {
+            // Retail `ApplyCurrentMovement` (:717027) re-issues the held
+            // movement after the reclaim. Ours: null the camera dispatcher's
+            // dedupe signature so the very next `_dispatchMovement` re-sends
+            // the held key state instead of early-returning on an unchanged
+            // signature.
+            const cs = scene3d?.cameraSwitcher;
+            if (cs) cs.lastInputSig = null;
+          },
+        });
+      } catch (e) {
+        if (!scene3d._serverTurnTickWarned) {
+          scene3d._serverTurnTickWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[serverTurn] control tick threw:", e);
+        }
+      }
+    }
   }
   // ── A11-S3 (CRITICAL — never RP3-gated): particle/script manager phase. ──
   // Retail point in frame: managers run after PositionManager finalizes the
@@ -2497,6 +2544,17 @@ function _readSpawnSliceFlag(name, dflt, max) {
 const _SPAWN_TIMESLICE = _readSpawnSliceFlag("noSpawnTimeSlice", true);
 const _SPAWN_PER_TICK = _readSpawnSliceFlag("spawnDispatchPerTick", 6, 64);
 
+// FU-2 (2026-08-02): is this spawn something that can wield? Only these get a
+// retry ladder in scene3d/index.js's flushWieldedDirty, so a lifestone / a
+// pile of pyreals / a door never burns retry budget. Bits per
+// target_cycle.js: ItemType::Creature (ACE ItemType.cs) = 0x10,
+// ObjectDescriptionFlag::Player (ACE ObjectDescriptionFlag.cs) = 0x08.
+function _isWielderCapable(meta) {
+  const it = (meta?.itemType ?? 0) >>> 0;
+  const odf = (meta?.objDescFlags ?? 0) >>> 0;
+  return (it & 0x10) !== 0 || (odf & 0x08) !== 0;
+}
+
 // The actual spawn + FU-1 wield nudge, run at real dispatch time (inline or
 // pumped) so the wield re-sync still fires per spawned guid.
 function _doSpawn(em, meta) {
@@ -2511,7 +2569,7 @@ function _doSpawn(em, meta) {
   // Covers the local player on login AND NPCs spawning pre-armed. No-op for
   // non-wielders.
   if (em._wieldHandAttach) {
-    try { em._markWielderDirty?.(meta.guid); } catch (_) {}
+    try { em._markWielderDirty?.(meta.guid, { retry: _isWielderCapable(meta), spawn: true }); } catch (_) {}
   }
 }
 
@@ -2927,6 +2985,38 @@ function _armTurn(scene3d, em, upd) {
   // arbitration; see `window.__diag.picking`.
   if (isLocalPlayerGuid(turnGuid)) {
     try { if (window.__diag?.picking) window.__diag.picking.localTurnDirectivesDropped++; } catch (_) {}
+    // FU-2 (2026-08-02, `?serverTurn=on`, DEFAULT OFF) — STOP dropping it.
+    // Retail applies the non-autonomous server turn to the local player and
+    // then hands the drive over (`CPhysics::SetObjectMovement` :311149 →
+    // `CommandInterpreter::LoseControlToServer` :716832; full chain in
+    // scene3d/server_turn.js). We drive it through the wasm integrator's
+    // `TurnToHeading` (retail :346141) rather than the rig quaternion,
+    // because `applyLocalPlayerPoseFromIntegrator` re-renders the local rig
+    // heading from `pose.heading` every frame and would overwrite a direct
+    // quaternion write on the very next tick.
+    if (SERVER_TURN_ON) {
+      const heading = headingFromTurnQuat(upd.qw ?? 1, upd.qz ?? 0);
+      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+      let applied = false;
+      if (heading !== null && sh && typeof sh.turnToHeading === "function") {
+        try { sh.turnToHeading(heading); applied = true; } catch (_) { applied = false; }
+      }
+      if (applied) noteServerTurnApplied(); else noteServerTurnDropped();
+      // Retail's LoseControlToServer fires off SetObjectMovement's return
+      // value regardless of what the motion was, so latch even if the
+      // TurnToHeading call itself was refused (pre-seed etc.).
+      const cs = scene3d?.cameraSwitcher;
+      const mi = cs?.lastMoveIntent;
+      const intentHeld =
+        !!mi && ((mi.forward | 0) !== 0 || (mi.strafe | 0) !== 0 || (mi.turn | 0) !== 0);
+      loseControlToServer(heading, intentHeld, () => {
+        // Retail: SetAutoRun(0, apply_movement=0) + ClearAllCommands()
+        // (:716840-:716845). Our analogue — flush the wasm drive once and
+        // force the camera dispatcher to re-fire on the next real key edge.
+        try { sh?.setMovementInput?.(0, 0, 0, false); } catch (_) {}
+        if (cs) { cs.lastInputSig = null; }
+      });
+    }
   }
   if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
     // G-5 (?turnOmega=on): forward the wire MoveToParameters.speed
@@ -3127,7 +3217,7 @@ function _legacyDirectDrainArm(scene3d, sessionHandle) {
         // handled by _pendingAttach). Covers the local player on login
         // AND NPCs spawning pre-armed. No-op for non-wielders.
         if (em._wieldHandAttach) {
-          try { em._markWielderDirty?.(meta.guid); } catch (_) {}
+          try { em._markWielderDirty?.(meta.guid, { retry: _isWielderCapable(meta), spawn: true }); } catch (_) {}
         }
       } else if (kind === KIND_REMOVE) {
         // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.

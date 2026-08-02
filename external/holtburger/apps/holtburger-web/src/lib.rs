@@ -6751,25 +6751,65 @@ fn is_tex_swap_alias(did: u32) -> bool {
 /// ([`triangulate_setup_model_per_part`]).
 #[cfg(any(target_arch = "wasm32", test))]
 /// A9-Stage1 (2026-06-12, survey A9 §3 row 1): the static
-/// placement-frame resolution chain. `retail_order` ON follows retail —
-/// the wire-commanded placement id (`PhysicsDesc.animation_frame` →
-/// `CPhysicsObj::SetPlacementFrame`, acclient.c:318540-318562) → `0x65`
-/// Resting (the `InitObjectEnd` init default, acclient.c:317303) → `0`
-/// (the `CPartArray::SetPlacementFrame` miss fallback searching for
-/// `id == 0`, acclient.c:326845-326860) → first available. OFF keeps
-/// the legacy `0 → 1 → first` chain byte-identically.
+/// placement-frame resolution chain. `retail_order` ON follows retail;
+/// OFF keeps the legacy `0 → 1 → first` chain byte-identically.
+///
+/// ## FU-2 (2026-08-02) — the two chains are DISTINCT, not one chain
+///
+/// The A9-Stage1 chain was `wire → 0x65 → 0 → first`, which conflated
+/// retail's two separate entry points into `CPartArray::SetPlacementFrame`
+/// (acclient.c:326818). That function is the *only* placement resolver and
+/// its own fallback is a single step:
+///
+/// ```text
+///   CPartArray::SetPlacementFrame(id):
+///     hash-lookup `id`      → hit  : set_placement_frame(frame, id); return 1
+///                             miss : hash-lookup `0`
+///                                      hit  : set_placement_frame(frame, 0); return 1
+///                                      miss : set_placement_frame(NULL, 0); return 0
+/// ```
+///
+/// (`id → 0 → give up`; acclient.c:326826-326862.) There are exactly two
+/// callers, and they pass DIFFERENT ids:
+///
+/// * **object INIT** — `CPhysicsObj::InitObjectEnd` (acclient.c:317303) and
+///   `CPhysicsObj::InitNullObject` (acclient.c:320815) both call
+///   `SetPlacementFrame(0x65)` unconditionally. So a freshly created object
+///   with no wire placement resolves `0x65 (Resting) → 0 (Default)`.
+/// * **wire animframe override** — `CPhysicsObj::SetPlacementFrameInternal`
+///   (acclient.c:316589), reached from the PhysicsDesc unpack's non-movement
+///   arm with `PhysicsDesc::get_animframe_id()` (acclient.c:322346-322347),
+///   calls `SetPlacementFrame(requested)`. So a wire-commanded placement
+///   resolves `requested → 0 (Default)` — it does **NOT** fall back through
+///   `0x65`.
+///
+/// The conflated chain therefore mis-posed one specific case: a free-standing
+/// object whose wire `animation_frame` key is absent from its Setup got
+/// **Resting (0x65)** where retail gives it **Default (0)**. (Placement key
+/// `104`/`0x68` on the Long/Short Sword setups is a real instance of a key
+/// that is not in DatReaderWriter `dats.xml`'s placement enum — the parser
+/// keeps it because `placement_frames` is a plain `HashMap<i32, PlacementType>`
+/// keyed by the raw DAT i32, with no enum validation on either read or
+/// lookup, so an unknown key round-trips fine and simply misses here.)
+///
+/// Divergence kept on purpose: the final `.values().next()` arm is OURS, not
+/// retail's — retail gives up and leaves the sequence with no placement frame
+/// (identity part frames). Keeping an arbitrary frame is the safer render.
 fn resolve_static_placement_frame<'a>(
     setup: &'a holtburger_dat::file_type::SetupModel,
     wire_placement: Option<u32>,
     retail_order: bool,
 ) -> Option<&'a holtburger_dat::file_type::setup_model::PlacementType> {
     if retail_order {
-        wire_placement
-            .and_then(|id| i32::try_from(id).ok())
-            .and_then(|id| setup.placement_frames.get(&id))
-            .or_else(|| setup.placement_frames.get(&0x65))
-            .or_else(|| setup.placement_frames.get(&0))
-            .or_else(|| setup.placement_frames.values().next())
+        // FU-2: split chain. A wire placement means we are on the
+        // SetPlacementFrameInternal path (`requested → 0`); no wire placement
+        // means we are on the InitObjectEnd path (`0x65 → 0`). Never both.
+        match wire_placement.and_then(|id| i32::try_from(id).ok()) {
+            Some(id) => setup.placement_frames.get(&id),
+            None => setup.placement_frames.get(&0x65),
+        }
+        .or_else(|| setup.placement_frames.get(&0))
+        .or_else(|| setup.placement_frames.values().next())
     } else {
         setup
             .placement_frames
@@ -15463,6 +15503,131 @@ fn collect_setup_parent_index<S: holtburger_dat::ResourceSource + ?Sized>(
         return Vec::new();
     };
     setup.parent_index
+}
+
+/// FU-2 (2026-08-02) — `CSetup.selection_sphere`, the retail selection
+/// indicator's authoritative bounds source.
+///
+/// Retail chain: `SmartBox::GetObjectBoundingBox` (acclient.c:144083) →
+/// `CPhysicsObj::GetSelectionSphere` (:315729) → `CPartArray::GetSelectionSphere`
+/// (:326293), which is literally
+///
+/// ```text
+///   center.x = part_array.scale.x * setup.selection_sphere.center.x
+///   center.y = part_array.scale.y * setup.selection_sphere.center.y
+///   center.z = part_array.scale.z * setup.selection_sphere.center.z
+///   radius   = part_array.scale.z * setup.selection_sphere.radius
+/// ```
+///
+/// (note the radius scales by **z** only — retail's own asymmetry, kept).
+/// The `scale` multiply belongs to the caller (JS knows the entity's live
+/// `obj_scale`), so this export returns the RAW unscaled DAT field.
+///
+/// `selection_sphere` is unpacked immediately after `sorting_sphere` in the
+/// SetupModel body — see `crates/holtburger-dat/src/file_type/setup_model.rs:439-440`
+/// and ACE `ACE.DatLoader/FileTypes/SetupModel.cs:36`; DatReaderWriter
+/// `dats.xml <type name="Setup">` agrees on the ordering.
+///
+/// Failure / absence semantics mirror `fetchSetupPartSortCenters`: a `0x01`
+/// raw-GfxObj id, a fetch failure, or a parse failure all resolve to
+/// `valid == false`, and JS falls back to its Box3 heuristic. Retail's own
+/// fallback when `GetSelectionSphere` returns 0 is a hardcoded tiny sphere —
+/// `center = (0, 0, 0.1)`, `radius = 0.1` (acclient.c:144129-144132, the
+/// four `1036831949` = `0x3DCCCCCD` = `0.1f` stores) — which is far too small
+/// to bracket a real model, so it is deliberately NOT what we fall back to.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SetupSelectionSphere {
+    setup_id: u32,
+    valid: bool,
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    radius: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SetupSelectionSphere {
+    #[wasm_bindgen(getter, js_name = setupId)]
+    pub fn setup_id(&self) -> u32 { self.setup_id }
+    /// `false` when the setup carried no parsable selection sphere (JS then
+    /// uses its Box3 heuristic).
+    #[wasm_bindgen(getter)]
+    pub fn valid(&self) -> bool { self.valid }
+    #[wasm_bindgen(getter)]
+    pub fn cx(&self) -> f32 { self.cx }
+    #[wasm_bindgen(getter)]
+    pub fn cy(&self) -> f32 { self.cy }
+    #[wasm_bindgen(getter)]
+    pub fn cz(&self) -> f32 { self.cz }
+    #[wasm_bindgen(getter)]
+    pub fn radius(&self) -> f32 { self.radius }
+}
+
+/// FU-2 (2026-08-02) — see [`SetupSelectionSphere`]. One fetch per unique
+/// `setup_id`; JS caches by id (the field is static per setup, exactly as
+/// retail's `CSetup::selection_sphere` is).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupSelectionSphere)]
+pub async fn fetch_setup_selection_sphere(
+    setup_id: u32,
+) -> Result<SetupSelectionSphere, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = collect_setup_selection_sphere(s, setup_id);
+    })
+    .await?;
+    let s = collect_setup_selection_sphere(source.as_ref(), setup_id);
+    Ok(match s {
+        Some((c, r)) => SetupSelectionSphere {
+            setup_id,
+            valid: true,
+            cx: c.x,
+            cy: c.y,
+            cz: c.z,
+            radius: r,
+        },
+        None => SetupSelectionSphere {
+            setup_id,
+            valid: false,
+            cx: 0.0,
+            cy: 0.0,
+            cz: 0.0,
+            radius: 0.0,
+        },
+    })
+}
+
+/// Pure helper for [`fetch_setup_selection_sphere`]. `None` when the id is
+/// not a `0x02` SetupModel, when the fetch/parse fails, or when the DAT field
+/// is degenerate (`radius <= 0` / non-finite) — retail's `GetSelectionSphere`
+/// returns 1 unconditionally for a non-null setup, but a zero radius projects
+/// to a zero-area rect, so treat it as "no sphere" and let JS fall back.
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_setup_selection_sphere<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Option<(holtburger_common::Vector3, f32)> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    if (setup_id >> 24) as u8 != 0x02 {
+        return None;
+    }
+    let bytes = source
+        .get_file_shared(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(bytes.as_slice())).ok()?;
+    let s = setup.selection_sphere;
+    if !s.radius.is_finite() || s.radius <= 0.0 {
+        return None;
+    }
+    if !s.center.x.is_finite() || !s.center.y.is_finite() || !s.center.z.is_finite() {
+        return None;
+    }
+    Some((s.center, s.radius))
 }
 
 /// Top-level per-part dispatch mirroring [`triangulate_model`]: route

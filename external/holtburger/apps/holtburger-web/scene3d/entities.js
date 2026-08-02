@@ -940,6 +940,11 @@ import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import {
   computeSelectionSphere,
   readSelectionIndicatorMode,
+  peekDatSelectionSphere,
+  loadDatSelectionSphere,
+  datSelectionSphereFor,
+  selectionSphereStats,
+  blipColorForEntity,
 } from "./selection_brackets.js";
 const SELECTION_INDICATOR_MODE = readSelectionIndicatorMode();
 // C2 (2026-07-12) — retail target-cycling ordering math (CPlayerSystem::
@@ -7259,7 +7264,47 @@ export class EntityManager {
     }
     if (_selLayer) {
       try {
-        _selLayer.setTarget(next, inst.root, computeSelectionSphere(inst.root));
+        // FU-2 (2026-08-02) — bracket colour. Retail tints the four corners
+        // with the radar blip colour (`VividTargetIndicator::SetSelected`
+        // acclient.c:289443 → `gmRadarUI::GetBlipColor` :262708); see
+        // selection_brackets.js `blipColorForEntity` for the full branch
+        // transcription. `?bracketBlipColor=off` pins the legacy red.
+        _selLayer.setColor(blipColorForEntity(inst));
+        // FU-2 — bracket BOUNDS. Prefer the real `CSetup.selection_sphere`
+        // (CPartArray::GetSelectionSphere acclient.c:326293); the Box3
+        // heuristic is only the fallback for setups that have none. The wasm
+        // fetch is async, so seed with the heuristic and upgrade in place.
+        const setupId =
+          (inst.meta?.setupId ?? inst.meta?.modelId ?? 0) >>> 0;
+        const cached = peekDatSelectionSphere(setupId);
+        const datNow = cached ? datSelectionSphereFor(cached, inst.root) : null;
+        if (datNow) {
+          selectionSphereStats.dat++;
+          selectionSphereStats.lastPath = "dat";
+          _selLayer.setTarget(next, inst.root, datNow);
+        } else {
+          selectionSphereStats.heuristic++;
+          selectionSphereStats.lastPath = "heuristic";
+          _selLayer.setTarget(next, inst.root, computeSelectionSphere(inst.root));
+          if (cached === undefined) {
+            // Not fetched yet — kick it and swap the sphere in when it lands,
+            // but only if this guid is still the selection.
+            loadDatSelectionSphere(
+              this.wasmExports?.fetchSetupSelectionSphere, setupId,
+            ).then((rec) => {
+              if ((this._selectedGuid >>> 0) !== next) return;
+              const live = this.entityMap.get(next);
+              if (!live || !live.root) return;
+              const up = datSelectionSphereFor(rec, live.root);
+              if (!up) return;
+              selectionSphereStats.upgrades++;
+              selectionSphereStats.dat++;
+              selectionSphereStats.heuristic--;
+              selectionSphereStats.lastPath = "dat";
+              try { _selLayer.setTarget(next, live.root, up); } catch (_) {}
+            }).catch(() => {});
+          }
+        }
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn("[selection] bracket layer setTarget threw:", e);

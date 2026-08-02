@@ -1373,6 +1373,14 @@
         // is the "shield on sideways" report. MUST also be listed in the
         // init3D opts block below. Import here AND opts there.
         fetchSetupPlacementFrames,
+        // FU-2 (2026-08-02): CSetup.selection_sphere — the DAT field retail's
+        // target indicator actually brackets (CPartArray::GetSelectionSphere
+        // acclient.c:326293, reached from SmartBox::GetObjectBoundingBox
+        // :144083 via CPhysicsObj::GetSelectionSphere :315729). Consumed by
+        // scene3d/selection_brackets.js `computeSelectionSphere`, which
+        // otherwise falls back to a Box3-over-rig heuristic. MUST also be
+        // listed in the init3D opts block below. Import here AND opts there.
+        fetchSetupSelectionSphere,
         populateBuildingAabbsForLandblock,
         populateStaticsAabbsForLandblock,
         populateSkyDescFromRegion,
@@ -5067,6 +5075,11 @@
             // block above for the full root-cause note). This is the second
             // half of the "import here AND opts there" plumb-through.
             fetchSetupPlacementFrames,
+            // FU-2 (2026-08-02): second half of the selection-sphere plumb —
+            // thread the export onto wasmExports so
+            // selection_brackets.js::computeSelectionSphere can prefer the DAT
+            // sphere over its Box3 heuristic. See the import block above.
+            fetchSetupSelectionSphere,
             populateBuildingAabbsForLandblock,
             populateStaticsAabbsForLandblock,
             fetchEnvCellsInLandblock,

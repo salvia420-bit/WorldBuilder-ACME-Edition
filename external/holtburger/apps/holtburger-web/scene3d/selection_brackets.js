@@ -96,8 +96,171 @@ const BEHIND_CAMERA_NDC_Z = 1.0;
  */
 const DEFAULT_COLOR = "#ff2a1a";
 
+/**
+ * FU-2 (2026-08-02): `?bracketBlipColor=off` pins the brackets to
+ * `DEFAULT_COLOR` (the pre-2026-08-02 hostile red) instead of running
+ * `blipColorForEntity`. DEFAULT-ON (`!== "off"`) — the mapping is a direct
+ * port of `gmRadarUI::GetBlipColor` and only ever changes the tint, but it IS
+ * a visible change to a default-ON system, so the escape stays.
+ */
+export const BRACKET_BLIP_COLOR_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search)
+      .get("bracketBlipColor")?.toLowerCase() !== "off";
+  } catch (_) { return true; }
+})();
+
 /** Reused zero vector for the "no offset captured" path. */
 const _ZERO = new THREE.Vector3(0, 0, 0);
+
+// ============================================================================
+// FU-2 (2026-08-02) — retail blip colours for the four corners
+// ============================================================================
+//
+// `VividTargetIndicator::SetSelected` (acclient.c:289396) tints the indicator
+// with `gmRadarUI::GetBlipColor(&clr, obj)` — the call is at :289443, the
+// store into `m_clrSelectedObjectColor` at :289444-:289449, and
+// `SetOnScreenColor` (:289694) re-tints corner images 1..4 through
+// `CopyImage` (:289470), which multiplies the grayscale corner art by the
+// colour. So the corners read exactly like the radar blip.
+//
+// ## GetBlipColor — acclient.c:262708 (RVA 0x004D76F0)
+//
+// Reads `PublicWeenieDesc::_bitfield` (acclient.h:6431-6463 = ACE's
+// `ObjectDescriptionFlag`) and `PublicWeenieDesc::_blipColor`
+// (acclient.h:37191, wire flag `PWD_Packed_BlipColor` 0x100000):
+//
+//   null obj                 -> RadarDefault                       :262719
+//   BF_UI_HIDDEN  (0x80)     -> RadarDefault                       :262721
+//   _blipColor != 0          -> switch, SHORT-CIRCUITS everything  :262726-262773
+//   BF_PORTAL     (0x40000)  -> RadarPortal   (purple)             :262776
+//   BF_VENDOR     (0x200)    -> RadarVendor   (yellow)             :262782
+//   BF_ATTACKABLE (0x10) && IsCreature() && !IsPlayer()
+//                            -> RadarCreature (gold)               :262788
+//   !IsPlayer()              -> RadarDefault  (white)              :262796
+//   -- players only from here, base = RadarDefault --              :262804
+//   BF_ADMIN(0x100000) && !BF_HIDDEN_ADMIN(0x40)
+//                            -> RadarAdmin    (cyan)               :262833
+//   else IsPK()     (0x20)   -> RadarPlayerKiller (red)            :262811
+//   else IsPKLite() (0x2000000) -> RadarPKLite (pink)              :262818
+//   else BF_FREE_PKSTATUS (0x200000) -> RadarCreature (gold)       :262825
+//   fellowship leader/fellow -> RadarFellowship* (bright green), LAST,
+//                               overrides everything above         :262842-:262856
+//
+// Predicate helpers: IsCreature acclient.c:436879 (= bitfield 0x10),
+// IsPlayer :437199 (0x8), IsPK :437213 (0x20), IsPKLite :437205 (0x2000000).
+//
+// ## The palette — acclient.c:45107-45116 (base) / :777674-:777758 (semantic)
+//
+// The semantic globals are assigned from the base literals by CRT static
+// initialisers and are never rewritten at runtime.
+const BLIP_BASE = Object.freeze({
+  Blue:        "#40a8ff", // 0.25, 0.66, 1.0
+  Gold:        "#ffab00", // 1.0,  0.67, 0.0
+  White:       "#ffffff",
+  Purple:      "#bf63ff", // 0.75, 0.39, 1.0
+  Red:         "#ff4063", // 1.0,  0.25, 0.39
+  Pink:        "#ffa8bf", // 1.0,  0.66, 0.75
+  Green:       "#008040", // 0.0,  0.5,  0.25
+  Yellow:      "#ffff80", // 1.0,  1.0,  0.5
+  Cyan:        "#00ffff",
+  BrightGreen: "#00ff00",
+});
+
+/** Semantic radar colours, acclient.c:777674-:777758. */
+export const BLIP_COLOR = Object.freeze({
+  Default:          BLIP_BASE.White,       // :777674
+  Admin:            BLIP_BASE.Cyan,        // :777681
+  Advocate:         BLIP_BASE.Pink,        // :777688
+  Creature:         BLIP_BASE.Gold,        // :777695
+  LifeStone:        BLIP_BASE.Blue,        // :777702
+  NPC:              BLIP_BASE.Yellow,      // :777709
+  PlayerKiller:     BLIP_BASE.Red,         // :777716
+  Portal:           BLIP_BASE.Purple,      // :777723
+  Sentinel:         BLIP_BASE.Cyan,        // :777730
+  Vendor:           BLIP_BASE.Yellow,      // :777737
+  Fellowship:       BLIP_BASE.BrightGreen, // :777744
+  FellowshipLeader: BLIP_BASE.BrightGreen, // :777751
+  PKLite:           BLIP_BASE.Pink,        // :777758
+});
+
+// `_blipColor` switch, acclient.c:262726-262773. Index = the server-sent
+// PropertyInt::RadarBlipColor. ACE's RadarColor enum (ACE.Entity/Enum/
+// RadarColor.cs:3-27) matches 0..9 exactly; ACE declares BrightGreen = 0x10
+// where retail's tenth case is 10, so accept BOTH (retail would render an ACE
+// BrightGreen as the `default:` white).
+const BLIP_COLOR_BY_INDEX = Object.freeze({
+  1: BLIP_BASE.Blue,
+  2: BLIP_BASE.Gold,
+  3: BLIP_BASE.White,
+  4: BLIP_BASE.Purple,
+  5: BLIP_BASE.Red,
+  6: BLIP_BASE.Pink,
+  7: BLIP_BASE.Green,
+  8: BLIP_BASE.Yellow,
+  9: BLIP_BASE.Cyan,
+  10: BLIP_BASE.BrightGreen,
+  16: BLIP_BASE.BrightGreen, // ACE's RadarColor.BrightGreen
+});
+
+// ObjectDescriptionFlag bits (acclient.h:6431-6463 / ACE ObjectDescriptionFlag.cs).
+const BF_PLAYER = 0x00000008;
+const BF_ATTACKABLE = 0x00000010;
+const BF_PLAYER_KILLER = 0x00000020;
+const BF_HIDDEN_ADMIN = 0x00000040;
+const BF_UI_HIDDEN = 0x00000080;
+const BF_VENDOR = 0x00000200;
+const BF_PORTAL = 0x00040000;
+const BF_ADMIN = 0x00100000;
+const BF_FREE_PKSTATUS = 0x00200000;
+const BF_PKLITE_PKSTATUS = 0x02000000;
+
+/**
+ * Port of `gmRadarUI::GetBlipColor` (acclient.c:262708) over the data an
+ * entity instance already carries. `meta.objDescFlags` is the wire
+ * `PublicWeenieDescription.obj_desc_flags` (loop.js toMeta :2408 /
+ * entity_update_clone.js:114).
+ *
+ * Two faithful gaps, both benign (they fall through to the flag branch, which
+ * is exactly what retail does when `_blipColor == 0`):
+ *  - `_blipColor` — parsed by the protocol crate as
+ *    `PublicWeenieDescription.radar_blip_color` and hydrated to
+ *    `PropertyInt::RadarBlipColor` (holtburger-world/src/hydration.rs:143),
+ *    but not surfaced on the entity meta by the wasm bundle. Honoured here
+ *    when a caller can supply it (`meta.radarBlipColor`), so wiring it later
+ *    is a one-field change. Without it, lifestones/NPCs read Default white.
+ *  - fellowship — the leader/fellow override (:262842) needs the fellowship
+ *    roster; skipped.
+ *
+ * @param {{meta?: object}|null} inst — an EntityManager entity record.
+ * @returns {string} a CSS colour; `BLIP_COLOR.Default` when unclassifiable.
+ */
+export function blipColorForEntity(inst) {
+  const meta = inst?.meta;
+  if (!meta) return BLIP_COLOR.Default;
+  const bits = (meta.objDescFlags ?? 0) >>> 0;
+  // :262721 — UI-hidden objects get the default colour (retail suppresses the
+  // blip via GetBlipShape returning 0, not via the colour).
+  if (bits & BF_UI_HIDDEN) return BLIP_COLOR.Default;
+  // :262726 — the server-sent blip colour short-circuits EVERYTHING.
+  const idx = (meta.radarBlipColor ?? 0) >>> 0;
+  if (idx !== 0) return BLIP_COLOR_BY_INDEX[idx] || BLIP_COLOR.Default;
+  if (bits & BF_PORTAL) return BLIP_COLOR.Portal;                  // :262776
+  if (bits & BF_VENDOR) return BLIP_COLOR.Vendor;                  // :262782
+  const isPlayer = (bits & BF_PLAYER) !== 0;                       // IsPlayer :437199
+  // :262788 — IsCreature() is itself `bitfield & 0x10` (:436879), so the
+  // retail predicate `BF_ATTACKABLE && IsCreature() && !IsPlayer()` collapses
+  // to "attackable and not a player".
+  if ((bits & BF_ATTACKABLE) && !isPlayer) return BLIP_COLOR.Creature;
+  if (!isPlayer) return BLIP_COLOR.Default;                        // :262796
+  // --- players only, base = Default (:262804) ---
+  if ((bits & BF_ADMIN) && !(bits & BF_HIDDEN_ADMIN)) return BLIP_COLOR.Admin; // :262833
+  if (bits & BF_PLAYER_KILLER) return BLIP_COLOR.PlayerKiller;     // IsPK :262811
+  if (bits & BF_PKLITE_PKSTATUS) return BLIP_COLOR.PKLite;         // IsPKLite :262818
+  if (bits & BF_FREE_PKSTATUS) return BLIP_COLOR.Creature;         // :262825
+  return BLIP_COLOR.Default;
+}
 
 /**
  * Read `?selectionIndicator`. Values: "brackets" (default), "ring" (the
@@ -118,17 +281,126 @@ export function readSelectionIndicatorMode() {
   }
 }
 
+// ============================================================================
+// FU-2 (2026-08-02) — the REAL selection sphere, from the DAT
+// ============================================================================
+//
+// Retail's bracket bounds are `CSetup.selection_sphere`, scaled by the part
+// array's scale (`CPartArray::GetSelectionSphere`, acclient.c:326293):
+//
+//     center.{x,y,z} = scale.{x,y,z} * setup.selection_sphere.center.{x,y,z}
+//     radius         = scale.z       * setup.selection_sphere.radius
+//
+// (the radius really does scale by z alone — retail's own asymmetry). The
+// sphere lives in OBJECT space and is pushed to world by
+// `Render::positionPush(3, &obj->m_position)` at :144120, so in three terms it
+// is a rig-LOCAL offset resolved through `root.localToWorld` — and because
+// `worldRoot.rotation.x = -PI/2` (scene3d/index.js:1324) carries the whole
+// AC→three axis change, everything under an entity rig is already AC-native.
+// The DAT center therefore needs no swizzle, and `localToWorld` applies both
+// the rig heading and `root.scale` (the wire `obj_scale`) for free.
+//
+// `fetchSetupSelectionSphere(setupId)` (src/lib.rs) is async, so selection
+// takes the heuristic immediately and upgrades in place when the DAT lands.
+// The cache is keyed by setup id — the field is static per setup, exactly as
+// retail's `CSetup::selection_sphere` is.
+//
+// Retail's own fallback when `GetSelectionSphere` returns 0 is a hardcoded
+// tiny sphere, center (0, 0, 0.1) radius 0.1 (acclient.c:144129-144132, the
+// four `0x3DCCCCCD` = 0.1f stores). That is a degenerate placeholder, not a
+// usable bound, so we keep the Box3 heuristic for that case instead.
+
+/** @type {Map<number, {cx:number,cy:number,cz:number,radius:number}|null>} */
+const _datSphereCache = new Map();
+/** @type {Map<number, Promise<any>>} */
+const _datSphereInflight = new Map();
+
 /**
- * Retail `CPartArray::GetSelectionSphere` (:326293) reads
- * `CSetup.selection_sphere` and scales it. That DAT field is not surfaced by
- * the current wasm bundle, so derive an equivalent from the rig's world-space
- * bounding box. Cheap enough at one call per selection change (NOT per frame).
+ * Which path fed the currently-drawn brackets. Read by headless probes as
+ * `window.__diag.selectionSphere` (installed by the layer constructor).
+ */
+export const selectionSphereStats = {
+  dat: 0,        // selections bracketed by the DAT sphere
+  heuristic: 0,  // selections bracketed by the Box3 fallback
+  upgrades: 0,   // heuristic → DAT swaps that landed after the async fetch
+  fetches: 0,    // wasm calls issued
+  noSphere: 0,   // setups whose DAT sphere was absent/degenerate
+  lastPath: "",  // "dat" | "heuristic"
+};
+
+/** The RAW cached DAT sphere for a setup, or null/undefined if unknown. */
+export function peekDatSelectionSphere(setupId) {
+  return _datSphereCache.get(setupId >>> 0);
+}
+
+/**
+ * Kick (or join) the async DAT fetch for one setup id. Resolves to the cached
+ * record (possibly `null` when the setup has no usable sphere).
+ * @param {Function} fetchFn — `wasmExports.fetchSetupSelectionSphere`
+ * @param {number} setupId
+ */
+export function loadDatSelectionSphere(fetchFn, setupId) {
+  const id = setupId >>> 0;
+  if (_datSphereCache.has(id)) return Promise.resolve(_datSphereCache.get(id));
+  if (_datSphereInflight.has(id)) return _datSphereInflight.get(id);
+  if (typeof fetchFn !== "function" || (id >>> 24) !== 0x02) {
+    _datSphereCache.set(id, null);
+    return Promise.resolve(null);
+  }
+  selectionSphereStats.fetches++;
+  const p = Promise.resolve()
+    .then(() => fetchFn(id))
+    .then((res) => {
+      let rec = null;
+      try {
+        if (res && res.valid && Number.isFinite(res.radius) && res.radius > 0) {
+          rec = { cx: res.cx, cy: res.cy, cz: res.cz, radius: res.radius };
+        }
+      } catch (_) { rec = null; }
+      if (rec === null) selectionSphereStats.noSphere++;
+      _datSphereCache.set(id, rec);
+      _datSphereInflight.delete(id);
+      return rec;
+    })
+    .catch(() => {
+      _datSphereCache.set(id, null);
+      _datSphereInflight.delete(id);
+      selectionSphereStats.noSphere++;
+      return null;
+    });
+  _datSphereInflight.set(id, p);
+  return p;
+}
+
+/**
+ * Turn a cached DAT record into the layer's sphere shape. `local: true` tells
+ * `tick` to resolve the offset through `root.localToWorld` (which applies the
+ * rig heading + `root.scale`), and the radius is scaled by `root.scale.z` to
+ * match `CPartArray::GetSelectionSphere` exactly.
+ * @param {{cx:number,cy:number,cz:number,radius:number}|null} rec
+ * @param {THREE.Object3D} root
+ * @returns {{offset: THREE.Vector3, radius: number, local: boolean}|null}
+ */
+export function datSelectionSphereFor(rec, root) {
+  if (!rec || !root) return null;
+  const sz = Math.abs(root.scale?.z ?? 1) || 1;
+  const r = rec.radius * sz;
+  if (!Number.isFinite(r) || r <= 0) return null;
+  return {
+    offset: new THREE.Vector3(rec.cx, rec.cy, rec.cz),
+    radius: r,
+    local: true,
+  };
+}
+
+/**
+ * Box3-over-rig FALLBACK for setups with no usable `CSetup.selection_sphere`
+ * (raw `0x01` GfxObj ids, parse failures, degenerate radii). Retail's own
+ * fallback is a 0.1-radius placeholder, which brackets nothing useful.
  *
- * Returned as an OFFSET from the rig root's world position (plus a radius) so
- * `tick` can re-anchor it to the rig's live world position every frame without
- * recomputing the box — retail stores the sphere in OBJECT space and pushes it
- * through `Render::positionPush(3, &obj->m_position)` at :144120, which is the
- * same relationship.
+ * Returned as a WORLD-space OFFSET from the rig root's world position (plus a
+ * radius) so `tick` can re-anchor it to the rig's live world position every
+ * frame without recomputing the box.
  *
  * @param {THREE.Object3D} root — the entity rig root.
  * @returns {{offset: THREE.Vector3, radius: number}|null}
@@ -245,6 +517,8 @@ export class SelectionBracketLayer {
    * @param {string} cssColor
    */
   setColor(cssColor) {
+    // FU-2: `?bracketBlipColor=off` freezes the legacy hostile red.
+    if (!BRACKET_BLIP_COLOR_ON) return;
     if (!cssColor || cssColor === this.color) return;
     this.color = cssColor;
     const t = `${CORNER_THICKNESS_PX}px solid ${cssColor}`;
@@ -302,8 +576,20 @@ export class SelectionBracketLayer {
     // position each frame (the offset from the rig origin is the invariant —
     // retail's sphere is stored in OBJECT space and pushed through
     // `Render::positionPush` at :144120).
-    this._follow.getWorldPosition(this._vC);
-    this._vC.add(this._sphere.offset || _ZERO);
+    // FU-2 (2026-08-02): a DAT sphere (`local: true`) is an OBJECT-space
+    // centre — push it through the rig's world matrix so the heading and
+    // `root.scale` apply, matching retail's `Render::positionPush(3,
+    // &obj->m_position)` at :144120 over the already-scaled
+    // `CPartArray::GetSelectionSphere` centre. The Box3 heuristic's offset is
+    // world-space and just rides the root position.
+    if (this._sphere.local) {
+      this._vC.copy(this._sphere.offset || _ZERO);
+      this._follow.updateWorldMatrix(true, false);
+      this._vC.applyMatrix4(this._follow.matrixWorld);
+    } else {
+      this._follow.getWorldPosition(this._vC);
+      this._vC.add(this._sphere.offset || _ZERO);
+    }
 
     // Camera basis. Retail multiplies Render::Xaxis / Zaxis through
     // FrameCurrent (:378949) — in three.js the camera's world matrix columns
@@ -454,5 +740,20 @@ export function createSelectionBracketOverlay(canvas) {
   }
   parent.appendChild(div);
   const layer = new SelectionBracketLayer(div, canvas);
+  // FU-2 (2026-08-02): headless probe surface — which bounds path fired and
+  // what colour the corners are wearing.
+  try {
+    window.__diag = window.__diag || {};
+    window.__diag.selectionSphere = selectionSphereStats;
+    window.__diag.selectionBrackets = {
+      stats: selectionSphereStats,
+      blipColorOn: BRACKET_BLIP_COLOR_ON,
+      color: () => layer.color,
+      rect: () => layer.lastRect,
+      status: () => layer.lastStatus,
+      radius: () => layer._sphere?.radius ?? null,
+      fromDat: () => !!layer._sphere?.local,
+    };
+  } catch (_) {}
   return { layer, domRoot: div };
 }

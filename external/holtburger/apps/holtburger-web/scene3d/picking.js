@@ -10,6 +10,11 @@ import { classifySpell } from "../ui/ac_spell_shape.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { pickSkillLevel, determineSpellRange, decideRangeWarn } from "./spell_range.js";
 import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
+// FU-2 (2026-08-02, `?serverTurn=on`, DEFAULT OFF) — when the server owns the
+// turn, every LOCAL face loop must stand down (see scene3d/server_turn.js for
+// the retail chain). Flag-off `serverTurnOwnsFacing()` is a constant false and
+// this file behaves byte-identically.
+import { serverTurnOwnsFacing } from "./server_turn.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -29,7 +34,19 @@ const PEACE_USE_DOUBLE_CLICK_MS = 400;
 // INTEGRATED always-on — 1070 eye-test PASSED 2026-06-11 (player turns to face
 // a side/behind target before the missile shot). JS, live on reload. Was the
 // default-OFF `?missileFaceTarget=on` gate.
-const MISSILE_FACE_TARGET = true;
+// FU-2 (2026-08-02): restored a URL escape hatch. It stayed a hard-coded
+// `true` after the eye-test, so unlike its siblings (castFaceTarget /
+// castReface) there was no way to isolate the missile turn-in-place when
+// diagnosing a motion-pipeline regression — and the ?serverTurn work below
+// needs to disable every local face loop. DEFAULT-ON (`!== "off"`), i.e.
+// byte-identical to the old hard-coded value when the param is absent.
+// `?missileFaceTarget=off` to disable.
+const MISSILE_FACE_TARGET = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("missileFaceTarget")?.toLowerCase() !== "off";
+  } catch { return true; }
+})();
 // Cap the turn-to-face pre-step so a bad bearing can't stall the shot.
 const FACE_TURN_TIMEOUT_MS = 800;
 
@@ -663,6 +680,18 @@ export function setupClickPicking({
 
   function turnToFaceThenAct(targetGuid, act, enabled) {
     if (!enabled) {
+      act();
+      return;
+    }
+    // FU-2 (2026-08-02, `?serverTurn=on`) — the server is the SOLE turn
+    // authority: loop.js `_armTurn` now applies the local player's KIND_TURN
+    // through the wasm integrator and latches
+    // `CommandInterpreter::LoseControlToServer` (acclient.c:716832). Retail
+    // has NO client-side auto-face at all, so CAST_FACE_TARGET /
+    // CAST_REFACE / MISSILE_FACE_TARGET all collapse to "just act". This is
+    // also what removes the two-driver fight the ROT-1 counters measured.
+    if (serverTurnOwnsFacing()) {
+      cancelFaceLoop();
       act();
       return;
     }

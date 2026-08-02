@@ -2746,6 +2746,79 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // Local player and remote players use the same code path.
   let wieldedDirty = new Set();
   let wieldedFlushRaf = 0;
+  // FU-2 (2026-08-02) — FIRST-ATTACH RACE. `markWielderDirty` was a one-shot
+  // rAF nudge fired from the KIND_SPAWN arm. On login the local player's
+  // ObjectCreate lands BEFORE the equipment ObjectCreates that populate the
+  // wasm `wielder_index` (lib.rs `apply_inventory_object_create` /
+  // `upsert_wielder_index`), so `entityWieldedItems(guid)` is very often an
+  // empty Vec at that exact rAF — and nothing ever retried. Result: the
+  // wielder shows no weapon until some unrelated later event (a live equip,
+  // a PVS respawn) happened to re-mark it.
+  //
+  // Two-pronged fix, both inert when the entity genuinely wields nothing:
+  //   (a) a bounded retry ladder, armed ONLY for wielder-capable spawns
+  //       (ItemType::Creature 0x10 or ObjectDescriptionFlag::Player 0x08 —
+  //       see target_cycle.js ITEM_TYPE_CREATURE / ODF_PLAYER), and dropped
+  //       the instant the wasm reports ANY wielded item;
+  //   (b) an event-driven kick off the wasm's own "inventory data became
+  //       ready" signal — ClientEvent kind=11 INVENTORY_UPDATED (lib.rs
+  //       CLIENT_EVENT_KIND_INVENTORY_UPDATED, published right after
+  //       `publish_player_inventory_snapshot` on the same drain pass that
+  //       ran `upsert_wielder_index`), which index.html already re-emits on
+  //       the plugin bus as `playerInventoryChanged`. That normally resolves
+  //       the local player on the very next packet batch; the ladder is the
+  //       safety net for remote wielders (whose equipment ObjectCreates are
+  //       not part of the local inventory snapshot).
+  // Geometric rung delays. Two budgets share one ladder:
+  //  * NO-DATA rungs (`WIELD_RUNGS_NO_DATA`) — the wasm `wielder_index` is
+  //    still empty for this guid. 5 rungs ≈ 5.7 s; past that the entity
+  //    genuinely wields nothing and further polling is waste.
+  //  * PENDING-MOUNT rungs (the full array) — the snapshot DOES list held
+  //    items but their child rigs are not mounted yet. Measured live
+  //    2026-08-02 (fresh tailnet1 login, nullRender): the held "Acid Sabra"'s
+  //    own rig did not exist until ~20 s after `__bootState==='in-world'`,
+  //    because the spawn pump is time-sliced (`?spawnDispatchPerTick`, 6 per
+  //    frame) across a full PVS set. A 5.7 s budget retired before it, so the
+  //    weapon only landed via the pre-existing preCreate park/drain — which is
+  //    exactly the path that silently loses the request when the wielder rig
+  //    also isn't built (entities.js:6072-6075). ≈23.7 s covers it with room.
+  const WIELD_RETRY_DELAYS_MS = [180, 420, 900, 1600, 2600, 4000, 6000, 8000];
+  const WIELD_RUNGS_NO_DATA = 5;
+  const wieldedRetry = new Map(); // guid → next index into WIELD_RETRY_DELAYS_MS
+  const wieldRetryStats = {
+    armed: 0,        // spawns that opened a retry ladder
+    fired: 0,        // timer-driven re-flushes
+    resolvedFirst: 0, // wielded items found on the original rAF pass
+    resolvedRetry: 0, // wielded items found only after a retry/inventory kick
+    exhausted: 0,    // ladders that ran out (entity wields nothing — benign)
+    invKicks: 0,     // playerInventoryChanged re-marks
+  };
+  function _armWieldRetry(guid) {
+    const g = guid >>> 0;
+    if (!g || wieldedRetry.has(g)) return;
+    wieldedRetry.set(g, 0);
+    wieldRetryStats.armed++;
+  }
+  function _stepWieldRetry(guid, maxRungs) {
+    const g = guid >>> 0;
+    const step = wieldedRetry.get(g);
+    if (step === undefined) return;
+    const cap = Math.min(maxRungs ?? WIELD_RETRY_DELAYS_MS.length,
+                         WIELD_RETRY_DELAYS_MS.length);
+    if (step >= cap) {
+      wieldedRetry.delete(g);
+      wieldRetryStats.exhausted++;
+      return;
+    }
+    wieldedRetry.set(g, step + 1);
+    setTimeout(() => {
+      // The ladder may have been cleared (items resolved) while the timer
+      // was in flight — `wieldedRetry.has` is the liveness check.
+      if (!wieldedRetry.has(g)) return;
+      wieldRetryStats.fired++;
+      markWielderDirty(g);
+    }, WIELD_RETRY_DELAYS_MS[step]);
+  }
   function flushWieldedDirty() {
     wieldedFlushRaf = 0;
     const handle = window.__sessionHandle;
@@ -2757,6 +2830,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       try { items = handle.entityWieldedItems(wielderGuid >>> 0); }
       catch (_) { continue; }
       if (!Array.isArray(items)) continue;
+      // FU-2 (2026-08-02): retry-ladder bookkeeping is done AFTER the attach
+      // pass below, keyed on whether every held item actually ENDED UP
+      // attached — not merely on the snapshot being non-empty. Measured
+      // live 2026-08-02 (fresh login, tailnet1): the snapshot resolved on the
+      // very first rAF with 12 entries, so a "snapshot non-empty ⇒ done"
+      // ladder retired immediately — yet the held "Acid Sabra" was still
+      // unparented at its world spawn pose 8 s later, because at that first
+      // flush NEITHER rig existed and the parked request was consumed
+      // without landing (`attachChildToParent`'s post-await liveness
+      // re-check, entities.js:6072-6075, silently returns when either rig
+      // isn't built yet). Re-issuing the attach on each ladder step is what
+      // actually closes the race; calling it again once the child is already
+      // mounted is a no-op, so this is safe to repeat.
+      let heldSeen = 0;
+      let heldAttached = 0;
       for (const it of items) {
         const childGuid = it?.guid >>> 0;
         if (childGuid === 0) continue;
@@ -2785,14 +2873,60 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           else if (wieldHandAttach && (em & 0x00800000)) loc = 5;
         }
         const place = (it.placement >>> 0) || 0;
+        // FU-2: is this held child ALREADY mounted on this wielder? That, not
+        // the snapshot's length, is what "resolved" means.
+        heldSeen++;
+        let mounted = false;
+        try {
+          const ci = entityManager.entityMap?.get(childGuid);
+          mounted = !!ci && (ci._attachedParentGuid >>> 0) === (wielderGuid >>> 0);
+        } catch (_) {}
+        if (mounted) { heldAttached++; continue; }
         try {
           entityManager.attachChildToParent(childGuid, wielderGuid >>> 0, loc, place);
         } catch (_) {}
       }
+      // FU-2: ladder step / retire. Retire when there is nothing held to
+      // attach (armour-only wielder, or a genuinely empty snapshot after the
+      // budget) or when every held item is mounted. `attachChildToParent` is
+      // async, so a request issued THIS pass lands before the next rung.
+      if (wieldedRetry.has(wielderGuid >>> 0)) {
+        if (items.length > 0 && heldSeen === 0) {
+          // Snapshot is populated and this wielder carries nothing HELD
+          // (armour/jewellery only — those go through ObjDesc, not the
+          // attach pass). Nothing to wait for.
+          wieldedRetry.delete(wielderGuid >>> 0);
+        } else if (heldSeen > 0 && heldAttached === heldSeen) {
+          wieldedRetry.delete(wielderGuid >>> 0);
+          wieldRetryStats.resolvedRetry++;
+        } else {
+          // Empty snapshot ⇒ short NO-DATA budget; held-but-unmounted ⇒ the
+          // full budget (the child rig can be tens of seconds behind).
+          _stepWieldRetry(wielderGuid >>> 0,
+            items.length === 0 ? WIELD_RUNGS_NO_DATA : undefined);
+        }
+      } else if (heldSeen > 0 && heldAttached === heldSeen) {
+        wieldRetryStats.resolvedFirst++;
+      }
     }
   }
-  function markWielderDirty(wielderGuid) {
+  function markWielderDirty(wielderGuid, opts) {
     if (!wielderGuid) return;
+    // FU-2 (2026-08-02): `opts.retry` is set ONLY by the KIND_SPAWN arm in
+    // loop.js, and only for a wielder-capable meta (creature/player). Live
+    // equip transitions (kind=49/47) already imply the index is populated,
+    // so they never arm a ladder.
+    if (opts && opts.retry) {
+      _armWieldRetry(wielderGuid >>> 0);
+    } else if (opts && opts.spawn) {
+      // Belt-and-braces: the local player's own spawn meta occasionally
+      // arrives before the ObjectDescription bits are folded in, so the
+      // ItemType/ODF classification in loop.js can read 0. The local guid is
+      // always wielder-capable.
+      let lpg = 0;
+      try { lpg = (entityManager._localPlayerGuid?.() >>> 0) || 0; } catch (_) {}
+      if (lpg !== 0 && lpg === (wielderGuid >>> 0)) _armWieldRetry(lpg);
+    }
     wieldedDirty.add(wielderGuid >>> 0);
     if (wieldedFlushRaf === 0) {
       wieldedFlushRaf = requestAnimationFrame(flushWieldedDirty);
@@ -2802,9 +2936,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // wields have no kind=49 transition event, so the spawn arm nudges the
   // re-sync directly (gated on _wieldHandAttach there).
   entityManager._markWielderDirty = markWielderDirty;
+  // FU-2 (2026-08-02): observable retry ledger for headless probes.
+  entityManager._wieldRetryStats = wieldRetryStats;
+  entityManager._wieldRetryPending = wieldedRetry;
+  try {
+    window.__diag = window.__diag || {};
+    window.__diag.wieldRetry = {
+      stats: wieldRetryStats,
+      pending: () => Array.from(wieldedRetry.keys()),
+    };
+  } catch (_) {}
   try {
     const client = window.__pluginClient;
     if (client?.events?.on) {
+      // FU-2 (2026-08-02): the wasm-side "inventory data became ready"
+      // signal. index.html's kind===11 arm (CLIENT_EVENT_KIND_INVENTORY_
+      // UPDATED) re-emits this after the same drain pass that folded the
+      // equipment ObjectCreates into `wielder_index`, so re-flushing every
+      // wielder with a live retry ladder resolves the local player's login
+      // wield on the first packet batch instead of waiting out the ladder.
+      client.events.on("playerInventoryChanged", () => {
+        if (wieldedRetry.size === 0) return;
+        wieldRetryStats.invKicks++;
+        for (const g of Array.from(wieldedRetry.keys())) markWielderDirty(g);
+      });
       // Plugin facade wraps the ClientEvent payload in CustomEvent.detail.
       // Field names are camelCase (u32Payload, u32Payload2) per the
       // wasm-side ClientEvent struct + index.html drainEvents shape —
