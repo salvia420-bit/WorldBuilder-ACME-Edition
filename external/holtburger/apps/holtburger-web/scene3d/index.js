@@ -108,7 +108,6 @@ import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { BakedAmbientSource } from "./audio/baked_ambient_source.js";
-import { WeatherEffectsManager } from "./weather/manager.js";
 import { LandblockLRU, lbKeyFromXY, isNearPlayerLb } from "./landblock_lru.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
 import { ACMoons } from "./ac_moons.js";
@@ -2255,22 +2254,6 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       } catch (_) {
         // Don't let a listener-sync failure kill the frame.
-      }
-    }
-    // Storm weather effects (2026-05-25): per-tick rain + lightning
-    // + thunder. Reads getWeatherState().is_storm + URL overrides;
-    // fully self-contained beyond camera + audioManager (already
-    // captured at construct time). Same try/one-shot-warn shape as
-    // the ambient runtime below.
-    if (liveScene3dRef?.weatherEffects) {
-      try {
-        liveScene3dRef.weatherEffects.tick(dt);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        if (!liveScene3dRef._weatherTickWarned) {
-          liveScene3dRef._weatherTickWarned = true;
-          console.warn("[weather/fx] weatherEffects.tick threw:", e);
-        }
       }
     }
     // Landblock LRU eviction tick. Per-frame so the always-resident
@@ -5019,35 +5002,6 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // eslint-disable-next-line no-console
       console.warn("[H3/audio] AudioManager init failed:", e);
     }
-  }
-
-  // Storm weather effects (2026-05-25) — rain + lightning + thunder driven
-  // by getWeatherState().is_storm. Constructed unconditionally (no wasm
-  // dependency); audioManager may be null if the audio path didn't
-  // initialise — thunder will silently no-op in that case.
-  try {
-    const weatherEffects = new WeatherEffectsManager({
-      scene,
-      camera,
-      audioManager,
-      getCameraWorldPos: () => {
-        const cam = liveScene3d?.cameraSwitcher?.activeCamera ?? camera;
-        return { x: cam.position.x, y: cam.position.y, z: cam.position.z };
-      },
-    });
-    liveScene3d.weatherEffects = weatherEffects;
-    scene3dForBuilders.weatherEffects = weatherEffects;
-    // eslint-disable-next-line no-undef
-    if (typeof window !== "undefined") {
-      window.__weatherEffects = weatherEffects;
-    }
-    // eslint-disable-next-line no-console
-    console.log(
-      "[weather/fx] WeatherEffectsManager attached; rain+lightning+thunder"
-    );
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn("[weather/fx] WeatherEffectsManager init failed:", e);
   }
 
   // Landblock LRU — bounds the resident set so long-play tours across

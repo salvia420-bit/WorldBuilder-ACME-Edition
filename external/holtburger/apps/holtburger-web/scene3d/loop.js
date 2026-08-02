@@ -1206,25 +1206,15 @@ function tickWeatherState(scene3d, sessionHandle) {
     const profile = weatherForState(state, state.dayGroupIndex, skyObjects);
     wxUpdateFromDayGroup(profile);
 
-    const scan = profile?._weather ?? null;
     // W5 indoor flag — reuse the skyDome's freshly-read indoor state when
     // present (it reads isCurrentCellIndoor() each tick); fall back to a
-    // direct read so the manager still gates when the dome is absent.
+    // direct read so the billboard host still gates when the dome is absent.
     let indoor = scene3d?.skyDome?._lastIsIndoor;
     if (typeof indoor !== "boolean" && handle &&
         typeof handle.isCurrentCellIndoor === "function") {
       try { indoor = !!handle.isCurrentCellIndoor(); } catch (_) { indoor = false; }
     }
     if (typeof indoor !== "boolean") indoor = false;
-
-    // W2/W5 — push environment to the weather manager (precip type + gate).
-    if (scene3d?.weatherEffects?.setEnvironment) {
-      scene3d.weatherEffects.setEnvironment({
-        indoor,
-        streakGfxId: scan?.streak_gfx_id ?? 0,
-        hasDroplets: scan?.has_droplets ?? false,
-      });
-    }
 
     // W1 — drive the parametric sky-dome weather billboard host with the
     // same snapshot array (the host gates itself on its `?skyWeather`

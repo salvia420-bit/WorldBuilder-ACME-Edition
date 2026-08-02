@@ -32,6 +32,7 @@
 
 import * as THREE from 'three';
 import { CloudVolume } from './cloud_volume.js';
+import { applyCloudLook } from './cloud_storm_look.js';
 import { updateFromPosition as wxUpdateFromPosition } from './weather_state.js';
 import {
   CloudShape, CloudShapeDetail, LocalWeather, Turbulence,
@@ -119,38 +120,13 @@ export class CloudOverlay {
       });
     }
 
-    // Layer config + coverage are independent of the noise SOURCE, so they
-    // apply to BOTH paths. (These previously lived inside the procedural-only
-    // block, which silently dropped the alto deck + 0.5 coverage whenever
-    // prebaked textures were used — a quality regression this avoids.)
-    {
-      const effect = this.volume.effect;
-      // Add an altocumulus middle-étage layer. takram defaults only ship
-      // 3 channels (R/G cumulus 750-2200m, B cirrus 7500-8000m), leaving
-      // channel A unused — meteorologically, the middle étage (2-7km mid-
-      // lat) is missing. Use channel A as a thin alto deck at ~3500m
-      // with cirrus-class density (preserves transparency, no rings).
-      const A = effect.cloudLayers[3];
-      A.channel = 'a';
-      A.altitude = 3500;
-      A.height = 600;
-      A.densityScale = 0.004;
-      A.shapeAmount = 0.5;
-      A.shapeDetailAmount = 0;
-      A.weatherExponent = 1.0;
-      A.shapeAlteringBias = 0.35;
-      A.coverageFilterWidth = 0.5;
-
-      // Bump default coverage from takram's 0.3 → 0.5 so there's more
-      // cloud overhead in the default ?clouds=on view. Live tune via
-      // `__setCloudCoverage(v)` in devtools (already exposed).
-      // Top-level property — the old `'coverage' in effect.clouds` guard
-      // was ALWAYS false (no such uniform key; see cloud_volume.js coverage
-      // note), so this intended default bump silently never applied.
-      if (typeof effect.coverage === 'number') {
-        effect.coverage = 0.5;
-      }
-    }
+    // Fair-weather baseline layers + coverage — independent of the noise
+    // SOURCE, so they apply to BOTH paths. Single source of truth is
+    // cloud_storm_look.js (2026-08-01): the alto-deck/0.5-coverage config
+    // that used to live inline here is its FAIR look, and cloud_volume
+    // switches to the STORM look on the real DayGroup storm signal. This
+    // construct-time call is what `?cloudWeather=off` freezes.
+    applyCloudLook(this.volume.effect, false);
 
     // STBN (Spatial Temporal Blue Noise) substitute. The cloud shader's
     // `getSTBN()` samples a 3D blue-noise texture to jitter ray samples
@@ -416,8 +392,33 @@ export class CloudOverlay {
       return tex;
     };
 
+    // `?wxMap=nasa` (2026-08-01) — swap the local-weather map for the NASA
+    // Blue Marble-derived one (assets/clouds/local_weather_nasa.png: real
+    // frontal systems; A channel = actual storm cores for the Cb layer;
+    // built by scratchpad make_weather.py from public-domain cloud_combined
+    // imagery, the same source Skybolt uses). STRICT opt-in; any failure
+    // falls back to takram's default map so the flag can never cost the
+    // prebaked cold-load path. The noise .bins and atmosphere EXRs are
+    // untouched either way.
+    // `nasa` = organic Blue Marble crop (not world-anchored; gets linear
+    // drift). `dereth` = biome-anchored map built from the retail terrain
+    // codes (desert clear, marsh/volcano stormy, snow overcast, sea
+    // maritime — scratchpad make_weather_dereth.py over a full
+    // get-terrain-layers dump); world-anchored, so it gets the wobble
+    // drift instead (see cloud_volume.js).
+    let wxMapName = 'local_weather.png';
+    try {
+      const wx = new URLSearchParams(window.location.search).get('wxMap');
+      if (wx === 'nasa') wxMapName = 'local_weather_nasa.png';
+      else if (wx === 'dereth') wxMapName = 'local_weather_dereth.png';
+    } catch (_) {}
     const [localWeather, turbulence, shape, shapeDetail, stbn] = await Promise.all([
-      load2D('local_weather.png'),
+      load2D(wxMapName).catch((e) => {
+        if (wxMapName === 'local_weather.png') throw e;
+        // eslint-disable-next-line no-console
+        console.warn('[clouds] wxMap=nasa load failed → default weather map:', e);
+        return load2D('local_weather.png');
+      }),
       load2D('turbulence.png'),
       load3D('shape.bin', 128),
       load3D('shape_detail.bin', 32),
