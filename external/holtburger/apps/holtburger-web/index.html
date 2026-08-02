@@ -498,6 +498,15 @@
       html.agent-mode body #nameplate-layer-3d,
       html.agent-mode body #post-spawn,
       html.agent-mode body .floating-panel { display: none !important; }
+      /* Selection brackets are gameplay-critical feedback (retail draws the
+         target indicator as part of the game view, RenderNormalMode
+         :144918-:144930), not a debug panel — and the 1070 eye-test recipe
+         rides autoLogin/agent-mode, so hiding them makes the indicator
+         un-eye-testable. Exempt the container; its corner/arrow children
+         still self-toggle, so no-target sessions stay blank. Must sit AFTER
+         the #canvas-column > *:not(#canvas) hide rule (equal specificity,
+         source order wins). */
+      html.agent-mode body #canvas-column > #selection-brackets-3d { display: block !important; }
 
       /* ?hud=none — strips EVERY overlay (the PR-Z hb-* HUDs that
          agent-mode allowlists by default, plus the 3D nameplate layer
