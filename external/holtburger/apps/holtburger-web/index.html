@@ -7792,10 +7792,29 @@
           // 127 min (one real-world AC day). Override is cleared if
           // the flag isn't present so wall-clock UTC derivation stays
           // authoritative.
-          const __skyTimeAccel =
-            new URLSearchParams(window.location.search).get("skytime") === "accel";
+          const __skyTimeRaw =
+            new URLSearchParams(window.location.search).get("skytime");
+          const __skyTimeAccel = __skyTimeRaw === "accel";
           const __skyTimeAccelStart = performance.now();
           window.__skyTimeAccel = __skyTimeAccel; // exposed for e2e probes
+          // 2026-08-02 (visual-quality wave) — NUMERIC `?skytime=<h>` PIN.
+          // `?skytime=19` (hour, 0-24) or `?skytime=0.7917` (normalised 0-1)
+          // holds the sky clock at one instant so a look comparison is
+          // reproducible frame to frame. Anything non-numeric (incl. the
+          // legacy `accel`, and the absent case) leaves wall-clock derivation
+          // untouched — this is a strict superset of the old grammar.
+          // `setSkyTimeOverride` is a persistent evaluator override, so it is
+          // re-asserted here per pump ONLY until it takes (the wasm side
+          // returns false until `populateSkyDescFromRegion` has landed).
+          const __skyTimePin = (() => {
+            if (__skyTimeRaw == null || __skyTimeRaw === "" || __skyTimeAccel) return null;
+            const v = Number(__skyTimeRaw);
+            if (!Number.isFinite(v) || v < 0) return null;
+            const t = v > 1 ? (v / 24) : v;             // hour-of-day or 0-1
+            return t >= 0 && t < 1 ? t : null;
+          })();
+          let __skyTimePinApplied = false;
+          window.__skyTimePin = __skyTimePin; // exposed for e2e probes
           // A1-O4 Stage O4-a (2026-06-12): the old drainEvents BODY,
           // extracted verbatim as a closure-scoped function (it closes
           // over `handle`, `characterUl`, `loginStatus`, `keyState`,
@@ -7869,6 +7888,19 @@
               const t = (elapsedMs / (5 * 60 * 1000)) % 1.0;
               try {
                 handle.setSkyTimeOverride(t);
+              } catch (e) {
+                /* pre-shadow no-op */
+              }
+            } else if (__skyTimePin !== null && !__skyTimePinApplied) {
+              // One-shot: the wasm override is sticky, so stop poking once it
+              // reports applied (`false` until the SkyDesc is populated).
+              try {
+                __skyTimePinApplied = !!handle.setSkyTimeOverride(__skyTimePin);
+                if (__skyTimePinApplied) {
+                  console.log(
+                    `[skytime] pinned time-of-day to ${(__skyTimePin * 24).toFixed(2)}h (t=${__skyTimePin.toFixed(4)})`
+                  );
+                }
               } catch (e) {
                 /* pre-shadow no-op */
               }

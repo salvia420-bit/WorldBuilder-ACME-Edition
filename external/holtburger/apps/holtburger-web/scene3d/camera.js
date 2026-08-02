@@ -408,6 +408,18 @@ export class CameraSwitcher {
     this.mode = "follow";
     this.activeCamera = perspectiveCamera; // updated by switchMode
 
+    // `?camDebug=on` — free-camera shot rig. EXACT-match opt-in; absent or any
+    // other value leaves `window.__cam` undefined and `positionCamera`
+    // unwrapped, so the default path is byte-identical. See `_installCamDebug`.
+    try {
+      if (
+        typeof window !== "undefined" && window.location &&
+        new URLSearchParams(window.location.search || "").get("camDebug") === "on"
+      ) {
+        this._installCamDebug();
+      }
+    } catch (_) { /* debug installs must never break boot */ }
+
     // Follow-camera state. Yaw=0 → camera looking toward AC +Y
     // (north), matching player heading=0 convention. Pitch is the
     // tilt down from horizon (positive looks down).
@@ -1132,6 +1144,97 @@ export class CameraSwitcher {
   }
 
   // ---- camera positioning ------------------------------------------
+
+  /**
+   * `?camDebug=on` — DEFAULT-INERT free camera for look/art-direction shots
+   * (2026-08-02, visual-quality wave). None of the three shipped modes can
+   * compose an arbitrary frame: `follow` and `topDown` re-derive the camera
+   * from the player every tick, and `orbit` re-targets the player every tick
+   * (`positionCamera`'s orbit branch, ~:1265). This installs `window.__cam`,
+   * whose `park()` suspends ONLY this instance's `positionCamera` so the
+   * camera stays exactly where a shot script put it.
+   *
+   * Positions/targets are AC-WORLD metres (x east, y north, z up) — the same
+   * frame `@teleloc` and `getLocalPlayerPose()` speak, with the landblock
+   * origin folded in (`world()` below), NOT the landblock-local x/y the pose
+   * getter returns. `acToThree` handles the Y-up mapping.
+   *
+   * Nothing here runs — nor is `window.__cam` defined — without the flag, so
+   * the default render path is byte-identical.
+   */
+  _installCamDebug() {
+    if (typeof window === "undefined") return;
+    const cs = this;
+    const orig = this.positionCamera.bind(this);
+    this._camDebugParked = false;
+    this.positionCamera = function (dt) {
+      if (cs._camDebugParked) return;
+      return orig(dt);
+    };
+    const world = () => {
+      // Landblock-local pose -> AC world metres. 0xXXYY0000: XX = LB east
+      // index, YY = LB north index, 192 m per landblock.
+      const h = cs.sessionHandle;
+      const p = h && typeof h.getLocalPlayerPose === "function" ? h.getLocalPlayerPose() : null;
+      if (!p) return { x: 0, y: 0, z: 0 };
+      const lb = p.landblockId >>> 0;
+      return {
+        x: ((lb >>> 24) & 0xff) * 192 + p.x,
+        y: ((lb >>> 16) & 0xff) * 192 + p.y,
+        z: p.z,
+      };
+    };
+    window.__cam = {
+      world,
+      /** Suspend follow/orbit re-positioning; the camera holds its pose. */
+      park() { cs._camDebugParked = true; return true; },
+      /** Hand the camera back to the active mode. */
+      release() { cs._camDebugParked = false; return false; },
+      get parked() { return !!cs._camDebugParked; },
+      /** Eye + look-at, both AC world metres. Implies park(). */
+      set(ex, ey, ez, tx, ty, tz) {
+        cs._camDebugParked = true;
+        const cam = cs.activeCamera;
+        cam.position.set(...acToThree(ex, ey, ez));
+        cam.up.set(0, 1, 0);
+        cam.lookAt(...acToThree(tx, ty, tz));
+        cam.updateMatrixWorld(true);
+        return this.info();
+      },
+      /** Orbit an AC world point: dist m, az deg CW from north, el deg up. */
+      orbit(tx, ty, tz, dist, azDeg, elDeg) {
+        const az = (azDeg * Math.PI) / 180;
+        const el = (elDeg * Math.PI) / 180;
+        const h = Math.cos(el) * dist;
+        return this.set(
+          tx + h * Math.sin(az), ty + h * Math.cos(az), tz + Math.sin(el) * dist,
+          tx, ty, tz
+        );
+      },
+      /** Orbit the local player (dz lifts the look-at off the feet). */
+      player(dist, azDeg, elDeg, dz) {
+        const p = world();
+        return this.orbit(p.x, p.y, p.z + (dz == null ? 1 : dz), dist, azDeg, elDeg);
+      },
+      fov(v) {
+        const c = cs.activeCamera;
+        if (v != null && c.isPerspectiveCamera) { c.fov = +v; c.updateProjectionMatrix(); }
+        return c.fov;
+      },
+      info() {
+        const c = cs.activeCamera;
+        return {
+          pos: c.position.toArray().map((v) => +v.toFixed(2)),
+          fov: c.fov, parked: !!cs._camDebugParked, mode: cs.mode, world: world(),
+        };
+      },
+    };
+    // eslint-disable-next-line no-console
+    console.log(
+      "[camDebug] ?camDebug=on — window.__cam installed " +
+      "(.player(dist,azDeg,elDeg,dz) / .orbit(x,y,z,dist,az,el) / .set(ex,ey,ez,tx,ty,tz) / .fov(n) / .release())"
+    );
+  }
 
   positionCamera(dt) {
     const p = this._safePlayerPos();

@@ -1099,6 +1099,71 @@ const _acTerrainGouraud = {
   ambLevel: AC_LSCAPE_LIGHT_MINIMUM,
 };
 
+// === visual-quality wave (2026-08-02) — TERRAIN world-light calibration ===
+//
+// WHY THIS EXISTS. `atmosphere_lights.js`'s 2026-06-27 calibration
+// (`worldLightScale`, default 0.4) pulls the takram sun + sky probe back into
+// AGX's colour-true range so lit SURFACES stop washing toward white at the
+// composer's `toneMappingExposure = 5` (scene3d/index.js ~:4999). That scale
+// reaches everything three.js lights — buildings, statics, entities — but the
+// TERRAIN is not lit by those lights at all: `ACRender::landPolyDraw`
+// (acclient.c:719994) calls `SetFFLighting(0)`, so our terrain shader
+// reproduces retail's per-vertex Gouraud term instead
+// (`terrain.js` ~:3207: `acC = min(1, uAcSunColor*L + uAcAmbColor*uAcAmbLevel)`
+// then `modulated *= acC`). That term is DISPLAY-REFERRED (0..1), and it was
+// the one surface class the world-light calibration never reached — so the
+// terrain alone still eats the full 5x exposure.
+//
+// MEASURED ON THE 1070 (pinned Holtburg, `?renderScale=1&adaptiveRes=off`,
+// `setSkyTimeOverride(19/24)`): at midday/afternoon `acC` CLAMPS to ~1.0 on
+// flat ground, so the terrain renders at full albedo and AGX at exposure 5
+// bleaches it — grass sampled #8A9864, a pale yellow-green with no shading
+// gradient. Scaling the two colour uniforms restores both the gradient and
+// the chroma: 0.6 -> #728050, 0.4 -> #5F6B3B (see vistest2 tls19b-grid.png).
+//
+// GRAMMAR: numeric opt-in, `?terrainLightScale=1` restores the pre-2026-08-02
+// look exactly. Live setter `window.__setTerrainLightScale(v)`.
+const AC_TERRAIN_LIGHT_SCALE_DEFAULT = 0.55;
+// Saturation of the DayGroup ambient TINT, 1 = retail data verbatim.
+// Dereth's DayGroups author `ambColor` = (200,100,255) for the whole
+// 20:10h-03:50h block (portal 0x13000000 skyInfo.dayGroups[*].skyTime) — a
+// literal magenta. The hue is retail's, but the terrain Gouraud term is the
+// only place it lands undiluted, which is what reads as the "magenta/lavender
+// terrain at dusk". `?ambTintSat=0.6` lerps it toward its own luminance for
+// anyone who wants the AC night without the full chroma. Default 1 = faithful.
+const AC_AMB_TINT_SAT_DEFAULT = 1.0;
+function _readNumFlag(name, dflt, lo, hi) {
+  try {
+    if (typeof window === "undefined" || !window.location) return dflt;
+    const raw = new URLSearchParams(window.location.search || "").get(name);
+    if (raw == null || raw === "") return dflt;
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return dflt;
+    return Math.min(hi, Math.max(lo, v));
+  } catch (_) {
+    return dflt;
+  }
+}
+const _acTerrainLight = {
+  scale: _readNumFlag("terrainLightScale", AC_TERRAIN_LIGHT_SCALE_DEFAULT, 0, 4),
+  ambSat: _readNumFlag("ambTintSat", AC_AMB_TINT_SAT_DEFAULT, 0, 1),
+};
+if (typeof window !== "undefined") {
+  // Live 1070 tuning handles (mirror `__setWorldLightScale`). Both take effect
+  // on the NEXT retail light tick; bump the epoch so it is the next frame.
+  window.__setTerrainLightScale = (v) => {
+    _acTerrainLight.scale = Math.min(4, Math.max(0, +v));
+    _acTerrainGouraud.nextLightTick = -Infinity;
+    return _acTerrainLight.scale;
+  };
+  window.__setAmbTintSat = (v) => {
+    _acTerrainLight.ambSat = Math.min(1, Math.max(0, +v));
+    _acTerrainGouraud.nextLightTick = -Infinity;
+    return _acTerrainLight.ambSat;
+  };
+  window.__terrainLightState = () => ({ ..._acTerrainLight });
+}
+
 function tickTerrainSunDir(scene3d) {
   if (!scene3d?.terrainMaterials || scene3d.terrainMaterials.length === 0) {
     return;
@@ -1136,14 +1201,31 @@ function tickTerrainSunDir(scene3d) {
     g.sun[0] = sx * db;
     g.sun[1] = sy * db;
     g.sun[2] = sz * db;
+    // visual-quality wave (2026-08-02): both colour terms carry the terrain
+    // world-light scale (see AC_TERRAIN_LIGHT_SCALE_DEFAULT). Scaling BOTH —
+    // rather than only the ambient — is what un-clamps `acC` at midday and so
+    // restores the shading gradient the pre-2026-08-02 look had lost.
+    const tls = _acTerrainLight.scale;
     const dc = (state.dirColorArgb >>> 0);
-    g.sunColor[0] = ((dc >>> 16) & 0xff) / 255;
-    g.sunColor[1] = ((dc >>> 8) & 0xff) / 255;
-    g.sunColor[2] = (dc & 0xff) / 255;
+    g.sunColor[0] = (((dc >>> 16) & 0xff) / 255) * tls;
+    g.sunColor[1] = (((dc >>> 8) & 0xff) / 255) * tls;
+    g.sunColor[2] = ((dc & 0xff) / 255) * tls;
     const ac = (state.ambColorArgb >>> 0);
-    g.ambColor[0] = ((ac >>> 16) & 0xff) / 255;
-    g.ambColor[1] = ((ac >>> 8) & 0xff) / 255;
-    g.ambColor[2] = (ac & 0xff) / 255;
+    let ar = ((ac >>> 16) & 0xff) / 255;
+    let ag = ((ac >>> 8) & 0xff) / 255;
+    let ab2 = (ac & 0xff) / 255;
+    // Optional chroma pull toward the tint's own Rec.709 luminance. sat=1
+    // (default) leaves the retail bytes untouched.
+    const sat = _acTerrainLight.ambSat;
+    if (sat < 1) {
+      const lum = 0.2126 * ar + 0.7152 * ag + 0.0722 * ab2;
+      ar = lum + (ar - lum) * sat;
+      ag = lum + (ag - lum) * sat;
+      ab2 = lum + (ab2 - lum) * sat;
+    }
+    g.ambColor[0] = ar * tls;
+    g.ambColor[1] = ag * tls;
+    g.ambColor[2] = ab2 * tls;
     // LSCAPE_LIGHT_MINIMUM floors AMBIENT ONLY (acclient.c:40344, 307261);
     // dirBright above is deliberately left free to reach 0 at night.
     const ab = +state.ambBright;
