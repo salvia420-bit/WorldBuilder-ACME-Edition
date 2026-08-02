@@ -333,6 +333,30 @@ function ensureStyles() {
   line-height: 20px;
   z-index: 3;
   box-sizing: border-box;
+  /* 2026-08-02 dropdown fix — the Items tab label carries the vendor
+     name ("Items — Randall Sandaw"), which is far wider than the 92px
+     tab. With overflow visible the inline-block ac-text spilled out of
+     the tab (measured 80x40 — it WRAPS to a second line in the
+     plain-text fallback, bottom y=510) and, because .hvb-tab sits at
+     z-index 3 while .hvb-body is z-index auto, that spill painted ON
+     TOP of the category dropdown button (y 495..513) and swallowed
+     every click on it. Clip + single-line the label so it can never
+     leave the tab box; setAcText passes fit:true so the AC font
+     condenses / ellipsizes instead of being hard-cut once the atlas
+     is loaded. (No backticks in here — this block lives inside a JS
+     template literal.) */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Belt-and-braces for the same bug class: every <ac-text> inside the
+   vendor bar is a pure text rasterizer owned by an interactive host
+   (tab / button / menu row). Pointer events belong to the host, never
+   to the label — so an oversized glyph canvas can never eat a click
+   meant for a widget underneath it. */
+#${OVERLAY_ID} ac-text,
+#${OVERLAY_ID} ac-text canvas {
+  pointer-events: none;
 }
 #${OVERLAY_ID} .hvb-tab[data-tab="items"]   { left: 0; }
 #${OVERLAY_ID} .hvb-tab[data-tab="buying"]  { left: 92px; }
@@ -397,6 +421,11 @@ function ensureStyles() {
   position: absolute;
   left: 4px; top: 4px;
   width: 117px; height: 18px;
+  /* Above the tabs (z-index 3) and the close button (4) — the dropdown
+     button lives in .hvb-body, which is z-index auto, so without this
+     ANY absolutely-positioned overlay-root chrome wins the hit test
+     where the boxes overlap. Stays below .hvb-menu-panel (80). */
+  z-index: 5;
   background: var(--hb-overlay-dark-deep);
   color: var(--hb-text-cream);
   border: 1px solid var(--hb-border-brass-dim);
@@ -870,6 +899,13 @@ function buildOverlay() {
   itemsPane.appendChild(menuPanel);
 
   let menuFocusIdx = 0;
+  // Rows for categories this vendor doesn't stock are hidden by
+  // syncCategoryMenuToStock(); keyboard nav must skip them or ArrowDown
+  // walks onto invisible entries.
+  function visibleMenuItems() {
+    return Array.from(menuPanel.querySelectorAll(".hvb-menu-item"))
+      .filter((el) => el.style.display !== "none");
+  }
   function syncMenuFromSelect() {
     const v = itemsCat.value;
     const found = CATEGORY_TABLE.find((c) => c.id === v) ?? CATEGORY_TABLE[0];
@@ -884,7 +920,7 @@ function buildOverlay() {
     menuPanel.dataset.open = "1";
     menuBtn.setAttribute("aria-expanded", "true");
     // Move focus to the currently selected option.
-    const items = Array.from(menuPanel.querySelectorAll(".hvb-menu-item"));
+    const items = visibleMenuItems();
     menuFocusIdx = Math.max(0, items.findIndex((el) => el.dataset.selected === "1"));
     updateFocusVisible(items);
     items[menuFocusIdx]?.scrollIntoView?.({ block: "nearest" });
@@ -918,7 +954,7 @@ function buildOverlay() {
     }
   });
   menuPanel.addEventListener("keydown", (ev) => {
-    const items = Array.from(menuPanel.querySelectorAll(".hvb-menu-item"));
+    const items = visibleMenuItems();
     if (ev.key === "ArrowDown") {
       ev.preventDefault();
       menuFocusIdx = Math.min(items.length - 1, menuFocusIdx + 1);
@@ -1492,6 +1528,11 @@ function render() {
     setAcText(b, label, {
       color: id === state.currentTab ? "#f0c87c" : "#f0d8a0",
       fontId: id === "items" && id === state.currentTab ? HEADING_FONT_ID : undefined,
+      // 2026-08-02 — the Items label embeds the vendor name and used to
+      // overflow the 92px tab (see the .hvb-tab CSS note). `fit` makes
+      // the AC-font ladder condense/ellipsize into the tab's own content
+      // width instead; CSS clips the plain-text fallback.
+      fit: true,
     });
     b.classList.toggle("active", id === state.currentTab);
   }
@@ -1508,9 +1549,47 @@ function render() {
   else if (state.currentTab === "selling") renderQueuePane("selling");
 }
 
+/**
+ * Retail's `VendorItemsUI` only calls `AddTypeFilter` for the item
+ * types the vendor actually stocks (acclient.c:4597) — the CATEGORY_TABLE
+ * comment above has always claimed we "hide categories with 0 items at
+ * render time", but nothing ever did it. The full 18-row list is 688px
+ * tall inside a 240px panel, so most of what a player could pick was
+ * both scrolled out of reach AND guaranteed to show an empty strip.
+ *
+ * Hide the dead rows (in the custom menu AND the hidden native select
+ * that backs it) so every selectable entry leads to real offerings.
+ * "All Items" always stays. If the live filter's category disappears
+ * across a restock, fall back to "all" before the caller reads it.
+ */
+function syncCategoryMenuToStock(refs, vs) {
+  const present = new Set();
+  for (const it of vs.items || []) {
+    const t = it.itemType | 0;
+    for (const c of CATEGORY_TABLE) {
+      if (c.id !== "all" && (t & c.mask)) present.add(c.id);
+    }
+  }
+  const keep = (id) => id === "all" || present.has(id);
+  if (!keep(state.categoryFilter)) {
+    state.categoryFilter = "all";
+    if (refs.cat) refs.cat.value = "all";
+  }
+  if (refs.menuPanel) {
+    for (const el of refs.menuPanel.querySelectorAll(".hvb-menu-item")) {
+      el.style.display = keep(el.dataset.value) ? "" : "none";
+    }
+  }
+  if (refs.cat) {
+    for (const opt of refs.cat.options) opt.hidden = !keep(opt.value);
+  }
+  try { refs.syncMenu?.(); } catch (_) {}
+}
+
 function renderItemsPane() {
   const refs = state.refs.items;
   const vs = state.vendorState;
+  syncCategoryMenuToStock(refs, vs);
   const cat = CATEGORY_TABLE.find((c) => c.id === state.categoryFilter) ?? CATEGORY_TABLE[0];
   const items = vs.items.filter((it) => state.categoryFilter === "all" || (it.itemType & cat.mask));
 
@@ -1533,7 +1612,15 @@ function renderItemsPane() {
     setAcText(refs.name, sel.name || `wcid ${sel.wcid}`, { color: "#f0c87c" });
     setAcText(refs.price, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
   } else {
-    setAcText(refs.name, items.length ? "— select an item —" : "(no items in this category)", { color: "#f0c87c" });
+    // The tab label is now clipped to its 92px box, so surface the
+    // vendor's name here (590px, empty whenever nothing is selected)
+    // rather than losing the identity entirely.
+    const who = vs.vendorName ? `${vs.vendorName} ` : "";
+    setAcText(
+      refs.name,
+      items.length ? `${who}— select an item —` : `${who}— no items in this category —`,
+      { color: "#f0c87c" },
+    );
     setAcText(refs.price, `(you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
   }
 
