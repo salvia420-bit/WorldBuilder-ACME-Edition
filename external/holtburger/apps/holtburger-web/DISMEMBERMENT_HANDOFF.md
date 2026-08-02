@@ -201,6 +201,201 @@ thresholds/probabilities are first-guess pending the 1070 session.
   parses string guids as decimal while `__diag.limbs` parses hex — pass
   NUMBERS to both.
 
+## 2026-08-02 (later) — fly-away fix, kill-driven falls, finisher variety
+
+Three owner-reported problems with the cced079c carnage suite, fixed in one
+pass. No flag semantics changed: all six flags stay DEFAULT ON with `?flag=off`
+escapes and `!== "off"` readers. No wasm change (`fetchSetupParentIndex` was
+already in `pkg/`).
+
+### 1. Ragdolls could gain energy and LAUNCH — fixed at the source + governed
+
+Three defects fed the fly-away, all in `stepSim`:
+- **(a) the launcher.** The floor projection inside the relaxation loop moved
+  `pos` without moving `prev`. Verlet reads velocity as `pos − prev`, so a deep
+  penetration (the rigid braces yanking nodes through the ground while the body
+  spun) became an *upward impulse* proportional to the penetration depth.
+- **(b) restitution was skipped exactly when it was needed.** The contact pass
+  computed `vz = pos − prev` *after* the projection, so a deeply penetrating
+  node read as "already rising", missed the `vz < 0` bounce branch, and kept
+  the whole invented velocity.
+- **(c) nothing bounded the over-constrained solve.** Bone + bend + up to three
+  braces per node, relaxed 5×/step, resolve conflicts by displacement — and
+  every displacement is a velocity.
+
+Fixes (all in `scene3d/ragdoll.js`):
+- `sim.push[]` accumulates the projection depth per node per step; the contact
+  pass subtracts it out before applying restitution, and now also runs for
+  nodes a later constraint lifted clear of the contact band.
+- Per-node speed ceiling `RAGDOLL_MAX_SPEED = 8 m/s` and a tighter **upward**
+  ceiling `RAGDOLL_MAX_UP_SPEED = 3 m/s` (v²/2g ⇒ ≤ 0.46 m of ballistic rise,
+  whatever the constraint state).
+- A ratcheting **mechanical-energy governor**: `E = Σ(½v² + g·z)` is measured
+  every step (both terms at the midpoint `t − dt/2`, so verlet's backward-
+  difference velocity is not paired with an endpoint height) and may never
+  exceed the previous step's value; the ceiling ratchets DOWN as damping and
+  friction bleed the sim. Energy after arming is therefore monotonically
+  non-increasing. Telemetry: `__diag.ragdoll.state(guid).{energy, eCap, trims,
+  maxRise}`.
+
+Measured, old module vs new, 300 seeded deaths × a 33-node "big creature" rig
+(`stress.mjs`, scratchpad), body armed 0.6 m inside the floor:
+
+| | E/E₀ | worst node rise | worst centroid rise | worst node speed |
+|---|---|---|---|---|
+| cced079c | **16.61×** | 5.65 m | **4.13 m** | **28.6 m/s** |
+| fixed | 2.66× * | 1.53 m | 0.54 m | 8.0 m/s |
+
+\* the residual 2.66 is the *first* step legitimately lifting a body that was
+armed underground (potential energy, zero velocity); the cap is taken after
+step 1 so an interpenetrating arm pose can still resolve.
+
+### 2. Falls were canned — now driven by the actual kill
+
+**Root cause.** `entities.js` armed with `startRagdoll(inst)` — no opts — so
+`startRagdoll` fell through to `dx = 1, dy = 0` and seeded `impulse =
+[RAGDOLL_IMPULSE, 0, …]`. `initSim`'s "no direction ⇒ random yaw" branch was
+therefore **unreachable** (the impulse XY was never zero) and every creature in
+the world toppled toward MODEL +X — its own right. Measured on the pre-fix
+module: 200 deaths landed in **2 of 8** azimuth bins (`101,0,0,0,0,0,0,99`).
+
+**New module `scene3d/kill_impulse.js`** (dependency-free, bare-node testable)
+resolves the direction, best source first:
+
+1. **Projectile impact.** ACE streams no in-flight motion for a
+   `PhysicsState::Missile`; the launch velocity arrives once on ObjectCreate
+   (entities.js already seeds `inst.lastVel` + `_ballistic`) and the only
+   VectorUpdate a projectile ever receives is the impact stop. `setVelocity`
+   now captures the pre-impact velocity and calls `noteProjectileImpact(x, y,
+   dx, dy)` — the exact flight direction of the bolt/arrow. Correlated to a
+   victim at death by proximity (≤3 m, ≤2.5 s) because the impact carries no
+   defender guid.
+2. **Attacker position.** `damageDealt` → `defenderName` → guid via
+   `EntityManager.findGuidByName`; the attacker is the local player, whose
+   world position we have. `damageTaken` is the mirror.
+3. **Splatter quadrant.** Every hit on every creature broadcasts one of the 12
+   Splatter PlayScripts, which decode to a TARGET-RELATIVE quadrant — where the
+   wound is, hence where the blow came from. Push = −quadrant. This is the only
+   source that works for fights we are merely watching, and it always fires:
+   noted from `play_effect_vfx.js` *outside* the `combatFx` gate (gated on
+   `?ragdoll` alone).
+4. **Nothing.** A seeded azimuth over the full circle.
+
+Sources are blended with recency (1.5 s half-life) and per-source confidence
+weights; opposing hits cancel to low confidence, which widens the seeded fan
+instead of picking a bogus direction. The victim's own momentum (`inst.lastVel`)
+leans the fall, so a mob dying mid-charge carries forward.
+
+On top of that, a per-death **fall style** is drawn from the seed —
+`topple / spinout / crumple / faceplant / sidefall / sidefall2 / backflop` —
+each scaling the topple rate, the vertical twist and the direction fan
+(`initSim` gained `toppleScale`, `twistScale`, `dirJitter`). `startRagdoll`'s
+no-direction path now passes a ZERO impulse XY, so the random-azimuth branch is
+finally reachable as a second line of defence.
+
+Diag: `__diag.killImpulse.{stats, last, hits, probe, clear}`;
+`__diag.ragdoll.state(guid).{style, source, critical}`.
+
+### 3. More pinata — seeded death finishers
+
+`carnage.js` keeps its shipped spine (`deathPlan`: hip sever ×1/×2 on crit,
+limb gib at ≥9 hits or crit+5, torso gib at crit+12 — all unchanged and
+regression-pinned) and adds a seeded draw on top:
+
+- `overkillTier(ctx)` 0-3 from hits + crit + limbs already lost.
+- `FINISHER_MOVES` catalogue: `decapitate`, `shear`, `chipShower` (tier 1),
+  `quarter`, `torsoSplit`, `limbGib`, `burst` (tier 2), `torsoGib` (tier 3).
+- `finisherBudget(tier)` spends 0 / 1 / 1-2 / 2-3 extra moves, drawn WEIGHTED
+  and WITHOUT REPLACEMENT, filtered by what the rig can do (`hasLegs`,
+  `hasChains`, `hasRoot` — a legless serpent silently skips leg moves).
+- `planeRecipe(style)` randomizes every cut plane's azimuth, tilt and offset,
+  so no two severs land on the same line. `torsoSplit` uses oblique/sagittal
+  planes — the torso now genuinely comes apart, not just the limbs.
+
+Measured over 400 seeded kills with a realistic mix of fight shapes: **185
+distinct finisher scripts**, commonest 8.5%, every catalogued move fires, ~1.3
+extra moves per kill. Trivial kills stay clean (tier 0 spends nothing).
+
+Entity lifetime, corpse timing and the ragdoll→corpse part-count guard are
+untouched: nothing here adds or removes `inst.parts` entries — it only swaps
+meshes *inside* part Groups, exactly as the mid-fight sever already did.
+
+### Node suites (kept, in `tests/`)
+
+| Suite | Checks | What it pins |
+|---|---|---|
+| `tests/ragdoll_energy.test.mjs` | 32 | energy never rises after arming (200 seeded deaths × 2 rigs + a 60-death pure-twist set), centroid never leaves the ground, floor penetration de-energised, rising env floor lifts without throwing, degenerate rigs, seeded determinism, and a "still tumbles" guard so the governor is not silently over-damping (40/40 topple, 40/40 travel) |
+| `tests/kill_impulse.test.mjs` | 115 | all 12 splatter quadrants push away from the wound, yaw/world/model frame math, blending + recency + source weights, **400-death fallback azimuth spread** (every 45° sector used; the top two sectors hold 26% vs the pre-fix 100%), 200 varied attacker bearings steer the fall, determinism, momentum bias, ring caps/TTL |
+| `tests/carnage_finisher.test.mjs` | 248 | tier thresholds + monotonicity, budgets, no duplicate moves in a draw, tier gating, rig-capability filtering, 400-kill variety, escalation, cut-plane randomization, and a full regression of the shipped `deathPlan` / `pickEscalation` / `pickLegForHit` policy |
+
+`_three_stub.mjs` gained `MeshStandardMaterial`, `Box3`, `Matrix3`, `Matrix4`,
+`BufferGeometry`, `Float32BufferAttribute` (additive only) so `carnage.js` →
+`dismember.js` can be imported under bare node.
+
+### Live headless verification (zero-GPU bot, owner-authorized `phase4demo`)
+
+`serve.py --port 8771` + headless chromium,
+`?nullRender=1&renderOnDemand=1&netDrainHz=30&nosw=1&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&agent=1`.
+Boot history `form-shown → connecting → char-list-ready → spawning → in-world →
+ready`; **0 console errors**; all six diag surfaces present
+(`ragdoll`, `killImpulse`, `carnage`, `dismember`, `limbs`, `blood`).
+
+Six real creatures (Brutish/Wily/Crude Monouga 17 parts, Olthoi Nymph 23,
+Sufut Zefir 9, Tusker Crimsonback 25, Banderling Breeder 17) sandbox-armed via
+`__diag.ragdoll.kill(guid, {critical:true})` — which now runs the production
+resolver — and sampled at 60 ms for 6 s:
+
+- **6/6 armed** with a real limb registry, 21-63 braces, `env: true` (the
+  terrain/raycast floor bridge is live).
+- **worst centroid rise 0.035 m, worst node rise 0.473 m** — nothing left the
+  ground; every sim reported `done: true` with `settled: 24` inside 2.6-4.3 s.
+- **`energy` tracked `eCap` in every case** (`trims` 1-26 — the governor firing
+  a handful of times per death, which is it doing its job, not fighting).
+- **6 of 6 distinct fall directions**, and five different styles observed
+  across the runs (`topple`, `spinout`, `faceplant`, `crumple`, `sidefall`,
+  `sidefall2`). Entities with a non-zero yaw showed `dir ≠ worldDir`, proving
+  the world→model conversion is live.
+- `__diag.carnage.simulateFinisher(200)` in-page: 41 distinct move lists at
+  tier 2 with every tier-≤2 move firing.
+
+Not covered headlessly: an actual server-driven death (the bot does not fight),
+so the `carnageOnDeath` → `startRagdoll(inst, killOptsFor(inst))` sequencing and
+the corpse handoff are still eye-check items below.
+
+### Queued 1070 eye checks (owner session — not run from agents)
+
+URL: `?nosw=1` (everything is default-ON; add `&agent=1` if driving headless).
+
+1. **Fly-away regression.** Kill 20+ creatures of mixed size, including on
+   stairs, slopes and on top of existing corpses. Nothing should leave the
+   ground; `__diag.ragdoll.state(guid).maxRise` should stay under ~0.5 m for
+   the body as a whole. `trims > 0` is normal (the governor doing its job);
+   `trims` in the thousands on a settled corpse would mean it is fighting the
+   solve and wants a look.
+2. **Direction.** Kill the same creature type from N, S, E and W — it should
+   topple away from you each time, not toward its own right. Then kill with a
+   war bolt from range and confirm it goes over along the bolt's flight line.
+   `__diag.killImpulse.last()` reports `{source, style, confidence}` for the
+   last resolve; `source` should read `projectile` / `attacker` / `splatter`
+   in that order of preference, and `seeded` only when nothing landed.
+3. **Variety.** Twenty kills in a row should not look alike: watch for the
+   `crumple` (drops near-straight down), `spinout` (visible spin about the
+   vertical), `faceplant` (a charging mob carries forward) and `sidefall`
+   (goes over sideways) styles. `__diag.ragdoll.state(guid).style` names it.
+4. **Finishers.** Long fights and crit finishes should show decapitations,
+   oblique torso splits, quarterings and chip showers, not just a hip sever.
+   `__diag.carnage.state(guid).finisher` gives `{seed, tier, moves}`;
+   `__diag.carnage.simulateFinisher(200)` dry-runs the distribution.
+5. **Torso split sanity.** After a `torsoSplit` the creature should still read
+   as a body (the joint-side half stays on the rig). If a split ever leaves the
+   creature effectively invisible, drop `torsoSplit`'s weight or bias the plane
+   offset toward the extremity.
+6. **Loot, still.** Loot a dozen finished corpses — the part-count guard and
+   the sprawl transfer were not touched, but this is the one thing worth
+   re-confirming after any carnage change.
+7. **Perf.** A 4-6 mob AoE kill should not hitch: `__diag.dismember.stats()`
+   `activeDebris` must stay under its cap of 40 and drain.
+
 ## Known issues / pre-existing bugs found during recon (not fixed here)
 
 - **holtburger-protocol reads `AttackConditions` as u64; wire is u32** — 4-byte

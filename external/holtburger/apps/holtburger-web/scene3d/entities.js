@@ -1011,6 +1011,11 @@ import {
   transferRagdollPose,
   promotePendingPose,
 } from "./ragdoll.js";
+// (2026-08-02) — where the ragdoll gets its DIRECTION. Dependency-free
+// resolver: projectile impact > attacker position > splatter quadrant >
+// seeded azimuth, plus the per-death fall style. Static import is safe (no
+// three, no listeners at import time); every call site is inside RAGDOLL_ON.
+import { killOptsFor, noteProjectileImpact } from "./kill_impulse.js";
 // Hoisted once (the URL cannot change mid-session), so the per-entity tick
 // gate is a bare boolean read — same shape as WIREFRAME_MODE / SPAWN_TRACE.
 const LIMB_DAMAGE_ON = limbDamageEnabled();
@@ -9135,7 +9140,17 @@ export class EntityManager {
       // Fire-and-forget: the cold path awaits one cached wasm registry fetch;
       // startRagdoll self-guards against the entity being removed meanwhile.
       if (RAGDOLL_ON && !this._isLocalPlayerGuid(guid >>> 0)) {
-        startRagdoll(inst).catch((e) => {
+        // Direction of the fall comes from the KILL, not from a constant:
+        // killOptsFor resolves {dir, critical, seed, style, …} from the
+        // projectile that just impacted / the attacker's position / the
+        // splatter quadrant, falling back to a seeded azimuth. Never throws.
+        let killOpts;
+        try {
+          killOpts = killOptsFor(inst);
+        } catch (_e) {
+          killOpts = undefined;
+        }
+        startRagdoll(inst, killOpts).catch((e) => {
           if (!this._ragdollWarned) {
             this._ragdollWarned = true;
             // eslint-disable-next-line no-console
@@ -9988,6 +10003,12 @@ export class EntityManager {
   setVelocity(upd) {
     const inst = this.entityMap.get((upd.guid >>> 0));
     if (!inst) return;
+    // Pre-impact velocity, captured BEFORE the overwrite below. For a
+    // PhysicsState::Missile this is still the ObjectCreate launch velocity
+    // (ACE streams nothing in flight), i.e. the exact flight direction of the
+    // bolt/arrow that is about to stop — the best kill-direction source there
+    // is (scene3d/kill_impulse.js).
+    const prevVel = inst.lastVel;
     inst.lastVel = {
       vx: upd.vx ?? 0,
       vy: upd.vy ?? 0,
@@ -10007,6 +10028,19 @@ export class EntityManager {
     if (PROJECTILE_IMPACT_STOP_ON && inst._ballistic && this.isProjectile(upd.guid >>> 0)) {
       inst._ballistic = false;
       inst._ballisticGravity = false;
+      // Record WHERE it hit and WHICH WAY it was going. Correlated to a victim
+      // by proximity at death time (the impact carries no defender guid), so a
+      // mage bolt or an arrow topples the creature the way it was travelling.
+      if (RAGDOLL_ON && prevVel && inst.root) {
+        try {
+          noteProjectileImpact(
+            inst.root.position.x,
+            inst.root.position.y,
+            prevVel.vx || 0,
+            prevVel.vy || 0,
+          );
+        } catch (_e) { /* enrichment only — never break the impact stop */ }
+      }
     }
   }
 

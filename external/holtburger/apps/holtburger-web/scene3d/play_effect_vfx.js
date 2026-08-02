@@ -112,6 +112,40 @@ import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
 // table + one pure function, no side effects) but ONLY consulted behind
 // the `?combatFx=on` gate below.
 import { decodeSplatterId } from "./splatter_decode.js";
+// (2026-08-02) Ragdoll kill-direction feed. Dependency-free module (no three,
+// no listeners at import time) — same import-safety property as
+// splatter_decode.js, so the node stub suites are unaffected.
+import { noteSplatterHit } from "./kill_impulse.js";
+
+/** `?ragdoll` (DEFAULT ON, `=off` escape) — hoisted; the URL cannot change. */
+const _RAGDOLL_ON_FOR_KILL_DIR = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get("ragdoll") !== "off";
+  } catch (_e) {
+    return false;
+  }
+})();
+
+/**
+ * Record the splatter's target-relative quadrant as a WORLD-frame push
+ * direction for `targetGuid`, so its eventual death topples away from where
+ * the blows were landing. Never throws; no-ops on an unresolvable target.
+ */
+function _noteSplatterForRagdoll(targetGuid, scriptId) {
+  try {
+    const decoded = decodeSplatterId(scriptId);
+    if (!decoded) return;
+    const inst = window.liveScene3d?.entityManager?.entityMap?.get(targetGuid >>> 0);
+    if (!inst?.root) return;
+    // PEEK the crit latch (never consume — `_spawnDirectionalSplatter` owns
+    // the consume, and a crit death should still read as a crit here).
+    const expiry = _critLatch.get(targetGuid >>> 0);
+    const critical = expiry !== undefined && expiry > _nowMs();
+    noteSplatterHit(targetGuid, decoded, inst.root.quaternion, { critical });
+  } catch (_e) {
+    /* enrichment only */
+  }
+}
 
 // Default tween duration in ms (Launch/Explode). ~500ms keeps the
 // visual on-screen long enough to be perceptible but short enough
@@ -2654,6 +2688,13 @@ function _runPlaceholderDispatch(targetGuid, scriptId) {
       // conventions across the genre). Short 300ms duration since
       // sustained combat fires Splatter on every hit.
       if (_SPLATTER_IDS.has(scriptId)) {
+        // (2026-08-02) — feed the ragdoll's kill-direction resolver FIRST, and
+        // deliberately OUTSIDE the combatFx gate: the splatter quadrant is
+        // target-relative, so it says which side the blow landed on, which is
+        // the only attack-direction source that works for fights we are merely
+        // watching. Gated on `?ragdoll` alone (a hoisted boolean), never
+        // throws, and does nothing to the visual either way.
+        if (_RAGDOLL_ON_FOR_KILL_DIR) _noteSplatterForRagdoll(targetGuid, scriptId);
         // Combat-visuals Phase 1 (2026-08-02) — STRICT `?combatFx=on`.
         // Decodes the ID's (height-third, target-relative quadrant) and
         // spawns a directional, outward-spraying, crit-aware splatter

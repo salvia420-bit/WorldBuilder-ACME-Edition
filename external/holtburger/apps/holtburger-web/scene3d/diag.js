@@ -54,6 +54,10 @@ import { attachCollision as _attachCollision } from "./diag/collision.js";
 // through the same `attach<Name>(diag)` contract as everything above.
 import { attachLimbs as _attachLimbs } from "./limbs.js";
 import { attachRagdoll as _attachRagdoll } from "./ragdoll.js";
+// (2026-08-02) kill-direction resolver telemetry — `__diag.killImpulse`.
+// scene3d/index.js's `?ragdoll` gate installs the fuller surface (with
+// `probe`); this attach guarantees the read-only counters exist either way.
+import { attachKillImpulse as _attachKillImpulse } from "./kill_impulse.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -494,6 +498,7 @@ export function installDiag() {
     ["collision",  _attachCollision],
     ["limbs",      _attachLimbs],
     ["ragdoll",    _attachRagdoll],
+    ["killImpulse", _attachKillImpulse],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console

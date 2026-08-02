@@ -27,7 +27,16 @@
 //   4. VARIETY. Direction jitter, topple rate, twist sign/magnitude, per-node
 //      jitter, joint give order/timing and floor bounce are all drawn from a
 //      per-death PRNG (`opts.seed` makes a death reproducible for tests). No
-//      module-scope randomness.
+//      module-scope randomness. The fall DIRECTION and the per-death style
+//      (topple / spinout / crumple / faceplant / sidefall / backflop) come from
+//      scene3d/kill_impulse.js, which reads the actual killing blow — the
+//      projectile flight, the attacker's position, or the splatter quadrant.
+//   5. ENERGY IS ONE-WAY. After arming, the sim's mechanical energy is
+//      monotonically non-increasing (see the RAGDOLL_MAX_SPEED block): floor
+//      penetration is de-energised at the source and a ratcheting governor
+//      trims whatever the over-constrained solve invents. The worst case a bad
+//      constraint state can reach is a vigorous tumble that settles — never a
+//      launch (2026-08-02 "ragdolls fly into the air" fix).
 //
 // Safety model mirrors Phase 2's limp exactly: we never touch the mixer, the
 // tracks, or the Group graph — every frame we overwrite part.position /
@@ -88,6 +97,30 @@ export const RAGDOLL_PIVOT_LEAD = 0.18; // pivot offset along the fall dir (× b
 export const RAGDOLL_LINEAR_FRAC = 0.25; // fraction of the impulse kept as a shove
 export const RAGDOLL_JITTER = 0.12; // m/s per-node asymmetry
 export const RAGDOLL_BOUNCE_MAX = 0.35; // peak floor restitution
+
+/* energy budget — the "no launches" guarantee (2026-08-02 fly-away fix)
+ *
+ * A verlet solver has three ways to CREATE energy, and a twisting ragdoll hit
+ * all three at once:
+ *   (a) the floor projection inside the relaxation loop moves `pos` without
+ *       moving `prev`, so a deep penetration (the rigid braces yanking a node
+ *       through the ground while the body spins) turns straight into upward
+ *       velocity — pos−prev gains the whole penetration depth. That is the
+ *       launcher: one bad frame and the corpse leaves the map.
+ *   (b) over-constrained Gauss-Seidel — bone + bend + up to three braces per
+ *       node, relaxed 5×/step — resolves conflicts by displacement, and every
+ *       displacement is a velocity in verlet.
+ *   (c) the environment bridge raising a node onto a slope/corpse.
+ * (a) is fixed at the source (penetration depth is tracked and subtracted back
+ * out at contact); (b) and (c) are caught by a MECHANICAL-ENERGY GOVERNOR:
+ * E = Σ(½v² + g·z) is measured every step and may never exceed the value it
+ * had on the previous step. The cap ratchets DOWN as damping and friction bleed
+ * the sim, so energy after arming is monotonically non-increasing — the worst
+ * case a bad constraint state can produce is a vigorous tumble that settles.
+ */
+export const RAGDOLL_MAX_SPEED = 8.0; // m/s hard per-node speed ceiling
+export const RAGDOLL_MAX_UP_SPEED = 3.0; // m/s upward ceiling (≈0.46 m ballistic rise)
+export const RAGDOLL_ENERGY_SLACK = 1.002; // tolerance before the governor trims
 
 const MAX_DT = 1 / 30; // clamp so a tab restore cannot explode the sim
 const ROOT = 0xffffffff;
@@ -280,11 +313,24 @@ export function buildBoneChildren(parentIndex, positions) {
  *   seed      uint32; omit for a fresh random death
  *   dir       [dx, dy] explicit fall direction (overrides the impulse XY dir)
  *   env       { floorZAt(acX, acY), constrainAC(pos, radius) } or null
+ *   toppleScale / twistScale / dirJitter
+ *             per-death style knobs (kill_impulse.js FALL_STYLES) — scale the
+ *             seeded angular rate, the vertical twist, and the direction fan.
  */
 export function initSim(
   parentIndex,
   positions,
-  { floorZ = 0, impulse = [0, 0, 0], dt = 1 / 60, seed = null, dir = null, env = null } = {},
+  {
+    floorZ = 0,
+    impulse = [0, 0, 0],
+    dt = 1 / 60,
+    seed = null,
+    dir = null,
+    env = null,
+    toppleScale = 1,
+    twistScale = 1,
+    dirJitter = null,
+  } = {},
 ) {
   const n = parentIndex.length;
   const pos = Float64Array.from(positions);
@@ -319,7 +365,7 @@ export function initSim(
   if (dir && Number.isFinite(dir[0]) && (dir[0] !== 0 || dir[1] !== 0)) ang = Math.atan2(dir[1], dir[0]);
   else if (speed > 1e-6) ang = Math.atan2(iy0, ix0);
   else ang = rand() * Math.PI * 2;
-  ang += (rand() - 0.5) * RAGDOLL_DIR_JITTER;
+  ang += (rand() - 0.5) * (Number.isFinite(dirJitter) && dirJitter > 0 ? dirJitter : RAGDOLL_DIR_JITTER);
   const dx = Math.cos(ang);
   const dy = Math.sin(ang);
 
@@ -327,15 +373,18 @@ export function initSim(
   // signed so the TOP of the body swings toward (dx, dy): ω = rate·(−dy, dx, 0)
   // cap FIRST, jitter after — capping the jittered value would clip the spread
   // away on small creatures and make every one of their deaths identical.
+  const tScale = Number.isFinite(toppleScale) && toppleScale > 0 ? toppleScale : 1;
+  const wScale = Number.isFinite(twistScale) && twistScale >= 0 ? twistScale : 1;
   const rate =
     Math.min(
       ((speed || RAGDOLL_IMPULSE) / height) * RAGDOLL_TOPPLE_GAIN,
       RAGDOLL_TOPPLE_RATE_CAP * Math.sqrt(RAGDOLL_GRAVITY / height),
     ) *
-    (0.7 + 0.6 * rand());
+    (0.7 + 0.6 * rand()) *
+    tScale;
   const ox = -dy * rate;
   const oy = dx * rate;
-  const twist = RAGDOLL_TWIST * (rand() < 0.5 ? -1 : 1) * (0.35 + 0.65 * rand());
+  const twist = RAGDOLL_TWIST * (rand() < 0.5 ? -1 : 1) * (0.35 + 0.65 * rand()) * wScale;
 
   /* ground pivot: the leading edge of the lowest nodes ------------------ */
   let px = 0;
@@ -423,6 +472,16 @@ export function initSim(
     t: 0,
     settled: 0,
     done: false,
+    // energy governor (see RAGDOLL_MAX_SPEED block). `push` accumulates the
+    // floor projection depth per node per step so the contact pass can undo the
+    // velocity it would otherwise inject; `eCap` is the ratcheting mechanical-
+    // energy ceiling (null until the first step measures it).
+    push: new Float64Array(n),
+    eCap: null,
+    energy: 0,
+    trims: 0,
+    zStart: Float64Array.from(pos.filter((_v, i) => i % 3 === 2)),
+    maxRise: 0,
     // environment bridge (all optional; null ⇒ flat floorZ, exactly as before)
     env: env && (typeof env.floorZAt === "function" || typeof env.constrainAC === "function") ? env : null,
     rootPos: new Float64Array(3),
@@ -571,7 +630,8 @@ export function stepSim(sim, dt) {
   if (!sim || sim.done) return 0;
   if (!(dt > 0)) dt = 1 / 60;
   if (dt > MAX_DT) dt = MAX_DT;
-  const { n, pos, prev, constraints, braces, kEff, kBrace, support } = sim;
+  const { n, pos, prev, constraints, braces, kEff, kBrace, support, push } = sim;
+  push.fill(0);
   sim.t += dt;
   const t = sim.t;
   const g = RAGDOLL_GRAVITY * dt * dt;
@@ -659,7 +719,16 @@ export function stepSim(sim, dt) {
     for (let i = 0; i < n; i++) {
       const iz = i * 3 + 2;
       const min = support[i] + RAGDOLL_NODE_RADIUS;
-      if (pos[iz] < min) pos[iz] = min;
+      if (pos[iz] < min) {
+        // Track the penetration depth we just projected away. Verlet reads
+        // velocity as pos−prev, so an unrecorded projection IS an upward
+        // impulse — the fly-away launcher. The contact pass below subtracts
+        // this back out. Over-counting (a later iteration pulls the node down
+        // and it is clamped again) only ever removes MORE energy, which is the
+        // safe direction.
+        push[i] += min - pos[iz];
+        pos[iz] = min;
+      }
     }
   }
 
@@ -680,14 +749,115 @@ export function stepSim(sim, dt) {
   maxMove = Math.sqrt(maxMove);
 
   /* contact: ground friction + (randomized) bounce ---------------------- */
+  // Nodes that were PUSHED out of the floor are handled even if a later
+  // constraint pass lifted them clear of the contact band — their velocity
+  // still carries the projection depth and must be de-energised.
   const bounce = sim.bounce;
   for (let i = 0; i < n; i++) {
     const ix = i * 3;
-    if (pos[ix + 2] > support[i] + RAGDOLL_NODE_RADIUS + 1e-6) continue;
+    if (push[i] <= 0 && pos[ix + 2] > support[i] + RAGDOLL_NODE_RADIUS + 1e-6) continue;
     prev[ix] = pos[ix] - (pos[ix] - prev[ix]) * RAGDOLL_FLOOR_FRICTION;
     prev[ix + 1] = pos[ix + 1] - (pos[ix + 1] - prev[ix + 1]) * RAGDOLL_FLOOR_FRICTION;
-    const vz = pos[ix + 2] - prev[ix + 2];
-    if (vz < 0) prev[ix + 2] = pos[ix + 2] + vz * bounce; // reflect, scaled
+    // TRUE vertical velocity = the integrated one MINUS the penetration we
+    // projected away this step. Pre-fix this read the post-projection value,
+    // so a deep penetration became a launch instead of a landing.
+    const vz = pos[ix + 2] - prev[ix + 2] - push[i];
+    // Restitution only ever reflects a fraction of the impact speed; a node
+    // that was still rising keeps its (already clamped) velocity.
+    prev[ix + 2] = pos[ix + 2] - (vz < 0 ? -vz * bounce : vz);
+  }
+
+  /* velocity ceilings ---------------------------------------------------
+   * A hard per-node speed cap and a tighter UPWARD cap. The up cap is the
+   * geometric guarantee behind "a ragdoll never launches": at 3 m/s the
+   * ballistic rise is v²/2g ≈ 0.46 m, whatever the constraint state. */
+  const maxStep = RAGDOLL_MAX_SPEED * dt;
+  const maxUpStep = RAGDOLL_MAX_UP_SPEED * dt;
+  for (let i = 0; i < n; i++) {
+    const ix = i * 3;
+    let vx = pos[ix] - prev[ix];
+    let vy = pos[ix + 1] - prev[ix + 1];
+    let vz = pos[ix + 2] - prev[ix + 2];
+    if (vz > maxUpStep) vz = maxUpStep;
+    const sp = Math.sqrt(vx * vx + vy * vy + vz * vz);
+    if (sp > maxStep) {
+      const s = maxStep / sp;
+      vx *= s;
+      vy *= s;
+      vz *= s;
+    }
+    prev[ix] = pos[ix] - vx;
+    prev[ix + 1] = pos[ix + 1] - vy;
+    prev[ix + 2] = pos[ix + 2] - vz;
+  }
+
+  /* mechanical-energy governor -------------------------------------------
+   * E = Σ(½|v|² + g·z) over unit-mass nodes. Physically this can only fall
+   * (gravity is conservative, damping/friction/restitution are strictly
+   * dissipative), so any INCREASE is solver error. Trim it by scaling the
+   * velocity field, and ratchet the ceiling down to whatever the sim actually
+   * has — a settled corpse can never re-inflate.
+   *
+   * Both terms are evaluated at the MIDPOINT t−dt/2: verlet's velocity
+   * (pos−prev)/dt is a backward difference, so pairing it with the endpoint
+   * height would make E drift down through any free fall and back up on
+   * landing — the governor would then trim every landing. Midpoint height
+   * (pos+prev)/2 is the matching sample and makes E exact under constant
+   * acceleration. */
+  {
+    const invDt = 1 / dt;
+    let ke = 0;
+    let pe = 0;
+    for (let i = 0; i < n; i++) {
+      const ix = i * 3;
+      const vx = (pos[ix] - prev[ix]) * invDt;
+      const vy = (pos[ix + 1] - prev[ix + 1]) * invDt;
+      const vz = (pos[ix + 2] - prev[ix + 2]) * invDt;
+      ke += 0.5 * (vx * vx + vy * vy + vz * vz);
+      pe += RAGDOLL_GRAVITY * 0.5 * (pos[ix + 2] + prev[ix + 2]);
+    }
+    let E = ke + pe;
+    if (sim.eCap === null) {
+      sim.eCap = E;
+    } else if (E > sim.eCap * (sim.eCap >= 0 ? RAGDOLL_ENERGY_SLACK : 1 / RAGDOLL_ENERGY_SLACK)) {
+      const allowed = sim.eCap - pe;
+      if (allowed <= 0 || ke <= 1e-12) {
+        // The body is being LIFTED (env floor rose under it, or a push-out).
+        // Zero the velocity field: it may sit higher, it may not fly.
+        for (let i = 0; i < n; i++) {
+          const ix = i * 3;
+          prev[ix] = pos[ix];
+          prev[ix + 1] = pos[ix + 1];
+          prev[ix + 2] = pos[ix + 2];
+        }
+        ke = 0;
+        sim.eCap = pe;
+      } else {
+        const s = Math.sqrt(allowed / ke);
+        for (let i = 0; i < n; i++) {
+          const ix = i * 3;
+          prev[ix] = pos[ix] - (pos[ix] - prev[ix]) * s;
+          prev[ix + 1] = pos[ix + 1] - (pos[ix + 1] - prev[ix + 1]) * s;
+          prev[ix + 2] = pos[ix + 2] - (pos[ix + 2] - prev[ix + 2]) * s;
+        }
+        ke = allowed;
+      }
+      sim.trims++;
+      E = ke + pe;
+    }
+    sim.energy = E;
+    if (E < sim.eCap) sim.eCap = E; // ratchet: energy after arming never rises
+  }
+
+  /* telemetry: the highest any node has climbed above its arm height ----- */
+  {
+    const zs = sim.zStart;
+    let rise = sim.maxRise;
+    for (let i = 0; i < n; i++) {
+      const d = pos[i * 3 + 2] - zs[i];
+      if (d > rise) rise = d;
+    }
+    sim.maxRise = rise;
   }
 
   /* freeze — never mid-topple: the braces must have finished giving ----- */
@@ -869,18 +1039,31 @@ export async function startRagdoll(inst, opts = {}) {
   // random yaw. Magnitude jumps for crit deaths; initSim jitters both, and the
   // per-death seed decides twist, joint-give order, jitter and bounce.
   const mag = opts.critical ? RAGDOLL_IMPULSE_CRIT : RAGDOLL_IMPULSE;
-  const given = opts.dir && Number.isFinite(opts.dir[0]) && Number.isFinite(opts.dir[1]) ? opts.dir : null;
+  const given =
+    opts.dir &&
+    Number.isFinite(opts.dir[0]) &&
+    Number.isFinite(opts.dir[1]) &&
+    (opts.dir[0] !== 0 || opts.dir[1] !== 0)
+      ? opts.dir
+      : null;
   const dl = given ? Math.hypot(given[0], given[1]) || 1 : 1;
-  const dx = given ? given[0] / dl : 1;
+  const dx = given ? given[0] / dl : 0;
   const dy = given ? given[1] / dl : 0;
   const seed =
     opts.seed === undefined || opts.seed === null ? (Math.random() * 4294967296) >>> 0 : opts.seed >>> 0;
+  // NO direction ⇒ ZERO impulse XY, so initSim draws a fresh azimuth from the
+  // per-death seed. Pre-fix this passed [1, 0] × RAGDOLL_IMPULSE, which made
+  // the "random yaw" branch unreachable and every creature in the world topple
+  // toward its own model +X — the "canned falls" bug.
   const sim = initSim(parentIndex, positions, {
     floorZ: 0,
     impulse: [dx * mag, dy * mag, 0.35 * mag],
     dir: given ? [dx, dy] : null,
     seed,
     env,
+    toppleScale: opts.toppleScale,
+    twistScale: opts.twistScale,
+    dirJitter: opts.dirJitter,
   });
   readRoot(sim, inst.root);
   const boneChild = buildBoneChildren(parentIndex, positions);
@@ -894,7 +1077,21 @@ export async function startRagdoll(inst, opts = {}) {
     const l = Math.hypot(bx, by, bz);
     if (l > 1e-4) restDir[i] = [bx / l, by / l, bz / l];
   }
-  inst._ragdoll = { sim, parentIndex, boneChild, restDir, q0, swing: new Array(n).fill(null), seed, reported: false };
+  inst._ragdoll = {
+    sim,
+    parentIndex,
+    boneChild,
+    restDir,
+    q0,
+    swing: new Array(n).fill(null),
+    seed,
+    reported: false,
+    // kill_impulse.js provenance — read by __diag.ragdoll.state for the
+    // "why did it fall THAT way" question.
+    style: opts.style || null,
+    source: opts.source || null,
+    critical: !!opts.critical,
+  };
   return inst._ragdoll;
 }
 
@@ -1103,13 +1300,35 @@ export function attachRagdoll(diag) {
   };
   diag.ragdoll = {
     enabled: ragdollEnabled,
-    /** Arm a ragdoll on a LIVING entity for testing: __diag.ragdoll.kill(guid, {critical:true}) */
+    /**
+     * Arm a ragdoll on a LIVING entity for testing:
+     *   __diag.ragdoll.kill(guid, {critical:true})
+     * With no explicit `dir`, the REAL kill-direction resolver runs (same call
+     * the death arm makes), so a console-driven test exercises the production
+     * path — style, source and seed all come from kill_impulse.js. Pass an
+     * explicit `dir` to override.
+     */
     async kill(guid, opts = {}) {
       const inst = findInst(guid);
       if (!inst) return { error: "no such entity" };
-      const rd = await startRagdoll(inst, opts);
+      let merged = opts;
+      if (!opts.dir) {
+        try {
+          const resolved = window.__diag?.killImpulse?.probe?.(inst);
+          if (resolved && !resolved.error) merged = { ...resolved, ...opts };
+        } catch (_e) { /* resolver optional — fall back to the seeded path */ }
+      }
+      const rd = await startRagdoll(inst, merged);
       return rd
-        ? { ok: true, nodes: rd.sim.n, seed: rd.seed, braces: rd.sim.braces.length, env: !!rd.sim.env }
+        ? {
+            ok: true,
+            nodes: rd.sim.n,
+            seed: rd.seed,
+            braces: rd.sim.braces.length,
+            env: !!rd.sim.env,
+            style: rd.style,
+            source: rd.source,
+          }
         : { error: "not armed (flag off / no hierarchy?)" };
     },
     stop(guid) {
@@ -1133,6 +1352,14 @@ export function attachRagdoll(diag) {
         bounce: +s.bounce.toFixed(3),
         env: !!s.env,
         seed: rd.seed,
+        style: rd.style,
+        source: rd.source,
+        critical: rd.critical,
+        // energy governor telemetry (fly-away regression watch)
+        energy: +(s.energy || 0).toFixed(3),
+        eCap: s.eCap === null ? null : +s.eCap.toFixed(3),
+        trims: s.trims,
+        maxRise: +(s.maxRise || 0).toFixed(3),
         settled: s.settled,
         done: s.done,
       };

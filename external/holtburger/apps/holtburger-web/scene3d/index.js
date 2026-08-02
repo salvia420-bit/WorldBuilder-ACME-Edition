@@ -3522,6 +3522,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       .then((m) => m.installCarnage())
       .catch((err) => console.warn("[carnage] failed to load:", err));
   }
+  // ── Kill-direction resolver (rides ?ragdoll) ─────────────────────────
+  // Subscribes damageDealt/damageTaken to learn WHERE a killing blow came
+  // from, so death ragdolls topple away from the attacker instead of always
+  // toward model +X. Splatter quadrants are fed from play_effect_vfx.js and
+  // projectile impacts from entities.js `setVelocity`; this gate only wires
+  // the bus listeners + `window.__diag.killImpulse`.
+  if (new URLSearchParams(window.location.search).get("ragdoll") !== "off") {
+    import("./kill_impulse.js")
+      .then((m) => m.installKillImpulse())
+      .catch((err) => console.warn("[kill-impulse] failed to load:", err));
+  }
   // ── Blood decals (Phase 6, ?blood=on strict opt-in) ──────────────────
   // Persistent liquid stains on dungeon walls/floors/ceilings, terrain and
   // tree trunks from combat splatter; pools under settled bodies/pieces via

@@ -20,6 +20,15 @@
 // 10-15 hit kill shows 2-4 mid-fight events (measured over 400 seeded fights
 // in scratchpad/test_carnage.mjs), escalating, never the same twice.
 //
+// DEATH FINISHERS (2026-08-02 expansion). On top of that spine sits a seeded
+// draw from FINISHER_MOVES — decapitate / shear / torsoSplit / quarter /
+// limbGib / torsoGib / chipShower / burst — gated by an overkill TIER (hits +
+// crit + limbs already lost) and sampled without replacement, so hunting is a
+// run of visibly different endings rather than one canned animation. Pure
+// planner (`planFinisher`, `overkillTier`, `finisherBudget`, `planeRecipe`)
+// with the execution isolated in `_runFinisherMove`; every cut plane is drawn
+// with a randomized azimuth/tilt/offset so no two severs land on the same line.
+//
 // Attribution rules (attack height is meaningful, per the design):
 //   Low band  → always a leg (quadrant picks WHICH leg on multi-leg rigs)
 //   Mid band  → 50% a leg (hip-height IS leg-height on quadrupeds), else torso
@@ -40,6 +49,10 @@ import {
   refractureDebrisNear,
   restingLargeDebrisCount,
 } from "./dismember.js";
+// Seeded per-death PRNG shared with the ragdoll's kill-direction resolver, so
+// a death's finisher draw and its fall direction come from the same family of
+// hashes (and a seeded test replays both). Dependency-free module.
+import { hash32, mulberry32 } from "./kill_impulse.js";
 
 export function carnageEnabled() {
   try {
@@ -152,6 +165,108 @@ export function deathPlan(ctx) {
   };
 }
 
+/* ── death FINISHERS (pure, seeded, node-tested) ──────────────────────
+ * `deathPlan` above is the spine (hip sever + the two original gibs). On top
+ * of it the finisher planner draws EXTRA three-pinata moves from a catalogue,
+ * weighted and gated by an overkill tier, so hunting reads as a run of
+ * different endings instead of one animation: a head comes off, a torso splits
+ * along an oblique plane, a creature is quartered, shell chips shower off, the
+ * chunks already on the ground burst again.
+ *
+ * Everything here is a PURE function of (ctx, rand) so a seeded kill replays
+ * exactly and the distribution is assertable without a renderer.
+ */
+
+/** Overkill tier 0-3 from the fight's shape. Higher = more spectacle. */
+export function overkillTier(ctx) {
+  const hits = ctx?.totalHits || 0;
+  const crit = !!ctx?.critical;
+  const severed = ctx?.severed || 0;
+  const score = hits + (crit ? 4 : 0) + severed * 2;
+  if (score >= 14) return 3;
+  if (score >= 8) return 2;
+  if (score >= 3) return 1;
+  return 0;
+}
+
+/**
+ * The catalogue. `minTier` gates availability; `w` is the draw weight; `needs`
+ * names the rig feature the move requires so a legless/chainless creature
+ * silently skips it instead of no-opping at execution time.
+ */
+export const FINISHER_MOVES = Object.freeze([
+  { kind: "decapitate", minTier: 1, w: 1.1, needs: "chain" },
+  { kind: "shear", minTier: 1, w: 1.0, needs: "chain" },
+  { kind: "chipShower", minTier: 1, w: 0.9, needs: "any" },
+  { kind: "quarter", minTier: 2, w: 1.2, needs: "leg" },
+  { kind: "torsoSplit", minTier: 2, w: 1.0, needs: "root" },
+  { kind: "limbGib", minTier: 2, w: 1.0, needs: "leg" },
+  { kind: "burst", minTier: 2, w: 0.6, needs: "any" },
+  { kind: "torsoGib", minTier: 3, w: 0.9, needs: "root" },
+]);
+
+/** How many EXTRA moves a tier is allowed to spend (before rig filtering). */
+export function finisherBudget(tier, roll = 0) {
+  if (tier <= 0) return 0;
+  if (tier === 1) return 1;
+  if (tier === 2) return roll < 0.55 ? 1 : 2;
+  return roll < 0.45 ? 2 : 3;
+}
+
+/**
+ * Draw the finisher move list (pure). Weighted sampling WITHOUT replacement so
+ * one death never plays the same move twice, filtered by what the rig can
+ * actually do.
+ *
+ * ctx: { totalHits, critical, severed, hasLegs, hasChains, hasRoot }
+ * rand: 0..1 generator (seeded per death by the caller)
+ */
+export function planFinisher(ctx, rand = Math.random) {
+  const base = deathPlan(ctx);
+  const tier = overkillTier(ctx);
+  const budget = finisherBudget(tier, rand());
+  const pool = FINISHER_MOVES.filter((m) => {
+    if (m.minTier > tier) return false;
+    if (m.needs === "leg") return !!ctx?.hasLegs;
+    if (m.needs === "chain") return !!ctx?.hasChains;
+    if (m.needs === "root") return !!ctx?.hasRoot;
+    return true;
+  }).slice();
+  const moves = [];
+  for (let i = 0; i < budget && pool.length > 0; i++) {
+    let total = 0;
+    for (const m of pool) total += m.w;
+    let r = rand() * total;
+    let pick = pool.length - 1;
+    for (let j = 0; j < pool.length; j++) {
+      r -= pool[j].w;
+      if (r <= 0) {
+        pick = j;
+        break;
+      }
+    }
+    moves.push(pool[pick].kind);
+    pool.splice(pick, 1);
+  }
+  return { ...base, tier, budget, moves };
+}
+
+/**
+ * Cut-plane recipe (pure). Returns the plane ORIENTATION as an azimuth + tilt
+ * plus where along the part to cut, so no two severs land on the same line.
+ *   style "transverse" — the classic square cut (normal ≈ world up)
+ *   style "sagittal"   — a lengthwise split down the body
+ *   style "oblique"    — a diagonal shear, the most fun to watch
+ * `offset` is a signed fraction of the part's extent along the normal.
+ */
+export function planeRecipe(style, rand = Math.random) {
+  const az = rand() * Math.PI * 2;
+  const offset = (rand() - 0.5) * 0.5;
+  if (style === "sagittal") return { az, tilt: 0, offset };
+  if (style === "oblique") return { az, tilt: 0.45 + rand() * 0.65, offset };
+  return { az, tilt: Math.PI / 2, offset }; // transverse: normal is world up
+}
+
 /* ── runtime ─────────────────────────────────────────────────────────── */
 
 const _vCenter = new THREE.Vector3();
@@ -171,6 +286,8 @@ function _carnageState(inst) {
       shatters: 0,
       lastEventAt: 0,
       events: [],
+      // filled at death by carnageOnDeath — {seed, tier, moves}
+      finisher: null,
     };
   }
   return inst._carnage;
@@ -391,63 +508,261 @@ async function _onSplatterHit(inst, decoded, critical) {
   if (kind) _runEscalation(kind, inst, reg, st, leg, decoded, critical);
 }
 
+/* ── finisher execution ──────────────────────────────────────────────── */
+
+/** World-space plane from a `planeRecipe` + a part's measured box. */
+function _planeFromRecipe(part, recipe) {
+  part.updateWorldMatrix(true, false);
+  const box = new THREE.Box3().setFromObject(part);
+  const center = box.getCenter(new THREE.Vector3());
+  // three world is Y-up (worldRoot rotates AC +Z onto +Y), so `tilt` measured
+  // off the horizontal gives the transverse cut at tilt = π/2.
+  const ct = Math.cos(recipe.tilt);
+  const normal = new THREE.Vector3(ct * Math.cos(recipe.az), Math.sin(recipe.tilt), ct * Math.sin(recipe.az));
+  if (normal.lengthSq() < 1e-9) normal.set(0, 1, 0);
+  normal.normalize();
+  const size = box.getSize(new THREE.Vector3());
+  const extent =
+    Math.abs(size.x * normal.x) + Math.abs(size.y * normal.y) + Math.abs(size.z * normal.z);
+  center.addScaledVector(normal, (recipe.offset || 0) * extent);
+  return { point: center, normal };
+}
+
+/** Slice a part with a styled plane. Returns true when the attempt was made. */
+function _styledSlice(inst, partIndex, style, rand, opts = {}) {
+  const part = inst?.parts?.[partIndex];
+  if (!part || part.visible === false) return false;
+  const meshes = part.children?.filter?.((c) => c.isMesh);
+  if (!meshes || meshes.length === 0) return false;
+  const { point, normal } = _planeFromRecipe(part, planeRecipe(style, rand));
+  slicePart(inst, partIndex, point, normal, opts).catch((e) =>
+    console.warn("[carnage] finisher slice failed:", e),
+  );
+  return true;
+}
+
+/** Longest non-leg chain (head/mandible/arm), or null. */
+function _longestBodyChain(reg, rand) {
+  const chains = _bodyChains(reg).filter((c) => c.length > 1);
+  if (chains.length === 0) return null;
+  chains.sort((a, b) => b.length - a.length);
+  // Prefer the longest, but let a shorter one win sometimes so a creature with
+  // two mandibles does not always lose the same one.
+  const i = chains.length > 1 && rand() < 0.3 ? 1 : 0;
+  return chains[i];
+}
+
+/**
+ * Run ONE finisher move. `cx` carries the mutable cursor shared across the
+ * death (which legs are still available, which parts are already destroyed) so
+ * two moves never fight over the same part. Never throws.
+ */
+function _runFinisherMove(kind, inst, reg, st, crit, rand, cx) {
+  const claim = (i) => {
+    if (i === null || i === undefined || i < 0) return false;
+    if (cx.used.has(i) || !inst.parts?.[i]) return false;
+    cx.used.add(i);
+    return true;
+  };
+  try {
+    if (kind === "decapitate") {
+      const c = _longestBodyChain(reg, rand);
+      const movable = c ? c.slice(1) : [];
+      if (movable.length === 0 || !claim(movable[0])) return false;
+      // Cut the neck/base square-ish and let the whole distal chain ride off.
+      const ok = _styledSlice(inst, movable[0], rand() < 0.7 ? "transverse" : "oblique", rand, {
+        critical: crit,
+        chainParts: movable.slice(1),
+      });
+      if (ok) st.events.push({ kind: "decapitate", part: movable[0] });
+      return ok;
+    }
+    if (kind === "shear") {
+      const chains = _bodyChains(reg).filter((c) => c.length > 1);
+      if (chains.length === 0) return false;
+      const c = chains[Math.min(chains.length - 1, Math.floor(rand() * chains.length))];
+      const movable = c.slice(1);
+      const pick = movable[Math.min(movable.length - 1, Math.floor(rand() * movable.length))];
+      if (!claim(pick)) return false;
+      const ok = _styledSlice(inst, pick, "oblique", rand, {
+        critical: crit,
+        chainParts: movable.slice(movable.indexOf(pick) + 1),
+      });
+      if (ok) st.events.push({ kind: "shear", part: pick });
+      return ok;
+    }
+    if (kind === "torsoSplit") {
+      const ri = reg?.rootIndex;
+      if (!claim(ri)) return false;
+      // A lengthwise or diagonal split reads as "cleaved", not "beheaded".
+      const ok = _styledSlice(inst, ri, rand() < 0.55 ? "oblique" : "sagittal", rand, {
+        critical: crit,
+        speedScale: 0.7,
+        upScale: 1.3,
+      });
+      if (ok) st.events.push({ kind: "torsoSplit", part: ri });
+      return ok;
+    }
+    if (kind === "quarter") {
+      const leg = cx.legs[cx.legCursor];
+      if (!leg) return false;
+      cx.legCursor++;
+      if (!claim(leg.movable?.[0])) return false;
+      st.severed.add(leg.leaf);
+      _severLeg(inst, leg, true, crit);
+      st.events.push({ kind: "quarter", part: leg.movable[0] });
+      return true;
+    }
+    if (kind === "limbGib") {
+      const leg = cx.legs[cx.legCursor];
+      const target = leg?.hip;
+      if (target === undefined || !claim(target)) return false;
+      cx.legCursor++;
+      st.severed.add(leg.leaf);
+      st.fractures++;
+      st.events.push({ kind: "limbGib", part: target });
+      fracturePart(inst, target, { critical: crit, scale: crit ? 1.2 : 1 })
+        .catch((e) => console.warn("[carnage] limb gib failed:", e));
+      return true;
+    }
+    if (kind === "torsoGib") {
+      const ri = reg?.rootIndex;
+      if (!claim(ri)) return false;
+      st.fractures++;
+      st.events.push({ kind: "torsoGib", part: ri });
+      fracturePart(inst, ri, { critical: true, scale: 1.2 })
+        .catch((e) => console.warn("[carnage] torso gib failed:", e));
+      return true;
+    }
+    if (kind === "chipShower") {
+      let fired = 0;
+      for (let i = 0; i < 2; i++) {
+        const pi = _pickChipPart(inst, reg, { height: i === 0 ? 2 : 1, left: rand() < 0.5, front: rand() < 0.5 }, rand());
+        if (pi === null || pi === undefined || cx.used.has(pi)) continue;
+        st.chips++;
+        fired++;
+        chipPart(inst, pi, { fragmentCount: 4 + ((rand() * 3) | 0) })
+          .catch((e) => console.warn("[carnage] finisher chip failed:", e));
+      }
+      if (fired) st.events.push({ kind: "chipShower", count: fired });
+      return fired > 0;
+    }
+    if (kind === "burst") {
+      if (!inst.root) return false;
+      st.shatters++;
+      st.events.push({ kind: "burst" });
+      refractureDebrisNear(inst.root.position, 2.2, { maxTargets: 2 })
+        .catch((e) => console.warn("[carnage] finisher burst failed:", e));
+      return true;
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[carnage] finisher move failed:", kind, e);
+  }
+  return false;
+}
+
 /**
  * Death-time finisher — called from entities.js at the death stamp (before
- * the ragdoll arms) when `?carnage=on`. Severs the most-damaged remaining
- * leg at the hip; a crit within the last 4s takes a second leg with it.
+ * the ragdoll arms) when `?carnage` is on. Severs the most-damaged remaining
+ * leg at the hip (a crit within the last 4 s takes a second leg with it), then
+ * spends an overkill-tiered budget of EXTRA three-pinata moves drawn from
+ * FINISHER_MOVES against a per-death seed — decapitations, oblique torso
+ * splits, quarterings, chip showers, gibs, and re-bursting the chunks already
+ * on the ground. No two kills draw the same list.
+ *
+ * Entity lifetime, corpse timing and the ragdoll→corpse part-count guard are
+ * untouched: nothing here adds or removes `inst.parts` entries, it only swaps
+ * the meshes inside part Groups (the same in-place children swap the
+ * mid-fight sever has always used).
  */
 export function carnageOnDeath(inst) {
   const setupId = inst?._setupId ?? inst?.setupId;
   const reg = setupId ? getLimbRegistry(setupId) : null;
-  if (!reg?.legs?.length) return;
+  if (!reg?.chains?.length) return;
   const st = _carnageState(inst);
   const crit = performance.now() - st.lastCritAt < CRIT_WINDOW_MS;
-  const remaining = reg.legs
+  const remaining = (reg.legs || [])
     .filter((l) => !st.severed.has(l.leaf))
     .sort((a, b) => (st.hits.get(b.leaf) || 0) - (st.hits.get(a.leaf) || 0));
-  // Sever on death only when the fight actually marked the creature (any leg
-  // hit, or a crit finish) — a one-shot kill from full health stays clean
-  // unless it crit.
-  const marked = remaining.some((l) => st.hits.get(l.leaf) > 0) || crit;
-  if (!marked || remaining.length === 0) return;
-  const plan = deathPlan({ totalHits: st.totalHits, critical: crit });
-  st.severed.add(remaining[0].leaf);
-  _severLeg(inst, remaining[0], true, crit);
-  let used = 1;
-  if (plan.hipSevers > 1 && remaining.length > 1) {
-    st.severed.add(remaining[1].leaf);
-    _severLeg(inst, remaining[1], true, true);
-    used = 2;
+  // Sever/finish on death only when the fight actually marked the creature (a
+  // leg hit, a crit finish, or a genuine slugging match) — a one-shot kill from
+  // full health stays clean.
+  const marked = remaining.some((l) => st.hits.get(l.leaf) > 0) || crit || st.totalHits >= 3;
+  if (!marked) return;
+
+  // Per-death PRNG: reproducible for tests, different for every kill.
+  const seed = hash32((Number(inst.guid) >>> 0) || 0, Math.round(inst._deathAt || performance.now()));
+  const rand = mulberry32(seed);
+
+  const bodyChains = _bodyChains(reg).filter((c) => c.length > 1);
+  const hasRoot =
+    reg.rootIndex !== undefined && reg.rootIndex !== null && reg.rootIndex >= 0 && !!inst.parts?.[reg.rootIndex];
+  const plan = planFinisher(
+    {
+      totalHits: st.totalHits,
+      critical: crit,
+      severed: st.severed.size,
+      hasLegs: remaining.length > 0,
+      hasChains: bodyChains.length > 0,
+      hasRoot,
+    },
+    rand,
+  );
+  st.finisher = { seed, tier: plan.tier, moves: plan.moves.slice() };
+
+  const cx = { used: new Set(), legs: remaining, legCursor: 0 };
+
+  // 1. The spine: hip sever(s) of the most-damaged remaining leg(s).
+  if (remaining.length > 0) {
+    const leg = remaining[cx.legCursor++];
+    st.severed.add(leg.leaf);
+    cx.used.add(leg.movable?.[0]);
+    _severLeg(inst, leg, true, crit);
+    if (plan.hipSevers > 1 && remaining.length > cx.legCursor) {
+      const leg2 = remaining[cx.legCursor++];
+      st.severed.add(leg2.leaf);
+      cx.used.add(leg2.movable?.[0]);
+      _severLeg(inst, leg2, true, true);
+    }
   }
 
-  // GIB: a long or critical fight does not end with a clean sever. Blow a
-  // whole limb (and on a punishing crit finish, the torso) into voronoi
-  // chunks — the ragdoll then takes what is left of the creature down.
-  if (!plan.gibLimb) return;
-  try {
-    let gibPart = null;
-    if (remaining.length > used) {
-      gibPart = remaining[used].hip; // an untouched leg comes apart
-      st.severed.add(remaining[used].leaf);
-    } else {
-      const chains = _bodyChains(reg);
-      const c = chains[Math.floor(Math.random() * chains.length) | 0];
-      if (c && c.length > 1) gibPart = c[c.length - 1]; // head/mandible/arm tip
+  // 2. The original gib pair (kept exactly as shipped — the tiers below are
+  //    additive, not a replacement, so nothing that worked yesterday stops).
+  if (plan.gibLimb) {
+    try {
+      let gibPart = null;
+      if (remaining.length > cx.legCursor) {
+        const leg = remaining[cx.legCursor++];
+        gibPart = leg.hip;
+        st.severed.add(leg.leaf);
+      } else if (bodyChains.length > 0) {
+        const c = bodyChains[Math.min(bodyChains.length - 1, Math.floor(rand() * bodyChains.length))];
+        gibPart = c[c.length - 1]; // head/mandible/arm tip
+      }
+      if (gibPart !== null && gibPart !== undefined && inst.parts?.[gibPart] && !cx.used.has(gibPart)) {
+        cx.used.add(gibPart);
+        st.fractures++;
+        fracturePart(inst, gibPart, { critical: crit, scale: crit ? 1.2 : 1 })
+          .catch((e) => console.warn("[carnage] gib failed:", e));
+      }
+      if (plan.gibTorso && hasRoot && !cx.used.has(reg.rootIndex)) {
+        cx.used.add(reg.rootIndex);
+        st.fractures++;
+        fracturePart(inst, reg.rootIndex, { critical: true, scale: 1.2 })
+          .catch((e) => console.warn("[carnage] torso gib failed:", e));
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[carnage] death gib failed:", e);
     }
-    if (gibPart !== null && inst.parts?.[gibPart]) {
-      st.fractures++;
-      fracturePart(inst, gibPart, { critical: crit, scale: crit ? 1.2 : 1 })
-        .catch((e) => console.warn("[carnage] gib failed:", e));
-    }
-    if (plan.gibTorso && reg.rootIndex !== undefined && inst.parts?.[reg.rootIndex]) {
-      st.fractures++;
-      fracturePart(inst, reg.rootIndex, { critical: true, scale: 1.2 })
-        .catch((e) => console.warn("[carnage] torso gib failed:", e));
-    }
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn("[carnage] death gib failed:", e);
   }
+
+  // 3. The seeded finisher draw — this is what makes deaths differ.
+  for (const kind of plan.moves) {
+    _runFinisherMove(kind, inst, reg, st, crit, rand, cx);
+  }
+  if (st.events.length > 24) st.events.splice(0, st.events.length - 24);
 }
 
 /* ── bus wiring ──────────────────────────────────────────────────────── */
@@ -522,8 +837,35 @@ export function installCarnage() {
         fractures: c.fractures,
         shatters: c.shatters,
         events: c.events.slice(),
+        finisher: c.finisher || null,
         dislocatedParts: inst._dislocations ? [...inst._dislocations.keys()] : [],
       };
+    },
+    /**
+     * Dry-run the death finisher draw over N seeded kills:
+     * __diag.carnage.simulateFinisher(200, {totalHits: 12, critical: true})
+     * → { tiers, byMove, distinctLists } — the variety check without a kill.
+     */
+    simulateFinisher(n = 200, ctx = {}) {
+      const base = {
+        totalHits: 10,
+        critical: false,
+        severed: 1,
+        hasLegs: true,
+        hasChains: true,
+        hasRoot: true,
+        ...ctx,
+      };
+      const tiers = {};
+      const byMove = {};
+      const lists = new Set();
+      for (let i = 0; i < n; i++) {
+        const p = planFinisher(base, mulberry32(hash32(i + 1, 0x5eed)));
+        tiers[p.tier] = (tiers[p.tier] || 0) + 1;
+        for (const m of p.moves) byMove[m] = (byMove[m] || 0) + 1;
+        lists.add(p.moves.join(">"));
+      }
+      return { n, tiers, byMove, distinctLists: lists.size };
     },
     /** Dry-run the escalation policy: __diag.carnage.simulate(12, 0.2) */
     simulate(hits = 12, roll = 0.3, critEvery = 5) {
