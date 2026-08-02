@@ -2773,6 +2773,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   //  * NO-DATA rungs (`WIELD_RUNGS_NO_DATA`) — the wasm `wielder_index` is
   //    still empty for this guid. 5 rungs ≈ 5.7 s; past that the entity
   //    genuinely wields nothing and further polling is waste.
+  //    EQUIP-3 (2026-08-02): the NO-DATA budget is now spent ONLY on the
+  //    LOCAL player. See `WIELD_NO_DATA_LOCAL_ONLY` below for the wire
+  //    evidence — a REMOTE wielder never needs it, and burning it was the
+  //    whole of the vis-test's "40 armed / 40 exhausted / 0 resolvedFirst".
   //  * PENDING-MOUNT rungs (the full array) — the snapshot DOES list held
   //    items but their child rigs are not mounted yet. Measured live
   //    2026-08-02 (fresh tailnet1 login, nullRender): the held "Acid Sabra"'s
@@ -2784,6 +2788,36 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   //    also isn't built (entities.js:6072-6075). ≈23.7 s covers it with room.
   const WIELD_RETRY_DELAYS_MS = [180, 420, 900, 1600, 2600, 4000, 6000, 8000];
   const WIELD_RUNGS_NO_DATA = 5;
+  // EQUIP-3 (2026-08-02) — spend the NO-DATA budget on the LOCAL player only.
+  // `?wieldNoDataLadder=all` restores the pre-fix behaviour (every
+  // wielder-capable spawn burns 5 rungs while its snapshot is empty).
+  //
+  // WHY a remote wielder never needs it (measured headless 2026-08-02,
+  // Holtburg, probe account, `?nullRender=1`): a remote creature's held item
+  // arrives as its OWN `ObjectCreate` carrying `PhysicsDesc.Parent`
+  // (ACE `WorldObject_Networking.cs:358-362`, gated by
+  // `Player_Tracking.cs:116 TrackEquippedObject`). The wasm turns that single
+  // message into BOTH a `KIND_SPAWN` and the `kind=7` ATTACH
+  // (`src/lib.rs` `wielded_spawn_on && data.parent_id`), mirroring retail's
+  // `unpack_physics_desc` → `set_parent` (acclient.c:322346 / :330260).
+  // `attachChildToParent` parks that request in `_pendingAttach` until both
+  // rigs exist and `_flushPendingAttach` lands it on the spawn commit — no
+  // polling involved. Live trace of every held child in view (own char,
+  // "+Tester2", and NPC "Rand, Game Hunter"): wire kinds `1:<setup>:<lb>` +
+  // `7:<wielder>:0`, all ending `_attachedParentGuid === wielder`, with
+  // `resolvedFirst 0 / resolvedRetry 3` (the 3 were local). Meanwhile the
+  // NO-DATA ladder scored `armed 30 / exhausted 27` — 27 ladders × 5 rungs of
+  // pure waste (154 timer wakeups + rAF flushes) on one town login.
+  //
+  // The LOCAL player keeps the budget: its equipment `ObjectCreate`s feed the
+  // inventory snapshot on a different pass, and the `playerInventoryChanged`
+  // kick below needs a LIVE ladder to have anything to re-mark.
+  const WIELD_NO_DATA_LOCAL_ONLY = (() => {
+    try {
+      return new URLSearchParams(window.location.search)
+        .get("wieldNoDataLadder")?.toLowerCase() !== "all";
+    } catch (_) { return true; }
+  })();
   const wieldedRetry = new Map(); // guid → next index into WIELD_RETRY_DELAYS_MS
   const wieldRetryStats = {
     armed: 0,        // spawns that opened a retry ladder
@@ -2792,7 +2826,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     resolvedRetry: 0, // wielded items found only after a retry/inventory kick
     exhausted: 0,    // ladders that ran out (entity wields nothing — benign)
     invKicks: 0,     // playerInventoryChanged re-marks
+    noDataRetired: 0, // EQUIP-3: remote ladders retired at rung 0 (no snapshot)
   };
+  /** EQUIP-3 — is `guid` the local player rig? (defensive; 0 when unknown). */
+  function _isLocalWielder(guid) {
+    try {
+      const lpg = (entityManager._localPlayerGuid?.() >>> 0) || 0;
+      return lpg !== 0 && lpg === (guid >>> 0);
+    } catch (_) { return false; }
+  }
   function _armWieldRetry(guid) {
     const g = guid >>> 0;
     if (!g || wieldedRetry.has(g)) return;
@@ -2899,6 +2941,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         } else if (heldSeen > 0 && heldAttached === heldSeen) {
           wieldedRetry.delete(wielderGuid >>> 0);
           wieldRetryStats.resolvedRetry++;
+        } else if (
+          items.length === 0 &&
+          WIELD_NO_DATA_LOCAL_ONLY &&
+          !_isLocalWielder(wielderGuid)
+        ) {
+          // EQUIP-3 (2026-08-02): a REMOTE wielder with an empty snapshot has
+          // nothing to poll for — its held items ride their own ObjectCreate's
+          // PhysicsDesc parent (KIND_SPAWN + kind=7 ATTACH → `_pendingAttach`
+          // → `_flushPendingAttach` on the spawn commit), which needs no
+          // ladder. Retire at rung 0 instead of burning 5 rungs. See the
+          // `WIELD_NO_DATA_LOCAL_ONLY` block for the live wire trace.
+          wieldedRetry.delete(wielderGuid >>> 0);
+          wieldRetryStats.noDataRetired++;
         } else {
           // Empty snapshot ⇒ short NO-DATA budget; held-but-unmounted ⇒ the
           // full budget (the child rig can be tens of seconds behind).
@@ -4997,7 +5052,22 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             // ToneMappingEffect does it) + bumped exposure makes the
             // raw values land in AGX's input range.
             renderer.toneMapping = THREE.NoToneMapping;
-            renderer.toneMappingExposure = 5;
+            // `?exposure=N` (2026-08-02, visual-quality wave) — numeric pin for
+            // the composer exposure so a look A/B is reproducible from the URL
+            // instead of only through the live `__setExposure(v)` handle.
+            // Absent / non-numeric ⇒ 5, the calibrated default. Bounded [0.1,20]
+            // so a typo can't black or blow the frame.
+            {
+              let _exp = 5;
+              try {
+                const raw = new URLSearchParams(window.location.search || "").get("exposure");
+                if (raw != null && raw !== "") {
+                  const v = Number(raw);
+                  if (Number.isFinite(v)) _exp = Math.min(20, Math.max(0.1, v));
+                }
+              } catch (_) { /* no window.location in the Node harness */ }
+              renderer.toneMappingExposure = _exp;
+            }
 
             // Sky-K.6 follow-on — bind real Bruneton tables on the
             // cloud material. Replaces the 5 DayGroup uniforms with

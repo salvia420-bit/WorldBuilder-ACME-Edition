@@ -2596,6 +2596,40 @@ function _disposeMaterialIfOwned(mat) {
   } catch (_) {}
 }
 
+/**
+ * EQUIP-3 (2026-08-02) — is this Object3D a WIELDED CHILD's root parented
+ * into one of our part Groups (as opposed to a surface Mesh the part owns)?
+ *
+ * THE BUG THIS EXISTS FOR: both part-content swap sites — the appearance
+ * hot-swap (`_applyAppearanceHotSwap`) and the ReplaceObject animation hook —
+ * cleared `partGroup.children` wholesale before rebuilding the part's meshes.
+ * A held weapon/shield mounted on that part (`attachChildToParent` parents the
+ * child's ROOT under `parts[holdingLocation.partId]`) was one of those
+ * children, so it was removed from the scene graph and never re-added: its
+ * `_attachedParentGuid` still named the wielder, every `_lastAttach` /
+ * `_replayLastAttach` / retry-ladder "is it mounted?" check therefore said YES,
+ * and nothing ever re-mounted it. The orphaned root keeps only its HAND-LOCAL
+ * transform (~0.03 m), i.e. it evaluates at AC map origin — tens of km from
+ * the player — so the item reads as ABSENT (or a sub-pixel sliver) from every
+ * camera angle while every diagnostic reports it correctly equipped.
+ *
+ * Traced live 2026-08-02 (headless, own char, "Shield of Isin Dule" wielded
+ * mid-session): `Object3D.remove(entity_80000f39)` from `part_11`, stack
+ * `_applyAppearanceHotSwap` ← `applyAppearance` — fired ~8 s after a clean
+ * mount, off the `GameMessageObjDescEvent(creature)` ACE broadcasts on EVERY
+ * equip (`Creature_Equipment.cs:365`). The despawn+respawn arm of
+ * `applyAppearance` was already correct (it detaches + re-attaches around the
+ * rebuild); only the hot-swap arm — which is the DEFAULT (`?clothingHotSwap`)
+ * — had the hole.
+ *
+ * Retail never had it: `CPhysicsPart::SetPart` swaps the part's gfx contents
+ * in place, while children live in the separate `CPhysicsObj::children`
+ * CHILDLIST (`add_child` acclient.c:316729) that part rebuilds never touch.
+ */
+function _isAttachedChildNode(obj) {
+  return obj?.userData?.__attachedChildOf != null;
+}
+
 // `_disposeMeshChildren` walks the rig with `.traverse()` and frees
 // per-Mesh geometry + materials. FU3 (2026-05-18) — both dispose paths
 // are now gated by `userData.__disposable === true`: geometry via an
@@ -3729,7 +3763,31 @@ export class EntityManager {
     const lodOriginalSetup = setupId;
     let lodSubstitute = 0;
     let lodPartSwap = 0;
-    const lodFetch = this.wasmExports?.fetch_entity_degrade_for_distance;
+    // EQUIP-3 (2026-08-02): a WIELDED CHILD has NO world pose of its own —
+    // ACE omits `PhysicsDescriptionFlag.Position` for anything carrying
+    // `Parent` (WorldObject_Networking.cs:358-362), so the wasm surfaces
+    // `landblockId = 0, x = y = z = 0` (verified on the wire: the held
+    // "Quarrel" / "Paradox-touched Olthoi Spear" KIND_SPAWNs arrive as
+    // `1:<setup>:0`). The band lookup below would then measure the camera
+    // against AC map origin (0,0) — tens of km for any real position — and
+    // freeze the entity's LOD on that garbage distance for its whole life
+    // (the substitution is spawn-time only). Today every retail band is a
+    // finite window (GfxObjInfo min/ideal/max, typically ≤100 m — see
+    // degrade_info.rs), so the miss returns 0 and the full-detail mesh
+    // survives by luck; 27 of 35 sampled weapon/shield GfxObjs DO carry a
+    // degrade chain (e.g. "Round Shield" 0x02000162 → 0x110002AF), so a
+    // single open-ended band would silently swap a held weapon to its
+    // lowest-detail stand-in forever. Skip the lookup outright — a parented
+    // object has no distance of its own (retail resolves degrade from the
+    // object's real position, and a child's is its wielder's). Also saves an
+    // async wasm round-trip + a poisoned `lodPrewarm` memo entry per held
+    // item.
+    const lodPoseless =
+      ((meta.landblockId ?? 0) >>> 0) === 0 &&
+      !(meta.x || meta.y || meta.z);
+    const lodFetch = lodPoseless
+      ? null
+      : this.wasmExports?.fetch_entity_degrade_for_distance;
     if (typeof lodFetch === "function") {
       try {
         const cameraPos = window.liveScene3d?.camera?.position;
@@ -6000,6 +6058,33 @@ export class EntityManager {
    * Ordering-safe: if either rig isn't spawned yet the request is queued in
    * `_pendingAttach` and retried from `spawn()` via `_flushPendingAttach`.
    */
+  /**
+   * EQUIP-3 (2026-08-02) — park an attach request that cannot be satisfied
+   * right now (a rig is missing, or vanished across `attachChildToParent`'s
+   * holding-location await). Extracted from the entry-point guard so BOTH
+   * "not built yet" and "torn down mid-resolve" take the identical route; the
+   * post-await case used to just `return`, permanently losing the request.
+   *
+   * A8-M4 (2026-06-12): under `?preCreateBuffer=on` park in the generic
+   * buffer instead, keyed by CHILD guid (the parent-side unblock is the
+   * `_drainPreCreate` scan, mirroring `_flushPendingAttach`). `dedupeKind`
+   * preserves the legacy Map's last-write-wins: two parked attaches would
+   * race their async holding-location resolves on drain.
+   */
+  _parkAttach(childGuid, parentGuid, location, placement) {
+    const cGuid = childGuid >>> 0;
+    const req = {
+      parentGuid: parentGuid >>> 0,
+      location: location >>> 0,
+      placement: placement >>> 0,
+    };
+    if (this._preCreateBufferOn) {
+      this._preCreate.enqueue(cGuid, "attach", req, { dedupeKind: true });
+      return;
+    }
+    this._pendingAttach.set(cGuid, req);
+  }
+
   async attachChildToParent(childGuid, parentGuid, location, placement) {
     const cGuid = childGuid >>> 0;
     const pGuid = parentGuid >>> 0;
@@ -6011,24 +6096,7 @@ export class EntityManager {
     const parentInst = this.entityMap.get(pGuid);
     if (!childInst || !parentInst) {
       // One (or both) rigs not built yet — remember and retry on spawn.
-      // A8-M4 (2026-06-12): under `?preCreateBuffer=on` park in the generic
-      // buffer instead, keyed by CHILD guid (the parent-side unblock is the
-      // `_drainPreCreate` scan, mirroring `_flushPendingAttach`).
-      // `dedupeKind` preserves the legacy Map's last-write-wins: two parked
-      // attaches would race their async holding-location resolves on drain.
-      if (this._preCreateBufferOn) {
-        this._preCreate.enqueue(cGuid, "attach", {
-          parentGuid: pGuid,
-          location: location >>> 0,
-          placement: placement >>> 0,
-        }, { dedupeKind: true });
-        return;
-      }
-      this._pendingAttach.set(cGuid, {
-        parentGuid: pGuid,
-        location: location >>> 0,
-        placement: placement >>> 0,
-      });
+      this._parkAttach(cGuid, pGuid, location, placement);
       return;
     }
     const setupId =
@@ -6075,9 +6143,26 @@ export class EntityManager {
       }
     }
     // Re-check liveness after the await — either rig may have despawned.
+    // EQUIP-3 (2026-08-02): RE-PARK instead of dropping. Pre-fix this bare
+    // `return` silently consumed a server-authoritative attach whenever a rig
+    // was torn down and rebuilt across the holding-location await (an
+    // applyAppearance despawn+respawn of the wielder on the very ObjDescEvent
+    // ACE broadcasts alongside the equip — Creature_Equipment.cs:365 — hits
+    // this window every single time). Nothing re-issued it once the wielder's
+    // retry ladder had retired, so the held item stayed unmounted for the rest
+    // of the session (it renders at its pose-less spawn origin, i.e. tens of
+    // km from the player = absent / a sub-pixel sliver). Retail rebuilds the
+    // link from the child's own PhysicsDesc on EVERY CreateObject
+    // (`unpack_physics_desc` acclient.c:322346 → `set_parent` :330260), so a
+    // dropped request is never retail-faithful; parking makes the surviving
+    // rig's next spawn commit (`_flushPendingAttach` / `_drainPreCreate`)
+    // land it.
     const c = this.entityMap.get(cGuid);
     const p = this.entityMap.get(pGuid);
-    if (!c || !c.root || !p || !p.root) return;
+    if (!c || !c.root || !p || !p.root) {
+      this._parkAttach(cGuid, pGuid, location, placement);
+      return;
+    }
     // Mount point: the wielder part the holding location names, else root.
     let mount = p.root;
     if (loc && p.parts && loc.partId >= 0 && loc.partId < p.parts.length) {
@@ -6085,6 +6170,12 @@ export class EntityManager {
     }
     if (c.root.parent) c.root.parent.remove(c.root);
     mount.add(c.root);
+    // EQUIP-3 (2026-08-02) — brand the mounted root so the two part-content
+    // swap sites (`_applyAppearanceHotSwap` and the ReplaceObject anim hook)
+    // can tell "a held item parented here" from "a surface Mesh I own". Both
+    // used to clear `partGroup.children` wholesale, which silently ORPHANED
+    // the wielded child (see `_isAttachedChildNode`).
+    c.root.userData.__attachedChildOf = pGuid;
     if (loc) {
       c.root.position.set(loc.ox, loc.oy, loc.oz);
       c.root.quaternion.copy(acQuatToThree(loc.qw, loc.qx, loc.qy, loc.qz));
@@ -6198,6 +6289,8 @@ export class EntityManager {
       if (p && p._attachedChildren) p._attachedChildren.delete(cGuid);
     }
     if (c.root.parent) c.root.parent.remove(c.root);
+    // EQUIP-3: clear the mount brand (see `attachChildToParent`).
+    if (c.root.userData) delete c.root.userData.__attachedChildOf;
     if (this.scene3d?.entitiesGroup) this.scene3d.entitiesGroup.add(c.root);
     // visibility intentionally left at its current value (true) so ground-
     // drops render the item at its new position. ObjectDelete reaches the
@@ -10706,9 +10799,13 @@ export class EntityManager {
     // new ones built from newPartGroups[p].
     for (let p = 0; p < inst.parts.length; p += 1) {
       const partGroup = inst.parts[p];
-      // remove existing child meshes
+      // remove existing child meshes — EQUIP-3 (2026-08-02): but NEVER a
+      // wielded child's root that happens to be mounted on this part (see
+      // `_isAttachedChildNode`; retail's `CPhysicsPart::SetPart` likewise
+      // rebuilds only the part's own gfx, never the CHILDLIST).
       const oldChildren = partGroup.children.slice();
       for (const child of oldChildren) {
+        if (_isAttachedChildNode(child)) continue;
         partGroup.remove(child);
       }
       const conv = newPartGroups[p];
@@ -16264,6 +16361,11 @@ export class EntityManager {
     // entity's own dispose() doesn't double-free (idempotent, but tidy).
     const oldChildren = partGroup.children.slice();
     for (const child of oldChildren) {
+      // EQUIP-3 (2026-08-02): a ReplaceObject hook swaps THIS part's gfx —
+      // it must not evict a wielded child mounted on the same part (a
+      // right-hand ReplaceObject during a combat/emote clip would otherwise
+      // orphan the weapon mid-swing). See `_isAttachedChildNode`.
+      if (_isAttachedChildNode(child)) continue;
       partGroup.remove(child);
       const og = child.geometry;
       if (og && og.userData?.__disposable === true) {
