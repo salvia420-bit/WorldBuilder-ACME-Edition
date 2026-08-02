@@ -4022,6 +4022,247 @@ fn outdoor_steep_cliff_blocks_climb_only_with_walkable_gate() {
 }
 
 // ---------------------------------------------------------------------------
+// CLIFF-UP (2026-08-02) — "the player slides UP a steep cliff". Sliding DOWN a
+// non-walkable face is correct; pushing DIAGONALLY into one must never gain Z.
+// Retail: the slide response projects the blocked displacement onto the
+// contact EDGE `collision_normal × contact_plane.N`
+// (`CSphere::slide_sphere`, acclient.c:358951-358981) — with a walkable
+// contact plane under the feet that edge is (near-)horizontal, so a slide
+// along a cliff face is a CONTOUR walk, never a climb. Any Z gain means some
+// arm bypassed the edge projection and used a bare plane projection
+// (`residual − N·(residual·N)`), whose Z component is positive whenever a
+// horizontal push meets an overhanging-free steep face.
+// ---------------------------------------------------------------------------
+
+/// Drive `ticks` 100 ms run-forward slices across an arbitrary LB-(0,0)
+/// heightmap from `start_xy` at `heading_rad`. Returns
+/// `(start_coords, after_coords)` in landblock-local coords.
+fn run_terrain_scenario(
+    guid: Guid,
+    ticks: u32,
+    heights: [f32; 81],
+    start_xy: (f32, f32),
+    heading_rad: f32,
+) -> (Vector3, Vector3) {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    world.populate_terrain_heights_scene_resident(0, heights);
+    let (start_x, start_y) = start_xy;
+    let start_z = world
+        .terrain_height_at(start_x, start_y)
+        .expect("terrain populated");
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0x0000_0001),
+        coords: Vector3::new(start_x, start_y, start_z),
+        rotation: Quaternion::from_heading(heading_rad),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    let mut movement = MovementSystem::new();
+    movement.last_move_was_autonomous = true;
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    for _ in 0..ticks {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+    }
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    (start_pose.coords, after.coords)
+}
+
+/// Uniform ~60° face rising toward −X (the [`run_uphill_cliff`] terrain), with
+/// the run heading as a parameter so the approach can be oblique.
+fn run_cliff_at_heading(guid: Guid, ticks: u32, heading_rad: f32) -> (Vector3, Vector3) {
+    let mut steep = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            steep[vx * 9 + vy] = (8 - vx) as f32 * 42.0;
+        }
+    }
+    run_terrain_scenario(guid, ticks, steep, (96.0, 96.0), heading_rad)
+}
+
+/// FLAT apron (vx ≤ 4, z = 0) meeting a ~60° face that rises toward +X
+/// (`z = (vx−4)·42` for vx ≥ 5). The player starts on the WALKABLE apron —
+/// i.e. `ON_WALKABLE` is set and a valid contact plane exists, which is the
+/// configuration retail's `slide_sphere` contact-edge projection depends on
+/// (`acclient.c:358951`). Heading 180° runs straight at the face; ±offsets
+/// make the approach oblique.
+fn run_apron_then_cliff(guid: Guid, ticks: u32, heading_rad: f32) -> (Vector3, Vector3) {
+    let mut heights = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            heights[vx * 9 + vy] = ((vx as i32 - 4).max(0) as f32) * 42.0;
+        }
+    }
+    run_terrain_scenario(guid, ticks, heights, (90.0, 96.0), heading_rad)
+}
+
+/// A diagonal (oblique) run into a non-walkable ~60° face must skid along the
+/// contour, never ratchet UP the face. Retail's slide is the contact-edge
+/// projection (`acclient.c:358960-358981`), which is horizontal under a
+/// walkable contact plane.
+#[test]
+fn diagonal_push_into_steep_cliff_never_gains_height() {
+    for (i, deg) in [10.0_f32, 20.0, 30.0, 45.0, 60.0, 75.0, 80.0]
+        .into_iter()
+        .enumerate()
+    {
+        for sign in [1.0_f32, -1.0] {
+            let heading = (deg * sign).to_radians();
+            let (start, after) =
+                run_cliff_at_heading(Guid(0x5000_1000 + i as u32 * 2), 40, heading);
+            eprintln!(
+                "heading {:+6.1}°: start=({:.2},{:.2},{:.2}) after=({:.2},{:.2},{:.2}) dz={:+.3}",
+                deg * sign,
+                start.x,
+                start.y,
+                start.z,
+                after.x,
+                after.y,
+                after.z,
+                after.z - start.z
+            );
+            assert!(
+                after.z <= start.z + 0.05,
+                "oblique push into a non-walkable cliff must not gain height \
+                 (heading {:+.1}°): start z={:.3} after z={:.3} (dz={:+.3})",
+                deg * sign,
+                start.z,
+                after.z,
+                after.z - start.z
+            );
+        }
+    }
+}
+
+/// Same invariant, but from a WALKABLE apron at the base of the face — the
+/// grounded / `ON_WALKABLE` configuration a player is actually in when they
+/// run at a cliff. Head-on (180°) and oblique approaches must both stay at
+/// the apron height.
+#[test]
+fn push_from_apron_into_steep_cliff_never_gains_height() {
+    for (i, off) in [0.0_f32, 10.0, 20.0, 30.0, 45.0, 60.0, 75.0, 85.0]
+        .into_iter()
+        .enumerate()
+    {
+        for sign in [1.0_f32, -1.0] {
+            let heading = (180.0 + off * sign).to_radians();
+            let (start, after) =
+                run_terrain_scenario_apron(Guid(0x5000_2000 + i as u32 * 2), 60, heading);
+            eprintln!(
+                "apron heading {:+7.1}°: start=({:.2},{:.2},{:.2}) after=({:.2},{:.2},{:.2}) dz={:+.3}",
+                180.0 + off * sign,
+                start.x,
+                start.y,
+                start.z,
+                after.x,
+                after.y,
+                after.z,
+                after.z - start.z
+            );
+            assert!(
+                after.z <= start.z + 0.05,
+                "push from the apron into a non-walkable cliff must not gain \
+                 height (heading {:+.1}°): start z={:.3} after z={:.3} (dz={:+.3})",
+                180.0 + off * sign,
+                start.z,
+                after.z,
+                after.z - start.z
+            );
+        }
+    }
+}
+
+fn run_terrain_scenario_apron(guid: Guid, ticks: u32, heading_rad: f32) -> (Vector3, Vector3) {
+    run_apron_then_cliff(guid, ticks, heading_rad)
+}
+
+/// CLIFF-UP / COL-17 regression — the JUMP ratchet up a non-walkable face.
+///
+/// Retail keeps two thresholds apart: `z_for_landing` (0.0871557) says whether
+/// a falling mover may STOP FALLING on a face, `floor_z` (0.66417415) says
+/// whether it is ON WALKABLE ground (`CPhysicsObj::SetPositionInternal`
+/// recomputes it every frame, acclient.c:322586-322604) — and
+/// `CMotionInterp::jump_is_allowed` needs CONTACT *and* ON_WALKABLE
+/// (`(v7 & 1) && v7 & 2`, acclient.c:343941). Collapsing the two lets a landing
+/// on a 60° face plant the mover, which re-arms the jump and ratchets it up the
+/// whole cliff.
+///
+/// Pinned for BOTH outdoor solver arms: `scene_resident = true` routes through
+/// the faithful `CTransition` driver (the live default), `false` routes through
+/// the `resolve_floor_for_step` heightfield fallback (live under
+/// `?faithfulOutdoor=off` and while a landblock's terrain is still streaming).
+fn cliff_jump_ratchet_probe(guid: Guid, heading_deg: f32, scene_resident: bool) -> (f32, f32) {
+    let mut heights = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            heights[vx * 9 + vy] = ((vx as i32 - 4).max(0) as f32) * 42.0;
+        }
+    }
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    if scene_resident {
+        world.populate_terrain_heights_scene_resident(0, heights);
+    } else {
+        world.populate_terrain_heights(0, heights);
+    }
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0x0000_0001),
+        coords: Vector3::new(90.0, 96.0, 0.0),
+        rotation: Quaternion::from_heading(heading_deg.to_radians()),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    let mut movement = MovementSystem::new();
+    movement.last_move_was_autonomous = true;
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    let mut max_z = 0.0_f32;
+    for t in 0..200 {
+        if t >= 20 && !world.player.is_airborne {
+            world.player.begin_jump(5.0);
+        }
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(50));
+        if let Some(p) = world.local_player_runtime_pose() {
+            max_z = max_z.max(p.coords.z);
+        }
+    }
+    let after = world.local_player_runtime_pose().expect("pose");
+    (max_z, after.coords.z)
+}
+
+#[test]
+fn jump_spam_into_steep_cliff_never_ratchets_up() {
+    // A 5 m/s launch peaks at ~1.28 m over flat ground; the apex over the face
+    // base tops out near 1.6 m. Anything materially above that is a ratchet UP
+    // the face, not a jump. (Pre-fix the fallback arm reached z = 27 m.)
+    const MAX_LEGIT_Z: f32 = 3.0;
+    for (i, deg) in [180.0_f32, 205.0, 230.0].into_iter().enumerate() {
+        for (j, resident) in [true, false].into_iter().enumerate() {
+            let guid = Guid(0x5000_3000 + (i as u32 * 4) + j as u32);
+            let (max_z, after_z) = cliff_jump_ratchet_probe(guid, deg, resident);
+            eprintln!(
+                "jump-spam heading {deg:+6.1}° scene_resident={resident}: max_z={max_z:.2} after_z={after_z:.2}"
+            );
+            assert!(
+                max_z < MAX_LEGIT_Z,
+                "jump-spam into a non-walkable cliff must not ratchet up the face \
+                 (heading {deg:+.1}°, scene_resident={resident}): max_z={max_z:.3} \
+                 after_z={after_z:.3}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // F4-4 (bughunt 2026-06-09) — deep-water walk-block. The outdoor solver snapped
 // Z to the lakebed and never read terrain type, so players ran across water
 // floors. `USE_WATER_COLLISION` refuses a grounded step into a fully-water

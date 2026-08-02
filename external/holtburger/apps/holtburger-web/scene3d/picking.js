@@ -115,6 +115,82 @@ const CAST_RANGE_WARN = (() => {
   } catch { return false; }
 })();
 
+// SEL-1 (2026-08-02) — RETAIL select-then-act on a world left-click.
+//
+// Retail's whole world-click semantics live in one function,
+// `UIElement_SmartBoxWrapper::RecvNotice_SmartBoxObjectFound`
+// (acclient.c:275631). `MouseDown` with the left button stamps
+// `m_SearchReason = sr_Select (2)` (acclient.c:275463; the enum is
+// acclient.h:6789), and the dispatcher's only action for it is
+// `ACCWeenieObject::SetSelectedObject(iid, 0)` (acclient.c:275684-275692) —
+// no packet is sent, selection is purely client-side. Attacks come from a
+// SEPARATE input: `ClientCombatSystem::HandleCombatAction` (acclient.c:409997)
+// maps the Hi/Med/Lo attack actions, and `ExecuteAttack` (acclient.c:408626)
+// fires at `GetAttackTarget()`, which literally reads
+// `ACCWeenieObject::selectedID` (acclient.c:407570). Casting is the same
+// shape: `HandleMagicAction` (acclient.c:407451) binds
+// `SendNotice_CastCurrentSpell` (0x10000060) and the 12 quickslots, and
+// `ClientMagicSystem::CastSpell` (acclient.c:404671) reads `selectedID`
+// (acclient.c:404757), printing "You must select a suitable target before
+// casting this spell" when it is 0. The behaviour is IDENTICAL in peace and
+// combat mode — the only mode-gated world-click branch in the whole
+// dispatcher is DRAG (`combatMode == 1`, acclient.c:275727).
+//
+// Our melee/ranged branch already matched this (click = target only, fire via
+// the combat-bar Hi/Med/Lo → `__fireAttackOnTarget`). The MAGIC branch did
+// not: with a spell armed, a single left-click on a creature fired
+// `castTargetedSpell` immediately. That is the "single click starts casting"
+// report, and it is also the ONLY cast path that runs the local
+// `turnToFaceThenAct` pre-turn — see the ROT-1 note there.
+//
+// DEFAULT retail (select-only). `?clickToCast=on` restores the legacy
+// click-to-release-armed-spell behaviour (strict `=on`, so absence is the
+// retail path). The armed spell is still fired from the spell bar / hotbar,
+// which already resolve the target from `entityManager.getSelectedTarget()`
+// (plugins/combat-bar.js, plugins/hotbar.js) — i.e. exactly retail's
+// select-then-cast flow.
+const CLICK_TO_CAST = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("clickToCast") === "on";
+  } catch { return false; }
+})();
+
+// ROT-1 (2026-08-02) — turn-arbitration diagnostics for the cast/shoot
+// rotation glitch. Surfaced at `window.__diag.picking`; always counted (the
+// counters are free) so a live session can be interrogated without a reload.
+//   faceLoopStarts      — turnToFaceThenAct rAF loops entered
+//   faceLoopPreempted   — a loop cancelled because a NEWER one started
+//     (>0 proves two local turn drivers overlapped)
+//   faceLoopSteps       — setMovementInput(0,0,±1) turn commands issued
+//   faceLoopDone        — loops that reached the dead-zone / timeout
+//   faceLoopTimeouts    — loops that ended on FACE_TURN_TIMEOUT_MS (a bearing
+//     the local drive could not close — the signature of the server turning
+//     the same body underneath us)
+//   localTurnDirectivesDropped — server KIND_TURN updates addressed to the
+//     LOCAL guid that loop.js `_armTurn` discarded. Retail APPLIES these:
+//     `CPhysics::SetObjectMovement` (acclient.c:311149) drops a movement blob
+//     for the local player ONLY when it is flagged autonomous; a
+//     NON-autonomous one (which is what ACE's `TurnToObject` broadcast is —
+//     `Creature_Navigation.cs:127` → `EnqueueBroadcastMotion` →
+//     `EnqueueBroadcast(sendSelf: true)`) IS unpacked, and the dispatcher then
+//     calls `CommandInterpreter::LoseControlToServer()` (acclient.c:392828).
+const pickDiag = {
+  faceLoopStarts: 0,
+  faceLoopPreempted: 0,
+  faceLoopSteps: 0,
+  faceLoopDone: 0,
+  faceLoopTimeouts: 0,
+  localTurnDirectivesDropped: 0,
+  clickCastSuppressed: 0,
+};
+try {
+  if (typeof window !== "undefined") {
+    window.__diag = window.__diag || {};
+    window.__diag.picking = pickDiag;
+  }
+} catch (_) { /* diag is never load-bearing */ }
+
 // FU-3 (2026-06-11) — server-timed swing. DEFAULT-ON (`!== "off"` reader;
 // `?serverSwing=off` restores the optimistic click-swing). Retail plays NO
 // local swing on attack input: `ClientCombatSystem::ExecuteAttack`
@@ -243,6 +319,17 @@ function emitActionRejected(message) {
   try {
     window.__pluginClient?.events?.emit?.("clientActionRejected", { message });
   } catch (_) { /* never block input handling on feedback */ }
+}
+
+// SEL-1 (2026-08-02) — one-shot discoverability hint the FIRST time a click
+// with an armed spell only selects. Retail printed nothing here, but the
+// legacy client-cast behaviour was long-standing, so a single toast per
+// session explains where the cast moved to. Never repeats.
+let selectThenCastHinted = false;
+function maybeHintSelectThenCast() {
+  if (selectThenCastHinted) return;
+  selectThenCastHinted = true;
+  emitActionRejected("Target selected — cast from your spell bar.");
 }
 
 // WS05 (C4-rangewarn, 2026-07-12) — de-dup state for the pre-cast range
@@ -546,6 +633,34 @@ export function setupClickPicking({
     } catch (_) { return false; }
   }
 
+  // ROT-1 (2026-08-02) — SINGLE-FLIGHT token for the local face-turn loop.
+  //
+  // `turnToFaceThenAct` drives the rig with `setMovementInput(0, 0, ±1)` from
+  // a self-scheduling rAF loop and ends with `setMovementInput(0, 0, 0)`.
+  // Nothing used to stop TWO loops running at once, and the click-cast path
+  // starts two by construction: `CAST_FACE_TARGET` before the send, then
+  // `CAST_REFACE` again from `playCastSequence`'s `onBeforeCastGesture`.
+  // A second click (or a click during a windup) adds more. Interleaved, each
+  // loop's neutral stop cancels the other's turn command and each loop's turn
+  // command revives the other's just-stopped drive, so the rig ratchets back
+  // and forth — and an abandoned loop can leave a turn command LATCHED (the
+  // "spin"). `cancelClientMove()` only fires on a fresh pointerdown, and it
+  // stops the stick/pursuit, never this loop.
+  //
+  // This is also the ONLY local turn driver in the client, and it is only
+  // reachable from the CLICK path — the spell-bar / hotbar cast paths
+  // (plugins/combat-bar.js, plugins/hotbar.js) never call it. That is exactly
+  // why the user reports the glitch as "more frequent when the target was
+  // acquired by clicking".
+  //
+  // The token makes the loop single-flight: a new loop preempts the old one,
+  // and the old one exits WITHOUT issuing its neutral stop (the new loop owns
+  // the drive now, so stopping would stomp it — the P16-H1 ManualSet hazard).
+  let faceLoopToken = 0;
+  function cancelFaceLoop() {
+    faceLoopToken++;
+  }
+
   function turnToFaceThenAct(targetGuid, act, enabled) {
     if (!enabled) {
       act();
@@ -573,7 +688,14 @@ export function setupClickPicking({
     // is the one that actually rotates.)
     if (typeof sessionHandle.setMovementInput !== "function") { act(); return; }
     const startMs = performance.now();
+    // ROT-1 single-flight: claim the drive. Any loop still running now sees a
+    // stale token on its next frame and bails without stopping the drive.
+    if (faceLoopToken !== 0) pickDiag.faceLoopPreempted++;
+    const myToken = ++faceLoopToken;
+    pickDiag.faceLoopStarts++;
     const step = () => {
+      // ROT-1: preempted by a newer loop — leave the drive to the new owner.
+      if (myToken !== faceLoopToken) return;
       const targetAc = entityAcPosition(liveScene3d.entityManager, targetGuid);
       const pose = playerWorldPose(sessionHandle);
       if (!targetAc || !pose) {
@@ -592,10 +714,15 @@ export function setupClickPicking({
         turnDelta, FACE_DEADZONE_RAD,
         performance.now() - startMs, FACE_TURN_TIMEOUT_MS);
       if (gate.done) {
+        pickDiag.faceLoopDone++;
+        if (performance.now() - startMs >= FACE_TURN_TIMEOUT_MS) {
+          pickDiag.faceLoopTimeouts++;
+        }
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
         act();
         return;
       }
+      pickDiag.faceLoopSteps++;
       try { sessionHandle.setMovementInput(0, 0, gate.turn, false); } catch {}
       requestAnimationFrame(step);
     };
@@ -673,6 +800,12 @@ export function setupClickPicking({
     }
     // Any left-click cancels an in-flight optimistic turn (retail cancels
     // MoveTo on fresh input) so a new action starts clean.
+    // ROT-1: `cancelClientMove` only stops the sticky/pursuit — the local
+    // face-turn rAF loop survived it and kept driving `setMovementInput`
+    // across the new click. Cancel it here too, and neutralise the drive so a
+    // preempted loop can't leave a turn command latched.
+    cancelFaceLoop();
+    try { sessionHandle.setMovementInput?.(0, 0, 0, false); } catch {}
     cancelClientMove();
     const guid = pickEntityAt(ev.clientX, ev.clientY);
     if (guid == null) return;
@@ -741,13 +874,32 @@ export function setupClickPicking({
       }
 
       if (isInMagicStance?.() && typeof sessionHandle.castTargetedSpell === "function") {
-        // Magic doesn't auto-charge — caster stands still to cast.
-        // Click on entity with an armed spell fires the cast directly
-        // (retail's "arm spell, click target" flow).
+        // SEL-1 (2026-08-02) — RETAIL: a single left-click SELECTS, it never
+        // casts. `RecvNotice_SmartBoxObjectFound`'s `sr_Select` branch calls
+        // `SetSelectedObject` and stops (acclient.c:275684-275692); the cast
+        // is a separate input (`HandleMagicAction` 0x10000060 /
+        // 0x10000065-0x10000070, acclient.c:407451) and
+        // `ClientMagicSystem::CastSpell` reads the ALREADY-SELECTED object
+        // (`ACCWeenieObject::selectedID`, acclient.c:404757). The comment this
+        // replaces ("retail's arm spell, click target flow") was wrong — no
+        // such flow exists in the decompile.
+        //
+        // `setSelectedTarget` already fired above, so the spell bar / hotbar
+        // (both of which resolve the target from
+        // `entityManager.getSelectedTarget()`) can fire it — that IS retail's
+        // select-then-cast. `?clickToCast=on` restores the legacy behaviour.
+        //
+        // This also removes the click path's local `turnToFaceThenAct` drive,
+        // which is the only local turn driver in the client (see ROT-1).
         const spellId =
           cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0
             ? cb.armedSpellId
             : 0;
+        if (spellId !== 0 && !CLICK_TO_CAST) {
+          pickDiag.clickCastSuppressed++;
+          maybeHintSelectThenCast();
+          return;
+        }
         if (spellId !== 0) {
           // Wave 6 Phase 16 (2026-05-26) — Sneak Attack prediction for
           // magic casts. acpedia wiki confirms Sneak Attack works for

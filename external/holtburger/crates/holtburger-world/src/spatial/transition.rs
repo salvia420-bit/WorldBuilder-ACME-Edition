@@ -1123,13 +1123,75 @@ fn resolve_floor_for_step(
                 } else {
                     None
                 };
-                if gates.landing_walkable
+                // CLIFF-UP (2026-08-02) — the support normal under the landing
+                // point, queried whenever EITHER walkability gate needs it.
+                // `landing_walkable` already queries it; `walkable_landing_ground`
+                // needs it too (and must not depend on the other flag being on).
+                let support_normal = landing_normal.or_else(|| {
+                    if gates.walkable_landing_ground {
+                        env.terrain_normal_at(global.x, global.y)
+                    } else {
+                        None
+                    }
+                });
+                let support_walkable = !gates.walkable_landing_ground
+                    || support_normal.map(|n| n.z >= FLOOR_Z).unwrap_or(true);
+                // CLIFF-UP: an AIRBORNE step whose terrain snap would RAISE the
+                // mover onto a >48.4° face is a CLIMB, not a landing. Retail
+                // never lifts a mover onto a non-walkable face: the transition
+                // only pushes the sphere out of its actual penetration
+                // (`OBJECTINFO::validate_walkable`'s `offset.z = -patha`,
+                // acclient.c:314276-314280) and gravity re-penetrates the next
+                // frame, so lateral speed cannot be converted into altitude.
+                // This arm's unconditional `pose.coords.z = z` DID convert it:
+                // an airborne mover driving into the face rode the heightmap up
+                // at run speed (measured: z 0 → 61 m on a 60° face). The
+                // discriminator is the SUPPORT HEIGHT the lateral step gained,
+                // not the mover's own Z (a mover falling INTO the face is
+                // legitimately below the surface and must still be pushed out).
+                // Skid the lateral along the face instead, then re-resolve the
+                // floor at the reverted XY — the same policy the GROUNDED
+                // branch below already applies via the F4-2
+                // `terrain_walkable_gate`.
+                let entry_global_x = global.x - (pose.coords.x - step_entry_xy.0);
+                let entry_global_y = global.y - (pose.coords.y - step_entry_xy.1);
+                let climb_onto_cliff = gates.walkable_landing_ground
+                    && !support_walkable
+                    && env
+                        .terrain_height_at(entry_global_x, entry_global_y)
+                        .is_some_and(|entry_z| z > entry_z + 1e-3);
+                let refuse_touchdown = gates.landing_walkable
                     && !landing_allows_touchdown(
                         landing_normal.map(|n| n.z),
                         physics_globals::LANDING_Z,
-                    )
-                {
-                    if let Some(normal) = landing_normal {
+                    );
+                if climb_onto_cliff {
+                    // CLIFF-UP: skid along the CONTOUR (the face normal
+                    // projected to XY and normalized), NOT along the 3-D plane
+                    // tangent. Projecting a horizontal push against a 3-D
+                    // normal leaves a residual INTO the face — for a 60° face a
+                    // head-on push keeps ~25% of the step (`1 − n_xy²`), which
+                    // is what let the mover keep grinding uphill even after the
+                    // Z-climb was refused. The horizontal contour sheds the
+                    // whole into-slope component, so a head-on approach stops
+                    // dead and an oblique one walks the base — the same
+                    // `terrain_contour_slide` the F4-2 grounded branch uses.
+                    let lateral = Vector3 {
+                        x: pose.coords.x - step_entry_xy.0,
+                        y: pose.coords.y - step_entry_xy.1,
+                        z: 0.0,
+                    };
+                    let slid = support_normal
+                        .and_then(|n| terrain_contour_slide(lateral, n))
+                        .unwrap_or(Vector3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0,
+                        });
+                    pose.coords.x = step_entry_xy.0 + slid.x;
+                    pose.coords.y = step_entry_xy.1 + slid.y;
+                } else if refuse_touchdown {
+                    if let Some(normal) = support_normal {
                         let lateral = Vector3 {
                             x: pose.coords.x - step_entry_xy.0,
                             y: pose.coords.y - step_entry_xy.1,
@@ -1139,9 +1201,72 @@ fn resolve_floor_for_step(
                         pose.coords.x = step_entry_xy.0 + slid.x;
                         pose.coords.y = step_entry_xy.1 + slid.y;
                     }
-                } else {
+                }
+                if climb_onto_cliff && !refuse_touchdown {
+                    // Re-resolve the floor at the skidded XY. Retail always
+                    // pushes the sphere out of the surface it penetrates
+                    // (acclient.c:314276-314280) — only the CLIMB was refused,
+                    // not the contact. Ground only on a walkable support
+                    // (`floor_z`, acclient.c:322598-322604).
+                    let g2 = pose.global_coords();
+                    if let Some(z2) = env.terrain_height_at(g2.x, g2.y) {
+                        let z2 = if gates.water_collision {
+                            z2 + env.water_depth_at(g2.x, g2.y)
+                        } else {
+                            z2
+                        };
+                        if pose.coords.z <= z2 {
+                            pose.coords.z = z2;
+                            if env
+                                .terrain_normal_at(g2.x, g2.y)
+                                .is_none_or(|n| n.z >= FLOOR_Z)
+                            {
+                                *airborne = false;
+                            }
+                        }
+                    }
+                } else if !refuse_touchdown {
                     pose.coords.z = z;
-                    *airborne = false;
+                    // CLIFF-UP (2026-08-02) — `walkable_landing_ground` /
+                    // `?walkableGround=off`. Retail keeps TWO distinct
+                    // thresholds and this arm was collapsing them onto the
+                    // laxer one:
+                    //   * `z_for_landing` (0.0871557, cos 85°) decides whether
+                    //     a falling mover may STOP FALLING on a face —
+                    //     `CTransition::step_down` / the landing allowance;
+                    //   * `floor_z` (0.66417415, cos 48.4°) decides whether it
+                    //     is ON WALKABLE ground — `CPhysicsObj::
+                    //     SetPositionInternal` recomputes it every frame from
+                    //     `contact_plane.N.z >= floor_z`
+                    //     (acclient.c:322586-322604).
+                    // Clearing `*airborne` here IS our ON_WALKABLE, so a
+                    // landing anywhere between 48.4° and 85° used to plant the
+                    // mover ON the cliff face. Two consequences, both observed
+                    // in `jump_spam_into_steep_cliff_never_ratchets_up` against
+                    // this arm: the mover parks on the face instead of
+                    // cliff-sliding down, and — because
+                    // `CMotionInterp::jump_is_allowed` needs CONTACT *and*
+                    // ON_WALKABLE (`(v7 & 1) && v7 & 2`, acclient.c:343941) —
+                    // the jump re-arms, so jump-into-face RATCHETS the mover up
+                    // the whole cliff (measured: z 0 → 27 m on a 60° face).
+                    // That is the "player slides UP a steep cliff" report; the
+                    // downhill direction was never affected, matching "sliding
+                    // down behaves correctly".
+                    //
+                    // The faithful `CTransition` driver already derives
+                    // `grounded` from `contact_plane.N.z >= FLOOR_Z`
+                    // (faithful_bridge.rs) and is correct — this is the
+                    // heightfield FALLBACK arm, live whenever
+                    // `?faithfulOutdoor=off` or the begin landblock's terrain
+                    // is not yet resident in the `SpatialScene`
+                    // (`faithful_find_transitional_position`'s residency
+                    // guard), i.e. during landblock streaming.
+                    //
+                    // Gate off (`?walkableGround=off`) ⇒ the pre-fix
+                    // LANDING_Z grounding, byte-identical.
+                    if support_walkable {
+                        *airborne = false;
+                    }
                 }
             }
         } else if gates.water_collision && env.is_entirely_water_cell_at(global.x, global.y) {
