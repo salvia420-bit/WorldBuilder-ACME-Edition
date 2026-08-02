@@ -587,6 +587,16 @@ export class CameraSwitcher {
       // restores the old behaviour for A/B.
       this._camAabbSweepOn =
         params?.get("camAabbSweep")?.toLowerCase() === "on";
+      // Step 6 of the clip chain — cell-space containment walk (CAM-SEAM,
+      // 2026-08-02). Retail's camera is a physics transit and can only
+      // change cells through portals; our triangle sweeps have no such
+      // continuity, so the camera could slip through hairline dungeon
+      // stitch seams (and building-interior walls whose shell triangles
+      // live in the indoor-gated-off building layer) and view the interior
+      // from outside. Default ON (`?camCellClamp=off` escape; also
+      // window.__setCamCellClamp). Indoors only — see _clipCameraAgainstWorld.
+      this._camCellClampOn =
+        params?.get("camCellClamp")?.toLowerCase() !== "off";
     }
     // Autofollow runtime state.
     this._followDragging = false; // true while right-mouse HELD (free-look)
@@ -669,6 +679,10 @@ export class CameraSwitcher {
       window.__setCamAabbSweep = (on) => {
         this._camAabbSweepOn = !!on;
         return this._camAabbSweepOn;
+      };
+      window.__setCamCellClamp = (on) => {
+        this._camCellClampOn = !!on;
+        return this._camCellClampOn;
       };
       // Retail-preference live setters (wired to the Camera options tab —
       // ui/camera_settings.js). Stiffness null = hard-lock (retail stiffness
@@ -1293,6 +1307,14 @@ export class CameraSwitcher {
    *      index.
    *   5. **EnvCell triangle sweep** (`sweepSphereAgainstCellMesh`),
    *      gated on the cells in the BFS render set. Dungeons + apartments.
+   *   6. **Cell-space containment walk** (`clipCameraToCellSpace`,
+   *      CAM-SEAM 2026-08-02, indoors only, `?camCellClamp=off` escape).
+   *      Retail-style cur_cell continuity from the player's cell: the
+   *      camera may only change cells through the portal/PVS graph, so
+   *      hairline stitch seams and wall triangles missing from the
+   *      sweep layers can no longer let it escape the interior. Exits
+   *      through a portal polygon that leads outdoors (doorways of
+   *      SeenOutside interiors) stay unconstrained.
    *
    * Each hit clips `final` to `start + (final - start) * (t - backoff)`,
    * so subsequent sweeps run against the already-clipped target. The
@@ -1435,6 +1457,29 @@ export class CameraSwitcher {
         }
       }
     } catch (_) {}
+
+    // ---- 6. Cell-space containment walk (indoors only; CAM-SEAM) ----
+    // Runs AFTER the triangle sweeps so it walks the already-clipped
+    // segment: it only ever tightens, catching what the sweeps missed
+    // (stitch-seam gaps, shell triangles living in skipped layers).
+    if (
+      this._camCellClampOn &&
+      (landblockId & 0xffff) >= 0x0100
+    ) {
+      try {
+        if (typeof handle.clipCameraToCellSpace === "function") {
+          const t = handle.clipCameraToCellSpace(
+            startX, startY, startZ,
+            finalX, finalY, finalZ,
+            CAM_RADIUS,
+            landblockId,
+          );
+          if (typeof t === "number" && t >= 0 && t < 1) {
+            clipFinalTo({ t });
+          }
+        }
+      } catch (_) {}
+    }
 
     return { x: finalX, y: finalY, z: finalZ };
   }

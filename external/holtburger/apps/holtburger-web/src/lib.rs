@@ -35295,6 +35295,34 @@ impl SessionHandle {
         Some(CollisionHit::from_generic(hit))
     }
 
+    /// CAM-SEAM (2026-08-02): clamp a camera segment to valid indoor cell
+    /// space (step 6 of the JS `_clipCameraAgainstWorld` chain). Walks
+    /// `from → to` with retail-style cur_cell continuity seeded at
+    /// `start_cell` (the player's full packed cell id) — see
+    /// `SpatialScene::clip_segment_to_cell_space` for the rules (portal
+    /// re-seat, seam-gap sphere rescue, doorway-exit-to-outdoors allowed,
+    /// fail-open on an invalid start). Returns the parametric clamp `t` in
+    /// `[0, 1)` when the camera would escape cell space through a wall or
+    /// stitch seam, or `undefined`/`None` when the full segment is valid.
+    #[wasm_bindgen(js_name = clipCameraToCellSpace)]
+    pub fn clip_camera_to_cell_space(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        start_cell: u32,
+    ) -> Option<f32> {
+        use holtburger_common::Vector3;
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let scene = self.collision_scene.borrow();
+        scene.clip_segment_to_cell_space(start_cell, start, end, radius)
+    }
+
     /// P5.1 (2026-07-27) — collision **residency** counters, read on
     /// demand off the per-tick `collision_scene` mirror. Zero cost until
     /// called: one `RefCell` borrow plus a handful of `HashMap` folds

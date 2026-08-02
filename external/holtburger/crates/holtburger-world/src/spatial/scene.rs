@@ -56,6 +56,94 @@ pub(crate) fn aabbs_overlap(a: &Aabb, b: &Aabb) -> bool {
         && a.max.z >= b.min.z
 }
 
+/// CAM-SEAM (2026-08-02): does the segment `a → b` pass through (or within
+/// `radius` of) the world-space polygon `verts`? Used by
+/// [`SpatialScene::clip_segment_to_cell_space`] to tell a legitimate doorway
+/// exit (crossing a portal polygon that leads outdoors) from a wall/seam
+/// escape. Newell-plane crossing test with a `radius` slack on both the
+/// plane distance and the in-polygon test (the camera is a sphere, not a
+/// point — a sphere brushing the door jamb still fits through the opening).
+pub(crate) fn segment_crosses_polygon(
+    a: Vector3,
+    b: Vector3,
+    verts: &[Vector3],
+    radius: f32,
+) -> bool {
+    if verts.len() < 3 {
+        return false;
+    }
+    // Newell's method — robust polygon normal for arbitrary winding.
+    let mut normal = Vector3::zero();
+    for i in 0..verts.len() {
+        let v0 = verts[i];
+        let v1 = verts[(i + 1) % verts.len()];
+        normal.x += (v0.y - v1.y) * (v0.z + v1.z);
+        normal.y += (v0.z - v1.z) * (v0.x + v1.x);
+        normal.z += (v0.x - v1.x) * (v0.y + v1.y);
+    }
+    if normal.length_squared() < 1e-12 {
+        return false;
+    }
+    let normal = normal.normalize();
+    let d0 = normal.dot(&(a - verts[0]));
+    let d1 = normal.dot(&(b - verts[0]));
+    // No plane crossing and neither endpoint within a radius of the plane.
+    if d0 * d1 > 0.0 && d0.abs().min(d1.abs()) > radius {
+        return false;
+    }
+    // Point where the segment meets the plane (or the nearest endpoint for
+    // a same-side near-touch).
+    let p = if (d0 - d1).abs() > 1e-6 {
+        let t = (d0 / (d0 - d1)).clamp(0.0, 1.0);
+        a + (b - a) * t
+    } else if d0.abs() <= d1.abs() {
+        a
+    } else {
+        b
+    };
+    // 2D containment on the dominant-axis projection, then a radius-slack
+    // edge-distance rescue for near-miss crossings.
+    let ax = normal.x.abs();
+    let ay = normal.y.abs();
+    let az = normal.z.abs();
+    let project = |v: Vector3| -> (f32, f32) {
+        if az >= ax && az >= ay {
+            (v.x, v.y)
+        } else if ay >= ax {
+            (v.x, v.z)
+        } else {
+            (v.y, v.z)
+        }
+    };
+    let (px, py) = project(p);
+    let mut inside = false;
+    let mut min_edge_dist_sq = f32::MAX;
+    let mut j = verts.len() - 1;
+    for i in 0..verts.len() {
+        let (xi, yi) = project(verts[i]);
+        let (xj, yj) = project(verts[j]);
+        if ((yi > py) != (yj > py))
+            && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)
+        {
+            inside = !inside;
+        }
+        // Distance from (px, py) to edge (i, j) — for the radius slack.
+        let ex = xj - xi;
+        let ey = yj - yi;
+        let el2 = ex * ex + ey * ey;
+        let s = if el2 > 1e-12 {
+            (((px - xi) * ex + (py - yi) * ey) / el2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let dx = px - (xi + ex * s);
+        let dy = py - (yi + ey * s);
+        min_edge_dist_sq = min_edge_dist_sq.min(dx * dx + dy * dy);
+        j = i;
+    }
+    inside || min_edge_dist_sq <= radius * radius
+}
+
 /// Physics deep-dive 2026-06-01 (gap 4, multi-pass) — opt-in faithful
 /// retail `PositionManager::InterpolateTo` / `ConstrainTo` reconciliation
 /// easing curve, DEFAULT-OFF.
@@ -3708,6 +3796,126 @@ impl SpatialScene {
             }
         }
         best
+    }
+
+    /// CAM-SEAM (2026-08-02): clip a camera segment so it can never leave
+    /// valid indoor cell space except through a portal to the outdoors.
+    ///
+    /// Retail's camera is a real physics transit (`SmartBox::update_viewer`
+    /// acclient.c:144991 → `makeTransition`/`find_valid_position`), so it
+    /// carries cur_cell continuity and can only change cells through
+    /// portals. Our triangle sweep (`sweep_sphere_against_cell_mesh`) tests
+    /// only the render-set cells' triangles and has no continuity, so the
+    /// camera can slip through hairline stitch seams between EnvCells, or
+    /// through building-interior walls whose shell triangles live in the
+    /// (indoor-gated-off) building-mesh layer — live-observed as "camera
+    /// pops outside the building / views the dungeon from outside".
+    ///
+    /// This walk mirrors `current_cell`'s continuity rules (point
+    /// membership first, portal/PVS neighbours, then the
+    /// `cell_contains_sphere` seam-gap rescue) along `start → end` at
+    /// `CELL_CLIP_STEP_M` resolution:
+    ///   - every sample must resolve to SOME resident cell reachable by
+    ///     re-seating through the graph — a sample in the void clamps the
+    ///     segment at the last valid sample (bisection-tightened);
+    ///   - leaving cell space by crossing a portal polygon whose
+    ///     `other_cell_id` is not an EnvCell (`u16` outside `[0x100,
+    ///     0xFFFD]` — the outdoors sentinel) is a legitimate doorway exit
+    ///     and stops constraining (retail lets the camera transit out of a
+    ///     SeenOutside interior through the door);
+    ///   - an invalid FIRST sample fails OPEN (no clamp): the head can
+    ///     poke odd geometry at spawn/teleport edges, and retail's answer
+    ///     there is `AdjustPosition`/player-snap, not freezing the camera.
+    ///
+    /// Returns `Some(t)` (parametric along `start→end`, in `[0, 1)`) only
+    /// when the segment must be clamped; `None` = unconstrained.
+    pub fn clip_segment_to_cell_space(
+        &self,
+        start_cell: u32,
+        start: Vector3,
+        end: Vector3,
+        radius: f32,
+    ) -> Option<f32> {
+        const CELL_CLIP_STEP_M: f32 = 0.25;
+        const MAX_STEPS: usize = 256;
+        if !is_envcell_id(start_cell) {
+            return None;
+        }
+        let delta = end - start;
+        let len = delta.length();
+        if !len.is_finite() || len < 1e-4 {
+            return None;
+        }
+        let n = ((len / CELL_CLIP_STEP_M).ceil() as usize).clamp(1, MAX_STEPS);
+
+        // Re-seat `carried` exactly like `current_cell`: bare-point owner
+        // first (carried, then neighbours), then the radius-aware seam-gap
+        // rescue. Returns the new carried cell, or None for "void".
+        let resolve = |carried: u32, p: Vector3| -> Option<u32> {
+            if self.cell_contains_point(carried, p) {
+                return Some(carried);
+            }
+            for &nb in self.cell_portal_neighbours(carried) {
+                if is_envcell_id(nb) && self.cell_contains_point(nb, p) {
+                    return Some(nb);
+                }
+            }
+            if self.cell_contains_sphere(carried, p, radius) {
+                return Some(carried);
+            }
+            for &nb in self.cell_portal_neighbours(carried) {
+                if is_envcell_id(nb) && self.cell_contains_sphere(nb, p, radius) {
+                    return Some(nb);
+                }
+            }
+            None
+        };
+
+        let mut carried = start_cell;
+        // Fail-open on an invalid start sample (see doc comment).
+        if resolve(carried, start).is_none() {
+            return None;
+        }
+        let mut prev_t = 0.0f32;
+        for i in 1..=n {
+            let t = i as f32 / n as f32;
+            let p = start + delta * t;
+            match resolve(carried, p) {
+                Some(cell) => {
+                    carried = cell;
+                    prev_t = t;
+                }
+                None => {
+                    // Doorway exit? The sub-segment must cross a portal
+                    // polygon of the carried cell that leads outdoors.
+                    let p_prev = start + delta * prev_t;
+                    for poly in self.cell_portal_polygons_for(carried) {
+                        let low = poly.other_cell_id & 0xFFFF;
+                        let leads_outdoors = !(0x100..=0xFFFD).contains(&low);
+                        if leads_outdoors
+                            && segment_crosses_polygon(p_prev, p, &poly.vertices, radius)
+                        {
+                            return None;
+                        }
+                    }
+                    // Void exit — tighten the boundary with a short
+                    // bisection between the last valid and first invalid
+                    // sample, then clamp there.
+                    let mut lo = prev_t;
+                    let mut hi = t;
+                    for _ in 0..4 {
+                        let mid = 0.5 * (lo + hi);
+                        if resolve(carried, start + delta * mid).is_some() {
+                            lo = mid;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    return Some(lo);
+                }
+            }
+        }
+        None
     }
 
     /// Workstream C (3D camera collision, 2026-05-11): insert a

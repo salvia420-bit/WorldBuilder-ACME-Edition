@@ -4410,6 +4410,157 @@ mod cur_cell_continuity {
     }
 }
 
+/// CAM-SEAM (2026-08-02): the camera cell-space containment walk
+/// (`clip_segment_to_cell_space`) — the retail-style "camera may only change
+/// cells through portals" net behind the triangle sweeps. Fixtures use
+/// AABB-only cells (the pre-membership fallback `cell_contains_point` /
+/// `cell_contains_sphere` take), which is also the resident state for
+/// building interiors; the membership-BSP take of the same predicates is
+/// pinned by `cur_cell_continuity` above.
+mod camera_cell_space_clip {
+    use super::super::scene::SpatialScene;
+    use crate::CellPortalPolygon;
+    use holtburger_common::{Aabb, Vector3};
+
+    const LB: u32 = 0x1234_0000;
+    const CELL_A: u32 = LB | 0x0101;
+    const CELL_B: u32 = LB | 0x0102;
+    const RADIUS: f32 = 0.5;
+    // Landblock origin: 0x12 * 192 = 3456, 0x34 * 192 = 9984.
+    const OX: f32 = 3456.0;
+    const OY: f32 = 9984.0;
+
+    fn p(x: f32, y: f32, z: f32) -> Vector3 {
+        Vector3::new(OX + x, OY + y, z)
+    }
+
+    /// Cell A occupies local [0,10]×[0,10]×[0,5]; `b_min_x` places B's
+    /// west face (flush at 10.0, or with a hairline gap when > 10.0).
+    fn two_cell_scene(with_b: bool, b_min_x: f32) -> SpatialScene {
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_aabb(
+            CELL_A,
+            Aabb::new(p(0.0, 0.0, 0.0), p(10.0, 10.0, 5.0)),
+        );
+        if with_b {
+            scene.insert_cell_aabb(
+                CELL_B,
+                Aabb::new(p(b_min_x, 0.0, 0.0), p(20.0, 10.0, 5.0)),
+            );
+            scene.insert_cell_portal(CELL_A, CELL_B);
+            scene.insert_cell_portal(CELL_B, CELL_A);
+        }
+        scene
+    }
+
+    #[test]
+    fn segment_inside_one_cell_is_unconstrained() {
+        let scene = two_cell_scene(false, 0.0);
+        assert_eq!(
+            scene.clip_segment_to_cell_space(CELL_A, p(2.0, 5.0, 2.0), p(8.0, 5.0, 2.0), RADIUS),
+            None,
+        );
+    }
+
+    #[test]
+    fn portal_crossing_into_neighbour_is_unconstrained() {
+        let scene = two_cell_scene(true, 10.0);
+        assert_eq!(
+            scene.clip_segment_to_cell_space(CELL_A, p(5.0, 5.0, 2.0), p(15.0, 5.0, 2.0), RADIUS),
+            None,
+        );
+    }
+
+    #[test]
+    fn hairline_seam_gap_is_rescued_by_sphere_continuity() {
+        // 5 cm stitch gap between A's east face and B's west face — the
+        // exact seam class the sweep layers can slip through. The
+        // radius-aware rescue must carry the walk across.
+        let scene = two_cell_scene(true, 10.05);
+        assert_eq!(
+            scene.clip_segment_to_cell_space(CELL_A, p(5.0, 5.0, 2.0), p(15.0, 5.0, 2.0), RADIUS),
+            None,
+        );
+    }
+
+    #[test]
+    fn escape_into_void_clamps_at_the_wall() {
+        let scene = two_cell_scene(false, 0.0);
+        let start = p(5.0, 5.0, 2.0);
+        let end = p(25.0, 5.0, 2.0);
+        let t = scene
+            .clip_segment_to_cell_space(CELL_A, start, end, RADIUS)
+            .expect("segment exiting cell space must clamp");
+        assert!(t < 1.0);
+        // Clamp point may sit up to RADIUS past the face (the seam-gap
+        // rescue band) but never beyond, and never pulled back inside
+        // by more than a walk step.
+        let clamp_x = start.x + (end.x - start.x) * t;
+        let face_x = OX + 10.0;
+        assert!(
+            clamp_x <= face_x + RADIUS + 0.02 && clamp_x >= face_x - 0.30,
+            "clamp_x {clamp_x} not at the x={face_x} wall",
+        );
+    }
+
+    #[test]
+    fn doorway_portal_polygon_to_outdoors_is_unconstrained() {
+        let mut scene = two_cell_scene(false, 0.0);
+        // Door opening in A's east face (x=10), leading OUTDOORS (low
+        // word 0x0004 < 0x100 — the outdoor sentinel range).
+        scene.insert_cell_portal_polygon(
+            CELL_A,
+            CellPortalPolygon {
+                other_cell_id: LB | 0x0004,
+                vertices: vec![
+                    p(10.0, 3.0, 0.0),
+                    p(10.0, 7.0, 0.0),
+                    p(10.0, 7.0, 4.0),
+                    p(10.0, 3.0, 4.0),
+                ],
+            },
+        );
+        assert_eq!(
+            scene.clip_segment_to_cell_space(CELL_A, p(5.0, 5.0, 2.0), p(15.0, 5.0, 2.0), RADIUS),
+            None,
+            "exit through the doorway polygon must stay unconstrained",
+        );
+        // Same scene, exit through the SOUTH wall (no polygon): clamped.
+        let start = p(5.0, 5.0, 2.0);
+        let end = p(5.0, -5.0, 2.0);
+        let t = scene
+            .clip_segment_to_cell_space(CELL_A, start, end, RADIUS)
+            .expect("wall escape away from the doorway must still clamp");
+        let clamp_y = start.y + (end.y - start.y) * t;
+        let face_y = OY;
+        assert!(
+            clamp_y >= face_y - RADIUS - 0.02 && clamp_y <= face_y + 0.30,
+            "clamp_y {clamp_y} not at the y={face_y} wall",
+        );
+    }
+
+    #[test]
+    fn invalid_start_sample_fails_open() {
+        let scene = two_cell_scene(false, 0.0);
+        // Head far outside any resident cell (teleport/spawn edge) —
+        // retail answers with AdjustPosition/player-snap, not a frozen
+        // camera; the walk must not constrain.
+        assert_eq!(
+            scene.clip_segment_to_cell_space(CELL_A, p(50.0, 50.0, 2.0), p(60.0, 50.0, 2.0), RADIUS),
+            None,
+        );
+    }
+
+    #[test]
+    fn outdoor_start_cell_fails_open() {
+        let scene = two_cell_scene(false, 0.0);
+        assert_eq!(
+            scene.clip_segment_to_cell_space(LB | 0x000A, p(5.0, 5.0, 2.0), p(25.0, 5.0, 2.0), RADIUS),
+            None,
+        );
+    }
+}
+
 /// DAT-01 phase 2a/2b/2d (2026-07-27): baked-procedural-scenery collision —
 /// per-landblock batch residency, the unload purge (the double-registration
 /// failure mode), and the broad+narrow sweep through `SpatialScene`.
