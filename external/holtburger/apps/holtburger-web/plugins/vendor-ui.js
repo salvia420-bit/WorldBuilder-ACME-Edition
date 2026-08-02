@@ -1969,16 +1969,44 @@ export function mount(ctx) {
       }
     };
 
+    // HUD rec #18 follow-up (2026-08-02) — teleport/death auto-close.
+    // The 2Hz range watchdog covers WALKING out of the 24-unit
+    // interact radius, but a teleport that lands near the vendor
+    // (lifestone or portal drop inside the same 24 units) never trips
+    // it, and after a far teleport the vendor entity reaps out of the
+    // scene, which parks the watchdog on its `!vendorPos` early-return
+    // with the bar still open. Retail tears the vendor window down on
+    // ANY portal transit (Character.OnPortalSpaceEntered) and on death
+    // — kind=33 PlayerTeleport rides every teleport flavour (portal
+    // use, gems, recall/teleport spells, the death recall), so one
+    // subscription covers "portal away by any means"; the death event
+    // additionally closes at the moment of death, before the recall.
+    const closeIfOpen = (why) => {
+      if (state.overlayEl?.dataset.open !== "1") return;
+      console.info(`[vendor-ui] ${why} — closing overlay`);
+      hideOverlay();
+    };
+    const onPortalSpace = () => closeIfOpen("portal space entered (teleport)");
+    const onDeath = (ev) => {
+      const victim = (ev.detail?.victimGuid ?? 0) >>> 0;
+      const local = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+      if (victim && local && victim === local) closeIfOpen("local player died");
+    };
+
     client.events.on("vendorOpened", onVendorOpened);
     client.events.on("kind:12", onVendorOpened);
     client.events.on("VendorOpened", onVendorOpened);
     client.events.on("playerInventoryChanged", onInvChanged);
+    client.events.on("portalSpaceEntered", onPortalSpace);
+    client.events.on("death", onDeath);
 
     unsubscribe = () => {
       client.events.off?.("vendorOpened", onVendorOpened);
       client.events.off?.("kind:12", onVendorOpened);
       client.events.off?.("VendorOpened", onVendorOpened);
       client.events.off?.("playerInventoryChanged", onInvChanged);
+      client.events.off?.("portalSpaceEntered", onPortalSpace);
+      client.events.off?.("death", onDeath);
     };
     return true;
   }
