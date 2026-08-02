@@ -106,6 +106,12 @@ import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 // parallel id registry. Off-path = the legacy group registry + per-guid map
 // cross-writes, byte-identical.
 import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
+// Combat-visuals Phase 1 (2026-08-02) — the 12-ID Splatter taxonomy
+// decode. Dependency-free + unit-tested under bare node; see
+// `scene3d/splatter_decode.js`. Imported unconditionally (it's a frozen
+// table + one pure function, no side effects) but ONLY consulted behind
+// the `?combatFx=on` gate below.
+import { decodeSplatterId } from "./splatter_decode.js";
 
 // Default tween duration in ms (Launch/Explode). ~500ms keeps the
 // visual on-screen long enough to be perceptible but short enough
@@ -670,6 +676,25 @@ function _tickAllBursts() {
     if (burst.rotateRadians) {
       burst.mesh.rotation.z = burst.rotateRadians * t;
     }
+    // Combat-visuals Phase 1 (`?combatFx=on`) — directional drift + sag.
+    // `drift` is set ONLY by the directional-splatter spawner, so this
+    // guard reads `undefined` (falsy) on every legacy burst and the
+    // flag-off path is byte-identical to pre-Phase-1 (same single
+    // truthiness test the `rotateRadians` line above already pays).
+    //
+    // Frame note: `basePos`/`drift` live in the entitiesGroup (AC Z-up)
+    // frame, so `-sagZ` is DOWN. Drift eases out with the scale (the
+    // spray decelerates as it expands); sag is quadratic in `t` so the
+    // droplets accelerate downward like a real ballistic arc.
+    if (burst.drift) {
+      const b = burst.basePos;
+      const d = burst.drift;
+      burst.mesh.position.set(
+        b.x + d.x * ease,
+        b.y + d.y * ease,
+        b.z + d.z * ease - burst.sagZ * t * t,
+      );
+    }
   }
   if (_activeBursts.size > 0 && typeof requestAnimationFrame === "function") {
     _rafId = requestAnimationFrame(_tickAllBursts);
@@ -762,8 +787,15 @@ function _resolveTargetPlacement(targetGuid) {
  * @param {number} color - 0xRRGGBB
  * @param {number} [durationMs] - per-burst duration override (Phase 37);
  *   omit to inherit the module default of 500ms.
+ * @param {{drift: {x:number,y:number,z:number}, sagZ?: number}} [motion] -
+ *   Combat-visuals Phase 1 (`?combatFx=on`) OPTIONAL translation record.
+ *   When present the burst also travels `drift` (eased) from its spawn
+ *   point and sags `sagZ` metres (quadratic) over its lifetime, both in
+ *   the parent's AC Z-up frame. Every pre-Phase-1 call site passes at
+ *   most 6 args, so `motion` is `undefined` there and the extra fields
+ *   are never attached to the registry record.
  */
-function _spawnBurst(parent, position, scaleFrom, scaleTo, color, durationMs) {
+function _spawnBurst(parent, position, scaleFrom, scaleTo, color, durationMs, motion) {
   if (!parent) return;
   // RP6 (2026-06-08): pooled sphere. The unit-sphere geometry is shared
   // across all sphere bursts (sizing is driven by mesh.scale); the mesh
@@ -775,7 +807,7 @@ function _spawnBurst(parent, position, scaleFrom, scaleTo, color, durationMs) {
   mesh.name = "playEffectBurst";
 
   const handle = _nextHandle++;
-  _activeBursts.set(handle, {
+  const record = {
     mesh,
     // RP6: `material` is referenced (pool-owned) so the rAF tween can
     // lerp opacity without re-deriving it; it is NOT disposed here —
@@ -788,7 +820,18 @@ function _spawnBurst(parent, position, scaleFrom, scaleTo, color, durationMs) {
     opacityFrom: 1.0,
     durationMs: durationMs || 0, // 0 = inherit TWEEN_DURATION_MS in the tick loop
     critical: _currentBurstCritical,
-  });
+  };
+  // Combat-visuals Phase 1 — attach the drift/sag fields ONLY when a
+  // motion record was passed, so legacy bursts keep the exact object
+  // shape (and the exact tick-loop cost) they had pre-Phase-1.
+  // `basePos` is a COPY: `position` is frequently `inst.root.position`,
+  // a live entity ref that keeps moving after the hit lands.
+  if (motion && motion.drift) {
+    record.drift = motion.drift;
+    record.sagZ = motion.sagZ || 0;
+    record.basePos = { x: position.x, y: position.y, z: position.z };
+  }
+  _activeBursts.set(handle, record);
   _enforceBurstCap();
   _ensureRafRunning();
 }
@@ -900,6 +943,465 @@ function _spawnCubeBurst(
   });
   _enforceBurstCap();
   _ensureRafRunning();
+}
+
+// =====================================================================
+// Combat-visuals Phase 1 (2026-08-02) — directional + crit-aware
+// Splatter. STRICT opt-in `?combatFx=on`.
+// =====================================================================
+//
+// Pre-Phase-1 all 12 Splatter IDs collapsed to one generic red sphere at
+// the target's ORIGIN (see the `_SPLATTER_IDS` comment block above). The
+// wire actually tells us WHERE the wound is: `0x5B-0x66` encode
+// (height-third × target-relative quadrant) — retail placed the emitter
+// at that height of the whole-body cylinder on that quadrant's side.
+// This block reconstructs that placement, adds an outward spray bias,
+// and scales the whole thing up when the hit was a critical.
+//
+// **Gate.** `combatFxEnabled()` is the ONE reader, and it is STRICT
+// `=== "on"`. This file already carries the codebase's known
+// default-on footgun (`BLOCKING_PARTICLE_PARITY_ON` reads `!== "off"`
+// under a comment claiming "default-off"). Do NOT copy that shape here:
+// an absent param, `?combatFx`, `?combatFx=1`, `?combatFx=true`,
+// `?combatFx=ON` and `?combatFx=off` ALL read false. When false, the
+// Splatter dispatch arm runs the byte-identical pre-Phase-1 code and
+// none of the state below is ever touched (no listeners bound, no maps
+// written, no bounding boxes computed).
+//
+// **Frame.** Bursts parent to `entitiesGroup`, which sits UNDER
+// `worldRoot` and therefore carries AC's native Z-up right-handed frame:
+// +Z is up, AC's canonical forward is +Y (see `scene3d/lighting.js`
+// spot-cone aim), so left = up × forward = +Z × +Y = −X and right = +X.
+// The quadrant vector is built in that entity-LOCAL frame and rotated by
+// `inst.root.quaternion` (the entity's yaw) to land in the parent frame.
+// Yaw never tilts Z, so the height offset needs no rotation.
+
+/**
+ * The single `?combatFx` reader. STRICT `=== "on"`; anything else
+ * (absent, empty, "1", "true", "ON", "off") is OFF.
+ *
+ * Memoized on first call rather than at module load so importing this
+ * module in a non-browser (node/worker) context can't throw, and so the
+ * flag is read at most once per session.
+ *
+ * @returns {boolean}
+ */
+let _combatFxOn = null;
+function combatFxEnabled() {
+  if (_combatFxOn !== null) return _combatFxOn;
+  _combatFxOn = false;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      _combatFxOn =
+        new URLSearchParams(window.location.search).get("combatFx") !== "off";
+    }
+  } catch (_) {
+    _combatFxOn = false;
+  }
+  return _combatFxOn;
+}
+
+// --- Crit latch -------------------------------------------------------
+// The wire carries the crit flag on the COMBAT NOTIFICATION (kind=19 →
+// `damageDealt` / `damageTaken` on the plugin bus), not on the PlayEffect
+// (kind=30) that spawns the splatter. The two arrive in the same drain
+// batch but as separate events with no shared correlation id, so we latch
+// "guid X took a crit" for a short window and consume it when that guid's
+// splatter lands.
+//
+// `damageDealt` = WE hit someone → the splatter target is the defender,
+//   resolved name→guid through `EntityManager.findGuidByName` (O(1) via
+//   the `_nameToGuid` index at entities.js:3414/6164).
+// `damageTaken` = someone hit US → the splatter target is the LOCAL
+//   PLAYER; `attackerName` is the attacker, NOT the target, so we latch
+//   `window.getLocalPlayerGuid()` instead of doing a name lookup.
+const _CRIT_LATCH_MS = 3000;
+// Small by construction — a latch entry only exists between a crit
+// notification and its splatter (sub-frame in practice). 32 covers a
+// full-group AoE crit landing on every member at once.
+const _CRIT_LATCH_MAX = 32;
+/** @type {Map<number, number>} guid → expiry timestamp (performance.now ms). */
+const _critLatch = new Map();
+// Diag counters — surfaced via `__test.combatFxStats()` so an acceptance
+// trace can assert correlation health without a screenshot.
+const _combatFxStats = {
+  latched: 0,
+  latchMissName: 0,
+  consumed: 0,
+  directional: 0,
+  critical: 0,
+};
+
+function _nowMs() {
+  return (typeof performance !== "undefined" && performance.now)
+    ? performance.now()
+    : Date.now();
+}
+
+/** Drop expired entries; then hard-cap by evicting oldest-first (Map is insertion-ordered). */
+function _pruneCritLatch(now) {
+  for (const [g, expiry] of _critLatch) {
+    if (expiry <= now) _critLatch.delete(g);
+  }
+  while (_critLatch.size > _CRIT_LATCH_MAX) {
+    const oldest = _critLatch.keys().next();
+    if (oldest.done) break;
+    _critLatch.delete(oldest.value);
+  }
+}
+
+function _latchCrit(guid) {
+  const g = (guid >>> 0) || 0;
+  if (g === 0) return;
+  const now = _nowMs();
+  // Re-insert (delete first) so the FIFO cap evicts by RECENCY, not by
+  // first-seen — a mob being crit repeatedly shouldn't age itself out.
+  _critLatch.delete(g);
+  _critLatch.set(g, now + _CRIT_LATCH_MS);
+  // Prune AFTER the insert, not before: pruning first leaves room for
+  // exactly one more entry and lets the map settle at MAX+1.
+  _pruneCritLatch(now);
+  _combatFxStats.latched += 1;
+}
+
+/**
+ * Read-and-clear the crit latch for `guid`. Consuming (rather than
+ * leaving it to expire) means one crit notification dramatizes exactly
+ * ONE splatter — a normal hit landing 200ms later can't inherit it.
+ *
+ * @returns {boolean}
+ */
+function _consumeCrit(guid) {
+  const g = (guid >>> 0) || 0;
+  if (g === 0 || _critLatch.size === 0) return false;
+  const expiry = _critLatch.get(g);
+  if (expiry === undefined) return false;
+  _critLatch.delete(g);
+  if (expiry <= _nowMs()) return false;
+  _combatFxStats.consumed += 1;
+  return true;
+}
+
+/** The local player's guid, or 0. Same global entities.js `_localPlayerGuid` reads. */
+function _localPlayerGuid() {
+  try {
+    if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+      const lpg = window.getLocalPlayerGuid();
+      if (lpg !== null && lpg !== undefined) return (lpg >>> 0) || 0;
+    }
+  } catch (_) {}
+  return 0;
+}
+
+/**
+ * `damageDealt` bus handler — WE crit someone. Correlates the defender's
+ * DISPLAY NAME back to a guid. Bound only when `?combatFx=on`.
+ *
+ * Failure modes are all "no crit scaling", never a throw:
+ *   - name absent / entity not spawned / already despawned → `findGuidByName`
+ *     returns 0 → no latch (counted as `latchMissName`).
+ *   - duplicate names in the cell (two "Drudge") → the index returns the
+ *     OLDEST living guid with that name, which may be the wrong one. The
+ *     splatter then reads non-crit (and the other Drudge may read crit if
+ *     it happens to be hit inside the window). Cosmetic only.
+ */
+function _onDamageDealt(evt) {
+  try {
+    const d = evt?.detail ?? evt ?? {};
+    if (d.criticalHit !== true) return;
+    const name = typeof d.defenderName === "string" ? d.defenderName : "";
+    if (!name) { _combatFxStats.latchMissName += 1; return; }
+    const em = (typeof window !== "undefined")
+      ? window.liveScene3d?.entityManager
+      : null;
+    const guid = (typeof em?.findGuidByName === "function")
+      ? (em.findGuidByName(name) >>> 0)
+      : 0;
+    if (guid === 0) { _combatFxStats.latchMissName += 1; return; }
+    _latchCrit(guid);
+  } catch (_) {
+    // Never let a malformed combat payload break the bus for other
+    // subscribers (combat-hud, combat-bar) sharing this event.
+  }
+}
+
+/**
+ * `damageTaken` bus handler — someone crit US. No name lookup needed:
+ * the splatter target is always the local player.
+ */
+function _onDamageTaken(evt) {
+  try {
+    const d = evt?.detail ?? evt ?? {};
+    if (d.criticalHit !== true) return;
+    const guid = _localPlayerGuid();
+    if (guid === 0) { _combatFxStats.latchMissName += 1; return; }
+    _latchCrit(guid);
+  } catch (_) {}
+}
+
+// --- Body-metric cache ------------------------------------------------
+// A splatter needs the target's body HEIGHT (to pick the height-third)
+// and its horizontal HALF-EXTENT (to push the burst out to the skin).
+// Neither is carried on the wire or on `inst.meta`, so we measure the
+// rig with a Box3 over `inst.parts` — the model part groups ONLY, which
+// deliberately excludes the nameplate/buff-badge sprites parented to
+// `inst.root` at AC-Z 2.2/2.7 (those would inflate every height to
+// ~2.7m). A Box3 walk is far too expensive per hit, so results are
+// cached per guid with a TTL (rigs do change: equipment swaps, growth
+// scripts, death ragdolls).
+const _BODY_METRIC_TTL_MS = 10000;
+const _BODY_METRIC_MAX = 128;
+/** @type {Map<number, {height:number, radius:number, ms:number}>} */
+const _bodyMetrics = new Map();
+// Fallbacks when the rig has no measurable geometry (parts not yet
+// streamed, fully-culled rig, degenerate box). ~1.8m tall / 0.35m half-
+// width is a mid-size AC humanoid.
+const _BODY_FALLBACK_HEIGHT_M = 1.8;
+const _BODY_FALLBACK_RADIUS_M = 0.35;
+// Clamp measured values so a pathological rig (a dropped Portal, a
+// 30m-tall boss placeholder) can't fling the burst off-screen.
+const _BODY_MIN_HEIGHT_M = 0.4;
+const _BODY_MAX_HEIGHT_M = 6.0;
+const _BODY_MIN_RADIUS_M = 0.15;
+const _BODY_MAX_RADIUS_M = 1.5;
+
+// Module-scoped scratch — the splatter path runs per hit during sustained
+// combat, so nothing below allocates a THREE object per burst. Matches
+// the pooling discipline the rest of this module uses.
+//
+// LAZILY built on first directional splatter, for the SAME reason
+// `_getSharedGeometry` defers its geometry: importing this module in a
+// non-WebGL context (the node `_three_stub.mjs` used by
+// `test_play_effect_resolver.mjs` / `tests/test_ws09_*.mjs`) must not
+// construct THREE objects the stub doesn't implement. Eager
+// `new THREE.Box3()` at module scope breaks every one of those suites at
+// import time.
+let _fxScratch = null;
+function _getFxScratch() {
+  if (_fxScratch) return _fxScratch;
+  _fxScratch = {
+    box: new THREE.Box3(),
+    size: new THREE.Vector3(),
+    quadLocal: new THREE.Vector3(),
+    quadWorld: new THREE.Vector3(),
+    pos: new THREE.Vector3(),
+  };
+  return _fxScratch;
+}
+
+function _clamp(v, lo, hi) {
+  return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/**
+ * Measure (or read from cache) the target's body height + horizontal
+ * half-extent, in metres. Never throws; always returns usable numbers.
+ *
+ * The Box3 is WORLD-space (three.js Y-up after `worldRoot.rotation.x =
+ * -π/2`), so `size.y` is the height and `max(size.x, size.z)/2` is the
+ * horizontal half-extent — both are frame-agnostic MAGNITUDES, which is
+ * all the caller needs (the direction comes from the entity quaternion).
+ *
+ * @param {number} guid
+ * @param {{parts?: Array<import("three").Object3D>}} inst
+ * @returns {{height: number, radius: number}}
+ */
+function _bodyMetricsFor(guid, inst) {
+  const g = (guid >>> 0) || 0;
+  const now = _nowMs();
+  const hit = _bodyMetrics.get(g);
+  if (hit && (now - hit.ms) < _BODY_METRIC_TTL_MS) return hit;
+
+  let height = _BODY_FALLBACK_HEIGHT_M;
+  let radius = _BODY_FALLBACK_RADIUS_M;
+  try {
+    const parts = inst?.parts;
+    if (Array.isArray(parts) && parts.length > 0) {
+      const s = _getFxScratch();
+      s.box.makeEmpty();
+      for (let i = 0; i < parts.length; i++) {
+        // Box3.expandByObject calls updateWorldMatrix(false, true) itself
+        // (three r129+), so a rig that hasn't been ticked this frame
+        // still measures correctly.
+        if (parts[i]) s.box.expandByObject(parts[i]);
+      }
+      if (!s.box.isEmpty()) {
+        s.box.getSize(s.size);
+        if (Number.isFinite(s.size.y) && s.size.y > 0) {
+          height = _clamp(s.size.y, _BODY_MIN_HEIGHT_M, _BODY_MAX_HEIGHT_M);
+        }
+        const horiz = Math.max(s.size.x, s.size.z) * 0.5;
+        if (Number.isFinite(horiz) && horiz > 0) {
+          radius = _clamp(horiz, _BODY_MIN_RADIUS_M, _BODY_MAX_RADIUS_M);
+        }
+      }
+    }
+  } catch (_) {
+    // Fall through with the fallbacks — a splatter in roughly the right
+    // place beats no splatter.
+  }
+
+  // Bounded cache: evict oldest-inserted first (Map insertion order).
+  if (!hit && _bodyMetrics.size >= _BODY_METRIC_MAX) {
+    const oldest = _bodyMetrics.keys().next();
+    if (!oldest.done) _bodyMetrics.delete(oldest.value);
+  }
+  const rec = { height, radius, ms: now };
+  _bodyMetrics.set(g, rec);
+  return rec;
+}
+
+// --- Splatter tuning --------------------------------------------------
+// Height-third CENTRES as a fraction of body height: Low/Mid/Up land at
+// 1/6, 1/2, 5/6 — the mid-point of each third of the whole-body cylinder
+// retail anchored the emitter to.
+const _SPLATTER_HEIGHT_FRAC = [1 / 6, 1 / 2, 5 / 6];
+// How far out along the quadrant vector the CORE burst sits, as a
+// fraction of the body half-extent. <1 keeps it inside the silhouette so
+// the wound reads as ON the body, not floating beside it.
+const _SPLATTER_SURFACE_FRAC = 0.85;
+const _SPLATTER_COLOR = 0xff3030;       // unchanged from the pre-Phase-1 arm
+const _SPLATTER_CRIT_COLOR = 0xff1a4d;  // hotter, pinker red — reads as "that hurt"
+// Core burst — normal vs critical.
+const _SPLATTER_CORE = {
+  normal: { scaleFrom: 0.10, scaleTo: 0.40, durationMs: 300, driftM: 0.22, sagZ: 0.06 },
+  crit:   { scaleFrom: 0.18, scaleTo: 0.85, durationMs: 520, driftM: 0.45, sagZ: 0.14 },
+};
+// Droplet count per hit. Budget check: `_MAX_ACTIVE_BURSTS` is 64 and
+// `_BURST_POOL_MAX` is 24 idle spheres. A normal hit costs 3 bursts, a
+// crit 6 — so ~10 simultaneous crits still sit inside the cap, and the
+// FIFO evictor (splatter is NOT in `_CRITICAL_PLAY_SCRIPT_IDS`) reclaims
+// beyond that.
+const _SPLATTER_DROPLETS = { normal: 2, crit: 5 };
+const _SPLATTER_DROPLET_SCALE = 0.42;   // relative to the core's scaleTo
+const _SPLATTER_DROPLET_DRIFT_MUL = 1.9;
+const _SPLATTER_DROPLET_SAG_MUL = 2.4;
+
+/**
+ * Directional + crit-aware Splatter (`?combatFx=on` ONLY).
+ *
+ * Places a core burst at the decoded (height-third, quadrant) point on
+ * the target's body, throws it outward along the quadrant normal, and
+ * adds a few smaller droplets fanned around that normal. When a crit was
+ * latched for this target inside `_CRIT_LATCH_MS`, everything scales up:
+ * bigger, more droplets, longer, hotter colour.
+ *
+ * Returns `false` when the target can't be resolved so the caller can
+ * fall back to the legacy generic burst (an unresolvable entity is the
+ * SAME condition the legacy arm skips on, so this is not a new drop).
+ *
+ * @param {number} targetGuid
+ * @param {number} scriptId - one of 0x5B-0x66
+ * @returns {boolean} true when a directional burst was spawned
+ */
+function _spawnDirectionalSplatter(targetGuid, scriptId) {
+  const decoded = decodeSplatterId(scriptId);
+  if (!decoded) return false;
+
+  let inst = null;
+  let parent = null;
+  let s = null;
+  try {
+    const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
+    const em = ls?.entityManager;
+    if (!em || !em.entityMap || typeof em.entityMap.get !== "function") return false;
+    inst = em.entityMap.get(targetGuid >>> 0);
+    if (!inst || !inst.root) return false;
+    // Same parent choice as `_resolveTargetPlacement` — entitiesGroup so
+    // the burst inherits worldRoot's AC→three rotation.
+    parent = ls.entitiesGroup ?? inst.root.parent ?? null;
+    if (!parent) return false;
+    s = _getFxScratch();
+  } catch (_) {
+    return false;
+  }
+
+  const crit = _consumeCrit(targetGuid);
+  const tune = crit ? _SPLATTER_CORE.crit : _SPLATTER_CORE.normal;
+  const { height, radius } = _bodyMetricsFor(targetGuid, inst);
+
+  // Entity-LOCAL quadrant vector (AC frame: forward +Y, up +Z ⇒ left −X,
+  // right +X). Normalised so the diagonal isn't √2 further out than an
+  // axis-aligned hit would be.
+  const INV_SQRT2 = 0.70710678;
+  s.quadLocal.set(
+    (decoded.left ? -1 : 1) * INV_SQRT2,
+    (decoded.front ? 1 : -1) * INV_SQRT2,
+    0,
+  );
+  // Rotate into the parent frame by the entity's yaw. `inst.root` may be
+  // mid-heading-ease; reading the live quaternion is correct — we want
+  // where the body is facing RIGHT NOW.
+  s.quadWorld.copy(s.quadLocal).applyQuaternion(inst.root.quaternion);
+  // Yaw can't tilt Z, but clamp defensively so an airborne pose-tilt
+  // quaternion (entities.js `_tickJumpPoseTween`) can't push the spray
+  // vertically and desync it from the height band.
+  s.quadWorld.z = 0;
+  if (s.quadWorld.lengthSq() < 1e-6) s.quadWorld.set(1, 0, 0);
+  s.quadWorld.normalize();
+
+  // Core position: entity origin + outward offset + height-third.
+  const zOff = height * _SPLATTER_HEIGHT_FRAC[decoded.height];
+  const outM = radius * _SPLATTER_SURFACE_FRAC;
+  s.pos.set(
+    inst.root.position.x + s.quadWorld.x * outM,
+    inst.root.position.y + s.quadWorld.y * outM,
+    inst.root.position.z + zOff,
+  );
+
+  const color = crit ? _SPLATTER_CRIT_COLOR : _SPLATTER_COLOR;
+  _spawnBurst(
+    parent, s.pos, tune.scaleFrom, tune.scaleTo, color, tune.durationMs,
+    {
+      drift: {
+        x: s.quadWorld.x * tune.driftM,
+        y: s.quadWorld.y * tune.driftM,
+        // Slight upward kick before the sag takes over — a hit sprays up
+        // and out, then falls.
+        z: tune.driftM * 0.35,
+      },
+      sagZ: tune.sagZ,
+    },
+  );
+
+  // Droplets fanned around the outward normal. Tangent is the in-plane
+  // perpendicular (−y, x); each droplet gets a random tangential lean +
+  // a random vertical kick so no two hits look stamped.
+  const tanX = -s.quadWorld.y;
+  const tanY = s.quadWorld.x;
+  const drops = crit ? _SPLATTER_DROPLETS.crit : _SPLATTER_DROPLETS.normal;
+  const dropScaleTo = tune.scaleTo * _SPLATTER_DROPLET_SCALE;
+  for (let i = 0; i < drops; i++) {
+    const lean = (Math.random() - 0.5) * 1.2;      // ±0.6 of the tangent
+    const speed = tune.driftM * _SPLATTER_DROPLET_DRIFT_MUL * (0.6 + Math.random() * 0.7);
+    // Start each droplet slightly scattered around the core so they read
+    // as a spray rather than a starburst from one point.
+    s.pos.set(
+      inst.root.position.x + s.quadWorld.x * outM + tanX * lean * radius * 0.4,
+      inst.root.position.y + s.quadWorld.y * outM + tanY * lean * radius * 0.4,
+      inst.root.position.z + zOff + (Math.random() - 0.5) * height * 0.08,
+    );
+    _spawnBurst(
+      parent,
+      s.pos,
+      dropScaleTo * 0.35,
+      dropScaleTo,
+      color,
+      Math.round(tune.durationMs * (0.75 + Math.random() * 0.5)),
+      {
+        drift: {
+          x: (s.quadWorld.x + tanX * lean) * speed,
+          y: (s.quadWorld.y + tanY * lean) * speed,
+          z: speed * (0.25 + Math.random() * 0.45),
+        },
+        sagZ: tune.sagZ * _SPLATTER_DROPLET_SAG_MUL,
+      },
+    );
+  }
+
+  _combatFxStats.directional += 1;
+  if (crit) _combatFxStats.critical += 1;
+  return true;
 }
 
 // =====================================================================
@@ -2152,6 +2654,17 @@ function _runPlaceholderDispatch(targetGuid, scriptId) {
       // conventions across the genre). Short 300ms duration since
       // sustained combat fires Splatter on every hit.
       if (_SPLATTER_IDS.has(scriptId)) {
+        // Combat-visuals Phase 1 (2026-08-02) — STRICT `?combatFx=on`.
+        // Decodes the ID's (height-third, target-relative quadrant) and
+        // spawns a directional, outward-spraying, crit-aware splatter
+        // instead of the generic origin sphere. Returns false when the
+        // target can't be resolved, in which case we fall through to the
+        // legacy arm below (which logs + skips on the same condition).
+        // When the flag is off, `combatFxEnabled()` short-circuits and
+        // everything below is byte-identical to pre-Phase-1.
+        if (combatFxEnabled() && _spawnDirectionalSplatter(targetGuid, scriptId)) {
+          return;
+        }
         if (!placement) {
           // eslint-disable-next-line no-console
           console.debug(
@@ -2900,6 +3413,17 @@ function _tryBind() {
   const pc = window.__pluginClient;
   if (!pc || !pc.events || typeof pc.events.on !== "function") return false;
   pc.events.on("playEffect", _onPlayEffect);
+  // Combat-visuals Phase 1 — crit latch. Subscribed ONLY under
+  // `?combatFx=on`, on the SAME bus + the same one-shot bind, so the
+  // flag-off path adds exactly zero listeners (and index.html needs no
+  // change: kind=19 already re-emits these as `damageDealt` /
+  // `damageTaken` at index.html:~9671).
+  if (combatFxEnabled()) {
+    pc.events.on("damageDealt", _onDamageDealt);
+    pc.events.on("damageTaken", _onDamageTaken);
+    // eslint-disable-next-line no-console
+    console.log("[play-effect-vfx] combatFx=on — directional splatter + crit latch armed");
+  }
   window.__playEffectVfxBound = true;
   // eslint-disable-next-line no-console
   console.log("[play-effect-vfx] bound to __pluginClient.events");
@@ -2978,6 +3502,28 @@ export const __test = Object.freeze({
     maxPerGuid: _PENDING_MAX_PER_GUID,
     maxGuids: _PENDING_MAX_GUIDS,
     ttlMs: _PENDING_TTL_MS,
+  }),
+  // Combat-visuals Phase 1 (2026-08-02) — directional/crit splatter.
+  // `combatFxEnabled` reflects the STRICT `?combatFx=on` gate;
+  // `combatFxStats` counts latch/consume/spawn so an acceptance trace
+  // can assert crit correlation without an eye-test; `latchCrit` lets a
+  // trace force a crit for a guid and fire a splatter to see the big
+  // version. `splatterDecode` re-exports the pure decode for console use.
+  combatFxEnabled,
+  combatFxStats: () => Object.freeze({ ..._combatFxStats }),
+  combatFxLatchSize: () => _critLatch.size,
+  latchCrit: _latchCrit,
+  consumeCrit: _consumeCrit,
+  bodyMetricsFor: _bodyMetricsFor,
+  spawnDirectionalSplatter: _spawnDirectionalSplatter,
+  splatterDecode: decodeSplatterId,
+  combatFxCaps: Object.freeze({
+    critLatchMs: _CRIT_LATCH_MS,
+    critLatchMax: _CRIT_LATCH_MAX,
+    bodyMetricTtlMs: _BODY_METRIC_TTL_MS,
+    bodyMetricMax: _BODY_METRIC_MAX,
+    dropletsNormal: _SPLATTER_DROPLETS.normal,
+    dropletsCrit: _SPLATTER_DROPLETS.crit,
   }),
 });
 

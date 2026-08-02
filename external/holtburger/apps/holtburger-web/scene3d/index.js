@@ -3502,6 +3502,36 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     sessionHandle,
   };
   window.liveScene3d = liveScene3d;
+  // ── Dismemberment (Phase 3, ?dismember=on strict opt-in) ─────────────
+  // Lazily imported ONLY when the flag is exactly "on" so the default arm
+  // never loads the module or the vendored three-pinata slicer. Diag-driven
+  // for now (window.__diag.dismember); death-event automation is queued in
+  // DISMEMBERMENT_HANDOFF.md pending the owner's 1070 eye session.
+  if (new URLSearchParams(window.location.search).get("dismember") !== "off") {
+    import("./dismember.js")
+      .then((m) => m.installDismemberDiag())
+      .catch((err) => console.warn("[dismember] failed to load:", err));
+  }
+  // ── Carnage automation (Phase 5, ?carnage=on strict opt-in) ──────────
+  // Hits accumulate per limb from broadcast splatter events → limp → sever →
+  // death finisher (entities.js reaches it via window.__carnageOnDeath).
+  // Wants ?limbDamage=on alongside for the limp to render, and pairs with
+  // ?ragdoll=on for the full effect; sever works standalone.
+  if (new URLSearchParams(window.location.search).get("carnage") !== "off") {
+    import("./carnage.js")
+      .then((m) => m.installCarnage())
+      .catch((err) => console.warn("[carnage] failed to load:", err));
+  }
+  // ── Blood decals (Phase 6, ?blood=on strict opt-in) ──────────────────
+  // Persistent liquid stains on dungeon walls/floors/ceilings, terrain and
+  // tree trunks from combat splatter; pools under settled bodies/pieces via
+  // window.__bloodPools. One InstancedMesh, shader-side aging — additive
+  // only, never touches world meshes/materials.
+  if (new URLSearchParams(window.location.search).get("blood") !== "off") {
+    import("./blood_decals.js")
+      .then((m) => m.installBloodDecals())
+      .catch((err) => console.warn("[blood] failed to load:", err));
+  }
   // ── Terrain-VFX spine (Wave 0B, plan §2.2) ────────────────────────────
   // Constructed HERE, immediately after `window.liveScene3d` is set, because
   // (a) its facade-hook install must reach `window.liveScene3d` (the

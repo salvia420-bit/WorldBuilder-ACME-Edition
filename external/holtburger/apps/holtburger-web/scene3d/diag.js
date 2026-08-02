@@ -49,6 +49,11 @@ import { attachLod as _attachLod } from "./diag/lod.js";
 import { attachClothing as _attachClothing } from "./diag/clothing.js";
 import { attachGeometry as _attachGeometry } from "./diag/geometry.js";
 import { attachCollision as _attachCollision } from "./diag/collision.js";
+// Phase 2 limbs (2026-08-02): the surface ships inside the module that owns
+// the state (scene3d/limbs.js) rather than a ./diag/ shim, but wires in
+// through the same `attach<Name>(diag)` contract as everything above.
+import { attachLimbs as _attachLimbs } from "./limbs.js";
+import { attachRagdoll as _attachRagdoll } from "./ragdoll.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -487,6 +492,8 @@ export function installDiag() {
     ["clothing",   _attachClothing],
     ["geometry",   _attachGeometry],
     ["collision",  _attachCollision],
+    ["limbs",      _attachLimbs],
+    ["ragdoll",    _attachRagdoll],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console

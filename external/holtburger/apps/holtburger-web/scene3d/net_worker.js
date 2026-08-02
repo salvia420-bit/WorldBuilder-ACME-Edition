@@ -32,7 +32,7 @@ import init, {
   net_worker_run,
   net_worker_submit_outbound,
   net_worker_set_sink,
-} from "../pkg/holtburger_web.js?v=netrev-20260709";
+} from "../pkg/holtburger_web.js?v=netrev-20260802";
 
 // Must match the RX_KIND_* tags in net_worker.rs.
 const RX_KIND_MESSAGE = 0;
@@ -71,7 +71,10 @@ function postToMain(kind, bytes) {
 // worker's wasm can't instantiate (Finding 2: no silent forever-hang).
 (async () => {
   try {
-    await init();
+    // STAMPED wasm URL — the glue's import.meta.url default drops ?v=.
+    await init({
+      module_or_path: new URL("../pkg/holtburger_web_bg.wasm?v=netrev-20260802", import.meta.url),
+    });
     net_worker_set_sink(postToMain);
     ready = true;
     self.postMessage({ t: "ready" });

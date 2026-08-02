@@ -988,6 +988,33 @@ import {
   buildPartSurfaceMeshes,
   createPartFramesProxy,
 } from "./setup_rig.js";
+// Phase 2 (2026-08-02) — limb registry + visual limping, behind the STRICT
+// opt-in `?limbDamage=on`. `limbDamageEnabled()` is the single flag reader;
+// with it off `applyLimbLimp` returns on its first line and nothing else in
+// this file changes behaviour (the two spawn-side stashes are inert data).
+import {
+  limbDamageEnabled,
+  ensureLimbRegistry,
+  applyLimbLimp,
+} from "./limbs.js";
+// Phase 4 (2026-08-02) — death-time ragdoll, behind the STRICT opt-in
+// `?ragdoll=on`. Same post-evaluation overwrite contract as the limp: the
+// authored collapse still plays (and still sizes the death-hold window);
+// `applyRagdoll` just re-poses the parts after every rig writer while
+// `inst._ragdoll` exists. Flag off: `startRagdoll` returns null on its first
+// check and the tick gate below is a hoisted-boolean + null read.
+import {
+  ragdollEnabled,
+  startRagdoll,
+  applyRagdoll,
+  applyFrozenPose,
+  transferRagdollPose,
+  promotePendingPose,
+} from "./ragdoll.js";
+// Hoisted once (the URL cannot change mid-session), so the per-entity tick
+// gate is a bare boolean read — same shape as WIREFRAME_MODE / SPAWN_TRACE.
+const LIMB_DAMAGE_ON = limbDamageEnabled();
+const RAGDOLL_ON = ragdollEnabled();
 const RIG_MODULE_ON = readRigModuleFlag();
 // FCULL (2026-06-08) — distance horizon for the per-frame entity RENDER
 // cull. Only the constant is imported; the cull pass is driven from loop.js
@@ -1751,6 +1778,10 @@ const DEATH_COLLAPSE_RADIUS_SQ = DEATH_COLLAPSE_RADIUS_M * DEATH_COLLAPSE_RADIUS
 // DEATH_HOLD_MS): the creature has no Ready→Dead link (bake fell back to the
 // 1-frame cycle hold), so there is no real collapse to wait on.
 const DEATH_HOLD_FALLBACK_MS = 2000;
+// Corpse correlation stays open this long past the authored collapse end —
+// the corpse CreateObject rides an async time-sliced spawn queue and can land
+// late in a busy dungeon (2026-08-02 handoff trace, bug #3).
+const DEATH_CORRELATE_GRACE_MS = 4000;
 // Monotonic-ish wall clock shared by the death stamps (same source as the
 // `_deathAt` stamp and loop.js `_armRemove`, so their arithmetic is coherent).
 const _entityNowMs = () =>
@@ -3867,6 +3898,16 @@ export class EntityManager {
     // substitution so the recheck always asks the band table from full detail.
     inst._lodOriginalSetup = lodOriginalSetup;
     inst._lodSub = lodSubstitute;
+    // Phase 2 limbs (2026-08-02) — the setup this rig was actually built from
+    // (post-LOD-substitution, so it matches `parts`/`restOrigins`) plus refs to
+    // the rest-pose arrays. `limbs.js` needs BOTH: the setup id keys its
+    // per-Setup limb registry, and the rest frames are the only pose that is
+    // still trustworthy after the mixer starts overwriting the part Groups.
+    // The arrays are the AnimationCache's own (shared across every spawn of
+    // this setup) — refs, not copies, so this costs two pointers per entity.
+    inst._setupId = setupId >>> 0;
+    inst._restOrigins = hasRestPose ? restOrigins : null;
+    inst._restOrientations = hasRestPose ? restOrientations : null;
 
     // Material resolution. Two paths:
     //   1. Plain (no palette substitutions) — share the scene
@@ -4298,6 +4339,25 @@ export class EntityManager {
       });
     }
 
+    // Phase 2 limbs (2026-08-02) — warm the per-Setup limb registry.
+    // Fire-and-forget: the classification needs the part geometry that the
+    // loop above just built, is cached per setupId (so only the FIRST spawn of
+    // a model pays the `fetchSetupParentIndex` round-trip), and never blocks
+    // the spawn. Gated on `?limbDamage=on` so the default path makes no extra
+    // wasm call at all.
+    if (LIMB_DAMAGE_ON) {
+      ensureLimbRegistry(setupId, inst, this.wasmExports).catch((e) => {
+        // eslint-disable-next-line no-console
+        if (!this._limbRegistryWarned) {
+          this._limbRegistryWarned = true;
+          console.warn(
+            `[entities/limbs] registry build failed (setup=0x${setupId.toString(16)}):`,
+            e
+          );
+        }
+      });
+    }
+
     // Step C: world-frame transform. Wire format gives us
     // (landblockId, x, y, z) where (x, y) are LB-local metres. Convert
     // to world coords the same way the 2D path does
@@ -4495,7 +4555,20 @@ export class EntityManager {
     // at the exact death transform (fixes the "corpse in a slightly different
     // spot" + "corpse appears before the animation is done" pair).
     if (this._deathAnimOn && ((meta.objDescFlags >>> 0) & ODF_CORPSE) !== 0) {
-      try { this._tryCorpseDeathHandoff(inst); } catch (_) { /* handoff is best-effort */ }
+      // Re-materialized corpse (vis churn / dungeon cell transitions / walk
+      // away and back): the sprawl + dismemberment lived on the OLD instance,
+      // so every re-spawn snapped back to the authored prone pose ("the old
+      // corpses come back", 2026-08-02). Restore from the per-guid archives
+      // first; only a corpse with no archived state runs the death handoff
+      // (a re-spawn has no dying creature to correlate with anyway).
+      let restored = false;
+      if (RAGDOLL_ON) {
+        try { restored = !!window.__ragdollCorpseRestore?.(inst); } catch (_e) { /* optional */ }
+      }
+      try { if (window.__dismemberCorpseRestore?.(inst)) restored = true; } catch (_e) { /* optional */ }
+      if (!restored) {
+        try { this._tryCorpseDeathHandoff(inst); } catch (_) { /* handoff is best-effort */ }
+      }
     }
     // P13/P16-H2 (2026-07-04) — once the LOCAL player's spawn bake commits
     // (its MotionTable is in the wasm source cache by construction), feed
@@ -9050,6 +9123,26 @@ export class EntityManager {
     if ((cmd & 0xFFFF) === CMD_LOW_DEAD) {
       inst._deathAt = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
+      // Phase 5 carnage (`?carnage=on`) — death finisher runs FIRST so its
+      // slices spawn from the live final pose before the ragdoll takes over.
+      // Reached via the window hook carnage.js registers (no import — keeps
+      // the module out of the flag-off arm and bare-node suite graphs).
+      if (!this._isLocalPlayerGuid(guid >>> 0)) {
+        try { window.__carnageOnDeath?.(inst); } catch (_e) { /* never block death */ }
+      }
+      // Phase 4 ragdoll (`?ragdoll=on`) — arm on the death stamp, remote rigs
+      // only (the local player's camera rig stays on the authored collapse).
+      // Fire-and-forget: the cold path awaits one cached wasm registry fetch;
+      // startRagdoll self-guards against the entity being removed meanwhile.
+      if (RAGDOLL_ON && !this._isLocalPlayerGuid(guid >>> 0)) {
+        startRagdoll(inst).catch((e) => {
+          if (!this._ragdollWarned) {
+            this._ragdollWarned = true;
+            // eslint-disable-next-line no-console
+            console.warn(`[entities/ragdoll] arm failed for 0x${guid.toString(16)}:`, e);
+          }
+        });
+      }
     }
     let cls = classifyMotionCommand(cmd);
     // === COL-20 / F4 — turn-phase gate. A MoveTo* envelope arrives as a bare
@@ -9168,8 +9261,12 @@ export class EntityManager {
             // Freeze remote dead-reckon so the collapsing rig settles at the
             // authoritative death spot rather than coasting on its last velocity.
             if (this._deathAnimOn) {
-              const durMs = (Number.isFinite(d.duration) && d.duration > 0)
-                ? d.duration * 1000 : DEATH_HOLD_FALLBACK_MS;
+              // Floor at 400ms: a creature with no Ready→Dead LINK falls back
+              // to the 1-frame Dead CYCLE, whose duration (~33ms) collapsed
+              // the death-hold AND the corpse-correlation window to a single
+              // frame (2026-08-02 trace, bug #4).
+              const durMs = Math.max(400, (Number.isFinite(d.duration) && d.duration > 0)
+                ? d.duration * 1000 : DEATH_HOLD_FALLBACK_MS);
               inst._deathDurationMs = durMs;
               inst._deathEndAt = (inst._deathAt ?? _entityNowMs()) + durMs;
               this._freezeDeadReckon(inst);
@@ -10413,6 +10510,27 @@ export class EntityManager {
       }
     }
 
+    // Phase 2 limbs (2026-08-02) — keep the limb bookkeeping in step with the
+    // swapped-in model. A re-dress usually keeps the same Setup (equal part
+    // count is already enforced above), but an equipment change CAN swap the
+    // base model outright; leaving `_setupId` on the old value would key the
+    // limp at the wrong registry. Pure data writes — no behaviour change with
+    // the flag off. On an actual model change any in-flight limp state is
+    // dropped (its remembered part transforms describe the old rig).
+    const _limbRest = animEntry.restOrigins ?? null;
+    const _limbRestQ = animEntry.restOrientations ?? null;
+    const _limbHasRest =
+      !!_limbRest && !!_limbRestQ &&
+      _limbRest.length === inst.parts.length * 3 &&
+      _limbRestQ.length === inst.parts.length * 4;
+    if ((inst._setupId >>> 0) !== setupId) {
+      inst._limpState = null;
+      if (inst._limbDamage) inst._limbDamage.clear();
+    }
+    inst._setupId = setupId;
+    inst._restOrigins = _limbHasRest ? _limbRest : null;
+    inst._restOrientations = _limbHasRest ? _limbRestQ : null;
+
     return true;
   }
 
@@ -10454,35 +10572,94 @@ export class EntityManager {
       if (inst === corpseInst) continue;
       if (typeof inst._deathAt !== "number") continue;
       if (inst._corpseHandoffGuid) continue; // already owns a corpse
+      // Correlation window: the authored-collapse clock, EXTENDED while a
+      // ragdoll is still live (the sim runs 2-4s, and the corpse's async
+      // time-sliced spawn can land after a short authored collapse expired —
+      // 2026-08-02 trace, bug #3) plus a grace for busy spawn queues.
       const endAt = inst._deathEndAt ?? (inst._deathAt + DEATH_HOLD_FALLBACK_MS);
-      if (now >= endAt) continue; // its collapse already finished
+      const ragdollLive = RAGDOLL_ON && inst._ragdoll && !inst._ragdoll.sim?.done;
+      if (!ragdollLive && now >= endAt + DEATH_CORRELATE_GRACE_MS) continue;
       const p = inst.root?.position;
       if (!p) continue;
       const dx = p.x - cp.x, dy = p.y - cp.y, dz = p.z - cp.z;
       const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 < bestD2) { bestD2 = d2; best = inst; }
+      // Live-ragdoll creatures match at 2× radius: a monster that died
+      // mid-charge can dead-reckon several metres past the server death spot
+      // before the freeze lands, and a missed correlation here IS the
+      // "authored corpse appears" failure.
+      const maxD2 = ragdollLive ? DEATH_COLLAPSE_RADIUS_SQ * 4 : DEATH_COLLAPSE_RADIUS_SQ;
+      if (d2 < maxD2 && d2 < bestD2) { bestD2 = d2; best = inst; }
     }
-    if (!best) return; // no dying creature here → corpse shows normally
+    if (!best) {
+      if (RAGDOLL_ON) {
+        // eslint-disable-next-line no-console
+        console.info(`[handoff] corpse 0x${(corpseInst.guid >>> 0).toString(16)}: no dying creature matched — authored pose shows`);
+      }
+      return; // no dying creature here → corpse shows normally
+    }
 
     // Align the collapsing rig with the corpse's authoritative transform so the
     // reveal is seamless in BOTH position and heading (the corpse's server
     // orientation is the creature's death orientation), then hide the corpse.
+    // Hide via the STATE-VISIBLE channel: `root.visible` has a single legal
+    // writer (_applyEntityVisible) and a raw write here was stomped back to
+    // true by the very next frustum-cull recompose — the authored corpse was
+    // visible during the whole fall (2026-08-02 trace, bug #1).
     best.root.position.copy(cp);
     best.root.quaternion.copy(corpseInst.root.quaternion);
     this._freezeDeadReckon(best);
     best._corpseHandoffGuid = corpseInst.guid >>> 0; // _armRemove yields to us
-    corpseInst.root.visible = false;
+    _setEntityStateVisible(corpseInst, false);
     corpseInst._hiddenForHandoff = true;
+    if (RAGDOLL_ON) {
+      // eslint-disable-next-line no-console
+      console.info(`[handoff] corpse 0x${(corpseInst.guid >>> 0).toString(16)} ↔ creature 0x${(best.guid >>> 0).toString(16)} (d=${Math.sqrt(bestD2).toFixed(1)}m)`);
+    }
 
     const revealAt = best._deathEndAt ?? (best._deathAt + DEATH_HOLD_FALLBACK_MS);
     const remaining = Math.max(0, revealAt - now);
     const corpseGuid = corpseInst.guid >>> 0;
     const creatureGuid = best.guid >>> 0;
-    setTimeout(() => {
+    // Phase 4 ragdoll (`?ragdoll=on`) — persist the sprawl onto the LOOTABLE
+    // corpse object before it reveals: copy the dying creature's final ragdoll
+    // part transforms onto the corpse rig as a frozen post-mixer overwrite
+    // (part-count-guarded; on mismatch the corpse keeps the authored prone
+    // pose). The corpse object itself — server position, picking meshes,
+    // selection, nameplate — is untouched, so looting works exactly as
+    // before; only the pose differs. The reveal WAITS (bounded) for the sim
+    // to settle: revealing on the authored-collapse clock froze a MID-FALL
+    // pose — or none at all — which read as "the old corpse animation came
+    // back" (2026-08-02 field report).
+    const finishReveal = (settleRetries) => {
       try {
         const corpse = this.entityMap.get(corpseGuid);
-        if (corpse && corpse._hiddenForHandoff && corpse.root) {
-          corpse.root.visible = true;
+        const creature = this.entityMap.get(creatureGuid);
+        if (
+          RAGDOLL_ON && settleRetries > 0 &&
+          creature?._ragdoll && !creature._ragdoll.sim?.done
+        ) {
+          setTimeout(() => finishReveal(settleRetries - 1), 500);
+          return;
+        }
+        if (RAGDOLL_ON) {
+          // eslint-disable-next-line no-console
+          console.info(`[handoff] reveal 0x${corpseGuid.toString(16)}: creature=${creature ? "present" : "GONE"} ragdoll=${creature?._ragdoll ? (creature._ragdoll.sim?.done ? "settled" : "live") : "none"} retries-left=${settleRetries}`);
+        }
+        if (RAGDOLL_ON && creature?._ragdoll && corpse) {
+          transferRagdollPose(creature, corpse);
+          // apply synchronously so the reveal frame already shows the sprawl
+          // (the tick re-asserts every frame afterwards)
+          applyFrozenPose(corpse);
+        }
+        // Dismemberment carry-over (`?dismember=on`): stumps/hidden parts
+        // move onto the corpse rig so a leg lost mid-fight STAYS lost on the
+        // lootable corpse. Window hook — see window.__carnageOnDeath pattern.
+        if (creature && corpse) {
+          try { window.__dismemberTransfer?.(creature, corpse); } catch (_e) { /* optional */ }
+        }
+        if (corpse && corpse._hiddenForHandoff) {
+          // reveal via the composite writer (same invariant as the hide)
+          _setEntityStateVisible(corpse, true);
           corpse._hiddenForHandoff = false;
         }
         // Remove the collapsed creature now that the corpse has taken over. The
@@ -10490,7 +10667,8 @@ export class EntityManager {
         // remove() no-ops if it already went.
         this.remove(creatureGuid);
       } catch (_) { /* handoff must never throw into a timer */ }
-    }, remaining);
+    };
+    setTimeout(() => finishReveal(8), remaining);
   }
 
   remove(guid) {
@@ -13715,6 +13893,51 @@ export class EntityManager {
               e
             );
           }
+        }
+      }
+      // Phase 2 limbs (2026-08-02, `?limbDamage=on`) — POST-EVALUATION limp
+      // offset. Runs after EVERY rig writer above (mixer.update /
+      // poseRigAt for both unified paths, and the jump-pose tween) so the
+      // offset lands on top of the resolved pose instead of being stomped by
+      // it. `applyLimbLimp` bails on its first line when the flag is off and on
+      // its second when the entity carries no damage, so the default path is a
+      // single boolean read + one null check per entity per frame — and the
+      // rendered rig is byte-identical.
+      if (LIMB_DAMAGE_ON && inst._limbDamage && inst._limbDamage.size > 0) {
+        try {
+          applyLimbLimp(inst, dt);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._limbLimpWarned) {
+            this._limbLimpWarned = true;
+            console.warn(
+              `[entities/limbs] limp tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
+      // Phase 4 ragdoll (`?ragdoll=on`) — LAST rig writer of the frame: the
+      // dying creature's sim (or a corpse's frozen transferred pose)
+      // overwrites everything above, including the limp. Gate is a hoisted
+      // boolean + two null reads on the default path. A throw disarms the
+      // ragdoll so a broken sim degrades to the authored collapse.
+      if (RAGDOLL_ON && (inst._ragdoll || inst._ragdollFrozenPose || inst._ragdollPendingPose)) {
+        try {
+          if (inst._ragdollPendingPose) promotePendingPose(inst);
+          if (inst._ragdoll) applyRagdoll(inst, dt);
+          else applyFrozenPose(inst);
+        } catch (e) {
+          if (!this._ragdollTickWarned) {
+            this._ragdollTickWarned = true;
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[entities/ragdoll] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+          inst._ragdoll = null;
+          inst._ragdollFrozenPose = null;
         }
       }
       // Swing-pose / cast-pose tween ticks RETIRED 2026-06-18 (WS-B teardown)

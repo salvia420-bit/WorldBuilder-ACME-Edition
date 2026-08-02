@@ -15427,6 +15427,44 @@ fn collect_setup_part_sort_centers<S: holtburger_dat::ResourceSource + ?Sized>(
     out
 }
 
+/// Limb-registry support — expose `SetupModel.parent_index` (parsed since
+/// day one, previously unconsumed at runtime; retail's `CSetup::parent_index`
+/// was likewise vestigial). One `u32` per `setup.parts[]` slot in index
+/// order, `0xFFFFFFFF` = root. `0x01` raw-GfxObj ids and any fetch/parse
+/// failure resolve to an empty array so JS uniformly treats "no hierarchy".
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupParentIndex)]
+pub async fn fetch_setup_parent_index(setup_id: u32) -> Result<Vec<u32>, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = collect_setup_parent_index(s, setup_id);
+    })
+    .await?;
+    Ok(collect_setup_parent_index(source.as_ref(), setup_id))
+}
+
+/// Pure helper for [`fetch_setup_parent_index`]; empty Vec on any failure.
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_setup_parent_index<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Vec<u32> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    if (setup_id >> 24) as u8 != 0x02 {
+        return Vec::new();
+    }
+    let Ok(bytes) = source.get_file_shared(ResourceKey::new("eor/portal", setup_id)) else {
+        return Vec::new();
+    };
+    let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(bytes.as_slice())) else {
+        return Vec::new();
+    };
+    setup.parent_index
+}
+
 /// Top-level per-part dispatch mirroring [`triangulate_model`]: route
 /// `0x01` (raw GfxObj) to a single-part vec, `0x02` (SetupModel) to
 /// the per-part walker.

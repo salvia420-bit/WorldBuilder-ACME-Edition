@@ -2650,12 +2650,29 @@ function _armRemove(scene3d, em, upd) {
       const remaining = deadAt + holdMs - nowMs;
       if (remaining > 0 && !inst._removePending) {
         inst._removePending = true;
-        setTimeout(() => {
+        // Re-check the corpse-handoff claim AT FIRE TIME: the claim is made
+        // by the corpse's async TIME-SLICED spawn, which lands after this
+        // timer was armed (ACE sends CreateCorpse+Destroy in one action) —
+        // the arm-time check alone destroyed the ragdolling creature before
+        // finishReveal could copy its pose (2026-08-02 trace, bug #2). And
+        // when the corpse spawn is SLOW (busy dungeon queue), DEFER while
+        // the ragdoll sim is still live so the claim can still arrive — the
+        // final removal is bounded (~8s) so nothing leaks. finishReveal owns
+        // removal once the claim exists.
+        let deferrals = 12;
+        const fire = () => {
           try {
             const cur = em?.entityMap?.get?.(g);
-            if (cur && cur._removePending) em.remove(g);
+            if (!cur || !cur._removePending) return;
+            if (cur._corpseHandoffGuid) return; // finishReveal owns it now
+            if (cur._ragdoll && !cur._ragdoll.sim?.done && deferrals-- > 0) {
+              setTimeout(fire, 700);
+              return;
+            }
+            em.remove(g);
           } catch (_) {}
-        }, remaining);
+        };
+        setTimeout(fire, remaining);
         // Bookkeeping is pruned immediately — only the rig disposal waits.
         if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
         _actionStamps.delete(g);

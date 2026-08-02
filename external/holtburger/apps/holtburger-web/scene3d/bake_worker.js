@@ -43,11 +43,11 @@ import init, {
   init_scenery_base_url,
   seed_url_flag_search,
   url_flag_diag,
-} from "../pkg/holtburger_web.js?v=netrev-20260709";
+} from "../pkg/holtburger_web.js?v=netrev-20260802";
 // Namespace handle for OPTIONAL exports (X-track tex overrides) — named
 // imports of a new export would module-link-error this whole worker on a
 // stale pkg/; via the namespace the loader bails loudly instead.
-import * as __wasmNs from "../pkg/holtburger_web.js?v=netrev-20260709";
+import * as __wasmNs from "../pkg/holtburger_web.js?v=netrev-20260802";
 import { installTextureOverrides } from "./tex_overrides.js";
 import { applyGfxReliefToWasm, GFX_RELIEF_FALLBACK } from "./gfx_relief.js";
 
@@ -122,8 +122,11 @@ async function handleInit(msg) {
       msg.sharedMemory.buffer instanceof SharedArrayBuffer,
     );
   } else {
-    // Instantiate the wasm module in this worker's context.
-    await init();
+    // Instantiate the wasm module in this worker's context. STAMPED URL —
+    // the glue's import.meta.url default drops the ?v= query (staleness hole).
+    await init({
+      module_or_path: new URL("../pkg/holtburger_web_bg.wasm?v=netrev-20260802", import.meta.url),
+    });
   }
   // Seed the page's query string into this instance (defect 1). Rust's
   // `js_location_search()` returns "" with no `window`, and the house flag rule
