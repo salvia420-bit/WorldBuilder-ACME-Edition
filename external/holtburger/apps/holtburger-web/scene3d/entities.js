@@ -134,6 +134,71 @@ function readSpawnHiddenStateFlag() {
   }
 }
 
+// === HELD-ITEM fixes (2026-08-02) ============================================
+//
+// `?childPlacement=off` — escape hatch for the B5-WIRING fix. B5 (2026-06-09)
+// added `_applyChildPlacementFrames` (retail's second equip step: pose the
+// child's OWN parts into the grip frame, `CPartArray::SetPlacementFrame`
+// acclient.c:326818-326865 -> `CSequence::set_placement_frame` :339767, read
+// back by `get_curr_animframe` :339745 whenever no animation is playing). It
+// never ran: `fetchSetupPlacementFrames` was never imported into index.html,
+// so `wasmExports.fetchSetupPlacementFrames` was `undefined`, the frame table
+// cached EMPTY and the method returned. Held items kept whatever the SPAWN
+// bake left on their parts, and that bake runs retail's INIT chain
+// `wire placement -> 0x65 Resting -> 0 -> first` (?placementId, default-ON) —
+// so any item whose setup lacks the requested placement key rendered in its
+// RESTING pose. Retail's wire-placement chain has NO Resting step
+// (:326818-:326865 is requested -> id==0); the 0x65 step is the object-init
+// default (`InitObjectEnd` :317303 / `InitNullObject` :320815) which the wire
+// animframe_id then overrides (`unpack_physics_desc` :322346).
+// Default ON (only `=off` reverts to the broken-but-shipped behaviour).
+function readChildPlacementFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("childPlacement");
+    return v == null ? true : v.toLowerCase() !== "off";
+  } catch (_) {
+    return true;
+  }
+}
+
+// `?wieldPersist=off` — escape hatch for the attached-child lifecycle fixes:
+//
+//   (a) POSE GUARD. While an object is parented, retail does not integrate or
+//       position it at all: `CPhysicsObj::update_position` (acclient.c:321671)
+//       opens with `if (!this->parent)`, `CPhysicsObj::update_object`
+//       (:323099) bails on `this->parent`, and `enter_world` (:323358) returns
+//       0 outright. Our `setPose` / `applyManagedPose` / dead-reckon ease had
+//       no such guard, so any server position for an equipped item wrote a
+//       WORLD coordinate into a root whose transform is HAND-LOCAL — the item
+//       is flung thousands of metres away, i.e. "my weapon vanished".
+//   (b) APPEARANCE RESPAWN. `applyAppearance` reconstructed `newMeta.x/y/z`
+//       from `inst.root.position`, which for an attached child is the
+//       hand-local holding-frame origin (~0.03 m) — the respawned rig landed
+//       at the map origin AND lost its `_attachedParentGuid`. It only ever
+//       re-attached a wielder's CHILDREN, never a child of its own wielder.
+//   (c) RE-ATTACH MEMORY. A child that despawns + respawns (PVS churn, portal
+//       hop) was never re-attached: the spawn hook only nudges guids that
+//       WIELD things, never guids that ARE wielded. Retail re-establishes the
+//       link from the child's own PhysicsDesc on every CreateObject
+//       (`unpack_physics_desc` set_parent at :322346 / :330260), so the link
+//       survives re-creation. `_lastAttach` is our equivalent ledger.
+//
+// Default ON (only `=off` reverts).
+function readWieldPersistFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("wieldPersist");
+    return v == null ? true : v.toLowerCase() !== "off";
+  } catch (_) {
+    return true;
+  }
+}
+const CHILD_PLACEMENT_ON = readChildPlacementFlag();
+const WIELD_PERSIST_ON = readWieldPersistFlag();
+/** LRU bound on the `_lastAttach` re-attach ledger (long-session leak guard). */
+const LAST_ATTACH_MAX = 512;
+
 // A8-M4 (2026-06-11 unification survey); DEFAULT-ON since 2026-07-27
 // (P4.3 / LEAK-02), `?preCreateBuffer=off` is the escape.
 // ON → events addressed to a guid whose rig isn't built yet park in ONE
@@ -869,6 +934,14 @@ const UNIFIED_LOCO = UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
 const UNIFIED_MISSILE = UNIFIED_DEFAULT || UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
+// Retail target indicator (2026-08-02) — the four red corner brackets that
+// track the projected selection sphere, replacing the vibe-coded torus.
+// See scene3d/selection_brackets.js for the full acclient.c chain.
+import {
+  computeSelectionSphere,
+  readSelectionIndicatorMode,
+} from "./selection_brackets.js";
+const SELECTION_INDICATOR_MODE = readSelectionIndicatorMode();
 // C2 (2026-07-12) — retail target-cycling ordering math (CPlayerSystem::
 // SelectNext, acclient.c:397944). Import-free helper so the ordering logic
 // is unit-testable under plain node (tests/target_cycle.test.cjs).
@@ -3456,6 +3529,19 @@ export class EntityManager {
     // so we fetch each wielder's holding table from wasm at most once.
     /** @type {Map<number, {parentGuid:number, location:number, placement:number}>} */
     this._pendingAttach = new Map();
+    // HELD-ITEM (2026-08-02, `?wieldPersist`) — `_lastAttach`: childGuid →
+    // the LAST committed {parentGuid, location, placement}. Unlike
+    // `_pendingAttach` (a request queue, cleared the moment the mount lands)
+    // this is a durable ledger: it survives `remove(childGuid)` so a
+    // despawn+respawn of the ITEM alone (PVS churn on a portal hop, an
+    // ObjectDelete/ObjectCreate pair for the same guid) re-mounts it in the
+    // hand. Retail gets this for free — the child's own CreateObject carries
+    // its parent + location in the PhysicsDesc and `unpack_physics_desc`
+    // re-runs `set_parent` (acclient.c:322346 / :330260) — whereas our spawn
+    // hook only ever nudges guids that WIELD things, never guids that ARE
+    // wielded. Cleared only by an explicit detach (`_detachChild`).
+    /** @type {Map<number, {parentGuid:number, location:number, placement:number}>} */
+    this._lastAttach = new Map();
     // F16-5 (bughunt 2026-06-09) — spawn-time draw gate. `_pendingVisibility`:
     // guid → visible(bool) for a `setVisibility` that arrived before the rig
     // existed. The wasm spawn-hidden emit (`?spawnHiddenState=on`) sends a
@@ -4698,6 +4784,10 @@ export class EntityManager {
     if (this._wieldedSpawn && hasParkedAttach) {
       _setEntityStateVisible(inst, false);
     }
+    // HELD-ITEM (2026-08-02, `?wieldPersist`) — durable re-attach replay.
+    // Runs on BOTH drain arms below (the park queues only hold OUTSTANDING
+    // requests; a re-created wielded item has none). See `_replayLastAttach`.
+    this._replayLastAttach(guid, hasParkedAttach);
     if (this._preCreateBufferOn) {
       // A8-M4 (2026-06-12) — spawn-commit drain of the generic pre-create
       // buffer (retail: object creation replays the placeholder's queued
@@ -5574,6 +5664,12 @@ export class EntityManager {
     if (!inst || !inst.root) return;
     if (inst._ballistic) return;
     if (inst._stickyTarget) return;
+    // HELD-ITEM (2026-08-02) — a parented object has no world position of its
+    // own; its root transform is the hand-local holding frame. Retail refuses
+    // to integrate it at all (`CPhysicsObj::update_position` acclient.c:321671
+    // `if (!this->parent)`; `update_object` :323099). Writing the wire world
+    // pose here would fling the weapon out of the hand.
+    if (WIELD_PERSIST_ON && inst._attachedParentGuid != null) return;
     inst._wasmDriven = REMOTE_INTERP_OWNERSHIP_FRAMES;
     inst.root.position.set(x, y, z);
     let tgt = inst._serverTargetPos;
@@ -5615,6 +5711,20 @@ export class EntityManager {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
+    // HELD-ITEM (2026-08-02) — same parented-object guard as
+    // `applyManagedPose` / `setVisibility`. ACE keeps broadcasting a position
+    // for an equipped item in some flows (drop/pickup echo, teleport
+    // re-sync); applying it to a hand-parented root moves the weapon by the
+    // full world coordinate (tens of thousands of metres) and it reads as
+    // "the weapon disappeared". Retail: `update_position` acclient.c:321671.
+    // Also drop any ease target stashed BEFORE the attach, so `tick`'s
+    // dead-reckon can't keep dragging the child toward a world point.
+    if (WIELD_PERSIST_ON && inst._attachedParentGuid != null) {
+      inst._serverTargetPos = null;
+      inst._serverTargetQuat = null;
+      inst._headingEaseInit = false;
+      return;
+    }
     const isRemote = !this._isLocalPlayerGuid(g);
     // A2-P2 (`?remoteInterp=on`): while the wasm PositionManager owns this
     // entity's position, the wire packet that produced this KIND_POSITION
@@ -5991,6 +6101,39 @@ export class EntityManager {
     // Remembered so an appearance-change respawn of the WIELDER can
     // re-attach this child faithfully (applyAppearance re-attach loop).
     c._attachedLocation = location >>> 0;
+    // HELD-ITEM (2026-08-02) — a pose stashed BEFORE the attach (the item's
+    // own pre-equip ObjectCreate / KIND_POSITION) would keep the dead-reckon
+    // ease in `tick` dragging this now-hand-local root toward a WORLD point,
+    // walking the weapon out of the hand over the following seconds. Retail
+    // never integrates a parented object at all (acclient.c:321671/:323099),
+    // so drop the targets outright at mount time.
+    if (WIELD_PERSIST_ON) {
+      c._serverTargetPos = null;
+      c._serverTargetQuat = null;
+      c._headingEaseInit = false;
+      c._wasmDriven = 0;
+      c._stickyTarget = null;
+      // Persistent re-attach ledger — survives `remove(childGuid)` so a
+      // despawn+respawn of the ITEM (PVS churn, portal hop) re-establishes
+      // the link, the way retail rebuilds it from the child's own
+      // PhysicsDesc on every CreateObject (`unpack_physics_desc` :322346 ->
+      // `set_parent` :330260). Cleared only by an explicit detach.
+      this._lastAttach.delete(cGuid); // re-insert so Map order == recency
+      this._lastAttach.set(cGuid, {
+        parentGuid: pGuid,
+        location: location >>> 0,
+        placement: placement >>> 0,
+      });
+      // Long-session bound. An entry normally dies on `_detachChild` (unequip
+      // / wielder despawn), but a child removed while its wielder survives is
+      // unlinked from `_attachedChildren` first, so no later detach reaches
+      // it. Map iteration is insertion order and we re-insert above, so this
+      // is a plain LRU trim. 512 >> any plausible live wielded-child count.
+      if (this._lastAttach.size > LAST_ATTACH_MAX) {
+        const oldest = this._lastAttach.keys().next().value;
+        if (oldest !== undefined) this._lastAttach.delete(oldest);
+      }
+    }
     if (!p._attachedChildren) p._attachedChildren = new Set();
     p._attachedChildren.add(cGuid);
     this._pendingAttach.delete(cGuid);
@@ -6033,6 +6176,11 @@ export class EntityManager {
   _detachChild(childGuid) {
     const cGuid = childGuid >>> 0;
     this._pendingAttach.delete(cGuid);
+    // HELD-ITEM (2026-08-02) — an explicit detach is the ONLY thing that
+    // forgets the re-attach ledger. `remove()` deliberately leaves it intact
+    // so a despawn+respawn of the item re-mounts it (retail rebuilds the link
+    // from the child's PhysicsDesc on every CreateObject).
+    this._lastAttach.delete(cGuid);
     // A8-M4 (2026-06-12): cancel ONLY a parked attach for this child (a
     // parked visibility event must survive a detach, exactly as
     // `_pendingVisibility` did). No-op when the flag is off (buffer empty).
@@ -6109,6 +6257,10 @@ export class EntityManager {
    * the wasm export is absent (old bundle) — matches prior behaviour.
    */
   async _applyChildPlacementFrames(childGuid, setupId, placement) {
+    // `?childPlacement=off` — revert to the (broken) pre-2026-08-02 behaviour
+    // where the grip re-pose never ran and the item kept the spawn bake's
+    // Resting(101) pose. See `readChildPlacementFlag`.
+    if (!CHILD_PLACEMENT_ON) return;
     const sid = setupId >>> 0;
     const cGuid = childGuid >>> 0;
     if (sid === 0) return;
@@ -6197,6 +6349,50 @@ export class EntityManager {
    * Retry queued attaches that involve `guid` (as child or as wielder),
    * now that its rig has been built. Called from `spawn()`.
    */
+  /**
+   * HELD-ITEM (2026-08-02, `?wieldPersist`) — durable re-attach replay, run
+   * at every spawn commit (BOTH the `?preCreateBuffer` drain arm and the
+   * legacy `_flushPendingAttach` arm — the two park queues only remember
+   * requests that are still OUTSTANDING, and a re-created item has none).
+   *
+   * The hole this closes: loop.js's spawn hook nudges `_markWielderDirty` for
+   * every spawned guid, which enumerates what that guid WIELDS. Nothing ever
+   * asks "is this guid wielded BY someone?", so an item whose rig despawns and
+   * respawns on its own (PVS churn across a portal hop, an ObjectDelete /
+   * ObjectCreate pair reusing the guid) came back unparented and rendered at
+   * its ObjectCreate world pose — the reported "my weapon is gone / on the
+   * floor". Retail has no such hole: the child's own CreateObject carries its
+   * parent + location in the PhysicsDesc, and `unpack_physics_desc` re-runs
+   * `set_parent` every time (acclient.c:322346 / :330260).
+   *
+   * `hasParkedAttach` = a still-outstanding, server-authoritative attach
+   * request for this guid; when set it supersedes the ledger and we do nothing
+   * (the park drain is about to mount it with fresher args).
+   */
+  _replayLastAttach(guid, hasParkedAttach) {
+    if (!WIELD_PERSIST_ON || this._lastAttach.size === 0) return;
+    const g = guid >>> 0;
+    if (!hasParkedAttach) {
+      const last = this._lastAttach.get(g);
+      if (last) {
+        const inst = this.entityMap.get(g);
+        const wielder = this.entityMap.get(last.parentGuid >>> 0);
+        if (inst && inst._attachedParentGuid == null && wielder) {
+          this.attachChildToParent(g, last.parentGuid, last.location, last.placement);
+        }
+      }
+    }
+    // …and the mirror case: this guid is the WIELDER coming back; re-mount
+    // every remembered child that is live but currently unparented.
+    for (const [childGuid, rec] of this._lastAttach) {
+      if ((rec.parentGuid >>> 0) !== g) continue;
+      const c = this.entityMap.get(childGuid >>> 0);
+      if (c && c._attachedParentGuid == null) {
+        this.attachChildToParent(childGuid, g, rec.location, rec.placement);
+      }
+    }
+  }
+
   _flushPendingAttach(guid) {
     const g = guid >>> 0;
     if (this._pendingAttach.size === 0) return;
@@ -7042,11 +7238,35 @@ export class EntityManager {
       }
     }
     this._selectedGuid = next;
-    if (next === 0) return;
+    // === RETAIL TARGET INDICATOR (2026-08-02, `?selectionIndicator`) ======
+    // Retail draws nothing in the 3D scene for a selected target — it runs a
+    // 2D UI overlay (`VividTargetIndicator`, acclient.c:289744) fed by the
+    // screen-space bbox of the object's SELECTION SPHERE, recomputed every
+    // frame in `SmartBox::RenderNormalMode` (:144918-:144930). Hand the
+    // overlay the rig + its sphere; `scene3d/selection_brackets.js` does the
+    // projection and the four corner brackets. The legacy torus below only
+    // builds under `?selectionIndicator=ring|both`.
+    const _selLayer = this.scene3d?.selectionBracketLayer ?? null;
+    if (next === 0) {
+      _selLayer?.setTarget(0, null, null);
+      return;
+    }
     const inst = this.entityMap.get(next);
     if (!inst || !inst.root) {
       this._selectedGuid = 0;
+      _selLayer?.setTarget(0, null, null);
       return;
+    }
+    if (_selLayer) {
+      try {
+        _selLayer.setTarget(next, inst.root, computeSelectionSphere(inst.root));
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[selection] bracket layer setTarget threw:", e);
+      }
+    }
+    if (SELECTION_INDICATOR_MODE !== "ring" && SELECTION_INDICATOR_MODE !== "both") {
+      return; // brackets-only (default) / none → no torus
     }
     if (inst._selectionRing) return; // already ringed
     // 0.6m flat torus at the entity's feet, tilted so the ring lies
@@ -10179,11 +10399,28 @@ export class EntityManager {
       }
     }
 
+    // HELD-ITEM (2026-08-02, `?wieldPersist`) — is THIS entity a wielded
+    // child? If so its `root.position` is the hand-local holding frame
+    // (~0.03 m), NOT an AC world pose: the world-pose preservation below
+    // would write ~0.03 into `newMeta.x/y/z` and the respawned rig would land
+    // at the MAP ORIGIN, unparented, permanently — an ObjDesc/UpdateObject on
+    // an equipped item (dye, imbue, a tinker recolour) silently teleported the
+    // weapon out of the world. Skip the pose rewrite entirely (a parented
+    // object has no world pose of its own — retail `update_position`
+    // acclient.c:321671) and re-mount after the respawn.
+    const selfAttach =
+      WIELD_PERSIST_ON && inst._attachedParentGuid != null
+        ? {
+            parentGuid: inst._attachedParentGuid >>> 0,
+            location: (inst._attachedLocation ?? 0) >>> 0,
+            placement: (inst._attachedPlacement ?? 0) >>> 0,
+          }
+        : null;
     // Preserve current world pose. `inst.root.position` is already in
     // AC world-frame (lbX*192 + local_x, etc); recompute LB-local so
     // the spawn path's `wx = lbX*192 + meta.x` rebuilds the same world
     // coords. Falls through to spawn-time pose if any field is missing.
-    const root = inst.root;
+    const root = selfAttach ? null : inst.root;
     if (root?.position) {
       const lbId = (oldMeta.landblockId ?? 0) >>> 0;
       const lbX = (lbId >>> 24) & 0xff;
@@ -10237,6 +10474,21 @@ export class EntityManager {
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn(`[applyAppearance] re-attach 0x${r.guid.toString(16)} failed:`, e);
+      }
+    }
+    // HELD-ITEM (2026-08-02) — …and the mirror case the original loop never
+    // covered: THIS entity was itself a wielded child. `remove(g)` dropped its
+    // `_attachedParentGuid`, so without this the fresh rig stays unparented.
+    // (`_replayLastAttach` on the spawn commit usually already re-mounted it;
+    // this is the belt-and-braces path for when the ledger was cleared.)
+    if (selfAttach && this.entityMap.get(g)?._attachedParentGuid == null) {
+      try {
+        await this.attachChildToParent(
+          g, selfAttach.parentGuid, selfAttach.location, selfAttach.placement
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[applyAppearance] self re-attach 0x${g.toString(16)} failed:`, e);
       }
     }
     // === Wave 6 polish — entityAppearanceChanged emit (2026-05-28) ===
@@ -10745,6 +10997,11 @@ export class EntityManager {
     // still resolve the old name from prevGuid if they need it.
     if ((this._selectedGuid >>> 0) === g && g !== 0) {
       this._selectedGuid = 0;
+      // Retail target indicator (2026-08-02): drop the overlay too, else the
+      // brackets keep projecting a disposed rig. Retail's equivalent is
+      // `SmartBox::GetObjectBoundingBox` returning status 3 (object unknown)
+      // once CObjectMaint no longer resolves the iid (acclient.c:144083).
+      try { this.scene3d?.selectionBracketLayer?.setTarget(0, null, null); } catch (_) {}
       try {
         window.__pluginClient?.events?.emit?.("selectionChanged", {
           guid: 0,
@@ -13664,7 +13921,14 @@ export class EntityManager {
       // projectile and a sticky-glued mob own their own motion above and must
       // never also be dragged by the dead-reckon ease (ACE sends no position
       // for either, so _serverTargetPos is normally absent/stale anyway).
-      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued && !wasmDriven && !inst._deadFrozen) {
+      // HELD-ITEM (2026-08-02, `?wieldPersist`): `!inst._attachedParentGuid`
+      // is the same defense-in-depth as `!inst._ballistic` / `!stickyGlued`
+      // above — retail never integrates a parented object at all
+      // (`CPhysicsObj::update_position` acclient.c:321671 opens with
+      // `if (!this->parent)`), and easing a hand-local root toward a WORLD
+      // target walks the weapon out of the hand. `setPose`/`attachChildToParent`
+      // already null the target, so this is belt-and-braces.
+      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued && !wasmDriven && !inst._deadFrozen && !(WIELD_PERSIST_ON && inst._attachedParentGuid != null)) {
         const tgt = inst._serverTargetPos;
         // B5/QW2/REMOTE-3: extrapolate the server target forward by the last
         // VectorUpdate velocity while it's fresh — retail integrates

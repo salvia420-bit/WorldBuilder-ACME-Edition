@@ -104,6 +104,13 @@ import {
   setAtlasTilePx,
 } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
+// Retail target indicator (2026-08-02) — VividTargetIndicator corner
+// brackets, replacing the vibe-coded selection torus. See
+// scene3d/selection_brackets.js for the acclient.c chain.
+import {
+  createSelectionBracketOverlay,
+  readSelectionIndicatorMode,
+} from "./selection_brackets.js";
 import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
@@ -2667,6 +2674,35 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   }
   scene3dForBuilders.nameplateLayer = nameplateLayer;
 
+  // === Retail target indicator (2026-08-02, `?selectionIndicator`) ========
+  // The four red corner brackets retail draws around the selected object's
+  // projected selection sphere (`VividTargetIndicator::OnDraw`
+  // acclient.c:289744, fed by `SmartBox::GetObjectBoundingBox` :144083). A
+  // DOM overlay like the nameplate layer — same construction contract, so a
+  // capture harness with no `canvas.parentElement` gets null and every call
+  // site no-ops through optional chaining. `?hud=none` and
+  // `?selectionIndicator=ring|none` skip construction entirely; with no layer
+  // the EntityManager falls back to the legacy torus only when the mode
+  // actually asks for it.
+  let selectionBracketLayer = null;
+  if (!_hudDisabled) {
+    const mode = readSelectionIndicatorMode();
+    if (mode === "brackets" || mode === "both") {
+      try {
+        const overlay = createSelectionBracketOverlay(canvas);
+        if (overlay) {
+          selectionBracketLayer = overlay.layer;
+          // eslint-disable-next-line no-console
+          console.log("[selection] retail bracket overlay attached:", overlay.domRoot.id);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[selection] createSelectionBracketOverlay failed:", e);
+      }
+    }
+  }
+  scene3dForBuilders.selectionBracketLayer = selectionBracketLayer;
+
   // Phase 7.4b — entity manager wires up here so the rAF tick can call
   // tickPerFrame → mixer.update(dt). Constructed BEFORE the liveScene3d
   // object so the wired-into-scene3d field can include it. The
@@ -2964,6 +3000,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // Capture scripts read .lastTickVisibleCount + .nodes.size to
     // verify per-frame projection produced live pixel coords.
     nameplateLayer,
+    selectionBracketLayer,
     // Workstream Sky-C — dynamic sky lighting / fog controller, wired
     // below after liveScene3d is constructed so its `liveScene3dRef`
     // points at the final object (the controller publishes

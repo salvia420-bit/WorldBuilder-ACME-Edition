@@ -1353,6 +1353,26 @@
         // in-hand instead of at the wielder root (feet). MUST also be listed in
         // the init3D opts block below. Import here AND opts there.
         fetchSetupHoldingLocations,
+        // B5-WIRING fix (2026-08-02): the placement-frame export was NEVER
+        // imported, so `EntityManager._applyChildPlacementFrames` saw
+        // `wasmExports.fetchSetupPlacementFrames === undefined`, cached an
+        // empty frame table and returned — the B5 (2026-06-09) grip re-pose
+        // has been dead code since it shipped. Held items therefore kept the
+        // pose the SPAWN bake left on their parts, and that bake resolves
+        // retail's INIT chain `wire placement -> 0x65 Resting -> 0 -> first`
+        // (?placementId, default-ON) — so any item whose setup lacks the
+        // requested placement key rendered in its RESTING pose. Measured live:
+        // "Shield of Isin Dule" (setup 0x02001573) asked for Placement.Shield
+        // (6), which that setup does NOT have; its part carried
+        // q(w,x,y,z) = (0.707107, -0.707107, 0, 0) — byte-for-byte the setup's
+        // Resting(101) frame — instead of the Default(0) identity retail falls
+        // back to (CPartArray::SetPlacementFrame acclient.c:326818-326865 has
+        // exactly two steps, requested then id==0; the 0x65 step belongs to
+        // InitObjectEnd/InitNullObject acclient.c:317303/:320815, which the
+        // wire animframe_id then OVERRIDES at :322346). That -90 deg about +X
+        // is the "shield on sideways" report. MUST also be listed in the
+        // init3D opts block below. Import here AND opts there.
+        fetchSetupPlacementFrames,
         populateBuildingAabbsForLandblock,
         populateStaticsAabbsForLandblock,
         populateSkyDescFromRegion,
@@ -5041,6 +5061,12 @@
             // B1 fix (2026-06-27): thread the holding-location export onto
             // wasmExports so EntityManager._resolveHoldingLocation resolves.
             fetchSetupHoldingLocations,
+            // B5-WIRING fix (2026-08-02): thread the placement-frame export
+            // onto wasmExports so EntityManager._applyChildPlacementFrames
+            // actually resolves (it was silently undefined — see the import
+            // block above for the full root-cause note). This is the second
+            // half of the "import here AND opts there" plumb-through.
+            fetchSetupPlacementFrames,
             populateBuildingAabbsForLandblock,
             populateStaticsAabbsForLandblock,
             fetchEnvCellsInLandblock,

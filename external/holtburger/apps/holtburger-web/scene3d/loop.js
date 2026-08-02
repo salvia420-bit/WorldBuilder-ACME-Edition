@@ -2292,6 +2292,28 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // Retail target indicator (2026-08-02, `?selectionIndicator`) — the four
+  // corner brackets re-project the selected object's selection sphere EVERY
+  // frame, which is why they track the camera. Retail runs this at the very
+  // end of `SmartBox::RenderNormalMode`, after the world and the alpha list
+  // (acclient.c:144918-:144930), so it belongs here — after the entity tick
+  // (rig poses current) and after cameraSwitcher.tick (camera matrices
+  // current). Deliberately NOT gated by the RP3 frame-budget stride: it is
+  // ONE projection per frame (the nameplate layer is one per entity), and a
+  // strided target reticle visibly lags the camera. Same try/catch contract.
+  if (scene3d?.selectionBracketLayer) {
+    try {
+      const activeCam =
+        scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
+      if (activeCam) scene3d.selectionBracketLayer.tick(activeCam);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._selBracketTickWarned) {
+        scene3d._selBracketTickWarned = true;
+        console.warn("[selection] selectionBracketLayer.tick threw:", e);
+      }
+    }
+  }
 }
 
 /**
@@ -2888,6 +2910,24 @@ function _armTurn(scene3d, em, upd) {
   // rig to face the absolute target heading (qw/qx/qy/qz).
   // Remote-only; the local player owns its own facing.
   const turnGuid = upd.guid >>> 0;
+  // ROT-1 (2026-08-02) — count the LOCAL-guid turn directives we discard.
+  // Retail does NOT discard them: `CPhysics::SetObjectMovement`
+  // (acclient.c:311149) drops a movement blob addressed to the local player
+  // only when its `autonomous` byte is set (the client's own echo). ACE's
+  // `TurnToObject` broadcast is NON-autonomous and self-inclusive
+  // (`Creature_Navigation.cs:127` → `EnqueueBroadcastMotion` →
+  // `EnqueueBroadcast(sendSelf: true)`, `WorldObject_Networking.cs:1413`), so
+  // retail UNPACKS it, turns the local player, and — because
+  // `SetObjectMovement` returns 1 for a player — the dispatcher calls
+  // `CommandInterpreter::LoseControlToServer()` (acclient.c:392828), handing
+  // the drive to the server until `CommandInterpreter::UseTime` reclaims it
+  // (acclient.c:717600-717612). Dropping it here is why the client needs a
+  // LOCAL turn-to-face substitute at all (picking.js `turnToFaceThenAct`),
+  // and why the two can fight. This counter is the evidence surface for that
+  // arbitration; see `window.__diag.picking`.
+  if (isLocalPlayerGuid(turnGuid)) {
+    try { if (window.__diag?.picking) window.__diag.picking.localTurnDirectivesDropped++; } catch (_) {}
+  }
   if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
     // G-5 (?turnOmega=on): forward the wire MoveToParameters.speed
     // (surfaced on omega_z) so the slerp can rate-limit to retail.
