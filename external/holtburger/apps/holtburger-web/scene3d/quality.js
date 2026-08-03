@@ -545,23 +545,15 @@ const BOOL_FLAGS = new Set([
     // had no reader; `?shadows=on` keeps its own exact-match reader in
     // index.js, unaffected by this parser.
     //
-    // ⚠ The removal checked for READERS but not for WRITERS (2026-08-03
-    // review). `ui/graphics_settings.js` still lists "shadows" in its
-    // QUALITY_BOOL_FLAGS (:18-20) and still renders a "Shadows" checkbox
-    // (:247) that writes `flags.shadows` into localStorage — where the
-    // sanitizer below silently drops it, because it is in none of the three
-    // flag sets. The control is inert end to end, and its fallback display
-    // value (`shadows: true`, :506) is the opposite of the real default,
-    // since the live gate is the default-OFF `?shadows=on` opt-in.
-    //
-    // DECISION: the checkbox should be REMOVED from the panel, not rewired.
-    // Rewiring means honouring a `flags.shadows` that thousands of saved
-    // `holtburger_graphics_v1` blobs already contain as `true` (the panel has
-    // been writing it since it shipped), which would silently switch shadow
-    // maps ON for every returning user — a ship-visible change with no 1070
-    // measurement behind it. Removal is the no-op. Owner: ui/ (out of this
-    // task's file ownership); `warnOnDeadFlag` below makes the drop audible
-    // in the meantime instead of silent.
+    // TOMBSTONE (2026-08-03): that 08-01 removal checked for READERS but not
+    // for WRITERS, so `ui/graphics_settings.js` kept rendering a "Shadows"
+    // checkbox writing `flags.shadows` into localStorage for the sanitizer
+    // below to silently drop. The checkbox is now GONE, and the rule it left
+    // behind is the reason this note stays: a dead flag must be REMOVED from
+    // the panel, never rewired. Rewiring would honour a `flags.shadows` that
+    // every already-saved `holtburger_graphics_v1` blob still contains as
+    // `true`, silently switching shadow maps on for returning users.
+    // `warnOnDeadFlag` below now names any future saved key with no reader.
     "normalMaps",
     "detailFlag",
     "terrainDetailNormal",
