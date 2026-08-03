@@ -666,30 +666,30 @@ console.log("\n-- L9b: declared upload ranges actually COVER every write --");
   for (const n of names) gpu[n] = new Float32Array(pool.arrays[n].length);
   gpu.__matrix = new Float32Array(pool.mesh.instanceMatrix.array.length);
 
+  // ⚠ `BufferAttribute.needsUpdate` is a SETTER-ONLY property in three — reading
+  // it yields `undefined`. Dirtiness is observed through `version`, which the
+  // setter bumps, exactly as WebGLAttributes does.
+  const seenVersion = {};
+  for (const n of names) seenVersion[n] = pool.attributes[n].version;
+  seenVersion.__matrix = pool.mesh.instanceMatrix.version;
+
   /** Copy only what the attribute DECLARED as dirty, then clear like three does. */
-  function uploadDeclared() {
-    for (const n of names) {
-      const a = pool.attributes[n];
-      if (a.updateRanges.length === 0) {
-        if (a.needsUpdate) gpu[n].set(a.array); // empty ranges == whole buffer
+  function applyOne(attr, dst, key) {
+    if (attr.version !== seenVersion[key]) {
+      seenVersion[key] = attr.version;
+      if (attr.updateRanges.length === 0) {
+        dst.set(attr.array); // empty ranges == "upload the whole buffer"
       } else {
-        for (const r of a.updateRanges) {
-          gpu[n].set(a.array.subarray(r.start, r.start + r.count), r.start);
+        for (const r of attr.updateRanges) {
+          dst.set(attr.array.subarray(r.start, r.start + r.count), r.start);
         }
       }
-      a.clearUpdateRanges();
-      a.needsUpdate = false;
     }
-    const im = pool.mesh.instanceMatrix;
-    if (im.updateRanges.length === 0) {
-      if (im.needsUpdate) gpu.__matrix.set(im.array);
-    } else {
-      for (const r of im.updateRanges) {
-        gpu.__matrix.set(im.array.subarray(r.start, r.start + r.count), r.start);
-      }
-    }
-    im.clearUpdateRanges();
-    im.needsUpdate = false;
+    attr.clearUpdateRanges();
+  }
+  function uploadDeclared() {
+    for (const n of names) applyOne(pool.attributes[n], gpu[n], n);
+    applyOne(pool.mesh.instanceMatrix, gpu.__matrix, "__matrix");
   }
 
   // Settle the field and sync the shadow buffers.
@@ -730,10 +730,21 @@ console.log("\n-- L9b: declared upload ranges actually COVER every write --");
     const { pool: p2 } = makePool();
     for (let i = 0; i < 20; i += 1) p2.update(0.016, 900, 900, 0);
     const a = p2.attributes.aScale;
-    a.clearUpdateRanges();
-    p2.update(0.016, 960, 930, 0);
-    const snapshot = a.updateRanges.map((r) => ({ r, start: r.start, count: r.count }));
-    p2.update(0.016, 1020, 960, 0); // second flush, no upload in between
+    // Drive until a flush actually emits ranges: a slice whose touched indices
+    // form more than `maxUpdateRuns` runs deliberately takes the whole-buffer
+    // fallback and emits none, which is not the case under test here.
+    let snapshot = [];
+    let px = 900, py = 900;
+    for (let i = 0; i < 60 && snapshot.length === 0; i += 1) {
+      a.clearUpdateRanges();
+      px += 7; py += 3;
+      p2.update(0.016, px, py, 0);
+      snapshot = a.updateRanges.map((r) => ({ r, start: r.start, count: r.count }));
+    }
+    // Second flush with NO upload in between — this is what used to overwrite
+    // the entries three was still holding.
+    px += 7; py += 3;
+    p2.update(0.016, px, py, 0);
     const stable = snapshot.every((s) => s.r.start === s.start && s.r.count === s.count);
     check("a range already handed to three is never rewritten by a later flush",
       stable && snapshot.length > 0, `held=${snapshot.length} stable=${stable}`);

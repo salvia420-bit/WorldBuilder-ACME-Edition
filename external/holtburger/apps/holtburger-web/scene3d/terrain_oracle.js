@@ -164,10 +164,26 @@ export function createTerrainOracle(opts = {}) {
 
   /** @type {Map<number, {codes:Uint8Array, heights:Float32Array|null, lbX:number, lbY:number, coverage:Uint16Array|null}>} */
   const cache = new Map();
-  /** lbKeys we scanned for and did not find, keyed to the epoch we scanned in. */
-  const missedAtEpoch = new Map();
   /** Bumped by every successful note/backfill — gives missed LBs another look. */
   let noteEpoch = 0;
+  /**
+   * Backfill scan INDEX (lbKey -> mesh), rebuilt at most once per note epoch.
+   *
+   * Was: a `missedAtEpoch` Map remembering which lbKeys had already been
+   * scanned for in the current epoch. That memo was invalidated GLOBALLY by
+   * every `noteLandblock`, and a note lands on every landblock bake — several
+   * per second while the ring streams. So a scatter pass sampling over
+   * partly-unbaked ground re-walked `terrainGroup.children` (~203 nodes at the
+   * default LRU cap) once per distinct missed landblock, per bake: exactly the
+   * "walk the scene graph thousands of times" cost the memo was written to
+   * avoid. It also grew without bound (one entry per lbKey ever sampled).
+   *
+   * Indexing the walk instead makes the epoch bump cheap: ONE walk per epoch
+   * however many landblocks miss, O(1) lookups after that, and the index is
+   * replaced (not appended to) on rebuild so nothing accumulates.
+   */
+  let scanIdx = null;
+  let scanIdxEpoch = -1;
 
   let hits = 0;
   let misses = 0;
@@ -223,7 +239,6 @@ export function createTerrainOracle(opts = {}) {
       lbY,
       coverage: null,
     });
-    missedAtEpoch.delete(lbKey);
     noteEpoch += 1;
     if (attachedLbKeys) attachedLbKeys.add(lbKey);
     return true;
@@ -235,15 +250,16 @@ export function createTerrainOracle(opts = {}) {
    */
   function invalidate(lbKeyOrId) {
     const lbKey = lbKeyOf(lbKeyOrId >>> 0);
-    missedAtEpoch.delete(lbKey);
     if (attachedLbKeys) attachedLbKeys.delete(lbKey);
+    if (scanIdx) scanIdx.delete(lbKey);
     return cache.delete(lbKey);
   }
 
   /** Drop everything (teleport across regions, full rebake, dispose). */
   function clear() {
     cache.clear();
-    missedAtEpoch.clear();
+    scanIdx = null;
+    scanIdxEpoch = -1;
     attachedLbKeys = null;
     noteEpoch += 1;
   }
@@ -258,34 +274,41 @@ export function createTerrainOracle(opts = {}) {
     const hit = cache.get(lbKey);
     if (hit) return hit;
     if (!getTerrainMeshes) return null;
-    if (missedAtEpoch.get(lbKey) === noteEpoch) return null;
-    let meshes = null;
-    try {
-      meshes = getTerrainMeshes();
-    } catch (_) {
-      meshes = null;
-    }
-    const wantX = (lbKey >>> 24) & 0xff;
-    const wantY = (lbKey >>> 16) & 0xff;
-    if (meshes) {
-      for (let i = 0; i < meshes.length; i += 1) {
-        const m = meshes[i];
-        const ud = m && m.userData;
-        if (!ud) continue;
-        if (ud.lbX !== wantX || ud.lbY !== wantY) continue;
-        if (noteLandblock(lbKey, {
-          codes: ud.terrainCodes,
-          heights: ud.heights,
-          lbX: ud.lbX,
-          lbY: ud.lbY,
-        })) {
-          backfills += 1;
-          return cache.get(lbKey);
-        }
-        break; // matching mesh with no usable codes — treat as a miss
+    // Rebuild the index at most ONCE per note epoch, then answer from it.
+    if (scanIdxEpoch !== noteEpoch) {
+      scanIdxEpoch = noteEpoch;
+      const next = new Map();
+      let meshes = null;
+      try {
+        meshes = getTerrainMeshes();
+      } catch (_) {
+        meshes = null;
       }
+      if (meshes) {
+        for (let i = 0; i < meshes.length; i += 1) {
+          const ud = meshes[i] && meshes[i].userData;
+          if (!ud) continue;
+          if (typeof ud.lbX !== "number" || typeof ud.lbY !== "number") continue;
+          const k = lbKeyFromXY(ud.lbX, ud.lbY);
+          if (!next.has(k)) next.set(k, ud);
+        }
+      }
+      scanIdx = next; // REPLACED, never appended to — cannot accumulate
     }
-    missedAtEpoch.set(lbKey, noteEpoch);
+    const ud = scanIdx ? scanIdx.get(lbKey) : null;
+    if (!ud) return null;
+    if (noteLandblock(lbKey, {
+      codes: ud.terrainCodes,
+      heights: ud.heights,
+      lbX: ud.lbX,
+      lbY: ud.lbY,
+    })) {
+      backfills += 1;
+      return cache.get(lbKey);
+    }
+    // A matching mesh with no usable codes is a miss; drop it from the index so
+    // we do not re-attempt it for every sample in this epoch.
+    scanIdx.delete(lbKey);
     return null;
   }
 

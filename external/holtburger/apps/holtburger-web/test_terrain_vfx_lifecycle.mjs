@@ -524,6 +524,58 @@ console.log("\n-- the oracle seam (Wave 0A, late-bound) --");
   }
 }
 
+// ---------------------------------------------------------------------------
+console.log("\n-- L13: the tick clock survives a frozen scene3d.frameTime --");
+// `scene3d.frameTime` is stamped ONLY by the rAF tick (scene3d/index.js), and
+// the `?netDrainHz=N` interval ALSO drives tickPerFrame while that loop idles
+// under `?renderOnDemand=1` / `?nullRender=1`. The spine used to read tSec/dt
+// straight off frameTime, so in exactly those bot sessions every terrain-VFX
+// family's clock stopped: terrain_rock's 15 s retail light tick could never
+// expire again, and terrain_dirt's footfall limiter (`tSec - last < interval`)
+// rejected every step forever. loop.js now passes a LIVE monotonic stamp.
+{
+  const { worldRoot, scene3d } = fresh();
+  initTerrainVfx({ THREE: FakeTHREE, scene3d, parent: worldRoot });
+  const seen = [];
+  const p = recorder("t.clockProbe", { scope: "camera" });
+  p.update = (dt, ctx) => { seen.push({ dt, tSec: ctx.tSec }); };
+  registerTerrainVfx(p);
+
+  // A FROZEN frameTime — exactly what the net-drain path presents.
+  scene3d.frameTime = { tsSec: 100, dt: 0.016 };
+
+  // No live stamp: the legacy contract still works (back-compat for callers
+  // that predate the third argument, and for direct test drivers).
+  terrainVfxTick(0.016, scene3d);
+  check("without a live stamp the frameTime clock is still used",
+    seen.length === 1 && seen[0].tSec === 100);
+
+  // With a live stamp, tSec must advance and dt must be derived from it.
+  seen.length = 0;
+  for (let i = 1; i <= 5; i += 1) terrainVfxTick(0.016, scene3d, 200 + i * 0.05);
+  check("tSec advances from the LIVE stamp while frameTime stays frozen",
+    seen.length === 5 && seen[0].tSec === 200.05
+      && seen[4].tSec > seen[0].tSec && scene3d.frameTime.tsSec === 100,
+    `first=${seen[0] && seen[0].tSec} last=${seen[4] && seen[4].tSec}`);
+  check("dt is derived from successive live stamps, not the frozen frameTime.dt",
+    seen.slice(1).every((s) => Math.abs(s.dt - 0.05) < 1e-9),
+    seen.map((s) => s.dt.toFixed(4)).join(","));
+  check("the first live tick reports dt 0 rather than a jump from nothing",
+    seen[0].dt === 0, `dt=${seen[0].dt}`);
+
+  // A long stall must not hand a provider a huge single step to integrate.
+  seen.length = 0;
+  terrainVfxTick(0.016, scene3d, 400);
+  check("a long stall is clamped to MAX_TICK_DT_SEC",
+    seen[0].dt <= 0.25 + 1e-9 && seen[0].dt > 0, `dt=${seen[0].dt}`);
+
+  // A non-monotonic stamp must not produce a negative dt.
+  seen.length = 0;
+  terrainVfxTick(0.016, scene3d, 399);
+  check("a backwards stamp yields dt 0, never negative", seen[0].dt === 0, `dt=${seen[0].dt}`);
+  unregisterTerrainVfx("t.clockProbe");
+}
+
 _resetTerrainVfx();
 delete globalThis.window;
 

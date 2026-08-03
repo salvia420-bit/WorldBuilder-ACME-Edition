@@ -1077,8 +1077,15 @@ export function createDustHazeField(opts = {}) {
  * sampler is exactly what the wave-2A sampler-budget ruling forbids (15 of a
  * guaranteed 16 are already bound). So mud writes the SAME sampler, centre and
  * radius, and gates itself with its OWN float (`uMudTrailEnabled`) — snow's
- * `uSnowTrailEnabled` stays snow's. Both families may run at once; they write
- * identical values into the shared entries, so the write order does not matter.
+ * `uSnowTrailEnabled` stays snow's.
+ *
+ * Both families may run at once. While BOTH have a live map they write
+ * identical values into the shared entries, so the write order does not matter
+ * — but that is only true for the has-a-map case, and the ABSENT-map case is
+ * the one that bites: whichever family writes `null` into the shared sampler
+ * disables the OTHER family's still-gated read. So the rule (2026-08-03, now
+ * symmetric in both files) is: touch the shared entries ONLY when you have a
+ * map, and clear nothing but your own gate.
  *
  * With `trail` null every material is driven to `uMudTrailEnabled = 0` — the
  * ABSENT-MAP contract (grass precedent): no lazy-ensure, no error, no print.
@@ -1143,6 +1150,21 @@ function _envSnapshot() {
   try { return _dirt.readEnv(_dirt.scene3d) || null; } catch (_) { return null; }
 }
 
+// Reusable oracle-sample result objects. `terrain_oracle.js::sample(x, y, out)`
+// fills a caller-supplied object and documents the parameter as the way "to keep
+// the sampler allocation-free" — without it every call mints a fresh result
+// object PLUS a Uint8Array(4) for cornerCodes PLUS a normal object. Both call
+// sites below run hot (one per rAF, one per footstep on the SoundTable audio
+// hook), so both bring their own.
+//
+// TWO scratches, not one: the footfall hook is driven from the audio path and
+// the state provider from the frame tick. Neither yields, so they cannot
+// actually interleave today — but a shared buffer would make that a silent
+// correctness bug the day one of them grows an await, and a second object costs
+// nothing.
+const _footfallSample = {};
+const _stateSample = {};
+
 function _terrainMaterials() {
   if (!_dirt) return null;
   try {
@@ -1196,7 +1218,8 @@ export function terrainFootfall(guid, x, y, z) {
   const oracle = _dirt.oracleRef();
   let sample = null;
   try {
-    sample = oracle && typeof oracle.sample === "function" ? oracle.sample(x, y) : null;
+    sample = oracle && typeof oracle.sample === "function"
+      ? oracle.sample(x, y, _footfallSample) : null;
   } catch (_) { sample = null; }
   if (!sample) { _stats.footfallsRejected += 1; return false; }
   const ground = Number.isFinite(sample.height) ? sample.height : z;
@@ -1402,7 +1425,7 @@ function _stateProvider() {
         try {
           const oracle = _dirt.oracleRef();
           const s = oracle && typeof oracle.sample === "function"
-            ? oracle.sample(frameCtx.playerPos.x, frameCtx.playerPos.y) : null;
+            ? oracle.sample(frameCtx.playerPos.x, frameCtx.playerPos.y, _stateSample) : null;
           const v = s && Number.isFinite(s.code) ? DIRT_VARIANTS[s.code | 0] : null;
           _dirt.lastPrintMul = v ? v.print : 1;
         } catch (_) { /* keep the last value */ }

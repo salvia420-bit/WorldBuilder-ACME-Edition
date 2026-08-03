@@ -555,11 +555,29 @@ export function createScatterPool(opts = {}) {
     if (!attr) return;
     const pending = attr.updateRanges;
     if (runOverflow || !pending || pending.length + runCount > maxPendingRanges) {
-      // Empty `updateRanges` means "upload the whole buffer" in three's
-      // WebGLAttributes — the correct, always-safe fallback. Reset the ring:
-      // nothing of ours is referenced any more.
+      // WHOLE-BUFFER FALLBACK. This must be expressed as an EXPLICIT full-span
+      // range, not by leaving `updateRanges` empty.
+      //
+      // "Empty means upload everything" is only true at the moment three reads
+      // it. It is NOT a durable instruction: a later flush that takes the ring
+      // path below would append its runs to that same empty array and silently
+      // demote the pending whole-buffer upload to "just these few runs", so
+      // this flush's writes would never reach the GPU. That is reachable
+      // whenever two flushes land between two uploads — the `?netDrainHz=N`
+      // interval drives tickPerFrame while the rAF loop is idle under
+      // `?renderOnDemand=1` / `?nullRender=1`.
+      //
+      // An explicit full range is self-describing: appending more ranges after
+      // it is redundant but never wrong.
       if (pending && typeof attr.clearUpdateRanges === "function") attr.clearUpdateRanges();
       rec.ringIdx = 0;
+      if (pending) {
+        const full = rec.ranges[0];
+        rec.ringIdx = 1 % rec.ranges.length;
+        full.start = 0;
+        full.count = attr.array.length;
+        pending.push(full);
+      }
       attr.needsUpdate = true;
       return;
     }

@@ -498,5 +498,61 @@ console.log("terrain_oracle — terrain.js userData contract");
 check("VERTEX_GRID/SPACING/LB constants match ambient_runtime",
   VERTEX_GRID === 9 && VERTEX_SPACING_M === 24 && METERS_PER_LANDBLOCK === 192);
 
+// ---------------------------------------------------------------------------
+console.log("\n-- backfill scanning is indexed, not re-walked per missed LB --");
+// The backfill memo used to be a `missedAtEpoch` map invalidated GLOBALLY by
+// every `noteLandblock` — and a note lands on every landblock bake, several per
+// second while the ring streams. So a scatter pass sampling over partly-unbaked
+// ground re-walked `terrainGroup.children` (~203 nodes at the default LRU cap)
+// once per distinct missed landblock, per bake. It also grew without bound.
+{
+  let walks = 0;
+  const meshes = [];
+  const oracle = createTerrainOracle({
+    getTerrainMeshes: () => { walks += 1; return meshes; },
+  });
+  // 40 landblocks worth of samples, none of them resident.
+  const sampleMany = () => {
+    for (let i = 0; i < 40; i += 1) oracle.sampleCode(i * 192 + 96, 96);
+  };
+  walks = 0;
+  sampleMany();
+  const firstEpochWalks = walks;
+  check("many misses in one epoch cost ONE scene-graph walk, not one each",
+    firstEpochWalks === 1, `walks=${firstEpochWalks} over 40 missed landblocks`);
+
+  sampleMany();
+  check("repeating the same misses inside the epoch costs no further walks",
+    walks === 1, `walks=${walks}`);
+
+  // A note bumps the epoch — the index must refresh exactly once more.
+  oracle.noteLandblock(lbKeyFromXY(200, 200), {
+    codes: new Uint8Array(81).fill(1), heights: new Float32Array(81), lbX: 200, lbY: 200,
+  });
+  walks = 0;
+  sampleMany();
+  sampleMany();
+  check("a note invalidates the index, and the refresh is still ONE walk",
+    walks === 1, `walks=${walks}`);
+
+  // Still correct: an LB that appears in the scene graph is adopted.
+  meshes.push({
+    userData: {
+      lbX: 3, lbY: 0,
+      terrainCodes: new Uint8Array(81).fill(5),
+      heights: new Float32Array(81).fill(9),
+    },
+  });
+  oracle.noteLandblock(lbKeyFromXY(201, 201), {
+    codes: new Uint8Array(81).fill(1), heights: new Float32Array(81), lbX: 201, lbY: 201,
+  }); // bump the epoch so the index rebuilds
+  check("backfill still adopts a landblock that entered the scene graph",
+    oracle.sampleCode(3 * 192 + 96, 96) === 5,
+    `code=${oracle.sampleCode(3 * 192 + 96, 96)}`);
+  check("… and its height came across too", oracle.heightAt(3 * 192 + 96, 96) === 9);
+  check("the adopted landblock is now a real cache entry",
+    oracle.hasLandblock(lbKeyFromXY(3, 0)) === true);
+}
+
 console.log(`\nterrain_oracle: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

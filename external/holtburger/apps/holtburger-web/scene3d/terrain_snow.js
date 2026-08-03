@@ -787,13 +787,26 @@ export function pushSnowTrailUniforms(materials, trail) {
   for (const mat of materials) {
     const u = mat && mat.uniforms;
     if (!u || !u.uSnowTrailEnabled) continue;   // pre-Wave-2A material: skip
-    if (u.uSnowTrailMap) u.uSnowTrailMap.value = tex;
-    const c = u.uSnowTrailCenter ? u.uSnowTrailCenter.value : null;
-    // Written componentwise rather than with .set(): the batched material's
-    // clone is a real Vector2, but a headless/stub material may carry a plain
-    // {x, y} and this path must not care.
-    if (c) { c.x = cx; c.y = cy; }
-    if (u.uSnowTrailRadius) u.uSnowTrailRadius.value = radius;
+    // ⚠ uSnowTrailMap / uSnowTrailCenter / uSnowTrailRadius are SHARED with the
+    // wave-3B MUD family (there is one trail map and one sampler; the snow name
+    // is a wave-2A artefact — see terrain_dirt.js::pushMudTrailUniforms). Only
+    // write them when we actually HAVE a map, exactly as the mud sibling does.
+    //
+    // 2026-08-03: this used to write unconditionally, so the absent-map and
+    // dispose() paths NULLED the sampler out from under a live mud provider
+    // while `uMudTrailEnabled` was still 1 — the mud block then sampled three's
+    // default 1x1 white texture and painted a full-strength dent + darkening
+    // over the whole dirt family. Each family clears its OWN gate and nothing
+    // else; a stale texture ref behind two closed gates is never read.
+    if (tex) {
+      if (u.uSnowTrailMap) u.uSnowTrailMap.value = tex;
+      const c = u.uSnowTrailCenter ? u.uSnowTrailCenter.value : null;
+      // Written componentwise rather than with .set(): the batched material's
+      // clone is a real Vector2, but a headless/stub material may carry a plain
+      // {x, y} and this path must not care.
+      if (c) { c.x = cx; c.y = cy; }
+      if (u.uSnowTrailRadius) u.uSnowTrailRadius.value = radius;
+    }
     u.uSnowTrailEnabled.value = on;
     touched += 1;
   }

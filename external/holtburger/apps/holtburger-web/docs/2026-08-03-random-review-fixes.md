@@ -417,3 +417,103 @@ and for the six visfid ones that claim was hollow. The lesson is the one this
 codebase already had a name for: a flat counter or an unconditional pass means
 the thing never ran. It applies to test harnesses too, and I did not apply it
 to my own evidence until round 6 went looking.
+
+---
+
+# Round 7 — VFX leaf modules + terrain shader/batch family: 18 findings, 18 fixes
+
+Two never-reviewed areas. The theme of this round is **shipped, default-ON
+features that had never once executed**, each with a passing test that was
+looking at the wrong thing.
+
+## Never executed (VFX)
+
+| Defect | Why it was invisible |
+|---|---|
+| `?itemFx` built `componentIds` as an **array** where every other producer passes a `Set`; a downstream `.has()` threw straight into the one call site's swallowing `catch`. Documented default-ON — **no magic item has ever shown its aura**, with no console evidence. | Nothing logged. Fixed both halves (Set at the producer + duck-typed membership downstream) and proved each independently load-bearing. |
+| `tarnish` gated its headline per-instance hash AND its up-facing term on two `#define` macros **that exist nowhere in the codebase** except that file and its own test → every tarnished item in the world got the identical 0.625 patina; `topWeight` was dead config. | The test asserted the `#ifdef`'s **TEXT** was present. |
+| `gemSparkle` read `ctx.geometry` / `ctx.partIndex`, which the real attach path never supplies → the twinkle always sat at the model origin in a fixed 5 cm ball (a lifestone's base, not its gem) regardless of the anchor bake. | The test **hand-built a ctx carrying the missing field**. |
+
+All three tests now drive the real descriptor/ctx/attach path and assert
+behaviour. gemSparkle's carries a **negative control** that catches the
+plausible-but-wrong fix (using `anchor.radius`, which for root anchors is 1 m —
+20× the authored ball).
+
+## Also fixed (VFX)
+
+Null mesh slot permanently stalled a `ParticleEmitter` (free-slot scan returned
+the same index forever while the emitter kept ticking) · three terrain gates
+returned 1 on a null env while their comments claimed 0 — **resolved to 0**: a
+null env is a wiring fault, not weather, and *two suites were wiring `env: null`
+deliberately to get any output at all* · two shader injectors missing the
+double-install guard all four siblings have · glint probed for a token rather
+than the varying declaration, so enchantShimmer's local fallback could make it
+splice a use above the declaration · particle master-gate bypass · duplicate
+`synthId` collapsing two effects' warn-dedup · bracket-art waiter queue never
+drained on early return.
+
+## Terrain shader/batch
+
+- **`terrain_batch` attribute whitelist** was computed once from whichever LB
+  absorbed first, but `acLightNormal` exists only on subdivided geometry
+  (verified: set solely in `adapter.js`'s subdivided path). On a `quality=high`
+  mixed ring that broke **both ways** — subdiv-first, ~194 of 203 LBs fell back
+  to individual draws behind a single session-long `_warnOnce`; base-first, the
+  retail Gouraud uniform was zeroed globally and never restored, killing the
+  term that carries most of the shipped terrain light. Fixed with a **per-LB bit
+  on the vertex-types A channel** (free — both legacy writers store constant
+  255) plus promote-on-evidence, so no geometry can ever latch a global uniform.
+- **`static_batch_x` never reaped region buckets** — ~0.5 MB of GPU buffers each,
+  86×86 possible regions × one per material, on a DEFAULT-ON flag. The roam test
+  shows the leak directly: 12 buckets retained after every LB evicted.
+- **`terrain_scatter` pushed reused range objects** into three's `updateRanges`,
+  so a second flush before an upload aliased the first's dirty runs. A **second,
+  worse defect was found while fixing**: the whole-buffer fallback signalled
+  "upload everything" by leaving `updateRanges` empty, and a later flush appended
+  to that array and silently demoted it to "just these runs".
+- **The frozen-`frameTime` hazard at its 4th and 5th sites** (terrain VFX spine +
+  rock's 15 s light tick). Rounds 1/3/4 each fixed an instance; the comment
+  defending this one cited "single time source" — the stale side of the argument.
+- Snow nulled the **shared** trail sampler unconditionally while its mud sibling
+  guards, so a snow teardown left mud sampling three's default white texture at
+  full strength · TexMerge decision frozen at first absorb and misdiagnosed as a
+  "shape mismatch" · `?statGeomDedup` probed three's **private** `_geometryInfo`
+  and failed **closed**, so a three upgrade would silently make it re-add every
+  geometry while still reporting `enabled: true` · oracle `sample()` allocating
+  3 objects per frame (and per footstep on the audio path) despite a documented
+  zero-alloc seam · the backfill miss-memo invalidated **globally** by any note,
+  measured at 40 full `terrainGroup` walks → 1.
+
+## Deferred
+
+- **Task #136:** `setTerrainWaterCodes` has **zero call sites** — independently
+  confirmed. The seam that exists to guarantee water-code agreement is dead
+  code; the sets match only because the reader was copied verbatim. A drift lock
+  now guards it (confirmed to read live values, not pass vacuously), but wiring
+  the boot call would change which family codes 22/23 resolve to on a default-ON
+  flag with no eye-test.
+- Tasks #104, #119, #120 still open from earlier rounds.
+
+## Adjudications (main)
+
+`test_vfx_frag_attach` / `frag_install` asserted that the **no-window** default
+is off, but `?visual` is default-ON per url-flags.md:305. A retired default
+pinned by the tests — same call as R6's `normalMaps`. Both now reach OFF the way
+a user does (`?visual=off`). My first attempt to prove they could still fail was
+a bad mutation (flipping the default only proved they are now
+default-*independent*); breaking the actual off-gate is what showed them red.
+
+## Green at round-7 commit time
+
+New/updated: terrain_batch 51, static_batch_x 40, terrain_scatter 120,
+terrain_vfx_lifecycle 94, terrain_families 54, vfx_item_fx 16,
+particle_null_slot_stall 15, vfx_emissive_compose 23, vfx_review_lowsev 17,
+tarnish 43, gemsparkle 43, sand 108, volcano 151, frag_attach 18,
+frag_install 34. **All five pre-existing GLSL byte-identity failures unchanged**
+(snow 1, dirt_shader 3, ice 2, sand_sparkle 1, volcano_shader 1) — verified
+count-for-count, no new failures.
+
+**Owed a real GPU:** the terrain_batch A-channel gate, the cross-family trail
+behaviour, per-instance tarnish variation, and the gemSparkle anchor move all
+change what ships on default. The node proofs cover the data path, not the
+rendered result.

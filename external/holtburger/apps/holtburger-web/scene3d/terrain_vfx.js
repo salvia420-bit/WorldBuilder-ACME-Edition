@@ -159,6 +159,9 @@ let _oraclePromise = null;
 let _trail = null;
 let _disabledReason = null;  // null | "flag" | "wireframe"
 let _tickWarned = false;
+// Previous LIVE tick stamp (seconds), for deriving a dt that cannot freeze with
+// `scene3d.frameTime`. `null` = no live tick yet, so the first one reports dt 0.
+let _liveTickPrevSec = null;
 // Bumped by `_resetTerrainVfx` so an in-flight oracle import from a previous
 // test/session cannot land on a fresh spine.
 let _epoch = 0;
@@ -284,6 +287,7 @@ export function _resetTerrainVfx() {
   for (const id of [..._providers.keys()]) unregisterTerrainVfx(id);
   _tracked.clear();
   if (_trail) { try { _trail.dispose(); } catch (_) {} _trail = null; }
+  _liveTickPrevSec = null;
   _spine = null;
   _oracle = null;
   _oracleState = "idle";
@@ -757,11 +761,24 @@ function _backfillFromTerrainGroup(scene3d) {
 // The per-frame tick. ONE call from `loop.js`, next to `tickVfxOscillators`.
 // ---------------------------------------------------------------------------
 
+/** Largest dt a single tick may report, seconds. A long stall (tab hidden, a
+ *  bake burst) must not hand a provider a 30 s step to integrate in one go. */
+const MAX_TICK_DT_SEC = 0.25;
+
 /**
- * @param {number} dt   seconds since last frame
+ * @param {number} dt   seconds since last frame (fallback only — see liveTsSec)
  * @param {object} ctx  the scene3d facade (loop.js passes `scene3d`)
+ * @param {number} [liveTsSec] LIVE monotonic seconds from the caller's own
+ *   clock. STRONGLY PREFERRED over `scene3d.frameTime`, which is stamped only
+ *   by the rAF tick: the `?netDrainHz=N` interval also drives `tickPerFrame`
+ *   while that loop idles under `?renderOnDemand=1` / `?nullRender=1`, so both
+ *   `frameTime.tsSec` and `frameTime.dt` FREEZE there. A frozen clock stops
+ *   terrain_rock's 15 s retail light tick from ever expiring again and makes
+ *   terrain_dirt's per-entity footfall limiter (`tSec - last < interval`)
+ *   reject every step forever. When supplied, dt is derived from successive
+ *   live stamps so it stays truthful too.
  */
-export function terrainVfxTick(dt, ctx) {
+export function terrainVfxTick(dt, ctx, liveTsSec) {
   if (!_spine || _disabled()) return;
   if (_providers.size === 0 && !_trail) return;   // inert: no providers, no map
   _stats.ticks += 1;
@@ -774,8 +791,21 @@ export function terrainVfxTick(dt, ctx) {
   installTerrainVfxHooks(scene3d);
 
   // Single time source (plan §2.3) — never `performance.now()` in an effect.
-  const tSec = scene3d?.frameTime?.tsSec ?? _frameCtx.tSec;
-  const frameDt = Number.isFinite(dt) ? dt : (scene3d?.frameTime?.dt ?? 0);
+  // The caller's live monotonic stamp wins when it is offered; frameTime is the
+  // fallback for callers that predate the third argument (and for tests that
+  // drive the tick directly).
+  const hasLive = Number.isFinite(liveTsSec);
+  const tSec = hasLive ? liveTsSec : (scene3d?.frameTime?.tsSec ?? _frameCtx.tSec);
+  let frameDt;
+  if (hasLive) {
+    // Derive dt from successive LIVE stamps so it cannot freeze with frameTime.
+    const prev = _liveTickPrevSec;
+    _liveTickPrevSec = liveTsSec;
+    const delta = prev === null ? 0 : liveTsSec - prev;
+    frameDt = delta > 0 ? Math.min(delta, MAX_TICK_DT_SEC) : 0;
+  } else {
+    frameDt = Number.isFinite(dt) ? dt : (scene3d?.frameTime?.dt ?? 0);
+  }
 
   _frameCtx.scene3d = scene3d;
   _frameCtx.tSec = tSec;

@@ -220,5 +220,49 @@ check("no name lookup in the LUT builder / accessors",
   && !/name\s*===/.test(codeSection));
 check("TERRAIN_CODE_COUNT === 32", TERRAIN_CODE_COUNT === 32);
 
+// ---------------------------------------------------------------------------
+console.log("\n-- water-set DRIFT LOCK vs terrain.js (the injection seam is dead code) --");
+// `setTerrainWaterCodes()` exists so "the whole client agrees about
+// ?strictWaterCodes" (its own doc comment). It is never called — grep the tree:
+// zero call sites outside this module. So terrain_families' water set agrees
+// with the shader's `uWaterCodeMask` only because the reader and both literal
+// sets were COPIED from terrain.js verbatim. Nothing enforced that, and a
+// one-sided edit would silently desync scatter placement from the rendered
+// water. These assertions are that enforcement, until the seam is actually
+// wired (which needs a boot-path call this module does not own).
+{
+  const __d = dirname(fileURLToPath(import.meta.url));
+  const terrainSrc = readFileSync(resolvePath(__d, "scene3d/terrain.js"), "utf8");
+  const famSrc = readFileSync(resolvePath(__d, "scene3d/terrain_families.js"), "utf8");
+
+  check("setTerrainWaterCodes still has no call site outside terrain_families "
+    + "(if this fails, the seam got wired — delete this lock and trust it)",
+    !/setTerrainWaterCodes/.test(terrainSrc));
+
+  // terrain.js: `readStrictWaterCodesFlag() ? [16,17,18,19,20] : [16,...,22,23]`
+  const tj = terrainSrc.match(
+    /readStrictWaterCodesFlag\(\)\s*\?\s*\[([0-9,\s]+)\]\s*:\s*\[([0-9,\s]+)\]/);
+  const norm = (s) => s.split(",").map((v) => v.trim()).filter(Boolean).join(",");
+  check("terrain.js's two water sets are still readable by this lock", !!tj);
+  if (tj) {
+    check("STRICT set matches terrain.js exactly",
+      norm(tj[1]) === STRICT_WATER_CODES.join(","),
+      `terrain.js=[${norm(tj[1])}] families=[${STRICT_WATER_CODES.join(",")}]`);
+    check("LEGACY set matches terrain.js exactly",
+      norm(tj[2]) === LEGACY_WATER_CODES.join(","),
+      `terrain.js=[${norm(tj[2])}] families=[${LEGACY_WATER_CODES.join(",")}]`);
+  }
+
+  // Both files must keep the SAME reader shape, including its two documented
+  // surprises (absent ⇒ ON in a browser; no-window ⇒ LEGACY under node).
+  const readerOf = (src) => {
+    const m = src.match(/get\("strictWaterCodes"\)\s*!==\s*"off"/g);
+    return m ? m.length : 0;
+  };
+  check("both files read ?strictWaterCodes with the same `!== \"off\"` shape",
+    readerOf(terrainSrc) > 0 && readerOf(famSrc) > 0,
+    `terrain.js=${readerOf(terrainSrc)} families=${readerOf(famSrc)}`);
+}
+
 console.log(`\nterrain_families: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

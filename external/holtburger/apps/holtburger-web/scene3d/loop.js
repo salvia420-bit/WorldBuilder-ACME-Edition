@@ -2477,7 +2477,15 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // `scene3d.frameTime` clock as the two ticks above (single time source).
   // Same try/catch shape: a thrown provider never kills the tick.
   try {
-    terrainVfxTick(scene3d?.frameTime?.dt ?? 0, scene3d);
+    // Third arg = the LIVE monotonic seconds (`_rp3TsSec`), NOT
+    // scene3d.frameTime.tsSec. frameTime is stamped ONLY by the rAF tick, and
+    // the ?netDrainHz=N interval also calls tickPerFrame while that loop idles
+    // under ?renderOnDemand=1 / ?nullRender=1 — so every terrain-VFX family's
+    // clock and dt froze in exactly the bot sessions they run in. Same hazard,
+    // and same remedy, as the R1#14 terrain-light and R4#5 IBL throttles.
+    // terrain_vfx derives its own dt from successive live stamps; the frameTime
+    // dt stays as the fallback for callers that pass no live clock.
+    terrainVfxTick(scene3d?.frameTime?.dt ?? 0, scene3d, _rp3TsSec);
   } catch (e) {
     // eslint-disable-next-line no-console
     if (!scene3d._terrainVfxTickWarned) {

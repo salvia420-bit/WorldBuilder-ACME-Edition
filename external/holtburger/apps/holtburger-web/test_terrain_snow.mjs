@@ -528,13 +528,28 @@ console.log("\n-- N11 footprints ----------------------------------------------"
     && mats[0].uniforms.uSnowTrailCenter.value.y === -192
     && mats[0].uniforms.uSnowTrailRadius.value === 64
     && mats[0].uniforms.uSnowTrailEnabled.value === 1);
-  check("ABSENT MAP ⇒ the uniform is driven OFF and the texture nulled "
-    + "(no lazy-ensure — the grass-stomp precedent)",
+  // 2026-08-03 — EXPECTATION UPDATED. This used to also require the shared
+  // sampler to be NULLED on the absent-map path. That was wrong and actively
+  // harmful: `uSnowTrailMap` / `uSnowTrailCenter` / `uSnowTrailRadius` are
+  // SHARED with the wave-3B mud family (one trail map, one sampler; the "snow"
+  // name is a wave-2A artefact), and mud gates on its own `uMudTrailEnabled`.
+  // Nulling the sampler here yanked it out from under a LIVE mud provider —
+  // snow's dispose() does exactly this — leaving the mud block sampling three's
+  // default 1x1 white texture, i.e. a full-strength dent + darkening over the
+  // whole dirt family. The mud sibling already guarded its shared writes on
+  // `tex`; snow now matches. The gate is what turns the effect off, and each
+  // family owns only its own gate.
+  check("ABSENT MAP ⇒ this family's GATE is driven OFF (no lazy-ensure — the "
+    + "grass-stomp precedent)",
     (() => {
       pushSnowTrailUniforms(mats, null);
-      return mats[0].uniforms.uSnowTrailEnabled.value === 0
-        && mats[0].uniforms.uSnowTrailMap.value === null;
+      return mats[0].uniforms.uSnowTrailEnabled.value === 0;
     })());
+  check("ABSENT MAP ⇒ the SHARED sampler/centre/radius are left alone for the "
+    + "mud family (they are never read behind a closed gate)",
+    mats[0].uniforms.uSnowTrailMap.value !== null
+    && mats[0].uniforms.uSnowTrailMap.value.id === 7
+    && mats[0].uniforms.uSnowTrailRadius.value === 64);
   check("a trail whose own map is null also reads as OFF",
     (() => {
       const dead = { uniforms: { uTrailMap: { value: null }, uTrailRadius: { value: 48 } } };
@@ -670,6 +685,63 @@ check("ice is the 2/27 subset of it, never 15 (Snow stays matte)",
 check("ice sheds far less spindrift than powder (there is nothing loose on it)",
   SNOWICE_VARIANTS[2].drift < SNOWICE_VARIANTS[15].drift
   && SNOWICE_VARIANTS[27].drift < SNOWICE_VARIANTS[15].drift);
+
+// ---------------------------------------------------------------------------
+console.log("\n-- SHARED TRAIL SAMPLER: snow and mud must not disable each other --");
+// There is ONE trail map and ONE sampler in the terrain shader; the wave-2A
+// "uSnowTrail*" names are shared with the wave-3B mud family, which gates on its
+// own `uMudTrailEnabled`. Snow's absent-map / dispose() path used to null the
+// shared sampler while mud was still gated ON.
+{
+  const { pushMudTrailUniforms } = await import("./scene3d/terrain_dirt.js");
+  const tex = { isTexture: true, id: 42 };
+  const trail = {
+    uniforms: {
+      uTrailMap: { value: tex },
+      uTrailCenter: { value: { x: 96, y: 48 } },
+      uTrailRadius: { value: 32 },
+    },
+  };
+  const mat = () => ({
+    uniforms: {
+      uSnowTrailMap: { value: null },
+      uSnowTrailCenter: { value: { x: 0, y: 0 } },
+      uSnowTrailRadius: { value: 0 },
+      uSnowTrailEnabled: { value: 0 },
+      uMudTrailEnabled: { value: 0 },
+      uMudWetness: { value: 0 },
+    },
+  });
+
+  // Both families live and pushing this frame.
+  const mats = [mat()];
+  pushSnowTrailUniforms(mats, trail);
+  pushMudTrailUniforms(mats, trail, 0.5);
+  const u = mats[0].uniforms;
+  check("both families share one bound sampler while both are live",
+    u.uSnowTrailMap.value === tex && u.uSnowTrailEnabled.value === 1
+    && u.uMudTrailEnabled.value === 1);
+
+  // Snow goes away (its provider disposes / its map is absent) — mud stays.
+  pushSnowTrailUniforms(mats, null);
+  check("snow's teardown closes only ITS gate",
+    u.uSnowTrailEnabled.value === 0 && u.uMudTrailEnabled.value === 1);
+  check("snow's teardown does NOT unbind the sampler mud is still reading",
+    u.uSnowTrailMap.value === tex,
+    `map=${u.uSnowTrailMap.value === null ? "null" : "bound"}`);
+  check("… nor does it move the centre/radius mud is still reading",
+    u.uSnowTrailCenter.value.x === 96 && u.uSnowTrailRadius.value === 32);
+
+  // And symmetrically: mud's teardown must not disable a live snow.
+  const mats2 = [mat()];
+  pushSnowTrailUniforms(mats2, trail);
+  pushMudTrailUniforms(mats2, trail, 0.5);
+  pushMudTrailUniforms(mats2, null, 0);
+  const u2 = mats2[0].uniforms;
+  check("mud's teardown closes only ITS gate and leaves snow bound",
+    u2.uMudTrailEnabled.value === 0 && u2.uSnowTrailEnabled.value === 1
+    && u2.uSnowTrailMap.value === tex);
+}
 
 console.log(`\nterrain snow: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
