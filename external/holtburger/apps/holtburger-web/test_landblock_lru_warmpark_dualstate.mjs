@@ -189,8 +189,16 @@ function makeGeom(tag) {
   lru.park(farKey);
   check("forced dual state resolves to a single pool copy",
     lru.parkPool.has(farKey) && !lru.entries.has(farKey));
-  check("forced dual state cost exactly one true-dispose", lru.getStats().evicted === 1,
+  // 2026-08-03 (#15) — the recovery is now NON-destructive: the stale pool
+  // copy is discarded without re-entering evict() against the still-resident
+  // LB (the old path tore down the LIVE containers, cleared the baked marks
+  // and purged wasm collision to heal a bookkeeping glitch). No true-dispose;
+  // the drop is counted on its own stat instead.
+  check("forced dual state does NOT true-dispose the live LB", lru.getStats().evicted === 0,
     `evicted=${lru.getStats().evicted}`);
+  check("forced dual state drops exactly one stale pool copy",
+    lru.getStats().stalePoolCopiesDropped === 1,
+    `stalePoolCopiesDropped=${lru.getStats().stalePoolCopiesDropped}`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

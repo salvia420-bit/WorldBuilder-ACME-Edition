@@ -5168,6 +5168,23 @@ const LOD_REBAKE_ON = (() => {
   } catch (_) { return true; }
 })();
 
+// Unregister a per-LB terrain ShaderMaterial from the two per-frame registries
+// the bake pushes it onto (2026-08-03). INVARIANT: a material that is about to
+// be disposed must not remain in either, or `loop.js::tickTerrainUTime` keeps
+// pushing uniforms into a dead material and `csm.refreshCsmUniforms` keeps
+// walking it forever — `csmState.patchedMaterials` has no other remover, so a
+// long tour accumulates every terrain material ever baked. Fail-soft.
+function unregisterTerrainMaterial(scene3d, material) {
+  if (!scene3d || !material) return;
+  try {
+    if (Array.isArray(scene3d.terrainMaterials)) {
+      const i = scene3d.terrainMaterials.indexOf(material);
+      if (i !== -1) scene3d.terrainMaterials.splice(i, 1);
+    }
+  } catch (_) { /* fail-soft */ }
+  try { scene3d.csmState?.patchedMaterials?.delete(material); } catch (_) { /* fail-soft */ }
+}
+
 // Re-point the LOD reference at `newLbKey` and enqueue every resident terrain
 // LB whose baked subdiv level no longer matches what the new centre picks.
 // Private — driven by `tickTerrainLodRebake` on an LB change.
@@ -5212,10 +5229,11 @@ function reconcileTerrainLodForCentre(scene3d, newLbKey) {
 // Tear down only the TERRAIN layer for one queued LB and re-bake it at the
 // new level. LandblockLRU.evict is intentionally NOT used — it would also
 // drop the LB's buildings / statics / EnvCells, which a terrain LOD swap must
-// leave in place. The LRU entry keeps stale refs to the now-disposed terrain
-// resources, but eviction's dispose() calls are try/caught no-ops and the
-// fresh bake's track() appends the new refs (a small JS-ref accrual bounded by
-// how often one LB re-bakes before it evicts — acceptable for opt-in). The new
+// leave in place. 2026-08-03: the swapped-out refs are UNTRACKED from the LRU
+// before we dispose them (the old "stale refs are harmless, dispose() is a
+// try/caught no-op" claim was false — the RP4 texture pool's dispose returns a
+// texture to the free list, so a second one hands a live LB's texture to the
+// next bake). The fresh bake's track() then appends the new refs. The new
 // mesh arrives async, so the LB shows a brief terrain gap; the integrator
 // holds pose Z from the cached heights so the player never falls through.
 function drainOneTerrainLodRebake(scene3d) {
@@ -5234,13 +5252,28 @@ function drainOneTerrainLodRebake(scene3d) {
     }
     for (const c of kill) {
       group.remove(c);
-      try { c.geometry && c.geometry.dispose && c.geometry.dispose(); } catch (_) {}
       const m = c.material;
-      if (m && !(m.userData && m.userData.__cacheOwned)) {
-        try { m.dispose && m.dispose(); } catch (_) {}
+      const ownMat = m && !(m.userData && m.userData.__cacheOwned) ? m : null;
+      const vtTex = c.userData && c.userData.vertexTypesTexture;
+      const mdTex = c.userData && c.userData.mergeDataTexture;
+      // 2026-08-03 — we dispose these HERE, so the LRU must stop tracking them
+      // first (one dispose per resource; see untrackDisposables). Without it
+      // eviction disposes them a second time, which for the RP4-pooled
+      // DataTextures returns a texture another LB has already checked out.
+      try {
+        scene3d.landblockLru?.untrackDisposables?.(lbKey, {
+          geometries: c.geometry ? [c.geometry] : [],
+          materials: ownMat ? [ownMat] : [],
+          textures: [vtTex, mdTex].filter(Boolean),
+        });
+      } catch (_) { /* fail-soft */ }
+      try { c.geometry && c.geometry.dispose && c.geometry.dispose(); } catch (_) {}
+      if (ownMat) {
+        unregisterTerrainMaterial(scene3d, ownMat);
+        try { ownMat.dispose && ownMat.dispose(); } catch (_) {}
       }
-      try { c.userData && c.userData.vertexTypesTexture && c.userData.vertexTypesTexture.dispose(); } catch (_) {}
-      try { c.userData && c.userData.mergeDataTexture && c.userData.mergeDataTexture.dispose(); } catch (_) {}
+      try { vtTex && vtTex.dispose(); } catch (_) {}
+      try { mdTex && mdTex.dispose(); } catch (_) {}
     }
   }
   // ?terrainBatch — also excise this LB's geometry from the cross-LB terrain
@@ -5418,6 +5451,10 @@ export async function bakeTerrainForLandblock(
     geom = subdividedLandblockMeshToGeometry(subdivEntry.mesh);
     effectiveSubdiv = subdivEntry.level;
     if (typeof subdivEntry.mesh.free === "function") subdivEntry.mesh.free();
+    // 2026-08-03 — mark CONSUMED. A ring driver holds this same entry object
+    // and frees whatever is left over (LBs we short-circuited); a null mesh is
+    // how it knows this one is already gone. Harmless on the solo path.
+    subdivEntry.mesh = null;
   } else {
     geom = landblockMeshToGeometry(wasmMesh);
   }
@@ -6136,12 +6173,33 @@ export async function bakeTerrainForLandblock(
   // Item 4 (2026-06-22): pre-warm this LB's shader program + DataTexture uploads
   // (vertexTypes / TexMerge) in the driver background BEFORE attaching, so the
   // first render frame after attach doesn't pay a synchronous compile+upload hitch
-  // (the cost the 1070 r10 probe flagged). Safe without a residency re-check: the LB
-  // isn't LRU-tracked until this baker resolves and the stream guard holds the
-  // in-flight key, so it can't be evicted across this await. `?bakePrewarm=off` skips.
+  // (the cost the 1070 r10 probe flagged). `?bakePrewarm=off` skips.
   // (?terrainBatch: skipped for an absorbed proxy — it never renders.)
+  //
+  // 2026-08-03 — RESIDENCY RE-CHECK across the await. The old comment claimed
+  // the stream guard's in-flight key made an eviction impossible here, but the
+  // LRU only honours that signal under warm-park (`warmParkEnabled &&
+  // _hasInFlightBake`), so `?warmPark=off` (and the headless default) can evict
+  // mid-await: evict clears `terrainBakedLbs`, finds no child to remove (we
+  // have not attached yet), and the next load then bakes a SECOND mesh on top
+  // of this one. `terrainBakedLbs` (set above) is the residency mark — if it is
+  // gone, we were reclaimed, so drop what we built and let the next load
+  // re-bake cleanly.
   if (!terrainBatchAbsorbed) {
     await prewarmSubtree(scene3d, lbMesh);
+    if (!scene3d.terrainBakedLbs.has(lbKey)) {
+      unregisterTerrainMaterial(scene3d, material);
+      try { geom.dispose && geom.dispose(); } catch (_) {}
+      if (material && !material.userData?.__cacheOwned) {
+        try { material.dispose && material.dispose(); } catch (_) {}
+      }
+      try { vertexTypesTex && vertexTypesTex.dispose(); } catch (_) {}
+      try { mergeDataTex && mergeDataTex.dispose(); } catch (_) {}
+      if (!opts.prefetchedMesh && typeof wasmMesh.free === "function") {
+        try { wasmMesh.free(); } catch (_) {}
+      }
+      return null;
+    }
   }
 
   scene3d.terrainGroup.add(lbMesh);
@@ -6408,6 +6466,21 @@ export async function bakeTerrainRing(
         // Already-freed wasm structs throw; swallow because we own
         // single-free here and the alternative is leaking memory if a
         // future refactor stops returning fresh handles per call.
+      }
+    }
+  }
+  // 2026-08-03 — and the subdiv meshes the ring prefetched. The baker frees
+  // (and nulls) the ones it CONSUMES; an LB that short-circuited on
+  // `terrainBakedLbs.has` returns before that, so its handle survives here and
+  // was previously leaked outright. Anything still holding a `.mesh` is
+  // unconsumed by construction, so this is single-free like the loop above.
+  // These are the largest payload in the pipeline at level 4/8 — a re-bake
+  // over an overlapping ring leaked the whole batch.
+  if (subdivMeshes) {
+    for (const entry of subdivMeshes) {
+      const m = entry?.mesh;
+      if (m && typeof m.free === "function") {
+        try { m.free(); } catch (_) { /* already-freed handles throw */ }
       }
     }
   }

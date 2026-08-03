@@ -38,8 +38,19 @@ const clip = buildSceneryAnimationClip(THREE, frames, numParts, numFrames, fps);
 check("returns a THREE.AnimationClip", clip instanceof THREE.AnimationClip);
 check("4 tracks (2 parts × position+quaternion)", clip.tracks.length === 4,
   `got ${clip.tracks.length}`);
+// Default = closedLoop: the SYNTHETIC wind clip repeats frame 0 as its closing
+// frame (wind_rig.js), so its period is (numFrames-1)/fps.
 check("duration = (numFrames-1)/fps", approx(clip.duration, 2 / 30),
   `got ${clip.duration}`);
+// closedLoop:false = a DAT 0x03 Animation — n frames each held 1/fps, no
+// duplicated closing frame, so the loop is numFrames/fps (matches the
+// entity-side builder in animation.js).
+const openClip = buildSceneryAnimationClip(
+  THREE, frames, numParts, numFrames, fps, { closedLoop: false });
+check("closedLoop:false duration = numFrames/fps", approx(openClip.duration, 3 / 30),
+  `got ${openClip.duration}`);
+check("closedLoop:false keeps the same tracks/times", openClip.tracks.length === 4 &&
+  approx(openClip.tracks[0].times[2], 2 / 30));
 
 const byName = Object.fromEntries(clip.tracks.map((t) => [t.name, t]));
 check("track names part0/part1 .position/.quaternion",

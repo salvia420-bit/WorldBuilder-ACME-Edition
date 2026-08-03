@@ -11379,7 +11379,13 @@ export class EntityManager {
     }
 
     // The entity may have been removed while the fetch was in flight.
-    if (!this.entityMap.has(inst.guid >>> 0)) {
+    // 2026-08-03 — must be an IDENTITY check, not `has(guid)`: a same-guid
+    // respawn (dynamic-LOD `_respawnForLod`, appearance despawn+respawn) puts a
+    // NEW instance under this guid, so `has()` passes while `inst` is the dead
+    // one. Attaching then parents lights to a detached rig and pushes them into
+    // `scene3d.activeLights` / `_entityLightCount` with no owner left to release
+    // them (remove() already ran and nulled `inst._setupLights`).
+    if (inst._disposed || this.entityMap.get(inst.guid >>> 0) !== inst) {
       for (const sl of setupLights) {
         if (typeof sl.free === "function") { try { sl.free(); } catch (_) {} }
       }
@@ -11988,9 +11994,21 @@ export class EntityManager {
         return;
       }
       const mixer = inst.mixer;
+      // 2026-08-03 — INVARIANT: at most ONE base-suppression 'finished' listener
+      // per rig. The closure below only unregisters itself from inside its own
+      // 'finished' handler, but an INTERRUPTED overlay (action.stop(), eviction's
+      // uncacheAction, a superseding overlay) never fires 'finished' — so without
+      // this the closures accumulate on the local player's session-long mixer,
+      // each pinning a dead action + clip. Retire the previous one here;
+      // `_completeOverlay` retires it on the cancellation paths.
+      if (inst._baseSuppressOff) { try { inst._baseSuppressOff(); } catch (_) {} }
+      const off = () => {
+        try { mixer.removeEventListener("finished", onFinished); } catch (_) {}
+        if (inst._baseSuppressOff === off) inst._baseSuppressOff = null;
+      };
       const onFinished = (e) => {
         if (e.action !== overlayAction) return;
-        try { mixer.removeEventListener("finished", onFinished); } catch (_) {}
+        off();
         if (CAST_OVERLAY_GUARD) {
           // WS03 (?castOverlayGuard): only THIS overlay's still-active suppression
           // may restore — an anim-break or a superseding overlay already cleared
@@ -12015,6 +12033,7 @@ export class EntityManager {
         }
       };
       mixer.addEventListener("finished", onFinished);
+      inst._baseSuppressOff = off;
     } catch (_) { /* never block the swing on the weight-ramp */ }
   }
 
@@ -12152,6 +12171,9 @@ export class EntityManager {
     try {
       if (inst && action && inst._baseSuppressAction === action) {
         inst._baseSuppressAction = null;
+        // This overlay is done — retire any legacy (non-?hookDrain) 'finished'
+        // listener armed for it so it can't outlive the suppression.
+        if (inst._baseSuppressOff) { try { inst._baseSuppressOff(); } catch (_) {} }
         const saved = inst._baseSuppressSaved;
         inst._baseSuppressSaved = null;
         if (saved && saved.baseAction) {
@@ -12369,7 +12391,24 @@ export class EntityManager {
   _getOrCloneEntityMaterial(inst, surfaceDid, opts = {}) {
     const did = surfaceDid >>> 0;
     if (!inst._entityMaterials) inst._entityMaterials = new Map();
-    const existing = inst._entityMaterials.get(did);
+    let existing = inst._entityMaterials.get(did);
+    // 2026-08-03 — INVARIANT: every mutation reached through this getter (ramp
+    // tweens, ethereal, camera fade, texture velocity) is PER-ENTITY, so what we
+    // hand back must never be cache-owned. `_entityMaterials` is not all
+    // entity-owned: the recolored spawn path and the R-8 recovery ladder store
+    // `installPaletted` materials, which materials.js tags `__cacheOwned` and
+    // shares with every entity carrying the same palette signature. Upgrade such
+    // an entry to a private clone here — otherwise the mutation bleeds across
+    // characters, and the `cloneTexture` branch below would re-point the CACHE
+    // material's `.map` (desyncing MaterialCache.palettedTextures).
+    if (existing && existing.userData?.__cacheOwned === true) {
+      const owned = existing.clone();
+      owned.userData = { ...(owned.userData || {}), __disposable: true };
+      delete owned.userData.__cacheOwned;
+      inst._entityMaterials.set(did, owned);
+      this._repointEntityMeshes(inst, did, owned);
+      existing = owned;
+    }
     if (existing) {
       // Already entity-owned. If the caller now wants a cloned texture
       // and the existing clone still points at a shared `.map`, clone
@@ -12405,21 +12444,27 @@ export class EntityManager {
       cloned.map = tex;
     }
     inst._entityMaterials.set(did, cloned);
-    // Re-point every Mesh under `inst.parts` that referenced the
-    // shared material. Spawn (~line 1671) stamps `userData.surfaceDid`
-    // on each Mesh so this lookup is O(parts × meshes_per_part).
-    if (Array.isArray(inst.parts)) {
-      for (const part of inst.parts) {
-        if (!part) continue;
-        for (const child of part.children) {
-          if (!child || !child.isMesh) continue;
-          if ((child.userData?.surfaceDid >>> 0) === did) {
-            child.material = cloned;
-          }
+    this._repointEntityMeshes(inst, did, cloned);
+    return cloned;
+  }
+
+  /**
+   * Re-point every Mesh under `inst.parts` that renders `did` at `mat`. Spawn
+   * stamps `userData.surfaceDid` on each Mesh so this lookup is
+   * O(parts × meshes_per_part). Shared by both clone paths in
+   * `_getOrCloneEntityMaterial`.
+   */
+  _repointEntityMeshes(inst, did, mat) {
+    if (!Array.isArray(inst.parts)) return;
+    for (const part of inst.parts) {
+      if (!part) continue;
+      for (const child of part.children) {
+        if (!child || !child.isMesh) continue;
+        if ((child.userData?.surfaceDid >>> 0) === (did >>> 0)) {
+          child.material = mat;
         }
       }
     }
-    return cloned;
   }
 
   /**

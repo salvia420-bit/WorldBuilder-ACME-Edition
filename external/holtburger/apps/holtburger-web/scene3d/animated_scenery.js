@@ -154,9 +154,10 @@ const _builtKeys = new Set(); // dedupe across ring re-bakes.
  * @param {number} numParts
  * @param {number} numFrames
  * @param {number} fps
+ * @param {object} [opts] `{closedLoop}` — see the duration note below.
  * @returns {object|null} THREE.AnimationClip, or null if degenerate
  */
-export function buildSceneryAnimationClip(THREE_, frames, numParts, numFrames, fps) {
+export function buildSceneryAnimationClip(THREE_, frames, numParts, numFrames, fps, opts) {
   if (!frames || numParts <= 0 || numFrames <= 0) return null;
   const expect = numParts * numFrames * 7;
   if (frames.length < expect) return null;
@@ -186,7 +187,17 @@ export function buildSceneryAnimationClip(THREE_, frames, numParts, numFrames, f
     tracks.push(new THREE_.QuaternionKeyframeTrack(`part${p}.quaternion`, times, quat));
   }
   if (tracks.length === 0) return null;
-  const duration = Math.max(dt, (numFrames - 1) * dt);
+  // Loop-duration convention — the two producers differ, so it is EXPLICIT:
+  //  - closedLoop (default): the SYNTHETIC wind clip repeats its opening frame as
+  //    its closing frame (wind_rig.js: `frame[0] === frame[numFrames-1]`, every
+  //    band an integer number of cycles over `(numFrames-1)/fps`), so its period
+  //    is (n-1)*dt. Using n*dt would hold the duplicate frame an extra tick.
+  //  - closedLoop:false: a DAT 0x03 Animation holds each of its n frames for
+  //    1/fps with NO duplicate, so the loop is n*dt. (n-1)*dt gave the final
+  //    authored frame zero dwell and ran every cycle one frame short. Matches
+  //    the entity-side builder, animation.js `numFrames / framerate`.
+  const closedLoop = opts?.closedLoop !== false;
+  const duration = Math.max(dt, (closedLoop ? numFrames - 1 : numFrames) * dt);
   return new THREE_.AnimationClip("scenery-default-anim", duration, tracks);
 }
 
@@ -290,7 +301,9 @@ async function getOrCreateDidGroup(animId, wasmExports) {
   const frames = anim.frames;
   anim.free?.();
   if (numParts <= 0 || numFrames <= 0) return null;
-  const clip = buildSceneryAnimationClip(THREE, frames, numParts, numFrames, animSceneryFps());
+  // DAT frames: n frames × 1/fps, no duplicated closing frame → open loop.
+  const clip = buildSceneryAnimationClip(
+    THREE, frames, numParts, numFrames, animSceneryFps(), { closedLoop: false });
   if (!clip) return null;
   const template = new THREE.Group();
   template.name = `anim-template-0x${animId.toString(16)}`;
@@ -321,9 +334,6 @@ async function buildOne(p, wasmExports, materialCache, spFetch) {
   const animId = (p.defaultAnimationId >>> 0);
   if (setupId === 0 || animId === 0) return null;
 
-  const didGroup = await getOrCreateDidGroup(animId, wasmExports);
-  if (!didGroup) return null;
-
   let bundle;
   try {
     bundle = await wasmExports.fetchBuildingPlacement(setupId);
@@ -337,6 +347,18 @@ async function buildOne(p, wasmExports, materialCache, spFetch) {
   const hinge = (typeof bundle.takePartHingeFrames === "function")
     ? bundle.takePartHingeFrames() : [];
   bundle.free?.();
+
+  // INVARIANT: create the shared DID driver only once every fallible fetch has
+  // succeeded. It enters `_didGroups` with refCount 0 and its mixer is advanced
+  // by the rAF forever; the ONLY reclaim path is an instance dropping the last
+  // ref, so a group created before a `return null` below would tick unreachable
+  // for the rest of the session.
+  const didGroup = await getOrCreateDidGroup(animId, wasmExports);
+  if (!didGroup) {
+    // takePartMeshes() already moved ownership to JS — free them on this bail-out.
+    for (const m of partMeshes) { try { m?.free?.(); } catch (_) {} }
+    return null;
+  }
 
   const node = new THREE.Group();
   node.name = `anim-scenery-0x${setupId.toString(16)}`;
@@ -383,31 +405,40 @@ async function buildOne(p, wasmExports, materialCache, spFetch) {
  * aren't double-rendered. No-op when `?animScenery` is off or nothing qualifies.
  * Fail-soft + capped. `opts.resolveParent(item)` chooses the THREE.Group to add
  * the node to (default `scene3d.staticsGroup`; cells.js passes the cell container
- * for interior visibility gating). Returns the count built.
+ * for interior visibility gating).
+ *
+ * 2026-08-03 coverage-gated peel — returns `{built:number, failed:Placement[]}`
+ * (same contract as `attachWindTrees`). INVARIANT: the caller peels these out of
+ * the FROZEN path, so anything this function cannot turn into a live animated
+ * node must come back in `failed` or it renders NOWHERE. `failed` carries the
+ * ORIGINAL placement objects for every over-cap / failed / unbuildable entry;
+ * statics.js re-freezes them so a prop is at worst STATIC, never invisible.
  */
 export async function attachAnimatedScenery(scene3d, placements, wasmExports, opts) {
-  if (!animSceneryEnabled()) return 0;
-  if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return 0;
+  if (!animSceneryEnabled()) return { built: 0, failed: [] };
+  if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return { built: 0, failed: [] };
   if (typeof wasmExports.fetchAnimation !== "function"
       || typeof wasmExports.fetchBuildingPlacement !== "function") {
-    return 0; // pre-rebuild pkg — soft-degrade to frozen.
+    return { built: 0, failed: placements }; // pre-rebuild pkg — re-freeze static.
   }
   const scripted = placements.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) !== 0);
-  if (scripted.length === 0) return 0;
+  if (scripted.length === 0) return { built: 0, failed: [] };
   _rafDisposed = false; // re-arm after a prior dispose if scenery loads again.
 
   const resolveParent = (typeof opts?.resolveParent === "function") ? opts.resolveParent : null;
   const { getOrCreateMaterialCache } = await import("./statics.js");
   const materialCache = getOrCreateMaterialCache(scene3d);
-  if (!materialCache) return 0;
+  if (!materialCache) return { built: 0, failed: placements }; // re-freeze, don't vanish
   const spFetch = surfacePixelsFetcher(wasmExports);
 
   let built = 0;
   let dropped = 0;
+  // Placements that could NOT become a live animated node — re-frozen by the caller.
+  const failed = [];
   for (const p of scripted) {
     const key = placementKey(p);
     if (_builtKeys.has(key)) continue;
-    if (_instances.length >= maxAnimated()) { dropped += 1; continue; }
+    if (_instances.length >= maxAnimated()) { failed.push(p); dropped += 1; continue; }
     _builtKeys.add(key);
     // ?animSceneryInstanced: outdoor (staticsGroup-parented) placements take the
     // instanced builder; interior (resolveParent → cell container) placements
@@ -437,13 +468,14 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
       built += 1;
     } else {
       _builtKeys.delete(key); // allow retry on a later bake.
+      failed.push(p);
     }
   }
   if (built > 0 || dropped > 0) {
     console.log(`[anim-scenery] built ${built} instances across ${_didGroups.size} anim DIDs` +
-      (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax)` : ""));
+      (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax) → re-frozen` : ""));
   }
-  return built;
+  return { built, failed };
 }
 
 // ===========================================================================
@@ -579,10 +611,12 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
   const setupId = (p.objId ?? p.obj_id ?? p.modelId ?? 0) >>> 0;
   const animId = (p.defaultAnimationId >>> 0);
   if (setupId === 0 || animId === 0) return null;
-  const didGroup = await getOrCreateDidGroup(animId, wasmExports);
-  if (!didGroup) return null;
+  // Shared geometry FIRST — see the invariant in buildOne: a `_didGroups` entry
+  // created before a `return null` is an unreclaimable per-frame mixer.
   const shared = await _getSharedSetupGeom(setupId, wasmExports);
   if (!shared) return null;
+  const didGroup = await getOrCreateDidGroup(animId, wasmExports);
+  if (!didGroup) return null;
 
   const node = new THREE.Group();
   node.name = `anim-scenery-0x${setupId.toString(16)}`;
@@ -1094,6 +1128,7 @@ export function disposeAnimatedScenery(_scene3d) {
   }
   _geomList.length = 0;
   _geomCache.clear();
+  _windRigCache.clear();
 }
 
 // ── INERT diag surface (P4.3 rig byte-identity proof) ────────────────────────

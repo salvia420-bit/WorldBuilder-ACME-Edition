@@ -1178,10 +1178,15 @@ export class CameraSwitcher {
       const p = h && typeof h.getLocalPlayerPose === "function" ? h.getLocalPlayerPose() : null;
       if (!p) return { x: 0, y: 0, z: 0 };
       const lb = p.landblockId >>> 0;
+      const px = p.x;
+      const py = p.y;
+      const pz = p.z;
+      // WASM-BOX LIFETIME (see _integratorWorldPose): release after copying.
+      try { p.free?.(); } catch (_) { /* already released */ }
       return {
-        x: ((lb >>> 24) & 0xff) * 192 + p.x,
-        y: ((lb >>> 16) & 0xff) * 192 + p.y,
-        z: p.z,
+        x: ((lb >>> 24) & 0xff) * 192 + px,
+        y: ((lb >>> 16) & 0xff) * 192 + py,
+        z: pz,
       };
     };
     window.__cam = {

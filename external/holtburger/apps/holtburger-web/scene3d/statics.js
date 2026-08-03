@@ -1921,6 +1921,22 @@ export async function bakeStaticsForLandblock(
   // is null whenever ?treeWind / ?visual are both off ⇒ this block is skipped on
   // the off-trace (the materialCache used by attachWindTrees was already created at
   // the head of this baker, so no ordering hazard).
+  //
+  // 2026-08-03 — same treatment for ANIMATED SCENERY. The peel above already
+  // removed these from `statics`, so anything the animated path can't take (over
+  // the ?animSceneryMax cap, a failed build, a pre-rebuild pkg) renders NOWHERE
+  // unless it flows back here. Empty `failed` ⇒ statics unchanged ⇒ byte-identical.
+  if (animatedStatics) {
+    try {
+      const { failed } = await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
+      if (failed && failed.length) statics = statics.concat(failed);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics] attachAnimatedScenery threw; re-freezing all animated scenery:", e);
+      statics = statics.concat(animatedStatics);
+    }
+    animatedStatics = null; // consumed — the post-build attach below is now a no-op.
+  }
   if (windTrees) {
     try {
       const { failed } = await attachWindTrees(scene3d, windTrees, wasmExports);
@@ -2364,11 +2380,9 @@ export async function bakeStaticsForLandblock(
   // zero-cost when no placement carries a script (the pre-re-bake case).
   try {
     await attachStaticDefaultScripts(scene3d, statics, wasmExports);
-    if (animatedStatics) {
-      await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
-    }
-    // (wind trees were attached above, BEFORE the frozen build, so a clip miss
-    //  re-freezes via statics.concat(failed) instead of vanishing — P4.3.)
+    // (animated scenery + wind trees are attached ABOVE, before the frozen build,
+    //  so an over-cap / failed build re-freezes via statics.concat(failed)
+    //  instead of vanishing — P4.3 + 2026-08-03.)
     // Phase 3 — attach synthesized additive emitters to the particle
     // placements. ALL placements in THIS per-LB path share one landblock → one
     // constant owner key `static:<lbKey>` (lbKey is in scope from the bake
@@ -2696,6 +2710,21 @@ export async function bakeStaticsRing(
   // always-succeeds synthesis path `failed` is empty ⇒ `statics` is unchanged ⇒
   // the frozen build is byte-identical. windTrees is null whenever ?treeWind /
   // ?visual are both off ⇒ this block is skipped on the off-trace.
+  //
+  // 2026-08-03 — same treatment for ANIMATED SCENERY (ring path). The peel above
+  // already removed these from `statics`, so an over-cap / failed build must flow
+  // back here or it renders NOWHERE. Empty `failed` ⇒ statics unchanged.
+  if (animatedStatics) {
+    try {
+      const { failed } = await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
+      if (failed && failed.length) statics = statics.concat(failed);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics] ring attachAnimatedScenery threw; re-freezing all animated scenery:", e);
+      statics = statics.concat(animatedStatics);
+    }
+    animatedStatics = null; // consumed — the post-build attach below is now a no-op.
+  }
   if (windTrees) {
     try {
       const { failed } = await attachWindTrees(scene3d, windTrees, wasmExports);
@@ -3034,11 +3063,9 @@ export async function bakeStaticsRing(
   // when no placement carries a script (the pre-re-bake case).
   try {
     await attachStaticDefaultScripts(scene3d, statics, wasmExports);
-    if (animatedStatics) {
-      await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
-    }
-    // (wind trees were attached above, BEFORE the frozen build, so a clip miss
-    //  re-freezes via statics.concat(failed) instead of vanishing — P4.3.)
+    // (animated scenery + wind trees are attached ABOVE, before the frozen build,
+    //  so an over-cap / failed build re-freezes via statics.concat(failed)
+    //  instead of vanishing — P4.3 + 2026-08-03.)
     // Phase 3 — the ring path spans MANY landblocks, so key each emitter to
     // ITS placement's landblock: owner `static:<lbKey(p)>`. Each LB's emitters
     // then tear down independently when THAT LB evicts. OFF ⇒ null ⇒ skipped ⇒

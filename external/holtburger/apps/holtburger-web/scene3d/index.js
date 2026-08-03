@@ -2082,7 +2082,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     let prePose = null;
     if (syncTickDiag) {
       window.__syncTickDiag.enqueued += 1;
-      try { prePose = handle.getLocalPlayerPose(); } catch (_) {}
+      try {
+        const pp = handle.getLocalPlayerPose();
+        if (pp) {
+          // WASM-BOX LIFETIME (camera.js _integratorWorldPose): snapshot the
+          // fields into a plain object and release the box before the await.
+          prePose = { x: pp.x, y: pp.y, z: pp.z, heading: pp.heading };
+          pp.free?.();
+        }
+      } catch (_) {}
     }
     try {
       handle.tickMovement();
@@ -2102,6 +2110,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         )) {
           window.__syncTickDiag.poseChangedSameFrame += 1;
         }
+        // WASM-BOX LIFETIME: release after the comparison reads.
+        post?.free?.();
       } catch (_) {}
     }
   }
@@ -6035,12 +6045,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
       const p = handle.getLocalPlayerPose();
       if (!p || typeof p.heading !== "number") {
+        try { p?.free?.(); } catch (_) {}
         return { ok: false, reason: "no-heading-yet" };
       }
-      cs.followYaw = p.heading;
+      // WASM-BOX LIFETIME (camera.js _integratorWorldPose): copy, then free.
+      const heading = p.heading;
+      const px = p.x;
+      const py = p.y;
+      const pz = p.z;
+      try { p.free?.(); } catch (_) {}
+      cs.followYaw = heading;
       cs.followPitch = 0.3;
       cs.followDistance = 6.0;
-      return { ok: true, heading: +p.heading.toFixed(3), pose: { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2) } };
+      return { ok: true, heading: +heading.toFixed(3), pose: { x: +px.toFixed(2), y: +py.toFixed(2), z: +pz.toFixed(2) } };
     };
   }
 

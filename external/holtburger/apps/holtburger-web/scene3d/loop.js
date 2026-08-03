@@ -616,7 +616,13 @@ function drainRemotePoses(scene3d, sessionHandle) {
     // every row is then non-sticky and the F3-4 glue keeps owning remote
     // sticky — the self-degrading compose rule).
     const stickyFlags = frame.stickyFlags;
-    const n = Math.min(guids?.length ?? 0, landblocks?.length ?? 0);
+    // Row count includes the poses stride-7 bound: a short/absent poses array
+    // must yield fewer rows, not undefined reads → NaN into applyManagedPose.
+    const n = Math.min(
+      guids?.length ?? 0,
+      landblocks?.length ?? 0,
+      Math.floor((poses?.length ?? 0) / 7),
+    );
     for (let i = 0; i < n; i++) {
       const g = guids[i] >>> 0;
       if (isLocalPlayerGuid(g)) continue;
@@ -872,6 +878,10 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
       try { pose = sessionHandle.getLocalPlayerPose(); } catch (_) { pose = null; }
     }
     const world = rustPoseWorldFromPose(pose);
+    // WASM-BOX LIFETIME (camera.js _integratorWorldPose): release the box
+    // after the copy — this runs every rAF. rust_pose.js stays import-free /
+    // mock-friendly, so the free belongs here at the call site.
+    try { pose?.free?.(); } catch (_) { /* already released */ }
     if (!world) return;
     scene3d.entityManager.setPose(
       guid,
@@ -924,6 +934,9 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
         if (typeof pose.isOnGround === "boolean") {
           isOnGround = pose.isOnGround;
         }
+        // WASM-BOX LIFETIME (camera.js _integratorWorldPose): per-rAF read —
+        // release the wasm-bindgen box after copying the fields out.
+        pose.free?.();
       }
     } catch (_) {}
   }
@@ -1230,10 +1243,14 @@ function tickTerrainSunDir(scene3d) {
   // not an optimisation — the visible stepping of terrain brightness IS the
   // retail look, and a per-frame push would smooth it away.
   const g = _acTerrainGouraud;
-  const nowSec = scene3d?.frameTime?.tsSec
-    ?? ((typeof performance !== "undefined" && performance.now)
-      ? performance.now() * 0.001
-      : Date.now() * 0.001);
+  // LIVE monotonic clock, NOT scene3d.frameTime.tsSec: frameTime is stamped
+  // only by the rAF tick and FREEZES under ?renderOnDemand=1 (see the RP3
+  // throttle-clock note in tickPerFrame). A frozen clock here wedges the 15 s
+  // light tick after its first firing — terrain Gouraud sun/ambient would
+  // never re-light across day/night in net-drain-driven sessions.
+  const nowSec = (typeof performance !== "undefined" && performance.now)
+    ? performance.now() * 0.001
+    : Date.now() * 0.001;
   const lightTickDue = !(nowSec < g.nextLightTick);
   if (lightTickDue) {
     g.nextLightTick = nowSec + AC_LIGHT_TICK_SECONDS;
@@ -2005,10 +2022,13 @@ export function tickShadowReceiveGate(scene3d) {
   // permissive — a stationary player would re-walk every 200 ms
   // (cheap but pointless); a fast player would skip walks for
   // arbitrarily long if only the move-guard ran.
-  const tsSec = scene3d.frameTime?.tsSec
-    ?? (typeof performance !== "undefined" && performance.now
-        ? performance.now() * 0.001
-        : Date.now() * 0.001);
+  // LIVE monotonic clock, NOT scene3d.frameTime.tsSec — frameTime freezes
+  // under ?renderOnDemand=1 (RP3 throttle-clock note in tickPerFrame), and a
+  // frozen clock makes `tsSec - lastTickSec` permanently 0 after the first
+  // walk, so the gate would never re-tag on player movement again.
+  const tsSec = (typeof performance !== "undefined" && performance.now)
+    ? performance.now() * 0.001
+    : Date.now() * 0.001;
   if (!scene3d._shadowGateState) {
     scene3d._shadowGateState = {
       lastTickSec: 0,
@@ -2748,6 +2768,8 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
           if (p && typeof p.heading === "number" && Number.isFinite(p.heading)) {
             heading = p.heading;
           }
+          // WASM-BOX LIFETIME (camera.js _integratorWorldPose): release.
+          p?.free?.();
         }
         tickServerTurnControl({
           intentHeld: !!mi && ((mi.forward | 0) !== 0 || (mi.strafe | 0) !== 0 || (mi.turn | 0) !== 0),

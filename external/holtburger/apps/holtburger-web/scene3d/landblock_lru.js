@@ -615,6 +615,9 @@ export class LandblockLRU {
     // victims deferred because a guarded bake was still in flight.
     this._trackMergedWhileParked = 0;
     this._reclaimDeferredInFlight = 0;
+    // Dual-state pool records dropped by park()'s non-destructive recovery
+    // (_discardStalePoolCopy). Must stay 0 in a healthy session.
+    this._stalePoolCopiesDropped = 0;
 
     // #7/#10 geom-pressure telemetry: extra farthest-beyond-ring resident LBs
     // parked to feed the pool because live geometry was over MAX_LIVE_GEOM.
@@ -843,6 +846,31 @@ export class LandblockLRU {
       const bucket = d.instancedNodes;
       for (const n of options.instancedNodes) {
         if (n && !bucket.includes(n)) bucket.push(n);
+      }
+    }
+  }
+
+  // Drop specific refs from an LB's tracked disposables (2026-08-03).
+  // OWNERSHIP RULE: exactly one dispose() per resource, and the LRU is the
+  // disposer. A subsystem that must release a per-LB resource EARLY (the
+  // terrain LOD re-bake swapping a landblock's mesh in place) has to untrack
+  // it FIRST — otherwise eviction disposes a handle the subsystem already
+  // released, which for the RP4-pooled DataTextures re-parks a texture a
+  // different landblock has since checked out of the free list. Identity
+  // match; unlisted refs are ignored. Covers the parked copy too (park and
+  // its entry share one disposables object, but disposeParked can re-enter).
+  untrackDisposables(lbKey, options = {}) {
+    const key = lbKeyOf(lbKey >>> 0);
+    const seen = new Set();
+    for (const d of [this.entries.get(key)?.disposables,
+                     this.parkPool.get(key)?.disposables]) {
+      if (!d || seen.has(d)) continue;
+      seen.add(d);
+      for (const bucket of ["geometries", "materials", "textures", "lights"]) {
+        const drop = options[bucket];
+        if (!Array.isArray(drop) || drop.length === 0) continue;
+        if (!Array.isArray(d[bucket])) continue;
+        d[bucket] = d[bucket].filter((x) => !drop.includes(x));
       }
     }
   }
@@ -1234,13 +1262,21 @@ export class LandblockLRU {
     // victim ORDER (oldest first); it is only spread across ticks.
     const victims = [];
     let toEvict = Math.max(0, this.entries.size - this.maxResident);
+    let hitParkBound = false;
     for (const c of candidates) {
       if (toEvict <= 0) break;
-      if (victims.length >= MAX_PARKS_PER_TICK) break;
+      if (victims.length >= MAX_PARKS_PER_TICK) { hitParkBound = true; break; }
       victims.push(c.key);
       toEvict -= 1;
     }
-    let clipped = toEvict;
+    // 2026-08-03 — `clipped` counts what the per-tick BOUND deferred, not the
+    // residual overage. Exhausting `candidates` (everything inside ringFloor,
+    // younger than the hysteresis window, or mid-bake) means nothing was
+    // ELIGIBLE — no storm was prevented, so it must not bump parkBoundHits.
+    // Otherwise an adversarial cap (?lbCap=4 vs the 9-LB floor) reports a
+    // clipped storm on every tick forever, and the counters that PROVE the
+    // bounded-park path fires stop meaning anything.
+    let clipped = hitParkBound ? toEvict : 0;
     if (overGeom) {
       const floor = this._geomPressureResidentFloor();
       const residentAfter = this.entries.size - victims.length;
@@ -1809,9 +1845,21 @@ export class LandblockLRU {
     //    terrainMaterials registry (the per-rAF uTime push iterates
     //    this; a stale dispose'd entry would still receive a push
     //    until the next bake replaces it).
-    if (Array.isArray(s.terrainMaterials) && entry.disposables.materials.length > 0) {
+    //    2026-08-03: and off `csmState.patchedMaterials`, which
+    //    `csm.refreshCsmUniforms` walks every frame. Nothing else ever
+    //    removes from that Set, so without this every terrain material ever
+    //    baked stays live (and keeps its uniforms' texture refs alive) for
+    //    the session. Inlined rather than imported — this file is a
+    //    zero-import leaf (see step 5b).
+    if (entry.disposables.materials.length > 0) {
       const dropped = new Set(entry.disposables.materials);
-      s.terrainMaterials = s.terrainMaterials.filter((m) => !dropped.has(m));
+      if (Array.isArray(s.terrainMaterials)) {
+        s.terrainMaterials = s.terrainMaterials.filter((m) => !dropped.has(m));
+      }
+      const patched = s.csmState?.patchedMaterials;
+      if (patched && typeof patched.delete === "function") {
+        for (const m of dropped) { try { patched.delete(m); } catch (_) {} }
+      }
     }
 
     // Phase 6 collision-leak fix (2026-05-29): the THREE.js render objects are
@@ -1901,9 +1949,13 @@ export class LandblockLRU {
       // Shouldn't happen (an LB lives in `entries` XOR `parkPool`; the
       // session-7 TN-storm fix enforces it at both ends — in-flight-bake
       // victims are deferred and a late track() merges into the pool copy).
-      // Last-resort resolution: true-dispose the stale pool copy first,
-      // then park fresh.
-      this.disposeParked(lbKey);
+      // 2026-08-03: resolve NON-destructively. This used to call
+      // disposeParked(), which re-enters evict() against a still-RESIDENT LB:
+      // evict scans the scene groups and tears down the LIVE containers,
+      // disposes the disposables list (park shares that object with the
+      // entry, so it is the live one), clears every baked mark and purges the
+      // wasm collision — turning a bookkeeping glitch into a cold re-bake.
+      this._discardStalePoolCopy(lbKey);
     }
 
     const s = this.scene3d;
@@ -2024,11 +2076,17 @@ export class LandblockLRU {
 
     // ⑦ terrainMaterials registry: parked ShaderMaterials must not receive
     // the per-rAF uTime push; remember exactly which ones we filtered.
+    // 2026-08-03: same for csmState.patchedMaterials (the per-frame CSM
+    // refresh walk) — unpark re-registers both.
     if (Array.isArray(s.terrainMaterials) && entry.disposables.materials.length > 0) {
       const mine = new Set(entry.disposables.materials);
       p.parkedTerrainMats = s.terrainMaterials.filter((m) => mine.has(m));
       if (p.parkedTerrainMats.length > 0) {
         s.terrainMaterials = s.terrainMaterials.filter((m) => !mine.has(m));
+        const patched = s.csmState?.patchedMaterials;
+        if (patched && typeof patched.delete === "function") {
+          for (const m of p.parkedTerrainMats) { try { patched.delete(m); } catch (_) {} }
+        }
       }
     }
 
@@ -2059,6 +2117,46 @@ export class LandblockLRU {
         `bytes=${p.bytes} pool=${this.parkPool.size} poolBytes=${this.parkedBytes}`
       );
     }
+    return true;
+  }
+
+  // Drop a stale pool record for an LB that is ALSO resident (dual state),
+  // without touching the scene or the LB's marks. The stashed containers are
+  // already detached, so nothing here is on screen — the point is to avoid
+  // evict()'s scene scan, mark clears and wasm-collision purge, none of which
+  // are valid for an LB that is still resident.
+  //
+  // Disposal is ownership-gated: park stores the ENTRY'S OWN disposables
+  // object by reference (`p.disposables = entry.disposables`), so when the two
+  // are the same object those handles belong to the live copy and disposing
+  // them would gut the resident LB. A distinct list is the stale copy's own
+  // and is released here. Detached Batched/InstancedMesh consolidations own
+  // private GPU buffers no disposables list covers (as in disposeParked), so
+  // they are released either way. Returns true if a record was dropped.
+  _discardStalePoolCopy(lbKeyArg) {
+    const lbKey = lbKeyOf(lbKeyArg >>> 0);
+    const p = this.parkPool.get(lbKey);
+    if (!p) return false;
+    for (const c of p.statics) {
+      if ((c?.isBatchedMesh || c?.isInstancedMesh) && typeof c.dispose === "function") {
+        try { c.dispose(); } catch (_) { /* fail-soft */ }
+      }
+    }
+    const live = this.entries.get(lbKey)?.disposables;
+    const d = p.disposables;
+    if (d && d !== live) {
+      for (const bucket of ["geometries", "materials", "textures"]) {
+        if (!Array.isArray(d[bucket])) continue;
+        for (const r of d[bucket]) {
+          if (!r || r.userData?.__cacheOwned === true) continue;
+          try { r.dispose && r.dispose(); } catch (_) { /* fail-soft */ }
+        }
+      }
+    }
+    this.parkPool.delete(lbKey);
+    this.parkedBytes = Math.max(0, this.parkedBytes - p.bytes);
+    if (this._sealedPinned.has(lbKey)) this._unpinSealed(lbKey);
+    this._stalePoolCopiesDropped += 1;
     return true;
   }
 
@@ -2103,8 +2201,13 @@ export class LandblockLRU {
       }
     }
     if (p.parkedTerrainMats.length > 0 && Array.isArray(s.terrainMaterials)) {
+      const patched = s.csmState?.patchedMaterials;
       for (const m of p.parkedTerrainMats) {
         if (!s.terrainMaterials.includes(m)) s.terrainMaterials.push(m);
+        // Mirror of park ⑦ — re-arm the per-frame CSM refresh for this LB.
+        if (patched && typeof patched.add === "function" && m?.userData?.csmShaderUniforms) {
+          try { patched.add(m); } catch (_) {}
+        }
       }
     }
     if (typeof s._unparkStaticAtlasForLb === "function") {
@@ -2299,6 +2402,7 @@ export class LandblockLRU {
       // TN-storm fix telemetry (session 7): dual-state near-misses.
       trackMergedWhileParked: this._trackMergedWhileParked,
       reclaimDeferredInFlight: this._reclaimDeferredInFlight,
+      stalePoolCopiesDropped: this._stalePoolCopiesDropped,
       // PHY-25 dungeon stream gate: outdoor load-point evaluations suppressed
       // because the player was indoors (see noteStreamGateHold). The richer
       // per-effect breakdown lives on `scene3d._dungeonStreamGate`.

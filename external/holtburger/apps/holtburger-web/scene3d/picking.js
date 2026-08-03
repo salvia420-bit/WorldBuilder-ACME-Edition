@@ -313,14 +313,23 @@ function normalizeAngle(a) {
 function playerWorldPose(sessionHandle) {
   const pose = sessionHandle.getLocalPlayerPose?.();
   if (!pose) return null;
+  // WASM-BOX LIFETIME (see camera.js _integratorWorldPose): copy every field
+  // out, then release the wasm-bindgen box — this runs per sticky-watch tick
+  // and per face-loop frame, so an unfreed box orphans one wasm allocation
+  // per call. `?.` keeps plain-object test mocks working.
+  const px = pose.x;
+  const py = pose.y;
+  const pz = pose.z;
+  const heading = pose.heading;
   const lbId = (pose.landblockId ?? 0) >>> 0;
+  try { pose.free?.(); } catch (_) { /* already released */ }
   const lbX = (lbId >>> 24) & 0xff;
   const lbY = (lbId >>> 16) & 0xff;
   return {
-    x: pose.x + lbX * 192,
-    y: pose.y + lbY * 192,
-    z: pose.z,
-    heading: pose.heading,
+    x: px + lbX * 192,
+    y: py + lbY * 192,
+    z: pz,
+    heading,
     landblockId: lbId,
   };
 }

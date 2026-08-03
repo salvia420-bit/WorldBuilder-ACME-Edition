@@ -278,6 +278,10 @@ const PVS_STREAM_QUEUE = (() => {
 let _mvpScratch = null;
 let _mvpMatrixScratch = null;
 
+// Session-monotonic EnvCell build tokens (see `buildGen` in
+// buildEnvCellsForLandblock). Must never be reissued for the same lbKey.
+let _envCellBuildSeq = 0;
+
 /**
  * Top-level: load every EnvCell for a single landblock and add the
  * resulting Groups under `scene3d.cellsGroup`. Idempotent — second
@@ -485,7 +489,14 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // (and the in-flight marker), and any LATER rebuild bumps it — either
   // way this build's attach guard sees a mismatch and bails instead of
   // attaching stale duplicates.
-  const buildGen = ((scene3d.envCellBuildGen.get(lbKey) | 0) + 1) | 0;
+  // 2026-08-03 — the token is drawn from a SESSION-MONOTONIC sequence, not
+  // from the map. Deriving it from `get(lbKey) | 0` restarted the count at 1
+  // after every evict (evict DELETES the entry), so the next build was handed
+  // the cancelled build's own token: its attach guard matched, both builds
+  // attached, and the loser's containers were orphaned in cellsGroup outside
+  // `cellContainers3d` (unevictable) — plus its `finally` cleared the winner's
+  // in-flight marker. A number that is never reissued cannot alias.
+  const buildGen = ++_envCellBuildSeq;
   scene3d.envCellBuildGen.set(lbKey, buildGen);
   try {
 
@@ -1194,6 +1205,55 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     const cellContainerById = new Map(newCells.map(({ container, cellId }) => [cellId >>> 0, container]));
     attachAnimatedScenery(scene3d, animatedInteriorStatics, wasmExports, {
       resolveParent: (item) => cellContainerById.get(item.sourceObjIdx >>> 0) || null,
+    }).then((r) => {
+      // 2026-08-03 (#7 follow-up) — re-freeze what the animated builder could
+      // not turn into a live node (over-cap / build failure / pre-rebuild
+      // pkg). The peel above SKIPPED these props' frozen meshes, so without
+      // this they render nowhere; the interior contract matches statics.js's
+      // — a prop is at worst STATIC, never invisible.
+      const failed = Array.isArray(r?.failed) ? r.failed : [];
+      if (failed.length === 0) return;
+      // Residency check: the attach is fire-and-forget, so the LB may have
+      // been evicted while it ran — the containers are gone and a
+      // re-approach rebuilds from scratch.
+      if (scene3d.envCellBuildGen.get(lbKey) !== buildGen) return;
+      const shadow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
+      let refrozen = 0;
+      for (const p of failed) {
+        const container = cellContainerById.get(p.sourceObjIdx >>> 0);
+        const geom = staticGeomByDid.get(p.objId >>> 0);
+        if (!container || !geom) continue;
+        const mat = staticMatByDid.get(p.objId >>> 0) || scene3d.materialCache.fallbackMaterial;
+        const m = new THREE.Mesh(geom, mat);
+        m.name = `cellstatic-${(p.sourceObjIdx >>> 0).toString(16).padStart(8, "0")}-${(p.objId >>> 0).toString(16).padStart(8, "0")}`;
+        if (shadow) {
+          m.castShadow = Array.isArray(mat)
+            ? mat.some((sub) => materialCanCastShadow(sub))
+            : materialCanCastShadow(mat);
+          m.receiveShadow = true;
+        }
+        const xform = placementToMatrix4(p);
+        xform.decompose(m.position, m.quaternion, m.scale);
+        m.userData = {
+          cellId: p.sourceObjIdx >>> 0,
+          modelId: p.objId >>> 0,
+          isCellStatic: true,
+        };
+        // Match the attach-time container state: layer 1 (cells render
+        // layer) and a one-shot world-matrix compose (the container is
+        // matrix-frozen, but its own matrixWorld is already correct).
+        m.layers.set(1);
+        container.add(m);
+        m.updateWorldMatrix(false, false);
+        if (typeof container.userData?.peeledAnimated === "number") {
+          container.userData.peeledAnimated -= 1;
+        }
+        refrozen += 1;
+      }
+      if (refrozen > 0) {
+        // eslint-disable-next-line no-console
+        console.info(`[envcell] re-froze ${refrozen} interior scenery prop(s) the animated builder dropped`);
+      }
     }).catch((e) => {
       // eslint-disable-next-line no-console
       console.warn("[envcell] interior animated scenery attach failed:", e);

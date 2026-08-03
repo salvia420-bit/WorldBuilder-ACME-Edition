@@ -627,8 +627,15 @@ export class AnimationCache {
             // bakes for other commands/stances reuse the same labels
             // (the rig's child names are determined once at rig-build
             // time in Phase 7.4b).
+            //
+            // 2026-08-03 — INVARIANT: the memo must match THIS bake's partCount.
+            // `partCount` is per-fetch, and a first bake that raced resource
+            // streaming resolves 0 parts; reusing that empty memo makes
+            // buildAnimationClip throw on the next real bake (and the rejection
+            // then sticks — see the reject-eviction below), permanently killing
+            // the setup's animation. Rebuild on any length mismatch.
             let partNames = this.partNames.get(setupId);
-            if (!partNames) {
+            if (!partNames || partNames.length !== partCount) {
                 partNames = Array.from({ length: partCount }, (_, i) => `part_${i}`);
                 this.partNames.set(setupId, partNames);
             }
@@ -911,7 +918,17 @@ export class AnimationCache {
                 this._evictLruIfNeeded();
             }
         };
-        promise.then(_clearPending, _clearPending);
+        // 2026-08-03 — INVARIANT: only RESOLVED bakes stay cached. A rejected
+        // promise left in `entries` is returned verbatim by every later get() for
+        // this key (the `if (hit)` fast path), so one transient fetch failure
+        // would kill that (setup, motion, stance) for the rest of the session.
+        // Dropping it lets the next caller retry. Returning normally from this
+        // rejection arm also keeps the derived promise from going unhandled; the
+        // rejection itself still propagates to callers via the returned `promise`.
+        promise.then(_clearPending, () => {
+            _clearPending();
+            if (this.entries.get(key) === promise) this.entries.delete(key);
+        });
         // First-pass eviction at insert time. Catches the common case
         // of cap+1 sequential miss-then-resolve in single-stepping
         // scenarios (one motion change, then another, then another).
@@ -1106,11 +1123,18 @@ export class AnimationCache {
             // can retry. The prewarmedSetupIds set is the
             // authoritative warm-state cache — _batchInFlight is
             // purely the concurrent-call coalescer.
-            inFlight.finally(() => {
+            // 2026-08-03 — `.finally()` returns a NEW promise that ADOPTS the
+            // rejection, and nothing handles it, so a failed batch prewarm raised
+            // an `unhandledrejection` on top of the real (handled) one below.
+            // `.then(cb, cb)` with a non-throwing rejection arm settles the
+            // derived promise as fulfilled; `inFlight` itself is still returned
+            // to the caller, so the error still propagates exactly once.
+            const _clearInFlight = () => {
                 if (this._batchInFlight.get(dedupKey) === inFlight) {
                     this._batchInFlight.delete(dedupKey);
                 }
-            });
+            };
+            inFlight.then(_clearInFlight, _clearInFlight);
         }
         return inFlight;
     }
