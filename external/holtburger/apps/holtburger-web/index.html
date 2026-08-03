@@ -4391,8 +4391,27 @@
               // F4-4 (bughunt 2026-06-09): pass the per-vertex terrain TYPE
               // codes alongside the heights so the wasm side can cache a water
               // grid for the deep-water walk-block (USE_WATER_COLLISION).
-              if (h) h.populateTerrain(lbId, meshes[i].heights, meshes[i].terrainCodes);
-              terrainPrefetchedLbs.add(lbId);
+              //
+              // Round-10 fix: the `terrainPrefetchedLbs.add(lbId)` used to sit
+              // OUTSIDE this `if (h)`, so a null `window.__sessionHandle` latched
+              // the landblock as "collision heightmap populated" while the wasm
+              // side got nothing — permanently, because the Set is the only gate
+              // on every later retry (handlePositionUpdate / world_stream /
+              // spawn-kick all test `!terrainPrefetchedLbs.has(lbId)` first).
+              // The handle is read AFTER an await, and `fireSubmit()` nulls
+              // `window.__sessionHandle` synchronously (~L11076) on every
+              // reconnect/retry — so an in-flight ring fetch that straddles a
+              // reconnect poisoned up to 9 landblocks for the rest of the page's
+              // life: the integrator then misses the height cache and the player
+              // sinks/floats across those LBs with no way to re-trigger.
+              // Marking only on a real populate keeps the retry path alive (the
+              // in-flight bit is still cleared in the `finally` below, so the
+              // next position update re-fetches). Same shape as the already-
+              // correct throw path: `populateTerrain` throwing skips the add too.
+              if (h) {
+                h.populateTerrain(lbId, meshes[i].heights, meshes[i].terrainCodes);
+                terrainPrefetchedLbs.add(lbId);
+              }
               // 2026-05-09 follow-up: also paint this LB's terrain
               // tile into outdoorContainer if it hasn't been painted
               // yet. Without this branch the player walks into a new
@@ -5826,8 +5845,29 @@
         const parts = [];
         if (s.description) parts.push(escapeHtml(s.description));
         const links = [];
-        if (s.website) links.push(`<a href="${escapeHtml(s.website)}" target="_blank" rel="noopener">website</a>`);
-        if (s.discord) links.push(`<a href="${escapeHtml(s.discord)}" target="_blank" rel="noopener">discord</a>`);
+        // `escapeHtml` stops an attribute break-out but NOT a dangerous SCHEME:
+        // `href="javascript:…"` survives entity-escaping untouched and runs on
+        // click. These two URLs come straight out of the community
+        // `acresources/serverslist` XML fetched over the network (SERVERSLIST_URL
+        // above) and are cached in localStorage, so one bad/compromised row is a
+        // one-click script execution that persists across reloads. Allow only
+        // http/https absolute URLs; anything else renders as inert escaped text.
+        const safeHref = (u) => {
+          try {
+            const parsed = new URL(String(u), window.location.href);
+            return (parsed.protocol === "http:" || parsed.protocol === "https:")
+              ? parsed.href
+              : null;
+          } catch (_) { return null; }
+        };
+        const linkOrText = (u, label) => {
+          const href = safeHref(u);
+          return href
+            ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${label}</a>`
+            : `<span class="hint">${label}: ${escapeHtml(u)}</span>`;
+        };
+        if (s.website) links.push(linkOrText(s.website, "website"));
+        if (s.discord) links.push(linkOrText(s.discord, "discord"));
         if (links.length) parts.push(links.join(" · "));
         if (s.type || s.status) {
           const tags = [s.type, s.status].filter(Boolean).join(" · ");
@@ -6270,11 +6310,25 @@
           function renderLoginStatusBanner() {
             const info = handle.serverInfo?.();
             const chars2 = handle.characterList();
-            let banner = `<span class="ok">[OK]</span> Logged in as <code>${handle.accountName || account}</code>. ` +
+            // escapeHtml: BOTH interpolations here are attacker-influenced text
+            // going into innerHTML, exactly like the three sites this file
+            // already escapes (character names ~L6317, kind=5 created-name
+            // ~L8516, kind=20 CharacterError label ~L8673):
+            //   - `info.name` is the SHARD's own `GameMessage::ServerName`
+            //     (opcode 0xF658) string — fully server-controlled, and the
+            //     server picker above offers arbitrary community shards, so an
+            //     unescaped `<img onerror=…>` server name was script execution
+            //     in the client page on every login AND on every kind=57
+            //     ServerInfoReceived re-render (this same function).
+            //   - `handle.accountName || account` is the login-form value.
+            // The numbers are coerced through Number() so a non-numeric
+            // `currentConnections`/`maxConnections` cannot smuggle markup either.
+            const acct = escapeHtml(handle.accountName || account);
+            let banner = `<span class="ok">[OK]</span> Logged in as <code>${acct}</code>. ` +
               `${chars2.length} character${chars2.length === 1 ? "" : "s"} on this account.`;
             if (info) {
-              const name = info.name || "(unnamed server)";
-              const cur = info.currentConnections ?? 0;
+              const name = escapeHtml(info.name || "(unnamed server)");
+              const cur = Number(info.currentConnections ?? 0) || 0;
               const max = info.maxConnections;
               const cap = (typeof max === "number" && max > 0) ? max : "∞";
               banner += `<br>Server: <strong>${name}</strong> · Players: ${cur}/${cap}`;
@@ -6447,6 +6501,33 @@
               SPRITE_HEADING_OFFSET,
             };
           }
+          // ── Reconnect hygiene, round 10 (2026-08-03) ──────────────────
+          // Same defect the keydown/keyup/blur trio (~L7567) and the virtual
+          // keypad (~L7777) already fixed, for the DOM widgets those two
+          // passes missed. Everything from here to the rAF boot arm lives
+          // inside this submit handler, so a second successful Connect
+          // (`fireSubmit()` — the `?maxRetries=N` / 0x0D char-in-world arms)
+          // re-runs it and `addEventListener` stacks a SECOND copy on
+          // characterUl / teleportBtn / chatForm / chatInput / createForm.
+          // Those copies are not equivalent: each closes over ITS login's
+          // `handle` (freed by fireSubmit ~L11068), `enteredWorld`,
+          // `spawningCharId` and `spawnedPlayerGuid`, so the stale copy runs
+          // FIRST on every click/submit and drives a dead session — a Spawn
+          // click can reach `setBootState("error", …)` from the corpse while
+          // the live copy is still deciding, which is exactly the signal the
+          // autonomous orchestrator polls on.
+          // Retire-then-register (NOT register-once): these handlers MUST be
+          // rebound against the new session, the previous ones must simply go
+          // away first. `AbortController` removes the whole previous set in
+          // one call. Placed as LATE as possible — immediately before the
+          // first of the five — so a throw earlier in this handler cannot
+          // leave the page with the old set retired and no new set bound.
+          // FIRST LOGIN: the global is undefined, the abort is a no-op, and
+          // registration order/shape is byte-identical to before.
+          try { window.__hbSessionUiAbort?.abort(); } catch (_) {}
+          const __sessionUiAbort = new AbortController();
+          window.__hbSessionUiAbort = __sessionUiAbort;
+          const __sessionUiOpts = { signal: __sessionUiAbort.signal };
           characterUl.addEventListener("click", (ev) => {
             // HUD rec #165 (2026-06-16): Delete + Restore branches
             // before the existing Spawn branch. Both mutate the
@@ -6520,7 +6601,7 @@
             loginStatus.innerHTML =
               `<span class="ok">[OK]</span> Selected <strong>${name}</strong>; ` +
               `awaiting CharacterEnterWorldServerReady → CharacterEnterWorld → PlayerCreate.`;
-          });
+          }, __sessionUiOpts);
 
           // Phase 4 step 2a.6 — Teleport to Holtburg. Sends the
           // ACE Developer command `@telepoi Holtburg` over the
@@ -6547,7 +6628,7 @@
               teleportBtn.disabled = false;
               teleportBtn.textContent = "Teleport to Holtburg";
             }, 3000);
-          });
+          }, __sessionUiOpts);
 
           // Phase 4 step 4 — chat send. Dispatches the input field's
           // text through SessionHandle.sendChat (GameAction::Talk).
@@ -6961,7 +7042,7 @@
             appendChatLine(`> ${message}`, null);
             chatInput.value = "";
             chatInput.focus();
-          });
+          }, __sessionUiOpts);
           // Pressing keys in the chat input must NOT drive movement
           // (Phase 4 step 3's W/A/S/D/Q/E/Shift document-level
           // listeners would otherwise fire while typing). The
@@ -6973,7 +7054,7 @@
           // propagation is defensive.
           chatInput.addEventListener("keydown", (ev) => {
             if (ev.key === "Enter") ev.stopPropagation();
-          });
+          }, __sessionUiOpts);
 
           // Phase 4 step 2a.5 — create-character form. Constructs the
           // CharacterCreateRequestData in the wasm bundle (Aluvian /
@@ -6997,8 +7078,12 @@
             }
             createBtn.disabled = true;
             createStatus.innerHTML =
-              `<span class="ok">[…]</span> Sending CharacterCreate(<strong>${name}</strong>); awaiting CharacterCreateResponse + CharacterList re-fire.`;
-          });
+              // escapeHtml for the same reason the kind=5 CharacterCreated
+              // echo (~L8516) escapes: this is free-form text landing in
+              // innerHTML. Form-local here, but the escaped form is the
+              // house rule and it also makes an odd name render literally.
+              `<span class="ok">[…]</span> Sending CharacterCreate(<strong>${escapeHtml(name)}</strong>); awaiting CharacterCreateResponse + CharacterList re-fire.`;
+          }, __sessionUiOpts);
 
           // Phase 4 step 3 — keyboard input → AC movement packets.
           // Tracks live keystate; the rAF tick (drainEvents below)
@@ -10969,11 +11054,41 @@
       //
       // Defaults: autoSpawn=first, maxRetries=0.
       //
-      // The orchestrator is idempotent — calling it twice is a no-op
-      // unless the prior run errored out. Agents can re-trigger via
-      // `window.__runAutonomousLogin({...})`.
+      // Re-entrancy: a run that is still IN FLIGHT owns the flow — a second
+      // call while it is running is a no-op that returns immediately (see
+      // `__autoLoginClaim` below). Once a run has settled (success, error or
+      // throw) the orchestrator is re-armed, so an agent CAN retry via
+      // `window.__runAutonomousLogin({...})`; it just cannot run two at once.
+      // (Round-10 note: the previous comment here promised idempotency that
+      // no code implemented. Two concurrent runs both call `fireSubmit()`,
+      // which frees `window.__sessionHandle`, bumps `window.__connectEpoch`
+      // and nulls `activeHandle` — so each run's `start_session` resolves
+      // into the OTHER's superseded-epoch branch and gets freed, and neither
+      // ever reaches char-list. `?autoLogin=1` schedules a run from
+      // requestIdleCallback while the documented manual entry point is
+      // exposed on window, which is exactly how the two collide.)
       // ────────────────────────────────────────────────────────────
+      // The claim is a module-scope pair so it is unit-testable on its own
+      // (the orchestrator itself closes over the whole login DOM).
+      let __autoLoginInFlight = false;
+      function __autoLoginClaim() {
+        if (__autoLoginInFlight) return false;
+        __autoLoginInFlight = true;
+        return true;
+      }
+      function __autoLoginRelease() {
+        __autoLoginInFlight = false;
+      }
+      window.__autoLoginInFlight = () => __autoLoginInFlight;
       async function runAutonomousLogin(opts = {}) {
+        if (!__autoLoginClaim()) {
+          console.warn(
+            "[autoLogin] a run is already in flight — ignoring the re-entrant call " +
+            "(two orchestrators fight over fireSubmit/__connectEpoch and neither connects)"
+          );
+          return;
+        }
+        try {
         const autoSpawn = opts.autoSpawn ?? "first";
         // Single clean attempt by default (2026-06-14). The retry-"dance"
         // was built to clear a STALE session, but it is destructive: every
@@ -11395,6 +11510,14 @@
           setBootState("error", `connect+spawn failed after ${maxRetries + 1} attempts`);
         } catch (e) {
           setBootState("error", `autonomous-login: ${String(e?.message ?? e)}`);
+        }
+        } finally {
+          // Re-arm on EVERY exit path — the `return`s scattered through the
+          // attempt loop (full success, autoSpawn=0, target-not-found, budget
+          // exhausted) as well as the catch above. A claim that leaked would
+          // silently disable every later retry, which is a worse failure than
+          // the double-run this guard exists to stop.
+          __autoLoginRelease();
         }
       }
       window.__runAutonomousLogin = runAutonomousLogin;
