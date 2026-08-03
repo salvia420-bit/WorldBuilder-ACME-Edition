@@ -121,8 +121,25 @@ export function installWebglContextRecovery({
     );
 
     const live = getLiveScene3d?.();
-    const w = canvas.clientWidth || canvas.width || 1;
-    const h = canvas.clientHeight || canvas.height || 1;
+    // CSS pixels — `setSize` on both composers is a CSS-px API (it forwards
+    // to renderer.setSize). `canvas.width/height` is the DRAWING BUFFER
+    // (CSS x pixelRatio), so the old fallback silently rescaled the canvas by
+    // the pixel ratio whenever clientWidth read 0 (hidden tab / detached
+    // canvas at restore time). Same confusion class as the 2026-08-03 cloud
+    // composer fix; ask the renderer, which owns the CSS size.
+    let w = canvas.clientWidth;
+    let h = canvas.clientHeight;
+    if (!w || !h) {
+      try {
+        // `getSize(target)` does `target.set(w, h)` — duck-type it so this
+        // leaf module stays THREE-import-free.
+        const s = { width: 0, height: 0, set(a, b) { this.width = a; this.height = b; return this; } };
+        renderer.getSize?.(s);
+        if (s.width > 0 && s.height > 0) { w = s.width; h = s.height; }
+      } catch (_) { /* fall through to the 1x1 floor */ }
+    }
+    w = w || 1;
+    h = h || 1;
 
     // Bounce setSize on the post-processing composers to force RT
     // re-allocation. Three's WebGLRenderTarget.setSize() short-

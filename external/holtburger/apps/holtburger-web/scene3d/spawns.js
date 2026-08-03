@@ -745,22 +745,29 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
         );
         // Result is `{ flatSurfaceDids: Uint32Array, surfaceDidsLens: Uint32Array }`
         // parallel to uniqueSetupIds order. Build a map for per-entity lookup.
-        const flatDids = surfDidsResult.flatSurfaceDids;
-        const didsLens = surfDidsResult.surfaceDidsLens;
+        // 2026-08-03 — the drain runs in a try/FINALLY: a stale `pkg/` whose
+        // result lacks these getters throws on `didsLens[i]`, and the outer
+        // catch would then swallow it with the wasm handle still held. One
+        // free per fetch, on every path.
         const setupToDids = new Map();
-        let off = 0;
-        for (let i = 0; i < uniqueSetupIds.length; i += 1) {
-          const len = didsLens[i] >>> 0;
-          const dids = [];
-          for (let k = 0; k < len; k += 1) dids.push(flatDids[off + k]);
-          setupToDids.set(uniqueSetupIds[i], dids);
-          off += len;
-        }
         try {
-          if (surfDidsResult && typeof surfDidsResult.free === "function") {
-            surfDidsResult.free();
+          const flatDids = surfDidsResult.flatSurfaceDids;
+          const didsLens = surfDidsResult.surfaceDidsLens;
+          let off = 0;
+          for (let i = 0; i < uniqueSetupIds.length; i += 1) {
+            const len = didsLens[i] >>> 0;
+            const dids = [];
+            for (let k = 0; k < len; k += 1) dids.push(flatDids[off + k]);
+            setupToDids.set(uniqueSetupIds[i], dids);
+            off += len;
           }
-        } catch (_) { /* ignore */ }
+        } finally {
+          try {
+            if (surfDidsResult && typeof surfDidsResult.free === "function") {
+              surfDidsResult.free();
+            }
+          } catch (_) { /* ignore */ }
+        }
 
         // Step 2: build per-entity groups + call materialCache.preloadBatch.
         // One group per unique setupDid is enough (entities sharing a
