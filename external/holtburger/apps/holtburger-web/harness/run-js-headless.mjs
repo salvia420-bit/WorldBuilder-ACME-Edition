@@ -61,7 +61,7 @@
 // ============================================================================
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -146,7 +146,222 @@ const TIER4 = [
   { flag: "combatInstallGiveup", file: "tests/combat_install_giveup.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
-const PLAN = [...TIER1, ...TIER4];
+
+// ---------------------------------------------------------------------------
+// TIER 5 — suites that existed but NO runner invoked (2026-08-03 round 9)
+// ---------------------------------------------------------------------------
+// A hand-maintained list is exactly the thing that rotted: 169 of the tree's
+// 212 `test_*.mjs` files were registered nowhere, so ~4 out of every 5 suites
+// were dead weight — written, passing, and protecting nothing. That is the
+// same "exists but never executes" shape this review round keeps finding in
+// product code, and it is why COVERAGE_GUARD below now makes the list
+// self-maintaining: a new suite that nobody registers is a loud row, not a
+// silent omission.
+//
+// Every entry here was executed first and exited 0. Hollow passes are NOT
+// laundered by that: the runner's existing SKIP detection (exit 0 having
+// asserted nothing — `--allow-skips`) still fails them, which is the correct
+// outcome for the two suites that silently no-op when THREE_PATH is absent.
+const TIER5 = [
+  { tier: 5, flag: "bot_escape_rung", file: "rynth/test_bot_escape_rung.mjs" },
+  { tier: 5, flag: "nav_frame_clamp", file: "rynth/test_nav_frame_clamp.mjs" },
+  { tier: 5, flag: "webhost_pose_free", file: "rynth/test_webhost_pose_free.mjs" },
+  { tier: 5, flag: "a15_q2_entity_update_clone", file: "test_a15_q2_entity_update_clone.mjs" },
+  { tier: 5, flag: "a15_q4_renderer_neutral_core", file: "test_a15_q4_renderer_neutral_core.mjs" },
+  { tier: 5, flag: "a8_m3_kind17_dispatch", file: "test_a8_m3_kind17_dispatch.mjs" },
+  { tier: 5, flag: "ac_aim_level_for_velocity", file: "test_ac_aim_level_for_velocity.mjs" },
+  { tier: 5, flag: "ac_attack_type_for_weapon", file: "test_ac_attack_type_for_weapon.mjs" },
+  { tier: 5, flag: "ac_damage_rating", file: "test_ac_damage_rating.mjs" },
+  { tier: 5, flag: "ac_floaty_frame", file: "test_ac_floaty_frame.mjs" },
+  { tier: 5, flag: "ac_layout_strings", file: "test_ac_layout_strings.mjs" },
+  { tier: 5, flag: "ac_spell_cast_sequence", file: "test_ac_spell_cast_sequence.mjs" },
+  { tier: 5, flag: "ac_spell_shape", file: "test_ac_spell_shape.mjs" },
+  { tier: 5, flag: "adapter_atlas_guard", file: "test_adapter_atlas_guard.mjs" },
+  { tier: 5, flag: "adaptive_res_settle", file: "test_adaptive_res_settle.mjs" },
+  { tier: 5, flag: "ambient_baked", file: "test_ambient_baked.mjs" },
+  { tier: 5, flag: "ambient_frame", file: "test_ambient_frame.mjs" },
+  { tier: 5, flag: "ambient_liveness", file: "test_ambient_liveness.mjs" },
+  { tier: 5, flag: "animated_scenery", file: "test_animated_scenery.mjs" },
+  { tier: 5, flag: "animated_scenery_park", file: "test_animated_scenery_park.mjs" },
+  { tier: 5, flag: "atmosphere_pipeline_passes", file: "test_atmosphere_pipeline_passes.mjs" },
+  { tier: 5, flag: "audio_optimistic", file: "test_audio_optimistic.mjs" },
+  { tier: 5, flag: "bake_transfer", file: "test_bake_transfer.mjs" },
+  { tier: 5, flag: "bake_worker_client_queue", file: "test_bake_worker_client_queue.mjs" },
+  { tier: 5, flag: "bm_colortexture_fix", file: "test_bm_colortexture_fix.mjs" },
+  { tier: 5, flag: "brazier_emit", file: "test_brazier_emit.mjs" },
+  { tier: 5, flag: "cast_level8_windup", file: "test_cast_level8_windup.mjs" },
+  { tier: 5, flag: "cast_overlay_guard", file: "test_cast_overlay_guard.mjs" },
+  { tier: 5, flag: "cell_lights", file: "test_cell_lights.mjs" },
+  { tier: 5, flag: "cloud_overlay_dispose", file: "test_cloud_overlay_dispose.mjs" },
+  { tier: 5, flag: "cloud_storm_look", file: "test_cloud_storm_look.mjs" },
+  { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
+  { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },
+  { tier: 5, flag: "diag_combat_giveup", file: "test_diag_combat_giveup.mjs" },
+  { tier: 5, flag: "diag_events_diff_lbfilter", file: "test_diag_events_diff_lbfilter.mjs" },
+  { tier: 5, flag: "diag_spawn_classifier", file: "test_diag_spawn_classifier.mjs" },
+  { tier: 5, flag: "f2_turn_to_align", file: "test_f2_turn_to_align.mjs" },
+  { tier: 5, flag: "first_bake_batch_flags", file: "test_first_bake_batch_flags.mjs" },
+  { tier: 5, flag: "fixed_grid", file: "test_fixed_grid.mjs" },
+  { tier: 5, flag: "gemsparkle_emit", file: "test_gemsparkle_emit.mjs" },
+  { tier: 5, flag: "ground_fog", file: "test_ground_fog.mjs" },
+  { tier: 5, flag: "hotbar_fire", file: "test_hotbar_fire.mjs" },
+  { tier: 5, flag: "init3d_idempotency_guard", file: "test_init3d_idempotency_guard.mjs" },
+  { tier: 5, flag: "journal_panel", file: "test_journal_panel.mjs" },
+  { tier: 5, flag: "landblock_lru_evict", file: "test_landblock_lru_evict.mjs" },
+  { tier: 5, flag: "landblock_lru_geom_governor", file: "test_landblock_lru_geom_governor.mjs" },
+  { tier: 5, flag: "landblock_lru_null_lb", file: "test_landblock_lru_null_lb.mjs" },
+  { tier: 5, flag: "landblock_lru_park_storm", file: "test_landblock_lru_park_storm.mjs" },
+  { tier: 5, flag: "landblock_lru_pool_scan", file: "test_landblock_lru_pool_scan.mjs" },
+  { tier: 5, flag: "landblock_lru_sealed_keepring", file: "test_landblock_lru_sealed_keepring.mjs" },
+  { tier: 5, flag: "landblock_lru_sealed_park", file: "test_landblock_lru_sealed_park.mjs" },
+  { tier: 5, flag: "landblock_lru_server_urgency", file: "test_landblock_lru_server_urgency.mjs" },
+  { tier: 5, flag: "landblock_lru_warmpark_dualstate", file: "test_landblock_lru_warmpark_dualstate.mjs" },
+  { tier: 5, flag: "lb_objects_shared", file: "test_lb_objects_shared.mjs" },
+  { tier: 5, flag: "leak01_bridge_index_prune", file: "test_leak01_bridge_index_prune.mjs" },
+  { tier: 5, flag: "lifestone_popup", file: "test_lifestone_popup.mjs" },
+  { tier: 5, flag: "light_pool", file: "test_light_pool.mjs" },
+  { tier: 5, flag: "lore_panel", file: "test_lore_panel.mjs" },
+  { tier: 5, flag: "lru_light_eviction", file: "test_lru_light_eviction.mjs" },
+  { tier: 5, flag: "map_panel", file: "test_map_panel.mjs" },
+  { tier: 5, flag: "materials_paletted_lru", file: "test_materials_paletted_lru.mjs" },
+  { tier: 5, flag: "nameplate_font_gate", file: "test_nameplate_font_gate.mjs" },
+  { tier: 5, flag: "nameplate_item_type", file: "test_nameplate_item_type.mjs" },
+  { tier: 5, flag: "nameplate_lod_badge", file: "test_nameplate_lod_badge.mjs" },
+  { tier: 5, flag: "p0_4_icon_cache", file: "test_p0_4_icon_cache.mjs" },
+  { tier: 5, flag: "p43_leak02_precreate_promote", file: "test_p43_leak02_precreate_promote.mjs" },
+  { tier: 5, flag: "p5_5_movement_gate", file: "test_p5_5_movement_gate.mjs" },
+  { tier: 5, flag: "pal_budget_bytes", file: "test_pal_budget_bytes.mjs" },
+  { tier: 5, flag: "park_usetime", file: "test_park_usetime.mjs" },
+  { tier: 5, flag: "particle_billboard", file: "test_particle_billboard.mjs" },
+  { tier: 5, flag: "particle_clock", file: "test_particle_clock.mjs" },
+  { tier: 5, flag: "particle_null_slot_stall", file: "test_particle_null_slot_stall.mjs" },
+  { tier: 5, flag: "particle_rp6_cull_authority", file: "test_particle_rp6_cull_authority.mjs" },
+  { tier: 5, flag: "particle_single_pass", file: "test_particle_single_pass.mjs" },
+  { tier: 5, flag: "particles", file: "test_particles.mjs" },
+  { tier: 5, flag: "phase7_5_camera", file: "test_phase7_5_camera.mjs" },
+  { tier: 5, flag: "portal_stencil_alloc", file: "test_portal_stencil_alloc.mjs" },
+  { tier: 5, flag: "quality_preset", file: "test_quality_preset.mjs" },
+  { tier: 5, flag: "remote_buffs", file: "test_remote_buffs.mjs" },
+  { tier: 5, flag: "retail_sun", file: "test_retail_sun.mjs" },
+  { tier: 5, flag: "review_lowsev_2026_08_03", file: "test_review_lowsev_2026_08_03.mjs" },
+  { tier: 5, flag: "service_worker_bake_gate", file: "test_service_worker_bake_gate.mjs" },
+  { tier: 5, flag: "shader_prewarm", file: "test_shader_prewarm.mjs" },
+  { tier: 5, flag: "sky_birds", file: "test_sky_birds.mjs" },
+  { tier: 5, flag: "spotlight_target", file: "test_spotlight_target.mjs" },
+  { tier: 5, flag: "static_batch", file: "test_static_batch.mjs" },
+  { tier: 5, flag: "static_batch_x", file: "test_static_batch_x.mjs" },
+  { tier: 5, flag: "static_callpes", file: "test_static_callpes.mjs" },
+  { tier: 5, flag: "stream_bake_guard", file: "test_stream_bake_guard.mjs" },
+  { tier: 5, flag: "suite_assets", file: "test_suite_assets.mjs" },
+  { tier: 5, flag: "surface_budget_flags", file: "test_surface_budget_flags.mjs" },
+  { tier: 5, flag: "surface_single_pass", file: "test_surface_single_pass.mjs" },
+  { tier: 5, flag: "synthesis4_leftovers", file: "test_synthesis4_leftovers.mjs" },
+  { tier: 5, flag: "terrain_batch", file: "test_terrain_batch.mjs" },
+  { tier: 5, flag: "terrain_detail_tex", file: "test_terrain_detail_tex.mjs" },
+  { tier: 5, flag: "terrain_dirt", file: "test_terrain_dirt.mjs" },
+  { tier: 5, flag: "terrain_families", file: "test_terrain_families.mjs" },
+  { tier: 5, flag: "terrain_grass_scatter", file: "test_terrain_grass_scatter.mjs" },
+  { tier: 5, flag: "terrain_grass_shader", file: "test_terrain_grass_shader.mjs" },
+  { tier: 5, flag: "terrain_oracle", file: "test_terrain_oracle.mjs" },
+  { tier: 5, flag: "terrain_palette", file: "test_terrain_palette.mjs" },
+  { tier: 5, flag: "terrain_ring_batch", file: "test_terrain_ring_batch.mjs" },
+  { tier: 5, flag: "terrain_rock", file: "test_terrain_rock.mjs" },
+  { tier: 5, flag: "terrain_sand", file: "test_terrain_sand.mjs" },
+  { tier: 5, flag: "terrain_scatter", file: "test_terrain_scatter.mjs" },
+  { tier: 5, flag: "terrain_swamp", file: "test_terrain_swamp.mjs" },
+  { tier: 5, flag: "terrain_texmerge", file: "test_terrain_texmerge.mjs" },
+  { tier: 5, flag: "terrain_vfx_lifecycle", file: "test_terrain_vfx_lifecycle.mjs" },
+  { tier: 5, flag: "terrain_vfx_promotion", file: "test_terrain_vfx_promotion.mjs" },
+  { tier: 5, flag: "terrain_volcano", file: "test_terrain_volcano.mjs" },
+  { tier: 5, flag: "terrain_water", file: "test_terrain_water.mjs" },
+  { tier: 5, flag: "tradeskill", file: "test_tradeskill.mjs" },
+  { tier: 5, flag: "trail_map", file: "test_trail_map.mjs" },
+  { tier: 5, flag: "trail_map_stamp_falloff", file: "test_trail_map_stamp_falloff.mjs" },
+  { tier: 5, flag: "train_skill", file: "test_train_skill.mjs" },
+  { tier: 5, flag: "vertex_bake_flags", file: "test_vertex_bake_flags.mjs" },
+  { tier: 5, flag: "vfx_emissive_compose", file: "test_vfx_emissive_compose.mjs" },
+  { tier: 5, flag: "vfx_foliage", file: "test_vfx_foliage.mjs" },
+  { tier: 5, flag: "vfx_item_fx", file: "test_vfx_item_fx.mjs" },
+  { tier: 5, flag: "vfx_particle_install", file: "test_vfx_particle_install.mjs" },
+  { tier: 5, flag: "vfx_review_lowsev", file: "test_vfx_review_lowsev.mjs" },
+  { tier: 5, flag: "visfid_c4_program_cache_key", file: "test_visfid_c4_program_cache_key.mjs" },
+  { tier: 5, flag: "visfid_p02_detail_material", file: "test_visfid_p02_detail_material.mjs" },
+  { tier: 5, flag: "visfid_p11_normal_gate", file: "test_visfid_p11_normal_gate.mjs" },
+  { tier: 5, flag: "visfid_p31_pom", file: "test_visfid_p31_pom.mjs" },
+  { tier: 5, flag: "visfid_p33_csm", file: "test_visfid_p33_csm.mjs" },
+  { tier: 5, flag: "walkin_instance_evict", file: "test_walkin_instance_evict.mjs" },
+  { tier: 5, flag: "walkin_instance_guard", file: "test_walkin_instance_guard.mjs" },
+  { tier: 5, flag: "weather_flags", file: "test_weather_flags.mjs" },
+];
+
+// Registered but KNOWN-FAILING. Listed so they are visible as QUARANTINED
+// rows instead of being quietly left out of the plan — an omitted failure
+// reads as "we have no test", which is how several of these got lost.
+// Clearing this list is task #156.
+const QUARANTINE = [
+  { file: "test_a15_q1_entity_buffer_caps.mjs", why: "unclassified — see task #156" },
+  { file: "test_a15_q3_dispatch_parity.mjs", why: "unclassified — see task #156" },
+  { file: "test_a1_o4_single_frame_driver.mjs", why: "unclassified — see task #156" },
+  { file: "test_a5_p2_tween_clock.mjs", why: "unclassified — see task #156" },
+  { file: "test_ac_cast_over_locomotion.mjs", why: "unclassified — see task #156" },
+  { file: "test_ac_jump_clip_plays.mjs", why: "unclassified — see task #156" },
+  { file: "test_ac_locomotion_dispatch.mjs", why: "unclassified — see task #156" },
+  { file: "test_ac_locomotion_per_stance.mjs", why: "unclassified — see task #156" },
+  { file: "test_ac_motion_inventory.mjs", why: "unclassified — see task #156" },
+  { file: "test_ac_resize_anchor.mjs", why: "unclassified — see task #156" },
+  { file: "test_cast_motion_drains.mjs", why: "unclassified — see task #156" },
+  { file: "test_diag_spawnfailed_lbkey.mjs", why: "harness stripExports gap: _attachCast is not defined (R8)" },
+  { file: "test_envcell_guard.mjs", why: "STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT gap (documented R8)" },
+  { file: "test_examine_dye_preview.mjs", why: "unclassified — see task #156" },
+  { file: "test_f10_hud_nameplate.mjs", why: "unclassified — see task #156" },
+  { file: "test_fixed_grid_park.mjs", why: "pre-existing, byte-identical FAIL set vs HEAD (R8)" },
+  { file: "test_mat_budget_lru.mjs", why: "unclassified — see task #156" },
+  { file: "test_per_vital_events.mjs", why: "unclassified — see task #156" },
+  { file: "test_phase7_4a_animation_clip.mjs", why: "unclassified — see task #156" },
+  { file: "test_phase7_4b_entity_pipeline.mjs", why: "unclassified — see task #156" },
+  { file: "test_phase7_6_lighting.mjs", why: "unclassified — see task #156" },
+  { file: "test_phase7_batch7_omega_basescale.mjs", why: "unclassified — see task #156" },
+  { file: "test_phase7_batch9_entity_lifecycle.mjs", why: "unclassified — see task #156" },
+  { file: "test_picking_resolve.mjs", why: "unclassified — see task #156" },
+  { file: "test_play_effect_resolver.mjs", why: "unclassified — see task #156" },
+  { file: "test_plugin_index_gen.mjs", why: "unclassified — see task #156" },
+  { file: "test_pure_smooth_prediction.mjs", why: "unclassified — see task #156" },
+  { file: "test_recolor_escape_entmb.mjs", why: "unclassified — see task #156" },
+  { file: "test_sky_assets.mjs", why: "unclassified — see task #156" },
+  { file: "test_sky_dome.mjs", why: "unclassified — see task #156" },
+  { file: "test_sky_lighting.mjs", why: "unclassified — see task #156" },
+  { file: "test_stat_geom_dedup.mjs", why: "unclassified — see task #156" },
+  { file: "test_status_indicators.mjs", why: "unclassified — see task #156" },
+  { file: "test_terrain_dirt_shader.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
+  { file: "test_terrain_ice.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
+  { file: "test_terrain_sand_sparkle.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
+  { file: "test_terrain_snow.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
+  { file: "test_terrain_visual_z.mjs", why: "unclassified — see task #156" },
+  { file: "test_terrain_volcano_shader.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
+  { file: "test_workstream_b_prediction.mjs", why: "unclassified — see task #156" },
+  { file: "test_workstream_d_camera_relative.mjs", why: "unclassified — see task #156" },
+];
+const QUARANTINED = new Set(QUARANTINE.map((q) => q.file));
+
+// COVERAGE GUARD — every `test_*.mjs` in the tree must be in a tier or in
+// QUARANTINE. Unlisted files are reported so the registration list can never
+// silently rot again.
+function unregisteredSuites() {
+  const seen = new Set([...TIER1, ...TIER4, ...TIER5].map((p) => p.file));
+  const out = [];
+  for (const dir of ["", "rynth"]) {
+    let names = [];
+    try { names = readdirSync(path.join(APP_ROOT, dir)); } catch (_) { continue; }
+    for (const n of names) {
+      if (!n.startsWith("test_") || !n.endsWith(".mjs")) continue;
+      const rel = dir ? `${dir}/${n}` : n;
+      if (!seen.has(rel) && !QUARANTINED.has(rel)) out.push(rel);
+    }
+  }
+  return out.sort();
+}
+
+const PLAN = [...TIER1, ...TIER4, ...TIER5];
 
 // ---------------------------------------------------------------------------
 // args
@@ -418,10 +633,27 @@ function main() {
     console.log(`  SKIP    : ${r.file} — ${r.detail}` +
       (opts.allowSkips ? " (tolerated)" : " (asserts nothing → FAIL)"));
   }
+
+  // Known-failing, deliberately out of the plan. Printed rather than omitted:
+  // a failure nobody lists is indistinguishable from a test that was never
+  // written, which is how several of these were lost in the first place.
+  for (const q of QUARANTINE) {
+    console.log(`  QUARANTINED: ${q.file} — ${q.why}`);
+  }
+
+  // Coverage guard. A suite in neither a tier nor QUARANTINE is invisible —
+  // the failure mode that left 169 of 212 suites unrun until 2026-08-03.
+  // Only meaningful on a full run; a filtered plan says nothing about coverage.
+  const unregistered = (opts.only || opts.tier !== "all") ? [] : unregisteredSuites();
+  for (const f of unregistered) {
+    console.log(`  UNREGISTERED: ${f} — in no tier and not quarantined; nothing runs it`);
+  }
+
   const missingCountsAsFail = opts.strictMissing ? missing.length : 0;
   const skipCountsAsFail = opts.allowSkips ? 0 : skipped.length;
   const exitNonZero =
-    failed.length > 0 || missingCountsAsFail > 0 || skipCountsAsFail > 0;
+    failed.length > 0 || missingCountsAsFail > 0 || skipCountsAsFail > 0 ||
+    unregistered.length > 0;
   process.exit(exitNonZero ? 1 : 0);
 }
 

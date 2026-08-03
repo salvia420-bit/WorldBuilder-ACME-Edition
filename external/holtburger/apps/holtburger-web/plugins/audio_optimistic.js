@@ -42,11 +42,21 @@ export const SOUND = Object.freeze({
 // keys on the slider element so a single pointer interaction only
 // fires GRAB once even if a nested handler also dispatches it.
 const _slidersHeld = new WeakSet();
+// The WeakSet alone cannot express "release whatever is held" — a WeakSet is
+// not iterable, which is why the recovery block below used to be an empty
+// `if` containing only a comment (2026-08-03 review). A pointer interaction
+// is singular, so the currently-held slider is tracked by reference too.
+// Without this the drift-off case the original comment describes latches
+// forever: pointerup lands on another element, the element stays in
+// `_slidersHeld`, and the `has(t)` guard below then swallows the GRAB sound
+// for every SUBSEQUENT interaction with that same slider.
+let _sliderHeldRef = null;
 function _onWindowPointerDown(ev) {
   const t = ev.target;
   if (!t || t.tagName !== "INPUT" || t.type !== "range") return;
   if (_slidersHeld.has(t)) return;
   _slidersHeld.add(t);
+  _sliderHeldRef = t;
   const lpgFn = (typeof window !== "undefined") ? window.getLocalPlayerGuid : null;
   const lpg = (typeof lpgFn === "function") ? (lpgFn() >>> 0) : 0;
   try { void playOptimistic(SOUND.UI_GRAB, lpg); } catch (_) {}
@@ -58,19 +68,23 @@ function _onWindowPointerUp(ev) {
   // The seen-set is small (typically one entry) so this is cheap.
   if (t && t.tagName === "INPUT" && t.type === "range" && _slidersHeld.has(t)) {
     _slidersHeld.delete(t);
+    if (_sliderHeldRef === t) _sliderHeldRef = null;
     const lpgFn = (typeof window !== "undefined") ? window.getLocalPlayerGuid : null;
     const lpg = (typeof lpgFn === "function") ? (lpgFn() >>> 0) : 0;
     try { void playOptimistic(SOUND.UI_RELEASE, lpg); } catch (_) {}
     return;
   }
-  // Pointer drifted off the slider — clear any held sliders + fire
-  // RELEASE once. Using pointercancel as well would double-fire on
-  // some browsers; pointerup with the held-set guard is sufficient.
-  if (_slidersHeld instanceof WeakSet) {
-    // WeakSet can't be iterated; instead we rely on a follow-up
-    // pointerdown on a fresh slider to repopulate after a stale held
-    // entry. The audible artifact of a missed RELEASE is silence — no
-    // worse than the pre-rec behaviour.
+  // Pointer drifted off the slider — release the tracked one and fire
+  // RELEASE once. This is the branch the WeakSet could not implement.
+  // Releasing matters more than the sound: leaving the element in
+  // `_slidersHeld` permanently disables its GRAB cue (see the note there).
+  if (_sliderHeldRef) {
+    const held = _sliderHeldRef;
+    _sliderHeldRef = null;
+    _slidersHeld.delete(held);
+    const lpgFn = (typeof window !== "undefined") ? window.getLocalPlayerGuid : null;
+    const lpg = (typeof lpgFn === "function") ? (lpgFn() >>> 0) : 0;
+    try { void playOptimistic(SOUND.UI_RELEASE, lpg); } catch (_) {}
   }
 }
 if (typeof window !== "undefined" && !window.__audio_sliderListenersInstalled) {
@@ -154,17 +168,40 @@ export async function playOptimistic(soundId, itemGuid) {
     // because that's what the server-broadcast echo carries.
     void itemGuid;
     const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
-    recentFire.set(ringKey(soundId, lpg), now + TTL_MS);
-    const entry = await cache.resolveSound(stbDid, (soundId >>> 0));
-    if (!entry) return;
-    const pos = inst?.root?.position;
-    if (!pos) return;
-    const baseVol = (entry.volume > 0) ? entry.volume : 1.0;
-    await audioMgr.play(
-      entry.waveDid,
-      { x: pos.x, y: pos.y, z: pos.z },
-      { gain: baseVol * 0.5 },
-    );
+    const key = ringKey(soundId, lpg);
+    // `expiresAt` doubles as an ownership token for the rollback below: a
+    // LATER optimistic fire for the same key overwrites the value, and that
+    // fire's own suppression claim must not be revoked by this one failing.
+    const expiresAt = now + TTL_MS;
+    recentFire.set(key, expiresAt);
+    let played = false;
+    try {
+      const entry = await cache.resolveSound(stbDid, (soundId >>> 0));
+      if (!entry) return;
+      // The entity can be despawned and respawned across the await — relog,
+      // portal, and landblock transitions all rebuild the entity map. Without
+      // this, a stale `inst` plays the cue at the position the player
+      // occupied BEFORE the transition. Same guard convention as the seven
+      // entities.js seams: a bare `entityMap.has(lpg)` is NOT equivalent,
+      // because a same-guid respawn satisfies it while `inst` is still the
+      // dead object.
+      if (inst._disposed || em.entityMap?.get?.(lpg) !== inst) return;
+      const pos = inst?.root?.position;
+      if (!pos) return;
+      const baseVol = (entry.volume > 0) ? entry.volume : 1.0;
+      await audioMgr.play(
+        entry.waveDid,
+        { x: pos.x, y: pos.y, z: pos.z },
+        { gain: baseVol * 0.5 },
+      );
+      played = true;
+    } finally {
+      // Nothing was heard, so nothing may be suppressed. Leaving the claim in
+      // place makes the server's genuine 0xF750 echo get dropped by
+      // shouldSuppressEcho() and the player hears SILENCE — strictly worse
+      // than the pre-optimistic behaviour this helper exists to improve.
+      if (!played && recentFire.get(key) === expiresAt) recentFire.delete(key);
+    }
   } catch (_) { /* best-effort */ }
 }
 
