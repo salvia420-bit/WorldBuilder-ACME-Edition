@@ -779,6 +779,31 @@ function _rangeRingTick() {
     const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
     const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
     const em = ls?.entityManager;
+    // 2026-08-03 — IDLE FAST PATH. `?castRangeRing` is DEFAULT-ON
+    // (url-flags.md:354), and this rAF chain is self-sustaining for the whole
+    // session, so everything below used to run every frame even with nothing
+    // armed: `resolveCasterFeet` mints a {x,y,z} (spell_range.js:198) and the
+    // diag object below mints one or two more. With no armed spell there is
+    // nothing to draw and nothing to explain beyond "no-armed-spell", so take
+    // the cheap exit — but only AFTER releasing any ring left over from the
+    // spell that was just disarmed.
+    if (!armed) {
+      if (_rangeRing) _disposeRangeRing();
+      if (typeof window !== "undefined") {
+        // Reuse one object rather than reallocating the idle snapshot.
+        const d = window.__rangeRingDiag;
+        if (d && d.reason === "no-armed-spell") {
+          d.flagOn = CAST_RANGE_RING_ON; d.hasSession = !!sh; d.hasScene = !!ls;
+        } else {
+          window.__rangeRingDiag = {
+            flagOn: CAST_RANGE_RING_ON, armed: 0, hasSession: !!sh,
+            hasScene: !!ls, hasFeet: false, feet: null, range: null,
+            school: null, drawn: false, reason: "no-armed-spell",
+          };
+        }
+      }
+      return;
+    }
     // CENTER the ring on the CASTER's feet. The local player has NO rig in
     // entityMap on the default boot — the wasm eager-WorldState path suppresses
     // its KIND_SPAWN on SelectCharacter — so `resolveCasterFeet` reads the
@@ -873,9 +898,15 @@ function _rangeRingTick() {
         _rangeRing.root.position.set(spec.x, spec.y, spec.z);
       }
     }
-  } catch (_) { /* never throw out of the rAF loop */ }
-  if (CAST_RANGE_RING_ON && typeof requestAnimationFrame === "function") {
-    _rangeRingRafId = requestAnimationFrame(_rangeRingTick);
+  } catch (_) {
+    /* never throw out of the rAF loop */
+  } finally {
+    // FINALLY, not a trailing statement: the idle fast path above `return`s
+    // from inside the try, and a bare trailing re-arm would silently kill the
+    // whole ring chain the first frame nothing is armed.
+    if (CAST_RANGE_RING_ON && typeof requestAnimationFrame === "function") {
+      _rangeRingRafId = requestAnimationFrame(_rangeRingTick);
+    }
   }
 }
 
