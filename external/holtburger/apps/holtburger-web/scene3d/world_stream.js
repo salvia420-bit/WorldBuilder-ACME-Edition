@@ -134,15 +134,17 @@ const DUNGEON_STREAM_GATE_ON = (() => {
 // that this is the only producer.) A duplicate fetch is merely wasteful
 // rather than corrupting since S14 (A5) moved the drain to
 // `replace_cell_triangles`, which replaces instead of appending.
-const RENDERER_IS_2D = (() => {
-  try {
-    return new URLSearchParams(globalThis.location?.search || "")
-      .get("renderer") === "2d";
-  } catch (_) {
-    // Headless: exercise the SHIPPED default (3D), not the retired 2D path.
-    return false;
-  }
-})();
+//
+// ⚠ NO RENDERER-MODE CHECK HERE, deliberately. s13 expressed this as
+// `renderer === "2d"`, but the 2D PIXI renderer was RETIRED 2026-06-18
+// (docs/2d-pixi-retirement-HANDOFF.md): `liveScene` is declared at
+// index.html:3501 and never reassigned, the bake tail moved to
+// legacy/render_2d.js, and nothing imports that file. So `liveScene` is
+// permanently null in EVERY mode, `ensureCellContainersForLandblock` always
+// bails at its own `!app` gate, and `?renderer=2d` no longer selects a mode
+// with a real consumer. Gating on it would read as "the 2D path needs this"
+// — a claim that has not been true since June. The condition that actually
+// matters is the one below: call this ONLY when cells.js cannot.
 const LOAD_POINT_SHIFT_ONLY = (() => {
   try {
     const v = new URLSearchParams(globalThis.location?.search || "").get("loadPointShiftOnly");
@@ -338,23 +340,25 @@ export function createWorldStreamer(deps) {
       // Lazy-fetch + bake EnvCells when entering a landblock.
       // Single-LB scope (not a 3x3 ring) because interior cells only
       // matter when the player is inside the building.
-      // See the RENDERER_IS_2D note above. In 3D this fetch is discarded at
-      // the `!app` gate and re-done by cells.js below, so it is duplicated
-      // decode — EXCEPT while the renderer is still coming up.
+      // See the s13 note above. Once the renderer is up this fetch is
+      // discarded at ensureCellContainersForLandblock's own `!app` gate and
+      // re-done by cells.js immediately below — pure duplicated decode.
       //
       // INVARIANT 2 (the Workstream-G hoist, pinned by
-      // test_a15_q4_renderer_neutral_core.mjs (vii)): when
-      // `getLiveScene3d()` is null the wasm collision bakes must STILL fire,
-      // or the 3D integrator freezes on the spawn cell. `loadEnvCellsForLandblock`
-      // — the cells.js path that otherwise queues the cell physics — is
-      // skipped in exactly that window, so gating this call on renderer mode
-      // ALONE would leave an indoor spawn with no cell collision until after
-      // init3D. Hence: 2D always, 3D only while nothing else can do it.
+      // test_a15_q4_renderer_neutral_core.mjs (vii)): when `getLiveScene3d()`
+      // is null the wasm collision bakes must STILL fire, or the 3D
+      // integrator freezes on the spawn cell. `loadEnvCellsForLandblock` —
+      // the cells.js path that otherwise queues the cell physics — is skipped
+      // in exactly that window, so an unconditional skip would leave an
+      // INDOOR SPAWN with no cell collision until after init3D.
+      //
+      // Hence the whole contract, in one line: call this only while nothing
+      // else will.
       const rendererUpForCells = !!getLiveScene3d();
       if (
         lbId !== 0
         && !cellContainersPopulatedLbs.has(lbId)
-        && (RENDERER_IS_2D || !rendererUpForCells)
+        && !rendererUpForCells
       ) {
         ensureCellContainersForLandblock(lbId);
       }
