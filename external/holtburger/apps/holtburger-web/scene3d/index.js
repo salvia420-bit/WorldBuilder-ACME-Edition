@@ -5558,6 +5558,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     scene3dForBuilders.landblockLru = landblockLru;
     if (typeof window !== "undefined") {
       window.__landblockLru = landblockLru;
+      // 2026-08-03 residency #11 (?sealedPark) — sealed round-trip warm-return
+      // probe. Sibling of `window.__fixedGridPark`: a live session reads it
+      // before/after a meeting-hall or Town Network hop to see the reserve
+      // work. Expected shape entering a sealed hub: `pinned` climbs to the
+      // return core (≤48 LBs / ≤ budgetBytes) and `pinHolds` climbs every
+      // pressure tick (the retention proof — those are pool-dispose passes the
+      // reserve blocked). On the way out: `warmUnparked` counts the re-adopts
+      // (each one a re-attach, no decode/bake) and `pinned` falls back to 0.
+      // `releasedAway` > 0 means the player teleported out of the area while
+      // inside (reserve released, ordinary pressure owns it); `fallbackPurged`
+      // > 0 means something disposed a pinned slot anyway. Same object as
+      // `__landblockLru.getStats().sealedPark`.
+      window.__sealedPark = () => landblockLru.sealedParkStats();
     }
     // S15b ?fixedGrid (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2,
     // §5.3): construct the player-centered TERRAIN slot grid ONLY when the flag
