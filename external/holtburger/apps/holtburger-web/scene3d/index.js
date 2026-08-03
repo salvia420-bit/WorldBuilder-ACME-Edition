@@ -137,6 +137,12 @@ import { guardedStreamBake, createStreamGuardState, summarizeStreamBakeWait } fr
 // A4 / Conflict C2). Pure injected-deps core; the loadTerrainRing facade below
 // wraps it. See terrain_ring.js for the ownership + F1-fallback contract.
 import { runTerrainRingBatch } from "./terrain_ring.js";
+// Far-terrain wave (2026-08-02). S1 = retail range fog (this file only reads
+// the flag to decide whether `scene.fog` exists at all); S2/S3 = the Far
+// Composite Ring, installed as a SIBLING of terrainGroup so the LRU's
+// terrainGroup.children scans never see it. Hard no-op behind ?farTerrain=off.
+import { terrainFogEnabled } from "./far_terrain_flags.js";
+import { initFarTerrain } from "./far_terrain.js";
 // S15b (2026-07-11) — ?fixedGrid player-centered TERRAIN slot-grid residency
 // driver (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2, landing §5.3).
 // Pure injected-deps core; the loadTerrainRing facade below injects the live
@@ -3841,6 +3847,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // eslint-disable-next-line no-console
     console.warn("[terrainVfx] initTerrainVfx threw (terrain VFX disabled):", e);
   }
+  // ── FAR COMPOSITE RING (2026-08-02) ───────────────────────────────────
+  // Same parenting rationale as the VFX spine: a SIBLING of terrainGroup under
+  // worldRoot, so it inherits the AC-space transform while the terrain LRU's
+  // park/evict scans, the LOD-rebake dispose walker and cullTerrainGroup —
+  // all of which walk `terrainGroup.children` — never see a far patch.
+  // Installs `window.__farTerrainState()` unconditionally (the fog stage
+  // reports through it too); allocates nothing unless `?farRing=on`.
+  try {
+    initFarTerrain(liveScene3d, { parent: worldRoot, renderer });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[far_terrain] initFarTerrain threw (far ring disabled):", e);
+  }
   // ── Terrain-VFX family: GRASS (Wave 1A, plan §3.1) ────────────────────
   // Ship-OFF behind `?terrainGrass=on`; a no-op (no provider, no allocation)
   // otherwise and under `?wireframe=1`. Camera-scoped, so it needs no landblock
@@ -5015,24 +5034,47 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             // separate function, so a reader there is out of scope here).
             // Default OFF (absent / any non-"on" value) → the else branch
             // nulls `scene.fog` EXACTLY as the shipped pure-Bruneton path.
+            //
+            // 2026-08-02 FAR-TERRAIN S1 — PROMOTED TO DEFAULT-ON. The AC fog
+            // band is the retail horizon mechanism (SkyDesc::GetWorldFog,
+            // acclient.c:301602), it is already ported into wasm as
+            // SkyState.fogMin/fogMax/fogColorArgbLerp, and loop.js has driven
+            // scene.fog from it all along — it just had nothing to act on,
+            // because the terrain ShaderMaterial had no fog code. That hole is
+            // now closed (terrain_shared_glsl.js), so the fog is turned on.
+            // Escapes, widest first: ?farTerrain=off, ?terrainFog=off,
+            // ?fogLerp=off. MUST be read here in init3D's scope.
             const fogLerpEnabled = (() => {
               try {
-                if (typeof window === "undefined" || !window.location?.search) return false;
+                if (typeof window === "undefined" || !window.location?.search) {
+                  return terrainFogEnabled();
+                }
                 const v = new URLSearchParams(window.location.search).get("fogLerp");
-                return typeof v === "string" && v.toLowerCase() === "on";
+                const s = typeof v === "string" ? v.toLowerCase() : null;
+                if (s === "on" || s === "1" || s === "true" || s === "yes") return true;
+                if (s === "off" || s === "0" || s === "false" || s === "no") return false;
+                return terrainFogEnabled();
               } catch (_) {
                 return false;
               }
             })();
-            if (scene.fog) {
+            // 2026-08-02 FAR-TERRAIN S1 — the guard used to be a bare
+            // `if (scene.fog)`, which meant `?fogLerp` only did anything when
+            // SOMETHING ELSE had already created a fog. On the shipped 3D path
+            // nothing does (the FogExp2 at L1319 is wireframe-only), so the
+            // flag was a no-op on exactly the path it was written for. Enter
+            // the block when fogLerp is on regardless, and seed the colour from
+            // whatever fog exists (or AC's own clear-day tint, 0xC3C8DC —
+            // parsed straight out of client_portal.dat's SkyTimeOfDay).
+            if (scene.fog || fogLerpEnabled) {
               if (fogLerpEnabled) {
                 // Seed color = current FogExp2 horizon tint (replaced on
                 // the first tickDistanceFogColor); seed near/far = AC's
                 // default fog band. THREE.Fog is linear (matches AC's
                 // near/far fog model better than FogExp2's exponential).
-                const seedColor = scene.fog.color
+                const seedColor = scene.fog?.color
                   ? scene.fog.color.clone()
-                  : new THREE.Color(0x8aa0b4);
+                  : new THREE.Color(0xc3c8dc);
                 // AC default fog band (fogMax ~2500); camera far is 5000
                 // so geometry past fogMax fully fogs to the AC color.
                 scene.fog = new THREE.Fog(seedColor, 200, 2500);
@@ -5047,7 +5089,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 // lean more on the AC tint. Only touched when fogLerp is
                 // ON, so the default render's aerial perspective is
                 // untouched (guardrail).
-                const FOGLERP_AERIAL_OPACITY = 0.6;
+                // 2026-08-02 — exposed as `?aerialOpacity=N` (0..1) so the
+                // validator can sweep the authored-fog / physical-scattering
+                // balance without a rebuild. The takram AP is real but WEAK
+                // (measured whole-band MAD 1.8-3.3 on terrain rows, 0.09-0.17
+                // on sky rows) — true Rayleigh over 1 km at ground level is
+                // nearly nothing — so 0.6 is a mild knock, not a suppression.
+                let FOGLERP_AERIAL_OPACITY = 0.6;
+                try {
+                  const raw = new URLSearchParams(window.location.search || "")
+                    .get("aerialOpacity");
+                  if (raw != null && raw !== "") {
+                    const n = Number(raw);
+                    if (Number.isFinite(n)) FOGLERP_AERIAL_OPACITY = Math.min(1, Math.max(0, n));
+                  }
+                } catch (_) { /* no window.location in the Node harness */ }
                 try {
                   const ap = atmospherePipeline?.aerialPerspective;
                   if (ap?.blendMode?.opacity != null) {
@@ -5065,8 +5121,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 }
                 // eslint-disable-next-line no-console
                 console.log(
-                  "[wave-r1.c] ?fogLerp=on — AC distance fog ALIVE alongside aerial perspective " +
-                  `(aerial blend opacity → ${FOGLERP_AERIAL_OPACITY}).`
+                  "[far-terrain S1] AC distance fog ALIVE (retail SkyDesc::GetWorldFog band, " +
+                  "terrain + statics + models) alongside aerial perspective " +
+                  `(aerial blend opacity → ${FOGLERP_AERIAL_OPACITY}). Escape: ?terrainFog=off.`
                 );
               } else {
                 scene.fog = null;

@@ -370,6 +370,12 @@ function _buildBatchMaterial(srcMaterial, glsl, state, opts, extras) {
     fragmentShader: glsl.fragmentShader,
     glslVersion: srcMaterial.glslVersion ?? THREE.GLSL3,
     side: srcMaterial.side ?? THREE.FrontSide,
+    // S1 far-terrain wave (2026-08-02): `fog` is a plain Material field, not a
+    // uniform, so the uniform-parity copy above misses it. Without this the
+    // DEFAULT-ON batched path would be the ONE terrain draw that never fogs
+    // while the (invisible) per-LB proxies did — i.e. the feature would look
+    // like it silently did nothing. Inherit it from the per-LB source material.
+    fog: srcMaterial.fog === true,
   });
   mat.name = "terrain-batch";
   return mat;

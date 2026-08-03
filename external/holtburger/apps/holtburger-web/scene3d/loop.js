@@ -37,6 +37,11 @@
 
 import * as THREE from "three";
 import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPvsLoadExpansion } from "./cells.js";
+// Far-terrain wave (2026-08-02). S1 (retail range fog) reads the flags + the
+// effective-radius helper; S2/S3 (the Far Composite Ring) adds one budgeted
+// tick. Both are hard no-ops behind `?farTerrain=off`.
+import { terrainFogEnabled, farFogFrac, farFogNearPin, farFogFarPin } from "./far_terrain_flags.js";
+import { tickFarTerrain, farTerrainEffectiveRadiusLb } from "./far_terrain.js";
 // ?statAtlas (default-ON; ?statAtlas=off escapes) — lazy buffer-compaction for the cross-LB static
 // texture-array buckets, driven off the ~10 Hz PVS path (NOT the per-frame
 // eviction tick). Flag-off: statAtlasEnabled() is false → never runs.
@@ -1368,12 +1373,19 @@ function tickWeatherState(scene3d, sessionHandle) {
 
 // === Wave R1.C — fog color lerp (2026-05-28) ===
 //
-// Parse `?fogLerp=on` from the page URL. Returns true only for the
-// literal value "on" (case-insensitive); missing/any other value is
-// false. Mirrors `terrain.js::readTerrainModulationFlag` exactly,
-// including the try/catch so the non-browser Node harness (which has
-// no `window`) doesn't throw. Cached once because the URL can't change
-// without a reload.
+// Parse `?fogLerp` from the page URL.
+//
+// 2026-08-02 FAR-TERRAIN S1 — PROMOTED TO DEFAULT-ON (escape `?fogLerp=off`,
+// or the wave master `?farTerrain=off` / `?terrainFog=off`). Rationale: retail
+// closed its horizon with authored linear range fog out of the DAT
+// (SkyDesc::GetWorldFog, acclient.c:301602), that data is already ported into
+// wasm as SkyState.fogMin/fogMax/fogColorArgbLerp, and this reader is what
+// decides whether the client actually uses it. It stayed opt-in only because
+// the terrain shader had no fog code to receive it — which the shared fog tail
+// (terrain_shared_glsl.js) now fixes. Keeping it opt-in would ship a horizon
+// mechanism nobody turns on.
+//
+// The literal-"on" form still forces it on when the master escapes are set.
 let _fogLerpFlagCache;
 function readFogLerpFlag() {
   if (_fogLerpFlagCache !== undefined) return _fogLerpFlagCache;
@@ -1383,7 +1395,14 @@ function readFogLerpFlag() {
       return false;
     }
     const v = new URLSearchParams(window.location.search).get("fogLerp");
-    _fogLerpFlagCache = typeof v === "string" && v.toLowerCase() === "on";
+    const s = typeof v === "string" ? v.toLowerCase() : null;
+    if (s === "on" || s === "1" || s === "true" || s === "yes") {
+      _fogLerpFlagCache = true;
+    } else if (s === "off" || s === "0" || s === "false" || s === "no") {
+      _fogLerpFlagCache = false;
+    } else {
+      _fogLerpFlagCache = terrainFogEnabled();
+    }
   } catch (_) {
     _fogLerpFlagCache = false;
   }
@@ -1487,8 +1506,47 @@ function tickDistanceFogColor(scene3d) {
     // whole frame fog out). Keep prior values otherwise.
     if (Number.isFinite(fogMin) && Number.isFinite(fogMax) &&
         fogMax > fogMin && fogMax > 0) {
-      fog.near = fogMin;
-      fog.far = fogMax;
+      // === FAR-TERRAIN S1 — the fog-before-edge invariant ==================
+      // Retail's authored clear-day band is 150 -> 2400 m against a 1536 m
+      // default grid, so its own ring edge sat at ~62 % fog and was never seen.
+      // Our terrain edge is a STREAMING limit that moves (near ring radius 5,
+      // far ring radius `farRadius`, and the geometry governor can collapse the
+      // near ring to ~3), so the authored 2400 m would leave a hard, fully
+      // unfogged cut. Clamp the far distance to `farFogFrac * R_effective * 192`
+      // (default 0.85) so fog reaches 100 % strictly INSIDE the outermost baked
+      // landblock. Then an absent / unbaked / off-map tile is invisible, and the
+      // "void read as ocean" mis-tune that contaminated pass 2 cannot recur.
+      // `?farFogFrac=0` disables the clamp; `?farFogNear` / `?farFogFar` pin
+      // both ends outright for an A/B.
+      let near = fogMin;
+      let far = fogMax;
+      const frac = farFogFrac();
+      if (frac > 0) {
+        const rEff = farTerrainEffectiveRadiusLb(scene3d);
+        if (Number.isFinite(rEff) && rEff > 0) {
+          const edge = frac * rEff * 192;
+          if (edge > 0) far = Math.min(far, edge);
+        }
+      }
+      const nearPin = farFogNearPin();
+      const farPin = farFogFarPin();
+      if (Number.isFinite(nearPin)) near = nearPin;
+      if (Number.isFinite(farPin)) far = farPin;
+      if (far > near) {
+        fog.near = near;
+        fog.far = far;
+      }
+      // Probe surface for the validator: what was ACTUALLY applied this frame,
+      // alongside the authored values it came from.
+      scene3d.__farFogApplied = {
+        authoredMin: fogMin,
+        authoredMax: fogMax,
+        near: fog.near,
+        far: fog.far,
+        colorHex: rgb,
+        frac,
+        effectiveRadiusLb: farTerrainEffectiveRadiusLb(scene3d),
+      };
     }
   }
 }
@@ -2029,6 +2087,22 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     // terrain BatchedMesh (dead space accrues on LB eviction / LOD re-bake).
     // No-op flag-off (module state never allocates) / no churn.
     if (terrainBatchEnabled()) tickTerrainBatchOptimize();
+    // ── FAR COMPOSITE RING (2026-08-02, ?farRing) ─────────────────────
+    // Deliberately parked on the SAME ~10 Hz deferrable as the PVS ring, and
+    // deliberately AFTER it: the far path must never issue a fetch or a bake
+    // while the near ring has work in flight (it re-checks that itself), and
+    // there is nothing in it that needs 60 Hz — patches are world-anchored, so
+    // player movement changes only which patches are in range. Hard no-op with
+    // `?farTerrain=off` / `?farRing` unset (module state never allocates).
+    try {
+      tickFarTerrain(scene3d, sessionHandle, scene3d?.renderer);
+    } catch (e) {
+      if (!scene3d._farTerrainTickWarned) {
+        scene3d._farTerrainTickWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[far_terrain] tick threw (far ring idle this frame):", e);
+      }
+    }
   }
   // Phase 2.2 — water/lava vertex displacement clock. Runs FIRST so the
   // displacement is current before any code reads terrain positions

@@ -23,6 +23,12 @@
 
 import * as THREE from "three";
 import { prewarmSubtree } from "./bake_prewarm.js";
+// Far-terrain wave (2026-08-02) — the SHARED lighting + fog tail. Interpolated
+// character-identically into this monolith and into the Far Composite Ring's
+// far-patch shader (scene3d/far_terrain.js), so the near/far seam cannot drift
+// apart. See scene3d/terrain_shared_glsl.js for the full rationale.
+import { TERRAIN_SHARED_TAIL_GLSL } from "./terrain_shared_glsl.js";
+import { terrainFogEnabled } from "./far_terrain_flags.js";
 import {
   landblockMeshToGeometry,
   subdividedLandblockMeshToGeometry,
@@ -1868,6 +1874,27 @@ float csmShadowFactor(vec3 worldPos, float viewDepth) {
   return csmSampleCascade(uCsmShadowMap2, uCsmMatrix2, worldPos);
 }
 
+${TERRAIN_SHARED_TAIL_GLSL}
+
+// === FAR COMPOSITE RING — albedo bake gate (2026-08-02) ==================
+// 0.0 in every shipped frame. The Far Composite Ring clones this material once,
+// sets this to 1.0, and renders each far landblock through it with a top-down
+// ORTHOGRAPHIC camera parked 1000 m up. Two things fall out for free:
+//   (a) vViewDepth is ~1000 for every bake fragment, so every distance ramp in
+//       this shader (uDetailTexFadeEnd 50 m, uPomFadeEnd 25 m, the macro ramp
+//       55->260 m, every sparkle fade, the trail-map UV range check) resolves to
+//       exactly the value the near path uses at the seam — no per-feature
+//       surgery, and any ramp added in future inherits the behaviour;
+//   (b) the early-out below emits the finished ALBEDO and skips every lighting
+//       and view-dependent term, so nothing that moves (sun, CSM, cloud shadow,
+//       IBL, night ramp) can ever invalidate a baked tile.
+// The bake clone ALSO forces uAcGouraudEnabled to 0 — the retail Gouraud term
+// multiplies the albedo above, and it tracks the sun, so it must be applied
+// live by the far shader instead of frozen into the composite.
+// With ?farTerrain=off this uniform is never written and the near path is
+// provably byte-identical.
+uniform float uBakeAlbedo;
+
 in vec2 vGridUv;
 in vec3 vWorldPos;
 in float vViewDepth;                  // CSM-on-terrain: view-space depth for cascade selection
@@ -3023,12 +3050,11 @@ void main() {
       // zero. Compute it raw, then fall back to the flat tangent normal.
       vec3 rnmRaw = t * dot(t, u) - u * t.z;
       vec3 combinedN = (dot(rnmRaw, rnmRaw) > 1e-8) ? normalize(rnmRaw) : vec3(0.0, 0.0, 1.0);
-      // Apply combined normal to the sun NdotL.
-      ndotl = clamp(dot(combinedN, sunDir), 0.0, 1.0);
-      // Wrap-lighting bias so unlit faces don't go pure black — terrain
-      // shading is otherwise unmodulated, so a pure cosine produces too
-      // much contrast at sunset orientations.
-      ndotl = mix(0.65, 1.0, ndotl);
+      // Apply combined normal to the sun NdotL, through the SHARED tail
+      // (terrain_shared_glsl.js) so the far composite ring runs the same
+      // wrap-lit lambert. Expression-identical to the prior inline
+      // mix(0.65, 1.0, clamp(dot(combinedN, sunDir), 0.0, 1.0)).
+      ndotl = terrainSunNdotl(combinedN, sunDir);
     }
   }
 
@@ -3041,7 +3067,7 @@ void main() {
   // the world normal through the tangent-space RNM. Combined floor ~0.42
   // (0.65 * 0.65), never pure black.
   if (slopeShading && !acGouraud) {
-    float slopeNdotL = mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
+    float slopeNdotL = terrainSunNdotl(geomN, sunDir);
     ndotl = mix(ndotl, ndotl * slopeNdotL, 1.0);
   }
 
@@ -3324,10 +3350,13 @@ void main() {
   // triangle, matching acclient's per-vertex colour lerp. max()/min() are
   // applied per fragment rather than per vertex, which differs from retail
   // only inside the terminator band and never overshoots it.
+  // Runs through the SHARED tail (terrain_shared_glsl.js) — expression-identical
+  // to the prior inline form, and the same characters the far composite ring
+  // executes, so the seam cannot drift. The far BAKE forces uAcGouraudEnabled to
+  // 0 and the far shader re-applies this live off the same uniforms.
   if (acGouraud) {
-    float acL = max(0.0, dot(vAcLightNormal, uAcSunVec));
-    vec3 acC = min(vec3(1.0), uAcSunColor * acL + uAcAmbColor * uAcAmbLevel);
-    modulated *= acC;
+    modulated = terrainAcGouraud(modulated, vAcLightNormal, uAcSunVec,
+                                 uAcSunColor, uAcAmbColor, uAcAmbLevel);
   }
 
   // === Wave 2A — SNOW FOOTPRINT DARKENING (plan §3.4 item 3) =============
@@ -3606,8 +3635,18 @@ void main() {
     }
   }
 
-  fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow + iblSpec
-                   + sandSparkle * cloudShadow * csmShadow, 1.0);
+  // === FAR COMPOSITE RING albedo bake (2026-08-02) =======================
+  // The ONE insertion into the monolith. modulated is the finished albedo;
+  // everything below it (ndotl, cloudShadow, csmShadow, iblSpec, sandSparkle)
+  // is lighting or view-dependent specular and is deliberately NOT baked.
+  // uBakeAlbedo is 0.0 in every shipped frame.
+  if (uBakeAlbedo > 0.5) { fragColor = vec4(modulated, 1.0); return; }
+
+  vec3 terrainLit = terrainApplyLight(modulated, ndotl, cloudShadow, csmShadow)
+                    + iblSpec + sandSparkle * cloudShadow * csmShadow;
+  // Retail range fog. No-op (identity return, no uniforms declared) whenever
+  // scene.fog is null — which is the shipped default before ?terrainFog.
+  fragColor = vec4(terrainApplyFog(terrainLit, vViewDepth), 1.0);
 }
 `;
 
@@ -5877,10 +5916,26 @@ export async function bakeTerrainForLandblock(
       uCsmBlend: {
         value: scene3d?.csmState?.blendFrac ?? 0.1,
       },
+      // FAR COMPOSITE RING — 0.0 in every shipped frame. Only the far ring's
+      // cloned scratch material ever sets this to 1.0 (see far_terrain.js).
+      uBakeAlbedo: { value: 0.0 },
+      // S1 retail range fog. These are three's OWN injected fog uniform names:
+      // WebGLRenderer.refreshFogUniforms() writes them every frame for any
+      // material with `fog === true` whenever `scene.fog` is non-null, in the
+      // same colour space as statics/models. They are inert (never written,
+      // never declared in GLSL) when scene.fog is null or terrainFog is off.
+      fogColor: { value: new THREE.Color(0xc3c8dc) },
+      fogNear: { value: 150 },
+      fogFar: { value: 2400 },
+      fogDensity: { value: 0.00025 },
     },
     vertexShader: TERRAIN_VERTEX_GLSL,
     fragmentShader: TERRAIN_FRAGMENT_GLSL,
     glslVersion: THREE.GLSL3,
+    // S1 — participate in scene.fog exactly as statics do. `false` (or a null
+    // scene.fog) leaves USE_FOG undefined, so the compiled program is
+    // byte-identical to the pre-wave build.
+    fog: terrainFogEnabled(),
     // Heightfield is single-sided: backfaces are looking at the
     // world from below the terrain — never the player's vantage.
     // The F#27 fix in `landblockMeshToGeometry` reverses the wasm's

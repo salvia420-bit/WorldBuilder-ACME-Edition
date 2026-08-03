@@ -130,14 +130,40 @@ const HORIZON_DISSOLVE_END_M = 1150;
 // itself untouched; 350 m started greying the near-field grass.
 const AERIAL_START_M = 80;
 const AERIAL_END_M = 480;
-/** Ceiling on the sky blend before the dissolve takes over. */
-const AERIAL_MAX = 0.62;
+/** Ceiling on the sky blend before the dissolve takes over.
+ *
+ * 2026-08-02 FAR-TERRAIN S1 — **0.62 -> 0.0, i.e. NUMERICALLY INERT.**
+ * The shipped desaturate-and-cool wash is user-rejected, and the ground-truth
+ * measurements explain why it could never have worked: its strength is INVERTED
+ * with distance (per-row MAD on/off at four vantages: 0.00-2.46 on the FARTHEST
+ * terrain rows vs 15.7-27.7 on the mid-field), because the ramp saturates at
+ * `AERIAL_END_M` 480 m and the pass cannot reach past 833.4 m at all (the
+ * `depth >= 0.9999` guard with near 0.1 / far 5000). So it greyed the mid-ground
+ * while the horizon silhouette kept full chroma — the exact opposite of aerial
+ * perspective. It was also tuned against frames whose "distance" was the takram
+ * sky's dark planet GROUND standing in for absent landblocks, not Dereth.
+ *
+ * The replacement is retail's own mechanism: authored linear RANGE FOG out of
+ * the DAT, monotone in distance by construction, in world space with real depth
+ * (scene3d/terrain_shared_glsl.js + loop.js::tickDistanceFogColor).
+ *
+ * The code, the `?aerialDebug` harness and the sweep knobs all stay. Getting
+ * the old look back for an A/B is
+ *   `?aerialDepth=on&aerialMax=0.62&aerialDesat=0.72`.
+ */
+const AERIAL_MAX = 0.0;
 /** >1 keeps the near-mid field crisp and loads the effect into the far field. */
 const AERIAL_CURVE = 1.15;
 /** Extra chroma loss on top of the sky blend. Real aerial perspective kills
  *  saturation faster than it kills luminance contrast; without this the
- *  distance just gets paler rather than hazier. */
-const AERIAL_DESAT = 0.72;
+ *  distance just gets paler rather than hazier.
+ *
+ *  2026-08-02 FAR-TERRAIN S1 — **0.72 -> 0.0, inert.** Same verdict as
+ *  AERIAL_MAX above, plus one specific defect: nothing in the term was
+ *  surface-aware, so it desaturated WATER as hard as land — the Holtburg river
+ *  went from bright cyan to murky grey-green. Retail's fog desaturates nothing
+ *  selectively. `?aerialDesat=0.72` restores it for an A/B. */
+const AERIAL_DESAT = 0.0;
 /** Screen-UV lift of the sky sample toward the horizon band. See hbSkyLift. */
 const AERIAL_SKY_LIFT = 0.05;
 
@@ -390,20 +416,45 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // 19:00 across a 900 m Holtburg sightline and lands where it should. Both
   // `?horizonFade=off` and `?aerialDepth=off` remove the effect AND its
   // capture pass entirely, restoring the byte-identical pre-feature pipeline.
+  //
+  // === 2026-08-02 FAR-TERRAIN S1 — DEFAULT FLIPPED BACK TO **OFF**. ========
+  // The horizon dissolve is KILLED as the shipping horizon mechanism, not
+  // re-tuned. It is structurally dead past 833.4 m — `HorizonDissolveEffect`
+  // opens with `depth >= 0.9999 -> passthrough`, which with the live
+  // near 0.1 / far 5000 is a hard cutoff at 833 m (measured 831-901 m). Only
+  // 820->833 m of the shipped 820->1150 m band was ever alive; whole-frame MAD
+  // for dissolve-only vs off measured 0.56-2.04, i.e. noise. Re-deriving
+  // START/END from a larger ring radius would put 100% of the band inside the
+  // dead zone — strictly worse. Its haze target is also a screen-space sample
+  // of the takram sky's dark planet GROUND, in exactly the direction distant
+  // terrain lies, which is why `aerialSkyLift` had to exist.
+  //
+  // Retail closed its horizon with authored linear RANGE FOG (SkyDesc::
+  // GetWorldFog), in world space, with real depth, reaching the full far plane.
+  // That is now live on terrain, statics and models (terrain_shared_glsl.js).
+  //
+  // Default-off restores the byte-identical pre-feature pipeline AND drops a
+  // full-res sky capture + blit per frame. The pass and the whole `?aerialDebug`
+  // distance-write harness are kept for archaeology and A/B:
+  //   ?horizonDissolve=on | ?horizonFade=on | ?aerialDepth=on | ?aerialDebug=on
+  // Even when re-enabled the wash is inert unless aerialMax/aerialDesat are
+  // given explicit values (both constants are now 0.0).
   const horizonFadeEnabled = (() => {
     if (typeof opts?.horizonFade === "boolean") return opts.horizonFade;
     try {
-      if (typeof window === "undefined" || !window.location?.search) return true;
+      if (typeof window === "undefined" || !window.location?.search) return false;
       const q = new URLSearchParams(window.location.search);
-      for (const name of ["horizonFade", "aerialDepth"]) {
+      // `?aerialDebug=on` must still build the pass — it IS the harness.
+      if (q.get("aerialDebug") === "on") return true;
+      for (const name of ["horizonDissolve", "horizonFade", "aerialDepth"]) {
         const v = q.get(name);
         if (typeof v !== "string") continue;
         const t = v.toLowerCase();
-        if (t === "off" || t === "0" || t === "false" || t === "no") return false;
+        if (t === "on" || t === "1" || t === "true" || t === "yes") return true;
       }
-      return true;
+      return false;
     } catch (_) {
-      return true;
+      return false;
     }
   })();
 

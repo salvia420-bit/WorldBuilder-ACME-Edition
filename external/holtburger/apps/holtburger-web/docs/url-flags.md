@@ -31,6 +31,8 @@
 > | `skytime` | Debug pin — freezes the sky clock at a chosen time for A/B shots. | n/a (debug). | Intentional debug pin. |
 > | `exposure` | Debug pin — manual tone-map exposure override for A/B shots. | n/a (debug). | Intentional debug pin. |
 > | `aerialDebug` | Debug pin — forces `horizonDissolve.debug = 1`. | n/a (debug). | Intentional debug pin. |
+> | `horizonDissolve` / `horizonFade` / `aerialDepth` | **Measured structurally dead, not merely mistuned.** The pass opens with `depth >= 0.9999 → passthrough`, a hard 833.4 m cutoff at `near 0.1 / far 5000` (measured 831–901 m) — 96 % of its own 820→1150 m band never executed, and dissolve-only vs off whole-frame MAD was 0.56–2.04 (noise). Its haze target is a screen-space sample of the takram sky's dark planet **ground**, in exactly the direction distant terrain lies. Replaced by `terrainFog` (retail authored range fog, world-space, real depth, reaches the far plane). | Would need the `depth >= 0.9999` guard AND the 5000 m far plane changed, i.e. a different effect. Not a tuning job. **Do not re-derive its band from a ring radius** — a wider band puts 100 % of it in the dead zone. | **ADJUDICATED OFF 2026-08-03** (far-terrain wave S1). Kept behind the flag for archaeology + the `?aerialDebug` harness. |
+> | `farRing` | The Far Composite Ring is implemented and locally smoke-clean, but every load-bearing claim about it is a **GPU** claim (bake cost, aniso, mip behaviour, seam visibility, crawl, ortho slope smear, ice-at-distance) and SwiftShader lies about all of them. Shipping it default-ON without the 1070 pass would repeat pass 2's mistake in the other direction. | The FARCRIT-3 per-stage matrix: (a) `?farTerrain=off` A/B MAD exactly 0.00; (b) seam invisible at 4 vantages incl. a mountain wall and a coastline; (c) `@teleloc` crawl test proving mips+aniso; (d) the AP/`sceneDepthTexture` depth sanity check (far pixels must read as WORLD, not sky); (e) `__farTerrainState().ring.policyOk === true` over a 20-hop tour; (f) the pre-declared ice fail condition — a frozen vista at `?farRing=on` must not read visibly flatter/deader than the same vista at `?pvsRingRadius=10&farRing=off`. | **Gated on that pass.** Everything else in the wave (`farTerrain`, `terrainFog`, `fogLerp`) ships ON. |
 > | `portalStencil` | The **non-stencil** indoor path shipped instead (`docs/HANDOFF-indoor-cells-vanquish420-nonstencil-2026-07-06.md`). This is the alternative, not the successor. | A real-GPU (1070) pass showing the stencil path beats non-stencil on **both** correctness (no leak through sealed cells) **and** frame cost. | Gated on that measurement. |
 > | `perPolyCull` | Cost/benefit never measured on a real GPU. | A 1070 A/B — fresh `--user-data-dir` per arm, `renderer.info.autoReset = false`, cumulative counts ÷ frames — showing a triangle win that survives the CPU cost. | Gated on that measurement. |
 > | `eagerDungeons` | Pre-streams dungeon cells; large memory spike on an 8 GB box. | A residency measurement on a 16 GB+ box showing the spike is bounded, **plus** a warm-park budget that evicts. | Gated on the residency work (retail refcounted `DBOCache` + fixed slot grid is the target). |
@@ -1284,6 +1286,41 @@ site) are audited and correct.
 | `terrainMacroScaleB` | numeric clamp [4, 4000] | 37.0 | terrain.js `readMacroScaleB` → terrain_macro.js:85 |
 | `terrainMacroNoise` | numeric clamp [0, 1] | 0.14 | terrain.js `readMacroNoiseAmp` → terrain_macro.js:88 |
 
+### Far terrain — retail range fog + the Far Composite Ring **[far-terrain wave, 2026-08-03]**
+
+The horizon problem is **~70 % absent content and ~30 % shading**. Content stopped at 1056 m
+(axis) while the DAT has real land out past 1500 m, so the top 39–49 % of every long sightline
+was backstop, not Dereth. Retail closed the same view with **authored linear range fog**
+(`SkyDesc::GetWorldFog`, acclient.c:301602 — Dereth clear day `min 150 → max 2400`,
+`0xFFC3C8DC`, lerped per `SkyTimeOfDay`) over a **radius-8 (1536 m)** default landblock grid.
+This wave ships both halves: the fog (`terrainFog`, ON) and the extra content (`farRing`).
+
+Reader for all of these: `scene3d/far_terrain_flags.js`. Effect sites: `scene3d/far_terrain.js`,
+`scene3d/terrain_shared_glsl.js`, `scene3d/terrain.js` (tail), `scene3d/loop.js`.
+
+| Flag | Reader (semantics when absent) | Effective default | Where |
+|---|---|---|---|
+| `farTerrain` | `off\|0\|false\|no` disables; anything else ON | **ON** — master escape for the whole wave (fog **and** ring). `?farTerrain=off` restores the pre-wave client: no terrain fog, no far ring, `fogLerp` back to opt-in. | far_terrain_flags.js `farTerrainEnabled` |
+| `terrainFog` | `off\|…` disables (AND-ed with `farTerrain`) | **ON** — **S1.** Puts retail range fog in the terrain fragment shader. The terrain `ShaderMaterial` previously contained the token `fog` exactly twice, both on the *wireframe* `MeshBasicMaterial`s — `scene.fog` had **never** affected the ground, which is why nobody could close the horizon with it. Terrain now sets `fog: true` + three's own `fogColor/fogNear/fogFar` uniforms and runs three's `<fog_fragment>` arithmetic verbatim (hand-written: the shader is GLSL3 with a custom `out`), so terrain, statics and models fog **identically** at a shared silhouette edge. Plane-based like three, **not** retail's `D3DRS_RANGEFOGENABLE` radial — matching three matters more than matching retail here, because a terrain/statics disagreement is visible and a corner-of-screen radial difference is not. OFF ⇒ `USE_FOG` is never defined and the fragment shader is byte-identical to the pre-wave build. | far_terrain_flags.js `terrainFogEnabled`; terrain_shared_glsl.js `TERRAIN_FOG_TAIL_GLSL` |
+| `fogLerp` | `on\|1\|true\|yes` forces ON, `off\|0\|false\|no` forces OFF, **absent ⇒ `terrainFog`** | **ON** (was `=== "on"` opt-in). Creates the linear `THREE.Fog` on the atmosphere path and lets `loop.js::tickDistanceFogColor` drive near/far/colour from `SkyState.fogMin/fogMax/fogColorArgbLerp` every frame. ⚠ Its guard used to be a bare `if (scene.fog)`, so on the shipped 3D path (where nothing creates a fog — the `FogExp2` is wireframe-only) the flag was a **no-op on exactly the path it was written for**. Fixed. | loop.js `readFogLerpFlag`; index.js `fogLerpEnabled` |
+| `farFogFrac` | numeric clamp [0, 4]; `0` disables the clamp | **0.85** — the **fog-before-edge invariant**. `fogFar = min(authored fogMax, farFogFrac × R_effective × 192)`. Retail's authored 2400 m sat against a 1536 m grid, so its edge was at ~62 % fog and never seen; our terrain edge is a *streaming* limit that moves (near ring 5, far ring `farRadius`, and the geometry governor has been measured collapsing the near ring 200 → 35 LBs), so the authored value alone would leave a hard unfogged cut. With the clamp, an absent / unbaked / off-map tile is **invisible** and the "void read as ocean" mis-tune cannot recur. `R_effective` is measured, not nominal — floored at 3 LB, rising instantly and decaying at 0.05 LB/tick so a park storm cannot flash the fog shut. | far_terrain_flags.js `farFogFrac`; far_terrain.js `nearRingEffectiveRadiusLb` |
+| `farFogNear` | numeric; absent ⇒ SkyState-driven `fogMin` | unset (A/B pin only — overrides the authored band) | far_terrain_flags.js `farFogNearPin` |
+| `farFogFar` | numeric; absent ⇒ SkyState-driven `fogMax` after the `farFogFrac` clamp | unset (A/B pin only — overrides BOTH the authored band and the clamp) | far_terrain_flags.js `farFogFarPin` |
+| `farRing` | `on\|1\|true\|yes` opt-in (AND-ed with `farTerrain`) | **OFF** — **S2/S3, the Far Composite Ring.** Landblocks beyond the monolith ring get their albedo baked once through the *existing* terrain material with a top-down ortho camera 1000 m up, then draw as merged 4×4-LB patches with a **1-sampler** shader (the monolith runs 16, the WebGL2 minimum) sharing the same lighting tail. Bakes albedo only and lights live, so nothing that moves invalidates a tile. Opaque, `depthWrite: true`, near/far handoff by `discard`. Costs heights only (~2 KB/LB); statics/buildings/scenery/spawns/cells stay HARD-CAPPED at radius 5. See §0 for the flip criteria. | far_terrain_flags.js `farRingEnabled`; far_terrain.js |
+| `farRadius` | integer clamp [1, 16] | **8** (1536 m — deliberately retail's own default `mid_radius`) | far_terrain_flags.js `farRadiusLb` |
+| `farTexels` | numeric, snapped down to a power of two, clamp [32, 512] | **128** per LB edge (1.5 m/texel). Measured at a 960 m seam (187 px LB footprint): MAD(128 vs 512) = **0.50/255**, visually indistinguishable. At a 576 m seam (312 px) 128² visibly stair-steps TexMerge type boundaries — so if `farNearRadius=3` ever ships, band A must move to 256² and the memory line goes ~32 MB → ~106 MB. | far_terrain_flags.js `farTexelsPerLb` |
+| `farDepthBias` | numeric clamp [0, 1e-3] | **1e-6** log-depth units. Pushes the far ring back so the opaque near ring deterministically wins the ~10 m handoff overlap (the far vertices are *identical* to what the monolith would draw there, so the two surfaces are coincident). Applied **in the shader**, not via `polygonOffset` — the far shader writes `gl_FragDepth`, and an explicit `gl_FragDepth` write overrides polygon offset entirely, so a material-level offset would have been silently inert. `=0` shows the raw seam. | far_terrain_flags.js `farDepthBias` |
+| `farBakeBudget` | integer clamp [1, 8] | **1** patch/frame. Measured on a 1070 through the real 151-uniform material: 0.073 ms GPU per LB at 128², i.e. **~1.2 ms per 16-LB patch** (the design's "a few µs" was ~30× optimistic). | far_terrain_flags.js |
+| `farFetchBatch` | integer clamp [1, 128] | **16** landblock ids per `fetch_landblock_heightmaps` call (one patch) | far_terrain_flags.js |
+| `farFetchInFlight` | integer clamp [1, 8] | **2**. Plus a hard rule the far path re-checks itself: **never fetch or bake while the near ring has work in flight** (`_streamGuardState.inFlight`). Far fetches also ride the non-urgent lane. | far_terrain.js `nearRingBusy` |
+| `farDiag` | `off\|…` disables | **ON** — the radius policy, ENFORCED not assumed. Asserts no far-ring landblock has ever reached `staticsBakedLbs` / `buildingsBakedLbs` / `terrainBakedLbs` / the terrain LRU, and console-**errors** with the offending keys if one has. Not hypothetical: the existing plumbing fires terrain + statics + buildings from ONE site (`cells.js:1861-1900`), so the natural way to "extend the ring" is exactly the way that drags 42–58 ms of statics and 415–613 draw calls along with it. | far_terrain.js `assertRadiusPolicy` |
+
+**Probe surface:** `window.__farTerrainState()` — installed unconditionally (even with the ring
+off, so the fog stage reports through the same entry point). Returns `{ flags, disabled,
+sharedTailFingerprint, sharedTailBytes, terrainBatch, slotsAssertionOk, fog{authoredMin,
+authoredMax, near, far, colorHex, frac, effectiveRadiusLb}, sceneFog, terrainMaterialFog,
+nearEffectiveRadiusLb, farEffectiveRadiusLb, ring{...} }`.
+
 ### Atmosphere / horizon dissolve **[visual-pass]**
 
 | Flag | Reader (semantics when absent) | Effective default | Where |
@@ -1292,12 +1329,32 @@ site) are audited and correct.
 | `horizonFadeEnd` | numeric via `_aerialNum` | 1150 m | atmosphere_pipeline.js:507 |
 | `aerialStart` | numeric via `_aerialNum` | 80 m | atmosphere_pipeline.js:508 |
 | `aerialEnd` | numeric via `_aerialNum` | 480 m | atmosphere_pipeline.js:509 |
-| `aerialMax` | numeric via `_aerialNum` | 0.62 | atmosphere_pipeline.js:510 |
+| `aerialMax` | numeric via `_aerialNum` | **0.0 — INERT** (was 0.62; 2026-08-03 far-terrain S1) | atmosphere_pipeline.js `AERIAL_MAX` |
 | `aerialCurve` | numeric via `_aerialNum` | 1.15 | atmosphere_pipeline.js:511 |
-| `aerialDesat` | numeric via `_aerialNum` | 0.72 | atmosphere_pipeline.js:512 |
-| `aerialDepth` | `off\|0\|false\|no` disable check (OR'd with `horizonFade`) | **ON** (2026-08-02) | atmosphere_pipeline.js `horizonFadeEnabled` |
+| `aerialDesat` | numeric via `_aerialNum` | **0.0 — INERT** (was 0.72; 2026-08-03 far-terrain S1) | atmosphere_pipeline.js `AERIAL_DESAT` |
+| `horizonDissolve` / `horizonFade` / `aerialDepth` | `on\|1\|true\|yes` on ANY of the three enables; `?aerialDebug=on` also enables | **OFF** (2026-08-03 — was ON 2026-08-02) | atmosphere_pipeline.js `horizonFadeEnabled` |
 | `aerialSkyLift` | numeric via `_aerialNum`, screen-UV | 0.05 | atmosphere_pipeline.js (`hbSkyLift`) |
-| `aerialDebug` | `=== "on"` opt-in | OFF (debug pin) | atmosphere_pipeline.js (`hbDebugDist`) |
+| `aerialDebug` | `=== "on"` opt-in (also force-builds the pass) | OFF (debug pin) | atmosphere_pipeline.js (`hbDebugDist`) |
+| `aerialOpacity` | numeric clamp [0, 1] — takram AerialPerspectiveEffect blend opacity on the AC-fog path | 0.6 | scene3d/index.js (`FOGLERP_AERIAL_OPACITY`) |
+
+> **⚠ 2026-08-03 — the aerial wash and the horizon dissolve are OUT of the default chain. Read this before re-tuning either.**
+>
+> Both were flipped ON on 2026-08-02 and are now off, with their two constants zeroed. This is **not** a taste call; it is
+> three measured facts from the GTX 1070 ground truth (`groundtruth/GROUNDTRUTH.md`, `CRITIQUE.md` §2a):
+> 1. **The dissolve cannot reach the band it exists for.** `HorizonDissolveEffect` opens with `depth >= 0.9999 → passthrough`.
+>    With the live `near 0.1 / far 5000` that is a hard cutoff at **833.4 m** (measured 831–901 m). **96 % of the shipped
+>    820→1150 m band was inside the dead zone**; dissolve-only vs off whole-frame MAD measured 0.56–2.04, i.e. noise.
+>    Deriving a *wider* band from a bigger ring radius puts **100 %** of it in the dead zone — strictly worse.
+> 2. **The aerial wash's strength is inverted with distance.** Per-row MAD on/off at four vantages: **0.00–2.46** on the
+>    farthest terrain rows vs **15.7–27.7** on the mid-field. It greyed the mid-ground while the horizon kept full chroma —
+>    the opposite of aerial perspective. It also desaturated *water* as hard as land (the Holtburg river went cyan → murky).
+> 3. **It was tuned against a backstop.** Past ~1056 m there was no geometry at all; the "ocean" was the takram sky's dark
+>    planet **ground** showing through absent landblocks. The oracle says the DAT has dry land at heights 43–99 m out to
+>    1500 m+. Never tune a distance treatment against a frame whose distance is absent content.
+>
+> **The replacement is `terrainFog` below** — retail's own authored linear range fog, in world space, with real depth,
+> monotone in distance by construction, reaching the full far plane. Restore the old look for an A/B with
+> `?aerialDepth=on&aerialMax=0.62&aerialDesat=0.72`. The `?aerialDebug` harness is untouched and still builds the pass.
 
 ### Night ramp **[visual-pass]**
 
