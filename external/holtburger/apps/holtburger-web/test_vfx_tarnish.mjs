@@ -9,7 +9,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { tarnish, _glsl } from "./scene3d/vfx/components/tarnish.js"; // registers it
+import { tarnish, _glsl, tarnishAmountForHash } from "./scene3d/vfx/components/tarnish.js"; // registers it
+import { VFX_HASH_FRAG_DECL } from "./scene3d/vfx/per_instance.js";
+import { ensureWorldNormalVarying, VFX_WORLD_NORMAL_VARYING } from "./scene3d/vfx/components/wetness.js";
 import { validateComponent, getComponent } from "./scene3d/vfx/registry.js";
 import { lintManifest, lintSource, ALLOWED_READS, ALLOWED_WRITES } from "./scene3d/vfx/lint_caps.js";
 
@@ -108,11 +110,97 @@ check("linkVariant() = 'blotch' for the textured variant (stable per-SET bit, no
   // Accumulator declared before it is read at the roughness seam.
   check("accumulator declared before the roughness read",
     fs2.indexOf("float _vfxTarnishT = 0.0;") < iRough);
-  // Per-instance hash path present (the #ifdef + vVfxHash reference).
-  check("per-instance variation via vVfxHash under #ifdef VFX_INSTANCE_HASH",
-    fs2.includes("#ifdef VFX_INSTANCE_HASH") && fs2.includes("float _tInst = vVfxHash;"));
-  check("uniform-only fallback present (uTarnishHashFallback) when the hash infra is absent",
+  // This bare `fakeShader()` has NO #include <common> / <begin_vertex>, so the
+  // per-instance hash infra cannot install → the CONSTANT fallback is correct here.
+  check("no-infra shader ⇒ uniform-only fallback (uTarnishHashFallback)",
     fs2.includes("float _tInst = uTarnishHashFallback;"));
+}
+
+// ---------------------------------------------------------------------------
+// ★★★ PER-INSTANCE VARIATION — BEHAVIOUR, not string presence (2026-08-03).
+//
+// This block replaces an assertion that read:
+//     check("per-instance variation via vVfxHash under #ifdef VFX_INSTANCE_HASH",
+//       fs2.includes("#ifdef VFX_INSTANCE_HASH") && fs2.includes("float _tInst = vVfxHash;"));
+// It passed for over a month while the feature was 100% dead, because it asserted
+// the presence of the TEXT of a preprocessor branch whose macro is never defined
+// anywhere in the app (per_instance.js installs a VARYING by string surgery;
+// materials.js sets no shader.defines). Constant-0.5 patina on every object, green
+// test. The lock below therefore asserts three things a dead feature cannot fake:
+//   1. the emitted GLSL must not gate the hash read on ANY #ifdef;
+//   2. against a REALISTIC three-shaped shader (the seams per_instance.js needs),
+//      the live path must read the varying, and the varying must be declared;
+//   3. the documented amount maths must yield DIFFERENT amounts for two hashes.
+// ---------------------------------------------------------------------------
+{
+  // A three-shaped shader carrying the real chunk seams — the shape the actual
+  // pipeline compiles. Hand-building a shader WITHOUT these seams is what let the
+  // old assertion pass, so the realistic shape is the whole point.
+  const real = () => ({
+    uniforms: {},
+    vertexShader: [
+      "#include <common>",
+      "void main() {",
+      "  #include <begin_vertex>",
+      "  gl_Position = vec4(transformed, 1.0);",
+      "}",
+    ].join("\n"),
+    fragmentShader: [
+      "#include <common>",
+      "void main() {",
+      "  vec4 diffuseColor = vec4( diffuse, opacity );",
+      "  #include <map_fragment>",
+      "  #include <roughnessmap_fragment>",
+      "}",
+    ].join("\n"),
+  });
+
+  const s = real();
+  tarnish.declareUniforms(s, {});
+  tarnish.inject(s);
+  const fs3 = s.fragmentShader;
+
+  check("★ no #ifdef gates the per-instance read (the macro is never #define'd)",
+    !fs3.includes("#ifdef VFX_INSTANCE_HASH") && !fs3.includes("#ifdef VFX_WORLD_NORMAL"));
+  check("★ realistic shader ⇒ the LIVE path reads the varying (float _tInst = vVfxHash;)",
+    fs3.includes("float _tInst = vVfxHash;"));
+  check("★ ...and it does NOT fall back to the constant on that path",
+    !fs3.includes("float _tInst = uTarnishHashFallback;"));
+  check("★ the varying tarnish reads is actually DECLARED in the fragment stage",
+    fs3.includes(VFX_HASH_FRAG_DECL));
+  check("★ ...and ASSIGNED in the vertex stage (declared-but-never-written = still dead)",
+    s.vertexShader.includes("vVfxHash = vfxHash01("));
+  check("tarnish installs the hash infra itself (does not depend on a prelude)",
+    s.vertexShader.includes("float vfxHash01(vec2 p){"));
+
+  // The amount formula, evaluated on the CPU. `tarnishAmountForHash` is exported
+  // from the component and mirrors the `mix(uTarnishVarLo, uTarnishVarHi, _tInst)`
+  // line; pin the two together so the reference cannot silently drift from the GLSL.
+  check("CPU reference mirrors the GLSL amount line verbatim",
+    fs3.includes("mix(uTarnishVarLo, uTarnishVarHi, _tInst)"));
+  const aLo = tarnishAmountForHash(0.1);
+  const aHi = tarnishAmountForHash(0.9);
+  check("★ BEHAVIOUR: two different instance hashes ⇒ two DIFFERENT tarnish amounts",
+    Math.abs(aHi - aLo) > 0.5, `lo=${aLo} hi=${aHi}`);
+  check("★ ...and neither equals the dead constant-fallback amount (hash 0.5)",
+    Math.abs(aLo - tarnishAmountForHash(0.5)) > 1e-6
+      && Math.abs(aHi - tarnishAmountForHash(0.5)) > 1e-6);
+  check("amount is monotonic in the hash and spans [varLo, varHi]",
+    tarnishAmountForHash(0) === 0.25 && tarnishAmountForHash(1) === 1.0);
+
+  // Up-facing weight: inert on its own, LIVE once a sibling installs the shared
+  // world-normal varying (wetness/frost). Both directions asserted.
+  check("topWeight inert (1.0) when no world-normal varying is present",
+    fs3.includes("float _tTop = 1.0;"));
+  const s2 = real();
+  ensureWorldNormalVarying(s2);          // what wetness/frost do in a shared SET
+  tarnish.declareUniforms(s2, {});
+  tarnish.inject(s2);
+  check("★ topWeight goes LIVE when wetness/frost supplied the world normal",
+    s2.fragmentShader.includes("_tTop = mix(1.0 - uTarnishTopWeight")
+      || s2.fragmentShader.includes("float _tTop = mix(1.0 - uTarnishTopWeight"));
+  check("...and reads the shared varying by its canonical name",
+    s2.fragmentShader.includes(VFX_WORLD_NORMAL_VARYING));
 }
 
 // ---- Idempotency ----

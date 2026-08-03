@@ -382,9 +382,19 @@ check("reads/writes are the ambient-particle set",
 check("the id is the terrain.* router row (so it is not treated as a default-ON effect)",
   terrainDustDevil.id === "terrain.sandDevils");
 
+// A REAL env, the shape `particle_env.readParticleEnv` produces and the shape
+// `terrain_sand.js` passes. 2026-08-03: this used to be `env: null` and leaned on
+// dustDevilGate's null-env => 1.0 to produce a spec at all. A null env is a WIRING
+// FAULT (the producer never returns null), so it now gates OUT like every sibling
+// gate — and a test that only ever exercised the fault path was never exercising
+// the real one. Calm, dry, daylit desert: the conditions the old default claimed.
+const DEVIL_ENV = Object.freeze({
+  isStorm: false, stormness: 1, wetness: 0, nightFactor: 0,
+  season: 2, temperatureC: 30, frost: 0, windStrength: 1,
+});
 const devilCtx = {
   anchor: { partIndex: -1, center: { x: 0, y: 0, z: 0 }, radius: 1.7 },
-  env: null, seed: 0x1234, clock: 0,
+  env: DEVIL_ENV, seed: 0x1234, clock: 0,
 };
 const spec = terrainDustDevil.emit(devilCtx)[0];
 check("emit() synthesizes one emitter spec", !!spec && !!spec.emitterInfo);
@@ -417,7 +427,11 @@ check("gate: rain (wetness) scales it down",
   dustDevilGate({ wetness: 0.9 }) < dustDevilGate({ wetness: 0 }));
 check("gate: wind feeds it", dustDevilGate({ stormness: 0.9 }) > dustDevilGate({ stormness: 0 }));
 check("gate: night fades it", dustDevilGate({ nightFactor: 1 }) < dustDevilGate({ nightFactor: 0 }));
-check("gate: a null env is calm daylight (never a black hole)", dustDevilGate(null) === 1);
+check("★ gate: a null env gates OUT (0) — a missing env is a wiring fault, not weather;\n"
+  + "        matches pollenGate/firefliesGate/leavesGate/breathFogGate (2026-08-03)",
+  dustDevilGate(null) === 0);
+check("gate: a REAL calm dry daylit env is the 1.0 baseline the null case used to fake",
+  dustDevilGate(DEVIL_ENV) === 1);
 check("a gated-OUT env synthesizes NO emitter at all (as cheap as flag-off)",
   terrainDustDevil.emit({ ...devilCtx, env: { isStorm: true } }).length === 0);
 
@@ -464,7 +478,11 @@ const surface = sand.initTerrainSand({
   scene3d,
   ownerRegistry: spy,
   getParticleManager: () => fakeManager,
-  readEnv: () => null,
+  // 2026-08-03: was `() => null`, which made this integration test exercise the
+  // gate's WIRING-FAULT path (null env) instead of the real one. The live host
+  // passes `vfx/particle_env.js::readParticleEnv`, which ALWAYS returns a filled
+  // snapshot and never null. Supply the same baseline the unit assertions use.
+  readEnv: () => DEVIL_ENV,
 });
 check("?terrainSand=on ⇒ initTerrainSand registers the devil provider",
   !!surface && vfx.terrainVfxStats().providers.some((p) => p.id === "terrain.sandDevils"));

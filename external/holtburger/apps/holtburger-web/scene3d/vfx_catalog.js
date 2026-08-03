@@ -173,9 +173,22 @@ export function descriptorMechs(descriptor) {
 }
 
 /** True if the descriptor carries the MECH-A deformation.windBend component
- *  (the only one wired to the animated_scenery player in Phase 0). */
+ *  (the only one wired to the animated_scenery player in Phase 0).
+ *
+ *  DUCK-TYPED on purpose (2026-08-03). `?.componentIds?.has(...)` only guards
+ *  `componentIds` being NULLISH — if it is present but not a Set (e.g. the plain
+ *  ARRAY `item_fx.itemFxPlanFor` used to build), `.has` is undefined and CALLING
+ *  it throws a TypeError. That threw out of `frag_attach.fragEntriesForDescriptor`
+ *  (which calls this via `windResponds`) and the caller's catch nulled the whole
+ *  plan, killing `?itemFx` outright with no console evidence. The producer now
+ *  hands a Set, but a membership predicate must never be the thing that throws:
+ *  anything without a usable `.has` is simply "not wind-bent". */
 export function hasWindBend(descriptor) {
-  return !!descriptor?.componentIds?.has("deformation.windBend");
+  const ids = descriptor?.componentIds;
+  if (!ids) return false;
+  if (typeof ids.has === "function") return !!ids.has("deformation.windBend");
+  if (Array.isArray(ids)) return ids.indexOf("deformation.windBend") !== -1;
+  return false;
 }
 
 /** True if a DID SHOULD sway in the wind. Superset of hasWindBend (2026-06-26, user:

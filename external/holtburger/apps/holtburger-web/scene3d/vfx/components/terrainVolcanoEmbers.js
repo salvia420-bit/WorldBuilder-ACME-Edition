@@ -61,8 +61,15 @@ export function ventHash01(n) {
 
 /**
  * Environmental gate for an ember vent, in the `particle_env_gates.js` shape
- * (env → 0..1). PURE and total: a null env reads as calm and dry (1.0) rather
- * than throwing, exactly like the foliage gates.
+ * (env → 0..1). PURE and total: it never throws.
+ *
+ * NULL ENV ⇒ 0 (2026-08-03), which is what "exactly like the foliage gates"
+ * always claimed and never did — pollenGate/firefliesGate/leavesGate/
+ * breathFogGate all return 0 for a null env; this returned 1. A null env is a
+ * WIRING FAULT, not a weather state (`readParticleEnv` always returns a filled
+ * scratch), so full-strength vents with zero environmental response was the worst
+ * of the three options. See the marshGasGate note in `particle_env_gates.js` for
+ * the full rationale.
  *
  * Volcanic vents are a persistent geological feature, not weather — so unlike
  * the dust devil this does NOT go to zero in a storm. Rain DAMPS it (steam and
@@ -74,7 +81,7 @@ export function ventHash01(n) {
  * @returns {number} 0..1
  */
 export function volcanoEmberGate(env) {
-  if (!env) return 1;
+  if (!env) return 0;
   const clamp01 = (v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
   const wet = clamp01(env.wetness);
   const night = clamp01(env.nightFactor);

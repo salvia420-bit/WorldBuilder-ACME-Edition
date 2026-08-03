@@ -467,7 +467,12 @@ vfx._resetTerrainVfx();
 console.log("\n-- E1 the ember RE-ANCHOR: same spec as the brazier modulo anchor");
 // ===========================================================================
 const anchor = { partIndex: -1, center: { x: 11, y: -3, z: 40 } };
-const ventSpecs = terrainVolcanoEmbers.emit({ anchor, env: null, seed: 7 });
+// A REAL env (see the note in test_terrain_sand.mjs). `env: null` used to lean on
+// volcanoEmberGate's null-env => 1.0; that is now a gated-OUT wiring fault, so the
+// dry/day baseline is expressed explicitly. gate == 1 here, so every "same spec as
+// the brazier modulo anchor" assertion below is unchanged.
+const VENT_ENV = Object.freeze({ wetness: 0, nightFactor: 0 });
+const ventSpecs = terrainVolcanoEmbers.emit({ anchor, env: VENT_ENV, seed: 7 });
 const cfg = gatedVentConfig({ ...terrainVolcanoEmbers.defaults }, 1);
 const brazierSpecs = brazierEmbers.emit({ config: cfg });
 check("E1: the re-anchor returns the SAME NUMBER of specs (ember + smoke)",
@@ -510,8 +515,11 @@ check("E1: the spawn-ball clamp is respected, not fought (maxOffset ≤ 1 m — 
   && /LANDBLOCK scale/.test(EMBER_SRC));
 
 // gate behaviour
-check("E4: a null env gates to 1 (calm and dry, never a throw)",
-  volcanoEmberGate(null) === 1);
+check("★ E4: a null env gates OUT (0) — a missing env is a wiring fault, not weather;\n"
+  + "        matches pollenGate/firefliesGate/leavesGate/breathFogGate (2026-08-03)",
+  volcanoEmberGate(null) === 0);
+check("E4: a REAL dry/day env is the 1.0 baseline the null case used to fake",
+  volcanoEmberGate(VENT_ENV) === 1);
 check("E4: rain DAMPS a vent but never kills it (vents are geology, not weather)",
   volcanoEmberGate({ wetness: 1, nightFactor: 0 }) < 1
   && volcanoEmberGate({ wetness: 1, nightFactor: 0 }) > 0);
@@ -522,7 +530,7 @@ check("E4: the gate is clamped to [0,1] for absurd inputs",
   volcanoEmberGate({ wetness: 9, nightFactor: 9 }) >= 0
   && volcanoEmberGate({ wetness: -9, nightFactor: 9 }) <= 1);
 check("E4: a gated-out env synthesizes NO emitter at all (as cheap as flag-off)",
-  terrainVolcanoEmbers.emit({ anchor, env: null, config: null, seed: 1 }).length === 2
+  terrainVolcanoEmbers.emit({ anchor, env: VENT_ENV, config: null, seed: 1 }).length === 2
   && terrainVolcanoEmbers.emit({
     anchor, seed: 1,
     // Force the gate under GATE_MIN through the descriptor's own gateFn.
@@ -651,7 +659,11 @@ function makeSpyRegistry() {
     scene3d,
     ownerRegistry: spy,
     getParticleManager: () => fakeManager,
-    readEnv: () => null,
+    // 2026-08-03: was `() => null`, which made this integration test exercise the
+    // gate's WIRING-FAULT path (null env) instead of the real one. The live host
+    // passes `vfx/particle_env.js::readParticleEnv`, which ALWAYS returns a filled
+    // snapshot and never null. Supply the same baseline the unit assertions use.
+    readEnv: () => VENT_ENV,
   });
   check("E3: ?terrainVolcano=on registers the ember provider",
     !!surface && vfx.terrainVfxStats().providers.some((p) => p.id === "terrain.volcanoEmbers"));

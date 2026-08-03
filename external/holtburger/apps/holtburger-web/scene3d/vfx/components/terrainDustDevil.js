@@ -65,8 +65,15 @@ export function devilHash01(n) {
 
 /**
  * Environmental gate for a dust devil, in the `particle_env_gates.js` shape
- * (env → 0..1). PURE and total: a null env reads as a calm, dry, daylit desert
- * (1.0 baseline) rather than throwing, exactly like the foliage gates.
+ * (env → 0..1). PURE and total: it never throws.
+ *
+ * NULL ENV ⇒ 0 (2026-08-03), which is what "exactly like the foliage gates"
+ * always claimed and never did — pollenGate/firefliesGate/leavesGate/
+ * breathFogGate all return 0 for a null env; this returned 1. A null env is a
+ * WIRING FAULT, not a weather state (`readParticleEnv` always returns a filled
+ * scratch), so full-strength devils with zero environmental response was the
+ * worst of the three options. See the marshGasGate note in
+ * `particle_env_gates.js` for the full rationale.
  *
  * Devils are a DRY-WEATHER, DAYTIME phenomenon: rain kills them, wind feeds
  * them, and the ground stops convecting after sunset.
@@ -84,7 +91,7 @@ export function devilHash01(n) {
  * @returns {number} 0..1
  */
 export function dustDevilGate(env) {
-  if (!env) return 1;
+  if (!env) return 0;
   if (env.isStorm === true) return 0;
   const clamp01 = (v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
   const storm = clamp01(env.stormness);

@@ -280,6 +280,26 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl) {
     "frag road gate",
   );
   if (f == null) return null;
+  // 8. RND-20/21 — PER-LB retail-Gouraud validity (2026-08-03 fix).
+  //    `acLightNormal` is NOT session-constant: adapter.js supplies it ONLY
+  //    from `subdividedLandblockMeshToGeometry` (:386), never from
+  //    `landblockMeshToGeometry` (:288-352), and the LOD ring mixes both in one
+  //    resident ring at quality=high. The legacy path decides per LB
+  //    (terrain.js seeds uAcGouraudEnabled from `TERRAIN_GOURAUD_ON &&
+  //    geom.getAttribute("acLightNormal")`), so the batch must too — a
+  //    batch-wide uniform cannot express it.
+  //    The bit rides the vertex-types layer's A channel, exactly like merge
+  //    validity rides B. A is free: the shader reads only .r (terrain code)
+  //    and .g (road code), and BOTH legacy writers store a constant 255
+  //    (terrain.js:399 `bytes[dst + 3] = 255`, adapter.js:754), so the batch
+  //    writing 0/255 there cannot disturb any other reader.
+  f = _replaceOnce(
+    f,
+    "  bool acGouraud = uAcGouraudEnabled > 0.5;",
+    "  bool acGouraud = uAcGouraudEnabled > 0.5 && texelFetch(uVertexTypes, ivec3(0, 0, int(vLbSlot + 0.5)), 0).a > 0.5;",
+    "frag gouraud gate",
+  );
+  if (f == null) return null;
 
   return { vertexShader: v, fragmentShader: f };
 }
@@ -300,9 +320,14 @@ function _makeDataArray(w, h, layers) {
   return arr;
 }
 
-// Copy one LB's vertex-types bytes into its slot layer. mergeValid rides the
-// otherwise-unused B channel (see _buildBatchedGlsl step 6).
-function _writeVtLayer(state, slot, vtTex, mergeValid) {
+// Copy one LB's vertex-types bytes into its slot layer. Two per-LB validity
+// bits ride channels the shader otherwise ignores:
+//   B = merge-data validity   (see _buildBatchedGlsl step 6)
+//   A = retail-Gouraud validity — i.e. "this LB's geometry carries
+//       acLightNormal AND ?terrainGouraud is on" (step 8). Legacy writes a
+//       constant 255 into A, so it must be written explicitly here rather than
+//       inherited from the copied source bytes.
+function _writeVtLayer(state, slot, vtTex, mergeValid, gouraudValid) {
   const src = vtTex?.image?.data;
   const stride = VT_W * VT_H * 4;
   if (!src || src.length !== stride || vtTex.image.width !== VT_W || vtTex.image.height !== VT_H) {
@@ -311,28 +336,55 @@ function _writeVtLayer(state, slot, vtTex, mergeValid) {
   const dst = state.vtArray.image.data;
   dst.set(src, slot * stride);
   const b = mergeValid ? 255 : 0;
-  for (let i = 0; i < VT_W * VT_H; i += 1) dst[slot * stride + i * 4 + 2] = b;
+  const a = gouraudValid ? 255 : 0;
+  for (let i = 0; i < VT_W * VT_H; i += 1) {
+    dst[slot * stride + i * 4 + 2] = b;
+    dst[slot * stride + i * 4 + 3] = a;
+  }
   state.vtArray.addLayerUpdate(slot);
   state.vtArray.needsUpdate = true;
   return true;
 }
 
+// Zero-filled `acLightNormal` stand-in for a landblock whose geometry has none
+// (the non-subdivided 9x9 path). A BatchedMesh fixes its attribute layout from
+// the first geometry admitted, so every later geometry MUST present the same
+// set — but the per-LB A-channel gate keeps these zeros from ever being read.
+// Cached by vertex count: the ring only ever has a handful of distinct counts.
+const _zeroAttrCache = new Map();
+function _zeroVec3Attr(vcount) {
+  let attr = _zeroAttrCache.get(vcount);
+  if (!attr) {
+    attr = new THREE.BufferAttribute(new Float32Array(vcount * 3), 3, false);
+    _zeroAttrCache.set(vcount, attr);
+  }
+  return attr;
+}
+
 // Copy (or zero) one LB's TexMerge bytes into its slot layer. Zeroing is only
 // hygiene — the shader's per-LB B-channel gate already skips the block.
+//
+// Returns "ok" | "capability" | "shape" rather than a bare boolean: the two
+// failure modes are genuinely different and used to share one misleading
+// "merge texture shape mismatch" warning. "capability" means the batch-wide
+// merge array was never allocated (the FIRST absorb ran before texMerge state
+// existed, and `state.mergeArray` is decided once in _createState), so EVERY
+// merge-carrying LB for the rest of the session falls out of the batch — a
+// session-shaped problem that a "shape mismatch" message actively misdirects.
 function _writeMergeLayer(state, slot, mergeTex) {
-  if (!state.mergeArray) return mergeTex == null; // merge disabled batch-wide: only ok if the LB has none
+  if (!state.mergeArray) return mergeTex == null ? "ok" : "capability";
   const stride = MERGE_W * MERGE_H * 4;
   const dst = state.mergeArray.image.data;
   if (mergeTex) {
     const src = mergeTex.image?.data;
-    if (!src || src.length !== stride) return false;
+    if (!src || src.length !== stride) return "shape";
     dst.set(src, slot * stride);
   } else {
     dst.fill(0, slot * stride, (slot + 1) * stride);
   }
   state.mergeArray.addLayerUpdate(slot);
   state.mergeArray.needsUpdate = true;
-  return true;
+  return "ok";
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +450,11 @@ function _createState(scene3d, lbMesh, opts, extras) {
         ? _makeDataArray(MERGE_W, MERGE_H, TB_SLOT_CAPACITY)
         : null,
     attrNames: null,
+    // Does the shader declare the retail calc_lighting normal? Session-constant
+    // (it is a property of the GLSL source, not of any one landblock), so it is
+    // resolved ONCE here and consulted by every absorb — including the unpark
+    // re-absorb path, which receives no `extras`.
+    wantsAcLightNormal: extras.vertexGlsl.includes("acLightNormal"),
     freeSlots: [],
     nextSlot: 0,
     byLb: new Map(),     // lbKey -> { gid, iid, slot }
@@ -418,6 +475,20 @@ function _createState(scene3d, lbMesh, opts, extras) {
     absorbs: 0,
     reabsorbs: 0,
     evicts: 0,
+    // Per-LB retail-Gouraud accounting. `gouraudLbs` counts absorbs whose LB
+    // carried acLightNormal with the flag on; at quality=high it should track
+    // the subdivided sub-ring, and at quality=low it should be 0. A non-zero
+    // `gouraudLbs` with uAcGouraudEnabled still 0 would mean the promote path
+    // never ran.
+    gouraudLbs: 0,
+    // Absorbs rejected for a genuinely unexpected attribute set (NOT the
+    // acLightNormal case, which is now handled per-LB).
+    attrMismatches: 0,
+    // Absorbs rejected because this LB carries merge data the batch cannot
+    // hold — the batch-wide merge array was never allocated (the first absorb
+    // ran before texMerge state existed). Distinct from a real shape mismatch.
+    mergeCapabilityMisses: 0,
+    mergeShapeMisses: 0,
     parkHides: 0,
     unparkShows: 0,
     unparkReabsorbs: 0,
@@ -504,6 +575,17 @@ function _createState(scene3d, lbMesh, opts, extras) {
           absorbs: state.absorbs,
           reabsorbs: state.reabsorbs,
           evicts: state.evicts,
+          // Per-LB retail-Gouraud health (2026-08-03). `gouraudUniform` is the
+          // batch-wide enable; `gouraudLbs` is how many absorbed LBs actually
+          // presented the attribute. gouraudLbs > 0 with gouraudUniform 0 means
+          // the promote path is broken; both 0 at quality=high means no
+          // subdivided LB was ever absorbed.
+          gouraudUniform: state.material?.uniforms?.uAcGouraudEnabled?.value ?? null,
+          gouraudLbs: state.gouraudLbs,
+          carriesAcLightNormal: !!state.wantsAcLightNormal,
+          attrMismatches: state.attrMismatches,
+          mergeCapabilityMisses: state.mergeCapabilityMisses,
+          mergeShapeMisses: state.mergeShapeMisses,
           parkHides: state.parkHides,
           unparkShows: state.unparkShows,
           unparkReabsorbs: state.unparkReabsorbs,
@@ -628,23 +710,42 @@ function _absorbMeshIntoState(state, lbMesh) {
   // AND the wasm mesh carried merge data.
   const mergeTex = ud.mergeDataTexture || null;
   const mergeValid = !!(mergeTex && state.mergeArray);
-  if (!_writeVtLayer(state, slot, ud.vertexTypesTexture, mergeValid)) {
+  // RND-20/21 per-LB Gouraud validity. Read the LB's OWN source material,
+  // which terrain.js already seeded as `TERRAIN_GOURAUD_ON &&
+  // geom.getAttribute("acLightNormal")` — so this is the flag AND the
+  // attribute in one read, with no need to know the flag independently.
+  const gouraudValid = !!(
+    lbMesh.material?.uniforms?.uAcGouraudEnabled?.value > 0
+    && lbMesh.geometry?.getAttribute?.("acLightNormal")
+  );
+  if (!_writeVtLayer(state, slot, ud.vertexTypesTexture, mergeValid, gouraudValid)) {
     releaseSlot();
     state.passthroughCount += 1;
     _warnOnce("vertex-types texture shape mismatch");
     return false;
   }
-  if (!_writeMergeLayer(state, slot, mergeTex)) {
+  const mergeWrite = _writeMergeLayer(state, slot, mergeTex);
+  if (mergeWrite !== "ok") {
     releaseSlot();
     state.passthroughCount += 1;
-    _warnOnce("merge texture shape mismatch");
+    if (mergeWrite === "capability") {
+      state.mergeCapabilityMisses += 1;
+      _warnOnce(
+        "batch built without a TexMerge array (first absorb preceded texMerge state)",
+        "EVERY merge-carrying landblock will draw per-LB for this session",
+      );
+    } else {
+      state.mergeShapeMisses += 1;
+      _warnOnce("merge texture shape mismatch");
+    }
     return false;
   }
 
-  // Canonical attribute set: decided by the first absorbed geometry
-  // (modulation attributes are session-constant — present iff the wasm
-  // modulation-ranges table loaded). roadCode is intentionally dropped
-  // (unused by the shader; roads ride uVertexTypes.G).
+  // Canonical attribute set. The modulation trio IS session-constant (present
+  // iff the wasm modulation-ranges table loaded), so it is still decided by the
+  // first absorbed geometry; `acLightNormal` is NOT and is handled separately
+  // below. roadCode is intentionally dropped (unused by the shader; roads ride
+  // uVertexTypes.G).
   const srcGeom = lbMesh.geometry;
   if (!srcGeom?.attributes?.position || !srcGeom.index) {
     releaseSlot();
@@ -657,30 +758,51 @@ function _absorbMeshIntoState(state, lbMesh) {
     if (srcGeom.getAttribute("vertexBrightness")) {
       names.push("vertexBrightness", "vertexSaturate", "vertexHue");
     }
-    // RND-20/21 — carry the retail calc_lighting normal into the batch, or
-    // hard-off the Gouraud term. The batch material is cloned from ONE LB's
-    // material before any geometry is admitted, so its uAcGouraudEnabled can
-    // disagree with the whitelist; without this the batched draw would sample
-    // an unbound attribute as (0,0,0) and light every LB by ambient alone.
-    if (srcGeom.getAttribute("acLightNormal")) {
+    // RND-20/21 (2026-08-03 fix) — `acLightNormal` is admitted UNCONDITIONALLY
+    // when the shader declares it, NOT when the first geometry happens to have
+    // it. It is not session-constant (subdivided LBs carry it, base 9x9 LBs do
+    // not, and quality=high mixes both in one ring), so keying the canonical
+    // set off geometry #1 made the whole session depend on which LB streamed
+    // first: either every base LB fell out of the batch as an attribute-set
+    // mismatch, or `uAcGouraudEnabled` was latched to 0 batch-wide and every
+    // subdivided LB silently lost the retail calc_lighting term. Geometries
+    // without the attribute now present a zeroed stand-in and are switched off
+    // individually by the A-channel gate.
+    // (`wantsAcLightNormal` is resolved once in _createState from the shader
+    // source — `extras` is not in scope here: the unpark re-absorb path calls
+    // this function with no opts/extras to offer.)
+    if (state.wantsAcLightNormal) {
       names.push("acLightNormal");
-    } else if (state.material?.uniforms?.uAcGouraudEnabled) {
-      state.material.uniforms.uAcGouraudEnabled.value = 0.0;
     }
     state.attrNames = names;
   }
+  const vcount = srcGeom.attributes.position.count;
   const shadow = new THREE.BufferGeometry();
   for (const name of state.attrNames) {
-    const attr = srcGeom.getAttribute(name);
+    let attr = srcGeom.getAttribute(name);
+    if (!attr && name === "acLightNormal") {
+      // Never read: this LB's A-channel gate is 0 (see gouraudValid above).
+      attr = _zeroVec3Attr(vcount);
+    }
     if (!attr) {
       releaseSlot();
       state.passthroughCount += 1;
+      state.attrMismatches += 1;
       _warnOnce(`geometry attribute set mismatch (missing ${name})`);
       return false;
     }
     shadow.setAttribute(name, attr); // shared ref; setGeometryAt copies the data out
   }
-  const vcount = srcGeom.attributes.position.count;
+  // Promote-on-evidence, never demote. The batch material is cloned from ONE
+  // LB's material, so a base-mesh first absorb would otherwise pin the uniform
+  // at 0 for the session. Raising it here is safe because the per-LB A gate
+  // still decides each landblock, and it stays 0 forever when ?terrainGouraud
+  // is off (no LB ever presents a non-zero source uniform).
+  if (gouraudValid) {
+    const gu = state.material?.uniforms?.uAcGouraudEnabled;
+    if (gu && gu.value !== 1.0) gu.value = 1.0;
+    state.gouraudLbs += 1;
+  }
   shadow.setAttribute(
     "aLbSlot",
     new THREE.BufferAttribute(new Float32Array(vcount).fill(slot), 1, false),

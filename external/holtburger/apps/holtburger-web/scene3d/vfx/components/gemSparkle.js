@@ -76,11 +76,37 @@ function _phase01(ctx) {
   return f >= 0 && f < 1 ? f : 0;
 }
 
-// The gem/anchor half-extent (metres) used to size the spawn ball, from the "geometry"
-// read. ctx.geometry.halfExtent is preferred; fall back to half the max bbox span; else
-// the authored default. Clamped so a huge anchor doesn't scatter sparkles across a room.
+// ⚠ 2026-08-03 — CTX SHAPE FIX. This function used to read ONLY `ctx.geometry`,
+// and `emit()` used to read ONLY `ctx.partIndex`. **Neither field exists on the
+// ctx the attach layer actually builds.** `particle_attach.attachParticleEmitters`
+// constructs exactly:
+//     { did, numParts, partBoxes, rig, hash01, seed, clock, tSec, weather, env,
+//       anchor, config }
+// The resolved anchor lives on `ctx.anchor` — a {partIndex, center, radius}
+// record produced by `particle_attach._resolveAnchor` from the descriptor's
+// `config.anchor` ROLE against the per-part bboxes — and EVERY sibling particle
+// component reads it (foliageAmbient, breathFog, terrainDustDevil,
+// terrainVolcanoEmbers, terrainSwampAmbient). gemSparkle silently discarded the
+// whole P3.6 anchor resolution: the spawn ball was always the authored 0.05 m and
+// the part was always the root (-1), so the twinkle sat at the model ORIGIN
+// regardless of which part the `vfx anchor-parts` bake picked. Its unit test hid
+// this by hand-building `{ geometry: { halfExtent } }` — a shape the runtime never
+// produces.
+//
+// `ctx.geometry` is kept as a LEGACY fallback (offline/preview callers pass it),
+// but `ctx.anchor` now wins.
+//
+// ⚠ The root anchor's `radius` is NOT geometry. `_resolveAnchor` returns
+// `radius: config.maxOffset || 1` for role "root" — gemSparkle authors no
+// `maxOffset`, so that is a literal 1 m, 20× the authored 0.05 m ball. Only a
+// REAL resolved part (partIndex >= 0, radius derived from that part's bbox) may
+// size the ball; the root case keeps the authored `spawnRadius`.
 function _anchorHalfExtent(ctx, fallback) {
-  const g = ctx && ctx.geometry;
+  const a = ctx && ctx.anchor;
+  if (a && Number.isInteger(a.partIndex) && a.partIndex >= 0 && Number.isFinite(+a.radius) && +a.radius > 0) {
+    return _clamp(a.radius, 0.005, MAX_SPAWN_RADIUS_M);
+  }
+  const g = ctx && ctx.geometry;                       // legacy / offline callers
   if (g && Number.isFinite(+g.halfExtent)) return _clamp(g.halfExtent, 0.005, MAX_SPAWN_RADIUS_M);
   if (g && g.partBox && g.partBox.min && g.partBox.max) {
     const dx = +g.partBox.max[0] - +g.partBox.min[0];
@@ -90,6 +116,17 @@ function _anchorHalfExtent(ctx, fallback) {
     if (Number.isFinite(span) && span > 0) return _clamp(span * 0.5, 0.005, MAX_SPAWN_RADIUS_M);
   }
   return _clamp(fallback, 0.005, MAX_SPAWN_RADIUS_M);
+}
+
+/** The anchor part this placement resolved to, or -1 (root). Prefers the LIVE
+ *  `ctx.anchor.partIndex` (P3.6 selector) over the legacy `ctx.partIndex`, then
+ *  the authored config. Pure. */
+function _anchorPartIndex(ctx, cfg) {
+  const a = ctx && ctx.anchor;
+  if (a && Number.isInteger(a.partIndex) && a.partIndex >= 0) return a.partIndex;
+  if (Number.isInteger(ctx && ctx.partIndex)) return ctx.partIndex;   // legacy
+  if (Number.isInteger(cfg && cfg.partIndex)) return cfg.partIndex;
+  return -1;
 }
 
 /**
@@ -283,16 +320,23 @@ export const gemSparkle = {
     const cfg = { ...gemSparkle.defaults, ...((ctx && ctx.config) || {}) };
     const emitterInfo = gemSparkleEmitterInfo(cfg, ctx);
 
-    // Anchor: the resolved part (P3.6) or the configured/root index. Root sentinel −1.
-    const partIndex = Number.isInteger(ctx && ctx.partIndex) ? ctx.partIndex
-      : (Number.isInteger(cfg.partIndex) ? cfg.partIndex : -1);
+    // Anchor: the resolved part (P3.6 `ctx.anchor`), then the legacy ctx field,
+    // then the configured/root index. Root sentinel −1. See _anchorPartIndex.
+    const partIndex = _anchorPartIndex(ctx, cfg);
 
-    // Static offset frame (emitter-local, AC Z-up): lift the spawn ball toward gem
-    // height when liftZ != 0. Plain {position,quaternion} POJO (addEmitter accepts POJO
+    // Static offset frame (emitter-local, AC Z-up): the resolved anchor's bbox
+    // CENTRE (so the ball sits on the gem, not at the part origin) plus the
+    // authored liftZ. Plain {position,quaternion} POJO (addEmitter accepts POJO
     // frames, particle_manager.js:495-513) — no three needed.
     const liftZ = _clamp(cfg.liftZ, -5, 5);
-    const parentOffset = liftZ !== 0
-      ? { position: { x: 0, y: 0, z: liftZ }, quaternion: { x: 0, y: 0, z: 0, w: 1 } }
+    const c = (ctx && ctx.anchor && ctx.anchor.center) || null;
+    const cx = c && Number.isFinite(+c.x) ? +c.x : 0;
+    const cy = c && Number.isFinite(+c.y) ? +c.y : 0;
+    const cz = c && Number.isFinite(+c.z) ? +c.z : 0;
+    // null stays the "no offset at all" path (byte-identical to pre-fix for a
+    // root anchor with no lift), so the OFF/default render is unchanged.
+    const parentOffset = (liftZ !== 0 || cx !== 0 || cy !== 0 || cz !== 0)
+      ? { position: { x: cx, y: cy, z: cz + liftZ }, quaternion: { x: 0, y: 0, z: 0, w: 1 } }
       : null;
 
     return [{ emitterInfo, partIndex, parentOffset }];

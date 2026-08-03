@@ -33,6 +33,7 @@
 // add — the whole emissive output pulses, which is the intent.
 
 import { registerComponent } from "../registry.js";
+import { fragDeclaresVfxHash, VFX_HASH_FRAG_FALLBACK_DECL } from "../per_instance.js";
 
 // 2*PI as a GLSL literal (per-instance phase spreads vVfxHash in [0,1) over a
 // full cycle). Kept as a string constant so the GLSL below stays a pure literal.
@@ -110,9 +111,28 @@ export const enchantShimmer = {
     // -age) — declared by frag_install once for the whole SET. If it is absent
     // (component used standalone / in a unit test), fall back to a constant 0.0
     // so the patch still compiles (degrades to a synchronized global pulse).
-    const phaseSrc = shader.fragmentShader.includes("vVfxHash")
-      ? ""
-      : "    float vVfxHash = 0.0;\n";
+    //
+    // ⚠ 2026-08-03 — THE FALLBACK IS DECLARED AT GLOBAL SCOPE, NOT INSIDE main().
+    // It used to be spliced inline right after the emissive seam. `emissive.glint`
+    // patches THE SAME SEAM and, sorting after us by id, re-emits the seam line and
+    // inserts its own block BETWEEN the include and our declaration — while its
+    // probe (a bare `vVfxHash` token test) was satisfied by our declaration and so
+    // emitted a READ of it. Result: a read above the only declaration, i.e.
+    // "undeclared identifier vVfxHash" and a dead program, for any SET carrying
+    // both components without a shared prelude. A global-scope declaration is
+    // visible to every main()-body splice regardless of chain order, so the hazard
+    // cannot recur. glint now probes for the DECLARATION (fragDeclaresVfxHash),
+    // which this satisfies correctly.
+    let phaseSrc = "";
+    if (!fragDeclaresVfxHash(shader.fragmentShader)) {
+      if (shader.fragmentShader.includes("#include <common>")) {
+        _declareFragOnce(shader, VFX_HASH_FRAG_FALLBACK_DECL, VFX_HASH_FRAG_FALLBACK_DECL);
+      } else {
+        // No global seam to hang it on (non-standard material) — keep the legacy
+        // inline form so the patch still compiles standalone.
+        phaseSrc = "    " + VFX_HASH_FRAG_FALLBACK_DECL + "\n";
+      }
+    }
 
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <emissivemap_fragment>",

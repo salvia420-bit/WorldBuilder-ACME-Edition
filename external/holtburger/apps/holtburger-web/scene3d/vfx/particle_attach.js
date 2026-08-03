@@ -49,7 +49,7 @@
 // + per-placement THREE anchors are supplied by the host seam at call time, so
 // this module + its test stand alone under node.
 
-import { vfxDescriptorFor } from "../vfx_catalog.js";
+import { vfxDescriptorFor, visualEnabled } from "../vfx_catalog.js";
 import { getComponent, FAMILY_ORDER } from "./registry.js";
 import { vfxEffectEnabled } from "../vfx_flags.js";
 import { ownerRegistry as defaultOwnerRegistry } from "../particles/owner_registry.js";
@@ -91,6 +91,18 @@ export { mergeComponentConfig };
  * @returns {boolean}
  */
 function _particleEffectEnabled(comp) {
+  // ⚠ 2026-08-03 — THE MASTER GATE APPLIES TO BOTH ARMS. The fallback arm
+  // (`vfxEffectEnabled`) starts with `if (!visualEnabled()) return false`, but the
+  // `comp.enabled` arm bypassed it — and ALL 11 registered particle components
+  // define `enabled`, so the master gate was never consulted on the live path.
+  // None of those readers carries a `visualEnabled()` term of its own
+  // (`foliagePollen.enabled` is `_boolFlag("foliagePollen", visualAllEffects())`;
+  // the terrain components compose only family+effect flags), so `?visual=off`
+  // did not actually stop this path — only the host seam's separate check did,
+  // which is a convention a new seam inherits no protection from. The doc above
+  // calls this gate "airtight"; now it is. `visualEnabled()` is DEFAULT-ON
+  // (vfx_catalog.js:29), so this is a no-op on every default path.
+  try { if (!visualEnabled()) return false; } catch (_) { /* fail open to the arms below */ }
   if (typeof comp.enabled === "function") {
     try { return !!comp.enabled(); } catch (_) { return false; }
   }

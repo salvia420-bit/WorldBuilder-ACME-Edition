@@ -25,6 +25,12 @@
 // textured blotch variant returns a stable per-SET bit, never a per-instance one.
 
 import { registerComponent } from "../registry.js";
+// Per-instance hash infra (slice 03). Imports nothing — stays node-testable.
+import { ensureVfxHashVarying, VFX_HASH_FRAG_DECL } from "../per_instance.js";
+// The shared world-normal varying NAME only (wetness.js owns the installer and
+// its header states siblings import this). wetness imports only the registry, so
+// there is no cycle.
+import { VFX_WORLD_NORMAL_VARYING } from "./wetness.js";
 
 // --- GLSL seam strings (kept as exported constants so the unit test can assert
 // the exact tokens). NO backticks inside these template literals' comments. ---
@@ -42,14 +48,33 @@ uniform float uTarnishHashFallback;
 `;
 
 // Computed + applied right after #include <map_fragment> (POST-palette decode).
-const TARNISH_DIFFUSE_GLSL = `{
-  // per-instance amount: hash01(setupDid ^ instanceHash) via vVfxHash (slice 03),
-  // or the uTarnishHashFallback constant when the instance-hash infra is absent.
-  #ifdef VFX_INSTANCE_HASH
-    float _tInst = vVfxHash;
-  #else
-    float _tInst = uTarnishHashFallback;
-  #endif
+//
+// ⚠ 2026-08-03 — THIS USED TO BE A CONST GATED ON `#ifdef VFX_INSTANCE_HASH` AND
+// `#ifdef VFX_WORLD_NORMAL`. NEITHER MACRO IS EVER `#define`d — not by
+// per_instance.js (which installs a VARYING by string surgery, never a
+// preprocessor symbol), not by wetness.js (same), not by materials.js (which sets
+// no `shader.defines` at all). `rg VFX_INSTANCE_HASH` returned this file and its
+// own test, nothing else. So `_tInst` was ALWAYS `uTarnishHashFallback` (0.5) and
+// `_tTop` was ALWAYS 1.0: with the default `amount:"hash01"` every tarnished
+// object in the world got the identical `mix(0.25, 1.0, 0.5) = 0.625` patina, and
+// `topWeight: 0.6` was dead config. The file header's headline behaviour ("the
+// amount per object is a DETERMINISTIC per-instance hash") had never once run.
+//
+// The fix is RUNTIME SEAM DETECTION, which is the idiom the shipped siblings
+// already use (glint.js picks its `hashExpr` by probing the compiled source;
+// tipFlex/windSwayGpu call `ensureVfxHashVarying` themselves rather than trusting
+// a prelude). No `#define` is introduced, because nothing in this pipeline emits
+// defines — a `#define` would just be a second way to be silently dead.
+//
+// Program-key safety: the two expressions are chosen from the SHADER's contents,
+// which are a function of the component SET (+ the host's sharedPrelude), never of
+// config or of a per-instance value. `linkVariant()` stays "" and the SET key is
+// untouched — exactly glint's precedent.
+function _tarnishDiffuseGlsl(hashExpr, topExpr) {
+  return `{
+  // per-instance amount: hash01(setupDid ^ instanceHash) via the vVfxHash varying
+  // (slice 03), or the uTarnishHashFallback constant when the infra is absent.
+  float _tInst = ${hashExpr};
   float _tAmt = (uTarnishAmount < 0.0)
       ? mix(uTarnishVarLo, uTarnishVarHi, _tInst)
       : uTarnishAmount;
@@ -57,15 +82,33 @@ const TARNISH_DIFFUSE_GLSL = `{
   // more. Uses the RESOLVED (palette-decoded) diffuseColor — post #include <map_fragment>.
   float _tLum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
   float _tCrev = mix(1.0, uTarnishCrevFloor, _tLum);
-  // up-facing weight (top surfaces collect more); inert (==1.0) until a world-normal
-  // varying is present (composes with the wetness world normal, slice 09).
-  float _tTop = 1.0;
-  #ifdef VFX_WORLD_NORMAL
-    _tTop = mix(1.0 - uTarnishTopWeight, 1.0, clamp(vVfxWorldNormal.y * 0.5 + 0.5, 0.0, 1.0));
-  #endif
+  // up-facing weight (top surfaces collect more); 1.0 unless a sibling weathering
+  // component (wetness/frost) already installed the shared world-normal varying.
+  float _tTop = ${topExpr};
   _vfxTarnishT = clamp(uTarnishAge * _tAmt, 0.0, 1.0) * _tCrev * _tTop;
   diffuseColor.rgb = mix(diffuseColor.rgb, uTarnishTint, _vfxTarnishT);
 }`;
+}
+
+/** The per-instance amount expression, given whether the hash varying is live. */
+const TARNISH_HASH_EXPR = "vVfxHash";
+const TARNISH_HASH_FALLBACK_EXPR = "uTarnishHashFallback";
+/** The up-facing weight expression, given whether the world-normal varying is live. */
+const TARNISH_TOP_EXPR =
+  "mix(1.0 - uTarnishTopWeight, 1.0, clamp(vVfxWorldNormal.y * 0.5 + 0.5, 0.0, 1.0))";
+const TARNISH_TOP_INERT_EXPR = "1.0";
+
+/**
+ * CPU reference for the per-instance amount the GLSL above computes, so a test
+ * can assert the BEHAVIOUR (two hashes ⇒ two amounts) rather than the presence of
+ * a string. Kept next to the GLSL it mirrors: `_tAmt` for the default
+ * `amount:"hash01"` (uTarnishAmount < 0) is exactly `mix(varLo, varHi, hash)`.
+ * Pure.
+ */
+export function tarnishAmountForHash(hash01, varLo = 0.25, varHi = 1.0) {
+  const h = Number.isFinite(+hash01) ? Math.min(1, Math.max(0, +hash01)) : 0;
+  return varLo + (varHi - varLo) * h;
+}
 
 // Roughness bump, injected at the later #include <roughnessmap_fragment> seam
 // where roughnessFactor first exists; reads the function-scoped _vfxTarnishT.
@@ -159,20 +202,57 @@ export const tarnish = {
   inject(shader, _ctx) {
     if (!shader || typeof shader.fragmentShader !== "string") return;
     if (shader.fragmentShader.includes("uTarnishTint")) return; // already patched
+
+    // (1) GUARANTEE the per-instance hash varying rather than hoping a prelude
+    //     supplied it. tipFlex/windSwayGpu already do exactly this; tarnish
+    //     declares "instanceHash" in its manifest reads[], so this is the infra
+    //     it is entitled to. Idempotent + THREE-free; a non-standard shader
+    //     (missing #include seams) is left untouched and we fall back below.
+    ensureVfxHashVarying(shader);
+
+    // (2) Pick the two expressions from what the shader ACTUALLY carries. This
+    //     replaces the two `#ifdef`s that were never satisfied (see the block
+    //     comment above _tarnishDiffuseGlsl).
+    const hashExpr = shader.fragmentShader.includes(VFX_HASH_FRAG_DECL)
+      ? TARNISH_HASH_EXPR
+      : TARNISH_HASH_FALLBACK_EXPR;
+    // The world normal is NOT force-installed: adding a varying + a vertex
+    // compute to every tarnish-only material would be a silent visual change to
+    // a default-ON effect with no eye-test behind it. When wetness/frost put it
+    // there (they share the "precip" channel and the same SETs), tarnish uses it.
+    const topExpr = shader.fragmentShader.includes(VFX_WORLD_NORMAL_VARYING)
+      ? TARNISH_TOP_EXPR
+      : TARNISH_TOP_INERT_EXPR;
+
     // Uniform block + the function-scoped accumulator as main()'s first statement.
     shader.fragmentShader = shader.fragmentShader.replace(
       "void main() {",
       TARNISH_UNIFORMS_GLSL + "void main() {\n  float _vfxTarnishT = 0.0;",
     );
     // Diffuse tint — POST-palette decode (after the resolved diffuse sample).
-    _injectAfterSeam(shader, "#include <map_fragment>", DIFFUSE_TAIL, TARNISH_DIFFUSE_GLSL);
+    _injectAfterSeam(shader, "#include <map_fragment>", DIFFUSE_TAIL, _tarnishDiffuseGlsl(hashExpr, topExpr));
     // Roughness up — at the seam where roughnessFactor first exists.
     _injectAfterSeam(shader, "#include <roughnessmap_fragment>", ROUGH_TAIL, TARNISH_ROUGH_GLSL);
   },
 };
 
 // Exported for the unit test / shared seam helper reuse.
-export const _glsl = { TARNISH_UNIFORMS_GLSL, TARNISH_DIFFUSE_GLSL, TARNISH_ROUGH_GLSL, DIFFUSE_TAIL, ROUGH_TAIL };
+export const _glsl = {
+  TARNISH_UNIFORMS_GLSL,
+  TARNISH_ROUGH_GLSL,
+  DIFFUSE_TAIL,
+  ROUGH_TAIL,
+  // The diffuse block is now expression-parameterised (see _tarnishDiffuseGlsl).
+  // Both concrete forms are exposed so a test can diff the LIVE path against the
+  // FALLBACK path instead of asserting a single frozen string.
+  buildDiffuse: _tarnishDiffuseGlsl,
+  TARNISH_DIFFUSE_GLSL_LIVE: _tarnishDiffuseGlsl(TARNISH_HASH_EXPR, TARNISH_TOP_EXPR),
+  TARNISH_DIFFUSE_GLSL_FALLBACK: _tarnishDiffuseGlsl(TARNISH_HASH_FALLBACK_EXPR, TARNISH_TOP_INERT_EXPR),
+  TARNISH_HASH_EXPR,
+  TARNISH_HASH_FALLBACK_EXPR,
+  TARNISH_TOP_EXPR,
+  TARNISH_TOP_INERT_EXPR,
+};
 
 registerComponent(tarnish);
 export default tarnish;

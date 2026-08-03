@@ -112,10 +112,16 @@ const BASE = { __base: true };
 let resolveCalls = [];
 const resolveStub = (sid, entries) => { resolveCalls.push({ sid, n: entries.length }); return { __variant: sid }; };
 
-// OFF (no ?visual): seam keeps the base material → byte-identical frozen.
-delete globalThis.window; _resetVfxCatalog(); setVfxCatalog(parseDescriptorsJsonl(FIXTURE));
+// OFF: seam keeps the base material → byte-identical frozen.
+// 2026-08-03: this used to `delete globalThis.window`, i.e. assert that the
+// NO-WINDOW default is off. `?visual` is default-ON (vfx_catalog.js:29,
+// docs/url-flags.md:305 "on, default-on since f3942a95"), and the no-window
+// case follows that default — so the assertion was pinning a retired default,
+// not the seam. Drive the OFF state the way a user actually reaches it.
+globalThis.window = { location: { search: "?visual=off" } };
+_resetVfxCatalog(); setVfxCatalog(parseDescriptorsJsonl(FIXTURE));
 resolveCalls = [];
-check("seam OFF: rigid-glint keeps BASE material (no swap, no resolver call)",
+check("seam OFF (?visual=off): rigid-glint keeps BASE material (no swap, no resolver call)",
   seamMaterial(0x02000999, 0x1111, BASE, resolveStub) === BASE && resolveCalls.length === 0);
 
 // ON (?visual): frag DID swaps to the variant; resolver gets (surfaceDid, entries).

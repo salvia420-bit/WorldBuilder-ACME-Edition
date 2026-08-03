@@ -83,5 +83,104 @@ setSearch("?visual=all");
 ok("?visual=all: KEPT", dropped() === false && gemSparkleEnabled() === true);
 delete globalThis.window;
 
+// ---------------------------------------------------------------------------
+// ★★★ THE RESOLVED ANCHOR — driven through the REAL attach layer (2026-08-03).
+//
+// Everything above this line feeds emit() a HAND-BUILT ctx (`{geometry:{...}}`,
+// `{partIndex}`). The runtime never builds that shape. `attachParticleEmitters`
+// builds `{did, numParts, partBoxes, rig, hash01, seed, clock, tSec, weather,
+// env, anchor, config}` — the resolved anchor is on `ctx.anchor` — so gemSparkle,
+// which read only `ctx.geometry`/`ctx.partIndex`, discarded the entire P3.6
+// anchor selection: every sparkle sat at the model origin with the authored
+// 0.05 m ball no matter what the bake resolved. The hand-built ctx is exactly
+// what made that invisible for a month.
+//
+// So this block calls the REAL `attachParticleEmitters` with the REAL
+// `_resolveAnchor` in the loop and inspects what actually reaches addEmitter.
+// If the ctx field names ever drift again, these go red.
+// ---------------------------------------------------------------------------
+{
+  const { attachParticleEmitters } = await import("./scene3d/vfx/particle_attach.js");
+  const { setVfxCatalog } = await import("./scene3d/vfx_catalog.js");
+
+  // A real catalog entry whose config asks for a NON-root anchor role, which is
+  // what makes _resolveAnchor pick a part from partBoxes.
+  const DID = 0x0200aa01;
+  setVfxCatalog(new Map([[DID, {
+    archetype: "magic-gem",
+    componentIds: new Set(["particle.gemSparkle"]),
+    config: { "particle.gemSparkle": { anchor: "canopy" } },
+    raw: {},
+  }]]));
+
+  // Two parts; part 1 is the topmost centroid, so _resolveAnchor must pick it.
+  // Its bbox is 0.24 m across ⇒ radius 0.12 (inside the 0.25 clamp, and far from
+  // the authored 0.05 default, so a pass cannot be a coincidence).
+  const partBoxes = [
+    { minX: -0.5, maxX: 0.5, minY: -0.5, maxY: 0.5, minZ: 0.0, maxZ: 0.2, cx: 0, cy: 0, cz: 0.1 },
+    { minX: -0.12, maxX: 0.12, minY: -0.1, maxY: 0.1, minZ: 1.0, maxZ: 1.2, cx: 0.3, cy: -0.4, cz: 1.1 },
+  ];
+
+  const calls = [];
+  const mgr = { async addEmitter(req) { calls.push(req); return calls.length; } };
+  const res = await attachParticleEmitters(
+    {}, [{ modelId: DID, landblockId: 0xab940001, x: 1, y: 2, z: 3 }], {},
+    () => "static:0",
+    {
+      manager: mgr,
+      buildParent: () => ({ position: {}, quaternion: {} }),
+      geometryFor: () => ({ numParts: 2, partBoxes, rig: null }),
+      useOwnerRegistry: false,
+      clockNow: () => 0,
+    },
+  );
+
+  ok("★ real attach path produces exactly one gemSparkle emitter",
+    res.emitterCount === 1 && calls.length === 1, `count=${res.emitterCount}`);
+
+  const req = calls[0] || {};
+  ok("★ BEHAVIOUR: the RESOLVED part index reaches addEmitter (not the -1 root default)",
+    req.partIndex === 1, `partIndex=${req.partIndex}`);
+  ok("★ BEHAVIOUR: the spawn ball is sized from the RESOLVED part bbox, not cfg.spawnRadius",
+    req.emitterInfo && Math.abs(req.emitterInfo.maxOffset - 0.12) < 1e-9,
+    `maxOffset=${req.emitterInfo && req.emitterInfo.maxOffset}`);
+  ok("★ ...and that is demonstrably NOT the authored default (0.05)",
+    req.emitterInfo && Math.abs(req.emitterInfo.maxOffset - 0.05) > 1e-6);
+  ok("★ BEHAVIOUR: parentOffset carries the resolved anchor CENTRE (ball sits on the gem)",
+    req.parentOffset && Math.abs(req.parentOffset.position.x - 0.3) < 1e-9
+      && Math.abs(req.parentOffset.position.y - (-0.4)) < 1e-9
+      && Math.abs(req.parentOffset.position.z - 1.1) < 1e-9,
+    JSON.stringify(req.parentOffset && req.parentOffset.position));
+
+  // NEGATIVE CONTROL: role "root" must NOT inherit _resolveAnchor's radius, which
+  // is `config.maxOffset || 1` — a literal 1 m, 20x the authored ball. A naive
+  // "just use anchor.radius" fix passes the assertions above and fails this one.
+  setVfxCatalog(new Map([[DID, {
+    archetype: "magic-gem",
+    componentIds: new Set(["particle.gemSparkle"]),
+    config: {},                       // no anchor role ⇒ role "root"
+    raw: {},
+  }]]));
+  const calls2 = [];
+  const mgr2 = { async addEmitter(req2) { calls2.push(req2); return calls2.length; } };
+  await attachParticleEmitters(
+    {}, [{ modelId: DID, landblockId: 0xab940001 }], {}, () => "static:0",
+    {
+      manager: mgr2,
+      buildParent: () => ({ position: {}, quaternion: {} }),
+      geometryFor: () => ({ numParts: 2, partBoxes, rig: null }),
+      useOwnerRegistry: false, clockNow: () => 0,
+    },
+  );
+  ok("★ NEGATIVE CONTROL: a ROOT anchor keeps the authored 0.05 m ball (not _resolveAnchor's 1 m)",
+    calls2.length === 1 && Math.abs(calls2[0].emitterInfo.maxOffset - 0.05) < 1e-9,
+    `maxOffset=${calls2.length && calls2[0].emitterInfo.maxOffset}`);
+  ok("root anchor still reports partIndex -1", calls2.length === 1 && calls2[0].partIndex === -1);
+  ok("root anchor with no lift keeps parentOffset null (byte-identical default path)",
+    calls2.length === 1 && calls2[0].parentOffset === null);
+
+  setVfxCatalog(new Map());
+}
+
 console.log(`\ngemSparkle emit/firewall: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -60,7 +60,17 @@ export const breathFog = {
   reads: ["geometry", "weather", "clock"],
   writes: ["emitter"],
   defaults: {
-    synthId: 0xF0E00010,
+    // 0xF0E00004 — the next free id after the three foliage emitters
+    // (0xF0E00001/02/03). Was 0xF0E00010, which COLLIDED with
+    // terrainDustDevil's synthId; both also default to the smokePuff sprite, so
+    // the composite `${info.id}|${info.hwGfxObjId}` keys used for warn dedup
+    // (particle_manager.js:1114 `_nullGeometryWarned`, particle_emitter.js:219
+    // `_e6WarnedEmitterIds`) were byte-identical: a "geometryFactory returned
+    // null, the effect will not render" warning fired once for breath fog
+    // permanently silenced the same diagnostic for sand devils, and vice versa.
+    // terrainSwampAmbient.js:140 states the invariant this violated ("a distinct
+    // emitter id (two ambient sources must not collide)").
+    synthId: 0xF0E00004,
     hwGfxObjId: PARTICLE_SPRITES.smokePuff,   // alpha puff (breath MUST be non-additive)
     particleType: PT_LOCAL_VELOCITY,
     basePeriodSec: 1.3,                 // a slow exhale cadence (~0.8/sec at g=1)

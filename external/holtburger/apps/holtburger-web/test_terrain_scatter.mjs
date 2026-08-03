@@ -644,6 +644,103 @@ console.log("\n-- L9: steady state allocates nothing, upload ranges stay bounded
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L9b: declared upload ranges actually COVER every write --");
+// L9 above proves the pending range list stays BOUNDED. It does not prove the
+// ranges are CORRECT, and they were not: the range objects are pushed BY
+// REFERENCE into three's `attr.updateRanges`, which three empties only when it
+// really uploads. Reusing one fixed set of objects per flush meant a second
+// flush before an upload REWROTE entries three was still holding — flush A's
+// runs were replaced by flush B's values and pushed twice, so flush A's
+// instances silently never reached the GPU.
+//
+// That window is real on the shipped bot path: `update()` is driven from
+// tickPerFrame, which the `?netDrainHz=N` interval also calls while the rAF
+// loop (and therefore rendering) is idle under `?renderOnDemand=1`.
+//
+// This emulates three's WebGLAttributes: apply the declared ranges to a shadow
+// "GPU" buffer, then require the GPU copy to equal the CPU array exactly.
+{
+  const { pool } = makePool();
+  const names = GRASS_SCHEMA.map((s) => s.name);
+  const gpu = {};
+  for (const n of names) gpu[n] = new Float32Array(pool.arrays[n].length);
+  gpu.__matrix = new Float32Array(pool.mesh.instanceMatrix.array.length);
+
+  /** Copy only what the attribute DECLARED as dirty, then clear like three does. */
+  function uploadDeclared() {
+    for (const n of names) {
+      const a = pool.attributes[n];
+      if (a.updateRanges.length === 0) {
+        if (a.needsUpdate) gpu[n].set(a.array); // empty ranges == whole buffer
+      } else {
+        for (const r of a.updateRanges) {
+          gpu[n].set(a.array.subarray(r.start, r.start + r.count), r.start);
+        }
+      }
+      a.clearUpdateRanges();
+      a.needsUpdate = false;
+    }
+    const im = pool.mesh.instanceMatrix;
+    if (im.updateRanges.length === 0) {
+      if (im.needsUpdate) gpu.__matrix.set(im.array);
+    } else {
+      for (const r of im.updateRanges) {
+        gpu.__matrix.set(im.array.subarray(r.start, r.start + r.count), r.start);
+      }
+    }
+    im.clearUpdateRanges();
+    im.needsUpdate = false;
+  }
+
+  // Settle the field and sync the shadow buffers.
+  for (let i = 0; i < 40; i += 1) { pool.update(0.016, 500, 500, 0); uploadDeclared(); }
+
+  // Now the defect's shape: SEVERAL flushes, then ONE upload. Each hop moves
+  // the window enough to re-scatter a fresh slice, so every flush has real runs.
+  let mismatches = 0;
+  let flushes = 0;
+  for (let round = 0; round < 6; round += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      pool.update(0.016, 500 + round * 30 + k * 9, 500 + round * 17 + k * 5, 0);
+      flushes += 1;
+    }
+    uploadDeclared();
+    for (const n of names) {
+      const cpu = pool.arrays[n];
+      const g = gpu[n];
+      for (let i = 0; i < cpu.length; i += 1) {
+        if (cpu[i] !== g[i]) { mismatches += 1; break; }
+      }
+    }
+    const im = pool.mesh.instanceMatrix.array;
+    for (let i = 0; i < im.length; i += 1) {
+      if (im[i] !== gpu.__matrix[i]) { mismatches += 1; break; }
+    }
+  }
+  check("3 flushes per upload: every declared range set reproduces the CPU buffer",
+    mismatches === 0, `${mismatches} buffer(s) diverged over ${flushes} flushes`);
+
+  // And the bound that makes the ring safe must still hold.
+  check("pending ranges never exceed maxPendingRanges across those flushes",
+    names.every((n) => pool.attributes[n].updateRanges.length <= SCATTER_DEFAULTS.maxPendingRanges));
+
+  // A range object handed to three must never be mutated while three still
+  // holds it — check identity/vaue stability directly.
+  {
+    const { pool: p2 } = makePool();
+    for (let i = 0; i < 20; i += 1) p2.update(0.016, 900, 900, 0);
+    const a = p2.attributes.aScale;
+    a.clearUpdateRanges();
+    p2.update(0.016, 960, 930, 0);
+    const snapshot = a.updateRanges.map((r) => ({ r, start: r.start, count: r.count }));
+    p2.update(0.016, 1020, 960, 0); // second flush, no upload in between
+    const stable = snapshot.every((s) => s.r.start === s.start && s.r.count === s.count);
+    check("a range already handed to three is never rewritten by a later flush",
+      stable && snapshot.length > 0, `held=${snapshot.length} stable=${stable}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- L10: headless (no THREE) is a first-class mode --");
 {
   const pool = createScatterPool({

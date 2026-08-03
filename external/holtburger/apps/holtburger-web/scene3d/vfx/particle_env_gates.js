@@ -231,13 +231,26 @@ export function breathFogGate(env) {
  *                            still surface, they just do not linger.
  *  • night (`nightFactor`) ⇒ mild 0.75 → 1.0 bias. A pale gas plume reads
  *                            against dark water and washes out at noon.
- * PURE and TOTAL, like every gate here: a null env reads as a calm, temperate,
- * daylit marsh (1.0) rather than throwing.
+ *
+ * NULL ENV ⇒ 0 (2026-08-03). This used to return 1 under a comment claiming it
+ * behaved "like every gate here" — the exact inverse of the truth: pollenGate,
+ * firefliesGate, leavesGate and breathFogGate all return 0. The polarity matters
+ * because a null env is NOT a weather state, it is a WIRING FAULT: the producer
+ * (`particle_env.readParticleEnv`) always fills a scratch with calm defaults and
+ * never returns null, so the only way to get here with no env is a seam that did
+ * not pass one — `particle_attach.js` does `opts.env || null`, and
+ * `terrain_swamp.js::_envSnapshot` returns null whenever `readEnv` is unwired or
+ * throws. Returning 1 there meant a frozen, storming marsh vented at FULL rate
+ * with zero environmental response and no diagnostic. Returning 0 restores the
+ * contract every one of these files states ("gated out ⇒ exactly as cheap as
+ * flag-off"), matches the host's own failure semantic (`terrain_swamp.js:480`
+ * already maps a THROWN gate to `g = 0`), and is trivially diagnosable as
+ * "0 emitters" rather than "emitters that look wrong".
  * @param {ParticleEnv} env
  * @returns {number} visibility ∈ [0,1]
  */
 export function marshGasGate(env) {
-  if (!env) return 1;
+  if (!env) return 0;
   const cold = clamp01(Number.isFinite(env.frost) ? env.frost : 0);
   const gust = Number.isFinite(env.windStrength) ? env.windStrength : 1.0;
   const disperse = 1 - 0.6 * smoothstep(1.0, 1.6, gust);

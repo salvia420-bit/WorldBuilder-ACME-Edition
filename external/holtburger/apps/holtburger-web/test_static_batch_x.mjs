@@ -41,6 +41,7 @@ const factory = new Function(
   "THREE",
   stripped +
     "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, " +
+    "statGeomDedupEnabled, __setStatGeomDedupForTest, stampStaticContentKeys, " +
     "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, tickStatBatchXOptimize, getStatBatchXStats };"
 );
 const M = factory(THREE);
@@ -160,8 +161,28 @@ check("14: LB2 survivor matrices intact (x=100..103)", (() => {
   xs.sort((a, b) => a - b);
   return xs.length === 4 && xs[0] === 100 && xs[3] === 103;
 })());
-check("15: buckets stay in the scene graph after eviction (never disposed per-LB)",
-  scene3d.staticsGroup.children.includes(bmA) && scene3d.staticsGroup.children.includes(bmB));
+// 2026-08-03 — EXPECTATION UPDATED. This used to assert that BOTH buckets stay
+// in the scene graph forever ("never disposed per-LB"). Half of that is still
+// right and is the important half: a bucket that still holds another LB's
+// geometry must NOT be torn down by one LB's eviction (bmA keeps LB2). But
+// bucket B held ONLY LB1's contribution, so after this eviction it is empty —
+// and keeping empty buckets was a real leak: buckets are keyed by (3x3 region,
+// material) over an 86x86 region space and each one holds ~0.65 MB of GPU
+// buffers, so a long roam grew `staticsGroup` with regions VISITED rather than
+// regions RESIDENT. Empty buckets are now reaped at the eviction that empties
+// them.
+check("15a: a bucket that still holds geometry survives one LB's eviction",
+  scene3d.staticsGroup.children.includes(bmA) && bmA.userData.gidVerts.size > 0,
+  `gids=${bmA.userData.gidVerts.size}`);
+check("15b: a bucket emptied by that eviction is reaped from the scene graph",
+  !scene3d.staticsGroup.children.includes(bmB) && bmB.userData.gidVerts.size === 0,
+  `stillChild=${scene3d.staticsGroup.children.includes(bmB)} gids=${bmB.userData.gidVerts.size}`);
+check("15c: the reaped bucket is gone from the module's bucket registry",
+  M.getStatBatchXStats().detail.every((d) => d.name !== bmB.name));
+check("15d: bucket lifecycle counters balance (created - reaped === live)", (() => {
+  const s = M.getStatBatchXStats();
+  return s.bucketsCreated - s.bucketsReaped === s.buckets && s.bucketsReaped >= 1;
+})(), JSON.stringify({ ...M.getStatBatchXStats(), detail: undefined, dedup: undefined }));
 check("16: dead-space accounted for optimize (A deadVerts = LB1's 6 verts)",
   bmA.userData.deadVerts === 6 && bmB.userData.deadVerts === 9,
   `A=${bmA.userData.deadVerts} B=${bmB.userData.deadVerts}`);
@@ -255,6 +276,100 @@ console.log("=========================");
   const s3 = M.getStatBatchXStats();
   check("25: re-feed with DIFFERENT content replaces (2 instances, not 5)",
     !!rc && s3.instances === 2, `instances=${s3.instances}`);
+}
+
+// ===== BUCKET REAPING ON A MULTI-REGION ROAM (2026-08-03 leak fix) =====
+// THE LEAK: buckets are keyed by (3x3-LB region, material) and nothing ever
+// removed one, so `staticsGroup` and GPU memory grew with regions VISITED, not
+// regions RESIDENT — over an 86x86 region space, at ~0.65 MB of vertex+index
+// buffers per bucket. This walks 12 distinct regions, evicts each landblock
+// behind the player, and asserts the live bucket population returns to zero.
+{
+  M.__resetStatBatchXForTest();
+  const sc = { staticsGroup: new THREE.Group() };
+  const mat = new THREE.MeshBasicMaterial();
+  const visited = [];
+  let peakChildren = 0;
+  for (let r = 0; r < 12; r += 1) {
+    // Region key is (lbX/3 | 0) x (lbY/3 | 0) — step 3 landblocks to land in a
+    // fresh region every iteration.
+    const lbId = ((((10 + r * 3) & 0xff) << 24) | ((20 & 0xff) << 16)) >>> 0;
+    const g = triGeom(1);
+    M.consolidateStaticSingletonsCrossLb(
+      [singleton(0x0F00, 0, lbId, g, mat), singleton(0x0F00, 1, lbId, g, mat)], sc, lbId);
+    visited.push(lbId);
+    peakChildren = Math.max(peakChildren, sc.staticsGroup.children.length);
+  }
+  const midway = M.getStatBatchXStats();
+  check("26: the roam really did create one bucket per region",
+    midway.buckets === 12 && peakChildren === 12,
+    `buckets=${midway.buckets} peakChildren=${peakChildren}`);
+
+  for (const lbId of visited) M.evictStaticBatchXForLb(lbId);
+  const after = M.getStatBatchXStats();
+  check("27: every bucket is reaped once its region has no resident landblock",
+    after.buckets === 0, `buckets=${after.buckets}`);
+  check("28: reaped buckets left the scene graph (no orphan staticsGroup children)",
+    sc.staticsGroup.children.length === 0, `children=${sc.staticsGroup.children.length}`);
+  check("29: created/reaped counters balance across the whole roam",
+    after.bucketsCreated === 12 && after.bucketsReaped === 12,
+    `created=${after.bucketsCreated} reaped=${after.bucketsReaped}`);
+
+  // Re-approaching a reaped region must rebuild cleanly (no stale registry
+  // entry pointing at a disposed BatchedMesh).
+  const back = visited[0];
+  const g2 = triGeom(1);
+  const rr = M.consolidateStaticSingletonsCrossLb(
+    [singleton(0x0F00, 0, back, g2, mat), singleton(0x0F00, 1, back, g2, mat)], sc, back);
+  const re = M.getStatBatchXStats();
+  check("30: re-approaching a reaped region rebuilds its bucket",
+    !!rr && re.buckets === 1 && sc.staticsGroup.children.length === 1 && re.instances === 2,
+    `buckets=${re.buckets} children=${sc.staticsGroup.children.length} instances=${re.instances}`);
+  check("31: the rebuilt bucket is a LIVE object (its geometry accepts reads)",
+    sc.staticsGroup.children[0].isBatchedMesh
+      && sc.staticsGroup.children[0].userData.gidVerts.size === 1);
+}
+
+// ===== ?statGeomDedup DEGRADATION IS ANNOUNCED, NOT SILENT =====
+// `_gidLive` reads three's private `_geometryInfo`. If a three upgrade removes
+// it, dedup silently becomes a no-op that copies each geometry in again while
+// `stats().dedup.enabled` still reports true. It must announce instead.
+{
+  M.__resetStatBatchXForTest();
+  M.__setStatGeomDedupForTest(true);
+  const sc = { staticsGroup: new THREE.Group() };
+  const mat = new THREE.MeshBasicMaterial();
+  const LBa = 0x40400000 >>> 0, LBb = 0x41400000 >>> 0; // same 3x3 region
+  const mkStamped = (lbId) => {
+    const g = triGeom(1);
+    g.userData = { __statContentKey: "deadbeef|0a00|0|3|0|1234" };
+    return [singleton(0x1000, 0, lbId, g, mat), singleton(0x1000, 1, lbId, g, mat)];
+  };
+  M.consolidateStaticSingletonsCrossLb(mkStamped(LBa), sc, LBa);
+  const bm = sc.staticsGroup.children[0];
+  const healthy = M.getStatBatchXStats();
+  check("32: dedup reports healthy while the three internal is present",
+    healthy.dedup.enabled === true && healthy.dedup.degraded === false
+      && healthy.dedup.probeFailures === 0);
+
+  // Simulate the three upgrade that removes the internal.
+  const realInfo = bm._geometryInfo;
+  Object.defineProperty(bm, "_geometryInfo", { value: undefined, configurable: true });
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  M.consolidateStaticSingletonsCrossLb(mkStamped(LBb), sc, LBb);
+  M.consolidateStaticSingletonsCrossLb(mkStamped(LBb), sc, LBb); // second pass
+  console.warn = realWarn;
+  Object.defineProperty(bm, "_geometryInfo", { value: realInfo, configurable: true });
+
+  const degraded = M.getStatBatchXStats();
+  check("33: the probe failure is COUNTED, not swallowed",
+    degraded.dedup.probeFailures > 0 && degraded.dedup.degraded === true,
+    `probeFailures=${degraded.dedup.probeFailures}`);
+  check("34: it warns, and warns exactly once despite repeated feeds",
+    warns.filter((w) => w.includes("_geometryInfo")).length === 1,
+    `warns=${warns.length}`);
 }
 
 console.log(`static-batch-x test: ${passed} passed, ${failed} failed`);

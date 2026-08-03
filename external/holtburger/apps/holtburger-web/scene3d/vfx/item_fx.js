@@ -50,7 +50,17 @@ export function itemFxPlanFor(uiEffects) {
   // Census: items carry exactly one flag → use the lowest set bit's tint.
   const row = list[0];
   const descriptor = {
-    componentIds: ["emissive.itemAura"],
+    // MUST be a Set, not an array (2026-08-03). Every other descriptor producer
+    // (the baked catalog's `vfxDescriptorFor`) hands a Set, and the consumers
+    // rely on it: `fragEntriesForDescriptor` only needs `.forEach`, but the
+    // runtime windSway append it performs calls `windResponds` ->
+    // `vfx_catalog.hasWindBend`, which does `componentIds?.has(...)`. An ARRAY
+    // has no `.has`, so this threw a TypeError on EVERY call — and the sole call
+    // site (entities.js `_itemFxPlan`) catches and nulls the plan, so `?itemFx`
+    // (default-ON under `?visual`, url-flags.md row 834) silently never rendered
+    // a single aura. `hasWindBend` is now also duck-typed as a second line of
+    // defence; this Set is the primary fix. See test_vfx_item_fx.mjs.
+    componentIds: new Set(["emissive.itemAura"]),
     // `_splitConfig` keys per-component config by the component id directly.
     config: { "emissive.itemAura": { glow: AURA_GLOW, tint: row.tint } },
   };

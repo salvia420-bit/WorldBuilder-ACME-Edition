@@ -79,7 +79,8 @@ const marshCalm = { sunAlt: -0.4, nightFactor: 1, frost: 0, windStrength: 1.0 };
 const marshGusty = { ...marshCalm, windStrength: 1.8 };
 const marshFrozen = { ...marshCalm, frost: 1 };
 check("marshGas: routed in PARTICLE_GATES", PARTICLE_GATES["terrain.marshGas"] === marshGasGate);
-check("marshGas: total (null env ⇒ a finite baseline, no throw)", marshGasGate(null) === 1);
+check("★ marshGas: total (null env ⇒ 0 — a missing env is a wiring fault, gated out\n"
+  + "        like every sibling gate; 2026-08-03), no throw", marshGasGate(null) === 0);
 check("marshGas: deterministic", marshGasGate(marshCalm) === marshGasGate({ ...marshCalm }));
 check("marshGas: calm night > 0", marshGasGate(marshCalm) > 0);
 check("marshGas: a gust disperses it", marshGasGate(marshGusty) < marshGasGate(marshCalm));

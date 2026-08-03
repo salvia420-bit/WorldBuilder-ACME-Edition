@@ -73,6 +73,13 @@ export const magicGlow = {
   inject(shader) {
     if (!shader || typeof shader.fragmentShader !== "string") return;
     if (!shader.fragmentShader.includes("#include <emissivemap_fragment>")) return;
+    // Already-patched guard (2026-08-03). Every sibling has one (glint.js
+    // GLINT_MARKER, tarnish.js uTarnishTint, tipFlex.js/windSwayGpu.js markers);
+    // magicGlow and itemAura were the two that did not. A second install of the
+    // same component onto one shader emitted `uniform float uGlow;` TWICE, which
+    // is a GLSL redeclaration error — the material fails to compile and the object
+    // renders with three's error material. One line, same shape as the neighbours.
+    if (shader.fragmentShader.includes("uniform float uGlow;")) return;
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",

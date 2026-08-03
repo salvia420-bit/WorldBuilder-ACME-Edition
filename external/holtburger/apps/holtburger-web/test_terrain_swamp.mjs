@@ -626,8 +626,8 @@ check("the host never touches the terrain fragment shader", !/terrain\.js/.test(
 console.log("\n== L11  the new gate passes the foliage-gate shape checks");
 // ---------------------------------------------------------------------------
 check("marshGasGate is registered in PARTICLE_GATES", PARTICLE_GATES["terrain.marshGas"] === marshGasGate);
-check("marshGasGate is total: null env ⇒ a finite baseline, never a throw",
-  marshGasGate(null) === 1 && marshGasGate(undefined) === 1);
+check("★ marshGasGate is total: null/undefined env ⇒ 0 (wiring fault, gated out), never a throw",
+  marshGasGate(null) === 0 && marshGasGate(undefined) === 0);
 check("marshGasGate is deterministic", marshGasGate(NIGHT) === marshGasGate({ ...NIGHT }));
 check("marshGasGate stays in [0,1] over a wide env sweep", (() => {
   for (const frost of [0, 0.5, 1, NaN]) {

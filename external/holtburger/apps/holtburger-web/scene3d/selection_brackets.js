@@ -173,6 +173,24 @@ const CORNER_ART_URL = Object.freeze({
 let _cornerArtReady = null;
 const _cornerArtWaiters = [];
 
+/** Deliver the settled verdict to every queued waiter and EMPTY the queue. The
+ *  splice is what releases the captured corner <div>s; every exit path that sets
+ *  `_cornerArtReady` must call this. */
+function _drainCornerArtWaiters() {
+  for (const w of _cornerArtWaiters.splice(0)) {
+    try { w(_cornerArtReady); } catch (_) { /* a waiter must not poison the rest */ }
+  }
+}
+
+/** Test-only: reset the module-level probe state. */
+export function _resetCornerArtProbe() {
+  _cornerArtReady = null;
+  _cornerArtWaiters.length = 0;
+}
+
+/** Test-only: how many waiters are still holding a reference. */
+export function _cornerArtWaiterCount() { return _cornerArtWaiters.length; }
+
 /**
  * Decode-probe the four corner bitmaps ONCE. Resolves every registered waiter
  * with the verdict. Never throws, never blocks: callers keep their CSS
@@ -181,7 +199,15 @@ const _cornerArtWaiters = [];
 function _probeCornerArt() {
   if (_cornerArtReady !== null) return;
   if (!BRACKET_CORNER_ART_ON || typeof Image === "undefined") {
+    // 2026-08-03: SETTLE the queue on this path too. `_onCornerArtVerdict` pushes
+    // the callback BEFORE calling here, and only the async settle() below drained
+    // `_cornerArtWaiters`. So under `?bracketCornerArt=off` (or any non-`Image`
+    // host) the four closures `_makeCorner` registers were never invoked and never
+    // released — each retaining its <div> for the page lifetime. The verdict is
+    // simply "false" (keep the CSS L-brackets), so deliver it rather than
+    // abandoning the queue.
     _cornerArtReady = false;
+    _drainCornerArtWaiters();
     return;
   }
   let remaining = 4;
@@ -193,9 +219,7 @@ function _probeCornerArt() {
       // eslint-disable-next-line no-console
       console.warn("[selection-brackets] corner bitmaps missing — CSS L-bracket fallback");
     }
-    for (const w of _cornerArtWaiters.splice(0)) {
-      try { w(_cornerArtReady); } catch (_) { /* a waiter must not poison the rest */ }
-    }
+    _drainCornerArtWaiters();
   };
   for (const which of ["tl", "tr", "bl", "br"]) {
     const img = new Image();
@@ -901,6 +925,15 @@ export class SelectionBracketLayer {
     for (const el of [this._tl, this._tr, this._bl, this._br, this._arrow]) {
       try { if (el.parentNode) el.parentNode.removeChild(el); } catch (_) {}
     }
+    // 2026-08-03: drop the target refs too. `_follow` is a live entity rig root
+    // and `_sphere.offset` a THREE.Vector3; a disposed layer that is still
+    // reachable (e.g. via a stale `window.__diag.selectionBrackets` closure, which
+    // captures `layer`) otherwise pins the last selected target's whole rig.
+    // Also makes tick() take its own guarded early-out if it is ever called after
+    // dispose, instead of projecting a detached rig.
+    this._follow = null;
+    this._sphere = null;
+    this._guid = 0;
   }
 }
 

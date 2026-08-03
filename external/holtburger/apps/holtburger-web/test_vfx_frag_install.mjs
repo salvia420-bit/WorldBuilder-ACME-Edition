@@ -78,7 +78,15 @@ function makeFakeMC() {
 const GLOBALS = { uTime: { value: 0 }, uWetness: { value: 0 } }; // stand-in for VFX_GLOBALS
 
 function visualOn() { globalThis.window = { location: { search: "?visual=on" } }; _resetVfxCatalog(); _resetFragInstall(); }
-function visualOff() { delete globalThis.window; _resetVfxCatalog(); _resetFragInstall(); }
+// 2026-08-03: was `delete globalThis.window`, which asserts that the NO-WINDOW
+// default is off. `?visual` is default-ON (vfx_catalog.js:29; docs/url-flags.md
+// :305 "on, default-on since f3942a95") and the no-window path follows that
+// default, so the old helper pinned a retired default rather than the off
+// behaviour it names. Reach OFF the way a user does.
+function visualOff() {
+  globalThis.window = { location: { search: "?visual=off" } };
+  _resetVfxCatalog(); _resetFragInstall();
+}
 
 // ===== pure helpers: ordering + filtering =====
 const both = fragComponentsForDescriptor(desc(["deformation.windBend", "emissive.glint", "weathering.tarnish"]));

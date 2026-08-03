@@ -55,6 +55,10 @@ export function __resetStatBatchXForTest() {
   _dedupStats.hits = 0;
   _dedupStats.adds = 0;
   _dedupStats.keyed = 0;
+  _stats.bucketsCreated = 0;
+  _stats.bucketsReaped = 0;
+  _stats.gidProbeFailures = 0;
+  _warned.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +137,12 @@ export function __setStatGeomDedupForTest(v) { _dedupFlag = v; }
 
 const _dedupStats = { hits: 0, adds: 0, keyed: 0 };
 
+// Unconditional lifecycle counters (not flag-gated, not debug-gated). The
+// 2026-08-03 leak was a bucket population that only ever grew, which is exactly
+// what `bucketsCreated` vs `bucketsReaped` makes visible. `gidProbeFailures`
+// tracks the three-internals probe below.
+const _stats = { bucketsCreated: 0, bucketsReaped: 0, gidProbeFailures: 0 };
+
 // Geometry-level stamp read by `_contentKeyOf`. Absent ⇒ legacy path.
 const STAT_CONTENT_KEY = "__statContentKey";
 
@@ -207,12 +217,37 @@ function _contentKeyOf(geom) {
   } catch (_) { return null; }
 }
 
-/** Is `gid` still a live geometry slot in this bucket? (stale-entry guard) */
+/**
+ * Is `gid` still a live geometry slot in this bucket? (stale-entry guard)
+ *
+ * ⚠ READS A THREE INTERNAL (`_geometryInfo`). If a three upgrade renames or
+ * reshapes it this returns false for every live id, the caller treats every
+ * dedup hit as stale, and `?statGeomDedup` silently becomes a no-op that copies
+ * each geometry in again — the exact duplication the flag exists to remove,
+ * while still reporting `enabled: true`. So the SHAPE probe is separated from
+ * the answer and announced once: a degraded feature must say so.
+ */
 function _gidLive(bm, gid) {
-  try {
-    const info = bm._geometryInfo;
-    return Array.isArray(info) && !!info[gid] && info[gid].active !== false;
-  } catch (_) { return false; }
+  const info = bm._geometryInfo;
+  if (!Array.isArray(info)) {
+    _stats.gidProbeFailures += 1;
+    _warnOnce(
+      "statGeomDedup",
+      "[static_batch_x] BatchedMesh._geometryInfo is not an array — this three " +
+      "build does not expose the internal ?statGeomDedup relies on. Dedup is " +
+      "INERT (geometry will be copied per landblock as if the flag were off).",
+    );
+    return false;
+  }
+  return !!info[gid] && info[gid].active !== false;
+}
+
+const _warned = new Set();
+function _warnOnce(key, msg) {
+  if (_warned.has(key)) return;
+  _warned.add(key);
+  // eslint-disable-next-line no-console
+  console.warn(msg);
 }
 
 const _INIT_VERTS = 1 << 14;      // 16,384 (chunk-scale); grows via setGeometrySize on demand
@@ -274,10 +309,55 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
     dedupGids: null,
   };
   bm.name = `static-batch-c-r${regionKey}-s${surf.toString(16).padStart(8, "0")}-m${_bucketSeq++}`;
+  // Back-references so an emptied bucket can find and remove itself (see
+  // _reapBucketIfEmpty). Kept on userData rather than in a side map so they
+  // cannot outlive the BatchedMesh.
+  bm.userData.regionKey = regionKey;
+  bm.userData.material = mat;
   b = { bm };
   region.set(mat, b);
+  _stats.bucketsCreated += 1;
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
+}
+
+/**
+ * Drop a bucket that no longer holds any geometry.
+ *
+ * WHY THIS EXISTS (2026-08-03). Buckets are keyed by (3x3-LB region, material)
+ * and were deliberately PERSISTENT — but nothing ever removed one, so a bucket
+ * survived in `staticsGroup` with its full GPU allocation for the whole session
+ * even after every landblock in its region had been evicted. Each bucket costs
+ * `_INIT_VERTS` verts of position/normal/uv plus `_INIT_VERTS * 2` indices
+ * (~0.65 MB before any growth) and its own matrix/indirect textures, and the
+ * region key space is 86x86 — so a cross-Dereth roam ratcheted VRAM and
+ * `staticsGroup.children` monotonically with regions VISITED rather than
+ * regions RESIDENT. `?statBatchChunk` is default-ON, so this was the shipped
+ * path.
+ *
+ * `gidVerts.size === 0` is the exact emptiness signal: entries are added by
+ * `_addGeometryGrow` and removed when `deleteGeometry` actually runs (per
+ * record on the legacy path, at last reference on the dedup path).
+ *
+ * The material is SHARED cross-LB (MaterialCache) and is never disposed here —
+ * only the bucket's own geometry buffers and BatchedMesh-internal textures.
+ */
+function _reapBucketIfEmpty(bm) {
+  const ud = bm.userData;
+  if (!ud || ud.gidVerts.size > 0) return false;
+  const region = _buckets.get(ud.regionKey);
+  if (region) {
+    region.delete(ud.material);
+    if (region.size === 0) _buckets.delete(ud.regionKey);
+  }
+  _dirtyBuckets.delete(bm);
+  try { bm.parent?.remove(bm); } catch (_) { /* fail-soft */ }
+  // BatchedMesh.dispose() releases the matrix/indirect/colour textures; the
+  // big vertex+index buffers live on its own geometry.
+  try { bm.dispose(); } catch (_) { /* fail-soft */ }
+  try { bm.geometry?.dispose(); } catch (_) { /* fail-soft */ }
+  _stats.bucketsReaped += 1;
+  return true;
 }
 
 // addGeometry with vertex+index headroom growth (delete never reclaims space;
@@ -489,6 +569,9 @@ export function evictStaticBatchXForLb(lbKey) {
   const key = _lbKeyOfId(lbKey);
   const list = _lbMembership.get(key);
   if (!list) return;
+  // Buckets this eviction touched — checked for emptiness once at the end so a
+  // multi-record LB does not re-scan the same bucket per record.
+  const touched = new Set();
   for (const m of list) {
     const ud = m.bm.userData;
     // ?statGeomDedup record — the geometry id may be SHARED with other LBs in
@@ -510,6 +593,7 @@ export function evictStaticBatchXForLb(lbKey) {
       }
       m.bm.boundingSphere = null; // membership changed — lazy bounds recompute
       _dirtyBuckets.add(m.bm);
+      touched.add(m.bm);
       continue;
     }
     let removedInstances = 0;
@@ -528,8 +612,15 @@ export function evictStaticBatchXForLb(lbKey) {
     if (removedInstances > 0) ud.instances = Math.max(0, ud.instances - removedInstances);
     m.bm.boundingSphere = null; // membership changed — lazy bounds recompute
     _dirtyBuckets.add(m.bm);
+    touched.add(m.bm);
   }
   _lbMembership.delete(key);
+  // A bucket whose last geometry just left is dead weight: it holds its whole
+  // GPU allocation and a staticsGroup child for nothing. Reap it here rather
+  // than on the optimize tick so the release is same-frame with the eviction
+  // that caused it (and so it cannot be missed when the bucket never becomes
+  // fragmented enough for optimize() to look at it).
+  for (const bm of touched) _reapBucketIfEmpty(bm);
 }
 
 /**
@@ -579,12 +670,23 @@ export function getStatBatchXStats() {
     instances,
     detail: buckets,
     lbsFed: _lbMembership.size,
+    // Bucket lifecycle. `bucketsCreated - bucketsReaped` MUST equal `buckets`;
+    // a `buckets` count that only ever climbs on a long roam is the 2026-08-03
+    // leak returning. High churn (reaped ~= created on a short walk) would mean
+    // the 3x3 region granularity is thrashing and wants a hysteresis pass.
+    bucketsCreated: _stats.bucketsCreated,
+    bucketsReaped: _stats.bucketsReaped,
     dedup: {
       enabled: statGeomDedupEnabled(),
       // geometry copies AVOIDED / geometry copies MADE, since page load.
       hits: _dedupStats.hits,
       adds: _dedupStats.adds,
       keyed: _dedupStats.keyed,
+      // Non-zero ⇒ the three-internals probe `_gidLive` depends on is gone and
+      // dedup is INERT despite `enabled` above. Never expect a silent 0-hit
+      // run to mean "nothing to dedup".
+      probeFailures: _stats.gidProbeFailures,
+      degraded: _stats.gidProbeFailures > 0,
     },
   };
 }

@@ -68,6 +68,10 @@ export const itemAura = {
   inject(shader) {
     if (!shader || typeof shader.fragmentShader !== "string") return;
     if (!shader.fragmentShader.includes("#include <emissivemap_fragment>")) return;
+    // Already-patched guard (2026-08-03) — see the twin note in magicGlow.js. A
+    // double install emitted the four aura uniform declarations twice = a GLSL
+    // redeclaration error = a material that does not compile.
+    if (shader.fragmentShader.includes("uniform float uAuraGlow;")) return;
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",

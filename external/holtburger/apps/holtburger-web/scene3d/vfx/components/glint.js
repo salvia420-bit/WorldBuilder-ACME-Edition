@@ -22,6 +22,7 @@
 // hash, no Math.random); no light-count change.
 
 import { registerComponent } from "../registry.js";
+import { fragDeclaresVfxHash } from "../per_instance.js";
 
 // The MeshStandard fragment seam glint folds into. metalnessFactor / roughness-
 // Factor / normal / vViewPosition / totalEmissiveRadiance are ALL in main()
@@ -119,7 +120,18 @@ export const glint = {
     fs = _ensureUniformDecl(fs, "uniform float uGlintStrength;");
     fs = _ensureUniformDecl(fs, "uniform float uGlintMetalBias;");
     // Per-instance phase rides the per-instance-age varying when present.
-    const hashExpr = /\bvVfxHash\b/.test(fs) ? "vVfxHash" : "0.0";
+    //
+    // ⚠ 2026-08-03 — PROBE THE DECLARATION, NOT THE TOKEN. This used to be
+    // `/\bvVfxHash\b/.test(fs)`, which is satisfied by any other component's USE
+    // of the name. `emissive.enchantShimmer` sorts before us and patches the SAME
+    // seam; when no shared prelude had installed the varying it declared a LOCAL
+    // `float vVfxHash = 0.0;` inside main(). That local made this probe true, and
+    // our snippet — which re-emits the seam line and therefore lands ABOVE that
+    // local — then read an identifier that was not yet declared: a hard GLSL
+    // compile failure for the [enchantShimmer, glint] SET. fragDeclaresVfxHash
+    // asks the real question (is it declared at GLOBAL scope, as the varying or as
+    // the agreed constant fallback), which is order-independent.
+    const hashExpr = fragDeclaresVfxHash(fs) ? "vVfxHash" : "0.0";
     shader.fragmentShader = fs.replace(GLINT_SEAM, _glintSnippet(hashExpr));
   },
 };

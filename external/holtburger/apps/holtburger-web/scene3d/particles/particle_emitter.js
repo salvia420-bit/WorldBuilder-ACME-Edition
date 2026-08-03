@@ -356,13 +356,30 @@ export class ParticleEmitter {
   /** Port of `GetNextParticleIdx` (ParticleEmitter.cs:154-160). Lazy-slot aware:
    *  only hands out a slot whose mesh has actually been built (`_createdSlots`),
    *  and kicks an async grow when the created slots are exhausted but the emitter
-   *  is still below maxParticles. */
+   *  is still below maxParticles.
+   *
+   *  ⚠ 2026-08-03 — THE NULL-MESH STALL. `_createSlots` stores whatever
+   *  `_meshFactory(i)` resolved to, INCLUDING null (a missing GfxObj, a
+   *  decode-starved bake, a 0-triangle model), and still advances
+   *  `_createdSlots`. This loop used to return the first index with
+   *  `parts[i] === null`, and `emitParticle` then bails on `!mesh` BEFORE it
+   *  writes `parts[idx]`. So a null slot was handed back on every single tick,
+   *  forever: the emitter could never emit, and `_growSlots()` was never reached
+   *  because a "free" slot had been found. One failed mesh permanently bricked
+   *  the emitter while it kept paying the full per-frame tick, and `initEnd`
+   *  spun its whole `initialParticles` burst doing nothing.
+   *
+   *  A slot is now only offered when it is BOTH free and actually renderable. If
+   *  every created slot is dead, we fall through to the grow path exactly as if
+   *  they were all busy — and if the emitter is already at maxParticles we return
+   *  -1, which is the correct answer: nothing here can ever draw. */
   getNextParticleIdx() {
     for (let i = 0; i < this._createdSlots; i++) {
-      if (this.parts[i] === null) return i;
+      if (this.parts[i] === null && this.partStorage[i]) return i;
     }
-    // Created slots all busy — grow toward maxParticles (async). Returning -1
-    // skips this one emit; the next tick(s) find the freshly-built free slots.
+    // Created slots all busy (or unrenderable) — grow toward maxParticles
+    // (async). Returning -1 skips this one emit; the next tick(s) find the
+    // freshly-built free slots.
     this._growSlots();
     return -1;
   }

@@ -381,9 +381,11 @@ export function createScatterPool(opts = {}) {
       array,
       attr: null,
       normalized: entry.normalized === true,
+      // Range RING, not a per-flush scratch list — see pushRanges().
       ranges: [],
+      ringIdx: 0,
     };
-    for (let i = 0; i < maxUpdateRuns; i += 1) rec.ranges.push({ start: 0, count: 0 });
+    for (let i = 0; i < maxPendingRanges; i += 1) rec.ranges.push({ start: 0, count: 0 });
     arrays[entry.name] = array;
     offsets[entry.name] = 0;
     attrs.push(rec);
@@ -399,7 +401,8 @@ export function createScatterPool(opts = {}) {
   let mesh = null;
   let matrixArray = null;
   let matrixAttr = null;
-  const matrixRanges = [];
+  // Same ring discipline as the per-attribute records (see pushRanges).
+  const matrixRec = { ranges: [], ringIdx: 0 };
   if (THREE && typeof THREE.InstancedMesh === "function" && opts.geometry && opts.material) {
     try {
       mesh = new THREE.InstancedMesh(opts.geometry, opts.material, count);
@@ -430,7 +433,7 @@ export function createScatterPool(opts = {}) {
           const b = i * 16;
           matrixArray[b + 15] = 1;
         }
-        for (let i = 0; i < maxUpdateRuns; i += 1) matrixRanges.push({ start: 0, count: 0 });
+        for (let i = 0; i < maxPendingRanges; i += 1) matrixRec.ranges.push({ start: 0, count: 0 });
       }
       if (opts.parent && typeof opts.parent.add === "function") opts.parent.add(mesh);
     } catch (e) {
@@ -526,18 +529,44 @@ export function createScatterPool(opts = {}) {
     runCount += 1;
   }
 
-  function pushRanges(attr, ranges, itemSize) {
+  /**
+   * Translate this flush's touched-index runs into three `updateRanges` entries.
+   *
+   * ⚠ THE RANGE OBJECTS ARE A RING, AND THAT IS LOAD-BEARING (2026-08-03 fix).
+   * These objects are pushed BY REFERENCE into three's `attr.updateRanges`, and
+   * three only empties that array when it actually uploads the buffer. The
+   * previous code reused the SAME `maxUpdateRuns` objects on every flush, so
+   * two flushes without an upload in between rewrote entries three was still
+   * holding: flush A's runs were silently replaced by flush B's values (and
+   * pushed twice), so flush A's re-scattered instances never uploaded and kept
+   * rendering stale positions until the whole-buffer fallback happened to fire.
+   *
+   * That is not hypothetical — `update()` is driven from `tickPerFrame`, which
+   * the `?netDrainHz=N` interval also calls while the rAF loop (and therefore
+   * rendering) is idle under `?renderOnDemand=1` / `?nullRender=1`.
+   *
+   * A ring of `maxPendingRanges` entries makes it safe by construction: the
+   * guard below refuses to push when `pending.length + runCount` would exceed
+   * that bound, so the slots we are about to write are always at least
+   * `pending.length + runCount <= maxPendingRanges` positions ahead of the
+   * oldest entry three still references — i.e. never a live one.
+   */
+  function pushRanges(attr, rec, itemSize) {
     if (!attr) return;
     const pending = attr.updateRanges;
     if (runOverflow || !pending || pending.length + runCount > maxPendingRanges) {
       // Empty `updateRanges` means "upload the whole buffer" in three's
-      // WebGLAttributes — the correct, always-safe fallback.
+      // WebGLAttributes — the correct, always-safe fallback. Reset the ring:
+      // nothing of ours is referenced any more.
       if (pending && typeof attr.clearUpdateRanges === "function") attr.clearUpdateRanges();
+      rec.ringIdx = 0;
       attr.needsUpdate = true;
       return;
     }
+    const ring = rec.ranges;
     for (let r = 0; r < runCount; r += 1) {
-      const range = ranges[r];
+      const range = ring[rec.ringIdx];
+      rec.ringIdx = (rec.ringIdx + 1) % ring.length;
       range.start = runStart[r] * itemSize;
       range.count = (runEnd[r] - runStart[r] + 1) * itemSize;
       pending.push(range);
@@ -547,8 +576,8 @@ export function createScatterPool(opts = {}) {
 
   function flushRanges() {
     if (runCount === 0 && !runOverflow) return;
-    for (const rec of attrs) pushRanges(rec.attr, rec.ranges, rec.itemSize);
-    pushRanges(matrixAttr, matrixRanges, 16);
+    for (const rec of attrs) pushRanges(rec.attr, rec, rec.itemSize);
+    pushRanges(matrixAttr, matrixRec, 16);
     runCount = 0;
     runOverflow = false;
   }

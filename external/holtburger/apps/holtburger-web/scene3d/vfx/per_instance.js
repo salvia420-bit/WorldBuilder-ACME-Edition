@@ -41,8 +41,40 @@ export const VFX_HASH_VARYING = "vVfxHash";
 
 // Marker substring present once the vertex side is patched (idempotency guard).
 const VERT_GUARD = "vfxHash01";
-// The exact fragment varying declaration (idempotency guard for the frag side).
-const FRAG_DECL = "varying float vVfxHash;";
+// The exact fragment varying DECLARATION (idempotency guard for the frag side).
+//
+// EXPORTED (2026-08-03) because consumers must probe for THIS, not for the bare
+// token `vVfxHash`. A bare-token probe is satisfied by another component's USE of
+// the name (or by its local fallback declaration), which is how a
+// [enchantShimmer, glint] SET could splice a read of `vVfxHash` ABOVE the only
+// declaration of it. Probe the declaration and the answer is unambiguous.
+export const VFX_HASH_FRAG_DECL = "varying float vVfxHash;";
+const FRAG_DECL = VFX_HASH_FRAG_DECL;
+
+/**
+ * The GLOBAL-SCOPE constant stand-in a component may declare when the real
+ * varying is absent (component used standalone / no shared prelude / a
+ * non-standard material). It MUST be global scope, not a local inside main():
+ * a local is only visible after its own line, so a sibling component that
+ * splices a READ of `vVfxHash` above it produces "undeclared identifier" and the
+ * whole program fails to compile. Declared once here so every component agrees
+ * on the exact text and can probe for it.
+ */
+export const VFX_HASH_FRAG_FALLBACK_DECL = "float vVfxHash = 0.0;";
+
+/**
+ * Is `vVfxHash` DECLARED at global scope in this fragment source — either as the
+ * real varying or as the constant fallback? This is the question a component must
+ * ask before emitting a read of it. Probing for the bare token `vVfxHash` instead
+ * is what allowed a [enchantShimmer, glint] SET to splice a read above the only
+ * declaration: enchantShimmer's own local fallback satisfied glint's token probe.
+ * @param {string} fragmentShader
+ */
+export function fragDeclaresVfxHash(fragmentShader) {
+  return typeof fragmentShader === "string"
+    && (fragmentShader.includes(VFX_HASH_FRAG_DECL)
+      || fragmentShader.includes(VFX_HASH_FRAG_FALLBACK_DECL));
+}
 
 // --- Vertex: declare the varying + a GPU-stable 2D value hash (Dave Hoskins
 // "hash without sine" hash12 — no sin() precision blow-up at large world coords).
