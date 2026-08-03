@@ -88,12 +88,78 @@ export function farTexelsPerLb() {
 
 /**
  * Fog-before-edge invariant (CRITIQUE reconciliation (a)):
- *   fogFar = min(authored fogMax, FRAC * R_effective * 192)
+ *   fogFar = min(authored fogMax, FRAC * (R_effective + 0.5) * 192)
  * so an unbaked / off-map / absent tile is invisible and the "void read as
  * ocean" mis-tune cannot recur. `?farFogFrac=0` disables the clamp entirely.
+ *
+ * FIX ROUND 2026-08-03 (validator defect 2) — 0.85 * R * 192 was measured too
+ * aggressive: at the MEASURED R_near = 5 it put fogFar at 816 m, i.e. the whole
+ * visible world inside the ramp, and mid-valley terrain 400 m out read 201/255
+ * against 134/255 with the retail-authored 2400 m band. The outermost DRAWN
+ * landblock's far edge is at `(R + 0.5) * 192` (R counts LB CENTRES, the tile
+ * is 192 m wide), so the old expression was clamping ~0.77 of the real edge.
+ * The invariant only needs fog to be visually opaque BEFORE that edge, which
+ * smoothstep reaches well before its far parameter: 0.95 * (R + 0.5) * 192
+ * keeps ~5 % of margin and stops discarding usable depth.
  */
 export function farFogFrac() {
-  return _num("farFogFrac", 0.85, 0, 4);
+  return _num("farFogFrac", 0.95, 0, 4);
+}
+
+/**
+ * Absolute floor for the clamped fog far distance, in metres. Only applied
+ * when the MEASURED radius says residency is healthy (>= `farFogFloorMinLb`
+ * landblocks actually drawn) — during a boot fill or a governor collapse the
+ * world really IS that small and the fog must still hide the true edge
+ * (validator defect 4, acceptance (c)). `?farFogFloor=0` disables it.
+ */
+export function farFogFloorM() {
+  return _num("farFogFloor", 700, 0, 20000);
+}
+
+/** Measured radius (LB) at or above which `farFogFloorM` is allowed to apply. */
+export function farFogFloorMinLb() {
+  return _num("farFogFloorMinLb", 3, 0, 16);
+}
+
+/**
+ * S1 fix round (validator defect 1 + 3) — drive `scene.fog.color` from the
+ * RENDERED SKY's horizon radiance instead of the authored sRGB hex.
+ *
+ * The authored DAT colour is an 8-bit DISPLAY value. `scene.fog.color` is
+ * consumed as PRE-EXPOSURE SCENE RADIANCE (terrain renders into the HalfFloat
+ * HDR buffer, `toneMappingExposure = 5`, AGX afterwards), so feeding it the
+ * authored value made 100 %-fogged terrain 60+ levels brighter than the sky it
+ * meets — a glowing band at 19:00, a grey wall against a black sky at 02:00.
+ * The sky's own horizon radiance is in that space BY CONSTRUCTION, so fogged
+ * terrain converges to exactly the sky behind it at every hour, for free.
+ *
+ * DEFAULT ON; `?farFogSky=off` falls back to the authored hex (the shipped
+ * becba0d1 behaviour) for an A/B.
+ */
+export function farFogSkyProbeEnabled() {
+  return _boolOn("farFogSky", true);
+}
+
+/** Probe elevation above the horizon, in degrees. Half-fov of the probe cone. */
+export function farFogSkyElevDeg() {
+  return _num("farFogSkyElev", 2.0, -10, 45);
+}
+
+/** Probe rate cap, in Hz. The readback is a GPU sync — keep it lazy. */
+export function farFogSkyHz() {
+  return _num("farFogSkyHz", 4, 0.1, 60);
+}
+
+/**
+ * Weight of the AUTHORED DAT fog chroma blended over the sampled sky radiance,
+ * preserving the sample's luminance. 0 (default) = pure sky radiance, which is
+ * what the acceptance measurement ("fogged pixel within a few levels of the sky
+ * above it") rewards; 1 = the authored hue at the sky's brightness. The
+ * authored RANGES are never touched by any of this.
+ */
+export function farFogTint() {
+  return _num("farFogTint", 0, 0, 1);
 }
 
 /** Numeric pin for the fog band, for A/B only. NaN = "use the AC/SkyState value". */

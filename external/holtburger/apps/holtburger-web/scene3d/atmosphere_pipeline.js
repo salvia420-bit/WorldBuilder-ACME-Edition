@@ -197,6 +197,44 @@ uniform float hbDebugDist;
 uniform float hbSkyLift;
 
 void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+  // === DEPTH SANITY HARNESS (fix round 2026-08-03, validator defect 6) =====
+  // FIRST, before every other branch, so the harness answers even indoors and
+  // never depends on the dissolve/aerial terms being enabled (both ship inert).
+  // It is a BINARY read, not a gradient to eyeball:
+  //   BLACK       = the pixel has NO world depth. It is sky / cleared far.
+  //   B channel   = 0.08 constant marker. Non-black blue means WORLD GEOMETRY,
+  //                 which is the whole question for the far composite ring.
+  //   R channel   = 0.16 * clamp(eye-forward distance / 2000 m).
+  //   G channel   = 100 m banding, for reading distance off the frame by eye.
+  // The 0.16 amplitude is deliberate: the composer applies exposure 5 then AGX,
+  // so a 0..0.8 ramp would land almost entirely in AGX's shoulder (measured:
+  // 0.1 -> 174/255, 0.7 -> 237/255, i.e. 63 levels for 1200 m). 0.16 keeps the
+  // whole ramp in AGX's responsive range and well under the BloomEffect
+  // luminanceThreshold of 0.85, so bloom does not smear it either.
+  if (hbDebugDist > 0.5) {
+    // CALIBRATION WEDGE. Everything downstream (exposure, AGX, bloom) is a
+    // monotone per-channel transfer, so a harness can invert it EXACTLY if the
+    // frame carries known inputs. The top 1.5 % of the frame is a linear
+    // 0.0 -> 0.16 ramp in uv.x, the same range the distance ramp below uses, so
+    // reading that strip turns the R channel back into METRES instead of
+    // "a redder pixel is farther away" - and it stays correct under a changed
+    // ?exposure or a future tone-curve swap, with nothing to re-derive.
+    if (uv.y > 0.985) {
+      outputColor = vec4(vec3(0.16 * uv.x), 1.0);
+      return;
+    }
+    if (depth >= 0.9999) {
+      outputColor = vec4(0.0, 0.0, 0.0, 1.0);
+      return;
+    }
+    float dbgDist = -getViewZ(depth);
+    outputColor = vec4(
+      0.16 * clamp(dbgDist / 2000.0, 0.0, 1.0),
+      0.16 * fract(dbgDist / 100.0),
+      0.08,
+      1.0);
+    return;
+  }
   // Gated OFF indoors (set by preFrameSkySync): the sky pass is disabled and
   // the world pass clears colour, so there is no visible sky to dissolve into.
   if (hbEnabled < 0.5) {
@@ -231,10 +269,6 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
   // (?aerialDebug=on). getViewZ() is pmndrs' own helper, injected into every
   // Effect shader, and is correct for both camera types.
   float dist = -getViewZ(depth);
-  if (hbDebugDist > 0.5) {
-    outputColor = vec4(dist / 1000.0, fract(dist / 100.0), depth, 1.0);
-    return;
-  }
   float dissolve = smoothstep(hbDissolveStart, hbDissolveEnd, dist);
   // AERIAL DEPTH (2026-08-02). Gamma-curved, ceilinged ramp that starts far
   // closer than the dissolve so the whole mid-to-far field gains depth, not

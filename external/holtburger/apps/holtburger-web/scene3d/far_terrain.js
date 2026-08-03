@@ -125,6 +125,15 @@ function _warnOnce(reason, detail) {
  * quality-1's whole landscape draw distance — a sane worst case. Without it the
  * first seconds of a boot (the fixed 3x3 core, 9 LBs => r = 1) would clamp the
  * fog to 163 m and the player would log in inside pea soup.
+ *
+ * ⚠ 2026-08-03 — NO LONGER ON THE FOG PATH, and deliberately so. A floor is by
+ * construction a claim that more terrain is drawn than actually is, which is
+ * the fog-before-edge invariant inverted; the validator measures
+ * `fog.far <= fog.drawnEdgeM` at every sample of a fresh boot. The pea-soup
+ * guard moved to `farFogFloorM()` — expressed in METRES, gated on the measured
+ * radius being healthy, and capped at the true drawn edge, so it can only give
+ * back the `farFogFrac` margin. `{ floor: true }` now has exactly one caller:
+ * the `nearEffectiveRadiusLb` diagnostic field.
  */
 const EFFECTIVE_R_FLOOR = 3;
 /** Per-call decay when the ring shrinks. ~10 Hz tick => ~2 s to give up 1 LB. */
@@ -169,15 +178,125 @@ export function nearRingEffectiveRadiusLb(scene3d, { floor = true } = {}) {
   return floor ? Math.max(EFFECTIVE_R_FLOOR, _smoothedNearR) : _smoothedNearR;
 }
 
+// ---------------------------------------------------------------------------
+// FAR RING MEASURED RADIUS (fix round 2026-08-03 — validator defect 4)
+// ---------------------------------------------------------------------------
+// `farTerrainEffectiveRadiusLb` used to return `farRadiusLb()` — the NOMINAL
+// flag value — the instant `?farRing=on` was seen, while the doc claimed the
+// number was measured. Measured on the HD520 during a fill: 9 near LBs resident
+// and ZERO patches baked reported r = 8 → fogFar 1305 m, with drawn terrain
+// ending at 288 m. That is the fog-before-edge invariant inverted: the fog
+// stopped hiding the true edge for the whole fill, which is exactly when the
+// edge is ugliest.
+//
+// The replacement is the ring's SOLID radius: the largest Chebyshev radius R
+// such that EVERY landblock within R of the player is covered by a patch that
+// is both baked AND in the scene graph (`finishPatch` is the only site that
+// adds the mesh, and it only runs once every LB in the patch has baked). A
+// half-filled ring therefore reports the radius of its complete core, never the
+// radius of its outermost lucky patch.
+//
+// Off-map landblocks (outside 0..255) count as NOT covered on purpose: past the
+// map edge the terrain genuinely stops, and the fog has to close before it.
+
+/** Open rate for the measured far radius, LB per throttled step (~60 Hz). */
+const FAR_R_OPEN_RATE = 0.05;
+/** Minimum wall-clock gap between smoothing steps, ms (call-count immunity). */
+const FAR_R_STEP_MS = 16;
+let _smoothedFarR = NaN;
+let _farRLastStepMs = 0;
+const _farRSolidCache = { key: -1, count: -1, radius: -1, value: 0 };
+
+/**
+ * The far ring's MEASURED solid radius in landblocks (see the block comment
+ * above). Returns 0 when the ring is not built or nothing is drawn yet.
+ */
+export function farRingSolidRadiusLb(scene3d) {
+  const st = _state;
+  if (!st || _disabled) return 0;
+  const plb = playerLb(scene3d);
+  if (!plb) return 0;
+  let visibleCount = 0;
+  for (const p of st.patches.values()) {
+    if (p.mesh && p.mesh.parent) visibleCount += 1;
+  }
+  if (visibleCount === 0) return 0;
+  const cacheKey = (((plb.x & 0xff) << 8) | (plb.y & 0xff)) >>> 0;
+  if (_farRSolidCache.key === cacheKey
+      && _farRSolidCache.count === visibleCount
+      && _farRSolidCache.radius === st.radius) {
+    return _farRSolidCache.value;
+  }
+  const visible = new Set();
+  for (const p of st.patches.values()) {
+    if (p.mesh && p.mesh.parent) visible.add(p.key);
+  }
+  const covered = (lbx, lby) => {
+    if (lbx < 0 || lby < 0 || lbx > 0xff || lby > 0xff) return false;
+    return visible.has(_patchKey(lbx >> 2, lby >> 2));
+  };
+  let solid = 0;
+  let broke = false;
+  for (let ring = 0; ring <= st.radius && !broke; ring += 1) {
+    for (let dx = -ring; dx <= ring && !broke; dx += 1) {
+      for (let dy = -ring; dy <= ring; dy += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        if (!covered(plb.x + dx, plb.y + dy)) { broke = true; break; }
+      }
+    }
+    if (!broke) solid = ring;
+  }
+  _farRSolidCache.key = cacheKey;
+  _farRSolidCache.count = visibleCount;
+  _farRSolidCache.radius = st.radius;
+  _farRSolidCache.value = solid;
+  return solid;
+}
+
+/**
+ * The measured far radius with OPEN-ONLY smoothing. It eases UP as patches land
+ * (a patch is 4 LB = 768 m of fog far distance, and a step that big lands as a
+ * visible pop) and drops to reality INSTANTLY, so the published value can never
+ * exceed what is actually drawn — the opposite asymmetry to `uNearFadeLb`,
+ * which may lag downward because a hole there is only a shading seam.
+ */
+export function farRingMeasuredRadiusLb(scene3d) {
+  const raw = farRingSolidRadiusLb(scene3d);
+  const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (!Number.isFinite(_smoothedFarR) || raw <= _smoothedFarR) {
+    _smoothedFarR = raw;
+    _farRLastStepMs = now;
+    return _smoothedFarR;
+  }
+  if (now - _farRLastStepMs >= FAR_R_STEP_MS) {
+    _farRLastStepMs = now;
+    _smoothedFarR = Math.min(raw, _smoothedFarR + FAR_R_OPEN_RATE);
+  }
+  return _smoothedFarR;
+}
+
 /**
  * Radius of the OUTERMOST drawn terrain, in landblocks — what the fog-before-
- * edge invariant clamps against. The far ring when it is live, otherwise the
- * near ring's effective radius.
+ * edge invariant clamps against. MEASURED at both ends: the far ring's solid
+ * radius when the ring is live, the near ring's measured radius otherwise, and
+ * the larger of the two when both exist (during a fill the near ring is ahead
+ * of the far ring; after the far ring lands it is far ahead of the near one).
+ *
+ * ⚠ Deliberately the UNFLOORED near radius. `EFFECTIVE_R_FLOOR` exists so a
+ * boot does not start in pea soup, but a floor is by definition a claim that
+ * more terrain is drawn than actually is — the exact defect (4) this round is
+ * closing. The floor moved to `farFogFloorM()`, applied in metres in
+ * loop.js and gated on the measured radius already being healthy.
  */
 export function farTerrainEffectiveRadiusLb(scene3d) {
   if (!farTerrainEnabled()) return NaN;      // wave off → no clamp at all
-  if (farRingEnabled() && !_disabled) return farRadiusLb();
-  return nearRingEffectiveRadiusLb(scene3d);
+  const near = nearRingEffectiveRadiusLb(scene3d, { floor: false });
+  const nearR = Number.isFinite(near) ? near : 0;
+  if (farRingEnabled() && !_disabled) {
+    const far = farRingMeasuredRadiusLb(scene3d);
+    return Math.max(nearR, Number.isFinite(far) ? far : 0);
+  }
+  return nearR;
 }
 
 // ===========================================================================
@@ -1404,6 +1523,10 @@ export function farTerrainState(scene3d) {
         near: f.near ?? null,
         far: f.far ?? null,
         colorHex: f.color ? f.color.getHex() : null,
+        // Raw LINEAR working-space components. `getHex()` re-encodes to sRGB and
+        // clips to 8 bits, which hides exactly the mis-space defect this round
+        // fixed — the probe has to publish the number the shader receives.
+        colorLinear: f.color ? [f.color.r, f.color.g, f.color.b] : null,
       };
     })(),
     terrainMaterialFog: (() => {
@@ -1411,7 +1534,12 @@ export function farTerrainState(scene3d) {
       return m ? { fog: m.fog === true, hasFogUniform: !!m.uniforms?.fogColor } : null;
     })(),
     nearEffectiveRadiusLb: nearRingEffectiveRadiusLb(scene3d),
+    nearMeasuredRadiusLb: nearRingEffectiveRadiusLb(scene3d, { floor: false }),
+    // MEASURED, not nominal (fix round defect 4): solid = every LB inside it is
+    // covered by a drawn far patch; measured = that value, open-smoothed.
+    farRingSolidRadiusLb: farRingSolidRadiusLb(scene3d),
     farEffectiveRadiusLb: farTerrainEffectiveRadiusLb(scene3d),
+    skyFogProbe: (typeof window !== "undefined" && window.__farFogSkyProbe) ? window.__farFogSkyProbe : null,
   };
 
   if (!st) {

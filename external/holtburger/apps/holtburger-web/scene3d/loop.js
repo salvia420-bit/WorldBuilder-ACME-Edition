@@ -40,7 +40,11 @@ import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPvsLoadEx
 // Far-terrain wave (2026-08-02). S1 (retail range fog) reads the flags + the
 // effective-radius helper; S2/S3 (the Far Composite Ring) adds one budgeted
 // tick. Both are hard no-ops behind `?farTerrain=off`.
-import { terrainFogEnabled, farFogFrac, farFogNearPin, farFogFarPin } from "./far_terrain_flags.js";
+import {
+  terrainFogEnabled, farFogFrac, farFogNearPin, farFogFarPin,
+  farFogFloorM, farFogFloorMinLb,
+  farFogSkyProbeEnabled, farFogSkyElevDeg, farFogSkyHz, farFogTint,
+} from "./far_terrain_flags.js";
 import { tickFarTerrain, farTerrainEffectiveRadiusLb } from "./far_terrain.js";
 // ?statAtlas (default-ON; ?statAtlas=off escapes) — lazy buffer-compaction for the cross-LB static
 // texture-array buckets, driven off the ~10 Hz PVS path (NOT the per-frame
@@ -1409,6 +1413,234 @@ function readFogLerpFlag() {
   return _fogLerpFlagCache;
 }
 
+// ===========================================================================
+// HORIZON SKY RADIANCE PROBE (fix round 2026-08-03 — validator defects 1 + 3)
+// ===========================================================================
+//
+// THE DEFECT. `scene.fog.color` is consumed as PRE-EXPOSURE SCENE RADIANCE:
+// terrain and statics render into the composer's HalfFloat HDR buffer, the
+// composer then applies `toneMappingExposure = 5` (index.js) and AGX
+// (atmosphere_pipeline.js). Feeding it the AUTHORED sRGB hex — an 8-bit
+// DISPLAY value — therefore over-drives it by roughly the exposure factor.
+// Measured on the HD520: authored day 0xC6C8CC rendered (223,225,230);
+// authored night 0x171725 rendered (64,68,97) against a night sky of (2,2,2).
+// The visible result is a 60-level bright band where fogged terrain meets the
+// sky at 19:00 and a grey wall glowing out of a black sky at 02:00.
+//
+// THE FIX. Sample the RENDERED SKY's radiance just above the horizon, in the
+// camera's own azimuth, and feed THAT to the uniform. It is in scene-radiance
+// space by construction — same buffer, same exposure, same tone curve — so a
+// 100 %-fogged terrain pixel converges to the sky pixel directly above it at
+// every hour, with no gamma/AGX inversion to derive and nothing to re-tune when
+// the sky model changes. Retail's authored fog RANGES are untouched; the
+// authored CHROMA is available at `?farFogTint=N` (default 0, see the flag).
+//
+// HOW. One tiny private render of the sky scene (the takram SkyMaterial quad
+// only — stars/moons hidden for the probe) through a narrow-FOV camera aimed
+// `farFogSkyElevDeg` above the horizon, into an 8x8 HalfFloat target, then a
+// readback. The readback IS a GPU sync, so it is throttled to `farFogSkyHz`
+// (default 4 Hz) and skipped entirely indoors, when `scene.fog` is absent, and
+// after three consecutive failures (sticky fall-back to the authored hex).
+//
+// WHY NOT the composer's own sky pass: its buffer is overwritten by the world
+// pass in the same frame, and the horizon row's screen position depends on the
+// camera pitch — at the validator's `ov`/`hill` vantages the geometric horizon
+// is not near the middle of the frame. A private camera asks the question
+// directly and costs one 8x8 draw.
+const _FOG_PROBE_PX = 8;
+/** Probe cone, degrees. Centred on `farFogSkyElevDeg` → +/- 1.5 deg around it. */
+const _FOG_PROBE_FOV_DEG = 3;
+const _FOG_PROBE_MAX_FAILS = 3;
+let _fogProbeRT = null;
+let _fogProbeCam = null;
+let _fogProbeBuf = null;
+let _fogProbeNextMs = 0;
+let _fogProbeFails = 0;
+let _fogProbeDead = false;
+let _fogProbeLast = null;
+const _fogProbePos = new THREE.Vector3();
+const _fogProbeFwd = new THREE.Vector3();
+const _fogProbeDir = new THREE.Vector3();
+const _fogTintColor = new THREE.Color();
+
+/** IEEE-754 binary16 → Number. `readRenderTargetPixels` on a HalfFloatType
+ *  target hands back raw 16-bit patterns in a Uint16Array. */
+function _halfToFloat(h) {
+  const s = (h & 0x8000) ? -1 : 1;
+  const e = (h & 0x7c00) >> 10;
+  const f = h & 0x03ff;
+  if (e === 0) return s * f * 5.9604644775390625e-8;          // 2^-24
+  if (e === 0x1f) return f ? NaN : s * Infinity;
+  return s * (f + 1024) * Math.pow(2, e - 25);
+}
+
+/**
+ * Render + read the sky radiance just above the horizon in the camera azimuth.
+ * Returns `{ r, g, b }` in LINEAR working space (pre-exposure), or null when
+ * the probe cannot run this frame (indoors, no sky yet, throttled, disabled).
+ * The last good sample is reused between throttled ticks by the caller.
+ */
+function sampleHorizonSkyRadiance(scene3d) {
+  if (_fogProbeDead) return null;
+  const renderer = scene3d?.renderer;
+  const skyScene = scene3d?.skyDome?.skyScene;
+  const cam = scene3d?.camera;
+  // `atmosphereSky` resolves ~seconds after boot; before that the sky scene has
+  // no radiance quad and a probe would read the clear colour.
+  const quad = scene3d?.atmosphereSky?.skyMesh ?? null;
+  if (!renderer || !skyScene || !cam || !quad) return null;
+  if (scene3d?.skyDome?._lastIsIndoor) return null;
+
+  const hz = farFogSkyHz();
+  const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (now < _fogProbeNextMs) return null;
+  _fogProbeNextMs = now + 1000 / Math.max(0.1, hz);
+
+  const savedVisible = [];
+  let prevTarget = null;
+  let prevAutoClear = true;
+  let restoreRenderer = false;
+  try {
+    if (!_fogProbeCam) {
+      _fogProbeCam = new THREE.PerspectiveCamera(_FOG_PROBE_FOV_DEG, 1, 1, 1e7);
+      _fogProbeCam.name = "far-fog-horizon-probe";
+    }
+    if (!_fogProbeRT) {
+      _fogProbeRT = new THREE.WebGLRenderTarget(_FOG_PROBE_PX, _FOG_PROBE_PX, {
+        type: THREE.HalfFloatType,
+        depthBuffer: false,
+        stencilBuffer: false,
+        minFilter: THREE.NearestFilter,
+        magFilter: THREE.NearestFilter,
+      });
+      _fogProbeBuf = new Uint16Array(_FOG_PROBE_PX * _FOG_PROBE_PX * 4);
+    }
+
+    // Aim: the camera's forward azimuth, flattened onto the horizontal plane
+    // (three world space is Y-up; see sun_direction.js for the AC→three
+    // transform), then lifted `farFogSkyElevDeg` above the horizon. A parked
+    // straight-down camera degenerates → fall back to -Z.
+    cam.getWorldPosition(_fogProbePos);
+    cam.getWorldDirection(_fogProbeFwd);
+    _fogProbeFwd.y = 0;
+    if (_fogProbeFwd.lengthSq() < 1e-8) _fogProbeFwd.set(0, 0, -1);
+    _fogProbeFwd.normalize();
+    const elev = farFogSkyElevDeg() * Math.PI / 180;
+    const ce = Math.cos(elev);
+    _fogProbeDir.set(_fogProbeFwd.x * ce, Math.sin(elev), _fogProbeFwd.z * ce).normalize();
+    _fogProbeCam.position.copy(_fogProbePos);
+    _fogProbeCam.up.set(0, 1, 0);
+    _fogProbeCam.lookAt(
+      _fogProbePos.x + _fogProbeDir.x,
+      _fogProbePos.y + _fogProbeDir.y,
+      _fogProbePos.z + _fogProbeDir.z,
+    );
+    _fogProbeCam.updateMatrixWorld(true);
+    _fogProbeCam.updateProjectionMatrix();
+
+    // Stars, moon billboards and any cloud band in the sky scene are POINT
+    // sources / overlays, not the horizon haze we are asking about — a single
+    // star landing in an 8x8 probe would swing the fog colour. Radiance quad
+    // only, restored in `finally`.
+    const kids = skyScene.children;
+    for (let i = 0; i < kids.length; i += 1) {
+      savedVisible.push(kids[i].visible);
+      kids[i].visible = (kids[i] === quad);
+    }
+
+    prevTarget = renderer.getRenderTarget();
+    prevAutoClear = renderer.autoClear;
+    restoreRenderer = true;
+    renderer.setRenderTarget(_fogProbeRT);
+    renderer.autoClear = true;
+    renderer.render(skyScene, _fogProbeCam);
+    // SENTINEL. `readRenderTargetPixels` reports an unreadable target by
+    // console-erroring and RETURNING — it does not throw and it does not touch
+    // the buffer. Pre-filling with 0xFFFF (a binary16 NaN) makes that silent
+    // path indistinguishable from success impossible: every texel decodes
+    // non-finite, `n` stays 0, and we take the sticky fallback below instead of
+    // quietly driving the fog to black.
+    _fogProbeBuf.fill(0xffff);
+    renderer.readRenderTargetPixels(
+      _fogProbeRT, 0, 0, _FOG_PROBE_PX, _FOG_PROBE_PX, _fogProbeBuf,
+    );
+
+    let r = 0; let g = 0; let b = 0; let n = 0;
+    for (let i = 0; i < _fogProbeBuf.length; i += 4) {
+      const pr = _halfToFloat(_fogProbeBuf[i]);
+      const pg = _halfToFloat(_fogProbeBuf[i + 1]);
+      const pb = _halfToFloat(_fogProbeBuf[i + 2]);
+      if (!Number.isFinite(pr) || !Number.isFinite(pg) || !Number.isFinite(pb)) continue;
+      r += pr; g += pg; b += pb; n += 1;
+    }
+    if (n === 0) throw new Error("probe read no finite texels");
+    const out = {
+      r: Math.max(0, r / n),
+      g: Math.max(0, g / n),
+      b: Math.max(0, b / n),
+      elevDeg: farFogSkyElevDeg(),
+      at: now,
+    };
+    _fogProbeFails = 0;
+    _fogProbeLast = out;
+    if (typeof window !== "undefined") window.__farFogSkyProbe = out;
+    return out;
+  } catch (err) {
+    _fogProbeFails += 1;
+    if (_fogProbeFails >= _FOG_PROBE_MAX_FAILS) {
+      _fogProbeDead = true;
+      // eslint-disable-next-line no-console
+      console.warn("[far-terrain S1] horizon sky probe disabled after "
+        + `${_fogProbeFails} failures; falling back to the authored fog hex.`, err);
+    }
+    return null;
+  } finally {
+    if (savedVisible.length) {
+      const kids = skyScene.children;
+      for (let i = 0; i < kids.length && i < savedVisible.length; i += 1) {
+        kids[i].visible = savedVisible[i];
+      }
+    }
+    if (restoreRenderer) {
+      renderer.setRenderTarget(prevTarget);
+      renderer.autoClear = prevAutoClear;
+    }
+  }
+}
+
+/**
+ * Write a LINEAR working-space radiance triple straight into `fog.color`.
+ *
+ * Component assignment, NOT `setHex`/`setRGB`: three r0.184's
+ * `refreshFogUniforms` does `fog.color.getRGB(uniform, getUnlitUniformColor
+ * Space(renderer))`, and with a render target bound (always, for the world
+ * pass) that resolves to `workingColorSpace` — i.e. the uniform receives these
+ * components verbatim. Any colour-managed setter would insert a transfer
+ * function we would then have to invert.
+ *
+ * `tint` (0..1) blends the AUTHORED DAT chroma over the sample while PRESERVING
+ * the sample's luminance, so retail's tint identity is reachable without
+ * re-introducing the brightness defect. 0 = pure sky radiance.
+ */
+function applyFogRadiance(fog, sky, authoredHex, tint) {
+  let r = sky.r; let g = sky.g; let b = sky.b;
+  if (tint > 0 && Number.isFinite(authoredHex)) {
+    _fogTintColor.setHex(authoredHex);   // sRGB hex → linear working space
+    const lumSky = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const lumTint = 0.2126 * _fogTintColor.r + 0.7152 * _fogTintColor.g
+      + 0.0722 * _fogTintColor.b;
+    if (lumTint > 1e-6) {
+      const k = lumSky / lumTint;
+      r += (_fogTintColor.r * k - r) * tint;
+      g += (_fogTintColor.g * k - g) * tint;
+      b += (_fogTintColor.b * k - b) * tint;
+    }
+  }
+  fog.color.r = Math.max(0, r);
+  fog.color.g = Math.max(0, g);
+  fog.color.b = Math.max(0, b);
+}
+
 // Apply the live SkyState fog COLOR to the THREE distance fog
 // (`scene.fog` — a FogExp2/Fog whose `.color` is a THREE.Color).
 //
@@ -1486,7 +1718,18 @@ function tickDistanceFogColor(scene3d) {
     : (state.fogColorArgb >>> 0);
   if (!Number.isFinite(argb)) return;
   const rgb = argb & 0xffffff;
-  fog.color.setHex(rgb);
+  // === FIX ROUND 2026-08-03 (validator defects 1 + 3) =====================
+  // `fog.color` is scene RADIANCE, not a display colour. Prefer the rendered
+  // sky's own horizon radiance (same buffer, same exposure, same tone curve →
+  // fogged terrain converges to the sky it meets); fall back to the authored
+  // sRGB hex when the probe is unavailable or `?farFogSky=off`. See
+  // `sampleHorizonSkyRadiance` above for the full rationale + measurements.
+  let skyRad = null;
+  if (farFogSkyProbeEnabled()) {
+    skyRad = sampleHorizonSkyRadiance(scene3d) ?? _fogProbeLast;
+  }
+  if (skyRad) applyFogRadiance(fog, skyRad, rgb, farFogTint());
+  else fog.color.setHex(rgb);
   // Refresh the AC fog band only on the fogLerp path AND only for a
   // linear THREE.Fog (has finite `.near`/`.far`). Leaves the wireframe
   // FogExp2 density untouched (default-off path is unaffected — its fog
@@ -1512,20 +1755,51 @@ function tickDistanceFogColor(scene3d) {
       // Our terrain edge is a STREAMING limit that moves (near ring radius 5,
       // far ring radius `farRadius`, and the geometry governor can collapse the
       // near ring to ~3), so the authored 2400 m would leave a hard, fully
-      // unfogged cut. Clamp the far distance to `farFogFrac * R_effective * 192`
-      // (default 0.85) so fog reaches 100 % strictly INSIDE the outermost baked
-      // landblock. Then an absent / unbaked / off-map tile is invisible, and the
-      // "void read as ocean" mis-tune that contaminated pass 2 cannot recur.
-      // `?farFogFrac=0` disables the clamp; `?farFogNear` / `?farFogFar` pin
-      // both ends outright for an A/B.
+      // unfogged cut. Clamp the far distance so fog reaches 100 % strictly
+      // INSIDE the outermost DRAWN landblock. Then an absent / unbaked /
+      // off-map tile is invisible, and the "void read as ocean" mis-tune that
+      // contaminated pass 2 cannot recur. `?farFogFrac=0` disables the clamp;
+      // `?farFogNear` / `?farFogFar` pin both ends outright for an A/B.
+      //
+      // FIX ROUND 2026-08-03 (validator defect 2) — the clamp was
+      // `0.85 * R * 192`, which is ~0.77 of the real edge: `R` counts LB
+      // CENTRES and each tile is 192 m wide, so the outermost drawn edge is at
+      // `(R + 0.5) * 192`. At the measured R_near = 5 that put fogFar at 816 m,
+      // i.e. the entire visible world inside the ramp, and mid-valley terrain
+      // 400 m out measured 201/255 against 134/255 with the retail-authored
+      // 2400 m band. Now `0.95 * (R + 0.5) * 192` — the invariant only needs
+      // fog VISUALLY opaque before the edge, which smoothstep reaches well
+      // before its `far` parameter, so 5 % of margin is enough and the rest of
+      // the depth stays usable.
+      //
+      // Plus an absolute floor (`?farFogFloor`, 700 m) so a momentarily
+      // under-reported radius cannot slam the world shut — gated on the
+      // measured radius already being healthy (`?farFogFloorMinLb`, 3 LB) AND
+      // capped at the TRUE drawn edge, so the floor can only ever give back the
+      // `frac` margin, never claim terrain that is not there. During a boot
+      // fill or a governor collapse the world really IS that small and the fog
+      // still has to hide the true edge (defect 4, acceptance (c)).
       let near = fogMin;
       let far = fogMax;
       const frac = farFogFrac();
-      if (frac > 0) {
-        const rEff = farTerrainEffectiveRadiusLb(scene3d);
-        if (Number.isFinite(rEff) && rEff > 0) {
-          const edge = frac * rEff * 192;
-          if (edge > 0) far = Math.min(far, edge);
+      const rEff = farTerrainEffectiveRadiusLb(scene3d);
+      if (frac > 0 && Number.isFinite(rEff) && rEff > 0) {
+        const drawnEdge = (rEff + 0.5) * 192;
+        let edge = frac * drawnEdge;
+        const floorM = farFogFloorM();
+        if (floorM > 0 && rEff >= farFogFloorMinLb()) {
+          edge = Math.max(edge, Math.min(floorM, drawnEdge));
+        }
+        if (edge > 0 && edge < far) {
+          far = edge;
+          // DEGENERATE BAND. In the first seconds of a boot the drawn world is
+          // smaller than the authored fog START (150 m), so the clamp produces
+          // far < near, `far > near` below is false, and the fog silently keeps
+          // whatever the THREE.Fog was CONSTRUCTED with (2500 m) — i.e. no fog
+          // at all in exactly the phase where the drawn edge is nearest and
+          // ugliest. Measured on the HD520: 30 s of fogFar 2500 against a
+          // 136 m drawn edge. Scale the whole band down instead.
+          if (near >= far) near = far * 0.1;
         }
       }
       const nearPin = farFogNearPin();
@@ -1544,8 +1818,18 @@ function tickDistanceFogColor(scene3d) {
         near: fog.near,
         far: fog.far,
         colorHex: rgb,
+        // The value the shader actually receives (LINEAR working space). The
+        // authored hex above is now only the FALLBACK / tint source.
+        colorLinear: [fog.color.r, fog.color.g, fog.color.b],
+        colorSource: skyRad ? "sky-horizon-radiance" : "authored-hex",
+        skyRadiance: skyRad ? [skyRad.r, skyRad.g, skyRad.b] : null,
+        tint: farFogTint(),
         frac,
-        effectiveRadiusLb: farTerrainEffectiveRadiusLb(scene3d),
+        floorM: farFogFloorM(),
+        // MEASURED (defect 4): near-ring measured radius, or the far ring's
+        // SOLID radius when `?farRing=on` and patches are actually drawn.
+        effectiveRadiusLb: rEff,
+        drawnEdgeM: Number.isFinite(rEff) ? (rEff + 0.5) * 192 : null,
       };
     }
   }
