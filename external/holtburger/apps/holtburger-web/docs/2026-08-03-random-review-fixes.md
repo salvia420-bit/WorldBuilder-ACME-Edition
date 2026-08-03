@@ -622,3 +622,87 @@ The 1070 was offline for this round (tailscale last seen 36→59 min).
 the queue: ceiling spatter tracking the blow, indoor-spawned mobs bleeding on
 the floor rather than the terrain under it, visibly less canned kills, and
 `ragdoll_env` preferring the terrain floor within 1 m of a body's terrain column.
+
+---
+
+# Round 9 — plugins/, ui/, and the harness
+
+Three reviewers on disjoint sets: `plugins/` panels+HUDs, all of `ui/`, and me
+on the plugin API/loader plus the harness. 25 findings, all fixed and proven
+red-then-green.
+
+## The structural finding: 169 of 212 suites ran nowhere
+
+I went looking for somewhere to register ONE new suite and found that round
+8's own service-worker regression test — the fix that stops a re-bake bricking
+returning clients — was registered nowhere either. So I ran every unregistered
+suite: **129 passed, 41 failed.** Four out of five suites in the tree were
+written, passing, and protecting nothing.
+
+The runner now carries the verified-passing suites, a QUARANTINE list that
+**prints** the known-failing ones (an omitted failure is indistinguishable
+from a test that was never written — which is how several of these got lost),
+and a **coverage guard** that fails the run on any suite in neither list.
+A hand-maintained list is exactly what rotted; the guard makes it
+self-maintaining.
+
+**The guard's own first bug** is the part worth remembering. It scanned only
+`test_*.mjs` under app-root and `rynth/` — so all 39 suites under `tests/`
+(which uses `*.test.mjs`) were invisible to the very check written to make
+invisible suites impossible. The plugins reviewer caught it, not me. Widened
+to all three naming conventions, which surfaced 19 more.
+
+**Gate: 43 → 248 registered suites.** 240 pass, 5 fail, 0 unregistered. All 5
+failures are pre-existing, each registered at HEAD and failing standalone.
+
+## Findings
+
+| # | Area | Defect | Proof |
+|---|---|---|---|
+| — | combat-hud | swing power silently reset to 100% every second; persisted setting defeated on boot | red on shipped wiring |
+| — | inventory_helpers | `ITEM_TYPE_SIGIL` is actually `ItemType.Lockable`; sigils bound freely | verified vs ACE: no Sigil ItemType exists |
+| — | vendor-ui | queue-drop comment with **no code behind it**; buys sent to the wrong NPC | `buyQueue still holds vendor A's guids` |
+| — | ac_resize_corners / ac_window_position | left/top handles moved the panel the **wrong way**; clamped drags walk it off-screen | `left=-100 right=100` |
+| — | ac_font | `<ac-text>` spun the microtask queue unbounded → **tab freeze** | `renderCalls=51` vs a breaker of 50 |
+| — | 8 ui modules | transient failures cached forever; every retry above became a no-op | 5× `RETRIES … still null (LATCHED)` |
+| — | allegiance-panel | read `payload.x` off an EventTarget arg; the login/logout line has **never** fired | `0 !== 1` on the real bus |
+| — | character-creation | wizard singleton left pointing at a destroyed instance; never re-openable | negative control on bare `= null` |
+| — | combat-bar | skill array walked at stride 5; it is stride 6 | in-test replay of the old stride |
+| — | character-info | tabs relabel to lowercase ids on first click | red ONLY post-font-registration |
+| — | ac_dye_viewport | no race-cancel; stale dye wins, post-dispose loads leak | `_clearRig calls=2` |
+| — | corpse-loot, dye-preview | thousands of unfreed wasm boxes; a debounce that never engaged | `2480 of 2480 boxes leaked` |
+| — | audio_optimistic | identity gap across `await`; suppression never rolled back; dead WeakSet recovery | cue played at stale (10,20,30) |
+
+## Judgement calls worth keeping
+
+**A rule port verified CLEAN is worth as much as a defect.** The ui reviewer
+diffed `getAimLevelForVelocity`, `getCombatManeuver`, `isAttackerBehindDefender`
+and 174 `PLAY_SCRIPT` values against retail and ACE and found zero drift. That
+tells us where not to look again.
+
+**Two agents declined changes and were right.** One refused to align an
+out-of-range shade clamp to retail's null-palette return: all 4,776 Shade
+values in LSD-Partial are in range, so it is unreachable divergence. The other
+left ~10 unfreed-box sites unfixed, preferring a small proven set to a large
+unproven one (#162).
+
+**Negative controls caught what looked right.** The audio identity guard test
+is red for the plausible `entityMap.has(guid)` form too, because a same-guid
+respawn satisfies it. The character-creation test is red for a bare
+`_wizard = null`, which breaks teardown.
+
+## Escalated to me, decided
+
+- `shadows` checkbox: **removed, not rewired** (#153 closed) — rewiring would
+  honour `shadows: true` in every saved settings blob. Tombstoned in quality.js.
+- Two `docs/url-flags.md` rows whose trailing prose contradicted their own
+  default column: **corrected** (`powerMeterSwingDuration`, `uiEffectIcons`).
+- `powerMeterSwingDuration`'s catch returning the DISABLED state for a
+  default-ON flag: **not changed** (#161) — near-unreachable, and arguably a
+  default change rather than a fix.
+
+## Open
+
+#156 (41 quarantined suites — 33 unclassified because nothing ever ran them),
+#157 two hollow-pass suites, #158-160 loader/API contracts, #161-162 above.
+The 1070 queue now also owes: chat-panel corner-drag feel.
