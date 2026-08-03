@@ -352,13 +352,20 @@ export function installDiag() {
       // Unsigned-coerce LAST so the bitwise-AND result doesn't sign-extend
       // for keys above 0x80000000 (e.g. Holtburg 0xA9B40000).
       const lb = ((lbId & 0xffff0000) >>> 0);
-      const expectedNpcs = (this.expected.npcs ?? []).filter((_npc) => {
-        if (this.expected.landblockId == null) return true;
-        const oracleLb = typeof this.expected.landblockId === "string"
-          ? parseInt(this.expected.landblockId, 16) >>> 0
-          : (this.expected.landblockId >>> 0);
-        return ((oracleLb & 0xffff0000) >>> 0) === lb;
-      });
+      // The oracle is per-landblock, so this is an all-or-nothing filter on
+      // the ORACLE's own landblockId — `_npc` is deliberately unused.
+      const oracleLb = this.expected.landblockId == null
+        ? null
+        : (typeof this.expected.landblockId === "string"
+            ? parseInt(this.expected.landblockId, 16) >>> 0
+            : (this.expected.landblockId >>> 0));
+      const oracleMatches = oracleLb == null || ((oracleLb & 0xffff0000) >>> 0) === lb;
+      const expectedNpcs = oracleMatches ? (this.expected.npcs ?? []) : [];
+      // VACUOUS RUN (2026-08-03 review). Asking for a landblock the loaded
+      // oracle does not describe produced `expectedCount: 0`, `missing: []`
+      // and therefore `ok: true` — which runAll reported as PASS. A comparison
+      // that compared nothing is not a pass; flag it so the verdict can say so.
+      const vacuous = !oracleMatches || expectedNpcs.length === 0;
 
       const now = performance.now();
       const missing = [];
@@ -543,6 +550,12 @@ export function installDiag() {
         missing,
         inFlight,
         extra,
+        // A run that compared nothing reports neither PASS nor DRIFT — see
+        // `vacuous` above and runAll's verdict mapping.
+        vacuous,
+        oracleLandblockId: oracleLb == null
+          ? null
+          : `0x${oracleLb.toString(16).padStart(8, "0")}`,
         ok: missing.length === 0,
         summary: missing.reduce((acc, m) => {
           acc[m.classification] = (acc[m.classification] ?? 0) + 1;
@@ -637,7 +650,17 @@ export function installDiag() {
     // either the collision math broke or terrain is resident with zero
     // static AABBs behind it.
     try { if (this.collision?.audit) out.surfaces.collision = this.collision.audit(); } catch (e) { out.surfaces.collision = { error: String(e?.message ?? e) }; }
-    out.summary = Object.fromEntries(Object.entries(out.surfaces).map(([k, v]) => [k, v?.error ? "INFRA" : (v?.ok === false ? "DRIFT" : "PASS")]));
+    // Verdict mapping. `vacuous` surfaces (an oracle that describes a
+    // DIFFERENT landblock, or no expected rows at all) report NO-ORACLE rather
+    // than PASS — a comparison with zero comparanda must never read green.
+    out.summary = Object.fromEntries(Object.entries(out.surfaces).map(([k, v]) => [
+      k,
+      v?.error ? "INFRA" : (v?.vacuous ? "NO-ORACLE" : (v?.ok === false ? "DRIFT" : "PASS")),
+    ]));
+    // Surfaces whose attach() threw are absent from `surfaces` entirely, so
+    // the summary silently omits them rather than reporting a gap. Name them.
+    out.missingSurfaces = ["spawns", "placements", "entityTypes", "events", "geometry", "collision"]
+      .filter((k) => !(k in out.surfaces));
     return out;
   };
 

@@ -190,7 +190,7 @@ export class PortalStencilPass extends Pass {
    * Convex polygons are fan-triangulated into one merged BufferGeometry.
    */
   setApertures(flat) {
-    this._disposeApertureMesh();
+    this._detachApertureMesh();
     this._apertureCount = 0;
     if (!flat || flat.length < 1) return;
 
@@ -198,7 +198,14 @@ export class PortalStencilPass extends Pass {
     const count = flat[k++] | 0;
     if (count <= 0) return;
 
-    const positions = [];
+    // Reused scratch (2026-08-03 review): this runs EVERY frame from
+    // cells.js's tickPortalStencil, and used to allocate a fresh array, a
+    // fresh BufferGeometry, a fresh Float32BufferAttribute and a fresh Mesh
+    // per frame — then destroy last frame's GL buffer. ~600 fan vertices at
+    // 60 Hz of pure churn. The array is reused in place and the geometry is
+    // only reallocated when it needs to GROW.
+    const positions = this._posScratch || (this._posScratch = []);
+    positions.length = 0;
     for (let a = 0; a < count; a++) {
       const nv = flat[k++] | 0;
       if (nv < 3) {
@@ -223,24 +230,54 @@ export class PortalStencilPass extends Pass {
       this._apertureCount = 0;
       return;
     }
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(positions, 3),
-    );
-    const mesh = new THREE.Mesh(geom, this._markMat);
-    mesh.frustumCulled = false;
-    mesh.matrixAutoUpdate = false;
+    // Grow-only buffer reuse. `_detachApertureMesh()` at the top of this
+    // method has already detached last frame's mesh; re-adopt its geometry
+    // when the new fan fits, so the common steady-state frame does zero
+    // allocation and one buffer sub-upload.
+    const needed = positions.length;
+    let geom = this._apertureGeom;
+    let attr = geom ? geom.getAttribute("position") : null;
+    if (!geom || !attr || attr.array.length < needed) {
+      if (geom) geom.dispose();
+      geom = new THREE.BufferGeometry();
+      // Round up so a slowly-growing aperture set stops reallocating.
+      const cap = Math.max(needed, 256 * 3);
+      attr = new THREE.BufferAttribute(new Float32Array(cap), 3);
+      attr.setUsage(THREE.DynamicDrawUsage);
+      geom.setAttribute("position", attr);
+      this._apertureGeom = geom;
+    }
+    attr.array.set(positions);
+    attr.addUpdateRange ? attr.addUpdateRange(0, needed) : (attr.updateRange = { offset: 0, count: needed });
+    attr.needsUpdate = true;
+    geom.setDrawRange(0, needed / 3);
+    let mesh = this._apertureMeshObj;
+    if (!mesh || mesh.geometry !== geom) {
+      mesh = new THREE.Mesh(geom, this._markMat);
+      mesh.frustumCulled = false;
+      mesh.matrixAutoUpdate = false;
+      this._apertureMeshObj = mesh;
+    }
     this._apertureMesh = mesh;
     this.apertureGroup.add(mesh);
   }
 
-  _disposeApertureMesh() {
+  /** Per-frame: unparent, but KEEP the geometry for reuse (see setApertures). */
+  _detachApertureMesh() {
     if (this._apertureMesh) {
       this.apertureGroup.remove(this._apertureMesh);
-      this._apertureMesh.geometry?.dispose();
       this._apertureMesh = null;
     }
+  }
+
+  /** Teardown: unparent AND release the reused buffer. */
+  _disposeApertureMesh() {
+    this._detachApertureMesh();
+    if (this._apertureGeom) {
+      this._apertureGeom.dispose();
+      this._apertureGeom = null;
+    }
+    this._apertureMeshObj = null;
   }
 
   render(renderer, inputBuffer /*, outputBuffer, dt, maskActive */) {

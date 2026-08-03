@@ -204,6 +204,13 @@ export class AdaptiveRenderScaleController {
     this._cooldownUntil = 0;
     this._raf = null;
     this.changes = 0; // for tests/telemetry
+    // Reachability counters (2026-08-03): applyScale threw / applyScale
+    // returned normally but the scale did not move. Both should stay 0; a
+    // climbing `applyNoOps` next to a flat `changes` is the "controller is
+    // running but nothing happens" signature.
+    this.applyFailures = 0;
+    this.applyNoOps = 0;
+    this._prevCatastrophic = false;
     this._settle = !!settle;
     this._settleFlips = settleFlips;
     this._settleWindowMs = settleWindowMs;
@@ -227,7 +234,19 @@ export class AdaptiveRenderScaleController {
     // FAST PATH: a single catastrophically-slow frame (≫ budget, e.g. the 4 s /
     // 4K turn) drops the scale IMMEDIATELY rather than waiting a full eval window
     // — otherwise, at ~4 fps there aren't enough samples per window to evaluate.
-    if (dt > this._highMs * 3 && t >= this._cooldownUntil) {
+    // A single catastrophic frame is NOT evidence of a GPU that cannot keep
+    // up (2026-08-03 review). The module header calls rAF cadence "GPU-bound",
+    // but it cannot distinguish fill cost from a MAIN-THREAD stall — a terrain
+    // bake, a shard decode, a GC pause and a 4 K camera turn all look like one
+    // long frame. Dropping resolution does nothing for the first three; it
+    // just degrades the image, and repeated often enough it trips the 5-minute
+    // settle latch. Requiring two CONSECUTIVE over-budget frames keeps the
+    // sustained case (a genuinely fill-bound GPU produces a run of them, which
+    // is the ~4 fps case this path exists for) while ignoring isolated hitches.
+    const catastrophic = dt > this._highMs * 3;
+    const prevCatastrophic = this._prevCatastrophic === true;
+    this._prevCatastrophic = catastrophic;
+    if (catastrophic && prevCatastrophic && t >= this._cooldownUntil) {
       const s = this._getScale();
       if (s > this._minScale) {
         const over = dt / this._highMs;
@@ -277,6 +296,20 @@ export class AdaptiveRenderScaleController {
     try {
       this._applyScale(scale);
     } catch (_) {
+      this.applyFailures = (this.applyFailures | 0) + 1;
+      return;
+    }
+    // Did the scale ACTUALLY move? The production `applyScale` wraps
+    // `window.__setRenderScale` in its own swallowing try/catch
+    // (scene3d/index.js), so a failure there returns normally and this method
+    // would count a change, arm the cooldown and log "down -> 0.88" forever
+    // while the rendered resolution never moved — telemetry reporting a
+    // controller that is working when it structurally cannot (2026-08-03
+    // review). Verify against the getter rather than trusting the setter.
+    let applied = scale;
+    try { applied = this._getScale(); } catch (_) { /* keep the optimistic value */ }
+    if (Number.isFinite(applied) && Math.abs(applied - scale) > 1e-6) {
+      this.applyNoOps = (this.applyNoOps | 0) + 1;
       return;
     }
     this.changes += 1;

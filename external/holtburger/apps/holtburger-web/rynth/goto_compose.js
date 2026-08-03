@@ -133,6 +133,23 @@ function currentCell(host) {
   return 0;
 }
 
+/**
+ * Is the cell read above actually BACKED by live data? `currentCell` collapses
+ * "outdoors" and "unreadable" onto 0; this separates them so a caller can
+ * refuse to conclude anything from the ambiguous case (2026-08-03 review).
+ */
+function poseIsReadable(host) {
+  try {
+    const s = host && host.s;
+    if (s && typeof s.getCurrentCellId === "function") return true;
+  } catch (_) { /* fall through */ }
+  try {
+    const p = host && host.TryGetPlayerPose && host.TryGetPlayerPose();
+    if (p && typeof p.objCellId === "number") return true;
+  } catch (_) { /* hostile host */ }
+  return false;
+}
+
 // Wait up to timeoutMs for a pose (null during boot / mid-teleport). Never throws.
 async function awaitPose(host, timeoutMs, pollMs) {
   const deadline = Date.now() + timeoutMs;
@@ -852,7 +869,17 @@ function findUpcomingJumpLeg(legs, fromIdx) {
  */
 async function exitToOutdoors(ctx, tune, phases, { label = "re-exit" } = {}) {
   const { host, walk, buildGraph } = ctx;
-  if (!isEnvCellId(currentCell(host))) return { ok: true, alreadyOutdoors: true };
+  // `currentCell` returns 0 for BOTH "genuinely outdoors" and "could not read
+  // the cell" — its own comment says `0 -> outdoors` (2026-08-03 review). A
+  // pose-null window (post-portal, pre-first-tick) therefore made this return
+  // `{ ok: true, alreadyOutdoors: true }` while the character was still inside
+  // a dungeon: the exact false success the module docblock says egress
+  // eliminates. Distinguish the two before claiming victory.
+  const cell0 = currentCell(host);
+  if (cell0 === 0 && !poseIsReadable(host)) {
+    return { ok: false, reason: "cell unreadable (pose not yet live) — cannot claim outdoors", phases };
+  }
+  if (!isEnvCellId(cell0)) return { ok: true, alreadyOutdoors: true };
   const maxAttempts = Math.max(1, tune.egressAttempts ?? 4);
   const excludeEdges = new Set();
   const wedgeCounts = new Map(); // canonical edgeKey -> stall count

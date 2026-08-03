@@ -468,6 +468,19 @@ export function createTrailMap(opts = {}) {
     state.prevCenterY = state.centerY;
   }
 
+  /**
+   * Release both render targets, the stamp program and the quad geometry.
+   *
+   * ⚠ OWNERSHIP GAP (2026-08-03 review): the ONLY caller in the tree is
+   * `terrain_vfx.js::_resetTerrainVfx()`, whose own docstring labels it
+   * "Test seam". `initTerrainVfx` has no re-entry guard, so a second init
+   * (renderer re-create, WebGL context recovery, a 3D→2D→3D flip) orphans two
+   * WebGLRenderTargets plus this program and geometry — and "GC reclaims GPU"
+   * is false for three.js, the lesson R3#6 already paid for with the nameplate
+   * cache. Wiring a real teardown call belongs in terrain_vfx.js, which is
+   * outside this task's file ownership; flagged rather than reached into.
+   * dispose() itself is idempotent, so the fix there is a one-liner.
+   */
   function dispose() {
     pending.length = 0;
     if (!gpu) return;

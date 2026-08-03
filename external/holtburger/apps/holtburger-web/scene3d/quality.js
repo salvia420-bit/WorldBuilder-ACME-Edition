@@ -544,6 +544,24 @@ const BOOL_FLAGS = new Set([
     // "shadows" removed 2026-08-01 — see the PRESETS.low note: flags.shadows
     // had no reader; `?shadows=on` keeps its own exact-match reader in
     // index.js, unaffected by this parser.
+    //
+    // ⚠ The removal checked for READERS but not for WRITERS (2026-08-03
+    // review). `ui/graphics_settings.js` still lists "shadows" in its
+    // QUALITY_BOOL_FLAGS (:18-20) and still renders a "Shadows" checkbox
+    // (:247) that writes `flags.shadows` into localStorage — where the
+    // sanitizer below silently drops it, because it is in none of the three
+    // flag sets. The control is inert end to end, and its fallback display
+    // value (`shadows: true`, :506) is the opposite of the real default,
+    // since the live gate is the default-OFF `?shadows=on` opt-in.
+    //
+    // DECISION: the checkbox should be REMOVED from the panel, not rewired.
+    // Rewiring means honouring a `flags.shadows` that thousands of saved
+    // `holtburger_graphics_v1` blobs already contain as `true` (the panel has
+    // been writing it since it shipped), which would silently switch shadow
+    // maps ON for every returning user — a ship-visible change with no 1070
+    // measurement behind it. Removal is the no-op. Owner: ui/ (out of this
+    // task's file ownership); `warnOnDeadFlag` below makes the drop audible
+    // in the meantime instead of silent.
     "normalMaps",
     "detailFlag",
     "terrainDetailNormal",
@@ -653,6 +671,23 @@ function parseInteger(raw) {
 function parseFloatFlag(raw) {
     const n = Number.parseFloat(String(raw));
     return Number.isFinite(n) ? n : null;
+}
+
+// Persisted-preference keys this parser knowingly has no home for. Warned
+// once each per session — a settings control that writes a key nothing reads
+// is a UI element that does nothing, and that should never be silent.
+const _deadFlagWarned = new Set();
+export function warnOnDeadFlag(key) {
+    if (_deadFlagWarned.has(key)) return false;
+    _deadFlagWarned.add(key);
+    try {
+        // eslint-disable-next-line no-console
+        console.warn(
+            `[quality] saved graphics preference "${key}" has no reader — ` +
+            "the control that wrote it does nothing (see quality.js BOOL_FLAGS)",
+        );
+    } catch (_) { /* never block boot for a diagnostic */ }
+    return true;
 }
 
 function parseOverrides(params) {
@@ -883,6 +918,12 @@ export function getQuality(url, userAgent) {
                 flags[k] = v;
             } else if (FLOAT_FLAGS.has(k) && Number.isFinite(v)) {
                 flags[k] = v;
+            } else {
+                // A saved preference this parser has no home for. Silently
+                // dropping it is how the "Shadows" checkbox stayed inert and
+                // invisible for two days (see the BOOL_FLAGS note). Name it
+                // once per key per session so a dead control is audible.
+                warnOnDeadFlag(k);
             }
         }
     }

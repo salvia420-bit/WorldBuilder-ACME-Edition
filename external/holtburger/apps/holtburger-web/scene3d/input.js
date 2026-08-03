@@ -71,7 +71,14 @@ export function clampSign(v) {
 // `resolveRunModifier` is the ONE helper all four run-computation
 // sites consult (index.html prediction + dispatch blocks, camera.js
 // _advancePrediction + computeMovementFromKeys):
-//   - flag OFF (default): legacy `!shiftHeld`, byte-identical.
+//   - flag OFF (`?retailRunKeys=off`): legacy `!shiftHeld`, byte-identical.
+//     (This line used to say "OFF (default)". It is not: the reader below is
+//     the `!== "off"` idiom, so an ABSENT param reads ON, and
+//     docs/url-flags.md:779 lists the flag as default **on**. The XOR branch
+//     ships on every session. Comment corrected — no behaviour touched.
+//     Note the reader's `catch` arm returns false, i.e. the OPPOSITE polarity
+//     to its success path; left as-is deliberately, since a URLSearchParams
+//     throw means there is no location to read a preference from.)
 //   - flag ON: `shiftHeld XOR toggleRunOption` — with the option ON
 //     (its fallback default) this is IDENTICAL to legacy; flipping
 //     the option in Options → Character gives retail walk-by-default.
@@ -279,6 +286,29 @@ export class InputController {
    *   axes:(null|object), sig:string}}
    *   `dispatched` is true iff `setMovementInput` was actually called this
    *   time (signature changed AND not suppressed AND gate allowed).
+   */
+  /**
+   * ⚠ RETIRED IN PRACTICE — NOT WIRED ON ANY SHIPPED PATH (2026-08-03 review).
+   *
+   * Both call sites exclude themselves when `?cmdInterp` is on:
+   *   index.html   `if (!CMD_INTERP_ON && sig !== lastInputSig) { … }`
+   *   camera.js    `if (CMD_INTERP_ON) { … } else if (this._inputFunnelOn) { … }`
+   * and docs/url-flags.md lists BOTH `inputFunnel` (row 330) and `cmdInterp`
+   * (row 778) as default-ON. So on the shipped default lane this method never
+   * runs: `dispatchCount` below is structurally pinned at 0 and `lastSig` at
+   * null, and any assertion gating on `dispatchCount > 0` can never pass.
+   *
+   * The funnel's job — one owner for the wasm `setMovementInput` boundary so
+   * the rAF dispatcher and the camera dispatcher cannot stomp each other — is
+   * now done by cmdInterp's per-edge key forwarding instead. The flag is
+   * therefore dead weight on the default path and live only under
+   * `?cmdInterp=off`.
+   *
+   * DELIBERATELY NOT CHANGED HERE: retiring `?inputFunnel` (or flipping either
+   * default) is a shipped-behaviour decision for the owner, not a review fix.
+   * This note exists so the next reader does not spend an afternoon wondering
+   * why a default-ON module's counters are flat. See also the `?cmdInterp=off`
+   * path, which is the only configuration that exercises anything below.
    */
   dispatch(handle, raw) {
     const axes = this.resolveAxes(raw);
