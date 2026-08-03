@@ -132,6 +132,28 @@ const PVS_BAKE_CAP = (() => {
 // trims residency at the SOURCE (Town Network 68 LBs → single digits), which
 // shrinks every downstream per-frame statics walk proportionally. `=0` = most
 // aggressive (render-set only); `=N >= pvsRingRadius` disables the gate.
+// 2026-08-03 residency task #10 — `?fogRingCap` (DEFAULT ON, `=off` escape).
+// Cap the outdoor prefetch ring by the AUTHORED fog band: night fog is
+// 0→400 m, so baking terrain/statics/buildings to the radius-5 edge
+// (~1056 m) made ~80 % of the night working set invisible. The cap reads
+// `scene3d._authoredFogMaxM` (published by loop.js::tickDistanceFogColor
+// from the SkyState snapshot — authored values, NOT the drawn-edge-derived
+// fogFar, which would feed back). Absent snapshot (headless / boot) → no
+// cap, fail-open to the full ring. The capped radius feeds `fireSig`, so a
+// dawn fogMax lerp re-fires the sweep and the ring reopens by itself.
+const FOG_RING_CAP_ENABLED = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const v = new URLSearchParams(globalThis.location.search).get("fogRingCap");
+      if (v != null) {
+        const t = String(v).toLowerCase();
+        return !(t === "off" || t === "0" || t === "false" || t === "no");
+      }
+    }
+  } catch (_) {}
+  return true;
+})();
+
 const INDOOR_PVS_RING_RADIUS = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
@@ -1822,6 +1844,19 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
       indoor = false;
     }
     if (indoor) ringRadius = INDOOR_PVS_RING_RADIUS;
+  }
+  // Residency task #10 — authored-fog cap (see FOG_RING_CAP_ENABLED above).
+  // `+1` keeps one LB of margin past full fog so the fogged edge itself is
+  // always backed by real terrain (mirrors the fog-before-edge invariant
+  // from the other side). Ceil quantizes the dawn/dusk lerp to LB steps, so
+  // the fireSig churn during a transition is a handful of re-sweeps, not
+  // per-frame. Applies AFTER the indoor/sealed collapses (never widens).
+  if (FOG_RING_CAP_ENABLED && ringRadius > 1) {
+    const fogMaxM = +scene3d._authoredFogMaxM;
+    if (Number.isFinite(fogMaxM) && fogMaxM > 0) {
+      const fogRadiusLb = Math.ceil(fogMaxM / 192) + 1;
+      if (fogRadiusLb < ringRadius) ringRadius = fogRadiusLb;
+    }
   }
   // Per-frame fire-storm guard: the fire loop below makes
   // (ringSize × 3-domain) idempotent hook calls — at radius 5 that is

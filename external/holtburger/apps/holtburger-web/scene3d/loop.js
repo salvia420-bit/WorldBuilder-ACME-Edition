@@ -1792,6 +1792,14 @@ function tickDistanceFogColor(scene3d) {
       // still has to hide the true edge (defect 4, acceptance (c)).
       let near = fogMin;
       let far = fogMax;
+      // 2026-08-03 residency task #10 — publish the AUTHORED band for the
+      // PVS ring's fog cap (cells.js::tickPvsLoadExpansion). Deliberately the
+      // authored fogMax, NOT the derived `far` below: the derived value is
+      // clamped to the measured drawn edge, so capping the ring with it would
+      // be a feedback loop (ring shrinks → edge shrinks → ring shrinks…).
+      // The authored band is the binding visibility constraint at night
+      // (0→400 m) and is what makes >400 m residency pointless there.
+      scene3d._authoredFogMaxM = fogMax;
       const frac = farFogFrac();
       const rEff = farTerrainEffectiveRadiusLb(scene3d);
       if (frac > 0 && Number.isFinite(rEff) && rEff > 0) {
