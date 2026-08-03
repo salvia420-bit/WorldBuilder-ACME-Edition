@@ -58,7 +58,18 @@ from pathlib import Path
 HOLT_ROOT = Path(__file__).resolve().parent.parent
 DIST_LINK = HOLT_ROOT / "dist"
 
-DEFAULT_ROOT = "/mnt/wbterminal2/holtburger-dist"
+# 2026-08-02 — REPOINTED to the current bake. The previous default
+# (/mnt/wbterminal2/holtburger-dist, generated 2026-05-24) does NOT contain the
+# `holtburger/tex-bc7` namespace, while `?texBc7` has been DEFAULT-ON since
+# 2026-07-30 — so every bare `serve.py` produced the boot warning
+#   [bc7] namespace `holtburger/tex-bc7` is not in the loaded manifest
+# and silently ran the whole client on the RGBA8 texture path. Worse,
+# `ensure_dist_symlink` below actively RE-POINTS external/holtburger/dist at
+# this constant on every start, so hand-fixing the symlink was always reverted.
+# The two bakes carry identical world data (scenery 195,076 / spawns 38,153 /
+# events 80,397 files in both `_health.json`); the newer one just adds the BC7
+# texture namespace. `HOLTBURGER_DIST=<path>` still overrides.
+DEFAULT_ROOT = "/mnt/wbterminal2/holtburger-dist-hires-bc7m"
 
 # Layers the RENDERER needs — a missing/empty one is a hard failure (fail-loud).
 # `events` is consumed only by offline Node validators, never by the renderer, so

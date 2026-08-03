@@ -150,6 +150,12 @@ setMasterClock(VFX_GLOBALS.uTime);
 // table inside installSharedDrainHook (`?unifiedDispatch=on`,
 // default-off — read independently here and in index.html).
 import { KIND, createEntityDispatcher } from "./entity_dispatch.js";
+// NIGHT RAMP (2026-08-02, ?nightRamp — DEFAULT ON). See night_ramp.js.
+import {
+  nightRampEnabled,
+  nightFactorFromAuthoredPitch,
+  nightGroundScale,
+} from "./night_ramp.js";
 
 // Entity-update kind constants — aliases over the shared KIND table
 // (A15-Q4; pre-Q4 these were file-local literals). Listed here
@@ -1085,6 +1091,23 @@ function tickVfxWeatherInputs(scene3d) {
 // === RND-20/21 — retail terrain light-tick state ===
 // `LSCAPE_LIGHT_MINIMUM` (acclient.c:40344) floors the AMBIENT level only.
 const AC_LSCAPE_LIGHT_MINIMUM = 0.2;
+
+/**
+ * Night multiplier for the retail-Gouraud terrain light, in (0, 1]. Recomputed
+ * on the 15 s retail light tick with everything else, so the terrain steps into
+ * night on the authored cadence rather than sliding per frame.
+ */
+function _nightGroundMul(state) {
+  try {
+    if (!nightRampEnabled()) return 1.0;
+    const pitch = state && Number.isFinite(state.dirPitch) ? state.dirPitch : null;
+    if (pitch == null) return 1.0;
+    const n = nightFactorFromAuthoredPitch(pitch);
+    return 1.0 + n * (nightGroundScale() - 1.0);
+  } catch (_) {
+    return 1.0;
+  }
+}
 // Dereth's Region DAT (portal 0x13000000) carries skyInfo.lightTickSize = 15.0
 // as an f64; acclient's no-region fallback is 3.0 (acclient.c:307294) and the
 // SkyDesc ctor seeds 20.0 (acclient.c:301477). 15 is what the shipped client
@@ -1129,9 +1152,20 @@ const AC_TERRAIN_LIGHT_SCALE_DEFAULT = 0.55;
 // 20:10h-03:50h block (portal 0x13000000 skyInfo.dayGroups[*].skyTime) — a
 // literal magenta. The hue is retail's, but the terrain Gouraud term is the
 // only place it lands undiluted, which is what reads as the "magenta/lavender
-// terrain at dusk". `?ambTintSat=0.6` lerps it toward its own luminance for
-// anyone who wants the AC night without the full chroma. Default 1 = faithful.
-const AC_AMB_TINT_SAT_DEFAULT = 1.0;
+// terrain at dusk". `?ambTintSat` lerps it toward its own luminance.
+//
+// DEFAULT CHANGED 1.0 -> 0.6 (2026-08-02, visual pass 2). Pass 1 shipped 1.0
+// on the "reproduce the authored bytes" principle, and that was right for a
+// client whose night was a dimly-lit late afternoon: the tint was one term
+// among many. `?nightRamp` landed in the SAME pass-2 session and made nights
+// genuinely dark, and at a real 02:00 that same chroma is now the loudest
+// colour in the frame -- 1070-measured on the Holtburg town vantage, the
+// gravel roads render lavender and the grass reads muddy olive
+// (GRID-AMB2.png, arms 1.00 / 0.75 / 0.60). At 0.6 the cold magenta-blue
+// moonlight is still plainly on the gravel and grass reads as grass:
+// measured hue 59 deg -> 78 deg, sat 0.367 -> 0.523.
+// `?ambTintSat=1` restores the byte-faithful tint exactly.
+const AC_AMB_TINT_SAT_DEFAULT = 0.6;
 function _readNumFlag(name, dflt, lo, hi) {
   try {
     if (typeof window === "undefined" || !window.location) return dflt;
@@ -1205,7 +1239,14 @@ function tickTerrainSunDir(scene3d) {
     // world-light scale (see AC_TERRAIN_LIGHT_SCALE_DEFAULT). Scaling BOTH —
     // rather than only the ambient — is what un-clamps `acC` at midday and so
     // restores the shading gradient the pre-2026-08-02 look had lost.
-    const tls = _acTerrainLight.scale;
+    // NIGHT RAMP (2026-08-02, ?nightRamp / ?nightGround). Terrain is NOT lit by
+    // three.js lights (retail SetFFLighting(0)) so the indirect night dim
+    // applied in ibl_environment.js cannot reach it — this is its counterpart
+    // on the retail-Gouraud term, and it rides the SAME night fraction so the
+    // ground and the characters standing on it darken together. Multiplier is
+    // exactly 1.0 by day and whenever the flag is off, so nothing about the
+    // daytime calibration moves.
+    const tls = _acTerrainLight.scale * _nightGroundMul(state);
     const dc = (state.dirColorArgb >>> 0);
     g.sunColor[0] = (((dc >>> 16) & 0xff) / 255) * tls;
     g.sunColor[1] = (((dc >>> 8) & 0xff) / 255) * tls;

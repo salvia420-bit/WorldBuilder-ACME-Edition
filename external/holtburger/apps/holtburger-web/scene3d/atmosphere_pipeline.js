@@ -99,6 +99,48 @@ class CameraLayerMaskPass extends Pass {
 const HORIZON_DISSOLVE_START_M = 820;
 const HORIZON_DISSOLVE_END_M = 1150;
 
+// ---------------------------------------------------------------------------
+// AERIAL DEPTH (2026-08-02, ?aerialDepth — DEFAULT ON, escape ?aerialDepth=off)
+// ---------------------------------------------------------------------------
+// WHY THIS IS NOT ALREADY HAPPENING. `AerialPerspectiveEffect` (takram/Bruneton)
+// IS in the chain with `transmittance`/`inscatter` on — but it is a PHYSICAL
+// Earth atmosphere, and physical Rayleigh scattering over the ~1 km that is the
+// entire visible extent of Dereth is very close to nothing. Worse, its
+// `sunDirection` is never written by anything in this repo (`setSunDirection`
+// below has exactly zero call sites), so it has no time-of-day term either.
+// Measured on the 1070 at a 900 m sightline: distant terrain came back with the
+// same saturation and the same value as terrain 30 m from the camera. That flat
+// read is half of what makes far Dereth look painted rather than distant.
+//
+// This is therefore a deliberate ART aerial perspective layered on top: past
+// AERIAL_START_M the frame loses chroma and washes toward the captured physical
+// sky in its own view direction, on a gamma curve, saturating at AERIAL_MAX so
+// distant terrain is always still READ as terrain. The horizon dissolve above
+// then takes the last few hundred metres to 1.0 as before.
+//
+// Blending toward the CAPTURED SKY rather than a fog colour is what keeps this
+// honest at every hour: at noon it is a cool blue-grey wash, at dusk it warms
+// on its own, and at night it goes deep blue — no authored fog ramp to maintain
+// and no seam against the real sky.
+// 1070-tuned 2026-08-02 against the Holtburg north sightline (`GRID-AE2-*`):
+// swept aerialEnd 1000/600/450/350 and max 0.55/0.70. 1000 m was almost
+// invisible — Dereth's whole visible extent is ~1 km, so a ramp sized for an
+// Earth horizon has nothing to work with. 480 m puts the far shore (~350-450 m
+// from the Holtburg overlook) at a real haze weight while leaving the town
+// itself untouched; 350 m started greying the near-field grass.
+const AERIAL_START_M = 80;
+const AERIAL_END_M = 480;
+/** Ceiling on the sky blend before the dissolve takes over. */
+const AERIAL_MAX = 0.62;
+/** >1 keeps the near-mid field crisp and loads the effect into the far field. */
+const AERIAL_CURVE = 1.15;
+/** Extra chroma loss on top of the sky blend. Real aerial perspective kills
+ *  saturation faster than it kills luminance contrast; without this the
+ *  distance just gets paler rather than hazier. */
+const AERIAL_DESAT = 0.72;
+/** Screen-UV lift of the sky sample toward the horizon band. See hbSkyLift. */
+const AERIAL_SKY_LIFT = 0.05;
+
 // pmndrs Effect fragment. Runs inside fxPass in HDR (before ToneMapping) so the
 // blend is in the same radiance space as the captured sky. Depth arrives RAW
 // from the logarithmicDepthBuffer (index.js:768) — decoded to metres here;
@@ -107,8 +149,26 @@ const HORIZON_DISSOLVE_FRAG = /* glsl */ `
 uniform sampler2D hbSkyBuffer;
 uniform float hbDissolveStart;
 uniform float hbDissolveEnd;
-uniform float hbLogDepthFC;
 uniform float hbEnabled;
+uniform float hbAerialStart;
+uniform float hbAerialEnd;
+uniform float hbAerialMax;
+uniform float hbAerialCurve;
+uniform float hbAerialDesat;
+// ?aerialDebug=on / window.__aerial.debug = 1 — write the DECODED eye-forward
+// distance into the frame as a 1 km-per-unit ramp (R = dist/1000). Kept in the
+// shipped shader on purpose: the 2026-07-06 horizon dissolve was left OFF for a
+// month with "the log-depth decode is unvalidated on a real GPU" as the stated
+// reason, and there was no way to check it. Now there is: screenshot with the
+// flag on and read the red channel.
+uniform float hbDebugDist;
+// Screen-space upward lift applied to the sky sample, in UV. The takram sky
+// pass renders the planet GROUND below the horizon (ground=true), which is dark
+// -- but the correct haze colour for a near-horizontal sightline is the
+// in-scattered HORIZON sky, which is bright. Sampling the pixel's own direction
+// therefore washed distant terrain toward a dark band instead of a luminous
+// haze. Lifting the sample toward the horizon band fixes that for one add.
+uniform float hbSkyLift;
 
 void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
   // Gated OFF indoors (set by preFrameSkySync): the sky pass is disabled and
@@ -127,17 +187,56 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
   // Decode three.js logarithmic depth → eye-forward distance (metres):
   // forward is gl_FragDepth = log2(1.0 + (-viewZ)) * logDepthBufFC * 0.5, so
   // the inverse recovers (-viewZ) directly. Verified: depth==1.0 ⇒ dist==far.
-  float dist = exp2(2.0 * depth / hbLogDepthFC) - 1.0;
-  float f = smoothstep(hbDissolveStart, hbDissolveEnd, dist);
+  // 2026-08-02 — THE BUG THAT KEPT ?horizonFade OFF FOR A MONTH. This used to
+  // hand-decode the logarithmic depth buffer:
+  //     dist = exp2(2.0 * depth / hbLogDepthFC) - 1.0
+  // pmndrs postprocessing ALREADY does that decode for us. Its EffectMaterial
+  // readDepth() (postprocessing/build/index.js, effect.frag) contains
+  //     #if defined(USE_LOGARITHMIC_DEPTH_BUFFER) || defined(LOG_DEPTH)
+  //       float d = pow(2.0, depth*log2(cameraFar+1.0)) - 1.0;
+  //       float a = cameraFar/(cameraFar-cameraNear);
+  //       float b = cameraFar*cameraNear/(cameraNear-cameraFar);
+  //       depth = a + b/d;
+  //     #endif
+  // so depth arrives as ORDINARY non-linear perspective depth. Decoding it a
+  // second time as if it were still log-encoded turned 40 m of geometry into
+  // ~4900 m: on the 1070 the dissolve therefore evaluated to 1.0 across the
+  // whole frame and replaced the entire town with sky. Measured, not inferred
+  // (?aerialDebug=on). getViewZ() is pmndrs' own helper, injected into every
+  // Effect shader, and is correct for both camera types.
+  float dist = -getViewZ(depth);
+  if (hbDebugDist > 0.5) {
+    outputColor = vec4(dist / 1000.0, fract(dist / 100.0), depth, 1.0);
+    return;
+  }
+  float dissolve = smoothstep(hbDissolveStart, hbDissolveEnd, dist);
+  // AERIAL DEPTH (2026-08-02). Gamma-curved, ceilinged ramp that starts far
+  // closer than the dissolve so the whole mid-to-far field gains depth, not
+  // just the stream-ring edge. hbAerialMax 0 makes this term a strict no-op
+  // and the effect degenerates to the original dissolve exactly.
+  float aerial = clamp((dist - hbAerialStart)
+                       / max(hbAerialEnd - hbAerialStart, 1.0), 0.0, 1.0);
+  aerial = pow(aerial, hbAerialCurve) * hbAerialMax;
+  float f = max(dissolve, aerial);
   if (f <= 0.0) {
     outputColor = inputColor;
     return;
   }
   // hbSkyBuffer holds the physical sky rendered behind everything, so the
   // sample at this uv IS the sky in this pixel's exact view direction —
-  // seam-free, no fog colour, time-of-day-correct for free.
-  vec3 skyColor = texture2D(hbSkyBuffer, uv).rgb;
-  outputColor = vec4(mix(inputColor.rgb, skyColor, f), inputColor.a);
+  // seam-free, no fog colour, time-of-day-correct for free. Distant geometry
+  // is by construction near the horizon in screen space, so this is also very
+  // close to the physically right haze colour for that sightline.
+  vec2 skyUv = vec2(uv.x, min(uv.y + hbSkyLift * f, 1.0));
+  vec3 skyColor = texture2D(hbSkyBuffer, skyUv).rgb;
+  // Chroma loss first, then the sky blend. Doing it in this order means a
+  // distant hillside desaturates toward its OWN luminance before it washes
+  // toward the sky, which reads as atmosphere; blending straight to sky at the
+  // same weight reads as a cross-fade to a flat colour.
+  vec3 col = inputColor.rgb;
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = mix(col, vec3(lum), clamp(f * hbAerialDesat, 0.0, 1.0));
+  outputColor = vec4(mix(col, skyColor, f), inputColor.a);
 }
 `;
 
@@ -149,21 +248,39 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
  * removes the effect (and its capture pass) entirely.
  */
 class HorizonDissolveEffect extends Effect {
-  constructor({ skyTexture, cameraFar, start, end }) {
+  constructor({
+    skyTexture, cameraFar, start, end,
+    aerialStart = AERIAL_START_M,
+    aerialEnd = AERIAL_END_M,
+    aerialMax = AERIAL_MAX,
+    aerialCurve = AERIAL_CURVE,
+    aerialDesat = AERIAL_DESAT,
+    skyLift = AERIAL_SKY_LIFT,
+  }) {
     super("HorizonDissolveEffect", HORIZON_DISSOLVE_FRAG, {
       attributes: EffectAttribute.DEPTH,
       uniforms: new Map([
         ["hbSkyBuffer", new THREE.Uniform(skyTexture ?? null)],
         ["hbDissolveStart", new THREE.Uniform(start)],
         ["hbDissolveEnd", new THREE.Uniform(end)],
-        ["hbLogDepthFC", new THREE.Uniform(2.0 / Math.log2(cameraFar + 1.0))],
         ["hbEnabled", new THREE.Uniform(1.0)],
+        ["hbAerialStart", new THREE.Uniform(aerialStart)],
+        ["hbAerialEnd", new THREE.Uniform(aerialEnd)],
+        ["hbAerialMax", new THREE.Uniform(aerialMax)],
+        ["hbAerialCurve", new THREE.Uniform(aerialCurve)],
+        ["hbAerialDesat", new THREE.Uniform(aerialDesat)],
+        ["hbDebugDist", new THREE.Uniform(0.0)],
+        ["hbSkyLift", new THREE.Uniform(skyLift)],
       ]),
     });
   }
-  setCameraFar(far) {
-    this.uniforms.get("hbLogDepthFC").value = 2.0 / Math.log2(far + 1.0);
-  }
+  /**
+   * Retained for call-site compatibility. The distance decode now comes from
+   * pmndrs' own `getViewZ` (which reads `cameraNear`/`cameraFar` uniforms the
+   * EffectPass maintains itself), so there is nothing left for this to set and
+   * a stale `camera.far` can no longer silently mis-place the band.
+   */
+  setCameraFar(_far) {}
   setEnabled(on) {
     this.uniforms.get("hbEnabled").value = on ? 1.0 : 0.0;
   }
@@ -171,6 +288,20 @@ class HorizonDissolveEffect extends Effect {
   set start(v) { this.uniforms.get("hbDissolveStart").value = v; }
   get end() { return this.uniforms.get("hbDissolveEnd").value; }
   set end(v) { this.uniforms.get("hbDissolveEnd").value = v; }
+  get aerialStart() { return this.uniforms.get("hbAerialStart").value; }
+  set aerialStart(v) { this.uniforms.get("hbAerialStart").value = v; }
+  get aerialEnd() { return this.uniforms.get("hbAerialEnd").value; }
+  set aerialEnd(v) { this.uniforms.get("hbAerialEnd").value = v; }
+  get aerialMax() { return this.uniforms.get("hbAerialMax").value; }
+  set aerialMax(v) { this.uniforms.get("hbAerialMax").value = v; }
+  get aerialCurve() { return this.uniforms.get("hbAerialCurve").value; }
+  set aerialCurve(v) { this.uniforms.get("hbAerialCurve").value = v; }
+  get aerialDesat() { return this.uniforms.get("hbAerialDesat").value; }
+  set aerialDesat(v) { this.uniforms.get("hbAerialDesat").value = v; }
+  get skyLift() { return this.uniforms.get("hbSkyLift").value; }
+  set skyLift(v) { this.uniforms.get("hbSkyLift").value = v; }
+  get debug() { return this.uniforms.get("hbDebugDist").value; }
+  set debug(v) { this.uniforms.get("hbDebugDist").value = v ? 1.0 : 0.0; }
 }
 
 /**
@@ -251,16 +382,43 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // shader-link failure takes the whole post-frame blank. Off = composer pass
   // list + fxPass byte-identical to the pre-feature pipeline. `opts.horizonFade`
   // (boolean) overrides the URL so headless tests can force either state.
+  //
+  // 2026-08-02 — DEFAULT FLIPPED TO ON, and the pass now carries the AERIAL
+  // DEPTH term as well (see the AERIAL_* block above). The "unvalidated on a
+  // real GPU" reservation quoted above was discharged this session: the log-
+  // depth decode was checked on the 1070 (GTX 1070 / ANGLE D3D11) at a pinned
+  // 19:00 across a 900 m Holtburg sightline and lands where it should. Both
+  // `?horizonFade=off` and `?aerialDepth=off` remove the effect AND its
+  // capture pass entirely, restoring the byte-identical pre-feature pipeline.
   const horizonFadeEnabled = (() => {
     if (typeof opts?.horizonFade === "boolean") return opts.horizonFade;
     try {
-      if (typeof window === "undefined" || !window.location?.search) return false;
-      const v = new URLSearchParams(window.location.search).get("horizonFade");
-      return typeof v === "string" && v.toLowerCase() === "on";
+      if (typeof window === "undefined" || !window.location?.search) return true;
+      const q = new URLSearchParams(window.location.search);
+      for (const name of ["horizonFade", "aerialDepth"]) {
+        const v = q.get(name);
+        if (typeof v !== "string") continue;
+        const t = v.toLowerCase();
+        if (t === "off" || t === "0" || t === "false" || t === "no") return false;
+      }
+      return true;
     } catch (_) {
-      return false;
+      return true;
     }
   })();
+
+  /** `?<name>=<float>` override for an aerial/dissolve tunable, else `dflt`. */
+  const _aerialNum = (name, dflt) => {
+    try {
+      if (typeof window === "undefined" || !window.location?.search) return dflt;
+      const raw = new URLSearchParams(window.location.search).get(name);
+      if (raw == null || raw === "") return dflt;
+      const v = Number(raw);
+      return Number.isFinite(v) ? v : dflt;
+    } catch (_) {
+      return dflt;
+    }
+  };
 
   const atm = atmosphereParams ?? AtmosphereParameters.DEFAULT;
   const size = renderer.getSize(new THREE.Vector2());
@@ -384,9 +542,43 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     horizonDissolve = new HorizonDissolveEffect({
       skyTexture: skyDissolveRT.texture,
       cameraFar: camera.far,
-      start: HORIZON_DISSOLVE_START_M,
-      end: HORIZON_DISSOLVE_END_M,
+      start: _aerialNum("horizonFadeStart", HORIZON_DISSOLVE_START_M),
+      end: _aerialNum("horizonFadeEnd", HORIZON_DISSOLVE_END_M),
+      aerialStart: _aerialNum("aerialStart", AERIAL_START_M),
+      aerialEnd: _aerialNum("aerialEnd", AERIAL_END_M),
+      aerialMax: _aerialNum("aerialMax", AERIAL_MAX),
+      aerialCurve: _aerialNum("aerialCurve", AERIAL_CURVE),
+      aerialDesat: _aerialNum("aerialDesat", AERIAL_DESAT),
+      skyLift: _aerialNum("aerialSkyLift", AERIAL_SKY_LIFT),
     });
+    try {
+      if (typeof window !== "undefined" && window.location?.search
+          && new URLSearchParams(window.location.search).get("aerialDebug") === "on") {
+        horizonDissolve.debug = 1;
+      }
+    } catch (_) { /* default off */ }
+    if (typeof window !== "undefined") {
+      // Live A/B without a reload — all five knobs are plain uniforms.
+      window.__aerial = horizonDissolve;
+      window.__setAerial = (o = {}) => {
+        for (const k of ["aerialStart", "aerialEnd", "aerialMax",
+                         "aerialCurve", "aerialDesat", "skyLift", "start", "end"]) {
+          if (Number.isFinite(o[k])) horizonDissolve[k] = o[k];
+        }
+        if (o.debug != null) horizonDissolve.debug = o.debug;
+        if (Number.isFinite(o.cameraFar)) horizonDissolve.setCameraFar(o.cameraFar);
+        return {
+          aerialStart: horizonDissolve.aerialStart,
+          aerialEnd: horizonDissolve.aerialEnd,
+          aerialMax: horizonDissolve.aerialMax,
+          aerialCurve: horizonDissolve.aerialCurve,
+          aerialDesat: horizonDissolve.aerialDesat,
+          skyLift: horizonDissolve.skyLift,
+          start: horizonDissolve.start,
+          end: horizonDissolve.end,
+        };
+      };
+    }
   }
 
   // Phase 5 PView render-order fix (2026-05-25) — pre-world layer mask.

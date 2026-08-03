@@ -35,6 +35,12 @@
 // minute or two.
 
 import * as THREE from 'three';
+// NIGHT RAMP (2026-08-02, ?nightRamp — DEFAULT ON). With retail's 0.9 deg
+// dirPitch floor this fade could only ever reach nightFrac ~0.42, capping the
+// moons at ~0.62 brightness at the darkest hour of the AC day. Routing the
+// authored pitch through the same art remap the sky uses lets them reach 1.0.
+// Identity when the flag is off. See night_ramp.js.
+import { artSunPitchDeg } from "./night_ramp.js";
 
 // Sky-sphere radius the existing parametric moon sits at
 // (skyDome.js:556 references it as "anchor 0x2000714 → paired body
@@ -360,8 +366,9 @@ export class ACMoons {
    */
   static moonBrightnessFactorFromSunAltitude(state) {
     const MOON_DAY_FLOOR = 0.35;
-    const pitchDeg = +(state && state.dirPitch);
-    if (!Number.isFinite(pitchDeg)) return 1.0;
+    const authored = +(state && state.dirPitch);
+    if (!Number.isFinite(authored)) return 1.0;
+    const pitchDeg = artSunPitchDeg(authored);
     const sunAlt = Math.sin(pitchDeg * Math.PI / 180);
     // Same dawn/dusk band as the star fade: +0.10 (full day) .. -0.10
     // (full night). nightFrac=1 at night, 0 by day.

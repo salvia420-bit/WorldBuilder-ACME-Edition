@@ -47,6 +47,21 @@ import {
   buildTerrainBc7Atlas,
   terrainBc7Stats,
 } from "./terrain_bc7.js";
+// 2026-08-02 — FAR MACRO ("mspaint" fix). Default ON; `?terrainMacro=off`
+// makes every export below inert (loader returns null → uMacroEnabled 0 →
+// the fragment branch is skipped → render byte-identical to before).
+import {
+  terrainMacroEnabled,
+  loadTerrainMacroArray,
+  macroNumFlag,
+  MACRO_SLICE_NONE,
+  MACRO_STRENGTH_DEFAULT,
+  MACRO_FADE_START_DEFAULT,
+  MACRO_FADE_END_DEFAULT,
+  MACRO_SCALE_A_DEFAULT,
+  MACRO_SCALE_B_DEFAULT,
+  MACRO_NOISE_AMP_DEFAULT,
+} from "./terrain_macro.js";
 import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
 // streamFix urgent lane (2026-07-02) — near-player bake detection.
 import { isNearPlayerLb } from "./landblock_lru.js";
@@ -1464,6 +1479,32 @@ uniform float uDetailTexEnabled;          // 0.0 OFF / 1.0 ON (URL flag gate)
 // acclient.c:459046/454415/719936). 0.0 = the legacy per-code MODULATE2X
 // grain (?terrainDetailTex=percode A/B mode).
 uniform float uDetailTexCrossfade;
+// ---------------------------------------------------------------------------
+// FAR MACRO (2026-08-02, ?terrainMacro — DEFAULT ON, escape ?terrainMacro=off)
+// ---------------------------------------------------------------------------
+// The "mspaint" fix. uTerrainDetailTex above is a NEAR-camera layer by
+// design (uDetailTexFadeEnd = 50 m), and past it the atlas mip chain has
+// averaged each 24 m cell into one flat colour — so distant Dereth is N flat
+// colour fields separated by the TexMerge masks' hand-drawn cell-grid edges.
+//
+// uMacroTex is a 7-slice array of 1024² TILEABLE MODULATION maps, one per
+// terrain FAMILY (grass/sand/rock/snowice/swamp/volcano/dirt — see
+// terrain_macro.js + assets/terrain_macro/generate.py), baked offline from the
+// same ground textures the atlas renders with. MODULATE2X encoded with every
+// channel's mean pinned to 0.5, so multiplying by it PRESERVES the authored
+// average colour of a distant field exactly and changes only its structure.
+// The DAT still decides what is where; this only changes how it is shaded far
+// away. Two taps at different world scales (one rotated) kill the tile repeat.
+uniform sampler2DArray uMacroTex;
+uniform int uMacroSliceForCode[33];   // terrain code -> family slice (255 = none, e.g. water/road)
+uniform int uMacroSliceCount;         // slices actually loaded; slice >= count means skip
+uniform float uMacroEnabled;          // 0.0 OFF / 1.0 ON
+uniform float uMacroStrength;         // peak blend weight of the modulation
+uniform float uMacroFadeStart;        // metres — untouched nearer than this
+uniform float uMacroFadeEnd;          // metres — full strength beyond this
+uniform float uMacroScaleA;           // world metres per macro tile, tap A
+uniform float uMacroScaleB;           // world metres per macro tile, tap B (rotated)
+uniform float uMacroNoiseAmp;         // extra procedural world-space octaves
 // T1 (2026-05-28) — retail TexMerge composite. AC's landscape does NOT
 // bilinear-blend between cells: each 24 m cell picks a base terrain texture
 // plus up to 3 alpha-masked overlays (one per differing corner) + up to 2
@@ -1484,6 +1525,15 @@ uniform float uTexMergeEnabled;           // 0.0 OFF / 1.0 ON
 // follow the 24 m cell grid / fixed retail masks" read.
 uniform float uSplatNoiseAmp;             // 0 = off; ~0.6 default via flag
 uniform float uSplatNoiseFreq;            // world-space 1/m; ~0.35 default
+// 2026-08-02 (?splatMacro, DEFAULT ON) — SECOND, MUCH LOWER-FREQUENCY splat
+// octave. uSplatNoiseFreq 0.35 /m is a ~3 m wavelength: it is sub-pixel past
+// roughly 150 m, averages to nothing under the mip/aniso filter, and the hard
+// 24 m cell-grid border comes straight back at exactly the distances the user
+// called "mspaint". This octave wanders at 30-60 m and survives to the horizon.
+// The same flag also restores the historical (biased) splatN expression when
+// set to off -- see the splatN block in main() for that bug's description.
+uniform float uSplatMacroAmp;             // 0 = legacy path; ~0.9 default
+uniform float uSplatMacroFreq;            // world-space 1/m; ~0.022 default (~45 m)
 // T4 (terrainplan, 2026-07-28) -- parallax occlusion mapping. Material
 // height lives in uAtlas ALPHA (v3 bake; sRGB decode never touches A;
 // retail layers hold A=255 = flat = zero offset by construction). Steep-
@@ -2526,9 +2576,26 @@ void main() {
     // T1 splat-noise: one world-space noise sample shared by every slot
     // this fragment composites (per-slot noise would decorrelate the same
     // border across slots and shimmer).
-    float splatN = (uSplatNoiseAmp > 0.0)
-      ? (fragValueNoise2D(vWorldPos.xy * uSplatNoiseFreq) - 0.5)
-      : 0.0;
+    float splatN = 0.0;
+    if (uSplatNoiseAmp > 0.0) {
+      if (uSplatMacroAmp > 0.0) {
+        // 2026-08-02 — TWO fixes, both under ?splatMacro (default on; "off"
+        // restores the byte-exact legacy line below).
+        //
+        // (1) SIGN BIAS. fragValueNoise2D ALREADY returns mean-zero
+        //     [-0.5, +0.5] (see its declaration ~line 1544 — it subtracts 0.5
+        //     internally). The legacy expression subtracted 0.5 a SECOND time,
+        //     making splatN one-sided [-1, 0]: every masked border was pushed
+        //     toward the OVERLAY and never toward the base. Half the intended
+        //     perturbation, applied asymmetrically, which is why the borders
+        //     still read as authored edges rather than as organic transitions.
+        // (2) MACRO OCTAVE. See the uSplatMacroAmp/Freq declarations.
+        splatN = fragValueNoise2D(vWorldPos.xy * uSplatNoiseFreq)
+               + uSplatMacroAmp * fragValueNoise2D(vWorldPos.xy * uSplatMacroFreq);
+      } else {
+        splatN = fragValueNoise2D(vWorldPos.xy * uSplatNoiseFreq) - 0.5;
+      }
+    }
     if (baseLayer != 32) {
       // Slots 1..3 = terrain overlays; slots 4..5 = road overlays. The road
       // slots were abandoned on 2026-06-21 because the masks "decoded to
@@ -2775,6 +2842,60 @@ void main() {
     if (roadWeight > 0.0) {
       vec3 roadColor = texture(uRoadTexture, vGridUv * uRoadTileScale).rgb;
       result = mix(result, roadColor, roadWeight);
+    }
+  }
+
+  // =====================================================================
+  // FAR MACRO — the "mspaint" fix (2026-08-02, ?terrainMacro, DEFAULT ON)
+  // =====================================================================
+  // Sited HERE, at the very end of the albedo chain and before ANY lighting,
+  // deliberately: everything above (TexMerge composite, palette tint, water
+  // tint, detail crossfade, road paint) is retail-derived placement/colour,
+  // and this layer must modulate the finished authored albedo rather than
+  // participate in deciding it. result is linear here (the atlas is sRGB and
+  // the sampler has already decoded it), which is the space the MODULATE2X
+  // encode assumes.
+  //
+  // Strictly a far-field layer: mFade is 0 nearer than uMacroFadeStart
+  // (55 m, just past where the near detail layer hands off at 50 m), so the
+  // ground the player is standing on is byte-identical to before.
+  if (uMacroEnabled > 0.5 && uMacroStrength > 0.0) {
+    int mSlice = uMacroSliceForCode[clamp(nearCode, 0, 32)];
+    // Water and road resolve to 255 -> no macro. Water is the water agent's
+    // surface (it has its own scroll/tint/sheen treatment and a macro
+    // modulation would fight the swell), and a road is a 5 m lane, not a field.
+    if (mSlice < uMacroSliceCount) {
+      float mFade = smoothstep(uMacroFadeStart, uMacroFadeEnd, vViewDepth);
+      if (mFade > 0.0) {
+        vec2 wp = vWorldPos.xy;
+        // Tap B is rotated ~37 deg (an angle with no small rational relation
+        // to the axis-aligned tap A) and uses a scale that is NOT a harmonic
+        // of A, so the two lattices' repeats never coincide: the visible
+        // period of the sum is far longer than either tile.
+        const float MACRO_ROT_C = 0.79863551;   // cos(37 deg)
+        const float MACRO_ROT_S = 0.60181502;   // sin(37 deg)
+        vec2 wr = vec2(wp.x * MACRO_ROT_C - wp.y * MACRO_ROT_S,
+                       wp.x * MACRO_ROT_S + wp.y * MACRO_ROT_C);
+        vec3 mA = texture(uMacroTex,
+          vec3(wp / max(uMacroScaleA, 1.0), float(mSlice))).rgb;
+        vec3 mB = texture(uMacroTex,
+          vec3(wr / max(uMacroScaleB, 1.0), float(mSlice))).rgb;
+        // MODULATE2X, averaged in MULTIPLIER space: (mA*2 + mB*2) * 0.5.
+        // Both maps are baked mean-0.5, so this is exactly mean-1.0 — the
+        // average colour of a distant field is preserved to the byte and only
+        // its structure changes. That is what keeps WorldBuilder the source of
+        // truth: this cannot shift a terrain type's authored colour.
+        vec3 macroMod = mA + mB;
+        // Direction 1 — procedural octaves on top, sampled in WORLD space so
+        // the field is continuous across the whole landscape. (vGridUv would
+        // reset every 192 m and stamp the landblock stream grid — the same
+        // trap documented on the paintMode noise above.)
+        float pn = fragValueNoise2D(wp * 0.014084)             // ~71 m
+                 + 0.55 * fragValueNoise2D(wp * 0.038462)      // ~26 m
+                 + 0.30 * fragValueNoise2D(wp * 0.111111);     // ~9 m
+        macroMod *= (1.0 + pn * uMacroNoiseAmp);
+        result *= mix(vec3(1.0), macroMod, mFade * uMacroStrength);
+      }
     }
   }
 
@@ -3669,7 +3790,14 @@ export async function resolveTerrainRingOpts(
       waterEnvEnabled: false,
       splatNoiseAmp: 0,
       splatNoiseFreq: 0.35,
+      splatMacroAmp: 0,
+      splatMacroFreq: SPLAT_MACRO_FREQ_DEFAULT,
       pomEnabled: false,
+      // FAR MACRO — wire mode never builds the terrain ShaderMaterial.
+      macroTex: null,
+      macroSliceLut: null,
+      macroSliceCount: 0,
+      macroEnabled: false,
     };
   }
 
@@ -4096,8 +4224,24 @@ export async function resolveTerrainRingOpts(
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
       tex.magFilter = THREE.LinearFilter;
-      tex.minFilter = THREE.LinearFilter; // no mips: a mask is sampled 1:1 per cell
-      tex.generateMipmaps = false;
+      // 2026-08-02 (?maskMips, DEFAULT ON) — the masks USED to ship with
+      // `minFilter = LinearFilter; generateMipmaps = false` on the reasoning
+      // "a mask is sampled 1:1 per cell". That holds under the camera and is
+      // false everywhere else: a 24 m cell covers a handful of pixels past
+      // ~200 m, so a 256² mask was being point-ish sampled far below its
+      // Nyquist rate. The result is exactly the artefact the user reported —
+      // distant terrain-type borders snapping to hard, hand-drawn-looking
+      // lines that crawl as the camera moves. Mips + anisotropy make the
+      // border resolve to its true area coverage at distance while leaving
+      // mip 0 (i.e. everything near the camera) bit-identical.
+      if (readMaskMipsFlag()) {
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.generateMipmaps = true;
+        tex.anisotropy = getAdapterMaxAnisotropy();
+      } else {
+        tex.minFilter = THREE.LinearFilter;
+        tex.generateMipmaps = false;
+      }
       tex.needsUpdate = true;
       texMergeState = { alphaArray: tex, count: built.depth };
       scene3d.texMergeAlphaState = texMergeState;
@@ -4106,6 +4250,80 @@ export async function resolveTerrainRingOpts(
       console.warn("[terrain] fetch_terrain_alpha_masks failed:", e);
       texMergeState = null;
     }
+  }
+
+  // 2026-08-02 — FAR MACRO array (?terrainMacro, DEFAULT ON). One session-wide
+  // load, cached on scene3d like every other ring texture. `undefined` means
+  // NOT YET ATTEMPTED and `null` means ATTEMPTED AND FAILED, so a failure is
+  // remembered instead of re-hammering the fetch on every ring rebuild (the
+  // same negative-caching contract terrainBc7State uses).
+  let macroState = scene3d.terrainMacroState;
+  if (terrainMacroEnabled() && macroState === undefined) {
+    try {
+      macroState = await loadTerrainMacroArray();
+      if (macroState) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[terrain-macro] ${macroState.sliceCount} family macro maps loaded ` +
+            `(fade ${readMacroFadeStart()}-${readMacroFadeEnd()} m, ` +
+            `strength ${readMacroStrength()})`
+        );
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[terrain-macro] load failed (far terrain unchanged):", e);
+      macroState = null;
+    }
+    scene3d.terrainMacroState = macroState ?? null;
+  }
+  if (!terrainMacroEnabled()) macroState = null;
+
+  // Live tuning without a reload — every macro/splat knob is a plain uniform,
+  // so an A/B sweep can run in ONE page load (which is what makes the arms
+  // comparable: same streamed ring, same shader cache, same sky tick).
+  //   window.__setTerrainMacro({ strength, start, end, scaleA, scaleB, noise,
+  //                              enabled, splatMacroAmp, splatMacroFreq })
+  //   window.__terrainMacroState()
+  if (typeof window !== "undefined") {
+    window.__setTerrainMacro = (o = {}) => {
+      const mats = scene3d.terrainMaterials ?? [];
+      for (const m of mats) {
+        const u = m?.uniforms;
+        if (!u) continue;
+        if (Number.isFinite(o.strength) && u.uMacroStrength) u.uMacroStrength.value = o.strength;
+        if (Number.isFinite(o.start) && u.uMacroFadeStart) u.uMacroFadeStart.value = o.start;
+        if (Number.isFinite(o.end) && u.uMacroFadeEnd) u.uMacroFadeEnd.value = o.end;
+        if (Number.isFinite(o.scaleA) && u.uMacroScaleA) u.uMacroScaleA.value = o.scaleA;
+        if (Number.isFinite(o.scaleB) && u.uMacroScaleB) u.uMacroScaleB.value = o.scaleB;
+        if (Number.isFinite(o.noise) && u.uMacroNoiseAmp) u.uMacroNoiseAmp.value = o.noise;
+        if (o.enabled != null && u.uMacroEnabled) u.uMacroEnabled.value = o.enabled ? 1.0 : 0.0;
+        if (Number.isFinite(o.splatMacroAmp) && u.uSplatMacroAmp) {
+          u.uSplatMacroAmp.value = o.splatMacroAmp;
+        }
+        if (Number.isFinite(o.splatMacroFreq) && u.uSplatMacroFreq) {
+          u.uSplatMacroFreq.value = o.splatMacroFreq;
+        }
+      }
+      return mats.length;
+    };
+    window.__terrainMacroState = () => {
+      const u = (scene3d.terrainMaterials ?? [])[0]?.uniforms;
+      if (!u) return null;
+      return {
+        enabled: u.uMacroEnabled?.value,
+        strength: u.uMacroStrength?.value,
+        start: u.uMacroFadeStart?.value,
+        end: u.uMacroFadeEnd?.value,
+        scaleA: u.uMacroScaleA?.value,
+        scaleB: u.uMacroScaleB?.value,
+        noise: u.uMacroNoiseAmp?.value,
+        sliceCount: u.uMacroSliceCount?.value,
+        splatNoiseAmp: u.uSplatNoiseAmp?.value,
+        splatMacroAmp: u.uSplatMacroAmp?.value,
+        splatMacroFreq: u.uSplatMacroFreq?.value,
+        materials: (scene3d.terrainMaterials ?? []).length,
+      };
+    };
   }
 
   return {
@@ -4252,6 +4470,16 @@ export async function resolveTerrainRingOpts(
     // ?splatNoiseFreq=).
     splatNoiseAmp: readSplatNoiseAmp(),
     splatNoiseFreq: readSplatNoiseFreq(),
+    // 2026-08-02 — macro splat octave + the splatN sign-bias fix
+    // (?splatMacro=off restores the byte-exact legacy expression).
+    splatMacroAmp: readSplatMacroAmp(),
+    splatMacroFreq: readSplatMacroFreq(),
+    // 2026-08-02 — FAR MACRO array (?terrainMacro=off escape). Loaded once
+    // per session and cached on scene3d alongside the other ring textures.
+    macroTex: macroState?.texture ?? null,
+    macroSliceLut: macroState?.sliceLut ?? null,
+    macroSliceCount: macroState?.sliceCount ?? 0,
+    macroEnabled: !!macroState?.texture,
     // T4 — POM: high/ultra only (8 dependent atlas taps/fragment near
     // camera; SwiftShader-hostile), needs the pbr height bake in uAtlas.A.
     pomEnabled:
@@ -4644,6 +4872,73 @@ function readSplatNoiseFreq() {
   } catch (_) {
     return 0.35;
   }
+}
+
+// 2026-08-02 — macro splat octave. DEFAULT ON (?splatMacro=off → amp 0, which
+// ALSO restores the byte-exact legacy splatN expression including its sign
+// bias; see the splatN block in main()). ?splatMacroAmp / ?splatMacroFreq tune.
+export const SPLAT_MACRO_AMP_DEFAULT = 0.9;
+export const SPLAT_MACRO_FREQ_DEFAULT = 0.022; // ~45 m wavelength
+
+function readSplatMacroAmp() {
+  try {
+    if (typeof window === "undefined" || !window.location) {
+      return SPLAT_MACRO_AMP_DEFAULT;
+    }
+    const q = new URLSearchParams(window.location.search);
+    const raw = (q.get("splatMacro") ?? "").toLowerCase();
+    if (raw === "off" || raw === "0" || raw === "false" || raw === "no") return 0;
+    const v = Number.parseFloat(q.get("splatMacroAmp"));
+    return Number.isFinite(v) && v >= 0 ? v : SPLAT_MACRO_AMP_DEFAULT;
+  } catch (_) {
+    return SPLAT_MACRO_AMP_DEFAULT;
+  }
+}
+
+function readSplatMacroFreq() {
+  try {
+    const v = Number.parseFloat(
+      new URLSearchParams(window.location.search).get("splatMacroFreq"));
+    return Number.isFinite(v) && v > 0 ? v : SPLAT_MACRO_FREQ_DEFAULT;
+  } catch (_) {
+    return SPLAT_MACRO_FREQ_DEFAULT;
+  }
+}
+
+// 2026-08-02 — TexMerge alpha-mask mipmaps + anisotropy. DEFAULT ON
+// (?maskMips=off restores the un-mipped legacy sampler). Rationale at the
+// construction site.
+function readMaskMipsFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("maskMips");
+    if (v == null) return true;
+    const t = String(v).toLowerCase();
+    return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+// 2026-08-02 — FAR MACRO tunables. Defaults live in terrain_macro.js next to
+// the bake that produced the maps.
+function readMacroStrength() {
+  return macroNumFlag("terrainMacroStrength", MACRO_STRENGTH_DEFAULT, 0, 2);
+}
+function readMacroFadeStart() {
+  return macroNumFlag("terrainMacroStart", MACRO_FADE_START_DEFAULT, 0, 4000);
+}
+function readMacroFadeEnd() {
+  return macroNumFlag("terrainMacroEnd", MACRO_FADE_END_DEFAULT, 1, 8000);
+}
+function readMacroScaleA() {
+  return macroNumFlag("terrainMacroScaleA", MACRO_SCALE_A_DEFAULT, 4, 4000);
+}
+function readMacroScaleB() {
+  return macroNumFlag("terrainMacroScaleB", MACRO_SCALE_B_DEFAULT, 4, 4000);
+}
+function readMacroNoiseAmp() {
+  return macroNumFlag("terrainMacroNoise", MACRO_NOISE_AMP_DEFAULT, 0, 1);
 }
 
 function readPomFlag() {
@@ -5159,6 +5454,32 @@ export async function bakeTerrainForLandblock(
       // T1 splat-noise borders (default on; ?splatNoise=off → amp 0 no-op).
       uSplatNoiseAmp: { value: Number.isFinite(opts.splatNoiseAmp) ? opts.splatNoiseAmp : 0.0 },
       uSplatNoiseFreq: { value: Number.isFinite(opts.splatNoiseFreq) ? opts.splatNoiseFreq : 0.35 },
+      // 2026-08-02 — macro splat octave (?splatMacro=off → 0 → legacy expr).
+      uSplatMacroAmp: {
+        value: Number.isFinite(opts.splatMacroAmp) ? opts.splatMacroAmp : 0.0,
+      },
+      uSplatMacroFreq: {
+        value: Number.isFinite(opts.splatMacroFreq)
+          ? opts.splatMacroFreq
+          : SPLAT_MACRO_FREQ_DEFAULT,
+      },
+      // 2026-08-02 — FAR MACRO ("mspaint" fix). Null texture + gate 0 when the
+      // flag is off or the asset load failed → three skips the bind and the
+      // fragment branches around every sample. The int[33] LUT must ALWAYS be
+      // length 33 or three warns on the bind, so it falls back to all-255
+      // ("no family macro for any code"), which is itself a full no-op.
+      uMacroTex: { value: opts.macroTex ?? null },
+      uMacroSliceForCode: {
+        value: opts.macroSliceLut ?? new Array(33).fill(MACRO_SLICE_NONE),
+      },
+      uMacroSliceCount: { value: opts.macroSliceCount ?? 0 },
+      uMacroEnabled: { value: opts.macroEnabled ? 1.0 : 0.0 },
+      uMacroStrength: { value: readMacroStrength() },
+      uMacroFadeStart: { value: readMacroFadeStart() },
+      uMacroFadeEnd: { value: readMacroFadeEnd() },
+      uMacroScaleA: { value: readMacroScaleA() },
+      uMacroScaleB: { value: readMacroScaleB() },
+      uMacroNoiseAmp: { value: readMacroNoiseAmp() },
       // T4 POM (quality high/ultra + pbr assets; ?pom=off escape).
       uPomEnabled: { value: opts.pomEnabled ? 1.0 : 0.0 },
       uPomScale: { value: 0.012 },

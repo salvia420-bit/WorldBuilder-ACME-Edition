@@ -77,12 +77,75 @@ export function computeInitialRenderScale({
   // ~2.6 Mpx ≈ 1080p with a little headroom (1920×1080 = 2.07 Mpx).
   pixelBudget = 2_600_000,
 }) {
+  // __diag is built during init3D, i.e. after this module loaded — re-stamp so
+  // `__diag.renderScale` exists regardless of module/init ordering.
+  installRenderScaleDiag();
   const fullPixels = cssW * basePixelRatio * (cssH * basePixelRatio);
   if (!(fullPixels > 0) || !(basePixelRatio > 0)) return maxScale;
   if (fullPixels <= pixelBudget) return maxScale;
   const s = Math.sqrt(pixelBudget / fullPixels);
   return Math.max(minScale, Math.min(maxScale, s));
 }
+
+
+// ---------------------------------------------------------------------------
+// RENDER-SCALE VISIBILITY (2026-08-02)
+// ---------------------------------------------------------------------------
+// Pass-1 finding: off-screen on the 1070 the adaptive controller silently
+// dropped renderScale to 0.52 within seconds and everything upscaled from
+// there — so "the client looks blurry" was, in that session, a MEASUREMENT of
+// a half-resolution frame, and nothing in the client said so. There was no way
+// to see the live value short of reading `renderer.getPixelRatio()` by hand.
+//
+// `window.__renderScaleState()` is now always available (no flag), reports the
+// live number next to the device's own ratio, and names WHY it is what it is.
+// Also mirrored onto `window.__diag.renderScale` when __diag exists.
+
+/** Live render-scale readback. Never throws; returns `{error}` on any failure. */
+export function renderScaleState() {
+  try {
+    const s = typeof window !== "undefined" ? window.liveScene3d : null;
+    const r = s?.renderer ?? null;
+    const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
+    const live = r && typeof r.getPixelRatio === "function" ? r.getPixelRatio() : null;
+    // getDrawingBufferSize writes into a THREE.Vector2 (it calls target.set),
+    // so a plain {x,y} literal throws. Read the canvas instead — same numbers,
+    // no THREE import needed in this module.
+    const canvas = r ? r.domElement : null;
+    const size = canvas ? { x: canvas.width, y: canvas.height } : null;
+    let urlPin = null;
+    try {
+      const v = new URLSearchParams(window.location.search).get("renderScale");
+      if (v != null && v !== "" && Number.isFinite(+v)) urlPin = +v;
+    } catch (_) { /* no window */ }
+    return {
+      // The number that actually decides how many pixels get rendered.
+      renderScale: live,
+      devicePixelRatio: dpr,
+      // live/dpr < 1 means the frame is being UPSCALED to the canvas — the
+      // single most common cause of "it looks soft" that is not a shader.
+      upscalingFrom: live != null && dpr > 0 ? +(live / dpr).toFixed(3) : null,
+      drawingBuffer: size ? [size.x, size.y] : null,
+      adaptiveEnabled: adaptiveResEnabled(),
+      settleEnabled: adaptiveResSettleEnabled(),
+      urlPin,
+      source: urlPin != null ? "url" : (adaptiveResEnabled() ? "adaptive" : "initial"),
+    };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+/** Install the readback on `window` (+ `__diag` when it already exists). */
+export function installRenderScaleDiag() {
+  if (typeof window === "undefined") return;
+  window.__renderScaleState = renderScaleState;
+  try {
+    if (window.__diag) window.__diag.renderScale = renderScaleState;
+  } catch (_) { /* diagnostics never block boot */ }
+}
+
+if (typeof window !== "undefined") installRenderScaleDiag();
 
 function percentile(arr, p) {
   if (!arr.length) return 0;

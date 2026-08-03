@@ -28,6 +28,16 @@
 // only — no recompiles.
 
 import * as THREE from "three";
+// NIGHT RAMP (2026-08-02, ?nightRamp / ?nightEnv). `lastProbeIntensity` is
+// arithmetically PINNED at exactly 0.2 for the whole AC day — it is
+// max(0.2, max(0.2, ambBright) * worldLightScale) and Dereth's ambBright never
+// exceeds 0.5, so the 0.4 world-light scale pushes the signal below the 0.2
+// floor it is then re-clamped to. Characters, statics and the terrain env term
+// therefore get IDENTICAL indirect fill at noon and at midnight. This applies
+// the missing diurnal term as a multiplier on the indirect path ONLY: placed
+// lights and emissive surfaces are absolute and stay exactly as authored, so
+// hearths and lit windows gain contrast instead of being crushed with the rest.
+import { nightFactorFromAuthoredPitch, nightEnvScale, nightRampEnabled } from "./night_ramp.js";
 
 export function readIblFlag() {
   // DEFAULT ON as of 2026-07-28 (escape `?ibl=off`) after the off-screen
@@ -123,12 +133,34 @@ export class IblEnvironment {
    * live per-LB ShaderMaterial registry (scene3d.terrainMaterials) — walked
    * every frame like tickTerrainSunDir so bake/ibl init order never matters.
    */
+  /**
+   * Night multiplier for the indirect term, in (0, 1]. 1.0 by day and whenever
+   * `?nightRamp=off`, so the legacy behaviour is exactly preserved.
+   */
+  _nightEnvMul() {
+    try {
+      if (!nightRampEnabled()) return 1.0;
+      // AtmosphereLights.tick stashes the SkyState snapshot it was handed
+      // (atmosphere_lights.js `this._lastState = state`), which is the same
+      // object skyLightingController produced — so this needs no new plumbing
+      // and cannot go stale relative to the lights it is modulating.
+      const st = this.atmosphereLights?._lastState ?? null;
+      const pitch = st && Number.isFinite(st.dirPitch) ? st.dirPitch : null;
+      if (pitch == null) return 1.0;
+      const n = nightFactorFromAuthoredPitch(pitch);
+      return 1.0 + n * (nightEnvScale() - 1.0);
+    } catch (_) {
+      return 1.0;
+    }
+  }
+
   tick(nowMs, terrainMaterials) {
     if (nowMs - this._lastRefreshMs >= this.refreshMs) this.refresh(nowMs);
 
     // Diurnal intensity: reuse the exact retail ambient term the muted
     // probe would have used (L1 ambBright curve, 0.2 floor, worldLightScale).
-    const p = this.atmosphereLights?.lastProbeIntensity;
+    let p = this.atmosphereLights?.lastProbeIntensity;
+    if (Number.isFinite(p)) p *= this._nightEnvMul();
     if (Number.isFinite(p)) this.scene.environmentIntensity = p;
 
     if (Array.isArray(terrainMaterials)) {

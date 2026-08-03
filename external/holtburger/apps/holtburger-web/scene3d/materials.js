@@ -103,6 +103,12 @@ const FALLBACK_SURFACE_DID = 0;
 // identical for UVs within [0,1], so defaulting to Repeat is safe for
 // non-tiling surfaces and fixes the tiling ones. Default-on;
 // `?surfaceWrapClamp=on` restores the old clamp-default for A/B.
+// READER POLARITY (2026-08-02, resolving the standing audit finding): this flag
+// is an EXACT `=== "on"` OPT-IN, i.e. ABSENT means OFF. The surrounding prose
+// calls the feature "default-on" — that refers to the REPEAT-WRAP behaviour
+// being the default render, not to this flag being on. Turning the flag ON
+// opts back IN to the old clamp. Both statements are true; the pairing reads
+// backwards, hence this note.
 const _SURFACE_WRAP_CLAMP = (() => {
   try {
     return (
@@ -1003,6 +1009,26 @@ export function installCsmShaderPatch(material, csmState) {
 // artifact. Pixels at the edge of the mesh can't extend geometry, so
 // the perturbed UV bleeds outside the surface. The ultra preset can
 // add silhouette clipping later; for now this is intentional.
+/**
+ * `?pomGraze` — DEFAULT ON. Grazing-angle step ramp + amplitude fade in the
+ * POM march (see the GRAZING FIX notes in `_pomPerturbedUv`). `off` restores
+ * the pre-2026-08-02 constants so the roof-shingle smear can be A/B'd in one
+ * session.
+ */
+export function pomGrazeEnabled(search) {
+  try {
+    const q = typeof search === "string"
+      ? search
+      : (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(q || "").get("pomGraze");
+    if (v == null) return true;
+    const t = String(v).toLowerCase();
+    return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
 const POM_UNIFORM_DEFAULTS = Object.freeze({
   steps: 16,
   ultraSteps: 32,
@@ -1075,6 +1101,10 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
     shader.uniforms.uPomLodFar = { value: lodFar };
     shader.uniforms.uPomShadowSteps = { value: shadowSteps };
     shader.uniforms.uPomShadowDarkness = { value: shadowDarkness };
+    // 2026-08-02 — grazing-angle step ramp + amplitude fade. DEFAULT ON;
+    // `?pomGraze=off` restores the pre-fix numbers exactly (0.05 epsilon,
+    // fixed step count, hard `z > 0.15` cut) for a same-session A/B.
+    shader.uniforms.uPomGraze = { value: pomGrazeEnabled() ? 1.0 : 0.0 };
 
     // S4 fix (2026-07-30) — the vertex-stage TBN this patch used to
     // fabricate (`cross(view-space up, normal)`) had no relationship
@@ -1101,6 +1131,7 @@ uniform float uPomLodNear;
 uniform float uPomLodFar;
 uniform int uPomShadowSteps;
 uniform float uPomShadowDarkness;
+uniform float uPomGraze;
 // Fragment-stage tangent frame (S4 fix) — built once in the patched
 // <map_fragment> from getTangentFrame, reused by the self-shadow pass.
 // Constant initializers only (GLSL ES 3.0 global rule); _pomLodG = 0.0
@@ -1118,11 +1149,29 @@ vec2 _pomUvG = vec2(0.0);
 // camera). Higher z = looking down at the surface (small parallax);
 // lower z = grazing (large parallax).
 vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
-  // Project view direction onto UV plane, scaled by the depth scale.
-  // Divide by abs(z) so grazing angles get a longer projection in UV
-  // (the classic POM "uv shift = (xy/z) * height" formula).
-  vec2 uvStep = vTanDir.xy / max(abs(vTanDir.z), 0.05) * depthScale / float(steps);
-  float layerStep = 1.0 / float(steps);
+  // 2026-08-02 GRAZING FIX (?pomGraze=off restores the legacy numbers).
+  //
+  // The user-visible symptom was roof shingles at a glancing view degenerating
+  // into vertical stalactite smears with hard stair-stepping. Two causes, both
+  // addressed here:
+  //
+  //  (a) STEP RAMP. The march always took the same step COUNT regardless
+  //      of angle, but the UV path length it has to cover grows as 1/cos —
+  //      about 7x longer at 82 deg than head-on. So the sample SPACING along
+  //      the ray grew with the same factor and the linear search started
+  //      skipping whole shingle edges: the stair-stepping. Scale the count by
+  //      1/max(dot(V,N), eps), capped at the loop bound.
+  //  (b) BOUNDED PROJECTION. The 0.05 epsilon allowed a 20x UV shift, i.e. a
+  //      smear up to 20 * depthScale long, which is the stalactite itself.
+  //      0.12 bounds it at ~8x, still ample for real relief.
+  float _pz = max(abs(vTanDir.z), uPomGraze > 0.5 ? 0.12 : 0.05);
+  int nSteps = steps;
+  if (uPomGraze > 0.5) {
+    nSteps = int(min(64.0, float(steps) * clamp(1.0 / _pz, 1.0, 3.0) + 0.5));
+  }
+  vec2 uvStep = vTanDir.xy / _pz * depthScale / float(nSteps);
+  float layerStep = 1.0 / float(nSteps);
+  steps = nSteps;
   vec2 currentUv = baseUv;
   float currentLayerDepth = 0.0;
   // The seam field stores the PROUD face at 255 and joints dipping
@@ -1208,11 +1257,20 @@ _pomTbnG[1] *= _pomFace;
 float _pomLod = 1.0 - smoothstep(uPomLodNear, uPomLodFar, length(vViewPosition));
 if (_pomLod > 0.001) {
   vec3 _pomTanDir = normalize(transpose(_pomTbnG) * normalize(vViewPosition));
-  // Grazing rays explode the xy/z projection — hard gate, like terrain's.
-  if (_pomTanDir.z > 0.15) {
+  // 2026-08-02 GRAZING FADE (?pomGraze=off restores the hard gate). The legacy
+  // gate was a hard z > 0.15 cut, so the effect ran at FULL amplitude right
+  // up to 81 deg and then popped off in one pixel. The band 66-81 deg is
+  // precisely where a pitched roof is seen from the ground, and it is where the
+  // smear lived. Ramp the amplitude to zero across it instead: the geometry
+  // stops smearing AND the cut-off stops popping.
+  float _pomGrazeW = (uPomGraze > 0.5)
+    ? smoothstep(0.12, 0.45, _pomTanDir.z)
+    : step(0.15, _pomTanDir.z);
+  if (_pomGrazeW > 0.001) {
+    float _pomAmt = _pomLod * _pomGrazeW;
     _pomUv = _pomPerturbedUv(_pomBaseUv, _pomTanDir, uPomDepth, uPomSteps);
-    _pomUv = mix(_pomBaseUv, _pomUv, _pomLod);
-    _pomLodG = _pomLod;
+    _pomUv = mix(_pomBaseUv, _pomUv, _pomAmt);
+    _pomLodG = _pomAmt;
   }
 }
 _pomUvG = _pomUv;

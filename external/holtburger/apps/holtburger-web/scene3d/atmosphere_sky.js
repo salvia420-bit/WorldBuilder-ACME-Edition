@@ -24,6 +24,13 @@
 
 import * as THREE from "three";
 import { sunDirFromHeadingPitch } from "./sun_direction.js";
+// NIGHT RAMP (2026-08-02, ?nightRamp — DEFAULT ON). Dereth's DayGroup sun never
+// goes below the horizon (dirPitch bottoms at 0.9 deg), so a physical Bruneton
+// sky can only ever render permanent late sunset and the star fade caps at ~42%
+// night. `artSunPitchDeg` remaps the authored elevation for THIS FILE ONLY —
+// SunDirectionalLight / SkyLightProbe / CSM / terrain uSunDir all derive their
+// own vectors from `_lastState` and are untouched. Full rationale: night_ramp.js.
+import { artSunPitchDeg, nightRampEnabled } from "./night_ramp.js";
 import {
   SkyMaterial,
   StarsMaterial,
@@ -250,8 +257,13 @@ export class AtmosphereSky {
    * @returns {number} night fraction in [0, 1]
    */
   static nightFractionFromSunAltitude(state) {
-    const pitchDeg = +(state && state.dirPitch);
-    if (!Number.isFinite(pitchDeg)) return 0.0;
+    const authored = +(state && state.dirPitch);
+    if (!Number.isFinite(authored)) return 0.0;
+    // 2026-08-02 — through the night ramp. With the retail 0.9 deg floor this
+    // band could only ever reach nightFrac ~0.42, so the star field topped out
+    // at 42% intensity at the darkest hour of the AC day. Identity when
+    // ?nightRamp=off, so the legacy fade is exactly preserved.
+    const pitchDeg = artSunPitchDeg(authored);
     const sunAlt = Math.sin(pitchDeg * Math.PI / 180);
     // Band: sun-altitude +0.10 (sun ~6deg up, full day, stars off) down to
     // -0.10 (sun ~6deg below, full night, stars on). Linear in between so
@@ -273,7 +285,17 @@ export class AtmosphereSky {
     if (!state) return;
 
     // Sun direction from AC heading/pitch (shared utility).
-    sunDirFromHeadingPitch(state.dirHeading, state.dirPitch, this._sunDirScratch);
+    // 2026-08-02 — THE NIGHT RAMP INJECTION POINT, and the only one. Heading
+    // is retail-verbatim; only the ELEVATION is art-remapped, and only into
+    // `_sunDirScratch`, which is private to this class. Everything else in the
+    // client reads `_lastState.dirPitch` itself, so this cannot leak into
+    // surface lighting. (One acknowledged indirect path: IblEnvironment PMREMs
+    // this same sky scene on its 15 s cadence, so the environment map does
+    // follow the art sky — which is what a night treatment wants, and is the
+    // reason the ground dim below is expressed as a MULTIPLIER on top of it
+    // rather than as a second, fighting light model.)
+    this._artPitchDeg = artSunPitchDeg(state.dirPitch);
+    sunDirFromHeadingPitch(state.dirHeading, this._artPitchDeg, this._sunDirScratch);
     this.skyMaterial.sunDirection.copy(this._sunDirScratch);
     if (this.starsMaterial) {
       this.starsMaterial.sunDirection.copy(this._sunDirScratch);

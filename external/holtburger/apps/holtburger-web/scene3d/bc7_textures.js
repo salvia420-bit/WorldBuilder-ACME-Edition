@@ -41,9 +41,10 @@
 // returns a null gl format and warns "Attempt to load unsupported
 // compressed texture format" once per texture — i.e. flag-ON on an
 // unsupported GPU would be a console-noise + all-white-texture bug. So:
-//   - `bc7Enabled()` is an EXACT-MATCH opt-in (`?texBc7=on`), never the
-//     `!== "off"` idiom (docs/url-flags.md flag-default footgun: that reads
-//     ON when the param is absent).
+//   - `bc7Enabled()` was an EXACT-MATCH opt-in until 2026-07-30, when it was
+//     flipped DEFAULT-ON after the 1070 frame-time A/B (see the reader). This
+//     header said "EXACT-MATCH opt-in ... DEFAULT OFF" for three days after
+//     that flip; corrected 2026-08-02. `?texBc7=off` is the escape.
 //   - `bc7Available()` additionally requires `initBc7(renderer)` to have
 //     observed the extension. Every consumer calls `bc7Available()`, so an
 //     unsupported GPU behaves EXACTLY like flag-off: the existing
