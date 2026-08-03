@@ -697,12 +697,15 @@ export function mount(_ctx) {
     if (!item) return;
     selectChannel(item.dataset.channel);
   });
-  // Click anywhere else closes the menu.
-  document.addEventListener("click", (ev) => {
+  // Click anywhere else closes the menu. Named so teardown can remove it —
+  // an anonymous handler on `document` pins the whole detached overlay
+  // (and its closure) for the life of the page after an unmount.
+  const onDocClickCloseMenu = (ev) => {
     if (channelMenu.dataset.open !== "1") return;
     if (overlay.contains(ev.target)) return;
     closeChannelMenu();
-  });
+  };
+  document.addEventListener("click", onDocClickCloseMenu);
 
   // Text input — per layout 0x10000016 at (46, 0) 306×17.
   const input = document.createElement("input");
@@ -849,6 +852,7 @@ export function mount(_ctx) {
 
   // MutationObserver watches for new <li>s appended by appendChatLine.
   let observer = null;
+  let retryTimer = null;
   if (sourceLog) {
     observer = new MutationObserver((records) => {
       for (const r of records) {
@@ -860,10 +864,16 @@ export function mount(_ctx) {
     observer.observe(sourceLog, { childList: true });
   } else {
     // index.html hasn't mounted #chat-log yet (we ran first); retry.
-    const retry = setInterval(() => {
+    // Held in a mount-scope handle so teardown can cancel it: a remount
+    // (mount() removes the prior overlay by id without running its
+    // disposer) would otherwise leave the orphan interval alive, and it
+    // would go on to attach a SECOND MutationObserver that mirrors every
+    // chat line into a detached subtree forever.
+    retryTimer = setInterval(() => {
       const log = document.getElementById("chat-log");
       if (!log) return;
-      clearInterval(retry);
+      clearInterval(retryTimer);
+      retryTimer = null;
       for (const li of log.children) mirrorOne(li);
       observer = new MutationObserver((records) => {
         for (const r of records) {
@@ -924,7 +934,11 @@ export function mount(_ctx) {
   function recallHistory(direction) {
     if (inputHistory.length === 0) return;
     if (historyCursor === -1) {
-      // First Up after typing — remember the draft.
+      // Down with nothing recalled yet is a no-op — there is no "newer"
+      // entry to move to. Only Up enters the history and stashes the
+      // draft; the old code ignored `direction` here, so Down on a fresh
+      // draft behaved as Up and overwrote in-progress text.
+      if (direction !== "up") return;
       historyDraft = input.value;
       historyCursor = inputHistory.length - 1;
     } else {
@@ -1014,6 +1028,9 @@ export function mount(_ctx) {
 
   return () => {
     if (observer) observer.disconnect();
+    observer = null;
+    if (retryTimer) { clearInterval(retryTimer); retryTimer = null; }
+    document.removeEventListener("click", onDocClickCloseMenu);
     overlay.remove();
   };
 }

@@ -14,6 +14,7 @@
 // panel only subscribes to playerStatsUpdated once it's opened.
 
 import { setAcText } from "../ui/ac_font.js";
+import { escapeHtml } from "../ui/ac_html.js";
 import {
   fetchIconDataUrl as fetchIconDataUrlShared,
   getIconImmediate as getIconImmediateShared,
@@ -690,14 +691,8 @@ function makeRow(id, meta) {
   return row;
 }
 
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+// escapeHtml moved to ui/ac_html.js (2026-08-03) — allegiance-panel needed
+// the same helper and a second private copy is how these drift.
 
 function render() {
   if (!state.listEl) return;

@@ -919,8 +919,13 @@ function buildOverlay() {
   const doSetTitle = () => {
     const raw = titleSelect.value;
     if (!raw) { toast("No title selected"); return; }
-    const id = parseInt(raw, 10) >>> 0;
-    if (!Number.isFinite(id)) { toast("Invalid title ID"); return; }
+    // Validate BEFORE the `>>> 0` — the coercion turns NaN into 0, so the
+    // old `Number.isFinite(id)` guard could never fire and a non-numeric
+    // option sent setTitle(0) = CharacterTitle::Undef, silently clearing
+    // the player's displayed title.
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) { toast("Invalid title ID"); return; }
+    const id = parsed >>> 0;
     withSession("setTitle", (h) => {
       h.setTitle(id);
       emit(`[title/set] id=${id}`);

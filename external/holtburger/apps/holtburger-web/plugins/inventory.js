@@ -1363,8 +1363,16 @@ function doMount(parentEl, _ctx) {
       // (crossbow → 0x400000); identical to the old single-bit-slot behavior
       // for armor, and falls back to the slot mask if validLocations isn't
       // hydrated yet.
+      // `|| slotMask` is what makes that last sentence true — without it
+      // the speculative path (validLocations === 0, the only shape that
+      // yields speculative:true) ANDs to 0 and wields to location 0. It
+      // cannot reintroduce the multi-bit bug: with validLocations hydrated
+      // canEquipInSlot has already rejected any `vl & slotMask === 0`, so
+      // the AND is non-zero and the fallback is dead — and weapons, the
+      // only multi-bit masks, never reach the speculative path (WEAPON_BITS).
+      const slotMask = (s.equipMask >>> 0);
       const wieldLoc =
-        (((dropItem.validLocations >>> 0) & (s.equipMask >>> 0)) >>> 0);
+        ((((dropItem.validLocations >>> 0) & slotMask) >>> 0) || slotMask);
       if (handle?.setWielded) {
         try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
         try { handle.setWielded(guid, wieldLoc); }

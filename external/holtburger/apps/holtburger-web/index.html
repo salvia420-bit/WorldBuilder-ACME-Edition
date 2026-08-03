@@ -1565,10 +1565,12 @@
       // A15-Q2 (2026-06-11 unification survey) — single EntityUpdate clone/
       // field schema shared with the 3D path's toMeta (scene3d/loop.js).
       // Pure function, no DOM/wasm. Wired into the backlog/deferred-spawn
-      // clones below behind `?unifiedClone=on` (default-off).
+      // clones below behind `?unifiedClone` (DEFAULT-ON since the W6 flip
+      // 2026-06-18; `?unifiedClone=off` escapes — url-flags.md row 429).
       import { cloneEntityUpdate as __unifiedCloneEntityUpdate } from "./scene3d/entity_update_clone.js";
       // A15-Q4 (2026-06-12 unification survey) — renderer-neutral core
-      // extraction behind `?unifiedDispatch=on` (default-off):
+      // extraction behind `?unifiedDispatch` (DEFAULT-ON since the W6 flip
+      // 2026-06-18; `?unifiedDispatch=off` escapes — url-flags.md row 433):
       // `createWorldStreamer` owns the load-bearing world-streaming block
       // hoisted out of handlePositionUpdate; `createEntityDispatcher` +
       // `KIND` are the single EntityUpdate kind table shared with
@@ -3860,6 +3862,32 @@
         }
       };
 
+      // Session-reset drain for the cross-frame entity-drain buffer
+      // (`window.__entDrainPending`, ~L10219). UNLIKE
+      // `__scene3dEntityBacklog` above — which holds PLAIN CLONES — that
+      // buffer parks the raw wasm-bindgen `EntityUpdate` handles straight
+      // off `pollEntityUpdates()`, so a reset must FREE them, not just drop
+      // the array.
+      //
+      // Load-bearing on reconnect: the kind=4 arm already calls
+      // `clearWorldEntities()` so a re-stream lands on an EMPTY map (the
+      // academy "two leather hats" double-spawn). The pending buffer was the
+      // one place dead-session updates still survived that reset — up to
+      // 6000 of them under the safety valve — and the next pump would splice
+      // them into the FRESH session's dispatcher under guids it never issued.
+      function __resetEntDrainPending(reason) {
+        const pend = window.__entDrainPending;
+        if (!pend || pend.length === 0) return 0;
+        const n = pend.length;
+        for (const u of pend) {
+          try { u?.free?.(); } catch (_) { /* already-dead box; keep draining */ }
+        }
+        pend.length = 0; // keep array identity — the drain does `||=` on it
+        console.log(`[entDrain] dropped ${n} pending entity update(s) on ${reason}`);
+        return n;
+      }
+      window.__resetEntDrainPending = __resetEntDrainPending;
+
       // Phase 4 step 6 player-fix: pre-liveScene Spawn buffer.
       // ACE sends ObjectCreate for the local player as soon as the
       // spawn handshake completes (Player_Networking.cs:224 —
@@ -4622,7 +4650,13 @@
         if (entry.nameplate) entry.nameplate.destroy();
         if (entry.portalSwirl) entry.portalSwirl.destroy();
         if (entry.portalChip) entry.portalChip.destroy();
-        entry.sprite.destroy();
+        // Guard like the three children above: since the 2D retirement the
+        // only populator (dispatch2dSpawn) is a no-op, so an entry can reach
+        // here with no `.sprite`. An unguarded throw here would skip the
+        // entityMap.delete below AND abort the whole entity-drain loop (it
+        // has no per-update try/catch), dropping the batch's remaining
+        // upd.free() calls and that frame's tickMovement heartbeat.
+        if (entry.sprite) entry.sprite.destroy();
         entityMap.delete(upd.guid);
       }
 
@@ -5489,7 +5523,19 @@
       // so this is bounded work.
       function renderVitalsPanel(handle) {
         if (!handle) return;
+        // Copy-then-free: playerStats() hands back a wasm-bindgen
+        // PlayerStatsSnapshot box. This runs on EVERY kind=8 — i.e. every
+        // vital regen tick — so the box must be released deterministically
+        // rather than left to the FinalizationRegistry. The body is split
+        // out (unchanged) so the free stays throw-safe in a `finally`.
         const stats = handle.playerStats();
+        try {
+          renderVitalsPanelFromSnapshot(stats);
+        } finally {
+          stats?.free?.();
+        }
+      }
+      function renderVitalsPanelFromSnapshot(stats) {
         const name = stats.name || "—";
         vitalsName.textContent = name;
 
@@ -5605,7 +5651,19 @@
       // partition into the two sub-sections.
       function renderInventoryPanel(handle) {
         if (!handle) return;
+        // Copy-then-free: playerInventory() hands back an ARRAY of
+        // wasm-bindgen InventoryItem boxes (one per owned item) — freed
+        // element-wise, unlike the single-box snapshot above. Runs on every
+        // kind=11 (ObjectCreate / Delete / Wield / ViewContents). Body split
+        // out (unchanged, incl. its early returns) so the free is throw-safe.
         const items = handle.playerInventory();
+        try {
+          renderInventoryPanelFromSnapshot(items);
+        } finally {
+          if (items) for (const it of items) it?.free?.();
+        }
+      }
+      function renderInventoryPanelFromSnapshot(items) {
         // Empty-state — both sections hidden, "no items" message shown.
         if (!items || items.length === 0) {
           inventoryEmpty.hidden = false;
@@ -6248,15 +6306,24 @@
             } else {
               characterUl.innerHTML = list.map((c, slot) => {
                 const idHex = `0x${c.id.toString(16).toUpperCase().padStart(8, "0")}`;
+                // Server-supplied name goes through the same escaper the
+                // inventory rows use (escapeHtml, ~L5674). A bare `"` in a
+                // name used to terminate `data-name="…"` early, which breaks
+                // BOTH readers of this markup: pickSpawnButton's
+                // `parentElement.dataset.name` match (?autoSpawn=<Name>) and
+                // the kind=1 `li[data-id="…"]` lookup. The browser decodes
+                // entities when parsing, so `dataset.name` still round-trips
+                // to the exact wire name.
+                const cName = escapeHtml(c.name ?? "");
                 const isPending = c.deleteTime !== 0;
                 const pendingDelete = isPending
                   ? ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`
                   : "";
                 const actionBtn = isPending
-                  ? ` <button type="button" data-restore-id="${c.id}" data-name="${c.name}">Restore</button>`
+                  ? ` <button type="button" data-restore-id="${c.id}" data-name="${cName}">Restore</button>`
                   : ` <button type="button" data-id="${c.id}">Spawn</button>` +
-                    ` <button type="button" data-delete-slot="${slot}" data-name="${c.name}">Delete</button>`;
-                return `<li data-name="${c.name}" data-id="${c.id}"><strong>${c.name}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
+                    ` <button type="button" data-delete-slot="${slot}" data-name="${cName}">Delete</button>`;
+                return `<li data-name="${cName}" data-id="${c.id}"><strong>${cName}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
                   actionBtn + `</li>`;
               }).join("");
               // Delegate Delete / Restore click handling via the
@@ -7477,14 +7544,40 @@
               ev.preventDefault();
             }
           };
+          // ── Reconnect hygiene (2026-08-03) ────────────────────────────
+          // Everything from the session install down to the rAF boot arm
+          // lives INSIDE this submit handler, so a SECOND successful Connect
+          // re-runs all of it. (Reachable today only via `fireSubmit()` —
+          // `?maxRetries=N` and the 0x0D char-in-world arm — because the
+          // `if (activeHandle) return;` guard blocks a manual re-Connect.)
+          //
+          // The keydown/keyup/blur trio closes over THIS login's `handle`,
+          // `keyState` and `enteredWorld`, so it genuinely must be
+          // RE-registered against the new session — but the previous
+          // login's copies have to be RETIRED first. `ui/input-funnel.js`
+          // `_bindRawTo` does a bare `list.push` with no name dedupe, so
+          // without this both copies stay live: one keypress dispatches
+          // into two different `keyState` objects and the stale copy
+          // forwards every InputAction edge to a freed handle (a
+          // `[cmdInterp] handleKeyAction failed` warn per keystroke).
+          //
+          // FIRST LOGIN: the hook is undefined and the array is empty, so
+          // the retire is a no-op and registration order/shape is
+          // byte-identical to before.
+          try { window.__hbGameplayInputUnbind?.(); } catch (_) {}
+          const __gameplayUnbinds = [];
           if (__INPUT_FUNNEL_V2) {
             // priority 100 — the movement keystate runs before every other
             // raw subscriber (camera mirror, attack-abort watcher).
-            __inputFunnel.bindRaw("index.gameplay", __gameplayKeyDown, {
-              priority: 100,
-            });
+            __gameplayUnbinds.push(
+              __inputFunnel.bindRaw("index.gameplay", __gameplayKeyDown, {
+                priority: 100,
+              })
+            );
           } else {
             document.addEventListener("keydown", __gameplayKeyDown);
+            __gameplayUnbinds.push(() =>
+              document.removeEventListener("keydown", __gameplayKeyDown));
           }
           const __gameplayKeyUp = (ev) => {
             // Don't gate keyup on enteredWorld — if the user was
@@ -7574,16 +7667,41 @@
             }
           };
           if (__INPUT_FUNNEL_V2) {
-            __inputFunnel.bindRawUp("index.gameplay", __gameplayKeyUp, {
-              priority: 100,
-            });
+            __gameplayUnbinds.push(
+              __inputFunnel.bindRawUp("index.gameplay", __gameplayKeyUp, {
+                priority: 100,
+              })
+            );
           } else {
             document.addEventListener("keyup", __gameplayKeyUp);
+            __gameplayUnbinds.push(() =>
+              document.removeEventListener("keyup", __gameplayKeyUp));
           }
           // Clear keystate if the page loses focus mid-press — Chrome
           // suppresses keyup events for some modifier combos when the
           // window blurs, which would leave the player walking forever.
-          window.addEventListener("blur", () => {
+          // Named (not inline) so the reconnect retire-hook below can
+          // removeEventListener it — it closes over this login's `keyState`
+          // and `handle`.
+          const __gameplayBlur = () => {
+            // ?cmdInterp=on (DEFAULT-ON, url-flags.md row 779): clearing
+            // `keyState` alone is COSMETIC on this lane. The interpreter lane
+            // is edge-driven — the only channel to wasm is the per-key
+            // `__cmdInterpForward` edge from keydown/keyup — and the legacy
+            // full-state re-send that the clear below used to ride is
+            // explicitly silenced (`if (!CMD_INTERP_ON && sig !== ...)` in the
+            // pump). So a suppressed keyup at blur left the retail command
+            // stack's forward head installed and the character ran forever:
+            // precisely the failure the comment above says this handler
+            // prevents. Emit the release EDGE for every key actually held,
+            // before the clear, so the stack pops. Space is deliberately NOT
+            // forwarded — its release edge is DoJump; the jump-charge abort
+            // below is the correct blur analog (retail FinishJump).
+            if (CMD_INTERP_ON) {
+              for (const k of Object.keys(keyState)) {
+                if (keyState[k]) __cmdInterpForward(k, false);
+              }
+            }
             for (const k of Object.keys(keyState)) keyState[k] = false;
             // Same rationale for the jump charge timestamp: a held
             // space at blur shouldn't fire a stale jump when the
@@ -7608,7 +7726,18 @@
             // cancels the pending rAF and clears the `.hb-jc-active`
             // class so the bar isn't stuck mid-fill on refocus.
             jumpChargeUi.hide();
-          });
+          };
+          window.addEventListener("blur", __gameplayBlur);
+          __gameplayUnbinds.push(() =>
+            window.removeEventListener("blur", __gameplayBlur));
+          // Publish the retire hook for the NEXT login (see the reconnect
+          // hygiene note at the keydown bind above).
+          window.__hbGameplayInputUnbind = () => {
+            for (const off of __gameplayUnbinds) {
+              try { off?.(); } catch (_) { /* keep retiring the rest */ }
+            }
+            __gameplayUnbinds.length = 0;
+          };
 
           // ----- Virtual keypad wiring -----------------------------
           // For touchscreen testing on the Tailscale-served URL.
@@ -7635,6 +7764,18 @@
           (function wireVirtualKeypad() {
             const pad = document.getElementById("virtual-keypad");
             if (!pad) return;
+            // Reconnect hygiene (2026-08-03): PAGE-LIFETIME wiring, unlike
+            // the keydown/keyup/blur trio above. Nothing in here closes over
+            // the session — `fireKey` re-dispatches synthetic KeyboardEvents
+            // at `document` (so it always reaches whichever gameplay handler
+            // is currently bound) and the zoom/centre/follow helpers read
+            // `window.liveScene` dynamically. So it must run ONCE, not once
+            // per login: a second run added a SECOND pointerdown listener to
+            // each of the same buttons (one tap → two synthetic keydowns)
+            // and started a SECOND permanent `followTick` rAF chain that
+            // nothing ever cancels. First login: flag unset → runs → unchanged.
+            if (window.__hbKeypadWired) return;
+            window.__hbKeypadWired = true;
             const fireKey = (key, type) => {
               document.dispatchEvent(new KeyboardEvent(type, {
                 key, bubbles: true, cancelable: true,
@@ -7794,6 +7935,16 @@
           window.__rafTickCount = 0;
           window.__lastInputSig = "0,0,0,false";
           window.__smiCallCount = 0;
+          // Reconnect hygiene (2026-08-03): this login's rAF-driver
+          // generation. `drainEvents`/`pumpNetFrame` close over THIS
+          // login's `handle`, so a second Connect necessarily starts a
+          // fresh chain — and the previous chain used to keep running
+          // until it happened to throw on the freed handle (an uncaught
+          // TypeError out of the rAF callback, after up to one more pump
+          // against a dead session). Bumping the generation retires the
+          // stale chain deterministically at its next tick instead.
+          // First login: 0 -> 1, and drainEvents only ever compares equal.
+          const __driverGen = (window.__hbDriverGen = (window.__hbDriverGen ?? 0) + 1);
           // Workstream Sky-B (2026-05-11): `?skytime=accel` URL flag
           // drives a 5-minute synthetic day cycle through the wasm
           // `setSkyTimeOverride` export. Used by Workstream Sky-F's e2e
@@ -8255,8 +8406,16 @@
                 // already-populated LB and composes with the position-update
                 // trigger (which still covers in-world movement + teleports).
                 try {
+                  // Copy-then-free: `getLocalPlayerPose()` hands back a
+                  // wasm-bindgen LocalPlayerPose box. Same invariant the
+                  // cell-residency watchdog (~L4150) already honors.
                   const spawnPose = handle.getLocalPlayerPose?.();
-                  let spawnCell = (spawnPose?.landblockId ?? 0) >>> 0;
+                  let spawnCell = 0;
+                  try {
+                    spawnCell = (spawnPose?.landblockId ?? 0) >>> 0;
+                  } finally {
+                    spawnPose?.free?.();
+                  }
                   // Indoor-spawn fix (2026-07-23, Town Network no-walk wedge):
                   // the raw pose accessor can read cell 0 (or a stale
                   // pre-teleport cell) right at EnteredWorld — precisely on a
@@ -8354,7 +8513,11 @@
                 const newName = evt.stringPayload || "<unknown>";
                 renderCharacterList();
                 createStatus.innerHTML =
-                  `<span class="ok">[OK]</span> Created <strong>${newName}</strong> ` +
+                  // escapeHtml: server-supplied name into innerHTML. (Also
+                  // makes the "<unknown>" fallback visible instead of being
+                  // parsed away as an unknown element.) The plugin-bus
+                  // fan-out below keeps the RAW name.
+                  `<span class="ok">[OK]</span> Created <strong>${escapeHtml(newName)}</strong> ` +
                   `<span class="hint">(GUID 0x${newGuid.toString(16).toUpperCase().padStart(8, "0")})</span>. ` +
                   `Click Spawn on the new row to enter world.`;
                 createBtn.disabled = false;
@@ -8375,7 +8538,9 @@
                 const label = evt.stringPayload || "<unknown>";
                 createStatus.innerHTML =
                   `<span class="fail">[FAIL]</span> CharacterCreate rejected: ` +
-                  `<code>${label}</code> (code ${code}).`;
+                  // escapeHtml: server-supplied label into innerHTML. The
+                  // plugin-bus fan-out below keeps the RAW label.
+                  `<code>${escapeHtml(label)}</code> (code ${code}).`;
                 createBtn.disabled = false;
                 // Wave D.2 — bus fan-out (see kind=5 comment above).
                 if (window.__pluginClient?.events?.emit) {
@@ -8386,7 +8551,10 @@
                 // Disconnected — recv loop terminated. The UI stays
                 // up but commands won't go anywhere.
                 loginStatus.innerHTML =
-                  `<span class="fail">[FAIL]</span> Disconnected: <code>${evt.stringPayload || ""}</code>` +
+                  // escapeHtml: server-supplied reason into innerHTML. The
+                  // __lastDisconnect stash below keeps the RAW reason (the
+                  // autoLogin orchestrator matches on it).
+                  `<span class="fail">[FAIL]</span> Disconnected: <code>${escapeHtml(evt.stringPayload || "")}</code>` +
                   ` <span class="hint">Reload the page to retry.</span>`;
                 // Stash the disconnect reason so the autoLogin
                 // orchestrator can see it (it watches for kind=20
@@ -8429,6 +8597,10 @@
                 try {
                   window.liveScene3d?.entityManager?.clearWorldEntities?.();
                 } catch (_) { /* best-effort */ }
+                // Same reset, for the one buffer clearWorldEntities can't
+                // reach: the cross-frame drain queue still holds this dead
+                // session's EntityUpdate handles (see __resetEntDrainPending).
+                try { __resetEntDrainPending("disconnect"); } catch (_) {}
                 // Bounded auto-reload (P1 #5a, rynth-review 15 C1 / 13 D2,
                 // 2026-07-23): the runbook already treats a kind=4 drop as
                 // "reload it" (STREAM-RIG-OPS.md "Reload/boot loop" — every
@@ -8496,7 +8668,9 @@
                 console.warn(`[character-error] ${name} (0x${code.toString(16)})`);
                 if (loginStatus) {
                   loginStatus.innerHTML =
-                    `<span class="fail">[ACE]</span> CharacterError: <code>${name}</code> (0x${code.toString(16)})`;
+                    // escapeHtml: server-supplied label into innerHTML. The
+                    // __lastCharacterError stash above keeps the RAW name.
+                    `<span class="fail">[ACE]</span> CharacterError: <code>${escapeHtml(name)}</code> (0x${code.toString(16)})`;
                 }
               } else if (evt.kind === 8) {
                 // Phase 4 step 4 follow-on: PlayerStatsUpdated.
@@ -10008,21 +10182,28 @@
                         // Convert to AC world frame the same way
                         // `playerWorldPose` does in picking.js (LB origin
                         // at `(lbX * 192, lbY * 192)`).
+                        // Copy-then-free: wasm-bindgen LocalPlayerPose box.
+                        // Fires once per incoming damageTaken/evadedAttacker,
+                        // so an unfreed box here orphans one per hit taken.
                         const lp = handle?.getLocalPlayerPose?.();
-                        if (attackerPos && lp) {
-                          const lbId = (lp.landblockId ?? 0) >>> 0;
-                          const lbX = (lbId >>> 24) & 0xff;
-                          const lbY = (lbId >>> 16) & 0xff;
-                          const lx = lp.x + lbX * 192;
-                          const ly = lp.y + lbY * 192;
-                          const lz = lp.z;
-                          const v = {
-                            x: lx - attackerPos.x,
-                            y: ly - attackerPos.y,
-                            z: lz - attackerPos.z,
-                          };
-                          resolvedMotion = getAimLevelForVelocity(v);
-                          try { window.__diag?.combat?.onAimLevel?.({ scope: "remote", motion: resolvedMotion }); } catch (_) {}
+                        try {
+                          if (attackerPos && lp) {
+                            const lbId = (lp.landblockId ?? 0) >>> 0;
+                            const lbX = (lbId >>> 24) & 0xff;
+                            const lbY = (lbId >>> 16) & 0xff;
+                            const lx = lp.x + lbX * 192;
+                            const ly = lp.y + lbY * 192;
+                            const lz = lp.z;
+                            const v = {
+                              x: lx - attackerPos.x,
+                              y: ly - attackerPos.y,
+                              z: lz - attackerPos.z,
+                            };
+                            resolvedMotion = getAimLevelForVelocity(v);
+                            try { window.__diag?.combat?.onAimLevel?.({ scope: "remote", motion: resolvedMotion }); } catch (_) {}
+                          }
+                        } finally {
+                          lp?.free?.();
                         }
                       } else {
                         const weapon = em.getEquippedWeapon?.(g) ?? null;
@@ -10091,6 +10272,19 @@
                     );
                   }
                 }
+              } finally {
+                // ClientEvent is a wasm-bindgen box (it carries an owned
+                // Rust String in `stringPayload`), exactly like the
+                // EntityUpdate freed at the tail of the entity drain below.
+                // `finally` so the free also covers the paths that leave the
+                // iteration early: the kind=4 `return`, the kind=61
+                // `continue`, and the `?evtGuard=off` rethrow above.
+                // Verified no consumer retains the box past this point —
+                // both taps at the loop head normalize to a plain object
+                // synchronously (scene3d/diag/wire.js recordFromEvent,
+                // rynth/webhost.js _dispatchEvent), and no handler captures
+                // `evt` in an async closure.
+                evt.free?.();
               }
             }
             // Phase 4 step 2b: drain the parallel entity-update channel
@@ -10416,12 +10610,19 @@
                 // load-bearing signal for the on-ground gate.
                 if (typeof handle?.setLastClientPrediction === "function") {
                   let zEst = 0.0;
+                  // Copy-then-free: wasm-bindgen LocalPlayerPose box. This
+                  // is the PER-FRAME reader (the R1#6 ~60 orphans/s shape),
+                  // so the free is load-bearing, not hygiene.
+                  let stashedPose = null;
                   try {
-                    const stashedPose = handle.getLocalPlayerPose?.();
+                    stashedPose = handle.getLocalPlayerPose?.();
                     if (stashedPose && Number.isFinite(stashedPose.z)) {
                       zEst = stashedPose.z;
                     }
-                  } catch (_) {}
+                  } catch (_) {
+                  } finally {
+                    try { stashedPose?.free?.(); } catch (_) {}
+                  }
                   try {
                     handle.setLastClientPrediction(
                       localEntry.sprite.x,
@@ -10659,6 +10860,10 @@
             if (__watchdog2dTimer !== null) return;
             __watchdog2dTimer = setTimeout(function __check2dHeartbeat() {
               __watchdog2dTimer = null;
+              // Reconnect hygiene: a superseded login's watchdog drops its
+              // chain here instead of re-arming every 2 s for the rest of
+              // the page's life (see __driverGen). Equal on a single login.
+              if (__driverGen !== window.__hbDriverGen) return;
               if (!window.__scene3dFrameDriverActive) return; // claim released elsewhere; resume already queued
               const last = window.__lastPumpMs ?? 0;
               if (performance.now() - last > 4000) {
@@ -10690,6 +10895,11 @@
           // renderer boots AFTER the boot arm below — renderHoltburg()
           // is awaited next) and all 2D-mode sessions, exactly as today.
           function drainEvents() {
+            // Reconnect hygiene (2026-08-03): a superseded login's chain
+            // retires here — no pump against its freed handle, no re-arm,
+            // and no __rafTickCount inflation (that counter must reflect
+            // only the LIVE 2D driver). Single login: always equal.
+            if (__driverGen !== window.__hbDriverGen) return;
             window.__rafTickCount++;
             if (__SINGLE_DRIVER_ON && __USE_RENDERER_3D && window.__scene3dFrameDriverActive) {
               if (!window.__singleDriverHandoffLogged) {
@@ -10846,6 +11056,13 @@
           // (wasm-bindgen destructors don't run on GC) — every retry
           // then stacks another zombie connection that retransmits at
           // 1 Hz into ACE ("Session for Id 0 has IP …" flood).
+          // Drain the cross-frame entity queue BEFORE the handles go: those
+          // are the outgoing session's EntityUpdate boxes, and the retry
+          // dance is exactly the path that would otherwise replay them into
+          // the incoming session (see __resetEntDrainPending). A kind=4 is
+          // not guaranteed to precede a retry, so this cannot rely on the
+          // disconnect arm alone.
+          try { __resetEntDrainPending("reconnect"); } catch (_) {}
           try {
             const oldHandle = window.__sessionHandle;
             if (oldHandle && typeof oldHandle.free === "function") oldHandle.free();

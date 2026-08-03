@@ -22,6 +22,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { clearPlaceholderGlyph } from "../ui/ac_html.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import {
   uiEffectIconsEnabled,
@@ -155,25 +156,52 @@ function fmtGuid(guid) {
   return `0x${(guid >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
-function resolveItemMeta(guid) {
+/**
+ * Take ONE `playerInventory()` snapshot for a whole container render.
+ *
+ * Every call returns a fresh array of wasm-bindgen boxes, so resolving N
+ * GUIDs one-at-a-time allocated N × (inventory size) of them — a 24-slot
+ * chest against a 100-item pack minted 2,400 boxes per open. They are
+ * finalizer-registered (pkg/holtburger_web.js) so they are not a permanent
+ * leak, but the JS wrapper is tiny while the Rust allocation is not, so the
+ * GC gets no pressure signal and the wasm heap high-water mark ratchets up
+ * (wasm linear memory never shrinks).
+ *
+ * @returns {{ inv: any[], free: () => void }} `free()` is safe to call once
+ *   the resolve pass is done: `resolveItemMeta` copies primitives out of
+ *   each box and retains no reference to it.
+ */
+function takeInventorySnapshot() {
+  const handle = window.__sessionHandle;
+  let inv = null;
+  if (handle?.playerInventory) {
+    try { inv = handle.playerInventory(); } catch (_) { inv = null; }
+  }
+  const list = Array.isArray(inv) ? inv : [];
+  return {
+    inv: list,
+    free() {
+      for (const it of list) { try { it?.free?.(); } catch (_) { /* already freed */ } }
+    },
+  };
+}
+
+function resolveItemMeta(guid, invSnapshot) {
   const g = guid >>> 0;
   const handle = window.__sessionHandle;
-  if (handle?.playerInventory) {
-    try {
-      const inv = handle.playerInventory();
-      for (const it of inv) {
-        if ((it.guid >>> 0) === g) {
-          return {
-            guid: g,
-            name: it.name || fmtGuid(g),
-            iconId: (it.iconId >>> 0) || 0,
-            stackSize: it.stackSize || 1,
-            uiEffects: (it.uiEffects >>> 0) || 0,
-          };
-        }
+  try {
+    for (const it of invSnapshot ?? []) {
+      if ((it.guid >>> 0) === g) {
+        return {
+          guid: g,
+          name: it.name || fmtGuid(g),
+          iconId: (it.iconId >>> 0) || 0,
+          stackSize: it.stackSize || 1,
+          uiEffects: (it.uiEffects >>> 0) || 0,
+        };
       }
-    } catch (_) {}
-  }
+    }
+  } catch (_) {}
   try {
     const em = window.liveScene3d?.entityManager;
     const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
@@ -257,7 +285,9 @@ function renderItems(items) {
     if (it.iconId) {
       fetchIconDataUrl(it.iconId).then((url) => {
         if (!url || !slot.isConnected) return;
-        slot.textContent = "";
+        // Glyph only — the stack-count badge and UiEffects chips are
+        // appended below this promise and must survive it.
+        clearPlaceholderGlyph(slot);
         const img = document.createElement("img");
         img.src = url;
         img.alt = it.name;
@@ -446,7 +476,10 @@ function openContainer(containerGuid, containerName) {
       console.warn("[container-panel] getContainerContents failed", e);
     }
   }
-  const items = guids.map(resolveItemMeta);
+  // One snapshot for the whole list — see takeInventorySnapshot().
+  const snap = takeInventorySnapshot();
+  const items = guids.map((g) => resolveItemMeta(g, snap.inv));
+  snap.free();
   renderItems(items);
   overlayEl.dataset.open = "1";
 

@@ -75,6 +75,7 @@ import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { clearPlaceholderGlyph } from "../ui/ac_html.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import { formatAppraisalTooltip } from "./inventory_helpers.js";
 
@@ -772,7 +773,9 @@ function setItemIcon(iconEl, item) {
   if (!item.iconId) return;
   fetchIconDataUrl(item.iconId).then((url) => {
     if (!url || !iconEl.isConnected) return;
-    iconEl.textContent = "";
+    // Glyph only — the strip cell's stack-count badge is appended by the
+    // caller after this promise is created and must survive it.
+    clearPlaceholderGlyph(iconEl);
     const img = document.createElement("img");
     img.src = url;
     img.alt = item.name || "";
@@ -1705,9 +1708,16 @@ function renderItemsPane() {
     const altName = vs.alternateCurrencyName || `wcid 0x${(vs.alternateCurrencyWcid >>> 0).toString(16)}`;
     extras += ` · Pays in: ${altName} (${vs.alternateCurrencyAmount})`;
   }
+  // XSS invariant (2026-08-03): `extras` is built above from WIRE
+  // PropertyStrings (`alternateCurrencyName`, `buyAcceptCategoryNames`) and
+  // carries no markup of its own, so it is appended as a TEXT NODE rather
+  // than interpolated into the template. Only the two multiplier percentages
+  // — both `Math.round`ed numbers — stay inside the innerHTML, because the
+  // <b> emphasis is real markup we want to keep.
   refs.rates.innerHTML =
     `Sells <b>${Math.round((vs.buyMultiplier || 1) * 100)}%</b> · ` +
-    `Buys <b>${Math.round((vs.sellMultiplier || 1) * 100)}%</b>${extras}`;
+    `Buys <b>${Math.round((vs.sellMultiplier || 1) * 100)}%</b>`;
+  if (extras) refs.rates.append(extras);
 
   // Enable Buy / Add buttons only when something is selected.
   refs.buyBtn.disabled = !sel;
@@ -1737,9 +1747,54 @@ function renderQueuePane(which) {
     refs.list.appendChild(empty);
   }
 
+  const label = which === "buying" ? "Cost" : "Credit";
+
+  // The BUYING queue must price with the same retail formula the Items
+  // pane shows (`shopBuyPrice` = ShopSystem::BuyPrice): floor(+0.1) and
+  // the promissory-note flat-1.0 carve-out. The old `Math.round(value *
+  // mult * amount)` disagreed with the header on both counts — a Trade
+  // Note read 100 p selected and 110 p queued at a 1.1× vendor.
+  // SELLING keeps the multiplier form: ACE prices sell-backs with
+  // Vendor.GetSellCost (no note carve-out) and the sell queue's entries
+  // carry `itemType: 0` anyway, so the buy formula would not apply.
+  const linePrice = (q) => (which === "buying"
+    ? shopBuyPrice(q.value || 0, q.itemType || 0, mult, q.amount)
+    : Math.round((q.value || 0) * mult * q.amount));
+
+  // Shared by the initial paint and by `repriceInPlace` so the two can
+  // never drift.
+  const writeTotals = (sum) => {
+    const totalEl = refs.footer.querySelector(".hvb-queue-total");
+    setAcText(totalEl, `${label}: ${fmtPrice(sum)} p`, { color: "#f0c87c" });
+    // Mirror the running total into the per-pane selected-price field
+    // so it lines up with the layout-driven 590×15 slot at (125,15).
+    setAcText(refs.price, `${vs.vendorName || "Vendor"} — ${label.toLowerCase()} ${fmtPrice(sum)} p`, { color: "#f0e8d0" });
+    setAcText(refs.name, queue.length
+      ? `${queue.length} item${queue.length === 1 ? "" : "s"} on the list`
+      : (which === "buying" ? "Buying list" : "Selling list"),
+      { color: "#f0c87c" });
+  };
+
+  // Qty edits must NOT go through `render()`: it opens with
+  // `refs.list.innerHTML = ""`, destroying the very <input> being typed
+  // into — focus drops to <body>, the second keystroke is lost, and any
+  // quantity above 9 is untypeable. Reprice in place instead; the
+  // structural re-render is deferred to `change` (blur/Enter), when the
+  // field is no longer being edited, which also normalizes the clamp.
+  const priceCells = [];
+  const repriceInPlace = () => {
+    let sum = 0;
+    for (const cell of priceCells) {
+      const n = linePrice(cell.q);
+      sum += n;
+      setAcText(cell.el, `${fmtPrice(n)} p`, { color: "#f0c87c" });
+    }
+    writeTotals(sum);
+  };
+
   let total = 0;
   for (const q of queue) {
-    const lineTotal = Math.round((q.value || 0) * mult * q.amount);
+    const lineTotal = linePrice(q);
     total += lineTotal;
     const row = document.createElement("div");
     row.className = "hvb-queue-row";
@@ -1758,11 +1813,15 @@ function renderQueuePane(which) {
     qtyEl.addEventListener("input", (e) => {
       const v = parseInt(e.target.value, 10);
       q.amount = Math.max(1, Math.min(v || 1, q.stackSize || 9999));
-      render();
+      repriceInPlace();
     });
+    // Blur / Enter — safe to rebuild now, and it snaps the field back to
+    // the clamped value (e.g. an emptied box shows 1 again).
+    qtyEl.addEventListener("change", () => { render(); });
     const priceEl = document.createElement("div");
     priceEl.className = "hvb-queue-price";
     setAcText(priceEl, `${fmtPrice(lineTotal)} p`, { color: "#f0c87c" });
+    priceCells.push({ q, el: priceEl });
     const rmEl = document.createElement("button");
     rmEl.className = "hvb-queue-remove";
     rmEl.textContent = "×";
@@ -1780,17 +1839,8 @@ function renderQueuePane(which) {
     refs.list.appendChild(row);
   }
 
-  // Update the queue-footer "Cost: …" / "Credit: …" total label.
-  const totalEl = refs.footer.querySelector(".hvb-queue-total");
-  const label = which === "buying" ? "Cost" : "Credit";
-  setAcText(totalEl, `${label}: ${fmtPrice(total)} p`, { color: "#f0c87c" });
-  // Mirror the running total into the per-pane selected-price field
-  // so it lines up with the layout-driven 590×15 slot at (125,15).
-  setAcText(refs.price, `${vs.vendorName || "Vendor"} — ${label.toLowerCase()} ${fmtPrice(total)} p`, { color: "#f0e8d0" });
-  setAcText(refs.name, queue.length
-    ? `${queue.length} item${queue.length === 1 ? "" : "s"} on the list`
-    : (which === "buying" ? "Buying list" : "Selling list"),
-    { color: "#f0c87c" });
+  // Queue-footer "Cost: …" / "Credit: …" total label + mirrors.
+  writeTotals(total);
 
   refs.confirmBtn.disabled = queue.length === 0;
   refs.clearBtn.disabled = queue.length === 0;

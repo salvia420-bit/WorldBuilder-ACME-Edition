@@ -293,3 +293,80 @@ All edited JS files `node --check` clean.
 mtimes, so cargo silently reuses the PRISTINE test binary and reports green
 against code that was never compiled. Caught by a test-count mismatch. Always
 `touch` after a checkout-swap experiment.
+
+---
+
+# Round 5 (same day) — index.html + plugins/ui, both never reviewed: 20 findings, 20 fixes + 2 deferred
+
+Fifth pass, scoped off this document. index.html (11,252 lines) and the
+plugins/ + ui/ layer had never been reviewed by anyone. **Two genuine XSS
+holes** and a runaway-movement bug are the headline items.
+
+## Fixed — index.html (R5#11–R5#18)
+
+| # | Defect | Fix |
+|---|---|---|
+| R5#11 | The ENTIRE post-login wiring lives inside the submit listener with no teardown, and `runAutonomousLogin`'s `fireSubmit()` nulls `activeHandle` specifically to bypass the re-entry guard — so a reconnect double-binds the input funnel (its `_bindRawTo` is a bare push with no dedupe and the unbind was discarded), double-wires the virtual keypad (2 synthetic keydowns per tap) and starts an extra permanent `followTick` rAF chain **per reconnect** | No restructuring. Retire-then-rebind for the handle-closing listeners (unbinds published for the next login), an idempotence latch on the page-lifetime keypad wiring, and a `__hbDriverGen` generation token so a superseded drain chain retires at its next tick instead of throwing against a freed handle. Every mechanism is a no-op on run #1 by construction |
+| R5#12 | `blur` cleared only JS keystate, but `?cmdInterp` is DEFAULT-ON and under it the ONLY channel to wasm is the per-edge keyup forward — the legacy full-state resend is explicitly silenced. Alt-tab holding W (Chrome suppresses the keyup) → the character runs until it hits geometry, exactly what the handler's own comment says it prevents | Release edge forwarded for every held key through the same `__cmdInterpForward` channel, gated on `CMD_INTERP_ON`. Space excluded (its release edge is DoJump; the jump-charge abort is the correct blur analog) |
+| R5#13 | `ClientEvent` boxes never freed in the `poll_events` drain — zero `evt.free()` in the file — while the sibling EntityUpdate loop frees unconditionally 2,300 lines away | `finally { evt.free?.() }` on the per-event guard; covers all four exits incl. the kind=4 return and the `?evtGuard=off` rethrow. Verified no consumer retains the box (both diag taps copy scalars synchronously) |
+| R5#14 | **Round 1 claimed "index.html already complied" with the copy-then-free invariant after checking ONE site and generalizing.** Five sites did not free: three `getLocalPlayerPose`, plus `playerStats()` (kind=8 arm — every vital tick) and `playerInventory()` (kind=11 — every ObjectCreate/Delete/Wield, and an ARRAY of boxes) | Copy-then-free at all five, in `finally`. The two HUD renderers' bodies moved verbatim into `*FromSnapshot` helpers so the free sits throw-safe without re-indenting ~170 lines |
+| R5#15 | `__entDrainPending` survived disconnect, so the buffer was replayed after the reconnect that `clearWorldEntities()` exists to reset — the academy double-spawn, defeated | Reset helper that FREES each entry (they are wasm handles, not clones — the clone buffer is the separate `__scene3dEntityBacklog`) then truncates in place to preserve array identity. Called from the kind=4 arm and from `fireSubmit` before the handle frees |
+| R5#16 | Four unescaped server strings in innerHTML while `escapeHtml` is defined in the same file and used on the inventory path. A name with a quote also truncates `data-name="` so `?autoSpawn` never matches and the char row never flips to "Spawned" | All routed through `escapeHtml`; agent found a FIFTH site (kind=6 label). Raw values preserved where consumed as data |
+| R5#17 | `handleEntityRemove` guarded three optional children but dereferenced `entry.sprite` unguarded; a throw skips `entityMap.delete`, the batch's remaining `upd.free()` calls, and that frame's `tickMovement` heartbeat | Guarded like its siblings |
+| R5#18 | Import-block comments claimed `unifiedClone`/`unifiedDispatch` are default-off; url-flags.md says default-ON (W6 flip) and the readers are correct | Comments only |
+
+## Fixed — plugins/ + ui/ (R5#1–R5#10)
+
+| # | Defect | Fix |
+|---|---|---|
+| R5#1 | **XSS**: wire-controlled player/allegiance names into `innerHTML` at 4 sites in allegiance-panel. The MOTD line 13 rows below sanitizes — the author knew | `escapeHtml` at all four; audited all 26 innerHTML sites in the file to confirm the other 22 are static or numeric |
+| R5#2 | **XSS**: vendor `PropertyString`s (`alternateCurrencyName`, category names) into the rates strip | Appended as a TEXT NODE rather than escaped — strictly stronger, since `extras` carries no markup of its own |
+| — | (helper) only copy of `escapeHtml` was private to spell-research-panel | Moved to a new `ui/ac_html.js` leaf module; one definition, not three |
+| R5#3 | Speculative equip always sent `equip_mask = 0` — the comment claimed a fallback that did not exist | `|| slotMask` fallback; comment records why it can't reintroduce the multi-bit wield bug (weapons can't reach the speculative path) |
+| R5#4 | Async icon load `textContent = ""` wiped badges appended synchronously after — stack counts and buff timers vanished when the icon resolved | Scoped as 2 sites, shipped as **3** (agent found the same bug in buffs-hud, its own section); new helper removes only text nodes, verified CSS painting order keeps badges above the img |
+| R5#5 | Vendor queue re-derived price with different math than the Items pane (rounding + the promissory-note carve-out) | Buy queue routed through the same `shopBuyPrice` helper. **Sell queue deliberately left on the multiplier form** — ACE prices sell-backs with a different function that has no note carve-out |
+| R5#6 | Quantity input called a full re-render on every keystroke, destroying the focused input — quantities >9 untypeable | In-place reprice on `input`, structural rebuild on `change` |
+| R5#7 | chat-panel teardown leaked a 250 ms interval + a document click listener; remount stacked a second MutationObserver mirroring chat into a detached div forever | Both tracked and cleared |
+| R5#8 | `_flashSwapFail` read `state.slotEls`, which appears exactly ONCE in the file (the read) — Rec #75's failure flash never rendered | Reads the real array |
+| R5#9 | `playerInventory()` called once per GUID (≈2,400 boxes for a 24-slot chest against a 100-item pack); `playerEnchantments()` on a 2 s cadence forever | One snapshot per render + element-wise free. NOT permanent leaks (FinalizationRegistry) — the cost is that a tiny JS wrapper gives GC no pressure signal while the wasm high-water mark ratchets |
+| R5#10 | `parseInt(...) >>> 0` before `Number.isFinite` — a dead guard that silently sent `setTitle(0)`, clearing the player's title | Validate before coercing; plus two unranked extras |
+
+## Also fixed (main)
+
+- `spawns.js`: wasm handle freed after the parse loop → moved to `try/finally`
+  (a stale `pkg/` threw on a missing getter and the outer catch swallowed it
+  with the handle held).
+- `webgl_context_recovery.js`: composer setSize fell back to
+  `canvas.width/height` (drawing-buffer px) in a CSS-px API. Also noted:
+  `csmState.invalidate?.()` there was a silent no-op until R3 added the method.
+- `tests/plugin_loader.test.cjs`: hardcoded 49 bundled plugins vs an actual 50
+  (pre-existing, from the vitals-orbs commit; the plugins agent correctly
+  refused to touch it as out-of-ownership). Now 110/110.
+
+## Deferred (round 5)
+
+- **Task #103:** eleven more unfreed wasm boxes in plugins — all single-call
+  per user action, so no amplification. `inventory.js:2179` RETAINS its
+  snapshot in module state, so that one needs a retention audit, not an
+  opportunistic free.
+- **Task #84** (R4) still open: IBL PMREM bakes the cloud quad + moon
+  billboards into `scene.environment`.
+- R5#13's abandoned-tail sweep: on the kind=4 return and the `?evtGuard=off`
+  rethrow the batch's unvisited events still go to the FinalizationRegistry.
+  Freeing them needs a not-yet-freed marker (wasm-bindgen `free()` is NOT
+  idempotent — `?.free?.()` does not protect against a double call), and
+  kind=4 fires once per session. Deliberately skipped.
+
+## Green at round-5 commit time
+
+plugins: plugin_loader 110/110 (after the count fix), plugin_facade_contract 32,
+allegiance_panel 15, buffs_hud 34, inventory_paperdoll_helpers 49,
+contracts_panel. index.html: module body (10,219 lines) extracted and
+`node --check` clean; of the 20 suites that regex index.html, 16 pass and the
+4 failures were proven pre-existing (HEAD swap, byte-identical output, restore
+`cmp`-verified).
+
+**Process note:** twice this round a conclusion was nearly drawn from a
+TRUNCATED grep (`rg … | head -8` over 13 matches) — "these two call sites no
+longer exist" was wrong for exactly that reason. Count matches before
+concluding absence.

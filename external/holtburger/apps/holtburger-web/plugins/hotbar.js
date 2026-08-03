@@ -487,7 +487,10 @@ export function mount(ctx) {
   }
   function _flashSwapFail(slotIndex) {
     try {
-      const el = state.slotEls?.[slotIndex];
+      // `slotEls`, NOT `state.slotEls` — `state` is the localStorage save
+      // (`{slots:[…]}`), which has no element array, so the old read was
+      // always undefined and Rec #75's failure flash never once fired.
+      const el = slotEls[slotIndex];
       if (!el) return;
       el.classList.add("hb-hotbar-swap-fail");
       setTimeout(() => { try { el.classList.remove("hb-hotbar-swap-fail"); } catch (_) {} }, 400);
@@ -495,7 +498,9 @@ export function mount(ctx) {
   }
   function _swapToast(text) {
     try {
-      const ov = state.overlayEl ?? document.getElementById(OVERLAY_ID);
+      // Same reason as _flashSwapFail: `state.overlayEl` never existed, so
+      // this always fell through to the by-id lookup. Use the live ref.
+      const ov = overlay;
       if (!ov) return;
       const old = ov.querySelector(".hb-hotbar-toast");
       if (old) old.remove();

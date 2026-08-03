@@ -59,6 +59,7 @@
 // (which would force the user to scroll the whole panel).
 
 import { setAcText } from "../ui/ac_font.js";
+import { escapeHtml } from "../ui/ac_html.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
 
@@ -585,12 +586,19 @@ function renderAllegianceState(refs, snapshot) {
   // player-is-monarch from that shape, mirroring publish_player_allegiance_snapshot.
   const playerIsMonarch = monarch && !myself;
 
+  // XSS invariant (2026-08-03): every interpolation below that carries a
+  // WIRE string — the allegiance name and the monarch/patron character
+  // names — goes through escapeHtml. Those names are chosen by other
+  // players, so a raw interpolation is arbitrary markup executing in the
+  // client origin with the session handle in scope. The numeric fields
+  // (`totalVassals`, `rank`, `totalMembers`) are already `>>> 0` and the
+  // MOTD strips `[<>&]` on its own, so only the four name sites changed.
   if (refs.patronHeaderRowEl) {
     const lockBadge = locked
       ? ` <span class="value" style="color: var(--hb-text-gold)">[LOCKED]</span>`
       : "";
     refs.patronHeaderRowEl.innerHTML =
-      `<span class="label">${name}</span>${lockBadge}`;
+      `<span class="label">${escapeHtml(name)}</span>${lockBadge}`;
   }
   if (refs.patronLabelEl) {
     refs.patronLabelEl.innerHTML =
@@ -613,18 +621,18 @@ function renderAllegianceState(refs, snapshot) {
         ? `Patron: ${patron.name}`
         : "No patron";
     refs.monarchPatronRowEl.innerHTML =
-      `<span class="label">${text}</span>`;
+      `<span class="label">${escapeHtml(text)}</span>`;
   }
   if (refs.monarchMonarchRowEl) {
     const text = monarch
       ? (playerIsMonarch ? `Monarch: ${monarch.name} (you)` : `Monarch: ${monarch.name}`)
       : "Monarch: —";
     refs.monarchMonarchRowEl.innerHTML =
-      `<span class="label">${text}</span>`;
+      `<span class="label">${escapeHtml(text)}</span>`;
   }
   if (refs.monarchAllegRowEl) {
     refs.monarchAllegRowEl.innerHTML =
-      `<span class="label">Allegiance:</span><span class="value">${name}</span>`;
+      `<span class="label">Allegiance:</span><span class="value">${escapeHtml(name)}</span>`;
   }
   if (refs.statusLeftEl) {
     refs.statusLeftEl.innerHTML =
@@ -926,9 +934,23 @@ export const view = {
         // Read the monarch row from the rendered panel as a sensible
         // self-target — the panel always populates this from the
         // active allegiance state.
-        const monarchVal = monarchMonarchRowEl.querySelector?.(".value");
-        if (monarchVal && monarchVal.textContent && monarchVal.textContent !== "—") {
-          target = monarchVal.textContent.trim();
+        //
+        // `.label`, not `.value`: the POPULATED render writes the whole
+        // "Monarch: <name>" string into a single `.label` span, and the
+        // only `.value` span in this row belongs to the EMPTY state where
+        // the text is "—" and is rejected below. Querying `.value` alone
+        // therefore never matched in any state, and the refresh always
+        // went out with an empty target.
+        const monarchCell = monarchMonarchRowEl.querySelector?.(".label")
+          ?? monarchMonarchRowEl.querySelector?.(".value");
+        const monarchText = monarchCell?.textContent?.trim() ?? "";
+        if (monarchText && monarchText !== "—") {
+          // Strip the "Monarch:" label prefix and the "(you)" suffix the
+          // populated render appends for the local player.
+          target = monarchText
+            .replace(/^Monarch:\s*/, "")
+            .replace(/\s*\(you\)$/, "")
+            .trim();
         }
       }
       try {

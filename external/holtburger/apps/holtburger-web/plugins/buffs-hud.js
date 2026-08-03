@@ -49,6 +49,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { clearPlaceholderGlyph } from "../ui/ac_html.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 import { ETF } from "../ui/enchantment_constants.js";
 
@@ -117,6 +118,21 @@ function nowSeconds() {
 // refreshed buff) we treat it as a fresh arrival and re-stamp `receivedAt`.
 const receivedAtSelf = new Map();          // layeredId -> {startTime, receivedAt}
 const receivedAtByEntity = new Map();      // guid -> Map(layeredId -> {startTime, receivedAt})
+
+// `playerEnchantments()` / `entityEnchantments()` hand back a fresh array
+// of wasm-bindgen `PlayerEnchantmentJs` boxes on every call. They ARE
+// finalizer-registered, so an unfreed box is reclaimed eventually rather
+// than leaked outright — but the JS wrapper is tiny next to the Rust
+// allocation, so the GC has no reason to hurry and the wasm heap's
+// high-water mark only ever goes up. Call this once the rows have been
+// normalized into plain objects.
+//
+// Safe iff the caller retains no reference INTO a row. Both call sites go
+// through `normalizeEnchantment`, which copies every field out.
+function freeWasmRows(rows) {
+  if (!Array.isArray(rows)) return;
+  for (const r of rows) { try { r?.free?.(); } catch (_) { /* already freed */ } }
+}
 
 function stampReceivedAt(record, cache) {
   if (!record) return record;
@@ -752,7 +768,11 @@ function renderCell(ench, kind) {
   if (iconId) {
     fetchIconDataUrl(iconId).then((url) => {
       if (!url || !cell.isConnected) return;
-      cell.textContent = "";
+      // Glyph only — the layer badge and the remaining-time label are
+      // appended below this promise and must survive it (a `textContent`
+      // clear here erased the countdown on every buff whose icon landed
+      // after the synchronous appends, i.e. all of them).
+      clearPlaceholderGlyph(cell);
       const img = document.createElement("img");
       img.src = url;
       img.alt = meta.name || `Spell ${ench.spellId}`;
@@ -1020,6 +1040,13 @@ export function mount(ctx) {
         } else {
           const list = liveHandle()?.playerEnchantments() || [];
           refreshFromSnapshot(list);
+          // `normalizeEnchantment` copies every field into a plain object
+          // and keeps no reference to the box, so the wasm side can go
+          // back now. This runs on a 2 s cadence for the whole session —
+          // the one place in this plugin where deferring to the finalizer
+          // actually accumulates. (Freeing here, not inside
+          // refreshFromSnapshot: __buffsHudDebug feeds it plain objects.)
+          freeWasmRows(list);
         }
         syncIndicators();
         if (overlay.dataset.open === "1") renderAll();
@@ -1067,6 +1094,7 @@ export function mount(ctx) {
         try {
           const snapshot = liveHandle()?.entityEnchantments?.(guid) || [];
           refreshEntityFromSnapshot(guid, snapshot);
+          freeWasmRows(snapshot);   // normalized copies retained, boxes not
         } catch (e) {
           console.warn("[buffs-hud] entityEnchantments fetch failed", e);
         }
