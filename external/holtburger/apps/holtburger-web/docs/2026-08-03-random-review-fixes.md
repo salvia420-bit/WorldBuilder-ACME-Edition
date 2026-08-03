@@ -706,3 +706,85 @@ respawn satisfies it. The character-creation test is red for a bare
 #156 (41 quarantined suites — 33 unclassified because nothing ever ran them),
 #157 two hollow-pass suites, #158-160 loader/API contracts, #161-162 above.
 The 1070 queue now also owes: chat-panel corner-drag feel.
+
+---
+
+# Round 10 — the three surfaces still untouched after nine rounds
+
+`index.html` (11,469 lines, never reviewed), the Rust world/session crates, and
+the plugins nobody had read. 16 findings.
+
+## Highest impact: 25 of 54 skill formulas disagreed with portal.dat
+
+`holtburger-world/src/player/stats_calc.rs` used a hand-grouped table that is a
+second copy of the SkillFormula rows in portal.dat's SkillTable `0x0E000004` —
+which `WorldState` **already loads** as `self.skill_table` and never consults
+here. I verified against the live DAT rather than the report: Missile Defense is
+Quickness+Coordination**÷5** (code had ÷3), Shield is Strength+Coordination÷2
+(code had different attributes entirely), and Leadership/Loyalty/Salvaging/
+Deception carry zero multipliers — ACE's `if (formula.X == 0) return 0`, not
+implemented at all. Values corrected; making it DAT-driven is #166.
+
+## Purest instance yet of "the test could not fail"
+
+`spatial/scene.rs::get_nearby_entities` keyed on `pose.landblock_id` — the full
+ObjCellID, which carries a real cell in its low word — while the 3×3 scan built
+keys ending `0xFFFF`. All eight neighbour lookups always missed and "same
+landblock" silently meant "same 24 m cell". **Every in-tree test fed synthetic
+`0x____FFFF` ids: the one shape that makes the broken key work.**
+
+## Findings
+
+| # | Area | Defect |
+|---|---|---|
+| — | stats_calc.rs | 25/54 skill formulas wrong vs portal.dat |
+| — | spatial/scene.rs | neighbour scan unreachable on real data |
+| — | position_manager.rs | sticky standoff used planar distance; **flipped negative** for overhead targets (retail pulls in, we backed away) |
+| — | state/types.rs | `open_containers` + `prior_wielders` unpruned → guid reuse pins items against eviction |
+| — | crafting/salvage.rs | overage rule INVERSE of ACE/retail default; test was *named* for ACE while pinning the other branch |
+| — | crafting/salvage.rs | negative wire `Structure` → 4.29e9-iteration loop |
+| — | state/mutations.rs | remote `VectorUpdate` missing the non-finite guard both siblings have |
+| — | magic.rs | enchantment tiebreak missing ACE's middle key (drifted duplicate — core's copy was right) |
+| — | index.html | server-supplied `ServerName` into `innerHTML` unescaped |
+| — | index.html | community serverslist `javascript:` URLs into `href` |
+| — | index.html | terrain prefetch latched a transient miss **forever** (sink/float, no re-trigger) |
+| — | index.html | 5 per-login listeners stacked on reconnect, stale copy runs first over a freed handle |
+| — | index.html | `runAutonomousLogin` documented idempotent, no guard |
+| — | loading-screen.js | `portalSpaceEntered` read the event, not `.detail` (2nd instance of the R9 allegiance bug) |
+| — | world_stream.js | s13's indoor 2D-gate had landed only in the DEAD copy |
+
+## The EnvCell gate — where I was wrong, and what saved it
+
+I filed the s13 gate drift as unresolvable-by-reading on the grounds that two
+comments contradicted each other. **They were not contradictory, they were
+dated**, and the wasm settled it in minutes: S14 (A5) had already moved the
+drain to `replace_cell_triangles` so a duplicate fetch replaces instead of
+appending, and cells.js calls the same export unconditionally.
+
+But applying the gate **flatly**, as proposed, would have shipped a real bug.
+Invariant 2 — pinned by `(vii)` in the A15-Q4 suite — requires the wasm
+collision bakes to fire while `getLiveScene3d()` is null, "to keep the 3D
+integrator from freezing on the spawn cell", and `loadEnvCellsForLandblock` is
+skipped in exactly that window. A flat gate leaves an **indoor spawn with no
+cell collision until after init3D**. Shipped as "2D always, 3D only while the
+renderer is not yet up".
+
+That surfaced only because the change broke four assertions and I read them
+instead of adjusting them. One I did have to change: `(viii)` asserted *a
+specific function was called*; it now asserts *what the invariant means* — that
+indoor cell collision is still queued.
+
+## Escalated, decided
+
+- `runAutonomousLogin`: in-flight-only re-entrancy, **not** the stronger
+  "no-op after any prior run" the stale comment promised — that would silently
+  no-op a harness's deliberate re-trigger, and there is no in-repo caller to
+  check against.
+- `derive_skill_value` left value-corrected rather than DAT-driven (#166):
+  `PlayerState` has no `SkillTable`, so it is a struct/threading change.
+
+## Behaviour widening owed an in-world look
+
+Nearby-entity sets go from same-cell to same-landblock-plus-8-neighbours. That
+is the intended semantic and matches the code's own TODO, but it changes what
+feeds the active-solve radius.
