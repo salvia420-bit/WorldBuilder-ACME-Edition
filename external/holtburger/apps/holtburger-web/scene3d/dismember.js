@@ -1,11 +1,15 @@
 // scene3d/dismember.js — Phase 3 runtime destruction (?dismember — DEFAULT ON, =off escape).
 //
 // Runtime mesh slicing AND voronoi fracturing of a live entity's setup parts
-// via @dgreenheck/three-pinata (vendor/dgreenheck/three-pinata.js, MIT). Strict
-// opt-in: the module is only ever dynamically imported when the URL flag
-// `dismember` is not "off" (see scene3d/index.js) or when carnage.js
-// pulls it in under `carnage=on`, so the flag-off arm pays zero bytes and zero
-// risk.
+// via @dgreenheck/three-pinata (vendor/dgreenheck/three-pinata.js, MIT).
+//
+// DEFAULT ON (owner flip 2026-08-02; comment corrected 2026-08-03 review F10).
+// The reader below is `!== "off"`, and scene3d/index.js gates the dynamic
+// import on the same shape — so an ABSENT param resolves ON and this module,
+// the vendored slicer, `installDismemberDiag()` and the two window hooks
+// (`__dismemberTransfer` / `__dismemberCorpseRestore`) all load on the bare
+// default URL. Only `?dismember=off` skips the import and pays zero bytes.
+// carnage.js pulls the same module in under its own default-ON flag.
 //
 // Primitives (all callable from window.__diag.dismember):
 //   slicePart      plane cut → stump on the rig + severed limb as debris
@@ -246,7 +250,11 @@ function _tickDebris(nowMs) {
   _rafId = 0;
   const dt = Math.min(0.05, (nowMs - _lastTickMs) / 1000 || 0.016);
   _lastTickMs = nowMs;
-  for (const entry of [..._activeDebris]) {
+  // Iterate the Set directly — no per-frame `[...spread]` copy. Safe: the only
+  // mutation inside the loop is `_disposeDebris(entry)`, and Set iteration is
+  // specified to tolerate deletion of the current / already-visited entry.
+  // Nothing here ADDS to the set (spawns come from the slice/fracture paths).
+  for (const entry of _activeDebris) {
     if (nowMs - entry.startMs > DEBRIS_TTL_MS) {
       _disposeDebris(entry);
       continue;
@@ -1010,9 +1018,9 @@ export function restoreParts(inst) {
  * Carry dismemberment across the corpse handoff: the lootable corpse is a
  * SEPARATE object that spawns with FULL geometry, so a creature that lost a
  * leg mid-fight would get it back as a corpse. Called from entities.js
- * finishReveal (via the window.__dismemberTransfer hook, registered only
- * when ?dismember=on) right after the ragdoll pose transfer, while the
- * creature instance still exists.
+ * finishReveal (via the window.__dismemberTransfer hook, registered on the
+ * default arm — escape is ?dismember=off) right after the ragdoll pose
+ * transfer, while the creature instance still exists.
  *
  * Per damaged part on the creature: the corpse part's own meshes are removed
  * and stashed (cache-shared — never disposed; restoreParts on the corpse
@@ -1086,10 +1094,31 @@ const CORPSE_DISM_MAX = 32;
 const CORPSE_DISM_TTL_MS = 10 * 60 * 1000;
 const _corpseDism = new Map(); // guid -> { n, stumps: Map<pi, Mesh[]>, hidden: number[], expiresAt }
 
+/**
+ * Drop an archive entry. Ownership rule (round-1 #2): exactly one dispose()
+ * per resource, and the archive may only free geometry it still holds ALONE.
+ *
+ * 2026-08-03 review F2: this used to dispose every `__corpseArchived` geometry
+ * unconditionally. But `restoreCorpseDismemberment` re-parents these very Mesh
+ * objects onto a live corpse rig and the entry keeps pointing at them, so a
+ * cap/TTL eviction freed a BufferGeometry that an on-screen corpse was still
+ * rendering (kill 33 creatures inside one decay window and corpse #1's stumps
+ * go). A mesh with a parent is displayed by a live rig: hand ownership back to
+ * that rig instead (its `_disposeMeshChildren` walk / `restoreParts` frees
+ * `__disposable` geometry) and free only the genuinely orphaned ones here.
+ */
 function _disposeDismEntry(entry) {
   for (const meshes of entry.stumps.values()) {
     for (const m of meshes) {
-      if (m.geometry?.userData?.__corpseArchived) m.geometry.dispose();
+      const ud = m.geometry?.userData;
+      if (!ud?.__corpseArchived) continue;
+      if (m.parent) {
+        // Still on a rig — transfer ownership, do NOT free.
+        ud.__corpseArchived = false;
+        ud.__disposable = true;
+        continue;
+      }
+      m.geometry.dispose();
     }
   }
 }
@@ -1144,6 +1173,11 @@ export function restoreCorpseDismemberment(inst) {
   }
   if (!inst.parts || inst.parts.length !== entry.n) return false;
   entry.expiresAt = now + CORPSE_DISM_TTL_MS;
+  // F2 — re-insert so the cap eviction above is LRU, not FIFO: a corpse that
+  // keeps re-materialising must not be evicted ahead of one nobody has seen
+  // since it was archived (Map preserves insertion order).
+  _corpseDism.delete(g);
+  _corpseDism.set(g, entry);
   let altered = 0;
   inst._dismemberStash = inst._dismemberStash || new Map();
   for (const [pi, meshes] of entry.stumps) {
@@ -1223,8 +1257,9 @@ function _findInst(guid) {
 }
 
 /**
- * Install `window.__diag.dismember`. Called lazily from scene3d/index.js
- * only when `?dismember=on`.
+ * Install `window.__diag.dismember`. Called lazily from scene3d/index.js on
+ * the DEFAULT arm (its gate is `?dismember` !== "off", same as ours), so the
+ * hooks below are live unless the escape flag is set.
  */
 export function installDismemberDiag() {
   if (!dismemberEnabled()) return;
@@ -1326,5 +1361,5 @@ export function installDismemberDiag() {
       return debrisStats();
     },
   };
-  console.info("[dismember] diag installed (window.__diag.dismember) — flag ?dismember=on");
+  console.info("[dismember] diag installed (window.__diag.dismember) — default ON, escape ?dismember=off");
 }

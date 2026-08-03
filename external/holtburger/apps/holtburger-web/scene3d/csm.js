@@ -24,23 +24,27 @@
 // resulting shadow factor. Ambient + hemisphere remain unshadowed
 // (matches Phase 0.1's behaviour — only the directional sun casts).
 //
-// Per-frame: `updateCsm(csmState, camera)` tightly fits each cascade's
-// orthographic shadow camera to the player-visible portion of that
-// cascade range. Frustum-fitting follows the standard CSM recipe
-// (see learnopengl.com Guest-Articles/2021/CSM):
+// Per-frame: `updateCsm(csmState, camera)` fits each cascade's orthographic
+// shadow camera to the player-visible portion of that cascade range:
 //   1. Compute 8 corner points of the camera's perspective sub-frustum
 //      between near=splitN and far=splitN+1 in world space.
-//   2. Transform corners into the light's view space.
-//   3. Take the AABB of the transformed corners.
-//   4. Set the cascade's ortho camera to that AABB.
-//   5. Pull the near plane back by `BACK_DIST_M` so casters BEHIND the
-//      camera (relative to the light direction) still register.
+//   2. Take their centroid and BOUNDING-SPHERE radius.
+//   3. Set the cascade's ortho camera to that sphere's bounding square,
+//      with near/far bracketing it plus `BACK_DIST_M` of lead-in so casters
+//      BEHIND the camera (relative to the light direction) still register.
 //
-// Texel snapping (anti-shimmer): each cascade's ortho frustum centre
-// is snapped to integer texel increments so the shadow map's depth
-// values don't drift sub-texel frame-to-frame, which would produce
-// per-pixel shimmer on stationary geometry as the player walks.
-// Mirrors Phase 0.1's `updateShadowCameraTarget` snap logic.
+// Texel snapping (anti-shimmer): the sphere radius depends only on
+// (fov, aspect, near, far) — never on where the camera looks or stands — so
+// each cascade's ortho extents and texel size are CONSTANT. The frustum
+// centre is then snapped to whole texels in a light frame anchored at the
+// world origin, which stops the texel grid sliding under stationary geometry
+// as the player walks or turns.
+//
+// (Pre-2026-08-03 this fit the AABB of the corners in light space. That AABB
+// resized every frame as the camera rotated, so the "texel" it snapped to
+// resized with it and the snap stabilised nothing — review finding F3. The
+// sphere circumscribes the slice, so extents are ~1.2-1.3× the old tight AABB;
+// stability is worth the texels, and it is the standard CSM trade.)
 //
 // Disabled when `flags.csm` is false — the Phase 0.1 single-shadow
 // path stays in effect (low/mid quality presets). The two paths are
@@ -117,6 +121,24 @@ const NDC_CORNERS = [
 const CAM_DELTA_SQ_EPS = 1e-4; // m²
 const SUN_DELTA_SQ_EPS = 1e-6; // unit-vector²
 
+// Camera ORIENTATION threshold (2026-08-03 review F1). The cascade fit is
+// derived from `_frustumCornersWorld`, which depends on the camera's rotation
+// just as much as its position, so a position-only skip test froze the
+// cascades through any pure rotation. The retail in-head camera
+// (`?retailCamZoom`, default ON) is the worst case: its pitch does not move
+// the camera AT ALL and its yaw moves it only 0.18 m × Δθ, so a normal
+// look-around stayed under CAM_DELTA_SQ_EPS indefinitely — cascades frozen to
+// a stale view slice, and `didRefitThisTick=false` also parked lighting.js's
+// shadow re-raster.
+//
+// Measured on the two world-space basis columns of `camera.matrixWorld`
+// (columns 1 and 2 — two orthonormal axes pin the full orientation, including
+// roll). For a small rotation θ each column moves ≈ θ, so the summed squared
+// delta is ≈ 2θ². 2e-6 ⇒ θ ≈ 1e-3 rad, which drifts the 300 m far plane by
+// ≈ 0.3 m — one texel of the far cascade (0.293 m), matching the budget the
+// position threshold above was tuned to.
+const CAM_ROT_DELTA_SQ_EPS = 2e-6; // unit-basis², ≈1e-3 rad
+
 /**
  * Construct the CSM bundle and attach the shadow-only cascade lights
  * to `scene`. The caller is responsible for:
@@ -145,6 +167,10 @@ const SUN_DELTA_SQ_EPS = 1e-6; // unit-vector²
  * @param {number} [opts.sunDeltaSqEps=SUN_DELTA_SQ_EPS] - RP5 tunable
  *   squared sun-direction-delta threshold below which `updateCsm` skips
  *   the per-cascade refit. Defaults to the validated SUN_DELTA_SQ_EPS.
+ * @param {number} [opts.camRotDeltaSqEps=CAM_ROT_DELTA_SQ_EPS] - R3#1 tunable
+ *   squared camera-orientation-delta threshold (matrixWorld basis columns)
+ *   below which `updateCsm` may skip the refit. Defaults to the validated
+ *   CAM_ROT_DELTA_SQ_EPS.
  * @returns {{
  *   lights: THREE.DirectionalLight[3],
  *   splits: number[],
@@ -181,6 +207,9 @@ export function setupCsm(scene, opts = {}) {
   const sunDeltaSqEps = Number.isFinite(opts.sunDeltaSqEps)
     ? opts.sunDeltaSqEps
     : SUN_DELTA_SQ_EPS;
+  const camRotDeltaSqEps = Number.isFinite(opts.camRotDeltaSqEps)
+    ? opts.camRotDeltaSqEps
+    : CAM_ROT_DELTA_SQ_EPS;
 
   const csmGroup = new THREE.Group();
   csmGroup.name = "csm-cascades";
@@ -232,6 +261,7 @@ export function setupCsm(scene, opts = {}) {
     // so the lighting/URL layer can retune without editing this file.
     camDeltaSqEps,
     sunDeltaSqEps,
+    camRotDeltaSqEps,
     // RP5 — set by every `updateCsm` call: true when this tick actually
     // refit the cascades (camera or sun moved past threshold), false when
     // it early-outed because the scene was static. The static-scene
@@ -254,6 +284,19 @@ export function setupCsm(scene, opts = {}) {
     _lastSunX: NaN,
     _lastSunY: NaN,
     _lastSunZ: NaN,
+    // F1 — camera ORIENTATION (two world basis columns of matrixWorld) and
+    // the projection parameters the sub-frustum is derived from. Same NaN
+    // sentinel contract as the position/sun fields above.
+    _lastCamUX: NaN,
+    _lastCamUY: NaN,
+    _lastCamUZ: NaN,
+    _lastCamFX: NaN,
+    _lastCamFY: NaN,
+    _lastCamFZ: NaN,
+    _lastCamFov: NaN,
+    _lastCamAspect: NaN,
+    _lastCamNear: NaN,
+    _lastCamZoom: NaN,
     /**
      * Force the next `updateCsm` call to rebuild all cascades regardless
      * of how small the camera / sun deltas are. Call this when:
@@ -269,6 +312,16 @@ export function setupCsm(scene, opts = {}) {
       this._lastSunX = NaN;
       this._lastSunY = NaN;
       this._lastSunZ = NaN;
+      this._lastCamUX = NaN;
+      this._lastCamUY = NaN;
+      this._lastCamUZ = NaN;
+      this._lastCamFX = NaN;
+      this._lastCamFY = NaN;
+      this._lastCamFZ = NaN;
+      this._lastCamFov = NaN;
+      this._lastCamAspect = NaN;
+      this._lastCamNear = NaN;
+      this._lastCamZoom = NaN;
       // RP5 — a forced rebuild WILL refit on the next updateCsm, so the
       // static-shadow gate must re-raster that frame. Mark it now so even
       // if the gate is read before updateCsm runs, it errs toward drawing.
@@ -370,6 +423,28 @@ export function updateCsm(csmState, camera, sunDir) {
   const dSunZ = lz - csmState._lastSunZ;
   const camDeltaSq = dCamX * dCamX + dCamY * dCamY + dCamZ * dCamZ;
   const sunDeltaSq = dSunX * dSunX + dSunY * dSunY + dSunZ * dSunZ;
+  // F1 — camera ORIENTATION. `_frustumCornersWorld` reads camera.matrixWorld,
+  // so a pure rotation changes the fit exactly as much as a translation does;
+  // a position-only test froze the cascades through any look-around (see
+  // CAM_ROT_DELTA_SQ_EPS). matrixWorld is fresh — updateMatrixWorld() ran
+  // above. Columns 1 (up) + 2 (+Z) pin the orientation including roll.
+  const me = camera.matrixWorld.elements;
+  const dUpX = me[4] - csmState._lastCamUX;
+  const dUpY = me[5] - csmState._lastCamUY;
+  const dUpZ = me[6] - csmState._lastCamUZ;
+  const dFwX = me[8] - csmState._lastCamFX;
+  const dFwY = me[9] - csmState._lastCamFY;
+  const dFwZ = me[10] - csmState._lastCamFZ;
+  const camRotDeltaSq =
+    dUpX * dUpX + dUpY * dUpY + dUpZ * dUpZ + dFwX * dFwX + dFwY * dFwY + dFwZ * dFwZ;
+  // Projection parameters feed the sub-frustum shape directly (resize, retail
+  // zoom): compare exactly — they only move on discrete events, so there is
+  // no threshold to tune and no drift to accumulate.
+  const projChanged =
+    camera.fov !== csmState._lastCamFov ||
+    camera.aspect !== csmState._lastCamAspect ||
+    camera.near !== csmState._lastCamNear ||
+    camera.zoom !== csmState._lastCamZoom;
   // NaN propagates through subtraction, so on first call (cached NaNs)
   // both deltaSq will be NaN, NaN < eps is false → we fall through to
   // the rebuild path. Subsequent frames compare real numbers.
@@ -381,7 +456,10 @@ export function updateCsm(csmState, camera, sunDir) {
   const sunEps = Number.isFinite(csmState.sunDeltaSqEps)
     ? csmState.sunDeltaSqEps
     : SUN_DELTA_SQ_EPS;
-  if (camDeltaSq < camEps && sunDeltaSq < sunEps) {
+  const camRotEps = Number.isFinite(csmState.camRotDeltaSqEps)
+    ? csmState.camRotDeltaSqEps
+    : CAM_ROT_DELTA_SQ_EPS;
+  if (camDeltaSq < camEps && sunDeltaSq < sunEps && camRotDeltaSq < camRotEps && !projChanged) {
     // RP5 — static this tick: no cascade refit. The shadow maps three
     // already rastered last frame stay valid, so the static-scene gate
     // can skip the re-raster (unless something else, e.g. an indoor/
@@ -416,6 +494,16 @@ export function updateCsm(csmState, camera, sunDir) {
   csmState._lastSunX = lx;
   csmState._lastSunY = ly;
   csmState._lastSunZ = lz;
+  csmState._lastCamUX = me[4];
+  csmState._lastCamUY = me[5];
+  csmState._lastCamUZ = me[6];
+  csmState._lastCamFX = me[8];
+  csmState._lastCamFY = me[9];
+  csmState._lastCamFZ = me[10];
+  csmState._lastCamFov = camera.fov;
+  csmState._lastCamAspect = camera.aspect;
+  csmState._lastCamNear = camera.near;
+  csmState._lastCamZoom = camera.zoom;
   // RP5 — cascades were refit this tick (camera and/or sun moved). The
   // static-scene shadow-raster gate treats this as "shadows changed →
   // re-raster this frame".
@@ -436,6 +524,42 @@ export function updateCsm(csmState, camera, sunDir) {
  *
  * @param {Object} csmState - the bundle from `setupCsm`.
  */
+/**
+ * F4 (2026-08-03) — resolve a material's CSM uniform objects ONCE instead of
+ * rebuilding six template-literal keys per material per frame. `refreshCsmUniforms`
+ * runs unconditionally every frame (lighting.js) over every patched terrain
+ * material, so the key churn was thousands of throwaway strings a second.
+ *
+ * Cached under a NON-ENUMERABLE userData slot on purpose: `Material.copy`
+ * JSON-serialises userData and these refs reach live Textures — the exact
+ * root cause R2#1 fixed for `heightTex` and the `*ShaderUniforms` stashes.
+ *
+ * Keyed on the uniforms object identity so a re-patch (onBeforeCompile firing
+ * again with a fresh uniforms object) rebuilds instead of writing into the
+ * dead shader's uniforms.
+ */
+function _csmUniformRefs(mat) {
+  const u = mat.userData?.csmShaderUniforms;
+  if (!u) return null;
+  const cached = mat.userData.__csmUniformRefs;
+  if (cached && cached.src === u) return cached;
+  const refs = {
+    src: u,
+    maps: [u.uCsmShadowMap0 || null, u.uCsmShadowMap1 || null, u.uCsmShadowMap2 || null],
+    mats: [u.uCsmMatrix0 || null, u.uCsmMatrix1 || null, u.uCsmMatrix2 || null],
+    splits: u.uCsmSplits || null,
+    far: u.uCsmFar || null,
+    blend: u.uCsmBlend || null,
+  };
+  Object.defineProperty(mat.userData, "__csmUniformRefs", {
+    value: refs,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  return refs;
+}
+
 export function refreshCsmUniforms(csmState) {
   if (!csmState?.patchedMaterials) return;
   const lights = csmState.lights;
@@ -444,35 +568,37 @@ export function refreshCsmUniforms(csmState) {
   // are already baked at install; we only refresh per-frame shadow
   // matrices + map textures (those change as cameras / lights move).
   for (const mat of csmState.patchedMaterials) {
-    const u = mat.userData?.csmShaderUniforms;
-    if (!u) continue;
+    const refs = _csmUniformRefs(mat);
+    if (!refs) continue;
     for (let i = 0; i < 3; i += 1) {
       const light = lights[i];
       if (!light) continue;
-      if (u[`uCsmShadowMap${i}`]) {
+      const mapU = refs.maps[i];
+      if (mapU) {
         // light.shadow.map is created lazily on first render; until
         // it lands, leave the stale uniform value (the shader will
         // see the previous frame's texture, which is fine for a
         // single-frame discontinuity).
         const tex = light.shadow?.map?.texture ?? null;
-        if (tex) u[`uCsmShadowMap${i}`].value = tex;
+        if (tex) mapU.value = tex;
       }
-      if (u[`uCsmMatrix${i}`]) {
+      const matU = refs.mats[i];
+      if (matU) {
         // Three composes shadow.matrix as
         //   biasMatrix * cam.projectionMatrix * cam.matrixWorldInverse
         // so it transforms world → shadow-NDC[0,1]. We can sample
         // `shadow.map.texture` directly at `xy` of the result.
-        u[`uCsmMatrix${i}`].value.copy(light.shadow.matrix);
+        matU.value.copy(light.shadow.matrix);
       }
     }
-    if (u.uCsmSplits) {
-      u.uCsmSplits.value.set(csmState.splits[0], csmState.splits[1]);
+    if (refs.splits) {
+      refs.splits.value.set(csmState.splits[0], csmState.splits[1]);
     }
-    if (u.uCsmFar) {
-      u.uCsmFar.value = csmState.splits[2];
+    if (refs.far) {
+      refs.far.value = csmState.splits[2];
     }
-    if (u.uCsmBlend) {
-      u.uCsmBlend.value = csmState.blendFrac;
+    if (refs.blend) {
+      refs.blend.value = csmState.blendFrac;
     }
   }
 }
@@ -481,108 +607,99 @@ export function refreshCsmUniforms(csmState) {
 
 const _tmpFrustumCorners = new Array(8);
 for (let i = 0; i < 8; i += 1) _tmpFrustumCorners[i] = new THREE.Vector3();
-const _tmpAabbMin = new THREE.Vector3();
-const _tmpAabbMax = new THREE.Vector3();
 const _tmpCenter = new THREE.Vector3();
-const _tmpLightView = new THREE.Matrix4();
 const _tmpUp = new THREE.Vector3(0, 1, 0);
 const _tmpLightPos = new THREE.Vector3();
 const _tmpLightTarget = new THREE.Vector3();
+// F3 — light basis anchored at the WORLD ORIGIN (not at the frustum centre)
+// plus its inverse, so the texel snap grid below is a fixed frame.
+const _tmpLightRot = new THREE.Matrix4();
+const _tmpLightRotInv = new THREE.Matrix4();
+const _tmpLightDir = new THREE.Vector3();
+const _tmpSnap = new THREE.Vector3();
+const _ORIGIN = new THREE.Vector3(0, 0, 0);
+const _tmpProj = new THREE.Matrix4();
+const _tmpInvProj = new THREE.Matrix4();
 
 function _fitCascade(light, camera, near, far, lx, ly, lz, mapSize) {
   // Step 1 — Compute the 8 corners of the camera's sub-frustum between
   // `near` and `far` in WORLD space.
   _frustumCornersWorld(camera, near, far, _tmpFrustumCorners);
 
-  // Step 2 — Compute the sub-frustum centroid in world space. We
-  // anchor the light position relative to this so the shadow camera
-  // tracks the player's local view.
+  // Step 2 — Sub-frustum centroid + BOUNDING-SPHERE radius (F3, 2026-08-03).
+  //
+  // The radius is a function of (fov, aspect, near, far) ONLY — it does not
+  // depend on where the camera looks or stands. That rotation-invariance is
+  // the whole point: the ortho extents and near/far derived from it below are
+  // CONSTANT for a given cascade, so the texel grid in step 4 is a fixed grid
+  // that world geometry can actually be snapped onto.
+  //
+  // The previous fit took the AABB of the corners in LIGHT space, whose width
+  // changed every frame as the camera turned. Its texel size therefore changed
+  // every frame too, so snapping the centre to `round(cx / texelX) * texelX`
+  // quantised onto a grid that was itself sliding — the documented anti-shimmer
+  // guarantee never held. Cost of the fix: a sphere circumscribes the slice, so
+  // extents grow ~1.2-1.3× vs. the tight AABB (measured at the default splits /
+  // 60° fov / 16:9: cascade widths 54.2 → 69.2 m, 180.7 → 219.6 m,
+  // 542.2 → 655.7 m, i.e. near cascade 3.4 cm/texel rather than 2.6). Stability
+  // is worth the texels; that is the standard CSM trade.
   _tmpCenter.set(0, 0, 0);
   for (let i = 0; i < 8; i += 1) {
     _tmpCenter.add(_tmpFrustumCorners[i]);
   }
   _tmpCenter.multiplyScalar(1 / 8);
-
-  // Step 3 — Build the light's view matrix anchored at the centroid
-  // looking down the negative light direction (towards the scene).
-  // `lightPos` sits BACK_DIST_M behind the centroid along +lightDir
-  // (i.e. opposite the direction the light shines).
-  _tmpLightPos.set(
-    _tmpCenter.x + lx * BACK_DIST_M,
-    _tmpCenter.y + ly * BACK_DIST_M,
-    _tmpCenter.z + lz * BACK_DIST_M
-  );
-  _tmpLightTarget.copy(_tmpCenter);
-  // makeLookAt is camera-style: it returns a matrix that puts (0,0,-1)
-  // looking at target. The shadow camera's matrixWorldInverse is what
-  // we actually need to transform world→light-view, so build that.
-  _tmpLightView.lookAt(_tmpLightPos, _tmpLightTarget, _tmpUp);
-  _tmpLightView.setPosition(_tmpLightPos);
-  // Invert to get world → light view.
-  _tmpLightView.invert();
-
-  // Step 4 — Transform every corner into light view space, compute AABB.
-  _tmpAabbMin.set(Infinity, Infinity, Infinity);
-  _tmpAabbMax.set(-Infinity, -Infinity, -Infinity);
+  let radiusSq = 0;
   for (let i = 0; i < 8; i += 1) {
-    const v = _tmpFrustumCorners[i].clone().applyMatrix4(_tmpLightView);
-    if (v.x < _tmpAabbMin.x) _tmpAabbMin.x = v.x;
-    if (v.y < _tmpAabbMin.y) _tmpAabbMin.y = v.y;
-    if (v.z < _tmpAabbMin.z) _tmpAabbMin.z = v.z;
-    if (v.x > _tmpAabbMax.x) _tmpAabbMax.x = v.x;
-    if (v.y > _tmpAabbMax.y) _tmpAabbMax.y = v.y;
-    if (v.z > _tmpAabbMax.z) _tmpAabbMax.z = v.z;
+    const d = _tmpFrustumCorners[i].distanceToSquared(_tmpCenter);
+    if (d > radiusSq) radiusSq = d;
   }
+  const radius = Math.max(1e-3, Math.sqrt(radiusSq));
 
-  // Step 5 — Texel snap the AABB centre to the cascade's texel size.
-  // Frustum width = aabbMax.x - aabbMin.x. Texel size = width / mapSize.
-  // Snap centre to integer texels so depth values don't drift sub-texel
-  // frame-to-frame (anti-shimmer).
-  const widthX = _tmpAabbMax.x - _tmpAabbMin.x;
-  const widthY = _tmpAabbMax.y - _tmpAabbMin.y;
-  const texelX = widthX / mapSize;
-  const texelY = widthY / mapSize;
-  if (texelX > 0 && texelY > 0) {
-    const cx = (_tmpAabbMin.x + _tmpAabbMax.x) * 0.5;
-    const cy = (_tmpAabbMin.y + _tmpAabbMax.y) * 0.5;
-    const snappedCx = Math.round(cx / texelX) * texelX;
-    const snappedCy = Math.round(cy / texelY) * texelY;
-    const halfW = widthX * 0.5;
-    const halfH = widthY * 0.5;
-    _tmpAabbMin.x = snappedCx - halfW;
-    _tmpAabbMax.x = snappedCx + halfW;
-    _tmpAabbMin.y = snappedCy - halfH;
-    _tmpAabbMax.y = snappedCy + halfH;
-  }
+  // Step 3 — Light basis anchored at the WORLD ORIGIN. Anchoring it at the
+  // frustum centre (as before) makes the centre trivially (0,0,-BACK_DIST_M)
+  // in light space, so there is nothing left to snap; the snap has to happen
+  // in a frame that does NOT move with the camera.
+  // lookAt(eye, target, up) puts +Z along (eye - target), i.e. along the light
+  // direction — same convention the old code got from (lightPos - centre).
+  _tmpLightRot.lookAt(_tmpLightDir.set(lx, ly, lz), _ORIGIN, _tmpUp);
+  _tmpLightRot.setPosition(_ORIGIN);
+  _tmpLightRotInv.copy(_tmpLightRot).invert();
 
-  // Step 6 — Configure the cascade's shadow camera. Position the light
-  // BACK_DIST_M behind the centroid along +lightDir. Set ortho frustum
-  // to AABB.
+  // Step 4 — Snap the centre to whole texels in that fixed light frame, then
+  // bring it back to world. Texel size is constant now, so the shadow map's
+  // texels stop sliding under stationary geometry (anti-shimmer, for real).
+  const texel = (radius * 2) / mapSize;
+  _tmpSnap.copy(_tmpCenter).applyMatrix4(_tmpLightRotInv);
+  _tmpSnap.x = Math.round(_tmpSnap.x / texel) * texel;
+  _tmpSnap.y = Math.round(_tmpSnap.y / texel) * texel;
+  _tmpSnap.applyMatrix4(_tmpLightRot);
+
+  // Step 5 — Position the light BACK_DIST_M behind the snapped centre along
+  // +lightDir (i.e. opposite the direction the light shines).
+  _tmpLightPos.set(
+    _tmpSnap.x + lx * BACK_DIST_M,
+    _tmpSnap.y + ly * BACK_DIST_M,
+    _tmpSnap.z + lz * BACK_DIST_M
+  );
+  _tmpLightTarget.copy(_tmpSnap);
   light.position.copy(_tmpLightPos);
   light.target.position.copy(_tmpLightTarget);
   light.target.updateMatrixWorld();
   light.updateMatrixWorld();
 
+  // Step 6 — Ortho frustum = the sphere's bounding square about the light
+  // axis. near/far bracket the sphere with BACK_DIST_M of lead-in so casters
+  // behind the camera still register — the same interval the old AABB form
+  // produced (its `near` clamped to 0.1 in every practical configuration,
+  // because the -BACK_DIST_M pull-back always drove it negative), only now
+  // expressed in per-cascade constants instead of a per-frame measurement.
   const cam = light.shadow.camera;
-  cam.left = _tmpAabbMin.x;
-  cam.right = _tmpAabbMax.x;
-  cam.bottom = _tmpAabbMin.y;
-  cam.top = _tmpAabbMax.y;
-  // Near/far in light-view space. The light's view origin is at
-  // _tmpLightPos which is BACK_DIST_M behind the centroid; the AABB's
-  // -Z extent (light view) is the deepest caster. We want
-  //   near = aabbMax.z (closest plane to light)
-  //   far  = aabbMin.z (deepest plane from light)
-  // but light.shadow.camera is positioned at light.position with its
-  // -Z axis pointing towards target — so distances are negated.
-  //
-  // Practical: pull near back by BACK_DIST_M too, so casters that are
-  // technically behind the camera (but still in the shadow's path)
-  // contribute.
-  const nearZ = -_tmpAabbMax.z - BACK_DIST_M;
-  const farZ = -_tmpAabbMin.z + BACK_DIST_M;
-  cam.near = Math.max(0.1, nearZ);
-  cam.far = farZ;
+  cam.left = -radius;
+  cam.right = radius;
+  cam.bottom = -radius;
+  cam.top = radius;
+  cam.near = 0.1;
+  cam.far = BACK_DIST_M * 2 + radius;
   cam.updateProjectionMatrix();
 }
 
@@ -612,22 +729,22 @@ function _frustumCornersWorld(camera, near, far, out) {
   // defaults to WebGLCoordinateSystem when undefined; the camera's
   // own `coordinateSystem` is the canonical source if set. Falling
   // through to the default keeps r184-and-later compatible.
-  const proj = new THREE.Matrix4().makePerspective(
+  // F4 — module scratch, not fresh Matrix4s: this runs 3× per refit frame.
+  _tmpProj.makePerspective(
     left, left + width,
     top, top - height,
     near, far,
     camera.coordinateSystem
   );
   // Invert to go from NDC → camera view space.
-  const invProj = new THREE.Matrix4().copy(proj).invert();
-  // camera.matrixWorld transforms view-space → world-space.
-  const viewToWorld = new THREE.Matrix4().copy(camera.matrixWorld);
+  _tmpInvProj.copy(_tmpProj).invert();
 
   for (let i = 0; i < 8; i += 1) {
     const c = NDC_CORNERS[i];
     const v = out[i];
     v.set(c[0], c[1], c[2]);
-    v.applyMatrix4(invProj);
-    v.applyMatrix4(viewToWorld);
+    v.applyMatrix4(_tmpInvProj);
+    // camera.matrixWorld transforms view-space → world-space.
+    v.applyMatrix4(camera.matrixWorld);
   }
 }

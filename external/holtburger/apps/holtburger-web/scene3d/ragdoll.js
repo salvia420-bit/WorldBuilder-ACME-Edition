@@ -870,8 +870,13 @@ export function stepSim(sim, dt) {
   return maxMove;
 }
 
-/** q = shortest arc rotating unit vector a onto unit vector b; [x,y,z,w]. */
-export function quatFromUnitVectors(ax, ay, az, bx, by, bz) {
+/* The `*Into` forms write into a caller-owned 4-slot array and allocate
+ * nothing — applyRagdoll runs them 2n times per ragdoll per frame. The
+ * array-returning exports below wrap them and stay the public (node-tested)
+ * surface. */
+
+/** out = shortest arc rotating unit vector a onto unit vector b; [x,y,z,w]. */
+function quatFromUnitVectorsInto(ax, ay, az, bx, by, bz, out) {
   const dot = ax * bx + ay * by + az * bz;
   if (dot < -0.999999) {
     // opposite: 180° about any axis orthogonal to a
@@ -884,26 +889,49 @@ export function quatFromUnitVectors(ax, ay, az, bx, by, bz) {
       oz = ay;
     }
     const l = Math.hypot(ox, oy, oz) || 1;
-    return [ox / l, oy / l, oz / l, 0];
+    out[0] = ox / l;
+    out[1] = oy / l;
+    out[2] = oz / l;
+    out[3] = 0;
+    return out;
   }
   const cx = ay * bz - az * by;
   const cy = az * bx - ax * bz;
   const cz = ax * by - ay * bx;
   const w = 1 + dot;
   const l = Math.hypot(cx, cy, cz, w) || 1;
-  return [cx / l, cy / l, cz / l, w / l];
+  out[0] = cx / l;
+  out[1] = cy / l;
+  out[2] = cz / l;
+  out[3] = w / l;
+  return out;
+}
+
+/** out = Hamilton product q1*q2, all [x,y,z,w]. `out` may not alias q1/q2. */
+function quatMulInto(q1, q2, out) {
+  const x1 = q1[0];
+  const y1 = q1[1];
+  const z1 = q1[2];
+  const w1 = q1[3];
+  const x2 = q2[0];
+  const y2 = q2[1];
+  const z2 = q2[2];
+  const w2 = q2[3];
+  out[0] = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2;
+  out[1] = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2;
+  out[2] = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2;
+  out[3] = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2;
+  return out;
+}
+
+/** q = shortest arc rotating unit vector a onto unit vector b; [x,y,z,w]. */
+export function quatFromUnitVectors(ax, ay, az, bx, by, bz) {
+  return quatFromUnitVectorsInto(ax, ay, az, bx, by, bz, [0, 0, 0, 1]);
 }
 
 /** Hamilton product q1*q2, both [x,y,z,w]. */
 export function quatMul(q1, q2) {
-  const [x1, y1, z1, w1] = q1;
-  const [x2, y2, z2, w2] = q2;
-  return [
-    w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-    w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-    w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-    w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-  ];
+  return quatMulInto(q1, q2, [0, 0, 0, 1]);
 }
 
 /* ── environment bridge ──────────────────────────────────────────────────
@@ -1083,7 +1111,15 @@ export async function startRagdoll(inst, opts = {}) {
     boneChild,
     restDir,
     q0,
-    swing: new Array(n).fill(null),
+    // Preallocated swing slots + a validity mask (was `new Array(n).fill(null)`
+    // rebuilt from two array-returning quat helpers every frame). `swingOut` is
+    // the scratch quatMul writes into before it lands on the part.
+    swing: Array.from({ length: n }, () => new Float64Array(4)),
+    swingSet: new Uint8Array(n),
+    swingOut: new Float64Array(4),
+    // Set once the sim freezes: node positions can no longer change, so the
+    // swing set computed on the freeze frame stays correct forever.
+    swingFrozen: false,
     seed,
     reported: false,
     // kill_impulse.js provenance — read by __diag.ragdoll.state for the
@@ -1102,7 +1138,7 @@ export async function startRagdoll(inst, opts = {}) {
 export function applyRagdoll(inst, dt) {
   const rd = inst?._ragdoll;
   if (!rd) return;
-  const { sim, parentIndex, boneChild, restDir, q0, swing } = rd;
+  const { sim, parentIndex, boneChild, restDir, q0, swing, swingSet, swingOut } = rd;
   if (!sim.done) {
     // refresh the AC transform every frame: the root can still be moving while
     // the body settles, and the environment queries are in the AC frame.
@@ -1114,27 +1150,43 @@ export function applyRagdoll(inst, dt) {
     }
   }
   const n = sim.n;
-  for (let i = 0; i < n; i++) {
-    swing[i] = null;
-    const d0 = restDir[i];
-    const c = boneChild[i];
-    if (d0 && c >= 0) {
-      const bx = sim.pos[c * 3] - sim.pos[i * 3];
-      const by = sim.pos[c * 3 + 1] - sim.pos[i * 3 + 1];
-      const bz = sim.pos[c * 3 + 2] - sim.pos[i * 3 + 2];
-      const l = Math.hypot(bx, by, bz);
-      if (l > 1e-4) swing[i] = quatFromUnitVectors(d0[0], d0[1], d0[2], bx / l, by / l, bz / l);
+  // Recompute the bone swings only while the sim is live. `sim.done` (settle or
+  // the RAGDOLL_MAX_TIME cap) freezes sim.pos for good, so one final pass on the
+  // freeze frame is enough — a corpse held for its death window was otherwise
+  // re-deriving an identical swing set 60×/s for the rest of its life.
+  if (!rd.swingFrozen) {
+    for (let i = 0; i < n; i++) {
+      swingSet[i] = 0;
+      const d0 = restDir[i];
+      const c = boneChild[i];
+      if (d0 && c >= 0) {
+        const bx = sim.pos[c * 3] - sim.pos[i * 3];
+        const by = sim.pos[c * 3 + 1] - sim.pos[i * 3 + 1];
+        const bz = sim.pos[c * 3 + 2] - sim.pos[i * 3 + 2];
+        const l = Math.hypot(bx, by, bz);
+        if (l > 1e-4) {
+          quatFromUnitVectorsInto(d0[0], d0[1], d0[2], bx / l, by / l, bz / l, swing[i]);
+          swingSet[i] = 1;
+        }
+      }
     }
+    if (sim.done) rd.swingFrozen = true;
   }
+  // The pose overwrite itself still runs EVERY frame: it has to land after the
+  // mixer and the other rig writers, frozen sim or not.
   for (let i = 0; i < n; i++) {
     const part = inst.parts[i];
     if (!part) continue;
     part.position.set(sim.pos[i * 3], sim.pos[i * 3 + 1], sim.pos[i * 3 + 2]);
     // leaves ride their parent's swing so hands/feet follow the limb
-    const s = swing[i] || (parentIndex[i] !== ROOT ? swing[parentIndex[i]] : null);
-    if (s) {
-      const q = quatMul(s, q0[i]);
-      part.quaternion.set(q[0], q[1], q[2], q[3]);
+    let si = swingSet[i] ? i : -1;
+    if (si < 0) {
+      const p = parentIndex[i];
+      if (p !== ROOT && p >= 0 && p < n && swingSet[p]) si = p;
+    }
+    if (si >= 0) {
+      quatMulInto(swing[si], q0[i], swingOut);
+      part.quaternion.set(swingOut[0], swingOut[1], swingOut[2], swingOut[3]);
     }
   }
 }

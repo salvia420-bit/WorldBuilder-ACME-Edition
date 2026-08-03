@@ -139,3 +139,62 @@ all LRU suites (evict 39, dualstate 26, park_storm 36, sealed_park 46,
 fixed_grid 33), animated_scenery 16, vertex_bake_flags 61, a11_s0 45/48 (3 =
 the deferred #42 assertions, pre-existing). Materials-agent ran a full 198-suite
 A/B: identical pass/fail to pristine baseline. `node --check` clean everywhere.
+
+---
+
+# Round 3 (same day) — boot/adapter/worker + body-sim/HUD/shadows: 18 findings, 18 fixes + 1 deferred
+
+Third pass: bake_worker_client/adapter/index.js (boot-agent), csm/dismember/
+nameplate_sprite/ragdoll (csm-agent), lib.rs + index.html pattern sweeps (main —
+no new fixable findings; wire-data getters are length-guarded, flag readers
+match their docs). All 18 findings read-verified; both agents proved fixes
+against reverted source.
+
+## Fixed (tasks R3#1–R3#18)
+
+| # | Defect | Fix | Verified |
+|---|---|---|---|
+| R3#1 | CSM refit skip compared position+sun only — first-person look-around (in-head pitch moves the camera 0 m) froze cascades AND the re-raster gate | Orientation term from matrixWorld basis columns + fov/aspect/near/zoom compares; per-instance `camRotDeltaSqEps` | 13/13 harness; reverted source reproduces didRefit=false on pure pitch; static-camera skip intact |
+| R3#2 | Corpse-dismemberment archive (cap/TTL evict) disposed geometry still parented to LIVE corpse rigs (?dismember default-ON) | Ownership handback for parented meshes (`__corpseArchived=false, __disposable=true`); restore re-inserts for LRU order | 8/8; reverted source reproduces disposedCount=1 on a live rig |
+| R3#3 | Texel snap used per-frame AABB-derived texel size — anti-shimmer guarantee not delivered | Rotation-invariant bounding-sphere fit; snap in a world-anchored light basis | Ortho width rotation-invariant to 1.1e-13 m (pre-fix 326 m spread); texel lock 1.3e-13 |
+| R3#4 | refreshCsmUniforms built 6 template-literal keys per material per frame | Uniform refs resolved once, stored non-enumerable (R2#1 JSON lesson applied); Matrix4s hoisted | Suites + program-key lock 15/15 |
+| R3#5 | Nameplate LOD: children.find closures ×2 per entity per frame + fresh scratch objects | inst._buffBadgeSprite slot + pooled _lodEntry scratch (refs nulled after use) | lod-badge suite green |
+| R3#6 | Nameplate cache FIFO eviction never disposed; "GC reclaims GPU" premise false for three.js — unbounded VRAM leak past 512 unique names | _pendingDispose + mark-and-sweep vs the live entity map (~600-tick cadence); telemetry getter | 4-case harness; all fail on reverted source |
+| R3#7 | Ragdoll pose writer allocated ~2n arrays/frame and recomputed after settle | *_Into quat helpers + preallocated swing slots; swing set latches at freeze (pose re-assert kept — must land after mixer) | Byte-identical output over 1200 frames (maxDiff 0) |
+| R3#8 | Badge on an entity with no nameplate sprite escaped every cull → stranded "+N" chip at any range | Badge visibility keyed off _buffBadgeSprite incl. the no-sprite arm | Reverted source leaves badge visible at 300 m; fixed hides |
+| R3#9 | Debris tick copied the whole registry per rAF frame | Direct Set iteration (deletion-safe, invariant stated) | Re-read |
+| R3#10 | dismember header/log claimed strict =on while default-ON (deliberate 2026-08-02 flip); nameplate occlusion comment claimed a retired gate | Comments/log corrected — no flag behavior touched | Grep |
+| R3#11 | Crashed bake worker never terminate()d, respawned per bake with no backoff (stale-pkg spawn storm) | terminate + geometric cooldown (1s→30s cap), one-shot stale-pkg warn; explicit terminate() still respawns immediately | 20 bakes in cooldown spawn 1 worker (pre-fix: 20) |
+| R3#12 | Request enqueued while worker null never settled → guardedStreamBake slot held forever, fallback never ran | _request settles undispatched entries; queue-off arm + _pump postMessage throws settle + unwind | 29/29 settle-contract harness; pre-fix scores HANG |
+| R3#13 | ?targetFps pacer double-charged the sleep → ~2× requested rate, 16/100 ms sawtooth | Budget charged against the frame's start (pure `pacerDelayMs`, exported) | Simulated: 17.24→10.00 fps flat |
+| R3#14 | Unguarded direct-path render: a throw killed the frame loop permanently + leaked the camera layer mask | try/catch/finally — finally restores autoClear + mask and always scheduleNext()s | Re-read (mirrors composer guard) |
+| R3#15 | Terrain atlas layer index unchecked: undefined→NaN→silently corrupts layer 0; code≥33 aborts whole atlas | Per-tile fail-soft skip + warn + tile free | 25/25; reverted source corrupts layer 0 |
+| R3#16 | vfxGauge begin/end asymmetry → GL_INVALID_OPERATION every other frame, multi-frame measurements | begin/end matched via pending slot; poll-only frames issue no endQuery | 10/10 vs strict mock GL; pre-fix 20 errors/30 frames |
+| R3#17 | surfacePixelsToTexture had no length check (only sibling without one) | byteLength >= w*h*4 or THROW (deliberate: all 6 callers deref unconditionally — soft-null would crash at call sites) | Harness |
+| R3#18 | meshToFusedGeometry unguarded null-ptr first read failed the whole LB statics bake | try/catch → null, matching meshToGeometryGroups | Harness |
+
+## Deferred / known remaining (round 3)
+
+- **Task #61 (open):** dismember slicePart/fracturePart/chipPart mutate a captured
+  part after `await _loadPinata()` with no identity guard (R1#9 class) — stump
+  meshes on a detached rig after same-guid respawn. Next round.
+- **Task #42 (still open):** BLOCKING_PARTICLE_PARITY_ON strict-on trio.
+- csm.js `dispose()` → scene.remove(csmGroup) remains the one runtime
+  light-count mutation (soft 3D→2D→3D re-init relinks everything) —
+  teardown-ownership change in lighting.js, deliberately untouched.
+- Debris rAF ignores ?targetFps/?renderOnDemand/?nullRender — left as-is
+  (physics must integrate while rendering is gated); revisit if bot CPU matters.
+- ragdoll _corpsePoses FIFO (plain Float32Arrays, no GPU) — harmless, noted.
+- Boot-agent's scratch harnesses (settle-contract, pacer, adapter, vfxGauge)
+  live in the session scratchpad — self-contained, ready to promote into
+  tests/ if wanted.
+
+## Green at round-3 commit time
+
+visfid_p33_csm 16, visfid_c4_program_cache_key 15 (light-count lock),
+nameplate lod-badge/font-gate/item-type, ragdoll_energy 32, kill_impulse 115,
+carnage_finisher 248, light_pool 14, cell_lights 18, lru_light_eviction 9,
+spotlight_target 4, p1_alias_split 9. All 7 edited files node --check clean.
+Pre-existing failures re-proven on baseline by both agents (md5-verified
+restores): phase7_6_lighting (1 check), p33's harness import gap,
+f10_hud_nameplate (hud.js, not touched).

@@ -468,6 +468,24 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
 
   for (const tex of terrainTextures) {
     const code = tex.terrainType;
+    // 2026-08-03 — the layer index was the only unvalidated write target in
+    // this loop, and BOTH failure shapes were silent-or-fatal: `undefined`
+    // (a stale pkg/ without the getter) coerces to offset 0 inside
+    // `TypedArray.set`, painting every tile over layer 0 (whole world renders
+    // as one terrain code, no error anywhere), while a code >= ATLAS_DEPTH
+    // throws RangeError mid-loop and loses the ENTIRE atlas. Fail soft per
+    // tile: skip it, keep the other 32 layers, say so loudly. (The sibling
+    // `buildTerrainDetailArrayBytes` throws instead — it packs a variable
+    // depth derived from the same array, so there a bad index means the
+    // caller's slice table is wrong.)
+    if (!Number.isInteger(code) || code < 0 || code >= ATLAS_DEPTH) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[adapter] terrain atlas: skipping tile with out-of-range terrainType ${code} (expected integer 0..${ATLAS_DEPTH - 1})`
+      );
+      if (typeof tex.free === "function") tex.free();
+      continue;
+    }
     const w = tex.width;
     const h = tex.height;
     const px = tex.pixels; // wasm-bindgen Uint8Array, length w*h*4
@@ -1018,7 +1036,16 @@ export function meshToGeometryGroups(wasmMesh, opts) {
  * Empty meshes return `null` (caller skips the placement).
  */
 export function meshToFusedGeometry(wasmMesh) {
-  const triCount = wasmMesh.triCount | 0;
+  // 2026-08-03 — same null-Rust-pointer guard `meshToGeometryGroups` has had
+  // (see its head comment): a freed / cache-evicted wasm-bindgen wrapper
+  // throws "null pointer passed to rust" on EVERY getter, and the statics
+  // bake must skip that one placement rather than fail the whole landblock.
+  let triCount;
+  try {
+    triCount = wasmMesh.triCount | 0;
+  } catch (_) {
+    return null;
+  }
   if (triCount === 0) return null;
 
   const positions = Float32Array.from(wasmMesh.positions);
@@ -1065,6 +1092,19 @@ export function surfacePixelsToTexture(rgba8, width, height) {
   if (!rgba8 || width === 0 || height === 0) {
     throw new Error(
       `surfacePixelsToTexture: bad input (w=${width}, h=${height}, hasPixels=${!!rgba8})`
+    );
+  }
+  // 2026-08-03 — this was the ONE pixel helper that never checked the buffer
+  // against its declared dimensions (the normal / height / roughness / AO
+  // siblings all do). Since the copy-elision below stopped reallocating to
+  // w*h*4, a short plane reached `texImage2D` and produced a GL error plus
+  // garbage texels with nothing naming the DID. The two scalars and the plane
+  // travel as INDEPENDENT fields across the bake-worker postMessage boundary
+  // (bake_transfer.js), so a mismatch is a protocol error, not a soft miss —
+  // raised through this function's existing bad-input contract.
+  if (rgba8.byteLength < width * height * 4) {
+    throw new Error(
+      `surfacePixelsToTexture: truncated pixels (w=${width}, h=${height} needs ${width * height * 4} bytes, got ${rgba8.byteLength})`
     );
   }
   // Copy off wasm linear memory (it can grow between this call and the GPU

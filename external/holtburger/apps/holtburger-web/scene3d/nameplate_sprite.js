@@ -158,19 +158,72 @@ function setNameplateDepthTest(enabled) {
 
 // Wave 1 / A1+A2 fix (2026-05-28) — FIFO caps so neither cache grows
 // unboundedly through long sessions with many unique names / enchant-
-// state tuples. Eviction does NOT dispose the texture/material because
-// other live sprites may still hold references to the evicted entry;
-// GC reclaims the GPU resources naturally once the last sprite using
-// them despawns. The cap therefore bounds JS Map growth (the actual
-// leak vector); GPU memory tracks live-sprite count, not cache size.
+// state tuples.
+//
+// 2026-08-03 review F6: eviction used to drop the entry and rely on "GC
+// reclaims the GPU resources naturally". It does not. three.js frees a
+// WebGLTexture only from the texture's own `dispose` event — `WebGLProperties`
+// holds it in a WeakMap, so a garbage-collected CanvasTexture leaks its GL
+// handle for the life of the context. Past the cap, every new unique name was
+// leaking up to 1024×64 RGBA (256 KB) of VRAM with no way to reclaim it.
+//
+// We cannot dispose at eviction time either: live sprites may still be drawing
+// with that material. So evicted entries move to `_pendingDispose` and are
+// freed by a low-frequency mark-and-sweep against the live entity map (the
+// same map the LOD tick already walks every frame) — an entry whose material
+// no live sprite references is provably safe to free.
 const NAMEPLATE_CACHE_CAP = 512;
 const BUFF_BADGE_CACHE_CAP = 128;
+/** Entries evicted from a cache but possibly still in use by a live sprite. */
+const _pendingDispose = [];
+/** Sweep cadence in LOD ticks (~10 s at 60 fps). Eviction is rare; the sweep
+ *  only needs to be eventual, and it walks the whole entity map. */
+const PENDING_DISPOSE_SWEEP_TICKS = 600;
+let _pendingSweepTick = 0;
+let _pendingDisposed = 0;
+
 function _capCacheFifo(cache, max) {
   while (cache.size > max) {
     const firstKey = cache.keys().next().value;
     if (firstKey === undefined) break;
+    const evicted = cache.get(firstKey);
     cache.delete(firstKey);
+    if (evicted) _pendingDispose.push(evicted);
   }
+}
+
+/**
+ * Free evicted texture/material pairs that no live sprite references any more.
+ * `entityMap` is the authority on what is on screen: a nameplate/badge sprite
+ * only ever lives in `inst._nameplateSprite` / `inst._buffBadgeSprite`, so the
+ * union of those materials is the complete in-use set. Anything else in
+ * `_pendingDispose` is unreachable and its GPU resources can go.
+ */
+function _sweepPendingDispose(entityMap) {
+  if (_pendingDispose.length === 0) return 0;
+  const inUse = new Set();
+  for (const inst of entityMap.values()) {
+    const np = inst && inst._nameplateSprite;
+    if (np?.material) inUse.add(np.material);
+    const bb = inst && inst._buffBadgeSprite;
+    if (bb?.material) inUse.add(bb.material);
+  }
+  let freed = 0;
+  let keep = 0;
+  for (let i = 0; i < _pendingDispose.length; i++) {
+    const entry = _pendingDispose[i];
+    if (entry?.material && inUse.has(entry.material)) {
+      // Still on screen — hold it for the next sweep.
+      _pendingDispose[keep++] = entry;
+      continue;
+    }
+    try { entry?.texture?.dispose(); } catch (_) {}
+    try { entry?.material?.dispose(); } catch (_) {}
+    freed++;
+  }
+  _pendingDispose.length = keep;
+  _pendingDisposed += freed;
+  return freed;
 }
 
 // #27 (Option A) — system-font bake gate. To avoid the use-after-dispose
@@ -290,7 +343,20 @@ const MAX_VISIBLE_NAMEPLATES = (() => {
   } catch (_) { return 30; }
 })();
 // Cached scratch arrays to avoid allocations in the hot per-frame loop.
+// `_lodScratch` is rebuilt each tick but only ever holds objects drawn from
+// `_lodPool`, which grows to the session's high-water entity count and is then
+// reused forever — the old `push({ sprite, d2 })` minted one object per
+// in-range entity per frame (2026-08-03 review F5).
 const _lodScratch = [];
+const _lodPool = [];
+function _lodEntry(n) {
+  let e = _lodPool[n];
+  if (!e) {
+    e = { sprite: null, badge: null, d2: 0 };
+    _lodPool[n] = e;
+  }
+  return e;
+}
 const _lodCamWorld = { x: 0, y: 0, z: 0 };
 let _lodRafId = 0;
 let _lodDisposed = false;
@@ -422,7 +488,7 @@ function _bakeWithCanvasText(cacheKey, textCanvas) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    depthTest: _nameplateDepthTest, // F14-6 — flipped on indoors under ?nameplateOcclusion
+    depthTest: _nameplateDepthTest, // F14-6 — always-on gate: true indoors, false outdoors
     depthWrite: false,
     sizeAttenuation: true,
     toneMapped: false,
@@ -588,7 +654,7 @@ function getOrBakeNameplateMaterial(name, colorHex) {
     // through walls" was inconsistent with the 2D and arguably worse
     // for player situational awareness (you couldn't see the name of a
     // vendor through a wall before walking in).
-    depthTest: _nameplateDepthTest, // F14-6 — flipped on indoors under ?nameplateOcclusion
+    depthTest: _nameplateDepthTest, // F14-6 — always-on gate: true indoors, false outdoors
     depthWrite: false,
     // sizeAttenuation=true (default) — sprite gets smaller in the
     // distance, like a real billboard. Keeps the nameplate's apparent
@@ -807,6 +873,17 @@ export function disposeNameplateCache() {
     try { entry.material.dispose(); } catch (_) {}
   }
   _buffBadgeCache.clear();
+  // F6 — drain anything the cap evicted but the sweep hadn't reached yet.
+  for (const entry of _pendingDispose) {
+    try { entry?.texture?.dispose(); } catch (_) {}
+    try { entry?.material?.dispose(); } catch (_) {}
+  }
+  _pendingDispose.length = 0;
+}
+
+/** Pending-dispose telemetry (tests / diagnostic scripts). */
+export function getNameplateDisposeStats() {
+  return { pending: _pendingDispose.length, disposed: _pendingDisposed };
 }
 
 // =========================================================================
@@ -903,7 +980,7 @@ function _bakeBuffBadge(buffs, debuffs, cooldowns) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    depthTest: _nameplateDepthTest, // F14-6 — flipped on indoors under ?nameplateOcclusion
+    depthTest: _nameplateDepthTest, // F14-6 — always-on gate: true indoors, false outdoors
     depthWrite: false,
     sizeAttenuation: true,
     toneMapped: false,
@@ -1064,15 +1141,23 @@ export function tickNameplateLod(scene3d) {
   if (!scene3d) return { visible: 0, considered: 0 };
   // F14-6 — drive nameplate / buff-badge wall-occlusion off the local
   // player's indoor state (stamped by cells.js tickCellVisibility3D each
-  // frame). Only active under ?nameplateOcclusion=on; otherwise depthTest
-  // stays false (the shipped on-top behaviour). setNameplateDepthTest
-  // no-ops when the value is unchanged, so this is a cheap per-frame check.
+  // frame). INTEGRATED always-on (the ?nameplateOcclusion=on gate was retired
+  // after the 2026-06-10 1070 eye-test — see _NAMEPLATE_OCCLUSION_FLAG):
+  // depthTest is ON indoors, OFF outdoors. setNameplateDepthTest no-ops when
+  // the value is unchanged, so this is a cheap per-frame check.
   if (_NAMEPLATE_OCCLUSION_FLAG) {
     setNameplateDepthTest(!!scene3d._currentCellIndoor);
   }
   const entityMap = scene3d.entityManager?.entityMap;
   if (!entityMap || typeof entityMap.values !== "function") {
     return { visible: 0, considered: 0 };
+  }
+  // F6 — reclaim GPU resources for cache entries evicted past the cap, once
+  // no live sprite references them. Cheap: runs once every ~10 s and only when
+  // something was actually evicted.
+  if (++_pendingSweepTick >= PENDING_DISPOSE_SWEEP_TICKS) {
+    _pendingSweepTick = 0;
+    _sweepPendingDispose(entityMap);
   }
   const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
   if (!cam) return { visible: 0, considered: 0 };
@@ -1097,12 +1182,24 @@ export function tickNameplateLod(scene3d) {
   const rangeSq = NAMEPLATE_VISIBLE_RANGE_M * NAMEPLATE_VISIBLE_RANGE_M;
   for (const inst of entityMap.values()) {
     const sprite = inst && inst._nameplateSprite;
-    if (!sprite) continue;
+    // F5/F8 — the badge comes from its OWN tracked slot, not a per-frame
+    // `root.children.find(...)` scan (one closure + an O(children) walk per
+    // entity per frame). The slot is also the only way to reach a badge on an
+    // entity that has NO nameplate — deferred font bake, or a name filtered by
+    // the local-player / inventory skips. `refreshBuffBadgeForEntity` attaches
+    // to those, and the old `if (!sprite) continue` left them stranded visible
+    // at any distance, past both the range cull and the count cap.
+    const badge = inst && inst._buffBadgeSprite;
+    if (!sprite) {
+      if (badge) badge.visible = false;
+      continue;
+    }
     // Local-player sprite: always visible. (Note: ensureNameplateForEntity
     // already skips the local player, but if a future path attaches one
     // anyway — e.g. third-person showing your own name — keep it on.)
     if (localGuid !== null && (inst.guid >>> 0) === localGuid) {
       sprite.visible = true;
+      if (badge) badge.visible = true;
       continue;
     }
     // World position of the sprite. Sprite is parented to inst.root,
@@ -1119,47 +1216,39 @@ export function tickNameplateLod(scene3d) {
     const d2 = dx * dx + dy * dy + dz * dz;
     if (d2 > rangeSq) {
       sprite.visible = false;
-      // Wave 4.B (#19) — hide the sibling buff badge too. The badge is
-      // parented to the same root but is NOT in entityMap's nameplate
-      // slot, so without this it stays visible after the nameplate LODs
-      // out (stranded "+N" chip floating with no name). Mirrors the
-      // in-range visibility sync below.
-      const badge = root.children?.find((c) => c?.name?.startsWith?.("buff_badge_"));
+      // Wave 4.B (#19) — hide the sibling buff badge too, or it stays visible
+      // after the nameplate LODs out (stranded "+N" chip floating with no
+      // name). Mirrors the in-range visibility sync below.
       if (badge) badge.visible = false;
       continue;
     }
-    _lodScratch.push({ sprite, d2 });
+    const e = _lodEntry(_lodScratch.length);
+    e.sprite = sprite;
+    e.badge = badge || null;
+    e.d2 = d2;
+    _lodScratch.push(e);
   }
 
   // Count cap: partial-sort by distance² and keep the N nearest. Plain
   // O(n log n) sort is fine here — n typically ≤ 200; the in-range
-  // subset is usually << that. Using stable Array.sort over an
-  // index-array would save GC churn, but the scratch is reused across
-  // frames and the per-tick objects are small (sprite ref + number).
+  // subset is usually << that. The scratch entries themselves are pooled
+  // (`_lodEntry`), so the sort shuffles references and allocates nothing.
   _lodScratch.sort((a, b) => a.d2 - b.d2);
   let visible = 0;
   for (let i = 0; i < _lodScratch.length; i++) {
+    const e = _lodScratch[i];
     const want = i < MAX_VISIBLE_NAMEPLATES;
-    _lodScratch[i].sprite.visible = want;
+    e.sprite.visible = want;
     if (want) visible++;
     // === Wave 4.B — sync buff badge visibility with nameplate (2026-05-28) ===
-    //
-    // The badge lives on the same entity root as the nameplate, so the
-    // entity manager's visibility passes for the rig will already affect
-    // both. But the nameplate's per-frame LOD path explicitly toggles
-    // `.visible` per-sprite — we need to mirror that on the badge so it
-    // hides when the nameplate hides (same range + count cap).
-    //
-    // Pull from `_lodScratch[i].inst` set in the in-range push below. To
-    // avoid widening the scratch tuple shape, we walk back to the entity
-    // by reading the sprite's parent root and looking up the entity by
-    // userData (set at spawn). Cheap — only runs for in-range nameplates.
-    const sprite = _lodScratch[i].sprite;
-    const root = sprite.parent;
-    if (root) {
-      const badge = root.children?.find((c) => c?.name?.startsWith?.("buff_badge_"));
-      if (badge) badge.visible = want;
-    }
+    // The badge is parented to the same entity root, but the LOD path toggles
+    // `.visible` per-sprite, so the badge has to be mirrored explicitly (same
+    // range + count cap). Carried on the pooled scratch entry from its tracked
+    // slot — no children scan (F5).
+    if (e.badge) e.badge.visible = want;
+    // Drop the refs so a pooled entry can't pin a despawned sprite alive.
+    e.sprite = null;
+    e.badge = null;
   }
   const considered = _lodScratch.length;
   _lodScratch.length = 0;

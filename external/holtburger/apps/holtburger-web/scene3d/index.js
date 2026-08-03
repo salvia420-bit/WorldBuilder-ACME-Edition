@@ -353,6 +353,26 @@ const FIXED_GRID_DIAG_GRACE_MS = 3000;
 // landblock_lru.js `_hasInFlightBake`). Feeds the fixedGrid derived-view
 // assertion so a just-dispatched (not-yet-baked) edge LB isn't mis-flagged as
 // an over-claim. Returns null when the guard isn't wired (unit/capture paths).
+/**
+ * F3 (2026-08-03) — `?targetFps=N` pacing delay, in ms.
+ *
+ * The budget must be charged against the previous frame's START, not against
+ * the previous `scheduleNext()` call: the gap between two scheduleNext calls
+ * is `delay + work`, so subtracting it charged the sleep to itself and the
+ * pacer alternated `I` / `0` delays (measured average period `(I + work)/2` —
+ * `?targetFps=10` ran at ~17 fps with a 6× frame-time sawtooth).
+ *
+ * `lastFrameStartMs === null` (boot, and the post-context-loss `onResume`
+ * baseline reset) ⇒ 0, i.e. schedule immediately and let the cadence establish
+ * from the next frame — the pre-fix behaviour for that case.
+ * Pure: exported only so the unit harness can drive it.
+ */
+export function pacerDelayMs(frameIntervalMs, lastFrameStartMs, nowMs) {
+  if (!(frameIntervalMs > 0)) return 0;
+  if (lastFrameStartMs === null || !Number.isFinite(lastFrameStartMs)) return 0;
+  return Math.max(0, frameIntervalMs - (nowMs - lastFrameStartMs));
+}
+
 function terrainInFlightLbKeys(streamGuardState) {
   const inFlight = streamGuardState?.inFlight;
   if (!(inFlight instanceof Set) || inFlight.size === 0) return null;
@@ -543,7 +563,8 @@ function _vfxGaugeArm(renderer) {
     timerExt,
     useFence,
     gpuSource,
-    query: null, // in-flight timer query
+    query: null, // ACTIVE query (begun this frame, not yet ended)
+    pending: null, // ENDED query awaiting its async result (F6)
     tCpuStart: 0,
     tCpuMs: 0,
     tGpuMs: -1, // -1 = not-yet / N/A
@@ -571,7 +592,9 @@ function vfxGaugeBeginFrame(renderer) {
       typeof performance !== "undefined" && performance.now
         ? performance.now()
         : 0;
-    if (s.timerExt && s.gl && !s.query) {
+    // F6: begin only when nothing is active AND nothing is still awaiting a
+    // result — one query in flight at a time keeps begin/end strictly paired.
+    if (s.timerExt && s.gl && !s.query && !s.pending) {
       // Begin a GPU timer query around this frame's submission.
       const q = s.gl.createQuery();
       s.gl.beginQuery(s.timerExt.TIME_ELAPSED_EXT, q);
@@ -586,19 +609,33 @@ function vfxGaugeEndFrame(renderer) {
   const s = _vfxGaugeState;
   if (!s) return; // disarmed (or not yet probed) → nothing to do
   try {
-    if (s.timerExt && s.gl && s.query) {
-      s.gl.endQuery(s.timerExt.TIME_ELAPSED_EXT);
-      // Poll the PREVIOUS query (results are async — never block the frame).
-      const available = s.gl.getQueryParameter(
-        s.query,
-        s.gl.QUERY_RESULT_AVAILABLE
-      );
-      const disjoint = s.gl.getParameter(s.timerExt.GPU_DISJOINT_EXT);
-      if (available && !disjoint) {
-        const ns = s.gl.getQueryParameter(s.query, s.gl.QUERY_RESULT);
-        s.tGpuMs = ns / 1e6;
-        s.gl.deleteQuery(s.query);
+    if (s.timerExt && s.gl) {
+      // F6 (2026-08-03): end ONLY the query this frame actually began. The old
+      // shape ended on every frame `s.query` was non-null — but `s.query` was
+      // only cleared once a result landed (1-2 frames later), so the in-between
+      // frames issued an unmatched `endQuery` = GL INVALID_OPERATION every
+      // other frame, and the number reported spanned an unknown frame count.
+      if (s.query) {
+        s.gl.endQuery(s.timerExt.TIME_ELAPSED_EXT);
+        s.pending = s.query;
         s.query = null;
+      }
+      // Poll the ENDED query on LATER frames (results are async — never block).
+      if (s.pending) {
+        const available = s.gl.getQueryParameter(
+          s.pending,
+          s.gl.QUERY_RESULT_AVAILABLE
+        );
+        const disjoint = s.gl.getParameter(s.timerExt.GPU_DISJOINT_EXT);
+        if (available || disjoint) {
+          // A disjoint invalidates the timing — drop it rather than report it
+          // (and rather than leak the query object, which the old code did).
+          if (available && !disjoint) {
+            s.tGpuMs = s.gl.getQueryParameter(s.pending, s.gl.QUERY_RESULT) / 1e6;
+          }
+          s.gl.deleteQuery(s.pending);
+          s.pending = null;
+        }
       }
     } else if (s.useFence && s.gl) {
       // Fence fallback — gl.finish() blocks until the GPU drains this frame,
@@ -2032,7 +2069,6 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   const _dtRecoveryThresholdS = renderOnDemand
     ? Infinity
     : Math.max(DT_RECOVERY_RAW_THRESHOLD_S, (_frameIntervalMs / 1000) * 1.5);
-  let _lastScheduleTs = null;
   // sched-timers (2026-06-07): track the in-flight scheduler handles so
   // stop()/onPause()/onResume() can cancel a pending re-arm. Without
   // this, a paused/restored loop (context-loss recovery, hot-swap stop)
@@ -2040,6 +2076,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // ?targetFps=N a mid-interval pause→resume could double the cadence.
   let _schedTimeoutId = null;
   let _schedRafId = null;
+  // F4 one-shot warn flag for the direct (non-composer) render path.
+  let _directRenderWarned = false;
   function _cancelSchedule() {
     if (_schedTimeoutId !== null) {
       clearTimeout(_schedTimeoutId);
@@ -2055,9 +2093,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     if (_frameIntervalMs > 0) {
       const now = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
-      const elapsed = _lastScheduleTs === null ? 0 : (now - _lastScheduleTs);
-      _lastScheduleTs = now;
-      const delay = Math.max(0, _frameIntervalMs - elapsed);
+      // F3: budget charged against THIS frame's start (`lastFrameTs`, stamped
+      // at the top of tick), so period → _frameIntervalMs exactly. Charging it
+      // against the previous scheduleNext double-counted the sleep.
+      const delay = pacerDelayMs(_frameIntervalMs, lastFrameTs, now);
       if (delay > 0) {
         _schedTimeoutId = setTimeout(() => {
           _schedTimeoutId = null;
@@ -2395,25 +2434,43 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // vs-terrain Z-fight the clear masked — to be fixed with a targeted
     // cell-floor polygonOffset if it resurfaces, never a global wipe.
     const camLayersBefore = activeCam.layers.mask;
+    const prevAutoClear = renderer.autoClear;
     activeCam.layers.mask = (1 << 0) | (1 << 1); // both layers, shared depth
-    if (skyRendered) {
-      // Preserve the sky's color paint; reset ONLY depth so the world
-      // depth-test starts fresh against a clean buffer.
-      const prevAutoClear = renderer.autoClear;
-      renderer.autoClear = false;
-      renderer.clearDepth();
-      renderer.render(scene, activeCam);
+    // F4 (2026-08-03) — this path (pre-atmosphere-bake window, ?wireframe=1,
+    // ?atmosphere=off) was the ONE render submission with no guard: a throw
+    // skipped the mask/autoClear restores AND `scheduleNext()`, so the frame
+    // pump never re-armed. `tick` is async, so it surfaced only as a silent
+    // unhandled rejection with `running` still true — the world froze and
+    // streaming stopped with no console signal. INVARIANT: every exit restores
+    // renderer + camera state and re-arms the loop.
+    try {
+      if (skyRendered) {
+        // Preserve the sky's color paint; reset ONLY depth so the world
+        // depth-test starts fresh against a clean buffer.
+        renderer.autoClear = false;
+        renderer.clearDepth();
+        renderer.render(scene, activeCam);
+      } else {
+        // No sky pass (pre-bake / pre-construction) — autoClear writes
+        // color + depth from the clear color in a single shared-depth pass.
+        renderer.render(scene, activeCam);
+      }
+      recordRenderDiag(renderer, scene);
+    } catch (e) {
+      // One-shot, on a closure flag rather than `liveScene3dRef` — this path
+      // also runs on the capture route where that ref is null.
+      if (!_directRenderWarned) {
+        _directRenderWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[scene3d] direct-path renderer.render threw (loop re-armed):", e);
+      }
+    } finally {
       renderer.autoClear = prevAutoClear;
-    } else {
-      // No sky pass (pre-bake / pre-construction) — autoClear writes
-      // color + depth from the clear color in a single shared-depth pass.
-      renderer.render(scene, activeCam);
+      // Restore the camera's layer mask so downstream consumers
+      // (raycasters, CSM matrices) observe the outdoor-equivalent state.
+      activeCam.layers.mask = camLayersBefore;
+      scheduleNext();
     }
-    // Restore the camera's layer mask so downstream consumers
-    // (raycasters, CSM matrices) observe the outdoor-equivalent state.
-    activeCam.layers.mask = camLayersBefore;
-    recordRenderDiag(renderer, scene);
-    scheduleNext();
   }
   // A1-O3: declare 3D-driver ownership of the tickMovement enqueue so
   // the index.html 2D loop's legacy enqueue (its sole `tickMovement()`

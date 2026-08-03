@@ -449,6 +449,13 @@ function aliasSplitFlagEnabled() {
 // tunes the cap. Observe via `__diag.bakeWorkerStats().queue`.
 const DEFAULT_BAKE_QUEUE_CAP = 4;
 
+// F1 (2026-08-03) — post-crash respawn cooldown, doubling per CONSECUTIVE
+// failure. 1 s is short enough that a one-off fault costs at most one bake's
+// worth of main-thread decode; the 30 s ceiling is what stops a permanently
+// broken worker (stale `pkg/`) from being re-spawned once per bake.
+const WORKER_RETRY_BASE_MS = 1000;
+const WORKER_RETRY_MAX_MS = 30000;
+
 function queueFlagEnabled() {
   try {
     const v = new URLSearchParams(globalThis.location?.search || "").get("bakeQueue");
@@ -737,6 +744,15 @@ export class BakeWorkerClient {
     this._queueCap = queueCapFlag();
     this._lanes = [[], [], []];
     this._inFlightPosted = 0;
+    // F1 (2026-08-03) — crash respawn backoff. `_failAll` used to drop a dead
+    // worker with no cooldown, so a worker that fails at LOAD (the classic
+    // stale-`pkg/` module-link error) was re-spawned once per bake — dozens of
+    // Workers a second on a cold boot, each re-fetching the wasm. Consecutive
+    // crashes now push `_workerRetryAtMs` out geometrically; until then
+    // `_ensureWorker` rejects immediately and every caller takes its existing
+    // main-thread fallback. Reset on a successful `ready`.
+    this._workerFailCount = 0;
+    this._workerRetryAtMs = 0;
     // A16 (2026-07-25) — `?bakeBatchMax=N`; 0 = uncapped (pre-A16 behaviour).
     this.batchMax = DEFAULT_BAKE_BATCH_MAX;
   }
@@ -764,12 +780,32 @@ export class BakeWorkerClient {
 
   _ensureWorker() {
     if (this._readyPromise) return this._readyPromise;
-    this._worker = new Worker(new URL("./bake_worker.js", import.meta.url), {
-      type: "module",
-    });
+    // F1: inside the post-crash cooldown, refuse to spawn. A rejected promise
+    // is the SAME signal a crash gives the callers, so each one takes its
+    // existing main-thread fallback — no new branch at any call site.
+    const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    if (this._workerRetryAtMs > nowMs) {
+      return Promise.reject(
+        new Error(
+          `bake worker: in crash backoff for another ${Math.round(this._workerRetryAtMs - nowMs)} ms`,
+        ),
+      );
+    }
+    try {
+      this._worker = new Worker(new URL("./bake_worker.js", import.meta.url), {
+        type: "module",
+      });
+    } catch (e) {
+      // Construction itself can throw (CSP / blocked worker-src). Arm the same
+      // cooldown so this is not retried per bake either.
+      this._noteWorkerFailure();
+      throw e;
+    }
     this._worker.onmessage = (ev) => this._onMessage(ev.data);
     this._worker.onerror = (e) =>
-      this._failAll(new Error("bake worker crashed: " + ((e && e.message) || e)));
+      this._failAll(new Error("bake worker crashed: " + ((e && e.message) || e)), {
+        backoff: true,
+      });
     // Absolutize URLs against the PAGE: the worker resolves relative URLs
     // against its own script location (scene3d/), not index.html, so a raw
     // "../../dist/manifest.json" would fetch the wrong path inside the worker.
@@ -868,10 +904,36 @@ export class BakeWorkerClient {
         resolve: (v) => { done(true); resolve(v); },
         reject: (e) => { done(false); reject(e); },
       });
+      // F2 (2026-08-03) — INVARIANT: every promise handed out here settles.
+      // The client is worker-less between a `_failAll` and the next
+      // `_ensureWorker()` respawn (a crash can land in the gap between the
+      // caller's `await this._ensureWorker()` and this call). Pre-fix, such a
+      // request sat in `_pending` + `_lanes` forever — `_pump` no-ops without
+      // a worker and `_failAll` had already run — so the awaiting per-LB bake
+      // never resolved and held one of the 6 global stream-guard slots for the
+      // rest of the session. Reject instead: that is what routes the caller
+      // into its main-thread fallback.
+      const settleUndispatched = (e) => {
+        const p = this._pending.get(id);
+        if (!p) return;
+        this._pending.delete(id);
+        p.reject(e);
+      };
+      if (!this._worker) {
+        settleUndispatched(new Error("bake worker: unavailable (dropped before dispatch)"));
+        return;
+      }
       // Session 9 (1116 §4) — urgent-first dispatch. `?bakeQueue=off`
       // restores the pre-queue post-immediately behavior (the s8 arm).
       if (!this._queueEnabled) {
-        this._worker.postMessage({ type, id, ...body });
+        try {
+          this._worker.postMessage({ type, id, ...body });
+        } catch (e) {
+          // A throwing postMessage (DataCloneError on a non-cloneable body,
+          // dead port) must settle the request AND drop its `_pending` entry —
+          // an executor throw alone would reject but leak the map entry.
+          settleUndispatched(e);
+        }
         return;
       }
       const lane = laneForBakeMessage(type, body);
@@ -901,7 +963,20 @@ export class BakeWorkerClient {
           if (qMs > b.maxQueueMs) b.maxQueueMs = qMs;
         }
       } catch (_) { /* stats must never affect dispatch */ }
-      this._worker.postMessage({ type: entry.type, id: entry.id, ...entry.body });
+      try {
+        this._worker.postMessage({ type: entry.type, id: entry.id, ...entry.body });
+      } catch (e) {
+        // F2: a dispatch failure settles THIS entry and keeps pumping. Letting
+        // it escape would land in whichever caller happened to drive the pump
+        // (`_request`'s executor, or `_onMessage`) and strand every other
+        // queued request — the same never-settles hazard by another route.
+        this._inFlightPosted = Math.max(0, this._inFlightPosted - 1);
+        const p = this._pending.get(entry.id);
+        if (p) {
+          this._pending.delete(entry.id);
+          p.reject(e);
+        }
+      }
     }
   }
 
@@ -927,6 +1002,10 @@ export class BakeWorkerClient {
       this._pump();
     }
     if (msg.type === "ready") {
+      // F1: a worker that reached `ready` is healthy — clear the crash
+      // backoff so a mid-session fault starts from the shortest cooldown.
+      this._workerFailCount = 0;
+      this._workerRetryAtMs = 0;
       // `?gfxRelief` ack — the worker echoes what IT applied to its OWN wasm
       // instance. Without this the diag reader can only see what the page
       // SENT, and a worker that silently baked flat (stale pkg/ in the worker's
@@ -940,16 +1019,50 @@ export class BakeWorkerClient {
     entry.reject(new Error("bake worker: unknown reply " + msg.type));
   }
 
-  _failAll(err) {
+  /** F1: geometric cooldown before the next spawn (1 s → 30 s, capped). */
+  _noteWorkerFailure() {
+    this._workerFailCount += 1;
+    const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    const waitMs = Math.min(
+      WORKER_RETRY_BASE_MS * 2 ** (this._workerFailCount - 1),
+      WORKER_RETRY_MAX_MS,
+    );
+    this._workerRetryAtMs = nowMs + waitMs;
+    if (this._workerFailCount === 1) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[bake_worker_client] worker failed; main-thread fallback active, respawn backoff ${waitMs} ms (stale pkg/ after a wasm rebuild is the usual cause)`,
+      );
+    }
+  }
+
+  /**
+   * @param {Error} err
+   * @param {{backoff?:boolean}} [opts] `backoff` arms the F1 respawn cooldown —
+   *   set on the CRASH path only, so an explicit `terminate()` (the documented
+   *   post-rebake staleness reset) still respawns on the very next bake.
+   */
+  _failAll(err, opts = {}) {
     for (const { reject } of this._pending.values()) reject(err);
     this._pending.clear();
     // Queued-but-unposted entries were rejected via `_pending` above; drop
     // their lane records and the posted counter so a respawn starts clean.
     this._lanes = [[], [], []];
     this._inFlightPosted = 0;
-    // Drop the dead worker so a later call can respawn.
+    // F1: TERMINATE the dead worker before dropping the reference. A worker
+    // that threw is not necessarily gone — without this its thread, wasm
+    // instance and shard/surface caches (up to `?surfaceBudgetMB`'s worker
+    // half) stay resident for the rest of the session while the respawn mints
+    // a second one. `terminate()` on an already-dead worker is a no-op.
+    const dead = this._worker;
     this._worker = null;
     this._readyPromise = null;
+    try {
+      dead?.terminate?.();
+    } catch (_) {
+      /* best-effort — the reference is already dropped */
+    }
+    if (opts.backoff) this._noteWorkerFailure();
   }
 
   /**
@@ -1413,7 +1526,9 @@ export class BakeWorkerClient {
   }
 
   terminate() {
-    if (this._worker) this._worker.terminate();
+    // `_failAll` owns the terminate + reference drop (F1). No `backoff` — an
+    // explicit terminate is the staleness-reset gesture, so the next bake must
+    // be free to respawn immediately.
     this._failAll(new Error("bake worker terminated"));
   }
 }
