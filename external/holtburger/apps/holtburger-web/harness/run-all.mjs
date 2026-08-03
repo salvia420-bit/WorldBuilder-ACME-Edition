@@ -304,6 +304,13 @@ function runTier(tier, childArgs) {
     { re: /cargo not found/i, name: "cargo-absent" },
     { re: /not running cargo/i, name: "print-only" },
     { re: /PRINT-ONLY-SAFE/, name: "print-only" },
+    // F5 (2026-08-03): the list above is entirely TIER-level, so a tier that
+    // ran but whose individual TESTS all skipped still read GREEN. Under
+    // --allow-skips run-js-headless exits 0 with SKIP rows; surface that here
+    // too, so "GREEN (with skips)" is reachable from a per-test skip and not
+    // only from a dead server/toolchain. (Without --allow-skips the child
+    // exits 1 and this tier is RED, which needs no marker.)
+    { re: /^ {2}SKIP {4}: /m, name: "per-test-skip" },
   ];
   const skipHit = okExit ? SKIP_MARKERS.find((m) => m.re.test(combined)) : null;
 

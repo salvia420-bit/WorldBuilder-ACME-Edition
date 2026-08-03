@@ -13,6 +13,13 @@
 //
 import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
+// P5.5 — no "walk" conclusion without proof the player moved. The sibling
+// harness (perf-walk.mjs) has used this since PHY-07-LIVE-RUN-2026-07-26; this
+// file computed `moved` from LANDBLOCK-LOCAL x/y with no global lift and no
+// path accumulation, which is the exact false positive movement_gate.mjs
+// exists to prevent (an out-and-back walk reads ~0 m; an LB crossing reads
+// ~192 m). 2026-08-03 review, finding F4.
+import { movementGate } from "./lib/movement_gate.mjs";
 
 const arg = (k, d) => { const h = process.argv.find(a => a.startsWith(`--${k}=`)); return h ? h.slice(k.length + 3) : d; };
 const DURATION_S = Number(arg("seconds", "300"));
@@ -103,7 +110,12 @@ async function main() {
         if (i % 8 === 7) { await ff(KEY("keyup", "w", "KeyW", 87)); await sleep(1000); await ff(KEY("keydown", "w", "KeyW", 87)); }
       } catch {}
     }
-    const s = await ff(`()=>{const h=window.__sessionHandle;let pose=null;try{pose=h&&h.getLocalPlayerPose?h.getLocalPlayerPose():null}catch(e){}return {diag:window.__diag&&window.__diag.render?Object.assign({},window.__diag.render):null,sync:window.__syncTickDiag?Object.assign({},window.__syncTickDiag):null,heapMB:(performance.memory?+(performance.memory.usedJSHeapSize/1048576).toFixed(1):null),frames:(window.__perf?window.__perf.frames.length:0),boot:window.__bootState||null,pose:pose?{x:+(pose.x||0).toFixed(1),y:+(pose.y||0).toFixed(1),z:+(pose.z||0).toFixed(1)}:null}}`).catch(e => ({ evalErr: String(e.message).slice(0, 80) }));
+    // Pose fields are prototype GETTERS on a wasm-bindgen class, so they are
+    // copied out field-by-field (returning the object serialises to `{}`), and
+    // the box is freed — this harness reports heap/GPU growth, so leaking one
+    // wasm box per sample would pollute its own measurement. landblockId +
+    // heading are required by movementGate (global lift + turn proof).
+    const s = await ff(`()=>{const h=window.__sessionHandle;let p=null,pose=null;try{p=h&&h.getLocalPlayerPose?h.getLocalPlayerPose():null;if(p){pose={landblockId:(p.landblockId>>>0),x:+(p.x||0).toFixed(2),y:+(p.y||0).toFixed(2),z:+(p.z||0).toFixed(2),heading:(typeof p.heading==="number"?p.heading:null)};}}catch(e){}finally{try{p&&p.free&&p.free()}catch(e){}}return {diag:window.__diag&&window.__diag.render?Object.assign({},window.__diag.render):null,sync:window.__syncTickDiag?Object.assign({},window.__syncTickDiag):null,heapMB:(performance.memory?+(performance.memory.usedJSHeapSize/1048576).toFixed(1):null),frames:(window.__perf?window.__perf.frames.length:0),boot:window.__bootState||null,pose:pose}}`).catch(e => ({ evalErr: String(e.message).slice(0, 80) }));
     s.gpu = gpu1070();
     s.elapsed = Math.round((Date.now() - t0) / 1000);
     if (s.pose && !startPose) startPose = s.pose;
@@ -117,7 +129,13 @@ async function main() {
 
   const frames = await ff(`()=>window.__perf?window.__perf.frames:[]`, 20000).catch(() => []);
   const endPose = samples.filter(s => s.pose).slice(-1)[0]?.pose || null;
-  const moved = startPose && endPose ? +Math.hypot(endPose.x - startPose.x, endPose.y - startPose.y).toFixed(1) : 0;
+  // F4: was `Math.hypot(endPose.x - startPose.x, ...)` over LANDBLOCK-LOCAL
+  // coords — no global lift (an LB crossing read as a 192 m jump) and no path
+  // accumulation (an out-and-back walk read ~0 m). movementGate does both, and
+  // its verdict now gates the exit code below.
+  const movement = movementGate(samples.map(s => s.pose).filter(Boolean),
+    { inWorld, requireHeading: true });
+  const moved = movement.pathM;
 
   const dts = frames.filter(d => d > 0 && d < 8000);
   const fps = dts.length ? 1000 / (dts.reduce((a, b) => a + b, 0) / dts.length) : null;
@@ -130,7 +148,7 @@ async function main() {
 
   const report = {
     ts: new Date().toISOString(), host: "GTX1070", durationS: DURATION_S, url: URL, inWorld, renderer,
-    movedMeters: moved, startPose, endPose,
+    movedMeters: moved, movement, startPose, endPose,
     fps: fps ? +fps.toFixed(1) : null,
     frameMs: { p50: pctile(dts, 50), p95: pctile(dts, 95), p99: pctile(dts, 99), worst: dts.length ? Math.max(...dts) : null },
     spikes: { gt33ms: dts.filter(d => d > 33).length, gt100ms: dts.filter(d => d > 100).length, gt500ms: dts.filter(d => d > 500).length, totalFrames: dts.length },
@@ -147,7 +165,11 @@ async function main() {
   console.log("  ALL-FLAGS-ON PERF WALK — GTX 1070 (real GPU)");
   console.log("=".repeat(70));
   console.log(`  in-world        : ${inWorld}   renderer: ${renderer}`);
-  console.log(`  moved           : ${moved} m  (start ${JSON.stringify(startPose)} -> end ${JSON.stringify(endPose)})`);
+  console.log(`  MOVEMENT GATE   : ${movement.verdict}  (path=${movement.pathM}m net=${movement.netDisplacementM}m turned=${movement.headingTurnedRad}rad over ${movement.poseSamples} pose samples)`);
+  if (!movement.valid) {
+    console.log("      ! the player did not walk — treat FPS/draw-call/GPU numbers as a STANDING");
+    console.log("        client, not a walk. This run FAILS (exit 1).");
+  }
   console.log(`  FPS             : ${report.fps}   frame ms p50=${report.frameMs.p50} p95=${report.frameMs.p95} p99=${report.frameMs.p99} worst=${report.frameMs.worst}`);
   console.log(`  spikes          : >33ms=${report.spikes.gt33ms} >100ms=${report.spikes.gt100ms} >500ms=${report.spikes.gt500ms} (of ${dts.length})`);
   console.log(`  draw calls      : ${JSON.stringify(report.drawCalls)}`);
@@ -160,13 +182,23 @@ async function main() {
   console.log(`  eval errors     : ${errs}`);
   console.log(`  full JSON -> ${out}`);
   console.log("=".repeat(70));
+
+  // F4: the verdict now decides the exit code instead of only printing.
+  if (!inWorld || !movement.valid) EXIT = 1;
 }
 
+// F4: this used to swallow every fatal in `.catch` and then `process.exit(0)`
+// unconditionally in `.finally`, so a crash, a never-in-world run and a clean
+// 5-minute walk were indistinguishable to any caller. The cleanup still always
+// runs (the 1070 off-screen rule), but the exit code now reports the truth:
+//   0 = in-world AND the movement gate says a real walk happened
+//   1 = fatal, never in-world, or "this was a standing client"
+let EXIT = 0;
 main()
-  .catch(e => { console.error("[1070] fatal:", e && e.stack ? e.stack : e); })
+  .catch(e => { console.error("[1070] fatal:", e && e.stack ? e.stack : e); EXIT = 1; })
   .finally(async () => {
     // Per the off-screen rule + cleanup: clear the FF off the test page (stops the
     // heavy scene + frees the GPU). Does NOT kill the shared driver process.
     try { await gotoFF("about:blank"); console.log("[1070] FF navigated to about:blank (test page closed)."); } catch (e) { console.log("[1070] about:blank failed:", String(e.message)); }
-    process.exit(0);
+    process.exit(EXIT);
   });

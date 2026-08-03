@@ -95,7 +95,39 @@ const libRs = path.join(APP, "src", "lib.rs");
 if (fs.existsSync(libRs)) {
   const rs = fs.readFileSync(libRs, "utf8");
   for (const m of rs.matchAll(/"([A-Za-z_][A-Za-z0-9_]*)=(?:on|off|[0-9A-Za-z.\-]*)"/g)) readers.add(m[1]);
-  for (const m of rs.matchAll(/[?&]([A-Za-z_][A-Za-z0-9_]*)\b/g)) readers.add(m[1]);
+  // 2026-08-03 review, finding F7: this second sweep used to run
+  //     /[?&]([A-Za-z_][A-Za-z0-9_]*)\b/g
+  // over the WHOLE 3 MB lib.rs. In Rust `?` is the try operator and `&` is the
+  // borrow operator, so it harvested every borrowed identifier as a "reader":
+  // 39 genuine flag tokens vs 511 injected non-flags (`str`, `self`, `mut`,
+  // `Sized`, `key`, `bytes`, `format`, `log`, `e`, `S`, `keys`, `cell`,
+  // `heights`, `codes`, `tables`, …). Any emitted param whose name collided
+  // with a Rust local was therefore marked "has a reader" and silently
+  // dropped from the DEAD-PARAM report.
+  //
+  // `?flagName` only means a URL param inside a string literal or a comment,
+  // so restrict the scan to exactly those regions.
+  const litsAndComments = [
+    ...rs.matchAll(/"(?:[^"\\\n]|\\.)*"/g),   // double-quoted string literals
+    ...rs.matchAll(/\/\/[^\n]*/g),            // line comments
+  ].map((m) => m[0]).join("\n");
+  // Even inside comments, `&mut self` / `&dyn Trait` / `&Rc<T>` are Rust, not
+  // URL params. Two cheap shape discriminators remove the rest of the noise:
+  // every URL flag in this client is lowercase-initial camelCase with no
+  // underscore (`texBc7`, `fogLerp`, `nullRender`), so PascalCase types and
+  // snake_case locals cannot be flags; and Rust keywords never are.
+  const RUST_KEYWORDS = new Set([
+    "mut", "self", "dyn", "ref", "move", "impl", "fn", "let", "in", "as", "if",
+    "else", "match", "loop", "while", "for", "return", "use", "mod", "pub",
+    "crate", "super", "type", "where", "trait", "enum", "struct", "const",
+    "static", "unsafe", "async", "await", "box",
+  ]);
+  for (const m of litsAndComments.matchAll(/[?&]([A-Za-z_][A-Za-z0-9_]*)\b/g)) {
+    const name = m[1];
+    if (!/^[a-z][A-Za-z0-9]*$/.test(name)) continue;   // no snake_case / PascalCase
+    if (RUST_KEYWORDS.has(name)) continue;
+    readers.add(name);
+  }
 }
 // ── R4 ──
 for (const k of Object.keys(READER_ALLOW)) readers.add(k);

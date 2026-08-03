@@ -270,15 +270,54 @@ check(
   /per_guid:\s*&PerGuidBridgeIndexes<'_>/.test(fanoutSlice),
 );
 check("  fan-out calls per_guid.prune_on_delete", fanoutSlice.includes("per_guid.prune_on_delete("));
-// The eight pre-existing siblings must still be pruned in the same body.
+// 2026-08-03 (R6#1): these siblings used to be pruned INLINE in the fan-out
+// body, and this loop sliced 5000 bytes from `maintain_bridge_indexes_on_delete`
+// to look for them. That window never actually contained them — the fan-out
+// body is ~1.9 KB and the sibling prunes sat 113 KB-455 KB away, so the checks
+// passed on accidental overlap (1 of 4 at the time, 0 after the refactor) and
+// never verified what they named.
+//
+// The prunes now live in ONE owner, `prune_guid`, which BOTH entry points
+// (`prune_on_delete` and `prune_on_guid_reuse`) call — that consolidation IS
+// the R6#1 fix: the reuse path previously missed six of these stores, so a
+// recycled guid inherited the previous occupant's radar-blip colour, gravity
+// flag and default script. Assert the real invariant instead: every sibling is
+// pruned inside `prune_guid`'s body, and the delete fan-out reaches it.
+const pruneGuidStart = libRs.indexOf("    fn prune_guid(&self, g: u32) {");
+check("lib.rs has the single-owner prune_guid", pruneGuidStart >= 0);
+// Bound the slice by the NEXT fn at the same indent, not a byte count — a
+// fixed window is what let the old assertions drift out of their own target.
+const pruneGuidEnd = pruneGuidStart >= 0
+  ? libRs.indexOf("\n    fn ", pruneGuidStart + 1)
+  : -1;
+const pruneGuidBodyRaw = pruneGuidStart >= 0
+  ? libRs.slice(pruneGuidStart, pruneGuidEnd > 0 ? pruneGuidEnd : pruneGuidStart + 4000)
+  : "";
+// Strip `//` comment lines BEFORE matching. A bare `.includes(NAME)` passes on
+// a commented-out prune — verified: commenting the UI_EFFECTS_INDEX line still
+// satisfied it, which is the same "asserts nothing" class this round is about.
+const pruneGuidBody = pruneGuidBodyRaw
+  .split("\n")
+  .filter((l) => !l.trimStart().startsWith("//"))
+  .join("\n");
 for (const sib of [
   "MOTION_ACTION_STAMPS",
   "PROJECTILE_GRAVITY_GUIDS",
   "DEFAULT_SCRIPT_INDEX",
   "UI_EFFECTS_INDEX",
 ]) {
-  check(`  sibling ${sib} still pruned in the same body`, fanoutSlice.includes(sib));
+  // Require the actual prune CALL, not just the identifier appearing somewhere.
+  check(
+    `  sibling ${sib} pruned in prune_guid (single owner)`,
+    new RegExp(`${sib}\\.with\\(`).test(pruneGuidBody),
+  );
 }
+// Both lifecycles must reach that one owner — the reuse path missing them is
+// exactly the defect R6#1 fixed.
+check("  prune_on_delete delegates to prune_guid",
+  /fn prune_on_delete\(&self, g: u32\) \{\s*self\.prune_guid\(g\);/.test(libRs));
+check("  prune_on_guid_reuse delegates to prune_guid",
+  /fn prune_on_guid_reuse\(&self, g: u32\) \{\s*self\.prune_guid\(g\);/.test(libRs));
 
 // (2.4) guid-reuse overwrite: BOTH create paths purge.
 for (const fn of ["maintain_bridge_indexes_on_routed_create", "apply_inventory_object_create"]) {

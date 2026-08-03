@@ -77,9 +77,26 @@ runTick({ singleDriverOn: false });
 check("pump does NOT fire without singleDriverOn (default off = byte-path-identical)", pumpCalls === 0, `calls=${pumpCalls}`);
 
 // 3. null scene3d → no crash in phase #0 (optional-chaining guard)
-let threwAtPhase0 = false;
-try { tickPerFrame(null, null, 0.016); } catch (_) { threwAtPhase0 = false; }
-check("null scene3d does not crash the phase #0 guard", !threwAtPhase0);
+//
+// 2026-08-03 review (F10): this used to read
+//     let threwAtPhase0 = false;
+//     try { tickPerFrame(null, null, 0.016); } catch (_) { threwAtPhase0 = false; }
+//     check("...", !threwAtPhase0);
+// — the catch assigned the SAME value as the initialiser, so `!threwAtPhase0`
+// was true on every path and the check passed even with the guard deleted.
+//
+// A plain `= true` would be wrong in the other direction: tickPerFrame's LATER
+// phases legitimately throw against this bare stub scene (see runTick above),
+// so the assertion has to identify phase #0 as the thrower rather than merely
+// observe that something threw. Removing the `?.` from
+// `scene3d?.singleDriverOn` produces "Cannot read properties of null (reading
+// 'singleDriverOn')", which is what this pattern pins.
+let phase0Err = null;
+try { tickPerFrame(null, null, 0.016); } catch (e) { phase0Err = e; }
+const phase0Crashed = !!phase0Err &&
+  /singleDriverOn|__netFramePump/.test(String((phase0Err && (phase0Err.stack || phase0Err.message)) || ""));
+check("null scene3d does not crash the phase #0 guard", !phase0Crashed,
+  phase0Err ? `later-phase throw (not #0): ${String(phase0Err.message).slice(0, 60)}` : "no throw at all");
 check("null scene3d does not pump", pumpCalls === 0, `calls=${pumpCalls}`);
 
 // 4. missing pump (2D loop not booted yet) → skipped, no warn
@@ -99,7 +116,11 @@ runTick(scene);
 check("throwing pump is still invoked every frame (no latch-off)", throwCalls === 3, `calls=${throwCalls}`);
 const pumpWarns = warns.filter((w) => w.includes("[singleDriver] __netFramePump threw"));
 check("pump throw warns exactly once (_netPumpWarned one-shot)", pumpWarns.length === 1, `warns=${pumpWarns.length}`);
-check("pump throw never propagates out of phase #0", true); // runTick would have caught a *different* error site; phase #0 rethrow would surface as the synthetic message
+// F10: a `check(..., true)` literal used to sit here. It printed [OK] and
+// incremented `passed` unconditionally, and the property it named is exactly
+// what runTick's own catch had just swallowed — so it asserted nothing. The
+// real probe for that property is the rethrow test immediately below, which
+// is why the literal is simply deleted rather than repaired.
 let phase0Rethrew = false;
 try {
   // A scene with ONLY singleDriverOn — if phase #0 rethrew, the synthetic

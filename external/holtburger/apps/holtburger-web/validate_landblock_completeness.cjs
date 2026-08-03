@@ -60,8 +60,15 @@
 // **CLI args**
 //   --ring   minLb..maxLb  (default `0xA3AE..0xAFBA`; the 13×13 ring)
 //   --out    dir           (default `/mnt/wbterminal1/tmp/claude-scratch/scenery-bake/e/`)
-//   --strict               (treat any drift as exit 1; default 0 if
-//                           all matches and the ring bake completed)
+//   --strict               (accepted, now a NO-OP: drift fails by default)
+//   --lenient              (drift reported but exit 0 — the old default)
+//
+// DRIFT FAILS BY DEFAULT (2026-08-03 review, finding F3). Missing-render and
+// invented placements used to be counted and then discarded unless `--strict`
+// was passed, and `run-all-validators.cjs` registers this surface with
+// `args: []` and `required: true` — so any amount of drift exited 0 and the
+// orchestrator badged it PASS. The escape is now opt-IN (`--lenient`), which
+// is the correct polarity for a gate: you must ask to ignore drift.
 //
 // Run:
 //   NODE_PATH=/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules \
@@ -80,12 +87,18 @@ function parseArgs(argv) {
     ring: { min: 0xa3ae, max: 0xafba },
     out: "/mnt/wbterminal1/tmp/claude-scratch/scenery-bake/e/",
     strict: false,
+    // F3: drift now fails by default; `--lenient` is the opt-in escape.
+    lenient: false,
     skipSpawns: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--strict") {
+      // Retained for callers/scripts that still pass it. Drift fails by
+      // default now, so this is a no-op rather than an error.
       args.strict = true;
+    } else if (a === "--lenient") {
+      args.lenient = true;
     } else if (a === "--skip-spawns") {
       // PIPE-3: validate terrain/scenery even when spawns aren't staged yet,
       // instead of hard-exiting before [stage 1].
@@ -1689,16 +1702,25 @@ function hexU32(v) {
     report.summary.missingRenderTotal > 0 ||
     report.summary.inventedPlacementTotal > 0;
 
-  // Exit semantics:
+  // Exit semantics (F3 — drift fails by DEFAULT):
   //   - boot failure → exit 1 (already set above)
-  //   - --strict + any drift → exit 1
+  //   - any drift    → exit 1, unless --lenient
+  //   - --lenient + drift → exit 0, but the summary line says so
   //   - everything matched → exit 0
-  //   - drift but not strict → exit 0 (report is the artefact)
-  if (exitCode === 0 && args.strict && hasDrift) {
+  const driftTotal =
+    report.summary.missingRenderTotal + report.summary.inventedPlacementTotal;
+  if (exitCode === 0 && hasDrift && !args.lenient) {
     exitCode = 1;
     console.log(
-      `--strict: ${report.summary.missingRenderTotal + report.summary.inventedPlacementTotal} ` +
-        `drift placements; failing.`
+      `${driftTotal} drift placement(s) ` +
+        `(missingRender=${report.summary.missingRenderTotal}, ` +
+        `invented=${report.summary.inventedPlacementTotal}); failing. ` +
+        `Pass --lenient to downgrade drift to a report-only artefact.`
+    );
+  } else if (hasDrift && args.lenient) {
+    console.log(
+      `--lenient: ${driftTotal} drift placement(s) present and IGNORED for the ` +
+        `exit code (report is the artefact).`
     );
   }
   if (exitCode === 0 && !report.bootStage.initResolved) {
@@ -1706,9 +1728,14 @@ function hexU32(v) {
     console.log("init3D did not resolve; failing.");
   }
   if (exitCode === 0) {
-    console.log("PASS: validation gate green.");
+    // Never claim an unqualified PASS when drift was merely waived.
+    console.log(
+      hasDrift
+        ? "PASS (--lenient: drift present and ignored — NOT a clean run)."
+        : "PASS: validation gate green (zero drift)."
+    );
   } else {
-    console.log("FAIL: validation gate has failures (or --strict caught drift).");
+    console.log("FAIL: validation gate has failures (boot failure or placement drift).");
   }
   process.exit(exitCode);
 })().catch((err) => {

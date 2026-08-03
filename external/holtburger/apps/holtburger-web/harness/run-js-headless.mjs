@@ -36,7 +36,7 @@
 // USAGE
 //   node harness/run-js-headless.mjs [--only=substr,substr] [--tier=1|4|all]
 //                                    [--quiet] [--list] [--strict-missing]
-//                                    [--timeout=MS] [--bail]
+//                                    [--timeout=MS] [--bail] [--allow-skips]
 //
 //   --only=...        Run only files whose path OR flag contains any listed
 //                     substring (comma-separated, case-insensitive).
@@ -50,9 +50,14 @@
 //   --timeout=MS      Per-test wall-clock timeout (default 120000). On timeout
 //                     the test is a FAIL (killed).
 //   --bail            Stop at the first FAIL (still prints the partial table).
+//   --allow-skips     Tolerate a child that printed a SKIP banner and exited 0.
+//                     OFF by default: such a child asserted NOTHING, so
+//                     counting it as a pass is exactly the defect the
+//                     2026-08-03 review found (F5).
 //
-// EXIT CODE: 0 unless at least one test FAILED (or, under --strict-missing, a
-// file was MISSING). MISSING alone (default) and an empty plan exit 0.
+// EXIT CODE: 0 unless at least one test FAILED, or a test SKIPPED (unless
+// --allow-skips), or -- under --strict-missing -- a file was MISSING.
+// MISSING alone (default) and an empty plan exit 0.
 // ============================================================================
 
 import { spawnSync } from "node:child_process";
@@ -138,6 +143,8 @@ function parseArgs(argv) {
     quiet: false,
     list: false,
     strictMissing: false,
+    // F5: a SKIP (exit 0 but nothing asserted) fails the run by default.
+    allowSkips: false,
     timeoutMs: 120000,
     bail: false,
     help: false,
@@ -146,6 +153,7 @@ function parseArgs(argv) {
     if (a === "--quiet") opts.quiet = true;
     else if (a === "--list") opts.list = true;
     else if (a === "--strict-missing") opts.strictMissing = true;
+    else if (a === "--allow-skips") opts.allowSkips = true;
     else if (a === "--bail") opts.bail = true;
     else if (a === "--help" || a === "-h") opts.help = true;
     else if (a.startsWith("--only=")) {
@@ -194,8 +202,34 @@ function selectPlan(opts) {
 const STATUS = Object.freeze({
   PASS: "PASS",
   FAIL: "FAIL",
+  SKIP: "SKIP",
   MISSING: "MISSING",
 });
+
+// A child that prints a SKIP banner and exits 0 asserted NOTHING (2026-08-03
+// review, finding F5). The runner used to classify purely on `status === 0`,
+// so six suites whose `locateThree()` exit-0'd were tabulated PASS and counted
+// in the "N passed" line. run-all.mjs's own skip detector could not see them
+// either: its SKIP_MARKERS list only covers TIER-level banners (SERVER_DOWN /
+// PLAYWRIGHT_MISSING / cargo-absent), not per-test ones.
+//
+// Matches the banner forms actually in use, all of which put SKIP in caps
+// followed by a delimiter:
+//     "paletted-LRU ESM test: SKIP (three not located)."
+//     "Phase 7.5 camera ESM test: SKIP (OrbitControls.js not found ...)."
+//     "SKIP: cannot locate three.module.js — set THREE_PATH."
+//     "A11-S5: SKIP — could not extract genuine pickScriptEntry ..."
+// Deliberately case-sensitive on SKIP + requires a delimiter, so ordinary
+// assertion text ("[OK] ... is skipped", "parkSkippedInEntriesMiss") is not
+// mistaken for a banner.
+const SKIP_BANNER = [
+  /^[^\n]*:[ \t]*SKIP[ \t]*[(—:-]/m,
+  /^[ \t]*SKIP[ \t]*[(—:-]/m,
+];
+
+function looksSkipped(output) {
+  return SKIP_BANNER.some((re) => re.test(output));
+}
 
 function pad(s, w) {
   s = String(s);
@@ -244,13 +278,15 @@ function runOne(entry, opts) {
     else if (killed) detail = `signal ${run.signal}`;
     else detail = `exit ${run.status}`;
   }
-  return {
-    ...entry,
-    status: ok ? STATUS.PASS : STATUS.FAIL,
-    code: run.status,
-    detail,
-    output,
-  };
+  // F5: exit 0 + a SKIP banner is NOT a pass — the suite asserted nothing.
+  let status;
+  if (!ok) status = STATUS.FAIL;
+  else if (looksSkipped(output)) {
+    status = STATUS.SKIP;
+    const line = output.split("\n").find((l) => looksSkipped(l));
+    detail = (line || "skipped").trim().slice(0, 100);
+  } else status = STATUS.PASS;
+  return { ...entry, status, code: run.status, detail, output };
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +314,7 @@ function main() {
     (opts.tier !== "all" ? ` (tier=${opts.tier})` : "") +
     (opts.only ? ` (only~[${opts.only.join(", ")}])` : ""));
   console.log(`  missing   : ${opts.strictMissing ? "STRICT (counts as FAIL)" : "tolerated (no effect on exit)"}`);
+  console.log(`  skips     : ${opts.allowSkips ? "tolerated (--allow-skips)" : "count as FAIL (a SKIP asserts nothing)"}`);
   console.log("=".repeat(76));
 
   // --list: print the plan (with existence) and exit 0.
@@ -327,6 +364,7 @@ function main() {
 
     const isFailNow =
       res.status === STATUS.FAIL ||
+      (res.status === STATUS.SKIP && !opts.allowSkips) ||
       (res.status === STATUS.MISSING && opts.strictMissing);
     if (opts.bail && isFailNow) {
       console.log("\n[run-js-headless] --bail: stopping at first failure.");
@@ -344,6 +382,7 @@ function main() {
   const passed = results.filter((r) => r.status === STATUS.PASS);
   const failed = results.filter((r) => r.status === STATUS.FAIL);
   const missing = results.filter((r) => r.status === STATUS.MISSING);
+  const skipped = results.filter((r) => r.status === STATUS.SKIP);
 
   console.log("\n" + "=".repeat(76));
   console.log(
@@ -360,8 +399,14 @@ function main() {
   }
   console.log("=".repeat(76));
 
+  for (const r of skipped) {
+    console.log(`  SKIP    : ${r.file} — ${r.detail}` +
+      (opts.allowSkips ? " (tolerated)" : " (asserts nothing → FAIL)"));
+  }
   const missingCountsAsFail = opts.strictMissing ? missing.length : 0;
-  const exitNonZero = failed.length > 0 || missingCountsAsFail > 0;
+  const skipCountsAsFail = opts.allowSkips ? 0 : skipped.length;
+  const exitNonZero =
+    failed.length > 0 || missingCountsAsFail > 0 || skipCountsAsFail > 0;
   process.exit(exitNonZero ? 1 : 0);
 }
 

@@ -17,7 +17,8 @@
 //
 //   node scripts/audit-flag-defaults.mjs [--app apps/holtburger-web]
 //                                        [--off]      only the default-OFF docket
-//                                        [--mismatch] only mismatches (exit 1 if any)
+//                                        [--mismatch] only mismatches (output filter)
+//                                        [--lenient]  survey run: report but exit 0
 //                                        [--all]      full per-flag table (TSV)
 import fs from "node:fs";
 import path from "node:path";
@@ -91,7 +92,14 @@ function flagOps(name, lines, i) {
       // pre-taken snapshot of `vars` would miss `s`.
       for (let pass = 0; pass < 2; pass += 1) {
         for (const v of [...vars]) {
-          const hop = new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${v}\\s*\\.\\s*(?:toLowerCase|trim)\\(\\)`).exec(l);
+          // 2026-08-03 (F8): the hop used to require the bare form
+          // `const s = v.toLowerCase()`. `acFogLerpEnabled` writes
+          // `const s = typeof v === "string" ? v.toLowerCase() : null;`
+          // so the hop failed, no ops were collected, and the precise
+          // TRISTATE rule below never saw the `=== "off"` arm — the flag
+          // was misreported as an exact-match opt-in. Allow any expression
+          // between `=` and the `.toLowerCase()`/`.trim()` call.
+          const hop = new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*[^;]*\\b${v}\\s*\\.\\s*(?:toLowerCase|trim)\\(\\)`).exec(l);
           if (hop) vars.add(hop[1]);
           if (pass === 0) continue;
           const cmp = new RegExp(`\\b${v}\\b\\s*(===?|!==?)\\s*["']([^"']*)["']`, "g");
@@ -208,6 +216,27 @@ function classify(sites) {
   const optOut = sites.some((s) => /!==?\s*["'](off|0|false|2d)["']/.test(s.stmt));
   const optIn = sites.some((s) => /===?\s*["'](on|1|true|yes|retail)["']/.test(s.stmt));
   const numeric = sites.some((s) => /(parseFloat|parseInt|Number)\s*\(/.test(s.stmt));
+  // F8: the coarse fallback had no TRISTATE rule, only the precise `ops` path
+  // above did. A reader with BOTH `=== "on"` and `=== "off"` arms (absent ⇒
+  // inherited default) therefore fell through to `optIn` and was reported as
+  // "absent ⇒ OFF" — wrong, and it manufactured a comment mismatch against a
+  // comment that was telling the truth.
+  // `(?<![!=])` is load-bearing: `!== "off"` CONTAINS `== "off"`, so a bare
+  // /===?\s*"off"/ also matches the opt-OUT idiom and would misreport
+  // wieldedSpawn / wieldHandAttach (which genuinely have two DIVERGENT
+  // readers — `!== "off"` in index.js, `=== "on"` in entities.js) as
+  // tristate, hiding a real ON*/divergence signal.
+  const eqOffCoarse = sites.some((s) => /(?<![!=])===?\s*["'](off|0|false|no)["']/.test(s.stmt));
+  if (optIn && eqOffCoarse) {
+    // A numeric reader (`Number(raw)` + a code fallback) that merely sits in a
+    // window alongside on/off literals is a VALUE flag, not a tristate bool —
+    // aoIntensity / farFogNear / farFogFar. Both labels beat the old "OFF"
+    // (which claimed "absent resolves OFF" for a flag whose absent case is
+    // 0.6 / NaN), but `num` is the accurate one.
+    return numeric
+      ? { def: "num", kind: "numeric with code fallback" }
+      : { def: "tri", kind: "tristate `=on`/`=off`; ABSENT ⇒ code/quality-preset default" };
+  }
   if (optOut && optIn) return { def: "ON*", kind: 'multi-value (`!== "off"` opt-out + an allowlist site)' };
   if (optOut) return { def: "ON", kind: 'opt-OUT `!== "off"` — ABSENT RESOLVES ON' };
   if (optIn) return { def: "OFF", kind: "opt-IN exact-match — absent resolves OFF" };
@@ -302,4 +331,25 @@ for (const r of stale) console.log(`  ${r.name} (url-flags.md:${r.doc.line}, §$
 console.log(`\n## In-code COMMENT vs reader mismatches — ${cmism.length}`);
 for (const r of cmism) for (const c of r.commentMismatches) console.log(`  ${r.name}: ${c}`);
 
-if (ONLY_MISMATCH && (polarity.length || cmism.length)) process.exit(1);
+// 2026-08-03 review, finding F8. The only non-zero exit used to be gated
+// behind `--mismatch`, so a bare `node audit-flag-defaults.mjs` printed real
+// DEFAULT-POLARITY and COMMENT-vs-reader mismatches to stdout and then exited
+// 0 — any CI wired to the bare invocation concluded the audit was clean while
+// it was reporting a live documented-vs-actual polarity bug.
+//
+// A polarity or comment mismatch now fails REGARDLESS of --mismatch (that flag
+// only controls output verbosity, not the verdict). UNDOCUMENTED and STALE-ROW
+// stay advisory: they are a docs backfill debt, not a wrong-behaviour claim,
+// and there are ~150 of them. `--lenient` restores exit 0 for a survey run.
+const LENIENT = argv.includes("--lenient");
+const hardFindings = polarity.length + cmism.length;
+if (hardFindings > 0) {
+  console.log(
+    `\nFAIL: ${polarity.length} default-polarity + ${cmism.length} comment-vs-reader ` +
+    `mismatch(es). These are claims about SHIPPED behaviour that are wrong — fix the\n` +
+    `reader, the docs row, or the comment. (${undoc.length} undocumented + ${stale.length} ` +
+    `stale rows are advisory and do NOT fail.) Pass --lenient for a survey run.`,
+  );
+}
+if (hardFindings > 0 && !LENIENT) process.exit(1);
+process.exit(0);

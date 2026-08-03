@@ -277,6 +277,10 @@ async function main() {
     console.log("      ! the player did not walk — treat FPS/draw-call numbers as a STANDING client,");
     console.log("        not a walk, and do NOT conclude anything about streaming or collision.");
   }
+  // F9: the verdict used to be advisory text followed by an unconditional
+  // process.exit(0), so any `&&` chain read a standing / never-logged-in
+  // client as a successful walk. It now decides the exit code.
+  const walkOk = inWorld && movement.valid;
   console.log(`  landblocks        : ${lbs.length} visited ${lbs.length ? "(" + lbs.slice(0, 6).join(",") + (lbs.length > 6 ? "…" : "") + ")" : ""}`);
   console.log(`  FPS (software GL) : ${report.fps}  | frame ms p50=${report.frameMs.p50} p95=${report.frameMs.p95} p99=${report.frameMs.p99} worst=${report.frameMs.worst}`);
   console.log(`  spikes            : >33ms=${spikes33}  >100ms=${spikes100}  >500ms=${spikes500}  (of ${dts.length} frames)`);
@@ -293,7 +297,11 @@ async function main() {
   console.log("=".repeat(70));
 
   await browser.close();
-  process.exit(0);
+  if (!walkOk) {
+    console.log(`\n[perf-walk] FAIL: inWorld=${inWorld} movement=${movement.verdict} — ` +
+      `these numbers do not describe a walk.`);
+  }
+  process.exit(walkOk ? 0 : 1);
 }
 
 main().catch((e) => { console.error("[perf-walk] fatal:", e && e.stack ? e.stack : e); process.exit(1); });

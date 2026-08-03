@@ -45,6 +45,8 @@ function check(name, ok, detail) {
 // This used to be a THREE_PATH-env-only lookup that exit-0'd when unset, so the
 // invocation in this file's own header asserted nothing. See F2.
 import { locateThree, requireThree } from "./harness/lib/locate_three.mjs";
+import { spliceModule } from "./harness/lib/splice_module.mjs";
+import { MATERIALS_JS_STUBS } from "./harness/lib/scene3d_stubs.mjs";
 
 const threePath = locateThree();
 const THREE = await requireThree("Phase 0.2 DetailMaterial ESM test");
@@ -60,16 +62,14 @@ if (!existsSync(matPath)) {
   check("materials.js exists", false, matPath);
   process.exit(failed > 0 ? 1 : 0);
 }
+// Splice materials.js via the shared harness — the private stripper this
+// replaced removed only `./adapter.js`, so later imports survived into the
+// Function body and killed the suite. See F2.
 const matSrc = readFileSync(matPath, "utf8");
-const patched = matSrc
-  .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-  .replace(
-    /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
-    "",
-  )
-  .replace(/^\s*export\s+function\s+/gm, "function ")
-  .replace(/^\s*export\s+class\s+/gm, "class ")
-  .replace(/^\s*export\s+const\s+/gm, "const ");
+const patched = spliceModule(matSrc, {
+  stubs: MATERIALS_JS_STUBS,
+  label: "scene3d/materials.js",
+});
 
 const factory = new Function(
   "THREE",

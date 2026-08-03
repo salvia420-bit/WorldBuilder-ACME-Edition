@@ -92,9 +92,15 @@
 //                        `project_event_fdfu_done_2026-05-20.md` for
 //                        the probability-distribution analysis.)
 //   --out       dir      (default `/mnt/wbterminal1/tmp/claude-scratch/event-completeness/d/`)
-//   --strict             (treat any missing-event as exit 1; default
-//                        0 if all sources reported their expected
-//                        counts within tolerance)
+//   --strict             (accepted, now a NO-OP: missing events fail by default)
+//   --lenient            (missing events reported but exit 0 — the old default)
+//
+// MISSING EVENTS FAIL BY DEFAULT (2026-08-03 review, finding F3). Per-source
+// `missing` counts used to be computed and then discarded unless `--strict`
+// was passed, and `run-all-validators.cjs` registers this surface with
+// `args: []` and `required: true` — so any number of missing sound/particle
+// events exited 0 and the orchestrator badged it PASS. The escape is now
+// opt-IN (`--lenient`).
 //
 // Run:
 //   NODE_PATH=/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules \
@@ -114,11 +120,16 @@ function parseArgs(argv) {
     probeSeconds: 60,
     out: "/mnt/wbterminal1/tmp/claude-scratch/event-completeness/d/",
     strict: false,
+    // F3: missing events now fail by default; `--lenient` is the escape.
+    lenient: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--strict") {
+      // Retained for callers that still pass it; a no-op now.
       args.strict = true;
+    } else if (a === "--lenient") {
+      args.lenient = true;
     } else if (a === "--probe-s") {
       args.probeSeconds = parseInt(argv[i + 1], 10);
       i += 1;
@@ -1435,20 +1446,32 @@ const POST_PROBE_SETTLE_MS = 15_000;
 
   // Exit semantics:
   //   - boot failure → exit 1 (already set above)
-  //   - --strict + any missing → exit 1
-  //   - exit 0 otherwise (report IS the artefact)
-  if (exitCode === 0 && args.strict && anyMissing) {
+  //   - any missing → exit 1, unless --lenient
+  //   - --lenient + missing → exit 0, but the summary says so
+  const missingTotal = Object.values(report.perSource)
+    .reduce((n, s) => n + (s.missing ?? 0), 0);
+  if (exitCode === 0 && anyMissing && !args.lenient) {
     exitCode = 1;
-    console.log(`--strict: missing-events present; failing.`);
+    console.log(
+      `${missingTotal} missing event(s) across ` +
+      `${Object.values(report.perSource).filter((s) => (s.missing ?? 0) > 0).length} source(s); ` +
+      `failing. Pass --lenient to downgrade to a report-only artefact.`);
+  } else if (anyMissing && args.lenient) {
+    console.log(
+      `--lenient: ${missingTotal} missing event(s) present and IGNORED for the ` +
+      `exit code (report is the artefact).`);
   }
   if (exitCode === 0 && !report.bootStage.initResolved) {
     exitCode = 1;
     console.log("init3D did not resolve; failing.");
   }
   if (exitCode === 0) {
-    console.log("PASS: validation gate green (or non-strict drift).");
+    console.log(
+      anyMissing
+        ? "PASS (--lenient: missing events present and ignored — NOT a clean run)."
+        : "PASS: validation gate green (zero missing events).");
   } else {
-    console.log("FAIL: validation gate has failures (or --strict caught drift).");
+    console.log("FAIL: validation gate has failures (boot failure or missing events).");
   }
   process.exit(exitCode);
 })().catch((err) => {

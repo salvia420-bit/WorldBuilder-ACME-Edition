@@ -13,7 +13,7 @@
 //   3. `normalMapsEnabled: false` → normal map dropped, no scale set.
 //   4. Per-category `normalScale` fallback chain:
 //      explicit override > category default > 0.8 baseline.
-//   5. Quality preset table: `low`+`mid` = false, `high`+`ultra` = true.
+//   5. Quality preset table: all four presets = true since 656e1542 (2026-07-30).
 //   6. Luminous surfaces never get a normal map regardless of gate
 //      (emissive + bump shading would look wrong).
 //
@@ -266,14 +266,22 @@ console.log("\nGroup 5: quality preset table");
     const qualityUrl =
         "file://" + resolvePath(__dirname, "scene3d/quality.js");
     const { PRESETS } = await import(qualityUrl);
+    // 2026-08-03: low+mid were `false` until commit 656e1542 (2026-07-30)
+    // flipped every preset ON, with the 1070 A/B recorded inline at
+    // scene3d/quality.js:246-250 — with ?texBc7 also on, the compressed
+    // textures cut enough bandwidth that everything-on measured FASTER
+    // (35.2 ms / 28.4 fps vs 36.7 / 27.2). That commit updated neither this
+    // test nor docs/url-flags.md, so both asserted a retired default; this
+    // suite could not report it because it was silently exiting 0 without
+    // THREE_PATH. Doc row corrected in the same change.
     check(
-        "low preset: normalMaps=false",
-        PRESETS.low.normalMaps === false,
+        "low preset: normalMaps=true (656e1542 default-ON)",
+        PRESETS.low.normalMaps === true,
         `low.normalMaps=${PRESETS.low.normalMaps}`
     );
     check(
-        "mid preset: normalMaps=false",
-        PRESETS.mid.normalMaps === false,
+        "mid preset: normalMaps=true (656e1542 default-ON)",
+        PRESETS.mid.normalMaps === true,
         `mid.normalMaps=${PRESETS.mid.normalMaps}`
     );
     check(
