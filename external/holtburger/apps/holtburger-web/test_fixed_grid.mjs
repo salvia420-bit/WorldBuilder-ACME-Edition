@@ -339,6 +339,82 @@ function makeGrid({ radius = 1 } = {}) {
   }
 }
 
+// ---------------------------------------------------------------------
+// 11 — F8 (2026-08-03): detectors that can ACTUALLY fail.
+//
+// Before this, `assertResidency` compared `_resident` (built in _placeBlock
+// from the block formula) against `computeBlockKeys` (the same formula), so
+// `untracked` and `offBlock` were provably always empty — the assert could
+// only ever fire on `unbacked`, and a corrupted slot arrangement sailed
+// straight through the check meant to catch it. These drive the new
+// slot-table-derived detectors.
+// ---------------------------------------------------------------------
+{
+  // (11a) The shift cross-check agrees on a healthy walk crossing.
+  const { grid } = makeGrid();
+  grid.update(0x10, 0x10);
+  grid.update(0x11, 0x10); // one step east
+  const st = grid.getStats();
+  check("(11a) healthy shift: positional carry-over == set intersection",
+    st.shiftMismatches === 0 &&
+    st.lastShiftCheck != null &&
+    st.lastShiftCheck.copied === st.lastShiftCheck.expectedCopied &&
+    st.lastShiftCheck.copied === 6, // 3×3 shifted by 1 ⇒ 2 columns carried
+    JSON.stringify(st.lastShiftCheck));
+
+  const baked = new Set(grid.residentKeys);
+  const d = grid.assertResidency({ baked });
+  check("(11a) and a healthy grid reports no slot faults",
+    d.misplacedSlots.length === 0 && d.slotDesync === false && d.shiftMismatch === false,
+    JSON.stringify(d));
+}
+{
+  // (11b) A corrupted SLOT (right key set, wrong position) must be caught.
+  // A pure set comparison cannot see this — which is why the old detector
+  // could not either.
+  const { grid, warns } = makeGrid();
+  grid.update(0x20, 0x20);
+  const W = grid.width;
+  const tmp = grid.slots[0];
+  grid.slots[0] = grid.slots[W * W - 1];
+  grid.slots[W * W - 1] = tmp;                       // swap two slots
+  const baked = new Set(grid.residentKeys);
+  const before = warns.length;
+  const d = grid.assertResidency({ baked });
+  check("(11b) swapped slots are detected as misplaced",
+    d.misplacedSlots.length === 2, JSON.stringify(d.misplacedSlots));
+  check("(11b) …and it warns (never graced — arithmetic, not bake noise)",
+    warns.length === before + 1 && grid.getStats().slotDesyncs === 1);
+  check("(11b) …while the set-only view still looks perfectly fine",
+    d.untracked.length === 0 && d.offBlock.length === 0 && d.unbacked.length === 0,
+    "this is exactly why the old detectors could not fail");
+}
+{
+  // (11c) `_resident` drifting out of lockstep with `slots`.
+  const { grid } = makeGrid();
+  grid.update(0x30, 0x30);
+  grid._resident.delete([...grid._resident][0]);
+  const d = grid.assertResidency({ baked: new Set(grid.residentKeys) });
+  check("(11c) _resident/slots desync is detected", d.slotDesync === true);
+}
+{
+  // (11d) The shift cross-check fires when the positional carry-over is
+  // wrong — the off-by-one class. Simulated by corrupting the previous slot
+  // table before the crossing so the positional walk finds fewer matches
+  // than the set intersection does.
+  const { grid } = makeGrid();
+  grid.update(0x40, 0x40);
+  grid.slots = grid.slots.map(() => -1); // previous slots no longer match
+  grid.update(0x41, 0x40);
+  const st = grid.getStats();
+  check("(11d) positional carry-over ≠ set intersection is caught",
+    st.shiftMismatches === 1 && st.lastShiftCheck.copied === 0 &&
+    st.lastShiftCheck.expectedCopied === 6,
+    JSON.stringify(st.lastShiftCheck));
+  const d = grid.assertResidency({ baked: new Set(grid.residentKeys) });
+  check("(11d) …and assertResidency surfaces it", d.shiftMismatch === true);
+}
+
 console.log("");
 console.log(`S15b fixedGrid: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

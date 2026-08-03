@@ -35,8 +35,9 @@ const {
   chipChance,
   CARNAGE_LIMP_HITS,
   CARNAGE_SEVER_HITS,
+  carnageDeathSeed,
 } = await import("../scene3d/carnage.js");
-const { mulberry32, hash32 } = await import("../scene3d/kill_impulse.js");
+const { mulberry32, hash32, pickFallStyle, FALL_STYLES } = await import("../scene3d/kill_impulse.js");
 
 let pass = 0;
 let fail = 0;
@@ -230,6 +231,74 @@ section("shipped policy unchanged");
   ok(pickLegForHit(legs, { height: 2, left: true, front: true }) === null, "Up band still never takes a leg");
   ok(pickLegForHit(legs, { height: 0, left: true, front: false }).leaf === 3, "Low band still routes by quadrant");
   ok(pickLegForHit(legs, { height: 1, left: true, front: true }, 0.9) === null, "Mid band still coin-flips to torso");
+}
+
+/* ── 8. the death seed is DECOUPLED from the FALL seed ────────────────── */
+section("seed decoupling (2026-08-03 regression lock)");
+{
+  // THE SETUP THAT MATTERS. entities.js stamps `inst._deathAt` at :9535 and
+  // calls `killOptsFor(inst)` at :9554, so on essentially every kill both
+  // modules round to the SAME millisecond. `resolveKillImpulse` seeds with
+  // `hash32(guid, Math.round(nowMs))`; `carnageOnDeath` used to seed with
+  // exactly that expression too. Identical seed ⇒ identical mulberry32 stream,
+  // and each side spends its FIRST draw on a different decision. So the fall
+  // style and the finisher budget were drawn from THE SAME NUMBER.
+  //
+  // §4 above could never see this: it seeds with its own `hash32(i+1, 0xd1e)`
+  // and never asks what kill_impulse would have drawn at the same instant.
+  // This section reseeds the way the RUNTIME seeds.
+  const killSeed = (guid, ms) => hash32(guid, Math.round(ms)); // == resolveKillImpulse
+  const N = 600;
+  const pairs = [];
+  for (let i = 0; i < N; i++) {
+    const guid = 0x50000000 + i * 7;
+    const ms = 1_000_000 + i * 13;
+    pairs.push([guid, ms]);
+  }
+
+  let identical = 0;
+  for (const [g, ms] of pairs) if (carnageDeathSeed(g, ms) === killSeed(g, ms)) identical++;
+  ok(identical === 0, `the two seeds never coincide over ${N} kills (got ${identical})`);
+
+  // The first draws must be statistically independent, not equal.
+  let sameHalf = 0;
+  let equalDraw = 0;
+  for (const [g, ms] of pairs) {
+    const a = mulberry32(killSeed(g, ms))();
+    const b = mulberry32(carnageDeathSeed(g, ms))();
+    if (a === b) equalDraw++;
+    if ((a < 0.5) === (b < 0.5)) sameHalf++;
+  }
+  ok(equalDraw === 0, `no kill draws the same first number twice (got ${equalDraw}) — pre-fix: all ${N}`);
+  const agree = sameHalf / N;
+  console.log(`    first-draw half agreement: ${(agree * 100).toFixed(1)}% (pre-fix 100%, ideal 50%)`);
+  ok(agree > 0.38 && agree < 0.62, `the streams are independent, not coupled (${(agree * 100).toFixed(1)}%)`);
+
+  // The BEHAVIOURAL statement of the same thing, and the legible one: at
+  // tier 2 the budget threshold is 0.55 while "topple" owns roll < 0.40, so a
+  // shared draw makes a toppling death ALWAYS spend the low budget. It must be
+  // possible to topple and still draw the bigger finisher.
+  const seen = new Map(); // style -> Set(budget)
+  for (const [g, ms] of pairs) {
+    const style = pickFallStyle(mulberry32(killSeed(g, ms))());
+    const budget = finisherBudget(2, mulberry32(carnageDeathSeed(g, ms))());
+    if (!seen.has(style.name)) seen.set(style.name, new Set());
+    seen.get(style.name).add(budget);
+  }
+  ok((seen.get("topple")?.size ?? 0) === 2,
+    `a toppling death can draw EITHER tier-2 budget (got ${[...(seen.get("topple") ?? [])].join("/")})`);
+  const coupled = [...seen.entries()].filter(([, b]) => b.size < 2).map(([k]) => k);
+  ok(coupled.length === 0, `no fall style is locked to one budget (coupled: ${coupled.join(",") || "none"})`);
+  ok(seen.size >= 4, `the fixture really does exercise several fall styles (${seen.size} of ${FALL_STYLES.length})`);
+
+  // Determinism is the whole reason the seed is a pure function — a seeded
+  // test must still replay one kill exactly, and neighbouring kills must differ.
+  ok(carnageDeathSeed(0x1234, 5000) === carnageDeathSeed(0x1234, 5000), "the same kill replays exactly");
+  ok(carnageDeathSeed(0x1234, 5000) !== carnageDeathSeed(0x1234, 5001), "one millisecond later is a different draw");
+  ok(carnageDeathSeed(0x1234, 5000) !== carnageDeathSeed(0x1235, 5000), "a different creature is a different draw");
+  ok(carnageDeathSeed(0x1234, 5000.4) === carnageDeathSeed(0x1234, 5000), "sub-millisecond jitter is rounded away");
+  ok(Number.isInteger(carnageDeathSeed(0, 0)) && carnageDeathSeed(0, 0) >= 0, "a degenerate kill still seeds a u32");
+  ok(Number.isInteger(carnageDeathSeed(undefined, NaN)), "…as does a malformed one");
 }
 
 console.log(`\ncarnage_finisher: ${pass} passed, ${fail} failed`);

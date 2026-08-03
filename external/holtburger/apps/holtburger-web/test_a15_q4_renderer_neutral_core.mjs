@@ -70,11 +70,15 @@ function makeDeps({ liveScene3d = undefined, noRing = false } = {}) {
   if (!noRing) {
     s3dBase.loadTerrainRing = (x, y) => calls.push(["loadTerrainRing", x, y]);
   }
-  const s3d = liveScene3d === undefined ? s3dBase : liveScene3d;
+  let s3d = liveScene3d === undefined ? s3dBase : liveScene3d;
   let localGuid = LOCAL_GUID;
   const deps = {
     calls,
     sets,
+    s3dBase,
+    // (x) 2026-08-03: lets a test model the real boot ordering — packets
+    // drain while `window.liveScene3d` is still null, then init3D lands.
+    setLiveScene3d: (v) => { s3d = v; },
     setLocalGuid: (g) => { localGuid = g; },
     getLocalPlayerGuid: () => localGuid,
     emitLandblockChanged: (prevLb, lbId) => calls.push(["emitLandblockChanged", prevLb, lbId]),
@@ -669,6 +673,51 @@ check("entity_dispatch.js: factory CODE never calls upd.free (comments excluded)
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join("\n")
     .includes(".free("));
+
+// ---------------------------------------------------------------------
+// (x) PHY-25 effect (B) — the pre-init3D load-point latch (2026-08-03 F4)
+//
+// The net pump starts BEFORE the renderer: index.html runs
+// `requestAnimationFrame(drainEvents)` and only then `await renderHoltburg()`
+// → `await init3D(...)`, and `getLiveScene3d()` reads `window.liveScene3d`,
+// which index.js assigns at the END of init3D. Position packets in that
+// window must NOT claim the load point — if they do, every later packet in
+// the same LB is shift-skipped and the spawn landblock never streams.
+{
+  const deps = makeDeps({ liveScene3d: null });
+  const ws = createWorldStreamer(deps);
+  // 1. Packets during init3D (renderer null).
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9b40021));
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9b40021));
+  const pre = ws._debugState();
+  check("(x) pre-init3D packets do not claim the load point",
+    pre.lastRingLb === 0 && pre.ringEvals === 0 && pre.preRendererRingEvals === 2,
+    JSON.stringify(pre));
+
+  // 2. init3D finishes — the renderer appears, same landblock, no movement.
+  deps.setLiveScene3d(deps.s3dBase);
+  deps.calls.length = 0;
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9b40021));
+  const names = deps.calls.map((c) => c[0]);
+  check("(x) first post-init3D packet streams the spawn LB",
+    names.includes("loadTerrainRing") &&
+    names.includes("loadBuildingsForLandblock") &&
+    names.includes("loadStaticsForLandblock") &&
+    names.includes("loadSpawnsForLandblock"),
+    names.join(","));
+  check("(x) and it claims the load point exactly once",
+    ws._debugState().ringEvals === 1 &&
+    ws._debugState().lastRingLb === 0xa9b40000,
+    JSON.stringify(ws._debugState()));
+
+  // 3. Steady state is unchanged — later same-LB packets still shift-skip.
+  deps.calls.length = 0;
+  ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xa9b40021));
+  check("(x) subsequent same-LB packets still shift-skip (effect B intact)",
+    !deps.calls.map((c) => c[0]).includes("loadTerrainRing") &&
+    ws._debugState().shiftSkippedRingEvals === 1,
+    JSON.stringify(ws._debugState()));
+}
 
 const urlFlags = readFileSync(joinPath(__dirname, "docs", "url-flags.md"), "utf8");
 check("docs/url-flags.md documents unifiedDispatch",

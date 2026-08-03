@@ -543,7 +543,23 @@ export function installKillImpulse() {
   let tries = 0;
   const attempt = () => {
     if (_bind()) return;
-    if (++tries < 60) setTimeout(attempt, 2000);
+    // GIVE-UP IS LOUD (2026-08-03). This chain used to end in silence after
+    // ~2 minutes. Without the bus there is no `damageDealt`/`damageTaken`, so
+    // sources 2 and 3 of the four documented above never contribute and every
+    // death falls back to the seeded azimuth — indistinguishable from working,
+    // with nothing on the console. (The splatter feed comes from
+    // play_effect_vfx.js and the projectile feed from entities.js, so those two
+    // survive; say so, rather than overstating the damage.)
+    if (++tries < 60) {
+      setTimeout(attempt, 2000);
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[kill-impulse] gave up after ${tries} attempts (~${tries * 2}s): window.__pluginClient.events.on ` +
+        "never appeared — attacker-position hits are OFF (splatter + projectile feeds are unaffected); " +
+        "deaths with neither will topple on a seeded azimuth.",
+    );
   };
   attempt();
   const diag = (window.__diag = window.__diag || {});

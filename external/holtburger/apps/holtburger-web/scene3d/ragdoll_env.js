@@ -400,21 +400,43 @@ function _buildEnv(inst, opts) {
   // Indoor EnvCell? `entities.js::_groundClampZ` uses exactly this test: the
   // low 16 bits of the landcell >= 0x0100 means an EnvCell interior, where
   // terrain sampling is not merely imprecise but meaningless.
+  //
+  // But this is a SPAWN-TIME STAMP, not a live reading (2026-08-03).
+  // `_outdoorCellIdx` has exactly ONE writer in the tree — `entities.js:4551`,
+  // inside the ObjectCreate path — and `_cellIdx` has none at all; nothing
+  // refreshes either when the creature MOVES, because the position-update seam
+  // (`entities.js:5969`) is handed world-folded x/y/z with no landcell in it.
+  // So it is a HINT, and it is used as one: it decides nothing on its own, it
+  // only answers when the live probe below cannot.
   const cellIdx = (inst._outdoorCellIdx ?? inst._cellIdx ?? 0) >>> 0;
   let indoor = (cellIdx & 0xffff) >= 0x0100;
 
   /* --- base floor ---------------------------------------------------- */
 
-  const terrainAt = indoor ? null : _terrainFn(live);
+  // Probe the terrain oracle UNCONDITIONALLY. Previously a stale "indoor"
+  // stamp vetoed the probe outright (`indoor ? null : …`), so a creature that
+  // spawned in a cottage and died on the lawn got no terrain floor at all —
+  // it fell back to the flat death plane this module exists to replace, and
+  // silently, since a flat plane is exactly what "no env" looks like. The
+  // agreement test below is a LIVE, geometric read and is strictly better
+  // evidence than the stamp in both directions; one oracle call per death is
+  // nanoseconds against the 6 ms budget.
+  const terrainAt = _terrainFn(live);
   let terrainOk = false;
   if (terrainAt) {
     const z0 = terrainAt(cx, cy);
     if (z0 !== null) {
       // Died a metre or more off the terrain surface ⇒ standing on a cottage
-      // floor, a bridge, a rooftop. Terrain is the wrong answer there; fall
-      // through to the raycast/flat path, which reads the actual surface.
-      if (Math.abs(cz - z0) <= FLOOR_ELEVATED_EPS_M) terrainOk = true;
-      else indoor = true; // "treat like an interior": no terrain, probe or flat
+      // floor, a bridge, a rooftop, or underground. Terrain is the wrong
+      // answer there; fall through to the raycast/flat path, which reads the
+      // actual surface. Within a metre of your own terrain column, though,
+      // you ARE outdoors — that overrides a stale indoor stamp.
+      if (Math.abs(cz - z0) <= FLOOR_ELEVATED_EPS_M) {
+        terrainOk = true;
+        indoor = false;
+      } else {
+        indoor = true; // "treat like an interior": no terrain, probe or flat
+      }
     }
   }
 

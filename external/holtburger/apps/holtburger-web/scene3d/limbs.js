@@ -524,13 +524,26 @@ export function ensureLimbRegistry(setupId, inst, wasmExports) {
     // Pivot = the hip part's REST origin. The per-frame path prefers the hip's
     // live animated position, but this is the fallback when the hip part Group
     // is missing (half-decoded rig).
+    //
+    // BOUNDS (2026-08-03). `leg.hip` is a SETUP slot index drawn from
+    // `parentIndex`, whose length is independent of `inst.parts.length` — and
+    // the ONLY length check upstream (`partMinZFromInstance`) validates
+    // `origins` against `parts.length`, not against the slot indices the chains
+    // actually name. An out-of-range read produced `pivot = [undefined × 3]`,
+    // which `applyLimbLimp` fed straight into `position.set(…)` as NaN — and
+    // `_resolveBase` then adopted that NaN off the Group as the NEXT frame's
+    // base, so the part's matrix could never recover for the entity's whole
+    // life. A leg with no usable pivot now simply gets none: the per-frame path
+    // skips it unless the live hip Group answers.
     const origins = inst._restOrigins;
     for (const leg of legs) {
-      leg.pivot = [
-        origins[leg.hip * 3 + 0],
-        origins[leg.hip * 3 + 1],
-        origins[leg.hip * 3 + 2],
-      ];
+      const o = leg.hip * 3;
+      const px = origins[o + 0];
+      const py = origins[o + 1];
+      const pz = origins[o + 2];
+      leg.pivot = (Number.isFinite(px) && Number.isFinite(py) && Number.isFinite(pz))
+        ? [px, py, pz]
+        : null;
     }
     const reg = {
       setupId: key,
@@ -741,12 +754,22 @@ export function applyLimbLimp(inst, dt) {
     } else {
       continue;
     }
+    // INVARIANT (2026-08-03): this module never writes a non-finite transform.
+    // One NaN write is PERMANENT — the offset we write is remembered as the
+    // next frame's base, and `_resolveBase`'s bit-exact `===` comparison can
+    // never match a NaN, so the rig would re-derive its base from the NaN it
+    // just received, every frame, forever. Cheap: this runs only for legs that
+    // are actually damaged.
+    if (!(Number.isFinite(px) && Number.isFinite(py) && Number.isFinite(pz))) continue;
 
     for (let k = 0; k < movable.length; k += 1) {
       const pi = movable[k];
       const g = parts[pi];
       if (!g || !g.position || !g.quaternion) continue;
       const r = (pi === leg.hip && hipRec) ? hipRec : _resolveBase(st, pi, g);
+      // Same invariant as the pivot above: a base an upstream pose writer has
+      // already NaN'd must not be latched into `r.o*` as "we wrote this".
+      if (!(Number.isFinite(r.bx) && Number.isFinite(r.by) && Number.isFinite(r.bz))) continue;
 
       // Swing the base position about the hip, rotating around +X:
       //   y' = y*cos - z*sin,  z' = y*sin + z*cos   (half-angle form below).
@@ -825,7 +848,7 @@ function _summarize(reg) {
 /**
  * `window.__diag.limbs` — devtools driver for the Phase 2 work.
  *
- *   __diag.limbs.enabled()                  -> is ?limbDamage=on set
+ *   __diag.limbs.enabled()                  -> limb damage on? (DEFAULT ON)
  *   __diag.limbs.registry(guidOrSetupId)    -> cached classification (or null)
  *   __diag.limbs.build(guid)                -> Promise, forces the wasm fetch
  *   __diag.limbs.damage(guid, leaf, sev)    -> start limping that leg
@@ -874,7 +897,11 @@ export function attachLimbs(diag) {
       if (!getLimbRegistry(setupId)) {
         ensureLimbRegistry(setupId, inst).catch(() => {});
       }
-      if (!out.enabled) out.note = "?limbDamage=on is NOT set — no visual change";
+      // `?limbDamage` is DEFAULT-ON (owner flip 2026-08-02; url-flags.md:798,
+      // reader shape `!== "off"`), so the ONLY way to reach this line is an
+      // explicit `?limbDamage=off`. The old text said "=on is NOT set", which
+      // reads as "you forgot a flag" and invites re-tightening the reader.
+      if (!out.enabled) out.note = "?limbDamage=off is set — no visual change";
       return out;
     },
 

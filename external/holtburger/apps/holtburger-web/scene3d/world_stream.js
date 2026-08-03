@@ -195,8 +195,13 @@ export function createWorldStreamer(deps) {
     wouldHoldRingEvals: 0,
     // Ring evaluations suppressed by effect (B) — no real load-point shift.
     shiftSkippedRingEvals: 0,
-    // Ring evaluations that actually ran.
+    // Ring evaluations that actually ran (renderer present).
     ringEvals: 0,
+    // Outdoor packets that arrived BEFORE `window.liveScene3d` existed —
+    // the init3D window. These deliberately do NOT claim the load point
+    // (see onPositionUpdate). A non-zero value here is normal at boot; it
+    // is only a problem if `ringEvals` stays 0 afterwards.
+    preRendererRingEvals: 0,
   };
   const noteHeld = (s3d) => {
     try { s3d?.landblockLru?.noteStreamGateHold?.(); } catch (_) {}
@@ -252,8 +257,27 @@ export function createWorldStreamer(deps) {
       } else if (shiftSkipped) {
         gateStats.shiftSkippedRingEvals += 1;
       } else if (streamOutdoor) {
-        gateStats.ringEvals += 1;
-        lastRingLb = lbId;
+        // Stamp the load point ONLY when a renderer exists to receive the
+        // ring (2026-08-03 review F4). The net pump starts before the
+        // renderer does — index.html fires `requestAnimationFrame(drainEvents)`
+        // and only then `await renderHoltburg()` → `await init3D(...)`, and
+        // `getLiveScene3d()` reads `window.liveScene3d`, which index.js does
+        // not assign until init3D is done. Every `s3d?.load*` call below is
+        // therefore a no-op during that window, so stamping `lastRingLb` here
+        // marked a ring that nothing built: with `?loadPointShiftOnly` (which
+        // follows the default-ON `?dungeonStreamGate`) every LATER packet in
+        // the same LB is then shift-skipped, and the spawn landblock never
+        // streams terrain/buildings/statics/spawns until the player crosses an
+        // LB boundary. Reproduced headless: 1 pre-init3D packet + 20 after it
+        // ⇒ shiftSkippedRingEvals=20 and zero loader calls.
+        if (getLiveScene3d()) {
+          gateStats.ringEvals += 1;
+          lastRingLb = lbId;
+        } else {
+          // Renderer not up yet: the load point stays unclaimed so the first
+          // post-init3D packet does a real evaluation.
+          gateStats.preRendererRingEvals += 1;
+        }
       }
       try {
         const _s = getLiveScene3d();

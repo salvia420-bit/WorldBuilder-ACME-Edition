@@ -129,6 +129,21 @@ const TIER4 = [
   { flag: "defaultScriptSpawn", file: "test_a11_s5_default_script_spawn.mjs" },
   { flag: "acWindowPositionMerge(R11)", file: "test_ac_window_position_merge.mjs" },
   { flag: "aliasSplit(JS)", file: "test_p1_alias_split.mjs" },
+  // 2026-08-03 (R8#5) — the combat/gore cluster. limbs, blood_decals and
+  // ragdoll_env were 2,400 lines of DEFAULT-ON code with no suite at all, and
+  // the four pre-existing siblings below were never registered either: 522
+  // assertions that nothing ran automatically. A test that no runner invokes
+  // protects nothing, which is the same "exists but never executes" shape this
+  // round keeps finding in the product code.
+  { flag: "carnage(finisher)", file: "tests/carnage_finisher.test.mjs" },
+  { flag: "carnage(hitGuard)", file: "tests/carnage_hit_guard.test.mjs" },
+  { flag: "limbs", file: "tests/limbs.test.mjs" },
+  { flag: "bloodDecals", file: "tests/blood_decals.test.mjs" },
+  { flag: "ragdollEnv", file: "tests/ragdoll_env.test.mjs" },
+  { flag: "ragdollEnergy", file: "tests/ragdoll_energy.test.mjs" },
+  { flag: "killImpulse", file: "tests/kill_impulse.test.mjs" },
+  { flag: "gfxRelief", file: "tests/gfx_relief.test.mjs" },
+  { flag: "combatInstallGiveup", file: "tests/combat_install_giveup.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 const PLAN = [...TIER1, ...TIER4];

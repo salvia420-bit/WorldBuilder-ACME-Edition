@@ -89,6 +89,16 @@ self.addEventListener("install", (event) => {
             }
           })
         );
+        // Stamp the bake identity these just-fetched bytes belong to.
+        // Without it the first real request would see "stored id: null",
+        // purge, and re-fetch everything the prefetch just warmed.
+        try {
+          const bootUrl = new URL("../../dist/boot.hba", self.location.href);
+          const id = await currentBakeId(bootUrl);
+          if (id) await writeStoredBakeId(cache, id);
+        } catch (e) {
+          console.warn("[holtburger-sw] bake-id stamp during install failed:", e);
+        }
       } catch (e) {
         console.warn("[holtburger-sw] cache.open during install failed:", e);
       }
@@ -117,24 +127,167 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-function isCacheable(url) {
-  // Shards: any URL whose path contains `/shards/`. Matches both
-  // content-addressable (`shards/{prefix2}/{trunc32}.bin`) and
-  // convention-URL (`shards/{namespace_slug}/{file_id_hex}.bin`)
-  // layouts the v2 emitter ships.
-  if (url.pathname.includes("/shards/")) return true;
-  // V2 per-namespace catalogs at `/manifest/<namespace>.bin`.
-  // Specifically NOT `/manifest.json` (the top-level pointer
-  // re-fetched each load to detect bake updates).
+// ── THE CACHE-KEY INVARIANT (2026-08-03 review, finding F1) ────────────────
+//
+// Cache-first is sound for exactly ONE class of URL: **content-addressed**
+// ones, where the bytes are a function of the path, so "same URL" implies
+// "same bytes" and a re-bake necessarily writes a NEW path.
+//
+// `/shards/` qualifies — `dist/manifest.json` ships
+// `shard_url_template: "shards/{sha256_prefix2}/{sha256}.bin"`.
+//
+// `boot.hba` and the per-namespace catalogs do NOT. They keep the SAME
+// URL across bakes (`boot_pack.url: "boot.hba"`,
+// `catalog_url_template: "manifest/{namespace_slug}.bin"`) and change
+// their BYTES. Cache-first on them was a shipped-stale-content bug, and
+// the comment that used to sit here — "bake updates change the hash
+// inside `manifest.json` which the page refreshes each load" — was the
+// reason it looked safe. A fresh `manifest.json` cannot invalidate a
+// cache keyed by URL. What actually happened after a re-bake:
+//   - boot.hba: the wasm hard-verifies it against the FRESH manifest
+//     (`crates/holtburger-resource-http/src/manifest_source.rs:497-503`)
+//     and raises `boot.hba hash mismatch` — a returning client with a warm
+//     cache could not boot at all until `?nosw=1`.
+//   - catalogs: a stale catalog indexes shard hashes the new bake no
+//     longer emits → per-LB 404s → the silent "0 placements" empty world.
+//
+// So they are cached under a BAKE-IDENTITY GATE instead: the identity is
+// read from the very manifest the page refreshes each load, and any change
+// purges every non-content-addressed entry before it can be served. That
+// keeps the cold-load win these entries exist for (they are the boot
+// fan-out) without ever handing back another bake's bytes. If the identity
+// cannot be established, the gate FAILS SAFE to network-first — an
+// unknown bake is never allowed to serve from cache.
+
+/** Content-addressed: path ⇒ bytes. Safe to serve cache-first forever. */
+function isContentAddressed(url) {
+  return url.pathname.includes("/shards/");
+}
+
+/**
+ * Bake-immutable but NOT content-addressed: same URL every bake, different
+ * bytes. Cacheable only behind the bake-identity gate below.
+ * Specifically NOT `/manifest.json` — that is the top-level pointer the
+ * page re-fetches each load, and it is what the gate reads.
+ */
+function isBakeVersioned(url) {
+  if (url.pathname.endsWith("/boot.hba")) return true;
   if (url.pathname.includes("/manifest/") && url.pathname.endsWith(".bin")) {
     return true;
   }
-  // Boot pack — stable per-bake, fetched once per page during the
-  // wasm init path. Cacheable so the install-time prefetch + first
-  // visit's network fetch share storage; bake updates change the
-  // hash inside `manifest.json` which the page refreshes each load.
-  if (url.pathname.endsWith("/boot.hba")) return true;
   return false;
+}
+
+function isCacheable(url) {
+  return isContentAddressed(url) || isBakeVersioned(url);
+}
+
+// Synthetic cache key holding the bake identity the cached
+// non-content-addressed entries belong to. Never served to the page.
+const BAKE_ID_KEY = "/__holtburger_bake_id";
+// SINGLE-FLIGHT, deliberately NOT time-memoised. The boot fan-out
+// (boot.hba + N catalogs) is concurrent, so one shared in-flight read
+// collapses it to a single ~1 KB manifest fetch — but every request that
+// arrives after that read SETTLES re-reads. A TTL here would re-open the
+// exact hole this gate closes: a SW instance that survives a re-bake would
+// keep serving the previous bake's boot.hba for the length of the TTL, and
+// that is the unbootable-client failure, not a slow one.
+const _bakeIdInflight = new Map(); // manifestUrl → Promise<string|null>
+
+/**
+ * The manifest that governs a given asset, derived from the REQUEST path
+ * rather than a hardcoded `/dist/` — this is the inverse of the wasm's
+ * `join_url(manifest_url, boot_pack.url)`, so it stays correct under any
+ * dist base (tunnel, sub-path deploy, capture harness).
+ */
+function manifestUrlFor(url) {
+  const p = url.pathname;
+  if (p.endsWith("/boot.hba")) {
+    return new URL(p.slice(0, p.length - "boot.hba".length) + "manifest.json", url.origin).href;
+  }
+  const i = p.lastIndexOf("/manifest/");
+  if (i >= 0) {
+    return new URL(p.slice(0, i + 1) + "manifest.json", url.origin).href;
+  }
+  return null;
+}
+
+/** Current bake identity, or null when it cannot be established. */
+async function currentBakeId(url) {
+  const manifestUrl = manifestUrlFor(url);
+  if (!manifestUrl) return null;
+  const pending = _bakeIdInflight.get(manifestUrl);
+  if (pending) return pending;
+  const p = (async () => {
+    try {
+      // `no-store`: the gate must never read the HTTP cache's copy of the
+      // pointer it exists to check.
+      const res = await fetch(manifestUrl, { cache: "no-store", credentials: "same-origin" });
+      if (!res.ok) return null;
+      const m = await res.json();
+      const sha = m?.boot_pack?.sha256 ?? "";
+      const cat = m?.catalog_version ?? "";
+      const gen = m?.generated_at ?? "";
+      if (!sha && !cat && !gen) return null;
+      return `${sha}:${cat}:${gen}`;
+    } catch (_) {
+      return null;
+    }
+  })();
+  _bakeIdInflight.set(manifestUrl, p);
+  try {
+    return await p;
+  } finally {
+    _bakeIdInflight.delete(manifestUrl);
+  }
+}
+
+async function readStoredBakeId(cache) {
+  try {
+    const r = await cache.match(BAKE_ID_KEY);
+    return r ? await r.text() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function writeStoredBakeId(cache, id) {
+  try {
+    await cache.put(BAKE_ID_KEY, new Response(id, { headers: { "content-type": "text/plain" } }));
+  } catch (_) { /* best-effort — a failed write just re-purges next time */ }
+}
+
+/**
+ * Drop every non-content-addressed entry. Shards are left alone: they are
+ * content-addressed, so surviving ones are still valid bytes for their URL.
+ */
+async function purgeBakeVersioned(cache) {
+  try {
+    const keys = await cache.keys();
+    await Promise.all(
+      keys.map(async (req) => {
+        try {
+          if (isBakeVersioned(new URL(req.url))) await cache.delete(req);
+        } catch (_) { /* skip unparseable keys */ }
+      })
+    );
+  } catch (_) { /* best-effort */ }
+}
+
+/**
+ * Reconcile the cache against the live bake identity.
+ * @returns {boolean} true when cached bake-versioned entries may be served.
+ */
+async function bakeGateAllowsCache(cache, url) {
+  const id = await currentBakeId(url);
+  // Unknown identity ⇒ never serve a possibly-stale copy.
+  if (id == null) return false;
+  const stored = await readStoredBakeId(cache);
+  if (stored !== id) {
+    await purgeBakeVersioned(cache);
+    await writeStoredBakeId(cache, id);
+  }
+  return true;
 }
 
 // Load-regression fix 2026-08-03: static scene3d imagery (terrain_macro's
@@ -163,7 +316,15 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     (async () => {
       const cache = await caches.open(CONTENT_CACHE).catch(() => null);
-      if (cache) {
+      // Bake-identity gate (see the invariant block above). Runs BEFORE the
+      // cache read so a re-baked asset can never be served from a previous
+      // bake, and returns false when the identity is unknown — in which case
+      // this request is network-first with the cache as an offline fallback.
+      let mayServeCached = true;
+      if (cache && isBakeVersioned(url)) {
+        mayServeCached = await bakeGateAllowsCache(cache, url);
+      }
+      if (cache && mayServeCached) {
         const cached = await cache.match(event.request).catch(() => null);
         if (cached) {
           if (swr) {
@@ -195,8 +356,20 @@ self.addEventListener("fetch", (event) => {
         }
         return network;
       } catch (e) {
-        // Any unexpected SW error — fall through to a direct passthrough
-        // so the page sees the same response it would get without the SW.
+        // Network failed. When the bake gate withheld the cache (unknown
+        // identity, i.e. manifest.json unreachable — which is ALSO what an
+        // offline load looks like), the cached copy is the best answer left:
+        // being one bake behind beats no world at all, and the wasm's own
+        // hash check is still the backstop if it is genuinely stale.
+        if (cache && !mayServeCached) {
+          const stale = await cache.match(event.request).catch(() => null);
+          if (stale) {
+            console.warn("[holtburger-sw] offline — serving unverified cached copy:", url.pathname);
+            return stale;
+          }
+        }
+        // Otherwise fall through to a direct passthrough so the page sees
+        // the same response it would get without the SW.
         console.warn("[holtburger-sw] fetch failed, passing through:", e);
         return fetch(event.request);
       }

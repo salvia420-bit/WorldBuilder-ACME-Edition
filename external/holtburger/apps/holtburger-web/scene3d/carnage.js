@@ -35,8 +35,13 @@
 //   Up band   → never a leg (head/torso; reserved for future head effects)
 //
 // Local player is exempt (their own camera rig). All state is per-instance
-// and dies with the entity. Flag off: installCarnage() returns immediately,
-// carnageOnDeath() is never called (hoisted gate in entities.js).
+// and dies with the entity. Flag off (`?carnage=off` — the reader is
+// `!== "off"`, so an ABSENT param is ON per url-flags.md:801):
+// scene3d/index.js never imports this module, installCarnage() returns
+// immediately, and `window.__carnageOnDeath` is never installed — so
+// entities.js's unconditional `window.__carnageOnDeath?.(inst)` at :9541 is an
+// optional-chain no-op. There is no "hoisted gate in entities.js"; the hook's
+// ABSENCE is the gate.
 
 import * as THREE from "three";
 import { decodeSplatterId } from "./splatter_decode.js";
@@ -267,6 +272,34 @@ export function planeRecipe(style, rand = Math.random) {
   return { az, tilt: Math.PI / 2, offset }; // transverse: normal is world up
 }
 
+/**
+ * DOMAIN SALT for the per-death finisher seed (2026-08-03).
+ *
+ * `kill_impulse.js::resolveKillImpulse` seeds the FALL with
+ * `hash32(guid, Math.round(nowMs))`, and entities.js stamps `inst._deathAt`
+ * a few statements before it calls `killOptsFor` (entities.js:9535 vs :9554) —
+ * so both rounded to the SAME millisecond on essentially every kill. An
+ * identical seed means an identical `mulberry32` stream, and each side spends
+ * its FIRST draw on a different decision: `finisherBudget(tier, rand())` here,
+ * `pickFallStyle(rand())` there. Fall style and finisher budget were therefore
+ * ~100 % correlated for the whole session — e.g. every `roll < 0.40`
+ * ("topple") kill also drew the low tier-2 budget, and the tier-3 2-vs-3 split
+ * could never co-occur with a topple. That is precisely the "no two kills draw
+ * the same list" property this planner exists to provide, and the variety
+ * suite could not see it because it seeds with its own `hash32(i+1, 0xd1e)`.
+ *
+ * Re-mixing through a salt keeps the seed a PURE function of (guid, deathMs) —
+ * a seeded test still replays one kill exactly, and the two modules still come
+ * from the same hash family — while decoupling the two streams.
+ */
+export const CARNAGE_SEED_SALT = 0xc021a6e5;
+
+/** Per-death PRNG seed for the finisher draw. Pure. */
+export function carnageDeathSeed(guid, deathMs) {
+  const ms = Math.round(Number(deathMs) || 0);
+  return hash32(hash32((Number(guid) >>> 0) || 0, ms), CARNAGE_SEED_SALT);
+}
+
 /* ── runtime ─────────────────────────────────────────────────────────── */
 
 const _vCenter = new THREE.Vector3();
@@ -398,6 +431,29 @@ function _findInst(guid) {
   return em?.entityMap?.get(Number(guid) >>> 0) || null;
 }
 
+/**
+ * Is `inst` STILL the live instance for its guid?
+ *
+ * The established post-await guard shape (entities.js `_attachEntityLights`,
+ * play_effect_vfx `_isLiveInstance`, dismember's `slicePart`): a bare
+ * `entityMap.has(guid)` is WRONG because a same-guid respawn passes it while
+ * handing back a different rig. Identity, or nothing.
+ *
+ * Falls back to dismember's `!root?.parent` form when there is no entity map
+ * to ask (bare-node suites, pre-`liveScene3d` boot) — `dispose()` detaches the
+ * root from its parent, so that test is equivalent for a disposed rig.
+ */
+function _isLiveInstance(inst) {
+  if (!inst || inst._disposed) return false;
+  try {
+    const map = window.liveScene3d?.entityManager?.entityMap;
+    if (map && typeof map.get === "function") {
+      return map.get((Number(inst.guid) >>> 0) || 0) === inst;
+    }
+  } catch (_e) { /* fall through to the structural test */ }
+  return !!inst.root?.parent;
+}
+
 /** Run one escalation action. Never throws; never blocks the bus. */
 function _runEscalation(kind, inst, reg, st, leg, decoded, critical) {
   const note = (extra) => {
@@ -462,7 +518,18 @@ async function _onSplatterHit(inst, decoded, critical) {
   const setupId = inst._setupId ?? inst.setupId;
   if (!setupId) return;
   let reg = getLimbRegistry(setupId);
-  if (!reg) reg = await ensureLimbRegistry(setupId, inst).catch(() => null);
+  if (!reg) {
+    reg = await ensureLimbRegistry(setupId, inst).catch(() => null);
+    // IDENTITY GUARD across the await (the R1#9 class). This await is not the
+    // rare path: the registry is cold for the FIRST entity of every Setup, so
+    // the very first splatter on any new model species takes it. If the
+    // creature despawned — or ACE re-issued the SAME guid for a fresh rig —
+    // while the wasm `fetchSetupParentIndex` was in flight, everything below
+    // (`_carnageState`, `st.totalHits++`, `setLimbDamage`, `_severLeg`) would
+    // land on the detached instance: the new rig never limps and dismember's
+    // own guard silently eats the slice, with nothing on the console.
+    if (!_isLiveInstance(inst)) return;
+  }
   // Chains, not legs: a legless rig (floating/serpent) still chips and
   // dislocates — only the limp/sever path needs `legs`.
   if (!reg?.chains?.length) return;
@@ -691,8 +758,10 @@ export function carnageOnDeath(inst) {
   const marked = remaining.some((l) => st.hits.get(l.leaf) > 0) || crit || st.totalHits >= 3;
   if (!marked) return;
 
-  // Per-death PRNG: reproducible for tests, different for every kill.
-  const seed = hash32((Number(inst.guid) >>> 0) || 0, Math.round(inst._deathAt || performance.now()));
+  // Per-death PRNG: reproducible for tests, different for every kill, and
+  // SALTED so it is not the same stream `killOptsFor` is drawing the fall
+  // style from at the same millisecond (see CARNAGE_SEED_SALT).
+  const seed = carnageDeathSeed(inst.guid, inst._deathAt || performance.now());
   const rand = mulberry32(seed);
 
   const bodyChains = _bodyChains(reg).filter((c) => c.length > 1);
@@ -814,7 +883,21 @@ export function installCarnage() {
         "creature loses the rest of the limb, and a long/critical kill gibs");
       return;
     }
-    if (++tries < 60) setTimeout(attempt, 2000);
+    // GIVE-UP IS LOUD (2026-08-03). The success arm above logs; this arm used
+    // to end the chain in silence after ~2 minutes, so a missing/renamed
+    // `window.__pluginClient.events` left a DEFAULT-ON feature permanently
+    // inert with ZERO console evidence — the "shipped but never executed"
+    // signature. One warn, once, naming what is missing.
+    if (++tries < 60) {
+      setTimeout(attempt, 2000);
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[carnage] gave up after ${tries} attempts (~${(tries * 2)}s): window.__pluginClient.events.on ` +
+        "never appeared — no splatter events will be observed, so nothing limps, severs or gibs. " +
+        "?carnage=off silences this module entirely.",
+    );
   };
   attempt();
   // entities.js calls the death finisher through this window hook so it never

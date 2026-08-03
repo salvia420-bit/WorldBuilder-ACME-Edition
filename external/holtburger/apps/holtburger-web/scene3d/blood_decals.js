@@ -78,9 +78,34 @@ export function makeRayFan(quadDir, count, indoor, crit, rand = Math.random) {
     rays.push([dx * cp, dy * cp, Math.sin(pitch)]);
   }
   if (indoor && (crit || rand() < 0.25)) {
-    // arterial ceiling hit
+    // Arterial ceiling hit: mostly straight up, leaning along the spray.
+    //
+    // 2026-08-03 — the old line was
+    //   [qx * 0.3 * Math.cos(yaw), qy * 0.3 * Math.sin(yaw) || 0.1, 0.95]
+    // which is not a rotation at all: it multiplies each component by a
+    // DIFFERENT trig function of the same angle (a yaw rotation is
+    // `qx*c - qy*s` / `qx*s + qy*c`, both components of ONE rotation), and the
+    // `|| 0.1` binds looser than the `*`, so any spray along ±X (`qy === 0`)
+    // silently became a FIXED +Y lean — indoor ceiling spatter always landed
+    // on the same side of the victim regardless of where the blow came from.
     const yaw = (rand() - 0.5) * 0.8;
-    rays.push([qx * 0.3 * Math.cos(yaw), qy * 0.3 * Math.sin(yaw) || 0.1, 0.95]);
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
+    let lx = (qx * c - qy * s) * 0.3;
+    let ly = (qx * s + qy * c) * 0.3;
+    if (!Number.isFinite(lx) || !Number.isFinite(ly) || (lx === 0 && ly === 0)) {
+      // Degenerate quadrant (a zero/NaN spray dir): any small lean beats a
+      // perfectly vertical ray, which would stripe the ceiling directly
+      // overhead on every hit. This is the ONLY case the old `|| 0.1` was
+      // right about, kept explicit instead of riding operator precedence.
+      lx = 0;
+      ly = 0.1;
+    }
+    // Unit, like every other ray in the fan (`[dx*cp, dy*cp, sin(pitch)]` from
+    // a unit horizontal is already unit) — the docstring promises unit vectors
+    // and the suite asserts it. `transformDirection` would normalise anyway.
+    const l = Math.hypot(lx, ly, 0.95) || 1;
+    rays.push([lx / l, ly / l, 0.95 / l]);
   }
   return rays;
 }
@@ -571,6 +596,52 @@ function _terrainHeightAt(x, y) {
   }
 }
 
+/** Trust the analytic terrain oracle as "this IS the surface under me" within
+ *  this many metres. Same tolerance `addPool` and `__diag.blood.test` use. */
+export const BLOOD_TERRAIN_TRUST_M = 2.5;
+
+/**
+ * Is this entity indoors RIGHT NOW?
+ *
+ * 2026-08-03 — this used to be `(inst._outdoorCellIdx ?? inst._cellIdx ?? 0)`
+ * alone. Two problems, both verified by grep over the whole tree:
+ *   * `_cellIdx` does not exist. Nothing ever writes it.
+ *   * `_outdoorCellIdx` has exactly ONE writer, `entities.js:4551`, inside the
+ *     ObjectCreate spawn path — it is a SPAWN-TIME STAMP, never refreshed,
+ *     despite that line's own comment claiming position updates re-read it.
+ *     The position-update seam (`entities.js:5969`) receives world-folded
+ *     x/y/z with no landcell at all, so there is nothing there to refresh it
+ *     WITH; a stamp-refresh fix would mean plumbing a new field down the wire
+ *     path. Hence the live read below rather than a stamp refresh.
+ * A creature that spawned in a cottage and was killed on the lawn therefore
+ * read "indoor" forever: no terrain fallback, no statics in the ray targets,
+ * and a ceiling ray it can never hit — outdoor kills of indoor-spawned mobs
+ * left no blood on the ground at all.
+ *
+ * The live test is the one this file already trusts twice (`addPool`,
+ * `__diag.blood.test`): if the body is sitting ON the analytic terrain
+ * surface, it is outdoors — nothing else puts you within 2.5 m of your own
+ * terrain column. Off it by more ⇒ dungeon, cottage floor, bridge or rooftop,
+ * all of which want the indoor treatment. The stamp survives only as the
+ * fallback for when the oracle cannot answer (no session handle, LB not
+ * streamed). One oracle call per hit, already inside the 30/s budget.
+ *
+ * @param {object} inst  EntityInstance.
+ * @param {(x:number,y:number)=>number|null} [terrainAt]  injectable for tests.
+ */
+export function resolveIndoor(inst, terrainAt = _terrainHeightAt) {
+  const cellIdx = (inst?._outdoorCellIdx ?? inst?._cellIdx ?? 0) >>> 0;
+  const stamped = (cellIdx & 0xffff) >= 0x0100;
+  const p = inst?.root?.position;
+  if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) {
+    return stamped;
+  }
+  let th = null;
+  try { th = terrainAt(p.x, p.y); } catch (_e) { th = null; }
+  if (typeof th !== "number" || !Number.isFinite(th)) return stamped;
+  return Math.abs(p.z - th) > BLOOD_TERRAIN_TRUST_M;
+}
+
 /**
  * Stamp blood from one hit. `woundAC` = [x,y,z] wound point, `quadDir` =
  * horizontal unit direction the spray travels (away from the attacker).
@@ -580,8 +651,7 @@ function _splatterFromHit(inst, woundAC, quadDir, crit) {
   const group = live?.entitiesGroup;
   if (!group) return 0;
   const s = _getScratch();
-  const cellIdx = (inst._outdoorCellIdx ?? inst._cellIdx ?? 0) >>> 0;
-  const indoor = (cellIdx & 0xffff) >= 0x0100;
+  const indoor = resolveIndoor(inst);
   const rays = makeRayFan(quadDir, crit ? BLOOD_RAYS_CRIT : BLOOD_RAYS_HIT, indoor, crit);
 
   // entitiesGroup local (AC) → world for the raycaster
@@ -732,7 +802,16 @@ function _bind(decodeSplatterId) {
   return true;
 }
 
-/** Lazy-loaded from scene3d/index.js only when ?blood=on. */
+/**
+ * Lazy-loaded from scene3d/index.js on the DEFAULT path.
+ *
+ * `?blood` is DEFAULT-ON (owner flip 2026-08-02; url-flags.md:800). Both the
+ * import gate (`scene3d/index.js:3840`) and `bloodEnabled()` above read
+ * `!== "off"`, so an ABSENT param resolves ON — only `?blood=off` skips it.
+ * (This line previously said "only when ?blood=on", contradicting both the
+ * file header and the doc; that exact shape talked a reviewer into inverting
+ * an owner decision earlier today, so it is corrected, not obeyed.)
+ */
 export async function installBloodDecals() {
   if (_installed || !bloodEnabled()) return;
   _installed = true;
@@ -744,7 +823,23 @@ export async function installBloodDecals() {
       console.info("[blood] armed — surface decals on, cap", BLOOD_MAX_DECALS);
       return;
     }
-    if (++tries < 60) setTimeout(attempt, 2000);
+    // GIVE-UP IS LOUD (2026-08-03). The success arm logs "[blood] armed"; this
+    // arm used to end the chain in silence after ~2 minutes, so a missing or
+    // renamed `window.__pluginClient.events` left a DEFAULT-ON feature with no
+    // splatter subscription and ZERO console evidence — `__diag.blood.stats()`
+    // would report `bound: false` if anyone thought to look, which is exactly
+    // what nobody does when a feature has simply never been seen working.
+    // Pools (`window.__bloodPools`, installed below) are unaffected.
+    if (++tries < 60) {
+      setTimeout(attempt, 2000);
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[blood] gave up after ${tries} attempts (~${tries * 2}s): window.__pluginClient.events.on ` +
+        "never appeared — no combat splatter will be observed (settled-body pools still work). " +
+        "__diag.blood.stats().bound stays false.",
+    );
   };
   attempt();
   window.__bloodPools = (x, y, z, r) => {

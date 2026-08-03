@@ -917,6 +917,12 @@ const TOWN_HOP_DIST_M = 45;
 // insertion order) for long-session hygiene, same convention as
 // state._usedObjects (extensions.js) / _visitedDoors above.
 const SEEN_PORTALS_MAX = 64;
+// Idle-rung re-issue budget for the last unreached director goto. That rung
+// skips _bumpHop() by design, so it sits outside BOTH hop watchdogs — without
+// a budget of its own an unreachable destination re-composes a full route
+// every idle period forever, each attempt spending a director check-in
+// (2026-08-03 review). 3 = one transient-failure retry plus a margin.
+const GOTO_REISSUE_MAX = 3;
 
 // ── Frontier cruise (2026-07-23, movement-utilization fix) ─────────────────
 // Live measurement (stream soak): the bot MOVES ~14% of a rolling minute —
@@ -1044,6 +1050,11 @@ export class ExplorePressureController {
     // retried forever.
     this._deadEscapeGuids = new Set(); // portal guids proven dead this session
     this._pendingEscapeGuid = null;    // guid we most recently walked to/used, awaiting pose movement
+    this._pendingEscapeAt = null;      // when that escalation was ISSUED — the
+                                       // reference point for "did it work?" (F9)
+    this._escapeResolved = 0;          // escalations that moved the pose (telemetry:
+                                       // a flat 0 next to a climbing blacklist means
+                                       // the success arm is unreachable again)
 
     // Seen-portal ledger (change #2, 2026-07-21 wedge fix part 2): guid ->
     // { name, wx, wy, z, cell, lastSeenT }, refreshed opportunistically from
@@ -1301,9 +1312,35 @@ export class ExplorePressureController {
     // period (the 15s-since-last-step gate above already enforces "once").
     const lm = this.bot.lastMission;
     if (lm && lm.kind === "goto" && lm.to != null && lm.result?.ok !== true && typeof this.bot.goto === "function") {
-      this._journalNote(`[pressure] idle — re-issuing last unreached goto (${lm.label ?? "?"})`);
-      void this.bot.goto(lm.to).catch(() => {});
-      return; // director input, not a random/sweep hop — _consecutiveHops untouched
+      // BOUNDED (2026-08-03 review). This rung deliberately skips _bumpHop()
+      // — "director input, not a random hop" — which also means neither the
+      // `_consecutiveHops >= 6` stand-down nor the `_hopsSincePoseChange >= 4`
+      // watchdog can ever fire for it. With no counter of its own, and with
+      // doGoto rewriting `lastMission` with the SAME unreachable `to`, the
+      // predicate stayed true forever: an unreachable destination re-issued a
+      // full compose every idle period for the rest of the session, each one
+      // spending a director check-in against the hourly budget.
+      const key = String(lm.to);
+      if (this._gotoReissueKey !== key) {
+        this._gotoReissueKey = key;
+        this._gotoReissues = 0;
+      }
+      if (this._gotoReissues < GOTO_REISSUE_MAX) {
+        this._gotoReissues += 1;
+        this._journalNote(
+          `[pressure] idle — re-issuing last unreached goto (${lm.label ?? "?"}, attempt ${this._gotoReissues}/${GOTO_REISSUE_MAX})`
+        );
+        void this.bot.goto(lm.to).catch(() => {});
+        return; // director input, not a random/sweep hop — _consecutiveHops untouched
+      }
+      if (!this._gotoReissueGaveUp) {
+        this._gotoReissueGaveUp = true;
+        this._journalNote(
+          `[pressure] idle — giving up on unreached goto (${lm.label ?? "?"}) after ${GOTO_REISSUE_MAX} attempts; falling through to the sweep rungs`
+        );
+      }
+      // Deliberately NO return: fall through so the sweep/portal rungs below
+      // get their turn instead of the bot re-composing the same dead route.
     }
 
     const pose = this._pose();
@@ -1591,12 +1628,34 @@ export class ExplorePressureController {
     // end — blacklist it and fall through to pick the next-nearest
     // candidate THIS call rather than idling another cycle on a corpse.
     if (this._pendingEscapeGuid != null) {
-      const stalled = this.now() - this._lastMoveAt > 20_000;
-      if (stalled) {
+      // SUCCESS ARM (2026-08-03 review F9). This block used to have exactly
+      // one exit — the blacklist below — because `_pendingEscapeGuid` was set
+      // when the escalation was ISSUED and cleared nowhere else. So the walk
+      // arm ("portal is >5 m away, walk to it") set the pending guid, the bot
+      // arrived and then stood still (arriving is the point), and ~20 s later
+      // the first thing that ran was `_deadEscapeGuids.add()` on the portal it
+      // was standing on — after which the `d <= 5` UseObject arm below could
+      // never be reached for that portal, because the candidate scan skips
+      // blacklisted guids. A successful hop is ALSO followed by stillness, so
+      // working portals were blacklisted too, and `_deadEscapeGuids` is never
+      // cleared: portal-only dungeons became inescapable for the session.
+      //
+      // The discriminator is "did the pose move SINCE WE ISSUED IT", not "is
+      // the pose moving now".
+      const movedSinceIssue =
+        this._pendingEscapeAt != null && this._lastMoveAt > this._pendingEscapeAt;
+      if (movedSinceIssue) {
+        this._pendingEscapeGuid = null;
+        this._pendingEscapeAt = null;
+        this._escapeResolved = (this._escapeResolved | 0) + 1;
+        // Fall through: this cycle re-scans, and the portal we just walked to
+        // is now within the 5 m UseObject radius instead of being poisoned.
+      } else if (this.now() - this._lastMoveAt > 20_000) {
         const deadGuid = this._pendingEscapeGuid;
         const deadName = h.TryGetObjectName?.(deadGuid) || "?";
         this._deadEscapeGuids.add(deadGuid);
         this._pendingEscapeGuid = null;
+        this._pendingEscapeAt = null;
         this._journalNote(`[pressure] portal "${deadName}" appears dead — blacklisting, trying next`);
       } else {
         // Still inside the grace window — claim the tick (nothing new to
@@ -1661,9 +1720,11 @@ export class ExplorePressureController {
           this._journalNote(label(1, false));
         }
         this._pendingEscapeGuid = best.guid;
+        this._pendingEscapeAt = this.now();
       } else {
         this.host.UseObject(best.guid);
         this._pendingEscapeGuid = best.guid;
+        this._pendingEscapeAt = this.now();
         this._bumpHop();
         this._journalNote(`[pressure] idle — ESCALATE: using portal "${best.name}"`);
         // Interaction-outcome memory (change #3): record so a decorative
@@ -1760,9 +1821,15 @@ export class ExplorePressureController {
     // sweeps to 0xa9b4015f). Failed hops now advance through the neighbor
     // list; the ?? revisit arm plus the hop-cap stand-down bound the worst
     // case when every neighbor is unreachable.
+    // Capture BEFORE the add (2026-08-03 review): the label closure below
+    // tests `visited.has(target)`, and `visited.add(target)` ran first — so
+    // the journal printed "(revisit)" for every sweep including genuinely new
+    // cells, and the director's loop-detection reads that string. Constant
+    // discriminators are not discriminators.
+    const wasVisited = visited.has(target);
     visited.add(target);
     const label = (hops, multi) =>
-      `[pressure] idle — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}${multi ? ` via ${hops}-leg route` : ""}`;
+      `[pressure] idle — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${wasVisited ? " (revisit)" : ""}${multi ? ` via ${hops}-leg route` : ""}`;
     // Direct graph neighbor -> _walkGraphPath returns a real 2-cell route with
     // doorway pre-approach. WP-10 (C1 P1): no straight-line fallback when the
     // planner is present but can't plan it (stale/pruned edge, unreachable) —

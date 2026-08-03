@@ -64,6 +64,18 @@ import { attachKillImpulse as _attachKillImpulse } from "./kill_impulse.js";
 
 const TWO_M_SQ = 4; // 2-meter tolerance squared for "misplaced" classification
 const PENDING_TIMEOUT_MS = 5000; // spawn-pending classification threshold
+// Past this age a pending record is not "the async chain is slow", it is a
+// spawn that will never resolve: `_spawnImpl`'s generation-supplanted bail
+// (entities.js:4689 `return null`) returns without calling EITHER terminal
+// hook, so a same-guid/LOD respawn strands its predecessor's record forever.
+// Reaping to an explicit `abandoned` state bounds `spawns.pending` and — the
+// point — stops those from being reported as "spawn-pending" for the rest of
+// the session, which reads as "the async chain is stuck RIGHT NOW".
+// Generous on purpose: failure mode (d) keeps the whole 5 s–120 s window.
+const ABANDON_TIMEOUT_MS = 120_000;
+// Sweep cadence — the reap is O(pending), so amortise it over attempts
+// rather than running it on every spawn.
+const ABANDON_SWEEP_EVERY = 64;
 
 export function installDiag() {
   if (typeof window === "undefined") return;
@@ -84,6 +96,16 @@ export function installDiag() {
       byLandblock: new Map(),   // lbId → { attempted, succeeded, failed, pending: Set<guid> }
       byWcid: new Map(),        // wcid → [{ guid, lbId, x, y, z, name, status }]
       localPlayer: { attempted: 0, succeeded: 0 },
+      // Attempts that never reached EITHER terminal hook and aged out
+      // (see ABANDON_TIMEOUT_MS). A climbing number here is real signal:
+      // it is the same-guid-respawn / dispose race, not a slow spawn.
+      abandoned: 0,
+      // How many `noteSpawnStage()` calls the surface has received. This is
+      // a REACHABILITY counter: `awaitingWhat` can only ever be better than
+      // "unreported" if something calls the hook, and today nothing does
+      // (see noteSpawnStage). If this reads 0, the stage detail below is
+      // structurally uninformative and should be read as such.
+      stageNotesReceived: 0,
     },
 
     // ── expected-state oracle (loaded externally) ─────────────────
@@ -124,9 +146,18 @@ export function installDiag() {
         x: meta.x ?? 0, y: meta.y ?? 0, z: meta.z ?? 0,
         setupId: (meta.setupId ?? meta.modelId ?? 0) >>> 0,
         attemptedAt: performance.now(),
-        awaitingWhat: "init",
+        // NOT "init" (2026-08-03 review F3). This field exists to answer
+        // failure mode (d) — "which await is the spawn stuck on?" — and it
+        // was written exactly once, here, and never updated by anything in
+        // the tree, so every `spawn-pending` report has always read
+        // `awaitingWhat: "init"` regardless of where the chain actually is.
+        // A __diag field whose producer never runs is worse than no field:
+        // it reads like an answer. The honest default is "unreported"; the
+        // producer seam is `noteSpawnStage()` below.
+        awaitingWhat: "unreported",
       };
       this.spawns.pending.set(guid, record);
+      this._maybeReapAbandoned();
 
       // byLandblock bucket
       let lbBucket = this.spawns.byLandblock.get(lbId);
@@ -144,6 +175,63 @@ export function installDiag() {
         this.spawns.byWcid.set(wcid, wcidBucket);
       }
       wcidBucket.push({ guid, lbId, x: record.x, y: record.y, z: record.z, name: record.name, status: "pending" });
+    },
+
+    /**
+     * Producer seam for `awaitingWhat` — the ONLY way a pending record's
+     * stage can become more specific than "unreported".
+     *
+     * ⚠ NOTHING CALLS THIS TODAY. It is deliberately shipped unwired: the
+     * call sites belong in `entities.js::_spawnImpl`, one per await it
+     * parks on ("animation-cache", "surface-decode", "palette", …), and
+     * that file is owned elsewhere. Wiring it is what makes failure mode
+     * (d) diagnosable; until then `spawns.stageNotesReceived` stays 0 and
+     * `diff()` reports the stage as "unreported" rather than inventing one.
+     *
+     * @param {number} guid
+     * @param {string} stage  short label for the await currently in flight
+     */
+    noteSpawnStage(guid, stage) {
+      const rec = this.spawns.pending.get(guid >>> 0);
+      if (!rec) return false;
+      rec.awaitingWhat = String(stage ?? "unreported");
+      this.spawns.stageNotesReceived += 1;
+      return true;
+    },
+
+    /**
+     * Move pending records older than ABANDON_TIMEOUT_MS to an explicit
+     * terminal state. Without this they accumulate forever (the bail at
+     * entities.js:4689 calls neither terminal hook) AND every later
+     * `diff()` keeps classifying them as "spawn-pending", i.e. as a live
+     * stuck async chain, for the rest of the session.
+     * Public so a harness can force it; normally amortised from
+     * `onSpawnAttempted`.
+     * @returns {number} records reaped
+     */
+    reapAbandonedSpawns(maxAgeMs = ABANDON_TIMEOUT_MS) {
+      const now = performance.now();
+      let reaped = 0;
+      for (const [g, rec] of this.spawns.pending) {
+        if (now - rec.attemptedAt <= maxAgeMs) continue;
+        this.spawns.pending.delete(g);
+        this.spawns.abandoned += 1;
+        reaped += 1;
+        const lbBucket = this.spawns.byLandblock.get(rec.landblockId);
+        if (lbBucket) lbBucket.pending.delete(g);
+        const wcidBucket = this.spawns.byWcid.get(rec.wcid);
+        if (wcidBucket) {
+          const idx = wcidBucket.findIndex((r) => r.guid === g);
+          if (idx >= 0) wcidBucket[idx].status = "abandoned";
+        }
+      }
+      return reaped;
+    },
+
+    _sweepTick: 0,
+    _maybeReapAbandoned() {
+      this._sweepTick = (this._sweepTick + 1) % ABANDON_SWEEP_EVERY;
+      if (this._sweepTick === 0) this.reapAbandonedSpawns();
     },
 
     onSpawnSucceeded(guid, inst) {
@@ -274,6 +362,9 @@ export function installDiag() {
 
       const now = performance.now();
       const missing = [];
+      // Observed-and-still-loading. Kept OUT of `missing` so `ok` stays a
+      // statement about drift, not about boot timing (2026-08-03 F2).
+      const inFlight = [];
       const paired = new Set();   // observed guids already paired (good or bad)
       let goodMatches = 0;
 
@@ -359,7 +450,7 @@ export function installDiag() {
           if (obs.lbId !== lb) continue;
           const dx = obs.x - expWorldX, dy = obs.y - expWorldY, dz = obs.z - expWorldZ;
           const dSq = dx*dx + dy*dy + dz*dz;
-          if (obs.status === "failed" && dSq < bestFailDistSq) {
+          if ((obs.status === "failed" || obs.status === "abandoned") && dSq < bestFailDistSq) {
             bestFailDistSq = dSq; bestFail = obs;
           } else if (obs.status === "pending" && dSq < bestPendingDistSq) {
             bestPendingDistSq = dSq; bestPending = obs;
@@ -387,6 +478,27 @@ export function installDiag() {
             paired.add(bestPending.guid);
             continue;
           }
+          // Younger than the timeout: the spawn was OBSERVED and is still in
+          // flight. This arm used to have no `else` and fell through to the
+          // "check elsewhere" block below, which can only match observations
+          // in a DIFFERENT landblock — so an entity that is materialising
+          // normally was reported as `wire-never-received`, i.e. "the server
+          // never sent the packet". That is the exact inversion this module
+          // exists to prevent: mode (a) reported for mode (d). Claim it here.
+          // NOT pushed to `missing`: still-loading is not drift, so `ok` (and
+          // therefore runAll's PASS/DRIFT) must not flip on boot timing.
+          inFlight.push({
+            expected: exp,
+            classification: "spawn-in-flight",
+            detail: {
+              guid: bestPending.guid,
+              ageMs: age,
+              awaitingWhat: pending?.awaitingWhat ?? "unknown",
+              note: `younger than PENDING_TIMEOUT_MS (${PENDING_TIMEOUT_MS} ms) — re-run diff() later to settle`,
+            },
+          });
+          paired.add(bestPending.guid);
+          continue;
         }
 
         // No observation of this wcid at all in this LB. Check elsewhere.
@@ -429,6 +541,7 @@ export function installDiag() {
         goodMatches,
         pairedCount: paired.size,
         missing,
+        inFlight,
         extra,
         ok: missing.length === 0,
         summary: missing.reduce((acc, m) => {

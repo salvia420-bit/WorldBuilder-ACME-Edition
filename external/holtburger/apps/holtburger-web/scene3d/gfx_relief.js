@@ -221,7 +221,22 @@ export function _resetGfxReliefForTest() {
  * @returns {boolean} true when the wasm actually took the values.
  */
 export function applyGfxReliefToWasm(wasmNs, cfg, label = "main") {
-  const c = cfg || GFX_RELIEF_FALLBACK;
+  // A missing config resolves to an explicit, RESOLVED-SHAPE off.
+  //
+  // NOT `GFX_RELIEF_FALLBACK` (2026-08-03): that constant is the PRESET-FLAGS
+  // bag — `{gfxRelief, gfxSubdivLevel, gfxReliefScale}` — while every read
+  // below is on the RESOLVER's output shape, `{enabled, subdivLevel, scale}`.
+  // Using it as the fallback made all three reads `undefined`, so the wasm got
+  // `fn(false, 0, NaN)`; the stale-`pkg/` `console.error` was suppressed
+  // (`c.enabled` undefined is falsy); and because the constant is FROZEN, the
+  // `applied` stamp — described three lines down as "the only record that a
+  // headless assert can distinguish 'flag on, wasm took it' from 'flag on,
+  // stale pkg/'" — was skipped entirely. Latent, because both live callers
+  // pass a real config and `bake_worker.js:159` hand-spreads exactly the shape
+  // built here to dodge the bug; it no longer has to.
+  const c = (cfg && typeof cfg === "object")
+    ? cfg
+    : { ...GFX_RELIEF_FALLBACK, enabled: false, subdivLevel: 0, scale: 0 };
   const fn = wasmNs && wasmNs.set_gfx_relief;
   // Stamp the outcome onto the config object itself — `window.__hbWasmNs` is
   // module-scoped in index.html and never reaches `window`, so the diag reader
@@ -244,7 +259,13 @@ export function applyGfxReliefToWasm(wasmNs, cfg, label = "main") {
     return false;
   }
   try {
-    fn(!!c.enabled, c.subdivLevel >>> 0, Number(c.scale));
+    // NEVER hand the wasm a NaN. `c.subdivLevel >>> 0` already coerces junk to
+    // 0, but `Number(undefined)` is NaN — and a NaN amplitude reaches the Rust
+    // `f32` as a NaN, which would multiply every displaced vertex position into
+    // one. Belt to the braces above: this holds even for a config shaped wrong
+    // in a way the fallback cannot detect (e.g. the preset bag passed by hand).
+    const scale = Number(c.scale);
+    fn(!!c.enabled, c.subdivLevel >>> 0, Number.isFinite(scale) ? scale : 0);
     if (c && c.applied && c.applied[label]) c.applied[label].ok = true;
     // eslint-disable-next-line no-console
     console.log(

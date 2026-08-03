@@ -59,7 +59,22 @@ export function worldToOutdoorCell(wx, wy, z = 0) {
   const lbY = Math.max(0, Math.min(255, Math.floor(wy / 192)));
   const lx = wx - lbX * 192;
   const ly = wy - lbY * 192;
-  const cellIdx = 1 + Math.min(7, Math.floor(lx / 24)) * 8 + Math.min(7, Math.floor(ly / 24));
+  // Both terms need the LOWER clamp too (2026-08-03 review F5). `lbX`/`lbY`
+  // are clamped to >= 0 above but `lx`/`ly` are not, and NEGATIVE locals are
+  // precisely what this module exists to handle — see normalizeLegWorldFrame's
+  // header, which cites the live Town Network legs carrying y ~ -70. Town
+  // Network cells are 0x0007xxxx, i.e. the landblock X byte is 0x00, so the
+  // landblock base cannot lift a negative local back into range: without
+  // Math.max(0, ...) the cell index goes negative and the OR below wraps into
+  // a garbage landblock. Measured before the fix:
+  //   normalizeLegWorldFrame({lb: 0x00070143, x: -12.5, y: -62.8})
+  //     -> { lb: 0xfffffffe, x: -12.5 }
+  // The duplicate of this function in goto_compose.js (:88-93) has always had
+  // the Math.max — the two copies had silently diverged, and bot.js's
+  // _walkGraphPath is the caller that got the unclamped one.
+  const cellIdx = 1
+    + Math.min(7, Math.max(0, Math.floor(lx / 24))) * 8
+    + Math.min(7, Math.max(0, Math.floor(ly / 24)));
   const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
   return { lb, x: lx, y: ly, z };
 }

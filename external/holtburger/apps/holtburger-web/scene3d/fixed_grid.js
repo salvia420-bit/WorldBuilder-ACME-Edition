@@ -198,8 +198,15 @@ export class FixedSlotGrid {
       // gate on "0 non-transient warns" = assertWarns stays flat while these
       // absorb the boot/teleport bake ramp.
       transientUnbackedSuppressed: 0, graceSuppressedRuns: 0,
+      // F8 (2026-08-03): the two detectors below are the only ones in this
+      // class that can contradict the block formula — see _placeBlock's shift
+      // cross-check and assertResidency's slot-table derivation. Both MUST
+      // stay 0; a non-zero value is a real bookkeeping bug, not bake noise.
+      shiftMismatches: 0, slotDesyncs: 0,
       lastDx: 0, lastDy: 0,
     };
+    // { dx, dy, copied, expectedCopied } for the last shift crossing, or null.
+    this._lastShiftCheck = null;
   }
 
   /** The grid's resident record (the lb-keys it claims should be resident). */
@@ -214,6 +221,7 @@ export class FixedSlotGrid {
       center: this.center ? { ...this.center } : null,
       resident: this._resident.size,
       lastCrossingAtMs: this._lastCrossingAtMs,
+      lastShiftCheck: this._lastShiftCheck ? { ...this._lastShiftCheck } : null,
       ...this._stats,
     };
     // Merge the S15c park scheduler counters (parksIssued, parkSkippedInEntriesMiss,
@@ -254,10 +262,28 @@ export class FixedSlotGrid {
         }
       }
     }
+    const prevResident = this._resident;
     this.slots = next;
     const resident = new Set();
     for (const k of next) if (k !== -1) resident.add(k);
     this._resident = resident;
+
+    // SHIFT CROSS-CHECK (2026-08-03 review F8). `copied` above is POSITIONAL:
+    // it walks the shift offsets into the previous slot array. Compute the same
+    // quantity a completely different way — pure set intersection, no offsets —
+    // so the two can disagree. They must not: every key present in both blocks
+    // is, under a correct shift, reachable at the shifted slot index. An
+    // off-by-one in `sr`/`sc` shows up here and NOWHERE else, because every
+    // other value in this class is re-derived from the block formula and so
+    // cannot contradict it.
+    if (shift) {
+      let expectedCopied = 0;
+      for (const k of resident) if (prevResident.has(k)) expectedCopied += 1;
+      this._lastShiftCheck = { dx: shift.dx, dy: shift.dy, copied, expectedCopied };
+      if (copied !== expectedCopied) this._stats.shiftMismatches += 1;
+    } else {
+      this._lastShiftCheck = null;
+    }
     return { copied };
   }
 
@@ -370,7 +396,37 @@ export class FixedSlotGrid {
     const block = this.center
       ? computeBlockKeys(this.center.cx, this.center.cy, this.radius, this.lbKeyFromXY)
       : new Set();
-    const raw = diffResidency({ resident: this._resident, baked, inFlight, block });
+    // F8 (2026-08-03): derive the resident set from the SLOT TABLE, not from
+    // the `_resident` cache. Both used to be re-derivations of the same block
+    // formula that `block` above re-derives a third time, so `untracked` and
+    // `offBlock` were provably always empty — this assert could only ever fire
+    // on `unbacked`, and a corrupted slot arrangement would sail straight
+    // through the check that exists to catch it. `slots` is the state the grid
+    // actually indexes with, so validating IT against the geometry (and against
+    // the `_resident` cache, below) is a claim that can be false.
+    const resident = new Set();
+    for (const k of this.slots) if (k !== -1) resident.add(k);
+    // Lockstep check: `_resident` is documented as "kept in lockstep with
+    // slots". Any future path that mutates one without the other lands here.
+    let slotDesync = false;
+    if (resident.size !== this._resident.size) slotDesync = true;
+    else { for (const k of resident) if (!this._resident.has(k)) { slotDesync = true; break; } }
+    // Positional check: slot (r,c) must hold the key its own offset implies.
+    // Catches a stale/mis-centred slot table, which a set comparison cannot see.
+    const misplaced = [];
+    if (this.center) {
+      const W = this.width, R = this.radius;
+      for (let r = 0; r < W; r += 1) {
+        for (let c = 0; c < W; c += 1) {
+          const nx = (this.center.cx & 0xff) + (c - R);
+          const ny = (this.center.cy & 0xff) + (r - R);
+          const want = (inMap(nx) && inMap(ny)) ? (this.lbKeyFromXY(nx, ny) >>> 0) : -1;
+          if (this.slots[r * W + c] !== want) misplaced.push({ r, c, got: this.slots[r * W + c], want });
+        }
+      }
+    }
+    if (slotDesync || misplaced.length) this._stats.slotDesyncs += 1;
+    const raw = diffResidency({ resident, baked, inFlight, block });
 
     // Grace classification: only `unbacked` is a bake-window transient (an edge
     // whose bake is still catching up). untracked/offBlock are real divergences
@@ -388,8 +444,16 @@ export class FixedSlotGrid {
       this._stats.graceSuppressedRuns += 1;
     }
 
-    const diff = { unbacked, untracked: raw.untracked, offBlock: raw.offBlock, transientUnbacked };
-    if (unbacked.length || diff.untracked.length || diff.offBlock.length) {
+    const shiftCheck = this._lastShiftCheck;
+    const shiftMismatch = !!(shiftCheck && shiftCheck.copied !== shiftCheck.expectedCopied);
+    const diff = {
+      unbacked, untracked: raw.untracked, offBlock: raw.offBlock, transientUnbacked,
+      // F8 detectors — never graced: these are arithmetic/bookkeeping bugs,
+      // not bake-window transients.
+      misplacedSlots: misplaced, slotDesync, shiftMismatch,
+    };
+    if (unbacked.length || diff.untracked.length || diff.offBlock.length
+        || misplaced.length || slotDesync || shiftMismatch) {
       this._stats.assertWarns += 1;
       const hex = (arr) => arr.map((k) => `0x${(k >>> 0).toString(16).padStart(8, "0")}`);
       this.warn(
@@ -400,6 +464,9 @@ export class FixedSlotGrid {
           untracked: hex(diff.untracked),          // baked in-block, grid lost track of it
           offBlock: hex(diff.offBlock),            // grid resident outside its own block
           transientUnbacked: hex(transientUnbacked), // in-grace bake-window LBs (context only, not part of the warn trigger)
+          misplacedSlots: misplaced,               // slot (r,c) holds the wrong LB for its own offset
+          slotDesync,                              // `_resident` cache no longer matches `slots`
+          shiftMismatch: shiftMismatch ? shiftCheck : false, // positional carry-over ≠ set intersection
         },
       );
     }

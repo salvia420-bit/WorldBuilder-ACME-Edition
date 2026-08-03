@@ -574,6 +574,18 @@ export class RynthWebHost {
         pursuitNow >= 2 ? pursuitNow : prev ? prev.pursuitLast : 0,
       nearby: this._nearbyGuids(),
     };
+    // Copy-then-free (2026-08-03 review F6). `GetPlayerPose` maps to the wasm
+    // `getLocalPlayerPose` (see the capability table above), which hands back a
+    // wasm-bindgen `LocalPlayerPose` box — `pkg/holtburger_web.d.ts` declares
+    // `free(): void` on it. Every field the snapshot needs has been read into
+    // plain numbers by this point, so the box is dead. It was never freed, and
+    // `_tick` runs off a WORKER interval (see `start(hz = 15)`) specifically so
+    // a backgrounded tab keeps ticking — ~54k orphaned boxes an hour across a
+    // soak, in the module every pose read in bot.js / goto_compose.js goes
+    // through. Same invariant as R1#6 / R5#14; `free()` is NOT idempotent, so
+    // this is the single owner and it frees exactly once.
+    try { pose?.free?.(); } catch (_) { /* box already gone — never break the tick */ }
+    this._posesFreed = (this._posesFreed | 0) + 1;
     Object.freeze(snap.pose);
     Object.freeze(snap.nearby);
     this.snap = Object.freeze(snap);

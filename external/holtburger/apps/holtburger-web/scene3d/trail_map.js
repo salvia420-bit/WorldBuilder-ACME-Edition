@@ -198,8 +198,20 @@ void main() {
     if (i >= uStampCount) break;
     vec4 s = uStamps[i];
     float d = distance(world, s.xy);
-    // smoothstep(edge1, edge0, d) — 1 at the centre, 0 at the rim.
-    v = max(v, s.w * smoothstep(s.z, 0.0, d));
+    // 1 at the centre, 0 at the rim.
+    //
+    // This used to be written smoothstep(s.z, 0.0, d) — i.e. edge0 = the
+    // radius, edge1 = 0, so edge0 > edge1 ALWAYS (the JS side clamps the
+    // radius to > 0 before it ever reaches this uniform). GLSL ES leaves
+    // smoothstep UNDEFINED when edge0 >= edge1; it only worked because most
+    // compilers emit the general clamp((x-edge0)/(edge1-edge0)) form, which
+    // happens to invert cleanly. A compiler that specialises on edge0 < edge1
+    // is entitled to return 0 for every texel — a permanently blank trail
+    // map, with stampsDrawn still counting up and stats() still reporting the
+    // feature healthy. The 1070 runs ANGLE/D3D11, so this is live risk on the
+    // only real GPU in the fleet, not a theoretical portability note.
+    // Spec-safe form, same curve: rise over [0, s.z], then invert.
+    v = max(v, s.w * (1.0 - smoothstep(0.0, max(s.z, 1e-4), d)));
   }
 
   gl_FragColor = vec4(v, 0.0, 0.0, 1.0);
