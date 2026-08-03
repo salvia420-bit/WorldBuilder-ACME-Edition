@@ -441,7 +441,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `dynLod` (render) | see §3 | off | — | Distance-LOD render pass (recent perf pass). | scene3d/entities.js:376 |
 | `frameBudget` | float ms | 9 ms (audit 2026-07-27; doc said 16.67) | numeric 2-33; "off" disables | Per-frame async work budget. | scene3d/loop.js:1542 (`RP3_DEFAULT_BUDGET_MS`; doc pointed at materials.js) |
 | `deferHz` | float | 10 Hz (audit 2026-07-27; doc said 60) | numeric 1-60 | Deferred work scheduling rate. | scene3d/loop.js:1543 (`RP3_DEFAULT_DEFER_HZ`; doc pointed at materials.js) |
-| `ringRadius` / `staticsRadius` / `buildingsRadius` | int | 6 | — | Bake/load ring radii (LB count). | scene3d/index.js:118–166 |
+| `ringRadius` / `staticsRadius` / `buildingsRadius` | int | 6 | — | **Corrected 2026-08-03 (residency #12).** These were never "bake/load ring radii" after the eager boot ring was retired (`docs/2026-06-30-spawn-driven-boot-retire-holtburg-ring.md`). `ringRadius` is **inert** (its const was deleted). `staticsRadius` / `buildingsRadius` are **LRU cap sizing inputs only** — they feed `max(staticsRadius, buildingsRadius, pvsRingRadius)` and nothing else. Draw distance is `pvsRingRadius`. See the per-flag rows in §"streaming / residency" below. | scene3d/residency.js (`LRU_SIZING_RADIUS`); consumed at scene3d/index.js `ringMax` |
 | `agentic` | `low` | per-GPU | `=== "low"` opt-in | Lower-LOD strategy for agent tests. | scene3d/index.js:123 |
 | `lbCap` | int | small | numeric | Landblock LRU cache size. | scene3d/index.js:3218 |
 | `lbLruDebug` | `1` | off | `=== "1"` opt-in | Debug LRU evictions. | scene3d/index.js:3220 |
@@ -619,9 +619,9 @@ Values cell says only `off` really does ignore `=0`/`=false`.
 | `buildingsRingTimeSlice` | `off` (escape) | **on** | `!== "off"` | ~6 ms time-slice for the buildings ring build (mirrors the statics F3 slice). | scene3d/buildings.js:118 |
 | `buildingFloorBias` | `off` (escape) | **on** | `!== "off"` | Coplanar building-floor z-fight bias. SwiftShader resolves coplanar depth deterministically — A/B needs a real GPU. | scene3d/buildings.js:92 |
 | `buildingBatch` | `off` (escape) | **on** (2026-07-14, user decision) | `!== "off"` | Feed static building surfaces into the cross-LB `?statAtlas` (buildings never articulate in 3D — doors are entities). Big draw-call cut (1070 paired: 1853→279 draws, dir. large; exact # is FCULL-facing-noisy). Trade-off: batched buildings lose the per-placement distance receive-shadow gate (`castShadow` preserved). Requires `?statAtlas` on. | scene3d/buildings.js:117 |
-| `staticsRadius` | N (0..6) | 6 (`agentic=low` → 1) | numeric 0-6 | Statics streaming ring radius. | scene3d/index.js:197 |
-| `buildingsRadius` | N (0..6) | 6 (`agentic=low` → 1) | numeric 0-6 | Buildings streaming ring radius. | scene3d/index.js:210 |
-| `pvsRingRadius` | N (0..12) | 5 (`agentic=low` → 1) | numeric 0-12 | Indoor/EnvCell PVS streaming ring radius (resident geometry grows as (2N+1)²). | scene3d/index.js:247 |
+| `staticsRadius` | N (0..6) | 6 (`agentic=low` → 1) | numeric 0-6 | **Corrected 2026-08-03 (residency #12): NOT a statics draw distance.** The eager boot ring this sized was retired 2026-06-30; the flag's only surviving effect is one input to the landblock-LRU cap radius `max(staticsRadius, buildingsRadius, pvsRingRadius)` (→ `lbCap = span² + 2·span + 8`, span = 2·radius+1; default 6 → 203). Statics stream on the PVS ring. Grammar unchanged by the residency fold. | scene3d/residency.js `STATICS_LRU_RADIUS` → `LRU_SIZING_RADIUS` |
+| `buildingsRadius` | N (0..6) | 6 (`agentic=low` → 1) | numeric 0-6 | **Corrected 2026-08-03 (residency #12): NOT a buildings draw distance.** Same story as `staticsRadius` — LRU cap sizing input only; buildings stream on the PVS ring. Grammar unchanged by the residency fold. | scene3d/residency.js `BUILDINGS_LRU_RADIUS` → `LRU_SIZING_RADIUS` |
+| `pvsRingRadius` | N (0..12) | 5 (`agentic=low` → 1) | numeric 0-12 | Player-centered PVS prefetch/bake ring radius — **this is the client's actual draw distance** (outdoors as well as indoors: an outdoor `renderSet` is structurally always {current}, so this ring is the only thing that pulls terrain/statics/buildings as the player roams). Default 5 = 11×11 ≈ 960 m; resident geometry grows as (2N+1)². 2026-08-03 (residency #9): now the base of the one residency policy constant — reap keep-zone = base+3, LRU sizing = base+1 — but the flag's grammar and default are unchanged. Indoors, `indoorPvsRing` collapses it. | scene3d/residency.js `RESIDENCY_RADIUS_LB` / `PVS_RING_RADIUS` → `scene3d.pvsRingRadius` → scene3d/cells.js `tickPvsLoadExpansion` |
 | `pvsBakeCap` | N \| `off` | 4 | numeric; "off" disables | Cap on concurrent PVS cell bakes; `off` = legacy uncapped fan-out. | scene3d/cells.js:98 |
 | `pvsStreamQueue` | N \| `off` | 6 | numeric; "off" disables | Target in-flight depth for the PVS stream-bake queue; `off` = uncapped. | scene3d/cells.js:225 |
 | `bakePrewarm` | `off` (escape) | **on** | `!== "off"` | Pre-warm shader programs + texture uploads for baked subtrees before attach (legacy = attach-then-lazy-compile). | scene3d/bake_prewarm.js:28 |
@@ -1227,7 +1227,7 @@ EFFECTIVE absent-param behavior traced from the reader code, not from comments.
 | `breathFog` | _boolFlag(visualAllEffects()) | ON via visualAll | vfx_flags.js |
 | `buildingBsp02` | `!= off` | ON | lib.rs parse_building_bsp_02_flag |
 | `entityReapBudgetMs` | numeric; "off"→0 | 3 | entities.js:410 |
-| `entityReapRadius` | numeric 1-64 | 8 | entities.js:385 |
+| `entityReapRadius` | numeric 1-64; "off" → default | 8 (= `pvsRingRadius` base 5 + 3, residency #9 2026-08-03) | scene3d/residency.js `REAP_PVS_RADIUS` (consumed entities.js reaper) |
 | `examineFloaty` | `!(0\|false\|off)` | ON | plugins/examine-floaty.js:360 |
 | `flameFlickerAmp` | numeric via _strFlag | component default | vfx/components/flameFlicker.js:139 |
 | `foliageFireflies` | _boolFlag(visualAllEffects()) | ON via visualAll | vfx_flags.js |

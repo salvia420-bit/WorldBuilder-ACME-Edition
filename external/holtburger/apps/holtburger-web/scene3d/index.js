@@ -81,6 +81,10 @@ import { EntityManager } from "./entities.js";
 // (2026-07-26, RESULTS-matcache-falsifier next-move 1).
 import { entityOwnedTally } from "./entity_owned_tally.js";
 import { RECOLOR_ON } from "./recolor_flag.js";
+// 2026-08-03 residency #9 — the five residency radii now derive from ONE base
+// policy constant; see scene3d/residency.js for the derivation + the URL-flag
+// grammars (unchanged) it preserves.
+import { PVS_RING_RADIUS, LRU_SIZING_RADIUS } from "./residency.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
@@ -365,122 +369,34 @@ function terrainInFlightLbKeys(streamGuardState) {
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X / HOLTBURG_Y retired (spawn-driven-boot): no landblock is special
 // at boot — the world streams around the player's real spawn LB.
-// World-expand step 1 Objective 8 (2026-05-14) — initial ring radius
-// around Holtburg flipped from 1 (3×3 = 9 LBs) to 6 (13×13 = 169 LBs).
-// Per `docs/world-expand-step-1-handoff.md` §Intent / §Objective 8 the
-// new ring covers ~2.5 km × 2.5 km of Aluvian Heartlands (Holtburg in
-// the centre plus 168 surrounding LBs — 51 populated, 118 wilderness
-// per the WorldBuilder.Terminal oracle at
-// `/mnt/wbterminal1/tmp/claude-scratch/world-expand/ring_13x13_inventory.jsonl`).
+// 2026-08-03 residency #9 + #12 — the ring radii that used to live here
+// (STATICS_RING_RADIUS / BUILDINGS_RING_RADIUS / PVS_RING_RADIUS, three
+// hand-tuned IIFEs with three unrelated defaults) now derive from ONE base
+// policy constant in `./residency.js`. Imported at the top of this file as:
 //
-// init-time impact: terrain bake ~6× slower at radius=6 vs radius=1
-// (oracle reports 169/9 ≈ 19× more LBs but 118 are empty so buildings/
-// statics are sub-linear); cold-fetch through manifest+shards adds
-// ~5-15 s of HTTP fetches for non-boot LBs. Total init jumps from ~3 s
-// to ~10-30 s (per brief, acceptable). Phase 6's lazy LB-entry pipeline
-// + Objective 6's per-LB hooks keep the walk-out path efficient (LBs
-// past the initial ring still lazy-load on player movement).
+//   PVS_RING_RADIUS   = base       (5) — the player-centered prefetch/bake ring
+//                                       published as `scene3d.pvsRingRadius`
+//                                       and consumed by cells.js's
+//                                       `tickPvsLoadExpansion`. THIS is the
+//                                       client's draw distance.
+//   LRU_SIZING_RADIUS = base + 1   (6) — the landblock-LRU cap input (`ringMax`
+//                                       at the LRU construction below), i.e.
+//                                       max(?staticsRadius, ?buildingsRadius,
+//                                       PVS_RING_RADIUS). Anti-thrash margin,
+//                                       NOT a draw distance.
 //
-// The `buildHoltburgX` exports in terrain.js / buildings.js /
-// statics.js remain radius=1 back-compat wrappers for the existing
-// Phase 7.1 capture + visual-fidelity wave 1-6 captures. Objective 8
-// flips ONLY the init3D call site; per-capture follow-ons are
-// out-of-scope (radius=1-hardcoded assertions move forward in their
-// own PR via Objective 10's `capture_world_expand_e2e.cjs`).
-// 2026-05-21 — low-agentic-mode override. `?ringRadius=N` or
-// `?agentic=low` (which sets ringRadius=1) shrinks the initial ring
-// to drastically reduce phase7 wasm fetch time at boot. PVS-driven
-// `tickPvsLoadExpansion` still pulls additional LBs as the player
-// walks toward them, so functionality is preserved — just slower
-// horizon-fill the first time the user moves.
-// HOLTBURG_RING_RADIUS retired (spawn-driven-boot): the eager boot ring is gone.
-// Statics/buildings draw distance is governed by STATICS_RING_RADIUS /
-// BUILDINGS_RING_RADIUS (LRU sizing) + the live PVS expansion ring below.
-// Statics/scenery and buildings are the two heaviest per-LB content
-// streams (placements + per-model setup/meshes/surface-pixels via
-// F.41 batch). Decoupling their rings from the terrain ring lets us
-// load a small neighborhood up-front, then PVS-driven expansion
-// (in loop.js's `tickPvsLoadExpansion`) pulls additional LBs as they
-// enter the renderer's visible cell set. Net: ~85 % fewer initial
-// setup/surface fetches at boot for each (25/169 LBs) without
-// leaving the visible scene empty.
-// Bumped 2→6 on 2026-05-16 (post-B.5 + RIC-shim) so the visible
-// horizon shows the full 13×13 ring of scenery placements (16,700
-// trees / rocks / props across 169 LBs) and buildings up-front,
-// instead of a sparse 5×5 with empty wilderness past ~480m. PVS
-// expansion via loop.js::tickPvsLoadExpansion still pulls anything
-// the player walks toward, but with radius=6 the initial bake covers
-// the full visible horizon at Holtburg spawn — matching the world-
-// completeness method's 13×13 oracle counts.
-// 2026-05-21 — low-agentic-mode override. Mirrors HOLTBURG_RING_RADIUS
-// above so all three streams (terrain + buildings + statics) shrink
-// together. `?agentic=low` defaults to radius=1 (3×3 = 9 LBs) for the
-// fastest possible cold boot; PVS expansion (`tickPvsLoadExpansion`)
-// still pulls more as the player walks. Per-stream `?buildingsRadius=N`
-// / `?staticsRadius=N` overrides win over agentic-mode default.
-const STATICS_RING_RADIUS = (() => {
-  try {
-    if (typeof window === "undefined") return 6;
-    const ps = new URLSearchParams(window.location.search);
-    const raw = ps.get("staticsRadius");
-    if (raw) {
-      const n = Number.parseInt(raw, 10);
-      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
-    }
-    if (ps.get("agentic") === "low") return 1;
-  } catch (_) { /* fallthrough */ }
-  return 6;
-})();
-const BUILDINGS_RING_RADIUS = (() => {
-  try {
-    if (typeof window === "undefined") return 6;
-    const ps = new URLSearchParams(window.location.search);
-    const raw = ps.get("buildingsRadius");
-    if (raw) {
-      const n = Number.parseInt(raw, 10);
-      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
-    }
-    if (ps.get("agentic") === "low") return 1;
-  } catch (_) { /* fallthrough */ }
-  return 6;
-})();
-
-// 2026-06-20 empty-world / barren-wilderness fix — player-centered PVS
-// expansion ring radius. The radius-6 boot ring (HOLTBURG_RING_RADIUS) is
-// hardcoded to center on Holtburg, so AWAY from Holtburg the only static /
-// scenery / building / terrain-mesh coverage came from `tickPvsLoadExpansion`,
-// which — because an OUTDOOR `renderSet` is structurally always {current}
-// (the cell_portal_graph holds only indoor EnvCell portals, scene.rs:990) —
-// expanded to a hardcoded 3×3 (radius 1, ~288 m). Result: everywhere except
-// the Holtburg neighborhood showed exactly the "empty wilderness past ~480 m"
-// symptom the 2026-05-16 radius 2→6 boot bump cured — but the cure never
-// followed the player. This raises the per-frame player-centered ring to
-// radius 5 (11×11 ≈ 960 m horizon), matching the boot ring's "full visible
-// horizon" intent as the player roams. `?pvsRingRadius=N` overrides
-// (N=1 restores the old 3×3 for A/B). Default (5) is unchanged.
+// Defaults are byte-identical to the pre-fold values (ring 5, lbCap 203) and
+// every URL flag keeps its exact previous grammar — `?pvsRingRadius`,
+// `?staticsRadius`, `?buildingsRadius` and `?agentic=low` all still parse and
+// still land on the same derived value. residency.js carries the full history
+// (the retired Holtburg boot ring, the 2026-06-20 barren-wilderness fix, the
+// 2026-06-22 ceiling raise to 12) that used to be transcribed here.
 //
-// Goal-1 draw-distance throttle (2026-06-22): the ceiling was `<= 6` because a
-// larger ring flooded the per-LB bake/fetch pipeline and stalled the main
-// thread (the 0.2 fps "draw distance got destroyed" symptom). The bounded
-// stream-queue in cells.js (`?pvsStreamQueue`, default-ON) now caps how many
-// bakes' fan-outs run at once regardless of ring size, so larger draw distance
-// is safe to reach; the ceiling is raised to 12 (25×25 ≈ 4.8 km) for testing.
-// The LRU cap below self-sizes to the ring + headroom (no manual `?lbCap`
-// pairing needed). NOTE: resident geometry/VRAM still grows as (2N+1)², so very
-// large radii ultimately want Goal-2 (texture compression) headroom.
-const PVS_RING_RADIUS = (() => {
-  try {
-    if (typeof window === "undefined") return 5;
-    const ps = new URLSearchParams(window.location.search);
-    const raw = ps.get("pvsRingRadius");
-    if (raw) {
-      const n = Number.parseInt(raw, 10);
-      if (Number.isFinite(n) && n >= 0 && n <= 12) return n;
-    }
-    if (ps.get("agentic") === "low") return 1;
-  } catch (_) { /* fallthrough */ }
-  return 5;
-})();
+// WARNING: `?staticsRadius` / `?buildingsRadius` are NOT statics/buildings draw
+// distance any more. The eager boot ring they sized was retired in
+// `docs/2026-06-30-spawn-driven-boot-retire-holtburg-ring.md`; their only
+// surviving effect is widening (or, via `?agentic=low`, shrinking) the LRU cap.
+// Statics and buildings stream on the PVS ring like everything else.
 
 // 2026-05-21 cold-boot Phase G (eager-init) — session-independent
 // scene3d bootstrap. Runs during page-init while the user is still
@@ -5446,7 +5362,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // above the live PVS working set (3×3 bake ≈9 + PVS expansion ≲25) so growth
     // is bounded WITHOUT evict↔re-bake thrash. The 3×3 always-resident floor in
     // LandblockLRU.tickEviction is the hard thrash guard regardless of this cap.
-    const ringMax = Math.max(STATICS_RING_RADIUS, BUILDINGS_RING_RADIUS, PVS_RING_RADIUS);
+    // 2026-08-03 residency #9 — same expression as before, now computed once in
+    // residency.js: `max(?staticsRadius, ?buildingsRadius, PVS_RING_RADIUS)`.
+    // Defaults to base+1 = 6, so a big `?pvsRingRadius=N` still lifts the cap
+    // with it (that max() is load-bearing, not decoration).
+    const ringMax = LRU_SIZING_RADIUS;
     // Goal-1 (2026-06-22): the floor is the ring AREA plus a perimeter of
     // headroom. The old floor was the bare ring area ((2N+1)²), which a
     // one-LB roam transiently exceeds — the shifted ring + the trailing edge

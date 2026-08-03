@@ -2370,8 +2370,12 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // (no camera / no worldRoot → culls nothing). `?frustumCull=off` disables.
   tickFrustumCull(scene3d);
   // ── DEFERRABLE #2 (group PVS) — PVS-driven scenery + buildings ───────
-  // expansion (paired with STATICS_RING_RADIUS=2 and BUILDINGS_RING_RADIUS=2
-  // boot rings in index.js). Reads the wasm renderSet and triggers
+  // expansion. (Stale-comment fix 2026-08-03, residency #12: this used to say
+  // "paired with STATICS_RING_RADIUS=2 / BUILDINGS_RING_RADIUS=2 boot rings in
+  // index.js" — those boot rings were retired 2026-06-30 and the constants are
+  // now LRU-cap sizing inputs only, see scene3d/residency.js. This expansion IS
+  // the statics/buildings streaming path now, with no boot ring behind it.)
+  // Reads the wasm renderSet and triggers
   // `loadStaticsForLandblock` + `loadBuildingsForLandblock` for any LB the
   // player can see but hasn't entered yet. Both hooks are idempotent + cheap,
   // so RP3 throttles the per-frame renderSet scan + ring expand to ~10 Hz:
