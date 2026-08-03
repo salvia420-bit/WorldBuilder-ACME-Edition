@@ -88,6 +88,132 @@ const SEALED_KEEP_RING_ON = (() => {
 // re-streams) when the fix is on, 0 = keep only (legacy) when off.
 const SEALED_KEEP_RING_FLOOR = SEALED_KEEP_RING_ON ? 1 : 0;
 
+// ── sealedPark: warm sealed round trip (2026-08-03 residency #11) ────────────
+// THE ROUND-TRIP PROBLEM. A SEALED dungeon (no outdoor-facing portal — the
+// Holtburg meeting hall, Town Network, every portal hub) is the one place a
+// player enters and leaves CONSTANTLY, and it is also the place the residency
+// stack reclaims hardest: `sealedEvict` publishes `_sealedEvictLbKey`, this
+// tick reclaims every resident LB beyond the keep-ring (~112 of the radius-5
+// prefetch ring's 121), and `tickPvsLoadExpansion` collapses the prefetch
+// skirt to 0. That is CORRECT while inside (nothing outdoor is visible or
+// reachable — see the sealedEvict/sealedCull notes) but it makes every
+// meeting-hall round trip a worst-case COLD rebuild.
+//
+// WHAT ALREADY WORKED. `?warmPark` has been default-on since 2026-07-10, and
+// `_reclaim` routes through `park()` — so the sealed purge already PARKS the
+// outdoor set (detach + stash, baked marks + wasm collision kept, re-entry is
+// a pointer re-adopt). The purge only truly disposes under `?warmPark=off`.
+//
+// WHAT DID NOT. The parked set does not survive the dwell:
+//   (a) the park pool's BYTE backstop (`warmParkBudgetMb`, 160 MB) drains it
+//       once the 30 s `parkUseTimeMs` floor ages out — and a sealed dwell is
+//       usually longer than that (that is what a hub IS);
+//   (b) worse, the live-geometry governor (`maxLiveGeom`, 8000) BYPASSES the
+//       UseTime floor outright (`floorMs = 0` in `_tickParkPoolPressure`), and
+//       inside a sealed hub the only geometry the LRU can reclaim IS the
+//       parked outdoor set — the interior's ~200 EnvCells are resident and
+//       un-reclaimable. So a governor breach drains the pool to EMPTY: the
+//       exact unsatisfiable-feed shape the 2026-07-28 park-storm fix bounded
+//       on the resident side (GEOM_PRESSURE_RESIDENT_MARGIN).
+// Either way the player portals out into a full cold re-bake of the town.
+//
+// THE FIX (this flag). While sealed, PIN a bounded RETURN CORE of the parked
+// outdoor set: the LBs nearest the dungeon's own LB, which is exactly where
+// the portal drops you back. Pinned slots are not pressure victims — neither
+// byte backstop nor geometry governor — so the exit is a re-attach. On the
+// sealed→outdoor transition the pins drive a bounded, nearest-first UNPARK
+// drain so the return is warm immediately instead of waiting for the prefetch
+// ring to re-expand, and then release.
+//
+// THE BOUNDS (parking is not immortality — plan constraint #3):
+//   · radius   SEALED_PARK_RADIUS (3 ⇒ 7×7 around the keep; the 3×3 inside it
+//              is already kept RESIDENT by sealedKeepRing, so ≤40 LBs are
+//              actually pinnable) — far ocean-skirt / mountain-wall LBs, the
+//              ~70 that motivated sealedEvict in the first place, are NOT
+//              pinned and reclaim exactly as today;
+//   · count    SEALED_PARK_MAX_LBS;
+//   · bytes    SEALED_PARK_BUDGET_BYTES (`?sealedParkBudgetMb`, 64 MB) —
+//              nearest-first, so the byte cap protects the core, not the rim;
+//   · lifetime pins exist ONLY while `_sealedEvictLbKey` names the SAME keep
+//              LB. A different sealed dungeon, a teleport away while inside, a
+//              geometry-governor breach that outlives the drain, the exit
+//              drain's own 5 s deadline, `unpark`, `disposeParked`,
+//              `flushParked` and `dispose()` all release them.
+// MEMORY TRADE-OFF (deliberate, and the whole point): a pinned slot keeps its
+// GL buffers — park detaches, it does not free (see MAX_LIVE_GEOM's note). We
+// are choosing ≤64 MB of retained VRAM/heap for the dwell over a full cold
+// town rebuild per round trip. The cap is small next to the 160 MB pool budget
+// the same bytes are already counted against, so the TOTAL pool ceiling is
+// unchanged — pins change WHICH slots survive, not how many bytes may.
+//
+// COST WHILE PINNED: zero per-frame work. A pinned slot is a PARKED slot —
+// detached from terrainGroup/buildingsGroup/staticsGroup/cellsGroup (no draw,
+// no `updateMatrixWorld` traversal), filtered out of `scene3d.terrainMaterials`
+// (no per-rAF uniform pushes), spliced out of `activeLights`, its static-script
+// emitters destroyed, and REMOVED from `entries` (so every walk over the
+// resident set — this tick's own candidate scan included — shrinks). That is
+// the peg `sealedEvict` was written to kill, and pinning does not give any of
+// it back. (Residual: `animated_scenery.js`'s rAF loop still iterates parked
+// instances to skip them via `_isParkedLb` — a Map lookup per instance,
+// pre-existing to park and unchanged here.)
+//
+// DEFAULT ON, `?sealedPark=off` restores today's exact behavior (no pins, no
+// exit drain — every sealed park is an ordinary pool slot again). Layered ON
+// TOP of `?warmPark`: with `?warmPark=off` the sealed purge is a classic
+// dispose and there is no pool to pin, so this flag is inert (warmPark remains
+// the classic-dispose escape). `?sealedEvict=off` (no purge at all) and
+// `?sealedCull=off` (no sealed detection) both make it inert too.
+const SEALED_PARK_ON = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("sealedPark");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    // No window/URLSearchParams = headless unit-test env. Warm-park itself
+    // defaults OFF there (see WARM_PARK_ON), so this is inert either way;
+    // keep it ON so a suite that stubs `?warmPark=on` exercises the feature.
+    return true;
+  }
+})();
+// Chebyshev radius from the keep LB inside which a sealed-purge park is
+// pinnable. 3 ⇒ the 7×7 return neighbourhood; the 3×3 core of that is already
+// kept resident by SEALED_KEEP_RING_FLOOR.
+const SEALED_PARK_RADIUS = 3;
+// Hard count cap on the pinned reserve (7×7 minus the resident 3×3 = 40, so
+// this is slack, not the binding constraint — the byte cap is).
+const SEALED_PARK_MAX_LBS = 48;
+// Byte cap on the pinned reserve. `?sealedParkBudgetMb=N` tunes; 0/off
+// disables pinning entirely (equivalent to `?sealedPark=off` for the retention
+// half while keeping the exit drain's release bookkeeping).
+const SEALED_PARK_BUDGET_BYTES = (() => {
+  try {
+    const raw = new URLSearchParams(window.location?.search || "").get("sealedParkBudgetMb");
+    if (raw == null) return 64 * 1024 * 1024;
+    if (raw === "off" || raw === "false") return 0;
+    const v = parseInt(raw, 10);
+    return (Number.isFinite(v) && v >= 0 ? v : 64) * 1024 * 1024;
+  } catch (_) {
+    return 64 * 1024 * 1024;
+  }
+})();
+// Exit drain. On the sealed→outdoor transition:
+//   · a center farther than SEALED_EXIT_NEAR_RADIUS from the keep means the
+//     player did NOT walk/portal back out where they came in (they teleported
+//     somewhere else while inside) — the reserve is not the return path, so
+//     release it unparked and let ordinary pressure reclaim it;
+//   · otherwise re-adopt the pinned LBs within SEALED_EXIT_UNPARK_RADIUS of
+//     the exit center, nearest first, ≤ SEALED_EXIT_UNPARK_PER_TICK per tick
+//     (the MAX_PARKS_PER_TICK discipline applied to the unpark direction — a
+//     bulk re-attach is exactly the hitch we are trying to avoid), never past
+//     `maxResident` and never while the geometry governor is engaged, so the
+//     drain can't hand the next tick a park storm;
+//   · the whole drain is deadlined at SEALED_EXIT_DRAIN_MAX_MS so a stuck
+//     center (null `getCurrentLbId` through a transition) can't make the
+//     reserve immortal.
+const SEALED_EXIT_NEAR_RADIUS = 4;
+const SEALED_EXIT_UNPARK_RADIUS = 2;
+const SEALED_EXIT_UNPARK_PER_TICK = 4;
+const SEALED_EXIT_DRAIN_MAX_MS = 5000;
+
 // Phase 9a warm-park eviction (W4 residency design §3, 2026-07-10).
 // Eviction PARKS instead of disposing — containers detach from the scene
 // groups into a byte-budgeted pool, baked marks and the wasm collision
@@ -518,6 +644,36 @@ export class LandblockLRU {
     this._geomPressureEngagements = 0;
     this._geomPressureActive = false;
 
+    // ── #11 sealedPark reserve (2026-08-03) ──────────────────────────────
+    // The pinned return core: Map<lbKey, bytes> mirroring the parkPool slots
+    // that the sealed purge parked near the keep LB. Membership is the ONLY
+    // thing that exempts a slot from `_tickParkPoolPressure`; every exit from
+    // the pool (`unpark`, `disposeParked`) unpins, so a pin can never outlive
+    // its slot. `_sealedPinKeep` is the keep LB the reserve belongs to (0 =
+    // no reserve) — a different sealed dungeon clears it wholesale.
+    this._sealedPinned = new Map();
+    this._sealedPinnedBytes = 0;
+    this._sealedPinKeep = 0;
+    this._sealedExitAtMs = 0;
+    // Telemetry (UNCONDITIONAL — same "flag off vs dead code" rule as the
+    // park-storm counters above; these are what a live session reads off
+    // `window.__sealedPark` to prove the reserve fired):
+    //   _sealedPinnedTotal      slots pinned since boot
+    //   _sealedPinHolds         pressure-dispose considerations the reserve
+    //                           blocked (the retention proof)
+    //   _sealedPinBudgetDrops   sealed parks NOT pinned (radius/count/byte cap)
+    //   _sealedWarmUnparked     slots the exit drain re-adopted (warm return)
+    //   _sealedPinsReleasedAway pins dropped because the player left the area
+    //                           while inside (teleport-out reclaim path)
+    //   _sealedFallbackPurged   pinned slots true-disposed anyway (governor
+    //                           breach / explicit flush) — the honesty counter
+    this._sealedPinnedTotal = 0;
+    this._sealedPinHolds = 0;
+    this._sealedPinBudgetDrops = 0;
+    this._sealedWarmUnparked = 0;
+    this._sealedPinsReleasedAway = 0;
+    this._sealedFallbackPurged = 0;
+
     // PHY-25 dungeon stream gate (P0.1, 2026-07-27): how many outdoor
     // load-point evaluations world_stream.js suppressed because the player
     // was indoors (cell low word >= 0x100). Surfaced here rather than in a
@@ -700,6 +856,156 @@ export class LandblockLRU {
       : Date.now();
   }
 
+  // ── #11 sealedPark reserve helpers (2026-08-03) ────────────────────────
+  // All of them are no-ops unless a reserve actually exists, so the flag-off
+  // and outdoor paths stay byte-identical (one Map.size read per tick).
+
+  /** Is a sealed return core currently pinned? (the pressure-skip predicate) */
+  _sealedPinsHeld() {
+    return SEALED_PARK_ON && this._sealedPinned.size > 0;
+  }
+
+  /** Drop one pin (called from every pool exit + the release paths). */
+  _unpinSealed(lbKey) {
+    const bytes = this._sealedPinned.get(lbKey);
+    if (bytes === undefined) return false;
+    this._sealedPinned.delete(lbKey);
+    this._sealedPinnedBytes = Math.max(0, this._sealedPinnedBytes - bytes);
+    if (this._sealedPinned.size === 0) this._sealedPinKeep = 0;
+    return true;
+  }
+
+  /** Drop the whole reserve (keep-LB change, teleport-away, drain deadline). */
+  _clearSealedPins() {
+    this._sealedPinned.clear();
+    this._sealedPinnedBytes = 0;
+    this._sealedPinKeep = 0;
+    this._sealedExitAtMs = 0;
+  }
+
+  // Pin the return core out of the keys THIS sealed tick just parked. Called
+  // at the tail of the sealed drain with the keys `_reclaim` actually
+  // consumed (the drain is time-budgeted, so that is a subset of `victims`).
+  //
+  // Nearest-first inside the tick: the drain itself reclaims FARTHEST-first
+  // (W4 §3.4 — the return path parks last), so without this sort a byte cap
+  // would be spent on the rim. Cross-tick the caps simply fill up; with the
+  // R-12 burst essentially the whole backlog lands in one tick anyway.
+  _sealedPinAfterPark(keep, parkedKeys) {
+    if (!SEALED_PARK_ON || SEALED_PARK_BUDGET_BYTES <= 0) return;
+    if (!this.warmParkEnabled || parkedKeys.length === 0) return;
+    const cand = [];
+    for (const key of parkedKeys) {
+      // Only slots that really landed in the pool (classic evict / a park
+      // that bailed leaves nothing to pin).
+      if (!this.parkPool.has(key)) continue;
+      if (this._sealedPinned.has(key)) continue;
+      const d = lbChebyshev(keep, key);
+      if (d > SEALED_PARK_RADIUS) { this._sealedPinBudgetDrops += 1; continue; }
+      cand.push({ key, d });
+    }
+    if (cand.length === 0) return;
+    cand.sort((a, b) => a.d - b.d);
+    for (const { key } of cand) {
+      const bytes = this.parkPool.get(key)?.bytes || 0;
+      if (this._sealedPinned.size >= SEALED_PARK_MAX_LBS
+          || this._sealedPinnedBytes + bytes > SEALED_PARK_BUDGET_BYTES) {
+        // Over a cap: this slot stays an ordinary pool entry and reclaims on
+        // today's terms (farthest-from-keep first — see _tickParkPoolPressure).
+        this._sealedPinBudgetDrops += 1;
+        continue;
+      }
+      this._sealedPinned.set(key, bytes);
+      this._sealedPinnedBytes += bytes;
+      this._sealedPinnedTotal += 1;
+      this._sealedPinKeep = keep;
+    }
+  }
+
+  // Sealed→outdoor transition drain (see the SEALED_EXIT_* constants). Runs on
+  // NOT-sealed ticks while a reserve is outstanding, and always terminates:
+  // every branch either releases the reserve or unparks out of it, and the
+  // whole thing is deadlined.
+  //
+  // Flicker is bounded by construction: a one-frame sealed-detection flap
+  // (measured stable in s11 — 0-1 flaps over a 25 s dwell) costs at most
+  // SEALED_EXIT_UNPARK_PER_TICK re-adopts, which the next sealed tick re-parks
+  // and re-pins. That is a 4-op blip, not the s11 park↔unpark storm class
+  // (which was per-POSITION-PACKET, unbounded, for the whole dwell).
+  _tickSealedExit(currentLbKey) {
+    const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    if (this._sealedExitAtMs === 0) this._sealedExitAtMs = nowMs;
+    // Deadline: a center that never resolves (null through a transition) must
+    // not make the reserve immortal.
+    if (nowMs - this._sealedExitAtMs > SEALED_EXIT_DRAIN_MAX_MS) {
+      this._clearSealedPins();
+      return;
+    }
+    if (currentLbKey == null) return; // wait for a center, bounded by the deadline
+    // Teleported somewhere else while inside: the reserve is not the return
+    // path. Release WITHOUT unparking — the slots stay in the pool and normal
+    // byte/geometry pressure reclaims them on today's terms (this is the
+    // "parking must not make LBs immortal" branch).
+    if (lbChebyshev(currentLbKey, this._sealedPinKeep) > SEALED_EXIT_NEAR_RADIUS) {
+      this._sealedPinsReleasedAway += this._sealedPinned.size;
+      this._clearSealedPins();
+      return;
+    }
+    // A governor breach outranks warmth (hard resource ceiling): release and
+    // let the pool drain rather than re-inflating the resident set.
+    if (this._geomPressure()) {
+      this._sealedPinsReleasedAway += this._sealedPinned.size;
+      this._clearSealedPins();
+      return;
+    }
+    const cand = [];
+    for (const key of this._sealedPinned.keys()) {
+      const d = lbChebyshev(currentLbKey, key);
+      if (d <= SEALED_EXIT_UNPARK_RADIUS) cand.push({ key, d });
+    }
+    if (cand.length === 0) {
+      // Nothing left near the exit worth re-adopting proactively. Release the
+      // rest: they stay PARKED (still warm for the loaders' unpark fast path
+      // as the prefetch ring re-expands) but stop being pressure-exempt.
+      this._clearSealedPins();
+      return;
+    }
+    cand.sort((a, b) => a.d - b.d);
+    let n = 0;
+    for (const { key } of cand) {
+      if (n >= SEALED_EXIT_UNPARK_PER_TICK) break;
+      if (this.entries.size >= this.maxResident) break;
+      // unpark() unpins via _unpinSealed; count the warm re-adopt.
+      if (this.unpark(key)) {
+        this._sealedWarmUnparked += 1;
+        n += 1;
+      } else {
+        this._unpinSealed(key); // not in the pool any more — stale pin
+      }
+    }
+  }
+
+  /** Live counters for `window.__sealedPark` / getStats().sealedPark. */
+  sealedParkStats() {
+    return {
+      enabled: SEALED_PARK_ON,
+      // Inert without the park pool — warmPark is the classic-dispose escape.
+      active: SEALED_PARK_ON && this.warmParkEnabled,
+      radius: SEALED_PARK_RADIUS,
+      maxLbs: SEALED_PARK_MAX_LBS,
+      budgetBytes: SEALED_PARK_BUDGET_BYTES,
+      pinned: this._sealedPinned.size,
+      pinnedBytes: this._sealedPinnedBytes,
+      pinKeepLbKey: this._sealedPinKeep,
+      pinnedTotal: this._sealedPinnedTotal,
+      pinHolds: this._sealedPinHolds,
+      budgetDrops: this._sealedPinBudgetDrops,
+      warmUnparked: this._sealedWarmUnparked,
+      releasedAway: this._sealedPinsReleasedAway,
+      fallbackPurged: this._sealedFallbackPurged,
+    };
+  }
+
   // Per-frame eviction tick. Touches the player's LB + 3×3 ring (the
   // always-resident floor), then evicts the oldest entries beyond
   // `maxResident` until the resident count is ≤ maxResident.
@@ -724,6 +1030,17 @@ export class LandblockLRU {
     // purge sticks. `sealedKeepLbKeyArg === 0` disables (normal path below).
     if (sealedKeepLbKeyArg) {
       const keep = lbKeyOf(sealedKeepLbKeyArg >>> 0);
+      // #11 sealedPark — a DIFFERENT sealed dungeon (portalled hub→hub while
+      // inside) invalidates the whole reserve: those slots are no longer the
+      // return path, so they go back to ordinary pool terms before this tick's
+      // parks start pinning against the new keep. Also re-arm the exit drain.
+      if (SEALED_PARK_ON) {
+        if (this._sealedPinKeep !== 0 && this._sealedPinKeep !== keep) {
+          this._sealedPinsReleasedAway += this._sealedPinned.size;
+          this._clearSealedPins();
+        }
+        this._sealedExitAtMs = 0;
+      }
       if (!SEALED_EVICT_BURST_ON) {
         // Legacy `?sealedEvictBurst=off` arm — the 2026-07-08 24/frame
         // count staircase, byte-identical (park substitutes per-victim
@@ -750,6 +1067,10 @@ export class LandblockLRU {
           this._sealedParksPerTickMax = victims.length;
         }
         for (const key of victims) this._reclaim(key);
+        // #11 — pin the return core out of what we just parked (no-op under
+        // ?sealedPark=off / classic evict), THEN run pressure so the reserve
+        // is already exempt on its very first pressure tick.
+        this._sealedPinAfterPark(keep, victims);
         this._tickParkPoolPressure(keep);
         return;
       }
@@ -797,6 +1118,10 @@ export class LandblockLRU {
         evicted += 1;
         if (performance.now() - t0 > budgetMs) break;
       }
+      // #11 — pin the return core out of the keys this tick actually drained
+      // (`victims` is time-budgeted, so slice it at `evicted`). Runs before
+      // pressure below so the reserve is exempt on its first pressure tick.
+      this._sealedPinAfterPark(keep, victims.slice(0, evicted));
       // The sealed burst is deliberately UNBOUNDED IN COUNT (time-budgeted
       // instead — R-12: one accepted loading blip beats six near-frozen
       // frames, and nothing outdoor is visible to churn). Counted separately
@@ -809,6 +1134,16 @@ export class LandblockLRU {
     // Not sealed (or no longer sealed): re-arm the first-burst budget for
     // the next sealed entry.
     this._sealedDrainActive = false;
+
+    // #11 sealedPark — the sealed→outdoor transition. Runs BEFORE the
+    // `currentLbKey == null` bail below (the drain has its own deadline and
+    // must not be starved by a center that is still resolving through the
+    // portal hop), and before candidate selection so a re-adopted LB is
+    // already resident + freshly touched when the at-cap filter runs — the
+    // RECLAIM_MIN_AGE_MS hysteresis then keeps this tick's unparks off the
+    // very next tick's victim list (no park↔unpark storm). No-op with no
+    // reserve outstanding: one Map.size read.
+    if (this._sealedPinsHeld()) this._tickSealedExit(currentLbKey);
 
     // lru-null-lb (2026-06-07): bail out entirely when we don't know the
     // player's current LB yet (getCurrentLbId() returned null during
@@ -1001,6 +1336,35 @@ export class LandblockLRU {
     // high default cap, never engages this).
     const overGeomAtEntry = this._geomPressure();
     const floorMs = overGeomAtEntry ? 0 : PARK_USE_TIME_MS;
+    // ── #11 sealedPark RESERVE (2026-08-03) ────────────────────────────────
+    // While the player is inside a sealed dungeon, the pinned return core is
+    // exempt from BOTH pressure halves. The byte half is obvious. The GEOMETRY
+    // half is the load-bearing one: inside a sealed hub the interior's own
+    // EnvCells are resident and un-reclaimable, so the parked outdoor set is
+    // the governor's ONLY feed — an unsatisfiable breach would drain the pool
+    // to empty and hand the player a full cold town rebuild on the way out.
+    // This is the pool-side twin of GEOM_PRESSURE_RESIDENT_MARGIN (2026-07-28:
+    // "geom pressure may never strip the resident set below the reclaim-exempt
+    // ring plus a margin"), and it is bounded exactly the same way: the reserve
+    // is capped at SEALED_PARK_MAX_LBS / SEALED_PARK_BUDGET_BYTES (64 MB, well
+    // under the 160 MB pool budget these same bytes are already counted
+    // against), it only exists while `_sealedEvictLbKey` names its keep LB, and
+    // every non-pressure dispose path (flushParked / dispose / a stale-pin
+    // unpark) still reclaims it. Everything OUTSIDE the reserve — the far
+    // ocean-skirt / mountain-wall LBs that motivated sealedEvict — is disposed
+    // on exactly today's terms, farthest-from-keep first.
+    const pins = this._sealedPinsHeld() ? this._sealedPinned : null;
+    if (pins) {
+      // Fully-pinned pool: nothing is eligible, so the sort+scan below is dead
+      // work — same shape as the all-young fast path, counted as pin holds so
+      // the two telemetry counters stay disjoint.
+      let eligible = 0;
+      for (const key of this.parkPool.keys()) if (!pins.has(key)) eligible += 1;
+      if (eligible === 0) {
+        this._sealedPinHolds += this.parkPool.size;
+        return;
+      }
+    }
     // ── ALL-YOUNG FAST PATH (2026-08-01 outdoor-run scan-cost fix) ──────────
     // Steady state during a continuous outdoor run is: byte budget exceeded,
     // geometry governor NOT engaged, and every parked slot inside the 30 s
@@ -1025,15 +1389,23 @@ export class LandblockLRU {
     // deferred). Behaviour-identical, no flag.
     if (floorMs > 0) {
       let oldest = Infinity;
-      for (const p of this.parkPool.values()) {
+      // #11: a pinned slot is not a victim, so it must not bound eligibility
+      // either — an old pinned slot would otherwise defeat this fast path on
+      // every frame of the dwell. `pinnedSeen` keeps the two counters
+      // disjoint; with no reserve it stays 0 and this is byte-identical.
+      let pinnedSeen = 0;
+      for (const [key, p] of this.parkPool) {
+        if (pins && pins.has(key)) { pinnedSeen += 1; continue; }
         if (p.parkedAtMs < oldest) oldest = p.parkedAtMs;
       }
       if (nowMs - oldest < floorMs) {
         // `parkedBytes` is by construction the sum of every pooled slot's
         // `bytes` (park adds, unpark/disposeParked subtract), so it is exactly
-        // what the per-entry accumulation above would have produced.
-        this._useTimeDeferredCount += this.parkPool.size;
-        this._useTimeDeferredBytes += this.parkedBytes;
+        // what the per-entry accumulation above would have produced —
+        // `_sealedPinnedBytes` is the same sum restricted to the reserve.
+        this._useTimeDeferredCount += this.parkPool.size - pinnedSeen;
+        this._useTimeDeferredBytes += Math.max(0, this.parkedBytes - this._sealedPinnedBytes);
+        this._sealedPinHolds += pinnedSeen;
         return;
       }
     }
@@ -1052,6 +1424,8 @@ export class LandblockLRU {
     let disposed = 0;
     for (const [key, p] of order) {
       if (!overBudget()) break;
+      // #11 sealedPark reserve: never a pressure victim (see the note above).
+      if (pins && pins.has(key)) { this._sealedPinHolds += 1; continue; }
       if (useTimeBudget) {
         if (disposed >= 1 && (nowPerf() - t0) > PARK_DISPOSE_BUDGET_MS) break;
       } else if (disposed >= WARM_PARK_MAX_DISPOSE_PER_TICK) {
@@ -1756,6 +2130,11 @@ export class LandblockLRU {
 
     this.parkPool.delete(lbKey);
     this.parkedBytes = Math.max(0, this.parkedBytes - p.bytes);
+    // #11 — a slot that leaves the pool cannot stay pinned. This covers BOTH
+    // the exit drain's own unparks and the loaders' already-baked fast path
+    // re-adopting a reserve LB while still inside (the s11 storm surface):
+    // either way it is resident again and the ordinary LRU owns it.
+    if (this._sealedPinned.size > 0) this._unpinSealed(lbKey);
     this._unparkedTotal += 1;
     const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
     this.entries.set(lbKey, { lastTouchMs: now, disposables: p.disposables });
@@ -1790,6 +2169,15 @@ export class LandblockLRU {
     // parents at park; evict's 5b dispose covers them via disposables.lights.
     this.parkPool.delete(lbKey);
     this.parkedBytes = Math.max(0, this.parkedBytes - p.bytes);
+    // #11 — pressure never picks a pinned slot, so reaching here with a pin
+    // means a NON-pressure dispose won (flushParked / dispose(), or a caller
+    // that disposes explicitly). Drop the pin and count it: `fallbackPurged`
+    // is the honesty counter — a live session with a warm-return complaint
+    // reads it to see whether the reserve was reclaimed out from under it.
+    if (this._sealedPinned.has(lbKey)) {
+      this._sealedFallbackPurged += 1;
+      this._unpinSealed(lbKey);
+    }
     this.entries.set(lbKey, { lastTouchMs: 0, disposables: p.disposables });
     const ok = this.evict(lbKey);
     // cellContainers3d entries were removed at park; per-LB envcell
@@ -1860,6 +2248,9 @@ export class LandblockLRU {
     this.flushParked();
     const keys = [...this.entries.keys()];
     for (const k of keys) this.evict(k);
+    // #11 — flushParked() unpins each slot as it disposes it; clear anyway so
+    // a re-used instance can never start life holding a stale reserve.
+    this._clearSealedPins();
   }
 
   getStats() {
@@ -1912,6 +2303,9 @@ export class LandblockLRU {
       // because the player was indoors (see noteStreamGateHold). The richer
       // per-effect breakdown lives on `scene3d._dungeonStreamGate`.
       streamGateHolds: this._streamGateHolds,
+      // #11 sealedPark warm-return reserve (2026-08-03). Same object as
+      // `window.__sealedPark()`; see sealedParkStats().
+      sealedPark: this.sealedParkStats(),
     };
   }
 }
