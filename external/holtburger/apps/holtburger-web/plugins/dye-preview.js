@@ -39,6 +39,7 @@
 
 import { composeDyePreview, resolveDyeTriples } from "../ui/ac_dye_preview.js";
 import { DyeViewport } from "../ui/ac_dye_viewport.js";
+import { takeInventorySnapshot } from "./inventory_helpers.js";
 
 const TOOLTIP_ID = "hb-dye-preview-tooltip";
 const PLUGIN_STATE_KEY = "__hbDyePreviewState";
@@ -394,14 +395,50 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
   return true;
 }
 
-function getInventoryItem(guid) {
-  if (!guid) return null;
+// Fields showTooltipFor + the Shift whole-mesh path read off an inventory
+// row. Copied out as plain numbers so the wasm boxes can be freed at the end
+// of the lookup instead of being retained (and, before this, never freed at
+// all) — see inventory_helpers.takeInventorySnapshot for why that matters.
+function copyItemRow(it, guid) {
+  return {
+    guid,
+    wcid: (it.wcid >>> 0) || 0,
+    name: it.name || "",
+    itemType: (it.itemType >>> 0) || 0,
+    equipMask: (it.equipMask >>> 0) || 0,
+    clothingBaseId: (it.clothingBaseId >>> 0) || 0,
+    setupId: (it.setupId >>> 0) || 0,
+    modelId: (it.modelId >>> 0) || 0,
+  };
+}
+
+/**
+ * Resolve BOTH drag guids from ONE `playerInventory()` snapshot, and release
+ * it. This used to be two separate `playerInventory()` calls per drag-over
+ * event, neither freed — see the debounce note in `mount()` for why that ran
+ * on every single dragover rather than once per `debounceMs`.
+ *
+ * @returns {{dragged: object|null, hovered: object|null}}
+ */
+function getInventoryItems(draggedGuid, hoveredGuid) {
+  const out = { dragged: null, hovered: null };
+  if (!draggedGuid && !hoveredGuid) return out;
+  const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+  const snap = takeInventorySnapshot(handle);
   try {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-    if (!handle?.playerInventory) return null;
-    const items = handle.playerInventory();
-    return items.find((it) => String(it.guid) === String(guid)) || null;
-  } catch (_) { return null; }
+    for (const it of snap.inv) {
+      if (draggedGuid && !out.dragged && String(it.guid) === String(draggedGuid)) {
+        out.dragged = copyItemRow(it, draggedGuid);
+      }
+      if (hoveredGuid && !out.hovered && String(it.guid) === String(hoveredGuid)) {
+        out.hovered = copyItemRow(it, hoveredGuid);
+      }
+      if ((!draggedGuid || out.dragged) && (!hoveredGuid || out.hovered)) break;
+    }
+  } finally {
+    snap.free();
+  }
+  return out;
 }
 
 /**
@@ -423,10 +460,21 @@ export function mount(/* ctx */) {
   const state = (window[PLUGIN_STATE_KEY] = window[PLUGIN_STATE_KEY] ?? {
     enabled: true,
     lastShownAt: 0,
+    // The debounce gate's OWN clock. It used to be `lastShownAt`, which is
+    // only stamped when a tooltip actually renders (showTooltipFor's tail) —
+    // so on the overwhelmingly common path (dragging anything that is not a
+    // dye pot over anything that is not dyeable) the gate never engaged and
+    // every single HTML5 `dragover` (continuous while the pointer moves; see
+    // inventory.js:2806 "the event fires continuously during drag;
+    // subscribers debounce as needed") ran two full `playerInventory()`
+    // snapshots. Stamping evaluation time is what actually throttles.
+    lastEvalAt: 0,
     debounceMs: 60,
     handlerDragOver: null,
     handlerDragEnd: null,
   });
+  // A state object persisted from a previous mount predates `lastEvalAt`.
+  if (!Number.isFinite(state.lastEvalAt)) state.lastEvalAt = 0;
 
   // Wave 11 — eagerly preload the dye-recipes catalog so the cache is
   // warm by the time the first drag-over event fires. Fire-and-forget;
@@ -442,10 +490,11 @@ export function mount(/* ctx */) {
   state.handlerDragOver = async (ev) => {
     if (!state.enabled) return;
     const now = performance.now();
-    if (now - state.lastShownAt < state.debounceMs) return;
+    if (now - state.lastEvalAt < state.debounceMs) return;
+    state.lastEvalAt = now;
     const detail = ev.detail ?? {};
-    const draggedItem = getInventoryItem(detail.draggedGuid);
-    const hoveredItem = getInventoryItem(detail.hoveredGuid);
+    const { dragged: draggedItem, hovered: hoveredItem } =
+      getInventoryItems(detail.draggedGuid, detail.hoveredGuid);
     if (!draggedItem || !hoveredItem) {
       hideTooltip();
       return;
@@ -489,8 +538,9 @@ export function mount(/* ctx */) {
  * to bypass the synthetic-drag-event ceremony.
  */
 export async function _testShowPreview(draggedItem, hoveredItem, x, y) {
-  const state = (window[PLUGIN_STATE_KEY] = window[PLUGIN_STATE_KEY] ?? { enabled: true, lastShownAt: 0 });
+  const state = (window[PLUGIN_STATE_KEY] = window[PLUGIN_STATE_KEY] ?? { enabled: true, lastShownAt: 0, lastEvalAt: 0 });
   state.lastShownAt = 0; // bypass debounce
+  state.lastEvalAt = 0;
   return showTooltipFor(state, draggedItem, hoveredItem, x, y);
 }
 
@@ -510,6 +560,7 @@ export function getDyePreviewPluginSnapshot() {
   return {
     enabled: state?.enabled ?? false,
     lastShownAt: state?.lastShownAt ?? 0,
+    lastEvalAt: state?.lastEvalAt ?? 0,
     debounceMs: state?.debounceMs ?? 0,
     knownDyePots,
     catalogLoaded: _dyePotsCache !== null,

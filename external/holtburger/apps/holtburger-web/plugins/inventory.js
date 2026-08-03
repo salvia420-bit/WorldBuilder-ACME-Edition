@@ -1748,11 +1748,17 @@ function doMount(parentEl, _ctx) {
     }
     slot.appendChild(icon);
     // Track A A1 (2026-06-24): UiEffects magic-effect badge dot(s). Gated
-    // `?uiEffectIcons` (default OFF). Reads InventoryItem.uiEffects (PropertyInt
-    // 18, the new wasm getter; 0 pre-rebuild → no badge). Same registry + tint
-    // as the examine A0 badge. DOM-only, never touches WebGL. The slot is
-    // position:relative (see `.hb-inv-slot.armed::after`), so the corner dots
-    // anchor within it. Flag-off = byte-identical (block never runs).
+    // `?uiEffectIcons`, which is default **ON** — docs/url-flags.md:835
+    // ("**on** (2026-06-24)") and the reader itself
+    // (scene3d/vfx/ui_effects_registry.js: absent param => true, only
+    // off/0/false/no opt out). This comment used to say "default OFF" and
+    // "flag-off = byte-identical (block never runs)", which is exactly
+    // backwards: with no URL param the block runs on every grid cell of
+    // every rebuild. `?uiEffectIcons=off` is the escape.
+    // Reads InventoryItem.uiEffects (PropertyInt 18; 0 pre-rebuild → no
+    // badge). Same registry + tint as the examine A0 badge. DOM-only, never
+    // touches WebGL. The slot is position:relative (see
+    // `.hb-inv-slot.armed::after`), so the corner dots anchor within it.
     if (uiEffectIconsEnabled()) {
       const uiFx = uiEffectIconsFor((item?.uiEffects >>> 0) || 0);
       if (uiFx.length) {

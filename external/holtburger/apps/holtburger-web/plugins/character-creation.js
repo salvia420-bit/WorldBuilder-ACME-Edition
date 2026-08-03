@@ -626,6 +626,9 @@ export function closeWizard() {
 }
 
 function createWizardInstance(client, catalog, ctx) {
+  // Assigned to the returned handle at the tail; `transition` closes over it
+  // so the NotStarted branch can identity-check the module singleton.
+  let api = null;
   // ── Mutable wizard state. ──
   const state = {
     wizard: WizardState.NotStarted,
@@ -730,6 +733,19 @@ function createWizardInstance(client, catalog, ctx) {
     state.wizard = next;
     if (next === WizardState.NotStarted) {
       destroy();
+      // Release the module singleton. Without this, `_wizard` stayed
+      // pointing at the DESTROYED instance and `openWizard()`'s
+      // "already open — bring to front" short-circuit (see openWizard)
+      // returned it forever: after one Cancel / × / Success-Close the
+      // char-gen wizard could never be opened again for the rest of the
+      // page's life. `closeWizard()` was the only path that nulled it,
+      // and index.html only calls that on the success path.
+      //
+      // Identity guard, not a bare `_wizard = null`: if a NEWER wizard has
+      // since been opened, this stale instance must not evict it. Same
+      // shape as the entity-identity convention elsewhere in the tree
+      // (`entityMap.get(guid) !== inst`, never a bare `.has()`).
+      if (_wizard === api) _wizard = null;
       ctx?.onCancel?.();
       return;
     }
@@ -1473,7 +1489,10 @@ function createWizardInstance(client, catalog, ctx) {
     if (unsubFailed)  try { unsubFailed();  } catch {}
   }
 
-  return { transition, destroy, _state: state /* test hook */ };
+  // `api` is captured so `transition`'s NotStarted branch can release the
+  // module singleton with an IDENTITY check (see below).
+  api = { transition, destroy, _state: state /* test hook */ };
+  return api;
 }
 
 // ───────────────────────────────────────────────────────────────────────

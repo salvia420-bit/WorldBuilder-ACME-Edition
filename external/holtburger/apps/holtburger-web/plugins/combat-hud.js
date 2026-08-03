@@ -402,6 +402,11 @@ let state = {
   overlayEl: null,
   visible: false,
   power: 1.0,         // 0..1, drives __combatBarState.powerLevel
+  // Last value syncPowerFill() wrote into __combatBarState.powerLevel.
+  // `null` = never published, so the FIRST sync always adopts whatever the
+  // combat-bar seeded (its persisted localStorage value) instead of
+  // stomping it with this module's 1.0 default. See syncPowerFill().
+  lastPublishedPower: null,
   // DR readout state (Phase 35). drHasSneak flips to true when
   // `sneakAttackPredicted` fires and back to false ~SNEAK_HOLD_MS later
   // via drSneakTimer. drLastPower remembers the last polled power value
@@ -464,6 +469,26 @@ function stanceIsRanged() {
 function syncPowerFill() {
   const ov = state.overlayEl;
   if (!ov) return;
+  // TWO widgets drive the same value: this HUD slider and the combat-bar
+  // PANEL slider (combat-bar.js:1692 `powerSlider` -> syncWindowState ->
+  // window.__combatBarState.powerLevel), which is also the value persisted in
+  // localStorage `holtburger_combat_bar_v1` and the one scene3d/picking.js
+  // reads as the real swing power (picking.js:1244).
+  //
+  // This function used to write `state.power` into the shared state
+  // unconditionally, and `state.power` is a module local seeded to 1.0 that
+  // NOTHING ever reads back from the shared state. Because syncPowerFill is
+  // called from `recomputeVisible` — a 1 Hz setInterval AND every
+  // `playerStatsUpdated` — the HUD silently reset the shared powerLevel to
+  // 1.0 within a second of any combat-bar slider change (and on boot, over
+  // the persisted value). Every swing then fired at full power.
+  //
+  // Adopt-then-publish: if the shared value has moved since WE last published
+  // it, the other widget (or the persisted seed) changed it and wins.
+  const shared = Number(window.__combatBarState?.powerLevel);
+  if (Number.isFinite(shared) && shared !== state.lastPublishedPower) {
+    state.power = Math.max(0, Math.min(1, shared));
+  }
   const fill = ov.querySelector(".hch-slider-fill");
   const val = ov.querySelector(".hch-slider-val");
   if (fill) fill.style.width = `${Math.round(state.power * 100)}%`;
@@ -475,6 +500,7 @@ function syncPowerFill() {
   // fireAttackOnTarget honours the power level set here.
   if (window.__combatBarState) {
     window.__combatBarState.powerLevel = state.power;
+    state.lastPublishedPower = state.power;
   }
 }
 

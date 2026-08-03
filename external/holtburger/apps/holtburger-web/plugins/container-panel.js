@@ -29,6 +29,7 @@ import {
   uiEffectIconsFor,
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
+import { takeInventorySnapshot } from "./inventory_helpers.js";
 
 const OVERLAY_ID = "hb-container-panel";
 const STYLE_ID = "hb-container-panel-style";
@@ -156,35 +157,10 @@ function fmtGuid(guid) {
   return `0x${(guid >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
-/**
- * Take ONE `playerInventory()` snapshot for a whole container render.
- *
- * Every call returns a fresh array of wasm-bindgen boxes, so resolving N
- * GUIDs one-at-a-time allocated N × (inventory size) of them — a 24-slot
- * chest against a 100-item pack minted 2,400 boxes per open. They are
- * finalizer-registered (pkg/holtburger_web.js) so they are not a permanent
- * leak, but the JS wrapper is tiny while the Rust allocation is not, so the
- * GC gets no pressure signal and the wasm heap high-water mark ratchets up
- * (wasm linear memory never shrinks).
- *
- * @returns {{ inv: any[], free: () => void }} `free()` is safe to call once
- *   the resolve pass is done: `resolveItemMeta` copies primitives out of
- *   each box and retains no reference to it.
- */
-function takeInventorySnapshot() {
-  const handle = window.__sessionHandle;
-  let inv = null;
-  if (handle?.playerInventory) {
-    try { inv = handle.playerInventory(); } catch (_) { inv = null; }
-  }
-  const list = Array.isArray(inv) ? inv : [];
-  return {
-    inv: list,
-    free() {
-      for (const it of list) { try { it?.free?.(); } catch (_) { /* already freed */ } }
-    },
-  };
-}
+// `takeInventorySnapshot` (ONE playerInventory() box array per render, with an
+// explicit free) now lives in ./inventory_helpers.js — corpse-loot-bar.js needs
+// exactly the same contract and had an unfixed copy of the same leak. The
+// docstring there carries the full rationale.
 
 function resolveItemMeta(guid, invSnapshot) {
   const g = guid >>> 0;
@@ -300,9 +276,12 @@ function renderItems(items) {
       setAcText(badge, String(it.stackSize), { color: "#f0e8d0" });
       slot.appendChild(badge);
     }
-    // Track A (?uiEffectIcons, default OFF): UiEffects magic-effect badge(s).
-    // Same registry + real-icon (0x25000009 map) + tint fallback as the
-    // inventory grid. `.hcp-slot` is position:relative. DOM-only; flag-off no-op.
+    // Track A (`?uiEffectIcons`, default **ON** — docs/url-flags.md:835; the
+    // reader in scene3d/vfx/ui_effects_registry.js treats an absent param as
+    // true and only off/0/false/no opt out. The old "default OFF" here was
+    // stale): UiEffects magic-effect badge(s). Same registry + real-icon
+    // (0x25000009 map) + tint fallback as the inventory grid. `.hcp-slot` is
+    // position:relative. DOM-only; `?uiEffectIcons=off` is the escape.
     if (uiEffectIconsEnabled()) {
       const uiFx = uiEffectIconsFor((it.uiEffects >>> 0) || 0);
       if (uiFx.length) {
@@ -476,10 +455,16 @@ function openContainer(containerGuid, containerName) {
       console.warn("[container-panel] getContainerContents failed", e);
     }
   }
-  // One snapshot for the whole list — see takeInventorySnapshot().
-  const snap = takeInventorySnapshot();
-  const items = guids.map((g) => resolveItemMeta(g, snap.inv));
-  snap.free();
+  // One snapshot for the whole list — see takeInventorySnapshot(). `free()`
+  // sits in a `finally` so a throw inside resolveItemMeta (its last leg calls
+  // handle.getObjectIconId) still releases the boxes.
+  const snap = takeInventorySnapshot(handle);
+  let items;
+  try {
+    items = guids.map((g) => resolveItemMeta(g, snap.inv));
+  } finally {
+    snap.free();
+  }
   renderItems(items);
   overlayEl.dataset.open = "1";
 

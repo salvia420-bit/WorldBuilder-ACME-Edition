@@ -2062,10 +2062,12 @@ export function mount(ctx) {
   }
 
   function openWith(rawState, profilePayload = null) {
+    const prevVendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
     state.vendorState = enrichWithProfile(
       snapshotFromWasm(rawState),
       profilePayload,
     );
+    const nextVendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
     // Reset transient UI state on (re)open of a vendor.
     state.currentTab = "items";
     state.selectedItemGuid = null;
@@ -2073,6 +2075,20 @@ export function mount(ctx) {
     // Preserve buy/sell queues across re-fires of the SAME vendor —
     // ACE refreshes kind=12 after every buy. Drop the queues only
     // when switching vendors.
+    //
+    // That second sentence was a comment with no code behind it: there was no
+    // vendorGuid comparison and no queue reset anywhere in openWith, and the
+    // only place the queues are dropped is hideOverlay(). With two vendors
+    // inside the range watchdog's radius (a shop with two NPCs, a bazaar row)
+    // you could queue items at A, use B WITHOUT closing the bar, and
+    // handleConfirmBuy would then send A's itemGuids against B's vendorGuid:
+    //   handle.buyFromVendor(vs.vendorGuid >>> 0, guids, amounts)
+    // ACE rejects that, so the user gets a "Buying N items…" toast and
+    // nothing bought.
+    if (nextVendorGuid !== prevVendorGuid) {
+      state.buyQueue = [];
+      state.sellQueue = [];
+    }
     showOverlay();
     // Rec #18 — start range polling when vendor opens.
     startVendorRangeWatchdog();
@@ -2081,6 +2097,15 @@ export function mount(ctx) {
       try { state.refs.items.syncMenu?.(); } catch (_) {}
     }
     render();
+  }
+
+  // Expose the REAL kind=12 entry point for the e2e verifier and
+  // tests/vendor_queue_vendor_switch.test.mjs. The module-scope
+  // `__vendorPluginDebug` below only offers `openDebug`, which
+  // unconditionally clears the queues and therefore cannot observe the
+  // preserve-same-vendor / drop-on-switch behaviour at all.
+  if (typeof window !== "undefined") {
+    window.__vendorPluginDebugMount = { openWith, close: () => hideOverlay() };
   }
 
   // P3-41 — replace 500ms client-discovery poll with one-shot await on

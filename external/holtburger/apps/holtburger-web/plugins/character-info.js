@@ -1206,6 +1206,14 @@ export const view = {
       btn.type = "button";
       btn.className = "hb-ci-tab" + (t.id === activeTab ? " active" : "");
       btn.dataset.tab = t.id;
+      // Stash the display label. `setTab()` used to re-derive it from
+      // `btn.textContent`, which is EMPTY once the AC font has registered:
+      // setAcText puts an `<ac-text>` inside the button and `<ac-text>
+      // ._render()` replaces its children with a <canvas> — its own re-entry
+      // guard says so ("when _render() replaces children with a canvas,
+      // textContent becomes ''", ui/ac_font.js). The `|| k` fallback then
+      // relabelled every tab with its lowercase id.
+      btn.dataset.label = t.label;
       setAcText(btn, t.label, { color: t.id === activeTab ? "#f0c87c" : "#f0e8d0" });
       btn.addEventListener("click", () => setTab(t.id));
       tabsEl.appendChild(btn);
@@ -1415,7 +1423,9 @@ export const view = {
       for (const k of Object.keys(tabBtns)) {
         const btn = tabBtns[k];
         btn.classList.toggle("active", k === id);
-        setAcText(btn, btn.textContent || k, { color: k === id ? "#f0c87c" : "#f0e8d0" });
+        // Label comes from the stash set at build time, NEVER from live DOM
+        // text (see the dataset.label note above).
+        setAcText(btn, btn.dataset.label || k, { color: k === id ? "#f0c87c" : "#f0e8d0" });
       }
       rerender();
     }

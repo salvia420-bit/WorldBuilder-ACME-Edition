@@ -128,11 +128,58 @@ export const EQUIP = Object.freeze({
 // TinkeringMaterial; mis-bit caused the right-click Open and double-click
 // open paths to silently never match real sacks/pouches.)
 export const ITEM_TYPE_CONTAINER = 0x00000200;
-export const ITEM_TYPE_SIGIL = 0x00020000; // Aetheria sigil
+// An Aetheria sigil is NOT an ItemType — there is no "Sigil" member in ACE's
+// ItemType enum at all. Aetheria weenies are `ItemType.Gem` (0x800; LSD
+// weenie 42635 "Coalesced Aetheria", intStats key 1 = 2048), so the only
+// thing that makes an item a sigil is its EQUIP SLOT:
+//   ACE.Entity/Enum/EquipMask.cs:40-42,50 —
+//     SigilOne=0x10000000, SigilTwo=0x20000000, SigilThree=0x40000000,
+//     Sigil = SigilOne|SigilTwo|SigilThree = 0x70000000
+// which is exactly what inventory.js:261-263 PAPERDOLL_SLOTS (Aetheria
+// Blue/Yellow/Red) and EQUIP.Sigil* above already use.
+//
+// The previous value here was 0x00020000 = **ItemType.Lockable** (see
+// ACE ItemType.cs:26 and the repo's own note in
+// world-objects/canonical_classify.js:46). That is the SAME mis-bit the
+// salvage-panel path already had to fix once — inventory.js:1959-1961:
+//   "IT_TINKERING_TOOL = 0x20000000 ... NOT 0x00020000 (= IT_LOCKABLE)".
+// Consequence of the old value: no sigil was ever rejected (they bound to
+// the hotbar despite the spec), while Lockable-typed items were.
+export const EQUIP_SIGIL_MASK = EQUIP.SigilBlue | EQUIP.SigilYellow | EQUIP.SigilRed; // 0x70000000
 
 // CombatStyle bits — DefaultCombatStyle PropertyInt 46.
 export const COMBAT_STYLE_CASTER = 0x00000040; // Magic Caster
 export const COMBAT_STYLE_AMMO_LAUNCHER = 0x00008000; // ranged that consumes ammo
+
+/**
+ * Take ONE `playerInventory()` snapshot and hand back an explicit release.
+ *
+ * Every call to `SessionHandle.playerInventory()` returns a FRESH array of
+ * wasm-bindgen boxes, so resolving N guids one-at-a-time allocates
+ * N x (inventory size) of them. They are FinalizationRegistry-registered so
+ * this is not a permanent leak, but the JS wrapper is tiny while the Rust
+ * allocation is not: the GC gets no pressure signal and the wasm linear
+ * memory high-water mark ratchets up (wasm memory never shrinks).
+ *
+ * Callers must copy the primitives they need out of each box and MUST NOT
+ * retain a box past `free()`.
+ *
+ * @param {object|null} handle  `window.__sessionHandle` (or a stub in tests).
+ * @returns {{ inv: any[], free: () => void }}
+ */
+export function takeInventorySnapshot(handle) {
+  let inv = null;
+  if (handle && typeof handle.playerInventory === "function") {
+    try { inv = handle.playerInventory(); } catch (_) { inv = null; }
+  }
+  const list = Array.isArray(inv) ? inv : [];
+  return {
+    inv: list,
+    free() {
+      for (const it of list) { try { it?.free?.(); } catch (_) { /* already freed */ } }
+    },
+  };
+}
 
 /**
  * Suggested ACE CombatMode for the local player when leaving Peace,
@@ -323,7 +370,12 @@ export function canBindToHotbar(item) {
   if ((itemType & ITEM_TYPE_CONTAINER) !== 0) {
     return { ok: false, reason: "Containers cannot be bound to the hotbar." };
   }
-  if ((itemType & ITEM_TYPE_SIGIL) !== 0) {
+  // Sigil = equip-slot test, not an item-type test (see EQUIP_SIGIL_MASK).
+  // `validLocations` is the wield-slot mask for a packed item; `equipMask`
+  // is the CURRENT wielded slot once it is worn — check both so an already
+  // socketed sigil is rejected too.
+  const slotBits = (((item.validLocations >>> 0) || 0) | ((item.equipMask >>> 0) || 0)) >>> 0;
+  if ((slotBits & EQUIP_SIGIL_MASK) !== 0) {
     return { ok: false, reason: "Sigils cannot be bound to the hotbar." };
   }
   return { ok: true, reason: "" };

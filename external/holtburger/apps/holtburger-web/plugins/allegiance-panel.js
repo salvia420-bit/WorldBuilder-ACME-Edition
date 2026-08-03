@@ -670,8 +670,23 @@ function subscribeAllegiance(rerender) {
 function subscribeAllegiancePresence() {
   const bus = window.__pluginClient?.events;
   if (!bus || typeof bus.on !== "function") return () => {};
-  const listener = (payload) => {
+  const listener = (ev) => {
     try {
+      // `client.events` is an EventTarget: `emit(name, payload)` dispatches
+      // `new CustomEvent(name, { detail: payload })` and `on(name, fn)` is a
+      // bare addEventListener (plugins/api.js:463-474). Handlers therefore
+      // receive the EVENT, and the payload lives on `.detail`.
+      //
+      // This handler read `payload.characterGuid` straight off the event
+      // object, which is always `undefined` -> `guid === 0` -> the `!guid`
+      // bail below fired every single time. The allegiance "X has logged
+      // in / out" chat line (opcode 0x027A, emitted at index.html:8992) has
+      // never appeared. Every other plugin in the tree already reads
+      // `ev.detail` (vendor-ui.js:1988, combat-bar.js:654,
+      // character-creation.js:708); this one was the outlier.
+      //
+      // `?? ev` keeps a hypothetical raw-payload emitter working too.
+      const payload = ev?.detail ?? ev;
       const guid = (payload?.characterGuid >>> 0) || 0;
       const isLoggedIn = !!payload?.isLoggedIn;
       if (!guid) return;

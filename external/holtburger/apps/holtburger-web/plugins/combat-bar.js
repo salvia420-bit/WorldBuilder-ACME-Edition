@@ -508,6 +508,9 @@ function currentStanceIsMagic() {
 // `Vec<u32>` of 5-tuples `[type, current, base, ranks, training]`
 // sorted by SkillType — see `src/lib.rs:13911-13915`.
 const SKILL_TYPE_RECKLESSNESS = 50;
+// ACE.Entity/Enum/Skill.cs ordinal 16 (None=0 … MagicDefense=15,
+// ManaConversion=16).
+const SKILL_TYPE_MANA_CONVERSION = 16;
 const TRAINING_TRAINED = 2;
 const TRAINING_SPECIALIZED = 3;
 
@@ -516,7 +519,24 @@ const TRAINING_SPECIALIZED = 3;
 // level (0..3) or `null` when stats/skills aren't available yet
 // (pre-login, pre-PlayerDescription, accessor throws). Callers
 // should treat any non-2/3 return as "no band".
-function readRecklessnessTrainingLevel() {
+// THE one stride-aware walker over `playerStats().skills`.
+//
+// The flat array is stride SIX — `[type, current, base, ranks, training,
+// next_rank_cost]` per skill — per the wasm getter's own doc
+// (src/lib.rs:26594-26600) and the identical readers in
+// plugins/character-info.js:476, plugins/train-skills.js:48 and
+// ui/ac_damage_rating.js:105-107.
+//
+// A second, hand-rolled copy of this walk in `renderRows()` used stride 5 and
+// read training at `+3`, so its `skills[s] === <type>` test landed on a
+// different field every iteration and the value it returned was `ranks`, not
+// `training`. Everything that walks the array now goes through here.
+//
+// @param {number} skillType  ACE SkillType value.
+// @returns {number|null} SkillAdvancementClass (0..3), or null when stats /
+//          skills aren't available yet or the skill isn't in the snapshot.
+//          Callers should treat any non-2/3 return as "not trained".
+function readSkillTrainingLevel(skillType) {
   try {
     const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
     if (!handle || typeof handle.playerStats !== "function") return null;
@@ -532,7 +552,7 @@ function readRecklessnessTrainingLevel() {
     // stride-6: [type, current, base, ranks, training, next_rank_cost]
     for (let i = 0; i + 5 < len; i += 6) {
       const type = skills[i];
-      if (type === SKILL_TYPE_RECKLESSNESS) {
+      if (type === skillType) {
         return skills[i + 4] ?? 0;   // training class (value index unchanged)
       }
     }
@@ -540,6 +560,10 @@ function readRecklessnessTrainingLevel() {
   } catch {
     return null;
   }
+}
+
+function readRecklessnessTrainingLevel() {
+  return readSkillTrainingLevel(SKILL_TYPE_RECKLESSNESS);
 }
 
 // Seed window.__combatBarState at import time so picking.js reads
@@ -2132,22 +2156,17 @@ function renderSpellPicker(bodyEl, state) {
     // Mana Conversion trained/specialized? Drives the tooltip's cost
     // note: ACE only rolls the cost reduction when the skill is at
     // least Trained (Creature_Magic.cs CalculateManaUsage — untrained
-    // or SpellFlags.IgnoresManaConversion → flat BaseMana). skills[]
-    // is the flat [id, current, base, trained_state, xp] × N layout
-    // (see plugins/character-info.js); ManaConversion = 16,
-    // SkillAdvancementClass Trained = 2.
-    let manaConvTrained = false;
-    try {
-      const skills = window.__sessionHandle?.playerStats?.()?.skills;
-      if (skills && skills.length) {
-        for (let s = 0; s + 4 < skills.length; s += 5) {
-          if (skills[s] === 16) {
-            manaConvTrained = skills[s + 3] >= 2;
-            break;
-          }
-        }
-      }
-    } catch (_) {}
+    // or SpellFlags.IgnoresManaConversion → flat BaseMana).
+    // SkillAdvancementClass Trained = 2, Specialized = 3.
+    //
+    // This used to hand-roll its own walk over `playerStats().skills` at
+    // STRIDE 5 reading training at `+3`. The array is stride 6
+    // (src/lib.rs:26594) — the same layout readSkillTrainingLevel above has
+    // always used — so the type test landed on the wrong field and the
+    // "training" it read was actually `ranks`. The suffix appeared and
+    // disappeared at random.
+    const manaConvLevel = readSkillTrainingLevel(SKILL_TYPE_MANA_CONVERSION);
+    const manaConvTrained = (manaConvLevel ?? 0) >= 2;
 
     const slots = getSpellBarSlots();
     const populated = slots.filter((v) => v > 0);

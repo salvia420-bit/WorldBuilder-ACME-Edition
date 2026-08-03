@@ -163,6 +163,63 @@ const TIER4 = [
 // asserted nothing — `--allow-skips`) still fails them, which is the correct
 // outcome for the two suites that silently no-op when THREE_PATH is absent.
 const TIER5 = [
+  { tier: 5, flag: "c1_facing_camera", file: "tests/test_c1_facing_camera.cjs" },
+  { tier: 5, flag: "cast_busy_clock", file: "tests/test_cast_busy_clock.mjs" },
+  { tier: 5, flag: "cast_diag", file: "tests/test_cast_diag.mjs" },
+  { tier: 5, flag: "drop_guard_item_tags", file: "tests/test_drop_guard_item_tags.mjs" },
+  { tier: 5, flag: "ws01_note_gating", file: "tests/test_ws01_note_gating.mjs" },
+  { tier: 5, flag: "ws01_windup_link_coverage", file: "tests/test_ws01_windup_link_coverage.mjs" },
+  { tier: 5, flag: "ws02_cast_echo_dedup", file: "tests/test_ws02_cast_echo_dedup.mjs" },
+  { tier: 5, flag: "ws04_magic_gesture_lengths", file: "tests/test_ws04_magic_gesture_lengths.mjs" },
+  { tier: 5, flag: "ws05_spell_range", file: "tests/test_ws05_spell_range.mjs" },
+  { tier: 5, flag: "ws06_cast_facing", file: "tests/test_ws06_cast_facing.mjs" },
+  { tier: 5, flag: "ws07_remote_cast_links", file: "tests/test_ws07_remote_cast_links.mjs" },
+  { tier: 5, flag: "ws08_cast_reject", file: "tests/test_ws08_cast_reject.mjs" },
+  { tier: 5, flag: "ws09_formula_scale_parity", file: "tests/test_ws09_formula_scale_parity.mjs" },
+  { tier: 5, flag: "ws09_play_effect_sound", file: "tests/test_ws09_play_effect_sound.mjs" },
+  { tier: 5, flag: "ws10_projectile_impact_stop", file: "tests/test_ws10_projectile_impact_stop.mjs" },
+  { tier: 5, flag: "ws11_cast_gesture_timing_parity", file: "tests/test_ws11_cast_gesture_timing_parity.mjs" },
+  { tier: 5, flag: "ws12_cast_audio", file: "tests/test_ws12_cast_audio.mjs" },
+  { tier: 5, flag: "ws13_spell_cast_sequence_vs_dat", file: "tests/test_ws13_spell_cast_sequence_vs_dat.cjs" },
+  { tier: 5, flag: "allegiance_panel", file: "tests/allegiance_panel.test.cjs" },
+  { tier: 5, flag: "allegiance_presence_event", file: "tests/allegiance_presence_event.test.mjs" },
+  { tier: 5, flag: "blip_color", file: "tests/blip_color.test.mjs" },
+  { tier: 5, flag: "buffs_hud", file: "tests/buffs_hud.test.cjs" },
+  { tier: 5, flag: "bufftime_f1", file: "tests/bufftime_f1.test.mjs" },
+  { tier: 5, flag: "character", file: "tests/character.test.cjs" },
+  { tier: 5, flag: "character_creation", file: "tests/character_creation.test.cjs" },
+  { tier: 5, flag: "character_creation_reopen", file: "tests/character_creation_reopen.test.mjs" },
+  { tier: 5, flag: "character_info_tab_labels", file: "tests/character_info_tab_labels.test.mjs" },
+  { tier: 5, flag: "col20_remote_turn_gate", file: "tests/col20_remote_turn_gate.test.cjs" },
+  { tier: 5, flag: "combat_bar_skill_stride", file: "tests/combat_bar_skill_stride.test.mjs" },
+  { tier: 5, flag: "combat_hud_power_ownership", file: "tests/combat_hud_power_ownership.test.mjs" },
+  { tier: 5, flag: "contracts_panel", file: "tests/contracts_panel.test.cjs" },
+  { tier: 5, flag: "corpse_loot_snapshot", file: "tests/corpse_loot_snapshot.test.mjs" },
+  { tier: 5, flag: "dye_preview_dragover_throttle", file: "tests/dye_preview_dragover_throttle.test.mjs" },
+  { tier: 5, flag: "emote_table", file: "tests/emote_table.test.cjs" },
+  { tier: 5, flag: "entity_anim_targets", file: "tests/entity_anim_targets.test.cjs" },
+  { tier: 5, flag: "hotbar_bind_sigil_guard", file: "tests/hotbar_bind_sigil_guard.test.mjs" },
+  { tier: 5, flag: "indoor_nav_no_pose", file: "tests/indoor_nav_no_pose.test.mjs" },
+  { tier: 5, flag: "inventory_paperdoll_helpers", file: "tests/inventory_paperdoll_helpers.test.cjs" },
+  { tier: 5, flag: "keymap_manifest", file: "tests/keymap_manifest.test.cjs" },
+  { tier: 5, flag: "layout_state_inheritance", file: "tests/layout_state_inheritance.test.cjs" },
+  { tier: 5, flag: "plugin_facade_contract", file: "tests/plugin_facade_contract.test.cjs" },
+  { tier: 5, flag: "plugin_loader", file: "tests/plugin_loader.test.cjs" },
+  { tier: 5, flag: "plugin_query_wire", file: "tests/plugin_query_wire.test.cjs" },
+  { tier: 5, flag: "rust_pose", file: "tests/rust_pose.test.cjs" },
+  { tier: 5, flag: "soa_aos_parity", file: "tests/soa_aos_parity.test.cjs" },
+  { tier: 5, flag: "spellbook_wasm_record", file: "tests/spellbook_wasm_record.test.cjs" },
+  { tier: 5, flag: "target_cycle", file: "tests/target_cycle.test.cjs" },
+  { tier: 5, flag: "test_ws14_cast_cooldown", file: "tests/test_ws14_cast_cooldown.test.mjs" },
+  { tier: 5, flag: "test_ws14_ui_feedback", file: "tests/test_ws14_ui_feedback.test.cjs" },
+  { tier: 5, flag: "unwedge_reflex", file: "tests/unwedge_reflex.test.mjs" },
+  { tier: 5, flag: "vendor_profile", file: "tests/vendor_profile.test.cjs" },
+  { tier: 5, flag: "vendor_queue_vendor_switch", file: "tests/vendor_queue_vendor_switch.test.mjs" },
+  { tier: 5, flag: "world-state", file: "tests/world-state.test.cjs" },
+  { tier: 5, flag: "world_object", file: "tests/world_object.test.cjs" },
+  { tier: 5, flag: "world_object_property_dict", file: "tests/world_object_property_dict.test.cjs" },
+  { tier: 5, flag: "world_objects_typed_hierarchy", file: "tests/world_objects_typed_hierarchy.test.cjs" },
+  { tier: 5, flag: "ws15_dot_enchantment_label", file: "tests/ws15_dot_enchantment_label.test.cjs" },
   { tier: 5, flag: "ac_resize_anchor", file: "test_ac_resize_anchor.mjs" },
   { tier: 5, flag: "ac_font_render_retry", file: "test_ac_font_render_retry.mjs" },
   { tier: 5, flag: "ac_strings_no_latch", file: "test_ac_strings_no_latch.mjs" },
@@ -305,6 +362,7 @@ const TIER5 = [
 // reads as "we have no test", which is how several of these got lost.
 // Clearing this list is task #156.
 const QUARANTINE = [
+  { file: "tests/test_ws03_cast_overlay_guard.mjs", why: "pre-existing: static-shape regexes drifted vs scene3d/entities.js (untouched vs HEAD)" },
   { file: "test_a15_q1_entity_buffer_caps.mjs", why: "unclassified — see task #156" },
   { file: "test_a15_q3_dispatch_parity.mjs", why: "unclassified — see task #156" },
   { file: "test_a1_o4_single_frame_driver.mjs", why: "unclassified — see task #156" },
@@ -354,11 +412,21 @@ const QUARANTINED = new Set(QUARANTINE.map((q) => q.file));
 function unregisteredSuites() {
   const seen = new Set([...TIER1, ...TIER4, ...TIER5].map((p) => p.file));
   const out = [];
-  for (const dir of ["", "rynth"]) {
+  // Two naming conventions, and MISSING THE SECOND ONE was this guard's own
+  // first bug (2026-08-03): app-root and rynth/ use `test_*.mjs`, while
+  // tests/ uses `*.test.mjs` / `*.test.cjs`. Scanning only the first pattern
+  // left 39 suites under tests/ invisible to the very check written to make
+  // invisible suites impossible. Caught by the plugins reviewer, not by me.
+  const SCAN = [
+    { dir: "", match: (n) => n.startsWith("test_") && n.endsWith(".mjs") },
+    { dir: "rynth", match: (n) => n.startsWith("test_") && n.endsWith(".mjs") },
+    { dir: "tests", match: (n) => /\.(test\.)?(mjs|cjs)$/.test(n) && (n.startsWith("test_") || n.includes(".test.")) },
+  ];
+  for (const { dir, match } of SCAN) {
     let names = [];
     try { names = readdirSync(path.join(APP_ROOT, dir)); } catch (_) { continue; }
     for (const n of names) {
-      if (!n.startsWith("test_") || !n.endsWith(".mjs")) continue;
+      if (!match(n)) continue;
       const rel = dir ? `${dir}/${n}` : n;
       if (!seen.has(rel) && !QUARANTINED.has(rel)) out.push(rel);
     }

@@ -29,6 +29,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { takeInventorySnapshot } from "./inventory_helpers.js";
 
 const OVERLAY_ID = "hb-corpse-loot-bar";
 const STYLE_ID = "hb-corpse-loot-bar-style";
@@ -55,24 +56,28 @@ function fmtGuid(guid) {
 
 // Same resolution chain as container-panel.js — playerInventory first (items
 // already owned), entityManager meta second, wasm icon cache last.
-function resolveItemMeta(guid) {
+//
+// `invSnapshot` is ONE `takeInventorySnapshot(handle).inv` array shared by the
+// whole refresh pass. It used to call `handle.playerInventory()` itself, i.e.
+// once per corpse item on top of refreshContents' own call, and freed none of
+// them — a 12-item corpse against a 100-item pack minted 1,300 wasm boxes,
+// repeated on every `playerInventoryChanged` (which each Take emits). See
+// inventory_helpers.takeInventorySnapshot for why that ratchets wasm memory.
+function resolveItemMeta(guid, invSnapshot) {
   const g = guid >>> 0;
   const handle = window.__sessionHandle;
-  if (handle?.playerInventory) {
-    try {
-      const inv = handle.playerInventory();
-      for (const it of inv) {
-        if ((it.guid >>> 0) === g) {
-          return {
-            guid: g,
-            name: it.name || fmtGuid(g),
-            iconId: (it.iconId >>> 0) || 0,
-            stackSize: it.stackSize || 1,
-          };
-        }
+  try {
+    for (const it of invSnapshot ?? []) {
+      if ((it.guid >>> 0) === g) {
+        return {
+          guid: g,
+          name: it.name || fmtGuid(g),
+          iconId: (it.iconId >>> 0) || 0,
+          stackSize: it.stackSize || 1,
+        };
       }
-    } catch (_) {}
-  }
+    }
+  } catch (_) {}
   try {
     const em = window.liveScene3d?.entityManager;
     const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
@@ -334,11 +339,18 @@ function refreshContents() {
   // refreshes to the true remaining contents after each Take. `playerInventory`
   // is owned-items-only (open-corpse contents are NOT in it — verified: taking
   // 1 grows it by exactly 1), so this never hides un-looted corpse items.
+  //
+  // ONE snapshot serves both the owned-filter and every per-item meta resolve;
+  // `free()` runs in a `finally` so a throw inside resolveItemMeta (e.g.
+  // getObjectIconId) still releases the boxes.
+  const snap = takeInventorySnapshot(handle);
   try {
-    const owned = new Set((handle.playerInventory?.() || []).map((it) => (it.guid >>> 0)));
+    const owned = new Set(snap.inv.map((it) => (it.guid >>> 0)));
     if (owned.size) guids = guids.filter((x) => !owned.has(x >>> 0));
-  } catch (_) {}
-  state.items = guids.map(resolveItemMeta);
+    state.items = guids.map((x) => resolveItemMeta(x, snap.inv));
+  } finally {
+    snap.free();
+  }
   if (!guids.some((x) => (x >>> 0) === (state.selectedGuid >>> 0))) {
     state.selectedGuid = 0;
   }
