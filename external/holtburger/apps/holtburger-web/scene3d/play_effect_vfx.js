@@ -1026,8 +1026,13 @@ function combatFxEnabled() {
   _combatFxOn = false;
   try {
     if (typeof window !== "undefined" && window.location) {
+      // STRICT `=== "on"` — the contract stated in the block comment above.
+      // This read was `!== "off"`, i.e. the documented default-on footgun the
+      // comment explicitly says not to copy: absent / `?combatFx` / `=1` /
+      // `=true` all read ON, so the un-eye-tested directional-splatter path
+      // was live on the bare default URL.
       _combatFxOn =
-        new URLSearchParams(window.location.search).get("combatFx") !== "off";
+        new URLSearchParams(window.location.search).get("combatFx") === "on";
     }
   } catch (_) {
     _combatFxOn = false;
@@ -1745,6 +1750,28 @@ function _tryResolveRealVfxBounded(targetGuid, scriptId, speed) {
 }
 
 /**
+ * Is `inst` STILL the live instance for `guid`? The deferred spawn/resolve
+ * callbacks below capture `inst` once and fire up to seconds later (hook
+ * StartTime + the addEmitter await), so `entityMap.has(guid)` is not enough —
+ * it answers true again after a same-guid respawn while the captured `inst` is
+ * a disposed rig. Mirrors the entities.js identity-guard convention
+ * (`inst._disposed || map.get(guid) !== inst`). Never throws.
+ *
+ * @param {object} em - the EntityManager
+ * @param {number} guid
+ * @param {object} inst - the instance captured at resolver entry
+ * @returns {boolean}
+ */
+function _isLiveInstance(em, guid, inst) {
+  try {
+    if (!inst || inst._disposed === true) return false;
+    return em?.entityMap?.get?.(guid >>> 0) === inst;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * Phase 51 resolver: walk the
  * `entityPhysicsScriptTableDid → fetchPhysicsScriptTable → pickScriptEntry
  *  → fetchPhysicsScript → CreateParticleHook → fetchParticleEmitter →
@@ -2036,9 +2063,13 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
       // ABOVE the loop, so it's always initialized when this callback fires —
       // even when a StartTime=0 timer races the loop's `await`.)
       if (_rp6Group._evicted) return;
-      // The target may have despawned during the StartTime delay; if
-      // so, skip the spawn (matches the H2 arms' entityMap guard).
-      if (!em.entityMap?.has?.(targetGuid >>> 0)) return;
+      // The target may have despawned during the StartTime delay; if so, skip
+      // the spawn. IDENTITY guard, not `.has()`: a same-guid respawn (LOD
+      // recycle / death+recreate) inside the delay answers `.has()` true while
+      // the captured `inst` is the DISPOSED rig, so `parent: inst.root` would
+      // strand the emitter on a detached root. Same shape as the established
+      // entities.js sibling guards (:5315 / :5414 / :11388).
+      if (!_isLiveInstance(em, targetGuid, inst)) return;
       const req = {
         emitterInfo,
         parent: inst.root,
@@ -2061,7 +2092,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
             // entity-remove path can no longer reap. Destroy it now.
             // (A11-S2 on-path: the facade already returned 0 + self-
             // destroyed in that race, so this branch only acts off-path.)
-            if (!em.entityMap?.has?.(targetGuid >>> 0)) {
+            // Identity guard again (see the StartTime callback above): the
+            // despawn may have landed DURING the addEmitter await, and a
+            // same-guid respawn must not adopt this emitter.
+            if (!_isLiveInstance(em, targetGuid, inst)) {
               if (particleOwnerOn()) {
                 try { ownerRegistry.destroySome(targetGuid >>> 0, [emitterId]); } catch (_) {}
               } else {
@@ -3545,7 +3579,8 @@ export const __test = Object.freeze({
     ttlMs: _PENDING_TTL_MS,
   }),
   // Combat-visuals Phase 1 (2026-08-02) — directional/crit splatter.
-  // `combatFxEnabled` reflects the STRICT `?combatFx=on` gate;
+  // `combatFxEnabled` reflects the STRICT `?combatFx=on` gate (ONLY the exact
+  // string "on" enables it — absent / "1" / "true" / "ON" all read OFF);
   // `combatFxStats` counts latch/consume/spawn so an acceptance trace
   // can assert crit correlation without an eye-test; `latchCrit` lets a
   // trace force a crit for a guid and fire a splatter to see the big

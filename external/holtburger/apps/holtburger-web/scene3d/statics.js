@@ -93,7 +93,7 @@ import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./an
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
 import { treeWindEnabled, isTreeDid, windGeoEnabled, windSwayGpuEnabled } from "./tree_wind.js";
-import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb } from "./static_atlas.js";
+import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb, isBc7AtlasTexture } from "./static_atlas.js";
 // ?statBatchCrossLb (default-OFF, 1070 eye-test pending) — cross-LB variant of the
 // per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
 // per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
@@ -1350,7 +1350,13 @@ function buildSingletonNode({
     }
   }
   // If every band failed to build a mesh, fall back to the plain full mesh.
+  // 2026-08-03 — the LOD took the placement transform above and the leaf was
+  // reset to identity; hand it back or the prop renders at the landblock origin
+  // at scale 1.
   if (lod.levels.length <= 1) {
+    mesh.position.copy(lod.position);
+    mesh.quaternion.copy(lod.quaternion);
+    mesh.scale.copy(lod.scale);
     return { node: mesh, isLod: false };
   }
   lod.userData = {
@@ -2256,9 +2262,17 @@ export async function bakeStaticsForLandblock(
   // landing) aborts here the same way — the content is invisible under
   // sealedCull and the only exit is a portal. Clear the baked mark so a
   // future non-sealed approach rebuilds.
+  //
+  // 2026-08-03 — the residency re-check is UNCONDITIONAL. It used to be gated
+  // on `staticsTimeSlice`, but that flag only controls the build loop's yields:
+  // this baker awaits the placement drain, the animated/wind attach, the model
+  // + degrade fetches, the surface preload and the prewarm regardless, so an
+  // eviction can land in any of them. Under `?noStaticsTimeSlice=1` the gate
+  // therefore attached a full LB the LRU had already torn down (orphans + a
+  // duplicate bake on re-walk).
   const _sealedAbort = SEALED_STATICS_SKIP_ON && _sealedNow(scene3d);
   if (_sealedAbort) { try { scene3d.staticsBakedLbs.delete(lbKey); } catch (_) {} }
-  if ((staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) || _sealedAbort) {
+  if (!scene3d.staticsBakedLbs.has(lbKey) || _sealedAbort) {
     // RP1 — dispose every per-surface group geometry (full + degraded)
     // for this LB's models. groupsByModel: modelId → [{geometry,...}];
     // R-JS-T4a — degradedGeomByModel: modelId → Map<surfaceKey, [{geometry,
@@ -2320,7 +2334,8 @@ export async function bakeStaticsForLandblock(
     for (const n of nodesToAdd) _tmp.add(n);
     await prewarmSubtree(scene3d, _tmp);
     for (const n of [..._tmp.children]) _tmp.remove(n);
-    if (staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) {
+    // Unconditional — the prewarm await yields regardless of ?noStaticsTimeSlice.
+    if (!scene3d.staticsBakedLbs.has(lbKey)) {
       // Evicted while the prewarm await was outstanding — dispose this LB's per-surface
       // group geometries (full + degraded) and bail without attaching (same as the
       // time-slice cancellation guard above; nodes were never added to the scene graph).
@@ -2357,7 +2372,11 @@ export async function bakeStaticsForLandblock(
         // atlasable node as a single batched entry, so an InstancedMesh routed
         // here would lose every placement but one. Same guard, same reason, as
         // the two consolidators above.
-        if (node && node.isMesh && !node.isInstancedMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && img.data && !node.userData?.__staticBatch) {
+        // X6 (2026-08-03) — accept EITHER pixel source. A BC7 map has no
+        // `image.data` (bytes live in `mipmaps[0].data`), so the bare `img.data`
+        // test used to route every BC7 static past the atlas as an unbatched
+        // singleton on the walk-in path while the boot ring batched it fine.
+        if (node && node.isMesh && !node.isInstancedMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && (img.data || isBc7AtlasTexture(t)) && !node.userData?.__staticBatch) {
           atlasable.push(node);
         } else {
           rest.push(node);

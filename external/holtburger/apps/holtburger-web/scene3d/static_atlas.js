@@ -67,6 +67,9 @@ import {
 } from "./bc7_textures.js";
 import { aoMapIntensityValue } from "./vfx_flags.js";
 import { getQuality } from "./quality.js";
+// 2026-08-03 — the seam-height plane moved out of `material.userData` (three's
+// Material.copy JSON round-trips userData); read it through the accessor.
+import { heightTexForMaterial } from "./materials.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -115,7 +118,7 @@ export function statNraEnabled() {
 // === S3 (2026-07-30) — atlas POM over the seam-height field ("statPom") =====
 // The nra ALPHA channel now carries the per-surface seam height (255 = proud
 // face, grooves dip toward 0 — height_seam.rs, the operator that won the
-// 10-way comparison), packed from `mat.userData.heightTex` by `packNraLayer`.
+// 10-way comparison), packed from `heightTexForMaterial(mat)` by `packNraLayer`.
 // `makeArrayMaterial` marches it per-fragment: a correct POM (derivative
 // tangent frame via three's own `getTangentFrame` — NOT the legacy
 // view-space fabrication that swam with the camera), a self-shadow ray toward
@@ -335,7 +338,7 @@ function packNraLayer(nraArray, layer, mat, w, h, stats) {
   // texchan AO exactly as before — under the same shader formula both
   // semantics shade correctly, and a near-flat AO field makes the POM march a
   // no-op, so the fallback can never invent relief.
-  const hgt = _texChannel(mat.userData?.heightTex, 0, w, h);
+  const hgt = _texChannel(heightTexForMaterial(mat), 0, w, h);
 
   const roughScalar = Math.min(1, Math.max(0, Number.isFinite(mat.roughness) ? mat.roughness : 1));
   const roughFlat = Math.round(roughScalar * 255);
@@ -854,7 +857,13 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   nraWithHeight: 0, // S3: layers whose alpha carries the seam-height field
   nraResampled: 0, nraMetalDropped: 0, nraRepacked: 0, nraPendingDropped: 0,
   // X6 BC7 tally (all zero unless ?texBc7=on AND the GPU has BPTC).
-  bc7Buckets: 0, bc7Layers: 0, ptBc7Deferred: 0 };
+  bc7Buckets: 0, bc7Layers: 0, ptBc7Deferred: 0,
+  // 2026-08-03 layer-write invariant: a recycled layer whose source could not be
+  // written is zeroed (RGBA8) or released (BC7) instead of bleeding its previous
+  // surface. Both should stay 0 in a healthy session.
+  layerWriteZeroed: 0, ptLayerWriteFail: 0,
+  // Per-node exceptions whose partial commit had to be unwound.
+  ptErrorUnwound: 0 };
 const _uniqueTexUuids = new Set(); // every distinct surface texture ever atlased
 if (typeof window !== "undefined") {
   window.__atlasStats = () => {
@@ -899,6 +908,23 @@ const _NRA_PENDING_TRIES = 600;
 
 function _lbKeyOfId(id) {
   return (((id >>> 0) & 0xffff0000) >>> 0);
+}
+
+/**
+ * X6 — a BC7 map carries its bytes in `mipmaps[0].data`, NOT `image.data`, so
+ * an `img.data` test alone rejects every BC7 surface. Exported so caller-side
+ * pre-filters (statics.js's walk-in feed) use the same rule as the feed itself
+ * and can't silently drop BC7 nodes back to one-draw-per-prop.
+ */
+export function isBc7AtlasTexture(tex) {
+  return !!(
+    tex &&
+    tex.isCompressedTexture &&
+    tex.format === THREE.RGBA_BPTC_Format &&
+    tex.mipmaps &&
+    tex.mipmaps[0] &&
+    tex.mipmaps[0].data
+  );
 }
 
 // X6 — the trailing format field. `f8` = RGBA8 `DataArrayTexture` (every bucket
@@ -1065,6 +1091,12 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
   _atlasStats.feeds++;
   for (const n of nodes) {
     let handled = false;
+    // 2026-08-03 — partial-commit tracking so the blanket catch below can
+    // unwind. Without it a throw between the layer take and the membership
+    // push leaked the layer refcount AND left an unevictable geometry in the
+    // bucket that rendered alongside the passthrough copy of the same node.
+    let heldEntry = null;   // { ud, uuid, entry }
+    let heldGeom = null;    // { bm, gid, vcount }
     _atlasStats.nodesIn++;
     try {
       const mat = n && n.material;
@@ -1075,14 +1107,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       // have silently passed every BC7 surface through as an unbatched singleton —
       // exactly the ~5,400-draw-call wall the atlas exists to remove. Accept
       // either pixel source.
-      const bc7Tex = !!(
-        tex &&
-        tex.isCompressedTexture &&
-        tex.format === THREE.RGBA_BPTC_Format &&
-        tex.mipmaps &&
-        tex.mipmaps[0] &&
-        tex.mipmaps[0].data
-      );
+      const bc7Tex = isBc7AtlasTexture(tex);
       if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !(img.data || bc7Tex) || n.userData?.__staticBatch) {
         _atlasStats.ptFiltered++; passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
       }
@@ -1125,6 +1150,11 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         if (ud.freeLayers.length > 0) { layer = ud.freeLayers.pop(); _atlasStats.layerRecycles++; }
         else if (ud.nextLayer < ud.capacity) layer = ud.nextLayer++;
         else { _atlasStats.ptLayerFull++; passthrough.push(n); continue; } // layer pool full → unbatched (fail-soft)
+        // LAYER-WRITE INVARIANT (2026-08-03): a layer index is RECYCLED, so a
+        // skipped or failed write leaves the PREVIOUS surface's texels resident
+        // and the prop renders someone else's texture. Every allocation below
+        // either rewrites the layer in full or releases it — the same rule
+        // `packNraLayer` already states for the nra array.
         if (ud.bc7) {
           // X6 — one `compressedTexSubImage3D` for THIS layer (block-aligned by
           // construction: every layer is `ceil(w/4)*ceil(h/4)*16` bytes and the
@@ -1135,19 +1165,30 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
             levels: [{ data: tex.mipmaps[0].data, width: w, height: h }],
           });
           if (ok) { _atlasStats.bc7Layers++; _bumpBc7Stat("atlasLayers"); }
+          else {
+            // A compressed layer cannot be cleared in place — release it and
+            // let this node render unbatched.
+            ud.freeLayers.push(layer);
+            _atlasStats.ptLayerWriteFail++; passthrough.push(n); continue;
+          }
         } else {
           const stride = w * h * 4;
           const src = img.data;
           if (src && src.length === stride) {
             ud.diffArray.image.data.set(src, layer * stride);
-            // 2026-08-01 — mark ONLY this layer dirty (terrain_batch.js:315
-            // precedent). Without it, `needsUpdate = true` below re-uploads the
-            // ENTIRE pre-allocated array (up to 128 layers × 2 arrays ≈ 16-32 MiB)
-            // on every per-LB feed — the measured walk-stall texture-upload cost
-            // (RESULTS-task12). With layerUpdates non-empty three emits one
-            // texSubImage3D per touched layer instead.
-            if (typeof ud.diffArray.addLayerUpdate === "function") ud.diffArray.addLayerUpdate(layer);
+          } else {
+            // Wrong-stride source (non-RGBA8 map, truncated decode): zero the
+            // layer rather than inherit its previous tenant's pixels.
+            ud.diffArray.image.data.fill(0, layer * stride, (layer + 1) * stride);
+            _atlasStats.layerWriteZeroed++;
           }
+          // 2026-08-01 — mark ONLY this layer dirty (terrain_batch.js:315
+          // precedent). Without it, `needsUpdate = true` below re-uploads the
+          // ENTIRE pre-allocated array (up to 128 layers × 2 arrays ≈ 16-32 MiB)
+          // on every per-LB feed — the measured walk-stall texture-upload cost
+          // (RESULTS-task12). With layerUpdates non-empty three emits one
+          // texSubImage3D per touched layer instead.
+          if (typeof ud.diffArray.addLayerUpdate === "function") ud.diffArray.addLayerUpdate(layer);
         }
         entry = { layer, refs: 1 };
         ud.layerOf.set(uuid, entry);
@@ -1167,11 +1208,12 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
           // there yet, queue a re-pack rather than lose the relief for the session.
           // S3: with a seam-height field in hand the alpha channel never wants
           // the texchan AO, so only the roughness bake is worth waiting for.
-          if (!mat.roughnessMap || (!mat.userData?.heightTex && !mat.aoMap)) {
+          if (!mat.roughnessMap || (!heightTexForMaterial(mat) && !mat.aoMap)) {
             _nraPending.push({ ud, layer: entry.layer, mat, w, h, texUuid: uuid, tries: 0, full });
           }
         }
       }
+      heldEntry = { ud, uuid, entry };
       const g = normalizeForMerge(n.geometry, entry.layer);
       if (!g) {
         if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
@@ -1195,6 +1237,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
         _atlasStats.ptInstFail++; passthrough.push(n); continue;
       }
+      heldGeom = { bm, gid, vcount, bucketKey };
       n.updateMatrix();
       bm.setMatrixAt(iid, n.matrix); // world transform (node is staticsGroup-relative)
       ud.gidVerts.set(gid, vcount);
@@ -1209,11 +1252,34 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       try { n.geometry?.dispose?.(); } catch (_) {}
       _atlasStats.atlased++;
       handled = true;
+      heldEntry = null; // committed to _lbMembership — eviction owns it now
+      heldGeom = null;
     } catch (e) {
       _atlasStats.ptError++;
-      // per-node fail-soft: fall through to passthrough below.
+      // Unwind whatever this node committed before the throw, then fall through
+      // to passthrough below (fail-soft: the prop still renders, once).
+      if (heldGeom) {
+        _atlasStats.ptErrorUnwound++;
+        try { heldGeom.bm.deleteGeometry(heldGeom.gid); } catch (_) {}
+        try {
+          const gud = heldGeom.bm.userData;
+          if (gud?.gidVerts?.delete(heldGeom.gid)) gud.deadVerts += heldGeom.vcount;
+          _dirtyBuckets.add(heldGeom.bucketKey);
+        } catch (_) {}
+      }
+      if (heldEntry) {
+        try {
+          if (--heldEntry.entry.refs <= 0) {
+            heldEntry.ud.freeLayers.push(heldEntry.entry.layer);
+            heldEntry.ud.layerOf.delete(heldEntry.uuid);
+          }
+        } catch (_) {}
+      }
     }
-    if (!handled && n && !passthrough.includes(n)) passthrough.push(n);
+    // Every `continue` above pushes exactly once and leaves the loop body, so
+    // this is the only other push — no membership scan needed (it was O(n^2)
+    // across a ~5,400-node ring feed).
+    if (!handled && n) passthrough.push(n);
   }
   for (const d of touchedDiff) d.needsUpdate = true; // batch the array re-upload once
   for (const d of touchedNra) d.needsUpdate = true;  // X5, same single re-upload
@@ -1316,7 +1382,7 @@ function _drainNraPending() {
     if (!p.ud?.nraArray || !cur || cur.layer !== p.layer) { _nraPending.splice(i, 1); continue; }
     // S3 — with a seam-height field the alpha channel never takes the texchan
     // AO, so only the roughness bake is worth waiting for on those entries.
-    const both = !!(p.mat?.roughnessMap && (p.mat?.userData?.heightTex || p.mat?.aoMap));
+    const both = !!(p.mat?.roughnessMap && (heightTexForMaterial(p.mat) || p.mat?.aoMap));
     const expired = ++p.tries > _NRA_PENDING_TRIES;
     if (!both && !expired) continue;
     const any = !!(p.mat?.roughnessMap || p.mat?.aoMap);

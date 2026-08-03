@@ -785,6 +785,37 @@ function hashCellSet(arr) {
   return (h ^ (arr.length + 1)) | 0;
 }
 
+// Monotone per-light identity stamp. `activeLights` is spliced from THREE
+// places (releaseLight here, entities.js remove(), landblock_lru evict()), so
+// the cell-scoped selection cannot key on a mutation counter it owns.
+let _lightIdSeq = 0;
+
+/**
+ * FNV-1a over the IDENTITY of every entry in `activeLights` — the cell-scoped
+ * selection's invalidation key. `lights.length` alone is NOT sufficient: a
+ * count-preserving churn (an LB evicting N lights while the next LB attaches N,
+ * between two ticks) leaves `pool.selPoint` holding released, detached lights
+ * whose stale `matrixWorld` keeps feeding a ghost light into the pool while the
+ * freshly-attached ones stay dark. Integer-only, zero-allocation, no
+ * getWorldPosition — the expensive parts (resolve + sort) stay behind the
+ * rebuild gate.
+ */
+function hashLightIdentities(lights) {
+  let h = 0x811c9dc5 | 0;
+  for (let i = 0; i < lights.length; i += 1) {
+    const l = lights[i];
+    let id = l.__lightSeqId;
+    if (id === undefined) {
+      _lightIdSeq = (_lightIdSeq + 1) | 0;
+      id = _lightIdSeq;
+      l.__lightSeqId = id;
+    }
+    h = (h ^ id) | 0;
+    h = (h + ((h << 1) | 0) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) | 0;
+  }
+  return (h ^ (lights.length + 1)) | 0;
+}
+
 /**
  * RND-05/03 — lazily build the synthetic VIEWER-LIGHT source (retail
  * SmartBox viewer_light). It is NOT a THREE light and is never added to the
@@ -868,6 +899,12 @@ function allocateLightPool(lightsGroup, cfg) {
 function zeroLightPool(pool) {
   for (let i = 0; i < pool.point.length; i += 1) pool.point[i].intensity = 0;
   for (let i = 0; i < pool.spot.length; i += 1) pool.spot[i].intensity = 0;
+  // Clear the hysteresis tags BEFORE forgetting the selection (same order
+  // pickSelectedSources uses). INVARIANT: `__lightPoolSel` is true only while a
+  // source actually holds a slot — a stale tag biases every later sort by
+  // √hysteresis forever, which is the flicker the band exists to prevent.
+  for (let i = 0; i < pool.selPoint.length; i += 1) pool.selPoint[i].__lightPoolSel = false;
+  for (let i = 0; i < pool.selSpot.length; i += 1) pool.selSpot[i].__lightPoolSel = false;
   pool.selPoint.length = 0;
   pool.selSpot.length = 0;
 }
@@ -1073,15 +1110,20 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
           if (sun.visible !== true) sun.visible = true;
           if (scene3d._poolSunIndoor !== isIndoor) {
             if (isIndoor) {
-              if (sun.intensity > 0) {
-                if (!sun.userData) sun.userData = {};
-                sun.userData.__poolOutdoorIntensity = sun.intensity;
-              }
+              // Capture the LIVE outdoor contribution unconditionally (edge-
+              // triggered, so this IS the outdoor value — including 0). The old
+              // `if (sun.intensity > 0)` guard refused to record a zero, which
+              // is exactly the atmosphere-path case.
+              if (!sun.userData) sun.userData = {};
+              sun.userData.__poolOutdoorIntensity = sun.intensity;
               sun.intensity = 0;
-            } else {
-              sun.intensity = Number.isFinite(sun.userData?.__poolOutdoorIntensity)
-                ? sun.userData.__poolOutdoorIntensity
-                : 1.0;
+            } else if (Number.isFinite(sun.userData?.__poolOutdoorIntensity)) {
+              // INVARIANT: only ever restore an intensity we captured — never
+              // invent one. The old `: 1.0` fallback fired on the FIRST tick
+              // (`_poolSunIndoor` starts undefined ⇒ !== false), resurrecting
+              // the legacy sun that index.js:4973 zeroes on the atmosphere
+              // path, double-lighting the world from the frozen boot heading.
+              sun.intensity = sun.userData.__poolOutdoorIntensity;
             }
             scene3d._poolSunIndoor = isIndoor;
             shadowDirty = true;
@@ -1671,12 +1713,19 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
   if (cellMode && renderSetArr) {
     refreshCellLightRef(scene3d, camera);
     const key = hashCellSet(renderSetArr);
+    // Identity key, not just the count — see hashLightIdentities. A
+    // same-count add/remove pair MUST invalidate or the pool keeps feeding
+    // released lights (ghost glow) and starves the fresh ones.
+    const srcKey = hashLightIdentities(lights);
     let stats = scene3d._cellLightsStats;
     if (!stats) {
-      stats = { rebuilds: 0, key: 0, count: -1, scoped: 0, candidates: 0, built: false };
+      stats = {
+        rebuilds: 0, key: 0, count: -1, srcKey: 0,
+        scoped: 0, candidates: 0, built: false,
+      };
       scene3d._cellLightsStats = stats;
     }
-    if (stats.built && key === stats.key && stats.count === lights.length) {
+    if (stats.built && key === stats.key && stats.srcKey === srcKey) {
       feedSelectedIntoPool(lightPool);
       return;
     }
@@ -1685,6 +1734,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     stats.rebuilds += 1;
     stats.key = key;
     stats.count = lights.length;
+    stats.srcKey = srcKey;
     stats.built = true;
     return;
   }
@@ -2012,10 +2062,12 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         partsBySetupId.set(modelId, entry);
       }
       for (const partGroup of partGroups) {
-        const pi =
-          (partGroup.userData?.partIndex ?? -1) >>> 0 >= 0
-            ? partGroup.userData?.partIndex ?? 0
-            : 0;
+        // `x >>> 0 >= 0` parsed as `(x >>> 0) >= 0`, which is unconditionally
+        // true for an unsigned operand — the clamp never ran and a negative /
+        // non-integer partIndex flowed through to the `partIndex !== targetPartIndex`
+        // compare below, silently dropping that Setup's light.
+        const rawPi = partGroup.userData?.partIndex;
+        const pi = Number.isInteger(rawPi) && rawPi >= 0 ? rawPi : 0;
         entry.push({ partIndex: pi, object3D: partGroup, lbKey });
       }
     }

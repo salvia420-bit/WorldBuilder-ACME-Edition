@@ -380,7 +380,15 @@ async function spawnWithLiveSlot(mgr, HANDLE) {
 
   check("4a.replace produced a NEW emitter on the same id", id2 === HANDLE && newEmitter && newEmitter !== oldEmitter);
   check("4a.LEAK FIX: old slot mesh pulled from the scene (parent === null)", oldSlotMesh.parent === null);
-  check("4a.LEAK FIX: old slot cloned material disposed", oldMatDisposed === 1);
+  // 2026-08-03: teardown routes through `_reclaimSlotMaterial` (its documented
+  // contract; only the tick() site had been converted), so the clone is PARKED
+  // in the per-slot material pool — and here immediately re-popped by the
+  // replacement emitter — rather than dispose()'d. The leak-fix invariant is
+  // that it is never ORPHANED; assert that, not the mechanism.
+  const oldMatPooled = [...mgr._materialPool.values()].some((a) => a.includes(oldSlotMat));
+  const oldMatReused = (newEmitter?.partStorage || []).some((m) => m && m.material === oldSlotMat);
+  check("4a.LEAK FIX: old slot cloned material reclaimed (disposed, pooled or reused)",
+    oldMatDisposed === 1 || oldMatPooled || oldMatReused);
   check("4a.table holds exactly the one surviving emitter", mgr.particleTable.size === 1);
 }
 
@@ -417,7 +425,9 @@ async function spawnWithLiveSlot(mgr, HANDLE) {
   const ok = mgr.destroyParticleEmitter(HANDLE);
   check("4c.destroyParticleEmitter returns true", ok === true);
   check("4c.slot mesh removed from scene", slotMesh.parent === null);
-  check("4c.slot cloned material disposed", disposed === 1);
+  // Same invariant-not-mechanism update as 4a (the pool is the reclaim sink).
+  const pooled4c = [...mgr._materialPool.values()].some((a) => a.includes(slotMesh.material));
+  check("4c.slot cloned material reclaimed (disposed or pooled)", disposed === 1 || pooled4c);
   check("4c.emitter dropped from the table", !mgr.particleTable.has(HANDLE));
 }
 
@@ -432,8 +442,8 @@ check(
   /if\s*\(blocking\s*&&\s*emitterId\s*!==\s*0\s*&&\s*this\.particleTable\.has\(emitterId\)\)\s*\{\s*return\s+0;/.test(pmSrc),
 );
 check(
-  "4.destroyParticleEmitter disposes per-slot materials via _disposeMaterialIfOwned over partStorage",
-  /partStorage\[i\];[\s\S]{0,80}_disposeMaterialIfOwned\(slotMesh\.material\)/.test(pmSrc),
+  "4.destroyParticleEmitter reclaims per-slot materials via _reclaimSlotMaterial over partStorage",
+  /partStorage\[i\];[\s\S]{0,80}this\._reclaimSlotMaterial\(slotMesh\.material\)/.test(pmSrc),
 );
 
 // restore global hooks

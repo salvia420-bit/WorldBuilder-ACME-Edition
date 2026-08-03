@@ -1588,6 +1588,21 @@ export class LandblockLRU {
           const k = c.userData?.placementKey;
           if (k) s.buildingMap3d.delete(k);
         }
+        // 2026-08-03 — ?buildingBatch placements never attach their
+        // placementGroups to buildingsGroup (their surfaces live in the
+        // cross-LB static atlas), so the kill-scan above cannot find them and
+        // their buildingMap3d keys used to survive eviction: the re-bake
+        // after a re-approach then hit the placementKey dedup and skipped
+        // every placement while the atlas instances were already excised —
+        // buildings permanently vanished. The placementKey's leading 8 hex
+        // chars ARE the full landblockId, so prune by prefix as well.
+        for (const k of s.buildingMap3d.keys()) {
+          if (typeof k !== "string" || k.length < 8) continue;
+          const lb = parseInt(k.slice(0, 8), 16);
+          if (Number.isFinite(lb) && lbKeyOf(lb >>> 0) === lbKey) {
+            s.buildingMap3d.delete(k);
+          }
+        }
       }
     }
 

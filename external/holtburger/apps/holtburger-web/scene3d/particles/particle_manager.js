@@ -19,6 +19,9 @@ import * as THREE from "three";
 
 import { ParticleEmitter } from "./particle_emitter.js";
 import { ParticleEmitterInfo } from "./particle_emitter_info.js";
+// Same mockable physics clock the emitters age on (seconds) — used by the
+// culled count-bounded stop bound below so tests can drive it deterministically.
+import { currentTime } from "./time_rng.js";
 
 // 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
 // surface, `materialFactory` returns null. The pre-fix meshFactory then did
@@ -132,8 +135,26 @@ const _RP6 = {
   // sub-pixel. 220m comfortably exceeds the entity tick radius so we
   // never cull an emitter on an entity that is still animating.
   maxDistance: 220,
+  // 2026-08-03 — off-screen dwell (SECONDS, physics clock) after which a
+  // COUNT-bounded emitter is force-stopped so the culled drain can run. See
+  // the long note at the cull branch in tick(): `stopEmitter()` flips
+  // `stopped` on `totalSeconds` (wall-clock, keeps ticking while culled) or on
+  // `totalEmitted >= totalParticles` — and `totalEmitted` is FROZEN while
+  // culled because updateParticles() is skipped. So a `totalParticles > 0 &&
+  // totalSeconds === 0` emitter culled mid-emission can never satisfy either
+  // condition and never reaches the `stopped && numParticles === 0` removal
+  // predicate. 30 s is deliberately conservative: far longer than any
+  // pan-away/pan-back, and persistent (0/0) emitters are excluded outright, so
+  // this can only ever reap an emitter that was already going to finish.
+  culledStopSeconds: 30,
 };
 const _RP6_MAX_DIST_SQ = _RP6.maxDistance * _RP6.maxDistance;
+
+/** Diagnostic counters for the RP6 cull path (read by probes/tests). */
+export const PARTICLE_RP6_STATS = {
+  // Count-bounded emitters force-stopped after `culledStopSeconds` off-screen.
+  culledForceStopped: 0,
+};
 
 // ── Particle instancing (2026-07-14, `?particleInstancing=on`, default OFF) ──
 //
@@ -190,6 +211,21 @@ function _instGeometryFor(geometry) {
   const g = geometry.clone();
   g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3));
   _instGeomCache.set(geometry.uuid, g);
+  // OWNERSHIP: the clone is ours, the SOURCE is cache-owned. Nothing else can
+  // tell us when that source dies (LB evict / geometry-cache trim), so ride its
+  // own dispose event — otherwise every particle gfxobj ever seen leaves a
+  // permanently-resident clone in this module-level Map. `once`-style:
+  // unregister inside the handler so a re-disposed source can't double-free.
+  if (typeof geometry.addEventListener === "function") {
+    const onSourceDispose = () => {
+      try { geometry.removeEventListener("dispose", onSourceDispose); } catch (_) {}
+      if (_instGeomCache.get(geometry.uuid) === g) {
+        _instGeomCache.delete(geometry.uuid);
+        try { g.dispose?.(); } catch (_) {}
+      }
+    };
+    geometry.addEventListener("dispose", onSourceDispose);
+  }
   return g;
 }
 
@@ -219,6 +255,12 @@ export function setParticleInstancingFlag(on) { _INST_ON = !!on; }
 // makes RP6 culling free: a culled emitter simply contributes no instances,
 // so no per-bucket visibility bookkeeping is needed.
 const _INST_BUCKET_MIN_CAP = 256;
+// Consecutive empty ticks before an idle bucket is reaped. A bucket that
+// `_growBucket` doubled to thousands of slots keeps those matrix/colour buffers
+// forever once its last emitter despawns, and `_finalizeInstBuckets`' old
+// `count === 0 && n === 0 → continue` never removed it. ~3 s @60fps — long
+// enough that a briefly-empty emitter set doesn't thrash the realloc.
+const _INST_BUCKET_IDLE_TICKS = 180;
 
 /** Grow a bucket's InstancedMesh in place (double until it fits). */
 function _growBucket(bucket, need, scene) {
@@ -1394,6 +1436,10 @@ export class ParticleManager {
           // this) silently wins against a write that happens every
           // `_RP6.recheckInterval` ticks. Enforcing "culled ⇒ hidden" EVERY
           // tick below makes the cull authoritative instead of hoping.
+          //
+          // Re-entry also clears the off-screen dwell stamp: the count-bounded
+          // force-stop bound below measures CONTINUOUS time culled only.
+          emitter._rp6CulledSinceSec = undefined;
           _setPartsVisible(emitter, true);
         }
       }
@@ -1433,6 +1479,28 @@ export class ParticleManager {
         try {
           if (typeof emitter.stopEmitter === "function") emitter.stopEmitter();
         } catch (_) {}
+        // 2026-08-03 — the paragraph above is only true for TIME-bounded
+        // emitters. `stopEmitter()` (particle_emitter.js:318-330) has exactly
+        // two stop conditions: `totalSeconds > 0` elapsed (wall-clock — still
+        // advances while culled, fine) and `totalEmitted >= totalParticles`
+        // (frozen while culled, since only updateParticles() emits). A
+        // COUNT-bounded emitter (totalParticles > 0, totalSeconds === 0) culled
+        // before it finished emitting therefore never flips `stopped`, never
+        // drains, and stays pinned in particleTable holding its partStorage
+        // meshes + cloned materials — the exact leak this branch's comment
+        // claims to have closed. Force the stop after a conservative
+        // continuous off-screen dwell so the normal drain + auto-remove path
+        // becomes reachable. Persistent (0/0) emitters are excluded, so they
+        // still "run forever and resume on re-entry" as intended.
+        if (emitter.stopped !== true && (emitter.info?.totalParticles | 0) > 0) {
+          const nowSec = currentTime();
+          if (emitter._rp6CulledSinceSec === undefined) {
+            emitter._rp6CulledSinceSec = nowSec;
+          } else if (nowSec - emitter._rp6CulledSinceSec >= _RP6.culledStopSeconds) {
+            emitter.stopped = true;
+            PARTICLE_RP6_STATS.culledForceStopped += 1;
+          }
+        }
         let drained = false;
         if (emitter.stopped === true) {
           // Drain the stopped emitter's remaining particles instead of
@@ -1655,9 +1723,29 @@ export class ParticleManager {
   /** Publish this tick's instance counts + buffer uploads. */
   _finalizeInstBuckets() {
     if (this._instBuckets.size === 0) return;
-    for (const b of this._instBuckets.values()) {
+    // Map deletion during for..of is safe (visited entries only).
+    for (const [key, b] of this._instBuckets) {
       const im = b.im;
-      if (im.count === 0 && b.n === 0) continue; // already empty, nothing uploaded
+      if (b.n === 0) {
+        // Idle: park it dark first (a stale `count` would keep drawing last
+        // tick's instances), then reap once the idle window elapses so the
+        // grown instance buffers are actually released.
+        if (im.count !== 0) {
+          im.count = 0;
+          im.instanceMatrix.needsUpdate = true;
+        }
+        b.idle = (b.idle | 0) + 1;
+        if (b.idle >= _INST_BUCKET_IDLE_TICKS) {
+          try { im.parent?.remove(im); } catch (_) {}
+          // The bucket material is OUR clone (_appendInstances); the geometry
+          // is the shared `_instGeomCache` clone and is NOT disposed here.
+          try { im.material?.dispose?.(); } catch (_) {}
+          try { im.dispose?.(); } catch (_) {}
+          this._instBuckets.delete(key);
+        }
+        continue;
+      }
+      b.idle = 0;
       im.count = b.n;
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
@@ -1695,11 +1783,20 @@ export class ParticleManager {
     // Wave 3 / L1 fix (2026-05-28) — `tick()`'s auto-removal branch now
     // mirrors this disposal walk, so naturally-finishing emitters no
     // longer leak per-slot materials.
+    //
+    // 2026-08-03 — route through `_reclaimSlotMaterial`, which is what its own
+    // contract already claimed ("replaces the two teardown-site dispose calls").
+    // Only the tick() site had been converted, so THIS path — the one every
+    // PlayEffect one-shot reap, entity-remove reap, LB-evict reap and
+    // addEmitter-replace takes — still dispose()'d each clone and left the
+    // pool starved, re-paying the per-cast clone churn the pool exists to kill.
+    // Non-poolable materials still fall through to _disposeMaterialIfOwned
+    // inside the helper, so cache-owned / untagged handling is unchanged.
     if (e.partStorage) {
       for (let i = 0; i < e.partStorage.length; i++) {
         const slotMesh = e.partStorage[i];
         if (!slotMesh) continue;
-        _disposeMaterialIfOwned(slotMesh.material);
+        this._reclaimSlotMaterial(slotMesh.material);
       }
     }
     return this.particleTable.delete(emitterId);

@@ -394,6 +394,30 @@ function _installPatchSetCacheKey(material) {
   };
 }
 
+// === 2026-08-03 — live handles on userData must be NON-ENUMERABLE ===========
+// three's `Material.copy()` does `userData = JSON.parse(JSON.stringify(...))`,
+// and a stashed `shader.uniforms` pins EVERY bound texture (map, normalMap,
+// shadow maps) — so an enumerable slot makes each `.clone()` serialize the
+// material's whole texture set via `Array.from(image.data)`. Non-enumerable
+// keeps `mat.userData.xShaderUniforms` reads working (csm.js, landblock_lru.js,
+// the capture scripts) while JSON.stringify AND object spread both skip it; a
+// clone builds its own handle from its own compile anyway.
+// INVARIANT: never assign a Texture / TypedArray / shader.uniforms to an
+// enumerable userData key.
+function _defineLiveUserData(material, key, value) {
+  const ud = (material.userData = material.userData || {});
+  try {
+    Object.defineProperty(ud, key, {
+      value,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  } catch (_) {
+    ud[key] = value; // fail-soft (frozen userData) — behaviour unchanged
+  }
+}
+
 // Compose a new onBeforeCompile hook with whatever was previously set on
 // the material. Each shader-patch installer (detail, CSM, ...) calls
 // this so the chain is preserved — three.js calls onBeforeCompile ONCE
@@ -692,7 +716,7 @@ export function applyBakedVertexLightPatch(material, opts = {}) {
 
     // Stash for post-compile introspection by tests / capture scripts, same
     // convention as lightClampShaderUniforms.
-    material.userData.acBakedLightUniforms = shader.uniforms;
+    _defineLiveUserData(material, "acBakedLightUniforms", shader.uniforms);
   });
   material.userData = material.userData ?? {};
   material.userData.__acBakedLight = true;
@@ -741,7 +765,7 @@ void main() {`
     // Stash the patched shader handle back on the material so tests
     // can read uniforms post-compile (three.js doesn't expose
     // `shader.uniforms` after the upload otherwise).
-    material.userData.detailShaderUniforms = shader.uniforms;
+    _defineLiveUserData(material, "detailShaderUniforms", shader.uniforms);
   });
   // Force shader re-compile if the material was already used.
   material.needsUpdate = true;
@@ -947,7 +971,7 @@ varying float vCsmViewDepth;`
 
     // Stash the uniforms so `refreshCsmUniforms` can update the texture
     // + matrix references each frame post-compile.
-    material.userData.csmShaderUniforms = shader.uniforms;
+    _defineLiveUserData(material, "csmShaderUniforms", shader.uniforms);
   });
   // Register on the bundle's set so refreshCsmUniforms walks us.
   if (csmState.patchedMaterials && typeof csmState.patchedMaterials.add === "function") {
@@ -1325,7 +1349,7 @@ if (_pomLodG > 0.001) {
 
     // Stash the patched shader handle so tests can read uniforms post-
     // compile (three.js doesn't expose shader.uniforms otherwise).
-    material.userData.pomShaderUniforms = shader.uniforms;
+    _defineLiveUserData(material, "pomShaderUniforms", shader.uniforms);
   });
   material.needsUpdate = true;
 }
@@ -2095,7 +2119,7 @@ function _installLightClampShaderPatch(material) {
       .replace("#include <lights_fragment_begin>", patchedBegin);
 
     // Stash for post-compile introspection by tests / capture scripts.
-    material.userData.lightClampShaderUniforms = shader.uniforms;
+    _defineLiveUserData(material, "lightClampShaderUniforms", shader.uniforms);
   });
 
   material.needsUpdate = true;
@@ -2368,6 +2392,75 @@ export function estimateMatEntryBytes(tex, normalTex, heightTex) {
   );
 }
 
+// === 2026-08-03 — seam-height side channel ==================================
+// INVARIANT: nothing may store a THREE.Texture (or a typed array) in a
+// `material.userData`. three's `Material.copy()` does
+// `userData = JSON.parse(JSON.stringify(source.userData))`, and Texture.toJSON
+// serializes a DataTexture via `Array.from(image.data)` — so a userData-held
+// height plane costs a full pixel-array serialize + reparse on EVERY clone
+// (getCachedFloorBias / StaticBias / CellBaked / Variant / FrontSide are all
+// default-path). The statics atlas still needs the plane (`packNraLayer`), so
+// it lives here, keyed weakly by material, and is inherited explicitly at each
+// clone site via `_inheritHeightTex`.
+const _heightTexByMaterial = new WeakMap();
+
+/** The seam-height plane for a material, or null. Read by static_atlas.js. */
+export function heightTexForMaterial(mat) {
+  if (!mat) return null;
+  return _heightTexByMaterial.get(mat) || null;
+}
+
+/** Carry the base's height plane onto a derived clone (clones share textures). */
+function _inheritHeightTex(base, clone) {
+  const h = base && _heightTexByMaterial.get(base);
+  if (h && clone) _heightTexByMaterial.set(clone, h);
+}
+
+// === 2026-08-03 — derived-clone re-seat ====================================
+// The surface-derived half of a material, i.e. everything `_materialFromFlags`
+// / `applySurfaceRenderState` / `_applyRough` can set. Deliberately EXCLUDES
+// `side` and everything the clone's own patch owns (onBeforeCompile,
+// customProgramCacheKey, the userData patch flags below).
+const _RESEAT_FIELDS = [
+  "map", "normalMap", "emissiveMap", "roughnessMap", "aoMap",
+  "roughness", "metalness", "aoMapIntensity", "emissiveIntensity",
+  "transparent", "opacity", "depthWrite", "alphaTest",
+  "blending", "blendSrc", "blendDst", "blendEquation",
+  "forceSinglePass", "fog",
+];
+// Clone-local markers that must survive a re-seat: `_patchSetCacheKey` reads
+// them, so losing one collapses the clone onto the un-patched program.
+const _RESEAT_KEEP_USERDATA = [
+  "__cacheOwned", "__floorBiased", "__staticBiased", "__acBakedLight",
+  "__aoPatched", "__depthBiased", "__vfxSetKey", "__vfxColorPassOnly",
+  "detailEnabled", "csmEnabled", "pomEnabled", "lightClampRetail",
+];
+/** Non-enumerable live handles (see `_defineLiveUserData`) — a spread skips them. */
+const _LIVE_USERDATA_KEYS = [
+  "acBakedLightUniforms", "detailShaderUniforms", "csmShaderUniforms",
+  "pomShaderUniforms", "lightClampShaderUniforms",
+];
+
+function _reseatSurfaceState(clone, base) {
+  for (const k of _RESEAT_FIELDS) clone[k] = base[k];
+  // Colour-valued fields are objects — copy VALUES so the clone never aliases
+  // the base's Color/Vector2.
+  if (clone.color && base.color) clone.color.copy(base.color);
+  if (clone.emissive && base.emissive) clone.emissive.copy(base.emissive);
+  if (clone.normalScale && base.normalScale) clone.normalScale.copy(base.normalScale);
+  const prev = clone.userData || {};
+  const keep = {};
+  for (const k of _RESEAT_KEEP_USERDATA) if (k in prev) keep[k] = prev[k];
+  clone.userData = { ...(base.userData || {}), ...keep, __cacheOwned: true };
+  // Carry the clone's own live handles across — the spread above skips
+  // non-enumerable keys, and csm.js reads csmShaderUniforms every frame.
+  for (const k of _LIVE_USERDATA_KEYS) {
+    if (prev[k] !== undefined) _defineLiveUserData(clone, k, prev[k]);
+  }
+  _inheritHeightTex(base, clone);
+  clone.needsUpdate = true;
+}
+
 export class MaterialCache {
   /**
    * @param {{
@@ -2443,6 +2536,13 @@ export class MaterialCache {
     this._texchanInit = false;
     /** Materials awaiting the manifest (built before it loaded): [mat, did]. */
     this._pendingRough = [];
+    /**
+     * 2026-08-03 — the texchan roughness/AO planes minted by `_applyRough`,
+     * keyed by DID. They hang off the material only, so without this map
+     * neither `_evictMatEntry` nor `dispose()` could ever free them.
+     * @type {Map<number, THREE.DataTexture[]>}
+     */
+    this._texchanTextures = new Map();
     // Render-completeness audit (2026-05-29) — animated SurfaceTextures.
     // `_animFramesFetch` is the wasm `fetchSurfaceAnimFrames(did)` getter
     // (null on legacy builds → animation silently disabled). `_animatedMaterials`
@@ -2451,7 +2551,7 @@ export class MaterialCache {
     // cache material's `.map` is correct: every instance of a water/lava
     // surface should cycle in sync.
     this._animFramesFetch = opts.animFramesFetch || null;
-    /** @type {Map<number, {mat: any, frames: any[], idx: number, accumS: number}>} */
+    /** @type {Map<number, {mat: any, frames: any[], idx: number, accumS: number, cyclesEmissive?: boolean}>} */
     this._animatedMaterials = new Map();
     /** Set of DIDs already checked for animation (avoid re-fetching). */
     this._animChecked = new Set();
@@ -2892,6 +2992,13 @@ export class MaterialCache {
         for (const f of anim.frames) if (f) disposables.push(f);
       }
     }
+    // Phase-5 texchan planes (roughness/AO). They hang off the material and
+    // live in no other map, so they are freed here or never.
+    const tcPlanes = this._texchanTextures && this._texchanTextures.get(did);
+    if (tcPlanes) {
+      this._texchanTextures.delete(did);
+      for (const t of tcPlanes) if (t) disposables.push(t);
+    }
     // Let a re-install re-check animation for this DID.
     this._animChecked.delete(did);
     // X6 — same reason: a re-install must be allowed to re-ask for BC7 (the
@@ -3071,6 +3178,10 @@ export class MaterialCache {
     if (!front) {
       front = base.clone();
       front.side = THREE.FrontSide;
+      // Match the other derived-clone sites: re-seat userData from the base
+      // (Material.copy hands back a JSON round-trip) and carry the height plane.
+      front.userData = { ...(base.userData || {}), __cacheOwned: true };
+      _inheritHeightTex(base, front);
       this.frontSideMaterials.set(key, front);
     }
     return front;
@@ -3092,6 +3203,7 @@ export class MaterialCache {
     if (!v) {
       v = base.clone();
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
+      _inheritHeightTex(base, v);
       applyFloorDepthBias(v);
       this.floorBiasMaterials.set(key, v);
     }
@@ -3123,6 +3235,7 @@ export class MaterialCache {
     if (!v) {
       v = base.clone();
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
+      _inheritHeightTex(base, v);
       applyBakedVertexLightPatch(v, { suppressDirect: VERTEX_BAKE.suppressDirect });
       this.cellBakedMaterials.set(key, v);
     }
@@ -3137,6 +3250,7 @@ export class MaterialCache {
     if (!v) {
       v = base.clone();
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
+      _inheritHeightTex(base, v);
       applyStaticDepthBias(v);
       this.staticBiasMaterials.set(key, v);
     }
@@ -3172,6 +3286,7 @@ export class MaterialCache {
       // casters with its internal _depthMaterial (which never sees our
       // onBeforeCompile/userData). See scene3d/vfx/shadow_guard.js.
       v.userData = { ...(base.userData || {}), __cacheOwned: true, __vfxSetKey: setKey, __vfxColorPassOnly: true };
+      _inheritHeightTex(base, v);
       try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariant builder failed for ${key}:`, e); }
       v.needsUpdate = true;
       this.vfxVariants.set(key, v);
@@ -3218,6 +3333,30 @@ export class MaterialCache {
       }
     }
     return v;
+  }
+
+  /**
+   * 2026-08-03 — re-seat the live derived clones of `did` onto its (re)installed
+   * base. Replaces the old `delete` sweep: the map entry is NOT the only
+   * reference, so dropping it stranded every mesh already holding the clone on
+   * the stale (fallback-derived) material forever AND leaked the clone plus its
+   * compiled program. Re-seating fixes both — the meshes hold the same object.
+   * Fail-soft per clone.
+   */
+  _reseatVariantsForDid(did) {
+    const key = did >>> 0;
+    const base = this.materials.get(key);
+    if (!base) return;
+    for (const map of [
+      this.frontSideMaterials,
+      this.floorBiasMaterials,
+      this.staticBiasMaterials,
+      this.cellBakedMaterials,
+    ]) {
+      const v = map && map.get(key);
+      if (!v || v === base) continue;
+      try { _reseatSurfaceState(v, base); } catch (_) { /* fail-soft */ }
+    }
   }
 
   /** The DoubleSide base material for a surface (original `getCached` body). */
@@ -3700,9 +3839,17 @@ export class MaterialCache {
         this._texchanManifest = m;
         const pend = this._pendingRough;
         this._pendingRough = [];
-        for (const [mat, did] of pend) this._resolveRough(mat, did);
+        for (const [mat, did] of pend) {
+          // The DID can have been evicted + re-installed while the manifest
+          // loaded; only the material still holding the entry may be upgraded.
+          if (this.materials.get(did >>> 0) !== mat) continue;
+          this._resolveRough(mat, did);
+        }
       })
-      .catch(() => { this._texchanManifest = new Map(); });
+      .catch(() => {
+        this._texchanManifest = new Map();
+        this._pendingRough = []; // never drained on this path — don't pin the materials
+      });
   }
 
   /** Attach the baked roughnessMap for `did` to `mat` (gated, fail-soft). Called
@@ -3716,38 +3863,68 @@ export class MaterialCache {
   }
 
   _resolveRough(mat, did) {
-    const stem = this._texchanManifest.get(did >>> 0);
+    const key = did >>> 0;
+    const stem = this._texchanManifest.get(key);
     if (!stem || !this._texchanSource) return;
     const tc = this._texchanSource.getByKey(stem, "texchan"); // sync: decoded|null (kicks fetch)
-    if (tc) { this._applyRough(mat, tc); return; }
-    // Cold: upgrade once the async fetch resolves, then re-mint clone variants.
+    // The sync arm runs at BUILD time, before `_installCacheEntry` — no
+    // identity guard is possible or needed there.
+    if (tc) { this._applyRough(mat, tc, key); return; }
+    // Cold: upgrade once the async fetch resolves, then re-seat clone variants.
     this._texchanSource.getByKeyAsync(stem, "texchan").then((t) => {
-      if (!t || !mat) return;
-      this._applyRough(mat, t);
-      this.frontSideMaterials.delete(did >>> 0);
-      this.floorBiasMaterials.delete(did >>> 0);
-      this.staticBiasMaterials.delete(did >>> 0);
-      this.cellBakedMaterials.delete(did >>> 0);
+      if (!t) return;
+      // 2026-08-03 identity guard (the sibling pattern at `_maybeUpgradeToBc7` /
+      // `_maybeSetupSurfaceAnimation`): an evict+re-install across the fetch
+      // would otherwise attach two fresh GPU textures to a dead material.
+      if (this.materials.get(key) !== mat) return;
+      this._applyRough(mat, t, key);
+      this._reseatVariantsForDid(key);
     });
   }
 
-  _applyRough(mat, tc) {
+  /**
+   * 2026-08-03 — `did` is required: the planes minted here are owned by the
+   * cache (`_texchanTextures`) so eviction/teardown can free them.
+   */
+  _applyRough(mat, tc, did) {
     if (!tc) return;
     let touched = false;
+    let bytes = 0;
     if (tc.roughness) {
       const rtex = surfacePixelsToRoughnessTexture(tc.roughness, tc.width, tc.height);
-      if (rtex) { mat.roughnessMap = rtex; touched = true; }
+      if (rtex) { mat.roughnessMap = rtex; touched = true; bytes += this._trackTexchanTexture(did, rtex); }
     }
     // F1 — baked cavity AO. r184 lets aoMap use the main "uv" (channel 0); reads
     // .r (RedFormat). Conservative intensity so the darkening stays subtle (AO
     // can only darken, never chrome). Look-polish owed to a 1070 eye-test.
     if (tc.ao) {
       const atex = surfacePixelsToAoTexture(tc.ao, tc.width, tc.height);
-      if (atex) { mat.aoMap = atex; mat.aoMapIntensity = aoMapIntensityValue(); touched = true; }
+      if (atex) {
+        mat.aoMap = atex;
+        mat.aoMapIntensity = aoMapIntensityValue();
+        touched = true;
+        bytes += this._trackTexchanTexture(did, atex);
+      }
     }
     if (!touched) return;
+    // No-op until the entry exists (the build-time sync arm runs pre-install).
+    if (bytes > 0) this._addMatEntryBytes(did >>> 0, bytes);
     mat.needsUpdate = true;
-    mat.userData = { ...(mat.userData || {}), texchanRoughness: !!tc.roughness, texchanAo: !!tc.ao };
+    // Mutate in place: this can run POST-compile, and a `{...userData}` spread
+    // would drop the non-enumerable live handles (`_defineLiveUserData`).
+    mat.userData = mat.userData || {};
+    mat.userData.texchanRoughness = !!tc.roughness;
+    mat.userData.texchanAo = !!tc.ao;
+  }
+
+  /** Take ownership of one texchan plane for `did`; returns its byte cost. */
+  _trackTexchanTexture(did, tex) {
+    if (!tex || !Number.isFinite(did)) return 0;
+    const key = did >>> 0;
+    let list = this._texchanTextures.get(key);
+    if (!list) { list = []; this._texchanTextures.set(key, list); }
+    list.push(tex);
+    return estimateTextureBytes(tex);
   }
 
   _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides, heightTexture, surfaceFloats) {
@@ -4112,10 +4289,12 @@ export class MaterialCache {
       // S3 (2026-07-30) — the statics atlas packs this seam-height field into
       // its nra ALPHA channel (static_atlas.js `packNraLayer`) and marches it
       // per-fragment (`?statPom`). The atlas REPLACES the member material
-      // wholesale, so a userData reference is the only channel through which
-      // the per-surface height survives into the atlased path. CPU-side
-      // pixels only — never bound as a sampler by the bucket material.
-      mat.userData = { ...(mat.userData || {}), heightTex: heightTexture };
+      // wholesale, so this side channel is the only route by which the
+      // per-surface height survives into the atlased path. CPU-side pixels
+      // only — never bound as a sampler by the bucket material. 2026-08-03:
+      // held in the `_heightTexByMaterial` WeakMap, NOT userData (see the
+      // invariant at that declaration).
+      _heightTexByMaterial.set(mat, heightTexture);
     }
     // Retail draws a surface ONCE (see applyRetailSinglePass). Covers the LEGACY
     // opts ladder (`useUnifiedDecoder` false), whose `opts.transparent = true`
@@ -4253,14 +4432,11 @@ export class MaterialCache {
       this._noteHandout(did);
       if (this._negCacheEnabled) this.missingSurfaces.delete(did);
       // 2026-05-30 — a real (textured) material just landed for this surface;
-      // drop any stale FrontSide clone that getCached(did,false) minted from
-      // the mapless fallback during a spawn-race, so the next getCached
-      // re-clones from THIS base. Without this, single-sided (?perPolyCull)
-      // meshes keep the fallback clone forever even after the texture arrives.
-      this.frontSideMaterials.delete(did);
-      this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
-      this.staticBiasMaterials.delete(did); // twin of the FrontSide invalidation
-      this.cellBakedMaterials.delete(did); // twin of the FrontSide invalidation
+      // any clone getCached*(did) minted from the mapless fallback during a
+      // spawn-race must adopt it. 2026-08-03: re-seat in place rather than
+      // delete — the meshes already holding those clones are the reference that
+      // matters, and a delete left them grey for the session.
+      this._reseatVariantsForDid(did);
       // Render-completeness audit (2026-05-29) — kick animated-frame setup.
       this._maybeSetupSurfaceAnimation(did, mat, tex);
       return mat;
@@ -4922,13 +5098,9 @@ export class MaterialCache {
     this._installCacheEntry(did, mat, tex, normalTex, heightTex);
     this._maybeUpgradeToBc7(did, mat, rsIdV); // X6: no-op unless ?texBc7=on + BPTC
     if (this._negCacheEnabled) this.missingSurfaces.delete(did);
-    // 2026-05-30 — invalidate the stale fallback-derived FrontSide clone (see
-    // the 6-space twin in get()) so getCached(did,false) re-clones from this
-    // textured base after a spawn-race fallback.
-    this.frontSideMaterials.delete(did);
-    this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
-    this.staticBiasMaterials.delete(did); // twin of the FrontSide invalidation
-    this.cellBakedMaterials.delete(did); // twin of the FrontSide invalidation
+    // 2026-05-30 — adopt this textured base into any stale fallback-derived
+    // clone (see the 6-space twin in get()). 2026-08-03: re-seat, don't delete.
+    this._reseatVariantsForDid(did);
     // Render-completeness audit (2026-05-29) — kick animated-frame setup.
     this._maybeSetupSurfaceAnimation(did, mat, tex);
     return mat;
@@ -4981,6 +5153,13 @@ export class MaterialCache {
         // so every live per-DID variant must be re-pointed BEFORE the RGBA8
         // twin is freed — otherwise a `?perPolyCull` FrontSide clone or an
         // EnvCell floor/static-bias clone would sample a disposed texture.
+        // 2026-08-03 — the Luminous path ALIASES the albedo as `emissiveMap`
+        // (`applyFloatLumDiffuse`), so every alias must move with `map` or the
+        // emissive term samples the RGBA8 twin freed below.
+        if (mat.emissiveMap === old) {
+          mat.emissiveMap = tex;
+          mat.needsUpdate = true;
+        }
         for (const m of [
           this.frontSideMaterials,
           this.floorBiasMaterials,
@@ -4988,8 +5167,13 @@ export class MaterialCache {
           this.cellBakedMaterials,
         ]) {
           const clone = m && m.get(d);
-          if (clone && clone.map === old) {
+          if (!clone) continue;
+          if (clone.map === old) {
             clone.map = tex;
+            clone.needsUpdate = true;
+          }
+          if (clone.emissiveMap === old) {
+            clone.emissiveMap = tex;
             clone.needsUpdate = true;
           }
         }
@@ -4998,8 +5182,13 @@ export class MaterialCache {
         // (size 0) unless a frag/MECH-B component built one for this surface.
         if (this.vfxVariants && typeof this.vfxVariants.values === "function") {
           for (const v of this.vfxVariants.values()) {
-            if (v && v.map === old) {
+            if (!v) continue;
+            if (v.map === old) {
               v.map = tex;
+              v.needsUpdate = true;
+            }
+            if (v.emissiveMap === old) {
+              v.emissiveMap = tex;
               v.needsUpdate = true;
             }
           }
@@ -5078,8 +5267,14 @@ export class MaterialCache {
           }
           frames.push(t);
         }
+        // 2026-08-03 — the Luminous path aliases the albedo as `emissiveMap`
+        // (`applyFloatLumDiffuse`). Lava/effect surfaces are Luminous AND
+        // animated, so the alias has to cycle with `map` or the glow stays
+        // frozen on frame 0 under a moving albedo.
+        const cyclesEmissive = !!baseTex && mat.emissiveMap === baseTex;
         mat.map = frames[0];
-        this._animatedMaterials.set(d, { mat, frames, idx: 0, accumS: 0 });
+        if (cyclesEmissive) mat.emissiveMap = frames[0];
+        this._animatedMaterials.set(d, { mat, frames, idx: 0, accumS: 0, cyclesEmissive });
         // `?matBudgetMB` accounting: the frame set is `frameCount × w×h×4`
         // JS-heap bytes hanging off this DID — by far the largest per-entry
         // retainer when it exists. Charge it to the entry (recency
@@ -5112,7 +5307,10 @@ export class MaterialCache {
       // stall doesn't cause a catch-up burst).
       entry.accumS = 0;
       entry.idx = (entry.idx + 1) % entry.frames.length;
-      entry.mat.map = entry.frames[entry.idx];
+      const frame = entry.frames[entry.idx];
+      entry.mat.map = frame;
+      // Luminous surfaces alias the albedo as emissiveMap — cycle both.
+      if (entry.cyclesEmissive) entry.mat.emissiveMap = frame;
     }
   }
 
@@ -5190,6 +5388,16 @@ export class MaterialCache {
       }
       this._animatedMaterials.clear();
     }
+    // Phase-5 texchan planes (roughness/AO) — cache-owned, held in no other map.
+    if (this._texchanTextures) {
+      for (const list of this._texchanTextures.values()) {
+        for (const t of list) {
+          try { t?.dispose?.(); } catch (_) {}
+        }
+      }
+      this._texchanTextures.clear();
+    }
+    if (this._pendingRough) this._pendingRough.length = 0;
     try { this.fallbackMaterial?.dispose?.(); } catch (_) {}
     if (this.wireMatToFill) this.wireMatToFill.clear();
     if (this._animChecked) this._animChecked.clear();

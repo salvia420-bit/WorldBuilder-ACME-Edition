@@ -80,3 +80,62 @@ gemsparkle 35. All edited files `node --check` clean.
 
 Reminder: JS-only change set — no wasm rebuild needed, but dev loads need
 `?nosw=1` once or the service worker serves the old JS.
+
+---
+
+# Round 2 (same day) — fresh random spots: 21 findings, 21 fixes + 1 deferred
+
+Second pass over sections round 1 never touched: buildings + far_terrain (main),
+materials + statics + static_atlas (agent A), lighting + play_effect_vfx +
+particles (agent B). All 21 findings read-verified before fixing; both agents
+additionally proved their fixes against deliberately-reverted source.
+
+## Fixed (tasks R2#1–R2#21)
+
+| # | Defect | Fix | Verified |
+|---|---|---|---|
+| R2#1 | `material.userData.heightTex` held a live DataTexture → three r184's `Material.copy` JSON-serialized the whole height bitmap on EVERY cache clone (default path); FrontSide clones additionally retained the parsed blob | WeakMap side-channel (`heightTexForMaterial()`), all 5 clone sites inherit explicitly; BONUS same-root-cause: the five `*ShaderUniforms` userData stashes made non-enumerable (`_defineLiveUserData`) so bound textures stay out of the JSON | Measured 3.92→0.01 ms/clone (388×) and 28.43→0.01 (2758×); packNraLayer data-path harness green |
+| R2#2 | First outdoor light-pool tick resurrected the atmosphere-zeroed legacy sun to 1.0 → two suns, one frozen at a fixed heading, every default session | Unconditional indoor capture (records 0); outdoor arm restores ONLY a captured value | Scratch harness reproduced `i=1` pre-fix; test_light_pool 14✓ |
+| R2#3 | `?buildingBatch` (default-on) placements never reach `buildingsGroup`, so evict couldn't prune their `buildingMap3d` keys → post-evict re-bake skipped every placement → buildings permanently vanished on re-approach | Prefix-prune of `buildingMap3d` by the placementKey's leading 8-hex landblockId in evict()'s building arm | All 5 LRU suites green |
+| R2#4 | BC7 upgrade disposed the RGBA8 texture `emissiveMap` still referenced (every luminous surface under `?texBc7=on`) | `emissiveMap` re-pointed on base + 4 variants + vfxVariants before dispose | Re-read (needs BPTC GPU — eye-test queue) |
+| R2#5 | Variant-map invalidation was a bare `.delete()` — stale grey clones stayed on live meshes forever + orphaned materials | In-place re-seat (`_reseatVariantsForDid`): same object re-adopts the new surface state, meshes heal automatically | Harness: identity preserved, texture adopted, no Color aliasing |
+| R2#6 | `_resolveRough` async arm: no identity guard + minted roughness/AO textures tracked by nothing (unfreeable) | Guard added; `_texchanTextures` tracked, freed on evict + dispose, bytes charged | Harness: 2 planes tracked → disposed on evict |
+| R2#7 | Statics evicted-during-build guards gated on `staticsTimeSlice` while ~8 awaits run unconditionally → orphan/duplicate bake under `?noStaticsTimeSlice=1` | Residency re-checks made unconditional | Re-read + suites |
+| R2#8 | `combatFxEnabled()` read `!== "off"` directly under its own "STRICT === on, do NOT copy that shape" contract — un-eye-tested splatter path live by default | Strict `=== "on"`; splatter now genuinely opt-in (eye-test to promote later) | Harness: 6-of-7 inputs read ON pre-fix |
+| R2#9 | Deferred emitter spawns guarded on `entityMap.has()` → parented to disposed rigs on same-guid respawn | Identity guards (`_isLiveInstance`) at both sites | Harness reproduced `parent=OLD-ROOT` pre-fix |
+| R2#10 | Cell-scoped light selection invalidated only by (renderSet, count) → count-preserving churn kept released ghost lights lit and new torches dark indefinitely | Per-light identity hash (`__lightSeqId` FNV) folded into the rebuild key | Harness reproduced ghost selection pre-fix; test_cell_lights 18✓ |
+| R2#11 | `destroyParticleEmitter` bypassed the slot-material pool its own contract names → per-cast clone churn on every reaped emitter | One-line route through `_reclaimSlotMaterial` | test_particles 64✓ (4 assertions updated to assert the invariant, not the mechanism) |
+| R2#12 | Animated luminous surfaces (lava) cycled `map` but not `emissiveMap` → frozen glow under a moving surface | `cyclesEmissive` recorded at setup; both maps advance | Harness: both advance together |
+| R2#13 | Recycled atlas layer committed even when the diffuse write was skipped → previous surface's texels rendered on an unrelated prop | Zero-fill on wrong-stride (RGBA8); release-layer + passthrough on BC7 write failure; counters added | Re-read; counters should stay 0 |
+| R2#14 | Walk-in atlas pre-filter used the pre-X6 `img.data` gate → BC7 statics never batched on the walking path | Shared `isBc7AtlasTexture()` used by feed + pre-filter | Re-read (BPTC — eye-test queue) |
+| R2#15 | Atlas per-node catch had no undo (leaked layer refcounts; live-but-unrecorded instances double-rendered) + O(n²) `passthrough.includes` | Partial-commit tracking + unwind in catch (`ptErrorUnwound`); includes-scan dropped | Re-read; stats counter |
+| R2#16 | `_instGeomCache` never disposed; empty instancing buckets lived forever | Dispose-listener eviction on source geometry; idle-bucket reap after 180 ticks | test_particle suites green |
+| R2#17 | Culled count-bounded emitters could never drain (comment claimed otherwise) | 30 s continuous-cull force-stop for `totalParticles>0 && totalSeconds===0`; persistent emitters excluded; stat counter | Harness incl. persistent-emitter negative case |
+| R2#18 | `zeroLightPool` truncated selections without clearing `__lightPoolSel` → permanent 0.8× sort bias | Tags cleared before truncation | Harness reproduced stale tag pre-fix |
+| R2#19 | `(x ?? -1) >>> 0 >= 0` — precedence made the partIndex guard tautological | Explicit `Number.isInteger(raw) && raw >= 0` | Harness |
+| R2#20 | `buildSingletonNode` all-bands-failed fallback returned a mesh whose transform was already zeroed onto the discarded LOD | Transform restored from the LOD before returning | Re-read (latent path) |
+| R2#21 | `bakeBuildingsRing` cached `incomplete` (decode-starved) bakes cross-LB, bypassing the per-LB poisoning quarantine | `bake.incomplete` skipped, mirroring the per-LB arm | Re-read (test/capture path) |
+
+## Deferred / known remaining (round 2)
+
+- **Task #42 (open):** `BLOCKING_PARTICLE_PARITY_ON` (`play_effect_vfx.js:2287`)
+  has the same `!== "off"` footgun under a default-off comment, with twins in
+  entities.js and statics.js — `test_a11_s0_blocking_particle`'s 3 remaining
+  failures are pre-existing assertions demanding the strict form. Needs one
+  coordinated pass + a retail-parity decision; not fixed this round.
+- **1070 eye-test queue additions:** R2#4 + R2#14 (`?texBc7=on` on BPTC),
+  `?statPom=on` relief still marching after the R2#1 height-channel change,
+  R2#8 (`?combatFx=on` splatter A/B to promote default-on properly).
+- far_terrain.js minor notes (not tasked): bake-rig material clone not disposed
+  on `bumpFarCompositeEpoch`/teardown; a patch retired mid-fetch repopulates
+  its orphaned `lbData` (GC-recoverable, never GPU-uploaded).
+- materials-agent notes: `packNraLayer` return ignores height-only surfaces
+  (feeds an unread field); `consolidateSingletonsViaTexArray` is dead code.
+
+## Green at round-2 commit time
+
+light_pool 14, cell_lights 18, particles 64, rp6_cull 16, lru_light_eviction 9,
+all LRU suites (evict 39, dualstate 26, park_storm 36, sealed_park 46,
+fixed_grid 33), animated_scenery 16, vertex_bake_flags 61, a11_s0 45/48 (3 =
+the deferred #42 assertions, pre-existing). Materials-agent ran a full 198-suite
+A/B: identical pass/fail to pristine baseline. `node --check` clean everywhere.

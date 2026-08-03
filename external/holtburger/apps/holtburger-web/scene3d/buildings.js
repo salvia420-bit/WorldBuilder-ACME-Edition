@@ -1151,9 +1151,16 @@ export async function bakeBuildingsRing(
         )
       );
       for (let i = 0; i < toBake.length; i += 1) {
-        if (bakeResults[i]) {
-          opts.bakeCache.set(toBake[i], bakeResults[i]);
-        }
+        const bake = bakeResults[i];
+        if (!bake) continue;
+        // streamFix parity (2026-08-03) — NEVER cache an incomplete
+        // (decode-starved) bake cross-LB: same quarantine as the per-LB
+        // baker's localBakes arm above; a poisoned entry strips this model
+        // from every future LB for the whole session. Ring placements for
+        // an incomplete model just skip this pass (the per-LB streaming
+        // path retries under its bounded budget).
+        if (bake.incomplete) continue;
+        opts.bakeCache.set(toBake[i], bake);
       }
     }
 

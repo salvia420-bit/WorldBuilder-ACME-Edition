@@ -1120,13 +1120,26 @@ check(
     secondEmitter != null && secondEmitter !== firstEmitter,
     `same=${secondEmitter === firstEmitter}`
   );
-  // destroyParticleEmitter → _disposeMaterialIfOwned disposes every
-  // __disposable per-slot clone. The bare-`delete` bug left these alive.
-  const disposedCount = firstSlotMats.filter((m) => (m.__disposeCount | 0) >= 1).length;
+  // The invariant is that the replace path must not ORPHAN the old clones —
+  // that is what the bare-`delete` bug did. 2026-08-03: teardown now routes
+  // through `_reclaimSlotMaterial` (its documented contract; only the tick()
+  // site had been converted), so the destination is the per-slot material POOL
+  // instead of dispose() — and the replace immediately re-pops them for the new
+  // emitter, which is exactly the recycle the pool exists for. Assert the
+  // invariant, not the mechanism: every old clone must be accounted for as
+  // disposed, parked in the pool, or re-adopted by the new emitter.
+  const pooledMats = new Set();
+  for (const arr of mgr._materialPool.values()) for (const m of arr) pooledMats.add(m);
+  const secondSlotMats = new Set(
+    (secondEmitter.partStorage || []).map((m) => m && m.material).filter(Boolean)
+  );
+  const accounted = firstSlotMats.filter(
+    (m) => (m.__disposeCount | 0) >= 1 || pooledMats.has(m) || secondSlotMats.has(m)
+  ).length;
   check(
-    "A11-S0(a): old emitter's per-slot materials disposed on replace (no leak)",
-    firstSlotMats.length > 0 && disposedCount === firstSlotMats.length,
-    `firstSlotMats=${firstSlotMats.length} disposed=${disposedCount}`
+    "A11-S0(a): old emitter's per-slot materials reclaimed on replace (no leak)",
+    firstSlotMats.length > 0 && accounted === firstSlotMats.length,
+    `firstSlotMats=${firstSlotMats.length} accounted=${accounted}`
   );
   // And the old slot meshes must be detached from any scene parent (the
   // bug orphaned them in the scene graph).

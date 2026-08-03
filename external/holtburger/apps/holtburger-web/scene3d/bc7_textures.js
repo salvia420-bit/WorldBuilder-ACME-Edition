@@ -561,15 +561,18 @@ export function upgradeMaterialToBc7(mat, rsId) {
   // Mark BEFORE the await so the atlas can see "verdict pending" on the very
   // first feed and defer instead of baking this surface in at 32 bpp.
   const already = src.known(rsId);
+  // 2026-08-03 — mutate userData in place, never `{...spread}`: this runs on a
+  // possibly-compiled material, and a spread drops the non-enumerable live
+  // handles materials.js `_defineLiveUserData` installs.
   if (!already) {
-    mat.userData = { ...(mat.userData || {}), __bc7Pending: true };
+    mat.userData = mat.userData || {};
+    mat.userData.__bc7Pending = true;
   }
   return src
     .getAsync(rsId)
     .then((parsed) => {
-      const ud = mat.userData || {};
+      const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
-      mat.userData = ud;
       if (!parsed) return false;
       const old = mat.map;
       const tex = makeBc7Texture(parsed, {
@@ -579,7 +582,8 @@ export function upgradeMaterialToBc7(mat, rsId) {
       });
       mat.map = tex;
       mat.needsUpdate = true;
-      mat.userData = { ...(mat.userData || {}), __bc7: true, __bc7RsId: rsId >>> 0 };
+      ud.__bc7 = true;
+      ud.__bc7RsId = rsId >>> 0;
       _stats.texturesBuilt += 1;
       _stats.singletonUpgrades += 1;
       // The RGBA8 twin is now unreferenced by this material. Only dispose it
@@ -589,9 +593,8 @@ export function upgradeMaterialToBc7(mat, rsId) {
       return { swapped: true, replaced: old };
     })
     .catch(() => {
-      const ud = mat.userData || {};
+      const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
-      mat.userData = ud;
       return false;
     });
 }
