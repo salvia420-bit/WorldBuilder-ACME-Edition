@@ -227,6 +227,41 @@ def build_health():
                     f"layer 'spawns/' has no .spawns.jsonl + source.sha256 at {d} "
                     "(README/wcid_to_setup alone is not a staged world)")
             continue
+        if name == "scenery":
+            # 2026-08-03: content-aware, same rationale as the spawns arm above
+            # — `dir_nonempty` is true for a directory holding only README.md,
+            # so a scenery/ that lost its payload passed --check, wrote
+            # "present": true into _health.json, printed a clean boot banner,
+            # and left the wasm client reading every per-LB 404 as
+            # "0 placements". That disappearance is the incident this module's
+            # docstring opens with; the hardening was never extended here.
+            jsonl = count_suffix(d, ".scenery.jsonl") if d.is_dir() else 0
+            present = jsonl > 0
+            layers[name] = {"present": present, "files": jsonl}
+            if not present:
+                failures.append(
+                    f"layer 'scenery/' has no .scenery.jsonl at {d} "
+                    "(a README-only directory is not a staged world)")
+            continue
+        if name == "shards":
+            # Shards are hex-prefix BUCKET DIRS of .bin records, not flat files,
+            # so `count_files` (non-recursive, files only) reads 0 and the old
+            # `files = 1 if present` fallback made the summary print
+            # "shards=1" unconditionally. Count populated buckets instead.
+            buckets = 0
+            if d.is_dir():
+                try:
+                    for e in os.scandir(d):
+                        if e.is_dir() and dir_nonempty(Path(e.path)):
+                            buckets += 1
+                except OSError:
+                    buckets = 0
+            present = buckets > 0
+            layers[name] = {"present": present, "files": buckets, "unit": "buckets"}
+            if not present:
+                failures.append(
+                    f"layer 'shards/' has no populated bucket directories at {d}")
+            continue
         present = d.is_dir() and dir_nonempty(d)
         files = count_files(d) if (name in COUNTED_DIRS and d.is_dir()) else (1 if present else 0)
         layers[name] = {"present": present, "files": files}

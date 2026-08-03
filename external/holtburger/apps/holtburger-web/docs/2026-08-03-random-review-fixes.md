@@ -370,3 +370,50 @@ contracts_panel. index.html: module body (10,219 lines) extracted and
 TRUNCATED grep (`rg … | head -8` over 13 matches) — "these two call sites no
 longer exist" was wrong for exactly that reason. Count matches before
 concluding absence.
+
+---
+
+# ⚠ CORRECTION (round 6) — some "green at commit time" evidence in this document was not real
+
+The round-6 audit of the TEST layer found suites that report PASS while
+verifying nothing. Two of them were cited **in this document** as regression
+evidence. Correcting the record rather than quietly fixing them:
+
+- **`test_visfid_p33_csm` and `test_visfid_c4_program_cache_key`** (cited in the
+  Round 3 green list, incl. as "the light-count/program-key lock") **silently
+  exit 0 when `THREE_PATH` is unset** — they print `SKIP (three not located)`
+  and return success. Verified: a bare `node test_visfid_c4_program_cache_key.mjs`
+  exits 0 having asserted nothing. Every sibling suite falls back to
+  `require.resolve("three")`, which resolves fine; these six had the fallback
+  removed. I *did* set `THREE_PATH` when I ran them, so the counts I reported
+  (16 / 15) were real numbers — but anyone re-running them bare, and any CI
+  path, gets a silent pass. `p33_csm` additionally dies on a stale import
+  splice once the env var IS set, so its "16" is a partial run before a crash.
+- **Round 1's note that `test_materials_paletted_lru.mjs` "needs THREE_PATH"**
+  was a misdiagnosis. It exits 0 without it, and *with* it fails on the same
+  broken splice — it is not a path problem.
+
+Other suites/tools that cannot fail, found in the same audit (tasks #111-#118):
+`validate_texture_decode` reports PASS/100% with **zero pixels compared**
+(cached records counted as passes; empty chain/format histograms are the tell);
+both `required: true` completeness validators discard their own drift unless
+`--strict`, which the orchestrator never passes; `perf-walk-1070` — the
+real-GPU harness — `process.exit(0)`s in a `finally` and measures walk distance
+by differencing landblock-LOCAL coordinates, the exact error
+`harness/lib/movement_gate.mjs` exists to forbid; `run-js-headless` counts any
+exit-0 as PASS and `run-all`'s skip detector matches only tier banners, not the
+two per-test SKIP banners actually in use; `test_a1_o4_single_frame_driver.mjs:81`
+assigns `threwAtPhase0 = false` **inside the catch**, so the guard it tests can
+be deleted and it still prints `[OK]`; `audit-flag-defaults` prints a real live
+polarity mismatch (`fogLerp`) and exits 0; `lint-harness-params`' reader-set is
+93% noise from a regex that harvests Rust borrow/try identifiers.
+
+**What this does and does not change.** It does not invalidate the *fixes* in
+rounds 1-5 — those were verified by reading, by reverted-source proofs, and by
+suites that do assert (the `tests/` directory audited clean, 55/56, and the
+round-4 Rust work ran real per-crate test suites). It does mean that where this
+document says "green", the right reading is "these suites reported green" —
+and for the six visfid ones that claim was hollow. The lesson is the one this
+codebase already had a name for: a flat counter or an unconditional pass means
+the thing never ran. It applies to test harnesses too, and I did not apply it
+to my own evidence until round 6 went looking.

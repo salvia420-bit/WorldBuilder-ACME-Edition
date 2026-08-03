@@ -31050,6 +31050,23 @@ struct PerGuidBridgeIndexes<'a> {
     rynth_id_times: &'a std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, f64>>,
     >,
+    // Rust review 2026-08-03 (F1): these three were pruned ONLY by
+    // `maintain_bridge_indexes_on_delete`, i.e. only on the ObjectDelete
+    // path — which by construction cannot fire on a GUID *reuse*. All
+    // three are written conditionally at ObjectCreate (`if table_did != 0`,
+    // `if …contains(MISSILE)`) or by a later server message, so a new
+    // occupant with a zero/absent value never overwrote the survivor. They
+    // move here so `prune_guid` is the SINGLE list both lifecycle entry
+    // points share.
+    projectile_index: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
+    >,
+    physics_script_table_index: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
+    entity_enchantments_index: &'a std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
+    >,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31066,6 +31083,14 @@ impl PerGuidBridgeIndexes<'_> {
     /// Every borrow is scoped to its own statement — callers routinely
     /// hold a `world.borrow_mut()` across these calls, never one of
     /// these maps.
+    ///
+    /// INVARIANT (Rust review 2026-08-03, F1): this is the ONE place a
+    /// guid-keyed per-entity cache is dropped. Both lifecycle entry points
+    /// reach it — `prune_on_delete` (ObjectDelete /
+    /// InventoryRemoveObject) and `prune_on_guid_reuse` (ObjectCreate for
+    /// a recycled GUID) — so a cache added to one path can no longer go
+    /// missing from the other. Adding a guid-keyed store anywhere in the
+    /// bridge means adding a field above and a line here, nowhere else.
     fn prune_guid(&self, g: u32) {
         self.latest_vendor_state.borrow_mut().remove(&g);
         {
@@ -31081,7 +31106,34 @@ impl PerGuidBridgeIndexes<'_> {
         self.identify_meta_index.borrow_mut().remove(&g);
         self.door_part_snapshot.borrow_mut().remove(&g);
         self.rynth_id_times.borrow_mut().remove(&g);
+        // F1: moved up from `maintain_bridge_indexes_on_delete` — the
+        // delete-only half of the split list. Cheap O(1) removals; absent
+        // GUIDs are a no-op.
+        self.projectile_index.borrow_mut().remove(&g);
+        self.physics_script_table_index.borrow_mut().remove(&g);
+        self.entity_enchantments_index.borrow_mut().remove(&g);
         REMOTE_AIRBORNE_STATE.with(|m| {
+            m.borrow_mut().remove(&g);
+        });
+        // F1: the thread_local half. These outlive `SessionHandle::free()`,
+        // so without a reuse-side prune they also carried a previous
+        // session's GUIDs across a relog.
+        PROJECTILE_GRAVITY_GUIDS.with(|s| {
+            s.borrow_mut().remove(&g);
+        });
+        DEFAULT_SCRIPT_INDEX.with(|m| {
+            m.borrow_mut().remove(&g);
+        });
+        UI_EFFECTS_INDEX.with(|m| {
+            m.borrow_mut().remove(&g);
+        });
+        RADAR_BLIP_COLOR_INDEX.with(|m| {
+            m.borrow_mut().remove(&g);
+        });
+        // A reused GUID must not inherit the previous occupant's action
+        // stamp — that would suppress the new entity's first swing/emote
+        // under the 15-bit `is_newer_u16` dedup.
+        MOTION_ACTION_STAMPS.with(|m| {
             m.borrow_mut().remove(&g);
         });
     }
@@ -31111,8 +31163,9 @@ impl PerGuidBridgeIndexes<'_> {
     }
 
     /// `(name, len)` for each per-guid store, in declaration order.
-    /// Backing for the `bridgeIndexSizes()` diag.
-    fn sizes(&self) -> [(&'static str, usize); 9] {
+    /// Backing for the `bridgeIndexSizes()` diag. Grew 9 → 17 with the F1
+    /// list merge; the soak asserts "stops growing", not a fixed row count.
+    fn sizes(&self) -> [(&'static str, usize); 17] {
         [
             ("latestVendorState", self.latest_vendor_state.borrow().len()),
             (
@@ -31128,6 +31181,32 @@ impl PerGuidBridgeIndexes<'_> {
             (
                 "remoteAirborneState",
                 REMOTE_AIRBORNE_STATE.with(|m| m.borrow().len()),
+            ),
+            ("projectileIndex", self.projectile_index.borrow().len()),
+            (
+                "physicsScriptTableIndex",
+                self.physics_script_table_index.borrow().len(),
+            ),
+            (
+                "entityEnchantmentsIndex",
+                self.entity_enchantments_index.borrow().len(),
+            ),
+            (
+                "projectileGravityGuids",
+                PROJECTILE_GRAVITY_GUIDS.with(|s| s.borrow().len()),
+            ),
+            (
+                "defaultScriptIndex",
+                DEFAULT_SCRIPT_INDEX.with(|m| m.borrow().len()),
+            ),
+            ("uiEffectsIndex", UI_EFFECTS_INDEX.with(|m| m.borrow().len())),
+            (
+                "radarBlipColorIndex",
+                RADAR_BLIP_COLOR_INDEX.with(|m| m.borrow().len()),
+            ),
+            (
+                "motionActionStamps",
+                MOTION_ACTION_STAMPS.with(|m| m.borrow().len()),
             ),
         ]
     }
@@ -31149,6 +31228,9 @@ impl SessionHandle {
             identify_meta_index: &self.identify_meta_index,
             door_part_snapshot: &self.door_part_snapshot,
             rynth_id_times: &self.rynth_id_times,
+            projectile_index: &self.projectile_index,
+            physics_script_table_index: &self.physics_script_table_index,
+            entity_enchantments_index: &self.entity_enchantments_index,
         }
     }
 }
@@ -31167,18 +31249,12 @@ fn maintain_bridge_indexes_on_delete(
     wielder_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
     >,
-    projectile_index: &std::rc::Rc<
-        std::cell::RefCell<std::collections::HashSet<u32>>,
-    >,
-    physics_script_table_index: &std::rc::Rc<
-        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
-    >,
-    entity_enchantments_index: &std::rc::Rc<
-        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
-    >,
-    // P4.1 / LEAK-01 (2026-07-27): the nine per-guid JS-facing caches
-    // that had zero removal sites while the eight indexes below were
-    // pruned here since A8-M1.
+    // Rust review 2026-08-03 (F1): every guid-keyed store this used to
+    // prune inline now lives on `PerGuidBridgeIndexes::prune_guid`, the
+    // single list the reuse path shares. Only `wielder_index` stays here
+    // — its cleanup is genuinely delete-ONLY (it strips the guid from
+    // *other* wielders' lists and sweeps empty buckets; the create path
+    // owns its own `upsert_wielder_index`).
     per_guid: &PerGuidBridgeIndexes<'_>,
 ) {
     // CMT Wave 2 / Phase 5 (2026-05-26): wielder-index cleanup. The
@@ -31200,25 +31276,6 @@ fn maintain_bridge_indexes_on_delete(
     // grow unbounded with dead-wielder buckets.
     idx.retain(|_, entries| !entries.is_empty());
     drop(idx);
-
-    // CMT Wave 10 / Phase 30 (2026-05-26): projectile-index cleanup.
-    // Cheap O(1) removal; absent GUIDs are a no-op.
-    projectile_index.borrow_mut().remove(&g_u32);
-    // G-4 / F3-1 follow-on: symmetric prune of the gravity classification.
-    PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().remove(&g_u32));
-    // A11-S5 / G14: symmetric prune of the default-script stash.
-    DEFAULT_SCRIPT_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
-    // #16 (2026-06-24): symmetric prune of the UiEffects stash.
-    UI_EFFECTS_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
-    // 2026-08-02: symmetric prune of the RadarBlipColor stash.
-    RADAR_BLIP_COLOR_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
-
-    // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
-    // cleanup — don't accumulate dead-GUID entries over a long session.
-    physics_script_table_index.borrow_mut().remove(&g_u32);
-
-    // === Wave 4.B — remote enchantments index cleanup (2026-05-28) ===
-    entity_enchantments_index.borrow_mut().remove(&g_u32);
 
     // Wave 2 (2026-06-08, review C3-leak) — prune the per-guid action
     // stamp-dedup entry so a long session with heavy entity churn
@@ -42985,6 +43042,9 @@ async fn recv_loop(
                         identify_meta_index: &identify_meta_index,
                         door_part_snapshot: &door_part_snapshot,
                         rynth_id_times: &rynth_id_times,
+                        projectile_index: &projectile_index,
+                        physics_script_table_index: &physics_script_table_index,
+                        entity_enchantments_index: &entity_enchantments_index,
                     };
                     if let Some(w) = world.borrow_mut().as_mut() {
                         match &message {
