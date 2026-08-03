@@ -1490,6 +1490,17 @@ function sampleHorizonSkyRadiance(scene3d) {
   const quad = scene3d?.atmosphereSky?.skyMesh ?? null;
   if (!renderer || !skyScene || !cam || !quad) return null;
   if (scene3d?.skyDome?._lastIsIndoor) return null;
+  // 2026-08-03 LOAD FIX — two new early-outs, both boot-shaped:
+  // (a) `?nullRender=1` bots: this probe calls renderer.render directly (not
+  //     through the loop's render step), so it silently un-did nullRender's
+  //     "no GPU work" contract.
+  // (b) During the initial terrain fill the pipeline is upload-saturated and
+  //     `readRenderTargetPixels` is a full GPU sync — the worst possible
+  //     moment for 4 stalls/sec. The authored-hex fallback carries the fog
+  //     colour until the first landblock is baked (seconds), after which the
+  //     probe takes over exactly as before.
+  if (scene3d?.nullRender) return null;
+  if (!(scene3d?.terrainBakedLbs?.size > 0)) return null;
 
   const hz = farFogSkyHz();
   const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();

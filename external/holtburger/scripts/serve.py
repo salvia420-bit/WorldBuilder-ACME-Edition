@@ -329,7 +329,15 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         if path.startswith("/dist/shards/") and 200 <= status < 300:
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
-        elif path.endswith((".js", ".mjs", ".wasm", ".bin", ".hba")) and not path.endswith("manifest.json"):
+        elif path.endswith(
+            (".js", ".mjs", ".wasm", ".bin", ".hba",
+             # Load-regression fix 2026-08-03: static imagery was falling to
+             # the no-store branch below, so the 9 MB terrain_macro PNG set
+             # (default-ON, and until today on the blocking boot path)
+             # re-downloaded in full on EVERY page load — brutal over a
+             # tunnel. Same revalidating contract as JS: 304 when unchanged.
+             ".png", ".jpg", ".jpeg", ".webp", ".ktx2", ".exr")
+        ) and not path.endswith("manifest.json"):
             # Login-boot diagnosis 2026-06-11: no-store forced a full ~23MB /
             # 150-request re-download on EVERY reload and retry cycle.
             # `no-cache` (without no-store) still revalidates every request —

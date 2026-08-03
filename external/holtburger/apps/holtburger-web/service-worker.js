@@ -137,6 +137,17 @@ function isCacheable(url) {
   return false;
 }
 
+// Load-regression fix 2026-08-03: static scene3d imagery (terrain_macro's
+// 9 MB PNG set, ui_brackets, pbr/bc7 sets) was never SW-cached, so every
+// page load re-crossed the network for it — brutal over a tunnel. Unlike
+// shards these URLs are NOT content-addressed, so plain cache-first would
+// pin stale art forever; they get STALE-WHILE-REVALIDATE instead — cached
+// bytes serve instantly, a background refetch updates the cache for the
+// NEXT load. (`?nosw=1` remains the hard bypass, as everywhere.)
+function isSwrCacheable(url) {
+  return url.pathname.includes("/scene3d/assets/");
+}
+
 // Coalesce concurrent fetches for the same URL. Without this, two
 // JS-side fetches that arrive while the SW's cache.match is still
 // pending both miss → both go to network. Observed in 2026-05-13
@@ -146,14 +157,29 @@ function isCacheable(url) {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
-  if (!isCacheable(url)) return;
+  const swr = isSwrCacheable(url);
+  if (!isCacheable(url) && !swr) return;
 
   event.respondWith(
     (async () => {
       const cache = await caches.open(CONTENT_CACHE).catch(() => null);
       if (cache) {
         const cached = await cache.match(event.request).catch(() => null);
-        if (cached) return cached;
+        if (cached) {
+          if (swr) {
+            // Serve stale now, refresh in the background for next load.
+            event.waitUntil(
+              fetch(event.request)
+                .then((network) => {
+                  if (network.ok && network.type === "basic") {
+                    return cache.put(event.request, network);
+                  }
+                })
+                .catch(() => {})
+            );
+          }
+          return cached;
+        }
       }
       // Fetch fresh. Clone ONCE for the cache before returning the
       // original — Response bodies are locked after the first clone()

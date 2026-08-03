@@ -3925,10 +3925,14 @@ export async function resolveTerrainRingOpts(
     // rebuild (the same negative-caching contract Bc7RecordSource uses).
     let bc7Atlas = scene3d.terrainBc7State;
     if (terrainBc7Enabled() && bc7Atlas === undefined) {
+      // 2026-08-03 — promise memo: cap-exempt urgent bakes can enter this
+      // resolve concurrently, so without it each launched its own ~20 MB
+      // atlas build (the state only lands after the await).
+      scene3d.terrainBc7Promise ??= buildTerrainBc7Atlas({
+        anisotropy: getAdapterMaxAnisotropy(),
+      });
       try {
-        bc7Atlas = await buildTerrainBc7Atlas({
-          anisotropy: getAdapterMaxAnisotropy(),
-        });
+        bc7Atlas = await scene3d.terrainBc7Promise;
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn("[terrain-bc7] build failed (RGBA8/CC0 path):", e);
@@ -3959,9 +3963,15 @@ export async function resolveTerrainRingOpts(
     // uncurated layers (water ×6, olthoi) keep their retail bytes. Load
     // failure → null state → uPbrEnabled 0 → retail render, no-op.
     if (!bc7Active && readPbrTerrainFlag() && !scene3d.pbrTerrainState) {
+      // 2026-08-03 — promise memo, same concurrent-bake dedupe as bc7 above
+      // (assets/pbr_terrain is up to 162 MB on disk; N× fetches were possible).
+      // The post-await re-check keeps the overrides/NRA build single-shot.
+      scene3d.pbrTerrainPromise ??= loadPbrTerrainAtlasSet({
+        tileSize: built.tileSize,
+      });
       try {
-        const pbrSet = await loadPbrTerrainAtlasSet({ tileSize: built.tileSize });
-        if (pbrSet) {
+        const pbrSet = await scene3d.pbrTerrainPromise;
+        if (pbrSet && !scene3d.pbrTerrainState) {
           const applied = applyPbrColorOverrides(
             built.atlasArrayBytes,
             built.tileSize,
@@ -4238,7 +4248,10 @@ export async function resolveTerrainRingOpts(
     !texMergeState &&
     typeof wasmExports.fetch_terrain_alpha_masks === "function"
   ) {
-    try {
+    // 2026-08-03 — promise memo: cap-exempt urgent bakes can enter this
+    // resolve concurrently, and the state only lands after the await, so
+    // each used to run its own fetch + mask-array build. Share one.
+    scene3d.texMergeAlphaPromise ??= (async () => {
       const bundle = await wasmExports.fetch_terrain_alpha_masks();
       const corner = bundle.takeCorner();
       const side = bundle.takeSide();
@@ -4282,7 +4295,10 @@ export async function resolveTerrainRingOpts(
         tex.generateMipmaps = false;
       }
       tex.needsUpdate = true;
-      texMergeState = { alphaArray: tex, count: built.depth };
+      return { alphaArray: tex, count: built.depth };
+    })();
+    try {
+      texMergeState = await scene3d.texMergeAlphaPromise;
       scene3d.texMergeAlphaState = texMergeState;
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -4296,26 +4312,45 @@ export async function resolveTerrainRingOpts(
   // NOT YET ATTEMPTED and `null` means ATTEMPTED AND FAILED, so a failure is
   // remembered instead of re-hammering the fetch on every ring rebuild (the
   // same negative-caching contract terrainBc7State uses).
+  //
+  // 2026-08-03 — the load is now BACKGROUND, never awaited here: the 7-map
+  // set is ~9 MB of PNG + ~29 MB of canvas decode, and awaiting it gated the
+  // FIRST landblock bake on the whole thing (the dominant boot slowdown of
+  // the 08-02 wave, tunnel-amplified). Bakes proceed with uMacroEnabled 0;
+  // when the texture lands, the resolve handler just before this function's
+  // return patches the shared ring-opts bag (future bakes) and every live
+  // material in scene3d.terrainMaterials (existing bakes) — the same
+  // hot-swap `window.__setTerrainMacro` already proves safe (uMacroEnabled
+  // is a uniform, not a define, so no program relink). The PROMISE is
+  // memoised on scene3d so concurrent cap-exempt urgent bakes cannot each
+  // launch their own 7-fetch + 29 MB decode.
   let macroState = scene3d.terrainMacroState;
-  if (terrainMacroEnabled() && macroState === undefined) {
-    try {
-      macroState = await loadTerrainMacroArray();
-      if (macroState) {
-        // eslint-disable-next-line no-console
-        console.log(
-          `[terrain-macro] ${macroState.sliceCount} family macro maps loaded ` +
-            `(fade ${readMacroFadeStart()}-${readMacroFadeEnd()} m, ` +
-            `strength ${readMacroStrength()})`
-        );
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[terrain-macro] load failed (far terrain unchanged):", e);
-      macroState = null;
+  if (!terrainMacroEnabled()) {
+    macroState = null;
+  } else if (macroState === undefined) {
+    macroState = null; // bake macro-less now; patched in place on resolve
+    if (!scene3d.terrainMacroPromise) {
+      scene3d.terrainMacroPromise = (async () => {
+        let st = null;
+        try {
+          st = await loadTerrainMacroArray();
+          if (st) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[terrain-macro] ${st.sliceCount} family macro maps loaded ` +
+                `(fade ${readMacroFadeStart()}-${readMacroFadeEnd()} m, ` +
+                `strength ${readMacroStrength()})`
+            );
+          }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn("[terrain-macro] load failed (far terrain unchanged):", e);
+        }
+        scene3d.terrainMacroState = st ?? null;
+        return st ?? null;
+      })();
     }
-    scene3d.terrainMacroState = macroState ?? null;
   }
-  if (!terrainMacroEnabled()) macroState = null;
 
   // Live tuning without a reload — every macro/splat knob is a plain uniform,
   // so an A/B sweep can run in ONE page load (which is what makes the arms
@@ -4365,7 +4400,7 @@ export async function resolveTerrainRingOpts(
     };
   }
 
-  return {
+  const ringOpts = {
     centreLbX,
     centreLbY,
     playerLbKey,
@@ -4611,6 +4646,30 @@ export async function resolveTerrainRingOpts(
       }
     })(),
   };
+
+  // 2026-08-03 — deferred-macro patch-in (see the terrainMacroPromise block
+  // above). `self.terrainOpts` is stashed ONCE and shared by reference, so
+  // patching this bag reaches every future bake; the material sweep reaches
+  // the ones already built.
+  if (terrainMacroEnabled() && !macroState && scene3d.terrainMacroPromise) {
+    scene3d.terrainMacroPromise.then((st) => {
+      if (!st?.texture) return;
+      ringOpts.macroTex = st.texture;
+      ringOpts.macroSliceLut = st.sliceLut;
+      ringOpts.macroSliceCount = st.sliceCount;
+      ringOpts.macroEnabled = true;
+      for (const m of scene3d.terrainMaterials ?? []) {
+        const u = m?.uniforms;
+        if (!u?.uMacroTex) continue;
+        u.uMacroTex.value = st.texture;
+        if (u.uMacroSliceForCode) u.uMacroSliceForCode.value = st.sliceLut;
+        if (u.uMacroSliceCount) u.uMacroSliceCount.value = st.sliceCount;
+        if (u.uMacroEnabled) u.uMacroEnabled.value = 1.0;
+      }
+    });
+  }
+
+  return ringOpts;
 }
 
 /**

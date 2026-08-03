@@ -142,6 +142,29 @@ import { runTerrainRingBatch } from "./terrain_ring.js";
 // Composite Ring, installed as a SIBLING of terrainGroup so the LRU's
 // terrainGroup.children scans never see it. Hard no-op behind ?farTerrain=off.
 import { terrainFogEnabled } from "./far_terrain_flags.js";
+
+// 2026-08-03 LOAD FIX — ONE resolver for "does the AC linear distance fog
+// ship on?", used at BOTH scene construction (preInit3D) and the atmosphere
+// gate (init3D). `parameters.fog` is part of every material's program cache
+// key in three, so the two sites MUST agree: when the gate was the only
+// writer, scene.fog flipped null→Fog after the rAF loop was already drawing
+// and the entire world program set compiled twice (once fogless, once
+// fogged). `?fogLerp=on|off` overrides; otherwise follows terrainFogEnabled()
+// (i.e. ?farTerrain / ?terrainFog, default ON).
+function acFogLerpEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location?.search) {
+      return terrainFogEnabled();
+    }
+    const v = new URLSearchParams(window.location.search).get("fogLerp");
+    const s = typeof v === "string" ? v.toLowerCase() : null;
+    if (s === "on" || s === "1" || s === "true" || s === "yes") return true;
+    if (s === "off" || s === "0" || s === "false" || s === "no") return false;
+    return terrainFogEnabled();
+  } catch (_) {
+    return false;
+  }
+}
 import { initFarTerrain } from "./far_terrain.js";
 // S15b (2026-07-11) — ?fixedGrid player-centered TERRAIN slot-grid residency
 // driver (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2, landing §5.3).
@@ -1323,6 +1346,15 @@ export async function preInit3D(canvas) {
     // Fog colour stays tuned to the horizon stop so the wire-far-plane
     // dissolves into the gradient instead of into a contrasting flat.
     scene.fog = new THREE.FogExp2(horizon, 0.004);
+  } else if (acFogLerpEnabled()) {
+    // 2026-08-03 LOAD FIX — create the AC linear fog AT CONSTRUCTION instead
+    // of letting the async atmosphere gate flip scene.fog null→Fog after the
+    // rAF loop is already drawing (which re-keyed and re-linked the whole
+    // world program set — every material's program cache key includes
+    // `parameters.fog`). Seed = AC's clear-day tint + default band; the gate
+    // and loop.js::tickDistanceFogColor only re-point color/near/far on this
+    // SAME instance, which is uniform-only.
+    scene.fog = new THREE.Fog(new THREE.Color(0xc3c8dc), 200, 2500);
   }
 
   const worldRoot = new THREE.Group();
@@ -3226,6 +3258,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // textured while the initial-ring LBs (baked via scene3dForBuilders)
     // were wire. Mirrors the terrainOpts/etc aliasing precedent above.
     wireframeMode: !!scene3dForBuilders.wireframeMode,
+    // 2026-08-03 LOAD FIX — loop.js::sampleHorizonSkyRadiance calls
+    // renderer.render directly (outside the tick's render step), so it needs
+    // the flag on the live bag to honour ?nullRender=1's no-GPU contract.
+    nullRender: !!nullRender,
     // Phase 7.6.1 (follow-on #1) — per-SetupModel light registry +
     // summary. `activeLights` is the Array<THREE.PointLight |
     // THREE.SpotLight> that `tickLightingForCellState` sorts by
@@ -5044,20 +5080,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             // now closed (terrain_shared_glsl.js), so the fog is turned on.
             // Escapes, widest first: ?farTerrain=off, ?terrainFog=off,
             // ?fogLerp=off. MUST be read here in init3D's scope.
-            const fogLerpEnabled = (() => {
-              try {
-                if (typeof window === "undefined" || !window.location?.search) {
-                  return terrainFogEnabled();
-                }
-                const v = new URLSearchParams(window.location.search).get("fogLerp");
-                const s = typeof v === "string" ? v.toLowerCase() : null;
-                if (s === "on" || s === "1" || s === "true" || s === "yes") return true;
-                if (s === "off" || s === "0" || s === "false" || s === "no") return false;
-                return terrainFogEnabled();
-              } catch (_) {
-                return false;
-              }
-            })();
+            // 2026-08-03 — resolver hoisted to module scope (acFogLerpEnabled)
+            // so scene construction in preInit3D creates the SAME fog this
+            // gate drives; see the LOAD FIX comment on the helper.
+            const fogLerpEnabled = acFogLerpEnabled();
             // 2026-08-02 FAR-TERRAIN S1 — the guard used to be a bare
             // `if (scene.fog)`, which meant `?fogLerp` only did anything when
             // SOMETHING ELSE had already created a fog. On the shipped 3D path
@@ -5077,7 +5103,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   : new THREE.Color(0xc3c8dc);
                 // AC default fog band (fogMax ~2500); camera far is 5000
                 // so geometry past fogMax fully fogs to the AC color.
-                scene.fog = new THREE.Fog(seedColor, 200, 2500);
+                // 2026-08-03 LOAD FIX — construction already made this exact
+                // linear Fog (preInit3D, acFogLerpEnabled agreement), so
+                // RE-POINT it (uniform-only) rather than replacing the
+                // instance; only create when construction didn't (e.g. a
+                // wireframe boot that still reaches this gate).
+                if (scene.fog?.isFog) {
+                  scene.fog.color.copy(seedColor);
+                  scene.fog.near = 200;
+                  scene.fog.far = 2500;
+                } else {
+                  scene.fog = new THREE.Fog(seedColor, 200, 2500);
+                }
                 // === Wave R1.C double-fog balance knob ===
                 // `scene.fog` tints the world pass AND the aerial
                 // perspective scatters on top → without rebalancing the
