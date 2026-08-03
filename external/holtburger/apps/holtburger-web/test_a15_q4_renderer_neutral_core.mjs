@@ -138,11 +138,21 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     emits.length === 1 && emits[0][1] === 0 && emits[0][2] === 0xa9b40000,
     JSON.stringify(emits));
   const count = (n) => names.filter((x) => x === n).length;
-  check("(iii) four wasm-bake ensure* called once each",
+  check("(iii) three wasm-bake ensure* called once each",
     count("ensureTerrainAroundLandblock") === 1 &&
     count("ensureBuildingAabbsAroundLandblock") === 1 &&
-    count("ensureCellContainersForLandblock") === 1 &&
     count("ensureLandblockObjectsForLandblock") === 1);
+  // s13 indoor 2D-gate, mirrored into world_stream.js 2026-08-03 (round 10).
+  // With the renderer UP this call is pure duplicated decode: it is discarded
+  // at ensureCellContainersForLandblock's own `!app` gate under ?renderer=3d,
+  // and cells.js re-fetches the same EnvCells via loadEnvCellsForLandblock —
+  // which is what actually queues the cell physics. Skipping it here does NOT
+  // skip the collision data; (vii) below pins the case where it still must run.
+  check("(iii) renderer UP ⇒ ensureCellContainersForLandblock SKIPPED (no 2x decode)",
+    count("ensureCellContainersForLandblock") === 0,
+    `called ${count("ensureCellContainersForLandblock")}x`);
+  check("(iii) …and the EnvCell fetch that DOES queue cell physics still fires",
+    count("loadEnvCellsForLandblock") === 1);
   check("(iii) loadTerrainRing called exactly 1× (batched facade, NOT 9 solo)",
     count("loadTerrainRing") === 1 && count("loadTerrainForLandblock") === 0,
     `ring=${count("loadTerrainRing")} solo=${count("loadTerrainForLandblock")}`);
@@ -157,7 +167,10 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     "emitLandblockChanged",
     "ensureTerrainAroundLandblock",
     "ensureBuildingAabbsAroundLandblock",
-    "ensureCellContainersForLandblock",
+    // "ensureCellContainersForLandblock" is absent by design with the
+    // renderer UP (round-10 s13 gate mirror) — its slot in the order is the
+    // loadEnvCellsForLandblock call below, which performs the same wasm
+    // fetch. The (vii) null-renderer case still pins it present.
     "loadEnvCellsForLandblock",
     "loadTerrainRing",
     "loadBuildingsForLandblock",
@@ -313,8 +326,14 @@ async function loadStreamerArm(search, tag) {
     inNames.join(","));
   check("(viii) gate ON, indoors → wasm collision bakes STILL fire (invariant 2)",
     inNames.includes("ensureTerrainAroundLandblock") &&
-    inNames.includes("ensureBuildingAabbsAroundLandblock") &&
-    inNames.includes("ensureCellContainersForLandblock"));
+    inNames.includes("ensureBuildingAabbsAroundLandblock"));
+  // Cell collision is NOT dropped by the round-10 gate — with the renderer up
+  // it arrives through loadEnvCellsForLandblock (asserted immediately below),
+  // which calls the same wasm fetchEnvCellsInLandblock that queues
+  // CELL_PHYSICS_PENDING / CELL_BSP_PENDING. The invariant is "indoor cell
+  // collision still gets queued", not "this particular function was called".
+  check("(viii) gate ON, indoors → cell collision still queued via the EnvCell fetch",
+    inNames.includes("loadEnvCellsForLandblock"));
   check("(viii) gate ON, indoors → EnvCell (interior) load still fires",
     inNames.includes("loadEnvCellsForLandblock"));
   check("(viii) gate ON, indoors → landblockChanged still emitted",

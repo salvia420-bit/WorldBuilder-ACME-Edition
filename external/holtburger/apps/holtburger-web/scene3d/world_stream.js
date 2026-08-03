@@ -113,6 +113,36 @@ const DUNGEON_STREAM_GATE_ON = (() => {
     return true;
   }
 })();
+// s13 indoor 2D-gate (2026-07-11, 1120-appendix A5/T08) — MIRRORED HERE
+// 2026-08-03 (round 10). s13 applied this gate to index.html's legacy copy
+// ONLY, and `?unifiedDispatch` is default-ON, so the gate has been sitting in
+// the DEAD path while this file — the live one — kept double-decoding.
+//
+// Under `?renderer=3d` the 2D `liveScene` is permanently null, so
+// `ensureCellContainersForLandblock` fetches the landblock's EnvCells purely
+// to discard them at its own `!app` gate, while `cells.js
+// buildEnvCellsForLandblock` (reached via `loadEnvCellsForLandblock` a few
+// lines below, unconditionally) re-fetches the very same cells under its own
+// dedup set. Every cold indoor landblock decoded 2×.
+//
+// Why dropping the call cannot cost us physics: the wasm-side
+// `fetchEnvCellsInLandblock` is what queues CELL_PHYSICS_PENDING /
+// CELL_BSP_PENDING, and the cells.js path calls that same export — so the
+// collision data still lands, from the fetch we keep. (The older comment in
+// index.html saying "the wasm push above already shipped all the data the 3D
+// path needs" predates s13 and describes why marking populated is safe, not
+// that this is the only producer.) A duplicate fetch is merely wasteful
+// rather than corrupting since S14 (A5) moved the drain to
+// `replace_cell_triangles`, which replaces instead of appending.
+const RENDERER_IS_2D = (() => {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "")
+      .get("renderer") === "2d";
+  } catch (_) {
+    // Headless: exercise the SHIPPED default (3D), not the retired 2D path.
+    return false;
+  }
+})();
 const LOAD_POINT_SHIFT_ONLY = (() => {
   try {
     const v = new URLSearchParams(globalThis.location?.search || "").get("loadPointShiftOnly");
@@ -308,7 +338,24 @@ export function createWorldStreamer(deps) {
       // Lazy-fetch + bake EnvCells when entering a landblock.
       // Single-LB scope (not a 3x3 ring) because interior cells only
       // matter when the player is inside the building.
-      if (lbId !== 0 && !cellContainersPopulatedLbs.has(lbId)) {
+      // See the RENDERER_IS_2D note above. In 3D this fetch is discarded at
+      // the `!app` gate and re-done by cells.js below, so it is duplicated
+      // decode — EXCEPT while the renderer is still coming up.
+      //
+      // INVARIANT 2 (the Workstream-G hoist, pinned by
+      // test_a15_q4_renderer_neutral_core.mjs (vii)): when
+      // `getLiveScene3d()` is null the wasm collision bakes must STILL fire,
+      // or the 3D integrator freezes on the spawn cell. `loadEnvCellsForLandblock`
+      // — the cells.js path that otherwise queues the cell physics — is
+      // skipped in exactly that window, so gating this call on renderer mode
+      // ALONE would leave an indoor spawn with no cell collision until after
+      // init3D. Hence: 2D always, 3D only while nothing else can do it.
+      const rendererUpForCells = !!getLiveScene3d();
+      if (
+        lbId !== 0
+        && !cellContainersPopulatedLbs.has(lbId)
+        && (RENDERER_IS_2D || !rendererUpForCells)
+      ) {
         ensureCellContainersForLandblock(lbId);
       }
       const s3d = getLiveScene3d();
