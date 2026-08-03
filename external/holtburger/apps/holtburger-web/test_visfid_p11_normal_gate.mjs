@@ -37,22 +37,13 @@ function check(name, ok, detail) {
     else passed += 1;
 }
 
-function locateThree() {
-    if (process.env.THREE_PATH && existsSync(process.env.THREE_PATH)) {
-        return process.env.THREE_PATH;
-    }
-    return null;
-}
+// `three` comes from the ONE canonical locator (harness/lib/locate_three.mjs).
+// This used to be a THREE_PATH-env-only lookup that exit-0'd when unset, so the
+// invocation in this file's own header asserted nothing. See F2.
+import { locateThree, requireThree } from "./harness/lib/locate_three.mjs";
 
 const threePath = locateThree();
-if (!threePath) {
-    console.log("Phase 1.1 normal-gate ESM test: SKIP (three not located).");
-    console.log("  hint: `THREE_PATH=/tmp/three-test/node_modules/three/build/three.module.js node test_visfid_p11_normal_gate.mjs`");
-    process.exit(0);
-}
-
-const threeUrl = "file://" + threePath;
-const THREE = await import(threeUrl);
+const THREE = await requireThree("Phase 1.1 normal-gate ESM test");
 
 console.log("Phase 1.1 / Wave 2.B — procedural normal gate test");
 console.log(`three loaded from: ${threePath}`);
@@ -63,21 +54,17 @@ function loadModule(relPath) {
     return readFileSync(full, "utf8");
 }
 
+// Splice materials.js via the shared harness — the private stripper this
+// replaced removed only `./adapter.js`, so later imports survived into the
+// Function body and killed the suite. See F2.
+import { spliceModule } from "./harness/lib/splice_module.mjs";
+import { MATERIALS_JS_STUBS } from "./harness/lib/scene3d_stubs.mjs";
+
 const matsSrc = loadModule("scene3d/materials.js");
-const matsPatched = matsSrc
-    .replace(
-        /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
-        ""
-    )
-    .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-    .replace(/^\s*export\s+function\s+/gm, "function ")
-    .replace(/^\s*export\s+class\s+/gm, "class ")
-    .replace(/^\s*export\s+const\s+/gm, "const ");
-const matsStubbed =
-    "const surfacePixelsToTexture = () => null;\n" +
-    "const surfacePixelsToNormalTexture = () => null;\n" +
-    "const surfacePixelsToHeightTexture = () => null;\n" +
-    matsPatched;
+const matsStubbed = spliceModule(matsSrc, {
+    stubs: MATERIALS_JS_STUBS,
+    label: "scene3d/materials.js",
+});
 
 const matsFactory = new Function(
     "THREE",

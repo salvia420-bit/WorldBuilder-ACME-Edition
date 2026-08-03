@@ -100,9 +100,14 @@ function parseArgs(argv) {
     endId: SURFACE_END_ID,
     chunkSize: 500,
     cacheRoot: process.env.WAVE4T_CACHE_ROOT || CACHE_ROOT_DEFAULT,
+    // Count CACHED records toward the acceptance bar (the O(0) warm-replay
+    // documented in the header). OFF by default: a replay decodes nothing, so
+    // it cannot substantiate a PASS. See summarizeChunks().
+    allowCached: false,
   };
   for (const arg of argv.slice(2)) {
     if (arg === "--emit-png") out.emitPng = true;
+    else if (arg === "--allow-cached") out.allowCached = true;
     else if (arg === "--auto-splice") out.autoSplice = true;
     else if (arg === "--mode=fast") out.mode = "fast";
     else if (arg === "--mode=full") out.mode = "full";
@@ -116,7 +121,12 @@ function parseArgs(argv) {
 Usage:
   node validate_texture_decode.cjs [--mode=fast|full] [--emit-png] [--auto-splice]
        [--start-id=0x08000000] [--end-id=0x08010000] [--chunk-size=500]
-       [--cache-root=/mnt/wbterminal1/...]`);
+       [--cache-root=/mnt/wbterminal1/...] [--allow-cached]
+
+  --allow-cached  Count CACHED records toward the bar. A cache hit returns
+                  BEFORE the Chorizite decode, so it verifies nothing; without
+                  this flag a fully-cached run FAILS (use a fresh --cache-root
+                  to force real decodes). Marks the report verified:false.`);
       process.exit(0);
     }
   }
@@ -411,18 +421,44 @@ function rebuildTerminal() {
 
 // ─── Result aggregation ────────────────────────────────────────────────
 
-function summarizeChunks(chunks, mode) {
+// CACHED IS NOT VERIFIED (2026-08-03 review, finding F1).
+//
+// `CommandEngine.TextureParity.cs` returns a CACHED record at "Step 2 — Cache
+// hit?", which is BEFORE "Step 3 — Parse the Surface via Chorizite TryGet<T>".
+// A cache hit therefore replays a stored record and performs no decode and no
+// mean-RGBA comparison this run. The old bar summed `passCount + cachedCount`,
+// so a 100%-cached run reported `pass rate: 100.000%` / `acceptance: PASS` /
+// exit 0 having compared zero pixels — which is exactly the regression this
+// validator exists to catch (break the decoder, every record is still a cache
+// hit, still "PASS").
+//
+// The bar now counts only `passCount` — records decoded AND compared THIS run.
+// `--allow-cached` restores the old warm-replay semantics for the deliberate
+// O(0) case documented in the header, but marks the report `verified: false`
+// and prints a banner, so a replay can never be mistaken for a verification.
+//
+// Acceptance is also per-ID-RANGE rather than pooled over all chunks. Pooling
+// let a range that was never verified ride over the bar on a different range's
+// passes. Grouping by range (rather than by chunk) is deliberate: the W4.B
+// chain-walk spot-check re-runs the SAME range as the W4.A sweep, and the C#
+// `_textureCacheRam` is process-wide, so W4.B is ALWAYS a replay (pass=0) —
+// that is redundancy, not a defect, and a range counts as verified if ANY
+// chunk covering it did real decodes. A range covered only by replays fails.
+function summarizeChunks(chunks, mode, allowCached = false) {
   let recordCount = 0, passCount = 0, failCount = 0, cachedCount = 0;
   const failureBuckets = {};
   const chainKindHist = {};
   const formatHist = {};
   let datSha = null;
+  let recordsDetailChunks = 0;
+  const perChunk = [];
   for (const c of chunks) {
     recordCount += c.recordCount;
     passCount += c.passCount;
     failCount += c.failCount;
     cachedCount += c.cachedCount;
     datSha = datSha || c.datSha256;
+    if (Array.isArray(c.records)) recordsDetailChunks += 1;
     for (const r of c.records || []) {
       if (r.status === "FAIL") {
         const reason = (r.failureReason || "unknown").substring(0, 80);
@@ -434,22 +470,58 @@ function summarizeChunks(chunks, mode) {
         formatHist[r.pixelFormat] = (formatHist[r.pixelFormat] || 0) + 1;
       }
     }
+    // Accumulate per ID-RANGE (see the block comment above).
+    const key = `${c.startId}..${c.endId}`;
+    let g = perChunk.find((p) => p.range === key);
+    if (!g) {
+      g = { range: key, chunkLabels: [], recordCount: 0, passCount: 0,
+            cachedCount: 0, failCount: 0, credited: 0, accept: false };
+      perChunk.push(g);
+    }
+    g.chunkLabels.push(c.chunkLabel);
+    // recordCount for a range is its widest chunk, not the sum — re-running
+    // the same range does not enlarge it.
+    g.recordCount = Math.max(g.recordCount, c.recordCount);
+    g.passCount += c.passCount;
+    g.cachedCount += c.cachedCount;
+    g.failCount += c.failCount;
   }
-  // Acceptance bar.
-  const passRate = recordCount > 0 ? (passCount + cachedCount) / recordCount : 0;
-  let accept;
-  if (mode === "fast") {
-    // Spec: fast-mode (Holtburg 81 models) ≥80/81 PASS — ie ≥98.7%.
-    accept = recordCount >= 1 && (passCount + cachedCount) >= Math.min(recordCount, 80);
-  } else {
-    accept = passRate >= 0.995;
+  for (const g of perChunk) {
+    g.credited = allowCached ? g.passCount + g.cachedCount : g.passCount;
+    g.accept = mode === "fast"
+      ? g.recordCount >= 1 && g.credited >= Math.min(g.recordCount, 80)
+      : (g.recordCount > 0 ? g.credited / g.recordCount : 0) >= 0.995;
   }
+  // `verifiedCount` is the honest coverage number: decoded + compared this run.
+  const verifiedCount = passCount;
+  const credited = allowCached ? passCount + cachedCount : verifiedCount;
+  const passRate = recordCount > 0 ? credited / recordCount : 0;
+  // Per-record detail is what feeds the failure buckets + chain/format
+  // histograms. The live JsonCommandProcessor wrapper omits `records` (it
+  // serialises only `failures`), so those stay empty and the per-record
+  // ≤0.01 mean-RGBA tolerance promised in the header is never applied
+  // JS-side. Surface it instead of letting empty histograms read as "clean".
+  const recordsDetailAvailable = recordsDetailChunks > 0;
+  // NB: no global `failCount === 0` term — the per-range bar already accounts
+  // for failures (a failed record is not in passCount, so `credited` drops),
+  // and a hard zero would silently revoke the documented full-mode tolerance
+  // budget. An empty run (no chunks / no records) can never pass.
+  const accept =
+    chunks.length > 0 &&
+    recordCount >= 1 &&
+    perChunk.length > 0 &&
+    perChunk.every((p) => p.accept);
   return {
     mode,
     recordCount,
     passCount,
     failCount,
     cachedCount,
+    verifiedCount,
+    verified: verifiedCount > 0,
+    allowCached,
+    recordsDetailAvailable,
+    perChunk,
     passRate,
     accept,
     datSha256: datSha,
@@ -589,7 +661,7 @@ async function main() {
     }
 
     results.finishedAt = new Date().toISOString();
-    results.summary = summarizeChunks(results.chunks, cli.mode);
+    results.summary = summarizeChunks(results.chunks, cli.mode, cli.allowCached);
     const reportPath = path.join(reportDir, "report.json");
     fs.writeFileSync(reportPath, JSON.stringify(results, null, 2));
 
@@ -597,10 +669,27 @@ async function main() {
     const s = results.summary;
     console.log(`  mode: ${s.mode}`);
     console.log(`  records: ${s.recordCount}  pass: ${s.passCount}  cached: ${s.cachedCount}  fail: ${s.failCount}`);
-    console.log(`  pass rate: ${(s.passRate * 100).toFixed(3)}%`);
+    console.log(`  VERIFIED this run: ${s.verifiedCount}/${s.recordCount} (decoded + compared; CACHED returns before the decode)`);
+    for (const p of s.perChunk) {
+      console.log(`    ${p.accept ? "ok  " : "BAR!"} ${p.range}: records=${p.recordCount} pass=${p.passCount} cached=${p.cachedCount} fail=${p.failCount} credited=${p.credited}  [${p.chunkLabels.join(", ")}]`);
+    }
+    console.log(`  pass rate: ${(s.passRate * 100).toFixed(3)}%${s.allowCached ? " (--allow-cached: CACHED credited)" : ""}`);
     console.log(`  dat sha256: ${s.datSha256?.slice(0, 16)}…`);
     console.log(`  chain kinds: ${JSON.stringify(s.chainKindHist)}`);
     console.log(`  pixel formats: ${JSON.stringify(s.formatHist)}`);
+    if (!s.recordsDetailAvailable && s.recordCount > 0) {
+      console.log(`  WARNING: no chunk returned a 'records' array — the live`);
+      console.log(`           JsonCommandProcessor wrapper serialises only 'failures', so the`);
+      console.log(`           per-record chain/format histograms above are EMPTY BY OMISSION,`);
+      console.log(`           not because the DAT is clean, and the ≤0.01 mean-RGBA tolerance`);
+      console.log(`           in this file's header is never applied JS-side. (C# side; fix in`);
+      console.log(`           WorldBuilder.Terminal/JsonCommandProcessor.cs CmdChoriziteDecode*.)`);
+    }
+    if (!s.verified && !s.allowCached) {
+      console.log(`  CACHE REPLAY: 0 records were decoded this run — nothing was verified.`);
+      console.log(`           Use a fresh --cache-root=<empty dir> to force real decodes, or`);
+      console.log(`           --allow-cached to accept a warm replay (reported verified:false).`);
+    }
     if (s.failCount > 0) {
       console.log(`  failure clusters (top 5):`);
       const top = Object.entries(s.failureBuckets)

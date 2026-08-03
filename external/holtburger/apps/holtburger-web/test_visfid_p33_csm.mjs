@@ -38,22 +38,13 @@ function check(name, ok, detail) {
     else passed += 1;
 }
 
-function locateThree() {
-    if (process.env.THREE_PATH && existsSync(process.env.THREE_PATH)) {
-        return process.env.THREE_PATH;
-    }
-    return null;
-}
+// `three` comes from the ONE canonical locator (harness/lib/locate_three.mjs).
+// This used to be a THREE_PATH-env-only lookup that exit-0'd when unset, so
+// the invocation in this file's own header asserted nothing. See F2.
+import { locateThree, requireThree } from "./harness/lib/locate_three.mjs";
 
 const threePath = locateThree();
-if (!threePath) {
-    console.log("Phase 3.3 CSM ESM test: SKIP (three not located).");
-    console.log("  hint: `THREE_PATH=/tmp/three-test/node_modules/three/build/three.module.js node test_visfid_p33_csm.mjs`");
-    process.exit(0);
-}
-
-const threeUrl = "file://" + threePath;
-const THREE = await import(threeUrl);
+const THREE = await requireThree("Phase 3.3 CSM ESM test");
 
 console.log("Phase 3.3 — CSM standalone ESM test");
 console.log(`three loaded from: ${threePath}`);

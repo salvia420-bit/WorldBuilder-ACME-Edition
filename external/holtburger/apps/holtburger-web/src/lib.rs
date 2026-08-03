@@ -1129,18 +1129,21 @@ fn check_sequence_gap(
             }
             map.insert(key, incoming_seq);
         }
-        Some(last) if incoming_seq == last + 1 => {
-            map.insert(key, incoming_seq);
-        }
-        Some(last) if incoming_seq > last + 1 => {
-            console_warn_str(&format!(
-                "[seq-gap] opcode=0x{:04X} target=0x{:08X} last={} got={} skipped={} kind=gap",
-                opcode,
-                target,
-                last,
-                incoming_seq,
-                incoming_seq - last - 1
-            ));
+        // Rust review 2026-08-03 (F6): the advance and gap arms used to be
+        // `incoming_seq == last + 1` / `> last + 1`. `last` is a wire u32,
+        // so `last + 1` overflowed at `u32::MAX` — a panic with
+        // overflow-checks on, and in release it wrapped to 0 and reclassified
+        // every subsequent packet as a gap (warn-spam). Comparing the two
+        // sequences directly cannot overflow and preserves both outcomes:
+        // `skipped == 0` is the silent steady-state advance.
+        Some(last) if incoming_seq > last => {
+            let skipped = incoming_seq - last - 1;
+            if skipped > 0 {
+                console_warn_str(&format!(
+                    "[seq-gap] opcode=0x{:04X} target=0x{:08X} last={} got={} skipped={} kind=gap",
+                    opcode, target, last, incoming_seq, skipped
+                ));
+            }
             map.insert(key, incoming_seq);
         }
         Some(last) if incoming_seq == last => {
@@ -10140,6 +10143,13 @@ impl<K: Clone + Eq + std::hash::Hash, V: Clone> ByteBudgetLru<K, V> {
                     // a pressure window with no diag poll in it leaves no
                     // trace and the leak stays indistinguishable from
                     // healthy over-budget operation.
+                    //
+                    // F4 (2026-08-03): for the two live stores this arm is
+                    // currently unreachable — both pass an outer-`Arc`
+                    // refcount predicate that no consumer ever holds, so a
+                    // victim always exists and the budget behaves as a hard
+                    // cap. Kept because it is the correct behaviour the day
+                    // a store starts handing out retained values.
                     self.count_pinned(&evictable, |_| false);
                     break;
                 }
@@ -10151,10 +10161,15 @@ impl<K: Clone + Eq + std::hash::Hash, V: Clone> ByteBudgetLru<K, V> {
     fn count_keys(&self, f: impl Fn(&K) -> bool) -> usize {
         self.map.keys().filter(|k| f(k)).count()
     }
-    /// PAL-01: entries that FAIL `evictable` — the residency the byte budget
-    /// cannot reclaim. `insert` runs OVER budget rather than break a live
-    /// holder, so `total_bytes > budget` is legal by design and this is the
-    /// only signal separating a leaked pinned handle from healthy pressure.
+    /// PAL-01: entries that FAIL the supplied predicate.
+    ///
+    /// Rust review 2026-08-03 (F4): the predicate is a PARAMETER, not
+    /// necessarily the eviction predicate. Callers that want a residency
+    /// *measurement* must not pass the eviction predicate — see
+    /// `surface_cache_pinned_stats`, which passes an inner-plane refcount
+    /// test because the outer-`Arc` eviction predicate is true by
+    /// construction on every entry (every `get` deep-copies and drops its
+    /// clone inside the same expression) and so can only ever report 0.
     /// `class` selects a sub-population reported alongside the total (the
     /// composed/recolored split, matching `count_keys`' `palEntries`).
     /// Returns `(entries, bytes, class_entries, class_bytes)` and refreshes
@@ -10184,7 +10199,8 @@ impl<K: Clone + Eq + std::hash::Hash, V: Clone> ByteBudgetLru<K, V> {
         (entries, bytes, cls_entries, cls_bytes)
     }
     /// PAL-01: monotonic `(entries, bytes)` high-water observed by
-    /// `count_pinned`, since construction.
+    /// `count_pinned`, since construction. Refreshed only by the diag
+    /// poll — see the F4 note on `count_pinned`'s `insert` call site.
     fn pinned_peak(&self) -> (usize, usize) {
         use std::sync::atomic::Ordering;
         (
@@ -10653,12 +10669,28 @@ fn surface_cache_stats() -> (u64, u64, u64, u64, u64, u64, u64, usize, usize, us
 /// from `surface_cache_stats` so that tuple, and the three call sites that
 /// destructure it, stay byte-identical.
 ///
-/// An entry is pinned when a live consumer still holds its `Arc`, i.e. the
-/// eviction predicate `Arc::strong_count(v) == 1` fails. Design intent is
-/// that a cache hit is a TRANSIENT clone-out which JS frees, so a nonzero
-/// steady-state count is a leaked handle, not pressure. Returns
+/// An entry is pinned when a live consumer still holds its decoded PIXEL
+/// PLANES. Design intent is that a cache hit is a TRANSIENT clone-out which
+/// JS frees, so a nonzero steady-state count is a leaked handle, not
+/// pressure. Returns
 /// `(entries, bytes, pal_entries, pal_bytes, peak_entries, peak_bytes)`;
 /// the `pal_` pair is the composed (recolored-entity) subset.
+///
+/// Rust review 2026-08-03 (F4) — WHY NOT THE EVICTION PREDICATE. This used
+/// to pass `Arc::strong_count(v) == 1` on the store's OUTER
+/// `Arc<SurfacePixels>`, which is 1 at every point it can be observed:
+/// `surface_memo_get` deep-copies and drops its clone inside the same
+/// expression, and every observer holds the same lock. The counter was
+/// therefore hard-wired to 0 and could not answer the question its own doc
+/// asks. The real sharing lives one level down — [`PixelPlane`] is an
+/// `Arc<Vec<u8>>` that `clone_surface_pixels` hands out by refcount bump —
+/// so THAT is what a live consumer actually retains, and what this now
+/// counts. Eviction is deliberately left on the outer-`Arc` predicate:
+/// dropping the cache's outer `Arc` never frees a plane a caller is holding
+/// (the caller owns its own plane arcs), so evicting is already safe, and
+/// moving this test into the eviction path would make entries un-evictable
+/// while JS holds a handle and turn the byte budget from a hard cap into an
+/// advisory one.
 ///
 /// `cfg` matches its single caller `dat_decode_diag`; the counting itself is
 /// on `ByteBudgetLru::count_pinned`, which native tests do exercise.
@@ -10666,7 +10698,15 @@ fn surface_cache_stats() -> (u64, u64, u64, u64, u64, u64, u64, usize, usize, us
 fn surface_cache_pinned_stats() -> (usize, usize, usize, usize, usize, usize) {
     let c = surface_cache_ro();
     let (entries, bytes, pal_entries, pal_bytes) = c.count_pinned(
-        |v| std::sync::Arc::strong_count(v) == 1,
+        // "Unpinned" = no consumer holds any of this entry's three planes.
+        // The store itself owns one ref per plane, so > 1 is an outstanding
+        // clone. Distinct entries never share a plane (see
+        // `surface_pixels_bytes`), so no cross-entry false positives.
+        |v| {
+            std::sync::Arc::strong_count(&v.pixels) <= 1
+                && std::sync::Arc::strong_count(&v.normal_pixels) <= 1
+                && std::sync::Arc::strong_count(&v.height_pixels) <= 1
+        },
         |k| k.is_composed(),
     );
     let (peak_entries, peak_bytes) = c.pinned_peak();
@@ -13953,11 +13993,31 @@ pub async fn fetch_entity_surfaces_pixels_batch(
     {
         let mut do_acc: usize = 0;
         let mut so_acc: usize = 0;
+        // Rust review 2026-08-03 (F6): these accumulators are the bounds
+        // PROOF for the unchecked `flat_sub_palettes[off..off + len]` and
+        // `flat_surface_dids[off..off + len]` slices below — the two
+        // sum-equality checks that follow are what make those slices sound.
+        // On wasm32 `usize` is 32-bit, so a wrapped sum could satisfy the
+        // very guard it is supposed to prove. Checked math, so a wrap is a
+        // rejected call rather than a silently-passing guard.
+        let overflow = || {
+            JsValue::from_str(
+                "fetch_entity_surfaces_pixels_batch: group offsets overflow usize",
+            )
+        };
         for i in 0..n {
             dids_offset.push(do_acc);
             sub_offset.push(so_acc);
-            do_acc += surface_dids_lens[i] as usize;
-            so_acc += (sub_palettes_triple_counts[i] as usize) * 3;
+            do_acc = do_acc
+                .checked_add(surface_dids_lens[i] as usize)
+                .ok_or_else(overflow)?;
+            so_acc = so_acc
+                .checked_add(
+                    (sub_palettes_triple_counts[i] as usize)
+                        .checked_mul(3)
+                        .ok_or_else(overflow)?,
+                )
+                .ok_or_else(overflow)?;
         }
         if do_acc != flat_surface_dids.len() {
             return Err(JsValue::from_str(&format!(
@@ -16564,6 +16624,17 @@ fn kick_entity_physics_geometry_loads(world: &holtburger_world::WorldState) {
             .await
             .is_err()
             {
+                // Rust review 2026-08-03 (F2): a prefetch failure is
+                // TRANSIENT (shard 502 / stall guard), so release the
+                // claim — otherwise one bad fetch permanently disabled
+                // this setup's entity collision for the page's lifetime
+                // and the player walked through the door until reload.
+                // Only this arm releases: a successful walk that yields
+                // no geometry is a REAL answer and must stay claimed, or
+                // every physics-less setup re-walks every tick.
+                SETUP_BSP_ATTEMPTED.with(|cell| {
+                    cell.borrow_mut().remove(&setup_id);
+                });
                 return;
             }
             let Some(geometry) = setup_entity_physics_geometry(source.as_ref(), setup_id) else {
@@ -16928,9 +16999,19 @@ fn outdoor_cells_for_world_aabb(
     // spuriously claim the next cell. Clamp to [0, 7] — out-of-LB
     // overhangs (rare) drop to the nearest in-LB cell.
     let cx_min = (local_min_x / VERT_M).floor().clamp(0.0, 7.0) as u32;
-    let cx_max = ((local_max_x / VERT_M).ceil() - 1.0).clamp(0.0, 7.0) as u32;
     let cy_min = (local_min_y / VERT_M).floor().clamp(0.0, 7.0) as u32;
+    // Rust review 2026-08-03 (F3): the `ceil() - 1` form makes `*_max`
+    // land BELOW `*_min` for an axis with zero extent sitting exactly on a
+    // cell line (min == max == 24.0 → min cell 1, max cell 0), and
+    // `cx_max - cx_min` then underflowed the u32 — a panic on any build
+    // with overflow-checks (this crate is not in the workspace's
+    // `overflow-checks = false` list). Raising `*_max` to `*_min` yields
+    // the single cell containing that line, which is the same answer the
+    // `out.is_empty()` centre fallback below used to produce by accident.
+    let cx_max = ((local_max_x / VERT_M).ceil() - 1.0).clamp(0.0, 7.0) as u32;
     let cy_max = ((local_max_y / VERT_M).ceil() - 1.0).clamp(0.0, 7.0) as u32;
+    let cx_max = cx_max.max(cx_min);
+    let cy_max = cy_max.max(cy_min);
     let mut out = Vec::with_capacity(((cx_max - cx_min + 1) * (cy_max - cy_min + 1)) as usize);
     for cx in cx_min..=cx_max {
         for cy in cy_min..=cy_max {
@@ -31212,10 +31293,10 @@ impl PerGuidBridgeIndexes<'_> {
     }
 }
 
-/// P4.1 / LEAK-01: the `SessionHandle`-side view of the same nine
-/// stores. Kept adjacent to [`PerGuidBridgeIndexes`] so the field list
-/// exists in exactly one place — `bridgeIndexSizes()` and the recv-loop
-/// fan-out cannot drift apart.
+/// P4.1 / LEAK-01: the `SessionHandle`-side view of the same stores
+/// (nine at P4.1; seventeen since the F1 list merge). Kept adjacent to
+/// [`PerGuidBridgeIndexes`] so the field list exists in exactly one place
+/// — `bridgeIndexSizes()` and the recv-loop fan-out cannot drift apart.
 #[cfg(target_arch = "wasm32")]
 impl SessionHandle {
     fn per_guid_bridge_indexes(&self) -> PerGuidBridgeIndexes<'_> {
@@ -31277,17 +31358,10 @@ fn maintain_bridge_indexes_on_delete(
     idx.retain(|_, entries| !entries.is_empty());
     drop(idx);
 
-    // Wave 2 (2026-06-08, review C3-leak) — prune the per-guid action
-    // stamp-dedup entry so a long session with heavy entity churn
-    // doesn't leak the map.
-    MOTION_ACTION_STAMPS.with(|m| {
-        m.borrow_mut().remove(&g_u32);
-    });
-
-    // P4.1 / LEAK-01 (2026-07-27): the per-guid JS-facing caches join the
-    // SAME fan-out rather than getting their own lifecycle. Zero removal
-    // sites existed before this call; ACE recycles dynamic GUIDs, so a
-    // survivor here is read back as the previous occupant's data.
+    // P4.1 / LEAK-01 (2026-07-27): every other per-guid store is dropped
+    // through the SAME fan-out rather than getting its own lifecycle.
+    // ACE recycles dynamic GUIDs, so a survivor here is read back as the
+    // previous occupant's data.
     per_guid.prune_on_delete(g_u32);
 }
 
@@ -31305,20 +31379,9 @@ fn apply_inventory_object_delete(
     wielder_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
     >,
-    projectile_index: &std::rc::Rc<
-        std::cell::RefCell<std::collections::HashSet<u32>>,
-    >,
-    physics_script_table_index: &std::rc::Rc<
-        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
-    >,
-    // === Wave 4.B — remote enchantments index cleanup (2026-05-28) ===
-    //
-    // Drop the deleted entity's cached enchantment list so the index
-    // doesn't accumulate dead-GUID entries over a long session.
-    // Symmetric with the `physics_script_table_index` path above.
-    entity_enchantments_index: &std::rc::Rc<
-        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
-    >,
+    // F1 (2026-08-03): the projectile / physics-script-table /
+    // enchantments params are gone — those stores now ride
+    // `PerGuidBridgeIndexes`, which this already receives.
     per_guid: &PerGuidBridgeIndexes<'_>,
 ) -> bool {
     let was_owned = world.player.inventory.contains(&guid);
@@ -31328,19 +31391,10 @@ fn apply_inventory_object_delete(
     }
     world.entities.remove(guid);
 
-    // A8-M1 (2026-06-11): the bridge-local index cleanup (wielder /
-    // projectile / gravity / physics-script-table / enchantments /
-    // MOTION_ACTION_STAMPS) is shared with the `?worldLifecycle=on`
-    // routed path — extracted verbatim into
+    // A8-M1 (2026-06-11): the bridge-local index cleanup is shared with
+    // the `?worldLifecycle=on` routed path — extracted verbatim into
     // `maintain_bridge_indexes_on_delete`.
-    maintain_bridge_indexes_on_delete(
-        guid,
-        wielder_index,
-        projectile_index,
-        physics_script_table_index,
-        entity_enchantments_index,
-        per_guid,
-    );
+    maintain_bridge_indexes_on_delete(guid, wielder_index, per_guid);
 
     was_owned
 }
@@ -43075,9 +43129,6 @@ async fn recv_loop(
                                 maintain_bridge_indexes_on_delete(
                                     data.guid,
                                     &wielder_index,
-                                    &projectile_index,
-                                    &physics_script_table_index,
-                                    &entity_enchantments_index,
                                     &per_guid_bridge_indexes,
                                 );
                                 inventory_changed = true;
@@ -43086,9 +43137,6 @@ async fn recv_loop(
                                 maintain_bridge_indexes_on_delete(
                                     data.object_guid,
                                     &wielder_index,
-                                    &projectile_index,
-                                    &physics_script_table_index,
-                                    &entity_enchantments_index,
                                     &per_guid_bridge_indexes,
                                 );
                                 inventory_changed = true;
@@ -43100,13 +43148,13 @@ async fn recv_loop(
                             }
                             GameMessage::ObjectDelete(data) => {
                                 // === Wave 4.B — propagate to entity_enchantments_index (2026-05-28) ===
-                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index, &per_guid_bridge_indexes) {
+                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &per_guid_bridge_indexes) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::InventoryRemoveObject(data) => {
                                 // === Wave 4.B — propagate to entity_enchantments_index (2026-05-28) ===
-                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index, &per_guid_bridge_indexes) {
+                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &per_guid_bridge_indexes) {
                                     inventory_changed = true;
                                 }
                             }
@@ -53328,8 +53376,17 @@ pub async fn fetch_animation(did: u32) -> Result<AnimationJs, JsValue> {
     let anim = Animation::read(&mut std::io::Cursor::new(&bytes)).map_err(|e| {
         JsValue::from_str(&format!("fetchAnimation 0x{did:08X}: parse failed: {e:?}"))
     })?;
-    let mut frames: Vec<f32> =
-        Vec::with_capacity((anim.num_parts as usize) * (anim.num_frames as usize) * 7);
+    // Rust review 2026-08-03 (F5): was `num_parts * num_frames * 7` — a raw
+    // DAT header product in 32-bit `usize` with release overflow-checks off,
+    // so a corrupt 0x03 record either wrapped the hint or asked for a
+    // multi-GB reservation and aborted the module. Same clamp-by-a-real-
+    // ceiling idiom as `holtburger_dat::utils::safe_capacity`, using the
+    // tighter ceiling a COMPLETED parse already gives us: the loop below
+    // pushes exactly 7 floats per parsed frame, so this is now exact rather
+    // than merely bounded. (`safe_capacity` proper wants a `Read + Seek` and
+    // would only re-derive a looser byte-based bound here.)
+    let parsed_frames: usize = anim.part_frames.iter().map(|pf| pf.frames.len()).sum();
+    let mut frames: Vec<f32> = Vec::with_capacity(parsed_frames.saturating_mul(7));
     for pf in &anim.part_frames {
         for fr in &pf.frames {
             frames.push(fr.origin.x);

@@ -39,45 +39,31 @@ function check(name, ok, detail) {
     else passed += 1;
 }
 
-function locateThree() {
-    if (process.env.THREE_PATH && existsSync(process.env.THREE_PATH)) {
-        return process.env.THREE_PATH;
-    }
-    return null;
-}
+// `three` comes from the ONE canonical locator (harness/lib/locate_three.mjs).
+// This used to be a THREE_PATH-env-only lookup that exit-0'd when unset. See F2.
+import { locateThree, requireThree } from "./harness/lib/locate_three.mjs";
 
 const threePath = locateThree();
-if (!threePath) {
-    console.log("paletted-LRU ESM test: SKIP (three not located).");
-    console.log("  hint: `THREE_PATH=/path/to/three.module.js node test_materials_paletted_lru.mjs`");
-    process.exit(0);
-}
-
-const threeUrl = "file://" + threePath;
-const THREE = await import(threeUrl);
+const THREE = await requireThree("paletted-LRU ESM test");
 
 console.log("Batch 4 — MaterialCache paletted LRU cap + dispose() (#22, anim-frames)");
 console.log(`three loaded from: ${threePath}`);
 console.log("=========================");
 
-// Load a module source, strip the bare `import * as THREE` line + the
-// adapter import, and de-`export` so it runs inside a `new Function`.
-function loadModule(relPath) {
-    const full = resolvePath(__dirname, relPath);
-    let src = readFileSync(full, "utf8");
-    src = src.replace(
-        /^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m,
-        ""
-    );
-    return src;
-}
+// Splice materials.js via the shared harness. The private stripper this
+// replaced removed only the `./adapter.js` import, so every later import
+// materials.js grew (vfx_flags/quality/suite_assets/bc7_textures) survived
+// into the Function body and killed the suite with "Cannot use import
+// statement outside a module" — invisible because locateThree() exit-0'd
+// first. See F2.
+import { spliceModule } from "./harness/lib/splice_module.mjs";
+import { MATERIALS_JS_STUBS } from "./harness/lib/scene3d_stubs.mjs";
 
-const matsSrc = loadModule("scene3d/materials.js");
-const matsPatched = matsSrc
-    .replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m, "")
-    .replace(/^\s*export\s+function\s+/gm, "function ")
-    .replace(/^\s*export\s+class\s+/gm, "class ")
-    .replace(/^\s*export\s+const\s+/gm, "const ");
+const matsSrc = readFileSync(resolvePath(__dirname, "scene3d/materials.js"), "utf8");
+const matsPatched = spliceModule(matsSrc, {
+    stubs: MATERIALS_JS_STUBS,
+    label: "scene3d/materials.js",
+});
 const matsFactory = new Function(
     "THREE",
     matsPatched + "\n; return { MaterialCache };"

@@ -1,0 +1,35 @@
+// harness/lib/scene3d_stubs.mjs — explicit stubs for scene3d modules spliced
+// into `new Function()` by the headless suites.
+//
+// One shared map instead of a per-suite hand-list: the 2026-08-03 review (F2)
+// found four suites broken because `scene3d/materials.js` grew imports their
+// private strippers/stubs never learned about. Centralising means the next
+// import is fixed in one place, and `spliceModule()` fails loudly naming the
+// symbol rather than dying inside `new Function` with a bare SyntaxError.
+//
+// Values are DELIBERATELY narrow (typed no-ops returning the inert value), not
+// a permissive catch-all proxy: a truthy catch-all silently makes any
+// assertion that touches it unfalsifiable.
+
+/** Stubs for every module `scene3d/materials.js` statically imports. */
+export const MATERIALS_JS_STUBS = Object.freeze({
+  // ./adapter.js — pixel→texture uploads. Suites that need a real texture
+  // override these; the default is "no texture produced".
+  surfacePixelsToTexture: "() => null",
+  surfacePixelsToNormalTexture: "() => null",
+  surfacePixelsToHeightTexture: "() => null",
+  surfacePixelsToRoughnessTexture: "() => null",
+  surfacePixelsToAoTexture: "() => null",
+  // ./vfx_flags.js
+  aoMapIntensityValue: "() => 0.6",
+  materialBakeEnabled: "() => false",
+  // ./quality.js
+  getQuality: "() => null",
+  // ./suite_assets.js
+  SuiteAssetSource: "class {}",
+  loadTexchanManifest: "() => null",
+  // ./bc7_textures.js — inert unless ?texBc7=on AND the GPU reports BPTC.
+  bc7Available: "() => false",
+  bc7TextureBytes: "() => 0",
+  upgradeMaterialToBc7: "() => false",
+});
