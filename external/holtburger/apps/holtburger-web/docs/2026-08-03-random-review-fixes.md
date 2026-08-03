@@ -517,3 +517,108 @@ count-for-count, no new failures.
 behaviour, per-instance tarnish variation, and the gemSparkle anchor move all
 change what ships on default. The node proofs cover the data path, not the
 rendered result.
+
+---
+
+# Round 8 — combat/gore + boot infrastructure
+
+Two agents, disjoint file sets (`scene3d/` gore cluster; `service-worker.js` +
+`world_stream` + diag + `rynth/`), me on `spell_shape_preview.js` and
+adjudication. 16 findings, all 16 fixed, every behavioural fix proven by
+reverting the source and watching the test go red.
+
+## The one that could have bricked users
+
+`service-worker.js` cached `boot.hba` and `manifest/<ns>.bin` cache-first.
+Neither is content-addressed — **only `shards/{sha2}/{sha}.bin` is**; those two
+keep the same URL across bakes and change bytes. So a re-bake left every
+returning client serving a stale boot pack into
+`manifest_source.rs:173`'s hard `"boot.hba hash mismatch"`. Unbootable, and
+unfixable by the user: `?nosw=1` is the only escape and nobody knows to type it.
+
+The fix establishes the invariant instead of patching the two paths:
+**cache-first is sound only for content-addressed URLs.** Everything else sits
+behind a bake-identity gate read from the manifest the page already refreshes
+each load. Unknown identity ⇒ network-first; network failure ⇒ cached copy with
+a warn, so offline still boots.
+
+Worth recording: the agent first memoised the manifest read for 30 s, then
+**removed its own memo**, because a SW instance surviving a re-bake would keep
+serving the old boot pack for the TTL — which is the unbootable failure, not a
+slow one. Single-flight instead. A/B re-run by me against the pre-fix file:
+4 passed 4 failed, `RE-BAKE: boot.hba serves the NEW bake — got BOOT-BAKE-A`.
+The first four checks pass on **both** arms, so the cold-load win is preserved.
+
+## Findings
+
+| # | Area | Defect | Proof |
+|---|---|---|---|
+| 145 | service-worker | non-content-addressed cache-first ⇒ re-bake bricks boot | 4/8 red pre-fix |
+| 146 | world_stream | load point latched while `liveScene3d` null ⇒ spawn LB never streams | 3 red on revert |
+| 147 | diag | pending spawn misreported `wire-never-received` | 5 red; revert also exposed a double-report as `extra` |
+| 148 | fixed_grid | 2 of 3 residency detectors structurally impossible | corrupt grid: new red, **old `=> SILENT`** |
+| 149 | trail_map | `smoothstep(edge0>=edge1)` UNDEFINED in GLSL | old form collapses to 0 under a conforming lowering |
+| 150 | rynth | landblock `0xfffffffe`; pose-box leak per host tick | `leaked=40` over 40 ticks |
+| 151 | rynth bot | portal-escape blacklists the portal it walked to | 2 red |
+| 152 | sweep | diag vacuous PASS, adaptive-scale single-frame drop, portal_stencil realloc | 12+20 |
+| 137 | carnage | entity mutated across an `await`, no identity guard (7th site) | red without guard **and** with the wrong `.has()` form |
+| 138 | limbs | pivot indexed out of a differently-sized array, no finite check | NaN is permanent — `===` recovery can never match |
+| 139 | blood_decals | arterial ray used different trig per component | `E=[0.2981,0.1000] W=[-0.2981,0.1000]` |
+| 140 | blood_decals | indoor/outdoor from a cell index stamped once at spawn | live terrain read (see below) |
+| 141 | gore cluster | 3 default-ON modules, ~2,400 lines, **no tests at all** | 522 assertions added |
+| 142 | 3 features | bus-bind ladder gives up silently after ~2 min | — |
+| 143 | misc | stale default comments, wrong fallback shape feeding NaN to wasm | — |
+| 144 | carnage | budget and fall style share a seed *and* its position | 600/600 identical → 54% |
+
+## Two agent judgement calls I want on the record
+
+**#140** — I proposed a one-line stamp refresh. The agent checked and **rejected
+it**: the position-update seam carries no landcell to refresh it *with*, so my
+"one line" meant plumbing a new wire field. It used a live terrain-oracle read
+instead and said why.
+
+**#141 registration** — the agent declined to register its own suites and
+escalated, having first verified that four *pre-existing* siblings
+(`carnage_finisher`, `kill_impulse`, `ragdoll_energy`, `dismember`) were in no
+runner either. 522 assertions that nothing invoked. I registered all nine in
+`harness/run-js-headless.mjs` TIER4; all report PASS. **A test nothing runs
+protects nothing** — the same "exists but never executes" shape this review
+keeps finding in product code.
+
+## No defaults changed
+
+`shadows`: the panel writes `flags.shadows`; the sanitizer silently drops it.
+Decision recorded in `quality.js` — **remove the dead checkbox, do not rewire**,
+because rewiring honours `shadows: true` in every already-saved settings blob
+and switches shadow maps on for returning users with no 1070 measurement behind
+it. Owner is `ui/`, so it is task #153, not an agent edit. `warnOnDeadFlag()`
+makes the drop audible meanwhile.
+
+## Left undone, deliberately
+
+- #153 shadows checkbox (ui/ ownership) · #154 `trail_map.dispose()` has no
+  non-test caller; the re-entry guard belongs in `terrain_vfx.js`.
+- #155 `test_a14_i3_run_keys` 5 failures pin `retailRunKeys` default-OFF while
+  url-flags.md:779 says on. **Proven pre-existing, byte-identical FAIL set.**
+  Same class R6 (`normalMaps`) and R7 (`?visual`) adjudicated — which points at
+  fixing the test, but changing a shipped default's expectation needs the owner.
+- Pre-existing failures re-confirmed byte-identical against `HEAD`:
+  `test_fixed_grid_park` (1), `test_diag_spawnfailed_lbkey` (harness
+  `stripExports` gap), `test_envcell_guard` (documented above).
+
+## My own process error this round
+
+I ran `git add -A external/holtburger` while the second agent still had files
+open, so commit `4596737c` ("combat/gore") swept nine of its in-progress files
+and five new tests under a message describing none of them. Nothing was lost —
+every fix re-verified in the tree, all 12 suites green — and `3f51602f` carries
+the correction. **Stage by path when agents run concurrently.** It could have
+been worse than mis-attribution: a half-written file would have committed too.
+
+## Still owed a real GPU
+
+The 1070 was offline for this round (tailscale last seen 36→59 min).
+`harness/vistest-1070-round1-7.mjs` is staged and unrun. Round-8 additions to
+the queue: ceiling spatter tracking the blow, indoor-spawned mobs bleeding on
+the floor rather than the terrain under it, visibly less canned kills, and
+`ragdoll_env` preferring the terrain floor within 1 m of a body's terrain column.
