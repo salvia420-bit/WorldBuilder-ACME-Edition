@@ -2,7 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>cloud_bridge_test — Clouds-C state bridge validation</title>
+    <title>cloud_bridge_test — OBSOLETE since Sky-K.6</title>
+    <!--
+      ⚠ OBSOLETE (marked 2026-08-03). This harness asserts that five DayGroup
+      uniforms (uSunColor / uAmbientColor / uHorizonColor / uFogDensity /
+      uSunIntensity) on CloudsMaterial track the wasm SkyState. Sky-K.6 DELETED
+      those uniforms — clouds now sample the real Bruneton tables via
+      `attachAtmosphere`, so physics-derived irradiance replaces the hand-fed
+      DayGroup values. It also imports `_internals.decodeArgbToRgb01`, removed
+      in the same wave.
+
+      It therefore cannot pass, and its premise no longer describes the client.
+      `CloudVolume.snapshotUniforms()` was made non-throwing on 2026-08-03 (it
+      reports null for the deleted fields) but that only stops the TypeError.
+
+      To revive it, the assertions have to be rewritten against what the bridge
+      actually feeds today (the Bruneton atmosphere handoff), not restored.
+      Left in place for archaeology rather than deleted.
+    -->
+    <!-- Original title: cloud_bridge_test — Clouds-C state bridge validation -->
     <style>
       body { font-family: ui-monospace, monospace; margin: 1.5rem; line-height: 1.4; max-width: 70rem; }
       h1 { font-size: 1.1rem; }

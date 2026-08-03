@@ -434,6 +434,10 @@ function build() {
     try {
       const inv = typeof handle.playerInventory === "function" ? handle.playerInventory() : [];
       suggested = suggestedCombatModeFromInventory(inv);
+      // Copy-then-free (2026-08-03): `suggestedCombatModeFromInventory` only
+      // `.some()`s over `equipMask` primitives and returns a number, so no box
+      // escapes this scope. See the container-panel/buffs-hud precedent.
+      for (const it of inv) { try { it?.free?.(); } catch (_) {} }
     } catch {}
     const next = inCombatNow ? COMBAT_MODE_NON_COMBAT : suggested;
     try {

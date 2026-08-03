@@ -275,6 +275,14 @@ export class CloudOverlay {
     const plane = new THREE.PlaneGeometry(2, 2);
     this.overlayMesh = new THREE.Mesh(plane, this.overlayMaterial);
     this.overlayMesh.frustumCulled = false;
+    // The vertex shader above writes clip space directly, so this mesh has no
+    // world position: any renderer that is not the main camera pass (the IBL
+    // PMREM / CubeCamera bake, a probe) must hide it or it fills the frame.
+    // `ibl_environment.refresh` keys off this tag.
+    this.overlayMesh.userData = {
+      ...(this.overlayMesh.userData || {}),
+      __clipSpaceOverlay: true,
+    };
     this.overlayScene.add(this.overlayMesh);
 
     // Cloud texture pointer wired in preRender (after first composer

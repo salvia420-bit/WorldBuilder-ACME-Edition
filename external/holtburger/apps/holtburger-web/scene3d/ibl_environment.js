@@ -113,16 +113,43 @@ export class IblEnvironment {
 
   /** Re-render both environment products from the current sky. */
   refresh(nowMs) {
-    // PMREM for standard materials. New RT per call (three has no reuse
-    // API for fromScene); texture-object swap does not recompile programs.
-    const rt = this._pmrem.fromScene(this.skyScene, 0.03, 0.1, 1e7);
-    const old = this._pmremRT;
-    this.scene.environment = rt.texture;
-    this._pmremRT = rt;
-    if (old) old.dispose();
+    // 2026-08-03 — hide the CLIP-SPACE members of skyScene for the duration.
+    // `cloud_overlay`'s composite quad writes `gl_Position = vec4(position.xy,
+    // 0, 1)` (no matrices), so it is not geometry in the scene at all: through
+    // the CubeCamera it covers EVERY face completely, and through `fromScene`
+    // it becomes the entire environment. Under `?clouds=on&ibl=on` that means
+    // the whole world's indirect light is the cloud composite rather than the
+    // sky. World-placed members (the radiance quad, stars, the moon
+    // billboards) are left visible on purpose — they are real sky radiance and
+    // their contribution to the environment is the point.
+    const hidden = [];
+    try {
+      const kids = this.skyScene?.children;
+      if (kids) {
+        for (let i = 0; i < kids.length; i += 1) {
+          const k = kids[i];
+          if (k && k.visible && k.userData?.__clipSpaceOverlay === true) {
+            k.visible = false;
+            hidden.push(k);
+          }
+        }
+      }
+    } catch (_) { /* fail-soft: a bad walk must not skip the refresh */ }
 
-    // Raw mipmapped cube for the terrain shader.
-    this._cubeCam.update(this.renderer, this.skyScene);
+    try {
+      // PMREM for standard materials. New RT per call (three has no reuse
+      // API for fromScene); texture-object swap does not recompile programs.
+      const rt = this._pmrem.fromScene(this.skyScene, 0.03, 0.1, 1e7);
+      const old = this._pmremRT;
+      this.scene.environment = rt.texture;
+      this._pmremRT = rt;
+      if (old) old.dispose();
+
+      // Raw mipmapped cube for the terrain shader.
+      this._cubeCam.update(this.renderer, this.skyScene);
+    } finally {
+      for (let i = 0; i < hidden.length; i += 1) hidden[i].visible = true;
+    }
 
     this._lastRefreshMs = nowMs;
     this.refreshCount += 1;

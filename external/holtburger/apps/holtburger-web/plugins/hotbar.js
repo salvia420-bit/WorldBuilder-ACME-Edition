@@ -642,6 +642,11 @@ export function mount(ctx) {
           }
         }
       }
+      // Copy-then-free (2026-08-03): `canBindToHotbar` reads primitives and
+      // returns a plain {ok, reason}, and nothing above retains an element,
+      // so every box can be released here rather than waiting on the
+      // FinalizationRegistry (the wasm high-water mark only ratchets up).
+      for (const it of inv) { try { it?.free?.(); } catch (_) {} }
       if (dirty) { saveState(state); for (let i = 0; i < SLOT_COUNT; i++) renderSlot(i); }
     } catch (_) {}
   }

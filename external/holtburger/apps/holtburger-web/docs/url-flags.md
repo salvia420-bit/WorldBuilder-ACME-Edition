@@ -1350,8 +1350,8 @@ to reality instantly so it can never exceed what is drawn. The re-validator's ch
 
 | Flag | Reader (semantics when absent) | Effective default | Where |
 |---|---|---|---|
-| `horizonFadeStart` | numeric via `_aerialNum` | 820 m | atmosphere_pipeline.js:506 |
-| `horizonFadeEnd` | numeric via `_aerialNum` | 1150 m | atmosphere_pipeline.js:507 |
+| `horizonFadeStart` | numeric via `_aerialNum` | 820 m | atmosphere_pipeline.js:630 |
+| `horizonFadeEnd` | numeric via `_aerialNum` | 1150 m | atmosphere_pipeline.js:631 |
 | `aerialStart` | numeric via `_aerialNum` | 80 m | atmosphere_pipeline.js:508 |
 | `aerialEnd` | numeric via `_aerialNum` | 480 m | atmosphere_pipeline.js:509 |
 | `aerialMax` | numeric via `_aerialNum` | **0.0 — INERT** (was 0.62; 2026-08-03 far-terrain S1) | atmosphere_pipeline.js `AERIAL_MAX` |
