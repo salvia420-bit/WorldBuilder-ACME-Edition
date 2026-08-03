@@ -992,12 +992,13 @@ function _spawnCubeBurst(
 // This block reconstructs that placement, adds an outward spray bias,
 // and scales the whole thing up when the hit was a critical.
 //
-// **Gate.** `combatFxEnabled()` is the ONE reader, and it is STRICT
-// `=== "on"`. (`BLOCKING_PARTICLE_PARITY_ON` below reads `!== "off"` —
-// that one is a VALIDATED default-ON gate per url-flags.md, not a model
-// for new un-eye-tested features.) Do NOT copy that shape here:
-// an absent param, `?combatFx`, `?combatFx=1`, `?combatFx=true`,
-// `?combatFx=ON` and `?combatFx=off` ALL read false. When false, the
+// **Gate.** `combatFxEnabled()` is the ONE reader, and it is DEFAULT-ON
+// (`!== "off"`) per the owner decision recorded in url-flags.md — the same
+// shape `BLOCKING_PARTICLE_PARITY_ON` below uses. (This block previously
+// asserted a STRICT `=== "on"` contract; that was written pre-flip and a
+// 2026-08-03 review acted on it, briefly reverting the owner's default.
+// url-flags.md is the authority for a shipped default.) Only
+// `?combatFx=off` reads false. When false, the
 // Splatter dispatch arm runs the byte-identical pre-Phase-1 code and
 // none of the state below is ever touched (no listeners bound, no maps
 // written, no bounding boxes computed).
@@ -1026,13 +1027,15 @@ function combatFxEnabled() {
   _combatFxOn = false;
   try {
     if (typeof window !== "undefined" && window.location) {
-      // STRICT `=== "on"` — the contract stated in the block comment above.
-      // This read was `!== "off"`, i.e. the documented default-on footgun the
-      // comment explicitly says not to copy: absent / `?combatFx` / `=1` /
-      // `=true` all read ON, so the un-eye-tested directional-splatter path
-      // was live on the bare default URL.
+      // DEFAULT-ON (`!== "off"`) — this is the OWNER's recorded decision
+      // (url-flags.md `combatFx` row: "on (2026-08-02 owner default-on,
+      // pre-1070-eyetest)"), NOT the footgun class. A 2026-08-03 review flipped
+      // it to strict `=== "on"` off the stale block comment above and was
+      // reverted the same day: url-flags.md is the authority for a flag's
+      // shipped default, and an owner default-on awaiting its eye-test is a
+      // deliberate state. `?combatFx=off` is the A/B escape.
       _combatFxOn =
-        new URLSearchParams(window.location.search).get("combatFx") === "on";
+        new URLSearchParams(window.location.search).get("combatFx") !== "off";
     }
   } catch (_) {
     _combatFxOn = false;
@@ -3581,8 +3584,8 @@ export const __test = Object.freeze({
     ttlMs: _PENDING_TTL_MS,
   }),
   // Combat-visuals Phase 1 (2026-08-02) — directional/crit splatter.
-  // `combatFxEnabled` reflects the STRICT `?combatFx=on` gate (ONLY the exact
-  // string "on" enables it — absent / "1" / "true" / "ON" all read OFF);
+  // `combatFxEnabled` reflects the DEFAULT-ON `?combatFx` gate (only the exact
+  // string "off" disables it — see the gate block comment);
   // `combatFxStats` counts latch/consume/spawn so an acceptance trace
   // can assert crit correlation without an eye-test; `latchCrit` lets a
   // trace force a crit for a guid and fire a splatter to see the big
