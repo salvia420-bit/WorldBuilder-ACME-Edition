@@ -77,8 +77,13 @@ fn parse_colors<R: Read + Seek>(
     _endian: binrw::Endian,
     _args: (),
 ) -> BinResult<Vec<u32>> {
-    let count = i32::read_le(reader)? as usize;
-    let mut out = Vec::with_capacity(count);
+    // Rust review 2026-08-03 (F5): was `i32::read_le(reader)? as usize` — a
+    // negative count sign-extended to usize::MAX and blew up `with_capacity`
+    // before any element was read. `.max(0)` matches the existing guard at
+    // `file_type/sound_table.rs:179`; `safe_capacity` additionally bounds the
+    // reservation by what the record can actually hold (4 bytes per entry).
+    let count = i32::read_le(reader)?.max(0) as usize;
+    let mut out = Vec::with_capacity(crate::utils::safe_capacity(reader, count, 4)?);
     for _ in 0..count {
         out.push(u32::read_le(reader)?);
     }

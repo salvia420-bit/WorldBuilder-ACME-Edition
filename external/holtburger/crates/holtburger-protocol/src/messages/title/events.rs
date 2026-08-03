@@ -1,3 +1,4 @@
+use crate::messages::utils::require_fixed_stride;
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 
@@ -27,9 +28,10 @@ impl ProtocolUnpack for CharacterTitleEventData {
         let num_titles = LittleEndian::read_u32(&data[*offset + 8..*offset + 12]) as usize;
         *offset += 12;
 
-        if *offset + num_titles * 4 > data.len() {
-            return None;
-        }
+        // Rust review 2026-08-03 (F-sweep): `num_titles * 4` wrapped 32-bit
+        // usize on wasm32, so the guard passed for counts >= 0x40000000 and the
+        // `with_capacity` below reserved multi-GB. See `utils::require_fixed_stride`.
+        require_fixed_stride(data, *offset, num_titles, 4)?;
         let mut title_ids = Vec::with_capacity(num_titles);
         for _ in 0..num_titles {
             title_ids.push(LittleEndian::read_u32(&data[*offset..*offset + 4]));

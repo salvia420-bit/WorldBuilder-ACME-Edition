@@ -1,7 +1,7 @@
 use crate::messages::object::types::*;
 use crate::messages::utils::{
     align_to_4, pad_to_4, read_packed_data_id, read_packed_wclass_id, read_string16,
-    write_packed_data_id, write_packed_wclass_id, write_string16,
+    require_fixed_stride, write_packed_data_id, write_packed_wclass_id, write_string16,
 };
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
@@ -995,9 +995,14 @@ impl ProtocolUnpack for ObjectDescriptionData {
             }
             let count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
             *offset += 4;
-            if *offset + (count * 8) > data.len() {
-                return None;
-            }
+            // Rust review 2026-08-03 (F4): `count * 8` was evaluated in native
+            // usize — 32-bit on wasm32 — so a count of 0x20000000 wrapped the
+            // product to 0, the guard degenerated to `*offset > data.len()`, and
+            // both the `with_capacity` below (4.3 GB) and the read loop ran
+            // unbounded. The three sibling entry-count sites in this file
+            // (:63/:91/:121) are safe because they mask `& 0x00FFFFFF` first;
+            // this one has no mask, so it takes the checked gate instead.
+            require_fixed_stride(data, *offset, count, 8)?;
 
             let mut parsed_children = Vec::with_capacity(count);
             for _ in 0..count {

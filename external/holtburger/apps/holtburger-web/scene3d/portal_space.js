@@ -36,6 +36,10 @@ const RING_COUNT = 6;          // repeated along the view axis → tunnel of rin
 const RING_SPACING = 26;       // AC units between rings (pre-scale)
 const OPEN_DUR = 0.45;         // s — iris-open (scale + fade in) = "opens"
 const TRAVEL_DUR = 1.8;        // s — default sustained travel before auto-close
+// ⚠ RESERVED (2026-08-03 review): travel currently ALWAYS ends at TRAVEL_DUR
+// (or immediately on signalPortalArrived) — there is no wait-for-arrival hold,
+// so this cap never binds. It becomes live only if a future change makes the
+// close WAIT for the arrival signal (then: hold until arrival, capped here).
 const MAX_HOLD = 6.0;          // s — hard cap on travel if arrival never signals
 const CLOSE_DUR = 0.55;        // s — iris-out (fade + slight expand) = "closes"
 const TWIST_RATE = 0.9;        // rad/s — global roll ("twists and turns")
@@ -126,6 +130,9 @@ async function ensureRig(scene3d) {
     const wasmMesh = meshes && meshes[0];
     if (!wasmMesh) return null;
     const { groups } = meshToGeometryGroups(wasmMesh);
+    // meshToGeometryGroups snapshots every typed array — release the
+    // wasm-bindgen handle (one-time, but the convention is one free per fetch).
+    try { wasmMesh.free?.(); } catch (_) {}
     if (!groups || groups.length === 0) return null;
 
     normaliseGeometries(groups.map((g) => g.geometry));

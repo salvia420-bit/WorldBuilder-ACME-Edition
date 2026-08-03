@@ -1,5 +1,6 @@
 use super::types::EquipMask;
 use crate::errors::WeenieError;
+use crate::messages::utils::capacity_hint;
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use holtburger_common::Guid;
@@ -25,7 +26,7 @@ impl ProtocolUnpack for ViewContentsEventData {
         }
         let count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
-        let mut items = Vec::with_capacity(count);
+        let mut items = Vec::with_capacity(capacity_hint(data, *offset, count));
         for _ in 0..count {
             let guid = Guid::unpack(data, offset)?;
             if *offset + 4 > data.len() {

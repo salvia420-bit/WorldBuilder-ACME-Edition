@@ -158,7 +158,11 @@ fn smoothstep01(x: f32) -> f32 {
 fn seam_t(rgba: &[u8], w: u32, h: u32) -> Option<(Vec<f32>, Vec<f32>)> {
     let (wu, hu) = (w as usize, h as usize);
     let n = wu.saturating_mul(hu);
-    if n == 0 || rgba.len() < n * 4 {
+    // Rust review 2026-08-03 (F-sweep): `n` is `saturating_mul`'d but the
+    // `* 4` was not — at w=65536,h=16384 the product wrapped to 0 on wasm32,
+    // the guard passed for a short buffer, and the `rgba[i * 4 + 2]` reads
+    // below ran off the end. Matches `normal_gen.rs:47`'s `needed_rgba`.
+    if n == 0 || rgba.len() < n.saturating_mul(4) {
         return None;
     }
 
@@ -650,6 +654,16 @@ fn micro_amp(class: ReliefClass) -> f32 {
 fn micro_detail_dark(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
     let (wu, hu) = (w as usize, h as usize);
     let n = wu.saturating_mul(hu);
+    // F-sweep (defensive): this private helper indexes `rgba[i * 4 + 2]` with
+    // no check of its own. Its single caller
+    // (`relief_height_classified`) validates the length first, so this is not
+    // independently reachable — but that guard was exactly the one whose
+    // `n * 4` wrapped, so keep a local one. Returning a zero field (rather
+    // than an empty Vec) preserves the caller's `zip` length: d = 0 is the
+    // neutral "pure noise" case, i.e. the painted-class behaviour.
+    if n == 0 || rgba.len() < n.saturating_mul(4) {
+        return vec![0.0; n];
+    }
     let mut lum = vec![0.0f32; n];
     for i in 0..n {
         lum[i] = (0.299 * rgba[i * 4] as f32
@@ -671,7 +685,8 @@ fn micro_detail_dark(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
 pub fn grain_dir_u(rgba: &[u8], w: u32, h: u32) -> bool {
     let (wu, hu) = (w as usize, h as usize);
     let n = wu.saturating_mul(hu);
-    if n == 0 || rgba.len() < n * 4 || wu < 2 || hu < 2 {
+    // F-sweep: `n * 4` wrap — see `seam_t`.
+    if n == 0 || rgba.len() < n.saturating_mul(4) || wu < 2 || hu < 2 {
         return true;
     }
     let lum = |i: usize| {
@@ -701,7 +716,10 @@ pub fn relief_height_classed(
     seed: u32,
 ) -> Vec<f32> {
     let n = (w as usize).saturating_mul(h as usize);
-    if n == 0 || rgba.len() < n * 4 {
+    // F-sweep: `n * 4` wrap — see `seam_t`. This is the guard that also keeps
+    // `micro_detail_dark` (below) in bounds, so the wrap made that unguarded
+    // helper reachable.
+    if n == 0 || rgba.len() < n.saturating_mul(4) {
         return Vec::new();
     }
     // UNCLASSIFIED surfaces (test fixtures, post-table content) keep the

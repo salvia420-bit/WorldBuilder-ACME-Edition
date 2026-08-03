@@ -1,4 +1,4 @@
-use crate::messages::utils::{read_string16, write_string16};
+use crate::messages::utils::{capacity_hint, read_string16, write_string16};
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{LittleEndian, WriteBytesExt};
 use holtburger_common::Guid;
@@ -73,7 +73,7 @@ impl ProtocolUnpack for BookDataResponseEventData {
         let num_pages = u32::unpack(data, offset)?;
         let max_num_chars_per_page = u32::unpack(data, offset)?;
         let page_count = u32::unpack(data, offset)? as usize;
-        let mut pages = Vec::with_capacity(page_count);
+        let mut pages = Vec::with_capacity(capacity_hint(data, *offset, page_count));
         for _ in 0..page_count {
             pages.push(BookPageData::unpack(data, offset)?);
         }

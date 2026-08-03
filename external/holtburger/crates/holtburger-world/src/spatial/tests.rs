@@ -1210,6 +1210,112 @@ mod collision {
         assert_eq!(nearby.len(), 1, "expected neighbour cell AABB to be included");
     }
 
+    /// Rust review 2026-08-03 (F10): the 3x3 neighbour ring used to `continue`
+    /// on any cell index outside 0..8, clipping it at the 192 m landblock seam.
+    /// Since entries are bucketed by AABB CENTRE, a building part centred in the
+    /// edge cell of the ADJACENT landblock was never returned for a player
+    /// standing in the facing edge cell of this one — 24 m away — so it could be
+    /// walked straight through.
+    #[test]
+    fn near_pose_crosses_landblock_boundary_into_neighbour_cells() {
+        let mut scene = SpatialScene::new();
+        // Player stands in landblock (0x01, 0x02) at its SOUTH-WEST corner cell,
+        // so it is simultaneously on the west seam (cx=0) and the south seam
+        // (cy=0): cell (cx=0, cy=0) → idx = 0*8 + 0 + 1 = 1 → 0x0001.
+        // Block origin is (192, 384); cell (0,0) spans local 0..24 on both axes.
+        let here_high = 0x0102_0000u32;
+        let pose = pose_at(Guid(here_high | 0x0001), 4.0, 4.0, 0.0);
+
+        // Building centred in the EAST edge column of the landblock to the WEST,
+        // i.e. block (0x00, 0x02), cell (cx=7, cy=0) → idx = 7*8 + 0 + 1 = 57 →
+        // 0x0039. Geometrically this is the cell immediately adjacent to ours.
+        let west_high = 0x0002_0000u32;
+        scene.insert_building_aabb(
+            west_high | 0x0039,
+            entry(
+                BuildingId::new(west_high, 0x0200_5678, 0),
+                // Block (0x00,0x02) origin is (0, 384); cell x 168..192, y 384..408.
+                global_aabb(
+                    Vector3::new(170.0, 386.0, 0.0),
+                    Vector3::new(191.0, 390.0, 6.0),
+                ),
+            ),
+        );
+
+        let nearby = scene.building_aabbs_near_pose(&pose);
+        assert_eq!(
+            nearby.len(),
+            1,
+            "a building in the adjacent landblock's facing edge cell must be a \
+             collision candidate (pre-fix the ring stopped at the seam and \
+             returned 0)",
+        );
+        assert_eq!(nearby[0].building_id.landblock_id, west_high);
+
+        // Symmetric case across the SOUTH seam: block (0x01, 0x01), cell
+        // (cx=0, cy=7) → idx = 0*8 + 7 + 1 = 8 → 0x0008.
+        // Block (0x01,0x01) origin is (192, 192); cell x 192..216, y 360..384.
+        let south_high = 0x0101_0000u32;
+        scene.insert_building_aabb(
+            south_high | 0x0008,
+            entry(
+                BuildingId::new(south_high, 0x0200_9ABC, 0),
+                global_aabb(
+                    Vector3::new(194.0, 362.0, 0.0),
+                    Vector3::new(198.0, 383.0, 6.0),
+                ),
+            ),
+        );
+        let nearby = scene.building_aabbs_near_pose(&pose);
+        assert_eq!(nearby.len(), 2, "south-seam neighbour must also be included");
+
+        // A landblock we are NOT adjacent to must never be pulled in.
+        let far_high = 0x0505_0000u32;
+        scene.insert_building_aabb(
+            far_high | 0x0002,
+            entry(
+                BuildingId::new(far_high, 0x0200_DEAD, 0),
+                global_aabb(
+                    Vector3::new(960.0, 960.0, 0.0),
+                    Vector3::new(964.0, 964.0, 6.0),
+                ),
+            ),
+        );
+        assert_eq!(
+            scene.building_aabbs_near_pose(&pose).len(),
+            2,
+            "the ring must stay a 3x3 of CELLS — a distant landblock is not a \
+             candidate just because the boundary is now crossable",
+        );
+    }
+
+    /// F10 edge-of-world guard: a pose in landblock (0x00, 0x00) asks for
+    /// neighbours at block index −1, which does not exist. Must not panic or
+    /// wrap around to 0xFF.
+    #[test]
+    fn near_pose_at_world_edge_does_not_wrap_or_panic() {
+        let mut scene = SpatialScene::new();
+        // Block (0x00, 0x00), cell (0, 0) → idx = 1 → 0x0001.
+        let pose = pose_at(Guid(0x0000_0001), 4.0, 4.0, 0.0);
+        // Plant something in the would-be wrap target (0xFF, 0xFF) — if the
+        // rebase wrapped instead of clamping, this would be returned.
+        let wrap_high = 0xFFFF_0000u32;
+        scene.insert_building_aabb(
+            wrap_high | 0x003A,
+            entry(
+                BuildingId::new(wrap_high, 0x0200_BEEF, 0),
+                global_aabb(
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::new(4.0, 4.0, 4.0),
+                ),
+            ),
+        );
+        assert!(
+            scene.building_aabbs_near_pose(&pose).is_empty(),
+            "block index -1 must be dropped, never wrapped to 0xFF",
+        );
+    }
+
     #[test]
     fn aabb_transform_yaw_45_translates_and_rotates_corners() {
         // Phase 6 step B follow-up: per-part AABBs come back from

@@ -54,13 +54,36 @@ check("idempotent per pesObjectId (guard set before async attach)",
   /_skyBirdChainsAttached\.add\(pes\)/.test(upd) && /_skyBirdChainsAttached\.has\(pes\)\) continue/.test(upd));
 check("attaches via statics.attachSkyParticleChain (dynamic import, no cycle)",
   /import\("\.\/statics\.js"\)/.test(upd) && /attachSkyParticleChain\(scene3d, this\._skyBirdAnchor, pes, wasmExports/.test(upd));
-check("anchor added to the WORLD scene (world-scale particles)",
-  /this\.scene\.add\(this\._skyBirdAnchor\)/.test(upd));
+// FRAME INVARIANT (2026-08-03 fix #63). `_runStaticParticleChain` parents the
+// Swarm emitters straight under this anchor, and every other caller hands it an
+// anchor under `staticsGroup` — so the emitter offsets are AC-frame (Z-up). The
+// anchor must therefore hang off `worldRoot`, NOT the Y-up root scene. These two
+// checks assert the INVARIANT (correct frame, genuinely overhead), not the old
+// mechanism; they previously locked the bug in place by matching
+// `this.scene.add(...)` and `camera.position.z + this._skyBirdAltitude`, which
+// parked the swarm 40 m SOUTH at eye height.
+check("anchor parented to the AC frame (worldRoot), root scene only as fallback",
+  /scene3d\.worldRoot \?\? this\.scene/.test(upd) && /frame\.add\(this\._skyBirdAnchor\)/.test(upd));
+check("anchor frame's matrixWorld is seeded before the first worldToLocal",
+  /frame\.updateWorldMatrix\(/.test(upd));
 // tick: camera-follow at altitude, hidden indoors
-const tickFn = sky.slice(sky.indexOf("  tick(_dt, camera) {"), sky.indexOf("  tick(_dt, camera) {") + 1600);
-check("tick follows camera at altitude (AC Z-up), hides indoors",
-  /_skyBirdAnchor\.position\.set\(\s*[\s\S]*camera\.position\.z \+ this\._skyBirdAltitude/.test(tickFn) &&
+const tickFn = sky.slice(sky.indexOf("  tick(_dt, camera) {"), sky.indexOf("  tick(_dt, camera) {") + 2200);
+check("tick lifts the anchor along three.js world +Y (overhead), hides indoors",
+  /_skyBirdPosScratch\.copy\(camera\.position\)/.test(tickFn) &&
+  /_skyBirdPosScratch\.y \+= this\._skyBirdAltitude/.test(tickFn) &&
   /!isIndoor/.test(tickFn));
+check("overhead point is converted into the anchor's parent frame",
+  /frame\.worldToLocal\(_skyBirdPosScratch\)/.test(tickFn) &&
+  /_skyBirdAnchor\.position\.copy\(_skyBirdPosScratch\)/.test(tickFn));
+check("tick allocates no vector (module scratch, not a fresh Vector3)",
+  !/new THREE\.Vector3\(\)/.test(tickFn));
+// dispose: reap the shared-manager emitters + drop the idempotence guard
+const disposeFn = sky.slice(sky.indexOf("  dispose() {"));
+check("dispose reaps sky-swarm emitters by the same sky:<pes> owner key",
+  /destroyAllForOwner/.test(disposeFn) && /`sky:\$\{pes\}`/.test(disposeFn));
+check("dispose clears the per-pes idempotence guard and drops the anchor",
+  /_skyBirdChainsAttached\.clear\(\)/.test(disposeFn) &&
+  /_skyBirdAnchor\.parent\.remove\(this\._skyBirdAnchor\)/.test(disposeFn));
 
 // --- loop.js: drives it from the same getSkyObjectStates snapshot
 check("loop.js tickWeatherState calls updateSkyParticleChains with wasmExports",

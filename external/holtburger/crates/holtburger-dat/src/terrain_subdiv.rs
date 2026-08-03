@@ -178,38 +178,50 @@ fn sample_height(
     if (0..=8).contains(&x) && (0..=8).contains(&y) {
         return heights[x as usize][y as usize];
     }
-    // East neighbour (x = 9, 10 → indices 0, 1 of east.[x_local])
-    if x > 8 && let Some(east) = adjacent.east.as_ref() {
-        let xi = (x - 9) as usize;
-        if xi < 2 && (0..=8).contains(&y) {
-            return east[xi][y as usize];
+    // Rust review 2026-08-03 (F8): all four neighbour arms were off by one.
+    //
+    // Landblock vertex columns run 0..=8 over 192 m, and column 8 IS column 0
+    // of the east neighbour — they are the same shared seam vertex, not two
+    // adjacent ones. So the first genuinely NEW sample east of this LB is the
+    // east neighbour's column 1, i.e. global `x = 9` → `east[1]`; and the first
+    // new sample west is the west neighbour's column 7, i.e. `x = -1` →
+    // `west[0]`. The old code returned `east[0]` / `west[1]`, both of which are
+    // the seam duplicates of `heights[8]` / `heights[0]` — so every bicubic
+    // evaluation at a 192 m seam saw a repeated knot, flattening the tangent
+    // and silently degrading the loaded-neighbour case into the mirror case.
+    //
+    // `control_grid_normals` in this same file already had it right
+    // (`w[0][j]` for x = −1, `e[1][j]` for x = +9) and therefore contradicted
+    // this function; the two now agree.
+    //
+    // `x = ±2` / `y = ±2` have NO stored data (only two strips are kept per
+    // direction, and one of each pair is the seam duplicate), so they now fall
+    // through to the mirror fallback rather than silently returning the `±1`
+    // sample. `neighbourhood_patch` only ever asks for `[-1, 9]`, so this is
+    // unreachable from the live path — it is the correct answer for the
+    // exported API regardless.
+    //
+    // East neighbour: global x = 9 is the east LB's column 1 (index 1).
+    if x == 9 && let Some(east) = adjacent.east.as_ref() {
+        if (0..=8).contains(&y) {
+            return east[1][y as usize];
         }
     }
-    // West neighbour (x = -1, -2 → indices 1, 0 of west.[x_local])
-    // We store columns 7 and 8 of the west LB as indices 0 (col 7) and
-    // 1 (col 8). x = -1 maps to col 8 (=index 1); x = -2 maps to col 7
-    // (=index 0).
-    if x < 0 && let Some(west) = adjacent.west.as_ref() {
-        if x == -1 && (0..=8).contains(&y) {
-            return west[1][y as usize];
-        }
-        if x == -2 && (0..=8).contains(&y) {
+    // West neighbour: global x = -1 is the west LB's column 7 (index 0).
+    if x == -1 && let Some(west) = adjacent.west.as_ref() {
+        if (0..=8).contains(&y) {
             return west[0][y as usize];
         }
     }
-    // North neighbour (y = 9, 10 → indices 0, 1)
-    if y > 8 && let Some(north) = adjacent.north.as_ref() {
-        let yi = (y - 9) as usize;
-        if yi < 2 && (0..=8).contains(&x) {
-            return north[x as usize][yi];
+    // North neighbour: global y = 9 is the north LB's row 1 (index 1).
+    if y == 9 && let Some(north) = adjacent.north.as_ref() {
+        if (0..=8).contains(&x) {
+            return north[x as usize][1];
         }
     }
-    // South neighbour (y = -1, -2 → indices 1, 0)
-    if y < 0 && let Some(south) = adjacent.south.as_ref() {
-        if y == -1 && (0..=8).contains(&x) {
-            return south[x as usize][1];
-        }
-        if y == -2 && (0..=8).contains(&x) {
+    // South neighbour: global y = -1 is the south LB's row 7 (index 0).
+    if y == -1 && let Some(south) = adjacent.south.as_ref() {
+        if (0..=8).contains(&x) {
             return south[x as usize][0];
         }
     }
@@ -1141,11 +1153,57 @@ mod tests {
         }
     }
 
-    // Removed `lb_edge_uses_adjacent_when_loaded` (2026-06-26): it asserted
-    // the bicubic POSITION path read neighbour-LB heights and overshot, then
-    // clamped to ±0.3 m. Positions are faceted now (no bicubic, no clamp);
-    // the neighbour strips feed cross-LB NORMALS instead — covered by
-    // `cross_lb_normals_are_seam_continuous`.
+    // `lb_edge_uses_adjacent_when_loaded` was removed 2026-06-26 because it
+    // asserted the bicubic POSITION path (overshoot + ±0.3 m clamp), which no
+    // longer exists — positions are faceted now.
+    //
+    // RESTORED 2026-08-03 (Rust review F8), retargeted at the contract that
+    // actually still holds: `sample_height` must splice the ADJACENT strips at
+    // `x/y = ±1` past the edge, and must pick the strip index that is NOT the
+    // shared seam duplicate. Absent this lock the off-by-one it caught was
+    // invisible — every seam sample silently returned a copy of this LB's own
+    // edge row, which is exactly what the mirror fallback would have produced.
+    #[test]
+    fn lb_edge_uses_adjacent_when_loaded() {
+        // Inner LB is flat at 5.0 so any adjacent value is unmistakable.
+        let h = flat(5.0);
+
+        // Strip layout (see `AdjacentHeights`):
+        //   east[0]  = east LB col 0 == OUR col 8  (seam duplicate)
+        //   east[1]  = east LB col 1               <- the real x = 9
+        //   west[0]  = west LB col 7               <- the real x = -1
+        //   west[1]  = west LB col 8 == OUR col 0  (seam duplicate)
+        // Same shape for north (rows 0,1) and south (rows 7,8).
+        let mut adj = AdjacentHeights::default();
+        adj.east = Some([[5.0; 9], [11.0; 9]]); // [seam dup, real]
+        adj.west = Some([[12.0; 9], [5.0; 9]]); // [real, seam dup]
+        adj.north = Some([[5.0, 13.0]; 9]); // [seam dup, real]
+        adj.south = Some([[14.0, 5.0]; 9]); // [real, seam dup]
+
+        // The four one-past-the-edge samples must come from the NON-duplicate
+        // strip. Reading the duplicate would yield 5.0 — indistinguishable from
+        // the mirror fallback, which is how the bug hid.
+        assert_eq!(sample_height(&h, &adj, 9, 4), 11.0, "x=+9 must be east[1]");
+        assert_eq!(sample_height(&h, &adj, -1, 4), 12.0, "x=-1 must be west[0]");
+        assert_eq!(sample_height(&h, &adj, 4, 9), 13.0, "y=+9 must be north[1]");
+        assert_eq!(sample_height(&h, &adj, 4, -1), 14.0, "y=-1 must be south[0]");
+
+        // In-range coords are untouched by the neighbour arms.
+        assert_eq!(sample_height(&h, &adj, 8, 4), 5.0);
+        assert_eq!(sample_height(&h, &adj, 0, 4), 5.0);
+
+        // No strips loaded ⇒ mirror fallback (−1 → 1, 9 → 7), never a panic.
+        let none = AdjacentHeights::default();
+        assert_eq!(sample_height(&h, &none, 9, 4), 5.0);
+        assert_eq!(sample_height(&h, &none, -1, 4), 5.0);
+
+        // `sample_height` must agree with `control_grid_normals`' own mapping —
+        // the two disagreed before this fix. Reproduce that function's choice
+        // (`e[1]` for x=+9, `w[0]` for x=-1) and require an exact match.
+        let (east_strip, west_strip) = (adj.east.unwrap(), adj.west.unwrap());
+        assert_eq!(sample_height(&h, &adj, 9, 4), east_strip[1][4]);
+        assert_eq!(sample_height(&h, &adj, -1, 4), west_strip[0][4]);
+    }
 
     #[test]
     fn vertex_normal_flat_terrain_is_z_up() {

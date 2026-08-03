@@ -1075,6 +1075,28 @@ impl Entity {
             return EntityPositionSyncOutcome::Rejected;
         }
 
+        // Rust review 2026-08-03 (F9): reject a non-finite wire pose before it can
+        // reach `self.position` (and from there the scene body + every physics
+        // term). `PositionPack::unpack` validates length but not VALUE, and
+        // nothing downstream re-sanitizes: `rebucket_outdoor_landblock` is
+        // NaN-inert, so a single poisoned UpdatePosition wedges the entity for the
+        // rest of the session. Rejecting here also protects every REMOTE entity —
+        // the local-player twin of this guard lives in
+        // `state/mutations.rs::update_player_position_core`.
+        if !position.coords.x.is_finite()
+            || !position.coords.y.is_finite()
+            || !position.coords.z.is_finite()
+        {
+            log::warn!(
+                "rejecting non-finite server position for entity {:?}: ({}, {}, {})",
+                self.guid,
+                position.coords.x,
+                position.coords.y,
+                position.coords.z
+            );
+            return EntityPositionSyncOutcome::Rejected;
+        }
+
         let old_teleport_sequence = self.sequences[OBJECT_TELEPORT_SEQUENCE_INDEX];
         let old_force_position_sequence = self.sequences[OBJECT_FORCE_POSITION_SEQUENCE_INDEX];
         let old_position_sequence = self.sequences[OBJECT_POSITION_SEQUENCE_INDEX];

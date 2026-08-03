@@ -466,8 +466,12 @@ fn cycle_key(stance: u32, command: u32) -> u32 {
 }
 
 fn parse_u32_map<R: Read + Seek>(reader: &mut R) -> BinResult<HashMap<u32, u32>> {
+    // Rust review 2026-08-03 (F6): `with_capacity(count)` reserved straight off
+    // an unvalidated u32 read 8 bytes into the file — a 12-byte MotionTable
+    // ending in 0xFFFFFFFF asked for ~40 GB of buckets and aborted before the
+    // first (fallible) element read could fail. 8 bytes minimum per entry.
     let count = u32::read_le(reader)? as usize;
-    let mut values = HashMap::with_capacity(count);
+    let mut values = HashMap::with_capacity(crate::utils::safe_capacity(reader, count, 8)?);
     for _ in 0..count {
         values.insert(u32::read_le(reader)?, u32::read_le(reader)?);
     }
@@ -475,8 +479,10 @@ fn parse_u32_map<R: Read + Seek>(reader: &mut R) -> BinResult<HashMap<u32, u32>>
 }
 
 fn parse_motion_data_map<R: Read + Seek>(reader: &mut R) -> BinResult<HashMap<u32, MotionData>> {
+    // F6: see `parse_u32_map`. Key (4) + a MotionData that is itself at least
+    // 4 bytes ⇒ 8 bytes minimum per entry.
     let count = u32::read_le(reader)? as usize;
-    let mut values = HashMap::with_capacity(count);
+    let mut values = HashMap::with_capacity(crate::utils::safe_capacity(reader, count, 8)?);
     for _ in 0..count {
         let key = u32::read_le(reader)?;
         values.insert(key, MotionData::read(reader)?);
@@ -487,8 +493,10 @@ fn parse_motion_data_map<R: Read + Seek>(reader: &mut R) -> BinResult<HashMap<u3
 fn parse_nested_motion_data_map<R: Read + Seek>(
     reader: &mut R,
 ) -> BinResult<HashMap<u32, HashMap<u32, MotionData>>> {
+    // F6: see `parse_u32_map`. Key (4) + a nested map that is itself at least
+    // its own 4-byte count ⇒ 8 bytes minimum per entry.
     let count = u32::read_le(reader)? as usize;
-    let mut values = HashMap::with_capacity(count);
+    let mut values = HashMap::with_capacity(crate::utils::safe_capacity(reader, count, 8)?);
     for _ in 0..count {
         let key = u32::read_le(reader)?;
         values.insert(key, parse_motion_data_map(reader)?);

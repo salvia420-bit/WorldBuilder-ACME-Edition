@@ -641,10 +641,23 @@ export class CloudOverlay {
         this.composer.addPass(this._cloudEffectPass);
         this._lastActiveCam = cam;
       }
-      if (!this._composerSized && renderer.domElement) {
-        const w = renderer.domElement.width;
-        const h = renderer.domElement.height;
-        this.composer.setSize(w, h);
+      if (!this._composerSized) {
+        // ⚠ CSS PIXELS, NOT DRAWING-BUFFER PIXELS. pmndrs
+        // `EffectComposer.setSize` forwards its args straight to
+        // `renderer.setSize(w, h, updateStyle)` (postprocessing 6.39.1,
+        // build/index.js:1311-1322) and only THEN sizes its own buffers to
+        // `getDrawingBufferSize()`. This used to pass `renderer.domElement
+        // .width/height` — the DRAWING BUFFER — so on any session with
+        // pixelRatio != 1 (HiDPI, or the adaptive render-scale controller,
+        // which drives it below 1 routinely) the first cloud frame RESIZED
+        // THE CANVAS by the pixel ratio: 2x CSS box + 4x backing store at
+        // DPR 2, or a 25% shrink at renderScale 0.75, until the next window
+        // resize undid it. Handing it the renderer's own current size makes
+        // the identity compare inside setSize skip `renderer.setSize`
+        // entirely, while the ping-pong buffers still land at the correct
+        // drawing-buffer resolution.
+        const s = renderer.getSize(new THREE.Vector2());
+        this.composer.setSize(s.x, s.y);
         this._composerSized = true;
       }
 
@@ -760,8 +773,10 @@ export class CloudOverlay {
       this.volume.effect.setSize(width, height);
       if (this.composer) {
         this.composer.setSize(width, height);
+        // Latch ONLY when a composer actually got sized — setting it with a
+        // null composer made preRender skip the lazy-init sizing entirely.
+        this._composerSized = true;
       }
-      this._composerSized = true;
     } catch (err) {
       this.lastError = String(err);
     }

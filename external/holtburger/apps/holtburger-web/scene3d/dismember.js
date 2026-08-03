@@ -372,6 +372,12 @@ export async function slicePart(inst, partIndex, planePointW, planeNormalW, opts
 
   const { DestructibleMesh, SliceOptions } = await _loadPinata();
 
+  // Identity guard across the await (the R1#9 class): a despawn or same-guid
+  // respawn during the pinata load leaves `inst` disposed — mutating its parts
+  // would stash disposed originals and attach stumps to a detached rig.
+  // dispose() detaches root from its parent, so `!root?.parent` ≡ disposed.
+  if (inst._disposed || !inst.root?.parent) return null;
+
   const merged = weldPartGeometry(meshes);
   if (!merged) return null;
 
@@ -668,6 +674,12 @@ export async function fracturePart(inst, partIndex, opts = {}) {
   merged.dispose();
   if (!frags || frags.length === 0) return null;
 
+  // Identity guard across the fracture await (R1#9 class — see slicePart).
+  if (inst._disposed || !inst.root?.parent) {
+    for (const f of frags) { try { f.geometry?.dispose?.(); } catch (_) {} }
+    return null;
+  }
+
   // Strip the part (stash for restoreParts) — the limb is gone, the rig keeps
   // animating an empty Group so every mixer binding stays valid.
   inst._dismemberStash = inst._dismemberStash || new Map();
@@ -748,6 +760,12 @@ export async function chipPart(inst, partIndex, opts = {}) {
   if (!frags || frags.length < 2) {
     // Nothing separated — leave the part exactly as it was.
     for (const f of frags || []) f.geometry.dispose();
+    return null;
+  }
+
+  // Identity guard across the fracture await (R1#9 class — see slicePart).
+  if (inst._disposed || !inst.root?.parent) {
+    for (const f of frags) { try { f.geometry?.dispose?.(); } catch (_) {} }
     return null;
   }
 

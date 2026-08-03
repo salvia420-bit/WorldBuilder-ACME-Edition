@@ -1467,6 +1467,23 @@ impl SpatialScene {
     /// per-cell EnvCell graph in Phase D will widen this to portal
     /// neighbours. Returns AABBs by value to dodge the per-cell
     /// borrow.
+    /// Rust review 2026-08-03 (F10) helper: map a possibly-out-of-range in-block
+    /// cell index onto `(cell_index, landblock_index)`, crossing the landblock
+    /// boundary when it runs off either end. Cells are 0..=7 within a block, and
+    /// a block is 8 cells wide, so `-1` is cell 7 of the previous block and `8`
+    /// is cell 0 of the next.
+    ///
+    /// Only ever called with `base + {-1, 0, 1}` where `base ∈ 0..=7`, so the
+    /// index can overshoot by at most one cell in either direction.
+    #[inline]
+    fn rebase_cell(cell: i32, landblock: i32) -> (i32, i32) {
+        match cell {
+            -1 => (7, landblock - 1),
+            8 => (0, landblock + 1),
+            v => (v, landblock),
+        }
+    }
+
     pub fn building_aabbs_near_pose(&self, pose: &WorldPosition) -> Vec<BuildingAabbEntry> {
         let mut out: Vec<BuildingAabbEntry> = Vec::new();
         let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
@@ -1493,15 +1510,36 @@ impl SpatialScene {
         }
         let cx = cell_idx >> 3;
         let cy = cell_idx & 0x7;
+        // Rust review 2026-08-03 (F10): an out-of-range neighbour cell used to be
+        // `continue`d, clipping the 3x3 ring at the 192 m landblock edge. Entries
+        // are bucketed by AABB CENTRE (`insert_building_aabb`), so a building part
+        // whose centre sits in cell (7, y) of the landblock to our west was
+        // invisible to a player standing in cell (0, y) of this one — 24 m away,
+        // well inside the AABB's reach. Result: walk-through-wall on any building
+        // near a landblock seam.
+        //
+        // Now the index is rebased onto the adjacent landblock instead of dropped.
+        // This does NOT re-introduce the "loading virus" that the outdoor-static
+        // bake documents (see `bake_outdoor_static_overlap_for_landblock`): that
+        // one is a WRITE path which had to avoid registering into a non-resident
+        // landblock. This is a pure READ of an already-populated map keyed by full
+        // cell id, so a non-resident neighbour simply misses and costs one hash
+        // lookup. No load is triggered.
+        let lb_x = ((lb_high >> 24) & 0xFF) as i32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as i32;
         for dx in -1i32..=1 {
             for dy in -1i32..=1 {
-                let nx = cx + dx;
-                let ny = cy + dy;
-                if !(0..8).contains(&nx) || !(0..8).contains(&ny) {
+                // Rebase an over/underflowing cell index onto the neighbouring
+                // landblock: cell -1 is cell 7 of the block below, cell 8 is cell 0
+                // of the block above.
+                let (nx, nb_x) = Self::rebase_cell(cx + dx, lb_x);
+                let (ny, nb_y) = Self::rebase_cell(cy + dy, lb_y);
+                // Edge of the world: no landblock beyond 0x00 / 0xFF.
+                if !(0..=0xFF).contains(&nb_x) || !(0..=0xFF).contains(&nb_y) {
                     continue;
                 }
                 let neighbour_cell = ((nx << 3) | ny) as u32 + 1;
-                let key = lb_high | neighbour_cell;
+                let key = ((nb_x as u32) << 24) | ((nb_y as u32) << 16) | neighbour_cell;
                 if let Some(entries) = self.building_aabb_index.get(&key) {
                     push_active(&mut out, entries);
                 }

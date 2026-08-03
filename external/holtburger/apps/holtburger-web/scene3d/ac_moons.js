@@ -331,16 +331,20 @@ export class ACMoons {
     // (acclient.c:303122-303128, linear `(next - prev) * ratio + prev` lerp
     // of each object's luminosity between time-of-day keyframes). The moon
     // billboards here render at a FIXED uBrightness (2.0) regardless of
-    // time-of-day. Flag `?skyObjLum=on` (default OFF → byte-identical: the
-    // base uBrightness uniform is never re-scaled) makes tick() multiply
-    // each moon's uBrightness by a sun-altitude factor that ramps from 1.0
-    // at night down to a small daytime floor as the sun climbs. The flag is
-    // captured ONCE here and consumed via `this._skyObjLum` in tick() — same
-    // `this` scope, so no split-declaration ReferenceError.
-    // render-audit T1d (skyObjLum): default-ON, opt-out via `?skyObjLum=off`.
-    // Returns false only when the value is exactly "off"; any other value
-    // (incl. absent param) and the no-window case default to ON. Pending
-    // 1070 GPU eye-test before this becomes the committed default.
+    // time-of-day. Flag `?skyObjLum` — **DEFAULT-ON**, opt-out via
+    // `?skyObjLum=off`: the reader below is `sp !== 'off'`, so it returns false
+    // ONLY for the literal "off"; any other value, an absent param, and the
+    // no-window case are all ON. (2026-08-03: this block used to open "default
+    // OFF → byte-identical: the base uBrightness uniform is never re-scaled" —
+    // stale since the 2026-06-09 render-audit T1d flip and contradicted three
+    // lines later. Same stale pair as the twin block in atmosphere_sky.js.)
+    // When on, tick() multiplies each moon's uBrightness by a sun-altitude
+    // factor that ramps from 1.0 at night down to a small daytime floor as the
+    // sun climbs. The flag is captured ONCE here and consumed via
+    // `this._skyObjLum` in tick() — same `this` scope, so no split-declaration
+    // ReferenceError.
+    // ⚠ Still awaiting its 1070 GPU eye-test — default-ON is the SHIPPED state,
+    // not a validated one.
     this._skyObjLum = true;
     try {
       // eslint-disable-next-line no-undef

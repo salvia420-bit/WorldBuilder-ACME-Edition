@@ -76,8 +76,10 @@ fn parse_texture_ids<R: Read + Seek>(
     _args: (),
 ) -> BinResult<Vec<u32>> {
     // List<uint>.Unpack reads an Int32 count, then that many u32 entries.
-    let count = i32::read_le(reader)? as usize;
-    let mut out = Vec::with_capacity(count);
+    // Rust review 2026-08-03 (F5): see `file_type/palette.rs` — negative count
+    // sign-extended into `with_capacity`.
+    let count = i32::read_le(reader)?.max(0) as usize;
+    let mut out = Vec::with_capacity(crate::utils::safe_capacity(reader, count, 4)?);
     for _ in 0..count {
         out.push(u32::read_le(reader)?);
     }

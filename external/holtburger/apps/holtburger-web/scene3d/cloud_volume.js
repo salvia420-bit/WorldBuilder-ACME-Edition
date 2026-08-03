@@ -375,16 +375,39 @@ export class CloudVolume {
   /**
    * Read back the current uniform values as a plain object. Used by
    * `cloud_bridge_test.html` to assert the tick() mapping is correct.
+   *
+   * 2026-08-03 — the five DayGroup uniforms (uSunColor / uAmbientColor /
+   * uHorizonColor / uFogDensity / uSunIntensity) were REMOVED from
+   * CloudsMaterial by the Sky-K.6 Bruneton switch — which tick() above states
+   * outright, and which is verifiable: zero occurrences anywhere in
+   * vendor/takram-three-clouds. This method nevertheless dereferenced
+   * `u.uSunColor.value.toArray()` unguarded, i.e. it threw a TypeError on its
+   * FIRST line on every call, which is why `cloud_bridge_test.html` has been
+   * silently dead since K.6 (it also still calls `_internals.decodeArgbToRgb01`,
+   * likewise removed). Each field is now read defensively and reports `null`
+   * when the uniform is absent, so the snapshot documents what the material
+   * ACTUALLY carries instead of crashing. `sunDirection` is the one survivor and
+   * the only value tick() still writes. The `this.material?.` guard also makes
+   * this safe to call after dispose() (which nulls it).
    */
   snapshotUniforms() {
-    const u = this.material.uniforms;
+    const u = this.material?.uniforms ?? null;
+    const vec = (name) => {
+      const v = u?.[name]?.value;
+      return typeof v?.toArray === "function" ? v.toArray() : null;
+    };
+    const num = (name) => {
+      const v = u?.[name]?.value;
+      return typeof v === "number" ? v : null;
+    };
     return {
-      uSunColor:     u.uSunColor.value.toArray(),
-      uAmbientColor: u.uAmbientColor.value.toArray(),
-      uHorizonColor: u.uHorizonColor.value.toArray(),
-      uFogDensity:   u.uFogDensity.value,
-      uSunIntensity: u.uSunIntensity.value,
-      sunDirection:  u.sunDirection?.value?.toArray?.() ?? null,
+      // Retired by Sky-K.6 — explicit nulls so a stale caller reads "gone".
+      uSunColor:     vec("uSunColor"),
+      uAmbientColor: vec("uAmbientColor"),
+      uHorizonColor: vec("uHorizonColor"),
+      uFogDensity:   num("uFogDensity"),
+      uSunIntensity: num("uSunIntensity"),
+      sunDirection:  vec("sunDirection"),
     };
   }
 

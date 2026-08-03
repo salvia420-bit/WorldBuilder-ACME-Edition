@@ -1,5 +1,5 @@
 use crate::messages::utils::{
-    read_packed_wclass_id, read_string16, write_packed_wclass_id, write_string16,
+    capacity_hint, read_packed_wclass_id, read_string16, write_packed_wclass_id, write_string16,
 };
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
@@ -198,7 +198,8 @@ impl ProtocolUnpack for DddInterrogationData {
         let count = LittleEndian::read_u32(&data[*offset..*offset + 4]);
         *offset += 4;
 
-        let mut supported_languages = Vec::with_capacity(count as usize);
+        let mut supported_languages =
+            Vec::with_capacity(capacity_hint(data, *offset, count as usize));
         for _ in 0..count {
             if *offset + 4 > data.len() {
                 return None;
@@ -475,7 +476,7 @@ fn unpack_packable_list_u32(data: &[u8], offset: &mut usize) -> Option<Vec<u32>>
     }
     let count = LittleEndian::read_u32(&data[*offset..*offset + 4]);
     *offset += 4;
-    let mut out = Vec::with_capacity(count as usize);
+    let mut out = Vec::with_capacity(capacity_hint(data, *offset, count as usize));
     for _ in 0..count {
         if *offset + 4 > data.len() {
             return None;
@@ -538,7 +539,7 @@ impl ProtocolUnpack for DddBeginDddData {
         *offset += 4;
         let count = LittleEndian::read_u32(&data[*offset..*offset + 4]);
         *offset += 4;
-        let mut revisions = Vec::with_capacity(count as usize);
+        let mut revisions = Vec::with_capacity(capacity_hint(data, *offset, count as usize));
         for _ in 0..count {
             revisions.push(DddRevision::unpack(data, offset)?);
         }

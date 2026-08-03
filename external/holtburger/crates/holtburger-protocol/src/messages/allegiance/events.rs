@@ -1,5 +1,5 @@
 use crate::messages::utils::{
-    read_hashtable_header, read_string16, write_hashtable_header, write_string16,
+    capacity_hint, read_hashtable_header, read_string16, write_hashtable_header, write_string16,
 };
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
@@ -474,7 +474,7 @@ pub fn unpack_allegiance_hierarchy_body(
     }
     let title_count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
     *offset += 4;
-    let mut officer_titles = Vec::with_capacity(title_count);
+    let mut officer_titles = Vec::with_capacity(capacity_hint(data, *offset, title_count));
     for _ in 0..title_count {
         officer_titles.push(read_string16(data, offset)?);
     }

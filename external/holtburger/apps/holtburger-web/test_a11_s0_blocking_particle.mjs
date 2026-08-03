@@ -86,13 +86,17 @@ setRng(() => 0.5);
 // ---------------------------------------------------------------------
 
 /** entities.js / play_effect_vfx.js BLOCKING_PARTICLE_PARITY_ON, and
- *  statics.js _blockingParticleParityOn(), all reduce to this expression. */
+ *  statics.js _blockingParticleParityOn(), all reduce to this expression.
+ *  2026-08-03 (#42): DEFAULT-ON — the flag was flipped in the "default-on 41
+ *  validated feature-gates" wave (9d06254a) and url-flags.md documents the
+ *  `!== "off"` reader; this replica (and the shape pins below) now assert the
+ *  shipped contract instead of the retired 2026-06-11 strict-opt-in draft. */
 function parseBlockingFlag(search) {
   try {
     return (
       new URLSearchParams(search ?? "")
         .get("blockingParticleParity")
-        ?.toLowerCase() === "on"
+        ?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -202,26 +206,26 @@ console.log("PART 1 — ?blockingParticleParity flag parse");
 check("'on' parses true", parseBlockingFlag("?blockingParticleParity=on") === true);
 check("'ON' parses true (case-fold)", parseBlockingFlag("?blockingParticleParity=ON") === true);
 check("'off' parses false", parseBlockingFlag("?blockingParticleParity=off") === false);
-check("absent parses false (default-OFF)", parseBlockingFlag("?foo=1") === false);
-check("empty parses false", parseBlockingFlag("") === false);
-check("malformed search never throws → false", parseBlockingFlag(null) === false);
+check("'OFF' parses false (case-fold)", parseBlockingFlag("?blockingParticleParity=OFF") === false);
+check("absent parses true (default-ON)", parseBlockingFlag("?foo=1") === true);
+check("empty parses true (default-ON)", parseBlockingFlag("") === true);
 
 // Pin the replica to source: all three walkers ship the identical
-// `?blockingParticleParity` lower-cased === "on" parse.
+// `?blockingParticleParity` lower-cased !== "off" parse (default-ON).
 check(
-  "entities.js parses blockingParticleParity?.toLowerCase()===\"on\"",
-  /\.get\("blockingParticleParity"\)\s*\?\.toLowerCase\(\)\s*===\s*"on"/.test(entitiesSrc),
+  "entities.js parses blockingParticleParity?.toLowerCase()!==\"off\"",
+  /\.get\("blockingParticleParity"\)\s*\?\.toLowerCase\(\)\s*!==\s*"off"/.test(entitiesSrc),
 );
 check(
-  "statics.js parses blockingParticleParity?.toLowerCase()===\"on\"",
-  /\.get\("blockingParticleParity"\)\s*\?\.toLowerCase\(\)\s*===\s*"on"/.test(staticsSrc),
+  "statics.js parses blockingParticleParity?.toLowerCase()!==\"off\"",
+  /\.get\("blockingParticleParity"\)\s*\?\.toLowerCase\(\)\s*!==\s*"off"/.test(staticsSrc),
 );
 check(
-  "play_effect_vfx.js parses blockingParticleParity?.toLowerCase()===\"on\"",
-  /\.get\("blockingParticleParity"\)\s*\?\.toLowerCase\(\)\s*===\s*"on"/.test(playEffectSrc),
+  "play_effect_vfx.js parses blockingParticleParity?.toLowerCase()!==\"off\"",
+  /\.get\("blockingParticleParity"\)\s*\?\.toLowerCase\(\)\s*!==\s*"off"/.test(playEffectSrc),
 );
 check(
-  "url-flags.md documents the default-off ?blockingParticleParity=on row",
+  "url-flags.md documents the ?blockingParticleParity row",
   /`\?blockingParticleParity=on`/.test(urlFlagsSrc),
 );
 

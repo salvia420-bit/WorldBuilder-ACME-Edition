@@ -1,5 +1,6 @@
 use crate::messages::utils::{
-    read_hashtable_header, read_string16, write_hashtable_header, write_string16,
+    read_hashtable_header, read_string16, require_fixed_stride, write_hashtable_header,
+    write_string16,
 };
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
@@ -35,9 +36,10 @@ impl ProtocolUnpack for SquelchInfo {
                 num_filters
             );
         }
-        if *offset + num_filters * 4 > data.len() {
-            return None;
-        }
+        // Rust review 2026-08-03 (F-sweep): 32-bit usize wrap in the span guard;
+        // see `utils::require_fixed_stride`. (The `filters` array write below is
+        // already bounded by its own `if i < 4` — not a defect.)
+        require_fixed_stride(data, *offset, num_filters, 4)?;
         let mut filters = [0u32; 4];
         for i in 0..num_filters {
             let v = LittleEndian::read_u32(&data[*offset..*offset + 4]);

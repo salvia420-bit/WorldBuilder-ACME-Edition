@@ -1,3 +1,4 @@
+use crate::messages::utils::capacity_hint;
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use holtburger_common::Guid;
@@ -45,7 +46,7 @@ impl ProtocolUnpack for BuyActionData {
         }
         let num_items = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
-        let mut items = Vec::with_capacity(num_items);
+        let mut items = Vec::with_capacity(capacity_hint(data, *offset, num_items));
         for _ in 0..num_items {
             items.push(ItemProfileActionData::unpack(data, offset)?);
         }
@@ -78,7 +79,7 @@ impl ProtocolUnpack for SellActionData {
         }
         let num_items = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
-        let mut items = Vec::with_capacity(num_items);
+        let mut items = Vec::with_capacity(capacity_hint(data, *offset, num_items));
         for _ in 0..num_items {
             items.push(ItemProfileActionData::unpack(data, offset)?);
         }

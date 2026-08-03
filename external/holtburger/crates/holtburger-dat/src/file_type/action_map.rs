@@ -118,8 +118,11 @@ impl ActionMap {
             let key = u32::read_le(reader)?;
             let input_map = u32::read_le(reader)?;
             // ACE `List<uint>.Unpack` reads i32 count + count × u32.
-            let conflict_count = i32::read_le(reader)? as usize;
-            let mut conflicting_input_maps = Vec::with_capacity(conflict_count);
+            // Rust review 2026-08-03 (F5): see `file_type/palette.rs` — negative
+            // count sign-extended into `with_capacity`.
+            let conflict_count = i32::read_le(reader)?.max(0) as usize;
+            let mut conflicting_input_maps =
+                Vec::with_capacity(crate::utils::safe_capacity(reader, conflict_count, 4)?);
             for _ in 0..conflict_count {
                 conflicting_input_maps.push(u32::read_le(reader)?);
             }

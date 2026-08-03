@@ -1,4 +1,7 @@
-use super::types::{PendingControlPacket, PendingControlPacketData, PendingMessage, Session};
+use super::types::{
+    MAX_FRAGMENTS_PER_MESSAGE, PendingControlPacket, PendingControlPacketData, PendingMessage,
+    Session,
+};
 use crate::capture::Direction;
 use crate::optional_header::OptionalHeaderCursor;
 use anyhow::{Result, anyhow};
@@ -447,6 +450,22 @@ impl Session {
                 oldest
             );
             self.fragment_reassembler.remove(&oldest);
+        }
+
+        // Rust review 2026-08-03 (F-sweep): `header.count` is a wire u16, so a
+        // single fragment can claim 65535 slots (~768 KB of `Option<Vec<u8>>` on
+        // wasm32) and 256 such groups is ~200 MB of pure bookkeeping for blobs
+        // that never complete. The transport caps a packet at 4096 B, so a group
+        // can never legitimately need more slots than that many fragments;
+        // anything larger is malformed. Reject rather than reserve.
+        if header.count as usize > MAX_FRAGMENTS_PER_MESSAGE {
+            log::warn!(
+                "rejecting fragment group {} claiming {} fragments (max {})",
+                header.sequence,
+                header.count,
+                MAX_FRAGMENTS_PER_MESSAGE
+            );
+            return None;
         }
 
         let entry = self

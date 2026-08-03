@@ -1,6 +1,7 @@
 use super::types::{
-    CachedPacket, MAX_CACHED_PACKETS, MAX_RETRANSMIT_SEQUENCE_IDS, MAX_RETRANSMIT_SEQUENCE_WINDOW,
-    REQUEST_RETRANSMIT_INTERVAL, RETRANSMIT_GIVE_UP_REQUESTS, Session,
+    CachedPacket, MAX_CACHED_PACKETS, MAX_PENDING_SERVER_PACKETS, MAX_RETRANSMIT_SEQUENCE_IDS,
+    MAX_RETRANSMIT_SEQUENCE_WINDOW, REQUEST_RETRANSMIT_INTERVAL, RETRANSMIT_GIVE_UP_REQUESTS,
+    ReceivedPacket, Session,
 };
 use crate::optional_header::OptionalHeaderCursor;
 use anyhow::{Result, anyhow};
@@ -51,6 +52,45 @@ impl Session {
 
     pub(crate) fn current_client_sequence(&self) -> u32 {
         self.packet_sequence.saturating_sub(1)
+    }
+
+    /// Rust review 2026-08-03 (F-sweep): bounded insert into the out-of-order
+    /// S2C reorder buffer. Replaces two identical bare
+    /// `pending_server_packets.entry(seq).or_insert(packet)` call sites in
+    /// `receive.rs`, which had no size limit of any kind — see
+    /// [`MAX_PENDING_SERVER_PACKETS`].
+    ///
+    /// Two bounds, in order:
+    /// 1. Drop anything further ahead than the retransmit window. We could
+    ///    never close such a gap anyway — `send_request_retransmit` errors on
+    ///    `missing_span > MAX_RETRANSMIT_SEQUENCE_WINDOW + 1` — so holding the
+    ///    packet only costs memory.
+    /// 2. An explicit ceiling, mirroring `maybe_cache_packet`'s
+    ///    `MAX_CACHED_PACKETS` prune. Evicts the HIGHEST sequence, not the
+    ///    lowest: the entries nearest `expected` are the ones about to be
+    ///    consumed by `take_pending_server_packet`.
+    pub(crate) fn buffer_out_of_order_packet(&mut self, sequence: u32, packet: ReceivedPacket) {
+        let expected = self.last_server_seq.wrapping_add(1);
+        if sequence.wrapping_sub(expected) > MAX_RETRANSMIT_SEQUENCE_WINDOW {
+            log::debug!(
+                "dropping S2C packet {} — more than {} ahead of expected {}",
+                sequence,
+                MAX_RETRANSMIT_SEQUENCE_WINDOW,
+                expected
+            );
+            return;
+        }
+
+        self.pending_server_packets
+            .entry(sequence)
+            .or_insert(packet);
+
+        while self.pending_server_packets.len() > MAX_PENDING_SERVER_PACKETS {
+            let Some((&highest, _)) = self.pending_server_packets.last_key_value() else {
+                break;
+            };
+            self.pending_server_packets.remove(&highest);
+        }
     }
 
     pub(crate) fn read_ack_sequence(&self, flags: u32, data: &[u8]) -> Option<u32> {

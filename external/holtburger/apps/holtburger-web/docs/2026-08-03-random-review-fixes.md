@@ -198,3 +198,98 @@ spotlight_target 4, p1_alias_split 9. All 7 edited files node --check clean.
 Pre-existing failures re-proven on baseline by both agents (md5-verified
 restores): phase7_6_lighting (1 check), p33's harness import gap,
 f10_hud_nameplate (hud.js, not touched).
+
+---
+
+# Round 4 (same day) — sky/atmosphere + the FIRST Rust-crate review: 21 findings, 21 fixes + 2 deferred
+
+Fourth pass, scoped off this document so no ground was re-covered: the sky/
+atmosphere stack (sky-agent), the workspace Rust crates — never reviewed before
+(rust-agent), and the leftovers + deferred items from rounds 2-3 (main).
+All 21 findings read-verified; both agents proved key fixes against reverted
+source.
+
+## Fixed — sky/atmosphere (R4#1–R4#10)
+
+| # | Defect | Fix | Verified |
+|---|---|---|---|
+| R4#1 | `?skyBirds` (default-ON since 2026-06-23) parked the Swarm anchor in the ROOT Y-up scene while positioning it as AC Z-up → birds 40 m SOUTH at eye level, never overhead. The feature has never worked. | Emitter frame established first (attachSkyParticleChain → static ParticleManager under worldRoot ⇒ AC-frame), anchor re-parented to worldRoot, lift via worldToLocal so it's correct under either parent | Harness: fixed = +40 m AC up / 0 horizontal; reverted = 0 m up, 40 m AC south |
+| R4#2 | url-flags.md row 273 claimed `horizonFade`/`aerialDepth` default-ON; code is strict opt-in and row 34 of the SAME doc adjudicates it OFF — the inverse of the four `!== "off"` footguns | Row corrected (default OFF, strict `on/1/true/yes`, third name `horizonDissolve`, `?aerialDebug` note) | Doc-only |
+| R4#3 | Cloud composer's lazy sizing fed drawing-buffer px into pmndrs setSize (→ renderer.setSize with updateStyle undefined) → canvas CSS box + backing store resized at DPR≠1 | `renderer.getSize()` (CSS px), matching index.js's correct resize call | Reverted harness: DPR 2 → canvas 1920→3840 CSS/7680 backing; renderScale 0.75 → 1440 |
+| R4#4 | night_ramp re-parsed location.search on every flag read → ~14 URLSearchParams/frame from the sky tick | Parsed-params cache (test seam preserved) | 840 allocs/60 frames → 0 |
+| R4#5 | IBL 15 s refresh throttled on the freezable frameTime clock — R1#14's hazard at a third call site | Live monotonic clock at the loop.js call site (single hunk) | Re-read + suites |
+| R4#6 | SkyDome.dispose orphaned the bird anchor, its Swarm emitters (shared manager) and the idempotence guard → R1#10 zero-owner ticking; stale guard blocked re-attach | destroyAllForOwner on the same key the attach used, guard cleared, anchor removed | sky_birds 19/19 |
+| R4#7 | fxPass never re-pointed on camera switch — EffectPass HAS a real mainCamera setter, so top-down ortho decoded depth with the perspective formula (aerial/heatHaze/dissolve all wrong) | retargetFxPass on both switch paths, inside the cam-changed guard; one-time recompile invariant commented | Re-read |
+| R4#8 | CloudVolume.snapshotUniforms read five uniforms its own comment says were deleted → guaranteed TypeError (cloud-bridge harness dead since Sky-K.6) | Defensive reads → null; dispose-safe | Reverted throws; fixed returns nulls + sunDirection |
+| R4#9 | weather_state.recompute allocated ~6 objects/frame under a "Zero-alloc" comment | Étage table memoised on latitude band; scratch seam for lat/lon; comment corrected | Values stable in-band, rebuild on both crossings |
+| R4#10 | `skyObjLum` carried a self-contradicting "default OFF → byte-identical" + "default-ON" comment pair, duplicated in two files | Stale halves deleted (comments only) | Grep |
+
+## Fixed — Rust crates (R4#11–R4#21), first review of this code
+
+Context: wasm32 `usize` is 32-bit and `overflow-checks = false` ships in every
+profile for these crates, so integer wrap is silent.
+
+| # | Defect | Fix |
+|---|---|---|
+| R4#11 | Six unguarded per-entry slice reads in IdentifyObjectResponse stat tables — a truncated 0xF7B0 packet PANICS the wasm module | Per-table bounds pre-check (checked_mul/checked_add idiom from reliability.rs) |
+| R4#12 | `update_player_inventory_recursive` had no visited set — a self-referential/cyclic wire `Container` id hangs the tab forever | HashSet visited (also collapses the diamond case) |
+| R4#13 | `*offset + len > data.len()` wraps on 32-bit for the 0xFFFF-escape u32 length — the guard itself lets the panic through (3 helpers, dozens of opcodes) | checked_add |
+| R4#14 | `count * 8` wraps past its own bounds check on CreateObject → 4.3 GB with_capacity + OOB loop | Clamp/checked math, matching the sibling sites' mask |
+| R4#15 | Signed DAT counts sign-extend into with_capacity (surface_texture runs per rendered surface) | `.max(0)`, matching sound_table's idiom |
+| R4#16 | Unbounded with_capacity from raw u32 counts in motion_table ×3 and region ×14 — Region parses at boot, so pre-login DoS | New `safe_capacity`; read loops still honor the wire count and fail at EOF |
+| R4#17 | CharacterList swallowed entry-parse failure → 4.29e9-iteration spin on the first post-login message | Abort the parse; `Vec::new()` kept deliberately |
+| R4#18 | terrain_subdiv neighbour-strip indexing off by one in all four directions, contradicting control_grid_normals in the same file (latent — no non-test callers; independently confirmed) | Aligned with the correct sibling; deleted seam test restored |
+| R4#19 | Rotation was NaN-guarded but coords/velocity were not, in the same function — one NaN UpdatePosition poisons the pose permanently (rebucket is NaN-inert) | Guards on player + all remote entities; new Vector3::is_finite/finite_or_zero |
+| R4#20 | Building-AABB neighbour ring `continue`d at the landblock edge instead of rebasing → walk-through-wall near any 192 m seam | Cross-LB rebase (pure bit math, no loads); 2 tests |
+| R4#21 | Sweep: 32-bit `count*4` guard wraps (4 sites), 11 unclamped with_capacity, height_seam `n*4` wraps, unbounded reorder buffer, fragment-count ceiling | require_fixed_stride / capacity_hint / MAX_PENDING_SERVER_PACKETS / MAX_FRAGMENTS_PER_MESSAGE |
+
+**Found while fixing:** `height_seam.rs micro_detail_dark` indexes `rgba[i*4+2]`
+unguarded — private, and its single caller's guard was exactly the `n*4` that
+wrapped, so the wrap made it reachable. Both fixed.
+**False alarm not forced:** squelch's `filters[i]` write is already bounded by
+its own `if i < 4`; only the wrap needed fixing.
+
+## Also fixed this round (main)
+
+- Task #61 (deferred from R3): identity guards at all three dismember
+  post-await seams (slice/fracture/chip) — fragments disposed on the bail path.
+- Task #42 (deferred from R2): the BLOCKING_PARTICLE_PARITY trio resolved by
+  correcting the TEST, not the code — git history (9d06254a "default-on 41
+  validated feature-gates") and url-flags.md both show the default-ON flip was
+  deliberate, so the three `!== "off"` readers are right and the 2026-06-11
+  strict-opt-in assertions were the stale side. `test_a11_s0_blocking_particle`
+  48/48 (was 45/48). combatFx's gate comment reworded — it cited the trio as a
+  footgun to avoid; it is a validated gate, just not a model for un-eye-tested
+  features.
+- portal_space.js: wasm mesh handle freed; MAX_HOLD documented as reserved
+  (travel always ends at TRAVEL_DUR, so the cap never binds today).
+- Stale `?terrainBatch` default-OFF claims corrected in loop.js + url-flags.
+
+## Deferred / known remaining (round 4)
+
+- **Task #84 (open):** IBL PMREM bakes the cloud fullscreen quad + moon
+  billboards into `scene.environment` under `?clouds=on&?ibl=on`; also
+  cloud_bridge_test.html is still dead (`_internals.decodeArgbToRgb01` removed
+  in Sky-K.6 — R4#8 only stopped the throw); url-flags rows 1353/1354 keep
+  stale line refs.
+- `MAX_FRAGMENTS_PER_MESSAGE = 16384` (~7 MB) is a judgement call — well above
+  any real AC message, but the true DDD patch-chunk max was not verifiable.
+  Documented as tunable, rejection logged at warn.
+- 1070 eye-test queue additions: R4#1 (birds actually overhead), R4#3
+  (`?clouds=on` at DPR≠1), R4#7 (C-key to top-down with `?atmosphere=on`).
+
+## Green at round-4 commit time
+
+Rust (independently re-run by main, post-`touch`): holtburger-protocol 389 ✓,
+holtburger-world 663 ✓, holtburger-dat 679 ✓ + 1 failure PROVEN pre-existing by
+a pristine-source swap (`triangle_corner_ring_matches_height_sampler`, panics in
+`point_in_ring_2d`, unrelated to R4#18). Agent total across crates: 2478.
+JS: sky_birds 19/19, cloud_overlay_dispose 5/5, ground_fog 65, weather_flags
+9/9, a11_s0_blocking_particle 48/48, atmosphere_pipeline_passes, cloud_storm_look,
+vfx_weather_inputs, particle_clock, shader_prewarm and the rest of the sky set.
+All edited JS files `node --check` clean.
+
+**Process note worth keeping:** restoring backups with `rsync -a` preserves
+mtimes, so cargo silently reuses the PRISTINE test binary and reports green
+against code that was never compiled. Caught by a test-count mismatch. Always
+`touch` after a checkout-swap experiment.

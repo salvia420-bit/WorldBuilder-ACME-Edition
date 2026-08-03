@@ -10,6 +10,7 @@ use holtburger_common::math::Quaternion;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::properties::WorldObjectExt as _;
 use holtburger_common::sequence::is_newer_u16;
+use std::collections::HashSet;
 use holtburger_protocol::messages::movement::{
     PositionPack, PositionType, ServerAutonomousPositionData, UpdatePositionFlag,
 };
@@ -846,8 +847,25 @@ impl WorldState {
     }
 
     pub(crate) fn update_player_inventory_recursive(&mut self, root: Guid, owned: bool) {
+        // Rust review 2026-08-03 (F2): this walk had NO visited set, and
+        // `container_id()` is a raw wire property (`PropertyInstanceId::Container`,
+        // set by ObjectCreate / UpdateInstanceId). A container CYCLE therefore
+        // spun forever and hung the browser tab — the degenerate case being a
+        // single entity whose Container points at ITSELF (pop X, scan finds X,
+        // push X, repeat), with A→B→A equally fatal. The client must not trust
+        // the server to keep the containment graph acyclic.
+        //
+        // `visited` also collapses the diamond case (an entity reachable by two
+        // paths was previously re-scanned once per path), so this is strictly
+        // less work as well. Set semantics are unchanged for well-formed trees:
+        // add/remove_from_inventory is idempotent, so skipping a repeat visit
+        // cannot alter the resulting inventory.
+        let mut visited: HashSet<Guid> = HashSet::new();
         let mut stack = vec![root];
         while let Some(current) = stack.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
             if owned {
                 self.player.add_to_inventory(current);
             } else {
@@ -855,7 +873,7 @@ impl WorldState {
             }
 
             for (&guid, entity) in &self.entities.entities {
-                if entity.container_id() == Some(current) {
+                if entity.container_id() == Some(current) && !visited.contains(&guid) {
                     stack.push(guid);
                 }
             }
@@ -887,6 +905,9 @@ impl WorldState {
         let mut velocity_event = None;
         if accepted {
             if let Some(velocity) = pos_pack.velocity {
+                // F9: wire velocity is length-validated but not value-validated;
+                // a non-finite component would poison the integrator permanently.
+                let velocity = velocity.finite_or_zero();
                 entity.velocity = velocity;
                 velocity_event = Some((velocity, entity.omega));
             } else if pos_pack.flags.contains(UpdatePositionFlag::IS_GROUNDED)
@@ -995,6 +1016,28 @@ impl WorldState {
                 .player_position()
                 .map(|current| current.rotation)
                 .unwrap_or_default();
+        }
+
+        // Rust review 2026-08-03 (F9): the rotation was NaN-guarded above but the
+        // COORDS were not, in this same function. `PositionPack::unpack` reads
+        // x/y/z as raw `read_f32` with bounds checks but no value validation, so
+        // one UpdatePosition carrying 0x7FC00000 wrote NaN into the player entity,
+        // the scene body pose, and every downstream physics term.
+        //
+        // Nothing recovered it: `WorldPosition::rebucket_outdoor_landblock` is
+        // NaN-inert (all its `>=`/`<` comparisons are false, so `moved` stays
+        // false and the clamp arm never fires), leaving the pose NaN for the rest
+        // of the session. Reject the update outright rather than half-applying it
+        // — a non-finite server pose is not a pose.
+        if !pos.coords.x.is_finite() || !pos.coords.y.is_finite() || !pos.coords.z.is_finite() {
+            log::warn!(
+                "rejecting non-finite server position for player {:?}: ({}, {}, {})",
+                guid,
+                pos.coords.x,
+                pos.coords.y,
+                pos.coords.z
+            );
+            return None;
         }
 
         // Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — any
@@ -1159,6 +1202,9 @@ impl WorldState {
         if guid == Guid::NULL {
             return events;
         }
+        // F9: same non-finite wire-vector guard as `apply_entity_position_pack`.
+        let velocity = velocity.finite_or_zero();
+        let omega = omega.finite_or_zero();
 
         if let Some(entity) = self.entities.get_mut(guid) {
             entity.velocity = velocity;

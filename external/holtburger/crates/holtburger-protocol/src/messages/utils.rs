@@ -63,6 +63,49 @@ pub fn write_string32(buf: &mut Vec<u8>, s: &str) {
     }
 }
 
+/// Rust review 2026-08-03 (F1/F3/F10 family): the single overflow-safe
+/// "does `count` records of `stride` bytes fit from `offset`?" gate.
+///
+/// Every `if *offset + count * N > data.len()` guard in this crate was
+/// evaluated in native `usize`, which is **32-bit on wasm32** — a wire-supplied
+/// count of `0x40000000` made `count * 4` wrap to `0` and the guard passed,
+/// handing the following read loop a slice range past the end of the buffer.
+/// This mirrors the `checked_mul` form already used by
+/// `session/reliability.rs:79` (`read_sequence_list`).
+///
+/// Returns `None` (⇒ the caller's `?` fails the parse) when the span would
+/// overflow or run past `data`. `count == 0` always succeeds.
+#[inline]
+pub fn require_fixed_stride(
+    data: &[u8],
+    offset: usize,
+    count: usize,
+    stride: usize,
+) -> Option<()> {
+    let span = count.checked_mul(stride)?;
+    let end = offset.checked_add(span)?;
+    (end <= data.len()).then_some(())
+}
+
+/// Rust review 2026-08-03 (F-sweep): clamp a wire-supplied element count for use
+/// as a `Vec::with_capacity` hint **only**.
+///
+/// A dozen readers reserved `with_capacity(count)` straight off the wire before
+/// reading a single element, so an 8-byte packet claiming `0xFFFFFFFF` entries
+/// asked for a multi-GB allocation and aborted. Their read loops are all
+/// individually bounds-guarded (or fallible), so the *parse* was already safe —
+/// only the eager reservation was not.
+///
+/// Every element of every list in this protocol occupies at least one byte, so
+/// the remaining buffer length is a hard upper bound on how many can actually be
+/// parsed. Clamping to it therefore never shrinks a legitimate reservation, and
+/// the caller keeps iterating over the raw wire `count` — parse semantics are
+/// bit-identical, only the pre-allocation is bounded.
+#[inline]
+pub fn capacity_hint(data: &[u8], offset: usize, count: usize) -> usize {
+    count.min(data.len().saturating_sub(offset))
+}
+
 pub fn read_string16(data: &[u8], offset: &mut usize) -> Option<String> {
     if *offset + 2 > data.len() {
         return None;
@@ -78,14 +121,15 @@ pub fn read_string16(data: &[u8], offset: &mut usize) -> Option<String> {
         *offset += 4;
     }
 
-    if *offset + len > data.len() {
+    // F3: `*offset + len` wrapped 32-bit usize (len is a full u32 on the
+    // 0xFFFF escape arm), so the guard passed and `data[*offset..*offset + len]`
+    // panicked with `slice index starts at N but ends at M`.
+    let end = offset.checked_add(len)?;
+    if end > data.len() {
         return None;
     }
-    let s = WINDOWS_1252
-        .decode(&data[*offset..*offset + len])
-        .0
-        .into_owned();
-    *offset += len;
+    let s = WINDOWS_1252.decode(&data[*offset..end]).0.into_owned();
+    *offset = end;
 
     align_offset(offset, 4);
     Some(s)
@@ -121,14 +165,13 @@ pub fn read_string16_unpadded(data: &[u8], offset: &mut usize) -> Option<String>
         *offset += 4;
     }
 
-    if *offset + len > data.len() {
+    // F3: same 32-bit wrap as `read_string16` — see the comment there.
+    let end = offset.checked_add(len)?;
+    if end > data.len() {
         return None;
     }
-    let s = WINDOWS_1252
-        .decode(&data[*offset..*offset + len])
-        .0
-        .into_owned();
-    *offset += len;
+    let s = WINDOWS_1252.decode(&data[*offset..end]).0.into_owned();
+    *offset = end;
     Some(s)
 }
 
@@ -138,11 +181,13 @@ pub fn read_data(data: &[u8], offset: &mut usize) -> Option<Vec<u8>> {
     }
     let len = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
     *offset += 4;
-    if *offset + len > data.len() {
+    // F3: same 32-bit wrap as `read_string16` — see the comment there.
+    let end = offset.checked_add(len)?;
+    if end > data.len() {
         return None;
     }
-    let buf = data[*offset..*offset + len].to_vec();
-    *offset += len;
+    let buf = data[*offset..end].to_vec();
+    *offset = end;
     Some(buf)
 }
 

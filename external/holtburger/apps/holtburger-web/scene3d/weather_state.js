@@ -128,16 +128,19 @@ export function etageRanges(lat_deg) {
  * @param {number} worldZ
  * @returns {{lat: number, lon: number}}
  */
-export function latLonFromWorld(worldX, worldZ) {
+export function latLonFromWorld(worldX, worldZ, out) {
   // world Z is negated relative to AC Y (north is -Z in three.js space).
   const acY_m = -worldZ;
   const acX_m = worldX;
   const lb_y = acY_m / LANDBLOCK_M;
   const lb_x = acX_m / LANDBLOCK_M;
-  return {
-    lat: lb_y * LAT_PER_LANDBLOCK_Y,
-    lon: lb_x * LON_PER_LANDBLOCK_X,
-  };
+  // `out` is the zero-alloc seam (same shape as readWeatherFlags): pass a
+  // reusable scratch on the per-frame path. Omitting it keeps the original
+  // fresh-object return for callers/tests that read it directly.
+  const dst = out || {};
+  dst.lat = lb_y * LAT_PER_LANDBLOCK_Y;
+  dst.lon = lb_x * LON_PER_LANDBLOCK_X;
+  return dst;
 }
 
 // --- State mutators ----------------------------------------------------
@@ -153,9 +156,28 @@ export function latLonFromWorld(worldX, worldZ) {
 let _cloudConfigRevision = 0;
 let _sigT = NaN, _sigTd = NaN, _sigStorm = -1, _sigEtageHigh = NaN;
 
+// Étage band memo (2026-08-03). Only the REVISION compare below was ever
+// zero-alloc: `etageRanges()` built 4 nested objects + a closure and
+// `latLonFromWorld()` one more, EVERY frame, because recompute() runs per-rAF
+// via cloud_overlay.tick -> updateFromPosition -- ~6 short-lived objects/frame
+// plus the discarded previous etage_m graph. etageRanges is BANDED (|lat| <= 25
+// tropical / >= 60 polar / else mid), so the result can only change at a band
+// crossing; memoise on the band and reuse the object. Nothing mutates
+// `state.etage_m` in place (getWeatherState shallow-copies it; readWeatherFlags
+// and readWeatherVfxInputs never touch it), so sharing the object is safe.
+let _etageBand = -1;
+function _latBand(lat_deg) {
+  const abs = Math.abs(lat_deg);
+  return abs >= 60 ? 2 : (abs <= 25 ? 0 : 1);
+}
+
 function recompute() {
   state.lcl_m = lclMeters(state.temperature_C, state.dewpoint_C);
-  state.etage_m = etageRanges(state.latitude_deg);
+  const band = _latBand(state.latitude_deg);
+  if (band !== _etageBand) {
+    _etageBand = band;
+    state.etage_m = etageRanges(state.latitude_deg);
+  }
   // etageRanges is banded (25°/60°), so etage_m.high.max only shifts at a
   // latitude-band boundary — signing on it (not raw latitude) means walking
   // within a band doesn't bump the revision every frame.
@@ -184,10 +206,13 @@ export function getWeatherRevision() {
  * Update latitude/longitude from the camera's world position.
  * Per-frame; cheap.
  */
+const _latLonScratch = { lat: 0, lon: 0 };
+
 export function updateFromPosition(worldX, worldZ) {
-  const { lat, lon } = latLonFromWorld(worldX, worldZ);
-  state.latitude_deg = lat;
-  state.longitude_deg = lon;
+  // Per-frame path (cloud_overlay.tick) — scratch, not a fresh object.
+  const ll = latLonFromWorld(worldX, worldZ, _latLonScratch);
+  state.latitude_deg = ll.lat;
+  state.longitude_deg = ll.lon;
   recompute();
 }
 

@@ -78,10 +78,33 @@ function _search(search) {
   return "";
 }
 
+// PER-FRAME ALLOCATION INVARIANT (2026-08-03). Every reader below used to do
+// `new URLSearchParams(...)` on EVERY call, and `artSunPitchDeg` alone is 2-3
+// of those. Its default-ON per-frame callers are `atmosphere_sky.tick` (twice:
+// directly and via `nightFractionFromSunAltitude`), `ac_moons.tick` (via
+// `moonBrightnessFactorFromSunAltitude`) and `IblEnvironment._nightEnvMul`
+// (plus `nightEnvScale`) — ~11-14 parses of the query string per rAF, ~800/s.
+// `location.search` is immutable for the session, so the PARSED object is
+// cached instead of each flag value: zero allocation on the live path, and the
+// explicit-`search` test seam still parses fresh, so no caller loses generality
+// (different dflt/lo/hi for the same name keep working). Guarded on the string
+// itself so a hypothetical rewrite still invalidates.
+let _liveParams = null;
+let _liveParamsSearch = null;
+function _params(search) {
+  if (typeof search === "string") return new URLSearchParams(search);
+  const s = _search();
+  if (_liveParams === null || _liveParamsSearch !== s) {
+    _liveParamsSearch = s;
+    _liveParams = new URLSearchParams(s);
+  }
+  return _liveParams;
+}
+
 /** `?nightRamp` — DEFAULT ON; only the literal escapes turn it off. */
 export function nightRampEnabled(search) {
   try {
-    const v = new URLSearchParams(_search(search)).get("nightRamp");
+    const v = _params(search).get("nightRamp");
     if (v == null) return true;
     const t = String(v).toLowerCase();
     return !(t === "off" || t === "0" || t === "false" || t === "no");
@@ -93,7 +116,7 @@ export function nightRampEnabled(search) {
 /** `?<name>=<float>` clamped override, else `dflt`. */
 export function nightNumFlag(name, dflt, lo, hi, search) {
   try {
-    const raw = new URLSearchParams(_search(search)).get(name);
+    const raw = _params(search).get(name);
     if (raw == null || raw === "") return dflt;
     const v = Number(raw);
     if (!Number.isFinite(v)) return dflt;

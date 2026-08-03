@@ -993,9 +993,9 @@ function _spawnCubeBurst(
 // and scales the whole thing up when the hit was a critical.
 //
 // **Gate.** `combatFxEnabled()` is the ONE reader, and it is STRICT
-// `=== "on"`. This file already carries the codebase's known
-// default-on footgun (`BLOCKING_PARTICLE_PARITY_ON` reads `!== "off"`
-// under a comment claiming "default-off"). Do NOT copy that shape here:
+// `=== "on"`. (`BLOCKING_PARTICLE_PARITY_ON` below reads `!== "off"` —
+// that one is a VALIDATED default-ON gate per url-flags.md, not a model
+// for new un-eye-tested features.) Do NOT copy that shape here:
 // an absent param, `?combatFx`, `?combatFx=1`, `?combatFx=true`,
 // `?combatFx=ON` and `?combatFx=off` ALL read false. When false, the
 // Splatter dispatch arm runs the byte-identical pre-Phase-1 code and
@@ -2311,7 +2311,9 @@ const PLAY_EFFECT_SOUND_ON = (() => {
     return false;
   }
 })();
-// Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.
+// Survey A11-S0 (2026-06-11): `?blockingParticleParity` — DEFAULT-ON
+// (`!== "off"` reader; `=off` restores replace semantics), flipped in the
+// validated feature-gate wave (url-flags.md default-ON block).
 // Mirrors entities.js BLOCKING_PARTICLE_PARITY_ON. When on, hook 26
 // (CreateBlockingParticle) takes retail blocking semantics
 // (acclient.c:329528-329565: no-replace if emitter id already live).

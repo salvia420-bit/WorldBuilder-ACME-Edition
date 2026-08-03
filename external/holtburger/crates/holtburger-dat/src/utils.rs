@@ -2,6 +2,46 @@ use binrw::{BinRead, BinWrite};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 
+/// Rust review 2026-08-03 (F5/F6): bytes left between the cursor and EOF.
+///
+/// Used to bound `Vec::with_capacity` / `HashMap::with_capacity` reservations
+/// against what the record could physically contain. Restores the cursor.
+pub fn remaining_bytes<R: Read + Seek>(reader: &mut R) -> binrw::BinResult<u64> {
+    let pos = reader.stream_position()?;
+    let end = reader.seek(SeekFrom::End(0))?;
+    reader.seek(SeekFrom::Start(pos))?;
+    Ok(end.saturating_sub(pos))
+}
+
+/// Rust review 2026-08-03 (F5/F6): validate a DAT-supplied element count and
+/// return a **reservation-safe** capacity for it.
+///
+/// Two distinct defects motivated this:
+///
+/// * **F5 (sign):** several `List<T>.Unpack` ports read the ACE `Int32` count as
+///   `i32::read_le(reader)? as usize`. A negative count sign-extends to
+///   `usize::MAX` (`0xFFFF_FFFF` on wasm32) and reached `with_capacity`
+///   directly, aborting with `capacity overflow` before a single element was
+///   read. `file_type/sound_table.rs:179` already had the `.max(0)` guard; these
+///   sites did not. Callers now pass the count already widened from `i32`.
+/// * **F6 (magnitude):** even a *positive* count is attacker-chosen — a 12-byte
+///   MotionTable claiming `0xFFFF_FFFF` entries asked for tens of GB.
+///
+/// `min_elem_size` is the smallest number of bytes one element can occupy on the
+/// wire, so `remaining / min_elem_size` is a hard ceiling on how many are
+/// actually parseable. The returned capacity is only a **reservation hint** —
+/// callers keep looping over the real `count`, and the per-element
+/// `read_le(reader)?` still fails cleanly at EOF, so parse semantics are
+/// unchanged for every well-formed record.
+pub fn safe_capacity<R: Read + Seek>(
+    reader: &mut R,
+    count: usize,
+    min_elem_size: usize,
+) -> binrw::BinResult<usize> {
+    let ceiling = remaining_bytes(reader)? / (min_elem_size.max(1) as u64);
+    Ok(count.min(ceiling as usize))
+}
+
 pub fn read_compressed_u32<R: Read + Seek>(reader: &mut R) -> binrw::BinResult<u32> {
     let b0 = u8::read(reader)?;
     if (b0 & 0x80) == 0 {

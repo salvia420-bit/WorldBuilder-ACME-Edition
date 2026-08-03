@@ -1,6 +1,6 @@
 use crate::errors::WeenieError;
 use crate::messages::object::messages::PublicWeenieDescription;
-use crate::messages::utils::{read_string16, write_string16};
+use crate::messages::utils::{capacity_hint, read_string16, write_string16};
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use holtburger_common::Guid;
@@ -282,7 +282,7 @@ impl ProtocolUnpack for ApproachVendorEventData {
         let num_items = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
 
-        let mut items = Vec::with_capacity(num_items);
+        let mut items = Vec::with_capacity(capacity_hint(data, *offset, num_items));
         for _ in 0..num_items {
             items.push(VendorItemEventData::unpack(data, offset)?);
         }

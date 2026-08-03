@@ -2,7 +2,8 @@ use crate::messages::object::types::{
     ArmorLevels, ArmorProfile, CreatureProfile, HookProfile, WeaponProfile,
 };
 use crate::messages::utils::{
-    read_hashtable_header, read_string16, write_hashtable_header, write_string16,
+    read_hashtable_header, read_string16, require_fixed_stride, write_hashtable_header,
+    write_string16,
 };
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use bitflags::bitflags;
@@ -76,8 +77,17 @@ impl ProtocolUnpack for IdentifyObjectResponseEventData {
 
         let mut properties = WorldObjectProperties::default();
 
+        // Rust review 2026-08-03 (F1): every stats-table loop below trusted the
+        // hashtable header's count and sliced `data[*offset..*offset + N]` with no
+        // bounds check, so a truncated IdentifyObjectResponse panicked the module
+        // (`range end index out of range`) instead of failing the parse. The
+        // fixed-stride tables are pre-checked with the `checked_mul`/`checked_add`
+        // idiom already used in `session/reliability.rs:79`; the variable-stride
+        // tables (STRING/DID) guard their key read per iteration and let the
+        // existing `?` on the value reader cover the rest.
         if flags.contains(IdentifyResponseFlags::INT_STATS_TABLE) {
             let (count, _) = read_hashtable_header(data, offset)?;
+            require_fixed_stride(data, *offset, count, 8)?;
             for _ in 0..count {
                 let key = LittleEndian::read_u32(&data[*offset..*offset + 4]);
                 let value = LittleEndian::read_i32(&data[*offset + 4..*offset + 8]);
@@ -88,6 +98,7 @@ impl ProtocolUnpack for IdentifyObjectResponseEventData {
 
         if flags.contains(IdentifyResponseFlags::INT64_STATS_TABLE) {
             let (count, _) = read_hashtable_header(data, offset)?;
+            require_fixed_stride(data, *offset, count, 12)?;
             for _ in 0..count {
                 let key = LittleEndian::read_u32(&data[*offset..*offset + 4]);
                 let value = LittleEndian::read_i64(&data[*offset + 4..*offset + 12]);
@@ -98,6 +109,7 @@ impl ProtocolUnpack for IdentifyObjectResponseEventData {
 
         if flags.contains(IdentifyResponseFlags::BOOL_STATS_TABLE) {
             let (count, _) = read_hashtable_header(data, offset)?;
+            require_fixed_stride(data, *offset, count, 8)?;
             for _ in 0..count {
                 let key = LittleEndian::read_u32(&data[*offset..*offset + 4]);
                 let value = LittleEndian::read_u32(&data[*offset + 4..*offset + 8]) != 0;
@@ -108,6 +120,7 @@ impl ProtocolUnpack for IdentifyObjectResponseEventData {
 
         if flags.contains(IdentifyResponseFlags::FLOAT_STATS_TABLE) {
             let (count, _) = read_hashtable_header(data, offset)?;
+            require_fixed_stride(data, *offset, count, 12)?;
             for _ in 0..count {
                 let key = LittleEndian::read_u32(&data[*offset..*offset + 4]);
                 let value = LittleEndian::read_f64(&data[*offset + 4..*offset + 12]);
@@ -119,6 +132,9 @@ impl ProtocolUnpack for IdentifyObjectResponseEventData {
         if flags.contains(IdentifyResponseFlags::STRING_STATS_TABLE) {
             let (count, _) = read_hashtable_header(data, offset)?;
             for _ in 0..count {
+                // Variable stride: guard the 4-byte key, `read_string16` guards
+                // its own length + payload.
+                require_fixed_stride(data, *offset, 1, 4)?;
                 let key = LittleEndian::read_u32(&data[*offset..*offset + 4]);
                 *offset += 4;
                 let value = read_string16(data, offset)?;
@@ -129,6 +145,9 @@ impl ProtocolUnpack for IdentifyObjectResponseEventData {
         if flags.contains(IdentifyResponseFlags::DID_STATS_TABLE) {
             let (count, _) = read_hashtable_header(data, offset)?;
             for _ in 0..count {
+                // Variable stride only in the sense that `Guid::unpack` is
+                // fallible; the key still needs its own guard.
+                require_fixed_stride(data, *offset, 1, 4)?;
                 let key = LittleEndian::read_u32(&data[*offset..*offset + 4]);
                 *offset += 4;
                 let value = Guid::unpack(data, offset)?;
@@ -143,9 +162,10 @@ impl ProtocolUnpack for IdentifyObjectResponseEventData {
             }
             let count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
             *offset += 4;
-            if *offset + count * 4 > data.len() {
-                return None;
-            }
+            // F1 follow-on: `count * 4` wrapped 32-bit usize on wasm32 (count is a
+            // full u32 here, not a u16 hashtable count), so the guard could pass
+            // for a count of 0x40000000. Same checked form as above.
+            require_fixed_stride(data, *offset, count, 4)?;
             for _ in 0..count {
                 spell_book.push(LittleEndian::read_u32(&data[*offset..*offset + 4]));
                 *offset += 4;

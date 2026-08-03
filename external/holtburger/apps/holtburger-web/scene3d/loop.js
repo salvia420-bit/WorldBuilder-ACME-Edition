@@ -53,8 +53,9 @@ import { statAtlasEnabled, tickStatAtlasOptimize } from "./static_atlas.js";
 // ?statBatchChunk (default-OFF) — same lazy buffer-compaction story for the
 // region-chunked per-material ?staticBatch buckets. Flag-off: never runs.
 import { statBatchChunkEnabled, tickStatBatchXOptimize } from "./static_batch_x.js";
-// ?terrainBatch (default-OFF) — lazy buffer compaction for the cross-LB
-// terrain BatchedMesh; both imports are inert when the flag is off.
+// ?terrainBatch (DEFAULT-ON since 2026-07-03; `=off` escapes — stale-comment
+// fix 2026-08-03) — lazy buffer compaction for the cross-LB terrain
+// BatchedMesh; both imports are inert when the flag is off.
 import { terrainBatchEnabled, tickTerrainBatchOptimize } from "./terrain_batch.js";
 import { tickLightingForCellState } from "./lighting.js";
 import { tickFlameFlicker } from "./vfx/components/flameFlicker.js";
@@ -2618,11 +2619,16 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // frames it only writes environmentIntensity + terrain uniforms.
   if (_rp3RunSky && scene3d?.iblEnvironment) {
     try {
-      const nowMs =
-        (scene3d?.frameTime?.tsSec ?? null) !== null
-          ? scene3d.frameTime.tsSec * 1000
-          : performance.now();
-      scene3d.iblEnvironment.tick(nowMs, scene3d.terrainMaterials);
+      // LIVE monotonic clock (`_rp3FrameStartMs`), NOT scene3d.frameTime.tsSec
+      // — the same defect round 1 #14 fixed for the 15 s terrain light tick.
+      // frameTime is stamped ONLY by the rAF tick, which idles under
+      // `?renderOnDemand=1`, so tsSec FREEZES and the `nowMs - _lastRefreshMs
+      // >= refreshMs` compare inside IblEnvironment.tick can never fire again:
+      // scene.environment + the terrain uEnvCube stay pinned to the boot sky
+      // for the whole bot session while environmentIntensity keeps moving.
+      // The RP3 gate above already runs on this clock, so the tick itself was
+      // reached — only its cadence compare was dead.
+      scene3d.iblEnvironment.tick(_rp3FrameStartMs, scene3d.terrainMaterials);
     } catch (e) {
       // eslint-disable-next-line no-console
       if (!scene3d._iblTickWarned) {

@@ -330,9 +330,8 @@ impl Session {
                                 continue;
                             }
 
-                            self.pending_server_packets
-                                .entry(received_sequence)
-                                .or_insert(packet);
+                            // F-sweep: bounded insert (was unbounded).
+                            self.buffer_out_of_order_packet(received_sequence, packet);
 
                             if self.should_request_retransmit(expected, received_sequence) {
                                 self.send_request_retransmit(received_sequence)?;
@@ -384,9 +383,8 @@ impl Session {
                     continue;
                 }
 
-                self.pending_server_packets
-                    .entry(received_sequence)
-                    .or_insert(packet);
+                // F-sweep: bounded insert (was unbounded).
+                self.buffer_out_of_order_packet(received_sequence, packet);
 
                 if self.should_request_retransmit(expected, received_sequence) {
                     self.send_request_retransmit(received_sequence)?;

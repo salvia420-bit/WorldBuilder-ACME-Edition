@@ -15,7 +15,33 @@ use web_time::Instant;
 use tokio::net::UdpSocket;
 
 pub(crate) const MAX_CACHED_PACKETS: usize = 512;
+/// Rust review 2026-08-03 (F-sweep): hard ceiling on the out-of-order S2C
+/// reorder buffer (`Session::pending_server_packets`).
+///
+/// The C2S retransmit cache has always had [`MAX_CACHED_PACKETS`]; its inbound
+/// twin had NO bound at all, so a server (or anything that can pass the
+/// checksum) streaming ever-higher sequence numbers grew the map without limit
+/// for the ~180 s it takes [`RETRANSMIT_GIVE_UP_REQUESTS`] to fire at the 1 Hz
+/// request cadence. `MAX_RETRANSMIT_SEQUENCE_WINDOW + 2` is the real bound:
+/// `send_request_retransmit` refuses a gap wider than the window, so a packet
+/// further ahead than that can never be ordered and buffering it is pure waste.
+pub(crate) const MAX_PENDING_SERVER_PACKETS: usize =
+    MAX_RETRANSMIT_SEQUENCE_WINDOW as usize + 2;
 pub(crate) const MAX_RETRANSMIT_SEQUENCE_IDS: usize = 115;
+/// Rust review 2026-08-03 (F-sweep): per-group slot ceiling for the inbound
+/// fragment reassembler (`Session::process_fragment`).
+///
+/// `FragmentHeader::count` is a wire `u16`, so one 16-byte fragment header could
+/// reserve 65535 `Option<Vec<u8>>` slots (~768 KB on wasm32) for a message that
+/// never completes; combined with `MAX_PENDING_FRAGMENT_GROUPS` (256) that is
+/// ~200 MB of bookkeeping an attacker gets for ~4 KB of traffic.
+///
+/// 16384 fragments x `MAX_FRAGMENT_PAYLOAD` (448 B) = a ~7 MB reassembled
+/// message, which is far above anything the AC protocol actually sends (the
+/// largest real S2C blobs — character list, allegiance roster, DDD chunks — are
+/// well under 1 MB). Tune upward if a legitimate transfer is ever seen to
+/// exceed it; the rejection is logged at `warn`.
+pub(crate) const MAX_FRAGMENTS_PER_MESSAGE: usize = 16384;
 pub(crate) const MAX_RETRANSMIT_SEQUENCE_WINDOW: u32 = 256;
 pub(crate) const REQUEST_RETRANSMIT_INTERVAL: Duration = Duration::from_secs(1);
 // conn-fix (2026-07-18): give-up ceiling for consecutive retransmit

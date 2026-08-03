@@ -218,19 +218,24 @@ export class AtmosphereSky {
     // that used to consume those lerps (Sky-K.6), so the takram star field
     // currently renders at a FIXED intensity regardless of time-of-day.
     //
-    // Flag `?skyObjLum=on` (default OFF → byte-identical: starsMaterial.intensity
-    // is never touched). When on, tick() scales the StarsMaterial `intensity`
-    // uniform from the sun altitude (`sin(dirPitch)`) on the shared SkyState
-    // snapshot, ramping linearly across a dawn/dusk band — the same linear
-    // "between segments" interpolation intent as the acclient keyframe lerp.
+    // Flag `?skyObjLum` — **DEFAULT-ON**, opt-out via `?skyObjLum=off`. The
+    // reader below is `sp !== "off"`, so it returns false ONLY for the literal
+    // "off"; any other value, an absent param, and the no-window case are all
+    // ON. (2026-08-03: this block used to open "default OFF → byte-identical:
+    // starsMaterial.intensity is never touched" — stale since the 2026-06-09
+    // render-audit T1d flip, and directly contradicted four lines later. That
+    // half-sentence is the same shape that produced R2#8 and the still-open
+    // task #42, so it is deleted rather than left to be re-read.)
+    // When on, tick() scales the StarsMaterial `intensity` uniform from the sun
+    // altitude (`sin(dirPitch)`) on the shared SkyState snapshot, ramping
+    // linearly across a dawn/dusk band — the same linear "between segments"
+    // interpolation intent as the acclient keyframe lerp.
     // The flag is captured ONCE here and consumed via `this._skyObjLum` in
     // tick(); declaration + use share `this` so there's no split-scope
     // ReferenceError (cf. a prior wave that shipped one by reading the flag
     // in a different function than it declared it).
-    // render-audit T1d (skyObjLum): default-ON, opt-out via `?skyObjLum=off`.
-    // Returns false only when the value is exactly "off"; any other value
-    // (incl. absent param) and the no-window case default to ON. Pending
-    // 1070 GPU eye-test before this becomes the committed default.
+    // ⚠ Still awaiting its 1070 GPU eye-test — default-ON is the SHIPPED state,
+    // not a validated one.
     this._skyObjLum = true;
     try {
       // eslint-disable-next-line no-undef

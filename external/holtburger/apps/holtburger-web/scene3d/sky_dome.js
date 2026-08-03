@@ -26,6 +26,9 @@ import * as THREE from "three";
 const SKY_CAMERA_NEAR = 0.1;
 const SKY_CAMERA_FAR = 50000.0;
 
+// Scratch for the sky-bird anchor placement (per-rAF; never allocate in tick).
+const _skyBirdPosScratch = new THREE.Vector3();
+
 // === W1 — parametric weather SkyObject billboard host (2026-05-29) ======
 //
 // Retail weather is per-DayGroup SkyObjects (streak GfxObjs 0x01004C42/44,
@@ -532,7 +535,19 @@ export class SkyDome {
       this._skyBirdAnchor = new THREE.Group();
       this._skyBirdAnchor.name = "sky-bird-anchor";
       this._skyBirdAnchor.frustumCulled = false;
-      this.scene.add(this._skyBirdAnchor); // world scene → world-scale particles
+      // FRAME INVARIANT (2026-08-03): `_runStaticParticleChain` parents the
+      // Swarm emitters straight under this anchor, and every other caller
+      // hands it an anchor under `staticsGroup` — so the DAT emitter offsets
+      // and trajectories are AC-frame (Z-up). Parent under `worldRoot` (the
+      // rotation.x = -PI/2 AC frame) so +Z is genuinely up. The root scene is
+      // Y-up: hanging the swarm there rendered it on its side. Fall back to
+      // the root scene if worldRoot is absent — tick() converts through the
+      // parent's own matrix either way, so the placement stays correct.
+      const frame = scene3d.worldRoot ?? this.scene;
+      frame.add(this._skyBirdAnchor); // world-scale particles, AC frame
+      // worldToLocal reads matrixWorld; seed it so the FIRST tick (which can
+      // precede the first render) already converts against the real transform.
+      frame.updateWorldMatrix(true, false);
       this._skyBirdChainsAttached = new Set();
     }
     for (const o of skyObjects) {
@@ -582,18 +597,25 @@ export class SkyDome {
     }
     this._lastIsIndoor = isIndoor;
 
-    // Task #4 — keep the sky-swarm (bird) anchor overhead, following the camera
-    // (AC Z-up). Hidden indoors (no birds through ceilings). The emitters tick
-    // on the shared static ParticleManager; only the anchor transform moves
-    // here, so the Swarm particles orbit around the player wherever they go.
+    // Task #4 — keep the sky-swarm (bird) anchor overhead, following the camera.
+    // Hidden indoors (no birds through ceilings). The emitters tick on the
+    // shared static ParticleManager; only the anchor transform moves here, so
+    // the Swarm particles orbit around the player wherever they go.
+    //
+    // 2026-08-03 — OVERHEAD IS +Y IN THREE.JS WORLD SPACE, converted into the
+    // anchor's parent frame (AC Z-up under worldRoot). `camera` is unparented,
+    // so `camera.position` is already world space. The old code added the
+    // altitude to `camera.position.z` while the anchor hung in the Y-up root
+    // scene, which parked the swarm 40 m SOUTH at exact eye height instead of
+    // overhead — the whole default-ON feature never reached the sky.
     if (this._skyBirdAnchor) {
       if (camera && camera.position && !isIndoor) {
         this._skyBirdAnchor.visible = true;
-        this._skyBirdAnchor.position.set(
-          camera.position.x,
-          camera.position.y,
-          camera.position.z + this._skyBirdAltitude
-        );
+        _skyBirdPosScratch.copy(camera.position);
+        _skyBirdPosScratch.y += this._skyBirdAltitude;
+        const frame = this._skyBirdAnchor.parent;
+        if (frame) frame.worldToLocal(_skyBirdPosScratch);
+        this._skyBirdAnchor.position.copy(_skyBirdPosScratch);
       } else {
         this._skyBirdAnchor.visible = false;
       }
@@ -673,6 +695,32 @@ export class SkyDome {
   dispose() {
     if (this.cloudOverlay && typeof this.cloudOverlay.dispose === "function") {
       try { this.cloudOverlay.dispose(); } catch (_) { /* tear-down */ }
+    }
+    // Task #4 sky-swarm teardown (2026-08-03). The Swarm emitters live on the
+    // SHARED static ParticleManager, not on anything this dispose() nulls — so
+    // without an explicit reap they keep ticking 60x/s for the rest of the
+    // session with no owner (the R1#10 shape). Reap by the SAME `sky:<pes>`
+    // owner key the attach used, so the key can never drift, then drop the
+    // anchor and the idempotence guard (a stale guard would make a later
+    // re-init silently skip every chain).
+    if (this._skyBirdChainsAttached) {
+      const keys = [...this._skyBirdChainsAttached].map((pes) => `sky:${pes}`);
+      this._skyBirdChainsAttached.clear();
+      // Dynamic import mirrors the attach path — keeps sky_dome a leaf module.
+      import("./particles/owner_registry.js")
+        .then((m) => {
+          for (const k of keys) {
+            try { m.ownerRegistry.destroyAllForOwner(k); } catch (_) { /* tear-down */ }
+          }
+        })
+        .catch(() => { /* tear-down: nothing left to reap into */ });
+      this._skyBirdChainsAttached = null;
+    }
+    if (this._skyBirdAnchor) {
+      if (this._skyBirdAnchor.parent) {
+        this._skyBirdAnchor.parent.remove(this._skyBirdAnchor);
+      }
+      this._skyBirdAnchor = null;
     }
     // W1 — free the weather billboard pool + its textures.
     if (this._weatherPool) {

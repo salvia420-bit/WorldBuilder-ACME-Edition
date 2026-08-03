@@ -1,4 +1,4 @@
-use crate::messages::utils::{read_string16, write_string16};
+use crate::messages::utils::{capacity_hint, read_string16, write_string16};
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use holtburger_common::Guid;
@@ -60,11 +60,21 @@ impl ProtocolUnpack for CharacterListData {
         }
         let count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
+        // Rust review 2026-08-03 (F7): this loop used to SWALLOW a failed entry
+        // (`if let Some(entry) = ...`). A failing `CharacterEntry::unpack` does
+        // not advance `*offset`, so a truncated CharacterList — the first S2C
+        // message after login — with `count = 0xFFFFFFFF` re-ran a pure no-op
+        // body ~4.3 billion times and froze the main thread before character
+        // select. Propagating with `?` matches every other reader in this crate
+        // and bounds the loop at one failing iteration: a desynced entry means
+        // the rest of the stream is unparseable anyway.
+        //
+        // NOTE: `Vec::new()` (not `with_capacity(count)`) is deliberate and
+        // stays that way — the count is unvalidated, so it must never size an
+        // allocation.
         let mut characters = Vec::new();
         for _ in 0..count {
-            if let Some(entry) = CharacterEntry::unpack(data, offset) {
-                characters.push(entry);
-            }
+            characters.push(CharacterEntry::unpack(data, offset)?);
         }
 
         // Post-character list padding
@@ -291,7 +301,8 @@ impl ProtocolUnpack for CharacterCreateRequestData {
         *offset += 4;
         let skill_count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
-        let mut skill_advancement_classes = Vec::with_capacity(skill_count);
+        let mut skill_advancement_classes =
+            Vec::with_capacity(capacity_hint(data, *offset, skill_count));
         for _ in 0..skill_count {
             if *offset + 4 > data.len() {
                 return None;

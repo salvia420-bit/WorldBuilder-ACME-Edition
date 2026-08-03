@@ -1,4 +1,4 @@
-use crate::messages::utils::{read_string16, write_string16};
+use crate::messages::utils::{capacity_hint, read_string16, require_fixed_stride, write_string16};
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use holtburger_common::Guid;
@@ -49,9 +49,9 @@ impl ProtocolUnpack for FriendEntry {
         }
         let their_count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
-        if *offset + their_count * 4 > data.len() {
-            return None;
-        }
+        // Rust review 2026-08-03 (F-sweep): 32-bit usize wrap in the span guard;
+        // see `utils::require_fixed_stride`.
+        require_fixed_stride(data, *offset, their_count, 4)?;
         let mut their_friends = Vec::with_capacity(their_count);
         for _ in 0..their_count {
             their_friends.push(Guid(LittleEndian::read_u32(&data[*offset..*offset + 4])));
@@ -63,9 +63,9 @@ impl ProtocolUnpack for FriendEntry {
         }
         let inverse_count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
-        if *offset + inverse_count * 4 > data.len() {
-            return None;
-        }
+        // Rust review 2026-08-03 (F-sweep): 32-bit usize wrap in the span guard;
+        // see `utils::require_fixed_stride`.
+        require_fixed_stride(data, *offset, inverse_count, 4)?;
         let mut inverse_friends = Vec::with_capacity(inverse_count);
         for _ in 0..inverse_count {
             inverse_friends.push(Guid(LittleEndian::read_u32(&data[*offset..*offset + 4])));
@@ -116,7 +116,7 @@ impl ProtocolUnpack for FriendsListUpdateEventData {
         let friend_count = LittleEndian::read_u32(&data[*offset..*offset + 4]) as usize;
         *offset += 4;
 
-        let mut friends = Vec::with_capacity(friend_count);
+        let mut friends = Vec::with_capacity(capacity_hint(data, *offset, friend_count));
         for _ in 0..friend_count {
             friends.push(FriendEntry::unpack(data, offset)?);
         }

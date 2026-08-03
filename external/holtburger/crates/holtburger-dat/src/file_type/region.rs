@@ -169,8 +169,17 @@ impl SkyDesc {
         // future schema revision lands here mid-stream at an odd offset.
         align_boundary(reader, 4)?;
 
+        // Rust review 2026-08-03 (F6): every `with_capacity(N as usize)` in this
+        // file reserved straight off an unvalidated wire u32. Region 0x13000000
+        // is parsed at BOOT on every client, so a corrupt/hostile shard could
+        // abort the module before login with a multi-GB reservation. Each of the
+        // 14 sites now routes through `utils::safe_capacity` with a 4-byte
+        // minimum element size (every sub-struct here begins with at least a u32
+        // or a length-prefixed string). The loops still iterate the real wire
+        // count and still fail cleanly at EOF via `?` — parse semantics unchanged.
         let num_day_groups = u32::read_le(reader)?;
-        let mut day_groups = Vec::with_capacity(num_day_groups as usize);
+        let mut day_groups =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num_day_groups as usize, 4)?);
         for _ in 0..num_day_groups {
             day_groups.push(DayGroup::unpack(reader)?);
         }
@@ -223,13 +232,15 @@ impl DayGroup {
         // SkyObjectReplace entries are back-referenced to a SkyObject
         // index from this array.
         let num_sky_objects = u32::read_le(reader)?;
-        let mut sky_objects = Vec::with_capacity(num_sky_objects as usize);
+        let mut sky_objects =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num_sky_objects as usize, 4)?);
         for _ in 0..num_sky_objects {
             sky_objects.push(SkyObject::unpack(reader)?);
         }
 
         let num_sky_time = u32::read_le(reader)?;
-        let mut sky_time = Vec::with_capacity(num_sky_time as usize);
+        let mut sky_time =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num_sky_time as usize, 4)?);
         for _ in 0..num_sky_time {
             sky_time.push(SkyTimeOfDay::unpack(reader)?);
         }
@@ -375,7 +386,8 @@ impl SkyTimeOfDay {
         align_boundary(reader, 4)?;
 
         let num_replace = u32::read_le(reader)?;
-        let mut sky_obj_replace = Vec::with_capacity(num_replace as usize);
+        let mut sky_obj_replace =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num_replace as usize, 4)?);
         for _ in 0..num_replace {
             sky_obj_replace.push(SkyObjectReplace::unpack(reader)?);
         }
@@ -560,7 +572,8 @@ impl AmbientSTBDesc {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let stb_id = u32::read_le(reader)?;
         let num = u32::read_le(reader)?;
-        let mut ambient_sounds = Vec::with_capacity(num as usize);
+        let mut ambient_sounds =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num as usize, 4)?);
         for _ in 0..num {
             ambient_sounds.push(AmbientSoundDesc::unpack(reader)?);
         }
@@ -591,7 +604,8 @@ pub struct SoundDesc {
 impl SoundDesc {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let num = u32::read_le(reader)?;
-        let mut stb_descs = Vec::with_capacity(num as usize);
+        let mut stb_descs =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num as usize, 4)?);
         for _ in 0..num {
             stb_descs.push(AmbientSTBDesc::unpack(reader)?);
         }
@@ -634,7 +648,7 @@ impl SceneType {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let stb_index = i32::read_le(reader)?;
         let num = u32::read_le(reader)?;
-        let mut scenes = Vec::with_capacity(num as usize);
+        let mut scenes = Vec::with_capacity(crate::utils::safe_capacity(reader, num as usize, 4)?);
         for _ in 0..num {
             scenes.push(u32::read_le(reader)?);
         }
@@ -663,7 +677,8 @@ pub struct SceneDesc {
 impl SceneDesc {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let num = u32::read_le(reader)?;
-        let mut scene_types = Vec::with_capacity(num as usize);
+        let mut scene_types =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num as usize, 4)?);
         for _ in 0..num {
             scene_types.push(SceneType::unpack(reader)?);
         }
@@ -815,25 +830,28 @@ impl TexMerge {
         let base_tex_size = u32::read_le(reader)?;
 
         let n = u32::read_le(reader)?;
-        let mut corner_terrain_maps = Vec::with_capacity(n as usize);
+        let mut corner_terrain_maps =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, n as usize, 4)?);
         for _ in 0..n {
             corner_terrain_maps.push(TerrainAlphaMap::unpack(reader)?);
         }
 
         let n = u32::read_le(reader)?;
-        let mut side_terrain_maps = Vec::with_capacity(n as usize);
+        let mut side_terrain_maps =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, n as usize, 4)?);
         for _ in 0..n {
             side_terrain_maps.push(TerrainAlphaMap::unpack(reader)?);
         }
 
         let n = u32::read_le(reader)?;
-        let mut road_maps = Vec::with_capacity(n as usize);
+        let mut road_maps = Vec::with_capacity(crate::utils::safe_capacity(reader, n as usize, 4)?);
         for _ in 0..n {
             road_maps.push(RoadAlphaMap::unpack(reader)?);
         }
 
         let n = u32::read_le(reader)?;
-        let mut terrain_desc = Vec::with_capacity(n as usize);
+        let mut terrain_desc =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, n as usize, 4)?);
         for _ in 0..n {
             terrain_desc.push(TMTerrainDesc::unpack(reader)?);
         }
@@ -915,7 +933,8 @@ impl TerrainType {
         let terrain_name = read_pstring_char(reader)?;
         let terrain_color = u32::read_le(reader)?;
         let num = u32::read_le(reader)?;
-        let mut scene_types = Vec::with_capacity(num as usize);
+        let mut scene_types =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num as usize, 4)?);
         for _ in 0..num {
             scene_types.push(u32::read_le(reader)?);
         }
@@ -950,7 +969,8 @@ pub struct TerrainDesc {
 impl TerrainDesc {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let num = u32::read_le(reader)?;
-        let mut terrain_types = Vec::with_capacity(num as usize);
+        let mut terrain_types =
+            Vec::with_capacity(crate::utils::safe_capacity(reader, num as usize, 4)?);
         for _ in 0..num {
             terrain_types.push(TerrainType::unpack(reader)?);
         }

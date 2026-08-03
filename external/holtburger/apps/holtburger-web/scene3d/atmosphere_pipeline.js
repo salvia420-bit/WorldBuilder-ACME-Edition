@@ -902,6 +902,30 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
   let activeCamera = camera;
 
+  /**
+   * Re-point the compound fx shader at a new render camera (2026-08-03 fix).
+   *
+   * `fxPass` was constructed with the boot PERSPECTIVE camera and nothing ever
+   * updated it, so a C-key switch to the top-down ORTHO camera (camera.js
+   * `createOrthoCamera`) left every DEPTH effect decoding ortho depth with the
+   * perspective formula: `EffectPass.set mainCamera` is what calls
+   * `EffectMaterial.copyCameraSettings`, which owns both `cameraNear`/
+   * `cameraFar` AND the `PERSPECTIVE_CAMERA` define that selects the `getViewZ`
+   * branch. AerialPerspectiveEffect (world-position reconstruction), heatHaze
+   * and horizonDissolve all carry `EffectAttribute.DEPTH` and all read it.
+   *
+   * ⚠ INVARIANT: CALL THIS ONLY ON AN EXPLICIT CAMERA SWITCH, never per frame.
+   * The define flip is a program-cache-key change — one recompile per switch is
+   * the intended cost; per-frame would fork programs every frame. Both call
+   * sites are already behind `cam !== activeCamera`.
+   */
+  function retargetFxPass(cam) {
+    // `.mainCamera`, not `.camera`: on the pmndrs BASE Pass `set mainCamera` is
+    // an empty no-op (the portal_punch trap), but EffectPass genuinely
+    // overrides it and fans out to fullscreenMaterial + every effect.
+    fxPass.mainCamera = cam;
+  }
+
   return {
     composer,
     aerialPerspective,
@@ -1050,6 +1074,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         worldMaskPass.setCamera(cam);
         cellsMaskPass.setCamera(cam);
         cellsPostMaskPass.setCamera(cam);
+        retargetFxPass(cam);
         activeCamera = cam;
       }
       // Portal-stencil pass draws with the CURRENT render camera — set every
@@ -1120,6 +1145,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       worldMaskPass.setCamera(cam);
       cellsMaskPass.setCamera(cam);
       cellsPostMaskPass.setCamera(cam);
+      retargetFxPass(cam);
       activeCamera = cam;
     },
 

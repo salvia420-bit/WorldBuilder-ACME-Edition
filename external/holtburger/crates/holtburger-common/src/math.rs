@@ -52,6 +52,23 @@ impl Vector3 {
         if len > 0.0 { *self / len } else { *self }
     }
 
+    /// Rust review 2026-08-03 (F9): true when all three components are finite.
+    ///
+    /// Wire vectors (positions, velocities) are read as raw `f32` with only
+    /// LENGTH validation, so NaN/±inf reach the physics state unchecked and are
+    /// never cleaned up afterwards — `WorldPosition::rebucket_outdoor_landblock`
+    /// is NaN-inert, and every comparison against NaN is false, so a poisoned
+    /// value persists for the whole session.
+    pub fn is_finite(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
+
+    /// [`Self::is_finite`] or zero — the neutral substitute for a non-finite
+    /// wire VELOCITY (a stopped body, rather than a poisoned integrator).
+    pub fn finite_or_zero(&self) -> Self {
+        if self.is_finite() { *self } else { Self::zero() }
+    }
+
     /// Calculates the AC heading (radians) required to face from this position to a target.
     /// AC heading convention: 0 is West, 90 is North, 180 is East, 270 is South.
     pub fn heading_to(&self, target: &Vector3) -> f32 {
