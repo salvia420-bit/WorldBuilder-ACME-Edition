@@ -163,6 +163,12 @@ const TIER4 = [
 // asserted nothing — `--allow-skips`) still fails them, which is the correct
 // outcome for the two suites that silently no-op when THREE_PATH is absent.
 const TIER5 = [
+  { tier: 5, flag: "ac_resize_anchor", file: "test_ac_resize_anchor.mjs" },
+  { tier: 5, flag: "ac_font_render_retry", file: "test_ac_font_render_retry.mjs" },
+  { tier: 5, flag: "ac_strings_no_latch", file: "test_ac_strings_no_latch.mjs" },
+  { tier: 5, flag: "ac_dat_runtime_no_latch", file: "test_ac_dat_runtime_no_latch.mjs" },
+  { tier: 5, flag: "graphics_settings_live_flags", file: "test_graphics_settings_live_flags.mjs" },
+  { tier: 5, flag: "ac_dye_viewport_race", file: "test_ac_dye_viewport_race.mjs" },
   { tier: 5, flag: "bot_escape_rung", file: "rynth/test_bot_escape_rung.mjs" },
   { tier: 5, flag: "nav_frame_clamp", file: "rynth/test_nav_frame_clamp.mjs" },
   { tier: 5, flag: "webhost_pose_free", file: "rynth/test_webhost_pose_free.mjs" },
@@ -308,7 +314,6 @@ const QUARANTINE = [
   { file: "test_ac_locomotion_dispatch.mjs", why: "unclassified — see task #156" },
   { file: "test_ac_locomotion_per_stance.mjs", why: "unclassified — see task #156" },
   { file: "test_ac_motion_inventory.mjs", why: "unclassified — see task #156" },
-  { file: "test_ac_resize_anchor.mjs", why: "unclassified — see task #156" },
   { file: "test_cast_motion_drains.mjs", why: "unclassified — see task #156" },
   { file: "test_diag_spawnfailed_lbkey.mjs", why: "harness stripExports gap: _attachCast is not defined (R8)" },
   { file: "test_envcell_guard.mjs", why: "STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT gap (documented R8)" },

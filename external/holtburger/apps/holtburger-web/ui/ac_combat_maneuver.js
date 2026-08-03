@@ -25,15 +25,21 @@
 
 export const DEFAULT_CMT_ID = 0x30000000;
 
-// F6-1 (2026-06-09) — `?cmtStanceMask=on` (default OFF). The CMT tree is
+// F6-1 (2026-06-09) — `?cmtStanceMask` — **DEFAULT-ON since the 2026-07-27
+// audit**; `?cmtStanceMask=off` is the escape hatch. (The "default OFF" note
+// that used to head this block was stale from the day it shipped: the reader
+// below is `!== "off"`, which reads ON whenever the param is ABSENT. Corrected
+// R9 2026-08-03 against docs/url-flags.md:340, which is the authority for a
+// shipped default — no behaviour change here, only the comment.) The CMT tree is
 // keyed by the FULL MotionStance u32 (e.g. 0x8000003C) but every caller
 // passes the low-16 stance (0x3C — `__getCurrentStanceLow()` /
 // picking.js), so getCombatManeuver missed at the stance level 100% of the
 // time and the local melee swing always fell back to the canned "vibe pose"
 // arm tween instead of the real SlashHigh/BackhandMed/ThrustLow clip. When
 // ON, both the tree keys and the lookup are masked to low-16 so the
-// (stance, height, type, power) lookup resolves. Default OFF: this lights up
-// the real swing animations and needs a 1070 eye-test before defaulting on.
+// (stance, height, type, power) lookup resolves — which is what lights up the
+// real swing animations. docs/url-flags.md:340 records it as on-by-default
+// with the 1070 eye-test still pending.
 const CMT_STANCE_MASK = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
@@ -71,12 +77,20 @@ export async function loadCombatManeuverTable(tableId = DEFAULT_CMT_ID) {
   if (pending) return pending;
 
   const promise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_combat_maneuver_table) {
-      runtimes.set(tableId, null);
-      return null;
-    }
+    // R9 (2026-08-03) — yield once so the `inFlight.set(...)` below has run
+    // before this body (and its `finally`) executes. Without it the
+    // synchronous wasm-missing early return fired `inFlight.delete` BEFORE
+    // the matching set, and the set then pinned a settled promise. Same
+    // ordering hazard ui/ac_layout.js documents on loadLayout.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      // R9 — "wasm isn't ready yet" is transient (plugins mount before
+      // init_resource_source resolves); memoising it as `null` blanked this
+      // record for the WHOLE session with no way back. Unproven failures are
+      // NOT cached — only the authoritative DAT answers below are. Same rule
+      // as ui/ac_icon_cache.js §P0.4 / LEAK-03 and ui/ac_layout.js.
+      if (!wasm?.fetch_combat_maneuver_table) return null;
       const json = await wasm.fetch_combat_maneuver_table(tableId >>> 0);
       const data = JSON.parse(json);
       if (!data || !Array.isArray(data.maneuvers)) {
@@ -97,8 +111,7 @@ export async function loadCombatManeuverTable(tableId = DEFAULT_CMT_ID) {
     } catch (err) {
       console.warn(`[ac-combat] CMT 0x${tableId.toString(16)} load failed:`, err);
       try { window.__diag?.combat?.onLoadFailed?.({ tableId, error: err, source: "fetch" }); } catch (_) {}
-      runtimes.set(tableId, null);
-      return null;
+      return null; // not cached — a later call retries
     } finally {
       inFlight.delete(tableId);
     }

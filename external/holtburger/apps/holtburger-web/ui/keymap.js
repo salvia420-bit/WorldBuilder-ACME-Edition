@@ -493,12 +493,25 @@ export async function loadRetailKeyMap(id = 0x14000000) {
   if (retailKeyMapCache) return retailKeyMapCache;
   if (retailKeyMapPromise) return retailKeyMapPromise;
   retailKeyMapPromise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_key_map) {
-      retailKeyMapCache = null;
-      return null;
-    }
+    // R9 (2026-08-03) — yield before touching anything. The `!wasm` branch
+    // below is a SYNCHRONOUS early return inside this async IIFE, so its
+    // `finally { retailKeyMapPromise = null }` used to run BEFORE the
+    // `retailKeyMapPromise = (...)()` assignment completed; the assignment
+    // then re-pinned the already-settled null promise and the
+    // `if (retailKeyMapPromise) return retailKeyMapPromise` guard handed it
+    // out for the rest of the session, so the retail keymap never loaded
+    // once anything called this before wasm was up. ac_layout.js documents
+    // the same ordering hazard on loadLayout.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      // Kept INSIDE the try so the `finally` still clears
+      // retailKeyMapPromise — an early return above it pins the settled
+      // promise, which is the very bug this block fixes.
+      if (!wasm?.fetch_key_map) {
+        retailKeyMapCache = null;
+        return null;
+      }
       const json = await wasm.fetch_key_map(id >>> 0);
       const raw = json === "null" ? null : JSON.parse(json);
       if (!raw) {

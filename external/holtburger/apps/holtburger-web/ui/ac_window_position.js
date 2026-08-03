@@ -516,12 +516,19 @@ export function attachEdgeResizers(element, opts) {
       const actualDh = newH - drag.h0;
       element.style.width = `${newW}px`;
       element.style.height = `${newH}px`;
+      // R9 (2026-08-03) — same sign inversion the corner resizers carried:
+      // with `sign === -1` on the top/left edges, `x0 - actualDw*sign` is
+      // `x0 + actualDw`, so the origin moved AWAY from the cursor and the
+      // supposedly-pinned opposite edge slid by 2·|dx|. Correct form is
+      // `newLeft = R - newW = x0 + actualDw*sign`. See
+      // test_ac_resize_anchor.mjs and the derivation in
+      // ui/ac_resize_corners.js.
       if (spec.affectsOrigin) {
         if (spec.axis === "w") {
-          element.style.left = `${drag.x0 - actualDw * spec.sign}px`;
+          element.style.left = `${drag.x0 + actualDw * spec.sign}px`;
           element.style.right = "auto";
         } else {
-          element.style.top = `${drag.y0 - actualDh * spec.sign}px`;
+          element.style.top = `${drag.y0 + actualDh * spec.sign}px`;
           element.style.bottom = "auto";
         }
       }

@@ -166,12 +166,24 @@ export function attachCornerResizers(element, opts) {
       // the OPPOSITE corner stays pinned. We rewrite left/top using
       // the actual (clamped) delta so a clamp at min size doesn't
       // continue to drag the element away from the cursor.
+      //
+      // Sign derivation (tl; x0 = rect.left, w0 = rect.width, pointer dx):
+      //   pinned right edge R = x0 + w0
+      //   newW     = w0 + widthSign*dx        (computed above)
+      //   actualDw = newW - w0 = widthSign*dx
+      //   newLeft  = R - newW = x0 - widthSign*dx = x0 + actualDw*widthSign
+      // R9 (2026-08-03): this read `x0 - actualDw * widthSign`, which is
+      // `x0 + actualDw` on the left/top handles — the origin moved AWAY from
+      // the cursor and the "pinned" edge slid by 2·|dx|. Clamped drags were
+      // worse: at minWidth the origin kept marching, walking the panel
+      // off-screen (left went to -100 in the regression case). Proven by
+      // test_ac_resize_anchor.mjs.
       if (spec.affectsLeft) {
-        element.style.left = `${drag.x0 - actualDw * spec.widthSign}px`;
+        element.style.left = `${drag.x0 + actualDw * spec.widthSign}px`;
         element.style.right = "auto";
       }
       if (spec.affectsTop) {
-        element.style.top = `${drag.y0 - actualDh * spec.heightSign}px`;
+        element.style.top = `${drag.y0 + actualDh * spec.heightSign}px`;
         element.style.bottom = "auto";
       }
       scheduleSizeChange(newW, newH);

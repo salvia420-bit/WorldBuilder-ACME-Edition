@@ -34,12 +34,20 @@ export async function loadPaletteSet(setId) {
   if (pending) return pending;
 
   const promise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_palette_set) {
-      runtimes.set(setId, null);
-      return null;
-    }
+    // R9 (2026-08-03) — yield once so the `inFlight.set(...)` below has run
+    // before this body (and its `finally`) executes. Without it the
+    // synchronous wasm-missing early return fired `inFlight.delete` BEFORE
+    // the matching set, and the set then pinned a settled promise. Same
+    // ordering hazard ui/ac_layout.js documents on loadLayout.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      // R9 — "wasm isn't ready yet" is transient (plugins mount before
+      // init_resource_source resolves); memoising it as `null` blanked this
+      // record for the WHOLE session with no way back. Unproven failures are
+      // NOT cached — only the authoritative DAT answers below are. Same rule
+      // as ui/ac_icon_cache.js §P0.4 / LEAK-03 and ui/ac_layout.js.
+      if (!wasm?.fetch_palette_set) return null;
       const json = await wasm.fetch_palette_set(setId >>> 0);
       const data = JSON.parse(json);
       if (!data || !Array.isArray(data.palettes) || data.palettes.length === 0) {
@@ -57,8 +65,7 @@ export async function loadPaletteSet(setId) {
     } catch (err) {
       console.warn(`[ac-palette-set] 0x${setId.toString(16)} load failed:`, err);
       try { window.__diag?.palettes?.onLoadFailed?.({ setId, error: err, source: "fetch" }); } catch (_) {}
-      runtimes.set(setId, null);
-      return null;
+      return null; // not cached — a later call retries
     } finally {
       inFlight.delete(setId);
     }
@@ -93,7 +100,18 @@ export function getPaletteSet(setId) {
  */
 export function pickPaletteForShade(set, shade) {
   if (!set?.palettes?.length) return null;
-  const s = Math.max(0, Math.min(1, shade));
+  // R9 (2026-08-03) — NaN used to survive the clamp (Math.max(0, NaN) === NaN),
+  // so `palettes[NaN]` handed back `undefined`, not the documented `null`.
+  // Retail/ACE both reject an out-of-band shade outright: acclient
+  // `PalSet::GetPaletteID` @470491 requires `_shade <= 1.0 && _shade >= 0.0`
+  // and otherwise returns the null DID, and ACE PaletteSet.cs:31 returns 0 for
+  // `hue < 0 || hue > 1`. We keep the CLAMP for in-band-but-imprecise floats
+  // (all 4,776 retail Shade values in LSD-Partial are already inside [0,1], so
+  // the clamp is unreachable divergence) but a non-finite shade is a caller
+  // bug, not a shade — null, per this function's contract.
+  const n = Number(shade);
+  if (!Number.isFinite(n)) return null;
+  const s = Math.max(0, Math.min(1, n));
   const idx = Math.min(
     set.palettes.length - 1,
     Math.max(0, Math.floor((set.palettes.length - 0.000001) * s)),

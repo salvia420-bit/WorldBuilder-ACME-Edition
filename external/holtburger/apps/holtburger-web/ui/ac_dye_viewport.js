@@ -84,6 +84,27 @@ export class DyeViewport {
     this._rafId = null;
     this._rotation = 0;
     this._disposed = false;
+    // R9 (2026-08-03) — race-cancel token, the same device the sibling
+    // ac_paperdoll_viewport.js got in Wave C / PR8 (2026-06-06) and this
+    // viewport never did. `loadDyedItem` / `loadPlayerMesh` each await twice
+    // (animationCache.get, then fetchEntitySurfacesPixels) before mutating
+    // rigRoot / playerRigRoot / _ownedMaterials / _ownedTextures, and the
+    // dye picker calls them once per swatch click. Two overlapping calls can
+    // resolve OUT OF ORDER (a cache-hit second click beats a cache-miss first
+    // one), leaving the preview showing the older dye — and every stale
+    // resumption still allocates GPU textures nobody frees. Bumped on entry,
+    // re-checked after every await; a superseded (or post-dispose) load bails.
+    //
+    // Per-RIG counters, not one shared counter: loadDyedItem owns rigRoot and
+    // loadPlayerMesh owns playerRigRoot, and plugins/dye-preview.js runs them
+    // back to back. A single counter would make the player load cancel the
+    // armor load (or vice versa) the moment either grew a second await.
+    this._loadTokens = { dyed: 0, player: 0 };
+  }
+
+  /** True when `token` is still the newest load of `kind` and we're alive. */
+  _loadStillCurrent(kind, token) {
+    return !this._disposed && token === this._loadTokens[kind];
   }
 
   _buildPedestal() {
@@ -123,6 +144,8 @@ export class DyeViewport {
    */
   async loadDyedItem(setupId, mtableId, paletteId, subPalettes) {
     if (this._disposed) return false;
+    const kind = "dyed";
+    const token = ++this._loadTokens.dyed; // R9 — race-cancel, see ctor
     const em = window.liveScene3d?.entityManager;
     if (!em?.animationCache?.get) return false;
     const fetchKeyframes = em.wasmExports?.fetchEntityAnimationKeyframes;
@@ -146,6 +169,9 @@ export class DyeViewport {
     } catch (_) {
       return false;
     }
+    // R9 — a newer load (or dispose()) landed while we were awaiting; drop
+    // this result rather than clobbering the rig with a stale dye.
+    if (!this._loadStillCurrent(kind, token)) return false;
     if (!animEntry || !Array.isArray(animEntry.partGroups)) return false;
 
     // Tear down prior rig contents (geometry refs are cache-shared —
@@ -172,6 +198,15 @@ export class DyeViewport {
           const results = await em.wasmExports.fetchEntitySurfacesPixels(
             dids, paletteId >>> 0, subPalettes ?? new Uint32Array(0),
           );
+          // R9 — superseded/disposed while decoding: free the wasm-owned
+          // SurfacePixels boxes and build nothing. Without this the stale
+          // load allocated THREE textures + materials into _ownedTextures /
+          // _ownedMaterials that dispose() had already drained, so nothing
+          // would ever free them.
+          if (!this._loadStillCurrent(kind, token)) {
+            for (const sp of results) { if (sp?.free) try { sp.free(); } catch (_) {} }
+            return false;
+          }
           for (let i = 0; i < dids.length; i += 1) {
             const did = dids[i] >>> 0;
             const sp = results[i];
@@ -259,6 +294,8 @@ export class DyeViewport {
   async loadPlayerMesh(setupId, mtableId, paletteId, subPalettes) {
     if (this._disposed) return false;
     if (!setupId) return false;
+    const kind = "player";
+    const token = ++this._loadTokens.player; // R9 — race-cancel, see ctor
     const em = window.liveScene3d?.entityManager;
     if (!em?.animationCache?.get) return false;
     const fetchKeyframes = em.wasmExports?.fetchEntityAnimationKeyframes;
@@ -276,6 +313,8 @@ export class DyeViewport {
         },
       );
     } catch (_) { return false; }
+    // R9 — superseded or disposed while awaiting: don't touch playerRigRoot.
+    if (!this._loadStillCurrent(kind, token)) return false;
     if (!animEntry || !Array.isArray(animEntry.partGroups)) return false;
 
     // Tear down prior player rig contents.
@@ -297,6 +336,15 @@ export class DyeViewport {
           const results = await em.wasmExports.fetchEntitySurfacesPixels(
             dids, paletteId >>> 0, subPalettes ?? new Uint32Array(0),
           );
+          // R9 — superseded/disposed while decoding: free the wasm-owned
+          // SurfacePixels boxes and build nothing. Without this the stale
+          // load allocated THREE textures + materials into _ownedTextures /
+          // _ownedMaterials that dispose() had already drained, so nothing
+          // would ever free them.
+          if (!this._loadStillCurrent(kind, token)) {
+            for (const sp of results) { if (sp?.free) try { sp.free(); } catch (_) {} }
+            return false;
+          }
           for (let i = 0; i < dids.length; i += 1) {
             const did = dids[i] >>> 0;
             const sp = results[i];

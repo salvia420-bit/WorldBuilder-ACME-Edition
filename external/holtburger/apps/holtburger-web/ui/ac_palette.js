@@ -52,12 +52,20 @@ export async function loadPalette(paletteId) {
   if (pending) return pending;
 
   const promise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_palette) {
-      runtimes.set(paletteId, null);
-      return null;
-    }
+    // R9 (2026-08-03) — yield once so the `inFlight.set(...)` below has run
+    // before this body (and its `finally`) executes. Without it the
+    // synchronous wasm-missing early return fired `inFlight.delete` BEFORE
+    // the matching set, and the set then pinned a settled promise. Same
+    // ordering hazard ui/ac_layout.js documents on loadLayout.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      // R9 — "wasm isn't ready yet" is transient (plugins mount before
+      // init_resource_source resolves); memoising it as `null` blanked this
+      // record for the WHOLE session with no way back. Unproven failures are
+      // NOT cached — only the authoritative DAT answers below are. Same rule
+      // as ui/ac_icon_cache.js §P0.4 / LEAK-03 and ui/ac_layout.js.
+      if (!wasm?.fetch_palette) return null;
       const json = await wasm.fetch_palette(paletteId >>> 0);
       const data = JSON.parse(json);
       if (!data || !Array.isArray(data.colors) || data.colors.length === 0) {
@@ -75,8 +83,7 @@ export async function loadPalette(paletteId) {
     } catch (err) {
       console.warn(`[ac-palette] 0x${paletteId.toString(16)} load failed:`, err);
       try { window.__diag?.palettes?.onPaletteLoadFailed?.({ paletteId, error: err, source: "fetch" }); } catch (_) {}
-      runtimes.set(paletteId, null);
-      return null;
+      return null; // not cached — a later call retries
     } finally {
       inFlight.delete(paletteId);
     }

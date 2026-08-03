@@ -41,26 +41,36 @@ export async function loadStringTable(tableId) {
   if (pending) return pending;
 
   const promise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_string_table) {
-      tables.set(tableId, new Map());
-      return tables.get(tableId);
-    }
+    // R9 (2026-08-03) — yield once so the caller's `tableInFlight.set(...)`
+    // below has run before this body (and its `finally`) executes. Without
+    // it a synchronous early return deletes the entry BEFORE it is set, and
+    // the set then pins a settled promise forever. Same hazard ac_layout.js
+    // documents on loadLayout.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      // R9 — do NOT cache this. "wasm isn't ready yet" is the single most
+      // transient failure here (plugins mount before init_resource_source
+      // resolves); caching it blanked every localized label for the rest of
+      // the session and made options-panel.js's own retry a no-op. Failures
+      // stay retryable; only an authoritative result is memoised. Same rule
+      // as ui/ac_icon_cache.js §P0.4 and ui/ac_layout.js §loadLayout.
+      if (!wasm?.fetch_string_table) return new Map();
       const json = await wasm.fetch_string_table(tableId >>> 0);
       const arr = JSON.parse(json);
       const map = new Map();
       for (const [key, text] of arr) {
         map.set(key >>> 0, text);
       }
+      // Success — including an authoritative empty "[]" (src/lib.rs returns
+      // that for a genuine DAT miss), which is a proof and worth caching.
       tables.set(tableId, map);
       try { window.__diag?.strings?.onTableLoaded?.({ tableId, entryCount: map.size }); } catch (_) {}
       return map;
     } catch (err) {
       console.warn(`[ac-strings] table 0x${tableId.toString(16)} load failed:`, err);
       try { window.__diag?.strings?.onTableFailed?.({ tableId, error: err }); } catch (_) {}
-      tables.set(tableId, new Map());
-      return tables.get(tableId);
+      return new Map(); // not cached — a later call retries
     } finally {
       tableInFlight.delete(tableId);
     }
@@ -102,12 +112,12 @@ export async function loadLanguageString(stringId) {
   if (pending) return pending;
 
   const promise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_language_string) {
-      languageStrings.set(stringId, "");
-      return "";
-    }
+    // R9 — see loadStringTable: yield before the body so the in-flight entry
+    // exists, and never memoise an unproven failure.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      if (!wasm?.fetch_language_string) return "";
       const text = await wasm.fetch_language_string(stringId >>> 0);
       languageStrings.set(stringId, text);
       try { window.__diag?.strings?.onLanguageStringLoaded?.({ stringId, textLength: (text ?? "").length }); } catch (_) {}
@@ -115,8 +125,7 @@ export async function loadLanguageString(stringId) {
     } catch (err) {
       console.warn(`[ac-strings] language string 0x${stringId.toString(16)} load failed:`, err);
       try { window.__diag?.strings?.onLanguageStringFailed?.({ stringId, error: err }); } catch (_) {}
-      languageStrings.set(stringId, "");
-      return "";
+      return ""; // not cached — a later call retries
     } finally {
       lsInFlight.delete(stringId);
     }
@@ -154,16 +163,25 @@ export async function loadActionMap(mapId = 0x26000000) {
   if (actionMapCache) return actionMapCache;
   if (actionMapPromise) return actionMapPromise;
   actionMapPromise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_action_map) {
-      const empty = { stringTableId: 0, actions: [] };
-      actionMapCache = empty;
-      return empty;
-    }
+    // R9 — yield so the `actionMapPromise = (...)()` assignment lands before
+    // the `finally` clears it; a synchronous early return otherwise re-pinned
+    // the settled empty promise for the whole session.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      // R9 — not cached: "wasm isn't ready" is transient, and latching it
+      // left window.__acKeybindings empty (and keymap.js's isToggleAction /
+      // actionHashLabel / canUserBind permanently degraded) for the session.
+      // This check MUST live inside the try so the `finally` below still
+      // clears actionMapPromise — an early return above it leaves the
+      // settled promise pinned, which is the same bug in a new place.
+      if (!wasm?.fetch_action_map) {
+        return { stringTableId: 0, actions: [] };
+      }
       const json = await wasm.fetch_action_map(mapId >>> 0);
       const data = JSON.parse(json);
       if (!data) {
+        // Authoritative "no such record" — safe to memoise.
         actionMapCache = { stringTableId: 0, actions: [] };
         return actionMapCache;
       }
@@ -187,9 +205,7 @@ export async function loadActionMap(mapId = 0x26000000) {
     } catch (err) {
       console.warn(`[ac-strings] action map 0x${mapId.toString(16)} load failed:`, err);
       try { window.__diag?.strings?.onActionMapFailed?.({ mapId, error: err }); } catch (_) {}
-      const empty = { stringTableId: 0, actions: [] };
-      actionMapCache = empty;
-      return empty;
+      return { stringTableId: 0, actions: [] }; // not cached — retryable
     } finally {
       actionMapPromise = null;
     }

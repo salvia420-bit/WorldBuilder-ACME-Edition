@@ -161,12 +161,20 @@ export async function loadAcFont(fontId = UI_FONT_ID) {
   if (pending) return pending;
 
   const promise = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_font) {
-      runtimes.set(fontId, null);
-      return null;
-    }
+    // R9 (2026-08-03) — yield once so the `inFlight.set(...)` below has run
+    // before this body (and its `finally`) executes. Without it the
+    // synchronous wasm-missing early return fired `inFlight.delete` BEFORE
+    // the matching set, and the set then pinned a settled promise. Same
+    // ordering hazard ui/ac_layout.js documents on loadLayout.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      // R9 — "wasm isn't ready yet" is transient (plugins mount before
+      // init_resource_source resolves); memoising it as `null` blanked this
+      // record for the WHOLE session with no way back. Unproven failures are
+      // NOT cached — only the authoritative DAT answers below are. Same rule
+      // as ui/ac_icon_cache.js §P0.4 / LEAK-03 and ui/ac_layout.js.
+      if (!wasm?.fetch_font) return null;
       const data = await wasm.fetch_font(fontId >>> 0);
       if (!data || !data.numGlyphs) {
         try { window.__diag?.fonts?.onLoadFailed?.({ fontId, error: "empty data", source: "empty" }); } catch (_) {}
@@ -188,8 +196,7 @@ export async function loadAcFont(fontId = UI_FONT_ID) {
     } catch (err) {
       console.warn(`[ac-font] load failed (font 0x${fontId.toString(16)}):`, err);
       try { window.__diag?.fonts?.onLoadFailed?.({ fontId, error: err, source: "fetch" }); } catch (_) {}
-      runtimes.set(fontId, null);
-      return null;
+      return null; // not cached — a later call retries
     } finally {
       inFlight.delete(fontId);
     }
@@ -944,9 +951,28 @@ function _registerAcTextImpl() {
         const n = Number(this.getAttribute("shadow-offset-y"));
         if (Number.isFinite(n)) opts.shadowOffsetY = n;
       }
-      const runtime = getAcFont(opts.fontId ?? UI_FONT_ID);
+      const wantFontId = opts.fontId ?? UI_FONT_ID;
+      const runtime = getAcFont(wantFontId);
       if (!runtime) {
-        loadAcFont(opts.fontId ?? UI_FONT_ID).then(() => this._render());
+        // R9 (2026-08-03) — this used to be an UNCONDITIONAL
+        // `loadAcFont(id).then(() => this._render())`. When the font can
+        // never load (no `wasm.fetch_font`, or a failure cached as null)
+        // loadAcFont resolves without ever awaiting, so `_render` re-entered
+        // in the same microtask drain and chained forever: the microtask
+        // queue never emptied and the tab froze — not "slow", stopped. Two
+        // guards now: only re-render when a runtime ACTUALLY arrived, and
+        // keep at most one load in flight per element. Durable recovery for
+        // the genuinely-late case still comes from the addFontLoadListener
+        // subscription installed in connectedCallback.
+        if (!this._fontLoadPending) {
+          this._fontLoadPending = true;
+          loadAcFont(wantFontId).then((rt) => {
+            this._fontLoadPending = false;
+            if (rt) this._render();
+          }, () => {
+            this._fontLoadPending = false;
+          });
+        }
         return;
       }
       const canvas = renderAcText(text, opts);

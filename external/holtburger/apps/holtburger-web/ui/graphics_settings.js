@@ -17,7 +17,11 @@ const QUALITY_EVENT = "hb-quality-changed";
 // add it here too.
 const QUALITY_BOOL_FLAGS = [
   "antialias",
-  "shadows",
+  // R9 (2026-08-03), task #153 — "shadows" removed. quality.js dropped it
+  // from BOOL_FLAGS on 2026-08-01 (no reader), so its sanitizer silently
+  // discards `flags.shadows`; listing it here only made setQualityFlag write
+  // a key that nothing consumes. The live gate is the default-OFF
+  // `?shadows=on` opt-in with its own exact-match reader in scene3d/index.js.
   "csm",
   "normalMaps",
   "detailFlag",
@@ -243,10 +247,20 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   }));
 
   // --- Shadows -------------------------------------------------------------
+  // R9 (2026-08-03), task #153 — the master "Shadows" checkbox that used to
+  // live here has been REMOVED, not rewired. It wrote `flags.shadows` into
+  // `holtburger_graphics_v1`, but `scene3d/quality.js`'s sanitizer drops that
+  // key (it is in none of BOOL_FLAGS / INT_FLAGS / STR_FLAGS — see the
+  // decision block under BOOL_FLAGS there), so the control was inert end to
+  // end and displayed `true` while the live gate is the default-OFF
+  // `?shadows=on` opt-in with its own exact-match reader in scene3d/index.js.
+  //
+  // Rewiring is NOT on the table: the panel has been writing `shadows: true`
+  // into localStorage since it shipped, so honouring the key would silently
+  // switch shadow maps ON for every returning user — a ship-visible render
+  // change with no GPU measurement behind it. Removal is the no-op.
+  // CSM + shadow-map size below are real, sanitizer-backed controls and stay.
   containerEl.appendChild(makeSectionHeader("Shadows"));
-  containerEl.appendChild(boolRow("Shadows", "shadows", effective.shadows, (v) => {
-    setQualityFlag(state, "shadows", v); markDirty();
-  }));
   containerEl.appendChild(boolRow("Cascaded shadows (CSM)", "csm", effective.csm, (v) => {
     setQualityFlag(state, "csm", v); markDirty();
   }));
@@ -503,7 +517,11 @@ function effectiveFlags(state) {
   // values land on the next render.
   const fallback = {
     antialias: true,
-    shadows: true,
+    // R9 (2026-08-03), task #153 — `shadows: true` deleted. There is no
+    // longer a control reading it, and the value was WRONG: shadow maps are
+    // gated by the default-OFF `?shadows=on` opt-in (exact-match reader in
+    // scene3d/index.js), so this fallback advertised the opposite of the
+    // shipped default on every pre-quality.js render.
     csm: false,
     // Wave 2.B (2026-05-28): mirrors the `mid` preset (false). Users on
     // `high`/`ultra` see this overridden after quality.js boots.
