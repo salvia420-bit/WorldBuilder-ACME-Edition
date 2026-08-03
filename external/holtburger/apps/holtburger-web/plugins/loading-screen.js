@@ -228,15 +228,29 @@ export function mount(ctx) {
   const client = ctx?.client ?? window.__pluginClient ?? null;
   state.client = client;
 
-  // portalSpaceEntered is not on the JS bus today (pass-1 rec #168 →
-  // defer-wasm). Subscribe defensively: once that event is wired this
-  // plugin starts gating zone-cross transitions without further JS.
+  // portalSpaceEntered IS on the JS bus — index.html emits it on the
+  // PlayerTeleport branch. (The previous comment here said it was not yet
+  // wired and that this subscription was defensive; that stopped being true
+  // when the producer landed, 2026-08-03 review.)
+  //
+  // The handler argument is the EVENT, not the payload: `client.events` is an
+  // EventTarget and `emit` dispatches `new CustomEvent(name, { detail })`
+  // (api.js). Reading fields straight off the argument yields undefined —
+  // exactly the defect found in allegiance-panel this round, and the reason
+  // naming the parameter `detail` was so easy to miss. Every other subscriber
+  // reads `.detail` (vendor-ui's onDeath is the model).
+  //
+  // NOTE: the producer currently sends only `{ teleportSeq }` — there is no
+  // `zoneName` on the wire yet, so the fallback string below is the EXPECTED
+  // path today, not an error case. `zoneName` is read for the day the
+  // producer carries one; it must not be mistaken for working code.
   let unsubPortal = null;
   let unsubLb = null;
   try {
     if (typeof client?.events?.on === "function") {
-      unsubPortal = client.events.on("portalSpaceEntered", (detail) => {
-        show({ message: detail?.zoneName ?? "Crossing portal space…" });
+      unsubPortal = client.events.on("portalSpaceEntered", (ev) => {
+        const d = ev?.detail ?? ev;
+        show({ message: d?.zoneName ?? "Crossing portal space…" });
       });
       unsubLb = client.events.on("landblockChanged", () => {
         if (state.hideAfterNextLb) {
