@@ -448,30 +448,16 @@ const REAP_GRACE_MS = 30000; // > ACE DestructionTime (25 s) + skew/throttle mar
 // porting leftovers (tens of LBs away — e.g. academy gear left resident after
 // porting to Holtburg, ~178 LBs) age out and get reaped.
 //
-// #11b (2026-07-14): radius 8 keeps a 17×17 = 289-LB window and refreshes the
-// grace clock for every entity inside it, so a walked trail can balloon before
-// it reaps. A 1070 corridor walk (RESULTS-task11b) measured the r=8 entity
-// working set PEAK at ~3875 distinct BufferGeometry (town→wilderness transit)
-// with a late ~2500-geom bulk reap once the town fell 8 LBs behind; an
-// (unpaired, spawn-noise-confounded) r=3 arm peaked ~1636 and reaped
-// continuously (no bulk drop). The reaper DOES work at r=8 — the earlier
-// "unbounded / zero-eviction" reading was a stuck-character + backlog-drain
-// artifact (corrected in RESULTS-task11a). So the tighter radius is a
-// DIRECTIONAL smoothness/peak win, NOT a validated default change — left OPT-IN
-// pending a multi-run A/B + live eye-test for creature pop-out. Default stays 8;
-// `?entityReapRadius=N` opts into a tighter (or wider) window.
-function readReapRadius() {
-  try {
-    if (typeof window === "undefined" || !window.location) return 8;
-    const v = new URLSearchParams(window.location.search).get("entityReapRadius");
-    if (v == null || v.toLowerCase() === "off") return 8;
-    const n = Number(v);
-    return Number.isFinite(n) && n >= 1 && n <= 64 ? Math.floor(n) : 8;
-  } catch (_) {
-    return 8;
-  }
-}
-const REAP_PVS_RADIUS = readReapRadius();
+// 2026-08-03 residency #9 — the radius itself (and the `?entityReapRadius`
+// grammar, unchanged) moved to scene3d/residency.js, where it is derived as
+// `RESIDENCY_RADIUS_LB + REAP_KEEP_OFFSET_LB` = 5 + 3 = 8 (a 17×17 = 289-LB
+// window, exactly today's value). Deriving it off the bake ring is the POINT:
+// the keep-zone must stay WIDER than the ring or the reaper culls entities that
+// are still inside the baked, visible world. The #11b (2026-07-14) 1070 walk
+// measurements that justify the +3 slack live in residency.js next to the
+// constant. `REAP_PVS_RADIUS` is imported from "./residency.js" with the rest of
+// this module's imports below (ESM bindings are hoisted, so the reaper reads the
+// same value it always did).
 // Self-throttle for the full-entityMap scan (cheap, but no need per-frame).
 const REAP_SCAN_INTERVAL_MS = 4000;
 // #11b continuous reap (2026-07-14): the old "remove every stale rig in one loop"
@@ -843,6 +829,10 @@ import {
 // urgent — lane-0 dispatch in the bake-worker queue + fetch-semaphore bypass
 // in the decoding wasm instance, same signal statics/buildings/terrain use.
 import { isNearPlayerLb } from "./landblock_lru.js";
+// 2026-08-03 residency #9 — reaper keep-zone radius, derived from the one
+// residency policy constant (base 5 + 3 = 8, unchanged). `?entityReapRadius`
+// grammar is preserved verbatim there. See the block near REAP_GRACE_MS above.
+import { REAP_PVS_RADIUS } from "./residency.js";
 // `entMB` instrument (2026-07-26, RESULTS-matcache-falsifier next-move 1):
 // count + byte-sum every entity-OWNED texture/material across ALL live
 // instances. Charged O(1) at register time; a poll never walks the rigs.

@@ -58,11 +58,18 @@ import * as THREE from "three";
 //   ?cullDist=<metres>        OPT-IN distance horizon for statics + entities.
 //                             DEFAULT: disabled (frustum-only). The world is
 //                             intentionally streamed well past any fixed
-//                             metre horizon: STATICS_RING_RADIUS defaults to 6
-//                             (a 13×13 LB ring whose far corner sits ~1764 m
-//                             away — sqrt((6.5·192)²·2)) and PVS expansion
-//                             (loop.js tickPvsLoadExpansion) pushes loaded
-//                             statics farther still, while clear-weather
+//                             metre horizon: the PVS expansion ring
+//                             (scene3d/residency.js RESIDENCY_RADIUS_LB /
+//                             PVS_RING_RADIUS, default 5 = an 11×11 LB ring
+//                             whose far corner sits ~1494 m away —
+//                             sqrt((5.5·192)²·2)) streams statics as the player
+//                             roams, and the LRU keeps a radius-6 worth of them
+//                             resident (~1764 m corner). Stale-comment fix
+//                             2026-08-03 (residency #12): this used to credit
+//                             "STATICS_RING_RADIUS defaults to 6" as the
+//                             streaming horizon; that constant sizes the LRU
+//                             cap, it does not stream anything. Meanwhile
+//                             clear-weather
 //                             fogMax reaches ~2500 m (daygroup_weather.js).
 //                             Any fixed default horizon below that would
 //                             distance-cull loaded, in-frustum, in-fog
