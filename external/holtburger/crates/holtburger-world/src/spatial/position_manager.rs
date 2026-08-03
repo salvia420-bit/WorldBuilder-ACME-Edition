@@ -740,13 +740,29 @@ impl StickyManager {
         let from = current.global_coords();
         let to = target.global_coords();
         let mut offset = to - from;
-        // Sticky zeroes the z component (acclient.c:388557).
+
+        // Rust review 2026-08-03 — `mag` must come from the FULL 3-D
+        // separation, NOT the planar one. `cylinder_distance_no_z`'s "no_z"
+        // means "ignores the cylinder HEIGHTS", not "drops the z component of
+        // the separation":
+        //   retail `Position::cylinder_distance_no_z` (acclient.c:467269-467276)
+        //     = sqrt(dx² + dy² + dz²) − (r1 + r2)
+        //   ACE  `Position.CylinderDistanceNoZ` (Physics/Common/Position.cs:133)
+        //     = pos.GetOffset(otherPos).Length() − (radius + otherRadius)
+        // and retail's `StickyManager::adjust_offset` (acclient.c:388554-388560)
+        // zeroes z on the OFFSET FRAME (the direction), then calls
+        // `cylinder_distance_no_z` which re-derives its own 3-D `get_offset` —
+        // so the zeroing never reaches the magnitude. Reusing one z-zeroed
+        // vector for both understated the pull by the whole vertical
+        // separation (stairs, ramps, ledges, a taller creature's origin), and
+        // could even flip `mag` negative — backing AWAY from a target retail
+        // pulls toward.
+        let separation = offset.length();
+        // Sticky zeroes the z component of the DIRECTION (acclient.c:388557).
         offset.z = 0.0;
         let planar = offset.length();
 
-        // cylinder_distance_no_z (ACE `Position.CylinderDistanceNoZ`):
-        // planar center distance minus both radii.
-        let mag = planar - my_radius - self.target_radius - STICKY_RADIUS;
+        let mag = separation - my_radius - self.target_radius - STICKY_RADIUS;
 
         let mut speed = max_speed * 5.0;
         if speed < EPSILON {
@@ -1596,16 +1612,24 @@ mod tests {
         sticky.handle_update_target(guid(0x1234), pose(60.0, 50.0, 5.0));
         let cur = pose(50.0, 50.0, 0.0);
 
-        // mag = 10 − 0.5(my) − 0.7(target) − 0.3(STICKY_RADIUS) = 8.5.
-        // speed = 2*5 = 10; delta = 10*0.1 = 1.0 < 8.5 → uncapped step.
+        // `cylinder_distance_no_z` is the FULL 3-D separation minus both radii
+        // (acclient.c:467275, ACE Position.cs:135) — the z-zeroing at
+        // acclient.c:388557 applies to the direction frame only. So
+        // mag = sqrt(10² + 5²) − 0.5(my) − 0.7(target) − 0.3(STICKY_RADIUS)
+        //     = 11.18034 − 1.5 = 9.68034.
+        // speed = 2*5 = 10; delta = 10*0.1 = 1.0 < 9.68 → uncapped step.
         let (step, _) = sticky.adjust_offset(&cur, 0.5, 2.0, 0.1).unwrap();
         assert!((step.x - 1.0).abs() < 1e-5);
         assert!(step.y.abs() < 1e-6);
         assert_eq!(step.z, 0.0, "sticky z is zeroed (acclient.c:388557)");
 
-        // Overshoot: delta = 10*1.0 = 10 ≥ 8.5 → capped at mag.
+        // Overshoot: delta = 10*1.0 = 10 ≥ 9.68034 → capped at mag.
         let (step, _) = sticky.adjust_offset(&cur, 0.5, 2.0, 1.0).unwrap();
-        assert!((step.x - 8.5).abs() < 1e-4);
+        assert!(
+            (step.x - 9.680_34).abs() < 1e-4,
+            "expected the 3-D standoff 9.68034, got {} (8.5 = the old planar bug)",
+            step.x
+        );
 
         // Inside the standoff: planar 0.5, mag = 0.5 − 1.5 = −1.0;
         // delta = 1.0 ≥ |−1.0| → delta = mag → backs off (negative X).
@@ -1613,6 +1637,60 @@ mod tests {
         let (step, _) = sticky.adjust_offset(&cur, 0.5, 2.0, 0.1).unwrap();
         assert!((step.x + 1.0).abs() < 1e-4, "negative mag backs off: {}", step.x);
         assert_eq!(step.z, 0.0);
+    }
+
+    /// Rust review 2026-08-03 — the sticky standoff magnitude is the FULL 3-D
+    /// `cylinder_distance_no_z`, not the planar one.
+    ///
+    /// AUTHORITIES (both agree, and the module doc at `adjust_offset` already
+    /// stated the correct contract):
+    ///   * retail `Position::cylinder_distance_no_z`, acclient.c:467269-467276 —
+    ///     `sqrt(dx*dx + dy*dy + dz*dz) - (r1 + r2)`.
+    ///   * ACE `Physics/Common/Position.cs:133-137 CylinderDistanceNoZ` —
+    ///     `pos.GetOffset(otherPos).Length() - (radius + otherRadius)`.
+    ///   * retail `StickyManager::adjust_offset`, acclient.c:388554-388560 —
+    ///     zeroes z on the offset FRAME (which is only used as the direction,
+    ///     after `normalize_check_small`), then calls
+    ///     `cylinder_distance_no_z` which re-derives its own 3-D `get_offset`.
+    ///
+    /// The step DIRECTION stays planar (z always 0); only the magnitude changes.
+    #[test]
+    fn sticky_standoff_uses_full_3d_separation_not_planar() {
+        let mut sticky = StickyManager::default();
+        sticky.stick_to(guid(0x4321), 0.5);
+        // 3-4-5 triangle: 3 m out along +X, 4 m up.
+        sticky.handle_update_target(guid(0x4321), pose(53.0, 50.0, 4.0));
+        let cur = pose(50.0, 50.0, 0.0);
+
+        // mag = 5 − 0.6788(my) − 0.5(target) − 0.3 = 3.5212.
+        // The planar reading would be 3 − 1.4788 = 1.5212.
+        // speed floor 15 → delta = 15 * 1.0 = 15 ≥ mag, so the step IS mag.
+        let (step, _) = sticky.adjust_offset(&cur, 0.6788, 0.0, 1.0).unwrap();
+        assert!(
+            (step.x - 3.521_2).abs() < 1e-3,
+            "expected the 3-D standoff 3.5212, got {} (1.5212 = the planar bug)",
+            step.x
+        );
+        assert_eq!(step.z, 0.0, "the sticky STEP stays planar");
+
+        // Sign flip: mostly-vertical separation. 3-D distance 10.0498 gives a
+        // strongly POSITIVE mag (pull in); the planar distance 1.0 gives a
+        // NEGATIVE mag, i.e. the body backs away from a target retail pulls
+        // toward. This is the case the old code got backwards, not merely
+        // short.
+        sticky.handle_update_target(guid(0x4321), pose(51.0, 50.0, 10.0));
+        let (step, _) = sticky.adjust_offset(&cur, 0.6788, 0.0, 1.0).unwrap();
+        assert!(
+            step.x > 0.0,
+            "a target 10 m overhead and 1 m out must still PULL IN (retail mag \
+             = 10.0499 − 1.4788 = 8.571); got step.x = {}",
+            step.x
+        );
+        assert!(
+            (step.x - 8.571).abs() < 1e-2,
+            "expected mag 8.571, got {}",
+            step.x
+        );
     }
 
     /// Spec S9 §4 test 2 — `max_speed * 5.0`, zero/absent → floor 15.0

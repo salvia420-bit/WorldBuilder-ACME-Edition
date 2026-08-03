@@ -1270,6 +1270,37 @@ impl WorldState {
             self.retire_authoritative_body_for_guid(guid);
             self.entity_lifecycle.clear(guid);
 
+            // Rust review 2026-08-03 — two more guid-keyed indexes that
+            // `remove_entity` did not prune (same family as the round-6
+            // `prune_guid` finding).
+            //
+            // `open_containers` was only ever cleared by the
+            // `CloseGroundContainer` game event (handlers/inventory.rs:207).
+            // A ground container that is DELETED while open — a looted corpse
+            // decaying, a chest despawning, or simply walking away until the
+            // 25 s visibility sweep evicts it — left its guid in the set
+            // forever. Two consequences, both real:
+            //   * unbounded growth over a session (one dead guid per opened
+            //     container that never sent a close), and
+            //   * ACE recycles object GUIDs, so a later object reusing this
+            //     guid is treated as an OPEN container: every item reporting
+            //     `Container = <recycled guid>` gets `container_preview`
+            //     stamped on it (state/mutations.rs:1768,
+            //     liveness.rs `upsert_entity_from_create`) and then reads
+            //     `inside_open_container` in `retention_snapshot`
+            //     (liveness.rs:259), which makes `has_nonworld_retention()`
+            //     true and pins those entities against eviction permanently.
+            //
+            // `prior_wielders` was pruned only on the explicit ObjectDelete /
+            // InventoryRemoveObject handlers (handlers/inventory.rs:70,78) —
+            // its own doc comment on `WorldState::prior_wielders` claims it is
+            // "pruned … when the entity is deleted", but the visibility-sweep
+            // eviction path (`liveness::sweep_entity` -> `remove_entity`)
+            // never touched it, so a recycled guid inherited the previous
+            // occupant's wielder and emitted a bogus `EntityDetached`.
+            self.open_containers.remove(&guid);
+            self.prior_wielders.remove(&u32::from(guid));
+
             let dependent_guids: Vec<_> = self
                 .entities
                 .iter()

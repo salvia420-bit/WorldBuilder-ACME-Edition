@@ -124,6 +124,90 @@ impl PlayerState {
         )
     }
 
+    /// The `SkillFormula` a skill's attribute bonus is derived from, as it
+    /// appears in `portal.dat`'s SkillTable (`0x0E000004`).
+    ///
+    /// `None` means "no attribute bonus at all" — this is the DAT's
+    /// `attribute1Multiplier` (`SkillFormula.X`) being 0, or the skill being
+    /// absent from the SkillTable entirely. Both cases return 0 in ACE
+    /// (`ACE.Server/Entity/AttributeFormula.cs:24` early-return for a missing
+    /// skill, `:57` `if (formula.X == 0) return 0;`).
+    ///
+    /// Rust review 2026-08-03: this table was previously grouped by
+    /// hand-guessed "families" and disagreed with the DAT on 17 skills — see
+    /// `skill_attribute_formula_matches_portal_dat` in `player/tests.rs` for
+    /// the full DAT-sourced expectation table and the drift it pins down.
+    fn skill_attribute_formula(
+        skill_type: stats::SkillType,
+    ) -> Option<(
+        stats::AttributeType,
+        Option<stats::AttributeType>,
+        u32,
+    )> {
+        use stats::AttributeType::*;
+        use stats::SkillType::*;
+
+        // Values below are the live `client_portal.dat` SkillTable rows
+        // (`attribute1`, `attribute2`, `divisor`), with the ten retired
+        // weapon skills backfilled exactly as ACE's
+        // `ACE.DatLoader/FileTypes/SkillTable.cs:25-37 AddRetiredSkills()`
+        // does (they are not in the modern portal.dat).
+        Some(match skill_type {
+            // --- portal.dat rows ---
+            Alchemy => (CoordinationAttr, Some(FocusAttr), 3),
+            ArcaneLore => (FocusAttr, None, 3),
+            ArmorTinkering => (FocusAttr, Some(EnduranceAttr), 2),
+            Cooking => (CoordinationAttr, Some(FocusAttr), 3),
+            CreatureEnchantment => (FocusAttr, Some(SelfAttr), 4),
+            DirtyFighting => (StrengthAttr, Some(CoordinationAttr), 3),
+            DualWield => (CoordinationAttr, Some(CoordinationAttr), 3),
+            FinesseWeapons => (QuicknessAttr, Some(CoordinationAttr), 3),
+            Fletching => (CoordinationAttr, Some(FocusAttr), 3),
+            Healing => (FocusAttr, Some(CoordinationAttr), 3),
+            HeavyWeapons => (StrengthAttr, Some(CoordinationAttr), 3),
+            ItemEnchantment => (FocusAttr, Some(SelfAttr), 4),
+            ItemTinkering => (FocusAttr, Some(CoordinationAttr), 2),
+            Jump => (StrengthAttr, Some(CoordinationAttr), 2),
+            LifeMagic => (FocusAttr, Some(SelfAttr), 4),
+            LightWeapons => (StrengthAttr, Some(CoordinationAttr), 3),
+            Lockpick => (CoordinationAttr, Some(FocusAttr), 3),
+            MagicDefense => (SelfAttr, Some(FocusAttr), 7),
+            MagicItemTinkering => (FocusAttr, None, 1),
+            ManaConversion => (FocusAttr, Some(SelfAttr), 6),
+            MeleeDefense => (QuicknessAttr, Some(CoordinationAttr), 3),
+            MissileDefense => (QuicknessAttr, Some(CoordinationAttr), 5),
+            MissileWeapons => (CoordinationAttr, None, 2),
+            Recklessness => (StrengthAttr, Some(QuicknessAttr), 3),
+            Run => (QuicknessAttr, None, 1),
+            Shield => (StrengthAttr, Some(CoordinationAttr), 2),
+            SneakAttack => (CoordinationAttr, Some(QuicknessAttr), 3),
+            Summoning => (EnduranceAttr, Some(SelfAttr), 3),
+            TwoHandedCombat => (StrengthAttr, Some(CoordinationAttr), 3),
+            VoidMagic => (FocusAttr, Some(SelfAttr), 4),
+            WarMagic => (FocusAttr, Some(SelfAttr), 4),
+            WeaponTinkering => (FocusAttr, Some(StrengthAttr), 2),
+
+            // --- ACE AddRetiredSkills() backfill ---
+            Axe | Mace | Spear | Staff | Sword | UnarmedCombat => {
+                (StrengthAttr, Some(CoordinationAttr), 3)
+            }
+            Bow | Crossbow | ThrownWeapon => (CoordinationAttr, None, 2),
+            Dagger => (QuicknessAttr, Some(CoordinationAttr), 3),
+
+            // --- `SkillFormula.X == 0` in portal.dat: no attribute bonus ---
+            AssessCreature | AssessPerson | Deception | Leadership | Loyalty | Salvaging => {
+                return None;
+            }
+
+            // --- absent from both portal.dat and AddRetiredSkills(): ACE's
+            // `TryGetValue` miss returns 0 (AttributeFormula.cs:24). These are
+            // the retired/unimplemented skills ACE never sends a live client. ---
+            Sling | Spellcraft | Awareness | ArmsAndArmorRepair | Gearcraft | Challenge => {
+                return None;
+            }
+        })
+    }
+
     pub fn derive_skill_value(
         &self,
         skill_type: stats::SkillType,
@@ -131,42 +215,6 @@ impl PlayerState {
         init: u32,
         use_current: bool,
     ) -> u32 {
-        use stats::AttributeType::*;
-        use stats::SkillType::*;
-
-        let (a1, a2, div) = match skill_type {
-            MeleeDefense | MissileDefense | FinesseWeapons | DualWield | Shield | Recklessness
-            | DirtyFighting | SneakAttack => (Some(QuicknessAttr), Some(CoordinationAttr), 3),
-            ArcaneLore | MagicDefense | ManaConversion | Spellcraft | CreatureEnchantment
-            | ItemEnchantment | LifeMagic | WarMagic | VoidMagic | Summoning | Deception
-            | AssessPerson | AssessCreature => (
-                Some(FocusAttr),
-                Some(SelfAttr),
-                match skill_type {
-                    MagicDefense => 7,
-                    ManaConversion | ArcaneLore => 6,
-                    Deception => 4,
-                    AssessPerson | AssessCreature => 2,
-                    _ => 4,
-                },
-            ),
-            Axe | Dagger | Mace | Spear | Staff | Sword | UnarmedCombat | HeavyWeapons
-            | LightWeapons | TwoHandedCombat => (Some(StrengthAttr), Some(CoordinationAttr), 3),
-            Bow | Crossbow | MissileWeapons | ThrownWeapon | Sling => {
-                (Some(CoordinationAttr), None, 2)
-            }
-            Healing | Lockpick | Fletching | Alchemy | Cooking | ItemTinkering
-            | WeaponTinkering | ArmorTinkering | MagicItemTinkering | Gearcraft | Salvaging => {
-                (Some(FocusAttr), Some(CoordinationAttr), 3)
-            }
-            Run => (Some(QuicknessAttr), None, 1),
-            Jump => (Some(StrengthAttr), Some(QuicknessAttr), 2),
-            Leadership | Loyalty | Awareness | ArmsAndArmorRepair => {
-                (Some(FocusAttr), Some(SelfAttr), 4)
-            }
-            Challenge => (Some(StrengthAttr), Some(SelfAttr), 4),
-        };
-
         let get_val = |attr: stats::AttributeType| {
             if use_current {
                 self.get_attribute_current(attr)
@@ -175,11 +223,24 @@ impl PlayerState {
             }
         };
 
-        let val1 = a1.map(get_val).unwrap_or(0);
-        let val2 = a2.map(get_val).unwrap_or(0);
+        // ACE `AttributeFormula.GetFormula` (AttributeFormula.cs:55-73):
+        // total = attr1 (+ attr2 when it is not Undef); then, ONLY when the
+        // divisor differs from 1, `total = Round(total / divisor)` with
+        // `MidpointRounding.AwayFromZero` (ACE.Common FloatExtensions.cs:9) —
+        // which is exactly Rust's `f32::round`.
+        let bonus = match Self::skill_attribute_formula(skill_type) {
+            None => 0.0,
+            Some((a1, a2, div)) => {
+                let total = get_val(a1) + a2.map(get_val).unwrap_or(0);
+                if div == 1 {
+                    total as f32
+                } else {
+                    (total as f32 / div as f32).round()
+                }
+            }
+        };
 
-        let bonus = (val1 + val2) as f32 / div as f32;
-        let total_base = (bonus.round() as u32 + ranks + init) as f32;
+        let total_base = (bonus as u32 + ranks + init) as f32;
 
         if use_current {
             let mult = self.get_skill_multiplier(skill_type);

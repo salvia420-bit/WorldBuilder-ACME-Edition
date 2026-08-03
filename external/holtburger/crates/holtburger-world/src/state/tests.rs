@@ -6248,3 +6248,208 @@ fn precipice_edge_test_uses_the_retail_triangle_not_the_cell_quad() {
         stuck.y
     );
 }
+
+/// Rust review 2026-08-03 — `remove_entity` pruned `entities`, the scene, the
+/// authoritative body and `entity_lifecycle`, but NOT `open_containers` or
+/// `prior_wielders`. Same family as the round-6 `prune_guid` finding: a
+/// guid-keyed index that outlives its entity, and ACE recycles object GUIDs.
+///
+/// Scenario: a ground container is opened (`ViewContents` -> `open_containers`)
+/// and then destroyed — a looted corpse decaying, or simply the 25 s visibility
+/// sweep evicting it after you walk away. `CloseGroundContainer`, the ONLY
+/// thing that removed the entry, never arrives.
+#[test]
+fn removing_an_open_ground_container_clears_its_open_containers_entry() {
+    let mut state = WorldState::synthetic();
+    state.server_time = Some(ServerTimeSync {
+        server_time: 100.0,
+        local_time: Instant::now(),
+    });
+
+    let container_guid = Guid(0x8000_0910);
+    let mut container = Entity::new(
+        container_guid,
+        "Corpse".to_string(),
+        WorldPosition::default(),
+    );
+    container.position.landblock_id = Guid(0xA9B4_0000);
+    state.entities.insert(container);
+    state.open_containers.insert(container_guid);
+
+    assert!(state.remove_entity(container_guid).is_some());
+
+    assert!(
+        !state.open_containers.contains(&container_guid),
+        "a destroyed container must not stay in open_containers — the entry is \
+         unbounded (one per opened-then-despawned container) and ACE recycles \
+         object GUIDs"
+    );
+}
+
+/// The consequence of the leak above, in the terms the eviction sweep actually
+/// reads: a NEW object that reuses the recycled container guid makes every item
+/// pointing at it look like it is `inside_open_container`, so
+/// `has_nonworld_retention()` is true and `should_evict_entity` refuses to ever
+/// prune those items (liveness.rs:259 / :90).
+///
+/// NEGATIVE CONTROL: this asserts on `should_evict_entity`, not on the set
+/// itself, so the plausible-but-wrong "clear open_containers wholesale on any
+/// remove_entity" would still have to leave a genuinely open container working
+/// — which the third assertion below pins down.
+#[test]
+fn recycled_container_guid_does_not_pin_items_against_eviction() {
+    let mut state = WorldState::synthetic();
+    state.server_time = Some(ServerTimeSync {
+        server_time: 100.0,
+        local_time: Instant::now(),
+    });
+
+    let container_guid = Guid(0x8000_0911);
+    let mut container = Entity::new(
+        container_guid,
+        "Corpse".to_string(),
+        WorldPosition::default(),
+    );
+    container.position.landblock_id = Guid(0xA9B4_0000);
+    state.entities.insert(container);
+    state.open_containers.insert(container_guid);
+
+    // The container is destroyed without a CloseGroundContainer.
+    assert!(state.remove_entity(container_guid).is_some());
+
+    // Much later, ACE recycles the guid onto an unrelated object, and some
+    // loose item legitimately reports it as its container.
+    let item_guid = Guid(0x8000_0912);
+    let mut item = Entity::new(item_guid, "Debris".to_string(), WorldPosition::default());
+    item.set_container_id(Some(container_guid));
+    item.position.landblock_id = Guid::NULL;
+    state.entities.insert(item);
+    state.mark_container_preview(item_guid);
+    state.set_entity_prune_deadline(item_guid, 50.0); // already expired at t=100
+
+    let snapshot = state
+        .retention_snapshot(item_guid, 100.0)
+        .expect("item should have a retention snapshot");
+    assert!(
+        !snapshot.inside_open_container,
+        "the recycled guid must not read as an open container"
+    );
+    assert!(
+        state.should_evict_entity(item_guid, 100.0),
+        "an expired preview item must be evictable once its container is gone"
+    );
+
+    // Control: a container that is genuinely still open DOES pin its preview
+    // items, so the fix has not simply disabled open-container retention.
+    let live_container = Guid(0x8000_0913);
+    let live_item = Guid(0x8000_0914);
+    let mut item2 = Entity::new(live_item, "Loot".to_string(), WorldPosition::default());
+    item2.set_container_id(Some(live_container));
+    item2.position.landblock_id = Guid::NULL;
+    state.entities.insert(item2);
+    state.open_containers.insert(live_container);
+    state.mark_container_preview(live_item);
+    state.set_entity_prune_deadline(live_item, 50.0);
+    assert!(
+        !state.should_evict_entity(live_item, 100.0),
+        "an item inside a still-open container must stay retained"
+    );
+}
+
+/// `WorldState::prior_wielders`' own doc comment claims it is "pruned … when
+/// the entity is deleted", but only the explicit ObjectDelete /
+/// InventoryRemoveObject handlers did so (handlers/inventory.rs:70,78) — the
+/// visibility-sweep eviction path (`sweep_entity` -> `remove_entity`) did not.
+/// A recycled guid then inherited the previous occupant's wielder.
+#[test]
+fn removing_an_entity_prunes_its_prior_wielder_record() {
+    let mut state = WorldState::synthetic();
+    let item_guid = Guid(0x8000_0920);
+    let wielder_guid = Guid(0x8000_0921);
+
+    let mut item = Entity::new(item_guid, "Sword".to_string(), WorldPosition::default());
+    item.position.landblock_id = Guid(0xA9B4_0000);
+    state.entities.insert(item);
+    state
+        .prior_wielders
+        .insert(u32::from(item_guid), u32::from(wielder_guid));
+
+    assert!(state.remove_entity(item_guid).is_some());
+
+    assert!(
+        !state.prior_wielders.contains_key(&u32::from(item_guid)),
+        "prior_wielders must be pruned on ANY entity removal, not just the \
+         explicit ObjectDelete handler — otherwise a recycled guid inherits a \
+         dead wielder and emits a bogus EntityDetached"
+    );
+}
+
+/// Rust review 2026-08-03 — of the three wire-vector consumers, only
+/// `update_entity_velocity` (the REMOTE-guid VectorUpdate path) was missing
+/// the "F9" non-finite guard. `VectorUpdateData::unpack` is six bare
+/// `LittleEndian::read_f32` behind a length check, so a NaN payload landed
+/// straight in `entity.velocity` and in the authoritative body, where it is
+/// unrecoverable (every later value derives from the NaN).
+///
+/// Control: the two siblings that already guarded (`set_player_vector`,
+/// which `set_player_vector_gated` funnels through) are asserted here too, so
+/// a "fix" that removed the guard from them instead would not pass.
+#[test]
+fn remote_vector_update_rejects_non_finite_wire_values() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0001);
+    state.seed_local_player_entity(player_guid, "Player", WorldPosition::default());
+
+    let remote_guid = Guid(0x8000_0930);
+    let mut remote = Entity::new(remote_guid, "Drudge".to_string(), WorldPosition::default());
+    remote.position.landblock_id = Guid(0xA9B4_0019);
+    remote.velocity = Vector3::new(1.0, 2.0, 3.0);
+    state.entities.insert(remote);
+
+    let mut events = Vec::new();
+    let applied = state.update_entity_velocity(
+        remote_guid,
+        Vector3::new(f32::NAN, 0.0, 0.0),
+        Vector3::new(0.0, f32::INFINITY, 0.0),
+        1,
+        &mut events,
+    );
+    assert!(applied, "the update should still be accepted, just sanitised");
+
+    let entity = state
+        .entities
+        .get(remote_guid)
+        .expect("remote entity should still exist");
+    assert!(
+        entity.velocity.is_finite(),
+        "a non-finite wire velocity must never reach entity.velocity, got {:?}",
+        entity.velocity
+    );
+    assert!(
+        entity.omega.is_finite(),
+        "a non-finite wire omega must never reach entity.omega, got {:?}",
+        entity.omega
+    );
+    assert_eq!(entity.velocity, Vector3::zero());
+    assert_eq!(entity.omega, Vector3::zero());
+
+    // The authoritative body is fed from the same values (reconcile_authoritative_body).
+    if let Some(pose) = state.runtime_pose_for_guid(remote_guid) {
+        assert!(
+            pose.coords.is_finite(),
+            "the runtime body pose must stay finite, got {:?}",
+            pose.coords
+        );
+    }
+
+    // Control: the local-player path guards too and must keep doing so.
+    let _ = state.set_player_vector(
+        Vector3::new(0.0, f32::NAN, 0.0),
+        Vector3::new(f32::NEG_INFINITY, 0.0, 0.0),
+    );
+    let player = state
+        .entities
+        .get(player_guid)
+        .expect("player entity should exist");
+    assert!(player.velocity.is_finite() && player.omega.is_finite());
+}

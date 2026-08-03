@@ -1322,3 +1322,145 @@ fn test_heal_command_updates() {
         100
     );
 }
+
+/// Rust review 2026-08-03 — the skill→attribute formula table used by
+/// [`PlayerState::derive_skill_value`] is a hand-written SECOND COPY of the
+/// `SkillFormula` rows that live in `portal.dat`'s SkillTable (`0x0E000004`),
+/// and the two had drifted on 17 of the 54 skills.
+///
+/// AUTHORITIES (both agree):
+///   * `client_portal.dat` `0x0E000004`, dumped with
+///     `WorldBuilder.Terminal chorizite-parse-dat-record --typeName SkillTable`
+///     (fields `attribute1` / `attribute2` / `divisor`, i.e. the DAT
+///     `SkillFormula.Attr1` / `.Attr2` / `.Z`).
+///   * ACE `ACE.Server/Entity/AttributeFormula.cs:55-73` for how that row is
+///     applied — `if (formula.X == 0) return 0;`, attr2 skipped when `Undef`,
+///     divide-and-round only when `divisor != 1`, `MidpointRounding.AwayFromZero`
+///     (`ACE.Common/Extensions/FloatExtensions.cs:9`).
+///   * ACE `ACE.DatLoader/FileTypes/SkillTable.cs:25-37 AddRetiredSkills()` for
+///     the ten retired weapon skills that are NOT in the modern portal.dat.
+///
+/// A skill absent from BOTH sources (Sling, Spellcraft, Awareness,
+/// ArmsAndArmorRepair, Gearcraft, Challenge) is a `TryGetValue` miss in ACE
+/// (`AttributeFormula.cs:24`) and contributes 0.
+///
+/// Attribute values are deliberately all-distinct so a wrong attribute pick is
+/// never masked by a coincidentally equal sum.
+#[test]
+fn skill_attribute_formula_matches_portal_dat() {
+    use holtburger_common::stats::SkillType;
+
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::StrengthAttr, 100);
+    set_attr(&mut player, stats::AttributeType::EnduranceAttr, 110);
+    set_attr(&mut player, stats::AttributeType::QuicknessAttr, 120);
+    set_attr(&mut player, stats::AttributeType::CoordinationAttr, 130);
+    set_attr(&mut player, stats::AttributeType::FocusAttr, 140);
+    set_attr(&mut player, stats::AttributeType::SelfAttr, 150);
+
+    // (skill, expected attribute bonus) — hand-computed from the DAT row above
+    // with Str=100 End=110 Quick=120 Coord=130 Focus=140 Self=150.
+    let expected: &[(SkillType, u32)] = &[
+        // portal.dat rows
+        (SkillType::Alchemy, 90),               // Coord+Focus /3 = 270/3
+        (SkillType::ArcaneLore, 47),            // Focus /3 = 140/3 -> 46.67
+        (SkillType::ArmorTinkering, 125),       // Focus+End /2 = 250/2
+        (SkillType::Cooking, 90),               // Coord+Focus /3
+        (SkillType::CreatureEnchantment, 73),   // Focus+Self /4 = 290/4 -> 72.5
+        (SkillType::DirtyFighting, 77),         // Str+Coord /3 = 230/3
+        (SkillType::DualWield, 87),             // Coord+Coord /3 = 260/3
+        (SkillType::FinesseWeapons, 83),        // Quick+Coord /3 = 250/3
+        (SkillType::Fletching, 90),             // Coord+Focus /3
+        (SkillType::Healing, 90),               // Focus+Coord /3
+        (SkillType::HeavyWeapons, 77),          // Str+Coord /3
+        (SkillType::ItemEnchantment, 73),       // Focus+Self /4
+        (SkillType::ItemTinkering, 135),        // Focus+Coord /2 = 270/2
+        (SkillType::Jump, 115),                 // Str+Coord /2 = 230/2
+        (SkillType::LifeMagic, 73),             // Focus+Self /4
+        (SkillType::LightWeapons, 77),          // Str+Coord /3
+        (SkillType::Lockpick, 90),              // Coord+Focus /3
+        (SkillType::MagicDefense, 41),          // Self+Focus /7 = 290/7 -> 41.43
+        (SkillType::MagicItemTinkering, 140),   // Focus /1
+        (SkillType::ManaConversion, 48),        // Focus+Self /6 = 290/6 -> 48.33
+        (SkillType::MeleeDefense, 83),          // Quick+Coord /3
+        (SkillType::MissileDefense, 50),        // Quick+Coord /5 = 250/5
+        (SkillType::MissileWeapons, 65),        // Coord /2
+        (SkillType::Recklessness, 73),          // Str+Quick /3 = 220/3
+        (SkillType::Run, 120),                  // Quick /1
+        (SkillType::Shield, 115),               // Str+Coord /2
+        (SkillType::SneakAttack, 83),           // Coord+Quick /3
+        (SkillType::Summoning, 87),             // End+Self /3 = 260/3
+        (SkillType::TwoHandedCombat, 77),       // Str+Coord /3
+        (SkillType::VoidMagic, 73),             // Focus+Self /4
+        (SkillType::WarMagic, 73),              // Focus+Self /4
+        (SkillType::WeaponTinkering, 120),      // Focus+Str /2 = 240/2
+        // ACE AddRetiredSkills()
+        (SkillType::Axe, 77),
+        (SkillType::Mace, 77),
+        (SkillType::Spear, 77),
+        (SkillType::Staff, 77),
+        (SkillType::Sword, 77),
+        (SkillType::UnarmedCombat, 77),
+        (SkillType::Bow, 65),
+        (SkillType::Crossbow, 65),
+        (SkillType::ThrownWeapon, 65),
+        (SkillType::Dagger, 83),                // Quick+Coord /3 (NOT Str)
+        // portal.dat rows with attribute1Multiplier (SkillFormula.X) == 0
+        (SkillType::AssessCreature, 0),
+        (SkillType::AssessPerson, 0),
+        (SkillType::Deception, 0),
+        (SkillType::Leadership, 0),
+        (SkillType::Loyalty, 0),
+        (SkillType::Salvaging, 0),
+        // absent from portal.dat AND from AddRetiredSkills()
+        (SkillType::Sling, 0),
+        (SkillType::Spellcraft, 0),
+        (SkillType::Awareness, 0),
+        (SkillType::ArmsAndArmorRepair, 0),
+        (SkillType::Gearcraft, 0),
+        (SkillType::Challenge, 0),
+    ];
+
+    // The table must cover EVERY SkillType — otherwise a future skill could be
+    // added and silently escape this check (the "test that cannot fail" trap).
+    let covered: std::collections::HashSet<SkillType> =
+        expected.iter().map(|(skill, _)| *skill).collect();
+    // SkillType has no EnumIter derive; `from_repr` over the full repr range
+    // (Axe = 1 … Summoning = 54) enumerates every real variant.
+    let all_skills: Vec<SkillType> = (0u32..=64).filter_map(SkillType::from_repr).collect();
+    assert_eq!(
+        all_skills.len(),
+        54,
+        "SkillType variant count changed — update this test's expectation table"
+    );
+    let missing: Vec<SkillType> = all_skills
+        .into_iter()
+        .filter(|s| !covered.contains(s))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "expectation table does not cover every SkillType: {:?}",
+        missing
+    );
+
+    // ranks/init are pass-through addends, so with ranks=0/init=0 the returned
+    // value IS the attribute bonus.
+    let mut wrong = Vec::new();
+    for (skill, want) in expected {
+        let got = player.derive_skill_value(*skill, 0, 0, false);
+        if got != *want {
+            wrong.push(format!("{:?}: got {} want {}", skill, got, want));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "skill attribute bonus disagrees with portal.dat SkillTable / ACE AttributeFormula:\n  {}",
+        wrong.join("\n  ")
+    );
+
+    // ranks + init really are pure addends on top of the bonus.
+    assert_eq!(
+        player.derive_skill_value(SkillType::MissileDefense, 40, 5, false),
+        50 + 40 + 5
+    );
+}

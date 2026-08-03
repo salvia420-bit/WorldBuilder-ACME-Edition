@@ -13,6 +13,80 @@ fn make_position(x: f32, y: f32, heading_rad: f32) -> WorldPosition {
     }
 }
 
+/// Rust review 2026-08-03 — the same neighbour query as `test_spatial_neighbors`
+/// but with REAL `ObjCellID`s instead of the synthetic `0x____FFFF` form.
+///
+/// `WorldPosition::landblock_id` is the full ObjCellID: outdoor poses get a
+/// derived cell in the low word (`normalize_outdoor_cell`,
+/// holtburger-common/src/position.rs:105-112 — `0x3419_0000` becomes
+/// `0x3419_0003`), indoor poses an EnvCell stab `>= 0x0100`. `landblock_map`
+/// was keyed by that whole value while `get_nearby_entities` synthesised its
+/// eight neighbour keys as `(x << 24) | (y << 16) | 0xFFFF`, a low word that is
+/// never a real cell — so the neighbour scan could not hit, and the "same
+/// landblock" bucket was really a "same 24 m cell" bucket.
+///
+/// `test_spatial_neighbors` passed throughout because `0x____FFFF` is the one
+/// input shape that makes the broken key line up: a test that could not fail on
+/// production data.
+#[test]
+fn spatial_neighbors_work_with_real_objcell_ids() {
+    let mut scene = SpatialScene::new();
+
+    // All four live in landblock 0x0A0A / 0x0B0A, in DIFFERENT cells.
+    let same_cell = Guid(0x1000_0001);
+    let same_lb_other_cell = Guid(0x1000_0002);
+    let adjacent_lb = Guid(0x1000_0003);
+    let indoor_same_lb = Guid(0x1000_0004);
+    let far_lb = Guid(0x1000_0005);
+
+    let put = |scene: &mut SpatialScene, guid: Guid, cell: u32| {
+        let pose = WorldPosition {
+            landblock_id: Guid(cell),
+            ..Default::default()
+        };
+        scene.update_entity(guid, Guid(cell), pose);
+    };
+
+    put(&mut scene, same_cell, 0x0A0A_0003);
+    put(&mut scene, same_lb_other_cell, 0x0A0A_0021);
+    put(&mut scene, adjacent_lb, 0x0B0A_0011);
+    put(&mut scene, indoor_same_lb, 0x0A0A_0135);
+    put(&mut scene, far_lb, 0x3232_0005);
+
+    // Query from the player's actual cell id, exactly as
+    // `WorldState::player_landblock()` supplies it.
+    let nearby = scene.get_nearby_entities(Guid(0x0A0A_0003));
+
+    assert!(nearby.contains(&same_cell));
+    assert!(
+        nearby.contains(&same_lb_other_cell),
+        "an entity in the SAME landblock but a different 24 m cell must be nearby"
+    );
+    assert!(
+        nearby.contains(&adjacent_lb),
+        "an entity one landblock east must be nearby — the 3x3 neighbour scan          used to be unreachable on real cell ids"
+    );
+    assert!(
+        nearby.contains(&indoor_same_lb),
+        "an indoor EnvCell in the same landblock must be nearby"
+    );
+    assert!(!nearby.contains(&far_lb), "40 landblocks away is not nearby");
+
+    // Landblock row/column 0 is a real part of the world; the old
+    // `nx > 0 && ny > 0` bound dropped it.
+    let mut edge = SpatialScene::new();
+    let at_origin = Guid(0x2000_0001);
+    put(&mut edge, at_origin, 0x0000_0002);
+    assert!(
+        edge.get_nearby_entities(Guid(0x0100_0002)).contains(&at_origin),
+        "landblock (0, 0) must be reachable from its neighbour (1, 0)"
+    );
+
+    // Removal must use the same key, or the entity would linger forever.
+    edge.remove_entity(at_origin, Guid(0x0000_0002));
+    assert!(edge.get_nearby_entities(Guid(0x0100_0002)).is_empty());
+}
+
 #[test]
 fn test_spatial_neighbors() {
     let mut scene = SpatialScene::new();

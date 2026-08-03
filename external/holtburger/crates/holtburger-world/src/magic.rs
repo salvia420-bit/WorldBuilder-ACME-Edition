@@ -3,9 +3,47 @@ use holtburger_common::properties::{EnchantmentTypeFlags, PropertyFloat, Propert
 use holtburger_protocol::messages::magic::Enchantment;
 use std::collections::HashMap;
 
+/// ACE `PropertiesEnchantmentRegistryExtensions.Level8AuraSelfSpells`
+/// (ACE.Entity/Models/PropertiesEnchantmentRegistryExtensions.cs:131-139), whose
+/// own comment reads: *"this ensures level 8 item self spells always take
+/// precedence over level 8 item other spells."* It is the SECOND sort key in
+/// all three `GetEnchantmentsTopLayer*` chains (`:153-155`, `:180-182`,
+/// `:223-227`), between `PowerLevel` and the set-spell/start-time key.
+///
+/// Ids computed from `ACE.Entity/Enum/SpellId.cs`.
+///
+/// DRIFT NOTE (2026-08-03): this repo already carries a correct copy of the
+/// same contract at `holtburger-core/src/client/character_info.rs:75-82`
+/// (`LEVEL_8_AURA_SELF_SPELLS`, with its own regression test at :1171-1188).
+/// `holtburger-core` depends on `holtburger-world`, not the other way round, so
+/// the two cannot share a definition without moving it down into
+/// `holtburger-common` — flagged for the reviewer rather than done here.
+const LEVEL_8_AURA_SELF_SPELLS: [u16; 6] = [
+    4395, // SpellId.BloodDrinkerSelf8
+    4400, // SpellId.DefenderSelf8
+    4405, // SpellId.HeartSeekerSelf8
+    4414, // SpellId.SpiritDrinkerSelf8
+    4417, // SpellId.SwiftKillerSelf8
+    4418, // SpellId.HermeticLinkSelf8
+];
+
+fn is_level_8_aura_self(spell_id: u16) -> bool {
+    LEVEL_8_AURA_SELF_SPELLS.contains(&spell_id)
+}
+
 fn is_higher_priority_enchantment(current: &Enchantment, challenger: &Enchantment) -> bool {
     if challenger.power_level != current.power_level {
         return challenger.power_level > current.power_level;
+    }
+
+    // Rust review 2026-08-03 — the missing middle sort key. Without it a
+    // same-category, same-power level-8 "other" aura could beat the level-8
+    // SELF aura purely on start_time, which is exactly what ACE's second
+    // `ThenByDescending` exists to prevent.
+    let current_is_l8_self = is_level_8_aura_self(current.spell_id);
+    let challenger_is_l8_self = is_level_8_aura_self(challenger.spell_id);
+    if current_is_l8_self != challenger_is_l8_self {
+        return challenger_is_l8_self;
     }
 
     let current_is_set = current.spell_set_id.is_some();
@@ -386,5 +424,87 @@ mod tests {
 
         // Base 100 + 250 add = 350
         assert_eq!(get_enchanted_armor(100, &enchantments), 350);
+    }
+
+    /// Rust review 2026-08-03 — ACE's top-layer tiebreak has THREE keys, and
+    /// the middle one was missing here.
+    ///
+    /// AUTHORITY: `ACE.Entity/Models/PropertiesEnchantmentRegistryExtensions.cs`
+    /// — all three `GetEnchantmentsTopLayer*` overloads (`:153-155`, `:180-182`,
+    /// `:223-227`) sort
+    ///     `OrderByDescending(PowerLevel)`
+    ///     `.ThenByDescending(Level8AuraSelfSpells.Contains(SpellId))`
+    ///     `.ThenByDescending(setSpells.Contains(SpellId) ? SpellId : StartTime)`
+    /// with `Level8AuraSelfSpells` defined at `:131-139` and commented "this
+    /// ensures level 8 item self spells always take precedence over level 8
+    /// item other spells".
+    ///
+    /// Concrete break: two same-category, same-power level-8 auras on a wielded
+    /// item — BloodDrinkerSelf8 (4395) and a BloodDrinker "other" aura. Without
+    /// the middle key, whichever was cast LAST wins, so the derived stat
+    /// flip-flops with cast order instead of pinning to the self spell.
+    #[test]
+    fn level_8_aura_self_wins_the_power_tie() {
+        let key = crate::stats::SkillType::MeleeDefense as u32;
+        let flags = (EnchantmentTypeFlags::SKILL | EnchantmentTypeFlags::ADDITIVE).bits();
+
+        let self8 = Enchantment {
+            spell_id: 4395, // BloodDrinkerSelf8
+            spell_category: 77,
+            power_level: 400,
+            start_time: 0.0, // cast FIRST
+            stat_mod_type: flags,
+            stat_mod_key: key,
+            stat_mod_value: 10.0,
+            ..Default::default()
+        };
+        let other8 = Enchantment {
+            spell_id: 4394, // a same-category level-8 "other" aura
+            spell_category: 77,
+            power_level: 400,
+            start_time: 100.0, // cast LATER — wins on start_time alone
+            stat_mod_type: flags,
+            stat_mod_key: key,
+            stat_mod_value: 99.0,
+            ..Default::default()
+        };
+
+        // Both orderings must resolve to the SELF spell.
+        assert_eq!(
+            get_enchantment_additive(&[self8.clone(), other8.clone()], flags, key),
+            10.0
+        );
+        assert_eq!(
+            get_enchantment_additive(&[other8.clone(), self8.clone()], flags, key),
+            10.0
+        );
+
+        // NEGATIVE CONTROL 1: power still outranks the level-8-self key, so a
+        // "always prefer the self spell" fix would be wrong.
+        let stronger_other = Enchantment {
+            power_level: 500,
+            ..other8.clone()
+        };
+        assert_eq!(
+            get_enchantment_additive(&[self8.clone(), stronger_other], flags, key),
+            99.0,
+            "PowerLevel is still the FIRST key"
+        );
+
+        // NEGATIVE CONTROL 2: between two NON-level-8-self spells the old
+        // start_time rule must still decide.
+        let early = Enchantment {
+            spell_id: 4390,
+            start_time: 0.0,
+            stat_mod_value: 1.0,
+            ..other8.clone()
+        };
+        let late = Enchantment {
+            spell_id: 4391,
+            start_time: 50.0,
+            stat_mod_value: 2.0,
+            ..other8.clone()
+        };
+        assert_eq!(get_enchantment_additive(&[early, late], flags, key), 2.0);
     }
 }

@@ -1408,6 +1408,18 @@ impl WorldState {
                 }
                 entity.set_vector_sequence(incoming_vector_sequence);
             }
+            // Rust review 2026-08-03 — the third wire-vector consumer was
+            // missing the F9 non-finite guard its two siblings carry
+            // (`apply_entity_position_pack` :908-911, `set_player_vector`
+            // :1205-1207). `VectorUpdateData::unpack` is six bare
+            // `LittleEndian::read_f32` behind a length check only, so a NaN /
+            // Inf payload for a REMOTE guid (handlers/movement.rs:192 routes
+            // here) wrote straight into `entity.velocity` and from there into
+            // `reconcile_authoritative_body` below — poisoning that body's
+            // projection permanently, since every later value is derived from
+            // the NaN.
+            let velocity = velocity.finite_or_zero();
+            let omega = omega.finite_or_zero();
             entity.velocity = velocity;
             entity.omega = omega;
             let pose = entity.position;

@@ -97,8 +97,21 @@ pub(crate) fn handle_message(
                     // so retail's arrival PLACEMENT (`find_placement_position`,
                     // acclient.c:313341) is skipped and an env-cell-wall landing
                     // stays embedded. Consume-once here (clears whether or not it
-                    // fires); when set it upgrades the suspended-arrival apply to
-                    // `Reset` so the placement latches. Only a `PlayerTeleport`
+                    // fires); when set it latches `pending_arrival_placement`
+                    // directly, at the bottom of this arm.
+                    //
+                    // CORRECTION (Rust review 2026-08-03): this used to read
+                    // "it upgrades the suspended-arrival apply to `Reset` so the
+                    // placement latches", and so did the arming site's comment.
+                    // No such upgrade exists or ever existed in this code — the
+                    // `body_suspended || body_cell_null` branch below is a
+                    // hard-coded `AuthoritativeBodySync::Snapshot`, and the flag's
+                    // ONLY effect is the bare `latch_arrival_placement()` call at
+                    // the end of this arm. The net placement latch is the same
+                    // either way, but `Reset` and `Snapshot` are materially
+                    // different body syncs (`Reset` hard-snaps + constrains,
+                    // `Snapshot` blends), so nobody should read the old wording as
+                    // a description of the live trajectory. Only a `PlayerTeleport`
                     // arms THIS flag — login placement is latched directly in the
                     // self-`ObjectCreate` arm instead (task-#12, 2026-07-20:
                     // retail's enter_world runs `find_placement_position` on
@@ -298,9 +311,13 @@ pub(crate) fn handle_message(
             // `set_teleport_sequence` above pre-mirrors the destination stamp, so
             // the follow-up self `UpdatePosition` reads it EQUAL and lands via the
             // `body_suspended` Snapshot branch (above) without latching
-            // `pending_arrival_placement`. Arming lets that branch upgrade to
-            // `Reset` so retail's arrival PLACEMENT runs. Consume-once via
-            // `take_teleport_arrival`.
+            // `pending_arrival_placement`. Arming makes the consume site call
+            // `latch_arrival_placement()` outright so retail's arrival PLACEMENT
+            // runs. Consume-once via `take_teleport_arrival`.
+            //
+            // CORRECTION (Rust review 2026-08-03): previously worded as "lets
+            // that branch upgrade to `Reset`". It does not — that branch is a
+            // hard-coded `Snapshot`; see the matching note at the consume site.
             state.player.arm_teleport_arrival();
             events
                 .extend(state.suspend_runtime_bodies(RuntimeBodyResetCause::TeleportOrWorldReset));

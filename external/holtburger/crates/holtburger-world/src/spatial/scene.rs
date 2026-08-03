@@ -42,6 +42,17 @@ pub(crate) fn is_envcell_id(cell_id: u32) -> bool {
     (cell_id & 0xFFFF) >= 0x100
 }
 
+/// The LANDBLOCK part of an ObjCellID — `0xXXYY0000`.
+///
+/// `WorldPosition::landblock_id` is really the full ObjCellID: outdoor poses
+/// carry a derived cell in the low word (`1..=64`), indoor poses an EnvCell stab
+/// (`>= 0x0100`), and some legacy/synthetic paths the block-only `0xFFFF`
+/// marker. Anything that means "which landblock is this in" has to mask.
+#[inline]
+pub(crate) fn landblock_key(cell_id: Guid) -> Guid {
+    Guid(cell_id.0 & 0xFFFF_0000)
+}
+
 /// COL-27 (2026-07-28): do two WORLD-space AABBs overlap (closed intervals on
 /// all three axes)? Touching faces count as overlapping — a static flush with a
 /// cell boundary must be testable from BOTH sides, which is the whole point of
@@ -4961,7 +4972,8 @@ impl SpatialScene {
     }
 
     pub fn update_entity(&mut self, guid: Guid, old_lb: Guid, pose: WorldPosition) {
-        let new_lb = pose.landblock_id;
+        let new_lb = landblock_key(pose.landblock_id);
+        let old_lb = landblock_key(old_lb);
         if old_lb != new_lb
             && let Some(set) = self.landblock_map.get_mut(&old_lb)
         {
@@ -4978,7 +4990,7 @@ impl SpatialScene {
     }
 
     pub fn remove_entity(&mut self, guid: Guid, lb: Guid) {
-        if let Some(set) = self.landblock_map.get_mut(&lb) {
+        if let Some(set) = self.landblock_map.get_mut(&landblock_key(lb)) {
             set.remove(&guid);
         }
         self.entity_poses.remove(&guid);
@@ -4991,33 +5003,49 @@ impl SpatialScene {
     }
 
     pub fn get_in_landblock(&self, lb: Guid) -> Option<&HashSet<Guid>> {
-        self.landblock_map.get(&lb)
+        self.landblock_map.get(&landblock_key(lb))
     }
 
+    /// Every entity in the player's landblock and its 8 neighbours.
+    ///
+    /// Rust review 2026-08-03 — this used to be dead on real data, twice over:
+    ///
+    /// 1. `landblock_map` was keyed by whatever `pose.landblock_id` held, and
+    ///    that is the FULL ObjCellID, not the landblock: outdoor poses carry a
+    ///    derived cell in the low word (`WorldPosition::normalize_outdoor_cell`,
+    ///    holtburger-common/src/position.rs:105-112, e.g. `0x3419_0003`) and
+    ///    indoor poses carry the EnvCell stab (`>= 0x0100`). So the "same
+    ///    landblock" bucket was really a "same 24 m cell" bucket.
+    /// 2. The 3x3 neighbour scan built its keys as `(x << 24) | (y << 16) |
+    ///    0xFFFF`. `0xFFFF` is the legacy block-only placeholder
+    ///    (position.rs:199) and is never a real cell id, so NONE of the eight
+    ///    neighbour lookups could ever hit. The whole loop was unreachable.
+    ///
+    /// The in-tree tests did not catch it because they all fed synthetic
+    /// `0x____FFFF` landblock ids, which is the one input shape that makes the
+    /// broken key work — a test that could not fail on production data.
+    ///
+    /// Both the map keys and the queries are now masked to the landblock
+    /// (`& 0xFFFF_0000`). The x/y bound is also `0..=0xFE`, the real AC
+    /// landblock range: the old `nx > 0` dropped column/row 0 outright.
     pub fn get_nearby_entities(&self, lb: Guid) -> HashSet<Guid> {
         let mut nearby = HashSet::new();
 
         let x = (lb >> 24) & 0xFF;
         let y = (lb >> 16) & 0xFF;
 
-        for dx in -1..=1 {
-            for dy in -1..=1 {
+        for dx in -1..=1i32 {
+            for dy in -1..=1i32 {
                 let nx = x as i32 + dx;
                 let ny = y as i32 + dy;
-                if nx > 0 && nx < 255 && ny > 0 && ny < 255 {
-                    let neighbor_lb = ((nx as u32) << 24) | ((ny as u32) << 16) | 0xFFFF;
+                if (0..=0xFE).contains(&nx) && (0..=0xFE).contains(&ny) {
+                    let neighbor_lb = ((nx as u32) << 24) | ((ny as u32) << 16);
                     if let Some(set) = self.landblock_map.get(&Guid(neighbor_lb)) {
                         for &guid in set {
                             nearby.insert(guid);
                         }
                     }
                 }
-            }
-        }
-
-        if let Some(set) = self.landblock_map.get(&lb) {
-            for &guid in set {
-                nearby.insert(guid);
             }
         }
 
