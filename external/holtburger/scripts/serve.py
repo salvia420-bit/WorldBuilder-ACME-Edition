@@ -45,10 +45,16 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import email.utils
 import json
 import os
+import stat as stat_mod
 import subprocess
 import sys
+import threading
+import zlib
+from collections import OrderedDict
+from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -321,6 +327,95 @@ def die_loud(failures: list[str], root: Path) -> None:
 COI = False
 
 
+# --- response compression (2026-08-04) --------------------------------------
+# Players first-load over ~666 kbps links; the cold path is ~5.4 MB wasm +
+# several MB of unminified ES-module JS + JSON + shard payloads, and nothing
+# was served with Content-Encoding. Negotiated per-request via Accept-Encoding:
+#   * text assets  -> gzip (stdlib zlib, level 6)
+#   * binary assets (wasm / shard .bin / .hba / .hbc7) -> zstd when a zstd
+#     codec is importable AND the client accepts it; else gzip (still ~15-20%
+#     on BC7 blobs); else identity.
+# Never compresses a request that carries a Range header (byte offsets), never
+# compresses when the client didn't ask, always sends Vary: Accept-Encoding on
+# compressible extensions. Fail-loud posture: if no zstd codec exists we say so
+# ONCE at startup instead of silently downgrading forever.
+try:
+    import zstandard as _zstd_pkg  # pip package (not installed everywhere)
+
+    def _zstd_compress(data: bytes) -> bytes:
+        return _zstd_pkg.ZstdCompressor(level=10).compress(data)
+
+    ZSTD_IMPL: str | None = f"zstandard {_zstd_pkg.__version__}"
+except ImportError:
+    try:
+        from compression import zstd as _zstd_std  # stdlib, Python >= 3.14
+
+        def _zstd_compress(data: bytes) -> bytes:
+            return _zstd_std.compress(data, level=10)
+
+        ZSTD_IMPL = "stdlib compression.zstd"
+    except ImportError:
+        def _zstd_compress(data: bytes) -> bytes:  # never negotiated when None
+            raise RuntimeError("no zstd codec available")
+
+        ZSTD_IMPL = None
+
+# Text-shaped assets: gzip only (universally accepted, great ratio on source).
+# .jsonl is the per-LB scenery/spawns layer — fetched constantly at boot.
+TEXT_COMPRESS_EXTS = {".js", ".mjs", ".html", ".css", ".json", ".jsonl", ".md", ".map"}
+# Binary payloads: zstd preferred (faster + better on already-packed data),
+# gzip fallback. .bin = content-addressed dist shards (incl. tex-bc7 blobs).
+BIN_COMPRESS_EXTS = {".wasm", ".bin", ".hba", ".hbc7"}
+GZIP_LEVEL = 6
+MIN_COMPRESS_BYTES = 256               # header overhead isn't worth it below this
+MAX_COMPRESS_BYTES = 64 * 1024 * 1024  # sanity cap: don't buffer huge files
+
+
+def _gzip_compress(data: bytes) -> bytes:
+    # wbits=31 -> gzip container (RFC 1952), what Content-Encoding: gzip means.
+    co = zlib.compressobj(GZIP_LEVEL, zlib.DEFLATED, 31)
+    return co.compress(data) + co.flush()
+
+
+class _CompressCache:
+    """Byte-bounded LRU of compressed bodies keyed by (path, mtime_ns, size,
+    encoding) so repeated fetches (reload loops, multi-agent boots) don't
+    re-compress. A value of None is a negative entry: 'compression did not
+    shrink this file — serve identity' (stops re-compressing incompressible
+    data on every hit). Thread-safe: the server is a ThreadingHTTPServer."""
+
+    def __init__(self, max_bytes: int = 96 * 1024 * 1024):
+        self._lock = threading.Lock()
+        self._map: OrderedDict[tuple, bytes | None] = OrderedDict()
+        self._bytes = 0
+        self._max_bytes = max_bytes
+
+    def get(self, key: tuple):
+        with self._lock:
+            if key not in self._map:
+                return False, None  # (hit?, value)
+            self._map.move_to_end(key)
+            return True, self._map[key]
+
+    def put(self, key: tuple, body: bytes | None) -> None:
+        size = len(body) if body is not None else 0
+        if size > self._max_bytes:
+            return
+        with self._lock:
+            old = self._map.pop(key, None)
+            if old is not None:
+                self._bytes -= len(old)
+            self._map[key] = body
+            self._bytes += size
+            while self._bytes > self._max_bytes and self._map:
+                _, evicted = self._map.popitem(last=False)
+                if evicted is not None:
+                    self._bytes -= len(evicted)
+
+
+COMPRESS_CACHE = _CompressCache()
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Serve the external/holtburger/ tree with dev no-cache headers (the reason
     the old /tmp/nocache-server.py existed — Firefox/Chrome ES-module + wasm
@@ -337,6 +432,115 @@ class Handler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HOLT_ROOT), **kwargs)
+
+    # --- compression -------------------------------------------------------
+
+    def _accepted_encodings(self) -> set[str]:
+        """Parse Accept-Encoding into the set of codings with q > 0."""
+        hdr = self.headers.get("Accept-Encoding", "")
+        accepted: set[str] = set()
+        for part in hdr.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            token, _, params = part.partition(";")
+            token = token.strip().lower()
+            q = 1.0
+            params = params.strip().lower()
+            if params.startswith("q="):
+                try:
+                    q = float(params[2:])
+                except ValueError:
+                    q = 0.0
+            if q > 0:
+                accepted.add("gzip" if token == "x-gzip" else token)
+        return accepted
+
+    def _negotiate_encoding(self, ext: str) -> str | None:
+        accepted = self._accepted_encodings()
+        if ext in TEXT_COMPRESS_EXTS:
+            return "gzip" if "gzip" in accepted else None
+        if ext in BIN_COMPRESS_EXTS:
+            if ZSTD_IMPL is not None and "zstd" in accepted:
+                return "zstd"
+            if "gzip" in accepted:
+                return "gzip"
+        return None
+
+    def _maybe_send_compressed(self) -> bool:
+        """Serve a compressed body when negotiable. Returns True when the
+        request was fully handled; False falls through to the stdlib path
+        (which also covers 404s, directories, redirects, and Range requests
+        — a Range response must NEVER be compressed, byte offsets break)."""
+        if self.headers.get("Range") is not None:
+            return False
+        clean = self.path.split("?", 1)[0].split("#", 1)[0]
+        ext = os.path.splitext(clean)[1].lower()
+        if ext not in TEXT_COMPRESS_EXTS and ext not in BIN_COMPRESS_EXTS:
+            return False
+        enc = self._negotiate_encoding(ext)
+        if enc is None:
+            return False
+        fspath = self.translate_path(self.path)
+        try:
+            fs = os.stat(fspath)
+        except OSError:
+            return False  # stdlib path produces the 404
+        if not stat_mod.S_ISREG(fs.st_mode):
+            return False
+        if not (MIN_COMPRESS_BYTES <= fs.st_size <= MAX_COMPRESS_BYTES):
+            return False
+
+        # Preserve SimpleHTTPRequestHandler's If-Modified-Since -> 304 contract
+        # (the no-cache tiers below rely on revalidation collapsing to 304s).
+        ims_hdr = self.headers.get("If-Modified-Since")
+        if ims_hdr is not None and "If-None-Match" not in self.headers:
+            try:
+                ims = email.utils.parsedate_to_datetime(ims_hdr)
+            except (TypeError, IndexError, OverflowError, ValueError):
+                ims = None
+            if ims is not None:
+                if ims.tzinfo is None:
+                    ims = ims.replace(tzinfo=datetime.timezone.utc)
+                if ims.tzinfo is datetime.timezone.utc:
+                    last_modif = datetime.datetime.fromtimestamp(
+                        fs.st_mtime, datetime.timezone.utc).replace(microsecond=0)
+                    if last_modif <= ims:
+                        self.send_response(HTTPStatus.NOT_MODIFIED)
+                        self.end_headers()
+                        return True
+
+        key = (fspath, fs.st_mtime_ns, fs.st_size, enc)
+        hit, body = COMPRESS_CACHE.get(key)
+        if not hit:
+            try:
+                with open(fspath, "rb") as f:
+                    raw = f.read()
+            except OSError:
+                return False
+            body = _zstd_compress(raw) if enc == "zstd" else _gzip_compress(raw)
+            if len(body) >= len(raw):
+                body = None  # negative entry: incompressible, serve identity
+            COMPRESS_CACHE.put(key, body)
+        if body is None:
+            return False
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", self.guess_type(fspath))
+        self.send_header("Content-Encoding", enc)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        return True
+
+    def do_GET(self):
+        if self._maybe_send_compressed():
+            return
+        super().do_GET()
 
     def send_response_only(self, code, message=None):
         # Stash the status so end_headers() can gate immutable caching on a 2xx
@@ -355,6 +559,11 @@ class Handler(SimpleHTTPRequestHandler):
         # production proxy.cjs precedent (shards-only, 200-gated, same header).
         path = self.path.split("?", 1)[0]
         status = getattr(self, "_hb_status", 0)
+        # Any extension that CAN be served compressed varies by Accept-Encoding,
+        # whether or not this particular response was compressed (keeps every
+        # cache in front — SW, proxy.cjs, browser — from mixing encodings).
+        if os.path.splitext(path)[1].lower() in TEXT_COMPRESS_EXTS | BIN_COMPRESS_EXTS:
+            self.send_header("Vary", "Accept-Encoding")
         if COI:
             # Both headers are required — COOP alone does not isolate. Same-origin
             # workers (bake_worker, net worker) inherit isolation; the wsbridge
@@ -458,6 +667,13 @@ def main() -> None:
     httpd = Srv((args.bind, args.port), Handler)
     url = f"http://{args.bind}:{args.port}/apps/holtburger-web/index.html"
     print(f"[serve] serving {HOLT_ROOT} (threaded, no-cache)\n[serve] open {url}", file=sys.stderr)
+    if ZSTD_IMPL is not None:
+        print(f"[serve] compression: text=gzip-{GZIP_LEVEL}, binary=zstd ({ZSTD_IMPL}) with gzip fallback.",
+              file=sys.stderr)
+    else:
+        print(f"[serve] WARNING: no zstd codec (no `zstandard` package; stdlib compression.zstd needs "
+              f"Python>=3.14, this is {sys.version.split()[0]}) — binary payloads (wasm/shards) fall back "
+              "to gzip. `pip install --user zstandard` to enable.", file=sys.stderr)
     if COI:
         print("[serve] --coi: COOP=same-origin COEP=require-corp (crossOriginIsolated).\n"
               "[serve]   Use ?nosw=1 — SW-cached responses predate these headers and silently\n"

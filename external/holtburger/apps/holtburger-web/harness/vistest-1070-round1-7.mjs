@@ -48,6 +48,19 @@ const ARMS = [
     why: "R2#8 A/B against arm A" },
   { id: "E-statpom", flags: "quality=high&statPom=on",
     why: "R2#1 POM relief still marches after the height-texture WeakMap move" },
+  // 2026-08-04 — terrainBc7 flipped DEFAULT-ON (t512) with the 1070 look-pass
+  // QUEUED, not waived. Arm F is the new bare default (retail-derived BC7
+  // atlas); arm G pins the old CC0 arm for the side-by-side. Look for: derived
+  // normal green-channel sign (lighting reads inverted on N-S slopes if
+  // wrong), derived-height POM sliding vs texels, and the retail-vs-CC0 look
+  // call. `__terrainBc7Stats()` in the probe must show built:"color+nra",
+  // tier t512 in arm F and enabled:false in arm G.
+  { id: "F-terrain-bc7-default", flags: "quality=high",
+    why: "terrainBc7 default-ON 08-04: green-channel sign · POM height slide · retail look (A/B vs G)" },
+  { id: "G-terrain-cc0", flags: "quality=high&terrainBc7=off",
+    why: "CC0 comparison arm for F (the pre-08-04 default look)" },
+  { id: "H-terrain-bc7-1024", flags: "quality=high&terrainBc7=1024",
+    why: "TERRAIN-BC7-REPORT: eye-test BOTH tiers — ESRGAN sharpening is not uniformly better; don't assume t1024 dominates t512" },
 ];
 
 /** Read-only page probes. Anything that mutates game state stays out. */
@@ -64,6 +77,8 @@ const PROBE = `(() => {
   // R7#10 — buckets must be reaped, not ratcheted.
   try { out.statBatchX = window.__statBatchXStats?.() ?? null; } catch (e) { out.statBatchX = null; }
   try { out.farTerrain = window.__farTerrainState?.() ?? null; } catch (e) { out.farTerrain = null; }
+  // 08-04 arms F/G — BC7 terrain atlas state (enabled/tier/built/errors).
+  try { out.terrainBc7 = window.__terrainBc7Stats?.() ?? null; } catch (e) { out.terrainBc7 = null; }
   // R4#1 — the anchor must be genuinely OVERHEAD, not 40 m sideways.
   try {
     const a = window.liveScene3d?.skyDome?._skyBirdAnchor;

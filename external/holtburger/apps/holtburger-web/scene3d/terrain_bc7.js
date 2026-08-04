@@ -94,23 +94,32 @@ let _flag;
 // whose manifest.json fetches wins. See TERRAIN-BC7-REPORT.md §VRAM for why 2048
 // is deliberately NOT a shippable tier (33 layers x 4 MiB x 4/3 mip = 176 MiB
 // per array, 352 MiB for albedo+nra — 4x today's whole terrain budget).
-export const TERRAIN_BC7_TIERS = ["t1024", "t512"];
+// t512 FIRST (2026-08-04): with the arm default-ON the tier order is a cold-load
+// decision, not a quality preference — t512 is ~20 MB on the wire (retail-native
+// level-0 res, 4x VRAM saving) vs ~78 MB for t1024 (VRAM-neutral, 2x linear).
+// At a 666 kbps first-visit line that is ~4 min vs ~15 min of terrain download.
+// `?terrainBc7=1024` pins the high tier for anyone who wants it.
+export const TERRAIN_BC7_TIERS = ["t512", "t1024"];
 let _tierPref = null;
 
 /**
- * `?terrainBc7=on` — EXACT-MATCH opt-in (`on`/`1`/`true`/`yes`), plus the tier
- * selectors `?terrainBc7=1024` and `?terrainBc7=512` which also mean ON and pin
- * one tier for A/B.
+ * `?terrainBc7` — DEFAULT ON since 2026-08-04 (`?terrainBc7=off` is the escape).
+ * Tier selectors `?terrainBc7=1024` / `?terrainBc7=512` pin one tier for A/B;
+ * absent or any other value runs the default tier order (t512 first).
  *
- * DELIBERATELY NOT the `!== "off"` default-on idiom. Two reasons: (1) this arm
- * has had no GPU eye-test yet, and (2) url-flags.md's own flag-default footgun
- * box records that `!== "off"` reads ON when the param is absent — which is how
- * six cast flags went silently live. Absent ⇒ OFF ⇒ the CC0/retail RGBA8 path
- * runs exactly as it does today.
+ * History: this was an EXACT-MATCH opt-in from 2026-07-30 to 2026-08-04 because
+ * the arm had no GPU eye-test. Flipped default-ON by user direction (the retail
+ * -derived upscaled BC7 atlas is the intended terrain arm; cold-load bytes are
+ * the driving metric). The default-on bar (bare-default loads+spawns+0 errors)
+ * was validated on local SwiftShader BPTC; the 1070 aesthetic pass (derived
+ * normal green-channel sign, derived-height POM, retail-vs-CC0 look) is QUEUED
+ * in the vistest queue, not waived. Failure of any kind — no BPTC, no bake,
+ * bad payload — still nulls into the CC0/retail RGBA8 path, so default-on is
+ * behaviour-neutral on unsupported GPUs and un-baked checkouts.
  */
 export function terrainBc7Enabled(search) {
   if (_flag !== undefined && search === undefined) return _flag;
-  let on = false; // DEFAULT-OFF
+  let on = true; // DEFAULT-ON (2026-08-04); `off`/`0`/`false`/`no` disables
   let tier = null;
   try {
     const s =
@@ -122,12 +131,12 @@ export function terrainBc7Enabled(search) {
     const v = new URLSearchParams(s).get("terrainBc7");
     if (v != null) {
       const t = String(v).toLowerCase();
-      on = t === "on" || t === "1" || t === "true" || t === "yes";
+      on = !(t === "off" || t === "0" || t === "false" || t === "no");
       if (t === "1024" || t === "t1024") { on = true; tier = "t1024"; }
       else if (t === "512" || t === "t512") { on = true; tier = "t512"; }
     }
   } catch (_) {
-    on = false;
+    on = true;
   }
   if (search === undefined) {
     _flag = on;

@@ -3913,7 +3913,8 @@ export async function resolveTerrainRingOpts(
     const built = buildTerrainAtlasArrayBytes(terrainTextures);
     roadCanvas = built.roadCanvas;
 
-    // ?terrainBc7=on (DEFAULT OFF) — retail-derived BC7 atlas arm. Resolved
+    // ?terrainBc7 (DEFAULT ON 2026-08-04; =off escape) — retail-derived BC7
+    // atlas arm. Resolved
     // FIRST because it is mutually exclusive with the CC0 arm below: both write
     // the albedo of the same 33 layers, and running both would mean one silently
     // overwriting the other. Null for every failure reason (flag off, no BPTC,
