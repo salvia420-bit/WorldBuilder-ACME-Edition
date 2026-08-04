@@ -579,6 +579,81 @@ function readCreatureSeparationFlag() {
   }
 }
 
+// === IMMOVABLE-ENTITIES (2026-08-04) — `?immovableEntities=on`, default OFF. ===
+//
+// THE BUG: the player rig can shove doors off their hinges and slide NPCs and
+// corpses around by walking into them. The displacement is entirely the
+// separation push-out above: `_applyCreatureSeparation` is applied to EVERY
+// non-local entity with no type filter and no bound, so `pushOut` writes
+// `root.position` (and `_serverTargetPos`) of a door / corpse / standing NPC
+// whenever the PLAYER's own capsule intrudes on its contact envelope. Nothing
+// in wasm ever moves another entity — `clamp_delta_against_entities`
+// (`crates/holtburger-world/src/spatial/entity_collision.rs`) only shortens the
+// PLAYER's delta — so this render-side push is the sole source.
+//
+// RETAIL / ACE: the colliding mover is stopped or slid and the target is NEVER
+// displaced. `CPhysicsObj::handle_all_collisions` (acclient.c:321808) writes
+// only `this->m_velocityVector` (the bounce, :321870-321886);
+// `track_object_collision` (:321217) and `report_object_collision` (:320228)
+// record the contact and notify — neither touches `object`'s position. ACE is
+// the same port: `PhysicsObj.FindObjCollisions` (`ACE.Server/Physics/
+// PhysicsObj.cs:381`) returns a `TransitionState` for the MOVER and never
+// writes the collidee. `PhysicsState.Pushable` (0x80) is declared and never
+// read. A world object's position is the server's, full stop.
+//
+// THE RULE ENFORCED HERE: the separation resolve may only ever REDUCE our own
+// client-side prediction error — it may never carry a rendered pose FARTHER
+// from that entity's authoritative anchor than it already is. Consequences:
+//   * a standing NPC / door / corpse renders AT its authoritative pose, so its
+//     distance-from-anchor is 0 and every push is rejected ⇒ immovable;
+//   * a charging mob whose dead-reckon overshot ~1 m past its wire pose and
+//     into the player still gets pushed back OUT, because that move shortens
+//     the distance to the anchor. The 2026-07-28 measured defect stays fixed.
+// The anchor is the last authoritative pose we hold: `_wirePos` (stashed in
+// `setPose`, reached only from a KIND_POSITION drain) falling back to the
+// spawn pose, which is what a door that never moves has.
+function readImmovableEntitiesFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get(
+      "immovableEntities"
+    );
+    // DEFAULT-ON (2026-08-04 — user-verified live: doors were still pushable
+    // with the fix flagged off). `=off` is the escape.
+    return v?.toLowerCase() !== "off";
+  } catch (_) {
+    return false;
+  }
+}
+
+// MOVER-SIDE RESOLUTION (2026-08-04) — `?playerDepenetrate=on`, DEFAULT OFF.
+// The other half of retail's collision rule. IMMOVABLE-ENTITIES establishes
+// that the TARGET never moves; retail's mover then gets stopped or slid
+// (`CPhysicsObj::handle_all_collisions` acclient.c:321808 writes only `this`).
+// Our sim does that in `clamp_delta_against_entities`, but it clamps against
+// each entity's WIRE pose, while the renderer draws the entity's INTERPOLATED
+// pose — CREATURE-SEPARATION measured up to 1.019 m between the two. When that
+// residual leaves the avatar drawn inside an entity, this resolves it on the
+// MOVER: the local player's rendered rig is offset out, and the entity is left
+// exactly where the server put it.
+function readPlayerDepenetrateFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get(
+      "playerDepenetrate"
+    );
+    // DEFAULT-OFF; only an explicit `=on` enables. (Absent => off.)
+    return v != null && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Hard cap (m) on the per-tick mover-side correction. A wrong radius must
+// never be able to fling the avatar; beyond this the overlap is a sim bug to
+// fix in Rust, not something to paper over here.
+const PLAYER_DEPENETRATE_MAX_M = 0.5;
+
 // Fallback radius (m) for a party whose SetupModel collision radius has not
 // landed yet. `PLAYER_SETUP_SPHERE_RADIUS` (0.48) — Setup `0x02000001`'s
 // sphere, i.e. a humanoid. A residency miss must never collapse the floor to
@@ -1605,6 +1680,59 @@ const DYN_LOD_INTERVAL_S = 0.5;
 // shrinks the rig live). JS, live on reload. Was the default-OFF
 // `?runtimeObjScale=on` gate.
 const RUNTIME_OBJSCALE_ON = true;
+// ─────────────────────────────────────────────────────────────────
+// BUG-3 — `?appearanceUrgent=on` (DEFAULT OFF, strict `=== "on"` opt-in;
+// an absent param is OFF — see docs/url-flags.md on the `!== "off"`
+// footgun).
+//
+// SYMPTOM: equipping armour (or a spell landing on you) takes several
+// seconds to show on a settled scene.
+//
+// NOT A POLL. The trigger is already fully message-driven: the wasm recv
+// loop arms `ENTITY_UPDATE_KIND_APPEARANCE` (=6) directly off
+// `GameMessage::UpdateObject` (0xF7DB, lib.rs:45196) and
+// `GameMessage::ObjDescEvent` (0xF625, lib.rs:45280); index.html's rAF
+// drain takes the zero-copy fast path for any batch <= 256
+// (index.html:10419) and hands it to `dispatchEntityUpdate`
+// (loop.js:3641) → `_armAppearance` (loop.js:3568) → `applyAppearance`
+// in the SAME frame the packet lands.
+//
+// THE REAL COST IS THE ASSET WALK THAT FOLLOWS. `applyAppearance`
+// despawn+respawns the rig, and `AnimationCache` folds the equip's
+// modelChanges/textureChanges/palette into its key
+// (`_substitutionSuffix`, animation.js:510-530), so a NEW piece of armour
+// is always a cache MISS → a full `fetchEntityAnimationKeyframes`. That
+// export walks Setup → substituted GfxObjs → MotionTable → Animations via
+// `prefetch::ensure_walk_prefetched_keyed` (lib.rs:23026/:23070) — the
+// NON-urgent variant. `run_walk_loop` (prefetch.rs:341-438) is up to 8
+// SEQUENTIAL discovery rounds (`for _round in 0..8`, :375), each at least
+// one full RTT, and each round's `source.prefetch(&keys)` (:416) takes a
+// `fetch_sem` permit and rides `FetchPriority::Low`
+// (manifest_source.rs:737-753). Over a high-latency tunnel that is
+// several seconds of pure serialised round-trips.
+//
+// ON: pass the same `isNearPlayerLb` urgency hint the recolour path
+// already uses at :4177 down through `AnimationCache.get(opts.urgent)` to
+// the wasm fetcher's trailing `urgent` arg, so an appearance change on a
+// rig the player can actually see runs its walk on `prefetch_urgent`
+// (semaphore bypass + default browser priority) instead of behind the
+// speculative ring bakers. Also lifts the two `materialCache.preload`
+// sites that were still lane-less. No new requests and no new queue — the
+// same batches move to the lane that already exists.
+//
+// REQUIRES A WASM REBUILD: the trailing `urgent: Option<bool>` on
+// `fetchEntityAnimationKeyframes` is new (lib.rs). With a stale pkg/ the
+// extra arg is coerced away harmlessly and the flag is simply inert.
+const APPEARANCE_URGENT_ON = (() => {
+  try {
+    return (
+      new URLSearchParams(globalThis.location?.search || "").get("appearanceUrgent")
+      ?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 // Render-completeness Waves-2 P3 (2026-05-29) — CallPES (AnimationHook
 // type 19) is a RECURSIVE sub-script invocation: a PhysicsScript can call
 // another PhysicsScript, which can call another, etc. (354 retail scripts
@@ -1612,6 +1740,37 @@ const RUNTIME_OBJSCALE_ON = true;
 // cyclic script graph can't blow the stack / spawn-storm. 3 levels covers
 // every retail script (none nest beyond 2); the walker bails past it.
 const MAX_CALL_PES_DEPTH = 3;
+// PORTAL-LOOP (2026-08-04) — `?callPesLoop` (default ON; `=off` restores the
+// depth-capped behavior). The depth cap above conflates STATIC NESTING (what
+// its "none nest beyond 2" survey measured) with SELF-LOOPING: ambient scripts
+// like the portal swirl (Setup 0x020001B3 → default_script 0x3300067A:
+// 2×CreateParticle + SoundTweaked + CallPES back into the loop) re-invoke
+// themselves indefinitely. Retail `CPhysicsObj::CallPES`
+// (acclient.c:318973-319005) just SCHEDULES the sub-script — there is no depth
+// counter anywhere in the retail path — so a looping script runs for the
+// object's whole life. Our A11-S1 queue arm passed `depth + 1` per iteration,
+// so every portal's swirl died after 3 loop iterations (live-probed at
+// Holtburg: the per-portal ScriptManager settles at scriptsCompleted=4,
+// active=false, zero emitters — the "portals never/sometimes appear" bug).
+// On the queue path a CallPES is ASYNC scheduling into the owner's serialized
+// queue (fetch → addScript), never stack recursion, so the stack-safety half
+// of the cap is moot there; the spawn-storm half is covered instead by a
+// per-owner pending-script bound (`MAX_OWNER_SCRIPT_QUEUE` — a branching
+// script bomb saturates its own queue and drops, while a self-loop keeps at
+// most one pending sub-script). The legacy (`?scriptQueue=off`) walker keeps
+// the old depth accounting untouched.
+const CALL_PES_LOOP_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("callPesLoop")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+const MAX_OWNER_SCRIPT_QUEUE = 8;
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 // Track B7 (2026-06-08): spawn-time PhysicsScriptTable prewarm. Reuses the
 // Phase 49 cached facade so the first object-triggered PlayEffect on this
@@ -3457,6 +3616,19 @@ export class EntityManager {
     // push-out) and in the F3-4 sticky glue's standoff. See the flag-reader
     // block for the full decomp grounding.
     this._creatureSeparationOn = readCreatureSeparationFlag();
+    // IMMOVABLE-ENTITIES (2026-08-04) — `?immovableEntities=on` (default OFF).
+    // Bounds the separation push-out so it can never displace an entity past
+    // its authoritative pose; see the flag-reader block for the decomp/ACE
+    // grounding. Consumed in `_applyCreatureSeparation` and by the spawn-time
+    // anchor stash.
+    this._immovableEntitiesOn = readImmovableEntitiesFlag();
+    // MOVER-SIDE RESOLUTION (2026-08-04) — `?playerDepenetrate=on` (default
+    // OFF). Applies a rejected separation to the LOCAL PLAYER's rendered rig
+    // instead of to the entity. `_pendingPlayerDepen` is rebuilt from scratch
+    // each tick (never accumulated) — see the apply site in `tick`.
+    this._playerDepenetrateOn = readPlayerDepenetrateFlag();
+    /** @type {{x:number,y:number}|null} */
+    this._pendingPlayerDepen = null;
     // Cached wasm radius table: setupId -> collision-primitive radius (m,
     // UNSCALED). Refreshed on the `SEPARATION_RETRY_FRAMES` cadence only
     // while some entity is still unresolved.
@@ -3472,7 +3644,16 @@ export class EntityManager {
     // radius rather than the humanoid fallback; `clamped` counts prediction
     // clamps (defect 1); `pushed` counts contact-envelope push-outs
     // (defect 2). Read via `window.__creatureSeparationStats()`.
-    this._sepStats = { evals: 0, resolved: 0, clamped: 0, pushed: 0 };
+    // `immovable` (IMMOVABLE-ENTITIES, 2026-08-04) counts push-outs REJECTED
+    // because they would have carried the entity past its authoritative pose —
+    // i.e. the player trying to shove a door/corpse/NPC. Stays 0 with
+    // `?immovableEntities` off.
+    this._sepStats = {
+      evals: 0, resolved: 0, clamped: 0, pushed: 0, immovable: 0,
+      // MOVER-SIDE RESOLUTION: ticks where a rejected push was resolved by
+      // offsetting the PLAYER instead. Stays 0 with `?playerDepenetrate` off.
+      moverResolved: 0,
+    };
     // Diag surface for capture scripts / the 1070 eye-test. Registered here
     // (not on `__diag`) so it is reachable the moment the manager exists,
     // before the diag bundle attaches.
@@ -3927,6 +4108,9 @@ export class EntityManager {
     }
     const _spawnTraceT0 = SPAWN_TRACE ? performance.now() : 0;
     const _spawnTraceAnimStart = _spawnTraceT0;
+    // BUG-3 urgency centre — the same `(meta.landblockId ?? 0) >>> 0` the
+    // recolour fetch at the surfaces stage already measures against.
+    const _urgentLb = (meta.landblockId ?? 0) >>> 0;
     const bakeOpts = {
       modelChanges,
       textureChanges,
@@ -3935,6 +4119,16 @@ export class EntityManager {
       paletteId: paletteIdRaw,
       paletteSubsFlat: subPalettesRaw,
       placementId,
+      // BUG-3 (`?appearanceUrgent=on`, see APPEARANCE_URGENT_ON): route this
+      // bake's Setup/GfxObj/MotionTable walk through `prefetch_urgent` when the
+      // rig is one the player can see. `landblockId === 0` is the PARENTED case
+      // (EQUIP-3: ACE omits Position for anything carrying `Parent`,
+      // WorldObject_Networking.cs:358-362) — a held weapon has no pose of its
+      // own but hangs off a rig that IS near, and "trying gear on" is exactly
+      // the latency this flag targets, so treat poseless as urgent too.
+      urgent: APPEARANCE_URGENT_ON && (
+        _urgentLb === 0 || isNearPlayerLb(this.scene3d, _urgentLb)
+      ),
     };
     // P11 (2026-07-04) — the spawn-time bake used to be FATAL on reject: a
     // corpse CreateObject ships motionCommand=Dead, and a Dead-pose bake
@@ -4317,9 +4511,17 @@ export class EntityManager {
       // Cache hit / miss flows through the shared cache. Preload via
       // the bulk path so all DIDs land in one wasm round-trip.
       try {
+        // BUG-3 (`?appearanceUrgent=on`): the non-recoloured sibling of the
+        // recolour fetch above, which has carried `isNearPlayerLb` since
+        // 2026-07-10. Same lane hint, same closure shape as
+        // statics.js:1963-1969 / buildings.js:864-869.
+        const spFetchRaw = surfacePixelsFetcher(this.wasmExports);
+        const spUrgent = APPEARANCE_URGENT_ON && (
+          _urgentLb === 0 || isNearPlayerLb(this.scene3d, _urgentLb)
+        );
         await this.materialCache.preload(
           [...allSurfaceDids],
-          surfacePixelsFetcher(this.wasmExports)
+          (dids) => spFetchRaw(dids, spUrgent)
         );
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -4559,6 +4761,15 @@ export class EntityManager {
       ? (meta.z ?? 0)
       : _groundClampZ(wx, wy, meta.z ?? 0, inst._outdoorCellIdx);
     inst.setPose(wx, wy, wz, meta.qw ?? 1, meta.qx ?? 0, meta.qy ?? 0, meta.qz ?? 0);
+    // IMMOVABLE-ENTITIES (2026-08-04, `?immovableEntities=on`): stash the
+    // CREATE pose as the authoritative anchor. `_wirePos` is stashed only by
+    // the manager-level `setPose`, i.e. only from a KIND_POSITION drain — and a
+    // door, a corpse or a standing NPC may never get one, so without this the
+    // separation bound would have no anchor for exactly the objects the report
+    // is about. Overwritten by the first real KIND_POSITION.
+    if (this._immovableEntitiesOn) {
+      inst._spawnAnchor = new THREE.Vector3(wx, wy, wz);
+    }
     // #9 (2026-06-07): remember the entity's authored base scale so the
     // generic jump pose can multiply through it instead of stomping x/y/z
     // back to 1.0 (which collapsed scaled creatures mid-jump). Defaults to
@@ -7274,31 +7485,62 @@ export class EntityManager {
           ? requestIdleCallback(() => r(), { timeout: 250 })
           : setTimeout(r, 16),
       );
+    // PREWARM-WIDTH (2026-08-04) — the original driver was a `do…while` whose
+    // exit test is a 3 ms CPU budget (`performance.now() < budgetEnd`), written
+    // when the per-script cost was a synchronous wasm DAT parse. It is not any
+    // more: every iteration now `await`s a NETWORK fetch, and on a 150 ms-RTT
+    // tunnel the very first await blows a 3 ms budget, so the `do…while` ran
+    // EXACTLY ONE script per slice and then paid `yieldOnce()` — a
+    // `requestIdleCallback(timeout: 250)`. Effective rate: one script per
+    // (RTT + up to 250 ms), i.e. ~0.4 s each, so a canonical set of several
+    // dozen scripts took tens of seconds to warm and was still cold when the
+    // player actually cast. That is the "prewarm exists but the first cast is
+    // still cold" gap.
+    //
+    // Fix: keep the yield-between-slices shape (it is what keeps the wasm
+    // PARSES from accumulating into one frame stall — still a real concern),
+    // but make each slice a BOUNDED PARALLEL WAVE so the RTTs overlap instead
+    // of stacking. Per slice: one wave for the scripts, then one wave for every
+    // emitter DID discovered across the whole slice. Cost per slice is ~2 RTT
+    // regardless of width, so the whole canonical set warms in
+    // ceil(N/WIDTH) × (2·RTT + idle) instead of N × (RTT + idle).
+    //
+    // STAYS ON THE NORMAL LANE ON PURPOSE — no `urgent` argument here. This is
+    // speculative background work; letting it bypass the fetch semaphore would
+    // put it in direct contention with the player's actual in-flight cast,
+    // which is the exact starvation the urgent lane exists to prevent.
+    const PREWARM_FETCH_WIDTH = 8;
     let i = 0;
     while (i < dids.length) {
-      // Tiny per-slice budget: warm a couple of scripts, then yield so the
-      // synchronous wasm DAT parses never accumulate into a frame stall.
-      const budgetEnd =
-        (typeof performance !== "undefined" ? performance.now() : 0) + 3;
-      do {
-        const scriptDid = dids[i++];
-        let ps;
-        try { ps = await wasm.fetchPhysicsScript(scriptDid); } catch (_) { continue; }
-        if (!ps || typeof ps.takeEntries !== "function" || !canFetchEmitter) continue;
-        let entries;
-        try { entries = ps.takeEntries(); } catch (_) { continue; }
-        if (!Array.isArray(entries)) continue;
-        for (const e of entries) {
-          if (e.hookType !== 13 && e.hookType !== 26) continue;
-          const emitterDid = (e.createParticleEmitterId >>> 0);
-          if (emitterDid !== 0) {
-            try { await wasm.fetchParticleEmitter(emitterDid); } catch (_) { /* warm-only */ }
+      const slice = dids.slice(i, i + PREWARM_FETCH_WIDTH);
+      i += slice.length;
+      const scripts = await Promise.all(
+        slice.map((did) =>
+          Promise.resolve(wasm.fetchPhysicsScript(did)).catch(() => null)),
+      );
+      if (canFetchEmitter) {
+        // Collect this slice's emitter DIDs, then fire them as ONE wave.
+        // Deduped: unlike the cast path these handles are discarded (warm-only,
+        // the DAT/shard cache is the product), so sharing a resolution is free.
+        const emitterDids = new Set();
+        for (const ps of scripts) {
+          if (!ps || typeof ps.takeEntries !== "function") continue;
+          let entries;
+          try { entries = ps.takeEntries(); } catch (_) { continue; }
+          if (!Array.isArray(entries)) continue;
+          for (const e of entries) {
+            if (e.hookType !== 13 && e.hookType !== 26) continue;
+            const emitterDid = (e.createParticleEmitterId >>> 0);
+            if (emitterDid !== 0) emitterDids.add(emitterDid);
           }
         }
-      } while (
-        i < dids.length &&
-        (typeof performance !== "undefined" ? performance.now() : 0) < budgetEnd
-      );
+        if (emitterDids.size > 0) {
+          await Promise.all(
+            [...emitterDids].map((d) =>
+              Promise.resolve(wasm.fetchParticleEmitter(d)).catch(() => null)),
+          );
+        }
+      }
       if (i < dids.length) await yieldOnce();
     }
   }
@@ -7530,10 +7772,15 @@ export class EntityManager {
    * `resolved` counts floors sized from a REAL resident SetupModel collision
    * radius rather than the humanoid fallback (it is what proves the wasm
    * radius table is actually reaching JS). `clamped` / `pushed` count the two
-   * corrections firing. `radiiCached` is the resident table size.
+   * corrections firing. `immovable` counts push-outs REJECTED by the
+   * IMMOVABLE-ENTITIES anchor bound (`?immovableEntities=on`) — nonzero the
+   * moment you walk into a door / corpse / standing NPC, and the proof the
+   * player is no longer displacing it. `radiiCached` is the resident table
+   * size.
    *
    * @returns {{evals:number, resolved:number, clamped:number, pushed:number,
-   *            radiiCached:number, playerRadius:number, enabled:boolean}}
+   *            immovable:number, radiiCached:number, playerRadius:number,
+   *            enabled:boolean}}
    */
   creatureSeparationStats() {
     return {
@@ -7541,6 +7788,8 @@ export class EntityManager {
       radiiCached: this._separationRadii.size,
       playerRadius: this._separationPlayerRadius,
       enabled: !!this._creatureSeparationOn,
+      immovableEnabled: !!this._immovableEntitiesOn,
+      playerDepenetrateEnabled: !!this._playerDepenetrateOn,
     };
   }
 
@@ -7629,12 +7878,27 @@ export class EntityManager {
    * velScale gait sampler reads the frame's position delta, so the gait
    * reflects what is actually drawn.
    *
+   * IMMOVABLE-ENTITIES (2026-08-04, `?immovableEntities=on`): both corrections
+   * run through `pushOut`, which under that flag refuses any move that would
+   * carry the pose farther from the entity's authoritative anchor — the fix
+   * for "the player shoves doors/NPCs/corpses around". See the
+   * `readImmovableEntitiesFlag` block for the retail/ACE grounding.
+   *
    * @param {object} inst  the entity instance (already known non-local)
    * @param {{x:number,y:number,z:number}} pp  local player world pose
    */
   _applyCreatureSeparation(inst, pp) {
     const floor = this._separationFloor(inst);
     if (!this._creatureSeparationOn || !(floor > 0)) return;
+
+    // IMMOVABLE-ENTITIES (2026-08-04, `?immovableEntities=on`): the entity's
+    // authoritative anchor — the last server pose we hold. `_wirePos` is
+    // stashed only from a KIND_POSITION drain, so a door / corpse / standing
+    // NPC that never moves falls back to its CREATE pose (`_spawnAnchor`).
+    // `null` when the flag is off, which leaves `pushOut` byte-identical.
+    const anchor = this._immovableEntitiesOn
+      ? (inst._wirePos || inst._spawnAnchor || null)
+      : null;
 
     // Planar push of `v` (an {x,y} carrier) out to `floor` from the player.
     // Returns true when it moved. Dead-centre overlap has no axis to push
@@ -7655,9 +7919,48 @@ export class EntityManager {
         ux = Math.cos(h);
         uy = Math.sin(h);
       }
+      const nx = pp.x + ux * floor;
+      const ny = pp.y + uy * floor;
+      // IMMOVABLE-ENTITIES: a world object's position is the SERVER's. Retail
+      // stops/slides the MOVER and never writes the collidee
+      // (`CPhysicsObj::handle_all_collisions` acclient.c:321808 touches only
+      // `this->m_velocityVector`; `track_object_collision` :321217 /
+      // `report_object_collision` :320228 only record + notify. ACE
+      // `PhysicsObj.FindObjCollisions` `PhysicsObj.cs:381` likewise returns a
+      // state for the mover). So this correction may only ever REDUCE our own
+      // prediction error: reject any push that would carry the pose FARTHER
+      // from the anchor than it already is. A standing door/corpse/NPC renders
+      // at its anchor (distance 0) ⇒ every push is rejected ⇒ immovable. A
+      // mob whose dead-reckon overshot past its wire pose and into the player
+      // still gets pushed back out, because that shortens the anchor distance.
+      if (anchor) {
+        const ax = v.x - anchor.x, ay = v.y - anchor.y;
+        const bx = nx - anchor.x, by = ny - anchor.y;
+        if (bx * bx + by * by > ax * ax + ay * ay) {
+          this._sepStats.immovable++;
+          // MOVER-SIDE RESOLUTION (`?playerDepenetrate=on`): the target is
+          // authoritative where it stands, so retail's answer is to move the
+          // MOVER. Record what the PLAYER would have to move: the entity sits
+          // at `pp + u·d` (u = player→entity unit, d < floor), so the player
+          // must travel `u·(d − floor)` — i.e. AWAY from the entity, by
+          // exactly the shortfall. Keep the LARGEST demand this tick (a plain
+          // max, not a sum: two entities rarely demand the same direction and
+          // summing would over-correct); `tick` applies + clears it.
+          if (this._playerDepenetrateOn) {
+            const need = d - floor; // negative
+            const cx = ux * need;
+            const cy = uy * need;
+            const prev = this._pendingPlayerDepen;
+            if (!prev || cx * cx + cy * cy > prev.x * prev.x + prev.y * prev.y) {
+              this._pendingPlayerDepen = { x: cx, y: cy };
+            }
+          }
+          return false;
+        }
+      }
       inst._lastSepBearing = Math.atan2(uy, ux);
-      v.x = pp.x + ux * floor;
-      v.y = pp.y + uy * floor;
+      v.x = nx;
+      v.y = ny;
       return true;
     };
 
@@ -10727,6 +11030,24 @@ export class EntityManager {
         textureChanges: newMeta.textureChanges ?? new Uint32Array(0),
         paletteId: (newMeta.paletteId ?? 0) >>> 0,
         paletteSubsFlat: newMeta.subPalettes ?? new Uint32Array(0),
+        // BUG-3 FOLLOW-UP (2026-08-04) — THE armour miss. `?appearanceUrgent`
+        // first landed only on `_spawnImpl`'s `bakeOpts`, but hot-swap is
+        // DEFAULT-ON (`this._hotSwapAppearance = true`, :3495) so a normal
+        // equip takes THIS branch and never reached the urgent lane — only the
+        // topology-mismatch/throw FALLBACK respawns did, which is why the fix
+        // read as "fast but not instant". This `animationCache.get` is the
+        // single dominant await of a wear event: the equip's
+        // modelChanges/textureChanges change the cache key
+        // (`animation.js _substitutionSuffix`), so it is ALWAYS a miss and
+        // always pays a full `fetchEntityAnimationKeyframes` walk. Unlike the
+        // cast chain, this walk is genuinely multi-round (its closure touches
+        // `triangulate_setup_model_per_part` + `try_resolve_cycle_frames`, so
+        // it discovers GfxObjs/Animations/Surfaces across rounds), which is
+        // exactly the case `prefetch.rs:375`'s `for _round in 0..8` serialises.
+        urgent: APPEARANCE_URGENT_ON && (
+          ((newMeta.landblockId ?? 0) >>> 0) === 0
+          || isNearPlayerLb(this.scene3d, (newMeta.landblockId ?? 0) >>> 0)
+        ),
       }
     );
 
@@ -10831,7 +11152,17 @@ export class EntityManager {
       }
     } else if (allSurfaceDids.size > 0 && this.materialCache) {
       try {
-        await this.materialCache.preload([...allSurfaceDids], surfacePixelsFetcher(this.wasmExports));
+        // BUG-3 (`?appearanceUrgent=on`): match the recoloured arm above,
+        // which already passes `isNearPlayerLb` as its urgency hint.
+        const spFetchRaw = surfacePixelsFetcher(this.wasmExports);
+        const hsLb = (newMeta.landblockId ?? 0) >>> 0;
+        const hsUrgent = APPEARANCE_URGENT_ON && (
+          hsLb === 0 || isNearPlayerLb(this.scene3d, hsLb)
+        );
+        await this.materialCache.preload(
+          [...allSurfaceDids],
+          (dids) => spFetchRaw(dids, hsUrgent)
+        );
       } catch (e) {
         try { window.__diag?.assets?.onMaterialError?.({ guid, dids: allSurfaceDids, error: e, source: "hot-swap" }); } catch (_) {}
       }
@@ -13274,6 +13605,30 @@ export class EntityManager {
         this._executeScriptHook(gKey, rig, pesId, entry, depth, defaultPartIndex),
       );
     }
+    // PORTAL-LOOP (2026-08-04): the spawn-storm bound that replaces per-
+    // iteration depth accumulation (`?callPesLoop`, default ON). A CallPES
+    // sub-script (`startNow` is a number — top-level attaches pass undefined)
+    // that would push this owner's PENDING queue past the cap is dropped: a
+    // branching script bomb saturates its own serialized queue and stops
+    // growing, while a well-formed self-loop keeps at most one pending
+    // sub-script and never comes near the cap.
+    if (
+      CALL_PES_LOOP_ON &&
+      typeof startNow === "number" &&
+      Array.isArray(mgr._queue) &&
+      mgr._queue.length >= MAX_OWNER_SCRIPT_QUEUE
+    ) {
+      if (!this._callPesQueueCapWarned) {
+        this._callPesQueueCapWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/PORTAL-LOOP] owner 0x${gKey.toString(16)} CallPES sub-script ` +
+          `0x${(pesId >>> 0).toString(16)} dropped — pending queue at cap ` +
+          `(${MAX_OWNER_SCRIPT_QUEUE}); branching script graph?`
+        );
+      }
+      return { ok: false, hookCount: 0, emitterCount: 0, soundHookCount: 0 };
+    }
     const decoded = [];
     for (const e of entries) decoded.push(this._decodePhysicsScriptHookEntry(e));
     // A11-S1 fixup: a CallPES sub-script supplies its own absolute t=0
@@ -13332,7 +13687,14 @@ export class EntityManager {
       // CallPES — queue the sub-script on the SAME owner (serialized).
       const callDid = hook.callPesDid >>> 0;
       if (callDid === 0) return;
-      if (depth >= MAX_CALL_PES_DEPTH) return;
+      // PORTAL-LOOP (2026-08-04): on the queue path a CallPES iteration is
+      // async scheduling, not stack recursion — retail has no depth counter
+      // (acclient.c:318973-319005), and accumulating one here killed every
+      // self-looping ambient script (portal swirl) after 3 iterations. With
+      // `?callPesLoop` ON (default) depth passes through UNCHANGED and the
+      // spawn-storm guard is the per-owner queue bound in
+      // `_queuePhysicsScript`; `=off` restores the depth-capped legacy arm.
+      if (!CALL_PES_LOOP_ON && depth >= MAX_CALL_PES_DEPTH) return;
       // A11-S1 fixup (2026-06-11): apply the retail CallPES rand-pause that the
       // legacy off-path uses (entities.js:8046-8048) and the original queue path
       // dropped. Retail `CPhysicsObj::CallPES` (acclient.c:318973-319005)
@@ -13352,7 +13714,10 @@ export class EntityManager {
         .then((sub) => {
           if (!this.entityMap.has(gKey)) return;
           const subEntries = sub.takeEntries();
-          this._queuePhysicsScript(gKey, rig, callDid, subEntries, depth + 1, defaultPartIndex, subStart);
+          // PORTAL-LOOP: loop iterations do not accumulate depth (see the
+          // guard above); the legacy `=off` arm keeps the old accounting.
+          const subDepth = CALL_PES_LOOP_ON ? depth : depth + 1;
+          this._queuePhysicsScript(gKey, rig, callDid, subEntries, subDepth, defaultPartIndex, subStart);
         })
         .catch(() => {});
       return;
@@ -14588,6 +14953,48 @@ export class EntityManager {
           }
         }
       }
+    }
+    // === MOVER-SIDE RESOLUTION (2026-08-04, `?playerDepenetrate=on`) ===
+    // Retail's rule, applied the retail way round: when an overlap cannot be
+    // resolved by moving the TARGET (its position is the server's — see the
+    // IMMOVABLE-ENTITIES block), it must be resolved by moving the MOVER
+    // (`CPhysicsObj::handle_all_collisions` acclient.c:321808 acts only on
+    // `this`). `_applyCreatureSeparation` records the correction each rejected
+    // push would have needed; here it is applied to the LOCAL PLAYER's rendered
+    // rig instead of to the entity.
+    //
+    // DEFAULT-OFF and deliberately a BACKSTOP, not the primary fix: the primary
+    // fix is that the SIM stops the mover before the overlap exists (the COL-03
+    // `gfx_id` repair + the sim/render radius parity work in
+    // `WorldState::entity_physics_bsp` / `entity_collision_radius`). What the
+    // sim structurally cannot see is an entity RENDERED away from its wire pose
+    // (dead-reckon lead / sticky glue — CREATURE-SEPARATION measured 1.019 m of
+    // it), and that residual is what this covers.
+    //
+    // RENDER-ONLY and NON-ACCUMULATING: it writes the avatar rig's transform,
+    // never the wasm integrator pose or `predictedPlayerPos`, and it is
+    // recomputed from scratch every tick (never added to itself), so it cannot
+    // drift or fight the integrator across frames — the dual-predictor failure
+    // mode this codebase keeps re-learning. Capped at
+    // `PLAYER_DEPENETRATE_MAX_M` so a bad radius can never fling the avatar.
+    if (this._playerDepenetrateOn) {
+      const dep = this._pendingPlayerDepen;
+      if (dep && (dep.x !== 0 || dep.y !== 0)) {
+        try {
+          const lpg = typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function"
+            ? window.getLocalPlayerGuid()
+            : null;
+          const li = lpg != null ? this.entityMap.get(lpg >>> 0) : null;
+          if (li && li.root) {
+            const mag = Math.hypot(dep.x, dep.y);
+            const s = mag > PLAYER_DEPENETRATE_MAX_M ? PLAYER_DEPENETRATE_MAX_M / mag : 1;
+            li.root.position.x += dep.x * s;
+            li.root.position.y += dep.y * s;
+            this._sepStats.moverResolved++;
+          }
+        } catch (_) { /* pre-spawn / no local rig — nothing to resolve */ }
+      }
+      this._pendingPlayerDepen = null;
     }
     // T9 (2026-05-28) — dynamic-LOD recheck (throttled). Re-queries each
     // entity's degrade band at the live camera distance and respawns it when

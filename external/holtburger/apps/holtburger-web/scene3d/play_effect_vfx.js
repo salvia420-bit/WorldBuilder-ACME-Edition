@@ -1730,18 +1730,23 @@ const _realVfxStats = {
  * @param {number} scriptId
  * @param {number} speed
  */
-function _tryResolveRealVfxBounded(targetGuid, scriptId, speed) {
+function _tryResolveRealVfxBounded(targetGuid, scriptId, speed, t0) {
   const DEADLINE_MS = 300;
   let timer = null;
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => resolve("timeout"), DEADLINE_MS);
   });
   Promise.race([
-    _tryResolveRealVfx(targetGuid, scriptId, speed),
+    _tryResolveRealVfx(targetGuid, scriptId, speed, t0),
     deadline,
   ]).then((outcome) => {
     if (outcome === "timeout") {
       _realVfxStats.timedOut += 1;
+      // Telemetry only — the resolver is NOT cancelled and still attaches
+      // whenever it lands. Expect a later `attach` line after this.
+      _castLat("deadline", t0, `${DEADLINE_MS}ms elapsed (not a cancel)`);
+    } else {
+      _castLat("resolved", t0, `real=${outcome === true}`);
     }
   }).catch(() => {
     // Defensive: `_tryResolveRealVfx` contracts to never reject. The
@@ -1797,8 +1802,12 @@ function _isLiveInstance(em, guid, inst) {
  * @param {number} speed — picker's mod-weight; per acclient.c:336552
  * @returns {Promise<boolean>}
  */
-async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
+async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0) {
   _realVfxStats.attempts += 1;
+  // `?castLat=on` stamp. Defaults to "now" so the exported
+  // `tryResolveRealVfx` and any older caller still produce coherent (if
+  // resolver-relative) timings.
+  const t0 = (typeof _t0 === "number") ? _t0 : _castLatNow();
   // 1. Resolve the entity instance — we need the rig (.root) to anchor
   //    emitters to AND the EntityManager to access its
   //    `_worldParticleManager` + `wasmExports`.
@@ -1840,8 +1849,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   }
   if (!table || !table.scripts) {
     _realVfxStats.missTableFetch += 1;
+    _castLat("miss", t0, "reason=tableFetch");
     return false;
   }
+  _castLat("table", t0, `did=0x${tableDid.toString(16)}`);
 
   // 4. Index into scripts by stringified PScriptType (JSON object keys
   //    are strings). `scripts[scriptIdStr]` is the entry list for THIS
@@ -1849,6 +1860,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   const entries = table.scripts[String(scriptId >>> 0)];
   if (!Array.isArray(entries) || entries.length === 0) {
     _realVfxStats.missNoScriptId += 1;
+    // This entity's PhysicsScriptTable has no entry for the PlayScript ACE
+    // sent, so there is no real VFX to resolve — placeholder is final. Common
+    // and legitimate; it is NOT a latency problem.
+    _castLat("miss", t0, `reason=noScriptIdInTable script=${scriptId >>> 0} table=0x${tableDid.toString(16)}`);
     return false;
   }
 
@@ -1859,6 +1874,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   const picked = pickScriptEntry(entries, speed);
   if (!picked || (picked.scriptDid >>> 0) === 0) {
     _realVfxStats.missNoScriptId += 1;
+    _castLat("miss", t0, `reason=noScriptDidPicked script=${scriptId >>> 0} entries=${entries.length} speed=${speed}`);
     return false;
   }
   const pesId = picked.scriptDid >>> 0;
@@ -1871,7 +1887,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   }
   let ps;
   try {
-    ps = await wasmExports.fetchPhysicsScript(pesId);
+    ps = await wasmExports.fetchPhysicsScript(pesId, CAST_VFX_URGENT_ON);
   } catch (err) {
     _realVfxStats.missPhysicsScriptFetch += 1;
     // eslint-disable-next-line no-console
@@ -1879,8 +1895,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
       `[play-effect-vfx/real] fetchPhysicsScript(0x${pesId.toString(16)}) failed:`,
       err,
     );
+    _castLat("miss", t0, "reason=physicsScriptFetch");
     return false;
   }
+  _castLat("script", t0, `pes=0x${pesId.toString(16)}`);
 
   // 7. Iterate hooks; only CreateParticle (hook_type 13) and
   //    CreateBlockingParticle (hook_type 26) spawn particles. Audio hooks
@@ -1942,6 +1960,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   }
   if (particleHookCount === 0) {
     _realVfxStats.missNoCreateParticleHook += 1;
+    _castLat("miss", t0, "reason=noCreateParticleHook");
     return false;
   }
 
@@ -1969,8 +1988,27 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   const wm = em._worldParticleManager;
   if (!wm) {
     _realVfxStats.missNoParticleManager += 1;
+    // NOTE: this is not "slow", it is "never" — with no manager the resolver
+    // gives up and the placeholder is the ONLY visual this cue ever gets.
+    _castLat("manager", t0, "MISSING — real effect will NOT resolve for this cue");
+    // SELF-HEAL (2026-08-04). Track B7 deliberately stopped BUILDING the
+    // manager here (the dynamic import + factory wiring was one of the slow
+    // steps on the cast frame) and left creation to the H2 entity-spawn chain /
+    // `_prewarmPhysicsScriptTable`. But those only fire for an entity whose
+    // weenie carries a non-zero `PhysicsScriptTableDid` (entities.js:5372) — so
+    // in a neighbourhood where nothing nearby has one, the manager is never
+    // built and EVERY cast silently degrades to placeholder-only, forever. That
+    // is indistinguishable to the player from "the real effect is very late",
+    // which is exactly the symptom under investigation.
+    //
+    // Fire-and-forget the build so the NEXT cue resolves. This cue still
+    // returns false (unchanged — we do not move the build onto the critical
+    // path, which is the whole point of B7); `_ensureWorldParticleManager` is
+    // idempotent and returns the existing manager when one exists.
+    try { em._ensureWorldParticleManager?.(inst.root)?.catch?.(() => {}); } catch (_) {}
     return false;
   }
+  _castLat("manager", t0, "ok");
 
   // 9. For each CreateParticle / CreateBlockingParticle hook, fetch the
   //    ParticleEmitter (0x32) and add it to the ParticleManager parented
@@ -2011,21 +2049,79 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     // under (the target entity), for destroySome-routed evict/reap.
     ownerKey: targetGuid >>> 0,
   };
+  // CAST-BATCH (2026-08-04, `?castVfxBatch=off` to revert) — THE cast-path
+  // serialization. This loop used to `await fetchParticleEmitter(...)` INSIDE
+  // the `for...of`, so a script with N CreateParticle hooks paid N SEQUENTIAL
+  // round-trips stacked on top of the two the chain already owes
+  // (`fetchPhysicsScriptTable` + `fetchPhysicsScript`) — i.e. (2+N) × RTT
+  // before the first emitter can even be scheduled.
+  //
+  // NOTE, against the standing theory: `prefetch.rs::run_walk_loop`'s 8-round
+  // cap is NOT what bites on this chain. All three cast exports pass an EMPTY
+  // walk closure (`ensure_walk_prefetched(&source, &[key], |_| {})`,
+  // lib.rs:53585 / :53620 / the script-table twin), so `discovery_round`
+  // returns no misses and the loop breaks at `prefetch.rs:379-381` after
+  // exactly ONE round; and within a round `prefetch_impl` already fans out via
+  // `futures::future::join_all` (`manifest_source.rs:779`). The rounds were
+  // never the problem here — the JS `await`-per-hook was.
+  //
+  // Fix: resolve every hook's emitter in ONE parallel wave, then run the
+  // (now fully synchronous) scheduling loop over the results. Deliberately NOT
+  // deduped by DID: the current code fetches one `emitterInfo` object per hook
+  // occurrence and hands each to `addEmitter`, so collapsing duplicates would
+  // change wasm-object ownership (two hooks would share one handle). A repeat
+  // DID hits the warm shard/decode cache anyway — same object count, same
+  // lifetimes, zero extra HTTP, N round-trips → 1.
+  const _particleHooks = [];
   for (const e of entriesJs) {
     if (e.hookType !== 13 && e.hookType !== 26) continue;
+    if ((e.createParticleEmitterId >>> 0) === 0) continue;
+    _particleHooks.push(e);
+  }
+  // `async` wrapper (not `Promise.resolve(...).catch`): a SYNCHRONOUS throw out
+  // of the wasm-bindgen shim — bad arg marshalling, a wasm panic — happens
+  // BEFORE `Promise.resolve` is reached, so it would escape the `.catch` and
+  // reject the whole `Promise.all`, losing every sibling emitter. Inside an
+  // `async` arrow both sync throws and rejections land in the same try/catch,
+  // preserving the per-hook `continue` isolation the serial loop had.
+  const _emitterInfos = CAST_VFX_BATCH_ON
+    ? await Promise.all(_particleHooks.map(async (e) => {
+        const did = e.createParticleEmitterId >>> 0;
+        try {
+          return await wasmExports.fetchParticleEmitter(did, CAST_VFX_URGENT_ON);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[play-effect-vfx/real] fetchParticleEmitter(0x${did.toString(16)}) failed:`,
+            err,
+          );
+          return null;
+        }
+      }))
+    : null;
+  if (CAST_VFX_BATCH_ON) {
+    _castLat("emitters", t0, `n=${_particleHooks.length} lane=batch`);
+  }
+  for (let _hi = 0; _hi < _particleHooks.length; _hi += 1) {
+    const e = _particleHooks[_hi];
     const emitterDid = (e.createParticleEmitterId >>> 0);
-    if (emitterDid === 0) continue;
     let emitterInfo;
-    try {
-      emitterInfo = await wasmExports.fetchParticleEmitter(emitterDid);
-    } catch (err) {
-      _realVfxStats.missEmitterFetch += 1;
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[play-effect-vfx/real] fetchParticleEmitter(0x${emitterDid.toString(16)}) failed:`,
-        err,
-      );
-      continue;
+    if (CAST_VFX_BATCH_ON) {
+      emitterInfo = _emitterInfos[_hi];
+      if (!emitterInfo) { _realVfxStats.missEmitterFetch += 1; continue; }
+    } else {
+      // Legacy serial lane (`?castVfxBatch=off`) — byte-identical to pre-fix.
+      try {
+        emitterInfo = await wasmExports.fetchParticleEmitter(emitterDid, CAST_VFX_URGENT_ON);
+      } catch (err) {
+        _realVfxStats.missEmitterFetch += 1;
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[play-effect-vfx/real] fetchParticleEmitter(0x${emitterDid.toString(16)}) failed:`,
+          err,
+        );
+        continue;
+      }
     }
 
     // CreateParticleHook offset frame — same shape the H2 chain walker
@@ -2058,6 +2154,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     const startDelayMs = Math.max(0, (+e.startTime || 0) * 1000);
     if (startDelayMs > maxStartTimeMs) maxStartTimeMs = startDelayMs;
     pendingSpawnCount += 1;
+    // Retail StartTime is a DELIBERATE delay (ScriptManager::AddScript
+    // schedules each hook at cur_time + start_time). If `attach` lands far
+    // after `emitters`, check this number before blaming the network.
+    _castLat("sched", t0, `emitter=0x${emitterDid.toString(16)} startTime=${startDelayMs.toFixed(0)}ms`);
     setTimeout(() => {
       // Wave-1 review (RP6 cap): if this group was FIFO-evicted under
       // concurrent-emitter cap pressure during the StartTime delay, do
@@ -2088,6 +2188,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
         ? ownerRegistry.addEmitter(targetGuid >>> 0, wm, req)
         : wm.addEmitter(req))
         .then((emitterId) => {
+          _castLat("attach", t0, `emitter=0x${emitterDid.toString(16)} id=${emitterId}`);
           if (emitterId !== 0) {
             // Wave-1 review: a despawn that raced this addEmitter resolve
             // already tore down (and dropped) this guid's per-emitter
@@ -2292,6 +2393,136 @@ const CAST_VFX_DEDUP_ON = (() => {
   }
 })();
 const _CAST_VFX_DEDUP_MS = 2000;
+// ─────────────────────────────────────────────────────────────────
+// BUG-3 (2026-08-04) — `?castVfxUrgent=on` (DEFAULT OFF, strict `=== "on"`
+// opt-in; an absent param is OFF — see docs/url-flags.md on the `!== "off"`
+// footgun).
+//
+// SYMPTOM: a spell landing on you takes seconds to look right.
+//
+// NOT A POLL — the trigger is fully message-driven and already instant:
+// wire `PlayEffect` (0xF755) → ClientEvent kind=30 (index.html:8937) →
+// `events.emit("playEffect")` → `_onPlayEffect` (:2529), which paints the
+// SYNCHRONOUS placeholder burst in the same frame. What is late is the
+// UPGRADE to the real emitters: `_tryResolveRealVfxBounded` (:1717) races
+// `_tryResolveRealVfx` against a 300 ms deadline, and that resolver's DAT
+// chain (`fetchPhysicsScript` → `fetchParticleEmitter`) runs
+// `prefetch::ensure_walk_prefetched` — the NON-urgent variant, so each fetch
+// takes a `fetch_sem` permit and rides `FetchPriority::Low`
+// (manifest_source.rs:737-753) behind the speculative ring bakers. A COLD
+// spell script therefore blows the 300 ms deadline (visible as
+// `_realVfxStats.timedOut`) and the player is left looking at the
+// placeholder — which reads exactly like "the effect took seconds".
+//
+// ON: pass `urgent` to those two exports (new trailing `Option<bool>` in
+// lib.rs) so a wire-driven cast bypasses the semaphore and keeps default
+// browser fetch priority. Scope is deliberately ONLY this wire one-shot
+// path — ambient scenery/spawn emitters (statics.js, entities.js H2 walker)
+// stay on the normal lane, since they are speculative, not player-blocking.
+//
+// REQUIRES A WASM REBUILD (new trailing arg). With a stale pkg/ the extra
+// arg is coerced away and the flag is simply inert.
+const CAST_VFX_URGENT_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search).get("castVfxUrgent")?.toLowerCase() !== "off";
+  } catch (_) {
+    return false;
+  }
+})();
+// ─────────────────────────────────────────────────────────────────
+// CAST-BATCH (2026-08-04) — `?castVfxBatch=off` reverts. DEFAULT-ON: this is a
+// pure SERIALIZATION change with identical semantics — same fetch count, one
+// wasm emitter object per hook (not deduped), same lifetimes. It only moves N
+// per-hook `await fetchParticleEmitter` calls out of the `for...of` in
+// `_tryResolveRealVfx` into a single `Promise.all` wave, turning the cast
+// chain's (2+N)×RTT into 3×RTT. See the long note at that loop for why
+// `run_walk_loop`'s 8-round cap is NOT the bottleneck on this chain.
+const CAST_VFX_BATCH_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("castVfxBatch")?.toLowerCase() !== "off";
+  } catch (_) {
+    return true;
+  }
+})();
+// ─────────────────────────────────────────────────────────────────
+// `?castPlaceholder=off` — DEFAULT-ON (current behaviour preserved, per the
+// 2026-08-04 brief). User ruling: the synthetic burst is "a vibe coded effect"
+// and unnecessary now that the real chain resolves fast.
+//
+// SCOPE IS DELIBERATELY NARROW: this gates ONLY the placeholder fired on the
+// TABLE-BEARING branch of `_onPlayEffect` (the `tableDid !== 0` arm), i.e. the
+// one that exists purely to cover latency until `_tryResolveRealVfxBounded`
+// upgrades it. The no-table arm keeps its placeholder UNCONDITIONALLY — an
+// entity whose `PhysicsScriptTableDid` is 0 has no real-VFX counterpart to
+// resolve to, so gating that arm would silently delete every projectile
+// Launch/Explode and gameplay cue on the majority of weenies. Turning this off
+// therefore means "show the real effect or nothing", never "show nothing".
+const CAST_PLACEHOLDER_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("castPlaceholder")?.toLowerCase() !== "off";
+  } catch (_) {
+    return true;
+  }
+})();
+// ─────────────────────────────────────────────────────────────────
+// `?castLat=on` — DEFAULT OFF, strict `=== "on"` opt-in. Pure instrumentation:
+// one console line per stage of the cast→visual pipeline, each stamped with ms
+// SINCE THE WIRE MESSAGE ARRIVED, so a single paste localises which stage is
+// slow on a real high-latency link instead of us guessing from a local box.
+//
+// Lines (all prefixed `[castlat]`, all `t=` in ms since this cue's t0):
+//   msg      — a cast-related wire message reached JS (kind=30 playEffect,
+//              kind=8 playerStatsUpdated, kind=46 entityEnchantmentsUpdated)
+//   placeholder — the synthetic burst was painted (t≈0 expected)
+//   table / script / emitters — each resolver DAT stage completed
+//   manager  — world ParticleManager present? (`missing` here means the REAL
+//              effect never resolves at all for this cue — see step 8)
+//   sched    — a hook was scheduled, with its retail StartTime delay
+//   attach   — an emitter actually landed in the scene (THE visual moment)
+//   miss     — the resolver gave up, with the reason
+//   deadline — the 300 ms race elapsed (telemetry only; NOT a cancel)
+//
+// Read it as: if `attach` is late but `emitters` is early, the cost is
+// addEmitter/StartTime, not the network. If `manager missing` appears, the
+// real effect is not merely late — it is never coming for that cue.
+const CAST_LAT_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search).get("castLat")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+const _castLatNow = () =>
+  (typeof performance !== "undefined" && performance.now)
+    ? performance.now()
+    : Date.now();
+/**
+ * Emit one `[castlat]` line. No-op (and allocation-free at the call site is
+ * not attempted — the flag is off in every shipping session) unless
+ * `?castLat=on`.
+ * @param {string} stage
+ * @param {number} t0 — `_castLatNow()` stamp captured when the cue arrived
+ * @param {string} [extra]
+ */
+function _castLat(stage, t0, extra) {
+  if (!CAST_LAT_ON) return;
+  try {
+    const dt = (_castLatNow() - t0).toFixed(0);
+    // eslint-disable-next-line no-console
+    console.log(`[castlat] ${stage} t=${dt}ms${extra ? ` ${extra}` : ""}`);
+  } catch (_) { /* diag must never break the cue */ }
+}
+/** Is this guid the local player? Used only to tag `[castlat]` lines. */
+function _castIsLocalPlayer(guid) {
+  try {
+    const lpg = window.getLocalPlayerGuid?.();
+    return lpg !== null && lpg !== undefined && (lpg >>> 0) === (guid >>> 0);
+  } catch (_) { return false; }
+}
 // WS09 (2026-07-12) — `?playEffectSound=on` (DEFAULT OFF). The PlayEffect
 // resolver spawned particle hooks (13/26) ONLY, dropping the Sound(1)/
 // SoundTable(2)/SoundTweaked(21) hooks carried by wire PlayScripts — so fizzle
@@ -2527,6 +2758,7 @@ export function drainPendingPlayEffects(em, guid) {
  * @param {CustomEvent<{ targetGuid: number, scriptId: number, speed: number }>} evt
  */
 function _onPlayEffect(evt) {
+  const _t0 = _castLatNow();
   const detail = evt?.detail ?? {};
   const targetGuid = (detail.targetGuid >>> 0) || 0;
   const scriptId = (detail.scriptId >>> 0) || 0;
@@ -2535,6 +2767,12 @@ function _onPlayEffect(evt) {
   // Default to 1.0 on the wire (the most common ACE broadcast).
   const speed = Number.isFinite(detail.speed) ? detail.speed : 1.0;
 
+  _castLat(
+    "msg",
+    _t0,
+    `kind=30 playEffect script=0x${scriptId.toString(16)} target=0x${(targetGuid >>> 0).toString(16)}`
+    + `${_castIsLocalPlayer(targetGuid) ? " SELF" : ""}`,
+  );
   if (targetGuid === 0) {
     // eslint-disable-next-line no-console
     console.debug("[play-effect-vfx] skipped: targetGuid=0");
@@ -2654,18 +2892,32 @@ function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed) {
     // then letting the resolver upgrade/replace it with real emitters
     // when the chain lands (the real emitters are additive, and the
     // placeholder self-expires on its own short lifetime).
-    _runPlaceholderDispatch(targetGuid, scriptId);
+    // `?castPlaceholder=off` (2026-08-04) — user ruling: skip the synthetic
+    // burst on THIS arm and show only the real emitters when they land. Safe
+    // to skip precisely because this arm has a real-VFX counterpart; the
+    // no-table arm below is NOT gated. See CAST_PLACEHOLDER_ON.
+    if (CAST_PLACEHOLDER_ON) {
+      _runPlaceholderDispatch(targetGuid, scriptId);
+      _castLat("placeholder", _t0, "shown");
+    } else {
+      _castLat("placeholder", _t0, "suppressed (?castPlaceholder=off)");
+    }
     // Then kick off the real-VFX resolver under a hard deadline so a
     // slow/cold chain can't hang the upgrade — on timeout we simply
-    // keep the placeholder already shown above.
-    _tryResolveRealVfxBounded(targetGuid, scriptId, speed);
+    // keep the placeholder already shown above (or, with the placeholder
+    // off, nothing shows until the real emitters attach — which they still
+    // do: the deadline is a STATS boundary, not a cancel; see
+    // `_tryResolveRealVfxBounded`).
+    _tryResolveRealVfxBounded(targetGuid, scriptId, speed, _t0);
     return;
   }
   // No table → synchronous placeholder path, identical to pre-Phase-51
   // behavior. Most weenies hit this branch.
   _realVfxStats.attempts += 1;
   _realVfxStats.missNoTable += 1;
+  _castLat("miss", _t0, "reason=noTable (placeholder is the only visual for this entity)");
   _runPlaceholderDispatch(targetGuid, scriptId);
+  _castLat("placeholder", _t0, "shown (no-table arm)");
 }
 
 /**
@@ -3493,6 +3745,31 @@ function _tryBind() {
   const pc = window.__pluginClient;
   if (!pc || !pc.events || typeof pc.events.on !== "function") return false;
   pc.events.on("playEffect", _onPlayEffect);
+  // `?castLat=on` — tap the OTHER cast-related wire messages on the same bus
+  // so one paste covers the whole picture, without touching index.html.
+  //   playerStatsUpdated (kind=8)          — the LOCAL player's enchantment
+  //     add/remove/purge/dispel path. `lib.rs:43449-43459`: the recv loop
+  //     buckets `PlayerEnchantmentsUpdated` into `stats_changed` and emits
+  //     this, so the local buff strip IS event-driven (the 2 s timer in
+  //     buffs-hud.js is a documented fallback, not the primary path).
+  //   entityEnchantmentsUpdated (kind=46)  — REMOTE targets only; the recv
+  //     loop skips the local player by design (`lib.rs:43483-43512`, and the
+  //     index.html:9176 comment "without touching the local-player path").
+  // If a buff visibly lands seconds after its `msg` line, the delay is
+  // downstream of the wire; if the `msg` line itself is late, it is the link.
+  if (CAST_LAT_ON) {
+    pc.events.on("playerStatsUpdated", () => {
+      const t = _castLatNow();
+      _castLat("msg", t, "kind=8 playerStatsUpdated (local enchantments refresh)");
+    });
+    pc.events.on("entityEnchantmentsUpdated", (evt) => {
+      const t = _castLatNow();
+      const g = (evt?.detail?.guid ?? 0) >>> 0;
+      _castLat("msg", t, `kind=46 entityEnchantmentsUpdated target=0x${g.toString(16)}`);
+    });
+    // eslint-disable-next-line no-console
+    console.log("[castlat] armed — one line per cast pipeline stage; paste the whole block");
+  }
   // Combat-visuals Phase 1 — crit latch. Subscribed ONLY under
   // `?combatFx=on`, on the SAME bus + the same one-shot bind, so the
   // flag-off path adds exactly zero listeners (and index.html needs no

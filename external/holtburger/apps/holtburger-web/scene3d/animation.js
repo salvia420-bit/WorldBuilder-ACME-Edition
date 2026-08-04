@@ -577,6 +577,13 @@ export class AnimationCache {
         // and passed through as the wasm fetcher's trailing arg (older
         // pkg bundles coerce the extra arg away harmlessly). 0 = none.
         const placementId = (opts.placementId ?? 0) >>> 0;
+        // BUG-3 (2026-08-04, `?appearanceUrgent=on`): player-blocking hint,
+        // passed straight through as the wasm fetcher's next trailing arg.
+        // NOT part of the cache key — it is a lane hint, not an input to the
+        // baked clip, so two callers differing only in urgency must share a
+        // slot. Older pkg bundles coerce the extra arg away harmlessly (same
+        // contract as `placementId` above).
+        const urgent = opts.urgent === true;
         const modelChanges = opts.modelChanges ?? new Uint32Array(0);
         const textureChanges = opts.textureChanges ?? new Uint32Array(0);
         const paletteId = (opts.paletteId ?? 0) >>> 0;
@@ -613,6 +620,7 @@ export class AnimationCache {
                 stance,
                 fromMotion,
                 placementId,
+                urgent,
             ).catch((e) => {
                 try { window.__diag?.assets?.onAnimationError?.({ setupId, mtableId, motionCmd: motionCommand, stance, error: e, source: "get" }); } catch (_) {}
                 throw e;

@@ -245,6 +245,16 @@ const AUTOFOLLOW_GRACE_MS = 350; // suppress trailing this long after a right-dr
 const AUTOFOLLOW_MOVE_EPS = 1e-3; // metres of pos-delta below which we call it idle
 const AUTOFOLLOW_DEADZONE = 0.02; // rad: within this of heading, stop easing
 
+/**
+ * CAM-STAB (2026-08-04, `?camIndoorObjects=on`) — metres of slack added to the
+ * pivot→camera segment length when bounding the step-5c entity scan. An entity
+ * ORIGIN can sit this far outside the segment and still have geometry the
+ * segment touches; a door leaf is 1.93 m wide about its hinge (the COL-03
+ * bisect: GfxObj 0x010044B5 under Setup 0x020019FF), so 2 m covers the widest
+ * door with margin while keeping the per-frame walk local.
+ */
+const CAM_ENTITY_MARGIN_M = 2.0;
+
 /** Top-down ortho view: metres visible vertically at zoom=1. */
 const TOPDOWN_FRUSTUM_HEIGHT_M = 100.0;
 const TOPDOWN_HEIGHT_M = 300.0;
@@ -609,6 +619,20 @@ export class CameraSwitcher {
       // window.__setCamCellClamp). Indoors only — see _clipCameraAgainstWorld.
       this._camCellClampOn =
         params?.get("camCellClamp")?.toLowerCase() !== "off";
+      // CAM-STAB (2026-08-04) — steps 5b/5c of the clip chain: collide the
+      // camera against an EnvCell's STAB-LIST statics (furniture, dressing
+      // screens) and against solid world-object entities (closed doors).
+      // Neither is reachable from the existing layers: the cell-physics index
+      // holds only the room shell, and doors are server weenies. Retail's
+      // camera is a real `CTransition` (`SmartBox::update_viewer`
+      // acclient.c:144991) that sweeps the cell's shadow-object list through
+      // `CObjCell::find_obj_collisions` (:347142) and skips ONLY creatures
+      // (`CPhysicsObj::FindObjCollisions` :316195-316198), so it does collide
+      // with both. DEFAULT-ON (2026-08-04 — user-verified live: camera still
+      // clipped the forge with this flagged off); `=off` is the escape.
+      // `window.__setCamIndoorObjects` toggles live.
+      this._camIndoorObjectsOn =
+        params?.get("camIndoorObjects")?.toLowerCase() !== "off";
     }
     // Autofollow runtime state.
     this._followDragging = false; // true while right-mouse HELD (free-look)
@@ -683,6 +707,10 @@ export class CameraSwitcher {
         this._autoFollowInvert = !!on; // flip if the camera trails to the wrong side
         this._autoFollowDiagCount = 0; // re-log the convention diag
         return this._autoFollowInvert;
+      };
+      window.__setCamIndoorObjects = (on) => {
+        this._camIndoorObjectsOn = !!on;
+        return this._camIndoorObjectsOn;
       };
       window.__setIndoorCam = (on) => {
         this._indoorCamOn = !!on;
@@ -1415,6 +1443,16 @@ export class CameraSwitcher {
    *      index.
    *   5. **EnvCell triangle sweep** (`sweepSphereAgainstCellMesh`),
    *      gated on the cells in the BFS render set. Dungeons + apartments.
+   *      Room SHELL only — `Environment.physics_polygons`.
+   *   5b. **EnvCell stab-list statics** (`sweepSphereAgainstCellStatics`,
+   *      CAM-STAB 2026-08-04, `?camIndoorObjects=on`). The furniture /
+   *      dressing screens / props resident in a cell, whose physics is
+   *      staged separately in `SpatialScene::cell_static_physics_bsp`
+   *      and is NOT part of step 5's shell.
+   *   5c. **Solid world-object entities** (`sweepSphereAgainstEntities`,
+   *      same flag). Closed doors — server weenies, so invisible to both
+   *      cell layers. Creatures are excluded, matching retail's viewer
+   *      exemption (`CPhysicsObj::FindObjCollisions` acclient.c:316195).
    *   6. **Cell-space containment walk** (`clipCameraToCellSpace`,
    *      CAM-SEAM 2026-08-02, indoors only, `?camCellClamp=off` escape).
    *      Retail-style cur_cell continuity from the player's cell: the
@@ -1544,6 +1582,9 @@ export class CameraSwitcher {
     }
 
     // ---- 5. EnvCell triangle sweep (cells in current render set) ----
+    // CAM-STAB: `cellArr` is hoisted so step 5b can reuse the one
+    // `getRenderSet(1)` call instead of asking wasm twice per frame.
+    let cellArr = null;
     try {
       if (
         typeof handle.sweepSphereAgainstCellMesh === "function" &&
@@ -1552,7 +1593,7 @@ export class CameraSwitcher {
         const renderSet = handle.getRenderSet(1);
         if (renderSet && renderSet.length > 0) {
           // Pass as a Uint32Array (wasm-bindgen `&[u32]` expects this).
-          const cellArr = renderSet instanceof Uint32Array
+          cellArr = renderSet instanceof Uint32Array
             ? renderSet
             : new Uint32Array(renderSet);
           const hit = handle.sweepSphereAgainstCellMesh(
@@ -1565,6 +1606,51 @@ export class CameraSwitcher {
         }
       }
     } catch (_) {}
+
+    // ---- 5b/5c. Interior OBJECTS (CAM-STAB, `?camIndoorObjects=on`) ----
+    // Step 5 tests only the room SHELL (`Environment.physics_polygons`), so a
+    // dungeon room's furniture and its doors were invisible to the camera and
+    // it clipped straight through them — worst in a small room, exactly the
+    // report. Retail does not have this gap: its camera transit sweeps the
+    // cell's whole shadow-object list and only exempts creatures.
+    //   5b — the EnvCell STAB list (`SpatialScene::cell_static_physics_bsp`,
+    //        the same statics the faithful driver blocks the PLAYER with).
+    //   5c — solid, BSP-bearing world-object entities (closed doors). Open
+    //        doors are ETHEREAL server-side and drop out via `is_collidable`.
+    // Both run AFTER the shell sweep, so they only ever tighten an already
+    // clipped segment; each is `try`-wrapped so a stale `pkg/` without the
+    // export degrades to the pre-CAM-STAB chain instead of throwing.
+    if (this._camIndoorObjectsOn) {
+      if (cellArr && cellArr.length > 0) {
+        try {
+          if (typeof handle.sweepSphereAgainstCellStatics === "function") {
+            const hit = handle.sweepSphereAgainstCellStatics(
+              startX, startY, startZ,
+              finalX, finalY, finalZ,
+              CAM_RADIUS,
+              cellArr,
+            );
+            if (hit) clipFinalTo(hit);
+          }
+        } catch (_) {}
+      }
+      try {
+        if (typeof handle.sweepSphereAgainstEntities === "function") {
+          // Scan bound: the segment is pivot→camera, so anything that can
+          // touch it has its origin within (segment length + a body radius)
+          // of the head. Keeps the per-frame entity walk O(nearby).
+          const dx = finalX - startX, dy = finalY - startY, dz = finalZ - startZ;
+          const range = Math.sqrt(dx * dx + dy * dy + dz * dz) + CAM_ENTITY_MARGIN_M;
+          const hit = handle.sweepSphereAgainstEntities(
+            startX, startY, startZ,
+            finalX, finalY, finalZ,
+            CAM_RADIUS,
+            range,
+          );
+          if (hit) clipFinalTo(hit);
+        }
+      } catch (_) {}
+    }
 
     // ---- 6. Cell-space containment walk (indoors only; CAM-SEAM) ----
     // Runs AFTER the triangle sweeps so it walks the already-clipped

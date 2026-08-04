@@ -46,6 +46,23 @@ use holtburger_common::position::WorldPosition;
 use holtburger_common::{Quaternion, Triangle, Vector3};
 use std::sync::Arc;
 
+/// COL-STUCK (2026-08-04) — let a mover that is ALREADY inside an entity
+/// collider move in any direction that reduces its penetration.
+///
+/// `true` (default): the invariant "an embedded mover can always get out".
+/// Without it, a start-inside contact (`t = 0`) zeroes the advance AND the
+/// tangent slide AND the slide re-test, so the delta is exactly zero for every
+/// requested direction — the live "stuck in doors" lock that appeared the
+/// moment door leaves became real colliders. Retail's equivalent recovery is
+/// `CPhysicsObj::AdjustPosition` / `find_placement_position`
+/// (acclient.c:313341) after a failed `find_valid_position`; ACE's is
+/// `InsertType.Placement` (`ObjCell.cs:185`).
+///
+/// `false`: the pre-2026-08-04 behaviour, i.e. the lock. Kept as the A/B
+/// revert target only — there is no scenario where shipping `false` is
+/// correct.
+const USE_PENETRATION_ESCAPE: bool = true;
+
 /// A collidable entity reduced to the data the collision math needs.
 ///
 /// Construct from a live [`crate::entity::Entity`] after filtering on
@@ -204,6 +221,45 @@ pub fn clamp_delta_against_entities(
     else {
         return delta;
     };
+
+    // === PENETRATION ESCAPE (2026-08-04, COL-STUCK) ===
+    //
+    // THE BUG THIS FIXES ("you get stuck in doors", live 2026-08-04): the
+    // moment the door leaf became a real collider, a mover that ended a frame
+    // INSIDE it could never leave. A start-inside contact reports `t = 0`
+    // (`sweep_circle_into_circle` `c <= 0.0 => Some(0.0)`;
+    // `sweep_sphere_against_triangles`'s degenerate/overlap arm likewise), so
+    // `safe_t = 0` zeroes the advance, the tangent slide is then re-tested from
+    // the SAME embedded point and also returns `t = 0`, and the BSP arm's
+    // bounded re-test scales that slide to zero as well. Net delta becomes
+    // EXACTLY zero for EVERY input direction — a hard lock with no exit, in
+    // every direction including straight back out the way you came. A door
+    // that swings/closes onto the player, or a slide that ends a hair inside a
+    // corner, is enough to trigger it.
+    //
+    // RETAIL DOES NOT LOCK. An embedded start is a recognised state with a
+    // dedicated recovery: `CTransition::find_valid_position` failing hands off
+    // to `CPhysicsObj::AdjustPosition` / `find_placement_position`
+    // (acclient.c:313341) — the same de-embed retail runs on arrival/teleport
+    // — and `SmartBox::update_viewer` (:145096-145105) shows the pattern
+    // verbatim: try the transition, and on failure `AdjustPosition` rather
+    // than freeze. ACE keeps the same escape hatch, admitting an overlapping
+    // insert through `InsertType.Placement` (`ObjCell.cs:185`).
+    //
+    // We do not need a full placement solver to remove the lock — only the
+    // invariant that a mover already inside a collider may always REDUCE its
+    // penetration. `normal` points outward (back toward the sweep origin, per
+    // `sweep_sphere_against_triangles`' contract; the circle arm builds
+    // `contact − center`), so a requested move with a positive component along
+    // it is strictly an escape and is passed through untouched. Moves that
+    // would go deeper keep the existing stop-and-slide, so nothing gets looser
+    // in the non-embedded case — the only state whose behaviour changes is the
+    // one that was previously a dead stop.
+    //
+    // Revert target: flip `USE_PENETRATION_ESCAPE` to `false`.
+    if USE_PENETRATION_ESCAPE && earliest_t <= 0.0 && (delta.x * nx + delta.y * ny) > 0.0 {
+        return delta;
+    }
 
     // Back off a hair so the next frame doesn't start inside the
     // cylinder. 1mm in world space, scaled by the motion's pace.
@@ -382,6 +438,55 @@ fn sweep_capsule_into_entity_bsp(
     best
 }
 
+/// CAM-STAB (2026-08-04) — the CAMERA's twin of
+/// [`sweep_capsule_into_entity_bsp`]: a full-3D swept-sphere test of one
+/// segment against one entity's physics polygons, returning the generic hit
+/// shape the camera clip chain already consumes.
+///
+/// Retail's camera is a real physics transit (`SmartBox::update_viewer`
+/// acclient.c:144991 → `CTransition::find_valid_position`), so it runs the same
+/// `CObjCell::find_obj_collisions` (:347142) object sweep a mover does and only
+/// skips CREATURES (`CPhysicsObj::FindObjCollisions` :316195-316198; ACE
+/// `PhysicsObj.cs:388` `IsViewer && WeenieObj.IsCreature() → OK`). Callers are
+/// therefore expected to have filtered to solid, non-creature entities —
+/// closed doors and interior props — before reaching here.
+///
+/// Unlike the mover arm this is NOT lateral-only and does not drop vertical
+/// normals: a camera pulled toward the player over a table top is a legitimate
+/// contact, and only the parametric `t` is consumed by the clip chain.
+pub fn sweep_sphere_against_entity_bsp(
+    bsp: &EntityBsp,
+    start: Vector3,
+    end: Vector3,
+    radius: f32,
+) -> Option<super::GenericSweptHit> {
+    let geometry = &bsp.geometry;
+    if geometry.triangles.is_empty() {
+        return None;
+    }
+    let inv = bsp.orientation.conjugate();
+    let local_start = inv.rotate_vector(start - bsp.origin);
+    let local_end = inv.rotate_vector(end - bsp.origin);
+    // `GfxObj.FindObjCollisions`'s bounding-sphere reject (GfxObj.cs:79-82),
+    // applied to the whole swept segment — the cheap out for the ~all-miss
+    // common case.
+    let reach = geometry.bound_radius + radius;
+    if segment_distance_to_origin_sq(local_start, local_end) > reach * reach {
+        return None;
+    }
+    let hit = super::physics::sweep_sphere_against_triangles(
+        &geometry.triangles,
+        local_start,
+        local_end,
+        radius,
+    )?;
+    Some(super::GenericSweptHit {
+        t: hit.t.clamp(0.0, 1.0),
+        point: bsp.orientation.rotate_vector(hit.point) + bsp.origin,
+        normal: bsp.orientation.rotate_vector(hit.normal),
+    })
+}
+
 /// Squared distance from the origin to the segment `a`→`b`. The
 /// bounding-sphere reject's inner loop; a segment-vs-sphere test rather
 /// than two point tests so a long sweep that passes the geometry
@@ -456,6 +561,40 @@ mod tests {
         let delta = Vector3::new(1.0, 0.0, 0.0);
         let out = clamp_delta_against_entities(&[], &pose_at(0.0, 0.0), delta, 0.4);
         assert_eq!(out, delta);
+    }
+
+    /// COL-STUCK (2026-08-04) — the invariant that removes the live "stuck in
+    /// doors" lock: a mover that is ALREADY inside a collider may always move
+    /// in a direction that reduces its penetration, and may still not move
+    /// deeper. Before `USE_PENETRATION_ESCAPE` the clamp returned an exactly
+    /// zero delta for BOTH directions, so there was no exit at all.
+    #[test]
+    fn embedded_mover_can_always_escape_but_not_burrow() {
+        let colliders = [EntityCollider {
+            center_xy: (0.0, 0.0),
+            radius: 1.0,
+            has_physics_bsp: false,
+            bsp: None,
+        }];
+        // Centre-to-centre 0.2 — deep inside the 1.0 + 0.4 contact envelope.
+        let pose = pose_at(0.2, 0.0);
+
+        // OUTWARD (+x, away from the collider centre): passes untouched.
+        let out_delta = Vector3::new(0.5, 0.0, 0.0);
+        let escaped = clamp_delta_against_entities(&colliders, &pose, out_delta, 0.4);
+        assert_eq!(
+            escaped, out_delta,
+            "an embedded mover must be able to walk straight out, got {escaped:?}"
+        );
+
+        // INWARD (-x, deeper): still clamped — the escape must not become a
+        // free pass through the collider.
+        let in_delta = Vector3::new(-0.5, 0.0, 0.0);
+        let blocked = clamp_delta_against_entities(&colliders, &pose, in_delta, 0.4);
+        assert!(
+            blocked.x > in_delta.x + 1e-6,
+            "an embedded mover must not burrow deeper, got {blocked:?}"
+        );
     }
 
     #[test]

@@ -3862,6 +3862,34 @@ function _blockingParticleParityOn() {
   return false;
 }
 
+// `?indoorParticleLayer=off` (2026-08-04) — DEFAULT ON. Interior-anchored
+// static particle chains are emitted onto the INDOOR render layer (1) so they
+// composite with the interior pass instead of the world pass. Outdoor chains
+// are untouched (layer 0), which is what keeps torches/swamp mist from bleeding
+// through a punched doorway — the defect that kept the previous per-tick
+// staticsGroup sweep (retired with this change) default-OFF.
+//
+// NOTE the `search || ""`: this reader must NOT be gated on a NON-EMPTY
+// `location.search` the way `_blockingParticleParityOn` above is. That shape
+// returns false on a bare URL — the opposite of its documented default — and
+// statics.js:4171-4174 already carries a workaround for the same bug in
+// `particleOwnerOn()`. A default-ON escape hatch has to read ON when the query
+// string is absent, which is the production case.
+function _indoorParticleLayerEnabled() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      return (
+        new URLSearchParams(globalThis.location.search || "")
+          .get("indoorParticleLayer")?.toLowerCase() !== "off"
+      );
+    }
+  } catch (_) {}
+  return true;
+}
+
+/** The INDOOR render layer (cells.js `RENDER_LAYER_INDOOR`). */
+const _RENDER_LAYER_INDOOR = 1;
+
 function _staticScriptsEnabled() {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
@@ -4158,6 +4186,21 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
           position: _staticOffsetVec3,
           quaternion: _staticOffsetQuat,
         },
+        // Interior particle layering (2026-08-04) — DERIVED FROM THE ANCHOR,
+        // deliberately NOT threaded as a `_runStaticParticleChain` parameter.
+        // The anchor already IS the interior/outdoor discriminator
+        // (`attachStaticDefaultScriptsWorld` stamps `isCellStaticScriptAnchor`
+        // at :4451, the outdoor twin at :4318 does not), and every one of the
+        // five call sites passes the anchor through unchanged — including the
+        // CallPES self-loop at :4078, which re-runs the chain on a timer and
+        // is how a looping emitter (e.g. the town-portal swirl, 2.7 s period)
+        // gets rebuilt over and over. A parameter would have to be plumbed
+        // correctly through all five, and the loop site is exactly the one a
+        // future edit would forget; reading the anchor cannot drift.
+        renderLayer:
+          (_indoorParticleLayerEnabled() && anchor?.userData?.isCellStaticScriptAnchor)
+            ? _RENDER_LAYER_INDOOR
+            : 0,
         blocking:
           ((e.hookType | 0) === STATIC_HOOK_CREATE_BLOCKING_PARTICLE) &&
           _blockingParticleParityOn(),

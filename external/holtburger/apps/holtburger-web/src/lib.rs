@@ -436,6 +436,16 @@ fn parse_faithful_entity_collision_flag(search: &str) -> bool {
         .any(|kv| kv == "faithfulEntityCollision=off")
 }
 
+/// COL-DIAG (2026-08-04): parse `?fu3Diag=on`. DEFAULT-OFF, strict `=on`
+/// opt-in — a pure console diagnostic for the FU-3 entity clamp (one `[fu3] …`
+/// line per ~second: collider count, how many took the precise BSP arm,
+/// nearest collider distance/radius, the prefilter, and whether the
+/// server-echo interpreted state is driving). Changes no collision decision.
+fn parse_fu3_diag_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "fu3Diag=on")
+}
+
 /// Phase 3 Phase D (2026-06-28): parse `?faithfulOutdoor=off` (or
 /// `&faithfulOutdoor=off`). DEFAULT-ON, off-escape shape (mirrors
 /// `parse_unified_tick_flag`): returns `true` UNLESS `faithfulOutdoor=off` is
@@ -16603,14 +16613,23 @@ fn drain_pending_setup_physics_geometry_into(
 /// before the await so a burst of doors in one landblock walks once.
 #[cfg(target_arch = "wasm32")]
 fn kick_entity_physics_geometry_loads(world: &holtburger_world::WorldState) {
+    // COL-03 LIVE REPAIR (2026-08-04): this filter used to be
+    // `.filter_map(|e| e.gfx_id)`, and `Entity::gfx_id` is the TRAP
+    // `WorldState::entity_setup_did` documents — NOTHING outside unit tests
+    // ever assigns it. So `wanted` was ALWAYS EMPTY: no entity's physics
+    // polygons were ever fetched, `setup_physics_geometry` stayed at len 0 for
+    // the page's whole life, and every door/prop fell back to the swept CIRCLE
+    // at its ORIGIN (for a door, its HINGE). That is the entire "you can walk
+    // through a closed door" report. Resolution now goes through
+    // `WorldState::entity_physics_setup_ids_wanted`, which uses the SAME
+    // `PropertyDataId::Setup` path as `entity_collision_radius` and the combat
+    // lane (SetupModel-only `0x02xxxxxx` filtering included), so the id rule
+    // cannot drift out of sync again.
     let wanted: Vec<u32> = SETUP_BSP_ATTEMPTED.with(|cell| {
         let mut seen = cell.borrow_mut();
         world
-            .entities
-            .iter()
-            .filter(|e| e.is_collidable() && e.has_physics_bsp())
-            .filter_map(|e| e.gfx_id)
-            .filter(|id| (id >> 24) == 0x02)
+            .entity_physics_setup_ids_wanted()
+            .into_iter()
             .filter(|id| seen.insert(*id))
             .collect()
     });
@@ -22915,6 +22934,22 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     })
 }
 
+/// BUG-3 helper (2026-08-04): identity that PINS a walk closure to the
+/// higher-ranked `Fn(&dyn ResourceSource) + 'static` bound the
+/// `prefetch::ensure_walk_*` helpers require. Needed because
+/// `fetch_entity_animation_keyframes` now hands the SAME `let`-bound closure
+/// to two different helpers (urgent vs normal arm), and a bare
+/// `let walk = move |s| …;` has nothing to infer the parameter type from —
+/// while annotating `|s: &dyn ResourceSource|` on its own risks inferring one
+/// concrete lifetime rather than a higher-ranked one. Zero cost: returns `f`.
+#[cfg(target_arch = "wasm32")]
+fn as_walk_fn<F>(f: F) -> F
+where
+    F: Fn(&dyn holtburger_dat::ResourceSource) + 'static,
+{
+    f
+}
+
 /// Phase 7.4a (3D migration): bake rest-pose per-part meshes + RAW
 /// per-frame keyframe transforms for an entity setup at a specific
 /// `(stance, command)`. JS-side adapter (`scene3d/animation.js`)
@@ -22970,9 +23005,27 @@ pub async fn fetch_entity_animation_keyframes(
     // ?placementId=on. Older JS callers see `0` via the same
     // trailing-arg coercion as from_motion_command above.
     placement_id: u32,
+    // BUG-3 (2026-08-04, `?appearanceUrgent=on`): PLAYER-BLOCKING hint. This
+    // export's discovery walk (Setup → substituted GfxObjs → MotionTable →
+    // Animations) is the dominant cost of an equip / dye / death re-skin,
+    // because `AnimationCache` folds the substitutions into its key
+    // (animation.js `_substitutionSuffix`) so new gear is ALWAYS a miss. The
+    // walk is up to 8 sequential `prefetch` rounds (`prefetch::run_walk_loop`),
+    // and on the normal lane every round takes a `fetch_sem` permit and rides
+    // `FetchPriority::Low` behind the speculative ring bakers — several
+    // seconds of serialised round-trips on a high-latency link. `Some(true)`
+    // routes the same rounds through `prefetch_urgent`, exactly as
+    // `fetch_surfaces_pixels` / `fetch_model_meshes` / `fetchBuildingPlacement`
+    // already do for the player's own 3×3. Absent/false = the pre-fix lane, so
+    // every existing caller (and any older JS bundle that omits the arg —
+    // wasm-bindgen coerces a missing trailing `Option<bool>` to `None`) is
+    // byte-identical to before.
+    urgent: Option<bool>,
 ) -> Result<EntityAnimationData, JsValue> {
     use holtburger_dat::file_type::SetupModel;
     use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let urgent = urgent.unwrap_or(false);
 
     if model_changes.len() % 2 != 0 {
         return Err(JsValue::from_str(
@@ -23020,13 +23073,28 @@ pub async fn fetch_entity_animation_keyframes(
         // `fetchEntityAnimationKeyframes` calls with the same raw
         // `setup_id` (0x01-prefix GfxObj) now share the
         // single-shot prefetch loop.
-        let cache_key =
-            prefetch::WalkCacheKey::new("fetchEntityAnimationKeyframes:raw")
-                .with_u32(setup_id);
-        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
-            let _ = triangulate_model_per_part_buckets(s, setup_id);
+        // BUG-3: distinct key name per lane, so an urgent caller cannot latch
+        // onto an in-flight NORMAL-lane walk and get parked in the very
+        // semaphore queue it is meant to bypass (the same argument
+        // `fetch_surfaces_pixels` spells out at its `:urgent` cache key).
+        let cache_key = prefetch::WalkCacheKey::new(if urgent {
+            "fetchEntityAnimationKeyframes:raw:urgent"
+        } else {
+            "fetchEntityAnimationKeyframes:raw"
         })
-        .await?;
+        .with_u32(setup_id);
+        let walk_raw = as_walk_fn(move |s: &dyn ResourceSource| {
+            let _ = triangulate_model_per_part_buckets(s, setup_id);
+        });
+        if urgent {
+            prefetch::ensure_walk_prefetched_keyed_urgent(
+                cache_key, &source, &initial, walk_raw,
+            )
+            .await?;
+        } else {
+            prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk_raw)
+                .await?;
+        }
         // geom-audit: counted build + one retry (see the wrapper).
         let inner = build_entity_animation_counted(
             &source,
@@ -23068,7 +23136,14 @@ pub async fn fetch_entity_animation_keyframes(
     let mc_flat: Vec<u32> = mc.iter().flat_map(|(p, g)| [*p as u32, *g]).collect();
     let tc_flat: Vec<u32> =
         tc.iter().flat_map(|(p, o, n)| [*p as u32, *o, *n]).collect();
-    let cache_key = prefetch::WalkCacheKey::new("fetchEntityAnimationKeyframes")
+    // BUG-3: lane-distinct key name (see the `:raw:urgent` note above) so an
+    // urgent equip walk cannot latch onto an in-flight normal-lane `Shared`
+    // and inherit its semaphore wait.
+    let cache_key = prefetch::WalkCacheKey::new(if urgent {
+        "fetchEntityAnimationKeyframes:urgent"
+    } else {
+        "fetchEntityAnimationKeyframes"
+    })
         .with_u32(setup_id)
         .with_u32(mtable_id)
         .with_u32(motion_command)
@@ -23077,7 +23152,7 @@ pub async fn fetch_entity_animation_keyframes(
         .with_u32_slice(&mc_flat)
         .with_u32_slice(&tc_flat)
         .with_u32_slice(&palette_subs_flat);
-    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
+    let walk_setup = as_walk_fn(move |s: &dyn ResourceSource| {
         // Touch rest-pose triangulation (warms substituted GfxObjs)
         // and the cycle frames (warms Animation + chained Anim parts).
         let _ = triangulate_setup_model_per_part(
@@ -23119,8 +23194,16 @@ pub async fn fetch_entity_animation_keyframes(
                 }
             }
         }
-    })
-    .await?;
+    });
+    if urgent {
+        prefetch::ensure_walk_prefetched_keyed_urgent(
+            cache_key, &source, &initial, walk_setup,
+        )
+        .await?;
+    } else {
+        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk_setup)
+            .await?;
+    }
 
     // geom-audit: counted build + one retry (see the wrapper).
     let inner = build_entity_animation_counted(
@@ -34694,6 +34777,85 @@ impl SessionHandle {
         out
     }
 
+    /// Portal apertures WITH their owning cell's centre (2026-08-04, round 5).
+    ///
+    /// Identical selection to [`Self::get_visible_portal_apertures`], but each
+    /// aperture is prefixed with the AABB centre of the cell that owns it, so
+    /// JS can run retail's `PView::ConstructView` SIDEDNESS reject
+    /// (acclient.c:462513-462543) — which our wire format could not express
+    /// before, because a bare polygon carries no notion of which face is
+    /// "outside" and vertex winding is not a reliable substitute.
+    ///
+    /// Why the cell centre is the missing piece: the aperture is a hole in the
+    /// shell of the room `from`, so the outward normal is unambiguously the one
+    /// pointing AWAY from that room's centre. JS orients the polygon's Newell
+    /// normal with it and keeps the aperture only when the viewer is on the
+    /// outward side. That is what stops a door on the FAR side of a building
+    /// being depth-punched and drawn through the near wall.
+    ///
+    /// Wire shape — flat `Vec<f32>`:
+    ///   `[ count, (nverts, cx, cy, cz, x0,y0,z0, ...) x count ]`
+    /// i.e. the same layout as the v1 export with three extra floats inserted
+    /// after each `nverts`. ADDITIVE export under a NEW name, so a stale
+    /// `pkg/` simply lacks it and the JS `typeof` guard falls back to v1 with
+    /// no sidedness reject (the round-4 behaviour) rather than mis-parsing.
+    ///
+    /// Read-only; does not mutate snapshot state.
+    #[wasm_bindgen(js_name = getVisiblePortalAperturesWithCellCenter)]
+    pub fn get_visible_portal_apertures_with_cell_center(
+        &self,
+        mvp: &[f32],
+        _max_depth: u8,
+    ) -> Vec<f32> {
+        if mvp.len() != 16 {
+            return Vec::new();
+        }
+        let mut mvp_arr = [0.0f32; 16];
+        mvp_arr.copy_from_slice(mvp);
+        let frustum = holtburger_common::Frustum::from_view_projection_matrix(&mvp_arr);
+        let snap = self.cell_scene_snapshot.borrow();
+        if snap.current_cell == 0 {
+            return Vec::new();
+        }
+
+        let aabb_for = |cell_id: u32| -> Option<holtburger_common::Aabb> {
+            snap.cell_aabbs.iter().find_map(|(id, ext)| {
+                if *id == cell_id {
+                    Some(holtburger_common::Aabb::new(
+                        holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+                        holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+                    ))
+                } else {
+                    None
+                }
+            })
+        };
+
+        let mut out: Vec<f32> = Vec::new();
+        out.push(0.0);
+        let mut count: u32 = 0;
+        for (from, to, flat) in &snap.cell_portal_polygons {
+            if (*to & 0xFFFF) < 0xFFFE {
+                continue;
+            }
+            if flat.len() < 9 || flat.len() % 3 != 0 {
+                continue;
+            }
+            let aabb = match aabb_for(*from) {
+                Some(a) if frustum.intersects_aabb(&a) => a,
+                _ => continue,
+            };
+            out.push((flat.len() / 3) as f32);
+            out.push((aabb.min.x + aabb.max.x) * 0.5);
+            out.push((aabb.min.y + aabb.max.y) * 0.5);
+            out.push((aabb.min.z + aabb.max.z) * 0.5);
+            out.extend_from_slice(flat);
+            count += 1;
+        }
+        out[0] = count as f32;
+        out
+    }
+
     /// Phase 4 PView port (2026-05-25): frustum-aware visibility.
     /// Takes a 16-float **column-major** view-projection matrix (same
     /// memory layout as `THREE.Matrix4.elements` — pass it directly
@@ -35606,6 +35768,111 @@ impl SessionHandle {
             cell_ids, start, end, radius,
         )?;
         Some(CollisionHit::from_generic(hit))
+    }
+
+    /// CAM-STAB (2026-08-04): sweep against the EnvCell **stab-list statics**
+    /// (furniture, dressing screens, props) of `cell_ids` — the gap
+    /// `sweepSphereAgainstCellMesh` leaves, since the cell-physics index holds
+    /// only the room ENVIRONMENT (walls/floor/ceiling) and a cell's statics are
+    /// staged separately in `SpatialScene::cell_static_physics_bsp`.
+    ///
+    /// Retail's camera is a `CTransition` (`SmartBox::update_viewer`
+    /// acclient.c:144991) and therefore sweeps the cell's shadow-object list
+    /// via `CObjCell::find_obj_collisions` (:347142) exactly like a mover; it
+    /// skips only creatures (`CPhysicsObj::FindObjCollisions` :316195-316198).
+    /// Statics are not creatures, so retail's camera collides with them.
+    ///
+    /// Same argument shape as `sweepSphereAgainstCellMesh`: world-metre
+    /// endpoints, a flat `&[u32]` of full 32-bit cell ids (typically
+    /// `getRenderSet(1)`). `None` on a clean miss / no statics resident.
+    #[wasm_bindgen(js_name = sweepSphereAgainstCellStatics)]
+    pub fn sweep_sphere_against_cell_statics(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        cell_ids: &[u32],
+    ) -> Option<CollisionHit> {
+        use holtburger_common::Vector3;
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let scene = self.collision_scene.borrow();
+        let hit = scene.sweep_sphere_against_cell_statics(
+            cell_ids, start, end, radius,
+        )?;
+        Some(CollisionHit::from_generic(hit))
+    }
+
+    /// CAM-STAB (2026-08-04): sweep against nearby **solid world-object
+    /// entities** — the door path. Doors, chests and the like are server
+    /// weenies, not cell stabs, so neither the cell-mesh nor the cell-statics
+    /// layer can see them; their collision geometry is the COL-03
+    /// `WorldState::entity_physics_bsp` set the movement system already uses to
+    /// stop the PLAYER at a door leaf.
+    ///
+    /// Retail parity — `CPhysicsObj::FindObjCollisions` (acclient.c:316159):
+    ///   * `:316195-316198` — `if (object_info.state & 4` (IsViewer) `&&
+    ///     weenie->IsCreature()) return 1;` ⇒ the viewer passes THROUGH
+    ///     creatures. Approximated here by requiring `HAS_PHYSICS_BSP` +
+    ///     resident polygons: creature setups collide by cyl-sphere and never
+    ///     carry a physics BSP, so the BSP-only filter selects exactly the
+    ///     door/prop family. (Conservative in the safe direction: an entity
+    ///     without resident geometry is skipped, never blocks spuriously.)
+    ///   * `:316191-316193` — `ETHEREAL | IGNORE_COLLISIONS` return early;
+    ///     mirrored by `Entity::is_collidable()`, which is also how an OPEN
+    ///     door stops obstructing (ACE `Door.cs` flips `Ethereal` on open).
+    ///
+    /// `max_range_m` bounds the scan to entities whose origin is within that
+    /// radius of `from` (the camera pivot sits at the player, so the segment is
+    /// short); pass ~the follow distance plus a margin. `None` on a clean miss.
+    #[wasm_bindgen(js_name = sweepSphereAgainstEntities)]
+    pub fn sweep_sphere_against_entities(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        max_range_m: f32,
+    ) -> Option<CollisionHit> {
+        use holtburger_common::Vector3;
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        // `try_borrow`: the recv loop may hold `borrow_mut`; a camera frame
+        // that lands mid-drain must degrade to "no hit", never panic.
+        let world = self.world.try_borrow().ok()?;
+        let world = world.as_ref()?;
+        let self_guid = world.player.guid;
+        let range_sq = max_range_m * max_range_m;
+        let mut best: Option<holtburger_world::spatial::GenericSweptHit> = None;
+        for e in world.entities.iter() {
+            if e.guid == self_guid || !e.is_collidable() || !e.has_physics_bsp() {
+                continue;
+            }
+            let g = e.position.global_coords();
+            let dx = g.x - start.x;
+            let dy = g.y - start.y;
+            let dz = g.z - start.z;
+            if dx * dx + dy * dy + dz * dz >= range_sq {
+                continue;
+            }
+            let Some(bsp) = world.entity_physics_bsp(e) else {
+                continue;
+            };
+            if let Some(hit) = holtburger_world::spatial::sweep_sphere_against_entity_bsp(
+                &bsp, start, end, radius,
+            ) && (best.is_none() || hit.t < best.unwrap().t)
+            {
+                best = Some(hit);
+            }
+        }
+        Some(CollisionHit::from_generic(best?))
     }
 
     /// CAM-SEAM (2026-08-02): clamp a camera segment to valid indoor cell
@@ -41510,6 +41777,9 @@ async fn recv_loop(
     // `parse_faithful_entity_collision_flag`.
     movement
         .set_faithful_entity_collision(parse_faithful_entity_collision_flag(&flag_search()));
+    // COL-DIAG (2026-08-04): `?fu3Diag=on` — console ground truth for the FU-3
+    // entity clamp (see `parse_fu3_diag_flag`). Default OFF, zero cost when off.
+    movement.set_fu3_diag(parse_fu3_diag_flag(&flag_search()));
     // Phase 3 Phase D (2026-06-28): `?faithfulOutdoor=off` — roll the faithful
     // driver's OUTDOOR terrain path back to the approximate heightfield (default
     // ON). Read only when `?faithfulTransition` is also on; see
@@ -53408,12 +53678,20 @@ pub async fn fetch_animation(did: u32) -> Result<AnimationJs, JsValue> {
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchPhysicsScript)]
-pub async fn fetch_physics_script(did: u32) -> Result<PhysicsScriptJs, JsValue> {
+pub async fn fetch_physics_script(
+    did: u32,
+    // BUG-3 (2026-08-04): PLAYER-BLOCKING hint — see `fetch_particle_emitter`.
+    urgent: Option<bool>,
+) -> Result<PhysicsScriptJs, JsValue> {
     use holtburger_dat::file_type::PhysicsScript;
     use holtburger_dat::{ResourceKey, ResourceSource};
     let source = global_source::global_source();
     let key = ResourceKey::new("eor/portal", did);
-    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    if urgent.unwrap_or(false) {
+        prefetch::ensure_walk_prefetched_urgent(&source, &[key], |_| {}).await?;
+    } else {
+        prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    }
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", did))
         .map_err(|e| {
@@ -53443,12 +53721,28 @@ pub async fn fetch_physics_script(did: u32) -> Result<PhysicsScriptJs, JsValue> 
 /// pass directly to the (P4) ParticleManager.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchParticleEmitter)]
-pub async fn fetch_particle_emitter(did: u32) -> Result<ParticleEmitterJs, JsValue> {
+pub async fn fetch_particle_emitter(
+    did: u32,
+    // BUG-3 (2026-08-04): PLAYER-BLOCKING hint. `play_effect_vfx.js` shows a
+    // synchronous placeholder burst and then races the REAL emitter chain
+    // (`fetchPhysicsScriptTable` → `fetchPhysicsScript` → this) against a
+    // 300 ms deadline (`_tryResolveRealVfxBounded`). On the normal lane that
+    // chain takes a `fetch_sem` permit and rides `FetchPriority::Low` behind
+    // the speculative ring bakers, so a cold spell script blows the deadline
+    // and the player keeps the placeholder — the "spell effect took seconds"
+    // symptom. `Some(true)` bypasses the semaphore and restores default
+    // browser priority. Absent/false = the pre-fix lane.
+    urgent: Option<bool>,
+) -> Result<ParticleEmitterJs, JsValue> {
     use holtburger_dat::file_type::ParticleEmitter;
     use holtburger_dat::{ResourceKey, ResourceSource};
     let source = global_source::global_source();
     let key = ResourceKey::new("eor/portal", did);
-    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    if urgent.unwrap_or(false) {
+        prefetch::ensure_walk_prefetched_urgent(&source, &[key], |_| {}).await?;
+    } else {
+        prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    }
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", did))
         .map_err(|e| {

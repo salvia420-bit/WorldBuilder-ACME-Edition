@@ -17,11 +17,11 @@ use holtburger_protocol::messages::{GameMessage, MovementEventData, MovementType
 /// `UseSpheres` cylinder metric (`GetCurrentDistance` :344856-344893 →
 /// `Position::cylinder_distance`) stops at the target's EDGE and the
 /// arrival `StickTo` handoff (:345553-345566) inherits the same dims.
-/// With the flag off (or the Setup not yet resident) this keeps the
-/// pre-fix value: radius via the cached SetupModel cyl-sphere
-/// (`entity_collision_radius`, the ACE `GetPhysicsRadius` mirror),
-/// height `0.0` — the retail CPartArray-null fallback
-/// (acclient.c:319810-319815).
+/// With the flag off (or the Setup not yet resident) this uses the cached
+/// SetupModel cyl-sphere pair: radius via `entity_collision_radius` (the ACE
+/// `GetPhysicsRadius` mirror — `primitive × scale`, `PhysicsObj.cs:596`;
+/// since 2026-08-04 the scale is actually applied, see that fn's doc), height
+/// `0.0` — the retail CPartArray-null fallback (acclient.c:319810-319815).
 pub(crate) fn resolve_movement_target(
     state: &WorldState,
     data: &MovementEventData,
@@ -300,8 +300,8 @@ mod tests {
 
     /// A3-D3 driver (M4.3, spec test 10): the wire case-6 emit sites
     /// carry the CALLER-resolved target dims (radius via
-    /// `entity_collision_radius` — the no-gfx fallback is
-    /// PLAYER_CAPSULE_RADIUS; height 0.0, the retail CPartArray-null
+    /// `entity_collision_radius` — the no-Setup fallback is
+    /// PLAYER_SETUP_SPHERE_RADIUS; height 0.0, the retail CPartArray-null
     /// fallback) on BOTH lanes, and the LOCAL lane carries a REAL
     /// `target_exists` (regression for the documented `false`
     /// placeholder).
@@ -321,7 +321,11 @@ mod tests {
             "Chaser".to_string(),
             WorldPosition::default(),
         ));
-        let expected_radius = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        // SIM/RENDER RADIUS PARITY (2026-08-04): the no-Setup fallback moved
+        // from PLAYER_CAPSULE_RADIUS (0.40, the legacy hand-tuned capsule) to
+        // the retail Setup 0x02000001 sphere the mover itself uses — see
+        // `WorldState::entity_collision_radius`.
+        let expected_radius = crate::spatial::transition::PLAYER_SETUP_SPHERE_RADIUS;
 
         // Remote lane.
         let events = state.handle_message(&moveto_message(remote, target));
@@ -375,7 +379,21 @@ mod tests {
     /// `CPartArray::GetRadius`/`GetHeight` = `setup->radius/height ×
     /// scale.z` (acclient.c:325382-325391) — NOT the cyl-sphere
     /// `GetPhysicsRadius` value, and height is no longer pinned 0.0.
-    /// Flag off ⇒ byte-identical to the pre-fix pair.
+    ///
+    /// FLAG-OFF CONTRACT, RESTATED (2026-08-04): the flag-off arm is the
+    /// cyl-sphere `GetPhysicsRadius` pair — `primitive × scale`, height 0.0.
+    /// It used to be `primitive` with the scale DROPPED, which was not
+    /// `GetPhysicsRadius` in either engine: ACE returns
+    /// `cylSpheres[0].Radius * Scale` (`ACE.Server/Physics/PhysicsObj.cs:596`,
+    /// `:601`) and retail applies the same factor at the `FindObjCollisions`
+    /// call site (acclient.c:316244/:316266). So this is not "flag-off
+    /// behaviour changed" — it is the flag-off arm finally being the thing it
+    /// is named after. `?combatRadii` gates which SOURCE supplies the dims
+    /// (CPartArray vs cyl-sphere cache), never whether an object has a scale;
+    /// before this the ON arm scaled and the OFF arm did not, so the two
+    /// disagreed about a scaled creature's size. Height stays pinned 0.0 off
+    /// (the retail CPartArray-null fallback, acclient.c:319810-319815) —
+    /// THAT is the part the flag genuinely gates.
     #[test]
     fn case6_dims_are_part_array_dims_under_combat_radii() {
         use holtburger_common::properties::{
@@ -405,10 +423,14 @@ mod tests {
         // The DAT pair the wasm SetupModel parse stages.
         state.register_setup_part_dims(setup_id, 1.2, 2.4);
         // The cyl-sphere cache says something DIFFERENT — proving which
-        // source the combat lane reads.
+        // source the combat lane reads. Stored UNSCALED, exactly as the wasm
+        // SetupModel parse stages it; `entity_collision_radius` applies
+        // `DefaultScale` on read (ACE `GetPhysicsRadius`, PhysicsObj.cs:596).
         state.register_setup_radius(setup_id, 0.55);
 
-        // Flag off: the pre-fix cyl-sphere pair.
+        // Flag off: the cyl-sphere `GetPhysicsRadius` pair = 0.55 × 1.5 =
+        // 0.825, height 0.0. (Pre-2026-08-04 this asserted a bare 0.55 — the
+        // same primitive with `Scale` dropped; see the doc comment above.)
         let events = state.handle_message(&moveto_message(remote, target));
         assert!(
             events.iter().any(|event| matches!(
@@ -417,9 +439,10 @@ mod tests {
                     object_radius,
                     object_height,
                     ..
-                } if (*object_radius - 0.55).abs() < 1e-6 && *object_height == 0.0
+                } if (*object_radius - 0.825).abs() < 1e-5 && *object_height == 0.0
             )),
-            "flag off must keep the GetPhysicsRadius pair: {events:?}"
+            "flag off must carry the GetPhysicsRadius pair (0.55 x 1.5 scale, \
+             height 0.0): {events:?}"
         );
 
         // Flag on: setup.radius/height × scale.
@@ -442,14 +465,17 @@ mod tests {
 
         // Residency miss (Setup not parsed yet) falls back to the
         // cyl-sphere radius, never to 0.0 — a miss is not retail's
-        // "no CPartArray".
+        // "no CPartArray". SIM/RENDER RADIUS PARITY (2026-08-04): that
+        // fallback is now PLAYER_SETUP_SPHERE_RADIUS (0.48, retail Setup
+        // 0x02000001's sphere and the radius the mover itself carries), not
+        // the legacy hand-tuned PLAYER_CAPSULE_RADIUS (0.40).
         let unknown = holtburger_common::Guid(0x8000_0099);
         let mut bare = Entity::new(unknown, "Bare".to_string(), WorldPosition::default());
         bare.set_did_prop(PropertyDataId::Setup, holtburger_common::Guid(0x0200_9999));
         state.entities.insert(bare);
         let (r, h) = state.combat_part_dims(unknown);
         assert_eq!(h, 0.0);
-        assert!((r - crate::spatial::PLAYER_CAPSULE_RADIUS).abs() < 1e-6);
+        assert!((r - crate::spatial::transition::PLAYER_SETUP_SPHERE_RADIUS).abs() < 1e-6);
 
         // The unconditional reachability counter moved.
         assert!(state.combat_radii_counters().0 > 0);

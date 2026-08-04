@@ -274,6 +274,12 @@ function _growBucket(bucket, need, scene) {
   im.matrixAutoUpdate = false;
   im.updateMatrix();
   im.userData = old.userData;
+  // Interior particle layering (2026-08-04): the replacement is a FRESH
+  // Object3D, so it starts on the default layer 0. Carrying `userData` over is
+  // not enough — the mask is what the render pass reads. Without this an
+  // indoor bucket silently fell back to the world layer the first time it
+  // outgrew `_INST_BUCKET_MIN_CAP`, i.e. exactly when the effect got busy.
+  im.layers.mask = old.layers.mask;
   im.setColorAt(0, _instColor.setRGB(1, 1, 1));
   // CRITICAL: growth happens MID-TICK, after earlier emitters already wrote
   // `bucket.n` instances into the old buffer. `bucket.n` survives the swap, so
@@ -983,7 +989,13 @@ export class ParticleManager {
       parentOffset = null,
       emitterId = 0,
       blocking = false,
+      renderLayer = 0,
     } = req;
+    // Interior particle layering (2026-08-04) — see `_PARTICLE_RENDER_LAYER`
+    // note above `_appendInstances`. 0 = leave on the world layer (every
+    // caller's default, byte-identical); 1 = the INDOOR layer the cells pass
+    // draws after the portal punch stamps far-Z in the aperture.
+    const layer = Number.isFinite(renderLayer) ? (renderLayer | 0) : 0;
 
     // Retail `CreateBlockingParticleEmitter` (acclient.c:329528-329565):
     // a blocking create over an already-live emitter id returns 0 and
@@ -1297,9 +1309,22 @@ export class ParticleManager {
         // ADDITIVE particles — the alpha branch above sets depthWrite=true, so
         // it silently misses them (measured: 12 of 700 at Cragstone).
         mesh.userData.__particle = true;
+        // Interior particle layering (2026-08-04). THE singleton choke point:
+        // every slot mesh is built here exactly once and then reused across
+        // spawn/kill cycles, and a three.js layer mask is mesh state that
+        // survives add/remove — so stamping at CREATION covers every later
+        // activation without touching `_onMeshActive`, which is NOT available
+        // as a seam (particle_manager uses `_NOOP` identity on that hook as the
+        // instanced-vs-singleton sentinel — see `_applyInstancing`). Nothing
+        // else rewrites these masks: cells.js `_stampSplitLayers` only walks
+        // children that pass `nodeInLandblock`, and a particle mesh carries
+        // neither `landblockId` nor `coversLbKeys`, so it is always skipped.
+        if (layer > 0) mesh.layers.set(layer);
         return mesh;
       },
     });
+    // Carried on the emitter for the instanced path (bucket keying) + diag.
+    emitter.renderLayer = layer;
 
     const ok = await emitter.setInfo(info);
     if (!ok) {
@@ -1575,15 +1600,34 @@ export class ParticleManager {
   }
 
   /**
-   * Append one emitter's live particles to its gfxobj bucket (created on first
-   * use). The slot meshes are scene-detached, so `mesh.matrix` is already in
-   * `_scene`-local space — the same space the bucket (identity, child of
-   * `_scene`) instances live in, so the matrix copies straight across.
+   * Append one emitter's live particles to its (gfxobj, renderLayer) bucket
+   * (created on first use). The slot meshes are scene-detached, so
+   * `mesh.matrix` is already in `_scene`-local space — the same space the
+   * bucket (identity, child of `_scene`) instances live in, so the matrix
+   * copies straight across.
+   *
+   * BUCKET KEYING (2026-08-04): buckets were keyed by gfxobj alone. An
+   * InstancedMesh is ONE scene object with ONE layer mask and three.js has no
+   * per-instance layer, so a bucket holding both an indoor fountain and an
+   * outdoor torch that share a gfxobj can only be given one answer, and either
+   * choice is the bug: hoisting the whole bucket reintroduces exactly the
+   * over-hoisting the retired `?indoorParticleLayer` sweep was rejected for
+   * (outdoor particles drawing over the interior inside the punched doorway),
+   * and leaving it on layer 0 loses the interior ones. So the key is now the
+   * PAIR. Rejected alternatives: (a) hoist-if-any-member — the sweep's bug;
+   * (b) force layered emitters onto the per-mesh path — silently forfeits the
+   * draw-call collapse for precisely the dense interior fountains that motivate
+   * instancing, and only when `?particleInstancing=on`, i.e. an invisible
+   * asymmetry. Cost of the pair key is at most ONE extra bucket per gfxobj that
+   * appears both indoors and outdoors (+1 draw call), against the 627→N
+   * collapse instancing already buys.
    */
   _appendInstances(emitter) {
     const parts = emitter.parts;
     if (!parts || !parts.length) return;
-    const key = emitter._instKey >>> 0;
+    const gfx = emitter._instKey >>> 0;
+    const layer = emitter.renderLayer | 0;
+    const key = `${gfx}|${layer}`;
     let bucket = this._instBuckets.get(key);
     if (!bucket) {
       const mat = emitter._instBaseMat.clone();
@@ -1602,13 +1646,15 @@ export class ParticleManager {
       mat.userData.__disposable = true;
       const im = new THREE.InstancedMesh(emitter._instGeom, mat, _INST_BUCKET_MIN_CAP);
       im.count = 0;
-      im.name = `particle-inst-0x${key.toString(16)}`;
+      im.name = `particle-inst-0x${gfx.toString(16)}${layer ? `-L${layer}` : ""}`;
       // RP6 culls per emitter by contribution; three's per-object test would
       // measure the bucket's identity-placed bounds, not the particles'.
       im.frustumCulled = false;
       im.matrixAutoUpdate = false;
       im.updateMatrix();
-      im.userData = { isParticleInstanced: true, gfxObjId: key };
+      im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer };
+      // Same emission-time layer the singleton slot meshes get (meshFactory).
+      if (layer > 0) im.layers.set(layer);
       im.setColorAt(0, _instColor.setRGB(1, 1, 1));
       this._scene.add(im);
       bucket = { im, n: 0 };

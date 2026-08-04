@@ -710,6 +710,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     composer.addPass(portalPunchPass);
   }
 
+  // ?indoorDepthSplit (2026-08-04). Published once per tick by cells.js
+  // `tickCellVisibility3D` via `setIndoorSplitArmed`; read by
+  // `preFrameSkySync`. Stays `false` forever when the flag is off (cells.js
+  // never arms), so the off-state costs one already-false boolean read and the
+  // composer's pass list is untouched — the split reuses the depthClearPass /
+  // cellsMaskPass / cellsRenderPass slots that have existed (disabled) since
+  // the Phase 5 PView work.
+  let indoorSplitArmed = false;
+
   // Phase 5 PView render-order fix (2026-05-25) — indoor depth-clear +
   // cells pass. Both are `enabled=false` by default (outdoor steady state);
   // preFrameSkySync flips them on when indoor and configures
@@ -724,6 +733,31 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   const depthClearPass = new ClearPass(false, true, false);
   depthClearPass.enabled = false;
   composer.addPass(depthClearPass);
+
+  // PORTAL SEAL (2026-08-04 round 6) — retail's step 3 between the Z wipe and
+  // the cell draws (`DrawPortalPolyInternal(portal, zClear=0)`,
+  // acclient.c:461536). Re-stamps each outdoor-facing aperture at its TRUE
+  // depth so interior geometry beyond the doorway plane is depth-rejected and
+  // the world pass's colour seen through the doorway survives. Only added when
+  // the indoor-split flag is live, so the composer pass list is byte-identical
+  // otherwise. Ordering is load-bearing: AFTER depthClearPass, BEFORE the cells
+  // mask/render pair.
+  // Live only when ?indoorDepthSplit is engaged. Read here rather than plumbed
+  // through options so the pipeline cannot be constructed in a state where the
+  // seal slot is missing while cells.js is arming the split. `off`/absent =>
+  // the pass is never constructed and the composer list is byte-identical.
+  const indoorDepthSplitFlag = (() => {
+    try {
+      const v = new URLSearchParams(globalThis.location?.search || "").get("indoorDepthSplit");
+      return v !== "off"; // DEFAULT-ON (2026-08-04); "on"/"retail"/"strict"/absent all construct the seal slot
+    } catch (_) { return false; }
+  })();
+  let portalSealPass = null;
+  if (indoorDepthSplitFlag) {
+    portalSealPass = new PortalPunchPass(scene, camera, "seal");
+    portalSealPass.enabled = false;
+    composer.addPass(portalSealPass);
+  }
 
   const cellsMaskPass = new CameraLayerMaskPass(
     camera,
@@ -942,6 +976,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     worldRenderPass,
     portalStencilPass,
     portalPunchPass,
+    portalSealPass,
     // Phase 5 PView render-order fix (2026-05-25) — exposed for diag
     // probes + the zfighting harness, which reads `depthClearPass.enabled`
     // to confirm the indoor split is wired.
@@ -951,6 +986,26 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     cellsRenderPass,
     cellsPostMaskPass,
     fxPass,
+
+    /**
+     * ?indoorDepthSplit (2026-08-04) — arm/disarm retail's indoor
+     * `PView::DrawCells` structure for the NEXT frame. Called once per tick by
+     * cells.js `tickCellVisibility3D`, which owns the (indoor && camera-below-
+     * terrain) decision AND the matching restriction of the cells pass to the
+     * portal set. Split here rather than computed in `preFrameSkySync` for the
+     * same reason `_lastIsIndoor` is: the render dispatch must never call into
+     * wasm (`?nullRender=1` / capture cadences throttle the session).
+     *
+     * @param {boolean} armed
+     */
+    setIndoorSplitArmed(armed) {
+      indoorSplitArmed = !!armed;
+    },
+
+    /** Diag read-back for `__diag` / the zfighting harness. */
+    isIndoorSplitArmed() {
+      return indoorSplitArmed;
+    },
 
     /**
      * Pre-frame: sync sky camera, flip sky enabled/world clear flags
@@ -977,10 +1032,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
      */
     preFrameSkySync(skyDome, mainCamera) {
       const isIndoor = !!skyDome?._lastIsIndoor;
+      // SKY-SEEN-OUTSIDE (2026-08-04): the SKY gates read the composite flag
+      // (indoor AND not SeenOutside — sky_dome.js tick) so a cottage interior
+      // keeps its sky behind the doorway/window view; dungeon cells (never
+      // SeenOutside) black out exactly as before. Everything else in this
+      // method (punch split, layer masks) still keys off `isIndoor`.
+      const skyBlocked = !!(skyDome?._lastSkyBlocked ?? isIndoor);
 
       // Sky-K.2 sky-pass + sky-camera sync (existing behaviour).
       if (skyRenderPass) {
-        skyRenderPass.enabled = !!skyDome && !isIndoor;
+        skyRenderPass.enabled = !!skyDome && !skyBlocked;
         if (skyRenderPass.enabled && typeof skyDome.syncSkyCamera === "function") {
           skyDome.syncSkyCamera(mainCamera);
         }
@@ -989,9 +1050,25 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // Job A — the horizon dissolve only makes sense when the sky is visible.
       // Indoors (sky pass off, world clears colour) skip the capture and no-op
       // the effect so distant indoor geometry is never tinted sky-colour.
-      const skyVisible = !!skyDome && !isIndoor;
+      // ?indoorDepthSplit (2026-08-04 round 3) — mark which renderer drove this
+      // frame, so "armed but nothing changed" can be told apart from "armed and
+      // the split ran" without a screenshot. The direct-render fallback in
+      // index.js stamps "direct"; reaching here means the composer ran.
+      if (skyDome) skyDome._indoorSplitPath = "composer";
+
+      const skyVisible = !!skyDome && !skyBlocked;
       if (skyCapturePass) skyCapturePass.enabled = skyVisible;
-      if (horizonDissolve) horizonDissolve.setEnabled(skyVisible);
+      // DEPTH-CONSUMER GUARD. The armed split deliberately leaves TERRAIN at
+      // far depth (its depth is wiped and only layer-1 geometry rewrites it),
+      // and the horizon dissolve blends any pixel past HORIZON_DISSOLVE_END_M
+      // (1150 m) fully into the sky. Far depth reads as "beyond the end", so
+      // leaving it on would dissolve every terrain pixel — the whole view out
+      // the doorway — to flat sky colour. Retail draws no atmosphere at all
+      // from inside a cell (`PView::DrawCells` has no aerial/fog stage), so
+      // switching it off while armed is both the fix and the faithful choice.
+      if (horizonDissolve) {
+        horizonDissolve.setEnabled(skyVisible && !(indoorSplitArmed && isIndoor));
+      }
 
       // World pass clear flags. The world pass is the first GEOMETRY pass, so
       // it always starts from a FRESH depth buffer; it keeps the COLOR the sky
@@ -1033,6 +1110,34 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         !isIndoor &&
         !!portalPunchPass &&
         portalPunchPass.hasApertures;
+      //
+      // ?indoorDepthSplit (2026-08-04) — THE CAMERA-INSIDE HALF, and the
+      // rectification of the rectification above. The 2026-05-29 note is right
+      // that the OLD split caused the see-through, and wrong that the split
+      // itself is the sin: retail's indoor frame IS this split.
+      // `SmartBox::RenderNormalMode` (acclient.c:144889) sends any EnvCell
+      // viewer to `DrawInside` → `PView::DrawCells(pview, 0)`
+      // (acclient.c:461450), which draws the landscape (portal-clipped),
+      // then `Clear(4 /*Z only*/, …, 1.0f)` — a FULL-SCREEN depth wipe,
+      // acclient.c:461484 + :457577 — then re-stamps the exterior portal planes
+      // at true depth, then draws `cell_draw_list` with a normal LESS test.
+      // There is NO terrain-vs-building exclusion anywhere in retail; the Z
+      // wipe is the entire mechanism, which is why terrain can never occlude an
+      // interior there and does here.
+      //
+      // What actually regressed in 2026-05-29 was the pair (trigger, content):
+      // the trigger fired while the camera was visually outside, and the second
+      // pass drew the AABB-frustum/stablist union instead of retail's
+      // portal-clipped `cell_draw_list`. cells.js fixes BOTH before setting
+      // this flag — it arms only when the camera is genuinely below the terrain
+      // surface (or `=retail` for the A/B), and it narrows the cell set to the
+      // portal walk in the same tick. This branch therefore does only what
+      // retail does, and never fires unless cells.js says the camera is inside.
+      //
+      // Ordering: the punch (outdoor) wins if both somehow ask, because
+      // `punchActive` requires `!isIndoor` and the split requires indoor —
+      // they are mutually exclusive by construction, and the `else if` makes
+      // that structural rather than incidental.
       if (punchActive) {
         // (1) world pass → terrain + facade + outdoor statics only (layer 0).
         worldMaskPass.mask = CAM_LAYER_MASK_WORLD_ONLY;
@@ -1040,12 +1145,55 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         //     depth to FAR inside each aperture. NOT the global depth wipe (that
         //     caused the 2026-05-29 see-through); the punch is bounded to doorways.
         depthClearPass.enabled = false;
+        if (portalSealPass) portalSealPass.enabled = false;
         // (3) cells pass → interior EnvCells + entities (layer 1) with the world
         //     depth + punches intact (clear=false/clearDepth=false). Interior
         //     wins inside the punched doorways, loses behind the facade.
         cellsMaskPass.enabled = true;
         cellsRenderPass.enabled = true;
+      } else if (indoorSplitArmed && isIndoor) {
+        // ROUND 2 (2026-08-04), after live verification. The masks below are
+        // UNCHANGED from round 1 — what changed is what the two layers MEAN,
+        // and that is done entirely in cells.js. Round 1 assumed layer 1 held
+        // the interior; at the Holtburg meeting hall `cellContainers3d` was
+        // empty and the room VANISHED, because the walls you see from inside a
+        // town building are the BUILDING MODEL (buildingsGroup, layer 0 —
+        // index.js:1319, never stamped), not EnvCell surfaces. So while armed,
+        // cells.js moves the player's-landblock buildingsGroup + staticsGroup
+        // onto layer 1 (see SPLIT_RELAYER_GROUPS there). The split then reads:
+        //
+        // (1) world pass, layer 0 → TERRAIN (plus other landblocks' buildings,
+        //     which stay on layer 0 on purpose and so keep terrain occlusion).
+        //     Retail's `LScape::draw` at :461480.
+        worldMaskPass.mask = CAM_LAYER_MASK_WORLD_ONLY;
+        // (2) full depth wipe, colour kept — retail's `Clear(4, …, 1.0f)` at
+        //     :461484. `ClearPass(false, true, false)` is exactly that.
+        depthClearPass.enabled = true;
+        // (3) cells pass, layer 1 → the room SHELL + its props + the portal-set
+        //     EnvCells + entities, against the fresh depth, so terrain can no
+        //     longer occlude the room the camera is standing in. Retail's
+        //     `DrawBuilding` + `DrawEnvCell` loop at :461606.
+        //
+        // KNOWN GAPS vs retail, deliberately not attempted this round:
+        //   · retail re-stamps each exterior portal plane at its true depth
+        //     between (2) and (3) (`DrawPortalPolyInternal(portal, 0)`,
+        //     acclient.c:461536), stopping interior content from overpainting
+        //     the landscape colour seen through a doorway;
+        //   · terrain depth is far after the wipe, so depth-reading effects
+        //     (aerial perspective, ground fog, cloud overlay) over-apply on the
+        //     terrain seen through the doorway. Retail draws no atmosphere
+        //     indoors at all, so there is no retail answer to copy; this needs
+        //     a real-GPU look before deciding.
+        // Both are tracked in the `indoorDepthSplit` docs row.
+        // (2b) retail step 3 — seal the doorway planes at TRUE depth so the
+        //      cells pass cannot overpaint the world-pass colour (terrain AND
+        //      the layer-0 outdoor particles drawn with it) that is legitimately
+        //      visible through the aperture.
+        if (portalSealPass) portalSealPass.enabled = portalSealPass.hasApertures;
+        cellsMaskPass.enabled = true;
+        cellsRenderPass.enabled = true;
       } else {
+        if (portalSealPass) portalSealPass.enabled = false;
         worldMaskPass.mask = CAM_LAYER_MASK_BOTH;
         depthClearPass.enabled = false;
         cellsMaskPass.enabled = false;
@@ -1084,6 +1232,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // `.camera`, not `.mainCamera` — the pmndrs base Pass `set mainCamera` is
       // an empty no-op, so the punch reads its render camera off `this.camera`.
       if (portalPunchPass && cam) portalPunchPass.camera = cam;
+      if (portalSealPass && cam) portalSealPass.camera = cam;
       composer.render(dt);
     },
 

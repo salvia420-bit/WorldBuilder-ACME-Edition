@@ -25,6 +25,19 @@ import * as THREE from "three";
 
 const SKY_CAMERA_NEAR = 0.1;
 const SKY_CAMERA_FAR = 50000.0;
+// SKY-SEEN-OUTSIDE (2026-08-04) — `?skySeenOutside` (default ON; `=off`
+// escape). See the `_lastSkyBlocked` comment in tick().
+const SKY_SEEN_OUTSIDE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("skySeenOutside")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 
 // Scratch for the sky-bird anchor placement (per-rAF; never allocate in tick).
 const _skyBirdPosScratch = new THREE.Vector3();
@@ -596,6 +609,33 @@ export class SkyDome {
       }
     }
     this._lastIsIndoor = isIndoor;
+    // SKY-SEEN-OUTSIDE (2026-08-04, `?skySeenOutside`, default ON; `=off`
+    // restores the old any-indoor blackout). `_lastSkyBlocked` is the flag the
+    // SKY PASS gates on (atmosphere_pipeline.preFrameSkySync + the legacy
+    // renderSkyPass short-circuit below) — everything else keeps reading
+    // `_lastIsIndoor` unchanged (birds stay hidden under cottage ceilings,
+    // weather SkyObjects, the W5 loop flag, the indoor layer split).
+    // A building interior is a SeenOutside EnvCell (`flags & 0x01`,
+    // env_cell.rs:32): its doorway/windows show terrain — which the Phase 5
+    // indoor render deliberately keeps visible — so blanking the sky there
+    // painted the doorway view against a dead clear color. Retail feeds the
+    // outdoor bed into a cell when (outdoor OR seen_outside)
+    // (acclient.c:146721/146746 — the same rule the Phase 4 ambient-sound
+    // gate ported); the sky pass now follows it. Dungeon cells are not
+    // SeenOutside, so they keep the blackout. Typeof-guarded: a stale pkg/
+    // without the getter degrades to the old behavior.
+    let skyBlocked = isIndoor;
+    if (
+      SKY_SEEN_OUTSIDE_ON &&
+      isIndoor &&
+      session &&
+      typeof session.isCurrentCellSeenOutside === "function"
+    ) {
+      try {
+        skyBlocked = !session.isCurrentCellSeenOutside();
+      } catch (_) { /* keep isIndoor */ }
+    }
+    this._lastSkyBlocked = skyBlocked;
 
     // Task #4 — keep the sky-swarm (bird) anchor overhead, following the camera.
     // Hidden indoors (no birds through ceilings). The emitters tick on the
@@ -669,7 +709,10 @@ export class SkyDome {
       this._lastSkyRendered = false;
       return;
     }
-    if (this._lastIsIndoor) {
+    // SKY-SEEN-OUTSIDE (2026-08-04): gate on the composite sky-block flag
+    // (indoor AND not SeenOutside) so cottage interiors keep their sky;
+    // `?? _lastIsIndoor` covers a tick() not having run yet this frame.
+    if (this._lastSkyBlocked ?? this._lastIsIndoor) {
       this._lastSkyRendered = false;
       return;
     }

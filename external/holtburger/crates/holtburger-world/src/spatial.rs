@@ -25,7 +25,7 @@ mod types;
 
 pub use entity_collision::{
     EntityBsp, EntityCollider, EntityPhysicsGeometry, clamp_delta_against_entities,
-    spheres_overlap_xy,
+    spheres_overlap_xy, sweep_sphere_against_entity_bsp,
 };
 pub use force_position_interp::{
     InterpStep, MAX_INTERPOLATED_VELOCITY, RetailForcePositionInterpolator,

@@ -56,6 +56,23 @@ const SWARM_ACE_LEGACY = (() => {
   }
 })();
 
+// Particle::Init A/B/C fallthrough escape (2026-08-04). Default = retail-correct
+// (acclient.c:330710-330742 — see the long note at the switch in `init()`).
+// `?particleInitAce=on` reverts to ACE.Server Particle.cs:54-99's non-fallthrough
+// port (types 3/4/9/10/11 leave A — and 4/9/11 also B — unwritten) for a
+// side-by-side 1070 eye-test. Strict `=== "on"`: a `!== "off"` test would read ON
+// when the param is absent (the documented flag-default footgun). Read once at
+// module load — the per-particle `init()` hot path must not parse the URL.
+const PARTICLE_INIT_ACE_LEGACY = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("particleInitAce")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
 /**
  * `ACE.Entity.Enum.ParticleType` — frozen enum mirror.
  * Source: external/ACE/Source/ACE.Entity/Enum/ParticleType.cs
@@ -209,7 +226,43 @@ export class Particle {
     const localPt = parentOffset.position.clone().add(randomOffset);
     this.offset.copy(localToGlobalVec(this.startFrame, localPt));
 
-    // Port of Particle.cs:47-108 — 12-case ParticleType branch.
+    // Per-type A/B/C setup — RETAIL `Particle::Init` (acclient.c:330710-330742).
+    //
+    // 2026-08-04 PARTICLE-INIT-FALLTHROUGH fix. Retail's switch is a
+    // FALLTHROUGH CHAIN; ACE's C# port (Particle.cs:54-99) kept only the FIRST
+    // statement of each case and `break`s, and this file faithfully ported that
+    // port. Three chains, verbatim from the decomp:
+    //
+    //   case 4: c = *_c;              ↓ (goto $L112711)
+    //   case 3: b = *_b;              ↓ (goto $L112712)
+    //   case 2: a = l2g(start_frame, _a);  break
+    //
+    //   case 9: c = l2g(start_frame, _c);  ↓ (goto $L112717)
+    //   case 8: b = l2g(start_frame, _b);  ↓
+    //           a = l2g(start_frame, _a);  break
+    //
+    //   case 11: c = *_c;             ↓ (goto $L112721)
+    //   case 10: b = *_b;             ↓ (goto $L112722)
+    //   case 12: a = *_a;             break
+    //
+    // The type NAMES corroborate the decomp independently: ParabolicLVGA =
+    // *L*ocal *V*elocity + *G*lobal *A*cceleration ⇒ A is rotated into the
+    // start frame and B is a world vector; LVLALR rotates all three; GVGAGR
+    // rotates none. So ACE has TWO errors here, both inherited by us:
+    //   (a) the missing fallthrough — types 3/4/9/10/11 never set A (and
+    //       4/9/11 never set B), leaving whatever the PREVIOUS particle in that
+    //       reused slot left behind (zeroes on a fresh slot). Those types read
+    //       A and B in update(), so their particles had NO velocity and NO
+    //       acceleration: the whole emission collapsed onto the spawn offset
+    //       instead of streaming. 481 of the 2051 ParticleEmitter records in
+    //       client_portal.dat use one of the five types; 223 of those author a
+    //       non-zero A that was being dropped on the floor. The Holtburg town
+    //       portal is one (0x320002CD, type 9, a=(0,0.2,0)·[0.7,1.5]).
+    //   (b) B rotated for type 3 and C rotated for type 4, where retail takes
+    //       both as GLOBAL vectors (the "GA"/"GR" in the names).
+    //
+    // `?particleInitAce=on` restores the legacy ACE-port assignment for a
+    // side-by-side eye-test — same escape-hatch shape as SWARM_ACE_LEGACY above.
     switch (info.particleType) {
       case ParticleType.Still:
         // No A/B/C used.
@@ -218,15 +271,23 @@ export class Particle {
         this.a.copy(localToGlobalVec(this.startFrame, a));
         break;
       case ParticleType.ParabolicLVGA:
-        // ACE Particle.cs:55: B = StartFrame.LocalToGlobalVec(b);
-        // (the C# has `case ParabolicLVGA: B = ...;` but it does NOT set
-        // A — A passes through as the random A in update; flagging this
-        // as an apparent ACE oversight but porting faithfully.)
-        this.b.copy(localToGlobalVec(this.startFrame, b));
+        // retail case 3 → 2: b = *_b (GLOBAL), a = l2g(_a).
+        if (PARTICLE_INIT_ACE_LEGACY) {
+          this.b.copy(localToGlobalVec(this.startFrame, b)); // ACE Particle.cs:55
+        } else {
+          this.b.copy(b);
+          this.a.copy(localToGlobalVec(this.startFrame, a));
+        }
         break;
       case ParticleType.ParabolicLVGAGR:
-        // ACE Particle.cs:58: C = StartFrame.LocalToGlobalVec(c);
-        this.c.copy(localToGlobalVec(this.startFrame, c));
+        // retail case 4 → 3 → 2: c = *_c, b = *_b (both GLOBAL), a = l2g(_a).
+        if (PARTICLE_INIT_ACE_LEGACY) {
+          this.c.copy(localToGlobalVec(this.startFrame, c)); // ACE Particle.cs:58
+        } else {
+          this.c.copy(c);
+          this.b.copy(b);
+          this.a.copy(localToGlobalVec(this.startFrame, a));
+        }
         break;
       case ParticleType.Swarm:
         this.a.copy(localToGlobalVec(this.startFrame, a));
@@ -262,15 +323,25 @@ export class Particle {
         this.b.copy(localToGlobalVec(this.startFrame, b));
         break;
       case ParticleType.ParabolicLVLALR:
-        // ACE Particle.cs:92: C = StartFrame.LocalToGlobalVec(c);
-        // (No A/B set; mirrors C# oversight — `case ParabolicLVLALR: C = ...;`)
+        // retail case 9 → 8 → tail: c, b, a ALL l2g(start_frame, ·).
         this.c.copy(localToGlobalVec(this.startFrame, c));
+        if (!PARTICLE_INIT_ACE_LEGACY) {
+          this.b.copy(localToGlobalVec(this.startFrame, b));
+          this.a.copy(localToGlobalVec(this.startFrame, a));
+        }
         break;
       case ParticleType.ParabolicGVGA:
+        // retail case 10 → 12: b = *_b, a = *_a (both GLOBAL).
         this.b.copy(b);
+        if (!PARTICLE_INIT_ACE_LEGACY) this.a.copy(a);
         break;
       case ParticleType.ParabolicGVGAGR:
+        // retail case 11 → 10 → 12: c = *_c, b = *_b, a = *_a (all GLOBAL).
         this.c.copy(c);
+        if (!PARTICLE_INIT_ACE_LEGACY) {
+          this.b.copy(b);
+          this.a.copy(a);
+        }
         break;
       case ParticleType.GlobalVelocity:
         this.a.copy(a);

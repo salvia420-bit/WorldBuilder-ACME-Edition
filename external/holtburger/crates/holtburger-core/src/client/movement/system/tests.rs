@@ -9143,9 +9143,12 @@ mod faithful_entity_collision {
 
         let capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 2.0, 1.0);
 
-        // Door-like obstacle: default entity (radius = PLAYER_CAPSULE_RADIUS 0.4,
-        // no gfx) at global (481.2, 480). Combined radius 0.8 → contact when the
-        // player centre reaches x = 481.2 − 0.8 = 480.4 (≈ 0.4 m of travel).
+        // Door-like obstacle: default entity at global (481.2, 480), carrying no
+        // Setup DID so `entity_collision_radius` returns its fallback. Since
+        // 2026-08-04 that fallback is PLAYER_SETUP_SPHERE_RADIUS (0.48, the
+        // radius the MOVER itself uses) rather than PLAYER_CAPSULE_RADIUS (0.40)
+        // — combined 0.96, so contact lands when the player centre reaches
+        // x = 481.2 − 0.96 = 480.24 (≈ 0.24 m of travel, was ≈ 0.32 m).
         let mut door = Entity::new(
             Guid(0x6000_0001),
             "Door".to_string(),
@@ -9199,14 +9202,14 @@ mod faithful_entity_collision {
     }
 
     /// Flag ON: the closed (collidable) door blocks the mover at the cylinder —
-    /// contact is at ~0.4 m of travel (2 m − combined-radius 0.8 m from a 1.2 m
-    /// gap), so the realized advance is a small fraction of the request.
+    /// contact is at ~0.24 m of travel (1.2 m gap − combined radius 0.96), so
+    /// the realized advance is a small fraction of the 2 m request.
     #[test]
     fn flag_on_stops_at_closed_door() {
         let advance = run_slice(true, false);
         assert!(
             (0.2..0.6).contains(&advance),
-            "flag on: mover should stop at the door cylinder (~0.4 m), got \
+            "flag on: mover should stop at the door cylinder (~0.24 m), got \
              {advance:.3} m"
         );
         // And strictly less than the pass-through baseline.

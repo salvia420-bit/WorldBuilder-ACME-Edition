@@ -121,13 +121,16 @@ const composite =
   "\n// === particle_emitter_info.js ===\n" + stripped[2] +
   "\n// === particle_emitter.js ===\n" + stripped[3] +
   "\n// === particle_manager.js ===\n" + stripped[4] +
-  "\n; return { Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager, setCurrentTime, setRng, currentTime, rng, normalizeCheckSmall, setTranslucency, localToGlobalVec };";
+  "\n; return { Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager, setCurrentTime, setRng, currentTime, rng, normalizeCheckSmall, setTranslucency, localToGlobalVec, setParticleInstancingFlag, _growBucket };";
 
 const factory = new Function("THREE", composite);
 const mod = factory(THREE);
 const {
   Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager,
   setCurrentTime, setRng, normalizeCheckSmall, localToGlobalVec, setTranslucency,
+  // Module-private in the real files; in scope here because the harness
+  // concatenates the sources into ONE closure (see `composite` above).
+  setParticleInstancingFlag, _growBucket,
 } = mod;
 
 // ---- shared deterministic mocks --------------------------------------
@@ -374,27 +377,85 @@ check(
   );
 
   // First explicit update: lt = (now - lastUpdateTime) = 1 (non-persistent).
-  // ACE ParabolicLVGA init only sets B — A stays (0,0,0). So:
-  // pos = parent + offset + 0.5*1²*B + 1*0 = (1, 0, 0).
+  // 2026-08-04 PARTICLE-INIT-FALLTHROUGH: retail `Particle::Init`
+  // (acclient.c:330712-330718) falls case 3 THROUGH case 2, so ParabolicLVGA
+  // sets B = *_b (global) AND A = l2g(_a) — A is NOT (0,0,0). ACE's C# port
+  // (Particle.cs:54-56) kept only the B line, and this suite used to assert
+  // that quirk. Identity start frame ⇒ A = (1,0,0), B = (2,0,0), so:
+  //   pos = parent + offset + 0.5·1²·B + 1·A = 1 + 1 = (2, 0, 0).
   mockTime = 1.0;
   p.update(ParticleType.ParabolicLVGA, false, mesh, parent);
   check(
-    "ParabolicLVGA @ t=1: position = parent + 0.5*t²*B + offset → x=1 (A=0 per ACE init quirk)",
-    approx(mesh.position.x, 1),
+    "ParabolicLVGA @ t=1: position = parent + 0.5*t²*B + t*A → x=2 (retail fallthrough sets A)",
+    approx(mesh.position.x, 2),
     `pos.x=${mesh.position.x}`
   );
 
   // Second update at lt=2. Non-persistent sets lifetime = elapsed,
   // but lastUpdateTime is NOT updated in non-persistent path (Particle.cs:128-134).
-  // So lt = 2, and pos is ASSIGNED 0.5*2²*2 = 4 (anchored at parent, not
+  // So lt = 2, and pos is ASSIGNED 0.5*2²*2 + 2*1 = 6 (anchored at parent, not
   // accumulated onto the t=1 value).
   mockTime = 2.0;
   p.update(ParticleType.ParabolicLVGA, false, mesh, parent);
   check(
-    "ParabolicLVGA @ t=2: position = parent + 0.5*t²*B = 0.5*4*2 = 4 (retail assign, not ACE += accumulator)",
-    approx(mesh.position.x, 4),
-    "pos.x=" + mesh.position.x + ", expected=4"
+    "ParabolicLVGA @ t=2: position = parent + 0.5*t²*B + t*A = 4 + 2 = 6 (retail assign, not ACE += accumulator)",
+    approx(mesh.position.x, 6),
+    "pos.x=" + mesh.position.x + ", expected=6"
   );
+}
+
+// ============================================================
+// Test 5b: Particle.init per-type A/B/C table (retail fallthrough)
+// ============================================================
+// Regression guard for the 2026-08-04 PARTICLE-INIT-FALLTHROUGH fix. Retail
+// `Particle::Init` (acclient.c:330710-330742) is a fallthrough chain
+// (4→3→2, 9→8→tail, 11→10→12); ACE's C# (Particle.cs:54-99) kept only the
+// first statement per case, so types 3/4/9/10/11 never wrote A (and 4/9/11
+// never wrote B) — those types READ A and B in update(), so their particles
+// had zero velocity and zero acceleration. The type names are the spec:
+// L/G before V/A/R = the vector is rotated into the start frame (l2g) or
+// taken as a world vector. A non-identity start frame (90° about Z) makes
+// the two cases distinguishable: l2g((1,0,0)) = (0,1,0).
+{
+  mockTime = 0;
+  mockRngVal = 0.5;
+  const q90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+  const A = new THREE.Vector3(1, 0, 0);
+  const B = new THREE.Vector3(2, 0, 0);
+  const C = new THREE.Vector3(3, 0, 0);
+  // Expected per retail: "l2g" ⇒ x-vector becomes +y; "glob" ⇒ stays +x;
+  // null ⇒ the field is not read by update() for that type.
+  const table = [
+    ["LocalVelocity",    ParticleType.LocalVelocity,    "l2g",  null,   null],
+    ["ParabolicLVGA",    ParticleType.ParabolicLVGA,    "l2g",  "glob", null],
+    ["ParabolicLVGAGR",  ParticleType.ParabolicLVGAGR,  "l2g",  "glob", "glob"],
+    ["ParabolicLVLA",    ParticleType.ParabolicLVLA,    "l2g",  "l2g",  null],
+    ["ParabolicLVLALR",  ParticleType.ParabolicLVLALR,  "l2g",  "l2g",  "l2g"],
+    ["ParabolicGVGA",    ParticleType.ParabolicGVGA,    "glob", "glob", null],
+    ["ParabolicGVGAGR",  ParticleType.ParabolicGVGAGR,  "glob", "glob", "glob"],
+    ["GlobalVelocity",   ParticleType.GlobalVelocity,   "glob", null,   null],
+  ];
+  for (const [name, type, wantA, wantB, wantC] of table) {
+    const info = new ParticleEmitterInfo(makeBaseInfo({ particleType: type }));
+    const mesh = makeMesh();
+    const parent = { position: new THREE.Vector3(0, 0, 0), quaternion: q90 };
+    const parentOffset = { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() };
+    const p = new Particle();
+    p.init(info, parent, -1, parentOffset, mesh, new THREE.Vector3(0, 0, 0), false,
+      A.clone(), B.clone(), C.clone());
+    const want = (mode, src) => (mode === "l2g"
+      ? new THREE.Vector3(0, src.x, 0)   // 90° about Z: (x,0,0) → (0,x,0)
+      : src);
+    for (const [field, mode, src] of [["a", wantA, A], ["b", wantB, B], ["c", wantC, C]]) {
+      if (mode === null) continue;
+      const w = want(mode, src);
+      check(
+        `${name}: ${field.toUpperCase()} = ${mode === "l2g" ? "l2g(startFrame, _" + field + ")" : "*_" + field + " (global)"}`,
+        approx(p[field].x, w.x) && approx(p[field].y, w.y) && approx(p[field].z, w.z),
+        `${field}=(${p[field].x.toFixed(3)}, ${p[field].y.toFixed(3)}, ${p[field].z.toFixed(3)}) want=(${w.x}, ${w.y}, ${w.z})`
+      );
+    }
+  }
 }
 
 // ============================================================
@@ -1308,6 +1369,104 @@ check(
   );
 
   console.warn = realWarn;
+}
+
+// ------------------------------------------------------------
+// Test 25: renderLayer plumbing (2026-08-04 interior particles)
+// ------------------------------------------------------------
+// Interior-anchored static chains pass `renderLayer: 1` so their meshes ride
+// the cells pass instead of the world pass under `?portalPunch`. Guards the
+// default (untouched layer 0), the singleton stamp, the (gfxobj, layer) bucket
+// keying, and `_growBucket`'s mask carry-over — the two silent-failure modes.
+{
+  mockTime = 0;
+  mockRngVal = 0.5;
+  const mkMgr = (scene, instancing = false) => new ParticleManager({
+    scene,
+    instancing,
+    geometryFactory: async (_) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
+      return g;
+    },
+    materialFactory: async (_) => {
+      const m = new THREE.MeshBasicMaterial({ transparent: true });
+      m.blending = THREE.AdditiveBlending; // additive ⇒ eligible for instancing
+      return m;
+    },
+  });
+  const infoFor = () => makeBaseInfo({
+    particleType: ParticleType.Still,
+    maxParticles: 2, totalParticles: 0, totalSeconds: 0,
+    lifespan: 100.0, lifespanRand: 0, initialParticles: 2, birthrate: 0.0,
+  });
+  const parentAt = () => ({ position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() });
+
+  // (a) default: no renderLayer ⇒ meshes keep three's default mask (layer 0).
+  const sceneA = new THREE.Scene();
+  const mgrA = mkMgr(sceneA);
+  await mgrA.addEmitter({ emitterInfo: infoFor(), parent: parentAt(), partIndex: -1 });
+  const emA = [...mgrA.particleTable.values()][0];
+  check(
+    "renderLayer: absent ⇒ emitter.renderLayer === 0 (byte-identical default)",
+    emA.renderLayer === 0,
+    `renderLayer=${emA.renderLayer}`
+  );
+  check(
+    "renderLayer: absent ⇒ slot meshes stay on layer 0",
+    emA.partStorage.filter(Boolean).every((m) => m.layers.mask === 1),
+    `masks=${emA.partStorage.filter(Boolean).map((m) => m.layers.mask).join(",")}`
+  );
+
+  // (b) renderLayer:1 ⇒ every slot mesh is stamped onto layer 1 at creation.
+  const sceneB = new THREE.Scene();
+  const mgrB = mkMgr(sceneB);
+  await mgrB.addEmitter({ emitterInfo: infoFor(), parent: parentAt(), partIndex: -1, renderLayer: 1 });
+  const emB = [...mgrB.particleTable.values()][0];
+  const builtB = emB.partStorage.filter(Boolean);
+  check(
+    "renderLayer: 1 ⇒ emitter carries it + every built slot mesh is on layer 1",
+    emB.renderLayer === 1 && builtB.length > 0 && builtB.every((m) => m.layers.mask === (1 << 1)),
+    `renderLayer=${emB.renderLayer} built=${builtB.length} masks=${builtB.map((m) => m.layers.mask).join(",")}`
+  );
+
+  // (c) instanced buckets key by (gfxobj, layer): SAME gfxobj, different layer
+  //     ⇒ two buckets, each on its own layer. A gfxobj-only key would collapse
+  //     them into one and force a single wrong layer on the pair.
+  setParticleInstancingFlag(true);
+  const sceneC = new THREE.Scene();
+  const mgrC = mkMgr(sceneC, true);
+  await mgrC.addEmitter({ emitterInfo: infoFor(), parent: parentAt(), partIndex: -1 });
+  await mgrC.addEmitter({ emitterInfo: infoFor(), parent: parentAt(), partIndex: -1, renderLayer: 1 });
+  mgrC.tick();
+  const buckets = [...mgrC._instBuckets.entries()];
+  check(
+    "renderLayer: same gfxobj on two layers ⇒ TWO instanced buckets",
+    buckets.length === 2,
+    `buckets=${buckets.length} keys=${buckets.map(([k]) => k).join(" ")}`
+  );
+  const layerOf = (im) => (im.layers.mask === (1 << 1) ? 1 : (im.layers.mask === 1 ? 0 : -1));
+  check(
+    "renderLayer: the two buckets sit on layers 0 and 1 respectively",
+    buckets.map(([, b]) => layerOf(b.im)).sort().join(",") === "0,1",
+    buckets.map(([k, b]) => `${k}→mask${b.im.layers.mask}`).join(" ")
+  );
+
+  // (d) _growBucket must carry the layer mask onto the replacement mesh.
+  const indoor = buckets.find(([, b]) => layerOf(b.im) === 1);
+  if (indoor) {
+    const bucket = indoor[1];
+    const before = bucket.im;
+    _growBucket(bucket, before.instanceMatrix.count + 1, sceneC);
+    check(
+      "renderLayer: _growBucket carries layers.mask onto the new InstancedMesh",
+      bucket.im !== before && bucket.im.layers.mask === (1 << 1),
+      `replaced=${bucket.im !== before} mask=${bucket.im.layers.mask}`
+    );
+  } else {
+    check("renderLayer: _growBucket carries layers.mask onto the new InstancedMesh", false, "no indoor bucket");
+  }
+  setParticleInstancingFlag(false);
 }
 
 // ---- Summary --------------------------------------------------------

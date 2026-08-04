@@ -36,7 +36,7 @@
 // frame, BEFORE `renderer.render(scene, camera)`.
 
 import * as THREE from "three";
-import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPvsLoadExpansion } from "./cells.js";
+import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPortalSeal, tickPvsLoadExpansion } from "./cells.js";
 // Far-terrain wave (2026-08-02). S1 (retail range fog) reads the flags + the
 // effective-radius helper; S2/S3 (the Far Composite Ring) adds one budgeted
 // tick. Both are hard no-ops behind `?farTerrain=off`.
@@ -2378,6 +2378,10 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // Portal-punch feed (?portalPunch) — same ordering; hands the punch pass this
   // frame's visible door/window apertures. No-ops when off.
   tickPortalPunch(scene3d, sessionHandle);
+  // Round 6: indoor twin of the punch — feeds the seal pass that protects
+  // world-pass colour (terrain + outdoor particles) inside the doorway from
+  // being overpainted by the post-wipe cells pass. No-op unless armed.
+  tickPortalSeal(scene3d, sessionHandle);
   // ── CRITICAL #1.5 — FCULL app-level frustum + distance render cull. ──
   // Runs AFTER cell-visibility (#1) so the world GROUPS already carry their
   // correct `.visible` state, and BEFORE lighting (#5). It only gates per-

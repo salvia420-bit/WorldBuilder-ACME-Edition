@@ -41,13 +41,20 @@
 import * as THREE from "three";
 import { RENDER_LAYER_PORTAL_CELL } from "./portal_stencil.js";
 import {
+  clipAperturesForPunch,
+  makeNearPlane,
+  makeLosCache,
+  isCameraBelowTerrain,
+  nodeInLandblock,
+} from "./portal_clip.js";
+import {
   meshToGeometryGroups,
   meshToFusedGeometry,
   placementToMatrix4,
   acQuatToThree,
 } from "./adapter.js";
 import { materialCanCastShadow, VERTEX_BAKE } from "./materials.js";
-import { lbKeyOf } from "./landblock_lru.js";
+import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { guardedCompileAsync } from "./bake_prewarm.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
@@ -80,6 +87,423 @@ const CELL_STATIC_BIAS = (() => {
   } catch (_) {}
   return true;
 })();
+
+// ?indoorDepthSplit (2026-08-04) — TERRAIN-OVER-INTERIORS, camera-inside case.
+//
+// Retail's indoor frame is NOT a shared-depth pass. `SmartBox::RenderNormalMode`
+// (acclient.c:144889) branches on `(viewer.objcell_id & 0xFFFF) < 0x100`; the
+// EnvCell branch calls `DrawInside` → `PView::DrawCells(pview, 0)`
+// (acclient.c:461450), which does, in order:
+//   1. `if (outside_view.view_count)` → `LScape::draw` (:461480), the landscape
+//      SCREEN-CLIPPED to the accumulated exterior-portal view polygons
+//      (`cliplandscape = 1`, acclient.c:45789);
+//   2. `Clear(4 /*Z only*/, …, 1.0f)` (:461484) — a FULL-SCREEN depth wipe
+//      (`RenderDeviceD3D::Clear` resets to the full presentation rect first,
+//      acclient.c:457577), colour untouched;
+//   3. `DrawPortalPolyInternal(portal, /*zClear=*/0)` (:461536) for every portal
+//      with `other_cell_id == -1`, re-stamping the exterior portal PLANES at
+//      their true depth;
+//   4. `DrawEnvCell` per cell of `cell_draw_list`, then `DrawObjCellForDummies`.
+// There is no terrain-vs-building exclusion anywhere in retail — the Z wipe IS
+// the mechanism. So terrain physically cannot occlude an interior indoors.
+//
+// Our pipeline dropped the equivalent split on 2026-05-29 (see the long note in
+// atmosphere_pipeline.js `preFrameSkySync`) because it fired whenever the
+// player's cell classified indoor — and building plots ARE EnvCells, so it drew
+// interiors/basements/downhill cottages THROUGH terrain while the player stood
+// visually outside. The regression was NOT the clear; retail does the clear.
+// It was (a) the trigger and (b) WHAT the second pass drew: retail draws
+// `cell_draw_list` — the portal-clipped BFS from the viewer's own cell — while
+// we draw the UNION of the PView walk and the raw AABB-frustum set, which under
+// `?stablist` admits every frustum-visible SeenOutside cell in town.
+//
+// Modes:
+//   off    (DEFAULT) — byte-identical to today. No split, no set restriction.
+//   on               — arm when `isCurrentCellIndoor()` AND the camera is
+//                      BELOW the terrain surface at its own (x, y). That
+//                      second clause is the precise anti-regression: standing
+//                      on a Holtburg plot the camera is ABOVE terrain, so the
+//                      split cannot arm; a camera under the surface is exactly
+//                      the case where the heightfield encloses it and terrain
+//                      wins depth in every horizontal direction (the reported
+//                      Yaraq bug). Fails CLOSED on an unbaked landblock.
+//   retail           — arm on `isCurrentCellIndoor()` alone (retail :144889),
+//                      for A/B against the historical see-through.
+// In BOTH armed modes the cells pass is restricted to the portal set (retail
+// `cell_draw_list`), dropping the frustum/stablist admissions.
+const INDOOR_DEPTH_SPLIT = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      const v = new URLSearchParams(globalThis.location.search || "").get(
+        "indoorDepthSplit",
+      );
+      if (v === "off") return "off";
+      if (v === "retail") return "retail";
+      if (v === "strict") return "strict";
+      return "on"; // DEFAULT-ON (2026-08-04 — user-verified live indoors on R9 290)
+    }
+  } catch (_) {}
+  return "off";
+})();
+
+// ROUND 5 BOOT BANNER. The round-4 transition log never reached the user's
+// console even though the behaviour changed — the signature of a STALE
+// service-worker bundle (`holtburger-content-v2` caches JS across Ctrl+R and
+// browser restarts; only `?nosw=1` clears it), which would also explain the
+// round-4 report exactly: round-3 code armed off the CAMERA (so it worked when
+// fully inside, where the camera is also below grade) and had no log at all.
+// This line is emitted at MODULE LOAD, before any tick, so its ABSENCE is
+// itself the diagnosis: no banner ⇒ stale bundle ⇒ add `?nosw=1`.
+const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
+
+// ?punchSidedness (2026-08-04 round 7) — DEFAULT OFF, and off is the RESTORED
+// round-4 behaviour the user confirmed working outdoors.
+//
+// The round-5 sidedness gate (`apertureFacesAway`) regressed the outdoor punch.
+// It rests on the sign of "is the room centre inside or outside this doorway",
+// derived from the cell's AABB centre, and that sign is unreliable for real AC
+// rooms: a doorway in a long wall puts the AABB centre near the wall plane, and
+// an L-shaped or multi-part cell can put it outside the room entirely. Round 7
+// added an orientation-confidence guard (`SIDEDNESS_MIN_INWARD_M`) so the gate
+// fails OPEN when the sign is untrustworthy — but "outdoor punch works" is a
+// confirmed-good state and a speculative gate does not get to risk it by
+// default. `?punchSidedness=on` to A/B the far-side-door fix it was written for.
+const PUNCH_SIDEDNESS = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      return new URLSearchParams(globalThis.location.search || "")
+        .get("punchSidedness") === "on";
+    }
+  } catch (_) {}
+  return false;
+})();
+
+/** Mirrors the `?portalPunch` reader in index.js so the diag can report it. */
+const PORTAL_PUNCH_FLAG_ON = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      return new URLSearchParams(globalThis.location.search || "")
+        .get("portalPunch")?.toLowerCase() !== "off"; // DEFAULT-ON 2026-08-04
+    }
+  } catch (_) {}
+  return false;
+})();
+
+// Boot banner + flag mirror (round 7). `_portalPunchDiag === undefined` cost a
+// round-trip because it could mean "flag off", "stale bundle", or "the tick
+// never ran". `window.__portalPunch` is stamped at MODULE LOAD, so its absence
+// means STALE BUNDLE and nothing else; `enabled` settles flag presence at a
+// glance; and `_portalPunchDiag` is stamped on EVERY tick when the flag is on,
+// including every early-return path.
+try {
+  globalThis.__portalPunch = {
+    build: INDOOR_SPLIT_BUILD,
+    enabled: PORTAL_PUNCH_FLAG_ON,
+    sidedness: PUNCH_SIDEDNESS,
+  };
+  if (PORTAL_PUNCH_FLAG_ON) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[portalPunch] build=${INDOOR_SPLIT_BUILD} enabled=true sidedness=${PUNCH_SIDEDNESS} ` +
+      `— if you do not see this line, your bundle is STALE: add ?nosw=1`,
+    );
+  }
+} catch (_) {}
+/** Last logged `armed|reason`, module-scoped so a scene rebuild cannot reset it. */
+let _indoorSplitLastLog = null;
+if (INDOOR_DEPTH_SPLIT !== "off") {
+  try {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[indoorDepthSplit] build=${INDOOR_SPLIT_BUILD} mode=${INDOOR_DEPTH_SPLIT} ` +
+      `— if you do not see this line, your bundle is STALE: add ?nosw=1`,
+    );
+  } catch (_) {}
+}
+
+/** Metres the camera must sit below the terrain surface before "on" arms. */
+const INDOOR_SPLIT_BELOW_TERRAIN_M = 0.5;
+
+// ── Which geometry the armed cells pass must draw (2026-08-04 round 2) ──
+//
+// Round 1 assumed "interior == cellsGroup (layer 1)". Live verification killed
+// that: at the Holtburg meeting hall (cell 0xA9B4011A) the split armed
+// correctly but the ROOM VANISHED, because `cellContainers3d` was EMPTY and
+// `cellsGroup` had no layer-1 meshes there — so the world pass (WORLD_ONLY)
+// excluded nothing useful and the cells pass (INDOOR_ONLY) had nothing to draw.
+//
+// What is actually on screen inside a town building, established by reading
+// every layer assignment in scene3d/ (`rg -n 'layers\.(set|enable|disable)'`):
+//   · terrainGroup   — index.js:1318, NEVER stamped → layer 0
+//   · buildingsGroup — index.js:1319, NEVER stamped → layer 0  ← the room SHELL
+//   · staticsGroup   — index.js:1320, NEVER stamped → layer 0  ← interior props
+//   · cellsGroup     — index.js:1343 → layer 1 (EnvCell surfaces, when baked)
+//   · entitiesGroup  — index.js:1344 → layer 1
+// The building MODEL carries the walls you see from inside (retail draws it via
+// `DrawBuilding`/`CBuildingObj`, separately from the EnvCells `DrawEnvCell`
+// draws). So the interior lives MOSTLY ON LAYER 0, alongside terrain — which is
+// exactly why the shared-depth pass lets terrain occlude it, and why splitting
+// on the existing layer scheme could never fix it.
+//
+// (The DAT confirms the EnvCells are real — WorldBuilder.Terminal
+// `pvs-visibility-snapshot 0xA9B4011A` returns a 9-cell portal graph
+// 0xA9B40116-0xA9B4011E. Their absence from `cellContainers3d` on the probe box
+// is a SEPARATE streaming gap, noted in the docs row. The fix below does not
+// depend on it either way.)
+//
+// The fix: while armed, move buildingsGroup + staticsGroup onto the INDOOR
+// layer, so the passes become "terrain" vs "everything else" — retail's actual
+// division (`LScape::draw` then Z-wipe then the cell/building draws). Chosen
+// over moving TERRAIN to a new layer because layer 1 is already the codebase's
+// "indoor content" layer and is therefore already covered by:
+//   · every light (`lighting.js:276/2466/2642`, `csm.js:245`,
+//     `atmosphere_lights.js:174-175` all `layers.enable(1)`) → no black geometry
+//   · every raycaster (`picking.js:476`, `ragdoll_env.js:136-137`) → picking,
+//     ragdoll ground contact and decal placement keep working
+// Moving terrain to a fresh layer 3 would have broken all of those. Terrain
+// never moves, so nothing that depends on terrain being on layer 0 is touched.
+// Blood decals are parented to entitiesGroup (blood_decals.js:862), not to
+// these two groups, so the layer-0 restore cannot strand them.
+//
+// Consequence: NO mask change is needed in atmosphere_pipeline.js — the armed
+// world pass keeps `CAM_LAYER_MASK_WORLD_ONLY` (now = terrain alone) and the
+// armed cells pass keeps `CAM_LAYER_MASK_INDOOR_ONLY` (now = shell + props +
+// EnvCells + entities). Off-state is still byte-identical: nothing is ever
+// re-layered unless the flag arms.
+const SPLIT_RELAYER_GROUPS = ["buildingsGroup", "staticsGroup"];
+const RENDER_LAYER_WORLD = 0;
+const RENDER_LAYER_INDOOR = 1;
+/** Backstop re-stamp cadence while armed, in ticks (catches any signature miss). */
+const SPLIT_RELAYER_BACKSTOP_TICKS = 60;
+
+/**
+ * Does this top-level buildings/statics child belong to landblock `lbKey`?
+ *
+ * NARROWING GRANULARITY (the honest answer to "operate at whatever granularity
+ * the baked path offers"): the baked path offers PER-LANDBLOCK, not per-cell.
+ * Top-level children carry `userData.landblockId` (buildings.js:490 per
+ * placement, statics.js:1257 per static, static_batch_x:1758 per batched
+ * surface); merged instanced statics instead carry `coversLbKeys`
+ * (statics.js:1444) and can span several LBs. There is no per-cell mapping to
+ * narrow with, so the split narrows to the player's own LB.
+ *
+ * FAILS CLOSED on an untagged node — it stays on layer 0 and keeps its terrain
+ * occlusion. That direction is deliberate: leaving a node behind means the
+ * original bug persists for that node (no NEW artifact), whereas hoisting an
+ * unknown world-spanning merged batch past the depth clear would manufacture a
+ * fresh see-through. The room SHELL is a tagged building placement, so the
+ * thing the fix exists for is always covered.
+ */
+// Implementation lives in portal_clip.js (pure, unit-tested); see the doc
+// comment there for the fail-closed rationale and the userData shapes.
+const _nodeInLandblock = nodeInLandblock;
+
+/**
+ * Move (or restore) the player's-landblock buildings/statics between the WORLD
+ * and INDOOR layers. Other landblocks are left on layer 0 on purpose: they then
+ * draw in the pre-clear world pass alongside terrain, KEEPING their terrain
+ * occlusion, and their colour survives the depth clear — so the town seen
+ * through the doorway looks exactly as it does today. Only the LB you are
+ * standing in is hoisted past the clear.
+ *
+ * PERF (2026-08-04). This is re-entered whenever `_splitGroupSignature` moves,
+ * and that signature is the raw child count of `buildingsGroup` +
+ * `staticsGroup` — which changes on EVERY streaming add anywhere in the ring,
+ * i.e. on most frames while a town is still settling. Re-stamping a subtree
+ * that is already on the target layer is pure waste, so a node records its
+ * stamped layer in `userData.__splitLayer` and is skipped on the next pass.
+ * `force` (used by the periodic backstop and by every transition) ignores the
+ * tag, so the safety net that catches a node which grew children after being
+ * stamped still runs — just at 1/SPLIT_RELAYER_BACKSTOP_TICKS of the cost.
+ */
+function _stampSplitLayers(scene3d, layer, lbKey, force = false) {
+  let hoisted = 0;
+  let skipped = 0;
+  let already = 0;
+  for (const name of SPLIT_RELAYER_GROUPS) {
+    const g = scene3d?.[name];
+    if (!g || !Array.isArray(g.children)) continue;
+    try {
+      // Snapshot the child list: a bake completing mid-traverse would
+      // otherwise mutate the array we are walking.
+      for (const child of g.children.slice()) {
+        if (!_nodeInLandblock(child, lbKey)) { skipped++; continue; }
+        if (!force && child.userData && child.userData.__splitLayer === layer) {
+          already++;
+          hoisted++;
+          continue;
+        }
+        child.traverse((o) => o.layers.set(layer));
+        if (child.userData) child.userData.__splitLayer = layer;
+        hoisted++;
+      }
+    } catch (_) { /* a mid-traverse mutation must never break the tick */ }
+  }
+  // DIAGNOSTIC (2026-08-04 round 2). `hoisted === 0` means the split had
+  // NOTHING to move and can only be drawing EnvCell geometry — which is
+  // precisely the round-1 failure (empty `cellContainers3d` ⇒ blank room).
+  // Publishing it makes that state observable from the probe instead of
+  // needing a screenshot to notice. See the docs row's atlas caveat: under
+  // the default `?statAtlas` / `?buildingBatch` the building shell is merged
+  // into cross-LB `BatchedMesh` buckets that deliberately carry NO
+  // `userData.landblockId` (static_atlas.js:1012), so it CANNOT be hoisted
+  // and `hoisted` will be low or zero.
+  if (scene3d) {
+    scene3d._splitRelayerDiag = { layer, lbKey, hoisted, skipped, already, force };
+  }
+  return hoisted;
+}
+
+/**
+ * Cheap change detector for "did new geometry stream into these groups".
+ * Meshes added while armed default to layer 0 and would otherwise be drawn in
+ * the pre-clear world pass — i.e. occluded by terrain, the very bug — until
+ * the next backstop. Batched surfaces also MOVE between buildingsGroup and
+ * staticsGroup (static_batch_x / static_atlas), and any such move changes at
+ * least one child count.
+ */
+// DEFECT 3 (fountain particles vanish when an interior is viewed from outside
+// through `?portalPunch`) was fixed at EMISSION TIME on 2026-08-04; the
+// per-tick `staticsGroup` sweep and its `INDOOR_PARTICLE_LAYER` gate that used
+// to live here are retired.
+//
+// ROOT CAUSE (unchanged, recorded for the next reader). The static
+// ParticleManager is constructed with `scene: scene3d.staticsGroup`
+// (statics.js), and the emitter adds each live mesh to THAT SCENE, not to its
+// anchor (`particle_emitter.js` `this._scene.add(mesh)`; `particle_manager.js`
+// `this._scene.add(im)` for instanced buckets). The anchor Group is only a
+// transform frame read via `_resolveAnchorFrame`. So particle meshes are FLAT
+// SIBLINGS of the anchor, and they used to be on LAYER 0 — under the punch the
+// world pass paints them, the punch stamps far-Z in the aperture, and the cells
+// pass paints the interior OVER them. Fully inside there is no split, which is
+// why they only vanished when looking in from outside.
+//
+// THE FIX now lives where the interior/outdoor distinction actually exists:
+// statics.js `_runStaticParticleChain` derives `renderLayer` from the anchor's
+// `userData.isCellStaticScriptAnchor` and passes it through
+// `manager.addEmitter(req)`; the manager stamps every slot mesh in its
+// meshFactory and keys instanced buckets by (gfxobj, layer). Interior emitters
+// land on layer 1 and ride the cells pass; outdoor ones stay on layer 0 and are
+// correctly occluded by the punch — the discrimination the sweep could not do,
+// which is why it was never promoted past default-OFF. `?indoorParticleLayer=off`
+// (read in statics.js) disables the mechanism.
+//
+// NOTE for anyone adding a layer sweep here again: `_stampSplitLayers` below
+// cannot reach particle meshes anyway — it only descends children that pass
+// `nodeInLandblock`, and a particle mesh carries neither `landblockId` nor
+// `coversLbKeys`. That is also what makes the emission-time stamp stable.
+
+function _splitGroupSignature(scene3d) {
+  let sig = 0;
+  for (const name of SPLIT_RELAYER_GROUPS) {
+    const g = scene3d?.[name];
+    sig = sig * 65537 + (g?.children?.length ?? 0);
+  }
+  return sig;
+}
+
+// Scratch objects for the per-frame AC-space camera derivation (allocation-free).
+const _acCamVec = { x: 0, y: 0, z: 0 };
+const _acFwdVec = { x: 0, y: 0, z: 0 };
+const _v3a = new THREE.Vector3();
+const _v3b = new THREE.Vector3();
+
+/**
+ * Camera position + forward in AC world coords (Z-up), derived by pulling the
+ * THREE-space camera back through `worldRoot`'s AC→THREE rotation. The camera
+ * lives OUTSIDE worldRoot (see `tickCellVisibility3D`'s MVP note), so
+ * `worldToLocal` is the exact inverse of the transform the aperture vertices
+ * were authored in. Returns false when the inputs aren't ready.
+ */
+function acCameraFrame(camera, worldRoot) {
+  if (!camera || !worldRoot) return false;
+  try {
+    camera.getWorldPosition(_v3a);
+    // A point one metre down the view axis; the DIFFERENCE of the two
+    // worldToLocal results is the rotated direction (translation cancels).
+    camera.getWorldDirection(_v3b);
+    _v3b.add(_v3a);
+    worldRoot.worldToLocal(_v3a);
+    worldRoot.worldToLocal(_v3b);
+    if (!Number.isFinite(_v3a.x) || !Number.isFinite(_v3b.x)) return false;
+    _acCamVec.x = _v3a.x; _acCamVec.y = _v3a.y; _acCamVec.z = _v3a.z;
+    _acFwdVec.x = _v3b.x - _v3a.x;
+    _acFwdVec.y = _v3b.y - _v3a.y;
+    _acFwdVec.z = _v3b.z - _v3a.z;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * DEFECT 1 (2026-08-04 round 4) — the local player's position in AC WORLD
+ * metres, or null.
+ *
+ * Round 3 armed the split from the CAMERA position alone. In third person the
+ * camera trails the player and sits ABOVE the terrain surface while the player
+ * is under it — which is exactly a sunken Yaraq shop, and exactly why the user
+ * saw "no difference". Arming needs the player position too.
+ *
+ * TWO TRAPS this function exists to encapsulate:
+ *   · `getLocalPlayerPose()` returns LANDBLOCK-LOCAL x/y. `terrainHeightAt`
+ *     wants AC world metres, so the landblock corner (192 m per LB, byte-packed
+ *     into the id) must be folded in — the same conversion camera.js's
+ *     `__cam.world()` does at camera.js:1204-1218. Passing the raw local x/y
+ *     would sample a landblock near the world origin and return null or a
+ *     wildly wrong height.
+ *   · the returned pose is a WASM BOX and must be `.free()`d or it leaks every
+ *     frame (same note as camera.js `_integratorWorldPose`).
+ */
+function playerAcPosition(sessionHandle) {
+  if (!sessionHandle || typeof sessionHandle.getLocalPlayerPose !== "function") {
+    return null;
+  }
+  let p = null;
+  try {
+    p = sessionHandle.getLocalPlayerPose();
+    if (!p) return null;
+    const lb = p.landblockId >>> 0;
+    const out = {
+      x: ((lb >>> 24) & 0xff) * 192 + p.x,
+      y: ((lb >>> 16) & 0xff) * 192 + p.y,
+      z: p.z,
+    };
+    return Number.isFinite(out.x) && Number.isFinite(out.y) && Number.isFinite(out.z)
+      ? out
+      : null;
+  } catch (_) {
+    return null;
+  } finally {
+    try { p?.free?.(); } catch (_) { /* already released */ }
+  }
+}
+
+/**
+ * `terrainHeightAt` bound to a session handle, or null when unavailable
+ * (missing export on a stale `pkg/` → callers degrade to "unknown height",
+ * which fails CLOSED for the split arm and OPEN for the LOS cull).
+ *
+ * Memoised on the handle so the two per-frame consumers don't allocate a
+ * fresh closure every rAF tick.
+ */
+let _heightSamplerHandle = null;
+let _heightSampler = null;
+function heightSamplerFor(sessionHandle) {
+  if (!sessionHandle || typeof sessionHandle.terrainHeightAt !== "function") {
+    return null;
+  }
+  if (_heightSamplerHandle === sessionHandle) return _heightSampler;
+  _heightSamplerHandle = sessionHandle;
+  _heightSampler = (x, y) => {
+    try {
+      return sessionHandle.terrainHeightAt(x, y);
+    } catch (_) {
+      return null;
+    }
+  };
+  return _heightSampler;
+}
 
 // RND-04 (2026-07-27) — pick the material for one EnvCell surface group.
 // `baked` is decided ONCE PER CELL (every group of a cell comes from the same
@@ -282,6 +706,57 @@ let _mvpMatrixScratch = null;
 // buildEnvCellsForLandblock). Must never be reissued for the same lbKey.
 let _envCellBuildSeq = 0;
 
+// ─────────────────────────────────────────────────────────────────
+// `?envcellUrgent=on` — DEFAULT OFF. Strict `=== "on"` opt-in (an
+// absent param is OFF; see docs/url-flags.md on the `!== "off"`
+// footgun).
+//
+// BUG-2 (2026-08-04, interiors arrive minutes after the outdoors).
+// The 2026-07-02 "streamFix urgent lane" gave every OUTDOOR per-LB
+// baker a player-proximity urgency hint that it threads into its wasm
+// fetches — statics.js:1837/:1963-1969, buildings.js:744/:864-869,
+// terrain_ring.js:116-124 all do
+//   `const urgent = isNearPlayerLb(scene3d, lbKey)`
+//   `const spFetch = (dids) => spFetchRaw(dids, urgent)`.
+// The interior path never got it. On the Rust side only the EnvCell
+// RECORD prefetch is urgent (lib.rs `fetch_env_cells_in_landblock`
+// :20448/:20473/:20511/:20539 call `prefetch_urgent`); the two stages
+// the visible geometry actually blocks on —
+//   Step B  `materialCache.preload(cellSurfaceDids, spFetch)`
+//   Step C  `mmFetch(uniqueStaticDids)` + its own surface preload
+// — were called with NO trailing `urgent`, so `fetch_surfaces_pixels` /
+// `fetch_model_meshes` took `urgent.unwrap_or(false)` (lib.rs:12055)
+// and every one of their shard rounds went out on the NORMAL lane:
+//   • `fetch_sem.acquire()` FIFO, 32 permits SPLIT across the main
+//     wasm instance and the bake worker (concurrency.rs:19-29, :49),
+//     shared with the speculative outdoor ring flood;
+//   • `FetchPriority::Low` on the browser fetch itself
+//     (manifest_source.rs:742-753) — the browser then deprioritises
+//     them behind every outdoor shard;
+//   • lane 1/2 instead of lane 0 in the bake-worker dispatch queue
+//     (bake_worker_client.js:439-447, laneForBakeMessage :699-701).
+// `prefetch.rs::run_walk_loop` runs up to 8 SEQUENTIAL discovery rounds
+// (:375, Setup→GfxObj→Surface→SurfaceTexture→RenderSurface→Palette),
+// each at least one full RTT, so over a high-latency cloudflared tunnel
+// the interior build is round-trip bound AND queued last.
+//
+// ON: thread the same `isNearPlayerLb` hint the outdoor bakers use into
+// the EnvCell bake's two fetchers. No new requests, no new queue — the
+// same batches move to the lane that already exists for exactly this
+// ("the player is IN this landblock; its interior is player-blocking").
+// Behind a flag because it reprioritises streaming; promote to on-when-
+// absent once a live capture confirms the interior latency drop.
+const ENVCELL_URGENT_ON = (() => {
+  try {
+    return (
+      new URLSearchParams(globalThis.location?.search || "").get("envcellUrgent")
+      ?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
 /**
  * Top-level: load every EnvCell for a single landblock and add the
  * resulting Groups under `scene3d.cellsGroup`. Idempotent — second
@@ -379,8 +854,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // M2 (worker-based asset bake): worker-routed decoders when enabled
   // (`?bakeWorker=1`); identical references to wasmExports.* when disabled
   // (byte-identical to pre-M2). Drop-in results (consumers guard `.free()`).
-  const mmFetch = modelMeshFetcher(wasmExports);
-  const spFetch = surfacePixelsFetcher(wasmExports);
+  const mmFetchRaw = modelMeshFetcher(wasmExports);
+  const spFetchRaw = surfacePixelsFetcher(wasmExports);
   if (!scene3d.materialCache) {
     throw new Error(
       "buildEnvCellsForLandblock: scene3d.materialCache missing — Phase 7.2 should have installed it before EnvCell load"
@@ -442,6 +917,15 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   const ENVCELL_BUILD_BUDGET_MS = 6;
 
   const lbKey = (landblockId & 0xffff_0000) >>> 0;
+  // `?envcellUrgent=on` (see ENVCELL_URGENT_ON above) — close the bake's lane
+  // over both fetchers, exactly as statics.js:1963-1969 does for the outdoor
+  // props. `isNearPlayerLb` is Chebyshev<=1, i.e. the player's own 3x3, and is
+  // itself fail-soft `false` (and `?streamFix=off`-aware). Flag OFF => the
+  // trailing arg is `false`, which is what `Option<bool>` already defaulted to,
+  // so the off-path is byte-identical to pre-fix.
+  const urgent = ENVCELL_URGENT_ON && isNearPlayerLb(scene3d, lbKey);
+  const mmFetch = (ids) => mmFetchRaw(ids, urgent);
+  const spFetch = (dids) => spFetchRaw(dids, urgent);
   if (scene3d.envCellLoadedLbs.has(lbKey)) {
     // Phase 9a warm-park: the loaded mark stays set while parked, so this
     // idempotent short-circuit is the envcell unpark seam (mirrors the
@@ -1368,6 +1852,11 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   let cellId = 0;
   let renderSetArr = null;
   let isIndoor = false;
+  // PERF (2026-08-04): the `?indoorDepthSplit` narrowing below needs the SAME
+  // portal walk this block already runs, composed from the SAME MVP. Stash it
+  // so the armed path reuses it instead of paying a second
+  // `getRenderSetWithPView` (a depth-8 portal-clipped BFS) every frame.
+  let pviewSetThisTick = null;
   try {
     cellId = sessionHandle.getCurrentCellId() >>> 0;
     isIndoor = !!sessionHandle.isCurrentCellIndoor();
@@ -1429,6 +1918,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
           // `0` (= use the default `PVIEW_MAX_DEPTH=8`); only the
           // `run-diag-pview-depth-tuning.cjs` harness varies it.
           const pviewSet = sessionHandle.getRenderSetWithPView(mvp, 0);
+          pviewSetThisTick = pviewSet ?? null;
           if (pviewSet && pviewSet.length > 1) {
             // Indoor case: PView returned more than just the seed
             // cell, so the portal walk produced real refined results.
@@ -1459,6 +1949,206 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // hasn't spawned). Mirror the 2D path's tickCellVisibility — leave
   // visibility alone until the first non-zero cell.
   if (cellId === 0) return;
+
+  // ---- ?indoorDepthSplit arm (2026-08-04) — see the flag block up top ----
+  //
+  // Decides ONE boolean per frame and publishes it to the atmosphere pipeline,
+  // which turns it into retail's `PView::DrawCells` structure (world pass →
+  // depth clear → cells pass). When armed we also narrow the cell set to the
+  // portal walk — retail's `cell_draw_list` (acclient.c:461450) — because the
+  // 2026-05-29 see-through was the frustum/stablist admissions painting through
+  // the wiped depth, not the wipe itself.
+  //
+  // Every step is guarded and every failure path leaves `splitArmed = false`,
+  // so a stale `pkg/` (no `terrainHeightAt`), a pre-spawn frame, or a throwing
+  // getter all degrade to today's exact behaviour.
+  let splitArmed = false;
+  let splitReason = INDOOR_DEPTH_SPLIT === "off" ? "flag-off" : (isIndoor ? "" : "not-indoor");
+  if (INDOOR_DEPTH_SPLIT !== "off" && isIndoor) {
+    if (INDOOR_DEPTH_SPLIT === "on" || INDOOR_DEPTH_SPLIT === "retail") {
+      // ROUND 5 — ARM ON "CURRENT CELL IS INDOOR", full stop.
+      //
+      // Round 4 additionally required the player to be BELOW terrain. That
+      // fixed the fully-inside case but left the reported gap: standing at
+      // entry level ABOVE a below-ground room, the player is above grade so the
+      // gate declined — yet the room below IS visible down its stairwell and
+      // still got painted over by terrain.
+      //
+      // The below-terrain clause was only ever a proxy for "the 2026-05-29
+      // see-through cannot recur". That guarantee no longer lives in the ARM
+      // gate — it lives in the CONTENT narrowing that rounds 2-3 added: the
+      // cells pass is restricted to the portal set (retail `cell_draw_list`)
+      // and the re-layering is restricted to the player's own landblock. With
+      // those in place, arming on the retail condition (`viewer.objcell_id &
+      // 0xFFFF >= 0x100`, acclient.c:144889) is both correct and sufficient,
+      // and it closes the entry-level gap because standing in a building's
+      // entry IS an EnvCell.
+      //
+      // `=strict` keeps the round-4 below-terrain-only behaviour as the A/B
+      // escape if the see-through ever returns.
+      splitArmed = true;
+      const sh = heightSamplerFor(sessionHandle);
+      const pp = sh ? playerAcPosition(sessionHandle) : null;
+      const pBelow = !!(sh && pp && isCameraBelowTerrain(sh, pp.x, pp.y, pp.z, INDOOR_SPLIT_BELOW_TERRAIN_M));
+      splitReason = `indoor-cell(playerBelowTerrain=${pBelow})`;
+    } else {
+      // DEFECT 1 (round 4): arm if EITHER the player OR the camera is below
+      // grade. Round 3 tested the camera alone, which in third person trails
+      // ABOVE the surface while the player stands in a sunken shop — the
+      // reported "no difference". The player test is the primary one (it is
+      // what "am I in a below-grade room" actually means); the camera test is
+      // kept so a first-person / clipped-into-the-hill camera still arms.
+      const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+      const wr = scene3d.worldRoot ?? null;
+      const sampleHeight = heightSamplerFor(sessionHandle);
+      if (sampleHeight) {
+        const pp = playerAcPosition(sessionHandle);
+        if (pp && isCameraBelowTerrain(sampleHeight, pp.x, pp.y, pp.z, INDOOR_SPLIT_BELOW_TERRAIN_M)) {
+          splitArmed = true;
+          splitReason = "player-below-terrain";
+        } else if (
+          acCameraFrame(cam, wr) &&
+          isCameraBelowTerrain(sampleHeight, _acCamVec.x, _acCamVec.y, _acCamVec.z, INDOOR_SPLIT_BELOW_TERRAIN_M)
+        ) {
+          splitArmed = true;
+          splitReason = "camera-below-terrain";
+        } else {
+          // Capture WHY we declined, so the one console line below is
+          // actionable instead of just "not armed".
+          const h = pp ? sampleHeight(pp.x, pp.y) : null;
+          splitReason =
+            !pp ? "no-player-pose"
+            : h == null || !Number.isFinite(h) ? "terrain-height-unknown"
+            : `above-terrain(playerZ=${pp.z.toFixed(1)} terrainZ=${Number(h).toFixed(1)})`;
+        }
+      } else {
+        splitReason = "no-terrainHeightAt-export";
+      }
+    }
+  }
+  // One line per TRANSITION (never per frame) so the user can simply paste
+  // their console back. Covers both the armed and the declined case — a
+  // silent "nothing happened" is what cost us rounds 1-3.
+  // Module-level (not on scene3d) so a scene rebuild cannot silently reset it
+  // and swallow the first transition. Also mirrored to `window.__indoorDepthSplit`
+  // so the state can be READ on demand instead of waiting for a transition —
+  // one more way for the diagnostic to survive a filtered console.
+  if (INDOOR_DEPTH_SPLIT !== "off") {
+    try {
+      globalThis.__indoorDepthSplit = {
+        build: INDOOR_SPLIT_BUILD,
+        mode: INDOOR_DEPTH_SPLIT,
+        armed: splitArmed,
+        reason: splitReason,
+        indoor: isIndoor,
+        cell: `0x${(cellId >>> 0).toString(16)}`,
+        relayered: scene3d._splitRelayered === true,
+        relayerDiag: scene3d._splitRelayerDiag ?? null,
+        path: scene3d.skyDome?._indoorSplitPath ?? null,
+      };
+    } catch (_) {}
+  }
+  if (INDOOR_DEPTH_SPLIT !== "off" && _indoorSplitLastLog !== `${splitArmed}|${splitReason}`) {
+    _indoorSplitLastLog = `${splitArmed}|${splitReason}`;
+    try {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[indoorDepthSplit] ${splitArmed ? "ARMED" : "disarmed"} (${splitReason}) ` +
+        `mode=${INDOOR_DEPTH_SPLIT} indoor=${isIndoor} cell=0x${(cellId >>> 0).toString(16)}`,
+      );
+    } catch (_) {}
+  }
+  if (splitArmed) {
+    // Retail `cell_draw_list`: the portal-clipped BFS from the viewer's own
+    // cell (`PView::ConstructView`, acclient.c:462423), UNIONed with the cheap
+    // depth-1 snapshot BFS so a cell whose portal has a vertex behind the near
+    // plane (which `getRenderSetWithPView` conservatively skips) isn't lost.
+    // NOT the frustum set — that is what painted downhill cottages through
+    // terrain in 2026-05-29.
+    try {
+      const portalSet = new Set();
+      const bfs = sessionHandle.getRenderSet(1);
+      if (bfs) for (const v of bfs) portalSet.add(v >>> 0);
+      // PERF: reuse the walk the visibility block above already ran off the
+      // IDENTICAL MVP (projection · matrixWorldInverse · worldRoot.matrixWorld)
+      // — same camera, same frame, same result. Only fall back to a fresh call
+      // when that block did not run (no frustum export / camera not wired /
+      // it threw), which is exactly the pre-2026-08-04 behaviour.
+      if (pviewSetThisTick) {
+        for (const v of pviewSetThisTick) portalSet.add(v >>> 0);
+      } else if (typeof sessionHandle.getRenderSetWithPView === "function") {
+        const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+        const wr = scene3d.worldRoot ?? null;
+        if (cam?.projectionMatrix && cam.matrixWorldInverse && wr) {
+          const mvp = _mvpScratch ?? (_mvpScratch = new Float32Array(16));
+          const m = _mvpMatrixScratch ?? (_mvpMatrixScratch = new THREE.Matrix4());
+          m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+          m.multiply(wr.matrixWorld);
+          for (let i = 0; i < 16; i++) mvp[i] = m.elements[i];
+          const pv = sessionHandle.getRenderSetWithPView(mvp, 0);
+          if (pv) for (const v of pv) portalSet.add(v >>> 0);
+        }
+      }
+      portalSet.add(cellId >>> 0); // never lose the "where am I" anchor
+      if (portalSet.size) renderSetArr = Array.from(portalSet);
+      else splitArmed = false; // nothing to draw → don't wipe depth for nothing
+    } catch (_) {
+      splitArmed = false;
+    }
+  }
+  // Apply / undo the buildings+statics re-layering that makes the armed split
+  // mean "terrain" vs "everything else" (see SPLIT_RELAYER_GROUPS above).
+  // Idempotent and transition-driven: a steady armed frame with no streaming
+  // does ZERO traverses.
+  const wasRelayered = scene3d._splitRelayered === true;
+  const splitLbKey = (cellId & 0xffff0000) >>> 0;
+  if (splitArmed) {
+    const sig = _splitGroupSignature(scene3d);
+    scene3d._splitRelayerTick = ((scene3d._splitRelayerTick | 0) + 1) | 0;
+    const backstopDue =
+      scene3d._splitRelayerTick % SPLIT_RELAYER_BACKSTOP_TICKS === 0;
+    const lbChanged = scene3d._splitRelayerLb !== splitLbKey;
+    if (lbChanged && wasRelayered) {
+      // Walked/teleported to a new LB while armed — put the OLD landblock back
+      // before hoisting the new one, or its buildings stay stranded on layer 1.
+      _stampSplitLayers(scene3d, RENDER_LAYER_WORLD, scene3d._splitRelayerLb >>> 0, true);
+    }
+    if (!wasRelayered || lbChanged || sig !== scene3d._splitRelayerSig || backstopDue) {
+      // `force` only on the transitions and the periodic backstop; the
+      // signature-driven re-entries (one per streaming add, i.e. most frames
+      // while a town settles) ride the per-node `__splitLayer` tag and touch
+      // only geometry that actually arrived.
+      _stampSplitLayers(
+        scene3d,
+        RENDER_LAYER_INDOOR,
+        splitLbKey,
+        backstopDue || lbChanged || !wasRelayered,
+      );
+      scene3d._splitRelayerSig = sig;
+      scene3d._splitRelayerLb = splitLbKey;
+      scene3d._splitRelayered = true;
+    }
+  } else if (wasRelayered) {
+    _stampSplitLayers(scene3d, RENDER_LAYER_WORLD, scene3d._splitRelayerLb >>> 0, true);
+    scene3d._splitRelayered = false;
+    scene3d._splitRelayerSig = -1;
+    scene3d._splitRelayerLb = 0;
+  }
+  // DEFECT 3 is no longer handled here. The per-tick staticsGroup sweep that
+  // used to live at this point is RETIRED (2026-08-04): interior particles now
+  // get the INDOOR layer at EMISSION time, from the one call site that knows
+  // the emitter is interior-anchored — statics.js `_runStaticParticleChain`
+  // derives `renderLayer` from the anchor's `isCellStaticScriptAnchor` and
+  // passes it in `addEmitter(req)`, which stamps each slot mesh in the
+  // manager's meshFactory and keys instanced buckets by (gfxobj, layer).
+  // That is scoped to interior emitters, so outdoor torches/swamp mist keep
+  // layer 0 and correctly do NOT bleed through a punched doorway — the
+  // over-hoisting exposure that kept the sweep default-OFF. `?indoorParticleLayer=off`
+  // still disables the whole mechanism (read in statics.js).
+  scene3d._indoorSplitArmed = splitArmed;
+  try {
+    scene3d.atmospherePipeline?.setIndoorSplitArmed?.(splitArmed);
+  } catch (_) {}
 
   // Phase 5 PView render-order fix (2026-05-25, WB.GameScene.cs:1610):
   // terrain + outdoor buildings + outdoor statics stay VISIBLE when
@@ -1596,6 +2286,13 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
 // + docs/RETAIL-PORTAL-RENDERER-AND-CELL-TERRAIN-WATER-RELATIONSHIPS.md.
 const _psMvp = new THREE.Matrix4();
 const _psMvpArr = new Float32Array(16);
+/**
+ * Terrain line-of-sight memo for `tickPortalPunch`'s `clipAperturesForPunch`
+ * call (see `makeLosCache` in portal_clip.js). Module-scoped: there is exactly
+ * one punch pass per client, and the cache keys are AC world coordinates, so a
+ * scene rebuild cannot make an entry mean something different.
+ */
+const _punchLosCache = makeLosCache();
 
 // Near-plane aperture cull (2026-07-06). `getVisiblePortalApertures` emits RAW
 // world-space aperture polygons with no near-plane clip and no sidedness check
@@ -1694,7 +2391,15 @@ export function tickPortalStencil(scene3d, sessionHandle) {
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
 
-    const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+    // ROUND 5: prefer the export that carries the owning cell's AABB centre,
+    // which is what makes retail's ConstructView sidedness reject possible
+    // (fixes far-side doors being punched through the near wall). Typeof-guarded
+    // — a stale `pkg/` falls back to v1 and simply loses that one gate.
+    const hasV2 =
+      typeof sessionHandle.getVisiblePortalAperturesWithCellCenter === "function";
+    const flat = hasV2
+      ? sessionHandle.getVisiblePortalAperturesWithCellCenter(_psMvpArr, 0)
+      : sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
     pass.setApertures(nearPlaneCullApertures(flat, _psMvpArr));
 
     // Portal-visible interior cells (idx >= 0x100): PARK each on the portal-cell
@@ -1740,15 +2445,40 @@ export function tickPortalStencil(scene3d, sessionHandle) {
 // this does NOT re-layer cells — the world/cells split does the masking. The pass
 // is null when the flag is off → this whole function no-ops. Milestone: outdoor
 // only (indoor cells render normally in the shared world pass).
+/**
+ * Stamp `_portalPunchDiag` on EVERY early-return path so `undefined` can only
+ * ever mean "flag off, or stale bundle" — never "the tick silently bailed".
+ * `reason` names the bail so one paste is self-describing.
+ */
+function _punchDiag(scene3d, reason, extra = null) {
+  if (!scene3d || !PORTAL_PUNCH_FLAG_ON) return;
+  scene3d._portalPunchDiag = {
+    reason,
+    offered: 0,
+    kept: 0,
+    dropped: { boundary: 0, backface: 0, straddle: 0, nearPlane: 0, project: 0, oversize: 0, terrain: 0 },
+    rect: null,
+    gates: { sidedness: PUNCH_SIDEDNESS, terrainLos: true, straddle: true },
+    ...(extra || {}),
+  };
+}
+
 export function tickPortalPunch(scene3d, sessionHandle) {
   const pass = scene3d?._portalPunchPass;
-  if (!pass || !sessionHandle) return;
-  if (typeof sessionHandle.getVisiblePortalApertures !== "function") return;
+  if (!pass || !sessionHandle) {
+    _punchDiag(scene3d, !sessionHandle ? "no-session" : "no-punch-pass(flag off?)");
+    return;
+  }
+  if (typeof sessionHandle.getVisiblePortalApertures !== "function") {
+    _punchDiag(scene3d, "stale-pkg-no-aperture-export");
+    return;
+  }
   // Pass disabled itself after a render error → stop feeding it; interiors fall
   // back to the default (occluded) world-pass draw and preFrameSkySync stops
   // splitting (its punchActive gate reads pass.hasApertures, cleared below).
   if (pass._errored) {
     pass.setApertures(null);
+    _punchDiag(scene3d, "pass-errored");
     return;
   }
 
@@ -1769,6 +2499,10 @@ export function tickPortalPunch(scene3d, sessionHandle) {
     !worldRoot
   ) {
     pass.setApertures(null);
+    // Indoors is the EXPECTED bail (the punch is an outdoor mechanism), but it
+    // is also the single most likely explanation for "kept is always 0", so it
+    // gets named rather than left silent.
+    _punchDiag(scene3d, indoor ? "indoor(punch is outdoor-only)" : "no-camera-or-worldroot");
     return;
   }
 
@@ -1780,9 +2514,145 @@ export function tickPortalPunch(scene3d, sessionHandle) {
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
     const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
-    pass.setApertures(nearPlaneCullApertures(flat, _psMvpArr));
+
+    // OVER-PUNCH FIX (2026-08-04) — the 2026-07-06 R9-290 blackout.
+    //
+    // The old feed was `nearPlaneCullApertures`, which DROPS any aperture with
+    // a vertex near the near plane and does nothing else. Retail's
+    // `DrawPortalPolyInternal` (acclient.c:453882) runs four gates our port had
+    // none of, and `clipAperturesForPunch` (scene3d/portal_clip.js) is the port
+    // of all four:
+    //   · the all-±12 LandCell-wall degenerate reject (:453919-453932);
+    //   · `ACRender::polyClipFinish` (:453941) — CLIP against the near plane
+    //     (retail `cdstW` ≈ 0.0999999, acclient.c:60530) rather than discard
+    //     the whole doorway, plus `if (clip_pts >= 3)` (:453942);
+    //   · a screen-area sanity clamp — retail's second polyClipFinish stage
+    //     clips to the current portal-view POLYGON, which we cannot reproduce
+    //     without a full PView port, so the clamp + the scissor below stand in
+    //     for its bounding effect;
+    //   · a terrain line-of-sight cull, standing in for
+    //     `PView::ConstructView`'s sidedness reject (acclient.c:462513-462543),
+    //     which we cannot port verbatim because `getVisiblePortalApertures`
+    //     does not carry `portal_side`.
+    //
+    // Deliberately NOT a depth test against the world pass. Retail's punch is
+    // `DEPTHTEST_ALWAYS` (:453953) and it has to be: the bug being fixed is
+    // "terrain wrongly wins depth in front of the interior", so depth-testing
+    // the aperture against that same buffer would reject exactly the apertures
+    // that need punching. The bound is the CLIP, as it is in retail.
+    let punchFlat = null;
+    let punchRect = null;
+    const nearPlane = acCameraFrame(camera, worldRoot)
+      ? makeNearPlane(_acCamVec, _acFwdVec)
+      : null;
+    if (!nearPlane) _punchDiag(scene3d, "no-near-plane(degenerate camera)");
+    if (nearPlane) {
+      const res = clipAperturesForPunch(flat, _psMvpArr, {
+        nearPlane,
+        camAc: _acCamVec,
+        sampleHeight: heightSamplerFor(sessionHandle),
+        withCellCenter: hasV2 && PUNCH_SIDEDNESS,
+        // PERF (2026-08-04): the terrain-LOS gate is 11 `terrainHeightAt`
+        // wasm calls PER SURVIVING APERTURE PER FRAME — in a town that is
+        // several hundred boundary crossings every frame, re-deriving an
+        // answer that only changes when the camera moves. The memo is owned
+        // here (module-scoped, one per client) so `clipAperturesForPunch`
+        // stays a pure function for the unit tests.
+        losCache: _punchLosCache,
+      });
+      if (res.kept > 0) {
+        punchFlat = res.flat;
+        punchRect = res.rect;
+      }
+      // ONE-PASTE DIAGNOSTIC. `kept > 0` with the interior visible is the
+      // success condition; if `kept === 0` the `dropped` breakdown names the
+      // exact gate responsible, and `gates` says which optional gates were even
+      // running, so a single paste is self-describing.
+      scene3d._portalPunchDiag = {
+        reason: res.kept > 0 ? "ok" : "all-apertures-dropped",
+        offered: (flat && flat.length ? flat[0] | 0 : 0),
+        kept: res.kept,
+        dropped: res.dropped,
+        rect: res.rect,
+        gates: {
+          sidedness: !!(hasV2 && PUNCH_SIDEDNESS),
+          sidednessExportPresent: hasV2,
+          terrainLos: true,
+          straddle: true,
+        },
+      };
+    }
+    pass.setApertures(punchFlat, punchRect);
   } catch (_) {
-    pass.setApertures(null);
+    pass.setApertures(null, null);
+  }
+}
+
+/**
+ * Portal-SEAL feed (2026-08-04 round 6, `?indoorDepthSplit`). The indoor twin of
+ * `tickPortalPunch`: while the split is armed, hands the seal pass the current
+ * view's outdoor-facing apertures so it can re-stamp them at TRUE depth between
+ * the depth wipe and the cells pass — retail `PView::DrawCells` step 3
+ * (`DrawPortalPolyInternal(portal, zClear=0)`, acclient.c:461536).
+ *
+ * PASS-SLOT CONTRACT this exists to make true (round-6 particle ordering):
+ *   · layer-0 content — terrain, other-LB buildings/statics, and EVERY outdoor
+ *     particle (particle meshes are plain scene-graph children of staticsGroup;
+ *     there is NO separate particle render pass — zero `renderer.render()` calls
+ *     under scene3d/particles or scene3d/vfx) — is drawn by the WORLD pass with
+ *     world depth intact, and its colour inside the aperture is then PROTECTED
+ *     by this seal.
+ *   · layer-1 content — the interior shell, EnvCells, entities, and (once the
+ *     emitter-side `renderLayer` threading lands) interior-anchored particles —
+ *     is drawn by the CELLS pass against the interior's own fresh depth.
+ * Without the seal, the wipe leaves layer-0 colour with no depth at all, so the
+ * cells pass overpaints it even where it is genuinely nearer — which is the
+ * reported doorway-full-of-fountain-blobs / interior-particles-missing frame.
+ *
+ * Deliberately NOT sidedness- or terrain-culled: retail seals every
+ * outdoor-facing portal of the cells it draws, unconditionally. Only the
+ * near-plane clip and the straddle drop apply (a doorway the camera is standing
+ * in has no meaningful plane to seal).
+ */
+export function tickPortalSeal(scene3d, sessionHandle) {
+  const pass = scene3d?.atmospherePipeline?.portalSealPass ?? null;
+  if (!pass || !sessionHandle) return;
+  if (typeof sessionHandle.getVisiblePortalApertures !== "function") return;
+  if (pass._errored || !scene3d._indoorSplitArmed) {
+    pass.setApertures(null, null);
+    return;
+  }
+  const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  const worldRoot = scene3d.worldRoot ?? null;
+  if (!camera?.projectionMatrix || !camera.matrixWorldInverse || !worldRoot) {
+    pass.setApertures(null, null);
+    return;
+  }
+  try {
+    _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _psMvp.multiply(worldRoot.matrixWorld);
+    for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
+    const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+    const nearPlane = acCameraFrame(camera, worldRoot)
+      ? makeNearPlane(_acCamVec, _acFwdVec)
+      : null;
+    if (!nearPlane) {
+      pass.setApertures(null, null);
+      return;
+    }
+    // No sampleHeight and no withCellCenter → terrain-LOS and sidedness are
+    // skipped by construction, matching retail's unconditional seal.
+    const res = clipAperturesForPunch(flat, _psMvpArr, {
+      nearPlane,
+      camAc: _acCamVec,
+    });
+    // The seal is a depth WALL, not a hole: no scissor. Bounding it to the
+    // aperture rects would be harmless but pointless, and a wrong rect would
+    // silently drop part of the wall.
+    pass.setApertures(res.kept > 0 ? res.flat : null, null);
+    scene3d._portalSealDiag = { kept: res.kept, dropped: res.dropped };
+  } catch (_) {
+    pass.setApertures(null, null);
   }
 }
 

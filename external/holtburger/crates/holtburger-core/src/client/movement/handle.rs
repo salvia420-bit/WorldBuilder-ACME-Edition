@@ -248,6 +248,14 @@ impl MovementSystemHandle {
         self.inner.set_faithful_entity_collision(on);
     }
 
+    /// COL-DIAG (2026-08-04): install the `?fu3Diag=on` runtime carrier —
+    /// the FU-3 entity clamp logs one `[fu3] …` line per ~second describing
+    /// the collider gather it actually saw. Diagnostic only; changes no
+    /// collision decision. Forwards to `MovementSystem::set_fu3_diag`.
+    pub fn set_fu3_diag(&mut self, on: bool) {
+        self.inner.set_fu3_diag(on);
+    }
+
     /// Phase 3 Phase D (2026-06-28): install the `?faithfulOutdoor=off` runtime
     /// carrier (default-ON outdoor-faithful; `=off` rolls the OUTDOOR terrain
     /// path back to the heightfield). Read only when `?faithfulTransition` is

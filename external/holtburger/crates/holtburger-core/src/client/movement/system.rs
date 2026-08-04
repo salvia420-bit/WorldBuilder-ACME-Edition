@@ -1786,6 +1786,17 @@ pub(crate) struct MovementSystem {
     /// entity-collision arm. OR'd with the [`USE_FAITHFUL_ENTITY_COLLISION`]
     /// const by [`Self::faithful_entity_collision_enabled`]. Default `false`.
     faithful_entity_collision_runtime: bool,
+    /// COL-DIAG (2026-08-04) — `?fu3Diag=on`. When set, the FU-3 entity
+    /// clamp logs one line roughly every second describing the collider
+    /// gather it actually saw. Exists because "creatures still walk through"
+    /// could not be told apart from "the gather returned nothing" by reading
+    /// the code: doors and creatures share the gather and the clamp, and only
+    /// doors were observed blocking. Diagnostic only — never gates behaviour.
+    fu3_diag_runtime: bool,
+    /// Slice counter for the `fu3_diag_runtime` rate limit. `Cell` because
+    /// the clamp runs under `&self` (same reason `SpatialScene`'s arm-eval
+    /// probes are `Cell`s).
+    fu3_diag_tick: std::cell::Cell<u32>,
     /// Phase 3 Phase D (2026-06-28) — runtime carrier of the
     /// `?faithfulOutdoor=off` URL flag. `None` = use the
     /// [`USE_FAITHFUL_OUTDOOR`] const default (ON); `Some(false)` forces the
@@ -2232,6 +2243,8 @@ impl MovementSystem {
             unified_transition_runtime: false,
             faithful_transition_runtime: false,
             faithful_entity_collision_runtime: false,
+            fu3_diag_runtime: false,
+            fu3_diag_tick: std::cell::Cell::new(0),
             faithful_outdoor_runtime: None,
             faithful_stepup_runtime: None,
             outdoor_static_grounding_runtime: None,
@@ -2286,6 +2299,12 @@ impl MovementSystem {
     /// and any future URL-flag plumbing target this entry.
     pub(crate) fn set_faithful_entity_collision(&mut self, on: bool) {
         self.faithful_entity_collision_runtime = on;
+    }
+
+    /// COL-DIAG (2026-08-04) — install the `?fu3Diag=on` runtime carrier.
+    /// Diagnostic only; does not change any collision decision.
+    pub(crate) fn set_fu3_diag(&mut self, on: bool) {
+        self.fu3_diag_runtime = on;
     }
 
     /// Phase 3 Phase D (2026-06-28) — install the `?faithfulOutdoor=off` runtime
@@ -7125,6 +7144,54 @@ impl MovementSystem {
                 object.self_guid,
                 gates.skip_parented_entities,
             );
+            // COL-DIAG (2026-08-04, `?fu3Diag=on`) — ground truth for "creatures
+            // still walk through while doors block". Doors and creatures share
+            // this gather and this clamp; the ONLY divergence is the narrow
+            // phase (`bsp=` below counts colliders that took the precise arm,
+            // the rest took the swept circle). Logged BEFORE the emptiness
+            // check so "gather returned nothing" is distinguishable from
+            // "gathered but did not clamp" — the exact ambiguity that made this
+            // unresolvable by reading code. ~1 line/second at a 30 Hz slice.
+            if self.fu3_diag_runtime {
+                let n = self.fu3_diag_tick.get().wrapping_add(1);
+                self.fu3_diag_tick.set(n);
+                if n % 30 == 0 {
+                    let begin_g = input.begin.global_coords();
+                    let (mut near_d, mut near_r, mut n_bsp) = (f32::MAX, 0.0f32, 0usize);
+                    for c in &colliders {
+                        if c.bsp.is_some() {
+                            n_bsp += 1;
+                        }
+                        let dx = c.center_xy.0 - begin_g.x;
+                        let dy = c.center_xy.1 - begin_g.y;
+                        let d = (dx * dx + dy * dy).sqrt();
+                        if d < near_d {
+                            near_d = d;
+                            near_r = c.radius;
+                        }
+                    }
+                    log::info!(
+                        "[fu3] colliders={} bsp={} nearest_d={:.2} nearest_r={:.2} \
+                         player_r={:.2} prefilter={:.2} interp_drives={} \
+                         interp_fwd={}",
+                        colliders.len(),
+                        n_bsp,
+                        if colliders.is_empty() { -1.0 } else { near_d },
+                        near_r,
+                        object.radius,
+                        prefilter,
+                        // Item-3 carrier: is the SERVER-ECHO state driving, and
+                        // does it still claim forward? A stale `1/1` pair with no
+                        // key held is the "click makes me walk forward" latch.
+                        self.interpreted_movement_active() as u8,
+                        self.movement_managers
+                            .get(&world.player.guid)
+                            .and_then(|m| m.motion_interp_ref())
+                            .map(|mi| mi.interpreted_state.forward_command.is_some() as u8)
+                            .unwrap_or(0),
+                    );
+                }
+            }
             if !colliders.is_empty() {
                 let begin_g = input.begin.global_coords();
                 let realized_g = pose.global_coords();

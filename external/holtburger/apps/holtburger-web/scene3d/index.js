@@ -74,7 +74,12 @@ import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnF
 // shared particle/script time hook (one clock for mixers + particles +
 // script queues, mirroring retail's single Timer::cur_time static,
 // acclient.c:46992). Install point is below, right after liveScene3d exists.
-import { particleClockMode, setCurrentTime } from "./particles/time_rng.js";
+// `currentTime` (2026-08-04): __diag.portalEmitterState() must read the SAME
+// clock the emitters gate emission on (ShouldEmitParticle's
+// `currentTime() - lastEmitTime > birthrate`), not a private performance.now(),
+// or the "is this emitter due to birth?" verdict would be measured against the
+// wrong timebase under `?particleClock=sim`.
+import { currentTime, particleClockMode, setCurrentTime } from "./particles/time_rng.js";
 import { ownerRegistry as particleOwnerRegistry } from "./particles/owner_registry.js"; // P3.8 __diag.particles() bridge
 import { EntityManager } from "./entities.js";
 // `entMB` instrument + `?recolor` arm label for `__diag.entityOwned()`
@@ -2436,6 +2441,25 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     const camLayersBefore = activeCam.layers.mask;
     const prevAutoClear = renderer.autoClear;
     activeCam.layers.mask = (1 << 0) | (1 << 1); // both layers, shared depth
+    // ?indoorDepthSplit (2026-08-04 round 3) — FALLBACK-PATH PARITY.
+    //
+    // THIS is why rounds 1-2 measured "armed, re-layered, room still gone".
+    // The armed split lived ONLY in atmosphere_pipeline.preFrameSkySync, but
+    // the comment above this block spells out that `?wireframe=1`, the ~8 s
+    // atmosphere-bake window and `?atmosphere=off` ALL render here instead —
+    // the composer never runs, so `preFrameSkySync` never runs, so the split
+    // never happened. cells.js still re-layered buildings/statics to layer 1
+    // (hoisted:39 in the probe), which this path's `(1<<0)|(1<<1)` mask still
+    // draws — hence "arms correctly, changes nothing". A SwiftShader bot is
+    // exactly the configuration that lands here.
+    //
+    // `_indoorSplitPath` below reports which renderer actually drove the frame
+    // so this can never again be diagnosed by screenshot alone.
+    const splitArmed = !!liveScene3dRef?._indoorSplitArmed;
+    if (liveScene3dRef) liveScene3dRef._indoorSplitPath = "direct";
+    // Stamp the SAME field the composer writes so one read is authoritative
+    // (last writer per frame wins): `liveScene3d.skyDome._indoorSplitPath`.
+    if (liveScene3dRef?.skyDome) liveScene3dRef.skyDome._indoorSplitPath = "direct";
     // F4 (2026-08-03) — this path (pre-atmosphere-bake window, ?wireframe=1,
     // ?atmosphere=off) was the ONE render submission with no guard: a throw
     // skipped the mask/autoClear restores AND `scheduleNext()`, so the frame
@@ -2444,7 +2468,39 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // streaming stopped with no console signal. INVARIANT: every exit restores
     // renderer + camera state and re-arms the loop.
     try {
-      if (skyRendered) {
+      if (splitArmed) {
+        // Retail `PView::DrawCells` (acclient.c:461450) in the direct path:
+        // (1) landscape, (2) depth wipe, (3) everything else.
+        if (skyRendered) {
+          renderer.autoClear = false;
+          renderer.clearDepth();
+        }
+        activeCam.layers.mask = 1 << 0; // terrain (+ other LBs, still layer 0)
+        renderer.render(scene, activeCam);
+        // (2) depth-only wipe, colour kept — retail's `Clear(4, …, 1.0f)`.
+        renderer.autoClear = false;
+        renderer.clearDepth();
+        // (3) the room shell + props + EnvCells + entities, fresh depth.
+        //
+        // `scene.background` MUST be nulled around this second submission.
+        // three's WebGLBackground.render() repaints the background on EVERY
+        // renderer.render() — and force-clears when it is a Color, even with
+        // autoClear off — so leaving it set would wipe the terrain paint the
+        // first submission just made and leave the frame on the clear colour.
+        // (`scene.background` is set at index.js:1295/1297; wireframe mode is
+        // one of the configurations that reaches this very path.) The composer
+        // route gets this for free from pmndrs RenderPass's own
+        // `ignoreBackground` handling, which is why only the direct path needs
+        // it spelled out.
+        const bgSaved = scene.background;
+        scene.background = null;
+        activeCam.layers.mask = 1 << 1;
+        try {
+          renderer.render(scene, activeCam);
+        } finally {
+          scene.background = bgSaved;
+        }
+      } else if (skyRendered) {
         // Preserve the sky's color paint; reset ONLY depth so the world
         // depth-test starts fresh against a clean buffer.
         renderer.autoClear = false;
@@ -4249,6 +4305,252 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       };
     };
 
+    // ── __diag.portalEmitterState() (2026-08-04) ─────────────────────────
+    // ONE paste that convicts ONE branch of "emitters are live but
+    // `probeNearestParticle()` says liveCount:0".
+    //
+    // Read the two existing probes correctly first: `__diag.particles()`
+    // reports `particleTable.size` per manager (emitters, NOT particles) and
+    // `byOwner` from the owner REGISTRY, which is a different bookkeeping set —
+    // a registry entry whose manager is not the one hanging off
+    // `scene3dForBuilders` still counts there while reporting 0 here.
+    // `probeNearestParticle().liveCount` counts meshes that are BOTH
+    // `parts[i] != null` AND `mesh.visible` — so it reads 0 for BOTH "never
+    // birthed" and "birthed then hidden", which is exactly the ambiguity this
+    // resolves.
+    //
+    // The load-bearing field is `mgr._rp6Frame`: `ParticleManager.tick()`
+    // increments it on entry (particles/particle_manager.js), so it is a free
+    // tick counter. The world manager ticks from the TAIL of
+    // `entityManager.tick(dt)` (entities.js — `if (particleClockMode() ===
+    // "off") this.tickParticlesAndScripts()`), so ANY throw earlier in that
+    // tick starves the whole particle runtime silently. Sampling the counter
+    // across ~500 ms separates "not ticking at all" from "ticking but not
+    // birthing" before any per-emitter field matters.
+    //
+    // Usage (DevTools console, top-level await):
+    //     await window.__diag.portalEmitterState()
+    window.__diag.portalEmitterState = async () => {
+      const out = { ok: true };
+      try {
+        const s = scene3dForBuilders;
+        const sm = s && s._staticParticleManager;
+        const wm = s && s.entityManager && s.entityManager._worldParticleManager;
+        const mgrs = [];
+        if (sm) mgrs.push(["static", sm]);
+        if (wm) mgrs.push(["world", wm]);
+        out.managersFound = mgrs.map(([n]) => n);
+        // Facade cross-check: `__diag.particles()` reads scene3dForBuilders;
+        // if the manager actually lives on the window facade instead, that
+        // alone explains a 0 count with a populated owner registry.
+        out.facade = {
+          staticOnBuilders: !!(s && s._staticParticleManager),
+          staticOnWindow: !!(typeof window !== "undefined" && window.liveScene3d?._staticParticleManager),
+          sameSceneObject: (typeof window !== "undefined") && window.liveScene3d === s,
+        };
+        if (!mgrs.length) { out.ok = false; out.reason = "no particle manager"; return out; }
+
+        // ── tick liveness ──────────────────────────────────────────────
+        const frame0 = mgrs.map(([, m]) => m._rp6Frame | 0);
+        const t0 = currentTime();
+        await new Promise((r) => setTimeout(r, 500));
+        const frame1 = mgrs.map(([, m]) => m._rp6Frame | 0);
+        const t1 = currentTime();
+        out.clock = {
+          mode: particleClockMode(),
+          currentTimeS: +t1.toFixed(3),
+          advancedS: +(t1 - t0).toFixed(3), // ~0.5 ⇒ the emitters' clock is live
+        };
+        out.tick = mgrs.map(([n], i) => ({
+          manager: n, frames: frame1[i] - frame0[i],
+          ticking: frame1[i] !== frame0[i],
+        }));
+
+        // ── RP6 camera, as RP6 itself resolves it ──────────────────────
+        const ls = typeof window !== "undefined" ? window.liveScene3d : null;
+        const rp6Cam = ls ? (ls.cameraSwitcher?.activeCamera ?? ls.camera ?? null) : null;
+        const camPos = new THREE.Vector3();
+        if (rp6Cam) {
+          rp6Cam.updateMatrixWorld?.();
+          rp6Cam.getWorldPosition(camPos);
+        }
+        out.rp6Camera = rp6Cam
+          ? {
+              resolved: true,
+              // RP6's distance gate reads `camera.position` directly; report BOTH
+              // so a parented/stale camera shows up as a mismatch.
+              position: rp6Cam.position.toArray().map((v) => +v.toFixed(1)),
+              worldPosition: camPos.toArray().map((v) => +v.toFixed(1)),
+              isActiveCamera: !!(ls && ls.cameraSwitcher && rp6Cam === ls.cameraSwitcher.activeCamera),
+            }
+          : { resolved: false }; // ⇒ RP6 bails open and culls NOTHING
+
+        // ── frustum, rebuilt EXACTLY as _rp6PrepareFrustum does ────────
+        // (particles/particle_manager.js: mvp = projection · matrixWorldInverse
+        // after camera.updateMatrixWorld(), then Frustum.setFromProjectionMatrix)
+        // so `inFrustum` below is the same predicate RP6 applied, not a proxy.
+        const mvp = new THREE.Matrix4();
+        const frustum = new THREE.Frustum();
+        const camFwd = new THREE.Vector3();
+        let halfFovDeg = null;
+        if (rp6Cam) {
+          rp6Cam.updateMatrixWorld();
+          mvp.multiplyMatrices(rp6Cam.projectionMatrix, rp6Cam.matrixWorldInverse);
+          frustum.setFromProjectionMatrix(mvp);
+          rp6Cam.getWorldDirection(camFwd);
+          if (Number.isFinite(rp6Cam.fov)) {
+            // Diagonal half-angle ≈ the widest in-view angle, so a point inside
+            // the frustum always has angleDeg <= this. Anything culled with a
+            // SMALLER angle is a false cull.
+            const vHalf = (rp6Cam.fov / 2) * Math.PI / 180;
+            const hHalf = Math.atan(Math.tan(vHalf) * (rp6Cam.aspect || 1));
+            halfFovDeg = +(Math.atan(Math.hypot(Math.tan(vHalf), Math.tan(hHalf))) * 180 / Math.PI).toFixed(1);
+          }
+          out.rp6Camera.forward = camFwd.toArray().map((v) => +v.toFixed(3));
+          out.rp6Camera.fov = rp6Cam.fov ?? null;
+          out.rp6Camera.aspect = rp6Cam.aspect ? +rp6Cam.aspect.toFixed(3) : null;
+          out.rp6Camera.near = rp6Cam.near ?? null;
+          out.rp6Camera.far = rp6Cam.far ?? null;
+          out.rp6Camera.halfFovDiagDeg = halfFovDeg;
+          // Staleness self-test: force a full matrix rebuild and see whether the
+          // frustum planes actually move. If they do, RP6's non-forced
+          // updateMatrixWorld() was reading stale matrices — which would be the
+          // "culled while looking right at it" bug. Non-zero ⇒ stale.
+          const before = frustum.planes.map((p) => p.constant);
+          rp6Cam.updateMatrixWorld(true);
+          const mvp2 = new THREE.Matrix4().multiplyMatrices(rp6Cam.projectionMatrix, rp6Cam.matrixWorldInverse);
+          const f2 = new THREE.Frustum().setFromProjectionMatrix(mvp2);
+          out.rp6Camera.staleMatrixDelta = +Math.max(
+            ...f2.planes.map((p, i) => Math.abs(p.constant - before[i]))
+          ).toFixed(6);
+        }
+
+        // ── per-emitter birth state ────────────────────────────────────
+        const now = currentTime();
+        const anchor = new THREE.Vector3();
+        const rows = [];
+        const verdicts = {};
+        let falseCullSuspects = 0;
+        for (const [mgrName, mgr] of mgrs) {
+          if (!mgr.particleTable) continue;
+          for (const [eid, em] of mgr.particleTable) {
+            const info = em.info || {};
+            const parts = em.parts || [];
+            const store = em.partStorage || [];
+            let partsLive = 0, partsVisible = 0, storeBuilt = 0, maskSample = null;
+            for (let i = 0; i < parts.length; i++) {
+              if (parts[i]) { partsLive++; if (parts[i].visible) partsVisible++; }
+            }
+            for (let i = 0; i < store.length; i++) {
+              if (store[i]) { storeBuilt++; if (maskSample === null) maskSample = store[i].layers.mask; }
+            }
+            // Distance exactly as _rp6ShouldCull measures it.
+            let dist = null;
+            const p = em.parent;
+            if (p) {
+              if (typeof p.getWorldPosition === "function") p.getWorldPosition(anchor);
+              else if (p.position) anchor.set(p.position.x || 0, p.position.y || 0, p.position.z || 0);
+              if (rp6Cam) dist = +anchor.distanceTo(camPos).toFixed(1);
+            }
+            // Frustum inputs EXACTLY as _rp6ShouldCull assembles them:
+            // sphere = (anchor world pos, sortingSphere.radius + |parentOffset|).
+            let radius = em.info?.sortingSphere?.radius ?? 0;
+            const poff = em.parentOffset?.position;
+            if (poff && typeof poff.length === "function") radius += poff.length();
+            let inFrustum = null, angleDeg = null, rejectPlane = null;
+            if (rp6Cam && p) {
+              const sph = new THREE.Sphere(anchor.clone(), radius);
+              inFrustum = frustum.intersectsSphere(sph);
+              if (!inFrustum) {
+                for (let pi = 0; pi < frustum.planes.length; pi++) {
+                  const d = frustum.planes[pi].distanceToPoint(sph.center);
+                  if (d < -sph.radius) { rejectPlane = { plane: pi, dist: +d.toFixed(2) }; break; }
+                }
+              }
+              const toAnchor = anchor.clone().sub(camPos);
+              if (toAnchor.lengthSq() > 1e-9) {
+                angleDeg = +(toAnchor.normalize().angleTo(camFwd) * 180 / Math.PI).toFixed(1);
+              }
+            }
+            // THE discriminator: culled while WITHIN the camera's view cone is a
+            // false cull (real bug). Culled with a larger angle is correct
+            // behaviour — the player simply was not looking at it.
+            const falseCull = em._rp6Culled === true && angleDeg !== null
+              && halfFovDeg !== null && angleDeg < halfFovDeg;
+            if (falseCull) falseCullSuspects += 1;
+
+            const sinceEmit = +(now - (em.lastEmitTime ?? 0)).toFixed(3);
+            const birthrate = +(info.birthrate ?? 0);
+            // Mirrors ParticleEmitterInfo.shouldEmitParticle's three gates.
+            const dueByClock = sinceEmit > birthrate;
+            const underMax = (em.numParticles | 0) < (info.maxParticles | 0);
+            const underTotal = !(info.totalParticles > 0) || (em.totalEmitted | 0) < info.totalParticles;
+
+            let verdict;
+            if (partsVisible > 0) verdict = "OK_VISIBLE";
+            else if (partsLive > 0) verdict = em._rp6Culled === true ? "HIDDEN_BY_RP6" : "HIDDEN_OTHER";
+            else if (em.stopped) verdict = "STOPPED";
+            else if (em._rp6Culled === true) verdict = "CULLED_NO_BIRTH";
+            else if (storeBuilt === 0) verdict = "NO_SLOT_MESHES";
+            else if (!underMax) verdict = "AT_MAX_BUT_NO_PARTS"; // bookkeeping desync
+            else if (!underTotal) verdict = "TOTAL_REACHED";
+            else if (!dueByClock) verdict = "CLOCK_NOT_DUE";
+            else verdict = "EMIT_BLOCKED"; // due + room + slots, still nothing
+            verdicts[verdict] = (verdicts[verdict] || 0) + 1;
+
+            rows.push({
+              mgr: mgrName,
+              eid: typeof eid === "number" ? "0x" + (eid >>> 0).toString(16) : String(eid),
+              info: "0x" + ((info.id >>> 0) || 0).toString(16),
+              hw: "0x" + ((info.hwGfxObjId >>> 0) || 0).toString(16),
+              type: info.particleType,
+              verdict,
+              num: em.numParticles | 0,
+              max: info.maxParticles | 0,
+              emitted: em.totalEmitted | 0,
+              slots: `${storeBuilt}/${em._createdSlots | 0}/${parts.length}`, // built/created/max
+              partsLive,
+              partsVisible,
+              sinceEmit,
+              birthrate,
+              dueByClock,
+              stopped: !!em.stopped,
+              rp6Culled: em._rp6Culled === true,
+              degradeDist: Number.isFinite(em.degradeDistance) ? em.degradeDistance : "Inf",
+              dist,
+              // RP6 frustum inputs (2026-08-04) — proves/disproves false culling.
+              sphere: anchor.toArray().map((v) => +v.toFixed(1)),
+              radius: +radius.toFixed(2),
+              angleDeg,      // angle off camera forward
+              inFrustum,     // the same predicate RP6 used
+              rejectPlane,   // which plane rejected it, and by how far
+              falseCull,     // culled DESPITE being inside the view cone ⇒ bug
+              parentAttached: !!(em.parent && em.parent.parent),
+              layer: em.renderLayer | 0,
+              meshMask: maskSample,
+            });
+          }
+        }
+        rows.sort((a, b) => (a.dist ?? 1e9) - (b.dist ?? 1e9));
+        out.summary = {
+          emitters: rows.length,
+          verdicts,
+          totalLiveParts: rows.reduce((n, r) => n + r.partsLive, 0),
+          totalVisibleParts: rows.reduce((n, r) => n + r.partsVisible, 0),
+          // >0 ⇒ RP6 culled something inside the view cone: a REAL cull bug.
+          // 0 with many culled emitters ⇒ culling is correct and the camera
+          // simply was not pointed at them when the snapshot was taken.
+          falseCullSuspects,
+          inFrustumCulled: rows.filter((r) => r.rp6Culled && r.inFrustum === true).length,
+        };
+        out.nearest = rows.slice(0, 10);
+      } catch (e) {
+        out.ok = false;
+        out.error = String(e && e.message ? e.message : e);
+      }
+      return out;
+    };
+
     // A07 §3.6 (P2 negcache hardening, 2026-07-10) — dat-decode failure
     // counters + negative-cache state from BOTH wasm instances (the bake
     // worker's tier was previously invisible from the main thread), plus
@@ -4885,12 +5187,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // hill in the frustum → terrain/statics lose the depth test and the whole
               // world can vanish (R9 290; SwiftShader clipped the degenerate poly and
               // hid it). `nearPlaneCullApertures` (cells.js) only drops near-plane
-              // straddlers, not occluded-but-in-front apertures, so the over-punch is
-              // NOT fully fixed. Reverted to default-OFF (2026-07-06) until the
-              // occlusion/clip gap is closed and it re-passes a real-GPU eye-test.
-              // Off = byte-identical (no pass, no split). See portal_punch.js + cells.js.
+              // straddlers, not occluded-but-in-front apertures. 2026-08-04: the punch
+              // was rebuilt with retail clip gates (near-plane Sutherland-Hodgman, area
+              // clamp, straddle drop, terrain-LOS cache, scissor bound) and passed the
+              // real-GPU eye-test at Yaraq — DEFAULT-ON with `=off` escape. The r5
+              // sidedness gate stays behind `?punchSidedness=on` (see cells.js).
               portalPunch:
-                new URLSearchParams(window.location.search).get("portalPunch") === "on",
+                new URLSearchParams(window.location.search).get("portalPunch")?.toLowerCase() !== "off", // DEFAULT-ON 2026-08-04
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // Expose the portal-stencil pass (null when the flag is off) so

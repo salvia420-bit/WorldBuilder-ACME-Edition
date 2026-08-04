@@ -833,12 +833,28 @@ impl WorldState {
     /// `HAS_PHYSICS_BSP` or its SetupModel geometry has not landed yet.
     /// Feeds [`crate::spatial::EntityCollider::bsp`]; `None` leaves the
     /// caller on the swept-circle arm.
+    ///
+    /// COL-03 LIVE REPAIR (2026-08-04) — this keyed on `entity.gfx_id`, the
+    /// TRAP [`Self::entity_setup_did`] documents: **nothing outside unit tests
+    /// ever assigns that field**, so this returned `None` for EVERY entity in
+    /// every live session and the precise arm has never once run in the
+    /// browser. The 2026-07-28 COMBAT-RADII audit fixed the same trap in
+    /// [`Self::entity_collision_radius`] but not here or in the wasm bundle's
+    /// geometry-fetch kick, so the whole COL-03 feature was dead live: every
+    /// door/prop silently degraded to the swept CIRCLE at its ORIGIN — which
+    /// for a door is the HINGE, and is exactly the pre-COL-03 failure the
+    /// bisect recorded ("at ±0.45 m lateral the tangent slide walked the mover
+    /// AROUND the circle and into the shop"; the leaf under Setup
+    /// `0x020019FF` is 1.93 m wide and 0.26 m thick). Resolved now through
+    /// the same `PropertyDataId::Setup` path the combat lane and
+    /// `entity_collision_radius` use, so a SINGLE resolution rule governs all
+    /// three.
     pub fn entity_physics_bsp(&self, entity: &Entity) -> Option<crate::spatial::EntityBsp> {
         if !entity.has_physics_bsp() {
             return None;
         }
-        let gfx_id = entity.gfx_id?;
-        let geometry = self.setup_physics_geometry.get(&gfx_id)?;
+        let setup_id = Self::entity_setup_did(entity)?;
+        let geometry = self.setup_physics_geometry.get(&setup_id)?;
         Some(crate::spatial::EntityBsp {
             geometry: geometry.clone(),
             origin: entity.position.global_coords(),
@@ -846,30 +862,98 @@ impl WorldState {
         })
     }
 
-    /// Best-known collision cylinder radius for an entity, in metres.
-    /// Returns the cached SetupModel cyl-sphere radius when the
-    /// entity's `gfx_id` is a `0x02xxxxxx` SetupModel and has been
-    /// loaded; otherwise falls back to
-    /// [`crate::spatial::PLAYER_CAPSULE_RADIUS`].
+    /// COL-03 LIVE REPAIR (2026-08-04) — the SetupModel ids whose physics
+    /// geometry the residency feed still owes us: every resident entity that
+    /// is collidable, carries `HAS_PHYSICS_BSP`, resolves to a `0x02xxxxxx`
+    /// SetupModel, and has no staged geometry yet.
     ///
-    /// Mirrors ACE's `PhysicsObj.GetPhysicsRadius` at
-    /// `Source/ACE.Server/Physics/PhysicsObj.cs:~590`. ACE returns
-    /// `0.0` for `HasPhysicsBSP` entities (caller uses the BSP path
-    /// instead); we keep the cylinder for them because our BSP arm is
-    /// residency-gated — [`Self::entity_physics_bsp`] returning `None`
-    /// has to leave a solid fallback behind.
+    /// Lives here (not in the wasm bundle) because the id resolution is
+    /// [`Self::entity_setup_did`] — `pub(crate)` on purpose, since getting it
+    /// wrong is precisely the `gfx_id` trap that made the caller's filter
+    /// return an EMPTY list forever, so no entity's polygons were ever
+    /// fetched. Callers dedupe against their own "already attempted" set.
+    pub fn entity_physics_setup_ids_wanted(&self) -> Vec<u32> {
+        self.entities
+            .iter()
+            .filter(|e| e.is_collidable() && e.has_physics_bsp())
+            .filter_map(Self::entity_setup_did)
+            .filter(|id| !self.setup_physics_geometry.contains_key(id))
+            .collect()
+    }
+
+    /// Best-known collision cylinder radius for an entity, in metres:
+    /// the cached SetupModel collision primitive **× the object's scale**,
+    /// falling back to a humanoid radius when the Setup is not resident.
+    ///
+    /// Mirrors ACE's `PhysicsObj.GetPhysicsRadius`
+    /// (`Source/ACE.Server/Physics/PhysicsObj.cs:588-602`). ACE returns `0.0`
+    /// for `HasPhysicsBSP` entities (caller uses the BSP path instead); we
+    /// keep the cylinder for them because our BSP arm is residency-gated —
+    /// [`Self::entity_physics_bsp`] returning `None` has to leave a solid
+    /// fallback behind. That divergence is deliberate and stays.
+    ///
+    /// SIM/RENDER RADIUS PARITY (2026-08-04) — two corrections so the value
+    /// the MOVER is stopped by is the same number the renderer draws the
+    /// creature at:
+    ///
+    /// 1. **`× obj_scale`.** This is not an embellishment of the reference —
+    ///    it IS the reference: ACE's `GetPhysicsRadius` returns
+    ///    `cylSpheres[0].Radius * Scale` / `spheres[0].Radius * Scale`
+    ///    (`PhysicsObj.cs:596`, `:601`), and retail applies the same factor at
+    ///    the `FindObjCollisions` call site where the primitive is cached into
+    ///    the part frame (acclient.c:316244 / :316266). Both readings agree
+    ///    that what collides is `primitive × scale`; ours dropped `Scale`, so
+    ///    it was never the `GetPhysicsRadius` pair it claimed to be. A
+    ///    double-size creature was stopped at its unscaled cylinder and the
+    ///    avatar visibly entered the model, while the JS contact floor
+    ///    (`entities.js` `_separationFloor`, `base * inst._baseScale`) has
+    ///    always scaled — so sim and render disagreed by `(scale − 1)·r`.
+    ///
+    ///    CONTRACT NOTE (2026-08-04; pinned by `handlers::movement`'s
+    ///    case-6 combat-radii test): this deliberately changes the COMBAT-RADII
+    ///    **flag-OFF** value too, and that is the point rather than a leak
+    ///    past the gate. `?combatRadii` gates *which SOURCE* the dims come
+    ///    from — [`Self::entity_part_dims`]'s `CPartArray::GetRadius`
+    ///    (`setup->radius × scale.z`, acclient.c:325382-325391) versus this
+    ///    cyl-sphere cache — it was never a gate on whether an object's scale
+    ///    exists. Before this, the flag-ON arm scaled and the flag-OFF arm did
+    ///    not, so the two disagreed about a scaled creature's size and only
+    ///    the ON arm matched either engine. Scaling both makes the gate mean
+    ///    exactly what it says. Downstream, the case-6 wire `object_radius`
+    ///    (`handlers/movement.rs::resolve_movement_target`) feeds the MoveTo
+    ///    cylinder metric and the `StickTo` standoff
+    ///    (acclient.c:319749-319763, :345553-345566), which in retail stop at
+    ///    the target's real edge — so a 1.5× creature earning a 1.5× standoff
+    ///    is the fix, not the regression.
+    /// 2. **Fallback = [`crate::spatial::transition::PLAYER_SETUP_SPHERE_RADIUS`]
+    ///    (0.48), not `PLAYER_CAPSULE_RADIUS` (0.40).** 0.40 is the legacy
+    ///    hand-tuned capsule; 0.48 is retail Setup `0x02000001`'s real sphere
+    ///    and is what the mover itself uses (`ObjectInfo::for_local_player`
+    ///    `radius`) and what the render-side floor falls back to
+    ///    (`SEPARATION_FALLBACK_RADIUS_M`). Matching them removes a permanent
+    ///    0.08 m of sim-allowed interpenetration on every residency miss.
     pub fn entity_collision_radius(&self, entity: &Entity) -> f32 {
-        const DEFAULT: f32 = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        const DEFAULT: f32 = crate::spatial::transition::PLAYER_SETUP_SPHERE_RADIUS;
         // COMBAT-RADII (2026-07-28) — was `entity.gfx_id`, a field
         // NOTHING ever assigns, so this returned DEFAULT for every
         // entity in a live session. Resolve the Setup DID the same way
         // the combat lane does (see [`Self::entity_setup_did`]);
         // SetupModel ids are `0x02xxxxxx`, raw GfxObjs have no cylinder
         // and keep the default.
-        let Some(setup_id) = Self::entity_setup_did(entity) else {
-            return DEFAULT;
+        let base = Self::entity_setup_did(entity)
+            .and_then(|setup_id| self.setup_radii.get(&setup_id).copied())
+            .unwrap_or(DEFAULT);
+        // Scale the FALLBACK too, matching the render-side floor
+        // (`_separationFloor`: `base * inst._baseScale`, where `base` is the
+        // resolved radius OR the humanoid fallback) — otherwise a half-scale
+        // creature whose Setup has not landed yet is blocked at full size.
+        let scale = entity.obj_scale().unwrap_or(1.0) as f32;
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
         };
-        self.setup_radii.get(&setup_id).copied().unwrap_or(DEFAULT)
+        base * scale
     }
 
     /// CREATURE-SEPARATION (2026-07-28) — snapshot of the per-SetupModel

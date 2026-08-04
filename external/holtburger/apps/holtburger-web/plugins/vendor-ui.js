@@ -1447,17 +1447,72 @@ function hideOverlay() {
   stopVendorRangeWatchdog();
 }
 
-// HUD rec #18 — vendor approach-distance enforcement. Retail Trade/
-// Vendor.cs sets MaxInteractDistance≈24 units; when the player walks
-// outside that radius the vendor UI auto-closes (acclient.h:55268
-// ObjectRangeHandler / OnObjectRangeExit). The wasm side doesn't yet
-// surface a per-frame ObjectRangeExit callback, so we poll the live
-// scene at 2Hz: read the vendor's `root.position` from entityManager
-// + the local player pose via window.getLocalPlayerPose(), compute
-// horizontal distance, and if it crosses the 24-unit threshold while
-// the overlay is open we hide it + show a single toast. Started by
-// openWith() and torn down by hideOverlay() / mount disposer.
-const VENDOR_MAX_INTERACT_RANGE = 24.0;
+// HUD rec #18 — vendor approach-distance enforcement.
+//
+// 2026-08-04 CORRECTION. The previous constant here was 24.0, justified by
+// "Retail Trade/Vendor.cs sets MaxInteractDistance≈24 units
+// (acclient.h:55268 ObjectRangeHandler / OnObjectRangeExit)". BOTH halves of
+// that citation are fabricated: `MaxInteractDistance` appears NOWHERE in the
+// ACE source tree or in acclient.c (0 hits each), and there is no ACE file
+// named "Trade/Vendor.cs". The real authorities:
+//
+//   RETAIL (client owns the close; there is no close packet in either
+//   direction — `CM_Vendor::SendNotice_CloseVendor` acclient.c:707232 is a
+//   LOCAL notice dispatch, not a send):
+//     `gmVendorUI::OpenVendor` (acclient.c:246660) registers an object-range
+//     handler with the VENDOR'S OWN wire use-radius —
+//       `_range = *(float *)&v9[18].hash_next;`            (:246708)
+//       `CPlayerSystem::RegisterObjectRangeHandler(v12, …, _range,
+//                                                  /*useRadii*/1,
+//                                                  /*ignoreZDelta*/0,
+//                                                  /*timeInterval*/1.0, 0.0)`
+//     where byte offset 220 = `ACCWeenieObject.pwd` (+152) +
+//     `PublicWeenieDesc::_useRadius` (+68). `CPlayerSystem::
+//     CalculateObjectRangeChecks` (:397612) polls it once per second and
+//     calls `gmVendorUI::OnObjectRangeExit` (:242550) → `CloseVendor`
+//     (:245102) once `ACCWeenieObject::ObjectsInRange` (:436730) reports
+//     `get_distance_to_object(use_cyls=1) > _range`.
+//
+//   ACE (server side, independent, emote-only): `Vendor.CheckClose()`
+//     (Vendor.cs:330-367) re-arms every `closeInterval = 1.5f`
+//     (Vendor.cs:322) and on `GetCylinderDistance(lastPlayer) > UseRadius`
+//     (Vendor.cs:350-352) only plays the goodbye emote + clears
+//     `LastOpenedContainerId`. It never tells the client to close, so the
+//     client-side threshold below IS the whole mechanism.
+//
+//   THE VALUE: `UseRadius` is `PropertyFloat.UseRadius` (54) on the vendor
+//     weenie. In ACE-World v0.9.292 all 1179 `WeenieType.Vendor` weenies
+//     carry an explicit UseRadius: 3.0 ×1108, 5.0 ×47, 6.0 ×23, 4.0 ×1.
+//     So 3.0 is the correct default (~94% of vendors), not 24.
+//
+// SEMANTICS GAP: retail/ACE both measure CYLINDER distance —
+// `Position.CylinderDistance` (ACE Physics/Common/Position.cs:100) is
+// `|offset| - (radius + otherRadius)` with a Z term. Our watchdog only has
+// world-frame root positions, so it measures CENTRE-to-CENTRE horizontally.
+// Add back the radii sum so the two agree: retail's player collision sphere
+// is `PLAYER_SETUP_SPHERE_RADIUS` = 0.48 (Setup 0x02000001; surfaced as
+// `playerRadius` in the wasm .d.ts), and a humanoid vendor's is the same
+// order, so 2 × 0.48 ≈ 0.96 is the allowance. Erring high here only makes us
+// marginally MORE permissive than the server, which is the safe direction —
+// closing the window while the server would still accept a trade is the
+// annoying failure.
+//
+// TODO (needs Rust): `PublicWeenieDescription.use_radius` IS already parsed
+// (crates/holtburger-protocol/.../description.rs:200/:363) but is not
+// surfaced to JS, so we cannot use the PER-VENDOR radius the retail client
+// reads. Plumb it onto the spawn meta and this constant becomes a fallback.
+//
+// The wasm side doesn't surface a per-frame ObjectRangeExit callback, so we
+// poll the live scene at 2 Hz (retail polls at 1.0 s — a faster poll only
+// closes sooner within retail's own jitter): read the vendor's
+// `root.position` from entityManager + the local player entity's
+// `root.position`, compute horizontal distance, and if it crosses the
+// threshold while the overlay is open we hide it + show a single toast.
+// Started by openWith() and torn down by hideOverlay() / mount disposer.
+const VENDOR_USE_RADIUS = 3.0;
+const VENDOR_CYLINDER_RADII_ALLOWANCE = 0.96;
+const VENDOR_MAX_INTERACT_RANGE =
+  VENDOR_USE_RADIUS + VENDOR_CYLINDER_RADII_ALLOWANCE;
 function startVendorRangeWatchdog() {
   stopVendorRangeWatchdog();
   state.rangeCheckTimer = setInterval(() => {
@@ -1487,7 +1542,7 @@ function startVendorRangeWatchdog() {
     if (dist > VENDOR_MAX_INTERACT_RANGE) {
       console.info(
         `[vendor-ui] vendor 0x${vendorGuid.toString(16)} out of range ` +
-        `(${dist.toFixed(1)}m > ${VENDOR_MAX_INTERACT_RANGE}m) — closing overlay`,
+        `(${dist.toFixed(1)}m > ${VENDOR_MAX_INTERACT_RANGE.toFixed(2)}m) — closing overlay`,
       );
       toast("Vendor moved away.", "err");
       // Defer the close one tick so the toast has a parent to animate in.

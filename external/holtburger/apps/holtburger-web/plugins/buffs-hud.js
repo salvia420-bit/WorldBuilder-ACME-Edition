@@ -1089,7 +1089,24 @@ export function mount(ctx) {
     // hit with Weakness. Per-target route keeps the cadence honest.
     if (client?.events?.on) {
       const onEntityEnch = (payload) => {
-        const guid = (payload?.guid ?? 0) >>> 0;
+        // BUGFIX 2026-08-04 — this handler was DEAD ON ARRIVAL. The plugin bus
+        // delivers a CustomEvent, not the raw payload: `events.emit(name, p)`
+        // does `bus.dispatchEvent(new CustomEvent(name, { detail: p }))` and
+        // `events.on(name, h)` does a bare `bus.addEventListener(name, h)`
+        // (plugins/api.js:463-475), so `h` receives the EVENT. Reading
+        // `payload.guid` therefore always yielded `undefined` → `guid === 0` →
+        // the `if (!guid) return` below fired on EVERY kind=46, for the whole
+        // session. `refreshEntityFromSnapshot` has exactly one live call site
+        // (this one), so `state.entityEnchantments` was NEVER populated in a
+        // real session: remote buff/debuff state — the monster-debuff badge on
+        // the nameplate (`scene3d/nameplate_sprite.js` reads it through
+        // `__buffsHudGetEntitySummary`) — simply never appeared. The sibling
+        // subscriptions were unaffected because `refresh`/`evRefresh` ignore
+        // their argument entirely, which is why this went unnoticed.
+        // `?? payload` keeps the exported `refreshEntityFromSnapshot` /
+        // `__buffsHudDebug` plain-object callers working.
+        const d = payload?.detail ?? payload;
+        const guid = (d?.guid ?? 0) >>> 0;
         if (!guid) return;
         try {
           const snapshot = liveHandle()?.entityEnchantments?.(guid) || [];

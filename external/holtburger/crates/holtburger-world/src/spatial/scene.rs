@@ -507,6 +507,59 @@ impl CellPhysicsBsp {
     }
 }
 
+/// CAM-STAB (2026-08-04): swept-sphere test against ONE object BSP's resolved
+/// physics polygons, run entirely in the object's own frame.
+///
+/// The polygons of a [`CellPhysicsBsp`] are object-local, so rather than lifting
+/// every vertex to world (what [`CellPhysicsBsp::world_aabb`] does, fine for a
+/// one-off bake, wasteful per frame) the SEGMENT is brought into the object
+/// frame: `world_to_local` then `* 1/scale`, with the sphere radius divided by
+/// the same scale — exactly retail `SPHEREPATH::cache_localspace_sphere`
+/// (`crates/holtburger-dat/src/transition/spherepath_methods.rs:465-474`,
+/// `scalea = 1.0 / scale`) and the convention
+/// `faithful_bridge::SceneObjCell::find_obj_collisions` already uses for the
+/// static pass (the PART's scale, acclient.c:314669 — not the mover's).
+///
+/// `scratch` is a caller-owned triangle buffer so a whole stab list costs one
+/// allocation instead of one per object. The parametric `t` is scale/frame
+/// invariant; the contact point and normal are lifted back to world.
+fn sweep_sphere_against_object_bsp(
+    bsp: &CellPhysicsBsp,
+    start: Vector3,
+    end: Vector3,
+    radius: f32,
+    scratch: &mut Vec<Triangle>,
+) -> Option<crate::spatial::GenericSweptHit> {
+    let scale = if bsp.scale > 1e-6 { bsp.scale } else { 1.0 };
+    let inv = 1.0 / scale;
+    scratch.clear();
+    for poly in bsp.polys.values() {
+        let v = &poly.vertices;
+        if v.len() < 3 {
+            continue;
+        }
+        // Fan-triangulate, the same winding `ResolvedPolygon::make_plane`
+        // (`holtburger-dat/src/physics.rs:661`) sums its area-weighted normal over.
+        for i in 1..v.len() - 1 {
+            scratch.push(Triangle::new(v[0], v[i], v[i + 1]));
+        }
+    }
+    if scratch.is_empty() {
+        return None;
+    }
+    let hit = crate::spatial::sweep_sphere_against_triangles(
+        scratch.as_slice(),
+        bsp.world_to_local(start) * inv,
+        bsp.world_to_local(end) * inv,
+        radius * inv,
+    )?;
+    Some(crate::spatial::GenericSweptHit {
+        t: hit.t,
+        point: bsp.orientation.rotate_vector(hit.point * scale) + bsp.origin,
+        normal: bsp.orientation.rotate_vector(hit.normal),
+    })
+}
+
 /// Cell MEMBERSHIP tree (`CellStruct.cell_bsp`) + cell frame. Answers
 /// "is this world point / capsule inside this EnvCell?" purely from
 /// geometry — the client-local analogue of ACE `check_building_transit`
@@ -3842,6 +3895,63 @@ impl SpatialScene {
             ) && (best.is_none() || hit.t < best.unwrap().t)
             {
                 best = Some(hit);
+            }
+        }
+        best
+    }
+
+    /// CAM-STAB (2026-08-04): sweep a sphere from `start` to `end` against the
+    /// EnvCell **stab-list statics** ([`Self::cell_static_physics_bsp`]) of the
+    /// cells in `cell_ids` — the indoor twin of
+    /// [`Self::sweep_sphere_against_cell_mesh`], which only ever tests the cell
+    /// ENVIRONMENT (walls/floor/ceiling; see the `cell_static_physics_bsp`
+    /// field doc: "a cell's statics are NOT baked into it").
+    ///
+    /// WHY: retail's camera is a real physics transit — `SmartBox::update_viewer`
+    /// (acclient.c:144991) builds a `CTransition` with `init_object(player, 92)`
+    /// (`IsViewer|PathClipped|FreeRotate|PerfectClip`) + `init_sphere(1,
+    /// &viewer_sphere, 1.0)` and calls `find_valid_position`, so the viewer runs
+    /// the SAME `CObjCell::find_obj_collisions` (:347142) sweep over the cell's
+    /// shadow-object list that a mover does. The only thing it skips is
+    /// creatures (`CPhysicsObj::FindObjCollisions` :316195-316198 —
+    /// `if (object_info.state & 4 /* IsViewer */ && weenie->IsCreature())
+    /// return 1;`, ACE `PhysicsObj.cs:388`). So retail's camera DOES collide
+    /// with a dungeon room's furniture / dressing screens / doors; ours did not.
+    ///
+    /// Each static is a [`CellPhysicsBsp`] whose resolved polygons are
+    /// OBJECT-LOCAL, so the segment is transformed into the static's frame
+    /// (`world_to_local`, then `* 1/scale` exactly like
+    /// `SPHEREPATH::cache_localspace_sphere` acclient.c / `spherepath_methods.rs`
+    /// :465-474) rather than lifting every vertex to world — the sweep is
+    /// per-frame and a stab list re-transformed per frame would be the
+    /// expensive way round. The returned `t` is frame-invariant; the hit point
+    /// and normal are lifted back to world for the caller.
+    ///
+    /// A static registered into several cells by the COL-27 overlap bake is
+    /// tested once (dedupe by `Arc` identity).
+    pub fn sweep_sphere_against_cell_statics(
+        &self,
+        cell_ids: &[u32],
+        start: Vector3,
+        end: Vector3,
+        radius: f32,
+    ) -> Option<crate::spatial::GenericSweptHit> {
+        let mut best: Option<crate::spatial::GenericSweptHit> = None;
+        let mut seen: Vec<*const CellPhysicsBsp> = Vec::new();
+        let mut scratch: Vec<Triangle> = Vec::new();
+        for &cell_id in cell_ids {
+            for bsp in self.cell_static_physics_bsp(cell_id) {
+                let key = Arc::as_ptr(bsp);
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.push(key);
+                if let Some(hit) =
+                    sweep_sphere_against_object_bsp(bsp, start, end, radius, &mut scratch)
+                    && (best.is_none() || hit.t < best.unwrap().t)
+                {
+                    best = Some(hit);
+                }
             }
         }
         best
