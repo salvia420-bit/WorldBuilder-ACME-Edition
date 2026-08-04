@@ -38,16 +38,31 @@ program — fps is draw-call-bound (63.6 ms @ 3,031 calls, 07-31).
 
 ## 3. IN FLIGHT AT SESSION CLOSE — collect first
 
-**L4 corpus run** (instance `l4-corpus`, us-central1-a, spot): 2,950 statics
-(Remacri) + 29 terrain ×4 models + chained tranche1 batch (1,067 plain-RGB
-entity/item textures — creatures/weapons/items, see §6). Delivers to
-`/mnt/wbterminal2/upscale-corpus/` (tarball + sha256 + `corpus-ledger.jsonl`).
-The driving agent stops the instance itself. VERIFY: instance status TERMINATED
-(`gcloud compute instances describe l4-corpus --zone us-central1-a`), checksum,
-ledger flags — **any `SUSPECT-TILED` rows** (small-texture 1→16 tiling, the
-user's explicit worry) **must be reviewed and excluded/redone, never shipped
-silently**. Inputs live at /mnt/wbterminal2/upscale-bakeoff/corpus-inputs.tgz +
-/mnt/wbterminal2/tranche1-src/tranche1-inputs.tgz (both sha256'd).
+**L4 corpus run — PREEMPTED MID-RUN AT SESSION CLOSE, needs restart+collect.**
+Instance `l4-corpus` (us-central1-a, spot) was preempted by GCE at
+2026-08-04T20:03Z (its SECOND preemption) and sits TERMINATED — zero billing,
+**outputs safe on its disk, NOT yet pulled back**
+(/mnt/wbterminal2/upscale-corpus/ is empty). State at preemption: statics
+(Remacri, 2,950) deep in progress with 0 failures; terrain ×4 models and the
+chained tranche1 batch (1,067 entity PNGs, verified on the disk) possibly not
+yet run. RECOVERY (first thing next session):
+1. `gcloud compute instances start l4-corpus --zone us-central1-a` (spot —
+   retry/zone-hop if stocked out; snapshot+recreate pattern in §6 if the zone
+   is dead: the disk carries checkpoints, deps, inputs, driver, outputs).
+2. SSH in, re-launch the driver the same way (it is RESUME-SAFE: skips
+   outputs that exist and pass the 4× dims check). Let it finish statics →
+   terrain ×4 → tranche1.
+3. tar+sha256 `out/` + `corpus-ledger.jsonl` + `run.log`, scp to
+   /mnt/wbterminal2/upscale-corpus/, verify checksum, THEN
+   `gcloud compute instances stop l4-corpus --zone us-central1-a` and verify
+   TERMINATED. Do not leave it running unattended — preemption does the
+   stopping for you but a healthy run does not.
+4. Review ledger: **any `SUSPECT-TILED` rows** (small-texture 1→16 tiling,
+   the user's explicit worry) **must be reviewed and excluded/redone, never
+   shipped silently**; also PSNR outliers.
+Inputs (both sha256'd, also already ON the instance disk):
+/mnt/wbterminal2/upscale-bakeoff/corpus-inputs.tgz +
+/mnt/wbterminal2/tranche1-src/tranche1-inputs.tgz.
 
 Also still running locally: test-dist server on :8768 (tranche2 boot test,
 orphan setsid — kill freely), live serve on :8765 (OLD pre-gzip process — a
