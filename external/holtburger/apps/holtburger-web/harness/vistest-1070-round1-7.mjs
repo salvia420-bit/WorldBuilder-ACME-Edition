@@ -49,20 +49,32 @@ const ARMS = [
   { id: "D-combatfx-off", flags: "quality=high&combatFx=off",
     why: "R2#8 A/B against arm A" },
   { id: "E-statpom", flags: "quality=high&statPom=on",
-    why: "R2#1 POM relief still marches after the height-texture WeakMap move" },
-  // 2026-08-04 — terrainBc7 flipped DEFAULT-ON (t512) with the 1070 look-pass
-  // QUEUED, not waived. Arm F is the new bare default (retail-derived BC7
-  // atlas); arm G pins the old CC0 arm for the side-by-side. Look for: derived
-  // normal green-channel sign (lighting reads inverted on N-S slopes if
-  // wrong), derived-height POM sliding vs texels, and the retail-vs-CC0 look
-  // call. `__terrainBc7Stats()` in the probe must show built:"color+nra",
-  // tier t512 in arm F and enabled:false in arm G.
+    why: "R2#1 POM relief still marches after the height-texture WeakMap move · 08-05 also the OVER-CARVE judgment: statics heights derive at runtime from the albedo, and §4b measured the seam operator carving 1.5-3x deeper on Remacri than on x4plus (0x06006784: 24.7%->67.1%). A/B against arm I. If it reads over-carved the lever is the wasm GROOVE_MIN/FULL tables, not the art" },
+  // 2026-08-04 — terrainBc7 flipped DEFAULT-ON with the 1070 look-pass QUEUED,
+  // not waived. Arm F is the bare default; arm G pins the old CC0 arm for the
+  // side-by-side. Look for: derived normal green-channel sign (lighting reads
+  // inverted on N-S slopes if wrong), derived-height POM sliding vs texels, and
+  // the retail-vs-CC0 look call.
+  //
+  // 2026-08-05 — three things changed under arm F and the probe now reads all
+  // of them back (`__terrainBc7Stats`, `__bc7Stats`, `__xu7Stats`, `msaa`):
+  //   * the default TIER is t1024 / retail-x4-remacri, not t512 — F vs H is now
+  //     Remacri-x4 vs retail-native, and H is the low-bandwidth pin.
+  //   * terrain anisotropy floors at 16 on the high tier (was inheriting the
+  //     preset's 4, which resolved away most of the extra texel density).
+  //   * 2x MSAA on the composer RTs (arm J is the off arm).
+  // Arm F must show tier t1024, source retail-x4-remacri, built "color+nra",
+  // anisotropy 16, msaa 2; arm G enabled:false.
   { id: "F-terrain-bc7-default", flags: "quality=high",
-    why: "terrainBc7 default-ON 08-04: green-channel sign · POM height slide · retail look (A/B vs G)" },
+    why: "08-05 default = t1024 REMACRI + aniso 16 + msaa 2. Green-channel sign on N-S slopes · POM height slide · Remacri character vs G/H. __terrainBc7Stats must read tier t1024, source retail-x4-remacri, built color+nra, anisotropy 16" },
   { id: "G-terrain-cc0", flags: "quality=high&terrainBc7=off",
-    why: "CC0 comparison arm for F (the pre-08-04 default look)" },
-  { id: "H-terrain-bc7-1024", flags: "quality=high&terrainBc7=1024",
-    why: "TERRAIN-BC7-REPORT: eye-test BOTH tiers — ESRGAN sharpening is not uniformly better; don't assume t1024 dominates t512" },
+    why: "CC0 comparison arm for F (the pre-08-04 default look); __terrainBc7Stats enabled:false" },
+  { id: "H-terrain-bc7-512", flags: "quality=high&terrainBc7=512",
+    why: "the OTHER tier, now the low-bandwidth pin rather than the default: retail-native 512px vs F's Remacri x4. ESRGAN sharpening is not uniformly better — this is the arm that would justify putting t512 back in front" },
+  { id: "I-statics-xu7-off", flags: "quality=high&texXu7=off",
+    why: "08-05 statics A/B: Remacri xu7 corpus (F) vs the x4plus hbc7 records. §4b: the seam operator carves 1.5-3x DEEPER on Remacri — judge over-carve here; lever is the wasm GROOVE_MIN/FULL tables, not the art" },
+  { id: "J-msaa-off", flags: "quality=high&msaa=0",
+    why: "08-05 MSAA A/B: 2x on the composer RTs vs none. Edges on statics silhouettes + terrain horizon; frame-time cost at high" },
 ];
 
 /** Read-only page probes. Anything that mutates game state stays out. */
@@ -81,6 +93,15 @@ const PROBE = `(() => {
   try { out.farTerrain = window.__farTerrainState?.() ?? null; } catch (e) { out.farTerrain = null; }
   // 08-04 arms F/G — BC7 terrain atlas state (enabled/tier/built/errors).
   try { out.terrainBc7 = window.__terrainBc7Stats?.() ?? null; } catch (e) { out.terrainBc7 = null; }
+  // 08-05 — the STATICS texture lanes. texXu7 was flipped default-ON off the
+  // back of a 1070 session that could not read any of this: the probe carried
+  // terrain only, so preSwaps / decodes / decodeErrors went unrecorded.
+  try { out.bc7 = window.__bc7Stats?.() ?? null; } catch (e) { out.bc7 = null; }
+  try { out.xu7 = window.__xu7Stats?.() ?? null; } catch (e) { out.xu7 = null; }
+  // 08-05 — MSAA is default 2 on the composer RTs; read BACK the buffer's own
+  // sample count, because a driver that refuses the request reports 0 here
+  // while the boot log still shows what was asked for.
+  try { out.msaa = window.liveScene3d?.atmospherePipeline?.composer?.multisampling ?? null; } catch (e) { out.msaa = null; }
   // R4#1 — the anchor must be genuinely OVERHEAD, not 40 m sideways.
   try {
     const a = window.liveScene3d?.skyDome?._skyBirdAnchor;
