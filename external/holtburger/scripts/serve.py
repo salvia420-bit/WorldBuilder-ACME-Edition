@@ -374,10 +374,34 @@ except ImportError:
 TEXT_COMPRESS_EXTS = {".js", ".mjs", ".html", ".css", ".json", ".jsonl", ".md", ".map"}
 # Binary payloads: zstd preferred (faster + better on already-packed data),
 # gzip fallback. .bin = content-addressed dist shards (incl. tex-bc7 blobs).
-# NEVER add XUBC7 payloads (.ktx2/.basis/tex-xu7) here — they are already
-# zstd-supercompressed inside and must ship identity; extensions absent from
-# both allowlists are served identity by omission, which is the mechanism.
+#
+# 2026-08-05 — this block used to end "NEVER add XUBC7 payloads
+# (.ktx2/.basis/tex-xu7) here ... extensions absent from both allowlists are
+# served identity by omission, which is the mechanism". That mechanism does not
+# exist: `dat-shard` writes EVERY record, tex-xu7 included, to
+# `shards/<xx>/<sha>.bin`, and `.bin` is right there in the set. The extension
+# an XUBC7 payload had at bake time never reaches the wire. Payloads escaped
+# only because they are incompressible and the negative cache below caught them
+# after paying for the attempt.
+#
+# So the guard is CONTENT-based now (`_is_identity_only`), which is the only
+# thing a content-addressed store can key on. See its docstring.
 BIN_COMPRESS_EXTS = {".wasm", ".bin", ".hba", ".hbc7"}
+
+# KTX2 file identifier (12 bytes, Khronos spec) — the same check
+# `dat_shard.rs` validates XUBC7 ingest with, and `src/lib.rs xu7_blocks`
+# re-checks on read.
+KTX2_MAGIC = bytes([0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A])
+
+
+def _is_identity_only(raw: bytes) -> bool:
+    """Payloads that must ship identity no matter what extension they arrived
+    under. XUBC7 (basisu KTX2, unregistered scheme-6 supercompression) is
+    already Zstd-compressed inside: re-compressing it burns CPU and cache for a
+    body that cannot shrink. Checked on the file's own bytes because the dist is
+    content-addressed — every namespace lands as `<sha>.bin`, so there is no
+    extension left to gate on."""
+    return raw[:12] == KTX2_MAGIC
 GZIP_LEVEL = 6
 MIN_COMPRESS_BYTES = 256               # header overhead isn't worth it below this
 MAX_COMPRESS_BYTES = 64 * 1024 * 1024  # sanity cap: don't buffer huge files
@@ -530,9 +554,14 @@ class Handler(SimpleHTTPRequestHandler):
                     raw = f.read()
             except OSError:
                 return False
-            body = _zstd_compress(raw) if enc == "zstd" else _gzip_compress(raw)
-            if len(body) >= len(raw):
-                body = None  # negative entry: incompressible, serve identity
+            if _is_identity_only(raw):
+                # Cached as a negative entry, so the sniff costs one read per
+                # (path, mtime, size, enc) rather than one per request.
+                body = None
+            else:
+                body = _zstd_compress(raw) if enc == "zstd" else _gzip_compress(raw)
+                if len(body) >= len(raw):
+                    body = None  # negative entry: incompressible, serve identity
             COMPRESS_CACHE.put(key, body)
         if body is None:
             return False
