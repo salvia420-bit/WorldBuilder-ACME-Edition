@@ -114,6 +114,15 @@ const materials = loadModule("scene3d/materials.js", {
   materialBakeEnabled: () => false,
   SuiteAssetSource: function SuiteAssetSourceStub() {},
   loadTexchanManifest: async () => null,
+  // 2026-08-05: the bc7_textures.js import is stripped like every other relative
+  // import, but these three were never injected — so `estimateTextureBytes` blew
+  // up with "bc7TextureBytes is not defined" and killed the suite at the byte-
+  // accounting section, taking sections 6 and 7 with it. Reproduced on an
+  // unmodified checkout, so it predates the budget arming. Stubs return the
+  // no-BC7 answers, which is the regime these byte-accounting cases assert.
+  bc7Available: () => false,
+  bc7TextureBytes: () => 0,
+  upgradeMaterialToBc7: () => false,
 });
 
 const {
@@ -123,6 +132,7 @@ const {
   estimateTextureBytes,
   estimateMatEntryBytes,
   MAT_ENTRY_OVERHEAD_BYTES,
+  MAT_BUDGET_DEFAULT_MB,
 } = materials;
 
 console.log("?matBudgetMB — MaterialCache byte-budget LRU");
@@ -149,18 +159,28 @@ check("resolve: leading ? optional",
 check("resolve: co-existing flags don't confuse it",
   resolveMatBudgetBytes("?nosw=1&matBudgetMB=16&nullRender=1") === 16 * 1024 * 1024);
 
-// ---- 2. NEGATIVE CONTROL: absent ⇒ unbounded ------------------------------
-console.log("\n[negative control — absent ⇒ unbounded]");
-check("no query string => 0", resolveMatBudgetBytes("") === 0);
-check("undefined search => 0", resolveMatBudgetBytes(undefined) === 0);
-check("unrelated params => 0",
-  resolveMatBudgetBytes("?nosw=1&agent=1&nullRender=1&surfaceBudgetMB=24:64") === 0);
-check("garbage value => 0", resolveMatBudgetBytes("?matBudgetMB=lots") === 0);
-check("=off => 0", resolveMatBudgetBytes("?matBudgetMB=off") === 0);
-check("=0 => 0", resolveMatBudgetBytes("?matBudgetMB=0") === 0);
+// ---- 2. DEFAULT ARMED 2026-08-05 + the explicit unbounded escape ----------
+// Was "absent ⇒ unbounded". The default is now ARMED (see MAT_BUDGET_DEFAULT_MB
+// in materials.js for the crash + heap-snapshot evidence), so absent means the
+// default and ONLY `off`/`0` disarms it.
+const DEFAULT_BYTES = MAT_BUDGET_DEFAULT_MB * 1024 * 1024;
+console.log("\n[default armed — absent ⇒ default, explicit off ⇒ unbounded]");
+check("no query string => default", resolveMatBudgetBytes("") === DEFAULT_BYTES);
+check("undefined search => default", resolveMatBudgetBytes(undefined) === DEFAULT_BYTES);
+check("unrelated params => default",
+  resolveMatBudgetBytes("?nosw=1&agent=1&nullRender=1&surfaceBudgetMB=24:64") === DEFAULT_BYTES);
+// Deliberate change of grammar: a typo must NOT silently uncap memory.
+check("garbage value => default (a typo must not disarm the cap)",
+  resolveMatBudgetBytes("?matBudgetMB=lots") === DEFAULT_BYTES);
+check("=off => 0 (unbounded escape)", resolveMatBudgetBytes("?matBudgetMB=off") === 0);
+check("=OFF is case-insensitive", resolveMatBudgetBytes("?matBudgetMB=OFF") === 0);
+check("=0 => 0 (unbounded escape)", resolveMatBudgetBytes("?matBudgetMB=0") === 0);
 // The footgun this guards: a reader coded `!== "off"` reads ON when absent.
-check("a similarly-named param does NOT arm it",
-  resolveMatBudgetBytes("?matBudget=64&matBudgetMBx=64") === 0);
+check("a similarly-named param does NOT override the default",
+  resolveMatBudgetBytes("?matBudget=64&matBudgetMBx=64") === DEFAULT_BYTES);
+// The pure token parser keeps its original grammar (0 = "no explicit budget").
+check("parser itself still maps absent/off/garbage to 0",
+  parseMatBudgetMB(null) === 0 && parseMatBudgetMB("off") === 0 && parseMatBudgetMB("lots") === 0);
 
 /** Build a stub entry: mat + three planes of the given pixel dimensions. */
 function makeEntry(px) {
@@ -211,7 +231,11 @@ function install(mc, did, px = ENTRY_PX) {
   const prevWindow = globalThis.window;
   globalThis.window = { location: { search: "?nosw=1&nullRender=1&agent=1" } };
   const mc = new MaterialCache();
-  check("unrelated query string => unbounded", mc.matBudgetArmed() === false);
+  // Was "unrelated query string => unbounded". Since the 2026-08-05 arming an
+  // unrelated query string arms the DEFAULT; only the explicit escape disarms.
+  check("unrelated query string => armed at the default",
+    mc.matBudgetArmed() === true
+    && mc._matBudgetBytes === MAT_BUDGET_DEFAULT_MB * 1024 * 1024);
   globalThis.window = { location: { search: "?matBudgetMB=off" } };
   check("?matBudgetMB=off => unbounded", new MaterialCache().matBudgetArmed() === false);
   globalThis.window = { location: { search: "?matBudgetMB=2" } };

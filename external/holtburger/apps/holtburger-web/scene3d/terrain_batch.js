@@ -428,6 +428,15 @@ function _buildBatchMaterial(srcMaterial, glsl, state, opts, extras) {
     // while the (invisible) per-LB proxies did — i.e. the feature would look
     // like it silently did nothing. Inherit it from the per-LB source material.
     fog: srcMaterial.fog === true,
+    // Same class of omission as `fog` above, found by the 2026-08-05 1070
+    // black-flicker hunt: `defines` is a plain Material field too, so the
+    // uniform-parity copy missed it. terrain.js gates its trail-map and CSM
+    // sampler DECLARATIONS on HB_TERRAIN_TRAIL_MAP / HB_TERRAIN_CSM; without
+    // this line the batched material — the one that actually draws terrain
+    // under the default-on ?terrainBatch — would compile the wrong variant of
+    // the shader it was cloned from (dropping live CSM cascades, or keeping the
+    // dead samplers that overflow this GPU's 16 fragment texture units).
+    defines: { ...(srcMaterial.defines || {}) },
   });
   mat.name = "terrain-batch";
   return mat;

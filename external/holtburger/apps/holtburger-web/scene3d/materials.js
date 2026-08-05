@@ -2235,17 +2235,64 @@ export function parseMatBudgetMB(raw) {
 }
 
 /**
- * Resolve `?matBudgetMB=` out of a query string into BYTES; `0` = unbounded.
- * Pure — touches no globals, so the negative control is testable in node.
+ * `?matBudgetMB` default, in MiB — DEFAULT ARMED 2026-08-05.
+ *
+ * WHY IT IS ARMED. Unset used to mean UNBOUNDED, and the block comment above
+ * says exactly what that costs: the four per-DID maps are "a monotone retainer
+ * over distinct surface DIDs ever seen, i.e. a function of ROUTE LENGTH, not of
+ * boot". A 1070 session that teleported Holtburg → Arwic → Yaraq → Sawato →
+ * Shoushi took the renderer process to 2.5 GB against Chrome's 4.19 GB cap and
+ * OOM-crashed the tab (black screen + auto-reload) repeatedly. A V8 heap
+ * snapshot attributed 2,021 MB of the 2,184 MB heap to `system /
+ * JSArrayBufferData`, and the retainer walk landed on Texture CPU pixel data:
+ * DataTexture 115 MB / DataArrayTexture 398 MB / CompressedTexture 74 MB /
+ * CompressedArrayTexture 82 MB. The per-DID DataTextures in these maps are the
+ * share this budget governs; the atlas ARRAY textures have their own owners
+ * (static_atlas layer recycling, terrain_bc7 tiers) and are unaffected.
+ *
+ * WHY 384. The measured live working set for a town is ~115-130 MB across ~760
+ * cached DIDs, so this sits ~3x above one bake's set — comfortably clear of the
+ * FOOTGUN documented above (a budget under the live set re-introduces grey
+ * fallback surfaces), while still capping the route-length growth that has no
+ * ceiling at all today.
+ *
+ * ⚠ STILL OWED: the ABAB interleave `?surfaceBudgetMB` got before IT was armed
+ * (RESULTS-abab-surface-budget-2026-07-26.md). This arming is justified by a
+ * crash and a heap snapshot, not by a settle-within-noise A/B. `?matBudgetMB=off`
+ * restores the never-evicted maps bit-for-bit.
+ */
+export const MAT_BUDGET_DEFAULT_MB = 384;
+
+/**
+ * Resolve `?matBudgetMB=` out of a query string into BYTES.
+ *
+ * GRAMMAR (changed 2026-08-05 with the arming above):
+ *   absent / unparseable ⇒ `MAT_BUDGET_DEFAULT_MB` (the armed default)
+ *   explicit `off` / `0` ⇒ 0 = unbounded (the bit-for-bit legacy escape)
+ *
+ * Garbage resolving to the DEFAULT rather than to unbounded is deliberate and
+ * is the one behaviour change: with a default armed, "typo silently disables
+ * the memory cap" is the same class of footgun as the `!== "off"` reader this
+ * flag's own tests warn about. Only the explicit escape disarms it.
+ *
+ * Pure — touches no globals, so the control arms stay testable in node.
  */
 export function resolveMatBudgetBytes(search = "") {
-  let mb = 0;
+  let raw = null;
   try {
-    mb = parseMatBudgetMB(new URLSearchParams(search || "").get("matBudgetMB"));
+    raw = new URLSearchParams(search || "").get("matBudgetMB");
   } catch (_) {
-    return 0; /* unbounded */
+    return Math.floor(MAT_BUDGET_DEFAULT_MB * 1024 * 1024);
   }
-  return mb > 0 ? Math.max(1, Math.floor(mb * 1024 * 1024)) : 0;
+  if (raw === null || raw === undefined) {
+    return Math.floor(MAT_BUDGET_DEFAULT_MB * 1024 * 1024);
+  }
+  const s = String(raw).trim().toLowerCase();
+  if (s === "off" || s === "0") return 0; /* explicit escape ⇒ unbounded */
+  const mb = parseMatBudgetMB(raw);
+  return mb > 0
+    ? Math.max(1, Math.floor(mb * 1024 * 1024))
+    : Math.floor(MAT_BUDGET_DEFAULT_MB * 1024 * 1024);
 }
 
 /** The live page's budget in bytes; 0 (unbounded) anywhere without a location. */

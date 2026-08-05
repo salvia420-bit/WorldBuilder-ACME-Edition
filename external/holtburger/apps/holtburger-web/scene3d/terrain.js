@@ -109,6 +109,10 @@ import {
 import { terrainVolcanoEnabled, terrainCrackGlowEnabled } from "./vfx_flags.js";
 // Wave 3B (plan §3.7, DIRT/MUD) — same rationale, fourth statement.
 import { terrainDirtEnabled, terrainMudPrintsEnabled, terrainMudWetnessEnabled } from "./vfx_flags.js";
+// Sampler-unit budget (2026-08-05) — the SAME reader the trail map itself is
+// built from (`terrain_vfx.js::initTerrainVfx`), so the shader's
+// HB_TERRAIN_TRAIL_MAP define can never disagree with whether a map exists.
+import { terrainTrailEnabled } from "./vfx_flags.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -1692,7 +1696,19 @@ uniform float uSnowSparkleFadeEnd;
 uniform float uSnowPrintEnabled;     // 0.0 OFF / 1.0 ON
 uniform float uSnowPrintDepth;       // cell-UV dent amplitude (<< uPomScale)
 uniform float uSnowPrintDarken;      // 0..1 fraction of lit colour removed
+// SAMPLER-UNIT BUDGET (2026-08-05, 1070 black-flicker fix): the trail sampler
+// is declared ONLY when the map can exist (HB_TERRAIN_TRAIL_MAP, set from
+// terrainTrailEnabled() at material build). It used to be declared and
+// REFERENCED unconditionally, so GLSL kept it ACTIVE even with the family off
+// and it burned one of the GPU's fragment texture units for nothing. On ANGLE/
+// D3D11 (GTX 1070) that budget is 16 and this program wanted 18 — three.js then
+// falls back to unit 0 and terrain samples the WRONG texture, i.e. black
+// terrain frames. The float gates (uSnowPrintEnabled / uSnowTrailEnabled /
+// their mud twins) stay declared unconditionally: non-samplers cost no unit and
+// the per-frame JS pushes write them through material.uniforms either way.
+#ifdef HB_TERRAIN_TRAIL_MAP
 uniform sampler2D uSnowTrailMap;     // R8 ping-ponged trail RT (trail_map.js)
+#endif
 uniform vec2 uSnowTrailCenter;       // AC world centre of the map, texel-snapped
 uniform float uSnowTrailRadius;      // HALF-extent in metres
 uniform float uSnowTrailEnabled;     // 0.0 = no map bound this frame
@@ -1826,6 +1842,15 @@ uniform float uAcAmbLevel;
 // preset has csm:false. Uniforms refreshed each frame by
 // csm.refreshCsmUniforms (registered alongside other materialCache
 // patched materials in terrain bake).
+// SAMPLER-UNIT BUDGET (2026-08-05) — see the trail-map note above. The three
+// cascade samplers were declared and referenced unconditionally, so a session
+// with NO CSM at all (low/mid preset, ?shadows=off — scene3d.csmState absent,
+// uCsmEnabled hard 0.0) still paid three fragment texture units for maps that
+// were never even bound. HB_TERRAIN_CSM is set at material build from the
+// same scene3d?.csmState test that initialises uCsmEnabled, so the compiled
+// program is unchanged whenever CSM is actually live, and three units come back
+// on every tier that isn't running it.
+#ifdef HB_TERRAIN_CSM
 uniform float uCsmEnabled;
 uniform sampler2D uCsmShadowMap0;
 uniform sampler2D uCsmShadowMap1;
@@ -1875,6 +1900,7 @@ float csmShadowFactor(vec3 worldPos, float viewDepth) {
   }
   return csmSampleCascade(uCsmShadowMap2, uCsmMatrix2, worldPos);
 }
+#endif  // HB_TERRAIN_CSM
 
 ${TERRAIN_SHARED_TAIL_GLSL}
 
@@ -2319,7 +2345,9 @@ void main() {
     // Outside the map footprint there is NO trail -- never a clamped smear
     // (the trail_map.js contract).
     if (trailUv.x >= 0.0 && trailUv.x <= 1.0 && trailUv.y >= 0.0 && trailUv.y <= 1.0) {
+#ifdef HB_TERRAIN_TRAIL_MAP
       snowPrint = clamp(texture(uSnowTrailMap, trailUv).r, 0.0, 1.0);
+#endif
     }
     if (snowPrint > 0.0 && uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd) {
       vec3 pvw = normalize(vWorldPos - cameraPosition);
@@ -2366,7 +2394,9 @@ void main() {
     // Outside the map footprint there is NO trail -- never a clamped smear
     // (the trail_map.js contract).
     if (mudUv.x >= 0.0 && mudUv.x <= 1.0 && mudUv.y >= 0.0 && mudUv.y <= 1.0) {
+#ifdef HB_TERRAIN_TRAIL_MAP
       mudPrint = clamp(texture(uSnowTrailMap, mudUv).r, 0.0, 1.0);
+#endif
     }
     mudPrint *= mix(uMudPrintDryScale, 1.0, clamp(uMudWetness, 0.0, 1.0));
     if (mudPrint > 0.0 && uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd) {
@@ -3317,10 +3347,12 @@ void main() {
   // ambient lift, matching the MeshStandardMaterial CSM patch in
   // materials.js (same visual feel for cast shadows across surfaces).
   float csmShadow = 1.0;
+#ifdef HB_TERRAIN_CSM
   if (uCsmEnabled > 0.5) {
     float s = csmShadowFactor(vWorldPos, vViewDepth);
     csmShadow = mix(0.45, 1.0, s);
   }
+#endif
 
   // R1.A 2026-05-28 — TerrainTex saturation + hue adjust, applied to
   // the lit color BEFORE the brightness multiply so the channel order
@@ -6033,6 +6065,16 @@ export async function bakeTerrainForLandblock(
     vertexShader: TERRAIN_VERTEX_GLSL,
     fragmentShader: TERRAIN_FRAGMENT_GLSL,
     glslVersion: THREE.GLSL3,
+    // SAMPLER-UNIT BUDGET (2026-08-05 — the 1070 black-flicker fix). Each of
+    // these gates a block of sampler DECLARATIONS in the fragment shader; see
+    // the GLSL comments at uSnowTrailMap / uCsmEnabled. Both conditions are the
+    // ones the features themselves are built from, so a live feature compiles
+    // byte-identically to the pre-fix program and only the dead declarations
+    // (4 units on a mid-tier / no-CSM session: 18 -> 14) go away.
+    defines: {
+      ...(scene3d?.csmState ? { HB_TERRAIN_CSM: "" } : {}),
+      ...(terrainTrailEnabled() ? { HB_TERRAIN_TRAIL_MAP: "" } : {}),
+    },
     // S1 — participate in scene.fog exactly as statics do. `false` (or a null
     // scene.fog) leaves USE_FOG undefined, so the compiled program is
     // byte-identical to the pre-wave build.
