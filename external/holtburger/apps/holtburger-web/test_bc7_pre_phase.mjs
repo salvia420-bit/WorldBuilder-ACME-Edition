@@ -141,7 +141,43 @@ async function run() {
     check(preDisposed, "case4: orphaned pre texture disposed without onSwap");
   }
 
-  console.log(failures === 0 ? "ALL PASS" : `${failures} FAILURES`);
+  // --- 2026-08-05: concurrent asks for ONE rsId must share a single fetch -----
+// Retail shares RenderSurfaces across Surfaces, and MaterialCache dedupes by
+// surface DID, so this is the routine case rather than a corner one. `get()`
+// was guarded by _inflight; `getAsync()` was not, and each duplicate cost an
+// xu7 payload fetch plus a ~32 ms/1024^2 transcode under P2.
+{
+  _resetBc7ForTest();
+  _setBc7SupportForTest(true);
+  let fullCalls = 0;
+  let preCalls = 0;
+  const src = initBc7Source({
+    fetchImpl: () => {
+      fullCalls += 1;
+      return new Promise((r) => setTimeout(() => r(hbc7(64, 64)), 10));
+    },
+    preFetchImpl: () => {
+      preCalls += 1;
+      return new Promise((r) => setTimeout(() => r(hbc7(16, 16)), 5));
+    },
+  });
+  const rs = 0x06004242;
+  const all = await Promise.all([src.getAsync(rs), src.getAsync(rs), src.getAsync(rs)]);
+  check(fullCalls === 1, `dedup: 3 concurrent getAsync -> 1 full fetch (got ${fullCalls})`);
+  check(bc7Stats().fetches === 1, "dedup: stats.fetches counts the ask once");
+  check(all.every((p) => p && p.width === 64), "dedup: every caller still gets the payload");
+  check(all[0] === all[1] && all[1] === all[2], "dedup: and they share ONE parsed object");
+
+  const pres = await Promise.all([src.getPreAsync(rs), src.getPreAsync(rs), src.getPreAsync(rs)]);
+  check(preCalls === 1, `dedup: 3 concurrent getPreAsync -> 1 pre fetch (got ${preCalls})`);
+  check(pres.every((p) => p && p.width === 16), "dedup: every pre caller gets the payload");
+
+  const again = await src.getAsync(rs);
+  check(fullCalls === 1, "dedup: a post-settle ask is served from cache");
+  check(again && again.width === 64, "dedup: cached payload is the full record");
+}
+
+console.log(failures === 0 ? "ALL PASS" : `${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
 }
 

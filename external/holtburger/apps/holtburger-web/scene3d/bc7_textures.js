@@ -440,6 +440,16 @@ export class Bc7RecordSource {
     this._inflight = new Set();
     this._preCache = new Map(); // rsId -> parsed | null (pre-record twin)
     this._preInflight = new Set();
+    // 2026-08-05 — rsId -> the in-flight promise, so a second ask for a record
+    // already being fetched JOINS it instead of starting a rival fetch. Retail
+    // shares RenderSurfaces across Surfaces (three of the 33 terrain layers
+    // alone, and far more among statics) while `MaterialCache._bc7Asked`
+    // dedupes by surface DID, so concurrent asks for one rsId are routine.
+    // `get()` was already guarded by `_inflight`; `getAsync()` was not, and
+    // under P2 each duplicate cost a full xu7 payload fetch AND a ~32 ms/1024²
+    // main-thread transcode on top of the wasted bytes.
+    this._inflightP = new Map();
+    this._preInflightP = new Map();
   }
 
   get cacheSize() {
@@ -494,13 +504,15 @@ export class Bc7RecordSource {
       this._preCache.set(id, null);
       return Promise.resolve(null);
     }
-    if (this._preInflight.has(id)) {
-      // Rare: two asks racing before the first resolves. Cheap poll-free
-      // fallback — just re-fetch; the store layer dedupes the network hop.
-    }
+    // 2026-08-05 — this used to be an empty `if (this._preInflight.has(id)) {}`
+    // whose comment said "just re-fetch; the store layer dedupes the network
+    // hop". The store dedupes the HOP, not the parse or the caller's work, and
+    // the block did nothing either way. Join the in-flight promise instead.
+    const joined = this._preInflightP.get(id);
+    if (joined) return joined;
     this._preInflight.add(id);
     _stats.preFetches += 1;
-    return Promise.resolve(impl(id))
+    const pre = Promise.resolve(impl(id))
       .then((bytes) => {
         if (!bytes || bytes.length === 0) {
           this._preCache.set(id, null);
@@ -529,10 +541,16 @@ export class Bc7RecordSource {
       })
       .finally(() => {
         this._preInflight.delete(id);
+        this._preInflightP.delete(id);
       });
+    this._preInflightP.set(id, pre);
+    return pre;
   }
 
   _begin(id) {
+    // Join an ask already in flight (see `_inflightP` in the ctor).
+    const joined = this._inflightP.get(id);
+    if (joined) return joined;
     this._inflight.add(id);
     _stats.fetches += 1;
     // P2 (2026-08-04): with `?texXu7=on`, try the XUBC7 namespace FIRST —
@@ -613,7 +631,11 @@ export class Bc7RecordSource {
       })
       .finally(() => {
         this._inflight.delete(id);
+        this._inflightP.delete(id);
       });
+    // Set BEFORE anyone can await: `p` cannot have settled yet (promise
+    // callbacks are microtasks), so the `.finally` above never races this.
+    this._inflightP.set(id, p);
     return p;
   }
 }
