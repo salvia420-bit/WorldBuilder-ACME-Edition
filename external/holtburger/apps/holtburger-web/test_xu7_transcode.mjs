@@ -39,12 +39,30 @@ const check = (c, l) => {
 };
 
 async function run() {
-  // --- flag: exact-match opt-in ---
+  // --- flag: DEFAULT-ON with an `off` escape ---
+  // Flipped 2026-08-05 (862640b9) after the 1070 redmi eye-pass. These
+  // assertions still encoded the pre-flip exact-match opt-in and FAILED from
+  // that commit onwards — nothing caught it because this suite was registered
+  // in no runner (now TIER5).
   check(texXu7Enabled("?texXu7=on") === true, "flag: =on enables");
-  check(texXu7Enabled("?texXu7=1") === false, "flag: =1 does NOT enable (exact-match)");
-  check(texXu7Enabled("") === false, "flag: absent is OFF");
+  check(texXu7Enabled("?texXu7=off") === false, "flag: =off is the escape");
+  check(texXu7Enabled("") === true, "flag: absent is ON (default-ON since 08-05)");
+  check(texXu7Enabled("?other=1") === true, "flag: an unrelated query is still ON");
 
   // --- transcode a real corpus payload ---
+  // Real corpus payload, not a synthesised one — a hand-built KTX2 would not
+  // exercise the scheme-6 supercompression this whole tier is about. Registered
+  // in TIER5 as of 2026-08-05, so a missing fixture must FAIL with something
+  // actionable rather than an ENOENT stack (and must not be skipped: a skip
+  // asserts nothing, which is the runner's stated rule).
+  if (!fs.existsSync(KTX2)) {
+    console.error(
+      `FAIL: corpus fixture missing: ${KTX2}\n` +
+        "      /mnt/wbterminal2 is an external mount — check it is mounted " +
+        "(the xu7 corpus lives there; see docs/HANDOFF-texture-pipeline-2026-08-04.md)."
+    );
+    process.exit(1);
+  }
   const bytes = new Uint8Array(fs.readFileSync(KTX2));
   const parsed = await transcodeXu7(bytes);
   check(parsed !== null, "transcode: real corpus ktx2 decodes");
@@ -63,8 +81,7 @@ async function run() {
   // wire a fake wasm exposing both exports.
   _resetBc7ForTest();
   _setBc7SupportForTest(true);
-  // force the flag memo ON for this scope
-  texXu7Enabled("?texXu7=on");
+  // (default-ON; the explicit window.location below pins it for this scope)
   const fakeWasm = {
     xu7_blocks: async () => bytes,
     bc7_blocks: async () => {
@@ -72,8 +89,8 @@ async function run() {
     },
   };
   const src = initBc7Source({ wasmExports: fakeWasm });
-  // texXu7Enabled() memo was primed OFF by earlier no-arg call in module —
-  // prime it ON via the internal reset + explicit search evaluation.
+  // The flag is default-ON now, so the memo needs no priming — reset it anyway
+  // so this block does not inherit whatever an earlier case left behind.
   _resetXu7ForTest();
   _setXu7ModuleForTest(modulePromise);
   const origWindow = globalThis.window;
