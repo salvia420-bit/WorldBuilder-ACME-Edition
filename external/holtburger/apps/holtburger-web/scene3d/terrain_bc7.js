@@ -10,12 +10,15 @@
 //   needed human review rounds (`/mnt/wbterminal2/pbr-terrain/curation-manifest.json`
 //   records r2 swaps like "Rock035 too dark vs retail tan speckle").
 //
-//   RETAIL arm (this module, `?terrainBc7=on`): the SAME art AC shipped, 4x
-//   ESRGAN-upscaled with the same realesrgan-x4plus model the 2,950 statics use,
-//   delivered as BC7. Character is preserved by construction, so there is nothing
-//   to sign off on — the only question is resolution and compression fidelity,
-//   both of which are measurable. One pipeline, one provenance, one format for
-//   the whole world.
+//   RETAIL arm (this module, DEFAULT ON since 2026-08-04): the SAME art AC
+//   shipped, delivered as BC7. Provenance is PER TIER — t512 (the default) is
+//   retail-native level-0 pixels (`manifest source:"retail"`); t1024 is 4x
+//   ESRGAN-family upscaled from retail (2026-08-04: 4x_foolhardy_Remacri, the
+//   statics corpus model; `source:"retail-x4-remacri"`, user-picked over
+//   x4plus/ultrasharp/hat-l). Character is preserved by construction, so
+//   there is nothing to sign off on — the only question is resolution and
+//   compression fidelity, both of which are measurable. One pipeline, one
+//   provenance, one format for the whole world.
 //
 // THIS MODULE DOES NOT REPLACE OR DELETE THE CC0 ARM. When `?terrainBc7` is
 // absent, every function here returns null before it fetches anything, and

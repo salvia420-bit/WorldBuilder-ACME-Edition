@@ -54,6 +54,20 @@ struct Args {
     #[arg(long, value_name = "DIR")]
     tex_bc7: Option<PathBuf>,
 
+    /// Directory of `<rsId>.hbc7` PREVIEW blobs (quarter-res level0 +
+    /// mip chain, P1 of the 2026-08-04 progressive-texture plan) to
+    /// publish into `holtburger/tex-bc7-pre`. Same container,
+    /// validation, and streaming as `--tex-bc7`.
+    #[arg(long, value_name = "DIR")]
+    tex_bc7_pre: Option<PathBuf>,
+
+    /// Directory of `<rsId>.ktx2` XUBC7 payloads (P2) to publish into
+    /// `holtburger/tex-xu7`. Validated by KTX2 identifier only — the
+    /// supercompressed contents are opaque to the bake and must be
+    /// served identity (already Zstd inside).
+    #[arg(long, value_name = "DIR")]
+    tex_xu7: Option<PathBuf>,
+
     /// Spawn-area landblock for boot-pack inclusion. Hex
     /// (`0xA9B4`, default Holtburg). String-default rather than
     /// typed-default so the value flows through `parse_hex_u32`
@@ -99,6 +113,8 @@ impl Args {
             output_dir: self.output,
             manifest_version: self.manifest_version,
             tex_bc7: self.tex_bc7,
+            tex_bc7_pre: self.tex_bc7_pre,
+            tex_xu7: self.tex_xu7,
         }
     }
 }
@@ -134,6 +150,40 @@ fn main() -> Result<()> {
             eprintln!(
                 "dat-shard: {} --tex-bc7 file(s) failed the HBC7 header/size check and were NOT published (re-run with RUST_LOG=warn for per-file reasons)",
                 r.tex_bc7_skipped
+            );
+        }
+    }
+    if let BakeOutput::V2(ref r) = bake
+        && opts.tex_bc7_pre.is_some()
+    {
+        println!(
+            "dat-shard: tex-bc7-pre — {} records, {} bytes ({:.1} MB), {} skipped",
+            r.tex_bc7_pre_records,
+            r.tex_bc7_pre_bytes,
+            r.tex_bc7_pre_bytes as f64 / (1024.0 * 1024.0),
+            r.tex_bc7_pre_skipped,
+        );
+        if r.tex_bc7_pre_skipped > 0 {
+            eprintln!(
+                "dat-shard: {} --tex-bc7-pre file(s) failed the HBC7 header/size check and were NOT published",
+                r.tex_bc7_pre_skipped
+            );
+        }
+    }
+    if let BakeOutput::V2(ref r) = bake
+        && opts.tex_xu7.is_some()
+    {
+        println!(
+            "dat-shard: tex-xu7 — {} records, {} bytes ({:.1} MB), {} skipped",
+            r.tex_xu7_records,
+            r.tex_xu7_bytes,
+            r.tex_xu7_bytes as f64 / (1024.0 * 1024.0),
+            r.tex_xu7_skipped,
+        );
+        if r.tex_xu7_skipped > 0 {
+            eprintln!(
+                "dat-shard: {} --tex-xu7 file(s) failed the KTX2 identifier check and were NOT published",
+                r.tex_xu7_skipped
             );
         }
     }

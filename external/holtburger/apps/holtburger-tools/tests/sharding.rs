@@ -83,6 +83,8 @@ fn shard_fixture() -> (tempfile::TempDir, holtburger_manifest::Manifest) {
         output_dir,
         manifest_version: 1,
         tex_bc7: None,
+        tex_bc7_pre: None,
+        tex_xu7: None,
     })
     .expect("shard_bundle");
 
@@ -222,6 +224,8 @@ fn v2_shard_fixture() -> (tempfile::TempDir, std::path::PathBuf, V2BakeResult) {
         output_dir: output_dir.clone(),
         manifest_version: 2,
         tex_bc7: None,
+        tex_bc7_pre: None,
+        tex_xu7: None,
     })
     .expect("shard_bundle_v2");
 

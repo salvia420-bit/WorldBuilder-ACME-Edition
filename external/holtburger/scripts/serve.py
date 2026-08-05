@@ -75,7 +75,16 @@ DIST_LINK = HOLT_ROOT / "dist"
 # The two bakes carry identical world data (scenery 195,076 / spawns 38,153 /
 # events 80,397 files in both `_health.json`); the newer one just adds the BC7
 # texture namespace. `HOLTBURGER_DIST=<path>` still overrides.
-DEFAULT_ROOT = "/mnt/wbterminal2/holtburger-dist-hires-bc7m"
+#
+# 2026-08-05 — REPOINTED again to the P1/P2 bake: same world data + tex-bc7,
+# plus `holtburger/tex-bc7-pre` (2,893 quarter-res preview records, ?texPre
+# default-ON) and `holtburger/tex-xu7` (3,985 XUBC7 payloads — the Remacri
+# statics corpus + tranche-1 entities, ?texXu7=on opt-in). Provenance:
+# bake-source.sha256 in the dist root.
+# 2026-08-05 (2): -xu7t2 adds tranche 2 — 1,138 paletted RenderSurfaces
+# re-emitted at up to 4x/512-cap INDEX16 in eor/portal (t2quant constrained
+# re-quantization; injected portal provenance in bake-source.sha256).
+DEFAULT_ROOT = "/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2"
 
 # Layers the RENDERER needs — a missing/empty one is a hard failure (fail-loud).
 # `events` is consumed only by offline Node validators, never by the renderer, so
@@ -365,6 +374,9 @@ except ImportError:
 TEXT_COMPRESS_EXTS = {".js", ".mjs", ".html", ".css", ".json", ".jsonl", ".md", ".map"}
 # Binary payloads: zstd preferred (faster + better on already-packed data),
 # gzip fallback. .bin = content-addressed dist shards (incl. tex-bc7 blobs).
+# NEVER add XUBC7 payloads (.ktx2/.basis/tex-xu7) here — they are already
+# zstd-supercompressed inside and must ship identity; extensions absent from
+# both allowlists are served identity by omission, which is the mechanism.
 BIN_COMPRESS_EXTS = {".wasm", ".bin", ".hba", ".hbc7"}
 GZIP_LEVEL = 6
 MIN_COMPRESS_BYTES = 256               # header overhead isn't worth it below this

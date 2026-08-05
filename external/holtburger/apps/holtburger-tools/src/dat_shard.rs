@@ -106,6 +106,25 @@ pub const DEFAULT_KEYMAP_ID: u32 = 0x14000000;
 /// `holtburger_dat::RESOURCE_NAMESPACE_LEN` (32).
 pub const TEX_BC7_NAMESPACE: &str = "holtburger/tex-bc7";
 
+/// P1 preview-first (2026-08-04): quarter-res HBC7 twins of the
+/// [`TEX_BC7_NAMESPACE`] records, same keys, same container, same
+/// validation. OPTIONAL — a dist without it is a normal full-only
+/// deployment. 22 bytes, inside the 32-byte namespace cap.
+pub const TEX_BC7_PRE_NAMESPACE: &str = "holtburger/tex-bc7-pre";
+
+/// P2 (2026-08-04): XUBC7-supercompressed BC7 payloads (basisu KTX2
+/// with the unregistered scheme-6 supercompression), keyed by
+/// RenderSurface id like [`TEX_BC7_NAMESPACE`]. Payloads are OPAQUE
+/// here — validated only by the KTX2 identifier; the client's
+/// transcoder wasm is the authority on the contents. Serve identity:
+/// already Zstd inside. 18 bytes.
+pub const TEX_XU7_NAMESPACE: &str = "holtburger/tex-xu7";
+
+/// KTX2 file identifier (12 bytes, per the Khronos spec).
+pub const KTX2_MAGIC: &[u8; 12] = &[
+    0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+];
+
 /// `HBC7` container magic. Little-endian header follows:
 /// `u32 width | u32 height | u32 blocks_x | u32 blocks_y`, then
 /// `blocks_x * blocks_y` BC7 blocks of 16 bytes each, row-major.
@@ -138,6 +157,14 @@ pub struct DatShardOptions {
     /// full BC7 set is ~2 GB and the bundle map is already the bake's
     /// peak-RSS driver. See [`ingest_tex_bc7_dir`].
     pub tex_bc7: Option<PathBuf>,
+    /// Directory of `<rsId>.hbc7` PREVIEW blobs (quarter-res level0 +
+    /// chain) for [`TEX_BC7_PRE_NAMESPACE`]. Same validation and
+    /// streaming as `tex_bc7`.
+    pub tex_bc7_pre: Option<PathBuf>,
+    /// Directory of `<rsId>.ktx2` XUBC7 payloads for
+    /// [`TEX_XU7_NAMESPACE`]. Validated by KTX2 identifier only —
+    /// the payload is opaque to the bake.
+    pub tex_xu7: Option<PathBuf>,
 }
 
 /// Result of [`read_input_bundle`] — every record in the source
@@ -166,6 +193,14 @@ pub struct V2BakeResult {
     /// non-HBC7 file. Non-zero is a bake-quality signal, not a
     /// hard failure: the run keeps the valid subset.
     pub tex_bc7_skipped: usize,
+    /// `--tex-bc7-pre` records / bytes / rejects (see `tex_bc7_*`).
+    pub tex_bc7_pre_records: usize,
+    pub tex_bc7_pre_bytes: u64,
+    pub tex_bc7_pre_skipped: usize,
+    /// `--tex-xu7` records / bytes / rejects (see `tex_bc7_*`).
+    pub tex_xu7_records: usize,
+    pub tex_xu7_bytes: u64,
+    pub tex_xu7_skipped: usize,
 }
 
 /// Wrapped output of the unified bake dispatcher
@@ -234,11 +269,13 @@ pub fn read_input_bundle(opts: &DatShardOptions) -> Result<LoadedBundle> {
             hba_bundle.source_meta = dat_bundle.source_meta;
             Ok(hba_bundle)
         }
-        // `--tex-bc7` alone is a legitimate bake: a side-car bundle
-        // that carries ONLY the BC7 namespace (no retail records, so
-        // an empty boot pack). Any other no-input combination is a
-        // usage error.
-        (None, false) if opts.tex_bc7.is_some() => Ok(LoadedBundle {
+        // A texture-namespace flag alone is a legitimate bake: a
+        // side-car bundle that carries ONLY those namespaces (no
+        // retail records, so an empty boot pack). Any other no-input
+        // combination is a usage error.
+        (None, false)
+            if opts.tex_bc7.is_some() || opts.tex_bc7_pre.is_some() || opts.tex_xu7.is_some() =>
+        Ok(LoadedBundle {
             records: BTreeMap::new(),
             source_meta: SourceMeta {
                 portal_dat_iteration: 0,
@@ -437,6 +474,85 @@ pub fn ingest_tex_bc7_dir(dir: &Path, output_dir: &Path) -> Result<TexBc7Ingest>
         if !seen_ids.insert(file_id) {
             return Err(ToolError::Validation(format!(
                 "--tex-bc7 dir {dir:?} has two files for record 0x{file_id:08X} (e.g. {path:?})"
+            )));
+        }
+
+        let (_full, trunc) = sha256_full_and_trunc(&bytes);
+        let trunc_hex = hex_encode_16(&trunc);
+        if written.insert(trunc) {
+            let prefix_dir = shards_dir.join(&trunc_hex[..2]);
+            std::fs::create_dir_all(&prefix_dir).map_err(|e| {
+                ToolError::Validation(format!("create shard prefix dir {prefix_dir:?}: {e}"))
+            })?;
+            let shard_path = prefix_dir.join(format!("{trunc_hex}.bin"));
+            std::fs::write(&shard_path, &bytes)
+                .map_err(|e| ToolError::Validation(format!("write {shard_path:?}: {e}")))?;
+        }
+
+        total_bytes += bytes.len() as u64;
+        entries.push(CatalogEntry {
+            file_id,
+            sha256_truncated: trunc,
+            size: bytes.len() as u64,
+        });
+    }
+
+    Ok(TexBc7Ingest {
+        unique_shard_count: written.len(),
+        entries,
+        total_bytes,
+        skipped,
+    })
+}
+
+/// P2 — ingest a directory of `<rsId>.ktx2` XUBC7 payloads into the
+/// shard store. Same streaming, dedupe, and duplicate-id rules as
+/// [`ingest_tex_bc7_dir`]; the ONLY content check is the 12-byte KTX2
+/// identifier (the container uses an unregistered supercompression
+/// scheme, so payloads are opaque here by design — the client's
+/// transcoder wasm is the authority). Serve these identity: they are
+/// already Zstd-supercompressed inside.
+pub fn ingest_tex_xu7_dir(dir: &Path, output_dir: &Path) -> Result<TexBc7Ingest> {
+    let shards_dir = output_dir.join("shards");
+    std::fs::create_dir_all(&shards_dir)
+        .map_err(|e| ToolError::Validation(format!("create shards dir {shards_dir:?}: {e}")))?;
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let read_dir = std::fs::read_dir(dir)
+        .map_err(|e| ToolError::Validation(format!("read --tex-xu7 dir {dir:?}: {e}")))?;
+    for entry in read_dir {
+        let entry =
+            entry.map_err(|e| ToolError::Validation(format!("scan --tex-xu7 dir {dir:?}: {e}")))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("ktx2") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut entries: Vec<CatalogEntry> = Vec::with_capacity(paths.len());
+    let mut seen_ids: HashSet<u32> = HashSet::new();
+    let mut written: HashSet<[u8; 16]> = HashSet::new();
+    let mut skipped: Vec<(PathBuf, String)> = Vec::new();
+    let mut total_bytes: u64 = 0;
+
+    for path in paths {
+        let file_id = match parse_hbc7_file_name(&path) {
+            Ok(id) => id,
+            Err(reason) => {
+                skipped.push((path, format!("filename is not a hex record id: {reason}")));
+                continue;
+            }
+        };
+        let bytes = std::fs::read(&path)
+            .map_err(|e| ToolError::Validation(format!("read {path:?}: {e}")))?;
+        if bytes.len() < KTX2_MAGIC.len() || &bytes[..KTX2_MAGIC.len()] != KTX2_MAGIC {
+            skipped.push((path, "not a KTX2 file (bad identifier)".into()));
+            continue;
+        }
+        if !seen_ids.insert(file_id) {
+            return Err(ToolError::Validation(format!(
+                "--tex-xu7 dir {dir:?} has two files for record 0x{file_id:08X} (e.g. {path:?})"
             )));
         }
 
@@ -1022,6 +1138,44 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
             .or_default()
             .extend(ingest.entries);
     }
+    let mut tex_bc7_pre_records = 0usize;
+    let mut tex_bc7_pre_bytes = 0u64;
+    let mut tex_bc7_pre_skipped = 0usize;
+    if let Some(pre_dir) = opts.tex_bc7_pre.as_deref() {
+        // Same container, same validator — a pre record IS an HBC7
+        // record whose level 0 happens to be the full record's level 2.
+        let ingest = ingest_tex_bc7_dir(pre_dir, &opts.output_dir)?;
+        tex_bc7_pre_records = ingest.entries.len();
+        tex_bc7_pre_bytes = ingest.total_bytes;
+        tex_bc7_pre_skipped = ingest.skipped.len();
+        for (path, reason) in &ingest.skipped {
+            log::warn!("--tex-bc7-pre: skipped {path:?}: {reason}");
+        }
+        unique_shard_count += ingest.unique_shard_count;
+        v2_shards
+            .catalogs
+            .entry(TEX_BC7_PRE_NAMESPACE.to_string())
+            .or_default()
+            .extend(ingest.entries);
+    }
+    let mut tex_xu7_records = 0usize;
+    let mut tex_xu7_bytes = 0u64;
+    let mut tex_xu7_skipped = 0usize;
+    if let Some(xu7_dir) = opts.tex_xu7.as_deref() {
+        let ingest = ingest_tex_xu7_dir(xu7_dir, &opts.output_dir)?;
+        tex_xu7_records = ingest.entries.len();
+        tex_xu7_bytes = ingest.total_bytes;
+        tex_xu7_skipped = ingest.skipped.len();
+        for (path, reason) in &ingest.skipped {
+            log::warn!("--tex-xu7: skipped {path:?}: {reason}");
+        }
+        unique_shard_count += ingest.unique_shard_count;
+        v2_shards
+            .catalogs
+            .entry(TEX_XU7_NAMESPACE.to_string())
+            .or_default()
+            .extend(ingest.entries);
+    }
 
     let boot_pack_v1 = write_boot_pack(&bundle, opts.boot_landblock, &opts.output_dir)?;
     let boot_covers_count = boot_pack_v1.covers.len();
@@ -1063,6 +1217,12 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
         tex_bc7_records,
         tex_bc7_bytes,
         tex_bc7_skipped,
+        tex_bc7_pre_records,
+        tex_bc7_pre_bytes,
+        tex_bc7_pre_skipped,
+        tex_xu7_records,
+        tex_xu7_bytes,
+        tex_xu7_skipped,
     })
 }
 
@@ -1071,12 +1231,14 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
 /// 2 (the new wire format); `--manifest-version=1` keeps the
 /// legacy emission for one release cycle.
 pub fn shard_bundle_dispatch(opts: &DatShardOptions) -> Result<BakeOutput> {
-    if opts.manifest_version != MANIFEST_V2_VERSION && opts.tex_bc7.is_some() {
+    if opts.manifest_version != MANIFEST_V2_VERSION
+        && (opts.tex_bc7.is_some() || opts.tex_bc7_pre.is_some() || opts.tex_xu7.is_some())
+    {
         // v1 has no per-namespace catalogs and its top-level shard map
         // is the 203 MB cliff v2 exists to fix. Rather than emit a
-        // manifest that silently omits the BC7 records, refuse.
+        // manifest that silently omits the texture records, refuse.
         return Err(ToolError::Validation(format!(
-            "--tex-bc7 requires --manifest-version={MANIFEST_V2_VERSION} (v1 has no per-namespace catalogs)"
+            "--tex-bc7/--tex-bc7-pre/--tex-xu7 require --manifest-version={MANIFEST_V2_VERSION} (v1 has no per-namespace catalogs)"
         )));
     }
     match opts.manifest_version {
@@ -1402,6 +1564,8 @@ mod tests {
             output_dir: std::env::temp_dir().join("hb-tex-bc7-v1-reject"),
             manifest_version: 1,
             tex_bc7: Some(PathBuf::from("/nonexistent")),
+            tex_bc7_pre: None,
+            tex_xu7: None,
         };
         let err = shard_bundle_dispatch(&opts).expect_err("v1 + --tex-bc7 must be refused");
         assert!(

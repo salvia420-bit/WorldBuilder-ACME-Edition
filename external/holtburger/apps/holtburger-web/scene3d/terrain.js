@@ -41,12 +41,13 @@ import {
   applyPbrColorOverrides,
   buildPbrNraTexture,
 } from "./adapter.js";
-// ?terrainBc7=on (DEFAULT OFF) — retail-derived BC7 terrain atlas. The A/B twin
-// of the CC0 `?pbrTerrain` arm above: same 33 layers, but the albedo is the art
-// AC shipped (4x realesrgan-x4plus, the statics model) delivered as BC7 with a
-// full mip chain, and normal/roughness/AO/height are derived from that same
-// retail albedo instead of coming from a CC0 set authored for different pixels.
-// Flag absent ⇒ every export here returns null before fetching ⇒ the CC0 path
+// ?terrainBc7 (DEFAULT ON 2026-08-04; =off escape) — retail-derived BC7 terrain
+// atlas. The A/B twin of the CC0 `?pbrTerrain` arm above: same 33 layers, but
+// the albedo is the art AC shipped (t512 = retail-native level-0; t1024 =
+// 4x realesrgan-x4plus, the statics model) delivered as BC7 with a full mip
+// chain, and normal/roughness/AO/height are derived from that same retail
+// albedo instead of coming from a CC0 set authored for different pixels.
+// `=off` ⇒ every export here returns null before fetching ⇒ the CC0 path
 // below runs byte-for-byte unchanged. See scene3d/terrain_bc7.js.
 import {
   terrainBc7Enabled,
@@ -3925,6 +3926,11 @@ export async function resolveTerrainRingOpts(
     // so a failure is remembered rather than re-hammering the endpoint on every
     // rebuild (the same negative-caching contract Bc7RecordSource uses).
     let bc7Atlas = scene3d.terrainBc7State;
+    if (typeof window !== "undefined") {
+      // Installed unconditionally so vistest arm G (?terrainBc7=off) can
+      // assert enabled:false instead of probing a hole.
+      window.__terrainBc7Stats = () => terrainBc7Stats();
+    }
     if (terrainBc7Enabled() && bc7Atlas === undefined) {
       // 2026-08-03 — promise memo: cap-exempt urgent bakes can enter this
       // resolve concurrently, so without it each launched its own ~20 MB
@@ -3940,9 +3946,6 @@ export async function resolveTerrainRingOpts(
         bc7Atlas = null;
       }
       scene3d.terrainBc7State = bc7Atlas;
-      if (typeof window !== "undefined") {
-        window.__terrainBc7Stats = () => terrainBc7Stats();
-      }
     }
     const bc7Active = !!bc7Atlas?.atlasTexture;
     if (bc7Active) {

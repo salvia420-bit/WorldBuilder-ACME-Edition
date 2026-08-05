@@ -78,8 +78,12 @@ re-encoding). Ordering INSIDE a container stays level-0-first (v2 unchanged).
 
 New namespace `holtburger/tex-xu7` (+ `-pre`), payload = raw `.basis`/KTX2
 bytes; decode in the bake worker via the 1.04 MB transcoder wasm → BC7 blocks
-→ existing upload path. serve.py must ship these **identity** (already
-zstd inside — add the ext to the incompressible list). Corpus re-encode from
+→ existing upload path. serve.py must ship these **identity** (already zstd
+inside). serve.py compresses by opt-in ALLOWLIST (`TEXT_COMPRESS_EXTS` /
+`BIN_COMPRESS_EXTS`) — unknown extensions are served identity by omission, so
+the rule is: NEVER add the XUBC7 ext to `BIN_COMPRESS_EXTS` (don't confuse the
+allowlists with the separate `Cache-Control: no-cache` ext list, which already
+names `.ktx2`). Corpus re-encode from
 source PNGs (~1–2 h on this box at -j3, or buildbox). Keep `tex-bc7` shards
 during transition; flag `?texXu7` exact-match opt-in until the 1070 confirms
 the new base blocks, then default-flip with `=off` escape per house rules.

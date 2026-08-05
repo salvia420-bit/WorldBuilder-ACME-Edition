@@ -54,6 +54,10 @@
 // `?texBc7=on` AND the extension is present.
 
 import * as THREE from "three";
+// P2 — call-time-only cycle with xu7_textures.js (it imports bc7BlocksFor/
+// bc7LevelBytes back from here); both sides bind functions, never eval-time
+// values, so the cycle is safe.
+import { texXu7Enabled, transcodeXu7, xu7Stats } from "./xu7_textures.js";
 
 // --------------------------------------------------------------------------
 // flag + capability
@@ -377,7 +381,29 @@ const _stats = {
   atlasBuckets: 0,
   singletonUpgrades: 0,
   deferredNodes: 0,
+  preFetches: 0,
+  preHits: 0,
+  preSwaps: 0,
 };
+
+// P1 preview-first (?texPre; DEFAULT ON, =off/0/false/no escape). Fetches the
+// quarter-res `holtburger/tex-bc7-pre` record ahead of the full one and swaps
+// twice. Pure acceleration: identical final pixels, and an archive without the
+// pre namespace behaves exactly as before (empty fetch → negative cache).
+let _preFlag;
+export function texPreEnabled(search) {
+  if (search === undefined && _preFlag !== undefined) return _preFlag;
+  let on = true;
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" ? window.location.search : "";
+    const v = new URLSearchParams(s).get("texPre");
+    if (v !== null && ["off", "0", "false", "no"].includes(v.toLowerCase())) on = false;
+  } catch (_) {
+    /* malformed location: stay ON (the path is fail-soft end to end) */
+  }
+  if (search === undefined) _preFlag = on;
+  return on;
+}
 
 /** Mutable module tally — read via `window.__bc7Stats()`. */
 export function bc7Stats() {
@@ -409,8 +435,11 @@ export class Bc7RecordSource {
   constructor(opts = {}) {
     this._wasm = opts.wasmExports || null;
     this._fetchImpl = opts.fetchImpl || null;
+    this._preFetchImpl = opts.preFetchImpl || null;
     this._cache = new Map(); // rsId -> parsed | null (null = absent/failed)
     this._inflight = new Set();
+    this._preCache = new Map(); // rsId -> parsed | null (pre-record twin)
+    this._preInflight = new Set();
   }
 
   get cacheSize() {
@@ -447,16 +476,100 @@ export class Bc7RecordSource {
     return this._begin(id);
   }
 
+  /**
+   * P1 — async accessor for the PRE record (quarter-res twin). Resolves to
+   * the parsed payload or null (absent / namespace not shipped / flag off /
+   * wasm without the export). Never throws; never warns on absence — the pre
+   * layer is optional by contract.
+   */
+  getPreAsync(rsId) {
+    const id = rsId >>> 0;
+    if (this._preCache.has(id)) return Promise.resolve(this._preCache.get(id));
+    const impl = this._preFetchImpl
+      ? this._preFetchImpl
+      : this._wasm && typeof this._wasm.bc7_pre_blocks === "function"
+        ? (i) => this._wasm.bc7_pre_blocks(i)
+        : null;
+    if (!impl) {
+      this._preCache.set(id, null);
+      return Promise.resolve(null);
+    }
+    if (this._preInflight.has(id)) {
+      // Rare: two asks racing before the first resolves. Cheap poll-free
+      // fallback — just re-fetch; the store layer dedupes the network hop.
+    }
+    this._preInflight.add(id);
+    _stats.preFetches += 1;
+    return Promise.resolve(impl(id))
+      .then((bytes) => {
+        if (!bytes || bytes.length === 0) {
+          this._preCache.set(id, null);
+          return null;
+        }
+        let parsed;
+        try {
+          parsed = parseHbc7(bytes);
+        } catch (e) {
+          // A malformed PRE payload is a bake bug like any other — loud.
+          _stats.parseErrors += 1;
+          _stats.lastError = String(e && e.message ? e.message : e);
+          // eslint-disable-next-line no-console
+          console.error(`[bc7] 0x${id.toString(16).toUpperCase()} malformed PRE payload:`, e);
+          this._preCache.set(id, null);
+          return null;
+        }
+        _stats.bytesFetched += bytes.length;
+        _stats.preHits += 1;
+        this._preCache.set(id, parsed);
+        return parsed;
+      })
+      .catch(() => {
+        this._preCache.set(id, null);
+        return null;
+      })
+      .finally(() => {
+        this._preInflight.delete(id);
+      });
+  }
+
   _begin(id) {
     this._inflight.add(id);
     _stats.fetches += 1;
-    const bytesP = this._fetchImpl
-      ? Promise.resolve(this._fetchImpl(id))
-      : this._wasm && typeof this._wasm.bc7_blocks === "function"
-        ? Promise.resolve(this._wasm.bc7_blocks(id))
-        : Promise.resolve(null);
-    const p = bytesP
-      .then((bytes) => {
+    // P2 (2026-08-04): with `?texXu7=on`, try the XUBC7 namespace FIRST —
+    // transcoded output is shape-identical to parseHbc7's, so the rest of
+    // this chain and every consumer is codec-blind. Any miss/failure falls
+    // through to the hbc7 fetch below, which is only kicked on that path
+    // (no double bandwidth).
+    const tryXu7 = () => {
+      if (!texXu7Enabled() || this._fetchImpl || !this._wasm || typeof this._wasm.xu7_blocks !== "function") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(this._wasm.xu7_blocks(id))
+        .then((b) => {
+          if (!b || b.length === 0) return null;
+          _stats.bytesFetched += b.length;
+          return transcodeXu7(b);
+        })
+        .catch(() => null);
+    };
+    const bytesP = () =>
+      this._fetchImpl
+        ? Promise.resolve(this._fetchImpl(id))
+        : this._wasm && typeof this._wasm.bc7_blocks === "function"
+          ? Promise.resolve(this._wasm.bc7_blocks(id))
+          : Promise.resolve(null);
+    const p = tryXu7()
+      .then((xu7Parsed) => {
+        if (xu7Parsed) {
+          this._cache.set(id, xu7Parsed);
+          _stats.hits += 1;
+          return { __shortCircuit: xu7Parsed };
+        }
+        return bytesP();
+      })
+      .then((bytesOrDone) => {
+        if (bytesOrDone && bytesOrDone.__shortCircuit) return bytesOrDone.__shortCircuit;
+        const bytes = bytesOrDone;
         if (!bytes || bytes.length === 0) {
           this._cache.set(id, null); // proven-absent OR namespace not shipped
           _stats.absent += 1;
@@ -514,6 +627,7 @@ export function initBc7Source(opts = {}) {
   _source = new Bc7RecordSource(opts);
   if (typeof window !== "undefined") {
     window.__bc7Stats = () => bc7Stats();
+    window.__xu7Stats = () => xu7Stats();
   }
   return _source;
 }
@@ -551,11 +665,21 @@ export function _resetBc7ForTest() {
  * `static_atlas.js`'s `__bc7Pending` deferral, which holds a node out of an
  * RGBA8 bucket for one LB stream rather than locking it to 32 bpp.
  *
+ * P1 (2026-08-04): when `?texPre` is on (default) and the archive ships the
+ * `tex-bc7-pre` namespace, the quarter-res pre-record is fetched CONCURRENTLY
+ * and, if it lands while the full record is still in flight, swapped in first
+ * — the surface goes textured at ~6% of the bytes, then sharpens in place
+ * when the full record arrives. Each swap is reported through `onSwap` so the
+ * caller can re-point clone families both times; the returned promise still
+ * resolves once, after the FULL verdict, preserving v1 semantics.
+ *
  * @param {THREE.Material} mat
  * @param {number} rsId RenderSurface (0x06xxxxxx) id
- * @returns {Promise<boolean>} whether a swap happened
+ * @param {(res:{swapped:true,replaced:THREE.Texture|null})=>void} [onSwap]
+ *   invoked after EACH swap (pre and/or full) with the texture it replaced.
+ * @returns {Promise<boolean|{swapped:true,replaced:*}>} final-phase result
  */
-export function upgradeMaterialToBc7(mat, rsId) {
+export function upgradeMaterialToBc7(mat, rsId, onSwap) {
   const src = bc7Source();
   if (!src || !mat || !(rsId >>> 0)) return Promise.resolve(false);
   // Mark BEFORE the await so the atlas can see "verdict pending" on the very
@@ -568,29 +692,77 @@ export function upgradeMaterialToBc7(mat, rsId) {
     mat.userData = mat.userData || {};
     mat.userData.__bc7Pending = true;
   }
+  let fullDone = false;
+  let preTex = null;
+  const buildAndSwap = (parsed, phase) => {
+    const old = mat.map;
+    const tex = makeBc7Texture(parsed, {
+      wrapS: old ? old.wrapS : undefined,
+      wrapT: old ? old.wrapT : undefined,
+      colorSpace: old && old.colorSpace ? old.colorSpace : undefined,
+    });
+    mat.map = tex;
+    mat.needsUpdate = true;
+    _stats.texturesBuilt += 1;
+    if (phase === "pre") _stats.preSwaps += 1;
+    else _stats.singletonUpgrades += 1;
+    return { swapped: true, replaced: old };
+  };
+  // Pre phase: only worth kicking when the full verdict isn't already cached.
+  if (texPreEnabled() && !already) {
+    src
+      .getPreAsync(rsId)
+      .then((parsed) => {
+        // Lost the race (or full already landed): the pre texture is never
+        // built, so there is nothing to dispose. parsed stays in _preCache
+        // for any later asker.
+        if (!parsed || fullDone) return;
+        if (mat.userData && mat.userData.__bc7) return; // full already swapped
+        const res = buildAndSwap(parsed, "pre");
+        preTex = mat.map;
+        const ud = (mat.userData = mat.userData || {});
+        ud.__bc7Pre = true;
+        if (onSwap) {
+          try {
+            onSwap(res);
+          } catch (_) {
+            /* caller's re-point failed: material itself is still correct */
+          }
+        }
+      })
+      .catch(() => {
+        /* pre is best-effort by contract */
+      });
+  }
   return src
     .getAsync(rsId)
     .then((parsed) => {
+      fullDone = true;
       const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
       if (!parsed) return false;
-      const old = mat.map;
-      const tex = makeBc7Texture(parsed, {
-        wrapS: old ? old.wrapS : undefined,
-        wrapT: old ? old.wrapT : undefined,
-        colorSpace: old && old.colorSpace ? old.colorSpace : undefined,
-      });
-      mat.map = tex;
-      mat.needsUpdate = true;
+      const res = buildAndSwap(parsed, "full");
       ud.__bc7 = true;
+      delete ud.__bc7Pre;
       ud.__bc7RsId = rsId >>> 0;
-      _stats.texturesBuilt += 1;
-      _stats.singletonUpgrades += 1;
-      // The RGBA8 twin is now unreferenced by this material. Only dispose it
-      // if nothing else can be holding it: the MaterialCache tracks it under
-      // the DID for `?matBudgetMB` accounting and page-teardown disposal, so
-      // hand ownership back to the caller instead of guessing here.
-      return { swapped: true, replaced: old };
+      if (onSwap) {
+        // The caller's re-point handler owns disposal of `replaced` (RGBA8
+        // twin in phase pre, the pre texture here) exactly as in v1.
+        try {
+          onSwap(res);
+        } catch (_) {
+          /* caller's re-point failed: material itself is still correct */
+        }
+      } else if (res.replaced && res.replaced === preTex) {
+        // No caller handler: the pre texture was built here and is tracked
+        // nowhere else — dispose it or it leaks GPU memory on every upgrade.
+        try {
+          res.replaced.dispose();
+        } catch (_) {
+          /* fail-soft */
+        }
+      }
+      return res;
     })
     .catch(() => {
       const ud = (mat.userData = mat.userData || {});

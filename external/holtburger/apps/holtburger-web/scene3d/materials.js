@@ -5140,8 +5140,10 @@ export class MaterialCache {
     if (!this._bc7Asked) this._bc7Asked = new Set();
     if (this._bc7Asked.has(d)) return;
     this._bc7Asked.add(d);
-    upgradeMaterialToBc7(mat, rs)
-      .then((res) => {
+    // P1 (2026-08-04): the re-point handler runs via onSwap for EACH phase
+    // (pre then full) — NOT via the returned promise, which would double-run
+    // it for the full phase (double LRU delta, double dispose).
+    upgradeMaterialToBc7(mat, rs, (res) => {
         if (!res || res.swapped !== true) return;
         // Evicted / replaced between the ask and the land: leave everything
         // alone (the new material has its own ask).

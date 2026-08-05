@@ -29,12 +29,26 @@ program — fps is draw-call-bound (63.6 ms @ 3,031 calls, 07-31).
   noted "safer" (no crosshatch hallucination) — kept as terrain candidate only.
 - **Terrain: per-layer HAND-PICK across all 4 models** (29 tiles baked ×4 in
   the corpus run) — do NOT auto-pick; Remacri hallucinates crosshatch on grass.
+  **RESOLVED 2026-08-04 (user call, supersedes the above): Remacri for ALL 29
+  layers.** Decided after reviewing the 4-way sheets AND a 3×3 full-res tiled
+  macro test of 0x06006D49 (remacri vs ultrasharp vs source) on the phone —
+  no tiling/grid artifact; UltraSharp judged "a bit plain". The ×4 corpus and
+  sheets remain on disk if any layer needs revisiting after the 1070 pass.
 - **XUBC7 lossy tier is promising**: user could not distinguish source vs
   lossless vs q75 vs 1.5bpp-RDO sheets on phone. Motion/tiling verdict still
   needs the 1070. Add a q20/rdo60 probe to find the visible floor.
 - **Paletted (Tranche 2) mechanism: GO** — user confirmed quantized column
   indistinguishable from pre-quant. All 5 gates passed (see §5).
 - Diffusion upscalers (SUPIR etc.): rejected on provenance, permanently.
+- **SUSPECT-TILED verdict (user, 2026-08-04): EXCLUDE ALL 32** (19 statics +
+  13 tranche1; the ledger split is `phase` for statics/terrain but `batch` for
+  tranche1 — key on both). Outputs moved to
+  /mnt/wbterminal2/upscale-corpus/quarantine-suspect-tiled/ (with
+  EXCLUDED-rsids.txt); those textures ship at retail res. Shippable remainder:
+  2,931 statics + 1,054 tranche1.
+- **Statics spot-check (user, 2026-08-04): PASS** — 20 stratified + 3 lowest-
+  PSNR samples reviewed on phone ("remacri looks great"); corpus cleared for
+  relief re-derive + encode.
 
 ## 3. IN FLIGHT AT SESSION CLOSE — collect first
 
@@ -97,8 +111,11 @@ restart picks up the committed compression).
      opaque payload bytes in our shard store, never interchange KTX2.
    - Corpus bitrates measured on our art: lossless ~59% of raw, q75 38%,
      rdo1.5 22.5% (12-sample matrix: /mnt/wbterminal2/xubc7-proto/results/).
-   - Wire note: serve XUBC7 payloads identity (already Zstd inside) — add ext
-     to serve.py's incompressible list.
+   - Wire note: serve XUBC7 payloads identity (already Zstd inside). serve.py
+     compresses by opt-in allowlist — unknown exts are identity by omission,
+     so the rule is NEVER add the XUBC7 ext to `BIN_COMPRESS_EXTS` (there is
+     no "incompressible list"; the no-cache ext list naming `.ktx2` is a
+     different, cache-control-only list).
 5. **Client integration (P1+P2 of the plan doc, one container/namespace rev)**:
    - P1 preview-first: two self-contained HBC7 records per texture
      (`holtburger/tex-bc7-pre` = quarter-res level0 + chain ≈ 6% of bytes;
@@ -132,6 +149,19 @@ restart picks up the committed compression).
 9. **Then flip defaults** per house rules (bare-default loads+spawns+0 errors;
    escapes documented in url-flags.md; run scripts/audit-flag-defaults.mjs).
 
+## 4b. RELIEF SANITY PASS (2026-08-05, step-3 verification — PASSED with a 1070 note)
+
+Statics heights derive AT RUNTIME (height_seam.rs via wasm; no offline bake),
+so the Remacri albedo automatically re-derives relief. Offline seam-operator
+comparison over 15 old-vs-new pairs (script in session scratchpad; operator =
+gfx-material-agent relief_op.op_seam): median height-field corr 0.774, NO
+polarity inversions. **FINDING for arm E: Remacri sharpening makes the seam
+operator carve CONSISTENTLY DEEPER — carve fraction often 1.5–3x the x4plus
+albedo's (e.g. 0x06006784: 24.7%→67.1%).** Structurally sane, but the 1070
+statPom arm should specifically judge whether statics relief now reads as
+over-carved; if so the lever is the seam GROOVE_MIN/FULL thresholds (wasm
+tables — rebuild required), not the art.
+
 ## 5. TRANCHE 2 PROTOTYPE RESULTS (all gates passed — evidence)
 
 /mnt/wbterminal2/tranche2-proto/: 20 samples (ranges proven via ClothingTable/
@@ -145,6 +175,27 @@ write bugs found** (report + workarounds in the t2tool, work dir):
 with a real contiguous free region first; (2) DatBTreeNode.Pack writes
 0xCDCDCDCD in leaf branch slot[0] — zero all CD branch slots after writing
 (the known b-tree bug, now with a proven workaround). Consider upstreaming.
+
+## 5b. TRANCHE 2 BATCH SHIPPED (2026-08-05) + THE REAL DatReaderWriter WORKAROUNDS
+
+Batch complete: 1,138 records (1,189 minus 51 CAP-SKIPPED 512px sources — no
+gain under the 512² output cap; revisit with the A15 budgets). ZERO structural
+violations (range/sentinel) across all quantizations; NN-controls exact.
+256px sources mode-pooled 1024→512 in INDEX space post-quantize (emit_records
+CAP logic; quantizer geometry untouched). Injected into a portal copy →
+byte-verify 1,138/1,138 → diff-dat: 78,556 same / 1,138 diff / 0 missing →
+dist `holtburger-dist-hires-bc7m-xu7t2` (all texture namespaces) → live boot
+0 errors. **The §5 workarounds, now actually understood and tooled**
+(tranche2-proto/pregrow.py + cdfix.py — use BOTH for any future injection):
+(1) DRW's ReserveBlockCore does NOT walk the retail free chain — it assumes a
+CONTIGUOUS free region (`FirstFreeBlock += BlockSize` per pop; decompiled
+v2.1.2). Pre-grow = append zeroed blocks at EOF and point the header AT THAT
+REGION ONLY (FirstFree=old EOF, count=N), abandoning the retail chain values.
+Linking a chain corrupts; small injections only survive by luck.
+(2) DRW leaves 0xCDCDCDCD in leaf-node branch slot[0]; DRW's reader tolerates
+it but holtburger-dat recurses into it ("failed to fill whole buffer" at
+DatOpen). cdfix.py walks the tree and zeroes tainted leaf branch slots
+(182 leaves this batch). Upstream both to chorizite/DatReaderWriter.
 
 ## 6. KEY NUMBERS / PATHS
 

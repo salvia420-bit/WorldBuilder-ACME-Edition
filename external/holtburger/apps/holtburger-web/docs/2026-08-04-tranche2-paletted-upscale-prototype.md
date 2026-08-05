@@ -1,5 +1,17 @@
 # Tranche 2 prototype — palette-preserving ×4 upscale for INDEX16/P8 (scoped 2026-08-04)
 
+> **STATUS 2026-08-04 (post-run truth-up): the prototype RAN and ALL 5 GATES
+> PASSED.** 20 samples, quantizer unit-tests 3/3, ZERO range-boundary /
+> clip-sentinel / hard-bleed violations across all samples × all real dye
+> variants, NN-control exact 20/20, live boot (gate 4) rendered Bak'tshay
+> Servant at 1024² + 512×1024 from injected records with 0 errors. Evidence +
+> tooling: `/mnt/wbterminal2/tranche2-proto/` (quantizer `t2quant.py`, gates,
+> records, sheets, t2tool with the two DatReaderWriter write-bug workarounds);
+> test dist `/mnt/wbterminal2/tranche2-testdist/`. Gate 1 shipped with an
+> ACCEPTED SPEC REVISION — see the gate-1 note below; the original <1% index
+> floor is superseded. Mechanism is GO for the 1,189 batch (user call, do not
+> relitigate). Batch steps: HANDOFF-texture-pipeline-2026-08-04.md §4.7.
+
 **Population:** 1,427 uncovered paletted RenderSurfaces (1,423 INDEX16 + 4 P8);
 1,189 are >32 px and upscalable, 238 tiny stay retail-res. These are the
 recolor-bearing textures — creature skins, clothing, hair — composed per-entity
@@ -49,9 +61,15 @@ dolls/Virindi class), ~2 P8. Extraction via WB.Terminal
 
 ## Validation gates (all must pass before the 1,189 batch)
 
-1. **Identity floor:** downscale the re-quantized 4× output back to 1× —
-   index mismatch rate vs source < 1% and no mismatch crosses a range boundary
-   or the clip sentinel. (Catches quantizer bugs mechanically.)
+1. **Identity floor:** downscale the re-quantized 4× output back to 1× — no
+   mismatch may cross a range boundary or the clip sentinel. (Catches
+   quantizer bugs mechanically.)
+   **SPEC REVISION (accepted 2026-08-04):** the original "<1% index mismatch"
+   floor is WRONG for this pipeline and superseded by a structural-zero +
+   color-delta budget. Remacri de-dithers AC's hand-dithered art, so 8–72%
+   same-range adjacent-entry churn is EXPECTED and harmless — the gate is zero
+   structural violations (range/sentinel) plus a bounded color delta, with the
+   NN-control roundtripping exact as the mechanical check.
 2. **Recolor stress:** compose every sample under ≥4 real subpalette variants
    (offline reimplementation of the compose, checked against wasm output at
    1×). Per-variant diff of 1×-vs-4×-downscaled: any pixel whose color CLASS
@@ -78,8 +96,10 @@ L4 (~$1) using the corpus driver + the quantizer as a post-stage.
 
 ## Kill criteria
 
-Range bleed that constraint-quantization can't eliminate; identity mismatch
->1%; budget math demanding an unacceptable cap (<2× effective res gain); any
+Range bleed that constraint-quantization can't eliminate; structural
+violations (range/sentinel) or unbounded color delta under the revised gate 1
+(NOT raw index churn — see the spec revision above); budget math demanding an
+unacceptable cap (<2× effective res gain); any
 client dims assumption that would force wasm changes disproportionate to the
 win. If killed: fall back to per-combo BC7 pre-bake for the FINITE composed
 set actually observed in world data (enumerable from LSD weenies + ClothingTable

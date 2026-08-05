@@ -9642,6 +9642,11 @@ impl SurfacePixels {
 /// writes it, this reads it.
 pub const BC7_TEX_NAMESPACE: &str = "holtburger/tex-bc7";
 
+/// P1 preview-first (2026-08-04 progressive plan): quarter-res HBC7 records,
+/// same container, same keys. OPTIONAL namespace — an archive without it is a
+/// normal full-only deployment, so its absence is never warned about.
+pub const BC7_PRE_NAMESPACE: &str = "holtburger/tex-bc7-pre";
+
 /// `HBC7` container magic, little-endian.
 #[cfg(target_arch = "wasm32")]
 const BC7_MAGIC: &[u8; 4] = b"HBC7";
@@ -9733,6 +9738,86 @@ pub async fn bc7_blocks(rs_id: u32) -> Vec<u8> {
         return Vec::new();
     }
     BC7_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    bytes
+}
+
+/// P1 — the raw `HBC7` preview payload (quarter-res level0 + chain) for one
+/// RenderSurface id, or an EMPTY `Vec` for absent. Same contract as
+/// `bc7_blocks` with two deliberate differences: the namespace is
+/// `holtburger/tex-bc7-pre`, and a missing namespace is SILENT — pre-records
+/// are an optional acceleration layer, so a full-only archive is a normal
+/// deployment, not a delivery gap.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn bc7_pre_blocks(rs_id: u32) -> Vec<u8> {
+    use holtburger_dat::{ResourceKey, ResourceSource as _};
+    if rs_id >> 24 != 0x06 {
+        return Vec::new();
+    }
+    let Some(source) = global_source::try_global_source() else {
+        return Vec::new();
+    };
+    if !source.has_namespace(BC7_PRE_NAMESPACE) {
+        return Vec::new();
+    }
+    if source.key_known_absent(ResourceKey::new(BC7_PRE_NAMESPACE, rs_id)) {
+        return Vec::new();
+    }
+    let _ = source
+        .prefetch(&[ResourceKey::new(BC7_PRE_NAMESPACE, rs_id)])
+        .await;
+    let bytes = match source.get_file_by_key(ResourceKey::new(BC7_PRE_NAMESPACE, rs_id)) {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    if bytes.len() < 20 || &bytes[..4] != BC7_MAGIC {
+        BC7_BAD_MAGIC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Vec::new();
+    }
+    bytes
+}
+
+/// P2 — XUBC7 payload namespace (basisu KTX2, scheme-6 supercompression;
+/// opaque bytes — the JS transcoder is the authority on contents).
+pub const TEX_XU7_NAMESPACE: &str = "holtburger/tex-xu7";
+
+/// KTX2 identifier (12 bytes).
+#[cfg(target_arch = "wasm32")]
+const KTX2_MAGIC: &[u8; 12] = &[
+    0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+];
+
+/// P2 — the raw XUBC7 KTX2 payload for one RenderSurface id, or an EMPTY
+/// `Vec` for absent. Same silent-absence contract as `bc7_pre_blocks`: the
+/// xu7 namespace is an optional codec upgrade, so a dist without it is a
+/// normal deployment. Validation here is the 12-byte KTX2 identifier only.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn xu7_blocks(rs_id: u32) -> Vec<u8> {
+    use holtburger_dat::{ResourceKey, ResourceSource as _};
+    if rs_id >> 24 != 0x06 {
+        return Vec::new();
+    }
+    let Some(source) = global_source::try_global_source() else {
+        return Vec::new();
+    };
+    if !source.has_namespace(TEX_XU7_NAMESPACE) {
+        return Vec::new();
+    }
+    if source.key_known_absent(ResourceKey::new(TEX_XU7_NAMESPACE, rs_id)) {
+        return Vec::new();
+    }
+    let _ = source
+        .prefetch(&[ResourceKey::new(TEX_XU7_NAMESPACE, rs_id)])
+        .await;
+    let bytes = match source.get_file_by_key(ResourceKey::new(TEX_XU7_NAMESPACE, rs_id)) {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    if bytes.len() < KTX2_MAGIC.len() || &bytes[..KTX2_MAGIC.len()] != KTX2_MAGIC {
+        BC7_BAD_MAGIC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Vec::new();
+    }
     bytes
 }
 
