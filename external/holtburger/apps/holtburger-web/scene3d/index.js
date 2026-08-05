@@ -675,6 +675,52 @@ function vfxGaugeEndFrame(renderer) {
   }
 }
 
+// 2026-08-05 — `?msaa`, DEFAULT 2. This is the OTHER half of the `_canvasMsaa`
+// note in preInit3D: dropping canvas MSAA on 08-01 was correct (it multisampled
+// a framebuffer that only receives fullscreen quads) but it left the world with
+// no antialiasing at all, because geometry renders into the composer's render
+// targets. So request the samples THERE — pmndrs
+// `EffectComposer({ multisampling: N })` sets `samples` on both ping-pong RTs
+// (postprocessing 6.39 build/index.js:927 createBuffer -> :1139
+// `renderTarget.samples = multisampling`, and outputBuffer is a clone).
+//
+// Depth survives the resolve: three r184 blits DEPTH_BUFFER_BIT (and stencil
+// when `resolveStencilBuffer`) alongside colour whenever `resolveDepthBuffer`
+// is set, which is its default — so the shared DepthTexture the cloud overlay
+// and ground fog sample keeps getting real depth. Stencil composes with
+// `?portalStencil` for the same reason.
+//
+// 2 samples is the deliberate default rather than 4: at HalfFloat the two
+// ping-pong RTs are the biggest allocation in the frame, and 2x buys the
+// large majority of the visible edge cleanup for half the multisample store
+// and half the resolve bandwidth of 4x.
+//
+// `?msaa=0` / `off` / `false` / `no` disables; `?msaa=4` (or 8) raises it.
+// The `low` preset still wins — `quality.flags.antialias` is false there and
+// gates the value handed to the pipeline (see the createAtmospherePipeline
+// call in init3D).
+//
+// MODULE SCOPE ON PURPOSE: the canvas twin lives in `preInit3D` (it feeds the
+// WebGLRenderer ctor), but the composer is built in `init3D` — a separate
+// function. The first cut declared this next to `_canvasMsaa` and the pipeline
+// init died with `ReferenceError: _msaaSamples is not defined`, caught by the
+// `[sky-k.2/k.3]` warn, i.e. the whole atmosphere pipeline silently fell back
+// to the degraded direct-to-canvas path. Keep it callable from both.
+function msaaSampleCount() {
+  try {
+    const v = new URLSearchParams(window.location.search).get("msaa");
+    if (v == null || v === "") return 2;
+    const t = String(v).toLowerCase();
+    if (t === "off" || t === "false" || t === "no") return 0;
+    const n = Number(t);
+    // A garbled value must not silently disable AA — fall back to the default.
+    if (!Number.isFinite(n) || n < 0) return 2;
+    return Math.min(8, n | 0);
+  } catch (_) {
+    return 2;
+  }
+}
+
 export async function preInit3D(canvas) {
   // 2026-05-23 — install window.__diag observability surface eagerly so
   // every spawn from the autoLogin handshake onwards is captured. The
@@ -5164,6 +5210,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               atmosphereRuntime,
               bloom: !!quality.flags.bloom,
               vignette: !!quality.flags.vignette,
+              // 2026-08-05 — MSAA on the composer RTs (see `msaaSampleCount`).
+              // Preset-gated: `low` sets antialias false and gets 0 samples.
+              msaa: quality.flags.antialias ? msaaSampleCount() : 0,
               // 2026-05-21 stutter fix — lensFlare default OFF (see
               // atmosphere_pipeline.js). Opt in via `?lensFlare=on`.
               lensFlare: !!quality.flags.lensFlare,

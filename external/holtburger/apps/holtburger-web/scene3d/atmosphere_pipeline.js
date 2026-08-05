@@ -515,13 +515,29 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // takram's SunDirectionalLight (which emits W/m²/sr-scale values)
   // saturates to 1.0 immediately and tone mapping has nothing to
   // recover. Takram's vanilla example uses HalfFloatType explicitly.
+  // 2026-08-05 — MSAA belongs HERE, not on the canvas: world geometry renders
+  // into these ping-pong buffers, so this is the only surface with geometric
+  // edges to antialias (scene3d/index.js `_msaaSamples` derives the count and
+  // gates it on the quality preset; `?msaa=0` disables). 0 ⇒ pmndrs default ⇒
+  // byte-identical to the pre-08-05 composer. `setSize` below preserves
+  // `samples` (it resizes the existing targets rather than rebuilding them).
+  const msaaSamples = Number.isFinite(opts?.msaa) ? Math.max(0, Math.min(8, opts.msaa | 0)) : 0;
   const composer = new EffectComposer(renderer, {
     frameBufferType: THREE.HalfFloatType,
     // Portal-stencil pass needs a stencil attachment. Off → pmndrs default
     // (false) → byte-identical to the pre-feature composer.
     stencilBuffer: !!portalStencil,
+    multisampling: msaaSamples,
   });
   composer.setSize(width, height);
+  if (msaaSamples > 0) {
+    // Loud once, like the BC7 probe: a boot that spends the multisample store
+    // must say so, and `composer.multisampling` reads back the buffer's ACTUAL
+    // sample count — 0 here would mean the request was dropped (WebGL 1, or a
+    // driver that refused the sample count).
+    // eslint-disable-next-line no-console
+    console.log(`[msaa] composer multisampling=${composer.multisampling} (requested ${msaaSamples})`);
+  }
 
   // 2026-05-16 cloud z-order fix — attach a DepthTexture to both of
   // the composer's ping-pong render targets so the cloud overlay's
