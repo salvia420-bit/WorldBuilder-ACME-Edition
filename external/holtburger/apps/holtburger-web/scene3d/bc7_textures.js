@@ -20,8 +20,9 @@
 //              Blocks are COMPRESSED_RGBA_BPTC_UNORM_EXT (opaque
 //              surfaces still encode alpha = 255).
 //
-// MIP LEVELS — THE ONE KNOWN FIDELITY GAP (read this before shipping)
-// v1 of the container carries level 0 ONLY. WebGL cannot generate mipmaps
+// MIP LEVELS
+// v1 of the container carries level 0 ONLY, and the per-statics `tex-bc7`
+// records are still v1. WebGL cannot generate mipmaps
 // for a compressed texture (`generateMipmaps` is forced false by three), so
 // a level-0-only BC7 texture MUST sample with `minFilter = LinearFilter`.
 // That is a real regression versus the RGBA8 path, which runs
@@ -31,13 +32,16 @@
 // incomplete texture and samples BLACK.
 // `parseHbc7` therefore accepts an OPTIONAL trailing mip chain (each
 // successive level halving, min 1x1) and only enables mipmapped filtering
-// when the payload actually carries one. Nothing in the current v1 payloads
-// exercises that branch; it exists so a v2 container that appends levels
-// needs no client change. See BC7-CLIENT-REPORT.md §"needs 1070 time".
+// when the payload actually carries one. 2026-08-05: that branch is NO LONGER
+// theoretical — the terrain arm ships HBC7 v2 with a full chain (10 levels at
+// t512, 11 at t1024) and needed no client change, exactly as designed. The
+// statics records are the ones still waiting on a v2 bake.
 //
 // FEATURE DETECTION IS MANDATORY, NOT OPTIONAL
-// `EXT_texture_compression_bptc` is absent on SwiftShader (the dev laptop)
-// and on plenty of real devices. Without the extension three's `convert()`
+// `EXT_texture_compression_bptc` is absent on plenty of real devices. (It is
+// NOT absent on this laptop's SwiftShader, contrary to what this header and
+// the url-flags row both claimed until 2026-08-05 — the probe reports it
+// present and the whole path renders locally.) Without the extension three's `convert()`
 // returns a null gl format and warns "Attempt to load unsupported
 // compressed texture format" once per texture — i.e. flag-ON on an
 // unsupported GPU would be a console-noise + all-white-texture bug. So:
@@ -50,8 +54,10 @@
 //     unsupported GPU behaves EXACTLY like flag-off: the existing
 //     decode-to-RGBA8 path, no fetches, no textures, no warnings.
 //
-// DEFAULT OFF. Nothing in this module allocates or fetches until
-// `?texBc7=on` AND the extension is present.
+// DEFAULT ON since 2026-07-30 (`?texBc7=off` escapes), still hard-gated on the
+// extension: nothing here allocates or fetches until `bc7Available()` is true.
+// (This trailer said "DEFAULT OFF ... until ?texBc7=on" for six days after the
+// flip, contradicting the reader eighteen lines above it.)
 
 import * as THREE from "three";
 // P2 — call-time-only cycle with xu7_textures.js (it imports bc7BlocksFor/
