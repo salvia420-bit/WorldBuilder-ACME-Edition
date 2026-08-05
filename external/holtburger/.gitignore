@@ -63,3 +63,11 @@ apps/holtburger-web/scratchpad/
 # curation-manifest.json) by scratchpad prep — docs/terrainplan.md §T2.
 apps/holtburger-web/scene3d/assets/pbr_terrain/
 apps/holtburger-web/scene3d/assets/terrain_bc7/
+
+# tools/bc7cli — the PNG -> HBC7 v2 encoder. The SOURCES are committed
+# (bc7cli.cpp + vendored bc7enc/lodepng); the built ELF is not. It was left
+# untracked-and-unignored from 2026-07-31 to 2026-08-05, which is the worst of
+# both: `git status` noise on every checkout that built it, and a fresh clone
+# with no binary and nothing saying so. Build it with tools/bc7cli/build.sh
+# before a tex-bc7 bake.
+tools/bc7cli/bc7cli
