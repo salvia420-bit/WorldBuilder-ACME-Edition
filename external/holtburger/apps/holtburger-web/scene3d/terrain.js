@@ -43,8 +43,9 @@ import {
 } from "./adapter.js";
 // ?terrainBc7 (DEFAULT ON 2026-08-04; =off escape) — retail-derived BC7 terrain
 // atlas. The A/B twin of the CC0 `?pbrTerrain` arm above: same 33 layers, but
-// the albedo is the art AC shipped (t512 = retail-native level-0; t1024 =
-// 4x realesrgan-x4plus, the statics model) delivered as BC7 with a full mip
+// the albedo is the art AC shipped (t1024 = 4x_foolhardy_Remacri, the statics
+// corpus model, DEFAULT tier since 2026-08-05; t512 = retail-native level-0,
+// the `?terrainBc7=512` low-bandwidth pin) delivered as BC7 with a full mip
 // chain, and normal/roughness/AO/height are derived from that same retail
 // albedo instead of coming from a CC0 set authored for different pixels.
 // `=off` ⇒ every export here returns null before fetching ⇒ the CC0 path

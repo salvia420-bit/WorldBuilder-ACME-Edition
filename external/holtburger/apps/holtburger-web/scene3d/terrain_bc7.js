@@ -11,14 +11,15 @@
 //   records r2 swaps like "Rock035 too dark vs retail tan speckle").
 //
 //   RETAIL arm (this module, DEFAULT ON since 2026-08-04): the SAME art AC
-//   shipped, delivered as BC7. Provenance is PER TIER — t512 (the default) is
-//   retail-native level-0 pixels (`manifest source:"retail"`); t1024 is 4x
-//   ESRGAN-family upscaled from retail (2026-08-04: 4x_foolhardy_Remacri, the
-//   statics corpus model; `source:"retail-x4-remacri"`, user-picked over
-//   x4plus/ultrasharp/hat-l). Character is preserved by construction, so
-//   there is nothing to sign off on — the only question is resolution and
-//   compression fidelity, both of which are measurable. One pipeline, one
-//   provenance, one format for the whole world.
+//   shipped, delivered as BC7. Provenance is PER TIER — t1024 (the default
+//   since 2026-08-05) is 4x ESRGAN-family upscaled from retail
+//   (4x_foolhardy_Remacri, the statics corpus model; `source:"retail-x4-remacri"`,
+//   user-picked over x4plus/ultrasharp/hat-l), which is what puts terrain on the
+//   SAME art footing as the Remacri statics around it; t512 is retail-native
+//   level-0 pixels (`manifest source:"retail"`), kept as the low-bandwidth pin.
+//   Character is preserved by construction, so there is nothing to sign off on —
+//   the only question is resolution and compression fidelity, both of which are
+//   measurable. One pipeline, one provenance, one format for the whole world.
 //
 // THIS MODULE DOES NOT REPLACE OR DELETE THE CC0 ARM. When `?terrainBc7` is
 // absent, every function here returns null before it fetches anything, and
@@ -97,18 +98,28 @@ let _flag;
 // whose manifest.json fetches wins. See TERRAIN-BC7-REPORT.md §VRAM for why 2048
 // is deliberately NOT a shippable tier (33 layers x 4 MiB x 4/3 mip = 176 MiB
 // per array, 352 MiB for albedo+nra — 4x today's whole terrain budget).
-// t512 FIRST (2026-08-04): with the arm default-ON the tier order is a cold-load
-// decision, not a quality preference — t512 is ~20 MB on the wire (retail-native
-// level-0 res, 4x VRAM saving) vs ~78 MB for t1024 (VRAM-neutral, 2x linear).
-// At a 666 kbps first-visit line that is ~4 min vs ~15 min of terrain download.
-// `?terrainBc7=1024` pins the high tier for anyone who wants it.
-export const TERRAIN_BC7_TIERS = ["t512", "t1024"];
+//
+// t1024 FIRST (2026-08-05, user direction): the Remacri arm is the intended
+// terrain look, and t512 is NOT it — t512 ships `source:"retail"`, retail-native
+// 512px pixels, so a t512-first default renders no upscaled art at all while the
+// statics around it are all Remacri (the tex-xu7 corpus). Shipping the intended
+// look is the driving metric now, not cold-load bytes:
+//   t1024  81 MB wire · 92.3 MiB GPU (46.1 per array) · 11 mip levels ·
+//          source "retail-x4-remacri" — VRAM-NEUTRAL vs the 88 MiB RGBA8 arm
+//          this replaces, at 2x the linear resolution.
+//   t512   20 MB wire · 22.0 MiB GPU · 10 mip levels · source "retail".
+// `?terrainBc7=512` pins the low tier for a constrained line (the old default),
+// `=1024` pins the new one explicitly, `=off` is still the CC0 escape. The
+// first-visit cost at 666 kbps is ~15 min vs ~4 min of terrain download — the
+// tier pin is the answer for anyone on that line, not the default.
+export const TERRAIN_BC7_TIERS = ["t1024", "t512"];
 let _tierPref = null;
 
 /**
  * `?terrainBc7` — DEFAULT ON since 2026-08-04 (`?terrainBc7=off` is the escape).
  * Tier selectors `?terrainBc7=1024` / `?terrainBc7=512` pin one tier for A/B;
- * absent or any other value runs the default tier order (t512 first).
+ * absent or any other value runs the default tier order (t1024 first since
+ * 2026-08-05 — see TERRAIN_BC7_TIERS for why the Remacri tier leads).
  *
  * History: this was an EXACT-MATCH opt-in from 2026-07-30 to 2026-08-04 because
  * the arm had no GPU eye-test. Flipped default-ON by user direction (the retail
