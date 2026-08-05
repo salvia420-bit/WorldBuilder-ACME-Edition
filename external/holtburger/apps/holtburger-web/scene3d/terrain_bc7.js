@@ -83,7 +83,7 @@
 // the statics path via `bc7Available()`).
 
 import * as THREE from "three";
-import { parseHbc7, bc7LevelBytes, bc7Available, bc7SupportNote } from "./bc7_textures.js";
+import { parseHbc7, bc7LevelBytes, bc7Available, bc7SupportNote, flagIsOff } from "./bc7_textures.js";
 
 export const TERRAIN_BC7_DEPTH = 33;
 const DEFAULT_BASE = "scene3d/assets/terrain_bc7";
@@ -145,7 +145,7 @@ export function terrainBc7Enabled(search) {
     const v = new URLSearchParams(s).get("terrainBc7");
     if (v != null) {
       const t = String(v).toLowerCase();
-      on = !(t === "off" || t === "0" || t === "false" || t === "no");
+      on = !flagIsOff(t);
       if (t === "1024" || t === "t1024") { on = true; tier = "t1024"; }
       else if (t === "512" || t === "t512") { on = true; tier = "t512"; }
     }

@@ -63,6 +63,23 @@ import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder } from "./xu
 // flag + capability
 // --------------------------------------------------------------------------
 
+/**
+ * The shared "this flag is switched off" predicate for the texture family.
+ *
+ * `texBc7`, `texPre` and `terrainBc7` each inlined `off|0|false|no`, and
+ * `texXu7` shipped `!== "off"` — so `?texXu7=0`, `=false` and `=no` all read ON
+ * while the identical spelling disabled its three siblings. The flag audit
+ * passed the whole time, because the docs faithfully recorded the divergence.
+ * One predicate, imported by all four, is what actually removes the class.
+ *
+ * @param {string|null} v raw query value (null/undefined ⇒ not off)
+ */
+export function flagIsOff(v) {
+  if (v == null) return false;
+  const t = String(v).toLowerCase();
+  return t === "off" || t === "0" || t === "false" || t === "no";
+}
+
 let _flag;
 /** `?texBc7=on` — EXACT-MATCH opt-in (`on`/`1`/`true`/`yes`). Absent, empty,
  *  or any other value reads OFF. Pass `search` explicitly in worker context;
@@ -82,11 +99,7 @@ export function bc7Enabled(search) {
         : typeof window !== "undefined" && window.location
           ? window.location.search
           : "";
-    const v = new URLSearchParams(s).get("texBc7");
-    if (v != null) {
-      const t = String(v).toLowerCase();
-      on = !(t === "off" || t === "0" || t === "false" || t === "no");
-    }
+    on = !flagIsOff(new URLSearchParams(s).get("texBc7"));
   } catch (_) {
     on = true;
   }
@@ -396,8 +409,7 @@ export function texPreEnabled(search) {
   let on = true;
   try {
     const s = search !== undefined ? search : typeof window !== "undefined" ? window.location.search : "";
-    const v = new URLSearchParams(s).get("texPre");
-    if (v !== null && ["off", "0", "false", "no"].includes(v.toLowerCase())) on = false;
+    on = !flagIsOff(new URLSearchParams(s).get("texPre"));
   } catch (_) {
     /* malformed location: stay ON (the path is fail-soft end to end) */
   }
@@ -677,6 +689,10 @@ export function _resetBc7ForTest() {
   }
   _stats.lastError = null;
   _flag = undefined;
+  // 2026-08-05 — `_preFlag` was missing here, so a no-arg `texPreEnabled()`
+  // memoised once and then silently decided every later case in the same
+  // process regardless of what the test set up.
+  _preFlag = undefined;
   _supported = null;
   _detectNote = "not probed";
 }

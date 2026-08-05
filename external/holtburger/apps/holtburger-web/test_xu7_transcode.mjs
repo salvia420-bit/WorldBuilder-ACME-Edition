@@ -48,6 +48,13 @@ async function run() {
   // in no runner (now TIER5).
   check(texXu7Enabled("?texXu7=on") === true, "flag: =on enables");
   check(texXu7Enabled("?texXu7=off") === false, "flag: =off is the escape");
+  // 2026-08-05 — the escape is the SHARED `flagIsOff` predicate now. It read
+  // `!== "off"` before, so these three silently stayed ON while the identical
+  // spelling disabled texBc7 / texPre / terrainBc7.
+  check(texXu7Enabled("?texXu7=0") === false, "flag: =0 is off (was ON: polarity divergence)");
+  check(texXu7Enabled("?texXu7=false") === false, "flag: =false is off (was ON)");
+  check(texXu7Enabled("?texXu7=no") === false, "flag: =no is off (was ON)");
+  check(texXu7Enabled("?texXu7=OFF") === false, "flag: the escape is case-insensitive");
   check(texXu7Enabled("") === true, "flag: absent is ON (default-ON since 08-05)");
   check(texXu7Enabled("?other=1") === true, "flag: an unrelated query is still ON");
 

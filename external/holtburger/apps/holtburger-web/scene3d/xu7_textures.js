@@ -25,16 +25,23 @@
 // stripes=8; per-record decode currently runs on the calling thread — the
 // bake worker absorbs atlas feeds, singletons hitch at most once per surface.
 
-import { bc7BlocksFor, bc7LevelBytes } from "./bc7_textures.js";
+import { bc7BlocksFor, bc7LevelBytes, flagIsOff } from "./bc7_textures.js";
 
 let _flag;
-/** DEFAULT-ON (2026-08-05 1070 sign-off); `?texXu7=off` exact-match escape. */
+/**
+ * DEFAULT-ON (2026-08-05 1070 sign-off). Escape: `off`/`0`/`false`/`no`.
+ *
+ * This read `!== "off"` until 2026-08-05, which meant `?texXu7=0`, `=false` and
+ * `=no` all silently read ON while the identical spelling disabled texBc7,
+ * texPre and terrainBc7. Now on the shared `flagIsOff` predicate with its three
+ * siblings.
+ */
 export function texXu7Enabled(search) {
   if (search === undefined && _flag !== undefined) return _flag;
   let on = true;
   try {
     const s = search !== undefined ? search : typeof window !== "undefined" ? window.location.search : "";
-    on = new URLSearchParams(s).get("texXu7") !== "off";
+    on = !flagIsOff(new URLSearchParams(s).get("texXu7"));
   } catch (_) {
     on = true;
   }
