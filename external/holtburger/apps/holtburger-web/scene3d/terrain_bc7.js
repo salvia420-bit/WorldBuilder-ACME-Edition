@@ -104,9 +104,9 @@ let _flag;
 // 512px pixels, so a t512-first default renders no upscaled art at all while the
 // statics around it are all Remacri (the tex-xu7 corpus). Shipping the intended
 // look is the driving metric now, not cold-load bytes:
-//   t1024  81 MB wire · 92.3 MiB GPU (46.1 per array) · 11 mip levels ·
-//          source "retail-x4-remacri" — VRAM-NEUTRAL vs the 88 MiB RGBA8 arm
-//          this replaces, at 2x the linear resolution.
+//   t1024  81 MB wire · 88.0 MiB GPU (44.0 per array) · 11 mip levels ·
+//          source "retail-x4-remacri" — EXACTLY VRAM-NEUTRAL against the
+//          88.0 MiB RGBA8 arm it replaces, at 2x the linear resolution.
 //   t512   20 MB wire · 22.0 MiB GPU · 10 mip levels · source "retail".
 // `?terrainBc7=512` pins the low tier for a constrained line (the old default),
 // `=1024` pins the new one explicitly, `=off` is still the CC0 escape. The
@@ -164,6 +164,68 @@ export function terrainBc7TierOrder() {
   return _tierPref ? [_tierPref] : [...TERRAIN_BC7_TIERS];
 }
 
+/** Anisotropy floor the high-res tier is worth paying for.
+ *
+ * 16 = the GTX 1070's reported maximum, and the 1070 is the target this arm is
+ * tuned for (the fleet's only real GPU — see the runbook). Nothing weaker is
+ * penalised by the number: three clamps `texture.anisotropy` to
+ * `capabilities.getMaxAnisotropy()` when it sets TEXTURE_MAX_ANISOTROPY_EXT, so
+ * a GPU reporting 8 or 4 silently gets its own ceiling instead of an error. */
+export const TERRAIN_BC7_HIRES_ANISO = 16;
+
+/**
+ * `?terrainAniso=N` — anisotropic tap count for the TWO BC7 terrain arrays.
+ *
+ * WHY TERRAIN GETS ITS OWN NUMBER. The global `setAdapterMaxAnisotropy` cap is
+ * a per-PRESET budget spread over every adapter-built texture in the scene
+ * (low 1 / mid 4 / high+ultra 16, clamped to the GPU max). Terrain is two
+ * textures, and it is the surface that is ALWAYS viewed at grazing incidence —
+ * which is exactly the regime where the anisotropy cap, not the texel density,
+ * decides what you can see. At `mid` the measured live state was `anisotropy: 4`
+ * on a GPU reporting 16, and at 4 taps a 1024² atlas resolves to roughly what a
+ * 512² one does on a receding ground plane: the entire point of the t1024 tier
+ * gets filtered away before it reaches the screen. So when the high-res tier is
+ * the one that loaded, floor the count at TERRAIN_BC7_HIRES_ANISO on these two
+ * arrays only. Bounded cost — two textures, not the whole scene — and it buys
+ * back exactly the thing the tier exists for.
+ *
+ * Rules, in order:
+ *   - `?terrainAniso=N` wins outright (N >= 1), including over the floor.
+ *   - an explicit global `?anisotropy=N` is a deliberate A/B and is NOT
+ *     overridden — the floor is skipped entirely.
+ *   - `base <= 1` (preset `low`, or a GPU reporting 1) stays at base: someone
+ *     asking for the cheap preset is not asking for this.
+ *   - otherwise: t1024 ⇒ max(base, TERRAIN_BC7_HIRES_ANISO); t512 ⇒ base
+ *     unchanged (the low tier has no extra texel density to resolve).
+ *
+ * Values above the GPU maximum are safe to request — three clamps to
+ * `capabilities.getMaxAnisotropy()` when it sets TEXTURE_MAX_ANISOTROPY_EXT.
+ */
+export function terrainBc7Anisotropy(base, tier, search) {
+  const b = Number.isFinite(base) ? Math.max(1, base | 0) : 1;
+  let s = search;
+  if (s === undefined) {
+    try {
+      s = typeof window !== "undefined" && window.location ? window.location.search : "";
+    } catch (_) {
+      s = "";
+    }
+  }
+  let q = null;
+  try {
+    q = new URLSearchParams(s);
+  } catch (_) {
+    return b;
+  }
+  const own = Number.parseInt(q.get("terrainAniso"), 10);
+  if (Number.isFinite(own) && own >= 1) return own;
+  // A hand-set global cap is an experiment; don't silently outvote it.
+  const globalOverride = Number.parseInt(q.get("anisotropy"), 10);
+  if (Number.isFinite(globalOverride) && globalOverride >= 1) return b;
+  if (b <= 1) return b;
+  return tier === "t1024" ? Math.max(b, TERRAIN_BC7_HIRES_ANISO) : b;
+}
+
 /** Test hook: clear the memoised flag read. */
 export function _resetTerrainBc7ForTest() {
   _flag = undefined;
@@ -176,6 +238,8 @@ export function _resetTerrainBc7ForTest() {
   _stats.errors = 0;
   _stats.lastError = null;
   _stats.built = null;
+  _stats.anisotropy = 0;
+  _stats.anisotropyBase = null;
 }
 
 const _stats = {
@@ -188,6 +252,8 @@ const _stats = {
   errors: 0,
   lastError: null,
   built: null, // "color+nra" | "color" | null
+  anisotropy: 0,      // taps actually requested on both arrays
+  anisotropyBase: null, // what the global preset cap offered
 };
 
 /** Read via `window.__terrainBc7Stats()` (installed by terrain.js). */
@@ -499,11 +565,17 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
   const color = await loadTerrainBc7Channel(manifest, "color", base);
   if (!color) return null;
 
+  // Tier-aware anisotropy — resolved AFTER the manifest, because the floor only
+  // applies to the high-res tier (see `terrainBc7Anisotropy`).
+  const aniso = terrainBc7Anisotropy(anisotropy, manifest.tier);
+  _stats.anisotropy = aniso;
+  _stats.anisotropyBase = Number.isFinite(anisotropy) ? anisotropy : null;
+
   let atlasTexture;
   try {
     atlasTexture = buildTerrainBc7Array(color, {
       colorSpace: THREE.SRGBColorSpace,
-      anisotropy,
+      anisotropy: aniso,
       name: "scene3d-terrain-bc7-albedo-array",
     });
   } catch (e) {
@@ -523,7 +595,11 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
         // Vector + scalar data — no transfer function. Matches
         // adapter.js buildPbrNraTexture's NoColorSpace.
         colorSpace: THREE.NoColorSpace,
-        anisotropy,
+        // Same count as the albedo, deliberately: the normal/roughness/AO
+        // planes are sampled at the SAME cellUv as the albedo, so a lower tap
+        // count here would make lighting resolve coarser than the colour it
+        // shades — visible as flat-looking ground under a sharp texture.
+        anisotropy: aniso,
         name: "scene3d-terrain-bc7-nra-array",
       });
     } catch (e) {
@@ -542,7 +618,8 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
   console.log(
     `[terrain-bc7] ${manifest.tier ?? "?"} ${manifest.source ?? "?"} — ` +
       `${TERRAIN_BC7_DEPTH} layers @ ${color.tileSize}px, ${color.levels} mip levels, ` +
-      `${_stats.built}, ${(bytes / (1024 * 1024)).toFixed(1)} MiB GPU ` +
+      `${_stats.built}, aniso ${aniso}${aniso !== _stats.anisotropyBase ? ` (preset ${_stats.anisotropyBase})` : ""}, ` +
+      `${(bytes / (1024 * 1024)).toFixed(1)} MiB GPU ` +
       `(RGBA8 equivalent ${((color.tileSize * color.tileSize * 4 * TERRAIN_BC7_DEPTH * (nraTexture ? 2 : 1) * 4) / 3 / (1024 * 1024)).toFixed(1)} MiB)`
   );
   return {

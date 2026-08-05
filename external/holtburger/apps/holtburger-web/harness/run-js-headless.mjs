@@ -163,6 +163,7 @@ const TIER4 = [
 // asserted nothing — `--allow-skips`) still fails them, which is the correct
 // outcome for the two suites that silently no-op when THREE_PATH is absent.
 const TIER5 = [
+  { tier: 5, flag: "terrain_bc7_aniso", file: "test_terrain_bc7_aniso.mjs" },
   { tier: 5, flag: "r10_index_orchestrator", file: "test_r10_index_orchestrator.mjs" },
   { tier: 5, flag: "loading_screen_portal_event", file: "test_loading_screen_portal_event.mjs" },
   { tier: 5, flag: "c1_facing_camera", file: "tests/test_c1_facing_camera.cjs" },
