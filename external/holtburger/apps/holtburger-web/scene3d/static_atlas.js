@@ -916,6 +916,16 @@ function _lbKeyOfId(id) {
  * pre-filters (statics.js's walk-in feed) use the same rule as the feed itself
  * and can't silently drop BC7 nodes back to one-draw-per-prop.
  */
+/**
+ * Should this node be held out of a bucket because its BC7 verdict is still in
+ * flight? Exported so the regression suite exercises THE gate rather than a
+ * transcription of it — the 2026-08-05 P1 hole (see the call site) was
+ * invisible precisely because nothing tested the predicate itself.
+ */
+export function bc7AtlasShouldDefer(mat) {
+  return bc7Available() && bc7PendingOn(mat);
+}
+
 export function isBc7AtlasTexture(tex) {
   return !!(
     tex &&
@@ -1112,12 +1122,29 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         _atlasStats.ptFiltered++; passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
       }
       // X6 — a surface whose BC7 verdict is still IN FLIGHT must not be committed
-      // to an RGBA8 bucket: a bucket's array format is fixed by `texStorage3D` at
-      // allocation, so the wrong choice pins that surface at 32 bpp until its LB
-      // re-streams. Hold the node out for this round instead (unbatched, still
-      // rendered — fail-soft); the next per-LB feed after eviction/re-entry sees
-      // the resolved `mat.map`. Only reachable under `?texBc7=on`.
-      if (bc7Available() && !bc7Tex && bc7PendingOn(mat)) {
+      // to a bucket: a bucket's array format AND dimensions are fixed by
+      // `texStorage3D` at allocation, so the wrong choice pins that surface until
+      // its LB re-streams. Hold the node out for this round instead (unbatched,
+      // still rendered — fail-soft); the next per-LB feed after eviction/re-entry
+      // sees the resolved `mat.map`. Only reachable under `?texBc7=on`.
+      //
+      // 2026-08-05 — the gate USED TO read `!bc7Tex && bc7PendingOn(mat)`, and
+      // P1 preview-first walked straight through it. Once the quarter-res PRE
+      // record swaps in, `mat.map` IS a BC7 CompressedTexture while
+      // `__bc7Pending` is still set (upgradeMaterialToBc7 clears the marker only
+      // in the FULL phase), so `!bc7Tex` was false and the node committed — into
+      // a bucket keyed at the PRE's dimensions, e.g. 128x128 instead of 512x512.
+      // The later full swap re-points `mat.map`, but the atlas layer holds a
+      // COPY, so that prop rendered at quarter resolution until its LB
+      // re-streamed, and layer dedup split as well (pre uuid != full uuid). It
+      // also contradicted the documented contract — url-flags.md `texPre`:
+      // "Statics-ATLAS buckets are full-only by design".
+      //
+      // `bc7PendingOn` alone is the correct and sufficient test: while the
+      // marker is set, `mat.map` is either the RGBA8 twin or the PRE texture and
+      // NEVER the full record (the full phase deletes the marker before it
+      // swaps), so dropping `!bc7Tex` restores exactly the pre-P1 behaviour.
+      if (bc7AtlasShouldDefer(mat)) {
         _atlasStats.ptBc7Deferred++; _bumpBc7Stat("deferredNodes"); passthrough.push(n); continue;
       }
       // A MECH-B vertex-deformed variant (deformation.windSwayGpu — swaying
