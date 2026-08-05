@@ -7,11 +7,12 @@
 // transcoder emits the same BC7 blocks, which flow through the same
 // makeBc7Texture / atlas upload paths.
 //
-// FLAG: `?texXu7=on` — EXACT-MATCH opt-in until the 1070 confirms the new
-// base blocks (house rules; the encode is ±0.9 dB vs bc7enc_rdo, so this is
-// an eye call, not a correctness call). When on, the record source tries the
-// xu7 namespace FIRST and falls back to `tex-bc7` on any miss/failure, so a
-// dist without xu7 records behaves exactly as before.
+// FLAG: DEFAULT-ON since 2026-08-05 (owner redmi eye-pass on the 1070
+// hi-res capture set); `?texXu7=off` is the EXACT-MATCH escape. The encode
+// is ±0.9 dB vs bc7enc_rdo, so this was an eye call, not a correctness
+// call. When on, the record source tries the xu7 namespace FIRST and falls
+// back to `tex-bc7` on any miss/failure, so a dist without xu7 records
+// behaves exactly as before.
 //
 // TRANSCODER: scene3d/transcoder/basis_transcoder.{js,wasm} (1.04 MB wasm,
 // vendored from binomialLLC/basis_universal 9bebe167 / v2.50.0). The glue is
@@ -27,15 +28,15 @@
 import { bc7BlocksFor, bc7LevelBytes } from "./bc7_textures.js";
 
 let _flag;
-/** `?texXu7=on` exact-match opt-in (default OFF until 1070-confirmed). */
+/** DEFAULT-ON (2026-08-05 1070 sign-off); `?texXu7=off` exact-match escape. */
 export function texXu7Enabled(search) {
   if (search === undefined && _flag !== undefined) return _flag;
-  let on = false;
+  let on = true;
   try {
     const s = search !== undefined ? search : typeof window !== "undefined" ? window.location.search : "";
-    on = new URLSearchParams(s).get("texXu7") === "on";
+    on = new URLSearchParams(s).get("texXu7") !== "off";
   } catch (_) {
-    on = false;
+    on = true;
   }
   if (search === undefined) _flag = on;
   return on;

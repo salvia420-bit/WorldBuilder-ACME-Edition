@@ -11,8 +11,10 @@
 //        --window-position=-32000,-32000   (off-screen; a person is at that desk)
 //        --user-data-dir=C:\Temp\cdpwb-wls (the ONLY safe cleanup handle)
 //        --remote-debugging-port=9333 --use-angle=d3d11 --ignore-gpu-blocklist
-//   2. Tunnel (no `timeout` wrapper — it breaks -f):
-//        ssh -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 young@100.127.215.75
+//   2. Tunnel (no `timeout` wrapper — it breaks -f). -R 8080 is the ws↔UDP
+//      bridge (holtburger-wsbridge) — WITHOUT it every login dies with
+//      "WsTransport ws handshake failed" and __bootState='error' (2026-08-05):
+//        ssh -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 young@100.127.215.75
 //   3. serve.py on the laptop at :8765, ACE on :9000.
 //
 // This script NEVER closes the browser and NEVER touches a page it did not
