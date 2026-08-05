@@ -649,3 +649,7 @@ pipeline_data/output/
 # agent worktrees + fleet job artifacts (net-review A15 §4)
 .claude/worktrees/
 fleet-out/
+
+# tools/bc1ref — build outputs (sources committed; see tools/bc1ref/build.sh)
+tools/bc1ref/bin/
+tools/bc1ref/obj/
