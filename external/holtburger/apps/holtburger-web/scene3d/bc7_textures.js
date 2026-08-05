@@ -57,7 +57,7 @@ import * as THREE from "three";
 // P2 — call-time-only cycle with xu7_textures.js (it imports bc7BlocksFor/
 // bc7LevelBytes back from here); both sides bind functions, never eval-time
 // values, so the cycle is safe.
-import { texXu7Enabled, transcodeXu7, xu7Stats } from "./xu7_textures.js";
+import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder } from "./xu7_textures.js";
 
 // --------------------------------------------------------------------------
 // flag + capability
@@ -544,6 +544,16 @@ export class Bc7RecordSource {
       if (!texXu7Enabled() || this._fetchImpl || !this._wasm || typeof this._wasm.xu7_blocks !== "function") {
         return Promise.resolve(null);
       }
+      // 2026-08-05 — ASK whether the transcoder is up; never AWAIT it. The
+      // module is 1.04 MB of lazily-loaded wasm, and awaiting it here put every
+      // full-record fetch behind that load: measured ~15 s on localhost with
+      // zero surfaces upgrading and every material stuck `__bc7Pending` (so the
+      // atlas deferred them too), and a load that never settled would have been
+      // permanent AND silent — the catch below only sees a REJECTION, not a
+      // pending promise. See `ensureXu7Transcoder`. Until it lands, records take
+      // the hbc7 route: the same bytes the tier-off boot would have spent, and
+      // no xu7 payload fetched only to be dropped into a stalled await.
+      if (!ensureXu7Transcoder()) return Promise.resolve(null);
       return Promise.resolve(this._wasm.xu7_blocks(id))
         .then((b) => {
           if (!b || b.length === 0) return null;

@@ -49,6 +49,10 @@ const _stats = {
   decodeErrors: 0,
   decodeMs: 0,
   lastError: null,
+  // Records that took the hbc7 route because the transcoder was not up yet.
+  // Expected to be non-zero on every cold boot and to stop climbing once the
+  // module lands; a count that keeps rising means the load never finished.
+  notReadySkips: 0,
 };
 
 export function xu7Stats() {
@@ -56,6 +60,40 @@ export function xu7Stats() {
 }
 
 let _modulePromise = null;
+let _module = null;
+
+/**
+ * The transcoder IF it is already up, else null — kicking the load on the way
+ * past. This is the gate `Bc7RecordSource` uses, and it is the reason the xu7
+ * tier cannot stall the BC7 path.
+ *
+ * WHY THIS EXISTS. `transcodeXu7` awaits `xu7Transcoder()`, and the fallback
+ * contract ("any miss/failure falls back to tex-bc7") covers a REJECTED load,
+ * not one that simply never settles. With the record source awaiting it, every
+ * full-record fetch queued behind a slow module load: measured on localhost,
+ * ~15 s from the first xu7 decode to the module being ready (the 50 KB glue
+ * alone took 7.2 s behind the app's 24-way fetch concurrency over HTTP/1.1's
+ * 6-connection limit), and on the 666 kbps line this tier targets the 1.04 MB
+ * wasm is ~13 s by itself. During that window NO surface upgraded, every
+ * material kept `__bc7Pending`, and the atlas deferred all of them. A load that
+ * never settled at all would have been permanent and silent — `transcoderFailed`
+ * stays null while a promise is merely pending.
+ *
+ * Asking "is it up?" instead of "wait for it" removes the failure mode
+ * structurally rather than papering over it with a timeout: while the module is
+ * loading, records take the hbc7 route (correct pixels, the bytes we would have
+ * spent with the tier off), and the xu7 saving starts as soon as it lands. It
+ * also stops the pre-fix waste of fetching an xu7 payload and then dropping it
+ * into a stalled await.
+ */
+export function ensureXu7Transcoder(baseUrl) {
+  if (_module) return _module;
+  // Fire-and-forget: something has to start the load, and this is the only
+  // caller on the hot path.
+  xu7Transcoder(baseUrl);
+  _stats.notReadySkips += 1;
+  return null;
+}
 
 /**
  * Load + initialize the transcoder module ONCE per JS context. Resolves to
@@ -78,6 +116,7 @@ export function xu7Transcoder(baseUrl) {
         locateFile: (f) => new URL(f, base).href,
       });
       module.initializeBasis();
+      _module = module;
       _stats.transcoderLoads += 1;
       return module;
     } catch (e) {
@@ -94,13 +133,19 @@ export function xu7Transcoder(baseUrl) {
  *  browser-shaped UMD loader — emscripten's node branch requires
  *  `require`, absent in ESM eval). */
 export function _setXu7ModuleForTest(modulePromise) {
-  _modulePromise = modulePromise;
+  // Accepts a module or a promise for one. `await xu7Transcoder()` afterwards
+  // to make `ensureXu7Transcoder()` report ready.
+  _modulePromise = Promise.resolve(modulePromise).then((m) => {
+    _module = m ?? null;
+    return m ?? null;
+  });
 }
 
 /** Test hook: reset flag + transcoder memo + stats. */
 export function _resetXu7ForTest() {
   _flag = undefined;
   _modulePromise = null;
+  _module = null;
   for (const k of Object.keys(_stats)) {
     if (typeof _stats[k] === "number") _stats[k] = 0;
     else _stats[k] = null;

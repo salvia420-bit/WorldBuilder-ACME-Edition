@@ -10,6 +10,8 @@ import {
   _resetXu7ForTest,
   _setXu7ModuleForTest,
   xu7Stats,
+  xu7Transcoder,
+  ensureXu7Transcoder,
 } from "./scene3d/xu7_textures.js";
 import {
   initBc7Source,
@@ -93,6 +95,11 @@ async function run() {
   // so this block does not inherit whatever an earlier case left behind.
   _resetXu7ForTest();
   _setXu7ModuleForTest(modulePromise);
+  // 2026-08-05 — the record source now ASKS whether the transcoder is up
+  // rather than awaiting it (ensureXu7Transcoder), so a preset module has to
+  // be resolved before the first getAsync or the source correctly routes to
+  // hbc7 instead.
+  await xu7Transcoder();
   const origWindow = globalThis.window;
   globalThis.window = { location: { search: "?texXu7=on" } };
   const parsed2 = await src.getAsync(0x06003789);
@@ -105,6 +112,7 @@ async function run() {
   _setBc7SupportForTest(true);
   _resetXu7ForTest();
   _setXu7ModuleForTest(modulePromise);
+  await xu7Transcoder();
   globalThis.window = { location: { search: "?texXu7=on" } };
   let fellBack = false;
   const src2 = initBc7Source({
@@ -119,6 +127,35 @@ async function run() {
   const r2 = await src2.getAsync(0x06001111);
   globalThis.window = origWindow;
   check(r2 === null && fellBack, "source: empty xu7 falls back to bc7_blocks");
+
+  // --- 2026-08-05: the transcoder must never STALL the bc7 path -------------
+  // With the module not yet up, the record source must route to hbc7 rather
+  // than awaiting a 1.04 MB lazy wasm load (and must not fetch an xu7 payload
+  // it is going to drop).
+  _resetBc7ForTest();
+  _setBc7SupportForTest(true);
+  _resetXu7ForTest();
+  check(ensureXu7Transcoder("http://127.0.0.1:0/nope/") === null, "gate: not-ready reports null");
+  check(xu7Stats().notReadySkips === 1, "gate: the skip is tallied");
+  globalThis.window = { location: { search: "?texXu7=on" } };
+  let xu7Asked = false;
+  let hbc7Served = false;
+  const src3 = initBc7Source({
+    wasmExports: {
+      xu7_blocks: async () => {
+        xu7Asked = true;
+        return new Uint8Array(0);
+      },
+      bc7_blocks: async () => {
+        hbc7Served = true;
+        return null;
+      },
+    },
+  });
+  const r3 = await src3.getAsync(0x06002222);
+  globalThis.window = origWindow;
+  check(r3 === null && hbc7Served, "gate: transcoder-not-up routes straight to hbc7");
+  check(xu7Asked === false, "gate: and does NOT fetch an xu7 payload it would drop");
 
   console.log(failures === 0 ? "ALL PASS" : `${failures} FAILURES`);
   process.exit(failures === 0 ? 0 : 1);
