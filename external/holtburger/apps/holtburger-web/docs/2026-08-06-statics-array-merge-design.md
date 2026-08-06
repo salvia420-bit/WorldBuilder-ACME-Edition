@@ -17,6 +17,50 @@ different task, and §6 specs it.
 
 ---
 
+## 0b. CORRECTION to §0a — canonical tiers are NOT the thread; native-tile array merging is
+
+§0a read the `snapped` rows as "canonical tiers are worth ~3.9 ms, and they are a bake
+change". **That was a misreading of the baseline, and I made it.** Those rows price their
+saving against the *unmerged* drawn bucket count, so each one silently bundles in the
+native-tile array-merge win and then attributes the whole thing to the tier.
+
+Re-measured with every rule scored in ONE keying against the SAME baseline, on a live Nanto
+session (127 drawn submitted buckets, native keying → 54):
+
+| rule | drawn buckets | saved | worth | detail loss |
+|---|---|---|---|---|
+| **native — array-merge only** | **54** | **73** | **+2.92 ms** | **none** |
+| square-snap (short axis up) | 52 | +2 | +0.08 ms | none |
+| tiers `[128,512,2048]` | 42 | +12 | +0.48 ms | 0.2% of corpus |
+| square + cap 1024 | 41 | +13 | +0.52 ms | 9.2% |
+| tiers `[256,1024]` | 34 | +20 | +0.80 ms | 9.2%+ |
+| tiers `[512]` | 28 | +26 | +1.04 ms | **31.6%** |
+
+**Nearly the whole prize is the array merge at NATIVE tile sizes — many textures of one
+(tile, state) sharing one array — and it costs no fidelity at all.** It agrees with this
+doc's own §3 "the design" row (149 → 84, +2.60 ms) once both are measured the same way.
+
+**Canonical tiers are a marginal add-on with a steep fidelity price.** The full corpus
+(2,893 records, from `tex-bc7-pre/derive-ledger.jsonl`) is 34 distinct (w,h) classes but only
+6 distinct max-dimensions — 512² alone is 35.1%, and **26.3% are non-square**. Snapping to a
+single 512 tier downscales **915 records (31.6%)**, i.e. every 512, 1024 and 2048 including
+the Remacri hi-res corpus, to buy 1.04 ms. Fidelity-preserving snapping buys 0.08–0.52 ms.
+
+**So the bake-side canonical-tier task is WITHDRAWN.** It is the wrong end of the frontier:
+the perf comes precisely from destroying the resolution variety the corpus was upscaled to
+provide. §0a's "the thread to pull" conclusion does not survive its own follow-up
+measurement.
+
+Two facts worth keeping from the investigation anyway:
+* Statics `tex-bc7` records are level-0 only, but the v2 mip container is live and shipping
+  (terrain carries 10–11 levels) and `tex-bc7-pre/derive_pre.py` already downscales records by
+  **byte-slicing a mip level, no re-encode**. So IF a downscale tier is ever wanted, it is
+  cheap to produce — the reason not to do it is fidelity, not cost.
+* Upscaling can never be byte-sliced, so any snap-UP tier (the only fidelity-preserving
+  direction) is a genuine resample-and-re-encode of the corpus.
+
+---
+
 ## 0a. MEASURED ON THE 1070 (2026-08-06, after this doc was written) — the verdict moves
 
 The projection above was estimated with R≈8 drawn regions. `window.__statMergeProjection()`
