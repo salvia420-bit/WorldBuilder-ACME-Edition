@@ -101,6 +101,47 @@ const PALETTED_SLICE_ON = (() => {
 })();
 const PALETTED_SLICE_MS = 6;
 
+// `?palDedup` (2026-08-06) — upper bound on how long a spawn will wait for
+// ANOTHER spawn's paletted decode before giving up and taking the fallback
+// (which the R-8 recolored ladder then heals). The claim contract makes this
+// unreachable in normal operation: entities.js settles every claim it takes on
+// every exit path, so the wait is bounded by the owner's own wasm fetch. It
+// exists for the one case the contract cannot cover — a
+// `fetchEntitySurfacesPixels` promise that never settles at all (dead worker),
+// which today hangs only the owner and must not be allowed to hang the whole
+// town's rigs behind it. 8 s is ~9× the measured 897 ms mean decode.
+const PALETTED_JOIN_TIMEOUT_MS = 8000;
+
+/**
+ * `?palDedup` — await a spawn's joined paletted claims as one batch.
+ * Resolves to `[{ did, material }]`; `material` is null when the owner
+ * produced nothing (bailed / empty decode) or when the batch timed out.
+ * Never rejects: a settle is a resolve, and a rejected join is treated as
+ * "produced nothing" rather than aborting the whole material block.
+ * ONE timer for the batch, cleared on the normal path.
+ */
+async function _awaitPalettedJoins(joins) {
+  const all = Promise.all(
+    joins.map((j) =>
+      Promise.resolve(j.promise)
+        .catch(() => null)
+        .then((material) => ({ did: j.did, material: material ?? null }))
+    )
+  );
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(
+      () => resolve(joins.map((j) => ({ did: j.did, material: null }))),
+      PALETTED_JOIN_TIMEOUT_MS
+    );
+  });
+  try {
+    return await Promise.race([all, timeout]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
 // === Wave R2.A — entity-attached dynamic lights (SetLight hook 25) (2026-05-28) ===
 // `?entityLights=on` opt-in. Default OFF → no entity lights are created and
 // the SetLight (25) hook stays a logged no-op, so the rendered output is
@@ -4306,6 +4347,29 @@ export class EntityManager {
     // cheaper cache.preload branch below. Real-mode entities still
     // take the palette path so their recolored surfaces look right.
     if (hasPaletteSubs && !WIREFRAME_MODE && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
+      // `?palDedup` (2026-08-06) — this spawn's single-flight claims, did →
+      // settle. Declared OUTSIDE the try so the `finally` can sweep them: the
+      // contract on `MaterialCache.claimPalettedInflight` is that a claim MUST
+      // settle on every exit path, and the paths out of this block include a
+      // generation-abort `break`, a throwing wasm fetch, and normal completion.
+      // `_palSettle` settles-and-forgets one key; `_palSweepClaims` settles the
+      // rest with null (= "I produced nothing" — the joiner then re-checks the
+      // cache and otherwise takes the fallback, exactly as it would have if it
+      // had run its own empty decode).
+      const palClaims = new Map();
+      const _palSettle = (did, mat) => {
+        const s = palClaims.get(did >>> 0);
+        if (!s) return;
+        palClaims.delete(did >>> 0);
+        try { s(mat ?? null); } catch (_) { /* a settle must never break spawn */ }
+      };
+      const _palSweepClaims = () => {
+        if (palClaims.size === 0) return;
+        for (const s of [...palClaims.values()]) {
+          try { s(null); } catch (_) {}
+        }
+        palClaims.clear();
+      };
       try {
         const dids = new Uint32Array([...allSurfaceDids]);
         if (dids.length > 0) {
@@ -4334,9 +4398,26 @@ export class EntityManager {
           // signatures so a transparent dedup layer skips most fetches.
           // The cache holds CACHE-OWNED materials so they survive entity
           // dispose — see MaterialCache.installPaletted.
+          //
+          // `?palDedup` (2026-08-06) — the cache lookup above is SYNCHRONOUS
+          // and the mint is ~897 ms of `await` away, so before this every rig
+          // that spawned inside another rig's decode window missed too and
+          // minted its own copy. Measured at Nanto: FOUR material objects for
+          // ONE `__paletteKey` on four guids — three wasted decodes, three
+          // wasted texture uploads, three extra material objects (each its own
+          // program/uniform state, and invisible to any identity-keyed merge —
+          // `static_batch_x::_getOrCreateBucket` is the in-tree precedent) —
+          // and three orphans the caches cannot reclaim: not in
+          // `palettedMaterials` (the last install won the slot) yet
+          // `__cacheOwned`, so the entity's dispose skips them too.
+          // A miss now looks for an in-flight CLAIM before deciding to fetch:
+          // join it if one exists, otherwise take the claim and fetch. `off` ⇒
+          // both calls return null ⇒ the pre-2026-08-06 path, unchanged.
           const entityMaterials = new Map();
           const missDids = [];
           const missIdx = [];
+          /** @type {Array<{did: number, promise: Promise<object|null>}>} */
+          const palJoins = [];
           if (this.materialCache && !WIREFRAME_MODE) {
             for (let i = 0; i < dids.length; i += 1) {
               const did = dids[i] >>> 0;
@@ -4344,8 +4425,17 @@ export class EntityManager {
               if (cached) {
                 entityMaterials.set(did, cached);
               } else {
+                const pending = this.materialCache.getPalettedInflight(did, paletteId, subPalettes);
+                if (pending) {
+                  palJoins.push({ did, promise: pending });
+                  continue;
+                }
                 missDids.push(did);
                 missIdx.push(i);
+                // Nothing awaits between the `getPalettedInflight` above and
+                // this claim, so the claim cannot be stolen in between.
+                const settle = this.materialCache.claimPalettedInflight(did, paletteId, subPalettes);
+                if (settle) palClaims.set(did, settle);
               }
             }
           } else {
@@ -4418,6 +4508,12 @@ export class EntityManager {
                 this.materialCache?.fallbackMaterial ??
                   this._fallbackMaterial()
               );
+              // `?palDedup` — settle with null, NOT with the fallback we just
+              // took: null is the honest "no paletted material exists for this
+              // signature" answer, and it puts the joiner on exactly the branch
+              // the owner is on — shared fallback now, mapless mesh, R-8
+              // recolored ladder heals both rigs from the same later install.
+              _palSettle(did, null);
               if (sp && typeof sp.free === "function") sp.free();
               continue;
             }
@@ -4496,6 +4592,32 @@ export class EntityManager {
                 inst.registerOwnedMaterial(mat);
               }
               entityMaterials.set(did, mat);
+              // `?palDedup` — hand the freshly-installed material to whoever
+              // joined this claim. AFTER installPaletted, so the material is
+              // already `__cacheOwned`/`__paletteKey`-tagged and a joiner sees
+              // byte-identical userData to a plain cache hit.
+              _palSettle(did, mat);
+            }
+          }
+          // `?palDedup` — settle every claim we still hold BEFORE awaiting any
+          // join. This is the deadlock argument: two spawns can each own a key
+          // the other joins (A owns k1 + joins k2, B owns k2 + joins k1), so a
+          // spawn must never be parked on a join while still holding a claim.
+          // After the mint loop nothing more will be minted — the leftovers are
+          // the generation-abort `break`'s unreached DIDs — so null is correct.
+          _palSweepClaims();
+          if (palJoins.length > 0) {
+            const joined = await _awaitPalettedJoins(palJoins);
+            for (const { did, material } of joined) {
+              // A joiner that got null (owner bailed, or decoded empty) re-reads
+              // the cache — a LATER spawn may have installed the signature in
+              // the meantime — and only then takes the fallback, which leaves a
+              // mapless mesh for the R-8 ladder to heal.
+              const m = material
+                ?? this.materialCache?.getCachedPaletted(did, paletteId, subPalettes)
+                ?? this.materialCache?.fallbackMaterial
+                ?? this._fallbackMaterial();
+              if (m) entityMaterials.set(did, m);
             }
           }
           inst._entityMaterials = entityMaterials;
@@ -4507,6 +4629,13 @@ export class EntityManager {
           e
         );
         try { window.__diag?.assets?.onMaterialError?.({ guid, dids: allSurfaceDids, error: e, source: "surface" }); } catch (_) {}
+      } finally {
+        // `?palDedup` — belt-and-braces. The sweep above covers the normal and
+        // `break` exits; this one covers a throwing fetch/mint (the catch just
+        // above) and anything a future edit adds. Never let a claim outlive the
+        // spawn that took it — a joiner would park on it until the join
+        // timeout, i.e. an unrecolored rig for that long.
+        _palSweepClaims();
       }
     } else if (allSurfaceDids.size > 0 && this.materialCache) {
       // Cache hit / miss flows through the shared cache. Preload via
