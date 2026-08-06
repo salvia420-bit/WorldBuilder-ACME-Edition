@@ -5076,6 +5076,15 @@
             // "no census" while the worker half reports fine — which would
             // look exactly like the main instance holding nothing.
             hb_mem_census: __hbWasmNs.hb_mem_census,
+            // 2026-08-05 atlas-staging seam (scene3d/surface_planes.js). The
+            // atlas stages layers from `THREE.DataTexture.image.data`; these two
+            // give it a second source that does not depend on the texture
+            // keeping its CPU copy — which is the 1,332 MB we want back. Same
+            // namespace access, same stale-pkg reason; and the same
+            // curated-opts trap applies, so they are listed HERE or
+            // `surface_planes.js` silently runs texture-only forever.
+            surfacePlanesCached: __hbWasmNs.surfacePlanesCached,
+            surfacePlanesCachedHas: __hbWasmNs.surfacePlanesCachedHas,
             // DRAIN-WIRING FIX (2026-08-01) — the two motion side-channel drains
             // (`?multiAction` / `?castAxes`, both documented DEFAULT-ON) guarded
             // on `sessionHandle.pollMotionActions` / `.pollMotionAxes` being

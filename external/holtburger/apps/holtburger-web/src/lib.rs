@@ -12390,6 +12390,52 @@ pub async fn fetch_surface_anim_frames(surface_did: u32) -> Result<SurfaceAnimFr
     })
 }
 
+/// SYNCHRONOUS memo-only accessor for one surface's decoded planes
+/// (2026-08-05, atlas-staging seam).
+///
+/// Returns the cached [`SurfacePixels`] or `None` — it NEVER fetches, never
+/// decodes, never walks. That restriction is the whole point: the statics-atlas
+/// layer feed (`scene3d/static_atlas.js`) is synchronous and cannot await, and
+/// today it stages layers by reading `THREE.DataTexture.image.data` — the very
+/// CPU copy we want to stop retaining (1,332 MB of the heap, measured
+/// 2026-08-05). This gives that feed a second source it can consult in the same
+/// tick, so the texture stops being the only place the pixels live.
+///
+/// A `None` is NOT a failure, it is a "not this tick": the caller defers the
+/// node for a round (the mechanism `bc7AtlasShouldDefer` already implements)
+/// and warms the memo with the async [`fetch_surface_pixels`] meanwhile. Expect
+/// misses to be common — `?surfaceBudgetMB` caps this store at 24 MB on the
+/// main thread, well under a route's working set, so the deferral path is the
+/// normal path and not an edge case.
+///
+/// Palette-free class only, deliberately: `SurfaceCacheKey::PaletteFree`. A
+/// recolored (composed) variant is per-entity and is never atlased, so keying
+/// on the DID alone cannot hand back the wrong pixels here.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = surfacePlanesCached)]
+pub fn surface_planes_cached(surface_did: u32) -> Option<SurfacePixels> {
+    surface_memo_get(surface_did)
+}
+
+/// Presence probe for the same store — `true` iff [`surface_planes_cached`]
+/// would return pixels right now.
+///
+/// This is what replaces the `img.data`-existence gates that decide whether a
+/// static can be batched (`statics.js:2379`, `static_atlas.js:1121`). Those
+/// gates currently ask "does this texture still carry its CPU bytes"; with the
+/// copies released they would answer no and silently route every node to an
+/// UNBATCHED singleton — a frame-rate regression back toward the ~5,400-draw-call
+/// wall the atlas exists to remove, and one no eye-test for blackness would
+/// catch. The honest question is "can pixels for this DID be supplied", and this
+/// answers exactly that.
+///
+/// Cheap by construction: a read-locked `contains`, no LRU bump, no counters.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = surfacePlanesCachedHas)]
+pub fn surface_planes_cached_has(surface_did: u32) -> bool {
+    surface_memo_contains(surface_did)
+}
+
 /// Phase 3 step 6: fetch decoded RGBA8 pixels for one surface DID.
 /// Empty result means the walk failed at some step — JS falls back
 /// to a flat fill for that triangle group.
