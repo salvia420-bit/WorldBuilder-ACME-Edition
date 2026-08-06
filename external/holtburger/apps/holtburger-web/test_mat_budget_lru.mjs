@@ -111,6 +111,12 @@ const materials = loadModule("scene3d/materials.js", {
   surfacePixelsToHeightTexture: adapter.surfacePixelsToHeightTexture,
   surfacePixelsToRoughnessTexture: () => null,
   surfacePixelsToAoTexture: () => null,
+  // 2026-08-05: `texture_release.js` / `surface_planes.js` are relative imports
+  // and are therefore STRIPPED by the loader above, exactly like bc7_textures.js
+  // was — which is how this suite died mid-run once already. Stub them, or
+  // `_installCacheEntry` throws `armCpuRelease is not defined` on every install.
+  armCpuRelease: () => false,
+  PLANE: { ALBEDO: "albedo", NORMAL: "normal", HEIGHT: "height", ROUGHNESS: "roughness", AO: "ao" },
   materialBakeEnabled: () => false,
   SuiteAssetSource: function SuiteAssetSourceStub() {},
   loadTexchanManifest: async () => null,

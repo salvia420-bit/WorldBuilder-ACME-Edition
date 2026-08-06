@@ -60,6 +60,10 @@ import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 // point below is inert unless the flag is on AND the GPU reports
 // EXT_texture_compression_bptc, so the RGBA8 path is unchanged by default.
 import { bc7Available, bc7TextureBytes, upgradeMaterialToBc7 } from "./bc7_textures.js";
+// Task 4 (2026-08-05): release the CPU-side copy after upload. Default OFF —
+// see `texture_release.js` for the preconditions that gate the flag.
+import { armCpuRelease } from "./texture_release.js";
+import { PLANE } from "./surface_planes.js";
 
 // ACE SurfaceType bit constants (mirrored from ACE.Entity.Enum.SurfaceType,
 // see external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs). Exported so
@@ -2947,6 +2951,21 @@ export class MaterialCache {
     // into clones (`:2501`), and a clone SHOULD inherit the DID — it samples the
     // same surface.
     mat.userData = { ...(mat.userData || {}), surfaceDid: did >>> 0 };
+    // Task 4 (2026-08-05) — arm the CPU-copy release. Inert unless
+    // `?texFreeCpu=on`, and see that module's header for the preconditions:
+    // turning it on before the atlas stages through `surface_planes.js` will
+    // silently UNBATCH statics. Armed HERE because this is the one place that
+    // has both the DID and all three planes, and because arming the albedo
+    // without the DID would produce a texture that cannot be refilled.
+    //
+    // Only these three: roughness and AO are texchan sidecars and are NOT in
+    // the wasm decode memo, so nothing could refill them after a context loss.
+    // Releasing a plane you cannot re-supply is just a black texture on a timer.
+    try {
+      armCpuRelease(tex, PLANE.ALBEDO, did);
+      if (normalTex) armCpuRelease(normalTex, PLANE.NORMAL, did);
+      if (heightTex) armCpuRelease(heightTex, PLANE.HEIGHT, did);
+    } catch (_) { /* a memory optimisation must never break material install */ }
     this.textures.set(did, tex);
     if (normalTex) this.normalTextures.set(did, normalTex);
     if (heightTex) this.heightTextures.set(did, heightTex);
