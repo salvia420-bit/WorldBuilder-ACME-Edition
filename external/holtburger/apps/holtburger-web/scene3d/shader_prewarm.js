@@ -49,7 +49,45 @@ function _optIn(name) {
   return false;
 }
 
-export const SHADER_PREWARM_ON = _optIn("shaderPrewarm");
+/** True only for an explicit off-form. A typo keeps the default rather than
+ *  silently disabling it — the same rule `?statBatchMemo` adopted, for the same
+ *  reason: a mistyped flag must not cost a 2-second stall in silence. */
+function _optOut(name) {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      return ["off", "0", "false", "no"].includes(
+        String(new URLSearchParams(globalThis.location.search).get(name) || "").toLowerCase());
+    }
+  } catch (_) {}
+  return false;
+}
+
+/** `?shaderPrewarm=off` escapes; anything else (including absent) is ON.
+ *
+ * DEFAULT FLIPPED 2026-08-06 — this is the walk-stall A/B the flag row has been
+ * waiting on since 08-05, run on the 1070 at `?quality=ultra&clouds=on&wxMap=nasa`
+ * while moving, with `scene3d/stall_probe.js` armed:
+ *
+ *   shaderPrewarm=off   p50 49.4  p95 70.8  p99 97.9   MAX 2131 ms   >250ms 5   >1s 1
+ *   shaderPrewarm=ON    p50 48.4  p95 67.9  p99 90.6   MAX  369 ms   >250ms 1   >1s 0
+ *
+ * Steady state barely moves, which is the point: this was never a throughput
+ * problem. The stall probe attributed the worst frame outright —
+ * `intervalMs 576.2, renderMs 576.1, outsideMs 0.1, linkPrograms 1` — a single
+ * synchronous program link INSIDE `renderer.render`. A transcode or a bake would
+ * have landed in `outsideMs`; those exist too but are a ~100 ms class
+ * (`xu7DecodeMs 67.8` on a 101 ms frame), not the p99.
+ *
+ * ⚠ n=1 PER ARM on a rare-event metric. The mechanism is confirmed (the 07-16
+ * profile in the header above measured 43 programs linking at 172-849 ms each on
+ * this same GPU), but MAX and the >1s count are single observations and stalls
+ * are sparse by nature — do not treat 2131 -> 369 as a tight bound.
+ *
+ * ⚠ COST NOT YET MEASURED: prewarming moves link work to boot. Cold-boot time
+ * under this default has not been measured on the 1070. If boot regresses
+ * materially, `?shaderPrewarm=off` is the one-flag revert.
+ */
+export const SHADER_PREWARM_ON = !_optOut("shaderPrewarm");
 export const LINK_PROBE_ON = _optIn("linkProbe");
 
 let _warmTarget = null;

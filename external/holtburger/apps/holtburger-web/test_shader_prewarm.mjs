@@ -42,15 +42,30 @@ function check(name, ok) {
 globalThis.location = { search: "?shaderPrewarm=1&linkProbe=true" };
 {
   const m = await import("./scene3d/shader_prewarm.js?arm=notOn");
-  check("PART1: shaderPrewarm=1 is NOT on (exact-match idiom)", m.SHADER_PREWARM_ON === false);
+  // DEFAULT FLIPPED 2026-08-06: shaderPrewarm is default-ON, `=off` escapes, and
+  // a typo keeps the default (a mistyped flag must not cost a 2 s stall in
+  // silence). `=1` is not an off-form, so it resolves ON.
+  check("PART1: shaderPrewarm=1 resolves ON (typo keeps the default)", m.SHADER_PREWARM_ON === true);
   check("PART1: linkProbe=true is NOT on (exact-match idiom)", m.LINK_PROBE_ON === false);
 }
-
-// ── PART 2 (off half): flag absent → passthrough, no target churn ──────────
+// The shipped default, and every off-form spelling, pinned explicitly.
 globalThis.location = { search: "" };
 {
+  const m = await import("./scene3d/shader_prewarm.js?arm=absent");
+  check("PART1: flag ABSENT resolves ON (DEFAULT-ON 2026-08-06)", m.SHADER_PREWARM_ON === true);
+}
+for (const [q, want] of [["off", false], ["0", false], ["false", false], ["no", false], ["on", true], ["wat", true]]) {
+  globalThis.location = { search: `?shaderPrewarm=${q}` };
+  const m = await import(`./scene3d/shader_prewarm.js?arm=sp_${q}`);
+  check(`PART1: ?shaderPrewarm=${q} -> ${want ? "ON" : "OFF"}`, m.SHADER_PREWARM_ON === want);
+}
+
+// ── PART 2 (off half): the ESCAPE → passthrough, no target churn ───────────
+// Was "flag absent"; absent is now ON, so the off-half is driven by ?=off.
+globalThis.location = { search: "?shaderPrewarm=off" };
+{
   const m = await import("./scene3d/shader_prewarm.js?arm=off");
-  check("PART2: flag absent resolves OFF", m.SHADER_PREWARM_ON === false);
+  check("PART2: ?shaderPrewarm=off resolves OFF (the escape)", m.SHADER_PREWARM_ON === false);
   const calls = [];
   const renderer = {
     getRenderTarget: () => null,
