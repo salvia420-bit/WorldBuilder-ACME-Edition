@@ -1,0 +1,524 @@
+{
+  "batchBuckets": 346,
+  "drawnBuckets": 342,
+  "atlasBuckets": 18,
+  "instances": 17881,
+  "drawnInstances": 17844,
+  "blocked": {
+    "noMap": 0,
+    "noTile": 0,
+    "deformed": 193,
+    "nonStandard": 0
+  },
+  "blockedDrawn": {
+    "noMap": 0,
+    "noTile": 0,
+    "deformed": 193,
+    "nonStandard": 0
+  },
+  "all": {
+    "buckets": {
+      "today": 153,
+      "regionClass": 88,
+      "regionStrict": 91,
+      "regionState": 48,
+      "globalClasses": 20
+    },
+    "regions": 16,
+    "distinctTiles": 12,
+    "distinctStates": 4,
+    "distinctValues": 52,
+    "layers": {
+      "shared": 52,
+      "regional": 294,
+      "sharedMB": 142.2,
+      "regionalMB": 1440.2,
+      "classesOverCapacity": 1
+    },
+    "snapped": [
+      {
+        "tiers": [
+          512
+        ],
+        "regionClass": 49,
+        "regionStrict": 53,
+        "pools": 5,
+        "layers": 52,
+        "sharedMB": 67.3
+      },
+      {
+        "tiers": [
+          256,
+          1024
+        ],
+        "regionClass": 57,
+        "regionStrict": 61,
+        "pools": 8,
+        "layers": 52,
+        "sharedMB": 96.5
+      },
+      {
+        "tiers": [
+          128,
+          512,
+          2048
+        ],
+        "regionClass": 73,
+        "regionStrict": 77,
+        "pools": 10,
+        "layers": 52,
+        "sharedMB": 95.6
+      }
+    ],
+    "classes": [
+      {
+        "key": "1024x1024|0|0|1|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 8,
+        "regions": 16,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "512x512|0|0|1|b1|w|f7",
+        "w": 512,
+        "h": 512,
+        "bc7": true,
+        "surfaces": 8,
+        "regions": 3,
+        "capacity": 25,
+        "perLayerKiB": 1280
+      },
+      {
+        "key": "128x256|0|0|1|b1|w|f7",
+        "w": 128,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 6,
+        "regions": 2,
+        "capacity": 128,
+        "perLayerKiB": 160
+      },
+      {
+        "key": "256x256|0|0|1|b1|w|f7",
+        "w": 256,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 5,
+        "regions": 2,
+        "capacity": 102,
+        "perLayerKiB": 320
+      },
+      {
+        "key": "128x128|0|0|1|b1|w|f7",
+        "w": 128,
+        "h": 128,
+        "bc7": true,
+        "surfaces": 3,
+        "regions": 3,
+        "capacity": 128,
+        "perLayerKiB": 80
+      },
+      {
+        "key": "256x512|0|0|1|b1|w|f7",
+        "w": 256,
+        "h": 512,
+        "bc7": true,
+        "surfaces": 3,
+        "regions": 2,
+        "capacity": 51,
+        "perLayerKiB": 640
+      },
+      {
+        "key": "2048x2048|0|0.7843137254901961|1|b1|w|f7",
+        "w": 2048,
+        "h": 2048,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 14,
+        "capacity": 4,
+        "perLayerKiB": 20480
+      },
+      {
+        "key": "256x256|0|0.39215686274509803|1|b1|w|f7",
+        "w": 256,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 14,
+        "capacity": 102,
+        "perLayerKiB": 320
+      },
+      {
+        "key": "1024x1024|0|0.7843137254901961|1|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 14,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "512x1024|0|0|1|b1|w|f7",
+        "w": 512,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 2,
+        "capacity": 12,
+        "perLayerKiB": 2560
+      },
+      {
+        "key": "32x32|0|0|1|b1|w|f8",
+        "w": 32,
+        "h": 32,
+        "bc7": false,
+        "surfaces": 2,
+        "regions": 1,
+        "capacity": 128,
+        "perLayerKiB": 8
+      },
+      {
+        "key": "1024x1024|1|0|0|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 3,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "32x32|1|0|0|b1|w|f7",
+        "w": 32,
+        "h": 32,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 4,
+        "capacity": 128,
+        "perLayerKiB": 5
+      },
+      {
+        "key": "32x32|0|0|1|b1|w|f7",
+        "w": 32,
+        "h": 32,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 2,
+        "capacity": 128,
+        "perLayerKiB": 5
+      },
+      {
+        "key": "512x512|0|0.39215686274509803|1|b1|w|f7",
+        "w": 512,
+        "h": 512,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 25,
+        "perLayerKiB": 1280
+      },
+      {
+        "key": "128x128|0|0.39215686274509803|1|b1|w|f7",
+        "w": 128,
+        "h": 128,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 128,
+        "perLayerKiB": 80
+      },
+      {
+        "key": "8x8|0|0|1|b1|w|f8",
+        "w": 8,
+        "h": 8,
+        "bc7": false,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 128,
+        "perLayerKiB": 1
+      },
+      {
+        "key": "1024x1024|0|0.39215686274509803|1|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "2048x2048|0|0|1|b1|w|f7",
+        "w": 2048,
+        "h": 2048,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 4,
+        "perLayerKiB": 20480
+      },
+      {
+        "key": "512x256|0|0|1|b1|w|f7",
+        "w": 512,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 51,
+        "perLayerKiB": 640
+      }
+    ]
+  },
+  "drawn": {
+    "buckets": {
+      "today": 149,
+      "regionClass": 84,
+      "regionStrict": 87,
+      "regionState": 47,
+      "globalClasses": 19
+    },
+    "regions": 16,
+    "distinctTiles": 12,
+    "distinctStates": 4,
+    "distinctValues": 51,
+    "layers": {
+      "shared": 51,
+      "regional": 290,
+      "sharedMB": 142.2,
+      "regionalMB": 1440.2,
+      "classesOverCapacity": 1
+    },
+    "snapped": [
+      {
+        "tiers": [
+          512
+        ],
+        "regionClass": 48,
+        "regionStrict": 52,
+        "pools": 5,
+        "layers": 51,
+        "sharedMB": 66
+      },
+      {
+        "tiers": [
+          256,
+          1024
+        ],
+        "regionClass": 53,
+        "regionStrict": 57,
+        "pools": 7,
+        "layers": 51,
+        "sharedMB": 96.2
+      },
+      {
+        "tiers": [
+          128,
+          512,
+          2048
+        ],
+        "regionClass": 69,
+        "regionStrict": 73,
+        "pools": 9,
+        "layers": 51,
+        "sharedMB": 95.5
+      }
+    ],
+    "classes": [
+      {
+        "key": "1024x1024|0|0|1|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 8,
+        "regions": 16,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "512x512|0|0|1|b1|w|f7",
+        "w": 512,
+        "h": 512,
+        "bc7": true,
+        "surfaces": 8,
+        "regions": 3,
+        "capacity": 25,
+        "perLayerKiB": 1280
+      },
+      {
+        "key": "128x256|0|0|1|b1|w|f7",
+        "w": 128,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 6,
+        "regions": 2,
+        "capacity": 128,
+        "perLayerKiB": 160
+      },
+      {
+        "key": "256x256|0|0|1|b1|w|f7",
+        "w": 256,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 5,
+        "regions": 2,
+        "capacity": 102,
+        "perLayerKiB": 320
+      },
+      {
+        "key": "128x128|0|0|1|b1|w|f7",
+        "w": 128,
+        "h": 128,
+        "bc7": true,
+        "surfaces": 3,
+        "regions": 3,
+        "capacity": 128,
+        "perLayerKiB": 80
+      },
+      {
+        "key": "256x512|0|0|1|b1|w|f7",
+        "w": 256,
+        "h": 512,
+        "bc7": true,
+        "surfaces": 3,
+        "regions": 2,
+        "capacity": 51,
+        "perLayerKiB": 640
+      },
+      {
+        "key": "2048x2048|0|0.7843137254901961|1|b1|w|f7",
+        "w": 2048,
+        "h": 2048,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 14,
+        "capacity": 4,
+        "perLayerKiB": 20480
+      },
+      {
+        "key": "256x256|0|0.39215686274509803|1|b1|w|f7",
+        "w": 256,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 14,
+        "capacity": 102,
+        "perLayerKiB": 320
+      },
+      {
+        "key": "1024x1024|0|0.7843137254901961|1|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 14,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "512x1024|0|0|1|b1|w|f7",
+        "w": 512,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 2,
+        "regions": 2,
+        "capacity": 12,
+        "perLayerKiB": 2560
+      },
+      {
+        "key": "32x32|0|0|1|b1|w|f8",
+        "w": 32,
+        "h": 32,
+        "bc7": false,
+        "surfaces": 2,
+        "regions": 1,
+        "capacity": 128,
+        "perLayerKiB": 8
+      },
+      {
+        "key": "1024x1024|1|0|0|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 3,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "32x32|0|0|1|b1|w|f7",
+        "w": 32,
+        "h": 32,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 2,
+        "capacity": 128,
+        "perLayerKiB": 5
+      },
+      {
+        "key": "512x512|0|0.39215686274509803|1|b1|w|f7",
+        "w": 512,
+        "h": 512,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 25,
+        "perLayerKiB": 1280
+      },
+      {
+        "key": "128x128|0|0.39215686274509803|1|b1|w|f7",
+        "w": 128,
+        "h": 128,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 128,
+        "perLayerKiB": 80
+      },
+      {
+        "key": "8x8|0|0|1|b1|w|f8",
+        "w": 8,
+        "h": 8,
+        "bc7": false,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 128,
+        "perLayerKiB": 1
+      },
+      {
+        "key": "1024x1024|0|0.39215686274509803|1|b1|w|f7",
+        "w": 1024,
+        "h": 1024,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 6,
+        "perLayerKiB": 5120
+      },
+      {
+        "key": "2048x2048|0|0|1|b1|w|f7",
+        "w": 2048,
+        "h": 2048,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 4,
+        "perLayerKiB": 20480
+      },
+      {
+        "key": "512x256|0|0|1|b1|w|f7",
+        "w": 512,
+        "h": 256,
+        "bc7": true,
+        "surfaces": 1,
+        "regions": 1,
+        "capacity": 51,
+        "perLayerKiB": 640
+      }
+    ]
+  },
+  "rendererCalls": 1
+}

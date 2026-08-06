@@ -4,7 +4,7 @@
 sizing of this item this document **supersedes twice over**. Nothing here is shipped; one
 read-only instrument is added.
 
-**Verdict up front.** The honest reachable win is **~1.4–2.3 ms of a ~24 ms frame**, against a
+**Verdict up front (SUPERSEDED — see §0a, measured on the 1070: +2.48 ms for the scoped design and +3.9 ms with canonical tiers).** The honest reachable win is **~1.4–2.3 ms of a ~24 ms frame**, against a
 ceiling of 3.68 ms, for a subsystem touching the layer pool, the shader, the material cache's
 derived clones, eviction refcounting and the X7 memory ceiling — and validatable only by
 1070 A/B plus an owner eye-test. Two changes shipped **today** bought 0.7 ms and 1.2–2.0 ms
@@ -14,6 +14,60 @@ There is one variant that clears the bar — canonical tile sizes, worth ~2.7–
 turns out to be a **bake-side** change rather than a client one, because `?texBc7` is
 default-ON and a `CompressedArrayTexture` layer cannot be resampled at runtime. That is a
 different task, and §6 specs it.
+
+---
+
+## 0a. MEASURED ON THE 1070 (2026-08-06, after this doc was written) — the verdict moves
+
+The projection above was estimated with R≈8 drawn regions. `window.__statMergeProjection()`
+was then run on a settled Nanto session. **The ranges collapse, and the recommendation
+changes.**
+
+```
+DRAWN 149 of 346 resident · 17,844 instances submitted · 16 regions
+drawn axes: 12 tile sizes · 4 render states · 51 material values
+```
+
+| keying | drawn buckets | worth |
+|---|---|---|
+| (region, state) — ceiling, not reachable | 47 | +4.08 ms |
+| (region, tile, state, format) — the design | 84 | +2.60 ms |
+| + side / polygonOffset / emissive / shadow — image-preserving | **87** | **+2.48 ms** |
+
+**+2.48 ms, not the 1.4–2.3 ms estimated below** — R was 16, not 8, and the estimate was
+low. That alone puts the scoped design at the top of its predicted band rather than under it.
+
+**The tile axis is the whole problem, and it is fixable off-client.** Going from the
+(region, state) ceiling to the real design costs **47 → 84 drawn buckets (+37): 36% of the
+prize is eaten by tile-size fragmentation before a single correctness constraint is applied.**
+Snapping layers to canonical tiers recovers nearly all of it:
+
+| canonical tiers | drawn (strict) | worth | layers / memory |
+|---|---|---|---|
+| `[512]` | 52 | **+3.88 ms** | 51 / **66 MB** |
+| `[256, 1024]` | 57 | +3.68 ms | 51 / 96.2 MB |
+| `[128, 512, 2048]` | 73 | +3.04 ms | 51 / 95.5 MB |
+
+So the bake-side variant this doc specs in §6 is worth **~3.9 ms at 66 MB** — near the
+theoretical ceiling, and it makes the CLIENT side simpler rather than harder, because one
+canonical tier removes the packing problem entirely.
+
+**The memory argument holds exactly as argued:** global pools **142.2 MB** against
+region-scoped **1,440.2 MB (10.1×)**. Region-scoped arrays are not viable; global pools with
+regional BatchedMeshes are mandatory, as designed.
+
+**Confirmed unchanged:** 17,844 instances submitted × 0.386 µs = 6.89 ms, identical in every
+arm — merging moves no instance into a bucket that survives culling when it did not before,
+because the region key is kept.
+
+**Largest residue: `deformed` = 193** unmergeable drawn members (wind-sway variants), which is
+the least-bounded term below and now the one worth attacking next.
+
+**Revised recommendation.** The client-only design at +2.48 ms is still a subsystem for a
+middling return and I would still not build it first. But the canonical-tier variant at
+**+3.9 ms** is the largest measured item on the board, is a BAKE change rather than a renderer
+one, and *reduces* client complexity. That is the thread to pull. The §4 recommendation below
+stands only for the client-only scoping it was written against.
 
 ---
 
