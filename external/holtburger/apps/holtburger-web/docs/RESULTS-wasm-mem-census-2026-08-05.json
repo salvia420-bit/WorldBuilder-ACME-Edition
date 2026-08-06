@@ -1,0 +1,1490 @@
+{
+  "gpu": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "samples": [
+    {
+      "t": 1785977050113,
+      "mem": {
+        "main": {
+          "memoryBytes": 437256192,
+          "allocLive": 129473445,
+          "allocPeak": 423288234,
+          "allocTotal": 3433530670,
+          "storeBytes": 85191193,
+          "unattributed": 44282252,
+          "slackBytes": 307782747,
+          "decodePeakLiveBytes": 32944,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 25165312,
+              "entries": 312,
+              "budget": 25165824
+            },
+            "modelTri": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 59517182,
+              "entries": 1580,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 477968,
+              "entries": 168,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 11744,
+              "entries": 4,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 256,
+              "entries": 16,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 8160,
+              "entries": 340,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 216,
+              "entries": 18,
+              "budget": -1
+            }
+          }
+        },
+        "worker": {
+          "memoryBytes": 128581632,
+          "allocLive": 105936000,
+          "allocPeak": 112714329,
+          "allocTotal": 1099498250,
+          "storeBytes": 101005010,
+          "unattributed": 4930990,
+          "slackBytes": 22645632,
+          "decodePeakLiveBytes": 18415664,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 67011328,
+              "entries": 156,
+              "budget": 67108864
+            },
+            "modelTri": {
+              "bytes": 219132,
+              "entries": 27,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 25351186,
+              "entries": 618,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 5276544,
+              "entries": 38,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 1092,
+              "entries": 91,
+              "budget": -1
+            }
+          }
+        },
+        "page": {
+          "stores": {
+            "surfacePixels": {
+              "bytes": 92176640,
+              "entries": 468
+            },
+            "modelTri": {
+              "bytes": 219132,
+              "entries": 27
+            },
+            "shardRecords": {
+              "bytes": 84868368,
+              "entries": 2198
+            },
+            "surfaceHeight": {
+              "bytes": 5754512,
+              "entries": 206
+            },
+            "sceneryRecords": {
+              "bytes": 11744,
+              "entries": 4
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1
+            },
+            "sceneryAnim": {
+              "bytes": 256,
+              "entries": 16
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0
+            },
+            "texSwapAliases": {
+              "bytes": 8160,
+              "entries": 340
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1
+            },
+            "decodeDids": {
+              "bytes": 1308,
+              "entries": 109
+            }
+          },
+          "top": [
+            "surfacePixels 87.9MB",
+            "shardRecords 80.9MB",
+            "surfaceHeight 5.5MB",
+            "scratchPool 3.0MB",
+            "modelTri 0.2MB"
+          ],
+          "memoryBytes": 565837824,
+          "allocLive": 235409445,
+          "allocPeak": 536002563,
+          "storeBytes": 186196203,
+          "unattributed": 49213242,
+          "slackBytes": 330428379,
+          "decodePeakLiveBytes": 18448608
+        },
+        "missing": [],
+        "verdict": "540MB linear, 225MB live (42%) | HIGH-WATER-shaped: most of the memory is allocator slack — a cache budget cannot return it, bound the decode"
+      },
+      "scene": {
+        "geometries": 540,
+        "textures": 439,
+        "terrainLbs": null,
+        "heapMB": 753,
+        "limitMB": 4192
+      },
+      "lb": 3663003677,
+      "label": "spawn"
+    },
+    {
+      "t": 1785977101214,
+      "mem": {
+        "main": {
+          "memoryBytes": 459538432,
+          "allocLive": 208924824,
+          "allocPeak": 446818394,
+          "allocTotal": 6554858014,
+          "storeBytes": 165518205,
+          "unattributed": 43406619,
+          "slackBytes": 250613608,
+          "decodePeakLiveBytes": 525024,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 25148608,
+              "entries": 307,
+              "budget": 25165824
+            },
+            "modelTri": {
+              "bytes": 172864,
+              "entries": 1,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 138839174,
+              "entries": 2717,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 478816,
+              "entries": 221,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 69728,
+              "entries": 18,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 432,
+              "entries": 27,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 11376,
+              "entries": 474,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 786432,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 420,
+              "entries": 35,
+              "budget": -1
+            }
+          }
+        },
+        "worker": {
+          "memoryBytes": 143196160,
+          "allocLive": 127027108,
+          "allocPeak": 132355244,
+          "allocTotal": 2019233000,
+          "storeBytes": 122017232,
+          "unattributed": 5009876,
+          "slackBytes": 16169052,
+          "decodePeakLiveBytes": 18415664,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 66217344,
+              "entries": 206,
+              "budget": 67108864
+            },
+            "modelTri": {
+              "bytes": 1228544,
+              "entries": 215,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 42443800,
+              "entries": 1446,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 8978240,
+              "entries": 214,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 3576,
+              "entries": 298,
+              "budget": -1
+            }
+          }
+        },
+        "page": {
+          "stores": {
+            "surfacePixels": {
+              "bytes": 91365952,
+              "entries": 513
+            },
+            "modelTri": {
+              "bytes": 1401408,
+              "entries": 216
+            },
+            "shardRecords": {
+              "bytes": 181282974,
+              "entries": 4163
+            },
+            "surfaceHeight": {
+              "bytes": 9457056,
+              "entries": 435
+            },
+            "sceneryRecords": {
+              "bytes": 69728,
+              "entries": 18
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1
+            },
+            "sceneryAnim": {
+              "bytes": 432,
+              "entries": 27
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0
+            },
+            "texSwapAliases": {
+              "bytes": 11376,
+              "entries": 474
+            },
+            "scratchPool": {
+              "bytes": 3932160,
+              "entries": 2
+            },
+            "decodeDids": {
+              "bytes": 3996,
+              "entries": 333
+            }
+          },
+          "top": [
+            "shardRecords 172.9MB",
+            "surfacePixels 87.1MB",
+            "surfaceHeight 9.0MB",
+            "scratchPool 3.8MB",
+            "modelTri 1.3MB"
+          ],
+          "memoryBytes": 602734592,
+          "allocLive": 335951932,
+          "allocPeak": 579173638,
+          "storeBytes": 287535437,
+          "unattributed": 48416495,
+          "slackBytes": 266782660,
+          "decodePeakLiveBytes": 18940688
+        },
+        "missing": [],
+        "verdict": "575MB linear, 320MB live (56%) | RETENTION-shaped: most of the memory is still owned — chase the top store"
+      },
+      "scene": {
+        "geometries": 1373,
+        "textures": 1011,
+        "terrainLbs": 18,
+        "heapMB": 829,
+        "limitMB": 4192
+      },
+      "lb": 2847146009,
+      "label": "Holtburg"
+    },
+    {
+      "t": 1785977152098,
+      "mem": {
+        "main": {
+          "memoryBytes": 459538432,
+          "allocLive": 273674881,
+          "allocPeak": 446818394,
+          "allocTotal": 8084931198,
+          "storeBytes": 227158354,
+          "unattributed": 46516527,
+          "slackBytes": 185863551,
+          "decodePeakLiveBytes": 2097152,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 25160768,
+              "entries": 177,
+              "budget": 25165824
+            },
+            "modelTri": {
+              "bytes": 172864,
+              "entries": 1,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 197320087,
+              "entries": 4383,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 519632,
+              "entries": 337,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 811248,
+              "entries": 83,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 608,
+              "entries": 38,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 16320,
+              "entries": 680,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 744,
+              "entries": 62,
+              "budget": -1
+            }
+          }
+        },
+        "worker": {
+          "memoryBytes": 181796864,
+          "allocLive": 152289688,
+          "allocPeak": 160400146,
+          "allocTotal": 3218393790,
+          "storeBytes": 147189215,
+          "unattributed": 5100473,
+          "slackBytes": 29507176,
+          "decodePeakLiveBytes": 18415664,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 67056128,
+              "entries": 172,
+              "budget": 67108864
+            },
+            "modelTri": {
+              "bytes": 1945016,
+              "entries": 296,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 64281171,
+              "entries": 2163,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 10755904,
+              "entries": 318,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 5268,
+              "entries": 439,
+              "budget": -1
+            }
+          }
+        },
+        "page": {
+          "stores": {
+            "surfacePixels": {
+              "bytes": 92216896,
+              "entries": 349
+            },
+            "modelTri": {
+              "bytes": 2117880,
+              "entries": 297
+            },
+            "shardRecords": {
+              "bytes": 261601258,
+              "entries": 6546
+            },
+            "surfaceHeight": {
+              "bytes": 11275536,
+              "entries": 655
+            },
+            "sceneryRecords": {
+              "bytes": 811248,
+              "entries": 83
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1
+            },
+            "sceneryAnim": {
+              "bytes": 608,
+              "entries": 38
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0
+            },
+            "texSwapAliases": {
+              "bytes": 16320,
+              "entries": 680
+            },
+            "scratchPool": {
+              "bytes": 6291456,
+              "entries": 2
+            },
+            "decodeDids": {
+              "bytes": 6012,
+              "entries": 501
+            }
+          },
+          "top": [
+            "shardRecords 249.5MB",
+            "surfacePixels 87.9MB",
+            "surfaceHeight 10.8MB",
+            "scratchPool 6.0MB",
+            "modelTri 2.0MB"
+          ],
+          "memoryBytes": 641335296,
+          "allocLive": 425964569,
+          "allocPeak": 607218540,
+          "storeBytes": 374347569,
+          "unattributed": 51617000,
+          "slackBytes": 215370727,
+          "decodePeakLiveBytes": 20512816
+        },
+        "missing": [],
+        "verdict": "612MB linear, 406MB live (66%) | RETENTION-shaped: most of the memory is still owned — chase the top store"
+      },
+      "scene": {
+        "geometries": 3549,
+        "textures": 2106,
+        "terrainLbs": 84,
+        "heapMB": 1424,
+        "limitMB": 4192
+      },
+      "lb": 3332964361,
+      "label": "Arwic"
+    },
+    {
+      "t": 1785977202281,
+      "mem": {
+        "main": {
+          "memoryBytes": 459538432,
+          "allocLive": 313029615,
+          "allocPeak": 446818394,
+          "allocTotal": 9894068580,
+          "storeBytes": 264900740,
+          "unattributed": 48128875,
+          "slackBytes": 146508817,
+          "decodePeakLiveBytes": 2097152,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 25083072,
+              "entries": 307,
+              "budget": 25165824
+            },
+            "modelTri": {
+              "bytes": 172864,
+              "entries": 1,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 235022517,
+              "entries": 5219,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 519920,
+              "entries": 355,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 926080,
+              "entries": 165,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 896,
+              "entries": 56,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 18528,
+              "entries": 772,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 780,
+              "entries": 65,
+              "budget": -1
+            }
+          }
+        },
+        "worker": {
+          "memoryBytes": 182910976,
+          "allocLive": 159870333,
+          "allocPeak": 163168187,
+          "allocTotal": 4043036415,
+          "storeBytes": 154763591,
+          "unattributed": 5106742,
+          "slackBytes": 23040643,
+          "decodePeakLiveBytes": 18415664,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 66716352,
+              "entries": 219,
+              "budget": 67108864
+            },
+            "modelTri": {
+              "bytes": 3028228,
+              "entries": 412,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 69527667,
+              "entries": 2736,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 12338896,
+              "entries": 420,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 6720,
+              "entries": 560,
+              "budget": -1
+            }
+          }
+        },
+        "page": {
+          "stores": {
+            "surfacePixels": {
+              "bytes": 91799424,
+              "entries": 526
+            },
+            "modelTri": {
+              "bytes": 3201092,
+              "entries": 413
+            },
+            "shardRecords": {
+              "bytes": 304550184,
+              "entries": 7955
+            },
+            "surfaceHeight": {
+              "bytes": 12858816,
+              "entries": 775
+            },
+            "sceneryRecords": {
+              "bytes": 926080,
+              "entries": 165
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1
+            },
+            "sceneryAnim": {
+              "bytes": 896,
+              "entries": 56
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0
+            },
+            "texSwapAliases": {
+              "bytes": 18528,
+              "entries": 772
+            },
+            "scratchPool": {
+              "bytes": 6291456,
+              "entries": 2
+            },
+            "decodeDids": {
+              "bytes": 7500,
+              "entries": 625
+            }
+          },
+          "top": [
+            "shardRecords 290.4MB",
+            "surfacePixels 87.5MB",
+            "surfaceHeight 12.3MB",
+            "scratchPool 6.0MB",
+            "modelTri 3.1MB"
+          ],
+          "memoryBytes": 642449408,
+          "allocLive": 472899948,
+          "allocPeak": 609986581,
+          "storeBytes": 419664331,
+          "unattributed": 53235617,
+          "slackBytes": 169549460,
+          "decodePeakLiveBytes": 20512816
+        },
+        "missing": [],
+        "verdict": "613MB linear, 451MB live (74%) | RETENTION-shaped: most of the memory is still owned — chase the top store"
+      },
+      "scene": {
+        "geometries": 4455,
+        "textures": 2591,
+        "terrainLbs": 166,
+        "heapMB": 2035,
+        "limitMB": 4192
+      },
+      "lb": 2103705613,
+      "label": "Yaraq"
+    },
+    {
+      "t": 1785977252383,
+      "mem": {
+        "main": {
+          "memoryBytes": 459538432,
+          "allocLive": 320118911,
+          "allocPeak": 446818394,
+          "allocTotal": 11168767313,
+          "storeBytes": 270650309,
+          "unattributed": 49468602,
+          "slackBytes": 139419521,
+          "decodePeakLiveBytes": 2097152,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 25071872,
+              "entries": 324,
+              "budget": 25165824
+            },
+            "modelTri": {
+              "bytes": 172864,
+              "entries": 1,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 239843926,
+              "entries": 5544,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 519968,
+              "entries": 358,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 1864896,
+              "entries": 246,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 1008,
+              "entries": 63,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 18912,
+              "entries": 788,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 780,
+              "entries": 65,
+              "budget": -1
+            }
+          }
+        },
+        "worker": {
+          "memoryBytes": 182910976,
+          "allocLive": 160986278,
+          "allocPeak": 165114986,
+          "allocTotal": 4316869492,
+          "storeBytes": 155878818,
+          "unattributed": 5107460,
+          "slackBytes": 21924698,
+          "decodePeakLiveBytes": 18415664,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 66586368,
+              "entries": 224,
+              "budget": 67108864
+            },
+            "modelTri": {
+              "bytes": 3250024,
+              "entries": 430,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 70542306,
+              "entries": 2839,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 12347360,
+              "entries": 436,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 7032,
+              "entries": 586,
+              "budget": -1
+            }
+          }
+        },
+        "page": {
+          "stores": {
+            "surfacePixels": {
+              "bytes": 91658240,
+              "entries": 548
+            },
+            "modelTri": {
+              "bytes": 3422888,
+              "entries": 431
+            },
+            "shardRecords": {
+              "bytes": 310386232,
+              "entries": 8383
+            },
+            "surfaceHeight": {
+              "bytes": 12867328,
+              "entries": 794
+            },
+            "sceneryRecords": {
+              "bytes": 1864896,
+              "entries": 246
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1
+            },
+            "sceneryAnim": {
+              "bytes": 1008,
+              "entries": 63
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0
+            },
+            "texSwapAliases": {
+              "bytes": 18912,
+              "entries": 788
+            },
+            "scratchPool": {
+              "bytes": 6291456,
+              "entries": 2
+            },
+            "decodeDids": {
+              "bytes": 7812,
+              "entries": 651
+            }
+          },
+          "top": [
+            "shardRecords 296.0MB",
+            "surfacePixels 87.4MB",
+            "surfaceHeight 12.3MB",
+            "scratchPool 6.0MB",
+            "modelTri 3.3MB"
+          ],
+          "memoryBytes": 642449408,
+          "allocLive": 481105189,
+          "allocPeak": 611933380,
+          "storeBytes": 426529127,
+          "unattributed": 54576062,
+          "slackBytes": 161344219,
+          "decodePeakLiveBytes": 20512816
+        },
+        "missing": [],
+        "verdict": "613MB linear, 459MB live (75%) | RETENTION-shaped: most of the memory is still owned — chase the top store"
+      },
+      "scene": {
+        "geometries": 6009,
+        "textures": 3218,
+        "terrainLbs": 247,
+        "heapMB": 2126,
+        "limitMB": 4192
+      },
+      "lb": 3378184193,
+      "label": "Sawato"
+    },
+    {
+      "t": 1785977302512,
+      "mem": {
+        "main": {
+          "memoryBytes": 459538432,
+          "allocLive": 322476942,
+          "allocPeak": 446818394,
+          "allocTotal": 12679537957,
+          "storeBytes": 272926185,
+          "unattributed": 49550757,
+          "slackBytes": 137061490,
+          "decodePeakLiveBytes": 2097152,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 25165504,
+              "entries": 315,
+              "budget": 25165824
+            },
+            "modelTri": {
+              "bytes": 172864,
+              "entries": 1,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 241357050,
+              "entries": 5701,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 520032,
+              "entries": 362,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 2533888,
+              "entries": 318,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 1072,
+              "entries": 67,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 18912,
+              "entries": 788,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 780,
+              "entries": 65,
+              "budget": -1
+            }
+          }
+        },
+        "worker": {
+          "memoryBytes": 200736768,
+          "allocLive": 162474917,
+          "allocPeak": 165114986,
+          "allocTotal": 5001431851,
+          "storeBytes": 157349425,
+          "unattributed": 5125492,
+          "slackBytes": 38261851,
+          "decodePeakLiveBytes": 18415664,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 67108544,
+              "entries": 131,
+              "budget": 67108864
+            },
+            "modelTri": {
+              "bytes": 3407056,
+              "entries": 457,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 71333257,
+              "entries": 2929,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 12347568,
+              "entries": 449,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 7272,
+              "entries": 606,
+              "budget": -1
+            }
+          }
+        },
+        "page": {
+          "stores": {
+            "surfacePixels": {
+              "bytes": 92274048,
+              "entries": 446
+            },
+            "modelTri": {
+              "bytes": 3579920,
+              "entries": 458
+            },
+            "shardRecords": {
+              "bytes": 312690307,
+              "entries": 8630
+            },
+            "surfaceHeight": {
+              "bytes": 12867600,
+              "entries": 811
+            },
+            "sceneryRecords": {
+              "bytes": 2533888,
+              "entries": 318
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1
+            },
+            "sceneryAnim": {
+              "bytes": 1072,
+              "entries": 67
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0
+            },
+            "texSwapAliases": {
+              "bytes": 18912,
+              "entries": 788
+            },
+            "scratchPool": {
+              "bytes": 6291456,
+              "entries": 2
+            },
+            "decodeDids": {
+              "bytes": 8052,
+              "entries": 671
+            }
+          },
+          "top": [
+            "shardRecords 298.2MB",
+            "surfacePixels 88.0MB",
+            "surfaceHeight 12.3MB",
+            "scratchPool 6.0MB",
+            "modelTri 3.4MB"
+          ],
+          "memoryBytes": 660275200,
+          "allocLive": 484951859,
+          "allocPeak": 611933380,
+          "storeBytes": 430275610,
+          "unattributed": 54676249,
+          "slackBytes": 175323341,
+          "decodePeakLiveBytes": 20512816
+        },
+        "missing": [],
+        "verdict": "630MB linear, 462MB live (73%) | RETENTION-shaped: most of the memory is still owned — chase the top store"
+      },
+      "scene": {
+        "geometries": 7011,
+        "textures": 3727,
+        "terrainLbs": 319,
+        "heapMB": 2469,
+        "limitMB": 4192
+      },
+      "lb": 3663003677,
+      "label": "Shoushi"
+    },
+    {
+      "t": 1785977352725,
+      "mem": {
+        "main": {
+          "memoryBytes": 459538432,
+          "allocLive": 328276831,
+          "allocPeak": 446818394,
+          "allocTotal": 14260553516,
+          "storeBytes": 278137507,
+          "unattributed": 50139324,
+          "slackBytes": 131261601,
+          "decodePeakLiveBytes": 2097152,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 25164992,
+              "entries": 307,
+              "budget": 25165824
+            },
+            "modelTri": {
+              "bytes": 172864,
+              "entries": 1,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 245440708,
+              "entries": 5914,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 520240,
+              "entries": 375,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 3661744,
+              "entries": 399,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 1136,
+              "entries": 71,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 18960,
+              "entries": 790,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 780,
+              "entries": 65,
+              "budget": -1
+            }
+          }
+        },
+        "worker": {
+          "memoryBytes": 200736768,
+          "allocLive": 167727631,
+          "allocPeak": 169783818,
+          "allocTotal": 5252851873,
+          "storeBytes": 162601869,
+          "unattributed": 5125762,
+          "slackBytes": 33009137,
+          "decodePeakLiveBytes": 18415664,
+          "stores": {
+            "surfacePixels": {
+              "bytes": 67105216,
+              "entries": 143,
+              "budget": 67108864
+            },
+            "modelTri": {
+              "bytes": 3544408,
+              "entries": 487,
+              "budget": 67108864
+            },
+            "shardRecords": {
+              "bytes": 76156229,
+              "entries": 3078,
+              "budget": -1
+            },
+            "surfaceHeight": {
+              "bytes": 12642752,
+              "entries": 464,
+              "budget": -1
+            },
+            "sceneryRecords": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "suiteArtifacts": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "sceneryAnim": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "texSwapAliases": {
+              "bytes": 0,
+              "entries": 0,
+              "budget": -1
+            },
+            "scratchPool": {
+              "bytes": 3145728,
+              "entries": 1,
+              "budget": -1
+            },
+            "decodeDids": {
+              "bytes": 7536,
+              "entries": 628,
+              "budget": -1
+            }
+          }
+        },
+        "page": {
+          "stores": {
+            "surfacePixels": {
+              "bytes": 92270208,
+              "entries": 450
+            },
+            "modelTri": {
+              "bytes": 3717272,
+              "entries": 488
+            },
+            "shardRecords": {
+              "bytes": 321596937,
+              "entries": 8992
+            },
+            "surfaceHeight": {
+              "bytes": 13162992,
+              "entries": 839
+            },
+            "sceneryRecords": {
+              "bytes": 3661744,
+              "entries": 399
+            },
+            "suiteArtifacts": {
+              "bytes": 10355,
+              "entries": 1
+            },
+            "sceneryAnim": {
+              "bytes": 1136,
+              "entries": 71
+            },
+            "negCache": {
+              "bytes": 0,
+              "entries": 0
+            },
+            "texSwapAliases": {
+              "bytes": 18960,
+              "entries": 790
+            },
+            "scratchPool": {
+              "bytes": 6291456,
+              "entries": 2
+            },
+            "decodeDids": {
+              "bytes": 8316,
+              "entries": 693
+            }
+          },
+          "top": [
+            "shardRecords 306.7MB",
+            "surfacePixels 88.0MB",
+            "surfaceHeight 12.6MB",
+            "scratchPool 6.0MB",
+            "modelTri 3.5MB"
+          ],
+          "memoryBytes": 660275200,
+          "allocLive": 496004462,
+          "allocPeak": 616602212,
+          "storeBytes": 440739376,
+          "unattributed": 55265086,
+          "slackBytes": 164270738,
+          "decodePeakLiveBytes": 20512816
+        },
+        "missing": [],
+        "verdict": "630MB linear, 473MB live (75%) | RETENTION-shaped: most of the memory is still owned — chase the top store"
+      },
+      "scene": {
+        "geometries": 7344,
+        "textures": 4146,
+        "terrainLbs": 400,
+        "heapMB": 2508,
+        "limitMB": 4192
+      },
+      "lb": 3862822946,
+      "label": "Nanto"
+    }
+  ],
+  "errors": []
+}

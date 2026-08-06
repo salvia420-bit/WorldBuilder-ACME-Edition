@@ -206,12 +206,13 @@ What §3 **missed** — both found by auditing every store, not just the `thread
   in-flight decode bytes. That is the *other* mechanism entirely: transient peaks grow
   `WebAssembly.Memory`, which never shrinks, so a peak that lasts 200 ms raises the floor
   permanently. No cache budget can undo it.
-* **`SURFACE_HEIGHT` (`src/lib.rs:105`) is unbounded and would be the largest store of
-  all if it ever ran** — `Vec<f32>` at 4 B/px per distinct surface DID, i.e. ~4 MB for a
-  single 1024² surface, with no budget and no eviction. It is inert today because
-  `prime_surface_heights` no-ops unless `?gfxRelief=on` (strict opt-in, default off), so
-  it is NOT the 08-05 OOM. It is a row in the census anyway: "off by default" is a claim
-  worth measuring rather than assuming, and it is a landmine for whoever ships relief.
+* **`SURFACE_HEIGHT` (`src/lib.rs:105`) is unbounded** — `Vec<f32>` at 4 B/px per distinct
+  surface DID, no budget, no eviction. ~~Inert unless `?gfxRelief=on`~~ — **WRONG, and §8's
+  live run caught it**: `resolveGfxRelief` takes the QUALITY PRESET when the URL is silent,
+  and relief is on at mid/high/ultra, which is every real session. It ran the whole route
+  (839 entries / 12.6 MB — small here only because town surfaces are small). This is
+  exactly why the census carries rows for stores believed inert: "off by default" is a
+  claim worth measuring rather than assuming.
 
 **Those two candidates have opposite fixes, and `wasmMemoryBytes` reads identically under
 both.** That is why this session built an instrument instead of arming a budget.
@@ -305,3 +306,100 @@ it predates this work, exactly like the `bc7TextureBytes` breakage §2 found. So
 **Not verified: anything live.** No client session was run — the census has never executed
 in a browser. Its Rust half compiles for wasm32 and its arithmetic is tested natively; the
 first real reading is the queued run above.
+
+---
+
+## 8. RESULT — the census ran the route. It is the shard cache in wasm, and it is NOT the crash.
+
+1070, GTX 1070 / ANGLE D3D11 confirmed at the page, release wasm, `?nosw=1`, defaults
+otherwise (no `?shardBudgetMB`, no `?decodeAdmission`), six `@telepoi` hops with ~50 s
+settle each. **Zero console errors, zero page errors, no OOM this run.** Page totals (main
++ bake worker summed):
+
+| hop | linear | allocLive | allocPeak | shardRecords | (entries) | surfacePixels | unattributed | JS heap |
+|---|---|---|---|---|---|---|---|---|
+| spawn    | 540 MB | 225 MB | 511 MB |  81 MB | 2,198 | 88 MB | 47 MB |   753 MB |
+| Holtburg | 575 MB | 320 MB | 552 MB | 173 MB | 4,163 | 87 MB | 46 MB |   829 MB |
+| Arwic    | 612 MB | 406 MB | 579 MB | 249 MB | 6,546 | 88 MB | 49 MB | 1,424 MB |
+| Yaraq    | 613 MB | 451 MB | 582 MB | 290 MB | 7,955 | 88 MB | 51 MB | 2,035 MB |
+| Sawato   | 613 MB | 459 MB | 584 MB | 296 MB | 8,383 | 87 MB | 52 MB | 2,126 MB |
+| Shoushi  | 630 MB | 462 MB | 584 MB | 298 MB | 8,630 | 88 MB | 52 MB | 2,469 MB |
+| Nanto    | 630 MB | 473 MB | 588 MB | 307 MB | 8,992 | 88 MB | 53 MB | 2,508 MB |
+
+**Verdict: RETENTION, and it is `shardRecords`.** `allocLive` grew +248 MB over the route
+and the shard cache grew **+226 MB of it — 91 %**. Budget reads `-1` (unbounded) on both
+instances, as `?shardBudgetMB` unset promises. Split at Nanto: main 234 MB / worker 73 MB.
+
+Everything else behaved:
+* `surfacePixels` **pinned at 24 MB main / 64 MB worker** — the 2026-07-26 arming works
+  exactly as advertised, flat across all seven samples.
+* `unattributed` sat at **47→53 MB and did not grow**. The census is essentially complete:
+  no unnamed store is doing the leaking. (The steady ~50 MB is container slack, the
+  wasm shadow stack and statics — expected, and it is a constant, not a leak.)
+* `modelTri` 0.2 → 3.6 MB against its 64 MB budget; `decodePeakLiveBytes` 2 MB main /
+  18 MB worker, i.e. the unbounded `?decodeAdmission` never came close to mattering here.
+  The HIGH-WATER hypothesis is **dead**: `slackBytes` FELL over the route (315 → 157 MB) —
+  the allocator was filling pages it already had.
+
+### The decision rule fired — and I am not pulling the trigger. Here is why.
+
+§7 said: shardRecords top + rising allocLive ⇒ arm `?shardBudgetMB` at ~3× the per-hop
+working set. The data says the rule was too coarse, because **the store converges**:
+increments run +92, +76, +41, +6, +2, +9 MB. Six towns share most of their records, so
+307 MB *is* the working set, not a ratchet toward infinity. Arming at "3× per-hop" would
+either be inert (≈300 MB) or would evict records that get refetched — and 24 MB is already
+on record as thrashing ~280 MB of refetch churn.
+
+And the size is wrong for the disease. **307 MB is 7 % of the 4,192 MB renderer cap.**
+
+### What actually kills the tab: the JS heap, which the census does not cover
+
+`usedJSHeapSize` went **753 → 2,508 MB against the 4,192 MB cap, still climbing at Nanto
+with no sign of a plateau**, while wasm linear memory rose 540 → 630 MB and flattened.
+Last session crashed at 2,808 MB on this same route; this run stopped one hop short of it.
+A follow-up probe in-world:
+
+```
+glTextures 4,146   scene-reachable 1,504    reachable CPU-side image data 539 MB
+glGeometries 7,366 scene-reachable 4,088
+```
+
+539 MB of CPU-side texture bytes are held by textures the scene can still reach — measured
+directly, not inferred — and the JS heap is 4× the entire wasm side. This is the SAME
+metric §5 records as **314 MB** on a 4-hop route; six hops later it is 539 MB, so that
+number is not a ceiling, it is a point on a curve. §4's "**this is VRAM, not RAM — it will
+not move the OOM**" is a claim about geometry that has since been generalised to textures,
+and for textures the numbers do not support it.
+
+⚠ What the counts above do NOT prove: `renderer.info.memory.*` only ever decrements on
+`dispose()`, so `gl − reachable` means "never disposed", NOT "still alive" — a texture
+GC'd without dispose leaves the count high and the memory freed. §5's dead-end list
+already warns about exactly this class of over-count. The honest instrument is a WeakRef
+census (the one that reduced "702 MB of leaked geometry" to 28 MB), and it has never been
+pointed at TEXTURES.
+
+### Next move
+
+1. **WeakRef census over textures**, mirroring the geometry one: how much of that 539 MB
+   (plus whatever the 2,642 non-reachable textures hold) is orphaned-and-alive? That
+   number decides whether the OOM fix is disposal or residency.
+2. Only then arm anything. `?shardBudgetMB` remains the one large unbounded wasm store and
+   is worth ~200 MB, but it is a tidy-up, not the crash fix — and it still owes the ABAB
+   interleave `matBudgetMB` also owes.
+3. The census is now permanent instrumentation: `await __diag.wasmMem()` any time.
+
+### Instrument notes from the first live use
+
+* The census sums main + bake worker. `?agent=1` (and bot contexts) auto-enable the NET
+  WORKER, a **third** wasm instance whose linear memory nothing sums today. It carries the
+  transport only, so it is small — but the number is currently unknown, and this run was
+  made with it enabled. Adding a third relay is the obvious follow-up.
+* `page.top` ranking made the answer visible in the first sample, before any hop.
+* Boot blocker worth writing down: **MariaDB was down**, and the symptom was not a database
+  error anywhere. ACE logged `Login Request` + `Creating new session`, then dropped the
+  session at 17 s with `Account: , Reason: Network Timeout`, and the client reported
+  `connect failed after 1 attempts: timeout`. The tell is a MISSING line — a healthy login
+  logs `AuthenticationHandler) new client connected: <acct>` ~1 ms after the session is
+  created. `service mariadb start` fixed it outright. Probable cause: earlyoom taking
+  mysqld during a `wasm-pack --release` build on the 8 GB laptop — do not run release
+  builds and a live session at the same time.
