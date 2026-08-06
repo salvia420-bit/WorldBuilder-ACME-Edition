@@ -17,6 +17,52 @@ different task, and §6 specs it.
 
 ---
 
+## 0c. CORRECTION to §0a AND §0b — every figure above was RESIDENT-scale. The prize is 2.00 ms.
+
+§0a and §0b both priced the merge over `drawn.buckets`. **That population is not drawn.**
+`_projDrawn` tests `visible` + `instances > 0` and never the frustum, so it removed 4 buckets
+of 346. Two independent proofs:
+
+* arithmetic: `batchBuckets 346 − blocked.deformed 193 = 153 = all.buckets.today`, exactly —
+  so `blocked.deformed` counts BUCKETS, and the "drawn" split is resident-scale;
+* consistency: 149 mergeable + 193 deformed = 342 static-batch-c draws, against **177**
+  measured directly by attributing `renderBufferDirect`, and 129 in the region sweep.
+
+A real submitted-scale sampler now exists (`__statMergeArmSubmitted`, which shadows
+`onBeforeRender` and counts what three actually submits). Run on a settled Nanto session:
+
+```
+submitted BatchedMesh nodes: 128   =   60 mergeable  +  68 deformed
+```
+
+| population | submitted today | → regionStrict | → regionState | worth (strict) |
+|---|---|---|---|---|
+| mergeable | 60 | 35 | 19 | **+1.00 ms** |
+| deformed (blocked today) | 68 | 43 | 22 | **+1.00 ms** |
+| **combined** | **128** | **78** | **41** | **+2.00 ms** |
+
+**So the array merge is worth ~1.00 ms, not the 2.9 ms of §0b or the 2.48 ms of §0a — and the
+LARGER half of the remaining prize is the population this doc's gate analysis treats as
+unmergeable.**
+
+**The deformed half is reachable, and cheaply.** Sway already survives batching today:
+`per_instance.js` derives `vVfxHash` under an explicit `#ifdef USE_BATCHING` from
+`batchingMatrix[3].xy`; three r184 applies `batchingMatrix` after the `begin_vertex` seam
+where windSwayGpu writes its object-space shear; and 206 live BatchedMesh buckets already
+carry a windSwayGpu variant, because `_getOrCreateBucket` passes the member material through
+verbatim. The `ptDeformed` gate is about MATERIAL SUBSTITUTION — the array material never
+went through `buildFragVariant` — not about batching. Including `__vfxSetKey` in the bucket
+key admits them, splits each class into at most two buckets (there is exactly one set in the
+world, 206 of 206), and structurally cannot reproduce the 2026-07-02 "trunk sways, foliage
+frozen" split, because membership and material would then be decided by the same key.
+
+**Fourth 2× of this investigation, and the first one an instrument caused.** The pattern is
+always the same: a population counted at residency and priced as if drawn. Every future
+figure on this workload states its scale — resident, drawn, or submitted — or it is not a
+figure. Raw sampler output: `RESULTS-stat-merge-SUBMITTED-2026-08-06.json`.
+
+---
+
 ## 0b. CORRECTION to §0a — canonical tiers are NOT the thread; native-tile array merging is
 
 §0a read the `snapped` rows as "canonical tiers are worth ~3.9 ms, and they are a bake
