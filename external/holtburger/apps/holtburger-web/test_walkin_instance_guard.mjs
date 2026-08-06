@@ -48,7 +48,23 @@ const loadModule = (relPath, exportsList) => {
     .replace(/^\s*export\s+const\s+/gm, "const ")
     .replace(/^\s*export\s+let\s+/gm, "let ")
     .replace(/^\s*export\s+default\s+/gm, "const __default = ");
-  return new Function("THREE", stripped + `\n; return { ${exportsList.join(", ")} };`)(THREE);
+  // 2026-08-06 ?skipDeadBatch — statics.js composes `materialRendersNothing`
+  // with `skipDeadBatchEnabled` and installs the result into static_batch_x.js
+  // at MODULE LOAD. This loader strips imports, so without a shim that call is
+  // a ReferenceError before a single assertion runs. Shimmed to the
+  // flag-on / nothing-qualifies case so this test keeps measuring the walk-in
+  // instancing guard; dead-batch behaviour has its own test
+  // (test_dead_batch_skip.mjs). Same shim as test_static_batch.mjs — it was
+  // added there and missed here, which broke this suite at load on master.
+  // Conditional, because this loader is used for BOTH sides of that seam:
+  // static_batch_x.js DEFINES `setDeadBatchPredicate`, so shimming it there is
+  // a redeclaration SyntaxError. Only the consumer (statics.js) needs it.
+  const deadBatchShim = /function\s+setDeadBatchPredicate\b/.test(stripped)
+    ? ""
+    : "let __installedDeadPredicate=null;" +
+      "const setDeadBatchPredicate=(f)=>{__installedDeadPredicate=f;}," +
+      "skipDeadBatchEnabled=()=>true,materialRendersNothing=()=>false;\n";
+  return new Function("THREE", deadBatchShim + stripped + `\n; return { ${exportsList.join(", ")} };`)(THREE);
 };
 
 function triGeom(tris = 1) {
