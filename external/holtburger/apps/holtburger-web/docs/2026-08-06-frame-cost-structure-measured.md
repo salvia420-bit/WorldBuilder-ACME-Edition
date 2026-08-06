@@ -180,25 +180,53 @@ in the entire scene.** Merging by value alone recovers 35 buckets; the real ceil
 compatible surfaces to share array textures, which is exactly what the atlas does for the
 narrow class it admits.
 
-**Do not multiply 310 × 66 µs and quote 20 ms.** The per-bucket cost has a fixed component
-(one multidraw rebuild, one draw submission) and a per-instance component that merging does
-NOT remove — the instances still exist. The realizable saving is bounded by the fixed part,
-and **this session did not separate the two.** The measurement that would: build one scene
-with N buckets × M instances and one with N/2 × 2M at equal totals, and compare
-`onBeforeRender` time. Until that is done, 78% fewer buckets is a ceiling on the count, not a
-promise about milliseconds.
+**Do not multiply 310 × 66 µs and quote 20 ms.** Per-bucket cost has a fixed component and a
+per-instance component, and merging removes only the fixed part — the instances still exist.
+So the split had to be measured before any of this could be believed.
+
+### 5a. The split, measured — and it is NOT the same on both halves
+
+No synthetic scene was needed: 197 live buckets already vary widely in instance count, so
+per-bucket time was regressed against it, `t = fixed + perInstance × n`.
+
+| half | fixed | per-instance | r² | fixed share |
+|---|---|---|---|---|
+| `BatchedMesh.onBeforeRender` (rebuild) | 5.9 µs/bucket | 0.348 µs | 0.876 | **20%** |
+| `renderBufferDirect` (draw submission) | **37.6 µs/bucket** | 0.038 µs | **0.014** | **90%** |
+
+The onBeforeRender model reproduces its own measurement (197 × 5.9 µs + 13,195 × 0.348 µs =
+5.74 ms against 5.75 ms observed), which is the check that it is not overfitted.
+
+The two halves behave oppositely, and that is the whole finding:
+
+* **The rebuild is 80% per-instance.** Merging buckets barely helps it — 396 → 86 recovers
+  only **0.65 ms**. Taken alone this looked like a reason to abandon merging, and for one
+  measurement it was.
+* **The draw submission is 90% fixed, with r² = 0.014 against instance count** — i.e. a draw
+  costs essentially the same whether its multidraw carries 5 instances or 500. That is the
+  signature of per-draw state validation and binding dominating, and it is consistent with
+  the independently measured *71% of draws change material* and *160 program switches for 79
+  programs*.
+
+**Merging 197 → ~43 buckets therefore saves ~5.79 ms on the draw side plus 0.65 ms on the
+rebuild: ~6.4 ms of a ~24 ms frame, about 27%.** That is ~9× what `?skipDeadAlpha` bought,
+and it makes array-texture merging the clear top lever — but on the strength of the *fixed
+draw cost*, not the bucket count that first suggested it.
+
+Caveats that stay attached to that number: it assumes merged buckets inherit the 396 → 86
+ratio and gain no new per-bucket cost, and it is a Nanto-only figure.
 
 ---
 
 ## 6. Order, on evidence
 
-1. Separate the fixed vs per-instance cost of a bucket (§5). It is the one number that decides
-   whether merging is worth a subsystem, and nothing below should be built before it — the
-   same mistake the previous doc made by proposing §2 before §1.
+1. **Array-texture bucket merging — ~6.4 ms/frame (§5a).** The gating measurement is done and
+   it came back positive. This is the subsystem worth building.
 2. Program-switch ordering: 160 switches for 79 programs means draw order is not grouped by
-   program. Cheap to test, and it touches the 12.78 ms draw funnel directly.
-3. Bucket merging by material value (−35 buckets) — small, but it is the tractable half and
-   it needs no format work.
+   program. Cheap to test, and it attacks the same 37.6 µs fixed per-draw cost from the other
+   side — possibly most of the win without a format change, so **try this before (1)**.
+3. Bucket merging by material *value* (−35 buckets, ~1.3 ms by the §5a fixed cost) — the
+   tractable half, no format work. Already in flight.
 4. `ptBc7Deferred` re-feed — worth doing on correctness grounds (79% of props miss the atlas
    because of a race), but §3b measured its frame value at ~0.6 ms. Do not sell it as perf.
 5. Anything in the old §3 (overdraw, POM, atmosphere) — only if §1 is ever re-measured and
