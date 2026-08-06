@@ -296,6 +296,12 @@ opaque:
 ClipMap-only is **−2.1 ms**, with every repeat below every baseline repeat, reproducing the
 earlier session's 2.10 ms exactly — two independent sessions.
 
+> ⚠ **CORRECTED BY THE EYE-TEST — the honest number is −1.2 ms, not −2.1 ms.** See §5e. The
+> −2.1 ms arm moved all 77 ClipMap-flagged materials, and 27 of those also carry the
+> **Translucent** bit; moving them breaks the image badly. The safe set is the 50 PURE
+> ClipMap materials, worth **−1.2 ms (3.5%)**. Roughly 0.9 ms of the original figure was
+> being bought with a visual regression.
+
 **Generalising is actively harmful.** Of 284 transparent materials only 99 are movable
 (transparent + `alphaTest > 0` + `depthWrite === true`); **172 are additive** and can never
 move. Adding the 34 non-ClipMap movables — mostly `particle-unlit` — is **+1.5 ms worse than
@@ -336,9 +342,45 @@ one-shot the same way.
 
 ---
 
+## 5e. The eye-test caught what the numbers could not (1070, Holtburg)
+
+Paired A/B captures on the 1070, framing chosen by ranking pairs on pixel difference so that
+frames containing no ClipMap geometry discard themselves.
+
+**The first attempt failed outright.** Moving all 77 ClipMap-flagged materials to the opaque
+pass turned a large translucent blue object **fully opaque**, blanketing the frame and hiding
+the trees and terrain behind it. The classifier was too coarse:
+
+| ClipMap-flagged material | count | flags | safe to move? |
+|---|---|---|---|
+| **pure ClipMap** | **50** | `0x4`, opacity 1, alphaTest 0.784 | **yes** — real binary mask |
+| ClipMap **+ Translucent** | 27 | `0x14`, opacity 0.75 / 0 | **no** — genuinely translucent |
+
+A surface can carry `Base1ClipMap` *and* `Translucent` at once. `materialRendersNothing`'s
+lesson applies again: the flag bit alone is not the predicate — the blend dependency is.
+
+**Refined arm, 50 pure-ClipMap materials only**, three interleaved pairs:
+
+| arm | p50 runs | median |
+|---|---|---|
+| shipped (transparent + blend) | 34 / 34.2 / 35.5 | 34.2 ms |
+| opaque pass (alphaTest only) | 33.3 / 33 / 33 | **33.0 ms** |
+
+**−1.2 ms (3.5%)**, non-overlapping. No missing geometry, no opacity failures, translucent
+objects stay translucent.
+
+**Limit of this eye-test, stated so nobody over-reads it:** the two captures in a pair are
+~0.9 s apart and foliage sways, so the tree occupies a slightly different position in each
+arm. Edge *character* is comparable; pixel-level edge identity is not established, and would
+need the animation clock frozen — which is a client change, not a measurement.
+
+Owner sign-off on the edge quality is still outstanding; nothing is shipped.
+
+---
+
 ## 6. Order, on evidence
 
-1. **ClipMap surfaces out of the transparent pass — 2.10 ms / 6.5% measured (§5b).** Largest
+1. **ClipMap surfaces out of the transparent pass — 1.2 ms / 3.5% (§5b, corrected by §5e).** Largest
    result on the board, one existing flag away, and it needs an eye-test rather than
    engineering. Do this first.
 2. **Array-texture bucket merging — ~6.4 ms/frame (§5a).** Bigger, but a subsystem. The
