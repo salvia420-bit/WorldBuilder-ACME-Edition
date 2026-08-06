@@ -702,12 +702,19 @@ One paired run at Nanto, `texCensus=on` in both arms:
 |---|---|---|
 | live texture bytes | 863 MB | **756 MB** |
 | JS heap | 2,003 MB | **1,797 MB** |
-| draws / frame | 55.4 | **47.8** |
+| draws per `render()` call ⚠ | 55.4 | **47.8** |
 | textures registered for re-hydration | — | 578 |
 | re-hydration failures | — | **0** |
 
 Real, and in the right direction on every axis including draw calls (the
-unbatching regression did not happen). But it is **one paired run**, and this
+unbatching regression did not happen).
+
+> ⚠ That draw figure is per `render()` CALL, not per displayed frame:
+> `info.render.frame` is bumped inside `renderer.render()` (three.module.js:17631)
+> and this client makes several calls per frame (shadow map, sky, atmosphere,
+> composer). The A/B ratio holds — same instrument both arms — but 47.8 is not a
+> per-frame draw count and must not be quoted as one. See
+> `2026-08-06-next-gains-speculation.md` §0. But it is **one paired run**, and this
 workload's run-to-run variance is large — the two control runs 10 minutes apart
 differed by 40 % in bucket count (21 vs 29) and 400 MB in heap. I misread the
 release arm as a regression on the first pass for exactly that reason: I compared
