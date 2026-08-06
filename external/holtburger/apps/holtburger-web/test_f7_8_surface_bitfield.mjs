@@ -231,17 +231,50 @@ check(
 // (acclient.c:454497-454511) alpha-tests at a PER-FORMAT ref AND blends
 // ONE/INVSRCALPHA with z-writes on; `?clipMapParity` is default-ON. With no
 // `hasPalette` supplied the ref keeps its stale-pkg fallback of 0.5.
+// UPDATED 2026-08-06 by `?clipMapOpaque` (default-ON): the alpha-test ref and
+// the z-writes are unchanged, but the surface now stays in the OPAQUE pass
+// instead of the z-sorted transparent one. Measured -1.2 ms / 3.5% on the 1070,
+// owner-signed-off on an eye-test. Blending is deliberately NOT asserted here:
+// three disables blending outright when `transparent === false`, so the blend
+// fields are dead state on this path.
 const matClip = cache._materialFromFlags(SURFACE_TYPE.Base1ClipMap, stubTex);
 check(
-  "Base1ClipMap (0x4): alphaTest=0.5 (no hasPalette), ONE/INVSRCALPHA blend, depthWrite on",
+  "Base1ClipMap (0x4): alphaTest=0.5 (no hasPalette), OPAQUE pass, depthWrite on",
   matClip.alphaTest === 0.5 &&
-    matClip.transparent === true &&
-    matClip.depthWrite === true &&
-    matClip.blending === THREE.CustomBlending &&
-    matClip.blendSrc === THREE.OneFactor &&
-    matClip.blendDst === THREE.OneMinusSrcAlphaFactor &&
-    matClip.blendEquation === THREE.AddEquation,
-  `alphaTest=${matClip.alphaTest}, transparent=${matClip.transparent}, src=${matClip.blendSrc}, dst=${matClip.blendDst}`,
+    matClip.transparent === false &&
+    matClip.depthWrite === true,
+  `alphaTest=${matClip.alphaTest}, transparent=${matClip.transparent}, depthWrite=${matClip.depthWrite}`,
+);
+// The escape must restore the pre-2026-08-06 retail blend arm byte for byte —
+// this is the row that keeps `?clipMapOpaque=off` honest.
+{
+  const _w = globalThis.window;
+  globalThis.window = { location: { search: "?clipMapOpaque=off" } };
+  const matClipBlend = cache._materialFromFlags(SURFACE_TYPE.Base1ClipMap, stubTex);
+  check(
+    "Base1ClipMap + ?clipMapOpaque=off: ONE/INVSRCALPHA blend, transparent, depthWrite on",
+    matClipBlend.alphaTest === 0.5 &&
+      matClipBlend.transparent === true &&
+      matClipBlend.depthWrite === true &&
+      matClipBlend.blending === THREE.CustomBlending &&
+      matClipBlend.blendSrc === THREE.OneFactor &&
+      matClipBlend.blendDst === THREE.OneMinusSrcAlphaFactor &&
+      matClipBlend.blendEquation === THREE.AddEquation,
+    `transparent=${matClipBlend.transparent}, src=${matClipBlend.blendSrc}, dst=${matClipBlend.blendDst}`,
+  );
+  if (_w === undefined) delete globalThis.window; else globalThis.window = _w;
+}
+// A surface carrying Translucent ALONGSIDE ClipMap must NEVER reach the clipmap
+// arm — the ladder tests `isTranslucent || isAlpha || isInvAlpha` first. This is
+// the regression the eye-test caught: toggling on the ClipMap BIT turned a
+// translucent object fully opaque and blanketed the frame. Pin the ordering.
+const matClipTrans = cache._materialFromFlags(
+  SURFACE_TYPE.Base1ClipMap | SURFACE_TYPE.Translucent, stubTex,
+);
+check(
+  "Base1ClipMap|Translucent (0x14): takes the TRANSLUCENT arm, stays transparent",
+  matClipTrans.transparent === true && matClipTrans.depthWrite === false,
+  `transparent=${matClipTrans.transparent}, depthWrite=${matClipTrans.depthWrite}`,
 );
 // Per-format ref on the LEGACY (non-unified) ladder — the RND-08 fix proper.
 const matClipPal = cache._materialFromFlags(
@@ -992,14 +1025,16 @@ setSearch("?surfaceUnified=on&surfaceParityV2=on");
 // assertions stay here (still the same acclient.c truth); the mode/blend
 // coverage is stage 7 below.
 {
+  // `transparent === false` since `?clipMapOpaque` (2026-08-06): the per-format
+  // ref is unchanged, only the PASS moved. See applyClipMapRenderState.
   const mPal = decode6(F.Base1ClipMap, undefined, true);
   check("ClipMap + hasPalette=true → alphaTest=100/255 (paletted s_256AlphaTestRef)",
-    Math.abs(mPal.alphaTest - 100 / 255) < 1e-9 && mPal.transparent === true,
-    `alphaTest=${mPal.alphaTest}`);
+    Math.abs(mPal.alphaTest - 100 / 255) < 1e-9 && mPal.transparent === false,
+    `alphaTest=${mPal.alphaTest}, transparent=${mPal.transparent}`);
   const mDds = decode6(F.Base1ClipMap, undefined, false);
   check("ClipMap + hasPalette=false → alphaTest=200/255 (DDS s_ddsAlphaTestRef)",
-    Math.abs(mDds.alphaTest - 200 / 255) < 1e-9 && mDds.transparent === true,
-    `alphaTest=${mDds.alphaTest}`);
+    Math.abs(mDds.alphaTest - 200 / 255) < 1e-9 && mDds.transparent === false,
+    `alphaTest=${mDds.alphaTest}, transparent=${mDds.transparent}`);
   const mStale = decode6(F.Base1ClipMap, undefined, undefined);
   check("M3b ClipMap + hasPalette=undefined (stale pkg) → legacy alphaTest=0.5",
     mStale.alphaTest === 0.5, `alphaTest=${mStale.alphaTest}`);
@@ -1153,17 +1188,26 @@ setSearch("");
   check("?clipMapParity=ref → 'ref'",
     readClipMapParityMode() === "ref", `got=${readClipMapParityMode()}`);
 
-  // full (default): per-format ref + ONE/INVSRCALPHA + depthWrite on.
+  // full (default) SINCE 2026-08-06: per-format ref + depthWrite on, but the
+  // OPAQUE pass — `?clipMapOpaque` is default-ON. The blend arm moved to the
+  // escape case immediately below.
   setSearch("");
   const mFull = decode6(F.Base1ClipMap, undefined, true);
-  check("clipMapParity full: ONE/INVSRCALPHA blend, transparent, depthWrite ON",
-    mFull.blending === THREE.CustomBlending &&
-      mFull.blendSrc === THREE.OneFactor &&
-      mFull.blendDst === THREE.OneMinusSrcAlphaFactor &&
-      mFull.blendEquation === THREE.AddEquation &&
-      mFull.transparent === true && mFull.depthWrite === true &&
+  check("clipMapParity full + clipMapOpaque default: OPAQUE pass, depthWrite ON, per-format ref",
+    mFull.transparent === false && mFull.depthWrite === true &&
       Math.abs(mFull.alphaTest - 100 / 255) < 1e-9,
-    `blending=${mFull.blending}, src=${mFull.blendSrc}, dst=${mFull.blendDst}, depthWrite=${mFull.depthWrite}`);
+    `transparent=${mFull.transparent}, depthWrite=${mFull.depthWrite}, alphaTest=${mFull.alphaTest}`);
+  setSearch("?clipMapOpaque=off");
+  const mFullBlend = decode6(F.Base1ClipMap, undefined, true);
+  check("clipMapParity full + ?clipMapOpaque=off: ONE/INVSRCALPHA blend, transparent, depthWrite ON",
+    mFullBlend.blending === THREE.CustomBlending &&
+      mFullBlend.blendSrc === THREE.OneFactor &&
+      mFullBlend.blendDst === THREE.OneMinusSrcAlphaFactor &&
+      mFullBlend.blendEquation === THREE.AddEquation &&
+      mFullBlend.transparent === true && mFullBlend.depthWrite === true &&
+      Math.abs(mFullBlend.alphaTest - 100 / 255) < 1e-9,
+    `blending=${mFullBlend.blending}, src=${mFullBlend.blendSrc}, dst=${mFullBlend.blendDst}, transparent=${mFullBlend.transparent}`);
+  setSearch("");
 
   // ref: retail ref WITHOUT the blend (the A/B middle arm).
   setSearch("?clipMapParity=ref");

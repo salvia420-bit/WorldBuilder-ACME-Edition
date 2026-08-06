@@ -2079,6 +2079,26 @@ export function readClipMapParityMode() {
   }
 }
 
+// `?clipMapOpaque` — DEFAULT ON. `=off` restores the pre-2026-08-06 state where
+// a full-parity ClipMap surface rendered in the z-sorted TRANSPARENT pass with
+// CustomBlending ONE/INVSRCALPHA. See `applyClipMapRenderState` for the measured
+// cost and for why the scope is structural rather than a flag-bit filter.
+//
+// NOT memoized, deliberately, matching `readClipMapParityMode` immediately
+// above: the ESM harness re-stubs `globalThis.window` per case, and a memoized
+// reader would latch the first case's answer for the whole suite.
+export function clipMapOpaqueEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("clipMapOpaque");
+    if (typeof v !== "string") return true;
+    const lv = v.trim().toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false" || lv === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
 /**
  * Write retail's ClipMap render state onto `target` — either a live material or
  * the plain `opts` bag a `MeshStandardMaterial` is about to be constructed from
@@ -2096,6 +2116,44 @@ export function applyClipMapRenderState(target, hasPalette) {
       : CLIPMAP_ALPHA_REF_LEGACY;
   if (mode !== "full") {
     target.transparent = false;
+    return;
+  }
+  if (clipMapOpaqueEnabled()) {
+    // `?clipMapOpaque` (2026-08-06) — keep the retail alpha-test ref and the
+    // z-writes, but leave the surface in the OPAQUE pass.
+    //
+    // A ClipMap surface is a binary MASK with depth writes: its surviving
+    // fragments are at alpha >= ref and it occludes what is behind it, so it
+    // does not depend on blend order the way a translucent surface does. The
+    // `transparent = true` below was costing it the opaque pass's grouping and
+    // making it pay the transparent pass's per-frame z-sort, for a blend that
+    // is very nearly a no-op on fragments that survive a 0.784 alpha test.
+    //
+    // MEASURED (1070, Holtburg, quality mid, 3 interleaved in-session pairs):
+    // p50 34/34.2/35.5 -> 33.3/33/33 ms, i.e. **-1.2 ms / 3.5%**, ranges
+    // non-overlapping. The transparent pass overall is 212 draws / 8.70 ms
+    // against opaque's 215 draws / 4.28 ms — half the frame's draws at 2x the
+    // per-draw cost — and this moves 50 materials out of it. Frame is
+    // CPU-bound (an 8.2x render-scale cut does not move it), which is why a
+    // pass change pays at all.
+    //
+    // ⚠ SCOPE IS STRUCTURAL, NOT A FILTER, and that distinction is the whole
+    // safety argument. An eye-test of the naive version — toggling every
+    // material carrying the ClipMap BIT — was a hard FAIL: a large translucent
+    // object turned fully opaque and blanketed the frame. 27 of those 77
+    // materials also carry Translucent (flags 0x14, opacity 0.75/0) and
+    // genuinely need the blend. They never reach this function: in all three
+    // surface ladders (`_materialFromFlags`, the unified decoder, and
+    // entities.js) the `isTranslucent || isAlpha || isInvAlpha` branch is
+    // tested BEFORE `else if (isClipMap)`, so only pure ClipMap arrives here.
+    // Do not "widen" this by testing the flag bit somewhere else — the bit is
+    // not the predicate, the blend dependency is.
+    //
+    // Blending is deliberately NOT set: three disables blending outright for a
+    // material with `transparent === false`, so assigning CustomBlending here
+    // would be dead state that misleads the next reader.
+    target.transparent = false;
+    target.depthWrite = true;
     return;
   }
   target.blending = THREE.CustomBlending;
