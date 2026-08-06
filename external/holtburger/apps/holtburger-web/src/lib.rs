@@ -26,6 +26,101 @@ use holtburger_protocol::crypto::Hash32;
 use holtburger_session::Session;
 use wasm_bindgen::prelude::*;
 
+// --- counting global allocator (2026-08-05, renderer-OOM attribution) -------
+//
+// The 08-05 handoff (`docs/2026-08-05-1070-black-flicker-and-renderer-oom-
+// handoff.md` §3) left the OOM unattributed: `__hbWasmMemory` walks 58 MB →
+// 700 MB over a six-town route and `WebAssembly.Memory` never shrinks, but
+// nothing on the page could say WHICH bytes those are. There are two
+// candidates with OPPOSITE fixes:
+//
+//   * RETENTION — a store is holding them. Fix = a byte budget on that store
+//     (`?surfaceBudgetMB` / `matBudgetMB` shape).
+//   * HIGH-WATER — transient decode peaks grew the linear memory and dlmalloc
+//     kept the pages. Fix = bound the concurrent decode (`?decodeAdmission`),
+//     since capping any cache cannot give a grown `WebAssembly.Memory` back.
+//
+// `wasm_memory_bytes()` alone cannot tell them apart: it is the same number in
+// both worlds. LIVE allocated bytes can — `memoryBytes - allocLive` IS the
+// high-water half, and `allocLive` is the retained half. Nothing else in the
+// runtime exposes it (dlmalloc has no stats hook), so the allocator has to
+// count.
+//
+// Cost: two relaxed atomics on alloc, one on free, against an allocation that
+// already costs ~100 ns. Single-threaded wasm makes them uncontended. This is
+// deliberately NOT flag-gated: an instrument that has to be armed before the
+// leak is the instrument that is off when the crash happens.
+//
+// Accounting notes:
+//   * sizes come from `Layout`, so this counts what the program ASKED for, not
+//     what dlmalloc rounded up to. Per-allocation rounding therefore lands in
+//     the `memoryBytes - allocLive` gap alongside true fragmentation.
+//   * `realloc` charges `total` the full new size (not the delta), so `total`
+//     reads as allocation TRAFFIC (churn), not as a sum of distinct objects.
+mod hb_alloc {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+
+    /// Bytes currently allocated and not yet freed.
+    pub(crate) static LIVE: AtomicUsize = AtomicUsize::new(0);
+    /// Monotonic high-water of [`LIVE`] since instance start. Never reset —
+    /// a peak a diag poll missed is exactly the peak that grew the memory.
+    pub(crate) static PEAK: AtomicUsize = AtomicUsize::new(0);
+    /// Monotonic sum of every allocation ever made (churn, not residency).
+    pub(crate) static TOTAL: AtomicU64 = AtomicU64::new(0);
+
+    pub(crate) struct Counting;
+
+    #[inline]
+    fn charge(n: usize) {
+        let live = LIVE.fetch_add(n, Relaxed) + n;
+        PEAK.fetch_max(live, Relaxed);
+        TOTAL.fetch_add(n as u64, Relaxed);
+    }
+
+    #[inline]
+    fn refund(n: usize) {
+        LIVE.fetch_sub(n, Relaxed);
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc(layout) };
+            if !p.is_null() {
+                charge(layout.size());
+            }
+            p
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc_zeroed(layout) };
+            if !p.is_null() {
+                charge(layout.size());
+            }
+            p
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) };
+            refund(layout.size());
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let p = unsafe { System.realloc(ptr, layout, new_size) };
+            // A failed realloc leaves the ORIGINAL block live and unchanged,
+            // so only a success moves the counters.
+            if !p.is_null() {
+                refund(layout.size());
+                charge(new_size);
+            }
+            p
+        }
+    }
+}
+
+#[global_allocator]
+static HB_GLOBAL_ALLOC: hb_alloc::Counting = hb_alloc::Counting;
+
 // Phase 4 step 3 diagnostics — surface recv_loop trace messages to
 // the browser console without pulling in `web_sys` (the Cargo.toml
 // comment notes "avoids dragging `web-sys` along"). One #[wasm_bindgen]
@@ -3175,6 +3270,24 @@ mod scenery_fetch {
         CACHE.with(|cell| cell.borrow().len())
     }
 
+    /// Resident bytes held by the per-LB record cache — the `sceneryCache`
+    /// row of `hb_mem_census()`. Counts the record payload plus one
+    /// `HashMap` slot per LB; the map's own spare capacity is not counted
+    /// (it lands in the census's `unattributed` line, like every other
+    /// container's slack).
+    pub fn cache_bytes() -> usize {
+        CACHE.with(|cell| {
+            cell.borrow()
+                .values()
+                .map(|v| {
+                    v.len() * std::mem::size_of::<CachedRecord>()
+                        + std::mem::size_of::<u32>()
+                        + std::mem::size_of::<Vec<CachedRecord>>()
+                })
+                .sum()
+        })
+    }
+
     /// Clear the scenery cache. Useful for unit / smoke tests that
     /// want to verify cache miss vs hit behaviour. Not used in
     /// normal page flow.
@@ -3520,6 +3633,26 @@ mod suite_fetch {
             + SUITE_CACHE_BY_KEY.with(|cell| cell.borrow().len())
     }
 
+    /// Resident bytes across BOTH suite caches — the `suiteCache` row of
+    /// `hb_mem_census()`. Sidecar payloads dominate; the keys are counted
+    /// because the string-keyed (texchan) half keys on a content hash, so
+    /// its keys are not negligible next to a small sidecar.
+    pub fn cache_bytes() -> usize {
+        let by_did: usize = SUITE_CACHE.with(|cell| {
+            cell.borrow()
+                .iter()
+                .map(|((_, t), v)| v.len() + t.len() + 32)
+                .sum()
+        });
+        let by_key: usize = SUITE_CACHE_BY_KEY.with(|cell| {
+            cell.borrow()
+                .iter()
+                .map(|((k, t), v)| v.len() + k.len() + t.len() + 48)
+                .sum()
+        });
+        by_did + by_key
+    }
+
     /// Clear both suite caches. Test / smoke helper; not used in the
     /// normal page flow.
     #[wasm_bindgen]
@@ -3654,6 +3787,29 @@ pub async fn fetch_suite_artifact_by_key(
     Ok(bytes)
 }
 
+/// Scenic SetupModel → `default_animation` DID memo (Task #7, 2026-06-23).
+///
+/// Page-lifetime, one entry per unique 0x02 obj_id the scenery stream has ever
+/// resolved, so each model is parsed once across all LB fetches. Unbounded by
+/// design and cheap to leave that way: `u32 → u32` is 8 bytes of payload per
+/// distinct scenic model, i.e. tens of KB for all of Dereth.
+///
+/// Hoisted out of `fetch_landblock_scenery`'s body (2026-08-05) purely so
+/// `hb_mem_census()` can report it. A `thread_local!` in a function body and
+/// one at module scope have identical storage semantics — same instance, same
+/// lifetime, same single-threaded `RefCell` soundness argument.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static ANIM_CACHE: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Entries in [`ANIM_CACHE`] — the `sceneryAnimCache` row of `hb_mem_census()`.
+#[cfg(target_arch = "wasm32")]
+fn scenery_anim_cache_entries() -> usize {
+    ANIM_CACHE.with(|cache| cache.borrow().len())
+}
+
 /// Fetch per-landblock baked scenery placements for a list of
 /// `XXYYFFFE` LandblockInfo cell IDs. Mirrors
 /// [`fetch_landblock_objects`]'s call shape so the renderer's
@@ -3743,10 +3899,6 @@ pub async fn fetch_landblock_scenery(
     {
         use holtburger_dat::file_type::SetupModel;
         use holtburger_dat::{ResourceKey, ResourceSource};
-        thread_local! {
-            static ANIM_CACHE: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
-                std::cell::RefCell::new(std::collections::HashMap::new());
-        }
         let source = global_source::global_source();
         // Unique 0x02 SetupModel obj_ids not yet resolved → prefetch their DAT
         // entries before the sync parse (cold first-fetch of an LB can precede
@@ -11217,6 +11369,227 @@ pub fn dat_decode_diag() -> String {
             shard_cache_bytes,
         )
     }
+}
+
+// --- wasm memory census (2026-08-05, renderer-OOM attribution) -------------
+//
+// One call that says where THIS instance's linear memory went. See the
+// `hb_alloc` header for why the counting allocator is the load-bearing half:
+// `memoryBytes` alone reads the same whether a cache is holding the bytes or
+// a transient decode peak grew the memory and dlmalloc kept the pages, and
+// those two have opposite fixes.
+//
+// How to read the three totals (`docs/2026-08-05-...-handoff.md` §3):
+//
+//   allocLive        bytes something still owns. Walks up over a route ⇒
+//                    RETENTION; the `stores` rows say which store, and
+//                    `unattributed` is the part no row claims.
+//   slackBytes       `memoryBytes - allocLive`: dlmalloc's free pool, the
+//                    per-allocation size-class rounding this census does not
+//                    see (it charges `Layout`, not the rounded block), the
+//                    shadow stack and statics. Large and stable while
+//                    `allocLive` stays flat ⇒ HIGH-WATER, and no cache budget
+//                    can give it back — bound the concurrent decode instead.
+//   allocPeak        the high-water that GREW the memory. Monotonic, so a
+//                    spike between two polls still leaves its mark; expect
+//                    `allocPeak <= memoryBytes` on any healthy instance.
+//
+// Every store is a row even when it is known-tiny, because the value of this
+// instrument is that `unattributed` means "not any of these" — a store left
+// out silently reappears as a mystery.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default, Clone, Copy)]
+struct MemStoreRow {
+    bytes: usize,
+    entries: usize,
+    /// The store's byte budget, or `None` for "unbounded by construction".
+    /// Rendered as `-1`, matching `shardCacheBudget` / `surfaceCacheBudget`'s
+    /// existing "no bound" convention so JS tests for it the same way.
+    budget: Option<usize>,
+}
+
+/// Render the census. Split out from [`hb_mem_census`] so the arithmetic —
+/// the store sum, the saturating residuals — is exercised by native tests
+/// without a wasm runtime or a live page.
+///
+/// `unattributed` and `slack` SATURATE at zero rather than wrap. Both can go
+/// legitimately negative for a moment: the store rows and the allocator
+/// counters are read one after another, not atomically, and a store charges
+/// the payload it holds while the allocator charges the request that produced
+/// it (a `Vec` with spare capacity charges more to the allocator than the
+/// store reports, but an `Arc` shared between two rows would double-count the
+/// other way). A negative would be an artefact of the read, never a finding.
+#[cfg(any(target_arch = "wasm32", test))]
+fn mem_census_json(
+    memory_bytes: f64,
+    alloc_live: usize,
+    alloc_peak: usize,
+    alloc_total: u64,
+    rows: &[(&str, MemStoreRow)],
+    decode_peak_live_bytes: u64,
+) -> String {
+    let store_bytes: usize = rows.iter().map(|(_, r)| r.bytes).sum();
+    let unattributed = alloc_live.saturating_sub(store_bytes);
+    let slack = (memory_bytes as usize).saturating_sub(alloc_live);
+    let rows_json = rows
+        .iter()
+        .map(|(name, r)| {
+            format!(
+                "\"{}\":{{\"bytes\":{},\"entries\":{},\"budget\":{}}}",
+                name,
+                r.bytes,
+                r.entries,
+                match r.budget {
+                    Some(b) => b as i64,
+                    None => -1,
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"memoryBytes\":{memory_bytes},\"allocLive\":{alloc_live},\
+         \"allocPeak\":{alloc_peak},\"allocTotal\":{alloc_total},\
+         \"storeBytes\":{store_bytes},\"unattributed\":{unattributed},\
+         \"slackBytes\":{slack},\"decodePeakLiveBytes\":{decode_peak_live_bytes},\
+         \"stores\":{{{rows_json}}}}}"
+    )
+}
+
+/// JSON memory census for THIS wasm instance. The bake worker's instance
+/// reports its own through the `wasmMemCensus` worker relay, so
+/// `__diag.wasmMem()` sees the page-wide picture (two linear memories, two
+/// full sets of stores — that duplication is itself a finding when a row is
+/// large on both halves).
+///
+/// Read-only: no eviction, no clearing, no recency bump that would perturb the
+/// LRU order it is measuring. Safe to poll on a timer.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn hb_mem_census() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    let surface = {
+        let c = surface_cache_ro();
+        MemStoreRow {
+            bytes: c.total_bytes,
+            entries: c.len(),
+            budget: Some(c.budget),
+        }
+    };
+    let model_tri = {
+        // `get` bumps recency so the LRU has only a write accessor; this
+        // reads the totals and touches no entry.
+        let c = model_tri_cache();
+        MemStoreRow {
+            bytes: c.total_bytes,
+            entries: c.len(),
+            budget: Some(c.budget),
+        }
+    };
+    // The DAT-record cache — `?shardBudgetMB` UNSET means `usize::MAX`, i.e.
+    // every record ever fetched stays resident. If retention is the answer,
+    // this row is the first place to look.
+    let shard_budget = holtburger_resource_http::configured_shard_budget_bytes();
+    let shard = {
+        let src = global_source::try_global_source();
+        MemStoreRow {
+            bytes: src.as_ref().map(|s| s.cached_shard_bytes()).unwrap_or(0),
+            entries: src.as_ref().map(|s| s.cached_shard_count()).unwrap_or(0),
+            budget: if shard_budget == usize::MAX {
+                None
+            } else {
+                Some(shard_budget)
+            },
+        }
+    };
+    // Inert unless `?gfxRelief=on` — but 4 B/px per distinct surface DID with
+    // no bound, so it is a row precisely because "it is off by default" is a
+    // claim a census should check rather than assume.
+    let surface_height = SURFACE_HEIGHT
+        .read()
+        .map(|m| MemStoreRow {
+            bytes: m
+                .values()
+                .map(|v| {
+                    v.as_ref()
+                        .map(|h| h.data.len() * std::mem::size_of::<f32>() + 32)
+                        .unwrap_or(16)
+                })
+                .sum(),
+            entries: m.len(),
+            budget: None,
+        })
+        .unwrap_or_default();
+    let scenery = MemStoreRow {
+        bytes: scenery_fetch::cache_bytes(),
+        entries: scenery_fetch::scenery_cache_size(),
+        budget: None,
+    };
+    let suite = MemStoreRow {
+        bytes: suite_fetch::cache_bytes(),
+        entries: suite_fetch::suite_cache_size(),
+        budget: None,
+    };
+    let scenery_anim = {
+        let n = scenery_anim_cache_entries();
+        MemStoreRow {
+            bytes: n * (2 * std::mem::size_of::<u32>() + 8),
+            entries: n,
+            budget: None,
+        }
+    };
+    let neg_cache = {
+        let n = missing_surfaces().len();
+        MemStoreRow {
+            bytes: n * (std::mem::size_of::<u32>() + 8),
+            entries: n,
+            budget: None,
+        }
+    };
+    let tex_swap = {
+        let g = tex_swap_aliases();
+        let n = g.0.len() + g.1.len();
+        MemStoreRow {
+            bytes: n * 24,
+            entries: n,
+            budget: None,
+        }
+    };
+    let scratch = MemStoreRow {
+        bytes: NORMAL_HEIGHT_SCRATCH.idle_bytes(),
+        entries: NORMAL_HEIGHT_SCRATCH.idle_len(),
+        budget: None,
+    };
+    let decode_dids = {
+        let n = decode_diag().surface_decode_dids.len();
+        MemStoreRow {
+            bytes: n * (std::mem::size_of::<u32>() + 8),
+            entries: n,
+            budget: None,
+        }
+    };
+
+    mem_census_json(
+        wasm_memory_bytes(),
+        hb_alloc::LIVE.load(Relaxed),
+        hb_alloc::PEAK.load(Relaxed),
+        hb_alloc::TOTAL.load(Relaxed),
+        &[
+            ("surfacePixels", surface),
+            ("modelTri", model_tri),
+            ("shardRecords", shard),
+            ("surfaceHeight", surface_height),
+            ("sceneryRecords", scenery),
+            ("suiteArtifacts", suite),
+            ("sceneryAnim", scenery_anim),
+            ("negCache", neg_cache),
+            ("texSwapAliases", tex_swap),
+            ("scratchPool", scratch),
+            ("decodeDids", decode_dids),
+        ],
+        DECODE_ADMISSION.stats().peak_live_bytes as u64,
+    )
 }
 
 // --- P2↔P3 ABI (net-fixwave 2026-07-10): call-level decode audit -----------
@@ -62317,5 +62690,111 @@ mod tests_windup_action_order {
         let commands = vec![MotionItem::new(0x005Bu16, 41, false, 1.0)]; // SlashHigh
         let rows = motion_action_queue_rows(&commands, Some(41), GUID, 0x3D);
         assert!(rows.is_empty(), "the main path's own item must not re-queue");
+    }
+}
+
+#[cfg(test)]
+mod tests_mem_census {
+    use super::*;
+
+    // ---- wasm memory census (`hb_mem_census`) ------------------------------
+    //
+    // The live export is wasm-only (it reads `WebAssembly.Memory` and the
+    // wasm-gated stores), so what is testable natively is the part that can
+    // silently lie: the arithmetic that turns raw counters into the three
+    // numbers the OOM verdict is read off, and the allocator's own accounting.
+
+    /// `unattributed` is THE number the next measurement run acts on — it is
+    /// what says "no store claims these bytes". If it wrapped instead of
+    /// saturating, a store row that momentarily over-reports would turn a
+    /// small residual into ~4 exabytes and read as a catastrophic leak.
+    #[test]
+    fn census_residuals_saturate_instead_of_wrapping() {
+        let rows = [(
+            "surfacePixels",
+            MemStoreRow { bytes: 900, entries: 3, budget: Some(4096) },
+        )];
+        // Stores claim MORE than the allocator says is live (a legal transient
+        // skew: the two are read one after the other, not atomically).
+        let json = mem_census_json(1000.0, 500, 700, 12_345, &rows, 64);
+        assert!(json.contains("\"unattributed\":0"), "{json}");
+        // ...and linear memory smaller than live bytes is the same class.
+        let json = mem_census_json(100.0, 500, 700, 12_345, &rows, 64);
+        assert!(json.contains("\"slackBytes\":0"), "{json}");
+    }
+
+    /// The roll-up must sum every row, and an unbounded store must render as
+    /// `-1` — the convention `surfaceCacheBudget` / `shardCacheBudget` already
+    /// use, so one JS comparison tests "no bound" across all of them.
+    #[test]
+    fn census_sums_rows_and_renders_unbounded_budget_as_minus_one() {
+        let rows = [
+            ("surfacePixels", MemStoreRow { bytes: 100, entries: 1, budget: Some(96) }),
+            ("shardRecords", MemStoreRow { bytes: 250, entries: 0, budget: None }),
+            ("sceneryRecords", MemStoreRow { bytes: 50, entries: 7, budget: None }),
+        ];
+        let json = mem_census_json(4096.0, 1000, 1200, 9_000, &rows, 128);
+        assert!(json.contains("\"storeBytes\":400"), "{json}");
+        // 1000 live − 400 claimed = 600 nobody claims.
+        assert!(json.contains("\"unattributed\":600"), "{json}");
+        // 4096 linear − 1000 live = 3096 of free pool / rounding / stack.
+        assert!(json.contains("\"slackBytes\":3096"), "{json}");
+        assert!(json.contains("\"shardRecords\":{\"bytes\":250,\"entries\":0,\"budget\":-1}"), "{json}");
+        assert!(json.contains("\"surfacePixels\":{\"bytes\":100,\"entries\":1,\"budget\":96}"), "{json}");
+        assert!(json.contains("\"decodePeakLiveBytes\":128"), "{json}");
+        // Parseable as one object by the JS side.
+        let v: serde_json::Value = serde_json::from_str(&json).expect("census must be valid JSON");
+        assert_eq!(v["stores"]["sceneryRecords"]["entries"], 7);
+    }
+
+    /// The counting allocator must actually observe allocations, and its
+    /// `realloc` arm must not corrupt the live counter — a `Vec` growth loop
+    /// is nothing but reallocs, and an underflow there would wrap `LIVE` to
+    /// something near `usize::MAX` and make every later census meaningless.
+    ///
+    /// Asserted on the counters that are robust under a parallel test binary:
+    /// `TOTAL` and `PEAK` are monotonic, so other threads can only push them
+    /// the way this test expects. `LIVE` is only checked for sanity (it is
+    /// shared with every other running test, so no exact delta is available).
+    #[test]
+    fn counting_allocator_tracks_traffic_without_underflowing() {
+        use std::sync::atomic::Ordering::Relaxed;
+        const CHUNK: usize = 4 * 1024 * 1024;
+
+        let total_before = hb_alloc::TOTAL.load(Relaxed);
+        let peak_before = hb_alloc::PEAK.load(Relaxed);
+
+        let big = vec![7u8; CHUNK];
+        assert_eq!(big.len(), CHUNK);
+        let live_held = hb_alloc::LIVE.load(Relaxed);
+        drop(big);
+
+        // A growth loop: many reallocs, every one of them charged and refunded.
+        let mut grown: Vec<u64> = Vec::new();
+        for i in 0..200_000u64 {
+            grown.push(i);
+        }
+        let live_after = hb_alloc::LIVE.load(Relaxed);
+        drop(grown);
+
+        assert!(
+            hb_alloc::TOTAL.load(Relaxed) >= total_before + CHUNK as u64,
+            "a {CHUNK}-byte allocation must show up in the traffic counter"
+        );
+        assert!(
+            hb_alloc::PEAK.load(Relaxed) >= peak_before,
+            "PEAK is a fetch_max — it can never go backwards"
+        );
+        assert!(
+            hb_alloc::PEAK.load(Relaxed) >= live_held,
+            "PEAK must dominate any LIVE value ever observed"
+        );
+        // The underflow canary: a wrapped `LIVE` lands near `usize::MAX`, so
+        // any sane bound catches it. 64 GiB is far above anything a test
+        // binary holds and far below a wrap.
+        assert!(
+            live_after < 64 * 1024 * 1024 * 1024,
+            "LIVE = {live_after} — realloc accounting underflowed"
+        );
     }
 }

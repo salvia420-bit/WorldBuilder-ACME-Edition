@@ -91,13 +91,12 @@ cap active: 138 → 1,271 → 1,610 → 1,978 → 2,162 → 2,717 → **2,808 MB
 `WebAssembly.Memory` can only grow — it never shrinks, never gives memory back. Every
 spike permanently raises the floor, and the bake worker holds a *second* instance with its
 own linear memory. `?surfaceBudgetMB` already caps the wasm surface-pixel cache at 24:64 MB,
-so the growth is elsewhere. Unbounded `thread_local! RefCell<HashMap<..>>` caches with no
-eviction in `apps/holtburger-web/src/lib.rs` — record cache `:3118`, suite caches
-`:3488`/`:3495`, anim cache `:3747`, plus the triangulation memo. **Same bug class as
-`matBudgetMB`, one layer down in Rust.**
+so the growth is elsewhere.
 
-**Recommended next move:** byte-budget LRU over those caches, mirroring what
-`?surfaceBudgetMB` already does for surface pixels.
+> ⚠ **The cache list this section originally named was wrong. See §7.** It read the
+> `thread_local!` declarations and assumed unbounded; three of the four hold trivial
+> amounts and the triangulation memo has been byte-budgeted since S14. §7 replaces it
+> with a verified audit and an instrument that measures instead of guessing.
 
 ---
 
@@ -177,3 +176,132 @@ views (several typed-array views share one buffer; wasm-bindgen keeps `Uint8Arra
 removes in 30 s, resident oscillating 29↔39. NOT the count cap (`maxResident` is 203) —
 it is the memory-pressure governor parking landblocks that the streamer immediately
 re-adopts, and our path re-decodes each one on the way back. Downstream of §3.
+
+---
+
+## 7. LANDED — the wasm memory census (`__diag.wasmMem`), and what §3 got wrong
+
+§3 named five caches from their `thread_local!` declarations and recommended a byte-budget
+LRU over them. Reading each one against the code first:
+
+| §3's claim | verified | notes |
+|---|---|---|
+| triangulation memo unbounded | **WRONG** | `MODEL_TRI_CACHE` has been a `ByteBudgetLru` at **64 MiB** since S14 (`MODEL_TRI_CACHE_BUDGET_BYTES`, `src/lib.rs:8849`). Its own doc-comment says the entry-COUNT bound it replaced was root-caused as this exact RSS-growth class. |
+| anim cache `:3747` unbounded | true but **irrelevant** | `HashMap<u32,u32>` — 8 bytes of payload per distinct scenic model. Tens of KB for all of Dereth. |
+| scenery record cache `:3118` unbounded | true, **small** | `CachedRecord` is 15 scalars; a whole town's LBs are single-digit MB. |
+| suite caches `:3488`/`:3495` unbounded | true, **size unknown** | Raw sidecar bytes. Live via `scene3d/suite_assets.js` (texchan). Worth a row, not worth a guess. |
+| surface pixel cache | already capped | 24:64 MB, armed 2026-07-26. |
+
+What §3 **missed** — both found by auditing every store, not just the `thread_local!`s:
+
+* **The DAT-record shard cache is default-UNBOUNDED.** `configured_shard_budget_bytes()`
+  (`crates/holtburger-resource-http/src/manifest_source.rs:133`) returns `usize::MAX`
+  unless the page sets `__hbShardBudgetBytes`, and `?shardBudgetMB` ships **unset**. The
+  LRU exists and is unarmed — the *same* "built, measured, never armed" shape as
+  `matBudgetMB` in §2. `url-flags.md` already records it ratcheting ~58 MB main + ~21 MB
+  worker over four hops and calls it "the dominant tracked RSS ratchet". It also records
+  that arming it at **24 MB thrashed** (~280 MB of evicted-and-refetched churn), so the
+  number matters and cannot be picked blind.
+* **`?decodeAdmission` is also unset ⇒ unbounded**, i.e. nothing bounds concurrent
+  in-flight decode bytes. That is the *other* mechanism entirely: transient peaks grow
+  `WebAssembly.Memory`, which never shrinks, so a peak that lasts 200 ms raises the floor
+  permanently. No cache budget can undo it.
+* **`SURFACE_HEIGHT` (`src/lib.rs:105`) is unbounded and would be the largest store of
+  all if it ever ran** — `Vec<f32>` at 4 B/px per distinct surface DID, i.e. ~4 MB for a
+  single 1024² surface, with no budget and no eviction. It is inert today because
+  `prime_surface_heights` no-ops unless `?gfxRelief=on` (strict opt-in, default off), so
+  it is NOT the 08-05 OOM. It is a row in the census anyway: "off by default" is a claim
+  worth measuring rather than assuming, and it is a landmine for whoever ships relief.
+
+**Those two candidates have opposite fixes, and `wasmMemoryBytes` reads identically under
+both.** That is why this session built an instrument instead of arming a budget.
+
+### The instrument
+
+`hb_mem_census()` (`src/lib.rs`, wasm export) + `__diag.wasmMem()` (page-side roll-up over
+BOTH wasm instances, `scene3d/mem_census.js`). Needs a **wasm rebuild** (`--release`).
+
+```js
+await window.__diag.wasmMem()
+// { main, worker, page:{memoryBytes, allocLive, allocPeak, storeBytes,
+//                       unattributed, slackBytes, stores:{...}, top:[...]},
+//   missing:[], verdict:"..." }
+```
+
+A `#[global_allocator]` wrapper counts live/peak/total allocated bytes — the load-bearing
+half, because nothing else in the runtime exposes it (dlmalloc has no stats hook) and it is
+the only way to split the two candidates apart:
+
+| reading | means | fix |
+|---|---|---|
+| `allocLive` climbs across the route | RETENTION | budget the store `top` names |
+| `slackBytes` large, `allocLive` flat | HIGH-WATER from transient peaks | bound the decode (`?decodeAdmission`); check `decodePeakLiveBytes` |
+| `unattributed` is most of `allocLive` | the census is incomplete | a store has no row yet — add one before concluding anything |
+
+`page` sums the two instances deliberately: they are independent linear memories against
+ONE 4,192 MB renderer cap, so a row that is 200 MB on each half costs the tab 400 MB. A
+half whose `pkg/` predates the export is named in `missing`, never counted as zero — the
+standing staleness trap.
+
+Eleven store rows, including the ones known to be tiny. The value of the residual is
+exactly that `unattributed` means "none of these", so a store left out silently reappears
+as a mystery.
+
+**Cost:** two relaxed atomics per allocation, uncontended on single-threaded wasm. Not
+flag-gated on purpose — an instrument that must be armed before the leak is the instrument
+that is off when the crash happens.
+
+### QUEUED — the measurement run this is built for (owner-run)
+
+Not self-initiated (2026-07-31 halt / 2026-08-02 carve-out). Everything below is one
+route on the 1070; ~10 minutes.
+
+1. Rebuild `pkg/` **`--release`** first (this session's release build is **6.2 MB**; a
+   ~18 MB `.wasm` is a `--dev` build and pays ~4× the decode tax) and use `?nosw=1`, or
+   the run measures a stale bundle.
+2. Boot headless, in-world, defaults otherwise — **no** `?shardBudgetMB`, **no**
+   `?decodeAdmission`. The point is to measure the shipping configuration.
+3. `const t0 = await __diag.wasmMem()` at spawn.
+4. `@telepoi` the SAME six-town route §2 used: Holtburg → Arwic → Yaraq → Sawato →
+   Shoushi → Nanto, `await __diag.wasmMem()` after each, and record `verdict` +
+   `page.top` + `page.allocLive` + `page.slackBytes` + `page.unattributed` per hop.
+5. Record `page.stores.shardRecords.bytes` explicitly at every hop — it is the leading
+   retention hypothesis and it has never actually been read on this route.
+
+**Decision rule, written before the data:**
+* `allocLive` tracks the memory growth and `shardRecords` is the top row ⇒ arm
+  `?shardBudgetMB` — at ~3× the observed per-hop working set, **not** at 24 (that number is
+  already known to thrash), and owe the ABAB interleave.
+* `allocLive` stays flat while `memoryBytes` climbs ⇒ the fix is `?decodeAdmission`, and
+  every cache budget in the backlog is the wrong tree; `allocPeak` and
+  `decodePeakLiveBytes` size the bound.
+* `unattributed` dominates ⇒ stop and add the missing row. Do not arm anything.
+
+### Also still owed from §2 / §3
+
+* the ABAB settle-within-noise interleave `matBudgetMB` was armed without;
+* geometry disposal (§4) — VRAM, still unfixed, still will not move the OOM.
+
+### Verification for this section's changes
+
+| gate | result |
+|---|---|
+| `cargo test -p holtburger-web --lib` | 226 passed / **1 pre-existing failure** |
+| `cargo test -p holtburger-dat --lib scratch` | 10 passed / 0 failed (incl. the new `idle_bytes` case) |
+| `node test_mem_census.mjs` | 29 passed / 0 failed |
+| `node test_mat_budget_lru.mjs` | 123 / 0 |
+| `node test_surface_budget_flags.mjs` | 38 / 0 |
+| `node test_decode_admission_flags.mjs` | 61 / 0 |
+| `node test_first_bake_batch_flags.mjs` | 84 / 0 |
+| `node test_bake_worker_client_queue.mjs` | 34 / 0 |
+| `wasm-pack build --release` | clean; `hb_mem_census` present in `pkg/holtburger_web.js` |
+| `lint-url-flags`, `audit-flag-defaults` | clean (0 undocumented readers) |
+
+The one failure, `tests_substitution::resolve_static_placement_frame_orders`,
+**reproduces on an unmodified checkout** (`git stash`, same assert, `left: 0 right: 101`) —
+it predates this work, exactly like the `bc7TextureBytes` breakage §2 found. So does
+`lint-harness-params`' `kickDance` DEAD-PARAM failure. Both verified stashed, not assumed.
+
+**Not verified: anything live.** No client session was run — the census has never executed
+in a browser. Its Rust half compiles for wasm32 and its arithmetic is tested natively; the
+first real reading is the queued run above.

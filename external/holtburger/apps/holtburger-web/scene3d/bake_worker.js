@@ -22,9 +22,11 @@
 //        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...], urgent?}
 //        {type:'fetchEntitySurfacesPixelsBatch', id, flatDids, lens, basePals, flatSubs, tripleCounts, urgent?}
 //        {type:'datDecodeDiag', id}
+//        {type:'wasmMemCensus', id}
 //   out: {type:'ready', id}
 //        {type:'result', id, kind:'modelMeshes'|'surfaces'|'entitySurfaces'|'entitySurfacesBatch', payload:[...], audit?}  (+ transferables)
 //        {type:'result', id, kind:'diag', payload: <dat_decode_diag() JSON string|null>}
+//        {type:'result', id, kind:'memCensus', payload: <hb_mem_census() JSON string|null>}
 //        {type:'error', id, message}
 //
 // `audit` (P2↔P3 ABI, 2026-07-10) is the call-level decode audit
@@ -297,6 +299,26 @@ self.onmessage = async (ev) => {
           id: msg.id,
           kind: "diag",
           payload: typeof dat_decode_diag === "function" ? dat_decode_diag() : null,
+        });
+      case "wasmMemCensus":
+        // 2026-08-05 OOM attribution — THIS instance's linear-memory census
+        // (`hb_mem_census`). The worker holds a SECOND wasm memory with its
+        // own full set of stores, and it carries the bulk of the decode, so a
+        // main-thread-only reading attributes at most half the page.
+        //
+        // Via the namespace handle, NOT a named import: a named import of a
+        // new export module-link-errors the whole worker on a stale pkg/ (the
+        // `__wasmNs` rationale at the import site). A diagnostic must never be
+        // what stops the bake from working.
+        if (!ready) throw new Error("bake_worker: wasmMemCensus before init");
+        return self.postMessage({
+          type: "result",
+          id: msg.id,
+          kind: "memCensus",
+          payload:
+            typeof __wasmNs.hb_mem_census === "function"
+              ? __wasmNs.hb_mem_census()
+              : null,
         });
       default:
         throw new Error(`bake_worker: unknown message type ${msg && msg.type}`);

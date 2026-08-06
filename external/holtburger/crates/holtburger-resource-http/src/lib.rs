@@ -61,7 +61,7 @@ pub use http::{HttpError, fetch_bytes, join_url};
 #[cfg(target_arch = "wasm32")]
 pub use manifest_source::{
     ManifestConnectError, ManifestResourceSource, PrefetchError,
-    configured_fetch_concurrency, shard_verify_enabled,
+    configured_fetch_concurrency, configured_shard_budget_bytes, shard_verify_enabled,
 };
 #[cfg(target_arch = "wasm32")]
 pub use source::{ConnectError, HttpResourceSource};

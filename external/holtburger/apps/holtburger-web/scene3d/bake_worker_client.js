@@ -1525,6 +1525,27 @@ export class BakeWorkerClient {
     }
   }
 
+  /**
+   * 2026-08-05 OOM attribution — the WORKER wasm instance's `hb_mem_census()`
+   * JSON (linear-memory size, allocator live/peak, and per-store bytes). The
+   * worker owns a SECOND linear memory with its own full set of stores, so a
+   * main-thread-only reading misses the half that does most of the decoding.
+   *
+   * Returns the raw JSON string, or null when the worker is inactive / not yet
+   * ready / running a pkg that predates the export. Never throws — a memory
+   * probe that can break the bake is worse than no probe.
+   */
+  async wasmMemCensus() {
+    if (!this.active || !this._worker) return null;
+    try {
+      await this._ensureWorker();
+      const res = await this._request("wasmMemCensus", {});
+      return res.payload ?? null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   terminate() {
     // `_failAll` owns the terminate + reference drop (F1). No `backoff` — an
     // explicit terminate is the staleness-reset gesture, so the next bake must

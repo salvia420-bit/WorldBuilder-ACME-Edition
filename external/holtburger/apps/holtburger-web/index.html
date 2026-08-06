@@ -1118,6 +1118,7 @@
     <link rel="modulepreload" href="./scene3d/lod_prewarm.js">
     <link rel="modulepreload" href="./scene3d/loop.js">
     <link rel="modulepreload" href="./scene3d/materials.js">
+    <link rel="modulepreload" href="./scene3d/mem_census.js">
     <link rel="modulepreload" href="./scene3d/motion/motion_sequence.js">
     <link rel="modulepreload" href="./scene3d/nameplate_sprite.js">
     <link rel="modulepreload" href="./scene3d/net_worker_client.js">
@@ -5069,6 +5070,12 @@
             dat_decode_diag: __hbWasmNs.dat_decode_diag,
             surface_neg_cache_remove: __hbWasmNs.surface_neg_cache_remove,
             surface_neg_cache_clear: __hbWasmNs.surface_neg_cache_clear,
+            // 2026-08-05 OOM attribution — `__diag.wasmMem`'s MAIN half. Same
+            // namespace access, same reason; and it must be listed HERE or the
+            // curated-opts plumb-through trap makes the main thread read as
+            // "no census" while the worker half reports fine — which would
+            // look exactly like the main instance holding nothing.
+            hb_mem_census: __hbWasmNs.hb_mem_census,
             // DRAIN-WIRING FIX (2026-08-01) — the two motion side-channel drains
             // (`?multiAction` / `?castAxes`, both documented DEFAULT-ON) guarded
             // on `sessionHandle.pollMotionActions` / `.pollMotionAxes` being

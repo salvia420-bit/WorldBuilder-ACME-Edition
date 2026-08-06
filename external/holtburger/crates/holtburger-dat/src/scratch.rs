@@ -155,6 +155,21 @@ impl ScratchPool {
         self.cap
     }
 
+    /// Bytes retained by the buffers currently resting in the pool.
+    ///
+    /// Diagnostic only — the web bundle's `hb_mem_census()` reports it so the
+    /// pool's at-rest cost (up to `cap` × three 512²-shaped `Vec<f32>`s ≈
+    /// 12 MiB) is an attributed row rather than part of an unexplained
+    /// residual. Counts CAPACITY, not length: a pool exists to hold on to
+    /// capacity across leases, so capacity is what it costs.
+    pub fn idle_bytes(&self) -> usize {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .iter()
+            .map(|b| b.retained_capacity() * std::mem::size_of::<f32>())
+            .sum()
+    }
+
     fn give_back(&self, buf: ScratchBuf) {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if guard.len() < self.cap {
@@ -318,6 +333,35 @@ mod tests {
             let _l = pool.lease();
         }
         assert_eq!(pool.idle_len(), 0);
+    }
+
+    /// `idle_bytes` feeds the web bundle's memory census, where a row that
+    /// silently reads 0 is worse than no row: it says "this pool costs
+    /// nothing" while the pool is holding megabytes, and the residual it
+    /// should have explained gets blamed on something else.
+    #[test]
+    fn idle_bytes_reports_retained_capacity_not_length() {
+        let pool = ScratchPool::new(2);
+        assert_eq!(pool.idle_bytes(), 0, "an empty pool retains nothing");
+        {
+            let mut lease = pool.lease();
+            lease.buf_mut().f32_zeroed(Slot::A, 1024);
+        }
+        // The buffer is back in the pool with its capacity intact — which is
+        // the whole point of pooling, and therefore the cost to report.
+        assert_eq!(pool.idle_len(), 1);
+        assert!(
+            pool.idle_bytes() >= 1024 * std::mem::size_of::<f32>(),
+            "retained capacity must be charged, got {}",
+            pool.idle_bytes()
+        );
+        // A pool that drops its over-cap buffers charges nothing for them.
+        let tight = ScratchPool::new(0);
+        {
+            let mut lease = tight.lease();
+            lease.buf_mut().f32_zeroed(Slot::A, 4096);
+        }
+        assert_eq!(tight.idle_bytes(), 0);
     }
 
     #[test]

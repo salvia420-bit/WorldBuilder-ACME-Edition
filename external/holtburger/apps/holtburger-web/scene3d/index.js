@@ -69,6 +69,7 @@ import { buildEnvCellsForLandblock } from "./cells.js";
 // header for the dispatch-surface contract.
 import { ensureSpawnsForLandblock } from "./spawns.js";
 import { getBakeWorkerClient } from "./bake_worker_client.js"; // __diag.datDecode worker relay (A07 §3.6)
+import { summarizeMemCensus, memCensusVerdict } from "./mem_census.js"; // __diag.wasmMem page roll-up (2026-08-05)
 import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnFlush } from "./loop.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
@@ -4618,6 +4619,31 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         (d) => "0x" + (d >>> 0).toString(16).padStart(8, "0").toUpperCase(),
       );
       return { main, worker, jsMissing };
+    };
+
+    // 2026-08-05 (renderer-OOM attribution) — where BOTH wasm instances' linear
+    // memory went. The 08-05 handoff §3 left the OOM unattributed: the tab dies
+    // at Chrome's 4,192 MB renderer cap with `__hbWasmMemory` at ~700 MB, and
+    // `WebAssembly.Memory` never shrinks, but nothing said which bytes those are.
+    //
+    // Reading the result: `src/lib.rs`'s `hb_mem_census` header (what the
+    // three totals mean and which fix each shape implies) and
+    // `scene3d/mem_census.js` (why the two instances sum, and why a half that
+    // cannot answer is UNKNOWN rather than zero). `verdict` is a one-line
+    // pointer, not a proof — a single poll cannot see a trend.
+    window.__diag.wasmMem = async () => {
+      const parse = (s) => {
+        try { return s ? JSON.parse(s) : null; } catch (_) { return null; }
+      };
+      let main = null;
+      try {
+        main = typeof wasmExports.hb_mem_census === "function"
+          ? parse(wasmExports.hb_mem_census())
+          : null;
+      } catch (_) { /* diagnostic only — never throw */ }
+      const worker = parse(await getBakeWorkerClient().wasmMemCensus());
+      const { page, missing } = summarizeMemCensus(main, worker);
+      return { main, worker, page, missing, verdict: memCensusVerdict(page) };
     };
 
     // PAL-01 (2026-07-27) — pinned (un-evictable) residency on the wasm
