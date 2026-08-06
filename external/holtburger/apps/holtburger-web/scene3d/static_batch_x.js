@@ -58,6 +58,9 @@ export function __resetStatBatchXForTest() {
   _stats.bucketsCreated = 0;
   _stats.bucketsReaped = 0;
   _stats.gidProbeFailures = 0;
+  _stats.deadMarked = 0;
+  _stats.deadUnmarked = 0;
+  _stats.deadShadowSkipped = 0;
   _warned.clear();
 }
 
@@ -141,9 +144,93 @@ const _dedupStats = { hits: 0, adds: 0, keyed: 0 };
 // 2026-08-03 leak was a bucket population that only ever grew, which is exactly
 // what `bucketsCreated` vs `bucketsReaped` makes visible. `gidProbeFailures`
 // tracks the three-internals probe below.
-const _stats = { bucketsCreated: 0, bucketsReaped: 0, gidProbeFailures: 0 };
+const _stats = {
+  bucketsCreated: 0,
+  bucketsReaped: 0,
+  gidProbeFailures: 0,
+  // ?skipDeadBatch lifecycle: transitions, not a level. `deadUnmarked > 0` is
+  // the interesting one — it means a bucket material stopped being provably
+  // invisible after the bucket was built (the `_reseatSurfaceState` case), i.e.
+  // proof that re-deriving on the tick is load-bearing and not paranoia.
+  deadMarked: 0,
+  deadUnmarked: 0,
+  deadShadowSkipped: 0,
+};
 
 // Geometry-level stamp read by `_contentKeyOf`. Absent ⇒ legacy path.
+// ---------------------------------------------------------------------------
+// ?skipDeadBatch — hide a bucket whose material can never put a pixel on screen
+// (2026-08-06). Measured at Nanto, quality `mid`: 4 buckets holding ~21,845
+// triangles of transparent / opacity-0 / NormalBlending / depthWrite-false
+// geometry, submitted every frame for nothing.
+//
+// THE PREDICATE IS INJECTED, NOT IMPORTED. `materialRendersNothing` lives in
+// materials.js (which pulls THREE + quality + suite_assets); this module is a
+// deliberate THREE-only leaf and its headless test loads it by stripping the
+// import lines outright. setup_rig.js already established the house answer —
+// it takes `materialRendersNothing` as an ARGUMENT rather than importing it —
+// so statics.js (which imports both) installs it here once at module load.
+// Never installed ⇒ `_markDeadBatch` is a no-op and nothing is ever hidden.
+let _rendersNothing = null;
+
+/**
+ * Install the shared invisible-material predicate. Expected to be handed
+ * materials.js `materialRendersNothing` composed with `skipDeadBatchEnabled`
+ * (statics.js does exactly that), so BOTH flags' escapes land here as a null
+ * result from the predicate rather than as a second gate in this module.
+ */
+export function setDeadBatchPredicate(fn) {
+  _rendersNothing = typeof fn === "function" ? fn : null;
+}
+/** Test seam. */
+export function __getDeadBatchPredicateForTest() { return _rendersNothing; }
+
+/**
+ * Derive `visible` for one bucket from its material, and mark it so the
+ * per-frame statics cull knows the hide was deliberate.
+ *
+ * WHY A MARKER AND NOT JUST `visible = false`. `cullStaticsGroup`
+ * (statics.js) runs EVERY frame over `staticsGroup.children` and force-restores
+ * `node.visible = true` for every BatchedMesh it finds — that line exists
+ * because a bucket's origin-centred bounds made node-level culling hide the
+ * whole batch (the 2026-07-02 vanished-forests bug). A bare `visible = false`
+ * here would therefore survive exactly one frame. `userData.__deadBatch` makes
+ * that pass the SINGLE per-frame writer of bucket visibility instead of a
+ * competing one — the same "two writers of .visible is the bug" lesson the
+ * particle/RP6 exemption in that function records.
+ *
+ * WHY EVERY MEMBER IS PROVABLY INVISIBLE. Buckets are keyed by the MATERIAL
+ * OBJECT (`byMat` in the feed loop, `region.get(mat)` here) and that same
+ * object is the BatchedMesh's `material`, which a BatchedMesh applies to EVERY
+ * instance — so `m.material === bm.material` for every member by construction,
+ * and a bucket cannot mix visible with invisible members. This is not a
+ * property of the current population; it is what the bucket key IS.
+ *
+ * SHADOWS. The colour-pass argument (opacity 0 under NormalBlending composites
+ * to dst exactly) says nothing about the depth-only shadow pass, which ignores
+ * opacity entirely — hiding a shadow-casting bucket would change the image. In
+ * practice `castShadow` is always false here (statics set it from
+ * `materialCanCastShadow`, which rejects the Translucent bit that a
+ * `__baseTranslucency >= 1` material must carry), so the guard is provably
+ * free; it is counted rather than silent so a future regime where it starts
+ * biting shows up in `getStatBatchXStats` instead of quietly costing the win.
+ */
+function _markDeadBatch(bm) {
+  if (!_rendersNothing) return false;
+  let dead = false;
+  try {
+    dead = _rendersNothing(bm.material) === true;
+    if (dead && bm.castShadow) { dead = false; _stats.deadShadowSkipped += 1; }
+  } catch (_) { dead = false; /* fail-soft: keep rendering */ }
+  const was = bm.userData.__deadBatch === true;
+  if (dead !== was) {
+    bm.userData.__deadBatch = dead;
+    bm.visible = !dead;
+    if (dead) _stats.deadMarked += 1; else _stats.deadUnmarked += 1;
+  }
+  return dead;
+}
+
 const STAT_CONTENT_KEY = "__statContentKey";
 
 // Float bit-pattern view for the fingerprint (avoids float→string formatting).
@@ -317,6 +404,9 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
   b = { bm };
   region.set(mat, b);
   _stats.bucketsCreated += 1;
+  // ?skipDeadBatch — derive visibility from the material now that castShadow is
+  // set. Re-derived on the optimize tick below; see `_markDeadBatch`.
+  _markDeadBatch(bm);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
 }
@@ -629,6 +719,26 @@ export function evictStaticBatchXForLb(lbKey) {
  * Driven LAZILY from the ~10 Hz PVS tick (loop.js), never per-frame eviction.
  */
 export function tickStatBatchXOptimize() {
+  // ?skipDeadBatch — RE-DERIVE bucket visibility from the live material, every
+  // tick, over every bucket (not just the dirty ones).
+  //
+  // A bucket's `material` reference is immutable (assigned once at construction;
+  // nothing reassigns `bm.material`), so membership churn — feed, evict,
+  // deleteGeometry, optimize(), growth realloc, reap+recreate — can never change
+  // the answer: whatever the material renders, every member renders. What CAN
+  // change is the material's own render state: `_reseatSurfaceState`
+  // (materials.js, 2026-08-03) rewrites `transparent`/`opacity`/`depthWrite`/
+  // `blending` AND re-spreads the base's userData onto a derived variant clone
+  // when the real surface lands after a spawn-race fallback — and statics DO
+  // hold those clones (staticBias / floorBias / frontSide). That runs in BOTH
+  // directions, so a creation-time-only decision would either miss a bucket that
+  // became invisible or, worse, keep one hidden that became visible. Re-deriving
+  // converges either way within one PVS tick (~100 ms). Cost is the bucket count
+  // (tens) x six property reads at ~10 Hz, and `_markDeadBatch` only writes on a
+  // transition, so a settled scene does no work beyond the read.
+  if (_rendersNothing) {
+    for (const region of _buckets.values()) for (const { bm } of region.values()) _markDeadBatch(bm);
+  }
   if (_dirtyBuckets.size === 0) return;
   for (const bm of _dirtyBuckets) {
     const ud = bm.userData;
@@ -648,10 +758,19 @@ if (typeof window !== "undefined") {
 export function getStatBatchXStats() {
   const buckets = [];
   let instances = 0;
+  let deadBuckets = 0;
+  let deadTris = 0;
   for (const region of _buckets.values()) for (const { bm } of region.values()) {
     const ud = bm.userData;
+    // Triangles as verts/3: statics geometries are NON-indexed (adapter.js
+    // `meshToGeometryGroups` emits flat position/normal/uv), so this is exact
+    // for the population that actually reaches these buckets and an
+    // over-estimate for anything indexed that ever does.
+    if (ud.__deadBatch === true) { deadBuckets += 1; deadTris += (ud.usedVerts - ud.deadVerts) / 3; }
     buckets.push({
       name: bm.name,
+      // ?skipDeadBatch — this bucket is provably invisible and is not submitted.
+      dead: ud.__deadBatch === true,
       instances: ud.instances,
       usedVerts: ud.usedVerts,
       deadVerts: ud.deadVerts,
@@ -676,6 +795,17 @@ export function getStatBatchXStats() {
     // the 3x3 region granularity is thrashing and wants a hysteresis pass.
     bucketsCreated: _stats.bucketsCreated,
     bucketsReaped: _stats.bucketsReaped,
+    // ?skipDeadBatch census. `armed: false` means statics.js never installed the
+    // predicate (both escapes off, or a non-statics harness) — a 0 here then
+    // means "not measured", never "nothing to hide".
+    deadBatch: {
+      armed: _rendersNothing !== null,
+      buckets: deadBuckets,
+      triangles: deadTris,
+      marked: _stats.deadMarked,
+      unmarked: _stats.deadUnmarked,
+      shadowSkipped: _stats.deadShadowSkipped,
+    },
     dedup: {
       enabled: statGeomDedupEnabled(),
       // geometry copies AVOIDED / geometry copies MADE, since page load.
