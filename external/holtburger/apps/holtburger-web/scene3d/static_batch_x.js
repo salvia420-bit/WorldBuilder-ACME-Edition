@@ -62,6 +62,8 @@ export function __resetStatBatchXForTest() {
   _stats.deadUnmarked = 0;
   _stats.deadShadowSkipped = 0;
   for (const k of Object.keys(_mergeStats)) _mergeStats[k] = 0;
+  for (const k of Object.keys(_memoStats)) _memoStats[k] = 0;
+  _camPose.camera = null;
   _warned.clear();
 }
 
@@ -325,6 +327,529 @@ function _markDeadBatch(bm) {
   return dead;
 }
 
+// ---------------------------------------------------------------------------
+// THE PER-INSTANCE WALK — ?statBatchNoSort and ?statBatchMemo (2026-08-06)
+//
+// THE MEASUREMENT THESE TWO ANSWER (docs/2026-08-06-frame-cost-structure-
+// measured.md §5a). `BatchedMesh.onBeforeRender` costs 5.72 ms/frame over 197
+// rendered buckets, and the regression against instance count says
+// `t = 5.9 us/bucket + 0.348 us/instance`, r2 = 0.876 — **80% of it is
+// PER-INSTANCE**. That is why every bucket-COUNT change measured ~0:
+// `?statArrayMerge` removed 23 draws/frame for 0.0 ms, and a region-width sweep
+// removed 131 of 376 buckets for 0.00 ms. Both removed the 20% fixed part.
+// Nothing has ever attacked the instance axis. These two do, from opposite ends:
+// one makes each walked instance cheaper, the other stops walking at all.
+//
+// WHAT THREE ACTUALLY DOES (three.core.js r184 :27214-27368 — read it before
+// believing any summary, including this one). `onBeforeRender` is NOT
+// unconditional; its first statement is
+//
+//     if ( ! this._visibilityChanged && ! this.perObjectFrustumCulled && ! this.sortObjects ) return;
+//
+// so three already skips the rebuild for a settled bucket — but ONLY when
+// per-instance culling AND sorting are both off. We set
+// `perObjectFrustumCulled = true` on every bucket (:480) and
+// `sortObjects = !!mat.transparent` (:479), so that early-out is unreachable
+// here, for every bucket, on every frame.
+//
+// THIS EXPLAINS THE 0.40 ms. The `perObjectFrustumCulled = false` A/B (§3d)
+// saved only 0.40 ms of 5.72 and cost +420k triangles. If that had let three
+// early-out, essentially the whole 5.72 ms would have gone. It did not, because
+// the early-out ALSO requires `!sortObjects` — so the buckets that kept paying
+// are the TRANSPARENT ones, and those are where the statics instance mass lives
+// (ClipMap foliage/fences: `applyClipMapRenderState` sets `transparent = true`,
+// §5b). ⚠ This is an inference from three's source plus that one A/B, not a
+// direct measurement of the split. `getStatBatchXStats().walk` reports the
+// sorted/unsorted bucket AND instance-slot split precisely so the next 1070
+// session can confirm or kill it in one read.
+//
+// --- ?statBatchNoSort: make the walked instance cheaper -------------------
+//
+// For a `sortObjects` bucket three takes the OTHER branch (:27266-27327): the
+// same per-instance matrix fetch, sphere transform and frustum test, PLUS a
+// `_renderList.push` per survivor, PLUS `list.sort()` — an n log n JS sort with
+// a function-call comparator — PLUS a second pass to write the multidraw
+// arrays. That machinery is a large fraction of the 0.348 us.
+//
+// It buys nothing when the material's blend does not depend on draw order, and
+// a bucket is ONE material by construction (`byMat` in the feed loop), so the
+// question is answerable per bucket:
+//   - `depthWrite === true` — the z-buffer resolves overlap, so ordering the
+//     ranges cannot change the result. This is the ClipMap population, and it
+//     is the SAME argument §5b/§5e made for moving those materials to the
+//     opaque pass — but strictly weaker and therefore safer: the pass, the
+//     blending and the material are all untouched here, only the order of
+//     ranges INSIDE one bucket of one material changes.
+//   - `AdditiveBlending` — addition commutes. `dst + a + b == dst + b + a`.
+// Everything else (true Translucent: transparent, depthWrite false, alpha
+// blend) keeps the sort. Off = `!!mat.transparent`, exactly as before.
+//
+// --- ?statBatchMemo: stop walking a bucket that cannot have changed --------
+//
+// The multidraw arrays are a pure function of (instance set, instance matrices,
+// geometry ranges, camera, this.matrixWorld, material.wireframe). Between two
+// frames in which none of those changed, three rebuilds an identical answer.
+// `=on` remembers the inputs and skips the rebuild when they are bit-identical:
+// OUTPUT-IDENTICAL, and it recovers the WHOLE 5.72 ms whenever the camera is
+// still. Its honest limit is equally plain — a moving camera changes the view
+// matrix every frame, so `=on` is worth ~0 while walking. Do not sell it as a
+// movement win.
+//
+// `=slack:<m>:<deg>` is the movement half. It rebuilds through a frustum
+// DILATED by `trans + rot * r` (r = distance from the camera to the instance,
+// i.e. an angular dilation), which makes the cached answer a provable SUPERSET
+// of the exact one for any camera that has since translated <= `trans` and
+// rotated <= `rot`. Nothing visible can be dropped; a few extra ranges are
+// drawn. That trade is only sane because §1 measured this frame CPU-bound —
+// 8.2x fewer pixels changed nothing, and the +420k triangles of §3d cost ~0 ms
+// — so over-inclusion is paid at the draw side's 0.038 us/instance (§5a) rather
+// than on the GPU. Slack rebuilds use our own loop (a transcription of three's
+// non-sorted branch with the margin added), so it applies to `sortObjects ===
+// false` buckets only; sorted buckets fall back to the exact tier. Combining it
+// with `?statBatchNoSort=on` is what makes that population the majority.
+//
+// PRICING, STATED AS A RANGE AND EXPECTED TO BE OPTIMISTIC. On the §5a model
+// (13,195 instances in rendered buckets x 0.348 us + 197 x 5.9 us): a hit frame
+// costs ~48 float compares per bucket, call it 0.02 ms total, and saves up to
+// 5.7 ms. `=on` therefore projects ~5.7 ms at rest and ~0 moving. `=slack`
+// projects `(1 - h) * 5.72 * (1 + over) + h * 0.2` for hit rate h and
+// over-inclusion fraction `over`; at h = 0.5 / over = 0.3 that is ~2 ms saved,
+// at h = 0.8 ~4 ms. h is NOT predictable from here — it depends on how the
+// camera actually moves — which is why `walk.hits*` / `walk.rebuilds` are
+// counted per call rather than modelled.
+//
+// BOTH DEFAULT-OFF, exact-match opt-in. Off = not one extra property read on
+// any path: no override is installed, `sortObjects` keeps its old expression,
+// and `getStatBatchXStats().walk` reports `mode: "off"` with the census only.
+// ---------------------------------------------------------------------------
+const _MEMO_TRANS_DEFAULT_M = 8;    // world metres of camera translation slack
+const _MEMO_ROT_DEFAULT_DEG = 3;    // degrees of camera rotation slack
+
+let _noSortFlag;
+/** `?statBatchNoSort=on` — drop the per-bucket instance depth sort for buckets
+ *  whose material's blend is order-independent. EXACT-match opt-in (url-flags.md
+ *  header rule: never `!== "off"` for an opt-in). */
+export function statBatchNoSortEnabled() {
+  if (_noSortFlag !== undefined) return _noSortFlag;
+  let on = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("statBatchNoSort") || "").toLowerCase();
+      on = v === "on";
+    }
+  } catch (_) { on = false; }
+  _noSortFlag = on;
+  return on;
+}
+/** Test seam. */
+export function __setStatBatchNoSortForTest(v) { _noSortFlag = v; }
+
+let _memoMode;                                  // "off" | "exact" | "slack"
+let _memoTransM = _MEMO_TRANS_DEFAULT_M;
+let _memoRotRad = (_MEMO_ROT_DEFAULT_DEG * Math.PI) / 180;
+/**
+ * `?statBatchMemo=on|exact` (output-identical reuse) or
+ * `=slack[:<metres>[:<degrees>]]` (superset reuse under camera motion).
+ * Anything else, including absent, reads "off" — EXACT-match opt-in.
+ */
+export function statBatchMemoMode() {
+  if (_memoMode !== undefined) return _memoMode;
+  let mode = "off";
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const raw = (new URLSearchParams(globalThis.location.search).get("statBatchMemo") || "").toLowerCase();
+      const parts = raw.split(":");
+      if (parts[0] === "on" || parts[0] === "exact") mode = "exact";
+      else if (parts[0] === "slack") {
+        mode = "slack";
+        const t = Number(parts[1]);
+        if (Number.isFinite(t) && t >= 0 && t <= 500) _memoTransM = t;
+        const r = Number(parts[2]);
+        if (Number.isFinite(r) && r >= 0 && r <= 45) _memoRotRad = (r * Math.PI) / 180;
+      }
+    }
+  } catch (_) { mode = "off"; }
+  _memoMode = mode;
+  return mode;
+}
+/** Test seam. `slacks` = { transM, rotDeg } (optional). */
+export function __setStatBatchMemoForTest(mode, slacks) {
+  _memoMode = mode;
+  if (slacks && Number.isFinite(slacks.transM)) _memoTransM = slacks.transM;
+  if (slacks && Number.isFinite(slacks.rotDeg)) _memoRotRad = (slacks.rotDeg * Math.PI) / 180;
+}
+
+const _memoStats = {
+  calls: 0,          // onBeforeRender invocations on memo-installed buckets
+  hitsExact: 0,      // reuse under bit-identical camera + state
+  hitsSlack: 0,      // reuse under the dilated-frustum validity region
+  rebuilds: 0,       // full walks, three's loop
+  rebuildsSlack: 0,  // full walks, our dilated loop
+  instancesWalked: 0,   // instance SLOTS visited by a rebuild (cumulative)
+  instancesSkipped: 0,  // instance SLOTS a hit did not visit (cumulative)
+  errors: 0,         // fail-soft fallbacks to three's own path
+  installed: 0,
+};
+
+/**
+ * Does this bucket's material make the intra-bucket depth sort load-bearing?
+ *
+ * `?statBatchNoSort` off ⇒ `!!mat.transparent`, byte-identical to the
+ * expression this replaced. On ⇒ the two provable exemptions above.
+ */
+function _shouldSortBucket(mat) {
+  if (!mat || !mat.transparent) return false;
+  if (!statBatchNoSortEnabled()) return true;
+  try {
+    // Addition commutes — an additive bucket composites to the same pixel in
+    // any order (this is the same reason `materialRendersNothing` must EXCLUDE
+    // additive: the blend function, not the flag, is the predicate).
+    if (mat.blending === THREE.AdditiveBlending) return false;
+    // A depth-writing alpha-MASK (ClipMap: alphaTest 0.784, opacity 1) is
+    // resolved by the z-buffer, so range order cannot change the image.
+    if (mat.depthWrite === true) return false;
+  } catch (_) { return true; /* fail-soft: keep the sort */ }
+  return true;
+}
+
+/**
+ * Re-derive `sortObjects` from the live material. Same lifecycle argument as
+ * `_markDeadBatch`: `bm.material` never changes, but `_reseatSurfaceState`
+ * (materials.js) rewrites `transparent`/`depthWrite`/`blending` in BOTH
+ * directions when a real surface lands after a spawn-race fallback, so a
+ * creation-time-only decision can go stale either way. Writes only on a
+ * transition, and invalidates the memo when it flips (the cached arrays were
+ * built by the other branch).
+ */
+function _reseatBucketSort(bm) {
+  const want = _shouldSortBucket(bm.material);
+  if (bm.sortObjects !== want) {
+    bm.sortObjects = want;
+    _memoInvalidate(bm);
+    return true;
+  }
+  return false;
+}
+
+// Scratch — module-level, never re-entrant (three calls onBeforeRender
+// synchronously from the render loop, single-threaded).
+const _memoM = new THREE.Matrix4();
+const _memoInstM = new THREE.Matrix4();
+const _memoFrustum = new THREE.Frustum();
+const _memoSphere = new THREE.Sphere();
+const _memoCamLocal = new THREE.Vector3();
+const _memoPos = new THREE.Vector3();
+const _memoQuat = new THREE.Quaternion();
+const _memoScale = new THREE.Vector3();
+
+// ONE camera decompose per frame, not one per bucket: 197 buckets share a
+// camera, and `Matrix4.decompose` is not free. Keyed on the camera object plus
+// the raw elements of its matrixWorld, so it is correct across any number of
+// cameras (main pass, shadow cascades) at the cost of one 16-float compare.
+const _camPose = { camera: null, el: new Float64Array(16), pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
+function _cameraPose(camera) {
+  const e = camera.matrixWorld.elements;
+  if (_camPose.camera !== camera || !_elemsEqual(_camPose.el, e)) {
+    _camPose.camera = camera;
+    for (let i = 0; i < 16; i++) _camPose.el[i] = e[i];
+    camera.matrixWorld.decompose(_camPose.pos, _camPose.quat, _memoScale);
+  }
+  return _camPose;
+}
+
+function _elemsEqual(a, b) {
+  for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+function _elemsCopy(dst, src) {
+  for (let i = 0; i < 16; i++) dst[i] = src[i];
+}
+
+function _memoStateFor() {
+  return {
+    valid: false,
+    epoch: 0,        // bumped by every membership/matrix change (see _memoInvalidate)
+    builtEpoch: -1,
+    camera: null,
+    material: null,
+    camMw: new Float64Array(16),   // camera.matrixWorld at build (exact tier)
+    proj: new Float64Array(16),    // camera.projectionMatrix at build
+    mw: new Float64Array(16),      // this.matrixWorld at build
+    camPos: new THREE.Vector3(),   // decomposed, for the slack validity region
+    camQuat: new THREE.Quaternion(),
+    sortObjects: null,
+    pOFC: null,
+    wireframe: null,
+    idxBytes: -1,
+    slackTrans: 0,   // world metres of translation the cached answer tolerates
+    slackDotMin: 2,  // cos(rot/2); 2 = "no rotation tolerated" (|dot| <= 1)
+    walked: 0,
+    drawn: 0,
+  };
+}
+
+/**
+ * Membership / matrix / state change ⇒ the cached multidraw is stale.
+ *
+ * Called from every site that already nulls `boundingSphere` (those ARE the
+ * membership-change sites) plus `optimize()` and a `sortObjects` flip. three's
+ * own `_visibilityChanged` covers add/delete/optimize/setVisibleAt, but NOT a
+ * bare `setMatrixAt` (three.core.js :26770 does not set the flag) — this epoch
+ * is what closes that hole, and it is why the invalidation is ours rather than
+ * a read of three's flag alone.
+ */
+function _memoInvalidate(bm) {
+  const st = bm.userData && bm.userData.__memo;
+  if (st) { st.epoch = (st.epoch + 1) | 0; }
+}
+
+/** Membership changed: bounds AND the cached multidraw are both stale. */
+function _memoDirtyBounds(bm) {
+  bm.boundingSphere = null;
+  _memoInvalidate(bm);
+}
+
+/**
+ * Is the cached multidraw still a valid answer for this call?
+ *
+ * Returns 0 (rebuild), 1 (exact hit) or 2 (slack hit). Everything the build
+ * READ must be compared here — a field checked at build time and not here is a
+ * silent image bug, so the list is deliberately exhaustive and mirrors
+ * three.core.js :27214-27368 line for line.
+ */
+function _memoDecide(bm, st, camera, material, geometry, mode) {
+  if (!st.valid) return 0;
+  if (st.camera !== camera || st.material !== material) return 0;
+  if (bm._visibilityChanged) return 0;
+  if (st.builtEpoch !== st.epoch) return 0;
+  if (st.sortObjects !== bm.sortObjects || st.pOFC !== bm.perObjectFrustumCulled) return 0;
+  if (st.wireframe !== !!material.wireframe) return 0;
+  const index = geometry.getIndex();
+  if (st.idxBytes !== (index === null ? 0 : index.array.BYTES_PER_ELEMENT)) return 0;
+  if (!_elemsEqual(st.proj, camera.projectionMatrix.elements)) return 0;
+  if (!_elemsEqual(st.mw, bm.matrixWorld.elements)) return 0;
+  // Exact tier: the camera has not moved AT ALL, so three would recompute the
+  // identical arrays (including the sort order, which is why this tier is safe
+  // for `sortObjects` buckets too).
+  if (_elemsEqual(st.camMw, camera.matrixWorld.elements)) return 1;
+  if (mode !== "slack" || st.slackTrans <= 0) return 0;
+  // Slack tier: the build dilated the frustum by `trans + rot * r`, so the
+  // cached set is a superset while the camera stays inside that region.
+  const pose = _cameraPose(camera);
+  if (pose.pos.distanceTo(st.camPos) > st.slackTrans) return 0;
+  // |dot| >= cos(theta/2) <=> the quaternions are within theta of each other.
+  if (Math.abs(pose.quat.dot(st.camQuat)) < st.slackDotMin) return 0;
+  return 2;
+}
+
+/**
+ * Our transcription of three's NON-SORTED branch (three.core.js :27329-27362)
+ * with the dilation added. Byte-identical to three's output when both slacks
+ * are 0 — `test_stat_batch_walk.mjs` asserts exactly that against the real
+ * r184 build, which is the only reason this duplication is acceptable.
+ *
+ * The sorted branch is deliberately NOT transcribed: it needs three's
+ * module-private `_renderList`, and a re-implementation would be a second
+ * sort with its own tie-breaking. Sorted buckets get the exact tier only.
+ */
+function _memoBuildSlack(bm, camera, geometry, material, transLocal, rotSlack) {
+  const index = geometry.getIndex();
+  let bytesPerElement = index === null ? 1 : index.array.BYTES_PER_ELEMENT;
+  let multiDrawMultiplier = 1;
+  if (material.wireframe) {
+    multiDrawMultiplier = 2;
+    bytesPerElement = geometry.attributes.position.count > 65535 ? 4 : 2;
+  }
+  const instanceInfo = bm._instanceInfo;
+  const geometryInfoList = bm._geometryInfo;
+  const multiDrawStarts = bm._multiDrawStarts;
+  const multiDrawCounts = bm._multiDrawCounts;
+  const indirectTexture = bm._indirectTexture;
+  const indirectArray = indirectTexture.image.data;
+
+  // Frustum in the mesh's LOCAL frame — same composition three uses, so the
+  // plane distances below are in local units and so is the margin.
+  _memoM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(bm.matrixWorld);
+  _memoFrustum.setFromProjectionMatrix(_memoM, camera.coordinateSystem, camera.reversedDepth);
+  // Camera position in the same local frame, for the distance-proportional
+  // (i.e. ANGULAR) half of the margin.
+  _memoM.copy(bm.matrixWorld).invert();
+  _memoCamLocal.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(_memoM);
+
+  const planes = _memoFrustum.planes;
+  // The build margin has to cover the camera being at the EDGE of the validity
+  // region when the cache is next read: a point r from the old camera position
+  // can be up to r + transLocal from the new one, so the rotation term is taken
+  // against (r + transLocal), not r. Without this the region leaks by
+  // trans*rot local units and an instance could pop out.
+  const rotTrans = rotSlack * transLocal;
+  let multiDrawCount = 0;
+  let walked = 0;
+  for (let i = 0, l = instanceInfo.length; i < l; i++) {
+    const inf = instanceInfo[i];
+    if (!inf.visible || !inf.active) continue;
+    walked++;
+    const geometryId = inf.geometryIndex;
+    bm.getMatrixAt(i, _memoInstM);
+    const sph = bm.getBoundingSphereAt(geometryId, _memoSphere);
+    if (sph === null) continue; // three does not guard this; a null here means
+                                // a stale geometryIndex, and drawing it would
+                                // read another geometry's range.
+    sph.applyMatrix4(_memoInstM);
+    const c = sph.center;
+    let negRadius = -sph.radius;
+    if (transLocal > 0 || rotSlack > 0) {
+      const dx = c.x - _memoCamLocal.x, dy = c.y - _memoCamLocal.y, dz = c.z - _memoCamLocal.z;
+      const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      negRadius -= transLocal + rotSlack * r + rotTrans;
+    }
+    let culled = false;
+    for (let p = 0; p < 6; p++) {
+      if (planes[p].distanceToPoint(c) < negRadius) { culled = true; break; }
+    }
+    if (!culled) {
+      const geometryInfo = geometryInfoList[geometryId];
+      multiDrawStarts[multiDrawCount] = geometryInfo.start * bytesPerElement * multiDrawMultiplier;
+      multiDrawCounts[multiDrawCount] = geometryInfo.count * multiDrawMultiplier;
+      indirectArray[multiDrawCount] = i;
+      multiDrawCount++;
+    }
+  }
+  indirectTexture.needsUpdate = true;
+  bm._multiDrawCount = multiDrawCount;
+  bm._visibilityChanged = false;
+  return { walked, drawn: multiDrawCount };
+}
+
+/** Can this call take the dilated path at all? (fail-soft ⇒ three's own loop) */
+function _slackEligible(bm, camera) {
+  return bm.sortObjects === false
+    && bm.perObjectFrustumCulled === true
+    && camera.isArrayCamera !== true
+    && Array.isArray(bm._instanceInfo)
+    && Array.isArray(bm._geometryInfo)
+    && !!(bm._indirectTexture && bm._indirectTexture.image && bm._indirectTexture.image.data)
+    && !!bm._multiDrawStarts && !!bm._multiDrawCounts;
+}
+
+/**
+ * Per-bucket `onBeforeRender` override, installed as an OWN property so it
+ * shadows `BatchedMesh.prototype.onBeforeRender` for this node only. Nothing
+ * else in the tree is affected, and `?statBatchMemo=off` never installs it.
+ *
+ * NOTE `onBeforeShadow` (three.core.js :27370) routes through `this.
+ * onBeforeRender` with the SHADOW camera, so it lands here too. The state is a
+ * single slot, so a shadow pass and the colour pass alternating cameras simply
+ * miss each other — correct, but worth zero. Shadows are off at quality `mid`
+ * (quality.js `csm: false`, `?shadows` opt-in), which is where the 5.72 ms was
+ * measured; a shadowed preset wants a per-camera slot and does not have one.
+ */
+function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group) {
+  const st = this.userData && this.userData.__memo;
+  const mode = statBatchMemoMode();
+  if (!st || mode === "off" || !camera || !material || !geometry) {
+    return THREE.BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+  }
+  _memoStats.calls += 1;
+  let decision = 0;
+  try {
+    decision = _memoDecide(this, st, camera, material, geometry, mode);
+  } catch (_) { decision = 0; _memoStats.errors += 1; }
+  if (decision !== 0) {
+    if (decision === 1) _memoStats.hitsExact += 1; else _memoStats.hitsSlack += 1;
+    _memoStats.instancesSkipped += st.walked;
+    // Everything the renderer reads next — `_multiDrawStarts`, `_multiDrawCounts`,
+    // `_multiDrawCount` and the indirect texture — still holds this bucket's
+    // last answer, and `_visibilityChanged` is already false. Deliberately do
+    // NOT touch `indirectTexture.needsUpdate`: skipping the re-upload is part
+    // of the win.
+    return undefined;
+  }
+
+  // ---- rebuild --------------------------------------------------------
+  let walked = 0;
+  let drawn = 0;
+  let slackTrans = 0;
+  let slackRot = 0;
+  let built = false;
+  // Zero margins are a legal degenerate: our loop then computes EXACTLY what
+  // three computes, which is the identity `test_stat_batch_walk.mjs` asserts.
+  if (mode === "slack") {
+    try {
+      if (_slackEligible(this, camera)) {
+        // Margins are world metres; the frustum and spheres live in the mesh's
+        // LOCAL frame, so convert by the node's scale. Buckets sit at the
+        // staticsGroup origin unscaled, so this is normally exactly 1.
+        const s = this.matrixWorld.getMaxScaleOnAxis();
+        if (Number.isFinite(s) && s > 1e-6) {
+          const r = _memoBuildSlack(this, camera, geometry, material, _memoTransM / s, _memoRotRad);
+          walked = r.walked; drawn = r.drawn;
+          slackTrans = _memoTransM; slackRot = _memoRotRad;
+          built = true;
+          _memoStats.rebuildsSlack += 1;
+        }
+      }
+    } catch (_) { built = false; _memoStats.errors += 1; }
+  }
+  if (!built) {
+    // Exact tier (and every fail-soft path): three's own loop, untouched.
+    THREE.BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+    walked = Array.isArray(this._instanceInfo) ? this._instanceInfo.length : 0;
+    drawn = this._multiDrawCount | 0;
+    _memoStats.rebuilds += 1;
+  }
+  _memoStats.instancesWalked += walked;
+
+  // ---- record the inputs this answer was built from --------------------
+  try {
+    const index = geometry.getIndex();
+    st.camera = camera;
+    st.material = material;
+    _elemsCopy(st.camMw, camera.matrixWorld.elements);
+    _elemsCopy(st.proj, camera.projectionMatrix.elements);
+    _elemsCopy(st.mw, this.matrixWorld.elements);
+    if (slackTrans > 0 || slackRot > 0) {
+      const pose = _cameraPose(camera);
+      st.camPos.copy(pose.pos);
+      st.camQuat.copy(pose.quat);
+    }
+    st.slackTrans = slackTrans;
+    // cos(theta/2) — compared against |dot(q0,q1)| in `_memoDecide`.
+    st.slackDotMin = slackRot > 0 ? Math.cos(slackRot / 2) : 2;
+    st.sortObjects = this.sortObjects;
+    st.pOFC = this.perObjectFrustumCulled;
+    st.wireframe = !!material.wireframe;
+    st.idxBytes = index === null ? 0 : index.array.BYTES_PER_ELEMENT;
+    st.walked = walked;
+    st.drawn = drawn;
+    st.builtEpoch = st.epoch;
+    st.valid = true;
+  } catch (_) {
+    st.valid = false; // never cache a state we could not fully capture
+    _memoStats.errors += 1;
+  }
+  return undefined;
+}
+
+/**
+ * Install the memo override on a freshly created bucket (no-op when off).
+ *
+ * ⚠ INTERACTION WITH `__statMergeArmSubmitted`. `armStatMergeSubmittedSampler`
+ * (static_atlas.js) measures submitted scale by wrapping `onBeforeRender`, and
+ * it deliberately SKIPS any node that already owns one (`hasOwnProperty`) so it
+ * cannot double-wrap. With this flag on it therefore counts our buckets as
+ * "armed" while never sampling them — the submitted-scale census reads 0 frames
+ * for exactly the population it was built to size. Measure submitted scale with
+ * `?statBatchMemo=off`, or read `getStatBatchXStats().walk.calls` instead,
+ * which counts the same thing and is always live.
+ */
+function _installMemo(bm) {
+  if (statBatchMemoMode() === "off") return;
+  bm.userData.__memo = _memoStateFor();
+  bm.onBeforeRender = _memoOnBeforeRender;
+  _memoStats.installed += 1;
+}
+
 const STAT_CONTENT_KEY = "__statContentKey";
 
 // Float bit-pattern view for the fingerprint (avoids float→string formatting).
@@ -475,8 +1000,10 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
   if (b) return b;
   const bm = new THREE.BatchedMesh(_INIT_INST, _INIT_VERTS, _INIT_VERTS * 2, mat);
   // OPAQUE: skip the per-frame instance depth sort (CPU win; statAtlas
-  // precedent). Transparent buckets keep the sort for blend order.
-  bm.sortObjects = !!mat.transparent;
+  // precedent). Transparent buckets keep the sort for blend order — unless
+  // `?statBatchNoSort=on` proves this material's blend is order-independent
+  // (see `_shouldSortBucket`). Flag off ⇒ exactly `!!mat.transparent`.
+  bm.sortObjects = _shouldSortBucket(mat);
   bm.perObjectFrustumCulled = true; // per-instance sphere cull trims the multidraw
   bm.frustumCulled = true;          // the chunk is spatially bounded — cull the whole
                                     // node by its lazy boundingSphere (v2 core win)
@@ -532,6 +1059,8 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
   // ?skipDeadBatch — derive visibility from the material now that castShadow is
   // set. Re-derived on the optimize tick below; see `_markDeadBatch`.
   _markDeadBatch(bm);
+  // ?statBatchMemo — install the per-bucket multidraw memo (no-op when off).
+  _installMemo(bm);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
 }
@@ -868,8 +1397,10 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
     // touchedDiff/touchedNra pattern). `addLayerUpdate` already marked the
     // individual layers, so this uploads those and not the whole array.
     if (_arrayMerge) { try { _arrayMerge.flush(); } catch (_) { /* fail-soft */ } }
-    // Membership changed — invalidate node bounds; three recomputes at next cull.
-    for (const bm of touched) bm.boundingSphere = null;
+    // Membership changed — invalidate node bounds (three recomputes at the next
+    // cull) AND the ?statBatchMemo cache: this feed ran `setMatrixAt`, which
+    // three does NOT flag via `_visibilityChanged`.
+    for (const bm of touched) _memoDirtyBounds(bm);
     if (consumed === 0) return null; // nothing landed — let the caller run the legacy path
     return { out, bucketsTouched };
   } catch (e) {
@@ -925,7 +1456,7 @@ export function evictStaticBatchXForLb(lbKey) {
         const deadV = ud.gidVerts.get(m.gid);
         if (deadV) { ud.deadVerts += deadV; ud.gidVerts.delete(m.gid); }
       }
-      m.bm.boundingSphere = null; // membership changed — lazy bounds recompute
+      _memoDirtyBounds(m.bm); // membership changed — lazy bounds + memo recompute
       _dirtyBuckets.add(m.bm);
       touched.add(m.bm);
       continue;
@@ -944,7 +1475,7 @@ export function evictStaticBatchXForLb(lbKey) {
     const dead = ud.gidVerts.get(m.gid);
     if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(m.gid); }
     if (removedInstances > 0) ud.instances = Math.max(0, ud.instances - removedInstances);
-    m.bm.boundingSphere = null; // membership changed — lazy bounds recompute
+    _memoDirtyBounds(m.bm); // membership changed — lazy bounds + memo recompute
     _dirtyBuckets.add(m.bm);
     touched.add(m.bm);
   }
@@ -983,6 +1514,15 @@ export function tickStatBatchXOptimize() {
   if (_rendersNothing) {
     for (const region of _buckets.values()) for (const { bm } of region.values()) _markDeadBatch(bm);
   }
+  // ?statBatchNoSort — RE-DERIVE `sortObjects` for the same reason and on the
+  // same tick: `_reseatSurfaceState` rewrites `transparent`/`depthWrite`/
+  // `blending` in both directions after a spawn-race fallback, and those three
+  // ARE the order-independence proof. Only runs under the flag (off ⇒ the
+  // creation-time `!!mat.transparent` can never go stale in a way this would
+  // notice, and the loop is skipped outright).
+  if (statBatchNoSortEnabled()) {
+    for (const region of _buckets.values()) for (const { bm } of region.values()) _reseatBucketSort(bm);
+  }
   // ?statArrayMerge — the pool's own ~10 Hz pass. Its job is the state-DRIFT
   // detector: a pool material is minted once from the strict state key, so a
   // member reseated by `_reseatSurfaceState` after the fact is the one case
@@ -993,7 +1533,9 @@ export function tickStatBatchXOptimize() {
   for (const bm of _dirtyBuckets) {
     const ud = bm.userData;
     if (ud.usedVerts > 0 && ud.deadVerts / ud.usedVerts > _OPTIMIZE_FRAC) {
-      try { bm.optimize(); ud.usedVerts -= ud.deadVerts; ud.deadVerts = 0; bm.boundingSphere = null; } catch (_) { /* fail-soft */ }
+      // optimize() rewrites every geometry's start/count, so the memoised
+      // multidraw ranges are stale even though the instance SET did not change.
+      try { bm.optimize(); ud.usedVerts -= ud.deadVerts; ud.deadVerts = 0; _memoDirtyBounds(bm); } catch (_) { /* fail-soft */ }
     }
   }
   _dirtyBuckets.clear();
@@ -1033,14 +1575,32 @@ export function getStatBatchXStats() {
   let drawnBuckets = 0;
   let drawnBefore = 0;
   let drawnMerged = 0;
+  // THE PER-INSTANCE WALK CENSUS (2026-08-06). `instanceSlots` is the number
+  // three's `onBeforeRender` loop actually visits — `_instanceInfo.length`,
+  // i.e. the high-water mark of allocated slots INCLUDING inactive ones, which
+  // is NOT the same as `ud.instances` (live placements). If the two diverge on
+  // a long roam, eviction churn is leaving dead slots that are re-tested every
+  // frame forever. Split by `sortObjects` because that is the one bucket
+  // property that decides which of three's two loops runs, and the sorted loop
+  // is the expensive one (§5a + `?statBatchNoSort`).
+  let instanceSlots = 0;
+  let sortedBuckets = 0;
+  let sortedSlots = 0;
+  let drawnSlots = 0;
+  let drawnSortedSlots = 0;
   for (const region of _buckets.values()) for (const { bm } of region.values()) {
     const ud = bm.userData;
+    const slots = Array.isArray(bm._instanceInfo) ? bm._instanceInfo.length : 0;
+    instanceSlots += slots;
+    if (bm.sortObjects) { sortedBuckets += 1; sortedSlots += slots; }
     const before = ud.mergedMats ? Math.max(1, ud.mergedMats.size) : 1;
     bucketsBefore += before;
     if (ud.mergedMats) mergedBuckets += 1;
     if (_bucketDrawn(bm)) {
       drawnBuckets += 1;
       drawnBefore += before;
+      drawnSlots += slots;
+      if (bm.sortObjects) drawnSortedSlots += slots;
       if (ud.mergedMats) drawnMerged += 1;
     }
     // Triangles as verts/3: statics geometries are NON-indexed (adapter.js
@@ -1065,6 +1625,10 @@ export function getStatBatchXStats() {
       // ?statArrayMerge: how many of today's (region, material) buckets this one
       // replaced. 0 ⇒ an ordinary per-material bucket.
       mergedMats: ud.mergedMats ? ud.mergedMats.size : 0,
+      // The walk: slots three visits per frame (>= `instances`), and which of
+      // three's two loops this bucket takes.
+      slots,
+      sorted: !!bm.sortObjects,
     });
     instances += ud.instances;
   }
@@ -1111,6 +1675,41 @@ export function getStatBatchXStats() {
       marked: _stats.deadMarked,
       unmarked: _stats.deadUnmarked,
       shadowSkipped: _stats.deadShadowSkipped,
+    },
+    // THE INSTANCE AXIS (?statBatchNoSort / ?statBatchMemo). Read this before
+    // quoting any projection: `slots.drawn` is the population that actually
+    // pays the 0.348 us/instance, and every earlier over-estimate in this file
+    // came from pricing a RESIDENT count as if it were drawn.
+    //
+    //   hitRate = (hitsExact + hitsSlack) / calls   — the whole value of the memo
+    //   avgWalk = instancesWalked / (rebuilds + rebuildsSlack)
+    //
+    // To turn these into MILLISECONDS (the only unit that has ever survived a
+    // measurement here): sample the counters, wait N displayed frames, sample
+    // again, and evaluate the §5a model on the DELTAS —
+    //   saved_ms_per_frame = (d.hitsExact + d.hitsSlack) * 5.9e-3
+    //                      + d.instancesSkipped * 0.348e-3, all divided by N.
+    // Then check that against p50 frame time, and believe the frame time.
+    //
+    // `errors > 0` means the memo fell back to three's own loop — it is never
+    // wrong, only worthless, but a nonzero count wants explaining.
+    walk: {
+      mode: statBatchMemoMode(),
+      noSort: statBatchNoSortEnabled(),
+      installed: _memoStats.installed,
+      calls: _memoStats.calls,
+      hitsExact: _memoStats.hitsExact,
+      hitsSlack: _memoStats.hitsSlack,
+      rebuilds: _memoStats.rebuilds,
+      rebuildsSlack: _memoStats.rebuildsSlack,
+      instancesWalked: _memoStats.instancesWalked,
+      instancesSkipped: _memoStats.instancesSkipped,
+      errors: _memoStats.errors,
+      slackTransM: _memoTransM,
+      slackRotDeg: (_memoRotRad * 180) / Math.PI,
+      // Live population, split the way three's two loops split it.
+      slots: { all: instanceSlots, sorted: sortedSlots, drawn: drawnSlots, drawnSorted: drawnSortedSlots },
+      sortedBuckets,
     },
     dedup: {
       enabled: statGeomDedupEnabled(),
