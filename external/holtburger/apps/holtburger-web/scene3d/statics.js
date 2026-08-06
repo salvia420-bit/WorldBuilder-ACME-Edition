@@ -74,7 +74,10 @@
 import * as THREE from "three";
 import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
-import { MaterialCache, materialCanCastShadow, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
+// NB single line: test_static_batch.mjs / test_static_callpes.mjs load this
+// module by stripping `^\s*import .*$` LINE-wise, so a multi-line import
+// specifier list would leave a dangling `} from "./materials.js";`.
+import { MaterialCache, materialCanCastShadow, materialRendersNothing, skipDeadBatchEnabled, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
 // A7-F1 (2026-07-11 s13) — shared per-cellId LandblockInfo fetch (buildings.js
 // runs the SAME fetch_landblock_objects for this LB). See lb_objects_shared.js.
@@ -100,7 +103,7 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb, isBc7AtlasTe
 // ?statBatchCrossLb (default-OFF, 1070 eye-test pending) — cross-LB variant of the
 // per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
 // per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
-import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys } from "./static_batch_x.js";
+import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys, setDeadBatchPredicate } from "./static_batch_x.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -1699,6 +1702,24 @@ function walkInInstanceEnabled() {
 // Test seam.
 export function __setWalkInInstanceForTest(v) { _walkInInstanceFlag = v; }
 
+// === ?skipDeadBatch (2026-08-06, DEFAULT-ON) ================================
+// "Can this batch bucket ever put a pixel on screen?", composed once here from
+// the shared predicate + its own escape flag. BOTH statics batchers use it —
+// the per-LB one below and the cross-LB chunk batcher, which takes it by
+// injection because static_batch_x.js is a THREE-only leaf (see
+// `setDeadBatchPredicate` there for why, and `_markDeadBatch` for the
+// every-member-is-invisible and shadow arguments, which apply verbatim to the
+// per-LB buckets: both key by the material OBJECT and hand that object to
+// `new THREE.BatchedMesh(..., mat)`).
+//
+// Nothing here loosens `materialRendersNothing` — additive blending and
+// `depthWrite === true` still fail it. This is only a second CALLER of the
+// unchanged predicate plus a flag of its own.
+function _batchRendersNothing(mat) {
+  return skipDeadBatchEnabled() && materialRendersNothing(mat);
+}
+setDeadBatchPredicate(_batchRendersNothing);
+
 // Consolidate a per-LB list of built static nodes: plain-Mesh singletons sharing
 // a surface material → one BatchedMesh per surfaceDid; LOD wrappers, lone
 // singletons, and any member that won't fit the batch fall through as-is.
@@ -1764,6 +1785,17 @@ export function consolidateStaticSingletons(nodes, outBatches) {
     // documented fidelity trade under this flag).
     bm.castShadow = !!group[0].castShadow;
     bm.receiveShadow = !!group[0].receiveShadow;
+    // ?skipDeadBatch — a per-LB bucket is built once from an immutable member
+    // material and is never re-fed, so there is no lifecycle to track here: the
+    // decision is taken once and `cullStaticsGroup` enforces it every frame off
+    // `__deadBatch`. (The cross-LB buckets DO re-derive on the optimize tick;
+    // they outlive the material re-seat window, these do not — a re-bake
+    // REPLACES this node outright.) `castShadow` is checked for the same reason
+    // as there: the depth-only shadow pass ignores opacity.
+    if (!bm.castShadow && _batchRendersNothing(mat)) {
+      bm.userData.__deadBatch = true;
+      bm.visible = false;
+    }
     out.push(bm);
     if (outBatches) outBatches.push(bm);
   }
@@ -3647,6 +3679,20 @@ export function cullStaticsGroup(scene3d, culler) {
     // perObjectFrustumCulled, default true), so node-level culling adds
     // nothing — keep the node visible and let the batch cull itself.
     if (node.isBatchedMesh) {
+      // ?skipDeadBatch (2026-08-06) — EXCEPT a bucket already proven incapable
+      // of putting a pixel on screen. The unconditional restore below is what
+      // makes this pass the only per-frame writer of BatchedMesh visibility;
+      // that is a feature (see the RP6 particle note above — two writers of
+      // `.visible` is the recurring bug), so the hide is expressed as a marker
+      // this pass HONOURS rather than as a competing write that would survive
+      // exactly one frame. `__deadBatch` is only ever set by the batchers'
+      // `materialRendersNothing` proof and is re-derived on the ~10 Hz optimize
+      // tick, so a bucket that stops qualifying clears it and lands back on the
+      // restore path below.
+      if (ud && ud.__deadBatch === true) {
+        if (node.visible !== false) node.visible = false;
+        continue;
+      }
       if (node.visible === false) node.visible = true;
       continue;
     }

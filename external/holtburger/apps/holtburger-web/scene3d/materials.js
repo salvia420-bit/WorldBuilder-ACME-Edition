@@ -308,9 +308,17 @@ export function materialCanCastShadow(material) {
  *     Without this clause a mid-fade material at opacity 0 would be hidden
  *     permanently — a bug that would only show as a prop that never fades in.
  *
- * Materials that are transiently at opacity 0 WITHOUT the authored base (e.g. a
- * batcher's array material, which does not carry the marker) deliberately fail
- * this test and keep rendering.
+ * Materials that are transiently at opacity 0 WITHOUT the authored base
+ * deliberately fail this test and keep rendering. The `stat-atlas-x-*` bucket
+ * material is the live example: `makeArrayMaterial` (static_atlas.js) mints a
+ * FRESH MeshStandardMaterial and replays only `_stateKeyOf` (transparent /
+ * alphaTest / depthWrite / blend factors) — `opacity` is not in the key and is
+ * never copied, so an atlas bucket sits at opacity 1 and fails the very first
+ * clause. The statics BATCH buckets are the opposite case and DO qualify: both
+ * `consolidateStaticSingletons` (statics.js) and `_getOrCreateBucket`
+ * (static_batch_x.js) key their buckets by the MATERIAL OBJECT and hand that
+ * same object to `new THREE.BatchedMesh(..., mat)`, so the bucket material IS a
+ * member material, marker and all (see `skipDeadBatchEnabled` below).
  *
  * @param {object|Array<object>} material  material or material array.
  * @returns {boolean} true when nothing this material draws can ever be seen.
@@ -332,6 +340,57 @@ export function skipDeadAlphaEnabled() {
 }
 /** Test seam — reset the memoised flag. */
 export function __setSkipDeadAlphaForTest(v) { _skipDeadAlphaFlag = v; }
+
+let _skipDeadBatchFlag;
+/**
+ * `?skipDeadBatch=off` escapes the STATICS-BUCKET half of the invisible-draw
+ * skip. DEFAULT-ON.
+ *
+ * WHY THIS IS A SECOND FLAG AND NOT A SECOND CALLER OF `?skipDeadAlpha`
+ * (2026-08-06). The entity fix above shipped on the same day and found 76
+ * invisible part meshes; the statics side at the same spot (Nanto, quality
+ * `mid`) holds 4 BatchedMesh buckets carrying ~21,845 triangles of geometry
+ * that is transparent, opacity 0, NormalBlending, depthWrite false — i.e. every
+ * clause of `materialRendersNothing` EXCEPT the permanence proof, because
+ * `__baseTranslucency` was `undefined` on all 4.
+ *
+ * THE STAMP WAS MISSING AT THE SOURCE, NOT AT THE BATCHER. It is tempting to
+ * read "the batcher builds its own material" — it does not. Both statics
+ * batchers key by the material OBJECT and pass that object straight to
+ * `new THREE.BatchedMesh(..., mat)`, so a bucket material is a member material.
+ * The real gap is in `_materialFromFlags` below: the A10-M1 unified decoder
+ * (`applySurfaceRenderState`, `?surfaceUnified=on`) stamps `__baseTranslucency`
+ * for Translucent>0, and the LEGACY inline ladder — which is the DEFAULT path,
+ * `readSurfaceUnifiedFlag()` is opt-in — sets the same `opacity = 1 - T` and
+ * stamps nothing. The two decoders are documented as "byte-identical output";
+ * on this one userData field they were not. So there is nothing to "plumb
+ * through" the batcher: stamping at the authoring site is the whole fix, and it
+ * is the ONLY sound place for it — a batcher has no access to the Surface
+ * record, and inferring a base translucency from the current opacity is exactly
+ * the unsound inference the permanence clause exists to forbid.
+ *
+ * This flag gates BOTH halves — the legacy-ladder stamp and the bucket hiding —
+ * so `?skipDeadBatch=off` is a complete restore of the pre-2026-08-06 statics
+ * behaviour. `?skipDeadAlpha=off` also disables the hiding (the predicate
+ * carries its own gate) but leaves the stamp; that asymmetry is deliberate —
+ * the stamp is retail-correct on its own merits (it is what lets a
+ * Transparent(20) hook floor its ramp to `translucencyOriginal`,
+ * acclient.c:316947-316956) and only this flag rolls it back.
+ */
+export function skipDeadBatchEnabled() {
+  if (_skipDeadBatchFlag !== undefined) return _skipDeadBatchFlag;
+  let on = true; // DEFAULT-ON; ?skipDeadBatch=off escapes
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("skipDeadBatch") || "").toLowerCase();
+      if (v) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _skipDeadBatchFlag = on;
+  return on;
+}
+/** Test seam — reset the memoised flag. */
+export function __setSkipDeadBatchForTest(v) { _skipDeadBatchFlag = v; }
 
 export function materialRendersNothing(material) {
   if (!skipDeadAlphaEnabled()) return false;
@@ -4396,6 +4455,21 @@ export class MaterialCache {
         },
         { texture },
       );
+    }
+
+    // === 2026-08-06 (`?skipDeadBatch`) — close the ONE userData divergence
+    // between the two decoders. The unified block directly above stamps
+    // `__baseTranslucency` for Translucent>0; the legacy inline ladder (the
+    // DEFAULT path — `?surfaceUnified` is opt-in) computed the identical
+    // `opacity = 1 - T` at :4203 and stamped nothing, which is why every
+    // cache-installed material — and therefore every statics batch bucket built
+    // from one — failed the permanence clause of `materialRendersNothing` while
+    // sitting at opacity 0. Same condition and same value as the unified path,
+    // so the two decoders now agree; on any surface that is not Translucent
+    // with T>0 this writes nothing at all. See `skipDeadBatchEnabled` for why
+    // the stamp belongs here rather than in the batcher.
+    if (!useUnifiedDecoder && isTranslucent && sfTranslucency > 0 && skipDeadBatchEnabled()) {
+      mat.userData = { ...(mat.userData || {}), __baseTranslucency: sfTranslucency };
     }
 
     // Phase 1.1 — procedural normal map. Wasm skips Luminous surfaces

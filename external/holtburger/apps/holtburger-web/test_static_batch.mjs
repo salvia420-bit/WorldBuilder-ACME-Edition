@@ -33,7 +33,15 @@ src = src.replace(/^\s*import\s+.*$/gm, ""); // drop every import line
 const shims =
   "const meshToGeometryGroups=()=>[],materialCanCastShadow=()=>false,lbKeyOf=x=>(x>>>0)&0xffff0000," +
   "modelMeshFetcher=()=>null,surfacePixelsFetcher=()=>null,CULL_DIST_SQ=Infinity,particleClockMode=()=>0," +
-  "ownerRegistry={},particleOwnerOn=()=>false;class MaterialCache{};\n";
+  "ownerRegistry={},particleOwnerOn=()=>false;class MaterialCache{};\n" +
+  // 2026-08-06 ?skipDeadBatch — statics.js composes `materialRendersNothing`
+  // with `skipDeadBatchEnabled` and installs the result into static_batch_x.js
+  // at module load. Shimmed to the flag-on / nothing-qualifies case so this
+  // test keeps measuring the consolidation itself; the dead-batch behaviour has
+  // its own test (test_dead_batch_skip.mjs).
+  "let __installedDeadPredicate=null;" +
+  "const setDeadBatchPredicate=(f)=>{__installedDeadPredicate=f;}," +
+  "skipDeadBatchEnabled=()=>true,materialRendersNothing=()=>false;\n";
 const stripped = src
   .replace(/^\s*export\s+async\s+function\s+/gm, "async function ")
   .replace(/^\s*export\s+function\s+/gm, "function ")
