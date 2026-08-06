@@ -114,6 +114,9 @@ import { getQuality } from "./quality.js";
 // 2026-08-03 — the seam-height plane moved out of `material.userData` (three's
 // Material.copy JSON round-trips userData); read it through the accessor.
 import { heightTexForMaterial } from "./materials.js";
+// 2026-08-05 (task 2) — pixel source of last resort for atlas staging, so a
+// texture's CPU copy stops being the only place a surface's pixels live.
+import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -361,11 +364,23 @@ function _liftChannel(src, sw, sh, srcStride, ch, dw, dh) {
 }
 
 // Pull one channel out of a THREE texture's CPU-side image, or null.
-function _texChannel(tex, ch, w, h) {
+function _texChannel(tex, ch, w, h, plane, surfaceDid) {
   const img = tex && tex.image;
-  const data = img && img.data;
-  const sw = img && (img.width | 0);
-  const sh = img && (img.height | 0);
+  // 2026-08-05 (task 2) — the texture's own bytes are the FIRST source, not the
+  // only one. This read is why the 1,332 MB of CPU copies cannot simply be
+  // released: "uploaded first, atlased later" is routine (LRU evict -> re-enter
+  // frees the layer while the texture survives, `landblock_lru.js:1730` skips
+  // `__cacheOwned`), so a released plane would silently pack as black. When the
+  // copy is gone, `surface_planes.js` re-supplies it from the wasm decode memo;
+  // a miss returns null and the caller falls back exactly as it always has for
+  // an absent map.
+  let data = img && img.data;
+  let sw = img && (img.width | 0);
+  let sh = img && (img.height | 0);
+  if ((!data || !sw || !sh) && plane && surfaceDid) {
+    const p = planeFor({ map: tex, normalMap: tex, roughnessMap: tex, aoMap: tex }, plane, surfaceDid);
+    if (p) { data = p.data; sw = p.width | 0; sh = p.height | 0; }
+  }
   if (!data || !sw || !sh) return null;
   const stride = Math.floor(data.length / (sw * sh));
   if (stride < 1 || ch >= stride) return null;
@@ -392,8 +407,14 @@ function packNraLayer(nraArray, layer, mat, w, h, stats) {
   if (!Number.isFinite(scale)) scale = Number(mat.normalScale?.x);
   if (!Number.isFinite(scale)) scale = 1.0;
 
-  const nR = _texChannel(mat.normalMap, 0, w, h);
-  const nG = nR ? _texChannel(mat.normalMap, 1, w, h) : null;
+  // `surfaceDid` is stamped by `MaterialCache._installCacheEntry`; it is what the
+  // wasm fallback inside `_texChannel` needs to re-ask for a released plane.
+  // Roughness and AO deliberately get no plane hint: they are texchan sidecars,
+  // absent from the decode memo, so a fallback could only invent zeros — and
+  // task 4 correspondingly never releases them.
+  const did = mat.userData?.surfaceDid >>> 0;
+  const nR = _texChannel(mat.normalMap, 0, w, h, PLANE.NORMAL, did);
+  const nG = nR ? _texChannel(mat.normalMap, 1, w, h, PLANE.NORMAL, did) : null;
   const rgh = _texChannel(mat.roughnessMap, 1, w, h); // three reads roughnessMap.g
   const ao = _texChannel(mat.aoMap, 0, w, h);         // three reads aoMap.r (RedFormat)
   // S3 — the seam-height field (materials.js stashes it per material; 255 =
@@ -405,7 +426,7 @@ function packNraLayer(nraArray, layer, mat, w, h, stats) {
   // texchan AO exactly as before — under the same shader formula both
   // semantics shade correctly, and a near-flat AO field makes the POM march a
   // no-op, so the fallback can never invent relief.
-  const hgt = _texChannel(heightTexForMaterial(mat), 0, w, h);
+  const hgt = _texChannel(heightTexForMaterial(mat), 0, w, h, PLANE.HEIGHT, did);
 
   const roughScalar = Math.min(1, Math.max(0, Number.isFinite(mat.roughness) ? mat.roughness : 1));
   const roughFlat = Math.round(roughScalar * 255);
@@ -1395,7 +1416,15 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       // exactly the ~5,400-draw-call wall the atlas exists to remove. Accept
       // either pixel source.
       const bc7Tex = isBc7AtlasTexture(tex);
-      if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !(img.data || bc7Tex) || n.userData?.__staticBatch) {
+      // 2026-08-05 — the twin of `statics.js:2379`. Ask whether pixels CAN be
+      // supplied, not whether this texture still carries them: an `img.data`
+      // test answers no for every released texture and routes every static to an
+      // unbatched singleton, back toward the ~5,400-draw-call wall this atlas
+      // exists to remove. Identical today, since tier 1 of `canSupplyPlanes` IS
+      // the `img.data` test.
+      const canPixels = (img && img.data) || bc7Tex ||
+        canSupplyPlanes(n?.material, n?.material?.userData?.surfaceDid);
+      if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !canPixels || n.userData?.__staticBatch) {
         _atlasStats.ptFiltered++; passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
       }
       // X6 — a surface whose BC7 verdict is still IN FLIGHT must not be committed
@@ -1483,7 +1512,13 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
           }
         } else {
           const stride = w * h * 4;
-          const src = img.data;
+          // Same two-source rule as `_texChannel` above: the texture's bytes
+          // first, the wasm decode memo when they have been released.
+          let src = img.data;
+          if (!src) {
+            const p = planeFor(mat, PLANE.ALBEDO, mat?.userData?.surfaceDid >>> 0);
+            if (p) src = p.data;
+          }
           if (src && src.length === stride) {
             ud.diffArray.image.data.set(src, layer * stride);
           } else {
