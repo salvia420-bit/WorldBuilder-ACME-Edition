@@ -4,7 +4,7 @@
 sizing of this item this document **supersedes twice over**. Nothing here is shipped; one
 read-only instrument is added.
 
-**Verdict up front (SUPERSEDED — see §0a, measured on the 1070: +2.48 ms for the scoped design and +3.9 ms with canonical tiers).** The honest reachable win is **~1.4–2.3 ms of a ~24 ms frame**, against a
+**Verdict up front (SUPERSEDED TWICE — see §0c first: the sizing was over a RESIDENT population and is ~3x too generous, the deformed half is admissible after all, and the thing is built behind `?statArrayMerge`. Then §0a/§0b for the intermediate corrections).** The honest reachable win is **~1.4–2.3 ms of a ~24 ms frame**, against a
 ceiling of 3.68 ms, for a subsystem touching the layer pool, the shader, the material cache's
 derived clones, eviction refcounting and the X7 memory ceiling — and validatable only by
 1070 A/B plus an owner eye-test. Two changes shipped **today** bought 0.7 ms and 1.2–2.0 ms
@@ -17,49 +17,107 @@ different task, and §6 specs it.
 
 ---
 
-## 0c. CORRECTION to §0a AND §0b — every figure above was RESIDENT-scale. The prize is 2.00 ms.
+## 0c. CORRECTION to §0b, and the thing was BUILT — `?statArrayMerge`, default-OFF
 
-§0a and §0b both priced the merge over `drawn.buckets`. **That population is not drawn.**
-`_projDrawn` tests `visible` + `instances > 0` and never the frustum, so it removed 4 buckets
-of 346. Two independent proofs:
+**Two of this document's load-bearing numbers were wrong in the same direction, and its
+recommendation does not survive either fix.**
 
-* arithmetic: `batchBuckets 346 − blocked.deformed 193 = 153 = all.buckets.today`, exactly —
-  so `blocked.deformed` counts BUCKETS, and the "drawn" split is resident-scale;
-* consistency: 149 mergeable + 193 deformed = 342 static-batch-c draws, against **177**
-  measured directly by attributing `renderBufferDirect`, and 129 in the region sweep.
+### The sizing was over a RESIDENT population, not a submitted one
 
-A real submitted-scale sampler now exists (`__statMergeArmSubmitted`, which shadows
-`onBeforeRender` and counts what three actually submits). Run on a settled Nanto session:
+`projectStatMergeBuckets`'s `_projDrawn` tests `visible` + `instances > 0` and **never the
+frustum** — it cannot, because it runs between frames. So "drawn" was very nearly "resident":
+it removed 4 buckets of 346. Proof from the same session: `346 − 193 = 153` exactly, and 149
+mergeable + 193 deformed = 342 "drawn" against **177 `static-batch-c` draws/frame** measured
+directly by attributing `renderBufferDirect`. Every §0a/§0b figure inherits that.
+
+Re-measured at Nanto with a real submitted-scale sampler (`__statMergeArmSubmitted`, which
+shadows `onBeforeRender` and counts what three actually submits):
 
 ```
-submitted BatchedMesh nodes: 128   =   60 mergeable  +  68 deformed
+submitted BatchedMesh nodes: 128     mergeable 60   deformed 68
 ```
 
-| population | submitted today | → regionStrict | → regionState | worth (strict) |
+| population | today | (region, tile, state, format) | + strict (image-preserving) | (region, state), unreachable |
 |---|---|---|---|---|
-| mergeable | 60 | 35 | 19 | **+1.00 ms** |
-| deformed (blocked today) | 68 | 43 | 22 | **+1.00 ms** |
-| **combined** | **128** | **78** | **41** | **+2.00 ms** |
+| **mergeable** | 60 | 33 (+1.08 ms) | **35 (+1.00 ms)** | 19 (+1.64 ms) |
+| **deformed**  | 68 | 36 (+1.28 ms) | **43 (+1.00 ms)** | 22 (+1.84 ms) |
+| **combined**  | **128** | — | **78 (+2.00 ms)** | — |
 
-**So the array merge is worth ~1.00 ms, not the 2.9 ms of §0b or the 2.48 ms of §0a — and the
-LARGER half of the remaining prize is the population this doc's gate analysis treats as
-unmergeable.**
-
-**The deformed half is reachable, and cheaply.** Sway already survives batching today:
-`per_instance.js` derives `vVfxHash` under an explicit `#ifdef USE_BATCHING` from
-`batchingMatrix[3].xy`; three r184 applies `batchingMatrix` after the `begin_vertex` seam
-where windSwayGpu writes its object-space shear; and 206 live BatchedMesh buckets already
-carry a windSwayGpu variant, because `_getOrCreateBucket` passes the member material through
-verbatim. The `ptDeformed` gate is about MATERIAL SUBSTITUTION — the array material never
-went through `buildFragVariant` — not about batching. Including `__vfxSetKey` in the bucket
-key admits them, splits each class into at most two buckets (there is exactly one set in the
-world, 206 of 206), and structurally cannot reproduce the 2026-07-02 "trunk sways, foliage
-frozen" split, because membership and material would then be decided by the same key.
+**§0b's "+2.92 ms for the array merge at native tile sizes" is superseded by +1.00 ms.** The
+shape of §0b's finding survives — the prize is the native-tile array merge and the tiers are
+worth nothing — but it is a third of the size. Do not quote 2.9 ms anywhere.
 
 **Fourth 2× of this investigation, and the first one an instrument caused.** The pattern is
-always the same: a population counted at residency and priced as if drawn. Every future
-figure on this workload states its scale — resident, drawn, or submitted — or it is not a
-figure. Raw sampler output: `RESULTS-stat-merge-SUBMITTED-2026-08-06.json`.
+always the same: a population counted at RESIDENCY and priced as if DRAWN. Standing rule from
+here: every figure on this workload states its scale — resident, drawn, or submitted — or it
+is not a figure. Raw sampler output: `RESULTS-stat-merge-SUBMITTED-2026-08-06.json`.
+
+
+### `ptDeformed` was guarding the wrong thing, and it is the LARGER half
+
+68 of the 128 submitted buckets are deformed. **Sway already survives batching**:
+`per_instance.js` derives `vVfxHash` under an explicit `#ifdef USE_BATCHING` from
+`batchingMatrix[3].xy`; three r184 applies `batchingMatrix` AFTER the `begin_vertex` seam where
+`windSwayGpu` writes its object-space shear; and 206 live `BatchedMesh` buckets already carry a
+windSwayGpu variant, because `_getOrCreateBucket` uses the member material verbatim. **G14 is
+about material SUBSTITUTION** — the array material never went through `buildFragVariant` — not
+about batching. §1c's "hard" verdict on G14 is wrong as stated.
+
+### So it was built
+
+`?statArrayMerge=on`, DEFAULT-OFF. `scene3d/static_array_pool.js` (new) + a merged-bucket path
+in `scene3d/static_batch_x.js` + the provider/VFX-hook installation in `scene3d/statics.js`.
+105 offline checks in `test_stat_array_merge.mjs`.
+
+Everything §2 got right is kept verbatim and is what the code does: **global array pools,
+regional BatchedMeshes** (§2b's memory argument, 142.2 MB vs 1,440.2 MB, is why); the region
+key stays (§0 correction 1); **native tile sizes only** (§0b); the atlas's own
+`makeArrayMaterial` / `buildDiffuseArray` / `buildNraArray` / `packNraLayer` / `_stateKeyOf` /
+`_bucketKeyFor` / `_perLayerBytesFor` / `_layerCapacityFor` / `_atlasStartLayersFor` /
+`_atlasGrowTargetFor` are **imported, not transcribed**, so a pool array and an atlas array are
+the same object by construction; and the batcher's shared-geometry model is untouched (§1b —
+routing this population through the atlas's per-node copier is the measured 89 ms wall).
+
+Three things §2 did not have:
+
+* **§2a's unified refcount, made concrete.** Every membership record holds **exactly one
+  geometry reference and exactly one layer reference, taken together and released together**. A
+  material group takes ONE layer ref per feed and hands it to the FIRST membership record it
+  produces; that record's eviction releases it in the same sweep that drops (or, under
+  `?statGeomDedup`, decrefs) the geometry whose `aLayer` addresses it. So while any geometry
+  addressing layer L is live, at least one record holding L is live, and L cannot be recycled to
+  another surface. `arrayMerge.layerRefsHeld === layerRefsReleased` is the live form.
+* **The VFX set is in the KEY.** The component set + its config token joins the pool key, and
+  the set is reproduced on the pool material via `installVfxComponentPatch`, which chains onto
+  `makeArrayMaterial`'s `onBeforeCompile` rather than replacing it. Membership and material are
+  then ONE decision — the only shape that cannot repeat the 2026-07-02 "trunk sways, foliage
+  frozen" split. **VERTEX-stage sets only** (`comp.mech === "B"`): `makeArrayMaterial` CONSUMES
+  four fragment includes, so a "frag" component would find its seam gone and go silently inert.
+  Any set containing one is rejected, not composed. (Chaining also clobbers
+  `customProgramCacheKey`, so the pool re-composes `arrayVariant | vfxSet` — otherwise the wrap
+  and clamp array programs collapse onto each other, the shape of the 2026-07-28
+  `__staticBiased` regression.)
+* **G18, which this document missed.** `_stateKeyOf` also omits **`opacity`** (per-surface
+  translucency), **`color`** (diffuse tint) and the **blend-alpha triplet**, and a material can
+  carry an **`emissiveMap`** — luminous surfaces attach their own diffuse texture as one, which
+  one shared material cannot hold at all. The first three join the strict key; the last is an
+  outright rejection.
+
+### What is still owed
+
+Nothing here is GPU-measured. §7's list stands, re-pointed: the collapse to score is
+`getStatBatchXStats().arrayMerge.drawn.before → .after` against `renderer.info.render.calls`,
+and the eye-test §7 says is owed by "anything built on it" is now owed — swaying foliage first,
+then shadows, depth bias, sidedness and Luminosity.
+
+**One hazard this document never raised and the 1070 should settle:** merging cannot change
+which INSTANCES are submitted (the region key is kept), but it can change how many are
+**walked**. `perObjectFrustumCulled` walks every active instance of a *drawn* node, and merging
+can move instances that today sit in a culled bucket into a drawn one. At Nanto ~68% of a drawn
+region's buckets are drawn today; after merging it is closer to all of them. At the measured
+~0.038 µs per walked instance that is a fraction of a millisecond against a ~2 ms saving — but
+it is exactly the kind of second-order term that has eaten estimates on this workload twice
+already, so measure the frame, not the bucket count.
 
 ---
 

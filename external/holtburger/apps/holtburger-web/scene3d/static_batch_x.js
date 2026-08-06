@@ -61,6 +61,7 @@ export function __resetStatBatchXForTest() {
   _stats.deadMarked = 0;
   _stats.deadUnmarked = 0;
   _stats.deadShadowSkipped = 0;
+  for (const k of Object.keys(_mergeStats)) _mergeStats[k] = 0;
   _warned.clear();
 }
 
@@ -157,7 +158,90 @@ const _stats = {
   deadShadowSkipped: 0,
 };
 
-// Geometry-level stamp read by `_contentKeyOf`. Absent ⇒ legacy path.
+// ---------------------------------------------------------------------------
+// ?statArrayMerge — ARRAY-TEXTURE MERGING of the region buckets (2026-08-06,
+// DEFAULT-OFF, exact-match opt-in).
+//
+// THE MEASUREMENT. Buckets are keyed by the MATERIAL OBJECT, so every distinct
+// surface in a region is its own BatchedMesh and its own draw. Merging them by
+// (region, tile, state, format) collapses that at no fidelity cost.
+//
+// ⚠ SIZE CORRECTION (2026-08-06) — every earlier figure for this work, including
+// docs/2026-08-06-statics-array-merge-design.md §0b's "127 drawn -> 54, +2.92 ms",
+// counted a RESIDENT population, not a SUBMITTED one (`_projDrawn` tests
+// `visible` + `instances > 0` and never the frustum, so "drawn" removed 4 buckets
+// of 346). Re-measured with a real submitted-scale sampler
+// (`__statMergeArmSubmitted`) on a settled Nanto session:
+//
+//     submitted BatchedMesh nodes: 128   (mergeable 60 + deformed 68)
+//     MERGEABLE  60 -> regionStrict 35   = +1.00 ms   (image-preserving)
+//     DEFORMED   68 -> regionStrict 43   = +1.00 ms
+//     COMBINED  128 -> 78                = +2.00 ms
+//
+// **Do not quote 2.9 ms.** ~1.00 ms per half, and the DEFORMED half is the
+// larger population (68 of 128) — it is admitted here, via the VFX set token in
+// the pool key. See scene3d/static_array_pool.js's VFX-hook block.
+//
+// WHAT THIS MODULE DOES AND DOES NOT DO. It changes ONE thing: which bucket an
+// already-batched material group lands in. The population split is untouched —
+// `group.length < 2` still punts to the statAtlas seam, so the merged set is
+// exactly the set measured above and the atlas is not starved. Geometry is still
+// shared per MODEL (one addGeometry per distinct BufferGeometry, one addInstance
+// per placement); routing this population through the atlas's per-NODE copier
+// instead is the measured 89 ms / 4,576-draw wall and is not what happens here.
+//
+// THE ARRAY MACHINERY IS INJECTED, NEVER IMPORTED. This module is a deliberate
+// THREE-only leaf (its headless test loads it by stripping the import lines
+// outright, and `setDeadBatchPredicate` exists precisely so that stays true).
+// The layer pools, the sampler2DArray material and the admission rules live in
+// scene3d/static_array_pool.js and reach here as ONE injected provider object
+// installed by statics.js. Never installed, or flag off ⇒ every branch below is
+// dead and the feed path is byte-identical.
+//
+// THE TWO REFCOUNTS, AND WHY THEY ARE ONE RECORD. A pool is GLOBAL (region-
+// scoped arrays measured 1,440.2 MB against 142.2 MB shared, 10.1x, on a page
+// that OOMs near 2,800 MB), so a LAYER can outlive the landblock that first
+// supplied it AND the region bucket that first indexed it. A GEOMETRY can be
+// shared across landblocks (?statGeomDedup) and carries its layer index baked
+// into a per-vertex `aLayer` attribute. If the layer were freed and recycled to
+// another surface while a geometry still addressed it, that prop would render
+// with another surface's pixels — the exact failure this design has to rule out.
+//
+// The rule that rules it out: **every membership record holds exactly one
+// geometry reference and exactly one layer reference, taken together and
+// released together.** A group takes ONE layer ref per feed and hands it to the
+// FIRST membership record it produces; that record's eviction releases it in the
+// same sweep that drops (or decrefs) the geometry. So while any geometry
+// addressing layer L is live, at least one record holding a ref on L is live,
+// and L cannot be recycled. Two independent refcounts would drift; one record
+// cannot. If a group produces no record (every node failed), the ref is released
+// on the spot.
+//
+// FAIL-SOFT EVERYWHERE. Admission rejection, layer-pool overflow, a failed layer
+// write, a refused array allocation, an unexpected material shape — all fall
+// through to today's per-material bucket. Nothing that cannot merge disappears.
+// ---------------------------------------------------------------------------
+let _arrayMerge = null;
+
+/**
+ * Install the array-merge provider (statics.js does this once at module load,
+ * exactly as it installs `setDeadBatchPredicate`). The provider carries its OWN
+ * flag gate, so `?statArrayMerge=off`/absent lands here as `admit()` returning
+ * null rather than as a second gate in this module.
+ */
+export function setStatArrayMergeProvider(p) {
+  _arrayMerge = (p && typeof p.admit === "function" && typeof p.acquire === "function") ? p : null;
+}
+/** Test seam. */
+export function __getStatArrayMergeProviderForTest() { return _arrayMerge; }
+
+// Merge census. `bucketsBefore`/`bucketsAfter` are derived live in
+// `getStatBatchXStats` from each merged bucket's distinct SOURCE materials — the
+// same before/after the 127 -> 54 projection reports, computed from the buckets
+// that actually exist rather than from a model.
+const _mergeStats = { mergedBuckets: 0, mergedReaped: 0, groupsMerged: 0, groupsLegacy: 0, layerRefsHeld: 0, layerRefsReleased: 0 };
+
+// Geometry-level stamp read by `_contentKeyOf`.
 // ---------------------------------------------------------------------------
 // ?skipDeadBatch — hide a bucket whose material can never put a pixel on screen
 // (2026-08-06). Measured at Nanto, quality `mid`: 4 buckets whose material is
@@ -371,7 +455,20 @@ function _regionKeyOfId(id) {
   return `${rx}x${ry}`;
 }
 
-function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
+/**
+ * `poolRef` (?statArrayMerge, else null) makes this a MERGED bucket: `mat` is
+ * then the pool's ONE shared sampler2DArray material rather than a member's
+ * material, and the region map keys on it exactly as it keys on any other
+ * material object — two pools are two materials, and a pool material can never
+ * collide with a member material. That is why merging needs no second bucket
+ * map and no change to `_reapBucketIfEmpty`'s `ud.material` back-reference.
+ *
+ * Sharing ONE material across every region bucket of a class is better than
+ * free: three sorts the opaque pass by `material.id`, so a class's region
+ * buckets sort adjacent — and the frame-cost census measured 71% of draws
+ * changing material against 79 distinct programs.
+ */
+function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
   let region = _buckets.get(regionKey);
   if (!region) { region = new Map(); _buckets.set(regionKey, region); }
   let b = region.get(mat);
@@ -392,6 +489,10 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
   // node) and NO __staticBatch (that marks the per-LB batches).
   bm.userData = {
     __staticBatchCrossLb: true,
+    // ?statArrayMerge: this bucket's members are MANY surfaces sharing one array
+    // texture, so `surfaceDid` below names only the template's — it is kept for
+    // the name/census shape and must not be read as "the bucket's surface".
+    __statArrayMerged: !!poolRef,
     surfaceDid: surf,
     maxVerts: _INIT_VERTS,
     maxInst: _INIT_INST,
@@ -404,8 +505,16 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
     // lazily on first keyed feed and scoped to THIS bucket object, so it dies
     // with the BatchedMesh and can never key one bucket's ids into another.
     dedupGids: null,
+    // ?statArrayMerge only. `pool` is the GLOBAL layer pool this bucket indexes
+    // into (released back in `_reapBucketIfEmpty`); `mergedMats` is the set of
+    // distinct SOURCE material objects that collapsed into it, i.e. the number
+    // of buckets this one replaced — the live half of the 127 -> 54 headline.
+    pool: poolRef ? poolRef.pool : null,
+    mergedMats: poolRef ? new Set() : null,
   };
-  bm.name = `static-batch-c-r${regionKey}-s${surf.toString(16).padStart(8, "0")}-m${_bucketSeq++}`;
+  bm.name = poolRef
+    ? `static-batch-xa-r${regionKey}-p${String(poolRef.pool?.key ?? "").replace(/[^0-9a-zA-Z]+/g, "_").slice(0, 40)}-m${_bucketSeq++}`
+    : `static-batch-c-r${regionKey}-s${surf.toString(16).padStart(8, "0")}-m${_bucketSeq++}`;
   // Back-references so an emptied bucket can find and remove itself (see
   // _reapBucketIfEmpty). Kept on userData rather than in a side map so they
   // cannot outlive the BatchedMesh.
@@ -414,6 +523,12 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
   b = { bm };
   region.set(mat, b);
   _stats.bucketsCreated += 1;
+  if (poolRef) {
+    _mergeStats.mergedBuckets += 1;
+    // Register with the GLOBAL pool so it can tell when its last region bucket
+    // has gone and its arrays + program are dead weight.
+    try { _arrayMerge?.attachBucket(poolRef.pool, bm); } catch (_) { /* fail-soft */ }
+  }
   // ?skipDeadBatch — derive visibility from the material now that castShadow is
   // set. Re-derived on the optimize tick below; see `_markDeadBatch`.
   _markDeadBatch(bm);
@@ -457,6 +572,17 @@ function _reapBucketIfEmpty(bm) {
   try { bm.dispose(); } catch (_) { /* fail-soft */ }
   try { bm.geometry?.dispose(); } catch (_) { /* fail-soft */ }
   _stats.bucketsReaped += 1;
+  // ?statArrayMerge — hand the GLOBAL pool back its bucket reference. The pool
+  // disposes its arrays + shared material only when it has neither a live layer
+  // NOR a live bucket, so a layer that outlives this region (the whole point of
+  // a global pool) keeps it alive, and a pool nothing indexes any more does not
+  // linger. Note the ORDER this relies on in `evictStaticBatchXForLb`: every
+  // layer ref is released first, buckets are reaped after — so the last reap of
+  // a departed class is what actually frees the arrays.
+  if (ud.pool) {
+    _mergeStats.mergedReaped += 1;
+    try { _arrayMerge?.detachBucket(ud.pool, bm); } catch (_) { /* fail-soft */ }
+  }
   return true;
 }
 
@@ -478,6 +604,42 @@ function _addGeometryGrow(bm, g) {
   ud.gidVerts.set(gid, vcount);
   ud.usedVerts += vcount;
   return gid;
+}
+
+/**
+ * ?statArrayMerge — `_addGeometryGrow` with the surface's array LAYER stamped
+ * into a per-vertex `aLayer` attribute, which is what the pool material's
+ * injected `sampler2DArray` reads (`static_atlas.js makeArrayMaterial`).
+ *
+ * WHY PER-VERTEX IS COMPATIBLE WITH SHARING THE GEOMETRY ACROSS PLACEMENTS, and
+ * why the atlas never learned this: a statics geometry is a pure function of
+ * (modelId, surfaceDid, doubleSided) — precisely the `?statGeomDedup` content
+ * key — so it carries exactly ONE surface, hence one texture, hence one layer.
+ * Every placement of a geometry wants the same `aLayer`. The atlas's population
+ * is singletons BY DEFINITION, so sharing was structurally impossible there;
+ * here it is the whole point.
+ *
+ * WHY THE SOURCE GEOMETRY IS NOT CLONED. `BatchedMesh.addGeometry` COPIES the
+ * source attributes into the batch's own buffers (three r184
+ * `_initializeGeometry` :26076 defines the layout from the FIRST geometry,
+ * `setGeometryAt` copies per attribute), so the attribute only has to exist for
+ * the duration of the call. Cloning instead would be ~324 geometry copies per
+ * region and would re-introduce exactly the per-node copying that makes the
+ * atlas the weaker merger on volume. The attribute is removed immediately after
+ * so the shared BufferGeometry is left byte-identical for every other consumer
+ * (the legacy per-LB batch, the atlas's `normalizeForMerge`, a passthrough
+ * render) — this mutation is synchronous and single-threaded, so no other reader
+ * can observe it.
+ */
+function _addGeometryGrowLayered(bm, g, layer) {
+  const prev = g.getAttribute("aLayer");
+  const cnt = g.attributes.position.count;
+  g.setAttribute("aLayer", new THREE.BufferAttribute(new Float32Array(cnt).fill(layer), 1));
+  try {
+    return _addGeometryGrow(bm, g);
+  } finally {
+    if (prev) g.setAttribute("aLayer", prev); else g.deleteAttribute("aLayer");
+  }
 }
 
 // addInstance, growing the instance capacity on demand (atlas pattern).
@@ -567,15 +729,51 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
     let bucketsTouched = 0;
     for (const group of byMat.values()) {
       if (group.length < 2 && !wireframeMode) { out.push(...group); continue; } // lone → statAtlas seam (normal mode only)
-      let bucket;
-      try {
-        bucket = _getOrCreateBucket(group[0].material, scene3d, group[0], regionKey);
-      } catch (_) {
-        out.push(...group); // bucket creation failed — whole group stays unbatched
-        continue;
+      // ?statArrayMerge (default-OFF) — try to seat this whole group in a SHARED
+      // array-texture bucket first. The population split above is untouched, so
+      // the merged set is exactly the >=2 groups that are batched today.
+      //
+      // One layer reference is taken HERE, per group per feed, and is handed to
+      // the first membership record the group produces (see below) — one
+      // acquire, one release, released in the same eviction sweep that drops the
+      // geometry whose `aLayer` addresses it.
+      let poolRef = null;
+      let bucket = null;
+      if (_arrayMerge) {
+        try {
+          const handle = _arrayMerge.admit(group[0].material, group[0]);
+          const ref = handle ? _arrayMerge.acquire(handle) : null;
+          if (ref) {
+            try {
+              bucket = _getOrCreateBucket(ref.material, scene3d, group[0], regionKey, ref);
+              poolRef = ref;
+              _mergeStats.groupsMerged += 1;
+              _mergeStats.layerRefsHeld += 1;
+            } catch (_) {
+              // Bucket creation failed — give the layer straight back, then take
+              // today's per-material path below. Never leave a ref stranded.
+              bucket = null;
+              try { _arrayMerge.release(ref); _mergeStats.layerRefsReleased += 1; } catch (_2) {}
+            }
+          }
+        } catch (_) { bucket = null; poolRef = null; /* fail-soft: legacy bucket */ }
+      }
+      if (!bucket) {
+        try {
+          bucket = _getOrCreateBucket(group[0].material, scene3d, group[0], regionKey, null);
+          _mergeStats.groupsLegacy += 1;
+        } catch (_) {
+          out.push(...group); // bucket creation failed — whole group stays unbatched
+          continue;
+        }
       }
       const bm = bucket.bm;
       const ud = bm.userData;
+      // >= 0 ⇒ merged: every geometry added below is stamped with this layer.
+      const mergeLayer = poolRef ? poolRef.layer : -1;
+      // The group's single layer ref, until a membership record takes ownership.
+      let layerHeld = poolRef !== null;
+      if (poolRef && ud.mergedMats) ud.mergedMats.add(group[0].material.id);
       // Within one feed all placements of a model share ONE BufferGeometry
       // object — add it once, instance it per placement.
       const gidOf = new Map(); // BufferGeometry -> gid (this feed only)
@@ -608,25 +806,38 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
                 gid = entry.gid;
                 _dedupStats.hits += 1;
               } else {
-                gid = _addGeometryGrow(bm, m.geometry); // throws → catch → passthrough
+                gid = mergeLayer >= 0
+                  ? _addGeometryGrowLayered(bm, m.geometry, mergeLayer)
+                  : _addGeometryGrow(bm, m.geometry); // throws → catch → passthrough
                 entry = { gid, refs: new Set() };
                 shared.set(ckey, entry);
                 _dedupStats.adds += 1;
               }
             } else {
-              gid = _addGeometryGrow(bm, m.geometry); // throws → catch → passthrough
+              gid = mergeLayer >= 0
+                ? _addGeometryGrowLayered(bm, m.geometry, mergeLayer)
+                : _addGeometryGrow(bm, m.geometry); // throws → catch → passthrough
             }
             gidOf.set(m.geometry, gid);
             let list = _lbMembership.get(lbKey);
             if (!list) { list = []; _lbMembership.set(lbKey, list); }
+            let pushed;
             if (entry !== undefined) {
               entry.refs.add(lbKey);
               rec = { bm, gid, key: ckey, entry, iids: [] };
-              list.push(rec);
+              pushed = rec;
               recOf.set(gid, rec);
             } else {
-              list.push({ bm, gid }); // legacy record: deleteGeometry cascades
+              pushed = { bm, gid }; // legacy record: deleteGeometry cascades
             }
+            // ?statArrayMerge — the ONE layer ref this group took rides on the
+            // FIRST record it produces. That is what makes the two refcounts a
+            // single record: this record's eviction releases the layer in the
+            // same sweep that drops (dedup: decrefs) the geometry whose vertices
+            // carry the layer index, so a layer can never be recycled to another
+            // surface while a live geometry still addresses it.
+            if (layerHeld) { pushed.poolRef = poolRef; layerHeld = false; }
+            list.push(pushed);
           } else if (recOf) {
             rec = recOf.get(gid) || null;
           }
@@ -643,8 +854,20 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
           out.push(m);
         }
       }
+      // The group produced no membership record at all (every node threw before
+      // its geometry landed), so nothing will ever release the layer ref — do it
+      // here. A leaked ref would pin a layer for the session and, worse, keep a
+      // recycled index out of circulation, so this is not merely tidy.
+      if (layerHeld && poolRef) {
+        try { _arrayMerge?.release(poolRef); _mergeStats.layerRefsReleased += 1; } catch (_) {}
+        layerHeld = false;
+      }
       if (groupAdded > 0) { consumed += groupAdded; bucketsTouched += 1; touched.add(bm); }
     }
+    // ?statArrayMerge — ONE `needsUpdate` per touched array per feed (the atlas's
+    // touchedDiff/touchedNra pattern). `addLayerUpdate` already marked the
+    // individual layers, so this uploads those and not the whole array.
+    if (_arrayMerge) { try { _arrayMerge.flush(); } catch (_) { /* fail-soft */ } }
     // Membership changed — invalidate node bounds; three recomputes at next cull.
     for (const bm of touched) bm.boundingSphere = null;
     if (consumed === 0) return null; // nothing landed — let the caller run the legacy path
@@ -674,6 +897,17 @@ export function evictStaticBatchXForLb(lbKey) {
   const touched = new Set();
   for (const m of list) {
     const ud = m.bm.userData;
+    // ?statArrayMerge — release the array LAYER reference this record carries,
+    // BEFORE the branch below, so both the dedup and the legacy geometry path
+    // drop it. This is the other half of "one record, both refcounts": the layer
+    // and the geometry it is baked into are released in the same iteration, so
+    // no ordering between them can leave a live geometry pointing at a recycled
+    // layer. A record without `poolRef` is a legacy (unmerged) bucket member and
+    // this is a no-op.
+    if (m.poolRef) {
+      try { _arrayMerge?.release(m.poolRef); _mergeStats.layerRefsReleased += 1; } catch (_) { /* fail-soft */ }
+      m.poolRef = null;
+    }
     // ?statGeomDedup record — the geometry id may be SHARED with other LBs in
     // this region, so `deleteGeometry` (which deletes every instance of the id,
     // three r184 BatchedMesh.js :834-844) is only safe at the last reference.
@@ -749,6 +983,12 @@ export function tickStatBatchXOptimize() {
   if (_rendersNothing) {
     for (const region of _buckets.values()) for (const { bm } of region.values()) _markDeadBatch(bm);
   }
+  // ?statArrayMerge — the pool's own ~10 Hz pass. Its job is the state-DRIFT
+  // detector: a pool material is minted once from the strict state key, so a
+  // member reseated by `_reseatSurfaceState` after the fact is the one case
+  // merging cannot track for free (today's bucket material IS a member
+  // material). Counted, not silently fixed — see `tickStatArrayPool`.
+  if (_arrayMerge) { try { _arrayMerge.tick(); } catch (_) { /* fail-soft */ } }
   if (_dirtyBuckets.size === 0) return;
   for (const bm of _dirtyBuckets) {
     const ud = bm.userData;
@@ -764,14 +1004,45 @@ if (typeof window !== "undefined") {
   window.__statBatchXStats = () => { try { return getStatBatchXStats(); } catch (_) { return null; } };
 }
 
+/**
+ * Is this bucket actually SUBMITTED? Visibility up the parent chain plus a live
+ * instance — the same signal `projectStatMergeBuckets` uses, and for the same
+ * reason: frustum culling happens inside `render()` and a census runs between
+ * frames, so `visible` + a nonzero instance count is the honest available proxy.
+ * Cross-check any quoted collapse against `renderer.info.render.calls`.
+ */
+function _bucketDrawn(bm) {
+  if ((bm.userData?.instances | 0) <= 0) return false;
+  for (let o = bm; o; o = o.parent) if (o.visible === false) return false;
+  return true;
+}
+
 /** Diag/census: per-bucket + total live instance/vert counts. */
 export function getStatBatchXStats() {
   const buckets = [];
   let instances = 0;
   let deadBuckets = 0;
   let deadTris = 0;
+  // ?statArrayMerge before/after. "Before" is what this population would have
+  // occupied on today's (region, material OBJECT) key: a merged bucket stands in
+  // for `mergedMats.size` of them, an unmerged bucket for itself. Reported over
+  // BOTH populations because only the DRAWN one pays — the region-width sweep
+  // measured 131 fewer RESIDENT buckets buying 14 fewer draws and 0.00 ms.
+  let mergedBuckets = 0;
+  let bucketsBefore = 0;
+  let drawnBuckets = 0;
+  let drawnBefore = 0;
+  let drawnMerged = 0;
   for (const region of _buckets.values()) for (const { bm } of region.values()) {
     const ud = bm.userData;
+    const before = ud.mergedMats ? Math.max(1, ud.mergedMats.size) : 1;
+    bucketsBefore += before;
+    if (ud.mergedMats) mergedBuckets += 1;
+    if (_bucketDrawn(bm)) {
+      drawnBuckets += 1;
+      drawnBefore += before;
+      if (ud.mergedMats) drawnMerged += 1;
+    }
     // Triangles as verts/3: statics geometries are NON-indexed (adapter.js
     // `meshToGeometryGroups` emits flat position/normal/uv), so this is exact
     // for the population that actually reaches these buckets and an
@@ -791,6 +1062,9 @@ export function getStatBatchXStats() {
       // together ARE the duplication factor (`gidVerts.size / dedupGids`).
       dedupGids: ud.dedupGids ? ud.dedupGids.size : 0,
       gids: ud.gidVerts.size,
+      // ?statArrayMerge: how many of today's (region, material) buckets this one
+      // replaced. 0 ⇒ an ordinary per-material bucket.
+      mergedMats: ud.mergedMats ? ud.mergedMats.size : 0,
     });
     instances += ud.instances;
   }
@@ -799,6 +1073,28 @@ export function getStatBatchXStats() {
     instances,
     detail: buckets,
     lbsFed: _lbMembership.size,
+    // THE number this flag exists to move. `drawn.before -> drawn.after` is the
+    // live form of the 127 -> 54 projection; `all.*` is the resident population,
+    // which the region sweep proved is decoupled from frame cost. `pool` carries
+    // the layer/byte census (the §2b global-vs-regional memory argument) and
+    // every spill reason — a spilled surface kept its own bucket, it never
+    // vanished, so `after` already includes it.
+    arrayMerge: {
+      armed: _arrayMerge !== null,
+      all: { before: bucketsBefore, after: buckets.length, merged: mergedBuckets },
+      drawn: { before: drawnBefore, after: drawnBuckets, merged: drawnMerged },
+      groupsMerged: _mergeStats.groupsMerged,
+      groupsLegacy: _mergeStats.groupsLegacy,
+      bucketsCreated: _mergeStats.mergedBuckets,
+      bucketsReaped: _mergeStats.mergedReaped,
+      // MUST converge: every acquire is released exactly once, by the membership
+      // record that carries it. `held - released` is the count of layer refs
+      // currently owned by live records; it must equal the number of merged
+      // membership records and must return to 0 once every LB has evicted.
+      layerRefsHeld: _mergeStats.layerRefsHeld,
+      layerRefsReleased: _mergeStats.layerRefsReleased,
+      pool: (() => { try { return _arrayMerge ? _arrayMerge.stats() : null; } catch (_) { return null; } })(),
+    },
     // Bucket lifecycle. `bucketsCreated - bucketsReaped` MUST equal `buckets`;
     // a `buckets` count that only ever climbs on a long roam is the 2026-08-03
     // leak returning. High churn (reaped ~= created on a short walk) would mean

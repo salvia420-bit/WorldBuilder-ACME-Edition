@@ -103,7 +103,8 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb, isBc7AtlasTe
 // ?statBatchCrossLb (default-OFF, 1070 eye-test pending) — cross-LB variant of the
 // per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
 // per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
-import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys, setDeadBatchPredicate } from "./static_batch_x.js";
+import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys, setDeadBatchPredicate, setStatArrayMergeProvider } from "./static_batch_x.js";
+import { STAT_ARRAY_MERGE_PROVIDER } from "./static_array_pool.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -1719,6 +1720,104 @@ function _batchRendersNothing(mat) {
   return skipDeadBatchEnabled() && materialRendersNothing(mat);
 }
 setDeadBatchPredicate(_batchRendersNothing);
+
+// === ?statArrayMerge (2026-08-06, DEFAULT-OFF) =============================
+// Array-texture merging of the cross-LB batcher's region buckets: one shared
+// `CompressedArrayTexture`/`DataArrayTexture` per (tile size, render state,
+// format) drawn from a GLOBAL layer pool, with the regional BatchedMeshes
+// indexing into it. Measured projection at Nanto: 127 drawn submitted buckets
+// -> 54, ~2.9 ms of a ~24 ms frame at native tile sizes, no fidelity cost.
+//
+// Installed by INJECTION for the same reason the dead-batch predicate above is:
+// static_batch_x.js is a deliberate THREE-only leaf and its headless test loads
+// it by stripping the import lines outright, while static_array_pool.js pulls
+// static_atlas.js (which pulls THREE + bc7 + quality + materials + vfx_flags).
+// statics.js already imports both sides, so this is the one place the two can
+// meet. The provider carries its OWN flag gate, so `?statArrayMerge` absent
+// lands in the batcher as `admit()` returning null rather than as a second gate
+// there.
+//
+// Wrapped in a `typeof` guard + an IIFE for the same reason `_vfxFragDeps` is
+// built lazily: `test_static_batch.mjs` loads THIS FILE by stripping every
+// import line and shimming the handful of names it needs, so any bare call at
+// module eval on an unshimmed import is a ReferenceError that takes the whole
+// harness down. The guard is not defensive programming — it is the contract
+// that keeps statics.js loadable outside a bundler.
+(function installStatArrayMerge() {
+  if (typeof setStatArrayMergeProvider !== "function") return; // eval-based harness
+  setStatArrayMergeProvider(STAT_ARRAY_MERGE_PROVIDER);
+
+// The VFX half of the same injection. A pool material REPLACES its members'
+// materials, so a member carrying a `__vfxSetKey` variant can only merge if that
+// component set is reproduced on the pool material — otherwise the sway freezes
+// or the glint vanishes, silently. This is the larger half of the prize: of 128
+// submitted statics BatchedMesh nodes at Nanto, **68 are deformed**
+// (windSwayGpu) against 60 plain, and merging them is worth ~1.00 ms of the
+// ~2.00 ms total.
+//
+// SWAY ALREADY SURVIVES BATCHING — that was never the question. `per_instance.js`
+// derives `vVfxHash` under an explicit `#ifdef USE_BATCHING` from
+// `batchingMatrix[3].xy`, three r184 applies `batchingMatrix` after the
+// `begin_vertex` seam where windSwayGpu writes its object-space shear, and 206
+// live buckets already carry a windSwayGpu variant because the batcher uses the
+// member material verbatim. The atlas's `ptDeformed` gate is about material
+// SUBSTITUTION, not batching.
+//
+// TWO RULES MAKE THE SUBSTITUTION SAFE, and they live here because this is where
+// the vfx registry is:
+//   * VERTEX-STAGE SETS ONLY (`comp.mech === "B"`). `makeArrayMaterial`'s hook
+//     runs FIRST in the chain and CONSUMES four fragment includes
+//     (`<map_fragment>`, `<roughnessmap_fragment>`, `<normal_fragment_maps>`,
+//     `<aomap_fragment>`); a "frag" component anchored on one of those would
+//     find its seam gone and go inert with no error. MECH-B anchors
+//     (`<common>`, `<begin_vertex>`) are both untouched by that hook.
+//   * THE SET+CONFIG TOKEN IS IN THE POOL KEY (returned below), so membership
+//     and material are one decision and a bucket can never hold a member whose
+//     variant its material does not carry. That is what rules out a repeat of
+//     the 2026-07-02 "trunk sways, foliage frozen" split.
+//
+// The config token is part of the key rather than assumed uniform: component
+// config rides UNIFORMS bound at compile time from whichever member built the
+// pool, so two DIDs sharing a set but not a config must not share a material.
+STAT_ARRAY_MERGE_PROVIDER.setVfxHook({
+  tokenFor(mat) {
+    try {
+      const setKey = mat?.userData?.__vfxSetKey;
+      if (typeof setKey !== "string" || setKey === "") return null; // plain surface
+      const did = (mat.userData?.surfaceDid >>> 0) || 0;
+      if (!did) return false;
+      const plan = fragPlanForDid(did);
+      const entries = plan && plan.entries;
+      if (!entries || entries.length === 0) return false;
+      for (const e of entries) if (!e || !e.comp || e.comp.mech !== "B") return false;
+      const cfg = entries.map((e) => e.comp.id + "=" + JSON.stringify(e.config ?? null)).join("&");
+      return { token: `${setKey}#${cfg}`, setKey, entries };
+    } catch (_) { return false; } // unresolvable ⇒ keep the member's own bucket
+  },
+  decorate(poolMaterial, token) {
+    try {
+      if (!_vfxFragDeps) {
+        _vfxFragDeps = { globals: VFX_GLOBALS, installComponentPatch: installVfxComponentPatch, sharedPrelude: VFX_HASH_PRELUDE };
+      }
+      // Same order as `frag_install._fragVariantSpec`'s builder: the shared
+      // vVfxHash prelude FIRST (so a component reading the per-instance hash in
+      // the vertex stage sees it declared), then each entry in FAMILY_ORDER.
+      installVfxComponentPatch(poolMaterial, VFX_HASH_PRELUDE, undefined, VFX_GLOBALS);
+      for (const e of token.entries) installVfxComponentPatch(poolMaterial, e.comp, e.config, VFX_GLOBALS);
+      // Stamped for two readers: the recomposed program-cache key, and
+      // vfx/shadow_guard.js, which keeps three's internal `_depthMaterial` off
+      // our onBeforeCompile for any material carrying a set (so a vertex
+      // displacement never perturbs the shadow silhouette).
+      poolMaterial.userData.__vfxSetKey = token.setKey;
+      return true;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics/statArrayMerge] VFX set could not be reproduced on the pool material; keeping per-material buckets:", String(e?.message ?? e));
+      return false;
+    }
+  },
+  });
+})();
 
 // Consolidate a per-LB list of built static nodes: plain-Mesh singletons sharing
 // a surface material → one BatchedMesh per surfaceDid; LOD wrappers, lone
