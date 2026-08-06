@@ -562,6 +562,42 @@ export function statBatchMemoMode() {
 //
 // `=verify` recomputes each sphere the slow way and compares, counting
 // `sphere.verifyFails`. It is a diagnostic tier and is SLOWER than off.
+//
+// DOES THE MOTION CLAIM ACTUALLY HOLD? (audited 2026-08-06, second pass)
+// ---------------------------------------------------------------------
+// The claim above — "invalidated by PLACEMENT changes, which a moving camera
+// does not cause" — was checked against the code and by test rather than taken
+// on report. Three findings, in descending order of how much they matter.
+//
+// 1. THE KEY IS CLEAN. `_sphereCacheEnsure` keys on `(st.epoch, _instanceInfo
+//    .length)` and nothing else. `st.epoch` moves only through
+//    `_memoInvalidate`, whose four callers are the cross-LB feed (:1794), the
+//    per-LB evict (:1850/:1869), `optimize()` (:1929) and a `sortObjects` flip
+//    (`_reseatBucketSort`). Not one of them reads a camera. The cached spheres
+//    live in the MESH'S LOCAL FRAME, so they are additionally valid for ANY
+//    camera — where `?statBatchMemo`'s single state slot thrashes between the
+//    shadow cascade and the colour pass (see `_memoOnBeforeRender`'s note),
+//    this cache serves both from one build. §17 pins that.
+//
+// 2. IT WAS INERT IN THE SHIPPED CONFIGURATION. See the long note at the
+//    `_trySphereBuild` call inside `_memoOnBeforeRender`'s slack branch: with
+//    `?statBatchMemo` defaulting to "slack", `?statBatchSphere=on` did zero
+//    work until that fix. A motion claim cannot hold for a flag that never ran.
+//
+// 3. IT DEGRADES UNDER STREAMING, AND THE SCALE IS THE POINT. A rebuild is
+//    O(`_instanceInfo.length`) — the WHOLE bucket — while an invalidation is
+//    caused by as little as ONE landblock's feed. Buckets are region-scoped and
+//    span many LBs, so a 1-LB feed into a 13,000-slot bucket costs a
+//    13,000-slot rebuild, not a 200-slot one. That is the honest limit of the
+//    "moving is fine" claim: camera motion does not invalidate, but the
+//    STREAMING that accompanies camera motion does, and it invalidates at
+//    bucket granularity. Break-even is roughly one rebuild per walk (a rebuild
+//    costs about what three's own loop costs), so the flag PAYS when the epoch
+//    is stable for more than ~1 frame and LOSES while a bucket is fed every
+//    frame. `sphere.slotsWalked / sphere.slotsBuilt` is that ratio; read it
+//    before quoting any ms figure, and use `harness/moving-bench.mjs`
+//    `--mode=hop` (which streams on purpose) rather than an orbit to provoke
+//    the bad case.
 // ---------------------------------------------------------------------------
 let _sphereMode;
 /** `?statBatchSphere=on` (cache) or `=verify` (cache + per-instance recompute
@@ -584,6 +620,12 @@ export function __setStatBatchSphereForTest(mode) { _sphereMode = mode; }
 
 const _sphereStats = {
   calls: 0,          // onBeforeRender invocations that reached the cached path
+                     // — SPHERE-ONLY override. 0 under `?statBatchMemo` != off,
+                     // where the memo owns the seam; use `walks` for the rate.
+  walks: 0,          // cached walks actually served, on ANY path (sphere-only
+                     // override AND the memo's rebuilds). `slotsWalked/slotsBuilt`
+                     // is the payback ratio; below ~1 the epoch is moving faster
+                     // than the cache can pay for itself and the flag is a LOSS.
   builds: 0,         // full cache (re)builds — one per bucket per epoch
   slotsBuilt: 0,     // instance slots written by those builds (cumulative)
   slotsWalked: 0,    // instance slots read from the cache (cumulative)
@@ -1038,6 +1080,7 @@ function _buildFromSphereCache(bm, camera, geometry, material, transLocal, rotSl
   bm._multiDrawCount = multiDrawCount;
   bm._visibilityChanged = false;
   _sphereStats.slotsWalked += walked;
+  _sphereStats.walks += 1;
   return { walked, drawn: multiDrawCount };
 }
 
@@ -1139,7 +1182,25 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
         // staticsGroup origin unscaled, so this is normally exactly 1.
         const s = this.matrixWorld.getMaxScaleOnAxis();
         if (Number.isFinite(s) && s > 1e-6) {
-          const r = _memoBuildSlack(this, camera, geometry, material, _memoTransM / s, _memoRotRad);
+          // ?statBatchSphere COMPOSES WITH THE SLACK TIER TOO (fixed 2026-08-06,
+          // second pass). It did not, and the omission made the flag INERT in
+          // the shipped configuration: `?statBatchMemo` defaults to "slack", so
+          // every slack-eligible bucket rebuilt here through `_memoBuildSlack`
+          // — which recomputes every sphere from scratch — and the sphere cache
+          // was only reachable from the `!built` fallthrough below, which
+          // `_trySphereBuild` then declined for exactly the same eligibility
+          // reason that sent us down this branch. Measured with the test seams
+          // over 10 moving frames on a 200-instance bucket:
+          //     memo=slack  sphere{builds:0, slotsWalked:0, calls:0}   <- dead
+          //     memo=exact  sphere{builds:1, slotsWalked:2000}
+          //     memo=off    sphere{builds:1, slotsWalked:2000, calls:10}
+          // i.e. the one flag whose whole purpose is the MOVING case did no work
+          // at all unless you also turned off the 4.00 ms parked win. Both loops
+          // carry the identical margin arithmetic and the cached spheres are
+          // bit-identical to three's, so this changes what a rebuild COSTS and
+          // never what it answers (§7/§17 assert that byte for byte).
+          const r = _trySphereBuild(this, camera, geometry, material, _memoTransM / s, _memoRotRad)
+            || _memoBuildSlack(this, camera, geometry, material, _memoTransM / s, _memoRotRad);
           walked = r.walked; drawn = r.drawn;
           slackTrans = _memoTransM; slackRot = _memoRotRad;
           built = true;
@@ -2109,6 +2170,15 @@ export function getStatBatchXStats() {
       // believing any ms figure. `verifyFails` MUST be 0 (`=verify` only);
       // nonzero is a stale sphere, i.e. an image bug, not a perf note.
       //
+      // ⚠ `calls` counts the SPHERE-ONLY override and is therefore 0 whenever
+      // `?statBatchMemo` is on (the default), because the memo owns the seam
+      // and routes its rebuilds through the cache. Reading `calls === 0` as
+      // "the cache never ran" is wrong in exactly the configuration that ships.
+      // `walks` counts cached walks on BOTH paths — use it, and use
+      // `slotsWalked / slotsBuilt` as the payback ratio (< ~1 ⇒ a net loss;
+      // the epoch is moving faster than the cache can amortise, which under
+      // motion means landblocks are streaming into these buckets).
+      //
       // ms/frame saved, on the node bench's 93-122 -> 15-19 ns/instance:
       //   saved ~= d.slotsWalked * 0.080e-3 / N  -  d.slotsBuilt * 0.120e-3 / N
       // and, as ever, believe the p50 over the model.
@@ -2116,6 +2186,7 @@ export function getStatBatchXStats() {
         mode: statBatchSphereMode(),
         installed: _sphereStats.installed,
         calls: _sphereStats.calls,
+        walks: _sphereStats.walks,
         builds: _sphereStats.builds,
         slotsBuilt: _sphereStats.slotsBuilt,
         slotsWalked: _sphereStats.slotsWalked,
