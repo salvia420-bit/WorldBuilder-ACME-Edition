@@ -342,6 +342,7 @@ export function textureCensus(scene, renderer) {
     byKind: {},
     byOwner: {},
     byOrigin: {},
+    aliveByOrigin: {},
     sceneSupplied: !!scene,
   };
 
@@ -374,6 +375,15 @@ export function textureCensus(scene, renderer) {
     const k = (out.byKind[rec.kind] ??= { alive: 0, bytes: 0, orphanBytes: 0 });
     k.alive += 1;
     k.bytes += bytes;
+    // Creation site for EVERY alive texture, not just the orphans. `byOrigin`
+    // answers "who leaked it"; this answers "who is holding the resident
+    // working set", which is the bigger number by 8× and the one that decides
+    // where residency work goes (2026-08-05 §10: the 644 MB of
+    // `DataArrayTexture` splits between over-allocated statics-atlas buckets
+    // and terrain one-shot arrays, and nobody knew the ratio).
+    const ao = (out.aliveByOrigin[rec.origin] ??= { count: 0, bytes: 0, kind: rec.kind });
+    ao.count += 1;
+    ao.bytes += bytes;
     if (isOrphan) {
       out.orphanedAlive += 1;
       out.orphanedAliveBytes += bytes;
@@ -420,6 +430,10 @@ export function textureCensus(scene, renderer) {
     .sort((a, b) => b[1].bytes - a[1].bytes)
     .slice(0, 8)
     .map(([n, v]) => `${n} ${mb(v.bytes)} (${v.count})`);
+  out.topAliveOrigins = Object.entries(out.aliveByOrigin)
+    .sort((a, b) => b[1].bytes - a[1].bytes)
+    .slice(0, 10)
+    .map(([n, v]) => `${n} ${mb(v.bytes)} (${v.count} ${v.kind})`);
   out.topKinds = Object.entries(out.byKind)
     .sort((a, b) => b[1].bytes - a[1].bytes)
     .map(([n, v]) => `${n} ${mb(v.bytes)} alive=${v.alive} orphan=${mb(v.orphanBytes)}`);

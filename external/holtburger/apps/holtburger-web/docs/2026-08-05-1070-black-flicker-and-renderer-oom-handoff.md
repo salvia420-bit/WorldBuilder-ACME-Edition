@@ -486,12 +486,11 @@ geometry is not where the heap goes).
 
 ### Next move, in order
 
-1. **Release CPU-side pixel data after upload** for textures that never re-upload. This is
+1. ~~**Release CPU-side pixel data after upload** for textures that never re-upload. This is
    the 1.3 GB. `Texture.onUpload` is three's hook; the per-surface `DataTexture`s
-   (adapter.js:1122/1180/1238) and the BC7 singletons are the safe class. NOT the atlas
-   arrays — `addLayerUpdate` re-uploads individual layers and needs the staging copy — so
-   the win is bounded by which classes can give it up, and that wants measuring before
-   promising.
+   (adapter.js:1122/1180/1238) and the BC7 singletons are the safe class.~~
+   **WITHDRAWN — see §10. The honest win from this is ~0 MB, and two of the three sentences
+   above are wrong.**
 2. **Bound `Bc7RecordSource._cache`/`_preCache`** (`bc7_textures.js:457/459`). 60 MB
    independent and climbing; the LRU shape is already used three times in this codebase.
 3. `?shardBudgetMB` (§8) stays worth ~200 MB but stays a tidy-up.
@@ -506,3 +505,146 @@ geometry is not where the heap goes).
   counted as a leak.
 * The census is `?texCensus=on` only and holds one record per texture — never leave it on
   while measuring something else.
+
+---
+
+## 10. WITHDRAWN — "release the CPU copy after upload" cannot ship, and §9 named the wrong classes
+
+§9 closed by proposing that the 1,332 MB of live CPU-side texture data be released after
+upload. An audit against the code kills it on three independent grounds, two of which are
+corrections to §9 itself.
+
+**§9 got the hook name wrong.** three r184 has no `Texture.onUpload`. The post-upload
+callback is `texture.onUpdate`, fired at the end of `uploadTexture`
+(three.module.js:12378) — and it is per-SOURCE, not per-texture, so a `.clone()` (which
+shares `source`) never fires it and nulling one clone's data nulls it for all. Three clone
+sites exist (`entities.js:12750/12771/16579`), sharing the image by design.
+
+**§9 named the least safe classes as the safe ones.** The per-surface `DataTexture`s and
+the BC7 singletons are precisely what the statics atlas re-reads:
+
+* the diffuse layer write reads `img.data` per LB feed (`static_atlas.js:1203-1205`);
+* `packNraLayer` → `_texChannel` reads the normal / roughness / AO / height planes
+  (`static_atlas.js:297-341`), draining asynchronously up to `_NRA_PENDING_TRIES` later;
+* the BC7 layer write reads `tex.mipmaps[0].data` (`static_atlas.js:1189-1192`).
+
+And "uploaded first, atlased later" is routine, not theoretical: LRU evict → re-enter frees
+the layer and drops the dedup entry while the texture SURVIVES (LB eviction skips
+`__cacheOwned`, `landblock_lru.js:1730`), so re-entry re-reads the pixels. BC7 deferral,
+layer-pool overflow and geometry-fail passthrough all produce the same ordering.
+
+**A second-order failure §9 did not consider:** both atlas feed gates test the buffer's
+existence — `... && (img.data || isBc7AtlasTexture(t)) && ...` (`statics.js:2379`,
+`static_atlas.js:1121`). A released texture with no BC7 twin does not merely render a black
+layer; it routes the node to `passthrough` and is added **unbatched**, i.e. straight back
+toward the ~5,400-draw-call wall the atlas exists to remove. That is a frame-rate
+regression an eye-test for blackness would never catch.
+
+**The blocker that ends the discussion regardless: context loss.**
+`scene3d/webgl_context_recovery.js` exists, is installed at `scene3d/index.js:4928`, and
+calls `e.preventDefault()` — *"the defining call: tell the browser we want a restore.
+Without preventDefault the context is unrecoverable"* (`:95-97`). Three's own restore path
+clears `WebGLProperties` (`three.module.js:16382` via `:17055`) so **every texture
+re-uploads from `image.data`**. Its header records the motivating incident: context loss
+*"observed 7× on 1070"* under VRAM pressure — the exact hardware and exact pressure this
+investigation is about. Releasing the CPU copy converts a currently-recovered event into a
+permanently black world with no re-upload source. This applies to every class, including
+the ones that are otherwise safe.
+
+**One more correction, to §9's own citation.** The `buildDiffuseArray` staging loop
+(`static_atlas.js:225-229`) is DEAD CODE — its only caller
+`consolidateSingletonsViaTexArray` has no callers (`docs/2026-08-03-random-review-fixes.md:133`),
+and the live allocator passes an empty list (`static_atlas.js:1000-1002`). The re-read is
+real, but at `:1203` and in `packNraLayer`, not there.
+
+### What replaces it: the atlas is over-allocated
+
+The 644 MB of `DataArrayTexture` is dominated by statics-atlas buckets whose capacity is
+fixed at creation — up to 128 layers under `?statNra` (`static_atlas.js:830`) — while the
+module's own measurement says: *"Measured live working set at Holtburg is 28–47 layers
+across all buckets"* (`static_atlas.js:827-828`). Capacity is chosen once and never
+right-sized; the unused layers are allocated, zero-filled and uploaded.
+
+That is a residency win with **no context-loss exposure, no de-batching risk, and no
+eye-test gate** — the opposite risk profile to the withdrawn proposal. It needs one number
+first: the split of the 644 MB (and of the 205 MB `CompressedArrayTexture`) between
+statics-atlas buckets and the terrain one-shot arrays, which the census can report per
+creation site.
+
+### Revised order
+
+1. Measure the array split per creation site (`__diag.textures().aliveByOrigin`).
+2. Right-size / grow-on-demand the atlas bucket capacity — the real lever in the 644 MB.
+3. ~~Bound `Bc7RecordSource._cache`/`_preCache`~~ — **LANDED**, armed at 256 MB
+   (`?bc7RecordsMB`); live over the route it pinned at the cap with 541 evictions / 49 MB
+   evicted, zero parse or transcode errors, against 297 MB unbounded.
+4. `?shardBudgetMB` (§8) — still a ~200 MB tidy-up, still owed an ABAB.
+5. The 32 MB of `Data3DTexture` is 100 % ORPHANED, not resident — that is a dropped
+   reference (`cloud_overlay.js`), a different bug from everything above.
+
+---
+
+## 11. MEASURED — the single biggest item in the heap is 428 MB of atlas layers nothing uses
+
+§10 said the array split had to be measured before chasing the atlas. It is measured now.
+`__diag.textures().aliveByOrigin` attributes every LIVE texture to its creation site
+(`RESULTS-texture-census-2026-08-05.json`); at Nanto, of 1,366 MB alive:
+
+| creation site | MB | objects | kind |
+|---|---|---|---|
+| **`static_atlas.js:271` (NRA arrays)** | **551.1** | 29 | `DataArrayTexture` |
+| `bc7_textures.js:307` (BC7 singletons) | 264.9 | 573 | `CompressedTexture` |
+| `bc7_textures.js:348` (BC7 atlas buckets) | 125.7 | 25 | `CompressedArrayTexture` |
+| `terrain_bc7.js:500` (terrain BC7 array) | 88.0 | 2 | `CompressedArrayTexture` |
+| `materials.js:5117` (per-surface planes) | 77.5 | 586 | `DataTexture` |
+| `entities.js:4423` (entity textures) | 67.9 | 298 | `DataTexture` |
+
+The diffuse side of the atlas is BC7-compressed and costs 125.7 MB. **The NRA
+(normal/roughness/AO) side is uncompressed RGBA8 and costs 551.1 MB — 4.4× the diffuse
+side, and the largest single item in the entire heap.**
+
+Then the occupancy, straight from `__atlasStats()` (`RESULTS-atlas-occupancy-2026-08-05.json`):
+
+```
+29 buckets   1,941 layers ALLOCATED   112 layers USED
+             551.1 MB allocated       123 MB occupied
+```
+
+**428 MB of zero-filled NRA layers that nothing has ever written to** — 16 % of the
+2,445 MB heap, on a page that OOM-crashes at ~2,800 MB. Individual buckets show the shape:
+`256x256 cap=102 used=14`, `512x512 cap=25 used=1`, `1024x1024 cap=6 used=1`.
+
+This is exactly what `static_atlas.js:827-828` predicted in its own comment — *"measured
+live working set at Holtburg is 28–47 layers across all buckets"* — against a capacity
+chosen once at bucket creation and never revisited. The comment was right about the working
+set and wrong about the consequence: it concluded the smaller ceiling "costs nothing real",
+which is true of the CEILING and not of the ALLOCATION underneath it.
+
+### Why this is the right next fix
+
+* **428 MB, measured, not estimated.** Bigger than `shardBudgetMB` (307 MB), bigger than
+  the BC7 record cache (60 MB independent), 2.6× the entire orphaned-texture population.
+* **No context-loss exposure** — unlike §10's withdrawn proposal, nothing here releases a
+  re-upload source.
+* **No de-batching risk** — the `img.data` feed gates are untouched.
+* **No eye-test gate** — a right-sized bucket renders identically; layers that were never
+  written cannot change a pixel.
+
+### The shape of the fix
+
+Capacity is fixed at `texStorage3D` allocation time, so "grow on demand" means allocating a
+larger array and re-uploading the live layers into it. Two options, in increasing order of
+work:
+
+1. **Right-size the initial capacity** from the measured working set (`_layerCapacityFor`,
+   `static_atlas.js:954-984`) — cheapest, but a bucket that overflows falls back to
+   unbatched singletons (`ptLayerFull`), i.e. it trades memory for draw calls at the tail.
+2. **Grow-on-demand with doubling** — start small, reallocate at 2× when full and re-upload
+   live layers. Bounded copies (log₂ of final capacity), no overflow cliff. The BC7 buckets
+   would need the same treatment via `makeBc7ArrayTexture`.
+
+Either way `?statNra`'s halved ceiling (`_ATLAS_NRA_MAX_LAYERS = 128`) stops being the
+governing number, and the NRA array stops being 4.4× its own diffuse twin.
+
+**Not attempted this session** — it is a live render-path change and wants its own careful
+pass with the A/B the other three budgets already owe.

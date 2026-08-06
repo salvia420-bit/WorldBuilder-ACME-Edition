@@ -152,6 +152,15 @@ console.log("PART 4 — orphan classification");
         `${c.orphanedAliveBytes}`);
   check("aliveBytes covers both", c.aliveBytes === 4096 + 8192, `${c.aliveBytes}`);
   check("byKind is populated", (c.byKind.DataTexture?.alive ?? 0) === 2, JSON.stringify(c.byKind));
+  // Residency attribution: every ALIVE texture is tallied by creation site, not
+  // just the orphans. "Who is holding the working set" is a bigger number than
+  // "who leaked" by 8x, and it is what decides where residency work goes.
+  const aliveOrigins = Object.values(c.aliveByOrigin);
+  check("aliveByOrigin covers every alive texture, not only orphans",
+        aliveOrigins.reduce((n, v) => n + v.count, 0) === c.alive,
+        `${JSON.stringify(c.aliveByOrigin)} vs alive=${c.alive}`);
+  check("...and carries the kind, so array textures are distinguishable from planes",
+        aliveOrigins.every((v) => typeof v.kind === "string"));
 
   // A texture reachable ONLY through `renderer.properties.get(mat).uniforms`
   // (three's home for onBeforeCompile-injected uniforms) must count as
