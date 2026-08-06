@@ -274,6 +274,68 @@ used extent.
 
 ---
 
+## 5d. Three leads, A/B'd properly (2026-08-06, later)
+
+The overnight flag census failed — it wedged at 42 of 241 flags (a `page.evaluate` with no
+timeout), and worse, its baselines drifted 2.44× (p50 25.6 → 62.5 ms while materials halved)
+because one Chrome process was reused across every run. Its verdicts are not usable. What
+follows instead is the three most promising leads tested by hand, with Chrome relaunched
+between boot arms.
+
+### Lead 1 — ClipMap out of the transparent pass: CONFIRMED, and it does NOT generalise
+
+Three-arm interleave in one session, moving progressively more of the transparent pass to
+opaque:
+
+| arm | p50 runs | median | p95 |
+|---|---|---|---|
+| base (all transparent) | 28 / 24.7 / 25.2 | 25.2 | 32.1 |
+| **ClipMap only (65 materials)** | **22.4 / 23.4 / 23.1** | **23.1** | 32.5 |
+| all movable (99, +34 particle/other) | 25.1 / 26.7 / 27.8 | 26.7 | **50.6** |
+
+ClipMap-only is **−2.1 ms**, with every repeat below every baseline repeat, reproducing the
+earlier session's 2.10 ms exactly — two independent sessions.
+
+**Generalising is actively harmful.** Of 284 transparent materials only 99 are movable
+(transparent + `alphaTest > 0` + `depthWrite === true`); **172 are additive** and can never
+move. Adding the 34 non-ClipMap movables — mostly `particle-unlit` — is **+1.5 ms worse than
+baseline**, p95 blows out 32 → 50.6, and it degrades monotonically across repeats. Particles
+belong in the sorted pass. ClipMap is exactly the right scope, and the temptation to widen it
+is measurably wrong.
+
+### Lead 2 — the bucket-cost slope: VALIDATED by an independent method
+
+§5a's ~6.4 ms merging estimate rests on a regression (37.6 µs fixed per bucket). `?statBatchChunk=off`
+tests it head-on by *raising* bucket count, and **`ktris` is identical in both arms (268)** —
+same geometry, pure batching change:
+
+| arm | batched meshes | draws/frame | p50 |
+|---|---|---|---|
+| default | 356 (337 `batch-c`) | 437.8 | 27.8 ms |
+| `statBatchChunk=off` | 1324 | 633.4 | 38 / 35.1 ms |
+
+**+195.6 draws → +8.8 ms = ~45 µs per draw**, against the regression's 37.6 µs. Agreement
+within 20% from a completely independent method, so the ~6.4 ms figure for merging
+197 → ~43 rendered buckets stands. (Bucket count rose by 968 but draws by only 196 — most of
+the extra buckets frustum-cull, which is why per-DRAW is the right unit.)
+
+### Lead 3 — `particleBillboard`: the census signal was noise, KILLED
+
+The census's one-shot showed p50 +3.0 ms, its only signal above band. Interleaved boot arms:
+
+| arm | p50 runs | draws runs |
+|---|---|---|
+| default | 22.4 / 23.1 | 439.1 / 438.7 |
+| `=off` | 22.3 / 22.7 | 418.9 / 422.9 |
+
+**−18 draws is real and consistent** (both `=off` runs below both default runs), but **p50 is
+−0.4 ms with fully overlapping ranges**. The +3.0 ms did not reproduce. This is the confound
+predicted for the census: one-shot runs cannot separate a flag's effect from NPC churn, since
+a rig is ~16–20 meshes and entities wander between boots. Treat every unconfirmed census
+one-shot the same way.
+
+---
+
 ## 6. Order, on evidence
 
 1. **ClipMap surfaces out of the transparent pass — 2.10 ms / 6.5% measured (§5b).** Largest

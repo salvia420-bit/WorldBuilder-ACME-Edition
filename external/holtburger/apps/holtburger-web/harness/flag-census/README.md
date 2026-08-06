@@ -92,3 +92,58 @@ column, because the Default column is a claim the run is trying to test.
   are ever killed — never `taskkill /IM chrome.exe`.
 - Results go to `/mnt/wbterminal2` because the system disk runs 85–96% full.
 - Resumable: completed flags are read back from `results.jsonl` on start.
+
+## Night 1 post-mortem (2026-08-06) — read before trusting this harness
+
+It wedged at 42 of 241 flags and its verdicts were unusable. Two independent faults, both
+now understood:
+
+**1. No watchdog.** `page.evaluate()` has no default timeout in Playwright, so when the
+renderer stopped responding the driver waited forever — 6 hours lost. `bootab.mjs` wraps
+every page call in `withTimeout()`; `flag-census.mjs` still does not, and must not be re-run
+until it does.
+
+**2. Reusing one Chrome poisons the measurement — this is the important one.** Baselines are
+configuration-identical and should be flat. They were not:
+
+| time | draws | p50 | materials | texObjs |
+|---|---|---|---|---|
+| 05:12 | 463.3 | 25.6 | 712 | 786 |
+| 05:47 | 464.1 | 26.1 | 681 | 701 |
+| 05:58 | 454.5 | 49.3 | 671 | 693 |
+| 06:47 | 407.1 | 62.5 | 382 | 604 |
+
+p50 degraded **2.44×** while materials nearly halved — the scene got emptier *and* slower, as
+GPU state accumulated across page loads until the client's memory-pressure governor began
+evicting. `bootab.mjs` relaunches Chrome between arms for exactly this reason.
+
+**The guard checked the wrong property.** `analyze-census.mjs` refuses a verdict without
+enough baselines, and that passed (9 ≥ 3) — then computed a band of ±64.8 draws / ±47.9 ms
+from those *drifting* baselines, which swallowed everything and returned 35 of 42 flags as
+"no observable effect". A drifting baseline is worse than a missing one because it looks
+valid. **Baseline count is not baseline stationarity**; any future version must test the
+baselines for trend before using their spread as a noise floor.
+
+**One-shot runs cannot resolve ~20 draws.** In the clean early window the band was genuinely
+tight (draws ±0.5%), yet flag deltas clustered at ≈0, −16, −19, −26 across unrelated flags
+including `unwedgeLivelockRecall`, which has no plausible render effect. That quantisation is
+NPCs wandering (a rig is ~16–20 meshes), not flags. The census's one interesting signal,
+`particleBillboard` at p50 +3.0 ms, did **not** reproduce under interleaved boot arms
+(−0.4 ms, overlapping). Structural metrics need entity count recorded as a covariate, or a
+location with no NPCs.
+
+Raw night-1 data is kept at `/mnt/wbterminal2/flag-census/results-night1.jsonl` as evidence,
+not as findings.
+
+## bootab.mjs — the thing that did work
+
+Interleaved BOOT arms with Chrome relaunched between them and a hard watchdog on every page
+call. This is the tool to reach for when a flag cannot be toggled live:
+
+```bash
+FLAG=statBatchChunk ARM_B=off REPS=2 node bootab.mjs out.json
+```
+
+It validated the bucket-cost slope (~45 µs/draw measured against 37.6 µs predicted by
+regression) and killed the `particleBillboard` lead. Prefer an in-session interleaved toggle
+where the flag allows it — that method resolves ~0.3 ms; boot arms resolve ~1 ms at best.
