@@ -235,3 +235,63 @@ load** (§7: two boots have differed 40% in bucket count), `renderer.info.autoRe
 `?statBatchMemo` is on: that sampler skips any node that already owns an `onBeforeRender`, so
 it reports our buckets as armed and never counts them. Use `walk.calls`, which counts the same
 thing and is always live.
+
+---
+
+## MEASURED ON THE 1070 (2026-08-06, parent) — the prediction held, including the bad half
+
+The design's headline claim was "~5.7 ms standing still, ~0 moving". Measured, it is
+directionally right and smaller: a real win parked, and a small **regression** moving.
+
+### Step 1 — the census re-based the plan before any A/B
+
+`__statBatchXStats().walk.slots` with no flags, settled Nanto:
+
+```
+all 26,347 · sorted 2,061 · drawn 26,308 · drawnSorted 2,022 · sortedBuckets 23
+```
+
+**Only 7.7% of walked instances sit in sorted buckets**, so `?statBatchNoSort` drops off the
+board exactly as the design said this census would decide. It also falsifies one of the
+design's own premises — "ClipMap foliage/fences are `transparent = true`, and that is where
+the statics instance mass lives". That was true when written and is not true now:
+`?clipMapOpaque` shipped the same morning and moved those 50 materials into the opaque pass.
+An inference about a live population aged out within hours of being written.
+
+### Step 2 — `?statBatchMemo=on`, parked vs moving, both conditions inside each boot
+
+| condition | memo off | memo on | delta |
+|---|---|---|---|
+| parked | 23.7 | **21.4** | **−2.3 ms** |
+| moving (~54°/s yaw) | 23.9 / 24.0 | 24.3 / 24.6 | **+0.5 ms WORSE** |
+
+A separate boot-arm A/B, parked only, measured 23.1 → 19.8/20.2, i.e. **−3.1 ms**. So parked
+is worth ~2–3 ms, reproduced across two sessions.
+
+Mechanism confirmed: `hitsExact` 150k–184k, ~17M instances skipped, **`errors` 0**.
+
+**The moving regression is small but consistent** — both ON runs sat above both OFF runs. It
+is the memo's own bookkeeping paid on every rebuild that does not hit. Moving is when frame
+time matters most, so this is the number that decides whether the flag can ever be default-ON.
+
+### Step 3 — the `slack` tier: mechanism proven, frame effect NOT measured
+
+`?statBatchMemo=slack` cut rebuilds from ~65,000–68,000 to **3,666–3,905 (17×)** at
+`errors 0`, which is exactly what the dilated-frustum design predicts.
+
+**Its frame numbers are unusable and are not quoted.** In that session the BASELINE moved:
+`memo=off` measured 19.6 parked / 20.0 moving, against 23.7 / 23.9 in the run above — a 4 ms
+swing in the control — and the slack arm itself spread 21.2 → 18.5. With n=1 on the control,
+nothing can be read from it. This is the same variance that made the overnight census
+worthless; a 4 ms baseline swing swamps a ~2 ms effect.
+
+### Status
+
+Both flags stay **default-OFF**. `=on` is a genuine ~2–3 ms win for a standing player and a
+~0.5 ms loss for a moving one; that trade needs an owner decision, not a default. `=slack`
+needs a clean interleaved moving measurement — three arms per condition, one session, control
+repeated between every arm — before it can be believed either way.
+
+What is NOT in doubt: three's early-out at `three.core.js:27218` is real, `static_batch_x`
+disables it on every bucket every frame, and skipping the walk is worth real milliseconds when
+the camera is still.
