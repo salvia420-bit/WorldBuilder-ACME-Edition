@@ -180,8 +180,33 @@ console.log("\n-- 1. flag readers (default OFF; exact-match opt-in) --");
 M.__setStatBatchNoSortForTest(undefined);
 M.__setStatBatchMemoForTest(undefined);
 check("1: ?statBatchNoSort defaults OFF with no location.search", M.statBatchNoSortEnabled() === false);
+// DEFAULT FLIPPED 2026-08-06: `?statBatchMemo` ships "slack" (-4.00 ms parked
+// on the 1070, control spread 2.30 ms; ktris +7.3%; errors 0). `=off` escapes.
 M.__setStatBatchMemoForTest(undefined);
-check("2: ?statBatchMemo defaults to \"off\"", M.statBatchMemoMode() === "off");
+check("2: ?statBatchMemo defaults to \"slack\" (DEFAULT-ON 2026-08-06)", M.statBatchMemoMode() === "slack");
+// The escape is the revert path for the one thing not measured (the moving
+// case), so it gets its own row rather than riding on the default assertion.
+{
+  const _w = globalThis.window; const _l = globalThis.location;
+  for (const [search, want] of [
+    ["?statBatchMemo=off", "off"],
+    ["?statBatchMemo=0", "off"],
+    ["?statBatchMemo=false", "off"],
+    ["?statBatchMemo=on", "exact"],
+    ["?statBatchMemo=exact", "exact"],
+    ["?statBatchMemo=slack", "slack"],
+    ["?statBatchMemo=wat", "slack"],   // a typo must not silently cost 4 ms
+    ["", "slack"],
+  ]) {
+    globalThis.window = { location: { search } };
+    globalThis.location = { search };   // the reader uses globalThis.location, not window.location
+    M.__setStatBatchMemoForTest(undefined);
+    check(`2.${search || "(absent)"}: -> ${want}`, M.statBatchMemoMode() === want);
+  }
+  if (_w === undefined) delete globalThis.window; else globalThis.window = _w;
+  if (_l === undefined) delete globalThis.location; else globalThis.location = _l;
+  M.__setStatBatchMemoForTest(undefined);
+}
 
 // ---------------------------------------------------------------------------
 console.log("\n-- 2. ?statBatchNoSort — sortObjects follows the blend, not the flag bit --");

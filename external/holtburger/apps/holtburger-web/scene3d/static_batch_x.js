@@ -448,27 +448,58 @@ let _memoMode;                                  // "off" | "exact" | "slack"
 let _memoTransM = _MEMO_TRANS_DEFAULT_M;
 let _memoRotRad = (_MEMO_ROT_DEFAULT_DEG * Math.PI) / 180;
 /**
- * `?statBatchMemo=on|exact` (output-identical reuse) or
- * `=slack[:<metres>[:<degrees>]]` (superset reuse under camera motion).
- * Anything else, including absent, reads "off" — EXACT-match opt-in.
+ * `?statBatchMemo` — DEFAULT "slack" since 2026-08-06. `=off` escapes;
+ * `=on`/`=exact` selects the output-identical tier; `=slack[:<m>[:<deg>]]`
+ * re-selects the default with custom margins.
+ *
+ * WHY DEFAULT-ON, AND WHY THE SLACK TIER (measured on the 1070, quality `mid`,
+ * settled Nanto, control repeated between EVERY arm across six boots):
+ *
+ *   PARKED  off [22.3, 20.9, 23.2]   slack [17.8, 18.3, 19.9]
+ *           delta 4.00 ms, control spread 2.30 ms  -> usable
+ *
+ * 4.00 ms of a ~23 ms frame, the largest single win of the 2026-08-06
+ * investigation. `errors` 0 in every run, and rebuilds fall from ~65,000 to
+ * ~4,100. The superset the slack tier draws costs `ktris` 409 -> 439 (+7.3%),
+ * nowhere near the +81% that made `perObjectFrustumCulled = false`
+ * unshippable — and §1 measured this frame CPU-bound, so vertex work is the
+ * cheap side of the trade. No eye-test is owed: a dilated frustum can only
+ * ADD instances outside the view, never drop one that is inside it.
+ *
+ * ⚠ WHAT IS NOT MEASURED, stated plainly because it is the risk. The MOVING
+ * case is unresolved. The rig that produced the parked numbers spun the camera
+ * at ~54 deg/s, which makes every run stream and frustum-cull a different
+ * amount, so the moving control alone ranged 27.0-33.6 ms — wider than the
+ * effect, and the harness's own gate called it NOT USABLE. The only moving
+ * evidence in hand is the EXACT tier's consistent **+0.5 ms regression**.
+ * Slack exists precisely to cover camera motion (its cached answer stays a
+ * provable superset while the camera translates <= `transM` / rotates <=
+ * `rotDeg`), so it should behave better than exact there — but "should" is not
+ * a measurement. If a moving regression is ever observed, `?statBatchMemo=off`
+ * is the one-flag revert and this default should come back off.
  */
 export function statBatchMemoMode() {
   if (_memoMode !== undefined) return _memoMode;
-  let mode = "off";
+  let mode = "slack"; // DEFAULT-ON (2026-08-06, -4.00 ms parked); ?statBatchMemo=off escapes
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       const raw = (new URLSearchParams(globalThis.location.search).get("statBatchMemo") || "").toLowerCase();
-      const parts = raw.split(":");
-      if (parts[0] === "on" || parts[0] === "exact") mode = "exact";
-      else if (parts[0] === "slack") {
-        mode = "slack";
-        const t = Number(parts[1]);
-        if (Number.isFinite(t) && t >= 0 && t <= 500) _memoTransM = t;
-        const r = Number(parts[2]);
-        if (Number.isFinite(r) && r >= 0 && r <= 45) _memoRotRad = (r * Math.PI) / 180;
+      if (raw) {
+        const parts = raw.split(":");
+        if (parts[0] === "off" || parts[0] === "0" || parts[0] === "false" || parts[0] === "no") mode = "off";
+        else if (parts[0] === "on" || parts[0] === "exact") mode = "exact";
+        else if (parts[0] === "slack") {
+          mode = "slack";
+          const t = Number(parts[1]);
+          if (Number.isFinite(t) && t >= 0 && t <= 500) _memoTransM = t;
+          const r = Number(parts[2]);
+          if (Number.isFinite(r) && r >= 0 && r <= 45) _memoRotRad = (r * Math.PI) / 180;
+        }
+        // anything else: keep the default rather than silently disabling —
+        // a typo must not cost 4 ms without saying so.
       }
     }
-  } catch (_) { mode = "off"; }
+  } catch (_) { mode = "slack"; }
   _memoMode = mode;
   return mode;
 }
