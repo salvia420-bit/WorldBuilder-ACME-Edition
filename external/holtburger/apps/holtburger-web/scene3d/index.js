@@ -61,7 +61,7 @@ import { evictStaticBatchXForLb } from "./static_batch_x.js";
 // app's real WebGL context before any BC7 texture is constructed: without the
 // extension three's `convert()` yields a null gl format and warns per texture,
 // so the whole path gates on this one probe (see bc7_textures.js header).
-import { initBc7 } from "./bc7_textures.js";
+import { initBc7, bc7RecordCacheBytes } from "./bc7_textures.js";
 import { buildEnvCellsForLandblock } from "./cells.js";
 // Phase D.1 — synthetic ACE entity-spawn injector. The third
 // placement stream (after `fetch_landblock_objects` DAT-explicit and
@@ -70,6 +70,23 @@ import { buildEnvCellsForLandblock } from "./cells.js";
 import { ensureSpawnsForLandblock } from "./spawns.js";
 import { getBakeWorkerClient } from "./bake_worker_client.js"; // __diag.datDecode worker relay (A07 §3.6)
 import { summarizeMemCensus, memCensusVerdict } from "./mem_census.js"; // __diag.wasmMem page roll-up (2026-08-05)
+import {
+  texCensusEnabled,
+  installTextureCensus,
+  textureCensus,
+  registerTextureOwnerProbe,
+} from "./texture_census.js"; // __diag.textures WeakRef census (2026-08-05)
+
+// Install the texture census at MODULE-IMPORT time, not from init3D. Its trace
+// point is three's own `addEventListener('dispose', …)`, which fires once per
+// texture at first upload — a texture already uploaded when the hook lands is
+// invisible to the census forever. This is the earliest point in the renderer
+// that has a `THREE` binding. Strict `?texCensus=on` opt-in: the census retains
+// one record per texture, which is the very thing it exists to measure.
+if (texCensusEnabled()) {
+  installTextureCensus(THREE);
+  console.log("[texCensus] ?texCensus=on — tracing textures weakly from module import");
+}
 import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnFlush } from "./loop.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
@@ -4644,6 +4661,84 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       const worker = parse(await getBakeWorkerClient().wasmMemCensus());
       const { page, missing } = summarizeMemCensus(main, worker);
       return { main, worker, page, missing, verdict: memCensusVerdict(page) };
+    };
+
+    // 2026-08-05 — the JS-heap half of the OOM. `__diag.wasmMem` accounts for
+    // wasm linear memory (630 MB, attributed, not the crash); this accounts for
+    // the 2.5 GB the tab actually dies of.
+    //
+    // READ THE HEADER of `texture_census.js` before trusting any number here.
+    // In short: `renderer.info.memory.textures` minus scene-reachable proves
+    // "never disposed", NOT "still alive" — three holds textures in WeakMaps and
+    // only decrements that counter on `dispose()`. The same confusion produced
+    // the retracted "702 MB of leaked geometry". `orphanedAliveBytes` is the
+    // honest number: bytes held by textures that survived a GC while nothing in
+    // the scene points at them any more.
+    //
+    // FORCE A GC FIRST or everything dead reads as alive — there is no in-page
+    // way to do it, so the driver sends CDP `HeapProfiler.collectGarbage`.
+    // Returns null (never throws) unless `?texCensus=on` armed the tracer.
+    window.__diag.textures = () => {
+      if (!texCensusEnabled()) return null;
+      try {
+        // Owner probes, registered on first use. "Evicted", "disposed", "GC'd"
+        // and "bytes returned" are FOUR different states here
+        // (materials.js:3062-3075 evicts without disposing when the DID was
+        // handed out), so an orphan's retainer has to be named or the next fix
+        // gets aimed at the wrong one.
+        if (!window.__diag.__texProbesInstalled) {
+          window.__diag.__texProbesInstalled = true;
+          const mc = () => scene3dForBuilders?.materialCache ?? null;
+          const inAnyMap = (t, names) => {
+            const c = mc();
+            if (!c) return false;
+            for (const n of names) {
+              const m = c[n];
+              if (m && typeof m.values === "function") {
+                for (const v of m.values()) if (v === t) return true;
+              }
+            }
+            return false;
+          };
+          registerTextureOwnerProbe("matCache.perDid", (t) =>
+            inAnyMap(t, ["textures", "normalTextures", "heightTextures"]));
+          registerTextureOwnerProbe("matCache.paletted", (t) =>
+            inAnyMap(t, ["palettedTextures"]));
+          registerTextureOwnerProbe("matCache.texchan", (t) => {
+            const c = mc();
+            if (!c?._texchanTextures) return false;
+            for (const arr of c._texchanTextures.values()) {
+              if (Array.isArray(arr) && arr.includes(t)) return true;
+            }
+            return false;
+          });
+          registerTextureOwnerProbe("matCache.animFrames", (t) => {
+            const c = mc();
+            if (!c?._animatedMaterials) return false;
+            for (const e of c._animatedMaterials.values()) {
+              if (Array.isArray(e?.frames) && e.frames.includes(t)) return true;
+            }
+            return false;
+          });
+          // Tag-based fallbacks — the codebase already labels ownership, so an
+          // orphan can be attributed even when the holding map is out of reach.
+          registerTextureOwnerProbe("tagged.__cacheOwned", (t) => t.userData?.__cacheOwned === true);
+          registerTextureOwnerProbe("tagged.__rp4Pooled", (t) => t.userData?.__rp4Pooled === true);
+        }
+        // `scene` (destructured from the preInit handle above), NOT
+        // `window.liveScene3d` — that global is a one-time init snapshot, and a
+        // reachability set built from a null scene would report every live
+        // texture as an orphan.
+        const out = textureCensus(scene);
+        // Not a texture, but the same question one layer down: the BC7 record
+        // source's parsed-payload caches are unbounded and hold their bytes
+        // INDEPENDENTLY of any texture built from them, so textures dying does
+        // not free them. Reported alongside so the two are never confused.
+        try { out.bc7Records = bc7RecordCacheBytes(); } catch (_) { out.bc7Records = null; }
+        return out;
+      } catch (e) {
+        return { error: String(e && e.message ? e.message : e) };
+      }
     };
 
     // PAL-01 (2026-07-27) — pinned (un-evictable) residency on the wasm

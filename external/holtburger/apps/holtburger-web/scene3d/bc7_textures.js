@@ -687,6 +687,48 @@ export function bc7Source() {
   return bc7Available() ? _source : null;
 }
 
+/**
+ * Resident bytes held by the record source's parsed-payload caches — the
+ * `bc7Records` row of `__diag.textures()` (2026-08-05).
+ *
+ * These are `_cache` / `_preCache`, both UNBOUNDED, keyed by RenderSurface id.
+ * They matter to the OOM investigation for a reason that is easy to miss: they
+ * hold the parsed payload INDEPENDENTLY of any texture built from it, so a
+ * census that watches textures die will report those bytes as freed while this
+ * map is still holding every one of them. Route-length retention, one layer
+ * below the textures.
+ *
+ * Deduped by underlying `ArrayBuffer`: `parseHbc7` hands out `subarray` views
+ * over ONE `Uint8Array` per record, so summing `levels[].data.byteLength` naively
+ * counts the same payload once per mip level.
+ *
+ * Returns `{ records, preRecords, bytes, absent }`; `absent` counts negative
+ * entries (a `null` value = "no such record"), which cost a map slot and no bytes.
+ */
+export function bc7RecordCacheBytes() {
+  const out = { records: 0, preRecords: 0, bytes: 0, absent: 0 };
+  const seen = new Set();
+  const sum = (map, key) => {
+    if (!map) return;
+    for (const parsed of map.values()) {
+      if (!parsed) { out.absent += 1; continue; }
+      out[key] += 1;
+      const levels = parsed.levels || [];
+      for (const l of levels) {
+        const buf = l?.data?.buffer;
+        if (!buf || seen.has(buf)) continue;
+        seen.add(buf);
+        out.bytes += buf.byteLength;
+      }
+    }
+  };
+  try {
+    sum(_source?._cache, "records");
+    sum(_source?._preCache, "preRecords");
+  } catch (_) { /* diagnostic only */ }
+  return out;
+}
+
 /** Test hook: drop the installed source + stats. */
 export function _resetBc7ForTest() {
   _source = null;
