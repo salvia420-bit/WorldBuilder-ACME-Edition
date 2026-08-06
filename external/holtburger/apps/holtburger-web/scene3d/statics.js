@@ -79,6 +79,9 @@ import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
 // A7-F1 (2026-07-11 s13) — shared per-cellId LandblockInfo fetch (buildings.js
 // runs the SAME fetch_landblock_objects for this LB). See lb_objects_shared.js.
 import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
+// 2026-08-05 atlas-staging seam — "can pixels for this surface be supplied",
+// which is the honest form of the batching gate below (see its comment).
+import { canSupplyPlanes } from "./surface_planes.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
 // A11-S3: `?particleClock` flag parse — when "loop"/"sim" the static
@@ -2376,7 +2379,19 @@ export async function bakeStaticsForLandblock(
         // `image.data` (bytes live in `mipmaps[0].data`), so the bare `img.data`
         // test used to route every BC7 static past the atlas as an unbatched
         // singleton on the walk-in path while the boot ring batched it fine.
-        if (node && node.isMesh && !node.isInstancedMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && (img.data || isBc7AtlasTexture(t)) && !node.userData?.__staticBatch) {
+        // 2026-08-05 — ask whether pixels CAN be supplied, not whether this
+        // texture still carries them. Identical today (tier 1 of
+        // `canSupplyPlanes` is the `img.data` test), but it is the gate that
+        // decides BATCHED vs unbatched, and once the CPU copies are released
+        // (task 4) an `img.data` test would answer no for everything and route
+        // every static to a singleton — silently walking back into the
+        // ~5,400-draw-call wall the atlas exists to remove. A frame-rate
+        // regression no eye-test for blackness would ever catch, which is
+        // exactly why it is changed here BEFORE anything releases anything.
+        const canPixels =
+          (img && img.data) || isBc7AtlasTexture(t) ||
+          canSupplyPlanes(node?.material, node?.material?.userData?.surfaceDid);
+        if (node && node.isMesh && !node.isInstancedMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && canPixels && !node.userData?.__staticBatch) {
           atlasable.push(node);
         } else {
           rest.push(node);

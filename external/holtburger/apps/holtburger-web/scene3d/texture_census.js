@@ -149,7 +149,12 @@ function originOf() {
     const lines = (new Error().stack || "").split("\n").slice(2, 20);
     const app = [];
     for (const l of lines) {
-      if (/three\.|playwright|UtilityScript|texture_census\.js/.test(l)) continue;
+      // Drop the frames that are never the answer: three itself, the
+      // automation driver, and this file. Matched on three's actual bundle
+      // names and on `node_modules`, NOT on a bare `three.` — that also ate any
+      // app file whose name merely contains "three." (caught by the real-three
+      // suite, whose own filename does).
+      if (/three\.module\.|three\.core\.|node_modules|playwright|UtilityScript|texture_census\.js/.test(l)) continue;
       const m = l.match(/([\w.-]+\.m?js)[^\s)]*:(\d+):\d+/);
       if (m) app.push(m[1] + ":" + m[2]);
     }

@@ -21,15 +21,12 @@
 //   PART 6 — static: the shipped renderer installs the tracer at import time
 //            and exposes `__diag.textures`.
 //
-// WHAT THIS SUITE CANNOT SEE. The textures here are a stub hierarchy, and three
-// is loaded from a CDN (index.html:969) with no local copy to import. A
-// stub-only suite passed while the byte accounting DOUBLE-CHARGED every
-// DataTexture on the page, because in real three r184 `texture.image` and
-// `texture.source.data` are the SAME object and the walk visited both. That was
-// caught by a companion smoke that imports the real r184 build
-// (`real-three-smoke.mjs`, kept with the session scratchpad since the bundle is
-// not vendored). If you change `textureCpuBytes`, re-run that against real three
-// — this file will not tell you.
+// WHAT THIS SUITE CANNOT SEE. The textures here are a STUB hierarchy. This file
+// passed 38/38 while the byte accounting DOUBLE-CHARGED every DataTexture on the
+// page, because in real three r184 `texture.image` and `texture.source.data` are
+// the same object and the walk visited both. If you touch `textureCpuBytes` or
+// the install hooks, `test_texture_census_real_three.mjs` is the one that will
+// tell you — it imports the actual r0.184.0 build from node_modules. Run both.
 //
 // Run:
 //   cd apps/holtburger-web/
