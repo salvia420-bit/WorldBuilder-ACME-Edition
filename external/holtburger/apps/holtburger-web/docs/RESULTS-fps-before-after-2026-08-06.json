@@ -1,0 +1,74 @@
+[
+  {
+    "arm": "BEFORE",
+    "errors": 0,
+    "n": 447,
+    "p50": 26.5,
+    "p95": 32,
+    "mean": 26.86,
+    "fpsFromP50": 37.7,
+    "fpsMean": 37.2,
+    "draws": 512.1,
+    "ktris": 408
+  },
+  {
+    "arm": "AFTER",
+    "errors": 0,
+    "n": 572,
+    "p50": 20.5,
+    "p95": 26.5,
+    "mean": 20.99,
+    "fpsFromP50": 48.8,
+    "fpsMean": 47.6,
+    "draws": 436.5,
+    "ktris": 438
+  },
+  {
+    "arm": "BEFORE",
+    "errors": 0,
+    "n": 425,
+    "p50": 27.8,
+    "p95": 34.9,
+    "mean": 28.3,
+    "fpsFromP50": 36,
+    "fpsMean": 35.3,
+    "draws": 512.9,
+    "ktris": 408
+  },
+  {
+    "arm": "AFTER",
+    "errors": 0,
+    "n": 587,
+    "p50": 20.2,
+    "p95": 25.1,
+    "mean": 20.45,
+    "fpsFromP50": 49.5,
+    "fpsMean": 48.9,
+    "draws": 435.6,
+    "ktris": 438
+  },
+  {
+    "arm": "BEFORE",
+    "errors": 0,
+    "n": 424,
+    "p50": 27.6,
+    "p95": 36.2,
+    "mean": 28.36,
+    "fpsFromP50": 36.2,
+    "fpsMean": 35.3,
+    "draws": 512.3,
+    "ktris": 408
+  },
+  {
+    "arm": "AFTER",
+    "errors": 0,
+    "n": 587,
+    "p50": 19.8,
+    "p95": 26.8,
+    "mean": 20.46,
+    "fpsFromP50": 50.5,
+    "fpsMean": 48.9,
+    "draws": 436.5,
+    "ktris": 438
+  }
+]

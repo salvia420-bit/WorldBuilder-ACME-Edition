@@ -411,3 +411,47 @@ Owner sign-off on the edge quality is still outstanding; nothing is shipped.
 * `window.liveScene3d` is a one-time init snapshot, and `__cam`/`__set*` helpers attach only
   after `in-world`. Boot goes `ready` → `in-world` in ~350 ms, so a 1 s poll for exactly
   `ready` misses it — accept either.
+
+---
+
+## 7. END-TO-END: what the day's shipped defaults actually did
+
+Measured as ONE comparison rather than by summing the individual deltas — those were taken in
+separate sessions against different scene states, and this workload has punished that
+arithmetic repeatedly.
+
+* **BEFORE** = `?skipDeadAlpha=off&clipMapOpaque=off&statBatchMemo=off` (the morning's client)
+* **AFTER** = bare default (everything shipped 2026-08-06)
+
+1070, quality `mid`, `?renderScale=1&adaptiveRes=off`, settled Nanto, camera parked, Chrome
+relaunched between every arm, interleaved BEFORE/AFTER over six boots:
+
+| | p50 | fps | mean | p95 | draws | ktris |
+|---|---|---|---|---|---|---|
+| BEFORE | 27.6 ms | **36.2** | 28.3 | 34.9 | 512.3 | 408 |
+| AFTER | **20.2 ms** | **49.5** | 20.46 | 26.5 | 436.5 | 438 |
+
+```
+BEFORE runs 26.5 / 27.8 / 27.6   spread 1.3 ms
+AFTER  runs 20.5 / 20.2 / 19.8   spread 0.7 ms
+DELTA  7.40 ms  =  +13.3 fps  (26.8% of frame time)
+```
+
+**Every AFTER run beats every BEFORE run by ~6× the control spread** — the least ambiguous
+measurement of the investigation. p95 improved too (34.9 → 26.5), so it is not the median
+alone moving. `draws` 512 → 437 is `?skipDeadAlpha` plus the batch merge; `ktris` 408 → 438 is
+the expected `?statBatchMemo=slack` superset (+7.3%). **0 page errors across all six runs.**
+
+### Two things that must travel with this number
+
+**It is the PARKED case**, at Nanto, quality `mid`, 1200×1013. That is the condition
+`?statBatchMemo` is best at, and it is the only condition this rig can measure honestly — the
+moving rig self-noised at a 6.6 ms control spread, wider than the effect. **A player running
+around will see less than this, and no trustworthy moving figure exists.**
+
+**The cumulative −7.4 ms EXCEEDS the sum of the parts** reported individually
+(0.7 + ~1.6 + 4.0 ≈ 6.3 ms). Expected, since those were separate sessions against different
+scene states — but it means the per-flag attributions are indicative, and only this
+end-to-end comparison was measured as a single controlled experiment. Quote this one.
+
+Raw: `RESULTS-fps-before-after-2026-08-06.json`.
