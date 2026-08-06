@@ -63,6 +63,7 @@ export function __resetStatBatchXForTest() {
   _stats.deadShadowSkipped = 0;
   for (const k of Object.keys(_mergeStats)) _mergeStats[k] = 0;
   for (const k of Object.keys(_memoStats)) _memoStats[k] = 0;
+  for (const k of Object.keys(_sphereStats)) _sphereStats[k] = 0;
   _camPose.camera = null;
   _warned.clear();
 }
@@ -472,6 +473,99 @@ export function statBatchMemoMode() {
   _memoMode = mode;
   return mode;
 }
+// ---------------------------------------------------------------------------
+// ?statBatchSphere — CACHE THE PER-INSTANCE BOUNDING SPHERE (2026-08-06)
+//
+// THE MEASUREMENT. `docs/2026-08-06-object-glue-census.md`. The 3.42 ms of
+// `sceneSubmit` that is not the draw funnel is NOT per-object glue: three's own
+// glue for a submitted object (`layers.test` + `onBeforeRender` + `modelView
+// Matrix.multiplyMatrices` + `normalMatrix.getNormalMatrix` + `material.on
+// BeforeRender` + `onAfterRender`, three.module.js r184 :18046-18085) benches at
+// **70.7 ns**, so all ~470 submitted objects together are **0.03 ms**. The block
+// is `BatchedMesh.prototype.onBeforeRender` — a PER-INSTANCE population of
+// ~13,000, not a per-object one of 470 — which lands inside `sceneSubmit`
+// because three calls it from `renderObject`. Pricing it per submitted object
+// was a scale error of the same family as `_projDrawn`.
+//
+// WHAT THE LOOP ACTUALLY SPENDS. Per instance three does (three.core.js
+// :27331-27360) `getMatrixAt(i, m)` — 16 reads out of the matrices TEXTURE plus
+// a Matrix4 write — then `getBoundingSphereAt(gid, s).applyMatrix4(m)`, whose
+// `Sphere.applyMatrix4` calls `Matrix4.getMaxScaleOnAxis` (3 squared lengths and
+// a `Math.sqrt`), and only then the 6 plane dots that are the actual question.
+// **The sphere is recomputed every frame from inputs that never change.** A
+// static placement's local-frame world sphere is a pure function of its instance
+// matrix and its geometry's bounds; the camera enters only through the frustum,
+// which three already composes ONCE per bucket per call (:27251-27262) in the
+// mesh's local frame. So the per-instance work is cacheable in full.
+//
+// MEASURED, against the real r0.184.0 build, node 22, this laptop
+// (`docs/2026-08-06-object-glue-census.md` §3 — the bench is in the doc):
+//
+//   three's unsorted branch          93-122 ns/instance
+//   the same answer from a cache      15-19 ns/instance
+//   => 5-7x, with the survivor sets and multidraw arrays BYTE-IDENTICAL
+//
+// Applied to the ~3.3 ms this block costs at Nanto that projects **~2.4-2.8 ms**,
+// and — the part that matters — it holds WHILE THE CAMERA MOVES. `?statBatchMemo`
+// is worth ~2-3 ms parked and **+0.5 ms WORSE moving**, because a moving camera
+// invalidates it every frame; this cache is invalidated by PLACEMENT changes,
+// which a moving camera does not cause. The two are complementary and compose:
+// with both on, a memo miss rebuilds through the cache instead of three's loop.
+//
+// EXPECT THIS TO COME BACK SMALLER THAN 2.4 ms. Five estimates on this workload
+// have collapsed by 2x or more under measurement. The two named reasons here:
+// only `sortObjects === false` buckets are eligible (three's sorted branch needs
+// its module-private `_renderList`, and `?statBatchNoSort=on` is what widens that
+// population), and the node bench does not reproduce the cache-miss behaviour of
+// ~200 live buckets. `getStatBatchXStats().walk.sphere` reports the eligible and
+// skipped populations so the projection can be evaluated rather than believed.
+//
+// WHY IT IS SAFE. The cache is keyed on the SAME epoch `?statBatchMemo` uses —
+// bumped by every membership change and by the feed's `setMatrixAt`, which three
+// does NOT flag via `_visibilityChanged` (see `_memoInvalidate`). Values are
+// `Float64Array` and computed by exactly three's own expression, so a cached
+// sphere is bit-identical to the one three would have computed, not an
+// approximation: `test_stat_batch_walk.mjs` §7 asserts the multidraw arrays match
+// three's byte for byte across a rebuild, an invalidation and a growth. Every
+// failure path falls back to `BatchedMesh.prototype.onBeforeRender` untouched.
+//
+// `=verify` recomputes each sphere the slow way and compares, counting
+// `sphere.verifyFails`. It is a diagnostic tier and is SLOWER than off.
+// ---------------------------------------------------------------------------
+let _sphereMode;
+/** `?statBatchSphere=on` (cache) or `=verify` (cache + per-instance recompute
+ *  and compare). Anything else, including absent, reads "off". */
+export function statBatchSphereMode() {
+  if (_sphereMode !== undefined) return _sphereMode;
+  let mode = "off";
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("statBatchSphere") || "").toLowerCase();
+      if (v === "on") mode = "on";
+      else if (v === "verify") mode = "verify";
+    }
+  } catch (_) { mode = "off"; }
+  _sphereMode = mode;
+  return mode;
+}
+/** Test seam. */
+export function __setStatBatchSphereForTest(mode) { _sphereMode = mode; }
+
+const _sphereStats = {
+  calls: 0,          // onBeforeRender invocations that reached the cached path
+  builds: 0,         // full cache (re)builds — one per bucket per epoch
+  slotsBuilt: 0,     // instance slots written by those builds (cumulative)
+  slotsWalked: 0,    // instance slots read from the cache (cumulative)
+  ineligible: 0,     // sorted / array-camera / malformed ⇒ three's own loop
+  errors: 0,         // fail-soft fallbacks to three's own loop
+  lateActivations: 0,// slots live at walk time but sentinel at build time —
+                     // MUST stay 0; nonzero is a missing invalidation site
+  verifyChecked: 0,  // =verify only
+  verifyFails: 0,    // =verify only — MUST stay 0; nonzero is an image bug
+  installed: 0,
+  bytes: 0,          // live cache bytes across all buckets
+};
+
 /** Test seam. `slacks` = { transM, rotDeg } (optional). */
 export function __setStatBatchMemoForTest(mode, slacks) {
   _memoMode = mode;
@@ -484,7 +578,9 @@ const _memoStats = {
   hitsExact: 0,      // reuse under bit-identical camera + state
   hitsSlack: 0,      // reuse under the dilated-frustum validity region
   rebuilds: 0,       // full walks, three's loop
-  rebuildsSlack: 0,  // full walks, our dilated loop
+  rebuildsSlack: 0,  // full walks, OUR loop (dilated, or ?statBatchSphere's
+                     // zero-margin cached build — both are `_memoBuildSlack`'s
+                     // arithmetic, and zero margins are a legal degenerate)
   instancesWalked: 0,   // instance SLOTS visited by a rebuild (cumulative)
   instancesSkipped: 0,  // instance SLOTS a hit did not visit (cumulative)
   errors: 0,         // fail-soft fallbacks to three's own path
@@ -721,6 +817,236 @@ function _memoBuildSlack(bm, camera, geometry, material, transLocal, rotSlack) {
   return { walked, drawn: multiDrawCount };
 }
 
+// --- ?statBatchSphere: the cache and the loop that reads it ----------------
+
+const _sphM = new THREE.Matrix4();
+const _sphS = new THREE.Sphere();
+const _sphVerify = new THREE.Sphere();
+
+/**
+ * The cached local-frame world sphere of every instance slot, as
+ * `[cx, cy, cz, r]` quads in one `Float64Array`.
+ *
+ * `r < 0` is the SKIP sentinel and covers both cases the walk must not draw:
+ * an inactive slot, and a slot whose `geometryIndex` no longer resolves (three's
+ * own loop does not guard the latter; `_memoBuildSlack` does, and drawing it
+ * would emit another geometry's byte range — so the sentinel preserves that
+ * guard rather than dropping it).
+ *
+ * Rebuilt only when `st.epoch` moves — i.e. on a membership change, a feed's
+ * `setMatrixAt`, an `optimize()` or a `sortObjects` flip. A camera moving does
+ * NOT move the epoch, which is the whole reason this survives where the memo
+ * does not. Returns null on anything malformed; the caller then runs three's
+ * loop untouched.
+ */
+function _sphereCacheEnsure(bm, st) {
+  const info = bm._instanceInfo;
+  if (!Array.isArray(info)) return null;
+  const n = info.length;
+  const ud = bm.userData;
+  let c = ud.__sphereCache;
+  if (c && c.epoch === st.epoch && c.n === n) return c;
+  if (!c || c.arr.length < n * 4) {
+    // Slots only ever grow (`_instanceInfo.length` is a high-water mark), so
+    // this reallocates at most log2(maxInst) times per bucket.
+    const arr = new Float64Array(Math.max(16, n) * 4);
+    if (c) _sphereStats.bytes -= c.arr.byteLength;
+    c = { arr, epoch: -1, n: 0 };
+    ud.__sphereCache = c;
+    _sphereStats.bytes += arr.byteLength;
+  }
+  const arr = c.arr;
+  for (let i = 0; i < n; i++) {
+    const inf = info[i];
+    const b = i * 4;
+    if (!inf || !inf.active) { arr[b + 3] = -1; continue; }
+    bm.getMatrixAt(i, _sphM);
+    const sph = bm.getBoundingSphereAt(inf.geometryIndex, _sphS);
+    if (sph === null) { arr[b + 3] = -1; continue; }
+    sph.applyMatrix4(_sphM);
+    arr[b] = sph.center.x;
+    arr[b + 1] = sph.center.y;
+    arr[b + 2] = sph.center.z;
+    arr[b + 3] = sph.radius;
+  }
+  c.epoch = st.epoch;
+  c.n = n;
+  _sphereStats.builds += 1;
+  _sphereStats.slotsBuilt += n;
+  return c;
+}
+
+/**
+ * `=verify` — recompute every cached sphere the slow way and compare.
+ *
+ * Exact equality, not an epsilon: the cache is built by three's own expression
+ * on inputs that have not changed, so any difference at all is a stale entry,
+ * which is precisely the bug worth catching. Diagnostic only — this pass costs
+ * more than the walk it is checking.
+ */
+function _sphereVerifyCache(bm, cache) {
+  const info = bm._instanceInfo;
+  const arr = cache.arr;
+  for (let i = 0, l = info.length; i < l; i++) {
+    const inf = info[i];
+    if (!inf || !inf.active || !inf.visible) continue;
+    const b = i * 4;
+    bm.getMatrixAt(i, _sphM);
+    const sph = bm.getBoundingSphereAt(inf.geometryIndex, _sphVerify);
+    if (sph === null) continue;
+    sph.applyMatrix4(_sphM);
+    _sphereStats.verifyChecked += 1;
+    if (arr[b] !== sph.center.x || arr[b + 1] !== sph.center.y
+      || arr[b + 2] !== sph.center.z || arr[b + 3] !== sph.radius) {
+      _sphereStats.verifyFails += 1;
+      if (_sphereStats.verifyFails === 1) {
+        // eslint-disable-next-line no-console
+        console.warn(`[statBatchSphere] STALE CACHE on ${bm.name} slot ${i}: `
+          + `cached (${arr[b]},${arr[b + 1]},${arr[b + 2]},r${arr[b + 3]}) vs `
+          + `live (${sph.center.x},${sph.center.y},${sph.center.z},r${sph.radius})`);
+      }
+    }
+  }
+}
+
+/**
+ * `_memoBuildSlack` with the per-instance sphere read from the cache instead of
+ * recomputed. Same margin arithmetic, same output; with both margins at zero it
+ * is byte-identical to three's own loop, which is what
+ * `test_stat_batch_walk.mjs` §7 asserts against the real r0.184.0 build.
+ *
+ * The frustum planes are unpacked to scalars before the loop rather than read
+ * through `planes[p].distanceToPoint(center)`. That is not micro-optimisation
+ * for its own sake: it is what removes the last per-instance `Vector3` write,
+ * and the bench in `docs/2026-08-06-object-glue-census.md` §3 measures the whole
+ * body at 15-19 ns/instance against three's 93-122 ns.
+ */
+function _buildFromSphereCache(bm, camera, geometry, material, transLocal, rotSlack, cache) {
+  const index = geometry.getIndex();
+  let bytesPerElement = index === null ? 1 : index.array.BYTES_PER_ELEMENT;
+  let multiDrawMultiplier = 1;
+  if (material.wireframe) {
+    multiDrawMultiplier = 2;
+    bytesPerElement = geometry.attributes.position.count > 65535 ? 4 : 2;
+  }
+  const instanceInfo = bm._instanceInfo;
+  const geometryInfoList = bm._geometryInfo;
+  const multiDrawStarts = bm._multiDrawStarts;
+  const multiDrawCounts = bm._multiDrawCounts;
+  const indirectTexture = bm._indirectTexture;
+  const indirectArray = indirectTexture.image.data;
+  const arr = cache.arr;
+
+  // Frustum in the mesh's LOCAL frame — the same composition three does at
+  // :27251-27262, and the frame the cached spheres live in.
+  _memoM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(bm.matrixWorld);
+  _memoFrustum.setFromProjectionMatrix(_memoM, camera.coordinateSystem, camera.reversedDepth);
+  const dilate = transLocal > 0 || rotSlack > 0;
+  let camX = 0, camY = 0, camZ = 0;
+  if (dilate) {
+    _memoM.copy(bm.matrixWorld).invert();
+    _memoCamLocal.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(_memoM);
+    camX = _memoCamLocal.x; camY = _memoCamLocal.y; camZ = _memoCamLocal.z;
+  }
+  const rotTrans = rotSlack * transLocal;
+
+  const pl = _memoFrustum.planes;
+  const n0 = pl[0].normal, n1 = pl[1].normal, n2 = pl[2].normal;
+  const n3 = pl[3].normal, n4 = pl[4].normal, n5 = pl[5].normal;
+  const a0 = n0.x, b0 = n0.y, c0 = n0.z, d0 = pl[0].constant;
+  const a1 = n1.x, b1 = n1.y, c1 = n1.z, d1 = pl[1].constant;
+  const a2 = n2.x, b2 = n2.y, c2 = n2.z, d2 = pl[2].constant;
+  const a3 = n3.x, b3 = n3.y, c3 = n3.z, d3 = pl[3].constant;
+  const a4 = n4.x, b4 = n4.y, c4 = n4.z, d4 = pl[4].constant;
+  const a5 = n5.x, b5 = n5.y, c5 = n5.z, d5 = pl[5].constant;
+
+  let multiDrawCount = 0;
+  let walked = 0;
+  for (let i = 0, l = instanceInfo.length; i < l; i++) {
+    const inf = instanceInfo[i];
+    if (!inf.visible || !inf.active) continue;
+    const b = i * 4;
+    let r = arr[b + 3];
+    if (r < 0) {
+      // The slot carries the skip sentinel but is live NOW, so it went active
+      // without moving the epoch. That should be unreachable — every
+      // `addInstance` path ends in `_memoDirtyBounds` — but the failure mode if
+      // it ever is reachable is a SILENTLY DROPPED placement, which is the one
+      // outcome worth spending a branch to make impossible. Heal the entry
+      // in place and count it; a nonzero `lateActivations` is a missing
+      // invalidation site, not a perf note.
+      bm.getMatrixAt(i, _sphM);
+      const s = bm.getBoundingSphereAt(inf.geometryIndex, _sphS);
+      if (s === null) continue; // genuinely a stale gid — three's loop would
+                                // draw another geometry's range here; we do not
+      s.applyMatrix4(_sphM);
+      arr[b] = s.center.x; arr[b + 1] = s.center.y; arr[b + 2] = s.center.z;
+      r = arr[b + 3] = s.radius;
+      _sphereStats.lateActivations += 1;
+    }
+    walked++;
+    const cx = arr[b], cy = arr[b + 1], cz = arr[b + 2];
+    let negRadius = -r;
+    if (dilate) {
+      const dx = cx - camX, dy = cy - camY, dz = cz - camZ;
+      negRadius -= transLocal + rotSlack * Math.sqrt(dx * dx + dy * dy + dz * dz) + rotTrans;
+    }
+    if (a0 * cx + b0 * cy + c0 * cz + d0 < negRadius) continue;
+    if (a1 * cx + b1 * cy + c1 * cz + d1 < negRadius) continue;
+    if (a2 * cx + b2 * cy + c2 * cz + d2 < negRadius) continue;
+    if (a3 * cx + b3 * cy + c3 * cz + d3 < negRadius) continue;
+    if (a4 * cx + b4 * cy + c4 * cz + d4 < negRadius) continue;
+    if (a5 * cx + b5 * cy + c5 * cz + d5 < negRadius) continue;
+    const geometryInfo = geometryInfoList[inf.geometryIndex];
+    multiDrawStarts[multiDrawCount] = geometryInfo.start * bytesPerElement * multiDrawMultiplier;
+    multiDrawCounts[multiDrawCount] = geometryInfo.count * multiDrawMultiplier;
+    indirectArray[multiDrawCount] = i;
+    multiDrawCount++;
+  }
+  indirectTexture.needsUpdate = true;
+  bm._multiDrawCount = multiDrawCount;
+  bm._visibilityChanged = false;
+  _sphereStats.slotsWalked += walked;
+  return { walked, drawn: multiDrawCount };
+}
+
+/**
+ * Build this call's multidraw through the sphere cache, or return null to mean
+ * "run three's own loop". Shared by the sphere-only override and by the memo's
+ * rebuild path, so the two flags compose instead of racing for the seam.
+ */
+function _trySphereBuild(bm, camera, geometry, material, transLocal, rotSlack) {
+  const st = bm.userData && bm.userData.__memo;
+  const mode = statBatchSphereMode();
+  if (!st || mode === "off") return null;
+  if (!_slackEligible(bm, camera)) { _sphereStats.ineligible += 1; return null; }
+  try {
+    const cache = _sphereCacheEnsure(bm, st);
+    if (cache === null) { _sphereStats.errors += 1; return null; }
+    if (mode === "verify") _sphereVerifyCache(bm, cache);
+    return _buildFromSphereCache(bm, camera, geometry, material, transLocal, rotSlack, cache);
+  } catch (_) {
+    _sphereStats.errors += 1;
+    return null;
+  }
+}
+
+/**
+ * `onBeforeRender` override for `?statBatchSphere` with `?statBatchMemo=off`.
+ *
+ * Deliberately does NOT carry the memo's per-call bookkeeping (two 16-float
+ * compares, a camera decompose, the state write-back). That bookkeeping is what
+ * measured **+0.5 ms WORSE moving** for the memo, and this flag exists precisely
+ * for the moving case — so it must not inherit the cost that broke it.
+ */
+function _sphereOnBeforeRender(renderer, scene, camera, geometry, material, group) {
+  if (camera && material && geometry) {
+    _sphereStats.calls += 1;
+    if (_trySphereBuild(this, camera, geometry, material, 0, 0) !== null) return undefined;
+  }
+  return THREE.BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+}
+
 /** Can this call take the dilated path at all? (fail-soft ⇒ three's own loop) */
 function _slackEligible(bm, camera) {
   return bm.sortObjects === false
@@ -791,6 +1117,17 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
       }
     } catch (_) { built = false; _memoStats.errors += 1; }
   }
+  if (!built && statBatchSphereMode() !== "off") {
+    // ?statBatchSphere composes with the memo: a MISS rebuilds through the
+    // cached spheres rather than three's loop. Zero margins ⇒ byte-identical to
+    // three, so this changes only what the rebuild costs, never its answer.
+    const r = _trySphereBuild(this, camera, geometry, material, 0, 0);
+    if (r !== null) {
+      walked = r.walked; drawn = r.drawn;
+      built = true;
+      _memoStats.rebuildsSlack += 1;
+    }
+  }
   if (!built) {
     // Exact tier (and every fail-soft path): three's own loop, untouched.
     THREE.BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
@@ -832,22 +1169,37 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
 }
 
 /**
- * Install the memo override on a freshly created bucket (no-op when off).
+ * Install the per-instance-walk override on a freshly created bucket. No-op
+ * with `?statBatchMemo=off` AND `?statBatchSphere=off`, which is the default —
+ * off is then not one extra property read on any path.
+ *
+ * ONE seam, two flags. Both want to shadow `BatchedMesh.prototype
+ * .onBeforeRender` on the same node, so they share the `__memo` state (the
+ * epoch is what invalidates both) and the memo's override wins when it is on,
+ * routing its MISSES through the sphere cache. The sphere-only override is
+ * separate rather than a mode inside the memo's because the memo's per-call
+ * bookkeeping is exactly what regressed the moving case, and the sphere cache's
+ * whole point is the moving case.
  *
  * ⚠ INTERACTION WITH `__statMergeArmSubmitted`. `armStatMergeSubmittedSampler`
  * (static_atlas.js) measures submitted scale by wrapping `onBeforeRender`, and
  * it deliberately SKIPS any node that already owns one (`hasOwnProperty`) so it
- * cannot double-wrap. With this flag on it therefore counts our buckets as
+ * cannot double-wrap. With either flag on it therefore counts our buckets as
  * "armed" while never sampling them — the submitted-scale census reads 0 frames
  * for exactly the population it was built to size. Measure submitted scale with
- * `?statBatchMemo=off`, or read `getStatBatchXStats().walk.calls` instead,
- * which counts the same thing and is always live.
+ * both flags off, or read `getStatBatchXStats().walk.calls` /
+ * `walk.sphere.calls` instead, which count the same thing and are always live.
  */
 function _installMemo(bm) {
-  if (statBatchMemoMode() === "off") return;
+  const memo = statBatchMemoMode() !== "off";
+  const sphere = statBatchSphereMode() !== "off";
+  if (!memo && !sphere) return;
+  // The epoch lives on `__memo` and is bumped by `_memoInvalidate` regardless of
+  // which flag is on, so the sphere cache needs this state even with memo off.
   bm.userData.__memo = _memoStateFor();
-  bm.onBeforeRender = _memoOnBeforeRender;
-  _memoStats.installed += 1;
+  bm.onBeforeRender = memo ? _memoOnBeforeRender : _sphereOnBeforeRender;
+  if (memo) _memoStats.installed += 1;
+  if (sphere) _sphereStats.installed += 1;
 }
 
 const STAT_CONTENT_KEY = "__statContentKey";
@@ -1100,6 +1452,14 @@ function _reapBucketIfEmpty(bm) {
   // big vertex+index buffers live on its own geometry.
   try { bm.dispose(); } catch (_) { /* fail-soft */ }
   try { bm.geometry?.dispose(); } catch (_) { /* fail-soft */ }
+  // ?statBatchSphere — drop the cache with the bucket, and take its bytes back
+  // out of the census. Without this `walk.sphere.bytes` is a high-water mark
+  // wearing a live-total name, which is the reporting bug this file has already
+  // made once (`deadBatch.triangles` off an allocated vertex buffer).
+  if (ud.__sphereCache) {
+    _sphereStats.bytes -= ud.__sphereCache.arr.byteLength;
+    ud.__sphereCache = null;
+  }
   _stats.bucketsReaped += 1;
   // ?statArrayMerge — hand the GLOBAL pool back its bucket reference. The pool
   // disposes its arrays + shared material only when it has neither a live layer
@@ -1710,6 +2070,31 @@ export function getStatBatchXStats() {
       // Live population, split the way three's two loops split it.
       slots: { all: instanceSlots, sorted: sortedSlots, drawn: drawnSlots, drawnSorted: drawnSortedSlots },
       sortedBuckets,
+      // ?statBatchSphere. The number to watch is `slotsWalked` vs `slotsBuilt`:
+      // walked is per FRAME and is what got 5-7x cheaper, built is per EPOCH and
+      // is the price of that. A `slotsBuilt` that keeps pace with `slotsWalked`
+      // means something is bumping the epoch every frame and the cache is worth
+      // nothing — check `?statBatchChunk` feeds and eviction churn before
+      // believing any ms figure. `verifyFails` MUST be 0 (`=verify` only);
+      // nonzero is a stale sphere, i.e. an image bug, not a perf note.
+      //
+      // ms/frame saved, on the node bench's 93-122 -> 15-19 ns/instance:
+      //   saved ~= d.slotsWalked * 0.080e-3 / N  -  d.slotsBuilt * 0.120e-3 / N
+      // and, as ever, believe the p50 over the model.
+      sphere: {
+        mode: statBatchSphereMode(),
+        installed: _sphereStats.installed,
+        calls: _sphereStats.calls,
+        builds: _sphereStats.builds,
+        slotsBuilt: _sphereStats.slotsBuilt,
+        slotsWalked: _sphereStats.slotsWalked,
+        ineligible: _sphereStats.ineligible,
+        errors: _sphereStats.errors,
+        lateActivations: _sphereStats.lateActivations,
+        verifyChecked: _sphereStats.verifyChecked,
+        verifyFails: _sphereStats.verifyFails,
+        bytes: _sphereStats.bytes,
+      },
     },
     dedup: {
       enabled: statGeomDedupEnabled(),
