@@ -48,13 +48,56 @@ harness/
     flags.remote.mjs     ← remoteInterp/stickyRetail/wasmPursuit
     flags.anim.mjs       ← mtQueue/jumpParity/retailRunKeys/rootMotionObject/getLink/placementId/particleDegrade
     flags.sync.mjs       ← syncPhysicsTick
+  moving-bench.mjs       ← DETERMINISTIC moving A/B benchmark (one arm per run)
   lib/
     assert.mjs           ← result()/pass()/fail()/skip()/rebuildPending() + assert* helpers (the 4 statuses)
     boot.mjs             ← launchAndEnter(): headless Playwright boot → in-world, returns the `helpers` object
+    moving_path.mjs      ← the pose TABLE: pure, frame-indexed, no clock (moving-bench's path)
+    moving_rig.mjs       ← the in-page half of moving-bench (page.evaluate'd; unit-tested against a stub)
     schema.md            ← the flags.*.mjs descriptor schema + classification rules (authoritative)
   README.md              ← you are here
   COVERAGE.md            ← every flag × tier × getter/test × compose/const reqs
 ```
+
+### `moving-bench.mjs` — measuring a flag WHILE THE CAMERA MOVES
+
+Separate from the three tiers: it does not gate anything, it produces a number.
+
+Every moving measurement of the 2026-08-06 frame-cost investigation was thrown
+away because the rig spun the camera with a per-frame
+`window.__cam.player(dist, az, el, dz)` — a call whose centre is the LIVE player
+pose and whose azimuth advanced on WALL CLOCK. A slower arm therefore swept a
+shorter arc from a slightly different place and so streamed and culled a
+different amount: `?statBatchMemo=slack` moving read `off [28.5, 33.6, 27.0]`
+against `slack [29.6, 19.0, 22.4]` — a 6.10 ms delta inside a 6.60 ms control
+spread. Parked runs on the same box held 0.7–2.3 ms, so only the motion was at
+fault.
+
+`moving-bench.mjs` fixes the mechanism, not the statistics:
+
+* the camera path is a **table built in node and indexed by FRAME NUMBER**, so
+  frame *k* gets pose *k* whether it cost 12 ms or 40 ms;
+* the run length is a **frame count**, never a duration;
+* the **anchor is pinned on the command line**, never read from the live pose;
+* a **warm lap** streams and compiles, then the **measure lap** re-walks the
+  identical (closed) path;
+* every run prints what it takes to **reject** it — intended vs *realised* path
+  checksum, resident-landblock churn, per-frame draw spread, frame count — so a
+  diverged run is thrown away instead of averaged in.
+
+It connects to a CDP endpoint that is **already up** and runs ONE arm. Chrome
+lifecycle stays where it already works (`flag-census/bootab.mjs` relaunches
+between arms; reusing one Chrome degrades it 2.44× over ~100 minutes).
+
+```
+node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 \
+     --anchor=25171,20344,42.0 --mode=orbit --frames=600 \
+     --arm='statBatchSphere=on' --out=/tmp/mb-b.json
+```
+
+Tests: `node test_cam_moving_bench.mjs` (38 checks — including two runs of the
+real in-page rig against a stub client with a 6.7× frame-cost spread, asserted
+pose-for-pose identical).
 
 ---
 

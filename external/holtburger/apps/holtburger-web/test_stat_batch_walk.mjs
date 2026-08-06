@@ -800,6 +800,228 @@ console.log("\n-- 16. a slot that goes live without an epoch bump is healed, not
     (memoBuild(bm, cam), M.getStatBatchXStats().walk.sphere.lateActivations === before + 1));
 }
 
+// ---------------------------------------------------------------------------
+// THE MOTION CLAIM, TESTED RATHER THAN TRUSTED (2026-08-06, second pass).
+//
+// `?statBatchSphere` exists for ONE reason: `?statBatchMemo` is worth ~4 ms
+// parked and +0.5 ms WORSE moving, so something has to carry the moving case.
+// The claim is that this cache is invalidated by PLACEMENT changes and not by
+// the camera. §13-§16 covered invalidation and identity but every one of them
+// walks a STILL camera or a single hop, so none of them can show the claim.
+//
+// The camera path below is driven by the FRAME INDEX, exactly as
+// `harness/moving-bench.mjs` drives the live one, and for the same reason: a
+// wall-clock path makes each run cover a different arc, which is what made the
+// live moving numbers unusable (control spread 6.60 ms against a 6.10 ms
+// effect). Here it also means the A and B arms visit provably identical poses,
+// so a byte-comparison of their multidraw output is meaningful.
+// ---------------------------------------------------------------------------
+console.log("\n-- 17. ?statBatchSphere under MOTION: no camera input in the key --");
+const MOTION_POSES = 24;
+/** Frame-indexed camera path. Pure function of k — no clock, no randomness. */
+function motionPose(k) {
+  const az = (k * 2 * Math.PI) / MOTION_POSES;
+  return [Math.cos(az) * 90, 30 + 8 * Math.sin(2 * az), Math.sin(az) * 90];
+}
+function placeCam(cam, k) {
+  const p = motionPose(k);
+  cam.position.set(p[0], p[1], p[2]);
+  cam.lookAt(new THREE.Vector3(0, 0, 0));
+  cam.updateMatrixWorld(true);
+  cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+  return cam;
+}
+{
+  // Arm A — sphere ON, memo OFF. The cache is then the ONLY thing between the
+  // walk and three's loop, so its behaviour is not confounded by memo hits.
+  reset("off", null, false, "on");
+  const a = makeBucket(opaqueMat(), 200);
+  const camA = makeCamera(...motionPose(0));
+  const got = [];
+  for (let k = 0; k < MOTION_POSES; k++) { placeCam(camA, k); memoBuild(a.bm, camA); got.push(snapshot(a.bm)); }
+  const sA = M.getStatBatchXStats().walk.sphere;
+  check("78: 24 distinct camera poses cost exactly ONE cache build — a moving camera does not invalidate",
+    sA.builds === 1 && sA.walks === MOTION_POSES && sA.lateActivations === 0 && sA.errors === 0,
+    JSON.stringify({ builds: sA.builds, walks: sA.walks, slotsWalked: sA.slotsWalked, late: sA.lateActivations }));
+  // A path that culled the same set at every pose would pass 78 vacuously.
+  const distinct = new Set(got.map((g) => g.n));
+  check("79: the path really moved the answer (the test is not vacuous)", distinct.size > 3,
+    `distinct draw counts: ${[...distinct].sort((x, y) => x - y).join(",")}`);
+
+  // Arm B — everything off, three's own loop, the identical pose sequence.
+  // `makeBucket` is seeded, so this bucket is the same bucket.
+  reset("off", null, false, "off");
+  const b = makeBucket(opaqueMat(), 200);
+  const camB = makeCamera(...motionPose(0));
+  let allSame = true, firstBad = -1;
+  for (let k = 0; k < MOTION_POSES; k++) {
+    placeCam(camB, k);
+    threeBuild(b.bm, camB);
+    if (!sameSnapshot(got[k], snapshot(b.bm))) { allSame = false; if (firstBad < 0) firstBad = k; }
+  }
+  check("80: and the cached answer is byte-identical to three's at EVERY pose on the path",
+    allSame, allSame ? `${MOTION_POSES} poses` : `first divergence at pose ${firstBad}`);
+
+  // The cache lives in the mesh's LOCAL frame, so it is camera-INDEPENDENT, not
+  // merely camera-insensitive. `?statBatchMemo` cannot say this: its state is a
+  // single slot keyed on `st.camera === camera`, so a shadow cascade alternating
+  // with the colour pass misses on every call (see `_memoOnBeforeRender`'s note).
+  reset("off", null, false, "on");
+  const { bm: two } = makeBucket(opaqueMat(), 150);
+  const c1 = makeCamera(70, 30, 70);
+  const c2 = makeCamera(-70, 55, 10);
+  for (let i = 0; i < 6; i++) { memoBuild(two, c1); memoBuild(two, c2); }
+  const sTwo = M.getStatBatchXStats().walk.sphere;
+  check("81: TWO alternating cameras are served from ONE build (the key holds no camera at all)",
+    sTwo.builds === 1 && sTwo.walks === 12,
+    JSON.stringify({ builds: sTwo.builds, walks: sTwo.walks }));
+}
+
+// ---------------------------------------------------------------------------
+// REGRESSION PIN for the bug that made the whole flag moot.
+//
+// `?statBatchMemo` DEFAULTS to "slack". Until this was fixed, the slack tier
+// rebuilt through `_memoBuildSlack` — which recomputes every sphere from
+// scratch — and `_trySphereBuild` was only reachable from the `!built`
+// fallthrough, which then declined for the very eligibility reason that had
+// sent the call down the slack branch. So in the configuration that SHIPS,
+// `?statBatchSphere=on` did no work whatsoever:
+//     memo=slack  sphere{builds:0, slotsWalked:0, walks:0}
+// The flag that has to carry the moving case was inert unless you also gave up
+// the 4.00 ms parked win with `?statBatchMemo=off`. §18 fails loudly if that
+// ever comes back.
+// ---------------------------------------------------------------------------
+console.log("\n-- 18. ?statBatchSphere composes with the SHIPPED default (?statBatchMemo=slack) --");
+{
+  // 20 m per step is past the 8 m default translation slack, so every call is a
+  // slack MISS and therefore a rebuild — which is the path under test.
+  const STEPS = 8;
+  const stepCam = (cam, k) => {
+    cam.position.set(70 + k * 20, 30, 70);
+    cam.lookAt(new THREE.Vector3(0, 0, 0));
+    cam.updateMatrixWorld(true);
+    cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+    return cam;
+  };
+
+  reset("slack", null, false, "on");
+  const withCache = [];
+  const on = makeBucket(opaqueMat(), 200);
+  const camOn = makeCamera(70, 30, 70);
+  for (let k = 0; k < STEPS; k++) { stepCam(camOn, k); memoBuild(on.bm, camOn); withCache.push(snapshot(on.bm)); }
+  const wOn = M.getStatBatchXStats().walk;
+  check("82: under memo=slack the sphere cache is BUILT AND READ (it used to be dead code)",
+    wOn.sphere.builds === 1 && wOn.sphere.walks === STEPS && wOn.rebuildsSlack === STEPS,
+    JSON.stringify({ builds: wOn.sphere.builds, walks: wOn.sphere.walks, rebuildsSlack: wOn.rebuildsSlack }));
+  // The diagnostic trap, pinned so nobody reads `calls: 0` as "never ran": the
+  // sphere-only override is not installed while the memo owns the seam.
+  check("83: `sphere.calls` is 0 while the memo owns the seam — read `walks`, not `calls`",
+    wOn.sphere.calls === 0 && wOn.sphere.walks > 0,
+    JSON.stringify({ calls: wOn.sphere.calls, walks: wOn.sphere.walks }));
+
+  // Same path, same margins, cache OFF: `_memoBuildSlack`'s own answer.
+  reset("slack", null, false, "off");
+  const off = makeBucket(opaqueMat(), 200);
+  const camOff = makeCamera(70, 30, 70);
+  let same = true, bad = -1;
+  for (let k = 0; k < STEPS; k++) {
+    stepCam(camOff, k);
+    memoBuild(off.bm, camOff);
+    if (!sameSnapshot(withCache[k], snapshot(off.bm))) { same = false; if (bad < 0) bad = k; }
+  }
+  check("84: the DILATED answer through the cache is byte-identical to _memoBuildSlack's",
+    same, same ? `${STEPS} dilated rebuilds` : `first divergence at step ${bad}`);
+}
+
+// ---------------------------------------------------------------------------
+// THE HONEST LIMIT: streaming, which is exactly what accompanies motion.
+//
+// "A moving camera does not invalidate the cache" is true and is §17. It is
+// also not the whole moving case, because a moving player STREAMS, and a feed
+// or an evict does invalidate — at BUCKET granularity. Buckets are region-
+// scoped and span many landblocks, so one landblock's feed re-walks every slot
+// in the bucket, not the slots it added. State the SCALE: the cost of an
+// invalidation is the bucket's RESIDENT slot count.
+// ---------------------------------------------------------------------------
+console.log("\n-- 19. streaming under motion: an invalidation costs the WHOLE bucket --");
+{
+  const geoms = [triGeom(1), triGeom(2), triGeom(3)];
+  const feedNodes = (n, lb, mat) => {
+    const out = [];
+    let s = 999;
+    const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (let i = 0; i < n; i++) out.push(singleton(0x08000001, (rnd() - 0.5) * 400, (rnd() - 0.5) * 400, lb, geoms[i % 3], mat));
+    return out;
+  };
+
+  reset("off", null, false, "on");
+  const mat = opaqueMat();
+  const { scene3d, bm } = makeBucket(mat, 200);
+  const cam = makeCamera(70, 30, 70);
+  memoBuild(bm, cam);
+  const settled0 = M.getStatBatchXStats().walk.sphere;
+  const residentSlots = bm._instanceInfo.length;
+
+  // Settled: many walks, one build. This is the case the flag was priced on.
+  for (let k = 0; k < 12; k++) { placeCam(cam, k); memoBuild(bm, cam); }
+  const settled = M.getStatBatchXStats().walk.sphere;
+  const settledPayback = settled.slotsWalked / settled.slotsBuilt;
+  check("85: settled, the cache pays back many times over (slotsWalked / slotsBuilt)",
+    settledPayback > 5 && settled.builds === 1,
+    `payback ${settledPayback.toFixed(1)}x over ${settled.walks} walks, ${settled.builds} build`);
+
+  // ONE neighbouring landblock arrives with 20 placements. The 3x3 region bucket
+  // is reused (same argument as §13's growth case), so the epoch moves and the
+  // NEXT walk rebuilds every slot the bucket holds.
+  const builtBefore = settled.slotsBuilt;
+  M.consolidateStaticSingletonsCrossLb(feedNodes(20, (LB + 0x00010000) >>> 0, mat), scene3d, (LB + 0x00010000) >>> 0);
+  scene3d.staticsGroup.updateMatrixWorld(true);
+  memoBuild(bm, cam);
+  const afterFeed = M.getStatBatchXStats().walk.sphere;
+  const rebuiltSlots = afterFeed.slotsBuilt - builtBefore;
+  check("86: a 20-placement feed re-walks the WHOLE bucket, not the 20 new slots",
+    rebuiltSlots >= residentSlots && rebuiltSlots > 20 * 4,
+    `${rebuiltSlots} slots rebuilt for 20 new placements (bucket held ${residentSlots})`);
+  check("87: and the post-feed answer is still byte-identical to three's",
+    (() => {
+      threeBuild(bm, cam);
+      const want = snapshot(bm);
+      bm._multiDrawCount = 0;
+      bm._multiDrawStarts.fill(-1); bm._multiDrawCounts.fill(-1);
+      bm._indirectTexture.image.data.fill(0xffff);
+      memoBuild(bm, cam);
+      return sameSnapshot(want, snapshot(bm));
+    })());
+
+  // The LOSS case, measured rather than argued: a bucket fed EVERY frame never
+  // amortises its rebuild, so payback collapses toward 1 — the cache then costs
+  // a full extra walk per frame and buys nothing. This is what `--mode=hop` in
+  // `harness/moving-bench.mjs` is for; do not quote a settled ms figure and
+  // assume it survives streaming.
+  reset("off", null, false, "on");
+  const churn = makeBucket(mat, 200);
+  const camC = makeCamera(70, 30, 70);
+  memoBuild(churn.bm, camC);
+  const c0 = M.getStatBatchXStats().walk.sphere;
+  for (let k = 0; k < 8; k++) {
+    // Both neighbours stay inside THIS bucket's 3x3 region (`_regionKeyOfId`
+    // divides the LB bytes by 3): 0x96/0x97/0x98 all map to region 50x50. Step
+    // one further and the feed lands in a DIFFERENT bucket, the epoch here
+    // never moves, and the test silently measures a settled cache instead —
+    // which is exactly what the first cut of this row did (2 rebuilds, not 8).
+    const lb = (LB + (((k % 2) + 1) << 16)) >>> 0;
+    M.consolidateStaticSingletonsCrossLb(feedNodes(5, lb, mat), churn.scene3d, lb);
+    churn.scene3d.staticsGroup.updateMatrixWorld(true);
+    placeCam(camC, k);
+    memoBuild(churn.bm, camC);
+  }
+  const c1 = M.getStatBatchXStats().walk.sphere;
+  const churnPayback = (c1.slotsWalked - c0.slotsWalked) / (c1.slotsBuilt - c0.slotsBuilt);
+  check("88: fed every frame, payback collapses to ~1 — the cache is a LOSS while a bucket streams",
+    churnPayback < 1.5 && c1.builds - c0.builds === 8,
+    `payback ${churnPayback.toFixed(2)}x over 8 fed frames (${c1.builds - c0.builds} rebuilds)`);
+}
+
 console.log("=========================");
 console.log(`stat-batch-walk test: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
