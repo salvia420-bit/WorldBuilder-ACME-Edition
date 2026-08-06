@@ -17,6 +17,45 @@ different task, and §6 specs it.
 
 ---
 
+## 0d. MEASURED LIVE — it works, and it is worth ~0 ms. Keep it default-OFF.
+
+`?statArrayMerge=on` was A/B'd on the 1070 at a settled Nanto session, Chrome relaunched
+between every arm, interleaved off/ON/off/ON across two rounds:
+
+| arm | p50 runs | median p50 | draws/frame |
+|---|---|---|---|
+| off | 23.0 / 23.0 / 23.7 | **23.0 ms** | 453.9 / 457.8 / 454.0 |
+| ON | 23.2 / 23.0 / 22.8 | **23.0 ms** | 425.7 / 434.4 / 434.5 |
+
+**The mechanism works exactly as designed** — 84 buckets merged, 654 groups routed through 17
+pools over 29 layers, 0 console errors, 115/115 offline checks — and it removes a real,
+reproducible **~23 draws per frame**. And the frame does not move at all.
+
+That is the §2 calibration biting a fourth time: at the ~40 µs/draw fixed cost, 23 draws
+"should" be ~0.9 ms. It is 0.0. Two candidate explanations, neither settled here:
+* the second-order cost the implementing agent flagged — merged buckets bound more space, so
+  `perObjectFrustumCulled` walks instances that a culled bucket previously skipped;
+* an array-material draw simply costs more than the singleton draw it replaces (more layers
+  bound, a wider program), so the per-draw saving is smaller for exactly the draws removed.
+
+Also note the bucket collapse did NOT translate: 390 → 340 resident buckets (−50) produced
+only −23 draws, because half the merged buckets were not being submitted. Residency again.
+
+**Verdict: keep `?statArrayMerge` default-OFF.** It is correct, tested and instrumented, and
+it buys nothing measurable. The eye-test this would otherwise owe (it substitutes materials on
+68 of 128 submitted buckets, including swaying foliage) is NOT spent, because there is no win
+to justify the risk. The riskiest code in it — the entangled geometry/layer refcounting on
+eviction — was never exercised live either: `bucketsReaped 0`, `layerRefsReleased 0` in every
+arm, because a settled session evicts nothing.
+
+**What this closes.** The statics-merge thread is finished as a performance item. Its full
+arc: 6.4 ms projected → 3.68 ms on drawn buckets → 2.00 ms at submitted scale → **0.0 ms
+measured**. Every step of that decay was a population counted at the wrong scale, except the
+last, which is the real answer. Do not reopen it without a NEW mechanism; re-deriving the
+bucket arithmetic will just reproduce this number.
+
+---
+
 ## 0c. CORRECTION to §0b, and the thing was BUILT — `?statArrayMerge`, default-OFF
 
 **Two of this document's load-bearing numbers were wrong in the same direction, and its
