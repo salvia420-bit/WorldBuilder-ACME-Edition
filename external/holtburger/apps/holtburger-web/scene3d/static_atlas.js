@@ -1779,6 +1779,337 @@ export function tickStatAtlasOptimize() {
 }
 
 // ===========================================================================
+// BULK-MERGE PROJECTION (2026-08-06) — what would array-texture merging of the
+// `?statBatchChunk` population actually cost and buy?
+//
+// TWO CORRECTIONS ARE BAKED INTO THIS FILE. Both were live measurements that
+// overturned an estimate, and either one alone would have made the projection
+// wrong by about a factor of two.
+//
+// CORRECTION 1 — COUNT DRAWN BUCKETS, NOT RESIDENT ONES.
+// docs/2026-08-06-frame-cost-structure-measured.md §5a scaled an all-buckets
+// figure (396 -> 86) down by the rendered fraction and quoted ~6.4 ms. That
+// scaling is unsafe, and the region-width sweep says so directly:
+//
+//     regionDiv=3 (shipped)  376 buckets  452.2 draws  p50 23.4 ms
+//     regionDiv=6            245 buckets  438.3 draws  p50 23.4 ms
+//     regionDiv=12           142 buckets  437.9 draws  p50 24.5 ms
+//
+// 131 fewer buckets bought 14 fewer draws and 0.00 ms — because most buckets are
+// frustum-culled and never submitted. Bucket COUNT and DRAWN-bucket count are
+// decoupled. (It also kills "just use bigger regions": at div=12 a merged bucket
+// straddles visible and invisible space and the frame got WORSE.) Re-measured
+// over drawn buckets only, at Nanto: 376 resident, **129 drawn**, 5,063
+// instances submitted; drawn keyed by (region, material VALUE) = 123, drawn
+// keyed by (region, render STATE) = **37**. So the ceiling is 129 -> 37 drawn
+// buckets at ~40 us each ≈ **3.68 ms**, not 6.4. Every projection below is
+// therefore reported over BOTH populations, and `drawn` is the one that pays.
+//
+// CORRECTION 2 — A TEXTURE ARRAY CANNOT IGNORE TILE SIZE.
+// That 37 comes from `bucketfrag.mjs`'s `stateOnlyKey`, which ignores the bound
+// texture ENTIRELY, dimensions included. `texStorage3D` fixes (format, w, h,
+// depth) at allocation — which is exactly why `_bucketKeyFor` carries `w x h`
+// and a format field. The reachable key is
+//
+//     (region x TILE x state x format),  NOT  (region x state),
+//
+// and the tile axis has never been measured on the batched population. The only
+// size distribution on record is the atlas's own residue
+// (docs/RESULTS-atlas-occupancy-2026-08-05.json: 112 layers over ~15 distinct
+// sizes, 16x16 through 2048x2048, top three sizes only 62%), and that sample is
+// biased twice over — it is the surfaces the batcher did NOT take, and BC7's 4x
+// upscale inflates its tail. The live drawn census says the state axis is nearly
+// free (only **6** distinct render states across all drawn buckets, against 38
+// distinct material values), so the tile axis is essentially the whole problem.
+// Modelling the occupancy distribution onto ~14 surfaces per drawn region
+// predicts ~75 drawn buckets, not 37 — i.e. the tile axis plausibly eats half
+// the ceiling. That is the single number the design turns on.
+//
+// Hence `snapped`: the same projection with tile sizes SNAPPED to a small set of
+// canonical tiers before keying. Because each layer holds exactly one surface
+// addressed by normalized UV, resampling a surface to another tile size is a
+// pure RESOLUTION change with no UV math anywhere (and `_liftChannel` above
+// already resamples nra channels for precisely this reason). So the tier sets
+// are a real, implementable dial, and `snapped` prices each setting in buckets
+// AND in array-texture megabytes — the two halves of that trade.
+//
+// This computes everything FROM THE LIVE SCENE using the atlas's OWN key
+// functions (`_stateKeyOf`, `_bucketKeyFor`, `_perLayerBytesFor`,
+// `_layerCapacityFor`) rather than a transcription of them — the same rule
+// `bc7AtlasShouldDefer` states for the regression suite. If a key function
+// changes, this projection changes with it, because it IS that function.
+//
+// TWO STATE KEYS ARE REPORTED, AND THE GAP BETWEEN THEM IS THE POINT.
+// `_stateKeyOf` encodes transparent / alphaTest / depthWrite / blending / wrap.
+// It does NOT encode `side` (`makeArrayMaterial` hardcodes DoubleSide),
+// `polygonOffset` (the `staticBias` / `floorBias` derived clones exist for
+// nothing else — materials.js `staticBiasMaterials` / `floorBiasMaterials`),
+// `emissive` (the Luminosity term the array material drops), or `castShadow` /
+// `receiveShadow` (per-BUCKET flags a merge would have to flatten). Those
+// omissions are survivable for the atlas's population — lone props, one per
+// material — and are NOT survivable across a batched population, where
+// flattening a depth bias is z-fighting and flattening sidedness is the
+// `?perPolyCull` decision reversed. `strict` re-keys with all of them included:
+// it is the floor a merge can reach WITHOUT changing the image, and the gap
+// between it and `class` is a visual bill, not a saving.
+//
+// Read-only, allocation-light, never called by the app. Costs nothing unless a
+// probe calls `window.__statMergeProjection()`.
+// ===========================================================================
+
+// Canonical tile tiers to price. Each entry is a SQUARE side length; a surface
+// snaps to the tier nearest its geometric mean side in log space, so a 128x512
+// lands with the 256s rather than being torn between two tiers. One tier
+// collapses the axis entirely (the 37-bucket ceiling); three keeps most of the
+// resolution and most of the fragmentation. The point is not to pick one here —
+// it is to price all three off the same live population.
+const _PROJ_TIER_SETS = [[512], [256, 1024], [128, 512, 2048]];
+
+/**
+ * The (w, h, bc7) a texture would be atlased at, or null when it cannot be
+ * atlased at all. Mirrors the feed's own reads: `image.width/height` for RGBA8,
+ * and `isBc7AtlasTexture` for compressed payloads (whose bytes live in
+ * `mipmaps[0].data` while `image` carries only the dims).
+ */
+function _projTileOf(tex) {
+  if (!tex) return null;
+  const bc7 = isBc7AtlasTexture(tex);
+  const img = tex.image;
+  const w = (img && img.width) | 0;
+  const h = (img && img.height) | 0;
+  if (!w || !h) return null;
+  return { w, h, bc7 };
+}
+
+/** Nearest canonical tier to this tile's geometric-mean side, in log space. */
+function _projSnap(w, h, tiers) {
+  const g = Math.sqrt(Math.max(1, w) * Math.max(1, h));
+  let best = tiers[0];
+  let bestD = Infinity;
+  for (const t of tiers) {
+    const d = Math.abs(Math.log(g / t));
+    if (d < bestD) { bestD = d; best = t; }
+  }
+  return best;
+}
+
+/**
+ * Everything `_stateKeyOf` deliberately leaves out, appended. See the section
+ * header: each of these is a property the bucket material would have to flatten
+ * across its members, and each has a live population that would notice.
+ */
+function _projStrictStateKeyOf(mat, bm) {
+  const off = mat.polygonOffset
+    ? `p${mat.polygonOffsetFactor}.${mat.polygonOffsetUnits}`
+    : "p-";
+  const emi = mat.emissive
+    ? `e${(mat.emissive.getHex() >>> 0).toString(16)}.${Number(mat.emissiveIntensity ?? 1).toFixed(3)}`
+    : "e-";
+  return `${_stateKeyOf(mat)}|s${mat.side}|${off}|${emi}` +
+    `|sh${bm.castShadow ? 1 : 0}${bm.receiveShadow ? 1 : 0}`;
+}
+
+/**
+ * Is this bucket actually SUBMITTED? Visibility up the parent chain plus a live
+ * instance. This is the population the whole projection is about (correction 1):
+ * a design that halves resident buckets but not drawn ones is worth exactly the
+ * 0.00 ms the region-width sweep measured.
+ *
+ * `visible === undefined` counts as visible so a headless fixture (a plain
+ * object standing in for a BatchedMesh) is drawn by default; the app always sets
+ * it. Frustum culling is NOT re-derived here — three does it inside
+ * `render()` and this probe runs between frames, so `visible` plus a nonzero
+ * instance count is the honest available signal. Cross-check the result against
+ * `renderer.info.render.calls` before quoting it.
+ */
+function _projDrawn(bm) {
+  if ((bm.userData?.instances | 0) <= 0) return false;
+  for (let o = bm; o; o = o.parent) if (o.visible === false) return false;
+  return true;
+}
+
+/**
+ * Project the bucket count and texture-array memory of merging the cross-LB
+ * statics batcher's live buckets into array-texture buckets.
+ *
+ * `root` defaults to `window.liveScene3d.scene`. Counts only buckets carrying
+ * `__staticBatchCrossLb` (static_batch_x.js `_getOrCreateBucket`) — the atlas's
+ * own `__statAtlasCrossLb` buckets are already merged and are reported
+ * separately so the two populations are never conflated.
+ *
+ * Returns `{ all, drawn }` projections plus the shared class/layer census.
+ * `drawn` is the one that pays.
+ */
+export function projectStatMergeBuckets(root) {
+  const scene = root ||
+    (typeof window !== "undefined" ? window.liveScene3d?.scene : null);
+  if (!scene || typeof scene.traverse !== "function") {
+    return { error: "no scene — pass a root or wait for window.liveScene3d" };
+  }
+
+  const recs = [];
+  let atlasBuckets = 0;
+  let batchBuckets = 0;
+  let drawnBuckets = 0;
+  let instances = 0;
+  let drawnInstances = 0;
+  // Members that cannot merge at all, by reason. Nothing is subtracted for them
+  // — a blocked bucket keeps its own draw — so they are the residue the design
+  // must still carry, and they are what makes any projection a floor rather than
+  // a promise. Counted over the DRAWN population too, since that is what costs.
+  const blocked = { noMap: 0, noTile: 0, deformed: 0, nonStandard: 0 };
+  const blockedDrawn = { noMap: 0, noTile: 0, deformed: 0, nonStandard: 0 };
+
+  scene.traverse((o) => {
+    if (!o || !o.isBatchedMesh) return;
+    const ud = o.userData || {};
+    if (ud.__statAtlasCrossLb) { atlasBuckets += 1; return; }
+    if (!ud.__staticBatchCrossLb) return;
+    batchBuckets += 1;
+    instances += ud.instances | 0;
+    const drawn = _projDrawn(o);
+    if (drawn) { drawnBuckets += 1; drawnInstances += ud.instances | 0; }
+    const bump = (why) => { blocked[why] += 1; if (drawn) blockedDrawn[why] += 1; };
+    const mat = o.material;
+    if (!mat) { bump("noMap"); return; }
+    // The three gates that reject a member OUTRIGHT rather than fragmenting it.
+    // `deformation.` is the MECH-B wind-sway variant the atlas already refuses
+    // (`ptDeformed`, ~:1464): an array material replaces the member's material
+    // wholesale and would silently freeze the sway.
+    if (typeof mat.userData?.__vfxSetKey === "string" &&
+        mat.userData.__vfxSetKey.includes("deformation.")) { bump("deformed"); return; }
+    if (!mat.isMeshStandardMaterial) { bump("nonStandard"); return; }
+    if (!mat.map) { bump("noMap"); return; }
+    const tile = _projTileOf(mat.map);
+    if (!tile) { bump("noTile"); return; }
+    recs.push({
+      region: ud.regionKey ?? "?",
+      matId: mat.id,
+      texUuid: mat.map.uuid,
+      w: tile.w, h: tile.h, bc7: tile.bc7,
+      stateKey: _stateKeyOf(mat),
+      strictKey: _projStrictStateKeyOf(mat, o),
+      drawn,
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Projections over one population (all buckets, or the drawn subset).
+  // -------------------------------------------------------------------------
+  function project(rows) {
+    const today = new Set();
+    const regionClass = new Set();
+    const regionStrict = new Set();
+    const regionState = new Set();
+    const regions = new Set();
+    const tiles = new Set();
+    const states = new Set();
+    const values = new Set();
+    const classKeys = new Map(); // classKey -> { w, h, bc7, texUuids, regions }
+    for (const r of rows) {
+      regions.add(r.region);
+      states.add(r.stateKey);
+      values.add(`${r.texUuid}|${r.stateKey}`);
+      tiles.add(`${r.w}x${r.h}${r.bc7 ? "f7" : "f8"}`);
+      today.add(`${r.region}#${r.matId}`);
+      const classKey = _bucketKeyFor(r.w, r.h, r.stateKey, r.bc7);
+      regionClass.add(`${r.region}#${classKey}`);
+      regionStrict.add(`${r.region}#${_bucketKeyFor(r.w, r.h, r.strictKey, r.bc7)}`);
+      regionState.add(`${r.region}#${r.stateKey}`);
+      let c = classKeys.get(classKey);
+      if (!c) { c = { w: r.w, h: r.h, bc7: r.bc7, texUuids: new Set(), regions: new Set() }; classKeys.set(classKey, c); }
+      c.texUuids.add(r.texUuid);
+      c.regions.add(r.region);
+    }
+
+    // Texture-array memory, both scopings. THE number that decides the design's
+    // shape: the atlas's arrays are GLOBAL and refcount a layer once per
+    // distinct surface, so `sharedMB` is what a global layer pool costs.
+    // Making the ARRAYS region-scoped instead (the naive reading of "merge
+    // within a region") re-cuts a layer per region the surface appears in —
+    // `regionalMB` — and that multiplier is the whole reason the design keeps
+    // arrays global while keeping the BatchedMeshes regional.
+    let sharedLayers = 0, regionLayers = 0, sharedBytes = 0, regionBytes = 0, capped = 0;
+    const classes = [];
+    for (const [key, c] of classKeys) {
+      const per = _perLayerBytesFor(c.w, c.h, c.bc7);
+      const cap = _layerCapacityFor(c.w, c.h, c.bc7);
+      sharedLayers += c.texUuids.size;
+      sharedBytes += c.texUuids.size * per;
+      // Upper bound: every surface in every region the class touches. The true
+      // figure is between this and the shared one; the UPPER bound is the one
+      // that decides feasibility, so it is the one reported.
+      regionLayers += c.texUuids.size * c.regions.size;
+      regionBytes += c.texUuids.size * c.regions.size * per;
+      if (c.texUuids.size > cap) capped += 1;
+      classes.push({ key, w: c.w, h: c.h, bc7: c.bc7, surfaces: c.texUuids.size,
+        regions: c.regions.size, capacity: cap, perLayerKiB: Math.round(per / 1024) });
+    }
+    classes.sort((a, b) => b.surfaces - a.surfaces);
+
+    // The tile axis, priced. Snapping to canonical tiers collapses it toward
+    // `regionState` at the cost of resampling every surface — and of memory,
+    // because a small tile snapped UP costs its tier's full layer.
+    const snapped = _PROJ_TIER_SETS.map((tiers) => {
+      const rc = new Set(), rs = new Set();
+      const pools = new Map(); // snapKey -> Set<texUuid>
+      for (const r of rows) {
+        const t = _projSnap(r.w, r.h, tiers);
+        const ck = _bucketKeyFor(t, t, r.stateKey, r.bc7);
+        rc.add(`${r.region}#${ck}`);
+        rs.add(`${r.region}#${_bucketKeyFor(t, t, r.strictKey, r.bc7)}`);
+        let p = pools.get(ck);
+        if (!p) { p = { t, bc7: r.bc7, uuids: new Set() }; pools.set(ck, p); }
+        p.uuids.add(r.texUuid);
+      }
+      let bytes = 0, layers = 0;
+      for (const p of pools.values()) {
+        layers += p.uuids.size;
+        bytes += p.uuids.size * _perLayerBytesFor(p.t, p.t, p.bc7);
+      }
+      return { tiers, regionClass: rc.size, regionStrict: rs.size,
+        pools: pools.size, layers, sharedMB: +(bytes / (1024 * 1024)).toFixed(1) };
+    });
+
+    const mb = (b) => +(b / (1024 * 1024)).toFixed(1);
+    return {
+      buckets: {
+        today: today.size,
+        regionClass: regionClass.size,   // (region, tile, state, format) — the design
+        regionStrict: regionStrict.size, // + side/polygonOffset/emissive/shadow
+        regionState: regionState.size,   // (region, state) — the idealised ceiling
+        globalClasses: classKeys.size,   // distinct array-texture pools needed
+      },
+      regions: regions.size,
+      distinctTiles: tiles.size,
+      distinctStates: states.size,
+      distinctValues: values.size,
+      layers: { shared: sharedLayers, regional: regionLayers,
+        sharedMB: mb(sharedBytes), regionalMB: mb(regionBytes), classesOverCapacity: capped },
+      snapped,
+      classes,
+    };
+  }
+
+  return {
+    // Populations. `all.buckets.today` must equal `batchBuckets` minus the
+    // blocked ones; a divergence means a bucket lost its `regionKey`.
+    batchBuckets, drawnBuckets, atlasBuckets, instances, drawnInstances,
+    blocked, blockedDrawn,
+    all: project(recs),
+    // THE ONE THAT PAYS (correction 1). Resident buckets that never get
+    // submitted cost nothing, and merging them saves nothing.
+    drawn: project(recs.filter((r) => r.drawn)),
+  };
+}
+
+if (typeof window !== "undefined") {
+  window.__statMergeProjection = (root) => {
+    try { return projectStatMergeBuckets(root); } catch (e) { return { error: String(e?.message ?? e) }; }
+  };
+}
+
+// ===========================================================================
 // Test seams (X7). The module memoizes its flags off `window.location` and
 // keeps all bucket state module-global, so a node regression run needs a way to
 // re-arm both between cases. Nothing in the app calls these.
