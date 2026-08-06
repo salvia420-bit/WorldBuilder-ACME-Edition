@@ -1910,22 +1910,121 @@ function _projStrictStateKeyOf(mat, bm) {
 }
 
 /**
- * Is this bucket actually SUBMITTED? Visibility up the parent chain plus a live
- * instance. This is the population the whole projection is about (correction 1):
- * a design that halves resident buckets but not drawn ones is worth exactly the
- * 0.00 ms the region-width sweep measured.
+ * Is this bucket VISIBLE? Visibility up the parent chain plus a live instance.
+ *
+ * ⚠ THIS IS NOT THE SUBMITTED POPULATION, AND THE NAME `drawn` OVERSTATES IT.
+ * Frustum culling is not re-derived here — three does it inside `render()` and
+ * this probe runs between frames — so every resident bucket in a visible group
+ * with instances passes. The 2026-08-06 live run is the proof: it reported
+ * `drawnBuckets 342` against `batchBuckets 346`, i.e. the filter removed FOUR
+ * buckets, while the independently measured submitted count for the same
+ * population at the same place was 177 (`2026-08-06-frame-cost-structure-
+ * measured.md` §2, `statics | static-batch-c`) and the region-width sweep put it
+ * at 129 of 376. So `drawn` here is a RESIDENT-scale number wearing a
+ * submitted-scale name, and every ms figure scaled off it is high by ~2x.
+ *
+ * That is the same members-vs-draws / resident-vs-submitted confusion that has
+ * now produced three separate 2x overestimates on this workload (§0 of the
+ * design doc records the first two). Rather than delete the field — the design
+ * doc and its results JSON quote it — `armStatMergeSubmittedSampler` below adds
+ * the honest population next to it, and callers should quote `submitted`.
  *
  * `visible === undefined` counts as visible so a headless fixture (a plain
- * object standing in for a BatchedMesh) is drawn by default; the app always sets
- * it. Frustum culling is NOT re-derived here — three does it inside
- * `render()` and this probe runs between frames, so `visible` plus a nonzero
- * instance count is the honest available signal. Cross-check the result against
- * `renderer.info.render.calls` before quoting it.
+ * object standing in for a BatchedMesh) is visible by default; the app always
+ * sets it.
  */
 function _projDrawn(bm) {
   if ((bm.userData?.instances | 0) <= 0) return false;
   for (let o = bm; o; o = o.parent) if (o.visible === false) return false;
   return true;
+}
+
+// Per-bucket submitted-frame counter stamped by the sampler below. Lives on
+// userData so it dies with the BatchedMesh and can never outlive one.
+const _PROJ_SUBMIT_FRAMES = "__projSubmitFrames";
+const _PROJ_SUBMIT_ORIG = "__projSubmitOrig";
+
+/**
+ * Arm the SUBMITTED-bucket sampler: count, per bucket, the frames in which three
+ * actually submitted it.
+ *
+ * WHY A SAMPLER AND NOT A FRUSTUM TEST. Re-deriving the cull here would be a
+ * transcription of `WebGLRenderer.projectObject` — the exact mistake the
+ * projection's header forbids ("computes everything FROM THE LIVE SCENE using
+ * the atlas's OWN key functions rather than a transcription of them"). Three
+ * calls `onBeforeRender` on an object if and only if it reaches
+ * `renderObject`, i.e. exactly when it survives the cull and is drawn, so
+ * wrapping it measures the real thing rather than a model of it. It is also the
+ * same instrument `2026-08-06-frame-cost-structure-measured.md` used to attribute
+ * per-draw µs, so the two censuses are directly comparable.
+ *
+ * BatchedMesh defines `onBeforeRender` on its PROTOTYPE (the multidraw rebuild).
+ * We shadow it with an own property that increments and then delegates, and
+ * `disarm` deletes the own property to restore the prototype lookup — never
+ * assigning the captured function back, which would pin a stale method.
+ *
+ * Costs one function call per submitted bucket per frame while armed (~µs at
+ * these counts, but non-zero): DISARM BEFORE QUOTING A FRAME TIME.
+ *
+ * Usage: `window.__statMergeArmSubmitted()`, let a couple of seconds of frames
+ * run, then `window.__statMergeProjection()` — the `submitted` projection is
+ * populated — then `window.__statMergeDisarmSubmitted()`.
+ *
+ * @param {object} [root] scene root; defaults to `window.liveScene3d.scene`
+ * @returns {{armed:number}|{error:string}}
+ */
+export function armStatMergeSubmittedSampler(root) {
+  const scene = root ||
+    (typeof window !== "undefined" ? window.liveScene3d?.scene : null);
+  if (!scene || typeof scene.traverse !== "function") {
+    return { error: "no scene — pass a root or wait for window.liveScene3d" };
+  }
+  let armed = 0;
+  scene.traverse((o) => {
+    if (!o || !o.isBatchedMesh) return;
+    const ud = o.userData;
+    if (!ud || (!ud.__staticBatchCrossLb && !ud.__statAtlasCrossLb)) return;
+    ud[_PROJ_SUBMIT_FRAMES] = 0; // re-arming resets the count
+    if (Object.prototype.hasOwnProperty.call(o, "onBeforeRender")) { armed += 1; return; }
+    ud[_PROJ_SUBMIT_ORIG] = o.onBeforeRender; // the prototype's multidraw rebuild
+    o.onBeforeRender = function (...args) {
+      const u = this.userData;
+      u[_PROJ_SUBMIT_FRAMES] = (u[_PROJ_SUBMIT_FRAMES] | 0) + 1;
+      const orig = u[_PROJ_SUBMIT_ORIG];
+      if (typeof orig === "function") return orig.apply(this, args);
+      return undefined;
+    };
+    armed += 1;
+  });
+  return { armed };
+}
+
+/**
+ * Disarm the sampler: drop the own `onBeforeRender` so the prototype's runs
+ * again. Counts are LEFT IN PLACE so a projection can still be read after
+ * disarming (which is the order a measurement wants: disarm, then quote).
+ * @param {object} [root] @returns {{disarmed:number}|{error:string}}
+ */
+export function disarmStatMergeSubmittedSampler(root) {
+  const scene = root ||
+    (typeof window !== "undefined" ? window.liveScene3d?.scene : null);
+  if (!scene || typeof scene.traverse !== "function") {
+    return { error: "no scene — pass a root or wait for window.liveScene3d" };
+  }
+  let disarmed = 0;
+  scene.traverse((o) => {
+    if (!o || !o.isBatchedMesh) return;
+    if (!Object.prototype.hasOwnProperty.call(o, "onBeforeRender")) return;
+    delete o.onBeforeRender;
+    if (o.userData) delete o.userData[_PROJ_SUBMIT_ORIG];
+    disarmed += 1;
+  });
+  return { disarmed };
+}
+
+/** Did this bucket reach `renderObject` at least once since the sampler armed? */
+function _projSubmitted(bm) {
+  return ((bm.userData?.[_PROJ_SUBMIT_FRAMES] | 0) > 0);
 }
 
 /**
@@ -1937,8 +2036,16 @@ function _projDrawn(bm) {
  * own `__statAtlasCrossLb` buckets are already merged and are reported
  * separately so the two populations are never conflated.
  *
- * Returns `{ all, drawn }` projections plus the shared class/layer census.
- * `drawn` is the one that pays.
+ * Returns `{ all, drawn, submitted, deformed }` projections plus the shared
+ * class/layer census. `submitted` is the one that pays — and it is populated
+ * only after `armStatMergeSubmittedSampler` has seen frames; `drawn` is a
+ * resident-scale over-count kept for continuity with the 2026-08-06 results
+ * JSON (see `_projDrawn`).
+ *
+ * COUNTING UNIT, stated because it has been misread: every count here is
+ * BUCKETS (one per BatchedMesh), never members or instances. `blocked.deformed`
+ * is 193 BUCKETS in the 2026-08-06 run, not 193 props — instance totals are
+ * reported separately as `instances` / `drawnInstances`.
  */
 export function projectStatMergeBuckets(root) {
   const scene = root ||
@@ -1948,17 +2055,29 @@ export function projectStatMergeBuckets(root) {
   }
 
   const recs = [];
+  // The `deformation.` residue, projected SEPARATELY rather than discarded. A
+  // count alone cannot price it: 193 blocked buckets are worth a lot if they
+  // collapse to a handful and nothing if they are already near their floor, and
+  // that collapse factor is the whole question. These rows are keyed exactly
+  // like `recs`, so `deformed.*.buckets.today` minus `regionClass` IS the saving
+  // an un-blocking would buy, in the same units as the main projection.
+  const defRecs = [];
+  const defSetKeys = new Map(); // __vfxSetKey -> buckets carrying it
   let atlasBuckets = 0;
   let batchBuckets = 0;
   let drawnBuckets = 0;
+  let submittedBuckets = 0;
+  let sampled = 0;          // buckets carrying a sampler stamp (armed or not)
   let instances = 0;
   let drawnInstances = 0;
-  // Members that cannot merge at all, by reason. Nothing is subtracted for them
-  // — a blocked bucket keeps its own draw — so they are the residue the design
-  // must still carry, and they are what makes any projection a floor rather than
-  // a promise. Counted over the DRAWN population too, since that is what costs.
+  let submittedInstances = 0;
+  // BUCKETS that cannot merge at all, by reason — one count per BatchedMesh,
+  // never per member. Nothing is subtracted for them — a blocked bucket keeps
+  // its own draw — so they are the residue the design must still carry, and they
+  // are what makes any projection a floor rather than a promise.
   const blocked = { noMap: 0, noTile: 0, deformed: 0, nonStandard: 0 };
   const blockedDrawn = { noMap: 0, noTile: 0, deformed: 0, nonStandard: 0 };
+  const blockedSubmitted = { noMap: 0, noTile: 0, deformed: 0, nonStandard: 0 };
 
   scene.traverse((o) => {
     if (!o || !o.isBatchedMesh) return;
@@ -1969,28 +2088,60 @@ export function projectStatMergeBuckets(root) {
     instances += ud.instances | 0;
     const drawn = _projDrawn(o);
     if (drawn) { drawnBuckets += 1; drawnInstances += ud.instances | 0; }
-    const bump = (why) => { blocked[why] += 1; if (drawn) blockedDrawn[why] += 1; };
+    if (ud[_PROJ_SUBMIT_FRAMES] !== undefined) sampled += 1;
+    const submitted = _projSubmitted(o);
+    if (submitted) { submittedBuckets += 1; submittedInstances += ud.instances | 0; }
+    const bump = (why) => {
+      blocked[why] += 1;
+      if (drawn) blockedDrawn[why] += 1;
+      if (submitted) blockedSubmitted[why] += 1;
+    };
     const mat = o.material;
     if (!mat) { bump("noMap"); return; }
-    // The three gates that reject a member OUTRIGHT rather than fragmenting it.
+    // Build the row a merge would key on, or null when a later gate rejects it.
+    // Shared by the mergeable and the deformed populations so the residue is
+    // priced with the SAME key functions — a residue scored by a second,
+    // hand-rolled key would be exactly the transcription this file forbids.
+    const rowOf = (why) => {
+      if (!mat.isMeshStandardMaterial) { if (why) why("nonStandard"); return null; }
+      if (!mat.map) { if (why) why("noMap"); return null; }
+      const tile = _projTileOf(mat.map);
+      if (!tile) { if (why) why("noTile"); return null; }
+      return {
+        region: ud.regionKey ?? "?",
+        matId: mat.id,
+        texUuid: mat.map.uuid,
+        w: tile.w, h: tile.h, bc7: tile.bc7,
+        stateKey: _stateKeyOf(mat),
+        strictKey: _projStrictStateKeyOf(mat, o),
+        drawn, submitted,
+      };
+    };
+    // The gates that reject a bucket OUTRIGHT rather than fragmenting it.
     // `deformation.` is the MECH-B wind-sway variant the atlas already refuses
     // (`ptDeformed`, ~:1464): an array material replaces the member's material
-    // wholesale and would silently freeze the sway.
+    // wholesale and would silently freeze the sway. Note what this bucket IS,
+    // though — a BatchedMesh already rendering a windSwayGpu variant, i.e. live
+    // proof that the sway survives batching (per_instance.js carries a
+    // `USE_BATCHING` branch and three applies `batchingMatrix` in
+    // `project_vertex`, AFTER the `begin_vertex` seam the shear writes). The
+    // block is about MATERIAL SUBSTITUTION by the array merge, not about
+    // batching, which is why the row is still scored below.
     if (typeof mat.userData?.__vfxSetKey === "string" &&
-        mat.userData.__vfxSetKey.includes("deformation.")) { bump("deformed"); return; }
-    if (!mat.isMeshStandardMaterial) { bump("nonStandard"); return; }
-    if (!mat.map) { bump("noMap"); return; }
-    const tile = _projTileOf(mat.map);
-    if (!tile) { bump("noTile"); return; }
-    recs.push({
-      region: ud.regionKey ?? "?",
-      matId: mat.id,
-      texUuid: mat.map.uuid,
-      w: tile.w, h: tile.h, bc7: tile.bc7,
-      stateKey: _stateKeyOf(mat),
-      strictKey: _projStrictStateKeyOf(mat, o),
-      drawn,
-    });
+        mat.userData.__vfxSetKey.includes("deformation.")) {
+      bump("deformed");
+      // WHICH deformation sets, not just how many. `deformation.` also matches
+      // `deformation.tipFlex`, and the cheapest safe merge (key the bucket by
+      // __vfxSetKey) is only cheap while the set count is small — one set splits
+      // each class in two, five sets split it in six.
+      const k = mat.userData.__vfxSetKey;
+      defSetKeys.set(k, (defSetKeys.get(k) | 0) + 1);
+      const r = rowOf(null); // no second bump — the bucket is already counted once
+      if (r) defRecs.push(r);
+      return;
+    }
+    const rec = rowOf(bump);
+    if (rec) recs.push(rec);
   });
 
   // -------------------------------------------------------------------------
@@ -2096,16 +2247,43 @@ export function projectStatMergeBuckets(root) {
     // blocked ones; a divergence means a bucket lost its `regionKey`.
     batchBuckets, drawnBuckets, atlasBuckets, instances, drawnInstances,
     blocked, blockedDrawn,
+    // Every count above and below is BUCKETS unless its name says instances.
+    // Stated in the payload because the field names alone have been read as
+    // members three times, at a cost of two 2x overestimates.
+    units: { buckets: "BatchedMesh nodes", blocked: "buckets", instances: "instances" },
     all: project(recs),
-    // THE ONE THAT PAYS (correction 1). Resident buckets that never get
-    // submitted cost nothing, and merging them saves nothing.
+    // Resident-scale, despite the name — `_projDrawn` cannot see the frustum.
+    // Kept because the 2026-08-06 results JSON quotes it. Do not price off it.
     drawn: project(recs.filter((r) => r.drawn)),
+    // THE ONE THAT PAYS. Null until `armStatMergeSubmittedSampler` has seen
+    // frames — an absent measurement must read as absent, never as zero.
+    submittedSampled: sampled > 0,
+    submittedBuckets, submittedInstances, blockedSubmitted,
+    submitted: sampled > 0 ? project(recs.filter((r) => r.submitted)) : null,
+    // The `deformation.` residue, priced in the same units by the same keys.
+    // `today - regionClass` on each population is what un-blocking would buy.
+    deformed: {
+      buckets: blocked.deformed,
+      drawnBuckets: blockedDrawn.deformed,
+      submittedBuckets: blockedSubmitted.deformed,
+      setKeys: Object.fromEntries(defSetKeys),
+      all: project(defRecs),
+      drawn: project(defRecs.filter((r) => r.drawn)),
+      submitted: sampled > 0 ? project(defRecs.filter((r) => r.submitted)) : null,
+    },
   };
 }
 
 if (typeof window !== "undefined") {
   window.__statMergeProjection = (root) => {
     try { return projectStatMergeBuckets(root); } catch (e) { return { error: String(e?.message ?? e) }; }
+  };
+  // Arm → let frames run → project → disarm. See armStatMergeSubmittedSampler.
+  window.__statMergeArmSubmitted = (root) => {
+    try { return armStatMergeSubmittedSampler(root); } catch (e) { return { error: String(e?.message ?? e) }; }
+  };
+  window.__statMergeDisarmSubmitted = (root) => {
+    try { return disarmStatMergeSubmittedSampler(root); } catch (e) { return { error: String(e?.message ?? e) }; }
   };
 }
 

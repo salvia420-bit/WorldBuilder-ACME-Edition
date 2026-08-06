@@ -57,12 +57,33 @@
 //            between that and the unsnapped count; and snapping UP must cost
 //            memory, or the dial would look free and it is not.
 //
+// 2026-08-06, second pass — a THIRD 2x, and this one was the instrument's fault.
+// `blockedDrawn.deformed = 193` was read as 193 members and priced at 193 draws;
+// it is 193 BUCKETS. And `drawn` cannot see the frustum, so the live run's
+// "342 drawn of 346 resident" is a resident-scale number wearing a
+// submitted-scale name — against 177 submitted measured independently for the
+// same population. Both are now assertions:
+//
+//   PART 10 — the counting unit is BUCKETS. A 1,000-instance blocked bucket
+//             bumps the blocker once, and the payload states its own unit.
+//   PART 11 — the deformation residue is PROJECTED, not merely counted, so its
+//             collapse factor (today -> regionClass) is readable. A count alone
+//             cannot say whether un-blocking it is worth 1 ms or 0.1 ms.
+//   PART 12 — the SUBMITTED sampler. Counting `onBeforeRender` calls measures
+//             the draws three really made, rather than transcribing its cull;
+//             un-armed it reports null, because an absent measurement quoted as
+//             zero is the same error one rung down.
+//
 // Run:
 //   cd apps/holtburger-web/
 //   node test_static_merge_projection.mjs
 
 import * as THREE from "three";
-import { projectStatMergeBuckets } from "./scene3d/static_atlas.js";
+import {
+  projectStatMergeBuckets,
+  armStatMergeSubmittedSampler,
+  disarmStatMergeSubmittedSampler,
+} from "./scene3d/static_atlas.js";
 
 let failed = 0, passed = 0;
 function check(name, ok, detail) {
@@ -377,6 +398,125 @@ console.log("\nhygiene");
   check("no scene ⇒ an error, not a confident zero", typeof e.error === "string", e.error);
   check("a throwing traverse is caught by the window wrapper contract",
     typeof projectStatMergeBuckets === "function");
+}
+
+// ---------------------------------------------------------------------------
+// PART 10 — THE COUNTING UNIT IS BUCKETS. `blockedDrawn.deformed = 193` was read
+// as "193 members" and priced at 193 draws; it is 193 BatchedMesh nodes, and a
+// bucket holds many members. One bucket with a thousand instances must bump the
+// blocker exactly once, or every ms figure derived from it is a fiction.
+// ---------------------------------------------------------------------------
+console.log("\nPART 10 — blockers are counted in BUCKETS, never members");
+{
+  const deformed = mat(tex(64, 64));
+  deformed.userData.__vfxSetKey = "deformation.windSwayGpu";
+  const p = projectStatMergeBuckets(root([
+    bucket("2x2", deformed, { userData: { __staticBatchCrossLb: true, regionKey: "2x2", instances: 1000 } }),
+  ]));
+  check("a 1,000-instance blocked bucket bumps the blocker ONCE",
+    p.blocked.deformed === 1, `deformed=${p.blocked.deformed}`);
+  check("its members are reported separately, as instances",
+    p.instances === 1000, `instances=${p.instances}`);
+  check("the payload states its own unit so the field name cannot be misread",
+    p.units && p.units.blocked === "buckets", JSON.stringify(p.units));
+}
+
+// ---------------------------------------------------------------------------
+// PART 11 — THE DEFORMATION RESIDUE IS PRICED, NOT JUST COUNTED. A count cannot
+// say what un-blocking it would buy: 193 blocked buckets are worth a lot if they
+// collapse to a handful and nothing if they are already near their floor. The
+// residue must therefore be projected with the SAME keys as the mergeable
+// population — and it must stay OUT of that population's totals.
+// ---------------------------------------------------------------------------
+console.log("\nPART 11 — the deformation residue is projected, not discarded");
+{
+  const sway = () => {
+    const m = mat(tex(64, 64));
+    m.userData.__vfxSetKey = "deformation.windSwayGpu";
+    return m;
+  };
+  // Three sway buckets in one region: two share a tile+state (they would merge),
+  // the third differs in tile size (it would not). Plus one ordinary bucket.
+  const p = projectStatMergeBuckets(root([
+    bucket("4x4", sway()),
+    bucket("4x4", sway()),
+    bucket("4x4", (() => { const m = sway(); m.map = tex(256, 256); return m; })()),
+    bucket("4x4", mat(tex(64, 64))),
+  ]));
+  check("the residue never leaks into the mergeable projection",
+    p.all.buckets.today === 1, `today=${p.all.buckets.today}`);
+  check("the residue is projected on its own", p.deformed.buckets === 3 &&
+    p.deformed.all.buckets.today === 3, JSON.stringify(p.deformed.buckets));
+  check("and its COLLAPSE FACTOR is visible — 3 buckets to 2 classes",
+    p.deformed.all.buckets.regionClass === 2,
+    `regionClass=${p.deformed.all.buckets.regionClass}`);
+  check("the residue names its sets — one set splits a class in two, five in six",
+    p.deformed.setKeys["deformation.windSwayGpu"] === 3,
+    JSON.stringify(p.deformed.setKeys));
+  check("the tile axis splits the residue too (it is not idealised away)",
+    p.deformed.all.buckets.regionClass > p.deformed.all.buckets.regionState,
+    `class=${p.deformed.all.buckets.regionClass} state=${p.deformed.all.buckets.regionState}`);
+  // A deformed bucket that ALSO fails a later gate must be counted once, as
+  // deformed, and must not appear in either projection's rows.
+  const q = projectStatMergeBuckets(root([
+    bucket("4x4", (() => { const m = new THREE.MeshStandardMaterial(); m.userData.__vfxSetKey = "deformation.windSwayGpu"; return m; })()),
+  ]));
+  check("a deformed bucket that also has no map is counted ONCE, as deformed",
+    q.blocked.deformed === 1 && q.blocked.noMap === 0 &&
+    q.deformed.all.buckets.today === 0, JSON.stringify(q.blocked));
+}
+
+// ---------------------------------------------------------------------------
+// PART 12 — THE SUBMITTED SAMPLER. `_projDrawn` cannot see the frustum: the live
+// 2026-08-06 run reported 342 "drawn" of 346 resident while the measured
+// submitted count for the same population was 177. So `drawn` is resident-scale,
+// and an absent submitted measurement must read as ABSENT rather than as zero —
+// a null that gets quoted as 0 ms is the same class of error one rung down.
+// ---------------------------------------------------------------------------
+console.log("\nPART 12 — the submitted sampler measures draws, not visibility");
+{
+  const nodes = [bucket("5x5", mat(tex(64, 64))), bucket("5x5", mat(tex(128, 128)))];
+  // BatchedMesh keeps onBeforeRender on its PROTOTYPE; the fixture stands in for
+  // that with an own-property base so delegation and restore are both exercised.
+  let baseCalls = 0;
+  for (const n of nodes) Object.setPrototypeOf(n, { onBeforeRender() { baseCalls += 1; } });
+  const r = root(nodes);
+
+  const cold = projectStatMergeBuckets(r);
+  check("un-armed, `submitted` is null — absent, not a confident zero",
+    cold.submitted === null && cold.submittedSampled === false,
+    `sampled=${cold.submittedSampled}`);
+  check("the residue's submitted projection is null too", cold.deformed.submitted === null);
+
+  check("arming reports how many buckets it wrapped",
+    armStatMergeSubmittedSampler(r).armed === 2);
+  // Render one frame in which only the FIRST bucket survives the cull.
+  nodes[0].onBeforeRender();
+  const hot = projectStatMergeBuckets(r);
+  check("only the bucket three actually submitted counts as submitted",
+    hot.submittedBuckets === 1 && hot.submitted.buckets.today === 1,
+    `submitted=${hot.submittedBuckets}`);
+  check("and it differs from `drawn`, which sees both — that gap IS the finding",
+    hot.drawnBuckets === 2 && hot.submittedBuckets === 1,
+    `drawn=${hot.drawnBuckets} submitted=${hot.submittedBuckets}`);
+  check("submitted instances are counted over the submitted buckets only",
+    hot.submittedInstances === 10, `n=${hot.submittedInstances}`);
+  check("the wrapper delegates to the prototype's multidraw rebuild",
+    baseCalls === 1, `baseCalls=${baseCalls}`);
+  check("re-arming resets the counts rather than doubling them",
+    (armStatMergeSubmittedSampler(r), projectStatMergeBuckets(r).submittedBuckets === 0));
+
+  check("disarming restores the prototype method",
+    disarmStatMergeSubmittedSampler(r).disarmed === 2 &&
+    !Object.prototype.hasOwnProperty.call(nodes[0], "onBeforeRender"));
+  nodes[0].onBeforeRender();
+  check("after disarm the prototype runs unwrapped — no lingering per-draw cost",
+    baseCalls === 2, `baseCalls=${baseCalls}`);
+  check("counts survive the disarm, so a measurement can disarm THEN quote",
+    projectStatMergeBuckets(r).submittedSampled === true);
+  check("no scene ⇒ arm/disarm say so instead of silently doing nothing",
+    typeof armStatMergeSubmittedSampler(null).error === "string" &&
+    typeof disarmStatMergeSubmittedSampler(null).error === "string");
 }
 
 console.log("=========================");
