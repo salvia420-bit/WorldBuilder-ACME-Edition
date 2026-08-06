@@ -57,7 +57,8 @@ const factory = new Function(
     "\n; return { __resetStatBatchXForTest, consolidateStaticSingletonsCrossLb, " +
     "evictStaticBatchXForLb, tickStatBatchXOptimize, getStatBatchXStats, " +
     "statBatchNoSortEnabled, __setStatBatchNoSortForTest, " +
-    "statBatchMemoMode, __setStatBatchMemoForTest, __setStatGeomDedupForTest };"
+    "statBatchMemoMode, __setStatBatchMemoForTest, __setStatGeomDedupForTest, " +
+    "statBatchSphereMode, __setStatBatchSphereForTest };"
 );
 const M = factory(THREE);
 
@@ -166,11 +167,15 @@ function additiveMat() {
   return m;
 }
 
-const reset = (mode, slacks, noSort) => {
+const reset = (mode, slacks, noSort, sphere) => {
   M.__resetStatBatchXForTest();
   M.__setStatGeomDedupForTest(false);
   M.__setStatBatchNoSortForTest(!!noSort);
   M.__setStatBatchMemoForTest(mode, slacks);
+  // Every reader here memoises, so a flag left set by one section leaks into
+  // every later one. `?statBatchSphere` defaults to "off" and must be reset
+  // explicitly, not left to `__resetStatBatchXForTest`.
+  M.__setStatBatchSphereForTest(sphere || "off");
 };
 
 // ---------------------------------------------------------------------------
@@ -563,6 +568,236 @@ console.log("\n-- 11. the census the 1070 will be scored on --");
   const off = M.getStatBatchXStats().walk;
   check("53: with both flags off the census still reports the population (mode off, zero calls)",
     off.mode === "off" && off.noSort === false && off.calls === 0 && off.installed === 0);
+}
+
+// ---------------------------------------------------------------------------
+// ?statBatchSphere — the per-instance sphere cache.
+//
+// The load-bearing assertion is the same one section 4 makes for the slack
+// loop, and for the same reason: this walk is a TRANSCRIPTION of three's, and a
+// transcription that has drifted writes another geometry's byte range. So the
+// central check is byte-identity against the real r0.184.0 build — here across a
+// camera that MOVES (the case the memo cannot serve) and across an epoch bump.
+// ---------------------------------------------------------------------------
+console.log("\n-- 12. ?statBatchSphere: flag, install, and the identity under motion --");
+{
+  M.__setStatBatchSphereForTest(undefined);
+  check("54: ?statBatchSphere defaults to \"off\"", M.statBatchSphereMode() === "off");
+
+  reset("off", null, false, "off");
+  const plain = makeBucket(opaqueMat(), 8).bm;
+  check("55: off installs NO override and NO cache state",
+    !Object.prototype.hasOwnProperty.call(plain, "onBeforeRender")
+    && plain.userData.__memo === undefined && plain.userData.__sphereCache === undefined);
+
+  reset("off", null, false, "on");
+  const armed = makeBucket(opaqueMat(), 8).bm;
+  check("56: on (with memo off) installs an own-property override plus the epoch state",
+    Object.prototype.hasOwnProperty.call(armed, "onBeforeRender")
+    && armed.onBeforeRender !== THREE.BatchedMesh.prototype.onBeforeRender
+    && armed.userData.__memo !== undefined);
+  check("57: the prototype itself is still NOT patched",
+    !Object.prototype.hasOwnProperty.call(new THREE.BatchedMesh(4, 64, 128, opaqueMat()), "onBeforeRender"));
+
+  // THE IDENTITY, over four poses of a moving camera. Each iteration builds
+  // three's answer first, wipes the arrays so a no-op fails loudly, then builds
+  // ours from the cache — which is NOT rebuilt between poses, since the camera
+  // does not bump the epoch. That is the whole property being tested.
+  reset("off", null, false, "on");
+  const { bm } = makeBucket(opaqueMat(), 300);
+  const cam = makeCamera(70, 28, 70);
+  let allSame = true;
+  let culledSomething = false;
+  for (let step = 0; step < 4; step++) {
+    threeBuild(bm, cam);
+    const want = snapshot(bm);
+    if (want.n > 0 && want.n < bm._instanceInfo.length) culledSomething = true;
+    bm._multiDrawCount = 0;
+    bm._multiDrawStarts.fill(-1); bm._multiDrawCounts.fill(-1);
+    bm._indirectTexture.image.data.fill(0xffff);
+    memoBuild(bm, cam);
+    if (!sameSnapshot(want, snapshot(bm))) allSame = false;
+    moveCam(cam, -9, 1, -7, 0.09);
+  }
+  check("58: cached build is byte-identical to three's at every pose of a MOVING camera", allSame);
+  check("59: and it actually culled something (the identity is not vacuous)", culledSomething);
+
+  const s = M.getStatBatchXStats().walk.sphere;
+  check("60: the cache was built ONCE for four frames — a moving camera does not invalidate it",
+    s.builds === 1 && s.calls === 4,
+    JSON.stringify({ builds: s.builds, calls: s.calls, slotsWalked: s.slotsWalked }));
+  check("61: no fail-soft fallbacks and nothing ineligible on the happy path",
+    s.errors === 0 && s.ineligible === 0);
+  check("62: bytes reports the live Float64 cache (4 doubles per slot)",
+    s.bytes >= bm._instanceInfo.length * 32, `bytes=${s.bytes} slots=${bm._instanceInfo.length}`);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- 13. ?statBatchSphere: invalidation, growth, and eligibility --");
+{
+  // A second feed into the same region runs `setMatrixAt` on the SAME bucket —
+  // the change three does not flag via `_visibilityChanged`, and the exact hole
+  // `_memoInvalidate` exists to close. If the epoch did not carry to the sphere
+  // cache, the new instances would be culled against stale (or absent) spheres.
+  reset("off", null, false, "on");
+  const scene3d = { staticsGroup: new THREE.Group() };
+  const geom = triGeom(1);
+  const mat = opaqueMat();
+  const mk = (n, off) => {
+    const out = [];
+    let s = 999 + off;
+    const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (let i = 0; i < n; i++) out.push(singleton(0x08000001, (rnd() - 0.5) * 400, (rnd() - 0.5) * 400, LB, geom, mat));
+    return out;
+  };
+  M.consolidateStaticSingletonsCrossLb(mk(40, 0), scene3d, LB);
+  const bm = scene3d.staticsGroup.children.find((c) => c.isBatchedMesh);
+  scene3d.staticsGroup.updateMatrixWorld(true);
+  const cam = makeCamera(60, 30, 60);
+  memoBuild(bm, cam);
+  const slotsBefore = bm._instanceInfo.length;
+  const buildsBefore = M.getStatBatchXStats().walk.sphere.builds;
+
+  // grow past the first allocation, from a NEIGHBOURING landblock so the same
+  // 3x3 region bucket is reused rather than a new one created
+  M.consolidateStaticSingletonsCrossLb(mk(260, 7), scene3d, (LB + 0x00010000) >>> 0);
+  scene3d.staticsGroup.updateMatrixWorld(true);
+  const grew = bm._instanceInfo.length > slotsBefore;
+
+  threeBuild(bm, cam);
+  const want = snapshot(bm);
+  bm._multiDrawCount = 0;
+  bm._multiDrawStarts.fill(-1); bm._multiDrawCounts.fill(-1);
+  bm._indirectTexture.image.data.fill(0xffff);
+  memoBuild(bm, cam);
+  const s = M.getStatBatchXStats().walk.sphere;
+  check("63: the feed grew the bucket (the growth path is actually exercised)", grew,
+    `slots ${slotsBefore} -> ${bm._instanceInfo.length}`);
+  check("64: a setMatrixAt feed invalidates the cache and it is REBUILT", s.builds > buildsBefore,
+    JSON.stringify({ before: buildsBefore, after: s.builds }));
+  check("65: and the rebuilt answer is still byte-identical to three's", sameSnapshot(want, snapshot(bm)),
+    `three n=${want.n} ours n=${snapshot(bm).n}`);
+
+  // Sorted buckets are ineligible by construction — three's sorted branch needs
+  // its module-private `_renderList`, so the cache must decline, not improvise.
+  reset("off", null, false, "on");
+  const sorted = makeBucket(translucentMat(), 60).bm;
+  check("66: a sorted bucket really is sorted", sorted.sortObjects === true);
+  const cam2 = makeCamera(60, 30, 60);
+  memoBuild(sorted, cam2);
+  const want2 = snapshot(sorted);
+  threeBuild(sorted, cam2);
+  const s2 = M.getStatBatchXStats().walk.sphere;
+  check("67: a sorted bucket is declined and falls through to three's own loop",
+    s2.ineligible === 1 && s2.builds === 0 && sameSnapshot(want2, snapshot(sorted)));
+
+  // The eviction accounting: a reaped bucket hands its cache bytes back.
+  reset("off", null, false, "on");
+  const sc = { staticsGroup: new THREE.Group() };
+  M.consolidateStaticSingletonsCrossLb(mk(30, 3), sc, LB);
+  const doomed = sc.staticsGroup.children.find((c) => c.isBatchedMesh);
+  sc.staticsGroup.updateMatrixWorld(true);
+  memoBuild(doomed, makeCamera(60, 30, 60));
+  const held = M.getStatBatchXStats().walk.sphere.bytes;
+  M.evictStaticBatchXForLb(LB);
+  check("68: cache bytes are held while the bucket lives and returned when it is reaped",
+    held > 0 && M.getStatBatchXStats().walk.sphere.bytes === 0,
+    JSON.stringify({ held, after: M.getStatBatchXStats().walk.sphere.bytes }));
+}
+
+// ---------------------------------------------------------------------------
+// `=verify` is the tier that makes a stale sphere findable on the 1070 rather
+// than arguable. A verifier that cannot fail is not a verifier, so this asserts
+// BOTH directions: clean on the happy path, and loud on a corrupted cache.
+// ---------------------------------------------------------------------------
+console.log("\n-- 14. ?statBatchSphere=verify catches a stale cache --");
+{
+  reset("off", null, false, "verify");
+  const { bm } = makeBucket(opaqueMat(), 120);
+  const cam = makeCamera(60, 30, 60);
+  memoBuild(bm, cam);
+  let s = M.getStatBatchXStats().walk.sphere;
+  check("69: verify mode checks every visible slot and finds nothing wrong",
+    s.mode === "verify" && s.verifyChecked > 0 && s.verifyFails === 0,
+    JSON.stringify({ checked: s.verifyChecked, fails: s.verifyFails }));
+
+  // Corrupt one entry the way a missed invalidation would: the placement moved,
+  // the cache did not.
+  bm.userData.__sphereCache.arr[0] += 1234.5;
+  memoBuild(bm, cam);
+  s = M.getStatBatchXStats().walk.sphere;
+  check("70: a hand-corrupted entry is reported (the verifier can fail)", s.verifyFails >= 1,
+    JSON.stringify({ fails: s.verifyFails }));
+}
+
+// ---------------------------------------------------------------------------
+// The two flags share one `onBeforeRender` seam, so "both on" is a distinct
+// code path and not a free composition. With both on the memo owns the seam and
+// routes its MISSES through the cache — which must still be three's answer.
+// ---------------------------------------------------------------------------
+console.log("\n-- 15. ?statBatchMemo + ?statBatchSphere compose on one seam --");
+{
+  reset("exact", null, false, "on");
+  const { bm } = makeBucket(opaqueMat(), 200);
+  const cam = makeCamera(65, 30, 65);
+  memoBuild(bm, cam);                    // miss -> cached rebuild
+  memoBuild(bm, cam);                    // still camera -> exact memo hit
+  let w = M.getStatBatchXStats().walk;
+  check("71: the memo owns the seam and still hits on a still camera",
+    w.hitsExact === 1 && w.rebuilds === 0 && w.rebuildsSlack === 1,
+    JSON.stringify({ hitsExact: w.hitsExact, rebuilds: w.rebuilds, rebuildsSlack: w.rebuildsSlack }));
+  check("72: the miss was served by the sphere cache, not three's loop",
+    w.sphere.builds === 1 && w.sphere.errors === 0 && w.sphere.ineligible === 0,
+    JSON.stringify(w.sphere));
+
+  moveCam(cam, -14, 0, -11, 0.12);       // memo miss -> cached rebuild again
+  threeBuild(bm, cam);
+  const want = snapshot(bm);
+  bm._multiDrawCount = 0;
+  bm._multiDrawStarts.fill(-1); bm._multiDrawCounts.fill(-1);
+  bm._indirectTexture.image.data.fill(0xffff);
+  bm.userData.__memo.valid = false;      // force the miss, not a hit
+  memoBuild(bm, cam);
+  w = M.getStatBatchXStats().walk;
+  check("73: a memo MISS rebuilt through the cache is byte-identical to three's",
+    sameSnapshot(want, snapshot(bm)), `three n=${want.n} ours n=${snapshot(bm).n}`);
+  check("74: and the cache was NOT rebuilt for the camera move (still one build)",
+    w.sphere.builds === 1, JSON.stringify({ builds: w.sphere.builds }));
+}
+
+// ---------------------------------------------------------------------------
+// The self-heal. A slot that goes live WITHOUT the epoch moving would otherwise
+// be silently dropped — a placement that simply is not drawn, with nothing in
+// any counter to say so. Every `addInstance` path ends in `_memoDirtyBounds`, so
+// this should be unreachable; it is guarded anyway because a silently missing
+// prop is the worst failure this change could have, and simulated here by
+// stamping the sentinel by hand on a slot that IS live.
+// ---------------------------------------------------------------------------
+console.log("\n-- 16. a slot that goes live without an epoch bump is healed, not dropped --");
+{
+  reset("off", null, false, "on");
+  const { bm } = makeBucket(opaqueMat(), 120);
+  const cam = makeCamera(60, 30, 60);
+  threeBuild(bm, cam);
+  const want = snapshot(bm);
+  memoBuild(bm, cam);                          // builds the cache
+  const before = M.getStatBatchXStats().walk.sphere.lateActivations;
+
+  // Forge the hazard: sentinel a live slot without touching the epoch.
+  const live = bm._instanceInfo.findIndex((inf) => inf && inf.active && inf.visible);
+  bm.userData.__sphereCache.arr[live * 4 + 3] = -1;
+
+  bm._multiDrawCount = 0;
+  bm._multiDrawStarts.fill(-1); bm._multiDrawCounts.fill(-1);
+  bm._indirectTexture.image.data.fill(0xffff);
+  memoBuild(bm, cam);
+  const s = M.getStatBatchXStats().walk.sphere;
+  check("75: the sentinelled live slot is recomputed in place and COUNTED",
+    s.lateActivations === before + 1, JSON.stringify({ before, after: s.lateActivations }));
+  check("76: and the answer is still byte-identical to three's — nothing was dropped",
+    sameSnapshot(want, snapshot(bm)), `three n=${want.n} ours n=${snapshot(bm).n}`);
+  check("77: the heal is sticky — a second walk does not re-heal the same slot",
+    (memoBuild(bm, cam), M.getStatBatchXStats().walk.sphere.lateActivations === before + 1));
 }
 
 console.log("=========================");
