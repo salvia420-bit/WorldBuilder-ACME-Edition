@@ -648,3 +648,86 @@ governing number, and the NRA array stops being 4.4× its own diffuse twin.
 
 **Not attempted this session** — it is a live render-path change and wants its own careful
 pass with the A/B the other three budgets already owe.
+
+---
+
+## 12. LANDED — the four-task residency plan, measured on the 1070
+
+§11 ended with a plan; all four parts are implemented, and the atlas one is a
+large, unambiguous win. Same 1070, same four-hop route (Holtburg → Arwic →
+Yaraq → Nanto), same driver.
+
+### Task 1 — atlas buckets grow on demand (`?statAtlasGrow`, default ON)
+
+| at Nanto | before | after |
+|---|---|---|
+| layers ALLOCATED | 1,941 | **160** |
+| layers USED | 112 | **112** — identical |
+| NRA arrays (`aliveByOrigin`) | 551.1 MB | **150.9 MB** |
+| live texture bytes | 1,366 MB | **863 MB** |
+| JS heap | 2,445 MB | **2,003 MB** |
+| grow failures / `ptLayerFull` from growth | — | **0** / 0 |
+
+Used-layer count landing on exactly 112 both times is the confirmation that
+matters: the same work is being done, against a twelfth of the allocation.
+Buckets start at 4 layers (byte-capped at 2 MiB) and double, CLAMPED to the old
+`_layerCapacityFor` — so no bucket ever holds more than HEAD allocated on day
+one, and there is no overflow cliff traded in exchange. 20 reallocations over
+the route, zero failures.
+
+The correctness detail this hinged on, verified against three r184 rather than
+assumed: after `texStorage3D` the array contents are UNDEFINED, and when
+`layerUpdates` is non-empty three uploads ONLY those layers
+(three.module.js:12172-12186). Growth therefore re-marks every already-live
+layer before swapping arrays. If that were wrong the symptom would be a prop
+rendering garbage the moment a LATER prop triggers a grow — `?statAtlasGrow=off`
+is the one-flag check.
+
+### Tasks 2 + 3 — the seam and the way back
+
+`scene3d/surface_planes.js` gives the atlas a pixel source that is not the
+texture's CPU copy (texture bytes → wasm decode memo → honest miss), and both
+batching gates now ask `canSupplyPlanes` rather than testing `img.data`.
+`scene3d/texture_rehydrate.js` re-supplies released pixels on
+`webglcontextrestored`, holding the frame pump until the pass settles — verified
+against `tick`'s `!running` guard (`index.js:2236`). It is a strict no-op while
+nothing is released: the handler keeps its original synchronous shape at
+`releasedTextureCount() === 0`.
+
+### Task 4 — `?texFreeCpu`, built, measured, and still OFF
+
+One paired run at Nanto, `texCensus=on` in both arms:
+
+| | control | `texFreeCpu=on` |
+|---|---|---|
+| live texture bytes | 863 MB | **756 MB** |
+| JS heap | 2,003 MB | **1,797 MB** |
+| draws / frame | 55.4 | **47.8** |
+| textures registered for re-hydration | — | 578 |
+| re-hydration failures | — | **0** |
+
+Real, and in the right direction on every axis including draw calls (the
+unbatching regression did not happen). But it is **one paired run**, and this
+workload's run-to-run variance is large — the two control runs 10 minutes apart
+differed by 40 % in bucket count (21 vs 29) and 400 MB in heap. I misread the
+release arm as a regression on the first pass for exactly that reason: I compared
+it against a control with different streaming state. That is why the house rule
+is an ABAB interleave, and why this flag stays off until it gets one.
+
+It is also worth being precise about the ceiling: the classes task 4 can safely
+release are a slice, not the 1.3 GB. BC7 singletons (261 MB), the atlas arrays
+(140 MB) and the terrain BC7 array (88 MB) are all excluded by construction —
+the first two because the atlas re-reads them, all three because releasing a
+plane nothing can re-supply is a black texture on a timer.
+
+### Owed
+
+* An ABAB interleave for `?texFreeCpu` before it is ever armed — the same debt
+  `?matBudgetMB`, `?surfaceBudgetMB` and `?bc7RecordsMB` already carry.
+* `_ATLAS_NRA_MAX_LAYERS = 128` was halved purely as a memory bound. With
+  allocation now following use, raising the CEILING costs nothing until used, and
+  `ptLayerFull` is non-zero at Nanto in BOTH arms (15–19) — meaning some props
+  are already spilling to unbatched singletons. That is now a cheap win and it
+  wants its own measurement.
+* `test_stat_geom_dedup.mjs` fails 2/40 on this tree. Verified pre-existing by
+  stashing the entire working tree — untouched by any of this work.
