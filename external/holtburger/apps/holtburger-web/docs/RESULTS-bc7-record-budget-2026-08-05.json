@@ -1,0 +1,2356 @@
+{
+  "samples": [
+    {
+      "t": 1785981276909,
+      "tex": {
+        "traced": 459,
+        "disposeCalls": 87,
+        "collected": 83,
+        "alive": 376,
+        "aliveBytes": 254037248,
+        "orphanedAlive": 105,
+        "orphanedAliveBytes": 18570644,
+        "disposedButAlive": 7,
+        "disposedButAliveBytes": 98304,
+        "canvasBackedOrEmpty": 48,
+        "pooled": 18,
+        "pooledBytes": 16740,
+        "reachable": 272,
+        "byKind": {
+          "Texture": {
+            "alive": 37,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "DataTexture": {
+            "alive": 276,
+            "bytes": 43841836,
+            "orphanBytes": 1268996
+          },
+          "DataArrayTexture": {
+            "alive": 15,
+            "bytes": 85148672,
+            "orphanBytes": 0
+          },
+          "Data3DTexture": {
+            "alive": 2,
+            "bytes": 16777216,
+            "orphanBytes": 16777216
+          },
+          "DepthTexture": {
+            "alive": 2,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "CompressedTexture": {
+            "alive": 32,
+            "bytes": 9701620,
+            "orphanBytes": 524432
+          },
+          "CompressedArrayTexture": {
+            "alive": 3,
+            "bytes": 98567904,
+            "orphanBytes": 0
+          },
+          "CanvasTexture": {
+            "alive": 9,
+            "bytes": 0,
+            "orphanBytes": 0
+          }
+        },
+        "byOwner": {
+          "unknown": {
+            "count": 45,
+            "bytes": 16965636
+          },
+          "matCache.paletted": {
+            "count": 1,
+            "bytes": 8192
+          },
+          "tagged.__cacheOwned": {
+            "count": 1,
+            "bytes": 8192
+          },
+          "matCache.perDid": {
+            "count": 59,
+            "bytes": 1596816
+          }
+        },
+        "byOrigin": {
+          "(unknown)": {
+            "count": 9,
+            "bytes": 0
+          },
+          "three-geospatial.js:1596": {
+            "count": 2,
+            "bytes": 139264
+          },
+          "three-geospatial.js:1570": {
+            "count": 2,
+            "bytes": 16777216
+          },
+          "cdn.js:1137": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:928": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:503": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13433": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13278": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13289": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:4117": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3198": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3200": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3706": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3925": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3956": {
+            "count": 8,
+            "bytes": 0
+          },
+          "cdn.js:3962": {
+            "count": 6,
+            "bytes": 0
+          },
+          "cdn.js:1057": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:1059": {
+            "count": 1,
+            "bytes": 0
+          },
+          "(traced-at-upload)": {
+            "count": 1,
+            "bytes": 0
+          },
+          "entities.js:4423": {
+            "count": 1,
+            "bytes": 8192
+          },
+          "bake_prewarm.js:198": {
+            "count": 1,
+            "bytes": 4
+          },
+          "materials.js:5119": {
+            "count": 36,
+            "bytes": 606464
+          },
+          "materials.js:4427": {
+            "count": 9,
+            "bytes": 372736
+          },
+          "materials.js:4433": {
+            "count": 9,
+            "bytes": 93184
+          },
+          "bc7_textures.js:307": {
+            "count": 5,
+            "bytes": 524432
+          },
+          "loop.js:1538": {
+            "count": 1,
+            "bytes": 0
+          },
+          "materials.js:4410": {
+            "count": 2,
+            "bytes": 49152
+          }
+        },
+        "sceneSupplied": true,
+        "topOwners": [
+          "unknown 16.2MB (45)",
+          "matCache.perDid 1.5MB (59)",
+          "matCache.paletted 0.0MB (1)",
+          "tagged.__cacheOwned 0.0MB (1)"
+        ],
+        "topOrigins": [
+          "three-geospatial.js:1570 16.0MB (2)",
+          "materials.js:5119 0.6MB (36)",
+          "bc7_textures.js:307 0.5MB (5)",
+          "materials.js:4427 0.4MB (9)",
+          "three-geospatial.js:1596 0.1MB (2)",
+          "materials.js:4433 0.1MB (9)",
+          "materials.js:4410 0.0MB (2)",
+          "entities.js:4423 0.0MB (1)"
+        ],
+        "topKinds": [
+          "CompressedArrayTexture 94.0MB alive=3 orphan=0.0MB",
+          "DataArrayTexture 81.2MB alive=15 orphan=0.0MB",
+          "DataTexture 41.8MB alive=276 orphan=1.2MB",
+          "Data3DTexture 16.0MB alive=2 orphan=16.0MB",
+          "CompressedTexture 9.3MB alive=32 orphan=0.5MB",
+          "Texture 0.0MB alive=37 orphan=0.0MB",
+          "DepthTexture 0.0MB alive=2 orphan=0.0MB",
+          "CanvasTexture 0.0MB alive=9 orphan=0.0MB"
+        ],
+        "bc7Records": {
+          "records": 32,
+          "preRecords": 25,
+          "bytes": 530948,
+          "absent": 23,
+          "shared": true
+        }
+      },
+      "mem": {
+        "stores": {
+          "surfacePixels": {
+            "bytes": 71333184,
+            "entries": 193
+          },
+          "modelTri": {
+            "bytes": 468992,
+            "entries": 38
+          },
+          "shardRecords": {
+            "bytes": 65659412,
+            "entries": 1333
+          },
+          "surfaceHeight": {
+            "bytes": 3352896,
+            "entries": 126
+          },
+          "sceneryRecords": {
+            "bytes": 105584,
+            "entries": 9
+          },
+          "suiteArtifacts": {
+            "bytes": 82035,
+            "entries": 1
+          },
+          "sceneryAnim": {
+            "bytes": 352,
+            "entries": 22
+          },
+          "negCache": {
+            "bytes": 0,
+            "entries": 0
+          },
+          "texSwapAliases": {
+            "bytes": 1776,
+            "entries": 74
+          },
+          "scratchPool": {
+            "bytes": 3932160,
+            "entries": 2
+          },
+          "decodeDids": {
+            "bytes": 1176,
+            "entries": 98
+          }
+        },
+        "top": [
+          "surfacePixels 68.0MB",
+          "shardRecords 62.6MB",
+          "scratchPool 3.8MB",
+          "surfaceHeight 3.2MB",
+          "modelTri 0.4MB"
+        ],
+        "memoryBytes": 522649600,
+        "allocLive": 188091692,
+        "allocPeak": 499385529,
+        "storeBytes": 144937567,
+        "unattributed": 43154125,
+        "slackBytes": 334557908,
+        "decodePeakLiveBytes": 28350020
+      },
+      "bc7": {
+        "records": {
+          "bytes": 15984836,
+          "budget": 268435456,
+          "evictions": 0,
+          "evictedBytes": 0,
+          "records": 55,
+          "preRecords": 58
+        },
+        "hits": 48,
+        "absent": 7,
+        "parseErrors": 0,
+        "errors": 0
+      },
+      "xu7": {
+        "transcoderLoads": 1,
+        "transcoderFailed": null,
+        "decodes": 46,
+        "decodeErrors": 0,
+        "decodeMs": 590.1999999806285,
+        "lastError": null,
+        "notReadySkips": 2,
+        "enabled": true
+      },
+      "scene": {
+        "glTextures": 200,
+        "glGeometries": 158,
+        "heapMB": 408,
+        "limitMB": 4192
+      },
+      "label": "spawn"
+    },
+    {
+      "t": 1785981340114,
+      "tex": {
+        "traced": 3554,
+        "disposeCalls": 984,
+        "collected": 735,
+        "alive": 2819,
+        "aliveBytes": 1172532116,
+        "orphanedAlive": 355,
+        "orphanedAliveBytes": 37066632,
+        "disposedButAlive": 249,
+        "disposedButAliveBytes": 69817856,
+        "canvasBackedOrEmpty": 52,
+        "pooled": 260,
+        "pooledBytes": 241800,
+        "reachable": 2762,
+        "byKind": {
+          "Texture": {
+            "alive": 41,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "DataTexture": {
+            "alive": 2359,
+            "bytes": 218807588,
+            "orphanBytes": 17383492
+          },
+          "DataArrayTexture": {
+            "alive": 37,
+            "bytes": 542327808,
+            "orphanBytes": 0
+          },
+          "Data3DTexture": {
+            "alive": 2,
+            "bytes": 16777216,
+            "orphanBytes": 16777216
+          },
+          "DepthTexture": {
+            "alive": 2,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "CompressedTexture": {
+            "alive": 348,
+            "bytes": 198534032,
+            "orphanBytes": 2905924
+          },
+          "CompressedArrayTexture": {
+            "alive": 21,
+            "bytes": 196085472,
+            "orphanBytes": 0
+          },
+          "CanvasTexture": {
+            "alive": 9,
+            "bytes": 0,
+            "orphanBytes": 0
+          }
+        },
+        "byOwner": {
+          "unknown": {
+            "count": 55,
+            "bytes": 17086468
+          },
+          "tagged.__cacheOwned": {
+            "count": 2,
+            "bytes": 270336
+          },
+          "matCache.perDid": {
+            "count": 298,
+            "bytes": 19709828
+          }
+        },
+        "byOrigin": {
+          "(unknown)": {
+            "count": 12,
+            "bytes": 0
+          },
+          "three-geospatial.js:1596": {
+            "count": 2,
+            "bytes": 139264
+          },
+          "three-geospatial.js:1570": {
+            "count": 2,
+            "bytes": 16777216
+          },
+          "cdn.js:1137": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:928": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:503": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13433": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13278": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13289": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:4117": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3198": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3200": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3706": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3925": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3956": {
+            "count": 8,
+            "bytes": 0
+          },
+          "cdn.js:3962": {
+            "count": 6,
+            "bytes": 0
+          },
+          "cdn.js:1057": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:1059": {
+            "count": 1,
+            "bytes": 0
+          },
+          "(traced-at-upload)": {
+            "count": 1,
+            "bytes": 0
+          },
+          "entities.js:4423": {
+            "count": 2,
+            "bytes": 270336
+          },
+          "materials.js:5117": {
+            "count": 8,
+            "bytes": 827392
+          },
+          "materials.js:5119": {
+            "count": 206,
+            "bytes": 8446016
+          },
+          "materials.js:5111": {
+            "count": 4,
+            "bytes": 557056
+          },
+          "bake_prewarm.js:198": {
+            "count": 1,
+            "bytes": 4
+          },
+          "bc7_textures.js:307": {
+            "count": 18,
+            "bytes": 2905924
+          },
+          "materials.js:4427": {
+            "count": 24,
+            "bytes": 3981312
+          },
+          "materials.js:4433": {
+            "count": 32,
+            "bytes": 1402880
+          },
+          "materials.js:4410": {
+            "count": 11,
+            "bytes": 1724416
+          },
+          "loop.js:1538": {
+            "count": 1,
+            "bytes": 0
+          },
+          "static_batch_x.js:387": {
+            "count": 2,
+            "bytes": 32768
+          },
+          "cdn.js:6890": {
+            "count": 2,
+            "bytes": 2048
+          }
+        },
+        "sceneSupplied": true,
+        "topOwners": [
+          "matCache.perDid 18.8MB (298)",
+          "unknown 16.3MB (55)",
+          "tagged.__cacheOwned 0.3MB (2)"
+        ],
+        "topOrigins": [
+          "three-geospatial.js:1570 16.0MB (2)",
+          "materials.js:5119 8.1MB (206)",
+          "materials.js:4427 3.8MB (24)",
+          "bc7_textures.js:307 2.8MB (18)",
+          "materials.js:4410 1.6MB (11)",
+          "materials.js:4433 1.3MB (32)",
+          "materials.js:5117 0.8MB (8)",
+          "materials.js:5111 0.5MB (4)"
+        ],
+        "topKinds": [
+          "DataArrayTexture 517.2MB alive=37 orphan=0.0MB",
+          "DataTexture 208.7MB alive=2359 orphan=16.6MB",
+          "CompressedTexture 189.3MB alive=348 orphan=2.8MB",
+          "CompressedArrayTexture 187.0MB alive=21 orphan=0.0MB",
+          "Data3DTexture 16.0MB alive=2 orphan=16.0MB",
+          "Texture 0.0MB alive=41 orphan=0.0MB",
+          "DepthTexture 0.0MB alive=2 orphan=0.0MB",
+          "CanvasTexture 0.0MB alive=9 orphan=0.0MB"
+        ],
+        "bc7Records": {
+          "records": 331,
+          "preRecords": 293,
+          "bytes": 11867476,
+          "absent": 108,
+          "shared": true
+        }
+      },
+      "mem": {
+        "stores": {
+          "surfacePixels": {
+            "bytes": 91895488,
+            "entries": 511
+          },
+          "modelTri": {
+            "bytes": 1847476,
+            "entries": 235
+          },
+          "shardRecords": {
+            "bytes": 216632635,
+            "entries": 4288
+          },
+          "surfaceHeight": {
+            "bytes": 10463344,
+            "entries": 464
+          },
+          "sceneryRecords": {
+            "bytes": 1047088,
+            "entries": 128
+          },
+          "suiteArtifacts": {
+            "bytes": 82035,
+            "entries": 1
+          },
+          "sceneryAnim": {
+            "bytes": 592,
+            "entries": 37
+          },
+          "negCache": {
+            "bytes": 0,
+            "entries": 0
+          },
+          "texSwapAliases": {
+            "bytes": 6960,
+            "entries": 290
+          },
+          "scratchPool": {
+            "bytes": 6291456,
+            "entries": 2
+          },
+          "decodeDids": {
+            "bytes": 4728,
+            "entries": 394
+          }
+        },
+        "top": [
+          "shardRecords 206.6MB",
+          "surfacePixels 87.6MB",
+          "surfaceHeight 10.0MB",
+          "scratchPool 6.0MB",
+          "modelTri 1.8MB"
+        ],
+        "memoryBytes": 550699008,
+        "allocLive": 373373078,
+        "allocPeak": 526374493,
+        "storeBytes": 328271802,
+        "unattributed": 45101276,
+        "slackBytes": 177325930,
+        "decodePeakLiveBytes": 29922884
+      },
+      "bc7": {
+        "records": {
+          "bytes": 210401508,
+          "budget": 268435456,
+          "evictions": 0,
+          "evictedBytes": 0,
+          "records": 366,
+          "preRecords": 366
+        },
+        "hits": 331,
+        "absent": 35,
+        "parseErrors": 0,
+        "errors": 0
+      },
+      "xu7": {
+        "transcoderLoads": 1,
+        "transcoderFailed": null,
+        "decodes": 323,
+        "decodeErrors": 0,
+        "decodeMs": 6707.299999967217,
+        "lastError": null,
+        "notReadySkips": 2,
+        "enabled": true
+      },
+      "scene": {
+        "glTextures": 1497,
+        "glGeometries": 1645,
+        "heapMB": 1577,
+        "limitMB": 4192
+      },
+      "label": "Holtburg"
+    },
+    {
+      "t": 1785981393899,
+      "tex": {
+        "traced": 5978,
+        "disposeCalls": 1968,
+        "collected": 1392,
+        "alive": 4586,
+        "aliveBytes": 1481464712,
+        "orphanedAlive": 674,
+        "orphanedAliveBytes": 84212060,
+        "disposedButAlive": 574,
+        "disposedButAliveBytes": 187051776,
+        "canvasBackedOrEmpty": 56,
+        "pooled": 502,
+        "pooledBytes": 466860,
+        "reachable": 4502,
+        "byKind": {
+          "Texture": {
+            "alive": 45,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "DataTexture": {
+            "alive": 3996,
+            "bytes": 376441960,
+            "orphanBytes": 29531140
+          },
+          "DataArrayTexture": {
+            "alive": 41,
+            "bytes": 627262464,
+            "orphanBytes": 5505024
+          },
+          "Data3DTexture": {
+            "alive": 2,
+            "bytes": 16777216,
+            "orphanBytes": 16777216
+          },
+          "DepthTexture": {
+            "alive": 2,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "CompressedTexture": {
+            "alive": 468,
+            "bytes": 243926080,
+            "orphanBytes": 32398680
+          },
+          "CompressedArrayTexture": {
+            "alive": 23,
+            "bytes": 217056992,
+            "orphanBytes": 0
+          },
+          "CanvasTexture": {
+            "alive": 9,
+            "bytes": 0,
+            "orphanBytes": 0
+          }
+        },
+        "byOwner": {
+          "unknown": {
+            "count": 70,
+            "bytes": 22589444
+          },
+          "tagged.__cacheOwned": {
+            "count": 3,
+            "bytes": 278528
+          },
+          "matCache.perDid": {
+            "count": 505,
+            "bytes": 61254808
+          },
+          "tagged.__rp4Pooled": {
+            "count": 96,
+            "bytes": 89280
+          },
+          "matCache.paletted": {
+            "count": 1,
+            "bytes": 8192
+          }
+        },
+        "byOrigin": {
+          "(unknown)": {
+            "count": 15,
+            "bytes": 0
+          },
+          "three-geospatial.js:1596": {
+            "count": 2,
+            "bytes": 139264
+          },
+          "three-geospatial.js:1570": {
+            "count": 2,
+            "bytes": 16777216
+          },
+          "cdn.js:1137": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:928": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:503": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13433": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13278": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13289": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:4117": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3198": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3200": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3706": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3925": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3956": {
+            "count": 8,
+            "bytes": 0
+          },
+          "cdn.js:3962": {
+            "count": 6,
+            "bytes": 0
+          },
+          "cdn.js:1057": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:1059": {
+            "count": 1,
+            "bytes": 0
+          },
+          "(traced-at-upload)": {
+            "count": 1,
+            "bytes": 0
+          },
+          "entities.js:4423": {
+            "count": 3,
+            "bytes": 278528
+          },
+          "materials.js:5117": {
+            "count": 48,
+            "bytes": 7078912
+          },
+          "materials.js:5119": {
+            "count": 306,
+            "bytes": 12500800
+          },
+          "bake_prewarm.js:198": {
+            "count": 1,
+            "bytes": 4
+          },
+          "bc7_textures.js:307": {
+            "count": 63,
+            "bytes": 32398680
+          },
+          "materials.js:5111": {
+            "count": 5,
+            "bytes": 327680
+          },
+          "terrain.js:4097": {
+            "count": 7,
+            "bytes": 0
+          },
+          "materials.js:4427": {
+            "count": 35,
+            "bytes": 4100096
+          },
+          "materials.js:4433": {
+            "count": 43,
+            "bytes": 1432576
+          },
+          "terrain.js:4255": {
+            "count": 7,
+            "bytes": 5505024
+          },
+          "materials.js:4410": {
+            "count": 12,
+            "bytes": 3584000
+          },
+          "terrain.js:393": {
+            "count": 48,
+            "bytes": 15552
+          },
+          "terrain.js:434": {
+            "count": 48,
+            "bytes": 73728
+          },
+          "loop.js:1538": {
+            "count": 1,
+            "bytes": 0
+          }
+        },
+        "sceneSupplied": true,
+        "topOwners": [
+          "matCache.perDid 58.4MB (505)",
+          "unknown 21.5MB (70)",
+          "tagged.__cacheOwned 0.3MB (3)",
+          "tagged.__rp4Pooled 0.1MB (96)",
+          "matCache.paletted 0.0MB (1)"
+        ],
+        "topOrigins": [
+          "bc7_textures.js:307 30.9MB (63)",
+          "three-geospatial.js:1570 16.0MB (2)",
+          "materials.js:5119 11.9MB (306)",
+          "materials.js:5117 6.8MB (48)",
+          "terrain.js:4255 5.3MB (7)",
+          "materials.js:4427 3.9MB (35)",
+          "materials.js:4410 3.4MB (12)",
+          "materials.js:4433 1.4MB (43)"
+        ],
+        "topKinds": [
+          "DataArrayTexture 598.2MB alive=41 orphan=5.3MB",
+          "DataTexture 359.0MB alive=3996 orphan=28.2MB",
+          "CompressedTexture 232.6MB alive=468 orphan=30.9MB",
+          "CompressedArrayTexture 207.0MB alive=23 orphan=0.0MB",
+          "Data3DTexture 16.0MB alive=2 orphan=16.0MB",
+          "Texture 0.0MB alive=45 orphan=0.0MB",
+          "DepthTexture 0.0MB alive=2 orphan=0.0MB",
+          "CanvasTexture 0.0MB alive=9 orphan=0.0MB"
+        ],
+        "bc7Records": {
+          "records": 426,
+          "preRecords": 369,
+          "bytes": 14164740,
+          "absent": 161,
+          "shared": true
+        }
+      },
+      "mem": {
+        "stores": {
+          "surfacePixels": {
+            "bytes": 91179456,
+            "entries": 415
+          },
+          "modelTri": {
+            "bytes": 2403496,
+            "entries": 298
+          },
+          "shardRecords": {
+            "bytes": 276703146,
+            "entries": 6390
+          },
+          "surfaceHeight": {
+            "bytes": 11902528,
+            "entries": 670
+          },
+          "sceneryRecords": {
+            "bytes": 2450224,
+            "entries": 249
+          },
+          "suiteArtifacts": {
+            "bytes": 82035,
+            "entries": 1
+          },
+          "sceneryAnim": {
+            "bytes": 736,
+            "entries": 46
+          },
+          "negCache": {
+            "bytes": 0,
+            "entries": 0
+          },
+          "texSwapAliases": {
+            "bytes": 13440,
+            "entries": 560
+          },
+          "scratchPool": {
+            "bytes": 6291456,
+            "entries": 2
+          },
+          "decodeDids": {
+            "bytes": 6420,
+            "entries": 535
+          }
+        },
+        "top": [
+          "shardRecords 263.9MB",
+          "surfacePixels 87.0MB",
+          "surfaceHeight 11.4MB",
+          "scratchPool 6.0MB",
+          "sceneryRecords 2.3MB"
+        ],
+        "memoryBytes": 596049920,
+        "allocLive": 439889885,
+        "allocPeak": 555882347,
+        "storeBytes": 391032937,
+        "unattributed": 48856948,
+        "slackBytes": 156160035,
+        "decodePeakLiveBytes": 29922884
+      },
+      "bc7": {
+        "records": {
+          "bytes": 258090820,
+          "budget": 268435456,
+          "evictions": 0,
+          "evictedBytes": 0,
+          "records": 478,
+          "preRecords": 478
+        },
+        "hits": 426,
+        "absent": 52,
+        "parseErrors": 0,
+        "errors": 0
+      },
+      "xu7": {
+        "transcoderLoads": 1,
+        "transcoderFailed": null,
+        "decodes": 418,
+        "decodeErrors": 0,
+        "decodeMs": 8388.599999964237,
+        "lastError": null,
+        "notReadySkips": 2,
+        "enabled": true
+      },
+      "scene": {
+        "glTextures": 2634,
+        "glGeometries": 4019,
+        "heapMB": 2220,
+        "limitMB": 4192
+      },
+      "label": "Arwic"
+    },
+    {
+      "t": 1785981447880,
+      "tex": {
+        "traced": 7667,
+        "disposeCalls": 2708,
+        "collected": 2376,
+        "alive": 5291,
+        "aliveBytes": 1499216684,
+        "orphanedAlive": 1221,
+        "orphanedAliveBytes": 103040212,
+        "disposedButAlive": 398,
+        "disposedButAliveBytes": 103802112,
+        "canvasBackedOrEmpty": 60,
+        "pooled": 744,
+        "pooledBytes": 691920,
+        "reachable": 4820,
+        "byKind": {
+          "Texture": {
+            "alive": 49,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "DataTexture": {
+            "alive": 4619,
+            "bytes": 328066188,
+            "orphanBytes": 40268840
+          },
+          "DataArrayTexture": {
+            "alive": 42,
+            "bytes": 660816896,
+            "orphanBytes": 5505024
+          },
+          "Data3DTexture": {
+            "alive": 2,
+            "bytes": 16777216,
+            "orphanBytes": 16777216
+          },
+          "DepthTexture": {
+            "alive": 2,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "CompressedArrayTexture": {
+            "alive": 24,
+            "bytes": 225445600,
+            "orphanBytes": 0
+          },
+          "CompressedTexture": {
+            "alive": 544,
+            "bytes": 268110784,
+            "orphanBytes": 40489132
+          },
+          "CanvasTexture": {
+            "alive": 9,
+            "bytes": 0,
+            "orphanBytes": 0
+          }
+        },
+        "byOwner": {
+          "unknown": {
+            "count": 353,
+            "bytes": 62178272
+          },
+          "tagged.__cacheOwned": {
+            "count": 3,
+            "bytes": 278528
+          },
+          "matCache.perDid": {
+            "count": 527,
+            "bytes": 40269072
+          },
+          "tagged.__rp4Pooled": {
+            "count": 338,
+            "bytes": 314340
+          }
+        },
+        "byOrigin": {
+          "(unknown)": {
+            "count": 18,
+            "bytes": 0
+          },
+          "three-geospatial.js:1596": {
+            "count": 2,
+            "bytes": 139264
+          },
+          "three-geospatial.js:1570": {
+            "count": 2,
+            "bytes": 16777216
+          },
+          "cdn.js:1137": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:928": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:503": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13433": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13278": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13289": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:4117": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3198": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3200": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3706": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3925": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3956": {
+            "count": 8,
+            "bytes": 0
+          },
+          "cdn.js:3962": {
+            "count": 6,
+            "bytes": 0
+          },
+          "cdn.js:1057": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:1059": {
+            "count": 1,
+            "bytes": 0
+          },
+          "(traced-at-upload)": {
+            "count": 1,
+            "bytes": 0
+          },
+          "entities.js:4423": {
+            "count": 3,
+            "bytes": 278528
+          },
+          "bake_prewarm.js:198": {
+            "count": 1,
+            "bytes": 4
+          },
+          "materials.js:5119": {
+            "count": 414,
+            "bytes": 16181312
+          },
+          "materials.js:5117": {
+            "count": 140,
+            "bytes": 14149632
+          },
+          "bc7_textures.js:307": {
+            "count": 146,
+            "bytes": 40489132
+          },
+          "terrain.js:4097": {
+            "count": 7,
+            "bytes": 0
+          },
+          "materials.js:4427": {
+            "count": 36,
+            "bytes": 851968
+          },
+          "materials.js:4433": {
+            "count": 45,
+            "bytes": 686080
+          },
+          "terrain.js:4255": {
+            "count": 7,
+            "bytes": 5505024
+          },
+          "materials.js:4410": {
+            "count": 18,
+            "bytes": 3633152
+          },
+          "terrain.js:393": {
+            "count": 169,
+            "bytes": 54756
+          },
+          "terrain.js:434": {
+            "count": 169,
+            "bytes": 259584
+          },
+          "loop.js:1538": {
+            "count": 1,
+            "bytes": 0
+          },
+          "materials.js:5111": {
+            "count": 15,
+            "bytes": 4034560
+          }
+        },
+        "sceneSupplied": true,
+        "topOwners": [
+          "unknown 59.3MB (353)",
+          "matCache.perDid 38.4MB (527)",
+          "tagged.__rp4Pooled 0.3MB (338)",
+          "tagged.__cacheOwned 0.3MB (3)"
+        ],
+        "topOrigins": [
+          "bc7_textures.js:307 38.6MB (146)",
+          "three-geospatial.js:1570 16.0MB (2)",
+          "materials.js:5119 15.4MB (414)",
+          "materials.js:5117 13.5MB (140)",
+          "terrain.js:4255 5.3MB (7)",
+          "materials.js:5111 3.8MB (15)",
+          "materials.js:4410 3.5MB (18)",
+          "materials.js:4427 0.8MB (36)"
+        ],
+        "topKinds": [
+          "DataArrayTexture 630.2MB alive=42 orphan=5.3MB",
+          "DataTexture 312.9MB alive=4619 orphan=38.4MB",
+          "CompressedTexture 255.7MB alive=544 orphan=38.6MB",
+          "CompressedArrayTexture 215.0MB alive=24 orphan=0.0MB",
+          "Data3DTexture 16.0MB alive=2 orphan=16.0MB",
+          "Texture 0.0MB alive=49 orphan=0.0MB",
+          "DepthTexture 0.0MB alive=2 orphan=0.0MB",
+          "CanvasTexture 0.0MB alive=9 orphan=0.0MB"
+        ],
+        "bc7Records": {
+          "records": 467,
+          "preRecords": 1,
+          "bytes": 7536820,
+          "absent": 200,
+          "shared": true
+        }
+      },
+      "mem": {
+        "stores": {
+          "surfacePixels": {
+            "bytes": 91242880,
+            "entries": 474
+          },
+          "modelTri": {
+            "bytes": 3224396,
+            "entries": 389
+          },
+          "shardRecords": {
+            "bytes": 308268892,
+            "entries": 7817
+          },
+          "surfaceHeight": {
+            "bytes": 12404128,
+            "entries": 778
+          },
+          "sceneryRecords": {
+            "bytes": 2599920,
+            "entries": 370
+          },
+          "suiteArtifacts": {
+            "bytes": 82035,
+            "entries": 1
+          },
+          "sceneryAnim": {
+            "bytes": 960,
+            "entries": 60
+          },
+          "negCache": {
+            "bytes": 0,
+            "entries": 0
+          },
+          "texSwapAliases": {
+            "bytes": 16272,
+            "entries": 678
+          },
+          "scratchPool": {
+            "bytes": 6291456,
+            "entries": 2
+          },
+          "decodeDids": {
+            "bytes": 7440,
+            "entries": 620
+          }
+        },
+        "top": [
+          "shardRecords 294.0MB",
+          "surfacePixels 87.0MB",
+          "surfaceHeight 11.8MB",
+          "scratchPool 6.0MB",
+          "modelTri 3.1MB"
+        ],
+        "memoryBytes": 596049920,
+        "allocLive": 474664443,
+        "allocPeak": 562346669,
+        "storeBytes": 424138379,
+        "unattributed": 50526064,
+        "slackBytes": 121385477,
+        "decodePeakLiveBytes": 29922884
+      },
+      "bc7": {
+        "records": {
+          "bytes": 268392980,
+          "budget": 268435456,
+          "evictions": 452,
+          "evictedBytes": 24729040,
+          "records": 535,
+          "preRecords": 133
+        },
+        "hits": 492,
+        "absent": 68,
+        "parseErrors": 0,
+        "errors": 0
+      },
+      "xu7": {
+        "transcoderLoads": 1,
+        "transcoderFailed": null,
+        "decodes": 483,
+        "decodeErrors": 0,
+        "decodeMs": 9396.199999943376,
+        "lastError": null,
+        "notReadySkips": 2,
+        "enabled": true
+      },
+      "scene": {
+        "glTextures": 3178,
+        "glGeometries": 5459,
+        "heapMB": 2377,
+        "limitMB": 4192
+      },
+      "label": "Yaraq"
+    },
+    {
+      "t": 1785981502184,
+      "tex": {
+        "traced": 9132,
+        "disposeCalls": 2982,
+        "collected": 3157,
+        "alive": 5975,
+        "aliveBytes": 1407957392,
+        "orphanedAlive": 1741,
+        "orphanedAliveBytes": 170083336,
+        "disposedButAlive": 74,
+        "disposedButAliveBytes": 5943552,
+        "canvasBackedOrEmpty": 61,
+        "pooled": 986,
+        "pooledBytes": 916980,
+        "reachable": 5262,
+        "byKind": {
+          "Texture": {
+            "alive": 50,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "DataTexture": {
+            "alive": 5259,
+            "bytes": 232060008,
+            "orphanBytes": 87085708
+          },
+          "DataArrayTexture": {
+            "alive": 42,
+            "bytes": 660816896,
+            "orphanBytes": 5505024
+          },
+          "Data3DTexture": {
+            "alive": 2,
+            "bytes": 16777216,
+            "orphanBytes": 16777216
+          },
+          "DepthTexture": {
+            "alive": 2,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "CompressedArrayTexture": {
+            "alive": 24,
+            "bytes": 225445600,
+            "orphanBytes": 0
+          },
+          "CompressedTexture": {
+            "alive": 587,
+            "bytes": 272857672,
+            "orphanBytes": 60715388
+          },
+          "CanvasTexture": {
+            "alive": 9,
+            "bytes": 0,
+            "orphanBytes": 0
+          }
+        },
+        "byOwner": {
+          "unknown": {
+            "count": 451,
+            "bytes": 68414336
+          },
+          "tagged.__cacheOwned": {
+            "count": 133,
+            "bytes": 36288256
+          },
+          "matCache.perDid": {
+            "count": 577,
+            "bytes": 64841344
+          },
+          "tagged.__rp4Pooled": {
+            "count": 580,
+            "bytes": 539400
+          },
+          "matCache.paletted": {
+            "count": 130,
+            "bytes": 36009728
+          }
+        },
+        "byOrigin": {
+          "(unknown)": {
+            "count": 18,
+            "bytes": 0
+          },
+          "three-geospatial.js:1596": {
+            "count": 2,
+            "bytes": 139264
+          },
+          "three-geospatial.js:1570": {
+            "count": 2,
+            "bytes": 16777216
+          },
+          "cdn.js:1137": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:928": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:503": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13433": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13278": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13289": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:4117": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3198": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3200": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3706": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3925": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3956": {
+            "count": 8,
+            "bytes": 0
+          },
+          "cdn.js:3962": {
+            "count": 6,
+            "bytes": 0
+          },
+          "cdn.js:1057": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:1059": {
+            "count": 1,
+            "bytes": 0
+          },
+          "(traced-at-upload)": {
+            "count": 1,
+            "bytes": 0
+          },
+          "entities.js:4423": {
+            "count": 133,
+            "bytes": 36288256
+          },
+          "bake_prewarm.js:198": {
+            "count": 1,
+            "bytes": 4
+          },
+          "materials.js:5117": {
+            "count": 194,
+            "bytes": 20043008
+          },
+          "materials.js:5119": {
+            "count": 461,
+            "bytes": 17943424
+          },
+          "bc7_textures.js:307": {
+            "count": 195,
+            "bytes": 60715388
+          },
+          "terrain.js:4097": {
+            "count": 7,
+            "bytes": 0
+          },
+          "materials.js:4427": {
+            "count": 29,
+            "bytes": 794624
+          },
+          "materials.js:4433": {
+            "count": 38,
+            "bytes": 671744
+          },
+          "terrain.js:4255": {
+            "count": 7,
+            "bytes": 5505024
+          },
+          "materials.js:4410": {
+            "count": 26,
+            "bytes": 4022272
+          },
+          "terrain.js:393": {
+            "count": 290,
+            "bytes": 93960
+          },
+          "terrain.js:434": {
+            "count": 290,
+            "bytes": 445440
+          },
+          "loop.js:1538": {
+            "count": 1,
+            "bytes": 0
+          },
+          "materials.js:5111": {
+            "count": 19,
+            "bytes": 6643712
+          }
+        },
+        "sceneSupplied": true,
+        "topOwners": [
+          "unknown 65.2MB (451)",
+          "matCache.perDid 61.8MB (577)",
+          "tagged.__cacheOwned 34.6MB (133)",
+          "matCache.paletted 34.3MB (130)",
+          "tagged.__rp4Pooled 0.5MB (580)"
+        ],
+        "topOrigins": [
+          "bc7_textures.js:307 57.9MB (195)",
+          "entities.js:4423 34.6MB (133)",
+          "materials.js:5117 19.1MB (194)",
+          "materials.js:5119 17.1MB (461)",
+          "three-geospatial.js:1570 16.0MB (2)",
+          "materials.js:5111 6.3MB (19)",
+          "terrain.js:4255 5.3MB (7)",
+          "materials.js:4410 3.8MB (26)"
+        ],
+        "topKinds": [
+          "DataArrayTexture 630.2MB alive=42 orphan=5.3MB",
+          "CompressedTexture 260.2MB alive=587 orphan=57.9MB",
+          "DataTexture 221.3MB alive=5259 orphan=83.1MB",
+          "CompressedArrayTexture 215.0MB alive=24 orphan=0.0MB",
+          "Data3DTexture 16.0MB alive=2 orphan=16.0MB",
+          "Texture 0.0MB alive=50 orphan=0.0MB",
+          "DepthTexture 0.0MB alive=2 orphan=0.0MB",
+          "CanvasTexture 0.0MB alive=9 orphan=0.0MB"
+        ],
+        "bc7Records": {
+          "records": 494,
+          "preRecords": 8,
+          "bytes": 17603104,
+          "absent": 216,
+          "shared": true
+        }
+      },
+      "mem": {
+        "stores": {
+          "surfacePixels": {
+            "bytes": 91731328,
+            "entries": 518
+          },
+          "modelTri": {
+            "bytes": 3519088,
+            "entries": 439
+          },
+          "shardRecords": {
+            "bytes": 316067204,
+            "entries": 8447
+          },
+          "surfaceHeight": {
+            "bytes": 12716000,
+            "entries": 810
+          },
+          "sceneryRecords": {
+            "bytes": 3981600,
+            "entries": 490
+          },
+          "suiteArtifacts": {
+            "bytes": 82035,
+            "entries": 1
+          },
+          "sceneryAnim": {
+            "bytes": 1072,
+            "entries": 67
+          },
+          "negCache": {
+            "bytes": 0,
+            "entries": 0
+          },
+          "texSwapAliases": {
+            "bytes": 16608,
+            "entries": 692
+          },
+          "scratchPool": {
+            "bytes": 6291456,
+            "entries": 2
+          },
+          "decodeDids": {
+            "bytes": 7932,
+            "entries": 661
+          }
+        },
+        "top": [
+          "shardRecords 301.4MB",
+          "surfacePixels 87.5MB",
+          "surfaceHeight 12.1MB",
+          "scratchPool 6.0MB",
+          "sceneryRecords 3.8MB"
+        ],
+        "memoryBytes": 596049920,
+        "allocLive": 486331339,
+        "allocPeak": 562715756,
+        "storeBytes": 434414323,
+        "unattributed": 51917016,
+        "slackBytes": 109718581,
+        "decodePeakLiveBytes": 29922884
+      },
+      "bc7": {
+        "records": {
+          "bytes": 265554196,
+          "budget": 268435456,
+          "evictions": 510,
+          "evictedBytes": 43504416,
+          "records": 567,
+          "preRecords": 151
+        },
+        "hits": 542,
+        "absent": 73,
+        "parseErrors": 0,
+        "errors": 0
+      },
+      "xu7": {
+        "transcoderLoads": 1,
+        "transcoderFailed": null,
+        "decodes": 531,
+        "decodeErrors": 0,
+        "decodeMs": 9899.399999953806,
+        "lastError": null,
+        "notReadySkips": 2,
+        "enabled": true
+      },
+      "scene": {
+        "glTextures": 3772,
+        "glGeometries": 7511,
+        "heapMB": 2601,
+        "limitMB": 4192
+      },
+      "label": "Sawato"
+    },
+    {
+      "t": 1785981556281,
+      "tex": {
+        "traced": 10825,
+        "disposeCalls": 6759,
+        "collected": 6068,
+        "alive": 4757,
+        "aliveBytes": 1513961308,
+        "orphanedAlive": 1540,
+        "orphanedAliveBytes": 116225464,
+        "disposedButAlive": 463,
+        "disposedButAliveBytes": 121515520,
+        "canvasBackedOrEmpty": 60,
+        "pooled": 1016,
+        "pooledBytes": 944880,
+        "reachable": 3605,
+        "byKind": {
+          "Texture": {
+            "alive": 49,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "DataTexture": {
+            "alive": 4163,
+            "bytes": 332239260,
+            "orphanBytes": 47735456
+          },
+          "DataArrayTexture": {
+            "alive": 43,
+            "bytes": 687555584,
+            "orphanBytes": 5505024
+          },
+          "Data3DTexture": {
+            "alive": 2,
+            "bytes": 16777216,
+            "orphanBytes": 16777216
+          },
+          "DepthTexture": {
+            "alive": 2,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "CompressedArrayTexture": {
+            "alive": 25,
+            "bytes": 232130272,
+            "orphanBytes": 0
+          },
+          "CompressedTexture": {
+            "alive": 464,
+            "bytes": 245258976,
+            "orphanBytes": 46207768
+          },
+          "CanvasTexture": {
+            "alive": 9,
+            "bytes": 0,
+            "orphanBytes": 0
+          }
+        },
+        "byOwner": {
+          "unknown": {
+            "count": 103,
+            "bytes": 27021316
+          },
+          "tagged.__cacheOwned": {
+            "count": 5,
+            "bytes": 290816
+          },
+          "matCache.perDid": {
+            "count": 746,
+            "bytes": 88275352
+          },
+          "tagged.__rp4Pooled": {
+            "count": 686,
+            "bytes": 637980
+          }
+        },
+        "byOrigin": {
+          "(unknown)": {
+            "count": 16,
+            "bytes": 0
+          },
+          "three-geospatial.js:1596": {
+            "count": 2,
+            "bytes": 139264
+          },
+          "three-geospatial.js:1570": {
+            "count": 2,
+            "bytes": 16777216
+          },
+          "cdn.js:1137": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:928": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:503": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13433": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13278": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13289": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:4117": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3198": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3200": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3706": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3925": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3956": {
+            "count": 8,
+            "bytes": 0
+          },
+          "cdn.js:3962": {
+            "count": 6,
+            "bytes": 0
+          },
+          "cdn.js:1057": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:1059": {
+            "count": 1,
+            "bytes": 0
+          },
+          "(traced-at-upload)": {
+            "count": 1,
+            "bytes": 0
+          },
+          "entities.js:4423": {
+            "count": 5,
+            "bytes": 290816
+          },
+          "bake_prewarm.js:198": {
+            "count": 1,
+            "bytes": 4
+          },
+          "materials.js:5119": {
+            "count": 355,
+            "bytes": 14898816
+          },
+          "terrain.js:4097": {
+            "count": 7,
+            "bytes": 0
+          },
+          "materials.js:4427": {
+            "count": 29,
+            "bytes": 794624
+          },
+          "materials.js:4433": {
+            "count": 38,
+            "bytes": 671744
+          },
+          "bc7_textures.js:307": {
+            "count": 164,
+            "bytes": 46207768
+          },
+          "terrain.js:4255": {
+            "count": 7,
+            "bytes": 5505024
+          },
+          "materials.js:4410": {
+            "count": 26,
+            "bytes": 3842048
+          },
+          "terrain.js:393": {
+            "count": 343,
+            "bytes": 111132
+          },
+          "terrain.js:434": {
+            "count": 343,
+            "bytes": 526848
+          },
+          "loop.js:1538": {
+            "count": 1,
+            "bytes": 0
+          },
+          "materials.js:5117": {
+            "count": 158,
+            "bytes": 19062784
+          },
+          "materials.js:5111": {
+            "count": 15,
+            "bytes": 7397376
+          }
+        },
+        "sceneSupplied": true,
+        "topOwners": [
+          "matCache.perDid 84.2MB (746)",
+          "unknown 25.8MB (103)",
+          "tagged.__rp4Pooled 0.6MB (686)",
+          "tagged.__cacheOwned 0.3MB (5)"
+        ],
+        "topOrigins": [
+          "bc7_textures.js:307 44.1MB (164)",
+          "materials.js:5117 18.2MB (158)",
+          "three-geospatial.js:1570 16.0MB (2)",
+          "materials.js:5119 14.2MB (355)",
+          "materials.js:5111 7.1MB (15)",
+          "terrain.js:4255 5.3MB (7)",
+          "materials.js:4410 3.7MB (26)",
+          "materials.js:4427 0.8MB (29)"
+        ],
+        "topKinds": [
+          "DataArrayTexture 655.7MB alive=43 orphan=5.3MB",
+          "DataTexture 316.8MB alive=4163 orphan=45.5MB",
+          "CompressedTexture 233.9MB alive=464 orphan=44.1MB",
+          "CompressedArrayTexture 221.4MB alive=25 orphan=0.0MB",
+          "Data3DTexture 16.0MB alive=2 orphan=16.0MB",
+          "Texture 0.0MB alive=49 orphan=0.0MB",
+          "DepthTexture 0.0MB alive=2 orphan=0.0MB",
+          "CanvasTexture 0.0MB alive=9 orphan=0.0MB"
+        ],
+        "bc7Records": {
+          "records": 512,
+          "preRecords": 18,
+          "bytes": 41857308,
+          "absent": 236,
+          "shared": true
+        }
+      },
+      "mem": {
+        "stores": {
+          "surfacePixels": {
+            "bytes": 91350208,
+            "entries": 451
+          },
+          "modelTri": {
+            "bytes": 3753740,
+            "entries": 479
+          },
+          "shardRecords": {
+            "bytes": 323698577,
+            "entries": 9226
+          },
+          "surfaceHeight": {
+            "bytes": 12814864,
+            "entries": 843
+          },
+          "sceneryRecords": {
+            "bytes": 5133216,
+            "entries": 611
+          },
+          "suiteArtifacts": {
+            "bytes": 82035,
+            "entries": 1
+          },
+          "sceneryAnim": {
+            "bytes": 1088,
+            "entries": 68
+          },
+          "negCache": {
+            "bytes": 0,
+            "entries": 0
+          },
+          "texSwapAliases": {
+            "bytes": 18768,
+            "entries": 782
+          },
+          "scratchPool": {
+            "bytes": 6291456,
+            "entries": 2
+          },
+          "decodeDids": {
+            "bytes": 8268,
+            "entries": 689
+          }
+        },
+        "top": [
+          "shardRecords 308.7MB",
+          "surfacePixels 87.1MB",
+          "surfaceHeight 12.2MB",
+          "scratchPool 6.0MB",
+          "sceneryRecords 4.9MB"
+        ],
+        "memoryBytes": 611647488,
+        "allocLive": 498009693,
+        "allocPeak": 566098123,
+        "storeBytes": 443152220,
+        "unattributed": 54857473,
+        "slackBytes": 113637795,
+        "decodePeakLiveBytes": 29922884
+      },
+      "bc7": {
+        "records": {
+          "bytes": 268414684,
+          "budget": 268435456,
+          "evictions": 516,
+          "evictedBytes": 43635768,
+          "records": 594,
+          "preRecords": 172
+        },
+        "hits": 560,
+        "absent": 82,
+        "parseErrors": 0,
+        "errors": 0
+      },
+      "xu7": {
+        "transcoderLoads": 1,
+        "transcoderFailed": null,
+        "decodes": 549,
+        "decodeErrors": 0,
+        "decodeMs": 10020.499999932945,
+        "lastError": null,
+        "notReadySkips": 2,
+        "enabled": true
+      },
+      "scene": {
+        "glTextures": 3295,
+        "glGeometries": 7193,
+        "heapMB": 2155,
+        "limitMB": 4192
+      },
+      "label": "Shoushi"
+    },
+    {
+      "t": 1785981610114,
+      "tex": {
+        "traced": 11654,
+        "disposeCalls": 6938,
+        "collected": 6704,
+        "alive": 4950,
+        "aliveBytes": 1389168768,
+        "orphanedAlive": 1666,
+        "orphanedAliveBytes": 164727684,
+        "disposedButAlive": 83,
+        "disposedButAliveBytes": 5528064,
+        "canvasBackedOrEmpty": 62,
+        "pooled": 1016,
+        "pooledBytes": 944880,
+        "reachable": 3853,
+        "byKind": {
+          "Texture": {
+            "alive": 51,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "DataTexture": {
+            "alive": 4345,
+            "bytes": 205546000,
+            "orphanBytes": 81273160
+          },
+          "DataArrayTexture": {
+            "alive": 43,
+            "bytes": 687555584,
+            "orphanBytes": 5505024
+          },
+          "Data3DTexture": {
+            "alive": 2,
+            "bytes": 16777216,
+            "orphanBytes": 16777216
+          },
+          "DepthTexture": {
+            "alive": 2,
+            "bytes": 0,
+            "orphanBytes": 0
+          },
+          "CompressedArrayTexture": {
+            "alive": 25,
+            "bytes": 232130272,
+            "orphanBytes": 0
+          },
+          "CompressedTexture": {
+            "alive": 473,
+            "bytes": 247159696,
+            "orphanBytes": 61172284
+          },
+          "CanvasTexture": {
+            "alive": 9,
+            "bytes": 0,
+            "orphanBytes": 0
+          }
+        },
+        "byOwner": {
+          "unknown": {
+            "count": 111,
+            "bytes": 27119620
+          },
+          "tagged.__cacheOwned": {
+            "count": 125,
+            "bytes": 33257216
+          },
+          "matCache.perDid": {
+            "count": 820,
+            "bytes": 103783548
+          },
+          "tagged.__rp4Pooled": {
+            "count": 610,
+            "bytes": 567300
+          },
+          "matCache.paletted": {
+            "count": 120,
+            "bytes": 32966400
+          }
+        },
+        "byOrigin": {
+          "(unknown)": {
+            "count": 18,
+            "bytes": 0
+          },
+          "three-geospatial.js:1596": {
+            "count": 2,
+            "bytes": 139264
+          },
+          "three-geospatial.js:1570": {
+            "count": 2,
+            "bytes": 16777216
+          },
+          "cdn.js:1137": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:928": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:503": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13433": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13278": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:13289": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:4117": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3198": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3200": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3706": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3925": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:3956": {
+            "count": 8,
+            "bytes": 0
+          },
+          "cdn.js:3962": {
+            "count": 6,
+            "bytes": 0
+          },
+          "cdn.js:1057": {
+            "count": 1,
+            "bytes": 0
+          },
+          "cdn.js:1059": {
+            "count": 1,
+            "bytes": 0
+          },
+          "(traced-at-upload)": {
+            "count": 1,
+            "bytes": 0
+          },
+          "entities.js:4423": {
+            "count": 125,
+            "bytes": 33257216
+          },
+          "bake_prewarm.js:198": {
+            "count": 1,
+            "bytes": 4
+          },
+          "materials.js:5119": {
+            "count": 379,
+            "bytes": 15086144
+          },
+          "terrain.js:4097": {
+            "count": 7,
+            "bytes": 0
+          },
+          "materials.js:4427": {
+            "count": 33,
+            "bytes": 876544
+          },
+          "materials.js:4433": {
+            "count": 42,
+            "bytes": 692224
+          },
+          "bc7_textures.js:307": {
+            "count": 181,
+            "bytes": 61172284
+          },
+          "terrain.js:4255": {
+            "count": 7,
+            "bytes": 5505024
+          },
+          "materials.js:4410": {
+            "count": 32,
+            "bytes": 3923968
+          },
+          "loop.js:1538": {
+            "count": 1,
+            "bytes": 0
+          },
+          "materials.js:5117": {
+            "count": 177,
+            "bytes": 20537344
+          },
+          "terrain.js:393": {
+            "count": 305,
+            "bytes": 98820
+          },
+          "terrain.js:434": {
+            "count": 305,
+            "bytes": 468480
+          },
+          "materials.js:5111": {
+            "count": 21,
+            "bytes": 6193152
+          }
+        },
+        "sceneSupplied": true,
+        "topOwners": [
+          "matCache.perDid 99.0MB (820)",
+          "tagged.__cacheOwned 31.7MB (125)",
+          "matCache.paletted 31.4MB (120)",
+          "unknown 25.9MB (111)",
+          "tagged.__rp4Pooled 0.5MB (610)"
+        ],
+        "topOrigins": [
+          "bc7_textures.js:307 58.3MB (181)",
+          "entities.js:4423 31.7MB (125)",
+          "materials.js:5117 19.6MB (177)",
+          "three-geospatial.js:1570 16.0MB (2)",
+          "materials.js:5119 14.4MB (379)",
+          "materials.js:5111 5.9MB (21)",
+          "terrain.js:4255 5.3MB (7)",
+          "materials.js:4410 3.7MB (32)"
+        ],
+        "topKinds": [
+          "DataArrayTexture 655.7MB alive=43 orphan=5.3MB",
+          "CompressedTexture 235.7MB alive=473 orphan=58.3MB",
+          "CompressedArrayTexture 221.4MB alive=25 orphan=0.0MB",
+          "DataTexture 196.0MB alive=4345 orphan=77.5MB",
+          "Data3DTexture 16.0MB alive=2 orphan=16.0MB",
+          "Texture 0.0MB alive=51 orphan=0.0MB",
+          "DepthTexture 0.0MB alive=2 orphan=0.0MB",
+          "CanvasTexture 0.0MB alive=9 orphan=0.0MB"
+        ],
+        "bc7Records": {
+          "records": 526,
+          "preRecords": 8,
+          "bytes": 45971860,
+          "absent": 240,
+          "shared": true
+        }
+      },
+      "mem": {
+        "stores": {
+          "surfacePixels": {
+            "bytes": 92195264,
+            "entries": 459
+          },
+          "modelTri": {
+            "bytes": 3839280,
+            "entries": 501
+          },
+          "shardRecords": {
+            "bytes": 327477381,
+            "entries": 9519
+          },
+          "surfaceHeight": {
+            "bytes": 12815072,
+            "entries": 856
+          },
+          "sceneryRecords": {
+            "bytes": 6675072,
+            "entries": 722
+          },
+          "suiteArtifacts": {
+            "bytes": 82035,
+            "entries": 1
+          },
+          "sceneryAnim": {
+            "bytes": 1152,
+            "entries": 72
+          },
+          "negCache": {
+            "bytes": 0,
+            "entries": 0
+          },
+          "texSwapAliases": {
+            "bytes": 18768,
+            "entries": 782
+          },
+          "scratchPool": {
+            "bytes": 6291456,
+            "entries": 2
+          },
+          "decodeDids": {
+            "bytes": 8508,
+            "entries": 709
+          }
+        },
+        "top": [
+          "shardRecords 312.3MB",
+          "surfacePixels 87.9MB",
+          "surfaceHeight 12.2MB",
+          "sceneryRecords 6.4MB",
+          "scratchPool 6.0MB"
+        ],
+        "memoryBytes": 611647488,
+        "allocLive": 504142803,
+        "allocPeak": 566282779,
+        "storeBytes": 449403988,
+        "unattributed": 54738815,
+        "slackBytes": 107504685,
+        "decodePeakLiveBytes": 29922884
+      },
+      "bc7": {
+        "records": {
+          "bytes": 267351988,
+          "budget": 268435456,
+          "evictions": 541,
+          "evictedBytes": 50941824,
+          "records": 608,
+          "preRecords": 166
+        },
+        "hits": 577,
+        "absent": 82,
+        "parseErrors": 0,
+        "errors": 0
+      },
+      "xu7": {
+        "transcoderLoads": 1,
+        "transcoderFailed": null,
+        "decodes": 566,
+        "decodeErrors": 0,
+        "decodeMs": 10235.599999941885,
+        "lastError": null,
+        "notReadySkips": 2,
+        "enabled": true
+      },
+      "scene": {
+        "glTextures": 3734,
+        "glGeometries": 7613,
+        "heapMB": 2258,
+        "limitMB": 4192
+      },
+      "label": "Nanto"
+    }
+  ],
+  "errors": []
+}

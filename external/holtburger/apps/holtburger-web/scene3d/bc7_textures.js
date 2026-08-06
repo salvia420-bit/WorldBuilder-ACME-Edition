@@ -432,6 +432,9 @@ export function bc7Stats() {
     support: _detectNote,
     cached: _source ? _source.cacheSize : 0,
     inflight: _source ? _source.inflightSize : 0,
+    // 2026-08-05 — record-cache residency + the `?bc7RecordsMB` budget.
+    // `budget: -1` = disarmed, the same convention `shardCacheBudget` uses.
+    records: _source ? _source.recordCacheStats() : null,
   };
 }
 
@@ -449,6 +452,54 @@ export function _bumpBc7Stat(name, by = 1) {
  * makes this testable with no wasm and no GPU (and lets the delivery half
  * swap in a plain-HTTP route if it prefers one to the HBA namespace).
  */
+/**
+ * `?bc7RecordsMB=N` — byte budget for the parsed-payload caches below.
+ *
+ * DEFAULT ARMED at 256 MB. Absent / unparseable ⇒ the default; only an explicit
+ * `off` (or `0`) disarms, because a typo must not silently uncap memory — the
+ * same grammar `?matBudgetMB` uses and for the same reason.
+ *
+ * Sizing: the 2026-08-05 six-town census measured 553 + 476 records holding
+ * ~297 MB gross, still climbing slowly. 256 MB therefore does not bite on a
+ * town-scale route and bounds the growth on a longer one, which is the whole
+ * point — this cache was UNBOUNDED and is a function of route length.
+ *
+ * Why not tighter: most of those bytes are SHARED with the live
+ * `CompressedTexture` built from the record (`makeBc7Texture` passes
+ * `parsed.levels` through with no copy), so evicting a record whose texture is
+ * alive frees nothing and only risks a re-fetch. Worse, a re-fetch on the XU7
+ * path costs a ~32 ms main-thread transcode. The census puts the cache's
+ * INDEPENDENT hold — payload no live texture is charged for — at 60 MB after
+ * six towns, so a tight budget would buy little and could cost frames.
+ */
+export function bc7RecordBudgetBytes(search) {
+  let raw = null;
+  try {
+    const sq = search !== undefined
+      ? search
+      : (typeof window !== "undefined" && window.location ? window.location.search : "");
+    raw = new URLSearchParams(sq).get("bc7RecordsMB");
+  } catch (_) { raw = null; }
+  if (raw != null && flagIsOff(raw)) return Infinity;
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 1 ? n * 1024 * 1024 : 256 * 1024 * 1024;
+}
+
+/** Resident bytes of one parsed record, deduped by underlying ArrayBuffer —
+ *  `parseHbc7` hands out mip levels as subarrays of ONE payload. */
+function _parsedBytes(parsed) {
+  if (!parsed) return 0; // a negative entry costs a map slot, not bytes
+  let n = 0;
+  const seen = new Set();
+  for (const l of parsed.levels || []) {
+    const buf = l?.data?.buffer;
+    if (!buf || seen.has(buf)) continue;
+    seen.add(buf);
+    n += buf.byteLength;
+  }
+  return n;
+}
+
 export class Bc7RecordSource {
   constructor(opts = {}) {
     this._wasm = opts.wasmExports || null;
@@ -468,6 +519,65 @@ export class Bc7RecordSource {
     // main-thread transcode on top of the wasted bytes.
     this._inflightP = new Map();
     this._preInflightP = new Map();
+    // A15-shaped byte budget over BOTH record maps (2026-08-05). They were
+    // unbounded and keyed by RenderSurface id, i.e. they grew with route
+    // length; the texture census measured 60 MB of hold that no live texture
+    // accounts for after six towns.
+    this._budgetBytes = opts.budgetBytes != null ? opts.budgetBytes : bc7RecordBudgetBytes();
+    this._recordBytes = 0;
+    this._evictions = 0;
+    this._evictedBytes = 0;
+  }
+
+  /** Insert into one of the two record maps, charging bytes and trimming to
+   *  budget. Negative entries (`null` = proven absent) are stored but charged
+   *  nothing and are NEVER evicted: they are what stops a re-fetch storm
+   *  against records the archive does not ship, and they cost a map slot. */
+  _put(map, id, parsed) {
+    const prev = map.get(id);
+    if (prev !== undefined) this._recordBytes -= _parsedBytes(prev);
+    map.set(id, parsed);
+    this._recordBytes += _parsedBytes(parsed);
+    this._trimToBudget();
+  }
+
+  /** Bump recency: Map preserves insertion order, so re-inserting moves the
+   *  key to the young end. Only for POSITIVE entries — re-inserting a null
+   *  would churn the map for no benefit. */
+  _touch(map, id) {
+    const v = map.get(id);
+    if (v) { map.delete(id); map.set(id, v); }
+  }
+
+  _trimToBudget() {
+    if (!(this._recordBytes > this._budgetBytes)) return;
+    // Oldest-first across both maps; the pre-record twin is dropped before the
+    // full record of the same age because it is the cheaper one to lose (it is
+    // a quarter-res preview whose only job is time-to-textured).
+    for (const map of [this._preCache, this._cache]) {
+      for (const [id, parsed] of map) {
+        if (this._recordBytes <= this._budgetBytes) return;
+        if (!parsed) continue; // never evict a proven-absent verdict
+        const b = _parsedBytes(parsed);
+        map.delete(id);
+        this._recordBytes -= b;
+        this._evictions += 1;
+        this._evictedBytes += b;
+      }
+    }
+  }
+
+  /** Diag: `{ bytes, budget, evictions, evictedBytes, records, preRecords }`.
+   *  `budget` is `-1` when disarmed, matching `shardCacheBudget`'s convention. */
+  recordCacheStats() {
+    return {
+      bytes: this._recordBytes,
+      budget: Number.isFinite(this._budgetBytes) ? this._budgetBytes : -1,
+      evictions: this._evictions,
+      evictedBytes: this._evictedBytes,
+      records: this._cache.size,
+      preRecords: this._preCache.size,
+    };
   }
 
   get cacheSize() {
@@ -492,7 +602,7 @@ export class Bc7RecordSource {
   /** Sync accessor: parsed payload, or null while loading / absent. */
   get(rsId) {
     const id = rsId >>> 0;
-    if (this._cache.has(id)) return this._cache.get(id);
+    if (this._cache.has(id)) { this._touch(this._cache, id); return this._cache.get(id); }
     if (!this._inflight.has(id)) this._begin(id);
     return null;
   }
@@ -500,7 +610,7 @@ export class Bc7RecordSource {
   /** Async accessor: resolves to the parsed payload or null. */
   getAsync(rsId) {
     const id = rsId >>> 0;
-    if (this._cache.has(id)) return Promise.resolve(this._cache.get(id));
+    if (this._cache.has(id)) { this._touch(this._cache, id); return Promise.resolve(this._cache.get(id)); }
     return this._begin(id);
   }
 
@@ -512,14 +622,14 @@ export class Bc7RecordSource {
    */
   getPreAsync(rsId) {
     const id = rsId >>> 0;
-    if (this._preCache.has(id)) return Promise.resolve(this._preCache.get(id));
+    if (this._preCache.has(id)) { this._touch(this._preCache, id); return Promise.resolve(this._preCache.get(id)); }
     const impl = this._preFetchImpl
       ? this._preFetchImpl
       : this._wasm && typeof this._wasm.bc7_pre_blocks === "function"
         ? (i) => this._wasm.bc7_pre_blocks(i)
         : null;
     if (!impl) {
-      this._preCache.set(id, null);
+      this._put(this._preCache, id, null);
       return Promise.resolve(null);
     }
     // 2026-08-05 — this used to be an empty `if (this._preInflight.has(id)) {}`
@@ -533,7 +643,7 @@ export class Bc7RecordSource {
     const pre = Promise.resolve(impl(id))
       .then((bytes) => {
         if (!bytes || bytes.length === 0) {
-          this._preCache.set(id, null);
+          this._put(this._preCache, id, null);
           return null;
         }
         let parsed;
@@ -545,16 +655,16 @@ export class Bc7RecordSource {
           _stats.lastError = String(e && e.message ? e.message : e);
           // eslint-disable-next-line no-console
           console.error(`[bc7] 0x${id.toString(16).toUpperCase()} malformed PRE payload:`, e);
-          this._preCache.set(id, null);
+          this._put(this._preCache, id, null);
           return null;
         }
         _stats.bytesFetched += bytes.length;
         _stats.preHits += 1;
-        this._preCache.set(id, parsed);
+        this._put(this._preCache, id, parsed);
         return parsed;
       })
       .catch(() => {
-        this._preCache.set(id, null);
+        this._put(this._preCache, id, null);
         return null;
       })
       .finally(() => {
@@ -607,7 +717,7 @@ export class Bc7RecordSource {
     const p = tryXu7()
       .then((xu7Parsed) => {
         if (xu7Parsed) {
-          this._cache.set(id, xu7Parsed);
+          this._put(this._cache, id, xu7Parsed);
           _stats.hits += 1;
           return { __shortCircuit: xu7Parsed };
         }
@@ -617,7 +727,7 @@ export class Bc7RecordSource {
         if (bytesOrDone && bytesOrDone.__shortCircuit) return bytesOrDone.__shortCircuit;
         const bytes = bytesOrDone;
         if (!bytes || bytes.length === 0) {
-          this._cache.set(id, null); // proven-absent OR namespace not shipped
+          this._put(this._cache, id, null); // proven-absent OR namespace not shipped
           _stats.absent += 1;
           return null;
         }
@@ -632,17 +742,17 @@ export class Bc7RecordSource {
           // quirk, and silently rendering the retail texture would hide it.
           // eslint-disable-next-line no-console
           console.error(`[bc7] 0x${id.toString(16).toUpperCase()} malformed payload:`, e);
-          this._cache.set(id, null);
+          this._put(this._cache, id, null);
           return null;
         }
-        this._cache.set(id, parsed);
+        this._put(this._cache, id, parsed);
         _stats.hits += 1;
         return parsed;
       })
       .catch((e) => {
         _stats.errors += 1;
         _stats.lastError = String(e && e.message ? e.message : e);
-        this._cache.set(id, null); // never re-hammer a broken endpoint
+        this._put(this._cache, id, null); // never re-hammer a broken endpoint
         // eslint-disable-next-line no-console
         console.warn(`[bc7] fetch failed 0x${id.toString(16).toUpperCase()}:`, e);
         return null;
