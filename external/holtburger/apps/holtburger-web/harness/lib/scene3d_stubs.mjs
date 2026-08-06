@@ -32,4 +32,13 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   bc7Available: "() => false",
   bc7TextureBytes: "() => 0",
   upgradeMaterialToBc7: "() => false",
+  // ./texture_release.js — `?texFreeCpu` CPU-side release arming. Returns
+  // false = "not armed", which is also what the real function returns with the
+  // flag off, so no suite's assertions change shape. The one call site is
+  // inside `_finishSurface`; nothing reads the return.
+  armCpuRelease: "() => false",
+  // ./surface_planes.js — the plane TAGS (`armCpuRelease`'s second argument).
+  // Real string values, not sentinels: a suite that ever asserts on the tag
+  // should see the production string.
+  PLANE: '{ ALBEDO: "albedo", NORMAL: "normal", HEIGHT: "height", ROUGHNESS: "roughness", AO: "ao" }',
 });

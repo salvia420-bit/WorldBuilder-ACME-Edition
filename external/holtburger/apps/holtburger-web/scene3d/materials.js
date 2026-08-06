@@ -212,6 +212,60 @@ const PALETTED_CACHE_CAP = 256;
 // 1 MB — three orders below the budget it instruments.
 const PAL_EVICT_MEMORY_KEYS = 8192;
 
+// === `?palDedup` — SINGLE-FLIGHT over a paletted signature (2026-08-06) ===
+// `palettedMaterials` already dedups by VALUE key (`did|paletteId|subPalettes`),
+// so two entities in the same outfit are MEANT to share one material object —
+// and on a cache HIT they do (entities.js reads the hit straight into
+// `_entityMaterials`). The hole is the window between the miss and the install:
+// `_spawnImpl` does `getCachedPaletted()` (sync) → `await
+// fetchEntitySurfacesPixels()` (mean 897 ms) → mint → `installPaletted()`, and
+// spawns.js dispatches a landblock's spawns in one un-awaited loop. Every rig
+// that misses inside another rig's decode window misses TOO, mints its own
+// material, and the last install wins the map slot — the earlier ones are
+// orphaned onto their meshes forever (never in the cache, so the LRU can't
+// reclaim them; `__cacheOwned`, so the entity's dispose won't either).
+//
+// MEASURED (1070, Nanto, 2026-08-06): FOUR separate material objects all named
+// `paletted-8000015-400007e`, identical in every inspected property AND in
+// `userData.__paletteKey`, carrying 21/21/17/17 meshes on four different entity
+// guids. That is 3 wasted wasm decodes, 3 wasted texture uploads, 3 extra
+// material objects each carrying its own program/uniform state, and 3 ORPHANS:
+// the last install won the map slot, so the other three are in no cache (the
+// LRU cannot reclaim them) yet carry `__cacheOwned` (so the entity's dispose
+// won't either). Anything that merges by material IDENTITY — the statics
+// batcher's `_getOrCreateBucket` is the in-tree precedent — also cannot see
+// them as one.
+//
+// The fix is the paletted twin of the `pendingFetches` single-flight the PLAIN
+// per-DID path has had since the 2026-06-20 grey-surface race fix: the first
+// misser CLAIMS the key, later missers JOIN its promise instead of re-decoding.
+// See `claimPalettedInflight` / `getPalettedInflight`.
+//
+// ⚠ NOT the same bug as `palEvict` thrash (see the `?palBudgetMB` block below):
+// past the budget the cache evicts a live signature and the next wearer
+// re-mints, which ALSO produces duplicate objects for one key. Both are real;
+// they are distinguished live by `__diag.palettedCache()` — `palEvict`/
+// `palRemint` > 0 means thrash (raise `?palBudgetMB`), == 0 with duplicates
+// means this race. This flag only closes the race.
+let _palDedupFlag;
+/** `?palDedup=off` escapes the paletted single-flight (restores the
+ *  pre-2026-08-06 mint-per-misser behaviour). DEFAULT-ON. Lazy + memoised so
+ *  the Node harnesses (no `location`) read the default without touching the DOM. */
+export function palettedDedupEnabled() {
+  if (_palDedupFlag !== undefined) return _palDedupFlag;
+  let on = true; // DEFAULT-ON; ?palDedup=off escapes
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("palDedup") || "").toLowerCase();
+      if (v) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _palDedupFlag = on;
+  return on;
+}
+/** Test seam — reset the memoised flag. */
+export function __setPalettedDedupForTest(v) { _palDedupFlag = v; }
+
 // Phase 0.1 — shadow casting gate. Translucent and Additive surfaces
 // don't cast (shadow pass is depth-only — would render a solid box,
 // and three.js warns). Opaque + ClipMap honour alphaTest, so they cast.
@@ -2738,6 +2792,18 @@ export class MaterialCache {
     this.palettedMaterials = new Map();
     /** @type {Map<string, THREE.DataTexture>} — cache-owned paletted textures. */
     this.palettedTextures = new Map();
+    /**
+     * `?palDedup` (2026-08-06) — single-flight over the SAME key space as
+     * `palettedMaterials`. One entry per signature currently being decoded by
+     * some spawn; the value settles with the minted material (or `null` when
+     * that spawn bailed / decoded empty). Entries are transient: the claimer
+     * deletes its own entry when it settles, so a steady-state scene holds an
+     * empty map. See the `?palDedup` block near PAL_EVICT_MEMORY_KEYS.
+     * @type {Map<string, {promise: Promise<THREE.Material|null>, settle: (m: THREE.Material|null) => void}>}
+     */
+    this.palettedInflight = new Map();
+    this._palClaims = 0;   // signatures this cache handed out a claim for
+    this._palJoins = 0;    // decodes AVOIDED by joining another spawn's claim
     // === `palMB` instrument (2026-07-26, RESULTS-matcache-falsifier next-move 1) ===
     // The paletted maps are the ONLY per-surface caches `matBudgetMB` cannot
     // see: `_matLru` is populated exclusively for the four per-DID maps
@@ -3299,6 +3365,15 @@ export class MaterialCache {
       // even while `evictions` is nonzero.
       remints: this._palRemints,
       evictedKeysTracked: this._palEvictedKeys.size,
+      // `?palDedup` single-flight (2026-08-06). `joins` is the headline: every
+      // join is one wasm decode + one texture upload + one DUPLICATE material
+      // object that did not happen. `inflight` should idle at 0 — a nonzero
+      // steady-state reading means a claim leaked (see the settle contract on
+      // `claimPalettedInflight`).
+      dedupEnabled: palettedDedupEnabled(),
+      claims: this._palClaims,
+      joins: this._palJoins,
+      inflight: this.palettedInflight.size,
     };
   }
 
@@ -3549,6 +3624,60 @@ export class MaterialCache {
   getCachedPaletted(surfaceDid, paletteId, subPalettes) {
     const key = this._paletteKey(surfaceDid, paletteId, subPalettes);
     return this.palettedMaterials.get(key) ?? null;
+  }
+
+  /**
+   * `?palDedup` — is some OTHER caller already decoding this signature?
+   * Returns its promise (settles with the minted material, or `null` if that
+   * caller bailed/decoded empty) or `null` when nothing is in flight.
+   *
+   * Value-keyed, exactly like `getCachedPaletted`: a different dye ⇒ a
+   * different `subPalettes` tuple ⇒ a different key ⇒ never joined. Sharing is
+   * only ever offered within one (did, paletteId, subPalettes) signature, which
+   * is the same contract the cache hit already has.
+   *
+   * `?palDedup=off` ⇒ always null ⇒ every caller decodes for itself (the
+   * pre-2026-08-06 path, byte-identical).
+   */
+  getPalettedInflight(surfaceDid, paletteId, subPalettes) {
+    if (!palettedDedupEnabled()) return null;
+    const e = this.palettedInflight.get(this._paletteKey(surfaceDid, paletteId, subPalettes));
+    if (!e) return null;
+    this._palJoins += 1;
+    return e.promise;
+  }
+
+  /**
+   * `?palDedup` — claim this signature for the caller that is about to decode
+   * it. Returns a `settle(material|null)` callback, or `null` when the flag is
+   * off OR someone else already holds the claim (callers check
+   * `getPalettedInflight` first, and nothing awaits between the two calls, so
+   * the second case only fires on misuse).
+   *
+   * ⚠ CONTRACT: whoever takes a claim MUST settle it on EVERY exit path,
+   * including the abort branches — a claim that never settles hangs every
+   * joiner's spawn. `settle` is idempotent and deletes its own map entry.
+   * entities.js settles each key the moment it mints, sweeps the leftovers
+   * BEFORE it awaits any join (which is what makes mutual joins deadlock-free:
+   * a spawn can never be waiting on a key it still owns), and sweeps again in
+   * the spawn block's `finally`.
+   */
+  claimPalettedInflight(surfaceDid, paletteId, subPalettes) {
+    if (!palettedDedupEnabled()) return null;
+    const key = this._paletteKey(surfaceDid, paletteId, subPalettes);
+    if (this.palettedInflight.has(key)) return null;
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    const entry = { promise, settle: null };
+    entry.settle = (material) => {
+      // Idempotent: only the claim we installed may be dropped (a later claim
+      // for the same key after we settled belongs to someone else).
+      if (this.palettedInflight.get(key) === entry) this.palettedInflight.delete(key);
+      resolve(material ?? null);
+    };
+    this.palettedInflight.set(key, entry);
+    this._palClaims += 1;
+    return entry.settle;
   }
 
   /** True when `?palBudgetMB` is armed (byte mode); false = legacy count cap. */
@@ -5519,6 +5648,17 @@ export class MaterialCache {
     // a scene rebuild must not erase the session's thrash history.
     if (this._palKeyBytes) this._palKeyBytes.clear();
     this._palBytes = 0;
+    // `?palDedup` — SETTLE (never merely clear) any outstanding claim. A spawn
+    // continuation that survives page teardown is still parked on its joined
+    // promise; dropping the map entry would leave it awaiting forever, and its
+    // `finally` sweep would then never run either. Settling with null sends it
+    // down the same "owner produced nothing" branch as a bailed decode.
+    if (this.palettedInflight) {
+      for (const entry of [...this.palettedInflight.values()]) {
+        try { entry?.settle?.(null); } catch (_) {}
+      }
+      this.palettedInflight.clear();
+    }
     // anim-frames (#22 fold-in) — the per-surface animated-frame
     // DataTextures. `entry.mat` is the SAME object held in `this.materials`
     // (guarded by the build path), already disposed above, so dispose ONLY
