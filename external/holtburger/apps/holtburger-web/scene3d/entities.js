@@ -1038,6 +1038,7 @@ import {
   installVfxComponentPatch,
   surfaceResultDecodeMisses,
   surfaceResultProvenAbsent,
+  materialRendersNothing,
 } from "./materials.js";
 import { drainPendingPlayEffects } from "./play_effect_vfx.js";
 // #16 (?itemFx) — the optional non-retail UiEffects 3D item-aura. Mirrors the
@@ -4611,6 +4612,7 @@ export class EntityManager {
           resolveMaterial: resolveEntityMaterial,
           castShadow: castShadowGate,
           materialCanCastShadow,
+          materialRendersNothing,
           onGeometry: (geometry) => inst.registerGeometry(geometry),
         });
       } else {
@@ -4655,6 +4657,9 @@ export class EntityManager {
           if (castShadowGate) {
             m.castShadow = materialCanCastShadow(mat);
           }
+          // Mirror of the rig-module skip (setup_rig.js) so `?rigModule=off`
+          // does not silently diverge from the shipped path.
+          if (materialRendersNothing(mat)) m.visible = false;
           partGroup.add(m);
           inst.registerGeometry(g.geometry);
         }
@@ -11214,6 +11219,7 @@ export class EntityManager {
           resolveMaterial: resolveSwapMaterial,
           castShadow: swapCastShadow,
           materialCanCastShadow,
+          materialRendersNothing,
           onGeometry: (geometry) => inst.registerGeometry(geometry),
         });
       } else {
@@ -11226,6 +11232,8 @@ export class EntityManager {
           if (swapCastShadow) {
             m.castShadow = materialCanCastShadow(mat);
           }
+          // Mirror of the rig-module skip — see the spawn path above.
+          if (materialRendersNothing(mat)) m.visible = false;
           partGroup.add(m);
           inst.registerGeometry(grp.geometry);
         }

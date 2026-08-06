@@ -227,6 +227,73 @@ export function materialCanCastShadow(material) {
   return true;
 }
 
+/**
+ * True when a material can never put a pixel on screen, now or later, so the
+ * mesh carrying it is a pure no-op draw.
+ *
+ * WHY THIS EXISTS (2026-08-06). A frame at Nanto measured 519 draws, of which
+ * 80 were fully invisible: 76 entity part meshes (one triangle each) on surface
+ * 0x08000015, whose Surface record carries `translucency: 1` — verified against
+ * the DAT, not inferred — so `opacity = 1 - T = 0`. They were submitted every
+ * frame and contributed nothing. 76 draws is ~15% of that frame.
+ *
+ * Every clause is load-bearing; this is deliberately narrow, because the point
+ * is that skipping is OUTPUT-IDENTICAL rather than merely close:
+ *   - `opacity <= 0` with NormalBlending means the source contributes
+ *     `src*0 + dst*1` = dst exactly. ADDITIVE blending is excluded on purpose:
+ *     `srcFactor = ONE` adds the colour regardless of alpha, so an additive
+ *     material at opacity 0 still lights the pixel.
+ *   - `depthWrite === false` — a depth-writing invisible surface still occludes
+ *     what is behind it, so hiding it would CHANGE the image.
+ *   - `__baseTranslucency >= 1` is the PERMANENCE proof, and it is why this is
+ *     safe against animation. A Transparent(20)/TransparentPart(7) hook floors
+ *     its ramp value to the authored base translucency (entities.js
+ *     `_applyRampValueToMaterial`, mirroring retail's floor to
+ *     translucencyOriginal at acclient.c:316947-316956), so
+ *     `opacity = 1 - max(value, 1) <= 0` for every value a hook can ever set.
+ *     Without this clause a mid-fade material at opacity 0 would be hidden
+ *     permanently — a bug that would only show as a prop that never fades in.
+ *
+ * Materials that are transiently at opacity 0 WITHOUT the authored base (e.g. a
+ * batcher's array material, which does not carry the marker) deliberately fail
+ * this test and keep rendering.
+ *
+ * @param {object|Array<object>} material  material or material array.
+ * @returns {boolean} true when nothing this material draws can ever be seen.
+ */
+let _skipDeadAlphaFlag;
+/** `?skipDeadAlpha=off` escapes the invisible-draw skip above (restores the
+ *  pre-2026-08-06 behaviour of submitting them). DEFAULT-ON. */
+export function skipDeadAlphaEnabled() {
+  if (_skipDeadAlphaFlag !== undefined) return _skipDeadAlphaFlag;
+  let on = true; // DEFAULT-ON; ?skipDeadAlpha=off escapes
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("skipDeadAlpha") || "").toLowerCase();
+      if (v) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _skipDeadAlphaFlag = on;
+  return on;
+}
+/** Test seam — reset the memoised flag. */
+export function __setSkipDeadAlphaForTest(v) { _skipDeadAlphaFlag = v; }
+
+export function materialRendersNothing(material) {
+  if (!skipDeadAlphaEnabled()) return false;
+  const mats = Array.isArray(material) ? material : [material];
+  if (mats.length === 0) return false;
+  return mats.every(
+    (m) =>
+      !!m &&
+      m.transparent === true &&
+      (m.opacity ?? 1) <= 0 &&
+      m.blending === THREE.NormalBlending &&
+      m.depthWrite === false &&
+      +(m.userData?.__baseTranslucency ?? 0) >= 1
+  );
+}
+
 // Phase 1.4 — heuristic surface category mirror. MUST match the
 // `SurfaceCategory::as_u8` encoding in
 // `crates/holtburger-dat/src/surface_classify.rs`.

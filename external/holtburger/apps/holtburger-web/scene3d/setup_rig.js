@@ -113,6 +113,12 @@ export function applyRestPoseFrame(THREE, partGroup, origins, orientations, p, h
  * @param {boolean} args.castShadow  when true, gate each mesh's `castShadow`
  *                  through `materialCanCastShadow`.
  * @param {(mat: object) => boolean} args.materialCanCastShadow  shadow predicate.
+ * @param {(mat: object) => boolean} [args.materialRendersNothing]  predicate for
+ *                  surfaces that can never put a pixel on screen (fully
+ *                  translucent by authored surface data). Injected for the same
+ *                  reason as `materialCanCastShadow`: this module never reads
+ *                  Surface flags itself. Matching meshes are BUILT but left
+ *                  `visible = false` — see the note at the assignment.
  * @param {(geometry: object) => void} [args.onGeometry]  geometry-registration hook.
  */
 export function buildPartSurfaceMeshes(THREE, args) {
@@ -124,6 +130,7 @@ export function buildPartSurfaceMeshes(THREE, args) {
     resolveMaterial,
     castShadow,
     materialCanCastShadow,
+    materialRendersNothing,
     onGeometry,
   } = args;
   if (!conv) return;
@@ -133,6 +140,20 @@ export function buildPartSurfaceMeshes(THREE, args) {
     const m = new THREE.Mesh(g.geometry, mat);
     m.name = `part_${partIndex}_surface_${did.toString(16)}`;
     m.userData = { guid, partIndex, surfaceDid: did };
+    // 2026-08-06 — a fully-translucent surface (authored translucency 1, e.g.
+    // 0x08000015) can never be seen, so submitting it is a pure no-op draw:
+    // 76 of a measured 519-draw frame at Nanto were exactly this.
+    //
+    // HIDDEN, NOT SKIPPED. The mesh stays in the graph because consumers index
+    // the rig by part and by mesh name — limbs.js resolves parts via
+    // `userData.partIndex` (see its note at :359), dismember/recolor walk the
+    // same children — so dropping the node would silently change rig topology
+    // to save a traverse step. `visible = false` costs nothing at draw time:
+    // three skips invisible objects in projectObject before they ever reach a
+    // render list.
+    if (typeof materialRendersNothing === "function" && materialRendersNothing(mat)) {
+      m.visible = false;
+    }
     // Visual-fidelity Phase 0.1 — entities cast shadows. receiveShadow
     // stays false (animated rig → shimmer); translucent/additive surfaces
     // self-skip via the material-flag predicate. Phase 3.3 CSM path
