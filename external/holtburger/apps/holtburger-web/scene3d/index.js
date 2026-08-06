@@ -57,6 +57,13 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb } from "./static_batch_x.js";
+// Frame-split probe (2026-08-06) — imported for its side effect only: it
+// installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
+// Costs one module parse and zero frame time until something arms it, the same
+// shape as `window.__statMergeProjection` in static_atlas.js, so it carries no
+// URL flag. Splits the ~5.72 ms of `renderer.render()` that is neither the draw
+// funnel nor the multidraw rebuild — see docs/2026-08-06-frame-remainder-probe.md.
+import "./frame_split.js";
 // X6 `?texBc7` (DEFAULT-OFF) — the BPTC capability probe. MUST run against the
 // app's real WebGL context before any BC7 texture is constructed: without the
 // extension three's `convert()` yields a null gl format and warns per texture,
