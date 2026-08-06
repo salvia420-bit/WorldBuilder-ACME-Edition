@@ -167,6 +167,11 @@ console.log("PART 7 — the shipped page threads the exports through");
         /surfacePlanesCached:\s*__hbWasmNs\.surfacePlanesCached/.test(html));
   check("...and surfacePlanesCachedHas",
         /surfacePlanesCachedHas:\s*__hbWasmNs\.surfacePlanesCachedHas/.test(html));
+  // The seam needs a DID and the material is all the atlas has. Stamped on the
+  // single write path into the per-DID maps, so it cannot drift from them.
+  const mats = readFileSync(join(here, "scene3d", "materials.js"), "utf8");
+  check("MaterialCache stamps surfaceDid on every cached material",
+        /_installCacheEntry\(did, mat, tex, normalTex, heightTex\) \{[\s\S]{0,900}?userData = \{ \.\.\.\(mat\.userData \|\| \{\}\), surfaceDid: did >>> 0 \}/.test(mats));
   const rs = readFileSync(join(here, "src", "lib.rs"), "utf8");
   check("the wasm export exists and is memo-ONLY (never fetches on the sync path)",
         /js_name = surfacePlanesCached\)/.test(rs) &&

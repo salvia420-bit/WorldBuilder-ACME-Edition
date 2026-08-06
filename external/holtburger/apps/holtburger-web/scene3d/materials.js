@@ -2936,6 +2936,17 @@ export class MaterialCache {
    * both route through here, so the LRU can never drift from the maps.
    */
   _installCacheEntry(did, mat, tex, normalTex, heightTex) {
+    // Stamp the surface DID on the material (2026-08-05, atlas-staging seam).
+    // The atlas stages layers from `THREE.DataTexture.image.data` and knows only
+    // the material; `scene3d/surface_planes.js` can re-supply those pixels from
+    // the wasm decode memo instead, but it needs the DID to ask, and nothing
+    // else on the material carries it. Stamped HERE because this is the single
+    // write path into the four per-DID maps — `get()` and `_installFromPixels`
+    // both route through it, which is the same reason the LRU accounting lives
+    // here. Non-enumerable it is not: `userData` is plain data that gets spread
+    // into clones (`:2501`), and a clone SHOULD inherit the DID — it samples the
+    // same surface.
+    mat.userData = { ...(mat.userData || {}), surfaceDid: did >>> 0 };
     this.textures.set(did, tex);
     if (normalTex) this.normalTextures.set(did, normalTex);
     if (heightTex) this.heightTextures.set(did, heightTex);
