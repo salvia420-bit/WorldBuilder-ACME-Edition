@@ -295,3 +295,55 @@ repeated between every arm — before it can be believed either way.
 What is NOT in doubt: three's early-out at `three.core.js:27218` is real, `static_batch_x`
 disables it on every bucket every frame, and skipping the walk is worth real milliseconds when
 the camera is still.
+
+---
+
+## SLACK, MEASURED PROPERLY (2026-08-06) — 4.00 ms parked, moving still unresolved
+
+The first slack attempt was discarded for a 4 ms control swing at n=1. Rerun with the control
+repeated between EVERY arm and both conditions inside each boot, six boots:
+
+```
+PARKED  off [22.3, 20.9, 23.2]   slack [17.8, 18.3, 19.9]
+        delta 4.00 ms | control spread 2.30 ms | USABLE
+
+MOVING  off [28.5, 33.6, 27.0]   slack [29.6, 19.0, 22.4]
+        delta 6.10 ms | control spread 6.60 ms | NOT USABLE
+```
+
+**Parked: 4.00 ms**, the largest single measured win of the investigation, at `errors 0` and
+rebuilds down to ~4,100 from ~65,000 in exact mode. The effect is 1.7× the control spread —
+usable, not overwhelming.
+
+**Moving is still unresolved, and the fault is the test, not the flag.** Spinning the camera
+at ~54°/s makes every run stream and frustum-cull a different amount, so the condition
+generates its own variance: the moving control alone ranged 27.0–33.6 ms and the slack arm
+19.0–29.6 ms. A repeatable fixed path (the same `@teleloc` hops in the same order) would hold
+the workload constant while still invalidating the memo every frame. Until that is run,
+nothing is known about slack while moving — and exact mode's measured **+0.5 ms** moving
+regression is the only evidence on that side.
+
+## The `updateMatrixWorld` thread is CLOSED at 0.48 ms
+
+`preProject` is 2.06 ms/frame. Ballast priced its parts directly, control spread 0.037 ms:
+
+| | ns/node |
+|---|---|
+| `matrixAutoUpdate = true` | 340.4 |
+| `matrixAutoUpdate = false` | 229.4 |
+| **the compose (`updateMatrix`)** | **111.0** |
+
+So freezing all 4,358 static-subtree nodes has a **0.48 ms ceiling** — and that is a ceiling
+in the strict sense: it assumes every one is safe to freeze, when door hinges
+(`buildings.js` `hingeWrapper`) and the legacy animated-scenery path both move under those
+roots. Realistically ~0.3 ms for a change that can silently freeze a door.
+
+**The other 229 ns/node — 78% of the walk — is the recursion and parent multiply, and
+`matrixAutoUpdate` cannot touch it.** Only deleting nodes would, and that is not available
+either: of ~3,532 Groups, the entity `partGroup`s carry animation transforms (~1,050),
+building `placementGroup`s carry placement, and `cells.js`'s inner `meshGroup` carries cell
+origin and orientation. A few hundred are genuinely inert, worth ~0.2 ms for a risky
+refactor.
+
+Both halves of the 3.6 ms traversal are therefore closed. Do not reopen without a way to
+reduce NODE COUNT, which is a scene-graph design change, not a flag.
