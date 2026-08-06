@@ -288,7 +288,12 @@ function dummyMap() {
 // textures (the cross-LB path allocates an empty array of `capacity` layers up
 // front and writes each layer's pixels on demand). Omitted ⇒ exactly textures.length
 // (the original per-(LB,size) path — byte-identical).
-function buildDiffuseArray(textures, w, h, layerCount) {
+// EXPORTED (2026-08-06, `?statArrayMerge`) — static_array_pool.js builds the
+// SAME arrays for the batcher's global layer pools. Exported rather than
+// re-implemented so the two populations can never drift on colour space, wrap
+// mode, filtering or mip policy: a pool array and an atlas array are the same
+// object by construction. No behaviour change here — only the keyword.
+export function buildDiffuseArray(textures, w, h, layerCount) {
   const layers = layerCount != null ? layerCount : textures.length;
   const data = new Uint8Array(w * h * 4 * layers);
   const stride = w * h * 4;
@@ -319,7 +324,7 @@ const _NRA_FLAT_N = 128; // 0.5 -> tangent normal (0,0,1) after decode
 const _NRA_FLAT_R = 255; // roughness multiplier 1.0 (bucket material roughness = 1.0)
 const _NRA_FLAT_A = 255; // AO 1.0 = unoccluded
 
-function buildNraArray(w, h, layerCount) {
+export function buildNraArray(w, h, layerCount) {
   const data = new Uint8Array(w * h * 4 * layerCount);
   for (let i = 0; i < data.length; i += 4) {
     data[i] = _NRA_FLAT_N;
@@ -393,7 +398,7 @@ function _texChannel(tex, ch, w, h, plane, surfaceDid) {
  * previous surface's relief. `stats` is the module tally (mutated).
  * Returns true when at least one real source was found.
  */
-function packNraLayer(nraArray, layer, mat, w, h, stats) {
+export function packNraLayer(nraArray, layer, mat, w, h, stats) {
   const dst = nraArray?.image?.data;
   if (!dst || !mat) return false;
   const px = w * h;
@@ -471,7 +476,7 @@ function packNraLayer(nraArray, layer, mat, w, h, stats) {
 // ref verbatim and the blend factors, and `_applyStateKey` replays them onto the
 // bucket material. `alphaTest` is a uniform (not a define) in three, so the
 // distinct refs still share one compiled program.
-function _stateKeyOf(mat) {
+export function _stateKeyOf(mat) {
   const at = +(mat.alphaTest || 0);
   const dw = mat.depthWrite === false ? 0 : 1;
   const b = mat.blending ?? THREE.NormalBlending;
@@ -529,7 +534,7 @@ function _applyStateKey(m, stateKey) {
 // mutates — three keeps `materialProperties.uniforms === parameters.uniforms`,
 // three.module.js:18153). Omitted ⇒ a holder is synthesised from the args, so
 // the non-growing per-(LB,size) path below is unchanged.
-function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
+export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
   // Shape decisions (shader source, defines, cache key) are taken from the
   // CONSTRUCTION-time nra presence, which growth never changes; only the array
   // OBJECTS are late-bound.
@@ -1089,7 +1094,7 @@ export function isBc7AtlasTexture(tex) {
 // NOTE the deliberate asymmetry: the `f8` suffix is appended ONLY when the BC7
 // path is live, so with `?texBc7` absent every bucket key is character-identical
 // to the pre-X6 key (bucket identity is used in `bm.name` and `__atlasStats`).
-function _bucketKeyFor(w, h, stateKey, bc7) {
+export function _bucketKeyFor(w, h, stateKey, bc7) {
   if (!bc7Available()) return `${w}x${h}|${stateKey}`;
   return `${w}x${h}|${stateKey}|${bc7 ? "f7" : "f8"}`;
 }
@@ -1100,7 +1105,7 @@ function _bucketKeyFor(w, h, stateKey, bc7) {
  * sizing and the ceiling arithmetic can never drift apart; the expressions are
  * unchanged, including the `Math.max(1, …)` guard.
  */
-function _perLayerBytesFor(w, h, bc7) {
+export function _perLayerBytesFor(w, h, bc7) {
   const nra = statNraEnabled();
   if (bc7) return Math.max(1, bc7LevelBytes(w, h) + (nra ? (w | 0) * (h | 0) * 4 : 0));
   return Math.max(1, (w | 0) * (h | 0) * 4 * (nra ? 2 : 1));
