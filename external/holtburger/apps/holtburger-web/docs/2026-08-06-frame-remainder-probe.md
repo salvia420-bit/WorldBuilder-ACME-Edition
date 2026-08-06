@@ -378,9 +378,11 @@ liveScene3d.renderer.sortObjects = true;
 ```
 
 ```js
-// 5. Optional, ONLY if the multidraw-rebuild instrument is not armed: close sceneSubmit.
-__frameSplitArm({ objHooks: true, batchedMeshCtor: <the app's THREE.BatchedMesh> })
-//    refuses outright if it finds the prototype already wrapped.
+// 5. Close sceneSubmit. See §6 for the full sequence and what each number means.
+__frameSplitDisarm();
+__frameSplitArm({ objHooks: true, glueSample: 8 })
+//    No constructor argument any more — the hooks are adopted off the live
+//    render list, because on this app they are OWN properties. See §6a.
 ```
 
 `__frameSplitSamples()` returns the raw per-call rows (`total`, `project`, `shadow`,
@@ -480,3 +482,209 @@ fidelity trade and needs the eye-test, not a flag flip.
   of which are set at init, so arming any time after `in-world` is fine.
 * Disarm before quoting any frame time. The probe's own wrappers are in the frame while armed,
   and `health.probeOverheadMs` is the size of that, not zero.
+
+---
+
+## 6. The `sceneSubmit` split — the 3.42 ms, and the instrument for it
+
+The first run of the probe on the 1070 (549 calls, quality `mid`) closed three threads and left
+one standing:
+
+| bucket | ms/call | state |
+|---|---|---|
+| **`sceneSubmit` − draws (per-object glue)** | **3.42** | **unattributed, and `objHookMs` read `null`** |
+| `preProject` (`scene.updateMatrixWorld`) | 2.06 | closed — ceiling 0.48 ms |
+| `project` (`projectObject`) | 1.54 | closed |
+| `sort` | 0.16 | — |
+| `shadow` | 0.002 | `dutyCycle` 0 at `mid`, as §0c predicted |
+
+At ~470 SUBMITTED objects, 3.42 ms is **~7.3 µs per submitted object** of non-draw work. That
+is a very large number for three lines of matrix arithmetic, and the discrepancy is the whole
+reason this section exists: **`sceneSubmit` is not one population.** Read
+`WebGLRenderer.render` r184 from the end of `shadowMap.render` to `scene.onAfterRender` and
+four of the things in that window are **once per call** (`setupLights`, `setupLightsView`,
+`background.render`, the multisample resolve + `output.end`) while two are **per submitted
+object** (the object hook, and the glue: `modelViewMatrix.multiplyMatrices` +
+`normalMatrix.getNormalMatrix` + `material.onBeforeRender`). Quoting them as one number is
+exactly the scale confusion that produced the five 2×+ overestimates on this workload.
+
+### 6a. Why `objHookMs` could not be closed by wrapping a prototype — a tombstone
+
+The probe's original `{objHooks:true}` wrapped `BatchedMesh.prototype.onBeforeRender`. **On this
+app that measures an empty population and reports a confident ~0**, because the hot hooks are
+instance properties, which shadow the prototype:
+
+| site | what it does |
+|---|---|
+| `scene3d/static_batch_x.js` `_installMemo` | `bm.onBeforeRender = _memoOnBeforeRender` — on every batch bucket, default-on |
+| `scene3d/static_atlas.js` `armStatMergeSubmittedSampler` | `o.onBeforeRender = fn` |
+| `scene3d/blood_decals.js` | `mesh.onBeforeRender = () => {...}` |
+
+A prototype wrapper never runs for any of them. So the hooks are now **adopted off the live
+render list** instead: once per call, inside the already-wrapped `list.finish`, the probe walks
+`list.opaque/transmissive/transparent` — three's own answer, at SUBMITTED scale, never
+re-derived — and wraps every object whose `onBeforeRender` is not
+`Object3D.prototype.onBeforeRender`. Objects carrying the stock no-op are deliberately left
+alone: an empty call is ~2 ns and wrapping 470 of them would cost more than they do. Their
+dispatch is inside `glueSpanMs`, bounded by `submitted × 2 ns` ≈ 0.001 ms.
+
+The scan costs 2 timestamps and ~470 property reads per call, is measured as
+`health.objHooks.scanMs`, and lands **inside `buckets.listFinish`** — that bucket is inflated by
+exactly that much while `{objHooks:true}` is armed, which is stated rather than netted out,
+because opening a hole outside the window would break the books.
+
+⚠ **Interaction.** `static_atlas.js armStatMergeSubmittedSampler` skips any node that already
+owns an `onBeforeRender`. While this probe is armed with `{objHooks:true}` every hooked node
+owns one, so that sampler arms and samples nothing — the same trap `static_batch_x.js` documents
+for `?statBatchMemo`. Run them one at a time.
+
+### 6b. The split, and what it costs
+
+**Zero extra timestamps.** `renderBufferDirect` is already wrapped, so the first scene-phase
+draw's entry and the last one's exit are stamps the probe already takes. They tile `sceneSubmit`
+three ways:
+
+```
+preSubmitMs  = firstSceneDraw.entry − shadowEnd    ONCE PER CALL
+               setupLights + setupLightsView + background.render
+               + clipping.endShadows + info.reset
+drawLoopMs   = lastSceneDraw.exit  − firstSceneDraw.entry
+               every renderObject, start to finish
+postDrawMs   = onAfterRender       − lastSceneDraw.exit    ONCE PER CALL
+               multisample resolve + render-target mipmap + output.end
+
+glueSpanMs   = drawLoopMs − rbdSceneMs − objHookInLoopMs   PER SUBMITTED OBJECT
+```
+
+`sceneSplit.split.booksClosed` checks those three re-add to `sceneSubmit`, with the same
+"every bucket sampled on every call" rule as the top-level books.
+
+**Two window-edge facts, both worth a 2×-class error and both caught by the regression suite
+rather than by reading the code:**
+
+1. `drawLoopMs` opens at the **first draw**, so the first submitted object's `onBeforeRender`
+   already fired and is inside `preSubmitMs`. Subtracting the whole hook total leaves
+   `glueSpanMs` **negative** when hooks are few and expensive, and quietly low when they are
+   many and cheap. Only `objHookInLoopMs` is subtracted. One null check per hook.
+2. For the same reason the window spans N draws but only **N−1** inter-draw gaps.
+   `glueSpanPerSubmittedUs` (÷N) is biased **low** by 1/N; `glueSpanPerGapUs` (÷N−1) is the
+   unbiased per-object figure. At 470 submitted the difference is 0.2%; at 8 it is 12.5%. Quote
+   per-submitted for "what would deleting an object save", per-gap against the sampler.
+
+### 6c. Two independent cross-checks on the same number
+
+The span arithmetic is one estimate. Neither of these shares its failure modes.
+
+**The glue sampler** (`{glueSample:k}`) borrows up to *k* stock-no-op `onBeforeRender` slots off
+the submitted list and times **hook-exit → `renderBufferDirect`-entry** directly. That window is
+`modelViewMatrix.multiplyMatrices` + `normalMatrix.getNormalMatrix` + `material.onBeforeRender`
+and nothing else — a strict subset of a gap, so `glueSampleUs ≤ glueSpanPerGapUs` must hold and
+a violation means one of the two is wrong. Cost: **one** extra clock read per sample per call
+(the rbd side reuses a stamp it already takes), so k=8 is ~0.0004 ms. Bias, stated: the k
+objects are the first stock-hook objects in render-list order on the first sampled call and are
+kept for the session, so the sample carries their cache locality, not a random object's. The
+glue is the same three lines for every object, so this measures the code; the ballast below is
+the check on whether it measures the population.
+
+**The draw ballast** (`__frameSplitDrawBallast(n)`) is the SUBMITTED-scale ballast the node
+ballast cannot be. An empty `Group` is never pushed onto a render list — it prices a **visit**
+and can say nothing about a **submitted object**. The draw ballast attaches `n` Meshes sharing
+one geometry and one material, `frustumCulled = false` so three submits every one at any camera.
+Image-identical for the same class of reason as the empty Group: the geometry is **one triangle
+whose three vertices are the same point**, so the rasteriser emits no fragments — no colour, no
+depth, at any camera, in any order. Sharing the geometry and material is deliberate:
+`WebGLObjects.update` memoises per geometry per frame and `setProgram` early-outs on an
+unchanged material, so the injection adds `renderObject` glue and close to the floor of a draw
+rather than n programs. The unit:
+
+```
+glueUnit = Δ(drawLoopMs − drawMs) / n
+```
+
+It also inflates `submitted`, `project` and `sort` — those are **arms, not baselines**, while it
+is attached, and `report().ballast.drawNodes` says so.
+
+### 6d. What to run
+
+One session, after `draws/frame` has settled, same conditions as §3.
+
+```js
+// 0. Which hooks exist at all, and what would price setupLights.
+__frameSplitCensus()
+//    read: hooks.ownOnBeforeRender  <- a prototype wrapper CANNOT see these
+//          hooks.inheritedOverride  <- it could
+//          hooks.byConstructor      <- what is about to be timed
+//          hooks.identityCheckOk    <- false ⇒ two copies of three, stop
+//          preSubmitInputs.lights / lightsByType / sceneBackground
+
+// 1. The split, with the hook total and the direct glue sample.
+__frameSplitArm({ objHooks: true, glueSample: 8 })
+//    ... ~10 s ...
+__frameSplitDisarm(); const R = __frameSplitReport();
+```
+
+Read, in this order:
+
+* `health.booksClosed` and `sceneSplit.split.booksClosed` — **stop and send `health` if either
+  is false**; every share below is then wrong.
+* `health.objHooks.fullySampled` — false means `objHookMs` is `null` on purpose (the adopt scan
+  missed a call) and the split cannot be closed from this run.
+* `health.probeOverheadMs` and `health.probeClockReadsPerCall` — the instrument, priced. The
+  sub-split contributes **0** clock reads; the hooks contribute 2 per hooked object per call.
+* `sceneSplit.split.preSubmitMs` vs `glueSpanMs` — **this is the decision.**
+
+Then the ballast, interleaved base → arm → base as in §3:
+
+```js
+__frameSplitArm({ objHooks: true });
+__frameSplitReset();                       /* 10 s */ const A  = __frameSplitReport();  // BASE
+__frameSplitDrawBallast(400);
+__frameSplitReset();                       /* 10 s */ const B  = __frameSplitReport();  // +400 submitted
+__frameSplitDrawBallast(0);
+__frameSplitReset();                       /* 10 s */ const A2 = __frameSplitReport();  // BASE (drift)
+__frameSplitDisarm();
+
+// glueUnit, µs per submitted object — the third independent estimate
+1000 * ((B.sceneSplit.split.drawLoopMs - A.sceneSplit.split.drawLoopMs)
+        - (B.sceneSplit.drawMs - A.sceneSplit.drawMs)) / 400
+```
+
+If `A` and `A2` disagree by more than the Δ being read, the sweep is not usable — the same rule
+as §3, for the same reason.
+
+### 6e. Ranked hypotheses for the 3.42 ms, with the probe's signature for each
+
+Priors, not measurements. §4's warning applies with full force: my priors under-explained the
+last block by ~2×, and **all of these can be true at once** — 3.42 ms is a big enough number to
+be a sum rather than a lever.
+
+**H2c — the object hooks are still inside it.** *Prior: 1.0–2.5 ms, and the one I would bet on
+being biggest.* The 5.72 ms `BatchedMesh.onBeforeRender` in the original three-way split was
+measured with a **prototype** wrapper, and per §6a this app installs the memo as an **own
+property** — so that 5.72 ms and this 3.42 ms may be measuring overlapping or disjoint parts of
+the same work depending on `?statBatchMemo`, and **nobody has checked which**. Probe signature:
+`objHookMs` large, `sceneSplit.split.hookedPerCall` a substantial fraction of `submitted`. Run
+it twice, `?statBatchMemo=on` and `=off`, before quoting either number.
+
+**H2b — `setupLights` / `setupLightsView`, once per call.** *Prior: 0.2–1.5 ms, widening with
+`census.preSubmitInputs.lights`.* `WebGLLights.setup` walks every light rebuilding the uniform
+cache and `setupView` transforms each into view space; `getProgram` also compares
+`lights.state.version`, so a churning light state invalidates the per-material early-out inside
+the funnel. Probe signature: **large `preSubmitMs` that does NOT move with `submitted`** —
+regress `preSubmit` against `submitted` over `__frameSplitSamples()`; a flat line confirms it,
+and it is a *different* fix from anything per-object.
+
+**H2a — the per-object glue really is ~7 µs × 470.** *Prior: 0.3–1.0 ms — I expect this to
+explain a quarter of the block, not all of it.* `multiplyMatrices` is 64 multiplies and
+`getNormalMatrix` a 3×3 invert-transpose; 7 µs each would make one `Matrix4.multiply` cost ~3 µs,
+roughly 100× what it costs. **Something else is in there.** Probe signature: `glueSpanMs` ≈ 3 ms
+**and** `glueSampleUs` ≈ 6–7 µs — the sampler is what makes this falsifiable, because if the
+glue really were 7 µs the sampler would see it on a single object.
+
+**H2d — `postDrawMs`: the multisample resolve and `output.end`.** *Prior: 0.1–0.4 ms.* A
+CPU-side blit setup and a fullscreen quad. Small, but it has never been separated from the glue
+and no per-object fix will touch it. Probe signature: `postDrawMs` alone.
+
+**Tombstoned, again:** program selection and the uniform refresh (§0a — inside the funnel), and
+`background.render` whenever `census.preSubmitInputs.sceneBackground` is `null`, which it is
+when the sky is its own scene.

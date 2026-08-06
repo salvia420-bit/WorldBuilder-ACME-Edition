@@ -98,6 +98,128 @@
 // the reader can price the instrument instead of trusting it.
 //
 // ---------------------------------------------------------------------------
+// SPLITTING `sceneSubmit` — the last unattributed block (2026-08-06, part 2)
+// ---------------------------------------------------------------------------
+// The first run of this probe on the 1070 (549 calls, quality `mid`) left one
+// block standing:
+//
+//     sceneSubmit − draws (per-object glue)   3.42 ms   <- unattributed
+//     preProject (scene.updateMatrixWorld)    2.06 ms   closed (ceiling 0.48)
+//     project    (projectObject)              1.54 ms   closed
+//     sort                                    0.16 ms
+//     shadow                                  0.002 ms  (dutyCycle 0 at `mid`)
+//
+// At ~470 SUBMITTED objects that is ~7.3 µs per submitted object of non-draw
+// work — which is a very large number for three lines of matrix arithmetic, and
+// that discrepancy is the reason this half exists. `sceneSubmit` is NOT one
+// thing. Reading `WebGLRenderer.render` r184 from the end of `shadowMap.render`
+// to `scene.onAfterRender`, in order:
+//
+//     clipping.endShadows(); info.reset()
+//     currentRenderState.setupLights()                 <- once per call, O(lights)
+//     renderTransmissionPass(...)   if transmissive.length > 0
+//     background.render(scene)      if scene.background
+//     renderScene(...)
+//       └ currentRenderState.setupLightsView(camera)   <- once per call, O(lights)
+//       └ renderObjects(opaque) / (transmissive) / (transparent)
+//           └ object.layers.test(camera.layers)            per SUBMITTED object
+//           └ renderObject:
+//               object.onBeforeRender(...)                     <- OBJ HOOK
+//               object.modelViewMatrix.multiplyMatrices(...)   } THE GLUE
+//               object.normalMatrix.getNormalMatrix(...)       }
+//               material.onBeforeRender(...)                   }
+//               renderer.renderBufferDirect(...)               <- already timed
+//               object.onAfterRender(...)
+//     textures.updateMultisampleRenderTarget / updateRenderTargetMipmap
+//     output.end(...)                                   <- once per call
+//
+// Two of those groups are ONCE PER CALL and two are PER SUBMITTED OBJECT, and
+// they were being quoted as one 3.42 ms number. The split between them costs
+// ZERO extra timestamps: `renderBufferDirect` is already wrapped, so the FIRST
+// scene-phase draw's entry and the LAST one's exit are timestamps the probe
+// already takes. That gives, exactly:
+//
+//   preSubmitMs  = firstSceneDraw.entry − shadowEnd
+//                  ... setupLights + setupLightsView + background.render +
+//                      clipping.endShadows + info.reset. ONCE PER CALL.
+//   drawLoopMs   = lastSceneDraw.exit  − firstSceneDraw.entry
+//                  ... every renderObject, start to finish.
+//   postDrawMs   = onAfterRender       − lastSceneDraw.exit
+//                  ... multisample resolve + mipmap + output.end. ONCE PER CALL.
+//   glueSpanMs   = drawLoopMs − rbdSceneMs − objHookInLoopMs
+//                  ... THE per-submitted-object glue, with the draws and the
+//                      object hooks removed. This is the 7.3 µs claim's home.
+//
+// TWO WINDOW-EDGE FACTS, both of which cost a 2x-class error if ignored — this
+// investigation has now produced five of those, and both of these were caught
+// by the regression suite rather than by reading the code:
+//   1. `drawLoopMs` opens at the FIRST draw's entry, so the first submitted
+//      object's `onBeforeRender` has ALREADY FIRED and is inside `preSubmitMs`.
+//      Subtracting the whole hook total leaves `glueSpanMs` negative when hooks
+//      are few and expensive, and quietly low when they are many and cheap. So
+//      only `objHookInLoopMs` — the hooks that fired after the window opened —
+//      is subtracted. The split costs one null check per hook.
+//   2. For the same reason the window spans N draws but only N−1 inter-draw
+//      GAPS. `glueSpanPerSubmittedUs` (÷N) is therefore biased LOW by 1/N and
+//      `glueSpanPerGapUs` (÷N−1) is the unbiased per-object figure. At the live
+//      470 submitted the gap between them is 0.2% and either will do; at 8 it
+//      is 12.5%. Both are reported; quote the per-submitted one for "what would
+//      deleting an object save" and the per-gap one against the glue sampler.
+//
+// If `setupLights` is the co-suspect, it shows as a large `preSubmitMs` that
+// does NOT scale with submitted count. If the glue is, `glueSpanMs` carries it
+// and `glueSpanPerSubmittedUs` is the unit. They cannot both hide in one bucket
+// any more. Caveats, stated because they are the ways this reads wrong:
+//   * a transmission pass (`submitted.transmissive > 0`) draws BEFORE
+//     `background.render`, so its first draw closes `preSubmitMs` early and the
+//     rest of the pass lands in `drawLoopMs`. `submitted.transmissive` is
+//     reported next to it; at 0 the concern does not exist.
+//   * `output.end` renders a fullscreen quad. If that goes through
+//     `renderBufferDirect` it is the LAST scene draw and `postDrawMs` shrinks to
+//     the resolve; if it does not, it is in `postDrawMs`. Either way it is one
+//     draw and it is inside `sceneSubmit`, not lost.
+//   * a call with ZERO scene draws leaves all three null. Never 0.
+//
+// ---------------------------------------------------------------------------
+// WHY `objHookMs` IS ADOPTED FROM THE RENDER LIST, NOT WRAPPED ON A PROTOTYPE
+// ---------------------------------------------------------------------------
+// TOMBSTONE. The first version of this file wrapped `BatchedMesh.prototype
+// .onBeforeRender` and called that "the object hooks". On THIS app that would
+// have measured close to nothing and reported it with confidence, because the
+// app does not use the prototype hook on its hot population:
+//
+//   * `static_batch_x.js:_installMemo`  `bm.onBeforeRender = _memoOnBeforeRender`
+//   * `static_atlas.js:armStatMergeSubmittedSampler`  `o.onBeforeRender = fn`
+//   * `blood_decals.js`                 `mesh.onBeforeRender = () => {...}`
+//
+// All three are OWN properties on the instance, which SHADOW the prototype. A
+// prototype wrapper never runs for them. That is the same class of error as
+// `_projDrawn`: an instrument that looks right, reports a small number, and is
+// measuring an empty population.
+//
+// So the hooks are adopted from the SUBMITTED population instead. Once per
+// call, inside the already-wrapped `list.finish`, the probe walks
+// `list.opaque/transmissive/transparent` — three's own answer, at SUBMITTED
+// scale, never re-derived — and for every object whose `onBeforeRender` is not
+// `Object3D.prototype.onBeforeRender` it installs a timing wrapper (memoised by
+// function identity, so a steady-state frame wraps nothing). Objects that carry
+// the stock no-op are left alone: an empty function call is ~2 ns and wrapping
+// 470 of them would cost more than the thing being measured. Their dispatch is
+// therefore inside `glueSpanMs`, where it belongs, and is bounded by
+// `submitted × ~2 ns` ≈ 0.001 ms.
+//
+// The scan costs 2 timestamps and ~470 property reads per call. It is MEASURED
+// (`health.adoptScanMs`) rather than assumed, and it lands inside the
+// `listFinish` bucket — so `listFinish` is inflated by exactly that much while
+// `{objHooks:true}` is armed, and the books still close.
+//
+// ⚠ INTERACTION. `static_atlas.js armStatMergeSubmittedSampler` skips any node
+// that already owns an `onBeforeRender`. While this probe is armed with
+// `{objHooks:true}` every hooked node owns one, so that sampler will arm and
+// then sample nothing — the same trap `static_batch_x.js` documents for
+// `?statBatchMemo`. Run them one at a time.
+//
+// ---------------------------------------------------------------------------
 // HOW IT PRICES A VISIT — the ballast, not an estimate
 // ---------------------------------------------------------------------------
 // "3,600 Groups are visited every frame" is a COUNT. `docs/2026-08-06-frame-
@@ -124,6 +246,25 @@
 //                                                it. The difference between the
 //                                                two arms is the cleanest split
 //                                                this instrument can produce.
+//
+// The node ballast prices a VISIT. It cannot price a SUBMISSION, because an
+// empty Group is never submitted — so it says nothing about the 7.3 µs per
+// submitted object. `setFrameSplitDrawBallast(n)` is the second ballast, for
+// exactly that: `n` Meshes sharing ONE degenerate geometry (three identical
+// vertices → zero area → the rasteriser emits no fragments, so it is
+// image-identical for the same reason an empty Group is) and ONE material, with
+// `frustumCulled = false` so three submits every one of them regardless of where
+// the camera is looking. Each costs one full trip through `renderObject`. So
+//
+//     glueUnit = Δ(drawLoopMs − rbdSceneMs) / n
+//
+// is the MEASURED per-submitted-object glue, independent of the span arithmetic
+// above, and the two should agree. Sharing one geometry and one material is
+// deliberate: `objects.update` memoises per geometry per frame and `setProgram`
+// early-outs on an unchanged material, so the ballast adds the renderObject
+// glue and almost nothing else. It DOES also add `n` to the render list, which
+// inflates `project` and `sort` — expected, and the reason the node ballast is
+// still the right tool for those two buckets.
 //
 // ---------------------------------------------------------------------------
 // SCALE DISCIPLINE — every population here names its scale
@@ -154,17 +295,37 @@
 //   * `sortMs` is null when `renderer.sortObjects === false`, because then
 //     three never calls `sort` at all.
 //   * `objHookMs` is null unless armed with `{objHooks:true}`, and every bucket
-//     derived from it is null too. It is OFF by default because
-//     `BatchedMesh.prototype.onBeforeRender` is a separate investigation's
-//     instrument and two wrappers on one prototype is how a measurement
-//     silently double-counts.
+//     derived from it is null too. It is OFF by default because it installs own
+//     properties on live scene objects, which is a bigger footprint than the
+//     rest of this file and collides with the two other samplers that use the
+//     same slot (see the INTERACTION note above).
+//   * `objHookMs` is ALSO null when the adopt scan did not run on every
+//     accounted call (`health.adoptScans !== calls` — a detached render list
+//     orphans it). A hook total over a subset of calls is not comparable with a
+//     per-call mean and must not be subtracted from one.
+//   * `preSubmitMs` / `drawLoopMs` / `postDrawMs` / `glueSpanMs` are null on any
+//     call with no scene-phase draw at all, because their boundaries ARE the
+//     first and last draw. A frame that drew nothing is not a frame whose glue
+//     cost zero.
+//   * `glueSampleUs` is null unless armed with `{glueSample:k}`.
 //   * `booksClosed` is false, loudly, when the buckets do not re-add to the
-//     measured total within tolerance.
+//     measured total within tolerance. `sceneSubmitBooksClosed` is the same
+//     check one level down: preSubmit + drawLoop + postDraw must re-add to
+//     `sceneSubmit`.
 //
 // Read-only. Never called by the app. Costs nothing until `armFrameSplit()`.
 // ===========================================================================
 
-import { Group } from "three";
+// `Object3D` is imported for ONE reason: `Object3D.prototype.onBeforeRender` is
+// the identity of the stock no-op, and the adopt pass needs to compare against
+// it rather than against `typeof fn === "function"` (which every object passes).
+// This resolves through the app's importmap, so it is the same class object the
+// scene's nodes actually inherit from — a second copy of three would make the
+// comparison silently false for every node and the probe would wrap all 470.
+// `frameSplitCensus().hooks.identityCheckOk` reports whether that held.
+import { BufferAttribute, BufferGeometry, Group, Mesh, MeshBasicMaterial, Object3D } from "three";
+
+const _DEFAULT_ON_BEFORE_RENDER = Object3D.prototype.onBeforeRender;
 
 const _now =
   typeof performance !== "undefined" && performance.now
@@ -205,8 +366,21 @@ const S = {
   ballast: null,
   ballastCount: 0,
   ballastVisible: true,
+  drawBallast: null,
+  drawBallastCount: 0,
   objHooks: false,
-  objHookOrig: null,
+  // Every own `onBeforeRender` this probe installed, so disarm can hand each
+  // object back exactly what it had — including "no own property at all", which
+  // is restored by `delete`, not by assigning the prototype's no-op over it.
+  // Rows are append-only and identity-checked at restore time: if the app has
+  // since reassigned the slot (it does — `_installMemo` runs on bucket
+  // creation), our row is stale and must be left alone rather than clobbering
+  // the app's function with a captured one.
+  adopted: null,
+  glueSampleEvery: 0,
+  glueSampleTargets: 0,
+  glueMark: 0,
+  glueMarkArmed: false,
   acc: null,
   ring: null,
   ringAt: 0,
@@ -221,6 +395,15 @@ function _freshAcc() {
     listDetachedCalls: 0,
     noSortCalls: 0,
     shadowRasterCalls: 0, // calls where shadowMap.render did real work
+    // Calls on which the adopt pass actually walked the render list. Must equal
+    // `calls` for `objHookMs` to mean anything — see "silence is not success".
+    adoptScans: 0,
+    adoptScanMs: 0,
+    adoptWrapped: 0, // wrappers installed, cumulative (steady state: 0/frame)
+    adoptCapped: 0, // hooks the row cap refused to wrap — a non-zero here means
+                    // objHookMs is a FLOOR, not the total
+
+    adoptScanned: 0, // render-list entries examined, cumulative
     sums: {
       total: 0,
       preProject: 0,
@@ -237,6 +420,14 @@ function _freshAcc() {
       rbdScene: 0,
       rbdOther: 0,
       objHook: 0,
+      objHookPre: 0, // hooks that fired before the first scene draw
+      // The sceneSubmit sub-split. Boundaries are the first scene-phase draw's
+      // entry and the last one's exit — timestamps the rbd wrapper already
+      // takes, so these three buckets cost ZERO extra clock reads.
+      preSubmit: 0,
+      drawLoop: 0,
+      postDraw: 0,
+      glueSample: 0, // sampled per-object glue, in ms; reported as µs
     },
     // Per-bucket sample counts. Every bucket carries one, because a seam that
     // never fired must divide by zero and report `null`, not divide by `calls`
@@ -257,6 +448,11 @@ function _freshAcc() {
       rbdScene: 0,
       rbdOther: 0,
       objHook: 0,
+      objHookPre: 0,
+      preSubmit: 0,
+      drawLoop: 0,
+      postDraw: 0,
+      glueSample: 0,
       submitted: 0, // sum of render-list lengths, SUBMITTED scale
       submittedOpaque: 0,
       submittedTransmissive: 0,
@@ -286,8 +482,21 @@ function _freshCur() {
     rbdSceneMs: 0,
     rbdShadowN: 0,
     rbdSceneN: 0,
+    // First scene-phase draw ENTRY and last scene-phase draw EXIT. These are
+    // the sceneSubmit sub-split's boundaries and they are free: the rbd wrapper
+    // already reads the clock on both sides of every draw.
+    tFirstSceneRbd: null,
+    tLastSceneRbdEnd: null,
     objHookMs: 0,
     objHookN: 0,
+    // The part of the hook total that fired before the first scene draw, i.e.
+    // outside `drawLoopMs`. Kept separate so `glueSpanMs` subtracts only the
+    // hooks its own window actually contains.
+    objHookPreMs: 0,
+    objHookPreN: 0,
+    glueSampleMs: 0,
+    glueSampleN: 0,
+    sawAdopt: false,
     opaque: 0,
     transmissive: 0,
     transparent: 0,
@@ -312,6 +521,160 @@ function _measureNowCostNs() {
 }
 
 // ---------------------------------------------------------------------------
+// The object-hook adopt pass — SUBMITTED scale, read from three's own list
+// ---------------------------------------------------------------------------
+
+// Marker on every function this file installs into an `onBeforeRender` slot, so
+// the scan recognises its own work in O(1) and never wraps a wrapper. Two
+// wrappers deep on the same object would charge the inner one's time twice.
+const _OB_MARK = "__frameSplitObHook";
+
+// Ceiling on restore rows. Each app-side reassignment of a hook slot leaves one
+// stale row behind, so an app that swaps every frame would grow this without
+// bound. 8,192 is far above any plausible submitted population and small enough
+// that the probe can never be the memory story.
+const _ADOPT_ROW_CAP = 8192;
+
+/** Wrap one object's `onBeforeRender` so its time lands in `cur.objHookMs`.
+ *  `fn` is whatever the slot resolved to — an own property or an inherited
+ *  prototype method; which it was is recorded, because the restore differs. */
+function _wrapObjHook(o, fn) {
+  const own = Object.prototype.hasOwnProperty.call(o, "onBeforeRender");
+  const wrapper = function (...args) {
+    const cur = S.cur;
+    // "other" = a foreign scene's render nested in ours; "shadow" = the shadow
+    // phase (three calls `onBeforeShadow` there, not `onBeforeRender`, so this
+    // is belt-and-braces). Neither belongs in the world call's scene books.
+    if (!cur || S.phase === "other" || S.phase === "shadow") {
+      return fn.apply(this, args);
+    }
+    const a = _now();
+    try {
+      return fn.apply(this, args);
+    } finally {
+      const d = _now() - a;
+      cur.objHookMs += d;
+      cur.objHookN += 1;
+      // THE WINDOW EDGE. `drawLoopMs` runs from the FIRST draw's entry, so the
+      // first submitted object's hook fired BEFORE the window opened and is
+      // already inside `preSubmitMs`. Subtracting the full hook total from
+      // `drawLoopMs` would therefore double-charge it — visibly (glueSpan goes
+      // negative) when hooks are few and expensive, invisibly when they are
+      // many and cheap. One null check per hook keeps the two halves disjoint.
+      if (cur.tFirstSceneRbd === null) {
+        cur.objHookPreMs += d;
+        cur.objHookPreN += 1;
+      }
+    }
+  };
+  wrapper[_OB_MARK] = true;
+  o.onBeforeRender = wrapper;
+  S.adopted.push({ o, fn, own, wrapper });
+  S.acc.adoptWrapped += 1;
+}
+
+/** Install a timestamp-only hook on an object that carries the stock no-op, so
+ *  the glue between `onBeforeRender` returning and `renderBufferDirect` being
+ *  entered can be read for that object. Replacing an empty function with a
+ *  one-timestamp function is semantically identical; the cost is one clock read
+ *  per sampled object per call, and the rbd side reuses a timestamp it already
+ *  takes, so a sample is ONE extra read, not two. */
+function _wrapGlueSampler(o) {
+  const sampler = function () {
+    S.glueMark = _now();
+    S.glueMarkArmed = true;
+  };
+  sampler[_OB_MARK] = true;
+  sampler.__frameSplitGlueSampler = true;
+  o.onBeforeRender = sampler;
+  S.adopted.push({ o, fn: _DEFAULT_ON_BEFORE_RENDER, own: false, wrapper: sampler });
+  S.glueSampleTargets += 1;
+}
+
+/**
+ * Walk the live render list and adopt every non-default `onBeforeRender`.
+ *
+ * Runs once per accounted call, from inside the `list.finish` wrapper — the
+ * first moment the list is complete and the last before three starts drawing
+ * from it. The population is therefore SUBMITTED scale, taken from three's own
+ * arrays after three's own frustum cull. It is never re-derived.
+ *
+ * Steady-state cost is a property read and one identity compare per submitted
+ * object; the wrapper installs happen on the first call and then only when the
+ * app swaps a hook (`_installMemo` does, on every new batch bucket). Measured
+ * into `acc.adoptScanMs`, not assumed.
+ */
+function _adoptListHooks(list) {
+  const t0 = _now();
+  let scanned = 0;
+  const arrays = [list.opaque, list.transmissive, list.transparent];
+  for (let ai = 0; ai < arrays.length; ai++) {
+    const arr = arrays[ai];
+    if (!arr) continue;
+    for (let i = 0; i < arr.length; i++) {
+      const item = arr[i];
+      const o = item && item.object;
+      if (!o) continue;
+      scanned += 1;
+      const fn = o.onBeforeRender;
+      if (fn === _DEFAULT_ON_BEFORE_RENDER) {
+        // The stock no-op. Not worth a wrapper — its dispatch is ~2 ns and
+        // lives inside `glueSpanMs` where it belongs. It is, however, the only
+        // population safe to borrow for a glue sample.
+        if (S.glueSampleEvery > 0 && S.glueSampleTargets < S.glueSampleEvery) {
+          _wrapGlueSampler(o);
+        }
+        continue;
+      }
+      if (typeof fn !== "function") continue;
+      if (fn[_OB_MARK] === true) continue; // already ours
+      // Hard cap. Every swap the app makes leaves one stale restore row behind,
+      // and an app that reassigns hooks every frame would grow this without
+      // bound. Refusing to wrap past the cap keeps the probe's own footprint
+      // finite; `acc.adoptCapped` makes the refusal visible instead of turning
+      // it into a quietly incomplete hook total. (`objHookMs` is NOT nulled on
+      // this — the scan still ran on every call — but a non-zero `adoptCapped`
+      // means the total is a floor, and the report says so.)
+      if (S.adopted.length >= _ADOPT_ROW_CAP) {
+        S.acc.adoptCapped += 1;
+        continue;
+      }
+      _wrapObjHook(o, fn);
+    }
+  }
+  S.acc.adoptScanned += scanned;
+  S.acc.adoptScans += 1;
+  S.acc.adoptScanMs += _now() - t0;
+  if (S.cur) S.cur.sawAdopt = true;
+}
+
+/** Give every adopted slot back. Identity-checked: if the app has reassigned
+ *  the slot since we wrapped it, the row is stale and touching it would
+ *  overwrite the app's live function with a captured one. */
+function _releaseObjHooks() {
+  const rows = S.adopted || [];
+  let restored = 0;
+  let stale = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.o.onBeforeRender !== r.wrapper) {
+      stale += 1;
+      continue;
+    }
+    if (r.own) r.o.onBeforeRender = r.fn;
+    else delete r.o.onBeforeRender;
+    restored += 1;
+  }
+  S.adopted = null;
+  // `glueSampleTargets` is NOT cleared here. It is a fact about the run that
+  // just happened, and the report is read AFTER disarm by design; zeroing it
+  // would make the sampler's own population read 0 in every honest workflow.
+  // `armFrameSplit` resets it, which is the right place.
+  S.glueMarkArmed = false;
+  return { restored, stale };
+}
+
+// ---------------------------------------------------------------------------
 // Arm / disarm
 // ---------------------------------------------------------------------------
 
@@ -324,11 +687,19 @@ function _measureNowCostNs() {
  * @param {boolean} [opts.rbd=true] wrap `renderBufferDirect`. Required to split
  *   the shadow phase into traversal-vs-draws and to close the books; turning it
  *   off makes `shadowTraversalMs` and `sceneSubmitMinusDrawsMs` read null.
- * @param {boolean} [opts.objHooks=false] also wrap `BatchedMesh.prototype
- *   .onBeforeRender`. OFF by default: that prototype is the multidraw-rebuild
- *   investigation's instrument, and stacking two wrappers on it makes both
- *   readings wrong in a way neither can detect. Pass the constructor as
- *   `opts.batchedMeshCtor` (the app's `THREE.BatchedMesh`) to use this.
+ * @param {boolean} [opts.objHooks=false] time `object.onBeforeRender` by
+ *   ADOPTING every non-default hook off the live render list once per call —
+ *   not by wrapping `BatchedMesh.prototype`, which on this app misses the entire
+ *   hot population (`static_batch_x.js` installs the memo hook as an OWN
+ *   property; see the header tombstone). OFF by default because it installs own
+ *   properties on live scene objects and collides with the two other samplers
+ *   that use the same slot.
+ * @param {number} [opts.glueSample=0] when > 0, borrow up to this many
+ *   stock-no-op `onBeforeRender` slots off the submitted list and use them to
+ *   time the per-object glue DIRECTLY (hook-exit → `renderBufferDirect` entry),
+ *   as a cross-check on the span arithmetic. Requires `objHooks` (the adopt
+ *   pass is where the borrowing happens) and `rbd`. 8 is plenty; each sample
+ *   costs ONE extra clock read per call.
  * @returns {{armed:boolean}|{error:string}}
  */
 export function armFrameSplit(opts = {}) {
@@ -366,8 +737,15 @@ export function armFrameSplit(opts = {}) {
   S.cur = null;
   S.phase = "idle";
   S.depth = 0;
-  S.objHooks = false;
-  S.objHookOrig = null;
+  // The adopt pass needs `rbd` for the glue sampler's second boundary, and it
+  // needs somewhere to put its rows. Both are decided here so the wrappers below
+  // can branch on a plain boolean rather than re-deriving the option.
+  S.objHooks = opts.objHooks === true;
+  S.adopted = S.objHooks ? [] : null;
+  S.glueSampleEvery =
+    S.objHooks && wantRbd && opts.glueSample > 0 ? Math.min(64, opts.glueSample | 0) : 0;
+  S.glueSampleTargets = 0;
+  S.glueMarkArmed = false;
   S.orig = {
     render: renderer.render,
     rbd: wantRbd ? renderer.renderBufferDirect : null,
@@ -413,6 +791,10 @@ export function armFrameSplit(opts = {}) {
     S.cur = cur;
     S.depth = 1;
     S.phase = "pre";
+    // A glue mark left armed by an object whose draw never happened (a material
+    // that threw, an XR early-out) must not be paired with the FIRST draw of the
+    // next call — that would report a whole inter-frame gap as one object's glue.
+    S.glueMarkArmed = false;
     cur.t0 = _now();
     try {
       return S.orig.render.call(this, sceneArg, cameraArg);
@@ -451,6 +833,13 @@ export function armFrameSplit(opts = {}) {
   };
   list.finish = function (...args) {
     const a = _now();
+    // The adopt pass runs HERE, inside the finish window, because this is the
+    // first instant the render list is complete and the last before three draws
+    // from it. Its cost is therefore inside `buckets.listFinish` — stated, and
+    // separately measured as `health.adoptScanMs`, rather than hidden. Putting
+    // it outside the window would open a hole the books would then fail to close
+    // on, which is a worse lie than an inflated bucket that says so.
+    if (S.objHooks && S.cur) _adoptListHooks(this);
     const r = S.orig.listFinish.apply(this, args);
     if (S.cur && S.cur.tFinishStart === null) {
       S.cur.tFinishStart = a;
@@ -523,43 +912,43 @@ export function armFrameSplit(opts = {}) {
       }
       const a = _now();
       const isShadow = S.phase === "shadow";
+      if (!isShadow) {
+        // FREE BOUNDARIES. `a` and the exit stamp below are read for the draw
+        // funnel anyway; remembering the first entry and the last exit costs two
+        // stores per draw and gives the whole sceneSubmit sub-split.
+        if (cur.tFirstSceneRbd === null) cur.tFirstSceneRbd = a;
+        // One boolean test per draw (~1 ns × ~470) closes a glue sample: the
+        // window from the sampled object's hook returning to this draw starting
+        // is exactly `modelViewMatrix.multiplyMatrices` + `normalMatrix
+        // .getNormalMatrix` + `material.onBeforeRender` + the DoubleSide branch.
+        if (S.glueMarkArmed) {
+          S.glueMarkArmed = false;
+          cur.glueSampleMs += a - S.glueMark;
+          cur.glueSampleN += 1;
+        }
+      }
       try {
         return S.orig.rbd.apply(this, args);
       } finally {
-        const d = _now() - a;
+        const t = _now();
+        const d = t - a;
         if (isShadow) {
           cur.rbdShadowMs += d;
           cur.rbdShadowN += 1;
         } else {
           cur.rbdSceneMs += d;
           cur.rbdSceneN += 1;
+          cur.tLastSceneRbdEnd = t;
         }
       }
     };
   }
 
-  // --- optional: BatchedMesh.prototype.onBeforeRender -----------------------
-  if (opts.objHooks === true && opts.batchedMeshCtor?.prototype) {
-    const proto = opts.batchedMeshCtor.prototype;
-    if (Object.prototype.hasOwnProperty.call(proto, "__frameSplitWrapped")) {
-      return { error: "BatchedMesh.prototype.onBeforeRender already wrapped — refusing to stack" };
-    }
-    S.objHookOrig = proto.onBeforeRender;
-    proto.onBeforeRender = function (...args) {
-      const cur = S.cur;
-      if (!cur) return S.objHookOrig.apply(this, args);
-      const a = _now();
-      try {
-        return S.objHookOrig.apply(this, args);
-      } finally {
-        cur.objHookMs += _now() - a;
-        cur.objHookN += 1;
-      }
-    };
-    proto.__frameSplitWrapped = true;
-    S.objHooks = true;
-    S.objHookProto = proto;
-  }
+  // --- optional: object onBeforeRender, adopted from the render list --------
+  // Nothing to install here. The adopt pass runs inside the `list.finish`
+  // wrapper above, once per accounted call, against the SUBMITTED population.
+  // There is deliberately no prototype patching: see the header tombstone on
+  // why `BatchedMesh.prototype` was the wrong seam on this app.
 
   S.nowCostNs = _measureNowCostNs();
   S.armed = true;
@@ -568,6 +957,8 @@ export function armFrameSplit(opts = {}) {
     rbdWrapped: wantRbd,
     shadowWrapped: !!S.orig.shadowRender,
     objHooksWrapped: S.objHooks,
+    objHookMethod: S.objHooks ? "adopt-from-render-list (submitted scale)" : null,
+    glueSampleTargets: S.glueSampleEvery,
     nowCostNs: S.nowCostNs,
   };
 }
@@ -593,15 +984,15 @@ export function disarmFrameSplit() {
   else delete scene.onBeforeRender;
   if (S.sceneHookOwned.after) scene.onAfterRender = orig.sceneAfter;
   else delete scene.onAfterRender;
-  if (S.objHooks && S.objHookProto) {
-    S.objHookProto.onBeforeRender = S.objHookOrig;
-    delete S.objHookProto.__frameSplitWrapped;
-  }
+  // Adopted object hooks. `objHooks` stays TRUE after disarm so the report can
+  // still say the hook total was measured rather than absent — the accumulators
+  // outlive the wrappers on purpose (see the doc comment above).
+  const released = S.objHooks ? _releaseObjHooks() : null;
   S.armed = false;
   S.phase = "idle";
   S.depth = 0;
   S.cur = null;
-  return { disarmed: true };
+  return released ? { disarmed: true, objHooksReleased: released } : { disarmed: true };
 }
 
 /** Zero the accumulators without disarming — the A/B seam. Arm once, measure,
@@ -718,12 +1109,40 @@ function _closeCall(cur, t9) {
     c.tail += 1;
   }
 
+  // --- the sceneSubmit sub-split -------------------------------------------
+  // Boundaries: the first scene-phase draw's ENTRY and the last one's EXIT.
+  // Both are timestamps the rbd wrapper already took, so these three buckets
+  // are free. All three are null together on a call that drew nothing in the
+  // scene phase — a frame that drew nothing is not a frame whose glue was 0.
+  let preSubmit = null;
+  let drawLoop = null;
+  let postDraw = null;
+  if (cur.tFirstSceneRbd !== null && cur.tLastSceneRbdEnd !== null) {
+    if (sceneStart !== null) {
+      preSubmit = cur.tFirstSceneRbd - sceneStart;
+      s.preSubmit += preSubmit;
+      c.preSubmit += 1;
+    }
+    drawLoop = cur.tLastSceneRbdEnd - cur.tFirstSceneRbd;
+    s.drawLoop += drawLoop;
+    c.drawLoop += 1;
+    if (cur.tAfter !== null) {
+      postDraw = cur.tAfter - cur.tLastSceneRbdEnd;
+      s.postDraw += postDraw;
+      c.postDraw += 1;
+    }
+  }
+
   s.rbdShadow += cur.rbdShadowMs;
   s.rbdScene += cur.rbdSceneMs;
   c.rbdShadow += cur.rbdShadowN;
   c.rbdScene += cur.rbdSceneN;
   s.objHook += cur.objHookMs;
   c.objHook += cur.objHookN;
+  s.objHookPre += cur.objHookPreMs;
+  c.objHookPre += cur.objHookPreN;
+  s.glueSample += cur.glueSampleMs;
+  c.glueSample += cur.glueSampleN;
 
   c.submittedOpaque += cur.opaque;
   c.submittedTransmissive += cur.transmissive;
@@ -739,10 +1158,21 @@ function _closeCall(cur, t9) {
     sort,
     shadow,
     sceneSubmit,
+    preSubmit,
+    drawLoop,
+    postDraw,
+    // drawLoop minus the draws minus the object hooks: the per-submitted-object
+    // glue for THIS call. Kept per-call so it can be regressed against
+    // `submitted`, which varies naturally as the camera moves — the §5a method,
+    // and the only way to tell a per-object cost from a per-frame one without
+    // building a synthetic scene.
+    glueSpan:
+      drawLoop === null ? null : drawLoop - cur.rbdSceneMs - (S.objHooks ? cur.objHookMs : 0),
     rbdScene: cur.rbdSceneMs,
     rbdShadow: cur.rbdShadowMs,
     drawsScene: cur.rbdSceneN,
     drawsShadow: cur.rbdShadowN,
+    objHook: S.objHooks ? cur.objHookMs : null,
     submitted: cur.opaque + cur.transmissive + cur.transparent,
     shadowRastered: cur.shadowRastered,
   };
@@ -805,9 +1235,52 @@ export function frameSplitReport() {
   // background.render + the transmission pass.
   const sceneMinusDraws =
     rbdScene === null || sceneSubmitMs === null ? null : sceneSubmitMs - rbdScene;
-  const objHookMs = S.objHooks ? per(s.objHook) : null;
+  // The hook total is only comparable with a per-call mean if the adopt pass ran
+  // on EVERY accounted call. A detached render list (context loss) orphans it,
+  // and a hook sum over 400 of 549 calls divided by 549 is a number that looks
+  // right and is 27% low. Same denominator discipline as `allBucketsFullySampled`.
+  const objHooksFullySampled = S.objHooks && acc.adoptScans === n;
+  const objHookMs = objHooksFullySampled ? per(s.objHook) : null;
   const glueAndLights =
     sceneMinusDraws === null || objHookMs === null ? null : sceneMinusDraws - objHookMs;
+
+  // --- the sceneSubmit sub-split -------------------------------------------
+  const preSubmitMs = perOr(s.preSubmit, c.preSubmit);
+  const drawLoopMs = perOr(s.drawLoop, c.drawLoop);
+  const postDrawMs = perOr(s.postDraw, c.postDraw);
+  // THE per-submitted-object glue: the whole renderObject loop, minus the draws
+  // it contains, minus the object hooks it dispatches. What is left is
+  // `layers.test` + `modelViewMatrix.multiplyMatrices` + `normalMatrix
+  // .getNormalMatrix` + `material.onBeforeRender` + `object.onAfterRender` +
+  // the loop itself, and the stock-no-op `onBeforeRender` dispatches (~2 ns
+  // each, bounded by `submitted × 2 ns` ≈ 0.001 ms — deliberately NOT wrapped,
+  // because wrapping 470 of them would cost more than they do).
+  //
+  // Only the hooks the WINDOW CONTAINS are subtracted. The first submitted
+  // object's hook fires before the first draw, so it is in `preSubmitMs`;
+  // subtracting the full hook total here would charge it twice and can drive
+  // `glueSpanMs` negative outright.
+  const objHookInLoopMs = objHookMs === null ? null : per(s.objHook - s.objHookPre);
+  const glueSpanMs =
+    drawLoopMs === null || rbdScene === null || objHookInLoopMs === null
+      ? null
+      : drawLoopMs - rbdScene - objHookInLoopMs;
+  const submittedPerCall = c.submitted / n;
+  // Books one level down. The three sub-buckets are disjoint wall-clock windows
+  // that tile `sceneSubmit` exactly, so they must re-add to it. They are sampled
+  // on their own counts (a call with no scene draw contributes to none of them),
+  // so this also requires the counts to agree with `sceneSubmit`'s.
+  const subSampled =
+    c.preSubmit === c.sceneSubmit && c.drawLoop === c.sceneSubmit && c.postDraw === c.sceneSubmit;
+  const subSum =
+    preSubmitMs === null || drawLoopMs === null || postDrawMs === null
+      ? null
+      : preSubmitMs + drawLoopMs + postDrawMs;
+  const subResidual = subSum === null || sceneSubmitMs === null ? null : sceneSubmitMs - subSum;
+  const sceneSubmitBooksClosed =
+    subResidual !== null &&
+    subSampled &&
+    Math.abs(subResidual) <= Math.max(_BOOKS_TOL_MS, (sceneSubmitMs || 0) * _BOOKS_TOL_FRAC);
 
   const buckets = {
     preProject: perOr(s.preProject, c.preProject),
@@ -891,6 +1364,10 @@ export function frameSplitReport() {
       sort: _p50(ring.map((r) => r.sort)),
       shadow: _p50(ring.map((r) => r.shadow)),
       sceneSubmit: _p50(ring.map((r) => r.sceneSubmit)),
+      preSubmit: _p50(ring.map((r) => r.preSubmit)),
+      drawLoop: _p50(ring.map((r) => r.drawLoop)),
+      postDraw: _p50(ring.map((r) => r.postDraw)),
+      glueSpan: S.objHooks ? _p50(ring.map((r) => r.glueSpan)) : null,
     },
 
     // The shadow phase, split. `dutyCycle` is the number that decides whether
@@ -919,6 +1396,63 @@ export function frameSplitReport() {
       minusDrawsMs: sceneMinusDraws,
       objHookMs,
       glueAndLightsMs: glueAndLights,
+
+      // The sub-split. `glueAndLightsMs` is ONE number covering two populations
+      // — once-per-call lights/background/resolve work and per-submitted-object
+      // glue. These three tile `sceneSubmit` and separate them. Boundaries are
+      // the first scene draw's entry and the last one's exit, so they cost no
+      // extra timestamps and they are null (never 0) on a call that drew
+      // nothing in the scene phase.
+      split: {
+        // setupLights + setupLightsView + background.render + clipping.endShadows
+        // + info.reset. ONCE PER CALL — this is `setupLights`'s home, and if it
+        // is the suspect this number is large and does NOT track `submitted`.
+        preSubmitMs,
+        // Every renderObject, start to finish: hooks + glue + the draws.
+        drawLoopMs,
+        // Multisample resolve + render-target mipmap + output.end. ONCE PER CALL.
+        postDrawMs,
+        // drawLoop − draws − hooks. THE per-object glue.
+        glueSpanMs,
+        // Of the hook total, the part inside `drawLoopMs`. The remainder fired
+        // before the first draw and is inside `preSubmitMs`.
+        objHookInLoopMs,
+        // Per SUBMITTED object — the conservative reading, and the one to quote
+        // for "what would deleting an object save". It is a slight UNDER-count:
+        // the window spans N draws but only N−1 inter-draw gaps, so the first
+        // object's glue is in `preSubmitMs`. At 470 submitted that bias is 0.2%;
+        // at 8 it is 12.5%, which is why the per-gap figure sits next to it and
+        // why the glue sampler is the tie-breaker.
+        glueSpanPerSubmittedUs:
+          glueSpanMs === null || submittedPerCall <= 0 ? null : (glueSpanMs * 1000) / submittedPerCall,
+        // Per INTER-DRAW GAP — the unbiased per-object cost, and the figure the
+        // glue sampler should agree with.
+        glueSpanPerGapUs:
+          glueSpanMs === null || submittedPerCall <= 1
+            ? null
+            : (glueSpanMs * 1000) / (submittedPerCall - 1),
+        // Direct measurement of the same quantity, from `{glueSample:k}`:
+        // hook-exit → renderBufferDirect-entry on k borrowed objects. It covers
+        // a strict SUBSET of a gap (no layers.test, no onAfterRender, no loop
+        // overhead), so `glueSampleUs <= glueSpanPerGapUs` is the expected
+        // relation and a violation means one of the two is wrong.
+        glueSampleUs: c.glueSample > 0 ? (s.glueSample * 1000) / c.glueSample : null,
+        glueSamplesPerCall: S.glueSampleEvery > 0 ? c.glueSample / n : null,
+        glueSampleObjects: S.glueSampleEvery > 0 ? S.glueSampleTargets : null,
+        // Hooks that actually did something. If this is 0 while `objHookMs` is
+        // non-null, the app genuinely has no non-default hook in the submitted
+        // population — a MEASURED zero, and visibly so, which is not the same
+        // thing as an unmeasured one.
+        hookedPerCall: objHooksFullySampled ? c.objHook / n : null,
+        objHookPerHookedUs:
+          objHooksFullySampled && c.objHook > 0 ? (s.objHook * 1000) / c.objHook : null,
+        // `renderTransmissionPass` draws BEFORE `background.render`, so a
+        // non-zero count here means `preSubmitMs` closes at the transmission
+        // pass's first draw and the rest of that pass is inside `drawLoopMs`.
+        transmissivePerCall: c.submittedTransmissive / n,
+        booksClosed: sceneSubmitBooksClosed,
+        residualMs: subResidual,
+      },
     },
 
     // SUBMITTED scale — three's own render-list lengths after its own cull.
@@ -934,6 +1468,10 @@ export function frameSplitReport() {
     ballast: {
       nodes: S.ballastCount,
       visible: S.ballastVisible,
+      // The SUBMITTED-scale ballast. Non-zero means `submitted`, `project`,
+      // `sort` and `drawLoop` all contain injected population — every one of
+      // those numbers is an ARM, not a baseline.
+      drawNodes: S.drawBallastCount,
     },
 
     health: {
@@ -958,13 +1496,48 @@ export function frameSplitReport() {
       rbdOtherDraws: c.rbdOther,
       rbdOtherTotalMs: s.rbdOther,
       nowCostNs: S.nowCostNs,
-      // What this instrument costs the frame it is measuring: two clock reads
-      // per draw plus fourteen per call. Reported so nobody has to trust that
-      // it is small.
+      // What this instrument costs the frame it is measuring. Two clock reads
+      // per draw, fourteen per call, plus — only when `{objHooks:true}` — two
+      // per adopted hook per call and one per glue sample. The sceneSubmit
+      // sub-split adds ZERO: its boundaries are timestamps the draw wrapper
+      // already takes. Reported so nobody has to trust that it is small.
+      //
+      // The adopt SCAN is not a clock cost (it is ~470 property reads), so it
+      // is measured directly and added rather than modelled from `nowCostNs`.
+      probeClockReadsPerCall:
+        (2 * (c.rbdShadow + c.rbdScene)) / n +
+        14 +
+        (S.objHooks ? 2 + (2 * c.objHook) / n + c.glueSample / n : 0),
       probeOverheadMs:
         S.nowCostNs === null
           ? null
-          : ((2 * (c.rbdShadow + c.rbdScene)) / n + 14) * (S.nowCostNs / 1e6),
+          : ((2 * (c.rbdShadow + c.rbdScene)) / n +
+              14 +
+              (S.objHooks ? 2 + (2 * c.objHook) / n + c.glueSample / n : 0)) *
+              (S.nowCostNs / 1e6) +
+            (S.objHooks ? acc.adoptScanMs / n : 0),
+
+      // The object-hook adopt pass, priced and disclosed. `adoptScanMs` is
+      // INSIDE `buckets.listFinish` — that bucket is inflated by exactly this
+      // much while objHooks is armed, which is why it is reported next to it
+      // rather than netted out silently.
+      objHooks: S.objHooks
+        ? {
+            method: "adopt from render list (SUBMITTED scale)",
+            scans: acc.adoptScans,
+            fullySampled: objHooksFullySampled,
+            scanMs: acc.adoptScanMs / n,
+            scannedPerCall: acc.adoptScanned / n,
+            // Cumulative wrapper installs. In steady state this stops growing;
+            // continued growth means the app is swapping hooks every frame
+            // (`_installMemo` on new buckets) and the scan is doing real work.
+            wrappersInstalled: acc.adoptWrapped,
+            liveRows: S.adopted ? S.adopted.length : 0,
+            // Non-zero ⇒ the row cap was hit and `objHookMs` is a LOWER BOUND.
+            refusedByRowCap: acc.adoptCapped,
+            note: "prototype patching deliberately not used — static_batch_x.js installs its memo hook as an OWN property and a prototype wrapper would never see it",
+          }
+        : null,
     },
   };
 }
@@ -1031,6 +1604,28 @@ export function frameSplitCensus(root) {
     castShadowMeshes: 0,
     maxDepth: 0,
   };
+  // The `onBeforeRender` population, at VISITED scale. This is what decides
+  // whether the hook total can be reached by patching a prototype (it cannot on
+  // this app) and it is the census that would have caught the tombstoned
+  // prototype-wrap design before it reported a confident near-zero.
+  //
+  // VISITED, not SUBMITTED: the census never re-derives the frustum. The
+  // SUBMITTED-scale answer comes from the probe itself
+  // (`report().health.objHooks.scannedPerCall`), off three's own render list.
+  const hooks = {
+    scale: "visited (superset of submitted — the census never re-derives the frustum)",
+    defaultOnBeforeRender: 0,
+    ownOnBeforeRender: 0, // instance property — a prototype wrapper CANNOT see these
+    inheritedOverride: 0, // a non-default prototype method, e.g. stock BatchedMesh
+    ownOnAfterRender: 0,
+    byConstructor: {}, // ctor name → count, for the non-default ones
+    // If this is false the module's `three` is a different copy from the
+    // scene's and every identity compare in the adopt pass is meaningless.
+    identityCheckOk: typeof _DEFAULT_ON_BEFORE_RENDER === "function",
+  };
+  // `setupLights` and `setupLightsView` are O(lights) and sit inside
+  // `sceneSplit.split.preSubmitMs`. This is the population that prices them.
+  const lightsByType = {};
   let prunedSubtrees = 0;
   let prunedNodes = 0;
 
@@ -1062,10 +1657,27 @@ export function frameSplitCensus(root) {
     }
     visited.nodes += 1;
     if (depth > visited.maxDepth) visited.maxDepth = depth;
+
+    // The hook census. Three outcomes, and the distinction between the last two
+    // is the whole point: an OWN property shadows the prototype, so a prototype
+    // wrapper never runs for it.
+    const obr = o.onBeforeRender;
+    if (obr === _DEFAULT_ON_BEFORE_RENDER) {
+      hooks.defaultOnBeforeRender += 1;
+    } else {
+      if (Object.prototype.hasOwnProperty.call(o, "onBeforeRender")) hooks.ownOnBeforeRender += 1;
+      else hooks.inheritedOverride += 1;
+      const cn = (o.constructor && o.constructor.name) || "anonymous";
+      hooks.byConstructor[cn] = (hooks.byConstructor[cn] || 0) + 1;
+    }
+    if (Object.prototype.hasOwnProperty.call(o, "onAfterRender")) hooks.ownOnAfterRender += 1;
+
     let dispatched = false;
     if (o.isLight) {
       visited.lights += 1;
       if (o.castShadow) visited.lightsCastingShadow += 1;
+      const lt = (o.type || (o.constructor && o.constructor.name) || "Light").toString();
+      lightsByType[lt] = (lightsByType[lt] || 0) + 1;
       dispatched = true;
     } else if (o.isSprite) {
       visited.sprites += 1;
@@ -1121,6 +1733,18 @@ export function frameSplitCensus(root) {
     },
     resident,
     visited,
+    hooks,
+    // What `sceneSplit.split.preSubmitMs` is a function of, besides the draws:
+    // `setupLights`/`setupLightsView` are O(lights), `background.render` only
+    // exists when the scene has one, and `overrideMaterial` suppresses the
+    // transmission pass entirely (`renderTransmissionPass` returns on it).
+    preSubmitInputs: {
+      lights: visited.lights,
+      lightsByType,
+      sceneBackground: scene.background ? scene.background.type || "set" : null,
+      sceneEnvironment: !!scene.environment,
+      overrideMaterial: !!scene.overrideMaterial,
+    },
     pruned: { subtrees: prunedSubtrees, nodes: prunedNodes },
     shadow: sm
       ? {
@@ -1132,7 +1756,11 @@ export function frameSplitCensus(root) {
         }
       : { available: false, cascades },
     visitsPerFrame,
-    ballast: { nodes: S.ballastCount, visible: S.ballastVisible },
+    ballast: {
+      nodes: S.ballastCount,
+      visible: S.ballastVisible,
+      drawNodes: S.drawBallastCount,
+    },
   };
 }
 
@@ -1238,6 +1866,114 @@ export function setFrameSplitBallast(n, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// The DRAW ballast — a MEASURED unit price for one SUBMITTED object
+// ---------------------------------------------------------------------------
+
+const _DRAW_BALLAST_NAME = "__frameSplitDrawBallast";
+
+/**
+ * Attach `n` Meshes that are SUBMITTED and DRAWN but paint nothing, so the
+ * per-submitted-object cost of `renderObject` can be measured as `Δ / n`.
+ *
+ * THE NODE BALLAST CANNOT DO THIS. An empty `Group` is never pushed onto a
+ * render list, so it prices a VISIT and says nothing about the ~7.3 µs per
+ * SUBMITTED object that `sceneSubmit − draws` implies. Different scale,
+ * different instrument — which is the rule this investigation keeps relearning.
+ *
+ * WHY IT IS IMAGE-IDENTICAL, stated because a perf instrument that changes the
+ * picture measures a different program. The geometry is ONE triangle whose
+ * three vertices are the SAME point. A zero-area triangle produces no fragments
+ * — the rasteriser has nothing to cover — so it writes no colour and no depth,
+ * at any camera, in any order, with any material. It is the draw-scale analogue
+ * of the empty Group's "matches none of projectObject's branches".
+ *
+ * WHAT IT COSTS AND WHAT IT DOES NOT. Every ballast mesh pays, in full:
+ * `projectObject`'s dispatch and `objects.update`, a render-list push, a sort
+ * comparison, `layers.test`, `onBeforeRender` (the stock no-op),
+ * `modelViewMatrix.multiplyMatrices`, `normalMatrix.getNormalMatrix`,
+ * `material.onBeforeRender`, one `renderBufferDirect` and `onAfterRender`. It
+ * shares ONE geometry and ONE material across all `n` deliberately:
+ * `WebGLObjects.update` memoises per geometry per frame and `setProgram`
+ * early-outs on an unchanged material, so the injection adds renderObject glue
+ * and close to the floor of a draw, rather than n distinct programs.
+ *
+ * So the unit that falls out of an A/B is
+ *
+ *     glueUnit = (B.sceneSplit.split.drawLoopMs - A.sceneSplit.split.drawLoopMs
+ *                 - (B.sceneSplit.drawMs - A.sceneSplit.drawMs)) / n
+ *
+ * i.e. Δ(drawLoop − draws) / n — the same quantity `glueSpanPerSubmittedUs`
+ * reports from the span arithmetic, measured a second, independent way. If the
+ * two disagree, at least one is wrong and neither should be quoted.
+ *
+ * IT ALSO INFLATES `project`, `sort` AND `submitted`. Those are arms, not
+ * baselines, while it is attached — `report().ballast.drawNodes` says so.
+ * `frustumCulled = false` is what guarantees submission regardless of where the
+ * camera points; without it the arm would silently measure 0 objects whenever
+ * the ballast fell outside the frustum, which is exactly the `_projDrawn`
+ * failure mode one rung down.
+ *
+ * `setFrameSplitDrawBallast(0)` removes it. Idempotent and absolute, not
+ * cumulative — a cumulative ballast voids the A/B it exists to serve.
+ *
+ * @param {number} n
+ * @param {object} [opts]
+ * @param {object} [opts.scene]
+ * @param {boolean} [opts.matrixAutoUpdate=true] match the live population.
+ */
+export function setFrameSplitDrawBallast(n, opts = {}) {
+  const scene =
+    opts.scene ||
+    S.scene ||
+    (typeof window !== "undefined" ? window.liveScene3d?.scene : null) ||
+    null;
+  if (!scene || typeof scene.add !== "function") {
+    return { error: "no scene — pass one, or wait for window.liveScene3d" };
+  }
+  if (S.drawBallast) {
+    if (S.drawBallast.parent) S.drawBallast.parent.remove(S.drawBallast);
+    // Dispose the shared pair once; the meshes hold no resources of their own.
+    S.drawBallast.userData.__geom?.dispose?.();
+    S.drawBallast.userData.__mat?.dispose?.();
+  }
+  S.drawBallast = null;
+  S.drawBallastCount = 0;
+  const count = Math.max(0, n | 0);
+  if (count === 0) return { drawBallast: 0 };
+
+  const geom = new BufferGeometry();
+  // Three identical vertices. Zero area ⇒ no fragments ⇒ no pixels touched.
+  geom.setAttribute("position", new BufferAttribute(new Float32Array(9), 3));
+  const mat = new MeshBasicMaterial();
+  const root = new Group();
+  root.name = _DRAW_BALLAST_NAME;
+  root.userData.__geom = geom;
+  root.userData.__mat = mat;
+  const matrixAutoUpdate = opts.matrixAutoUpdate !== false;
+  for (let i = 0; i < count; i++) {
+    const m = new Mesh(geom, mat);
+    m.frustumCulled = false; // submitted every frame, at every camera
+    m.castShadow = false;
+    m.receiveShadow = false;
+    m.matrixAutoUpdate = matrixAutoUpdate;
+    root.add(m);
+  }
+  scene.add(root);
+  root.updateMatrixWorld(true);
+  S.drawBallast = root;
+  S.drawBallastCount = count;
+  return {
+    drawBallast: count,
+    sharedGeometry: true,
+    sharedMaterial: true,
+    frustumCulled: false,
+    matrixAutoUpdate,
+    note:
+      "submitted + drawn, paints nothing (zero-area triangle). Inflates submitted, project, sort and drawLoop — every one of those is an ARM while this is attached.",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Window surface. No URL flag: this is a pure diagnostic that costs nothing
 // until armed, which is the shape `window.__statMergeProjection` established.
 // ---------------------------------------------------------------------------
@@ -1257,4 +1993,5 @@ if (typeof window !== "undefined") {
   window.__frameSplitSamples = guard(frameSplitSamples);
   window.__frameSplitCensus = guard(frameSplitCensus);
   window.__frameSplitBallast = guard(setFrameSplitBallast);
+  window.__frameSplitDrawBallast = guard(setFrameSplitDrawBallast);
 }
