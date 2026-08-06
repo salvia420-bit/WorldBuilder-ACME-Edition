@@ -61,6 +61,17 @@ function triGeom(tris = 1) {
   g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(tris * 6), 2));
   return g;
 }
+// Mock material that wants its OWN bucket. Since 2026-08-06 the chunk batcher
+// keys buckets by material VALUE (`?statBatchValueKey`), and two bare
+// default MeshBasicMaterials are equal in every rendering-relevant respect —
+// they SHOULD share a bucket, which is the whole point of that flag. Real
+// statics materials differ at minimum by their per-surface-DID `map`, so the
+// mocks differ the same way: a unique Texture object per material.
+function mockMat(opts = {}) {
+  const m = new THREE.MeshBasicMaterial(opts);
+  m.map = new THREE.Texture(); // unique object == a distinct surface, no GL needed
+  return m;
+}
 function singleton(surfaceDid, x, lbId, geom, mat) {
   const m = new THREE.Mesh(geom, mat);
   m.position.set(x, 0, 0);
@@ -76,12 +87,12 @@ check("0: flag defaults ON (v2 chunked, 1070-proven 2026-07-03; =off escapes)", 
 M.__setStatBatchChunkForTest(true);
 
 // ===== 2. LB1 feed: grouping parity with the per-LB consolidator =====
-const matA = new THREE.MeshBasicMaterial(), matB = new THREE.MeshBasicMaterial();
+const matA = mockMat(), matB = mockMat();
 const geomA = triGeom(2), geomB = triGeom(3); // shared per (model,surface) within an LB
 const nodes1 = [];
 for (let i = 0; i < 5; i++) nodes1.push(singleton(0x0A00, i, LB1, geomA, matA)); // surf A ×5, ONE geometry
 for (let i = 0; i < 3; i++) nodes1.push(singleton(0x0B00, i, LB1, triGeom(1), matB)); // surf B ×3, per-node geoms
-const lone = singleton(0x0C00, 99, LB1, triGeom(1), new THREE.MeshBasicMaterial()); nodes1.push(lone);
+const lone = singleton(0x0C00, 99, LB1, triGeom(1), mockMat()); nodes1.push(lone);
 const lod = new THREE.LOD(); lod.userData = { surfaceDid: 0x0D00, landblockId: LB1 }; nodes1.push(lod);
 
 const r1 = M.consolidateStaticSingletonsCrossLb(nodes1, scene3d, LB1);
@@ -232,7 +243,7 @@ check("19: re-feed after evict lands in the same bucket (instances 4→6)",
   `instances=${bmA.userData.instances}`);
 
 // ===== 7. nothing-consumed → null (caller falls back to the per-LB path) =====
-const loneOnly = [singleton(0x0F00, 1, LB1, triGeom(1), new THREE.MeshBasicMaterial())];
+const loneOnly = [singleton(0x0F00, 1, LB1, triGeom(1), mockMat())];
 const r4 = M.consolidateStaticSingletonsCrossLb(loneOnly, scene3d, LB1);
 check("20: all-lone feed returns null (legacy per-LB fallback, no double-render)", r4 === null);
 
@@ -240,7 +251,7 @@ check("20: all-lone feed returns null (legacy per-LB fallback, no double-render)
 M.__resetStatBatchXForTest();
 {
   const s2 = { staticsGroup: new THREE.Group() };
-  const matBig = new THREE.MeshBasicMaterial();
+  const matBig = mockMat();
   const gBig = triGeom(1);
   const many = [];
   for (let i = 0; i < 600; i++) many.push(singleton(0x1111, i, LB1, gBig, matBig));
@@ -257,8 +268,8 @@ M.__resetStatBatchXForTest();
 // ===== 9. render-path flags =====
 {
   const s3 = { staticsGroup: new THREE.Group() };
-  const matOpaque = new THREE.MeshBasicMaterial();
-  const matTrans = new THREE.MeshBasicMaterial({ transparent: true });
+  const matOpaque = mockMat();
+  const matTrans = mockMat({ transparent: true });
   const g = triGeom(1);
   M.consolidateStaticSingletonsCrossLb(
     [singleton(1, 0, LB1, g, matOpaque), singleton(1, 1, LB1, g, matOpaque),
@@ -279,7 +290,7 @@ console.log("=========================");
 {
   M.__resetStatBatchXForTest();
   const sc = { staticsGroup: new THREE.Group() };
-  const mat = new THREE.MeshBasicMaterial();
+  const mat = mockMat();
   const mk = () => { const g = triGeom(1); return [singleton(0x0E00, 0, LB1, g, mat), singleton(0x0E00, 1, LB1, g, mat), singleton(0x0E00, 2, LB1, g, mat)]; };
   const ra = M.consolidateStaticSingletonsCrossLb(mk(), sc, LB1);
   const s1 = M.getStatBatchXStats();
@@ -304,7 +315,7 @@ console.log("=========================");
 {
   M.__resetStatBatchXForTest();
   const sc = { staticsGroup: new THREE.Group() };
-  const mat = new THREE.MeshBasicMaterial();
+  const mat = mockMat();
   const visited = [];
   let peakChildren = 0;
   for (let r = 0; r < 12; r += 1) {
@@ -355,7 +366,7 @@ console.log("=========================");
   M.__resetStatBatchXForTest();
   M.__setStatGeomDedupForTest(true);
   const sc = { staticsGroup: new THREE.Group() };
-  const mat = new THREE.MeshBasicMaterial();
+  const mat = mockMat();
   const LBa = 0x40400000 >>> 0, LBb = 0x41400000 >>> 0; // same 3x3 region
   const mkStamped = (lbId) => {
     const g = triGeom(1);

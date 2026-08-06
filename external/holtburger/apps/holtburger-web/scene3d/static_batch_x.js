@@ -51,9 +51,16 @@ export function statBatchChunkEnabled() {
 export function __setStatBatchChunkForTest(v) { _flag = v; }
 export function __resetStatBatchXForTest() {
   _buckets.clear();
+  _valueBuckets.clear();
+  _orphanedBuckets.clear();
   _lbMembership.clear();
   _dirtyBuckets.clear();
   _bucketSeq = 0;
+  _stats.valueMerges = 0;
+  _stats.valueKeyed = 0;
+  _stats.valueUnmergeable = 0;
+  _stats.valueRekeyed = 0;
+  _stats.valueDiverged = 0;
   _dedupStats.hits = 0;
   _dedupStats.adds = 0;
   _dedupStats.keyed = 0;
@@ -167,6 +174,17 @@ const _stats = {
   deadMarked: 0,
   deadUnmarked: 0,
   deadShadowSkipped: 0,
+  // ?statBatchValueKey lifecycle. `valueMerges` is the headline — each one is a
+  // bucket, a multidraw rebuild and a ~37.6 µs draw that did not happen.
+  // `valueUnmergeable` is the honest denominator (materials the key refused to
+  // compare); `valueRekeyed`/`valueDiverged` are the late-mutation guards
+  // firing, and a steadily climbing `valueDiverged` means some material class
+  // mutates after merge and should be excluded up front instead.
+  valueMerges: 0,
+  valueKeyed: 0,
+  valueUnmergeable: 0,
+  valueRekeyed: 0,
+  valueDiverged: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -310,6 +328,16 @@ export function __getDeadBatchPredicateForTest() { return _rendersNothing; }
  * instance — so `m.material === bm.material` for every member by construction,
  * and a bucket cannot mix visible with invisible members. This is not a
  * property of the current population; it is what the bucket key IS.
+ *
+ * ?statBatchValueKey (2026-08-06) weakens `===` to equal-by-VALUE, and the
+ * proof survives intact: every field `materialRendersNothing` reads —
+ * `transparent`, `opacity`, `blending`, `depthWrite`, and
+ * `userData.__baseTranslucency` — is in the merge key (the first four as own
+ * material properties, the last inside the appended `userData`), so a merged
+ * member cannot answer the predicate differently from `bm.material`. Adding a
+ * clause to that predicate that reads something OUTSIDE the merge key would
+ * break this; the key is a superset of the material's own state, so in practice
+ * that means "do not make it read a side channel".
  *
  * SHADOWS. The colour-pass argument (opacity 0 under NormalBlending composites
  * to dst exactly) says nothing about the depth-only shadow pass, which ignores
@@ -1909,6 +1937,286 @@ function _warnOnce(key, msg) {
   console.warn(msg);
 }
 
+// ---------------------------------------------------------------------------
+// ?statBatchValueKey — bucket by material VALUE, not material OBJECT (2026-08-06)
+//
+// ⚠ THIS IS NOT A PERF WIN. Measure it before you believe otherwise — the
+// number that commissioned this change was wrong and the correction is the most
+// useful thing in this comment.
+//
+// The premise was: the draw half of per-bucket cost is almost entirely FIXED
+// (`docs/2026-08-06-frame-cost-structure-measured.md` §5a, regressed over 197
+// live buckets: **37.6 µs/bucket, 0.038 µs/instance, r² = 0.014** — a draw costs
+// the same whether its multidraw carries 5 or 500 instances), and the Nanto
+// census showed the bucket count inflated by duplication (**396 buckets · 26,586
+// instances · 95 distinct material OBJECTS · 76 distinct material VALUES · 7
+// distinct render STATES**), so value-keying looked worth ~35 buckets ≈ 1.3 ms.
+//
+// **Bucket count and DRAWN bucket count are decoupled** — most buckets are
+// frustum-culled and never submitted, which the whole-population census does not
+// see. Two 1070 measurements (Nanto, 2026-08-06) settled it:
+//   * A region-width sweep — the same mechanism making fewer, bigger buckets:
+//     `regionDiv` 3 → 376 buckets / 452.2 draws / p50 23.4 ms; 6 → 245 / 438.3 /
+//     23.4; 12 → 142 / 437.9 / **24.5**. Removing 131 buckets bought 14 draws
+//     and 0.00 ms; removing 234 made the frame 1.1 ms WORSE.
+//   * The ceiling recomputed over DRAWN buckets: 376 all / **129 drawn**; keyed
+//     by (region, material VALUE) → **123**; keyed by (region, render STATE) →
+//     **37**.
+// So this flag removes ~6 drawn buckets ≈ **0.24 ms**, at or below this
+// workload's noise floor. It ships because it removes genuine duplicate state
+// (the consuming end of the duplication commit a02686b7 fixed at the minting
+// end) and because the counter below finally answers whether the drawn set is
+// fragmented by materials at all — it is NOT: 123 vs 37 says the fragmentation
+// is TEXTURE identity, and the remaining value is on the array-texture axis.
+// Do not quote a frame number for this flag.
+//
+// WHY THE KEY IS ENUMERATED, NOT ALLOW-LISTED. A `BatchedMesh` applies ONE
+// material to EVERY instance, so a merge is only legal when the surviving
+// material renders every member identically — the key has to be a SUPERSET of
+// everything the GPU can distinguish, and an allow-list cannot be proven to be
+// one (it can only be proven wrong, once, visually, on the 1070). The
+// prototype key that produced the −35 figure in §5 was
+// `type|map.uuid|transparent|alphaTest|depthWrite|blending|side|vertexColors|
+// normalMap?|emissiveMap?|defines`. Checked against three r184 that list is NOT
+// sufficient, in two separate ways:
+//   * `WebGLState.setMaterial` (three.module.js :10383-10419) additionally binds
+//     `blendSrc/Dst/Equation`, `blendSrcAlpha/DstAlpha/EquationAlpha`,
+//     `blendColor/blendAlpha`, `premultipliedAlpha`, `depthFunc`, `depthTest`,
+//     `colorWrite`, the seven `stencil*` fields, `polygonOffset{,Factor,Units}`
+//     and `alphaToCoverage`. None were in the prototype key.
+//   * `refreshMaterialUniforms` binds the per-material VALUES — `color`,
+//     `opacity`, `emissive`, `emissiveIntensity`, `roughness`, `metalness`,
+//     `normalScale`, `aoMapIntensity`, `envMapIntensity`, `bumpScale`, … — and
+//     `getParameters` (:7431) keys the program on ~40 more. Two surfaces with
+//     the same texture but a different `diffuse` tint (`_materialFromFlags`
+//     writes `opts.color` for the 241 retail surfaces with d≠1) are equal under
+//     the prototype key and render differently.
+// So this key walks EVERY own enumerable property of the material object. That
+// is sufficient by construction: three reads material state off the material,
+// and a property three added in an upgrade lands in the key without anyone
+// remembering to add it. Anything it cannot encode (an array, an unknown class
+// instance, an unknown own function) returns null = UNMERGEABLE — the material
+// keeps its own bucket, exactly as today.
+//
+// THREE THINGS THE PROPERTY WALK CANNOT SEE, and how each is covered:
+//   1. **Our onBeforeCompile patch sets.** Every patch is a closure, so
+//      identity comparison would refuse every merge. The tree already has the
+//      right discriminator: `customProgramCacheKey()` — `_patchSetCacheKey`
+//      (materials.js) exists precisely because "two materials that differ ONLY
+//      in their patch composition collapse onto one program and render each
+//      other's shader". Its string is appended to the key, which is the same
+//      question three itself asks. This is what keeps a `floorBias` /
+//      `staticBias` / `cellBaked` / VFX-variant CLONE out of its own base's
+//      bucket: those clones share the base's `map` and differ ONLY in a patch
+//      flag, so the prototype key would have FUSED them — merging a
+//      depth-biased floor into an unbiased bucket is the z-fighting that
+//      `applyFloorDepthBias` exists to prevent.
+//
+//      WHICH IS WHY THE REALIZED MERGE COUNT MAY BE ~0, AND WHY THAT IS THE
+//      ANSWER RATHER THAN A DISAPPOINTMENT. Texture identity has to stay in the
+//      key, and `MaterialCache` mints exactly one `DataTexture` per surface DID
+//      through one write path (`_installCacheEntry`; a re-install after a
+//      `?matBudgetMB` eviction re-decodes a FRESH texture object). So two
+//      material objects can only share a `map` when they are the same DID and
+//      the same install generation — i.e. a base and one of its derived clones,
+//      which exist precisely BECAUSE they must render differently and are
+//      refused above. A sound key therefore cannot merge across surfaces at all;
+//      the buckets the prototype key collapsed were mostly clones being wrongly
+//      fused. That is the real reading of the drawn-bucket ceiling (129 → 123 by
+//      value vs 129 → 37 by render state): the drawn set is fragmented by
+//      TEXTURE, not by material duplication, and only shared array textures can
+//      touch it. `getStatBatchXStats().valueKey.merges` is the live check.
+//   2. **Per-material resources bound by a patch's uniforms** (the POM height
+//      plane, the detail tile) and the `_heightTexByMaterial` side channel —
+//      none of them are material properties. They are all derived from ONE
+//      surface DID, and `userData` (which carries `surfaceDid`, stamped in
+//      `_installCacheEntry`) is appended to the key, so two materials only ever
+//      merge when they name the same surface. That also makes the key immune to
+//      any future userData-driven behaviour we forget about here.
+//   3. **Identity/bookkeeping fields** — `uuid`, `name`, `version` (a compile
+//      counter bumped by `needsUpdate`) and `_listeners` (the renderer's own
+//      dispose hook, attached at first render) must be skipped or nothing would
+//      ever compare equal. `id` is a non-enumerable defineProperty in r184 and
+//      never reaches the walk.
+//
+// OWNERSHIP / DISPOSAL. The bucket still belongs to the FIRST material object
+// that created it (`userData.material`; `bm.material` is that member's batched
+// variant under ?batchMatVariant) — merging never re-points either, so the
+// bucket's lifetime contract is byte-identical to the object-keyed one: a
+// `__cacheOwned` cache material that no consumer disposes (landblock_lru skips
+// `__cacheOwned`, `_reapBucketIfEmpty` explicitly never disposes it, and the
+// `?matBudgetMB` LRU only disposes entries that were never handed out —
+// a bucket material was handed out by definition — while handed-out evictions
+// go to a WeakRef graveyard with no default caller). What merging DOES add is a
+// strong reference to every joined material on `userData.mergedMaterials`, so a
+// member material can never be finalised while the bucket rendering in its
+// place is alive. That retention is free in bytes: map identity is IN the key,
+// so a merged member shares the bucket material's textures — the retained
+// object is a Material shell, not pixels.
+//
+// LATE MUTATION (the one way this can go wrong, and it is guarded twice).
+// Materials in this tree are not strictly immutable: `tickAnimatedSurfaces`
+// re-points a base material's `.map` every 250 ms, the BC7 upgrade re-points
+// `map`/`emissiveMap` and DISPOSES the old texture, and `_reseatSurfaceState`
+// rewrites a derived clone's render state when a real surface lands after a
+// spawn-race fallback. A merge decided on stale equality would then render one
+// member with another's state. Guard 1: a value-map HIT re-derives the resident
+// bucket material's key before merging, so a bucket whose material has since
+// mutated is re-keyed instead of joined. Guard 2: the ~10 Hz optimize tick
+// re-derives keys for buckets that actually hold a merge (only those — an
+// unmerged bucket cannot diverge from itself) and ORPHANS any bucket whose
+// members stopped agreeing: it is removed from both lookup maps but keeps
+// rendering and keeps draining, so the next feed builds a fresh bucket and the
+// stale one reaps itself when its last LB evicts. Divergence is counted
+// (`valueKey.diverged`), never silent.
+//
+// DEFAULT-ON with `?statBatchValueKey=off`. Off = byte-identical to the
+// pre-2026-08-06 path: no key is ever built and `region.get(mat)` is the only
+// lookup.
+let _valueKeyFlag;
+/** `?statBatchValueKey=off` escapes value-keyed bucket merging (restores pure
+ *  material-OBJECT keying). DEFAULT-ON. */
+export function statBatchValueKeyEnabled() {
+  if (_valueKeyFlag !== undefined) return _valueKeyFlag;
+  let on = true; // DEFAULT-ON; ?statBatchValueKey=off escapes
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("statBatchValueKey") || "").toLowerCase();
+      if (v) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _valueKeyFlag = on;
+  return on;
+}
+/** Test seam. */
+export function __setStatBatchValueKeyForTest(v) { _valueKeyFlag = v; }
+
+// Own enumerable properties that are IDENTITY or BOOKKEEPING, never render
+// state. `userData` is handled separately (appended whole); `id` is
+// non-enumerable in r184 and is listed only so a future three cannot surprise us.
+const _VALUE_KEY_SKIP = new Set(["uuid", "id", "name", "version", "userData", "_listeners"]);
+// Renderer BOOKKEEPING stamped onto whatever object is drawn — draw_sort_program.js
+// (`__dspTok/__dspFrame/__dspKey`, `__dspFrame` moves every frame) and
+// async_link_guard.js (`__hbLinkOk*`, `__hbLinkOkOwner` an object reference).
+// These are per-object caches, not render state: batched_material_variant.js
+// does not mirror them (`_skipKey`) and a variant renders exactly as its member.
+// Keyed, they would make every drawn material unmergeable or unstable, and
+// GUARD 2 would orphan a healthy merge within one tick.
+function _valueKeySkips(k) {
+  return _VALUE_KEY_SKIP.has(k) ||
+    (k.charCodeAt(0) === 95 && k.charCodeAt(1) === 95 && (k.startsWith("__hb") || k.startsWith("__dsp")));
+}
+// Own FUNCTION properties whose effect is fully captured by the
+// `customProgramCacheKey()` string appended below. Any OTHER own function on a
+// material is something this module does not understand — the material is
+// declared unmergeable rather than guessed at.
+const _VALUE_KEY_FN_OK = new Set(["onBeforeCompile", "customProgramCacheKey"]);
+
+/**
+ * Stable encoding of a plain-data value (userData, `defines`). Returns null —
+ * and null ONLY — when the value contains something this module cannot compare
+ * (a function, a class instance, a cycle beyond the depth cap). A JS `null`
+ * VALUE encodes as "~", so null-the-failure and null-the-value never collide.
+ */
+function _stablePlain(v, depth) {
+  if (depth > 6) return null;
+  if (v === null) return "~";
+  const t = typeof v;
+  if (t === "undefined") return "u";
+  if (t === "boolean") return v ? "T" : "F";
+  if (t === "number") return Number.isFinite(v) ? String(v) : `#${String(v)}`;
+  if (t === "string") return JSON.stringify(v);
+  if (t !== "object") return null; // function / symbol / bigint
+  if (Array.isArray(v)) {
+    const parts = [];
+    for (const e of v) {
+      const enc = _stablePlain(e, depth + 1);
+      if (enc === null) return null;
+      parts.push(enc);
+    }
+    return `[${parts.join(",")}]`;
+  }
+  if (Object.getPrototypeOf(v) !== Object.prototype) return null; // class instance
+  const keys = Object.keys(v).sort();
+  const parts = [];
+  for (const k of keys) {
+    const enc = _stablePlain(v[k], depth + 1);
+    if (enc === null) return null;
+    parts.push(`${JSON.stringify(k)}:${enc}`);
+  }
+  return `{${parts.join(",")}}`;
+}
+
+/**
+ * Encode ONE own material property. Null = unmergeable (see `_stablePlain` for
+ * why that cannot be confused with a null value).
+ *
+ * TEXTURES BY OBJECT IDENTITY. This is deliberate and is NOT the same change as
+ * merging across textures (that needs shared array textures — the −78% lever in
+ * §5, and someone else's piece of work). Identity is also strictly stronger
+ * than comparing sampler settings: two materials holding the SAME texture object
+ * cannot disagree about wrap/filter/anisotropy/colorSpace/uv-transform, now or
+ * after a later mutation of that texture.
+ */
+function _encodeMatProp(v) {
+  if (v === null || v === undefined) return v === null ? "~" : "u";
+  const t = typeof v;
+  if (t === "boolean") return v ? "T" : "F";
+  if (t === "number") return Number.isFinite(v) ? String(v) : `#${String(v)}`;
+  if (t === "string") return JSON.stringify(v);
+  if (t !== "object") return null;
+  if (v.isTexture === true) return `X${v.uuid}`;
+  if (v.isColor === true) return `C${v.getHex()}`;
+  if (v.isVector2 === true) return `V${v.x},${v.y}`;
+  if (v.isVector3 === true) return `V${v.x},${v.y},${v.z}`;
+  if (v.isVector4 === true) return `V${v.x},${v.y},${v.z},${v.w}`;
+  if (v.isQuaternion === true) return `Q${v.x},${v.y},${v.z},${v.w}`;
+  if (v.isEuler === true) return `E${v.x},${v.y},${v.z},${v.order}`;
+  if (v.isMatrix3 === true || v.isMatrix4 === true) return `M${v.elements.join(",")}`;
+  return _stablePlain(v, 0); // `defines` and friends; class instances → null
+}
+
+/**
+ * The bucket-merge key for a material, or null when the material cannot be
+ * proven equal to another by value (⇒ it keeps its own bucket, today's
+ * behaviour). Cheap enough to build on demand: called once per (material,
+ * region) group per LB feed — tens of times per bake, never per instance and
+ * never per frame — so it is deliberately NOT memoised on the material, which
+ * would go stale exactly on the late-mutation paths the guards above exist for.
+ */
+function _materialValueKey(mat) {
+  if (!mat || typeof mat !== "object" || typeof mat.type !== "string") return null;
+  let parts;
+  try {
+    const keys = Object.keys(mat).sort();
+    parts = [];
+    for (const k of keys) {
+      if (_valueKeySkips(k)) continue;
+      const v = mat[k];
+      if (typeof v === "function") {
+        // Captured by customProgramCacheKey() below; anything else = unknown.
+        if (!_VALUE_KEY_FN_OK.has(k)) return null;
+        continue;
+      }
+      const enc = _encodeMatProp(v);
+      if (enc === null) return null;
+      parts.push(k, enc);
+    }
+    let cpk = "";
+    if (typeof mat.customProgramCacheKey === "function") {
+      cpk = mat.customProgramCacheKey();
+      if (typeof cpk !== "string") return null;
+    }
+    const ud = _stablePlain(mat.userData === undefined ? null : mat.userData, 0);
+    if (ud === null) return null;
+    return `${mat.type}${parts.join("")}cpk=${cpk}ud=${ud}`;
+  } catch (_) {
+    return null; // a throwing getter / cache-key hook ⇒ unmergeable, never a merge
+  }
+}
+/** Test seam — the key is internal, but its sufficiency is the whole claim. */
+export function __materialValueKeyForTest(mat) { return _materialValueKey(mat); }
+
 const _INIT_VERTS = 1 << 14;      // 16,384 — ceiling for a NEW bucket's first allocation
 const _MIN_INIT_VERTS = 1 << 10;  // 1,024 — floor; both grow via setGeometrySize on demand
 const _INIT_INST = 256;           // chunk-scale; grows via setInstanceCount on demand
@@ -1945,12 +2253,45 @@ const _GROW_TRIES = 8;            // doubling attempts before a node falls throu
 
 // Lazy module state — only ever touched under ?statBatchCrossLb=on.
 const _buckets = new Map();       // regionKey -> Map<material object, bucket { bm }>
+// ?statBatchValueKey: regionKey -> Map<value key, bucket>. A SECOND index over
+// the same buckets, never a second population — every entry here also has at
+// least one `_buckets` entry, and `_reapBucketIfEmpty` clears both.
+const _valueBuckets = new Map();
+// ?statBatchValueKey: buckets dropped from both indexes by `_orphanBucket` but
+// still resident in `staticsGroup` until their last LB evicts. Bounded by the
+// divergence count (idles empty) and drained by `_reapBucketIfEmpty`.
+const _orphanedBuckets = new Set();
 const _lbMembership = new Map();  // lbKey -> Array<{ bm, gid }>
 const _dirtyBuckets = new Set();  // buckets with freed geometry awaiting optimize()
 let _bucketSeq = 0;
 
 function _lbKeyOfId(id) {
   return (((id >>> 0) & 0xffff0000) >>> 0);
+}
+
+/**
+ * Every live bucket, exactly once.
+ *
+ * ⚠ NOT `for (const region of _buckets.values()) for (const b of region.values())`.
+ * Under ?statBatchValueKey a region map holds ONE ENTRY PER MATERIAL OBJECT, and
+ * a merged bucket is reachable from several of them — that naive walk visits it
+ * once per member and double-counts everything downstream (bucket census,
+ * instance totals, the divergence check). `userData.material` is the object that
+ * CREATED the bucket, so `region.get(mat) === that entry` picks the canonical
+ * visit and is exact whether or not anything merged.
+ */
+function* _eachBucket() {
+  for (const region of _buckets.values()) {
+    for (const [mat, b] of region) {
+      if (b.bm.userData.material !== mat) continue; // a merged alias — already visited
+      yield b.bm;
+    }
+  }
+  // Orphans (see `_orphanBucket`) are out of the lookup maps but still in the
+  // scene and still drawing until their last LB evicts. A census that skipped
+  // them would under-report live draws, which is exactly the kind of "0 means
+  // not measured" trap `deadBatch.armed` exists to avoid.
+  for (const bm of _orphanedBuckets) yield bm;
 }
 
 // 3x3-LB region key: spatial chunk this LB's statics batch into. 192 m * 3 =
@@ -1980,6 +2321,57 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   if (!region) { region = new Map(); _buckets.set(regionKey, region); }
   let b = region.get(mat);
   if (b) return b;
+  // ?statBatchValueKey — this material OBJECT is new to the region, but an
+  // equal-by-VALUE one may already own a bucket here. See the block comment
+  // above `statBatchValueKeyEnabled` for why the key is what it is.
+  let vkey = null;
+  let vmap = null;
+  // Not for ?statArrayMerge pools: their material is already one shared pool
+  // material per class, and value-merging two pools was never reasoned about.
+  if (!poolRef && statBatchValueKeyEnabled()) {
+    vkey = _materialValueKey(mat);
+    if (vkey === null) {
+      _stats.valueUnmergeable += 1;
+    } else {
+      _stats.valueKeyed += 1;
+      vmap = _valueBuckets.get(regionKey);
+      if (!vmap) { vmap = new Map(); _valueBuckets.set(regionKey, vmap); }
+      const hit = vmap.get(vkey);
+      if (hit) {
+        // GUARD 1 (late mutation): the resident bucket's material may have been
+        // re-pointed since it was indexed (animated-surface frame swap, BC7
+        // upgrade, `_reseatSurfaceState`). Re-derive its key before trusting the
+        // index — a stale entry is RE-KEYED, and this material falls through to
+        // a bucket of its own rather than joining a bucket that no longer
+        // renders what it advertises.
+        // Keyed off the MEMBER (`userData.material`): `bm.material` is its
+        // batched variant (batched_material_variant.js), a clone synced once a
+        // frame that mirrors most but not all own keys.
+        const live = _materialValueKey(hit.bm.userData.material);
+        if (live === vkey) {
+          // The bucket's shadow flags are NOT re-derived for the joiner, exactly
+          // as they are not re-derived for a second LB feeding the same material
+          // object today. `castShadow` comes from `materialCanCastShadow`, a pure
+          // function of `userData.surfaceTypeFlags` — which is in the key, so a
+          // merged member always answers it the same way. `receiveShadow` was
+          // already flattened per bucket (statics sets it per placement from a
+          // distance test); this widens that documented trade by one material.
+          region.set(mat, hit);                   // object fast path for later feeds
+          hit.bm.userData.mergedMaterials.add(mat); // strong ref — see OWNERSHIP above
+          _stats.valueMerges += 1;
+          return hit;
+        }
+        vmap.delete(vkey);
+        _stats.valueRekeyed += 1;
+        if (live !== null) {
+          hit.bm.userData.valueKey = live;
+          vmap.set(live, hit);
+        } else {
+          hit.bm.userData.valueKey = null;
+        }
+      }
+    }
+  }
   // The bucket draws through a variant of `mat` (batched_material_variant.js):
   // reads fall through to `mat`, but three caches the batched program apart so
   // plain-Mesh draws of `mat` stop flipping its program every frame. The
@@ -2037,8 +2429,17 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   // cannot outlive the BatchedMesh.
   bm.userData.regionKey = regionKey;
   bm.userData.material = mat;
+  // ?statBatchValueKey bookkeeping. `valueKey` is this bucket's entry in the
+  // value index (null ⇒ unmergeable, never indexed). `mergedMaterials` holds a
+  // STRONG reference to every material object that resolves to this bucket —
+  // the creating one plus any that joined by value — and is what
+  // `_reapBucketIfEmpty` walks so a reaped bucket cannot be handed back out
+  // through a stale object-key entry.
+  bm.userData.valueKey = vkey;
+  bm.userData.mergedMaterials = new Set([mat]);
   b = { bm };
   region.set(mat, b);
+  if (vkey !== null && vmap) vmap.set(vkey, b);
   _stats.bucketsCreated += 1;
   if (poolRef) {
     _mergeStats.mergedBuckets += 1;
@@ -2053,6 +2454,45 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   _installMemo(bm);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
+}
+
+/** Remove this bucket's entry from the region's value index (no-op when the
+ *  entry has already been re-pointed at another bucket). */
+function _unindexValueKey(bm) {
+  const ud = bm.userData;
+  if (!ud || ud.valueKey === null || ud.valueKey === undefined) return;
+  const vmap = _valueBuckets.get(ud.regionKey);
+  if (!vmap) return;
+  if (vmap.get(ud.valueKey)?.bm === bm) vmap.delete(ud.valueKey);
+  if (vmap.size === 0) _valueBuckets.delete(ud.regionKey);
+  ud.valueKey = null;
+}
+
+/**
+ * GUARD 2 — a merged bucket whose members stopped agreeing.
+ *
+ * Repair is deliberately NOT "re-point `bm.material`" (that would change what
+ * every OTHER member renders, trading one wrong group for another) and not a
+ * geometry re-shuffle (buckets carry no per-material membership, only per-LB).
+ * It is an ORPHAN: drop the bucket out of both lookup maps while leaving it in
+ * the scene. It keeps rendering and keeps draining through the normal per-LB
+ * eviction path, the next feed of any of those materials builds a fresh bucket
+ * against the current values, and `_reapBucketIfEmpty` collects the orphan when
+ * its last LB leaves. Monotone, allocation-free, and self-healing on
+ * re-approach — the cost of the stale frames is bounded by one LB re-feed.
+ */
+function _orphanBucket(bm) {
+  const ud = bm.userData;
+  const region = _buckets.get(ud.regionKey);
+  if (region) {
+    for (const m of (ud.mergedMaterials || [ud.material])) {
+      if (region.get(m)?.bm === bm) region.delete(m);
+    }
+    if (region.size === 0) _buckets.delete(ud.regionKey);
+  }
+  _unindexValueKey(bm);
+  ud.__mergeOrphaned = true;
+  _orphanedBuckets.add(bm);
 }
 
 /**
@@ -2082,11 +2522,22 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
 function _reapBucketIfEmpty(bm) {
   const ud = bm.userData;
   if (!ud || ud.gidVerts.size > 0) return false;
+  // EVERY object key that resolves here must go, not just the creating
+  // material: under ?statBatchValueKey a bucket can be reachable from several
+  // material objects, and a survivor would hand a disposed BatchedMesh back to
+  // the next feed (statics silently invisible). The identity check keeps a
+  // key that has since been re-pointed at a NEWER bucket — the orphan path in
+  // `tickStatBatchXOptimize` can leave exactly that behind.
   const region = _buckets.get(ud.regionKey);
   if (region) {
-    region.delete(ud.material);
+    for (const m of (ud.mergedMaterials || [ud.material])) {
+      if (region.get(m)?.bm === bm) region.delete(m);
+    }
+    if (region.get(ud.material)?.bm === bm) region.delete(ud.material);
     if (region.size === 0) _buckets.delete(ud.regionKey);
   }
+  _unindexValueKey(bm);
+  _orphanedBuckets.delete(bm);
   _dirtyBuckets.delete(bm);
   try { bm.parent?.remove(bm); } catch (_) { /* fail-soft */ }
   // BatchedMesh.dispose() releases the matrix/indirect/colour textures; the
@@ -2265,6 +2716,14 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
     let consumed = 0;
     let bucketsTouched = 0;
     for (const group of byMat.values()) {
+      // RULED OUT (2026-08-06, ?statBatchValueKey): the >=2 test still counts
+      // per material OBJECT, so two equal-by-VALUE materials with one node each
+      // are both punted rather than paired into one bucket. Deliberate — the
+      // punt hands them to the statAtlas seam, which merges them ACROSS textures
+      // (the stronger axis: 129 drawn buckets → 37 by render state vs 123 by
+      // material value), so grouping by value here would take work away from the
+      // better merger to save a bucket the value key is already measured not to
+      // be short of.
       if (group.length < 2 && !wireframeMode) { out.push(...group); continue; } // lone → statAtlas seam (normal mode only)
       // ?statArrayMerge (default-OFF) — try to seat this whole group in a SHARED
       // array-texture bucket first. The population split above is untouched, so
@@ -2575,7 +3034,34 @@ export function tickStatBatchXOptimize() {
   // (tens) x six property reads at ~10 Hz, and `_markDeadBatch` only writes on a
   // transition, so a settled scene does no work beyond the read.
   if (_rendersNothing) {
-    for (const region of _buckets.values()) for (const { bm } of region.values()) _markDeadBatch(bm);
+    for (const bm of _eachBucket()) _markDeadBatch(bm);
+  }
+  // ?statBatchValueKey GUARD 2 — re-derive the value key of the buckets that
+  // actually hold a merge and orphan any whose members stopped agreeing (see
+  // `_orphanBucket`). Scoped to `mergedMaterials.size > 1`: an unmerged bucket
+  // cannot diverge from itself (its single material IS `ud.material`), and with
+  // the flag off there is no merged bucket at all, so this loop is a `Map`
+  // walk over the region index with no key built. Collected first because
+  // `_orphanBucket` mutates `_buckets` and we are iterating it.
+  if (statBatchValueKeyEnabled()) {
+    let diverged = null;
+    for (const bm of _eachBucket()) {
+      const ud = bm.userData;
+      if (ud.__mergeOrphaned) continue; // already adjudicated; re-counting it every tick would be a lie
+      if (!ud.mergedMaterials || ud.mergedMaterials.size < 2) continue;
+      const live = _materialValueKey(ud.material); // the member, not its batched variant
+      let ok = live !== null;
+      if (ok) {
+        for (const m of ud.mergedMaterials) {
+          if (m === ud.material) continue;
+          if (_materialValueKey(m) !== live) { ok = false; break; }
+        }
+      }
+      if (!ok) (diverged || (diverged = [])).push(bm);
+    }
+    if (diverged) {
+      for (const bm of diverged) { _orphanBucket(bm); _stats.valueDiverged += 1; }
+    }
   }
   // ?statBatchNoSort — RE-DERIVE `sortObjects` for the same reason and on the
   // same tick: `_reseatSurfaceState` rewrites `transparent`/`depthWrite`/
@@ -2584,7 +3070,7 @@ export function tickStatBatchXOptimize() {
   // creation-time `!!mat.transparent` can never go stale in a way this would
   // notice, and the loop is skipped outright).
   if (statBatchNoSortEnabled()) {
-    for (const region of _buckets.values()) for (const { bm } of region.values()) _reseatBucketSort(bm);
+    for (const bm of _eachBucket()) _reseatBucketSort(bm);
   }
   // ?statArrayMerge — the pool's own ~10 Hz pass. Its job is the state-DRIFT
   // detector: a pool material is minted once from the strict state key, so a
@@ -2651,7 +3137,10 @@ export function getStatBatchXStats() {
   let sortedSlots = 0;
   let drawnSlots = 0;
   let drawnSortedSlots = 0;
-  for (const region of _buckets.values()) for (const { bm } of region.values()) {
+  // ?statBatchValueKey census (named apart from ?statArrayMerge's `mergedBuckets`).
+  let valueMergedBuckets = 0;
+  let valueMergedMats = 0;
+  for (const bm of _eachBucket()) {
     const ud = bm.userData;
     const slots = Array.isArray(bm._instanceInfo) ? bm._instanceInfo.length : 0;
     instanceSlots += slots;
@@ -2671,10 +3160,16 @@ export function getStatBatchXStats() {
     // for the population that actually reaches these buckets and an
     // over-estimate for anything indexed that ever does.
     if (ud.__deadBatch === true) { deadBuckets += 1; deadTris += (ud.usedVerts - ud.deadVerts) / 3; }
+    const mats = ud.mergedMaterials ? ud.mergedMaterials.size : 1;
+    if (mats > 1) { valueMergedBuckets += 1; valueMergedMats += mats - 1; }
     buckets.push({
       name: bm.name,
       // ?skipDeadBatch — this bucket is provably invisible and is not submitted.
       dead: ud.__deadBatch === true,
+      // ?statBatchValueKey — distinct material OBJECTS that resolve to this
+      // bucket. 1 = keyed by object exactly as before; >1 = that many buckets
+      // (and draws) collapsed into this one.
+      mats,
       instances: ud.instances,
       usedVerts: ud.usedVerts,
       deadVerts: ud.deadVerts,
@@ -2821,6 +3316,25 @@ export function getStatBatchXStats() {
         verifyFails: _sphereStats.verifyFails,
         bytes: _sphereStats.bytes,
       },
+    },
+    // ?statBatchValueKey census. `merges` counts every join since page load;
+    // `mergedBuckets`/`bucketsSaved` are the LIVE picture (`bucketsSaved` is
+    // exactly the draw count this flag is removing right now — compare it
+    // against the −35 the offline census predicted). `unmergeable` is materials
+    // the key refused to compare, i.e. the head-room a wider key might reach.
+    valueKey: {
+      enabled: statBatchValueKeyEnabled(),
+      merges: _stats.valueMerges,
+      keyed: _stats.valueKeyed,
+      unmergeable: _stats.valueUnmergeable,
+      mergedBuckets: valueMergedBuckets,
+      bucketsSaved: valueMergedMats,
+      // Late-mutation guards. `rekeyed` = a stale index entry corrected at feed
+      // time; `diverged` = a merged bucket orphaned because its members stopped
+      // agreeing. Both should idle at 0; a climbing `diverged` names a material
+      // class that must be excluded up front.
+      rekeyed: _stats.valueRekeyed,
+      diverged: _stats.valueDiverged,
     },
     dedup: {
       enabled: statGeomDedupEnabled(),

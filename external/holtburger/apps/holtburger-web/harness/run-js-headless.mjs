@@ -593,6 +593,7 @@ const TIER5 = [
   { tier: 5, flag: "stat_array_merge", file: "test_stat_array_merge.mjs" },
   { tier: 5, flag: "stat_batch_memo_slots", file: "test_stat_batch_memo_slots.mjs" },
   { tier: 5, flag: "stat_batch_runs", file: "test_stat_batch_runs.mjs" },
+  { tier: 5, flag: "stat_batch_value_key", file: "test_stat_batch_value_key.mjs" },
   { tier: 5, flag: "stat_batch_walk", file: "test_stat_batch_walk.mjs" },
   // 2026-10-07 shadow/batch path trims (1070 ultra, CSM re-rastering every frame):
   // per-camera BatchedMesh indirect textures, one scene walk per shadow raster,

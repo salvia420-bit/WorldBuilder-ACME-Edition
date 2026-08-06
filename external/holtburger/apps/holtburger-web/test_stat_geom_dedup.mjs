@@ -73,6 +73,15 @@ function triGeom(tris = 1, seed = 0) {
 }
 // A `meshToGeometryGroups` output group.
 const grp = (geometry, surfaceDid, doubleSided = true) => ({ geometry, surfaceDid, doubleSided });
+// Distinct-by-VALUE mock material. `?statBatchValueKey` (2026-08-06) merges
+// buckets whose materials are equal by value, and two bare default
+// MeshBasicMaterials are exactly that — a mock that wants its own bucket has to
+// differ the way a real per-surface material does: its own `map` object.
+function mockMat(opts = {}) {
+  const m = new THREE.MeshBasicMaterial(opts);
+  m.map = new THREE.Texture();
+  return m;
+}
 function singleton(surfaceDid, x, lbId, geom, mat, modelId = 0x01000001) {
   const m = new THREE.Mesh(geom, mat);
   m.position.set(x, 0, 0);
@@ -157,7 +166,7 @@ M.__resetStatBatchXForTest();
 M.__setStatGeomDedupForTest(false);
 {
   const sc = { staticsGroup: new THREE.Group() };
-  const mat = new THREE.MeshBasicMaterial();
+  const mat = mockMat();
   const g1 = triGeom(2, 1), g2 = triGeom(2, 1); // identical content, 2 objects
   M.consolidateStaticSingletonsCrossLb(
     [singleton(0x0a00, 0, LB1, g1, mat), singleton(0x0a00, 1, LB1, g1, mat)], sc, LB1);
@@ -177,7 +186,7 @@ M.__setStatGeomDedupForTest(false);
 M.__resetStatBatchXForTest();
 M.__setStatGeomDedupForTest(true);
 const sc = { staticsGroup: new THREE.Group() };
-const matA = new THREE.MeshBasicMaterial();
+const matA = mockMat();
 let bmA;
 {
   // Two LBs in the SAME region decode the same model independently.
@@ -224,7 +233,7 @@ let bmA;
 
 // ===== 5. the map is scoped to the BUCKET object =====
 {
-  const matB = new THREE.MeshBasicMaterial();
+  const matB = mockMat();
   const gSameContent = triGeom(2, 1);
   M.stampStaticContentKeys(0x01000001, [grp(gSameContent, 0x0a00)]); // SAME key as bmA's
   M.consolidateStaticSingletonsCrossLb(
@@ -295,7 +304,7 @@ let bmA;
 {
   M.__resetStatBatchXForTest();
   const s2 = { staticsGroup: new THREE.Group() };
-  const mat = new THREE.MeshBasicMaterial();
+  const mat = mockMat();
   const mk = () => {
     const g = triGeom(2, 3);
     M.stampStaticContentKeys(0x01000009, [grp(g, 0x0e00)]);
@@ -316,7 +325,7 @@ let bmA;
 {
   M.__resetStatBatchXForTest();
   const s3 = { staticsGroup: new THREE.Group() };
-  const mat = new THREE.MeshBasicMaterial();
+  const mat = mockMat();
   const gU1 = triGeom(2, 1), gU2 = triGeom(2, 1); // identical, but NO stamp
   M.consolidateStaticSingletonsCrossLb(
     [singleton(0x0a00, 0, LB1, gU1, mat), singleton(0x0a00, 1, LB1, gU1, mat)], s3, LB1);
