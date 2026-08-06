@@ -47,6 +47,50 @@
 // so the existing per-LB eviction (which scans staticsGroup.children by
 // landblockId) tears it down identically to the singletons it replaces.
 
+// X7 (2026-08-06, `?statAtlasGrow`, DEFAULT-ON) — GROW-ON-DEMAND layer depth.
+// Every bucket used to allocate its FULL `_layerCapacityFor` depth at creation
+// and never revisit it. Measured live on a 1070 after a four-town route
+// (docs/RESULTS-atlas-occupancy-2026-08-05.json, and §11 of
+// docs/2026-08-05-1070-black-flicker-and-renderer-oom-handoff.md):
+//
+//     29 buckets   1,941 layers ALLOCATED   112 layers USED
+//                  551.1 MB allocated       123 MB occupied
+//
+// i.e. 428 MB of nra layers nothing had ever written to — the single largest
+// item in a 2,445 MB heap on a page whose renderer OOM-crashes at ~2,800 MB.
+// The `_ATLAS_NRA_MAX_LAYERS` comment below predicted the working set correctly
+// ("28-47 layers across all buckets") and drew the wrong conclusion: that is
+// true of the CEILING and false of the ALLOCATION underneath it.
+//
+// So `capacity` is now ONLY a ceiling. A bucket allocates `allocLayers` (a
+// handful, byte-capped for big tiles) and doubles — CLAMPED TO `capacity`, so
+// the allocation can never exceed what the pre-X7 code allocated on day one —
+// when the layer allocator runs out. Growth means a NEW array plus a re-upload
+// of the live layers, because `texStorage3D` fixes the depth at allocation.
+// Three moving parts make that safe:
+//   1. the material's array uniforms are re-pointed at the new arrays
+//      (`_rebindArrayUniforms`), AND `makeArrayMaterial`'s `onBeforeCompile`
+//      closure now reads a mutable HOLDER rather than capturing the array
+//      object, so a three RECOMPILE (light-count change ⇒ new program cache
+//      key ⇒ onBeforeCompile re-runs) rebuilds the uniforms against the
+//      CURRENT arrays instead of resurrecting the disposed one;
+//   2. every already-allocated layer is re-marked with `addLayerUpdate` on the
+//      new array. This is REQUIRED, not an optimisation: three's first upload
+//      of an array texture does `texStorage3D` (contents undefined) and then,
+//      if `layerUpdates` is non-empty, uploads ONLY those layers
+//      (three.module.js:12160-12195 DataArray, :12026-12070 CompressedArray).
+//      Copying the CPU bytes without re-marking would leave every carried-over
+//      layer as GPU garbage. Re-marking is also CHEAPER than a full-depth
+//      upload — it sends the live prefix, not the padding;
+//   3. BC7 buckets grow too, with no bc7_textures.js change: a
+//      `CompressedArrayTexture` keeps its whole payload in `mipmaps[0].data`
+//      (`makeBc7ArrayTexture` allocates it, `writeBc7ArrayLayer` writes into
+//      it), so the carried-over blocks are copied from the array's own CPU
+//      mirror — no per-layer source retention, nothing re-fetched.
+// Overflow past `capacity` still falls back to an unbatched singleton
+// (`ptLayerFull`), exactly as before. `?statAtlasGrow=off` allocates at
+// `capacity` again and can never enter the growth path — byte-identical.
+//
 // X6 (2026-07-29, `?texBc7=on`, DEFAULT-OFF) — BC7 buckets. A member whose
 // `material.map` is already a BC7 `CompressedTexture` (the direct-upload path in
 // bc7_textures.js) is batched into a `CompressedArrayTexture` bucket instead of a
@@ -113,6 +157,29 @@ export function statNraEnabled() {
     }
   } catch (_) { on = true; }
   return (_nraFlag = on);
+}
+
+let _growFlag;
+/** X7 — grow the bucket layer arrays on demand instead of allocating the full
+ *  `_layerCapacityFor` depth up front (see the header). **DEFAULT-ON**;
+ *  `?statAtlasGrow=off` (or `0`/`false`/`no`) allocates at `capacity` at bucket
+ *  creation exactly as the pre-2026-08-06 code did, which also makes the growth
+ *  path unreachable (`nextLayer < allocLayers` covers the whole range) — a
+ *  byte-identical escape, not a re-implementation of it. Absent or misspelled
+ *  ⇒ ARMED: a typo must never silently hand back 428 MB. */
+export function statAtlasGrowEnabled() {
+  if (_growFlag !== undefined) return _growFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      const v = new URLSearchParams(window.location.search).get("statAtlasGrow");
+      if (v != null) {
+        const s = String(v).toLowerCase();
+        on = !(s === "off" || s === "0" || s === "false" || s === "no");
+      }
+    }
+  } catch (_) { on = true; }
+  return (_growFlag = on);
 }
 
 // === S3 (2026-07-30) — atlas POM over the seam-height field ("statPom") =====
@@ -429,7 +496,23 @@ function _applyStateKey(m, stateKey) {
 // MeshStandardMaterial whose `map` is replaced by a sampler2DArray indexed per
 // vertex (aLayer). Shares ONE compiled program across buckets (customProgramCacheKey)
 // so the array variant compiles once; the array uniform differs per material.
-function makeArrayMaterial(diffArray, stateKey, nraArray) {
+//
+// X7 — `arrays` is an optional MUTABLE holder `{ diff, nra }` owned by the
+// bucket. `onBeforeCompile` reads the arrays THROUGH it instead of closing over
+// the array objects, because a grown bucket swaps in NEW array textures and
+// disposes the old ones: a closure that captured `diffArray` would re-bind the
+// disposed array on any recompile (three re-runs `onBeforeCompile` whenever the
+// program cache key changes — a light-count change is enough), which is a black
+// bucket, not a warning. Post-compile swaps go through `_rebindArrayUniforms`
+// against `userData._statArrayUniforms` (the same live object `setStatPom`
+// mutates — three keeps `materialProperties.uniforms === parameters.uniforms`,
+// three.module.js:18153). Omitted ⇒ a holder is synthesised from the args, so
+// the non-growing per-(LB,size) path below is unchanged.
+function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
+  // Shape decisions (shader source, defines, cache key) are taken from the
+  // CONSTRUCTION-time nra presence, which growth never changes; only the array
+  // OBJECTS are late-bound.
+  const bound = arrays || { diff: diffArray, nra: nraArray };
   const m = new THREE.MeshStandardMaterial({
     map: dummyMap(),
     side: THREE.DoubleSide,
@@ -470,9 +553,14 @@ function makeArrayMaterial(diffArray, stateKey, nraArray) {
   const sampleAt = (name, uvExpr) =>
     `textureGrad( ${name}, vec3( ${addr(uvExpr)}, vLayer ), _statUvGx, _statUvGy )`;
   m.onBeforeCompile = (shader) => {
-    shader.uniforms.uDiffuseArray = { value: diffArray };
+    // X7 — read the CURRENT arrays off the holder (see the note above).
+    shader.uniforms.uDiffuseArray = { value: bound.diff };
+    // The swap seam for `_rebindArrayUniforms`. Stamped on EVERY compile so a
+    // recompile hands over the fresh uniform objects rather than leaving a
+    // grow-swap writing into the retired set.
+    m.userData._statArrayUniforms = shader.uniforms;
     if (nraArray) {
-      shader.uniforms.uNraArray = { value: nraArray };
+      shader.uniforms.uNraArray = { value: bound.nra };
       // S3 — statPom uniforms (uniforms, not defines: `window.__statPom` can
       // A/B live, and quality resolution timing can never bake a stale gate
       // into a compiled program).
@@ -809,8 +897,11 @@ export function consolidateSingletonsViaTexArray(nodes) {
 // feed seam re-feeds the LB's singletons with fresh gids from the recycled pool.
 // ===========================================================================
 
-// Per-bucket DataArrayTexture VRAM budget → layer capacity. Pre-allocated fixed
-// at creation (a DataArrayTexture cannot grow its layer count in place). The
+// Per-bucket DataArrayTexture VRAM budget → layer CEILING. X7 (2026-08-06): this
+// is no longer what gets allocated — it is the cap the doubling growth clamps to
+// (`_growTargetFor`), so a bucket can never allocate MORE than the pre-X7 code
+// did, at any point in a session. A DataArrayTexture still cannot grow its layer
+// count in place; growth allocates a new array and re-uploads the live prefix. The
 // spike measured max 123 layers (128×128) and only 353 unique textures total, so
 // a memory-bounded capacity comfortably covers every bucket; overflow is fail-soft
 // (the offending node falls back to an unbatched singleton — never vanishes).
@@ -832,6 +923,16 @@ const _ATLAS_NRA_MAX_LAYERS = 128;
 // usable bucket), so it has to halve too or the 512×512 bucket alone would carry
 // 2 × 32 × 1 MiB. Live usage there is 2 layers.
 const _ATLAS_NRA_MIN_LAYERS = 16;
+// X7 — the layer depth a bucket actually ALLOCATES at creation, and the byte cap
+// on that first allocation. 4 layers is roughly the median bucket's whole live
+// working set (14 of the 29 measured buckets never exceed 4, and 21 never exceed
+// 8 — RESULTS-atlas-occupancy-2026-08-05.json), so most buckets never grow at all.
+// The BYTE cap is what stops the flat count from being a footgun on huge tiles:
+// the 2048×2048 bucket costs 16 MiB PER nra LAYER, where 4 layers up front would
+// be 64 MiB for a bucket whose measured live use is 2. Same shape of trap the BC7
+// floor hit in `_layerCapacityFor` — a flat LAYER count is not a memory bound.
+const _ATLAS_GROW_START_LAYERS = 4;
+const _ATLAS_GROW_START_BYTES = 2 * 1024 * 1024;
 const _ATLAS_INIT_VERTS = 1 << 15; // 32,768; grows via setGeometrySize on demand
 const _ATLAS_INIT_INST = 1024;     // grows via setInstanceCount on demand
 const _ATLAS_OPTIMIZE_FRAC = 0.30; // compact a bucket once >30% of its buffer is dead
@@ -852,6 +953,13 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   // is the refcount reuse. `uniqueSurfacesEver` is the distinct-texture count
   // across the whole session (see `_uniqueTexUuids`).
   surfaceRefs: 0, layerAllocs: 0, layerHits: 0, layerRecycles: 0,
+  // X7 grow-on-demand tally. `layerGrows` is the number of array reallocations
+  // (bounded by log2(capacity) per bucket — the four-town route models at 19
+  // across all 29 buckets); `layerGrowUploads` is the layers re-uploaded by
+  // them, the whole GPU cost of the scheme. `layerGrowFails` should stay 0 —
+  // non-zero means an allocation was refused and that bucket is now capped
+  // below its ceiling (props route to `ptLayerFull`, never vanish).
+  layerGrows: 0, layerGrowUploads: 0, layerGrowFails: 0,
   // X5 nra pack tally (all zero unless ?statNra=on).
   nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0,
   nraWithHeight: 0, // S3: layers whose alpha carries the seam-height field
@@ -868,9 +976,22 @@ const _uniqueTexUuids = new Set(); // every distinct surface texture ever atlase
 if (typeof window !== "undefined") {
   window.__atlasStats = () => {
     let liveLayers = 0;
-    for (const b of _buckets.values()) liveLayers += b.bm?.userData?.layerOf?.size || 0;
+    // X7 — the two aggregates the 2026-08-05 occupancy measurement wanted:
+    // `allocLayers` is what the arrays actually hold (the number that used to
+    // BE `capacity`), `capLayers` is the ceiling it is allowed to reach.
+    let allocLayers = 0;
+    let capLayers = 0;
+    for (const b of _buckets.values()) {
+      const ud = b.bm?.userData;
+      liveLayers += ud?.layerOf?.size || 0;
+      allocLayers += ud?.allocLayers || 0;
+      capLayers += ud?.capacity || 0;
+    }
     return {
       ..._atlasStats,
+      allocLayers,
+      capLayers,
+      growEnabled: statAtlasGrowEnabled(),
       // X5 — the before/after dedup headline. `surfaceRefs` in, `uniqueSurfacesEver`
       // distinct textures out; `liveLayers` is what is resident right now.
       uniqueSurfacesEver: _uniqueTexUuids.size,
@@ -885,7 +1006,8 @@ if (typeof window !== "undefined") {
       buckets: [..._buckets.entries()].map(([k, b]) => {
         const ud = (b.bm && b.bm.userData) || {};
         return { key: k, w: b.w, h: b.h, stateKey: b.stateKey, nextLayer: ud.nextLayer ?? null,
-          capacity: ud.capacity ?? null, layersUsed: ud.layerOf ? ud.layerOf.size : null,
+          capacity: ud.capacity ?? null, alloc: ud.allocLayers ?? null, // X7: alloc <= capacity
+          layersUsed: ud.layerOf ? ud.layerOf.size : null,
           nra: !!ud.nraArray, bc7: !!ud.bc7,
           full: (ud.nextLayer != null && ud.capacity != null) ? ud.nextLayer >= ud.capacity : null };
       }),
@@ -951,12 +1073,54 @@ function _bucketKeyFor(w, h, stateKey, bc7) {
   return `${w}x${h}|${stateKey}|${bc7 ? "f7" : "f8"}`;
 }
 
-function _layerCapacityFor(w, h, bc7) {
+/**
+ * X7 — bytes ONE layer of this bucket costs across every array it carries
+ * (diffuse + nra). Lifted verbatim out of `_layerCapacityFor` so the growth
+ * sizing and the ceiling arithmetic can never drift apart; the expressions are
+ * unchanged, including the `Math.max(1, …)` guard.
+ */
+function _perLayerBytesFor(w, h, bc7) {
+  const nra = statNraEnabled();
+  if (bc7) return Math.max(1, bc7LevelBytes(w, h) + (nra ? (w | 0) * (h | 0) * 4 : 0));
+  return Math.max(1, (w | 0) * (h | 0) * 4 * (nra ? 2 : 1));
+}
+
+/**
+ * X7 — the depth a bucket allocates at CREATION: a small flat layer count,
+ * capped by bytes so a huge tile still starts at 1–3 layers rather than 64 MiB
+ * of padding. Never above `capacity` (a bucket whose ceiling is 1 must not
+ * allocate 4), never below 1. Exported for the regression suite so the sizing
+ * is tested where it lives rather than through a transcription of it.
+ */
+export function _atlasStartLayersFor(w, h, bc7, capacity) {
+  const cap = Math.max(1, capacity | 0);
+  const affordable = Math.floor(_ATLAS_GROW_START_BYTES / _perLayerBytesFor(w, h, bc7));
+  return Math.max(1, Math.min(_ATLAS_GROW_START_LAYERS, cap, affordable || 1));
+}
+
+/**
+ * X7 — the next allocated depth: double, but take at least `needed` (so one
+ * step always satisfies the request even from a start of 1) and NEVER exceed
+ * `capacity`. The clamp is the guarantee that matters: at no point in a session
+ * does a bucket hold more layers than the pre-X7 code allocated on creation.
+ * Returns <= `alloc` when there is no room left — the caller then falls through
+ * to the unchanged `ptLayerFull` passthrough.
+ */
+export function _atlasGrowTargetFor(alloc, needed, capacity) {
+  const a = Math.max(1, alloc | 0);
+  const cap = Math.max(1, capacity | 0);
+  if (a >= cap) return a;
+  return Math.min(cap, Math.max(needed | 0, a * 2));
+}
+
+/** The per-bucket layer CEILING (X7: no longer the allocated depth — see the
+ *  header). Exported for the regression suite. */
+export function _layerCapacityFor(w, h, bc7) {
   // X6 — BC7 layers are 8 bpp, not 32, so the same byte budget buys 4x the
   // layers. The RGBA8 arithmetic below is left untouched (flag-off parity).
   if (bc7) {
     const nra = statNraEnabled();
-    const per = Math.max(1, bc7LevelBytes(w, h) + (nra ? (w | 0) * (h | 0) * 4 : 0));
+    const per = _perLayerBytesFor(w, h, bc7);
     const ceiling = nra ? _ATLAS_NRA_MAX_LAYERS : _ATLAS_MAX_LAYERS;
     let c = Math.floor(_ATLAS_LAYER_BUDGET_BYTES / per);
     // BYTE-AWARE FLOOR (the trap the RGBA8 path never hit): the flat 32/16-layer
@@ -974,7 +1138,7 @@ function _layerCapacityFor(w, h, bc7) {
   // and the ceiling halves — see _ATLAS_NRA_MAX_LAYERS. Flag-off arithmetic is
   // unchanged (arrays === 1, ceiling === _ATLAS_MAX_LAYERS).
   const arrays = statNraEnabled() ? 2 : 1;
-  const per = Math.max(1, (w | 0) * (h | 0) * 4 * arrays);
+  const per = _perLayerBytesFor(w, h, bc7);
   const floor = arrays === 2 ? _ATLAS_NRA_MIN_LAYERS : _ATLAS_MIN_LAYERS;
   const ceiling = arrays === 2 ? _ATLAS_NRA_MAX_LAYERS : _ATLAS_MAX_LAYERS;
   let c = Math.floor(_ATLAS_LAYER_BUDGET_BYTES / per);
@@ -992,21 +1156,30 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
   let b = _buckets.get(bucketKey);
   if (b) return b;
   const capacity = _layerCapacityFor(w, h, bc7);
+  // X7 — `capacity` is the CEILING; `alloc` is what is actually allocated now.
+  // Disarmed (`?statAtlasGrow=off`) the two are equal, which both restores the
+  // pre-X7 allocation byte for byte AND makes `_growBucketLayers` unreachable
+  // (the feed's `nextLayer < allocLayers` branch then spans the whole range).
+  const alloc = statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity) : capacity;
   // X6 — a BC7 bucket's array is a CompressedArrayTexture allocated EMPTY at the
-  // bucket's fixed (w, h, capacity); layers are written with
+  // bucket's fixed (w, h, depth); layers are written with
   // `compressedTexSubImage3D` via `addLayerUpdate` (bc7_textures.js). That is
   // strictly cheaper than the RGBA8 arm, which re-uploads the WHOLE array every
   // time a layer is written (`needsUpdate` on a DataArrayTexture).
   const diffArray = bc7
-    ? makeBc7ArrayTexture(w, h, capacity)
-    : buildDiffuseArray([], w, h, capacity);
-  // X5 — parallel nra array at the SAME capacity as the diffuse array, so the
+    ? makeBc7ArrayTexture(w, h, alloc)
+    : buildDiffuseArray([], w, h, alloc);
+  // X5 — parallel nra array at the SAME depth as the diffuse array, so the
   // layer index addresses both (one `aLayer`, one `vMapUv`). `_layerCapacityFor`
-  // has already halved that capacity for the nra-on case, so the PAIR fits the
+  // has already halved that ceiling for the nra-on case, so the PAIR fits the
   // same per-bucket byte budget the albedo-only arm used (the un-halved first cut
-  // OOM-killed the renderer — see _ATLAS_NRA_MAX_LAYERS).
-  const nraArray = statNraEnabled() ? buildNraArray(w, h, capacity) : null;
-  const material = makeArrayMaterial(diffArray, stateKey, nraArray);
+  // OOM-killed the renderer — see _ATLAS_NRA_MAX_LAYERS). X7 grows them TOGETHER,
+  // in one `_growBucketLayers` call, so the two depths can never diverge.
+  const nraArray = statNraEnabled() ? buildNraArray(w, h, alloc) : null;
+  // X7 — the mutable holder the material's onBeforeCompile closure reads. Owned
+  // by the bucket record so a grow-swap is visible to a later RECOMPILE.
+  const arrays = { diff: diffArray, nra: nraArray };
+  const material = makeArrayMaterial(diffArray, stateKey, nraArray, arrays);
   const bm = new THREE.BatchedMesh(_ATLAS_INIT_INST, _ATLAS_INIT_VERTS, _ATLAS_INIT_VERTS * 2, material);
   // OPAQUE: skip the per-frame depth sort of every instance (the CPU win we are
   // here for). Transparent buckets keep the sort for correct blending order —
@@ -1028,7 +1201,8 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
     nraArray,            // X5: null unless ?statNra=on
     layerOf: new Map(),  // texUuid -> { layer, refs }
     freeLayers: [],      // recycled layer indices (pixels overwritten on reuse)
-    capacity,
+    capacity,            // X7: the CEILING the doubling clamps to — not the allocation
+    allocLayers: alloc,  // X7: the depth diffArray/nraArray are allocated at RIGHT NOW
     nextLayer: 0,
     maxVerts: _ATLAS_INIT_VERTS,
     maxInst: _ATLAS_INIT_INST,
@@ -1038,7 +1212,7 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
     gidVerts: new Map(), // gid -> vertexCount (to account dead space on delete)
   };
   bm.name = `stat-atlas-x-${bucketKey}`;
-  b = { bm, w, h, stateKey, bc7: !!bc7 };
+  b = { bm, w, h, stateKey, bc7: !!bc7, arrays };
   if (bc7) {
     _atlasStats.bc7Buckets++;
     _bumpBc7Stat("atlasBuckets");
@@ -1046,6 +1220,109 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
   _buckets.set(bucketKey, b);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
+}
+
+/**
+ * X7 — re-point a COMPILED bucket material's array uniforms at the bucket's
+ * current arrays. `userData._statArrayUniforms` is the very object three keeps
+ * as `materialProperties.uniforms` (three.module.js:18153) and uploads from per
+ * draw, which is the same seam `setStatPom` uses to A/B live — mutating
+ * `.value` is a uniform rebind, not a recompile, and is safe between frames.
+ * Returns false when the material has not compiled yet: nothing to rebind, and
+ * the first compile will read the (already updated) holder anyway.
+ */
+function _rebindArrayUniforms(material, ud) {
+  const u = material && material.userData && material.userData._statArrayUniforms;
+  if (!u) return false;
+  if (u.uDiffuseArray) u.uDiffuseArray.value = ud.diffArray;
+  // Only present when the bucket was built with nra; growth never changes that.
+  if (u.uNraArray) u.uNraArray.value = ud.nraArray;
+  return true;
+}
+
+/**
+ * X7 — grow a bucket's layer arrays to hold at least `needed` layers, by
+ * doubling and clamping to `ud.capacity`. Returns true when the arrays now have
+ * room; false leaves the bucket EXACTLY as it was, so the caller falls through
+ * to the unchanged fail-soft `ptLayerFull` passthrough.
+ *
+ * Why a new array and not a resize: layer count is fixed by `texStorage3D` at
+ * allocation for both `DataArrayTexture` and `CompressedArrayTexture`. So:
+ * allocate at the new depth, copy the live prefix from the OLD array's own CPU
+ * mirror (the BC7 arm included — `makeBc7ArrayTexture` owns `mipmaps[0].data`
+ * and `writeBc7ArrayLayer` writes into it, so nothing has to be re-fetched or
+ * retained per layer), re-mark the carried-over layers dirty, swap, dispose.
+ *
+ * The re-mark is LOAD-BEARING. Three's first upload of a fresh array texture
+ * runs `texStorage3D` (contents undefined) and then, when `layerUpdates` is
+ * non-empty, uploads ONLY the marked layers (three.module.js:12160-12195 for
+ * DataArrayTexture, :12026-12070 for CompressedArrayTexture). Copying the CPU
+ * bytes and setting `needsUpdate` alone would upload the ONE layer the feed is
+ * about to mark and leave every carried-over layer as GPU garbage. Marking the
+ * prefix is also cheaper than the full-depth `texSubImage3D` the empty-set
+ * branch would do — it sends the live layers, not the padding.
+ */
+function _growBucketLayers(b, needed) {
+  const bm = b.bm;
+  const ud = bm.userData;
+  const target = _atlasGrowTargetFor(ud.allocLayers, needed, ud.capacity);
+  if (target <= ud.allocLayers) return false; // at the ceiling — caller passthroughs
+  const w = b.w, h = b.h;
+  const rgbaStride = (w | 0) * (h | 0) * 4;
+  let newDiff = null;
+  let newNra = null;
+  try {
+    if (ud.bc7) {
+      const blockStride = bc7LevelBytes(w, h);
+      newDiff = makeBc7ArrayTexture(w, h, target);
+      newDiff.mipmaps[0].data.set(
+        ud.diffArray.mipmaps[0].data.subarray(0, ud.allocLayers * blockStride), 0);
+    } else {
+      newDiff = buildDiffuseArray([], w, h, target);
+      newDiff.image.data.set(
+        ud.diffArray.image.data.subarray(0, ud.allocLayers * rgbaStride), 0);
+    }
+    if (ud.nraArray) {
+      // buildNraArray pre-fills the FLAT texel, so the tail beyond the copied
+      // prefix keeps the "unpacked layer shades like albedo-only v1" contract.
+      newNra = buildNraArray(w, h, target);
+      newNra.image.data.set(
+        ud.nraArray.image.data.subarray(0, ud.allocLayers * rgbaStride), 0);
+    }
+  } catch (e) {
+    // Out of memory / allocation refused: drop the partial pair and leave the
+    // bucket untouched. This is the one case where growing is WORSE than not
+    // having grown, so it must not be allowed to half-apply.
+    try { newDiff && newDiff.dispose && newDiff.dispose(); } catch (_) {}
+    try { newNra && newNra.dispose && newNra.dispose(); } catch (_) {}
+    _atlasStats.layerGrowFails++;
+    return false;
+  }
+  // Re-mark every layer index already handed out (free-list entries included:
+  // they are cheap, and a recycled layer is fully rewritten before reuse anyway).
+  for (let i = 0; i < ud.nextLayer; i++) {
+    if (typeof newDiff.addLayerUpdate === "function") newDiff.addLayerUpdate(i);
+    if (newNra && typeof newNra.addLayerUpdate === "function") newNra.addLayerUpdate(i);
+  }
+  const oldDiff = ud.diffArray;
+  const oldNra = ud.nraArray;
+  ud.diffArray = newDiff;
+  ud.nraArray = newNra;
+  ud.allocLayers = target;
+  // Both seams, in this order: the holder first (what a RECOMPILE will read),
+  // then the live uniform objects (what the CURRENT program samples). Anything
+  // that reads through `ud` — the feed's layer writes, `_drainNraPending`'s
+  // `p.ud.nraArray` — picks the new arrays up automatically.
+  if (b.arrays) { b.arrays.diff = newDiff; b.arrays.nra = newNra; }
+  newDiff.needsUpdate = true;
+  if (newNra) newNra.needsUpdate = true;
+  _rebindArrayUniforms(bm.material, ud);
+  // Only now: nothing samples the old pair any more.
+  try { oldDiff && oldDiff.dispose && oldDiff.dispose(); } catch (_) {}
+  try { oldNra && oldNra.dispose && oldNra.dispose(); } catch (_) {}
+  _atlasStats.layerGrows++;
+  _atlasStats.layerGrowUploads += ud.nextLayer;
+  return true;
 }
 
 // addGeometry, growing the vertex buffer on demand (delete never reclaims space;
@@ -1175,7 +1452,13 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       } else {
         let layer;
         if (ud.freeLayers.length > 0) { layer = ud.freeLayers.pop(); _atlasStats.layerRecycles++; }
-        else if (ud.nextLayer < ud.capacity) layer = ud.nextLayer++;
+        else if (ud.nextLayer < ud.allocLayers) layer = ud.nextLayer++;
+        // X7 — the allocated depth is exhausted but the CEILING is not: double
+        // the arrays and carry on. Disarmed, `allocLayers === capacity` so this
+        // branch is unreachable and the next line is the pre-X7 behaviour.
+        // A refused growth (allocation threw) falls through to passthrough
+        // rather than losing the prop — same fail-soft rule as a full pool.
+        else if (ud.nextLayer < ud.capacity && _growBucketLayers(b, ud.nextLayer + 1)) layer = ud.nextLayer++;
         else { _atlasStats.ptLayerFull++; passthrough.push(n); continue; } // layer pool full → unbatched (fail-soft)
         // LAYER-WRITE INVARIANT (2026-08-03): a layer index is RECYCLED, so a
         // skipped or failed write leaves the PREVIOUS surface's texels resident
@@ -1458,4 +1741,43 @@ export function tickStatAtlasOptimize() {
     }
   }
   _dirtyBuckets.clear();
+}
+
+// ===========================================================================
+// Test seams (X7). The module memoizes its flags off `window.location` and
+// keeps all bucket state module-global, so a node regression run needs a way to
+// re-arm both between cases. Nothing in the app calls these.
+// ===========================================================================
+
+/**
+ * Reset the cross-LB bucket state and (optionally) force the flag memos.
+ * `opts.grow` / `opts.nra` accept a boolean to pin `statAtlasGrowEnabled()` /
+ * `statNraEnabled()`; omitted leaves the memo cleared, so the next call
+ * re-resolves from the URL (i.e. the armed defaults under node).
+ */
+export function _resetStatAtlasForTest(opts = {}) {
+  for (const b of _buckets.values()) {
+    const ud = b.bm?.userData;
+    try { ud?.diffArray?.dispose?.(); } catch (_) {}
+    try { ud?.nraArray?.dispose?.(); } catch (_) {}
+  }
+  _buckets.clear();
+  _lbMembership.clear();
+  _atlasBakedLbs.clear();
+  _dirtyBuckets.clear();
+  _nraPending.length = 0;
+  _uniqueTexUuids.clear();
+  for (const k of Object.keys(_atlasStats)) _atlasStats[k] = 0;
+  _growFlag = typeof opts.grow === "boolean" ? opts.grow : undefined;
+  _nraFlag = typeof opts.nra === "boolean" ? opts.nra : undefined;
+}
+
+/** The live bucket map (bucketKey -> { bm, w, h, stateKey, bc7, arrays }). */
+export function _statAtlasBucketsForTest() {
+  return _buckets;
+}
+
+/** The module tally `window.__atlasStats()` wraps (window-only in the app). */
+export function _statAtlasStatsForTest() {
+  return _atlasStats;
 }
