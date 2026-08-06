@@ -705,9 +705,15 @@ export function bc7Source() {
  * Returns `{ records, preRecords, bytes, absent }`; `absent` counts negative
  * entries (a `null` value = "no such record"), which cost a map slot and no bytes.
  */
-export function bc7RecordCacheBytes() {
-  const out = { records: 0, preRecords: 0, bytes: 0, absent: 0 };
-  const seen = new Set();
+export function bc7RecordCacheBytes(sharedSeen) {
+  const out = { records: 0, preRecords: 0, bytes: 0, absent: 0, shared: !!sharedSeen };
+  // When the caller passes the texture census's dedupe set, every buffer a LIVE
+  // texture already charged is skipped, so `bytes` becomes the cache's
+  // INDEPENDENT retention: payload nothing else is holding. That is the number
+  // that matters — `makeBc7Texture` passes `parsed.levels` through with no copy,
+  // so a texture and its record share one buffer and naively summing both
+  // double-counts the same megabytes.
+  const seen = sharedSeen || new Set();
   const sum = (map, key) => {
     if (!map) return;
     for (const parsed of map.values()) {

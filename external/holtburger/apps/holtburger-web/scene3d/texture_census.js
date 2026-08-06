@@ -134,7 +134,32 @@ function kindOf(tex) {
   return tex.constructor?.name || "Texture";
 }
 
-function trace(tex) {
+/** First app frame in the stack — the call site that created this texture.
+ *
+ *  Lifted from the geometry WeakRef census that produced the corrected 28 MB
+ *  figure: filter three/driver frames, then take the first app frame that is
+ *  not the shared constructor helper, because `adapter.js` builds textures on
+ *  behalf of half the renderer and naming it tells you nothing.
+ *
+ *  This is the attribution that actually points at a fix. Knowing WHO retains
+ *  an orphan needs a heap snapshot; knowing who CREATED it is one stack scrape,
+ *  and for a leak that repeats per landblock the two answers usually coincide. */
+function originOf() {
+  try {
+    const lines = (new Error().stack || "").split("\n").slice(2, 20);
+    const app = [];
+    for (const l of lines) {
+      if (/three\.|playwright|UtilityScript|texture_census\.js/.test(l)) continue;
+      const m = l.match(/([\w.-]+\.m?js)[^\s)]*:(\d+):\d+/);
+      if (m) app.push(m[1] + ":" + m[2]);
+    }
+    return app.find((f) => !f.startsWith("adapter.js")) || app[0] || "(unknown)";
+  } catch (_) {
+    return "(unknown)";
+  }
+}
+
+function trace(tex, originOverride) {
   if (tex.__texCensusTraced) return;
   tex.__texCensusTraced = true;
   const bytes = textureCpuBytes(tex, null);
@@ -142,6 +167,7 @@ function trace(tex) {
     ref: new WeakRef(tex),
     id: tex.id,
     kind: kindOf(tex),
+    origin: originOverride || originOf(),
     w: tex.image?.width ?? 0,
     h: tex.image?.height ?? 0,
     bytesAtTrace: bytes,
@@ -175,10 +201,39 @@ export function installTextureCensus(THREE) {
   installed = true;
 
   const proto = THREE.Texture.prototype;
+
+  // PRIMARY trace point: the `needsUpdate` SETTER (an accessor on
+  // Texture.prototype in r184 — three.core.js:7963). Every texture the app
+  // builds sets it immediately after construction, so this fires with the
+  // CREATING call site on the stack. That matters: the upload hook below fires
+  // from inside `renderer.render`, where the stack is the render loop and
+  // `origin` would name `loop.js` for every texture on the page.
+  const desc = Object.getOwnPropertyDescriptor(proto, "needsUpdate");
+  if (desc && typeof desc.set === "function") {
+    Object.defineProperty(proto, "needsUpdate", {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set(value) {
+        if (value === true && !this.__texCensusTraced) {
+          try { trace(this); } catch (_) { /* never break a texture write */ }
+        }
+        return desc.set.call(this, value);
+      },
+    });
+  }
+
+  // BACKSTOP trace point: three's own `addEventListener('dispose', …)`, called
+  // once per texture at first upload (three.module.js:11711). This is what
+  // catches textures the app never touches — render targets, shadow maps,
+  // BatchedMesh internals, addon-built textures — so the population can be
+  // reconciled against `renderer.info.memory.textures` instead of leaving a
+  // residual nobody can explain. Their `origin` is the render stack, and is
+  // reported as such rather than pretending to name a creator.
   const inheritedAdd = proto.addEventListener;
   proto.addEventListener = function (type, listener) {
     if (type === "dispose" && this.isTexture) {
-      try { trace(this); } catch (_) { /* never break an upload */ }
+      try { trace(this, "(traced-at-upload)"); } catch (_) { /* never break an upload */ }
     }
     return inheritedAdd.call(this, type, listener);
   };
@@ -210,20 +265,59 @@ export function installTextureCensus(THREE) {
  * excluded from the ORPHAN population, which is the number the fix hinges on:
  * bytes held by textures nothing in the scene points at any more.
  */
-export function textureCensus(scene) {
+export function textureCensus(scene, renderer) {
   const reachable = new Set();
   if (scene) {
     const note = (t) => { if (t && t.isTexture) reachable.add(t.id); };
+    const noteUniforms = (u) => {
+      if (!u) return;
+      for (const k of Object.keys(u)) {
+        const v = u[k]?.value;
+        if (v && v.isTexture) note(v);
+        else if (Array.isArray(v)) for (const e of v) if (e && e.isTexture) note(e);
+      }
+    };
     try {
       scene.traverse((o) => {
+        // BatchedMesh keeps its per-instance matrix / indirect / colour
+        // DataTextures as OWN PROPERTIES, not on any material. Four subsystems
+        // here render through BatchedMesh, so missing these would report every
+        // one of them as an orphan.
+        if (o.isBatchedMesh) {
+          note(o._matricesTexture); note(o._indirectTexture); note(o._colorsTexture);
+        }
         const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
         for (const m of mats) {
           if (!m) continue;
           for (const k of Object.keys(m)) { const v = m[k]; if (v && v.isTexture) note(v); }
-          const u = m.uniforms || {};
-          for (const k of Object.keys(u)) { const v = u[k]?.value; if (v && v.isTexture) note(v); }
+          noteUniforms(m.uniforms);
+          // `onBeforeCompile` injects uniforms into a shader object the material
+          // never stores — the statics atlas hands its 32 MB `DataArrayTexture`s
+          // over that way (static_atlas.js:473-475), reachable ONLY through the
+          // closure. three keeps the resolved bag at
+          // `renderer.properties.get(material).uniforms` (three.module.js:18153),
+          // which is the one public-ish route to it.
+          //
+          // This is not a detail. Without it the first live run of this census
+          // reported 451 MB of live atlas as "orphaned and alive" — the exact
+          // over-count class this file exists to prevent.
+          if (renderer?.properties?.get) {
+            try { noteUniforms(renderer.properties.get(m)?.uniforms); } catch (_) { /* not compiled yet */ }
+          }
+          // Anything a material stashed in userData (`_statPomUniforms` is the
+          // whole shader.uniforms bag), one level of nesting deep.
+          const ud = m.userData;
+          if (ud && typeof ud === "object") {
+            for (const k of Object.keys(ud)) {
+              const v = ud[k];
+              if (v && v.isTexture) note(v);
+              else if (v && typeof v === "object") noteUniforms(v);
+            }
+          }
         }
       });
+      note(scene.background);
+      note(scene.environment);
     } catch (_) { /* partial reachability is still better than none */ }
   }
 
@@ -247,6 +341,7 @@ export function textureCensus(scene) {
     reachable: reachable.size,
     byKind: {},
     byOwner: {},
+    byOrigin: {},
     sceneSupplied: !!scene,
   };
 
@@ -299,6 +394,11 @@ export function textureCensus(scene) {
         o.count += 1;
         o.bytes += bytes;
       }
+      // Creation site, always — for an orphan no probe claims, this is the
+      // only thing in the report that points anywhere.
+      const org = (out.byOrigin[rec.origin] ??= { count: 0, bytes: 0 });
+      org.count += 1;
+      org.bytes += bytes;
     }
     if (rec.disposed) {
       out.disposedButAlive += 1;
@@ -309,9 +409,16 @@ export function textureCensus(scene) {
   entries.length = 0;
   entries.push(...kept);
 
+  // Handed back so a caller can charge OTHER holders against the same dedupe
+  // set and report only what they hold independently of these textures.
+  out.__seenBuffers = seen;
   const mb = (n) => (n / 1048576).toFixed(1) + "MB";
   out.topOwners = Object.entries(out.byOwner)
     .sort((a, b) => b[1].bytes - a[1].bytes)
+    .map(([n, v]) => `${n} ${mb(v.bytes)} (${v.count})`);
+  out.topOrigins = Object.entries(out.byOrigin)
+    .sort((a, b) => b[1].bytes - a[1].bytes)
+    .slice(0, 8)
     .map(([n, v]) => `${n} ${mb(v.bytes)} (${v.count})`);
   out.topKinds = Object.entries(out.byKind)
     .sort((a, b) => b[1].bytes - a[1].bytes)

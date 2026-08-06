@@ -4729,12 +4729,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // `window.liveScene3d` — that global is a one-time init snapshot, and a
         // reachability set built from a null scene would report every live
         // texture as an orphan.
-        const out = textureCensus(scene);
+        // `renderer` too: without it the reachability walk cannot see uniforms
+        // injected through `onBeforeCompile` closures, and the statics atlas
+        // (its 32 MB arrays ride exactly that route) reads as a 451 MB orphan.
+        const out = textureCensus(scene, renderer);
         // Not a texture, but the same question one layer down: the BC7 record
         // source's parsed-payload caches are unbounded and hold their bytes
         // INDEPENDENTLY of any texture built from them, so textures dying does
         // not free them. Reported alongside so the two are never confused.
-        try { out.bc7Records = bc7RecordCacheBytes(); } catch (_) { out.bc7Records = null; }
+        // Sharing the census's buffer set makes this the cache's INDEPENDENT
+        // hold — payload no live texture is already charged for.
+        try { out.bc7Records = bc7RecordCacheBytes(out.__seenBuffers); } catch (_) { out.bc7Records = null; }
+        delete out.__seenBuffers;
         return out;
       } catch (e) {
         return { error: String(e && e.message ? e.message : e) };

@@ -143,8 +143,12 @@ dispose, dispose at zero *and* evicted) is the shape of the fix.
   A WeakRef census is the honest instrument: of 71,318 traced geometries **59,981 were
   GC'd**; only **28 MB** is orphaned-and-alive. Geometry is a rounding error in the heap
   (`BufferAttribute` holds 40 MB in the snapshot).
-- **"Textures are ~1.2 GB CPU-side" is WRONG.** That conflated a `w*h*4*layers` GPU-size
-  *estimate* with CPU retention. Actual `image.data` for in-scene textures is **314 MB**.
+- ~~**"Textures are ~1.2 GB CPU-side" is WRONG.** That conflated a `w*h*4*layers` GPU-size
+  *estimate* with CPU retention. Actual `image.data` for in-scene textures is **314 MB**.~~
+  **THIS RETRACTION IS ITSELF WITHDRAWN — see §9.** The 314 MB came from a materials-and-
+  uniforms walk that cannot see the statics atlas's 644 MB of `DataArrayTexture` (handed
+  over through an `onBeforeCompile` closure). The WeakRef census measures **1,332 MB** of
+  live CPU-side texture data, and that is where the heap goes.
 - **Black canvas screenshots are NOT always a capture artifact.** I dismissed the first
   ones as such; they were the real bug (§1). `renderer.info` reading `calls:1, tris:1` at
   grab time is `autoReset` firing mid-frame, not proof the scene stopped drawing.
@@ -403,3 +407,102 @@ pointed at TEXTURES.
   created. `service mariadb start` fixed it outright. Probable cause: earlyoom taking
   mysqld during a `wasm-pack --release` build on the 8 GB laptop — do not run release
   builds and a live session at the same time.
+
+---
+
+## 9. RESULT — textures are not leaking. The heap is 1.3 GB of LIVE texture data.
+
+`?texCensus=on`, same six-town route, forced CDP GC before every reading
+(`RESULTS-texture-census-2026-08-05.json`). Page totals:
+
+| hop | traced | GC'd | alive | **alive MB** | **orphaned MB** | bc7 records (independent) | JS heap |
+|---|---|---|---|---|---|---|---|
+| spawn    |    611 |    87 |   524 |   310 |  62 |  1 MB |   493 MB |
+| Holtburg |  3,311 |   687 | 2,624 | 1,145 |  72 | 11 MB | 1,523 MB |
+| Arwic    |  5,718 | 1,353 | 4,365 | 1,365 | 107 | 14 MB | 2,103 MB |
+| Yaraq    |  7,375 | 2,312 | 5,063 | 1,378 | 135 | 24 MB | 2,272 MB |
+| Sawato   |  8,810 | 3,025 | 5,785 | 1,292 | 199 | 34 MB | 2,500 MB |
+| Shoushi  | 10,752 | 3,350 | 7,402 | 1,498 | 159 | 33 MB | 3,050 MB |
+| Nanto    | 11,689 | 5,306 | 6,383 | 1,332 | 164 | 60 MB | 2,715 MB |
+
+**The disposal theory is dead as the OOM cause.** Orphaned-and-alive textures hold
+**164 MB** and do not ratchet — 62 → 72 → 107 → 135 → 199 → 159 → 164, i.e. churn that
+rises and falls. 5,306 of 11,689 traced textures were collected and `dispose()` was called
+5,833 times: disposal is happening. §4 predicted the geometry/texture disposal gap "will
+not move the OOM" and was right, for a reason it did not give — the leak is small because
+the GC is doing the work `dispose()` isn't.
+
+**What the heap actually is: live textures.** 1,332 MB alive at Nanto against a 2,715 MB
+heap — roughly half — and every byte of it reachable from the scene:
+
+| kind | alive | alive MB | of which orphaned |
+|---|---|---|---|
+| `DataArrayTexture` | 46 | 643.8 | 20.0 |
+| `CompressedTexture` | 510 | 237.3 | 40.2 |
+| `DataTexture` | 5,728 | 213.9 | 71.7 |
+| `CompressedArrayTexture` | 25 | 205.4 | 0.0 |
+| `Data3DTexture` | 4 | 32.0 | 32.0 |
+
+Those are CPU-side copies of pixels **that are already on the GPU**. three keeps
+`image.data` (and `mipmaps[].data`) alive for the life of the texture; nothing in the
+upload path releases them. 46 `DataArrayTexture`s carrying 644 MB are the statics-atlas
+and terrain arrays; 5,728 `DataTexture`s carrying 214 MB are the per-surface albedo /
+normal / height planes.
+
+**So the lever is residency, not disposal** — and it is the largest one found in this
+whole investigation: bigger than `?shardBudgetMB` (307 MB, §8), bigger than
+`?matBudgetMB`, bigger than the orphan population by 8×.
+
+### Two things the census got wrong first, both worth knowing
+
+1. **It reported 451 MB of live statics atlas as "orphaned and alive".** The atlas hands
+   its arrays to the material through an `onBeforeCompile` CLOSURE
+   (`static_atlas.js:473-475`), so no walk over materials and their `uniforms` can see
+   them. three parks the resolved bag at `renderer.properties.get(material).uniforms`
+   (three.module.js:18153) — the census now reads that, plus BatchedMesh's own
+   `_matricesTexture`/`_indirectTexture`/`_colorsTexture`, plus `scene.background` /
+   `.environment`. Orphan bytes fell 820 → 164 MB. **This is the third time in this
+   document that an instrument's first answer was an over-count**; the only reason it was
+   caught is that 451 MB in 23 objects looked wrong and got read against the code.
+2. **The BC7 record cache first read 297 MB.** `makeBc7Texture` passes `parsed.levels`
+   through with no copy, so a record and the texture built from it SHARE one ArrayBuffer.
+   Charged against the census's own dedupe set, the cache's INDEPENDENT hold — payload no
+   live texture is already accounted for — is **60 MB**. Still unbounded, still growing
+   (1 → 60 MB over the route), but a twentieth of the naive figure.
+
+### §5's second dead-end entry is itself wrong, and this run overturns it
+
+§5 retracts *"textures are ~1.2 GB CPU-side"* with *"actual `image.data` for in-scene
+textures is **314 MB**"*. That correction was measured with a walk over materials and
+their `uniforms` — the same walk this census started with, and the same one that could not
+see the 644 MB of `DataArrayTexture` the statics atlas hands over through an
+`onBeforeCompile` closure. The 314 MB figure under-counted for a structural reason, on a
+shorter route.
+
+**Live CPU-side texture bytes are 1,332 MB at Nanto.** The original "~1.2 GB" instinct was
+closer to the truth than the retraction that replaced it. Treat §5's texture bullet as
+withdrawn; the geometry bullet above it still stands (28 MB, and this run agrees that
+geometry is not where the heap goes).
+
+### Next move, in order
+
+1. **Release CPU-side pixel data after upload** for textures that never re-upload. This is
+   the 1.3 GB. `Texture.onUpload` is three's hook; the per-surface `DataTexture`s
+   (adapter.js:1122/1180/1238) and the BC7 singletons are the safe class. NOT the atlas
+   arrays — `addLayerUpdate` re-uploads individual layers and needs the staging copy — so
+   the win is bounded by which classes can give it up, and that wants measuring before
+   promising.
+2. **Bound `Bc7RecordSource._cache`/`_preCache`** (`bc7_textures.js:457/459`). 60 MB
+   independent and climbing; the LRU shape is already used three times in this codebase.
+3. `?shardBudgetMB` (§8) stays worth ~200 MB but stays a tidy-up.
+
+### Instrument caveats to carry forward
+
+* `traced` is a FLOOR. The tracer installs at module import; anything uploaded before that
+  never re-registers.
+* Textures whose bytes are 0 (canvas-backed nameplates, speech bubbles, sky, render
+  targets — 70 at Nanto) are real GPU objects and correctly contribute nothing here.
+* 1,380 pooled per-LB planes (`__rp4Pooled`) live forever by design and are tagged, not
+  counted as a leak.
+* The census is `?texCensus=on` only and holds one record per texture — never leave it on
+  while measuring something else.

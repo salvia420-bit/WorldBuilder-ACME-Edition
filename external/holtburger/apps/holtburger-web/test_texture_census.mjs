@@ -153,6 +153,22 @@ console.log("PART 4 — orphan classification");
   check("aliveBytes covers both", c.aliveBytes === 4096 + 8192, `${c.aliveBytes}`);
   check("byKind is populated", (c.byKind.DataTexture?.alive ?? 0) === 2, JSON.stringify(c.byKind));
 
+  // A texture reachable ONLY through `renderer.properties.get(mat).uniforms`
+  // (three's home for onBeforeCompile-injected uniforms) must count as
+  // reachable. The first live run called 451 MB of live statics atlas an
+  // orphan for want of exactly this.
+  const closureHeld = new FakeTexture(new Uint8Array(2048));
+  upload(closureHeld);
+  const mat = {};
+  const fakeRenderer = { properties: { get: (m) => (m === mat ? { uniforms: { uAtlas: { value: closureHeld } } } : null) } };
+  const sceneWithClosureMat = { traverse(fn) { fn({ material: mat }); } };
+  const withR = textureCensus(sceneWithClosureMat, fakeRenderer);
+  check("closure-injected uniform is reachable when the renderer is supplied",
+        withR.reachable === 1, `reachable=${withR.reachable}`);
+  const withoutR = textureCensus(sceneWithClosureMat, null);
+  check("...and is a false orphan without it (the bug this catches)",
+        withoutR.reachable === 0, `reachable=${withoutR.reachable}`);
+
   // Without a scene there is no reachability, so NOTHING may be called an
   // orphan — a census run before the scene exists must not report a 100% leak.
   const noScene = textureCensus(null);
@@ -163,7 +179,7 @@ console.log("PART 4 — orphan classification");
   // instead of "a scene was supplied" turns the worst case into a clean bill.
   const emptyScene = textureCensus({ traverse(fn) { fn({}); } });
   check("empty scene ⇒ everything alive is an orphan",
-        emptyScene.orphanedAlive === emptyScene.alive && emptyScene.alive === 2,
+        emptyScene.alive > 0 && emptyScene.orphanedAlive === emptyScene.alive,
         `orphans=${emptyScene.orphanedAlive} alive=${emptyScene.alive}`);
 }
 
@@ -200,7 +216,11 @@ console.log("PART 6 — the shipped renderer wires it");
   check("__diag.textures is exposed", /window\.__diag\.textures\s*=/.test(idx));
   check(
     "it censuses the real `scene` binding, not the liveScene3d snapshot",
-    /const out = textureCensus\(scene\);/.test(idx),
+    /const out = textureCensus\(scene, renderer\);/.test(idx),
+  );
+  check(
+    "...and passes the renderer, so onBeforeCompile-injected uniforms count as reachable",
+    /textureCensus\(scene, renderer\)/.test(idx),
   );
   check(
     "orphans get attributed to a named retainer (evicted != disposed != GC'd)",
@@ -209,12 +229,16 @@ console.log("PART 6 — the shipped renderer wires it");
   );
   check(
     "the BC7 record cache is reported alongside (it holds bytes textures dying does not free)",
-    /out\.bc7Records = bc7RecordCacheBytes\(\)/.test(idx),
+    /out\.bc7Records = bc7RecordCacheBytes\(out\.__seenBuffers\)/.test(idx),
   );
   const bc7 = readFileSync(joinPath(__dirname, "scene3d", "bc7_textures.js"), "utf8");
   check(
     "...and that accessor dedupes by ArrayBuffer (mip levels are subarrays of one buffer)",
     /export function bc7RecordCacheBytes/.test(bc7) && /seen\.has\(buf\)/.test(bc7),
+  );
+  check(
+    "...and shares the census's set, so it reports INDEPENDENT hold rather than double-counting live payload",
+    /bc7RecordCacheBytes\(sharedSeen\)/.test(bc7) && /const seen = sharedSeen \|\| new Set\(\)/.test(bc7),
   );
   const doc = readFileSync(joinPath(__dirname, "docs", "url-flags.md"), "utf8");
   check("?texCensus has a docs row (lint-url-flags gate)", /\|\s*`texCensus`\s*\|/.test(doc));
