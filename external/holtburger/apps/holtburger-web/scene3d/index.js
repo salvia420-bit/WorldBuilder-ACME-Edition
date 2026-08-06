@@ -64,6 +64,15 @@ import { evictStaticBatchXForLb } from "./static_batch_x.js";
 // URL flag. Splits the ~5.72 ms of `renderer.render()` that is neither the draw
 // funnel nor the multidraw rebuild — see docs/2026-08-06-frame-remainder-probe.md.
 import "./frame_split.js";
+// Stall probe (2026-08-06) — same side-effect-only contract as frame_split
+// above: installs `window.__stallArm/Disarm/Reset/Report/Samples` and nothing
+// else, costs zero frame time until armed, carries no URL flag. Where
+// frame_split splits the AVERAGE render call, this one rings the frames whose
+// interval exceeds a threshold and attributes them by differencing the
+// already-cumulative ms counters (LINK_STATUS, xu7 decodeMs, GL upload) across
+// the frame edge — the p99 1630 ms that no average can see. See
+// docs/2026-08-06-p99-stall-attribution.md.
+import "./stall_probe.js";
 // X6 `?texBc7` (DEFAULT-OFF) — the BPTC capability probe. MUST run against the
 // app's real WebGL context before any BC7 texture is constructed: without the
 // extension three's `convert()` yields a null gl format and warns per texture,
