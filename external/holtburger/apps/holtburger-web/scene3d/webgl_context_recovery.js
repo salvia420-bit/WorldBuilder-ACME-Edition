@@ -26,13 +26,43 @@
 //           deltas; invalidate so the next `updateCsm` rebuilds
 //           cascades fresh.
 //        d. Reset the bound render target back to the canvas.
+//        e. TEXTURE RE-HYDRATION (2026-08-06) — see below.
 //   4. Resume the render loop.
+//
+// TEXTURE RE-HYDRATION — why step 3e exists.
+//   Step 3a is the whole problem. Three's restore clears WebGLProperties
+//   (three.module.js:16382 via :17055) so every texture re-uploads FROM
+//   `image.data` — which is precisely why the 1,332 MB of CPU-side pixel
+//   copies the census found (§9 of the 08-05 handoff) cannot simply be
+//   released: today a context loss recovers BECAUSE those copies exist, and
+//   dropping them would turn a recovered event into a permanently black
+//   world (§10, "the blocker that ends the discussion").
+//   `texture_rehydrate.js` is the replacement source. Any module that
+//   releases a texture's CPU copy registers a way to re-supply it; this
+//   handler runs that registry BEFORE `onResume`, i.e. before the frame pump
+//   is allowed to call `render()` again. Ordering is the correctness
+//   property: `onPause` sets `running = false` and `tick` early-returns on
+//   `!running` (index.js:2235-2236), so as long as we do not call `onResume`
+//   until the pass settles, NO render can observe a texture with no pixels.
+//   The pass is ASYNC and will stall the restore for a beat — accepted and
+//   documented in that module; it carries a hard deadline so a wedged decode
+//   resumes the pump loudly instead of deadlocking it.
+//   NO-OP TODAY: nothing releases a CPU copy yet, so `releasedTextureCount()`
+//   is 0 and this handler keeps its original fully-SYNCHRONOUS shape — the
+//   async branch is not entered at all.
 //
 // Devtools:
 //   `window.__loseContext()` / `window.__restoreContext()` use the
 //   `WEBGL_lose_context` extension to manually fire the cycle for
 //   verification. `window.__webglContextRecoveryHistory()` returns the
-//   loss/restore event log.
+//   loss/restore event log. `window.__textureRehydrate.stats()` reports the
+//   re-hydration registry + its miss counter.
+
+import {
+  releasedTextureCount,
+  rehydrateReleasedTextures,
+  installTextureRehydrateDevtools,
+} from "./texture_rehydrate.js";
 
 const HISTORY_CAP = 16;
 
@@ -55,7 +85,11 @@ const HISTORY_CAP = 16;
  *   restore hooks run.
  * @param {(rec: Object) => void} [opts.pushEventRecord] — optional
  *   eventLog hook for the validator surface.
- * @returns {{history: Object[], lossCount: () => number, isLost: () => boolean}}
+ * @param {number} [opts.rehydrateTimeoutMs] — hard deadline for the texture
+ *   re-hydration pass (default `DEFAULT_TIMEOUT_MS`). Past it the frame pump
+ *   resumes anyway, loudly. Overridable so the node suite can prove the
+ *   no-deadlock property in milliseconds instead of 15 seconds.
+ * @returns {{history: Object[], lossCount: () => number, isLost: () => boolean, isRehydrating: () => boolean}}
  */
 export function installWebglContextRecovery({
   renderer,
@@ -64,6 +98,7 @@ export function installWebglContextRecovery({
   onPause,
   onResume,
   pushEventRecord,
+  rehydrateTimeoutMs,
 }) {
   if (!canvas || !renderer) {
     throw new Error("installWebglContextRecovery: renderer + canvas required");
@@ -76,7 +111,16 @@ export function installWebglContextRecovery({
 
   const history = [];
   let lostAtMs = null;
+  // `lossCount` doubles as the EPOCH. A re-hydration pass captures it at
+  // restore time; if it has moved by the time the pass settles, a SECOND
+  // context loss superseded this restore and we must not resume the pump —
+  // that loss's own restore owns the resume. This is the no-double-fire
+  // invariant.
   let lossCount = 0;
+  // Epoch whose restore handler has already run, so a duplicate
+  // `webglcontextrestored` for the same loss cannot start a second pass.
+  let restoredEpoch = -1;
+  let rehydrating = false;
 
   function record(state, extra) {
     const ts = (typeof performance !== "undefined" && performance.now)
@@ -112,6 +156,18 @@ export function installWebglContextRecovery({
   }
 
   function _onRestored() {
+    // Duplicate restore for a loss we already handled (a driver that fires the
+    // event twice, or `__restoreContext()` called by hand after a real
+    // restore). Starting a second pass would double-decode and double-resume.
+    if (restoredEpoch === lossCount) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[webgl-recovery] duplicate webglcontextrestored for loss #${lossCount} — ignoring`
+      );
+      return;
+    }
+    restoredEpoch = lossCount;
+    const myEpoch = lossCount;
     const downMs = lostAtMs !== null
       ? ((performance?.now?.() ?? 0) - lostAtMs)
       : null;
@@ -168,7 +224,65 @@ export function installWebglContextRecovery({
     try { renderer.setRenderTarget(null); } catch (_) {}
 
     if (live) live.__webglContextLost = false;
-    record("restored", { downMs, count: lossCount });
+
+    // ── step 3e: re-supply released CPU pixel copies before the pump runs ──
+    // The registry is EMPTY on a page where nothing released anything, which
+    // is every page today. Keep the original synchronous shape in that case:
+    // no promise, no microtask, byte-for-byte the old behaviour.
+    const pending = releasedTextureCount();
+    if (pending === 0) {
+      record("restored", { downMs, count: lossCount, rehydrated: 0 });
+      _resume();
+      return;
+    }
+
+    // Async from here. `onResume` is deliberately NOT called yet: it is what
+    // sets `running = true` (index.js:4938), and `tick` early-returns while
+    // that is false (index.js:2235-2236). Holding it is the ordering
+    // guarantee — no render() can observe a texture whose pixels are still
+    // missing. The cost is a stalled restore; the alternative is a black one.
+    rehydrating = true;
+    if (live) live.__webglRehydrating = true;
+    record("restored", { downMs, count: lossCount, rehydratePending: pending });
+    rehydrateReleasedTextures({
+      reason: `context-restore #${myEpoch}`,
+      ...(Number.isFinite(rehydrateTimeoutMs) ? { timeoutMs: rehydrateTimeoutMs } : {}),
+      // A second loss while we are decoding: abandon rather than finish work
+      // for a GL context that is already gone again.
+      isStale: () => lossCount !== myEpoch,
+    })
+      .catch((e) => {
+        // rehydrateReleasedTextures is documented never to throw; if it does,
+        // that is a bug in it and we still must not strand the frame pump.
+        // eslint-disable-next-line no-console
+        console.error("[webgl-recovery] re-hydration pass threw — resuming anyway:", e);
+        return { failed: -1, rehydrated: 0, aborted: false };
+      })
+      .then((sum) => {
+        rehydrating = false;
+        if (live) live.__webglRehydrating = false;
+        if (lossCount !== myEpoch) {
+          // Superseded. The newer loss already paused the pump (or is about
+          // to); resuming here would race it back on with a dead context.
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[webgl-recovery] re-hydration for loss #${myEpoch} finished after loss ` +
+            `#${lossCount} — NOT resuming; that loss's restore owns the resume`
+          );
+          record("rehydrate-superseded", { epoch: myEpoch, count: lossCount });
+          return;
+        }
+        record("rehydrated", {
+          count: lossCount,
+          ok: sum?.rehydrated ?? 0,
+          failed: sum?.failed ?? 0,
+          ms: sum?.ms ?? 0,
+        });
+        _resume();
+      });
+  }
+
+  function _resume() {
     try { onResume?.(); } catch (e2) {
       // eslint-disable-next-line no-console
       console.warn("[webgl-recovery] onResume threw:", e2);
@@ -199,6 +313,9 @@ export function installWebglContextRecovery({
     };
     window.__webglContextRecoveryHistory = () => history.slice();
   }
+  // `window.__textureRehydrate` — registry size + the miss counter, on the
+  // same console as the loss/restore drivers above.
+  installTextureRehydrateDevtools();
 
   const handle = {
     history,
@@ -207,6 +324,9 @@ export function installWebglContextRecovery({
       const live = getLiveScene3d?.();
       return !!live?.__webglContextLost;
     },
+    // GL context is back but pixels are still being re-supplied — the frame
+    // pump is still parked. Distinct from `isLost`, which tracks the context.
+    isRehydrating: () => rehydrating,
   };
   canvas.__webglRecoveryInstalled = true;
   canvas.__webglRecoveryHandle = handle;
