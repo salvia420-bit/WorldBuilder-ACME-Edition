@@ -349,10 +349,26 @@ let _skipDeadBatchFlag;
  * WHY THIS IS A SECOND FLAG AND NOT A SECOND CALLER OF `?skipDeadAlpha`
  * (2026-08-06). The entity fix above shipped on the same day and found 76
  * invisible part meshes; the statics side at the same spot (Nanto, quality
- * `mid`) holds 4 BatchedMesh buckets carrying ~21,845 triangles of geometry
- * that is transparent, opacity 0, NormalBlending, depthWrite false — i.e. every
- * clause of `materialRendersNothing` EXCEPT the permanence proof, because
+ * `mid`) holds 4 BatchedMesh buckets whose material is transparent, opacity 0,
+ * NormalBlending, depthWrite false — i.e. every clause of
+ * `materialRendersNothing` EXCEPT the permanence proof, because
  * `__baseTranslucency` was `undefined` on all 4.
+ *
+ * ⚠ CORRECTION (2026-08-06, same day): the first write-up of this — including
+ * the eb2ac114 commit message and the task that commissioned this flag — said
+ * those 4 buckets held "~21,845 triangles". THEY DO NOT. That number was
+ * `position.count / 3` read off a BatchedMesh, which is its ALLOCATED vertex
+ * buffer, not its used geometry: `_INIT_VERTS = 1 << 14`, and
+ * 4 × 16384 / 3 = 21,845 exactly. Live `__statBatchXStats().deadBatch` reports
+ * **27 triangles** across the 4. So the honest payoff of this flag is 4 draws
+ * and 27 triangles — by the same session's calibration (62 draws bought 2.8%
+ * of frame time) that is BELOW the measurement noise floor, and it should not
+ * be expected to move a frame number. It ships because it is provably
+ * output-identical and because the missing stamp it fixes was a real decoder
+ * divergence, NOT because it is a performance win.
+ *
+ * The general lesson, since it will recur: never size a BatchedMesh's contents
+ * from its geometry attributes. Ask the batch for its used extent.
  *
  * THE STAMP WAS MISSING AT THE SOURCE, NOT AT THE BATCHER. It is tempting to
  * read "the batcher builds its own material" — it does not. Both statics

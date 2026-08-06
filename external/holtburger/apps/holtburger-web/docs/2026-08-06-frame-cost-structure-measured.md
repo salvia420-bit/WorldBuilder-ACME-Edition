@@ -218,18 +218,77 @@ ratio and gain no new per-bucket cost, and it is a Nanto-only figure.
 
 ---
 
+## 5b. Half the frame is in the transparent pass, and it costs double
+
+Splitting the draw funnel by `material.transparent`:
+
+| pass | draws/frame | ms/frame | µs/draw | reorderable |
+|---|---|---|---|---|
+| OPAQUE | 215.1 | 4.28 | 20 | yes — three sorts by `material.id` |
+| TRANSPARENT | 212.0 | **8.70** | **41** | **no** — z-sorted, blend order is load-bearing |
+
+Half the draws are transparent and they cost **2× per draw**. (Ignore the "1697 distinct
+programs" the first run printed for that pass — the probe fell back to `material.version`,
+a mutable counter, when `material.program` was absent. It is an instrument artifact.)
+
+The opaque pass has only **7 distinct programs** and 42 switches, so §6.2's reordering idea
+is worth at most ~35 switches/frame — much smaller than the raw 160 suggested.
+
+**The interesting part is what is IN the transparent pass.** `applyClipMapRenderState`
+(`materials.js`) sets `transparent = true` *together with* `depthWrite = true` on ClipMap
+surfaces — foliage, fences — to reproduce retail's `SetAlphaBlendEnable(1)` +
+ONE/INVSRCALPHA. But that is a binary alpha **mask** with z-writes: it does not depend on
+blend order the way a true translucent surface does, yet it pays the transparent pass's
+per-frame z-sort and forfeits the opaque pass's grouping. `?clipMapParity=ref` already keeps
+the correct alpha reference while leaving `transparent = false`.
+
+Toggled in-session on exactly the ClipMap-flagged materials (54 of 272 transparent
+materials), three interleaved pairs:
+
+| arm | p50 | p95 |
+|---|---|---|
+| transparent (shipped full parity) | 32.3 ms | 39.1 |
+| opaque pass (alphaTest only) | **30.2 ms** | 36.4 |
+
+**2.10 ms, 6.5%, from 54 materials** — 3× what `?skipDeadAlpha` bought, and the largest
+single result of this session. It is deliberately NOT shipped here: full ClipMap parity was a
+considered retail-fidelity decision (RND-08/33) and the edge blend genuinely differs, so this
+needs an eye-test, not a flag flip. But it is the best measured lead on the board.
+
+---
+
+## 5c. A correction to this document
+
+An earlier revision said the 4 invisible statics buckets held **"~21,845 triangles"**. They
+hold **27**. That figure was `position.count / 3` read off a `BatchedMesh`, which reports its
+**allocated** vertex buffer rather than used geometry — `_INIT_VERTS = 1 << 14`, and
+4 × 16384 / 3 = 21,845 exactly. The live number is
+`__statBatchXStats().deadBatch.triangles`.
+
+Consequences, stated plainly: `?skipDeadBatch` saves 4 draws and 27 triangles, which is below
+this workload's noise floor. It ships because it is provably output-identical and because the
+missing `__baseTranslucency` stamp it fixes was a real divergence between the two surface
+decoders — **not** as a performance win, and it should not be expected to move a frame
+number. The rule to carry: never size a batch from its geometry attributes; ask it for its
+used extent.
+
+---
+
 ## 6. Order, on evidence
 
-1. **Array-texture bucket merging — ~6.4 ms/frame (§5a).** The gating measurement is done and
-   it came back positive. This is the subsystem worth building.
-2. Program-switch ordering: 160 switches for 79 programs means draw order is not grouped by
-   program. Cheap to test, and it attacks the same 37.6 µs fixed per-draw cost from the other
-   side — possibly most of the win without a format change, so **try this before (1)**.
-3. Bucket merging by material *value* (−35 buckets, ~1.3 ms by the §5a fixed cost) — the
-   tractable half, no format work. Already in flight.
-4. `ptBc7Deferred` re-feed — worth doing on correctness grounds (79% of props miss the atlas
+1. **ClipMap surfaces out of the transparent pass — 2.10 ms / 6.5% measured (§5b).** Largest
+   result on the board, one existing flag away, and it needs an eye-test rather than
+   engineering. Do this first.
+2. **Array-texture bucket merging — ~6.4 ms/frame (§5a).** Bigger, but a subsystem. The
+   gating fixed-vs-per-instance measurement is done and came back positive.
+3. Program-switch ordering — **downgraded**. §5b measured the opaque pass at 7 programs / 42
+   switches, so the reorderable headroom is ~35 switches/frame, not the 160 the aggregate
+   suggested. The transparent half cannot be reordered at all.
+4. Bucket merging by material *value* (−35 buckets, ~1.3 ms by the §5a fixed cost) — the
+   tractable half, no format work.
+5. `ptBc7Deferred` re-feed — worth doing on correctness grounds (79% of props miss the atlas
    because of a race), but §3b measured its frame value at ~0.6 ms. Do not sell it as perf.
-5. Anything in the old §3 (overdraw, POM, atmosphere) — only if §1 is ever re-measured and
+6. Anything in the old §3 (overdraw, POM, atmosphere) — only if §1 is ever re-measured and
    comes back different.
 
 ## 7. Method notes worth keeping

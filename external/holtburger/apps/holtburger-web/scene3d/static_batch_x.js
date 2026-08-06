@@ -160,9 +160,19 @@ const _stats = {
 // Geometry-level stamp read by `_contentKeyOf`. Absent ⇒ legacy path.
 // ---------------------------------------------------------------------------
 // ?skipDeadBatch — hide a bucket whose material can never put a pixel on screen
-// (2026-08-06). Measured at Nanto, quality `mid`: 4 buckets holding ~21,845
-// triangles of transparent / opacity-0 / NormalBlending / depthWrite-false
-// geometry, submitted every frame for nothing.
+// (2026-08-06). Measured at Nanto, quality `mid`: 4 buckets whose material is
+// transparent / opacity-0 / NormalBlending / depthWrite-false, submitted every
+// frame for nothing.
+//
+// ⚠ SIZE CORRECTION (2026-08-06): the task that commissioned this said those
+// buckets held "~21,845 triangles". They hold **27**. The 21,845 was
+// `position.count / 3` off a BatchedMesh — its ALLOCATED buffer, not its used
+// extent (`_INIT_VERTS = 1 << 14`; 4 × 16384 / 3 = 21,845 exactly). Live
+// `getStatBatchXStats().deadBatch.triangles` is the honest number. So this
+// saves 4 draws and 27 triangles, which is below this workload's noise floor —
+// it ships for correctness (a real decoder divergence left the permanence stamp
+// missing) and not as a perf win. Never size a batch from its geometry
+// attributes; ask the batch for its used extent.
 //
 // THE PREDICATE IS INJECTED, NOT IMPORTED. `materialRendersNothing` lives in
 // materials.js (which pulls THREE + quality + suite_assets); this module is a
