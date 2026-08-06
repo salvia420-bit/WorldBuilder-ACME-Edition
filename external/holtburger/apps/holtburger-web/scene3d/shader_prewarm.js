@@ -114,9 +114,19 @@ const _COMPLETION_STATUS_KHR = 0x91b1;
  * Idempotent per context. Returns the probe state ({stats, reset, summary})
  * or null when the flag is off / the context is unusable. Also published as
  * `window.__linkProbe`.
+ *
+ * `{ force: true }` (2026-08-06) bypasses the URL-flag gate for a caller that
+ * has already decided it wants the probe. `stall_probe.js` uses it: the whole
+ * point of arming that instrument is to price the LINK_STATUS bucket in ms, and
+ * requiring the operator to also remember `&linkProbe=on` on a 1070 session
+ * they only get to run once is a footgun, not a safety rail. Everything else
+ * about the probe is unchanged — same wrap, same counters, same idempotence.
+ *
+ * @param {any} renderer
+ * @param {{force?: boolean}} [opts]
  */
-export function installLinkProbe(renderer) {
-  if (!LINK_PROBE_ON || !renderer || typeof renderer.getContext !== "function") return null;
+export function installLinkProbe(renderer, opts = {}) {
+  if ((!LINK_PROBE_ON && opts.force !== true) || !renderer || typeof renderer.getContext !== "function") return null;
   let gl;
   try {
     gl = renderer.getContext();
@@ -197,6 +207,8 @@ export function installLinkProbe(renderer) {
     if (typeof window !== "undefined") window.__linkProbe = state;
   } catch (_) {}
   // eslint-disable-next-line no-console
-  console.info("[shader_prewarm] link probe installed (?linkProbe=on) — window.__linkProbe.summary()");
+  console.info(
+    `[shader_prewarm] link probe installed (${opts.force === true ? "forced by caller" : "?linkProbe=on"}) — window.__linkProbe.summary()`,
+  );
   return state;
 }

@@ -22,8 +22,36 @@
 // Loaded LAZILY on the first xu7 decode, so flag-off boots pay zero bytes.
 //
 // Decode cost: ~32 ms per 1024² single-threaded. Payloads are encoded with
-// stripes=8; per-record decode currently runs on the calling thread — the
-// bake worker absorbs atlas feeds, singletons hitch at most once per surface.
+// stripes=8; per-record decode runs on the calling thread.
+//
+// TOMBSTONE (2026-08-06, p99-stall investigation). This paragraph used to end
+// "— the bake worker absorbs atlas feeds, singletons hitch at most once per
+// surface." That was WRONG on both halves and it was load-bearing wrong,
+// because it read as "the main thread does not pay for this".
+//
+//   * The bake worker absorbs NOTHING of this. `scene3d/bake_worker.js`'s
+//     complete import graph is pkg/holtburger_web.js, tex_overrides.js,
+//     gfx_relief.js -> quality.js, and bake_transfer.js. There is no bc7/xu7
+//     symbol anywhere in it; it produces RGBA8 SurfacePixels and stops.
+//     `transcodeXu7` has exactly ONE caller in the tree — `Bc7RecordSource._begin`
+//     in bc7_textures.js — and that source is constructed once, on the main
+//     thread, from index.html's boot arm, against the MAIN-thread wasm
+//     namespace. Every XUBC7 transcode this client has ever run was on the
+//     window thread.
+//   * "hitch at most once per surface" is true per surface and irrelevant per
+//     FRAME. The wasm `xu7_blocks` is an `async fn`, but after its `prefetch`
+//     the bytes come from the in-memory source, so N sibling `getAsync` calls
+//     from one landblock's material set settle in the SAME microtask drain and
+//     their N transcodes run back-to-back in ONE task, with no yield and no
+//     budget between them. The per-surface cost is bounded; the per-task cost
+//     is bounded only by how many surfaces a landblock crossing asks for at once.
+//
+// The transcode is therefore unbudgeted main-thread work that lands between
+// render calls. `_stats.decodeMs` below is the honest total; `scene3d/stall_probe.js`
+// differences it across a frame edge to say how much of it landed in one hitch.
+// If this ever needs fixing, the two candidate shapes are (a) move the decode
+// into the bake worker for real, or (b) budget it — a small FIFO drained under
+// a per-frame ms cap, the shape `statics.js STATICS_BUILD_BUDGET_MS` already uses.
 
 import { bc7BlocksFor, bc7LevelBytes, flagIsOff } from "./bc7_textures.js";
 
