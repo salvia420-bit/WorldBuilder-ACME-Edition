@@ -180,6 +180,13 @@ in the entire scene.** Merging by value alone recovers 35 buckets; the real ceil
 compatible surfaces to share array textures, which is exactly what the atlas does for the
 narrow class it admits.
 
+> **⛔ Every number in this table is a RESIDENT bucket count, and the merge it motivates was
+> built and measured at 0.0 ms.** Read the superseded banner at the end of §5a before using any
+> of it. Two specific traps: (a) resident buckets are mostly frustum-culled and already free —
+> the submitted population is 128 nodes, not ~400; (b) a texture array cannot ignore tile size
+> (`texStorage3D` fixes format/w/h/depth at allocation), so "7 render states" is not the floor —
+> the reachable key is (region × tile × state × format × VFX set).
+
 **Do not multiply 310 × 66 µs and quote 20 ms.** Per-bucket cost has a fixed component and a
 per-instance component, and merging removes only the fixed part — the instances still exist.
 So the split had to be measured before any of this could be believed.
@@ -215,6 +222,45 @@ draw cost*, not the bucket count that first suggested it.
 
 Caveats that stay attached to that number: it assumes merged buckets inherit the 396 → 86
 ratio and gain no new per-bucket cost, and it is a Nanto-only figure.
+
+> ### ⛔ SUPERSEDED — THE ~6.4 ms WAS BUILT, MEASURED, AND CAME BACK 0.0 ms
+>
+> **Do not act on the 6.4 ms above, and do not re-derive it.** The subsystem it recommends was
+> built as `?statArrayMerge` (`6540ac5e`) and A/B'd on the 1070 (`301f9ee1`, 2026-08-06):
+>
+> | arm | p50 runs | draws/frame |
+> |---|---|---|
+> | off | 23.0 / 23.0 / 23.7 | 453.9 / 457.8 / 454.0 |
+> | ON | 23.2 / 23.0 / 22.8 | 425.7 / 434.4 / 434.5 |
+>
+> The merge works — 84 buckets merged, 654 groups through 17 pools, 0 errors, a real
+> reproducible **−23 draws/frame** — and **the frame does not move**. At the 37.6 µs fixed cost
+> derived above, 23 draws should have been ~0.9 ms.
+>
+> **What was wrong, in order.** Three of the four decay steps were the same error — a population
+> counted at one scale and priced as if it were another:
+> 1. **6.4 ms → 3.68 ms.** The 396 → 86 ratio is a *resident* bucket count. Most buckets are
+>    frustum-culled and already free; only DRAWN buckets can pay (`3723348c`).
+> 2. **3.68 ms → 2.00 ms.** Even "drawn" was resident-scale: `_projDrawn` tested `visible` +
+>    `instances > 0` and never the frustum, removing 4 buckets of 346. A real submitted-scale
+>    sampler gives 128 submitted nodes, not ~300 (`2399c187`).
+> 3. **2.00 ms → 0.0 ms.** This one is not a counting error — it is the **conversion factor**.
+>    *Draws removed × µs-per-draw does not predict the win for this population.* §5a's r² = 0.014
+>    says a draw's cost is independent of its instance count; it does NOT say every draw costs
+>    the same as every other, and the draws merging removes are evidently the cheap ones.
+>
+> **The `?statBatchChunk=off` cross-check below (Lead 2) does not rescue it** — it validated the
+> cost of *adding* ~196 draws in a 633-draw regime, and that is not the same measurement as
+> *removing* 23 draws in a 454-draw regime. Asymmetric, and the ON arm settles it.
+>
+> Two unsettled explanations for the residual, neither needed to act on this: the per-instance
+> frustum walk growing (merged buckets bound more space, so `perObjectFrustumCulled` walks
+> instances a culled bucket used to skip), or an array-material draw simply costing more than the
+> singleton draw it replaces.
+>
+> The code is kept and default-OFF. **Reopen only on a NEW mechanism — re-deriving the bucket
+> arithmetic reproduces this exact number.** Full verdict: `docs/2026-08-06-statics-array-merge-design.md`
+> §0d; raw arms: `docs/RESULTS-statArrayMerge-AB-2026-08-06.json`.
 
 ---
 
@@ -325,6 +371,13 @@ within 20% from a completely independent method, so the ~6.4 ms figure for mergi
 197 → ~43 rendered buckets stands. (Bucket count rose by 968 but draws by only 196 — most of
 the extra buckets frustum-cull, which is why per-DRAW is the right unit.)
 
+> **⛔ CORRECTION (2026-08-06, `301f9ee1`): this validated the slope in the wrong direction and
+> the wrong regime.** It measures the cost of *adding* ~196 draws to reach 633 draws/frame. The
+> merge actually built removes 23 draws from 454 and is worth **0.0 ms** — see the superseded
+> banner in §5a. Both facts can hold at once: a marginal draw at 633 is expensive, the specific
+> 23 draws merging removes at 454 are not. An "independent method" that only ever pushes the
+> knob one way is not a validation of the other way.
+
 ### Lead 3 — `particleBillboard`: the census signal was noise, KILLED
 
 The census's one-shot showed p50 +3.0 ms, its only signal above band. Interleaved boot arms:
@@ -383,13 +436,21 @@ Owner sign-off on the edge quality is still outstanding; nothing is shipped.
 1. **ClipMap surfaces out of the transparent pass — 1.2 ms / 3.5% (§5b, corrected by §5e).** Largest
    result on the board, one existing flag away, and it needs an eye-test rather than
    engineering. Do this first.
-2. **Array-texture bucket merging — ~6.4 ms/frame (§5a).** Bigger, but a subsystem. The
-   gating fixed-vs-per-instance measurement is done and came back positive.
+2. ~~**Array-texture bucket merging — ~6.4 ms/frame (§5a).**~~ **⛔ DONE AND DEAD.** Built as
+   `?statArrayMerge` (`6540ac5e`), measured on the 1070 (`301f9ee1`): removes a real −23
+   draws/frame and is worth **0.0 ms**. Kept default-OFF. See the superseded banner in §5a for
+   why the projection decayed 6.4 → 3.68 → 2.00 → 0.0. **Do not re-derive the bucket
+   arithmetic.**
 3. Program-switch ordering — **downgraded**. §5b measured the opaque pass at 7 programs / 42
    switches, so the reorderable headroom is ~35 switches/frame, not the 160 the aggregate
    suggested. The transparent half cannot be reordered at all.
-4. Bucket merging by material *value* (−35 buckets, ~1.3 ms by the §5a fixed cost) — the
-   tractable half, no format work.
+4. ~~Bucket merging by material *value* (−35 buckets, ~1.3 ms by the §5a fixed cost).~~
+   **⛔ KILLED, and not merely re-priced (`b1e1f207`, `3723348c`).** The 95-objects-vs-76-values
+   gap is not duplication: those pairs are a base and its `floorBias` / `staticBias` /
+   `cellBaked` / VFX clones, which exist *precisely because* they must render differently. The
+   key sketched here had no patch-set discriminator, so it would have fused a depth-biased floor
+   into an unbiased bucket — the z-fighting `applyFloorDepthBias` exists to prevent. A *sound*
+   key merges ~0 buckets (~0.24 ms at the old pricing, and ~0 ms at the measured one).
 5. `ptBc7Deferred` re-feed — worth doing on correctness grounds (79% of props miss the atlas
    because of a race), but §3b measured its frame value at ~0.6 ms. Do not sell it as perf.
 6. Anything in the old §3 (overdraw, POM, atmosphere) — only if §1 is ever re-measured and

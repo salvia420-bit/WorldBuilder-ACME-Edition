@@ -21,8 +21,7 @@
 //              surfaces still encode alpha = 255).
 //
 // MIP LEVELS
-// v1 of the container carries level 0 ONLY, and the per-statics `tex-bc7`
-// records are still v1. WebGL cannot generate mipmaps
+// v1 of the container carried level 0 ONLY. WebGL cannot generate mipmaps
 // for a compressed texture (`generateMipmaps` is forced false by three), so
 // a level-0-only BC7 texture MUST sample with `minFilter = LinearFilter`.
 // That is a real regression versus the RGBA8 path, which runs
@@ -32,10 +31,29 @@
 // incomplete texture and samples BLACK.
 // `parseHbc7` therefore accepts an OPTIONAL trailing mip chain (each
 // successive level halving, min 1x1) and only enables mipmapped filtering
-// when the payload actually carries one. 2026-08-05: that branch is NO LONGER
-// theoretical — the terrain arm ships HBC7 v2 with a full chain (10 levels at
-// t512, 11 at t1024) and needed no client change, exactly as designed. The
-// statics records are the ones still waiting on a v2 bake.
+// when the payload actually carries one (`makeBc7Texture`, below).
+//
+// 2026-08-08 — THE STATICS RECORDS ARE v2 TOO; THIS HEADER SAID OTHERWISE FOR
+// THREE DAYS AND MISLED AT LEAST ONE AGENT. It claimed "the statics records
+// are the ones still waiting on a v2 bake". They are not: the shipped
+// `tex-bc7` payloads carry FULL chains, exactly as terrain does. Proof is
+// byte-exact from the bake ledger (`/mnt/wbterminal2/tex-bc7-pre/derive-ledger.jsonl`,
+// 2,999 rows) — a 2048^2 record is 5,592,452 B = the 12-level BC7 chain
+// (4194304+1048576+...+16+16) + the 20 B header, and a 1024^2 record is
+// 1,398,148 B = its 11-level chain + 20 B. Neither reconciles with level 0
+// alone. `parseHbc7` would in fact THROW "trailing garbage" on these if it
+// did not already walk the chain, so the singleton path has been taking its
+// `LinearMipmapLinearFilter` branch all along.
+//
+// THE REAL GAP IS THE ARRAY PATH, NOT THE BAKE. `makeBc7Texture` (singleton)
+// consumes every level. `makeBc7ArrayTexture` / `writeBc7ArrayLayer` (the
+// statics-atlas + `?statArrayMerge` bucket arrays) still allocate level 0 only
+// and write `parsed.levels[0]` only, so atlas-bucket statics sample with
+// `LinearFilter` and no anisotropy while singleton statics of the SAME surface
+// get the full chain. That asymmetry is a live quality bug, not a bake
+// blocker; fixing it is an allocation + upload change here (and a VRAM
+// increase of ~1/3 on those arrays, on a page that OOMs near 2,800 MB, so it
+// wants an eye-test and a memory census before it ships default-ON).
 //
 // FEATURE DETECTION IS MANDATORY, NOT OPTIONAL
 // `EXT_texture_compression_bptc` is absent on plenty of real devices. (It is
@@ -338,7 +356,12 @@ export function makeBc7ArrayTexture(w, h, depth, opts = {}) {
   );
   arr.colorSpace = opts.colorSpace ?? THREE.SRGBColorSpace;
   arr.magFilter = THREE.LinearFilter;
-  arr.minFilter = THREE.LinearFilter; // level-0 only ⇒ mipmapped filter = black
+  // Level-0 only ⇒ a mipmapped minFilter would make this an incomplete texture
+  // and sample BLACK. NOTE this is a limitation of THIS allocator, not of the
+  // payload: the tex-bc7 records carry full chains (see the header), and
+  // `makeBc7Texture` uses them. Allocating `levels > 1` here and writing every
+  // level in `writeBc7ArrayLayer` is the open item.
+  arr.minFilter = THREE.LinearFilter;
   arr.generateMipmaps = false;
   // Same addressing contract as the RGBA8 DataArrayTexture the atlas uses:
   // ClampToEdge per layer, with the wrap-bucket shader's fract() supplying
