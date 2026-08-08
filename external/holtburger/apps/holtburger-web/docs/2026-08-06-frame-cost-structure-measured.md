@@ -347,6 +347,13 @@ earlier session's 2.10 ms exactly — two independent sessions.
 > **Translucent** bit; moving them breaks the image badly. The safe set is the 50 PURE
 > ClipMap materials, worth **−1.2 ms (3.5%)**. Roughly 0.9 ms of the original figure was
 > being bought with a visual regression.
+>
+> **AND IT SHIPPED**, 37 minutes after this section was written, as `?clipMapOpaque`
+> (DEFAULT ON, `f712c13f`). Everything below this banner is the state of a **failed arm**:
+> the −2.1 ms, the 65/77-material scope and the "99 of 284 movable" census all describe
+> configurations that were measured and then rejected. If you arrived at this section from a
+> summary, an index or an agent's report, read §5e and §5f before acting on ANY number here —
+> this exact paragraph has already been re-quoted as current two days after it was corrected.
 
 **Generalising is actively harmful.** Of 284 transparent materials only 99 are movable
 (transparent + `alphaTest > 0` + `depthWrite === true`); **172 are additive** and can never
@@ -427,15 +434,118 @@ objects stay translucent.
 arm. Edge *character* is comparable; pixel-level edge identity is not established, and would
 need the animation clock frozen — which is a client change, not a measurement.
 
-Owner sign-off on the edge quality is still outstanding; nothing is shipped.
+~~Owner sign-off on the edge quality is still outstanding; nothing is shipped.~~
+
+**SUPERSEDED THE SAME DAY — this shipped as `?clipMapOpaque` (DEFAULT ON), commit `f712c13f`.**
+Owner eye-test 2026-08-06 on 1070/Holtburg captures (leaf and branch edges at 3× zoom): no
+difference noted. `applyClipMapRenderState` (`materials.js`) now sets `transparent = false`
+with `depthWrite = true` for the pure-ClipMap materials; `?clipMapOpaque=off` restores the
+ONE/INVSRCALPHA arm byte for byte. The per-format alpha-test ref did not move and is still
+selected by `?clipMapParity`, which short-circuits before this. `test_f7_8_surface_bitfield.mjs`
+pins both arms **and** the ladder ordering that keeps ClipMap+Translucent (`0x14`) out.
+
+A second, independent measurement landed with it — interleaved BOOT arms of the shipped path:
+default 24.9 ms / 439 draws vs `=off` 26.8 and 27.0 ms / 459.9 and 457.6 draws, i.e. −2.0 ms
+and −19 draws. Its default arm is **n=1** (the first boot hit a login race) while `=off` is
+n=2, so the in-session **−1.2 ms** above is still the number to quote; the two methods agree
+in direction and rough magnitude and neither is a reason to restate the other.
+
+*(This paragraph was left saying "nothing is shipped" for two days after it was. Anyone
+reading §5e or §6 in that window would have re-implemented a shipped change — which is the
+specific failure the tombstone convention in this tree exists to prevent.)*
+
+### The provenance, in order, because §5d has already been quoted past its own correction
+
+This lead moved three times in **37 minutes** on 2026-08-06, and §5d — the middle state — is
+the one that reads most like a result. It has since been re-quoted as current at least once,
+by someone acting on it in good faith two days later:
+
+| commit | time | says | status |
+|---|---|---|---|
+| `d30c8b44` | 02:26 | 2.10 ms from 54 ClipMap-flagged materials | first sighting |
+| `7976e9bd` | 10:56 | **"CONFIRMED at −2.1 ms"**, 65/77 flagged, "the temptation to widen is measurably wrong" | ⚠ **SUPERSEDED 21 min later** |
+| `ca44bbcf` | 11:17 | the eye-test **FAILED**; −2.1 ms was buying ~0.9 ms with a visual regression; honest figure **−1.2 ms on 50 pure-ClipMap** | the correction |
+| `f712c13f` | 11:33 | shipped as `?clipMapOpaque`, DEFAULT ON, owner signed off | current |
+
+So: **−2.1 ms and "77 materials" are the numbers of an arm that failed its eye-test.**
+−1.2 ms and 50 materials are the shipped ones. The 50/27 split is a live census of the
+ClipMap-flagged population — 50 pure (`0x4`, opacity 1) and 27 also carrying `Translucent`
+(`0x14`, opacity 0.75/0) — and 50 + 27 = the 77 the failed arm moved.
+
+The "99 of 284 movable" figure in §5d belongs to a **different and rejected** arm: transparent
++ `alphaTest > 0` + `depthWrite === true`, i.e. the 65-ish ClipMap movables **plus** 34
+non-ClipMap ones, mostly `particle-unlit`. That arm measured **+1.5 ms worse than baseline**
+with p95 blowing out 32 → 50.6 ms. It is a description of what NOT to move; it is not the
+shipped scope and must not be quoted as one. The shipped scope is enforced *structurally* by
+ladder ordering (see `applyClipMapRenderState`'s comment, which says so at the seam) rather
+than by any predicate over that census — which is exactly why widening it later takes a
+deliberate edit against an explicit warning.
+
+---
+
+## 5f. The eye-test checklist — for re-verification, not for a new decision
+
+`?clipMapOpaque` is signed off. This section exists so the check is *repeatable*: a
+regression here is invisible to every number the harness records (draws, triangles, materials,
+heap and p50 were all fine on the arm that blanketed the frame), so a screenshot pair is the
+only detector, and it should not have to be re-derived from scratch each time.
+
+**Arms.** Default vs `?clipMapOpaque=off`, identical otherwise. Relaunch Chrome between arms
+with a **fresh `--user-data-dir`** (a warmed shader cache flatters arm 2), and add `?nosw=1`
+or the service worker serves the previous build.
+
+**What actually moved — verify it, do not assume it.** In the page:
+
+```js
+// The set that changed pass. Everything here should be alphaTest > 0,
+// depthWrite === true, transparent === false in the DEFAULT arm.
+[...new Set(liveScene3d.scene.children.flatMap(o => {
+  const out = []; o.traverse?.(n => n.material && out.push(...[].concat(n.material))); return out;
+}))].filter(m => m.alphaTest > 0 && m.depthWrite === true).length
+```
+
+Expect ~50 at Holtburg. If it is ~77, the flag-bit filter has been reintroduced somewhere and
+the 27 ClipMap+Translucent materials are in the set — **stop, that is the arm that failed.**
+
+**Vantage points**, in this order:
+
+1. **Holtburg tree line** — leaf edges against bright sky *and* against terrain. Sky is the
+   high-contrast case for a fringe; terrain is where a changed edge is easiest to miss.
+2. **A fence or paling run**, viewed near-edge-on, where many alpha-masked quads overlap in z.
+3. **A frame containing a genuinely translucent object.** This is the regression canary, not a
+   perf sample: the failed arm turned a large translucent blue object fully opaque and
+   blanketed the frame behind it.
+4. **Foliage seen THROUGH a translucent surface** (glass, water). ClipMap now draws in the
+   opaque pass, i.e. *before* transparent geometry, so this is where a pass-order mistake
+   would show as missing foliage rather than as a bad edge.
+
+**The artifact to look for.** With `transparent = false`, three disables blending outright, so
+a bilinear-filtered edge texel that survives the 0.784/0.392 alpha test is written un-blended
+instead of composited ONE/INVSRCALPHA. Expect **at most a very slightly harder, more aliased
+leaf edge**. Anything else is a finding: a bright or dark colour fringe, foliage that
+disappears, any change in a translucent object's opacity, or foliage that vanishes when seen
+through glass.
+
+**The stated limit, carried forward.** Paired captures are ~0.9 s apart and foliage sways, so
+edge *character* is comparable and pixel-level identity is not. Establishing the latter needs
+the animation clock frozen — a client change, not a measurement. Do not report a pixel diff
+from an unfrozen pair as evidence either way.
+
+**Record alongside the shots:** p50/p95 from the same session, draws, and
+`__statBatchXStats().walk`'s sorted/unsorted bucket split — moving 50 materials out of the
+transparent pass also flips `_shouldSortBucket` for their buckets, so that split should move
+too, and if it does not, the materials being A/B'd are not the ones being measured.
 
 ---
 
 ## 6. Order, on evidence
 
-1. **ClipMap surfaces out of the transparent pass — 1.2 ms / 3.5% (§5b, corrected by §5e).** Largest
+1. ~~**ClipMap surfaces out of the transparent pass — 1.2 ms / 3.5% (§5b, corrected by §5e).** Largest
    result on the board, one existing flag away, and it needs an eye-test rather than
-   engineering. Do this first.
+   engineering. Do this first.~~
+   **DONE 2026-08-06 — shipped as `?clipMapOpaque`, DEFAULT ON (`f712c13f`).** Eye-test passed
+   on the refined 50-material scope after failing on the naive 77. Re-verification checklist
+   in §5f. Nothing further to do here; the next item is now first.
 2. ~~**Array-texture bucket merging — ~6.4 ms/frame (§5a).**~~ **⛔ DONE AND DEAD.** Built as
    `?statArrayMerge` (`6540ac5e`), measured on the 1070 (`301f9ee1`): removes a real −23
    draws/frame and is worth **0.0 ms**. Kept default-OFF. See the superseded banner in §5a for
