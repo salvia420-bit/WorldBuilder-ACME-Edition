@@ -253,7 +253,17 @@ function _sample(renderer) {
     // --- renderer.info: levels and cumulative draw counts -------------------
     programs: 0, geometries: 0, textures: 0, calls: 0, triangles: 0,
     // --- XUBC7 transcode: MS, on the main thread (see xu7_textures.js) -----
+    // `xu7Drains`/`xu7Deferrals` (2026-08-08) are COUNTS and stay out of
+    // `_MS_KEYS`: they say how the transcode ms was SHAPED across this window,
+    // not how much of it there was. A long frame carrying 187 ms of
+    // `xu7DecodeMs` with `xu7Drains: 1` is the pre-fix pile-up; the same ms
+    // spread over one drain per frame is the budgeted path working. A nonzero
+    // `xu7Deferrals` means the cap actually bit in this window.
     xu7Decodes: 0, xu7DecodeMs: 0, xu7Skips: 0, xu7Errors: 0,
+    // `xu7Runs` is the one that reads on BOTH arms: a long frame carrying
+    // `xu7Decodes: 12, xu7Runs: 1` is twelve decodes with no yield between
+    // them. `__xu7Stats().maxRun` is its session-wide high-water mark.
+    xu7Drains: 0, xu7Deferrals: 0, xu7Runs: 0,
     // --- BC7 record source: counts only ------------------------------------
     bc7Fetches: 0, bc7Hits: 0, bc7PreFetches: 0, bc7Absent: 0, bc7Bytes: 0,
     // --- shader link: MS (requires the link probe, which arm() installs) ----
@@ -298,6 +308,9 @@ function _sample(renderer) {
       s.xu7DecodeMs = _num(x.decodeMs);
       s.xu7Skips = _num(x.notReadySkips);
       s.xu7Errors = _num(x.decodeErrors);
+      s.xu7Drains = _num(x.drains);
+      s.xu7Deferrals = _num(x.deferrals);
+      s.xu7Runs = _num(x.runs);
     }
   } catch (_) {}
   try {

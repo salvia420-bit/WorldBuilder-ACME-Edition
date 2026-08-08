@@ -164,6 +164,10 @@ const TIER4 = [
 // outcome for the two suites that silently no-op when THREE_PATH is absent.
 const TIER5 = [
   { tier: 5, flag: "xu7_transcode", file: "test_xu7_transcode.mjs" },
+  // 2026-08-08 — the transcode BUDGET (`?xu7Budget`). Sibling of the above and
+  // deliberately separate: that suite needs the real transcoder and the
+  // /mnt corpus fixture, this one needs neither and pins the scheduler.
+  { tier: 5, flag: "xu7_budget", file: "test_xu7_budget.mjs" },
   { tier: 5, flag: "bc7_pre_phase", file: "test_bc7_pre_phase.mjs" },
   { tier: 5, flag: "atlas_bc7_pre_gate", file: "test_atlas_bc7_pre_gate.mjs" },
   { tier: 5, flag: "terrain_bc7_aniso", file: "test_terrain_bc7_aniso.mjs" },
