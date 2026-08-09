@@ -706,25 +706,40 @@ export function createPackFetchController(opts = {}) {
       if (ord < 0) continue;
       const url = packUrl(index.packs[ord].hash);
       keep.add(url);
-      if (resident.has(url)) continue;
+      // T20 live-arm fix (2026-08-09): the keep set for interiors +
+      // regionals must accrue for EVERY ring tile, INCLUDING resident ones.
+      // The old `if (resident.has(url)) continue;` short-circuit meant that
+      // once a ring tile's pack landed, its supergrid REGIONALS stopped
+      // being kept by that tile — so a still-queued shared regional (FIFO
+      // behind the tile packs) fell out of `keep` on the next crossing and
+      // dropQueuedOutside REJECTED it, failing every ST7 grid tile latched
+      // on it (in-window slots stranded EMPTY; found live on the T20 arm).
+      const tileResident = resident.has(url);
       const tileKey = `${t.tx},${t.ty}`;
       const qrow = quarantine.get(tileKey);
-      if (qrow && now() < qrow.until && t.dist > 1) continue; // timed; proximity (dist<=1) retries
-      // current tile = URGENT (player-blocking); rest lane R.
-      const lane = t.dist === 0 ? "U" : "R";
-      // C5 instrument: lane-U content the player OCCUPIES was not resident
-      // at need. The cold-boot spawn tile is excluded — C5 is a sustained-
-      // walk gate, not a boot gate (pass 10 owns the scoring).
-      if (!first && lane === "U" && !resident.has(url)) diag.wireWaitEvents += 1;
-      jobs.push(needPack(ord, { lane, tileKey }).catch(() => {}));
+      const tileQuarantined = qrow && now() < qrow.until && t.dist > 1; // timed; proximity (dist<=1) retries
+      if (!tileResident && !tileQuarantined) {
+        // current tile = URGENT (player-blocking); rest lane R.
+        const lane = t.dist === 0 ? "U" : "R";
+        // C5 instrument: lane-U content the player OCCUPIES was not resident
+        // at need. The cold-boot spawn tile is excluded — C5 is a sustained-
+        // walk gate, not a boot gate (pass 10 owns the scoring).
+        if (!first && lane === "U") diag.wireWaitEvents += 1;
+        jobs.push(needPack(ord, { lane, tileKey }).catch(() => {}));
+      }
       // Interiors of ring LBs prefetch at admission; player's own LB
-      // interior promotes to U (S4).
+      // interior promotes to U (S4). keep.add unconditionally (see above);
+      // enqueue skipped only while the owning tile is quarantined (needPack
+      // latches, so re-needs of settled entries are re-serves, not fetches).
       for (const [ilb, iord] of index.interiors) {
         const ix = (ilb >> 8) & 0xff, iy = ilb & 0xff;
         if ((ix >> 1) === t.tx && (iy >> 1) === t.ty) {
-          const ilane = ilb === lb ? "U" : "R";
-          keep.add(packUrl(index.packs[iord].hash));
-          jobs.push(needPack(iord, { lane: ilane, tileKey }).catch(() => {}));
+          const iurl = packUrl(index.packs[iord].hash);
+          keep.add(iurl);
+          if (!tileQuarantined && !resident.has(iurl)) {
+            const ilane = ilb === lb ? "U" : "R";
+            jobs.push(needPack(iord, { lane: ilane, tileKey }).catch(() => {}));
+          }
         }
       }
       // Regional shared packs for the tile's supergrid cell (32x32-LB,
@@ -732,8 +747,11 @@ export function createPackFetchController(opts = {}) {
       const sg = ((t.tx * 2) >> 5) * 8 + ((t.ty * 2) >> 5);
       for (const s of index.shared) {
         if (s.ord === sg && (s.kind === SHARED_KIND.META_REGIONAL || s.kind === SHARED_KIND.ENV_REGIONAL || s.kind === SHARED_KIND.PVW_REGIONAL)) {
-          keep.add(packUrl(index.packs[s.packOrd].hash));
-          jobs.push(needPack(s.packOrd, { lane: "R" }).catch(() => {}));
+          const surl = packUrl(index.packs[s.packOrd].hash);
+          keep.add(surl);
+          if (!resident.has(surl)) {
+            jobs.push(needPack(s.packOrd, { lane: "R" }).catch(() => {}));
+          }
         }
       }
     }

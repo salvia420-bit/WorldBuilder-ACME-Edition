@@ -5162,6 +5162,23 @@
             // trap). NAMESPACE access so a stale pkg/ degrades to "no limb
             // hierarchy" instead of a module-link error.
             fetchSetupParentIndex: __hbWasmNs.fetchSetupParentIndex,
+            // ST7 `?slotGrid` (T20, 2026-08-09) — PackStore residency policy
+            // surface (pins, budget enforcement, ladder budget/floor levers,
+            // stats for `__diag.residency().packSource`) + the tile-keyed
+            // per-LB world-cache retention hook. The scene3d/index.js grid
+            // wiring reads all of these off `wasmExports` behind `?.` guards,
+            // so omitting them here is the SAME curated-opts plumb-through
+            // trap as every entry above — pins/enforce silently no-op and
+            // `pinnedPacks` reads 0 forever (caught by the T20 live arm, not
+            // by review). NAMESPACE access so a stale pkg/ degrades to
+            // "no pack policy" instead of a module-link error.
+            pack_source_pin: __hbWasmNs.pack_source_pin,
+            pack_source_unpin: __hbWasmNs.pack_source_unpin,
+            pack_source_enforce: __hbWasmNs.pack_source_enforce,
+            pack_source_set_budgets: __hbWasmNs.pack_source_set_budgets,
+            pack_source_set_floor_ms: __hbWasmNs.pack_source_set_floor_ms,
+            pack_source_stats: __hbWasmNs.pack_source_stats,
+            hb_evict_lb_world_caches: __hbWasmNs.hb_evict_lb_world_caches,
             fetchEntityModelRender,
             fetchEntityCycleFrames,
             fetchEntityAnimationKeyframes,

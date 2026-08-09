@@ -618,7 +618,7 @@ export class GridResidencyAdapter {
     this._teleportFirstBurst = false;
 
     this._stats = {
-      feedsFired: 0, feedLbs: 0, packFetches: 0, packPins: 0, packUnpins: 0,
+      feedsFired: 0, feedLbs: 0, feedRefires: 0, packFetches: 0, packPins: 0, packUnpins: 0,
       parksIssued: 0, parkLbsIssued: 0, releases: 0, releaseLbs: 0,
       reAdopts: 0, quarantineHolds: 0,
       parkDeferredCount: 0, parkDeferredBytes: 0,
@@ -730,6 +730,10 @@ export class GridResidencyAdapter {
 
   _fireFeeds(tile) {
     this._stats.feedsFired += 1;
+    this._fireFeedLbs(tile);
+  }
+
+  _fireFeedLbs(tile) {
     for (const lbKey of tileLbKeys(tile)) {
       const lbx = (lbKey >>> 24) & 0xff;
       const lby = (lbKey >>> 16) & 0xff;
@@ -740,6 +744,75 @@ export class GridResidencyAdapter {
         if (!this._stats.lastError) this._stats.lastError = String(e && e.message ? e.message : e);
       }
     }
+  }
+
+  /**
+   * Re-admit in-window EMPTY tiles (T20 live-arm fix, 2026-08-09).
+   *
+   * A transient fetch failure drives FETCHING → EMPTY by design ("a later
+   * admit retries", _onTileFetchFailed) — but for a tile that stays IN
+   * WINDOW no later admit ever comes: admits are edge events. Live on the
+   * T20 arm, a movement-correlated controller drop (shared regional packs
+   * falling out of the backpressure keep set — fixed in
+   * pack_fetch_controller.js the same day) stranded 24/36 window slots
+   * EMPTY. This is the missing retry actor, called from the 1 Hz
+   * maintenance slice: EMPTY in-window ⇒ transient by construction
+   * (empty-world tiles stage bare; loud failures sit QUARANTINED and are
+   * NEVER touched here), and the controller's per-URL latch + quarantine
+   * machinery bound the retry cost.
+   *
+   * @returns {number} tiles re-admitted.
+   */
+  readmitEmptyTiles() {
+    const g = this.grid;
+    const empty = [];
+    for (const tile of g.windowTiles) {
+      if (g.stateOf(tile) === SLOT_STATE.EMPTY) empty.push(tile);
+    }
+    for (const tile of empty) this._admit(tile);
+    return empty.length;
+  }
+
+  /**
+   * Re-fire feeds for tiles still STAGED (T20 live-arm fix, 2026-08-09).
+   *
+   * The legacy producers sit behind the stream-bake guard
+   * (scene3d/stream_bake_guard.js), which is a skip-cap SEMAPHORE, not a
+   * queue: fires beyond `maxInFlight` (6) are DROPPED and counted
+   * (`skipCap`). The legacy `tickPvsLoadExpansion` sweep tolerated that by
+   * re-firing the whole ring every position packet; the grid's event-driven
+   * admit fires ONCE per tile, so a seed/teleport burst (up to 36 tiles =
+   * 144 LBs) admits ~6 bakes and starves the rest — 35/36 slots stuck
+   * STAGED on the first live arm (found live, invisible to the mocked-feed
+   * battery). This method restores the legacy retry semantics THROUGH the
+   * same guard: idempotent per LB (already-baked fast-path + per-key
+   * in-flight dedup + skip-cap all live in the guard/producers), fired
+   * nearest-tile-first (the legacy distance order), throttled by the caller
+   * (index.js re-fires at 250 ms). Bounded: ≤36 tiles × 4 LB calls, each a
+   * cheap Set/Map check when saturated.
+   *
+   * @returns {number} STAGED tiles re-fired.
+   */
+  refireStagedFeeds() {
+    const g = this.grid;
+    const staged = [];
+    for (const tile of g.windowTiles) {
+      if (g.stateOf(tile) === SLOT_STATE.STAGED) staged.push(tile);
+    }
+    if (staged.length === 0) return 0;
+    const pt = g.playerTile;
+    if (pt != null && pt >= 0) {
+      const px = (pt >> 8) & 0xff;
+      const py = pt & 0xff;
+      const cheb = (t) =>
+        Math.max(Math.abs(((t >> 8) & 0xff) - px), Math.abs((t & 0xff) - py));
+      staged.sort((a, b) => cheb(a) - cheb(b));
+    }
+    for (const tile of staged) {
+      this._stats.feedRefires += 1;
+      this._fireFeedLbs(tile);
+    }
+    return staged.length;
   }
 
   _vacate(tile) {

@@ -397,6 +397,97 @@ await (async () => {
   check(f.feedCalls.length === 144, "no-pack arm: feeds fire");
   check(f.adapter.pins.size === 0, "no-pack arm: no pins");
 })();
+await (async () => {
+  // T20 live-arm fix (2026-08-09): STAGED feed RE-FIRE. The stream-bake
+  // guard is a skip-cap semaphore (fires beyond maxInFlight are DROPPED,
+  // not queued), so an admit burst strands slots in STAGED unless feeds
+  // re-fire. Model the cap: only the first 24 fireLb calls "bake".
+  const f = makeFixture({});
+  let budget = 24;
+  f.feeds.fireLb = (x, y) => {
+    const lb = lbKeyFromXY(x, y);
+    f.feedCalls.push(lb);
+    if (budget > 0) { budget -= 1; if (!f.lru.parked.has(lb)) f.lru.live.add(lb); }
+  };
+  f.adapter.onUpdate(f.grid.update(100, 100));
+  await f.stageAll();
+  f.adapter.tickPromotions();
+  check(f.grid.counts().live === 6 && f.grid.counts().staged === 30,
+    `skip-cap burst strands STAGED (live=${f.grid.counts().live} staged=${f.grid.counts().staged})`);
+  // Re-fire with the cap still exhausted: idempotent, counted, no state flip.
+  const preCalls = f.feedCalls.length;
+  const n1 = f.adapter.refireStagedFeeds();
+  check(n1 === 30, `refire returns STAGED count (got ${n1})`);
+  check(f.feedCalls.length === preCalls + 120, "refire fires 4 LB feeds per STAGED tile");
+  check(f.adapter.getStats().feedRefires === 30, "feedRefires counted");
+  f.adapter.tickPromotions();
+  check(f.grid.counts().live === 6, "still-capped refire promotes nothing");
+  // Nearest-first: re-fired tile order is non-decreasing Chebyshev distance
+  // from the player tile (the legacy PVS distance order).
+  const pt = f.grid.playerTile;
+  const order = [];
+  for (let i = preCalls; i < f.feedCalls.length; i += 4) {
+    const lb = f.feedCalls[i];
+    order.push(tileOfLb((lb >>> 24) & 0xff, (lb >>> 16) & 0xff));
+  }
+  let monotone = true;
+  for (let i = 1; i < order.length; i++) {
+    if (tileChebyshev(order[i], pt) < tileChebyshev(order[i - 1], pt)) monotone = false;
+  }
+  check(monotone, "refire order is nearest-tile-first");
+  // Cap lifts (the guard drains): the next refire completes the grid.
+  budget = 1000;
+  f.adapter.refireStagedFeeds();
+  f.adapter.tickPromotions();
+  check(f.grid.counts().live === 36, "post-drain refire promotes all 36");
+  check(f.adapter.refireStagedFeeds() === 0, "fully-LIVE grid: refire is a no-op");
+  check(f.adapter.auditPins() === 0, "no pin leaks through the refire path");
+})();
+await (async () => {
+  // T20 live-arm fix (2026-08-09): in-window EMPTY RE-ADMIT. A transient
+  // fetch failure (controller drop) drives FETCHING→EMPTY; the tile stays
+  // in window, so no edge admit ever retries it — readmitEmptyTiles() is
+  // the retry actor (1 Hz slice).
+  const f = makeFixture({});
+  f.adapter.onUpdate(f.grid.update(100, 100));
+  // Reject 10 tile fetches (transient, NOT quarantined), resolve the rest.
+  const rejected = [];
+  for (const [tile, p] of [...f.fetches]) {
+    f.fetches.delete(tile);
+    if (rejected.length < 10) { rejected.push(tile); p.reject(new Error("[pack-fetch] dropped: transient")); }
+    else p.resolve({});
+  }
+  await f.settle();
+  check(f.grid.counts().staged === 26, "26 staged after 10 transient drops");
+  check(rejected.every((t) => f.grid.stateOf(t) === "EMPTY"), "dropped tiles sit EMPTY in-window");
+  check(f.adapter.auditPins() === 0, "no pins held for dropped tiles");
+  // The retry actor: re-admit → fetch retried → staged → promoted.
+  const n = f.adapter.readmitEmptyTiles();
+  check(n === 10, `readmit retries all EMPTY window tiles (got ${n})`);
+  check(rejected.every((t) => f.grid.stateOf(t) === "FETCHING"), "re-admitted tiles FETCHING");
+  await f.stageAll();
+  f.adapter.tickPromotions();
+  check(f.grid.counts().live === 36, "recovered to 36 LIVE after readmit");
+  check(f.adapter.readmitEmptyTiles() === 0, "no EMPTY window tiles: readmit is a no-op");
+  check(f.adapter.auditPins() === 0, "no pin leaks through the readmit path");
+})();
+await (async () => {
+  // Readmit NEVER touches QUARANTINED tiles (loud failures stay held by the
+  // controller's authoritative bookkeeping until its timed re-eligibility).
+  const f = makeFixture({});
+  const qt = tileOfLb(100 + 4, 100);
+  f.quarantined.add(qt);
+  f.adapter.onUpdate(f.grid.update(100, 100));
+  for (const [tile, p] of [...f.fetches]) {
+    f.fetches.delete(tile);
+    if (tile === qt) p.reject(new Error("quarantined"));
+    else p.resolve({});
+  }
+  await f.settle();
+  check(f.grid.stateOf(qt) === "QUARANTINED", "loud failure → QUARANTINED");
+  check(f.adapter.readmitEmptyTiles() === 0, "readmit skips QUARANTINED (controller bookkeeping authoritative)");
+  check(f.grid.stateOf(qt) === "QUARANTINED", "quarantined tile untouched by the retry actor");
+})();
 
 // ---------------------------------------------------------------------------
 // PART 7 — park hysteresis + zig-zag + re-adopt

@@ -404,7 +404,7 @@ export const REGISTRY = Object.freeze([
     name: "__hbFetch",
     status: "current",
     reads: "object",
-    evidence: "scene3d/pack_fetch_controller.js:817",
+    evidence: "scene3d/pack_fetch_controller.js:835",
     spec: "pass-10 S3 (pass 3 S9 completed)",
     availability: "flag:?packSource=on",
     note: "PackFetchController surface. wireWaitEvents is THE C5 instrument "
@@ -453,7 +453,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.residency",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6531",
+    evidence: "scene3d/index.js:6548",
     spec: "pass-10 S3 (pass 6 D-06.9.4 + additions)",
     availability: "flag:?slotGrid=on",
     note: "Slot-grid residency surface; successor of __landblockLru.getStats. "

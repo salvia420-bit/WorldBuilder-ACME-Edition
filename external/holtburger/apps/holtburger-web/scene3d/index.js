@@ -6469,6 +6469,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             adapter,
             ladder,
             _lastSliceMs: -Infinity,
+            _lastRefireMs: -Infinity,
             _warned: false,
             tick(currentLbKey, sealedKeepLbKey) {
               try {
@@ -6501,6 +6502,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 adapter.tickPressure(ladder.rung >= 4);
                 ladder.tick();
                 const t = now();
+                // T20 live-arm fix (2026-08-09): the stream-bake guard is a
+                // skip-cap semaphore, not a queue — a seed/teleport admit
+                // burst admits ~6 LB bakes and DROPS the rest, stranding
+                // slots in STAGED (35/36 on the first live arm). Re-fire
+                // feeds for STAGED tiles at 250 ms, nearest-first, through
+                // the same guard (idempotent; see refireStagedFeeds).
+                if (t - this._lastRefireMs >= 250) {
+                  this._lastRefireMs = t;
+                  adapter.refireStagedFeeds();
+                }
                 if (t - this._lastSliceMs >= 1000) {
                   this._lastSliceMs = t;
                   for (const p of sessionPins) {
@@ -6509,6 +6520,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                     }
                   }
                   try { wasmExports.pack_source_enforce?.(t); } catch (_) {}
+                  // T20 live-arm fix (2026-08-09): the retry actor for
+                  // transiently-failed in-window tiles (FETCHING→EMPTY is
+                  // the designed transient path; without this, "a later
+                  // admit retries" never happens for a tile already in
+                  // window — 24/36 slots stranded EMPTY on the first arm).
+                  adapter.readmitEmptyTiles();
                   adapter.auditPins();
                   grid.audit();
                   refreshWasmCensus();
