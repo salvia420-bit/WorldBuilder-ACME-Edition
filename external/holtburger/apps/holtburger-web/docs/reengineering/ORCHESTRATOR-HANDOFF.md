@@ -159,10 +159,23 @@ and armed (see queue-1070/batch-A sessionLog); E4 sheets v2 are on redmi's devic
   (one overnight bake then carries fixed textures + refreshed previews + T13's HBG1
   emission together; T13's agent owns holtburger-tools until it lands, R-MEM1 keeps
   the bake exclusive afterwards).
-- LAUNCHED ~22:55: T13 (geom bundles, wasm slot) + census tex-axis re-key
-  (offline analysis over /mnt/wbterminal2/reeng/T00 snapshots). Orchestrator lane:
-  preview-tier refresh investigation for the 593 repaired ids (pvw source-priority
-  pre>full>extra needs read-verification before the overnight bake).
+- T13: DONE + ORCHESTRATOR-VERIFIED ~20:25 (10 commits 9d6f5205..53c1251a pushed):
+  HBG1 end-to-end behind ?geomBundles DEFAULT-OFF, 4 consumer swaps bisectable,
+  BAKE-CI re-run green by the orchestrator (HBG1 differ 1,927 rows byte-identical,
+  187 s), 54/54 JS suite, both assemble exports in release wasm 6.40 MB. gfxRelief
+  parity note propagated into batch-A E1 (OFF arm URL now carries gfxRelief=off).
+  E1/P-ASSEMBLE/parked-p50 deferred to the GPU batch.
+- TEX-RE-KEY: DONE + APPLIED ~20:00 (proposal b1832ea1; amendments 24de3936):
+  tex axis → array-page tier; R-03 CLOSED-as-measured; T22 sizing unblocked
+  (GATE-POOLS 1070 confirm arm still owed).
+- Preview tier refreshed for all 593 repaired ids (47b234a3) — pre>full>extra
+  priority read-verified; 511 pre + 7 extra replaced, 75 added.
+- BAKE-3 LAUNCHED 20:32:55 (run-world-bake-3.sh → world-packs-v3/, log driver3.log,
+  detached setsid, alone in the jail, fresh dat-shard bin 9649a166 WITH the T13
+  emitter): fixed textures + refreshed previews + GEOM sections in one verified pass.
+  On DONE rc=0: deploy-packs-v3.sh (gates on driver3.log; CAS verify → additive
+  rsync → manifest merge → serve.py --check). Then tomorrow's GPU session (1070 or
+  the R9 290 over cloudflare) runs the FULL batch A — E1/P-ASSEMBLE now unblocked.
 
 ## SESSION CLOSED 2026-08-09 ~19:35 (superseded by the REOPENED block above) — original
 pause state kept for the record:
