@@ -51,7 +51,7 @@
         "Sealed hub: enter and exit both clean — no missing interior cells on enter, no hole in the return surface world on exit",
         "Diag at session end (ON arm): __diag.residency() integrity counters pinLeaks/shiftMismatches/slotDesyncs all 0 (zero-tolerance)",
         "Diag at session end (ON arm): __landblockLru.getStats().gridLruDivergence === 0",
-        "Diag: pressure ladder r4Engagements === 0 on this default-pressure run (r4Engagements > 0 = FAIL per the slotGrid row)",
+        "Diag: pressure ladder r4Engagements — AMENDED per T20 report D4 (2026-08-09): r4Engagements > 0 is EXPECTED on the migration-era ?slotGrid arm (summed 3-instance wasm exceeds 0.94×M3 while the legacy shard cache is live by design until ST10); the ===0 zero-criterion binds at GATE-GRID scoring on a DEFAULT run, NOT on this eye item — score the other counters at zero-tolerance and record the r4 value",
         "0 console errors (allowlist-subtracted) on both arms"
       ],
       "artifacts": [ "screenshot per vantage per arm (walk: start/mid/end frames; teleport: the 4-azimuth sweep)", "ON-arm __diag.residency() + gridLruDivergence dump at session end (archive with RESULTS)" ],
