@@ -52,6 +52,7 @@ import {
   surfacePixelsToHeightTexture,
   surfacePixelsToRoughnessTexture,
   surfacePixelsToAoTexture,
+  getAdapterMaxAnisotropy,
 } from "./adapter.js";
 import { aoMapIntensityValue, materialBakeEnabled } from "./vfx_flags.js";
 import { getQuality } from "./quality.js";
@@ -60,6 +61,22 @@ import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 // point below is inert unless the flag is on AND the GPU reports
 // EXT_texture_compression_bptc, so the RGBA8 path is unchanged by default.
 import { bc7Available, bc7TextureBytes, upgradeMaterialToBc7 } from "./bc7_textures.js";
+// ST5 (`?texCompressedOnly`, SPEC §3 T15; pass 5 D-05.5) — materials BORN
+// compressed from the resident PVW preview; scalars-only surface decode;
+// lane-T full-tier upgrade + worker NRA; demote-to-preview primitive. Every
+// entry point below is inert unless `texCompressedOnlyActive()` (flag ON +
+// BPTC + wasm exports armed + `?packSource` controller armed), so the
+// legacy RGBA8 build is byte-identical by default (the kill path, I7).
+import {
+  texCompressedOnlyActive,
+  texCompressedOnlyNs,
+  parseHbc7,
+  makeBc7Texture,
+  bc7Source,
+  _bumpBc7Stat,
+  atlasRefeed,
+} from "./bc7_textures.js";
+import { transcodeXu7WithNra } from "./xu7_textures.js";
 // Task 4 (2026-08-05): release the CPU-side copy after upload. Default OFF —
 // see `texture_release.js` for the preconditions that gate the flag.
 import { armCpuRelease } from "./texture_release.js";
@@ -3347,6 +3364,15 @@ export class MaterialCache {
     // X6 — same reason: a re-install must be allowed to re-ask for BC7 (the
     // record source's own cache makes the retry free).
     if (this._bc7Asked) this._bc7Asked.delete(did);
+    // ST5 — the retained preview texture (the demote target) frees WITH its
+    // entry. When it is the live `mat.map` it was already collected via
+    // `this.textures`; when a full tier is live, the preview object lives
+    // only here and must be disposed or it leaks a GL handle per eviction.
+    const pvw = this._pvwTexByDid && this._pvwTexByDid.get(did);
+    if (pvw) {
+      this._pvwTexByDid.delete(did);
+      if (!disposables.includes(pvw)) disposables.push(pvw);
+    }
 
     const wasHandedOut = this._matHandedOut.delete(did);
     this._matEvictions += 1;
@@ -4758,6 +4784,17 @@ export class MaterialCache {
     if (this._negCacheEnabled && this.missingSurfaces.has(did)) {
       return this.fallbackMaterial;
     }
+    // ST5 (`?texCompressedOnly`) — compressed-only SYNC build first: scalars
+    // + resident PVW preview, no pixel decode (pass 5 D-05.5). null routes
+    // to the legacy build below (solid/substituted/no-TEXREF/non-resident —
+    // always-correct fail-soft).
+    if (texCompressedOnlyActive()) {
+      const mat = this._tryCompressedOnlyBuild(did);
+      if (mat) {
+        this._noteHandout(did);
+        return mat;
+      }
+    }
     if (this.pendingFetches.has(did)) {
       // The in-flight promise resolves to the material and it goes to THIS
       // caller — mark handed-out now (the DID is not resident yet, so the
@@ -5410,6 +5447,19 @@ export class MaterialCache {
       this._noteHandout(did);
       return this.materials.get(did);
     }
+    // ST5 (`?texCompressedOnly`) — the preloadBatch/bake-worker feed lands
+    // here with pixels ALREADY decoded (the worker instance is not
+    // meta-armed at T15 — see the T15 report); build compressed-only
+    // anyway so the MATERIAL is preview-born + upgrade-wired, and free the
+    // handle. null = legacy install below (fail-soft).
+    if (texCompressedOnlyActive()) {
+      const mat = this._tryCompressedOnlyBuild(did);
+      if (mat) {
+        try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+        this._noteHandout(did);
+        return mat;
+      }
+    }
     // wasm-bindgen wrappers around a null Rust pointer throw on every
     // getter (`.width` / `.height` / `.pixels`), so read them once under
     // a try/catch instead of an inline `sp.width === 0` check. A throw
@@ -5569,75 +5619,373 @@ export class MaterialCache {
         // Evicted / replaced between the ask and the land: leave everything
         // alone (the new material has its own ask).
         if (this.materials.get(d) !== mat) return;
-        const old = res.replaced || null;
-        const tex = mat.map;
-        if (!tex || tex === old) return;
-        // Clones share `map` BY REFERENCE (three's `.clone()` copies the ref),
-        // so every live per-DID variant must be re-pointed BEFORE the RGBA8
-        // twin is freed — otherwise a `?perPolyCull` FrontSide clone or an
-        // EnvCell floor/static-bias clone would sample a disposed texture.
-        // 2026-08-03 — the Luminous path ALIASES the albedo as `emissiveMap`
-        // (`applyFloatLumDiffuse`), so every alias must move with `map` or the
-        // emissive term samples the RGBA8 twin freed below.
-        if (mat.emissiveMap === old) {
-          mat.emissiveMap = tex;
-          mat.needsUpdate = true;
-        }
-        for (const m of [
-          this.frontSideMaterials,
-          this.floorBiasMaterials,
-          this.staticBiasMaterials,
-          this.cellBakedMaterials,
-        ]) {
-          const clone = m && m.get(d);
-          if (!clone) continue;
-          if (clone.map === old) {
-            clone.map = tex;
-            clone.needsUpdate = true;
-          }
-          if (clone.emissiveMap === old) {
-            clone.emissiveMap = tex;
-            clone.needsUpdate = true;
-          }
-        }
-        // VFX component variants are keyed by a composite `(did|setKey|configKey)`
-        // string rather than the bare DID, so they have to be scanned. Dormant
-        // (size 0) unless a frag/MECH-B component built one for this surface.
-        if (this.vfxVariants && typeof this.vfxVariants.values === "function") {
-          for (const v of this.vfxVariants.values()) {
-            if (!v) continue;
-            if (v.map === old) {
-              v.map = tex;
-              v.needsUpdate = true;
-            }
-            if (v.emissiveMap === old) {
-              v.emissiveMap = tex;
-              v.needsUpdate = true;
-            }
-          }
-        }
-        // Re-point cache ownership + rebalance the `?matBudgetMB` accounting
-        // before freeing: `textures` is what `dispose()` walks at teardown and
-        // `_matLru` is what the budget enforcer reads. BC7 is always SMALLER
-        // than its RGBA8 twin, so the delta is negative and `_addMatEntryBytes`
-        // (which ignores <= 0) cannot express it — adjust the entry directly.
-        if (this.textures.get(d) === old) this.textures.set(d, tex);
-        const delta = estimateTextureBytes(tex) - estimateTextureBytes(old);
-        const prev = this._matLru.get(d);
-        if (prev !== undefined && delta !== 0) {
-          const next = Math.max(0, prev + delta);
-          this._matLru.set(d, next); // re-set on an existing key keeps recency
-          this._matLruBytes += next - prev;
-        }
-        try {
-          if (old && typeof old.dispose === "function") old.dispose();
-        } catch (_) {
-          /* fail-soft */
-        }
+        this._repointAlbedoForDid(d, mat, res.replaced || null);
       })
       .catch(() => {
         /* fail-soft: the surface keeps its RGBA8 albedo */
       });
+  }
+
+  /**
+   * Re-point every live holder of `did`'s OLD albedo at the material's
+   * CURRENT `mat.map`, rebalance the `?matBudgetMB` accounting, and dispose
+   * the old texture. Extracted VERBATIM from `_maybeUpgradeToBc7`'s onSwap
+   * (2026-08-09, T15) so the ST5 preview→full swap and the demote primitive
+   * share the one clone/alias walk — logic unchanged.
+   *
+   * @param {number} d surface DID
+   * @param {THREE.Material} mat the cache-resident material (map already
+   *   re-pointed by the caller)
+   * @param {THREE.Texture|null} old the texture being replaced
+   * @param {{dispose?:boolean}} [opts] `dispose:false` keeps `old` alive
+   *   (the ST5 demote path retains the full texture's object only when the
+   *   caller still owns it elsewhere — default true).
+   */
+  _repointAlbedoForDid(d, mat, old, opts = {}) {
+    const tex = mat.map;
+    if (!tex || tex === old) return;
+    // Clones share `map` BY REFERENCE (three's `.clone()` copies the ref),
+    // so every live per-DID variant must be re-pointed BEFORE the RGBA8
+    // twin is freed — otherwise a `?perPolyCull` FrontSide clone or an
+    // EnvCell floor/static-bias clone would sample a disposed texture.
+    // 2026-08-03 — the Luminous path ALIASES the albedo as `emissiveMap`
+    // (`applyFloatLumDiffuse`), so every alias must move with `map` or the
+    // emissive term samples the RGBA8 twin freed below.
+    if (mat.emissiveMap === old) {
+      mat.emissiveMap = tex;
+      mat.needsUpdate = true;
+    }
+    for (const m of [
+      this.frontSideMaterials,
+      this.floorBiasMaterials,
+      this.staticBiasMaterials,
+      this.cellBakedMaterials,
+    ]) {
+      const clone = m && m.get(d);
+      if (!clone) continue;
+      if (clone.map === old) {
+        clone.map = tex;
+        clone.needsUpdate = true;
+      }
+      if (clone.emissiveMap === old) {
+        clone.emissiveMap = tex;
+        clone.needsUpdate = true;
+      }
+    }
+    // VFX component variants are keyed by a composite `(did|setKey|configKey)`
+    // string rather than the bare DID, so they have to be scanned. Dormant
+    // (size 0) unless a frag/MECH-B component built one for this surface.
+    if (this.vfxVariants && typeof this.vfxVariants.values === "function") {
+      for (const v of this.vfxVariants.values()) {
+        if (!v) continue;
+        if (v.map === old) {
+          v.map = tex;
+          v.needsUpdate = true;
+        }
+        if (v.emissiveMap === old) {
+          v.emissiveMap = tex;
+          v.needsUpdate = true;
+        }
+      }
+    }
+    // Re-point cache ownership + rebalance the `?matBudgetMB` accounting
+    // before freeing: `textures` is what `dispose()` walks at teardown and
+    // `_matLru` is what the budget enforcer reads. BC7 is always SMALLER
+    // than its RGBA8 twin, so the delta is negative and `_addMatEntryBytes`
+    // (which ignores <= 0) cannot express it — adjust the entry directly.
+    if (this.textures.get(d) === old) this.textures.set(d, tex);
+    const delta = estimateTextureBytes(tex) - estimateTextureBytes(old);
+    const prev = this._matLru.get(d);
+    if (prev !== undefined && delta !== 0) {
+      const next = Math.max(0, prev + delta);
+      this._matLru.set(d, next); // re-set on an existing key keeps recency
+      this._matLruBytes += next - prev;
+    }
+    if (opts.dispose === false) return;
+    try {
+      if (old && typeof old.dispose === "function") old.dispose();
+    } catch (_) {
+      /* fail-soft */
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // ST5 (`?texCompressedOnly`) — the compressed-only build/upgrade/demote
+  // vertical (pass 5 D-05.5/S4; SPEC §3 T15). Every method below is dead
+  // code unless `texCompressedOnlyActive()`.
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * SYNC compressed-only material build for one surface DID, or null =
+   * "route to the legacy build" (the fail-soft arm, always correct):
+   *
+   *   scalars  = surface_meta_sync(did)   — no pixel decode (D-05.5.1)
+   *   albedo   = PVW payload, resident pack, parseHbc7 → makeBc7Texture
+   *              (full chain ⇒ mips + aniso legal from frame 1 — never
+   *              white, never RGBA8; D-05.5.2)
+   *   full     = lane-T async upgrade (D-05.5.3) when TEXREF declares it
+   *   nra      = worker-derived, attaches async — fail-soft flat until then
+   *
+   * Legacy-routed (returns null) BY DESIGN: solid surfaces (no texture),
+   * palette-substituted class (`palId != 0` / tex-swap alias — the SPEC
+   * §0.4 I3 kept degree), rsIds without a TEXREF row (equipment/dynamic),
+   * non-resident metadata, and — DEVIATION recorded in the T15 report —
+   * TEXREF'd rsIds whose PVW carrier is not YET resident (counted on
+   * `__texStats().coverage`, warned once per rsId; the D-05.5.4
+   * placeholder rule binds when ST7's residency guarantee exists — today
+   * a not-yet-arrived PVW pack routing to placeholder would trade correct
+   * pixels for policy).
+   */
+  _tryCompressedOnlyBuild(did) {
+    const d = did >>> 0;
+    const { wasmNs } = texCompressedOnlyNs();
+    let meta = null;
+    try {
+      const s = wasmNs.surface_meta_sync(d);
+      meta = s ? JSON.parse(s) : null;
+    } catch (_) {
+      meta = null;
+    }
+    if (!meta || meta.kind !== "textured") return null;
+    if (meta.aliased || (meta.palId >>> 0) !== 0) return null; // substituted → legacy decode
+    const rs = meta.rsId >>> 0;
+    if (!rs || rs >>> 24 !== 0x06) return null;
+    const packed = typeof wasmNs.pack_texref === "function" ? wasmNs.pack_texref(rs) : -1;
+    if (packed < 0) return null; // no TEXREF row ⇒ not world-texture content
+    const tierBits = (packed >> 8) & 0xff;
+    let pvwBytes = null;
+    try {
+      pvwBytes = wasmNs.pack_pvw_blocks(rs);
+    } catch (_) {
+      pvwBytes = null;
+    }
+    if (!pvwBytes || pvwBytes.length === 0) {
+      _bumpBc7Stat("texrefMissingPvw");
+      if (!this._pvwWarned) this._pvwWarned = new Set();
+      if (!this._pvwWarned.has(rs)) {
+        this._pvwWarned.add(rs);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[texCompressedOnly] TEXREF'd 0x${rs.toString(16).toUpperCase()} has no resident PVW — legacy decode for now (carrier in flight or bake coverage defect; texrefMissingPvw must read 0 once resident)`,
+        );
+      }
+      return null;
+    }
+    let parsedPvw;
+    try {
+      parsedPvw = parseHbc7(pvwBytes);
+    } catch (e) {
+      // A malformed PVW payload is a bake bug — loud, then legacy (correct
+      // pixels beat policy).
+      // eslint-disable-next-line no-console
+      console.error(`[texCompressedOnly] malformed PVW 0x${rs.toString(16).toUpperCase()}:`, e);
+      return null;
+    }
+    const map = makeBc7Texture(parsedPvw, { anisotropy: getAdapterMaxAnisotropy() });
+    const surfaceTypeFlags = (meta.surfaceType >>> 0) || 0;
+    const category = typeof meta.category === "number" ? meta.category : undefined;
+    const overrides = {
+      roughness: typeof meta.roughnessOverride === "number" ? meta.roughnessOverride : undefined,
+      normalScale: typeof meta.normalScaleOverride === "number" ? meta.normalScaleOverride : undefined,
+    };
+    const surfaceFloats = {
+      translucency: Number.isFinite(meta.translucency) ? meta.translucency : 0.0,
+      luminosity: Number.isFinite(meta.luminosity) ? meta.luminosity : 0.0,
+      diffuse: Number.isFinite(meta.diffuse) ? meta.diffuse : 0.0,
+      // KNOWN GAP (T15 report): palettedness needs the unpacked 0x06 header.
+      // undefined = the decoder's documented 0.5 alpha-ref fail-soft.
+      hasPalette: undefined,
+    };
+    const mat = this._materialFromFlags(surfaceTypeFlags, map, category, null, overrides, null, surfaceFloats);
+    this._attachRoughnessMap(mat, d); // texchan sidecars untouched in v1 (D-05.5)
+    mat.name = `scene3d-surface-${d.toString(16).padStart(8, "0")}`;
+    mat.userData = {
+      ...(mat.userData || {}),
+      surfaceTypeFlags,
+      surfaceCategory: category,
+      surfaceRoughnessOverride: overrides.roughness,
+      surfaceNormalScaleOverride: overrides.normalScale,
+      __cacheOwned: true,
+      // ST5 markers: preview-born; rsId for demote/refeed; full pending
+      // while the lane-T upgrade is in flight (the atlas escape arm keys
+      // its hold-out on this — NOT `__bc7Pending`, which stays legacy-only).
+      __pvwRsId: rs,
+      __texFullPending: (tierBits & 0x2) !== 0,
+    };
+    // The preview texture object is retained for the session (a few tens
+    // of KB CPU-side, pack-shared) — it IS the demote target (D-05.8:
+    // pressure costs sharpness, never blackness).
+    this._pvwTexByDid || (this._pvwTexByDid = new Map());
+    this._pvwTexByDid.set(d, map);
+    this._installCacheEntry(d, mat, map, null, null);
+    _bumpBc7Stat("pvwBuilds");
+    if (this._negCacheEnabled) this.missingSurfaces.delete(d);
+    this._reseatVariantsForDid(d);
+    // Animated SurfaceTextures keep today's frame machinery (RGBA frames
+    // swap over the preview base — motion beats purity during migration).
+    this._maybeSetupSurfaceAnimation(d, mat, map);
+    if ((tierBits & 0x2) !== 0) {
+      this._upgradeCompressedFull(d, mat, rs).catch(() => {
+        /* fail-soft: the surface keeps its preview */
+      });
+    }
+    return mat;
+  }
+
+  /**
+   * Lane-T full-tier upgrade (pass 5 S4): CAS info from the catalog →
+   * controller.need(lane T, hash-on-receipt) → texture worker transcode
+   * (+ half-res NRA rider when normal maps are enabled) → swap via the
+   * shared re-point walk → adopt into the 128 MB record cache →
+   * `atlasRefeed(rsId)` re-home. Falls back to the legacy `xu7_blocks`
+   * record route when the catalog carries no CAS info. Every failure
+   * leaves the material on its preview (counted `fullFailed`).
+   */
+  async _upgradeCompressedFull(did, mat, rs) {
+    const d = did >>> 0;
+    const { wasmNs, controller } = texCompressedOnlyNs();
+    const wantNra = this.normalMapsEnabled ? "half" : null;
+    let out = null;
+    try {
+      let info = null;
+      try {
+        const s = typeof wasmNs.xu7_cas_info === "function" ? await wasmNs.xu7_cas_info(rs) : "";
+        info = s ? JSON.parse(s) : null;
+      } catch (_) {
+        info = null;
+      }
+      if (info && info.url && controller && controller.armed) {
+        const buf = await controller.need(info.url, {
+          lane: "T",
+          component: "texFull",
+          expectedHash: info.sha16 || undefined,
+        });
+        out = await transcodeXu7WithNra(new Uint8Array(buf), wantNra);
+      } else if (typeof wasmNs.xu7_blocks === "function") {
+        // Legacy record route (no CAS info): same bytes, legacy-lane
+        // concurrency share (D-03.10) instead of lane T.
+        const b = await wasmNs.xu7_blocks(rs);
+        if (b && b.length) out = await transcodeXu7WithNra(b, wantNra);
+      }
+    } catch (_) {
+      out = null;
+    }
+    const ud = mat.userData || {};
+    delete ud.__texFullPending;
+    if (!out || !out.parsed) {
+      _bumpBc7Stat("fullFailed");
+      return false;
+    }
+    // Evicted/replaced while in flight: drop the result (the new material
+    // has its own ask).
+    if (this.materials.get(d) !== mat) return false;
+    try {
+      bc7Source()?.adoptParsed(rs, out.parsed);
+    } catch (_) { /* budget adoption is best-effort */ }
+    const old = mat.map;
+    const tex = makeBc7Texture(out.parsed, {
+      wrapS: old ? old.wrapS : undefined,
+      wrapT: old ? old.wrapT : undefined,
+      colorSpace: old && old.colorSpace ? old.colorSpace : undefined,
+      anisotropy: getAdapterMaxAnisotropy(),
+    });
+    mat.map = tex;
+    mat.needsUpdate = true;
+    ud.__bc7 = true;
+    ud.__bc7RsId = rs;
+    // dispose:false — `old` is the retained preview object (`_pvwTexByDid`),
+    // the demote target. Its GPU handle stays live (a handful of KB; freed
+    // with the entry at eviction/teardown).
+    this._repointAlbedoForDid(d, mat, old, { dispose: false });
+    _bumpBc7Stat("fullSwaps");
+    if (out.nra && this.normalMapsEnabled) this._attachWorkerNra(d, mat, out.nra);
+    try {
+      atlasRefeed(rs);
+    } catch (_) { /* producer seam is fail-soft */ }
+    return true;
+  }
+
+  /**
+   * Attach a worker-derived NRA plane (packed R/G = biased normal XY,
+   * B = roughness, A = AO — the terrain channel convention) as the
+   * material's normal map: unpack to RGB8 (z reconstructed), wrap via the
+   * adapter helper, re-point the per-DID variant clones. Half-res planes
+   * are standard practice (D-05.5) — the parity eye-check is E3.
+   */
+  _attachWorkerNra(did, mat, nra) {
+    const d = did >>> 0;
+    try {
+      const { width: w, height: h, plane } = nra;
+      if (!w || !h || !plane || plane.length < w * h * 4) return false;
+      const px = new Uint8Array(w * h * 3);
+      for (let i = 0, p = 0; i < w * h; i += 1, p += 4) {
+        const nx = plane[p] / 127.5 - 1;
+        const ny = plane[p + 1] / 127.5 - 1;
+        const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+        px[i * 3] = plane[p];
+        px[i * 3 + 1] = plane[p + 1];
+        px[i * 3 + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      }
+      const ntex = surfacePixelsToNormalTexture(px, w, h);
+      if (!ntex) return false;
+      if (this.materials.get(d) !== mat) {
+        try { ntex.dispose(); } catch (_) { /* fail-soft */ }
+        return false;
+      }
+      mat.normalMap = ntex;
+      const ns = mat.userData && mat.userData.surfaceNormalScaleOverride;
+      if (Number.isFinite(ns) && mat.normalScale) mat.normalScale.set(ns, ns);
+      mat.needsUpdate = true; // USE_NORMALMAP recompile — once per DID
+      for (const m of [
+        this.frontSideMaterials,
+        this.floorBiasMaterials,
+        this.staticBiasMaterials,
+        this.cellBakedMaterials,
+      ]) {
+        const clone = m && m.get(d);
+        if (clone && !clone.normalMap) {
+          clone.normalMap = ntex;
+          clone.needsUpdate = true;
+        }
+      }
+      this.normalTextures.set(d, ntex);
+      this._addMatEntryBytes(d, estimateTextureBytes(ntex));
+      _bumpBc7Stat("nraAttached");
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * The ST5 demote primitive (pass 5 D-05.8; H-05.1 hands the WIRING to
+   * the residency ladder): shed a full-tier texture's bytes by re-pointing
+   * the material at its permanently-retained preview — pressure costs
+   * sharpness, never blackness, no fetch, no decode. Disposes the full
+   * texture + drops its record-cache entry. Returns false when there is
+   * nothing to demote (never upgraded / already at preview).
+   * Dispose-with-tile-residency stays the residency machinery's job.
+   */
+  demoteToPreview(did) {
+    const d = did >>> 0;
+    const mat = this.materials.get(d);
+    const pvw = this._pvwTexByDid && this._pvwTexByDid.get(d);
+    if (!mat || !pvw || mat.map === pvw) return false;
+    const ud = mat.userData || {};
+    const rs = (ud.__bc7RsId ?? ud.__pvwRsId) >>> 0;
+    const old = mat.map;
+    pvw.needsUpdate = true; // GPU handle may have been released — re-upload
+    mat.map = pvw;
+    mat.needsUpdate = true;
+    delete ud.__bc7;
+    this._repointAlbedoForDid(d, mat, old); // disposes the full texture
+    if (rs) {
+      try {
+        bc7Source()?.dropRecord(rs);
+      } catch (_) { /* record already gone */ }
+    }
+    _bumpBc7Stat("demotions");
+    return true;
   }
 
   /**

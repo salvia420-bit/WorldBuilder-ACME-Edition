@@ -108,7 +108,12 @@ import {
   makeBc7ArrayTexture,
   writeBc7ArrayLayer,
   _bumpBc7Stat,
+  flagIsOff,
+  texCompressedOnlyEnabled,
+  texCompressedOnlyActive,
+  registerAtlasRefeed,
 } from "./bc7_textures.js";
+import { getAdapterMaxAnisotropy } from "./adapter.js";
 import { aoMapIntensityValue } from "./vfx_flags.js";
 import { getQuality } from "./quality.js";
 // 2026-08-03 — the seam-height plane moved out of `material.userData` (three's
@@ -969,6 +974,22 @@ const _buckets = new Map();        // bucketKey -> { bm, w, h, stateKey }
 const _lbMembership = new Map();   // lbKey -> Array<{ bucketKey, gid, texUuid }>
 const _atlasBakedLbs = new Set();  // lbKeys whose singletons are live in the buckets
 
+// ST5 (`?texCompressedOnly`) — re-home bookkeeping, THE CONSCIOUS THROWAWAY
+// (F-11.17: this atlas-side implementation retires at ST9 with the atlas;
+// the `atlasRefeed(rsId)` seam it serves is producer-agnostic and survives).
+// rsId -> members awaiting their full tier:
+//   committed rows (DEFAULT preview-commit arm): the node was batched at
+//     preview dims; `node` is RETAINED with CPU-side geometry attributes
+//     intact (the feed's dispose only frees GL buffers) so the re-home can
+//     re-run the commit path against the full-dim bucket;
+//   held rows (`?atlasPreviewCommit=off` escape): the node passed through
+//     as a scene singleton; the re-feed commits it and removes it from the
+//     scene.
+// Rows die with their LB (`evictStaticAtlasForLb` purges by lbKey) or on
+// re-home. All dead code unless `texCompressedOnlyActive()`.
+const _rsMembers = new Map(); // rsId -> Array<{node, lbKey, row|null}>
+let _lastScene3d = null;      // the feed's scene3d, for refeed-time commits
+
 // Diagnostic (2026-07-14): cumulative passthrough-reason tally + per-bucket fullness, so a
 // census can see WHY a static stays individual — layer-pool-full (capacity) vs never-fed
 // (routing) vs merge-fail. Cheap counters, no behaviour change. Read via window.__atlasStats().
@@ -997,7 +1018,10 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   // surface. Both should stay 0 in a healthy session.
   layerWriteZeroed: 0, ptLayerWriteFail: 0,
   // Per-node exceptions whose partial commit had to be unwound.
-  ptErrorUnwound: 0 };
+  ptErrorUnwound: 0,
+  // ST5 (`?texCompressedOnly` + `atlasRefeed`) re-home tally (pass 5 S8):
+  // all zero unless the compressed-only arm is live.
+  refeeds: 0, rehomedNodes: 0, emptyBucketsGCd: 0, ptFullHoldout: 0 };
 const _uniqueTexUuids = new Set(); // every distinct surface texture ever atlased
 if (typeof window !== "undefined") {
   window.__atlasStats = () => {
@@ -1071,7 +1095,36 @@ function _lbKeyOfId(id) {
  * invisible precisely because nothing tested the predicate itself.
  */
 export function bc7AtlasShouldDefer(mat) {
-  return bc7Available() && bc7PendingOn(mat);
+  if (bc7Available() && bc7PendingOn(mat)) return true;
+  // ST5 ESCAPE arm (`?atlasPreviewCommit=off` under `?texCompressedOnly`):
+  // hold a preview-born node out until its full tier lands — the pre-ST5
+  // deferral shape, now WITH the re-feed hook (`atlasRefeed` re-feeds the
+  // held nodes, so nothing can stick — the F-11.17 fix). The DEFAULT arm
+  // commits immediately at preview dims (D-05.6.3) and never reaches this.
+  if (
+    texCompressedOnlyActive() &&
+    !atlasPreviewCommitEnabled() &&
+    !!(mat && mat.userData && mat.userData.__texFullPending)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * ST5 — `?atlasPreviewCommit` (pass 5 D-05.6.3). DEFAULT ON *under the
+ * compressed-only arm* (meaningless otherwise — nothing sets
+ * `__texFullPending` without it): preview-born nodes commit immediately
+ * into a bucket keyed at preview dims and RE-HOME on upgrade. `=off` (the
+ * `flagIsOff` family escape) restores hold-out-until-full.
+ */
+export function atlasPreviewCommitEnabled(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    return !flagIsOff(new URLSearchParams(s).get("atlasPreviewCommit"));
+  } catch (_) {
+    return true;
+  }
 }
 
 export function isBc7AtlasTexture(tex) {
@@ -1136,7 +1189,11 @@ export function _atlasGrowTargetFor(alloc, needed, capacity) {
   const a = Math.max(1, alloc | 0);
   const cap = Math.max(1, capacity | 0);
   if (a >= cap) return a;
-  return Math.min(cap, Math.max(needed | 0, a * 2));
+  // ST5 (`?texCompressedOnly`): growth step ×1.5 — M6-compliant by
+  // construction (allocated ≤ 1.5× used at every step; pass 5 D-05.6.4),
+  // log-bounded growth count preserved. OFF arm keeps the X7 doubling.
+  const step = texCompressedOnlyEnabled() ? Math.ceil(a * 1.5) : a * 2;
+  return Math.min(cap, Math.max(needed | 0, step));
 }
 
 /** The per-bucket layer CEILING (X7: no longer the allocated depth — see the
@@ -1192,8 +1249,16 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
   // `compressedTexSubImage3D` via `addLayerUpdate` (bc7_textures.js). That is
   // strictly cheaper than the RGBA8 arm, which re-uploads the WHOLE array every
   // time a layer is written (`needsUpdate` on a DataArrayTexture).
+  // ST5 (`?texCompressedOnly`): BC7 buckets allocate the FULL mip chain +
+  // aniso (D-05.6.1 — closes the singleton-vs-atlas asymmetry). OFF arm:
+  // level-0-only, byte-identical pre-ST5 allocation.
   const diffArray = bc7
-    ? makeBc7ArrayTexture(w, h, alloc)
+    ? makeBc7ArrayTexture(
+        w, h, alloc,
+        texCompressedOnlyActive()
+          ? { mipChain: true, anisotropy: getAdapterMaxAnisotropy() }
+          : {},
+      )
     : buildDiffuseArray([], w, h, alloc);
   // X5 — parallel nra array at the SAME depth as the diffuse array, so the
   // layer index addresses both (one `aLayer`, one `vMapUv`). `_layerCapacityFor`
@@ -1299,10 +1364,18 @@ function _growBucketLayers(b, needed) {
   let newNra = null;
   try {
     if (ud.bc7) {
-      const blockStride = bc7LevelBytes(w, h);
-      newDiff = makeBc7ArrayTexture(w, h, target);
-      newDiff.mipmaps[0].data.set(
-        ud.diffArray.mipmaps[0].data.subarray(0, ud.allocLayers * blockStride), 0);
+      // ST5 chain buckets grow chain-shaped (same mip depth + aniso) and
+      // copy EVERY level's live prefix; level-0-only buckets unchanged.
+      const chain = ud.diffArray.mipmaps.length > 1;
+      newDiff = makeBc7ArrayTexture(
+        w, h, target,
+        chain ? { mipChain: true, anisotropy: ud.diffArray.anisotropy } : {},
+      );
+      for (let li = 0; li < ud.diffArray.mipmaps.length; li += 1) {
+        const src = ud.diffArray.mipmaps[li];
+        const stride = bc7LevelBytes(src.width, src.height);
+        newDiff.mipmaps[li].data.set(src.data.subarray(0, ud.allocLayers * stride), 0);
+      }
     } else {
       newDiff = buildDiffuseArray([], w, h, target);
       newDiff.image.data.set(
@@ -1398,6 +1471,9 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
   if (scene3d && scene3d._evictStaticAtlasForLb !== evictStaticAtlasForLb) {
     scene3d._evictStaticAtlasForLb = evictStaticAtlasForLb;
   }
+  // ST5 — retained for `atlasRefeed`-time commits (the re-home runs the
+  // same feed path; the throwaway machinery above).
+  if (scene3d) _lastScene3d = scene3d;
   const touchedDiff = new Set();
   const touchedNra = new Set(); // X5
   const fedLbs = new Set();
@@ -1456,6 +1532,19 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       // NEVER the full record (the full phase deletes the marker before it
       // swaps), so dropping `!bc7Tex` restores exactly the pre-P1 behaviour.
       if (bc7AtlasShouldDefer(mat)) {
+        // ST5 escape arm (`?atlasPreviewCommit=off`): a preview-born hold-out
+        // is TRACKED by rsId so `atlasRefeed` can re-feed it when its full
+        // tier lands — the F-11.17 nothing-can-stick rule. Legacy
+        // `__bc7Pending` deferrals keep the pre-ST5 shape (untracked).
+        const holdRs = texCompressedOnlyActive() && mat.userData && mat.userData.__texFullPending
+          ? (mat.userData.__bc7RsId ?? mat.userData.__pvwRsId) >>> 0
+          : 0;
+        if (holdRs) {
+          let list = _rsMembers.get(holdRs);
+          if (!list) { list = []; _rsMembers.set(holdRs, list); }
+          list.push({ node: n, lbKey: _lbKeyOfId(n.userData?.landblockId), row: null });
+          _atlasStats.ptFullHoldout++;
+        }
         _atlasStats.ptBc7Deferred++; _bumpBc7Stat("deferredNodes"); passthrough.push(n); continue;
       }
       // A MECH-B vertex-deformed variant (deformation.windSwayGpu — swaying
@@ -1503,10 +1592,14 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
           // X6 — one `compressedTexSubImage3D` for THIS layer (block-aligned by
           // construction: every layer is `ceil(w/4)*ceil(h/4)*16` bytes and the
           // array's dims equal the payload's, enforced by the bucket key).
+          // ST5 chain buckets consume the member texture's FULL chain (the
+          // writer refuses a shallow payload LOUDLY — bake defect class).
           const ok = writeBc7ArrayLayer(ud.diffArray, layer, {
             width: w,
             height: h,
-            levels: [{ data: tex.mipmaps[0].data, width: w, height: h }],
+            levels: ud.diffArray.mipmaps.length > 1
+              ? tex.mipmaps
+              : [{ data: tex.mipmaps[0].data, width: w, height: h }],
           });
           if (ok) { _atlasStats.bc7Layers++; _bumpBc7Stat("atlasLayers"); }
           else {
@@ -1596,8 +1689,21 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const lbKey = _lbKeyOfId(n.userData?.landblockId);
       let list = _lbMembership.get(lbKey);
       if (!list) { list = []; _lbMembership.set(lbKey, list); }
-      list.push({ bucketKey, gid, iid, texUuid: uuid }); // iid: Phase 9a park hide/show seam
+      const row = { bucketKey, gid, iid, texUuid: uuid }; // iid: Phase 9a park hide/show seam
+      list.push(row);
       fedLbs.add(lbKey);
+      // ST5 DEFAULT arm (preview-commit, D-05.6.3): a node committed while
+      // its full tier is in flight is tracked by rsId for the re-home. The
+      // node object is retained — its geometry's CPU attributes survive the
+      // GL-buffer dispose below, which is what the refeed re-merges from.
+      if (texCompressedOnlyActive() && mat.userData && mat.userData.__texFullPending) {
+        const rsKey = (mat.userData.__bc7RsId ?? mat.userData.__pvwRsId) >>> 0;
+        if (rsKey) {
+          let rlist = _rsMembers.get(rsKey);
+          if (!rlist) { rlist = []; _rsMembers.set(rsKey, rlist); }
+          rlist.push({ node: n, lbKey, row });
+        }
+      }
       // free the consumed source geometry's GPU buffer (mirrors the merge path).
       try { n.geometry?.dispose?.(); } catch (_) {}
       _atlasStats.atlased++;
@@ -1679,7 +1785,82 @@ export function evictStaticAtlasForLb(lbKey) {
   }
   _lbMembership.delete(key);
   _atlasBakedLbs.delete(key);
+  // ST5 — re-home rows owned by this LB die with it (their nodes/gids are
+  // gone; a later refeed must not touch them).
+  if (_rsMembers.size > 0) {
+    for (const [rs, list] of _rsMembers) {
+      const kept = list.filter((m) => m.lbKey !== key);
+      if (kept.length === 0) _rsMembers.delete(rs);
+      else if (kept.length !== list.length) _rsMembers.set(rs, kept);
+    }
+  }
 }
+
+/**
+ * ST5 — the atlas-side `atlasRefeed(rsId)` producer implementation
+ * (registered below; F-11.17: CONSCIOUS THROWAWAY — retires at ST9 when
+ * pools subsume the atlas; the seam it serves is producer-agnostic).
+ *
+ * DEFAULT arm: every member committed at preview dims is excised from its
+ * preview-dim bucket (delete + layer decref + membership-row removal) and
+ * re-fed — the material's map is the full tier by the time this runs, so
+ * the normal feed path commits it into the full-dim bucket. ESCAPE arm
+ * (`?atlasPreviewCommit=off`): held-out scene singletons re-feed; ones
+ * that commit leave the scene. Emptied preview buckets are torn down by
+ * the optimize-pass GC.
+ */
+function _atlasRefeedImpl(rsId) {
+  const rs = rsId >>> 0;
+  const list = _rsMembers.get(rs);
+  if (!list || list.length === 0) return 0;
+  _rsMembers.delete(rs);
+  _atlasStats.refeeds += 1;
+  const toFeed = [];
+  for (const m of list) {
+    if (m.row) {
+      const b = _buckets.get(m.row.bucketKey);
+      if (b) {
+        const bm = b.bm;
+        const ud = bm.userData;
+        try { bm.deleteGeometry(m.row.gid); } catch (_) { /* fail-soft */ }
+        const dead = ud.gidVerts.get(m.row.gid);
+        if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(m.row.gid); }
+        const entry = ud.layerOf.get(m.row.texUuid);
+        if (entry && --entry.refs <= 0) {
+          ud.freeLayers.push(entry.layer);
+          ud.layerOf.delete(m.row.texUuid);
+        }
+        _dirtyBuckets.add(m.row.bucketKey);
+      }
+      // Identity-remove the membership row so LB eviction cannot
+      // double-free the gid this re-home just excised.
+      const mlist = _lbMembership.get(m.lbKey);
+      if (mlist) {
+        const i = mlist.indexOf(m.row);
+        if (i >= 0) mlist.splice(i, 1);
+        if (mlist.length === 0) _lbMembership.delete(m.lbKey);
+      }
+      _atlasStats.rehomedNodes += 1;
+    }
+    if (m.node) toFeed.push(m.node);
+  }
+  if (toFeed.length > 0 && _lastScene3d) {
+    try {
+      const { passthrough } = addSingletonsToCrossLbAtlas(toFeed, _lastScene3d);
+      // Escape-arm singletons that just COMMITTED must leave the scene
+      // (they were scene-added as passthrough at hold-out time). Committed
+      // preview-arm nodes were never scene-resident — parent is null.
+      const pt = new Set(passthrough);
+      for (const n of toFeed) {
+        if (!pt.has(n) && n.parent) {
+          try { n.parent.remove(n); } catch (_) { /* fail-soft */ }
+        }
+      }
+    } catch (_) { /* fail-soft: nodes keep their current form */ }
+  }
+  return list.length;
+}
+registerAtlasRefeed(_atlasRefeedImpl);
 
 /**
  * Phase 9a warm-park (W4 §3.2): hide an LB's atlas instances WITHOUT
@@ -1781,6 +1962,28 @@ export function tickStatAtlasOptimize() {
     }
   }
   _dirtyBuckets.clear();
+  // ST5 — empty-bucket GC (D-05.6.3): buckets emptied by re-homes (typically
+  // preview-dim ones) are torn down on this pass. Flag-gated: the OFF arm
+  // keeps its session-lived buckets exactly as before. A bucket is created
+  // and first-written inside ONE synchronous feed, so "empty at tick time"
+  // is never a freshly-created bucket mid-feed.
+  if (texCompressedOnlyActive()) {
+    for (const [key, b] of [..._buckets]) {
+      const ud = b.bm && b.bm.userData;
+      if (!ud || ud.layerOf.size > 0 || ud.gidVerts.size > 0) continue;
+      try { b.bm.parent && b.bm.parent.remove(b.bm); } catch (_) { /* fail-soft */ }
+      try { ud.diffArray?.dispose?.(); } catch (_) { /* fail-soft */ }
+      try { ud.nraArray?.dispose?.(); } catch (_) { /* fail-soft */ }
+      try { b.bm.material?.dispose?.(); } catch (_) { /* fail-soft */ }
+      try { b.bm.geometry?.dispose?.(); } catch (_) { /* fail-soft */ }
+      _buckets.delete(key);
+      _atlasStats.emptyBucketsGCd += 1;
+      // Orphaned async nra re-pack rows for this bucket die with it.
+      for (let i = _nraPending.length - 1; i >= 0; i -= 1) {
+        if (_nraPending[i].ud === ud) _nraPending.splice(i, 1);
+      }
+    }
+  }
 }
 
 // ===========================================================================
@@ -2316,6 +2519,8 @@ export function _resetStatAtlasForTest(opts = {}) {
   _dirtyBuckets.clear();
   _nraPending.length = 0;
   _uniqueTexUuids.clear();
+  _rsMembers.clear();
+  _lastScene3d = null;
   for (const k of Object.keys(_atlasStats)) _atlasStats[k] = 0;
   _growFlag = typeof opts.grow === "boolean" ? opts.grow : undefined;
   _nraFlag = typeof opts.nra === "boolean" ? opts.nra : undefined;

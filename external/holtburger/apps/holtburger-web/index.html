@@ -2814,6 +2814,38 @@
           } catch (e) {
             console.error("[bc7] loader failed (non-fatal):", e);
           }
+          // ST5 `?texCompressedOnly` (T15) — arm the compressed-only texture
+          // path: PVW frame-1 materials + lane-T full upgrades need BOTH the
+          // wasm exports (surface_meta_sync / pack_pvw_blocks / pack_texref /
+          // xu7_cas_info) AND the armed pack controller (the flag REQUIRES
+          // `?packSource`). The curated-bag lesson (T20 D3) applies: the
+          // exports are passed HERE explicitly or the path silently no-ops.
+          // Fail-soft + self-gating: flag absent / legacy dist / stale pkg all
+          // leave every consumer on the byte-identical legacy build.
+          try {
+            const bc7mod2 = await import("./scene3d/bc7_textures.js");
+            if (bc7mod2.texCompressedOnlyEnabled()) {
+              if (typeof __hbWasmNs.surface_meta_sync !== "function") {
+                console.error(
+                  "[texCompressedOnly] flag ON but wasm export `surface_meta_sync` is missing — stale pkg/ build? Rebuild wasm-pack."
+                );
+              } else if (!__packCtl || !__packCtl.armed) {
+                console.warn(
+                  "[texCompressedOnly] flag ON but the pack controller is not armed (`?packSource` off or legacy dist) — compressed-only path disarmed (legacy build)."
+                );
+              } else {
+                bc7mod2.initTexCompressedOnly({ wasmNs: __hbWasmNs, controller: __packCtl });
+                console.log(
+                  "[texCompressedOnly] armed:",
+                  bc7mod2.texCompressedOnlyActive()
+                    ? "ACTIVE (pending BPTC probe at init3D)"
+                    : "waiting on BPTC probe (bc7Available)"
+                );
+              }
+            }
+          } catch (e) {
+            console.error("[texCompressedOnly] loader failed (non-fatal):", e);
+          }
           // Host-flag readback (defects 1/4) — same shape the bake worker logs
           // at the end of its init, so the two are directly diffable. Namespace
           // access (not a named import) so a stale pkg yields undefined instead
