@@ -1,0 +1,115 @@
+{
+  "schema": "hb-1070-queue-v1",
+  "batch": "C",
+  "created": "2026-08-09T00:00:00Z",
+  "owner": "redmi",
+  "preparedBy": "T32 (queue prep only; execution owner-gated)",
+  "sessionRules": "vistest-preamble-v1",
+  "sessionRulesText": [
+    "NORMATIVE PREAMBLE (pass-10 D-10.8, restated; fleet runbook is the source of record):",
+    "Off-screen/headless ONLY: test Chrome launches --window-position=-32000,-32000 --mute-audio (VERIFY muted+off-screen before any login; no sound may ever reach the 1070's user).",
+    "Interactive-session Chrome only, CDP :9333; match/kill test Chrome by --user-data-dir=C:\\Temp\\cdpwb-* ONLY; NEVER browser.close(), never taskkill /IM chrome.exe.",
+    "Tunnel (all three forwards or logins die): ssh -o ExitOnForwardFailure=yes -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 young@100.127.215.75 (laptop runs serve.py :8765 + holtburger-wsbridge :8080).",
+    "?nosw=1 on EVERY URL. Fresh --user-data-dir per BENCH arm; eye items may share one session. Accounts single-login: >=25 s gap between logins or 'Account In Use' boots both.",
+    "__bootState gate accepts 'ready'|'in-world'; wait 'ready' before __set*/atmosphere helpers; confirm streaming via terrainBakedLbs plateau, not pose.landblockId.",
+    "Verdicts (CLEAN/DIRTY + notes,ts,by) are written back INTO THIS FILE (authoritative for eye verdicts) AND into docs/url-flags.md §0 rows; bench results go to RESULTS-v2 files with pointers recorded here.",
+    "Screenshots are owner-eye artifacts, archived with RESULTS, never pixel-diffed as evidence (PR-8).",
+    "Run validity: release wasm only (pkg/*.wasm ~4.5 MB; ~18 MB = dev = INVALID), serve.py --check green, bare-default boot loads with 0 console errors before any arm."
+  ],
+  "batchPrerequisites": [
+    "E5: T20 stage-4 report GREEN (the live arm). Stages 1-3 are landed at prep time (432e8791 grid core, 4a07e021 PackStore Rust half, b98d315c adapter + assert-only LRU); stage 4 was queued this session — the E5 item below is written against the LANDED `?slotGrid` arm and must not run before the stage-4 report.",
+    "E6: T22 (ST9, `?drawPools`) LANDED — flag is SPEC-named but NOT at HEAD 2026-08-09, as are its required companions `?geomBundles` (T13) and `?texCompressedOnly` (T15) per the F-11.3 requirement chain. Re-verify all three readers + URL spellings against their url-flags.md rows at go-time.",
+    "Full-world DUAL dist (packs + legacy layers) deployed and serve.py --check green — both arms of every eye pair run against the SAME dist.",
+    "E5 pull-in option (pass-9 D-09.5): if T20 stage-4 is green before Batch B runs, item E5 may be pulled into the Batch B session UNCHANGED."
+  ],
+  "urlBase": "http://127.0.0.1:8765/apps/holtburger-web/index.html",
+  "urlNotes": "Login contract params (read-verified: index.html bootParams; url-flags.md contract-param row): autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first. camDebug=on installs window.__cam (camera.js:417 `=== \"on\"`); vantage poses use __cam.player(dist, azDeg, elDeg) after @telepoi. `?slotGrid` is EXACT-MATCH opt-in (on/1/true/yes; residency_grid.js:67 slotGridEnabled) and REQUIRES `?packSource=on` (SPEC D-12.4) — authored without it the grid DISARMS with a loud console error and legacy residency stays in charge. kickDance was REMOVED s13 (no reader) — do not add it.",
+  "items": [
+    {
+      "id": "E5",
+      "kind": "eye",
+      "stage": "ST7",
+      "gate": "GATE-GRID",
+      "prerequisite": "T20 stage-4 report green (batch prerequisite 1). Flags on the ON arm read-verified at HEAD: slotGridEnabled (residency_grid.js:67, EXACT-MATCH) + packSourceEnabled (pack_fetch_controller.js:62, EXACT-MATCH).",
+      "structuralChange": "slot grid as residency AUTHORITY for statics/buildings/cells (pass 6 H-06.3): W_T=6 grid + six-state slot machine + grid->legacy-producer adapter; legacy LRU assert-only; governor/floor-zeroing deleted on this arm, replaced by the 4-rung pressure ladder",
+      "urls": {
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on&packSource=on&slotGrid=on",
+        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
+      },
+      "vantages": [
+        { "name": "shift-boundary-walk", "tele": "@telepoi Holtburg", "cam": null,
+          "note": "WALK (keyboard, real GPU) one straight run of at least 6 LBs from town into open terrain — the grid shifts in place every 2 LBs, so this crosses >=3 shift boundaries. Watch the leading and trailing grid edges the whole run. Repeat the same run on the OFF arm." },
+        { "name": "teleport-arrival", "tele": "@telepoi n", "cam": { "player": { "dist": 40, "az": 0, "el": 25 } },
+          "note": "Anchor delta >= 6 LBs => whole-grid invalidate + amortized park drain. After settle (terrainBakedLbs plateau), sweep the camera 360 (az 0/90/180/270 at dist 40) checking arrival completeness. BENCH-TELEPORT is the CI timing arm; this is the completeness EYE." },
+        { "name": "sealed-hub-enter-exit", "tele": "@telepoi Town Network", "cam": null,
+          "note": "Sealed interior: grid freeze + amortized park drain + pinned return core. Enter, roam the hub ~1 min, exit through a portal back to the surface; watch both transitions." }
+      ],
+      "checklist": [
+        "Walk: NO seams/holes/ghost tiles at grid edges across every shift boundary (statics, buildings, terrain all present at the edge)",
+        "Walk: nothing visibly parks/vacates inside the view ring during forward motion",
+        "Teleport: arrival completeness — after settle, no permanently missing tiles/buildings/statics in the 360 sweep",
+        "Sealed hub: enter and exit both clean — no missing interior cells on enter, no hole in the return surface world on exit",
+        "Diag at session end (ON arm): __diag.residency() integrity counters pinLeaks/shiftMismatches/slotDesyncs all 0 (zero-tolerance)",
+        "Diag at session end (ON arm): __landblockLru.getStats().gridLruDivergence === 0",
+        "Diag: pressure ladder r4Engagements === 0 on this default-pressure run (r4Engagements > 0 = FAIL per the slotGrid row)",
+        "0 console errors (allowlist-subtracted) on both arms"
+      ],
+      "artifacts": [ "screenshot per vantage per arm (walk: start/mid/end frames; teleport: the 4-azimuth sweep)", "ON-arm __diag.residency() + gridLruDivergence dump at session end (archive with RESULTS)" ],
+      "verdict": null
+    },
+    {
+      "id": "E6",
+      "kind": "eye",
+      "stage": "ST9",
+      "gate": "GATE-POOLS",
+      "prerequisite": "T22 landed (batch prerequisite 2) — `?drawPools` requires `?slotGrid` + `?packSource` + `?geomBundles` + `?texCompressedOnly` (F-11.3), `?frameWork` ON for stages B/C (frameWorkEnabled landed + read-verified at HEAD, scene3d/frame_work.js). ON-arm URL below carries the full SPEC-named chain; only packSource/slotGrid/frameWork exist at HEAD 2026-08-09 — re-verify the rest at go-time.",
+      "structuralChange": "first pooled world + class-keyed materials + receiveShadow coarsening (pass 7 H-07.2/Q7): BatchedMesh pools, class-key material tier, sector cull, buildings generalize receiveShadow",
+      "urls": {
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on",
+        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
+      },
+      "vantages": [
+        { "name": "holtburg-town", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 26, "az": 35, "el": 18 } },
+          "note": "Town pass-membership pass: hunt known translucents (water, windows, foliage cards, particle-backed props) — the ClipMap item itself." },
+        { "name": "holtburg-floors", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 12, "az": 300, "el": 35 } },
+          "note": "Depth-bias classes: look down at building floors/steps/decals from above — z-fighting shows here first." },
+        { "name": "shadowed-town", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 30, "az": 150, "el": 10 } },
+          "note": "The receiveShadow generalization vantage (pass-10 debt row 38): buildings inside cast shadow — compare shadow reception on walls/roofs vs the OFF arm at the same sun angle (same session time-of-day both arms)." },
+        { "name": "town-network-hub", "tele": "@telepoi Town Network", "cam": null,
+          "note": "Dense sealed hub: pass membership at scale + ENVCELL BAKED-LIGHT PARITY — interior lightmap look must match the OFF arm." }
+      ],
+      "checklist": [
+        "Pass membership: every known-translucent object is STILL translucent (ClipMap regression class); no opaque-pass leaks, no newly-transparent opaques",
+        "Depth-bias classes: floors/decals not z-fighting anywhere in the floors vantage",
+        "Shadowed-town: buildings receive shadows plausibly on the ON arm (coarsening acceptable, absence/acne/peter-panning not) vs the OFF arm",
+        "Envcell baked-light parity in Town Network: interior lighting matches the OFF arm (no washed-out or doubled lightmaps)",
+        "Silhouettes/winding sane at pool scale (no inside-out or missing pooled instances)",
+        "0 console errors (allowlist-subtracted) on both arms"
+      ],
+      "artifacts": [ "screenshot per vantage per arm (identical poses + same time-of-day)", "ON-arm class-census/diag snapshot if T22 lands one (pools count, classesCreatedPostBoot) — archive with RESULTS" ],
+      "verdict": null
+    },
+    {
+      "id": "MOVE-FIX-ST9",
+      "kind": "bench",
+      "rider": true,
+      "gate": "GATE-POOLS (creates the F3/F4 moving baselines on first accepted run, scores the kill; pass-10 S10 names this rider in its example)",
+      "prerequisite": "T22 landed. moving-bench.mjs exists at HEAD (harness/moving-bench.mjs; fixed-pose PC-3 discipline: frame-indexed pose table, pinned anchor, warm lap + identical measure lap). Fresh --user-data-dir PER ARM.",
+      "cmd": "node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 --account=tailnet1 --poi=n --frames=1800 --arm=<arm>  (exact anchor/pose-table args per the harness header at go-time)",
+      "arms": [ "drawPools=on (full F-11.3 chain as in E6.urls.on)", "drawPools=off (bare legacy)" ],
+      "out": [ "RESULTS-v2 files (mb-on.json / mb-off.json class); pointers recorded here" ],
+      "result": null
+    },
+    {
+      "id": "GATE-GRID-BENCH-SET",
+      "kind": "bench",
+      "rider": true,
+      "gate": "GATE-GRID (M1/M2 MEM-ROUTE vs legacy arm; TAIL-ULTRA governor bucket; BENCH-ZIGZAG reAdoptCancels-absorbing + BENCH-TELEPORT 1070 arms)",
+      "prerequisite": "T20 stage-4 green; harness entry points confirmed/filled by the T20 stage-4 report or orchestrator at go-time (cmd null = NOT executable yet). BENCH-ZIGZAG/BENCH-TELEPORT also run as CI (S11) — only the 1070 confirm arms ride this batch.",
+      "cmd": null,
+      "arms": [ "packSource=on&slotGrid=on", "legacy (no flags)" ],
+      "out": [ "RESULTS-v2 files; pointers recorded here" ],
+      "result": null
+    }
+  ]
+}

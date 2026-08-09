@@ -1,0 +1,166 @@
+{
+  "schema": "hb-1070-queue-v1",
+  "batch": "B",
+  "created": "2026-08-09T00:00:00Z",
+  "owner": "redmi",
+  "preparedBy": "T31 (queue prep only; execution owner-gated)",
+  "sessionRules": "vistest-preamble-v1",
+  "sessionRulesText": [
+    "NORMATIVE PREAMBLE (pass-10 D-10.8, restated; fleet runbook is the source of record):",
+    "Off-screen/headless ONLY: test Chrome launches --window-position=-32000,-32000 --mute-audio (VERIFY muted+off-screen before any login; no sound may ever reach the 1070's user).",
+    "Interactive-session Chrome only, CDP :9333; match/kill test Chrome by --user-data-dir=C:\\Temp\\cdpwb-* ONLY; NEVER browser.close(), never taskkill /IM chrome.exe.",
+    "Tunnel (all three forwards or logins die): ssh -o ExitOnForwardFailure=yes -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 young@100.127.215.75 (laptop runs serve.py :8765 + holtburger-wsbridge :8080).",
+    "?nosw=1 on EVERY URL. Fresh --user-data-dir per BENCH arm; eye items may share one session. Accounts single-login: >=25 s gap between logins or 'Account In Use' boots both.",
+    "__bootState gate accepts 'ready'|'in-world'; wait 'ready' before __set*/atmosphere helpers; confirm streaming via terrainBakedLbs plateau, not pose.landblockId.",
+    "Verdicts (CLEAN/DIRTY + notes,ts,by) are written back INTO THIS FILE (authoritative for eye verdicts) AND into docs/url-flags.md §0 rows; bench results go to RESULTS-v2 files with pointers recorded here.",
+    "Screenshots are owner-eye artifacts, archived with RESULTS, never pixel-diffed as evidence (PR-8).",
+    "Run validity: release wasm only (pkg/*.wasm ~4.5 MB; ~18 MB = dev = INVALID), serve.py --check green, bare-default boot loads with 0 console errors before any arm."
+  ],
+  "batchPrerequisites": [
+    "T15 (ST5, `?texCompressedOnly`) LANDED with its node battery green — flag is SPEC-named but NOT at HEAD 2026-08-09 (T31 prep precedes T15 per the T31-gates-T15 queue order); re-verify the reader's exact-match semantics + any URL spelling against T15's url-flags.md row at go-time.",
+    "Full-world DUAL dist (packs + legacy layers) deployed and serve.py --check green — the T10 buildbox handoff; both arms of every eye pair must run against the SAME dist.",
+    "E4 additionally: T16 (ST6) q75 corpus baked and its contact sheets regenerated at /mnt/wbterminal2/xubc7-proto/results/sheets/ (dir exists at prep time but holds the earlier proto q20/ab pairs, not q75).",
+    "E5 pull-in option (pass-9 D-09.5): if T20 stage-4's report is green before this session runs, item E5 may be pulled from batch-C-2026-08-09.json into this session UNCHANGED."
+  ],
+  "urlBase": "http://127.0.0.1:8765/apps/holtburger-web/index.html",
+  "urlNotes": "Login contract params (read-verified: index.html bootParams; url-flags.md contract-param row): autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first. renderer defaults to 3d (only renderer=2d diverts). kickDance was REMOVED s13 (no reader; L3 lint fails re-emitters) — do not add it. camDebug=on installs window.__cam (camera.js:417 `=== \"on\"`); vantage poses use __cam.player(dist, azDeg, elDeg) after @telepoi, per the cam fields below.",
+  "items": [
+    {
+      "id": "E2",
+      "kind": "eye",
+      "stage": "ST5",
+      "gate": "GATE-TEX",
+      "prerequisite": "T15 landed (batch prerequisite 1); `?texCompressedOnly` requires `?packSource=on` (SPEC T15 card) and uses `?texWorkers=on` (both landed + read-verified at HEAD: packSourceEnabled pack_fetch_controller.js:62, texWorkersEnabled xu7_textures.js:657, both EXACT-MATCH opt-in).",
+      "structuralChange": "frame-1 preview world + preview-commit/re-home atlas (pass 5 D-05.5/D-05.6.3); terrain tier ladder t128 -> converged -> t1024 on lane T (SPEC 0.2.1)",
+      "urls": {
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on&packSource=on&texWorkers=on&texCompressedOnly=on",
+        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
+      },
+      "vantages": [
+        { "name": "boot-sequence-holtburg", "tele": "(spawn; no tele — watch from frame 1)", "cam": null,
+          "note": "Observe the ON-arm boot from first render: this vantage is a SEQUENCE, not a still. Capture periodic screenshots from first paint to converged." },
+        { "name": "nanto-town-props", "tele": "@telepoi n", "cam": { "player": { "dist": 26, "az": 35, "el": 18 } },
+          "note": "Dense prop town — the 79%-held-out prop class (now batched on the ON arm). Same pose both arms." },
+        { "name": "nanto-terrain-ladder", "tele": "@telepoi n", "cam": { "player": { "dist": 120, "az": 200, "el": 25 } },
+          "note": "Wide terrain view held across the t128->t1024 lane-T swap (post-converged); watch the swap seam live, then screenshot before/after." }
+      ],
+      "checklist": [
+        "Never-white materials: NO frame-1 white material anywhere in the boot sequence (zero-tolerance — also a console/diag gate at GATE-TEX)",
+        "Preview->full sharpening proceeds without flicker or holes",
+        "The 79%-held-out prop class (batched on the ON arm) renders CORRECT vs the OFF arm",
+        "Array mip/aniso parity vs singleton textures (no shimmer/blur delta at grazing angles)",
+        "Terrain t128->t1024 swap seam: invisible or transient-only; no persistent tile mismatch"
+      ],
+      "artifacts": [ "screenshot per vantage per arm (boot vantage: sequence frames)", "ON-arm __hbFetch + texture-diag snapshot at converged (archive with RESULTS)" ],
+      "verdict": null
+    },
+    {
+      "id": "E3",
+      "kind": "eye",
+      "stage": "ST5",
+      "gate": "GATE-TEX",
+      "prerequisite": "T15 landed (same as E2; NRA derive itself landed at T14: `want.nra` + workerDeriveNra, zero production callers until ST5).",
+      "structuralChange": "worker-derived half-res NRA replaces full-res Sobel-from-RGBA8 (pass 5 Q3)",
+      "urls": {
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on&packSource=on&texWorkers=on&texCompressedOnly=on",
+        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
+      },
+      "vantages": [
+        { "name": "holtburg-stone", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 10, "az": 315, "el": 8 } },
+          "note": "Close-range stone walls/cottages — relief detail. Side-by-side: same pose both arms." },
+        { "name": "holtburg-wood", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 8, "az": 120, "el": 10 } },
+          "note": "Wood surfaces (palisade/beams) at grazing light." },
+        { "name": "nanto-metal", "tele": "@telepoi n", "cam": { "player": { "dist": 8, "az": 45, "el": 12 } },
+          "note": "Metal-class surfaces (roofs/fittings)." }
+      ],
+      "checklist": [
+        "Relief/shading parity on the STONE class vs the OFF arm (no flattening)",
+        "Relief/shading parity on the WOOD class (no flattening)",
+        "Relief/shading parity on the METAL class (no flattening, no specular blowout delta)",
+        "No new normal-map artifacts (stairstepping/inversion) attributable to half-res derivation"
+      ],
+      "artifacts": [ "screenshot per vantage per arm, identical poses (owner compares side-by-side)" ],
+      "verdict": null
+    },
+    {
+      "id": "E4",
+      "kind": "eye",
+      "stage": "ST6",
+      "gate": "GATE-Q75",
+      "owner": "redmi",
+      "prerequisite": "T16 (ST6) q75 no-RDO full-tier corpus baked (buildbox) + sheets regenerated; dist-level arm (no client flag — clients see the TEXREF `lossy` bit; manifest points at either corpus, both CAS).",
+      "structuralChange": "q75 lossy full-tier corpus replaces lossless (pass 5 D-05.3)",
+      "urls": {
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on  (against the q75 dist)",
+        "off": "same URL against the lossless dist (dist-level arm — the manifest repoint IS the arm switch)"
+      },
+      "vantages": [
+        { "name": "contact-sheets", "tele": "(desk review, not in-world)", "cam": null,
+          "note": "Review the T16-regenerated contact sheets at /mnt/wbterminal2/xubc7-proto/results/sheets/ (q75 vs lossless pairs)." },
+        { "name": "painted-emblem-pass", "tele": "@telepoi Holtburg then @telepoi n", "cam": { "player": { "dist": 6, "az": 0, "el": 5 } },
+          "note": "In-world close pass over PAINTED and EMBLEM surfaces (signage, heraldry, painted trim) — the classes most exposed to q75 banding/mush. Owner roams; the pose is a starting point." }
+      ],
+      "checklist": [
+        "Sheets: no objectionable banding/blocking/mush on painted+emblem rows at q75",
+        "In-world: painted surfaces hold up at close range on the q75 arm",
+        "In-world: emblem/heraldic detail legible, no ringing at edges",
+        "DIRTY consequence understood: corpus STAYS LOSSLESS and classifier-mixed encode becomes the follow-up (pass-9 D-09.5 E4 row)"
+      ],
+      "artifacts": [ "sheet annotations (which rows, if any, fail)", "screenshots of any in-world failure surfaces" ],
+      "decisionsInWriting": {
+        "note": "SPEC 3 T16: BOTH decisions are recorded IN WRITING at ST6 (owner-decision register R-04); this file + the T16 report are the record.",
+        "q75Verdict": { "framing": "(1) the q75 verdict — DIRTY => stay lossless, classifier-mixed is the follow-up", "decision": null, "ts": null, "by": null },
+        "b4aElection": { "framing": "(2) the B4a election (SPEC 0.2.1): accept default (B4a <= 65 MB gated, expected ~63 at q75) / t1024-in-converged with B4a restated ~144 / rdo arm ~42", "decision": null, "ts": null, "by": null }
+      },
+      "verdict": null
+    },
+    {
+      "id": "D5-SHELL-EYE",
+      "kind": "eye",
+      "stage": "ST-SHELL",
+      "gate": "(none — B2 ledger / T11 D4-D5 validation floor; DIRTY blocks the shell default repoint, not a stage gate)",
+      "prerequisite": "None beyond the dual dist: T11 landed (85a50065, 14cb0671, a451e81c); the bundled arm is index-bundled.html against the same tree.",
+      "structuralChange": "T11 D5 (impl/task-T11-report.md): query-forked duplicate module instances COLLAPSE on the bundled arm (HEAD loads statics.js/buildings.js/scene3d-index twice via `?v=phase7-par` forks; esbuild merges each pair to ONE instance). Plus D4: plugin-shared deps double-instance (one bundled copy + one unbundled). Queued in Batch B by T31 direction — pass-10 predates T11 and assigns no batch (recorded as a T31 deviation).",
+      "urls": {
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index-bundled.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on",
+        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
+      },
+      "vantages": [
+        { "name": "holtburg-world-parity", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 26, "az": 35, "el": 18 } },
+          "note": "General world parity bundled vs unbundled: statics, buildings, terrain, entities." },
+        { "name": "nanto-settle", "tele": "@telepoi n", "cam": { "player": { "dist": 26, "az": 200, "el": 18 } },
+          "note": "Second town after a teleport — exercises the statics/buildings ring paths whose module registries collapsed to singletons." }
+      ],
+      "checklist": [
+        "Bundled arm reaches in-world with 0 console errors (allowlist-subtracted)",
+        "World parity: no missing/duplicated statics or buildings attributable to registry/cache singleton-collapse",
+        "No plugin misbehavior attributable to double-instancing (D4) during a normal login+teleport session",
+        "HUD/plugins load on both arms (plugin lane is per-file on both)"
+      ],
+      "artifacts": [ "screenshot per vantage per arm", "console log both arms (archive)" ],
+      "verdict": null
+    },
+    {
+      "id": "MEM-ROUTE-ST5",
+      "kind": "bench",
+      "rider": true,
+      "gate": "GATE-TEX (M4 live mirror bytes, allocated-vs-used labeled; M5/M6 with ULTRA-SOAK-30)",
+      "prerequisite": "T15 lands the route-bench harness; cmd filled by T15/orchestrator at go-time (null here = NOT executable yet; queue prep precedes ST5 per the T31-gates-T15 order)",
+      "cmd": null,
+      "arms": [ "texCompressedOnly=on (with packSource=on&texWorkers=on)", "legacy (no flags)" ],
+      "out": [ "RESULTS-v2 file; pointer recorded here" ],
+      "result": null
+    },
+    {
+      "id": "ULTRA-SOAK-30-ST5",
+      "kind": "bench",
+      "rider": true,
+      "gate": "GATE-TEX (M5 context losses / M6 over 30 min)",
+      "prerequisite": "same as MEM-ROUTE-ST5",
+      "cmd": null,
+      "arms": [ "texCompressedOnly=on (with packSource=on&texWorkers=on)", "legacy (no flags)" ],
+      "out": [ "RESULTS-v2 file; pointer recorded here" ],
+      "result": null
+    }
+  ]
+}

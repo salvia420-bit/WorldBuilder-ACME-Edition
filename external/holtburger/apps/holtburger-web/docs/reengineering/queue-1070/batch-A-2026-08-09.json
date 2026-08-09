@@ -1,0 +1,250 @@
+{
+  "schema": "hb-1070-queue-v1",
+  "batch": "A",
+  "created": "2026-08-09",
+  "owner": "redmi",
+  "preparedBy": "T30 (queue prep only; execution owner-gated per SPEC §5 R-05)",
+  "sessionRules": "vistest-preamble-v1",
+  "sessionRulesInline": [
+    "Read memory/fleet-runbooks.md BEFORE driving the 1070 (binding; not reproduced here).",
+    "Off-screen/headless ONLY: --window-position=-32000,-32000, --mute-audio; a PERSON uses this box; verify no sound can reach the user.",
+    "Attach via CDP :9333 to the existing interactive-session Chrome; match/clean up the test Chrome by --user-data-dir ONLY; NEVER browser.close().",
+    "Tunnel per the runbook incl. -R 8080 wsbridge or logins die.",
+    "?nosw=1 on EVERY URL (SW holtburger-content-v2 survives reloads AND restarts; Ctrl+Shift+R does NOT clear it).",
+    "Fresh --user-data-dir per BENCH arm (PR-3: defeats Chrome-reuse drift + shader-cache warming); eye items may share one session.",
+    "__bootState gate accepts 'ready' OR 'in-world' (PR-14); confirm streaming via terrainBakedLbs.size plateau, never pose.landblockId.",
+    "Release wasm gate (PR-13): pkg/holtburger_web_bg.wasm ~4.5 MB = release, ~18 MB = dev; a DEV-WASM run is invalid for any budget.",
+    "URLs below use the laptop-canonical origin http://127.0.0.1:8765 (scripts/serve.py, default port 8765). Substitute the 1070-side origin per the fleet runbook's tunnel recipe; query strings are normative as written.",
+    "Verdicts are written back into THIS file (eye: {result:'CLEAN'|'DIRTY', notes, ts, by}; probes/benches: result JSON or a RESULTS-v2 file pointer). Eye verdicts are ADDITIONALLY recorded in docs/url-flags.md §0 (pass-9 S5.4). This file is authoritative for eye verdicts; RESULTS for measurements (pass-10 Q6).",
+    "Admin teleports require the Developer account: login tailnet1 (index.html:6027 recipe). Verify POI names live with @telepoi list before relying on any named vantage (sendChat via window.__sessionHandle.sendChat, index.html:1616–1675; @telepoi handler AdminCommands.cs:875, @teledungeon DeveloperCommands.cs:2068)."
+  ],
+  "suggestedOrder": [
+    "P-SUBTLE", "E1", "P-ASSEMBLE", "P-LIGHTBAKE", "P-INITTEX", "P-88MIB",
+    "BOOT-666-SHELL", "TEXWORKER-TAIL", "TEXWORKER-BOOTWARM", "MOVE-FIX-BASELINE"
+  ],
+  "items": [
+    {
+      "id": "E1",
+      "kind": "eye",
+      "stage": "ST3",
+      "gate": "GATE-GEOM",
+      "title": "Consumer swap meshToGeometryGroups→bundleToGeometryGroups (bake-time triangulation, snorm8 normals, subset regroup, source-order winding — pass 4 H-04.5; D-09.5 register row E1)",
+      "prereqs": [
+        "T13 landed. As of 2026-08-09 `?geomBundles` DOES NOT EXIST on HEAD (no url-flags.md row, no reader) — T13 is TODO. Before the session, re-verify the flag's *Enabled() reader and exact spelling against T13's landing commit; do not trust this file's spelling over the reader.",
+        "T13 requires `?packSource` (SPEC §3 T13), so a full-world pack dist must be live behind serve.py (T10 handoff: full-world --emit-packs bake = buildbox job).",
+        "packSourceEnabled reader verified on HEAD: scene3d/pack_fetch_controller.js:62, EXACT-MATCH on/1/true/yes, default OFF."
+      ],
+      "urls": {
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&packSource=on&geomBundles=on",
+        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first"
+      },
+      "boxMode": "1070, off-screen CDP :9333 session (real GPU + real render required; eye items may share one Chrome session across arms — flag flip needs a reload since geomBundles is boot-time)",
+      "vantages": [
+        { "name": "town-overview", "tele": "@telepoi holtburg (verify with @telepoi list)", "cam": { "dist": 26, "az": 35, "el": 18 }, "note": "rooftops + props + fences: winding and silhouette read" },
+        { "name": "town-street", "tele": "same session, walk/short @teleloc to street level", "cam": { "dist": 6, "az": 0, "el": 5 }, "note": "close shading parity on walls/props (snorm8 normal quantization); stipple/two-sided classes (foliage, fences, signs)" },
+        { "name": "dungeon", "tele": "@teledungeon <name|landblock> or a dungeon POI from @telepoi list", "cam": { "dist": 8, "az": 0, "el": 10 }, "note": "interior envcells: winding + baked-light surfaces intact" },
+        { "name": "lod-band", "tele": "town-overview pose, then pull camera back through ~100 m", "cam": { "dist": 110, "az": 35, "el": 18 }, "note": "LOD swap behavior at the ~100 m band — same swap distance and no popping delta between arms" }
+      ],
+      "checklist": [
+        "winding: no inside-out props in either vantage (source-order winding preserved)",
+        "shading parity: no banding/faceting delta from snorm8 normal quantization at street distance",
+        "stipple/two-sided classes render identically across arms (known-translucent objects still translucent — §5f shape)",
+        "LOD swap at the ~100 m band: same swap point, no new popping",
+        "dungeon interior: cell geometry complete, no holes at cell boundaries, baked light intact",
+        "0 console errors after allowlist (harness/lib/console_allowlist.mjs; QuickEmote 0x13xxxxxx class is benign/allowlisted)"
+      ],
+      "artifacts": [ "screenshot per vantage per arm (owner-eye only; NEVER pixel-diffed — PR-8); archived alongside RESULTS" ],
+      "verdictSemantics": "CLEAN ⇒ ST3 promotion may proceed; DIRTY ⇒ stage stays flagged-OFF and the finding is a defect — never ship-and-tune (D-09.5)",
+      "verdict": null
+    },
+    {
+      "id": "P-SUBTLE",
+      "kind": "probe",
+      "stage": "ST2 (confirm)",
+      "gate": "informs GATE-WIRE-BOOT / ST2 default-flip scheduling",
+      "title": "crypto.subtle presence + SHA-256 throughput at pack sizes on the actual serving origin (pass 3 Q1 / DT-05; pass-09:584–585 — confirms the Blob-worker fallback story before ST2's default flip)",
+      "script": "none committed on HEAD — inline recipe below (hash-on-receipt engine selection read-verified at scene3d/pack_fetch_controller.js:18–20, 102–108: subtle when secure context, else Blob-worker pure-JS sha256)",
+      "boxMode": "1070, off-screen CDP :9333; any page on the batch's serving origin; no fresh profile needed",
+      "recipe": [
+        "1. On the exact origin the 1070 batches use (record it): evaluate `({secure: window.isSecureContext, subtle: !!(crypto && crypto.subtle)})`.",
+        "2. If subtle present: time `crypto.subtle.digest('SHA-256', buf)` for buf sizes 1 MiB and 8 MiB, >=5 reps each after 1 warmup; report MB/s p50 per size.",
+        "3. Boot once with `?packSource=on` appended (needs a pack dist; skip this leg if none is live) and read `globalThis.__hbFetch.verify` (pack_fetch_controller.js:817) — record `engine` and msTotal/ok counters.",
+        "4. If subtle ABSENT on this origin: record that the Blob-worker wasm/JS fallback is the 1070's real engine and time one fallback verify for the same sizes."
+      ],
+      "expects": "engine name + MB/s at 1 MiB and 8 MiB payloads; decides the verify engine story for ST2's default flip",
+      "result": null
+    },
+    {
+      "id": "P-INITTEX",
+      "kind": "probe",
+      "stage": "pre-ST9 (W2/stage-C design input)",
+      "gate": "informs GATE-POOLS upload staging (pass 8 Q2 / DT-41; R-12)",
+      "title": "renderer.initTexture on a CompressedArrayTexture with pending layerUpdates: does staging outside render() make the next render's texUploadMs ≈ 0?",
+      "script": "none committed on HEAD — inline recipe below",
+      "boxMode": "1070, off-screen CDP :9333, in-world session, real render (NOT nullRender — the probe measures GL upload timing)",
+      "recipe": [
+        "1. Boot in-world (bare default + login flags + ?nosw=1); wait for terrainBakedLbs.size plateau.",
+        "2. Arm the stall probe: `window.__stallArm()` (stall_probe.js:102; GL wrap groups texUpload = texSubImage/compressedTexSubImage — stall_probe.js:181; cumulative texUploadMs/Calls/Bytes at :285, an _MS_KEYS attribution field :432).",
+        "3. Control arm: force a fresh CompressedArrayTexture (or new layerUpdates on an existing xu7 array) to upload INSIDE the normal render path; snapshot texUploadMs delta across that frame.",
+        "4. Probe arm: build the same pending-layerUpdates texture, call `renderer.initTexture(tex)` in an idle callback OUTSIDE render(), then snapshot the NEXT render frame's texUploadMs delta.",
+        "5. PASS-shape: probe-arm next-frame texUploadMs ≈ 0 (upload happened at initTexture time); report both deltas + bytes.",
+        "6. Renderer handle: via the scene3d module scope or liveScene3d snapshot — note liveScene3d is a one-time init3D snapshot (stall_probe.js:430–435), stamped ~35 s after in-world; poll not-null."
+      ],
+      "expects": "texUploadMs(next frame) ≈ 0 on the initTexture arm; both arms' ms+bytes recorded",
+      "result": null
+    },
+    {
+      "id": "P-88MIB",
+      "kind": "probe",
+      "stage": "pre-ST9",
+      "gate": "informs F6 (250 ms streaming-hitch line) — pass 8 Q3 / DT-42; R-12",
+      "title": "t1024 terrain pair staging ms — whole 88 MiB vs 44/44 MiB split — against the 250 ms F6 line",
+      "script": "none committed on HEAD — inline recipe below",
+      "boxMode": "1070, off-screen CDP :9333, in-world session, real render",
+      "recipe": [
+        "1. Same session as P-INITTEX (probe already armed).",
+        "2. Whole arm: stage the full-res terrain BC7 array pair (the t1024-class payload, ~88 MiB total) in one frame via renderer.initTexture / forced full-layer upload; read the frame's texUploadMs + texUploadBytes delta from __stallReport().",
+        "3. Split arm: stage the same payload as two ~44 MiB halves on two consecutive frames; read per-frame deltas.",
+        "4. Report: whole-frame ms, split per-frame ms, both vs the 250 ms F6 line; note GPU (UNMASKED_RENDERER_WEBGL) in the result.",
+        "5. ≥3 reps per arm (fresh texture objects each rep — re-staging an already-uploaded texture measures nothing)."
+      ],
+      "expects": "ms whole vs ms per 44 MiB half; verdict text: does the split fit under 250 ms per frame on the 1070",
+      "result": null
+    },
+    {
+      "id": "P-ASSEMBLE",
+      "kind": "probe",
+      "stage": "ST3",
+      "gate": "GATE-GEOM (sanity leg) — pass 4 H-04.6b / DT-10; R-12",
+      "title": "HBG1 bundle assembly µs/model over a ring's models",
+      "script": "none committed on HEAD — inline recipe below",
+      "prereqs": [
+        "T13 landed: `assemble_model_geometry` / `assemble_envcell_geometry` wasm exports DO NOT EXIST on HEAD 2026-08-09 (pkg/holtburger_web.d.ts has no assemble_* entries) — verify export names against T13's landing before the session.",
+        "Same pack-dist prerequisite as E1."
+      ],
+      "boxMode": "1070, off-screen CDP :9333; can run in the E1 session's ON arm (geomBundles=on&packSource=on)",
+      "recipe": [
+        "1. In the E1 ON-arm session, iterate the resident ring's model set (>=100 models).",
+        "2. Time the T13 assembly entry per model (performance.now() around the wasm call, batched to defeat timer quantization: time N=32-model chunks, divide).",
+        "3. Report µs/model p50/p95 + total ms for one full ring; separately time >=10 envcell assemblies if the envcell export landed.",
+        "4. Sanity bar (GATE-GEOM): ring-scale assembly total must be milliseconds-class, not a frame-budget item; anything >1 ms/model is a finding."
+      ],
+      "expects": "µs/model p50/p95 + ring total ms (+ envcell figures if available)",
+      "result": null
+    },
+    {
+      "id": "P-LIGHTBAKE",
+      "kind": "probe",
+      "stage": "pre-ST7 (dual-wasm keystone)",
+      "gate": "sizes the pass 6 dual-instance decision margin (pass 4 Q3 / pass 6 Q2 / DT-14; R-12)",
+      "title": "envcell vertex light-bake µs/cell over p50 and p90 interiors (p90 class ≈ 639 cells/LB)",
+      "script": "none committed on HEAD — inline recipe below (bake path read-verified: collect_landblock_bake_lights src/lib.rs:20953, applied into mesh.baked_light_rgb at :21252–21274)",
+      "boxMode": "1070, off-screen CDP :9333, in-world; dungeon entries via @teledungeon",
+      "recipe": [
+        "1. Pick one p50-class interior and one p90-class (large, ~600+ cells) interior; verify cell counts via @teledungeon + the wire/diag surfaces before timing.",
+        "2. Cold-enter each interior (first visit this session so envcell decode actually runs) and time the envcell decode calls per landblock (performance.now() around the wasm envcell fetch/decode entry; identify the exact entry name on the session's HEAD — the decode path is inside the wasm, so per-cell time = LB total / cells).",
+        "3. If T13's assemble_envcell_geometry landed with a separable light-bake timing, use it; otherwise report decode ms/cell WITH the stated caveat that light bake is a share of it (pass 4's 0.38×-of-triangulation arithmetic, pass-04 Q3) — label which was measured.",
+        "4. Report µs/cell p50 interior, µs/cell p90 interior, and LB totals; the number sizes whether envcell light bake stays a bake-worker job (96 MiB instance) or could fold main-side."
+      ],
+      "expects": "µs/cell for p50 and p90 interiors + LB totals, measurement labeled (decode-total vs isolated light-bake)",
+      "result": null
+    },
+    {
+      "id": "BOOT-666-SHELL",
+      "kind": "bench",
+      "stage": "ST-SHELL (T11 handoff)",
+      "gate": "informs B2/B5 scoring shape (absolutes bind at ST5; this run is comparative/EXPLORATORY per SPEC §2.2)",
+      "title": "Shell-component comparative arms: index.html vs index-bundled.html, same flags, cold/warm × bundled/unbundled, counted via CDP network log classified by test-P5's recipe (task-T11-report.md Handoffs)",
+      "context": [
+        "ORCHESTRATOR D4 DECISION (recorded, binding for this run): the plugin dynamic-import lane is ACCEPTED as a per-file class for v1. When these arms run, the ~95 arms-invariant plugin/manifest requests (plugins/index.json + ~37 *.manifest.json + ~30 absolute-modulePath plugin modules + their per-file deps) are RECORDED in the B2 ledger, NOT 'fixed'. Do not file the plugin lane as a defect; count it as its own component class on BOTH arms.",
+        "T11 D5 watch item: on the bundled arm, query-forked duplicate module instances collapse to true singletons (statics.js/buildings.js/scene3d-index pairs merge). Behavioral-difference watch during the in-world leg — any divergence is a finding for the E-item eye pass.",
+        "Expected arithmetic (T11 test P5, pinned): shell-class cold 7 bare / 8 login / 9 agent-login on the bundled arm vs 267 unbundled; warm: 0 immutable shell refetches + 5 dev-tier conditional 304s (~0 bytes body)."
+      ],
+      "prereqs": [
+        "shell/ + index-bundled.html are gitignored BUILD ARTIFACTS: re-run `node scripts/build-shell.mjs` on the serving tree after any pull, or the bundled arm serves a stale app (T11 rebuild-staleness handoff).",
+        "serve.py post-14cb0671 (shell immutable tier) — already on HEAD."
+      ],
+      "boxMode": "1070, off-screen CDP :9333; fresh --user-data-dir per ARM (PR-3); CDP Network domain enabled BEFORE navigation; cold = fresh profile, warm = second boot same profile (PC-4)",
+      "arms": [
+        { "arm": "unbundled-cold", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&agent=1" },
+        { "arm": "unbundled-warm", "url": "same URL, second boot, same profile" },
+        { "arm": "bundled-cold", "url": "http://127.0.0.1:8765/apps/holtburger-web/index-bundled.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&agent=1" },
+        { "arm": "bundled-warm", "url": "same URL, second boot, same profile" }
+      ],
+      "checklist": [
+        "run each arm to __bootState in-world (gate accepts ready|in-world); this is ALSO the deferred T11 in-world floor: 0 console errors after allowlist on the bundled arm",
+        "classify every request per harness/test_build_shell.mjs part-P5's component recipe (shell-class vs pkg vs plugin-lane vs world-data vs vendor)",
+        "record the plugin-lane count into the B2 ledger row (per D4 above)",
+        "note nosw=1 skips the SW request by design — state it in the component table",
+        "write RESULTS-v2 via harness/lib/report.mjs: requests@wire + bytes@wire per component per arm, cold and warm; verdict EXPLORATORY (B2/B5 bind at ST5)"
+      ],
+      "out": [ "docs/RESULTS-shell-requests-1070-<date>.json" ],
+      "result": null
+    },
+    {
+      "id": "TEXWORKER-TAIL",
+      "kind": "bench",
+      "stage": "ST4 (T14 handoff, named T30-class)",
+      "gate": "GATE-TEXWORKER — TAIL-ULTRA worker-vs-FIFO transcode bucket (PC-7)",
+      "title": "?texWorkers=on vs ?texWorkers=0 tail arms, stall probe armed, 60 s+ walk at ultra",
+      "boxMode": "1070, off-screen CDP :9333; fresh --user-data-dir per arm (PR-3); ultra quality per the probe's reference header",
+      "arms": [
+        { "arm": "texWorkers=on", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=on" },
+        { "arm": "texWorkers=0", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=0" }
+      ],
+      "checklist": [
+        "reader semantics verified on HEAD: texWorkersEnabled xu7_textures.js:657—on/1/true/yes or N>=1 ⇒ ON; absent/0/off/garbage ⇒ OFF (so =0 is the explicit FIFO arm)",
+        "arm `window.__stallArm()` post-in-world; walk 60 s+ (hop-cadence path per §ace-admin @teleloc substitute if keyboard walk is unreliable headless)",
+        "read `window.__stallReport()`: compare the xu7Decode/transcode-class buckets worker-arm vs FIFO-arm; p99 + attributed long frames",
+        "read `window.__texWorkerStats()` (xu7_textures.js:729): jobs, msTranscode, queueDepth, maxQueueDepth, fallback counters — fallbacks must be counted-never-silent",
+        "NOTE: this is the FIRST armed stall-probe completion on the 1070 in the record — it doubles as partial instrument validation (D-10.5): check explainedMs+residualMs ≈ Σ intervalMs and probe self-cost <1%",
+        "kill-row shape (SPEC T14): worker-arm tail worse than FIFO arm ⇒ finding against the flip; report per PC-7 (tail from the probe's own clock, never a mean)"
+      ],
+      "out": [ "RESULTS-v2 + archived __stallReport rings, both arms" ],
+      "result": null
+    },
+    {
+      "id": "TEXWORKER-BOOTWARM",
+      "kind": "bench",
+      "stage": "ST4 (T14 handoff)",
+      "gate": "GATE-TEXWORKER — BOOT-WARM 1070 worker arm (DT-16; answers pass-05 Q4 one-worker sufficiency before anyone builds ?texWorkers=2)",
+      "title": "Warm boot with ?texWorkers=on; read the transcode queue high-water",
+      "boxMode": "1070, off-screen CDP :9333; second boot on a warmed profile (PC-4 warm semantics)",
+      "arms": [
+        { "arm": "texWorkers=on warm", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=on" }
+      ],
+      "checklist": [
+        "cold-boot the profile once (discard), then re-boot warm; run to in-world + terrainBakedLbs plateau",
+        "read `window.__texWorkerStats().maxQueueDepth` (high-water FIFO depth — xu7_textures.js:183/209/356) + jobs + msTranscode",
+        "one worker sufficient ⇔ queue drains without sustained saturation; record the number — it is the ?texWorkers=2 build/no-build datum"
+      ],
+      "out": [ "RESULTS-v2 row (bytes/requests optional; the queue-depth figure is the deliverable)" ],
+      "result": null
+    },
+    {
+      "id": "MOVE-FIX-BASELINE",
+      "kind": "bench",
+      "stage": "pre-ST9 baseline (charter Q2 / DT-51; H-10.2 scheduling note: run in Batch A or B, not C)",
+      "gate": "creates the F3/F4 baselines GATE-POOLS' kill row needs",
+      "title": "MOVE-FIX first accepted run — moving-bench orbit, >=1800 frames, mid quality, bare default (single-arm baseline creation)",
+      "cadenceOptional": true,
+      "cadenceNote": "SPEC T30 card: run only if session cadence allows; last in the suggested order. If dropped, it moves to Batch B (H-10.2).",
+      "boxMode": "1070, off-screen CDP :9333; fresh --user-data-dir; release wasm + bare-default URL (PR-13 — baseline runs are scored, not exploratory)",
+      "cmd": "node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 --anchor=25171,20344,42.0 --mode=orbit --frames=1800 --laps=1 --arm=default",
+      "cmdNotes": [
+        "args read-verified against harness/moving-bench.mjs header (:41–47: --cdp/--anchor=x,y,z/--mode=orbit/--frames/--laps/--arm; --arm='' or default = control; :54 hop-mode shape). The anchor above is the harness's own documented example — the owner may substitute the settled-Nanto reference anchor; whatever is used IS the baseline anchor and gets recorded in the result.",
+        "PC-3 discipline rides the harness: frame-indexed pose table, pinned anchor, warm lap + identical measure lap, judge() reject semantics — a REJECT run is re-run, never averaged (PR-10).",
+        "Sample the same-session PARKED p50 BEFORE the rig installs (the F3 denominator is same-session parked, MOVE-FIX card S6).",
+        "Page must be in-world with movement enabled; harness never picks a CDP endpoint or closes the browser."
+      ],
+      "checklist": [
+        "run judged USABLE (not REJECT) — reject reasons empty",
+        ">=1800 frames so F4 (p99) is scoreable from this run",
+        "record frameMs@moving p50/p95/p99 + same-session parked p50 + draws@submitted/ktris diagnostics (PR-9: reported, never priced)",
+        "label the result BASELINE-CREATING (charter Q2 retires on acceptance)"
+      ],
+      "out": [ "RESULTS-v2 (hb-results-v2) file; this file's result field carries the pointer" ],
+      "result": null
+    }
+  ]
+}
