@@ -264,6 +264,17 @@ function _sample(renderer) {
     // `xu7Decodes: 12, xu7Runs: 1` is twelve decodes with no yield between
     // them. `__xu7Stats().maxRun` is its session-wide high-water mark.
     xu7Drains: 0, xu7Deferrals: 0, xu7Runs: 0,
+    // --- ST8 frame phases + scheduler (T21, pass-08 S7.3: the probe's vector
+    // gains __framePhase/__frameWork in the commit series that lands them).
+    // fpP*Ms are cumulative PHASE sums — deliberately NOT in `_MS_KEYS`: they
+    // OVERLAP the GL buckets (a texUpload inside P3 is in both), so summing
+    // them into explainedMs would double-count. They attribute a long frame
+    // to a phase; the GL buckets price it. fw* are COUNTS (never priced).
+    // Both surfaces are flag-gated (?framePhase / ?frameWork) and read 0
+    // when absent, like every other guarded surface here.
+    fpP0Ms: 0, fpP1Ms: 0, fpP2Ms: 0, fpP3Ms: 0, fpP4Ms: 0, fpFrames: 0,
+    fwW6Ran: 0, fwW6Forced: 0, fwW6Deferred: 0,
+    fwGuardServices: 0, fwTeleports: 0,
     // --- BC7 record source: counts only ------------------------------------
     bc7Fetches: 0, bc7Hits: 0, bc7PreFetches: 0, bc7Absent: 0, bc7Bytes: 0,
     // --- shader link: MS (requires the link probe, which arm() installs) ----
@@ -311,6 +322,28 @@ function _sample(renderer) {
       s.xu7Drains = _num(x.drains);
       s.xu7Deferrals = _num(x.deferrals);
       s.xu7Runs = _num(x.runs);
+    }
+  } catch (_) {}
+  try {
+    // T21 (ST8): both are plain objects updated in place, installed only
+    // when their flags arm (?framePhase) / at module load (?frameWork —
+    // zeros when the flag is off, so these reads stay 0 on legacy runs).
+    const fp = typeof window !== "undefined" ? window.__framePhase : null;
+    if (fp) {
+      s.fpP0Ms = _num(fp.p0Ms);
+      s.fpP1Ms = _num(fp.p1Ms);
+      s.fpP2Ms = _num(fp.p2Ms);
+      s.fpP3Ms = _num(fp.p3Ms);
+      s.fpP4Ms = _num(fp.p4Ms);
+      s.fpFrames = _num(fp.frames);
+    }
+    const fw = typeof window !== "undefined" ? window.__frameWork : null;
+    if (fw) {
+      s.fwW6Ran = _num(fw.classes && fw.classes.W6 && fw.classes.W6.ran);
+      s.fwW6Forced = _num(fw.classes && fw.classes.W6 && fw.classes.W6.forcedRuns);
+      s.fwW6Deferred = _num(fw.classes && fw.classes.W6 && fw.classes.W6.deferredFrames);
+      s.fwGuardServices = _num(fw.guardServices);
+      s.fwTeleports = _num(fw.teleports);
     }
   } catch (_) {}
   try {
