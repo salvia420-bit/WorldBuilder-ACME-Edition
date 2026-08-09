@@ -37,7 +37,7 @@
       "gate": "GATE-GEOM",
       "title": "Consumer swap meshToGeometryGroups→bundleToGeometryGroups (bake-time triangulation, snorm8 normals, subset regroup, source-order winding — pass 4 H-04.5; D-09.5 register row E1)",
       "prereqs": [
-        "T13 landed. As of 2026-08-09 `?geomBundles` DOES NOT EXIST on HEAD (no url-flags.md row, no reader) — T13 is TODO. Before the session, re-verify the flag's *Enabled() reader and exact spelling against T13's landing commit; do not trust this file's spelling over the reader.",
+        "T13 LANDED 2026-08-09 (commits 9d6f5205..5865018c): flag spelling VERIFIED `?geomBundles` — reader `geomBundlesEnabled()` in scene3d/geom_bundles.js (EXACT-MATCH on/1/true/yes, default OFF); arming gate `initGeomBundles` additionally requires the armed pack controller + wasm assemble exports + relief OFF + `?placementId` not off. RELIEF NOTE for the arms: HBG1 bakes relief-free geometry, so the ON arm force-disables gfxRelief (preset-ON at mid/high/ultra) — for an apples-to-apples eye pair author `&gfxRelief=off` on the OFF arm too, else the delta seen at mid+ is the relief rails, not bundle geometry.",
         "T13 requires `?packSource` (SPEC §3 T13), so a full-world pack dist must be live behind serve.py (T10 handoff: full-world --emit-packs bake = buildbox job).",
         "packSourceEnabled reader verified on HEAD: scene3d/pack_fetch_controller.js:62, EXACT-MATCH on/1/true/yes, default OFF."
       ],
@@ -126,7 +126,7 @@
       "title": "HBG1 bundle assembly µs/model over a ring's models",
       "script": "none committed on HEAD — inline recipe below",
       "prereqs": [
-        "T13 landed: `assemble_model_geometry` / `assemble_envcell_geometry` wasm exports DO NOT EXIST on HEAD 2026-08-09 (pkg/holtburger_web.d.ts has no assemble_* entries) — verify export names against T13's landing before the session.",
+        "T13 LANDED 2026-08-09: export names VERIFIED `assemble_model_geometry(Uint32Array)` and `assemble_envcell_geometry(landblockId, Uint32Array)` — both in pkg/holtburger_web.d.ts (release wasm 6,404,273 B), returning {buffer: Uint8Array, descriptor: JSON string}. JS wrappers assembleModels/assembleEnvcells (scene3d/geom_bundles.js) stamp __diag.geometry.bundles (assembled/bytesOut/msAssemble) — readable directly; keep the chunked wasm-call timing as the independent check.",
         "Same pack-dist prerequisite as E1."
       ],
       "boxMode": "1070, off-screen CDP :9333; can run in the E1 session's ON arm (geomBundles=on&packSource=on)",

@@ -934,6 +934,15 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
 // starvation at this layer) must not turn the LB into an infinite
 // bake→throw→cooldown loop. After the cap, the partial bake is accepted and
 // warned loudly. A fully-clean bake clears the LB's counter.
+//
+// ST3 STATUS (T13, 2026-08-09 — SPEC §6 register row "statics geom-audit/
+// starvation machinery docs"): under an ARMED `?geomBundles` this whole
+// machinery serves ONLY the legacy-residue arm — bundle-served models
+// assemble SYNC from pack-resident HBG1 payloads and cannot starve by
+// construction (a missing payload is a counted `geomFallback`, never a
+// retry loop). The machinery is NOT deleted at ST3: it remains the live
+// path for the DEFAULT-OFF arm and for non-pack content until the ST9/ST10
+// legacy retirement executes its deletion ledger.
 const STATICS_STARVED_RETRY_CAP = 3;
 const _staticsStarvedRetries = new Map();
 
