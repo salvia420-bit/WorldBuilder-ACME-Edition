@@ -54,6 +54,8 @@ import {
   acQuatToThree,
 } from "./adapter.js";
 import { materialCanCastShadow, VERTEX_BAKE } from "./materials.js";
+// T13 (ST3, `?geomBundles`): per-LB envcell meshes from HBG1 bundles.
+import { geomBundlesActive, assembleEnvcells as assembleGeomEnvcells, cellToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
 // ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter; flag OFF
 // returns exactly today's setTimeout(0) macrotask yield (byte-identical).
@@ -1023,6 +1025,28 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   const uniqueStaticDids = new Set();
 
   // ---- Pass 1: drain placements into JS-owned snapshots --------------
+  // T13 (`?geomBundles`): assemble the WHOLE LB's cell meshes from the
+  // HBG1 kind-2 payloads in one sync call (slot→DID remap + back-face DID
+  // rule + vertex light bake over unique verts run wasm-side, pass 4
+  // D-04.7). Runs AFTER fetchEnvCellsInLandblock, so every input record is
+  // resident. Cells the bundle cannot serve fall through to the UNCHANGED
+  // per-cell takeMesh drain, counted. NOTE the runtime env triangulation
+  // inside fetchEnvCellsInLandblock still runs for collision/AABB/portal
+  // products at ST3 — retiring it is the ST9/ST10 producer swap.
+  let envBundle = null;
+  if (geomBundlesActive()) {
+    try {
+      const cellIds = placements.map((pl) => pl.cellId >>> 0);
+      envBundle = assembleGeomEnvcells(lbKey >>> 0, cellIds);
+      if (envBundle && envBundle.missingIds.length > 0) {
+        countGeomFallback(envBundle.missingIds.length);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.cells] envcell bundle assembly failed (legacy drain):", e);
+      envBundle = null;
+    }
+  }
   const snapshots = [];
   const allCellSurfaceDids = new Set();
   for (const pl of placements) {
@@ -1042,10 +1066,25 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // helper handles the wasm `ModelMesh.surfaces` getter (which
     // already carries the 0x08000000 OR mask for env-cell surfaces
     // per the wasm-side helper).
-    const mesh = pl.takeMesh();
-    const { groups: surfaceGroups, surfaceDids } = meshToGeometryGroups(mesh);
+    // T13: bundle-served cells build groups from the descriptor instead
+    // (same shape, acBakedLight attached from the bundle's light bake);
+    // pl's own mesh is left in the handle and dropped by pl.free().
+    let surfaceGroups;
+    let surfaceDids;
+    const bundleCell = envBundle ? envBundle.byCell.get(cellId) : undefined;
+    if (bundleCell) {
+      const r = cellToGeometryGroups(bundleCell, envBundle.buffer);
+      if (r) {
+        surfaceGroups = r.groups;
+        surfaceDids = r.surfaceDids;
+      }
+    }
+    if (!surfaceGroups) {
+      const mesh = pl.takeMesh();
+      ({ groups: surfaceGroups, surfaceDids } = meshToGeometryGroups(mesh));
+      if (mesh && typeof mesh.free === "function") mesh.free();
+    }
     for (const did of surfaceDids) allCellSurfaceDids.add(did >>> 0);
-    if (mesh && typeof mesh.free === "function") mesh.free();
 
     // Snapshot static placements into plain objects + free wasm sides.
     const staticSnaps = [];
