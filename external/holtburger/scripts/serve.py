@@ -442,6 +442,13 @@ TEXT_COMPRESS_EXTS = {".js", ".mjs", ".html", ".css", ".json", ".jsonl", ".md", 
 # thing a content-addressed store can key on. See its docstring.
 BIN_COMPRESS_EXTS = {".wasm", ".bin", ".hba", ".hbc7"}
 
+# T11 ST-SHELL (SPEC §1.1 HTTP contract / pass-12 D-12.2): the content-hashed
+# app-shell bundle tree. Two roots: the live build output
+# (scripts/build-shell.mjs -> apps/holtburger-web/shell/) and the deploy-staged
+# dist copy (scripts/deploy-shell.mjs -> <dist>/shell/, served at /dist/shell/).
+# Hash-named => immutable + identity, same tier as packs/ + index/.
+SHELL_PREFIXES = ("/apps/holtburger-web/shell/", "/dist/shell/")
+
 # KTX2 file identifier (12 bytes, Khronos spec) — the same check
 # `dat_shard.rs` validates XUBC7 ingest with, and `src/lib.rs xu7_blocks`
 # re-checks on read.
@@ -572,6 +579,12 @@ class Handler(SimpleHTTPRequestHandler):
         # the legacy shard store, so gate by path, not extension.
         if clean.startswith("/dist/packs/") or clean.startswith("/dist/index/"):
             return False
+        # T11 shell tree: the content-hashed app-shell bundles join the
+        # immutable-CAS class (SPEC §1.1 HTTP contract / D-12.2) — served
+        # IDENTITY like packs/index, .js extension notwithstanding. Covers
+        # the live-tree build output and the deploy-staged dist copy.
+        if clean.startswith(SHELL_PREFIXES):
+            return False
         ext = os.path.splitext(clean)[1].lower()
         if ext not in TEXT_COMPRESS_EXTS and ext not in BIN_COMPRESS_EXTS:
             return False
@@ -674,11 +687,13 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
             self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         if (
-            path.startswith(("/dist/shards/", "/dist/packs/", "/dist/index/"))
+            path.startswith(("/dist/shards/", "/dist/packs/", "/dist/index/")
+                            + SHELL_PREFIXES)
             and 200 <= status < 300
         ):
             # Content-addressed tiers: legacy shards + (T10) HBP1 packs and
-            # the HBSI1 index — immutable by name, 200-gated, no-transform
+            # the HBSI1 index + (T11) the content-hashed shell/ bundles —
+            # immutable by name, 200-gated, no-transform
             # (pass 3 S6.1/S6.3: hash = bytes; CDN must not re-encode).
             self.send_header(
                 "Cache-Control", "public, max-age=31536000, immutable, no-transform")
