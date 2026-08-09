@@ -98,7 +98,7 @@ Charges are abbreviations — SPEC.md §3 is the authoritative statement of each
 | T11 | ST-SHELL | esbuild bundle + content-hashed shell | M | TODO | | | |
 | T12 | ST2 | pack client (PackFetchController, PackSource, SW v3) `?packSource` | L | TODO | | | |
 | T13 | ST3 | HBG1 geometry bundles + consumer swap `?geomBundles` | L | TODO | | | |
-| T14 | ST4 | texture worker `?texWorkers` | M | TODO | | | |
+| T14 | ST4 | texture worker `?texWorkers` | M | DONE | 2026-08-08 | impl/task-T14-report.md | 2 commits (d8cfd82e, 23383e2a): worker (transcode+terrain-assemble+NRA, results-enqueue-only) + `?texWorkers` DEFAULT-OFF routing with the FIFO arm verbatim and counted-never-silent fallbacks. Node suites 118/118 new + all texture-family regressions green; byte-identity proven vs Rust goldens AND real transcoder/corpus. GATE-TEXWORKER 1070 arms DEFERRED-TO-BATCH. |
 | T15 | ST5 | compressed-only texture path `?texCompressedOnly` | L | TODO | | | |
 | T16 | ST6 | q75 corpus + owner decisions (bake-side) | M | TODO | | | |
 | T20 | ST7 | slot grid residency authority `?slotGrid` | L | TODO | | | |
