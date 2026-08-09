@@ -52,6 +52,14 @@
 
 import * as THREE from "three";
 import { prewarmSubtree } from "./bake_prewarm.js";
+// T13 (ST3, `?geomBundles`): HBG1 per-part bundle consumption — armed only
+// by index.html; OFF arm never reaches the branch (byte-identical legacy).
+import {
+  geomBundlesActive,
+  assembleModels as assembleGeomBundles,
+  bundleToPartGroups,
+  countGeomFallback,
+} from "./geom_bundles.js";
 import {
   meshToGeometryGroups,
   placementToMatrix4,
@@ -335,6 +343,29 @@ function _disposeMeshChildren(root) {
  * pure JS-owned data.
  */
 async function bakeBuildingPlacement(modelId, fetchBuildingPlacement) {
+  // T13 (`?geomBundles`): serve the whole per-part bake from the HBG1
+  // bundle when armed — parts + hinge frames straight from the kind-1
+  // directory descriptor (SPEC pass 4 S4 row 3), no walk, `incomplete`
+  // impossible by construction (a missing part payload marks the model
+  // `missing` wasm-side and the UNCHANGED legacy path below runs instead,
+  // counted via `__diag.geometry.geomFallback`).
+  if (geomBundlesActive()) {
+    const res = assembleGeomBundles([modelId >>> 0]);
+    if (res && res.byModel.has(modelId >>> 0)) {
+      const entry = res.byModel.get(modelId >>> 0);
+      const pr = bundleToPartGroups(entry, res.buffer);
+      if (pr) {
+        return {
+          modelId,
+          setupId: modelId >>> 0,
+          parts: pr.parts,
+          surfaceDids: pr.surfaceDids,
+          incomplete: false,
+        };
+      }
+    }
+    if (res) countGeomFallback(1);
+  }
   let bundle;
   try {
     bundle = await fetchBuildingPlacement(modelId);
