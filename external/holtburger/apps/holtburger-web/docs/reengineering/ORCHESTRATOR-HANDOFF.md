@@ -131,9 +131,15 @@ spec queue, then PAUSE. Pairings honor the slot policy (≤1 wasm-touching per p
   M1/M2 + scored benches remain Batch C. NOTE: the T20 agent RESTARTED local ACE —
   ACE is UP again (unblocks T00). T16 q75 encode still running on the buildbox
   (statics tranche 2,931/2,931 clean; tranche1 in flight).
-- Pass 3: T15 compressed-only tex (wasm slot) + T00 census live run IF box quiet and
-  ACE restarted (orchestrator restarts ACE between passes); else T13 slides in only if
-  the wasm slot is free — otherwise T13 stays queued past the pause.
+- T16: DONE (encode) and ORCHESTRATOR-VERIFIED ~18:00 — q75 corpus 3,985/3,985 records
+  sha-verified at /mnt/wbterminal2/xubc7-corpus-q75 (1.6 GB + provenance), 36 E4 sheets
+  staged, buildbox powered off after; E4 eye + the two ST6 decisions stay OWNER-gated
+  (redmi, Batch B). New [M] evidence for the B4a election: corpus q75/lossless = 0.690
+  → ≈69.6 MB, OVER the ≤65 gate. Commit e6a0dcad pushed.
+- Pass 3 (launched ~18:05, FINAL pass before pause): T15 compressed-only tex (wasm
+  slot, no browsers, gates → Batch B) + T00 census live run (owns the one chromium,
+  R-MEM pre-flight gated, ACE up). T13 stays queued past the pause (wasm slots
+  exhausted by the 3×2 authorization).
 Deploy tooling ready: /mnt/wbterminal2/reeng/orch-bake/deploy-packs-to-dist.sh
 (CAS sha-verify → additive-only manifest check → rsync packs/+index/ → merge
 world_index/pack_url_template → provenance copy → serve.py --check). Supports --dry-run.
