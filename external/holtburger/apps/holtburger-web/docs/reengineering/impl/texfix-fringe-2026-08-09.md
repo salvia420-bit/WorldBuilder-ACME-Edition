@@ -66,9 +66,11 @@ are large visual improvements.
 1. **Pack layer**: the deployed full-world packs embed PVW previews sliced at bake
    time — previews of repaired ids still carry the fringe. Re-bake packs against the
    fixed ingest (run-world-bake-2.sh; ~2.5 h verified) and re-deploy additively.
-   BEFORE that bake: refresh the preview tier for the 593 ids (tex-bc7-pre/pre was
-   derived from the contaminated art; re-derive via derive-pvw-xu7.mjs from the fixed
-   ingest or refresh the pre corpus) or the bake re-slices stale previews.
+   Preview-tier prerequisite DISCHARGED 2026-08-09 ~23:20: bake priority read-verified
+   pre>full>extra (pack_bake.rs:850-874); all 593 re-derived from the FIXED ingest via
+   derive-pvw-xu7.mjs (593/593, 0 failed) and swapped in place — 511 tex-bc7-pre/pre
+   entries replaced, 7 pvw-extra replaced, 75 added to pvw-extra (stale originals in
+   texfix-2026-08-09/{pre,extra}-stale-backup/). The overnight bake slices clean.
 2. **Dist full tier**: in-game full-res 0x06 records ship inside the dist shards —
    the shard texture layer needs a re-bake for the fix to reach the live client.
 3. **E4 sheets**: 4 of the 36 taildropped sheets show affected ids
