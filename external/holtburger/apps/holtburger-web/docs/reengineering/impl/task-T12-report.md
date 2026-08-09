@@ -1,0 +1,89 @@
+# T12 — ST2: pack client (`?packSource`): implementation report
+
+Agent: T12 implementation agent. Date: 2026-08-09. Scope: `crates/holtburger-resource-http/**`,
+`apps/holtburger-web/src/**` (resource-source seam), `scene3d/pack_fetch_controller.js` (new),
+`index.html` (minimal wiring), `service-worker.js` (SW v3 dormant), `harness/**`, `docs/url-flags.md`.
+
+## Shipped
+
+| commit | what |
+|---|---|
+| `5e284731` | **Rust half** — `crates/holtburger-resource-http/src/pack.rs` (new, target-agnostic): HBP1 container reader (magic/version/CRC32/section-bounds; per-section zstd — C `zstd` native / `ruzstd` wasm32, the holtburger-dat pattern), HBSI1 reader, `PackSource : ResourceSource` (record streams LBINFO/ENVCELLS/RECORDS decompressed once at admission into refcounted section payloads; the 4×252 B TERRAIN block with zero-filled slices treated as ABSENT — legacy 404-silent-skip parity), `CompositeSource` = pack → legacy with absence proofs forwarded to legacy catalogs only. `insert_pack` refuses hashes not listed by the pinned index (deploy-skew guard) + re-checks CRC; sha-on-receipt stays the controller's job. + `tests/pack_source_region.rs` (T10-region corpus battery, `#[ignore]`d per the bake_ci precedent). Cargo.lock: `zstd`/`ruzstd` resolutions for this crate. |
+| `43c541d5` | **wasm seam** — `manifest_source.rs` V2Source gains the CompositeSource seam (`packs: Mutex<Option<Arc<PackSource>>>`, `None` = byte-identical legacy): reads consult packs FIRST (pack → boot → shards), prefetch step A skips pack-served keys, `key_known_absent` guarded so negative caches can never latch a pack-served record. New exports in `apps/holtburger-web/src/pack_source_glue.rs`: `pack_source_init` / `pack_source_insert` / `pack_source_stats` / `pack_source_serves` (MAIN instance only at T12). |
+| `dc8b9738` | **PackFetchController** — `scene3d/pack_fetch_controller.js`: lanes U>B>R>T, cap 12 + 4 urgent-reserved + T sub-cap 4 [A] (`?fetchCap`), promotion-in-place (no bypass duplicates), per-URL latch with error-entry unlatch, sha256-on-receipt vs CAS names (subtle → Blob-worker JS sha256 off-main-thread → counted+tainting main-thread last resort; `?packVerify=off` taints), mismatch ⇒ one `cache:"reload"` retry then the pass-3 S7 matrix (404-on-index-listed = LOUD skew; tile quarantine 60 s timed + proximity re-eligibility, never rendered-as-empty), retries ×3 at 0/1/3 s, boot waves S3 (manifest → pinned index → CORE/META/ENV/PVW commons → t128 slices lane-B tail) → ring/regionals/interiors + 1-tile directional lookahead on `notePlayerLandblock` (D-03.8). `__hbFetch` flipped reserved → current (schema kept + `enabled`/`quarantinedTotal`/`packSource` additions). url-flags rows `packSource`/`fetchCap`/`packVerify` + §0 adjudication row. Suites `test_pack_fetch_controller.mjs` (92) + `test_pack_fetch_region.mjs` (22). |
+| `b4f76c3b` | **SW v3 dormant** — `service-worker.js` `SW_V3 = false` const (orchestrator flips at the ST2 default flip): v3 = cache `holtburger-content-v3`, intercept only `packs/`+`index/`+`shards/` (allowlisted until ST10, F-11.11) + `/scene3d/assets/` SWR; boot.hba/catalogs leave the SW (bake-identity gate unreachable; deleted at ST10's ledger); install prefetch skipped. Shipped arm v2-identical (`test_service_worker_bake_gate.mjs` 8/8 unchanged). + `harness/test_service_worker_v3.mjs` (25, both arms vm-loaded). |
+| `156ecd40` | **Integration** — `index.html` ON-arm-only wiring (module not even imported when OFF): pre-split controller boot + the D-03.10 legacy-share cap (`__hbFetchConcurrencyTotal = 8` when packs arm, unless user-authored); post-init `pack_source_init` + `attachWasm` + `bootCommons` + a 2 s `getLocalPlayerPose()` poll → `notePlayerLandblock`. All fail-soft (packs are an overlay, never a boot gate). Controller `attachWasm`/`getIndexBytes`/`_idle`. Release wasm rebuilt + rsync'd into `pkg/` (6.30 MB release-class; exports verified in d.ts). |
+
+## Spec conformance
+
+SPEC §3 T12: *"PackFetchController (lanes, promotion, latch, quarantine, diag), hash-on-receipt (subtle + worker-wasm fallback), PackSource/CompositeSource behind `ResourceSource`, HBSI1 consumption, widened-closure consumption, SW v3 (lands with the default flip; `shards/` allowlisted until ST10), t128 slice fetch via lane B. GEOM stays encoding 0x0000. Acceptance: GATE-WIRE-BOOT — 0 hash mismatches / 0 terminal quarantines over the battery; comparative cold-boot bytes+requests vs legacy arm; BOOT-WARM comparative; T2-BOT."*
+
+- **PackFetchController (lanes/promotion/latch/quarantine/diag)** — **MET.** All S2 rules implemented and node-pinned: cap/reserve/sub-cap arithmetic, FIFO within lane, browser `priority` per lane, promotion-in-place with a single fetch per URL, latch incl. settled-entry re-serve, error-entry unlatch (the inflight.rs invariant), S7 matrix per object class, quarantine lifecycle (timed + proximity re-eligibility, typed rejection while quarantined, live list + cumulative `quarantinedTotal`), backpressure dequeue of ring-departed lane-R entries.
+- **Hash-on-receipt (subtle + worker fallback)** — **MET, one mechanism deviation (D2 below).** Every CAS object verified against its name before admission; subtle on secure contexts; off-main-thread Blob-worker JS sha256 fallback (FIPS + node-crypto vector-pinned) instead of a bake-worker wasm call; main-thread last resort is counted AND taints. `?packVerify=off` taints per D-03.5.
+- **PackSource/CompositeSource behind `ResourceSource`, HBSI1 consumption** — **MET.** Sync reads over resident packs through the existing trait; composite fall-through leaves equipment/dynamic/texture records on the legacy lane unchanged; prefetch skips pack-served keys (never re-fetched per-record); `key_known_absent` sound in both directions. Byte-identity proven: **7,228 records from all 56 T10-region packs byte-identical to the base DATs** (the consumer-side differ), composite serving all 7,228 pack-first with 0 legacy hits.
+- **Widened-closure consumption** — **MET by construction.** T10's widened walk puts MotionTable/PhysicsScript/SoundTable/Animation/Wave/emitter/did_degrade records in RECORDS streams; PackSource registers record-stream entries type-blind, so they serve pack-first the moment their pack is resident (the differ covers them — the region's 7,228 records include the widened classes).
+- **SW v3, `shards/` allowlisted until ST10** — **MET, landed DORMANT per the task directive.** One `SW_V3` const (false); flip is the orchestrator's ST2 default-flip edit. Both arms test-pinned; shipped arm is v2 behavior-identical (pre-existing gate suite 8/8 green).
+- **t128 slice fetch via lane B** — **MET.** Both channel slices fetched lane-B tail per D-12.6, sha-verified, byte-exact vs the bake report, retained for the ST5 ladder consumer (`getT128Slice`). The terrain_bc7.js consumer swap is ST5 scope (SPEC §3 T15); its strict 33-layer manifest check is untouched.
+- **GEOM stays 0x0000 / rendered world byte-identical** — **MET.** No decode path touched; T10 packs carry no GEOM sections; record bytes byte-identical (differ) ⇒ identical decode inputs. OFF arm: flag module not imported, wasm seam `None` fast path, SW unchanged — byte-identical legacy (all neighboring suites green, below).
+- **GATE-WIRE-BOOT: 0 hash mismatches / 0 terminal quarantines over the battery** — **MET at the local scale the box allows** (node + native battery over the REAL T10 bounded region): boot+commons+ring+crossing = verify **45 ok / 0 mismatch / 0 terminal quarantines / 0 failed fetches**, every admission index-listed. Full-battery re-score on a full-world dual dist + browser: **DEFERRED** (see below).
+- **Comparative cold-boot bytes+requests vs legacy arm** — **DEFERRED-TO-BATCH, structurally.** No dist exists on which both arms can run: the live dist carries no packs (full-world `--emit-packs` bake is a buildbox job, T10 handoff), and the T10 region bake is packs-only (no legacy layers/shards). ON-arm local figures recorded as data, not a gate score: **46 requests / 6.33 MiB @wire, T10 bounded region, file-backed localhost** (component table in the region suite output; NOT a T3 measurement). Crossing delta measured 3 requests (≤ C1 12); re-crossing cached territory 0 requests (C3 shape).
+- **BOOT-WARM comparative** — **DEFERRED-TO-BATCH** (needs a browser + the dual dist; B5's warm path is HTTP-cache-driven and cannot be scored from node file reads).
+- **T2-BOT** — **DEFERRED, honestly.** I5 RAM gate: free memory sat at 0.8–1.9 GB through the session (< 2 GB floor) — no headless chromium was launched. Runbook when affordable: serve.py :8765, bare-default T2-BOT (OFF arm, byte-identity leg) then `?packSource=on&nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30` against a dual dist (ON arm no-ops cleanly on the live legacy dist — verified in code, `armed:false` path).
+- **Flag lifecycle (I7)** — **MET.** `?packSource` DEFAULT-OFF exact-match opt-in; audit-flag-defaults agrees on all three new readers; lint-url-flags --strict unchanged (the 2 pre-existing presence-guard findings only; T12 adds 0).
+
+## Deviations
+
+- **D1 (naming):** SPEC §1.1 names the module `scene3d/pack_fetch.js`; the T12 assignment's FILE SCOPE names `scene3d/pack_fetch_controller.js`. Followed the assignment (the more specific, later document). No functional delta.
+- **D2 — DEVIATION: pass 3 D-03.5 "worker-wasm sha fallback … in whichever worker context exists (bake worker today)" because** (read-verified) the bake worker is optional (`?bakeWorker=0` ⇒ no worker context exists at all), its request plumbing is a laned FIFO (`bake_worker_client.js:877-1046`) whose depth would put pack ADMISSION latency behind bake jobs, and reaching its wasm sha needs edits to 3 files outside T12's scope plus a new wasm export. Minimal sound thing done: a dedicated Blob-URL worker running the same pure-JS sha256 exported for tests (`sha256Hex`, FIPS-vector + node-crypto-pinned, 7 vectors incl. padding edges) — the operative constraint ("never on the main thread") is preserved; a worker-unconstructable context falls to a main-thread hash that is COUNTED and TAINTS the run (never silent). The fallback is unreachable on all current canonical origins (localhost + the loopback tunnel are secure contexts — F-11.8).
+- **D3 — T02 candidate deviations, each resolved explicitly:**
+  - **F-2 scenery JSONL / F-3 spawns JSONL / F-5 events JSONL (wasm-side direct fetches): EXCEPTED until ST7/ST10.** Their content is pack-resident from T10, but the CONSUMERS swap at the ST7 grid adapter ("reads via CompositeSource", SPEC §1.4) and the fetch tracks retire with the legacy lane's world traffic (ST10) — T02's own dispositions. Swapping the scenery feed to PLACEMENTS rows at T12 would change renderer inputs (PLACEMENTS drops baked AABBs) against this task's byte-identical acceptance. Boundary rule applied NOW: when packs arm, the legacy fetch-concurrency total (which these tracks share via `fetch_sem`) drops to 8 under the controller's cap (D-03.10(a), the pass-3 Q6 implementation).
+  - **F-6 suite bins (F-A lane gap): RESOLVED by assignment** — the suite track is assigned to the legacy-lane share (it already rides `fetch_sem`, so the armed-arm cap of 8 bounds it); its per-record path retires with the legacy lane. Recorded here as the lane decision F-A asked for; no SPEC edit.
+  - **F-4 `wcid_to_setup.json` / F-7 vfx catalog: EXCEPTED** — one-shot fetches whose designed home (CORE/commons membership) is a bake change owned by the bake side (T10 follow-up/T40), not a client fetch-routing change; left as-is, named here so ST10's ledger sees them.
+  - **F-1 terrain_bc7:** t128 → controller lane B **landed** (this task); t1024 stays per-payload on lane T with its producer at ST5 — matches SPEC, no exception needed. The S-2 strict-manifest note transfers to T15.
+  - **F-B stars.bin external origin:** out of T12 scope; re-flagged for the orchestrator (cheap fix: vendor + `starsUrl`).
+- **D4 (sub-spec note):** controller milestones `inWorldMs`/`previewCompleteMs` are stamped at controller-local proxies (commons-resident; first-ring-resident) until the real milestone events exist at ST5 — the registry fields are levels and benches must not score them as the charter milestones yet.
+- **D5 (sub-spec note):** the bake-worker wasm instance is NOT pack-armed at T12 (main only). This is the D-03.3/pass-6 design (worker gets per-job LEASES at ST7), stated here because it bounds the ON arm's wire win during coexistence: worker-driven decode still fetches legacy records until ST7.
+
+## Tests run
+
+Rust via `capped-build`, rust-analyzer killed first (I5). Node direct. No browser (RAM gate), no measurements beyond the labeled local wire figures ⇒ no RESULTS-v2 artifact claimed against any gate.
+
+```
+capped-build cargo test -p holtburger-resource-http            21 passed (incl. 4 new pack units), 0 failed
+capped-build cargo test -p holtburger-resource-http --release \
+    --test pack_source_region -- --ignored --nocapture         3/3: 56/56 packs admitted (counts+bytes == pack-report.json);
+                                                               7,228 records BYTE-IDENTICAL to base DATs; composite 7,228
+                                                               pack-first reads, 0 legacy hits   @scale: T10 bounded region
+capped-build wasm-pack build --target web --out-dir pkg-T12 --release   ok (5m57s); rsync -a --delete pkg-T12/ pkg/;
+                                                               pack_source_* exports verified in pkg/holtburger_web.d.ts
+node harness/test_pack_fetch_controller.mjs                    92 passed, 0 failed   PACK-FETCH-CONTROLLER ✅
+node harness/test_pack_fetch_region.mjs                        22 passed, 0 failed   PACK-FETCH-REGION ✅
+    [RESULTS] 46 requests / 6.33 MiB @wire (boot+ring+crossing, T10 bounded region, file-backed localhost);
+    verify 45 ok / 0 mismatch / 0 terminal quarantines; crossing delta 3 req; re-crossing 0 req
+node harness/test_service_worker_v3.mjs                        25 passed, 0 failed   SW-V3-DORMANT ✅
+node test_service_worker_bake_gate.mjs                          8 passed, 0 failed   (shipped SW arm v2-identical)
+node harness/test_diag_schema.mjs                              64 passed, 0 failed   DIAG-SCHEMA ✅ (21 surfaces)
+node harness/test_report_v2.mjs                                REPORT-V2 ✅
+node harness/test_console_allowlist.mjs                        CONSOLE-ALLOWLIST ✅
+node harness/test_texture_worker.mjs                           69 passed, 0 failed   (T14 arm untouched)
+node harness/test_nra_derive.mjs                               41 passed, 0 failed
+node harness/test_frame_work.mjs                               FRAME-WORK ✅          (T21 arm untouched)
+node harness/test_frame_phase_census.mjs                       FRAME-PHASE-CENSUS ✅
+node test_xu7_budget.mjs                                       49 passed, 0 failed
+node scripts/lint-url-flags.mjs --strict                       exit 1 PRE-EXISTING (same 2 presence-guard findings T21
+                                                               recorded: fogRingCap, stableDepthShare); T12 adds 0 findings
+node scripts/audit-flag-defaults.mjs --mismatch                exit 0 (packSource OFF/opt-IN, fetchCap numeric, packVerify
+                                                               ON/opt-OUT-exact — all three rows agree with readers)
+```
+
+## Handoffs & risks
+
+- **The gate needs the full-world dual bake (buildbox — T10's handoff).** Everything bench-side is ready: comparative arms are `?packSource=on|off` on a dual dist; the legacy arm's request count must EXPECT the JSONL side-tracks (T02 F-D); `__hbFetch.byComponent` is the B1 attribution table; `quarantinedTotal`/`verify.mismatch` are the gate counters. Serve.py already serves `packs/`+`index/` immutable-identity (T10).
+- **1070/T3 batch items:** BOOT-666 comparative arms, BOOT-WARM, CROWD-BURST (R-07 — the armed-arm legacy share of 8 is the watched lever; raise via `__hbFetchConcurrencyTotal` if equipment bursts starve), P-SUBTLE confirmation, T2-BOT ON+OFF.
+- **ST5 (T15) consumes:** `getT128Slice(chan)` verified bytes (HBP1-wrapped PVW stream, kinds 6/7); lane T + `needTexture`-shaped `need(url, {lane:"T"})`; the PVW pack payloads for preview-born materials (parse via the pack readers — `parse_pvw_stream` shape documented in pack_format.rs).
+- **ST7 (T20) consumes:** controller quarantine state (authoritative — residency must consult before rendering-empty), `notePlayerLandblock` → replace the 2 s pose poll with real grid events, worker pack LEASES (bake worker is legacy-lane until then, D5), PackStore budgets/eviction (ResidentPack rows already carry kind/file_len/records for the victim walk).
+- **ST10 ledger rows fed by T12:** SW v2 gate machinery deletion; `shards/` allowlist drop; F-2/F-3/F-5/F-6 direct-fetch retirement; F-4/F-7 CORE membership.
+- **Risk — pack admission CPU at insert:** record-stream sections decompress at admission (indexing requires it). At region scale this is µs-class per tile pack; a p99 600 KB pack is ~ms-class. If a full-world soak shows admission spikes, the escape is lazy per-section registration (the section table supports it) — noted in pack.rs.
+- **Risk — index-membership check is O(packs) per insert** (linear scan of ≤ ~18.5 k rows at full world, ~50 inserts/boot) — trivial now; hash-set it if a soak ever shows it.
+- **Unrelated dirty state:** none staged; the untracked `docs/reengineering/` pass files (orchestrator's) left untouched. `Cargo.lock` committed with the Rust commit (shared file, required for reproducible builds — the T10 precedent).
+- **pkg/ backup:** pre-T12 release wasm preserved at the session scratchpad (`pkg-backup/holtburger_web_bg.wasm`) for one session; pkg/ now carries the release build with the pack exports.
