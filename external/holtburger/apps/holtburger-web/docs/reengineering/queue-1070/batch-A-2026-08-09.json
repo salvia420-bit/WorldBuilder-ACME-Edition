@@ -22,6 +22,13 @@
     "P-SUBTLE", "E1", "P-ASSEMBLE", "P-LIGHTBAKE", "P-INITTEX", "P-88MIB",
     "BOOT-666-SHELL", "TEXWORKER-TAIL", "TEXWORKER-BOOTWARM", "MOVE-FIX-BASELINE"
   ],
+  "sessionLog": [
+    {
+      "ts": "2026-08-09T20:15-02:30",
+      "by": "orchestrator (owner-authorized execution: ultra quality + clouds=on + wxMap=nasa for real-render legs; muted off-screen; kill test chrome by --user-data-dir; taildrop artifacts to redmi)",
+      "event": "ATTEMPT BLOCKED — 1070 offline (tailscale last-seen 2d, ping no-reply, ssh timeout). Laptop preflight COMPLETE and standing: serve.py :8765 up (full dist incl. packs/index tiers), wsbridge up, ACE up, release wasm sha 1f6f57c9…e173907 (6.33 MB), shell REBUILT fresh against HEAD (app-39481b35, 5 workers). Reachability watcher armed; batch runs when the box appears. E1 + P-ASSEMBLE remain prereq-blocked on T13 regardless. E4 sheets (Batch B, redmi) taildropped to redmi-note-13-5g ahead of schedule (36 sheets + README, 28.8 MB zip)."
+    }
+  ],
   "items": [
     {
       "id": "E1",
