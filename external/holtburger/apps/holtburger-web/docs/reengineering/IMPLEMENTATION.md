@@ -112,3 +112,4 @@ Charges are abbreviations — SPEC.md §3 is the authoritative statement of each
 ## Log (orchestrator only)
 
 - 2026-08-08: Implementation phase opened. Slot policy: 1 critical-path + 1 independent, max 2. T10 + T01 launched.
+- 2026-08-09: OOM incident (hard reboot ~03:10) killed T20 mid-task + the full-world bake; T11 finished just prior. Root cause + now-binding scheduling rules (R-MEM1..4), in-flight bake state, and full orchestrator state → `ORCHESTRATOR-HANDOFF.md` (keep that file current; it is the successor session's first read).
