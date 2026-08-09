@@ -613,96 +613,131 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
         v.sort_unstable();
     }
 
-    // --- per-LB roots + widened closure ----------------------------------
-    let mut memo: HashMap<u32, std::rc::Rc<Vec<u32>>> = HashMap::new();
-    let closure_of = |root: u32,
-                          memo: &mut HashMap<u32, std::rc::Rc<Vec<u32>>>|
-     -> std::rc::Rc<Vec<u32>> {
-        memo.entry(root)
-            .or_insert_with(|| {
-                let mut set: HashSet<(String, u32)> = HashSet::new();
-                collect_model_dependencies_widened(&source, root, &mut set);
-                let mut ids: Vec<u32> = set.into_iter().map(|(_, id)| id).collect();
-                ids.sort_unstable();
-                std::rc::Rc::new(ids)
-            })
+    // --- per-LB roots + widened closure (parallel) ------------------------
+    // DatDatabase reads are positioned (`read_exact_at_compat`, `&self`), so
+    // `source` is Sync and the per-LB walks are independent. Root and surface
+    // closures memoize in shared maps: check under lock, walk WITHOUT the
+    // lock, insert under lock — a racing pair may walk the same root twice,
+    // but both produce the identical sorted Vec, so pack output is unchanged.
+    // Byte-identity vs the sequential emitter is the acceptance test.
+    use rayon::prelude::*;
+    use std::sync::{Arc, Mutex};
+    let root_memo: Mutex<HashMap<u32, Arc<Vec<u32>>>> = Mutex::new(HashMap::new());
+    let closure_of = |root: u32| -> Arc<Vec<u32>> {
+        if let Some(hit) = root_memo.lock().unwrap().get(&root) {
+            return hit.clone();
+        }
+        let mut set: HashSet<(String, u32)> = HashSet::new();
+        collect_model_dependencies_widened(&source, root, &mut set);
+        let mut ids: Vec<u32> = set.into_iter().map(|(_, id)| id).collect();
+        ids.sort_unstable();
+        let arc = Arc::new(ids);
+        root_memo
+            .lock()
+            .unwrap()
+            .entry(root)
+            .or_insert_with(|| arc.clone())
+            .clone()
+    };
+    let surf_memo: Mutex<HashMap<u32, Arc<Vec<u32>>>> = Mutex::new(HashMap::new());
+    let surface_closure_of = |did: u32| -> Arc<Vec<u32>> {
+        if let Some(hit) = surf_memo.lock().unwrap().get(&did) {
+            return hit.clone();
+        }
+        let mut set: HashSet<(String, u32)> = HashSet::new();
+        collect_surface_dependencies(&source, did, &mut set);
+        let mut ids: Vec<u32> = set.into_iter().map(|(_, id)| id).collect();
+        ids.sort_unstable();
+        let arc = Arc::new(ids);
+        surf_memo
+            .lock()
+            .unwrap()
+            .entry(did)
+            .or_insert_with(|| arc.clone())
             .clone()
     };
 
-    let mut per_lb: BTreeMap<u16, PerLb> = BTreeMap::new();
-    for &lb in &lb_present {
-        let mut closure_outdoor: BTreeSet<u32> = BTreeSet::new();
-        let mut roots: Vec<u32> = Vec::new();
-        let lbi_fid = ((lb as u32) << 16) | 0xFFFE;
-        let mut has_lbi = false;
-        if let Ok(bytes) =
-            source.get_file_by_key(ResourceKey::new(EOR_CELL_NAMESPACE, lbi_fid))
-            && let Ok(info) = LandblockInfo::unpack(&bytes)
-        {
-            has_lbi = true;
-            roots.extend(info.objects.iter().map(|s| s.id));
-            roots.extend(info.buildings.iter().map(|b| b.model_id));
-        }
-        let placements = match opts.scenery_dir.as_deref() {
-            Some(dir) => read_scenery_lb(dir, lb)?,
-            None => Vec::new(),
-        };
-        roots.extend(placements.iter().map(|p| p.obj_id));
-        roots.extend(placements.iter().map(|p| p.script_id).filter(|&s| s != 0));
-        roots.sort_unstable();
-        roots.dedup();
-        for root in roots {
-            closure_outdoor.extend(closure_of(root, &mut memo).iter().copied());
-        }
-
-        // EnvCell-derived closure.
-        let envcells = lb_envcells.get(&lb).cloned().unwrap_or_default();
-        let envcell_bytes: usize = envcells.iter().map(|&(_, s)| s as usize).sum();
-        let mut closure_interior: BTreeSet<u32> = BTreeSet::new();
-        for &(fid, _) in &envcells {
-            let Ok(bytes) =
-                source.get_file_by_key(ResourceKey::new(EOR_CELL_NAMESPACE, fid))
-            else {
-                continue;
-            };
-            let Ok(ec) = EnvCell::unpack(&mut std::io::Cursor::new(bytes)) else {
-                continue;
-            };
-            closure_interior.insert(0x0D00_0000 | ec.environment_id as u32);
-            let mut scratch: HashSet<(String, u32)> = HashSet::new();
-            for &s in &ec.surfaces {
-                collect_surface_dependencies(
-                    &source,
-                    surface_did_for_envcell_index(s),
-                    &mut scratch,
-                );
+    let lb_list: Vec<u16> = lb_present.iter().copied().collect();
+    let per_lb_rows: Vec<(u16, PerLb)> = lb_list
+        .par_iter()
+        .map(|&lb| -> Result<(u16, PerLb)> {
+            let mut closure_outdoor: BTreeSet<u32> = BTreeSet::new();
+            let mut roots: Vec<u32> = Vec::new();
+            let lbi_fid = ((lb as u32) << 16) | 0xFFFE;
+            let mut has_lbi = false;
+            if let Ok(bytes) =
+                source.get_file_by_key(ResourceKey::new(EOR_CELL_NAMESPACE, lbi_fid))
+                && let Ok(info) = LandblockInfo::unpack(&bytes)
+            {
+                has_lbi = true;
+                roots.extend(info.objects.iter().map(|s| s.id));
+                roots.extend(info.buildings.iter().map(|b| b.model_id));
             }
-            for stab in &ec.static_objects {
-                collect_model_dependencies_widened(&source, stab.stab_id, &mut scratch);
+            let placements = match opts.scenery_dir.as_deref() {
+                Some(dir) => read_scenery_lb(dir, lb)?,
+                None => Vec::new(),
+            };
+            roots.extend(placements.iter().map(|p| p.obj_id));
+            roots.extend(placements.iter().map(|p| p.script_id).filter(|&s| s != 0));
+            roots.sort_unstable();
+            roots.dedup();
+            for root in roots {
+                closure_outdoor.extend(closure_of(root).iter().copied());
             }
-            closure_interior.extend(scratch.into_iter().map(|(_, id)| id));
-        }
 
-        // Drop patch-pattern ids + ids not present in the portal DAT (the
-        // walk records entry ids even when the record is absent).
-        let keep =
-            |id: &u32| !patch_id_set.contains(id) && source.portal.files.contains_key(id);
-        closure_outdoor.retain(keep);
-        closure_interior.retain(keep);
+            // EnvCell-derived closure. Stab walks share the root memo (same
+            // walk, same ids); surface walks memoize per surface DID. The
+            // per-envcell scratch-set union of the sequential emitter and
+            // these per-root/per-DID unions produce the same BTreeSet.
+            let envcells = lb_envcells.get(&lb).cloned().unwrap_or_default();
+            let envcell_bytes: usize = envcells.iter().map(|&(_, s)| s as usize).sum();
+            let mut closure_interior: BTreeSet<u32> = BTreeSet::new();
+            for &(fid, _) in &envcells {
+                let Ok(bytes) =
+                    source.get_file_by_key(ResourceKey::new(EOR_CELL_NAMESPACE, fid))
+                else {
+                    continue;
+                };
+                let Ok(ec) = EnvCell::unpack(&mut std::io::Cursor::new(bytes)) else {
+                    continue;
+                };
+                closure_interior.insert(0x0D00_0000 | ec.environment_id as u32);
+                for &s in &ec.surfaces {
+                    closure_interior.extend(
+                        surface_closure_of(surface_did_for_envcell_index(s))
+                            .iter()
+                            .copied(),
+                    );
+                }
+                for stab in &ec.static_objects {
+                    closure_interior.extend(closure_of(stab.stab_id).iter().copied());
+                }
+            }
 
-        per_lb.insert(
-            lb,
-            PerLb {
-                closure_outdoor,
-                closure_interior,
-                envcells: envcells.iter().map(|&(f, _)| f).collect(),
-                envcell_bytes,
-                placements,
-                has_lbi,
-            },
-        );
-    }
-    drop(memo);
+            // Drop patch-pattern ids + ids not present in the portal DAT (the
+            // walk records entry ids even when the record is absent).
+            let keep = |id: &u32| {
+                !patch_id_set.contains(id) && source.portal.files.contains_key(id)
+            };
+            closure_outdoor.retain(keep);
+            closure_interior.retain(keep);
+
+            Ok((
+                lb,
+                PerLb {
+                    closure_outdoor,
+                    closure_interior,
+                    envcells: envcells.iter().map(|&(f, _)| f).collect(),
+                    envcell_bytes,
+                    placements,
+                    has_lbi,
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let per_lb: BTreeMap<u16, PerLb> = per_lb_rows.into_iter().collect();
+    drop(root_memo);
+    drop(surf_memo);
 
     // --- tiles, interiors, usage counts -----------------------------------
     let tile_of = |lb: u16| -> (u8, u8) { (((lb >> 8) as u8) / 2, ((lb & 0xFF) as u8) / 2) };
