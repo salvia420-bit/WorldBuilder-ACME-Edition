@@ -33,6 +33,20 @@
 // statics. That is written here rather than in a ticket because the flag is one
 // keystroke and the failure is silent.
 //
+// ST5 RE-SCOPE (2026-08-09, T15 `?texCompressedOnly`): on the compressed-only
+// arm this module's population shrinks to the legacy-RGBA8 residue. A
+// compressed-only material has NO decoded pixel planes — its albedo mirror IS
+// the 128 MB-budgeted record-cache entry (shared buffer, bc7_textures.js),
+// its preview is pack-resident, and `armCpuRelease` already skips compressed
+// textures (the `planeBytes` gate reads `image.data`, which they lack). The
+// full-tier byte lever on that arm is `MaterialCache.demoteToPreview`
+// (pass 5 D-05.8: shed ~7/8 of a texture's bytes to the resident preview —
+// no fetch, no decode, never black), not plane release. Preconditions
+// (a)/(b) above still bind, unchanged, for the legacy arm. The full
+// rehydrate-v3 mirror policy (terrain mirrors freed post-upload; the
+// release-seam generalization to source-keyed rehydrators) is the T15
+// report's named remainder.
+//
 // WHAT IT DOES NOT TOUCH, by construction:
 //   * atlas arrays (`DataArrayTexture` / `CompressedArrayTexture`) — their CPU
 //     buffer is the staging copy `addLayerUpdate` re-uploads individual layers
