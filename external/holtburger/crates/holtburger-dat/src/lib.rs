@@ -6,6 +6,7 @@ pub mod gfx_remodel;
 pub mod height_seam;
 pub mod gfx_subdiv;
 pub mod graphics;
+pub mod hbg1;
 pub mod landblock;
 pub mod manifest;
 pub mod normal_gen;
