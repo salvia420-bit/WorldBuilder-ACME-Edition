@@ -26,6 +26,19 @@ Read both before acting. This file is the volatile state those don't carry.
   derived. RUN2 (verified) started 04:44:19; emission artifacts (index/, manifest.json,
   bake-source.sha256) landed 07:06; verify phase in flight, cgroup steady ~3.44G of the
   3.5G cap, swap 0 used.
+- DIAGNOSIS ~12:30: RUN2's emission + INLINE determinism check PASSED by 07:06 (write
+  path is emission-time; the artifacts prove it). Since 07:06 the process is inside
+  `verify_closure` (pack_bake.rs:1735): state R, ~97% single-core CPU, RSS 795 MB
+  stable, ZERO I/O — read-verified the loop re-parses + re-decompresses the ENTIRE
+  target pack for EVERY REFS edge (`HbpReader::parse(&pack_bytes[*target])` +
+  `record_stream` per record edge). O(edges × pack-parse), finite but unbounded-slow at
+  full-world scale (hot targets = the big commons packs). No progress output exists.
+- DECISION (deadline rule): let it grind while the docs-only agent pass runs. At pass
+  end (~2 h), if not DONE: kill RUN2, apply the memoized fix to `verify_closure`
+  (pre-parse each pack's record-key set ONCE into a map, then O(1) edge checks —
+  orchestrator's bake-infra lane), rebuild dat-shard in the then-free jail, prove
+  bounded BAKE-CI green + byte-identity vs ci-run1-shas.txt, re-run RUN2 (emission
+  ≈2h22m + fast verify). Deterministic emission makes the re-run byte-safe.
 - The emitter's rayon patch is commit `4d24594c` — byte-identity proven vs the
   sequential baseline on bounded BAKE-CI (see commit body).
 - `world-packs-crashed-run1/` is the pre-incident partial output — delete when the
@@ -78,10 +91,16 @@ transcripts are dead to a new session — verify from committed state, do not Se
 ## 3b. SESSION PLAN 2026-08-09 (user-authorized ~08:45): after the bake is managed
 (RUN2 green → deploy script → push), run THREE passes of TWO Fable agents each on the
 spec queue, then PAUSE. Pairings honor the slot policy (≤1 wasm-touching per pass):
-- Pass 1: T20-finish (brief: /mnt/wbterminal2/reeng/T20-recovery-brief-2026-08-09.md)
-  + T30 Batch-A queue-file prep (docs-only, pass-10 format).
-- Pass 2: T13 geom bundles (critical path W1) + T31/T32 queue-file prep (docs-only).
-- Pass 3: T15 compressed-only tex + T16 q75 encode prep (buildbox-side, disjoint box).
+- REORDERED ~12:30 (bake verify overrunning; docs-only work is the only R-MEM1-safe
+  class while it grinds):
+- Pass 1 (LAUNCHED ~12:35): T30 Batch-A queue prep + T31/T32 Batch-B/C queue prep —
+  both docs-only, disjoint outputs, no builds/browsers.
+- Pass 2 (after bake settles + deploy): T20-finish (brief:
+  /mnt/wbterminal2/reeng/T20-recovery-brief-2026-08-09.md) + T16 q75 encode prep
+  (buildbox-side, disjoint box).
+- Pass 3: T15 compressed-only tex (wasm slot) + T00 census live run IF box quiet and
+  ACE restarted (orchestrator restarts ACE between passes); else T13 slides in only if
+  the wasm slot is free — otherwise T13 stays queued past the pause.
 Deploy tooling ready: /mnt/wbterminal2/reeng/orch-bake/deploy-packs-to-dist.sh
 (CAS sha-verify → additive-only manifest check → rsync packs/+index/ → merge
 world_index/pack_url_template → provenance copy → serve.py --check). Supports --dry-run.
