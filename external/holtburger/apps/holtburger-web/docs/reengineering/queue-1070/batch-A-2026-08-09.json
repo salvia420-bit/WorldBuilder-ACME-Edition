@@ -43,7 +43,7 @@
       ],
       "urls": {
         "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&packSource=on&geomBundles=on",
-        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first"
+        "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&gfxRelief=off"
       },
       "boxMode": "1070, off-screen CDP :9333 session (real GPU + real render required; eye items may share one Chrome session across arms — flag flip needs a reload since geomBundles is boot-time)",
       "vantages": [
