@@ -36,6 +36,8 @@
 
 import * as THREE from "three";
 import { meshToGeometryGroups, acToThree } from "./adapter.js";
+// T13 (ST3, `?geomBundles`): decode-once via the HBG1 bundle when armed.
+import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToPartGroups, countGeomFallback } from "./geom_bundles.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
 import { treeWindEnabled, treeWindStrength, treeWindDir, windBakeEnabled } from "./tree_wind.js";
 import { buildBboxRig, partBBox, hash01 } from "./wind_rig.js";
@@ -516,6 +518,40 @@ function _getSharedSetupGeom(setupId, wasmExports) {
   let p = _geomCache.get(setupId);
   if (p) return p;
   p = (async () => {
+    // T13 (`?geomBundles`): the decode-once shared geometry comes from the
+    // HBG1 bundle when armed — same per-part + hinge shape, memcpy-scale
+    // (SPEC pass 4 S4 row 4). A missing payload falls through to the
+    // UNCHANGED legacy decode below, counted.
+    if (geomBundlesActive()) {
+      const res = assembleGeomBundles([setupId >>> 0]);
+      if (res && res.byModel.has(setupId >>> 0)) {
+        const pr = bundleToPartGroups(res.byModel.get(setupId >>> 0), res.buffer);
+        if (pr && pr.parts.length > 0) {
+          const parts = [];
+          const hingeMats = [];
+          for (const part of pr.parts) {
+            const h = part.hinge;
+            const hm = new THREE.Matrix4();
+            hm.compose(
+              new THREE.Vector3(h.x, h.y, h.z),
+              new THREE.Quaternion(h.qx, h.qy, h.qz, h.qw),
+              _UNIT3
+            );
+            hingeMats.push(hm);
+            const groups = [];
+            for (const g of part.groups) {
+              if (g.geometry) {
+                groups.push({ geometry: g.geometry, surfaceDid: g.surfaceDid || 0 });
+                _geomList.push(g.geometry);
+              }
+            }
+            parts.push(groups);
+          }
+          return { partCount: pr.parts.length, parts, hingeMats };
+        }
+      }
+      if (res) countGeomFallback(1);
+    }
     let bundle;
     try {
       bundle = await wasmExports.fetchBuildingPlacement(setupId);
