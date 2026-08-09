@@ -122,9 +122,15 @@ spec queue, then PAUSE. Pairings honor the slot policy (≤1 wasm-touching per p
   class while it grinds):
 - Pass 1 (LAUNCHED ~12:35): T30 Batch-A queue prep + T31/T32 Batch-B/C queue prep —
   both docs-only, disjoint outputs, no builds/browsers.
-- Pass 2 (after bake settles + deploy): T20-finish (brief:
-  /mnt/wbterminal2/reeng/T20-recovery-brief-2026-08-09.md) + T16 q75 encode prep
-  (buildbox-side, disjoint box).
+- Pass 2 (launched ~15:45): T20-finish — DONE and ORCHESTRATOR-VERIFIED ~17:10
+  (suites re-run 394/394 + 25/25, lint clean, release wasm 6.34 MB shipped, report I8
+  complete; commits 5575c55f/107baf22/39907c14 pushed). Live arm: ALL zero-tolerance
+  counters 0, 0 console errors; three live-only integration bugs found+fixed (export
+  bag, STAGED refire, T12 keep-set — recorded deviations). Its D4 (R4 stays engaged in
+  migration era) propagated into batch-C E5's checklist same-day (59152c69). E5 eye +
+  M1/M2 + scored benches remain Batch C. NOTE: the T20 agent RESTARTED local ACE —
+  ACE is UP again (unblocks T00). T16 q75 encode still running on the buildbox
+  (statics tranche 2,931/2,931 clean; tranche1 in flight).
 - Pass 3: T15 compressed-only tex (wasm slot) + T00 census live run IF box quiet and
   ACE restarted (orchestrator restarts ACE between passes); else T13 slides in only if
   the wasm slot is free — otherwise T13 stays queued past the pause.
