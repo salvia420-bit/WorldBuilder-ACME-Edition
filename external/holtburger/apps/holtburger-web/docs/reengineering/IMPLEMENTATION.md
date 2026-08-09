@@ -102,7 +102,7 @@ Charges are abbreviations — SPEC.md §3 is the authoritative statement of each
 | T15 | ST5 | compressed-only texture path `?texCompressedOnly` | L | TODO | | | |
 | T16 | ST6 | q75 corpus + owner decisions (bake-side) | M | TODO | | | |
 | T20 | ST7 | slot grid residency authority `?slotGrid` | L | TODO | | | |
-| T21 | ST8 | FrameWorkScheduler stage A `?frameWork` | M | TODO | | | |
+| T21 | ST8 | FrameWorkScheduler stage A `?frameWork` | M | DONE | 2026-08-09 | impl/task-T21-report.md | 4 commits (7731250a…80761d45): scheduler core (W1..W6, modes, shrink, CROSSING lever) + all six 6 ms families and inline tickEviction as W6 clients (code unchanged, OFF byte-identical) + `__framePhase`/`__frameWork` landed in registry + census reducer. 144+25 new checks, all touched-family suites green. GATE-PHASE census run + BENCH-CROSS-SETTLE DEFERRED (memory / 1070 batch). |
 | T22 | ST9 | draw pools + scheduler B/C + closed-class prewarm `?drawPools` | L | TODO | | | |
 | T30 | batch A | 1070 queue batch A (E1 + probes) — queue-file prep | S | TODO | | | |
 | T31 | batch B | 1070 queue batch B (E2–E4) — queue-file prep | S | TODO | | | |
