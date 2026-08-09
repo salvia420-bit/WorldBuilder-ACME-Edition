@@ -64,6 +64,7 @@
 import { writeFileSync } from "node:fs";
 import { poseTable } from "./lib/moving_path.mjs";
 import { movingRigSource } from "./lib/moving_rig.mjs";
+import { createReport } from "./lib/report.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (k, d) => {
@@ -246,7 +247,9 @@ async function main() {
   rep.verdict = j.verdict;
   rep.rejectReasons = j.reasons;
 
-  writeFileSync(OUT, JSON.stringify({ ...rep, series: { cpuMs: r.cpuMs, rafMs: r.rafMs, draws: r.draws } }, null, 2));
+  // RESULTS v2 (T01): same measurements, emitted through the shared report
+  // writer — every figure now carries its mechanical @scale tag.
+  writeFileSync(OUT, JSON.stringify(toResultsV2(rep, { series: { cpuMs: r.cpuMs, rafMs: r.rafMs, draws: r.draws } }), null, 2));
   console.log("\n" + "=".repeat(72));
   console.log(`  MOVING BENCH — ${rep.arm}`);
   console.log("=".repeat(72));
@@ -289,6 +292,65 @@ export function deltaWalk(a, b) {
   }
   d.hitRate = (d.calls > 0) ? +((d.hitsExact + d.hitsSlack) / d.calls).toFixed(3) : null;
   return d;
+}
+
+/**
+ * Fold one run's legacy rep into a RESULTS-v2 object (T01, pass-10 S12 —
+ * "moving-bench's report is already ~this shape and converts first").
+ * Behavior-preserving: the measurements are the same numbers judge() saw; the
+ * emission path is the shared writer, which refuses untagged figures.
+ *
+ * Metric mapping (tags per pass-10 S1):
+ *   rafMs  -> frameMs@moving   (the rAF interval IS the frame time; the arm
+ *                               notes frameMsSource:"raf-interval")
+ *   cpuMs  -> cpuMs@moving     (vfxGauge tick CPU)
+ *   draws  -> draws@submitted  (renderer.info, differenced, autoReset off)
+ *   ktris  -> ktris@submitted
+ *   residentInstances/batchedMeshes/staticBatchC -> *@resident (RESIDENT,
+ *                               never priced as if drawn — the founding wall)
+ *
+ * Everything else the old file carried (checksums, frames, lb churn,
+ * walkDelta, errors, spec, series) rides along as aux fields on the arm, so
+ * nothing an operator read from the legacy shape is lost.
+ *
+ * A judge() USABLE run lands verdict EXPLORATORY (a single arm is never a
+ * scored budget by itself); a REJECT run lands INVALID and is kept on disk as
+ * evidence, never scored (PR-10).
+ */
+export function toResultsV2(rep, { series } = {}) {
+  const metrics = {};
+  if (rep.rafMs) metrics["frameMs@moving"] = rep.rafMs;
+  if (rep.cpuMs) metrics["cpuMs@moving"] = rep.cpuMs;
+  if (rep.workload?.draws) metrics["draws@submitted"] = rep.workload.draws;
+  if (rep.workload?.ktris) metrics["ktris@submitted"] = rep.workload.ktris;
+  if (Number.isFinite(rep.workload?.residentInstances)) metrics["instances@resident"] = rep.workload.residentInstances;
+  if (Number.isFinite(rep.workload?.batchedMeshes)) metrics["batchedMeshes@resident"] = rep.workload.batchedMeshes;
+  if (Number.isFinite(rep.workload?.staticBatchC)) metrics["staticBatchBuckets@resident"] = rep.workload.staticBatchC;
+  return createReport({
+    bench: "MOVE-FIX",
+    protocol: "PC-3",
+    url: rep.url,
+    ts: rep.ts,
+    wasmProfile: "unknown", // PR-13 gate not wired here yet (T01 handoff)
+  })
+    .addArm({
+      arm: rep.arm,
+      verdict: rep.verdict === "USABLE" ? "USABLE" : "REJECT",
+      rejectReasons: rep.rejectReasons || [],
+      metrics,
+      frameMsSource: "raf-interval",
+      spec: rep.spec,
+      pathChecksum: rep.pathChecksum,
+      realisedChecksum: rep.realisedChecksum,
+      frames: rep.frames,
+      missedGauge: rep.missedGauge,
+      lb: rep.lb,
+      walkDelta: rep.walkDelta,
+      errors: rep.errors,
+      ...(series !== undefined ? { series } : {}),
+    })
+    .setVerdict(rep.verdict === "USABLE" ? "EXPLORATORY" : "INVALID")
+    .toJSON();
 }
 
 // Importable for tests; only `main()` touches the network.
