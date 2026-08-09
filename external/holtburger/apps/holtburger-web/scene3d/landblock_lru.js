@@ -1,5 +1,18 @@
 // Landblock LRU — bounds the resident set of baked landblocks.
 //
+// ST7 STATUS NOTE (2026-08-09, T20 — pass-09 S7.3 register row "landblock_lru.js
+// header + governor doc rows"): under the `?slotGrid` arm (SPEC.md §1.4 / §3 T20)
+// this module runs ASSERT-ONLY — the slot grid (scene3d/residency_grid.js) is the
+// residency AUTHORITY; tickEviction computes its victim set per today's rules,
+// DIFFS it against the grid's window claim (setGridAssertProvider /
+// _tickAssertOnly), and acts on it NEVER (`gridLruDivergence` is THE GATE-GRID
+// counter and must read 0). The geometry-count governor (MAX_LIVE_GEOM) and its
+// floor-zeroing are not consulted on that arm — replaced by the byte-denominated
+// pressure ladder (pass 6 D-06.6). The park/unpark/dispose PRIMITIVES below stay
+// live on BOTH arms (the grid adapter drives them). This module is NOT deleted:
+// the flag-OFF arm is byte-identical legacy behavior (the kill path) until the
+// SPEC §3 ST10 retirement conditions fire.
+//
 // Today (pre-LRU) the 13×13 spawn ring + every LB the player has ever
 // walked into stays resident forever. Each LB owns:
 //   - 1 terrain mesh (per-LB ShaderMaterial + per-LB BufferGeometry +

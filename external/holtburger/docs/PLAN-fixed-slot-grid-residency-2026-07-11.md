@@ -1,5 +1,20 @@
 # PLAN — fixed-slot grid residency + park time-retention (`?fixedGrid`) — 2026-07-11 (s13 design doc, build S15)
 
+> **STATUS BANNER (ST7 landing, 2026-08-09 — pass-09 S7.3 register row, T20).**
+> This plan is HISTORICAL. What it designed was built, validated, and then
+> GENERALIZED: the S15b/S15c `?fixedGrid` terrain grid shipped default-ON at
+> radius 1 (S16 flip 2026-07-11, user 1070 sign-off), and at ST7 its core
+> (shift-in-place slots, integrity detectors, EdgeParkScheduler hysteresis)
+> became the seed of the full residency authority —
+> `scene3d/residency_grid.js` (`?slotGrid`, SPEC.md §1.4 / §3 T20, pass 6
+> D-06.1..D-06.10): tile-granular W_T=6, 36 slots covering the 11×11-LB ring,
+> PackStore pins, pressure ladder, grid→legacy-producer adapter, legacy LRU
+> assert-only. Under the `?slotGrid` arm the radius-1 fixed grid keeps ONLY its
+> terrain FETCH role (its EdgeParkScheduler is not constructed there); full
+> subsumption/retirement stages at ST10. Any brief echoing this plan's
+> "designed, never built" framing is stale — the grid has been live default-ON
+> since 2026-07-11. Read SPEC.md §1.4 for the current normative design.
+
 Deliverable of 1120-appendix **A15** (T13 primary). Design-doc NOW, build in
 S15 — after the S14 wasm rebuild lands the B1 surface cache (parking
 containers still cold-re-decodes source bytes until that resource cache
