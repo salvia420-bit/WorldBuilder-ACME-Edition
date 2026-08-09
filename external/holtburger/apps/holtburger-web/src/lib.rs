@@ -1298,6 +1298,10 @@ extern "C" {
 
 #[cfg(target_arch = "wasm32")]
 mod global_source;
+/// T13 (ST3, `?geomBundles`) — HBG1 GeometryBundle assembly (SPEC §1.2,
+/// pass 4 S3): `assemble_model_geometry` / `assemble_envcell_geometry`.
+#[cfg(any(target_arch = "wasm32", test))]
+mod geom_bundles;
 
 // T12 (ST2, `?packSource`): controller→PackSource admission exports.
 #[cfg(target_arch = "wasm32")]
@@ -19586,7 +19590,9 @@ impl EnvCellPlacement {
 /// `DatLoader/FileTypes/EnvCell.cs:50`) before passing the resolved
 /// `surfaces: &[u32]` here. `pos_surface < 0` or out-of-range polygons
 /// emit `surface_did = 0` and fall through to the flat-fallback path.
-#[cfg(target_arch = "wasm32")]
+// T13: `test` added so the geom_bundles differ can pin the bundle path
+// against this triangulator natively (behaviour unchanged on wasm32).
+#[cfg(any(target_arch = "wasm32", test))]
 fn append_environment_tris(
     tris: &mut Vec<Tri>,
     env: &holtburger_dat::file_type::Environment,
@@ -21063,7 +21069,7 @@ pub fn holtburg_test_door_rotation_keyframe() -> u32 {
 /// with a light table". `collect_setup_model_lights` is REUSED verbatim so
 /// the bake and the live `fetchSetupModelLights` pool path can never
 /// disagree about a light's colour, intensity or falloff.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn collect_landblock_bake_lights<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     cells_raw: &[holtburger_dat::file_type::EnvCell],

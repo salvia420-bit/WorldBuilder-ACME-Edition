@@ -477,6 +477,8 @@ struct ResidentPack {
     pvw_keys: Vec<u32>,
     /// T15 (ST5): TEXREF rsIds this pack registered (first-copy winners).
     texref_keys: Vec<u32>,
+    /// T13 (ST3): GEOM model ids this pack registered (first-copy winners).
+    geom_keys: Vec<u32>,
 }
 
 /// PackStore budgets + floor (pass 6 S3, all [A] — re-classed by the first
@@ -499,6 +501,10 @@ struct PackStoreInner {
     /// T15 (ST5, pass 5 S2): rsId → (tier_bits, dims) from TEXREF rows.
     /// Bucket identity (dims) + tier routing (FULL present / legacy-only).
     texref: HashMap<u32, (u8, u8)>,
+    /// T13 (ST3, pass 4 S1): model id → HBG1 GEOM payload range (kind 0x09
+    /// sections, decompressed at admission). Registered for the SYNC
+    /// `assemble_model_geometry` / `assemble_envcell_geometry` reads.
+    geom: HashMap<u32, RecordLoc>,
     /// Interned namespace strings across packs (2 today; format allows 255/pack).
     ns_names: Vec<String>,
     /// Total resident pack FILE bytes (scale: as-fetched, compressed).
@@ -525,6 +531,7 @@ impl Default for PackStoreInner {
             records: HashMap::new(),
             pvw: HashMap::new(),
             texref: HashMap::new(),
+            geom: HashMap::new(),
             ns_names: Vec::new(),
             pack_file_bytes: 0,
             section_bytes: 0,
@@ -569,6 +576,8 @@ pub struct PackSourceStats {
     /// the glue JSON gains two keys; no existing consumer reads them).
     pub pvw_rows: usize,
     pub texref_rows: usize,
+    /// T13 (ST3): registered HBG1 GEOM payloads (additive field).
+    pub geom_rows: usize,
 }
 
 /// One `enforce_budget` pass's outcome.
@@ -764,6 +773,34 @@ impl PackSource {
             }
         }
 
+        // T13 (ST3) — HBG1 GEOM payloads (kind 0x09): model id → payload
+        // range, registered for the SYNC bundle-assembly reads
+        // (`assemble_model_geometry` / `assemble_envcell_geometry`). Row
+        // shape per holtburger_dat::hbg1::parse_geom_section; inline
+        // duplication across tile packs keeps the first copy exactly like
+        // the record streams (bake determinism makes the bytes identical).
+        let mut own_geom_keys: Vec<u32> = Vec::new();
+        if let Some(payload) = pack.section_raw(section_kind::GEOM)? {
+            let rows = holtburger_dat::hbg1::parse_geom_section(&payload)?;
+            let body = Arc::new(payload);
+            for (id, enc, off, size) in rows {
+                if enc != holtburger_dat::hbg1::ENCODING_HBG1 {
+                    // Unknown encodings are skipped (forward-compat), never
+                    // an admission failure.
+                    continue;
+                }
+                if !inner.geom.contains_key(&id) {
+                    own_geom_keys.push(id);
+                    inner.geom.insert(
+                        id,
+                        RecordLoc { section: body.clone(), offset: off, len: size },
+                    );
+                }
+            }
+            inner.section_bytes += body.len();
+            own_sections.push(body);
+        }
+
         inner.pack_file_bytes += pack.bytes.len();
         inner.resident.insert(
             hash16,
@@ -777,6 +814,7 @@ impl PackSource {
                 record_keys: own_keys,
                 pvw_keys: own_pvw_keys,
                 texref_keys: own_texref_keys,
+                geom_keys: own_geom_keys,
             },
         );
         Ok(InsertStats { kind: pack.kind, records_registered: registered, duplicate: false })
@@ -914,6 +952,16 @@ impl PackSource {
             for rs in &p.texref_keys {
                 inner.texref.remove(rs);
             }
+            // T13 (ST3): same first-copy unregistration for GEOM payloads.
+            for id in &p.geom_keys {
+                let owned = match inner.geom.get(id) {
+                    Some(loc) => p.sections.iter().any(|s| Arc::ptr_eq(s, &loc.section)),
+                    None => false,
+                };
+                if owned {
+                    inner.geom.remove(id);
+                }
+            }
             inner.evictions += 1;
             report.evicted += 1;
         }
@@ -960,6 +1008,20 @@ impl PackSource {
         inner.texref.get(&rs_id).copied()
     }
 
+    /// T13 (ST3) — the HBG1 GEOM payload for one model id (0x01 GfxObj,
+    /// 0x02 Setup, 0x0D Environment), or `None` when no resident pack
+    /// carries it (encoding-0x0000 world / non-pack content — the caller
+    /// falls back to the runtime decode, counted). SYNC by design: GEOM
+    /// rides the same packs as its records, resident before decode
+    /// (pass 3 S1.4).
+    pub fn geom_payload(&self, model_id: u32) -> Option<Vec<u8>> {
+        let inner = self.inner.lock().expect("pack store mutex poisoned");
+        inner
+            .geom
+            .get(&model_id)
+            .map(|loc| loc.section[loc.offset..loc.offset + loc.len].to_vec())
+    }
+
     /// Every registered `(namespace, file_id)` — diag + the region differ
     /// test's iteration surface. O(records); not for per-frame use.
     pub fn record_keys(&self) -> Vec<(String, u32)> {
@@ -1001,6 +1063,7 @@ impl PackSource {
             over_budget: Self::over_budget(&inner),
             pvw_rows: inner.pvw.len(),
             texref_rows: inner.texref.len(),
+            geom_rows: inner.geom.len(),
         }
     }
 
@@ -1363,6 +1426,45 @@ mod tests {
         assert_eq!(src.pvw_payload(0x0600_0001), None, "A's PVW rows unregistered");
         assert_eq!(src.pvw_payload(0x0600_0002), None);
         assert_eq!(src.texref(0x0600_0001), None);
+    }
+
+    /// T13 (ST3): GEOM payloads register at admission, serve sync, and
+    /// unregister with their first-copy owner at eviction.
+    #[test]
+    fn geom_register_serve_and_evict() {
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(0x0100_0001u32, vec![0xABu8; 10]);
+        entries.insert(0x0D00_0002u32, vec![0xCDu8; 6]);
+        let sec = holtburger_dat::hbg1::build_geom_section(&entries);
+        let pack = build_pack(
+            pack_kind::META_SHARED,
+            0,
+            &["eor/portal"],
+            &[(section_kind::GEOM, sec)],
+        );
+        let keeper = build_pack(pack_kind::CORE, 0, &["eor/portal"], &[]);
+        let (ha, hk) = (sha_trunc16(&pack), sha_trunc16(&keeper));
+        let src = PackSource::new(build_index(&[
+            PackTableEntry { hash16: ha, size: pack.len() as u32, kind: pack_kind::META_SHARED, meta: 0 },
+            PackTableEntry { hash16: hk, size: keeper.len() as u32, kind: pack_kind::CORE, meta: 0 },
+        ]));
+        src.insert_pack(ha, pack).expect("insert");
+        src.insert_pack(hk, keeper).expect("insert keeper");
+        assert_eq!(src.geom_payload(0x0100_0001).unwrap(), vec![0xAB; 10]);
+        assert_eq!(src.geom_payload(0x0D00_0002).unwrap(), vec![0xCD; 6]);
+        assert_eq!(src.geom_payload(0x0100_0003), None);
+        assert_eq!(src.stats().geom_rows, 2);
+
+        // Evict the owner: rows unregister (same first-copy discipline as PVW).
+        src.set_budgets(1, 1);
+        src.set_floor_ms(5_000.0);
+        src.pin_pack(&hk);
+        let rep = src.enforce_budget(100_000.0);
+        assert_eq!(rep.evicted, 0, "floor holds on first sight");
+        let rep = src.enforce_budget(200_000.0);
+        assert!(rep.evicted >= 1, "geom carrier evicts once aged: {rep:?}");
+        assert_eq!(src.geom_payload(0x0100_0001), None);
+        assert_eq!(src.stats().geom_rows, 0);
     }
 
     #[test]

@@ -233,3 +233,15 @@ pub fn pack_texref(rs_id: u32) -> i32 {
         },
     })
 }
+
+// ── T13 (ST3, `?geomBundles`) — GEOM sync reads ────────────────────────────
+
+/// The HBG1 GEOM payload for one model id (0x01/0x02/0x0D), or `None` when
+/// no resident pack carries it / the seam is unarmed — the bundle assembly
+/// marks the entry `missing` and the JS consumer falls back to the runtime
+/// decode (encoding 0x0000, the designed migration state), counted.
+pub(crate) fn pack_geom_payload(model_id: u32) -> Option<Vec<u8>> {
+    PACK_SOURCE.with(|cell| {
+        cell.borrow().as_ref().and_then(|pack| pack.geom_payload(model_id))
+    })
+}
