@@ -77,12 +77,7 @@ import { meshToGeometryGroups } from "./adapter.js";
 // T13 (ST3, `?geomBundles`): HBG1 bundle consumption — armed only by
 // index.html's initGeomBundles (requires ?packSource); every reader below
 // is behind geomBundlesActive(), so the OFF arm is byte-identical legacy.
-import {
-  geomBundlesActive,
-  assembleModels as assembleGeomBundles,
-  bundleToGeometryGroups,
-  countGeomFallback,
-} from "./geom_bundles.js";
+import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 // NB single line: test_static_batch.mjs / test_static_callpes.mjs load this
 // module by stripping `^\s*import .*$` LINE-wise, so a multi-line import
 // specifier list would leave a dangling `} from "./materials.js";`.

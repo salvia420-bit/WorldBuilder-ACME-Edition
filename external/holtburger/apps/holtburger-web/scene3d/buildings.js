@@ -54,12 +54,7 @@ import * as THREE from "three";
 import { prewarmSubtree } from "./bake_prewarm.js";
 // T13 (ST3, `?geomBundles`): HBG1 per-part bundle consumption — armed only
 // by index.html; OFF arm never reaches the branch (byte-identical legacy).
-import {
-  geomBundlesActive,
-  assembleModels as assembleGeomBundles,
-  bundleToPartGroups,
-  countGeomFallback,
-} from "./geom_bundles.js";
+import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToPartGroups, countGeomFallback } from "./geom_bundles.js";
 import {
   meshToGeometryGroups,
   placementToMatrix4,
