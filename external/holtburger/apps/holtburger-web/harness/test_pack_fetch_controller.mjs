@@ -122,6 +122,19 @@ function mockFetch() {
   return { impl, calls, pending, bodies, flush };
 }
 
+/** Drive flush rounds until `promise` settles (async digests make single
+ *  flushes racy — settlement is the only deterministic signal). */
+async function settle(fm, promise) {
+  let done = false; let val; let err;
+  promise.then((v) => { done = true; val = v; }, (e) => { done = true; err = e; });
+  for (let i = 0; i < 200 && !done; i += 1) {
+    await fm.flush();
+    await new Promise((r) => setImmediate(r));
+  }
+  if (!done) throw new Error("settle: promise did not settle in 200 rounds");
+  return { val, err };
+}
+
 const digestSubtle = async (buf) => {
   const d = await webcrypto.subtle.digest("SHA-256", buf);
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -224,10 +237,7 @@ await (async () => {
   // Network error x3 => terminal; entry unlatched so a later need refetches.
   fm.bodies.set("http://x/flaky", new Error("boom"));
   const p = ctl.need("http://x/flaky", { lane: "B" });
-  let err = null;
-  p.catch((e) => { err = e; });
-  await fm.flush(); await fm.flush(); await fm.flush(); await fm.flush();
-  await new Promise((r) => setImmediate(r));
+  const { err } = await settle(fm, p);
   ok(err instanceof PackFetchError && err.kind === "network", `3 attempts then typed network failure (${err && err.kind})`);
   ok(delays.filter((d) => d === 1000).length === 1 && delays.filter((d) => d === 3000).length === 1,
     "backoff schedule 0/1s/3s");
@@ -241,10 +251,7 @@ await (async () => {
   // 404 on an index-listed object: LOUD deploy skew, immediate (no retries).
   fm.calls.length = 0;
   const p404 = ctl.need("http://x/gone", { lane: "B" });
-  let e404 = null;
-  p404.catch((e) => { e404 = e; });
-  await fm.flush();
-  await new Promise((r) => setImmediate(r));
+  const { err: e404 } = await settle(fm, p404);
   ok(e404 instanceof PackFetchError && e404.kind === "deploy-skew-404", "404 => deploy-skew, never silent-empty");
   ok(fm.calls.length === 1, "404 is terminal on first response (no retry spam)");
 })();
@@ -269,10 +276,7 @@ await (async () => {
   const badUrl = "http://x/packs/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.hbp";
   fm.bodies.set(badUrl, new Uint8Array([5, 5, 5]));
   const pBad = ctl.need(badUrl, { lane: "B" });
-  let eBad = null;
-  pBad.catch((e) => { eBad = e; });
-  await fm.flush(); await fm.flush();
-  await new Promise((r) => setImmediate(r));
+  const { err: eBad } = await settle(fm, pBad);
   const badCalls = fm.calls.filter((c) => c.url === badUrl);
   ok(badCalls.length === 2, `mismatch => exactly one reload retry (${badCalls.length} fetches)`);
   ok(badCalls[1].init.cache === "reload", "retry uses cache:'reload'");
@@ -301,10 +305,7 @@ await (async () => {
   });
   fm.bodies.set("http://x/tile", new Error("net down"));
   const p = ctl.need("http://x/tile", { lane: "R", tileKey: "3,4" });
-  let err = null;
-  p.catch((e) => { err = e; });
-  await fm.flush(); await fm.flush(); await fm.flush(); await fm.flush();
-  await new Promise((r) => setImmediate(r));
+  const { err } = await settle(fm, p);
   ok(err && err.kind === "network", "tile fetch failed terminally");
   ok(ctl._quarantine.has("3,4"), "tile quarantined");
   ok(ctl.diag.quarantined.includes("3,4"), "diag.quarantined lists the tile (authoritative)");

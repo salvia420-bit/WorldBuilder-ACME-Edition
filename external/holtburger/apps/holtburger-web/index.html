@@ -2682,6 +2682,35 @@
         } catch (e) {
           console.warn("[A15] decode admission setup failed (non-fatal):", e);
         }
+        // T12 (`?packSource`, ST2 — SPEC §1.1 / pass 3): pre-boot the
+        // PackFetchController BEFORE the concurrency split so an ARMED pack
+        // lane can apply the D-03.10 legacy-share rule (legacy fetch total
+        // drops to 8 UNDER the controller's cap — the pass-3 Q6 cheapest
+        // implementation). DEFAULT OFF: the exact-match check below mirrors
+        // packSourceEnabled() and the module is not even imported on the
+        // OFF arm (byte-identical legacy boot, the kill path).
+        let __packCtl = null;
+        try {
+          const __psv = new URLSearchParams(window.location.search).get("packSource");
+          const __psOn = __psv === "on" || __psv === "1" || __psv === "true" || __psv === "yes";
+          if (__psOn) {
+            const pf = await import("./scene3d/pack_fetch_controller.js");
+            __packCtl = pf.getPackFetchController();
+            const { armed } = await __packCtl.boot(MANIFEST_URL);
+            if (!armed) {
+              console.log("[packSource] flag ON but manifest has no world_index — legacy dist, controller disarmed");
+            } else if (
+              globalThis.__hbFetchConcurrencyTotal === undefined &&
+              globalThis.__hbFetchConcurrency === undefined
+            ) {
+              globalThis.__hbFetchConcurrencyTotal = 8;
+              console.log("[packSource] armed (index " + __packCtl.diag.pinnedIndex + ") — legacy fetch share capped at 8 (D-03.10)");
+            }
+          }
+        } catch (e) {
+          console.error("[packSource] controller boot failed (non-fatal — legacy path):", e);
+          __packCtl = null;
+        }
         try {
           const split = applyFetchConcurrencySplit();
           console.log(
@@ -2696,6 +2725,33 @@
             "[Phase 5.0/5.2] manifest-mode source initialized from",
             MANIFEST_URL
           );
+          // T12 (`?packSource`): arm the wasm CompositeSource seam with the
+          // controller's verified+pinned index, run the position-independent
+          // boot waves (CORE/commons/PVW/t128, lane B), and track the player
+          // LB at 2 s cadence for ring/lookahead fetches (D-03.8). MAIN
+          // instance only — the bake worker keeps the legacy path until the
+          // ST7 lease machinery. Fail-soft: any error logs and leaves the
+          // session on the legacy path (packs are an overlay, never a gate).
+          if (__packCtl && __packCtl.armed) {
+            try {
+              const summary = __hbWasmNs.pack_source_init(
+                new Uint8Array(__packCtl.getIndexBytes())
+              );
+              __packCtl.attachWasm(__hbWasmNs);
+              console.log("[packSource] wasm seam armed:", summary);
+              __packCtl.bootCommons().catch((e) =>
+                console.error("[packSource] boot waves failed (legacy path still serves):", e)
+              );
+              setInterval(() => {
+                try {
+                  const p = window.getLocalPlayerPose ? window.getLocalPlayerPose() : null;
+                  if (p && p.landblockId) __packCtl.notePlayerLandblock(p.landblockId >>> 0);
+                } catch (_) { /* pose pre-login → skip */ }
+              }, 2000);
+            } catch (e) {
+              console.error("[packSource] wasm seam arming failed (non-fatal):", e);
+            }
+          }
           // X-track `?statTexOverride=on` — install per-RenderSurface pixel
           // overrides into THIS instance before any scene decode runs (the
           // bake worker installs into its own instance in handleInit).

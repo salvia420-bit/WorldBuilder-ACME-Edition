@@ -94,8 +94,7 @@ const report = JSON.parse(readFileSync(path.join(REGION, "pack-report.json"), "u
 // ── spawn ring (Holtburg boot LB 0xA9B4 — the T10 bake's boot ring) ────────
 {
   ctl.notePlayerLandblock(0xa9b4);
-  // Drain: file-backed fetches settle in a few macrotask turns.
-  for (let i = 0; i < 50; i += 1) await new Promise((r) => setImmediate(r));
+  await ctl._idle(); // deterministic drain (queued+inflight empty)
   const d = ctl.diag;
   ok(d.lanes.U.done >= 1, "spawn tile rode lane U");
   ok(d.byComponent.tiles.requests >= 30, `ring tiles fetched (${d.byComponent.tiles.requests})`);
@@ -107,14 +106,14 @@ const report = JSON.parse(readFileSync(path.join(REGION, "pack-report.json"), "u
 {
   const before = wire.requests;
   ctl.notePlayerLandblock(0xa8b4);
-  for (let i = 0; i < 50; i += 1) await new Promise((r) => setImmediate(r));
+  await ctl._idle();
   const delta = wire.requests - before;
   ok(delta <= 12, `crossing request budget C1-class (${delta} ≤ 12)`);
   // Same hop again: everything resident → zero network (C3 shape).
   const before2 = wire.requests;
   ctl.notePlayerLandblock(0xa9b4);
   ctl.notePlayerLandblock(0xa8b4);
-  for (let i = 0; i < 50; i += 1) await new Promise((r) => setImmediate(r));
+  await ctl._idle();
   ok(wire.requests - before2 === 0, "re-crossing cached territory = 0 network (C3 shape)");
 }
 

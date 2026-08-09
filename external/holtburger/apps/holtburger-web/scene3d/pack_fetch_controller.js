@@ -266,7 +266,10 @@ export function createPackFetchController(opts = {}) {
   const search = opts.search;
   const cap = opts.fetchCap ?? fetchCapConfigured(search);
   const verifyOn = opts.verify ?? packVerifyEnabled(search);
-  const wasmNs = opts.wasmNs || null; // { pack_source_init, pack_source_insert, pack_source_stats }
+  // { pack_source_init, pack_source_insert, pack_source_stats } — may be
+  // attached AFTER boot() via attachWasm() (the page arms the seam once
+  // init_resource_source has resolved).
+  let wasmNs = opts.wasmNs || null;
   const log = opts.log || ((...a) => console.log("[pack-fetch]", ...a));
   const warn = opts.warn || ((...a) => console.warn("[pack-fetch]", ...a));
   const error = opts.error || ((...a) => console.error("[pack-fetch]", ...a));
@@ -553,6 +556,7 @@ export function createPackFetchController(opts = {}) {
   // ── session state ─────────────────────────────────────────────────────────
   let manifest = null;
   let index = null; // parsed HBSI1
+  let indexBytes = null; // raw verified HBSI1 bytes (handed to pack_source_init)
   let baseUrl = ""; // dist dir the manifest lives in
   let packUrlTemplate = "packs/{sha256_prefix2}/{sha256}.hbp";
   const t0 = now();
@@ -621,6 +625,7 @@ export function createPackFetchController(opts = {}) {
     const buf = await need(indexUrl, {
       lane: "B", component: "manifestIndex", expectedHash: wi.sha256_16,
     });
+    indexBytes = buf;
     index = parseHbsi1(buf);
     diag.pinnedIndex = wi.sha256_16;
     armed = true;
@@ -766,6 +771,9 @@ export function createPackFetchController(opts = {}) {
     need,
     needPack,
     notePlayerLandblock,
+    /** Arm the wasm seam post-init_resource_source (page wiring). */
+    attachWasm(ns) { wasmNs = ns || null; },
+    getIndexBytes: () => indexBytes,
     getT128Slice: (chan) => t128[chan],
     get armed() { return armed; },
     get index() { return index; },
@@ -776,6 +784,20 @@ export function createPackFetchController(opts = {}) {
     _quarantine: quarantine,
     _resident: resident,
     _pump: pump,
+    /** Test/harness drain: resolves when nothing is queued or in flight
+     *  (two consecutive quiet macrotasks). Not for production use — a
+     *  T-subcap-starved queue would spin. */
+    async _idle(maxRounds = 5000) {
+      const tick = () => new Promise((r) => (typeof setImmediate === "function" ? setImmediate(r) : setTimeout(r, 0)));
+      let quiet = 0;
+      for (let i = 0; i < maxRounds; i += 1) {
+        const busy = inflightTotal > 0 || LANES.some((l) => queues[l].some((e) => e.state === "queued"));
+        quiet = busy ? 0 : quiet + 1;
+        if (quiet >= 2) return;
+        await tick();
+      }
+      throw new Error("pack-fetch _idle: did not settle");
+    },
   };
   return controller;
 }
