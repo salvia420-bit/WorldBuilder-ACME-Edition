@@ -3301,6 +3301,19 @@ mod scenery_fetch {
         SHA_LOGGED.with(|cell| *cell.borrow_mut() = false);
     }
 
+    /// T20 (ST7, `?slotGrid`) — drop ONE LB's cached scenery rows. The
+    /// grid's tile-keyed retention hook: at a slot's true release
+    /// (PARKED→EMPTY) the per-LB world caches release with it, so this
+    /// store's population tracks the RESIDENT set, not the route (the
+    /// pass-6 S6 "scenery/spawns fetch caches delete with their feeds"
+    /// row, bridged until ST10 retires the fetch track itself). Never
+    /// called on the OFF arm.
+    pub fn evict_lb(lb_key: u32) {
+        CACHE.with(|cell| {
+            cell.borrow_mut().remove(&(lb_key & 0xFFFF_0000));
+        });
+    }
+
     /// Fetch + parse one LB's scenery JSONL. Returns `Ok(Vec<...>)`
     /// of cached records (may be empty for baked-empty LBs or 404).
     /// Errors only on JSON-parse failure (which indicates a real
@@ -4231,6 +4244,14 @@ mod spawn_fetch {
         SHA_LOGGED.with(|cell| *cell.borrow_mut() = false);
     }
 
+    /// T20 (ST7, `?slotGrid`) — drop ONE LB's cached spawn rows (the
+    /// grid's tile-keyed retention hook; see scenery_fetch::evict_lb).
+    pub fn evict_lb(lb_key: u32) {
+        CACHE.with(|cell| {
+            cell.borrow_mut().remove(&(lb_key & 0xFFFF_0000));
+        });
+    }
+
     /// Fetch + parse one LB's spawns JSONL. Returns `Ok(Vec<...>)`
     /// of cached records (may be empty for empty-staged LBs or 404).
     /// Errors only on JSON-parse failure (real bake corruption).
@@ -4369,6 +4390,20 @@ mod spawn_fetch {
 
 #[cfg(target_arch = "wasm32")]
 pub use spawn_fetch::{clear_spawns_cache, init_spawns_base_url, spawns_cache_size};
+
+/// T20 (ST7, `?slotGrid`) — tile-keyed retention for the per-LB world-data
+/// caches (pass 6 S6 bridged): the grid adapter calls this at a slot's true
+/// release (PARKED→EMPTY) for each of the tile's LBs, so the scenery/spawns
+/// record caches track the RESIDENT set instead of growing O(route). The
+/// FETCH tracks themselves stay legacy-lane until ST10 (T12 D3's exception,
+/// carried forward); a re-entry re-fetches through them (browser-cache-warm).
+/// OFF arm: never called — both caches keep today's grow-only behavior.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn hb_evict_lb_world_caches(lb_key: u32) {
+    scenery_fetch::evict_lb(lb_key);
+    spawn_fetch::evict_lb(lb_key);
+}
 
 /// Fetch per-landblock ACE entity-spawn records for a list of
 /// `XXYYFFFE` LandblockInfo cell IDs. Mirrors
@@ -11573,6 +11608,36 @@ pub fn hb_mem_census() -> String {
             budget: None,
         }
     };
+    // T20 (ST7): PackStore rows (pass 6 D-06.9.1 — every payload row
+    // BUDGETED). Unarmed instances (OFF arm; the bake worker ALWAYS at T20)
+    // read 0 bytes against the budget — the D-06.8 "worker census must read
+    // packBytes: 0" rule holds by construction.
+    let (pack_bytes, pack_sections) = match pack_source_glue::pack_source_census() {
+        Some(s) => (
+            MemStoreRow {
+                bytes: s.pack_file_bytes,
+                entries: s.packs_resident,
+                budget: Some(s.budget_bytes),
+            },
+            MemStoreRow {
+                bytes: s.section_bytes,
+                entries: s.records,
+                budget: Some(s.section_budget_bytes),
+            },
+        ),
+        None => (
+            MemStoreRow {
+                bytes: 0,
+                entries: 0,
+                budget: Some(holtburger_resource_http::pack::PACK_BUDGET_BYTES_DEFAULT),
+            },
+            MemStoreRow {
+                bytes: 0,
+                entries: 0,
+                budget: Some(holtburger_resource_http::pack::PACK_SECTION_BUDGET_BYTES_DEFAULT),
+            },
+        ),
+    };
 
     mem_census_json(
         wasm_memory_bytes(),
@@ -11591,6 +11656,8 @@ pub fn hb_mem_census() -> String {
             ("texSwapAliases", tex_swap),
             ("scratchPool", scratch),
             ("decodeDids", decode_dids),
+            ("packBytes", pack_bytes),
+            ("packSections", pack_sections),
         ],
         DECODE_ADMISSION.stats().peak_live_bytes as u64,
     )

@@ -399,17 +399,37 @@ struct RecordLoc {
     len: usize,
 }
 
-/// Per-pack residency row. `kind`/`file_len`/`records` are stored for the
-/// pass-6 eviction machinery (T20: PackStore budget + tile-vacate unpin)
-/// which reads them per victim; unread at T12 (store only grows).
+/// Per-pack residency row (pass 6 D-06.5 PackStore state, landed at T20):
+/// pin-counted, UseTime-floored, evictable only when unpinned + aged.
 #[allow(dead_code)]
 struct ResidentPack {
     kind: u8,
     file_len: usize,
     records: usize,
+    /// Grid-slot pin count (D-06.5.1): each LIVE/PARKED/STAGED slot pins its
+    /// tile pack + interiors + REFS-listed shared packs; commons/index carry
+    /// a session pin. Pinned packs are NEVER eviction victims.
+    pin_count: u32,
+    /// Clock of the last transition to pin_count == 0 (caller-supplied ms —
+    /// JS holds the clock, pass 6 "Rust holds bytes, JS holds policy").
+    /// `NaN` = not yet stamped; `enforce_budget` stamps it on first sight so
+    /// a never-pinned pack still gets a full floor window.
+    last_unpin_ms: f64,
+    /// Decompressed section payloads owned by this pack — the identity
+    /// anchor for record removal at eviction (RecordLoc.section ptr-eq).
+    sections: Vec<Arc<Vec<u8>>>,
+    /// Record keys this pack registered (first-copy winners only).
+    record_keys: Vec<(u16, u32)>,
 }
 
-#[derive(Default)]
+/// PackStore budgets + floor (pass 6 S3, all [A] — re-classed by the first
+/// soak): packBytes 96 MiB, packSections 32 MiB, UseTime floor 30 s from
+/// unpin, emergency minimum 5 s — NEVER 0 (D-06.5 "floors never zeroed").
+pub const PACK_BUDGET_BYTES_DEFAULT: usize = 96 * 1024 * 1024;
+pub const PACK_SECTION_BUDGET_BYTES_DEFAULT: usize = 32 * 1024 * 1024;
+pub const PACK_FLOOR_MS_DEFAULT: f64 = 30_000.0;
+pub const PACK_FLOOR_MS_MIN: f64 = 5_000.0;
+
 struct PackStoreInner {
     /// Resident packs by hash16.
     resident: HashMap<[u8; 16], ResidentPack>,
@@ -423,6 +443,34 @@ struct PackStoreInner {
     section_bytes: usize,
     hits: u64,
     misses: u64,
+    /// T20 residency policy state (see the constants above).
+    budget_bytes: usize,
+    section_budget_bytes: usize,
+    floor_ms: f64,
+    evictions: u64,
+    /// Enforcement passes that stayed over budget because every candidate
+    /// was pinned or floored — "no evictable victim ⇒ run over and record"
+    /// (the ByteBudgetLru stance, lib.rs:10385-10402, applied here).
+    evict_deferrals: u64,
+}
+
+impl Default for PackStoreInner {
+    fn default() -> Self {
+        Self {
+            resident: HashMap::new(),
+            records: HashMap::new(),
+            ns_names: Vec::new(),
+            pack_file_bytes: 0,
+            section_bytes: 0,
+            hits: 0,
+            misses: 0,
+            budget_bytes: PACK_BUDGET_BYTES_DEFAULT,
+            section_budget_bytes: PACK_SECTION_BUDGET_BYTES_DEFAULT,
+            floor_ms: PACK_FLOOR_MS_DEFAULT,
+            evictions: 0,
+            evict_deferrals: 0,
+        }
+    }
 }
 
 /// Insert summary returned to the admitting caller (diag surface fodder).
@@ -442,6 +490,24 @@ pub struct PackSourceStats {
     pub section_bytes: usize,
     pub hits: u64,
     pub misses: u64,
+    /// T20 residency policy readout (pass 6 S3/S5).
+    pub pinned_packs: usize,
+    pub pinned_bytes: usize,
+    pub budget_bytes: usize,
+    pub section_budget_bytes: usize,
+    pub floor_ms: f64,
+    pub evictions: u64,
+    pub evict_deferrals: u64,
+    pub over_budget: bool,
+}
+
+/// One `enforce_budget` pass's outcome.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EvictReport {
+    pub evicted: usize,
+    /// Candidates skipped by pin or floor while still over budget.
+    pub deferred: usize,
+    pub still_over: bool,
 }
 
 /// Sync `ResourceSource` over resident, controller-verified packs.
@@ -514,6 +580,8 @@ impl PackSource {
             .collect();
 
         let mut registered = 0usize;
+        let mut own_sections: Vec<Arc<Vec<u8>>> = Vec::new();
+        let mut own_keys: Vec<(u16, u32)> = Vec::new();
 
         // Record streams.
         for kind in [section_kind::LBINFO, section_kind::ENVCELLS, section_kind::RECORDS] {
@@ -528,13 +596,19 @@ impl PackSource {
                 };
                 // Inline duplication across tile packs (K ≤ 4) makes
                 // re-registration legitimate; bake determinism makes the
-                // bytes identical — keep the first copy.
-                inner.records.entry((ns_id, fid)).or_insert_with(|| {
+                // bytes identical — keep the first copy. First-copy keys are
+                // remembered so eviction (T20) can unregister exactly them.
+                if !inner.records.contains_key(&(ns_id, fid)) {
                     registered += 1;
-                    RecordLoc { section: body.clone(), offset: index_len + off, len: size }
-                });
+                    own_keys.push((ns_id, fid));
+                    inner.records.insert(
+                        (ns_id, fid),
+                        RecordLoc { section: body.clone(), offset: index_len + off, len: size },
+                    );
+                }
             }
             inner.section_bytes += body.len();
+            own_sections.push(body);
         }
 
         // TERRAIN (tile packs): 4 × 252 B fixed, tile order
@@ -569,20 +643,157 @@ impl PackSource {
                     continue; // absent terrain, zero-filled by the bake
                 }
                 let fid = ((lb as u32) << 16) | 0xFFFF;
-                inner.records.entry((ns_id, fid)).or_insert_with(|| {
+                if !inner.records.contains_key(&(ns_id, fid)) {
                     registered += 1;
-                    RecordLoc { section: body.clone(), offset: i * 252, len: 252 }
-                });
+                    own_keys.push((ns_id, fid));
+                    inner.records.insert(
+                        (ns_id, fid),
+                        RecordLoc { section: body.clone(), offset: i * 252, len: 252 },
+                    );
+                }
             }
             inner.section_bytes += body.len();
+            own_sections.push(body);
         }
 
         inner.pack_file_bytes += pack.bytes.len();
         inner.resident.insert(
             hash16,
-            ResidentPack { kind: pack.kind, file_len: pack.bytes.len(), records: registered },
+            ResidentPack {
+                kind: pack.kind,
+                file_len: pack.bytes.len(),
+                records: registered,
+                pin_count: 0,
+                last_unpin_ms: f64::NAN,
+                sections: own_sections,
+                record_keys: own_keys,
+            },
         );
         Ok(InsertStats { kind: pack.kind, records_registered: registered, duplicate: false })
+    }
+
+    // ── T20 residency policy (pass 6 D-06.5: pins, floor, budget) ─────────
+
+    /// Pin a resident pack (grid slot / session pin). Idempotent-additive:
+    /// refcounted, so each slot pins once and unpins once. Returns false
+    /// for a non-resident hash (a pin BEFORE admission is a caller bug —
+    /// the glue pins on STAGED, after `insert_pack`).
+    pub fn pin_pack(&self, hash16: &[u8; 16]) -> bool {
+        let mut inner = self.inner.lock().expect("pack store mutex poisoned");
+        match inner.resident.get_mut(hash16) {
+            Some(p) => {
+                p.pin_count = p.pin_count.saturating_add(1);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Drop one pin. `now_ms` (caller clock — JS holds policy time) stamps
+    /// the UseTime floor when the count reaches 0. Returns false when the
+    /// pack is not resident or was not pinned (audited as a pin leak by
+    /// the JS ledger).
+    pub fn unpin_pack(&self, hash16: &[u8; 16], now_ms: f64) -> bool {
+        let mut inner = self.inner.lock().expect("pack store mutex poisoned");
+        match inner.resident.get_mut(hash16) {
+            Some(p) if p.pin_count > 0 => {
+                p.pin_count -= 1;
+                if p.pin_count == 0 {
+                    p.last_unpin_ms = now_ms;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Set budgets (ladder R3 halves them for the emergency's duration;
+    /// release restores). Enforcement happens on the next `enforce_budget`.
+    pub fn set_budgets(&self, budget_bytes: usize, section_budget_bytes: usize) {
+        let mut inner = self.inner.lock().expect("pack store mutex poisoned");
+        inner.budget_bytes = budget_bytes.max(1);
+        inner.section_budget_bytes = section_budget_bytes.max(1);
+    }
+
+    /// Set the UseTime floor. CLAMPED to ≥ 5 s (`PACK_FLOOR_MS_MIN`) — the
+    /// R4 emergency minimum; a floor can be LOWERED, never zeroed
+    /// (D-06.5 "floors never zeroed", the deleted landblock_lru pathology).
+    pub fn set_floor_ms(&self, ms: f64) {
+        let mut inner = self.inner.lock().expect("pack store mutex poisoned");
+        inner.floor_ms = if ms.is_finite() { ms.max(PACK_FLOOR_MS_MIN) } else { PACK_FLOOR_MS_DEFAULT };
+    }
+
+    fn over_budget(inner: &PackStoreInner) -> bool {
+        inner.pack_file_bytes > inner.budget_bytes
+            || inner.section_bytes > inner.section_budget_bytes
+    }
+
+    /// One eviction pass (called by the glue after inserts/unpins, and by
+    /// the ladder): while over budget, evict UNPINNED packs whose floor has
+    /// aged out, LRU by `last_unpin_ms`. No evictable victim ⇒ run over and
+    /// record (`evict_deferrals`) — never break a pin, never violate the
+    /// floor (the ByteBudgetLru stance generalized, D-06.5).
+    pub fn enforce_budget(&self, now_ms: f64) -> EvictReport {
+        let mut inner = self.inner.lock().expect("pack store mutex poisoned");
+        let mut report = EvictReport::default();
+        if !Self::over_budget(&inner) {
+            return report;
+        }
+        // Stamp unstamped unpinned rows (insert-time packs get a full floor
+        // window starting at first enforcement sight).
+        for p in inner.resident.values_mut() {
+            if p.pin_count == 0 && p.last_unpin_ms.is_nan() {
+                p.last_unpin_ms = now_ms;
+            }
+        }
+        loop {
+            if !Self::over_budget(&inner) {
+                break;
+            }
+            let floor = inner.floor_ms;
+            let mut victim: Option<([u8; 16], f64)> = None;
+            let mut deferred = 0usize;
+            for (h, p) in inner.resident.iter() {
+                if p.pin_count > 0 {
+                    deferred += 1;
+                    continue;
+                }
+                if now_ms - p.last_unpin_ms < floor {
+                    deferred += 1;
+                    continue;
+                }
+                match victim {
+                    Some((_, best)) if p.last_unpin_ms >= best => {}
+                    _ => victim = Some((*h, p.last_unpin_ms)),
+                }
+            }
+            let Some((h, _)) = victim else {
+                report.deferred = deferred;
+                report.still_over = true;
+                inner.evict_deferrals += 1;
+                break;
+            };
+            let p = inner.resident.remove(&h).expect("victim vanished");
+            inner.pack_file_bytes = inner.pack_file_bytes.saturating_sub(p.file_len);
+            for s in &p.sections {
+                inner.section_bytes = inner.section_bytes.saturating_sub(s.len());
+            }
+            for key in &p.record_keys {
+                // Only unregister records still backed by THIS pack's
+                // sections (identity check — a defensive guard; first-copy
+                // bookkeeping should make it always true).
+                let owned = match inner.records.get(key) {
+                    Some(loc) => p.sections.iter().any(|s| Arc::ptr_eq(s, &loc.section)),
+                    None => false,
+                };
+                if owned {
+                    inner.records.remove(key);
+                }
+            }
+            inner.evictions += 1;
+            report.evicted += 1;
+        }
+        report
     }
 
     /// True when this source can serve `key` right now (used by the
@@ -617,6 +828,17 @@ impl PackSource {
 
     pub fn stats(&self) -> PackSourceStats {
         let inner = self.inner.lock().expect("pack store mutex poisoned");
+        let mut pinned_packs = 0usize;
+        let mut pinned_bytes = 0usize;
+        for p in inner.resident.values() {
+            if p.pin_count > 0 {
+                pinned_packs += 1;
+                pinned_bytes += p.file_len;
+                for s in &p.sections {
+                    pinned_bytes += s.len();
+                }
+            }
+        }
         PackSourceStats {
             packs_resident: inner.resident.len(),
             records: inner.records.len(),
@@ -624,6 +846,14 @@ impl PackSource {
             section_bytes: inner.section_bytes,
             hits: inner.hits,
             misses: inner.misses,
+            pinned_packs,
+            pinned_bytes,
+            budget_bytes: inner.budget_bytes,
+            section_budget_bytes: inner.section_budget_bytes,
+            floor_ms: inner.floor_ms,
+            evictions: inner.evictions,
+            evict_deferrals: inner.evict_deferrals,
+            over_budget: Self::over_budget(&inner),
         }
     }
 
@@ -1036,5 +1266,111 @@ mod tests {
             [0x00, 0xFF, 0x10, 0xA5]
         );
         assert!(hash16_from_hex("zz").is_err());
+    }
+
+    // ── T20 (ST7): PackStore pins / floor / budget eviction ────────────────
+
+    /// Three distinct listable packs + their source, budget-tunable.
+    fn residency_fixture() -> (PackSource, Vec<[u8; 16]>, Vec<usize>) {
+        let mut packs = Vec::new();
+        for i in 0..3u8 {
+            let records = build_record_stream(&[(0, 0x0100_0000 + i as u32, vec![i + 1; 64])]);
+            packs.push(build_pack(
+                pack_kind::META_SHARED,
+                i as u32,
+                &["eor/portal"],
+                &[(section_kind::RECORDS, records)],
+            ));
+        }
+        let hashes: Vec<[u8; 16]> = packs.iter().map(|p| sha_trunc16(p)).collect();
+        let table: Vec<PackTableEntry> = hashes
+            .iter()
+            .zip(&packs)
+            .map(|(h, p)| PackTableEntry {
+                hash16: *h,
+                size: p.len() as u32,
+                kind: pack_kind::META_SHARED,
+                meta: 0,
+            })
+            .collect();
+        let src = PackSource::new(build_index(&table));
+        let sizes: Vec<usize> = packs.iter().map(|p| p.len()).collect();
+        for (h, p) in hashes.iter().zip(packs) {
+            src.insert_pack(*h, p).unwrap();
+        }
+        (src, hashes, sizes)
+    }
+
+    #[test]
+    fn pins_and_floor_gate_eviction_and_deferrals_are_recorded() {
+        let (src, hashes, _) = residency_fixture();
+        // Tight budget: anything over 1 byte is over-budget → pure policy test.
+        src.set_budgets(1, 1);
+        // Pin all three (refcounted: pack 0 twice).
+        assert!(src.pin_pack(&hashes[0]));
+        assert!(src.pin_pack(&hashes[0]));
+        assert!(src.pin_pack(&hashes[1]));
+        assert!(src.pin_pack(&hashes[2]));
+        // All pinned ⇒ no victim ⇒ run over and record.
+        let r = src.enforce_budget(10_000.0);
+        assert_eq!(r.evicted, 0);
+        assert!(r.still_over);
+        assert_eq!(src.stats().evict_deferrals, 1);
+        assert_eq!(src.stats().pinned_packs, 3);
+        assert!(src.stats().over_budget);
+        // Unpin 1 and 2 at t=10s; floor 30 s ⇒ still deferred at t=20s.
+        assert!(src.unpin_pack(&hashes[1], 10_000.0));
+        assert!(src.unpin_pack(&hashes[2], 12_000.0));
+        let r2 = src.enforce_budget(20_000.0);
+        assert_eq!(r2.evicted, 0, "floor honored — nothing young evicts");
+        // Past the floor: LRU by last_unpin — pack 1 (older unpin) goes first.
+        let r3 = src.enforce_budget(41_000.0);
+        assert_eq!(r3.evicted, 1);
+        assert!(!src.is_pack_resident(&hashes[1]));
+        assert!(src.is_pack_resident(&hashes[2]), "younger unpin survives the pass");
+        // Its records unregistered with it.
+        assert!(!src.serves(ResourceKey::new("eor/portal", 0x0100_0001)));
+        assert!(src.serves(ResourceKey::new("eor/portal", 0x0100_0002)));
+        // Pack 2 ages out on the next pass; pack 0 (pinned twice) NEVER goes.
+        let r4 = src.enforce_budget(43_000.0);
+        assert_eq!(r4.evicted, 1);
+        assert!(src.is_pack_resident(&hashes[0]));
+        assert!(r4.still_over, "pinned remainder keeps the store over budget — recorded, not broken");
+        // Refcount: one unpin leaves it pinned; the second frees it.
+        assert!(src.unpin_pack(&hashes[0], 50_000.0));
+        let r5 = src.enforce_budget(90_000.0);
+        assert_eq!(r5.evicted, 0, "still one pin held");
+        assert!(src.unpin_pack(&hashes[0], 90_000.0));
+        let r6 = src.enforce_budget(121_000.0);
+        assert_eq!(r6.evicted, 1);
+        assert_eq!(src.stats().packs_resident, 0);
+        // Unpin of a non-pinned / non-resident hash reports false (JS audits).
+        assert!(!src.unpin_pack(&hashes[0], 0.0));
+    }
+
+    #[test]
+    fn floor_is_clamped_never_zero_and_budgets_restore() {
+        let (src, hashes, sizes) = residency_fixture();
+        src.set_budgets(1, 1);
+        // R4 may LOWER the floor to 5 s; 0 / negative / NaN clamp, never 0.
+        src.set_floor_ms(0.0);
+        assert_eq!(src.stats().floor_ms, PACK_FLOOR_MS_MIN);
+        src.set_floor_ms(-10.0);
+        assert_eq!(src.stats().floor_ms, PACK_FLOOR_MS_MIN);
+        src.set_floor_ms(f64::NAN);
+        assert_eq!(src.stats().floor_ms, PACK_FLOOR_MS_DEFAULT);
+        src.set_floor_ms(5_000.0);
+        // Never-pinned packs get stamped at first enforcement — a pass at
+        // t=0 defers, a pass past the (lowered) floor evicts.
+        let r = src.enforce_budget(0.0);
+        assert_eq!(r.evicted, 0);
+        let r2 = src.enforce_budget(6_000.0);
+        assert_eq!(r2.evicted, 3);
+        assert_eq!(src.stats().packs_resident, 0);
+        // Budget restore (ladder release): generous budget = never over.
+        let total: usize = sizes.iter().sum();
+        src.set_budgets(total * 2, total * 2);
+        assert!(!src.stats().over_budget);
+        let _ = hashes;
     }
 }
