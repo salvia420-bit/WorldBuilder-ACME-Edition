@@ -43,13 +43,13 @@ const ok = (cond, label) => {
   }
   // The pass-10 S3 new-architecture names are reserved until their stage
   // lands them (registry rule: the reserved schema IS the normative target).
-  for (const name of ["__diag.residency", "__diag.pools", "__texStats", "__diag.geometry", "__prewarmStats"]) {
+  for (const name of ["__diag.pools", "__texStats", "__diag.geometry", "__prewarmStats"]) {
     ok(RESERVED_NAMES.includes(name), `reserved name claimed: ${name}`);
   }
   // Landed at their stage (T21/ST8 flipped these reserved -> current with
   // the reserved field schemas kept intact + stage-A additions; T12/ST2
-  // did the same for __hbFetch).
-  for (const name of ["__framePhase", "__frameWork", "__hbFetch"]) {
+  // did the same for __hbFetch; T20/ST7 for __diag.residency).
+  for (const name of ["__framePhase", "__frameWork", "__hbFetch", "__diag.residency"]) {
     ok(getSurface(name)?.status === "current", `stage surface landed current: ${name}`);
   }
   // Same-name-successor rule is exercised by the real data.

@@ -685,6 +685,69 @@ export class LandblockLRU {
     // removes is the documented park↔unpark storm driver (SEALED_KEEP_RING_ON
     // note above). Stays 0 outdoors and under ?dungeonStreamGate=off.
     this._streamGateHolds = 0;
+
+    // ── ST7 `?slotGrid` ASSERT-ONLY mode (T20, SPEC §1.4) ─────────────────
+    // Non-null when the slot grid (scene3d/residency_grid.js) is the
+    // residency AUTHORITY: tickEviction then COMPUTES its would-be victim
+    // set exactly as today and DIFFS it against grid state — but acts on
+    // NOTHING (no park, no dispose, no pool pressure, no sealed purge; the
+    // grid's own park scheduler + pressure pass own all of that, and the
+    // MAX_LIVE_GEOM governor + its floor-zeroing simply never run — the
+    // pass-6 D-06.6 deletion, realized as this arm). A victim the grid
+    // still claims resident bumps `_gridLruDivergence` — GATE-GRID requires
+    // it to read 0 over the battery. The provider is (lbKey) => boolean
+    // ("the grid claims this LB resident"). Null (the default / OFF arm)
+    // keeps every code path in this file byte-identical.
+    this._gridAssert = null;
+    this._gridLruDivergence = 0;
+  }
+
+  /** Arm/disarm assert-only mode (ST7 wiring; null disarms). */
+  setGridAssertProvider(fn) {
+    this._gridAssert = typeof fn === "function" ? fn : null;
+  }
+
+  // Assert-only tick (see the constructor note): today's candidate filter +
+  // count-overage victim selection, diffed against the grid, acted on never.
+  // The geometry-count governor is deliberately NOT consulted here — on the
+  // grid arm it is DELETED, not asserted (its trigger reads a population the
+  // LRU does not own; pass 6 D-06.6 anchors landblock_lru.js:281-320).
+  _tickAssertOnly(currentLbKeyArg, sealedKeepLbKeyArg) {
+    const currentLbKey = currentLbKeyArg != null
+      ? lbKeyOf(currentLbKeyArg >>> 0)
+      : null;
+    if (currentLbKey == null) return;
+    // Keep the always-resident floor's timestamps fresh (parity with the
+    // normal path, and correct if assert mode is ever disarmed mid-session).
+    this.touch(currentLbKey);
+    for (const k of ringKeysAround(currentLbKey)) this.touch(k);
+    // Sealed residency is grid-owned on this arm (freeze + pinned return
+    // core, D-06.10) — the legacy purge's victim set is not comparable.
+    if (sealedKeepLbKeyArg) return;
+    if (this.entries.size <= this.maxResident) return;
+    const nowMs = (typeof performance !== "undefined")
+      ? performance.now()
+      : Date.now();
+    const candidates = [];
+    for (const [key, entry] of this.entries) {
+      if (lbChebyshev(currentLbKey, key) <= this.ringFloor) continue;
+      if (RECLAIM_MIN_AGE_MS > 0 && nowMs - entry.lastTouchMs < RECLAIM_MIN_AGE_MS) continue;
+      if (this.warmParkEnabled && this._hasInFlightBake(key)) continue;
+      candidates.push({ key, ts: entry.lastTouchMs });
+    }
+    candidates.sort((a, b) => a.ts - b.ts);
+    let toEvict = Math.max(0, this.entries.size - this.maxResident);
+    let served = 0;
+    for (const c of candidates) {
+      if (toEvict <= 0 || served >= MAX_PARKS_PER_TICK) break;
+      served += 1;
+      toEvict -= 1;
+      let claimed = false;
+      try { claimed = this._gridAssert(c.key) === true; } catch (_) { /* provider is diag */ }
+      // The legacy LRU would have reclaimed an LB the grid mandates
+      // resident — a real policy disagreement (GATE-GRID counter).
+      if (claimed) this._gridLruDivergence += 1;
+    }
   }
 
   // PHY-25 — bumped by scene3d/world_stream.js when the indoor gate holds an
@@ -1038,6 +1101,12 @@ export class LandblockLRU {
   // always-resident floor), then evicts the oldest entries beyond
   // `maxResident` until the resident count is ≤ maxResident.
   tickEviction(currentLbKeyArg, sealedKeepLbKeyArg = 0) {
+    // ST7 `?slotGrid` — ASSERT-ONLY arm (see the constructor note): the
+    // grid owns residency; this tick computes + diffs, acts on nothing.
+    if (this._gridAssert) {
+      this._tickAssertOnly(currentLbKeyArg, sealedKeepLbKeyArg);
+      return;
+    }
     const currentLbKey = currentLbKeyArg != null
       ? lbKeyOf(currentLbKeyArg >>> 0)
       : null;
@@ -2425,6 +2494,11 @@ export class LandblockLRU {
       // #11 sealedPark warm-return reserve (2026-08-03). Same object as
       // `window.__sealedPark()`; see sealedParkStats().
       sealedPark: this.sealedParkStats(),
+      // ST7 `?slotGrid` assert-only mode (T20). gridLruDivergence is the
+      // GATE-GRID counter — MUST read 0 over the battery. Both read their
+      // OFF-arm zeros when the grid is not armed.
+      gridAssertMode: this._gridAssert !== null,
+      gridLruDivergence: this._gridLruDivergence,
     };
   }
 }

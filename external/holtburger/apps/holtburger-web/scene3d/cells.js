@@ -2767,7 +2767,16 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // is published by `tickCellVisibility3D` (runs earlier this frame) and is
   // non-zero only when ?sealedCull + ?sealedEvict are on and the dungeon is
   // sealed. Takes precedence over the radius-1 indoor skirt below.
-  if (scene3d._sealedEvictLbKey) {
+  // ST7 (`?slotGrid`, T20 — SPEC §1.4): when the slot grid is armed it is
+  // the OUTDOOR-ring residency authority — grid slot admits drive the same
+  // three per-LB feeds event-driven (scene3d/residency_grid.js adapter), so
+  // this sweep collapses to the renderSet-derived LBs only (indoor
+  // visibility, incl. surface seen through a dungeon mouth, still loads).
+  // OFF arm: the property is undefined and this line is inert — the
+  // per-packet ring recompute below stays byte-identical (the kill path).
+  if (scene3d._slotGridDrivesRing === true) {
+    ringRadius = 0;
+  } else if (scene3d._sealedEvictLbKey) {
     ringRadius = 0;
   } else if (ringRadius > INDOOR_PVS_RING_RADIUS) {
     let indoor = false;

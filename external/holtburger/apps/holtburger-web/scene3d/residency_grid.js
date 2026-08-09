@@ -569,7 +569,12 @@ export class GridResidencyAdapter {
    * @param {object} deps.feeds  { fireLb(lbx, lby) } — the three legacy
    *   per-LB hooks (terrain/statics/buildings), idempotent by construction.
    * @param {object} deps.lru  { parkLb(lbKey):boolean, disposeLb(lbKey):boolean,
-   *   unparkLb(lbKey):boolean, isParkedLb(lbKey):boolean, lbBytes(lbKey):number }
+   *   unparkLb(lbKey):boolean, isParkedLb(lbKey):boolean, lbBytes(lbKey):number,
+   *   touchLb?(lbKey) } — touchLb keeps the legacy LRU's recency truth: the
+   *   pre-grid sweep re-touched every ring LB once per crossing, so the
+   *   assert-only victim computation must keep seeing window LBs as fresh
+   *   (without it, window content ages into the legacy victim set and reads
+   *   as spurious gridLruDivergence).
    * @param {object|null} deps.packs  null = legacy-lane fetch (no pack dist);
    *   else { fetchTile(tile):Promise, tileHashes(tile):string[],
    *   isQuarantined(tile):boolean, pin(hash), unpin(hash) }
@@ -646,6 +651,16 @@ export class GridResidencyAdapter {
     }
     for (const tile of res.admitted) this._admit(tile);
     if (!res.teleport && !res.seed) this.parkSched.drain();
+    // Per-crossing window touch (legacy parity — see the touchLb dep doc):
+    // one Map write per window LB, the recency signal the retired
+    // per-crossing sweep used to provide.
+    if (typeof this.lru.touchLb === "function") {
+      for (const tile of this.grid.windowTiles) {
+        for (const lbKey of tileLbKeys(tile)) {
+          try { this.lru.touchLb(lbKey); } catch (_) {}
+        }
+      }
+    }
   }
 
   _admit(tile) {

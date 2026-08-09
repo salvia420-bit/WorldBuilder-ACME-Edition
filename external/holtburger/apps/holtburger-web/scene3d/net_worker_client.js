@@ -44,6 +44,42 @@ const READY_TIMEOUT_MS = 12000;
 // At most one net worker alive at a time (see lifecycle note 1).
 let _activeWorker = null;
 
+// T20 (ST7) / pass-6 D-06.9.3 — census relay plumbing (the bake worker's
+// `wasmMemCensus` twin). Pending resolvers by sequence; a dead/pre-ready
+// worker resolves null via the timeout (a memory probe must never wedge).
+let _censusSeq = 0;
+const _censusPending = new Map();
+
+/**
+ * The net worker's own `hb_mem_census()` JSON, or null when no worker is
+ * active / it predates the relay / it doesn't answer in time. The worker
+ * exists only on `?netWorker` (bot/agent) sessions, so this is naturally
+ * flag-conditional; M3's "every instance that EXISTS in the run's
+ * configuration" rule (F-11.12) is scoreable through it.
+ */
+export function netWorkerMemCensus(timeoutMs = 3000) {
+  const w = _activeWorker;
+  if (!w) return Promise.resolve(null);
+  const seq = ++_censusSeq;
+  return new Promise((resolve) => {
+    const to = setTimeout(() => {
+      _censusPending.delete(seq);
+      resolve(null);
+    }, timeoutMs);
+    _censusPending.set(seq, (payload) => {
+      clearTimeout(to);
+      resolve(payload);
+    });
+    try {
+      w.postMessage({ t: "wasmMemCensus", seq });
+    } catch (_) {
+      clearTimeout(to);
+      _censusPending.delete(seq);
+      resolve(null);
+    }
+  });
+}
+
 function terminateActiveWorker() {
   if (!_activeWorker) return;
   try {
@@ -179,6 +215,13 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
     } else if (m.t === "timesync") {
       // Server clock sample → SessionEvent::TimeSync in the main recv loop.
       net_proxy_push_timesync(Number(m.time));
+    } else if (m.t === "memCensus") {
+      // T20 census relay reply (see netWorkerMemCensus below).
+      const p = _censusPending.get(m.seq);
+      if (p) {
+        _censusPending.delete(m.seq);
+        p(m.payload ?? null);
+      }
     } else if (m.t === "disconnect") {
       net_proxy_push_disconnect(String(m.reason || "net worker disconnect"));
     } else if (m.t === "error") {

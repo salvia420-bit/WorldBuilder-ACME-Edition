@@ -115,6 +115,7 @@ import {
   framePhaseBegin,
   framePhaseCut,
   framePhaseCommit,
+  getFrameWorkScheduler,
 } from "./frame_work.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
@@ -2441,6 +2442,22 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           frameWorkW6Run("lruEviction", () => lru.tickEviction(currentLbKey, sealedKeepLbKey));
         } else {
           lru.tickEviction(currentLbKey, sealedKeepLbKey);
+        }
+        // ST7 (`?slotGrid`, T20 — SPEC §1.4): the slot grid's residency
+        // tick (grid update → adapter drains → promotions → pressure →
+        // 1 Hz ladder/census) runs at this same P1 RESIDENCY-class site,
+        // as a coalesced W6 client under ?frameWork (the T21 lruEviction
+        // pattern; the W4/W5 class relocation is T22's stage-B work). On
+        // this arm the LRU call above ran ASSERT-ONLY (victims diffed
+        // against grid state, acted on never — gridLruDivergence). OFF
+        // arm: `_slotGridCtl` is undefined and this is one property read.
+        if (liveScene3dRef._slotGridCtl) {
+          const sg = liveScene3dRef._slotGridCtl;
+          if (_frameWorkOn) {
+            frameWorkW6Run("slotGridResidency", () => sg.tick(currentLbKey, sealedKeepLbKey));
+          } else {
+            sg.tick(currentLbKey, sealedKeepLbKey);
+          }
         }
         // F12-6 — per-LB subdiv LOD re-bake on approach. Shares the LRU's
         // current-LB read; no-op unless ?lodRebake=on. Detects the LB change,
@@ -6167,6 +6184,31 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     //     reset()s the scheduler, so the whole-grid-invalidate stays owned by the
     //     LRU's evict-on-teleport reclaim (constraint #3). `?fixedGridPark=off`
     //     restores the S15b no-op release (LRU positional eviction owns the edge).
+    // ST7 (`?slotGrid`, T20 — SPEC §1.4 / pass 6): armed only when BOTH
+    // flags are authored (?slotGrid=on requires ?packSource=on, D-12.4 —
+    // the grid's producer reads go through CompositeSource). Read here,
+    // ahead of the fixed-grid construction, because the S15c EdgeParkScheduler
+    // must NOT be constructed on the grid arm: the slot grid owns the
+    // vacated-edge park at the full 11×11 ring, and the radius-1 terrain
+    // grid's own park (trailing edge ~2 LBs behind the player) would fight
+    // it — parking LBs the slot grid still holds LIVE. The fixed grid's
+    // terrain FETCH role is kept (proven, idempotent; subsumed at ST10).
+    const __slotGridArmed = (() => {
+      try {
+        const ps = new URLSearchParams(window.location?.search || "");
+        const on = (v) => v === "on" || v === "1" || v === "true" || v === "yes";
+        if (!on(ps.get("slotGrid"))) return false;
+        if (!on(ps.get("packSource"))) {
+          console.error(
+            "[slotGrid] ?slotGrid=on requires ?packSource=on (SPEC D-12.4) — grid DISARMED, legacy residency in charge"
+          );
+          return false;
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    })();
     if (FIXED_GRID_ENABLED) {
       const gridNow = () => {
         try {
@@ -6175,7 +6217,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         return Date.now();
       };
       let edgeParkScheduler = null;
-      if (FIXED_GRID_PARK_ENABLED) {
+      if (FIXED_GRID_PARK_ENABLED && !__slotGridArmed) {
         edgeParkScheduler = new EdgeParkScheduler({
           // park() returns true only when the key was in `entries` (resident);
           // false (already parked / evicted) is counted, not an error.
@@ -6206,6 +6248,352 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       if (typeof window !== "undefined") {
         window.__fixedGrid = liveScene3d._fixedGrid;
       }
+    }
+    // ST7 (`?slotGrid`, T20 — SPEC §1.4 / pass 6): construct the slot grid
+    // as the residency AUTHORITY. Dynamic imports keep the OFF arm free of
+    // even the module loads (the index.html ?packSource discipline). While
+    // armed: the legacy LRU runs ASSERT-ONLY (gridLruDivergence — GATE-GRID),
+    // the tickPvsLoadExpansion outdoor ring goes event-driven
+    // (_slotGridDrivesRing), grid slot events drive the same per-LB feeds
+    // through CompositeSource reads, packs pin/unpin in the wasm PackStore,
+    // and the pressure ladder replaces the deleted geometry-count governor.
+    // Fail-soft at every seam: an arming error logs and leaves legacy
+    // residency in charge.
+    if (__slotGridArmed) {
+      (async () => {
+        try {
+          const [rg, pf] = await Promise.all([
+            import("./residency_grid.js"),
+            import("./pack_fetch_controller.js"),
+          ]);
+          const now = () => {
+            try {
+              if (typeof performance !== "undefined" && performance.now) return performance.now();
+            } catch (_) {}
+            return Date.now();
+          };
+          const ctl = pf.getPackFetchController();
+          const packsArmed = !!(ctl && ctl.armed && ctl.index);
+          const tileKeyStr = (tile) => `${(tile >> 8) & 0xff},${tile & 0xff}`;
+          // Every pack ordinal a tile slot pins: its tile pack, its LBs'
+          // interior packs, and its supergrid's META/ENV/PVW regionals —
+          // the PVW pin rule (D-06.5.1) falls out of per-slot refcounts:
+          // the regional PVW pack stays pinned while ANY slot of its
+          // region is FETCHING/STAGED/LIVE/PARKED.
+          const tilePackOrds = (tile) => {
+            const idx = ctl.index;
+            const tx = (tile >> 8) & 0xff;
+            const ty = tile & 0xff;
+            const ords = [];
+            const tOrd = pf.tilePackOrd(idx, tx, ty);
+            if (tOrd >= 0) ords.push(tOrd);
+            for (const [ilb, iord] of idx.interiors) {
+              if ((((ilb >> 8) & 0xff) >> 1) === tx && ((ilb & 0xff) >> 1) === ty) ords.push(iord);
+            }
+            const sg = ((tx * 2) >> 5) * 8 + ((ty * 2) >> 5);
+            for (const s of idx.shared) {
+              if (
+                s.ord === sg &&
+                (s.kind === pf.SHARED_KIND.META_REGIONAL ||
+                  s.kind === pf.SHARED_KIND.ENV_REGIONAL ||
+                  s.kind === pf.SHARED_KIND.PVW_REGIONAL)
+              ) {
+                ords.push(s.packOrd);
+              }
+            }
+            return ords;
+          };
+          const grid = new rg.SlotGrid({ now });
+          const packs = packsArmed
+            ? {
+                fetchTile: (tile) => {
+                  const ords = tilePackOrds(tile);
+                  if (ords.length === 0) return Promise.resolve(null); // empty tile — stages bare
+                  const lane = grid.playerTile === tile ? "U" : "R";
+                  return Promise.all(
+                    ords.map((o) => ctl.needPack(o, { lane, tileKey: tileKeyStr(tile) }))
+                  );
+                },
+                tileHashes: (tile) => tilePackOrds(tile).map((o) => ctl.index.packs[o].hash),
+                isQuarantined: (tile) => {
+                  try {
+                    return ctl.diag.quarantined.includes(tileKeyStr(tile));
+                  } catch (_) {
+                    return false;
+                  }
+                },
+                pin: (h) => {
+                  try { wasmExports.pack_source_pin?.(h); } catch (_) {}
+                },
+                unpin: (h) => {
+                  try { wasmExports.pack_source_unpin?.(h, now()); } catch (_) {}
+                },
+              }
+            : null; // legacy-lane fetch arm (no world_index): grid still owns residency
+          const feeds = {
+            fireLb: (lbX, lbY) => {
+              // The tickPvsLoadExpansion fireOne population, event-driven
+              // (idempotent per domain via baked-Sets + the stream guard).
+              try { liveScene3d.loadTerrainForLandblock(lbX, lbY); } catch (_) {}
+              try { liveScene3d.loadStaticsForLandblock(lbX, lbY); } catch (_) {}
+              try { liveScene3d.loadBuildingsForLandblock(lbX, lbY); } catch (_) {}
+            },
+          };
+          const lruDeps = {
+            parkLb: (lb) => landblockLru.park(lb) === true,
+            unparkLb: (lb) => landblockLru.unpark(lb) === true,
+            disposeLb: (lb) => {
+              if (landblockLru.isParked(lb)) return landblockLru.disposeParked(lb) === true;
+              const key = (lb & 0xffff_0000) >>> 0;
+              if (landblockLru.entries.has(key)) return landblockLru.evict(lb) === true;
+              return false;
+            },
+            isParkedLb: (lb) => landblockLru.isParked(lb),
+            lbBytes: (lb) => landblockLru.parkPool.get((lb & 0xffff_0000) >>> 0)?.bytes || 0,
+          };
+          const adapter = new rg.GridResidencyAdapter({
+            grid,
+            feeds,
+            lru: lruDeps,
+            packs,
+            evictLbCaches: (lb) => {
+              try { wasmExports.hb_evict_lb_world_caches?.(lb >>> 0); } catch (_) {}
+            },
+            bakedPredicate: (tile) => {
+              const t = liveScene3d.terrainBakedLbs;
+              if (!(t instanceof Set)) return false;
+              return rg.tileLbKeys(tile).every((lb) => t.has(lb));
+            },
+            now,
+          });
+          // Session pins (D-06.5.1): CORE + the three commons packs.
+          // bootCommons may still be in flight, so pins retry in the 1 Hz
+          // slice until each sticks.
+          const sessionPins = [];
+          if (packsArmed) {
+            for (const s of ctl.index.shared) {
+              if (
+                s.ord === 0 &&
+                (s.kind === pf.SHARED_KIND.CORE ||
+                  s.kind === pf.SHARED_KIND.META_COMMONS ||
+                  s.kind === pf.SHARED_KIND.ENV_COMMONS ||
+                  s.kind === pf.SHARED_KIND.PVW_COMMONS)
+              ) {
+                sessionPins.push({ hash: ctl.index.packs[s.packOrd].hash, done: false });
+              }
+            }
+          }
+          // Ladder sample inputs: JS heap + the SUMMED wasm instances
+          // (main sync; bake/net workers via their census relays, cached —
+          // F-11.12's every-existing-instance rule).
+          const wasmCensus = { main: 0, worker: 0, net: 0, lastMs: -Infinity };
+          const refreshWasmCensus = () => {
+            try {
+              const j = JSON.parse(wasmExports.hb_mem_census());
+              wasmCensus.main = j.memoryBytes || 0;
+            } catch (_) {}
+            try {
+              const client = getBakeWorkerClient();
+              if (client?.active) {
+                client.wasmMemCensus().then((s) => {
+                  if (s) {
+                    try { wasmCensus.worker = JSON.parse(s).memoryBytes || 0; } catch (_) {}
+                  }
+                }).catch(() => {});
+              }
+            } catch (_) {}
+            try {
+              import("./net_worker_client.js").then((nwc) => {
+                nwc.netWorkerMemCensus?.(1500).then((s) => {
+                  if (s) {
+                    try { wasmCensus.net = JSON.parse(s).memoryBytes || 0; } catch (_) {}
+                  }
+                }).catch(() => {});
+              }).catch(() => {});
+            } catch (_) {}
+          };
+          // Context-loss feeds the ladder trigger (S4.3).
+          try {
+            const cv = liveScene3d.renderer?.domElement;
+            cv?.addEventListener("webglcontextlost", () => { liveScene3d._slotGridContextLoss = true; });
+            cv?.addEventListener("webglcontextrestored", () => { liveScene3d._slotGridContextLoss = false; });
+          } catch (_) {}
+          const ladder = new rg.PressureLadder({
+            now,
+            sample: () => ({
+              heapBytes: (typeof performance !== "undefined" && performance.memory?.usedJSHeapSize) || 0,
+              wasmBytes: wasmCensus.main + wasmCensus.worker + wasmCensus.net,
+              contextLoss: liveScene3d._slotGridContextLoss === true,
+            }),
+            onRung: (rung, engaged) => {
+              if (rung === 1) {
+                // R1 texture-demote SEAM: the demote-to-preview primitive
+                // lands at ST5 (T15); engagement is counted either way and
+                // the hook fires once a producer installs it.
+                if (engaged) { try { liveScene3d._texDemoteToPreview?.(); } catch (_) {} }
+              } else if (rung === 2) {
+                adapter.parkBudgetScale = engaged ? 0.5 : 1; // R2: park budget halves
+              } else if (rung === 3) {
+                try {
+                  wasmExports.pack_source_set_budgets?.(
+                    engaged ? 48 * 1048576 : 96 * 1048576,
+                    engaged ? 16 * 1048576 : 32 * 1048576
+                  );
+                } catch (_) {}
+              } else if (rung === 4) {
+                // R4: floors LOWER to 5 s (never 0 — Rust clamps too),
+                // and the frame scheduler enters EMERGENCY.
+                adapter.parkFloorMs = engaged ? rg.PARK_FLOOR_EMERGENCY_MS : rg.PARK_FLOOR_MS;
+                try {
+                  wasmExports.pack_source_set_floor_ms?.(
+                    engaged ? rg.PARK_FLOOR_EMERGENCY_MS : rg.PARK_FLOOR_MS
+                  );
+                } catch (_) {}
+                try { getFrameWorkScheduler().setEmergency(engaged); } catch (_) {}
+              }
+            },
+          });
+          // The legacy LRU flips to ASSERT-ONLY: victims diffed against the
+          // grid's window claim, acted on never (SPEC §1.4).
+          landblockLru.setGridAssertProvider((lbKey) => {
+            const tile = rg.tileOfLb((lbKey >>> 24) & 0xff, (lbKey >>> 16) & 0xff);
+            if (!grid.windowTiles.has(tile)) return false;
+            const st = grid.stateOf(tile);
+            return st === "LIVE" || st === "STAGED" || st === "FETCHING";
+          });
+          // The PVS sweep's outdoor ring goes event-driven (cells.js seam).
+          liveScene3d._slotGridDrivesRing = true;
+          scene3dForBuilders._slotGridDrivesRing = true;
+          const sgCtl = {
+            grid,
+            adapter,
+            ladder,
+            _lastSliceMs: -Infinity,
+            _warned: false,
+            tick(currentLbKey, sealedKeepLbKey) {
+              try {
+                if (sealedKeepLbKey) {
+                  // Sealed: freeze + amortized park drain + pinned return
+                  // core (D-06.10). update() is not called while frozen.
+                  adapter.sealedEnter(sealedKeepLbKey >>> 0);
+                  adapter.tickSealedDrain();
+                  ladder.tick();
+                  return;
+                }
+                if (adapter.sealed) {
+                  adapter.sealedExit();
+                  grid.anchor = null; // re-seed at the exit position
+                }
+                if (currentLbKey != null) {
+                  const lbx = (currentLbKey >>> 24) & 0xff;
+                  const lby = (currentLbKey >>> 16) & 0xff;
+                  const res = grid.update(lbx, lby);
+                  adapter.onUpdate(res);
+                  if (res.moved && packsArmed) {
+                    // Keep the controller's ring/lookahead in lockstep with
+                    // grid crossings (idempotent; the index.html 2 s pose
+                    // poll remains the fallback driver until ST10).
+                    try { ctl.notePlayerLandblock(currentLbKey >>> 0); } catch (_) {}
+                  }
+                }
+                adapter.tickTeleportDrain();
+                adapter.tickPromotions();
+                adapter.tickPressure(ladder.rung >= 4);
+                ladder.tick();
+                const t = now();
+                if (t - this._lastSliceMs >= 1000) {
+                  this._lastSliceMs = t;
+                  for (const p of sessionPins) {
+                    if (!p.done) {
+                      try { p.done = wasmExports.pack_source_pin?.(p.hash) === true; } catch (_) {}
+                    }
+                  }
+                  try { wasmExports.pack_source_enforce?.(t); } catch (_) {}
+                  adapter.auditPins();
+                  grid.audit();
+                  refreshWasmCensus();
+                }
+              } catch (e) {
+                if (!this._warned) {
+                  this._warned = true;
+                  // eslint-disable-next-line no-console
+                  console.warn("[slotGrid] tick threw:", e);
+                }
+              }
+            },
+          };
+          liveScene3d._slotGridCtl = sgCtl;
+          scene3dForBuilders._slotGridCtl = sgCtl;
+          // `__diag.residency()` — the pass-6 D-06.9.4 aggregate (successor
+          // of __landblockLru.getStats; landed current at ST7).
+          if (typeof window !== "undefined") {
+            if (!window.__diag) window.__diag = {};
+            window.__diag.residency = () => {
+              const g = grid.getStats();
+              const a = adapter.getStats();
+              const l = ladder.getStats();
+              const counts = grid.counts();
+              const lru = landblockLru.getStats();
+              let packSourceStats = null;
+              try { packSourceStats = JSON.parse(wasmExports.pack_source_stats?.() || "null"); } catch (_) {}
+              return {
+                grid: {
+                  W: g.W,
+                  anchor: g.anchor,
+                  slots: {
+                    live: counts.live,
+                    parked: counts.parked,
+                    fetching: counts.fetching,
+                    staged: counts.staged,
+                    quarantined: counts.quarantined,
+                  },
+                  shifts: g.shifts,
+                  teleports: g.teleports,
+                  shiftMismatches: g.shiftMismatches,
+                  slotDesyncs: g.slotDesyncs,
+                },
+                park: {
+                  tiles: a.parkPoolTiles,
+                  bytes: a.parkPoolBytes,
+                  usedBytes: a.parkPoolBytes,
+                  floorMs: a.parkFloorMs,
+                  deferredCount: a.parkDeferredCount,
+                  deferredBytes: a.parkDeferredBytes,
+                  reAdoptCancels: a.park?.reAdoptCancels ?? 0,
+                },
+                ladder: {
+                  rung: l.rung,
+                  r4Engagements: l.r4Engagements,
+                  floorLowerings: l.floorLowerings,
+                },
+                wasm: {
+                  perInstance: { ...wasmCensus },
+                  summedBytes: wasmCensus.main + wasmCensus.worker + wasmCensus.net,
+                  instancesSummed:
+                    1 + (wasmCensus.worker > 0 ? 1 : 0) + (wasmCensus.net > 0 ? 1 : 0),
+                },
+                tex: null, // __texStats lands at ST5 (T15)
+                heap: {
+                  usedJSHeapSize:
+                    (typeof performance !== "undefined" && performance.memory?.usedJSHeapSize) || 0,
+                },
+                pinLeaks: a.pinLeaks,
+                leaseBytesPeak: 0, // worker leases deferred to T13+ (see T20 report D1)
+                gridLruDivergence: lru.gridLruDivergence,
+                packSource: packSourceStats,
+                adapter: a,
+              };
+            };
+          }
+          console.log(
+            `[slotGrid] ARMED (W=6, 36 slots) — packs ${packsArmed ? "armed" : "legacy-lane"}; ` +
+              "legacy LRU assert-only; PVS ring event-driven"
+          );
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("[slotGrid] arming failed (non-fatal — legacy residency):", e);
+        }
+      })();
     }
     // Bulk-track the initial ring (terrain ring 13×13 + buildings/statics
     // ring 5×5 already baked above). Walk terrainGroup.children once to

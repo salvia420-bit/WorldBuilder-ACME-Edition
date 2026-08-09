@@ -32,6 +32,7 @@ import init, {
   net_worker_run,
   net_worker_submit_outbound,
   net_worker_set_sink,
+  hb_mem_census,
 } from "../pkg/holtburger_web.js?v=wasmrev-20260803";
 
 // Must match the RX_KIND_* tags in net_worker.rs.
@@ -109,6 +110,12 @@ self.onmessage = (ev) => {
       // worker's outbound queue is installed by net_worker_run.
       if (!ready) return;
       net_worker_submit_outbound(msg.kind & 0xff, msg.bytes);
+    } else if (msg.t === "wasmMemCensus") {
+      // T20 (ST7) / pass-6 D-06.9.3 — census relay, the bake worker's
+      // `wasmMemCensus` twin: this worker owns a THIRD wasm linear memory
+      // that was previously UNSUMMED (08-05 §8 instrument note), so M3
+      // could not be scored honestly on `?netWorker` sessions. Read-only.
+      self.postMessage({ t: "memCensus", seq: msg.seq, payload: ready ? hb_mem_census() : null });
     }
   } catch (e) {
     self.postMessage({ t: "error", reason: String((e && e.message) || e) });

@@ -246,7 +246,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.wasmMem",
     status: "current",
     reads: "async-function",
-    evidence: "scene3d/index.js:4759",
+    evidence: "scene3d/index.js:4776",
     availability: "in-world",
     note: "Sums main + bake-worker hb_mem_census (src/lib.rs:11469-11593; "
       + "summarizeMemCensus in scene3d/mem_census.js:30-68). `missing` names "
@@ -317,7 +317,7 @@ export const REGISTRY = Object.freeze([
     name: "__landblockLru.getStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6134",
+    evidence: "scene3d/index.js:6151",
     availability: "late",
     retiresAt: "ST7",
     successor: "__diag.residency",
@@ -335,7 +335,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.textures",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:4789",
+    evidence: "scene3d/index.js:4806",
     availability: "flag:?texCensus=on",
     opaque: true,
     note: "WeakRef texture census (scene3d/texture_census.js). Returns null "
@@ -441,15 +441,29 @@ export const REGISTRY = Object.freeze([
   // ── reserved surfaces (pass-10 S3 normative schemas; land with their stage) ─
 
   {
+    // Landed current at ST7 (T20, 2026-08-09): reserved field schema kept
+    // verbatim; stage additions: `gridLruDivergence` (the SPEC §1.4
+    // assert-only diff counter — THE GATE-GRID criterion), `packSource`
+    // (pack_source_stats mirror incl. pins/budget/floor/evictions) and the
+    // opaque `adapter` row (feed/park/release/teleport/sealed counters).
+    // Published only on the `?slotGrid=on` (+`?packSource=on`, D-12.4) arm;
+    // `tex` stays null until ST5 lands __texStats; `leaseBytesPeak` reads 0
+    // until worker leases exist (T20 report D1 — leases deferred to the
+    // first pack-consuming worker job, T13).
     name: "__diag.residency",
-    status: "reserved",
+    status: "current",
     reads: "function",
+    evidence: "scene3d/index.js:6531",
     spec: "pass-10 S3 (pass 6 D-06.9.4 + additions)",
-    availability: "reserved:ST7",
+    availability: "flag:?slotGrid=on",
     note: "Slot-grid residency surface; successor of __landblockLru.getStats. "
       + "pinLeaks/shiftMismatches/slotDesyncs are zero-tolerance CENSUS-CI "
-      + "gates; r4Engagements > 0 on a default run = FAIL.",
+      + "gates; r4Engagements > 0 on a default run = FAIL; "
+      + "gridLruDivergence must read 0 over the battery (GATE-GRID).",
     fields: {
+      gridLruDivergence: C("count"),
+      packSource: L("json", null, { note: "pack_source_stats() mirror (pins/budget/floor); null pre-arm" }),
+      adapter: L("json", null, { note: "GridResidencyAdapter.getStats() — feeds/parks/releases/teleport/sealed counters" }),
       "grid.W": L("count"),
       "grid.anchor": L("json"),
       "grid.slots.live": L("count", ["resident"]),
