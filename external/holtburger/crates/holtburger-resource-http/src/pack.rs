@@ -272,6 +272,59 @@ pub fn parse_record_stream_index(
     Ok((rows, index_len))
 }
 
+/// T15 (ST5) — PVW stream index (pass 2 S3 kind 0x0B; byte truth
+/// `pack_format.rs::build_pvw_stream`): `[count u32]` × `[rs_id u32]
+/// [offset u32][size u32]`, then the concatenated HBC7 payload rows.
+/// Returns `(rs_id, offset_in_body, size)` rows + the body start offset.
+pub fn parse_pvw_index(payload: &[u8]) -> Result<(Vec<(u32, usize, usize)>, usize), String> {
+    if payload.len() < 4 {
+        return Err("PVW stream shorter than count".into());
+    }
+    let count = u32::from_le_bytes(payload[..4].try_into().unwrap()) as usize;
+    let index_len = 4 + count * 12;
+    if payload.len() < index_len {
+        return Err("PVW index truncated".into());
+    }
+    let body_len = payload.len() - index_len;
+    let mut rows = Vec::with_capacity(count);
+    for i in 0..count {
+        let e = 4 + i * 12;
+        let rs = u32::from_le_bytes(payload[e..e + 4].try_into().unwrap());
+        let off = u32::from_le_bytes(payload[e + 4..e + 8].try_into().unwrap()) as usize;
+        let size = u32::from_le_bytes(payload[e + 8..e + 12].try_into().unwrap()) as usize;
+        if off + size > body_len {
+            return Err(format!("PVW 0x{rs:08X} overruns stream"));
+        }
+        rows.push((rs, off, size));
+    }
+    Ok((rows, index_len))
+}
+
+/// T15 (ST5) — TEXREF rows (pass 5 S2; byte truth
+/// `pack_format.rs::build_texref`): `[count u32]` × `[rs_id u32]
+/// [tier_bits u8][pvw_pack_ord u16][dims u8]` (8 B rows). The
+/// `pvw_pack_ord` is a bake-side REFS ordinal — dropped here (the PVW
+/// registration above is global by rsId, so the runtime never needs it).
+pub fn parse_texref_rows(payload: &[u8]) -> Result<Vec<(u32, u8, u8)>, String> {
+    if payload.len() < 4 {
+        return Err("TEXREF shorter than count".into());
+    }
+    let count = u32::from_le_bytes(payload[..4].try_into().unwrap()) as usize;
+    if payload.len() != 4 + count * 8 {
+        return Err("TEXREF length mismatch".into());
+    }
+    let mut rows = Vec::with_capacity(count);
+    for i in 0..count {
+        let e = 4 + i * 8;
+        rows.push((
+            u32::from_le_bytes(payload[e..e + 4].try_into().unwrap()),
+            payload[e + 4],
+            payload[e + 7],
+        ));
+    }
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 // HBSI1 reader
 // ---------------------------------------------------------------------------
@@ -420,6 +473,10 @@ struct ResidentPack {
     sections: Vec<Arc<Vec<u8>>>,
     /// Record keys this pack registered (first-copy winners only).
     record_keys: Vec<(u16, u32)>,
+    /// T15 (ST5): PVW rsIds this pack registered (first-copy winners).
+    pvw_keys: Vec<u32>,
+    /// T15 (ST5): TEXREF rsIds this pack registered (first-copy winners).
+    texref_keys: Vec<u32>,
 }
 
 /// PackStore budgets + floor (pass 6 S3, all [A] — re-classed by the first
@@ -435,6 +492,13 @@ struct PackStoreInner {
     resident: HashMap<[u8; 16], ResidentPack>,
     /// (ns_id, file_id) → payload range. ns_id indexes `ns_names`.
     records: HashMap<(u16, u32), RecordLoc>,
+    /// T15 (ST5, pass 5 D-05.5): rsId → PVW payload range (HBC7 container
+    /// bytes inside a PVW section). Registered at admission for SYNC
+    /// frame-1 preview reads — the compressed-only material build path.
+    pvw: HashMap<u32, RecordLoc>,
+    /// T15 (ST5, pass 5 S2): rsId → (tier_bits, dims) from TEXREF rows.
+    /// Bucket identity (dims) + tier routing (FULL present / legacy-only).
+    texref: HashMap<u32, (u8, u8)>,
     /// Interned namespace strings across packs (2 today; format allows 255/pack).
     ns_names: Vec<String>,
     /// Total resident pack FILE bytes (scale: as-fetched, compressed).
@@ -459,6 +523,8 @@ impl Default for PackStoreInner {
         Self {
             resident: HashMap::new(),
             records: HashMap::new(),
+            pvw: HashMap::new(),
+            texref: HashMap::new(),
             ns_names: Vec::new(),
             pack_file_bytes: 0,
             section_bytes: 0,
@@ -499,6 +565,10 @@ pub struct PackSourceStats {
     pub evictions: u64,
     pub evict_deferrals: u64,
     pub over_budget: bool,
+    /// T15 (ST5): registered PVW payloads / TEXREF rows (additive fields —
+    /// the glue JSON gains two keys; no existing consumer reads them).
+    pub pvw_rows: usize,
+    pub texref_rows: usize,
 }
 
 /// One `enforce_budget` pass's outcome.
@@ -543,11 +613,13 @@ impl PackSource {
     ///
     /// Record-stream sections (LBINFO / ENVCELLS / RECORDS) and the
     /// fixed TERRAIN block are decompressed once at admission and their
-    /// records registered for sync reads; PVW/REFS/TEXREF/PLACEMENTS/
-    /// SPAWNS/EVENTS sections are not record-addressed and stay
-    /// compressed in the pack bytes (their consumers land at later
-    /// stages; GEOM stays encoding 0x0000 at T12 — no GEOM sections
-    /// exist in T10 bakes).
+    /// records registered for sync reads. T15 (ST5) additionally
+    /// registers PVW payloads (rsId → HBC7 bytes — the sync frame-1
+    /// preview source, pass 5 D-05.5) and TEXREF rows (rsId →
+    /// tier_bits/dims, pass 5 S2). REFS/PLACEMENTS/SPAWNS/EVENTS
+    /// sections are not record-addressed and stay compressed in the
+    /// pack bytes (their consumers land at later stages; GEOM stays
+    /// encoding 0x0000 at T12 — no GEOM sections exist in T10 bakes).
     pub fn insert_pack(&self, hash16: [u8; 16], bytes: Vec<u8>) -> Result<InsertStats, String> {
         if !self.index.packs.iter().any(|p| p.hash16 == hash16) {
             return Err(format!(
@@ -656,6 +728,42 @@ impl PackSource {
             own_sections.push(body);
         }
 
+        // T15 (ST5) — PVW payloads (kind 0x0B): rsId-keyed HBC7 containers,
+        // registered for SYNC reads (the frame-1 preview source). Stream
+        // framing per pack_format.rs `build_pvw_stream`: [count u32] ×
+        // [rs_id u32][offset u32][size u32] + payload rows. Inline
+        // duplication across carriers (tile self-PVW vs PVW packs) keeps
+        // the first copy, exactly like the record streams above.
+        let mut own_pvw_keys: Vec<u32> = Vec::new();
+        if let Some(payload) = pack.section_raw(section_kind::PVW)? {
+            let (rows, index_len) = parse_pvw_index(&payload)?;
+            let body = Arc::new(payload);
+            for (rs, off, size) in rows {
+                if !inner.pvw.contains_key(&rs) {
+                    own_pvw_keys.push(rs);
+                    inner.pvw.insert(
+                        rs,
+                        RecordLoc { section: body.clone(), offset: index_len + off, len: size },
+                    );
+                }
+            }
+            inner.section_bytes += body.len();
+            own_sections.push(body);
+        }
+
+        // T15 (ST5) — TEXREF rows (kind 0x0A): rsId → (tier_bits, dims).
+        // 8 B/row facts, first-copy wins (bake determinism makes dupes
+        // identical across tile packs).
+        let mut own_texref_keys: Vec<u32> = Vec::new();
+        if let Some(payload) = pack.section_raw(section_kind::TEXREF)? {
+            for (rs, tier, dims) in parse_texref_rows(&payload)? {
+                if let std::collections::hash_map::Entry::Vacant(e) = inner.texref.entry(rs) {
+                    e.insert((tier, dims));
+                    own_texref_keys.push(rs);
+                }
+            }
+        }
+
         inner.pack_file_bytes += pack.bytes.len();
         inner.resident.insert(
             hash16,
@@ -667,6 +775,8 @@ impl PackSource {
                 last_unpin_ms: f64::NAN,
                 sections: own_sections,
                 record_keys: own_keys,
+                pvw_keys: own_pvw_keys,
+                texref_keys: own_texref_keys,
             },
         );
         Ok(InsertStats { kind: pack.kind, records_registered: registered, duplicate: false })
@@ -790,6 +900,20 @@ impl PackSource {
                     inner.records.remove(key);
                 }
             }
+            // T15 (ST5): same first-copy unregistration for PVW payloads +
+            // TEXREF rows (same identity guard for the section-backed PVW).
+            for rs in &p.pvw_keys {
+                let owned = match inner.pvw.get(rs) {
+                    Some(loc) => p.sections.iter().any(|s| Arc::ptr_eq(s, &loc.section)),
+                    None => false,
+                };
+                if owned {
+                    inner.pvw.remove(rs);
+                }
+            }
+            for rs in &p.texref_keys {
+                inner.texref.remove(rs);
+            }
             inner.evictions += 1;
             report.evicted += 1;
         }
@@ -813,6 +937,27 @@ impl PackSource {
             .expect("pack store mutex poisoned")
             .resident
             .contains_key(hash16)
+    }
+
+    /// T15 (ST5) — the PVW preview payload (raw HBC7 container bytes) for
+    /// one RenderSurface id, or `None` when no resident pack carries it.
+    /// SYNC by design: PVW packs for the ring are resident before
+    /// materials build (pass 3 S1.4's guarantee) — this is the frame-1
+    /// preview source (pass 5 D-05.5 step 2).
+    pub fn pvw_payload(&self, rs_id: u32) -> Option<Vec<u8>> {
+        let inner = self.inner.lock().expect("pack store mutex poisoned");
+        inner
+            .pvw
+            .get(&rs_id)
+            .map(|loc| loc.section[loc.offset..loc.offset + loc.len].to_vec())
+    }
+
+    /// T15 (ST5) — the TEXREF row for one RenderSurface id:
+    /// `(tier_bits, dims)` per pass 5 S2 (dims = `(log2 w << 4) | log2 h`
+    /// of the FULL tier — bucket identity stable across preview→full).
+    pub fn texref(&self, rs_id: u32) -> Option<(u8, u8)> {
+        let inner = self.inner.lock().expect("pack store mutex poisoned");
+        inner.texref.get(&rs_id).copied()
     }
 
     /// Every registered `(namespace, file_id)` — diag + the region differ
@@ -854,6 +999,8 @@ impl PackSource {
             evictions: inner.evictions,
             evict_deferrals: inner.evict_deferrals,
             over_budget: Self::over_budget(&inner),
+            pvw_rows: inner.pvw.len(),
+            texref_rows: inner.texref.len(),
         }
     }
 
@@ -1143,6 +1290,79 @@ mod tests {
         let again = src.insert_pack(hash, pack).expect("re-insert");
         assert!(again.duplicate);
         assert_eq!(src.stats().packs_resident, 1);
+    }
+
+    /// T15 (ST5): PVW payload + TEXREF row registration at admission,
+    /// first-copy dedup across packs, and clean unregistration when the
+    /// owning pack is evicted.
+    #[test]
+    fn pvw_and_texref_register_and_evict() {
+        // PVW stream: two rsIds with distinct payloads.
+        let mut pvw = Vec::new();
+        pvw.extend_from_slice(&2u32.to_le_bytes());
+        for (rs, off, size) in [(0x0600_0001u32, 0u32, 10u32), (0x0600_0002, 10, 6)] {
+            pvw.extend_from_slice(&rs.to_le_bytes());
+            pvw.extend_from_slice(&off.to_le_bytes());
+            pvw.extend_from_slice(&size.to_le_bytes());
+        }
+        pvw.extend(std::iter::repeat_n(0xAAu8, 10));
+        pvw.extend(std::iter::repeat_n(0xBBu8, 6));
+        // TEXREF: same two rsIds; 0x...01 has PVW+FULL, 0x...02 PVW only.
+        let mut texref = Vec::new();
+        texref.extend_from_slice(&2u32.to_le_bytes());
+        for (rs, tier, dims) in [(0x0600_0001u32, 0b11u8, 0x99u8), (0x0600_0002, 0b01, 0x77)] {
+            texref.extend_from_slice(&rs.to_le_bytes());
+            texref.push(tier);
+            texref.extend_from_slice(&0xFFFEu16.to_le_bytes()); // pvw_pack_ord (dropped)
+            texref.push(dims);
+        }
+        let pack_a = build_pack(
+            pack_kind::PREVIEW,
+            0,
+            &["eor/portal"],
+            &[(section_kind::TEXREF, texref.clone()), (section_kind::PVW, pvw.clone())],
+        );
+        // A second carrier duplicating rsId 0x...01 with DIFFERENT bytes —
+        // first-copy must win (bake determinism makes real dupes identical;
+        // the divergence here proves which copy serves).
+        let mut pvw_b = Vec::new();
+        pvw_b.extend_from_slice(&1u32.to_le_bytes());
+        pvw_b.extend_from_slice(&0x0600_0001u32.to_le_bytes());
+        pvw_b.extend_from_slice(&0u32.to_le_bytes());
+        pvw_b.extend_from_slice(&4u32.to_le_bytes());
+        pvw_b.extend(std::iter::repeat_n(0xCCu8, 4));
+        let pack_b = build_pack(pack_kind::TILE, (1 << 8) | 1, &["eor/cell"], &[(section_kind::PVW, pvw_b)]);
+        let (ha, hb) = (sha_trunc16(&pack_a), sha_trunc16(&pack_b));
+        let src = PackSource::new(build_index(&[
+            PackTableEntry { hash16: ha, size: pack_a.len() as u32, kind: pack_kind::PREVIEW, meta: 0 },
+            PackTableEntry { hash16: hb, size: pack_b.len() as u32, kind: pack_kind::TILE, meta: 0 },
+        ]));
+        src.insert_pack(ha, pack_a).expect("insert A");
+        src.insert_pack(hb, pack_b).expect("insert B");
+
+        assert_eq!(src.pvw_payload(0x0600_0001).unwrap(), vec![0xAA; 10], "first copy wins");
+        assert_eq!(src.pvw_payload(0x0600_0002).unwrap(), vec![0xBB; 6]);
+        assert_eq!(src.pvw_payload(0x0600_0003), None);
+        assert_eq!(src.texref(0x0600_0001), Some((0b11, 0x99)));
+        assert_eq!(src.texref(0x0600_0002), Some((0b01, 0x77)));
+        assert_eq!(src.texref(0x0600_0003), None);
+        let st = src.stats();
+        assert_eq!((st.pvw_rows, st.texref_rows), (2, 2));
+
+        // Evict pack A (the first-copy owner): its PVW/TEXREF rows go; the
+        // duplicate rsId does NOT resurrect from pack B (first-copy keys are
+        // per-pack — B never owned 0x...01).
+        src.set_budgets(1, 1);
+        src.set_floor_ms(5_000.0);
+        // Pin B so A is the only victim; age A past the floor.
+        src.pin_pack(&hb);
+        let rep = src.enforce_budget(100_000.0);
+        assert_eq!(rep.evicted, 0, "floor holds on first sight (stamps clocks)");
+        let rep = src.enforce_budget(200_000.0);
+        assert!(rep.evicted >= 1, "A evicts once aged: {rep:?}");
+        assert_eq!(src.pvw_payload(0x0600_0001), None, "A's PVW rows unregistered");
+        assert_eq!(src.pvw_payload(0x0600_0002), None);
+        assert_eq!(src.texref(0x0600_0001), None);
     }
 
     #[test]

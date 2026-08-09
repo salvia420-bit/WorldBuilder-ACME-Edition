@@ -10012,6 +10012,120 @@ pub async fn xu7_blocks(rs_id: u32) -> Vec<u8> {
     bytes
 }
 
+/// T15 (ST5, `?texCompressedOnly`) — SCALARS-ONLY surface decode (pass 5
+/// D-05.5 step 1): everything the material build consumes EXCEPT pixel
+/// planes, read SYNCHRONOUSLY from resident sources (packs carry the 0x08
+/// Surface + 0x05 SurfaceTexture records — no pixel decode, no 0x06
+/// RenderSurface fetch, no network). Returns a JSON string, or `""` when
+/// the chain is not resident / not parseable — the caller's
+/// fall-to-legacy-path signal.
+///
+/// JSON shape:
+///   solid:    `{"kind":"solid","argb":u32,"surfaceType":u32,
+///              "translucency":f,"luminosity":f,"diffuse":f}`
+///   textured: `{"kind":"textured","surfaceType":u32,"translucency":f,
+///              "luminosity":f,"diffuse":f,"rsId":u32,"palId":u32,
+///              "aliased":bool,"category":u8|null,
+///              "roughnessOverride":f|null,"normalScaleOverride":f|null}`
+///
+/// Two knowing gaps vs the pixel decode, both recorded in the T15 report
+/// (they need the 0x06 record header / decoded pixels, which this path
+/// exists to NOT touch): `hasPalette` is not emitted (JS passes undefined
+/// → the decoder's documented 0.5 alpha-ref fail-soft), and `category`
+/// comes from the DID-keyed `surface_overrides.json` only (no
+/// pixel-stats heuristic → null = Generic defaults). `palId != 0` /
+/// `aliased == true` mark the palette-/texture-substituted class the
+/// caller MUST route to the legacy decode (SPEC §0.4 I3 kept-degree).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn surface_meta_sync(surface_did: u32) -> String {
+    use holtburger_dat::file_type::{Surface, SurfaceTexture};
+    use holtburger_dat::{ResourceKey, ResourceSource as _};
+    let Some(source) = global_source::try_global_source() else {
+        return String::new();
+    };
+    let aliased = resolve_tex_swap_alias(surface_did).is_some();
+    let (base_did, tex_override) = match resolve_tex_swap_alias(surface_did) {
+        Some((base, tex)) => (base, Some(tex)),
+        None => (surface_did, None),
+    };
+    let Ok(bytes) = source.get_file_shared(ResourceKey::new("eor/portal", base_did)) else {
+        return String::new();
+    };
+    let Ok(surface) = Surface::unpack(bytes.as_slice()) else {
+        return String::new();
+    };
+    let st = surface.surface_type;
+    // JSON has no NaN/Inf — clamp non-finite record floats to 0 (the same
+    // "0 = no effect" default the JS decoder applies to missing getters).
+    let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
+    if let Some(argb) = surface.solid_color() {
+        return format!(
+            "{{\"kind\":\"solid\",\"argb\":{argb},\"surfaceType\":{st},\
+             \"translucency\":{},\"luminosity\":{},\"diffuse\":{}}}",
+            fin(surface.translucency),
+            fin(surface.luminosity),
+            fin(surface.diffuse)
+        );
+    }
+    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else {
+        return String::new();
+    };
+    let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
+    let Ok(stb) = source.get_file_shared(ResourceKey::new("eor/portal", surf_tex_id)) else {
+        return String::new();
+    };
+    let Ok(surf_tex) = SurfaceTexture::unpack(stb.as_slice()) else {
+        return String::new();
+    };
+    let Some(rs_id) = surf_tex.highest_res() else {
+        return String::new();
+    };
+    let overrides = surface_overrides_map();
+    let entry = surface_overrides::lookup(overrides, surface_did);
+    let cat = match entry.and_then(|e| e.category) {
+        Some(c) => c.as_u8().to_string(),
+        None => "null".to_string(),
+    };
+    let opt_f = |v: Option<f32>| match v {
+        Some(x) if x.is_finite() => format!("{x}"),
+        _ => "null".to_string(),
+    };
+    format!(
+        "{{\"kind\":\"textured\",\"surfaceType\":{st},\
+         \"translucency\":{},\"luminosity\":{},\"diffuse\":{},\
+         \"rsId\":{rs_id},\"palId\":{surf_pal_id},\"aliased\":{aliased},\
+         \"category\":{cat},\"roughnessOverride\":{},\"normalScaleOverride\":{}}}",
+        fin(surface.translucency),
+        fin(surface.luminosity),
+        fin(surface.diffuse),
+        opt_f(entry.and_then(|e| e.roughness)),
+        opt_f(entry.and_then(|e| e.normal_scale))
+    )
+}
+
+/// T15 (ST5, `?texCompressedOnly`) — CAS URL + truncated sha256 for one
+/// full-tier XUBC7 record, WITHOUT fetching it: the JS lane-T routing
+/// input (pass 5 S4 — `controller.need(url, {lane:"T", expectedHash})`
+/// verifies on receipt against this sha). Returns
+/// `{"url":"...","sha16":"32-hex"}` or `""` (no xu7 namespace/entry, v1
+/// manifest, or convention-URL mode — caller falls back to the legacy
+/// `xu7_blocks` route).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn xu7_cas_info(rs_id: u32) -> String {
+    if rs_id >> 24 != 0x06 {
+        return String::new();
+    }
+    let Some(source) = global_source::try_global_source() else {
+        return String::new();
+    };
+    match source.shard_cas_info(TEX_XU7_NAMESPACE, rs_id).await {
+        Some((url, sha16)) => format!("{{\"url\":{url:?},\"sha16\":{sha16:?}}}"),
+        None => String::new(),
+    }
+}
+
 /// X6 — JSON tally for `window.__bc7Stats()` (merged with the JS-side counts).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]

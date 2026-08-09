@@ -103,10 +103,12 @@ pub fn pack_source_stats() -> String {
             format!(
                 "{{\"packsResident\":{},\"records\":{},\"packFileBytes\":{},\"sectionBytes\":{},\"hits\":{},\"misses\":{},\
                  \"pinnedPacks\":{},\"pinnedBytes\":{},\"budgetBytes\":{},\"sectionBudgetBytes\":{},\
-                 \"floorMs\":{},\"evictions\":{},\"evictDeferrals\":{},\"overBudget\":{}}}",
+                 \"floorMs\":{},\"evictions\":{},\"evictDeferrals\":{},\"overBudget\":{},\
+                 \"pvwRows\":{},\"texrefRows\":{}}}",
                 s.packs_resident, s.records, s.pack_file_bytes, s.section_bytes, s.hits, s.misses,
                 s.pinned_packs, s.pinned_bytes, s.budget_bytes, s.section_budget_bytes,
-                s.floor_ms, s.evictions, s.evict_deferrals, s.over_budget
+                s.floor_ms, s.evictions, s.evict_deferrals, s.over_budget,
+                s.pvw_rows, s.texref_rows
             )
         }
     })
@@ -196,5 +198,38 @@ pub fn pack_source_serves(namespace: &str, file_id: u32) -> bool {
     PACK_SOURCE.with(|cell| match cell.borrow().as_ref() {
         None => false,
         Some(pack) => pack.serves(holtburger_dat::ResourceKey::new(namespace, file_id)),
+    })
+}
+
+// ── T15 (ST5, `?texCompressedOnly`) — PVW/TEXREF sync reads ────────────────
+// Pass 5 D-05.5: the frame-1 material path reads the resident PVW preview
+// SYNCHRONOUSLY (packs for the ring are resident before materials build —
+// pass 3 S1.4). Both exports are cheap map lookups; the OFF arm never
+// calls them (seam unarmed ⇒ empty/-1, the caller's legacy-route signal).
+
+/// The PVW preview payload (raw HBC7 container bytes) for one
+/// RenderSurface id. EMPTY Vec = not resident / seam unarmed — the caller
+/// treats a TEXREF'd rsId with no PVW as LOUD deploy skew (pass 5
+/// D-05.5.4: `texrefMissingPvw` must stay 0), never a silent RGBA8 route.
+#[wasm_bindgen]
+pub fn pack_pvw_blocks(rs_id: u32) -> Vec<u8> {
+    PACK_SOURCE.with(|cell| match cell.borrow().as_ref() {
+        None => Vec::new(),
+        Some(pack) => pack.pvw_payload(rs_id).unwrap_or_default(),
+    })
+}
+
+/// The TEXREF row for one RenderSurface id, packed as
+/// `(tier_bits << 8) | dims`, or `-1` when no resident pack carries a
+/// TEXREF for it (⇒ not world-texture content: equipment/dynamic stays on
+/// the legacy lane).
+#[wasm_bindgen]
+pub fn pack_texref(rs_id: u32) -> i32 {
+    PACK_SOURCE.with(|cell| match cell.borrow().as_ref() {
+        None => -1,
+        Some(pack) => match pack.texref(rs_id) {
+            Some((tier, dims)) => ((tier as i32) << 8) | dims as i32,
+            None => -1,
+        },
     })
 }

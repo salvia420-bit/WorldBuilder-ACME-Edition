@@ -471,6 +471,22 @@ impl ManifestResourceSource {
             Self::V2(s) => s.pack_source(),
         }
     }
+
+    /// T15 (ST5, `?texCompressedOnly`): resolve the CAS URL + truncated
+    /// sha256 for one record WITHOUT fetching the record — the lane-T
+    /// routing seam (pass 5 S4: full-tier upgrades ride the JS
+    /// `PackFetchController`, lane T, with hash-on-receipt against this
+    /// sha). Ensures the namespace catalog is resident (one catalog fetch
+    /// on first ask, deduped via the in-flight map). `None` = v1 source,
+    /// undeclared/empty namespace, no catalog template (convention-URL
+    /// mode has no verifiable sha — the caller stays on the legacy lane),
+    /// or no catalog entry for `file_id`.
+    pub async fn shard_cas_info(&self, namespace: &str, file_id: u32) -> Option<(String, String)> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(s) => s.shard_cas_info(namespace, file_id).await,
+        }
+    }
 }
 
 impl ResourceSource for ManifestResourceSource {
@@ -568,6 +584,56 @@ impl V2Source {
             Some(p) => p.serves(key),
             None => false,
         }
+    }
+
+    /// T15 (ST5): CAS URL + truncated-sha for one record, catalog-backed,
+    /// record NOT fetched. See the [`ManifestResourceSource::shard_cas_info`]
+    /// doc for the contract. Mirrors prefetch's Step B catalog-ensure for a
+    /// single namespace (same in-flight dedup, same 404-=-empty-namespace
+    /// disposition).
+    async fn shard_cas_info(&self, namespace: &str, file_id: u32) -> Option<(String, String)> {
+        self.manifest.catalog_url_template.as_ref()?;
+        if !self.manifest.namespaces.iter().any(|n| n == namespace) {
+            return None;
+        }
+        let have = self
+            .catalogs
+            .lock()
+            .expect("catalog cache mutex poisoned")
+            .contains_key(namespace);
+        if !have {
+            let url = self.manifest.catalog_url(namespace)?;
+            let full_url = join_url(&self.base_url_with_slash(), &url);
+            let result = {
+                let u = full_url.clone();
+                self.inflight
+                    .get_or_fetch(&full_url, move || {
+                        let u = u.clone();
+                        async move { fetch_bytes(&u).await }
+                    })
+                    .await
+            };
+            match result {
+                Ok(bytes) => {
+                    let catalog =
+                        NamespaceCatalog::read_from(&bytes, namespace.to_string()).ok()?;
+                    self.catalogs
+                        .lock()
+                        .expect("catalog cache mutex poisoned")
+                        .insert(namespace.to_string(), catalog);
+                }
+                // 404 = namespace empty after bake pruning; transient
+                // errors likewise yield None — the caller's legacy route
+                // (per-record prefetch) retries on its own schedule.
+                Err(_) => return None,
+            }
+        }
+        let catalogs = self.catalogs.lock().expect("catalog cache mutex poisoned");
+        let entry = catalogs.get(namespace)?.lookup(file_id)?;
+        let hash_hex = hex_encode_16(&entry.sha256_truncated);
+        let key = ResourceKey { namespace, file_id };
+        let url = render_shard_url_full(&self.manifest.shard_url_template, key, &hash_hex);
+        Some((join_url(&self.base_url_with_slash(), &url), hash_hex))
     }
 
     /// v2 prefetch: lazy-fetch any per-namespace catalogs we don't
