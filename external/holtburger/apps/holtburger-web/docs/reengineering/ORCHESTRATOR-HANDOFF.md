@@ -136,10 +136,27 @@ spec queue, then PAUSE. Pairings honor the slot policy (≤1 wasm-touching per p
   staged, buildbox powered off after; E4 eye + the two ST6 decisions stay OWNER-gated
   (redmi, Batch B). New [M] evidence for the B4a election: corpus q75/lossless = 0.690
   → ≈69.6 MB, OVER the ≤65 gate. Commit e6a0dcad pushed.
-- Pass 3 (launched ~18:05, FINAL pass before pause): T15 compressed-only tex (wasm
-  slot, no browsers, gates → Batch B) + T00 census live run (owns the one chromium,
-  R-MEM pre-flight gated, ACE up). T13 stays queued past the pause (wasm slots
-  exhausted by the 3×2 authorization).
+- Pass 3 COMPLETE + VERIFIED ~19:30. T00: census RAN (both scenes survived, no
+  earlyoom kill) — VERDICT RE-EXAMINE: 122 classes / 352 projected pools at Nanto
+  (80/274 TN) vs ≤48/≤300 bounds; texDims is the sole big fragmenter (+92; without it
+  30/26 = inside the class bound). T22 sizing stays GATED on a pass-7 tex-axis re-key;
+  candidate keys evaluable OFFLINE via --reduce over /mnt/wbterminal2/reeng/T00/
+  snapshots (no browser run needed). Commit effde7dc. T15: landed as an honest staged
+  subset behind ?texCompressedOnly DEFAULT OFF (5 bisectable commits 3c49c17d…b22c1781;
+  84/84 new battery + all neighbor suites green; OFF arm proven; S7.3 ST5 doc duties
+  discharged; release wasm 6.33 MB shipped). T15 REMAINDER queued: terrain tier-ladder
+  (?terrainT1024), rehydrate-v3 completion, H-05.1 demote-into-pressure-ladder wiring
+  (orchestrator-sequenced).
+
+## SESSION CLOSED 2026-08-09 ~19:35 — PAUSED per user authorization (3×2 passes spent)
+
+State at pause: T00 T01 T02 T10 T11 T12 T14 T16(encode) T20 T21 DONE · T15 DONE-staged
+(remainder above) · T30/T31/T32 queues PREPARED (owner-gated 1070 batches; batch-B E4
+carries redmi's two in-writing decisions; B4a evidence: q75 projects ≈69.6 MB, OVER the
+≤65 gate) · T13 queued (geom bundles; last wasm-lane task before T22) · T22 gated on
+T13 + the census tex-axis re-key · T40 far. Everything pushed through b22c1781. ACE is
+UP. Buildbox is OFF. No bake running. Next orchestrator: T13 launch + the tex-axis
+re-key are the critical path; then Batch A/B/C owner sessions.
 Deploy tooling ready: /mnt/wbterminal2/reeng/orch-bake/deploy-packs-to-dist.sh
 (CAS sha-verify → additive-only manifest check → rsync packs/+index/ → merge
 world_index/pack_url_template → provenance copy → serve.py --check). Supports --dry-run.
