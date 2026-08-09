@@ -148,7 +148,24 @@ spec queue, then PAUSE. Pairings honor the slot policy (≤1 wasm-touching per p
   (?terrainT1024), rehydrate-v3 completion, H-05.1 demote-into-pressure-ladder wiring
   (orchestrator-sequenced).
 
-## SESSION CLOSED 2026-08-09 ~19:35 — PAUSED per user authorization (3×2 passes spent)
+## REOPENED 2026-08-09 ~22:50 (user-authorized): proceed with the critical path while
+the 1070 is down (it may return tomorrow; ALSO offered for tomorrow: an R9 290 over a
+cloudflare tunnel — usable for eye-item correctness legs; benches stay 1070-bound
+since prior baselines are 1070-GPU-specific). Batch-A session is preflight-complete
+and armed (see queue-1070/batch-A sessionLog); E4 sheets v2 are on redmi's device.
+- Corpus repair landed this evening (impl/texfix-fringe-2026-08-09.md, b03bf204):
+  593 Remacri textures fixed + promoted through lossless/ingest/q75; propagation
+  debts recorded there — the pack re-bake is DELIBERATELY sequenced AFTER T13 lands
+  (one overnight bake then carries fixed textures + refreshed previews + T13's HBG1
+  emission together; T13's agent owns holtburger-tools until it lands, R-MEM1 keeps
+  the bake exclusive afterwards).
+- LAUNCHED ~22:55: T13 (geom bundles, wasm slot) + census tex-axis re-key
+  (offline analysis over /mnt/wbterminal2/reeng/T00 snapshots). Orchestrator lane:
+  preview-tier refresh investigation for the 593 repaired ids (pvw source-priority
+  pre>full>extra needs read-verification before the overnight bake).
+
+## SESSION CLOSED 2026-08-09 ~19:35 (superseded by the REOPENED block above) — original
+pause state kept for the record:
 
 State at pause: T00 T01 T02 T10 T11 T12 T14 T16(encode) T20 T21 DONE · T15 DONE-staged
 (remainder above) · T30/T31/T32 queues PREPARED (owner-gated 1070 batches; batch-B E4
