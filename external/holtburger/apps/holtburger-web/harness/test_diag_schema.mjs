@@ -38,12 +38,13 @@ const ok = (cond, label) => {
   ok(clean, `registry validates (${errors.length} errors)`);
   ok(REGISTRY.length >= 10, `registry has surfaces (${REGISTRY.length})`);
   // The task-required current surfaces are all present.
-  for (const name of ["__bc7Stats", "__xu7Stats", "__terrainBc7Stats", "__diag.wasmMem", "__diag.render", "__hbWasmMemory"]) {
+  // __texStats moved reserved → current at T15 (ST5 landed the surface).
+  for (const name of ["__bc7Stats", "__xu7Stats", "__terrainBc7Stats", "__diag.wasmMem", "__diag.render", "__hbWasmMemory", "__texStats"]) {
     ok(getSurface(name)?.status === "current", `current surface registered: ${name}`);
   }
   // The pass-10 S3 new-architecture names are reserved until their stage
   // lands them (registry rule: the reserved schema IS the normative target).
-  for (const name of ["__diag.pools", "__texStats", "__diag.geometry", "__prewarmStats"]) {
+  for (const name of ["__diag.pools", "__diag.geometry", "__prewarmStats"]) {
     ok(RESERVED_NAMES.includes(name), `reserved name claimed: ${name}`);
   }
   // Landed at their stage (T21/ST8 flipped these reserved -> current with

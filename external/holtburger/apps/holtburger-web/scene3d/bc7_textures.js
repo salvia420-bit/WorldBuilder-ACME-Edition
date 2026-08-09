@@ -21,39 +21,30 @@
 //              surfaces still encode alpha = 255).
 //
 // MIP LEVELS
-// v1 of the container carried level 0 ONLY. WebGL cannot generate mipmaps
-// for a compressed texture (`generateMipmaps` is forced false by three), so
-// a level-0-only BC7 texture MUST sample with `minFilter = LinearFilter`.
-// That is a real regression versus the RGBA8 path, which runs
-// `LinearMipmapLinearFilter` + full anisotropy: expect shimmer/moire on
-// tiling surfaces at distance. It is ALSO a hard correctness rule, not a
-// taste call — `texStorage3D(levels = 1)` plus a mipmapped minFilter is an
-// incomplete texture and samples BLACK.
-// `parseHbc7` therefore accepts an OPTIONAL trailing mip chain (each
-// successive level halving, min 1x1) and only enables mipmapped filtering
-// when the payload actually carries one (`makeBc7Texture`, below).
+// Every level of an HBC7 chain is consumed: `parseHbc7` walks the trailing
+// halving chain (min 1x1) and `makeBc7Texture` enables mipmapped filtering
+// whenever a chain is present. The shipped payloads (tex-bc7, previews, PVW
+// pack payloads, terrain) all carry FULL chains — proven byte-exact from the
+// bake ledger (a 2048^2 record is 5,592,452 B = 12-level chain + 20 B
+// header; level 0 alone does not reconcile). A level-0-only payload still
+// parses and MUST sample `minFilter = LinearFilter` — `texStorage3D(levels
+// = 1)` plus a mipmapped minFilter is an incomplete texture and samples
+// BLACK. That branch is a LOUD DIAGNOSTIC path now, not a contract
+// (SPEC ST5 / pass 5 S5).
 //
-// 2026-08-08 — THE STATICS RECORDS ARE v2 TOO; THIS HEADER SAID OTHERWISE FOR
-// THREE DAYS AND MISLED AT LEAST ONE AGENT. It claimed "the statics records
-// are the ones still waiting on a v2 bake". They are not: the shipped
-// `tex-bc7` payloads carry FULL chains, exactly as terrain does. Proof is
-// byte-exact from the bake ledger (`/mnt/wbterminal2/tex-bc7-pre/derive-ledger.jsonl`,
-// 2,999 rows) — a 2048^2 record is 5,592,452 B = the 12-level BC7 chain
-// (4194304+1048576+...+16+16) + the 20 B header, and a 1024^2 record is
-// 1,398,148 B = its 11-level chain + 20 B. Neither reconciles with level 0
-// alone. `parseHbc7` would in fact THROW "trailing garbage" on these if it
-// did not already walk the chain, so the singleton path has been taking its
-// `LinearMipmapLinearFilter` branch all along.
-//
-// THE REAL GAP IS THE ARRAY PATH, NOT THE BAKE. `makeBc7Texture` (singleton)
-// consumes every level. `makeBc7ArrayTexture` / `writeBc7ArrayLayer` (the
-// statics-atlas + `?statArrayMerge` bucket arrays) still allocate level 0 only
-// and write `parsed.levels[0]` only, so atlas-bucket statics sample with
-// `LinearFilter` and no anisotropy while singleton statics of the SAME surface
-// get the full chain. That asymmetry is a live quality bug, not a bake
-// blocker; fixing it is an allocation + upload change here (and a VRAM
-// increase of ~1/3 on those arrays, on a page that OOMs near 2,800 MB, so it
-// wants an eye-test and a memory census before it ships default-ON).
+// ARRAY PATH (ST5, `?texCompressedOnly`): `makeBc7ArrayTexture` allocates
+// the FULL halving chain when built with `opts.mipChain` (+ aniso from
+// `opts.anisotropy`), and `writeBc7ArrayLayer` writes EVERY level of a
+// chain-allocated array — closing the measured singleton-vs-atlas quality
+// asymmetry (shimmer/moire on tiling surfaces; pass 5 D-05.6.1: the cost is
+// +1/3 on compressed array bytes, priced there — memory/quality grounds,
+// never an fps claim). The OFF arm (flag absent) allocates level 0 only,
+// byte-identical to the pre-ST5 path — that is the kill path (I7).
+// KNOWN COST, read-verified in three r184: with a mip chain + layerUpdates,
+// three clears `layerUpdates` after mip 0, so a marked-layer write uploads
+// marked layers at level 0 but the FULL depth at levels 1+ (~1/3 of the
+// array's bytes per write). Correct output; counted; P4 upload staging
+// (ST9) restructures it.
 //
 // FEATURE DETECTION IS MANDATORY, NOT OPTIONAL
 // `EXT_texture_compression_bptc` is absent on plenty of real devices. (It is
@@ -81,7 +72,8 @@ import * as THREE from "three";
 // P2 — call-time-only cycle with xu7_textures.js (it imports bc7BlocksFor/
 // bc7LevelBytes back from here); both sides bind functions, never eval-time
 // values, so the cycle is safe.
-import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder } from "./xu7_textures.js";
+import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder, texWorkerStats } from "./xu7_textures.js";
+import { textureRehydrateStats } from "./texture_rehydrate.js";
 
 // --------------------------------------------------------------------------
 // flag + capability
@@ -185,6 +177,101 @@ export function _setBc7SupportForTest(v, note = "forced (test)") {
 
 export function bc7SupportNote() {
   return _detectNote;
+}
+
+// --------------------------------------------------------------------------
+// ?texCompressedOnly — ST5 (SPEC §3 T15; pass 5 D-05.5): materials are BORN
+// compressed from the resident PVW preview (scalars-only surface decode, no
+// RGBA8 double-build); the full tier upgrades async via lane T + the texture
+// worker. DEV opt-in, DEFAULT OFF (I7); REQUIRES `?packSource` (the PVW
+// payloads live in packs — without the controller the path cannot arm and
+// every consumer stays byte-identical legacy).
+// --------------------------------------------------------------------------
+
+/**
+ * `?texCompressedOnly` — EXACT-MATCH DEV opt-in, **DEFAULT OFF** (the
+ * orchestrator flips it after GATE-TEX). Only `on`/`1`/`true`/`yes` read
+ * ON. Not memoized (the ESM suites re-stub `window` per case).
+ */
+export function texCompressedOnlyEnabled(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    const v = new URLSearchParams(s).get("texCompressedOnly");
+    if (v == null) return false;
+    const t = String(v).toLowerCase();
+    return t === "on" || t === "1" || t === "true" || t === "yes";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Armed by index.html AFTER init_resource_source + controller boot (the
+// same ordering contract as `initBc7Source`; the T20 export-bag lesson —
+// every export this path calls must be carried here or it silently no-ops).
+const _tco = { wasmNs: null, controller: null };
+
+/**
+ * Arm the compressed-only path: `wasmNs` must carry `surface_meta_sync`,
+ * `pack_pvw_blocks`, `pack_texref`, `xu7_cas_info`; `controller` is the
+ * PackFetchController singleton (lane-T `need`). Fail-soft: never throws;
+ * an un-armed path leaves every consumer on the legacy build.
+ */
+export function initTexCompressedOnly({ wasmNs, controller } = {}) {
+  _tco.wasmNs = wasmNs || null;
+  _tco.controller = controller || null;
+  return texCompressedOnlyActive();
+}
+
+/** The live gate every consumer checks: flag ON + BPTC present + wasm
+ *  exports armed + controller armed (`?packSource` on a pack dist). */
+export function texCompressedOnlyActive() {
+  return (
+    texCompressedOnlyEnabled() &&
+    bc7Available() &&
+    !!(_tco.wasmNs && typeof _tco.wasmNs.surface_meta_sync === "function" &&
+       typeof _tco.wasmNs.pack_pvw_blocks === "function") &&
+    !!(_tco.controller && _tco.controller.armed)
+  );
+}
+
+/** The armed namespace/controller pair (materials.js consumer). */
+export function texCompressedOnlyNs() {
+  return _tco;
+}
+
+/** Test hook. NOTE: does NOT clear the `atlasRefeed` registration — that
+ *  belongs to the registering producer (static_atlas at module load); a
+ *  suite that wants a clean seam passes `registerAtlasRefeed(null)`. */
+export function _resetTexCompressedOnlyForTest() {
+  _tco.wasmNs = null;
+  _tco.controller = null;
+}
+
+// --------------------------------------------------------------------------
+// atlasRefeed(rsId) — the PRODUCER-AGNOSTIC re-home seam (F-11.17).
+// The full-tier upgrade calls this after swapping a material's map so every
+// batched member of that rsId re-homes from its preview-dim bucket into the
+// full-dim one. The ATLAS-side implementation (static_atlas.js registers it)
+// is a CONSCIOUS THROWAWAY: it retires at ST9 when draw pools subsume the
+// atlas — pools register their own handler against this same seam.
+// --------------------------------------------------------------------------
+
+let _atlasRefeedImpl = null;
+
+/** Register the current producer's re-home handler (`fn(rsId) → nodes`). */
+export function registerAtlasRefeed(fn) {
+  _atlasRefeedImpl = typeof fn === "function" ? fn : null;
+}
+
+/** Re-home every committed member of `rsId`. Returns re-homed node count
+ *  (0 when no producer handler is registered — fail-soft by design). */
+export function atlasRefeed(rsId) {
+  if (!_atlasRefeedImpl) return 0;
+  try {
+    return _atlasRefeedImpl(rsId >>> 0) | 0;
+  } catch (_) {
+    return 0;
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -344,24 +431,36 @@ export function makeBc7Texture(parsed, opts = {}) {
  * path's full `needsUpdate` re-upload of the whole array.
  */
 export function makeBc7ArrayTexture(w, h, depth, opts = {}) {
-  const layerBytes = bc7LevelBytes(w, h);
-  const data = new Uint8Array(layerBytes * Math.max(1, depth | 0));
+  const d = Math.max(1, depth | 0);
+  // ST5 (`?texCompressedOnly`, pass 5 D-05.6.1): `opts.mipChain` allocates
+  // the COMPLETE halving chain per layer (mips + aniso legal — closes the
+  // singleton-vs-atlas asymmetry). Without it: level 0 only, byte-identical
+  // to the pre-ST5 allocator (the OFF arm / kill path).
+  const mipmaps = [];
+  let lw = w, lh = h;
+  for (;;) {
+    mipmaps.push({ data: new Uint8Array(bc7LevelBytes(lw, lh) * d), width: lw, height: lh });
+    if (!opts.mipChain || (lw === 1 && lh === 1)) break;
+    lw = Math.max(1, lw >> 1);
+    lh = Math.max(1, lh >> 1);
+  }
   const arr = new THREE.CompressedArrayTexture(
-    [{ data, width: w, height: h }],
+    mipmaps,
     w,
     h,
-    Math.max(1, depth | 0),
+    d,
     THREE.RGBA_BPTC_Format,
     THREE.UnsignedByteType,
   );
   arr.colorSpace = opts.colorSpace ?? THREE.SRGBColorSpace;
   arr.magFilter = THREE.LinearFilter;
-  // Level-0 only ⇒ a mipmapped minFilter would make this an incomplete texture
-  // and sample BLACK. NOTE this is a limitation of THIS allocator, not of the
-  // payload: the tex-bc7 records carry full chains (see the header), and
-  // `makeBc7Texture` uses them. Allocating `levels > 1` here and writing every
-  // level in `writeBc7ArrayLayer` is the open item.
-  arr.minFilter = THREE.LinearFilter;
+  // Chain-allocated ⇒ mipmapped filtering; level-0-only ⇒ LinearFilter is a
+  // HARD correctness rule (`texStorage3D(levels = 1)` + mipmapped minFilter
+  // = incomplete texture, samples BLACK).
+  arr.minFilter = mipmaps.length > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+  if (typeof opts.anisotropy === "number" && mipmaps.length > 1) {
+    arr.anisotropy = opts.anisotropy;
+  }
   arr.generateMipmaps = false;
   // Same addressing contract as the RGBA8 DataArrayTexture the atlas uses:
   // ClampToEdge per layer, with the wrap-bucket shader's fract() supplying
@@ -374,22 +473,43 @@ export function makeBc7ArrayTexture(w, h, depth, opts = {}) {
 
 /**
  * Write one layer of a BC7 array from a parsed HBC7 whose dims MUST equal
- * the array's. Marks only that layer dirty (`addLayerUpdate`) so three emits
- * a single `compressedTexSubImage3D` rather than re-uploading the array.
+ * the array's. Marks only that layer dirty (`addLayerUpdate`).
+ *
+ * Chain-allocated arrays (ST5) write EVERY level; the payload must carry a
+ * chain at least as deep as the array's — a shallow payload into a chain
+ * array is a LOUD diagnostic failure (pass 5 S5: level-0-only compressed
+ * uploads are illegal on the compressed-only arm), never a silent
+ * level-0-only write. Upload-cost note: three r184 clears `layerUpdates`
+ * after mip 0, so this write uploads marked layers at level 0 + full depth
+ * at levels 1+ (see the header).
  * @returns {boolean} true when written.
  */
 export function writeBc7ArrayLayer(arr, layer, parsed) {
   try {
     const img = arr && arr.image;
-    const mip = arr && arr.mipmaps && arr.mipmaps[0];
-    if (!img || !mip || !mip.data) return false;
+    const mips = arr && arr.mipmaps;
+    if (!img || !mips || !mips[0] || !mips[0].data) return false;
     if (parsed.width !== img.width || parsed.height !== img.height) return false;
-    const layerBytes = bc7LevelBytes(img.width, img.height);
-    const src = parsed.levels[0].data;
-    if (src.length !== layerBytes) return false;
-    const off = layer * layerBytes;
-    if (off + layerBytes > mip.data.length) return false;
-    mip.data.set(src, off);
+    if (mips.length > 1 && (!parsed.levels || parsed.levels.length < mips.length)) {
+      _stats.chainWriteRejects += 1;
+      // eslint-disable-next-line no-console
+      console.error(
+        `[bc7] chain array wants ${mips.length} levels, payload carries ${parsed.levels ? parsed.levels.length : 0} — refusing a level-0-only write (bake/coverage defect)`,
+      );
+      return false;
+    }
+    // Validate every level before writing any (a layer index is recycled —
+    // a half-written layer must not happen).
+    for (let i = 0; i < mips.length; i += 1) {
+      const levelBytes = bc7LevelBytes(mips[i].width, mips[i].height);
+      const src = parsed.levels[i] && parsed.levels[i].data;
+      if (!src || src.length !== levelBytes) return false;
+      if ((layer + 1) * levelBytes > mips[i].data.length) return false;
+    }
+    for (let i = 0; i < mips.length; i += 1) {
+      const levelBytes = bc7LevelBytes(mips[i].width, mips[i].height);
+      mips[i].data.set(parsed.levels[i].data, layer * levelBytes);
+    }
     if (typeof arr.addLayerUpdate === "function") arr.addLayerUpdate(layer);
     return true;
   } catch (_) {
@@ -426,6 +546,15 @@ const _stats = {
   preFetches: 0,
   preHits: 0,
   preSwaps: 0,
+  // ── ST5 (`?texCompressedOnly`) tier counters ────────────────────────────
+  pvwBuilds: 0,          // materials born from a resident PVW preview
+  texrefMissingPvw: 0,   // TEXREF'd rsId with no resident PVW — MUST stay 0
+                         // (bake invariant D-05.5.4; >0 = LOUD deploy skew)
+  fullSwaps: 0,          // lane-T full-tier upgrades swapped in
+  fullFailed: 0,         // lane-T fetch/transcode failures (stayed preview)
+  demotions: 0,          // pressure demote-to-preview events
+  nraAttached: 0,        // worker-derived NRA planes attached
+  chainWriteRejects: 0,  // shallow payload refused by a chain array (loud)
 };
 
 // P1 preview-first (?texPre; DEFAULT ON, =off/0/false/no escape). Fetches the
@@ -466,6 +595,55 @@ export function _bumpBc7Stat(name, by = 1) {
 }
 
 /**
+ * ST5 — the merged texture-tier surface (pass 5 S8): `__bc7Stats`/
+ * `__xu7Stats`/`__texWorkerStats` fold into `__texStats()` (the
+ * same-name-successor edge the diag registry encodes at T14).
+ * `arrays` reads the atlas tally via the window install (a direct import
+ * would mint a new module cycle — static_atlas already imports this file).
+ */
+export function texStats() {
+  let arrays = null;
+  try {
+    if (typeof window !== "undefined" && typeof window.__atlasStats === "function") {
+      arrays = window.__atlasStats();
+    }
+  } catch (_) { arrays = null; }
+  let rehydrate = null;
+  try { rehydrate = textureRehydrateStats(); } catch (_) { rehydrate = null; }
+  return {
+    enabled: texCompressedOnlyEnabled(),
+    active: texCompressedOnlyActive(),
+    tiers: {
+      pvwHits: _stats.pvwBuilds,
+      fullSwaps: _stats.fullSwaps,
+      fullFailed: _stats.fullFailed,
+      demotions: _stats.demotions,
+      nraAttached: _stats.nraAttached,
+      chainWriteRejects: _stats.chainWriteRejects,
+    },
+    coverage: { texrefMissingPvw: _stats.texrefMissingPvw },
+    worker: (() => {
+      try {
+        const w = texWorkerStats();
+        // Registry shape (pass 10 S3): fallbackArm = work is currently
+        // routing to the main-thread FIFO despite the flag.
+        return { ...w, fallbackArm: !!w.enabled && w.state !== "ready" };
+      } catch (_) { return null; }
+    })(),
+    xu7: (() => { try { return xu7Stats(); } catch (_) { return null; } })(),
+    records: _source ? _source.recordCacheStats() : null,
+    mirrors: (() => {
+      const m = bc7RecordCacheBytes();
+      // byClass @cpuMirror (D-05.7 classes; the atlas staging + terrain
+      // rows live on their own surfaces — see the registry note).
+      return { byClass: { fullTierRecords: m.bytes }, ...m };
+    })(),
+    arrays,
+    rehydrate,
+  };
+}
+
+/**
  * Per-RenderSurface BC7 record source. Mirrors `suite_assets.js`
  * `SuiteAssetSource`: a SYNC accessor that returns the parsed payload or
  * null-while-loading and kicks the async fetch on the first ask, so callers
@@ -478,22 +656,20 @@ export function _bumpBc7Stat(name, by = 1) {
 /**
  * `?bc7RecordsMB=N` — byte budget for the parsed-payload caches below.
  *
- * DEFAULT ARMED at 256 MB. Absent / unparseable ⇒ the default; only an explicit
- * `off` (or `0`) disarms, because a typo must not silently uncap memory — the
- * same grammar `?matBudgetMB` uses and for the same reason.
+ * DEFAULT ARMED at 256 MB legacy / **128 MB under `?texCompressedOnly`**
+ * (pass 5 D-05.7: the old 256 MB rationale — "eviction costs a ~32 ms
+ * main-thread transcode" and "evicting frees nothing while the texture
+ * lives" — is obsolete on the compressed-only arm: re-transcode is
+ * worker-side, and eviction there demotes the material to its
+ * pack-resident preview, actually freeing the full-tier bytes). Absent /
+ * unparseable ⇒ the default; only an explicit `off` (or `0`) disarms,
+ * because a typo must not silently uncap memory — the same grammar
+ * `?matBudgetMB` uses and for the same reason.
  *
- * Sizing: the 2026-08-05 six-town census measured 553 + 476 records holding
- * ~297 MB gross, still climbing slowly. 256 MB therefore does not bite on a
- * town-scale route and bounds the growth on a longer one, which is the whole
- * point — this cache was UNBOUNDED and is a function of route length.
- *
- * Why not tighter: most of those bytes are SHARED with the live
- * `CompressedTexture` built from the record (`makeBc7Texture` passes
- * `parsed.levels` through with no copy), so evicting a record whose texture is
- * alive frees nothing and only risks a re-fetch. Worse, a re-fetch on the XU7
- * path costs a ~32 ms main-thread transcode. The census puts the cache's
- * INDEPENDENT hold — payload no live texture is charged for — at 60 MB after
- * six towns, so a tight budget would buy little and could cost frames.
+ * Legacy-arm sizing (unchanged): the 2026-08-05 six-town census measured
+ * 553 + 476 records holding ~297 MB gross; on that arm most bytes are
+ * SHARED with the live `CompressedTexture` (`makeBc7Texture` passes
+ * `parsed.levels` through with no copy), so a tight budget buys little.
  */
 export function bc7RecordBudgetBytes(search) {
   let raw = null;
@@ -505,7 +681,8 @@ export function bc7RecordBudgetBytes(search) {
   } catch (_) { raw = null; }
   if (raw != null && flagIsOff(raw)) return Infinity;
   const n = raw == null ? NaN : Number(raw);
-  return Number.isFinite(n) && n >= 1 ? n * 1024 * 1024 : 256 * 1024 * 1024;
+  if (Number.isFinite(n) && n >= 1) return n * 1024 * 1024;
+  return (texCompressedOnlyEnabled(search) ? 128 : 256) * 1024 * 1024;
 }
 
 /** Resident bytes of one parsed record, deduped by underlying ArrayBuffer —
@@ -620,6 +797,29 @@ export class Bc7RecordSource {
   /** True once we have a verdict (payload or proven-absent) for this id. */
   known(rsId) {
     return this._cache.has(rsId >>> 0);
+  }
+
+  /**
+   * ST5 (`?texCompressedOnly`) — adopt an externally produced parsed
+   * record (the lane-T → worker transcode path) into the budgeted cache,
+   * so the 128 MB record budget governs full-tier mirrors on that arm
+   * (pass 5 D-05.7: "full-tier mirror ≡ the record-cache entry").
+   */
+  adoptParsed(rsId, parsed) {
+    if (!parsed) return;
+    this._put(this._cache, rsId >>> 0, parsed);
+    _stats.hits += 1;
+  }
+
+  /** ST5 — drop one record's cache entry (the demote primitive frees the
+   *  full-tier mirror; the preview stays pack-resident). */
+  dropRecord(rsId) {
+    const id = rsId >>> 0;
+    const parsed = this._cache.get(id);
+    if (parsed === undefined) return false;
+    this._recordBytes -= _parsedBytes(parsed);
+    this._cache.delete(id);
+    return true;
   }
 
   /** Sync accessor: parsed payload, or null while loading / absent. */
@@ -811,6 +1011,10 @@ export function initBc7Source(opts = {}) {
   if (typeof window !== "undefined") {
     window.__bc7Stats = () => bc7Stats();
     window.__xu7Stats = () => xu7Stats();
+    // ST5: the merged successor surface (registry: __texWorkerStats
+    // retiresAt ST5 → __texStats; the legacy surfaces stay installed
+    // through the migration window).
+    window.__texStats = () => texStats();
   }
   return _source;
 }

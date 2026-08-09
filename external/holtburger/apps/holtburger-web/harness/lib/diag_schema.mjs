@@ -102,7 +102,7 @@ export const REGISTRY = Object.freeze([
     name: "__bc7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:812",
+    evidence: "scene3d/bc7_textures.js:1012",
     availability: "in-world",
     note: "Module tally bc7Stats() (bc7_textures.js:449-472) + source residency. "
       + "Retained legacy surface; full-tier texture machinery re-homes at ST5.",
@@ -124,7 +124,7 @@ export const REGISTRY = Object.freeze([
     name: "__xu7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:813",
+    evidence: "scene3d/bc7_textures.js:1013",
     availability: "in-world",
     note: "xu7Stats() in scene3d/xu7_textures.js:142-211 (budgeted-FIFO tally). "
       + "decodeMs is cumulative main-thread transcode ms but NOT attribution-"
@@ -171,7 +171,7 @@ export const REGISTRY = Object.freeze([
     name: "__atlasStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/static_atlas.js:1003",
+    evidence: "scene3d/static_atlas.js:1027",
     availability: "in-world",
     retiresAt: "ST9",
     successor: "__diag.pools",
@@ -593,18 +593,29 @@ export const REGISTRY = Object.freeze([
 
   {
     name: "__texStats",
-    status: "reserved",
+    status: "current",
     reads: "function",
-    spec: "pass-10 S3 (pass 5 S8 verbatim)",
-    availability: "reserved:ST4",
-    note: "Texture tier/worker surface. worker.msTranscode is reported but "
+    evidence: "scene3d/bc7_textures.js:604",
+    availability: "boot",
+    note: "Texture tier/worker surface — LANDED at T15 (ST5, "
+      + "`?texCompressedOnly`; texStats() in bc7_textures.js, window-installed "
+      + "by initBc7Source; __texWorkerStats folds in as .worker per its "
+      + "same-name-successor edge and stays installed through the migration "
+      + "window). worker.msTranscode is reported but "
       + "NEVER summed into explainedMs — worker time is off-thread; only its "
       + "integration cost lands in a frame (pass-10 S5). "
-      + "coverage.texrefMissingPvw MUST stay 0 (loud skew, never silent RGBA8).",
+      + "coverage.texrefMissingPvw MUST stay 0 once carriers are resident "
+      + "(loud skew, never silent RGBA8; at T15 a not-yet-resident PVW "
+      + "carrier legacy-routes and counts here — see the T15 report "
+      + "deviation). arrays = the __atlasStats tally (window seam); "
+      + "terrain/atlas-staging mirror rows stay on their own surfaces.",
     fields: {
       "tiers.pvwHits": C("count"),
       "tiers.fullSwaps": C("count"),
+      "tiers.fullFailed": C("count"),
       "tiers.demotions": C("count"),
+      "tiers.nraAttached": C("count"),
+      "tiers.chainWriteRejects": C("count"),
       "worker.jobs": C("count"),
       "worker.msTranscode": C("ms", null, { attribution: false }),
       "worker.queueDepth": L("count"),

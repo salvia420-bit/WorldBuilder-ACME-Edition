@@ -28,10 +28,26 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   // ./suite_assets.js
   SuiteAssetSource: "class {}",
   loadTexchanManifest: "() => null",
+  // ./adapter.js — ST5: module-wide aniso preset (1 = three's stock value,
+  // what an uninitialised adapter returns).
+  getAdapterMaxAnisotropy: "() => 1",
   // ./bc7_textures.js — inert unless ?texBc7=on AND the GPU reports BPTC.
   bc7Available: "() => false",
   bc7TextureBytes: "() => 0",
   upgradeMaterialToBc7: "() => false",
+  // ./bc7_textures.js — ST5 (`?texCompressedOnly`): inactive is the default
+  // arm (flag OFF), so the compressed-only branch never fires and the
+  // remaining symbols are unreachable-but-declared (explicit inert stubs,
+  // not a proxy, per this file's rule).
+  texCompressedOnlyActive: "() => false",
+  texCompressedOnlyNs: "() => ({ wasmNs: null, controller: null })",
+  parseHbc7: "() => { throw new Error('stub parseHbc7 called with texCompressedOnly inactive'); }",
+  makeBc7Texture: "() => { throw new Error('stub makeBc7Texture called with texCompressedOnly inactive'); }",
+  bc7Source: "() => null",
+  _bumpBc7Stat: "() => {}",
+  atlasRefeed: "() => 0",
+  // ./xu7_textures.js — ST5 lane-T transcode entry; unreachable flag-OFF.
+  transcodeXu7WithNra: "async () => null",
   // ./texture_release.js — `?texFreeCpu` CPU-side release arming. Returns
   // false = "not armed", which is also what the real function returns with the
   // flag off, so no suite's assertions change shape. The one call site is

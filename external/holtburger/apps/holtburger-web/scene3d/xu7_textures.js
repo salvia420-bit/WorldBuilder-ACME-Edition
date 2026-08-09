@@ -681,6 +681,9 @@ const TEX_WORKER_QUEUE_CAP = 64;
 // script is same-origin and `ready` does not wait on the transcoder, so this
 // is script-fetch + eval time.
 const TEX_WORKER_TERRAIN_READY_MS = 10_000;
+// Bounded ready-wait for ST5 lane-T upgrade transcodes (background work —
+// see `transcodeXu7WithNra`). Same class as the terrain bound [A].
+const TEX_WORKER_UPGRADE_READY_MS = 10_000;
 
 const _TW_UNROUTED = Symbol("texWorker-unrouted");
 
@@ -930,7 +933,7 @@ function _twReconstructParsed(res) {
  * otherwise resolves exactly like `_transcodeNow` (parsed shape, or null =
  * "take the hbc7 route").
  */
-async function _workerTranscodeXu7(bytes) {
+async function _workerTranscodeXu7(bytes, wantNra = null) {
   if (!bytes || bytes.length === 0) return null;
   if (!_twEnsure()) return _TW_UNROUTED;
   if (_twQueue.length + _twPending.size >= TEX_WORKER_QUEUE_CAP) return _TW_UNROUTED;
@@ -940,7 +943,7 @@ async function _workerTranscodeXu7(bytes) {
   const owned = u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength ? u8 : u8.slice();
   const seq = ++_twSeq;
   const res = await _twSubmit(
-    { type: "job", seq, kind: "xu7", bytes: owned.buffer, want: { nra: null } },
+    { type: "job", seq, kind: "xu7", bytes: owned.buffer, want: { nra: wantNra } },
     [owned.buffer],
   );
   if (!res) return null; // worker died mid-flight (pendingNulled counted) → hbc7 route
@@ -953,7 +956,50 @@ async function _workerTranscodeXu7(bytes) {
   }
   _twStats.jobs += 1;
   _twStats.msTranscode += res.transcodeMs || 0;
-  return _twReconstructParsed(res);
+  const parsed = _twReconstructParsed(res);
+  if (wantNra === null) return parsed;
+  // Rich form (ST5): the caller asked for the NRA rider.
+  const nra = res.nra && res.nra.plane
+    ? { width: res.nra.width, height: res.nra.height, plane: new Uint8Array(res.nra.plane) }
+    : null;
+  if (nra) _twStats.nraDerives += 1;
+  return { parsed, nra };
+}
+
+/**
+ * ST5 (`?texCompressedOnly`, pass 5 S4) — the lane-T upgrade transcode:
+ * worker-first WITH the `want.nra` rider (half-res Sobel derived in-worker
+ * from the transcoded albedo, D-05.5), budgeted-FIFO fallback WITHOUT nra
+ * (the fallback arm has no RGBA source off-thread; counted via
+ * `fifoFallbacks` exactly like the plain route — never silent).
+ * Resolves `{parsed, nra|null}` or null (caller keeps its preview).
+ */
+export async function transcodeXu7WithNra(bytes, wantNra = "half") {
+  if (!bytes || bytes.length === 0) return null;
+  if (texWorkersEnabled()) {
+    // Unlike the hot xu7 record path (ask-don't-await — a loading worker
+    // must not stall boot-era upgrades), the lane-T upgrade is BACKGROUND
+    // work: waiting a bounded beat for the worker keeps the transcode (and
+    // the NRA rider, which the FIFO arm cannot produce) off the main
+    // thread. A dead/timed-out worker falls through, counted.
+    await _twReady(TEX_WORKER_UPGRADE_READY_MS);
+    const routed = await _workerTranscodeXu7(bytes, wantNra ?? "half");
+    if (routed !== _TW_UNROUTED) return routed; // {parsed, nra} | null
+    _twStats.fifoFallbacks += 1;
+  }
+  const module = await xu7Transcoder();
+  if (!module) return null;
+  if (!xu7BudgetEnabled()) {
+    const parsed = _transcodeNow(module, bytes);
+    return parsed ? { parsed, nra: null } : null;
+  }
+  const parsed = await new Promise((resolve) => {
+    _queue.push({ module, bytes, resolve, tQueued: _now() });
+    _stats.queued += 1;
+    if (_queue.length > _stats.maxQueueDepth) _stats.maxQueueDepth = _queue.length;
+    _scheduleDrain();
+  });
+  return parsed ? { parsed, nra: null } : null;
 }
 
 /**
