@@ -346,10 +346,12 @@ fn read_uleb128(bytes: &[u8], offset: &mut usize) -> Option<u64> {
 /// 0xEDB88320, init 0xFFFFFFFF, final XOR 0xFFFFFFFF. The same
 /// algorithm as `crc32fast` / `flate2`.
 ///
-/// Inline implementation (no extra dependency) — the catalog
-/// format is the only consumer in the workspace and the
-/// table-free version is short enough to read in one screen.
-fn crc32_ieee(bytes: &[u8]) -> u32 {
+/// Inline implementation (no extra dependency). Public since the
+/// pipeline re-engineering (T10): the HBP1/HBSI1 pack containers
+/// reuse the exact HBNS footer convention (crc32 + reversed
+/// trailing magic), so the bake tool needs the same function —
+/// exporting it keeps the two footers provably the same algorithm.
+pub fn crc32_ieee(bytes: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in bytes {
         crc ^= b as u32;

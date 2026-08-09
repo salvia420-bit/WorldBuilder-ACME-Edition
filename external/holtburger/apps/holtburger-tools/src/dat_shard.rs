@@ -1199,6 +1199,11 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
         namespaces,
         shard_url_template: DEFAULT_SHARD_URL_TEMPLATE_PREFIXED.into(),
         catalog_url_template: Some(DEFAULT_CATALOG_URL_TEMPLATE.into()),
+        // T10 pack fields are written by the pack emitter (pack_bake),
+        // never by the legacy path — keeps legacy manifest.json
+        // byte-identical to pre-T10 output.
+        world_index: None,
+        pack_url_template: None,
     };
 
     let manifest_path = opts.output_dir.join("manifest.json");

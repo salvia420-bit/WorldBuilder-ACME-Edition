@@ -17,7 +17,10 @@
 use std::collections::HashSet;
 use std::io::Cursor;
 
-use crate::file_type::{SetupModel, Surface, SurfaceTexture, Texture};
+use crate::file_type::{
+    AnimationHookData, GfxObjDegradeInfo, MotionTable, ParticleEmitter, PhysicsScript,
+    PhysicsScriptTable, SetupModel, SoundTable, Surface, SurfaceTexture, Texture,
+};
 use crate::{EOR_PORTAL_NAMESPACE, ResourceKey, ResourceSource};
 
 /// Walk a `(namespace, file_id)` graph starting from a single
@@ -206,6 +209,257 @@ pub fn read_compressed_u32(bytes: &[u8]) -> Option<(u32, usize)> {
         let b1 = *bytes.get(1)? as u32;
         let s = u16::from_le_bytes([*bytes.get(2)?, *bytes.get(3)?]) as u32;
         Some(((((b0 & 0x3F) << 8) | b1) << 16 | s, 4))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Widened walk — pipeline re-engineering T10 / SPEC D-12.5.
+//
+// The classic `collect_model_dependencies` above covers ONLY the visual
+// chain (GfxObj/Setup/Surface/SurfaceTexture/Texture/Palette). It is the
+// walk `write_boot_pack` and the legacy dist layers are built from, and it
+// MUST stay byte-identical (the legacy layers are the dual-emit kill path).
+//
+// `collect_model_dependencies_widened` is a NEW walk used only by the HBP1
+// pack bake. It adds, per SPEC.md §1.1 / pass-12 D-12.5:
+//
+//   * Setup → default MotionTable (0x09) / SoundTable (0x20) /
+//     PhysicsScript (0x33) / PhysicsScriptTable (0x34) edges;
+//   * MotionTable → Animation (0x03) edges (cycles + modifiers + links);
+//   * SoundTable → Wave (0x0A) edges;
+//   * PhysicsScriptTable → PhysicsScript → hook edges
+//     (SoundHook waves, particle-emitter records 0x32);
+//   * ParticleEmitter → GfxObj edges (sw + hw part);
+//   * GfxObj → did_degrade (0x11 GfxObjDegradeInfo) → LOD GfxObj edges.
+//
+// Same graceful-miss semantics as the classic walk: a record absent from
+// the source is a terminal leaf, never an error.
+// ---------------------------------------------------------------------------
+
+/// Widened transitive walk (pack-bake closure). See module notes above.
+pub fn collect_model_dependencies_widened<S: ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+    out: &mut HashSet<(String, u32)>,
+) {
+    walk_widened(source, model_id, out, 0);
+}
+
+/// Walk a bare Surface (0x08) id and its texture chain. Entry point for
+/// EnvCell surface tables (which reference Surfaces directly, not via a
+/// GfxObj). Shared by the classic and widened closures — the surface
+/// chain itself is unchanged.
+pub fn collect_surface_dependencies<S: ResourceSource + ?Sized>(
+    source: &S,
+    surface_id: u32,
+    out: &mut HashSet<(String, u32)>,
+) {
+    walk_surface(source, surface_id, out);
+}
+
+fn insert_and_read<S: ResourceSource + ?Sized>(
+    source: &S,
+    id: u32,
+    out: &mut HashSet<(String, u32)>,
+) -> Option<Vec<u8>> {
+    if !out.insert((EOR_PORTAL_NAMESPACE.to_string(), id)) {
+        return None; // already visited
+    }
+    source
+        .get_file_by_key(ResourceKey::new(EOR_PORTAL_NAMESPACE, id))
+        .ok()
+}
+
+fn walk_widened<S: ResourceSource + ?Sized>(
+    source: &S,
+    id: u32,
+    out: &mut HashSet<(String, u32)>,
+    depth: usize,
+) {
+    // Depth cap mirrors the classic walk's SetupModel guard but must be
+    // deeper: Setup → MotionTable → Animation and GfxObj → DegradeInfo →
+    // GfxObj legitimately nest past 4. 8 bounds any retail chain while
+    // still terminating a pathological cycle (the visited set in `out`
+    // already breaks true cycles; the cap is belt-and-braces).
+    if depth > 8 {
+        return;
+    }
+    match (id >> 24) as u8 {
+        0x01 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Some(surfaces) = read_gfx_obj_surfaces(&bytes) {
+                for surface_id in surfaces {
+                    walk_surface(source, surface_id, out);
+                }
+            }
+            // did_degrade — full GfxObj parse is fragile on some retail
+            // records; the degrade DID sits behind flags bit 0x08 which the
+            // typed parser handles. Fall back gracefully on parse failure.
+            if let Ok(gfx) =
+                crate::file_type::GfxObj::unpack(&mut Cursor::new(bytes))
+                && let Some(degrade_id) = gfx.did_degrade
+                && degrade_id != 0
+            {
+                walk_widened(source, degrade_id, out, depth + 1);
+            }
+        }
+        0x02 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Ok(setup) = SetupModel::unpack(&mut Cursor::new(bytes)) {
+                for part_id in setup.parts {
+                    walk_widened(source, part_id, out, depth + 1);
+                }
+                for opt in [
+                    setup.default_animation,
+                    setup.default_script,
+                    setup.default_motion_table,
+                    setup.default_sound_table,
+                    setup.default_script_table,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    walk_widened(source, opt, out, depth + 1);
+                }
+            }
+        }
+        0x03 => {
+            // Animation — keyframe payload; no further DID edges chased
+            // (retail hooks inside animations reference sounds/emitters via
+            // the owning MotionTable's context; the record itself is the
+            // closure requirement).
+            let _ = insert_and_read(source, id, out);
+        }
+        0x09 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Ok(mt) = MotionTable::read(&mut Cursor::new(bytes)) {
+                let mut anims: Vec<u32> = Vec::new();
+                for md in mt.cycles.values().chain(mt.modifiers.values()) {
+                    anims.extend(md.anims.iter().map(|a| a.anim_id));
+                }
+                for inner in mt.links.values() {
+                    for md in inner.values() {
+                        anims.extend(md.anims.iter().map(|a| a.anim_id));
+                    }
+                }
+                anims.sort_unstable();
+                anims.dedup();
+                for anim_id in anims {
+                    if anim_id != 0 {
+                        walk_widened(source, anim_id, out, depth + 1);
+                    }
+                }
+            }
+        }
+        0x0A => {
+            // Wave (sound payload) — leaf.
+            let _ = insert_and_read(source, id, out);
+        }
+        0x11 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Ok(info) = GfxObjDegradeInfo::unpack(&bytes) {
+                for entry in info.degrades {
+                    if entry.gfx_obj_id != 0 {
+                        walk_widened(source, entry.gfx_obj_id, out, depth + 1);
+                    }
+                }
+            }
+        }
+        0x20 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Ok(st) = SoundTable::unpack(&bytes) {
+                let mut waves: Vec<u32> = st
+                    .sounds
+                    .values()
+                    .flat_map(|d| d.entries.iter().map(|e| e.wave_did))
+                    .collect();
+                waves.sort_unstable();
+                waves.dedup();
+                for wave in waves {
+                    if wave != 0 {
+                        walk_widened(source, wave, out, depth + 1);
+                    }
+                }
+            }
+        }
+        0x32 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Ok(pe) = ParticleEmitter::unpack(&bytes) {
+                for gfx in [pe.gfx_obj_id, pe.hw_gfx_obj_id] {
+                    if gfx != 0 {
+                        walk_widened(source, gfx, out, depth + 1);
+                    }
+                }
+            }
+        }
+        0x33 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Ok(script) = PhysicsScript::unpack(&bytes) {
+                for sd in &script.script_data {
+                    let Ok(hook) = AnimationHookData::decode(
+                        sd.hook.hook_type,
+                        &sd.hook.data,
+                    ) else {
+                        continue;
+                    };
+                    match hook {
+                        AnimationHookData::Sound { id: wave }
+                            if wave >> 24 == 0x0A =>
+                        {
+                            walk_widened(source, wave, out, depth + 1);
+                        }
+                        AnimationHookData::CreateParticle { particle }
+                        | AnimationHookData::CreateBlockingParticle {
+                            particle,
+                        } => {
+                            let e = particle.emitter_info_id;
+                            if e != 0 {
+                                walk_widened(source, e, out, depth + 1);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        0x34 => {
+            let Some(bytes) = insert_and_read(source, id, out) else {
+                return;
+            };
+            if let Ok(pst) = PhysicsScriptTable::unpack(&bytes) {
+                let mut scripts: Vec<u32> = pst
+                    .script_table
+                    .values()
+                    .flat_map(|d| d.scripts.iter().map(|e| e.script_id))
+                    .collect();
+                scripts.sort_unstable();
+                scripts.dedup();
+                for s in scripts {
+                    if s != 0 {
+                        walk_widened(source, s, out, depth + 1);
+                    }
+                }
+            }
+        }
+        _ => {
+            // Same catch-all as the classic walk: record the id if it
+            // resolves; no descent.
+            let _ = insert_and_read(source, id, out);
+        }
     }
 }
 

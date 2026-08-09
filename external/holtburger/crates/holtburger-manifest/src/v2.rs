@@ -231,6 +231,16 @@ pub struct ManifestV2 {
     /// catalogs available; page falls through to convention-URL
     /// mode without sha256 verification.
     pub catalog_url_template: Option<String>,
+    /// T10 additive v2+ field: HBSI1 spatial-index pointer. `None` on
+    /// legacy-only bakes (field omitted from the JSON entirely, so
+    /// pre-pack manifests round-trip byte-identical). Presence routes
+    /// pack-capable clients onto the HBP1 pack path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world_index: Option<WorldIndexRef>,
+    /// T10 additive v2+ field: pack URL template
+    /// ([`DEFAULT_PACK_URL_TEMPLATE`]). Emitted iff `world_index` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack_url_template: Option<String>,
 }
 
 /// Cheap version-only probe deserializer. The v2 connect path
@@ -240,6 +250,30 @@ pub struct ManifestV2 {
 pub struct ManifestVersionProbe {
     pub version: u32,
 }
+
+/// Pipeline re-engineering (T10 / SPEC §1.1): pointer to the HBSI1
+/// spatial index that roots the HBP1 pack world. Additive v2+ field —
+/// the manifest stays `version: 2` during coexistence (deployed
+/// clients hard-fail on version ≠ 1,2), and pack-capable clients
+/// route on the PRESENCE of `world_index`, never on a version bump.
+/// The sentinel flips to 3 only at ST10 (legacy retirement).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WorldIndexRef {
+    /// Relative URL of the index binary, e.g.
+    /// `index/{trunc-sha256-32hex}.bin`. Content-addressed —
+    /// immutable by name.
+    pub url: String,
+    /// Byte length of the index file.
+    pub size: u64,
+    /// Truncated sha256 (16 bytes, 32 lowercase hex chars) of the
+    /// index file bytes — what the client verifies on receipt.
+    pub sha256_16: String,
+}
+
+/// Default pack URL template (SPEC §1.1 / pass 2 D-02.3). Same token
+/// vocabulary as [`DEFAULT_SHARD_URL_TEMPLATE_PREFIXED`]; the digest
+/// substituted is the pack's truncated sha256 (32 hex chars).
+pub const DEFAULT_PACK_URL_TEMPLATE: &str = "packs/{sha256_prefix2}/{sha256}.hbp";
 
 impl ManifestV2 {
     /// Render the shard URL for `key` with hash `sha256_hex`,
@@ -337,6 +371,8 @@ mod tests {
             ],
             shard_url_template: DEFAULT_SHARD_URL_TEMPLATE_PREFIXED.into(),
             catalog_url_template: Some(DEFAULT_CATALOG_URL_TEMPLATE.into()),
+            world_index: None,
+            pack_url_template: None,
         }
     }
 
@@ -389,6 +425,39 @@ mod tests {
         let json = serde_json::to_string(&conv_only).expect("serialize");
         let back: ManifestV2 = serde_json::from_str(&json).expect("parse back");
         assert_eq!(back.catalog_url_template, None);
+    }
+
+    /// T10: the v2+ pack fields are strictly additive. A legacy bake
+    /// (both `None`) serializes WITHOUT the keys — byte-identical to the
+    /// pre-T10 wire shape — and a legacy manifest (no keys) parses with
+    /// both fields `None`. A pack bake round-trips both fields, keeps
+    /// `version: 2`, and presence of `world_index` is the routing signal.
+    #[test]
+    fn pack_fields_are_additive_and_presence_routed() {
+        // Legacy emission: keys absent from the JSON entirely.
+        let legacy = fixture_manifest_v2();
+        let json = serde_json::to_string(&legacy).expect("serialize");
+        assert!(!json.contains("world_index"));
+        assert!(!json.contains("pack_url_template"));
+
+        // Legacy parse (pre-T10 JSON) → both None.
+        let back: ManifestV2 = serde_json::from_str(&json).expect("parse legacy");
+        assert_eq!(back.world_index, None);
+        assert_eq!(back.pack_url_template, None);
+
+        // Pack emission: fields present, version STAYS 2.
+        let mut packed = legacy;
+        packed.world_index = Some(WorldIndexRef {
+            url: "index/00112233445566778899aabbccddeeff.bin".into(),
+            size: 489_000,
+            sha256_16: "00112233445566778899aabbccddeeff".into(),
+        });
+        packed.pack_url_template = Some(DEFAULT_PACK_URL_TEMPLATE.into());
+        let json = serde_json::to_string(&packed).expect("serialize packed");
+        let back: ManifestV2 = serde_json::from_str(&json).expect("parse packed");
+        assert_eq!(back.version, MANIFEST_V2_VERSION, "sentinel must stay 2");
+        assert_eq!(back, packed);
+        assert!(back.world_index.is_some(), "presence is the route signal");
     }
 
     /// (3) `namespace_slug` is symmetric in spirit (one-way
