@@ -4,7 +4,23 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
-## 1. IN FLIGHT RIGHT NOW: the full-world packs-only bake (orchestrator-owned)
+## 0. BAKE SETTLED — FULL-WORLD PACK LAYER IS LIVE (2026-08-09 15:41)
+
+RUN2-FIXED completed 15:35 rc=0: 17,682 packs / 255.2 MB, 16,384 tiles / 1,153
+interiors / 65,025 LBs, missingPvw=0, closure_verified=TRUE, determinism_verified=TRUE
+(147m40s with the memoized verifier `7d44572b`). Cross-run byte-compare vs the 07:06
+emission: 0 content diffs, 0 new-only files (the 11,201 "only in old" lines are stale
+RUN1-era CAS names — the old dir held RUN1∪RUN2 = 28,883 files). DEPLOYED additively
+into the canonical dist via deploy-packs-to-dist.sh: CAS sha-verify 17,682/17,682,
+world_index verified, additive-only manifest merge (world_index + pack_url_template),
+provenance at dist/bake-source-packs.sha256, serve.py --check OK (index=1, packs=256).
+`?packSource` now has the full world. T12's deferred comparative arms are runnable.
+CLEANUP owed (rm permission-blocked for the orchestrator; safe to delete anytime):
+world-packs-CONTAMINATED-double-launch-DELETE-ME, world-packs-crashed-run1,
+world-packs-run2-unverified (superseded), driver2-firstattempt.log.
+Section 1 below is HISTORICAL (kept for the incident record).
+
+## 1. HISTORICAL: the full-world packs-only bake (orchestrator-owned)
 
 - Detached driver: `/mnt/wbterminal2/reeng/orch-bake/run-world-bake.sh`
   (setsid nohup — survives session exits), log `driver.log`, memory curve `mem.log`
