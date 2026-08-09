@@ -71,3 +71,13 @@ apps/holtburger-web/scene3d/assets/terrain_bc7/
 # with no binary and nothing saying so. Build it with tools/bc7cli/build.sh
 # before a tex-bc7 bake.
 tools/bc7cli/bc7cli
+
+# T11 ST-SHELL build output (scripts/build-shell.mjs — SPEC §3 T11 / D-12.2):
+# content-hashed bundle tree + generated loader page + build manifest +
+# staging dir. Regenerable from the tree; the esbuild binary is looked up via
+# $ESBUILD_BIN (default /mnt/wbterminal2/reeng/T11/bin/esbuild — see
+# scripts/README.md), never committed.
+apps/holtburger-web/shell/
+apps/holtburger-web/.shell-build/
+apps/holtburger-web/index-bundled.html
+apps/holtburger-web/shell-manifest.json
