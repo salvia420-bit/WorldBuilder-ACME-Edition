@@ -369,6 +369,111 @@ fn bake_ci_bounded_region() {
         }
     }
     println!("differ: {models_checked} unique models, {envcells_checked} envcells byte-verified");
+
+    // ---- T13 (ST3): HBG1 GEOM differ ------------------------------------
+    // Every GEOM row in every pack re-encodes byte-identically from the base
+    // DATs (pins the emission memo + codec determinism through the container;
+    // the runtime-triangulator differ lives in holtburger-web's native tests).
+    // Coverage/co-location/kind checks already ran in-bake (verify_geom).
+    {
+        use holtburger_dat::hbg1;
+        struct DatPair {
+            portal: DatDatabase,
+            cell: DatDatabase,
+        }
+        impl holtburger_dat::ResourceSource for DatPair {
+            fn get_file_by_key(
+                &self,
+                key: holtburger_dat::ResourceKey<'_>,
+            ) -> holtburger_dat::Result<Vec<u8>> {
+                match key.namespace {
+                    "eor/portal" => self.portal.get_file(key.file_id),
+                    "eor/cell" => self.cell.get_file(key.file_id),
+                    _ => Err(holtburger_dat::DatError::NotFound(key.file_id)),
+                }
+            }
+            fn get_metadata_by_key(
+                &self,
+                _key: holtburger_dat::ResourceKey<'_>,
+            ) -> Option<holtburger_dat::FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, namespace: &str) -> bool {
+                namespace == "eor/portal" || namespace == "eor/cell"
+            }
+        }
+        let pair = DatPair {
+            portal: DatDatabase::new(PORTAL_DAT).unwrap(),
+            cell: DatDatabase::new(CELL_DAT).unwrap(),
+        };
+        let mut geom_checked: BTreeSet<u32> = BTreeSet::new();
+        let mut geom_rows_total = 0usize;
+        for entry in &index.packs {
+            let hexname: String =
+                entry.hash16.iter().map(|b| format!("{b:02x}")).collect();
+            let path =
+                out1.join("packs").join(&hexname[..2]).join(format!("{hexname}.hbp"));
+            let bytes = std::fs::read(&path).unwrap();
+            let reader = HbpReader::parse(&bytes).unwrap();
+            let Some(payload) = reader.section(0x09).expect("GEOM section parses") else {
+                continue;
+            };
+            let rows = hbg1::parse_geom_section(&payload).expect("GEOM rows parse");
+            geom_rows_total += rows.len();
+            for (id, enc, off, size) in rows {
+                assert_eq!(enc, hbg1::ENCODING_HBG1);
+                let baked = &payload[off..off + size];
+                if !geom_checked.insert(id) {
+                    // Inline records repeat across tile packs — the payload
+                    // must still be byte-identical, so re-check cheaply.
+                }
+                let rec = pair.portal.get_file(id).expect("model record in DAT");
+                let reenc = match (id >> 24) as u8 {
+                    0x01 => hbg1::encode_gfx_part(
+                        &holtburger_dat::file_type::GfxObj::unpack(
+                            &mut std::io::Cursor::new(&rec),
+                        )
+                        .unwrap(),
+                    ),
+                    0x02 => hbg1::encode_setup_directory(
+                        &pair,
+                        &holtburger_dat::file_type::SetupModel::unpack(
+                            &mut std::io::Cursor::new(&rec),
+                        )
+                        .unwrap(),
+                    ),
+                    _ => hbg1::encode_env_directory(
+                        &holtburger_dat::file_type::Environment::unpack(
+                            &mut std::io::Cursor::new(&rec),
+                        )
+                        .unwrap(),
+                    ),
+                }
+                .expect("re-encode");
+                assert_eq!(
+                    baked,
+                    &reenc[..],
+                    "GEOM 0x{id:08X}: baked payload must re-encode byte-identically"
+                );
+            }
+        }
+        println!(
+            "HBG1 differ: {} unique payloads / {} rows byte-identical re-encode; \
+             report: {} rows / {:.2} MB raw / soft-cap hits {} / max payload {} B",
+            geom_checked.len(),
+            geom_rows_total,
+            report.geom_rows,
+            report.geom_bytes_raw as f64 / 1e6,
+            report.geom_soft_cap_hits,
+            report.geom_max_payload_bytes,
+        );
+        assert!(report.geom_rows > 0, "GEOM emission must have fired");
+        assert!(
+            geom_checked.len() >= 50,
+            "HBG1 differ needs ≥ 50 payloads (got {})",
+            geom_checked.len()
+        );
+    }
     assert!(
         models_checked >= 50,
         "differ needs ≥ 50 models (got {models_checked}) — grow the region"

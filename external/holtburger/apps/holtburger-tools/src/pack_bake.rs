@@ -45,6 +45,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use holtburger_dat::file_type::{EnvCell, Texture, env_cell::surface_did_for_envcell_index};
+use holtburger_dat::hbg1;
 use holtburger_dat::landblock::LandblockInfo;
 use holtburger_dat::walk::{
     collect_model_dependencies_widened, collect_surface_dependencies,
@@ -200,6 +201,15 @@ pub struct PackBakeReport {
     pub widened_commons_bytes: u64,
     pub terrain_slice_color_bytes: u64,
     pub terrain_slice_nra_bytes: u64,
+    /// T13 (ST3): HBG1 GEOM emission census. Rows are co-located with their
+    /// record's pack (pass 2 D-02.7 co-location; pass 4 D-04.2).
+    pub geom_rows: usize,
+    pub geom_bytes_raw: u64,
+    /// Payloads over the pass-4 S1 SHOULD cap (256 KiB) — census, not a
+    /// failure (the MUST cap of 4 MiB fails the bake loudly).
+    pub geom_soft_cap_hits: usize,
+    /// Q2 census input: largest single mesh payload emitted.
+    pub geom_max_payload_bytes: usize,
     pub closure_verified: bool,
     pub determinism_verified: bool,
 }
@@ -1022,6 +1032,10 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
             .map_err(|e| ToolError::Validation(format!("cell 0x{fid:08X}: {e}")))
     };
 
+    // T13 (ST3): HBG1 GEOM emitter — encode-once memo + census, sections
+    // co-located with each pack's model-class records.
+    let mut geom = GeomBaker::new();
+
     // 1. CORE.
     let mut core_records: BTreeMap<(u8, u32), Vec<u8>> = BTreeMap::new();
     for &id in BOOT_ESSENTIAL_PORTAL_IDS {
@@ -1029,16 +1043,15 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
             core_records.insert((ns_portal, id), get_portal(id)?);
         }
     }
-    let core_ord = emit_pack!(
-        pack_kind::CORE,
-        0,
-        0,
-        vec![SectionOut {
-            kind: section_kind::RECORDS,
-            codec: codec::ZSTD,
-            raw: pf::build_record_stream(&core_records),
-        }]
-    );
+    let mut core_sections = vec![SectionOut {
+        kind: section_kind::RECORDS,
+        codec: codec::ZSTD,
+        raw: pf::build_record_stream(&core_records),
+    }];
+    if let Some(g) = geom.section_for(&source, core_records.keys().map(|(_, id)| id))? {
+        core_sections.push(g);
+    }
+    let core_ord = emit_pack!(pack_kind::CORE, 0, 0, core_sections);
 
     // 2. META-COMMONS.
     let mut commons_records: BTreeMap<(u8, u32), Vec<u8>> = BTreeMap::new();
@@ -1047,16 +1060,15 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
             commons_records.insert((ns_portal, id), get_portal(id)?);
         }
     }
-    let meta_commons_ord = emit_pack!(
-        pack_kind::META_SHARED,
-        0,
-        0,
-        vec![SectionOut {
-            kind: section_kind::RECORDS,
-            codec: codec::ZSTD,
-            raw: pf::build_record_stream(&commons_records),
-        }]
-    );
+    let mut commons_sections = vec![SectionOut {
+        kind: section_kind::RECORDS,
+        codec: codec::ZSTD,
+        raw: pf::build_record_stream(&commons_records),
+    }];
+    if let Some(g) = geom.section_for(&source, commons_records.keys().map(|(_, id)| id))? {
+        commons_sections.push(g);
+    }
+    let meta_commons_ord = emit_pack!(pack_kind::META_SHARED, 0, 0, commons_sections);
     report.meta_commons_bytes = pack_table[meta_commons_ord as usize].size as u64;
 
     // 3. META-REGIONAL.
@@ -1070,16 +1082,15 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
     }
     let mut meta_regional_ords: BTreeMap<u8, u16> = BTreeMap::new();
     for (g, records) in &regional_map {
-        let ord = emit_pack!(
-            pack_kind::META_SHARED,
-            *g as u32,
-            *g,
-            vec![SectionOut {
-                kind: section_kind::RECORDS,
-                codec: codec::ZSTD,
-                raw: pf::build_record_stream(records),
-            }]
-        );
+        let mut regional_sections = vec![SectionOut {
+            kind: section_kind::RECORDS,
+            codec: codec::ZSTD,
+            raw: pf::build_record_stream(records),
+        }];
+        if let Some(gs) = geom.section_for(&source, records.keys().map(|(_, id)| id))? {
+            regional_sections.push(gs);
+        }
+        let ord = emit_pack!(pack_kind::META_SHARED, *g as u32, *g, regional_sections);
         meta_regional_ords.insert(*g, ord);
     }
 
@@ -1103,29 +1114,27 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
     let env_commons_ord = if env_commons.is_empty() {
         None
     } else {
-        Some(emit_pack!(
-            pack_kind::ENV,
-            0,
-            0,
-            vec![SectionOut {
-                kind: section_kind::RECORDS,
-                codec: codec::ZSTD,
-                raw: pf::build_record_stream(&env_commons),
-            }]
-        ))
+        let mut env_sections = vec![SectionOut {
+            kind: section_kind::RECORDS,
+            codec: codec::ZSTD,
+            raw: pf::build_record_stream(&env_commons),
+        }];
+        if let Some(g) = geom.section_for(&source, env_commons.keys().map(|(_, id)| id))? {
+            env_sections.push(g);
+        }
+        Some(emit_pack!(pack_kind::ENV, 0, 0, env_sections))
     };
     let mut env_regional_ords: BTreeMap<u8, u16> = BTreeMap::new();
     for (g, records) in &env_regional {
-        let ord = emit_pack!(
-            pack_kind::ENV,
-            *g as u32,
-            *g,
-            vec![SectionOut {
-                kind: section_kind::RECORDS,
-                codec: codec::ZSTD,
-                raw: pf::build_record_stream(records),
-            }]
-        );
+        let mut env_sections = vec![SectionOut {
+            kind: section_kind::RECORDS,
+            codec: codec::ZSTD,
+            raw: pf::build_record_stream(records),
+        }];
+        if let Some(gs) = geom.section_for(&source, records.keys().map(|(_, id)| id))? {
+            env_sections.push(gs);
+        }
+        let ord = emit_pack!(pack_kind::ENV, *g as u32, *g, env_sections);
         env_regional_ords.insert(*g, ord);
     }
 
@@ -1350,6 +1359,9 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
                 codec: codec::ZSTD,
                 raw: pf::build_record_stream(&inline_records),
             });
+        }
+        if let Some(g) = geom.section_for(&source, inline_records.keys().map(|(_, id)| id))? {
+            sections.push(g);
         }
         if let Some(pvw) = pvw_interior.get(&lb) {
             sections.push(SectionOut {
@@ -1577,6 +1589,9 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
                 raw: pf::build_record_stream(&inline_records),
             });
         }
+        if let Some(g) = geom.section_for(&source, inline_records.keys().map(|(_, id)| id))? {
+            sections.push(g);
+        }
         let origin = ((tx as u32) << 8) | ty as u32;
         let ord = emit_pack!(pack_kind::TILE, origin, 0, sections);
         tile_ords.insert(*tile, ord);
@@ -1705,9 +1720,14 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
         row.1 += p.size as u64;
     }
     report.determinism_verified = opts.verify_deterministic;
+    report.geom_rows = geom.rows;
+    report.geom_bytes_raw = geom.bytes_raw;
+    report.geom_soft_cap_hits = geom.soft_cap_hits;
+    report.geom_max_payload_bytes = geom.max_payload;
 
     if opts.verify_closure {
         verify_closure(&pack_table, &pack_bytes, &index)?;
+        verify_geom(&pack_bytes)?;
         report.closure_verified = true;
     }
 
@@ -1717,6 +1737,112 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
         .map_err(|e| ToolError::Validation(format!("write pack-report.json: {e}")))?;
 
     Ok(report)
+}
+
+/// T13 (ST3) — HBG1 GEOM emission (SPEC §1.2, pass 4 D-04.2): one payload
+/// per model-class record (0x01 kind-0, 0x02 kind-1, 0x0D kind-2), memoized
+/// across packs (an INLINE record repeats in every tile pack that uses it —
+/// the payload must be byte-identical, and encode-once keeps the bake cheap).
+/// Parse/encode failures fail the bake LOUDLY (base-DAT records must encode;
+/// a physics-only GfxObj legitimately encodes to an empty mesh).
+struct GeomBaker {
+    memo: HashMap<u32, std::sync::Arc<Vec<u8>>>,
+    rows: usize,
+    bytes_raw: u64,
+    soft_cap_hits: usize,
+    max_payload: usize,
+}
+
+impl GeomBaker {
+    fn new() -> Self {
+        GeomBaker {
+            memo: HashMap::new(),
+            rows: 0,
+            bytes_raw: 0,
+            soft_cap_hits: 0,
+            max_payload: 0,
+        }
+    }
+
+    fn payload_for(
+        &mut self,
+        source: &DatPairSource,
+        id: u32,
+    ) -> Result<Option<std::sync::Arc<Vec<u8>>>> {
+        if !matches!((id >> 24) as u8, 0x01 | 0x02 | 0x0D) {
+            return Ok(None);
+        }
+        if let Some(hit) = self.memo.get(&id) {
+            return Ok(Some(hit.clone()));
+        }
+        let bytes = source
+            .get_file_by_key(ResourceKey::new(EOR_PORTAL_NAMESPACE, id))
+            .map_err(|e| ToolError::Validation(format!("GEOM 0x{id:08X}: read: {e}")))?;
+        let payload = match (id >> 24) as u8 {
+            0x01 => {
+                let gfx = holtburger_dat::file_type::GfxObj::unpack(
+                    &mut std::io::Cursor::new(&bytes),
+                )
+                .map_err(|e| {
+                    ToolError::Validation(format!("GEOM 0x{id:08X}: GfxObj parse: {e}"))
+                })?;
+                hbg1::encode_gfx_part(&gfx)
+            }
+            0x02 => {
+                let setup = holtburger_dat::file_type::SetupModel::unpack(
+                    &mut std::io::Cursor::new(&bytes),
+                )
+                .map_err(|e| {
+                    ToolError::Validation(format!("GEOM 0x{id:08X}: Setup parse: {e}"))
+                })?;
+                hbg1::encode_setup_directory(source, &setup)
+            }
+            _ => {
+                let env = holtburger_dat::file_type::Environment::unpack(
+                    &mut std::io::Cursor::new(&bytes),
+                )
+                .map_err(|e| {
+                    ToolError::Validation(format!("GEOM 0x{id:08X}: Environment parse: {e}"))
+                })?;
+                hbg1::encode_env_directory(&env)
+            }
+        }
+        .map_err(|e| ToolError::Validation(format!("GEOM 0x{id:08X}: encode: {e}")))?;
+        if payload.len() > hbg1::MESH_PAYLOAD_SOFT {
+            self.soft_cap_hits += 1;
+        }
+        if payload.len() > self.max_payload {
+            self.max_payload = payload.len();
+        }
+        let arc = std::sync::Arc::new(payload);
+        self.memo.insert(id, arc.clone());
+        Ok(Some(arc))
+    }
+
+    /// Build the GEOM section for a pack's portal record ids. Returns `None`
+    /// when no model-class record is present.
+    fn section_for<'a>(
+        &mut self,
+        source: &DatPairSource,
+        ids: impl Iterator<Item = &'a u32>,
+    ) -> Result<Option<SectionOut>> {
+        let mut entries: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+        for &id in ids {
+            if let Some(p) = self.payload_for(source, id)? {
+                entries.insert(id, p.as_ref().clone());
+            }
+        }
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        self.rows += entries.len();
+        self.bytes_raw += entries.values().map(|p| p.len() as u64).sum::<u64>();
+        Ok(Some(SectionOut {
+            kind: section_kind::GEOM,
+            codec: codec::ZSTD,
+            raw: hbg1::build_geom_section(&entries),
+        }))
+    }
 }
 
 fn tex_dims(source: &DatPairSource, id: u32) -> (u32, u32) {
@@ -1731,6 +1857,157 @@ fn tex_dims(source: &DatPairSource, id: u32) -> (u32, u32) {
 // ---------------------------------------------------------------------------
 // Closure verification (`--verify-closure`)
 // ---------------------------------------------------------------------------
+
+/// T13 (ST3) — GEOM closure verification (`--verify-closure` leg):
+/// (a) every model-class portal record (0x01/0x02/0x0D) in a pack's RECORDS
+///     stream has an HBG1 GEOM row IN THE SAME PACK (co-location, D-04.2);
+/// (b) every GEOM row parses with the kind matching its id prefix;
+/// (c) every kind-1 SETUP directory part DID has a kind-0 row SOMEWHERE in
+///     the bake (the closure walk carries parts, so this pins emission);
+/// (d) every ENVCELLS-stream EnvCell's `(environment, cell_structure)` is
+///     covered by a kind-2 directory entry somewhere in the bake.
+fn verify_geom(pack_bytes: &[Vec<u8>]) -> Result<()> {
+    use holtburger_dat::file_type::EnvCell as EnvCellRec;
+    let mut failures: Vec<String> = Vec::new();
+    let mut global_kind0: HashSet<u32> = HashSet::new();
+    let mut global_env: HashMap<u32, HashSet<u32>> = HashMap::new(); // env id -> cellstructs
+    let mut setup_parts: Vec<(u32, u32)> = Vec::new(); // (setup id, part did)
+    let mut envcell_needs: Vec<(u32, u32, u16)> = Vec::new(); // (fid, env, struct)
+
+    for (i, bytes) in pack_bytes.iter().enumerate() {
+        let reader = HbpReader::parse(bytes)
+            .map_err(|e| ToolError::Validation(format!("geom re-parse pack {i}: {e}")))?;
+        let geom_rows: HashMap<u32, (u16, usize, usize)> = match reader
+            .section(section_kind::GEOM)
+            .map_err(ToolError::Validation)?
+        {
+            Some(payload) => {
+                let rows =
+                    hbg1::parse_geom_section(&payload).map_err(ToolError::Validation)?;
+                let mut m = HashMap::new();
+                for (id, enc, off, size) in rows {
+                    if enc != hbg1::ENCODING_HBG1 {
+                        failures.push(format!(
+                            "pack {i}: GEOM row 0x{id:08X} encoding 0x{enc:04X} != HBG1"
+                        ));
+                        continue;
+                    }
+                    let p = &payload[off..off + size];
+                    match hbg1::parse_header(p) {
+                        Ok(h) => {
+                            let want = match (id >> 24) as u8 {
+                                0x01 => hbg1::KIND_PART,
+                                0x02 => hbg1::KIND_SETUP,
+                                _ => hbg1::KIND_ENV,
+                            };
+                            if h.kind != want {
+                                failures.push(format!(
+                                    "pack {i}: GEOM 0x{id:08X} kind {} != expected {want}",
+                                    h.kind
+                                ));
+                            } else {
+                                match h.kind {
+                                    hbg1::KIND_PART => {
+                                        global_kind0.insert(id);
+                                        if let Err(e) = hbg1::Hbg1Mesh::parse(p) {
+                                            failures.push(format!(
+                                                "pack {i}: GEOM 0x{id:08X}: {e}"
+                                            ));
+                                        }
+                                    }
+                                    hbg1::KIND_SETUP => match hbg1::parse_setup(p) {
+                                        Ok(dir) => {
+                                            for row in &dir.parts {
+                                                if (row.part_did >> 24) as u8 == 0x01 {
+                                                    setup_parts.push((id, row.part_did));
+                                                }
+                                            }
+                                        }
+                                        Err(e) => failures.push(format!(
+                                            "pack {i}: GEOM 0x{id:08X}: {e}"
+                                        )),
+                                    },
+                                    _ => match hbg1::Hbg1EnvDir::parse(p) {
+                                        Ok(dir) => {
+                                            global_env
+                                                .entry(id)
+                                                .or_default()
+                                                .extend(dir.entries.iter().map(|(c, _)| c));
+                                        }
+                                        Err(e) => failures.push(format!(
+                                            "pack {i}: GEOM 0x{id:08X}: {e}"
+                                        )),
+                                    },
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            failures.push(format!("pack {i}: GEOM 0x{id:08X}: {e}"))
+                        }
+                    }
+                    m.insert(id, (enc, off, size));
+                }
+                m
+            }
+            None => HashMap::new(),
+        };
+        // (a) co-location: model-class RECORDS ids need a same-pack GEOM row.
+        if let Some(records) = reader
+            .record_stream(section_kind::RECORDS)
+            .map_err(ToolError::Validation)?
+        {
+            for &(_, fid) in records.keys() {
+                if matches!((fid >> 24) as u8, 0x01 | 0x02 | 0x0D)
+                    && !geom_rows.contains_key(&fid)
+                {
+                    failures.push(format!(
+                        "pack {i}: record 0x{fid:08X} has no co-located GEOM row"
+                    ));
+                }
+            }
+        }
+        // (d) inputs: ENVCELLS-stream cells name (env, cell_structure) pairs.
+        if let Some(cells) = reader
+            .record_stream(section_kind::ENVCELLS)
+            .map_err(ToolError::Validation)?
+        {
+            for ((_, fid), rec) in &cells {
+                if let Ok(ec) = EnvCellRec::unpack(&mut std::io::Cursor::new(rec)) {
+                    envcell_needs.push((
+                        *fid,
+                        0x0D00_0000 | ec.environment_id as u32,
+                        ec.cell_structure,
+                    ));
+                }
+            }
+        }
+    }
+    for (setup, part) in &setup_parts {
+        if !global_kind0.contains(part) {
+            failures.push(format!(
+                "setup 0x{setup:08X}: part 0x{part:08X} has no kind-0 GEOM row anywhere"
+            ));
+        }
+    }
+    for (fid, env, cs) in &envcell_needs {
+        match global_env.get(env) {
+            Some(structs) if structs.contains(&(*cs as u32)) => {}
+            _ => failures.push(format!(
+                "envcell 0x{fid:08X}: env 0x{env:08X} cellstruct {cs} has no kind-2 \
+                 GEOM coverage"
+            )),
+        }
+    }
+    if !failures.is_empty() {
+        let shown = failures.iter().take(20).cloned().collect::<Vec<_>>().join("\n  ");
+        return Err(ToolError::Validation(format!(
+            "GEOM closure FAILED with {} problem(s):\n  {shown}{}",
+            failures.len(),
+            if failures.len() > 20 { "\n  …" } else { "" }
+        )));
+    }
+    Ok(())
+}
 
 fn verify_closure(
     pack_table: &[PackTableEntry],

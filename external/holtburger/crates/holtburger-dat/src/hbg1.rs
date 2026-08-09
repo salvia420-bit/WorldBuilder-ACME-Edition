@@ -185,10 +185,6 @@ impl MeshBuilder {
         self.subsets[idx].tris.push(corners);
     }
 
-    fn is_empty(&self) -> bool {
-        self.subsets.iter().all(|s| s.tris.is_empty())
-    }
-
     /// Serialize to a kind-0 payload. `baked_light`: emit the zero-filled
     /// baked-light stream (ENV blocks). `did_degrade`: trailer when non-zero.
     fn serialize(&self, kind: u8, baked_light: bool, did_degrade: u32) -> Result<Vec<u8>, String> {
