@@ -1742,6 +1742,50 @@ fn verify_closure(
         by_hash.insert(p.hash16, i);
     }
     let mut failures: Vec<String> = Vec::new();
+    // Memoized per-pack key sets. Parsing + decompressing the TARGET pack once
+    // per REFS edge is O(edges × pack-parse) and does not terminate in useful
+    // time at full-world scale (measured: >5.5 h single-core on 17,682 packs,
+    // 2026-08-09); each pack is parsed at most once instead.
+    fn record_keys_for<'a>(
+        cache: &'a mut [Option<HashSet<(u8, u32)>>],
+        pack_bytes: &[Vec<u8>],
+        ord: usize,
+    ) -> Result<&'a HashSet<(u8, u32)>> {
+        if cache[ord].is_none() {
+            let reader =
+                HbpReader::parse(&pack_bytes[ord]).map_err(ToolError::Validation)?;
+            let mut keys: HashSet<(u8, u32)> = HashSet::new();
+            for k in [section_kind::RECORDS, section_kind::ENVCELLS] {
+                if let Some(m) = reader.record_stream(k).ok().flatten() {
+                    keys.extend(m.keys().copied());
+                }
+            }
+            cache[ord] = Some(keys);
+        }
+        Ok(cache[ord].as_ref().unwrap())
+    }
+    fn pvw_keys_for<'a>(
+        cache: &'a mut [Option<HashSet<u32>>],
+        pack_bytes: &[Vec<u8>],
+        ord: usize,
+    ) -> Result<&'a HashSet<u32>> {
+        if cache[ord].is_none() {
+            let reader =
+                HbpReader::parse(&pack_bytes[ord]).map_err(ToolError::Validation)?;
+            let keys: HashSet<u32> = reader
+                .section(section_kind::PVW)
+                .ok()
+                .flatten()
+                .and_then(|p| pf::parse_pvw_stream(&p).ok())
+                .map(|m| m.keys().copied().collect())
+                .unwrap_or_default();
+            cache[ord] = Some(keys);
+        }
+        Ok(cache[ord].as_ref().unwrap())
+    }
+    let mut record_keys: Vec<Option<HashSet<(u8, u32)>>> =
+        vec![None; pack_bytes.len()];
+    let mut pvw_keys: Vec<Option<HashSet<u32>>> = vec![None; pack_bytes.len()];
     for (i, bytes) in pack_bytes.iter().enumerate() {
         let reader = HbpReader::parse(bytes)
             .map_err(|e| ToolError::Validation(format!("re-parse pack {i}: {e}")))?;
@@ -1773,16 +1817,8 @@ fn verify_closure(
                 ));
                 continue;
             };
-            let treader =
-                HbpReader::parse(&pack_bytes[*target]).map_err(ToolError::Validation)?;
-            let found = [section_kind::RECORDS, section_kind::ENVCELLS].iter().any(|&k| {
-                treader
-                    .record_stream(k)
-                    .ok()
-                    .flatten()
-                    .map(|m| m.contains_key(&(ns, fid)))
-                    .unwrap_or(false)
-            });
+            let found = record_keys_for(&mut record_keys, pack_bytes, *target)?
+                .contains(&(ns, fid));
             if !found {
                 failures.push(format!(
                     "pack {i}: dangling REFS edge {ns}/0x{fid:08X} -> pack {target}"
@@ -1799,8 +1835,8 @@ fn verify_closure(
                 if row.tier_bits & tier_bits::PVW_PRESENT == 0 {
                     continue;
                 }
-                let target_bytes: Option<&Vec<u8>> = match row.pvw_pack_ord {
-                    pf::PVW_ORD_SELF => Some(bytes),
+                let target_ord: Option<usize> = match row.pvw_pack_ord {
+                    pf::PVW_ORD_SELF => Some(i),
                     pf::PVW_ORD_NONE => {
                         failures.push(format!(
                             "pack {i}: rs 0x{:08X} claims a preview but has no \
@@ -1810,7 +1846,7 @@ fn verify_closure(
                         None
                     }
                     local => match targets.get(local as usize) {
-                        Some(Some(t)) => Some(&pack_bytes[*t]),
+                        Some(Some(t)) => Some(*t),
                         _ => {
                             failures.push(format!(
                                 "pack {i}: rs 0x{:08X} preview ordinal {local} \
@@ -1821,15 +1857,9 @@ fn verify_closure(
                         }
                     },
                 };
-                if let Some(tb) = target_bytes {
-                    let tr = HbpReader::parse(tb).map_err(ToolError::Validation)?;
-                    let ok = tr
-                        .section(section_kind::PVW)
-                        .ok()
-                        .flatten()
-                        .and_then(|p| pf::parse_pvw_stream(&p).ok())
-                        .map(|m| m.contains_key(&row.rs_id))
-                        .unwrap_or(false);
+                if let Some(t) = target_ord {
+                    let ok = pvw_keys_for(&mut pvw_keys, pack_bytes, t)?
+                        .contains(&row.rs_id);
                     if !ok {
                         failures.push(format!(
                             "pack {i}: rs 0x{:08X} preview missing from its \
