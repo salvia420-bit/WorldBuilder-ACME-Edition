@@ -360,6 +360,38 @@ export const REGISTRY = Object.freeze([
     fields: {},
   },
 
+  {
+    name: "__texWorkerStats",
+    status: "current",
+    reads: "function",
+    evidence: "scene3d/xu7_textures.js:718",
+    availability: "boot",
+    retiresAt: "ST5",
+    successor: "__texStats",
+    note: "ST4 (`?texWorkers`, T14) texture-worker client tally — "
+      + "texWorkerStats() in scene3d/xu7_textures.js. msTranscode/msAssemble "
+      + "are OFF-THREAD worker time: reported, NEVER summed into explainedMs "
+      + "(pass-10 S5) — only the sub-ms result integration lands in a frame. "
+      + "fifoFallbacks/fallbackEngagements/pendingNulled/terrainFallbacks are "
+      + "the T14 kill-criterion counters (a silent fallback = FAIL); on a "
+      + "flag-OFF run everything reads 0 with enabled:false. Folds into "
+      + "__texStats().worker at ST5 (same-name-successor rule).",
+    fields: {
+      jobs: C("count"), jobErrors: C("count"),
+      msTranscode: C("ms", null, { attribution: false }),
+      maxQueueDepth: L("count"),
+      fifoFallbacks: C("count"), fallbackEngagements: C("count"),
+      pendingNulled: C("count"), cancels: C("count"),
+      terrainAssembles: C("count"),
+      msAssemble: C("ms", null, { attribution: false }),
+      terrainFallbacks: C("count"), nraDerives: C("count"),
+      lastError: L("string"),
+      enabled: L("bool"), requested: L("count"),
+      state: L("enum", null, { note: '"off" | "loading" | "ready" | "dead"' }),
+      queueDepth: L("count"), inflight: L("count"),
+    },
+  },
+
   // ── reserved surfaces (pass-10 S3 normative schemas; land with their stage) ─
 
   {

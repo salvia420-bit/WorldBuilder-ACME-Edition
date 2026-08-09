@@ -84,6 +84,11 @@
 
 import * as THREE from "three";
 import { parseHbc7, bc7LevelBytes, bc7Available, bc7SupportNote, flagIsOff } from "./bc7_textures.js";
+// ST4 (`?texWorkers`, DEFAULT OFF): the level-major array assembly can run in
+// the dedicated texture worker (SPEC §3 T14 / pass-05 D-05.4 — at t1024 the
+// synchronous build below is 88 MiB of alloc+memcpy in one main-thread task).
+// Flag off ⇒ these imports are never called and the path below is unchanged.
+import { texWorkersEnabled, workerTerrainAssemble } from "./xu7_textures.js";
 
 export const TERRAIN_BC7_DEPTH = 33;
 const DEFAULT_BASE = "scene3d/assets/terrain_bc7";
@@ -416,7 +421,10 @@ export async function loadTerrainBc7Channel(manifest, channel, baseUrl) {
     }
     byLayer[i] = p;
   }
-  return { byLayer, tileSize: size, levels: wantLevels };
+  // `layerRs` is additive (ST4): the worker-assembly path needs the layer→rsId
+  // map to rebuild the dedup on the other side. Existing consumers destructure
+  // by name and are untouched.
+  return { byLayer, tileSize: size, levels: wantLevels, layerRs };
 }
 
 // --------------------------------------------------------------------------
@@ -466,7 +474,107 @@ export function buildTerrainBc7Array(ch, opts = {}) {
     w = Math.max(1, w >> 1);
     h = Math.max(1, h >> 1);
   }
+  return _makeCompressedArrayTexture(mipmaps, size, ch.levels, opts);
+}
 
+/**
+ * ST4 twin of `buildTerrainBc7Array`: same texture, built from the ONE
+ * concatenated level-major buffer the texture worker returns
+ * (`workerTerrainAssemble` / texture_worker.js `assembleTerrainChannel`).
+ * `mipmaps[i].data` become zero-copy subarray views over that buffer — byte-
+ * identical content to the per-level buffers the synchronous path allocates
+ * (three's uploader takes ArrayBufferViews either way).
+ *
+ * @param {{tileSize:number, levels:number, depth:number,
+ *          levelBytes:number[], bc7:ArrayBuffer}} assembled
+ */
+export function buildTerrainBc7ArrayFromAssembled(assembled, opts = {}) {
+  if (!assembled || typeof THREE.CompressedArrayTexture !== "function") return null;
+  const size = assembled.tileSize;
+  const depth = assembled.depth ?? TERRAIN_BC7_DEPTH;
+  if (depth !== TERRAIN_BC7_DEPTH) {
+    throw new Error(`terrain-bc7: assembled depth ${depth} != ${TERRAIN_BC7_DEPTH}`);
+  }
+  const u8 = new Uint8Array(assembled.bc7);
+  const mipmaps = [];
+  let off = 0;
+  let w = size;
+  let h = size;
+  for (let li = 0; li < assembled.levels; li += 1) {
+    const expect = bc7LevelBytes(w, h) * depth;
+    const n = assembled.levelBytes[li];
+    if (n !== expect) {
+      throw new Error(`terrain-bc7: assembled L${li} is ${n} B, expected ${expect}`);
+    }
+    if (off + n > u8.byteLength) {
+      throw new Error(`terrain-bc7: assembled buffer short at L${li}`);
+    }
+    mipmaps.push({ data: u8.subarray(off, off + n), width: w, height: h });
+    off += n;
+    w = Math.max(1, w >> 1);
+    h = Math.max(1, h >> 1);
+  }
+  if (off !== u8.byteLength) {
+    throw new Error(`terrain-bc7: assembled buffer has ${u8.byteLength - off} trailing bytes`);
+  }
+  return _makeCompressedArrayTexture(mipmaps, size, assembled.levels, opts);
+}
+
+/**
+ * ST4 seam: build one channel's array, in the texture worker when
+ * `?texWorkers=on`, else (and on ANY worker failure) via the unchanged
+ * synchronous path. Worker failure is NEVER silent: `workerTerrainAssemble`
+ * counts `terrainFallbacks` on `__texWorkerStats` before throwing, and the
+ * catch below warns with the channel name. The transferred payload buffers
+ * die with a failed job, so the fallback RE-FETCHES the channel (immutable
+ * HTTP cache — the same re-supply rehydrate v3 leans on) before assembling
+ * on the main thread.
+ *
+ * Flag OFF ⇒ exactly `buildTerrainBc7Array(ch, opts)`, nothing else runs.
+ * May THROW (from the sync builder) — callers keep their existing catch.
+ */
+async function _assembleChannelArray(manifest, channel, base, ch, opts) {
+  if (texWorkersEnabled()) {
+    try {
+      const seen = new Set();
+      const payloads = [];
+      for (let i = 0; i < TERRAIN_BC7_DEPTH; i += 1) {
+        const rs = ch.layerRs ? ch.layerRs[i] : null;
+        if (!rs || seen.has(rs)) continue;
+        seen.add(rs);
+        // parseHbc7 hands out subarray views of the ONE fetched payload
+        // buffer (header included at offset 0), so `.data.buffer` IS the raw
+        // HBC7 payload — transferable whole, re-parsed worker-side.
+        payloads.push({ rs, bytes: ch.byLayer[i].levels[0].data.buffer });
+      }
+      const assembled = await workerTerrainAssemble({
+        tileSize: ch.tileSize,
+        levels: ch.levels,
+        depth: TERRAIN_BC7_DEPTH,
+        layerRs: ch.layerRs,
+        payloads,
+      });
+      const tex = buildTerrainBc7ArrayFromAssembled(assembled, opts);
+      if (tex) return tex;
+      throw new Error("assembled-array construction returned null");
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[terrain-bc7] ${channel}: worker assembly failed — main-thread fallback (counted):`,
+        e?.message ?? e
+      );
+      const again = await loadTerrainBc7Channel(manifest, channel, base);
+      if (!again) return null;
+      ch = again;
+    }
+  }
+  return buildTerrainBc7Array(ch, opts);
+}
+
+/** The texture-construction tail both builders share (factored at ST4;
+ *  behaviour byte-identical to the pre-ST4 inline block). */
+function _makeCompressedArrayTexture(mipmaps, size, chLevels, opts = {}) {
+  const depth = TERRAIN_BC7_DEPTH;
   const tex = new THREE.CompressedArrayTexture(
     mipmaps,
     size,
@@ -491,9 +599,9 @@ export function buildTerrainBc7Array(ch, opts = {}) {
   // the manifest check; with levels == 1 this line would make the texture
   // incomplete and every terrain fragment would sample BLACK.
   tex.minFilter =
-    ch.levels > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+    chLevels > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
   tex.generateMipmaps = false; // impossible for compressed; three forces it anyway
-  if (ch.levels > 1 && typeof opts.anisotropy === "number" && opts.anisotropy > 0) {
+  if (chLevels > 1 && typeof opts.anisotropy === "number" && opts.anisotropy > 0) {
     tex.anisotropy = opts.anisotropy;
   }
   tex.name = opts.name ?? "scene3d-terrain-bc7-array";
@@ -573,7 +681,7 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
 
   let atlasTexture;
   try {
-    atlasTexture = buildTerrainBc7Array(color, {
+    atlasTexture = await _assembleChannelArray(manifest, "color", base, color, {
       colorSpace: THREE.SRGBColorSpace,
       anisotropy: aniso,
       name: "scene3d-terrain-bc7-albedo-array",
@@ -591,7 +699,7 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
   const nra = await loadTerrainBc7Channel(manifest, "nra", base);
   if (nra) {
     try {
-      nraTexture = buildTerrainBc7Array(nra, {
+      nraTexture = await _assembleChannelArray(manifest, "nra", base, nra, {
         // Vector + scalar data — no transfer function. Matches
         // adapter.js buildPbrNraTexture's NoColorSpace.
         colorSpace: THREE.NoColorSpace,

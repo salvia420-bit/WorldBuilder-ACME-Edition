@@ -54,9 +54,18 @@
 // a per-frame ms cap, the shape `statics.js STATICS_BUILD_BUDGET_MS` already uses.
 //
 // FIX, 2026-08-08 — shape (b) is implemented below (`?xu7Budget`, DEFAULT ON,
-// `=off` restores the straight-through call). Shape (a) was NOT attempted; see
-// the note on `_drain` for why (b) is the one that addresses the hitch and what
-// (a) would still be worth.
+// `=off` restores the straight-through call). See the note on `_drain` for why
+// (b) is the one that addresses the hitch.
+//
+// ST4, 2026-08-08 (SPEC §3 T14) — shape (a) NOW EXISTS as the DEDICATED
+// texture worker (`?texWorkers`, DEFAULT OFF while DEV; scene3d/
+// texture_worker.js + the client at the bottom of this file), built on top of
+// (b) exactly as the prerequisite note below requires: when the flag is ON and
+// the worker is up, transcodes run in the worker on its own transcoder
+// instance and this file's budgeted FIFO is the RETAINED-VERBATIM fallback arm
+// (worker off/loading/crashed — every fallback engagement is counted on
+// `__texWorkerStats`, never silent). Flag OFF = every line of the (b) path,
+// byte-identical.
 //
 // WHAT (b) DOES AND DOES NOT CLAIM. It does not make a transcode cheaper: one
 // 1024² is still ~32 ms of main-thread work and one record still cannot be
@@ -308,14 +317,15 @@ function _clearScheduled() {
  * measured hitch is the N-record burst, not one record, and this fix is the one
  * that can be reasoned about without a live GPU.
  *
- * WHY NOT THE BAKE WORKER (shape (a)). Still the better end state and still not
- * done: the worker would need its own 1.04 MB transcoder instance (each context
- * instantiates its own — the tombstone's trap), a new `bake_worker.js` message
- * kind with a `{type:'result', kind:...}` reply, the mip levels moved back as
- * zero-copy transferables through `bake_transfer.js`, and a main-thread
- * fallback in `bake_worker_client.js` for both inactive-worker and worker-error
- * — and that fallback is, by construction, exactly this budgeted path. So (b)
- * is a prerequisite for (a) being safe, not an alternative to it.
+ * SHAPE (a) SHIPPED AT ST4 (2026-08-08) — as a DEDICATED texture worker, not
+ * the bake worker (pass-05 D-05.4 rejected the bake worker as host: it would
+ * couple texture throughput to bake jobs and to the wasm topology; the
+ * texture worker is deliberately wasm-free). `?texWorkers=on` routes
+ * transcodes there (own 1.04 MB transcoder instance — the tombstone's
+ * per-context trap, paid once, off the window thread), and THIS budgeted path
+ * is its main-thread fallback for worker-off/loading/crashed — "(b) is a
+ * prerequisite for (a) being safe" held: (a) was built on top of (b), and (b)
+ * is retained verbatim as the kill path.
  */
 function _drain() {
   _clearScheduled();
@@ -498,8 +508,21 @@ export function _xu7QueueDepthForTest() {
  * to get the module and then either run it straight through (`?xu7Budget=off`)
  * or hand it to the budgeted FIFO. The RESOLVED VALUE is identical either way,
  * so `Bc7RecordSource._begin` and every downstream consumer are unchanged.
+ *
+ * ST4 (`?texWorkers=on`, DEFAULT OFF): the transcode routes to the dedicated
+ * texture worker FIRST — same transcoder, same output shape, off the window
+ * thread. If the worker is not routable (flag off, still loading, crashed,
+ * queue over cap) the call falls through to the two lines of legacy behaviour
+ * below, and every flag-ON fall-through is counted (`fifoFallbacks` /
+ * `fallbackEngagements` on `__texWorkerStats`) so the fallback can never
+ * engage silently — SPEC T14's kill criterion.
  */
 export async function transcodeXu7(bytes, baseUrl) {
+  if (texWorkersEnabled()) {
+    const routed = await _workerTranscodeXu7(bytes);
+    if (routed !== _TW_UNROUTED) return routed;
+    _twStats.fifoFallbacks += 1;
+  }
   const module = await xu7Transcoder(baseUrl);
   if (!module || !bytes || bytes.length === 0) return null;
   if (!xu7BudgetEnabled()) return _transcodeNow(module, bytes);
@@ -577,4 +600,445 @@ function _transcodeNow(module, bytes) {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// ?texWorkers — ST4 dedicated-texture-worker CLIENT (SPEC §3 T14; pass-05
+// D-05.4 + S3, pass-08 D-08.4)
+// ---------------------------------------------------------------------------
+// The worker itself is scene3d/texture_worker.js (wasm-free, own transcoder
+// instance, self-contained — it cannot import this file). This client owns:
+//   * the flag (`texWorkersEnabled` — DEV opt-in, DEFAULT OFF; the default
+//     flip is a migration event gated on GATE-TEXWORKER, never done here);
+//   * lifecycle: lazy construction, an ASK-DON'T-AWAIT ready gate for the hot
+//     xu7 path (the ensureXu7Transcoder lesson: a load that never settles must
+//     not stall record upgrades — while the worker loads, records ride the
+//     budgeted FIFO and are counted), and a bounded AWAIT for the one-shot
+//     terrain assembly (which is exactly the 88 MiB task the worker exists
+//     to absorb, so it is worth waiting a few seconds for);
+//   * a client-side FIFO, ONE job in flight (pass-08 backpressure), depth-
+//     capped — over-cap xu7 asks fall back to the budgeted FIFO, counted;
+//   * fallback accounting: EVERY path that routes work back to the main
+//     thread while the flag is ON increments a counter on `__texWorkerStats`
+//     (fifoFallbacks / fallbackEngagements / pendingNulled / terrainFallbacks)
+//     — "fallback failing to engage silently" is T14's kill criterion, so
+//     silence is designed out;
+//   * RESULTS-ENQUEUE-ONLY (pass-08 D-08.5): the onmessage handler ONLY
+//     settles the caller's promise — the continuation is the same microtask
+//     the budgeted FIFO's `job.resolve` produces today. No GPU object is
+//     created in the worker or in the arrival callback; uploads keep their
+//     existing main-thread schedule.
+//
+// Worker crash mid-job: the transferred payload bytes died with the worker,
+// so pending jobs are resolved null — for xu7 that is the existing "null means
+// take the hbc7 route" contract (correct pixels, extra bytes), for terrain the
+// caller re-fetches from HTTP cache. All counted, warned once, and every
+// SUBSEQUENT job routes straight to the main-thread arm.
+
+/**
+ * `?texWorkers` — DEV opt-in, **DEFAULT OFF** (flag lifecycle SPEC §0.1; the
+ * orchestrator flips it after GATE-TEXWORKER). EXACT-MATCH opt-in like
+ * `?texFreeCpu`: only `on`/`1`/`true`/`yes` (or an integer >= 1 — the
+ * `?texWorkers=N` measurement escape; v1 always constructs ONE worker and
+ * records the request) read ON. Absent, empty, `off`, `0`, garbage ⇒ OFF.
+ * Not memoized — same ESM-suite re-stub reason as `xu7BudgetEnabled`.
+ */
+export function texWorkersEnabled(search) {
+  return _texWorkersRequested(search) >= 1;
+}
+
+/** The requested worker count (0 = off). v1 constructs at most 1. */
+function _texWorkersRequested(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    const v = new URLSearchParams(s).get("texWorkers");
+    if (v == null) return 0;
+    const t = String(v).toLowerCase();
+    if (t === "on" || t === "true" || t === "yes") return 1;
+    const n = Number.parseInt(t, 10);
+    return Number.isFinite(n) && n >= 1 ? n : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+// Client FIFO depth cap [A]: an xu7 ask beyond it rides the budgeted FIFO
+// instead (counted). Terrain jobs (2/session) are never the ones over cap.
+const TEX_WORKER_QUEUE_CAP = 64;
+// How long the ONE-SHOT terrain assembly will wait for the worker to come up
+// before falling back to the synchronous main-thread build [A]. The worker
+// script is same-origin and `ready` does not wait on the transcoder, so this
+// is script-fetch + eval time.
+const TEX_WORKER_TERRAIN_READY_MS = 10_000;
+
+const _TW_UNROUTED = Symbol("texWorker-unrouted");
+
+let _twWorker = null;
+let _twState = "off"; // off | loading | ready | dead
+let _twSeq = 0;
+let _twReadyPromise = null;
+let _twReadyResolve = null;
+let _twFactory = null; // test hook
+/** @type {Array<{msg:any, transfers:any[], resolve:(v:any)=>void}>} */
+const _twQueue = [];
+/** @type {Map<number, {msg:any, transfers:any[], resolve:(v:any)=>void}>} */
+const _twPending = new Map();
+
+const _twStats = {
+  jobs: 0, // worker jobs completed ok (xu7)
+  jobErrors: 0, // worker answered ok:false (bad payload class — hbc7 fallback)
+  msTranscode: 0, // OFF-THREAD worker transcode ms (reported, never frame-attributed)
+  maxQueueDepth: 0,
+  fifoFallbacks: 0, // flag ON but an xu7 ask rode the main-thread FIFO (loading/dead/over-cap)
+  fallbackEngagements: 0, // worker death transitions (construction failure, crash)
+  pendingNulled: 0, // in-flight jobs lost to a crash, resolved null
+  cancels: 0,
+  terrainAssembles: 0,
+  msAssemble: 0, // OFF-THREAD worker assembly ms
+  terrainFallbacks: 0, // terrain assembly rode the main thread while flag ON
+  nraDerives: 0,
+  lastError: null,
+};
+
+/** Read via `window.__texWorkerStats()` (installed below at module scope —
+ *  this module loads with the scene3d import graph at boot). Folds into
+ *  `__texStats().worker` at ST5 (same-name-successor; see the diag registry). */
+export function texWorkerStats() {
+  return {
+    ..._twStats,
+    enabled: texWorkersEnabled(),
+    requested: _texWorkersRequested(),
+    state: _twState,
+    queueDepth: _twQueue.length + _twPending.size,
+    inflight: _twPending.size,
+  };
+}
+if (typeof window !== "undefined") {
+  try {
+    window.__texWorkerStats = () => texWorkerStats();
+  } catch (_) {
+    /* fail-soft */
+  }
+}
+
+function _twDie(reason) {
+  if (_twState === "dead") return;
+  _twState = "dead";
+  _twStats.fallbackEngagements += 1;
+  _twStats.lastError = String(reason);
+  // Loud once, on purpose — the kill criterion is a SILENT fallback.
+  // eslint-disable-next-line no-console
+  console.warn("[texWorkers] texture worker failed — main-thread fallback armed (counted):", reason);
+  if (_twReadyResolve) {
+    _twReadyResolve(false);
+    _twReadyResolve = null;
+  }
+  const drop = (job) => {
+    _twStats.pendingNulled += 1;
+    try {
+      job.resolve(null);
+    } catch (_) {
+      /* fail-soft */
+    }
+  };
+  for (const [, job] of _twPending) drop(job);
+  _twPending.clear();
+  while (_twQueue.length) drop(_twQueue.shift());
+  if (_twWorker) {
+    try {
+      _twWorker.terminate();
+    } catch (_) {
+      /* fail-soft */
+    }
+    _twWorker = null;
+  }
+}
+
+/** Kick construction if needed; true only when the worker is READY NOW.
+ *  Never awaits — the xu7 hot path asks, it does not wait. */
+function _twEnsure() {
+  if (_twState === "ready") return true;
+  if (_twState === "dead" || _twState === "loading") return false;
+  _twState = "loading";
+  _twReadyPromise = new Promise((res) => {
+    _twReadyResolve = res;
+  });
+  try {
+    const make =
+      _twFactory ||
+      (() => new Worker(new URL("./texture_worker.js", import.meta.url), { type: "module" }));
+    _twWorker = make();
+    _twWorker.onmessage = (ev) => _twOnMessage(ev && ev.data);
+    _twWorker.onerror = (ev) =>
+      _twDie(`worker error: ${(ev && (ev.message || ev.type)) || "unknown"}`);
+    try {
+      _twWorker.onmessageerror = () => _twDie("worker messageerror");
+    } catch (_) {
+      /* optional handler */
+    }
+    let base = null;
+    try {
+      base = new URL("./transcoder/", import.meta.url).href;
+    } catch (_) {
+      base = null;
+    }
+    _twWorker.postMessage({ type: "init", transcoderBaseUrl: base });
+  } catch (e) {
+    _twDie(`construct: ${String(e && e.message ? e.message : e)}`);
+  }
+  return false;
+}
+
+/** Await readiness with a bound. `timeoutMs <= 0` = ask-only (no wait). */
+async function _twReady(timeoutMs) {
+  if (_twState === "ready") return true;
+  if (_twState === "dead") return false;
+  _twEnsure();
+  if (_twState === "ready") return true;
+  if (_twState === "dead" || !_twReadyPromise) return false;
+  if (!(timeoutMs > 0)) return false;
+  let timer = null;
+  const winner = await Promise.race([
+    _twReadyPromise,
+    new Promise((res) => {
+      timer = setTimeout(() => res("timeout"), timeoutMs);
+    }),
+  ]);
+  if (timer !== null) clearTimeout(timer);
+  return winner === true;
+}
+
+function _twOnMessage(msg) {
+  if (!msg || typeof msg !== "object") return;
+  if (msg.type === "ready") {
+    if (_twState === "loading") {
+      _twState = "ready";
+      if (_twReadyResolve) {
+        _twReadyResolve(true);
+        _twReadyResolve = null;
+      }
+      _twPump();
+    }
+    return;
+  }
+  if (msg.type !== "result") return;
+  const job = _twPending.get(msg.seq);
+  if (!job) return;
+  _twPending.delete(msg.seq);
+  // RESULTS-ENQUEUE-ONLY: settling the promise is ALL this callback does —
+  // the caller's continuation is a microtask, the exact shape the budgeted
+  // FIFO's job.resolve produces. No scene, no GL, no uploads here.
+  try {
+    job.resolve(msg);
+  } catch (_) {
+    /* fail-soft */
+  }
+  _twPump();
+}
+
+function _twSubmit(msg, transfers) {
+  return new Promise((resolve) => {
+    _twQueue.push({ msg, transfers: transfers || [], resolve });
+    const depth = _twQueue.length + _twPending.size;
+    if (depth > _twStats.maxQueueDepth) _twStats.maxQueueDepth = depth;
+    _twPump();
+  });
+}
+
+/** ONE job in flight (pass-08 backpressure); FIFO within the client queue. */
+function _twPump() {
+  if (_twState !== "ready" || _twPending.size > 0) return;
+  const job = _twQueue.shift();
+  if (!job) return;
+  _twPending.set(job.msg.seq, job);
+  try {
+    _twWorker.postMessage(job.msg, job.transfers);
+  } catch (e) {
+    _twDie(`postMessage: ${String(e && e.message ? e.message : e)}`);
+  }
+}
+
+/**
+ * Cancel a queued/in-flight worker job by seq (pass-05 S3 `cancel`). A job
+ * still in the client queue resolves null immediately; one already posted is
+ * cancelled worker-side only if the worker has not reached it (its reply then
+ * reads `ok:false, err:"cancelled"`). Returns whether the seq was known.
+ * No caller evicts pre-run today — this is the ST5 eviction seam.
+ */
+export function cancelTextureWorkerJob(seq) {
+  for (let i = 0; i < _twQueue.length; i += 1) {
+    if (_twQueue[i].msg.seq === seq) {
+      const [job] = _twQueue.splice(i, 1);
+      _twStats.cancels += 1;
+      try {
+        job.resolve(null);
+      } catch (_) {
+        /* fail-soft */
+      }
+      return true;
+    }
+  }
+  if (_twPending.has(seq) && _twWorker) {
+    _twStats.cancels += 1;
+    try {
+      _twWorker.postMessage({ type: "cancel", seq });
+    } catch (_) {
+      /* fail-soft */
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Rebuild the exact `parseHbc7`/`_transcodeNow` result shape as zero-copy
+ *  subarray views over the ONE transferred buffer (pass-05 S3 contract). */
+function _twReconstructParsed(res) {
+  const buf = new Uint8Array(res.bc7);
+  const levels = [];
+  let off = 0;
+  let lw = res.width;
+  let lh = res.height;
+  for (const n of res.levelBytes) {
+    levels.push({ data: buf.subarray(off, off + n), width: lw, height: lh });
+    off += n;
+    lw = Math.max(1, lw >> 1);
+    lh = Math.max(1, lh >> 1);
+  }
+  return {
+    width: res.width,
+    height: res.height,
+    blocksX: bc7BlocksFor(res.width),
+    blocksY: bc7BlocksFor(res.height),
+    levels,
+  };
+}
+
+/**
+ * Route one xu7 transcode to the worker. Returns `_TW_UNROUTED` when the
+ * worker cannot take it (caller falls through to the legacy arm and counts);
+ * otherwise resolves exactly like `_transcodeNow` (parsed shape, or null =
+ * "take the hbc7 route").
+ */
+async function _workerTranscodeXu7(bytes) {
+  if (!bytes || bytes.length === 0) return null;
+  if (!_twEnsure()) return _TW_UNROUTED;
+  if (_twQueue.length + _twPending.size >= TEX_WORKER_QUEUE_CAP) return _TW_UNROUTED;
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  // Transfer, don't copy — but only when the view owns its whole buffer
+  // (`xu7_blocks` returns fresh copies out of wasm memory, so it does).
+  const owned = u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength ? u8 : u8.slice();
+  const seq = ++_twSeq;
+  const res = await _twSubmit(
+    { type: "job", seq, kind: "xu7", bytes: owned.buffer, want: { nra: null } },
+    [owned.buffer],
+  );
+  if (!res) return null; // worker died mid-flight (pendingNulled counted) → hbc7 route
+  if (!res.ok) {
+    _twStats.jobErrors += 1;
+    _twStats.lastError = String(res.err ?? "job failed");
+    // eslint-disable-next-line no-console
+    console.warn("[texWorkers] xu7 job failed (falling back to tex-bc7):", _twStats.lastError);
+    return null;
+  }
+  _twStats.jobs += 1;
+  _twStats.msTranscode += res.transcodeMs || 0;
+  return _twReconstructParsed(res);
+}
+
+/**
+ * Terrain BC7 array assembly in the worker (pass-05 D-05.4: the 88 MiB
+ * level-major alloc+copy leaves the main thread). Caller: terrain_bc7.js
+ * `buildTerrainBc7Atlas`, which gates on `texWorkersEnabled()` and falls back
+ * to the synchronous `buildTerrainBc7Array` on ANY throw here (re-fetching
+ * its payloads — the transferred buffers died with the job).
+ *
+ * @param {{tileSize:number, levels:number, depth:number, layerRs:string[],
+ *          payloads:Array<{rs:string, bytes:ArrayBuffer}>}} job
+ * @returns {Promise<{tileSize:number, levels:number, depth:number,
+ *          levelBytes:number[], bc7:ArrayBuffer, assembleMs:number}>}
+ */
+export async function workerTerrainAssemble(job) {
+  const ready = await _twReady(TEX_WORKER_TERRAIN_READY_MS);
+  if (!ready) {
+    _twStats.terrainFallbacks += 1;
+    throw new Error(`texture worker unavailable (state=${_twState})`);
+  }
+  const seq = ++_twSeq;
+  const transfers = job.payloads.map((p) => p.bytes);
+  const res = await _twSubmit({ type: "job", seq, kind: "terrain-assemble", ...job }, transfers);
+  if (!res || !res.ok) {
+    _twStats.terrainFallbacks += 1;
+    const err = res && res.err ? String(res.err) : "texture worker died during terrain assembly";
+    _twStats.lastError = err;
+    throw new Error(err);
+  }
+  _twStats.terrainAssembles += 1;
+  _twStats.msAssemble += res.assembleMs || 0;
+  return res;
+}
+
+/**
+ * Standalone NRA derivation in the worker (pass-05 D-05.5's `nra-derive`
+ * kind; RGBA8 plane in the terrain channel convention R/G=normal XY,
+ * B=roughness, A=AO). Ask-only readiness — returns null when the worker is
+ * not up, and the caller keeps its current source. The ST5 consumer seam;
+ * no production caller at ST4.
+ */
+export async function workerDeriveNra({ width, height, rgba, strength }) {
+  const ready = await _twReady(0);
+  if (!ready) return null;
+  const seq = ++_twSeq;
+  const res = await _twSubmit(
+    { type: "job", seq, kind: "nra-derive", width, height, rgba, strength },
+    [rgba],
+  );
+  if (!res || !res.ok) return null;
+  _twStats.nraDerives += 1;
+  return { width: res.width, height: res.height, plane: new Uint8Array(res.plane) };
+}
+
+/** Test hook: inject a Worker-shaped factory (node has no Worker). */
+export function _setTexWorkerFactoryForTest(factory) {
+  _twFactory = factory ?? null;
+}
+
+/** Test hook: tear down the client — terminate, null-resolve everything,
+ *  zero the stats (same discipline as `_resetXu7ForTest`). */
+export function _resetTexWorkerForTest() {
+  if (_twWorker) {
+    try {
+      _twWorker.terminate();
+    } catch (_) {
+      /* fail-soft */
+    }
+  }
+  _twWorker = null;
+  _twState = "off";
+  _twSeq = 0;
+  _twReadyPromise = null;
+  _twReadyResolve = null;
+  while (_twQueue.length) {
+    const j = _twQueue.shift();
+    try {
+      j.resolve(null);
+    } catch (_) {
+      /* fail-soft */
+    }
+  }
+  for (const [, j] of _twPending) {
+    try {
+      j.resolve(null);
+    } catch (_) {
+      /* fail-soft */
+    }
+  }
+  _twPending.clear();
+  for (const k of Object.keys(_twStats)) {
+    _twStats[k] = typeof _twStats[k] === "number" ? 0 : null;
+  }
+}
+
+/** Test hook: the live client state string. */
+export function _texWorkerStateForTest() {
+  return _twState;
 }
