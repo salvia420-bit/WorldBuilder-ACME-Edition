@@ -1,0 +1,3555 @@
+{
+  "generated": "2026-08-09T19:18:42.219Z",
+  "task": "T00",
+  "bench": "CENSUS-CLASS",
+  "bounds": {
+    "classes": 48,
+    "pools": 300
+  },
+  "verdict": "RE-EXAMINE",
+  "offending": [
+    "nanto: classes 122 > 48",
+    "nanto: pools 352 > 300",
+    "townnetwork: classes 80 > 48"
+  ],
+  "keyDoc": "pass-07 S3: <domain>|<state t,a,w,b,r,s>|<patch hb|d..k|v[#config]>|<tex x{dims}{f7|f8}>|<shadow c,r>",
+  "scenes": {
+    "nanto": {
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/?renderer=3d&nullRender=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&server_host=127.0.0.1&server_port=9000&nosw=1&renderOnDemand=1&netDrainHz=30&quality=mid&agent=1",
+      "landblockId": 3862822946,
+      "settled": false,
+      "pooledClasses": 122,
+      "projectedPools": 352,
+      "sectors": 11,
+      "passes": {
+        "opaque": 26212,
+        "additive": 0,
+        "translucent": 2094
+      },
+      "domains": {
+        "tr": {
+          "classes": 1,
+          "instances": 260,
+          "mats": 131
+        },
+        "st": {
+          "classes": 83,
+          "instances": 27298,
+          "mats": 272
+        },
+        "as": {
+          "classes": 2,
+          "instances": 6474,
+          "mats": 2
+        },
+        "ec": {
+          "classes": 39,
+          "instances": 1008,
+          "mats": 127
+        },
+        "other": {
+          "classes": 1,
+          "instances": 1,
+          "mats": 1
+        }
+      },
+      "reserved": {
+        "tr": {
+          "classes": 1,
+          "instances": 260,
+          "mats": 131
+        },
+        "as": {
+          "classes": 2,
+          "instances": 6474,
+          "mats": 2
+        }
+      },
+      "axisAnalysis": {
+        "domain": {
+          "classesWithoutAxis": 122,
+          "contributes": 0
+        },
+        "stateAlphaTest": {
+          "classesWithoutAxis": 106,
+          "contributes": 16
+        },
+        "stateBlend": {
+          "classesWithoutAxis": 122,
+          "contributes": 0
+        },
+        "stateWrap": {
+          "classesWithoutAxis": 122,
+          "contributes": 0
+        },
+        "stateSide": {
+          "classesWithoutAxis": 122,
+          "contributes": 0
+        },
+        "stateDepthWrite": {
+          "classesWithoutAxis": 122,
+          "contributes": 0
+        },
+        "patchBias": {
+          "classesWithoutAxis": 102,
+          "contributes": 20
+        },
+        "patchVfx": {
+          "classesWithoutAxis": 114,
+          "contributes": 8
+        },
+        "vfxConfigOnly": {
+          "classesWithoutAxis": 122,
+          "contributes": 0
+        },
+        "texDims": {
+          "classesWithoutAxis": 30,
+          "contributes": 92
+        },
+        "texFormat": {
+          "classesWithoutAxis": 118,
+          "contributes": 4
+        },
+        "shadow": {
+          "classesWithoutAxis": 122,
+          "contributes": 0
+        }
+      },
+      "cache": {
+        "available": true,
+        "sizes": {
+          "materials": 339,
+          "frontSideMaterials": 0,
+          "floorBiasMaterials": 78,
+          "staticBiasMaterials": 98,
+          "cellBakedMaterials": 29,
+          "vfxVariants": 24,
+          "vfxPalettedVariants": 10,
+          "palettedMaterials": 202,
+          "particleUnlitMaterials": 23,
+          "_animatedMaterials": 0,
+          "didMaterials": 0
+        },
+        "totalMats": 803,
+        "coreClasses": 172,
+        "perMap": {
+          "materials": {
+            "mats": 339,
+            "coreClasses": 71
+          },
+          "floorBiasMaterials": {
+            "mats": 78,
+            "coreClasses": 15
+          },
+          "staticBiasMaterials": {
+            "mats": 98,
+            "coreClasses": 28
+          },
+          "cellBakedMaterials": {
+            "mats": 29,
+            "coreClasses": 11
+          },
+          "vfxVariants": {
+            "mats": 24,
+            "coreClasses": 11
+          },
+          "vfxPalettedVariants": {
+            "mats": 10,
+            "coreClasses": 8
+          },
+          "palettedMaterials": {
+            "mats": 202,
+            "coreClasses": 18
+          },
+          "particleUnlitMaterials": {
+            "mats": 23,
+            "coreClasses": 12
+          }
+        }
+      }
+    },
+    "townnetwork": {
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/?renderer=3d&nullRender=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&server_host=127.0.0.1&server_port=9000&nosw=1&renderOnDemand=1&netDrainHz=30&quality=mid&agent=1",
+      "landblockId": 459075,
+      "settled": false,
+      "pooledClasses": 80,
+      "projectedPools": 274,
+      "sectors": 12,
+      "passes": {
+        "opaque": 25726,
+        "additive": 0,
+        "translucent": 2083
+      },
+      "domains": {
+        "tr": {
+          "classes": 1,
+          "instances": 142,
+          "mats": 7
+        },
+        "st": {
+          "classes": 61,
+          "instances": 26751,
+          "mats": 102
+        },
+        "as": {
+          "classes": 2,
+          "instances": 6474,
+          "mats": 2
+        },
+        "ec": {
+          "classes": 19,
+          "instances": 1058,
+          "mats": 44
+        },
+        "other": {
+          "classes": 1,
+          "instances": 1,
+          "mats": 1
+        }
+      },
+      "reserved": {
+        "tr": {
+          "classes": 1,
+          "instances": 142,
+          "mats": 7
+        },
+        "as": {
+          "classes": 2,
+          "instances": 6474,
+          "mats": 2
+        }
+      },
+      "axisAnalysis": {
+        "domain": {
+          "classesWithoutAxis": 80,
+          "contributes": 0
+        },
+        "stateAlphaTest": {
+          "classesWithoutAxis": 68,
+          "contributes": 12
+        },
+        "stateBlend": {
+          "classesWithoutAxis": 80,
+          "contributes": 0
+        },
+        "stateWrap": {
+          "classesWithoutAxis": 80,
+          "contributes": 0
+        },
+        "stateSide": {
+          "classesWithoutAxis": 80,
+          "contributes": 0
+        },
+        "stateDepthWrite": {
+          "classesWithoutAxis": 80,
+          "contributes": 0
+        },
+        "patchBias": {
+          "classesWithoutAxis": 78,
+          "contributes": 2
+        },
+        "patchVfx": {
+          "classesWithoutAxis": 71,
+          "contributes": 9
+        },
+        "vfxConfigOnly": {
+          "classesWithoutAxis": 77,
+          "contributes": 3
+        },
+        "texDims": {
+          "classesWithoutAxis": 26,
+          "contributes": 54
+        },
+        "texFormat": {
+          "classesWithoutAxis": 78,
+          "contributes": 2
+        },
+        "shadow": {
+          "classesWithoutAxis": 80,
+          "contributes": 0
+        }
+      },
+      "cache": {
+        "available": true,
+        "sizes": {
+          "materials": 182,
+          "frontSideMaterials": 0,
+          "floorBiasMaterials": 2,
+          "staticBiasMaterials": 37,
+          "cellBakedMaterials": 10,
+          "vfxVariants": 8,
+          "vfxPalettedVariants": 10,
+          "palettedMaterials": 229,
+          "particleUnlitMaterials": 13,
+          "_animatedMaterials": 0,
+          "didMaterials": 0
+        },
+        "totalMats": 491,
+        "coreClasses": 80,
+        "perMap": {
+          "materials": {
+            "mats": 182,
+            "coreClasses": 28
+          },
+          "floorBiasMaterials": {
+            "mats": 2,
+            "coreClasses": 2
+          },
+          "staticBiasMaterials": {
+            "mats": 37,
+            "coreClasses": 16
+          },
+          "cellBakedMaterials": {
+            "mats": 10,
+            "coreClasses": 5
+          },
+          "vfxVariants": {
+            "mats": 8,
+            "coreClasses": 5
+          },
+          "vfxPalettedVariants": {
+            "mats": 10,
+            "coreClasses": 8
+          },
+          "palettedMaterials": {
+            "mats": 229,
+            "coreClasses": 11
+          },
+          "particleUnlitMaterials": {
+            "mats": 13,
+            "coreClasses": 5
+          }
+        }
+      }
+    }
+  },
+  "prewarmClassList": [
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 751,
+          "mats": 9,
+          "pools": 11,
+          "sectors": 11
+        },
+        "townnetwork": {
+          "instances": 748,
+          "mats": 7,
+          "pools": 11,
+          "sectors": 11
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000426",
+        "0x08000427",
+        "0x08000011",
+        "0x08000004",
+        "0x0800006d",
+        "0x0800006e",
+        "0x0800006f"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 11645,
+          "mats": 16,
+          "pools": 10,
+          "sectors": 10
+        },
+        "townnetwork": {
+          "instances": 150,
+          "mats": 1,
+          "pools": 8,
+          "sectors": 8
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000000",
+        "0x08000001",
+        "0x080011b1",
+        "0x08000008",
+        "0x08000009",
+        "0x08000075",
+        "0x08000074",
+        "0x0800001b",
+        "0x080011d5"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3383,
+          "mats": 4,
+          "pools": 10,
+          "sectors": 10
+        },
+        "townnetwork": {
+          "instances": 313,
+          "mats": 1,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x080011ce",
+        "0x08000007"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2011,
+          "mats": 2,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000005"
+      ]
+    },
+    {
+      "key": "st|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 2011,
+          "mats": 2,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000006"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1188,
+          "mats": 2,
+          "pools": 10,
+          "sectors": 10
+        },
+        "townnetwork": {
+          "instances": 1177,
+          "mats": 1,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x0800157e"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 511,
+          "mats": 7,
+          "pools": 10,
+          "sectors": 10
+        },
+        "townnetwork": {
+          "instances": 321,
+          "mats": 1,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x080011c2",
+        "0x080011c7",
+        "0x080011ca",
+        "0x08000020"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 148,
+          "mats": 2,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x080011c8"
+      ]
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x88f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1760,
+          "mats": 4,
+          "pools": 9,
+          "sectors": 9
+        },
+        "townnetwork": {
+          "instances": 1757,
+          "mats": 2,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x0800000a",
+        "0x0800049e",
+        "0x08000014"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1295,
+          "mats": 3,
+          "pools": 9,
+          "sectors": 9
+        },
+        "townnetwork": {
+          "instances": 1294,
+          "mats": 2,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x080011d2",
+        "0x080011d3"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 522,
+          "mats": 2,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000004"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 499,
+          "mats": 2,
+          "pools": 9,
+          "sectors": 9
+        },
+        "townnetwork": {
+          "instances": 498,
+          "mats": 1,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "mesh",
+        "batchx"
+      ],
+      "dids": [
+        "0x08000002"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 479,
+          "mats": 2,
+          "pools": 9,
+          "sectors": 9
+        },
+        "townnetwork": {
+          "instances": 479,
+          "mats": 2,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000003",
+        "0x080011c7"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|xaaf7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 49,
+          "mats": 1,
+          "pools": 9,
+          "sectors": 9
+        },
+        "townnetwork": {
+          "instances": 49,
+          "mats": 1,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 186,
+          "mats": 51,
+          "pools": 7,
+          "sectors": 7
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080006e8",
+        "0x08000660",
+        "0x08000370",
+        "0x080007e3",
+        "0x080006e6",
+        "0x080007e4",
+        "0x08000371",
+        "0x0800074e",
+        "0x08000742",
+        "0x080001a5",
+        "0x0800032a",
+        "0x080007ec"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 75,
+          "mats": 25,
+          "pools": 7,
+          "sectors": 7
+        },
+        "townnetwork": {
+          "instances": 57,
+          "mats": 10,
+          "pools": 6,
+          "sectors": 6
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x0800032a",
+        "0x080001a5",
+        "0x08000233",
+        "0x08000262",
+        "0x080001f0",
+        "0x080001f6",
+        "0x080001f8",
+        "0x080001f5",
+        "0x0800003a",
+        "0x08000083",
+        "0x080011f6",
+        "0x08000754"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|xbbf7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 14,
+          "mats": 1,
+          "pools": 7,
+          "sectors": 7
+        },
+        "townnetwork": {
+          "instances": 14,
+          "mats": 1,
+          "pools": 7,
+          "sectors": 7
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|xaaf7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 10,
+          "mats": 1,
+          "pools": 7,
+          "sectors": 7
+        },
+        "townnetwork": {
+          "instances": 10,
+          "mats": 1,
+          "pools": 7,
+          "sectors": 7
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x99f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 22,
+          "mats": 1,
+          "pools": 6,
+          "sectors": 6
+        },
+        "townnetwork": {
+          "instances": 22,
+          "mats": 1,
+          "pools": 6,
+          "sectors": 6
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x88f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 102,
+          "mats": 17,
+          "pools": 5,
+          "sectors": 5
+        },
+        "townnetwork": {
+          "instances": 87,
+          "mats": 5,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000130",
+        "0x08000129",
+        "0x0800084a",
+        "0x08000102",
+        "0x08000142",
+        "0x08000131",
+        "0x0800012e",
+        "0x0800038f",
+        "0x080003a8",
+        "0x080003a9",
+        "0x080006bb",
+        "0x080004ef"
+      ]
+    },
+    {
+      "key": "st|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x55f7|c0r0",
+      "domain": "st",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 45,
+          "mats": 1,
+          "pools": 5,
+          "sectors": 5
+        },
+        "townnetwork": {
+          "instances": 45,
+          "mats": 1,
+          "pools": 5,
+          "sectors": 5
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000015"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x77f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 40,
+          "mats": 4,
+          "pools": 5,
+          "sectors": 5
+        },
+        "townnetwork": {
+          "instances": 38,
+          "mats": 2,
+          "pools": 5,
+          "sectors": 5
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x080001f4",
+        "0x0800021a",
+        "0x08000226"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f1|s0|k0|v|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 29,
+          "mats": 4,
+          "pools": 5,
+          "sectors": 5
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800073b",
+        "0x08000762",
+        "0x08000849",
+        "0x080008e3"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x77f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 8,
+          "mats": 6,
+          "pools": 5,
+          "sectors": 5
+        },
+        "townnetwork": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh",
+        "batchx"
+      ],
+      "dids": [
+        "0x080001c2",
+        "0x08000227",
+        "0x080004b3",
+        "0x08000224",
+        "0x080003e9",
+        "0x08000079"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x78f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 56,
+          "mats": 14,
+          "pools": 4,
+          "sectors": 4
+        },
+        "townnetwork": {
+          "instances": 47,
+          "mats": 7,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x0800012d",
+        "0x080005e3",
+        "0x080001c0",
+        "0x0800049d",
+        "0x0800049f",
+        "0x08000209",
+        "0x08000362",
+        "0x080003aa",
+        "0x0800022e",
+        "0x0800021b"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x66f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 26,
+          "mats": 1,
+          "pools": 4,
+          "sectors": 4
+        },
+        "townnetwork": {
+          "instances": 26,
+          "mats": 1,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x080001f7"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x55f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 26,
+          "mats": 2,
+          "pools": 4,
+          "sectors": 4
+        },
+        "townnetwork": {
+          "instances": 25,
+          "mats": 1,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x080001f3"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x88f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 17,
+          "mats": 4,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000842",
+        "0x080006bb",
+        "0x080008e4",
+        "0x0800092a"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x89f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 12,
+          "mats": 2,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000724",
+        "0x080008e0"
+      ]
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x88f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 4,
+          "sectors": 4
+        },
+        "townnetwork": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f1|s0|k0|v|x66f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001f7"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000426"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 69,
+          "mats": 3,
+          "pools": 3,
+          "sectors": 3
+        },
+        "townnetwork": {
+          "instances": 68,
+          "mats": 2,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh",
+        "batchx"
+      ],
+      "dids": [
+        "0x08000499",
+        "0x08000849",
+        "0x08000af4"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x89f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 54,
+          "mats": 10,
+          "pools": 3,
+          "sectors": 3
+        },
+        "townnetwork": {
+          "instances": 48,
+          "mats": 4,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000128",
+        "0x08000205",
+        "0x08000942",
+        "0x08000af3",
+        "0x08000392",
+        "0x08000393",
+        "0x080003e6",
+        "0x0800099e",
+        "0x08000b1e"
+      ]
+    },
+    {
+      "key": "st|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 21,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        },
+        "townnetwork": {
+          "instances": 21,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000006"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 8,
+          "mats": 3,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "mesh",
+        "batchx"
+      ],
+      "dids": [
+        "0x080011d6",
+        "0x08000073"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x98f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 7,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080008f3"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x55f8|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 7,
+          "mats": 3,
+          "pools": 3,
+          "sectors": 3
+        },
+        "townnetwork": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh",
+        "batchx"
+      ],
+      "dids": [
+        "0x080009a3",
+        "0x0800020a",
+        "0x08000216"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 5,
+          "mats": 2,
+          "pools": 3,
+          "sectors": 3
+        },
+        "townnetwork": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh",
+        "batchx"
+      ],
+      "dids": [
+        "0x08001630",
+        "0x0800157e"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x89f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        },
+        "townnetwork": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x9af7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 2,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000944",
+        "0x08000711"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x87f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        },
+        "townnetwork": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x88f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 217,
+          "mats": 10,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 58,
+          "mats": 4,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000130",
+        "0x08000131",
+        "0x080001b9",
+        "0x08000129",
+        "0x0800012e",
+        "0x080005e2",
+        "0x0800050f",
+        "0x08000516",
+        "0x08000582",
+        "0x0800053c",
+        "0x08000109"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x56f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 40,
+          "mats": 2,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800012b",
+        "0x0800012c"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x78f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 36,
+          "mats": 6,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000362",
+        "0x08000dbe",
+        "0x0800012d",
+        "0x0800022e",
+        "0x080004f9",
+        "0x08000209"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x98f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 22,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 22,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000203"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x56f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 18,
+          "mats": 4,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 16,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x0800012b",
+        "0x0800012c"
+      ]
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x89f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 10,
+          "mats": 2,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 9,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh",
+        "batchx"
+      ],
+      "dids": [
+        "0x080000a2",
+        "0x08000086"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x9af7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 7,
+          "mats": 3,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 6,
+          "mats": 2,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x08000141",
+        "0x080011dd",
+        "0x08000af9"
+      ]
+    },
+    {
+      "key": "st|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x99f7|c0r0",
+      "domain": "st",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 6,
+          "mats": 2,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx",
+        "mesh"
+      ],
+      "dids": [
+        "0x080001a4"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x44f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080008e5"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x77f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080008ec"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|x9af7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000017"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x87f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 2,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080006ba",
+        "0x080004a5"
+      ]
+    },
+    {
+      "key": "ec|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|xa9f7|c0r0",
+      "domain": "ec",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800013c"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f1|s0|k0|v|x9af7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000725"
+      ]
+    },
+    {
+      "key": "st|t1a0w0b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x55f7|c1r1",
+      "domain": "st",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 3,
+          "sectors": 3
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x88f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        },
+        "townnetwork": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 2,
+          "sectors": 2
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x99f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 245,
+          "mats": 16,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000371",
+        "0x08000372",
+        "0x080007e4",
+        "0x0800032a",
+        "0x080007e3",
+        "0x0800074e",
+        "0x080006e8",
+        "0x080001a5",
+        "0x080007d6",
+        "0x080011fc",
+        "0x080007e5",
+        "0x08000722"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x77f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 85,
+          "mats": 22,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 31,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000385",
+        "0x0800027a",
+        "0x08000208",
+        "0x08000361",
+        "0x08000207",
+        "0x0800012f",
+        "0x08000229",
+        "0x08000515",
+        "0x0800021d",
+        "0x080003a7",
+        "0x0800041f",
+        "0x08000524",
+        "0x080001bf",
+        "0x080001bb"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x99f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 75,
+          "mats": 16,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 50,
+          "mats": 4,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080006e6",
+        "0x08000262",
+        "0x080003ec",
+        "0x0800032a",
+        "0x08000514",
+        "0x08000371",
+        "0x080001a5",
+        "0x080005e0",
+        "0x080005e1",
+        "0x080001f1",
+        "0x08000283",
+        "0x08000581",
+        "0x08000257",
+        "0x08000963",
+        "0x0800044a"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x89f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 75,
+          "mats": 4,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 12,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000128",
+        "0x08000512",
+        "0x0800010b",
+        "0x08000205"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x79f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 47,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000433",
+        "0x080002d2"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|x77f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 23,
+          "mats": 5,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 15,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000206",
+        "0x080001f4",
+        "0x08000226",
+        "0x080001bc",
+        "0x0800021a",
+        "0x0800010a"
+      ]
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x98f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 22,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 22,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000082"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x87f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 22,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080006e7",
+        "0x08000753"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x67f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 19,
+          "mats": 3,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000215",
+        "0x080001b8",
+        "0x0800020e"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x88f8|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 14,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001cb",
+        "0x080001b5"
+      ]
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 12,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 12,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000077"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|xabf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 12,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 12,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08001569"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x9af7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 12,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080011dd"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x66f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 11,
+          "mats": 5,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000869",
+        "0x0800051e",
+        "0x0800020d",
+        "0x0800020f",
+        "0x08000335"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x67f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 9,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 9,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000085"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x89f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 9,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080005ab",
+        "0x08000724",
+        "0x0800010b"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x75f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 7,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000384",
+        "0x0800045d"
+      ]
+    },
+    {
+      "key": "ec|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x68f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 7,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800013d"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x79f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 6,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 6,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x080002d2"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x98f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 6,
+          "mats": 3,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080007d8",
+        "0x08000133",
+        "0x08000203"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x55f8|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000217"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x33f8|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000218"
+      ]
+    },
+    {
+      "key": "ec|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|x55f7|c0r0",
+      "domain": "ec",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 5,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000015"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|xa9f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080007e2"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x79f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080002d2"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x87f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080006e7"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|x55f8|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000217"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x55f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 14,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001f3"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k1|v|x99f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 4,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000188",
+        "0x0800011b"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|xa9f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080007e2"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|x88f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001ef"
+      ]
+    },
+    {
+      "key": "ec|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x99f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800012a"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x97f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800074c"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k1|v|x9af7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000725"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|xa9f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080011a9",
+        "0x080011aa"
+      ]
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x77f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000078"
+      ]
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x0800003b"
+      ]
+    },
+    {
+      "key": "ec|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x77f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800045e"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x98f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 6,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000203",
+        "0x08000133"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x54f8|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001b6"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x64f8|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001b7"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|xaaf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 2,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080006c8",
+        "0x08000427"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x8af7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000879"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f1|s0|k0|v|x79f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080008f5"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|xabf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800033d"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x88f8|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001b5"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x88f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001ef"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#deformation.windSwayGpu={\"baseAmp\":0.03,\"baseZ\":0,\"flutter\":0.3,\"freqHz\":0.15}|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800001f"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x9af7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000af8"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v|x55f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000157"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x66f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x88f8|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x78f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x88f8|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000225"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080011ab"
+      ]
+    },
+    {
+      "key": "st|t1a0w0b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|xaaf7|c1r1",
+      "domain": "st",
+      "pass": "translucent",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x99f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x55f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x77f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "st|t0a0.39215686274509803w1b1rwsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x68f7|c1r1",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "atlas"
+      ],
+      "dids": []
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x97f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800074c"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|xaaf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        },
+        "townnetwork": {
+          "instances": 56,
+          "mats": 7,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001ec",
+        "0x0800128d",
+        "0x08000962",
+        "0x08000964",
+        "0x080010d2",
+        "0x080010d3",
+        "0x080010d4",
+        "0x08000961"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x77f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800034f"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|x66f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "nanto": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001f7"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 11445,
+          "mats": 6,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000000",
+        "0x08000001",
+        "0x08000008",
+        "0x08000009",
+        "0x08000075",
+        "0x08000074"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|x99f7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 2009,
+          "mats": 1,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000005"
+      ]
+    },
+    {
+      "key": "st|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "translucent",
+      "scenes": {
+        "townnetwork": {
+          "instances": 2009,
+          "mats": 1,
+          "pools": 10,
+          "sectors": 10
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000006"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 3034,
+          "mats": 1,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000007"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 520,
+          "mats": 1,
+          "pools": 9,
+          "sectors": 9
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000004"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 113,
+          "mats": 1,
+          "pools": 8,
+          "sectors": 8
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x080011c8"
+      ]
+    },
+    {
+      "key": "st|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|xaaf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 155,
+          "mats": 2,
+          "pools": 4,
+          "sectors": 4
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x080011c7",
+        "0x080011ca"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|xbbf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 333,
+          "mats": 6,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080005c6",
+        "0x0800154e",
+        "0x080015d8",
+        "0x080015d9",
+        "0x0800157e",
+        "0x0800154b"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|xbbf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 325,
+          "mats": 5,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08001560",
+        "0x0800154e",
+        "0x0800154f",
+        "0x0800154b",
+        "0x0800154a"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|xbaf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 114,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800154c",
+        "0x0800154d"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|xbbf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 16,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800158a"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|xabf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 8,
+          "mats": 2,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800033c",
+        "0x0800033e"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|xabf7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 8,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x0800033d"
+      ]
+    },
+    {
+      "key": "st|t0a0w1b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|vdeformation.windSwayGpu#?|xbbf7|c0r0",
+      "domain": "st",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "batchx"
+      ],
+      "dids": [
+        "0x08000073"
+      ]
+    },
+    {
+      "key": "ec|t0a0.7843137254901961w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|x55f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 4,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08000157"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s0|k1|v|x9af7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 3,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080004bf"
+      ]
+    },
+    {
+      "key": "ec|t1a0w0b1rwsd|hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v|x99f7|c0r0",
+      "domain": "ec",
+      "pass": "translucent",
+      "scenes": {
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x080001a1"
+      ]
+    },
+    {
+      "key": "ec|t0a0w1b1rwsd|hb|d0|c0|p1|l1|a0|b0|f0|s1|k0|v|xb8f7|c0r0",
+      "domain": "ec",
+      "pass": "opaque",
+      "scenes": {
+        "townnetwork": {
+          "instances": 1,
+          "mats": 1,
+          "pools": 1,
+          "sectors": 1
+        }
+      },
+      "sources": [
+        "mesh"
+      ],
+      "dids": [
+        "0x08001554"
+      ]
+    }
+  ]
+}

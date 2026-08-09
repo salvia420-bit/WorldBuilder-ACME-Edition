@@ -2,7 +2,7 @@
 
 Agent: T00 implementation agent. Date: 2026-08-09. Scope: `apps/holtburger-web/harness/census-class.mjs` (+ reducer test), `docs/reengineering/impl/`.
 
-**Status: BLOCKED (I9).** The classifier/harness is complete and Tier-1-green; the live census could not be completed on this box — earlyoom killed the census chromium's renderer during the Nanto streaming burst on both permitted attempts (evidence below). No numbers are reported; nothing was substituted for the live census.
+**Status: DONE (live census ran 2026-08-09 — see "Live run 2026-08-09" below; VERDICT: RE-EXAMINE).** Historical context: the harness landed Tier-1-green at `0ad7e151` while the live census was BLOCKED (I9) — earlyoom killed the census chromium's renderer during the Nanto streaming burst on both attempts permitted that night (evidence below, kept verbatim). The blockers cleared (box quiet, ~4.3 GB available, swap free; ACE up) and run 3 completed both scenes.
 
 ## Shipped
 
@@ -58,3 +58,65 @@ Pure node, no browser, no measurements produced (@scale N/A — the test locks e
 - **Collector snapshot caveat for the eventual run**: if `liveScene3d.materialCache` is null (init3D snapshot trap), the cache-side census reports `available:false` and only the scene-walk half lands — the pooled verdict is unaffected (it is scene-walk-only by design), but the @cached rows will be absent; note it in that run's report.
 - **Scene-attached ≠ resident-total**: warm-parked LBs are detached (landblock_lru park) and are not walked — the census measures the attached population + cache maps. Stated in the harness header and the RESULTS notes template; do not read its `@resident` rows as the full warm-park pool.
 - **Boot itself is healthy at this memory level** (in-world in 7.5-10.9 s both attempts, M9-consistent); the killer is specifically the post-teleport streaming burst. If a future census must run on this box under pressure, the promising lever is spawning AT Nanto (skip the teleport invalidate) or a `?netDrainHz` throttle to flatten the burst — both untested, recorded here for the next owner.
+
+## Live run 2026-08-09 (run 3) — census completed, VERDICT: RE-EXAMINE
+
+Same agent, later the same day, after the orchestrator cleared both blockers (box quiet — no bake, sibling tsservers gone after reboot; live ACE back up).
+
+### Run record
+
+- **Command** (exact):
+  `node harness/census-class.mjs --live --scenes nanto,townnetwork --out /mnt/wbterminal2/reeng/T00/t00-results-v2.json --artifact docs/reengineering/impl/t00-class-census.json --snapdir /mnt/wbterminal2/reeng/T00 --commit 4ecc8ec6 --wasm-profile release`
+- **Box state at launch (R-MEM gate)**: 4321 MB available (gate ≥ 1700 PASS), swap 5864/6986 MiB free (vs 0 free at the failed attempts). Minimum observed during the Town Network burst: 1234 MB available. **No earlyoom kill** — the run's chromium lived to a clean harness exit (exit 1 = the RE-EXAMINE verdict path, census-class.mjs:827, not a crash). ACE up on :9000/:9001 (pid 283170); serve.py :8765 over the live tree; dist symlink healthy per `dist/_health.json` (shards 263 buckets, scenery 65025, spawns present).
+- **Tree state**: holtburger `4ecc8ec6`; `pkg/holtburger_web_bg.wasm` = T20 release build, 6,344,497 B, sha256 `1f6f57c9432928c890fdef6e38ca9a5e016a15063855c765d224484b7e173907` — verified identical before and after the run (sibling T15 did not ship a new pkg/ mid-census).
+- **lbCap re-derivation**: run WITHOUT `lbCap` (attempt 2's mitigation). The cap bounds steady-state residency, not the burst, and taints pool counts to ring-scale; with 4.3 GB available the ~1.2 GiB renderer burst clears without it. Full-ring, untainted pool counts below.
+- **Recipe**: zero-GPU bot, `?renderer=3d&nullRender=1&autoLogin=1&autoSpawn=first&nosw=1&renderOnDemand=1&netDrainHz=30&quality=mid&agent=1` (quality=mid per pass-10 Q5). In-world in 10,106 ms.
+
+### Results (RESULTS-v2: /mnt/wbterminal2/reeng/T00/t00-results-v2.json; both arms USABLE; taint: census-class, renderOnDemand)
+
+| metric | nanto (lb 0xe63e0022) | townnetwork (lb 0x00070143) |
+|---|---|---|
+| pooled classes (st+ec) @resident | **122** | **80** |
+| projected pools @resident | **352** | **274** |
+| pooled materials / instances | 399 / 28,306 | 146 / 27,809 |
+| sectors | 11 | 12 |
+| pass split (opaque/additive/translucent inst) | 26,212 / 0 / 2,094 | 25,726 / 0 / 2,083 |
+| domains (classes: st / ec / as / tr) | 83 / 39 / 2 / 1 | 61 / 19 / 2 / 1 |
+| cache @cached (materials / core keys) | 803 / 172 | 491 / 80 |
+| terrainBakedLbs | 130 | 136 |
+| settled (plateau reached) | **false** | **false** |
+
+**VERDICT: RE-EXAMINE** — nanto: classes 122 > 48; nanto: pools 352 > 300; townnetwork: classes 80 > 48 (bounds: classes ≤ 48, pools ≤ 300).
+
+Axis analysis (classes the axis adds, nanto / townnetwork):
+
+| axis | nanto | townnetwork |
+|---|---|---|
+| **texDims** | **+92** (30 without) | **+54** (26 without) |
+| patchBias | +20 | +2 |
+| stateAlphaTest | +16 | +12 |
+| patchVfx | +8 | +9 |
+| texFormat | +4 | +2 |
+| vfxConfigOnly | +0 | +3 |
+| domain, blend, wrap, side, depthWrite, shadow | +0 | +0 |
+
+### Taints and caveats (recorded, per the harness contract)
+
+1. **Neither scene reached the settle plateau in time** — captured anyway, `settled:false` in both arms. Counts are late-burst residency, not a fully-settled floor; direction of error is unknown but small (terrainBakedLbs 130/136 shows streaming was substantially complete).
+2. **Town Network: 8 classes with VFX set `deformation.windSwayGpu` config unresolvable** (`#?` token, counted as ONE config each) — the TN class count is a FLOOR on the vfx-config axis. Nanto resolved its configs fully.
+3. `@resident` = scene-ATTACHED population + cache maps; warm-parked LBs are detached and not walked (harness header). The @cached rows DID land (liveScene3d cache snapshot was live — the init3D-snapshot trap did not bite).
+
+### R-03 disposition (what T22 may and may not do)
+
+- **R-03 is now MEASURED, not assumed — and the answer is RE-EXAMINE.** The pass-7 S5.3 [A] figures (≤48 classes / ≤300 pools) do NOT hold for the S3 key as designed: 122/352 at Nanto.
+- **The fragmentation is one axis, not the design.** Remove texDims and both scenes are comfortably inside the class bound (30 / 26 ≤ 48). Every state axis except alphaTest contributes zero. The core key (domain|state|patch|shadow) is sound; the raw texture-dims byte (`x{log2 dims}{f7|f8}`) is the fragmentation vector — 92 of Nanto's 122 classes exist only because of it. Secondary contributors worth a look in the same re-examination: patchBias (+20 at Nanto — the row-31 floorBias distinctness) and full-precision alphaTest strings (+16/+12; three distinct values observed: 0, 0.392…, 0.784…).
+- **T22 MUST NOT size pools against ≤48/≤300** — per SPEC §3 T00 acceptance, pass 7's key design gets re-examined BEFORE T22 sizes anything. The concrete re-examination question for the orchestrator: fold/bucket the tex axis (e.g. atlas-tier buckets instead of raw log2 dims — the `f7|f8` format split alone costs only +4/+2), then re-reduce OFFLINE from the captured snapshots (`--reduce /mnt/wbterminal2/reeng/T00/census-class-{nanto,townnetwork}-2026-08-09.json`) — no new browser run needed to evaluate candidate keys.
+- Prewarm class-list artifact for T22: `docs/reengineering/impl/t00-class-census.json` (committed).
+- The 1070 confirm arm (F-11.13, GATE-POOLS) remains the census's second venue; this CI arm is the box-tagged first measurement.
+
+### Artifacts
+
+- RESULTS-v2: `/mnt/wbterminal2/reeng/T00/t00-results-v2.json`
+- Raw snapshots (re-reducible): `/mnt/wbterminal2/reeng/T00/census-class-nanto-2026-08-09.json`, `census-class-townnetwork-2026-08-09.json`
+- Run log: `/mnt/wbterminal2/reeng/T00/census-run3.log`
+- Class-list artifact: `docs/reengineering/impl/t00-class-census.json` (committed with this report)
