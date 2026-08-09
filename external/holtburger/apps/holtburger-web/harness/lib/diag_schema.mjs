@@ -208,7 +208,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.render",
     status: "current",
     reads: "object",
-    evidence: "scene3d/index.js:531",
+    evidence: "scene3d/index.js:543",
     availability: "in-world",
     note: "Per-frame renderer.info snapshot — every numeric here is a LEVEL "
       + "(PR-7: renderer.info.autoReset zeroes per frame; differencing a "
@@ -230,7 +230,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.vfxGauge",
     status: "current",
     reads: "object",
-    evidence: "scene3d/index.js:694",
+    evidence: "scene3d/index.js:706",
     availability: "flag:?vfxGauge=on",
     note: "Half-B timing meter. tCpuMs/tGpuMs are LAST-FRAME levels; frames is "
       + "the only counter. tGpuMs=-1 when N/A; SwiftShader GPU clock is not "
@@ -246,7 +246,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.wasmMem",
     status: "current",
     reads: "async-function",
-    evidence: "scene3d/index.js:4667",
+    evidence: "scene3d/index.js:4759",
     availability: "in-world",
     note: "Sums main + bake-worker hb_mem_census (src/lib.rs:11469-11593; "
       + "summarizeMemCensus in scene3d/mem_census.js:30-68). `missing` names "
@@ -317,7 +317,7 @@ export const REGISTRY = Object.freeze([
     name: "__landblockLru.getStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6042",
+    evidence: "scene3d/index.js:6134",
     availability: "late",
     retiresAt: "ST7",
     successor: "__diag.residency",
@@ -335,7 +335,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.textures",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:4697",
+    evidence: "scene3d/index.js:4789",
     availability: "flag:?texCensus=on",
     opaque: true,
     note: "WeakRef texture census (scene3d/texture_census.js). Returns null "
@@ -505,15 +505,22 @@ export const REGISTRY = Object.freeze([
 
   {
     name: "__framePhase",
-    status: "reserved",
+    status: "current",
     reads: "object",
-    spec: "pass-10 S3 (pass 8 S7, D-10.5 refinement)",
-    availability: "reserved:ST8",
-    note: "Phases publish BOTH last-frame (p0..p4) and cumulative (p0Ms..p4Ms + "
-      + "frames) — a per-frame-only vector cannot be differenced, which is "
-      + "the probe's entire method. Cumulative phase sums are reported under "
-      + "a separate `phases` section, NOT summed into explainedMs (they "
-      + "overlap the GL buckets).",
+    evidence: "scene3d/frame_work.js:657",
+    availability: "flag:?framePhase=on",
+    note: "T21 (ST8 stage A) — the GATE-PHASE census instrument, stamped by "
+      + "index.js via framePhaseBegin/Cut/Commit into the pass-08 S1 "
+      + "taxonomy (p0 SIM, p1 residency-class LRU block, p2 world ticks, "
+      + "p3 render, p4 stream slot). Phases publish BOTH last-frame "
+      + "(p0..p4) and cumulative (p0Ms..p4Ms + frames) — a per-frame-only "
+      + "vector cannot be differenced, which is the probe's entire method. "
+      + "Cumulative phase sums are reported under a separate `phases` "
+      + "section, NOT summed into explainedMs (they overlap the GL "
+      + "buckets). Deliberately independent of ?frameWork: re-classing the "
+      + "[A] budgets requires measuring the LEGACY arm, where p4 ≈ 0 and "
+      + "the families' between-frames work is invisible to the vector. "
+      + "Reduce with harness/frame-phase-census.mjs.",
     fields: {
       p0: L("ms"), p1: L("ms"), p2: L("ms"), p3: L("ms"), p4: L("ms"),
       p0Ms: C("ms", null, { attribution: false }),
@@ -527,20 +534,31 @@ export const REGISTRY = Object.freeze([
 
   {
     name: "__frameWork",
-    status: "reserved",
+    status: "current",
     reads: "object",
-    spec: "pass-10 S3 (pass 8 S7 verbatim)",
-    availability: "reserved:ST8",
-    note: "FrameWorkScheduler surface. Class rows W1..W6. mode is a LEVEL — "
-      + "TELEPORT/BOOT-labeled long frames are design-accepted (F6 excludes "
-      + "them); scoring only reads mode=NORMAL frames.",
+    evidence: "scene3d/frame_work.js:591",
+    availability: "boot",
+    note: "T21 (ST8 stage A) — FrameWorkScheduler surface, installed at "
+      + "module scope so a flag-OFF run reads {enabled:false, zeros} instead "
+      + "of probing a hole (__texWorkerStats convention). Class rows W1..W6 "
+      + "(stage A: only W6 has producers — the legacy families; W1..W5 fill "
+      + "at ST9). mode is a LEVEL — TELEPORT/BOOT-labeled long frames are "
+      + "design-accepted (F6 excludes them); scoring only reads mode=NORMAL "
+      + "frames. guardServices counts stale-guard slot services (no frame "
+      + "driver ran P4 within 250 ms — boot/hidden-tab/renderOnDemand). "
+      + "uploads.* is the stage-C shape, zeros until T22 lands staging.",
     fields: {
       "classes.*.ran": C("count"),
       "classes.*.deferredFrames": C("count"),
       "classes.*.forcedRuns": C("count"),
       "classes.*.maxItemMs": L("ms"),
       "classes.*.queueDepth": L("count"),
+      "classes.*.itemsThisFrame": L("count"),
       mode: L("enum", null, { note: "NORMAL | BOOT | TELEPORT | EMERGENCY | CROSSING" }),
+      enabled: L("bool"),
+      budgetMs: L("ms"),
+      teleports: C("count"),
+      guardServices: C("count"),
       "uploads.stagedBytesByClass": C("bytes", ["staged"]),
       "uploads.initTextureCalls": C("count"),
       "uploads.exclusive": L("json", null, { note: "ring 16" }),
