@@ -74,6 +74,15 @@
 import * as THREE from "three";
 import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
+// T13 (ST3, `?geomBundles`): HBG1 bundle consumption — armed only by
+// index.html's initGeomBundles (requires ?packSource); every reader below
+// is behind geomBundlesActive(), so the OFF arm is byte-identical legacy.
+import {
+  geomBundlesActive,
+  assembleModels as assembleGeomBundles,
+  bundleToGeometryGroups,
+  countGeomFallback,
+} from "./geom_bundles.js";
 // NB single line: test_static_batch.mjs / test_static_callpes.mjs load this
 // module by stripping `^\s*import .*$` LINE-wise, so a multi-line import
 // specifier list would leave a dangling `} from "./materials.js";`.
@@ -789,9 +798,47 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     };
   }
 
+  // T13 (`?geomBundles`): serve the batch from HBG1 bundles first — SYNC
+  // over pack-resident payloads, no walk, no starvation classes (SPEC §3
+  // T13 / pass 4 S4). Models WITHOUT a resident GEOM payload fall through
+  // to the legacy runtime decode below as a residue batch, counted
+  // (`__diag.geometry.geomFallback` — must trend to entity-only).
+  let legacyIds = uniqueModelIds;
+  if (geomBundlesActive()) {
+    const res = assembleGeomBundles(uniqueModelIds);
+    if (res) {
+      for (const [id, entry] of res.byModel) {
+        const { groups, surfaceDids: dids } = bundleToGeometryGroups(
+          entry,
+          res.buffer
+        );
+        for (const did of dids) allSurfaceDids.add(did >>> 0);
+        const dd = (entry.didDegrade ?? 0) >>> 0;
+        if (dd !== 0) didDegradeByModel.set(id, dd);
+        if (groups && groups.length > 0) {
+          stampStaticContentKeys(id, groups);
+          groupsByModel.set(id, groups);
+        } else {
+          skippedZeroTri += 1; // genuinely-empty model (physics-only class)
+        }
+      }
+      legacyIds = res.missingIds;
+      if (legacyIds.length > 0) countGeomFallback(legacyIds.length);
+      if (legacyIds.length === 0) {
+        return {
+          groupsByModel,
+          didDegradeByModel,
+          allSurfaceDids,
+          skippedZeroTri,
+          starvedCount,
+        };
+      }
+    }
+  }
+
   let meshes;
   try {
-    meshes = await fetchModelMeshes(new Uint32Array(uniqueModelIds));
+    meshes = await fetchModelMeshes(new Uint32Array(legacyIds));
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[scene3d.statics] fetch_model_meshes batch failed:", e);
@@ -808,8 +855,8 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
   // geom-audit (2026-07-02): collect every dropped model id + reason so
   // the batch warn below makes silent scene holes impossible.
   const droppedModelIds = [];
-  for (let i = 0; i < uniqueModelIds.length; i += 1) {
-    const id = uniqueModelIds[i];
+  for (let i = 0; i < legacyIds.length; i += 1) {
+    const id = legacyIds[i];
     const m = meshes[i];
     if (!m) {
       droppedModelIds.push({ id: id >>> 0, reason: "no-mesh" });
@@ -870,7 +917,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
   if (droppedModelIds.length > 0) {
     // eslint-disable-next-line no-console
     console.warn(
-      `[geom-audit] statics: ${droppedModelIds.length}/${uniqueModelIds.length} models dropped from bake: ` +
+      `[geom-audit] statics: ${droppedModelIds.length}/${legacyIds.length} models dropped from bake: ` +
         droppedModelIds.map((d) => `0x${d.id.toString(16)}(${d.reason})`).join(" ")
     );
   }
@@ -1034,9 +1081,34 @@ async function fetchDegradedGeometries(
     ),
   ];
   const groupsByGfxId = new Map();
+  // T13 (`?geomBundles`): degrade-band 0x01 geometries are ordinary kind-0
+  // payloads (the T10 walk carries did_degrade->LOD-GfxObj edges), so the
+  // bundle path serves them the same way; the residue rides the legacy
+  // batch below, counted.
+  let legacyGfxIds = uniqueGfxIds;
+  if (geomBundlesActive()) {
+    const res = assembleGeomBundles(uniqueGfxIds);
+    if (res) {
+      for (const [gid, entry] of res.byModel) {
+        const { groups } = bundleToGeometryGroups(entry, res.buffer);
+        if (groups && groups.length > 0) {
+          const bySurface = new Map();
+          for (const g of groups) {
+            bySurface.set(degradedSurfaceKey(g.surfaceDid, g.doubleSided), g.geometry);
+          }
+          groupsByGfxId.set(gid, bySurface);
+        }
+      }
+      legacyGfxIds = res.missingIds;
+      if (legacyGfxIds.length > 0) countGeomFallback(legacyGfxIds.length);
+    }
+  }
   try {
-    const meshes = await fetchModelMeshes(new Uint32Array(uniqueGfxIds));
-    for (let i = 0; i < uniqueGfxIds.length; i += 1) {
+    const meshes =
+      legacyGfxIds.length > 0
+        ? await fetchModelMeshes(new Uint32Array(legacyGfxIds))
+        : [];
+    for (let i = 0; i < legacyGfxIds.length; i += 1) {
       const m = meshes[i];
       if (!m || m.triCount === 0) {
         if (m && typeof m.free === "function") m.free();
@@ -1056,7 +1128,7 @@ async function fetchDegradedGeometries(
         for (const g of groups) {
           bySurface.set(degradedSurfaceKey(g.surfaceDid, g.doubleSided), g.geometry);
         }
-        groupsByGfxId.set(uniqueGfxIds[i], bySurface);
+        groupsByGfxId.set(legacyGfxIds[i], bySurface);
       }
       if (typeof m.free === "function") m.free();
     }
