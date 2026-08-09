@@ -58,6 +58,7 @@ use holtburger_manifest::{
 use crate::concurrency::{DEFAULT_FETCH_CONCURRENCY, Semaphore};
 use crate::http::{FetchPriority, HttpError, fetch_bytes, fetch_bytes_with_priority, join_url};
 use crate::inflight::InflightMap;
+use crate::pack::PackSource;
 use crate::shard_cache::ShardCache;
 use crate::manifest_source_v1::ManifestResourceSourceV1;
 
@@ -331,6 +332,14 @@ pub struct V2Source {
     /// longer stack to a 218-deep fetch burst against the browser's
     /// 6-connection/origin HTTP/1.1 limit.
     fetch_sem: Semaphore,
+    /// T12 (`?packSource`, SPEC §1.1 / pass 3 S1.3): the CompositeSource
+    /// seam. `None` (the OFF arm / no pack dist) is byte-identical legacy
+    /// behavior. When attached: reads consult packs FIRST (pack → boot →
+    /// shards) and `prefetch` skips pack-served keys — a pack-resident
+    /// record must never be re-fetched per-record. Attached once at boot
+    /// by `pack_source_init` (main instance only at T12; the bake worker
+    /// keeps the pure legacy path until the ST7 lease machinery).
+    packs: Mutex<Option<Arc<PackSource>>>,
 }
 
 impl ManifestResourceSource {
@@ -440,6 +449,28 @@ impl ManifestResourceSource {
             Self::V2(s) => s.loaded_catalog_count(),
         }
     }
+
+    /// T12 (`?packSource`): arm the CompositeSource seam — subsequent
+    /// reads consult `pack` first and `prefetch` skips pack-served keys.
+    /// Returns `false` (not attached) on the deprecated v1 path: v1
+    /// predates the pack format and carries no seam by design.
+    pub fn attach_pack_source(&self, pack: Arc<PackSource>) -> bool {
+        match self {
+            Self::V1(_) => false,
+            Self::V2(s) => {
+                s.attach_pack_source(pack);
+                true
+            }
+        }
+    }
+
+    /// The attached pack source, if any (diag / the wasm glue).
+    pub fn pack_source(&self) -> Option<Arc<PackSource>> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(s) => s.pack_source(),
+        }
+    }
 }
 
 impl ResourceSource for ManifestResourceSource {
@@ -516,7 +547,27 @@ impl V2Source {
             base_url,
             inflight: Arc::new(InflightMap::new()),
             fetch_sem: Semaphore::new(configured_fetch_concurrency()),
+            packs: Mutex::new(None),
         })
+    }
+
+    /// T12: arm the composite (pack-first) read path. Idempotent-ish —
+    /// a second attach replaces the first (only exercised by tests; the
+    /// page attaches once at boot).
+    fn attach_pack_source(&self, pack: Arc<PackSource>) {
+        *self.packs.lock().expect("pack seam mutex poisoned") = Some(pack);
+    }
+
+    fn pack_source(&self) -> Option<Arc<PackSource>> {
+        self.packs.lock().expect("pack seam mutex poisoned").clone()
+    }
+
+    /// Pack-resident probe used by the prefetch skip + read paths.
+    fn pack_serves(&self, key: ResourceKey<'_>) -> bool {
+        match &*self.packs.lock().expect("pack seam mutex poisoned") {
+            Some(p) => p.serves(key),
+            None => false,
+        }
     }
 
     /// v2 prefetch: lazy-fetch any per-namespace catalogs we don't
@@ -532,11 +583,20 @@ impl V2Source {
     /// behind the speculative ring bakers' shard flood. See
     /// [`ManifestResourceSource::prefetch_urgent`].
     async fn prefetch_impl(&self, keys: &[ResourceKey<'_>], urgent: bool) -> Result<(), PrefetchError> {
-        // Step A: filter out boot-served + already-cached keys.
+        // Step A: filter out pack-served + boot-served + already-cached keys.
+        // T12: a pack-resident record is already verified bytes in this
+        // instance — re-fetching it per-record would double the wire cost
+        // the pack lane exists to delete (pass 3 S1.3/S1.4).
+        let pack = self.pack_source();
         let mut work_keys: Vec<OwnedKey> = Vec::new();
         {
             let mut cached = self.shards.lock().expect("shard cache mutex poisoned");
             for key in keys {
+                if let Some(p) = &pack
+                    && p.serves(*key)
+                {
+                    continue;
+                }
                 if self.boot_serves(*key) {
                     continue;
                 }
@@ -925,7 +985,15 @@ impl V2Source {
 
     /// Legacy owned-bytes read. Kept byte-for-byte identical for every caller
     /// that still wants a `Vec<u8>`; hot readers use [`Self::get_file_shared`].
+    /// T12: packs consult FIRST (CompositeSource order, pass 3 S1.3) — bake
+    /// determinism makes pack bytes identical to shard bytes for the same
+    /// record, so consult order cannot change served content, only its source.
     fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+        if let Some(p) = self.pack_source()
+            && let Ok(bytes) = p.get_file_by_key(key)
+        {
+            return Ok(bytes);
+        }
         if let Ok(bytes) = self.boot.get_file_by_key(key) {
             return Ok(bytes);
         }
@@ -948,6 +1016,11 @@ impl V2Source {
     /// `HbaReader` copies out of its backing buffer), so that path allocates
     /// exactly as it did before, no worse than the trait default.
     fn get_file_shared(&self, key: ResourceKey<'_>) -> DatResult<Arc<Vec<u8>>> {
+        if let Some(p) = self.pack_source()
+            && let Ok(bytes) = p.get_file_by_key(key)
+        {
+            return Ok(Arc::new(bytes));
+        }
         if let Ok(bytes) = self.boot.get_file_by_key(key) {
             return Ok(Arc::new(bytes));
         }
@@ -966,6 +1039,11 @@ impl V2Source {
     }
 
     fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+        if let Some(p) = self.pack_source()
+            && let Some(meta) = p.get_metadata_by_key(key)
+        {
+            return Some(meta);
+        }
         if let Some(meta) = self.boot.get_metadata_by_key(key) {
             return Some(meta);
         }
@@ -998,6 +1076,13 @@ impl V2Source {
     /// [`Self::get_file_by_key`], so only this probe may authorize a
     /// permanent memo.
     fn key_known_absent(&self, key: ResourceKey<'_>) -> bool {
+        // T12: a pack-RESIDENT record is present by construction — without
+        // this guard a packs-only dist (no catalogs) or a catalog that
+        // doesn't list a pack-served key would let the negative caches
+        // latch a record this source is actively serving.
+        if self.pack_serves(key) {
+            return false;
+        }
         if self.boot_serves(key) {
             return false;
         }

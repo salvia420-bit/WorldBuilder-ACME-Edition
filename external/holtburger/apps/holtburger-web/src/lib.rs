@@ -1299,6 +1299,10 @@ extern "C" {
 #[cfg(target_arch = "wasm32")]
 mod global_source;
 
+// T12 (ST2, `?packSource`): controller→PackSource admission exports.
+#[cfg(target_arch = "wasm32")]
+mod pack_source_glue;
+
 #[cfg(target_arch = "wasm32")]
 mod prefetch;
 
