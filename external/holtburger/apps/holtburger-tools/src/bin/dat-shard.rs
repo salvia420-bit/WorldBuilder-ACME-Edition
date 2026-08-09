@@ -9,7 +9,9 @@ use holtburger_tools::boot_verify::{EXIT_NOT_FULLY_PACKABLE, format_report, veri
 use holtburger_tools::dat_shard::{
     BakeOutput, DEFAULT_MANIFEST_VERSION, DatShardOptions, parse_hex_u32, shard_bundle_dispatch,
 };
-use holtburger_tools::error::Result;
+use holtburger_tools::error::{Result, ToolError};
+use holtburger_tools::pack_bake::{PackBakeOptions, RegionRect, emit_packs};
+use holtburger_tools::pack_format::PACK_ZSTD_LEVEL;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -100,30 +102,184 @@ struct Args {
     /// leaves the produced files untouched.
     #[arg(long)]
     verify_boot_reachability: bool,
+
+    // ---- T10 pack emission (pipeline re-engineering ST1) --------------
+
+    /// Emit the HBP1/HBSI1 pack world (T10 dual-emit). Requires
+    /// `--eor-portal` + `--eor-cell` (the pack bake reads the canonical
+    /// DATs on demand). Without `--legacy-layers` this SKIPS the legacy
+    /// shard/catalog/boot.hba emission and only adds packs beside an
+    /// existing `manifest.json`.
+    #[arg(long)]
+    emit_packs: bool,
+
+    /// With `--emit-packs`: ALSO run the legacy emission (unchanged code
+    /// path — the dual-emit shape SPEC §3 T10 requires). Without
+    /// `--emit-packs` this flag is a no-op (legacy is the default).
+    #[arg(long)]
+    legacy_layers: bool,
+
+    /// Per-LB scenery JSONL dir (`0xXXYY.scenery.jsonl`) folded into
+    /// tile-pack PLACEMENTS sections + walked for closure roots.
+    #[arg(long, value_name = "DIR")]
+    scenery_dir: Option<PathBuf>,
+
+    /// Per-LB spawns JSONL dir, folded verbatim (zstd) into SPAWNS.
+    #[arg(long, value_name = "DIR")]
+    spawns_dir: Option<PathBuf>,
+
+    /// Per-LB events JSONL dir, folded verbatim (zstd) into EVENTS.
+    #[arg(long, value_name = "DIR")]
+    events_dir: Option<PathBuf>,
+
+    /// Extra preview HBC7 dir covering xu7-only rsIds (output of
+    /// `apps/holtburger-tools/scripts/derive-pvw-xu7.mjs`).
+    #[arg(long, value_name = "DIR")]
+    tex_pvw_extra: Option<PathBuf>,
+
+    /// t1024 terrain payload dir (`<rsId>_color.hbc7` + `<rsId>_nra.hbc7`,
+    /// e.g. apps/holtburger-web/scene3d/assets/terrain_bc7/t1024) — the
+    /// t128 boot slice (one CAS file per channel) is mip-sliced from it.
+    #[arg(long, value_name = "DIR")]
+    terrain_bc7_dir: Option<PathBuf>,
+
+    /// Bound the pack bake to LB rectangles `X0Y0:X1Y1` (hex corners,
+    /// inclusive; repeatable). Default: full world (buildbox-scale).
+    #[arg(long, value_name = "RECT")]
+    pack_region: Vec<String>,
+
+    /// zstd level for pack sections. Level is part of the deterministic
+    /// emission contract — leave at default for comparable bakes.
+    #[arg(long, default_value_t = PACK_ZSTD_LEVEL)]
+    pack_zstd_level: i32,
+
+    /// Re-open every emitted pack and fail loud on any dangling REFS
+    /// edge or missing declared preview (generalizes
+    /// `--verify-boot-reachability` to the pack world).
+    #[arg(long)]
+    verify_closure: bool,
+
+    /// Re-emit each pack a second time in-process and fail on any byte
+    /// difference (intra-run determinism check; BAKE-CI's double-run
+    /// covers cross-run determinism).
+    #[arg(long)]
+    verify_deterministic: bool,
 }
 
 impl Args {
-    fn into_options(self) -> DatShardOptions {
+    fn shard_options(&self) -> DatShardOptions {
         DatShardOptions {
-            input_hba: self.input,
-            eor_portal: self.eor_portal,
-            eor_cell: self.eor_cell,
-            eor_local: self.eor_local,
+            input_hba: self.input.clone(),
+            eor_portal: self.eor_portal.clone(),
+            eor_cell: self.eor_cell.clone(),
+            eor_local: self.eor_local.clone(),
             boot_landblock: self.boot_landblock,
-            output_dir: self.output,
+            output_dir: self.output.clone(),
             manifest_version: self.manifest_version,
-            tex_bc7: self.tex_bc7,
-            tex_bc7_pre: self.tex_bc7_pre,
-            tex_xu7: self.tex_xu7,
+            tex_bc7: self.tex_bc7.clone(),
+            tex_bc7_pre: self.tex_bc7_pre.clone(),
+            tex_xu7: self.tex_xu7.clone(),
         }
+    }
+
+    fn pack_options(&self) -> Result<PackBakeOptions> {
+        let (Some(portal), Some(cell)) = (&self.eor_portal, &self.eor_cell) else {
+            return Err(ToolError::Validation(
+                "--emit-packs requires --eor-portal and --eor-cell (the pack \
+                 bake reads the canonical DATs on demand)"
+                    .into(),
+            ));
+        };
+        let regions = if self.pack_region.is_empty() {
+            None
+        } else {
+            Some(
+                self.pack_region
+                    .iter()
+                    .map(|s| RegionRect::parse(s))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(ToolError::Validation)?,
+            )
+        };
+        Ok(PackBakeOptions {
+            eor_portal: portal.clone(),
+            eor_cell: cell.clone(),
+            scenery_dir: self.scenery_dir.clone(),
+            spawns_dir: self.spawns_dir.clone(),
+            events_dir: self.events_dir.clone(),
+            tex_bc7: self.tex_bc7.clone(),
+            tex_bc7_pre: self.tex_bc7_pre.clone(),
+            tex_xu7: self.tex_xu7.clone(),
+            tex_pvw_extra: self.tex_pvw_extra.clone(),
+            terrain_bc7_dir: self.terrain_bc7_dir.clone(),
+            regions,
+            boot_landblock: self.boot_landblock,
+            output_dir: self.output.clone(),
+            zstd_level: self.pack_zstd_level,
+            verify_closure: self.verify_closure,
+            verify_deterministic: self.verify_deterministic,
+        })
     }
 }
 
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
+
+    // T10 dual-emit routing: legacy runs unless --emit-packs was given
+    // WITHOUT --legacy-layers. The legacy path is byte-identical to the
+    // pre-T10 emitter (it is the same code).
+    let run_legacy = !args.emit_packs || args.legacy_layers;
+    if args.emit_packs {
+        // Validate pack options BEFORE the (long) legacy bake runs.
+        args.pack_options()?;
+    }
+    if run_legacy {
+        run_legacy_bake(&args)?;
+    }
+    if args.emit_packs {
+        let popts = args.pack_options()?;
+        println!("dat-shard: emitting HBP1/HBSI1 packs (T10)...");
+        let report = emit_packs(&popts)?;
+        println!(
+            "dat-shard: packs — {} packs / {:.1} MB (+ index {:.1} KB), \
+             {} tiles / {} interiors / {} LBs, scope {}",
+            report.packs_emitted,
+            report.pack_bytes_total as f64 / (1024.0 * 1024.0),
+            report.index_bytes as f64 / 1024.0,
+            report.tiles,
+            report.interiors,
+            report.landblocks,
+            report.scope,
+        );
+        println!(
+            "dat-shard: texref — {} rows, missingPvw={}, legacyOnly={}, \
+             pvw bytes {:.2} MB (pre {} / full {} / extra {}, unsliceable {})",
+            report.texref_rows,
+            report.texref_missing_pvw,
+            report.texref_legacy_only,
+            report.pvw_bytes_total as f64 / (1024.0 * 1024.0),
+            report.pvw_from_pre,
+            report.pvw_from_full,
+            report.pvw_from_extra,
+            report.pvw_unsliceable,
+        );
+        if report.texref_missing_pvw > 0 {
+            eprintln!(
+                "dat-shard: WARNING {} TEXREF'd rsId(s) have a compressed full \
+                 tier but no preview (D-05.5.4 coverage violation — see \
+                 pvw_wanted_from_xu7 in pack-report.json; run \
+                 scripts/derive-pvw-xu7.mjs and re-bake with --tex-pvw-extra)",
+                report.texref_missing_pvw
+            );
+        }
+    }
+    Ok(())
+}
+
+fn run_legacy_bake(args: &Args) -> Result<()> {
     let verify_boot = args.verify_boot_reachability;
-    let opts = args.into_options();
+    let opts = args.shard_options();
     println!(
         "dat-shard: starting (manifest v{})...",
         opts.manifest_version

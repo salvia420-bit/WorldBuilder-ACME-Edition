@@ -2,6 +2,8 @@ pub mod boot_verify;
 pub mod dat2hba;
 pub mod dat_shard;
 pub mod error;
+pub mod pack_bake;
+pub mod pack_format;
 pub mod spell_export;
 
 pub use boot_verify::{EXIT_NOT_FULLY_PACKABLE, format_report, verify_boot_pack};
