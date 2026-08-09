@@ -75,6 +75,22 @@ transcripts are dead to a new session — verify from committed state, do not Se
 - T00: BLOCKED (census tooling done; live run needs RAM headroom + ACE up). Rerun is
   one command (see impl/task-T00-report.md) when the box is quiet and ACE restarted.
 
+## 3b. SESSION PLAN 2026-08-09 (user-authorized ~08:45): after the bake is managed
+(RUN2 green → deploy script → push), run THREE passes of TWO Fable agents each on the
+spec queue, then PAUSE. Pairings honor the slot policy (≤1 wasm-touching per pass):
+- Pass 1: T20-finish (brief: /mnt/wbterminal2/reeng/T20-recovery-brief-2026-08-09.md)
+  + T30 Batch-A queue-file prep (docs-only, pass-10 format).
+- Pass 2: T13 geom bundles (critical path W1) + T31/T32 queue-file prep (docs-only).
+- Pass 3: T15 compressed-only tex + T16 q75 encode prep (buildbox-side, disjoint box).
+Deploy tooling ready: /mnt/wbterminal2/reeng/orch-bake/deploy-packs-to-dist.sh
+(CAS sha-verify → additive-only manifest check → rsync packs/+index/ → merge
+world_index/pack_url_template → provenance copy → serve.py --check). Supports --dry-run.
+- D4 (T11 plugin-lane) ORCHESTRATOR CALL, recorded: option (a) — accept the plugin
+  dynamic-import lane as a per-file class for v1; record it in the B2 ledger when the
+  T30 comparative arms run; revisit (b) --splitting / (c) loader-map post-v1. Rationale:
+  (a) is the only no-code-change reversible option and the shell component itself still
+  meets ≈8.
+
 ## 4. TASK QUEUE (after the bake settles)
 
 Done: T01 T02 T10 T12 T14 T21 (+T11 pending verification). Blocked: T00 (RAM/ACE).
