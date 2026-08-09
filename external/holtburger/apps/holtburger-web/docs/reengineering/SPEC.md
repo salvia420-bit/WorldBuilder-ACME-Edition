@@ -304,7 +304,9 @@ blackness); dispose only with tile residency. M4 census ≈ 220–260 MB [D] vs 
   animated-scenery InstancedMesh paths KEPT; entities excluded (charter).
 - **Class key** (produced only by `classKeyOf`): domain | renderState (`_stateKeyOf`
   axes + side) | programPatchSet (`_patchSetCacheKey` verbatim + VFX set#config) |
-  textureArrayId (TEXREF dims+format) | shadowPair. Row 31 is unrepresentable by
+  textureArrayPage (page TIER: square pow2 page 256²/512²/1024²/2048² = clamp-ceil of
+  the max TEXREF dim, + format f7|f8; members resampled to page dims at bake/transcode
+  — raw dims retired from the key, T00 re-key 2026-08-09) | shadowPair. Row 31 is unrepresentable by
   construction (every clone family is a distinct class by its existing bit). ONE
   material object per class ⇒ material.id sort adjacency ⇒ attacks the 71%
   switch-rate / 160-program-switch term at its own scale (no ms prediction — walls).
@@ -464,7 +466,9 @@ fire only on the noise-floor rule (§1.7), never cross-boot single shots.
 **T00 — CENSUS-CLASS spike** *(S)* — [F-11.13] Run the class-cardinality census over
 TODAY'S materials (CI arm, quality mid): classifier over live MaterialCache
 populations at settled Nanto + Town Network. **Acceptance:** report published; classes
-≤ ~48 / projected pools ≤ ~300, or pass 7's key design is re-examined BEFORE T22 sizes
+total classes ≤ ~72 / program classes (key modulo tex axis) ≤ ~48 / projected pools
+≤ ~300 (page-tier key per the T00 re-key 2026-08-09), or pass 7's key design is
+re-examined BEFORE T22 sizes
 anything. **Kill:** n/a (information). Feeds: T22 sizing, the prewarm list, R-03.
 
 **T01 — Harness foundation** *(S)* — diag-schema registry + Tier-1 lint
@@ -647,7 +651,7 @@ the stage/gate at which the row must close or escalate.
 |---|---|---|---|
 | R-01 | **B1 slack stack**: ring-preview cap figure (1.6 vs 2.5 MB), HBG1 zstd ratio (≥ 0.7 [A]), post-coverage preview adds (±0.4 MB [F-11.16]), widened-closure commons bytes [D-12.5]. Levers if breached: t64 slice (−0.47), PVW-regional deferral, tiering parameters | BAKE-CI ratio report + POST-coverage ring re-score (T10) | GATE-BAKE / GATE-WIRE-BOOT |
 | R-02 | **ST-SHELL feasibility** (bundling an importmap-era no-npm tree). Pre-specified fallback: B2 → world-data ≤ 64 + shell budgeted separately at measured N; B5 likewise; SUPERSEDES of charter S2 network-layer wording lands with it | ST-SHELL task + owner call | before B2/B5 absolutes bind (ST5) |
-| R-03 | **Class cardinality closed set** — pass 7's most load-bearing [A] (prewarm list, switch-rate attack, node budget all lean on it); VFX config tokens are the fragmentation vector | T00 spike (CI) + GATE-POOLS 1070 confirm | T00 (pre-implementation) |
+| R-03 | **Class cardinality closed set** — pass 7's most load-bearing [A] (prewarm list, switch-rate attack, node budget all lean on it); VFX config tokens are the fragmentation vector. MEASURED 2026-08-09 (T00 census + re-key): texDims was the real fragmentation vector (+92 classes), resolved by the page-tier key — 63 cls/271 pools Nanto, 51/238 TN, program classes 24/23, zero layer-share violations (impl/t00-rekey-proposal-2026-08-09.md) | T00 spike (CI) + GATE-POOLS 1070 confirm | CLOSED-as-measured pending the GATE-POOLS 1070 confirm arm |
 | R-04 | **ST6 owner elections**: q75 verdict + the B4a terrain election (§0.2.1 arms priced) | redmi, recorded in writing at ST6 | GATE-Q75 |
 | R-05 | **1070 batch cadence** — three owner sessions serialize the structural promotions; DEV soaking continues if cadence slips | scheduling reality; batches carry many items, probes piggyback | ongoing |
 | R-06 | **Run-speed assumption under C5** (4–7 m/s [A]; margins safe to ~26 m/s but the measured margin is the assumption restated) [F-11.14] | one-shot live-ACE max-sustained-speed measurement; CROSS-COL cadence derives from it; velocity-adaptive lookahead = escape | before GATE-GRID scores C5 |

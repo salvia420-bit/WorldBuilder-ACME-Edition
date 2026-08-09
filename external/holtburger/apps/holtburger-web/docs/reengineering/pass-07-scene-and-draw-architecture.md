@@ -149,14 +149,16 @@ D-01.7 rejected it with rationale; nothing here re-opens it).
 **The class key (normative encoding in S3):**
 
 ```
-MatClassKey = domain | passClass | renderState | programPatchSet | textureArrayId | shadowPair
+MatClassKey = domain | passClass | renderState | programPatchSet | textureArrayPage | shadowPair
   domain          outdoor-static · envcell · (terrain, animscenery: reserved labels)
   passClass       opaque · additive · translucent      (derived from renderState; D-07.3)
   renderState     transparent, alphaTest (exact string), depthWrite,
                   blending (mode | custom src.dst.eq triple), wrapS, side
   programPatchSet the _patchSetCacheKey axes verbatim: d,c,p,l,a,b,f,s,k bits
                   + vfxSetKey#configKey token (materials.js:553–583; statics.js:1782–1818)
-  textureArrayId  (log2 w << 4 | log2 h) from pass 5 TEXREF dims + format (f7|f8)
+  textureArrayPage  array-page tier: square pow2 page 256²–2048² (clamp-ceil of the
+                  max TEXREF dim) + format (f7|f8); members resampled to page dims
+                  (T00 re-key 2026-08-09 — raw dims retired from the key)
   shadowPair      castShadow, receiveShadow (node-level flags → pool-level)
 ```
 
@@ -172,7 +174,7 @@ record:**
   patch-set discriminator fuses a depth-biased floor into an unbiased bucket.** The
   unified key carries every `_patchSetCacheKey` bit BY CONSTRUCTION, so the row-31
   failure is unrepresentable: a floorBias variant is a different class, full stop.
-  `textureArrayId` is forced by `texStorage3D` (format/w/h/depth fixed at allocation —
+  `textureArrayPage` is forced by `texStorage3D` (format/w/h/depth fixed at allocation —
   the frame-cost §5 banner's own correction: "7 render states is not the floor").
   `shadowPair` is forced by three (cast/receive are node flags; one pool = one value —
   the trade buildings already accepted, buildings.js:112–115).
@@ -609,7 +611,15 @@ String form (order fixed; produced only by `classKeyOf`, never hand-built):
  patch  = _patchSetCacheKey(material) verbatim (materials.js:553–583), which already
           canonicalizes d,c,p,l,a,b,f,s,k + "|v"+vfxSetKey; the pool key appends
           "#"+configKey for MECH-B sets (statics.js:1793 token rule)
- tex    = x{(log2w<<4|log2h) hex}{f7|f8}    (pass 5 TEXREF dims byte + format)
+ tex    = x{t}{f7|f8}   (ARRAY-PAGE TIER + format; t = log2 page edge ∈ {8,9,10,11}
+          — square pow2 pages 256²/512²/1024²/2048²,
+          t = clamp(ceil(log2(max(TEXREF w, TEXREF h))), 8, 11). Members whose
+          native dims ≠ page dims are stored RESAMPLED (upscaled) to page dims at
+          bake/transcode time — every layer fully covered, so wrap, full mip
+          chains and aniso stay legal. Raw-dims keying is RETIRED from the class
+          key: it fragmented the census (+92 classes at Nanto; T00 re-key
+          2026-08-09). Tier derives from TEXREF-DECLARED dims (D-05.6.2: identity
+          before payload; class identity stable across preview→full).)
  shadow = c{0|1}r{0|1}
 ```
 
@@ -652,7 +662,10 @@ level, exactly as `?buildingBatch` shipped it (buildings.js:112–115).
    into `__diag.residency()` per pass 6 H-06.1; allocated ≤ 1.5× used at steady state is
    the M6 gate, enforced by the lazy optimize() compaction threshold.
 3. **Census gates (pass 10 wiring):** `pools.count ≤ 300` at settled Nanto (else the
-   class key is fragmenting — investigate before shipping) [A]; `classes.count` reported
+   class key is fragmenting — investigate before shipping) [M: 271 Nanto / 238 TN
+   under the page-tier key, T00 re-key 2026-08-09]; `classes.count ≤ ~72` [A;
+   measured 63/51 late-burst] with `programClasses.count ≤ ~48` (the class key modulo
+   the tex axis — the D-07.9 program population; measured 24/23); `classes.count` reported
    and `classesCreatedPostBoot = 0` after ring settle (D-07.9); `poolMutationsPerFrame
    = 0` on parked frames (S2 invariant); `switchRate` (fraction of draws changing
    material — the 71% baseline) and `programSwitches` (the 160 baseline) sampled by the
