@@ -27,8 +27,17 @@ futures = { workspace = true }
 [dev-dependencies]
 # Native test runner for `inflight` dedup tests.
 tokio = { workspace = true, features = ["rt", "macros", "time", "rt-multi-thread", "sync"] }
+# T12 pack_source_region tests parse pack-report.json from the T10 bake.
+serde_json = { workspace = true }
+
+# T12 (`pack` module): section decompression. Same target fork as
+# holtburger-dat — C-backed `zstd` native, pure-Rust `ruzstd` on wasm32
+# (no C cross-compiler in the wasm toolchain).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zstd = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+ruzstd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

@@ -1579,11 +1579,13 @@ dependencies = [
  "holtburger-manifest",
  "js-sys",
  "log",
+ "ruzstd",
  "serde_json",
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "zstd",
 ]
 
 [[package]]

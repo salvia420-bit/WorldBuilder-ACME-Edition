@@ -46,6 +46,12 @@ pub(crate) mod shard_cache;
 // `get_file_shared` forward can be gate-tested natively. See recording.rs.
 pub mod recording;
 pub use recording::RecordingSource;
+// T12 (ST2, `?packSource`): HBP1/HBSI1 readers + PackSource/CompositeSource.
+// Target-agnostic so the exact client code paths are pinned natively against
+// T10's real baked region (tests/pack_source_region.rs); only the zstd
+// backend forks by target (same pattern as holtburger-dat/src/archive.rs).
+pub mod pack;
+pub use pack::{CompositeSource, PackSource};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod http;
