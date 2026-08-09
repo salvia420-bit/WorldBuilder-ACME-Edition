@@ -33,12 +33,23 @@ Read both before acting. This file is the volatile state those don't carry.
   target pack for EVERY REFS edge (`HbpReader::parse(&pack_bytes[*target])` +
   `record_stream` per record edge). O(edges × pack-parse), finite but unbounded-slow at
   full-world scale (hot targets = the big commons packs). No progress output exists.
-- DECISION (deadline rule): let it grind while the docs-only agent pass runs. At pass
-  end (~2 h), if not DONE: kill RUN2, apply the memoized fix to `verify_closure`
-  (pre-parse each pack's record-key set ONCE into a map, then O(1) edge checks —
-  orchestrator's bake-infra lane), rebuild dat-shard in the then-free jail, prove
-  bounded BAKE-CI green + byte-identity vs ci-run1-shas.txt, re-run RUN2 (emission
-  ≈2h22m + fast verify). Deterministic emission makes the re-run byte-safe.
+- DEADLINE EXECUTED ~12:40: pass 1 ended (11 min) with the verifier still grinding
+  (5.6 h in verify_closure) → killed RUN2, landed the memoized fix (`7d44572b` —
+  per-pack key sets, O(packs) parses; bake_ci_bounded_region GREEN with both verify
+  flags, 160 s). 12:49 relaunch DOUBLE-STARTED by accident (two instances shared the
+  OUT dir ~70 s) — both killed, contaminated dir quarantined as
+  `world-packs-CONTAMINATED-double-launch-DELETE-ME` (safe to delete anytime; rm was
+  permission-blocked for the orchestrator).
+- RUN2-FIXED launched CLEAN 13:03:12 (single instance, bin sha a3ed14123bb90a58,
+  log `driver2.log`): verified emission only (RUN1+derive results stand; pvw-extra
+  populated). Ends with a byte-compare vs `world-packs-run2-unverified/` (the intact
+  07:06 emission — emission code untouched by the verifier fix, so packs must be
+  byte-identical; a diff = STOP). ETA ≈2.5 h (~15:30). Deploy gate now reads
+  driver2.log. USER DIRECTIVE ~12:45: let it bake properly — NO agents until the bake
+  is DONE (passes 2/3 wait).
+- MEMORY-STALE (notify owner, do not edit MEMORY.md): `kickDance=1` in the
+  §chrome-testing headless-login recipe has NO reader on HEAD (removed s13);
+  `kickWaitMs` is the real knob — T30's queue prep read-verified this.
 - The emitter's rayon patch is commit `4d24594c` — byte-identity proven vs the
   sequential baseline on bounded BAKE-CI (see commit body).
 - `world-packs-crashed-run1/` is the pre-incident partial output — delete when the
