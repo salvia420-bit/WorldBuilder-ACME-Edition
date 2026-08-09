@@ -19,7 +19,7 @@
   "batchPrerequisites": [
     "T15 (ST5, `?texCompressedOnly`) LANDED with its node battery green — flag is SPEC-named but NOT at HEAD 2026-08-09 (T31 prep precedes T15 per the T31-gates-T15 queue order); re-verify the reader's exact-match semantics + any URL spelling against T15's url-flags.md row at go-time.",
     "Full-world DUAL dist (packs + legacy layers) deployed and serve.py --check green — the T10 buildbox handoff; both arms of every eye pair must run against the SAME dist.",
-    "E4 additionally: T16 (ST6) q75 corpus baked and its contact sheets regenerated at /mnt/wbterminal2/xubc7-proto/results/sheets/ (dir exists at prep time but holds the earlier proto q20/ab pairs, not q75).",
+    "E4 additionally: T16 (ST6) q75 corpus baked and its contact sheets regenerated at /mnt/wbterminal2/xubc7-proto/results/sheets/ — DONE 2026-08-09 (T16): corpus at /mnt/wbterminal2/xubc7-corpus-q75/ (3,985 ktx2, sha-manifest q75-corpus.sha256, PROVENANCE.md); sheets are the 36 <rsId>_q75.png files (SOURCE|LOSSLESS|q75 panels; the older proto q20/ab pairs remain alongside).",
     "E5 pull-in option (pass-9 D-09.5): if T20 stage-4's report is green before this session runs, item E5 may be pulled from batch-C-2026-08-09.json into this session UNCHANGED."
   ],
   "urlBase": "http://127.0.0.1:8765/apps/holtburger-web/index.html",
@@ -88,7 +88,7 @@
       "stage": "ST6",
       "gate": "GATE-Q75",
       "owner": "redmi",
-      "prerequisite": "T16 (ST6) q75 no-RDO full-tier corpus baked (buildbox) + sheets regenerated; dist-level arm (no client flag — clients see the TEXREF `lossy` bit; manifest points at either corpus, both CAS).",
+      "prerequisite": "T16 (ST6) q75 no-RDO full-tier corpus baked (buildbox) + sheets regenerated — DONE 2026-08-09: corpus /mnt/wbterminal2/xubc7-corpus-q75/{statics-q75,tranche1-q75} (3,985 ktx2, 1.62 GB, 0 encode failures; repoint recipe in impl/task-T16-report.md Handoffs); dist-level arm (no client flag — clients see the TEXREF `lossy` bit; manifest points at either corpus, both CAS). NOTE: the q75 DIST (bake with --tex-xu7 at the q75 ingest) is still to be produced at repoint time — the corpus is the T16 deliverable.",
       "structuralChange": "q75 lossy full-tier corpus replaces lossless (pass 5 D-05.3)",
       "urls": {
         "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on  (against the q75 dist)",
@@ -96,7 +96,7 @@
       },
       "vantages": [
         { "name": "contact-sheets", "tele": "(desk review, not in-world)", "cam": null,
-          "note": "Review the T16-regenerated contact sheets at /mnt/wbterminal2/xubc7-proto/results/sheets/ (q75 vs lossless pairs)." },
+          "note": "Review the T16-regenerated contact sheets: the 36 /mnt/wbterminal2/xubc7-proto/results/sheets/<rsId>_q75.png files (panels SOURCE | LOSSLESS corpus | q75 no-RDO corpus, center 512 crops; 12 canonical picks + 24 corpus-stride rows; painted/emblem rows are NOT classifier-selected — no emitted label list exists — so the in-world pass carries that class)." },
         { "name": "painted-emblem-pass", "tele": "@telepoi Holtburg then @telepoi n", "cam": { "player": { "dist": 6, "az": 0, "el": 5 } },
           "note": "In-world close pass over PAINTED and EMBLEM surfaces (signage, heraldry, painted trim) — the classes most exposed to q75 banding/mush. Owner roams; the pose is a starting point." }
       ],
