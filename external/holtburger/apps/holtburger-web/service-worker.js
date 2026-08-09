@@ -13,13 +13,37 @@
 // `index.html` registration code logs and continues; nothing
 // blocks on SW availability.
 
+// ── SW v3 (T12 / ST2, SPEC §1.1 as unified by F-11.11) — LANDED DORMANT ────
+//
+// `SW_V3 = false` ships the CURRENT worker byte-for-byte in behavior. The
+// ORCHESTRATOR flips this constant to `true` together with the `?packSource`
+// default flip (a migration event; implementation agents never flip it).
+//
+// What `true` changes:
+//   * cache renames to `holtburger-content-v3` (the activate-step prefix GC
+//     purges v2 on every client's next load);
+//   * the SW intercepts ONLY content-addressed paths — `packs/`, `index/`,
+//     plus legacy `shards/` (which is ALSO the full-tier texture CAS today)
+//     until ST10 drops it — and keeps the `/scene3d/assets/` SWR class.
+//     Cache-first-forever is sound for exactly this class: path ⇒ bytes;
+//   * `boot.hba` + `manifest/*.bin` are NO LONGER intercepted (network +
+//     HTTP cache), so the whole bake-identity gate below is unreachable —
+//     v3 has no bake-versioned URLs left to gate. The gate machinery is
+//     DELETED (not ported) at ST10's ledger, not here;
+//   * the install-time boot prefetch is skipped (its URLs are exactly the
+//     bake-versioned class v3 stops intercepting);
+//   * `manifest.json` / HTML / JS / wasm stay un-intercepted in BOTH modes;
+//     offline manifest fallback is the PackFetchController's job (a
+//     controller-stashed last-known manifest), never the SW's.
+const SW_V3 = false;
+
 // v1 -> v2 (2026-06-21): cache-bust the immutable shard cache (tree/scenery
 // models + textures). Investigating "no trees render on a phone" where the
 // scenery placement data is confirmed present and served — a stale/incomplete
 // cached shard set would load tree positions but fail to build their meshes.
 // The activate-step GC sweeps the `holtburger-content-` prefix, so renaming
 // this constant purges the old cache for every client on next load.
-const CONTENT_CACHE = "holtburger-content-v2";
+const CONTENT_CACHE = SW_V3 ? "holtburger-content-v3" : "holtburger-content-v2";
 
 // `holtburger-shards-` matches the Phase 5.0 cache name (renamed
 // to `holtburger-content-` in Phase 5.2 obj 7); the activate-step
@@ -63,6 +87,10 @@ self.addEventListener("install", (event) => {
   // Activate immediately so the very first page load sees the
   // worker (rather than waiting for all clients to navigate away).
   self.skipWaiting();
+  // v3: no install-time warming — the prefetch list is the bake-versioned
+  // class v3 no longer intercepts, and pack CAS warming is the
+  // PackFetchController's boot-wave job, not the SW's.
+  if (SW_V3) return;
   // Pre-warm the content cache with the boot-critical shards.
   // event.waitUntil keeps the install lifecycle alive until the
   // prefetch completes; failures are caught + logged so a single
@@ -159,9 +187,19 @@ self.addEventListener("activate", (event) => {
 // cannot be established, the gate FAILS SAFE to network-first — an
 // unknown bake is never allowed to serve from cache.
 
-/** Content-addressed: path ⇒ bytes. Safe to serve cache-first forever. */
+/**
+ * Content-addressed: path ⇒ bytes. Safe to serve cache-first forever.
+ * v3 adds `packs/` + `index/` (HBP1 packs + HBSI1 index, CAS-named) and
+ * keeps `shards/` allowlisted until ST10 (F-11.11) — today it is ALSO the
+ * full-tier texture CAS. `/index/` (with both slashes) cannot match
+ * `index.html`.
+ */
 function isContentAddressed(url) {
-  return url.pathname.includes("/shards/");
+  const p = url.pathname;
+  if (SW_V3) {
+    return p.includes("/shards/") || p.includes("/packs/") || p.includes("/index/");
+  }
+  return p.includes("/shards/");
 }
 
 /**
@@ -169,8 +207,12 @@ function isContentAddressed(url) {
  * bytes. Cacheable only behind the bake-identity gate below.
  * Specifically NOT `/manifest.json` — that is the top-level pointer the
  * page re-fetches each load, and it is what the gate reads.
+ * v3: ALWAYS false — the class is no longer intercepted at all (the
+ * structural fix; the gate below becomes unreachable and is deleted at
+ * ST10's ledger).
  */
 function isBakeVersioned(url) {
+  if (SW_V3) return false;
   if (url.pathname.endsWith("/boot.hba")) return true;
   if (url.pathname.includes("/manifest/") && url.pathname.endsWith(".bin")) {
     return true;
@@ -300,6 +342,10 @@ async function bakeGateAllowsCache(cache, url) {
 function isSwrCacheable(url) {
   return url.pathname.includes("/scene3d/assets/");
 }
+
+// Test hooks (harness/test_service_worker_v3.mjs vm-loads this file and
+// asserts the v2/v3 predicate split; worker-scope only, inert in production).
+self.__swTestHooks = { SW_V3, CONTENT_CACHE, isContentAddressed, isBakeVersioned, isSwrCacheable, isCacheable };
 
 // Coalesce concurrent fetches for the same URL. Without this, two
 // JS-side fetches that arrive while the SW's cache.match is still
