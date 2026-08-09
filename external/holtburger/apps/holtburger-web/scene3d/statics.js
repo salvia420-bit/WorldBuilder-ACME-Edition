@@ -79,6 +79,11 @@ import { meshToGeometryGroups } from "./adapter.js";
 // specifier list would leave a dangling `} from "./materials.js";`.
 import { MaterialCache, materialCanCastShadow, materialRendersNothing, skipDeadBatchEnabled, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
+// ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter. Flag OFF
+// it returns EXACTLY the `new Promise(r => setTimeout(r, 0))` macrotask
+// yield the F3/B3 time-slices use today (byte-identical scheduling); flag
+// ON the continuation resumes inside the global P4 stream slot.
+import { frameWorkW6Yield } from "./frame_work.js";
 // A7-F1 (2026-07-11 s13) — shared per-cellId LandblockInfo fetch (buildings.js
 // runs the SAME fetch_landblock_objects for this LB). See lb_objects_shared.js.
 import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
@@ -2314,8 +2319,11 @@ export async function bakeStaticsForLandblock(
     else landblockInfoObjectCount += 1;
 
     // F3 time-slice: yield once the chunk has spent its frame budget.
+    // ST8 W6 registration: the internal 6 ms chunk loop is UNCHANGED; only
+    // the yield's resume moves under the global cap when ?frameWork=on (the
+    // spent-chunk ms rides along as the scheduler's cost estimate).
     if (staticsTimeSlice && (performance.now() - _chunkStart) > STATICS_BUILD_BUDGET_MS) {
-      await new Promise((r) => setTimeout(r, 0));
+      await frameWorkW6Yield("staticsBuild", performance.now() - _chunkStart);
       _chunkStart = performance.now();
     }
   }
@@ -2378,8 +2386,9 @@ export async function bakeStaticsForLandblock(
         if (p.source === "scenery") sceneryObjectCount += 1;
         else landblockInfoObjectCount += 1;
       }
+      // ST8 W6 registration — same adapter as the singleton loop above.
       if (staticsTimeSlice && (performance.now() - _chunkStart) > STATICS_BUILD_BUDGET_MS) {
-        await new Promise((r) => setTimeout(r, 0));
+        await frameWorkW6Yield("staticsBuild", performance.now() - _chunkStart);
         _chunkStart = performance.now();
       }
     }
@@ -3150,10 +3159,15 @@ export async function bakeStaticsRing(
     // end of each model iteration (group granularity) — fine-grained
     // enough at ~130 groups, and keeps each group's per-surface nodes
     // attached atomically.
+    // ST8 W6 registration (?frameWork) — resume under the global P4 cap;
+    // chunk loop + budget constant untouched. Flag OFF: today's setTimeout(0).
     if (staticsRingTimeSlice && (
       (typeof performance !== "undefined" ? performance.now() : Date.now()) - _ringChunkStart
     ) > STATICS_BUILD_BUDGET_MS) {
-      await new Promise((r) => setTimeout(r, 0));
+      await frameWorkW6Yield(
+        "staticsRing",
+        (typeof performance !== "undefined" ? performance.now() : Date.now()) - _ringChunkStart,
+      );
       _ringChunkStart = (typeof performance !== "undefined" ? performance.now() : Date.now());
     }
   }

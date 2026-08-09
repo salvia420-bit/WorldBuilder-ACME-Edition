@@ -55,6 +55,9 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow, VERTEX_BAKE } from "./materials.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
+// ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter; flag OFF
+// returns exactly today's setTimeout(0) macrotask yield (byte-identical).
+import { frameWorkW6Yield } from "./frame_work.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { guardedCompileAsync } from "./bake_prewarm.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
@@ -1570,8 +1573,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
 
     // F3 time-slice: once this chunk has spent its frame budget, yield to the
     // event loop so the build spreads across frames instead of one long hitch.
+    // ST8 W6 registration (?frameWork): the 6 ms chunk loop is unchanged;
+    // only the resume moves under the global P4 cap when the flag is ON.
     if (envcellTimeSlice && (performance.now() - _chunkStart) > ENVCELL_BUILD_BUDGET_MS) {
-      await new Promise((r) => setTimeout(r, 0));
+      await frameWorkW6Yield("cellsBuild", performance.now() - _chunkStart);
       _chunkStart = performance.now();
     }
   }

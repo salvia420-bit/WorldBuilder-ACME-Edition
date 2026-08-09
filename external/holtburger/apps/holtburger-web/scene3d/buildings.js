@@ -59,6 +59,9 @@ import {
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
 import { isNearPlayerLb } from "./landblock_lru.js";
+// ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter; flag OFF
+// returns exactly today's setTimeout(0) macrotask yield (byte-identical).
+import { frameWorkW6Yield } from "./frame_work.js";
 // A7-F1 (2026-07-11 s13) — shared per-cellId LandblockInfo fetch. statics.js
 // runs the SAME fetch_landblock_objects for this LB; both route through this
 // so the wasm unpack + setup-resolution happens ONCE. See lb_objects_shared.js.
@@ -1282,11 +1285,13 @@ export async function bakeBuildingsRing(
 
       // B3 time-slice: yield a macrotask once this chunk has spent its frame
       // budget so the boot buildings ring doesn't stall the main thread.
+      // ST8 W6 registration (?frameWork): the 6 ms chunk loop is unchanged;
+      // only the resume moves under the global P4 cap when the flag is ON.
       if (
         BUILDINGS_RING_TIME_SLICE &&
         performance.now() - _ringChunkStart > BUILDINGS_RING_BUILD_BUDGET_MS
       ) {
-        await new Promise((r) => setTimeout(r, 0));
+        await frameWorkW6Yield("buildingsRing", performance.now() - _ringChunkStart);
         _ringChunkStart = performance.now();
       }
     }

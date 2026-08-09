@@ -77,6 +77,10 @@
 // `decodeMs` (unchanged by construction — it is the same total work).
 
 import { bc7BlocksFor, bc7LevelBytes, flagIsOff } from "./bc7_textures.js";
+// ST8 stage A (?frameWork, SPEC §3 T21) — W6 sync-drain adapter for the
+// budgeted FIFO below. Returns false when the flag is OFF (this file keeps
+// its rAF + hidden-tab-guard scheduling, byte-identical).
+import { frameWorkW6Run } from "./frame_work.js";
 
 let _flag;
 /**
@@ -253,6 +257,13 @@ const _HIDDEN_GUARD_MS = 250;
 function _scheduleDrain() {
   if (_drainScheduled) return;
   _drainScheduled = true;
+  // ST8 stage A (?frameWork=on): the drain registers as a W6 client — the
+  // scheduler calls `_drain` inside the post-render stream slot under the
+  // GLOBAL cap (the drain's own ?xu7BudgetMs batch bound and T14's worker
+  // routing are untouched; this FIFO is the fallback arm either way).
+  // `_drain`'s leading `_clearScheduled()` resets `_drainScheduled` on both
+  // paths. Flag OFF: the rAF + hidden-tab guard below, byte-identical.
+  if (frameWorkW6Run("xu7Drain", () => _drain())) return;
   const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : null;
   if (raf) {
     try {

@@ -104,6 +104,18 @@ if (texCensusEnabled()) {
   console.log("[texCensus] ?texCensus=on — tracing textures weakly from module import");
 }
 import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnFlush } from "./loop.js";
+// ST8 stage A (?frameWork, SPEC §3 T21 / pass-08 D-08.2) — the post-render
+// stream slot (P4) + the ?framePhase census instrument. Flag OFF: every call
+// below is a guarded no-op and the legacy task placement is byte-identical.
+import {
+  frameWorkEnabled,
+  frameWorkP4,
+  frameWorkW6Run,
+  frameWorkNoteLbKey,
+  framePhaseBegin,
+  framePhaseCut,
+  framePhaseCommit,
+} from "./frame_work.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
 // script queues, mirroring retail's single Timer::cur_time static,
@@ -2163,6 +2175,43 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   let _schedRafId = null;
   // F4 one-shot warn flag for the direct (non-composer) render path.
   let _directRenderWarned = false;
+  // ST8 stage A — ?frameWork (DEFAULT OFF). Memoized for the loop's lifetime
+  // (session-stable flag; the per-frame path must not re-parse the URL).
+  const _frameWorkOn = frameWorkEnabled();
+  let _frameWorkWarned = false;
+  // P4 STREAM SLOT (pass-08 S1: post-render, inside the same rAF task). Every
+  // render-path exit calls this before scheduleNext(). Flag OFF: only the
+  // ?framePhase marks run (no-ops when that flag is off too) — task placement
+  // is byte-identical. Flag ON: the FrameWorkScheduler serves W1..W6 under the
+  // global budget; granted W6 chunk continuations execute in this task's
+  // microtask drain, so p4 is stamped after a one-microtask hop to include
+  // them in the measured slot.
+  function _postRenderStreamSlot() {
+    framePhaseCut(3);
+    if (!_frameWorkOn) {
+      framePhaseCut(4);
+      framePhaseCommit();
+      return;
+    }
+    try {
+      frameWorkP4({
+        frameStartMs: lastFrameTs,
+        // Shrink-rule reference period: the configured pacer interval, else
+        // the 60 Hz frame [A].
+        targetPeriodMs: _frameIntervalMs > 0 ? _frameIntervalMs : 1000 / 60,
+      });
+    } catch (e) {
+      if (!_frameWorkWarned) {
+        _frameWorkWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[frameWork] P4 slot threw (loop unaffected):", e);
+      }
+    }
+    Promise.resolve().then(() => {
+      framePhaseCut(4);
+      framePhaseCommit();
+    });
+  }
   function _cancelSchedule() {
     if (_schedTimeoutId !== null) {
       clearTimeout(_schedTimeoutId);
@@ -2251,6 +2300,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   async function tick(nowTs) {
     if (!running) return;
     const ts = typeof nowTs === "number" ? nowTs : performance.now();
+    // ?framePhase census (pass-08 S7): P0 SIM opens here (dt clamp + hop).
+    framePhaseBegin(ts);
     // Raw dt (no cap) so we can detect post-unfocus recovery; the
     // Math.min(..., 0.1) cap below is the per-frame safety net and
     // stays in place. See A3 comment above the tick fn.
@@ -2281,6 +2332,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       await syncTickHop();
       if (!running) return; // stop() may have raced the hop
     }
+    // ?framePhase — close P0 SIM; P2 WORLD TICKS opens (tickPerFrame + moons
+    // + audio; the census taxonomy is pass-08 S1's, applied to today's order).
+    framePhaseCut(0);
     if (liveScene3dRef) {
       // Single per-frame wall-clock snapshot. Consumers that need
       // tsSec / dt read from here instead of calling performance.now()
@@ -2351,6 +2405,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // Don't let a listener-sync failure kill the frame.
       }
     }
+    // ?framePhase — close P2 (first span); P1 RESIDENCY-class work opens
+    // (the LRU/eviction/reaper block below is today's closest analog of the
+    // pass-08 P1 phase; the grid replaces it at ST7).
+    framePhaseCut(2);
     // Landblock LRU eviction tick. Per-frame so the always-resident
     // 3×3 ring around the player gets its lastTouchMs refreshed and
     // eviction candidates (LBs beyond `maxResident`) are released
@@ -2370,7 +2428,20 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // every OTHER resident LB, reclaiming the surrounding outdoor
         // terrain/statics that pegged the main thread at hub dungeons.
         const sealedKeepLbKey = liveScene3dRef._sealedEvictLbKey || 0;
-        lru.tickEviction(currentLbKey, sealedKeepLbKey);
+        // ST8 stage A — the previously UN-budgeted inline eviction tick
+        // registers as a W6 client (SPEC §3 T21): flag ON, the call is
+        // coalesced (latest args win) and runs inside the P4 stream slot
+        // under the global budget, its elapsed measured against the cap;
+        // tickEviction's own internal budgets (SEALED_STEADY/PARK_DISPOSE
+        // 6 ms) are untouched. Flag OFF: today's inline call, unchanged.
+        // frameWorkNoteLbKey feeds the TELEPORT-mode discontinuity detector
+        // from the one site that already holds the fresh LB key.
+        if (_frameWorkOn) {
+          frameWorkNoteLbKey(currentLbKey);
+          frameWorkW6Run("lruEviction", () => lru.tickEviction(currentLbKey, sealedKeepLbKey));
+        } else {
+          lru.tickEviction(currentLbKey, sealedKeepLbKey);
+        }
         // F12-6 — per-LB subdiv LOD re-bake on approach. Shares the LRU's
         // current-LB read; no-op unless ?lodRebake=on. Detects the LB change,
         // re-points the LOD reference, and drains one queued re-bake/frame.
@@ -2389,6 +2460,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       }
     }
+    // ?framePhase — close P1; P2 re-opens for the ambient roller (segments
+    // accumulate, so p2 sums both spans).
+    framePhaseCut(1);
     // Task D (ambient-sounds-chain, 2026-05-12): per-tick ambient
     // roller. Drives the Region.SoundDesc-keyed ambient chain
     // (terrain code → SceneType → AmbientSTB → SoundTable → Wave).
@@ -2406,6 +2480,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       }
     }
+    // ?framePhase — close P2 (ambient span); P3 RENDER opens.
+    framePhaseCut(2);
     // Phase 7.5 — render with the camera switcher's active camera so
     // toggling C between follow/orbit/topDown flips the render target.
     // Pre-7.5 (or if the switcher hasn't constructed yet) we fall back
@@ -2464,6 +2540,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           }
         }
       }
+      // P4 STREAM SLOT (ST8 stage A) — composer-path exit.
+      _postRenderStreamSlot();
       scheduleNext();
       return;
     }
@@ -2487,6 +2565,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // graph mutation all ran above; we just skip the GPU submission.
       // Canvas stays at last paint (boot-time content). Combined with
       // ?renderOnDemand=1 + ?netDrainHz=N this is a zero-GPU agent.
+      // P4 STREAM SLOT (ST8 stage A) — nullRender exit (pass-08 S1: bot
+      // drivers run P0–P2 + P4, skip P3; p3 reads ~0 here by construction).
+      _postRenderStreamSlot();
       scheduleNext();
       return;
     }
@@ -2605,6 +2686,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // Restore the camera's layer mask so downstream consumers
       // (raycasters, CSM matrices) observe the outdoor-equivalent state.
       activeCam.layers.mask = camLayersBefore;
+      // P4 STREAM SLOT (ST8 stage A) — direct-path exit (inside the F4
+      // restore-and-re-arm finally, so a render throw still runs the slot).
+      _postRenderStreamSlot();
       scheduleNext();
     }
   }
@@ -2676,6 +2760,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           liveScene3dRef._netDrainTickWarned = true;
           console.warn("[net-drain] tickPerFrame threw:", e);
         }
+      }
+      // ST8 stage A — alternate drivers run P4 too (pass-08 S1). No
+      // frameStartMs (no shrink; there is no render to protect on this
+      // driver); the mode budget still applies.
+      if (_frameWorkOn) {
+        try {
+          frameWorkP4({});
+        } catch (_) { /* fail-soft; one-shot warned in the rAF path */ }
       }
     }, periodMs);
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
