@@ -632,13 +632,18 @@ export const REGISTRY = Object.freeze([
 
   {
     name: "__diag.geometry",
-    status: "reserved",
+    status: "current",
     reads: "object",
-    spec: "pass-10 S3 (pass 4 S7 verbatim)",
-    availability: "reserved:ST3",
-    note: "Geometry-bundle surface. entityDecode counters gate the DORMANT "
+    evidence: "scene3d/geom_bundles.js:69",
+    availability: "boot",
+    note: "Geometry-bundle surface — LANDED at T13 (ST3, `?geomBundles`; "
+      + "installed by geom_bundles.js on module load, live counters when "
+      + "the flag arms). entityDecode counters gate the DORMANT "
       + "substitution cache (enable-threshold = owner call on this data, "
-      + "DT-11). bytesOut = wasm->JS boundary bytes of assembled bundles.",
+      + "DT-11) and read ZERO until the entity-path instrumentation lands "
+      + "(named T13 remainder). bytesOut = wasm->JS boundary bytes of "
+      + "assembled bundles; geomFallback counts models served by the "
+      + "runtime decode under the armed flag (must trend to entity-only).",
     fields: {
       "bundles.assembled": C("count"),
       "bundles.bytesOut": C("bytes", ["staged"]),

@@ -2356,6 +2356,23 @@
         try {
           const gfxReliefMod = await import("./scene3d/gfx_relief.js");
           const gfxReliefCfg = gfxReliefMod.getGfxRelief();
+          // T13 (`?geomBundles`): HBG1 bundles bake the RELIEF-FREE default
+          // geometry, and a mixed world (bundle statics flat, fallback models
+          // railed) is incoherent — so the bundle flag forces relief OFF for
+          // the whole instance UNLESS the user explicitly authored
+          // `?gfxRelief=on`, which wins and DISARMS bundles instead (the
+          // geom_bundles.js arming gate reads __hbGfxRelief.enabled).
+          try {
+            const __gbPs = new URLSearchParams(window.location.search);
+            const __gbV = String(__gbPs.get("geomBundles") || "").toLowerCase();
+            const __gbOn = __gbV === "on" || __gbV === "1" || __gbV === "true" || __gbV === "yes";
+            if (__gbOn && gfxReliefCfg.enabled && __gbPs.get("gfxRelief") !== "on") {
+              console.log(
+                "[geomBundles] forcing gfxRelief OFF (bundles carry relief-free geometry; author ?gfxRelief=on to keep relief — that disarms bundles)"
+              );
+              gfxReliefCfg.enabled = false;
+            }
+          } catch (_) { /* URL parse — relief stays as resolved */ }
           globalThis.__hbGfxRelief = gfxReliefCfg;
           gfxReliefMod.installGfxReliefOnWindow(gfxReliefCfg);
           gfxReliefMod.applyGfxReliefToWasm(__hbWasmNs, gfxReliefCfg, "main");
@@ -2845,6 +2862,25 @@
             }
           } catch (e) {
             console.error("[texCompressedOnly] loader failed (non-fatal):", e);
+          }
+          // ST3 `?geomBundles` (T13) — arm the HBG1 bundle consumers. The
+          // module is not even imported on the OFF arm (the index.html
+          // `?packSource` discipline); every arming leg is loud inside
+          // initGeomBundles (requires the armed controller + assemble
+          // exports + relief off + retail placement chain). Fail-soft: any
+          // error leaves the runtime-decode path byte-identical.
+          try {
+            const gbPs = new URLSearchParams(window.location.search);
+            const gbV = String(gbPs.get("geomBundles") || "").toLowerCase();
+            if (gbV === "on" || gbV === "1" || gbV === "true" || gbV === "yes") {
+              const gb = await import("./scene3d/geom_bundles.js");
+              gb.initGeomBundles({
+                wasmExports: __hbWasmNs,
+                controller: __packCtl && __packCtl.armed ? { armed: true } : null,
+              });
+            }
+          } catch (e) {
+            console.error("[geomBundles] loader failed (non-fatal — runtime decode):", e);
           }
           // Host-flag readback (defects 1/4) — same shape the bake worker logs
           // at the end of its init, so the two are directly diffable. Namespace
