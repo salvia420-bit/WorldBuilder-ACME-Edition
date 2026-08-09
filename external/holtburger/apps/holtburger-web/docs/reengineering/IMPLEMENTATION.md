@@ -1,0 +1,114 @@
+# PIPELINE RE-ENGINEERING — IMPLEMENTATION TRACKING (BINDING PROTOCOL)
+
+<!-- ============================================================ -->
+<!-- HEADER — NORMATIVE. EVERY IMPLEMENTATION AGENT IS BOUND BY IT. -->
+<!-- ============================================================ -->
+
+## PROTOCOL HEADER — READ FIRST, ADHERE COMPLETELY
+
+This document governs the implementation of `SPEC.md` (this folder — the authoritative
+architecture + implementation spec produced by the 12-pass effort; `TRACKING.md` and the
+pass files are its design history). One agent implements one task at a time; at most two
+agents run concurrently, with disjoint file scopes. An orchestrator session enforces
+this header; agents do not modify it.
+
+**RULES — violations invalidate the task:**
+
+I1. **Read order is mandatory.** (1) This file top to bottom; (2) `SPEC.md` §0–§2 plus
+    your task's entry in §3 and its row's cited findings; (3) the pass files your task's
+    SPEC entry cites (for full-fidelity design detail); (4) the current code you will
+    touch. SPEC.md is authoritative; pass files are rationale; where they disagree,
+    SPEC.md wins.
+
+I2. **Scope is your task only.** Your assignment lists your file scope. Files outside it
+    may be READ freely but edited only when unavoidable for your task, minimally, and
+    recorded in your report. Never touch another in-flight task's scope (listed in the
+    table below as ACTIVE).
+
+I3. **Deviations need evidence.** If implementation reveals SPEC.md is wrong or
+    unimplementable as written, do the minimal sound thing and record a
+    `DEVIATION: <spec §> because <read-verified evidence>` block in your report. Never
+    silently drift. Never edit SPEC.md (the orchestrator propagates accepted deviations).
+
+I4. **Read-verify before you assert or alter.** file:line claims come from files opened
+    this session. Traps: the wasm crate is `apps/holtburger-web/src/lib.rs`
+    (`crates/holtburger-web/` does not exist); `pkg/` is gitignored build output; URL
+    flags share `flagIsOff` — trust `*Enabled()` functions; `dist` is a symlink to
+    `/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2`; never pass `-rln` to rg.
+
+I5. **Build rules — this is an 8 GB laptop that OOMs.** Before any Rust build:
+    `kill $(pgrep -f rust-analyzer)`. Rust builds ONLY via
+    `env PATH="/home/wbterminal/.cargo/bin:/usr/local/bin:/usr/bin:/bin" capped-build cargo build -p <one-package> --release`
+    — single package, NEVER `--workspace`, never bare cargo. wasm ONLY via capped-build
+    wasm-pack with `--out-dir pkg-<task>/` then `rsync -a --delete pkg-<task>/ pkg/`
+    (parallel builds clobber pkg/; back up pkg/*.wasm first; release before any
+    measurement — ~4.5 MB = release, ~18 MB = dev). JS/node tests run direct. At most
+    ONE headless chromium per agent; prefer node-based tests. Big artifacts (bakes,
+    corpora, captures) go to `/mnt/wbterminal2/reeng/<task>/` — the system disk is
+    85–96% full; never bake into the source tree. Bakes read `~/ac_base_dats/` only
+    and emit `bake-source.sha256`.
+
+I6. **Commit discipline.** Work directly in the holtburger repo. Stage ONLY your scope's
+    files (`git add <paths>`, never `-A`). Commit style matches the repo: one summary
+    line `holtburger: <what>` + a body that records what was measured/decided (read
+    `git log` for the house voice). Multiple commits are encouraged where SPEC asks for
+    bisectable landings. If `index.lock` contention occurs, wait 5 s and retry (another
+    agent may be committing). NEVER push, never rebase/rewrite, never commit files you
+    don't own — if unrelated dirty files exist, leave them staged-out and say so in
+    your report.
+
+I7. **Flag lifecycle.** New behavior lands behind its SPEC-named flag, DEFAULT-OFF.
+    Implementation agents never flip defaults — default flips are migration events
+    (SPEC §3 serialization policy) executed by the orchestrator after gates pass.
+    The OFF arm must remain byte-identical legacy behavior (that is the kill path).
+
+I8. **Output contract.** Exactly one report: `impl/task-TNN-report.md` in this folder,
+    sections in order: `## Shipped` (files + commit hashes) · `## Spec conformance`
+    (every acceptance bullet from your SPEC §3 entry: MET / DEFERRED-TO-BATCH /
+    FAILED, each with evidence) · `## Deviations` (or "none") · `## Tests run`
+    (command + result, @scale tags where the measurement protocol applies) ·
+    `## Handoffs & risks`. Then update YOUR ROW ONLY in the status table below
+    (status → DONE or BLOCKED, date, report file, ≤2-line summary). Touch nothing
+    else in this file.
+
+I9. **Honesty over completeness.** Failing tests are reported failing. Gates needing
+    the 1070 or an owner eye are marked DEFERRED-TO-BATCH, never simulated. A task
+    that cannot meet its acceptance gate reports BLOCKED with the evidence — that is
+    a compliant outcome; a papered-over gate is not.
+
+**ORCHESTRATOR DUTIES:** at most 2 agents in flight (hard cap); disjoint scopes
+enforced at launch; verify each report against I8 and the SPEC gate before marking a
+task done; sequence default flips and doc propagation; keep the user advised of which
+tasks are active.
+
+<!-- ============================================================ -->
+<!-- END NORMATIVE HEADER                                          -->
+<!-- ============================================================ -->
+
+## Task status
+
+Charges are abbreviations — SPEC.md §3 is the authoritative statement of each task.
+
+| Task | Stage | Charge (abbrev.) | Size | Status | Date | Report | Summary |
+|------|-------|------------------|------|--------|------|--------|---------|
+| T00 | spike | class-cardinality census over today's materials | S | TODO | | | |
+| T01 | found. | diag-schema registry, RESULTS-v2 writer, console allowlist | S | DONE | 2026-08-08 | impl/task-T01-report.md | 4 commits (e1349f13…85c9d497): registry (20 surfaces) + lint, @scale-enforcing writer, QuickEmote-seeded allowlist, moving-bench→v2. Tests 60/39/20 green + cam-bench 38/38; run-all --js RED is pre-existing (17 unregistered app-root suites, none T01's). |
+| T02 | found. | manifest/fetch caller sweeps → T12 inputs | S | TODO | | | |
+| T10 | ST1 | dual-emit bake (HBP1/HBSI1, walk-widening, previews, t128, manifest fields), serve rules, BAKE-CI | L | **ACTIVE** | | | |
+| T11 | ST-SHELL | esbuild bundle + content-hashed shell | M | TODO | | | |
+| T12 | ST2 | pack client (PackFetchController, PackSource, SW v3) `?packSource` | L | TODO | | | |
+| T13 | ST3 | HBG1 geometry bundles + consumer swap `?geomBundles` | L | TODO | | | |
+| T14 | ST4 | texture worker `?texWorkers` | M | TODO | | | |
+| T15 | ST5 | compressed-only texture path `?texCompressedOnly` | L | TODO | | | |
+| T16 | ST6 | q75 corpus + owner decisions (bake-side) | M | TODO | | | |
+| T20 | ST7 | slot grid residency authority `?slotGrid` | L | TODO | | | |
+| T21 | ST8 | FrameWorkScheduler stage A `?frameWork` | M | TODO | | | |
+| T22 | ST9 | draw pools + scheduler B/C + closed-class prewarm `?drawPools` | L | TODO | | | |
+| T30 | batch A | 1070 queue batch A (E1 + probes) — queue-file prep | S | TODO | | | |
+| T31 | batch B | 1070 queue batch B (E2–E4) — queue-file prep | S | TODO | | | |
+| T32 | batch C | 1070 queue batch C (E5–E6) — queue-file prep | S | TODO | | | |
+| T40 | ST10 | legacy retirement (fires on SPEC §3 conditions only) | M | TODO | | | |
+
+## Log (orchestrator only)
+
+- 2026-08-08: Implementation phase opened. Slot policy: 1 critical-path + 1 independent, max 2. T10 + T01 launched.
