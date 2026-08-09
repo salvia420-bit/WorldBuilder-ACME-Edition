@@ -58,8 +58,13 @@ transcripts are dead to a new session — verify from committed state, do not Se
   T20 + pass-06 + the two landed commits + any dirty files, (b) verify/absorb what
   exists, (c) complete the remainder per the original acceptance. Original brief text
   is in this session's history; the essentials are in SPEC §3 T20 + §1.4.
-  ⚠ Check `git status` for T20's uncommitted WIP before launching anything that
-  touches its scope.
+  Verified 2026-08-09 ~03:45: NO uncommitted T20 WIP — its work is entirely in the
+  two landed commits.
+- PUSHED: as of `8c6d1920` everything (34 commits: all task work + this docs corpus)
+  is on origin/master (github.com/salvia420-bit/WorldBuilder-ACME-Edition). The
+  buildbox syncs from that origin — a buildbox agent fan-out needs NO git bundle,
+  just `git fetch && git reset --hard origin/master` on the box per the fleet
+  runbook. Keep pushing after each verified landing so the box stays current.
 - T00: BLOCKED (census tooling done; live run needs RAM headroom + ACE up). Rerun is
   one command (see impl/task-T00-report.md) when the box is quiet and ACE restarted.
 
