@@ -2441,7 +2441,7 @@ export async function bakeStaticsForLandblock(
   let nodesToAdd = addedNodes;
   let staticBatchCount = 0;
   if (readStaticBatchFlag() && addedNodes.length > 1) {
-    // ?statBatchChunk (default OFF, moving-A/B pending) — feed the SAME
+    // ?statBatchChunk (default ON since 2026-07-03; `off` opts out) — feed the SAME
     // >=2-per-material groups into REGION-CHUNKED (3x3-LB) per-material
     // BatchedMeshes (static_batch_x.js v2) instead of per-(LB, surface) ones.
     // consolidateStaticSingletonsCrossLb NEVER throws; it returns null when

@@ -96,7 +96,7 @@ plus session variance. Any re-engineering brief that says "make remacri fast" sh
 | I1 | **Per-record HTTP addressing + runtime decode-as-discovery** | 15.35 MB blocking catalog; 1,700-request boots; ≥4 RTT waves per material chain; 8-round walk loops re-decoding each round; sha256/shard at 71% main-thread in probes | LB-closure bundles baked offline (the boot.hba walk generalized): cold town in dozens of requests, catalogs shrink to bundle indexes, discovery loop deleted, verify amortized per-bundle |
 | I2 | **Runtime triangulation, de-indexed, clone-across-boundary** | decode-once was worth 25× longtask reduction when memoized; hits still deep-copy; unindexed = 3× vertex bytes, no post-transform cache; JS re-buckets scalar-wise; degrade DID re-parse | Offline pre-triangulated, **indexed**, GPU-ready buffers per model (the 07-01 roadmap endpoint); wasm hands transferable views; JS uploads without reshaping |
 | I3 | **RGBA8-first, compressed-second (fail-soft double-build)** | 2× decode + 2× upload per surface; ~1.3 GB CPU mirrors; 32 ms main-thread transcodes; atlas format bifurcation + 79% deferral | Compressed-only runtime path: preview tier (already baked, 6.3%) is the frame-1 fallback instead of RGBA8; transcode in a worker or ship BC7 wire; CPU mirrors become 8 bpp or freed (texFreeCpu seam already built) |
-| I4 | **Per-LB rebuild residency (stream→bake→bulk-evict)** | re-decode + re-bake churn on every crossing; governor drains its own warm pool; geometry counter never decrements; bucket fragmentation feeds the 37.6 µs/draw wall | Retail shape (designed `PLAN-fixed-slot-grid-residency-2026-07-11`, never built): fixed player-centered slot grid, edge-only churn, refcounted Rust resource cache with UseTime floor — memory bounded by construction, draws stable across moves |
+| I4 | **Per-LB rebuild residency (stream→bake→bulk-evict)** | re-decode + re-bake churn on every crossing; governor drains its own warm pool; geometry counter never decrements; bucket fragmentation feeds the 37.6 µs/draw wall | Retail shape (per `PLAN-fixed-slot-grid-residency-2026-07-11` — CORRECTED by pass-06 R4: its S15b/S15c terrain-near-ring slices ARE live default-ON since 07-11 (`fixed_grid.js`, radius 1, fetch-driver in front of the reactive LRU); the never-built part is the end state — grid as residency AUTHORITY for all layers at the full ring): fixed player-centered slot grid, edge-only churn, refcounted Rust resource cache with UseTime floor — memory bounded by construction, draws stable across moves |
 | I5 | **Per-(LB,surface)/per-bucket draw granularity + per-placement scene nodes** | 37.6 µs *fixed* per draw (r²=0.014); 71% material switches; ~3.6 ms traversal of ~4.4k mostly-inert nodes; merging resident-culled buckets measured 0.0 ms | Persistent material-class multidraw pools over the resident set (not per-LB), unified material keys, and a scene graph with O(pools) nodes instead of O(placements) |
 
 ## 5. Re-engineering shape (two workstreams, one bake)
@@ -118,7 +118,9 @@ full mip chains. Frame metric attacks the two real walls at their scale: fixed p
 
 Sequencing note: W1 is pure-additive (new dist format beside the old; client gains a pack-aware
 resource source behind the existing `ResourceSource` trait) and de-risks W2. W2's slot grid was
-already fully designed on 07-11.
+already fully designed on 07-11 — and its terrain-near-ring slices (S15b/S15c) are live
+default-ON since then; pass-06 specs the full end state, adopting the built artifact's
+proven mechanics (see pass-06's R4 correction to §4 I4).
 
 ## 6. What not to redo (the walls, so the next session doesn't re-run them)
 

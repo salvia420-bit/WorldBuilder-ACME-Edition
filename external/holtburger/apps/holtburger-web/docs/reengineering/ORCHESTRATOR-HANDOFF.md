@@ -21,6 +21,11 @@ Read both before acting. This file is the volatile state those don't carry.
   (pass-9 ONE-tree coexistence; legacy files untouched). Then T12's deferred
   comparative arms (GATE-WIRE-BOOT cold-boot bytes/requests vs legacy) become runnable.
 - ETA estimated 3.5–6.5 h from start (uncalibrated; RUN1 wall time is the calibration).
+- PROGRESS 2026-08-09 ~08:00: RUN1 finished clean in 84m20s (17,682 packs / 253.7 MB,
+  16,384 tiles / 1,153 interiors / 65,025 LBs; 74 missing previews). DERIVE: 74/74
+  derived. RUN2 (verified) started 04:44:19; emission artifacts (index/, manifest.json,
+  bake-source.sha256) landed 07:06; verify phase in flight, cgroup steady ~3.44G of the
+  3.5G cap, swap 0 used.
 - The emitter's rayon patch is commit `4d24594c` — byte-identity proven vs the
   sequential baseline on bounded BAKE-CI (see commit body).
 - `world-packs-crashed-run1/` is the pre-incident partial output — delete when the
@@ -47,9 +52,11 @@ kill" — avoid-list protects claude) → freeze → reboot. Rules going forward
 transcripts are dead to a new session — verify from committed state, do not SendMessage)
 
 - T11 (shell bundle): committed through `a451e81c` "T11 deploy + tests + report
-  (ST-SHELL DONE)" INCLUDING its report + row update. Status row says DONE.
-  ORCHESTRATOR DEBT: verify per I8 (report sections, tests actually green — rerun its
-  test commands; browser floor was deferred) before treating as closed. Not yet verified.
+  (ST-SHELL DONE)" INCLUDING its report + row update. VERIFIED per I8 2026-08-09 ~08:15:
+  report sections complete, tests re-run green (build-shell 56/56, diag-schema 65/65;
+  url-flags lint shows only the 2 known pre-existing presence-guard rows — T20's
+  slotGrid row is now documented). Browser floor remains deferred (RAM), rides T30
+  batch prep. D4 plugin-lane orchestrator call still OPEN.
 - T20 (slot grid): KILLED MID-TASK. Landed: `4a07e021` (PackStore Rust half),
   `b98d315c` (grid→legacy adapter + assert-only LRU). Missing (vs its brief): the
   residency_grid.js core commit?? (check git log for scene3d/residency_grid.js),
@@ -85,10 +92,13 @@ task at a time, and NOTHING heavy concurrent with a bake (R-MEM1).
 - Default flips are YOURS, not agents' (I7): every stage flag is DEFAULT-OFF; flips
   happen per SPEC §3 serialization (one at a time, gates green, soak between) — none
   are due yet.
-- Doc-propagation debts (pass 9's register + accumulating): the survey's stale
-  I4/fixedGrid wording (pass 6 finding) is still unpropagated; each landed stage and
-  each verdict must reach url-flags.md / the frame-cost doc / SPEC's risk register
-  same-day.
+- Doc-propagation debts (pass 9's register + accumulating): CLEARED 2026-08-09 ~08:20 —
+  the survey's stale I4/fixedGrid wording (§4 I4 row + §5 sequencing note) now carries
+  pass-06's R4 correction, and the statics.js:2444 "?statBatchChunk default OFF" comment
+  (S7.3's standalone-same-day row) now reads default-ON-since-07-03. Still bound to
+  their stages: the PLAN-fixed-slot-grid plan-doc banner (ST7/T20 landing) + the rest of
+  S7.3. Each landed stage and each verdict must reach url-flags.md / the frame-cost doc /
+  SPEC's risk register same-day.
 - 1070 batches A/B/C are owner-gated; queue files per pass 10's format. Nothing has
   gone to the 1070 yet.
 - User communication habit: report which tasks are ACTIVE by number, verify every
