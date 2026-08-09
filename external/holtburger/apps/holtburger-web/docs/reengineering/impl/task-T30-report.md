@@ -142,4 +142,15 @@ I4 read-verification sweep (this session, HEAD 05908db4):
   cadence-optional slot per H-10.2). The orchestrator may promote any of these into
   a later batch file.
 - **Unrelated dirty state:** untracked orchestrator/HUD files and sibling-agent
-  edits left untouched; only the three T30 files staged.
+  edits left untouched; only the three T30 files were deliberately staged
+  (IMPLEMENTATION.md staged row-only via `git hash-object` + `update-index
+  --cacheinfo` so the sibling's on-disk T31/T32 row edits were NOT committed
+  by T30).
+- **Commit-race disclosure (I6 honesty):** commit `08bfdff5` unintentionally
+  swept in 4 sibling files (impl/task-T31-report.md, impl/task-T32-report.md,
+  queue-1070/batch-B-2026-08-09.json, batch-C-2026-08-09.json) — the T31/T32
+  agent ran `git add` into the shared index between T30's staging check and
+  commit. Content is theirs and unmodified; the sibling's own commit `548ffcf7`
+  followed immediately with their IMPLEMENTATION.md rows, so history is
+  consistent and nothing was lost — only commit attribution mixed. No rewrite
+  attempted (their commit already built on mine).
