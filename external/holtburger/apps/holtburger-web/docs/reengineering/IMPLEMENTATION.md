@@ -93,7 +93,7 @@ Charges are abbreviations — SPEC.md §3 is the authoritative statement of each
 |------|-------|------------------|------|--------|------|--------|---------|
 | T00 | spike | class-cardinality census over today's materials | S | TODO | | | |
 | T01 | found. | diag-schema registry, RESULTS-v2 writer, console allowlist | S | DONE | 2026-08-08 | impl/task-T01-report.md | 4 commits (e1349f13…85c9d497): registry (20 surfaces) + lint, @scale-enforcing writer, QuickEmote-seeded allowlist, moving-bench→v2. Tests 60/39/20 green + cam-bench 38/38; run-all --js RED is pre-existing (17 unregistered app-root suites, none T01's). |
-| T02 | found. | manifest/fetch caller sweeps → T12 inputs | S | TODO | | | |
+| T02 | found. | manifest/fetch caller sweeps → T12 inputs | S | DONE | 2026-08-08 | impl/task-T02-report.md | Findings in impl/task-T02-findings.md: 0 strict dist-manifest parsers (additive v2+ fields safe repo-wide); F-11.6 class = terrain + 6 more world-data tracks (scenery/spawns/events JSONL, suite bins, vfx catalog, wcid_to_setup) incl. wasm-side direct fetch_bytes callers (F-C) + suite lane gap (F-A) + external stars.bin (F-B). |
 | T10 | ST1 | dual-emit bake (HBP1/HBSI1, walk-widening, previews, t128, manifest fields), serve rules, BAKE-CI | L | **ACTIVE** | | | |
 | T11 | ST-SHELL | esbuild bundle + content-hashed shell | M | TODO | | | |
 | T12 | ST2 | pack client (PackFetchController, PackSource, SW v3) `?packSource` | L | TODO | | | |
