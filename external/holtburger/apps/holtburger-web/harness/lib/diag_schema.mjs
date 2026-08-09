@@ -392,20 +392,30 @@ export const REGISTRY = Object.freeze([
     },
   },
 
-  // ── reserved surfaces (pass-10 S3 normative schemas; land with their stage) ─
-
   {
+    // Landed current at ST2 (T12, 2026-08-09): reserved field schema kept
+    // verbatim; stage additions: `enabled` (armed state — flag ON +
+    // world_index present), `quarantinedTotal` (cumulative terminal
+    // quarantines, THE GATE-WIRE-BOOT counter; `quarantined` stays the
+    // LIVE list), `packSource` (pack_source_stats() mirror from the wasm
+    // seam). Published only on the `?packSource=on` arm; the object is
+    // created at controller construction so an armed session always
+    // carries it from boot.
     name: "__hbFetch",
-    status: "reserved",
+    status: "current",
     reads: "object",
+    evidence: "scene3d/pack_fetch_controller.js:795",
     spec: "pass-10 S3 (pass 3 S9 completed)",
-    availability: "reserved:ST2",
+    availability: "flag:?packSource=on",
     note: "PackFetchController surface. wireWaitEvents is THE C5 instrument "
       + "(0 = pass): frames where lane-U content the player occupies was not "
       + "resident at need. byComponent is the mandatory B1 attribution table "
       + "(components: code/manifestIndex/core/meta/tiles/interior/pvw/"
       + "terrainTier/texFull).",
     fields: {
+      enabled: L("bool"),
+      quarantinedTotal: C("count"),
+      packSource: L("json", null, { note: "pack_source_stats() mirror; null until armed+inserted" }),
       "lanes.*.queued": L("count"),
       "lanes.*.inflight": L("count"),
       "lanes.*.done": C("count"),
@@ -427,6 +437,8 @@ export const REGISTRY = Object.freeze([
       taint: L("json"),
     },
   },
+
+  // ── reserved surfaces (pass-10 S3 normative schemas; land with their stage) ─
 
   {
     name: "__diag.residency",
