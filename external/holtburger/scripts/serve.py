@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import email.utils
+import hashlib
 import json
 import os
 import stat as stat_mod
@@ -283,6 +284,59 @@ def build_health():
         if not present and name in REQUIRED_DIRS:
             failures.append(f"layer '{name}/' missing or empty at {d}")
 
+    # T10 pack tree (reengineering ST1). Presence-routed exactly like the
+    # client: a manifest WITHOUT `world_index` is a legacy dist and the
+    # pack layers are simply not listed (legacy dists keep passing --check
+    # unchanged). A manifest that DECLARES `world_index` promises the pack
+    # tree — a missing/short/hash-mismatched index or an empty packs/ is
+    # then the same class of silent-empty-world bug this validator exists
+    # for, and fails loud.
+    world_index = None
+    try:
+        with open(DIST_LINK / "manifest.json") as f:
+            world_index = json.load(f).get("world_index")
+    except (OSError, ValueError):
+        pass
+    if world_index is not None:
+        idx_rel = world_index.get("url", "")
+        idx_path = DIST_LINK / idx_rel
+        idx_ok = idx_path.is_file()
+        idx_reason = None
+        if not idx_ok:
+            idx_reason = f"declared index {idx_rel!r} missing"
+        else:
+            try:
+                idx_bytes = idx_path.read_bytes()
+                if len(idx_bytes) != int(world_index.get("size", -1)):
+                    idx_ok, idx_reason = False, (
+                        f"index size {len(idx_bytes)} != declared {world_index.get('size')}")
+                else:
+                    digest16 = hashlib.sha256(idx_bytes).hexdigest()[:32]
+                    if digest16 != world_index.get("sha256_16"):
+                        idx_ok, idx_reason = False, (
+                            f"index sha256_16 {digest16} != declared "
+                            f"{world_index.get('sha256_16')}")
+            except OSError as e:
+                idx_ok, idx_reason = False, f"index unreadable: {e}"
+        layers["index"] = {"present": idx_ok, "files": 1 if idx_ok else 0}
+        if not idx_ok:
+            failures.append(f"pack layer 'index': {idx_reason}")
+
+        packs_dir = DIST_LINK / "packs"
+        buckets = 0
+        if packs_dir.is_dir():
+            try:
+                for e in os.scandir(packs_dir):
+                    if e.is_dir() and dir_nonempty(Path(e.path)):
+                        buckets += 1
+            except OSError:
+                buckets = 0
+        layers["packs"] = {"present": buckets > 0, "files": buckets, "unit": "buckets"}
+        if buckets == 0:
+            failures.append(
+                f"pack layer 'packs/' has no populated bucket directories at {packs_dir} "
+                "(manifest.json declares world_index — this dist promises packs)")
+
     health = {
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "root": str(canonical_root()),
@@ -511,6 +565,13 @@ class Handler(SimpleHTTPRequestHandler):
         if self.headers.get("Range") is not None:
             return False
         clean = self.path.split("?", 1)[0].split("#", 1)[0]
+        # T10 pack tree: HBP1 packs are per-section zstd inside and the
+        # HBSI1 index is hash-dominated (≈incompressible); the wire
+        # contract for the CAS tier is IDENTITY encoding (hash = bytes —
+        # reengineering pass 3 S6.1). `.bin` is in BIN_COMPRESS_EXTS for
+        # the legacy shard store, so gate by path, not extension.
+        if clean.startswith("/dist/packs/") or clean.startswith("/dist/index/"):
+            return False
         ext = os.path.splitext(clean)[1].lower()
         if ext not in TEXT_COMPRESS_EXTS and ext not in BIN_COMPRESS_EXTS:
             return False
@@ -612,8 +673,15 @@ class Handler(SimpleHTTPRequestHandler):
             # CORP or pass a CORS check (jsdelivr importmap / Servers.xml).
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
             self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
-        if path.startswith("/dist/shards/") and 200 <= status < 300:
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        if (
+            path.startswith(("/dist/shards/", "/dist/packs/", "/dist/index/"))
+            and 200 <= status < 300
+        ):
+            # Content-addressed tiers: legacy shards + (T10) HBP1 packs and
+            # the HBSI1 index — immutable by name, 200-gated, no-transform
+            # (pass 3 S6.1/S6.3: hash = bytes; CDN must not re-encode).
+            self.send_header(
+                "Cache-Control", "public, max-age=31536000, immutable, no-transform")
         elif path.endswith(
             (".js", ".mjs", ".wasm", ".bin", ".hba",
              # Load-regression fix 2026-08-03: static imagery was falling to
