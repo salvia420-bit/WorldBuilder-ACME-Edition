@@ -1,0 +1,69 @@
+{
+  "schema": "hb-results-v2",
+  "bench": "BOOT-666",
+  "gate": null,
+  "protocol": "static-arithmetic",
+  "ts": "2026-08-09T05:19:43.881Z",
+  "commit": null,
+  "distGeneratedAt": null,
+  "platform": {
+    "box": "wbterminal",
+    "renderer": null
+  },
+  "url": "n/a — enumerated from build artifacts (apps/holtburger-web/shell @ T11)",
+  "taint": [
+    "static-arithmetic-not-a-network-measurement"
+  ],
+  "wasmProfile": "n/a-static",
+  "arms": [
+    {
+      "arm": "cold-bundled-bare",
+      "verdict": "USABLE",
+      "rejectReasons": [],
+      "metrics": {
+        "requests@wire": 7
+      },
+      "enumeration": [
+        "index-bundled.html",
+        "shell/app-ce7b4555.js",
+        "pkg/holtburger_web.js?v=wasmrev-20260803",
+        "pkg/snippets/holtburger-web-35e2cc366b0a5b65/inline0.js",
+        "pkg/holtburger_web_bg.wasm",
+        "service-worker.js",
+        "shell/bake_worker-7b5546e9.js"
+      ]
+    },
+    {
+      "arm": "cold-bundled-agent-login",
+      "verdict": "USABLE",
+      "rejectReasons": [],
+      "metrics": {
+        "requests@wire": 9
+      },
+      "note": "bench-bot shape: + keepalive worker (session start) + net worker (agent/bot forces ON)"
+    },
+    {
+      "arm": "warm-bundled",
+      "verdict": "USABLE",
+      "rejectReasons": [],
+      "metrics": {
+        "requests@wire": 5
+      },
+      "note": "5 conditional revalidations (loader html, service-worker.js, pkg glue, pkg snippet, pkg wasm), ~0 bytes body; shell/* immutable-cached = 0 refetches. The 3 pkg rows are the task-recorded external residue (pkg/ is unbundlable from a clean tree); deploy-hashing pkg would bring this to D-12.2's ≈2 (html + manifest).",
+      "immutableRefetches": 0
+    },
+    {
+      "arm": "cold-unbundled-bare",
+      "verdict": "USABLE",
+      "rejectReasons": [],
+      "metrics": {
+        "requests@wire": 267
+      },
+      "note": "derived from the committed index.html (266 modulepreload links [M] + html + wasm + SW + bake worker)"
+    }
+  ],
+  "controlSpread": null,
+  "delta": {},
+  "verdict": "EXPLORATORY",
+  "notes": "T11 ST-SHELL static request arithmetic (SPEC §3 T11 / D-12.2). EXPLORATORY: B2/B5 absolutes bind at ST5 on the deployed artifact (SPEC §2.2); this file documents the shell component ≈8 cold (7..9) / ≈1 warm-with-body (5 empty 304s on the dev server). Importmap externals (three CDN, vendor takram, postprocessing) are identical on both arms and excluded from the shell count, as in D-12.2."
+}
