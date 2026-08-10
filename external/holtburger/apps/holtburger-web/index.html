@@ -4300,6 +4300,10 @@
       // 0x100) whose landblock has no cell containers yet, so the
       // ordinary outdoor-entry path keeps sole ownership of cold-LB
       // fetches (no re-introduction of the s13 double-decode).
+      //
+      // PORTAL-P0 leg 2 (2026-08-10): per-LB backoff for the MESH-half re-fire
+      // added below — `Map<lbKey, {n, nextMs}>`.
+      const cellWatchdogMeshRetries = new Map();
       setInterval(() => {
         try {
           const h = window.__sessionHandle;
@@ -4336,15 +4340,65 @@
             cellId = snapCell;
           }
           const lbId = (cellId & 0xffff0000) >>> 0;
-          if (
+          // PORTAL-P0 leg 2 (2026-08-10) — the watchdog was keyed on the WRONG
+          // set. `cellContainersPopulatedLbs`/`…InFlight` track the WASM
+          // collision bake only; the MESH bake's success mark is
+          // `scene3d.envCellLoadedLbs` (added only on success — cells.js
+          // :1049/:1738 — so a thrown/starved build leaves it unset). A
+          // succeeded wasm bake + failed mesh bake therefore satisfied this
+          // early-return forever and the watchdog went silent for the session:
+          // the player has cell physics and an EMPTY interior. Re-fire while
+          // EITHER half is missing; each half is re-fired on its own terms
+          // (both loaders are self-idempotent — `ensureCellContainersForLandblock`
+          // has its own populated/in-flight gate, `buildEnvCellsForLandblock`
+          // short-circuits on `envCellLoadedLbs`/`envCellBuildInFlight`).
+          //
+          // `window.liveScene3d` is stamped LATE (~35 s after in-world) and is
+          // a one-time init3D snapshot — while it is null the mesh set cannot
+          // be read at all, so treat "unverifiable" as done and keep the
+          // pre-2026-08-10 behaviour rather than re-firing at 2 Hz through boot.
+          const meshLoadedLbs = window.liveScene3d?.envCellLoadedLbs;
+          const meshInFlightLbs = window.liveScene3d?.envCellBuildInFlight;
+          const meshDone =
+            !(meshLoadedLbs instanceof Set)
+            || meshLoadedLbs.has(lbId)
+            || (meshInFlightLbs instanceof Set && meshInFlightLbs.has(lbId));
+          const wasmDone =
             cellContainersPopulatedLbs.has(lbId)
-            || cellContainersPopulateInFlight.has(lbId)
-          ) return;
+            || cellContainersPopulateInFlight.has(lbId);
+          if (wasmDone && meshDone) return;
+          if (!wasmDone) {
+            console.log(
+              `[cell-watchdog] indoor cell 0x${cellId.toString(16)} in unfetched LB 0x${lbId.toString(16)} — triggering EnvCell fetch`
+            );
+            ensureCellContainersForLandblock(lbId);
+            window.liveScene3d?.loadEnvCellsForLandblock?.(lbId);
+            return;
+          }
+          // wasm half is done, MESH half is not — the newly-covered case. The
+          // mesh bake is by far the heavier of the two (Academy = 568 cells),
+          // and a build that keeps throwing clears its in-flight marker without
+          // marking loaded, so re-firing it at the watchdog's 2 Hz would be a
+          // retry storm. Back off per LB and give up after a few tries; the
+          // ordinary per-position-update and PVS-ring drivers still own it.
+          const now = Date.now();
+          const prev = cellWatchdogMeshRetries.get(lbId);
+          if (prev && (prev.n >= 5 || now < prev.nextMs)) return;
+          cellWatchdogMeshRetries.set(lbId, {
+            n: (prev?.n ?? 0) + 1,
+            nextMs: now + 3000,
+          });
           console.log(
-            `[cell-watchdog] indoor cell 0x${cellId.toString(16)} in unfetched LB 0x${lbId.toString(16)} — triggering EnvCell fetch`
+            `[cell-watchdog] indoor cell 0x${cellId.toString(16)} in LB 0x${lbId.toString(16)} `
+            + `has cell physics but NO EnvCell meshes — re-firing the mesh bake `
+            + `(attempt ${(prev?.n ?? 0) + 1}/5)`
           );
-          ensureCellContainersForLandblock(lbId);
-          window.liveScene3d?.loadEnvCellsForLandblock?.(lbId);
+          const meshBake = window.liveScene3d?.loadEnvCellsForLandblock?.(lbId);
+          if (meshBake && typeof meshBake.catch === "function") {
+            meshBake.catch((e) => {
+              console.warn(`[cell-watchdog] mesh re-bake 0x${lbId.toString(16)} failed:`, e);
+            });
+          }
         } catch (_) {}
       }, 500);
       async function ensureBuildingAabbsAroundLandblock(centreLb) {
