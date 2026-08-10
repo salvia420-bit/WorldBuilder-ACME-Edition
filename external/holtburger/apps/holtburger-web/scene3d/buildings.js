@@ -78,6 +78,9 @@ import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
 import { applyRestPoseFrame } from "./setup_rig.js";
 // ?buildingBatch (default-OFF) — reuse the SAME cross-LB static atlas statics feed.
 import { statAtlasEnabled, addSingletonsToCrossLbAtlas } from "./static_atlas.js";
+// T22-PRODUCER (ST9, `?drawPools`): the pooled producer. Inert unless the full
+// F-11.3 chain armed it (index.js initPoolWorld), so the OFF arm never calls it.
+import { poolWorldActive, addSingletonsToPools } from "./pool_producer.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
@@ -151,7 +154,41 @@ function _feedBuildingGroupsToAtlas(groups, scene3d) {
       singletons.push(o);
     });
   }
-  const { passthrough } = addSingletonsToCrossLbAtlas(singletons, scene3d);
+  // ST9 (`?drawPools`, T22-PRODUCER — SPEC §1.5) — THE PRODUCER SWAP,
+  // consumer 2 of 3. Buildings already flatten to staticsGroup-relative
+  // singletons here, which is exactly the pooled producer's input contract, so
+  // the swap is a pre-pass on the SAME list: pools take what they can (grouped
+  // by owning LB, since a pool's residency is tile-granular), and the residue
+  // continues into the unchanged atlas / buildingsGroup path. Inert unless the
+  // full F-11.3 chain armed the pooled world ⇒ OFF arm byte-identical.
+  let toAtlas = singletons;
+  if (poolWorldActive() && singletons.length > 0) {
+    try {
+      const byLb = new Map();
+      for (const n of singletons) {
+        const k = (n.userData?.landblockId ?? 0) >>> 0;
+        let list = byLb.get(k);
+        if (!list) { list = []; byLb.set(k, list); }
+        list.push(n);
+      }
+      const residue = [];
+      for (const [k, list] of byLb) {
+        const { passthrough: pt } = addSingletonsToPools(list, scene3d, { domain: "st", lbKey: k });
+        for (const n of pt) residue.push(n);
+      }
+      toAtlas = residue;
+    } catch (e) {
+      // fail-soft: every building renders through the legacy producer, once.
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.buildings/drawPools] pool feed failed, keeping the legacy path:", String(e?.message ?? e));
+      toAtlas = singletons;
+    }
+  }
+  // With pools armed but `?statAtlas=off`, the residue goes straight to the
+  // group — the atlas is not resurrected by the pooled arm.
+  const { passthrough } = (BUILDING_BATCH && statAtlasEnabled())
+    ? addSingletonsToCrossLbAtlas(toAtlas, scene3d)
+    : { passthrough: toAtlas };
   for (const n of passthrough) scene3d.buildingsGroup.add(n); // world-baked TRS → correct under buildingsGroup
   return passthrough.length;
 }
@@ -979,7 +1016,10 @@ export async function bakeBuildingsForLandblock(
       for (const g of _pendingGroups) _tmp.add(g);
       await prewarmSubtree(scene3d, _tmp);
       for (const g of [..._tmp.children]) _tmp.remove(g);
-      if (BUILDING_BATCH && statAtlasEnabled()) {
+      // ST9: the pooled producer runs at the SAME seam, so it must be reached
+      // even when `?statAtlas=off` — the feed function routes the residue
+      // straight to buildingsGroup in that case (no atlas resurrection).
+      if ((BUILDING_BATCH && statAtlasEnabled()) || poolWorldActive()) {
         _feedBuildingGroupsToAtlas(_pendingGroups, scene3d);
       } else {
         for (const g of _pendingGroups) scene3d.buildingsGroup.add(g);
@@ -1260,7 +1300,7 @@ export async function bakeBuildingsRing(
       }
       let partCount = 0;
       let surfaceMeshCount = 0;
-      const lbBatchGroups = BUILDING_BATCH && statAtlasEnabled() ? [] : null;
+      const lbBatchGroups = (BUILDING_BATCH && statAtlasEnabled()) || poolWorldActive() ? [] : null;
       for (const placement of buildings) {
         const placementLbX = (placement.landblockId >>> 24) & 0xff;
         const placementLbY = (placement.landblockId >>> 16) & 0xff;
