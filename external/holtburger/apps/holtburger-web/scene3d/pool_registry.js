@@ -893,6 +893,18 @@ export function initDrawPools(deps = {}) {
   }
   _registry = new PoolRegistry(deps);
   _armed = true;
+  // Publish the census on the RESERVED registry name `__diag.pools` (the
+  // declared successor of `__atlasStats`). Merged onto whatever `__diag`
+  // already holds — never assigned wholesale, so ordering against index.js's
+  // own `__diag` construction cannot clobber either side. The registry entry
+  // stays `reserved` until the producer swap makes this live on a real run
+  // (T22 report: "remainder").
+  if (typeof window !== "undefined") {
+    try {
+      window.__diag = window.__diag || {};
+      window.__diag.pools = () => (_registry ? _registry.census() : { enabled: false });
+    } catch (_) { /* fail-soft */ }
+  }
   return _registry;
 }
 

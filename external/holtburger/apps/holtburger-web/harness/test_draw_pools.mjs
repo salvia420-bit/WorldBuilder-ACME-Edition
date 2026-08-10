@@ -60,6 +60,13 @@
 //             items; feeds are RESUMABLE W3 items; the LIVE flip waits on
 //             its textures having staged; a vacated in-flight plan is never
 //             fed.
+//   PART 16 — the closed-class boot prewarm (pass-08 D-08.6/S5, D-07.9): the
+//             census IS the work list; colour variants compile through
+//             withWarmTarget; the CSM depth population is warmed by a RENDER
+//             (compile cannot reach it) over REAL BatchedMesh proxies (a
+//             plain Mesh warms the wrong `batching` variant); warm scenes are
+//             PARKED, never disposed; re-warm on context restore / cascade
+//             flip; __prewarmStats shape.
 //
 // Run:  node harness/test_draw_pools.mjs        (exit 0/1)
 
@@ -82,6 +89,10 @@ import { UploadStager, UPLOAD_BUDGETS, GROW_LAYER_REMARKS_PER_FRAME } from "../s
 import { PoolStreamController, BakeDispatchQueue } from "../scene3d/pool_stream.js";
 import { FrameWorkScheduler } from "../scene3d/frame_work.js";
 import { tileKeyOf } from "../scene3d/residency_grid.js";
+import {
+  PoolPrewarm, prewarmWorkList, initPoolPrewarm, _resetPoolPrewarmForTest,
+  DEFAULT_CASCADES, WARM_SHADOW_MAP_SIZE,
+} from "../scene3d/pool_prewarm.js";
 import { getSurface } from "./lib/diag_schema.mjs";
 
 let passed = 0;
@@ -1012,6 +1023,110 @@ console.log("PART 15: stage B — P4 relocation + bake dispatch (F-11.19)");
 
   const st = ctl.stats_();
   check(typeof st.dispatch.depth === "number" && typeof st.feedsInFlight === "number", "controller stats shape");
+}
+
+
+// ── PART 16 — the closed-class boot prewarm ───────────────────────────────
+
+console.log("PART 16: closed-class boot prewarm (pass-08 D-08.6/S5)");
+{
+  const { reg } = makeRegistry();
+  const gs = geomSource();
+  // Three classes: two casters (castShadow true) and one non-caster.
+  reg.feedTile(plan(100, [
+    member(),                                            // caster
+    member({ axes: { texW: 1024 } }),                    // caster, other page
+    member({ axes: { castShadow: false } }),             // non-caster
+  ]), gs);
+
+  const list = prewarmWorkList(reg);
+  check(list.length === 3, `the census IS the work list: ${list.length} classes`);
+  check(list.filter((c) => c.castShadow).length === 2,
+    "castShadow is read off the class key's shadow token");
+  check(list.every((c) => c.material && c.material.isMaterial), "each entry carries its class material");
+  check(prewarmWorkList(null).length === 0, "no registry ⇒ empty list, never a throw");
+
+  // A stub renderer: we assert the MECHANISM (what gets compiled/rendered and
+  // what kind of object it is), not GL output — there is no GL here.
+  const compiled = [];
+  const rendered = [];
+  let shadowMapMarks = 0;
+  const renderer = {
+    shadowMap: { get needsUpdate() { return false; }, set needsUpdate(v) { if (v) shadowMapMarks += 1; } },
+    getRenderTarget: () => null,
+    setRenderTarget: () => {},
+    compile: (scene) => { compiled.push(scene); return new Set(); },
+    render: (scene) => { rendered.push(scene); },
+    initTexture: () => {},
+    properties: { get: () => ({}) },
+  };
+  const pw = new PoolPrewarm({ renderer, cascades: () => DEFAULT_CASCADES, now: () => 0 });
+  const st = await pw.run(list);
+
+  check(compiled.length === 1, "ONE colour compile for the whole class set");
+  check(rendered.length === 1, "the depth population is warmed by a RENDER, not a compile");
+  check(shadowMapMarks === 1, "shadowMap.needsUpdate is forced for the depth pass");
+  check(st.classes === 3 && st.colorPrograms === 3, `colour: ${JSON.stringify({ c: st.classes, p: st.colorPrograms })}`);
+  check(st.depthPrograms === 2, `only castShadow classes get depth variants, got ${st.depthPrograms}`);
+  check(st.cascades === DEFAULT_CASCADES, "cascade count recorded");
+
+  // THE proxy rule: real BatchedMeshes, or the wrong `batching` variant warms.
+  const colorProxies = pw.colorScene.children.filter((o) => o.isBatchedMesh);
+  check(colorProxies.length === 3, "one colour proxy per class");
+  check(pw.colorScene.children.every((o) => o.isBatchedMesh),
+    "EVERY colour proxy is a BatchedMesh (a plain Mesh warms the wrong depth variant)");
+  const depthProxies = pw.depthScene.children.filter((o) => o.isBatchedMesh);
+  const depthLights = pw.depthScene.children.filter((o) => o.isDirectionalLight);
+  check(depthProxies.length === 2 && depthProxies.every((o) => o.castShadow === true),
+    "the depth scene holds the castShadow subset, all casting");
+  check(depthLights.length === DEFAULT_CASCADES, `${DEFAULT_CASCADES} cascade lights`);
+  check(depthLights.every((l) => l.castShadow && l.shadow.mapSize.x === WARM_SHADOW_MAP_SIZE),
+    "warm lights cast with tiny shadow maps (the link is the product, not the pixels)");
+  const proxyMats = new Set(colorProxies.map((o) => o.material));
+  check(proxyMats.size === 3 && list.every((c) => proxyMats.has(c.material)),
+    "each proxy carries its own CLASS material (the warm is per class, not per proxy)");
+
+  // Idempotence: a re-run warms only what is new (post-boot mint costs one).
+  const before = compiled.length;
+  await pw.run(list);
+  check(compiled.length === before, "re-running with the same list compiles nothing");
+  reg.feedTile(plan(101, [member({ axes: { texW: 2048 } })]), gs);
+  await pw.run(prewarmWorkList(reg));
+  check(compiled.length === before + 1 && pw.stats.classes === 4,
+    "a newly minted class costs exactly one warm");
+
+  // Warm scenes are PARKED for the session — never disposed (program refcount).
+  const colorSceneRef = pw.colorScene;
+  const depthSceneRef = pw.depthScene;
+  await pw.rewarm(prewarmWorkList(reg));
+  check(pw.colorScene === colorSceneRef, "the colour warm scene is PARKED across a re-warm");
+  check(pw.depthScene === depthSceneRef, "the depth warm scene survives when the cascade count is unchanged");
+  check(pw.stats.rewarms === 1, "re-warms counted (context restore / CSM preset flip)");
+
+  // A cascade-count flip rebuilds the depth population.
+  const pw2 = new PoolPrewarm({ renderer, cascades: () => 1, now: () => 0 });
+  await pw2.run(list);
+  check(pw2.depthScene.children.filter((o) => o.isDirectionalLight).length === 1,
+    "the live cascade count drives the warm light count");
+
+  // No renderer (bot arm / node): the work list is still the deliverable and
+  // the skip is RECORDED rather than reported as a warm.
+  const pwNone = new PoolPrewarm({ renderer: null, now: () => 0 });
+  const stNone = await pwNone.run(list);
+  check(stNone.skipped === 3 && stNone.colorPrograms === 0,
+    "no renderer ⇒ skips counted, nothing claimed warm");
+
+  // __prewarmStats is a registered surface.
+  const surface = getSurface("__prewarmStats");
+  check(!!surface, "__prewarmStats is in the diag registry");
+  _resetPoolPrewarmForTest();
+  const inst = initPoolPrewarm({ renderer, now: () => 0 });
+  check(inst instanceof PoolPrewarm, "initPoolPrewarm builds the singleton");
+  const snap = inst.statsSnapshot();
+  for (const k of ["classes", "colorPrograms", "depthPrograms", "msColor", "msDepth"]) {
+    check(k in snap, `__prewarmStats publishes ${k} (pass-08 S5.4)`);
+  }
+  _resetPoolPrewarmForTest();
 }
 
 // ── done ──────────────────────────────────────────────────────────────────
