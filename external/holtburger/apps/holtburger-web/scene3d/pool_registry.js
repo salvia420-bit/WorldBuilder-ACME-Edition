@@ -147,6 +147,9 @@ function makeMembership(pool) {
     pool,
     instanceIds: [],       // u32[] — this tile's instances in this pool
     gidRefs: new Map(),    // gid -> count (refcount-by-tile, S1)
+    gidByInstance: new Map(), // instanceId -> gid (per-CELL release needs it:
+                           // the tile-level `gidRefs` cannot name which gid a
+                           // subset of instances held)
     layerRefs: new Set(),  // rsIds this tile needs resident in the class array
     cellRanges: null,      // Map<cellId, number[]> for envcell PVS ranges
     bands: null,           // Map<instanceId, {gids:[near,far], band:0|1}>
@@ -165,13 +168,21 @@ export class PoolRegistry {
    *   module must stay importable in node harnesses that stub it)
    * @param {(classKey:string, member:object)=>object} deps.materialFactory
    *   ONE material per class (D-07.2); called at most once per class.
-   * @param {object} [deps.group]          scene group pools attach to
+   * @param {object} [deps.group]          DEFAULT scene group pools attach to
+   * @param {object|((domain:string)=>object|null)} [deps.groups]
+   *   PER-DOMAIN groups — `{ st: staticsGroup, ec: cellsGroup }` or a
+   *   `groupFor(domain)` function. ENVCELL-POOL-SWAP: interiors may NOT hang
+   *   off the statics group (see `_groupFor`).
+   * @param {object} [deps.layers]         per-domain render LAYER, e.g.
+   *   `{ ec: 1 }` (RENDER_LAYER_INDOOR). three layer masks are per-OBJECT and
+   *   never inherit from the parent group, so a pool that lives under
+   *   `cellsGroup` still renders on layer 0 unless it is stamped here.
    * @param {(m:string, d?:any)=>void} [deps.warn]
    * @param {()=>number} [deps.now]
    * @param {number} [deps.initInstances]
    * @param {number} [deps.initVerts]
    */
-  constructor({ THREE, materialFactory, group = null, warn, now, initInstances, initVerts } = {}) {
+  constructor({ THREE, materialFactory, group = null, groups = null, layers = null, warn, now, initInstances, initVerts } = {}) {
     if (!THREE || typeof THREE.BatchedMesh !== "function") {
       throw new Error("pool_registry: THREE with BatchedMesh required");
     }
@@ -181,6 +192,8 @@ export class PoolRegistry {
     this.THREE = THREE;
     this.materialFactory = materialFactory;
     this.group = group;
+    this.groups = groups;
+    this.layers = layers;
     this.now = typeof now === "function" ? now : () => (typeof performance !== "undefined" ? performance.now() : Date.now());
     this.warn = typeof warn === "function" ? warn : (m, d) => { try { console.warn(m, d); } catch (_) { /* fail-soft */ } };
     this.initInstances = initInstances || POOL_INIT_INSTANCES;
@@ -192,6 +205,12 @@ export class PoolRegistry {
     this.classes = new Map();
     /** tileKey -> Map<poolKey, membership> */
     this.tiles = new Map();
+    /** cellId -> Set<membership> — the ENVCELL PVS index (D-07.8). Built at
+     *  commit, pruned at release. Without it a per-cell visibility delta would
+     *  have to walk every resident tile's every cell on every tick, which is
+     *  exactly the per-container walk pools exist to delete: the legacy path
+     *  is DIFF-driven (0–3 cells/tick), so the pooled one must be too. */
+    this._cellIndex = new Map();
 
     // D-07.9: the class set is CLOSED at boot. `sealClassSet()` is called once
     // the boot ring settles (the prewarm's own precondition); every class
@@ -206,6 +225,7 @@ export class PoolRegistry {
       mutationsThisFrame: 0, mutationsTotal: 0,
       dedupHits: 0, geometryAdds: 0, instanceAdds: 0, instanceDeletes: 0,
       poolsCreated: 0, poolsReaped: 0,
+      cellsHidden: 0, cellsReleased: 0,
       classesCreated: 0, classesCreatedPostBoot: 0,
       optimizeRuns: 0, growthDoublings: 0,
       unresolvedGeometry: 0, unpooledMembers: 0,
@@ -239,6 +259,37 @@ export class PoolRegistry {
 
   static poolKeyOf(sectorKey, classKey) {
     return `${sectorKey}|${classKey}`;
+  }
+
+  /**
+   * The scene group a pool of `domain` attaches to (ENVCELL-POOL-SWAP).
+   *
+   * WHY THIS IS NOT ONE GROUP. `index.js:1455` puts `cellsGroup` on
+   * RENDER_LAYER_INDOOR (1) and `cells.js:1642` stamps every node of every cell
+   * container with `layers.set(1)`, because `atmosphere_pipeline`'s indoor
+   * split renders layer 0 (terrain + outdoor buildings/statics), CLEARS DEPTH,
+   * then renders layer 1 (EnvCells + entities) — the cottage-floor/z-fight fix.
+   * An envcell pool parked on the layer-0 statics group would be drawn in the
+   * pre-clear world pass and lose that isolation entirely. So the registry
+   * takes per-domain groups, and the layer is stamped on the pool MESH (three
+   * layer masks are per-object; a child never inherits its parent's mask).
+   */
+  _groupFor(domain) {
+    if (typeof this.groups === "function") {
+      const g = this.groups(domain);
+      if (g) return g;
+    } else if (this.groups && this.groups[domain]) {
+      return this.groups[domain];
+    }
+    return this.group;
+  }
+
+  /** The render layer a pool of `domain` is stamped with, or null for three's
+   *  default (layer 0). */
+  _layerFor(domain) {
+    if (!this.layers) return null;
+    const l = this.layers[domain];
+    return typeof l === "number" ? l : null;
   }
 
   _verifyColorTextureFix() {
@@ -308,6 +359,12 @@ export class PoolRegistry {
     // Node-level culling KEPT (sector-bounded geometry, D-07.4 step 1).
     bm.frustumCulled = true;
     bm.matrixAutoUpdate = false;
+    // The domain decides the group AND the render layer. It rides the member;
+    // the class key's first field is the same value, so a member-less
+    // construction (tests) still resolves it.
+    const domain = (member && member.domain) || String(classKey).split("|")[0] || "st";
+    const layer = this._layerFor(domain);
+    if (layer !== null) bm.layers.set(layer);
     // D-07.6: shadow flags are POOL-uniform — they are class-key axes, so every
     // member of this pool agrees on them by construction. Taken from the first
     // member (the producer swap carries them on the plan row); a member-less
@@ -329,10 +386,12 @@ export class PoolRegistry {
       __drawPool: true,
       sectorKey,
       classKey,
+      domain,
       passClass: cls.passClass,
     };
+    const grp = this._groupFor(domain);
     p = {
-      key, sectorKey, classKey, passClass: cls.passClass, mesh: bm,
+      key, sectorKey, classKey, domain, group: grp, passClass: cls.passClass, mesh: bm,
       /** contentKey|layer -> gid (exact bake identities; the statGeomDedup
        *  FNV fingerprint existed to guard partial decodes, a failure class
        *  --verify-closure deletes — D-07.7). */
@@ -353,7 +412,7 @@ export class PoolRegistry {
     this.pools.set(key, p);
     cls.pools.add(key);
     this._stats.poolsCreated += 1;
-    if (this.group && typeof this.group.add === "function") this.group.add(bm);
+    if (grp && typeof grp.add === "function") grp.add(bm);
     return p;
   }
 
@@ -362,7 +421,7 @@ export class PoolRegistry {
     this.pools.delete(p.key);
     const cls = this.classes.get(p.classKey);
     if (cls) cls.pools.delete(p.key);
-    if (this.group && typeof this.group.remove === "function") this.group.remove(p.mesh);
+    if (p.group && typeof p.group.remove === "function") p.group.remove(p.mesh);
     try { p.mesh.dispose?.(); } catch (_) { /* fail-soft */ }
     this._stats.poolsReaped += 1;
     return true;
@@ -508,6 +567,7 @@ export class PoolRegistry {
               // producers do this): merge instead of orphaning the old ids.
               for (const id of mem.instanceIds) prev.instanceIds.push(id);
               for (const [g, n] of mem.gidRefs) prev.gidRefs.set(g, (prev.gidRefs.get(g) || 0) + n);
+              for (const [id, g] of mem.gidByInstance) prev.gidByInstance.set(id, g);
               for (const r of mem.layerRefs) prev.layerRefs.add(r);
               if (mem.cellRanges) {
                 if (!prev.cellRanges) prev.cellRanges = new Map();
@@ -524,6 +584,9 @@ export class PoolRegistry {
             } else {
               byTile.set(pk, mem);
             }
+            // ENVCELL-POOL-SWAP: keep the per-cell index in step with the
+            // membership record, so the PVS delta is O(cells that changed).
+            self._indexCells(prev || mem);
           }
           self._stats.feeds += 1;
           self._mutate(touched.size);
@@ -596,6 +659,7 @@ export class PoolRegistry {
     p.instances += 1;
     this._stats.instanceAdds += 1;
     mem.instanceIds.push(id);
+    mem.gidByInstance.set(id, gid);
     if (m.rsId) {
       mem.layerRefs.add(m.rsId >>> 0);
       if (hooks && typeof hooks.onLayer === "function") hooks.onLayer(m.rsId >>> 0, m);
@@ -672,6 +736,8 @@ export class PoolRegistry {
     let n = 0;
     for (const mem of byTile.values()) {
       const p = mem.pool;
+      this._unindexCells(mem);
+      if (mem.hiddenCells) this._stats.cellsHidden -= mem.hiddenCells.size;
       for (const id of mem.instanceIds) {
         try { p.mesh.deleteInstance(id); } catch (e) { this._stats.lastError = String(e && e.message || e); }
         n += 1;
@@ -739,10 +805,12 @@ export class PoolRegistry {
           const hidden = mem.hiddenCells.has(id);
           if (want && hidden) {
             mem.hiddenCells.delete(id);
+            this._stats.cellsHidden -= 1;
             if (mem.live) mem.pool.mesh.setVisibleAt(id, true);
             flips += 1;
           } else if (!want && !hidden) {
             mem.hiddenCells.add(id);
+            this._stats.cellsHidden += 1;
             mem.pool.mesh.setVisibleAt(id, false);
             flips += 1;
           }
@@ -751,6 +819,149 @@ export class PoolRegistry {
     }
     if (flips > 0) { this._stats.cellFlips += 1; this._mutate(1); }
     return flips;
+  }
+
+  /** Index a membership record's cells (commit-time; idempotent). */
+  _indexCells(mem) {
+    if (!mem || !mem.cellRanges) return;
+    for (const cellId of mem.cellRanges.keys()) {
+      let s = this._cellIndex.get(cellId);
+      if (!s) { s = new Set(); this._cellIndex.set(cellId, s); }
+      s.add(mem);
+    }
+  }
+
+  /** Drop a membership record from the cell index (release-time). */
+  _unindexCells(mem) {
+    if (!mem || !mem.cellRanges) return;
+    for (const cellId of mem.cellRanges.keys()) {
+      const s = this._cellIndex.get(cellId);
+      if (!s) continue;
+      s.delete(mem);
+      if (s.size === 0) this._cellIndex.delete(cellId);
+    }
+  }
+
+  /**
+   * The per-cell visibility DELTA — the pooled equivalent of cells.js's
+   * `container.visible = want` per cellId (`cells.js:2248-2262`), driven by the
+   * same PVS/portal tick and applied the same way: only the cells that CHANGED
+   * this tick are touched.
+   *
+   * `cellSetChanged` (above) is the full-set form the substrate landed with;
+   * this is the form the live tick uses, because the legacy path it replaces is
+   * itself diff-driven (0–3 cells/tick steady) and a full walk would be a
+   * regression dressed as a swap.
+   *
+   * Hidden-ness is recorded on the membership record, so a cell outside the PVS
+   * set stays hidden across park → adopt exactly as `cellSetChanged` leaves it.
+   *
+   * @param {Iterable<number>} cellIds
+   * @param {boolean} visible
+   * @returns {number} instance flips performed
+   */
+  setCellsVisible(cellIds, visible) {
+    let flips = 0;
+    for (const cellId of cellIds) {
+      const mems = this._cellIndex.get(cellId >>> 0);
+      if (!mems) continue;
+      for (const mem of mems) {
+        const ids = mem.cellRanges && mem.cellRanges.get(cellId >>> 0);
+        if (!ids || ids.length === 0) continue;
+        if (!mem.hiddenCells) mem.hiddenCells = new Set();
+        for (const id of ids) {
+          const hidden = mem.hiddenCells.has(id);
+          if (visible && hidden) {
+            mem.hiddenCells.delete(id);
+            this._stats.cellsHidden -= 1;
+            // A PARKED tile's instances are all invisible; un-hiding records
+            // the intent and `adoptTile` performs the flip.
+            if (mem.live) mem.pool.mesh.setVisibleAt(id, true);
+            flips += 1;
+          } else if (!visible && !hidden) {
+            mem.hiddenCells.add(id);
+            this._stats.cellsHidden += 1;
+            mem.pool.mesh.setVisibleAt(id, false);
+            flips += 1;
+          }
+        }
+      }
+    }
+    if (flips > 0) { this._stats.cellFlips += 1; this._mutate(1); }
+    return flips;
+  }
+
+  /** Cells this registry currently holds pooled instances for. */
+  hasCell(cellId) {
+    return this._cellIndex.has(cellId >>> 0);
+  }
+
+  /**
+   * True release of a SUBSET of cells (ENVCELL-POOL-SWAP).
+   *
+   * The grid releases whole TILES; an envcell LB is rebuilt on a granularity of
+   * its own (`buildEnvCellsForLandblock` after an LRU evict), and a rebuild that
+   * re-fed without releasing would double every interior surface — the tile is
+   * 2×2 LBs, so releasing the tile is not an option either. Same bookkeeping as
+   * `releaseTile`, scoped to the named cells.
+   *
+   * @param {Iterable<number>} cellIds
+   * @returns {number} instances deleted
+   */
+  releaseCells(cellIds) {
+    let n = 0;
+    const touchedPools = new Set();
+    const touchedMems = new Set();
+    for (const raw of cellIds) {
+      const cellId = raw >>> 0;
+      const mems = this._cellIndex.get(cellId);
+      if (!mems) continue;
+      for (const mem of [...mems]) {
+        const ids = mem.cellRanges && mem.cellRanges.get(cellId);
+        mem.cellRanges.delete(cellId);
+        mems.delete(mem);
+        if (!ids || ids.length === 0) continue;
+        const p = mem.pool;
+        const dead = new Set(ids);
+        for (const id of ids) {
+          try { p.mesh.deleteInstance(id); } catch (e) { this._stats.lastError = String(e && e.message || e); }
+          this._stats.instanceDeletes += 1;
+          n += 1;
+          const gid = mem.gidByInstance.get(id);
+          if (gid !== undefined) {
+            const refs = mem.gidRefs.get(gid);
+            if (refs !== undefined) {
+              if (refs <= 1) mem.gidRefs.delete(gid);
+              else mem.gidRefs.set(gid, refs - 1);
+            }
+            this._releaseGeometry(p, gid);
+          }
+          mem.gidByInstance.delete(id);
+          if (mem.hiddenCells && mem.hiddenCells.delete(id)) this._stats.cellsHidden -= 1;
+          if (mem.bands) mem.bands.delete(id);
+        }
+        mem.instanceIds = mem.instanceIds.filter((id) => !dead.has(id));
+        p.instances -= ids.length;
+        p.deadInstances += ids.length;
+        touchedPools.add(p);
+        touchedMems.add(mem);
+      }
+      if (mems.size === 0) this._cellIndex.delete(cellId);
+    }
+    // Prune membership records (and tiles) the release emptied.
+    if (touchedMems.size > 0) {
+      for (const [tileKey, byTile] of this.tiles) {
+        for (const [pk, mem] of [...byTile]) {
+          if (!touchedMems.has(mem) || mem.instanceIds.length > 0) continue;
+          this._unindexCells(mem);
+          byTile.delete(pk);
+        }
+        if (byTile.size === 0) this.tiles.delete(tileKey);
+      }
+    }
+    for (const p of touchedPools) { this._maybeOptimize(p); this._reapIfEmpty(p); }
+    if (n > 0) { this._stats.cellsReleased += n; this._mutate(touchedPools.size); }
+    return n;
   }
 
   // ── LOD band tick (D-07.8 — 2 Hz + moved-≥8 m gate, owned by the caller) ─
@@ -829,6 +1040,11 @@ export class PoolRegistry {
         adds: s.geometryAdds,
       },
       tiles: { resident: this.tiles.size },
+      // ENVCELL-POOL-SWAP: the interior half of residency. `tracked` counts the
+      // cells that have pooled instances at all; `hidden` counts the instances
+      // the PVS delta currently holds invisible (the pooled form of
+      // `container.visible === false`).
+      cells: { tracked: this._cellIndex.size, hidden: s.cellsHidden, released: s.cellsReleased },
       events: {
         feeds: s.feeds, parks: s.parks, adopts: s.adopts, releases: s.releases,
         bandSwaps: s.bandSwaps, cellFlips: s.cellFlips,
@@ -844,12 +1060,14 @@ export class PoolRegistry {
   /** Teardown (context loss / arm switch). */
   dispose() {
     for (const p of [...this.pools.values()]) {
-      if (this.group && typeof this.group.remove === "function") this.group.remove(p.mesh);
+      const grp = p.group || this.group;
+      if (grp && typeof grp.remove === "function") grp.remove(p.mesh);
       try { p.mesh.dispose?.(); } catch (_) { /* fail-soft */ }
     }
     this.pools.clear();
     this.classes.clear();
     this.tiles.clear();
+    this._cellIndex.clear();
   }
 }
 

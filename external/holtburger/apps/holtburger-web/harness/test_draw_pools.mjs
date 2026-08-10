@@ -1516,6 +1516,101 @@ console.log("PART 20: axis records key on the TEXREF-declared page dims");
   _resetPoolWorldForTest();
 }
 
+// ── PART 21 — the envcell substrate (ENVCELL-POOL-SWAP) ───────────────────
+
+console.log("PART 21: per-domain groups + layers, per-cell delta, per-cell release");
+{
+  // (a) LAYER + GROUP. An "ec" pool must attach to the CELLS group and carry
+  //     RENDER_LAYER_INDOOR, or atmosphere_pipeline's depth-clear split draws
+  //     it in the pre-clear world pass (index.js:1455 / cells.js:1642).
+  const stGroup = new THREE.Group();
+  const ecGroup = new THREE.Group();
+  const { reg } = makeRegistry({
+    group: stGroup,
+    groups: { st: stGroup, ec: ecGroup },
+    layers: { ec: 1 },
+  });
+  reg.feedTile(plan(400, [member({ contentKey: "st1" })]), geomSource());
+  reg.feedTile(plan(401, [member({
+    axes: { domain: "ec" }, domain: "ec", contentKey: "ec1", cellId: 0x100,
+  })]), geomSource());
+  check(stGroup.children.length === 1 && ecGroup.children.length === 1,
+    "the st pool lands in the statics group and the ec pool in the CELLS group");
+  check(stGroup.children[0].layers.test(new THREE.Layers()) === true,
+    "…the st pool stays on layer 0 (three's default mask)");
+  const ecLayer = new THREE.Layers();
+  ecLayer.set(1);
+  check(ecGroup.children[0].layers.test(ecLayer) === true,
+    "…and the ec pool is stamped RENDER_LAYER_INDOOR (masks never inherit)");
+  const l0 = new THREE.Layers();
+  check(ecGroup.children[0].layers.test(l0) === false,
+    "…and is NOT on layer 0, so the world pass cannot draw it before the depth clear");
+  check(ecGroup.children[0].userData.domain === "ec", "the pool carries its domain");
+
+  // (b) THE DELTA. Only the cells named this tick are touched — the legacy
+  //     path it replaces is diff-driven, so the pooled one must be too.
+  const cells = [0x100, 0x101, 0x102].map((cellId, i) => member({
+    axes: { domain: "ec" }, domain: "ec", contentKey: `c${i}`, cellId,
+  }));
+  reg.feedTile(plan(402, cells), geomSource());
+  const poolOf = (tile) => [...reg.tiles.get(tile).values()][0].pool.mesh;
+  const mesh = poolOf(402);
+  const visOf = (m, id) => m.getVisibleAt(id);
+  const memb = [...reg.tiles.get(402).values()][0];
+  const idOf = (cellId) => memb.cellRanges.get(cellId)[0];
+  check(visOf(mesh, idOf(0x100)) === true, "a freshly committed cell instance is visible");
+  reg.beginFrame();
+  check(reg.setCellsVisible([0x101], false) === 1, "hiding ONE cell flips exactly one instance");
+  check(visOf(mesh, idOf(0x101)) === false && visOf(mesh, idOf(0x100)) === true,
+    "…and leaves every other cell alone");
+  check(reg.census().cells.hidden === 1, "the census publishes the hidden count");
+  reg.beginFrame();
+  check(reg.setCellsVisible([0x101], false) === 0, "re-hiding an already-hidden cell is a NO-OP");
+  check(reg.census().events.mutationsThisFrame === 0,
+    "…so a settled PVS tick performs ZERO pool mutations (the S2 anti-churn law)");
+  reg.beginFrame();
+  reg.setCellsVisible([0x101], true);
+  check(visOf(mesh, idOf(0x101)) === true, "un-hiding restores the instance");
+
+  // (c) HIDDEN SURVIVES PARK → ADOPT (the cellSetChanged contract, on the delta).
+  reg.setCellsVisible([0x102], false);
+  reg.parkTile(402);
+  reg.adoptTile(402);
+  check(visOf(mesh, idOf(0x102)) === false,
+    "a cell outside the PVS set stays hidden across park → adopt");
+  check(visOf(mesh, idOf(0x100)) === true, "…and a visible one comes back");
+
+  // (d) PER-CELL RELEASE — the rebuild path. An LB rebuild re-feeds its cells;
+  //     without a per-cell release every interior surface would double, and the
+  //     tile (2×2 LBs) is too coarse to release instead.
+  const beforeBytes = reg.geometryBytes();
+  const deleted = reg.releaseCells([0x102]);
+  check(deleted === 1, "releasing one cell deletes exactly its instances");
+  check(reg.hasCell(0x102) === false && reg.hasCell(0x100) === true,
+    "…and drops only that cell from the index");
+  check(reg.census().cells.tracked === 2,
+    "…leaving the other cellIds (0x100, 0x101) tracked");
+  check(reg.census().cells.hidden === 0,
+    "…and the released cell's hidden bookkeeping is reclaimed");
+  const afterBytes = reg.geometryBytes();
+  check(afterBytes.used < beforeBytes.used && afterBytes.allocated === beforeBytes.allocated,
+    "…the cell's geometry is DEREFERENCED (used falls) while capacity is untouched");
+  // Re-feeding the released cell is a clean re-admit (the rebuild case).
+  reg.feedTile(plan(402, [member({
+    axes: { domain: "ec" }, domain: "ec", contentKey: "c2b", cellId: 0x102,
+  })]), geomSource());
+  check(reg.hasCell(0x102) === true, "…and the cell re-feeds cleanly afterwards");
+
+  // (e) A FULL release still tears the index down.
+  reg.releaseTile(402);
+  reg.releaseTile(401);
+  reg.releaseTile(400);
+  check(reg.census().cells.tracked === 0, "releaseTile un-indexes every cell it held");
+  check(reg.pools.size === 0, "…and the pools reap to zero");
+  check(ecGroup.children.length === 0 && stGroup.children.length === 0,
+    "…out of the group they were added to (never the default group)");
+}
+
 // ── done ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`);
