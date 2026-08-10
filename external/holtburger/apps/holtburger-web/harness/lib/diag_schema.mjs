@@ -102,9 +102,9 @@ export const REGISTRY = Object.freeze([
     name: "__bc7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1220",
+    evidence: "scene3d/bc7_textures.js:1301",
     availability: "in-world",
-    note: "Module tally bc7Stats() (bc7_textures.js:767-779) + source residency. "
+    note: "Module tally bc7Stats() (bc7_textures.js:843-855) + source residency. "
       + "Retained legacy surface; full-tier texture machinery re-homes at ST5.",
     fields: {
       fetches: C("count"), hits: C("count"), absent: C("count"),
@@ -124,7 +124,7 @@ export const REGISTRY = Object.freeze([
     name: "__xu7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1221",
+    evidence: "scene3d/bc7_textures.js:1302",
     availability: "in-world",
     note: "xu7Stats() in scene3d/xu7_textures.js:142-211 (budgeted-FIFO tally). "
       + "decodeMs is cumulative main-thread transcode ms but NOT attribution-"
@@ -638,7 +638,7 @@ export const REGISTRY = Object.freeze([
     name: "__texStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:792",
+    evidence: "scene3d/bc7_textures.js:869",
     availability: "boot",
     note: "Texture tier/worker surface — LANDED at T15 (ST5, "
       + "`?texCompressedOnly`; texStats() in bc7_textures.js, window-installed "
@@ -682,6 +682,12 @@ export const REGISTRY = Object.freeze([
       "arrays.mipBytes": L("bytes", ["allocated"]),
       rehydrate: L("json"),
       "coverage.texrefMissingPvw": L("count"),
+      // PAGE-RESAMPLE (T22 D2): the client-side reading of the TEXREF
+      // `FULL_PAGE_DIMS` marker. `texRefOffPage` is the population the
+      // resampled corpus drives to zero; it is a READ tally, so it counts
+      // reads, not distinct rsIds.
+      "coverage.texRefOnPage": C("count"),
+      "coverage.texRefOffPage": C("count"),
     },
   },
 

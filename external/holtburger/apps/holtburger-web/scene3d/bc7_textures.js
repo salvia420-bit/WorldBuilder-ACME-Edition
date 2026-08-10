@@ -262,6 +262,76 @@ export function _resetTexCompressedOnlyForTest() {
 
 let _atlasRefeedImpl = null;
 
+// --------------------------------------------------------------------------
+// PAGE-RESAMPLE (T22 D2) — the TEXREF page-dim read.
+//
+// The pool class key (`scene3d/pool_class_key.js`) tiers on TEXREF-DECLARED
+// dims and demands that members be STORED at their page dims; the bake half
+// of that landed as `page_resample.rs` + the `FULL_PAGE_DIMS` TEXREF tier
+// bit. This is the one client-side read of that marker, exported here rather
+// than in a pool module so the pool producer and any other consumer read the
+// SAME decode.
+//
+// TWO THINGS A CONSUMER MUST NOT DO ITSELF, which is why this exists:
+//
+//  1. **Do not re-derive "is it on its page?" from the dims byte.** The byte
+//     is 4 bits per axis of `ceil(log2)`, so a non-pow2 member (1096² is in
+//     the shipped corpus) rounds to 2^11 x 2^11 and reads exactly like a real
+//     2048² page. The BIT is the authority; the byte alone cannot be. Proven
+//     in `apps/holtburger-tools/src/pack_bake.rs`
+//     (`the_page_bit_is_the_authority_the_dims_byte_cannot_be`).
+//  2. **Do not fall back to the DAT record's dims.** The shipped full tier is
+//     the UPSCALE corpus — measured 4x the retail texture in each axis over a
+//     400-record sample, which shifts the page tier for 253 of them. TEXREF
+//     is the only place the dims that actually reach the GPU are declared.
+//
+// Reading is free of side effects beyond the two counters, and returns null
+// whenever the seam is unarmed — so this is inert on the OFF arm by
+// construction (nothing calls it, and if something does, it reports "no
+// TEXREF row" exactly as the legacy route already expects).
+// --------------------------------------------------------------------------
+
+/**
+ * TEXREF page facts for one RenderSurface id, or `null` when no resident
+ * pack carries a TEXREF row for it (⇒ not world-texture content: equipment
+ * and dynamics stay on the legacy lane).
+ *
+ * @param {number} rsId
+ * @returns {{tierBits:number, dimsByte:number, w:number, h:number,
+ *            onPage:boolean, hasFullTier:boolean, hasPreview:boolean}|null}
+ */
+export function texRefPageInfo(rsId) {
+  const { wasmNs } = _tco;
+  if (!wasmNs || typeof wasmNs.pack_texref !== "function") return null;
+  let packed = -1;
+  try { packed = wasmNs.pack_texref(rsId >>> 0); } catch (_) { return null; }
+  if (!(packed >= 0)) return null;
+  const tierBits = (packed >> 8) & 0xff;
+  const dimsByte = packed & 0xff;
+  // The declared dims, decoded from the log2 pair the bake wrote. Exact for
+  // the pow2 corpus; an upper bound for a non-pow2 member (see above).
+  const w = 1 << ((dimsByte >> 4) & 0x0f);
+  const h = 1 << (dimsByte & 0x0f);
+  const onPage = (tierBits & TIER_BIT_FULL_PAGE_DIMS) !== 0;
+  if (onPage) _stats.texRefOnPage += 1; else _stats.texRefOffPage += 1;
+  return {
+    tierBits,
+    dimsByte,
+    w,
+    h,
+    onPage,
+    hasFullTier: (tierBits & TIER_BIT_FULL_XU7_PRESENT) !== 0,
+    hasPreview: (tierBits & TIER_BIT_PVW_PRESENT) !== 0,
+  };
+}
+
+/** TEXREF tier bits, mirroring `pack_format.rs::tier_bits`. */
+export const TIER_BIT_PVW_PRESENT = 1 << 0;
+export const TIER_BIT_FULL_XU7_PRESENT = 1 << 1;
+export const TIER_BIT_FULL_LOSSY = 1 << 2;
+/** The member's stored full tier IS at its array-page dims (T22 D2). */
+export const TIER_BIT_FULL_PAGE_DIMS = 1 << 5;
+
 /** Register the current producer's re-home handler (`fn(rsId) → nodes`). */
 export function registerAtlasRefeed(fn) {
   _atlasRefeedImpl = typeof fn === "function" ? fn : null;
@@ -740,6 +810,9 @@ const _stats = {
   demotions: 0,          // pressure demote-to-preview events
   nraAttached: 0,        // worker-derived NRA planes attached
   chainWriteRejects: 0,  // shallow payload refused by a chain array (loud)
+  // ── PAGE-RESAMPLE (T22 D2) — TEXREF page-dim reads ─────────────────────
+  texRefOnPage: 0,       // rsIds read whose full tier IS stored at page dims
+  texRefOffPage: 0,      // ... and whose full tier is NOT (needsResample true)
   // ── T15R (rehydrate v3, D-05.7 row 2) full-tier mirror seam ────────────
   mirrorsArmed: 0,           // full-tier textures with a source-keyed way back
   mirrorsFreed: 0,           // CPU mirrors dropped at record eviction
@@ -813,7 +886,11 @@ export function texStats() {
       nraAttached: _stats.nraAttached,
       chainWriteRejects: _stats.chainWriteRejects,
     },
-    coverage: { texrefMissingPvw: _stats.texrefMissingPvw },
+    coverage: {
+      texrefMissingPvw: _stats.texrefMissingPvw,
+      texRefOnPage: _stats.texRefOnPage,
+      texRefOffPage: _stats.texRefOffPage,
+    },
     worker: (() => {
       try {
         const w = texWorkerStats();
