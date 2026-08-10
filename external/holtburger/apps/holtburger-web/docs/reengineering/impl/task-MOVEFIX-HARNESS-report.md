@@ -7,9 +7,9 @@ run. No SPEC task number; scope is `harness/` (plus this report).
 
 | File | What | Commit |
 |------|------|--------|
-| `apps/holtburger-web/harness/moving-bench.mjs` | boot gate rewritten: history-aware success, relogin-on-pre-in-world-error, diagnostic failure output, login-phase error partition (`classifyBoot` / `formatBootHistory` / `splitBootErrors`, all exported) + the investigation recorded in the header | `54fbdfe4` |
-| `apps/holtburger-web/harness/test_moving_bench_boot.mjs` | new pure-node suite, 39 checks, both real failure shapes encoded | `54fbdfe4` |
-| `apps/holtburger-web/harness/README.md` | boot-gate section + suite listing | `54fbdfe4` |
+| `apps/holtburger-web/harness/moving-bench.mjs` | boot gate rewritten: history-aware success, relogin-on-pre-in-world-error, diagnostic failure output, login-phase error partition (`classifyBoot` / `formatBootHistory` / `splitBootErrors`, all exported) + the investigation recorded in the header | `2d49aa26` |
+| `apps/holtburger-web/harness/test_moving_bench_boot.mjs` | new pure-node suite, 39 checks, both real failure shapes encoded | `2d49aa26` |
+| `apps/holtburger-web/harness/README.md` | boot-gate section + suite listing | `2d49aa26` |
 
 `index.html` was **not** touched (see Deviations — it did not need to be).
 
