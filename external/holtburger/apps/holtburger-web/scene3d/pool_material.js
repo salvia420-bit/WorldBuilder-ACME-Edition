@@ -71,6 +71,13 @@ import {
 import { getAdapterMaxAnisotropy } from "./adapter.js";
 import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
 import { pageDimsOf, needsResample } from "./pool_class_key.js";
+// ENVCELL-POOL-SWAP: the interior BAKE. `?vertexBake`'s retail arm drops an
+// EnvCell's static lamps from the live light pool on the strength of the
+// per-vertex `acBakedLight` term (lighting.js RND-04 handshake), so a class
+// material that does not carry the patch renders that dungeon on ambient
+// alone. Dungeon lighting is not negotiable: the class material takes the
+// patch, or the member does not pool.
+import { applyBakedVertexLightPatch, VERTEX_BAKE } from "./materials.js";
 
 /** Why a member was refused. Every value is COUNTED and routes the member to
  *  the legacy producer path — there is no silent drop. */
@@ -333,6 +340,32 @@ export class ClassMaterialRegistry {
     // and devtools all join on the same string.
     material2.name = `pool-class-${classKey}`;
     material2.userData = { ...(material2.userData || {}), __poolClassMat: true, classKey };
+    // ENVCELL-POOL-SWAP — THE INTERIOR BAKE. `__acBakedLight` is already a
+    // class-key axis (`pool_class_key.js:262`, the `k` bit of the patch token),
+    // so a baked surface and an unbaked one are DIFFERENT classes by
+    // construction and this decision is class-uniform. What was missing is the
+    // patch itself: the class material is `makeArrayMaterial`'s, which knows
+    // nothing about `acBakedLight`, so a pooled dungeon would have rendered
+    // with its static lamps ALREADY dropped from the live pool (the RND-04
+    // handshake in lighting.js fires on the ATTRIBUTE, not on who draws it) and
+    // no baked term to replace them — interiors on ambient alone, which is the
+    // exact regression `_patchSetCacheKey`'s `k` bit was added to fix.
+    //
+    // The patch is installed LAST (after the userData spread, which would
+    // otherwise drop the non-enumerable `acBakedLightUniforms` handle) and the
+    // cache key is COMPOSED, never replaced: `_chainBeforeCompile` installs
+    // `_patchSetCacheKey`, which knows nothing about the array material's own
+    // axes (wrap bucket, nra presence) — collapsing those onto one program is
+    // precisely the failure mode the atlas's per-bucket key exists to prevent.
+    if (material && material.userData && material.userData.__acBakedLight === true) {
+      const atlasKey = material2.customProgramCacheKey;
+      applyBakedVertexLightPatch(material2, { suppressDirect: VERTEX_BAKE.suppressDirect });
+      const composed = typeof atlasKey === "function" ? atlasKey.bind(material2) : null;
+      material2.customProgramCacheKey = composed
+        ? () => `${composed()}|k1${VERTEX_BAKE.suppressDirect ? "s" : ""}`
+        : material2.customProgramCacheKey;
+      material2.userData.__poolClassBaked = true;
+    }
     // D-07.6: shadow flags become POOL-uniform, and the class key already
     // carries them, so the material's own shadow-side settings are class-wide.
     c = {
@@ -450,6 +483,22 @@ export class ClassMaterialRegistry {
  * synthesises a sequential one when the source is non-indexed, so an indexed
  * HBG1 bundle and a legacy de-indexed decode can share a pool.
  *
+ * IT ALSO COMPACTS (ENVCELL-POOL-SWAP). The T13 `cellToGeometryGroups` /
+ * `bundleToGeometryGroups` shape is N per-surface groups whose position/normal/
+ * uv attributes are the SAME whole-entry vertex-stream views, each with its own
+ * compact index (`geom_bundles.js:290-370`). Cloning those attributes per group
+ * would put the WHOLE cell's vertex stream into the pool once per surface — a
+ * cell with 8 surfaces costs 8× its vertices, and BatchedMesh reserves that
+ * capacity per geometry. That is the same "shared streams are not slabs" trap
+ * `cell_fusion.js` exists for (the E1-DIRTY fracture), here paying in memory
+ * instead of pixels. So an indexed source is REMAPPED to exactly the vertices
+ * its own index references, in first-use order, and the index is rewritten.
+ *
+ * `acBakedLight` rides along when the source carries it (the interior bake —
+ * the class key's `k` bit makes that class-uniform, and the caller guarantees
+ * every member of a baked class carries the attribute; BatchedMesh fixes the
+ * attribute set at the first `addGeometry`).
+ *
  * @returns {THREE.BufferGeometry|null} a NEW geometry owned by the caller
  */
 export function normalizeForPool(geom, layer) {
@@ -458,18 +507,58 @@ export function normalizeForPool(geom, layer) {
   const nor = geom.attributes.normal;
   const uv = geom.attributes.uv;
   if (!pos || !nor || !uv) return null;
+  const baked = geom.getAttribute ? geom.getAttribute("acBakedLight") : null;
   const g = new THREE.BufferGeometry();
+
+  if (geom.index) {
+    const src = geom.index.array;
+    const idxCount = geom.index.count;
+    const srcVerts = pos.count;
+    const remap = new Int32Array(srcVerts).fill(-1);
+    // Two passes: number the referenced vertices in first-use order, then copy.
+    let kept = 0;
+    for (let i = 0; i < idxCount; i += 1) {
+      const v = src[i];
+      if (remap[v] < 0) { remap[v] = kept; kept += 1; }
+    }
+    const outIdx = kept > 65535 ? new Uint32Array(idxCount) : new Uint16Array(idxCount);
+    for (let i = 0; i < idxCount; i += 1) outIdx[i] = remap[src[i]];
+    const oPos = new Float32Array(kept * 3);
+    const oNor = new Float32Array(kept * 3);
+    const oUv = new Float32Array(kept * 2);
+    const oBaked = baked ? new Uint8Array(kept * 3) : null;
+    for (let v = 0; v < srcVerts; v += 1) {
+      const d = remap[v];
+      if (d < 0) continue;
+      oPos[d * 3] = pos.getX(v); oPos[d * 3 + 1] = pos.getY(v); oPos[d * 3 + 2] = pos.getZ(v);
+      oNor[d * 3] = nor.getX(v); oNor[d * 3 + 1] = nor.getY(v); oNor[d * 3 + 2] = nor.getZ(v);
+      oUv[d * 2] = uv.getX(v); oUv[d * 2 + 1] = uv.getY(v);
+      if (oBaked) {
+        // The bake is stored NORMALISED u8 (adapter.js RND-04), so read the
+        // RAW bytes — `getX` would hand back the 0..1 decode.
+        const a = baked.array;
+        oBaked[d * 3] = a[v * 3];
+        oBaked[d * 3 + 1] = a[v * 3 + 1];
+        oBaked[d * 3 + 2] = a[v * 3 + 2];
+      }
+    }
+    g.setAttribute("position", new THREE.BufferAttribute(oPos, 3));
+    g.setAttribute("normal", new THREE.BufferAttribute(oNor, 3));
+    g.setAttribute("uv", new THREE.BufferAttribute(oUv, 2));
+    g.setAttribute("aLayer", new THREE.BufferAttribute(new Float32Array(kept).fill(layer), 1));
+    if (oBaked) g.setAttribute("acBakedLight", new THREE.BufferAttribute(oBaked, 3, true));
+    g.setIndex(new THREE.BufferAttribute(outIdx, 1));
+    return g;
+  }
+
   g.setAttribute("position", pos.clone());
   g.setAttribute("normal", nor.clone());
   g.setAttribute("uv", uv.clone());
   const cnt = pos.count;
   g.setAttribute("aLayer", new THREE.BufferAttribute(new Float32Array(cnt).fill(layer), 1));
-  if (geom.index) {
-    g.setIndex(geom.index.clone());
-  } else {
-    const arr = cnt > 65535 ? new Uint32Array(cnt) : new Uint16Array(cnt);
-    for (let i = 0; i < cnt; i += 1) arr[i] = i;
-    g.setIndex(new THREE.BufferAttribute(arr, 1));
-  }
+  if (baked) g.setAttribute("acBakedLight", baked.clone());
+  const arr = cnt > 65535 ? new Uint32Array(cnt) : new Uint16Array(cnt);
+  for (let i = 0; i < cnt; i += 1) arr[i] = i;
+  g.setIndex(new THREE.BufferAttribute(arr, 1));
   return g;
 }

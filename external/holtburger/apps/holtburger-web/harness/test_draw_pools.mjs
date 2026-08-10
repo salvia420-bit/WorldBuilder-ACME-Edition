@@ -1611,6 +1611,111 @@ console.log("PART 21: per-domain groups + layers, per-cell delta, per-cell relea
     "…out of the group they were added to (never the default group)");
 }
 
+// ── PART 22 — shared-stream compaction + the interior bake ────────────────
+
+console.log("PART 22: shared-stream geometry compaction + acBakedLight survival");
+{
+  // The T13 envcell/model bundle shape: N per-surface groups over ONE shared
+  // vertex stream, each with its own compact index (geom_bundles.js:290-370).
+  const VERTS = 64;
+  const pos = new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3);
+  const nor = new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3);
+  const uvA = new THREE.BufferAttribute(new Float32Array(VERTS * 2), 2);
+  const bakedBytes = new Uint8Array(VERTS * 3);
+  for (let v = 0; v < VERTS; v += 1) {
+    pos.setXYZ(v, v, v * 2, v * 3);
+    nor.setXYZ(v, 0, 1, 0);
+    uvA.setXY(v, v / VERTS, 1 - v / VERTS);
+    bakedBytes[v * 3] = v & 0xff;
+    bakedBytes[v * 3 + 1] = (v * 2) & 0xff;
+    bakedBytes[v * 3 + 2] = (v * 3) & 0xff;
+  }
+  const bakedAttr = new THREE.BufferAttribute(bakedBytes, 3, true);
+  const sharedGroup = (indices) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", pos);
+    g.setAttribute("normal", nor);
+    g.setAttribute("uv", uvA);
+    g.setAttribute("acBakedLight", bakedAttr);
+    g.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
+    return g;
+  };
+  // One surface referencing 6 of the 64 shared vertices.
+  const srcIdx = [10, 11, 12, 12, 11, 40];
+  const gA = normalizeForPool(sharedGroup(srcIdx), 2);
+  check(gA.attributes.position.count === 4,
+    "a shared-stream group is COMPACTED to the vertices its own index uses (4 of 64)");
+  check(gA.index.count === 6, "…with its triangle count untouched");
+  check(gA.attributes.aLayer.count === 4 && gA.attributes.aLayer.array[0] === 2,
+    "…and aLayer is stamped over the compacted stream");
+  // The drawn triangles must be IDENTICAL vertex-for-vertex.
+  let same = true;
+  for (let i = 0; i < srcIdx.length; i += 1) {
+    const sv = srcIdx[i];
+    const dv = gA.index.array[i];
+    if (gA.attributes.position.getX(dv) !== pos.getX(sv)
+      || gA.attributes.position.getY(dv) !== pos.getY(sv)
+      || gA.attributes.position.getZ(dv) !== pos.getZ(sv)
+      || gA.attributes.uv.getX(dv) !== uvA.getX(sv)) same = false;
+  }
+  check(same, "…and every drawn vertex is byte-for-byte the one the source index named");
+  // acBakedLight rides along as RAW normalised bytes (a getX read would decode).
+  check(!!gA.attributes.acBakedLight && gA.attributes.acBakedLight.normalized === true,
+    "acBakedLight survives compaction, still normalised (the RND-04 contract)");
+  let bakedOk = true;
+  for (let i = 0; i < srcIdx.length; i += 1) {
+    const sv = srcIdx[i];
+    const dv = gA.index.array[i];
+    if (gA.attributes.acBakedLight.array[dv * 3] !== bakedBytes[sv * 3]
+      || gA.attributes.acBakedLight.array[dv * 3 + 1] !== bakedBytes[sv * 3 + 1]
+      || gA.attributes.acBakedLight.array[dv * 3 + 2] !== bakedBytes[sv * 3 + 2]) bakedOk = false;
+  }
+  check(bakedOk, "…carrying each vertex's own baked bytes (a shuffled remap would show here)");
+  // A second surface over the SAME stream compacts to ITS OWN vertices — the
+  // whole point: without this each surface pays for the whole cell.
+  const gB = normalizeForPool(sharedGroup([0, 1, 2]), 0);
+  check(gB.attributes.position.count === 3,
+    "a second group over the same stream costs only ITS vertices (8 surfaces ≠ 8× the cell)");
+  // A source WITHOUT the bake stays without it (BatchedMesh fixes the attribute
+  // set at the first addGeometry, so this must be class-uniform).
+  check(!normalizeForPool(triGeom(6), 0).attributes.acBakedLight,
+    "an unbaked source produces an unbaked pool geometry");
+
+  // THE CLASS MATERIAL takes the bake patch (dungeon lighting is not
+  // negotiable): a baked member's class material must carry `__acBakedLight`,
+  // and its program cache key must COMPOSE with the array material's own axes.
+  const cm = new ClassMaterialRegistry({ warn: () => {} });
+  const mkTex = (edge) => {
+    const t = new THREE.DataTexture(new Uint8Array(edge * edge * 4), edge, edge, THREE.RGBAFormat);
+    t.needsUpdate = true;
+    return t;
+  };
+  const plainMat = new THREE.MeshStandardMaterial({ map: mkTex(256) });
+  plainMat.userData = { surfaceDid: 0x08000010, __pvwRsId: 0x06000010 };
+  const bakedMat = new THREE.MeshStandardMaterial({ map: mkTex(256) });
+  bakedMat.userData = { surfaceDid: 0x08000011, __pvwRsId: 0x06000011, __acBakedLight: true };
+  const axesOf = (m) => axisRecordOf(m, { domain: "ec", castShadow: false, receiveShadow: true });
+  const rPlain = axesOf(plainMat);
+  const rBaked = axesOf(bakedMat);
+  check(classKeyOf(rPlain) !== classKeyOf(rBaked),
+    "a baked surface is a DIFFERENT class from an unbaked one (the key's k bit)");
+  check(cm.admit(classKeyOf(rPlain), plainMat, rPlain).ok === true, "the unbaked member admits");
+  check(cm.admit(classKeyOf(rBaked), bakedMat, rBaked).ok === true, "the baked member admits");
+  const plainClassMat = cm.materialFactory(classKeyOf(rPlain));
+  const bakedClassMat = cm.materialFactory(classKeyOf(rBaked));
+  check(bakedClassMat.userData.__acBakedLight === true,
+    "the BAKED class material carries the vertex-bake patch");
+  check(!plainClassMat.userData.__acBakedLight,
+    "…and the unbaked class material does NOT (it would double-count the term)");
+  const plainKey = plainClassMat.customProgramCacheKey();
+  const bakedKey = bakedClassMat.customProgramCacheKey();
+  check(plainKey !== bakedKey, "the two class materials cannot share a compiled program");
+  check(bakedKey.startsWith(plainKey.split("|")[0]) && bakedKey.includes("statAtlasArrayMat"),
+    "…because the baked key COMPOSES with the array material's own key, never replaces it");
+  check(bakedKey.includes("k1"), "…and adds the bake bit");
+  cm.dispose();
+}
+
 // ── done ──────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`);
