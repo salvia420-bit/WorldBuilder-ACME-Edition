@@ -312,12 +312,60 @@ export function terrainRayBlocked(
   bx, by, bz,
   samples = TERRAIN_LOS_SAMPLES,
   clearanceM = TERRAIN_LOS_CLEARANCE_M,
+  sunkenExempt = true,
 ) {
   if (typeof sampleHeight !== "function") return false;
   const n = Math.max(2, samples | 0);
+
+  // ── SUNKEN-APERTURE EXEMPTION (2026-08-10, the Yaraq blacksmith spot) ─────
+  //
+  // Reported: from an OUTDOOR vantage, terrain (grass) draws over the sunken,
+  // below-grade part of the Yaraq blacksmith; standing inside is clean.
+  //
+  // Root cause is right here. A below-grade aperture makes the TAIL of the
+  // camera→aperture segment run underground by construction, so the loop below
+  // finds `h > z + clearance` on the samples nearest the target and reports
+  // "blocked" — dropping the very doorway the punch exists to open. Skipping
+  // the two ENDPOINTS (which this function has always done) does not help: it
+  // is the whole final stretch that is under the surface, not just the last
+  // point. The deeper the room, the earlier the trailing blocked run starts,
+  // which is why the defect shows up as a PATCH of grass (the deepest
+  // apertures of the room are culled while the shallow ones survive) rather
+  // than the interior vanishing outright.
+  //
+  // Retail has no analogue of this test to inherit: `PView::ConstructView`
+  // (acclient.c:462507-462543) rejects a portal purely on the sign of
+  // `dot(FrameCurrent, ppoly->plane.N) + plane.d` versus the DAT-authored
+  // `outside_portal->portal_side` (epsilon 0.0002) — a plane-side test, never
+  // a heightfield march. Terrain LOS is our stand-in for a `portal_side` the
+  // wire format does not carry, so its failure modes are ours to fix.
+  //
+  // The fix distinguishes the two things the march was conflating:
+  //   · a HILL between camera and doorway — the ray goes under the surface and
+  //     comes back OUT above it before reaching the target (there is a clear
+  //     sample AFTER a blocked one). Still blocks, as it always did.
+  //   · the TARGET being underground — the blocked run continues to the target
+  //     with no clear sample after it. That is not an occluder, that is the
+  //     doorway's own below-grade elevation. No longer blocks.
+  // Only applied when the CAMERA end is above grade, i.e. the outdoor vantage
+  // the punch serves; a camera already under the surface keeps the old verdict
+  // (the indoor depth split, not the punch, owns that case).
+  let camAbove = false;
+  if (sunkenExempt) {
+    let h0;
+    try {
+      h0 = sampleHeight(ax, ay);
+    } catch (_) {
+      return false; // sampler threw → fail open
+    }
+    camAbove = h0 != null && Number.isFinite(h0) && az > h0 + clearanceM;
+  }
+
   // Skip the endpoints: the camera may legitimately be under the surface
   // (that IS case (a)), and the aperture itself may be below grade (that IS
   // the bug). Only the span BETWEEN them can prove a hill is in the way.
+  let firstBlockedI = -1;
+  let lastClearI = -1;
   for (let i = 1; i < n; i++) {
     const t = i / n;
     const x = ax + (bx - ax) * t;
@@ -330,9 +378,19 @@ export function terrainRayBlocked(
       return false; // sampler threw → fail open
     }
     if (h == null || !Number.isFinite(h)) continue; // unbaked → fail open
-    if (h > z + clearanceM) return true;
+    if (h > z + clearanceM) {
+      if (firstBlockedI < 0) firstBlockedI = i;
+      // Without the exemption this is the original early-out, verbatim.
+      if (!camAbove) return true;
+    } else {
+      lastClearI = i;
+    }
   }
-  return false;
+  if (firstBlockedI < 0) return false;
+  if (!camAbove) return true;
+  // Blocked only if the ray got PAST the occluder — i.e. a hill, not the
+  // target's own below-grade elevation.
+  return firstBlockedI < lastClearI;
 }
 
 /**
@@ -620,6 +678,9 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
     ? opts.straddleEpsM
     : APERTURE_STRADDLE_EPS_M;
   const withCellCenter = !!opts.withCellCenter;
+  // `?punchLosSunken` (cells.js owns the reader — this module stays DOM-free).
+  // Absent → true, the fixed behaviour, which is what the unit tests exercise.
+  const losSunkenExempt = opts.losSunkenExempt !== false;
   // Caller-owned terrain-LOS memo (see `makeLosCache`). Absent → every gate
   // runs exactly as before, which is what the unit tests exercise.
   const losCache = opts.losCache ?? null;
@@ -743,7 +804,14 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
       if (hit !== undefined && losCache.gen < hit.expire) {
         blocked = hit.v;
       } else {
-        blocked = terrainRayBlocked(sampleHeight, camAc.x, camAc.y, camAc.z, cx, cy, cz);
+        blocked = terrainRayBlocked(
+          sampleHeight,
+          camAc.x, camAc.y, camAc.z,
+          cx, cy, cz,
+          TERRAIN_LOS_SAMPLES,
+          TERRAIN_LOS_CLEARANCE_M,
+          losSunkenExempt,
+        );
         if (key >= 0) {
           // Stagger the expiry across doorways (the low bits of the key are the
           // quantised height, which differs per aperture) so a set that entered

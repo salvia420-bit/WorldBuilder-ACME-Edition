@@ -253,6 +253,43 @@ t("endpoints are excluded — a below-grade aperture is not self-blocking", () =
   assert.equal(terrainRayBlocked(() => -8, 0, 0, -5, 20, 0, -5), false);
 });
 
+t("SUNKEN APERTURE — the Yaraq blacksmith: below grade, seen from above grade", () => {
+  // Camera 2 m ABOVE flat grade (z=0) looking down at an aperture 4 m BELOW it.
+  // The tail of the segment necessarily runs underground, which the pre-fix
+  // march read as an occluder and dropped — the doorway the punch exists for.
+  const flat = () => 0;
+  assert.equal(terrainRayBlocked(flat, 0, 0, 2, 20, 0, -4), false);
+  // `?punchLosSunken=off` (10th arg false) restores the round-7 verdict, so the
+  // eye test has a real isolation arm.
+  assert.equal(terrainRayBlocked(flat, 0, 0, 2, 20, 0, -4, 12, 0.5, false), true);
+});
+
+t("a real hill still blocks a below-grade aperture (the ray re-emerges)", () => {
+  // Ridge at x 5..10, then the ground DROPS into a valley the aperture sits in.
+  // The ray gets past the ridge (clear samples after the blocked ones), which is
+  // what makes it an occluder rather than the target's own elevation.
+  const h = (x) => (x > 5 && x < 10 ? 40 : x > 10 ? -10 : 0);
+  assert.equal(terrainRayBlocked(h, 0, 0, 2, 20, 0, -4), true);
+});
+
+t("a camera BELOW grade keeps the old verdict (the split owns that case)", () => {
+  // Unchanged from §4 above: the punch is outdoor-only, so an under-surface
+  // camera never reaches this gate in production — and if it does, it must not
+  // gain the exemption.
+  assert.equal(terrainRayBlocked(() => 0, 0, 0, -5, 20, 0, -5), true);
+});
+
+t("KNOWN FAIL-OPEN: hill + sunken target with no re-emergence keeps the doorway", () => {
+  // Ridge at x 5..10 and flat grade after it, with the aperture 4 m down: the
+  // ray never rises back above the surface, so the blocked run reaches the
+  // target and the exemption applies. Fails OPEN (an over-punch bounded by the
+  // scissor rect) rather than re-introducing the reported defect — the explicit
+  // trade this gate makes. Documented so a future tightening is a deliberate
+  // choice, not a surprise.
+  const h = (x) => (x > 5 && x < 10 ? 40 : 0);
+  assert.equal(terrainRayBlocked(h, 0, 0, 2, 20, 0, -4), false);
+});
+
 t("the terrain cull is wired into clipAperturesForPunch", () => {
   const plane = makeNearPlane({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 });
   const flat = [1, 4, 20, -1, -1, 20, 1, -1, 20, 1, 1, 20, -1, 1];

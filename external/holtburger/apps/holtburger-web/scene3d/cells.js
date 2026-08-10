@@ -191,6 +191,24 @@ const PUNCH_SIDEDNESS = (() => {
   return false;
 })();
 
+// `?punchLosSunken` (2026-08-10) — DEFAULT-ON, `=off` restores the round-7
+// terrain-LOS verdict. See `terrainRayBlocked` in portal_clip.js: a below-grade
+// aperture makes the tail of the camera→aperture segment run underground, which
+// the LOS march read as an occluder and dropped — the Yaraq blacksmith's sunken
+// room with grass drawn over it. `=off` is the isolation arm for the eye test
+// (compare `__diag`-free one-paste `liveScene3d._portalPunchDiag.dropped.terrain`
+// between the two arms; ON should drop strictly fewer).
+const PUNCH_LOS_SUNKEN = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      const v = new URLSearchParams(globalThis.location.search || "")
+        .get("punchLosSunken")?.toLowerCase();
+      if (v != null) return !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) {}
+  return true;
+})();
+
 /** Mirrors the `?portalPunch` reader in index.js so the diag can report it. */
 const PORTAL_PUNCH_FLAG_ON = (() => {
   try {
@@ -2587,7 +2605,12 @@ function _punchDiag(scene3d, reason, extra = null) {
     kept: 0,
     dropped: { boundary: 0, backface: 0, straddle: 0, nearPlane: 0, project: 0, oversize: 0, terrain: 0 },
     rect: null,
-    gates: { sidedness: PUNCH_SIDEDNESS, terrainLos: true, straddle: true },
+    gates: {
+      sidedness: PUNCH_SIDEDNESS,
+      terrainLos: true,
+      losSunkenExempt: PUNCH_LOS_SUNKEN,
+      straddle: true,
+    },
     ...(extra || {}),
   };
 }
@@ -2688,6 +2711,7 @@ export function tickPortalPunch(scene3d, sessionHandle) {
         // here (module-scoped, one per client) so `clipAperturesForPunch`
         // stays a pure function for the unit tests.
         losCache: _punchLosCache,
+        losSunkenExempt: PUNCH_LOS_SUNKEN,
       });
       if (res.kept > 0) {
         punchFlat = res.flat;
@@ -2707,6 +2731,7 @@ export function tickPortalPunch(scene3d, sessionHandle) {
           sidedness: !!(hasV2 && PUNCH_SIDEDNESS),
           sidednessExportPresent: hasV2,
           terrainLos: true,
+          losSunkenExempt: PUNCH_LOS_SUNKEN,
           straddle: true,
         },
       };
