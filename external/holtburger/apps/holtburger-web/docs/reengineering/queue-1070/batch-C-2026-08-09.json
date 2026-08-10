@@ -131,9 +131,16 @@
           "tele": "@telepoi Town Network",
           "cam": null,
           "note": "Dense sealed hub: pass membership at scale + ENVCELL BAKED-LIGHT PARITY — interior lightmap look must match the OFF arm."
+        },
+        {
+          "name": "holtburg-redoubt-interior",
+          "tele": "@teledungeon holtburg redoubt",
+          "cam": { "player": { "dist": 8, "az": 0, "el": 10 } },
+          "note": "ENVCELL-POOL-SWAP (2026-08-10) — the INTERIOR eye pair, added when the ec domain landed. Four judgements, all invisible to every harness metric: (1) BAKED LIGHTING — a pooled dungeon whose class material lost applyBakedVertexLightPatch renders on ambient alone (lighting.js has already dropped its static lamps), so the ON arm must look as warm and contrasty as the OFF arm, never flat; (2) NO DOUBLE-DRAW — walk out past the LRU horizon and back: a rebuild that failed to release its pooled cells shows as z-fighting/darkening on every wall; (3) PVS TOGGLING — pan across doorways: pooled surfaces must appear and disappear with the same cells the OFF arm shows, never leaving a wall behind; (4) THE DEPTH SPLIT — look out through a doorway from inside: terrain must still be visible through it (pools sit on RENDER_LAYER_INDOOR, ?portalPunch default-ON). Do NOT combine with ?portalStencil=on — it disarms envcell pooling by design."
         }
       ],
       "checklist": [
+        "interior PREREQ: read __diag.pools().envcells.cells > 0 AND producer.byDomain.ec > 0 BEFORE judging the interior vantage — on a pre-page-dim dist every member is refused offPage and the interior is wholly legacy (task-ENVCELL-POOL report, Handoff 1)",
         "Pass membership: every known-translucent object is STILL translucent (ClipMap regression class); no opaque-pass leaks, no newly-transparent opaques",
         "Depth-bias classes: floors/decals not z-fighting anywhere in the floors vantage",
         "Shadowed-town: buildings receive shadows plausibly on the ON arm (coarsening acceptable, absence/acne/peter-panning not) vs the OFF arm",
