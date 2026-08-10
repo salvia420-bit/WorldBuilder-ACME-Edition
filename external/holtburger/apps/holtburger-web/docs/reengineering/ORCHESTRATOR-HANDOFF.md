@@ -15,8 +15,15 @@ Owner directive: Opus agents implement; orchestrator researches/verifies/pushes.
   stale-ACE-session refusals hidden by scalar-only gates; classifyBoot+relogin
   landed; MOVE-FIX baseline UNBLOCKED; never default --account=tailnet1 on the
   1070).
-- PASS 2 IN FLIGHT: T22 (?drawPools, the last L task) + T15R-TERRAIN
-  (?terrainT1024 ladder + terrain-mirror freeing), disjoint scopes.
+- PASS 2: T22 LANDED+VERIFIED (staged subset, battery 333/333 re-run by the
+  orchestrator; substrate complete, PRODUCER SWAP is the D1 remainder). Its
+  flags, all propagated: D2 — page-tier key needs bake/transcode RESAMPLE to
+  page dims before drawPools may allocate (texture-pipeline task, predicate
+  pageDimsOf/needsResample); E6 prereq corrected in batch-C queue (substrate
+  alone is not eye-testable); D-07.6 [A] "world-static nodes ≤~250" measures 271
+  (+8% — flagged, not absorbed); D4 — FrameWorkScheduler items must NOT
+  re-enqueue into their own class (drain-until-budget spins; continuation =
+  once-per-frame re-armed flag). T15R-TERRAIN still in flight.
 - QUEUED (owner-requested): RELIEF-IN-BAKE — bake gfxRelief into HBG1 GEOM
   variants so the pack pipeline stops force-disabling relief. Full turnkey brief:
   docs/reengineering/queued/RELIEF-IN-BAKE-brief.md. Launch when a pass-2 slot

@@ -37,12 +37,30 @@
         "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
       },
       "vantages": [
-        { "name": "shift-boundary-walk", "tele": "@telepoi Holtburg", "cam": null,
-          "note": "WALK (keyboard, real GPU) one straight run of at least 6 LBs from town into open terrain — the grid shifts in place every 2 LBs, so this crosses >=3 shift boundaries. Watch the leading and trailing grid edges the whole run. Repeat the same run on the OFF arm." },
-        { "name": "teleport-arrival", "tele": "@telepoi n", "cam": { "player": { "dist": 40, "az": 0, "el": 25 } },
-          "note": "Anchor delta >= 6 LBs => whole-grid invalidate + amortized park drain. After settle (terrainBakedLbs plateau), sweep the camera 360 (az 0/90/180/270 at dist 40) checking arrival completeness. BENCH-TELEPORT is the CI timing arm; this is the completeness EYE." },
-        { "name": "sealed-hub-enter-exit", "tele": "@telepoi Town Network", "cam": null,
-          "note": "Sealed interior: grid freeze + amortized park drain + pinned return core. Enter, roam the hub ~1 min, exit through a portal back to the surface; watch both transitions." }
+        {
+          "name": "shift-boundary-walk",
+          "tele": "@telepoi Holtburg",
+          "cam": null,
+          "note": "WALK (keyboard, real GPU) one straight run of at least 6 LBs from town into open terrain — the grid shifts in place every 2 LBs, so this crosses >=3 shift boundaries. Watch the leading and trailing grid edges the whole run. Repeat the same run on the OFF arm."
+        },
+        {
+          "name": "teleport-arrival",
+          "tele": "@telepoi n",
+          "cam": {
+            "player": {
+              "dist": 40,
+              "az": 0,
+              "el": 25
+            }
+          },
+          "note": "Anchor delta >= 6 LBs => whole-grid invalidate + amortized park drain. After settle (terrainBakedLbs plateau), sweep the camera 360 (az 0/90/180/270 at dist 40) checking arrival completeness. BENCH-TELEPORT is the CI timing arm; this is the completeness EYE."
+        },
+        {
+          "name": "sealed-hub-enter-exit",
+          "tele": "@telepoi Town Network",
+          "cam": null,
+          "note": "Sealed interior: grid freeze + amortized park drain + pinned return core. Enter, roam the hub ~1 min, exit through a portal back to the surface; watch both transitions."
+        }
       ],
       "checklist": [
         "Walk: NO seams/holes/ghost tiles at grid edges across every shift boundary (statics, buildings, terrain all present at the edge)",
@@ -54,7 +72,10 @@
         "Diag: pressure ladder r4Engagements — AMENDED per T20 report D4 (2026-08-09): r4Engagements > 0 is EXPECTED on the migration-era ?slotGrid arm (summed 3-instance wasm exceeds 0.94×M3 while the legacy shard cache is live by design until ST10); the ===0 zero-criterion binds at GATE-GRID scoring on a DEFAULT run, NOT on this eye item — score the other counters at zero-tolerance and record the r4 value",
         "0 console errors (allowlist-subtracted) on both arms"
       ],
-      "artifacts": [ "screenshot per vantage per arm (walk: start/mid/end frames; teleport: the 4-azimuth sweep)", "ON-arm __diag.residency() + gridLruDivergence dump at session end (archive with RESULTS)" ],
+      "artifacts": [
+        "screenshot per vantage per arm (walk: start/mid/end frames; teleport: the 4-azimuth sweep)",
+        "ON-arm __diag.residency() + gridLruDivergence dump at session end (archive with RESULTS)"
+      ],
       "verdict": null
     },
     {
@@ -69,14 +90,48 @@
         "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
       },
       "vantages": [
-        { "name": "holtburg-town", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 26, "az": 35, "el": 18 } },
-          "note": "Town pass-membership pass: hunt known translucents (water, windows, foliage cards, particle-backed props) — the ClipMap item itself." },
-        { "name": "holtburg-floors", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 12, "az": 300, "el": 35 } },
-          "note": "Depth-bias classes: look down at building floors/steps/decals from above — z-fighting shows here first." },
-        { "name": "shadowed-town", "tele": "@telepoi Holtburg", "cam": { "player": { "dist": 30, "az": 150, "el": 10 } },
-          "note": "The receiveShadow generalization vantage (pass-10 debt row 38): buildings inside cast shadow — compare shadow reception on walls/roofs vs the OFF arm at the same sun angle (same session time-of-day both arms)." },
-        { "name": "town-network-hub", "tele": "@telepoi Town Network", "cam": null,
-          "note": "Dense sealed hub: pass membership at scale + ENVCELL BAKED-LIGHT PARITY — interior lightmap look must match the OFF arm." }
+        {
+          "name": "holtburg-town",
+          "tele": "@telepoi Holtburg",
+          "cam": {
+            "player": {
+              "dist": 26,
+              "az": 35,
+              "el": 18
+            }
+          },
+          "note": "Town pass-membership pass: hunt known translucents (water, windows, foliage cards, particle-backed props) — the ClipMap item itself."
+        },
+        {
+          "name": "holtburg-floors",
+          "tele": "@telepoi Holtburg",
+          "cam": {
+            "player": {
+              "dist": 12,
+              "az": 300,
+              "el": 35
+            }
+          },
+          "note": "Depth-bias classes: look down at building floors/steps/decals from above — z-fighting shows here first."
+        },
+        {
+          "name": "shadowed-town",
+          "tele": "@telepoi Holtburg",
+          "cam": {
+            "player": {
+              "dist": 30,
+              "az": 150,
+              "el": 10
+            }
+          },
+          "note": "The receiveShadow generalization vantage (pass-10 debt row 38): buildings inside cast shadow — compare shadow reception on walls/roofs vs the OFF arm at the same sun angle (same session time-of-day both arms)."
+        },
+        {
+          "name": "town-network-hub",
+          "tele": "@telepoi Town Network",
+          "cam": null,
+          "note": "Dense sealed hub: pass membership at scale + ENVCELL BAKED-LIGHT PARITY — interior lightmap look must match the OFF arm."
+        }
       ],
       "checklist": [
         "Pass membership: every known-translucent object is STILL translucent (ClipMap regression class); no opaque-pass leaks, no newly-transparent opaques",
@@ -86,7 +141,10 @@
         "Silhouettes/winding sane at pool scale (no inside-out or missing pooled instances)",
         "0 console errors (allowlist-subtracted) on both arms"
       ],
-      "artifacts": [ "screenshot per vantage per arm (identical poses + same time-of-day)", "ON-arm class-census/diag snapshot if T22 lands one (pools count, classesCreatedPostBoot) — archive with RESULTS" ],
+      "artifacts": [
+        "screenshot per vantage per arm (identical poses + same time-of-day)",
+        "ON-arm class-census/diag snapshot if T22 lands one (pools count, classesCreatedPostBoot) — archive with RESULTS"
+      ],
       "verdict": null
     },
     {
@@ -96,8 +154,13 @@
       "gate": "GATE-POOLS (creates the F3/F4 moving baselines on first accepted run, scores the kill; pass-10 S10 names this rider in its example)",
       "prerequisite": "T22 landed. moving-bench.mjs exists at HEAD (harness/moving-bench.mjs; fixed-pose PC-3 discipline: frame-indexed pose table, pinned anchor, warm lap + identical measure lap). Fresh --user-data-dir PER ARM.",
       "cmd": "node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 --account=tailnet1 --poi=n --frames=1800 --arm=<arm>  (exact anchor/pose-table args per the harness header at go-time)",
-      "arms": [ "drawPools=on (full F-11.3 chain as in E6.urls.on)", "drawPools=off (bare legacy)" ],
-      "out": [ "RESULTS-v2 files (mb-on.json / mb-off.json class); pointers recorded here" ],
+      "arms": [
+        "drawPools=on (full F-11.3 chain as in E6.urls.on)",
+        "drawPools=off (bare legacy)"
+      ],
+      "out": [
+        "RESULTS-v2 files (mb-on.json / mb-off.json class); pointers recorded here"
+      ],
       "result": null
     },
     {
@@ -107,9 +170,21 @@
       "gate": "GATE-GRID (M1/M2 MEM-ROUTE vs legacy arm; TAIL-ULTRA governor bucket; BENCH-ZIGZAG reAdoptCancels-absorbing + BENCH-TELEPORT 1070 arms)",
       "prerequisite": "T20 stage-4 green; harness entry points confirmed/filled by the T20 stage-4 report or orchestrator at go-time (cmd null = NOT executable yet). BENCH-ZIGZAG/BENCH-TELEPORT also run as CI (S11) — only the 1070 confirm arms ride this batch.",
       "cmd": null,
-      "arms": [ "packSource=on&slotGrid=on", "legacy (no flags)" ],
-      "out": [ "RESULTS-v2 files; pointers recorded here" ],
+      "arms": [
+        "packSource=on&slotGrid=on",
+        "legacy (no flags)"
+      ],
+      "out": [
+        "RESULTS-v2 files; pointers recorded here"
+      ],
       "result": null
+    }
+  ],
+  "sessionLog": [
+    {
+      "ts": "2026-08-10",
+      "by": "orchestrator",
+      "event": "PREREQ CORRECTION from the T22 landing: E6's honest prerequisite is now 'T22 substrate + the PRODUCER SWAP (T22 report D1 remainder)' — the ST9 substrate is battery-green but no pooled world exists to eye until the producer swap lands. Also T22 D2: the page-tier class key is allocation-sound only after members are RESAMPLED to page dims at bake/transcode (texture-pipeline work, predicate exported as pageDimsOf/needsResample) — sequence that before any E6 attempt."
     }
   ]
 }
