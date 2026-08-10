@@ -15,9 +15,9 @@ P-88MIB (whole 88 MiB = 87-96 ms, split 44/44 = ~44 ms/frame — both under F6 2
 BOOT-666 (bundle collapses cold JS fan-out ~5×; world-data lane dominates — ST2
 territory), TEXWORKER-TAIL (worker tail ~3× better than FIFO, kill-row clear),
 TEXWORKER-BOOTWARM (64-deep burst high-water, drains clean — the texWorkers=2
-datum). MOVE-FIX-BASELINE BLOCKED → Batch B: moving-bench auto-URL carries
-renderOnDemand=1 which stalls the boot orchestrator pre-login (harness defect
-filed in its queue row). CLEANUP DONE: test chrome killed (cdpwb-* only), WLS2
+datum). MOVE-FIX-BASELINE was BLOCKED at run time; root cause CORRECTED and harness
+FIXED same evening (see the corrected queue row + the renderOnDemand correction
+below) — the judged baseline is runnable next 1070 session. CLEANUP DONE: test chrome killed (cdpwb-* only), WLS2
 task deleted, 1070 ssh tunnel + all three cloudflared quick tunnels closed
 (R9 290 session links now dead by design); serve.py/wsbridge/ACE left running.
 GATE-TEXWORKER: both legs now green (an interleaved PC-7-strict re-run would
@@ -35,9 +35,13 @@ Operational notes for successors:
   open() before starting — `setsid bash -c 'exec sleep infinity > ~/ace_stdin.fifo' &`
   first, then the setsid nohup dotnet line. (ace-live.md marks the recipe UNTESTED —
   it is now tested-with-fix; owner: consider updating that memory file.)
-- renderOnDemand=1 STALLS the boot orchestrator pre-login — dropped from bench
-  URLs as a recorded deviation (the queue's normative strings carry it; the
-  committed funnel smoke does not).
+- CORRECTED (same day, MOVEFIX-HARNESS agent): renderOnDemand=1 does NOT stall
+  boot — the observed stalls were STALE-ACE-SESSION login refusals hidden by
+  scalar-only __bootState gates (autoLogin maxRetries=0 is terminal on first
+  refusal; ready/in-world share one scalar so a late watchdog error can mask a
+  good session). Harness fixed (2d49aa26): history-based classifyBoot +
+  __runAutonomousLogin retries + reason-printing. MOVE-FIX baseline UNBLOCKED
+  for the next 1070 session; never default --account=tailnet1 there.
 
 ## -2. R9 290 REMOTE EYE SESSION 2026-08-10 — E1 DIRTY (envcell fracture) + boot-time complaint
 

@@ -379,7 +379,7 @@
       "result": {
         "ts": "2026-08-10",
         "by": "orchestrator (1070, CDP Network log, fresh profile per arm-pair sh1/sh2; verdict EXPLORATORY per SPEC §2.2)",
-        "taxonomyNote": "classifier: shell-class = index*.html + /shell/*; app-js-other = unbundled scene3d/module tree (T11's P5 counts those as shell-class, so compare totals not labels). DEVIATION recorded: &renderOnDemand=1 dropped from the queue's normative URLs (it stalls the boot orchestrator pre-login; reproduced 2×; committed funnel smoke also omits it).",
+        "taxonomyNote": "classifier: shell-class = index*.html + /shell/*; app-js-other = unbundled scene3d/module tree (T11's P5 counts those as shell-class, so compare totals not labels). DEVIATION recorded: &renderOnDemand=1 dropped from the queue's normative URLs (believed at run time to stall boot; SAME-DAY CORRECTION: the MOVEFIX-HARNESS agent proved renderOnDemand does NOT stall boot — the stalls were stale-ACE-session login refusals hidden by scalar-only boot gates. The drop is harmless to the comparison but the stated reason was wrong).",
         "arms": {
           "unbundled-cold": {
             "requests": 512,
@@ -531,11 +531,11 @@
         "RESULTS-v2 (hb-results-v2) file; this file's result field carries the pointer"
       ],
       "result": {
-        "ts": "2026-08-10",
-        "by": "orchestrator (1070, fresh mv1 profile)",
-        "status": "ATTEMPTED — BLOCKED by a harness defect, moved to Batch B per H-10.2 (cadenceOptional)",
-        "defect": "harness/moving-bench.mjs auto-builds its page URL with &renderOnDemand=1 (required for its drive=ondemand pacing) but that flag STALLS the boot orchestrator pre-login on HEAD (BOOT-FAIL; reproduced 3× today in other contexts — census #1, and the committed funnel smoke deliberately omits the flag). The harness cannot reach in-world to start its warm lap.",
-        "fixShape": "either boot WITHOUT renderOnDemand and arm on-demand drive post-in-world (flag is boot-time-read — may need a runtime setter), or fix the boot orchestrator to progress under renderOnDemand (it awaits a rendered frame that never comes). File under the T21/frame-work lane or harness maintenance."
+        "ts": "2026-08-10 (corrected same day)",
+        "by": "orchestrator",
+        "status": "UNBLOCKED — harness fixed (2d49aa26); the judged 1800-frame baseline is runnable next 1070 session",
+        "correction": "The original defect text blamed &renderOnDemand=1 stalling boot — WRONG (MOVEFIX-HARNESS agent reproduced the exact URL reaching ready in 8.4 s). TRUE cause: the harness's boot gate polled the bare __bootState scalar with no retries and no reason-printing, hiding a STALE-ACE-SESSION refusal (character-error 0x1; index.html autoLogin has maxRetries=0 by design) and racing the ready/in-world shared scalar. Fix: classifyBoot() over __bootStateHistory + __runAutonomousLogin relogin retries (--loginRetries default 2) + full failure forensics. Also: never default --account=tailnet1 on the 1070 (a person's Developer account) — pass a bot account.",
+        "fixedInvocation": "node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 --anchor=25171,20344,42.0 --mode=orbit --frames=1800 --laps=1 --arm=default --account=<bot account, NOT tailnet1>"
       }
     }
   ]
