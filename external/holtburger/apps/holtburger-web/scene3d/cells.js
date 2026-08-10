@@ -2743,6 +2743,52 @@ export function tickPortalPunch(scene3d, sessionHandle) {
 }
 
 /**
+ * Resolve the seal pass for whichever renderer is driving this frame.
+ *
+ * PORTAL-P0 leg 3 (2026-08-10). The composer owns a `portalSealPass` slot, but
+ * the DIRECT render path (`?wireframe=1`, `?atmosphere=off`, and the ~8-43 s
+ * pre-atmosphere-bake window — scene3d/index.js's "Direct render path", reached
+ * exactly when `atmospherePipeline` is falsy) had no seal at all: it does
+ * world → `clearDepth()` → cells with nothing between the wipe and the cells
+ * pass, so retail's step 3 (`DrawPortalPolyInternal(portal, zClear=0)`,
+ * acclient.c:461536) simply did not happen and interiors overpainted the
+ * world-pass colour seen through every doorway. A SwiftShader bot is exactly
+ * the configuration that lands there, so the round-6 seal was invisible to
+ * every headless run.
+ *
+ * The two paths are mutually exclusive by construction (the direct path is the
+ * `if (atmospherePipeline) { … return; }` fall-through), so one seal pass is
+ * live at a time and the composer's instance always wins when it exists.
+ *
+ * Minted lazily via `import()` rather than a static import: `PortalPunchPass`
+ * pulls in `postprocessing` (a CDN module in the import map), and the direct
+ * path's whole point is the configurations that never build the composer — a
+ * static import would make every `?wireframe=1` boot fetch it. The first armed
+ * frame kicks the import and returns null; the pass is fed from the next frame
+ * on. Also gated on the split being armed, so an unarmed session never fetches.
+ */
+function resolveSealPass(scene3d) {
+  const composerPass = scene3d?.atmospherePipeline?.portalSealPass ?? null;
+  if (composerPass) return composerPass;
+  if (!scene3d || scene3d._indoorSplitArmed !== true) return null;
+  if (scene3d._directPortalSealPass) return scene3d._directPortalSealPass;
+  if (INDOOR_DEPTH_SPLIT === "off" || scene3d._directPortalSealPending) return null;
+  scene3d._directPortalSealPending = true;
+  import("./portal_punch.js")
+    .then((m) => {
+      // `scene`/`camera` ctor args are unused by the pass (it renders its own
+      // aperture scene); the direct render path assigns `.camera` per frame
+      // from the active camera, exactly as the composer's `render()` does.
+      scene3d._directPortalSealPass = new m.PortalPunchPass(null, null, "seal");
+    })
+    .catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn("[portal_seal] direct-path seal pass unavailable:", e);
+    });
+  return null;
+}
+
+/**
  * Portal-SEAL feed (2026-08-04 round 6, `?indoorDepthSplit`). The indoor twin of
  * `tickPortalPunch`: while the split is armed, hands the seal pass the current
  * view's outdoor-facing apertures so it can re-stamp them at TRUE depth between
@@ -2769,7 +2815,7 @@ export function tickPortalPunch(scene3d, sessionHandle) {
  * in has no meaningful plane to seal).
  */
 export function tickPortalSeal(scene3d, sessionHandle) {
-  const pass = scene3d?.atmospherePipeline?.portalSealPass ?? null;
+  const pass = resolveSealPass(scene3d);
   if (!pass || !sessionHandle) return;
   if (typeof sessionHandle.getVisiblePortalApertures !== "function") return;
   if (pass._errored || !scene3d._indoorSplitArmed) {

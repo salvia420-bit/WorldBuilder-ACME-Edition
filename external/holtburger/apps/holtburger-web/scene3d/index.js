@@ -2682,6 +2682,28 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // (2) depth-only wipe, colour kept — retail's `Clear(4, …, 1.0f)`.
         renderer.autoClear = false;
         renderer.clearDepth();
+        // (2b) PORTAL SEAL — retail's step 3 between the Z wipe and the cell
+        // draws (`DrawPortalPolyInternal(portal, zClear=0)`, acclient.c:461536):
+        // re-stamp each outdoor-facing aperture at its TRUE depth so the cells
+        // pass cannot overpaint the world-pass colour (terrain AND the layer-0
+        // outdoor particles drawn with it) that is legitimately visible through
+        // the doorway. The composer route gets this from its `portalSealPass`
+        // slot, sequenced AFTER depthClearPass and BEFORE the cells mask/render
+        // pair (atmosphere_pipeline.js:753-795); this is the same pass object,
+        // the same apertures (cells.js `tickPortalSeal` feeds whichever one is
+        // live), in the same slot — the direct path just sequences it by hand.
+        //
+        // Render target `null` = the canvas, which is what this path draws to:
+        // the pass saves/restores `getRenderTarget()` and skips its scissor
+        // bound when there is no input buffer, so it stamps depth into the same
+        // buffer the two submissions either side of it use. The aperture mesh
+        // sits on layer 0, so this must run while the mask is still layer 0 —
+        // i.e. here, before the layer-1 switch below.
+        const sealPass = liveScene3dRef?._directPortalSealPass;
+        if (sealPass && !sealPass._errored && sealPass.hasApertures) {
+          sealPass.camera = activeCam;
+          sealPass.render(renderer, null);
+        }
         // (3) the room shell + props + EnvCells + entities, fresh depth.
         //
         // `scene.background` MUST be nulled around this second submission.
