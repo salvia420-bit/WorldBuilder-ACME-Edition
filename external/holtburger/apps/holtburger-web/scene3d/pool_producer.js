@@ -62,6 +62,7 @@ import { PoolStreamController } from "./pool_stream.js";
 import { tileOfLb, tileLbKeys } from "./residency_grid.js";
 import { frameWorkEnabled, getFrameWorkScheduler } from "./frame_work.js";
 import { registerAtlasRefeed } from "./bc7_textures.js";
+import { _atlasRefeedImpl as atlasSideRefeed } from "./static_atlas.js";
 
 // ---------------------------------------------------------------------------
 // the pool world singleton
@@ -121,7 +122,7 @@ export function initPoolWorld({ THREE, group, search } = {}) {
       byDomain: { st: 0, ec: 0 },
       refusedNodes: 0, normFails: 0,
       parks: 0, adopts: 0, releases: 0,
-      refeedCalls: 0, refeedLayers: 0, refeedRehomed: 0,
+      refeedCalls: 0, refeedLayers: 0, refeedRehomed: 0, refeedAtlasSide: 0,
     },
   };
   // F-11.17: the producer-agnostic re-home seam. The atlas registers the same
@@ -329,15 +330,30 @@ export function poolOnAdmit(tiles, playerTile) {
   const w = _world;
   if (!w.controller) return;
   if (playerTile != null && playerTile >= 0) w.controller.setPlayerTile(playerTile);
+  const canDispatch = typeof w.controller.dispatch.post === "function";
   for (const t of tiles || []) {
-    // A resident tile re-entering the window is a pointer re-adopt; a new one
-    // records a dispatch item that the producers' own feed satisfies.
-    w.controller.onAdmit(t);
+    if (w.registry.isTileResident(t)) {
+      // PARKED → LIVE is a pointer re-adopt: no bake, no fetch, no decode.
+      w.controller.onAdmit(t);
+      continue;
+    }
+    // LIVE-ARM FIX (2026-08-10): with no `postBake` wired (the worker-side
+    // record→axis ladder is T22's D1 remainder — the PRODUCERS feed today),
+    // `BakeDispatchQueue.dispatch()` can never post, so recording admits just
+    // grew the queue forever (the first arm ended at depth 36, posted 0).
+    // Record only when there is something that can post.
+    if (canDispatch) w.controller.onAdmit(t);
   }
 }
 
 function _releaseTile(tile) {
   const w = _world;
+  // LIVE-ARM FIX (2026-08-10): a teleport drives dozens of NEVER-RESIDENT tiles
+  // to EMPTY (the first arm read 89 such transitions against 33 resident
+  // tiles), and each one used to enqueue a W4 item that released nothing —
+  // 89 scheduler items of pure bookkeeping. Only a tile the registry actually
+  // holds is worth a release, and the counter now means what it says.
+  if (!w.registry.isTileResident(tile)) return;
   if (w.controller) w.controller.enqueueRelease(tile);
   else w.registry.releaseTile(tile);
   w.stats.releases += 1;
@@ -367,10 +383,19 @@ export function poolAtlasRefeed(rsId) {
   const w = _world;
   const rs = rsId >>> 0;
   w.stats.refeedCalls += 1;
+  // LIVE-ARM FIX (2026-08-10): the pooled world REPLACED the atlas on this
+  // seam, but the atlas still renders the pooled world's residue — the first
+  // arm read refeedCalls=54 with the atlas half never running, i.e. every
+  // atlas-committed preview node would have kept its preview texels for the
+  // session. Chain, never displace: the atlas half runs first (it owns the
+  // nodes it committed), the pool half second (it owns its class pages).
+  let atlasSide = 0;
+  try { atlasSide = atlasSideRefeed(rs) | 0; } catch (_) { /* fail-soft */ }
+  w.stats.refeedAtlasSide += atlasSide;
   const layers = w.classMats.refeedRsId(rs);
   w.stats.refeedLayers += layers;
   const held = w.holdouts.get(rs);
-  if (!held || held.length === 0) return layers;
+  if (!held || held.length === 0) return layers + atlasSide;
   w.holdouts.delete(rs);
   let rehomed = 0;
   // Group by (scene3d, lbKey, domain) so each re-offer is one TilePlan.
@@ -395,7 +420,7 @@ export function poolAtlasRefeed(rsId) {
     } catch (_) { /* fail-soft: the node keeps rendering as it is */ }
   }
   w.stats.refeedRehomed += rehomed;
-  return rehomed + layers;
+  return rehomed + layers + atlasSide;
 }
 
 // ---------------------------------------------------------------------------

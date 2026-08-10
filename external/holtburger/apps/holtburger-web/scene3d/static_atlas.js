@@ -1809,7 +1809,12 @@ export function evictStaticAtlasForLb(lbKey) {
  * that commit leave the scene. Emptied preview buckets are torn down by
  * the optimize-pass GC.
  */
-function _atlasRefeedImpl(rsId) {
+// EXPORTED (2026-08-10, T22-PRODUCER): the pooled producer takes ownership of
+// the `registerAtlasRefeed` seam when it arms, but the ATLAS still renders the
+// pooled world's residue — so the pool handler must run THIS one too, or every
+// atlas-committed preview node silently keeps its preview texels for the
+// session. Export only; not one byte of behaviour changes.
+export function _atlasRefeedImpl(rsId) {
   const rs = rsId >>> 0;
   const list = _rsMembers.get(rs);
   if (!list || list.length === 0) return 0;
