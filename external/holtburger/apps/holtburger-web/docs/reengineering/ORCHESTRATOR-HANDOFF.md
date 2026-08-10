@@ -31,9 +31,13 @@ Read both before acting. This file is the volatile state those don't carry.
   the 4x upscale corpus — 253/400 sampled rows keyed WRONG pre-resample; bake
   now reads the KTX2 header. (2) The dims byte cannot express off-page — new
   FULL_PAGE_DIMS tier bit (bit 5) is the authority + one client reader.
-  STITCH DISPATCHED: pool_producer.js:195 must pass texRef from
-  texRefPageInfo() (else a page-dim dist buys pools nothing) — sent back to the
-  producer-swap agent, in flight.
+  STITCH LANDED+VERIFIED (4d9ddbd8, battery 396→413/413, census reduction
+  still WITHIN-BOUNDS): pooled members key on TEXREF-declared page dims with
+  FULL_PAGE_DIMS as authority; D7 refinements accepted — compressed read from
+  the live texture (f7|f8 axis must match the real texStorage3D format), and
+  routing on DECLARED≠RESIDENT rather than the bit alone (bit-only would have
+  zeroed the 51-pool world on today's pre-resample dist). On today's dist
+  texRefPageKeyed reads 0 by design; it climbs on the first page-dim dist.
 - NEXT FULL-WORLD BAKE (orchestrator-owned, run ALONE per R-MEM1), now fully
   specified: step 1 buildbox encode of the 1,309 resampled members (identity
   members symlink; same basisu line so dims are the only variable; q75 election
