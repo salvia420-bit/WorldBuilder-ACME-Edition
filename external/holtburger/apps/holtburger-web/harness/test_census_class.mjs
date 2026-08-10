@@ -2,7 +2,8 @@
 // harness/test_census_class.mjs — Tier-1 test for the CENSUS-CLASS reducer
 // (T00). Pure node, no browser: locks the pass-07 S3 canonical key encoding
 // (state axes = _stateKeyOf + side; patch = _patchSetCacheKey verbatim +
-// #config token; tex dims byte + f7/f8; shadow pair), the (sector × class)
+// #config token; tex ARRAY-PAGE TIER + f7/f8 — the T00 re-key 2026-08-09;
+// shadow pair), the (sector × class)
 // pool projection, the pass split, the axis-explosion analysis, and the
 // SPEC §3 T00 verdict rule.
 
@@ -66,15 +67,29 @@ check("patch: vfx set + #config token",
 const vfxNoCfg = rec({ patch: { ...PLAIN_PATCH, v: "glint" }, vfxConfigKey: null });
 check("patch: set without config", patchKeyOf(vfxNoCfg) === "hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|vglint");
 
-// tex token: (log2w<<4|log2h) hex + format.
-check("tex: 256x256 bc7", texKeyOf(rec()) === "x88f7", texKeyOf(rec()));
-check("tex: 512x256 rgba8",
-  texKeyOf(rec({ texW: 512, texH: 256, texCompressed: false })) === "x98f8");
-check("tex: no texture", texKeyOf(rec({ texW: 0, texH: 0, hasTex: false, texCompressed: false })) === "x00f8");
+// tex token: ARRAY-PAGE TIER (t = clamp-ceil log2 of the max dim, 8..11) +
+// format — the T00 re-key 2026-08-09 (raw dims RETIRED from the key).
+check("tex: 256x256 bc7 -> tier 8", texKeyOf(rec()) === "x8f7", texKeyOf(rec()));
+check("tex: 512x256 rgba8 -> tier 9 (max dim, square page)",
+  texKeyOf(rec({ texW: 512, texH: 256, texCompressed: false })) === "x9f8",
+  texKeyOf(rec({ texW: 512, texH: 256, texCompressed: false })));
+check("tex: 512x256 and 256x512 share a page",
+  texKeyOf(rec({ texW: 512, texH: 256 })) === texKeyOf(rec({ texW: 256, texH: 512 })));
+check("tex: sub-page members floor at 256²",
+  texKeyOf(rec({ texW: 32, texH: 32 })) === "x8f7"
+  && texKeyOf(rec({ texW: 128, texH: 64 })) === "x8f7");
+check("tex: over-page members clamp at 2048²",
+  texKeyOf(rec({ texW: 4096, texH: 4096 })) === "x11f7");
+check("tex: non-pow2 clamp-CEILs (513 -> 1024)",
+  texKeyOf(rec({ texW: 513, texH: 200 })) === "x10f7");
+check("tex: format still discriminates",
+  texKeyOf(rec({ texCompressed: false })) === "x8f8");
+check("tex: no texture", texKeyOf(rec({ texW: 0, texH: 0, hasTex: false, texCompressed: false })) === "x0f8",
+  texKeyOf(rec({ texW: 0, texH: 0, hasTex: false, texCompressed: false })));
 
 // full key: fixed order domain|state|patch|tex|shadow.
 check("classKey: full S3 order",
-  classKeyOf(rec()) === "st|t0a0w1b1rcsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x88f7|c1r1",
+  classKeyOf(rec()) === "st|t0a0w1b1rcsd|hb|d0|c0|p0|l0|a0|b0|f0|s0|k0|v|x8f7|c1r1",
   classKeyOf(rec()));
 check("classKey: shadow pair discriminates",
   classKeyOf(rec({ receiveShadow: false })) !== classKeyOf(rec()));
@@ -104,15 +119,19 @@ const snapshot = {
     rec({ domain: "as", instances: 40, mats: 4, sectors: ["s1x1"] }),
     // translucent class
     rec({ transparent: true, instances: 7, sectors: ["s1x1"] }),
-    // unknown-sector class → floored at 1 pool + warning
-    rec({ texW: 64, texH: 64, instances: 5, sectors: [], sectorsUnknown: 1 }),
+    // a SUB-PAGE member (64²) shares the 256² page ⇒ SAME class as record 1
+    // (the T00 re-key's central property — raw dims no longer fragment).
+    rec({ texW: 64, texH: 64, instances: 3, sectors: ["s1x1"] }),
+    // a 2048² member is a different PAGE ⇒ different class; unknown sectors
+    // → floored at 1 pool + warning
+    rec({ texW: 2048, texH: 2048, instances: 5, sectors: [], sectorsUnknown: 1 }),
   ],
   cache: {
     available: true,
     sizes: { materials: 3 },
     records: [
       { ...rec(), map: "materials", mats: 2 },
-      { ...rec({ texW: 64, texH: 64 }), map: "materials", mats: 1 },
+      { ...rec({ texW: 2048, texH: 2048 }), map: "materials", mats: 1 },
       { ...rec({ patch: { ...PLAIN_PATCH, f: 1 } }), map: "floorBiasMaterials", mats: 1 },
     ],
   },
@@ -122,10 +141,17 @@ const r = reduceClassCensus(snapshot);
 check("reduce: pooled classes", r.pooledClasses === 4, r.pooledClasses);
 // pools: class1 |{s1x1,s1x2,s2x1}|=3, ec 1, translucent 1, unknown floor 1 → 6
 check("reduce: projected pools", r.projectedPools === 6, r.projectedPools);
-check("reduce: pooled instances", r.pooledInstances === 182, r.pooledInstances);
+check("reduce: pooled instances", r.pooledInstances === 185, r.pooledInstances);
+// The re-key's central property, asserted on the reduction: the 64² record
+// did NOT mint a class — it joined the 256² page class.
+check("reduce: sub-page member joins the page class",
+  classKeyOf(rec({ texW: 64, texH: 64 })) === classKeyOf(rec()),
+  classKeyOf(rec({ texW: 64, texH: 64 })));
+check("reduce: program classes ignore the tex axis entirely",
+  r.programClasses === 3, r.programClasses);
 check("reduce: reserved tr excluded", r.reserved.tr?.classes === 1 && r.reserved.tr.instances === 200);
 check("reduce: reserved as excluded", r.reserved.as?.classes === 1);
-check("reduce: pass split", r.passes.opaque === 175 && r.passes.translucent === 7, JSON.stringify(r.passes));
+check("reduce: pass split", r.passes.opaque === 178 && r.passes.translucent === 7, JSON.stringify(r.passes));
 check("reduce: unknown-sector warning",
   r.warnings.some((w) => w.includes("floored at 1 pool")));
 // pooled-domain sectors only: {s1x1, s1x2, s2x1} (tr/as sectors excluded).

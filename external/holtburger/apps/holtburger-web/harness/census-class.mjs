@@ -32,9 +32,17 @@
 //    patch  = _patchSetCacheKey verbatim (materials.js:553-585:
 //             hb|d|c|p|l|a|b|f|s|k|v<set>) + "#"+configKey for MECH-B sets
 //             (statics.js:1791-1802 token rule)
-//    tex    = x{(log2w<<4|log2h) hex}{f7|f8}   (dims + compressed format —
-//             the pass-5 TEXREF axis, approximated by live texture dims)
+//    tex    = x{t}{f7|f8}        ARRAY-PAGE TIER + compressed format —
+//             t = clamp(ceil(log2(max dim)), 8, 11) (square pow2 pages
+//             256²/512²/1024²/2048²), the pass-5 TEXREF axis as amended by
+//             the T00 re-key 2026-08-09, approximated by live texture dims
 //    shadow = c{0|1}r{0|1}       (node-level flags)
+//
+// The key BUILDERS are no longer defined here: they live in
+// `scene3d/pool_class_key.js` (T22/ST9), the one place the runtime pool
+// registry, this census and the boot prewarm list all read, so a census can
+// never measure a different key than the renderer builds. They are
+// re-exported below for the existing test surface.
 //
 // Projected pools = Σ over pooled classes (domains st + ec) of the class's
 // distinct world-sector count; sector = 2×2 tiles = 4×4 LBs = 768 m,
@@ -61,9 +69,23 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createReport } from "./lib/report.mjs";
+import {
+  classKeyOf as _classKeyOf,
+  programClassKeyOf as _programClassKeyOf,
+  stateKeyOf as _stateKeyOf,
+  patchKeyOf as _patchKeyOf,
+  texKeyOf as _texKeyOf,
+  passClassOf as _passClassOf,
+  POOL_DOMAINS as _POOL_DOMAINS,
+} from "../scene3d/pool_class_key.js";
 
-// ── SPEC §3 T00 acceptance anchors (pass 7 S5.3 [A] figures) ───────────────
-export const BOUNDS = Object.freeze({ classes: 48, pools: 300 });
+// ── SPEC §3 T00 acceptance anchors, as re-baselined by the T00 re-key
+// (2026-08-09, applied in 24de3936 to pass-07 S5.3 + SPEC §3 T00): the total
+// class bound splits from the PROGRAM class bound, because the page-tier tex
+// axis is a texStorage3D-allocation axis, not a GLSL-program axis. Measured
+// under the amended key: 63/271 (Nanto), 51/238 (Town Network), program
+// classes 24/23.
+export const BOUNDS = Object.freeze({ classes: 72, programClasses: 48, pools: 300 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Page-side collector. MUST be self-contained (Playwright serializes it):
@@ -375,57 +397,18 @@ export function collectClassCensusInPage() {
 // Node-side reducer — pass 7 S3 canonical key + census arithmetic.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function log2i(v) {
-  const n = Math.max(1, v | 0);
-  return Math.max(0, Math.min(15, Math.ceil(Math.log2(n))));
-}
+// The S3 key builders live in scene3d/pool_class_key.js (the single source
+// shared with the runtime pool registry + the prewarm list). Re-exported so
+// harness/test_census_class.mjs and the offline re-key evaluators keep their
+// import surface.
+export const stateKeyOf = _stateKeyOf;
+export const patchKeyOf = _patchKeyOf;
+export const texKeyOf = _texKeyOf;
+export const classKeyOf = _classKeyOf;
+export const programClassKeyOf = _programClassKeyOf;
+export const passClassOf = _passClassOf;
 
-/** pass 7 S3 state token: t{0|1}a{exact}w{0|1}b{mode|cS.D.E}r{w|c}s{f|b|d}. */
-export function stateKeyOf(rec) {
-  const at = String(+(rec.alphaTest || 0)); // full precision (100/255 rule)
-  const dw = rec.depthWrite === false ? 0 : 1;
-  const b = rec.blending == null ? 1 : rec.blending;
-  // S3: b{mode | cS.D.E} — "b1" normal, "bc<src>.<dst>.<eq>" custom.
-  const blend = b === 5 && rec.blendTriple ? `c${rec.blendTriple}` : String(b);
-  const wr = rec.wrap === "w" ? "w" : "c";
-  const side = rec.side === 0 ? "f" : rec.side === 1 ? "b" : "d";
-  return `t${rec.transparent ? 1 : 0}a${at}w${dw}b${blend}r${wr}s${side}`;
-}
-
-/** _patchSetCacheKey verbatim (materials.js:553-585) + #configKey token. */
-export function patchKeyOf(rec) {
-  const u = rec.patch || {};
-  let key = "hb"
-    + "|d" + (u.d ? 1 : 0) + "|c" + (u.c ? 1 : 0) + "|p" + (u.p ? 1 : 0)
-    + "|l" + (u.l ? 1 : 0) + "|a" + (u.a ? 1 : 0) + "|b" + (u.b ? 1 : 0)
-    + "|f" + (u.f ? 1 : 0) + "|s" + (u.s ? 1 : 0) + "|k" + (u.k ? 1 : 0)
-    + "|v" + (u.v || "");
-  if (u.v && rec.vfxConfigKey != null) key += "#" + rec.vfxConfigKey;
-  return key;
-}
-
-/** tex token: x{(log2w<<4|log2h) hex, 2 digits}{f7|f8}. */
-export function texKeyOf(rec) {
-  const byte = rec.hasTex === false && !rec.texW
-    ? 0
-    : ((log2i(rec.texW) << 4) | log2i(rec.texH));
-  return `x${byte.toString(16).padStart(2, "0")}${rec.texCompressed ? "f7" : "f8"}`;
-}
-
-/** The full S3 class key (order fixed, produced only here). */
-export function classKeyOf(rec) {
-  const shadow = `c${rec.castShadow ? 1 : 0}r${rec.receiveShadow ? 1 : 0}`;
-  return `${rec.domain}|${stateKeyOf(rec)}|${patchKeyOf(rec)}|${texKeyOf(rec)}|${shadow}`;
-}
-
-/** passClass per D-07.3 (derived from renderState). AdditiveBlending = 2. */
-export function passClassOf(rec) {
-  if (rec.blending === 2) return "additive";
-  if (rec.transparent === true && !(rec.alphaTest > 0)) return "translucent";
-  return "opaque";
-}
-
-const POOL_DOMAINS = ["st", "ec"];
+const POOL_DOMAINS = _POOL_DOMAINS;
 
 /**
  * Reduce a page snapshot to the census verdict inputs.
@@ -505,6 +488,12 @@ export function reduceClassCensus(snapshot) {
     shadow: (r) => ({ ...r, castShadow: true, receiveShadow: true }),
   };
   const pooledRecs = records.filter((r) => POOL_DOMAINS.includes(r.domain));
+  // PROGRAM classes — the key modulo the ENTIRE tex axis (dims AND format
+  // never change the GLSL program). This is the D-07.9 prewarm population and
+  // the p99 link-storm term's key; bounded separately from total classes
+  // since the T00 re-key (page tier is a texStorage3D axis, not a program
+  // axis).
+  const programClasses = new Set(pooledRecs.map((r) => programClassKeyOf(r))).size;
   const axisAnalysis = {};
   for (const [axis, drop] of Object.entries(axisDrop)) {
     const set = new Set(pooledRecs.map((r) => classKeyOf(drop(r))));
@@ -565,6 +554,7 @@ export function reduceClassCensus(snapshot) {
     skipped: snapshot?.skipped ?? {},
     errors: snapshot?.errors ?? [],
     pooledClasses: pooled.length,
+    programClasses,
     projectedPools,
     pooledMaterials: totalMats,
     pooledInstances: totalInstances,
@@ -584,6 +574,9 @@ export function censusVerdict(reducedScenes) {
   const offending = [];
   for (const [scene, r] of Object.entries(reducedScenes)) {
     if (r.pooledClasses > BOUNDS.classes) offending.push(`${scene}: classes ${r.pooledClasses} > ${BOUNDS.classes}`);
+    if (r.programClasses != null && r.programClasses > BOUNDS.programClasses) {
+      offending.push(`${scene}: programClasses ${r.programClasses} > ${BOUNDS.programClasses}`);
+    }
     if (r.projectedPools > BOUNDS.pools) offending.push(`${scene}: pools ${r.projectedPools} > ${BOUNDS.pools}`);
   }
   return {
@@ -604,7 +597,7 @@ function arg(name, dflt) {
 function printScene(name, r) {
   console.log(`\n── ${name} ──────────────────────────────────────────────`);
   console.log(`  lb=0x${(r.meta.landblockId ?? 0).toString(16).padStart(8, "0")} quality=${r.meta.quality} terrainBakedLbs=${r.meta.terrainBakedLbs}`);
-  console.log(`  pooled classes (st+ec): ${r.pooledClasses}   projected pools: ${r.projectedPools}`);
+  console.log(`  pooled classes (st+ec): ${r.pooledClasses}   program classes: ${r.programClasses}   projected pools: ${r.projectedPools}`);
   console.log(`  pooled materials: ${r.pooledMaterials}  instances: ${r.pooledInstances}  sectors: ${r.sectors}`);
   console.log(`  pass split (pooled instances): opaque=${r.passes.opaque} additive=${r.passes.additive} translucent=${r.passes.translucent}`);
   for (const [d, v] of Object.entries(r.domains)) {
@@ -630,6 +623,7 @@ function printScene(name, r) {
 function metricsOf(r) {
   const m = {
     "classes@resident": r.pooledClasses,
+    "programClasses@resident": r.programClasses,
     "projectedPools@resident": r.projectedPools,
     "classMaterials@resident": r.pooledMaterials,
     "classInstances@resident": r.pooledInstances,
