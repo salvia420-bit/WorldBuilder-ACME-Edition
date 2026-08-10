@@ -2665,6 +2665,11 @@ export function tickPortalPunch(scene3d, sessionHandle) {
     _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
+    // Own typeof-guard — this used to read `hasV2` from tickPortalStencil's
+    // scope: a cross-function ReferenceError thrown EVERY frame and eaten by
+    // the catch below, leaving the punch structurally dead with a frozen diag.
+    const hasV2 =
+      typeof sessionHandle.getVisiblePortalAperturesWithCellCenter === "function";
     const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
 
     // OVER-PUNCH FIX (2026-08-04) — the 2026-07-06 R9-290 blackout.
@@ -2737,8 +2742,12 @@ export function tickPortalPunch(scene3d, sessionHandle) {
       };
     }
     pass.setApertures(punchFlat, punchRect);
-  } catch (_) {
+  } catch (e) {
     pass.setApertures(null, null);
+    // A swallowed throw here hid a punch-killing ReferenceError for days —
+    // name it in the diag so "tick-threw" can never masquerade as "no
+    // apertures" again.
+    _punchDiag(scene3d, "tick-threw:" + (e?.message ?? e));
   }
 }
 
