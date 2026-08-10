@@ -260,7 +260,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.vfxGauge",
     status: "current",
     reads: "object",
-    evidence: "scene3d/index.js:706",
+    evidence: "scene3d/index.js:721",
     availability: "flag:?vfxGauge=on",
     note: "Half-B timing meter. tCpuMs/tGpuMs are LAST-FRAME levels; frames is "
       + "the only counter. tGpuMs=-1 when N/A; SwiftShader GPU clock is not "
@@ -276,7 +276,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.wasmMem",
     status: "current",
     reads: "async-function",
-    evidence: "scene3d/index.js:4776",
+    evidence: "scene3d/index.js:4800",
     availability: "in-world",
     note: "Sums main + bake-worker hb_mem_census (src/lib.rs:11469-11593; "
       + "summarizeMemCensus in scene3d/mem_census.js:30-68). `missing` names "
@@ -347,7 +347,7 @@ export const REGISTRY = Object.freeze([
     name: "__landblockLru.getStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6151",
+    evidence: "scene3d/index.js:6175",
     availability: "late",
     retiresAt: "ST7",
     successor: "__diag.residency",
@@ -365,7 +365,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.textures",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:4806",
+    evidence: "scene3d/index.js:4830",
     availability: "flag:?texCensus=on",
     opaque: true,
     note: "WeakRef texture census (scene3d/texture_census.js). Returns null "
@@ -483,7 +483,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.residency",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6548",
+    evidence: "scene3d/index.js:6630",
     spec: "pass-10 S3 (pass 6 D-06.9.4 + additions)",
     availability: "flag:?slotGrid=on",
     note: "Slot-grid residency surface; successor of __landblockLru.getStats. "
@@ -527,11 +527,16 @@ export const REGISTRY = Object.freeze([
 
   {
     name: "__diag.pools",
-    status: "reserved",
+    status: "current",
     reads: "function",
     spec: "pass-10 S3 (pass 7 S7 + M6 pair)",
-    availability: "reserved:ST9",
-    note: "Draw-pool surface; successor of __atlasStats. classes.createdPostBoot "
+    evidence: "scene3d/index.js:6304",
+    availability: "in-world",
+    note: "Draw-pool surface; successor of __atlasStats. LIVE since the T22 "
+      + "producer swap (index.js installs the PRODUCER census, which supersedes "
+      + "pool_registry.js's bare registry census of the same name). Only "
+      + "populated under the full F-11.3 chain; reads {enabled:false} otherwise. "
+      + "classes.createdPostBoot "
       + "and parked-frame events.mutationsThisFrame are zero-tolerance gates. "
       + "draws.* sampled under PR-7 (autoReset off, cumulative, /frames).",
     fields: {
@@ -556,6 +561,14 @@ export const REGISTRY = Object.freeze([
       "draws.submitted": L("count", ["submitted"]),
       "draws.switchRate": L("count", ["submitted"]),
       "draws.programSwitches": L("count", ["submitted"]),
+      "producer.nodesIn": C("count"),
+      "producer.pooled": C("count"),
+      "producer.passthrough": C("count"),
+      "producer.refusedNodes": C("count"),
+      "classPages.classes": L("count", ["resident"]),
+      "classPages.pageBytes.allocated": L("bytes", ["allocated"]),
+      "classPages.pageBytes.used": L("bytes", ["used"]),
+      "classPages.refused.needsResample": C("count"),
     },
   },
 
@@ -702,10 +715,11 @@ export const REGISTRY = Object.freeze([
 
   {
     name: "__prewarmStats",
-    status: "reserved",
-    reads: "object",
+    status: "current",
+    reads: "function",
     spec: "pass-10 S3 (pass 8 S5.4)",
-    availability: "reserved:ST9",
+    evidence: "scene3d/pool_prewarm.js:249",
+    availability: "in-world",
     note: "Boot class-census prewarm cost (DT-45: BOOT-666/PARKED-REF read "
       + "msColor/msDepth). Post-boot class mint is a bug.",
     fields: {

@@ -43,10 +43,13 @@ const ok = (cond, label) => {
   for (const name of ["__bc7Stats", "__xu7Stats", "__terrainBc7Stats", "__diag.wasmMem", "__diag.render", "__hbWasmMemory", "__texStats", "__diag.geometry"]) {
     ok(getSurface(name)?.status === "current", `current surface registered: ${name}`);
   }
-  // The pass-10 S3 new-architecture names are reserved until their stage
-  // lands them (registry rule: the reserved schema IS the normative target).
+  // T22-PRODUCER (ST9) flipped these reserved -> current: the producer swap
+  // makes both surfaces reachable on a real run (index.js installs the
+  // producer census on `__diag.pools`; pool_prewarm installs
+  // `__prewarmStats` when the boot ring settles). The reserved field schemas
+  // are kept intact and extended, per the registry rule.
   for (const name of ["__diag.pools", "__prewarmStats"]) {
-    ok(RESERVED_NAMES.includes(name), `reserved name claimed: ${name}`);
+    ok(getSurface(name)?.status === "current", `ST9 surface landed current: ${name}`);
   }
   // Landed at their stage (T21/ST8 flipped these reserved -> current with
   // the reserved field schemas kept intact + stage-A additions; T12/ST2

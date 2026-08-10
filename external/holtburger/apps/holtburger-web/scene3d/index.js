@@ -117,6 +117,20 @@ import {
   framePhaseCommit,
   getFrameWorkScheduler,
 } from "./frame_work.js";
+// ST9 (?drawPools, SPEC §3 T22 + T22-PRODUCER) — the pooled world. Every
+// export below is inert unless the FULL F-11.3 chain is armed (initPoolWorld
+// returns null and says why), so the OFF arm never leaves the legacy stack.
+import {
+  initPoolWorld,
+  poolWorldActive,
+  poolWorldCensus,
+  poolOnSlotState,
+  poolOnTeleport,
+  poolOnAdmit,
+  poolTickP4,
+} from "./pool_producer.js";
+import { getPoolRegistry } from "./pool_registry.js";
+import { initPoolPrewarm, prewarmWorkList } from "./pool_prewarm.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
 // script queues, mirroring retail's single Timer::cur_time static,
@@ -2195,6 +2209,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       return;
     }
     try {
+      // ST9 stage B: the pool stream's P4 half runs FIRST in the slot — it
+      // opens the registry's frame (the anti-churn counter's edge) and posts
+      // at most one bake dispatch; the scheduler below serves the W1..W4 items
+      // it enqueued. No-op unless the pooled world is armed.
+      poolTickP4();
+    } catch (_) { /* fail-soft; the loop never dies for a stream slot */ }
+    try {
       frameWorkP4({
         frameStartMs: lastFrameTs,
         // Shrink-rule reference period: the configured pacer interval, else
@@ -2782,6 +2803,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // frameStartMs (no shrink; there is no render to protect on this
       // driver); the mode budget still applies.
       if (_frameWorkOn) {
+        try {
+          poolTickP4();
+        } catch (_) { /* fail-soft */ }
         try {
           frameWorkP4({});
         } catch (_) { /* fail-soft; one-shot warned in the rAF path */ }
@@ -6259,6 +6283,27 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // and the pressure ladder replaces the deleted geometry-count governor.
     // Fail-soft at every seam: an arming error logs and leaves legacy
     // residency in charge.
+    // ST9 (`?drawPools`, T22 + T22-PRODUCER) — arm the pooled world BEFORE the
+    // slot grid, so the grid's event hooks find a live registry on their first
+    // fire. `initPoolWorld` checks the full F-11.3 chain itself (slotGrid +
+    // packSource + geomBundles + texCompressedOnly) and returns null with every
+    // unmet flag NAMED; with it null every producer's `poolWorldActive()` gate
+    // reads false and the legacy stack is untouched.
+    try {
+      initPoolWorld({ THREE, group: liveScene3d.staticsGroup });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[drawPools] arming threw; legacy producers stay in charge:", e);
+    }
+    if (typeof window !== "undefined") {
+      try {
+        window.__diag = window.__diag || {};
+        // The producer census SUPERSEDES the bare registry census installed by
+        // initDrawPools: same name, strictly more rows (class pages, refusals,
+        // producer counters, the stream controller).
+        window.__diag.pools = () => poolWorldCensus();
+      } catch (_) { /* fail-soft */ }
+    }
     if (__slotGridArmed) {
       (async () => {
         try {
@@ -6303,7 +6348,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             }
             return ords;
           };
-          const grid = new rg.SlotGrid({ now });
+          // T22-PRODUCER: the grid's event hooks, wired. `onSlotState` is the
+          // ONE choke point every S2 transition passes through, so the pool
+          // half of residency (park / pointer re-adopt / release) is complete
+          // by construction rather than by enumerating call sites; `onTeleport`
+          // drains the vacated set; `onSeed`/`onShift` record the F-11.19 bake
+          // dispatch items. All four are no-ops unless the pooled world armed.
+          const grid = new rg.SlotGrid({
+            now,
+            onSlotState: (ev) => poolOnSlotState(ev),
+            onTeleport: (ev) => poolOnTeleport(ev),
+            onSeed: (ev) => poolOnAdmit(ev.tiles, grid.playerTile),
+            onShift: (ev) => poolOnAdmit(ev.admitted, grid.playerTile),
+          });
           const packs = packsArmed
             ? {
                 fetchTile: (tile) => {
@@ -6529,6 +6586,31 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   adapter.auditPins();
                   grid.audit();
                   refreshWasmCensus();
+                  // ST9 (D-07.9): the class set CLOSES at boot. "Boot" is the
+                  // boot ring having SETTLED — no tile still FETCHING or
+                  // STAGED and at least one LIVE — which is the same condition
+                  // the prewarm's own precondition names. Warm the closed class
+                  // population once, then seal: every class minted after this
+                  // is a class-key bug and `classesCreatedPostBoot` counts it.
+                  if (poolWorldActive() && !this._poolSealed) {
+                    const gc = grid.counts();
+                    const reg = getPoolRegistry();
+                    if (gc.fetching === 0 && gc.staged === 0 && gc.live > 0 && reg && reg.pools.size > 0) {
+                      this._poolSealed = true;
+                      try {
+                        const pw = initPoolPrewarm({
+                          renderer: liveScene3d.renderer,
+                          camera: liveScene3d.camera,
+                          cascades: () => (liveScene3d.csm?.cascades | 0) || undefined,
+                        });
+                        Promise.resolve(pw.run(prewarmWorkList(reg)))
+                          .then(() => { try { reg.sealClassSet(); } catch (_) {} })
+                          .catch(() => { try { reg.sealClassSet(); } catch (_) {} });
+                      } catch (_) {
+                        try { reg.sealClassSet(); } catch (__) { /* fail-soft */ }
+                      }
+                    }
+                  }
                 }
               } catch (e) {
                 if (!this._warned) {

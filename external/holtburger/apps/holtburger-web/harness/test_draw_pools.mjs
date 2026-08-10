@@ -200,6 +200,10 @@ function plan(tile, members) {
   return { tile, lbs: [], members, counts: {} };
 }
 
+/** The full F-11.3 chain (?frameWork left off ⇒ stage-A inline feeds, which
+ *  keeps the battery's cadence deterministic; stage B/C are PART 15's). */
+const ARMED_PRE = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+
 /** An RGBA8 texture AT a page dimension (256/512/1024/2048) — the only shape
  *  the class page can allocate a layer for until the bake/transcode resample
  *  lands (T22 D2). */
@@ -593,9 +597,27 @@ console.log("PART 10: __diag.pools census shape");
   const { reg } = makeRegistry();
   reg.feedTile(plan(80, [member()]), geomSource());
   const c = reg.census();
-  const at = (path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), c);
+  const at = (o, path) => path.split(".").reduce((x, k) => (x == null ? undefined : x[k]), o);
+  // T22-PRODUCER: `producer.*` / `classPages.*` are the PRODUCER census's rows
+  // (index.js installs it on `__diag.pools`, superseding the bare registry
+  // census of the same name); the rest are the registry's own. Both halves of
+  // the registered schema are checked against the surface that publishes them.
   for (const path of Object.keys(surface.fields || {})) {
-    check(at(path) !== undefined, `census publishes the registered field ${path}`);
+    if (path.startsWith("producer.") || path.startsWith("classPages.")) continue;
+    check(at(c, path) !== undefined, `census publishes the registered field ${path}`);
+  }
+  {
+    _resetDrawPoolsForTest();
+    _resetPoolWorldForTest();
+    initPoolWorld({ THREE, group: new THREE.Group(), search: ARMED_PRE });
+    addSingletonsToPools([poolNode(256)], {}, { domain: "st", lbKey: 0x40400000 });
+    const pc = poolWorldCensus();
+    for (const path of Object.keys(surface.fields || {})) {
+      if (!path.startsWith("producer.") && !path.startsWith("classPages.")) continue;
+      check(at(pc, path) !== undefined, `producer census publishes the registered field ${path}`);
+    }
+    _resetDrawPoolsForTest();
+    _resetPoolWorldForTest();
   }
   check(typeof c.pools.byClass === "object" && typeof c.pools.byPass === "object", "byClass/byPass are maps");
   check(c.pools.count === 1 && c.nodes.worldStatic === 1, "one pool ⇒ one world-static node");
@@ -1238,7 +1260,7 @@ console.log("PART 17: class material tier (D-07.2) + the D2 page gate");
 // ── PART 18 — the producer swap ───────────────────────────────────────────
 
 console.log("PART 18: producer swap — singletons → (sector × class) pools");
-const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+const ARMED = ARMED_PRE;
 {
   _resetDrawPoolsForTest();
   _resetPoolWorldForTest();
