@@ -46,6 +46,12 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   bc7Source: "() => null",
   _bumpBc7Stat: "() => {}",
   atlasRefeed: "() => 0",
+  // ./bc7_textures.js — T15R rehydrate-v3 mirror seam. Only the ST5 upgrade
+  // arms one and only the demote/evict paths unregister, so both are
+  // unreachable with the flag off; the return values match the real
+  // functions' "nothing to do" answers.
+  registerFullTierMirror: "() => false",
+  unregisterFullTierMirror: "() => false",
   // ./xu7_textures.js — ST5 lane-T transcode entry; unreachable flag-OFF.
   transcodeXu7WithNra: "async () => null",
   // ./texture_release.js — `?texFreeCpu` CPU-side release arming. Returns

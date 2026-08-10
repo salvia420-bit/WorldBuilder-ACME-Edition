@@ -34,6 +34,17 @@
 //            `demoteToPreview` restores the preview and drops the record.
 //            Failure leg: controller rejection ⇒ material STAYS preview
 //            (counted `fullFailed`), never white, never RGBA8.
+//   PART 8 — T15R rehydrate v3 (D-05.7 row 2) + the demote rung (H-05.1 R1):
+//            the full-tier CPU mirror is armed with a SOURCE-keyed way back
+//            at upgrade time; release refuses until three has uploaded;
+//            release registers-first-then-drops, leaves the descriptor
+//            intact, and reads as "no pixels" to the restore pass; a restore
+//            re-fetches the xu7 CAS + re-transcodes and re-adopts; RECORD
+//            EVICTION drives the release (the D-05.7 identity: the budget
+//            frees real heap now); `demoteFullTierUnderPressure` sheds
+//            oldest-first under byte/count targets and unregisters mirrors
+//            with the textures it disposes. OFF arm: no mirror exists, so
+//            eviction and the registry behave exactly as before.
 //
 // Run:  cd apps/holtburger-web && node harness/test_tex_compressed_only.mjs
 
@@ -59,7 +70,18 @@ import {
   atlasRefeed,
   Bc7RecordSource,
   HBC7_HEADER_BYTES,
+  registerFullTierMirror,
+  releaseFullTierMirror,
+  unregisterFullTierMirror,
+  fullTierMirrorStats,
+  _resetFullTierMirrorsForTest,
 } from "../scene3d/bc7_textures.js";
+import {
+  rehydrateReleasedTextures,
+  textureHasPixels,
+  releasedTextureCount,
+  __resetTextureRehydrateForTests,
+} from "../scene3d/texture_rehydrate.js";
 import {
   atlasPreviewCommitEnabled,
   _atlasGrowTargetFor,
@@ -526,6 +548,196 @@ console.log("PART 7 — materials vertical: PVW build, lane-T upgrade, demote");
   _resetBc7ForTest();
   _resetTexCompressedOnlyForTest();
   _resetTexWorkerForTest();
+}
+
+// ===========================================================================
+console.log("PART 8 — T15R: rehydrate-v3 full-tier mirror seam + demote rung");
+// ===========================================================================
+//   D-05.7 row 2: "full-tier mirror ≡ the record-cache entry … freed WITH
+//   record eviction via the release seam", rehydrator = re-fetch xu7 CAS →
+//   worker re-transcode (SOURCE-keyed, never a pixel-plane decode).
+//   H-05.1 R1: demote-first is the texture rung of the pressure ladder.
+{
+  const RS = 0x06003333;
+  const RS2 = 0x06004444;
+  const DID = 0x08000055;
+  const DID2 = 0x08000056;
+  const pvwPayload = makeHbc7(16, 16, 0x10);
+  const fullPayload = makeHbc7(64, 64, 0x20);
+
+  class MockWorker {
+    constructor() { this.onmessage = null; }
+    postMessage(msg) {
+      if (msg.type === "init") {
+        queueMicrotask(() => this.onmessage && this.onmessage({ data: { type: "ready" } }));
+        return;
+      }
+      if (msg.type === "job" && msg.kind === "xu7") {
+        const parsed = parseHbc7(fullPayload);
+        const levelBytes = parsed.levels.map((l) => l.data.length);
+        const bc7 = new Uint8Array(levelBytes.reduce((a, b) => a + b, 0));
+        let off = 0;
+        for (const l of parsed.levels) { bc7.set(l.data, off); off += l.data.length; }
+        queueMicrotask(() => this.onmessage && this.onmessage({
+          data: {
+            type: "result", seq: msg.seq, ok: true, kind: "xu7",
+            width: parsed.width, height: parsed.height, levelBytes,
+            bc7: bc7.buffer, transcodeMs: 1, nra: null,
+          },
+        }));
+      }
+    }
+    terminate() {}
+  }
+
+  const metaFor = (d, rs) => JSON.stringify({
+    kind: "textured", surfaceType: 0, translucency: 0, luminosity: 0,
+    diffuse: 0, rsId: rs, palId: 0, aliased: false, category: null,
+    roughnessOverride: null, normalScaleOverride: null,
+  });
+  const makeNs = () => ({
+    surface_meta_sync: (d) => (d === DID ? metaFor(d, RS) : d === DID2 ? metaFor(d, RS2) : ""),
+    pack_texref: (rs) => (rs === RS || rs === RS2 ? ((0b11 << 8) | 0x66) : -1),
+    pack_pvw_blocks: (rs) => (rs === RS || rs === RS2 ? pvwPayload.slice() : new Uint8Array(0)),
+    xu7_cas_info: async (rs) =>
+      rs === RS || rs === RS2
+        ? JSON.stringify({ url: `http://h/shards/ab/${rs.toString(16)}.bin`, sha16: "cd".repeat(16) })
+        : "",
+  });
+
+  let laneNeeds = 0;
+  const controller = {
+    armed: true,
+    need: async () => { laneNeeds += 1; return new Uint8Array([1, 2, 3]).buffer; },
+  };
+  const armAll = (search = "?texCompressedOnly=on&texWorkers=on") => {
+    _resetBc7ForTest();
+    _resetTexCompressedOnlyForTest();
+    _resetTexWorkerForTest();
+    _resetFullTierMirrorsForTest();
+    __resetTextureRehydrateForTests();
+    registerAtlasRefeed(null);
+    setSearch(search);
+    _setBc7SupportForTest(true);
+    initBc7Source({});
+    _setTexWorkerFactoryForTest(() => new MockWorker());
+    initTexCompressedOnly({ wasmNs: makeNs(), controller });
+  };
+
+  // ---- arming ------------------------------------------------------------
+  armAll();
+  const mc = new MaterialCache();
+  const mat = await mc.get(DID, async () => [null]);
+  await new Promise((r) => setTimeout(r, 50));
+  check("upgrade landed (precondition for the seam)",
+    bc7Stats().fullSwaps === 1 && mat.map.image.width === 64);
+  check("full-tier mirror ARMED by the upgrade", fullTierMirrorStats().armed === 1);
+  const fullTex = mat.map;
+  const fullBytes = fullTex.mipmaps.reduce((a, m) => a + m.data.byteLength, 0);
+  check("mirror bytes are the record's bytes (shared buffer)", fullBytes > 0);
+
+  // ---- POST-UPLOAD ONLY --------------------------------------------------
+  check("release REFUSES before three has uploaded (counted, never silent)",
+    releaseFullTierMirror(RS) === 0 && texStats().mirrors.release.releaseDeferred === 1 &&
+      textureHasPixels(fullTex) === true);
+  fullTex.onUpdate(fullTex); // three fires this at the end of uploadTexture
+  check("upload watcher armed by registerFullTierMirror", fullTex.__hbUploaded === true);
+
+  // ---- release ------------------------------------------------------------
+  const freed = releaseFullTierMirror(RS);
+  check("release gave the mirror bytes back", freed === fullBytes && freed > 0);
+  check("levels are empty but the DESCRIPTOR is intact (re-supply, not re-spec)",
+    fullTex.mipmaps.every((m) => m.data.byteLength === 0) &&
+      fullTex.mipmaps[0].width === 64 && fullTex.mipmaps.length === 7);
+  check("registry now sees NO pixels (the loud-miss predicate)", textureHasPixels(fullTex) === false);
+  check("way back registered BEFORE the bytes went (ordering rule)",
+    releasedTextureCount() === 1);
+  const rel = texStats().mirrors.release;
+  check("release counted on __texStats().mirrors.release",
+    rel.freed === 1 && rel.bytesFreed === freed && rel.released === 1 && rel.armed === 1);
+  check("release is idempotent", releaseFullTierMirror(RS) === 0);
+
+  // ---- rehydrate (source-keyed: re-fetch CAS → re-transcode) -------------
+  const needsBefore = laneNeeds;
+  const pass = await rehydrateReleasedTextures({ reason: "test", timeoutMs: 5000 });
+  check("restore pass rehydrated the released mirror",
+    pass.rehydrated === 1 && pass.failed === 0, JSON.stringify(pass));
+  check("pixels are back at the right dims", textureHasPixels(fullTex) === true &&
+    fullTex.mipmaps[0].data.byteLength === bc7LevelBytes(64, 64));
+  check("rehydrator re-fetched the SOURCE (lane-T need fired again)",
+    laneNeeds === needsBefore + 1);
+  check("restore counted, zero misses",
+    texStats().mirrors.release.restores === 1 && texStats().mirrors.release.restoreFailed === 0);
+  check("restored mirror re-adopted into the budgeted record cache",
+    (bc7Source()?.recordCacheStats().records ?? 0) >= 1);
+
+  // ---- eviction drives the release (the D-05.7 identity) -----------------
+  armAll("?texCompressedOnly=on&texWorkers=on&bc7RecordsMB=1");
+  const mcE = new MaterialCache();
+  const matE = await mcE.get(DID, async () => [null]);
+  await new Promise((r) => setTimeout(r, 50));
+  matE.map.onUpdate(matE.map); // uploaded
+  const src = bc7Source();
+  // Push the budget over with an unrelated record: the LRU evicts the full
+  // tier first (oldest), and the eviction must free the mirror too.
+  src.adoptParsed(0x06009999, parseHbc7(makeHbc7(1024, 1024, 0x40)));
+  src.adoptParsed(0x0600999a, parseHbc7(makeHbc7(1024, 1024, 0x41)));
+  const relE = texStats().mirrors.release;
+  check("record eviction RELEASED the mirror (budget frees real bytes now)",
+    relE.freed === 1 && relE.bytesFreed > 0, JSON.stringify(relE));
+  check("evicted-and-released texture still has a way back",
+    releasedTextureCount() === 1 && textureHasPixels(matE.map) === false);
+
+  // ---- demote rung --------------------------------------------------------
+  armAll();
+  const mcD = new MaterialCache();
+  // Settle the upgrades ONE AT A TIME: `_fullTierDids` order is upgrade
+  // order, and two concurrent worker jobs can land in either sequence.
+  const matD1 = await mcD.get(DID, async () => [null]);
+  await new Promise((r) => setTimeout(r, 50));
+  const matD2 = await mcD.get(DID2, async () => [null]);
+  await new Promise((r) => setTimeout(r, 50));
+  check("two full tiers resident", bc7Stats().fullSwaps === 2 &&
+    matD1.map.image.width === 64 && matD2.map.image.width === 64);
+  const r1 = mcD.demoteFullTierUnderPressure({ max: 1 });
+  check("demote rung sheds OLDEST-first, one at a time",
+    r1.demoted === 1 && r1.bytesFreed > 0 && r1.remaining === 1 &&
+      matD1.map.image.width === 16 && matD2.map.image.width === 64, JSON.stringify(r1));
+  check("demoted surface kept correct pixels (sharpness, never blackness)",
+    matD1.map.isCompressedTexture && matD1.map.mipmaps[0].data.byteLength > 0);
+  check("demote unregistered the mirror with the disposed texture",
+    fullTierMirrorStats().armed === 1);
+  const r2 = mcD.demoteFullTierUnderPressure({ bytes: 1 });
+  check("byte target stops the walk once met",
+    r2.demoted === 1 && r2.remaining === 0 && fullTierMirrorStats().armed === 0);
+  check("nothing left to demote ⇒ no-op", mcD.demoteFullTierUnderPressure().demoted === 0);
+
+  // ---- OFF arm ------------------------------------------------------------
+  _resetBc7ForTest();
+  _resetTexCompressedOnlyForTest();
+  _resetTexWorkerForTest();
+  _resetFullTierMirrorsForTest();
+  __resetTextureRehydrateForTests();
+  setSearch("");
+  _setBc7SupportForTest(true);
+  const legacySrc = new Bc7RecordSource({ fetchImpl: async () => null, budgetBytes: 4096 });
+  legacySrc.adoptParsed(0x0600aaaa, parseHbc7(makeHbc7(32, 32, 0x50)));
+  legacySrc.adoptParsed(0x0600aaab, parseHbc7(makeHbc7(32, 32, 0x51)));
+  legacySrc.adoptParsed(0x0600aaac, parseHbc7(makeHbc7(32, 32, 0x52)));
+  const st = legacySrc.recordCacheStats();
+  check("OFF arm: eviction behaves exactly as before (no mirrors exist)",
+    st.evictions > 0 && bc7Stats().mirrorsFreed === 0 && releasedTextureCount() === 0);
+  check("OFF arm: mirror registry stays empty", fullTierMirrorStats().armed === 0);
+  check("unregisterFullTierMirror on an unknown rsId is a no-op",
+    unregisterFullTierMirror(0x06000001) === false);
+  check("registerFullTierMirror refuses a texture with no levels",
+    registerFullTierMirror(RS, { mipmaps: [] }, async () => null) === false);
+
+  _resetBc7ForTest();
+  _resetTexCompressedOnlyForTest();
+  _resetTexWorkerForTest();
+  _resetFullTierMirrorsForTest();
+  __resetTextureRehydrateForTests();
 }
 
 console.log(`\nTEX-COMPRESSED-ONLY ${failed === 0 ? "✅" : "❌"} — ${passed} passed, ${failed} failed`);

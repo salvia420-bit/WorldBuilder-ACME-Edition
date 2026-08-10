@@ -75,6 +75,10 @@ import {
   bc7Source,
   _bumpBc7Stat,
   atlasRefeed,
+  // T15R — rehydrate v3 row 2 (D-05.7): the full-tier CPU-mirror release
+  // seam. Arming is what lets the 128 MB record budget actually free heap.
+  registerFullTierMirror,
+  unregisterFullTierMirror,
 } from "./bc7_textures.js";
 import { transcodeXu7WithNra } from "./xu7_textures.js";
 // Task 4 (2026-08-05): release the CPU-side copy after upload. Default OFF —
@@ -3373,6 +3377,16 @@ export class MaterialCache {
       this._pvwTexByDid.delete(did);
       if (!disposables.includes(pvw)) disposables.push(pvw);
     }
+    // T15R — the full-tier texture goes with the entry, so its mirror arming
+    // + rehydrate registration must go too (a registration pointing at a
+    // disposed texture is a restore-pass miss waiting to happen).
+    if (this._fullTierDids) {
+      const rsFull = this._fullTierDids.get(did);
+      if (rsFull !== undefined) {
+        this._fullTierDids.delete(did);
+        try { unregisterFullTierMirror(rsFull); } catch (_) { /* fail-soft */ }
+      }
+    }
 
     const wasHandedOut = this._matHandedOut.delete(did);
     this._matEvictions += 1;
@@ -5841,11 +5855,20 @@ export class MaterialCache {
    * record route when the catalog carries no CAS info. Every failure
    * leaves the material on its preview (counted `fullFailed`).
    */
-  async _upgradeCompressedFull(did, mat, rs) {
-    const d = did >>> 0;
+  /**
+   * T15R — the full tier's SOURCE, extracted from `_upgradeCompressedFull`
+   * verbatim (2026-08-10) so the upgrade AND the rehydrate-v3 rehydrator
+   * share one path: catalog CAS info → lane-T `need` (hash-on-receipt) →
+   * worker transcode; legacy `xu7_blocks` record route when the catalog
+   * carries no CAS info. Resolves `{parsed, nra}` or null — never throws.
+   *
+   * This is what makes the mirror seam source-keyed (D-05.7): the way back
+   * from a released full-tier mirror is "re-fetch the xu7 CAS file and
+   * re-transcode", not "re-decode SurfacePixels".
+   */
+  async _fetchFullTierParsed(rs, wantNra = null) {
     const { wasmNs, controller } = texCompressedOnlyNs();
-    const wantNra = this.normalMapsEnabled ? "half" : null;
-    let out = null;
+    if (!wasmNs) return null;
     try {
       let info = null;
       try {
@@ -5860,16 +5883,24 @@ export class MaterialCache {
           component: "texFull",
           expectedHash: info.sha16 || undefined,
         });
-        out = await transcodeXu7WithNra(new Uint8Array(buf), wantNra);
-      } else if (typeof wasmNs.xu7_blocks === "function") {
+        return await transcodeXu7WithNra(new Uint8Array(buf), wantNra);
+      }
+      if (typeof wasmNs.xu7_blocks === "function") {
         // Legacy record route (no CAS info): same bytes, legacy-lane
         // concurrency share (D-03.10) instead of lane T.
         const b = await wasmNs.xu7_blocks(rs);
-        if (b && b.length) out = await transcodeXu7WithNra(b, wantNra);
+        if (b && b.length) return await transcodeXu7WithNra(b, wantNra);
       }
     } catch (_) {
-      out = null;
+      return null;
     }
+    return null;
+  }
+
+  async _upgradeCompressedFull(did, mat, rs) {
+    const d = did >>> 0;
+    const wantNra = this.normalMapsEnabled ? "half" : null;
+    const out = await this._fetchFullTierParsed(rs, wantNra);
     const ud = mat.userData || {};
     delete ud.__texFullPending;
     if (!out || !out.parsed) {
@@ -5898,6 +5929,17 @@ export class MaterialCache {
     // with the entry at eviction/teardown).
     this._repointAlbedoForDid(d, mat, old, { dispose: false });
     _bumpBc7Stat("fullSwaps");
+    // T15R (rehydrate v3, D-05.7 row 2) — the mirror IS this texture's
+    // shared buffer, so the record cache may only free it if the texture
+    // lets go too. Arm the release seam with a source-keyed way back (the
+    // very fetch+transcode that produced these bytes) and track the DID for
+    // the pressure ladder's demote rung.
+    registerFullTierMirror(rs, tex, () =>
+      this._fetchFullTierParsed(rs, null).then((o) => (o ? o.parsed : null)),
+    );
+    this._fullTierDids || (this._fullTierDids = new Map());
+    this._fullTierDids.delete(d); // re-insert = youngest (Map keeps order)
+    this._fullTierDids.set(d, rs);
     if (out.nra && this.normalMapsEnabled) this._attachWorkerNra(d, mat, out.nra);
     try {
       atlasRefeed(rs);
@@ -5983,9 +6025,53 @@ export class MaterialCache {
       try {
         bc7Source()?.dropRecord(rs);
       } catch (_) { /* record already gone */ }
+      // T15R — the full texture is DISPOSED here, so its mirror entry (and
+      // any rehydrate registration standing against it) must go with it: a
+      // restore pass that re-supplied a disposed texture would decode for
+      // nothing and count a phantom success.
+      try { unregisterFullTierMirror(rs); } catch (_) { /* fail-soft */ }
     }
+    if (this._fullTierDids) this._fullTierDids.delete(d);
     _bumpBc7Stat("demotions");
     return true;
+  }
+
+  /**
+   * T15R — the texture rung of the pressure ladder (pass 6 H-05.1 R1:
+   * "demote first"), expressed on the texture lane so the residency ladder's
+   * caller is a one-liner and this half is testable without a grid.
+   *
+   * Demotes full-tier surfaces OLDEST-FIRST (`_fullTierDids` is insertion-
+   * ordered and re-set on every upgrade, so recency is upgrade recency) until
+   * `bytes` have been shed or the population is exhausted. Every demotion is
+   * `demoteToPreview`: the surface keeps correct, resident pixels at preview
+   * sharpness — pressure costs sharpness, never blackness (D-05.8).
+   *
+   * @param {{bytes?: number, max?: number}} [opts] `bytes` = byte target
+   *   (default: shed everything demotable), `max` = cap on demotions this
+   *   call (the ladder amortizes).
+   * @returns {{demoted:number, bytesFreed:number, remaining:number}}
+   */
+  demoteFullTierUnderPressure(opts = {}) {
+    const target = Number.isFinite(opts.bytes) ? opts.bytes : Infinity;
+    const max = Number.isFinite(opts.max) ? opts.max : Infinity;
+    let demoted = 0;
+    let bytesFreed = 0;
+    if (!this._fullTierDids || this._fullTierDids.size === 0) {
+      return { demoted, bytesFreed, remaining: 0 };
+    }
+    for (const d of [...this._fullTierDids.keys()]) {
+      if (demoted >= max || bytesFreed >= target) break;
+      const mat = this.materials.get(d);
+      const before = mat && mat.map ? bc7TextureBytes(mat.map) : 0;
+      if (this.demoteToPreview(d)) {
+        demoted += 1;
+        bytesFreed += before;
+      } else {
+        this._fullTierDids.delete(d); // not demotable — stop re-visiting it
+      }
+    }
+    return { demoted, bytesFreed, remaining: this._fullTierDids.size };
   }
 
   /**

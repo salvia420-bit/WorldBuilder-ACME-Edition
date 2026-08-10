@@ -102,9 +102,9 @@ export const REGISTRY = Object.freeze([
     name: "__bc7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1012",
+    evidence: "scene3d/bc7_textures.js:1220",
     availability: "in-world",
-    note: "Module tally bc7Stats() (bc7_textures.js:449-472) + source residency. "
+    note: "Module tally bc7Stats() (bc7_textures.js:767-779) + source residency. "
       + "Retained legacy surface; full-tier texture machinery re-homes at ST5.",
     fields: {
       fetches: C("count"), hits: C("count"), absent: C("count"),
@@ -124,7 +124,7 @@ export const REGISTRY = Object.freeze([
     name: "__xu7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1013",
+    evidence: "scene3d/bc7_textures.js:1221",
     availability: "in-world",
     note: "xu7Stats() in scene3d/xu7_textures.js:142-211 (budgeted-FIFO tally). "
       + "decodeMs is cumulative main-thread transcode ms but NOT attribution-"
@@ -595,7 +595,7 @@ export const REGISTRY = Object.freeze([
     name: "__texStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:604",
+    evidence: "scene3d/bc7_textures.js:792",
     availability: "boot",
     note: "Texture tier/worker surface — LANDED at T15 (ST5, "
       + "`?texCompressedOnly`; texStats() in bc7_textures.js, window-installed "
@@ -622,6 +622,18 @@ export const REGISTRY = Object.freeze([
       "worker.maxQueueDepth": L("count"),
       "worker.fallbackArm": L("bool"),
       "mirrors.byClass": L("json", null, { note: "bytes by class @cpuMirror" }),
+      // T15R — rehydrate v3 row 2 (D-05.7): the full-tier mirror release
+      // seam. `restoreFailed` is the counter that must stay 0 (a released
+      // mirror with no way back is a black surface after a context loss);
+      // `releaseDeferred` counts evictions that found a not-yet-uploaded
+      // texture and correctly kept its bytes.
+      "mirrors.release.armed": L("count"),
+      "mirrors.release.released": L("count"),
+      "mirrors.release.freed": C("count"),
+      "mirrors.release.bytesFreed": C("bytes", ["cpuMirror"]),
+      "mirrors.release.releaseDeferred": C("count"),
+      "mirrors.release.restores": C("count"),
+      "mirrors.release.restoreFailed": C("count"),
       "arrays.alloc": L("bytes", ["allocated"]),
       "arrays.used": L("bytes", ["used"]),
       "arrays.mipBytes": L("bytes", ["allocated"]),

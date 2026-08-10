@@ -73,7 +73,11 @@ import * as THREE from "three";
 // bc7LevelBytes back from here); both sides bind functions, never eval-time
 // values, so the cycle is safe.
 import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder, texWorkerStats } from "./xu7_textures.js";
-import { textureRehydrateStats } from "./texture_rehydrate.js";
+import {
+  textureRehydrateStats,
+  registerReleasedTexture,
+  unregisterReleasedTexture,
+} from "./texture_rehydrate.js";
 
 // --------------------------------------------------------------------------
 // flag + capability
@@ -272,6 +276,183 @@ export function atlasRefeed(rsId) {
   } catch (_) {
     return 0;
   }
+}
+
+// --------------------------------------------------------------------------
+// T15R — rehydrate v3, row 2 of pass 5 D-05.7: the FULL-TIER CPU-mirror
+// release seam (source-keyed, not plane-keyed).
+//
+// D-05.7 states the identity "full-tier mirror ≡ the record-cache entry
+// (shared buffer, zero-copy)" and then the consequence T15 landed only half
+// of: the mirror is "freed WITH record eviction via the release seam". That
+// second half is this block. Without it the 128 MB budget is bookkeeping
+// only — `_trimToBudget` drops the map entry while the live
+// `CompressedTexture` still holds the SAME ArrayBuffer through its
+// `mipmaps[i].data` subarrays, so the heap gives back nothing (the exact
+// "evicting frees nothing while the texture lives" dead end D-05.7 calls
+// obsolete).
+//
+// THE ORDERING RULE IS NON-NEGOTIABLE (texture_release.js:117-124): register
+// the way back FIRST, drop the bytes second. A context loss landing between
+// the two would find a texture with no pixels and no entry telling anyone to
+// refill it — a permanently black world, the one outcome M4's rider forbids.
+//
+// POST-UPLOAD ONLY. Releasing before three has uploaded the texture would
+// upload nothing. `registerFullTierMirror` installs the same `onUpdate` hook
+// `armCpuRelease` uses (three fires it at the end of `uploadTexture`) and the
+// release refuses — counted, never silent — until it has fired.
+//
+// The rehydrator is SOURCE-keyed: it re-runs the owner's fetch→transcode
+// (materials.js `_fetchFullTierParsed`: lane-T CAS fetch, hash-on-receipt,
+// worker transcode), never a pixel-plane decode. Previews need no entry at
+// all (D-05.7 row 3: their mirror is KEPT — a few tens of KB, and three's own
+// restore path re-uploads from it).
+// --------------------------------------------------------------------------
+
+/** rsId -> { ref: WeakRef<CompressedTexture>, restore, released }. WeakRef so
+ *  the registry never becomes the retention it exists to remove (the same
+ *  rule texture_rehydrate.js:76-79 states for its own entries). */
+const _fullMirrors = new Map();
+
+/** One shared zero-length view: a released level keeps its `{width,height}`
+ *  descriptor and loses only its bytes, so `textureHasPixels` reads false
+ *  (byteLength 0) and three's descriptor is untouched — this is a re-supply
+ *  seam, never a re-spec. */
+const _EMPTY_LEVEL = new Uint8Array(0);
+
+/**
+ * Arm one full-tier texture's mirror for release-at-eviction.
+ *
+ * @param {number} rsId RenderSurface id (the record-cache key — the mirror's
+ *   identity, because the buffer IS the record).
+ * @param {Object} tex the live `CompressedTexture` built from that record.
+ * @param {() => Promise<Object|null>} restore resolves to a freshly parsed
+ *   HBC7 (`{width,height,levels:[{data,width,height}]}`) — the owner's
+ *   fetch→transcode path. A restore that cannot supply returns null.
+ */
+export function registerFullTierMirror(rsId, tex, restore) {
+  const id = rsId >>> 0;
+  if (!id || !tex || typeof restore !== "function") return false;
+  if (!Array.isArray(tex.mipmaps) || tex.mipmaps.length === 0) return false;
+  // Upload watcher — see the header. Chained, never replacing, so an owner
+  // that already installed an `onUpdate` keeps it.
+  if (!tex.__hbMirrorArmed) {
+    tex.__hbMirrorArmed = true;
+    const prev = typeof tex.onUpdate === "function" ? tex.onUpdate : null;
+    tex.onUpdate = function (t) {
+      try { prev?.call(this, t); } catch (_) { /* never break an upload */ }
+      tex.__hbUploaded = true;
+    };
+  }
+  _fullMirrors.set(id, { ref: new WeakRef(tex), restore, released: false });
+  _stats.mirrorsArmed += 1;
+  return true;
+}
+
+/** Drop the arming (the texture is being disposed — demote, eviction,
+ *  teardown). Also clears any live rehydrate registration. */
+export function unregisterFullTierMirror(rsId) {
+  const id = rsId >>> 0;
+  const e = _fullMirrors.get(id);
+  if (!e) return false;
+  _fullMirrors.delete(id);
+  const tex = e.ref.deref();
+  if (tex) {
+    try { unregisterReleasedTexture(tex); } catch (_) { /* fail-soft */ }
+  }
+  return true;
+}
+
+/** Re-supply a released mirror in place: same dims, same level count, same
+ *  format — a rehydrator that disagrees with the descriptor is a MISS, not a
+ *  re-spec (the registry verifies with `textureHasPixels` either way). */
+function _relevelInPlace(tex, parsed) {
+  if (!parsed || !Array.isArray(parsed.levels)) return false;
+  const mips = tex.mipmaps;
+  if (!Array.isArray(mips) || parsed.levels.length < mips.length) return false;
+  for (let i = 0; i < mips.length; i += 1) {
+    const src = parsed.levels[i];
+    const dst = mips[i];
+    if (!src || !src.data || !dst) return false;
+    if ((dst.width | 0) !== (src.width | 0) || (dst.height | 0) !== (src.height | 0)) return false;
+    dst.data = src.data;
+  }
+  return true;
+}
+
+/**
+ * Release one full-tier mirror: register the way back, then null the bytes.
+ * Called from the record cache's eviction path (and available to the
+ * pressure ladder). Returns the bytes actually given back.
+ */
+export function releaseFullTierMirror(rsId) {
+  const id = rsId >>> 0;
+  const e = _fullMirrors.get(id);
+  if (!e || e.released) return 0;
+  const tex = e.ref.deref();
+  if (!tex) { _fullMirrors.delete(id); return 0; }
+  if (!tex.__hbUploaded) { _stats.mirrorReleaseDeferred += 1; return 0; }
+  const bytes = bc7TextureBytes(tex);
+  if (!bytes) return 0;
+  const label = `0x${id.toString(16).toUpperCase()}:texFull`;
+  try {
+    registerReleasedTexture(
+      tex,
+      async () => {
+        const parsed = await e.restore();
+        if (!parsed || !_relevelInPlace(tex, parsed)) {
+          // The registry logs + counts the miss; this counter is the
+          // texture-lane's own view of it (`__texStats().mirrors`).
+          _stats.mirrorRestoreFailed += 1;
+          return false;
+        }
+        e.released = false;
+        // The mirror is the record again (D-05.7's identity) — re-adopt so
+        // the budget keeps governing it.
+        try { _source?.adoptParsed(id, parsed); } catch (_) { /* best-effort */ }
+        _stats.mirrorRestores += 1;
+        return true;
+      },
+      { label, owner: "texCompressedOnly:full", bytes },
+    );
+  } catch (_) {
+    return 0; // a registration we could not make is a release we must not do
+  }
+  for (const m of tex.mipmaps) { if (m) m.data = _EMPTY_LEVEL; }
+  // `textureHasPixels` reads `image` FIRST and treats an object with no
+  // `data` KEY as element-backed ("canvas/ImageBitmap carry their own
+  // pixels") — a compressed texture's `image` is the bare `{width,height}`
+  // descriptor `makeBc7Texture` builds, so without this the released texture
+  // would report pixels it does not have and every restore pass would SKIP
+  // it. Declaring the key (null) routes the predicate to `mipmaps`, which is
+  // where a compressed texture's bytes actually live.
+  if (tex.image && typeof tex.image === "object") tex.image.data = null;
+  e.released = true;
+  _stats.mirrorsFreed += 1;
+  _stats.mirrorBytesFreed += bytes;
+  return bytes;
+}
+
+/** Diag/test: how many full-tier mirrors are armed, and how many are
+ *  currently released (bytes given back, way back registered). */
+export function fullTierMirrorStats() {
+  let released = 0;
+  let live = 0;
+  for (const [id, e] of _fullMirrors) {
+    if (!e.ref.deref()) { _fullMirrors.delete(id); continue; }
+    live += 1;
+    if (e.released) released += 1;
+  }
+  return { armed: live, released };
+}
+
+/** Test hook — the registry is module state, so the suites need a reset. */
+export function _resetFullTierMirrorsForTest() {
+  for (const [, e] of _fullMirrors) {
+    const t = e.ref.deref();
+    if (t) { try { unregisterReleasedTexture(t); } catch (_) { /* fail-soft */ } }
+  }
+  _fullMirrors.clear();
 }
 
 // --------------------------------------------------------------------------
@@ -555,6 +736,13 @@ const _stats = {
   demotions: 0,          // pressure demote-to-preview events
   nraAttached: 0,        // worker-derived NRA planes attached
   chainWriteRejects: 0,  // shallow payload refused by a chain array (loud)
+  // ── T15R (rehydrate v3, D-05.7 row 2) full-tier mirror seam ────────────
+  mirrorsArmed: 0,           // full-tier textures with a source-keyed way back
+  mirrorsFreed: 0,           // CPU mirrors dropped at record eviction
+  mirrorBytesFreed: 0,       // bytes those releases actually gave back
+  mirrorReleaseDeferred: 0,  // eviction hit a not-yet-uploaded texture (kept)
+  mirrorRestores: 0,         // rehydrator re-supplied a released mirror
+  mirrorRestoreFailed: 0,    // rehydrator MISS (loud; must stay 0)
 };
 
 // P1 preview-first (?texPre; DEFAULT ON, =off/0/false/no escape). Fetches the
@@ -636,7 +824,21 @@ export function texStats() {
       const m = bc7RecordCacheBytes();
       // byClass @cpuMirror (D-05.7 classes; the atlas staging + terrain
       // rows live on their own surfaces — see the registry note).
-      return { byClass: { fullTierRecords: m.bytes }, ...m };
+      // `release` = the T15R full-tier seam (rehydrate v3 row 2):
+      // armed/released mirrors + what eviction actually gave back.
+      return {
+        byClass: { fullTierRecords: m.bytes },
+        ...m,
+        release: {
+          ...fullTierMirrorStats(),
+          everArmed: _stats.mirrorsArmed,
+          freed: _stats.mirrorsFreed,
+          bytesFreed: _stats.mirrorBytesFreed,
+          releaseDeferred: _stats.mirrorReleaseDeferred,
+          restores: _stats.mirrorRestores,
+          restoreFailed: _stats.mirrorRestoreFailed,
+        },
+      };
     })(),
     arrays,
     rehydrate,
@@ -755,6 +957,7 @@ export class Bc7RecordSource {
     // full record of the same age because it is the cheaper one to lose (it is
     // a quarter-res preview whose only job is time-to-textured).
     for (const map of [this._preCache, this._cache]) {
+      const isFull = map === this._cache;
       for (const [id, parsed] of map) {
         if (this._recordBytes <= this._budgetBytes) return;
         if (!parsed) continue; // never evict a proven-absent verdict
@@ -763,6 +966,11 @@ export class Bc7RecordSource {
         this._recordBytes -= b;
         this._evictions += 1;
         this._evictedBytes += b;
+        // T15R (D-05.7 row 2) — the eviction only FREES anything if the live
+        // texture lets go of the same buffer. Release the mirror (way back
+        // registered first). No-op on the legacy arm: nothing arms a mirror
+        // there, so the map is empty and this costs one `size` read.
+        if (isFull && _fullMirrors.size > 0) releaseFullTierMirror(id);
       }
     }
   }
