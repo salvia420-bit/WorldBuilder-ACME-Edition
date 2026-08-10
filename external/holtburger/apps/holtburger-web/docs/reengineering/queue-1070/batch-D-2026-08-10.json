@@ -156,5 +156,58 @@
       "status": "OPEN",
       "evidence": "re-key 2026-08-09 S4 options a/b — until decided, classPages.refused.needsResample (85 on the T22P arm) cannot reach 0 from the bake alone. Orchestrator can brief either option as an agent task once elected."
     }
+  ],
+  "postBakeCodeWork": [
+    {
+      "note": "Added 2026-08-10 by orchestrator per owner directive: all work slated for after BAKE-4 goes in this file. These are CODE items (wasm rebuild required — blocked while the bake owns the dev/builds cgroup), not 1070 eyetests. Sources: PORTAL investigation report + MOVEMENT decomp study (both 2026-08-10 opus agents, citations read-verified). Build with capped-build wasm-pack AFTER driver4.log shows === DONE; --release before any measurement.",
+      "items": [
+        {
+          "id": "MOVE-F2-HOLDKEY",
+          "gate": "root-cause fix for the stuck-walk bug (F1 JS guard is the stopgap)",
+          "files": "crates/holtburger-core/src/client/movement/system.rs:2607-2619 (base-gait seed)",
+          "recipe": "Derive the base gait from the interpreter's own persistent state (interp.hold_run != ui_toggles_run() -> Run/Walk), mirroring retail adjust_motion's fallback to RawMotionState::current_holdkey (acclient.c:343799), instead of inheriting gait from active_drive where a stray ManualHeld(run=false) persists it. Add retail_behavior_tests case: ManualHeld(run=false) then W edge still runs. cargo test -p holtburger-core after bake.",
+          "risk": "medium — shipped default lane (?cmdInterp=on)"
+        },
+        {
+          "id": "MOVE-F3-ENABLE",
+          "gate": "retail parity: CommandInterpreter::Enable (acclient.c:716912) re-asserts hold_run; our enable() (command_interpreter.rs:755) has zero callers",
+          "recipe": "Wire enable() at world entry / control reclaim. Land AFTER MOVE-F2 (without it, enable re-asserts into the same transient field).",
+          "risk": "low once F2 lands"
+        },
+        {
+          "id": "MOVE-F6-SPEEDCAP",
+          "gate": "retail global speed cap (get_state_velocity renormalizes at run_rate*4.0, acclient.c:343569-343589)",
+          "files": "crates/holtburger-core/src/client/movement/common.rs:882-930 local_velocity_for_state",
+          "risk": "low, minor"
+        },
+        {
+          "id": "PORTAL-GRAPH-SPLIT",
+          "gate": "highest-value structural portal fix (C2): cell_portal_graph merges walkable portal edges with visible_cells PVS edges; physics/camera walk through visibility",
+          "files": "crates/holtburger-world/src/spatial/scene.rs (cell_adjacency beside cell_portal_graph; consumers current_cell/clip_segment_to_cell_space/exited_envcell_to_outdoor/at_interior_doorway/cell_has_outdoor_exit -> adjacency only; render_set/compute_visibility stay on union), apps/holtburger-web/src/lib.rs:21456-21490 (route portals[] vs visible_cells[] separately)",
+          "recipe": "Also fixes the EXIT_INDOOR_BFS_MAX_CELLS=64 overflow (cap sized for adjacency, silently returns stay-indoors on PVS closures). cargo test -p holtburger-world (366 spatial + env840/academy wedge suites pin the seams).",
+          "risk": "medium"
+        },
+        {
+          "id": "PORTAL-FLAGS-DECODE",
+          "gate": "C3: CellPortal.flags never decoded (bit0 exact_match, bit1 inverted portal_side, bit2 leads-outdoors); all outdoor-sentinel checks are >=0xFFFE value tests; no sidedness gate anywhere — why ?punchSidedness is parked",
+          "files": "crates/holtburger-dat/src/file_type/env_cell.rs:62-68, lib.rs:21401-21409 + 21675-21723 (carry portal_side onto CellPortalPolygon), scene.rs sentinel tests, export via getVisiblePortalAperturesWithCellCenter so portal_clip.js apertureFacesAway uses real sidedness",
+          "recipe": "cargo test -p holtburger-dat vs real client_cell.dat fixtures; validate_cell_portal_graph.cjs for symmetry. Retail: CCellPortal::UnPack acclient.c:362379; ACE PortalFlags.cs.",
+          "risk": "medium"
+        },
+        {
+          "id": "BLDPORTAL-CONSUME",
+          "gate": "C1 root fix: BuildInfo.portals (retail CBldPortal — THE outdoor<->interior link + stab lists) parsed then discarded; outdoor visibility of interiors is an AABB heuristic. DIRECTLY relevant to the Yaraq blacksmith terrain-over-subterranean-interior bug (owner-reported 2026-08-10): retail punches terrain depth via building portal polys (PView::DrawCells), which we cannot do without this data.",
+          "files": "crates/holtburger-dat/src/landblock.rs:40-49 (keep stab_list), lib.rs building-load path ~:17802-17870 (push outdoor-cell->EnvCell edges + stab lists), scene.rs (landcell->building-portals index), then replace compute_visibility_with_frustum outdoor branch (~:3086-3100) with the retail walk",
+          "recipe": "Largest portal change; land AFTER PORTAL-GRAPH-SPLIT and PORTAL-FLAGS-DECODE. Retail: CBuildingObj::find_building_transit_cells acclient.c:719068, CEnvCell::check_building_transit; ACE BuildingObj.cs/BldPortal.cs.",
+          "risk": "high (staged)"
+        },
+        {
+          "id": "PORTAL-SMALL",
+          "gate": "C7+C8 cleanups riding along",
+          "recipe": "is_envcell_id tighten to 0x100..=0xFFFD (scene.rs:41 + inline copies :2549/:2559 — 0xFFFF sentinel currently accepted); per-snapshot AABB map replacing the per-portal linear scan in getVisiblePortalApertures* (lib.rs:35437/35516).",
+          "risk": "low"
+        }
+      ]
+    }
   ]
 }
