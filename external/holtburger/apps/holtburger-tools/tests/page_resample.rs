@@ -230,3 +230,115 @@ fn corpus_scale_replication_round_trip() {
     let back = resample_planar(&page, 2048, 2048, w, h, 4);
     assert_eq!(back, src, "replicate→box-reduce must be lossless");
 }
+
+// ---------------------------------------------------------------------------
+// The `page-resample` CLI, end to end over a fixture corpus.
+// ---------------------------------------------------------------------------
+
+fn write_png(path: &std::path::Path, w: u32, h: u32, color: png::ColorType, px: &[u8]) {
+    let f = std::fs::File::create(path).unwrap();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+    enc.set_color(color);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut wtr = enc.write_header().unwrap();
+    wtr.write_image_data(px).unwrap();
+    wtr.finish().unwrap();
+}
+
+fn png_dims(path: &std::path::Path) -> (u32, u32) {
+    let bytes = std::fs::read(path).unwrap();
+    let w = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let h = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    (w, h)
+}
+
+/// The tool must (a) emit every member at PAGE dims, (b) leave identity
+/// members byte-identical to the source, (c) never touch `--src`, and
+/// (d) produce the provenance trio the corpus conventions require.
+#[test]
+fn cli_derives_a_page_dim_tier_with_provenance() {
+    let root = std::env::temp_dir().join(format!("hb-page-resample-cli-{}", std::process::id()));
+    let src = root.join("src");
+    let out = root.join("out");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&src).unwrap();
+
+    // 512² RGBA identity · 64² RGB upscale · 4096² grayscale downscale
+    // (the tier clamp) · a 300×6 oddity (the dims_byte test's shape).
+    let cases: &[(u32, (u32, u32), png::ColorType, usize)] = &[
+        (0x0600_0001, (512, 512), png::ColorType::Rgba, 4),
+        (0x0600_0002, (64, 64), png::ColorType::Rgb, 3),
+        (0x0600_0003, (4096, 4096), png::ColorType::Grayscale, 1),
+        (0x0600_0004, (300, 6), png::ColorType::Rgba, 4),
+    ];
+    for &(id, (w, h), color, ch) in cases {
+        let px: Vec<u8> =
+            (0..(w as usize * h as usize * ch)).map(|v| ((v * 31 + id as usize) % 251) as u8).collect();
+        write_png(&src.join(format!("0x{id:08X}.png")), w, h, color, &px);
+    }
+    let src_before: Vec<(String, u64)> = std::fs::read_dir(&src)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (e.file_name().to_string_lossy().into_owned(), e.metadata().unwrap().len())
+        })
+        .collect();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_page-resample"))
+        .args(["--src", src.to_str().unwrap(), "--out", out.to_str().unwrap()])
+        .arg("--verify-deterministic")
+        .status()
+        .expect("run page-resample");
+    assert!(status.success(), "page-resample exited non-zero");
+
+    // (a) every emitted member sits on its page.
+    for &(id, (w, h), _, _) in cases {
+        let p = out.join(format!("0x{id:08X}.png"));
+        assert!(p.exists(), "0x{id:08X} missing from the derived tier");
+        let got = png_dims(&p);
+        let want = page_dims_of(true, w, h).unwrap();
+        assert_eq!(got, want, "0x{id:08X}: {w}x{h} → {got:?}, want {want:?}");
+        assert!(!needs_resample_dims(got.0, got.1), "0x{id:08X} still off-page");
+    }
+
+    // (b) the identity member is the SOURCE, byte for byte.
+    let ident_src = std::fs::read(src.join("0x06000001.png")).unwrap();
+    let ident_out = std::fs::read(out.join("0x06000001.png")).unwrap();
+    assert_eq!(ident_src, ident_out, "identity member must be byte-identical");
+
+    // (c) --src untouched.
+    let mut src_after: Vec<(String, u64)> = std::fs::read_dir(&src)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (e.file_name().to_string_lossy().into_owned(), e.metadata().unwrap().len())
+        })
+        .collect();
+    let mut before = src_before;
+    before.sort();
+    src_after.sort();
+    assert_eq!(before, src_after, "the source corpus must never be mutated");
+
+    // (d) provenance trio + the gate the plan carries.
+    for name in ["page-resample-plan.json", "page-resample.sha256", "bake-source.sha256",
+                 "PROVENANCE.md"] {
+        assert!(out.join(name).exists(), "missing provenance artifact {name}");
+    }
+    let plan: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("page-resample-plan.json")).unwrap())
+            .unwrap();
+    assert_eq!(plan["members"], 4);
+    assert_eq!(plan["identity"], 1);
+    assert_eq!(plan["needs_resample_before"], 3);
+    assert_eq!(plan["needs_resample_after"], 0);
+
+    // --src == --out is refused outright (in-place mutation is the one thing
+    // the corpus conventions forbid).
+    let refused = Command::new(env!("CARGO_BIN_EXE_page-resample"))
+        .args(["--src", src.to_str().unwrap(), "--out", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success(), "--src == --out must be refused");
+
+    let _ = std::fs::remove_dir_all(&root);
+}

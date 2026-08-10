@@ -30,6 +30,8 @@ zstd = { workspace = true }
 reqwest.workspace = true
 zip.workspace = true
 regex.workspace = true
+# PAGE-RESAMPLE: derived page-dim corpus tier (`page-resample` bin).
+png = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

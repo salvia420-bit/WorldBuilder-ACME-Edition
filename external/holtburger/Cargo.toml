@@ -78,6 +78,10 @@ bitflags = { version = "2.11", features = ["serde"] }
 tempfile = "3.10"
 criterion = "0.8"
 rayon = "1.11.0"
+# PAGE-RESAMPLE (T22 D2): PNG codec for the derived page-dim corpus tier.
+# Native tool-crate only; its deflate half (flate2/miniz_oxide) was already
+# in the lock via `zip`.
+png = "0.18"
 indicatif = "0.18"
 directories = "6.0"
 unicode-width = "0.2"
