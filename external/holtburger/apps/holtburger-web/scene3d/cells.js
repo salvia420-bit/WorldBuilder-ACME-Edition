@@ -640,6 +640,48 @@ const INDOOR_PVS_RING_RADIUS = (() => {
   return 1;
 })();
 
+// PORTAL-P0 leg 1 (2026-08-10) — `?envcellRing`, DEFAULT-ON, `=off` escape.
+//
+// The render half of "the neighbouring landblock's building has no interior".
+// Until this landed, `loadEnvCellsForLandblock` had exactly ONE production
+// driver — world_stream.js's per-position-update hook — and that hook is
+// single-LB scope by design ("interior cells only matter when the player is
+// inside the building"). A building one landblock away therefore rendered as an
+// exterior shell with nothing behind its doorway until the player crossed into
+// its LB, which is also the moment the interior bake starts (the worst possible
+// time for it).
+//
+// Scope is deliberately NOT the radius-5 statics/buildings/terrain ring: an
+// interior bake is the most expensive per-LB bake in the client (Academy is 568
+// cells in ONE landblock), so this fires only for the render-set LBs plus a
+// radius-<=1 skirt, throttled to a couple of starts in flight at a time.
+const ENVCELL_RING_ENABLED = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const v = new URLSearchParams(globalThis.location.search).get("envcellRing");
+      if (v != null) {
+        const t = String(v).toLowerCase();
+        return !(t === "off" || t === "0" || t === "false" || t === "no");
+      }
+    }
+  } catch (_) {}
+  return true;
+})();
+// Skirt around every render-set LB. 1 = the player's 3x3 (and, indoors, the 3x3
+// around anything the portal walk can see). Never widened by `pvsRingRadius`.
+const ENVCELL_RING_RADIUS = 1;
+// Start at most this many NEW interior bakes per sweep, and never while this
+// many are already mid-build — `loadEnvCellsForLandblock` is NOT behind the
+// stream-bake guard (it predates it), so this driver has to do its own bounding
+// or an LB crossing in a town fires 9 interior bakes in one frame.
+const ENVCELL_RING_MAX_STARTS_PER_TICK = 1;
+const ENVCELL_RING_MAX_IN_FLIGHT = 2;
+// A FAILED build clears its in-flight marker and never marks the LB loaded
+// (cells.js `finally`), so an unthrottled per-frame driver would re-fire it
+// every frame forever. Back off, then give up until the LB is evicted/re-entered.
+const ENVCELL_RING_RETRY_MS = 5000;
+const ENVCELL_RING_MAX_ATTEMPTS = 3;
+
 // Step 1b (2026-07-08) — sealed-dungeon outdoor cull. Default ON;
 // `?sealedCull=off` (or `0`/`false`) restores the Phase 5 unconditional
 // "outdoor groups always visible indoors" behaviour. When ON,
@@ -2787,7 +2829,14 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     typeof scene3d.loadTerrainForLandblock === "function"
       ? scene3d.loadTerrainForLandblock.bind(scene3d)
       : null;
-  if (!loadStatics && !loadBuildings && !loadTerrain) return;
+  // PORTAL-P0 leg 1 (`?envcellRing`) — the interior feed. Deliberately NOT part
+  // of the three-domain ring below: it runs on its own radius-<=1 scope and its
+  // own start budget (see the ENVCELL_RING_* constants).
+  const loadEnvCells =
+    ENVCELL_RING_ENABLED && typeof scene3d.loadEnvCellsForLandblock === "function"
+      ? scene3d.loadEnvCellsForLandblock.bind(scene3d)
+      : null;
+  if (!loadStatics && !loadBuildings && !loadTerrain && !loadEnvCells) return;
 
   let renderSetArr = null;
   try {
@@ -2884,6 +2933,92 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
       if (fogRadiusLb < ringRadius) ringRadius = fogRadiusLb;
     }
   }
+
+  // ---- PORTAL-P0 leg 1 (`?envcellRing`) — interior feed for the ring --------
+  //
+  // Runs BEFORE the `fireSig` short-circuit on purpose: the start budget below
+  // is per-TICK, so this driver needs to re-enter every frame to fill its (at
+  // most 9-LB) scope one bake at a time. The per-frame cost when there is
+  // nothing to do is ~18 Set lookups over the eligible LBs, i.e. nothing.
+  //
+  // Idempotency: `envCellLoadedLbs` (set only on SUCCESS, cells.js:1049/:1738)
+  // and `envCellBuildInFlight` (added SYNCHRONOUSLY before the build's first
+  // await, cells.js:1020) are checked here rather than relying on
+  // buildEnvCellsForLandblock's own short-circuit — its idempotent path still
+  // allocates a promise AND runs `_rescanSetupLights()` per call, which is not
+  // free at ring cadence. Eviction clears both sets, so a re-approached LB
+  // re-bakes normally.
+  if (loadEnvCells) {
+    const ecLoaded =
+      scene3d.envCellLoadedLbs instanceof Set ? scene3d.envCellLoadedLbs : null;
+    const ecInFlight =
+      scene3d.envCellBuildInFlight instanceof Set ? scene3d.envCellBuildInFlight : null;
+    if (!(scene3d._envCellRingAttempts instanceof Map)) {
+      scene3d._envCellRingAttempts = new Map();
+    }
+    const attempts = scene3d._envCellRingAttempts;
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    let starts = 0;
+    const onEnvCellRingError = (e) => {
+      if (scene3d._pvsLoadEnvCellsWarned) return;
+      scene3d._pvsLoadEnvCellsWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.cells] PVS loadEnvCellsForLandblock failed:", e);
+    };
+    const fireEnvCells = (lbKey) => {
+      if (starts >= ENVCELL_RING_MAX_STARTS_PER_TICK) return;
+      if (lbKey === 0) return;
+      if (ecLoaded?.has(lbKey)) {
+        attempts.delete(lbKey);
+        return;
+      }
+      if (ecInFlight?.has(lbKey)) return;
+      if (ecInFlight && ecInFlight.size >= ENVCELL_RING_MAX_IN_FLIGHT) return;
+      const prior = attempts.get(lbKey);
+      if (prior) {
+        if (prior.n >= ENVCELL_RING_MAX_ATTEMPTS) return;
+        if (nowMs < prior.nextMs) return;
+        prior.n += 1;
+        prior.nextMs = nowMs + ENVCELL_RING_RETRY_MS;
+      } else {
+        attempts.set(lbKey, { n: 1, nextMs: nowMs + ENVCELL_RING_RETRY_MS });
+      }
+      starts += 1;
+      try {
+        const p = loadEnvCells(lbKey);
+        // `loadEnvCellsForLandblock` returns a promise that REJECTS on a failed
+        // build (its callers to date never attached a handler); swallow it with
+        // one warn so the ring can't spray unhandled rejections.
+        if (p && typeof p.catch === "function") p.catch(onEnvCellRingError);
+      } catch (e) {
+        onEnvCellRingError(e);
+      }
+    };
+    const envRadius = Math.min(ENVCELL_RING_RADIUS, ringRadius);
+    for (const lbKey of seen) {
+      fireEnvCells(lbKey);
+      if (starts >= ENVCELL_RING_MAX_STARTS_PER_TICK) break;
+    }
+    if (envRadius > 0) {
+      for (const lbKey of seen) {
+        if (starts >= ENVCELL_RING_MAX_STARTS_PER_TICK) break;
+        const eX = (lbKey >>> 24) & 0xff;
+        const eY = (lbKey >>> 16) & 0xff;
+        for (let dx = -envRadius; dx <= envRadius; dx += 1) {
+          for (let dy = -envRadius; dy <= envRadius; dy += 1) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = eX + dx;
+            const ny = eY + dy;
+            if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+            fireEnvCells(((nx << 24) | (ny << 16)) >>> 0);
+            if (starts >= ENVCELL_RING_MAX_STARTS_PER_TICK) break;
+          }
+          if (starts >= ENVCELL_RING_MAX_STARTS_PER_TICK) break;
+        }
+      }
+    }
+  }
+
   // Per-frame fire-storm guard: the fire loop below makes
   // (ringSize × 3-domain) idempotent hook calls — at radius 5 that is
   // 121×3 ≈ 363 calls/frame, each allocating a guarded-bake Promise even
