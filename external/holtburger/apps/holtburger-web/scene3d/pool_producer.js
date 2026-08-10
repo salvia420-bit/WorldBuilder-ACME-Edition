@@ -175,7 +175,10 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
     w.stats.nodesIn += 1;
     // Same admission gate as the atlas: real single-material meshes with UVs.
     // A BatchedMesh / LOD wrapper / already-batched node is never re-fed.
-    if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry
+    // `isInstancedMesh` (the ?walkInInstance path): a pool re-emits the node as
+    // ONE instance, so an InstancedMesh routed here would lose every placement
+    // but the first — the atlas's own guard, same reason.
+    if (!n || !n.isMesh || n.isInstancedMesh || n.isBatchedMesh || n.isLOD || !n.geometry
         || !n.geometry.attributes || !n.geometry.attributes.uv
         || !n.material || Array.isArray(n.material)
         || (n.userData && n.userData.__staticBatch)) {

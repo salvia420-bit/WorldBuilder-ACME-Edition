@@ -78,6 +78,9 @@ import { meshToGeometryGroups } from "./adapter.js";
 // index.html's initGeomBundles (requires ?packSource); every reader below
 // is behind geomBundlesActive(), so the OFF arm is byte-identical legacy.
 import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
+// T22-PRODUCER (ST9, `?drawPools`): the pooled producer. Inert unless the full
+// F-11.3 chain armed it (index.js initPoolWorld), so the OFF arm never calls it.
+import { poolWorldActive, addSingletonsToPools } from "./pool_producer.js";
 // NB single line: test_static_batch.mjs / test_static_callpes.mjs load this
 // module by stripping `^\s*import .*$` LINE-wise, so a multi-line import
 // specifier list would leave a dangling `} from "./materials.js";`.
@@ -2571,6 +2574,31 @@ export async function bakeStaticsForLandblock(
         evictedDuringBuild: true,
         disposables: { geometries: [], materials: [], textures: [] },
       };
+    }
+  }
+  // ST9 (`?drawPools`, T22-PRODUCER — SPEC §1.5 / pass-07 S1) — THE PRODUCER
+  // SWAP, consumer 1 of 3. The pooled producer sits AHEAD of the atlas at the
+  // atlas's own seam (SPEC §1.5: "Atlas: subsumed wholesale") and takes every
+  // singleton it can place in a (sector × class) BatchedMesh pool. What it
+  // CANNOT take comes back in `passthrough` and continues into the unchanged
+  // atlas/singleton path below — that is the D2 route: a member whose texture
+  // is not at its class's page dims has no legal layer until the bake/transcode
+  // resample lands, so it renders through TODAY'S producer and is COUNTED
+  // (`__diag.pools().classPages.refused.needsResample`), never dropped.
+  // `poolWorldActive()` is false unless the full F-11.3 chain is armed ⇒ the
+  // OFF arm never reaches `addSingletonsToPools` and is byte-identical.
+  if (poolWorldActive() && nodesToAdd.length > 0) {
+    try {
+      const { passthrough } = addSingletonsToPools(nodesToAdd, scene3d, {
+        domain: "st",
+        lbKey,
+        urgent,
+      });
+      nodesToAdd = passthrough;
+    } catch (e) {
+      // fail-soft: the LB renders through the legacy producer, once.
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics/drawPools] pool feed failed, keeping the legacy path:", String(e?.message ?? e));
     }
   }
   // ?statAtlas (default-ON; ?statAtlas=off escapes) — SECOND feed seam: route this LB's plain-Mesh
