@@ -49,6 +49,7 @@ harness/
     flags.anim.mjs       ← mtQueue/jumpParity/retailRunKeys/rootMotionObject/getLink/placementId/particleDegrade
     flags.sync.mjs       ← syncPhysicsTick
   moving-bench.mjs       ← DETERMINISTIC moving A/B benchmark (one arm per run)
+  test_moving_bench_boot.mjs ← its boot gate (classifyBoot/splitBootErrors), pure node
   lib/
     assert.mjs           ← result()/pass()/fail()/skip()/rebuildPending() + assert* helpers (the 4 statuses)
     boot.mjs             ← launchAndEnter(): headless Playwright boot → in-world, returns the `helpers` object
@@ -95,9 +96,31 @@ node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 \
      --arm='statBatchSphere=on' --out=/tmp/mb-b.json
 ```
 
+**The boot gate (fixed 2026-08-10).** The MOVE-FIX baseline attempt died on a
+four-word `[moving-bench] BOOT-FAIL` and `?renderOnDemand=1` — the flag the
+harness adds for `drive=ondemand` — took the blame. It was innocent: the exact
+URL this file builds boots to `__bootState === "ready"` in 8.4 s on SwiftShader
+(live-reproduced 2026-08-10). The gate itself was the defect. It now
+
+* reads `__bootStateHistory` + `__sceneReadyEverFired`, not just the scalar, so
+  the 90 s ready-watchdog `error` that index.html can latch **after** a healthy
+  `in-world` (the two share one scalar) no longer aborts a good run;
+* re-fires `window.__runAutonomousLogin({…})` (index.html's documented retry
+  entry point) after a 9 s cooldown when the error is genuinely pre-in-world —
+  the stale-ACE-session case (`CharacterError::Logon 0x01` → connect timeout)
+  that two back-to-back arms on one account hit every time. `--loginRetries=0`
+  restores the old exit-on-first-error behaviour;
+* prints the page's own error message and its whole boot-state history on every
+  failure, and reports login-phase console errors as `bootErrors` instead of
+  letting a recovered boot reject its own measure lap.
+
+Pass a bot account for unattended runs — `--account` defaults to `tailnet1`,
+which on the 1070 is the human's Developer account.
+
 Tests: `node test_cam_moving_bench.mjs` (38 checks — including two runs of the
 real in-page rig against a stub client with a 6.7× frame-cost spread, asserted
-pose-for-pose identical).
+pose-for-pose identical) and `node harness/test_moving_bench_boot.mjs`
+(39 checks — the boot-gate policy above, both failure shapes encoded).
 
 ---
 

@@ -60,6 +60,41 @@
 //   ?renderDiag=on      draws/triangles/nodes
 //   ?nosw=1             or the service worker serves a stale build
 //   ?agent=1 &autoLogin ...  headless login
+//
+// THE BOOT GATE (2026-08-10 — why it is not a one-line poll any more)
+// -------------------------------------------------------------------
+// The MOVE-FIX baseline attempt of 2026-08-10 died printing four words —
+// `[moving-bench] BOOT-FAIL` — and nothing else, and the flag it was carrying
+// (`?renderOnDemand=1`) got the blame. It was innocent: the exact URL this
+// file builds, flag and all, boots to `__bootState === "ready"` in 8.4 s on
+// SwiftShader (live-reproduced 2026-08-10, `atmosphere load 1817.2ms`). Two
+// real defects were hiding behind the silent exit:
+//
+//   1. `error` was treated as terminal and printed WITHOUT its message, so a
+//      recoverable stale-session refusal looked identical to a broken build.
+//      The reproduced failure is ACE holding the previous run's character:
+//      `[character-error] code=0x1 name=Logon` → `connect failed after 1
+//      attempts: timeout`. index.html's autoLogin defaults to maxRetries=0
+//      ("one clean warm connect", index.html ~:11251) — deliberate, because
+//      the old retry-dance was destructive — so the FIRST refusal latches
+//      `error` and the harness quit. Two arms back-to-back on one account
+//      (which is what an interleaved bench IS) hit this every time.
+//   2. `error` can also latch AFTER a healthy `in-world`: index.html's
+//      ready-watchdog fires `error: in-world reached but scene-ready signal
+//      did not fire within 90000ms`, and `ready`/`in-world` share one scalar
+//      (index.html :6122-6131 conn-fix). A poll of the scalar alone can read
+//      a terminal `error` on a session that is fine.
+//
+// So the gate now reads `__bootStateHistory` + `__sceneReadyEverFired` (not
+// just the scalar), and on a genuine PRE-in-world error it re-fires the
+// documented retry entry point `window.__runAutonomousLogin({...})`
+// (index.html :11218 — "an agent CAN retry ... it just cannot run two at
+// once") after a cooldown, instead of exiting. Every failure now prints the
+// boot-state history that produced it.
+//
+// Account note: `--account` defaults to `tailnet1`, which on the 1070 is the
+// HUMAN's Developer account — two things logging into it fight. Pass a bot
+// account (`--account=agentp07`) for unattended runs.
 
 import { writeFileSync } from "node:fs";
 import { poseTable } from "./lib/moving_path.mjs";
@@ -84,6 +119,16 @@ const ARM = String(arg("arm", "") || "").replace(/^default$/, "");
 const DRIVE = String(arg("drive", "ondemand"));
 const SETTLE_MS = num("settle", 45000);
 const BOOT_MS = num("bootTimeout", 160000);
+// Boot-gate retry budget (see "THE BOOT GATE" above). `--loginRetries=0`
+// restores the old exit-on-first-error behaviour.
+const LOGIN_RETRIES = num("loginRetries", 2);
+// ACE's CHARACTER-level logout is ~5-10 s (index.html sizes its own
+// charInWorldWaitMs at 7000); wait past it before re-firing, or the retry
+// chases a half-killed session that keeps emitting CharacterError::Logon.
+const LOGIN_COOLDOWN_MS = num("loginCooldownMs", 9000);
+// Each retry buys its own runway on top of --bootTimeout: one attempt costs
+// the in-page connectTimeoutMs (25 s) + spawnTimeoutMs (20 s) at worst.
+const LOGIN_RETRY_BUDGET_MS = num("loginRetryBudgetMs", 60000);
 const BASE = String(arg("base", "http://127.0.0.1:8765/apps/holtburger-web/index.html"));
 // Repeatability budgets. A run outside them is REJECTED, not averaged in.
 const CHURN_MAX = num("churnMax", MODE === "hop" ? 1e9 : 0);
@@ -131,6 +176,98 @@ export function buildUrl(arm) {
   if (DRIVE === "ondemand") flags.push("renderOnDemand=1", "netDrainHz=30");
   if (arm) flags.push(arm);
   return `${BASE}?${flags.join("&")}`;
+}
+
+/**
+ * States index.html's autoLogin orchestrator passes through on the way to a
+ * playable session (index.html :6106-6109). Anything in here is "still
+ * working", never a verdict.
+ */
+export const BOOT_TRANSIENT_STATES = new Set([
+  "init", "form-shown", "connecting", "kicking", "reconnecting",
+  "char-list-ready", "spawning",
+]);
+
+/**
+ * THE boot verdict, as a pure function of one page snapshot — so the policy
+ * that cost the 2026-08-10 baseline is testable in node instead of only
+ * observable at 2 a.m. against a live ACE.
+ *
+ * `snap` = { state, history:[{state,message}], sceneReadyEverFired, inFlight }
+ * exactly as `readBootSnapshot` reads it off the page. A null snapshot (the
+ * evaluate raced a navigation) is "wait", never a verdict.
+ *
+ * Returns { action, reason }:
+ *   "go"      — the session reached in-world/ready at least once. A LATER
+ *               `error` does not revoke that (ready/in-world share one scalar
+ *               and the 90 s ready-watchdog latches error on healthy sessions
+ *               — index.html :6122-6131, :11626-11647).
+ *   "wait"    — a transient state, or an error while a login run is still in
+ *               flight (the orchestrator releases its claim in a `finally`,
+ *               so the terminal state may lag the scalar by a poll).
+ *   "relogin" — a PRE-in-world error with retries left: re-fire
+ *               `window.__runAutonomousLogin`. This is the stale-ACE-session
+ *               case (CharacterError::Logon 0x01 → connect timeout) that a
+ *               second bench arm on one account reproduces every time.
+ *   "fatal"   — a pre-in-world error with no retries left. `reason` carries
+ *               the page's own message so the operator sees WHY.
+ */
+export function classifyBoot(snap, { attempt = 0, maxAttempts = 2 } = {}) {
+  if (!snap) return { action: "wait", reason: "no snapshot (evaluate raced a navigation)" };
+  const history = Array.isArray(snap.history) ? snap.history : [];
+  const reached = (s) => snap.state === s || history.some((e) => e && e.state === s);
+  if (reached("in-world") || reached("ready") || snap.sceneReadyEverFired) {
+    return { action: "go", reason: snap.state === "error" ? "in-world reached; later error ignored" : "in-world/ready" };
+  }
+  if (snap.state === "error") {
+    if (snap.inFlight) return { action: "wait", reason: "error latched while a login run is still in flight" };
+    const last = [...history].reverse().find((e) => e && e.state === "error");
+    const why = (last && last.message) || "no message recorded";
+    if (attempt < maxAttempts) return { action: "relogin", reason: why };
+    return { action: "fatal", reason: `${why} (after ${attempt} relogin ${attempt === 1 ? "retry" : "retries"})` };
+  }
+  if (snap.state == null || BOOT_TRANSIENT_STATES.has(snap.state)) {
+    return { action: "wait", reason: `state=${snap.state ?? "(unset)"}` };
+  }
+  // Unknown state: index.html grew a state this harness has not been taught.
+  // Waiting is the safe read — the deadline still ends the run.
+  return { action: "wait", reason: `unrecognised boot state "${snap.state}"` };
+}
+
+/** One-line-per-state dump of what the page actually did. Printed on EVERY
+ *  boot failure — the 2026-08-10 run's whole diagnosis cost was this dump. */
+export function formatBootHistory(snap) {
+  if (!snap) return "  (no snapshot)";
+  const rows = (snap.history || []).map((e) => `  - ${e.state}${e.message ? ": " + e.message : ""}`);
+  if (!rows.length) rows.push("  (no boot-state history — did the page load index.html?)");
+  return rows.join("\n");
+}
+
+/**
+ * Split the console-error log at the instant the boot gate passed.
+ *
+ * Errors from BEFORE that instant belong to the login phase — and once the
+ * gate retries a refused connect, the refusal's own console error
+ * ("start_session: no CharacterList within 30s") sits in the log of a run
+ * that then went on to be perfectly healthy. judge() counts errors, so
+ * leaving them in would REJECT every recovered run: the harness would fail
+ * itself for surviving. They are reported (`bootErrors`), never judged.
+ * Everything from the gate onward — settle, teleport, warm lap, measure lap —
+ * is judged exactly as before.
+ */
+export function splitBootErrors(all, cutIndex) {
+  const list = Array.isArray(all) ? all : [];
+  const cut = Math.max(0, Math.min(list.length, cutIndex | 0));
+  return { bootErrors: list.slice(0, cut), runErrors: list.slice(cut) };
+}
+
+async function readBootSnapshot(page) {
+  return page.evaluate(() => ({
+    state: window.__bootState ?? null,
+    history: (window.__bootStateHistory || []).map((e) => ({ state: e.state, message: e.message || "" })),
+    sceneReadyEverFired: !!window.__sceneReadyEverFired,
+    inFlight: typeof window.__autoLoginInFlight === "function" ? window.__autoLoginInFlight() : false,
+  })).catch(() => null);
 }
 
 const pct = (a, p) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return +s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))].toFixed(2); };
@@ -195,13 +332,52 @@ async function main() {
 
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90000 });
   const t0 = Date.now();
+  let attempt = 0;
   for (;;) {
-    const s = await page.evaluate(() => window.__bootState).catch(() => null);
-    if (s === "ready" || s === "in-world") break;
-    if (s === "error") { console.error("[moving-bench] BOOT-FAIL"); process.exit(1); }
-    if (Date.now() - t0 > BOOT_MS) { console.error("[moving-bench] BOOT-TIMEOUT"); process.exit(1); }
+    const snap = await readBootSnapshot(page);
+    const d = classifyBoot(snap, { attempt, maxAttempts: LOGIN_RETRIES });
+    if (d.action === "go") break;
+    if (d.action === "relogin") {
+      attempt += 1;
+      console.warn(`[moving-bench] boot error: ${d.reason}`);
+      console.warn(`[moving-bench] relogin ${attempt}/${LOGIN_RETRIES} in ${LOGIN_COOLDOWN_MS}ms `
+        + "(ACE holds the previous session's character for ~5-10 s; a fresh connect boots it)");
+      await new Promise((r) => setTimeout(r, LOGIN_COOLDOWN_MS));
+      // Fire-and-forget: the orchestrator's promise settles minutes later and
+      // awaiting it here would just re-implement the poll below. `maxRetries:1`
+      // lets the in-page attempt loop absorb a char-in-world (0x0D) refusal
+      // itself; the claim guard makes a double-run impossible.
+      const fired = await page.evaluate((o) => {
+        if (typeof window.__runAutonomousLogin !== "function") return false;
+        window.__runAutonomousLogin(o);
+        return true;
+      }, { autoSpawn: "first", maxRetries: 1 }).catch(() => false);
+      if (!fired) {
+        console.error("[moving-bench] BOOT-FAIL — window.__runAutonomousLogin is absent "
+          + "(a --url without ?autoLogin=1 cannot be retried by this harness)");
+        console.error(formatBootHistory(snap));
+        process.exit(1);
+      }
+      continue;
+    }
+    if (d.action === "fatal") {
+      console.error(`[moving-bench] BOOT-FAIL — ${d.reason}`);
+      console.error("[moving-bench] boot-state history:");
+      console.error(formatBootHistory(snap));
+      process.exit(1);
+    }
+    // "wait": each relogin buys its own runway on top of --bootTimeout.
+    if (Date.now() - t0 > BOOT_MS + attempt * LOGIN_RETRY_BUDGET_MS) {
+      console.error(`[moving-bench] BOOT-TIMEOUT after ${((Date.now() - t0) / 1000).toFixed(1)}s `
+        + `(last: ${d.reason})`);
+      console.error("[moving-bench] boot-state history:");
+      console.error(formatBootHistory(snap));
+      process.exit(1);
+    }
     await new Promise((r) => setTimeout(r, 700));
   }
+  // Everything logged up to here is the login phase (see splitBootErrors).
+  const bootErrorCut = errors.length;
   if (spec.mode !== "hop") {
     await page.evaluate((p) => window.__sessionHandle?.sendChat("@telepoi " + p), POI).catch(() => {});
   }
@@ -241,7 +417,10 @@ async function main() {
     },
     lb: { churnFrames: r.lb.churnFrames, countFirst: r.lb.counts[0], countLast: r.lb.counts[r.lb.counts.length - 1], hashFirst: r.lb.hashFirst, hashLast: r.lb.hashLast },
     walkDelta: deltaWalk(r.walk0, r.walk1),
-    errors: errors.concat(r.errors || []).slice(0, 16),
+    // Login-phase errors are reported, never judged (see splitBootErrors).
+    bootErrors: splitBootErrors(errors, bootErrorCut).bootErrors.slice(0, 8),
+    reloginAttempts: attempt,
+    errors: splitBootErrors(errors, bootErrorCut).runErrors.concat(r.errors || []).slice(0, 16),
   };
   const j = judge(rep, { churnMax: CHURN_MAX, drawSpreadMax: DRAW_SPREAD_MAX });
   rep.verdict = j.verdict;
@@ -265,6 +444,8 @@ async function main() {
   console.log(`  lb churn       : ${rep.lb.churnFrames} frames  count ${rep.lb.countFirst} -> ${rep.lb.countLast}  hash ${rep.lb.hashFirst} -> ${rep.lb.hashLast}`);
   console.log(`  walk delta     : ${JSON.stringify(rep.walkDelta)}`);
   console.log(`  errors         : ${rep.errors.length}`);
+  console.log(`  boot           : ${rep.reloginAttempts} relogin(s), ${rep.bootErrors.length} login-phase error(s) (reported, not judged)`);
+  for (const be of rep.bootErrors) console.log(`      ~ ${be}`);
   console.log(`\n  full JSON -> ${OUT}`);
   console.log("=".repeat(72));
   process.exit(j.ok ? 0 : 1);
@@ -347,6 +528,10 @@ export function toResultsV2(rep, { series } = {}) {
       lb: rep.lb,
       walkDelta: rep.walkDelta,
       errors: rep.errors,
+      // Boot provenance (2026-08-10): how many relogins the gate had to spend
+      // and what the login phase logged. Reported, never judged.
+      reloginAttempts: rep.reloginAttempts ?? 0,
+      bootErrors: rep.bootErrors ?? [],
       ...(series !== undefined ? { series } : {}),
     })
     .setVerdict(rep.verdict === "USABLE" ? "EXPLORATORY" : "INVALID")
