@@ -2124,6 +2124,53 @@ export function clipMapOpaqueEnabled() {
   }
 }
 
+// === PORTAL-BLACKBOX (2026-08-10) — the fully-transparent-albedo BC7 veto ===
+//
+// The standard portal (Setup 0x020001B3, every unrestricted portal in the
+// world — 1,006 weenies in the LSD dump) draws ONE part: GfxObj 0x0100168B, a
+// 2.82 m quad whose single Surface 0x08000157 is `Base1ClipMap` over
+// RenderSurface 0x0600396B — an 8x8 PFID_DXT1 image whose four blocks are all
+// `c0=0x0000 c1=0x0001, indices=0xFFFFFFFF`. c0 <= c1 is DXT1's punch-through
+// mode and index 3 there is the transparent texel, so EVERY texel is
+// (0,0,0,0): retail's alpha test (ref 200/255 for a DDS clipmap) discards the
+// whole quad and the portal's visual is entirely its purple point light plus
+// the default_script 0x3300067A particle swirl. Our RGBA8 path agrees exactly
+// — `?texBc7=off` decodes 8x8, alphaMax 0, and the quad is invisible.
+//
+// The BC7 arm does not. The hires archive's `holtburger/tex-bc7` payload for
+// rs 0x0600396B is a 32x32 OPAQUE image (upscaled 4x by the hires texture
+// bake, alpha dropped), so after `_maybeUpgradeToBc7` swaps it in the quad
+// passes the 0.784 alpha test at RGB 0 and renders as a 2.82 m opaque BLACK
+// BOX centred in the swirl — the reported "purple portals show a spinning
+// black box instead of a swirl". Live-proven A/B at Yaraq (LB 0x7D64, cell
+// 0x7D640025): default arm = black box + swirl behind it; `?texBc7=off` = no
+// box, same swirl.
+//
+// The bake is the place that is wrong and re-baking that payload is the real
+// fix. This is the client-side invariant that makes the class of defect
+// non-rendering rather than catastrophic: an albedo that decoded to alpha 0
+// EVERYWHERE carries no information at all, so no re-encode of it can be an
+// improvement — anything a compressed payload adds there is manufactured. Keep
+// the decoded RGBA8 twin and skip the upgrade.
+//
+// Cost is O(1) amortised: the scan early-exits on the first non-zero alpha, so
+// an ordinary texture pays one byte read. Only a genuinely all-transparent
+// image walks its (by construction, tiny) buffer. Fail-open on anything we
+// cannot read (compressed source, `?texFreeCpu` already released the plane) —
+// the guard may only ever REFUSE an upgrade, never force one.
+function albedoFullyTransparent(tex) {
+  const data = tex && tex.image && tex.image.data;
+  if (!data || typeof data.length !== "number" || data.length === 0) return false;
+  if ((data.length & 3) !== 0) return false; // not RGBA8 — not ours to judge
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] !== 0) return false;
+  }
+  return true;
+}
+
+/** One warn per RenderSurface id vetoed above (diagnostic, not spam). */
+const _bc7TransparentVeto = new Set();
+
 /**
  * Write retail's ClipMap render state onto `target` — either a live material or
  * the plain `opts` bag a `MeshStandardMaterial` is about to be constructed from
@@ -5638,6 +5685,23 @@ export class MaterialCache {
     if (!this._bc7Asked) this._bc7Asked = new Set();
     if (this._bc7Asked.has(d)) return;
     this._bc7Asked.add(d);
+    // PORTAL-BLACKBOX (2026-08-10) — a fully-transparent decoded albedo is
+    // never upgradable; see the long note at `albedoFullyTransparent`. Runs
+    // after the ask-once gate so a vetoed DID is settled for the session
+    // (nothing is left waiting on a `__bc7Pending` that will never land —
+    // `upgradeMaterialToBc7`, the only writer of that marker, is not called).
+    if (albedoFullyTransparent(mat.map)) {
+      if (!_bc7TransparentVeto.has(rs)) {
+        _bc7TransparentVeto.add(rs);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[materials/bc7] skipping BC7 upgrade for surface 0x${d.toString(16).padStart(8, "0")}` +
+            ` (rs 0x${rs.toString(16).padStart(8, "0")}): decoded albedo is fully transparent,` +
+            ` so the compressed payload cannot be a faithful re-encode of it`
+        );
+      }
+      return;
+    }
     // P1 (2026-08-04): the re-point handler runs via onSwap for EACH phase
     // (pre then full) — NOT via the returned promise, which would double-run
     // it for the full phase (double LRU delta, double dispose).
