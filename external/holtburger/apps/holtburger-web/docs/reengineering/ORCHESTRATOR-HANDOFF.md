@@ -4,7 +4,29 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
-## 0. BAKE SETTLED — FULL-WORLD PACK LAYER IS LIVE (2026-08-09 15:41)
+## -1. BAKE-3 DONE + DEPLOYED (2026-08-10 05:20) — v3 pack layer is the live one
+
+driver3.log: === DONE rc=0 at 23:05:34 (152m38s). 17,682 packs / 265.0 MB (+453.8 KB
+index), 16,384 tiles / 1,153 interiors / 65,025 LBs, missingPvw=0,
+closure_verified=TRUE, determinism_verified=TRUE. texref 3,471 rows, pvw 45.06 MB
+(pre 2893 / full 106 / extra 88, unsliceable 0). This run carries the 593 fixed
+Remacri textures + refreshed previews + T13's HBG1 GEOM sections in one verified pass.
+DEPLOYED 2026-08-10 05:20 via deploy-packs-v3.sh: CAS sha-verify 17,682/17,682,
+world_index verified (index c80e43ab…, 464,666 bytes), manifest merge clean
+(only world_index changed — expected; pack_url_template identical; no other deltas),
+provenance + pack-report copied, serve.py --check OK (index=1, packs=256).
+NOTE: the script's step-3 gate was patched for the re-deploy case (the original
+asserted world_index was ABSENT from dist — true only for the first deploy; it now
+allows exactly world_index to change and nothing else).
+⚠ serve.py --check warns pkg/ wasm (mtime 08-09 20:12) predates the last
+Rust-touching commit — REBUILD (capped-build wasm-pack --release) before trusting any
+measurement or GPU-batch arm.
+CLEANUP from §0 executed 2026-08-10: world-packs-CONTAMINATED-double-launch-DELETE-ME,
+world-packs-crashed-run1, world-packs-run2-unverified, driver2-firstattempt.log all
+deleted. Remaining next steps: GPU session (1070 or R9 290 tunnel) runs FULL batch A —
+E1/P-ASSEMBLE unblocked; T15 remainder + T22 sizing per §Pass-3/TEX-RE-KEY notes below.
+
+## 0. HISTORICAL: BAKE SETTLED — FULL-WORLD PACK LAYER WAS LIVE (2026-08-09 15:41; superseded by -1)
 
 RUN2-FIXED completed 15:35 rc=0: 17,682 packs / 255.2 MB, 16,384 tiles / 1,153
 interiors / 65,025 LBs, missingPvw=0, closure_verified=TRUE, determinism_verified=TRUE
