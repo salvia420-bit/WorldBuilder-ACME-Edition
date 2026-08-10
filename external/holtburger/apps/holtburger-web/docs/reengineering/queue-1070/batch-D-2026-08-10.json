@@ -129,6 +129,19 @@
       "result": null
     },
     {
+      "id": "PORTAL-P0-VALIDATE",
+      "kind": "eye+probe",
+      "gate": "validates the 2026-08-10 PORTAL-P0 commits (a591a444 envcellRing, 2a196c4d watchdog, 3961f943 direct seal, f74dbd45 punchLosSunken). NOT v4-gated — runs against the live JS tree on any dist; the Yaraq leg is the owner-priority bug (grass over the blacksmith's sunken interior, outdoor vantage only).",
+      "recipe": [
+        "A. YARAQ PUNCH (priority; 1070 — SwiftShader cannot render the punch): ?nosw=1&autoLogin=1&autoSpawn=first&agent=1; @telepoi Yaraq; stand OUTSIDE the blacksmith. Assert liveScene3d._portalPunchDiag.gates.losSunkenExempt===true and _portalPunchDiag.offered>0. A/B vs &punchLosSunken=off: ON arm must have strictly LOWER dropped.terrain and the grass patch gone (eye). If offered===0 at that vantage => no aperture polygon exists there (light-well/stairwell case) => the fix is BLDPORTAL-CONSUME (postBakeCodeWork), not this gate.",
+        "B. ENVCELL RING: ?nosw=1&autoLogin=1&autoSpawn=first&nullRender=1&agent=1 in a town; after ~10s assert liveScene3d.envCellLoadedLbs.size>1 and no '[scene3d.cells] PVS loadEnvCellsForLandblock failed' console lines; &envcellRing=off collapses size to player-LB count.",
+        "C. WATCHDOG: in a dungeon, liveScene3d.envCellLoadedLbs.delete(<lbId>); assert a '[cell-watchdog] ... NO EnvCell meshes' re-fire within ~3s and it stops after 5 attempts (no 2Hz storm).",
+        "D. DIRECT SEAL: ?nosw=1&wireframe=1&autoLogin=1&autoSpawn=first, go indoors below grade until liveScene3d._indoorSplitArmed===true; assert _directPortalSealPass!=null with .hasApertures===true and _portalSealDiag.kept>0. Eye arm on 1070 uses &atmosphere=off instead of wireframe: terrain through the doorway no longer overpainted by interior geometry.",
+        "Known fail-open (accepted, pinned as KNOWN FAIL-OPEN test): hill occluder + sunken target with no re-emergence now over-punches within the pass's scissor rect — note if visible in the wild."
+      ],
+      "result": null
+    },
+    {
       "id": "MOVE-FIX-BASELINE",
       "kind": "bench",
       "gate": "creates F3/F4 baselines (charter Q2); GATE-POOLS kill-row needs it",
