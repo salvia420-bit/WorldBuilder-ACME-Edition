@@ -139,7 +139,16 @@
         "D. DIRECT SEAL: ?nosw=1&wireframe=1&autoLogin=1&autoSpawn=first, go indoors below grade until liveScene3d._indoorSplitArmed===true; assert _directPortalSealPass!=null with .hasApertures===true and _portalSealDiag.kept>0. Eye arm on 1070 uses &atmosphere=off instead of wireframe: terrain through the doorway no longer overpainted by interior geometry.",
         "Known fail-open (accepted, pinned as KNOWN FAIL-OPEN test): hill occluder + sunken target with no re-emergence now over-punches within the pass's scissor rect — note if visible in the wild."
       ],
-      "result": null
+      "result": null,
+      "laptopIgpuFindings2026-08-10": [
+        "RIG: laptop HD520 real-GPU headless chromium (--use-angle=gl-egl → 'Mesa Intel HD 520', NOT SwiftShader) against live tree; freecam __cam.set takes AC-WORLD FOLDED metres (lb 0x7D64 base = 24000,19200) — LB-local coords put the camera in the void.",
+        "KILLER BUG FOUND+FIXED (commit b97b9ee1): tickPortalPunch read hasV2 from tickPortalStencil's scope → ReferenceError EVERY frame, eaten by the bare catch → THE PUNCH WAS STRUCTURALLY DEAD (offered always 0, diag frozen on last stamp). Found via CDP Debugger.setPauseOnExceptions. Catch now stamps 'tick-threw:<msg>'. All prior punch eye-verdicts since the stencil/punch split are void — the pass never fed.",
+        "POST-FIX: punch feeds (Yaraq offered 12-28, kept most; terrain gate live, dropT differentials seen). punchLosSunken on/off showed NO dropT differential at the tested street vantages.",
+        "YARAQ SPOT NOT RESOLVED by the punch alone: with punch alive+kept>0, grass still draws over the sunken smithy courtyard from street vantages (player-outside). Interior cells ARE in the outdoor render set (7d640100 visible:true, 37/116 visible) — the courtyard region is simply covered by NO kept aperture polygon (open-top/courtyard boundary has no CellPortal poly to punch through) → this is the BLDPORTAL-CONSUME / aperture-export gap, exactly the postBakeCodeWork item.",
+        "INDOOR BLEED ON THIS RIG: player teleported into 0x7d640100 → indoorDepthSplit ARMED (relayered 97, path composer, seal kept 20) yet grass still overpaints the interior floor in view. Owner reports indoors clean on their rig — preset/GPU dependent? Suspect seal-aperture overreach (open-top courtyard 'aperture' re-protecting terrain over the whole floor) or hoist gap. VERIFY ON 1070 before chasing.",
+        "Freecam park does NOT disarm the punch (verified post-fix). @telepoi Yaraq lands at 0x7D64 spawn; blacksmith Buray ibn Tamsa interior cell 0x7D640100 local (87.8,111.8,12.005); @teleloc 0x7D640100 87.8 111.8 12.005 works headless.",
+        "Shots taildropped to redmi: yaraq-1-DEFECT-street (punch off = pre-fix state), yaraq-2-punchalive-street, yaraq-3-overview-fixed-arm, yaraq-4-player-inside."
+      ]
     },
     {
       "id": "MOVE-FIX-BASELINE",
