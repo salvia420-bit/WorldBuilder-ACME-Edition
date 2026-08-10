@@ -4,6 +4,7 @@ pub mod dat_shard;
 pub mod error;
 pub mod pack_bake;
 pub mod pack_format;
+pub mod page_resample;
 pub mod spell_export;
 
 pub use boot_verify::{EXIT_NOT_FULLY_PACKABLE, format_report, verify_boot_pack};
