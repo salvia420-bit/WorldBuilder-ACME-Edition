@@ -4,6 +4,24 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -4. AGENT-PASS ERA (2026-08-10 evening) — orchestrator + Opus implementation agents
+
+Owner directive: Opus agents implement; orchestrator researches/verifies/pushes.
+- PASS 1 LANDED+VERIFIED+PUSHED: T15R (rehydrate-v3 full-tier mirror seam +
+  demote rung; default-arm fullSwaps=0 scare resolved as counter-naming — legacy
+  full-res ran 306 upgrades in the same capture; E1 softness suspect is now the
+  untracked atlas hold-out class C1, third-arm tco probe queued for next 1070
+  session) + MOVEFIX-HARNESS (renderOnDemand exonerated — boot stalls were
+  stale-ACE-session refusals hidden by scalar-only gates; classifyBoot+relogin
+  landed; MOVE-FIX baseline UNBLOCKED; never default --account=tailnet1 on the
+  1070).
+- PASS 2 IN FLIGHT: T22 (?drawPools, the last L task) + T15R-TERRAIN
+  (?terrainT1024 ladder + terrain-mirror freeing), disjoint scopes.
+- QUEUED (owner-requested): RELIEF-IN-BAKE — bake gfxRelief into HBG1 GEOM
+  variants so the pack pipeline stops force-disabling relief. Full turnkey brief:
+  docs/reengineering/queued/RELIEF-IN-BAKE-brief.md. Launch when a pass-2 slot
+  frees and its scope no longer collides.
+
 ## -3. 1070 BATCH-A EXECUTION 2026-08-10 (afternoon; owner-directed) — in flight
 
 BATCH COMPLETE (evening): 9 of 10 items executed and recorded in the queue file —
