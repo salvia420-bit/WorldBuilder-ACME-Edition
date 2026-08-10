@@ -4,6 +4,31 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -7. BAKE-4 IN FLIGHT (2026-08-10 ~15:40) — pages + relief, verified single-pass
+
+- PASS 4 CLOSED: ENVCELL-POOL-SWAP + RSID-MARKER + the two ruling follow-ups
+  (FULL_PAGE_DIMS bit-gated strict arm, leg 7 a48b05b2; OFF_PAGE hold-out filing
+  with retire-not-refile drain, leg 8 83dcc266) all landed, verified (draw-pools
+  448/448 final), pushed.
+- ENCODE DONE: 1,309 page-dim members encoded on the buildbox (basisu v2.50.0
+  — version-matched to the laptop corpus encoder; first attempt failed 1,309/1,309
+  on a GLIBC 2.38 mismatch, native box build used instead), sha-verified on
+  arrival; farm /mnt/wbterminal2/xu7-ingest-pages = 1,309 encoded + 2,676
+  identity symlinks + PROVENANCE.md. Buildbox powered off.
+- PREVIEWS: 1,309 re-derived from the page farm; 893 REPLACED in the pre tree
+  (backup: reeng/page-resample/pre-backup-2026-08-10) + 416 into pvw-extra —
+  the pre>full>extra priority makes in-place pre replacement mandatory (the
+  texfix-593 pattern).
+- BAKE-4 RUNNING: run-world-bake-4.sh → world-packs-v4/, driver4.log, bin
+  49ac8b4d, --tex-xu7 xu7-ingest-pages --require-page-dims --geom-relief 1.0
+  + both verify flags. On DONE rc=0: adapt deploy-packs-v3.sh → v4 (gate on
+  driver4.log; expect world_index + pack_url_template-stable additive merge;
+  GEOMR rows are NEW sections — packs superset), deploy, serve.py --check.
+  Then the 1070 batch card is fully unblocked incl. E6 (strict-arm counters:
+  heldOutByReason.offPage climbing with reOfferAdmitted following;
+  heldOutNoRsId must be 0) and the relief eye pair
+  (assert __diag.geometry.relief.variantRowsResident>0 first).
+
 ## -6. PASS 4 (2026-08-10 night) — coverage gaps closing
 
 - RSID-MARKER LANDED+VERIFIED (87/87 new + draw-pools/tex-compressed re-run
