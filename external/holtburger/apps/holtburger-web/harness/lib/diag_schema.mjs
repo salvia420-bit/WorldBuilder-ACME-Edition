@@ -483,7 +483,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.residency",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6630",
+    evidence: "scene3d/index.js:6653",
     spec: "pass-10 S3 (pass 6 D-06.9.4 + additions)",
     availability: "flag:?slotGrid=on",
     note: "Slot-grid residency surface; successor of __landblockLru.getStats. "
@@ -530,7 +530,7 @@ export const REGISTRY = Object.freeze([
     status: "current",
     reads: "function",
     spec: "pass-10 S3 (pass 7 S7 + M6 pair)",
-    evidence: "scene3d/index.js:6304",
+    evidence: "scene3d/index.js:6321",
     availability: "in-world",
     note: "Draw-pool surface; successor of __atlasStats. LIVE since the T22 "
       + "producer swap (index.js installs the PRODUCER census, which supersedes "
@@ -538,7 +538,11 @@ export const REGISTRY = Object.freeze([
       + "populated under the full F-11.3 chain; reads {enabled:false} otherwise. "
       + "classes.createdPostBoot "
       + "and parked-frame events.mutationsThisFrame are zero-tolerance gates. "
-      + "draws.* sampled under PR-7 (autoReset off, cumulative, /frames).",
+      + "draws.* sampled under PR-7 (autoReset off, cumulative, /frames). "
+      + "ENVCELL-POOL-SWAP adds cells.* (the interior residency half) and an "
+      + "`envcells` section merged in by index.js from pool_envcells.js — the "
+      + "per-LB pooled-cell ledger, the PVS delta counters and the bake "
+      + "refusal; `envcells.enabled:false` means ?portalStencil disarmed it.",
     fields: {
       "pools.count": L("count", ["resident"]),
       "pools.byClass": L("json"),
@@ -557,6 +561,8 @@ export const REGISTRY = Object.freeze([
       "events.releases": C("count"),
       "events.bandSwaps": C("count"),
       "events.cellFlips": C("count"),
+      "cells.tracked": L("count", ["resident"]),
+      "cells.hidden": L("count", ["resident"]),
       "events.mutationsThisFrame": L("count"),
       "draws.submitted": L("count", ["submitted"]),
       "draws.switchRate": L("count", ["submitted"]),

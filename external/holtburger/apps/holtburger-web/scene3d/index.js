@@ -131,6 +131,9 @@ import {
 } from "./pool_producer.js";
 import { getPoolRegistry } from "./pool_registry.js";
 import { initPoolPrewarm, prewarmWorkList } from "./pool_prewarm.js";
+// ENVCELL-POOL-SWAP (ST9, `?drawPools`) — the interior producer's arming +
+// census. Inert unless initPoolWorld armed the full F-11.3 chain.
+import { armEnvCellPoolGroups, envCellPoolCensus } from "./pool_envcells.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
 // script queues, mirroring retail's single Timer::cur_time static,
@@ -6291,6 +6294,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // reads false and the legacy stack is untouched.
     try {
       initPoolWorld({ THREE, group: liveScene3d.staticsGroup });
+      // ENVCELL-POOL-SWAP: interiors pool into the CELLS group on
+      // RENDER_LAYER_INDOOR, never the layer-0 statics group — atmosphere_
+      // pipeline renders layer 0, CLEARS DEPTH, then renders layer 1, and an
+      // envcell pool drawn before that clear loses the isolation the split
+      // exists for (the cottage-floor z-fight / see-through pair). three layer
+      // masks are per-OBJECT, so the registry stamps the pool mesh itself.
+      armEnvCellPoolGroups({
+        staticsGroup: liveScene3d.staticsGroup,
+        cellsGroup: liveScene3d.cellsGroup,
+        // RENDER_LAYER_INDOOR = 1 (declared in preInit3D's scope, not this
+        // one) — the same constant cellsGroup and every cell container use.
+        indoorLayer: 1,
+      });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("[drawPools] arming threw; legacy producers stay in charge:", e);
@@ -6300,8 +6316,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         window.__diag = window.__diag || {};
         // The producer census SUPERSEDES the bare registry census installed by
         // initDrawPools: same name, strictly more rows (class pages, refusals,
-        // producer counters, the stream controller).
-        window.__diag.pools = () => poolWorldCensus();
+        // producer counters, the stream controller) — plus the envcell
+        // producer's own ledger, which lives in its own module.
+        window.__diag.pools = () => {
+          const c = poolWorldCensus();
+          if (c && c.enabled) {
+            try { c.envcells = envCellPoolCensus(); } catch (_) { /* fail-soft */ }
+          }
+          return c;
+        };
       } catch (_) { /* fail-soft */ }
     }
     if (__slotGridArmed) {
