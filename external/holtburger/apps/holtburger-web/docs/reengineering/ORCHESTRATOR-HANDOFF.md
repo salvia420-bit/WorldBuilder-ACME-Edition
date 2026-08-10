@@ -23,7 +23,21 @@ Owner directive: Opus agents implement; orchestrator researches/verifies/pushes.
   alone is not eye-testable); D-07.6 [A] "world-static nodes ≤~250" measures 271
   (+8% — flagged, not absorbed); D4 — FrameWorkScheduler items must NOT
   re-enqueue into their own class (drain-until-budget spins; continuation =
-  once-per-frame re-armed flag). T15R-TERRAIN still in flight.
+  once-per-frame re-armed flag). T15R-TERRAIN LANDED+VERIFIED (battery 105/105 re-run;
+  boot converges at t128 from the lane-B slice packs, wholesale in-place
+  promotion staged one array/frame per P-88MIB, 22 MiB mirrors freed live,
+  OFF=absent legacy-identical). Its flags: D5 — initTexture staging is a
+  CORRECTNESS requirement (live boots showed swapped arrays un-uploaded 150 s
+  post-promotion without it; renderer must come off liveScene3d.renderer, not
+  the snapshot); D4 — terrain mirrors ride texture_rehydrate.js directly (the
+  T15R record-budget seam would re-adopt terrain into the 128 MB record budget
+  SPEC keeps it out of); D1 — flag grammar: ABSENT=legacy kill path, off=pins
+  t128 (3-value grammar completes at the default flip); D6 doc-debt — pass-05's
+  "~0.9 MiB GPU" for the t128 pair is really 1.38 MiB (dedup saves wire bytes,
+  not texStorage3D layers). GATE-TEX gains a terrain leg (1070/owner): t1024
+  staging vs F6 in-app, mirrorRestoreFailed=0 across a forced context loss, and
+  an owner eye on the t128 interim state (never yet seen by a human) — chain it
+  with the E1 third-arm tco probe next 1070 session per the report.
 - QUEUED (owner-requested): RELIEF-IN-BAKE — bake gfxRelief into HBG1 GEOM
   variants so the pack pipeline stops force-disabling relief. Full turnkey brief:
   docs/reengineering/queued/RELIEF-IN-BAKE-brief.md. Launch when a pass-2 slot
