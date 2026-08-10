@@ -40,7 +40,7 @@ tree — I5):
 
 | artifact | what |
 |---|---|
-| `src-corpus-pages/` | the **full derived PNG tier** — all 3,985 corpus members at page dims, plus plan + `page-resample.sha256` + `bake-source.sha256` + `PROVENANCE.md`. STATE AT REPORT TIME: still writing (~3.4 k of 3,985 members on disk; the provenance trio is written last, so `PROVENANCE.md`'s presence is the completion signal). It is a HANDOFF artifact for step 1 below, not a gate — the gate ran on `src-region-pages/`, which is complete and sha-verified. Single-threaded by design and ~1 h on this laptop: the 4096² cases hold a 134 MB intermediate and a rayon pool would multiply that by the core count on a 7.8 GB box. Re-run to (re)produce: `page-resample --src /mnt/wbterminal2/reeng/page-resample/src-all --out <dir> --verify-deterministic` |
+| `src-corpus-pages/` | the **full derived PNG tier — COMPLETE**: 3,985 members at page dims (2,676 identity / 1,298 upscaled / 11 downscaled; `needsResample` 1,309 → **0**; 4,660.7 MB → 4,666.4 MB source-side, 1.2 GB on disk because 2,676 members are symlinks), plus `page-resample-plan.json`, `page-resample.sha256` (3,985 rows), `bake-source.sha256` and `PROVENANCE.md`. This is the encode input for step 1 below. ~1 h to regenerate on this laptop, single-threaded by design: the 4096² cases hold a 134 MB intermediate and a rayon pool would multiply that by the core count on a 7.8 GB box. Re-run: `page-resample --src /mnt/wbterminal2/reeng/page-resample/src-all --out <dir> --verify-deterministic` |
 | `src-region-pages/` | the same for the 413 full-tier rsIds of T10's bounded region |
 | `xu7-ingest-pages/` | the region's page-dim XUBC7 ingest (185 re-encoded, 228 identity members symlinked from the live corpus) |
 | `region-texref-xu7-ids.txt` | the region's full-tier rsIds, written by the CI leg itself |
@@ -89,9 +89,9 @@ time is claimed, derived or implied by this task.
 **253 of 400** members in the wrong class. Pinned as
 `full_tier_is_four_x_the_dat_record_dims`.
 
-**Corpus-wide plan** [M, the full 3,985-member dimension histogram]: 2,676 identity /
-1,298 upscale / 11 downscale — `needsResample` reads **1,309** over the live corpus and
-0 over the derived tier. The 11 downscales are the tier clamp: eight 4096², one
+**Corpus-wide plan** [M, the full 3,985-member run, not a projection]: 2,676 identity /
+1,298 upscaled / 11 downscaled — `needsResample` reads **1,309** over the live corpus and
+**0** over the derived tier, which the tool asserts before it writes its manifest. The 11 downscales are the tier clamp: eight 4096², one
 128×4096, one 1024×4096, one 2560×1920.
 
 **Byte cost** [M, region-scoped — the corpus-wide figure needs the buildbox encode]:
