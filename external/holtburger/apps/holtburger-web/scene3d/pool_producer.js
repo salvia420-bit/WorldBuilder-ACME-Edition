@@ -61,7 +61,7 @@ import { buildTilePlan } from "./tile_plan.js";
 import { PoolStreamController } from "./pool_stream.js";
 import { tileOfLb, tileLbKeys } from "./residency_grid.js";
 import { frameWorkEnabled, getFrameWorkScheduler } from "./frame_work.js";
-import { registerAtlasRefeed, texRefPageInfo } from "./bc7_textures.js";
+import { registerAtlasRefeed, texRefPageInfo, materialRsId } from "./bc7_textures.js";
 import { isBc7AtlasTexture } from "./static_atlas.js";
 import { _atlasRefeedImpl as atlasSideRefeed } from "./static_atlas.js";
 
@@ -125,6 +125,14 @@ export function initPoolWorld({ THREE, group, search } = {}) {
       texRefPageKeyed: 0, texRefOffPage: 0, texRefAbsent: 0, texRefDimsWillMove: 0,
       parks: 0, adopts: 0, releases: 0,
       refeedCalls: 0, refeedLayers: 0, refeedRehomed: 0, refeedAtlasSide: 0,
+      // RSID-MARKER — the hold-out → re-offer ledger. `heldOut` is what the
+      // refusal counters promised was recoverable; `reOffered` is what was
+      // actually offered a second time; the two `reOffer*` outcomes account
+      // for every one of them, per refusal reason. `heldOutNoRsId` is the
+      // marker gap the stamp closes and MUST read 0 on a stamped build.
+      heldOut: 0, heldOutNoRsId: 0, heldOutDupes: 0,
+      reOffered: 0, reOfferAdmitted: 0, reOfferStale: 0,
+      reOfferRefused: {},
     },
   };
   // F-11.17: the producer-agnostic re-home seam. The atlas registers the same
@@ -337,21 +345,40 @@ export function _poolAxisRecordForTest(mat, { domain = "st", castShadow = false,
   return { rec: _axisRecordFor(mat, domain, castShadow, receiveShadow, stats), stats };
 }
 
+/** RSID-MARKER: ONE reader (`bc7_textures.js#materialRsId`) so the key a
+ *  hold-out is filed under and the key `atlasRefeed(rsId)` arrives with cannot
+ *  drift. Was an inline `__bc7RsId ?? __pvwRsId` read, which is 0 for exactly
+ *  the state that gets a member refused (`__bc7Pending`) — the 363-hold-out
+ *  class; `__texRsId` is the stamp that makes the read total. */
 function _rsIdOf(mat) {
-  const ud = mat && mat.userData;
-  if (!ud) return 0;
-  return ((ud.__bc7RsId != null ? ud.__bc7RsId : ud.__pvwRsId) || 0) >>> 0;
+  return materialRsId(mat);
 }
 
-/** A preview-born member whose full tier is still in flight is held out (its
- *  page dims would be the PREVIEW's, i.e. the wrong class) and re-offered when
- *  `atlasRefeed(rsId)` fires — the F-11.17 "nothing can stick" rule. */
+/** A member whose texture tier is still in flight is held out (its page dims
+ *  would be the PREVIEW's, i.e. the wrong class) and re-offered when
+ *  `atlasRefeed(rsId)` fires — the F-11.17 "nothing can stick" rule.
+ *
+ *  UNRECOVERABLE-BY-DESIGN is still COUNTED: a member with no rsId marker
+ *  cannot be filed under any key, so it would sit on the legacy producer for
+ *  the session. That population is `heldOutNoRsId`, and the whole point of the
+ *  stamp is that it reads 0 — a nonzero value names a material class the
+ *  texture lane builds without going through either stamp site. */
 function _holdOut(node, scene3d, opts, mat) {
   const rs = _rsIdOf(mat);
-  if (!rs) return;
+  if (!rs) { _world.stats.heldOutNoRsId += 1; return; }
+  // A held-out node is ALSO returned as passthrough and rendered by the legacy
+  // producer, so the same node can be offered again on a later feed while its
+  // verdict is still pending. Filing it twice would re-offer it twice, and the
+  // second re-offer would add a SECOND pool instance for a node the first one
+  // already pooled — a double-drawn prop. The mark is cleared when the
+  // hold-out is consumed.
+  const ud = (node.userData = node.userData || {});
+  if (ud.__poolHeldRs === rs) { _world.stats.heldOutDupes += 1; return; }
+  ud.__poolHeldRs = rs;
   let list = _world.holdouts.get(rs);
   if (!list) { list = []; _world.holdouts.set(rs, list); }
   list.push({ node, scene3d, opts });
+  _world.stats.heldOut += 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +494,17 @@ export function poolAtlasRefeed(rsId) {
   // Group by (scene3d, lbKey, domain) so each re-offer is one TilePlan.
   const groups = new Map();
   for (const h of held) {
+    // STALE: both producer call sites parent every passthrough node the same
+    // synchronous turn they take it back (statics.js:2653,
+    // buildings.js:192), and a verdict can only resolve on a LATER turn — so
+    // a parentless node here is one whose landblock was evicted while its
+    // texture was in flight. Re-offering it would resurrect an evicted LB's
+    // geometry into a pool no residency event owns. Dropped, and counted.
+    if (!h.node || !h.node.parent) {
+      _world.stats.reOfferStale += 1;
+      if (h.node && h.node.userData) delete h.node.userData.__poolHeldRs;
+      continue;
+    }
     const k = `${(h.opts.lbKey >>> 0)}|${h.opts.domain || "st"}`;
     let g = groups.get(k);
     if (!g) { g = { scene3d: h.scene3d, opts: h.opts, nodes: [] }; groups.set(k, g); }
@@ -474,7 +512,25 @@ export function poolAtlasRefeed(rsId) {
   }
   for (const g of groups.values()) {
     try {
+      // RSID-MARKER: account for EVERY re-offered node. `refused` is read
+      // before and after so each refusal lands under the reason the class
+      // registry gave it — a re-offer that is refused AGAIN (still deformed,
+      // dims moved anyway, page full) is not a silent no-op, it is a row.
+      const before = { ...w.classMats.stats.refused };
+      w.stats.reOffered += g.nodes.length;
+      // Clear the hold-out mark BEFORE the re-offer, never after: a member can
+      // be re-offered while STILL pending (one rsId's verdict can settle while
+      // a member of the same rsId waits on the ST5 tier's own event), and it
+      // must then be RE-FILED by `_holdOut` rather than silently dropped from
+      // the ledger — that would strand it exactly the way the missing marker
+      // did. "Nothing can stick" (F-11.17) means the loop re-arms itself.
+      for (const n of g.nodes) { if (n.userData) delete n.userData.__poolHeldRs; }
       const { passthrough } = addSingletonsToPools(g.nodes, g.scene3d, g.opts);
+      const after = w.classMats.stats.refused;
+      for (const k of Object.keys(after)) {
+        const d = (after[k] | 0) - (before[k] | 0);
+        if (d > 0) w.stats.reOfferRefused[k] = (w.stats.reOfferRefused[k] || 0) + d;
+      }
       const pt = new Set(passthrough);
       for (const n of g.nodes) {
         if (pt.has(n)) continue;
@@ -485,6 +541,7 @@ export function poolAtlasRefeed(rsId) {
       }
     } catch (_) { /* fail-soft: the node keeps rendering as it is */ }
   }
+  w.stats.reOfferAdmitted += rehomed;
   w.stats.refeedRehomed += rehomed;
   return rehomed + layers + atlasSide;
 }

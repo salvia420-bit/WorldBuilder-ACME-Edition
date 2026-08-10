@@ -67,6 +67,7 @@ import {
   writeBc7ArrayLayer,
   bc7LevelBytes,
   texCompressedOnlyActive,
+  materialRsId,
 } from "./bc7_textures.js";
 import { getAdapterMaxAnisotropy } from "./adapter.js";
 import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
@@ -104,7 +105,8 @@ export class ClassMaterialRegistry {
     this.stats = {
       classes: 0,
       layerAllocs: 0, layerHits: 0, layerRecycles: 0, layerGrows: 0, layerGrowFails: 0,
-      bc7Layers: 0, rgbaLayers: 0, nraLayers: 0, refeedDimMismatch: 0,
+      bc7Layers: 0, rgbaLayers: 0, nraLayers: 0,
+      refeedDimMismatch: 0, refeedFormatMismatch: 0,
       refused: { noTexture: 0, needsResample: 0, offPage: 0, bc7Pending: 0, deformed: 0, layerFull: 0, layerWriteFail: 0, noPixels: 0 },
       allocatedBytes: 0,
     };
@@ -186,7 +188,11 @@ export class ClassMaterialRegistry {
     c.layerOf.set(uuid, {
       layer,
       refs: 1,
-      rsId: ((material.userData?.__bc7RsId ?? material.userData?.__pvwRsId) || 0) >>> 0,
+      // RSID-MARKER: the ONE reader. Was an inline `__bc7RsId ?? __pvwRsId`,
+      // which reads 0 for a member admitted after a NEGATIVE verdict (the X6
+      // path stamps `__bc7RsId` only on success) — and a layer filed under
+      // rsId 0 is a layer `refeedRsId` can never find again.
+      rsId: materialRsId(material),
       // The MATERIAL is retained so `refeedRsId` can re-read its (upgraded)
       // `map` — `atlasRefeed(rsId)` carries no resolver, and re-deriving the
       // surface from the DID here would duplicate the MaterialCache.
@@ -266,6 +272,17 @@ export class ClassMaterialRegistry {
           this.stats.refeedDimMismatch += 1;
           continue;
         }
+        // RSID-MARKER: the page's FORMAT is fixed by texStorage3D too, and a
+        // swap can change it — a member admitted while its BC7 record was
+        // already cached takes an RGBA8 layer and then upgrades its `map` to
+        // a CompressedTexture. Writing that into an RGBA8 page finds no
+        // `image.data`, and the layer-write invariant would ZERO the layer:
+        // the member goes BLACK. Refuse, count, leave the layer alone (it
+        // holds correct — if now stale — pixels).
+        if ((isBc7AtlasTexture(tex) === true) !== c.bc7) {
+          this.stats.refeedFormatMismatch += 1;
+          continue;
+        }
         if (!this._writeLayer(c, e.layer, tex, mat)) continue;
         c.layerOf.delete(uuid);
         c.layerOf.set(tex.uuid, e);
@@ -293,6 +310,7 @@ export class ClassMaterialRegistry {
         recycles: this.stats.layerRecycles, grows: this.stats.layerGrows,
         growFails: this.stats.layerGrowFails, nra: this.stats.nraLayers,
         refeedDimMismatch: this.stats.refeedDimMismatch,
+        refeedFormatMismatch: this.stats.refeedFormatMismatch,
       },
       refused: { ...this.stats.refused },
       byClass,

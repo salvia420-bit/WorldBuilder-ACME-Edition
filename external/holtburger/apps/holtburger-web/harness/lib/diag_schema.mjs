@@ -569,6 +569,25 @@ export const REGISTRY = Object.freeze([
       "classPages.pageBytes.allocated": L("bytes", ["allocated"]),
       "classPages.pageBytes.used": L("bytes", ["used"]),
       "classPages.refused.needsResample": C("count"),
+      // RSID-MARKER — the bc7Pending hold-out ledger. Every member refused
+      // `bc7Pending` is FILED under its rsId and re-offered when the texture
+      // lane settles that verdict, so the refusal is a delay and not a
+      // session-long legacy sentence. These count FILINGS and OFFERS, not
+      // distinct nodes (a member re-offered while still pending is re-filed —
+      // "nothing can stick", F-11.17), so the closing identity is
+      // heldOut = reOffered + reOfferStale + (still filed) and
+      // reOffered = reOfferAdmitted + sum(reOfferRefused.*).
+      // heldOutNoRsId is the marker gap and must read 0.
+      "producer.heldOut": C("count"),
+      "producer.heldOutNoRsId": C("count"),
+      "producer.heldOutDupes": C("count"),
+      "producer.reOffered": C("count"),
+      "producer.reOfferAdmitted": C("count"),
+      "producer.reOfferStale": C("count"),
+      "producer.reOfferRefused": L("json", null, { note: "per-reason refusal counts for RE-offered members (same reason vocabulary as classPages.refused)" }),
+      "producer.holdoutRsIds": L("count", ["resident"]),
+      "classPages.layers.refeedDimMismatch": C("count"),
+      "classPages.layers.refeedFormatMismatch": C("count"),
     },
   },
 
