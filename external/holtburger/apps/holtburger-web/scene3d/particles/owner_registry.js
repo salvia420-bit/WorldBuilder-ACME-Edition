@@ -65,8 +65,54 @@ export function particleOwnerOn() {
   return on;
 }
 
+// PORTAL-SWIRL (2026-08-10) — `?particleOwnerPending` (DEFAULT ON; `=off`
+// restores the legacy prune) makes an owner record survive while one of its
+// creates is still awaiting geometry/materials.
+//
+// THE BUG it fixes. `addEmitter` takes an owner record BEFORE its `await`, and
+// a FAILED create prunes that record when it finds it empty. Two CreateParticle
+// hooks fired from the same script in the same tick therefore race: the slow
+// one (real GfxObj → `fetchBuildingPlacement` + material) enters first and
+// awaits, the fast one fails instantly (`hwGfxObjId === 0` ⇒ ACE/retail's
+// destroy sentinel, `ParticleEmitter::SetInfo` acclient.c:330930-330934 /
+// ACE ParticleEmitter.cs:106-110) and `_pruneOwner`s the shared record out of
+// `_owners`. When the slow create finally resolves, its `liveRec !== rec` test
+// reads the pruned map, concludes the owner despawned, and DESTROYS a
+// perfectly good emitter.
+//
+// The portal swirl is exactly that shape: PhysicsScript 0x3300067A (Setup
+// 0x020001B3's default_script) fires CreateParticle 0x320002CD (hw GfxObj
+// 0x010016C8 — the swirl) and CreateParticle 0x320002D6 (hw GfxObj 0 — inert
+// in retail too) at the SAME t=0, so every town portal rolled a die on whether
+// its swirl survived its own sibling's failure. Reproduced in isolation
+// against this module (2026-08-10): the swirl emitter is created, then
+// immediately destroyed, leaving the bare pedestal.
+//
+// The fix is a per-owner in-flight counter: a record with pending creates is
+// never pruned, so `liveRec === rec` still holds when the slow create lands.
+// Real despawns are unaffected — `destroyAllForOwner` bumps the epoch, and the
+// epoch term of `ownerGone` still tombstones in-flight creates.
+let _pendingFlagCache = null;
+
+export function particleOwnerPendingOn() {
+  if (_pendingFlagCache !== null) return _pendingFlagCache;
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      on =
+        new URLSearchParams(globalThis.location.search)
+          .get("particleOwnerPending")?.toLowerCase() !== "off";
+    }
+  } catch (_) {
+    on = true;
+  }
+  _pendingFlagCache = on;
+  return on;
+}
+
 export function _resetParticleOwnerFlagForTests() {
   _flagCache = null;
+  _pendingFlagCache = null;
 }
 
 /**
@@ -74,6 +120,10 @@ export function _resetParticleOwnerFlagForTests() {
  * @property {Map<number, object>} ids  underlying emitter id → owning manager.
  * @property {Map<number, number|{pending:true, superseded:boolean}>} scoped
  *   script-authored explicit handle → underlying id (or an in-flight token).
+ * @property {number} pending  creates currently between `_ownerRec` and their
+ *   `manager.addEmitter` resolve. PORTAL-SWIRL (2026-08-10): `_pruneOwner`
+ *   refuses to drop a record while this is non-zero, so a fast-failing sibling
+ *   create can't tombstone a slow one that is still in flight.
  */
 
 export class ParticleOwnerRegistry {
@@ -115,7 +165,7 @@ export class ParticleOwnerRegistry {
   _ownerRec(ownerKey) {
     let rec = this._owners.get(ownerKey);
     if (!rec) {
-      rec = { ids: new Map(), scoped: new Map() };
+      rec = { ids: new Map(), scoped: new Map(), pending: 0 };
       this._owners.set(ownerKey, rec);
     }
     return rec;
@@ -169,6 +219,12 @@ export class ParticleOwnerRegistry {
       rec.scoped.set(handle, token);
     }
 
+    // PORTAL-SWIRL (2026-08-10): mark this create in flight BEFORE the await so
+    // a sibling create that fails fast in the same tick can't `_pruneOwner` the
+    // record out from under us (see the flag note at the top of this file).
+    const trackPending = particleOwnerPendingOn();
+    if (trackPending) rec.pending = (rec.pending | 0) + 1;
+
     const epochAtCall = this._epoch(ownerKey);
     let id = 0;
     try {
@@ -181,6 +237,10 @@ export class ParticleOwnerRegistry {
       // eslint-disable-next-line no-console
       console.warn("[particle-owner] addEmitter failed:", err);
     }
+
+    // This create is no longer in flight — drop it from the pending count
+    // BEFORE the liveness tests so the prune paths below see a truthful count.
+    if (trackPending) rec.pending = Math.max(0, (rec.pending | 0) - 1);
 
     const liveRec = this._owners.get(ownerKey);
     const ownerGone = liveRec !== rec || this._epoch(ownerKey) !== epochAtCall;
@@ -319,8 +379,13 @@ export class ParticleOwnerRegistry {
     return n;
   }
 
-  /** Drop empty owner records so churn doesn't accumulate dead owners. */
+  /** Drop empty owner records so churn doesn't accumulate dead owners.
+   *  PORTAL-SWIRL (2026-08-10): a record with creates still in flight is NOT
+   *  empty — pruning it makes every one of those creates resolve into the
+   *  `liveRec !== rec` tombstone and destroy a good emitter. The counter goes
+   *  back to 0 on every resolve path, so nothing can pin a record forever. */
   _pruneOwner(ownerKey, rec) {
+    if ((rec.pending | 0) > 0 && particleOwnerPendingOn()) return;
     if (rec.ids.size === 0 && rec.scoped.size === 0) {
       this._owners.delete(ownerKey);
     }

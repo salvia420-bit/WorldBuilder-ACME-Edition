@@ -245,7 +245,51 @@ class FakeManager {
   check("failure: null manager returns 0", (await reg.addEmitter(13, null, {})) === 0);
 }
 
-// ---- 13. singleton exists -------------------------------------------------
+// ---- 13. PORTAL-SWIRL (2026-08-10) sibling-prune race ---------------------
+// Two CreateParticle hooks from ONE script in ONE tick, the portal shape:
+// the SLOW create (real GfxObj) enters first and awaits; the FAST one fails
+// instantly (retail's `hwGfxObjId === 0` destroy sentinel) and used to
+// `_pruneOwner` the shared record out of `_owners`, so the slow create
+// resolved into the `liveRec !== rec` tombstone and destroyed a good emitter.
+// With `?particleOwnerPending` ON (default) the record survives the failure.
+{
+  const reg = new ParticleOwnerRegistry();
+  const destroyed = [];
+  let next = 100;
+  const mgr = {
+    async addEmitter(req) {
+      // hwGfxObjId 0 ⇒ the real manager returns 0 without awaiting anything.
+      if ((req.emitterInfo.hwGfxObjId >>> 0) === 0) return 0;
+      await new Promise((r) => setTimeout(r, 20)); // geometry + material fetch
+      return ++next;
+    },
+    destroyParticleEmitter(id) { destroyed.push(id); return true; },
+    stopParticleEmitter() { return false; },
+  };
+  const OWNER = 0x77d6406a; // Yaraq "Portal to Town Network"
+  const slow = reg.addEmitter(OWNER, mgr, {
+    emitterInfo: { id: 0x320002cd, hwGfxObjId: 0x010016c8 }, emitterId: 0,
+  });
+  const fast = reg.addEmitter(OWNER, mgr, {
+    emitterInfo: { id: 0x320002d6, hwGfxObjId: 0 }, emitterId: 0,
+  });
+  const [swirl, inert] = await Promise.all([slow, fast]);
+  check("sibling-race: the swirl emitter survives its sibling's fast failure",
+    swirl !== 0, `id=${swirl}`);
+  check("sibling-race: inert (hwGfxObjId 0) sibling still returns 0", inert === 0);
+  check("sibling-race: nothing destroyed", destroyed.length === 0, `destroyed=[${destroyed}]`);
+  check("sibling-race: owner holds exactly the swirl", reg.emitterCountForOwner(OWNER) === 1);
+  // A real despawn mid-flight must STILL tombstone the late create.
+  const late = reg.addEmitter(OWNER, mgr, {
+    emitterInfo: { id: 0x320002cd, hwGfxObjId: 0x010016c8 }, emitterId: 0,
+  });
+  reg.destroyAllForOwner(OWNER);
+  check("sibling-race: despawn still tombstones an in-flight create",
+    (await late) === 0);
+  check("sibling-race: no owner record leaked after despawn", reg.ownerCount === 0);
+}
+
+// ---- 14. singleton exists -------------------------------------------------
 check("singleton: shared ownerRegistry exported", ownerRegistry instanceof ParticleOwnerRegistry);
 
 console.log(`\n[test_particle_owner] ${passed} passed, ${failed} failed`);
