@@ -4,7 +4,29 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
-## -7. BAKE-4 IN FLIGHT (2026-08-10 ~15:40) — pages + relief, verified single-pass
+## -8. BAKE-4 DONE + DEPLOYED (2026-08-10 20:12) — v4 pack layer is the live one; BATCH D UNBLOCKED
+
+driver4.log: === DONE rc=0 at 18:49:08 (189m8s). 17,682 packs / 287.7 MB (+453.8 KB
+index), 16,384 tiles / 1,153 interiors / 65,025 LBs, missingPvw=0,
+closure_verified=TRUE, determinism_verified=TRUE. texref 3,471 rows, pvw 56.65 MB
+(pre 2893 / full 106 / extra 88, unsliceable 0), legacyOnly=384. world-packs-v4 333M.
+This run carries the 1,309 page-dim members (--require-page-dims) + --geom-relief 1.0
+(GEOMR rows are NEW sections — packs superset over v3) in one verified pass.
+DEPLOYED 2026-08-10 20:12 via deploy-packs-v4.sh (v3 script adapted: gate on
+driver4.log, world_index REQUIRED to change, pack_url_template REQUIRED identical,
+no added keys): dry-run then real run, CAS sha-verify 17,682/17,682 both passes,
+world_index verified (index 1ef56572…, 464,666 bytes), manifest merge clean
+(only world_index changed), provenance + pack-report copied, serve.py --check OK
+(index=1, packs=256, all required layers present).
+⚠ serve.py --check warns pkg/ wasm (mtime 08-10 13:32) predates the last
+Rust-touching commit — REBUILD (capped-build wasm-pack --release) before trusting any
+measurement or GPU-batch arm. The bake no longer owns the builds cgroup:
+postBakeCodeWork items (batch-D queue) are buildable now.
+NEXT: BATCH D on the 1070 — queue-1070/batch-D-2026-08-10.json (prereqGate = this
+deploy, now satisfied). PORTAL-SWIRL-RENDER investigation in flight (opus agent,
+2026-08-10 eve) — read its queue-item update before the 1070 session.
+
+## -7. HISTORICAL: BAKE-4 IN FLIGHT (2026-08-10 ~15:40) — pages + relief, verified single-pass (superseded by -8)
 
 - PASS 4 CLOSED: ENVCELL-POOL-SWAP + RSID-MARKER + the two ruling follow-ups
   (FULL_PAGE_DIMS bit-gated strict arm, leg 7 a48b05b2; OFF_PAGE hold-out filing
