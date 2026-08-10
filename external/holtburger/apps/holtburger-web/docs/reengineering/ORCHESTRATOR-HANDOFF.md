@@ -4,6 +4,20 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -6. PASS 4 (2026-08-10 night) — coverage gaps closing
+
+- RSID-MARKER LANDED+VERIFIED (87/87 new + draw-pools/tex-compressed re-run
+  green): the bc7Pending=363 hold-out class was UNREACHABLE BY CONSTRUCTION
+  (markers written only preview-born or post-landing, never in the pending
+  state). Fixed: universal __texRsId identity stamp + settle-time atlasRefeed on
+  the X6 path (pass-05 S8 pt3 finally landed) + counted hold-out/re-offer
+  ledger. D4 guards worth knowing: refeedRsId refuses format-mismatched
+  rewrites (an RGBA8 write into a compressed page = black member), and hold-out
+  marks clear BEFORE re-offer (still-pending re-files, never drops). BATCH READ
+  OWED: producer.heldOutNoRsId must be 0 live, else a material class missed the
+  stamp; offPage is the next re-offerable residue once it has a settle event.
+- ENVCELL-POOL-SWAP in flight (legs 1-5 committed at time of writing).
+
 ## -5. PASS 3 (2026-08-10 late) — pooled world exists; resample in flight
 
 - T22-PRODUCER LANDED+VERIFIED (battery 396/396 re-run; live SwiftShader arm on
