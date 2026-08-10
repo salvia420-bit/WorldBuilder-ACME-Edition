@@ -349,6 +349,89 @@ export function atlasRefeed(rsId) {
 }
 
 // --------------------------------------------------------------------------
+// RSID-MARKER — the universal rsId stamp (T22-PRODUCER Handoff 3).
+//
+// THE HOLE THIS CLOSES. A producer that holds a member out (the atlas's
+// `bc7AtlasShouldDefer`, the pool feed's `bc7Pending` refusal) can only
+// re-offer it later if it can NAME the surface the hold-out is waiting on —
+// `atlasRefeed(rsId)` carries an rsId and nothing else. Until now the two
+// existing markers were both written at the END of a tier's life:
+// `__pvwRsId` at preview-BORN materials only (ST5), `__bc7RsId` only after a
+// full tier LANDED. A material sitting in `__bc7Pending` — precisely the
+// state that gets it refused — carried NEITHER. T22-PRODUCER's live arm read
+// `refused.bc7Pending = 363` against `holdoutRsIds = 0`: 363 members refused
+// with no key to re-offer them under, so they stayed on the legacy producer
+// for the session unless their landblock happened to re-stream.
+//
+// `__texRsId` is that key: stamped ONCE, at the point the texture lane ASKS
+// for a surface (which is the earliest moment the rsId is known and is
+// strictly before any hold-out can be taken), and never cleared. It is an
+// IDENTITY, not a state — the tier state stays on `__bc7`/`__bc7Pending`/
+// `__texFullPending`, so no existing reader changes meaning.
+//
+// Read through `materialRsId()`, never by hand: the tier-specific markers win
+// when present (they are the same number when both exist, and the ST5 escape
+// arm's hold-out tracking already keys on them), and `__texRsId` is the
+// fallback that makes the read total.
+// --------------------------------------------------------------------------
+
+/**
+ * Stamp a material with the RenderSurface id its albedo is sourced from.
+ * Idempotent, in-place (never `{...spread}`: this can run on a compiled
+ * material and a spread drops materials.js's non-enumerable live handles).
+ *
+ * @param {object} mat
+ * @param {number} rsId
+ * @returns {number} the stamped id (0 = nothing stamped)
+ */
+export function stampRsId(mat, rsId) {
+  const rs = rsId >>> 0;
+  if (!mat || !rs) return 0;
+  const ud = (mat.userData = mat.userData || {});
+  if (ud.__texRsId === rs) return rs;
+  ud.__texRsId = rs;
+  _stats.rsIdStamped += 1;
+  return rs;
+}
+
+/**
+ * The RenderSurface id of a material, whichever marker carries it.
+ * ONE reader so a producer's hold-out key and a refeed's key cannot drift.
+ * @returns {number} 0 when the material is not surface-backed.
+ */
+export function materialRsId(mat) {
+  const ud = mat && mat.userData;
+  if (!ud) return 0;
+  const rs = ud.__bc7RsId != null ? ud.__bc7RsId
+    : (ud.__pvwRsId != null ? ud.__pvwRsId : ud.__texRsId);
+  return (rs || 0) >>> 0;
+}
+
+/**
+ * The BC7 verdict for `rsId` has RESOLVED (landed, absent, or failed) — every
+ * producer holding members out on it may re-offer them now.
+ *
+ * Fires on ALL THREE outcomes deliberately: a member is held out because its
+ * dims/format could still move, and a NEGATIVE verdict settles those just as
+ * finally as a positive one (the material keeps the map it has, forever). A
+ * hold-out that only ever un-held on success would strand every surface whose
+ * record is absent.
+ *
+ * Inert wherever no producer registered a handler, and a NO-OP for the atlas
+ * handler unless that rsId has tracked members (`_rsMembers` is populated only
+ * under `?texCompressedOnly`) — which is why this is safe to call from the
+ * legacy X6 upgrade path without changing the legacy arm.
+ */
+function _rsVerdictResolved(rsId) {
+  const rs = rsId >>> 0;
+  if (!rs) return;
+  _stats.rsVerdictsResolved += 1;
+  if (!_atlasRefeedImpl) return;
+  _stats.rsRefeedsFired += 1;
+  atlasRefeed(rs); // already fail-soft
+}
+
+// --------------------------------------------------------------------------
 // T15R — rehydrate v3, row 2 of pass 5 D-05.7: the FULL-TIER CPU-mirror
 // release seam (source-keyed, not plane-keyed).
 //
@@ -813,6 +896,10 @@ const _stats = {
   // ── PAGE-RESAMPLE (T22 D2) — TEXREF page-dim reads ─────────────────────
   texRefOnPage: 0,       // rsIds read whose full tier IS stored at page dims
   texRefOffPage: 0,      // ... and whose full tier is NOT (needsResample true)
+  // ── RSID-MARKER — the universal `__texRsId` stamp + the verdict seam ───
+  rsIdStamped: 0,        // materials stamped with their RenderSurface id
+  rsVerdictsResolved: 0, // BC7 verdicts settled (landed | absent | failed)
+  rsRefeedsFired: 0,     // ... of which reached a registered producer handler
   // ── T15R (rehydrate v3, D-05.7 row 2) full-tier mirror seam ────────────
   mirrorsArmed: 0,           // full-tier textures with a source-keyed way back
   mirrorsFreed: 0,           // CPU mirrors dropped at record eviction
@@ -885,6 +972,12 @@ export function texStats() {
       demotions: _stats.demotions,
       nraAttached: _stats.nraAttached,
       chainWriteRejects: _stats.chainWriteRejects,
+      // RSID-MARKER: the stamp population and the re-offer seam's firings.
+      // `rsIdStamped` is the universe a producer can re-offer from; a
+      // `bc7Pending` refusal population LARGER than this is a marker gap.
+      rsIdStamped: _stats.rsIdStamped,
+      rsVerdictsResolved: _stats.rsVerdictsResolved,
+      rsRefeedsFired: _stats.rsRefeedsFired,
     },
     coverage: {
       texrefMissingPvw: _stats.texrefMissingPvw,
@@ -1416,6 +1509,10 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap) {
   // 2026-08-03 — mutate userData in place, never `{...spread}`: this runs on a
   // possibly-compiled material, and a spread drops the non-enumerable live
   // handles materials.js `_defineLiveUserData` installs.
+  // RSID-MARKER: stamp the identity in the SAME breath as the pending state,
+  // so no material can ever be in `__bc7Pending` without carrying the key a
+  // producer needs to re-offer it (the 363-hold-out class).
+  stampRsId(mat, rsId);
   if (!already) {
     mat.userData = mat.userData || {};
     mat.userData.__bc7Pending = true;
@@ -1468,7 +1565,13 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap) {
       fullDone = true;
       const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
-      if (!parsed) return false;
+      if (!parsed) {
+        // An ABSENT record is a settled verdict: this material keeps the map
+        // it has (RGBA8, or the pre texture) for good, so anything held out
+        // on it is now admissible and must be re-offered.
+        _rsVerdictResolved(rsId);
+        return false;
+      }
       const res = buildAndSwap(parsed, "full");
       ud.__bc7 = true;
       delete ud.__bc7Pre;
@@ -1490,11 +1593,20 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap) {
           /* fail-soft */
         }
       }
+      // pass-05 S8 point 3: "upgradeMaterialToBc7's full-phase swap calls a
+      // new atlasRefeed(rsId) hook". T15 landed that call on the ST5 lane-T
+      // upgrade only (materials.js `_upgradeCompressedFull`); this is the
+      // same hook on the X6 upgrade — the path that owns `__bc7Pending`, and
+      // therefore the path every bc7Pending hold-out is waiting on. LAST,
+      // after `onSwap` has re-pointed the clone families, so a producer that
+      // re-reads `mat.map` sees the final texture.
+      _rsVerdictResolved(rsId);
       return res;
     })
     .catch(() => {
       const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
+      _rsVerdictResolved(rsId);
       return false;
     });
 }

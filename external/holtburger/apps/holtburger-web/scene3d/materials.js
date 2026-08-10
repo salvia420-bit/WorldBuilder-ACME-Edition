@@ -75,6 +75,10 @@ import {
   bc7Source,
   _bumpBc7Stat,
   atlasRefeed,
+  // RSID-MARKER — the universal `__texRsId` stamp. Every surface-backed
+  // material carries the RenderSurface id it was built from, so a producer
+  // that holds a member out can name what it is waiting on and re-offer it.
+  stampRsId,
   // T15R — rehydrate v3 row 2 (D-05.7): the full-tier CPU-mirror release
   // seam. Arming is what lets the 128 MB record budget actually free heap.
   registerFullTierMirror,
@@ -5622,6 +5626,15 @@ export class MaterialCache {
     const rs = rsId >>> 0;
     if (!rs || rs >>> 24 !== 0x06) return;
     const d = did >>> 0;
+    // RSID-MARKER: stamp BEFORE the ask-once gate. A material rebuilt for a
+    // DID that already asked never reaches `upgradeMaterialToBc7`, so the
+    // stamp has to happen here or that (already legacy-textured) material is
+    // invisible to every rsId-keyed producer seam. The stamp is an identity,
+    // not a state: it says which RenderSurface this albedo came from, which
+    // is true regardless of which tier is resident. Variant clones inherit it
+    // (the `{...base.userData}` re-seat at every clone site) because it lands
+    // before the material is installed and any variant can exist.
+    stampRsId(mat, rs);
     if (!this._bc7Asked) this._bc7Asked = new Set();
     if (this._bc7Asked.has(d)) return;
     this._bc7Asked.add(d);
@@ -5826,6 +5839,11 @@ export class MaterialCache {
       __pvwRsId: rs,
       __texFullPending: (tierBits & 0x2) !== 0,
     };
+    // RSID-MARKER: the universal marker rides alongside the tier-specific one
+    // so `materialRsId()` is total over every bc7-born material class
+    // (preview-born here, X6-upgraded in `_maybeUpgradeToBc7`) and the
+    // `rsIdStamped` tally is the whole re-offerable universe.
+    stampRsId(mat, rs);
     // The preview texture object is retained for the session (a few tens
     // of KB CPU-side, pack-shared) — it IS the demote target (D-05.8:
     // pressure costs sharpness, never blackness).

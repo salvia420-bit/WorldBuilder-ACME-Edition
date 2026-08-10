@@ -102,7 +102,7 @@ export const REGISTRY = Object.freeze([
     name: "__bc7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1301",
+    evidence: "scene3d/bc7_textures.js:1394",
     availability: "in-world",
     note: "Module tally bc7Stats() (bc7_textures.js:843-855) + source residency. "
       + "Retained legacy surface; full-tier texture machinery re-homes at ST5.",
@@ -124,7 +124,7 @@ export const REGISTRY = Object.freeze([
     name: "__xu7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1302",
+    evidence: "scene3d/bc7_textures.js:1395",
     availability: "in-world",
     note: "xu7Stats() in scene3d/xu7_textures.js:142-211 (budgeted-FIFO tally). "
       + "decodeMs is cumulative main-thread transcode ms but NOT attribution-"
@@ -638,7 +638,7 @@ export const REGISTRY = Object.freeze([
     name: "__texStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:869",
+    evidence: "scene3d/bc7_textures.js:956",
     availability: "boot",
     note: "Texture tier/worker surface — LANDED at T15 (ST5, "
       + "`?texCompressedOnly`; texStats() in bc7_textures.js, window-installed "
@@ -659,6 +659,17 @@ export const REGISTRY = Object.freeze([
       "tiers.demotions": C("count"),
       "tiers.nraAttached": C("count"),
       "tiers.chainWriteRejects": C("count"),
+      // RSID-MARKER — the universal `__texRsId` stamp (bc7_textures.js
+      // `stampRsId`/`materialRsId`) and the verdict seam that re-offers
+      // held-out members. `rsIdStamped` is the population any rsId-keyed
+      // producer can re-offer from; a `__diag.pools` bc7Pending refusal
+      // count with `producer.heldOutNoRsId > 0` is a marker GAP (a material
+      // class the texture lane builds past both stamp sites).
+      // `rsRefeedsFired` <= `rsVerdictsResolved` by construction: the
+      // difference is verdicts that settled with no producer registered.
+      "tiers.rsIdStamped": C("count"),
+      "tiers.rsVerdictsResolved": C("count"),
+      "tiers.rsRefeedsFired": C("count"),
       "worker.jobs": C("count"),
       "worker.msTranscode": C("ms", null, { attribution: false }),
       "worker.queueDepth": L("count"),
