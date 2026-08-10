@@ -100,6 +100,11 @@ import {
   poolOnSlotState, poolOnTeleport, poolTickP4, poolAtlasRefeed,
   _poolAxisRecordForTest, _resetPoolWorldForTest,
 } from "../scene3d/pool_producer.js";
+import {
+  armEnvCellPoolGroups, envCellPoolsActive, offerCellSurfacesToPools,
+  poolCellVisibilityTick, poolCellsSetAllVisible, releasePooledCellsForLb,
+  envCellPoolCensus, _resetEnvCellPoolsForTest,
+} from "../scene3d/pool_envcells.js";
 import { tileOfLb } from "../scene3d/residency_grid.js";
 import {
   initTexCompressedOnly, _resetTexCompressedOnlyForTest,
@@ -1714,6 +1719,180 @@ console.log("PART 22: shared-stream geometry compaction + acBakedLight survival"
     "…because the baked key COMPOSES with the array material's own key, never replaces it");
   check(bakedKey.includes("k1"), "…and adds the bake bit");
   cm.dispose();
+}
+
+// ── PART 23 — the envcell producer (ENVCELL-POOL-SWAP) ────────────────────
+
+console.log("PART 23: envcell producer — layer, per-cell visibility, rebuild release");
+{
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  _resetEnvCellPoolsForTest();
+
+  const staticsGroup = new THREE.Group();
+  const cellsGroup = new THREE.Group();
+  initPoolWorld({ THREE, group: staticsGroup, search: ARMED_PRE });
+  check(armEnvCellPoolGroups({ staticsGroup, cellsGroup }) === true,
+    "the cells group + RENDER_LAYER_INDOOR arm onto the live registry");
+  check(envCellPoolsActive() === true, "envcell pooling is active under the full chain");
+
+  // A cell: two surface groups over ONE shared vertex stream (the T13 shape),
+  // both baked, plus the cell's own mesh-group transform.
+  const VERTS = 32;
+  const shared = {
+    position: new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3),
+    normal: new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3),
+    uv: new THREE.BufferAttribute(new Float32Array(VERTS * 2), 2),
+    baked: new THREE.BufferAttribute(new Uint8Array(VERTS * 3), 3, true),
+  };
+  const cellGroupGeom = (indices) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", shared.position);
+    g.setAttribute("normal", shared.normal);
+    g.setAttribute("uv", shared.uv);
+    g.setAttribute("acBakedLight", shared.baked);
+    g.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
+    return g;
+  };
+  const bakedMat = (rs) => {
+    const m = new THREE.MeshStandardMaterial({ map: pageTex(256) });
+    m.userData = { surfaceDid: 0x08000100 + rs, __pvwRsId: 0x06000100 + rs, __acBakedLight: true };
+    return m;
+  };
+  const cellMatrix = new THREE.Matrix4().makeTranslation(10, 20, 30);
+  const entriesFor = (n) => Array.from({ length: n }, (_, i) => ({
+    group: { geometry: cellGroupGeom([i * 3, i * 3 + 1, i * 3 + 2]), surfaceDid: 0x08000100 + i },
+    material: bakedMat(i),
+  }));
+
+  const LB = 0x40400000;
+  const CELL_A = (LB | 0x0100) >>> 0;
+  const CELL_B = (LB | 0x0101) >>> 0;
+  const okA = offerCellSurfacesToPools({}, {
+    lbKey: LB, cellId: CELL_A, cellMatrix, entries: entriesFor(2), receiveShadow: true,
+  });
+  check(Array.isArray(okA) && okA[0] === true && okA[1] === true,
+    "both of the cell's surfaces pool (and the caller learns which, so the rest still FUSE)");
+  check(cellsGroup.children.length > 0 && staticsGroup.children.length === 0,
+    "the envcell pools land in the CELLS group, never the statics group");
+  const indoor = new THREE.Layers();
+  indoor.set(1);
+  check(cellsGroup.children.every((m) => m.layers.test(indoor)),
+    "…on RENDER_LAYER_INDOOR, so the depth-clear split still isolates them");
+  const poolMesh = cellsGroup.children[0];
+  check(poolMesh.material.userData.__acBakedLight === true,
+    "the pooled interior's class material carries the vertex bake (dungeon lighting survives)");
+
+  // The instance matrix is the CELL's transform (surfaces have identity TRS).
+  {
+    const m = new THREE.Matrix4();
+    poolMesh.getMatrixAt(0, m);
+    const p = new THREE.Vector3().setFromMatrixPosition(m);
+    check(p.x === 10 && p.y === 20 && p.z === 30,
+      "a pooled surface carries the cell's mesh-group transform (cells-group space)");
+  }
+
+  // VISIBILITY. A freshly fed cell that the PVS does not want is hidden on the
+  // next tick; the delta then drives it exactly as `container.visible` does.
+  const reg = getPoolRegistry();
+  const cellIds = () => {
+    const memb = [...reg.tiles.values()][0];
+    return [...memb.values()][0];
+  };
+  const idsOf = (cellId) => {
+    for (const byTile of reg.tiles.values()) {
+      for (const mem of byTile.values()) {
+        const r = mem.cellRanges && mem.cellRanges.get(cellId);
+        if (r) return { mem, ids: r };
+      }
+    }
+    return null;
+  };
+  check(!!cellIds(), "the cell is resident in a tile membership record");
+  const a = idsOf(CELL_A);
+  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === true, "the LIVE flip left it visible…");
+  poolCellVisibilityTick(new Set());
+  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === false,
+    "…and the first PVS tick that does not want it hides it (pending-hide)");
+  poolCellVisibilityTick(new Set([CELL_A]));
+  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === true, "entering the render set shows it");
+  reg.beginFrame();
+  poolCellVisibilityTick(new Set([CELL_A]));
+  check(reg.census().events.mutationsThisFrame === 0,
+    "an UNCHANGED render set performs zero pool mutations (the parked-frame gate)");
+  poolCellVisibilityTick(new Set([CELL_A, CELL_B])); // CELL_B is not pooled yet
+  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === true, "…and an unknown cell in the set is harmless");
+
+  // A second cell of the SAME landblock, fed while the first is visible.
+  offerCellSurfacesToPools({}, {
+    lbKey: LB, cellId: CELL_B, cellMatrix, entries: entriesFor(1), receiveShadow: true,
+  });
+  const b = idsOf(CELL_B);
+  check(!!b, "the second cell pools into the same tile");
+  poolCellVisibilityTick(new Set([CELL_A]));
+  check(b.mem.pool.mesh.getVisibleAt(b.ids[0]) === false,
+    "…and is hidden when it leaves the render set");
+
+  // REBUILD. Release-then-refeed is what keeps an LRU evict + re-approach from
+  // double-drawing every interior surface.
+  const beforeCells = envCellPoolCensus().cells;
+  const released = releasePooledCellsForLb(LB);
+  check(released > 0 && beforeCells === 2, "the LB's two pooled cells release together");
+  check(envCellPoolCensus().cells === 0, "…and leave the ledger empty");
+  check(reg.hasCell(CELL_A) === false && reg.hasCell(CELL_B) === false,
+    "…with no cell left in the registry index");
+  const okAgain = offerCellSurfacesToPools({}, {
+    lbKey: LB, cellId: CELL_A, cellMatrix, entries: entriesFor(2), receiveShadow: true,
+  });
+  check(okAgain[0] === true, "a rebuilt LB re-feeds cleanly");
+  const a2 = idsOf(CELL_A);
+  check(a2.ids.length === 2, "…with exactly its own instances (no doubling)");
+
+  // The census.
+  const cen = envCellPoolCensus();
+  check(cen.enabled === true && cen.lbs === 1 && cen.cells === 1, "the envcell census reads the ledger");
+  check(cen.surfacesPooled === 5 && cen.refusedBakedMissing === 0,
+    "…and counts every offered surface (2 + 1 + 2), with no bake refusals");
+
+  // A baked MATERIAL whose geometry lost the attribute is refused, never
+  // silently flattened (dungeon lighting is not negotiable).
+  const bad = [{ group: { geometry: triGeom(3), surfaceDid: 0x08000200 }, material: bakedMat(9) }];
+  const okBad = offerCellSurfacesToPools({}, { lbKey: LB, cellId: (LB | 0x0102) >>> 0, cellMatrix, entries: bad });
+  check(okBad[0] === false, "a baked member without the acBakedLight attribute does NOT pool");
+  check(envCellPoolCensus().refusedBakedMissing === 1, "…and the refusal is COUNTED");
+
+  _resetEnvCellPoolsForTest();
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+}
+
+// ── PART 24 — the portal-stencil interplay + the OFF arm ──────────────────
+
+console.log("PART 24: ?portalStencil disarms envcell pooling; OFF arm untouched");
+{
+  _resetEnvCellPoolsForTest();
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  // OFF arm: no pooled world at all ⇒ every entry point is inert and returns
+  // the "nothing happened" answer the caller treats as legacy.
+  check(envCellPoolsActive("") === false, "with no pooled world, envcell pooling is inactive");
+  check(offerCellSurfacesToPools({}, { lbKey: 1, cellId: 1, entries: [{}] }) === null,
+    "…the offer returns null (the caller fuses exactly as today)");
+  check(poolCellVisibilityTick(new Set([1])) === 0, "…the visibility tick is a no-op");
+  check(releasePooledCellsForLb(1) === 0, "…and the release is a no-op");
+  check(envCellPoolCensus().enabled === false, "…and the census says so");
+
+  // ?portalStencil ON: the pooled world may be armed, but interiors stay
+  // legacy — a pool cannot follow a container onto RENDER_LAYER_PORTAL_CELL.
+  const staticsGroup = new THREE.Group();
+  initPoolWorld({ THREE, group: staticsGroup, search: `${ARMED_PRE}&portalStencil=on` });
+  check(poolWorldActive() === true, "the pooled world still arms (statics keep pooling)");
+  check(envCellPoolsActive(`${ARMED_PRE}&portalStencil=on`) === false,
+    "…but envcell pooling DISARMS under ?portalStencil, loudly");
+  check(envCellPoolCensus().enabled === false, "…and the census reports it disabled");
+  _resetEnvCellPoolsForTest();
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
 }
 
 // ── done ──────────────────────────────────────────────────────────────────
