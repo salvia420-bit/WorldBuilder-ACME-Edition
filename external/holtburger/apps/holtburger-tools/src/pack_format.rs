@@ -67,6 +67,12 @@ pub mod section_kind {
     pub const GEOM: u16 = 0x09;
     pub const TEXREF: u16 = 0x0A;
     pub const PVW: u16 = 0x0B;
+    /// RELIEF-IN-BAKE — relief VARIANT geometry ("GEOMR"). Identical row
+    /// layout to `GEOM`; rows exist only for the models the bake's relief
+    /// profile actually changes, so an absent row means "relief is a no-op
+    /// for this model, read the default row". Emitted only under
+    /// `--geom-relief`; the default bake stays byte-identical.
+    pub const GEOM_RELIEF: u16 = 0x0C;
 }
 
 /// Shared-directory kinds for HBSI1 (S4 `[kind u8][ord u8][pack_ord u16]`

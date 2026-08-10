@@ -142,6 +142,10 @@ pub struct PackBakeOptions {
     pub zstd_level: i32,
     pub verify_closure: bool,
     pub verify_deterministic: bool,
+    /// RELIEF-IN-BAKE — when `Some(scale)`, ALSO emit relief-variant GEOM
+    /// (`GEOMR`) sections for the `set_gfx_relief(true, 0, scale)` profile.
+    /// `None` (the default) leaves every emitted byte exactly as it was.
+    pub geom_relief_scale: Option<f32>,
 }
 
 /// Per-class, per-tier byte accounting row (report).
@@ -210,6 +214,22 @@ pub struct PackBakeReport {
     pub geom_soft_cap_hits: usize,
     /// Q2 census input: largest single mesh payload emitted.
     pub geom_max_payload_bytes: usize,
+    /// RELIEF-IN-BAKE census. `geom_relief_variant` is empty when the bake
+    /// emitted no relief variants (the default).
+    pub geom_relief_variant: String,
+    /// GEOMR rows written (a model repeated across packs counts once per pack,
+    /// same convention as `geom_rows`).
+    pub geom_relief_rows: usize,
+    pub geom_relief_bytes_raw: u64,
+    /// Distinct 0x01 models whose relief encode DIFFERS from the default
+    /// (i.e. gained rails) vs. those the profile leaves untouched (gate
+    /// rejected or no railable edge) — the latter get no variant row.
+    pub geom_relief_models_changed: usize,
+    pub geom_relief_models_identical: usize,
+    /// Added triangles across the changed models — the "more triangles from
+    /// flat walls" number, reported not gated.
+    pub geom_relief_added_tris: u64,
+    pub geom_relief_max_payload_bytes: usize,
     pub closure_verified: bool,
     pub determinism_verified: bool,
 }
@@ -1034,7 +1054,8 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
 
     // T13 (ST3): HBG1 GEOM emitter — encode-once memo + census, sections
     // co-located with each pack's model-class records.
-    let mut geom = GeomBaker::new();
+    let relief_profile = opts.geom_relief_scale.map(hbg1::ReliefBake::from_scale);
+    let mut geom = GeomBaker::new(relief_profile.filter(|r| !r.is_noop()));
 
     // 1. CORE.
     let mut core_records: BTreeMap<(u8, u32), Vec<u8>> = BTreeMap::new();
@@ -1048,9 +1069,7 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
         codec: codec::ZSTD,
         raw: pf::build_record_stream(&core_records),
     }];
-    if let Some(g) = geom.section_for(&source, core_records.keys().map(|(_, id)| id))? {
-        core_sections.push(g);
-    }
+    core_sections.extend(geom.sections_for(&source, core_records.keys().map(|(_, id)| id))?);
     let core_ord = emit_pack!(pack_kind::CORE, 0, 0, core_sections);
 
     // 2. META-COMMONS.
@@ -1065,9 +1084,8 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
         codec: codec::ZSTD,
         raw: pf::build_record_stream(&commons_records),
     }];
-    if let Some(g) = geom.section_for(&source, commons_records.keys().map(|(_, id)| id))? {
-        commons_sections.push(g);
-    }
+    commons_sections
+        .extend(geom.sections_for(&source, commons_records.keys().map(|(_, id)| id))?);
     let meta_commons_ord = emit_pack!(pack_kind::META_SHARED, 0, 0, commons_sections);
     report.meta_commons_bytes = pack_table[meta_commons_ord as usize].size as u64;
 
@@ -1087,9 +1105,7 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
             codec: codec::ZSTD,
             raw: pf::build_record_stream(records),
         }];
-        if let Some(gs) = geom.section_for(&source, records.keys().map(|(_, id)| id))? {
-            regional_sections.push(gs);
-        }
+        regional_sections.extend(geom.sections_for(&source, records.keys().map(|(_, id)| id))?);
         let ord = emit_pack!(pack_kind::META_SHARED, *g as u32, *g, regional_sections);
         meta_regional_ords.insert(*g, ord);
     }
@@ -1119,9 +1135,7 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
             codec: codec::ZSTD,
             raw: pf::build_record_stream(&env_commons),
         }];
-        if let Some(g) = geom.section_for(&source, env_commons.keys().map(|(_, id)| id))? {
-            env_sections.push(g);
-        }
+        env_sections.extend(geom.sections_for(&source, env_commons.keys().map(|(_, id)| id))?);
         Some(emit_pack!(pack_kind::ENV, 0, 0, env_sections))
     };
     let mut env_regional_ords: BTreeMap<u8, u16> = BTreeMap::new();
@@ -1131,9 +1145,7 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
             codec: codec::ZSTD,
             raw: pf::build_record_stream(records),
         }];
-        if let Some(gs) = geom.section_for(&source, records.keys().map(|(_, id)| id))? {
-            env_sections.push(gs);
-        }
+        env_sections.extend(geom.sections_for(&source, records.keys().map(|(_, id)| id))?);
         let ord = emit_pack!(pack_kind::ENV, *g as u32, *g, env_sections);
         env_regional_ords.insert(*g, ord);
     }
@@ -1360,9 +1372,7 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
                 raw: pf::build_record_stream(&inline_records),
             });
         }
-        if let Some(g) = geom.section_for(&source, inline_records.keys().map(|(_, id)| id))? {
-            sections.push(g);
-        }
+        sections.extend(geom.sections_for(&source, inline_records.keys().map(|(_, id)| id))?);
         if let Some(pvw) = pvw_interior.get(&lb) {
             sections.push(SectionOut {
                 kind: section_kind::PVW,
@@ -1589,9 +1599,7 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
                 raw: pf::build_record_stream(&inline_records),
             });
         }
-        if let Some(g) = geom.section_for(&source, inline_records.keys().map(|(_, id)| id))? {
-            sections.push(g);
-        }
+        sections.extend(geom.sections_for(&source, inline_records.keys().map(|(_, id)| id))?);
         let origin = ((tx as u32) << 8) | ty as u32;
         let ord = emit_pack!(pack_kind::TILE, origin, 0, sections);
         tile_ords.insert(*tile, ord);
@@ -1724,6 +1732,17 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
     report.geom_bytes_raw = geom.bytes_raw;
     report.geom_soft_cap_hits = geom.soft_cap_hits;
     report.geom_max_payload_bytes = geom.max_payload;
+    report.geom_relief_variant = geom
+        .relief
+        .as_ref()
+        .map(|r| r.variant_key())
+        .unwrap_or_default();
+    report.geom_relief_rows = geom.relief_rows;
+    report.geom_relief_bytes_raw = geom.relief_bytes_raw;
+    report.geom_relief_models_changed = geom.relief_changed;
+    report.geom_relief_models_identical = geom.relief_identical;
+    report.geom_relief_added_tris = geom.relief_added_tris;
+    report.geom_relief_max_payload_bytes = geom.relief_max_payload;
 
     if opts.verify_closure {
         verify_closure(&pack_table, &pack_bytes, &index)?;
@@ -1751,16 +1770,36 @@ struct GeomBaker {
     bytes_raw: u64,
     soft_cap_hits: usize,
     max_payload: usize,
+    /// RELIEF-IN-BAKE — `Some` enables the variant pass.
+    relief: Option<hbg1::ReliefBake>,
+    /// Model id → relief-variant payload, or `None` when the profile leaves
+    /// that model byte-identical (no variant row is written for those, so an
+    /// absent GEOMR row reads as "relief is a no-op here").
+    relief_memo: HashMap<u32, Option<std::sync::Arc<Vec<u8>>>>,
+    relief_rows: usize,
+    relief_bytes_raw: u64,
+    relief_changed: usize,
+    relief_identical: usize,
+    relief_added_tris: u64,
+    relief_max_payload: usize,
 }
 
 impl GeomBaker {
-    fn new() -> Self {
+    fn new(relief: Option<hbg1::ReliefBake>) -> Self {
         GeomBaker {
             memo: HashMap::new(),
             rows: 0,
             bytes_raw: 0,
             soft_cap_hits: 0,
             max_payload: 0,
+            relief,
+            relief_memo: HashMap::new(),
+            relief_rows: 0,
+            relief_bytes_raw: 0,
+            relief_changed: 0,
+            relief_identical: 0,
+            relief_added_tris: 0,
+            relief_max_payload: 0,
         }
     }
 
@@ -1819,29 +1858,108 @@ impl GeomBaker {
         Ok(Some(arc))
     }
 
-    /// Build the GEOM section for a pack's portal record ids. Returns `None`
-    /// when no model-class record is present.
-    fn section_for<'a>(
+    /// RELIEF-IN-BAKE — the relief VARIANT payload for one 0x01 model id, or
+    /// `None` when the profile leaves it byte-identical (so no row is
+    /// written). Only kind-0 GfxObj parts have a variant:
+    ///
+    /// * kind-1 SETUP directories carry no vertex data at all (part DIDs +
+    ///   frames), so they are variant-invariant by construction — the fused
+    ///   model picks up relief through its PARTS.
+    /// * kind-2 ENV directories are per-CELLSTRUCT while the runtime's
+    ///   interior rails (OP3) are computed from the per-CELL resolved surface
+    ///   palette (`append_environment_tris`, lib.rs "OP3 — material rails on
+    ///   interiors": `ModelTopology::build(&cell.polygons, surfaces, ...)`
+    ///   where `surfaces` is the EnvCell's own DID list). Two slots can resolve
+    ///   to the same DID in one cell and differ in another, so a material
+    ///   boundary is not a cellstruct fact. Deferred with a designed shape (the
+    ///   T13-D4 pattern: emit rails tagged with their slot PAIR and drop them
+    ///   per cell when the pair resolves equal) — recorded in the task report.
+    fn relief_payload_for(
+        &mut self,
+        source: &DatPairSource,
+        id: u32,
+    ) -> Result<Option<std::sync::Arc<Vec<u8>>>> {
+        let Some(relief) = self.relief else { return Ok(None) };
+        if (id >> 24) as u8 != 0x01 {
+            return Ok(None);
+        }
+        if let Some(hit) = self.relief_memo.get(&id) {
+            return Ok(hit.clone());
+        }
+        let base = match self.payload_for(source, id)? {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+        let bytes = source
+            .get_file_by_key(ResourceKey::new(EOR_PORTAL_NAMESPACE, id))
+            .map_err(|e| ToolError::Validation(format!("GEOMR 0x{id:08X}: read: {e}")))?;
+        let gfx = holtburger_dat::file_type::GfxObj::unpack(&mut std::io::Cursor::new(&bytes))
+            .map_err(|e| {
+                ToolError::Validation(format!("GEOMR 0x{id:08X}: GfxObj parse: {e}"))
+            })?;
+        let variant = hbg1::encode_gfx_part_relief(&gfx, &relief)
+            .map_err(|e| ToolError::Validation(format!("GEOMR 0x{id:08X}: encode: {e}")))?;
+        let entry = if variant == *base.as_ref() {
+            self.relief_identical += 1;
+            None
+        } else {
+            self.relief_changed += 1;
+            let dm = hbg1::Hbg1Mesh::parse(&variant).map_err(|e| {
+                ToolError::Validation(format!("GEOMR 0x{id:08X}: variant re-parse: {e}"))
+            })?;
+            let bm = hbg1::Hbg1Mesh::parse(base.as_ref()).map_err(|e| {
+                ToolError::Validation(format!("GEOM 0x{id:08X}: base re-parse: {e}"))
+            })?;
+            self.relief_added_tris += (dm.index_count.saturating_sub(bm.index_count) / 3) as u64;
+            if variant.len() > self.relief_max_payload {
+                self.relief_max_payload = variant.len();
+            }
+            Some(std::sync::Arc::new(variant))
+        };
+        self.relief_memo.insert(id, entry.clone());
+        Ok(entry)
+    }
+
+    /// Build a pack's geometry sections from its portal record ids: the GEOM
+    /// section (always, when any model-class record is present) plus — under
+    /// `--geom-relief` — the GEOMR variant section carrying only the models
+    /// the profile actually changes. Returns them in ascending kind order.
+    fn sections_for<'a>(
         &mut self,
         source: &DatPairSource,
         ids: impl Iterator<Item = &'a u32>,
-    ) -> Result<Option<SectionOut>> {
+    ) -> Result<Vec<SectionOut>> {
         let mut entries: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+        let mut relief_entries: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
         for &id in ids {
             if let Some(p) = self.payload_for(source, id)? {
                 entries.insert(id, p.as_ref().clone());
             }
+            if let Some(r) = self.relief_payload_for(source, id)? {
+                relief_entries.insert(id, r.as_ref().clone());
+            }
         }
         if entries.is_empty() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         self.rows += entries.len();
         self.bytes_raw += entries.values().map(|p| p.len() as u64).sum::<u64>();
-        Ok(Some(SectionOut {
+        let mut out = vec![SectionOut {
             kind: section_kind::GEOM,
             codec: codec::ZSTD,
             raw: hbg1::build_geom_section(&entries),
-        }))
+        }];
+        if !relief_entries.is_empty() {
+            self.relief_rows += relief_entries.len();
+            self.relief_bytes_raw +=
+                relief_entries.values().map(|p| p.len() as u64).sum::<u64>();
+            out.push(SectionOut {
+                kind: section_kind::GEOM_RELIEF,
+                codec: codec::ZSTD,
+                raw: hbg1::build_geom_section(&relief_entries),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -1865,7 +1983,10 @@ fn tex_dims(source: &DatPairSource, id: u32) -> (u32, u32) {
 /// (c) every kind-1 SETUP directory part DID has a kind-0 row SOMEWHERE in
 ///     the bake (the closure walk carries parts, so this pins emission);
 /// (d) every ENVCELLS-stream EnvCell's `(environment, cell_structure)` is
-///     covered by a kind-2 directory entry somewhere in the bake.
+///     covered by a kind-2 directory entry somewhere in the bake;
+/// (e) RELIEF-IN-BAKE: every GEOMR (relief variant) row is a kind-0 payload
+///     for a 0x01 id with a co-located DEFAULT row, and is structurally
+///     ADDITIVE over it (identical subset table, only appended triangles).
 fn verify_geom(pack_bytes: &[Vec<u8>]) -> Result<()> {
     use holtburger_dat::file_type::EnvCell as EnvCellRec;
     let mut failures: Vec<String> = Vec::new();
@@ -1951,6 +2072,87 @@ fn verify_geom(pack_bytes: &[Vec<u8>]) -> Result<()> {
             }
             None => HashMap::new(),
         };
+        // (e) RELIEF-IN-BAKE: every GEOMR row must be a kind-0 payload for a
+        // 0x01 id that has a co-located DEFAULT row (the variant is an
+        // alternative to a row that exists, never a row of its own), must
+        // parse, and must be structurally ADDITIVE over that default — same
+        // subset table (material identity + flags, same order) with only
+        // appended triangles. That is the "relief never invents a material"
+        // invariant, checked at bake so a bad variant can never ship.
+        if let Some(payload) = reader
+            .section(section_kind::GEOM_RELIEF)
+            .map_err(ToolError::Validation)?
+        {
+            let rows = hbg1::parse_geom_section(&payload).map_err(ToolError::Validation)?;
+            for (id, enc, off, size) in rows {
+                if enc != hbg1::ENCODING_HBG1 {
+                    failures.push(format!(
+                        "pack {i}: GEOMR row 0x{id:08X} encoding 0x{enc:04X} != HBG1"
+                    ));
+                    continue;
+                }
+                if (id >> 24) as u8 != 0x01 {
+                    failures.push(format!(
+                        "pack {i}: GEOMR row 0x{id:08X} is not a 0x01 GfxObj id"
+                    ));
+                    continue;
+                }
+                let Some(&(_, boff, bsize)) = geom_rows.get(&id) else {
+                    failures.push(format!(
+                        "pack {i}: GEOMR 0x{id:08X} has no co-located default GEOM row"
+                    ));
+                    continue;
+                };
+                let Some(base_payload) = reader
+                    .section(section_kind::GEOM)
+                    .map_err(ToolError::Validation)?
+                else {
+                    failures.push(format!("pack {i}: GEOMR 0x{id:08X}: GEOM vanished"));
+                    continue;
+                };
+                let v = &payload[off..off + size];
+                let b = &base_payload[boff..boff + bsize];
+                match (hbg1::Hbg1Mesh::parse(v), hbg1::Hbg1Mesh::parse(b)) {
+                    (Ok(vm), Ok(bm)) => {
+                        let (vs, bs) = (vm.subsets(), bm.subsets());
+                        match (vs, bs) {
+                            (Ok(vs), Ok(bs)) if vs.len() == bs.len() => {
+                                for (a, c) in bs.iter().zip(vs.iter()) {
+                                    if a.surface_ref != c.surface_ref || a.flags != c.flags {
+                                        failures.push(format!(
+                                            "pack {i}: GEOMR 0x{id:08X}: subset identity drift"
+                                        ));
+                                        break;
+                                    }
+                                    if c.index_count < a.index_count
+                                        || (c.index_count - a.index_count) % 3 != 0
+                                    {
+                                        failures.push(format!(
+                                            "pack {i}: GEOMR 0x{id:08X}: subset is not additive"
+                                        ));
+                                        break;
+                                    }
+                                }
+                                if vm.index_count <= bm.index_count {
+                                    failures.push(format!(
+                                        "pack {i}: GEOMR 0x{id:08X}: variant row adds no \
+                                         geometry (it should not have been emitted)"
+                                    ));
+                                }
+                            }
+                            (Ok(_), Ok(_)) => failures.push(format!(
+                                "pack {i}: GEOMR 0x{id:08X}: subset count differs from default"
+                            )),
+                            _ => failures.push(format!(
+                                "pack {i}: GEOMR 0x{id:08X}: subset table unreadable"
+                            )),
+                        }
+                    }
+                    _ => failures
+                        .push(format!("pack {i}: GEOMR 0x{id:08X}: mesh unreadable")),
+                }
+            }
+        }
         // (a) co-location: model-class RECORDS ids need a same-pack GEOM row.
         if let Some(records) = reader
             .record_stream(section_kind::RECORDS)

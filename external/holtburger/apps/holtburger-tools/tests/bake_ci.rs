@@ -43,6 +43,8 @@ use sha2::{Digest, Sha256};
 const PORTAL_DAT: &str = "/home/wbterminal/ac_base_dats/client_portal.dat";
 const CELL_DAT: &str = "/home/wbterminal/ac_base_dats/client_cell_1.dat";
 const OUT_ROOT: &str = "/mnt/wbterminal2/reeng/T10";
+/// RELIEF-IN-BAKE arm output (big artifacts never land in the source tree).
+const RELIEF_OUT_ROOT: &str = "/mnt/wbterminal2/reeng/relief-bake";
 const DIST: &str = "/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2";
 const TEX_PRE: &str = "/mnt/wbterminal2/tex-bc7-pre/pre";
 const TEX_BC7: &str = "/mnt/wbterminal2/pbr-terrain/bc7/blocks-mip";
@@ -156,6 +158,7 @@ fn ci_options(out: &Path, extra_pvw: Option<PathBuf>) -> PackBakeOptions {
         zstd_level: PACK_ZSTD_LEVEL,
         verify_closure: true,
         verify_deterministic: true,
+        geom_relief_scale: None,
     }
 }
 
@@ -505,4 +508,166 @@ fn bake_ci_bounded_region() {
         report.terrain_slice_color_bytes as f64 / 1e6,
         report.terrain_slice_nra_bytes as f64 / 1e6,
     );
+}
+
+// ---------------------------------------------------------------------------
+// RELIEF-IN-BAKE — the relief-variant bake leg
+// ---------------------------------------------------------------------------
+
+/// BAKE-CI leg for relief variants: bake the SAME bounded region with
+/// `--geom-relief 1.0` and prove the two acceptance properties that make the
+/// variant shippable:
+///
+/// (a) the relief-free default is **untouched** — every GEOM row still
+///     re-encodes byte-identically through `encode_gfx_part` (the existing
+///     differ baseline is not perturbed by the variant pass existing); and
+/// (b) every GEOMR row byte-matches a **fresh variant encode** from the base
+///     DATs (`encode_gfx_part_relief`), i.e. the variant is reproducible and
+///     deterministic through the container exactly like the default.
+///
+/// The structural additive check (same subset table, appended triangles only)
+/// runs IN-BAKE via `verify_geom`, which this leg turns on.
+///
+/// Deliberately a separate test from `bake_ci_bounded_region`: that arm must
+/// keep baking the relief-free world so its determinism + differ legs stay the
+/// clean target (SPEC §3 T10 GATE-BAKE).
+#[test]
+#[ignore = "needs ~/ac_base_dats + /mnt/wbterminal2 (RELIEF-IN-BAKE arm); \
+            run with --ignored --nocapture"]
+fn bake_ci_relief_variants() {
+    use holtburger_dat::hbg1;
+    assert!(Path::new(PORTAL_DAT).is_file(), "missing {PORTAL_DAT}");
+    assert!(Path::new(CELL_DAT).is_file(), "missing {CELL_DAT}");
+    let out_root = PathBuf::from(RELIEF_OUT_ROOT);
+    std::fs::create_dir_all(&out_root).expect("create /mnt/wbterminal2/reeng/relief-bake");
+    let out = out_root.join("relief-run1");
+    let _ = std::fs::remove_dir_all(&out);
+    write_prelude_manifest(&out);
+
+    let opts = PackBakeOptions {
+        geom_relief_scale: Some(1.0),
+        // Intra-run determinism is proven by the relief-free arm; skip the
+        // second in-process emission here to keep the laptop arm bounded.
+        verify_deterministic: false,
+        ..ci_options(&out, None)
+    };
+    let report = emit_packs(&opts).expect("relief pack bake");
+    assert!(report.closure_verified, "verify_geom (incl. the GEOMR additive leg) must run");
+    assert!(
+        !report.geom_relief_variant.is_empty(),
+        "the report must record WHICH variant this dist carries"
+    );
+    assert!(report.geom_relief_rows > 0, "relief variant emission must have fired");
+    assert!(
+        report.geom_relief_models_changed > 0,
+        "no model gained rails — the profile or the gate is wrong"
+    );
+    assert!(report.geom_relief_added_tris > 0);
+
+    let portal = DatDatabase::new(PORTAL_DAT).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
+    let index_rel = manifest["world_index"]["url"].as_str().expect("world_index url");
+    let index = parse_hbsi1(&std::fs::read(out.join(index_rel)).unwrap())
+        .expect("index parses");
+
+    let mut default_checked: BTreeSet<u32> = BTreeSet::new();
+    let mut variant_checked: BTreeSet<u32> = BTreeSet::new();
+    let mut variant_rows = 0usize;
+    let mut added_tris_seen = 0u64;
+    let relief = hbg1::ReliefBake::from_scale(1.0);
+    for entry in &index.packs {
+        let hexname: String = entry.hash16.iter().map(|b| format!("{b:02x}")).collect();
+        let path = out.join("packs").join(&hexname[..2]).join(format!("{hexname}.hbp"));
+        let bytes = std::fs::read(&path).unwrap();
+        let reader = HbpReader::parse(&bytes).unwrap();
+
+        // (a) the relief-free default is byte-identical to today's encode.
+        if let Some(payload) = reader.section(section_kind::GEOM).expect("GEOM parses") {
+            for (id, enc, off, size) in
+                hbg1::parse_geom_section(&payload).expect("GEOM rows parse")
+            {
+                assert_eq!(enc, hbg1::ENCODING_HBG1);
+                if (id >> 24) as u8 != 0x01 {
+                    continue;
+                }
+                let rec = portal.get_file(id).expect("model record in DAT");
+                let gfx = holtburger_dat::file_type::GfxObj::unpack(
+                    &mut std::io::Cursor::new(&rec),
+                )
+                .unwrap();
+                assert_eq!(
+                    &payload[off..off + size],
+                    &hbg1::encode_gfx_part(&gfx).expect("default re-encode")[..],
+                    "GEOM 0x{id:08X}: relief-free default drifted"
+                );
+                default_checked.insert(id);
+            }
+        }
+
+        // (b) every variant row re-encodes byte-identically, and is additive
+        //     over the co-located default row.
+        let Some(vpayload) = reader
+            .section(section_kind::GEOM_RELIEF)
+            .expect("GEOMR parses")
+        else {
+            continue;
+        };
+        let base = reader.section(section_kind::GEOM).unwrap().unwrap();
+        let base_rows: BTreeMap<u32, (usize, usize)> =
+            hbg1::parse_geom_section(&base)
+                .unwrap()
+                .into_iter()
+                .map(|(id, _, off, size)| (id, (off, size)))
+                .collect();
+        for (id, enc, off, size) in
+            hbg1::parse_geom_section(&vpayload).expect("GEOMR rows parse")
+        {
+            assert_eq!(enc, hbg1::ENCODING_HBG1);
+            variant_rows += 1;
+            let rec = portal.get_file(id).expect("model record in DAT");
+            let gfx =
+                holtburger_dat::file_type::GfxObj::unpack(&mut std::io::Cursor::new(&rec))
+                    .unwrap();
+            let fresh = hbg1::encode_gfx_part_relief(&gfx, &relief).expect("variant encode");
+            assert_eq!(
+                &vpayload[off..off + size],
+                &fresh[..],
+                "GEOMR 0x{id:08X}: baked variant must re-encode byte-identically"
+            );
+            let (boff, bsize) = base_rows[&id];
+            let bm = hbg1::Hbg1Mesh::parse(&base[boff..boff + bsize]).unwrap();
+            let vm = hbg1::Hbg1Mesh::parse(&fresh).unwrap();
+            assert!(vm.index_count > bm.index_count, "variant 0x{id:08X} adds nothing");
+            added_tris_seen += ((vm.index_count - bm.index_count) / 3) as u64;
+            variant_checked.insert(id);
+        }
+    }
+    println!(
+        "RELIEF differ: variant={} | {} default 0x01 rows byte-identical | \
+         {} unique variants / {} rows byte-identical re-encode | \
+         report: changed {} / identical {} / +{} tris / {:.2} MB raw / max {} B | \
+         differ +{} tris",
+        report.geom_relief_variant,
+        default_checked.len(),
+        variant_checked.len(),
+        variant_rows,
+        report.geom_relief_models_changed,
+        report.geom_relief_models_identical,
+        report.geom_relief_added_tris,
+        report.geom_relief_bytes_raw as f64 / 1e6,
+        report.geom_relief_max_payload_bytes,
+        added_tris_seen,
+    );
+    assert!(
+        variant_checked.len() >= 10,
+        "relief differ needs ≥ 10 variant payloads (got {}) — grow the region \
+         or check ModelGate",
+        variant_checked.len()
+    );
+    std::fs::copy(
+        out.join("pack-report.json"),
+        out_root.join("relief-bake-report.json"),
+    )
+    .unwrap();
 }

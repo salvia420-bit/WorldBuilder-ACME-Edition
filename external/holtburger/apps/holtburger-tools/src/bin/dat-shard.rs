@@ -164,6 +164,17 @@ struct Args {
     /// covers cross-run determinism).
     #[arg(long)]
     verify_deterministic: bool,
+
+    // ---- RELIEF-IN-BAKE -----------------------------------------------
+
+    /// With `--emit-packs`: ALSO emit relief-variant geometry (GEOMR
+    /// sections) for the `set_gfx_relief(true, 0, SCALE)` profile — the
+    /// material-identity rails the client ships at `subdivLevel 0`. The
+    /// relief-free GEOM rows are emitted unchanged either way (they are the
+    /// byte-exact differ baseline), so this is purely additive; without the
+    /// flag the bake is byte-identical to a pre-RELIEF-IN-BAKE bake.
+    #[arg(long, value_name = "SCALE")]
+    geom_relief: Option<f32>,
 }
 
 impl Args {
@@ -218,6 +229,7 @@ impl Args {
             zstd_level: self.pack_zstd_level,
             verify_closure: self.verify_closure,
             verify_deterministic: self.verify_deterministic,
+            geom_relief_scale: self.geom_relief,
         })
     }
 }
