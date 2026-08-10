@@ -4,6 +4,28 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -5. PASS 3 (2026-08-10 late) — pooled world exists; resample in flight
+
+- T22-PRODUCER LANDED+VERIFIED (battery 396/396 re-run; live SwiftShader arm on
+  the deployed dist: 51 pools / 17 classes sealed post-boot, parked mutations 0,
+  36/36 grid slots LIVE, all integrity counters 0, census bounds MET, F-11.18
+  applied at pool scale, 0 console errors). E6 IS NOW RUNNABLE (first time).
+  ORCHESTRATOR RULINGS on its deviations: D3 envcell swap deferral ACCEPTED —
+  the three read-verified blockers (layer-1 attachment, cellSetChanged unwired,
+  portal ticks walk containers) make it a queued task (its designed shape is in
+  the T22P report); do not ship it un-eyed. D4 noted: 17/51 pooled is a FLOOR —
+  666/815 nodes still route legacy (bc7Pending 363 / deformed 218 /
+  needsResample 85) — the resample + rsId-marker items shrink that. OFF-arm live
+  boot not run (one-browser budget; suites+diff argument accepted per I9) — a
+  quick OFF boot rides the next orchestrator session for belt-and-braces.
+- ROUTED NUMBERS: pool geometry alloc:used 55x (22.3 vs 0.4 MiB) — POOL_INIT_*
+  [A]s want re-classing or a lazy first grow BEFORE M6 scores; 17 class pages =
+  127.8 MiB — M4 rider once envcells + resample residue join.
+- QUEUED (new): ENVCELL-POOL-SWAP (T22P D3 designed shape) · bc7Pending rsId
+  marker look (ST5 owner) · worker-side record→axis ladder (T22 D1, now a
+  relocation with a live differ target).
+- PAGE-RESAMPLE agent still in flight.
+
 ## -4. AGENT-PASS ERA (2026-08-10 evening) — orchestrator + Opus implementation agents
 
 Owner directive: Opus agents implement; orchestrator researches/verifies/pushes.
