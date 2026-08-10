@@ -16,7 +16,21 @@ Read both before acting. This file is the volatile state those don't carry.
   marks clear BEFORE re-offer (still-pending re-files, never drops). BATCH READ
   OWED: producer.heldOutNoRsId must be 0 live, else a material class missed the
   stamp; offPage is the next re-offerable residue once it has a settle event.
-- ENVCELL-POOL-SWAP in flight (legs 1-5 committed at time of writing).
+- ENVCELL-POOL-SWAP LANDED+VERIFIED (battery 413→496 re-run green + rsid/fusion
+  neighbors): all three D3 blockers closed (per-domain groups/layers with the
+  mask stamped on the pool mesh; delta-driven setCellsVisible in the same tick
+  as container flips incl. the born-visible arrival case; portal ticks
+  untouched — ?portalStencil disarms envcell pooling loudly). BONUS:
+  normalizeForPool now COMPACTS indexed sources (whole-cell streams were
+  entering pools once per surface — a candidate slice of the 55x alloc:used).
+  Baked light survives pooling via a composed material cache key;
+  refusedBakedMissing 0 on real dungeon data. BLOCKING FINDING + RULING
+  DISPATCHED: leg-6's declared≠resident gate empties the pooled world on a
+  pre-page-dim dist (1,852/1,852 offPage refusals — the declared dims it
+  compares are the untrustworthy bit-clear values); ruling = gate engages only
+  when FULL_PAGE_DIMS is SET, live-dims keying when clear (counted) — sent to
+  the producer-swap agent, in flight. E6 queue gains holtburg-redoubt-interior
+  with a judge-the-right-arm checklist row.
 
 ## -5. PASS 3 (2026-08-10 late) — pooled world exists; resample in flight
 
