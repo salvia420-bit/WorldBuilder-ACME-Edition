@@ -1,0 +1,160 @@
+{
+  "schema": "hb-1070-queue-v1",
+  "batch": "D",
+  "created": "2026-08-10",
+  "owner": "salvia (or orchestrator-driven per the 2026-08-10 precedent)",
+  "preparedBy": "orchestrator (post-BAKE-4 handoff; supersedes the deferred legs scattered across batch A-C reports)",
+  "prereqGate": "BAKE-4 DEPLOYED — run-world-bake-4.sh rc=0 (driver4.log '=== DONE'), deploy-packs-v4 additive merge clean, serve.py --check OK. The v4 layer carries: page-dim full tier (--require-page-dims PASSED), GEOMR relief variants (--geom-relief 1.0), re-derived previews. NOTHING in this batch is valid against the v3 dist.",
+  "sessionRulesInline": [
+    "Inherit vistest-preamble-v1 (batch-A file) PLUS the 2026-08-10 learnings:",
+    "NEVER default --account=tailnet1 for automation (a person's Developer account) — bots: agentp07-p10 (password = account name). tailnet1 only for @tele* admin needs, coordinated with the owner.",
+    "Boot gates read __bootStateHistory + pose, never the bare scalar (ready/in-world share it; a late watchdog error can mask a good session). renderOnDemand does NOT stall boot — the 2026-08-10 stalls were stale-ACE-session refusals; moving-bench now retries (--loginRetries).",
+    "ssh tunnel: -o ServerAliveInterval=15 -o ServerAliveCountMax=4 (a stale -L forward mimics chrome death; disambiguate box-side with Test-NetConnection).",
+    "Chrome cycling: per-profile bats C:\\Temp\\launch-{a1,a2,a3,b1,b2,sh1,sh2,mv1}.bat via schtasks WLS2 + cycle-chrome.sh <tag>; kill by cdpwb-* CIM match only.",
+    "Outdoor eye shots: ?skytime=12 pin + terrain plateau gate (terrainBakedLbs stable across 2+ polls, >10), NEVER fixed waits; fixed-anchor __cam.orbit for arm-identical cameras (el>=60 near Holtburg's portal hill or the orbit lands inside the slope).",
+    "ACE crash recovery: FIFO needs a persistent writer first — `setsid bash -c 'exec sleep infinity > ~/ace_stdin.fifo' &` then the setsid nohup dotnet line (handoff §-3).",
+    "Serve.py runs with --compress-cache-mb 256 --bind 0.0.0.0."
+  ],
+  "suggestedOrder": [
+    "OFF-ARM-BOOT",
+    "E6",
+    "RELIEF-EYE",
+    "E1-TCO-ARM",
+    "T128-INTERIM-EYE",
+    "CTX-LOSS-MIRRORS",
+    "TEXWORKER-INTERLEAVE",
+    "MOVE-FIX-BASELINE"
+  ],
+  "items": [
+    {
+      "id": "OFF-ARM-BOOT",
+      "kind": "probe",
+      "gate": "belt-and-braces owed from T22P (suites+diff argument accepted per I9; this is the live half)",
+      "recipe": [
+        "Bare-default boot (?nosw=1 + login only, NO stage flags), in-world + plateau.",
+        "Assert: 0 console errors; window.__diag.geometry.relief absent-or-disarmed; no pool/pack/bundle diag surfaces armed; visual spot vs any E1 legacy screenshot (b1070/e1/day-off-*).",
+        "5 minutes total. This is the kill-path proof on the v4 dist."
+      ],
+      "result": null
+    },
+    {
+      "id": "E6",
+      "kind": "eye",
+      "stage": "ST9",
+      "gate": "GATE-POOLS (the whole stage's eye)",
+      "prereqs": [
+        "BAKE-4 dist (page dims make the strict arm ADMIT; on v3 it refuses everything — ENVCELL report D5)",
+        "T22P leg 6-8 landed (bit-gated strict arm + offPage hold-out)"
+      ],
+      "urls": {
+        "on": "http://<origin>/apps/holtburger-web/index.html?nosw=1&skytime=12&camDebug=on&autoLogin=1&account=<bot>&password=<bot>&autoSpawn=first&packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on&slotGrid=on&frameWork=on&drawPools=on",
+        "off": "same minus drawPools (the K2 kill arm)"
+      },
+      "counterAssertionsBeforeJudging": [
+        "__diag pools: classesCreatedPostBoot===0 after settle; parked poolMutationsPerFrame===0 (two reads)",
+        "classes <= ~63, pools <= ~300 (census bounds)",
+        "producer.heldOutNoRsId === 0 (else a material class missed the RSID stamp)",
+        "heldOutByReason.offPage CLIMBS then reOfferAdmitted FOLLOWS (strict-arm drain working); heldOutRetired small and stable",
+        "refeedFormatMismatch === 0 (a nonzero = the cached-record race is real — file it)",
+        "envcells.visible === containersVisible in a dungeon; refusedBakedMissing === 0"
+      ],
+      "vantages": "batch-C E6 vantage list (ClipMap item, depth-bias, shadowed-town receiveShadow, baked-light) PLUS holtburg-redoubt-interior (four judgements in the ENVCELL-POOL report; its checklist row stops you judging a legacy interior by mistake — check the pooled diag counts nonzero IN the dungeon first)",
+      "verdictSemantics": "CLEAN => ST9 promotion path opens; DIRTY => defect, never ship-and-tune",
+      "verdict": null
+    },
+    {
+      "id": "RELIEF-EYE",
+      "kind": "eye",
+      "stage": "post-ST3 (reliefBundles)",
+      "gate": "the ?reliefBundles DEFAULT-OFF -> ON path",
+      "trap": "assert __diag.geometry.relief.variantRowsResident > 0 BEFORE judging — a dist without GEOMR rows renders flat and false-CLEANs (RELIEF-BAKE report). Interiors are FLAT BY DESIGN (D2 — env variants not baked).",
+      "arms": {
+        "a": "packSource=on&geomBundles=on&reliefBundles=on (baked rails)",
+        "b": "packSource=on&geomBundles=on (relief-free bundles)",
+        "c": "legacy arm, ?gfxRelief=on (runtime rails — the parity reference)"
+      },
+      "checklist": [
+        "Tudor timber/brick coursing protrudes on arm a and c, flat on b",
+        "a vs c: rails visually identical (the differ says byte-parity of triangles; the eye confirms shading/shadow)",
+        "no cracks at material boundaries (weld rule)",
+        "shadow pass sane (rails cast; ~cost note in url-flags row)",
+        "0 console errors"
+      ],
+      "vantages": "Holtburg tudor walls close-up (street cam dist 4-6) + overview; skytime=12",
+      "verdict": null
+    },
+    {
+      "id": "E1-TCO-ARM",
+      "kind": "eye",
+      "gate": "confirms/kills T15R's C1 (atlas hold-out class) as the E1 softness cause",
+      "recipe": [
+        "Third arm at the E1 day vantages: packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on; compare vs the archived day-on/day-off pairs (b1070/e1/).",
+        "Read __bc7Stats(): deferredNodes + singletonUpgrades on BOTH this arm and a plain pack arm; C1 predicts the tco arm re-atlases (deferred shrink) and sharpens.",
+        "On the v4 dist also read __texStats().mirrors + texRefPageKeyed>0 (first live page-keyed members)."
+      ],
+      "verdict": null
+    },
+    {
+      "id": "T128-INTERIM-EYE",
+      "kind": "eye",
+      "stage": "ST5 terrain ladder",
+      "gate": "GATE-TEX terrain leg (T15R-TERRAIN report)",
+      "recipe": [
+        "?terrainT1024=512 (promote target) arm: the t128 interim is on screen for ~1-2s post-boot — eye it (nobody ever has): acceptable as a boot transient? Then promotion completes; confirm no visible pop/seam at the swap.",
+        "Chain onto the E1-TCO-ARM boot at no extra cost (T15R-TERRAIN report's recommended arm chain).",
+        "Also read __terrainBc7Stats: mode, promotion ms, mirrorsFreed, mirrorReleaseDeferred===0."
+      ],
+      "verdict": null
+    },
+    {
+      "id": "CTX-LOSS-MIRRORS",
+      "kind": "probe",
+      "gate": "GATE-TEX terrain leg: mirrorRestoreFailed===0 across a forced context loss",
+      "recipe": [
+        "In a settled tco+t1024 arm: force GL context loss (WEBGL_lose_context extension: getExtension('WEBGL_lose_context').loseContext() then restoreContext()).",
+        "Assert: renderer recovers; __terrainBc7Stats.mirrorRestoreFailed===0; fullTierMirrorStats restore counters clean; world visually intact after ~30s.",
+        "This exercises the rehydrate path the mirrors exist for — first live test."
+      ],
+      "result": null
+    },
+    {
+      "id": "TEXWORKER-INTERLEAVE",
+      "kind": "bench",
+      "gate": "GATE-TEXWORKER hardening before the default flip (D-09.3.3)",
+      "recipe": [
+        "PC-7-strict version of the 2026-08-10 route-pinned pair: arms interleaved off/on/off/on, FRESH profile each, identical route (telepoi Holtburg + 7 westward @teleloc hops, 10s apart), ultra quality.",
+        "Compare stall-mass/long-frames/worst tails per arm-pair; the sequential result was ~3x in the worker's favor (13 vs 42 long frames) — interleave must reproduce the direction.",
+        "If it holds: the orchestrator flips ?texWorkers default per the serialization policy (one flip, soak)."
+      ],
+      "result": null
+    },
+    {
+      "id": "MOVE-FIX-BASELINE",
+      "kind": "bench",
+      "gate": "creates F3/F4 baselines (charter Q2); GATE-POOLS kill-row needs it",
+      "cmd": "node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 --anchor=25171,20344,42.0 --mode=orbit --frames=1800 --laps=1 --arm=default --account=<bot NOT tailnet1>",
+      "notes": [
+        "Harness fixed 2026-08-10 (classifyBoot + --loginRetries default 2; failure prints the page's own reason).",
+        "Fresh profile; sample same-session PARKED p50 BEFORE the rig; judged USABLE or re-run (never average a REJECT); label BASELINE-CREATING."
+      ],
+      "result": null
+    }
+  ],
+  "ownerItems": [
+    {
+      "id": "Q75-ELECTION",
+      "status": "OPEN",
+      "evidence": "BAKE-4's pack-report carries the world-scale full-tier size with page dims (region figure was +13.2% over pre-resample; T16's q75 projected ~69.6MB vs the <=65 gate). Decide q75 vs lossless for B4a AFTER reading the v4 world number; a q75 re-encode is a buildbox job (T16 pattern)."
+    },
+    {
+      "id": "E1-RATIFICATION",
+      "status": "OPEN",
+      "evidence": "2026-08-10 orchestrator-eye CLEAN awaits owner ratification per PR-8: pairs in session scratchpad b1070/e1/ (day-on/off town+street, final-*-el60, dungeon pair)."
+    },
+    {
+      "id": "PREVIEW-FEED-REKEY",
+      "status": "OPEN",
+      "evidence": "re-key 2026-08-09 S4 options a/b — until decided, classPages.refused.needsResample (85 on the T22P arm) cannot reach 0 from the bake alone. Orchestrator can brief either option as an agent task once elected."
+    }
+  ]
+}

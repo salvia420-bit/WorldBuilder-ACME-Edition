@@ -24,10 +24,9 @@ Read both before acting. This file is the volatile state those don't carry.
   + both verify flags. On DONE rc=0: adapt deploy-packs-v3.sh → v4 (gate on
   driver4.log; expect world_index + pack_url_template-stable additive merge;
   GEOMR rows are NEW sections — packs superset), deploy, serve.py --check.
-  Then the 1070 batch card is fully unblocked incl. E6 (strict-arm counters:
-  heldOutByReason.offPage climbing with reOfferAdmitted following;
-  heldOutNoRsId must be 0) and the relief eye pair
-  (assert __diag.geometry.relief.variantRowsResident>0 first).
+  Then run BATCH D — the full post-bake card is queue-1070/batch-D-2026-08-10.json
+  (8 items in suggested order + 3 owner items; every counter assertion, trap,
+  and verified flag spelling inlined; prereqGate = the v4 deploy).
 
 ## -6. PASS 4 (2026-08-10 night) — coverage gaps closing
 
