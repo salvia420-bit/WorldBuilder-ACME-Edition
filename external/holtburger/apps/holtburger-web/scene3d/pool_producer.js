@@ -122,7 +122,7 @@ export function initPoolWorld({ THREE, group, search } = {}) {
       nodesIn: 0, pooled: 0, passthrough: 0, plans: 0, planErrors: 0,
       byDomain: { st: 0, ec: 0 },
       refusedNodes: 0, normFails: 0,
-      texRefPageKeyed: 0, texRefOffPage: 0, texRefAbsent: 0, texRefDimsWillMove: 0,
+      texRefPageKeyed: 0, texRefBitClear: 0, texRefAbsent: 0, texRefDimsWillMove: 0,
       parks: 0, adopts: 0, releases: 0,
       refeedCalls: 0, refeedLayers: 0, refeedRehomed: 0, refeedAtlasSide: 0,
       // RSID-MARKER — the hold-out → re-offer ledger. `heldOut` is what the
@@ -298,41 +298,59 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
  * `FULL_PAGE_DIMS` tier bit distinguishes them, so the declared dims are
  * trusted ONLY when `onPage` is true.
  *
- * TWO REFINEMENTS on the prescribed shape, both recorded in the report:
+ * THE BIT GATES THE WHOLE GATE (orchestrator ruling 2026-08-10, option (b),
+ * after the ENVCELL-POOL arm read 1,852/1,852 members refused `offPage` and a
+ * pooled world of ZERO). Leg 6 originally applied the DECLARED ≠ RESIDENT
+ * refusal whichever way the bit read — but with the bit CLEAR the "declared"
+ * dims it compared against are exactly the untrustworthy pre-resample TEXREF
+ * values, and under `?texCompressedOnly` world materials are PREVIEW-born, so
+ * essentially every member of a pre-page-dim dist differs from them. The
+ * refusal therefore emptied the pooled world on today's dist. Now:
  *
- *  1. The format bit is taken from the LIVE texture, not asserted `true`.
- *     The `f7|f8` axis must match what the class PAGE actually allocates
- *     (`isBc7AtlasTexture` decides that), or two members could share a class
- *     key while needing different `texStorage3D` internal formats — the one
- *     thing D-07.2 says a class must never do.
- *  2. `onPage === false` does not by itself force the legacy path; DECLARED ≠
- *     RESIDENT does, whichever way the bit reads. That is the hazard that
- *     actually bites: such a member's dims WILL move when its full tier
- *     lands, so a page layer taken now pins it to the wrong page for the
- *     session (the refeed would read a dims mismatch and it would keep its
- *     preview texels forever). A member already AT its declared dims is
- *     allocation-sound today — which is also what keeps the pooled world from
- *     collapsing to ~0 on the pre-resample dist, where the bit is clear
- *     everywhere.
+ *   bit SET   ⇒ STRICT. Declared dims key the record, and DECLARED ≠ RESIDENT
+ *               marks the member `texOffPage` so `admit()` refuses it: its
+ *               dims WILL move when the full tier lands, and a page layer
+ *               taken now would pin it to the wrong page for the session (the
+ *               refeed would read a dims mismatch and it would keep its
+ *               preview texels). Counted `texRefPageKeyed` / `texRefDimsWillMove`.
+ *   bit CLEAR ⇒ PERMISSIVE, exactly the pre-leg-6 behaviour: live dims key the
+ *               record (`texApprox`), nothing is refused on page grounds, and
+ *               the existing `needsResample` gate decides. Counted
+ *               `texRefBitClear`. The cost is D7's own: a member whose full
+ *               tier later lands at different dims keeps its preview texels,
+ *               which `classPages.layers.refeedDimMismatch` already counts.
+ *
+ * so today's dist pools exactly as the 51-pool Nanto arm measured, and the
+ * page-dim dist gets the strict gate the resample exists to enable.
+ *
+ * ONE MORE REFINEMENT, kept from leg 6: the `f7|f8` format bit comes from the
+ * LIVE texture (`isBc7AtlasTexture`), not asserted `true`. That axis must
+ * match what the class PAGE actually allocates, or two members could share a
+ * class key while needing different `texStorage3D` internal formats — the one
+ * thing D-07.2 says a class must never do.
  */
 function _axisRecordFor(mat, domain, cast, recv, stats) {
   const rsId = _rsIdOf(mat);
   const info = rsId ? texRefPageInfo(rsId) : null;
   const tex = mat && mat.map;
-  const liveW = (tex && tex.image && tex.image.width) | 0;
-  const liveH = (tex && tex.image && tex.image.height) | 0;
-  const texRef = info && info.onPage
-    ? { w: info.w, h: info.h, compressed: isBc7AtlasTexture(tex) }
-    : null;
-  const rec = axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv, texRef });
   if (!info) {
     stats.texRefAbsent += 1; // no TEXREF row ⇒ live dims, `texApprox: true`
-    return rec;
+    return axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv });
   }
-  if (info.onPage) stats.texRefPageKeyed += 1;
-  else stats.texRefOffPage += 1;
+  if (!info.onPage) {
+    // The bit is the authority and it says NO — so the declared dims are not
+    // trusted for anything, neither to key with nor to compare against.
+    stats.texRefBitClear += 1;
+    return axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv });
+  }
+  const rec = axisRecordOf(mat, {
+    domain, castShadow: cast, receiveShadow: recv,
+    texRef: { w: info.w, h: info.h, compressed: isBc7AtlasTexture(tex) },
+  });
+  stats.texRefPageKeyed += 1;
+  const liveW = (tex && tex.image && tex.image.width) | 0;
+  const liveH = (tex && tex.image && tex.image.height) | 0;
   if (liveW !== (info.w | 0) || liveH !== (info.h | 0)) {
-    // Declared ≠ resident: this member's dims are going to move.
     rec.texOffPage = true;
     stats.texRefDimsWillMove += 1;
   }
@@ -341,7 +359,7 @@ function _axisRecordFor(mat, domain, cast, recv, stats) {
 
 /** Test hook — the axis record exactly as the feed builds it. */
 export function _poolAxisRecordForTest(mat, { domain = "st", castShadow = false, receiveShadow = false } = {}) {
-  const stats = { texRefPageKeyed: 0, texRefOffPage: 0, texRefAbsent: 0, texRefDimsWillMove: 0 };
+  const stats = { texRefPageKeyed: 0, texRefBitClear: 0, texRefAbsent: 0, texRefDimsWillMove: 0 };
   return { rec: _axisRecordFor(mat, domain, castShadow, receiveShadow, stats), stats };
 }
 

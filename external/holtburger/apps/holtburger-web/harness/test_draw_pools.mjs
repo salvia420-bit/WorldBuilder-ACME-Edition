@@ -1432,7 +1432,7 @@ console.log("PART 19: pooled-world residency, anti-churn and the closed class se
 
 // ── PART 20 — the TEXREF page stitch (PAGE-RESAMPLE handoff #2) ───────────
 
-console.log("PART 20: axis records key on the TEXREF-declared page dims");
+console.log("PART 20: the FULL_PAGE_DIMS bit gates the whole page gate");
 {
   // A stub `pack_texref` is all `texRefPageInfo` needs (it reads nothing else),
   // and it leaves `texCompressedOnlyActive()` false — so arming it here cannot
@@ -1458,439 +1458,85 @@ console.log("PART 20: axis records key on the TEXREF-declared page dims");
   _resetPoolWorldForTest();
   _resetTexCompressedOnlyForTest();
 
-  // (a) SEAM UNARMED / no TEXREF row ⇒ FALL BACK to live dims, exactly today's
-  //     behaviour, and say so (`texApprox`).
+  // ── (A) NO TEXREF ROW / seam unarmed ⇒ live dims, exactly today's behaviour.
   const a = _poolAxisRecordForTest(mkMat(512, 0x06000030));
   check(a.rec.texW === 512 && a.rec.texH === 512, "no TEXREF row ⇒ the axis record falls back to LIVE dims");
   check(a.rec.texApprox === true, "…and stamps texApprox, so the approximation is visible");
   check(a.stats.texRefAbsent === 1, "…and is COUNTED as an absent-TEXREF fallback");
 
-  // (b) TEXREF declares the member IS at its page ⇒ the DECLARED dims key it,
-  //     even while the live texture is still the preview. This is the whole
-  //     point of the stitch: class identity stable across preview → full.
+  initTexCompressedOnly({ wasmNs: { pack_texref: packTexref } });
+
+  // ── (B) BIT CLEAR ⇒ PERMISSIVE (orchestrator ruling 2026-08-10, option (b)).
+  //     The declared dims are not trusted to key with OR to compare against —
+  //     they are the untrustworthy pre-resample values. Pre-leg-6 behaviour.
+  rows.set(0x06000032, { tierBits: TIER_BIT_FULL_XU7_PRESENT, dimsByte: dimsByte(11, 11) });
+  const bClear = _poolAxisRecordForTest(mkMat(256, 0x06000032));
+  check(bClear.rec.texW === 256 && bClear.rec.texH === 256,
+    "bit CLEAR ⇒ the record keeps LIVE dims (the byte is never the authority)");
+  check(bClear.rec.texApprox === true, "…stamped texApprox, as the pre-leg-6 path did");
+  check(bClear.rec.texOffPage !== true,
+    "…and is NOT marked dims-will-move — comparing against untrusted dims is what emptied the pooled world");
+  check(bClear.stats.texRefBitClear === 1, "…counted as texRefBitClear");
+  check(bClear.stats.texRefDimsWillMove === 0 && bClear.stats.texRefPageKeyed === 0,
+    "…and neither strict counter fires with the bit clear");
+
+  // A preview-born member on a pre-page-dim dist is the 1,852/1,852 case the
+  // ENVCELL-POOL arm hit: it must POOL, not be refused.
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  initPoolWorld({ THREE, group: new THREE.Group(), search: ARMED_PRE });
+  const nPreview = mkNode(256, 0x06000032);
+  const rPreview = addSingletonsToPools([nPreview], {}, { domain: "st", lbKey: 0x40400000 });
+  check(rPreview.pooled === 1,
+    "bit CLEAR + preview-born ⇒ the member POOLS (the pre-page-dim dist is not emptied)");
+  const cClear = poolWorldCensus();
+  check(cClear.classPages.refused.offPage === 0, "…nothing is refused offPage with the bit clear");
+  check(cClear.producer.texRefBitClear === 1, "…and the producer census publishes texRefBitClear");
+
+  // ── (C) BIT SET ⇒ STRICT. Declared dims key the record even while the live
+  //     texture is still the preview — the preview→full stability the whole
+  //     page-resample exists for.
   rows.set(0x06000031, {
     tierBits: TIER_BIT_FULL_PAGE_DIMS | TIER_BIT_FULL_XU7_PRESENT,
     dimsByte: dimsByte(11, 11), // 2048²
   });
-  initTexCompressedOnly({ wasmNs: { pack_texref: packTexref } });
-  const b = _poolAxisRecordForTest(mkMat(256, 0x06000031));
-  check(b.rec.texW === 2048 && b.rec.texH === 2048,
-    "an on-page TEXREF row keys the record on the DECLARED 2048² page, not the live 256²");
-  check(b.rec.texApprox !== true, "…so the record is no longer an approximation");
-  check(classKeyOf(b.rec).includes("x11"), `…and the class key carries tier 11: ${classKeyOf(b.rec)}`);
-  check(b.stats.texRefPageKeyed === 1, "page-keyed records are COUNTED");
-  check(b.stats.texRefDimsWillMove === 1,
-    "…and a member whose live dims have not reached the page yet is flagged as moving");
+  const cSet = _poolAxisRecordForTest(mkMat(256, 0x06000031));
+  check(cSet.rec.texW === 2048 && cSet.rec.texH === 2048,
+    "bit SET ⇒ the record keys on the DECLARED 2048² page, not the live 256²");
+  check(cSet.rec.texApprox !== true, "…so the record is no longer an approximation");
+  check(classKeyOf(cSet.rec).includes("x11"), `…and the class key carries tier 11: ${classKeyOf(cSet.rec)}`);
+  check(cSet.stats.texRefPageKeyed === 1, "page-keyed records are COUNTED");
+  check(cSet.stats.texRefDimsWillMove === 1,
+    "…and DECLARED ≠ RESIDENT marks the member as one whose dims will move");
 
-  // (c) TEXREF row present, page bit CLEAR ⇒ the DIMS BYTE IS NOT TRUSTED (a
-  //     1096² member rounds to a convincing 2048²): the record keeps live dims.
-  rows.set(0x06000032, { tierBits: TIER_BIT_FULL_XU7_PRESENT, dimsByte: dimsByte(11, 11) });
-  const c = _poolAxisRecordForTest(mkMat(1024, 0x06000032));
-  check(c.rec.texW === 1024 && c.rec.texH === 1024,
-    "page bit CLEAR ⇒ the declared dims are NOT trusted (the bit is the authority, not the byte)");
-  check(c.stats.texRefOffPage === 1 && c.stats.texRefDimsWillMove === 1, "both off-page counters fire");
-  check(c.rec.texOffPage === true, "…and the record is marked as one whose dims will move");
-
-  // (d) declared == resident ⇒ allocation-sound today, nothing flagged.
-  rows.set(0x06000033, { tierBits: TIER_BIT_FULL_XU7_PRESENT, dimsByte: dimsByte(9, 9) });
-  const d = _poolAxisRecordForTest(mkMat(512, 0x06000033));
-  check(d.rec.texOffPage !== true && d.stats.texRefDimsWillMove === 0,
-    "a member already AT its declared dims is not flagged (this is what keeps the pre-resample dist poolable)");
-
-  // END TO END: a dims-will-move member takes the LEGACY path, counted with
-  // its own reason (distinct from the D2 needsResample residue).
+  // …and that member takes the LEGACY path, with its own reason.
   _resetDrawPoolsForTest();
   _resetPoolWorldForTest();
   initPoolWorld({ THREE, group: new THREE.Group(), search: ARMED_PRE });
   const nMove = mkNode(256, 0x06000031);
   const rMove = addSingletonsToPools([nMove], {}, { domain: "st", lbKey: 0x40400000 });
   check(rMove.pooled === 0 && rMove.passthrough[0] === nMove,
-    "a dims-will-move member RENDERS on the legacy path");
+    "bit SET + dims-will-move ⇒ the member RENDERS on the legacy path");
   const cen = poolWorldCensus();
   check(cen.classPages.refused.offPage === 1, "…refused with the offPage reason");
   check(cen.classPages.refused.needsResample === 0, "…and NOT conflated with the D2 residue");
   check(cen.producer.texRefPageKeyed === 1 && cen.producer.texRefDimsWillMove === 1,
-    "the producer census publishes the TEXREF stitch counters");
+    "the producer census publishes both strict counters");
 
+  // ── (D) BIT SET and declared == resident ⇒ the page-dim dist's steady state:
+  //     keyed on the declared page, admitted, nothing flagged.
+  rows.set(0x06000033, {
+    tierBits: TIER_BIT_FULL_PAGE_DIMS | TIER_BIT_FULL_XU7_PRESENT,
+    dimsByte: dimsByte(9, 9), // 512²
+  });
+  const dOk = _poolAxisRecordForTest(mkMat(512, 0x06000033));
+  check(dOk.rec.texOffPage !== true && dOk.stats.texRefDimsWillMove === 0,
+    "bit SET + already AT the declared page ⇒ nothing flagged");
   const nOk = mkNode(512, 0x06000033);
   check(addSingletonsToPools([nOk], {}, { domain: "st", lbKey: 0x40400000 }).pooled === 1,
-    "a member at its declared dims still pools");
+    "…and the member pools");
 
   _resetTexCompressedOnlyForTest();
-  _resetDrawPoolsForTest();
-  _resetPoolWorldForTest();
-}
-
-// ── PART 21 — the envcell substrate (ENVCELL-POOL-SWAP) ───────────────────
-
-console.log("PART 21: per-domain groups + layers, per-cell delta, per-cell release");
-{
-  // (a) LAYER + GROUP. An "ec" pool must attach to the CELLS group and carry
-  //     RENDER_LAYER_INDOOR, or atmosphere_pipeline's depth-clear split draws
-  //     it in the pre-clear world pass (index.js:1455 / cells.js:1642).
-  const stGroup = new THREE.Group();
-  const ecGroup = new THREE.Group();
-  const { reg } = makeRegistry({
-    group: stGroup,
-    groups: { st: stGroup, ec: ecGroup },
-    layers: { ec: 1 },
-  });
-  reg.feedTile(plan(400, [member({ contentKey: "st1" })]), geomSource());
-  reg.feedTile(plan(401, [member({
-    axes: { domain: "ec" }, domain: "ec", contentKey: "ec1", cellId: 0x100,
-  })]), geomSource());
-  check(stGroup.children.length === 1 && ecGroup.children.length === 1,
-    "the st pool lands in the statics group and the ec pool in the CELLS group");
-  check(stGroup.children[0].layers.test(new THREE.Layers()) === true,
-    "…the st pool stays on layer 0 (three's default mask)");
-  const ecLayer = new THREE.Layers();
-  ecLayer.set(1);
-  check(ecGroup.children[0].layers.test(ecLayer) === true,
-    "…and the ec pool is stamped RENDER_LAYER_INDOOR (masks never inherit)");
-  const l0 = new THREE.Layers();
-  check(ecGroup.children[0].layers.test(l0) === false,
-    "…and is NOT on layer 0, so the world pass cannot draw it before the depth clear");
-  check(ecGroup.children[0].userData.domain === "ec", "the pool carries its domain");
-
-  // (b) THE DELTA. Only the cells named this tick are touched — the legacy
-  //     path it replaces is diff-driven, so the pooled one must be too.
-  const cells = [0x100, 0x101, 0x102].map((cellId, i) => member({
-    axes: { domain: "ec" }, domain: "ec", contentKey: `c${i}`, cellId,
-  }));
-  reg.feedTile(plan(402, cells), geomSource());
-  const poolOf = (tile) => [...reg.tiles.get(tile).values()][0].pool.mesh;
-  const mesh = poolOf(402);
-  const visOf = (m, id) => m.getVisibleAt(id);
-  const memb = [...reg.tiles.get(402).values()][0];
-  const idOf = (cellId) => memb.cellRanges.get(cellId)[0];
-  check(visOf(mesh, idOf(0x100)) === true, "a freshly committed cell instance is visible");
-  reg.beginFrame();
-  check(reg.setCellsVisible([0x101], false) === 1, "hiding ONE cell flips exactly one instance");
-  check(visOf(mesh, idOf(0x101)) === false && visOf(mesh, idOf(0x100)) === true,
-    "…and leaves every other cell alone");
-  check(reg.census().cells.hidden === 1, "the census publishes the hidden count");
-  reg.beginFrame();
-  check(reg.setCellsVisible([0x101], false) === 0, "re-hiding an already-hidden cell is a NO-OP");
-  check(reg.census().events.mutationsThisFrame === 0,
-    "…so a settled PVS tick performs ZERO pool mutations (the S2 anti-churn law)");
-  reg.beginFrame();
-  reg.setCellsVisible([0x101], true);
-  check(visOf(mesh, idOf(0x101)) === true, "un-hiding restores the instance");
-
-  // (c) HIDDEN SURVIVES PARK → ADOPT (the cellSetChanged contract, on the delta).
-  reg.setCellsVisible([0x102], false);
-  reg.parkTile(402);
-  reg.adoptTile(402);
-  check(visOf(mesh, idOf(0x102)) === false,
-    "a cell outside the PVS set stays hidden across park → adopt");
-  check(visOf(mesh, idOf(0x100)) === true, "…and a visible one comes back");
-
-  // (d) PER-CELL RELEASE — the rebuild path. An LB rebuild re-feeds its cells;
-  //     without a per-cell release every interior surface would double, and the
-  //     tile (2×2 LBs) is too coarse to release instead.
-  const beforeBytes = reg.geometryBytes();
-  const deleted = reg.releaseCells([0x102]);
-  check(deleted === 1, "releasing one cell deletes exactly its instances");
-  check(reg.hasCell(0x102) === false && reg.hasCell(0x100) === true,
-    "…and drops only that cell from the index");
-  check(reg.census().cells.tracked === 2,
-    "…leaving the other cellIds (0x100, 0x101) tracked");
-  check(reg.census().cells.hidden === 0,
-    "…and the released cell's hidden bookkeeping is reclaimed");
-  const afterBytes = reg.geometryBytes();
-  check(afterBytes.used < beforeBytes.used && afterBytes.allocated === beforeBytes.allocated,
-    "…the cell's geometry is DEREFERENCED (used falls) while capacity is untouched");
-  // Re-feeding the released cell is a clean re-admit (the rebuild case).
-  reg.feedTile(plan(402, [member({
-    axes: { domain: "ec" }, domain: "ec", contentKey: "c2b", cellId: 0x102,
-  })]), geomSource());
-  check(reg.hasCell(0x102) === true, "…and the cell re-feeds cleanly afterwards");
-
-  // (e) A FULL release still tears the index down.
-  reg.releaseTile(402);
-  reg.releaseTile(401);
-  reg.releaseTile(400);
-  check(reg.census().cells.tracked === 0, "releaseTile un-indexes every cell it held");
-  check(reg.pools.size === 0, "…and the pools reap to zero");
-  check(ecGroup.children.length === 0 && stGroup.children.length === 0,
-    "…out of the group they were added to (never the default group)");
-}
-
-// ── PART 22 — shared-stream compaction + the interior bake ────────────────
-
-console.log("PART 22: shared-stream geometry compaction + acBakedLight survival");
-{
-  // The T13 envcell/model bundle shape: N per-surface groups over ONE shared
-  // vertex stream, each with its own compact index (geom_bundles.js:290-370).
-  const VERTS = 64;
-  const pos = new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3);
-  const nor = new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3);
-  const uvA = new THREE.BufferAttribute(new Float32Array(VERTS * 2), 2);
-  const bakedBytes = new Uint8Array(VERTS * 3);
-  for (let v = 0; v < VERTS; v += 1) {
-    pos.setXYZ(v, v, v * 2, v * 3);
-    nor.setXYZ(v, 0, 1, 0);
-    uvA.setXY(v, v / VERTS, 1 - v / VERTS);
-    bakedBytes[v * 3] = v & 0xff;
-    bakedBytes[v * 3 + 1] = (v * 2) & 0xff;
-    bakedBytes[v * 3 + 2] = (v * 3) & 0xff;
-  }
-  const bakedAttr = new THREE.BufferAttribute(bakedBytes, 3, true);
-  const sharedGroup = (indices) => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", pos);
-    g.setAttribute("normal", nor);
-    g.setAttribute("uv", uvA);
-    g.setAttribute("acBakedLight", bakedAttr);
-    g.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
-    return g;
-  };
-  // One surface referencing 6 of the 64 shared vertices.
-  const srcIdx = [10, 11, 12, 12, 11, 40];
-  const gA = normalizeForPool(sharedGroup(srcIdx), 2);
-  check(gA.attributes.position.count === 4,
-    "a shared-stream group is COMPACTED to the vertices its own index uses (4 of 64)");
-  check(gA.index.count === 6, "…with its triangle count untouched");
-  check(gA.attributes.aLayer.count === 4 && gA.attributes.aLayer.array[0] === 2,
-    "…and aLayer is stamped over the compacted stream");
-  // The drawn triangles must be IDENTICAL vertex-for-vertex.
-  let same = true;
-  for (let i = 0; i < srcIdx.length; i += 1) {
-    const sv = srcIdx[i];
-    const dv = gA.index.array[i];
-    if (gA.attributes.position.getX(dv) !== pos.getX(sv)
-      || gA.attributes.position.getY(dv) !== pos.getY(sv)
-      || gA.attributes.position.getZ(dv) !== pos.getZ(sv)
-      || gA.attributes.uv.getX(dv) !== uvA.getX(sv)) same = false;
-  }
-  check(same, "…and every drawn vertex is byte-for-byte the one the source index named");
-  // acBakedLight rides along as RAW normalised bytes (a getX read would decode).
-  check(!!gA.attributes.acBakedLight && gA.attributes.acBakedLight.normalized === true,
-    "acBakedLight survives compaction, still normalised (the RND-04 contract)");
-  let bakedOk = true;
-  for (let i = 0; i < srcIdx.length; i += 1) {
-    const sv = srcIdx[i];
-    const dv = gA.index.array[i];
-    if (gA.attributes.acBakedLight.array[dv * 3] !== bakedBytes[sv * 3]
-      || gA.attributes.acBakedLight.array[dv * 3 + 1] !== bakedBytes[sv * 3 + 1]
-      || gA.attributes.acBakedLight.array[dv * 3 + 2] !== bakedBytes[sv * 3 + 2]) bakedOk = false;
-  }
-  check(bakedOk, "…carrying each vertex's own baked bytes (a shuffled remap would show here)");
-  // A second surface over the SAME stream compacts to ITS OWN vertices — the
-  // whole point: without this each surface pays for the whole cell.
-  const gB = normalizeForPool(sharedGroup([0, 1, 2]), 0);
-  check(gB.attributes.position.count === 3,
-    "a second group over the same stream costs only ITS vertices (8 surfaces ≠ 8× the cell)");
-  // A source WITHOUT the bake stays without it (BatchedMesh fixes the attribute
-  // set at the first addGeometry, so this must be class-uniform).
-  check(!normalizeForPool(triGeom(6), 0).attributes.acBakedLight,
-    "an unbaked source produces an unbaked pool geometry");
-
-  // THE CLASS MATERIAL takes the bake patch (dungeon lighting is not
-  // negotiable): a baked member's class material must carry `__acBakedLight`,
-  // and its program cache key must COMPOSE with the array material's own axes.
-  const cm = new ClassMaterialRegistry({ warn: () => {} });
-  const mkTex = (edge) => {
-    const t = new THREE.DataTexture(new Uint8Array(edge * edge * 4), edge, edge, THREE.RGBAFormat);
-    t.needsUpdate = true;
-    return t;
-  };
-  const plainMat = new THREE.MeshStandardMaterial({ map: mkTex(256) });
-  plainMat.userData = { surfaceDid: 0x08000010, __pvwRsId: 0x06000010 };
-  const bakedMat = new THREE.MeshStandardMaterial({ map: mkTex(256) });
-  bakedMat.userData = { surfaceDid: 0x08000011, __pvwRsId: 0x06000011, __acBakedLight: true };
-  const axesOf = (m) => axisRecordOf(m, { domain: "ec", castShadow: false, receiveShadow: true });
-  const rPlain = axesOf(plainMat);
-  const rBaked = axesOf(bakedMat);
-  check(classKeyOf(rPlain) !== classKeyOf(rBaked),
-    "a baked surface is a DIFFERENT class from an unbaked one (the key's k bit)");
-  check(cm.admit(classKeyOf(rPlain), plainMat, rPlain).ok === true, "the unbaked member admits");
-  check(cm.admit(classKeyOf(rBaked), bakedMat, rBaked).ok === true, "the baked member admits");
-  const plainClassMat = cm.materialFactory(classKeyOf(rPlain));
-  const bakedClassMat = cm.materialFactory(classKeyOf(rBaked));
-  check(bakedClassMat.userData.__acBakedLight === true,
-    "the BAKED class material carries the vertex-bake patch");
-  check(!plainClassMat.userData.__acBakedLight,
-    "…and the unbaked class material does NOT (it would double-count the term)");
-  const plainKey = plainClassMat.customProgramCacheKey();
-  const bakedKey = bakedClassMat.customProgramCacheKey();
-  check(plainKey !== bakedKey, "the two class materials cannot share a compiled program");
-  check(bakedKey.startsWith(plainKey.split("|")[0]) && bakedKey.includes("statAtlasArrayMat"),
-    "…because the baked key COMPOSES with the array material's own key, never replaces it");
-  check(bakedKey.includes("k1"), "…and adds the bake bit");
-  cm.dispose();
-}
-
-// ── PART 23 — the envcell producer (ENVCELL-POOL-SWAP) ────────────────────
-
-console.log("PART 23: envcell producer — layer, per-cell visibility, rebuild release");
-{
-  _resetDrawPoolsForTest();
-  _resetPoolWorldForTest();
-  _resetEnvCellPoolsForTest();
-
-  const staticsGroup = new THREE.Group();
-  const cellsGroup = new THREE.Group();
-  initPoolWorld({ THREE, group: staticsGroup, search: ARMED_PRE });
-  check(armEnvCellPoolGroups({ staticsGroup, cellsGroup }) === true,
-    "the cells group + RENDER_LAYER_INDOOR arm onto the live registry");
-  check(envCellPoolsActive() === true, "envcell pooling is active under the full chain");
-
-  // A cell: two surface groups over ONE shared vertex stream (the T13 shape),
-  // both baked, plus the cell's own mesh-group transform.
-  const VERTS = 32;
-  const shared = {
-    position: new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3),
-    normal: new THREE.BufferAttribute(new Float32Array(VERTS * 3), 3),
-    uv: new THREE.BufferAttribute(new Float32Array(VERTS * 2), 2),
-    baked: new THREE.BufferAttribute(new Uint8Array(VERTS * 3), 3, true),
-  };
-  const cellGroupGeom = (indices) => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", shared.position);
-    g.setAttribute("normal", shared.normal);
-    g.setAttribute("uv", shared.uv);
-    g.setAttribute("acBakedLight", shared.baked);
-    g.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
-    return g;
-  };
-  const bakedMat = (rs) => {
-    const m = new THREE.MeshStandardMaterial({ map: pageTex(256) });
-    m.userData = { surfaceDid: 0x08000100 + rs, __pvwRsId: 0x06000100 + rs, __acBakedLight: true };
-    return m;
-  };
-  const cellMatrix = new THREE.Matrix4().makeTranslation(10, 20, 30);
-  const entriesFor = (n) => Array.from({ length: n }, (_, i) => ({
-    group: { geometry: cellGroupGeom([i * 3, i * 3 + 1, i * 3 + 2]), surfaceDid: 0x08000100 + i },
-    material: bakedMat(i),
-  }));
-
-  const LB = 0x40400000;
-  const CELL_A = (LB | 0x0100) >>> 0;
-  const CELL_B = (LB | 0x0101) >>> 0;
-  const okA = offerCellSurfacesToPools({}, {
-    lbKey: LB, cellId: CELL_A, cellMatrix, entries: entriesFor(2), receiveShadow: true,
-  });
-  check(Array.isArray(okA) && okA[0] === true && okA[1] === true,
-    "both of the cell's surfaces pool (and the caller learns which, so the rest still FUSE)");
-  check(cellsGroup.children.length > 0 && staticsGroup.children.length === 0,
-    "the envcell pools land in the CELLS group, never the statics group");
-  const indoor = new THREE.Layers();
-  indoor.set(1);
-  check(cellsGroup.children.every((m) => m.layers.test(indoor)),
-    "…on RENDER_LAYER_INDOOR, so the depth-clear split still isolates them");
-  const poolMesh = cellsGroup.children[0];
-  check(poolMesh.material.userData.__acBakedLight === true,
-    "the pooled interior's class material carries the vertex bake (dungeon lighting survives)");
-
-  // The instance matrix is the CELL's transform (surfaces have identity TRS).
-  {
-    const m = new THREE.Matrix4();
-    poolMesh.getMatrixAt(0, m);
-    const p = new THREE.Vector3().setFromMatrixPosition(m);
-    check(p.x === 10 && p.y === 20 && p.z === 30,
-      "a pooled surface carries the cell's mesh-group transform (cells-group space)");
-  }
-
-  // VISIBILITY. A freshly fed cell that the PVS does not want is hidden on the
-  // next tick; the delta then drives it exactly as `container.visible` does.
-  const reg = getPoolRegistry();
-  const cellIds = () => {
-    const memb = [...reg.tiles.values()][0];
-    return [...memb.values()][0];
-  };
-  const idsOf = (cellId) => {
-    for (const byTile of reg.tiles.values()) {
-      for (const mem of byTile.values()) {
-        const r = mem.cellRanges && mem.cellRanges.get(cellId);
-        if (r) return { mem, ids: r };
-      }
-    }
-    return null;
-  };
-  check(!!cellIds(), "the cell is resident in a tile membership record");
-  const a = idsOf(CELL_A);
-  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === true, "the LIVE flip left it visible…");
-  poolCellVisibilityTick(new Set());
-  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === false,
-    "…and the first PVS tick that does not want it hides it (pending-hide)");
-  poolCellVisibilityTick(new Set([CELL_A]));
-  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === true, "entering the render set shows it");
-  reg.beginFrame();
-  poolCellVisibilityTick(new Set([CELL_A]));
-  check(reg.census().events.mutationsThisFrame === 0,
-    "an UNCHANGED render set performs zero pool mutations (the parked-frame gate)");
-  poolCellVisibilityTick(new Set([CELL_A, CELL_B])); // CELL_B is not pooled yet
-  check(a.mem.pool.mesh.getVisibleAt(a.ids[0]) === true, "…and an unknown cell in the set is harmless");
-
-  // A second cell of the SAME landblock, fed while the first is visible.
-  offerCellSurfacesToPools({}, {
-    lbKey: LB, cellId: CELL_B, cellMatrix, entries: entriesFor(1), receiveShadow: true,
-  });
-  const b = idsOf(CELL_B);
-  check(!!b, "the second cell pools into the same tile");
-  poolCellVisibilityTick(new Set([CELL_A]));
-  check(b.mem.pool.mesh.getVisibleAt(b.ids[0]) === false,
-    "…and is hidden when it leaves the render set");
-
-  // REBUILD. Release-then-refeed is what keeps an LRU evict + re-approach from
-  // double-drawing every interior surface.
-  const beforeCells = envCellPoolCensus().cells;
-  const released = releasePooledCellsForLb(LB);
-  check(released > 0 && beforeCells === 2, "the LB's two pooled cells release together");
-  check(envCellPoolCensus().cells === 0, "…and leave the ledger empty");
-  check(reg.hasCell(CELL_A) === false && reg.hasCell(CELL_B) === false,
-    "…with no cell left in the registry index");
-  const okAgain = offerCellSurfacesToPools({}, {
-    lbKey: LB, cellId: CELL_A, cellMatrix, entries: entriesFor(2), receiveShadow: true,
-  });
-  check(okAgain[0] === true, "a rebuilt LB re-feeds cleanly");
-  const a2 = idsOf(CELL_A);
-  check(a2.ids.length === 2, "…with exactly its own instances (no doubling)");
-
-  // The census.
-  const cen = envCellPoolCensus();
-  check(cen.enabled === true && cen.lbs === 1 && cen.cells === 1, "the envcell census reads the ledger");
-  check(cen.surfacesPooled === 5 && cen.refusedBakedMissing === 0,
-    "…and counts every offered surface (2 + 1 + 2), with no bake refusals");
-
-  // A baked MATERIAL whose geometry lost the attribute is refused, never
-  // silently flattened (dungeon lighting is not negotiable).
-  const bad = [{ group: { geometry: triGeom(3), surfaceDid: 0x08000200 }, material: bakedMat(9) }];
-  const okBad = offerCellSurfacesToPools({}, { lbKey: LB, cellId: (LB | 0x0102) >>> 0, cellMatrix, entries: bad });
-  check(okBad[0] === false, "a baked member without the acBakedLight attribute does NOT pool");
-  check(envCellPoolCensus().refusedBakedMissing === 1, "…and the refusal is COUNTED");
-
-  _resetEnvCellPoolsForTest();
-  _resetDrawPoolsForTest();
-  _resetPoolWorldForTest();
-}
-
-// ── PART 24 — the portal-stencil interplay + the OFF arm ──────────────────
-
-console.log("PART 24: ?portalStencil disarms envcell pooling; OFF arm untouched");
-{
-  _resetEnvCellPoolsForTest();
-  _resetDrawPoolsForTest();
-  _resetPoolWorldForTest();
-  // OFF arm: no pooled world at all ⇒ every entry point is inert and returns
-  // the "nothing happened" answer the caller treats as legacy.
-  check(envCellPoolsActive("") === false, "with no pooled world, envcell pooling is inactive");
-  check(offerCellSurfacesToPools({}, { lbKey: 1, cellId: 1, entries: [{}] }) === null,
-    "…the offer returns null (the caller fuses exactly as today)");
-  check(poolCellVisibilityTick(new Set([1])) === 0, "…the visibility tick is a no-op");
-  check(releasePooledCellsForLb(1) === 0, "…and the release is a no-op");
-  check(envCellPoolCensus().enabled === false, "…and the census says so");
-
-  // ?portalStencil ON: the pooled world may be armed, but interiors stay
-  // legacy — a pool cannot follow a container onto RENDER_LAYER_PORTAL_CELL.
-  const staticsGroup = new THREE.Group();
-  initPoolWorld({ THREE, group: staticsGroup, search: `${ARMED_PRE}&portalStencil=on` });
-  check(poolWorldActive() === true, "the pooled world still arms (statics keep pooling)");
-  check(envCellPoolsActive(`${ARMED_PRE}&portalStencil=on`) === false,
-    "…but envcell pooling DISARMS under ?portalStencil, loudly");
-  check(envCellPoolCensus().enabled === false, "…and the census reports it disabled");
-  _resetEnvCellPoolsForTest();
   _resetDrawPoolsForTest();
   _resetPoolWorldForTest();
 }
