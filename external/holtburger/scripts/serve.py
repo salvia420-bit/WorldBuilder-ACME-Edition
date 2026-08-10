@@ -510,7 +510,7 @@ class _CompressCache:
                     self._bytes -= len(evicted)
 
 
-COMPRESS_CACHE = _CompressCache()
+COMPRESS_CACHE = _CompressCache()  # re-created in main() when --compress-cache-mb is given
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -735,6 +735,14 @@ def main() -> None:
     ap.add_argument("--allow-missing", action="store_true", help="serve even if a baked layer is absent")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
     ap.add_argument("--bind", default="127.0.0.1")
+    ap.add_argument("--compress-cache-mb", type=int,
+                    default=int(os.environ.get("SERVE_COMPRESS_CACHE_MB", "96")),
+                    help="byte budget (MB) for the compressed-body LRU. The 2026-08-10 "
+                         "tunnel-latency forensics measured a full cold-boot working set "
+                         "of ~160 MB encoded — the 96 MB default thrashes it; 256 keeps "
+                         "it resident so re-boots never re-compress (compression is "
+                         "~17 MB/s input on this class of laptop and was the dominant "
+                         "first-byte cost behind a tunnel).")
     ap.add_argument("--coi", action="store_true",
                     help="send COOP/COEP cross-origin-isolation headers (required for "
                          "SharedArrayBuffer / wasm threads; changes cross-origin loads)")
@@ -742,6 +750,11 @@ def main() -> None:
 
     global COI
     COI = args.coi
+
+    global COMPRESS_CACHE
+    if args.compress_cache_mb != 96:
+        COMPRESS_CACHE = _CompressCache(max_bytes=args.compress_cache_mb * 1024 * 1024)
+        print(f"[serve] compress cache: {args.compress_cache_mb} MB", file=sys.stderr)
 
     root = canonical_root()
     ensure_dist_symlink(root, args.allow_missing)
