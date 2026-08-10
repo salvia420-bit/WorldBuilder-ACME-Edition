@@ -15,7 +15,7 @@ change, so `pkg/` is unchanged: still the T13/T15 release artifact,
 
 | commit | what |
 |---|---|
-| `<commit-1>` | **The tier ladder + terrain mirror freeing.** `terrain_bc7.js`: `terrainT1024Mode`/`terrainLadderArmed` (4-state reader), `parseTerrainSlicePack` (HBP1 → PVW reader for the D-12.6 boot slice), t128 channel assembly, the wholesale in-place swap, `initTexture` staging, `promoteTerrainT1024Now`, `demoteTerrainUnderPressure`, source-keyed mirror release/rehydrate, `initTerrainTierLadder`, `_stats.ladder` counters; the level-major concatenation factored to `_mipsFromChannel`/`_mipsFromAssembled`/`_assembleChannelMips` (behaviour-identical, suite-pinned). New 105-check battery `harness/test_terrain_tier_ladder.mjs`. Registry rows for `__terrainBc7Stats().ladder.*`; both `terrainT1024` rows in `docs/url-flags.md`. |
+| `f8ee7508` | **The tier ladder + terrain mirror freeing.** `terrain_bc7.js`: `terrainT1024Mode`/`terrainLadderArmed` (4-state reader), `parseTerrainSlicePack` (HBP1 → PVW reader for the D-12.6 boot slice), t128 channel assembly, the wholesale in-place swap, `initTexture` staging, `promoteTerrainT1024Now`, `demoteTerrainUnderPressure`, source-keyed mirror release/rehydrate, `initTerrainTierLadder`, `_stats.ladder` counters; the level-major concatenation factored to `_mipsFromChannel`/`_mipsFromAssembled`/`_assembleChannelMips` (behaviour-identical, suite-pinned). New 105-check battery `harness/test_terrain_tier_ladder.mjs`. Registry rows for `__terrainBc7Stats().ladder.*`; both `terrainT1024` rows in `docs/url-flags.md`. |
 
 ## What the ladder is, in one paragraph
 
