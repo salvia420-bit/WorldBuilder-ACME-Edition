@@ -245,3 +245,28 @@ pub(crate) fn pack_geom_payload(model_id: u32) -> Option<Vec<u8>> {
         cell.borrow().as_ref().and_then(|pack| pack.geom_payload(model_id))
     })
 }
+
+/// RELIEF-IN-BAKE — relief-VARIANT-first GEOM read: the baked relief payload
+/// when this dist carries one for `model_id`, else the relief-free default.
+///
+/// The fallback is NOT a degradation. A variant row exists only for models
+/// the bake's relief profile actually changes; every other model's default
+/// row IS its relief geometry (the rails gate rejected it, or it had no
+/// railable edge). So a mixed read is still a coherent world — which is what
+/// makes the `?geomBundles` + relief combination shippable at all.
+pub(crate) fn pack_geom_payload_relief(model_id: u32) -> Option<Vec<u8>> {
+    PACK_SOURCE.with(|cell| {
+        let b = cell.borrow();
+        let pack = b.as_ref()?;
+        pack.geom_relief_payload(model_id)
+            .or_else(|| pack.geom_payload(model_id))
+    })
+}
+
+/// Diag: how many relief-variant rows the resident packs carry (0 on a dist
+/// baked without `--geom-relief` — the tell that the arm has nothing to do).
+pub(crate) fn pack_geom_relief_rows() -> usize {
+    PACK_SOURCE.with(|cell| {
+        cell.borrow().as_ref().map(|p| p.stats().geom_relief_rows).unwrap_or(0)
+    })
+}

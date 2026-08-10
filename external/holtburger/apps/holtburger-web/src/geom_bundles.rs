@@ -703,6 +703,33 @@ mod exports {
         Ok(bundle_to_js(buffer, descriptor))
     }
 
+    /// RELIEF-IN-BAKE — `assemble_model_geometry_relief(model_ids)`: identical
+    /// contract to [`assemble_model_geometry`], but each model is assembled
+    /// from its baked RELIEF variant when the resident dist carries one,
+    /// falling back to the relief-free default otherwise (that default IS the
+    /// relief geometry for models the profile leaves alone).
+    ///
+    /// A separate export rather than a parameter on the existing one: the OFF
+    /// arm's call site stays byte-identical, and a JS caller that never opts
+    /// in cannot accidentally pass a truthy variant flag.
+    #[wasm_bindgen]
+    pub fn assemble_model_geometry_relief(model_ids: &[u32]) -> Result<JsValue, JsValue> {
+        let mut geom = |id: u32| -> Option<Vec<u8>> {
+            crate::pack_source_glue::pack_geom_payload_relief(id)
+        };
+        let (buffer, descriptor) = super::assemble_models(&mut geom, model_ids)
+            .map_err(|e| JsValue::from_str(&e))?;
+        Ok(bundle_to_js(buffer, descriptor))
+    }
+
+    /// RELIEF-IN-BAKE diag: relief-variant rows in the resident packs. `0`
+    /// means this dist was baked without `--geom-relief` — the arm arms but
+    /// has nothing to serve, and every model reads its relief-free default.
+    #[wasm_bindgen]
+    pub fn geom_relief_rows_resident() -> usize {
+        crate::pack_source_glue::pack_geom_relief_rows()
+    }
+
     /// `assemble_envcell_geometry(landblock_id, cell_ids)` → same shape.
     /// Record reads go through the live composite source (pack-first, cached
     /// legacy fallback) — the caller runs AFTER `fetchEnvCellsInLandblock`
@@ -1647,5 +1674,240 @@ mod tests {
             static_objects: vec![],
             restriction_obj: None,
         }
+    }
+
+    // -----------------------------------------------------------------
+    // RELIEF-IN-BAKE — the consumer-side relief differ
+    // -----------------------------------------------------------------
+
+    /// Set/clear the wasm-instance relief config from a NATIVE test.
+    /// `set_gfx_relief` itself is `#[cfg(target_arch = "wasm32")]`, but the
+    /// three atomics it writes are crate-private statics reachable from here,
+    /// and `gfx_relief_config()` is compiled under `test` — so a native differ
+    /// can drive the exact same code path the browser drives.
+    fn set_relief_for_test(on: bool, level: u32, scale: f32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        crate::GFX_RELIEF_ON.store(on, Relaxed);
+        crate::GFX_RELIEF_LEVEL.store(level, Relaxed);
+        crate::GFX_RELIEF_SCALE.store(scale.to_bits(), Relaxed);
+        let _ = crate::model_tri_cache_clear_all();
+    }
+
+    /// Fixture differ: with relief ON at the shipped preset level, the BAKED
+    /// relief variant assembles to exactly what the RUNTIME triangulator
+    /// emits — same surfaces, same triangle multiset. This is the property
+    /// that lets the bundles arm stop force-disabling relief.
+    ///
+    /// Uses the same box the runtime rails accept (`ModelGate`: ≥ 4 m bbox,
+    /// ≥ 0.60 m median edge, ≥ 50 m² area, ≤ 25 % double-sided).
+    #[test]
+    fn differ_relief_variant_matches_runtime_relief() {
+        let gfx = relief_box_gfx();
+        let mut bytes = Vec::new();
+        gfx.pack(&mut std::io::Cursor::new(&mut bytes)).unwrap();
+        let src = FixtureSource(HashMap::from([(
+            ("eor/portal".to_string(), gfx.id),
+            bytes,
+        )]));
+
+        // Relief-free control: variant encode with a no-op profile is the
+        // default, and the default still matches the relief-OFF runtime.
+        set_relief_for_test(false, 0, 0.0);
+        let flat_tris = crate::triangulate_model(&src, gfx.id).unwrap_or_default();
+        let flat_payload = hbg1::encode_gfx_part(&gfx).expect("default encode");
+        {
+            let mut geom = |q: u32| (q == gfx.id).then(|| flat_payload.clone());
+            let (buffer, descriptor) = assemble_models(&mut geom, &[gfx.id]).unwrap();
+            assert_groups_equal(
+                runtime_groups(&flat_tris),
+                bundle_groups(&buffer, &descriptor["models"][0]),
+                "relief OFF control",
+            );
+        }
+
+        // Relief ON at the preset level (subdivLevel 0, scale 1.0).
+        set_relief_for_test(true, 0, 1.0);
+        let relief_tris = crate::triangulate_model(&src, gfx.id).unwrap_or_default();
+        set_relief_for_test(false, 0, 0.0);
+        assert!(
+            relief_tris.len() > flat_tris.len(),
+            "the runtime must add rails on this box ({} -> {})",
+            flat_tris.len(),
+            relief_tris.len()
+        );
+        let relief_payload =
+            hbg1::encode_gfx_part_relief(&gfx, &hbg1::ReliefBake::from_scale(1.0))
+                .expect("relief encode");
+        assert_ne!(relief_payload, flat_payload, "variant must differ");
+        let mut geom = |q: u32| (q == gfx.id).then(|| relief_payload.clone());
+        let (buffer, descriptor) = assemble_models(&mut geom, &[gfx.id]).unwrap();
+        assert_groups_equal(
+            runtime_groups(&relief_tris),
+            bundle_groups(&buffer, &descriptor["models"][0]),
+            "relief ON: baked variant vs runtime relief",
+        );
+
+        // …and the relief delta is exactly the rails: same surfaces, strictly
+        // more triangles, every relief-free triangle still present.
+        let flat_g = runtime_groups(&flat_tris);
+        let relief_g = runtime_groups(&relief_tris);
+        let mut keys: Vec<u32> = flat_g.keys().copied().collect();
+        keys.sort_unstable();
+        let mut rkeys: Vec<u32> = relief_g.keys().copied().collect();
+        rkeys.sort_unstable();
+        assert_eq!(keys, rkeys, "relief must not invent or drop a material");
+        for k in keys {
+            let f = &flat_g[&k];
+            let r = &relief_g[&k];
+            assert!(r.len() >= f.len(), "surface 0x{k:08X} lost triangles");
+            for t in f {
+                assert!(r.contains(t), "surface 0x{k:08X}: a base triangle moved");
+            }
+        }
+    }
+
+    /// A 6 m two-material box: clears `ModelGate` and has 12 convex 90°
+    /// edges, so OP1 fires. (Sibling of the codec's `big_box_gfx`; kept local
+    /// because these two crates' fixtures are independently maintained.)
+    fn relief_box_gfx() -> holtburger_dat::file_type::GfxObj {
+        use holtburger_common::{Quaternion, Vector3};
+        use holtburger_dat::graphics::{CVertexArray, Polygon, SWVertex, Vec2Duv};
+        let corners: [[f32; 3]; 8] = [
+            [0.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+            [6.0, 6.0, 0.0],
+            [0.0, 6.0, 0.0],
+            [0.0, 0.0, 6.0],
+            [6.0, 0.0, 6.0],
+            [6.0, 6.0, 6.0],
+            [0.0, 6.0, 6.0],
+        ];
+        let mut vertices = HashMap::new();
+        for (i, c) in corners.iter().enumerate() {
+            let d = [c[0] - 3.0, c[1] - 3.0, c[2] - 3.0];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            vertices.insert(
+                i as u16,
+                SWVertex {
+                    num_uvs: 1,
+                    origin: Vector3 { x: c[0], y: c[1], z: c[2] },
+                    normal: Vector3 { x: d[0] / l, y: d[1] / l, z: d[2] / l },
+                    uvs: vec![Vec2Duv { u: c[0] / 6.0, v: c[1] / 6.0 }],
+                },
+            );
+        }
+        let faces: [([i16; 4], i16); 6] = [
+            ([0, 3, 2, 1], 0),
+            ([4, 5, 6, 7], 0),
+            ([0, 1, 5, 4], 0),
+            ([1, 2, 6, 5], 1),
+            ([2, 3, 7, 6], 1),
+            ([3, 0, 4, 7], 1),
+        ];
+        let mut polygons = HashMap::new();
+        for (i, (ring, surf)) in faces.iter().enumerate() {
+            polygons.insert(
+                i as u16,
+                Polygon {
+                    num_pts: 4,
+                    stippling: 0,
+                    sides_type: 0,
+                    pos_surface: *surf,
+                    neg_surface: -1,
+                    vertex_ids: ring.to_vec(),
+                    pos_uv_indices: vec![0, 0, 0, 0],
+                    neg_uv_indices: vec![],
+                },
+            );
+        }
+        holtburger_dat::file_type::GfxObj {
+            id: 0x0100_0777,
+            flags: holtburger_common::properties::GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![0x0800_0010, 0x0800_0020],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons,
+            drawing_bsp: Some(holtburger_dat::physics::BspNode::Leaf(
+                holtburger_dat::physics::BspLeaf {
+                    index: 0,
+                    solid: 0,
+                    sphere: None,
+                    poly_ids: vec![],
+                },
+            )),
+            did_degrade: None,
+        }
+    }
+
+    /// Real-DAT relief differ (`--ignored`, needs ~/ac_base_dats). Every
+    /// sampled 0x01 GfxObj's BAKED relief variant must assemble to exactly
+    /// the runtime's relief triangulation.
+    ///
+    /// MUST run with `--test-threads=1`: it drives the crate-global relief
+    /// atomics, which every other triangulation test reads.
+    #[test]
+    #[ignore]
+    fn differ_real_dats_relief_variants() {
+        use holtburger_dat::DatDatabase;
+        let home = std::env::var("HOME").unwrap();
+        let portal = DatDatabase::new(&format!("{home}/ac_base_dats/client_portal.dat"))
+            .expect("open portal dat");
+        struct DatSrc(DatDatabase);
+        impl ResourceSource for DatSrc {
+            fn get_file_by_key(&self, key: ResourceKey<'_>) -> holtburger_dat::Result<Vec<u8>> {
+                self.0.get_file(key.file_id)
+            }
+            fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, ns: &str) -> bool {
+                ns == "eor/portal"
+            }
+        }
+        let ids: Vec<u32> = portal.files.keys().copied().collect();
+        let src = DatSrc(portal);
+        let profile = hbg1::ReliefBake::from_scale(1.0);
+
+        let mut checked = 0usize;
+        let mut railed = 0usize;
+        let mut added_tris = 0usize;
+        for &id in &ids {
+            if (id >> 24) as u8 != 0x01 || checked >= 120 {
+                continue;
+            }
+            let Ok(bytes) = src.0.get_file(id) else { continue };
+            let Ok(gfx) = holtburger_dat::file_type::GfxObj::unpack(
+                &mut std::io::Cursor::new(&bytes),
+            ) else {
+                continue;
+            };
+            let flat = hbg1::encode_gfx_part(&gfx).expect("default encode");
+            let variant = hbg1::encode_gfx_part_relief(&gfx, &profile).expect("relief encode");
+            set_relief_for_test(true, 0, 1.0);
+            let tris = crate::triangulate_model(&src, id).unwrap_or_default();
+            set_relief_for_test(false, 0, 0.0);
+            let flat_tris = crate::triangulate_model(&src, id).unwrap_or_default();
+            if variant != flat {
+                railed += 1;
+                added_tris += tris.len().saturating_sub(flat_tris.len());
+            }
+            let payload = if variant != flat { &variant } else { &flat };
+            let mut geom = |q: u32| (q == id).then(|| payload.clone());
+            let (buffer, descriptor) = assemble_models(&mut geom, &[id]).unwrap();
+            assert_groups_equal(
+                runtime_groups(&tris),
+                bundle_groups(&buffer, &descriptor["models"][0]),
+                &format!("relief gfx 0x{id:08X}"),
+            );
+            checked += 1;
+        }
+        println!(
+            "relief differ: {checked} GfxObjs EXACT vs runtime relief; \
+             {railed} carry a variant row (+{added_tris} tris)"
+        );
+        assert!(checked >= 100, "relief differ needs ≥ 100 models (got {checked})");
+        assert!(railed > 0, "no sampled model gained rails — check ModelGate");
     }
 }

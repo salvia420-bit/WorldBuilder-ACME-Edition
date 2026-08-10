@@ -84,6 +84,9 @@ pub mod section_kind {
     pub const GEOM: u16 = 0x09;
     pub const TEXREF: u16 = 0x0A;
     pub const PVW: u16 = 0x0B;
+    /// RELIEF-IN-BAKE — relief VARIANT geometry ("GEOMR"), same row layout as
+    /// `GEOM`. Absent on every pre-relief dist.
+    pub const GEOM_RELIEF: u16 = 0x0C;
 }
 
 pub mod codec {
@@ -479,6 +482,8 @@ struct ResidentPack {
     texref_keys: Vec<u32>,
     /// T13 (ST3): GEOM model ids this pack registered (first-copy winners).
     geom_keys: Vec<u32>,
+    /// RELIEF-IN-BAKE: GEOMR (relief variant) model ids this pack registered.
+    geom_relief_keys: Vec<u32>,
 }
 
 /// PackStore budgets + floor (pass 6 S3, all [A] — re-classed by the first
@@ -505,6 +510,13 @@ struct PackStoreInner {
     /// sections, decompressed at admission). Registered for the SYNC
     /// `assemble_model_geometry` / `assemble_envcell_geometry` reads.
     geom: HashMap<u32, RecordLoc>,
+    /// RELIEF-IN-BAKE: model id → HBG1 relief-VARIANT payload range (kind
+    /// 0x0C `GEOMR` sections). Sparse by design — a variant row exists only
+    /// for the models the bake's relief profile actually changes, so a miss
+    /// here means "relief is a no-op for this model, read the default row",
+    /// NOT "content missing". Never consulted unless the consumer's
+    /// DEFAULT-OFF relief arm is live.
+    geom_relief: HashMap<u32, RecordLoc>,
     /// Interned namespace strings across packs (2 today; format allows 255/pack).
     ns_names: Vec<String>,
     /// Total resident pack FILE bytes (scale: as-fetched, compressed).
@@ -532,6 +544,7 @@ impl Default for PackStoreInner {
             pvw: HashMap::new(),
             texref: HashMap::new(),
             geom: HashMap::new(),
+            geom_relief: HashMap::new(),
             ns_names: Vec::new(),
             pack_file_bytes: 0,
             section_bytes: 0,
@@ -578,6 +591,9 @@ pub struct PackSourceStats {
     pub texref_rows: usize,
     /// T13 (ST3): registered HBG1 GEOM payloads (additive field).
     pub geom_rows: usize,
+    /// RELIEF-IN-BAKE: registered relief-VARIANT payloads (additive field).
+    /// Always ≤ `geom_rows`; 0 on a dist baked without `--geom-relief`.
+    pub geom_relief_rows: usize,
 }
 
 /// One `enforce_budget` pass's outcome.
@@ -801,6 +817,29 @@ impl PackSource {
             own_sections.push(body);
         }
 
+        // RELIEF-IN-BAKE — GEOMR variant payloads (kind 0x0C), same row shape
+        // and same first-copy-wins rule. Absent on every pre-relief dist, so
+        // this loop is a no-op there (forward/backward compatible).
+        let mut own_geom_relief_keys: Vec<u32> = Vec::new();
+        if let Some(payload) = pack.section_raw(section_kind::GEOM_RELIEF)? {
+            let rows = holtburger_dat::hbg1::parse_geom_section(&payload)?;
+            let body = Arc::new(payload);
+            for (id, enc, off, size) in rows {
+                if enc != holtburger_dat::hbg1::ENCODING_HBG1 {
+                    continue;
+                }
+                if !inner.geom_relief.contains_key(&id) {
+                    own_geom_relief_keys.push(id);
+                    inner.geom_relief.insert(
+                        id,
+                        RecordLoc { section: body.clone(), offset: off, len: size },
+                    );
+                }
+            }
+            inner.section_bytes += body.len();
+            own_sections.push(body);
+        }
+
         inner.pack_file_bytes += pack.bytes.len();
         inner.resident.insert(
             hash16,
@@ -815,6 +854,7 @@ impl PackSource {
                 pvw_keys: own_pvw_keys,
                 texref_keys: own_texref_keys,
                 geom_keys: own_geom_keys,
+                geom_relief_keys: own_geom_relief_keys,
             },
         );
         Ok(InsertStats { kind: pack.kind, records_registered: registered, duplicate: false })
@@ -962,6 +1002,16 @@ impl PackSource {
                     inner.geom.remove(id);
                 }
             }
+            // RELIEF-IN-BAKE: same first-copy unregistration for variants.
+            for id in &p.geom_relief_keys {
+                let owned = match inner.geom_relief.get(id) {
+                    Some(loc) => p.sections.iter().any(|s| Arc::ptr_eq(s, &loc.section)),
+                    None => false,
+                };
+                if owned {
+                    inner.geom_relief.remove(id);
+                }
+            }
             inner.evictions += 1;
             report.evicted += 1;
         }
@@ -1022,6 +1072,19 @@ impl PackSource {
             .map(|loc| loc.section[loc.offset..loc.offset + loc.len].to_vec())
     }
 
+    /// RELIEF-IN-BAKE — the relief-VARIANT payload for one 0x01 model id, or
+    /// `None` when this dist carries no variant for it. `None` is the NORMAL
+    /// answer for a model relief leaves alone (and for every pre-relief
+    /// dist): the caller reads the default row instead. Same sync contract as
+    /// [`Self::geom_payload`].
+    pub fn geom_relief_payload(&self, model_id: u32) -> Option<Vec<u8>> {
+        let inner = self.inner.lock().expect("pack store mutex poisoned");
+        inner
+            .geom_relief
+            .get(&model_id)
+            .map(|loc| loc.section[loc.offset..loc.offset + loc.len].to_vec())
+    }
+
     /// Every registered `(namespace, file_id)` — diag + the region differ
     /// test's iteration surface. O(records); not for per-frame use.
     pub fn record_keys(&self) -> Vec<(String, u32)> {
@@ -1064,6 +1127,7 @@ impl PackSource {
             pvw_rows: inner.pvw.len(),
             texref_rows: inner.texref.len(),
             geom_rows: inner.geom.len(),
+            geom_relief_rows: inner.geom_relief.len(),
         }
     }
 
@@ -1465,6 +1529,61 @@ mod tests {
         assert!(rep.evicted >= 1, "geom carrier evicts once aged: {rep:?}");
         assert_eq!(src.geom_payload(0x0100_0001), None);
         assert_eq!(src.stats().geom_rows, 0);
+    }
+
+    /// RELIEF-IN-BAKE: GEOMR rows register beside their defaults, serve sync
+    /// and independently, are SPARSE (a miss means "relief is a no-op here",
+    /// not "content missing"), and unregister with their owner.
+    #[test]
+    fn geom_relief_variants_register_sparsely_and_evict() {
+        let mut default_entries = std::collections::BTreeMap::new();
+        default_entries.insert(0x0100_0001u32, vec![0xABu8; 10]);
+        default_entries.insert(0x0100_0002u32, vec![0xCDu8; 6]);
+        // Only model ...0001 gains relief — ...0002 has no variant row.
+        let mut variant_entries = std::collections::BTreeMap::new();
+        variant_entries.insert(0x0100_0001u32, vec![0xEEu8; 14]);
+        let pack = build_pack(
+            pack_kind::META_SHARED,
+            0,
+            &["eor/portal"],
+            &[
+                (
+                    section_kind::GEOM,
+                    holtburger_dat::hbg1::build_geom_section(&default_entries),
+                ),
+                (
+                    section_kind::GEOM_RELIEF,
+                    holtburger_dat::hbg1::build_geom_section(&variant_entries),
+                ),
+            ],
+        );
+        let keeper = build_pack(pack_kind::CORE, 0, &["eor/portal"], &[]);
+        let (ha, hk) = (sha_trunc16(&pack), sha_trunc16(&keeper));
+        let src = PackSource::new(build_index(&[
+            PackTableEntry { hash16: ha, size: pack.len() as u32, kind: pack_kind::META_SHARED, meta: 0 },
+            PackTableEntry { hash16: hk, size: keeper.len() as u32, kind: pack_kind::CORE, meta: 0 },
+        ]));
+        src.insert_pack(ha, pack).expect("insert");
+        src.insert_pack(hk, keeper).expect("insert keeper");
+        // Defaults unaffected by the variant section's presence.
+        assert_eq!(src.geom_payload(0x0100_0001).unwrap(), vec![0xAB; 10]);
+        assert_eq!(src.geom_payload(0x0100_0002).unwrap(), vec![0xCD; 6]);
+        assert_eq!(src.geom_relief_payload(0x0100_0001).unwrap(), vec![0xEE; 14]);
+        assert_eq!(
+            src.geom_relief_payload(0x0100_0002),
+            None,
+            "sparse by design: no variant row = relief is a no-op for this model"
+        );
+        let st = src.stats();
+        assert_eq!((st.geom_rows, st.geom_relief_rows), (2, 1));
+
+        src.set_budgets(1, 1);
+        src.set_floor_ms(5_000.0);
+        src.pin_pack(&hk);
+        let _ = src.enforce_budget(100_000.0);
+        assert!(src.enforce_budget(200_000.0).evicted >= 1);
+        assert_eq!(src.geom_relief_payload(0x0100_0001), None);
+        assert_eq!(src.stats().geom_relief_rows, 0);
     }
 
     #[test]
