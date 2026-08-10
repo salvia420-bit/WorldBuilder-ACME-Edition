@@ -159,6 +159,7 @@ fn ci_options(out: &Path, extra_pvw: Option<PathBuf>) -> PackBakeOptions {
         verify_closure: true,
         verify_deterministic: true,
         geom_relief_scale: None,
+        require_page_dims: false,
     }
 }
 
@@ -670,4 +671,209 @@ fn bake_ci_relief_variants() {
         out_root.join("relief-bake-report.json"),
     )
     .unwrap();
+}
+
+// ===========================================================================
+// PAGE-RESAMPLE (T22 D2) — the bake-side leg.
+// ===========================================================================
+
+/// Derived page-dim artifacts (never the source tree — I5).
+const PAGE_ROOT: &str = "/mnt/wbterminal2/reeng/page-resample";
+/// The page-dim XUBC7 ingest farm arm B bakes against. Produced out of band
+/// by `page-resample` + the UNCHANGED per-member `basisu` command; the recipe
+/// is in `<PAGE_ROOT>/PROVENANCE.md` and in the task report.
+const XU7_PAGES: &str = "/mnt/wbterminal2/reeng/page-resample/xu7-ingest-pages";
+
+/// Every TEXREF rsId in the emitted packs that declares a full tier, plus the
+/// on/off-page split as the ROWS say it (not as the report says it).
+fn texref_page_split(pack_bytes: &[Vec<u8>]) -> (BTreeSet<u32>, usize, usize) {
+    use holtburger_tools::pack_format::{parse_texref, tier_bits};
+    let mut with_full = BTreeSet::new();
+    let mut rows: BTreeMap<u32, u8> = BTreeMap::new();
+    for bytes in pack_bytes {
+        let reader = HbpReader::parse(bytes).expect("re-parse pack");
+        let Some(payload) = reader.section(section_kind::TEXREF).expect("texref section") else {
+            continue;
+        };
+        for r in parse_texref(&payload).expect("parse texref") {
+            if r.tier_bits & tier_bits::FULL_XU7_PRESENT != 0 {
+                with_full.insert(r.rs_id);
+            }
+            rows.insert(r.rs_id, r.tier_bits);
+        }
+    }
+    let on = rows.values().filter(|b| *b & tier_bits::FULL_PAGE_DIMS != 0).count();
+    (with_full, on, rows.len() - on)
+}
+
+/// Re-bake the SAME bounded region as `bake_ci_bounded_region` and score the
+/// PAGE contract (T22 D2 / T00 re-key §4).
+///
+/// Arm A — the LIVE corpus: censuses `texref_on_page` / `texref_off_page`,
+/// proves the emitter invariant (`--verify-closure` now also runs
+/// `verify_texref_pages`), and writes the region's full-tier rsId list so the
+/// derived tier can be produced for exactly this region.
+///
+/// Arm B — the PAGE-RESAMPLED corpus at `XU7_PAGES`: the same bake with
+/// `require_page_dims`, which must come back with `texref_off_page = 0`.
+/// That is the number this whole task exists to move, measured end to end
+/// through real KTX2 headers rather than asserted.
+#[test]
+#[ignore = "needs ~/ac_base_dats + /mnt/wbterminal2 + a page-resampled xu7 \
+            ingest (see the task report); run with --ignored --nocapture"]
+fn bake_ci_page_resample_region() {
+    assert!(Path::new(PORTAL_DAT).is_file(), "missing {PORTAL_DAT}");
+    let root = PathBuf::from(PAGE_ROOT);
+    std::fs::create_dir_all(&root).expect("create {PAGE_ROOT}");
+
+    // ---- arm A: the live corpus -----------------------------------------
+    let out_a = root.join("bake-live");
+    let _ = std::fs::remove_dir_all(&out_a);
+    write_prelude_manifest(&out_a);
+    let opts_a = ci_options(&out_a, None);
+    let report_a = emit_packs(&opts_a).expect("arm A bake");
+    assert!(report_a.closure_verified, "arm A must run the emitter checks");
+    let packs_a = read_packs(&out_a);
+    let (full_ids, rows_on_a, rows_off_a) = texref_page_split(&packs_a);
+    println!(
+        "arm A (live corpus): {} TEXREF rows — on-page {} / off-page {} \
+         (full-tier {} + legacy-only {}); {} carry a full tier; \
+         full-tier dims differ from the DAT record for {}",
+        report_a.texref_rows,
+        report_a.texref_on_page,
+        report_a.texref_off_page,
+        report_a.texref_off_page_full_tier,
+        report_a.texref_off_page_legacy_only,
+        full_ids.len(),
+        report_a.texref_full_tier_dims_differ,
+    );
+    for ex in report_a.texref_off_page_examples.iter().take(8) {
+        println!("  off-page e.g. {ex}");
+    }
+    // The report and the emitted BYTES must agree — the census is only worth
+    // anything if it counts the rows that actually shipped.
+    assert_eq!(report_a.texref_on_page, rows_on_a, "report vs rows: on-page");
+    assert_eq!(report_a.texref_off_page, rows_off_a, "report vs rows: off-page");
+    assert_eq!(report_a.texref_on_page + report_a.texref_off_page, report_a.texref_rows);
+    assert!(report_a.texref_off_page > 0, "the live corpus is the PRE-resample state");
+
+    let ids_file = root.join("region-texref-xu7-ids.txt");
+    let listing: String =
+        full_ids.iter().map(|id| format!("0x{id:08X}\n")).collect::<Vec<_>>().concat();
+    std::fs::write(&ids_file, listing).expect("write region id list");
+    println!("wrote {} full-tier rsIds to {ids_file:?}", full_ids.len());
+
+    // ---- arm B: the page-resampled corpus -------------------------------
+    assert!(
+        Path::new(XU7_PAGES).is_dir(),
+        "arm B needs a page-resampled xu7 ingest at {XU7_PAGES}.\n\
+         Produce it with:\n  \
+         page-resample --src <upscale corpus> --out <pages> --ids {ids_file:?}\n  \
+         basisu -xubc7 -quality <q> -mipmap -output_file <rsId>.ktx2 <rsId>.png\n\
+         (see PROVENANCE.md in the derived tier)"
+    );
+    let out_b = root.join("bake-pages");
+    let _ = std::fs::remove_dir_all(&out_b);
+    write_prelude_manifest(&out_b);
+    let mut opts_b = ci_options(&out_b, None);
+    opts_b.tex_xu7 = Some(PathBuf::from(XU7_PAGES));
+    opts_b.require_page_dims = true;
+    let report_b = emit_packs(&opts_b).expect(
+        "arm B bake must succeed — a failure here IS the gate reporting off-page members",
+    );
+    let packs_b = read_packs(&out_b);
+    let (full_ids_b, rows_on_b, rows_off_b) = texref_page_split(&packs_b);
+    println!(
+        "arm B (page-resampled): {} TEXREF rows — on-page {} / off-page {} \
+         (full-tier {} + legacy-only {}); {} carry a full tier; \
+         full-tier dims differ from the DAT record for {}",
+        report_b.texref_rows,
+        report_b.texref_on_page,
+        report_b.texref_off_page,
+        report_b.texref_off_page_full_tier,
+        report_b.texref_off_page_legacy_only,
+        full_ids_b.len(),
+        report_b.texref_full_tier_dims_differ,
+    );
+    // THE GATE: every member the compressed path can actually deliver is on
+    // its page. The legacy-only remainder is reported, never folded away —
+    // it has no full tier to resample and is the producer swap's problem.
+    assert_eq!(
+        report_b.texref_off_page_full_tier, 0,
+        "GATE: needsResample must read 0 over every full-tier member of the region"
+    );
+    assert_eq!(
+        report_b.texref_off_page, report_b.texref_off_page_legacy_only,
+        "the only off-page rows left must be the legacy-lane ones"
+    );
+    assert_eq!(
+        report_b.texref_off_page_legacy_only, report_a.texref_off_page_legacy_only,
+        "the legacy-lane population must not move — the resample does not touch it"
+    );
+    assert_eq!(rows_off_b, report_b.texref_off_page, "emitted rows vs report: off-page");
+    assert_eq!(report_b.texref_on_page, rows_on_b);
+    assert!(
+        report_b.texref_on_page > report_a.texref_on_page,
+        "the resample must have moved members ONTO their pages"
+    );
+    assert_eq!(
+        report_b.texref_rows, report_a.texref_rows,
+        "the region's TEXREF population must not move — only its dims"
+    );
+    assert_eq!(
+        full_ids_b, full_ids,
+        "arm B must cover exactly the same full-tier rsIds as arm A"
+    );
+    assert!(
+        report_b.texref_full_tier_dims_differ >= report_a.texref_off_page,
+        "every member that was off-page must now declare RESAMPLED dims"
+    );
+    // Coverage is not allowed to regress in the interesting direction.
+    assert_eq!(
+        report_b.texref_missing_pvw, report_a.texref_missing_pvw,
+        "preview coverage must be unchanged by the resample"
+    );
+
+    std::fs::write(
+        root.join("page-resample-bake-ci.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "region": report_a.scope,
+            "live":  { "texrefRows": report_a.texref_rows,
+                       "onPage": report_a.texref_on_page,
+                       "offPage": report_a.texref_off_page,
+                       "offPageFullTier": report_a.texref_off_page_full_tier,
+                       "offPageLegacyOnly": report_a.texref_off_page_legacy_only,
+                       "fullTierDimsDiffer": report_a.texref_full_tier_dims_differ,
+                       "fullTierIds": full_ids.len() },
+            "pages": { "texrefRows": report_b.texref_rows,
+                       "onPage": report_b.texref_on_page,
+                       "offPage": report_b.texref_off_page,
+                       "offPageFullTier": report_b.texref_off_page_full_tier,
+                       "offPageLegacyOnly": report_b.texref_off_page_legacy_only,
+                       "fullTierDimsDiffer": report_b.texref_full_tier_dims_differ },
+        }))
+        .unwrap(),
+    )
+    .expect("write leg summary");
+}
+
+/// Every emitted pack's bytes. Packs live under `packs/<2-hex>/<hex>.hbp`
+/// (two-level CAS layout), so this walks rather than lists.
+fn read_packs(out: &Path) -> Vec<Vec<u8>> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().and_then(|x| x.to_str()) == Some("hbp") {
+                out.push(p);
+            }
+        }
+    }
+    let mut names = Vec::new();
+    walk(&out.join("packs"), &mut names);
+    names.sort();
+    assert!(!names.is_empty(), "no .hbp under {:?}/packs", out);
+    names.iter().map(|p| std::fs::read(p).unwrap()).collect()
 }

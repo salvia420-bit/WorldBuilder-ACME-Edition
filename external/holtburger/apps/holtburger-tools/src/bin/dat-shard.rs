@@ -175,6 +175,20 @@ struct Args {
     /// flag the bake is byte-identical to a pre-RELIEF-IN-BAKE bake.
     #[arg(long, value_name = "SCALE")]
     geom_relief: Option<f32>,
+
+    // ---- PAGE-RESAMPLE ------------------------------------------------
+
+    /// With `--emit-packs`: FAIL the bake when any TEXREF'd rsId with a
+    /// compressed full tier is stored OFF its array page — i.e. when its
+    /// declared dims are not the square pow2 page (256²/512²/1024²/2048²)
+    /// the pool class key allocates for its class (T22 D2 / T00 re-key
+    /// 2026-08-09 §4). This is the acceptance gate for a bake over a
+    /// corpus that has been through `page-resample`; without it the bake
+    /// only CENSUSES the position (`texref_on_page` / `texref_off_page` in
+    /// `pack-report.json`), which is the right behaviour for every
+    /// pre-resample corpus.
+    #[arg(long)]
+    require_page_dims: bool,
 }
 
 impl Args {
@@ -230,6 +244,7 @@ impl Args {
             verify_closure: self.verify_closure,
             verify_deterministic: self.verify_deterministic,
             geom_relief_scale: self.geom_relief,
+            require_page_dims: self.require_page_dims,
         })
     }
 }

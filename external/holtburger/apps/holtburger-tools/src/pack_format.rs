@@ -447,6 +447,18 @@ pub mod tier_bits {
     pub const FULL_LOSSY: u8 = 1 << 2;
     pub const OFFLINE_NRA: u8 = 1 << 3; // reserved, 0 in v1
     pub const TEXCHAN_SIDECAR: u8 = 1 << 4; // reserved, 0 in v1
+    /// PAGE-RESAMPLE (T22 D2): the DECLARED dims in this row's `dims` byte
+    /// already ARE the member's array-page dims — a square pow2 page in
+    /// [256², 2048²]. Set by the bake, never by hand.
+    ///
+    /// This is the marker that makes the pool class key's page tier an
+    /// ALLOCATION key rather than only a census key: with the bit set, the
+    /// member can be written into ANY layer of its class's one
+    /// `texStorage3D` allocation with no subrect and no re-home, because
+    /// its stored payload is exactly page-sized. With it clear, the member
+    /// is off-page (`needsResample()` true on the client) and the bake
+    /// counts it in `texref_off_page`.
+    pub const FULL_PAGE_DIMS: u8 = 1 << 5;
 }
 
 pub const PVW_ORD_SELF: u16 = 0xFFFE;

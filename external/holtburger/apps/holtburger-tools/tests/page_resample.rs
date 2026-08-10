@@ -342,3 +342,87 @@ fn cli_derives_a_page_dim_tier_with_provenance() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// GROUND TRUTH, and the reason the bake must read the KTX2 header rather
+/// than the DAT record: the shipped full tier is the UPSCALE corpus, whose
+/// members are 4x the retail texture in each axis. A TEXREF row derived from
+/// the DAT record therefore describes a texture the client never receives —
+/// two page tiers below the one its class actually allocates.
+#[test]
+#[ignore = "needs ~/ac_base_dats + /mnt/wbterminal2/xu7-ingest"]
+fn full_tier_is_four_x_the_dat_record_dims() {
+    use holtburger_dat::DatDatabase;
+    use holtburger_dat::file_type::Texture;
+    let portal = "/home/wbterminal/ac_base_dats/client_portal.dat";
+    let ingest = std::path::Path::new("/mnt/wbterminal2/xu7-ingest");
+    assert!(std::path::Path::new(portal).is_file(), "missing {portal}");
+    assert!(ingest.is_dir(), "missing {ingest:?}");
+    let db = DatDatabase::new(portal).expect("open portal dat");
+
+    let mut checked = 0usize;
+    let mut tier_shift = 0usize;
+    let mut same = Vec::new();
+    let mut disagreements = Vec::new();
+    let mut unparsed = Vec::new();
+    let mut entries: Vec<_> = std::fs::read_dir(ingest)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("ktx2"))
+        .collect();
+    entries.sort();
+    entries.truncate(400); // deterministic slice — the whole corpus is 3,985
+    for path in entries {
+        let stem = path.file_stem().unwrap().to_str().unwrap();
+        let id = u32::from_str_radix(stem.trim_start_matches("0x"), 16).unwrap();
+        let head = std::fs::read(&path).unwrap();
+        let (kw, kh) = (
+            u32::from_le_bytes(head[20..24].try_into().unwrap()),
+            u32::from_le_bytes(head[24..28].try_into().unwrap()),
+        );
+        let Ok(bytes) = db.get_file(id) else { continue };
+        match Texture::unpack(&bytes) {
+            Ok(t) => {
+                checked += 1;
+                let (dw, dh) = (t.width.max(0) as u32, t.height.max(0) as u32);
+                if (dw, dh) == (kw, kh) {
+                    same.push(format!("0x{id:08X}: {dw}x{dh}"));
+                } else if (dw * 4, dh * 4) != (kw, kh) {
+                    disagreements.push(format!(
+                        "0x{id:08X}: dat {dw}x{dh}, ktx2 {kw}x{kh} — neither equal nor 4x"
+                    ));
+                }
+                // Whatever the ratio, the PAGE the class allocates is the one
+                // the FULL TIER implies; keying on the DAT record would put
+                // this member in the wrong class.
+                if plan_page(dw, dh).map(|p| p.page_w) != plan_page(kw, kh).map(|p| p.page_w) {
+                    tier_shift += 1;
+                }
+            }
+            Err(e) => unparsed.push(format!("0x{id:08X}: {e}")),
+        }
+    }
+    println!(
+        "DAT-vs-FULL-TIER over {checked} records: {} exactly 4x / {} equal / {} other; \
+         page tier would SHIFT for {tier_shift} if keyed on the DAT record",
+        checked - same.len() - disagreements.len(),
+        same.len(),
+        disagreements.len()
+    );
+    for u in unparsed.iter().take(5) {
+        println!("  unparsed {u}");
+    }
+    for d in disagreements.iter().take(5) {
+        println!("  {d}");
+    }
+    assert!(checked > 0, "no DAT texture record parsed at all");
+    assert!(unparsed.is_empty(), "DAT texture records must parse: {unparsed:?}");
+    assert!(
+        disagreements.is_empty(),
+        "the shipped corpus is a uniform 4x upscale; anything else needs a look"
+    );
+    assert!(
+        tier_shift > 0,
+        "if no tier shifted, the bake reading the DAT record would be harmless — \
+         it is not, and this test is the evidence"
+    );
+}

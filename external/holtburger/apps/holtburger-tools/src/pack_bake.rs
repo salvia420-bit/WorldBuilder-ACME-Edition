@@ -146,6 +146,12 @@ pub struct PackBakeOptions {
     /// (`GEOMR`) sections for the `set_gfx_relief(true, 0, scale)` profile.
     /// `None` (the default) leaves every emitted byte exactly as it was.
     pub geom_relief_scale: Option<f32>,
+    /// PAGE-RESAMPLE (T22 D2) — fail the bake when any TEXREF'd rsId with a
+    /// full tier is stored OFF its array page. This is the gate for a bake
+    /// over a page-resampled corpus; it is OFF by default because every
+    /// pre-resample corpus legitimately fails it (the census counters in the
+    /// report tell you where you stand either way).
+    pub require_page_dims: bool,
 }
 
 /// Per-class, per-tier byte accounting row (report).
@@ -197,6 +203,30 @@ pub struct PackBakeReport {
     /// rsIds that still need the offline xu7 deriver (xu7 present, no
     /// HBC7 source to slice) — input list for `derive-pvw-xu7.mjs`.
     pub pvw_wanted_from_xu7: Vec<String>,
+    /// PAGE-RESAMPLE census (T22 D2). `texref_on_page` carries the
+    /// `FULL_PAGE_DIMS` tier bit; `texref_off_page` is the bake-side reading
+    /// of the client's `needsResample()` over EVERY TEXREF row.
+    pub texref_on_page: usize,
+    pub texref_off_page: usize,
+    /// Off-page rows that HAVE a compressed full tier — the subset a
+    /// resampled corpus can fix, and the one `require_page_dims` gates on.
+    ///
+    /// The remainder (`texref_off_page - texref_off_page_full_tier`) is the
+    /// LEGACY-LANE population: rsIds with no full tier at all, whose pixels
+    /// come from the DAT record, at DAT dims, through the legacy decode.
+    /// No corpus re-encode moves them; they need either full-tier coverage
+    /// or an explicit exclusion in the pool producer. Counted here rather
+    /// than folded away, because a gate that quietly ignores a population is
+    /// how a "0" stops meaning anything.
+    pub texref_off_page_full_tier: usize,
+    pub texref_off_page_legacy_only: usize,
+    /// Off-page rsIds, `0xID WxH→PxP`, capped — enough to diagnose a
+    /// coverage hole without turning the report into a corpus listing.
+    pub texref_off_page_examples: Vec<String>,
+    /// TEXREF'd rsIds whose FULL-TIER (KTX2) dims differ from the DAT
+    /// record's. Before PAGE-RESAMPLE this read 0 (the encode does not
+    /// resample); after it, it is the resampled population.
+    pub texref_full_tier_dims_differ: usize,
     /// POST-coverage boot-ring re-score (F-11.16).
     pub ring_tiles: usize,
     pub ring_tile_pack_bytes: u64,
@@ -395,14 +425,34 @@ pub fn slice_hbc7_to_cap(bytes: &[u8], cap: u32) -> Option<Vec<u8>> {
     }
 }
 
-fn ceil_log2(v: u32) -> u8 {
-    if v <= 1 { 0 } else { (32 - (v - 1).leading_zeros()) as u8 }
-}
-
 /// TEXREF `dims` byte: `(ceil_log2(w) << 4) | ceil_log2(h)`. Exact for
 /// pow2 dims (the corpus); non-pow2 rounds up (bucket keying only).
+///
+/// Delegates to `page_resample::dims_byte_of` so the byte the pack writes
+/// and the arithmetic the pool class key reads cannot drift apart.
 pub fn dims_byte(w: u32, h: u32) -> u8 {
-    (ceil_log2(w) << 4) | (ceil_log2(h) & 0x0F)
+    crate::page_resample::dims_byte_of(w, h)
+}
+
+/// KTX2 file identifier (spec §3.1). The bake treats XUBC7 payloads as
+/// opaque, but the HEADER's declared dims are not opaque — they are what the
+/// client's TEXREF row must publish, because the full tier (not the DAT
+/// record) is what actually lands in the texture array.
+const KTX2_IDENTIFIER: [u8; 12] =
+    [0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// Declared `(width, height)` of an XUBC7 KTX2 payload, or `None` when the
+/// file is absent / not a KTX2. Reads 32 bytes, never the payload.
+fn ktx2_dims(path: &Path) -> Option<(u32, u32)> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 32];
+    f.read_exact(&mut head).ok()?;
+    if head[..12] != KTX2_IDENTIFIER {
+        return None;
+    }
+    let w = u32::from_le_bytes(head[20..24].try_into().unwrap());
+    let h = u32::from_le_bytes(head[24..28].try_into().unwrap());
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 // ---------------------------------------------------------------------------
@@ -488,10 +538,18 @@ fn read_hbc7_dir_entry(dir: Option<&Path>, rs_id: u32) -> Option<Vec<u8>> {
     None
 }
 
-fn xu7_present(dir: Option<&Path>, rs_id: u32) -> bool {
-    let Some(dir) = dir else { return false };
-    dir.join(format!("0x{rs_id:08X}.ktx2")).is_file()
-        || dir.join(format!("{rs_id:08X}.ktx2")).is_file()
+/// Full-tier presence AND declared dims. `Some((0, 0))` means "the KTX2 is
+/// there but its header did not parse" — presence is still true (the client
+/// can fetch it), the dims just fall back to the DAT record's.
+fn xu7_entry(dir: Option<&Path>, rs_id: u32) -> Option<(u32, u32)> {
+    let dir = dir?;
+    for name in [format!("0x{rs_id:08X}.ktx2"), format!("{rs_id:08X}.ktx2")] {
+        let path = dir.join(&name);
+        if path.is_file() {
+            return Some(ktx2_dims(&path).unwrap_or((0, 0)));
+        }
+    }
+    None
 }
 
 /// Record tier assignment.
@@ -869,11 +927,48 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
         .collect();
     let mut pvw_payloads: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
     let mut tex_bits: BTreeMap<u32, u8> = BTreeMap::new();
+    // PAGE-RESAMPLE (T22 D2): the dims a TEXREF row DECLARES are the dims of
+    // the tier that actually lands in the texture array — the full tier when
+    // one exists, the DAT record otherwise. Resolved once here rather than
+    // per emitted row (the row builder runs once per pack that references
+    // the rsId).
+    let mut tex_declared_dims: BTreeMap<u32, (u32, u32)> = BTreeMap::new();
     for &rs in &tex_ids {
         let mut bits = 0u8;
-        let has_xu7 = xu7_present(opts.tex_xu7.as_deref(), rs);
+        let xu7 = xu7_entry(opts.tex_xu7.as_deref(), rs);
+        let has_xu7 = xu7.is_some();
         if has_xu7 {
             bits |= tier_bits::FULL_XU7_PRESENT;
+        }
+        let dat_dims = tex_dims(&source, rs);
+        let declared = match xu7 {
+            Some((w, h)) if w > 0 && h > 0 => {
+                if (w, h) != dat_dims {
+                    report.texref_full_tier_dims_differ += 1;
+                }
+                (w, h)
+            }
+            _ => dat_dims,
+        };
+        tex_declared_dims.insert(rs, declared);
+        if crate::page_resample::needs_resample_dims(declared.0, declared.1) {
+            report.texref_off_page += 1;
+            if has_xu7 {
+                report.texref_off_page_full_tier += 1;
+            } else {
+                report.texref_off_page_legacy_only += 1;
+            }
+            if report.texref_off_page_examples.len() < 32
+                && let Some(p) = crate::page_resample::plan_page(declared.0, declared.1)
+            {
+                report.texref_off_page_examples.push(format!(
+                    "0x{rs:08X} {}x{}→{}x{}",
+                    declared.0, declared.1, p.page_w, p.page_h
+                ));
+            }
+        } else {
+            report.texref_on_page += 1;
+            bits |= tier_bits::FULL_PAGE_DIMS;
         }
         let mut sliced: Option<Vec<u8>> = None;
         let mut from = "";
@@ -1296,7 +1391,7 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
                     None => pf::PVW_ORD_NONE,
                 }
             };
-            let (w, h) = tex_dims(&source, rs);
+            let (w, h) = tex_declared_dims.get(&rs).copied().unwrap_or((0, 0));
             rows.push(TexRefRow {
                 rs_id: rs,
                 tier_bits: bits,
@@ -1747,7 +1842,25 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
     if opts.verify_closure {
         verify_closure(&pack_table, &pack_bytes, &index)?;
         verify_geom(&pack_bytes)?;
+        verify_texref_pages(&pack_bytes)?;
         report.closure_verified = true;
+    }
+
+    // PAGE-RESAMPLE gate (T22 D2). Off by default: a pre-resample corpus
+    // legitimately fails it, and the census counters above report the
+    // position either way. On, it is the acceptance test for a bake over a
+    // page-resampled corpus.
+    if opts.require_page_dims && report.texref_off_page_full_tier > 0 {
+        return Err(ToolError::Validation(format!(
+            "PAGE-RESAMPLE: {} of {} TEXREF rows WITH A FULL TIER are stored OFF \
+             their array page (e.g. {}) — re-encode the corpus through \
+             `page-resample` first. ({} further rows are legacy-lane, no full tier \
+             to resample; those are reported, not gated.)",
+            report.texref_off_page_full_tier,
+            report.texref_rows,
+            report.texref_off_page_examples.join(", "),
+            report.texref_off_page_legacy_only,
+        )));
     }
 
     let report_json = serde_json::to_string_pretty(&report)
@@ -1756,6 +1869,79 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
         .map_err(|e| ToolError::Validation(format!("write pack-report.json: {e}")))?;
 
     Ok(report)
+}
+
+/// PAGE-RESAMPLE (T22 D2) — re-open every emitted pack and check the TEXREF
+/// rows' PAGE contract against the bytes actually written:
+///
+/// (a) when `FULL_PAGE_DIMS` is set, the row's own `dims` byte decodes to a
+///     legal array page (square pow2 in [256², 2048²]) — so a consumer can
+///     trust the bit and the byte together. The implication is ONE-WAY on
+///     purpose: the byte is 4 bits per axis of `ceil(log2)`, so an off-page
+///     NON-POW2 member (1096² in the shipped corpus) rounds to 2^11 x 2^11
+///     and is indistinguishable from a real 2048² page. The BIT is the
+///     authority; the byte alone cannot be;
+/// (b) the same rsId never carries two different `(tier_bits, dims)` across
+///     packs — TEXREF rows are replicated into every pack that references the
+///     rsId, and a disagreement would make class identity pack-dependent,
+///     which is precisely the thing the page tier exists to prevent.
+///
+/// This is an EMITTER check, not a corpus check: it stays green on a
+/// pre-resample bake (where the bit is simply clear on off-page rows). The
+/// corpus gate is `require_page_dims`.
+fn verify_texref_pages(pack_bytes: &[Vec<u8>]) -> Result<()> {
+    use crate::page_resample::{PAGE_TIER_MAX, PAGE_TIER_MIN};
+    let mut seen: HashMap<u32, (u8, u8)> = HashMap::new();
+    let mut failures: Vec<String> = Vec::new();
+    for (i, bytes) in pack_bytes.iter().enumerate() {
+        let reader = HbpReader::parse(bytes)
+            .map_err(|e| ToolError::Validation(format!("texref re-parse pack {i}: {e}")))?;
+        let Some(payload) = reader
+            .section(section_kind::TEXREF)
+            .map_err(|e| ToolError::Validation(format!("texref section pack {i}: {e}")))?
+        else {
+            continue;
+        };
+        let rows = pf::parse_texref(&payload)
+            .map_err(|e| ToolError::Validation(format!("texref parse pack {i}: {e}")))?;
+        for r in rows {
+            let (lw, lh) = ((r.dims >> 4) as u32, (r.dims & 0x0F) as u32);
+            let on_page = lw == lh
+                && (PAGE_TIER_MIN..=PAGE_TIER_MAX).contains(&lw);
+            let bit = r.tier_bits & tier_bits::FULL_PAGE_DIMS != 0;
+            if bit && !on_page && failures.len() < 20 {
+                failures.push(format!(
+                    "0x{:08X}: FULL_PAGE_DIMS set but dims byte 0x{:02X} decodes to \
+                     2^{lw} x 2^{lh}, which is not a legal array page",
+                    r.rs_id, r.dims
+                ));
+            }
+            match seen.entry(r.rs_id) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert((r.tier_bits, r.dims));
+                }
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    if *e.get() != (r.tier_bits, r.dims) && failures.len() < 20 {
+                        failures.push(format!(
+                            "0x{:08X}: TEXREF disagrees across packs — {:?} vs {:?}",
+                            r.rs_id,
+                            e.get(),
+                            (r.tier_bits, r.dims)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(ToolError::Validation(format!(
+            "PAGE-RESAMPLE TEXREF verification failed ({} shown):\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        )))
+    }
 }
 
 /// T13 (ST3) — HBG1 GEOM emission (SPEC §1.2, pass 4 D-04.2): one payload
@@ -2446,6 +2632,65 @@ mod tests {
         assert_eq!(dims_byte(1, 1), 0);
         // non-pow2 rounds UP (bucket keying only).
         assert_eq!(dims_byte(300, 6), (9 << 4) | 3);
+    }
+
+    // ---- PAGE-RESAMPLE (T22 D2) ---------------------------------------
+
+    #[test]
+    fn ktx2_dims_reads_the_header_and_rejects_non_ktx2() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut head = Vec::new();
+        head.extend_from_slice(&KTX2_IDENTIFIER);
+        head.extend_from_slice(&0u32.to_le_bytes()); // vkFormat
+        head.extend_from_slice(&1u32.to_le_bytes()); // typeSize
+        head.extend_from_slice(&1024u32.to_le_bytes()); // pixelWidth
+        head.extend_from_slice(&512u32.to_le_bytes()); // pixelHeight
+        head.extend_from_slice(&0u32.to_le_bytes()); // pixelDepth
+        head.extend_from_slice(&[0u8; 64]); // rest of a real file
+        let good = dir.path().join("0x06000001.ktx2");
+        std::fs::write(&good, &head).unwrap();
+        assert_eq!(ktx2_dims(&good), Some((1024, 512)));
+
+        let bad = dir.path().join("0x06000002.ktx2");
+        std::fs::write(&bad, b"not a ktx2 file at all, definitely not").unwrap();
+        assert_eq!(ktx2_dims(&bad), None);
+
+        // Presence survives an unparseable header — the client can still
+        // fetch it; only the DECLARED dims fall back to the DAT record.
+        assert_eq!(xu7_entry(Some(dir.path()), 0x0600_0001), Some((1024, 512)));
+        assert_eq!(xu7_entry(Some(dir.path()), 0x0600_0002), Some((0, 0)));
+        assert_eq!(xu7_entry(Some(dir.path()), 0x0600_0003), None);
+        assert_eq!(xu7_entry(None, 0x0600_0001), None);
+    }
+
+    #[test]
+    fn the_page_bit_is_the_authority_the_dims_byte_cannot_be() {
+        // FOUND BY THIS TEST: the TEXREF `dims` byte is 4 bits per axis of
+        // ceil(log2), so it CANNOT express "off page" for a non-pow2 member.
+        // 1096x1096 rounds to 2^11 x 2^11 and reads exactly like a real
+        // 2048² page. That is why `FULL_PAGE_DIMS` exists and why the client
+        // must trust the BIT rather than re-deriving the verdict from the
+        // byte. The invariant is therefore ONE-WAY: bit set ⇒ the byte
+        // decodes to a legal square page.
+        let page_shaped = |w: u32, h: u32| {
+            let byte = dims_byte(w, h);
+            let (lw, lh) = ((byte >> 4) as u32, (byte & 0x0F) as u32);
+            lw == lh
+                && (crate::page_resample::PAGE_TIER_MIN
+                    ..=crate::page_resample::PAGE_TIER_MAX)
+                    .contains(&lw)
+        };
+        for (w, h) in [(256u32, 256u32), (512, 512), (1024, 1024), (2048, 2048)] {
+            assert!(!crate::page_resample::needs_resample_dims(w, h));
+            assert!(page_shaped(w, h), "{w}x{h}: on-page member must be page-shaped");
+        }
+        for (w, h) in [(128u32, 128u32), (512, 1024), (4096, 4096), (300, 6)] {
+            assert!(crate::page_resample::needs_resample_dims(w, h));
+            assert!(!page_shaped(w, h), "{w}x{h}: off-page member must not look page-shaped");
+        }
+        // The exception the bit is for.
+        assert!(crate::page_resample::needs_resample_dims(1096, 1096));
+        assert!(page_shaped(1096, 1096), "1096² is the lossy case — keep it documented");
     }
 
     #[test]
