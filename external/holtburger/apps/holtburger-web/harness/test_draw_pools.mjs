@@ -79,7 +79,7 @@ import {
 } from "../scene3d/pool_class_key.js";
 import {
   PoolRegistry, drawPoolsEnabled, checkDrawPoolsPrereqs, initDrawPools,
-  drawPoolsActive, _resetDrawPoolsForTest, POOL_OPTIMIZE_FRAC,
+  drawPoolsActive, _resetDrawPoolsForTest, POOL_OPTIMIZE_FRAC, getPoolRegistry,
 } from "../scene3d/pool_registry.js";
 import {
   buildTilePlan, validateTilePlan, encodeTilePlan, decodeTilePlan,
@@ -94,6 +94,13 @@ import {
   DEFAULT_CASCADES, WARM_SHADOW_MAP_SIZE,
 } from "../scene3d/pool_prewarm.js";
 import { getSurface } from "./lib/diag_schema.mjs";
+import { ClassMaterialRegistry, normalizeForPool } from "../scene3d/pool_material.js";
+import {
+  initPoolWorld, poolWorldActive, poolWorldCensus, addSingletonsToPools,
+  poolOnSlotState, poolOnTeleport, poolTickP4, poolAtlasRefeed,
+  _resetPoolWorldForTest,
+} from "../scene3d/pool_producer.js";
+import { tileOfLb } from "../scene3d/residency_grid.js";
 
 let passed = 0;
 let failed = 0;
@@ -191,6 +198,22 @@ function member(over = {}) {
 
 function plan(tile, members) {
   return { tile, lbs: [], members, counts: {} };
+}
+
+/** An RGBA8 texture AT a page dimension (256/512/1024/2048) — the only shape
+ *  the class page can allocate a layer for until the bake/transcode resample
+ *  lands (T22 D2). */
+function pageTex(edge) {
+  const t = new THREE.DataTexture(new Uint8Array(edge * edge * 4), edge, edge, THREE.RGBAFormat);
+  t.needsUpdate = true;
+  return t;
+}
+
+/** A poolable singleton: real Mesh, real UVs, a page-dim map. */
+function poolNode(edge) {
+  const m = new THREE.MeshStandardMaterial({ map: pageTex(edge) });
+  m.userData = { surfaceDid: 0x08000099, __pvwRsId: 0x06000099 };
+  return new THREE.Mesh(triGeom(6), m);
 }
 
 // ── PART 1 — flag grammar ─────────────────────────────────────────────────
@@ -1127,6 +1150,252 @@ console.log("PART 16: closed-class boot prewarm (pass-08 D-08.6/S5)");
     check(k in snap, `__prewarmStats publishes ${k} (pass-08 S5.4)`);
   }
   _resetPoolPrewarmForTest();
+}
+
+
+// ── PART 17 — the class-material tier (T22-PRODUCER) ──────────────────────
+
+console.log("PART 17: class material tier (D-07.2) + the D2 page gate");
+{
+  const cm = new ClassMaterialRegistry({ warn: () => {} });
+  const mk = (w, h, extra = {}) => {
+    const t = new THREE.DataTexture(new Uint8Array(w * h * 4), w, h, THREE.RGBAFormat);
+    t.needsUpdate = true;
+    const m = new THREE.MeshStandardMaterial({ map: t });
+    m.userData = { surfaceDid: 0x08000001, __pvwRsId: 0x06000001, ...extra };
+    return m;
+  };
+  const axes = (m, over = {}) => ({ ...axisRecordOf(m, { domain: "st", castShadow: true, receiveShadow: true }), ...over });
+
+  // ONE material per class, and it IS an array-page material.
+  const m256 = mk(256, 256);
+  const r256 = axes(m256);
+  const k256 = classKeyOf(r256);
+  const a1 = cm.admit(k256, m256, r256);
+  check(a1.ok === true && a1.layer === 0, "first member of a class takes layer 0");
+  check(cm.materialFactory(k256) === cm.materialFactory(k256),
+    "materialFactory returns ONE material object per class (D-07.2)");
+  check(cm.materialFactory(k256).userData.classKey === k256,
+    "the class material carries its class key (census/prewarm join)");
+
+  // A SECOND surface of the SAME class takes the NEXT layer of the SAME page.
+  const m256b = mk(256, 256, { __pvwRsId: 0x06000002 });
+  const a2 = cm.admit(k256, m256b, axes(m256b));
+  check(a2.ok === true && a2.layer === 1, "a second surface takes the next layer of the same page");
+  check(cm.census().classes === 1, "two surfaces, ONE class page");
+
+  // The SAME texture dedups by uuid (refcount, no new layer).
+  const a3 = cm.admit(k256, m256, r256);
+  check(a3.ok === true && a3.layer === 0, "a shared texture re-uses its layer (refcounted)");
+  check(cm.census().layers.hits === 1, "layer dedup hits are counted");
+
+  // THE D2 GATE: a member off its page dims is REFUSED and COUNTED.
+  const m64 = mk(64, 64);
+  const r64 = axes(m64);
+  check(needsResample(r64) === true, "a 64² member needs resample to its 256² page");
+  const a4 = cm.admit(classKeyOf(r64), m64, r64);
+  check(a4.ok === false && a4.reason === "needsResample",
+    "an off-page member is REFUSED with the needsResample reason (T22 D2)");
+  check(cm.census().refused.needsResample === 1,
+    "needsResample refusals are COUNTED, never silent");
+  check(cm.census().classes === 1, "a refused member never allocates a class page");
+
+  // A member already AT page dims is admitted (the resample's post-condition).
+  const m512 = mk(512, 512);
+  const r512 = axes(m512);
+  check(needsResample(r512) === false, "a 512² member is already at its page");
+  check(cm.admit(classKeyOf(r512), m512, r512).ok === true,
+    "an at-page member of a NEW tier opens its own class page");
+  check(cm.census().classes === 2, "the page tier is a class axis (256² and 512² are two pages)");
+
+  // A MECH-B deformed variant is never consumed (the class material would
+  // silently strip the deformation).
+  const mDef = mk(256, 256, { __vfxSetKey: "deformation.windSwayGpu" });
+  check(cm.admit(k256, mDef, axes(mDef)).reason === "deformed",
+    "a vertex-deformed variant is refused, not silently flattened");
+
+  // A material without a map has no page at all.
+  const mNo = new THREE.MeshStandardMaterial();
+  check(cm.admit("x", mNo, { hasTex: false }).reason === "noTexture",
+    "an untextured member is refused (no page, no array)");
+
+  // Geometry normalization stamps aLayer and KEEPS the index (pass-4).
+  const g = normalizeForPool(triGeom(6), 3);
+  check(!!g.attributes.aLayer && g.attributes.aLayer.count === 6, "normalizeForPool stamps aLayer per vertex");
+  check(g.attributes.aLayer.array[0] === 3, "aLayer carries the member's page layer");
+  check(!!g.index, "normalizeForPool keeps the index (pass-4's indexed layout)");
+  const gNi = new THREE.BufferGeometry();
+  gNi.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
+  gNi.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(9), 3));
+  gNi.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(6), 2));
+  const gNi2 = normalizeForPool(gNi, 0);
+  check(!!gNi2.index && gNi2.index.count === 3,
+    "a non-indexed source gets a synthesised index (one pool layout for both)");
+  check(normalizeForPool({ attributes: {} }, 0) === null, "a geometry without position/normal/uv is refused");
+  cm.dispose();
+}
+
+// ── PART 18 — the producer swap ───────────────────────────────────────────
+
+console.log("PART 18: producer swap — singletons → (sector × class) pools");
+const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+{
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  // DISARMED: the producer is a NO-OP passthrough — the kill path.
+  const off = initPoolWorld({ THREE, search: "?drawPools=on&slotGrid=on" });
+  check(off === null, "an incomplete flag chain arms NO pooled world (F-11.3)");
+  const nodesOff = [poolNode(256), poolNode(256)];
+  const rOff = addSingletonsToPools(nodesOff, {}, { domain: "st", lbKey: 0xaabb0000 });
+  check(rOff.pooled === 0 && rOff.passthrough.length === 2,
+    "disarmed ⇒ every node passes through untouched (byte-identical legacy)");
+
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  const group = new THREE.Group();
+  const w = initPoolWorld({ THREE, group, search: ARMED });
+  check(w !== null, "the full F-11.3 chain arms the pooled world");
+  check(poolWorldActive() === true, "poolWorldActive reads the armed singleton");
+
+  // Two LBs of the SAME tile, two surfaces, shared geometry.
+  const shared = triGeom(6);
+  const texA = pageTex(256);
+  const texB = pageTex(256);
+  const mkNode = (tex, geom) => {
+    const m = new THREE.MeshStandardMaterial({ map: tex });
+    m.userData = { surfaceDid: 0x08000010, __pvwRsId: 0x06000010 };
+    const n = new THREE.Mesh(geom, m);
+    n.castShadow = true;
+    n.receiveShadow = true;
+    return n;
+  };
+  const r1 = addSingletonsToPools(
+    [mkNode(texA, shared), mkNode(texA, shared), mkNode(texB, shared)],
+    {}, { domain: "st", lbKey: 0x40400000 },
+  );
+  check(r1.pooled === 3 && r1.passthrough.length === 0, "three at-page singletons pool");
+  const reg = getPoolRegistry();
+  check(reg.pools.size === 1, "one (sector, class) pool holds all three (same class, same sector)");
+  check(reg.classes.size === 1, "two surfaces sharing every axis are ONE class");
+  const pool = [...reg.pools.values()][0];
+  check(pool.instances === 3, "three instances in the pool");
+  check(pool.mesh.castShadow === true && pool.mesh.receiveShadow === true,
+    "shadow flags are POOL-uniform, taken from the class (D-07.6)");
+  check(reg.census().geometry.dedupHits === 1,
+    "the same (geometry, layer) pair dedups; a different layer is a different pool geometry");
+  check(group.children.length === 1, "the pool is the ONLY node added to the scene group (O(pools))");
+
+  // A second LB of the SAME tile merges into the same tile membership.
+  const r2 = addSingletonsToPools([mkNode(texA, shared)], {}, { domain: "st", lbKey: 0x41400000 });
+  check(r2.pooled === 1, "a second LB of the tile feeds the same tile");
+  check(reg.tiles.size === 1, "both LBs share ONE tile membership record (tile-granular residency)");
+  check(pool.instances === 4, "the merge added the instance rather than orphaning it");
+
+  // A DIFFERENT sector opens a second pool of the same class.
+  addSingletonsToPools([mkNode(texA, shared)], {}, { domain: "st", lbKey: 0x60600000 });
+  check(reg.pools.size === 2, "a different world-sector opens a second pool of the SAME class");
+  check(reg.classes.size === 1, "…and still ONE material class (one material object)");
+
+  // The D2 residue: an off-page member routes LEGACY, counted.
+  const small = new THREE.MeshStandardMaterial({ map: pageTex(64) });
+  small.userData = { surfaceDid: 0x08000011, __pvwRsId: 0x06000011 };
+  const nSmall = new THREE.Mesh(triGeom(6), small);
+  const r3 = addSingletonsToPools([nSmall], {}, { domain: "st", lbKey: 0x40400000 });
+  check(r3.pooled === 0 && r3.passthrough[0] === nSmall,
+    "an off-page member comes back as passthrough — it RENDERS, on the legacy path");
+  const census = poolWorldCensus();
+  check(census.classPages.refused.needsResample === 1,
+    "the D2 residue is published on __diag.pools().classPages.refused.needsResample");
+  check(census.producer.refusedNodes === 1, "the producer counts its own refusals");
+
+  // Non-poolable node shapes pass through untouched.
+  const noUv = new THREE.BufferGeometry();
+  noUv.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
+  const nNoUv = new THREE.Mesh(noUv, new THREE.MeshStandardMaterial({ map: pageTex(256) }));
+  check(addSingletonsToPools([nNoUv], {}, { domain: "st", lbKey: 0x40400000 }).passthrough[0] === nNoUv,
+    "a UV-less mesh passes through (the atlas's own gate)");
+  const nBatched = new THREE.Mesh(triGeom(6), new THREE.MeshStandardMaterial({ map: pageTex(256) }));
+  nBatched.userData = { __staticBatch: true };
+  check(addSingletonsToPools([nBatched], {}, { domain: "st", lbKey: 0x40400000 }).passthrough[0] === nBatched,
+    "an already-batched node is never re-fed");
+
+  // Envcell domain is its own class family.
+  const ec = new THREE.MeshStandardMaterial({ map: texA });
+  ec.userData = { surfaceDid: 0x08000010, __pvwRsId: 0x06000010 };
+  const nEc = new THREE.Mesh(shared, ec);
+  addSingletonsToPools([nEc], {}, { domain: "ec", lbKey: 0x40400000 });
+  check(reg.classes.size === 2, "the envcell domain is a distinct class (D-07.1's table)");
+  check(poolWorldCensus().producer.byDomain.ec === 1, "per-domain pooled counts are published");
+}
+
+// ── PART 19 — pooled-world residency + the CI gates ───────────────────────
+
+console.log("PART 19: pooled-world residency, anti-churn and the closed class set");
+{
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  const group = new THREE.Group();
+  initPoolWorld({ THREE, group, search: ARMED });
+  const reg = getPoolRegistry();
+  const tex = pageTex(256);
+  const geom = triGeom(6);
+  const feedLb = (lbKey, n = 2) => {
+    const nodes = [];
+    for (let i = 0; i < n; i += 1) {
+      const m = new THREE.MeshStandardMaterial({ map: tex });
+      m.userData = { surfaceDid: 0x08000020, __pvwRsId: 0x06000020 };
+      const node = new THREE.Mesh(geom, m);
+      node.castShadow = true;
+      nodes.push(node);
+    }
+    return addSingletonsToPools(nodes, {}, { domain: "st", lbKey });
+  };
+  feedLb(0x40400000);
+  feedLb(0x44440000);
+  const tileA = tileOfLb(0x40, 0x40);
+  const tileB = tileOfLb(0x44, 0x44);
+  check(reg.tiles.size === 2, "two tiles resident");
+
+  // The class set SEALS at boot; streaming a settled world mints nothing.
+  reg.sealClassSet();
+  const before = reg.classes.size;
+  feedLb(0x48480000);
+  check(reg.classes.size === before,
+    "streaming a new tile of an EXISTING class mints no class (D-07.9)");
+  check(reg.census().classes.createdPostBoot === 0,
+    "classesCreatedPostBoot === 0 on a settled arm (the GATE-POOLS bullet)");
+
+  // A settled PARKED frame performs zero pool mutations.
+  reg.beginFrame();
+  check(reg.census().events.mutationsThisFrame === 0,
+    "poolMutationsPerFrame === 0 on a settled frame (the S2 anti-churn CI gate)");
+  poolTickP4();
+  check(reg.census().events.mutationsThisFrame === 0,
+    "the P4 tick alone mutates nothing (events drive mutation, never the frame)");
+
+  // The grid's slot-state hook is the whole residency vocabulary.
+  poolOnSlotState({ tile: tileA, from: "LIVE", to: "PARKED" });
+  check(reg.census().events.parks === 1, "onSlotState LIVE→PARKED parks the tile's instances");
+  poolOnSlotState({ tile: tileA, from: "PARKED", to: "LIVE" });
+  check(reg.census().events.adopts === 1, "onSlotState PARKED→LIVE re-adopts by pointer");
+  poolOnSlotState({ tile: tileB, from: "PARKED", to: "EMPTY" });
+  check(reg.isTileResident(tileB) === false, "onSlotState →EMPTY releases the tile");
+  poolOnTeleport({ vacated: [tileA] });
+  check(reg.isTileResident(tileA) === false, "onTeleport drains the vacated set");
+  const st = poolWorldCensus().producer;
+  check(st.parks === 1 && st.adopts === 1 && st.releases === 2,
+    "every residency event is counted on the producer census");
+
+  // A park is GPU-free: no geometry adds, no deletes, no allocation change.
+  feedLb(0x40400000);
+  const allocBefore = reg.geometryBytes().allocated;
+  const addsBefore = reg.census().geometry.adds;
+  poolOnSlotState({ tile: tileA, from: "LIVE", to: "PARKED" });
+  check(reg.geometryBytes().allocated === allocBefore && reg.census().geometry.adds === addsBefore,
+    "park allocates nothing and adds no geometry (setVisibleAt only)");
+
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
 }
 
 // ── done ──────────────────────────────────────────────────────────────────
