@@ -51,6 +51,19 @@ one session; use agentp07 "Funnel Probe" etc.).
   159 MB through the laptop-uplink tunnel (~2-4 Mbps effective) + 887-request RTT
   tax + `?nosw=1` re-paying it every reload — bandwidth arithmetic, not a client
   defect. Mitigation = dist placement near the player (mirror/CDN), not client work.
+- **DRIVER INVESTIGATION (owner-requested, ~11:30) — wifi/driver CLEARED, serve-side
+  fixed:** iwlwifi 8265 healthy (5 GHz ch44/80 MHz, power-save off, 0 firmware
+  errors; NSS1 @ -72 dBm is rate adaptation, not a defect); measured 16.6 MB/s
+  (~133 Mbps) raw upload laptop→CF edge. Real cold-boot costs: (a) on-the-fly gzip
+  ~17 MB/s input vs 1.6 GB/s identity — and the 96 MB compress-LRU was smaller than
+  the ~160 MB boot working set, so it THRASHED (every boot re-compressed); (b) the
+  quick tunnel adds ~200 ms/request × 1,510 requests at app-capped concurrency;
+  (c) the remote player's own edge route (unmeasured from here). LANDED `4c5cbfe0`:
+  serve.py `--compress-cache-mb` (running instance restarted at 256 MB — warm wasm
+  re-serve 0.39 s → 0.036 s; serve log now at session scratchpad serve8765-new.log).
+  zstd codec still owed: `sudo apt install python3-zstandard` (no pip/sudo in this
+  session). NOTE serve.py's wasm-stale WARNING now false-positives: commit 864bc140
+  touches geom_bundles.rs but only #[cfg(test)] code — shipped wasm unaffected.
 
 ## -1. BAKE-3 DONE + DEPLOYED (2026-08-10 05:20) — v3 pack layer is the live one
 
