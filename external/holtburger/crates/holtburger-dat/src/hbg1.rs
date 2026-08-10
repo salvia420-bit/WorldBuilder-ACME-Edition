@@ -24,8 +24,20 @@
 //! key without the normal would merge them and lose that fidelity.
 //!
 //! Geometric relief (`gfx_relief_config`) is a per-instance opt-in that is OFF
-//! by default; HBG1 bakes the DEFAULT (relief-off) geometry. The client
-//! disarms `?geomBundles` loudly when relief is enabled.
+//! by default; the GEOM section keeps baking the DEFAULT (relief-free)
+//! geometry, which is the byte-exact differ baseline.
+//!
+//! **RELIEF-IN-BAKE (2026-08-10).** Relief is now ALSO bakeable, as a separate
+//! VARIANT payload set ([`ReliefBake`], [`encode_gfx_part_relief`]) that the
+//! bake emits into its own pack section (`GEOMR`, `section_kind::GEOM_RELIEF`)
+//! alongside — never in place of — the relief-free rows. What is baked is the
+//! MATERIAL-IDENTITY relief that actually ships: `gfx_remodel`'s OP1 convex-edge
+//! + OP3 material-boundary rails, which presets run at `subdivLevel = 0`. The
+//! per-texel displacement path was retired on 2026-07-30 and is deliberately
+//! NOT reproduced here (it needs decoded surface height fields; see
+//! `ReliefBake`). Variant rows exist only for models the profile actually
+//! changes, so an absent row means "relief is a no-op for this model" and the
+//! consumer reads the default row.
 //!
 //! ## Layout deviations from pass-04 S1 (recorded, T10-D1 class)
 //!
@@ -142,6 +154,12 @@ struct CornerKey {
     uv_idx: u16,
     side: u8,
     qn: [i8; 3],
+    /// RELIEF-IN-BAKE: 0 for every corner that descends from a SOURCE vertex
+    /// (so the relief-free encode is byte-identical to the pre-relief codec).
+    /// Relief rail corners are synthetic positions with no source vertex id;
+    /// each gets a distinct ordinal so two rails never merge — mirroring the
+    /// runtime, which emits rails de-indexed.
+    synth: u32,
 }
 
 struct SubsetAccum {
@@ -521,7 +539,7 @@ fn fan_polygons<F>(
             let corner = |ring_idx: usize, uv: ([f32; 2], u16), nrm: [f32; 3], side: u8| {
                 let qn = [quant_snorm8(nrm[0]), quant_snorm8(nrm[1]), quant_snorm8(nrm[2])];
                 (
-                    CornerKey { vid: ring_vid[ring_idx], uv_idx: uv.1, side, qn },
+                    CornerKey { vid: ring_vid[ring_idx], uv_idx: uv.1, side, qn, synth: 0 },
                     CornerRec { pos: ring_pos[ring_idx], uv: uv.0, qn },
                 )
             };
@@ -556,10 +574,174 @@ fn fan_polygons<F>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// RELIEF-IN-BAKE — material-identity relief variants (2026-08-10)
+// ---------------------------------------------------------------------------
+
+/// Bake-side relief profile: the SAME `gfx_remodel` rails the runtime emits at
+/// `set_gfx_relief(true, level, scale)`, resolved once at bake instead of once
+/// per wasm instance.
+///
+/// What relief IS, read-verified before this landed (`gfx_subdiv.rs` module
+/// docs + `apps/holtburger-web/src/lib.rs` `append_gfx_tris_with_tex_swaps`):
+/// the per-TEXEL displacement path (`subdivide_displaced_triangle_sampled`)
+/// is gated on `subdiv.level > 0` AND a decoded surface height field, and it
+/// was RETIRED as a default on 2026-07-30 (polarity + row-integration banding);
+/// presets ship `subdivLevel = 0`, at which the ONLY live relief is
+/// `gfx_remodel`'s OP1 convex-edge rails + OP3 material-boundary rails. Those
+/// rails are texture-blind, purely ADDITIVE, deterministic, and a pure function
+/// of `(polygons, surfaces, positions, uvs, RemodelConfig)` — i.e. exactly the
+/// bakeable half. Heights are still decided by MATERIAL IDENTITY; this type
+/// only moves WHERE that decision runs.
+///
+/// The bake is therefore for `subdiv_level = 0` profiles. A t-level ladder of
+/// variants (level 1..5) is the designed follow-up and is NOT representable
+/// here, because the runtime's level > 0 path needs per-texel height fields.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReliefBake {
+    /// Rail dimensions. `scale` mirrors `?gfxReliefScale`.
+    pub remodel: crate::gfx_remodel::RemodelConfig,
+    /// "Is this model architecture at all" gate — the runtime uses
+    /// `ModelGate::default()`.
+    pub gate: crate::gfx_remodel::ModelGate,
+    /// Subdivision level the profile was authored for. MUST be 0 in v1: the
+    /// bake refuses to claim a level it cannot reproduce.
+    pub subdiv_level: u8,
+}
+
+impl Default for ReliefBake {
+    fn default() -> Self {
+        Self {
+            remodel: crate::gfx_remodel::RemodelConfig::default(),
+            gate: crate::gfx_remodel::ModelGate::default(),
+            subdiv_level: 0,
+        }
+    }
+}
+
+impl ReliefBake {
+    /// Profile for `set_gfx_relief(true, 0, scale)` — the shipped preset shape.
+    pub fn from_scale(scale: f32) -> Self {
+        Self {
+            remodel: crate::gfx_remodel::RemodelConfig {
+                scale,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// True when this profile cannot add a single triangle, so callers keep
+    /// the relief-free payload and emit no variant row.
+    pub fn is_noop(&self) -> bool {
+        self.subdiv_level != 0 || self.remodel.is_noop()
+    }
+
+    /// Stable identity string for the manifest / report ("which variant is
+    /// this dist carrying"). Deliberately mirrors the resolved client config.
+    pub fn variant_key(&self) -> String {
+        format!(
+            "rails-l{}-s{:.3}-w{:.3}-h{:.3}-rw{:.3}-rh{:.3}-e{:.3}-c{:.1}",
+            self.subdiv_level,
+            self.remodel.scale,
+            self.remodel.width_m,
+            self.remodel.height_m,
+            self.remodel.rail_width_m,
+            self.remodel.rail_height_m,
+            self.remodel.min_edge_m,
+            self.remodel.coplanar_deg,
+        )
+    }
+}
+
+/// Append the relief rails for one GfxObj, mirroring the runtime's OP1+OP3
+/// block (`append_gfx_tris_with_tex_swaps`, lib.rs "OP1 — texture-blind
+/// convex-edge rails") at the identity part transform HBG1 kind-0 payloads
+/// are encoded in, with an empty texture-swap table (the bake path).
+///
+/// Rails inherit the parent polygon's material identity (`pos_surface` DID,
+/// `sides_type`, `stippling`), so every rail triangle lands in an EXISTING
+/// subset — no new surface, no new material, no new draw call. That is the
+/// property the differ asserts.
+fn append_gfx_rails(b: &mut MeshBuilder, gfx: &GfxObj, relief: &ReliefBake) {
+    use crate::gfx_remodel::ModelTopology;
+    if relief.is_noop() || gfx.vertex_array.vertices.is_empty() || gfx.polygons.is_empty() {
+        return;
+    }
+    let vpos = |raw: i16| -> Option<[f32; 3]> {
+        if raw < 0 {
+            return None;
+        }
+        let v = gfx.vertex_array.vertices.get(&(raw as u16))?;
+        Some([v.origin.x, v.origin.y, v.origin.z])
+    };
+    let vuv = |raw: i16, _ring_idx: usize| -> Option<[f32; 2]> {
+        if raw < 0 {
+            return None;
+        }
+        let v = gfx.vertex_array.vertices.get(&(raw as u16))?;
+        v.uvs.first().map(|t| [t.u, t.v])
+    };
+    let topo = ModelTopology::build(&gfx.polygons, &gfx.surfaces, &[], &vpos, &vuv);
+    if !topo.passes_gate(&relief.gate) {
+        return;
+    }
+    let mut synth: u32 = 0;
+    let mut push = |pid: u16, pos: [[f32; 3]; 3], uv: [[f32; 2]; 3], nrm: [f32; 3]| {
+        let Some(poly) = gfx.polygons.get(&pid) else {
+            return;
+        };
+        let did = if poly.pos_surface >= 0 && (poly.pos_surface as usize) < gfx.surfaces.len() {
+            gfx.surfaces[poly.pos_surface as usize]
+        } else {
+            0
+        };
+        if did == 0 {
+            return;
+        }
+        // Flat-shaded on purpose (runtime comment: "a constant facet normal is
+        // what makes a batten read as a batten").
+        let qn = [quant_snorm8(nrm[0]), quant_snorm8(nrm[1]), quant_snorm8(nrm[2])];
+        let flags = subset_flag_bits(poly.sides_type == 1, stipple_bits(poly.stippling, 0));
+        let mut corners: Vec<(CornerKey, CornerRec)> = Vec::with_capacity(3);
+        for k in 0..3 {
+            synth += 1;
+            corners.push((
+                CornerKey { vid: u16::MAX, uv_idx: u16::MAX, side: 0, qn, synth },
+                CornerRec { pos: pos[k], uv: uv[k], qn },
+            ));
+        }
+        let tri: [(CornerKey, CornerRec); 3] = match corners.try_into() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        b.push_tri(did, flags, 0, tri);
+    };
+    // OP1 takes edges >= coplanar_deg, OP3 takes edges below it — disjoint by
+    // construction, so an edge never grows two rails. Same call order as the
+    // runtime (determinism: both walk sorted edge keys).
+    topo.emit_convex_rails(&relief.remodel, &mut push);
+    topo.emit_material_rails(&relief.remodel, &mut push);
+}
+
 /// Encode one 0x01 GfxObj's drawing polygons as a kind-0 PART payload.
 /// Mirrors `append_gfx_tris` (identity transform, no swaps, relief off).
 /// The `did_degrade` trailer carries the record's own chain id.
 pub fn encode_gfx_part(gfx: &GfxObj) -> Result<Vec<u8>, String> {
+    encode_gfx_part_variant(gfx, None)
+}
+
+/// Relief VARIANT of [`encode_gfx_part`] (RELIEF-IN-BAKE). `None` reproduces
+/// the relief-free default byte-for-byte — the differ baseline is never
+/// disturbed by this path existing.
+pub fn encode_gfx_part_relief(gfx: &GfxObj, relief: &ReliefBake) -> Result<Vec<u8>, String> {
+    encode_gfx_part_variant(gfx, Some(relief))
+}
+
+fn encode_gfx_part_variant(
+    gfx: &GfxObj,
+    relief: Option<&ReliefBake>,
+) -> Result<Vec<u8>, String> {
     let mut b = MeshBuilder::default();
     if !gfx.vertex_array.vertices.is_empty() && !gfx.polygons.is_empty() {
         fan_polygons(
@@ -590,6 +772,12 @@ pub fn encode_gfx_part(gfx: &GfxObj) -> Result<Vec<u8>, String> {
                 Some((raw_pos, if emit_back { Some((raw_neg, 0)) } else { None }))
             },
         );
+    }
+    // Relief runs LAST and is purely additive — exactly the runtime's ordering,
+    // so the base triangles of every subset keep their emission order and the
+    // variant differs from the default only by appended rail triangles.
+    if let Some(r) = relief {
+        append_gfx_rails(&mut b, gfx, r);
     }
     b.serialize(KIND_PART, false, gfx.did_degrade.unwrap_or(0))
 }
@@ -1530,5 +1718,169 @@ mod tests {
         assert_eq!(&sec[rows[0].2..rows[0].2 + rows[0].3], &[1, 2, 3]);
         assert_eq!(&sec[rows[1].2..rows[1].2 + rows[1].3], &[9u8; 7]);
         assert_eq!(rows[1].2 % 4, 0, "payloads 4-B aligned");
+    }
+
+    // -----------------------------------------------------------------
+    // RELIEF-IN-BAKE
+    // -----------------------------------------------------------------
+
+    /// A 6 m cube with outward-wound faces: clears every `ModelGate` bar
+    /// (bbox 6 m, median edge 6 m, area 216 m², 0 double-sided) and has 12
+    /// convex 90° edges, so OP1 fires.
+    fn big_box_gfx() -> GfxObj {
+        let p: [[f32; 3]; 8] = [
+            [0.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+            [6.0, 6.0, 0.0],
+            [0.0, 6.0, 0.0],
+            [0.0, 0.0, 6.0],
+            [6.0, 0.0, 6.0],
+            [6.0, 6.0, 6.0],
+            [0.0, 6.0, 6.0],
+        ];
+        let mut vertices = HashMap::new();
+        for (i, c) in p.iter().enumerate() {
+            let d = [c[0] - 3.0, c[1] - 3.0, c[2] - 3.0];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            vertices.insert(
+                i as u16,
+                v(
+                    c[0],
+                    c[1],
+                    c[2],
+                    [d[0] / l, d[1] / l, d[2] / l],
+                    &[(c[0] / 6.0, c[1] / 6.0)],
+                ),
+            );
+        }
+        // Outward-wound quads; two materials so both surfaces are exercised.
+        let faces: [([i16; 4], i16); 6] = [
+            ([0, 3, 2, 1], 0), // z=0, outward -z
+            ([4, 5, 6, 7], 0), // z=6, outward +z
+            ([0, 1, 5, 4], 0), // y=0, outward -y
+            ([1, 2, 6, 5], 1), // x=6, outward +x
+            ([2, 3, 7, 6], 1), // y=6, outward +y
+            ([3, 0, 4, 7], 1), // x=0, outward -x
+        ];
+        let mut polygons = HashMap::new();
+        for (i, (ring, surf)) in faces.iter().enumerate() {
+            polygons.insert(
+                i as u16,
+                Polygon {
+                    num_pts: 4,
+                    stippling: 0,
+                    sides_type: 0, // Landblock — single-sided solid
+                    pos_surface: *surf,
+                    neg_surface: -1,
+                    vertex_ids: ring.to_vec(),
+                    pos_uv_indices: vec![0, 0, 0, 0],
+                    neg_uv_indices: vec![],
+                },
+            );
+        }
+        GfxObj {
+            id: 0x0100_0009,
+            flags: holtburger_common::properties::GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![0x0800_0010, 0x0800_0020],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons,
+            drawing_bsp: Some(crate::physics::BspNode::Leaf(crate::physics::BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![],
+            })),
+            did_degrade: None,
+        }
+    }
+
+    /// The invariant the consumer differ also asserts: relief is ADDITIVE.
+    /// Same subset table (same surfaces, same flags, same order), every
+    /// subset's base index prefix bit-identical, only appended triangles.
+    fn assert_relief_is_additive(default: &[u8], variant: &[u8]) -> u32 {
+        let d = Hbg1Mesh::parse(default).expect("default parses");
+        let r = Hbg1Mesh::parse(variant).expect("variant parses");
+        let ds = d.subsets().expect("default subsets");
+        let rs = r.subsets().expect("variant subsets");
+        assert_eq!(ds.len(), rs.len(), "relief must not add or drop subsets");
+        let mut added = 0u32;
+        for (a, b) in ds.iter().zip(rs.iter()) {
+            assert_eq!(a.surface_ref, b.surface_ref, "subset material identity");
+            assert_eq!(a.flags, b.flags, "subset flags");
+            assert!(
+                b.index_count >= a.index_count,
+                "relief is additive per subset"
+            );
+            assert_eq!(
+                (b.index_count - a.index_count) % 3,
+                0,
+                "added indices are whole triangles"
+            );
+            added += (b.index_count - a.index_count) / 3;
+            for k in 0..a.index_count as usize {
+                let dv = d.index(a.first_index as usize + k) as usize;
+                let rv = r.index(b.first_index as usize + k) as usize;
+                assert_eq!(d.position(dv), r.position(rv), "base position moved");
+                assert_eq!(d.uv(dv), r.uv(rv), "base uv moved");
+                assert_eq!(d.normal(dv), r.normal(rv), "base normal moved");
+            }
+        }
+        added
+    }
+
+    #[test]
+    fn relief_variant_appends_rails_and_never_moves_the_base() {
+        let gfx = big_box_gfx();
+        let default = encode_gfx_part(&gfx).expect("default encode");
+        let variant =
+            encode_gfx_part_relief(&gfx, &ReliefBake::default()).expect("relief encode");
+        assert_ne!(default, variant, "the box must gain rails");
+        let added = assert_relief_is_additive(&default, &variant);
+        assert!(added > 0, "OP1 emitted no rail triangles on a 6 m cube");
+        // Every rail triangle is 2 quads × 2 tris per railed edge, split over
+        // the two parent faces — so the count is a multiple of 4.
+        assert_eq!(added % 4, 0, "rails come in 4-triangle sets: {added}");
+    }
+
+    #[test]
+    fn relief_encode_is_deterministic() {
+        let gfx = big_box_gfx();
+        let a = encode_gfx_part_relief(&gfx, &ReliefBake::default()).unwrap();
+        let b = encode_gfx_part_relief(&gfx, &ReliefBake::default()).unwrap();
+        assert_eq!(a, b, "re-encode must be byte-identical (D-02.6)");
+    }
+
+    #[test]
+    fn relief_noop_profile_reproduces_the_default_bytes() {
+        let gfx = big_box_gfx();
+        let default = encode_gfx_part(&gfx).unwrap();
+        // scale 0 = the A/B control arm: classification runs, nothing emits.
+        let zero = encode_gfx_part_relief(&gfx, &ReliefBake::from_scale(0.0)).unwrap();
+        assert_eq!(default, zero);
+        // A level the bake cannot reproduce is a no-op, never a wrong answer.
+        let leveled = ReliefBake { subdiv_level: 3, ..ReliefBake::default() };
+        assert!(leveled.is_noop());
+        assert_eq!(default, encode_gfx_part_relief(&gfx, &leveled).unwrap());
+    }
+
+    #[test]
+    fn relief_gate_leaves_props_untouched() {
+        // The quad fixture is a 1 m sheet — it must fail `ModelGate` (props,
+        // items and creature parts never grow rails).
+        let gfx = quad_gfx();
+        let default = encode_gfx_part(&gfx).unwrap();
+        let variant = encode_gfx_part_relief(&gfx, &ReliefBake::default()).unwrap();
+        assert_eq!(default, variant, "a prop-scale model must be variant-free");
+    }
+
+    #[test]
+    fn relief_variant_key_is_stable_and_config_sensitive() {
+        let a = ReliefBake::default();
+        let b = ReliefBake::from_scale(1.0);
+        assert_eq!(a.variant_key(), b.variant_key());
+        assert_ne!(a.variant_key(), ReliefBake::from_scale(0.5).variant_key());
     }
 }
