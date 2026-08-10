@@ -27,10 +27,11 @@ concurrent task owns the bake/transcode resample) and the whole ENVCELL domain
 | `harness/lib/diag_schema.mjs`, `harness/test_diag_schema.mjs` | `d7a035ba` | **T22 D6 closed**: `__diag.pools` + `__prewarmStats` reserved → current (+ the producer's own rows); 5 drifted `evidence:` lines corrected |
 | `docs/url-flags.md` | `d7a035ba` | §0 status row + §4 `drawPools` row restated |
 | `scene3d/pool_producer.js`, `scene3d/static_atlas.js` | `0b8d98e8` | **three live-arm fixes** (below); `static_atlas.js` gains one word (`export`) and no behaviour |
+| `scene3d/pool_producer.js`, `scene3d/pool_material.js`, battery | `4d9ddbd8` | **the TEXREF page stitch** (PAGE-RESAMPLE Handoff #2): pooled members key on the DECLARED page dims, `FULL_PAGE_DIMS` as authority; battery 396 → **413** |
 
-Six bisectable commits, in producer order: `473c056b` → `52f8d82d` →
+Seven bisectable commits, in producer order: `473c056b` → `52f8d82d` →
 `cfd4bc1d` (statics) → `3340c79f` (buildings) → `d7a035ba` (wiring) →
-`0b8d98e8` (live-arm fixes). Nothing pushed. The concurrent PAGE-RESAMPLE
+`0b8d98e8` (live-arm fixes) → `4d9ddbd8` (the TEXREF page stitch). Nothing pushed. The concurrent PAGE-RESAMPLE
 task's commits interleave; none of its files were staged by this task.
 
 **OFF-arm argument.** Every new call in a pre-existing production file is
@@ -144,6 +145,34 @@ LIVE). The counters that matter for this task (`createdPostBoot`,
 had stopped changing. Recorded rather than smoothed: the run is tainted
 `settled:false` for any figure that needs a plateau, and none is claimed.
 
+**D7 — the TEXREF page stitch takes two deliberate refinements on the shape
+PAGE-RESAMPLE prescribed** (commit `4d9ddbd8`; its Handoff #2 asked for
+`texRef: { w, h, compressed: true }` and for `onPage === false` to force the
+legacy path).
+(a) The `f7|f8` format bit comes from the LIVE texture (`isBc7AtlasTexture`),
+not asserted `true`: that axis must match what the class PAGE actually
+allocates, or two members could share a class key while needing different
+`texStorage3D` internal formats — the one thing D-07.2 says a class must never
+do. Since a member is admitted only when its resident dims equal its declared
+dims, and the compressed-only arm's world materials are born BC7, this reads
+`true` in every admitted production case anyway.
+(b) `onPage === false` does not by itself route legacy; **DECLARED ≠ RESIDENT**
+does, whichever way the bit reads. That is the hazard the report actually names
+— a member whose dims will move when its full tier lands must not take a page
+layer now, or the refeed reads a dims mismatch and it keeps its preview texels
+for the session. Refusing on the bit alone would instead have collapsed the
+pooled world to ~0 on today's PRE-resample dist, where the bit is clear
+everywhere: it would have zeroed the 51-pool arm measured above. The trap the
+report warns about (a 1096² member whose byte rounds to a convincing 2048²) is
+closed either way, because the declared dims are read ONLY when the bit is set.
+The refusal has its own reason, `offPage`, so it is never conflated with the D2
+`needsResample` residue, and four counters (`producer.texRefPageKeyed /
+texRefOffPage / texRefAbsent / texRefDimsWillMove`) publish the populations —
+which is how a future page-dim dist will be seen to work. **NOT live-verified**:
+the one-browser budget was spent before this landed. On today's dist
+`texRefPageKeyed` is expected to be 0 and behaviour unchanged, which is what the
+neighbour suites show.
+
 **D6 — one out-of-scope edit.** `scene3d/static_atlas.js` gains the word
 `export` on `_atlasRefeedImpl` (live-arm fix 1). No behaviour changes; the
 reason is in the file.
@@ -154,7 +183,7 @@ Node, from `apps/holtburger-web/`, all on this HEAD.
 
 | command | result |
 |---|---|
-| `node harness/test_draw_pools.mjs` | **396 passed, 0 failed** — DRAW-POOLS ✅ (19 PARTs; 333 → 396) |
+| `node harness/test_draw_pools.mjs` | **413 passed, 0 failed** — DRAW-POOLS ✅ (20 PARTs; 333 → 413) |
 | `node harness/test_diag_schema.mjs` | **69 passed, 0 failed** ✅ (the `evidence:` re-verification caught all 5 of my line drifts) |
 | `node harness/test_build_shell.mjs` | 56 passed, 0 failed ✅ (proves the new modules bundle) |
 | `node test_static_batch.mjs` / `test_static_batch_x.mjs` / `test_static_callpes.mjs` / `test_stat_batch_walk.mjs` / `test_dead_batch_skip.mjs` | 13/0 · 40/0 · 22/0 · 98/0 · 33/0 |
@@ -217,7 +246,15 @@ Taint: `nullRender=1` (mandatory headless — `harness/lib/boot.mjs`), SwiftShad
 2. **The page-dim resample (the concurrent task)** closes the `needsResample`
    refusal by construction. When it lands, `classPages.refused.needsResample`
    should read 0 and the pooled share should jump; that counter is the
-   migration's progress meter and needs no code change to read.
+   migration's progress meter and needs no code change to read. Its CLIENT-side
+   stitch is now landed (`4d9ddbd8`, D7): the feed keys on the TEXREF-declared
+   page dims with `FULL_PAGE_DIMS` as authority, so the first page-dim dist will
+   show `producer.texRefPageKeyed` climbing off 0. PAGE-RESAMPLE's own
+   Handoff #3 (the preview-feed decision) is what still keeps `needsResample`
+   from reaching 0 from the bake alone; its option (b) — upsample the preview
+   into the member's FINAL page layer at transcode — is also what would drive
+   `texRefDimsWillMove` to 0 and let the pooled world cover preview-resident
+   members.
 3. **`refused.bc7Pending = 363` is the biggest residue** and is NOT the D2 gate:
    it is `bc7AtlasShouldDefer`'s in-flight-verdict hold-out. The held-out nodes
    are re-offered by the pool `atlasRefeed` handler — but only when the material
