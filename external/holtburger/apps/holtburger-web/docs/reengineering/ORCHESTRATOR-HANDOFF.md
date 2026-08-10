@@ -4,6 +4,54 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -2. R9 290 REMOTE EYE SESSION 2026-08-10 — E1 DIRTY (envcell fracture) + boot-time complaint
+
+Owner ran the Batch-A eye legs remotely (cloudflared tunnels: serve.py :8765 +
+wsbridge :8080; `bridge_url` URL param carries the wss tunnel; auto-login URLs in the
+session artifact). Release wasm REBUILT+verified 6,404,273 B (clears §-1's staleness
+warning — same byte size as T13's, mtime was a false alarm). ⚠ AUTOMATION RULE learned:
+headless probes must NOT log in as tailnet1 while the owner is testing (one account =
+one session; use agentp07 "Funnel Probe" etc.).
+- **E1 verdict DIRTY** (recorded in queue-1070/batch-A-2026-08-09.json): ON arm
+  envcells FRACTURED in dungeons (Holtburg Redoubt) + outdoor building interiors —
+  missing triangle chunks + giant stretched shards; models/statics/NPCs in the same
+  cells CORRECT. Screenshots in the session scratchpad (fracture-dungeon.png /
+  fracture-interior.png).
+- **NEW native differ** `differ_real_dats_envcells` (geom_bundles.rs, #[ignore],
+  needs ~/ac_base_dats): all 178 envcells of LB 0x0163 assemble EXACT vs the runtime
+  triangulator — T13's assembly code + hbg1 encoder are byte-perfect against real
+  DATs. Suspicion therefore moves to the DEPLOYED v3 pack GEOM/cell payloads or a
+  live-only path. 3-arm SwiftShader repro (A=packs+bundles, B=packs-only, C=legacy at
+  the redoubt) staged as scratchpad/redoubt_repro.cjs — B fracturing ⇒ T12/pack-data;
+  only-A fracturing ⇒ T13 live path.
+- **Boot time**: owner reports >10 min cold outdoor load through the tunnel (retail
+  <10 s local-disk). Byte census (headless, localhost, Arm-A flags) in flight;
+  hypothesis: tunnel-uplink bandwidth-bound, not client-bound. NOTE serve.py has no
+  zstd (Python 3.13; gzip fallback) and `?nosw=1` defeats warm-boot caching by design.
+- GATE-GEOM consequence: geomBundles stays DEFAULT-OFF; ST3 promotion blocked until
+  the fracture is root-caused + fixed + a re-run E1 comes back CLEAN (D-09.5).
+- **ROOT CAUSE FOUND + FIXED same day (~10:30):** cells.js `buildFusedMesh` (the
+  default `?envcellFusion` path, pre-T13) assumed NON-indexed surface groups; T13's
+  bundle cells are INDEXED over shared whole-cell streams → fusion drew the raw
+  vertex stream as triangle soup. Isolation chain: real-DAT differ 178/178 exact
+  (assembly innocent) → deployed-pack differ 769/769 byte-identical (bake innocent)
+  → SwiftShader arms A dirty / B,C clean (geomBundles-only) → arm D
+  (`envcellFusion=off`) CLEAN (fusion pinned). FIX: fusion extracted to
+  scene3d/cell_fusion.js (`fuseSurfaceGroups`): indexed buckets fuse by index-concat
+  over the shared streams (groups in INDEX units, no de-index blowup), legacy slabs
+  byte-identical, defensive mixed-bucket de-index. Tests: harness/test_cell_fusion.mjs
+  (20) + test_geom_bundles.mjs 54/54 green; two new #[ignore] Rust differs
+  (`differ_real_dats_envcells`, `differ_deployed_pack_geom_env`) in geom_bundles.rs.
+  Docs propagated (url-flags geomBundles §0 row + envcellFusion row + batch-A queue
+  verdict). E1 re-run on a REAL GPU still owed before CLEAN.
+- **Boot census (corrected — the first run silently truncated at the 250-entry
+  resource-timing buffer):** cold Arm-A outdoor boot = 1,510 requests / 159.2 MB
+  encoded (94.7 MB texture tier, 30.4 MB legacy shards over 887 requests, 9.3 MB
+  packs, 2.4 MB wasm); network-quiet at ~84 s on localhost. The owner's >10 min =
+  159 MB through the laptop-uplink tunnel (~2-4 Mbps effective) + 887-request RTT
+  tax + `?nosw=1` re-paying it every reload — bandwidth arithmetic, not a client
+  defect. Mitigation = dist placement near the player (mirror/CDN), not client work.
+
 ## -1. BAKE-3 DONE + DEPLOYED (2026-08-10 05:20) — v3 pack layer is the live one
 
 driver3.log: === DONE rc=0 at 23:05:34 (152m38s). 17,682 packs / 265.0 MB (+453.8 KB

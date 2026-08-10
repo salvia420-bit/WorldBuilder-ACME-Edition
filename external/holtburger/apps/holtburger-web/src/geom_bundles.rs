@@ -1213,6 +1213,238 @@ mod tests {
         assert!(setup_checked >= 100, "want ≥100 setups, got {setup_checked}");
     }
 
+    /// REAL-DAT ENVCELL differ (2026-08-10, filed off the R9 290 eye run's
+    /// fractured-interiors finding: the fixture differ above covers one
+    /// synthetic cellstruct; this runs the same comparison over every real
+    /// envcell of the two landblocks in the report — 0x0163 Holtburg Redoubt
+    /// and 0xA900 building interiors). `#[ignore]` — needs ~/ac_base_dats.
+    #[test]
+    #[ignore]
+    fn differ_real_dats_envcells() {
+        use holtburger_dat::DatDatabase;
+        let home = std::env::var("HOME").unwrap();
+        let portal =
+            DatDatabase::new(&format!("{home}/ac_base_dats/client_portal.dat")).expect("portal");
+        let celldat =
+            DatDatabase::new(&format!("{home}/ac_base_dats/client_cell_1.dat")).expect("cell");
+        struct CellSrc(DatDatabase);
+        impl ResourceSource for CellSrc {
+            fn get_file_by_key(&self, key: ResourceKey<'_>) -> holtburger_dat::Result<Vec<u8>> {
+                self.0.get_file(key.file_id)
+            }
+            fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, ns: &str) -> bool {
+                ns == "eor/cell"
+            }
+        }
+        let lbs: [u32; 2] = [0x0163, 0xA900];
+        let all_ids: Vec<u32> = celldat.files.keys().copied().collect();
+        let src = CellSrc(celldat);
+        let mut total_checked = 0usize;
+        for &lb in &lbs {
+            let mut ids: Vec<u32> = all_ids
+                .iter()
+                .copied()
+                .filter(|id| (id >> 16) == lb && (id & 0xFFFF) >= 0x0100 && (id & 0xFFFF) < 0xFFFE)
+                .collect();
+            ids.sort_unstable();
+            if ids.is_empty() {
+                // Outdoor blocks own no interior cells (the eye-report compass
+                // shows the OUTDOOR block id, not the interior's) — skip, the
+                // dungeon LB is the load-bearing leg.
+                println!("LB 0x{lb:04X}: no envcells in cell dat — skipped");
+                continue;
+            }
+            let mut geom = |env_did: u32| -> Option<Vec<u8>> {
+                let bytes = portal.get_file(env_did).ok()?;
+                let env = holtburger_dat::file_type::Environment::unpack(
+                    &mut std::io::Cursor::new(&bytes),
+                )
+                .ok()?;
+                hbg1::encode_env_directory(&env).ok()
+            };
+            let (buffer, descriptor) =
+                assemble_envcells(&src, &mut geom, lb << 16, &ids).unwrap();
+            let cells = descriptor["cells"].as_array().unwrap();
+            let mut missing = 0usize;
+            for (i, cell) in cells.iter().enumerate() {
+                let cid = ids[i];
+                if cell.get("missing").is_some() {
+                    missing += 1;
+                    continue;
+                }
+                // Runtime path: same records, the shipped triangulator.
+                let cbytes = src.0.get_file(cid).unwrap();
+                let envcell =
+                    EnvCell::unpack(&mut std::io::Cursor::new(&cbytes)).unwrap();
+                let env_bytes = portal
+                    .get_file(0x0D00_0000 | envcell.environment_id as u32)
+                    .unwrap();
+                let env = holtburger_dat::file_type::Environment::unpack(
+                    &mut std::io::Cursor::new(&env_bytes),
+                )
+                .unwrap();
+                let surfaces: Vec<u32> = envcell
+                    .surfaces
+                    .iter()
+                    .copied()
+                    .map(surface_did_for_envcell_index)
+                    .collect();
+                let mut tris = Vec::new();
+                crate::append_environment_tris(
+                    &mut tris,
+                    &env,
+                    &surfaces,
+                    envcell.cell_structure,
+                );
+                let rt = runtime_groups(&tris);
+                // Bundle path: env entries carry `subsets`/`surfaceDid`
+                // (models use `fused.subsets`/`surfaceRef`).
+                let vtx_off = cell["vtx"]["off"].as_u64().unwrap() as usize;
+                let vtx_count = cell["vtx"]["count"].as_u64().unwrap() as usize;
+                let idx_off = cell["idx"]["off"].as_u64().unwrap() as usize;
+                let width = cell["idx"]["width"].as_u64().unwrap() as usize;
+                let f32_at = |off: usize| -> f32 {
+                    f32::from_le_bytes(buffer[off..off + 4].try_into().unwrap())
+                };
+                let corner = |vi: usize| -> Corner {
+                    let p = vtx_off + vi * 12;
+                    let n = vtx_off + vtx_count * 12 + vi * 12;
+                    let t = vtx_off + vtx_count * 24 + vi * 8;
+                    Corner {
+                        pos: [
+                            f32_at(p).to_bits(),
+                            f32_at(p + 4).to_bits(),
+                            f32_at(p + 8).to_bits(),
+                        ],
+                        uv: [f32_at(t).to_bits(), f32_at(t + 4).to_bits()],
+                        qn: qn3([f32_at(n), f32_at(n + 4), f32_at(n + 8)]),
+                    }
+                };
+                let index_at = |i: usize| -> usize {
+                    let o = idx_off + i * width;
+                    if width == 2 {
+                        u16::from_le_bytes(buffer[o..o + 2].try_into().unwrap()) as usize
+                    } else {
+                        u32::from_le_bytes(buffer[o..o + 4].try_into().unwrap()) as usize
+                    }
+                };
+                let mut bd: HashMap<u32, Vec<[Corner; 3]>> = HashMap::new();
+                for s in cell["subsets"].as_array().unwrap() {
+                    let did = s["surfaceDid"].as_u64().unwrap() as u32;
+                    let first = s["firstIndex"].as_u64().unwrap() as usize;
+                    let count = s["indexCount"].as_u64().unwrap() as usize;
+                    for t in 0..count / 3 {
+                        bd.entry(did).or_default().push([
+                            corner(index_at(first + t * 3)),
+                            corner(index_at(first + t * 3 + 1)),
+                            corner(index_at(first + t * 3 + 2)),
+                        ]);
+                    }
+                }
+                assert_groups_equal(rt, bd, &format!("envcell 0x{cid:08X}"));
+                total_checked += 1;
+            }
+            println!(
+                "LB 0x{lb:04X}: {} envcells exact, {missing} missing",
+                cells.len() - missing
+            );
+            assert_eq!(missing, 0, "LB 0x{lb:04X}: {missing} cells came back missing");
+        }
+        assert!(total_checked > 100, "want >100 envcells, got {total_checked}");
+    }
+
+    /// DEPLOYED-PACK GEOM differ (2026-08-10, fracture root-cause hunt):
+    /// every 0x0D env HBG1 payload in the deployed pack dist must byte-match
+    /// a fresh `encode_env_directory` of the same record from the base DATs.
+    /// A mismatch = the bake binary's emitter drifted from HEAD's parser.
+    /// `#[ignore]` — needs ~/ac_base_dats + the dist (HB_PACKS_DIR overrides).
+    #[test]
+    #[ignore]
+    fn differ_deployed_pack_geom_env() {
+        use holtburger_dat::DatDatabase;
+        use holtburger_resource_http::pack::{HbpPack, section_kind};
+        let home = std::env::var("HOME").unwrap();
+        let portal =
+            DatDatabase::new(&format!("{home}/ac_base_dats/client_portal.dat")).expect("portal");
+        let packs_dir = std::env::var("HB_PACKS_DIR").unwrap_or_else(|_| {
+            "/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2/packs".to_string()
+        });
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        walk(&p, out);
+                    } else {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(std::path::Path::new(&packs_dir), &mut files);
+        assert!(!files.is_empty(), "no pack files under {packs_dir}");
+        let mut geom_env: HashMap<u32, Vec<u8>> = HashMap::new();
+        let mut pack_files = 0usize;
+        let mut geom_packs = 0usize;
+        for f in &files {
+            let Ok(bytes) = std::fs::read(f) else { continue };
+            let Ok(pack) = HbpPack::parse(bytes) else { continue };
+            pack_files += 1;
+            let Ok(Some(payload)) = pack.section_raw(section_kind::GEOM) else { continue };
+            geom_packs += 1;
+            for (id, enc, off, size) in hbg1::parse_geom_section(&payload).unwrap() {
+                if enc != hbg1::ENCODING_HBG1 || (id >> 24) != 0x0D {
+                    continue;
+                }
+                geom_env
+                    .entry(id)
+                    .or_insert_with(|| payload[off..off + size].to_vec());
+            }
+        }
+        println!(
+            "packs {pack_files}, geom-carrying {geom_packs}, distinct env payloads {}",
+            geom_env.len()
+        );
+        let (mut checked, mut mismatches, mut src_missing) = (0usize, 0usize, 0usize);
+        let mut dids: Vec<u32> = geom_env.keys().copied().collect();
+        dids.sort_unstable();
+        for did in dids {
+            let pack_bytes = &geom_env[&did];
+            let Ok(src_bytes) = portal.get_file(did) else {
+                src_missing += 1;
+                continue;
+            };
+            let env = holtburger_dat::file_type::Environment::unpack(
+                &mut std::io::Cursor::new(&src_bytes),
+            )
+            .expect("env parse");
+            let fresh = hbg1::encode_env_directory(&env).expect("fresh encode");
+            checked += 1;
+            if &fresh != pack_bytes {
+                mismatches += 1;
+                if mismatches <= 5 {
+                    let first = pack_bytes
+                        .iter()
+                        .zip(fresh.iter())
+                        .position(|(a, b)| a != b);
+                    println!(
+                        "MISMATCH 0x{did:08X}: pack {} B vs fresh {} B, first diff byte {:?}",
+                        pack_bytes.len(),
+                        fresh.len(),
+                        first
+                    );
+                }
+            }
+        }
+        println!("checked {checked} env payloads: {mismatches} mismatches, {src_missing} not in base portal.dat");
+        assert!(checked > 500, "expected a real env corpus, got {checked}");
+        assert_eq!(mismatches, 0, "{mismatches} deployed env GEOM payloads drift from HEAD's encoder");
+    }
+
     // ---- fixtures --------------------------------------------------------
 
     fn hbg1_fixture_gfx() -> holtburger_dat::file_type::GfxObj {

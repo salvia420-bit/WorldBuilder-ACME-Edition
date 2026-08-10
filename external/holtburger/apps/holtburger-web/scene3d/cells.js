@@ -54,6 +54,7 @@ import {
   acQuatToThree,
 } from "./adapter.js";
 import { materialCanCastShadow, VERTEX_BAKE } from "./materials.js";
+import { fuseSurfaceGroups } from "./cell_fusion.js";
 // T13 (ST3, `?geomBundles`): per-LB envcell meshes from HBG1 bundles.
 import { geomBundlesActive, assembleEnvcells as assembleGeomEnvcells, cellToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
@@ -1416,63 +1417,13 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           );
         }
 
-        // Compute total vertex count across the bucket. Each per-
-        // surface BufferGeometry has identical attribute layout
-        // (position[3]/uv[2]/normal[3]) — all non-indexed,
-        // 9-floats-per-tri for position+normal, 6-floats-per-tri
-        // for uv. We pre-allocate the merged Float32Arrays then
-        // copy each surface group's slabs into the right slot.
-        let totalVerts = 0;
-        for (const b of bucket) {
-          totalVerts += b.group.geometry.attributes.position.count;
-        }
-
-        const mergedPos = new Float32Array(totalVerts * 3);
-        const mergedUv = new Float32Array(totalVerts * 2);
-        const mergedNormal = new Float32Array(totalVerts * 3);
-        // RND-04: fuse the baked colours alongside. ALL-OR-NOTHING per bucket
-        // — a partially-baked fusion would feed (0,0,0) to the un-baked runs,
-        // which under the suppress-direct arm renders them black.
-        const mergedBaked = cellBaked ? new Uint8Array(totalVerts * 3) : null;
-
-        const fused = new THREE.BufferGeometry();
-        let vertexOffset = 0;
-        for (let i = 0; i < bucket.length; i += 1) {
-          const srcGeom = bucket[i].group.geometry;
-          const srcPos = srcGeom.attributes.position.array;
-          const srcUv = srcGeom.attributes.uv.array;
-          const srcNorm = srcGeom.attributes.normal.array;
-          const vertCount = srcGeom.attributes.position.count;
-
-          mergedPos.set(srcPos, vertexOffset * 3);
-          mergedUv.set(srcUv, vertexOffset * 2);
-          mergedNormal.set(srcNorm, vertexOffset * 3);
-          if (mergedBaked) {
-            mergedBaked.set(
-              srcGeom.getAttribute("acBakedLight").array,
-              vertexOffset * 3,
-            );
-          }
-
-          // addGroup is in *vertex* units for non-indexed
-          // geometry (the docs use "index/vertex" interchangeably
-          // depending on whether setIndex was called). Our source
-          // geometries are non-indexed → start/count count
-          // vertices, materialIndex picks the slot in `materials`.
-          fused.addGroup(vertexOffset, vertCount, i);
-          vertexOffset += vertCount;
-        }
-
-        fused.setAttribute("position", new THREE.BufferAttribute(mergedPos, 3, false));
-        fused.setAttribute("uv", new THREE.BufferAttribute(mergedUv, 2, false));
-        fused.setAttribute("normal", new THREE.BufferAttribute(mergedNormal, 3, false));
-        if (mergedBaked) {
-          fused.setAttribute(
-            "acBakedLight",
-            new THREE.BufferAttribute(mergedBaked, 3, true),
-          );
-        }
-        fused.computeBoundingSphere();
+        // Fusion extracted to cell_fusion.js (E1-DIRTY fix 2026-08-10):
+        // handles both legacy non-indexed slabs and T13 indexed
+        // shared-stream bundle groups — feeding the latter through the old
+        // non-indexed copy was the "fractured interiors" defect (the raw
+        // vertex stream drawn as triangle soup). Node coverage:
+        // harness/test_cell_fusion.mjs.
+        const fused = fuseSurfaceGroups(bucket, cellBaked);
         lbDisposableGeometries.push(fused);
 
         const m = new THREE.Mesh(fused, materials);

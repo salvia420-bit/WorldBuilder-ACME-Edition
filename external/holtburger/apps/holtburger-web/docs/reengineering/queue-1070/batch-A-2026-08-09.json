@@ -62,7 +62,13 @@
       ],
       "artifacts": [ "screenshot per vantage per arm (owner-eye only; NEVER pixel-diffed — PR-8); archived alongside RESULTS" ],
       "verdictSemantics": "CLEAN ⇒ ST3 promotion may proceed; DIRTY ⇒ stage stays flagged-OFF and the finding is a defect — never ship-and-tune (D-09.5)",
-      "verdict": null
+      "verdict": {
+        "result": "DIRTY",
+        "notes": "Owner eye run on the R9 290 (cloudflared tunnel, real GPU, real render; NOT the 1070). ON arm (packSource=on&geomBundles=on): envcell geometry FRACTURED in dungeons (Holtburg Redoubt, cell 0x0100 visible in shot) and in outdoor building interiors (LB 0xA900) — large missing triangle chunks in walls/floors/ceilings plus giant stretched shards with smeared texture. Models/statics/NPCs in the same cells render correctly, isolating the defect to the assemble_envcell_geometry consumer path. Screenshots archived at scratchpad fracture-dungeon.png / fracture-interior.png (source: owner i.ibb.co uploads 2026-08-10). OFF-arm same-spot comparison not yet captured. Partial run — vantages 1/2/4 and the full checklist not completed; batch A remains open. SECOND finding, same run: cold outdoor boot through the tunnel took >10 min wall (owner report) — under byte-census/bandwidth investigation, likely tunnel-uplink-bound, not client-bound; figures to follow.",
+        "ts": "2026-08-10",
+        "by": "owner (R9 290 remote), recorded by orchestrator",
+        "rootCause": "SAME-DAY ROOT CAUSE + FIX (orchestrator): cells.js buildFusedMesh (the default ?envcellFusion path, written pre-T13) assumed NON-indexed per-surface geometries and copied position.array verbatim with vertex-unit addGroup ranges; T13's cellToGeometryGroups hands INDEXED groups over SHARED whole-cell vertex-stream views, so fusion drew the raw vertex stream as triangle soup (missing chunks + giant shards, whole-cell stream re-drawn once per surface = wrong-texture shards). Isolation chain: native real-DAT differ (differ_real_dats_envcells: 178/178 LB 0x0163 cells EXACT) exonerated the assembly; deployed-pack differ (differ_deployed_pack_geom_env: 769/769 env payloads byte-identical to fresh encode) exonerated the v3 bake; local SwiftShader arms A=fractured/B=clean/C=clean isolated geomBundles; arm D (bundles + envcellFusion=off) CLEAN pinned the fusion step. FIX: fusion extracted to scene3d/cell_fusion.js — indexed shared-stream buckets fuse by index-concat over the shared streams (addGroup in index units; de-index blowup stays avoided), legacy slabs byte-identical path, defensive mixed-bucket de-index; node battery harness/test_cell_fusion.mjs (20 checks) + test_geom_bundles.mjs 54/54. Local A-fixed arm re-verified clean same day. E1 re-run on a REAL GPU still owed before any CLEAN verdict (this row stays DIRTY until the owner re-eyes)."
+      }
     },
     {
       "id": "P-SUBTLE",
