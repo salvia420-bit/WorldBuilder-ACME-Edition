@@ -130,7 +130,8 @@ export function initPoolWorld({ THREE, group, search } = {}) {
       // actually offered a second time; the two `reOffer*` outcomes account
       // for every one of them, per refusal reason. `heldOutNoRsId` is the
       // marker gap the stamp closes and MUST read 0 on a stamped build.
-      heldOut: 0, heldOutNoRsId: 0, heldOutDupes: 0,
+      heldOut: 0, heldOutNoRsId: 0, heldOutDupes: 0, heldOutRetired: 0,
+      heldOutByReason: {}, reOfferedByReason: {},
       reOffered: 0, reOfferAdmitted: 0, reOfferStale: 0,
       reOfferRefused: {},
     },
@@ -215,7 +216,14 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
       // producer. `needsResample` is the D2 residue and is expected to be the
       // dominant reason until the bake/transcode resample lands.
       w.stats.refusedNodes += 1;
-      if (admit.reason === REFUSE.BC7_PENDING) _holdOut(n, scene3d, opts, mat);
+      // RSID-MARKER filed the `bc7Pending` class; T22-PRODUCER leg 8 adds
+      // `offPage`. Both are refusals with a KNOWN future event — the BC7
+      // verdict settling — after which the member's dims stop moving and it
+      // can take a page layer. Everything else (needsResample, deformed,
+      // layerFull) has no event and is not filed.
+      if (admit.reason === REFUSE.BC7_PENDING || admit.reason === REFUSE.OFF_PAGE) {
+        _holdOut(n, scene3d, opts, mat, admit.reason);
+      }
       passthrough.push(n);
       continue;
     }
@@ -381,9 +389,23 @@ function _rsIdOf(mat) {
  *  the session. That population is `heldOutNoRsId`, and the whole point of the
  *  stamp is that it reads 0 — a nonzero value names a material class the
  *  texture lane builds without going through either stamp site. */
-function _holdOut(node, scene3d, opts, mat) {
+function _holdOut(node, scene3d, opts, mat, reason) {
   const rs = _rsIdOf(mat);
   if (!rs) { _world.stats.heldOutNoRsId += 1; return; }
+  // DRAIN BY CONSTRUCTION (leg 8). The ledger is re-armed by the BC7 verdict
+  // SETTLING (`upgradeMaterialToBc7` fires `atlasRefeed(rsId)` on landed,
+  // absent AND failed — RSID-MARKER leg 1), so a refusal is only worth filing
+  // while a settle is still coming. A member refused `offPage` DURING a
+  // re-offer has just had its settle: its `map` is final, so its dims can
+  // never stop differing from the declared page and no further event will
+  // ever change the answer. Re-filing it would be a ledger entry that retains
+  // a node for the session and never drains — the exact leak RSID-MARKER's D2
+  // declined to create. It is RETIRED instead: it renders on the legacy
+  // producer, once, and is counted.
+  if (opts && opts.__poolReoffer === true && reason !== REFUSE.BC7_PENDING) {
+    _world.stats.heldOutRetired += 1;
+    return;
+  }
   // A held-out node is ALSO returned as passthrough and rendered by the legacy
   // producer, so the same node can be offered again on a later feed while its
   // verdict is still pending. Filing it twice would re-offer it twice, and the
@@ -395,8 +417,9 @@ function _holdOut(node, scene3d, opts, mat) {
   ud.__poolHeldRs = rs;
   let list = _world.holdouts.get(rs);
   if (!list) { list = []; _world.holdouts.set(rs, list); }
-  list.push({ node, scene3d, opts });
+  list.push({ node, scene3d, opts, reason });
   _world.stats.heldOut += 1;
+  _world.stats.heldOutByReason[reason] = (_world.stats.heldOutByReason[reason] || 0) + 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,8 +548,16 @@ export function poolAtlasRefeed(rsId) {
     }
     const k = `${(h.opts.lbKey >>> 0)}|${h.opts.domain || "st"}`;
     let g = groups.get(k);
-    if (!g) { g = { scene3d: h.scene3d, opts: h.opts, nodes: [] }; groups.set(k, g); }
+    if (!g) {
+      // `__poolReoffer` marks this pass as the POST-SETTLE one, which is what
+      // makes `_holdOut`'s retire rule (above) reachable.
+      g = { scene3d: h.scene3d, opts: { ...h.opts, __poolReoffer: true }, nodes: [] };
+      groups.set(k, g);
+    }
     g.nodes.push(h.node);
+    // Count the re-offer under the reason the member was FILED with, so
+    // `offPage` and `bc7Pending` never share a row.
+    w.stats.reOfferedByReason[h.reason] = (w.stats.reOfferedByReason[h.reason] || 0) + 1;
   }
   for (const g of groups.values()) {
     try {

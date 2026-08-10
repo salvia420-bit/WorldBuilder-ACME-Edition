@@ -109,6 +109,7 @@ import { tileOfLb } from "../scene3d/residency_grid.js";
 import {
   initTexCompressedOnly, _resetTexCompressedOnlyForTest,
   TIER_BIT_FULL_PAGE_DIMS, TIER_BIT_FULL_XU7_PRESENT,
+  _setBc7SupportForTest,
 } from "../scene3d/bc7_textures.js";
 
 let passed = 0;
@@ -1536,6 +1537,99 @@ console.log("PART 20: the FULL_PAGE_DIMS bit gates the whole page gate");
   check(addSingletonsToPools([nOk], {}, { domain: "st", lbKey: 0x40400000 }).pooled === 1,
     "…and the member pools");
 
+  _resetTexCompressedOnlyForTest();
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+}
+
+// ── PART 21 — the offPage hold-out ledger (leg 8) ─────────────────────────
+
+console.log("PART 21: offPage refusals are FILED and re-offered on verdict settle");
+{
+  const rows = new Map();
+  const packTexref = (rsId) => {
+    const r = rows.get(rsId >>> 0);
+    return r === undefined ? -1 : ((r.tierBits << 8) | r.dimsByte);
+  };
+  const dimsByte = (logW, logH) => ((logW & 0xf) << 4) | (logH & 0xf);
+  const RS = 0x06000040;
+  // A page-dim dist: the bit is SET and the member's page is 2048².
+  rows.set(RS, {
+    tierBits: TIER_BIT_FULL_PAGE_DIMS | TIER_BIT_FULL_XU7_PRESENT,
+    dimsByte: dimsByte(11, 11),
+  });
+
+  const mkHeld = (edge) => {
+    const m = new THREE.MeshStandardMaterial({ map: pageTex(edge) });
+    m.userData = { surfaceDid: 0x08000040, __pvwRsId: RS };
+    const n = new THREE.Mesh(triGeom(6), m);
+    n.castShadow = true;
+    return n;
+  };
+  // The producers parent every passthrough node the same turn they take it
+  // back; the re-offer treats a parentless node as an evicted LB and drops it.
+  const parent = new THREE.Group();
+
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  _resetTexCompressedOnlyForTest();
+  initTexCompressedOnly({ wasmNs: { pack_texref: packTexref } });
+  initPoolWorld({ THREE, group: new THREE.Group(), search: ARMED_PRE });
+
+  // (1) STRICT ARM, preview-resident ⇒ refused offPage AND FILED.
+  const n1 = mkHeld(256);
+  const r1 = addSingletonsToPools([n1], {}, { domain: "st", lbKey: 0x40400000 });
+  check(r1.pooled === 0 && r1.passthrough[0] === n1, "a dims-will-move member is refused and passed through");
+  parent.add(n1); // what the producer does with its passthrough
+  let cen = poolWorldCensus();
+  check(cen.classPages.refused.offPage === 1, "…refused with the offPage reason");
+  check(cen.producer.heldOut === 1 && cen.producer.holdoutRsIds === 1,
+    "…and FILED in the hold-out ledger (leg 8 — without this the first strict arm holds it out forever)");
+  check(cen.producer.heldOutByReason.offPage === 1,
+    "…counted under its own reason, never merged with bc7Pending");
+
+  // (2) THE VERDICT SETTLES: the full tier lands at the declared page dims and
+  //     `atlasRefeed(rsId)` fires. The member is re-offered and ADMITTED.
+  n1.material.map = pageTex(2048);
+  poolAtlasRefeed(RS);
+  cen = poolWorldCensus();
+  check(cen.producer.reOfferedByReason.offPage === 1, "the re-offer is counted under offPage");
+  check(cen.producer.reOfferAdmitted === 1, "…and the member is ADMITTED once declared == resident");
+  check(n1.parent === null, "…and leaves the scene graph, so it is not drawn twice");
+  check(cen.producer.holdoutRsIds === 0, "…the ledger drained");
+  check(cen.pools.count === 1 && cen.classes.count === 1, "…and a pool now exists for it");
+
+  // (3) STILL PENDING ⇒ RE-FILED. A settle for the rsId can arrive while this
+  //     member's own BC7 verdict is still in flight; it must go back on the
+  //     ledger, not be stranded.
+  _setBc7SupportForTest(true);
+  const n2 = mkHeld(256);
+  n2.material.userData.__bc7Pending = true;
+  addSingletonsToPools([n2], {}, { domain: "st", lbKey: 0x40400000 });
+  parent.add(n2);
+  cen = poolWorldCensus();
+  check(cen.classPages.refused.bc7Pending === 1, "an in-flight verdict is refused bc7Pending");
+  check(cen.producer.heldOutByReason.bc7Pending === 1, "…filed under its own reason");
+  poolAtlasRefeed(RS); // settle fires while THIS member is still pending
+  cen = poolWorldCensus();
+  check(cen.producer.reOfferedByReason.bc7Pending === 1, "…re-offered, counted under bc7Pending");
+  check(cen.producer.holdoutRsIds === 1 && cen.producer.heldOut === 3,
+    "…and RE-FILED, because another settle is still coming for it");
+  check(cen.producer.heldOutRetired === 0, "…nothing retired while a settle is still owed");
+
+  // (4) STILL offPage AFTER the settle ⇒ RETIRED, not re-filed forever. Its
+  //     map is final, so no future event can change the answer; re-filing
+  //     would retain the node for the session (the leak RSID-MARKER's D2
+  //     declined to create).
+  delete n2.material.userData.__bc7Pending; // verdict settled; dims still wrong
+  poolAtlasRefeed(RS);
+  cen = poolWorldCensus();
+  check(cen.producer.reOfferRefused.offPage >= 1, "a post-settle re-offer that is still off-page is counted");
+  check(cen.producer.heldOutRetired === 1, "…RETIRED from the ledger");
+  check(cen.producer.holdoutRsIds === 0, "…so the ledger drains by construction");
+  check(n2.parent === parent, "…and the member keeps rendering on the legacy producer");
+
+  _setBc7SupportForTest(null);
   _resetTexCompressedOnlyForTest();
   _resetDrawPoolsForTest();
   _resetPoolWorldForTest();
