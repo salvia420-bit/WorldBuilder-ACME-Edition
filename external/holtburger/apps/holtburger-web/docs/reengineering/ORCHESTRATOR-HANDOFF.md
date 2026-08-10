@@ -38,7 +38,20 @@ Owner directive: Opus agents implement; orchestrator researches/verifies/pushes.
   staging vs F6 in-app, mirrorRestoreFailed=0 across a forced context loss, and
   an owner eye on the t128 interim state (never yet seen by a human) — chain it
   with the E1 third-arm tco probe next 1070 session per the report.
-- QUEUED (owner-requested): RELIEF-IN-BAKE — bake gfxRelief into HBG1 GEOM
+- RELIEF-IN-BAKE LANDED+VERIFIED (battery 78/78 + neighbors re-run; release
+  wasm 6,423,996 B shipped): HBG1 GEOMR variants bake the relief that ACTUALLY
+  ships (D1 read-verification: at preset subdivLevel 0 the live relief is
+  gfx_remodel's OP1/OP3 additive RAILS — gfx_subdiv's displacement has no
+  runtime caller; acceptance restated as identical-subsets+appended-triangles,
+  differ-pinned against the runtime's own relief output, strictly stronger).
+  Default GEOM unchanged (1,927 rows byte-identical to T13); GEOMR 125 rows /
+  +7,760 tris / 1.32 MB on the CI region; consumer behind ?reliefBundles
+  DEFAULT-OFF. REMAINDER D2: interior/ENV variants not baked (per-CELL palette
+  makes material boundaries a cell fact, not a cellstruct fact) — relief arm
+  rails exteriors only. ⚠ EYE-ARM TRAP for the next 1070 queue: the DEPLOYED
+  dist has NO GEOMR rows (needs a --geom-relief re-bake) — a naive arm renders
+  flat and false-CLEANs; assert __diag.geometry.relief.variantRowsResident>0
+  before judging. Original queued brief: — bake gfxRelief into HBG1 GEOM
   variants so the pack pipeline stops force-disabling relief. Full turnkey brief:
   docs/reengineering/queued/RELIEF-IN-BAKE-brief.md. Launch when a pass-2 slot
   frees and its scope no longer collides.
