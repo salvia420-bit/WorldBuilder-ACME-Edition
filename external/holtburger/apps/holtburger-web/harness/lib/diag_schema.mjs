@@ -694,6 +694,9 @@ export const REGISTRY = Object.freeze([
       "entityDecode.msTotal": C("ms", null, { attribution: false }),
       "entityDecode.substKeyDupes": C("count"),
       "geomFallback.modelsServedByRuntimeDecode": C("count"),
+      "relief.armed": L("bool", null, { note: "RELIEF-IN-BAKE: the baked relief VARIANT export is in use (`?reliefBundles=on` + gfxRelief resolved ON + subdivLevel 0)" }),
+      "relief.variantRowsResident": L("count", null, { note: "GEOMR rows in the resident packs; 0 = this dist was baked without --geom-relief, so every model reads its relief-free default (warned at arm)" }),
+      "relief.modelsAssembled": C("count"),
     },
   },
 

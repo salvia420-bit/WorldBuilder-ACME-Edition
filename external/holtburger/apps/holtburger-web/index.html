@@ -2366,9 +2366,16 @@
             const __gbPs = new URLSearchParams(window.location.search);
             const __gbV = String(__gbPs.get("geomBundles") || "").toLowerCase();
             const __gbOn = __gbV === "on" || __gbV === "1" || __gbV === "true" || __gbV === "yes";
-            if (__gbOn && gfxReliefCfg.enabled && __gbPs.get("gfxRelief") !== "on") {
+            // RELIEF-IN-BAKE: `?reliefBundles=on` (DEFAULT-OFF) means the dist
+            // carries baked relief VARIANT geometry, so relief and bundles are
+            // no longer exclusive — leave the resolved relief config alone and
+            // let geom_bundles.js check its own legs (variant export present,
+            // subdivLevel 0). Without that flag the T13 D3 rule stands.
+            const __rbV = String(__gbPs.get("reliefBundles") || "").toLowerCase();
+            const __rbOn = __rbV === "on" || __rbV === "1" || __rbV === "true" || __rbV === "yes";
+            if (__gbOn && gfxReliefCfg.enabled && !__rbOn && __gbPs.get("gfxRelief") !== "on") {
               console.log(
-                "[geomBundles] forcing gfxRelief OFF (bundles carry relief-free geometry; author ?gfxRelief=on to keep relief — that disarms bundles)"
+                "[geomBundles] forcing gfxRelief OFF (bundles carry relief-free geometry; author ?reliefBundles=on for baked relief, or ?gfxRelief=on to keep runtime relief — that disarms bundles)"
               );
               gfxReliefCfg.enabled = false;
             }
@@ -2867,7 +2874,8 @@
           // module is not even imported on the OFF arm (the index.html
           // `?packSource` discipline); every arming leg is loud inside
           // initGeomBundles (requires the armed controller + assemble
-          // exports + relief off + retail placement chain). Fail-soft: any
+          // exports + relief off, or the RELIEF-IN-BAKE variant arm under
+          // `?reliefBundles=on` + retail placement chain). Fail-soft: any
           // error leaves the runtime-decode path byte-identical.
           try {
             const gbPs = new URLSearchParams(window.location.search);

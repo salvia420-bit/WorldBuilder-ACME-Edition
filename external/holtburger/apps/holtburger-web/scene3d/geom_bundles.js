@@ -12,9 +12,13 @@
 // loud): `?geomBundles=on` requires
 //   (1) `?packSource=on` with an ARMED controller (GEOM rides packs);
 //   (2) the wasm assemble exports present (stale pkg/ disarms loudly);
-//   (3) geometry relief OFF — HBG1 payloads bake the relief-free default;
-//       index.html forces relief off under this flag unless the user
-//       explicitly authored `?gfxRelief=on`, which wins and DISARMS bundles;
+//   (3) geometry relief OFF — HBG1 GEOM payloads bake the relief-free
+//       default; index.html forces relief off under this flag unless the
+//       user explicitly authored `?gfxRelief=on`, which wins and DISARMS
+//       bundles. RELIEF-IN-BAKE lifts that leg for `?reliefBundles=on`
+//       (DEFAULT-OFF, below): the dist then also carries baked relief
+//       VARIANT payloads (`GEOMR`) and the arm consumes those instead of
+//       disarming;
 //   (4) `?placementId` NOT `off` — the bake resolves setup frames on the
 //       retail chain (the wasm default).
 // Any missing leg ⇒ byte-identical legacy decode (the kill path).
@@ -30,7 +34,7 @@ import * as THREE from "three";
 // Flag + arming
 // ---------------------------------------------------------------------------
 
-export function geomBundlesEnabled(search) {
+function _exactOn(search, name) {
   try {
     const s =
       search !== undefined
@@ -38,7 +42,7 @@ export function geomBundlesEnabled(search) {
         : typeof window !== "undefined" && window.location
           ? window.location.search
           : "";
-    const v = new URLSearchParams(s).get("geomBundles");
+    const v = new URLSearchParams(s).get(name);
     if (v == null) return false;
     const t = String(v).toLowerCase();
     return t === "on" || t === "1" || t === "true" || t === "yes";
@@ -47,10 +51,36 @@ export function geomBundlesEnabled(search) {
   }
 }
 
+export function geomBundlesEnabled(search) {
+  return _exactOn(search, "geomBundles");
+}
+
+/**
+ * RELIEF-IN-BAKE — `?reliefBundles=on`. DEFAULT-OFF, EXACT-MATCH opt-in
+ * (I7 / pass 9 D-09.3): absent or anything but an affirmative reads OFF,
+ * so the OFF arm is today's code path byte-for-byte.
+ *
+ * Consuming the baked relief variant is what lets `?geomBundles` stop
+ * force-disabling `?gfxRelief` (T13 D3). It requires BOTH flags plus relief
+ * actually resolving ON for the instance — relief geometry with the relief
+ * shading/config off would be an incoherent pairing.
+ */
+export function reliefBundlesEnabled(search) {
+  return _exactOn(search, "reliefBundles");
+}
+
+/** True when the assemble path is serving baked relief variants. */
+export function reliefBundlesActive() {
+  return _state.armed === true && _state.relief === true;
+}
+
 const _state = {
   armed: false,
   wasmExports: null,
   reasons: [],
+  // RELIEF-IN-BAKE: consume baked relief VARIANT geometry. DEFAULT-OFF
+  // (I7) — false unless `?reliefBundles=on` armed every leg.
+  relief: false,
 };
 
 const _stats = {
@@ -60,6 +90,11 @@ const _stats = {
   // registry contract.
   entityDecode: { count: 0, msTotal: 0, substKeyDupes: 0 },
   geomFallback: { modelsServedByRuntimeDecode: 0 },
+  // RELIEF-IN-BAKE surface. `armed` = the variant export is in use;
+  // `variantRowsResident` = how many relief rows the resident packs carry
+  // (0 on a dist baked without `--geom-relief` — the loud tell that the arm
+  // has nothing to serve and every model reads its relief-free default).
+  relief: { armed: false, variantRowsResident: 0, modelsAssembled: 0 },
 };
 
 function _installDiag() {
@@ -104,14 +139,49 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
   if (!ctlArmed) {
     reasons.push("pack controller not armed (legacy dist or ?packSource off)");
   }
-  if (
+  // RELIEF-IN-BAKE. Relief ON is a DISARM unless the relief-variant arm is
+  // explicitly requested AND every one of its own legs holds — in which case
+  // relief geometry comes from the bake and the pairing is coherent.
+  const reliefOn = !!(
     typeof globalThis !== "undefined" &&
     globalThis.__hbGfxRelief &&
     globalThis.__hbGfxRelief.enabled === true
-  ) {
-    reasons.push(
-      "gfxRelief is ON (explicit ?gfxRelief=on wins) — bundles bake relief-free geometry"
-    );
+  );
+  let wantRelief = false;
+  if (reliefOn) {
+    const reliefReasons = [];
+    if (!reliefBundlesEnabled()) {
+      reliefReasons.push(
+        "?reliefBundles=on not authored (DEFAULT-OFF until the eye pair passes)"
+      );
+    }
+    if (
+      !wasmExports ||
+      typeof wasmExports.assemble_model_geometry_relief !== "function"
+    ) {
+      reliefReasons.push(
+        "wasm assemble_model_geometry_relief missing (stale pkg/ — rebuild wasm)"
+      );
+    }
+    const lvl =
+      (globalThis.__hbGfxRelief && globalThis.__hbGfxRelief.subdivLevel) | 0;
+    if (lvl !== 0) {
+      // The bake reproduces the material-identity RAILS the presets ship at
+      // subdivLevel 0. Levels 1..5 are the per-texel displacement path, which
+      // needs decoded surface height fields and is not bakeable — refuse to
+      // pretend, rather than ship a level the dist does not carry.
+      reliefReasons.push(
+        `?gfxSubdivLevel=${lvl} has no baked variant (the bake carries level 0 rails)`
+      );
+    }
+    if (reliefReasons.length > 0) {
+      reasons.push(
+        "gfxRelief is ON but the relief-variant arm is not available:\n      - " +
+          reliefReasons.join("\n      - ")
+      );
+    } else {
+      wantRelief = true;
+    }
   }
   if (
     !wasmExports ||
@@ -132,9 +202,30 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
   }
   _state.wasmExports = wasmExports;
   _state.armed = true;
+  _state.relief = wantRelief;
+  _stats.relief.armed = wantRelief;
+  if (wantRelief) {
+    let rows = 0;
+    try {
+      if (typeof wasmExports.geom_relief_rows_resident === "function") {
+        rows = wasmExports.geom_relief_rows_resident() | 0;
+      }
+    } catch (_) {}
+    _stats.relief.variantRowsResident = rows;
+    if (rows === 0) {
+      // Never silent: the arm is live but this dist was baked without
+      // `--geom-relief`, so every model reads its relief-free default.
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[geomBundles] relief variants armed but 0 GEOMR rows resident — " +
+          "this dist was baked without --geom-relief; geometry will be relief-free"
+      );
+    }
+  }
   // eslint-disable-next-line no-console
   console.log(
-    "[geomBundles] armed — statics/buildings/anim-scenery/cells consume HBG1 bundles"
+    "[geomBundles] armed — statics/buildings/anim-scenery/cells consume HBG1 bundles" +
+      (wantRelief ? " (relief variants ON)" : "")
   );
   return true;
 }
@@ -349,7 +440,14 @@ export function assembleModels(modelIds) {
       : Date.now();
   let raw;
   try {
-    raw = _state.wasmExports.assemble_model_geometry(new Uint32Array(modelIds));
+    const ids = new Uint32Array(modelIds);
+    // RELIEF-IN-BAKE: the variant export reads each model's baked relief
+    // payload when the dist carries one and its relief-free default
+    // otherwise — that default IS the relief geometry for models the
+    // profile leaves alone, so a mixed read is still a coherent world.
+    raw = _state.relief
+      ? _state.wasmExports.assemble_model_geometry_relief(ids)
+      : _state.wasmExports.assemble_model_geometry(ids);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[geomBundles] assemble_model_geometry threw (runtime fallback):", e);
@@ -363,6 +461,7 @@ export function assembleModels(modelIds) {
   _stats.bundles.assembled += descriptor.assembled | 0;
   _stats.bundles.bytesOut += descriptor.bytes | 0;
   _stats.bundles.msAssemble += t1 - t0;
+  if (_state.relief) _stats.relief.modelsAssembled += descriptor.assembled | 0;
   const byModel = new Map();
   const missingIds = [];
   for (const m of descriptor.models) {
@@ -417,12 +516,16 @@ export function assembleEnvcells(landblockId, cellIds) {
 }
 
 // Test seam: node suites arm the module without a browser.
-export function _testArm(wasmExports) {
+export function _testArm(wasmExports, opts) {
   _state.armed = true;
   _state.wasmExports = wasmExports;
+  _state.relief = !!(opts && opts.relief);
+  _stats.relief.armed = _state.relief;
   _installDiag();
 }
 export function _testDisarm() {
   _state.armed = false;
   _state.wasmExports = null;
+  _state.relief = false;
+  _stats.relief.armed = false;
 }

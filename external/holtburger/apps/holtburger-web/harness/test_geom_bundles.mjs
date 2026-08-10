@@ -18,6 +18,11 @@
 //            attribute (normalized u8, itemSize 3) on shared streams.
 //   PART 6 — assemble wrappers: descriptor plumbing, missing-id routing,
 //            __diag.geometry counters.
+//   PART 7 — RELIEF-IN-BAKE (`?reliefBundles=on`, DEFAULT-OFF): flag
+//            grammar, the relief arming legs (relief resolved ON + the
+//            variant export + subdivLevel 0), the OFF-arm invariant (the
+//            relief-free export is the one called), variant-export routing
+//            when armed, and the 0-rows loud warning.
 //
 // Run:  cd apps/holtburger-web/ && node harness/test_geom_bundles.mjs
 
@@ -483,6 +488,149 @@ function groupMap(result) {
   );
   gb._testDisarm();
   ok(gb.assembleModels([1]) === null, "disarmed assembleModels → null (legacy path)");
+}
+
+// ---------------------------------------------------------------------------
+// PART 7 — RELIEF-IN-BAKE (`?reliefBundles=on`)
+// ---------------------------------------------------------------------------
+for (const [v, want] of [
+  ["?reliefBundles=on", true],
+  ["?reliefBundles=1", true],
+  ["?reliefBundles=true", true],
+  ["?reliefBundles=yes", true],
+  ["?reliefBundles=off", false],
+  ["?reliefBundles=0", false],
+  ["?reliefBundles=garbage", false],
+  ["", false],
+  ["?reliefBundles", false],
+]) {
+  ok(
+    gb.reliefBundlesEnabled(v) === want,
+    `relief flag grammar: "${v}" → ${want}`
+  );
+}
+
+{
+  // A wasm surface that carries the variant export + a resident-row count.
+  let reliefCalls = 0;
+  let flatCalls = 0;
+  let residentRows = 7;
+  const reliefWasm = {
+    assemble_model_geometry: () => {
+      flatCalls += 1;
+      return { buffer: new Uint8Array(0), descriptor: JSON.stringify({ models: [], assembled: 0, missing: 0, bytes: 0 }) };
+    },
+    assemble_model_geometry_relief: () => {
+      reliefCalls += 1;
+      return { buffer: new Uint8Array(0), descriptor: JSON.stringify({ models: [], assembled: 0, missing: 0, bytes: 0 }) };
+    },
+    assemble_envcell_geometry: () => {},
+    geom_relief_rows_resident: () => residentRows,
+  };
+
+  // Relief ON but the flag absent → the T13 D3 rule still stands (DISARM).
+  ok(
+    armWith({
+      search: "?geomBundles=on&packSource=on",
+      hbFetch: { enabled: true },
+      relief: { enabled: true, subdivLevel: 0 },
+      wasm: reliefWasm,
+    }) === false,
+    "relief arm: DEFAULT-OFF — relief ON without ?reliefBundles still disarms"
+  );
+  // Flag on, but the wasm has no variant export (stale pkg/) → DISARM.
+  ok(
+    armWith({
+      search: "?geomBundles=on&packSource=on&reliefBundles=on",
+      hbFetch: { enabled: true },
+      relief: { enabled: true, subdivLevel: 0 },
+      wasm: fakeWasm,
+    }) === false,
+    "relief arm: missing assemble_model_geometry_relief disarms (stale pkg/)"
+  );
+  // Flag on, but a subdiv level the bake cannot reproduce → DISARM.
+  ok(
+    armWith({
+      search: "?geomBundles=on&packSource=on&reliefBundles=on",
+      hbFetch: { enabled: true },
+      relief: { enabled: true, subdivLevel: 3 },
+      wasm: reliefWasm,
+    }) === false,
+    "relief arm: subdivLevel > 0 has no baked variant → disarms"
+  );
+  // All legs → armed WITH relief.
+  ok(
+    armWith({
+      search: "?geomBundles=on&packSource=on&reliefBundles=on",
+      hbFetch: { enabled: true },
+      relief: { enabled: true, subdivLevel: 0 },
+      wasm: reliefWasm,
+    }) === true,
+    "relief arm: all legs present → armed"
+  );
+  ok(gb.reliefBundlesActive() === true, "reliefBundlesActive true when armed");
+  ok(
+    gb.geomBundleStats().relief.armed === true &&
+      gb.geomBundleStats().relief.variantRowsResident === 7,
+    "__diag.geometry.relief records the resident variant row count"
+  );
+  gb.assembleModels([0x01000001]);
+  ok(
+    reliefCalls === 1 && flatCalls === 0,
+    "armed relief arm routes to assemble_model_geometry_relief"
+  );
+
+  // The flag ON but relief resolved OFF must NOT engage the variant export —
+  // relief geometry with relief off would be an incoherent pairing.
+  ok(
+    armWith({
+      search: "?geomBundles=on&packSource=on&reliefBundles=on",
+      hbFetch: { enabled: true },
+      wasm: reliefWasm,
+    }) === true,
+    "relief flag with relief OFF still arms bundles"
+  );
+  ok(
+    gb.reliefBundlesActive() === false,
+    "relief flag alone does not engage variants (gfxRelief must resolve ON)"
+  );
+  const beforeFlat = flatCalls;
+  gb.assembleModels([0x01000001]);
+  ok(
+    flatCalls === beforeFlat + 1 && reliefCalls === 1,
+    "OFF arm calls the relief-FREE export (byte-identical legacy routing)"
+  );
+
+  // A dist baked without --geom-relief: arms, but says so out loud.
+  residentRows = 0;
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  const armed0 = armWith({
+    search: "?geomBundles=on&packSource=on&reliefBundles=on",
+    hbFetch: { enabled: true },
+    relief: { enabled: true, subdivLevel: 0 },
+    wasm: reliefWasm,
+  });
+  console.warn = realWarn;
+  ok(armed0 === true, "0 resident variant rows still arms (defaults are relief-free)");
+  ok(
+    warns.some((w) => w.includes("0 GEOMR rows resident")),
+    "0 resident variant rows warns LOUDLY (never silent)"
+  );
+  ok(
+    gb.geomBundleStats().relief.variantRowsResident === 0,
+    "variantRowsResident reports 0 for a relief-free dist"
+  );
+  gb._testDisarm();
+  ok(
+    gb.reliefBundlesActive() === false,
+    "testDisarm clears the relief arm too"
+  );
+  // The test seam honours the relief opt-in explicitly.
+  gb._testArm(reliefWasm, { relief: true });
+  ok(gb.reliefBundlesActive() === true, "_testArm({relief:true}) arms variants");
+  gb._testDisarm();
 }
 
 console.log(`geom-bundles: ${passed} passed, ${failed} failed`);

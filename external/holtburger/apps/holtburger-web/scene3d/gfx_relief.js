@@ -18,6 +18,23 @@
 //
 // So relief lives in the position buffer, where the atlas cannot lose it.
 //
+// WHERE THE DECISION RUNS — RUNTIME *or* BAKE (RELIEF-IN-BAKE, 2026-08-10)
+// -----------------------------------------------------------------------
+// The heights are still decided the same way — by MATERIAL IDENTITY, per the
+// `gfx_subdiv.rs` module docs, whose retirement finding (per-texel/luminance
+// height RETIRED 2026-07-30 on polarity + banding measurements) is settled and
+// is NOT re-opened by anything below. What changed is only WHERE the decision
+// runs. On the migration arm (`?packSource` + `?geomBundles`) the geometry
+// comes from baked HBG1 payloads instead of this wasm decode, so relief had to
+// be baked too or the arm would ship a flat world: `hbg1::encode_gfx_part_relief`
+// re-emits the SAME `gfx_remodel` OP1/OP3 rails this file's config drives, into
+// a variant pack section (`GEOMR`), and `?reliefBundles=on` (DEFAULT-OFF)
+// consumes them. That path is differ-pinned to reproduce this runtime's output
+// exactly. This file stays the single place the CONFIG is resolved: the bake
+// profile mirrors `set_gfx_relief(true, 0, scale)`, and a `gfxSubdivLevel > 0`
+// resolution refuses the bundle arm rather than claim a level the bake cannot
+// reproduce.
+//
 // GEOMETRY IS SHARED PER DISTINCT MODEL (dedupe ~54.9x), so the vertex-count
 // cost is paid once per model, not per placement — but it IS paid in full by
 // the shadow depth pass, which reads the same buffer (see `?gfxRelief` notes in
