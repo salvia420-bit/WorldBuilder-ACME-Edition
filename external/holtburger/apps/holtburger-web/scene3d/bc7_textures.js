@@ -398,9 +398,13 @@ export function releaseFullTierMirror(rsId) {
   try {
     registerReleasedTexture(
       tex,
-      async () => {
+      // `t` is the registry's own argument, NOT the captured `tex`: the
+      // registry holds this callback strongly, so closing over the texture
+      // would pin it and make the WeakRef entry (and this module's map)
+      // the retention they exist to prevent.
+      async (t) => {
         const parsed = await e.restore();
-        if (!parsed || !_relevelInPlace(tex, parsed)) {
+        if (!parsed || !_relevelInPlace(t, parsed)) {
           // The registry logs + counts the miss; this counter is the
           // texture-lane's own view of it (`__texStats().mirrors`).
           _stats.mirrorRestoreFailed += 1;
