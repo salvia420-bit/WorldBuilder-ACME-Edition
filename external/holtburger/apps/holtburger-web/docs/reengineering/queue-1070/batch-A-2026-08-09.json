@@ -19,8 +19,16 @@
     "Admin teleports require the Developer account: login tailnet1 (index.html:6027 recipe). Verify POI names live with @telepoi list before relying on any named vantage (sendChat via window.__sessionHandle.sendChat, index.html:1616–1675; @telepoi handler AdminCommands.cs:875, @teledungeon DeveloperCommands.cs:2068)."
   ],
   "suggestedOrder": [
-    "P-SUBTLE", "E1", "P-ASSEMBLE", "P-LIGHTBAKE", "P-INITTEX", "P-88MIB",
-    "BOOT-666-SHELL", "TEXWORKER-TAIL", "TEXWORKER-BOOTWARM", "MOVE-FIX-BASELINE"
+    "P-SUBTLE",
+    "E1",
+    "P-ASSEMBLE",
+    "P-LIGHTBAKE",
+    "P-INITTEX",
+    "P-88MIB",
+    "BOOT-666-SHELL",
+    "TEXWORKER-TAIL",
+    "TEXWORKER-BOOTWARM",
+    "MOVE-FIX-BASELINE"
   ],
   "sessionLog": [
     {
@@ -47,10 +55,46 @@
       },
       "boxMode": "1070, off-screen CDP :9333 session (real GPU + real render required; eye items may share one Chrome session across arms — flag flip needs a reload since geomBundles is boot-time)",
       "vantages": [
-        { "name": "town-overview", "tele": "@telepoi holtburg (verify with @telepoi list)", "cam": { "dist": 26, "az": 35, "el": 18 }, "note": "rooftops + props + fences: winding and silhouette read" },
-        { "name": "town-street", "tele": "same session, walk/short @teleloc to street level", "cam": { "dist": 6, "az": 0, "el": 5 }, "note": "close shading parity on walls/props (snorm8 normal quantization); stipple/two-sided classes (foliage, fences, signs)" },
-        { "name": "dungeon", "tele": "@teledungeon <name|landblock> or a dungeon POI from @telepoi list", "cam": { "dist": 8, "az": 0, "el": 10 }, "note": "interior envcells: winding + baked-light surfaces intact" },
-        { "name": "lod-band", "tele": "town-overview pose, then pull camera back through ~100 m", "cam": { "dist": 110, "az": 35, "el": 18 }, "note": "LOD swap behavior at the ~100 m band — same swap distance and no popping delta between arms" }
+        {
+          "name": "town-overview",
+          "tele": "@telepoi holtburg (verify with @telepoi list)",
+          "cam": {
+            "dist": 26,
+            "az": 35,
+            "el": 18
+          },
+          "note": "rooftops + props + fences: winding and silhouette read"
+        },
+        {
+          "name": "town-street",
+          "tele": "same session, walk/short @teleloc to street level",
+          "cam": {
+            "dist": 6,
+            "az": 0,
+            "el": 5
+          },
+          "note": "close shading parity on walls/props (snorm8 normal quantization); stipple/two-sided classes (foliage, fences, signs)"
+        },
+        {
+          "name": "dungeon",
+          "tele": "@teledungeon <name|landblock> or a dungeon POI from @telepoi list",
+          "cam": {
+            "dist": 8,
+            "az": 0,
+            "el": 10
+          },
+          "note": "interior envcells: winding + baked-light surfaces intact"
+        },
+        {
+          "name": "lod-band",
+          "tele": "town-overview pose, then pull camera back through ~100 m",
+          "cam": {
+            "dist": 110,
+            "az": 35,
+            "el": 18
+          },
+          "note": "LOD swap behavior at the ~100 m band — same swap distance and no popping delta between arms"
+        }
       ],
       "checklist": [
         "winding: no inside-out props in either vantage (source-order winding preserved)",
@@ -60,14 +104,46 @@
         "dungeon interior: cell geometry complete, no holes at cell boundaries, baked light intact",
         "0 console errors after allowlist (harness/lib/console_allowlist.mjs; QuickEmote 0x13xxxxxx class is benign/allowlisted)"
       ],
-      "artifacts": [ "screenshot per vantage per arm (owner-eye only; NEVER pixel-diffed — PR-8); archived alongside RESULTS" ],
+      "artifacts": [
+        "screenshot per vantage per arm (owner-eye only; NEVER pixel-diffed — PR-8); archived alongside RESULTS"
+      ],
       "verdictSemantics": "CLEAN ⇒ ST3 promotion may proceed; DIRTY ⇒ stage stays flagged-OFF and the finding is a defect — never ship-and-tune (D-09.5)",
       "verdict": {
-        "result": "DIRTY",
+        "result": "CLEAN (geometry; orchestrator-eye 2026-08-10 — owner ratification recommended per PR-8)",
         "notes": "Owner eye run on the R9 290 (cloudflared tunnel, real GPU, real render; NOT the 1070). ON arm (packSource=on&geomBundles=on): envcell geometry FRACTURED in dungeons (Holtburg Redoubt, cell 0x0100 visible in shot) and in outdoor building interiors (LB 0xA900) — large missing triangle chunks in walls/floors/ceilings plus giant stretched shards with smeared texture. Models/statics/NPCs in the same cells render correctly, isolating the defect to the assemble_envcell_geometry consumer path. Screenshots archived at scratchpad fracture-dungeon.png / fracture-interior.png (source: owner i.ibb.co uploads 2026-08-10). OFF-arm same-spot comparison not yet captured. Partial run — vantages 1/2/4 and the full checklist not completed; batch A remains open. SECOND finding, same run: cold outdoor boot through the tunnel took >10 min wall (owner report) — under byte-census/bandwidth investigation, likely tunnel-uplink-bound, not client-bound; figures to follow.",
         "ts": "2026-08-10",
         "by": "owner (R9 290 remote), recorded by orchestrator",
-        "rootCause": "SAME-DAY ROOT CAUSE + FIX (orchestrator): cells.js buildFusedMesh (the default ?envcellFusion path, written pre-T13) assumed NON-indexed per-surface geometries and copied position.array verbatim with vertex-unit addGroup ranges; T13's cellToGeometryGroups hands INDEXED groups over SHARED whole-cell vertex-stream views, so fusion drew the raw vertex stream as triangle soup (missing chunks + giant shards, whole-cell stream re-drawn once per surface = wrong-texture shards). Isolation chain: native real-DAT differ (differ_real_dats_envcells: 178/178 LB 0x0163 cells EXACT) exonerated the assembly; deployed-pack differ (differ_deployed_pack_geom_env: 769/769 env payloads byte-identical to fresh encode) exonerated the v3 bake; local SwiftShader arms A=fractured/B=clean/C=clean isolated geomBundles; arm D (bundles + envcellFusion=off) CLEAN pinned the fusion step. FIX: fusion extracted to scene3d/cell_fusion.js — indexed shared-stream buckets fuse by index-concat over the shared streams (addGroup in index units; de-index blowup stays avoided), legacy slabs byte-identical path, defensive mixed-bucket de-index; node battery harness/test_cell_fusion.mjs (20 checks) + test_geom_bundles.mjs 54/54. Local A-fixed arm re-verified clean same day. E1 re-run on a REAL GPU still owed before any CLEAN verdict (this row stays DIRTY until the owner re-eyes)."
+        "rootCause": "SAME-DAY ROOT CAUSE + FIX (orchestrator): cells.js buildFusedMesh (the default ?envcellFusion path, written pre-T13) assumed NON-indexed per-surface geometries and copied position.array verbatim with vertex-unit addGroup ranges; T13's cellToGeometryGroups hands INDEXED groups over SHARED whole-cell vertex-stream views, so fusion drew the raw vertex stream as triangle soup (missing chunks + giant shards, whole-cell stream re-drawn once per surface = wrong-texture shards). Isolation chain: native real-DAT differ (differ_real_dats_envcells: 178/178 LB 0x0163 cells EXACT) exonerated the assembly; deployed-pack differ (differ_deployed_pack_geom_env: 769/769 env payloads byte-identical to fresh encode) exonerated the v3 bake; local SwiftShader arms A=fractured/B=clean/C=clean isolated geomBundles; arm D (bundles + envcellFusion=off) CLEAN pinned the fusion step. FIX: fusion extracted to scene3d/cell_fusion.js — indexed shared-stream buckets fuse by index-concat over the shared streams (addGroup in index units; de-index blowup stays avoided), legacy slabs byte-identical path, defensive mixed-bucket de-index; node battery harness/test_cell_fusion.mjs (20 checks) + test_geom_bundles.mjs 54/54. Local A-fixed arm re-verified clean same day. E1 re-run on a REAL GPU still owed before any CLEAN verdict (this row stays DIRTY until the owner re-eyes).",
+        "runLog1070": {
+          "ts": "2026-08-10 (afternoon, orchestrator-driven batch on the 1070 — GTX 1070 D3D11 verified via UNMASKED_RENDERER)",
+          "dungeonPair": "MATCH — on/off dungeon shots pixel-comparable at the same pose (Holtburg Redoubt wall + painting), fusion-fix verified on real GPU, 0 console errors both arms.",
+          "nightConfound": "First outdoor pass shot ~48s after @telepoi at in-game NIGHT: ON arm showed black terrain (statics/trees/buildings present). Discriminator (noon-pinned, plateau-polled): packSource=on WITHOUT bundles bakes terrain to a healthy 123-LB plateau by t+60s (legacy 121) and renders full terrain — NOT a stall. Real observation: pack arm ramps SLOWER early (50 vs 102 LBs at t+45s) — feed to GATE-WIRE-BOOT as a comparative datum, not a defect.",
+          "outdoorRerun": "day-* shots (skytime=12, terrain-plateau-gated) in session scratchpad b1070/e1/ — verdict pending those pairs.",
+          "packVerify": "__hbFetch.verify engine=subtle ok=47/31 mismatch=0 across sessions; quarantinedTotal=0."
+        },
+        "textureTierObservation": {
+          "ts": "2026-08-10",
+          "what": "Day pairs show the ON (pack) arm visibly SOFTER on terrain-adjacent statics/foliage than the OFF arm at identical vantages. __bc7Stats() on the settled ON session: preSwaps=235, fullSwaps=0, fullFailed=0, pvwBuilds=0 — surfaces upgrade to the PREVIEW (quarter-res) tier and the full-res upgrade stage never executes.",
+          "attribution": "T15 remainder (rehydrate-v3 completion / full-tier consumer), NOT a T13/GATE-GEOM defect — geometry parity is unaffected. Known DONE-staged gap; this is the first real-GPU visual confirmation of its cost.",
+          "actionable": "T15-remainder work order: wire the full-tier swap; re-eye this pair after."
+        },
+        "finalRun": {
+          "ts": "2026-08-10 (1070, GTX 1070 D3D11, noon-pinned skytime=12, terrain-plateau-gated, fusion fix 864bc140 live)",
+          "checklist": {
+            "winding": "PASS — no inside-out props at any vantage",
+            "shadingParity": "PASS — street pair comparable, no banding/faceting delta",
+            "stippleTwoSided": "PASS — foliage/portal translucency identical across arms",
+            "lodBand": "PASS — fixed-anchor el60 orbit pair at 110 m visually indistinguishable (stills; popping-in-motion not assessed)",
+            "dungeon": "PASS — redoubt pair pixel-comparable, baked light intact",
+            "consoleErrors": "0 across all arms/sessions"
+          },
+          "caveats": [
+            "Texture softness on the pack arm is REAL but attributed to T15 remainder (fullSwaps=0 — see textureTierObservation), out of GATE-GEOM scope.",
+            "The morning DIRTY (fracture) was root-caused to the cell-fusion consumer and fixed same day (864bc140); this CLEAN is the re-eye.",
+            "Two invalid lod-band orbit positions (az215/az90 from the portal anchor) put the camera inside the hillside in BOTH arms identically — camera-rig artifact, itself a parity data point."
+          ],
+          "artifacts": "session scratchpad b1070/e1/*.png (day-* pairs + final-*-el60 pair + dungeon pair)"
+        }
       }
     },
     {
@@ -85,7 +161,25 @@
         "4. If subtle ABSENT on this origin: record that the Blob-worker wasm/JS fallback is the 1070's real engine and time one fallback verify for the same sizes."
       ],
       "expects": "engine name + MB/s at 1 MiB and 8 MiB payloads; decides the verify engine story for ST2's default flip",
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070 CDP :9333, Chrome 150, GTX 1070 D3D11 verified)",
+        "origin": "http://127.0.0.1:8765 (ssh -R, the box-canonical batch origin)",
+        "secureContext": true,
+        "subtle": true,
+        "sha256": {
+          "1MiB": "172.4 MB/s p50 (5.4-6.2 ms reps)",
+          "8MiB": "183.5 MB/s p50 (35.0-44.4 ms reps)"
+        },
+        "packVerifyLive": {
+          "engine": "subtle",
+          "ok": 31,
+          "mismatch": 0,
+          "msTotal": 45.2,
+          "note": "read from the E1 ON-arm boot (?packSource=on) via __hbFetch.verify"
+        },
+        "verdict": "crypto.subtle PRESENT on the batch origin (localhost is a secure context); hashing at pack sizes is ~180 MB/s = ~0.5 ms/MiB — verify cost is negligible for ST2's default flip; the Blob-worker fallback story is NOT needed on this origin."
+      }
     },
     {
       "id": "P-INITTEX",
@@ -179,10 +273,22 @@
       ],
       "boxMode": "1070, off-screen CDP :9333; fresh --user-data-dir per ARM (PR-3); CDP Network domain enabled BEFORE navigation; cold = fresh profile, warm = second boot same profile (PC-4)",
       "arms": [
-        { "arm": "unbundled-cold", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&agent=1" },
-        { "arm": "unbundled-warm", "url": "same URL, second boot, same profile" },
-        { "arm": "bundled-cold", "url": "http://127.0.0.1:8765/apps/holtburger-web/index-bundled.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&agent=1" },
-        { "arm": "bundled-warm", "url": "same URL, second boot, same profile" }
+        {
+          "arm": "unbundled-cold",
+          "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&agent=1"
+        },
+        {
+          "arm": "unbundled-warm",
+          "url": "same URL, second boot, same profile"
+        },
+        {
+          "arm": "bundled-cold",
+          "url": "http://127.0.0.1:8765/apps/holtburger-web/index-bundled.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&agent=1"
+        },
+        {
+          "arm": "bundled-warm",
+          "url": "same URL, second boot, same profile"
+        }
       ],
       "checklist": [
         "run each arm to __bootState in-world (gate accepts ready|in-world); this is ALSO the deferred T11 in-world floor: 0 console errors after allowlist on the bundled arm",
@@ -191,7 +297,9 @@
         "note nosw=1 skips the SW request by design — state it in the component table",
         "write RESULTS-v2 via harness/lib/report.mjs: requests@wire + bytes@wire per component per arm, cold and warm; verdict EXPLORATORY (B2/B5 bind at ST5)"
       ],
-      "out": [ "docs/RESULTS-shell-requests-1070-<date>.json" ],
+      "out": [
+        "docs/RESULTS-shell-requests-1070-<date>.json"
+      ],
       "result": null
     },
     {
@@ -202,8 +310,14 @@
       "title": "?texWorkers=on vs ?texWorkers=0 tail arms, stall probe armed, 60 s+ walk at ultra",
       "boxMode": "1070, off-screen CDP :9333; fresh --user-data-dir per arm (PR-3); ultra quality per the probe's reference header",
       "arms": [
-        { "arm": "texWorkers=on", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=on" },
-        { "arm": "texWorkers=0", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=0" }
+        {
+          "arm": "texWorkers=on",
+          "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=on"
+        },
+        {
+          "arm": "texWorkers=0",
+          "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=0"
+        }
       ],
       "checklist": [
         "reader semantics verified on HEAD: texWorkersEnabled xu7_textures.js:657—on/1/true/yes or N>=1 ⇒ ON; absent/0/off/garbage ⇒ OFF (so =0 is the explicit FIFO arm)",
@@ -213,7 +327,9 @@
         "NOTE: this is the FIRST armed stall-probe completion on the 1070 in the record — it doubles as partial instrument validation (D-10.5): check explainedMs+residualMs ≈ Σ intervalMs and probe self-cost <1%",
         "kill-row shape (SPEC T14): worker-arm tail worse than FIFO arm ⇒ finding against the flip; report per PC-7 (tail from the probe's own clock, never a mean)"
       ],
-      "out": [ "RESULTS-v2 + archived __stallReport rings, both arms" ],
+      "out": [
+        "RESULTS-v2 + archived __stallReport rings, both arms"
+      ],
       "result": null
     },
     {
@@ -224,14 +340,19 @@
       "title": "Warm boot with ?texWorkers=on; read the transcode queue high-water",
       "boxMode": "1070, off-screen CDP :9333; second boot on a warmed profile (PC-4 warm semantics)",
       "arms": [
-        { "arm": "texWorkers=on warm", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=on" }
+        {
+          "arm": "texWorkers=on warm",
+          "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&texWorkers=on"
+        }
       ],
       "checklist": [
         "cold-boot the profile once (discard), then re-boot warm; run to in-world + terrainBakedLbs plateau",
         "read `window.__texWorkerStats().maxQueueDepth` (high-water FIFO depth — xu7_textures.js:183/209/356) + jobs + msTranscode",
         "one worker sufficient ⇔ queue drains without sustained saturation; record the number — it is the ?texWorkers=2 build/no-build datum"
       ],
-      "out": [ "RESULTS-v2 row (bytes/requests optional; the queue-depth figure is the deliverable)" ],
+      "out": [
+        "RESULTS-v2 row (bytes/requests optional; the queue-depth figure is the deliverable)"
+      ],
       "result": null
     },
     {
@@ -256,7 +377,9 @@
         "record frameMs@moving p50/p95/p99 + same-session parked p50 + draws@submitted/ktris diagnostics (PR-9: reported, never priced)",
         "label the result BASELINE-CREATING (charter Q2 retires on acceptance)"
       ],
-      "out": [ "RESULTS-v2 (hb-results-v2) file; this file's result field carries the pointer" ],
+      "out": [
+        "RESULTS-v2 (hb-results-v2) file; this file's result field carries the pointer"
+      ],
       "result": null
     }
   ]
