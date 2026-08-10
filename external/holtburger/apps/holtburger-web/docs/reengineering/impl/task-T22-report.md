@@ -223,6 +223,18 @@ world.** In dependency order:
   `?drawPools` without it warns and runs stage-A pools only (feeds on the caller's
   cadence). The full T22 arm is therefore a SIX-flag URL:
   `?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on&frameWork=on`.
+- **T11's `docs/RESULTS-shell-requests-2026-08-09.json` is now stale by one commit.**
+  Running `test_build_shell.mjs` regenerates it, and the `bake_worker-<hash>.js` content
+  hash legitimately changed (the worker gained the `tile_plan.js` import). The file was
+  RESTORED rather than committed — it is T11's measurement record, not this task's, and
+  overwriting a recorded measurement with an incidental re-run is exactly what the
+  measurement law forbids. The request ARITHMETIC is unchanged (56/56 green); only the
+  CAS filename moved.
+- **Working tree left dirty by the concurrent terrain-ladder task** — `scene3d/terrain_bc7.js`,
+  `harness/lib/diag_schema.mjs`, `harness/test_terrain_tier_ladder.mjs` and the
+  `terrainT1024` rows in `docs/url-flags.md` are that task's, were never staged by T22,
+  and are why `lint-url-flags --strict` reports one UNDOCUMENTED reader (`terrainT1024`)
+  that is not T22's to fix.
 - **Batch C's E6 item should be re-read before it is queued** — it presumes a pooled
   world exists. Until the producer swap lands, E6 is not runnable and the queue entry's
   prerequisite line needs that stated (T32's card lists T22 as its prereq; the honest
