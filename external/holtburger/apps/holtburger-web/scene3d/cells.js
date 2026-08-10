@@ -55,6 +55,13 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow, VERTEX_BAKE } from "./materials.js";
 import { fuseSurfaceGroups } from "./cell_fusion.js";
+// ST9 (`?drawPools`, ENVCELL-POOL-SWAP): the interior producer swap. Every
+// reader below is behind `envCellPoolsActive()`, which is false unless the full
+// F-11.3 chain armed the pooled world (index.js `initPoolWorld`) AND
+// `?portalStencil` is off — so the OFF arm never reaches any of it.
+// NB single line (the statics.js:80 rule): harnesses that load this module by
+// stripping `^\s*import .*$` LINE-wise would leave a dangling `} from ...`.
+import { envCellPoolsActive, offerCellSurfacesToPools, poolCellVisibilityTick, poolCellsSetAllVisible, releasePooledCellsForLb } from "./pool_envcells.js";
 // T13 (ST3, `?geomBundles`): per-LB envcell meshes from HBG1 bundles.
 import { geomBundlesActive, assembleEnvcells as assembleGeomEnvcells, cellToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
@@ -524,6 +531,42 @@ function cellMaterialFor(scene3d, group, baked) {
   return baked
     ? scene3d.materialCache.getCachedCellBaked(group.surfaceDid)
     : scene3d.materialCache.getCached(group.surfaceDid);
+}
+
+/**
+ * ST9 (ENVCELL-POOL-SWAP) — offer one cell's resolved surface groups to the
+ * (sector × class) draw pools. Returns a per-group "was pooled" array (or null
+ * when the pooled world is not armed), and the caller buckets/builds ONLY the
+ * groups that came back refused.
+ *
+ * The instance transform is the cell's mesh-group matrix: a cell surface's own
+ * local TRS is identity and the cell CONTAINER carries none, so `meshGroup`'s
+ * matrix is the member's transform in cells-group space — which is the space
+ * the "ec" pools live in (`pool_envcells.js#armEnvCellPoolGroups`).
+ *
+ * Shadow flags are PER SURFACE here, not the fused bucket's OR fold: they are
+ * class-key axes (D-07.6), so per-surface is both the exact semantics (the
+ * `?envcellFusion=off` path's) and the only one a pool can express.
+ */
+function _offerCellSurfaces(scene3d, snap, meshGroup, resolved, cellsShadow, lbKey) {
+  try {
+    meshGroup.updateMatrix();
+    return offerCellSurfacesToPools(scene3d, {
+      lbKey: lbKey >>> 0,
+      cellId: snap.cellId >>> 0,
+      cellMatrix: meshGroup.matrix,
+      entries: resolved.map((e) => ({
+        ...e,
+        castShadow: cellsShadow ? materialCanCastShadow(e.material) : false,
+        receiveShadow: cellsShadow,
+      })),
+    });
+  } catch (e) {
+    // fail-soft: this cell renders through the legacy producer, once.
+    // eslint-disable-next-line no-console
+    console.warn("[scene3d.cells/drawPools] pool offer failed, keeping the legacy path:", String(e?.message ?? e));
+    return null;
+  }
 }
 
 // C1 (2026-06-20 busted-world load fix): cap the per-frame PVS-ring bake
@@ -1283,6 +1326,13 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   }
 
   // ---- Step D: instantiate each cell from snapshots -----------------
+  // ST9 (ENVCELL-POOL-SWAP) — RELEASE BEFORE RE-FEED. This LB may already own
+  // pooled cell instances from an earlier build (LRU evict + re-approach
+  // rebuilds from scratch); feeding again without releasing would DOUBLE every
+  // interior surface. The grid's own release is TILE-scoped (2×2 LBs) and
+  // cannot stand in. No-op unless the pooled world is armed and this LB fed.
+  releasePooledCellsForLb(lbKey);
+  const envCellPools = envCellPoolsActive();
   let cellCount = 0;
   let staticObjectCount = 0;
   // Perf C1 — telemetry for the validation pass. Counts how many cells
@@ -1386,8 +1436,22 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       // static lights once a real baked attribute has been seen, so a wasm
       // bundle without the bake leaves dungeon lighting exactly as it was.
       if (cellBaked) scene3d._acVertexBakeActive = true;
-      for (const g of snap.surfaceGroups) {
-        const mat = cellMaterialFor(scene3d, g, cellBaked);
+      // ST9 (ENVCELL-POOL-SWAP): resolve materials first, offer the surfaces to
+      // the (sector × class) pools, and bucket only what the pools REFUSED —
+      // which then fuses exactly as it does today. A pooled surface leaves the
+      // bucket entirely; the bucket's all-or-nothing baked contract survives
+      // (removing members from a bucket whose every member carries
+      // `acBakedLight` leaves that true).
+      const resolvedGroups = snap.surfaceGroups.map((g) => ({
+        group: g,
+        material: cellMaterialFor(scene3d, g, cellBaked),
+      }));
+      const pooledFlags = envCellPools
+        ? _offerCellSurfaces(scene3d, snap, meshGroup, resolvedGroups, cellsShadow, lbKey)
+        : null;
+      for (let gi = 0; gi < resolvedGroups.length; gi += 1) {
+        if (pooledFlags && pooledFlags[gi]) continue;
+        const { group: g, material: mat } = resolvedGroups[gi];
         if (mat && mat.transparent === true) {
           transparentGroups.push({ group: g, material: mat });
         } else {
@@ -1463,8 +1527,18 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         snap.surfaceGroups.length > 0 &&
         snap.surfaceGroups.every((g) => g.geometry.getAttribute("acBakedLight"));
       if (cellBakedUnfused) scene3d._acVertexBakeActive = true;
-      for (const g of snap.surfaceGroups) {
-        const mat = cellMaterialFor(scene3d, g, cellBakedUnfused);
+      // ST9 (ENVCELL-POOL-SWAP) — same offer on the `?envcellFusion=off` arm,
+      // so the two legacy shapes stay symmetric under pooling.
+      const resolvedUnfused = snap.surfaceGroups.map((g) => ({
+        group: g,
+        material: cellMaterialFor(scene3d, g, cellBakedUnfused),
+      }));
+      const pooledUnfused = envCellPools
+        ? _offerCellSurfaces(scene3d, snap, meshGroup, resolvedUnfused, cellsShadow, lbKey)
+        : null;
+      for (let gi = 0; gi < resolvedUnfused.length; gi += 1) {
+        if (pooledUnfused && pooledUnfused[gi]) continue;
+        const { group: g, material: mat } = resolvedUnfused[gi];
         const m = new THREE.Mesh(g.geometry, mat);
         m.name = `surface-${(g.surfaceDid >>> 0).toString(16).padStart(8, "0")}`;
         m.userData = {
@@ -1626,6 +1700,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     for (const g of lbDisposableGeometries) {
       try { if (g && typeof g.dispose === "function") g.dispose(); } catch (_) {}
     }
+    // ST9 (ENVCELL-POOL-SWAP): Step D already fed this build's cells into the
+    // pools. The containers are being thrown away, so the pooled instances must
+    // go with them — otherwise an LB that was evicted mid-build leaves interior
+    // geometry in a pool that no container, and no later rebuild, accounts for.
+    releasePooledCellsForLb(lbKey);
     return {
       landblockId: lbKey,
       cellCount: 0,
@@ -2229,6 +2308,19 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // is 0-3 cells per tick, so the inner loop usually does no work at all.
   // Falls back to full-registry scan under CELL_BUG_PARITY because that
   // mode wants every EnvCell visible regardless of the diff.
+  // ST9 (ENVCELL-POOL-SWAP) — the POOLED half of per-cell visibility. Applied
+  // from this same tick, on this same set, immediately alongside the container
+  // flips below, so a cell whose surfaces are split between a pool and its
+  // container can never have the two halves disagree. Inert (and allocation-
+  // free) unless the pooled world is armed. The pooled form is a DELTA, like
+  // the container form: an unchanged render set performs zero pool mutations,
+  // which is the parked-frame CI gate.
+  if (envCellPoolsActive()) {
+    try {
+      if (CELL_BUG_PARITY) poolCellsSetAllVisible();
+      else poolCellVisibilityTick(visibleSet);
+    } catch (_) { /* fail-soft: the container half still runs */ }
+  }
   if (CELL_BUG_PARITY) {
     for (const [thisCellId, container] of registry) {
       const want = container?.userData?.isEnvCell

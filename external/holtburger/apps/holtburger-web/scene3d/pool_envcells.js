@@ -256,8 +256,10 @@ export function offerCellSurfacesToPools(scene3d, args) {
       n.quaternion.copy(quat);
       n.scale.copy(scl);
     }
-    n.castShadow = args.castShadow === true;
-    n.receiveShadow = args.receiveShadow === true;
+    // Shadow flags are class-key axes (D-07.6) and therefore PER SURFACE: the
+    // entry's own values win, the call-level ones are the fallback.
+    n.castShadow = (e.castShadow !== undefined ? e.castShadow : args.castShadow) === true;
+    n.receiveShadow = (e.receiveShadow !== undefined ? e.receiveShadow : args.receiveShadow) === true;
     // The producer reads this straight into the plan row (pool_producer.js:223)
     // and the registry turns it into the per-cell instance range (D-07.8).
     n.userData = { __poolCellId: cellId >>> 0, cellId: cellId >>> 0, surfaceDid: e.group.surfaceDid };
