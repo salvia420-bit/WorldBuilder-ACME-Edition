@@ -84,6 +84,17 @@
 
 import * as THREE from "three";
 import { parseHbc7, bc7LevelBytes, bc7Available, bc7SupportNote, flagIsOff } from "./bc7_textures.js";
+// ST5 tier ladder (`?terrainT1024`, DEFAULT OFF) — the terrain arrays are the
+// one texture class pass-05 D-05.7 frees OUTRIGHT post-upload (−88 MiB at
+// t1024), so the ladder registers its way back with the SAME registry the
+// context-loss restore pass walks. Flag absent ⇒ neither import is ever
+// called and no entry is ever registered (`releasedTextureCount()` stays 0,
+// which is what keeps webgl_context_recovery.js on its synchronous path).
+import {
+  registerReleasedTexture,
+  unregisterReleasedTexture,
+  textureHasPixels,
+} from "./texture_rehydrate.js";
 // ST4 (`?texWorkers`, DEFAULT OFF): the level-major array assembly can run in
 // the dedicated texture worker (SPEC §3 T14 / pass-05 D-05.4 — at t1024 the
 // synchronous build below is 88 MiB of alloc+memcpy in one main-thread task).
@@ -231,8 +242,78 @@ export function terrainBc7Anisotropy(base, tier, search) {
   return tier === "t1024" ? Math.max(b, TERRAIN_BC7_HIRES_ANISO) : b;
 }
 
+// --------------------------------------------------------------------------
+// ST5 — `?terrainT1024`: the TIER LADDER flag (SPEC §0.2.1 + §1.3; pass-12
+// D-12.1; pass-05 D-05.2). DEFAULT OFF, and "off" here means ABSENT.
+// --------------------------------------------------------------------------
+//
+// THE LADDER, AND WHY THE FLAG'S GRAMMAR LOOKS ODD
+// SPEC §1.3 states the end-state ladder as: t128 color (lane B tail, 1 CAS
+// file) → `preview-complete` → t128 nra → **`converged` stamps with terrain
+// at t128** → the full pair streams post-converged on idle lane T,
+// "default-ON, non-budgeted, wholesale-swapped (`?terrainT1024=eager|defer|
+// off`, default `defer`)". That grammar describes the world AFTER the
+// default flip; it has no spelling for "no ladder at all", because by then
+// there is no other path. Today there is: this module's 2026-08-05
+// t1024-FIRST boot, which is the shipped default and the kill path (I7).
+//
+// So the reader has four states and the ABSENT one is legacy:
+//   absent            — LADDER OFF. `buildTerrainBc7Atlas` runs exactly as
+//                       it did before this landing: resolve tier order,
+//                       fetch the full pair, build, return. Byte-identical.
+//   `defer`/`on`/`1`  — ladder ON, full tier promoted AFTER the converged
+//     /`true`/`yes`     signal (SPEC's own default within the ladder).
+//   `eager`           — ladder ON, promotion starts as soon as the t128 pair
+//                       is live (the "I have bandwidth" arm).
+//   `off`/`0`/`false` — ladder ON, terrain PINNED at t128 and never
+//     /`no`             promoted. This is the low-bandwidth arm and the
+//                       demote destination — NOT the legacy path.
+//
+// The distinction is documented in docs/url-flags.md the same way; a bench
+// arm that means "today's client" must OMIT the parameter.
+export const TERRAIN_LADDER_MODES = Object.freeze(["absent", "defer", "eager", "off"]);
+
+/**
+ * `?terrainT1024` — one of `TERRAIN_LADDER_MODES`. NOT memoised (the ESM
+ * suites re-stub `window.location` per case, and the ladder is read at ring
+ * resolve, long after any memo would have been taken).
+ */
+export function terrainT1024Mode(search) {
+  let s = search;
+  if (s === undefined) {
+    try {
+      s = typeof window !== "undefined" && window.location ? window.location.search : "";
+    } catch (_) {
+      s = "";
+    }
+  }
+  let v = null;
+  try {
+    v = new URLSearchParams(s).get("terrainT1024");
+  } catch (_) {
+    return "absent";
+  }
+  if (v == null) return "absent";
+  const t = String(v).toLowerCase();
+  // Every documented off-spelling in one statement (the lint's OFF-SPELLING
+  // rule): `off`/`0`/`false`/`no` pin t128, they do NOT disarm the ladder.
+  if (t === "off" || t === "0" || t === "false" || t === "no") return "off";
+  if (t === "eager") return "eager";
+  if (t === "defer" || t === "on" || t === "1" || t === "true" || t === "yes") return "defer";
+  // Garbage is not a silent third behaviour: fall back to the ladder's own
+  // documented default rather than to the legacy path, because the operator
+  // clearly asked for the ladder.
+  return "defer";
+}
+
+/** Ladder armed at all? (`?terrainT1024` present in any spelling.) */
+export function terrainLadderArmed(search) {
+  return terrainT1024Mode(search) !== "absent";
+}
+
 /** Test hook: clear the memoised flag read. */
 export function _resetTerrainBc7ForTest() {
+  _resetTerrainLadderForTest();
   _flag = undefined;
   _tierPref = null;
   _stats.manifest = null;
@@ -259,11 +340,62 @@ const _stats = {
   built: null, // "color+nra" | "color" | null
   anisotropy: 0,      // taps actually requested on both arrays
   anisotropyBase: null, // what the global preset cap offered
+  // ST5 tier ladder (`?terrainT1024`). `mode: "absent"` + every counter 0 is
+  // the legacy arm's honest reading — an ABSENT ladder, not a failed one.
+  ladder: _freshLadderStats(),
 };
+
+function _freshLadderStats() {
+  return {
+    mode: "absent",
+    armed: false,
+    tier: null,            // the tier CURRENTLY on the GPU: "t128" | full tier
+    fullTier: null,        // the promote target (manifest tier)
+    sliceSource: null,     // "pack" | null — where the t128 pair came from
+    t128Ms: null,          // ms from ladder start to the t128 pair being built
+    t128Bytes: 0,          // GPU bytes of the t128 pair (both arrays)
+    promoteStartMs: null,
+    terrainT1024CompleteMs: null, // SPEC B4b's named stamp
+    promotions: 0,
+    demotions: 0,
+    promoteFailures: 0,
+    fallbacks: 0,          // ladder could not arm ⇒ legacy full-tier boot
+    stageSplit: 0,         // promotions staged as 2 single-array uploads
+    stageColorMs: null,
+    stageNraMs: null,
+    uploadWaitTimeouts: 0,
+    mirrorsReleased: 0,
+    mirrorBytesFreed: 0,
+    mirrorReleaseDeferred: 0,
+    mirrorRestores: 0,
+    mirrorRestoreFailed: 0,
+    lastError: null,
+  };
+}
+
+/** Live per-array upload state, folded into `terrainBc7Stats().ladder` on
+ *  every read. The mirror release is gated on three having ACTUALLY uploaded
+ *  (D-05.7/T15R D2), so "did three ever upload this array?" is the first
+ *  question any capture with `mirrorsReleased: 0` has to answer — and it is
+ *  unanswerable from the counters alone. */
+function _ladderUploadState() {
+  return {
+    colorUploaded: !!_ladder.color?.__hbUploaded,
+    nraUploaded: !!_ladder.nra?.__hbUploaded,
+    colorVersion: _ladder.color ? _ladder.color.version | 0 : null,
+    colorReleaseArmed: !!_ladder.color?.__hbAfterUpload,
+  };
+}
 
 /** Read via `window.__terrainBc7Stats()` (installed by terrain.js). */
 export function terrainBc7Stats() {
-  return { ..._stats, enabled: terrainBc7Enabled(), bptc: bc7Available(), support: bc7SupportNote() };
+  return {
+    ..._stats,
+    ladder: { ..._stats.ladder, ..._ladderUploadState() },
+    enabled: terrainBc7Enabled(),
+    bptc: bc7Available(),
+    support: bc7SupportNote(),
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -451,6 +583,15 @@ export async function loadTerrainBc7Channel(manifest, channel, baseUrl) {
  */
 export function buildTerrainBc7Array(ch, opts = {}) {
   if (!ch || typeof THREE.CompressedArrayTexture !== "function") return null;
+  const m = _mipsFromChannel(ch);
+  return _makeCompressedArrayTexture(m.mipmaps, m.size, m.levels, opts);
+}
+
+/** The level-major concatenation itself, factored at ST5 so the tier ladder
+ *  can swap mip sets into a LIVE texture without building a second one
+ *  (the wholesale swap keeps the texture OBJECT, see `_swapArrayInPlace`).
+ *  Byte-identical to the pre-ST5 inline loop. */
+function _mipsFromChannel(ch) {
   const size = ch.tileSize;
   const depth = TERRAIN_BC7_DEPTH;
   const mipmaps = [];
@@ -474,7 +615,7 @@ export function buildTerrainBc7Array(ch, opts = {}) {
     w = Math.max(1, w >> 1);
     h = Math.max(1, h >> 1);
   }
-  return _makeCompressedArrayTexture(mipmaps, size, ch.levels, opts);
+  return { mipmaps, size, levels: ch.levels };
 }
 
 /**
@@ -490,6 +631,12 @@ export function buildTerrainBc7Array(ch, opts = {}) {
  */
 export function buildTerrainBc7ArrayFromAssembled(assembled, opts = {}) {
   if (!assembled || typeof THREE.CompressedArrayTexture !== "function") return null;
+  const m = _mipsFromAssembled(assembled);
+  return _makeCompressedArrayTexture(m.mipmaps, m.size, m.levels, opts);
+}
+
+/** ST5 twin of `_mipsFromChannel` for the worker-assembled buffer. */
+function _mipsFromAssembled(assembled) {
   const size = assembled.tileSize;
   const depth = assembled.depth ?? TERRAIN_BC7_DEPTH;
   if (depth !== TERRAIN_BC7_DEPTH) {
@@ -517,7 +664,7 @@ export function buildTerrainBc7ArrayFromAssembled(assembled, opts = {}) {
   if (off !== u8.byteLength) {
     throw new Error(`terrain-bc7: assembled buffer has ${u8.byteLength - off} trailing bytes`);
   }
-  return _makeCompressedArrayTexture(mipmaps, size, assembled.levels, opts);
+  return { mipmaps, size, levels: assembled.levels };
 }
 
 /**
@@ -534,6 +681,17 @@ export function buildTerrainBc7ArrayFromAssembled(assembled, opts = {}) {
  * May THROW (from the sync builder) — callers keep their existing catch.
  */
 async function _assembleChannelArray(manifest, channel, base, ch, opts) {
+  if (!ch || typeof THREE.CompressedArrayTexture !== "function") return null;
+  const m = await _assembleChannelMips(manifest, channel, base, ch);
+  if (!m) return null;
+  return _makeCompressedArrayTexture(m.mipmaps, m.size, m.levels, opts);
+}
+
+/** The same seam, one step short of the texture: ST5's ladder swaps mip sets
+ *  into the LIVE arrays, so it needs the concatenation without a second
+ *  `CompressedArrayTexture`. Control flow (worker → counted fallback →
+ *  re-fetch → sync build) is the ST4 flow verbatim. */
+async function _assembleChannelMips(manifest, channel, base, ch) {
   if (texWorkersEnabled()) {
     try {
       const seen = new Set();
@@ -554,9 +712,10 @@ async function _assembleChannelArray(manifest, channel, base, ch, opts) {
         layerRs: ch.layerRs,
         payloads,
       });
-      const tex = buildTerrainBc7ArrayFromAssembled(assembled, opts);
-      if (tex) return tex;
-      throw new Error("assembled-array construction returned null");
+      if (!assembled || typeof THREE.CompressedArrayTexture !== "function") {
+        throw new Error("assembled-array construction returned null");
+      }
+      return _mipsFromAssembled(assembled);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn(
@@ -568,7 +727,7 @@ async function _assembleChannelArray(manifest, channel, base, ch, opts) {
       ch = again;
     }
   }
-  return buildTerrainBc7Array(ch, opts);
+  return _mipsFromChannel(ch);
 }
 
 /** The texture-construction tail both builders share (factored at ST4;
@@ -607,6 +766,803 @@ function _makeCompressedArrayTexture(mipmaps, size, chLevels, opts = {}) {
   tex.name = opts.name ?? "scene3d-terrain-bc7-array";
   tex.needsUpdate = true;
   return tex;
+}
+
+// ==========================================================================
+// ST5 — THE TIER LADDER (`?terrainT1024`)
+// ==========================================================================
+//
+// SPEC §0.2.1/§1.3 + pass-12 D-12.1: the boot slice is t128 (ONE CAS file
+// per channel, D-12.6), `converged` stamps with terrain AT t128, and the
+// full pair streams afterwards and is WHOLESALE-swapped. Two properties of
+// this module make that implementable without touching a single consumer:
+//
+//  1. `resolveTerrainRingOpts` (terrain.js:3961-4093) consumes exactly two
+//     things from the returned atlas — `atlasTexture` and `nraTexture` —
+//     and threads those OBJECTS into every landblock material's `uAtlas` /
+//     nra uniforms. It never reads `tileSize`/`levels`. So a tier swap that
+//     KEEPS THE TEXTURE OBJECTS is invisible above this file: no uniform
+//     re-point, no material rebuild, no re-entry into the ring resolve.
+//  2. three r184 re-allocates a disposed texture from scratch:
+//     `deallocateTexture` drops the texture's properties
+//     (three.module.js:11350-11386), so the next `uploadTexture` takes
+//     `forceUpload` ⇒ `allocateMemory` ⇒ a fresh `texStorage3D` at
+//     `mipmaps[0].width/height, image.depth` (three.module.js:12026-12034).
+//     Dispose + new mipmaps + new `image` + `needsUpdate` therefore IS a
+//     legal wholesale re-spec of a live compressed array.
+//
+// STAGING. P-88MIB (1070, 2026-08-10 batch A): the full t1024 PAIR stages
+// whole in 87–96 ms and split 44/44 MiB on consecutive frames at
+// ~43–45 ms/frame — both under F6's 250 ms streaming-hitch line, the split
+// with 5× headroom. The ladder therefore swaps ONE array per frame by
+// default (`TERRAIN_STAGE_SPLIT`): colour first (the visible channel), nra
+// on the next frame, each its own upload task.
+//
+// MIRRORS. D-05.7 row 1: terrain arrays are FREED post-upload (−88 MiB
+// heap at t1024) and rehydrate by re-fetching their payloads (immutable
+// HTTP cache) → re-assemble → re-upload. The register-the-way-back-FIRST
+// ordering is non-negotiable (texture_release.js:117-124 states it; T15R
+// re-states it in bc7_textures.js:294-297): a context loss landing between
+// "dropped the bytes" and "registered the restore" is a permanently black
+// world. Release also refuses until three has actually uploaded (T15R D2)
+// and nulls `image.data` so `textureHasPixels` reads the mipmaps rather
+// than mistaking the `{width,height,depth}` descriptor for an
+// element-backed image (T15R D3 — the bug that would silently SKIP terrain
+// in every restore pass).
+
+/** t128 boot-slice level-0 dims (D-12.6: 29 payloads × 21,892 B = 0.63 MB
+ *  per channel, sliced from the t1024 chain, never re-encoded). */
+export const TERRAIN_T128_TILE = 128;
+
+/** Stage the promotion as two single-array uploads (P-88MIB: 44/44 MiB at
+ *  ~43–45 ms each vs 87–96 ms whole — both legal, the split has 5× F6
+ *  headroom, so it is the comfortable default). */
+export const TERRAIN_STAGE_SPLIT = true;
+
+/** How long a promotion waits for three to actually upload a swapped array
+ *  before giving up on observing it. Exceeding this does NOT fail the
+ *  swap (the pixels are correct and will upload on any later frame) — it
+ *  only defers the mirror release, counted as `uploadWaitTimeouts`. */
+export const TERRAIN_UPLOAD_WAIT_MS = 4000;
+
+/** `defer` mode: how long after the converged signal to sit idle before
+ *  starting the full-tier fetch. The milestone says "the ring is textured";
+ *  this says "and the lane has gone quiet". */
+export const TERRAIN_LADDER_DEFER_SETTLE_MS = 2000;
+
+/** `defer` mode ceiling: promote anyway. A converged signal that never
+ *  arrives (legacy dist, disarmed controller, a wedged lane) must not
+ *  strand the session at t128 — the user direction is that every session
+ *  ends at the full tier (SPEC §0.2.1). */
+export const TERRAIN_LADDER_DEFER_MAX_MS = 30000;
+
+/** How long the ladder waits for the controller's lane-B t128 slices
+ *  (`bootCommons` fetches both; the ring resolve can beat them). */
+export const TERRAIN_SLICE_WAIT_MS = 15000;
+
+const _ladder = {
+  mode: "absent",
+  manifest: null,
+  base: null,
+  aniso: 1,
+  anisoBase: null,
+  color: null,   // live CompressedArrayTexture
+  nra: null,
+  t128: { color: null, nra: null }, // retained mip sets = the demote source
+  promise: null, // in-flight promotion
+  timers: [],
+  controller: null, // injected (tests) or discovered lazily
+  renderer: null,   // WebGLRenderer for initTexture staging (discovered lazily)
+  stageUpload: null, // test override for the staging call
+  now: () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now()),
+};
+
+/**
+ * Wiring/test seam.
+ *
+ * @param {Object} [o]
+ * @param {Object} [o.controller] the PackFetchController singleton (the t128
+ *   slice carrier). Production discovers it lazily; a suite has no page.
+ * @param {Function} [o.now] clock.
+ * @param {Object} [o.renderer] the WebGLRenderer, for `initTexture` staging.
+ *   Discovered lazily from `window.liveScene3d.renderer` when not injected.
+ * @param {(tex:Object) => void} [o.stageUpload] overrides the staging call
+ *   entirely (suites stand in for the GPU with `tex.onUpdate(tex)`).
+ */
+export function initTerrainTierLadder({ controller, now, stageUpload, renderer } = {}) {
+  if (controller !== undefined) _ladder.controller = controller || null;
+  if (typeof now === "function") _ladder.now = now;
+  if (renderer !== undefined) _ladder.renderer = renderer || null;
+  if (stageUpload !== undefined) _ladder.stageUpload = typeof stageUpload === "function" ? stageUpload : null;
+}
+
+/**
+ * Stage one array to the GPU NOW.
+ *
+ * `renderer.initTexture(tex)` is the call SPEC §1.3 names for this ("staging
+ * via ≤ 2 exclusive `initTexture` calls (44/44 MiB splittable)") and the one
+ * P-88MIB measured on the 1070 (87–96 ms for the pair whole, 43–45 ms per
+ * array split). Landing it here is not an optimisation — it is a
+ * CORRECTNESS requirement for the mirror release, proven live on this box
+ * (2026-08-10, `?packSource=on&terrainBc7=512&terrainT1024=eager`,
+ * agentp08/agentp09, 3 boots): with staging left to "whatever three does on
+ * the next render", the swapped arrays read `colorUploaded:false` **150 s
+ * after a successful promotion** while the renderer advanced 4,738 frames —
+ * so a release gated on the upload (as D-05.7/T15R D2 require it to be)
+ * freed exactly 0 bytes. `initTexture` uploads synchronously through the
+ * same `uploadTexture` path, which is also what fires `onUpdate` and lets
+ * the release proceed.
+ *
+ * No renderer ⇒ no staging call, the swap is still correct, and the release
+ * simply waits on the upload event (counted `mirrorReleaseDeferred`).
+ */
+function _stageUpload(tex) {
+  if (_ladder.stageUpload) { _ladder.stageUpload(tex); return; }
+  let r = _ladder.renderer;
+  if (!r) {
+    try {
+      // `window.liveScene3d` is a one-time init3D SNAPSHOT (late-stamped
+      // subsystems read null forever) — but `renderer` is stamped AT init3D
+      // and is live: read-verified this session by reading
+      // `liveScene3d.renderer.info.render.frame` off a running page.
+      r = (typeof window !== "undefined" && window.liveScene3d) ? window.liveScene3d.renderer : null;
+    } catch (_) { r = null; }
+    if (r && typeof r.initTexture === "function") _ladder.renderer = r;
+  }
+  if (r && typeof r.initTexture === "function") r.initTexture(tex);
+}
+
+/** Test hook: forget every ladder-owned texture, timer and counter. */
+export function _resetTerrainLadderForTest() {
+  for (const t of _ladder.timers) { try { clearTimeout(t); } catch (_) { /* noop */ } }
+  _ladder.timers = [];
+  for (const tex of [_ladder.color, _ladder.nra]) {
+    if (tex) { try { unregisterReleasedTexture(tex); } catch (_) { /* fail-soft */ } }
+  }
+  _ladder.mode = "absent";
+  _ladder.manifest = null;
+  _ladder.base = null;
+  _ladder.aniso = 1;
+  _ladder.anisoBase = null;
+  _ladder.color = null;
+  _ladder.nra = null;
+  _ladder.t128 = { color: null, nra: null };
+  _ladder.promise = null;
+  _ladder.controller = null;
+  _ladder.renderer = null;
+  _ladder.stageUpload = null;
+  if (_stats) _stats.ladder = _freshLadderStats();
+}
+
+// --------------------------------------------------------------------------
+// t128 slice source: the HBP1 pack the bake emits as ONE CAS file/channel
+// --------------------------------------------------------------------------
+
+const HBP1_HEADER_LEN = 32;
+const HBP1_SECTION_ENTRY_LEN = 16;
+const HBP1_FOOTER_LEN = 8;
+const HBP1_SECTION_PVW = 0x0b;
+const HBP1_CODEC_RAW = 0;
+
+/**
+ * Read the PVW stream out of a terrain t128 slice pack.
+ *
+ * Layout (apps/holtburger-tools/src/pack_format.rs `write_hbp1` +
+ * `build_pvw_stream`, read-verified against the deployed slice packs —
+ * kind 6 colour / kind 7 nra, 1 section, 29 rows, 21,892 B each):
+ *   header 32 B: "HBP1" | ver u8 | kind u8 | flags u16 | origin u32 |
+ *                sectionCount u16 | nsCount u8 | rsv u8 | epoch u64 | rsv u64
+ *   namespace table: nsCount × 32 B
+ *   section table:   sectionCount × [kind u16][codec u8][pad u8]
+ *                    [offset u32 (FROM FILE START)][stored u32][raw u32]
+ *   footer 8 B:      crc32 u32 | "1PBH"
+ *   PVW payload:     [count u32] × [rs u32][off u32][size u32] + blobs
+ *
+ * The CRC is deliberately NOT checked: the controller sha256-verifies every
+ * pack on receipt against the pinned index (pack_fetch_controller.js:
+ * 434-449), which is strictly stronger, and a crc32 in JS here would exist
+ * only to re-answer a question already answered. Magic/version/trailing
+ * magic ARE checked — those catch a truncated or mis-routed body, which is
+ * what actually happens in the wild.
+ *
+ * @returns {Map<number, Uint8Array>} rsId → HBC7 payload (a COPY: the caller
+ *   hands these to the texture worker, and transferring a subarray of the
+ *   pack buffer would neuter the controller's retained slice).
+ */
+export function parseTerrainSlicePack(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (u8.byteLength < HBP1_HEADER_LEN + HBP1_FOOTER_LEN) {
+    throw new Error("HBP1: shorter than header + footer");
+  }
+  if (u8[0] !== 0x48 || u8[1] !== 0x42 || u8[2] !== 0x50 || u8[3] !== 0x31) {
+    throw new Error("HBP1: bad magic");
+  }
+  if (u8[4] !== 1) throw new Error(`HBP1: unsupported version ${u8[4]}`);
+  const tail = u8.subarray(u8.byteLength - 4);
+  if (tail[0] !== 0x31 || tail[1] !== 0x50 || tail[2] !== 0x42 || tail[3] !== 0x48) {
+    throw new Error("HBP1: bad trailing magic (truncated?)");
+  }
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const sectionCount = dv.getUint16(12, true);
+  const nsCount = u8[14];
+  let pos = HBP1_HEADER_LEN + nsCount * 32;
+  let pvw = null;
+  for (let i = 0; i < sectionCount; i += 1) {
+    if (pos + HBP1_SECTION_ENTRY_LEN > u8.byteLength) throw new Error("HBP1: section table overruns");
+    const kind = dv.getUint16(pos, true);
+    const codec = u8[pos + 2];
+    const offset = dv.getUint32(pos + 4, true);
+    const stored = dv.getUint32(pos + 8, true);
+    if (kind === HBP1_SECTION_PVW) {
+      if (codec !== HBP1_CODEC_RAW) {
+        // The bake emits terrain slices RAW (pack_bake.rs:1219). A zstd
+        // slice would need an inflater this module does not have, and
+        // guessing is worse than the counted fallback.
+        throw new Error(`HBP1: PVW section codec ${codec} is not RAW`);
+      }
+      if (offset + stored > u8.byteLength - HBP1_FOOTER_LEN) {
+        throw new Error("HBP1: PVW section overruns file");
+      }
+      pvw = u8.subarray(offset, offset + stored);
+    }
+    pos += HBP1_SECTION_ENTRY_LEN;
+  }
+  if (!pvw) throw new Error("HBP1: no PVW section (not a terrain slice pack?)");
+  const pdv = new DataView(pvw.buffer, pvw.byteOffset, pvw.byteLength);
+  const count = pdv.getUint32(0, true);
+  const indexLen = 4 + count * 12;
+  if (pvw.byteLength < indexLen) throw new Error("HBP1: PVW index truncated");
+  const body = indexLen;
+  const out = new Map();
+  for (let i = 0; i < count; i += 1) {
+    const e = 4 + i * 12;
+    const rs = pdv.getUint32(e, true) >>> 0;
+    const off = pdv.getUint32(e + 4, true);
+    const size = pdv.getUint32(e + 8, true);
+    if (body + off + size > pvw.byteLength) throw new Error(`HBP1: PVW row ${i} overruns`);
+    out.set(rs, pvw.slice(body + off, body + off + size));
+  }
+  return out;
+}
+
+/** The PackFetchController singleton, or null. Discovered lazily and only
+ *  on the armed arm — the OFF arm never imports the module from here. */
+async function _ladderController() {
+  if (_ladder.controller) return _ladder.controller;
+  try {
+    const mod = await import("./pack_fetch_controller.js");
+    // No-arg: index.html (:2715) and scene3d/index.js (:6275) both take the
+    // singleton this way, so this returns the ARMED one on a packs boot and
+    // an inert one otherwise. It never creates a second controller.
+    _ladder.controller = mod.getPackFetchController();
+  } catch (e) {
+    _ladder.controller = null;
+    _stats.ladder.lastError = `controller import: ${String(e?.message ?? e)}`;
+  }
+  return _ladder.controller;
+}
+
+/** Wait for one lane-B slice (`bootCommons` fetches both; the ring resolve
+ *  can and does beat them). Resolves null on timeout — counted by the
+ *  caller, never silent. */
+async function _awaitSlice(ctl, chan, deadlineMs) {
+  const t0 = _ladder.now();
+  for (;;) {
+    const buf = ctl.getT128Slice(chan);
+    if (buf) return buf;
+    if (_ladder.now() - t0 >= deadlineMs) return null;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => { _ladder.timers.push(setTimeout(r, 50)); });
+  }
+}
+
+/**
+ * Build one channel's t128 `{byLayer, tileSize, levels, layerRs}` from the
+ * slice pack, in the shape `loadTerrainBc7Channel` produces (so every
+ * downstream builder is tier-blind). ALL-OR-NOTHING for the same reason the
+ * full-tier loader is: a compressed array is one fixed (format, w, h).
+ */
+function _t128ChannelFromSlice(manifest, sliceBytes, channel) {
+  const byRs = parseTerrainSlicePack(sliceBytes);
+  const parsedByRs = new Map();
+  const byLayer = new Array(TERRAIN_BC7_DEPTH).fill(null);
+  const layerRs = new Array(TERRAIN_BC7_DEPTH).fill(null);
+  let size = 0;
+  let levels = 0;
+  for (const [idxStr, meta] of Object.entries(manifest.layers ?? {})) {
+    const idx = Number.parseInt(idxStr, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= TERRAIN_BC7_DEPTH) continue;
+    const rsStr = String(meta?.rsId ?? "");
+    if (!rsStr) continue;
+    layerRs[idx] = rsStr;
+    const rs = Number.parseInt(rsStr, 16) >>> 0;
+    if (!parsedByRs.has(rs)) {
+      const payload = byRs.get(rs);
+      if (!payload) {
+        throw new Error(`t128 slice (${channel}) has no payload for ${rsStr}`);
+      }
+      parsedByRs.set(rs, parseHbc7(payload));
+    }
+    const p = parsedByRs.get(rs);
+    if (!size) { size = p.width; levels = p.levels.length; }
+    if (p.width !== size || p.height !== size) {
+      throw new Error(`t128 slice layer ${idx} (${rsStr}) is ${p.width}x${p.height}, array is ${size}x${size}`);
+    }
+    if (p.levels.length !== levels) {
+      throw new Error(`t128 slice layer ${idx} (${rsStr}) has ${p.levels.length} levels, array has ${levels}`);
+    }
+    byLayer[idx] = p;
+  }
+  for (let i = 0; i < TERRAIN_BC7_DEPTH; i += 1) {
+    if (!byLayer[i]) throw new Error(`t128 slice (${channel}) missing layer ${i}`);
+  }
+  if (levels < 2) {
+    // Same hard rule as the manifest check: a level-0-only array with a
+    // mipmapped minFilter is INCOMPLETE and samples BLACK.
+    throw new Error(`t128 slice (${channel}) has ${levels} level(s); terrain requires a chain`);
+  }
+  return { byLayer, tileSize: size, levels, layerRs };
+}
+
+/** Both t128 channels, or null (counted) when the slice source is absent. */
+async function _loadT128Pair(manifest) {
+  const ctl = await _ladderController();
+  if (!ctl || !ctl.armed) {
+    _stats.ladder.lastError = "pack controller not armed (`?packSource` off or legacy dist)";
+    return null;
+  }
+  const out = {};
+  for (const chan of ["color", "nra"]) {
+    // eslint-disable-next-line no-await-in-loop
+    const bytes = await _awaitSlice(ctl, chan, TERRAIN_SLICE_WAIT_MS);
+    if (!bytes) {
+      _stats.ladder.lastError = `t128 ${chan} slice did not arrive within ${TERRAIN_SLICE_WAIT_MS} ms`;
+      return null;
+    }
+    try {
+      out[chan] = _t128ChannelFromSlice(manifest, bytes, chan);
+    } catch (e) {
+      _stats.ladder.lastError = `t128 ${chan}: ${String(e?.message ?? e)}`;
+      return null;
+    }
+  }
+  _stats.ladder.sliceSource = "pack";
+  return out;
+}
+
+// --------------------------------------------------------------------------
+// the wholesale swap + upload observation + mirror release
+// --------------------------------------------------------------------------
+
+/** Chain an upload watcher (three fires `onUpdate` at the end of
+ *  `uploadTexture` — three.module.js:12378, every format branch), never
+ *  replacing one an owner already installed: the same pattern the full-tier
+ *  mirror seam uses.
+ *
+ *  It also runs `tex.__hbAfterUpload` if one is armed. That indirection is
+ *  what makes the mirror release EVENT-DRIVEN rather than deadline-driven,
+ *  and it was put here by evidence: on the local SwiftShader arm
+ *  (2026-08-10, `?terrainBc7=512&terrainT1024=eager`) the swapped arrays
+ *  uploaded LATER than the staging wait, so a release gated on the wait's
+ *  return value freed exactly 0 bytes (`mirrorReleaseDeferred 2`). The wait
+ *  bounds SEQUENCING (when to stage the second array); the release belongs
+ *  to the upload, whenever three gets to it. */
+function _armUploadWatcher(tex) {
+  if (tex.__hbTerrainWatch) return;
+  tex.__hbTerrainWatch = true;
+  const prev = typeof tex.onUpdate === "function" ? tex.onUpdate : null;
+  tex.onUpdate = function (t) {
+    try { prev?.call(this, t); } catch (_) { /* never break an upload */ }
+    tex.__hbUploaded = true;
+    const after = tex.__hbAfterUpload;
+    if (after) { tex.__hbAfterUpload = null; try { after(); } catch (_) { /* never break an upload */ } }
+  };
+}
+
+/** Resolve once three has uploaded `tex`, or after the deadline (counted).
+ *  The deadline bounds the STAGING SEQUENCE only — see `_armUploadWatcher`. */
+function _awaitUpload(tex, ms = TERRAIN_UPLOAD_WAIT_MS) {
+  if (tex.__hbUploaded) return Promise.resolve(true);
+  const t0 = _ladder.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (tex.__hbUploaded) return resolve(true);
+      if (_ladder.now() - t0 >= ms) {
+        _stats.ladder.uploadWaitTimeouts += 1;
+        return resolve(false);
+      }
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(tick);
+      else _ladder.timers.push(setTimeout(tick, 16));
+      return undefined;
+    };
+    tick();
+  });
+}
+
+/**
+ * WHOLESALE SWAP, in place. Keeps the texture OBJECT (every material uniform
+ * above this file keeps pointing at it) and re-specs its storage.
+ *
+ * `dispose()` is what makes the re-spec legal: it drops three's per-texture
+ * properties, so the next upload takes the `allocateMemory` branch and calls
+ * `texStorage3D` at the NEW dims instead of trying to `compressedTexSubImage3D`
+ * 1024² bytes into a 128² allocation.
+ */
+function _swapArrayInPlace(tex, mips, aniso) {
+  if (!tex || !mips) return false;
+  // Any standing "these bytes are gone, here is the way back" registration
+  // describes the OLD mip set. Drop it before the swap; the new tier
+  // registers its own after ITS upload.
+  try { unregisterReleasedTexture(tex); } catch (_) { /* fail-soft */ }
+  try { tex.dispose(); } catch (_) { /* a texture never bound has nothing to free */ }
+  tex.mipmaps = mips.mipmaps;
+  tex.image = { width: mips.size, height: mips.size, depth: TERRAIN_BC7_DEPTH };
+  tex.minFilter = mips.levels > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+  if (mips.levels > 1 && typeof aniso === "number" && aniso > 0) tex.anisotropy = aniso;
+  tex.__hbUploaded = false;
+  _armUploadWatcher(tex);
+  tex.needsUpdate = true;
+  return true;
+}
+
+/**
+ * D-05.7 row 1: free one array's CPU mirror, way back FIRST.
+ * @param {Object} tex live array
+ * @param {() => Promise<{mipmaps:Array}|null>} rebuild re-supplies the SAME
+ *   dims/level count (re-fetch payloads → assemble). A rebuild that
+ *   disagrees with the descriptor is a MISS, not a re-spec.
+ */
+function _releaseArrayMirror(tex, label, rebuild) {
+  if (!tex || !Array.isArray(tex.mipmaps) || tex.mipmaps.length === 0) return 0;
+  if (!tex.__hbUploaded) {
+    // Releasing before three has uploaded would upload nothing (T15R D2).
+    // The caller counts the deferral (`mirrorReleaseDeferred`) — this guard
+    // is the invariant, not the instrument.
+    return 0;
+  }
+  const bytes = terrainBc7Bytes(tex);
+  if (!bytes) return 0;
+  try {
+    registerReleasedTexture(
+      tex,
+      // `t` is the registry's argument, never the captured texture: the
+      // registry holds this callback strongly, so closing over the texture
+      // would pin the very bytes this exists to free (T15R's fixup).
+      async (t) => {
+        const mips = await rebuild();
+        const dst = t.mipmaps;
+        if (!mips || !Array.isArray(mips.mipmaps) || mips.mipmaps.length !== dst.length) {
+          _stats.ladder.mirrorRestoreFailed += 1;
+          return false;
+        }
+        for (let i = 0; i < dst.length; i += 1) {
+          const src = mips.mipmaps[i];
+          if (!src || !src.data || (dst[i].width | 0) !== (src.width | 0)
+              || (dst[i].height | 0) !== (src.height | 0)) {
+            _stats.ladder.mirrorRestoreFailed += 1;
+            return false;
+          }
+          dst[i].data = src.data;
+        }
+        if (t.image && typeof t.image === "object") t.image.data = undefined;
+        _stats.ladder.mirrorRestores += 1;
+        return true;
+      },
+      { label, owner: "terrainT1024:array", bytes },
+    );
+  } catch (_) {
+    return 0; // a registration we could not make is a release we must not do
+  }
+  for (const m of tex.mipmaps) { if (m) m.data = new Uint8Array(0); }
+  // `textureHasPixels` reads `image` FIRST and treats an object with no
+  // `data` KEY as element-backed — a compressed array's image is the bare
+  // {width,height,depth} descriptor, so without this line every restore
+  // pass would SKIP the terrain arrays (T15R D3, same trap).
+  if (tex.image && typeof tex.image === "object") tex.image.data = null;
+  _stats.ladder.mirrorsReleased += 1;
+  _stats.ladder.mirrorBytesFreed += bytes;
+  return bytes;
+}
+
+/** Re-supply source for a released array: re-fetch the tier's payloads
+ *  (immutable HTTP cache) and re-assemble. Shared by the restore pass and,
+ *  by construction, identical to what the promotion did. */
+function _rebuildTierMips(tier, channel) {
+  return async () => {
+    if (tier === "t128") {
+      const pair = await _loadT128Pair(_ladder.manifest);
+      return pair ? _mipsFromChannel(pair[channel]) : null;
+    }
+    const ch = await loadTerrainBc7Channel(_ladder.manifest, channel, _ladder.base);
+    if (!ch) return null;
+    return _assembleChannelMips(_ladder.manifest, channel, _ladder.base, ch);
+  };
+}
+
+// --------------------------------------------------------------------------
+// promote / demote
+// --------------------------------------------------------------------------
+
+/**
+ * Promote the live arrays from t128 to the resolved full tier, wholesale.
+ * Idempotent + latched: concurrent callers share one promotion.
+ *
+ * ALL-OR-NOTHING per channel, and a failure LEAVES t128 ON SCREEN — which is
+ * strictly better than the legacy path's failure mode (fall back to RGBA8),
+ * because t128 is already correct art at correct colours.
+ */
+export function promoteTerrainT1024Now() {
+  if (_ladder.promise) return _ladder.promise;
+  if (!_ladder.color || !_ladder.manifest) return Promise.resolve(false);
+  if (_stats.ladder.tier && _stats.ladder.tier !== "t128") return Promise.resolve(true);
+  _ladder.promise = _promoteToFullTier().finally(() => { _ladder.promise = null; });
+  return _ladder.promise;
+}
+
+async function _promoteToFullTier() {
+  const tier = _stats.ladder.fullTier || "t1024";
+  const t0 = _ladder.now();
+  _stats.ladder.promoteStartMs = t0;
+  // Tier-aware anisotropy is resolved HERE, not at t128: the floor exists
+  // for the high-res tier only (`terrainBc7Anisotropy`), and a t128 array
+  // asking for 16 taps would spend them on 128² texels.
+  const aniso = terrainBc7Anisotropy(_ladder.anisoBase, tier);
+  const chans = _ladder.nra ? ["color", "nra"] : ["color"];
+  const built = {};
+  for (const chan of chans) {
+    // eslint-disable-next-line no-await-in-loop
+    const ch = await loadTerrainBc7Channel(_ladder.manifest, chan, _ladder.base);
+    if (!ch) {
+      _stats.ladder.promoteFailures += 1;
+      _stats.ladder.lastError = `${tier} ${chan} channel unavailable — staying at t128`;
+      // eslint-disable-next-line no-console
+      console.warn(`[terrain-bc7] ladder: ${tier} ${chan} unavailable — terrain stays at t128`);
+      return false;
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      built[chan] = await _assembleChannelMips(_ladder.manifest, chan, _ladder.base, ch);
+    } catch (e) {
+      built[chan] = null;
+      _stats.ladder.lastError = `${tier} ${chan} assembly: ${String(e?.message ?? e)}`;
+    }
+    if (!built[chan]) {
+      _stats.ladder.promoteFailures += 1;
+      _stats.errors += 1;
+      // eslint-disable-next-line no-console
+      console.warn(`[terrain-bc7] ladder: ${tier} ${chan} assembly failed — terrain stays at t128`);
+      return false;
+    }
+  }
+
+  // ── staging (P-88MIB) ──────────────────────────────────────────────────
+  // One array per frame: 44 MiB / ~43–45 ms measured on the 1070, vs 88 MiB
+  // / 87–96 ms whole. Both clear F6's 250 ms line; the split keeps 5×
+  // headroom and leaves the frame between the two uploads free for the
+  // scheduler's own work.
+  const swapOne = async (chan) => {
+    const tex = chan === "color" ? _ladder.color : _ladder.nra;
+    const s0 = _ladder.now();
+    _swapArrayInPlace(tex, built[chan], aniso);
+    // Arm the release BEFORE anything can upload: the watcher fires it the
+    // moment three actually uploads, which on a slow rasteriser is long
+    // after the staging wait below has returned.
+    let done = false;
+    const release = () => {
+      if (done) return;
+      done = true;
+      _releaseArrayMirror(tex, `terrain:${chan}:${tier}`, _rebuildTierMips(tier, chan));
+    };
+    tex.__hbAfterUpload = release;
+    try { _stageUpload(tex); } catch (e) {
+      _stats.ladder.lastError = `stage ${chan}: ${String(e?.message ?? e)}`;
+    }
+    const uploaded = await _awaitUpload(tex);
+    const ms = _ladder.now() - s0;
+    if (chan === "color") _stats.ladder.stageColorMs = ms;
+    else _stats.ladder.stageNraMs = ms;
+    if (uploaded) release();
+    else _stats.ladder.mirrorReleaseDeferred += 1; // still armed on the event
+  };
+  await swapOne("color");
+  if (chans.includes("nra")) {
+    if (TERRAIN_STAGE_SPLIT) {
+      _stats.ladder.stageSplit += 1;
+      await new Promise((r) => {
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => r());
+        else _ladder.timers.push(setTimeout(r, 0));
+      });
+    }
+    await swapOne("nra");
+  }
+
+  _stats.ladder.tier = tier;
+  _stats.ladder.promotions += 1;
+  _stats.ladder.terrainT1024CompleteMs = _ladder.now();
+  _stats.tileSize = built.color.size;
+  _stats.levels = built.color.levels;
+  _stats.anisotropy = aniso;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[terrain-bc7] ladder: promoted t128 → ${tier} (${built.color.size}px, ` +
+      `${built.color.levels} levels, aniso ${aniso}, ${chans.length} array(s), ` +
+      `${Math.round(_ladder.now() - t0)} ms, mirrors freed ` +
+      `${(_stats.ladder.mirrorBytesFreed / (1024 * 1024)).toFixed(1)} MiB)`
+  );
+  return true;
+}
+
+/**
+ * The terrain rung of the pressure ladder (pass-6 H-05.1 R1: "demote full-
+ * tier textures of PARKED slots to preview; **terrain t1024→t128 demote**"),
+ * shaped like `MaterialCache.demoteFullTierUnderPressure` so the residency
+ * ladder's rung action stays a one-liner on both lanes.
+ *
+ * The demote needs NO fetch: the t128 mip sets are retained for exactly this
+ * (0.9 MiB for both arrays — the cheapest insurance in the texture budget),
+ * which is also why `?terrainT1024=off` is a coherent pinned arm rather than
+ * a separate code path.
+ *
+ * @param {{bytes?:number, max?:number}} [opts]
+ * @returns {{demoted:number, bytesFreed:number, remaining:number}}
+ */
+export function demoteTerrainUnderPressure(opts = {}) {
+  const target = Number.isFinite(opts.bytes) ? opts.bytes : Infinity;
+  const max = Number.isFinite(opts.max) ? opts.max : Infinity;
+  let demoted = 0;
+  let bytesFreed = 0;
+  if (!_stats.ladder.armed || _stats.ladder.tier === "t128" || max < 1) {
+    return { demoted, bytesFreed, remaining: 0 };
+  }
+  const aniso = terrainBc7Anisotropy(_ladder.anisoBase, "t128");
+  // Colour first, deliberately: a capped call (`max: 1`) then sheds the
+  // channel the eye reads, and the tier stamp follows the colour array.
+  for (const chan of ["color", "nra"]) {
+    if (demoted >= max || bytesFreed >= target) break;
+    const tex = chan === "color" ? _ladder.color : _ladder.nra;
+    const mips = _ladder.t128[chan];
+    if (!tex || !mips) continue;
+    // A RELEASED mirror has no bytes to account and nothing to give back,
+    // but the swap still frees the GPU allocation — count only what the
+    // heap actually gives up.
+    const before = textureHasPixels(tex) ? terrainBc7Bytes(tex) : 0;
+    _swapArrayInPlace(tex, mips, aniso);
+    demoted += 1;
+    bytesFreed += before;
+  }
+  if (demoted > 0) {
+    _stats.ladder.demotions += 1;
+    _stats.ladder.tier = "t128";
+    _stats.tileSize = TERRAIN_T128_TILE;
+    _stats.levels = _ladder.t128.color ? _ladder.t128.color.levels : _stats.levels;
+    _stats.anisotropy = aniso;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[terrain-bc7] ladder: demoted to t128 under pressure (${demoted} array(s), ` +
+        `${(bytesFreed / (1024 * 1024)).toFixed(1)} MiB CPU)`
+    );
+  }
+  return { demoted, bytesFreed, remaining: 0 };
+}
+
+/** Schedule the promotion per mode. `off` never promotes; `eager` starts at
+ *  once; `defer` waits for the converged signal + a settle, with a hard
+ *  ceiling so a session cannot be stranded at t128. */
+function _schedulePromotion(mode) {
+  if (mode === "off") return;
+  if (mode === "eager") { promoteTerrainT1024Now().catch(() => {}); return; }
+  const t0 = _ladder.now();
+  const poll = () => {
+    if (_stats.ladder.tier !== "t128") return; // already promoted/demoted away
+    const ctl = _ladder.controller;
+    const ms = ctl?.diag?.milestones ?? null;
+    // `convergedMs` is the milestone SPEC names; today NOTHING stamps it
+    // (read-verified: pack_fetch_controller.js sets inWorldMs :666 and
+    // previewCompleteMs :779-780 only). Until a producer does, the ladder
+    // uses preview-complete + a settle as the converged proxy rather than
+    // waiting forever on a field that is null by construction.
+    const signal = ms ? (ms.convergedMs ?? ms.previewCompleteMs) : null;
+    const elapsed = _ladder.now() - t0;
+    if ((signal != null && elapsed >= TERRAIN_LADDER_DEFER_SETTLE_MS)
+        || elapsed >= TERRAIN_LADDER_DEFER_MAX_MS) {
+      promoteTerrainT1024Now().catch(() => {});
+      return;
+    }
+    _ladder.timers.push(setTimeout(poll, 250));
+  };
+  _ladder.timers.push(setTimeout(poll, TERRAIN_LADDER_DEFER_SETTLE_MS));
+}
+
+/**
+ * Boot the ladder: build the pair at t128 and schedule the promotion.
+ * Returns the same atlas shape `buildTerrainBc7Atlas` returns, or null when
+ * the ladder cannot arm (no slice source) — the caller then runs the legacy
+ * full-tier boot, loudly and counted.
+ */
+async function _buildViaLadder({ manifest, base, anisotropy, mode }) {
+  const t0 = _ladder.now();
+  _stats.ladder.mode = mode;
+  _stats.ladder.fullTier = manifest.tier ?? "t1024";
+  const pair = await _loadT128Pair(manifest);
+  if (!pair) {
+    _stats.ladder.fallbacks += 1;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrain-bc7] ?terrainT1024=${mode} but the t128 boot slice is unavailable ` +
+        `(${_stats.ladder.lastError}) — booting the full tier directly (legacy order)`
+    );
+    return null;
+  }
+  // t128 assembles on the MAIN thread on purpose: 0.63 MB per channel is
+  // three orders below the 88 MiB t1024 case the worker seam (D-05.4) was
+  // built for, and a transfer round-trip would cost more than the memcpy.
+  const aniso = terrainBc7Anisotropy(anisotropy, "t128");
+  const mipsColor = _mipsFromChannel(pair.color);
+  const mipsNra = _mipsFromChannel(pair.nra);
+  const atlasTexture = _makeCompressedArrayTexture(mipsColor.mipmaps, mipsColor.size, mipsColor.levels, {
+    colorSpace: THREE.SRGBColorSpace,
+    anisotropy: aniso,
+    name: "scene3d-terrain-bc7-albedo-array",
+  });
+  if (!atlasTexture) return null;
+  const nraTexture = _makeCompressedArrayTexture(mipsNra.mipmaps, mipsNra.size, mipsNra.levels, {
+    colorSpace: THREE.NoColorSpace,
+    anisotropy: aniso,
+    name: "scene3d-terrain-bc7-nra-array",
+  });
+  _armUploadWatcher(atlasTexture);
+  if (nraTexture) _armUploadWatcher(nraTexture);
+  try {
+    _stageUpload(atlasTexture);
+    if (nraTexture) _stageUpload(nraTexture);
+  } catch (e) {
+    _stats.ladder.lastError = `stage t128: ${String(e?.message ?? e)}`;
+  }
+
+  _ladder.mode = mode;
+  _ladder.manifest = manifest;
+  _ladder.base = base;
+  _ladder.aniso = aniso;
+  _ladder.anisoBase = Number.isFinite(anisotropy) ? anisotropy : null;
+  _ladder.color = atlasTexture;
+  _ladder.nra = nraTexture;
+  // Retained: the demote source (R1) AND the t128 restore source. 0.9 MiB.
+  _ladder.t128 = { color: mipsColor, nra: mipsNra };
+
+  _stats.layers = TERRAIN_BC7_DEPTH;
+  _stats.tileSize = mipsColor.size;
+  _stats.levels = mipsColor.levels;
+  _stats.built = nraTexture ? "color+nra" : "color";
+  _stats.anisotropy = aniso;
+  _stats.anisotropyBase = Number.isFinite(anisotropy) ? anisotropy : null;
+  _stats.ladder.armed = true;
+  _stats.ladder.tier = "t128";
+  _stats.ladder.t128Ms = _ladder.now() - t0;
+  _stats.ladder.t128Bytes = terrainBc7Bytes(atlasTexture) + terrainBc7Bytes(nraTexture);
+  // eslint-disable-next-line no-console
+  console.log(
+    `[terrain-bc7] ladder ${mode}: terrain converged at t128 ` +
+      `(${TERRAIN_BC7_DEPTH} layers @ ${mipsColor.size}px, ${mipsColor.levels} levels, ` +
+      `${(_stats.ladder.t128Bytes / (1024 * 1024)).toFixed(2)} MiB GPU, aniso ${aniso}) — ` +
+      `${mode === "off" ? "pinned (no promotion)" : `${_stats.ladder.fullTier} promotion ${mode}`}`
+  );
+  _schedulePromotionSafely(mode);
+  return {
+    atlasTexture,
+    nraTexture,
+    tileSize: mipsColor.size,
+    levels: mipsColor.levels,
+    bytes: _stats.ladder.t128Bytes,
+    manifest,
+    ladder: mode,
+  };
+}
+
+/** Scheduling must never take the boot down with it. */
+function _schedulePromotionSafely(mode) {
+  try { _schedulePromotion(mode); } catch (e) {
+    _stats.ladder.lastError = `schedule: ${String(e?.message ?? e)}`;
+  }
 }
 
 /** GPU bytes a built array occupies (all levels, all layers). */
@@ -669,6 +1625,17 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
     }
   }
   if (!manifest) return null;
+
+  // ST5 tier ladder (`?terrainT1024`). ABSENT ⇒ not one line of the ladder
+  // runs and everything below is the 2026-08-05 path byte-for-byte (I7's
+  // kill path). PRESENT ⇒ boot at t128 and promote per mode; a ladder that
+  // cannot arm (no slice source) falls through here, loudly and counted, so
+  // the flag can never leave a session with no terrain at all.
+  const ladderMode = terrainT1024Mode();
+  if (ladderMode !== "absent") {
+    const laddered = await _buildViaLadder({ manifest, base, anisotropy, mode: ladderMode });
+    if (laddered) return laddered;
+  }
 
   const color = await loadTerrainBc7Channel(manifest, "color", base);
   if (!color) return null;

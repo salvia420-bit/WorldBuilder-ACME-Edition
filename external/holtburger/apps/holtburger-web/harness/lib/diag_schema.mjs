@@ -153,9 +153,13 @@ export const REGISTRY = Object.freeze([
     reads: "function",
     evidence: "scene3d/terrain.js:3965",
     availability: "in-world",
-    note: "terrainBc7Stats() in scene3d/terrain_bc7.js:245-262. Installed "
+    note: "terrainBc7Stats() in scene3d/terrain_bc7.js. Installed "
       + "unconditionally so ?terrainBc7=off asserts enabled:false instead of "
-      + "probing a hole. Terrain tier ladder re-wires at ST5 (t128/t1024).",
+      + "probing a hole. The `ladder.*` rows are ST5's tier ladder "
+      + "(`?terrainT1024`, T15R-TERRAIN): mode 'absent' + zeros is the "
+      + "ABSENT-ladder legacy arm, not a failed one. tileSize/levels/"
+      + "anisotropy describe what is LIVE, so they CHANGE on a promotion or "
+      + "a pressure demote — level fields, never differenced.",
     fields: {
       manifest: L("json"), tileSize: L("count"), layers: L("count"),
       levels: L("count"),
@@ -164,6 +168,32 @@ export const REGISTRY = Object.freeze([
       built: L("enum", null, { note: '"color+nra" | "color" | null' }),
       anisotropy: L("count"), anisotropyBase: L("count"),
       enabled: L("bool"), bptc: L("bool"), support: L("string"),
+      "ladder.mode": L("enum", null, { note: '"absent" | "defer" | "eager" | "off"' }),
+      "ladder.armed": L("bool"),
+      "ladder.tier": L("enum", null, { note: 'live tier: "t128" | the full tier | null' }),
+      "ladder.fullTier": L("enum", null, { note: "promote target (manifest tier)" }),
+      "ladder.sliceSource": L("enum", null, { note: '"pack" (D-12.6 slice) | null' }),
+      "ladder.t128Ms": L("ms", ["converged"]),
+      "ladder.t128Bytes": L("bytes", ["allocated"], { note: "2 arrays x 33 layers x chain(128^2)" }),
+      "ladder.promoteStartMs": L("ms"),
+      "ladder.terrainT1024CompleteMs": L("ms", null, { note: "SPEC B4b's named stamp" }),
+      "ladder.promotions": C("count"),
+      "ladder.demotions": C("count"),
+      "ladder.promoteFailures": C("count"),
+      "ladder.fallbacks": C("count", null, { note: "ladder could not arm -> legacy full-tier boot" }),
+      "ladder.stageSplit": C("count", null, { note: "P-88MIB: promotions staged as 2 single-array uploads" }),
+      "ladder.stageColorMs": L("ms"), "ladder.stageNraMs": L("ms"),
+      "ladder.uploadWaitTimeouts": C("count"),
+      "ladder.mirrorsReleased": C("count"),
+      "ladder.mirrorBytesFreed": C("bytes", ["cpuMirror"]),
+      "ladder.mirrorReleaseDeferred": C("count"),
+      "ladder.mirrorRestores": C("count"),
+      "ladder.mirrorRestoreFailed": C("count", null, { note: "MUST stay 0 — a missed restore is a black world" }),
+      "ladder.colorUploaded": L("bool", null, { note: "three fired onUpdate on the albedo array" }),
+      "ladder.nraUploaded": L("bool"),
+      "ladder.colorVersion": L("count"),
+      "ladder.colorReleaseArmed": L("bool", null, { note: "a mirror release is armed on the next upload" }),
+      "ladder.lastError": L("string"),
     },
   },
 
