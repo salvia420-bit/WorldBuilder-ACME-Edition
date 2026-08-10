@@ -247,8 +247,16 @@ counter read on each of the E1 arms.
 A third arm (`&texCompressedOnly=on&texWorkers=on`, 240 s settle) was attempted for a
 LIVE `fullSwaps > 0`. It booted on its second attempt (first attempt latched
 `bootState=error` with zero console errors — the stale-ACE-session class) and reported
-one window (`settle+30s {pre 0, full 0, deferredNodes 65, fetches 28, inflight 28}`)
-before `page.evaluate` stopped answering under the box's load and the run was killed.
+two windows
+
+```
+settle+30s {pre 0, full 0, deferredNodes 65, fetches 28, inflight 28}
+settle+60s {pre 0, full 0, deferredNodes 83, fetches 61, inflight 61}
+```
+
+before `page.evaluate` stopped answering under the box's load and the run was killed
+(the probe prints only pre/full/deferred/fetch/inflight per window, so these say
+nothing about `pvwBuilds` or `active`).
 **No `fullSwaps` reading is claimed from it (I9).** One thing that interim window does
 NOT settle and that the 1070 run should check explicitly: `__texStats().active` — 65
 deferrals on an armed ST5 arm would be unexpected (preview-born materials commit at
