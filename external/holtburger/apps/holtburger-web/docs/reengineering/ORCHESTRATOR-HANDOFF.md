@@ -24,7 +24,27 @@ Read both before acting. This file is the volatile state those don't carry.
 - QUEUED (new): ENVCELL-POOL-SWAP (T22P D3 designed shape) · bc7Pending rsId
   marker look (ST5 owner) · worker-side record→axis ladder (T22 D1, now a
   relocation with a live differ target).
-- PAGE-RESAMPLE agent still in flight.
+- PAGE-RESAMPLE LANDED+VERIFIED (neighbors re-run green; Rust gate legs ran
+  in-agent incl. T10's bounded-region CI unchanged). Region gate: 413/462
+  TEXREF rows on-page, full-tier off-page 185→0. TWO FINDINGS BIGGER THAN THE
+  CHARGE: (1) TEXREF declared DAT-record dims while the shipped full tier is
+  the 4x upscale corpus — 253/400 sampled rows keyed WRONG pre-resample; bake
+  now reads the KTX2 header. (2) The dims byte cannot express off-page — new
+  FULL_PAGE_DIMS tier bit (bit 5) is the authority + one client reader.
+  STITCH DISPATCHED: pool_producer.js:195 must pass texRef from
+  texRefPageInfo() (else a page-dim dist buys pools nothing) — sent back to the
+  producer-swap agent, in flight.
+- NEXT FULL-WORLD BAKE (orchestrator-owned, run ALONE per R-MEM1), now fully
+  specified: step 1 buildbox encode of the 1,309 resampled members (identity
+  members symlink; same basisu line so dims are the only variable; q75 election
+  OWNER-GATED — region full tier is +13.2% [M], B4a gets worse, owner should
+  see world-scale number first) → /mnt/wbterminal2/xu7-ingest-pages; step 2
+  run-world-bake.sh THREE edits (--tex-xu7 farm, derive-pvw-xu7 SAME farm —
+  the path appears twice, easy miss — and --require-page-dims on RUN2 only)
+  + --geom-relief for the relief eye arm. 11 members downscale at the 2048
+  clamp (only information loss; escape PAGE_TIER_MAX 12 both sides).
+- OPEN DECISION (spec-side): preview-feed re-key options a/b — refused
+  .needsResample (85 live) will NOT reach 0 from the bake alone.
 
 ## -4. AGENT-PASS ERA (2026-08-10 evening) — orchestrator + Opus implementation agents
 
