@@ -47,6 +47,19 @@
 //             per-class counts), the loud validator, the one-buffer transfer
 //             codec, the bake-worker `tileBake` job body, and a
 //             plan → encode → decode → registry FEED round-trip.
+//   PART 14 — stage C, the UploadStager (pass-08 D-08.5 + S4): no upload
+//             from a completion callback; U-TEX byte AND item caps; the
+//             EXCLUSIVE item runs alone; chunked grow re-marks ≤2/frame;
+//             the F-11.10 nullRender rule (marks only, never initTexture);
+//             the D-08.5 rule-2 ordering — a re-point DEFERS until its
+//             rsId has staged; slot-vacation purge.
+//   PART 15 — stage B, the PoolStreamController + BakeDispatchQueue
+//             (F-11.19): P1 events RECORD and never execute; dispatch is
+//             concurrency 1, player-tile → interior → Chebyshev ordered;
+//             vacate purges the dispatch AND the queued scheduler/upload
+//             items; feeds are RESUMABLE W3 items; the LIVE flip waits on
+//             its textures having staged; a vacated in-flight plan is never
+//             fed.
 //
 // Run:  node harness/test_draw_pools.mjs        (exit 0/1)
 
@@ -65,6 +78,10 @@ import {
   buildTilePlan, validateTilePlan, encodeTilePlan, decodeTilePlan,
   runTileBakeJob, TILE_PLAN_RESULT_KIND,
 } from "../scene3d/tile_plan.js";
+import { UploadStager, UPLOAD_BUDGETS, GROW_LAYER_REMARKS_PER_FRAME } from "../scene3d/upload_stage.js";
+import { PoolStreamController, BakeDispatchQueue } from "../scene3d/pool_stream.js";
+import { FrameWorkScheduler } from "../scene3d/frame_work.js";
+import { tileKeyOf } from "../scene3d/residency_grid.js";
 import { getSurface } from "./lib/diag_schema.mjs";
 
 let passed = 0;
@@ -765,6 +782,236 @@ console.log("PART 13: TilePlan contract (pass-07 S1)");
   check(c13.errors.unresolvedGeometry === 0 && c13.errors.unpooledMembers === 0,
     "every planned member reached a pool");
   check(r13.tiles.get(0x0100).size === 3, "membership records per (tile, pool)");
+}
+
+
+// ── PART 14 — stage C: the UploadStager ───────────────────────────────────
+
+console.log("PART 14: stage C — UploadStager (pass-08 D-08.5)");
+{
+  const fakeTex = (n) => ({ isTexture: true, needsUpdate: false, __n: n });
+  const staged = [];
+  const renderer = { initTexture: (t) => staged.push(t.__n) };
+  const up = new UploadStager({ renderer, now: () => 0 });
+
+  // Rule 1: a completion callback may ENQUEUE and nothing else.
+  up.beginFrame();
+  up.enqueueTexture({ texture: fakeTex("a"), rsId: 1, bytes: 1024 });
+  check(staged.length === 0, "enqueue does NOT upload — the slot is the only site");
+  check(up.hasPending() === true, "work is pending");
+  up.drain();
+  check(staged.length === 1 && staged[0] === "a", "the slot stages via renderer.initTexture");
+  check(up.stats.initTextureCalls === 1, "initTexture calls counted");
+  check(up.isStaged(1) === true, "staged rsIds are tracked");
+
+  // U-TEX budget: ≤ 2 items AND ≤ 4 MiB per frame (always-run-one first).
+  const up2 = new UploadStager({ renderer: { initTexture: () => {} }, now: () => 0 });
+  up2.beginFrame();
+  for (let i = 0; i < 5; i++) up2.enqueueTexture({ texture: fakeTex(i), rsId: 10 + i, bytes: 1024 });
+  check(up2.drain() === UPLOAD_BUDGETS["U-TEX"].items, `U-TEX item cap = ${UPLOAD_BUDGETS["U-TEX"].items}/frame`);
+  up2.beginFrame();
+  check(up2.drain() === 2, "the next frame serves the next two");
+  const up3 = new UploadStager({ renderer: { initTexture: () => {} }, now: () => 0 });
+  up3.beginFrame();
+  up3.enqueueTexture({ texture: fakeTex(0), rsId: 1, bytes: 8 * 1024 * 1024 });
+  up3.enqueueTexture({ texture: fakeTex(1), rsId: 2, bytes: 8 * 1024 * 1024 });
+  check(up3.drain() === 1, "always-run-one: an over-budget single item still runs, alone");
+
+  // U-BUF: buffers have no staging API — the cap is upstream and OBSERVED.
+  const up4 = new UploadStager({ renderer, now: () => 0 });
+  up4.beginFrame();
+  check(up4.noteBufferBytes(1024 * 1024) === true, "under the U-BUF cap");
+  check(up4.noteBufferBytes(2 * 1024 * 1024) === false, "U-BUF cap reached ⇒ the feed stops appending");
+  check(up4.bufferBudgetLeft() === 0, "no U-BUF budget left");
+
+  // EXCLUSIVE items run alone (array allocation, the terrain t1024 pair).
+  const order = [];
+  const up5 = new UploadStager({ renderer: { initTexture: () => order.push("tex") }, now: () => 0 });
+  up5.beginFrame();
+  up5.enqueueTexture({ texture: fakeTex(0), rsId: 1, bytes: 1 });
+  up5.enqueueExclusive("terrain-t1024-color", () => order.push("excl"), { bytes: 44 * 1024 * 1024 });
+  check(up5.drain() === 1 && order.join(",") === "excl", "the exclusive item is the SOLE item of its frame");
+  up5.beginFrame();
+  up5.drain();
+  check(order.join(",") === "excl,tex", "the deferred texture stages the next frame");
+  check(up5.stats.exclusive.length === 1 && up5.stats.exclusive[0].name === "terrain-t1024-color",
+    "exclusive items are named in the ring");
+
+  // Grow re-marks are CHUNKED (D-08.5 rule 5), never a whole-prefix re-mark.
+  const marks = [];
+  const up6 = new UploadStager({ renderer, now: () => 0 });
+  up6.beginFrame();
+  up6.enqueueGrowRemark((l) => marks.push(l), 6);
+  up6.drain();
+  check(marks.length === GROW_LAYER_REMARKS_PER_FRAME,
+    `grow re-mark chunked at ${GROW_LAYER_REMARKS_PER_FRAME}/frame, got ${marks.length}`);
+  up6.beginFrame(); up6.drain();
+  check(marks.length === 2 * GROW_LAYER_REMARKS_PER_FRAME, "the chunk cap holds across frames");
+
+  // F-11.10 — nullRender: marks only, initTexture NEVER called.
+  let nulled = 0;
+  const upN = new UploadStager({ renderer: { initTexture: () => { nulled += 1; } }, nullRender: true, now: () => 0 });
+  const t = fakeTex("n");
+  let markRan = false;
+  upN.beginFrame();
+  upN.enqueueTexture({ texture: t, rsId: 5, bytes: 1, mark: () => { markRan = true; } });
+  upN.drain();
+  check(nulled === 0, "F-11.10: nullRender NEVER calls initTexture");
+  check(t.needsUpdate === true && markRan === true, "F-11.10: marks still happen in both arms");
+  check(upN.stats.marksOnly === 1, "marks-only is counted, not hidden");
+  check(upN.isStaged(5) === true, "a marked rsId still unblocks its re-point on the bot arm");
+
+  // D-08.5 rule 2 — a re-point DEFERS until its texture staged.
+  const seq = [];
+  const up7 = new UploadStager({ renderer: { initTexture: (x) => seq.push(`stage:${x.__n}`) }, now: () => 0 });
+  up7.beginFrame();
+  up7.enqueueRepoint(77, () => seq.push("repoint"));
+  up7.drain();
+  check(seq.length === 0, "a re-point whose texture has NOT staged does not run");
+  check(up7.stats.repointsDeferred === 1, "the deferral is counted");
+  up7.beginFrame();
+  up7.enqueueTexture({ texture: fakeTex("r"), rsId: 77, bytes: 1 });
+  up7.drain();
+  check(seq.join(",") === "stage:r,repoint", "the stage ALWAYS precedes its re-point");
+  check(up7.stats.repointsRun === 1, "re-points counted once run");
+
+  // Slot vacation purges the tile's queued uploads (S2.6).
+  const up8 = new UploadStager({ renderer, now: () => 0 });
+  up8.beginFrame();
+  up8.enqueueTexture({ texture: fakeTex(0), rsId: 1, bytes: 1, tileKey: 5 });
+  up8.enqueueExclusive("x", () => {}, { tileKey: 5 });
+  up8.enqueueRepoint(1, () => {}, 5);
+  up8.enqueueTexture({ texture: fakeTex(1), rsId: 2, bytes: 1, tileKey: 6 });
+  check(up8.purgeByTile(5) === 3, "purge removes every queued item for the tile");
+  check(up8.hasPending() === true, "another tile's work survives the purge");
+
+  // The scheduler's uploads bag (pass-08 S7).
+  const bag = up.statsInto({});
+  check(typeof bag.stagedBytesByClass === "object" && typeof bag.initTextureCalls === "number",
+    "statsInto fills the __frameWork uploads bag");
+}
+
+// ── PART 15 — stage B: PoolStreamController + BakeDispatchQueue ───────────
+
+console.log("PART 15: stage B — P4 relocation + bake dispatch (F-11.19)");
+{
+  // BakeDispatchQueue on its own: ordering + concurrency + purge.
+  const posted = [];
+  const resolvers = [];
+  const q = new BakeDispatchQueue({
+    post: (tile) => { posted.push(tile); return new Promise((r) => resolvers.push(r)); },
+  });
+  const T = (x, y) => tileKeyOf(x, y);
+  q.setPlayerTile(T(10, 10));
+  q.record(T(14, 10));              // far
+  q.record(T(11, 10));              // near
+  q.record(T(10, 10));              // the player tile
+  q.record(T(20, 20), { interior: true });
+  check(q.depth === 4, "four dispatch items recorded");
+  check(q.record(T(11, 10)) === false && q.stats.coalesced === 1, "a duplicate record coalesces");
+  check(posted.length === 0, "P1 RECORDS — it never posts");
+
+  check(q.dispatch() === T(10, 10), "the player tile goes first");
+  check(q.dispatch() === -1, "concurrency 1: nothing else posts while one is in flight");
+  resolvers.shift()();
+  await Promise.resolve();
+  check(q.dispatch() === T(20, 20), "then the interior");
+  resolvers.shift()();
+  await Promise.resolve();
+  check(q.dispatch() === T(11, 10), "then nearest-first by Chebyshev");
+  resolvers.shift()();
+  await Promise.resolve();
+  check(q.purge(T(14, 10)) === true && q.depth === 0, "a vacate PURGES the queued dispatch");
+  check(q.dispatch() === -1, "nothing left to post");
+  check(q.stats.posted === 3 && q.stats.completed === 3 && q.stats.purged === 1,
+    `dispatch stats: ${JSON.stringify(q.stats)}`);
+
+  // The controller, end to end, against a real FrameWorkScheduler.
+  const { reg } = makeRegistry();
+  const clock = { t: 0 };
+  const sched = new FrameWorkScheduler({ now: () => clock.t, isInWorld: () => true, budgetMs: 6 });
+  const stagedTex = [];
+  const uploads = new UploadStager({ renderer: { initTexture: (x) => stagedTex.push(x.__n) }, now: () => clock.t });
+  const bakes = [];
+  const ctl = new PoolStreamController({
+    registry: reg, scheduler: sched, uploads, feedChunk: 4,
+    postBake: (tile) => { bakes.push(tile); return Promise.resolve(); },
+  });
+
+  ctl.setPlayerTile(T(1, 1));
+  check(ctl.onAdmit(T(1, 1)) === true, "admit records a dispatch");
+  check(ctl.onAdmit(T(2, 1)) === true, "second admit records");
+  check(bakes.length === 0, "P1 executes NOTHING");
+  ctl.tickP4();
+  check(bakes.length === 1 && bakes[0] === T(1, 1), "P4 posts ONE job, player tile first");
+  await Promise.resolve();
+  ctl.tickP4();
+  check(bakes.length === 2, "the next slot posts the next job");
+
+  // A plan arrives: the feed is a RESUMABLE W3 item, nothing is fed on arrival.
+  const gs = geomSource();
+  const members = [];
+  for (let i = 0; i < 10; i++) members.push(member({ contentKey: `p${i}|0`, rsId: 0x06000009 }));
+  ctl.onPlanReady(plan(T(1, 1), members), gs);
+  check(reg.pools.size === 0, "a worker result touches NOTHING on arrival (pass-08 D-08.4)");
+  sched.run({});
+  check(reg.pools.size === 1 && ctl.stats.feedsCommitted === 0,
+    "the first W3 step feeds a chunk and re-enqueues (feedChunk = 4)");
+  const poolC = [...reg.pools.values()][0];
+  check(poolC.instances === 4, `chunked: ${poolC.instances} of 10 members fed`);
+  ctl.tickP4(); sched.run({});
+  ctl.tickP4(); sched.run({});
+  check(poolC.instances === 10, "the feed completes over successive slots (one step per frame)");
+  // The LIVE FLIP waits on the tile's textures having STAGED (S2.4).
+  ctl.tickP4(); sched.run({});
+  check(ctl.stats.feedsCommitted === 0 && ctl.stats.flipDeferrals > 0,
+    "the flip DEFERS while the tile's rsId has not staged");
+  check(poolC.mesh.getVisibleAt(0) === false, "an unstaged tile stays invisible — never a flash");
+  uploads.beginFrame();
+  uploads.enqueueTexture({ texture: { isTexture: true, __n: "tile" }, rsId: 0x06000009, bytes: 1 });
+  uploads.drain();
+  ctl.tickP4(); sched.run({});
+  check(ctl.stats.feedsCommitted === 1, "once the texture staged, the flip runs");
+  check(poolC.mesh.getVisibleAt(0) === true, "the tile is LIVE");
+
+  // A vacate purges the dispatch AND the queued scheduler/upload items, and
+  // abandons an in-flight feed.
+  ctl.onAdmit(T(5, 5));
+  ctl.onPlanReady(plan(T(5, 5), [member({ contentKey: "v|0" }), member({ contentKey: "v2|0" })]), gs);
+  const before = poolC.instances;
+  ctl.onVacate(T(5, 5));
+  check(ctl.stats.feedsAbandoned === 1, "a vacated in-flight feed is ABANDONED");
+  check(ctl.dispatch.depth === 0, "the queued dispatch is purged");
+  sched.run({});
+  check(reg.tiles.has(T(5, 5)) === false, "nothing from the vacated tile persists");
+  check(poolC.instances === before, "the abandoned feed left no instances");
+
+  // A plan arriving for an already-vacated tile is never fed.
+  ctl.onVacate(T(7, 7));
+  check(ctl.onPlanReady(plan(T(7, 7), [member()]), gs) === false,
+    "a plan for a vacated tile is dropped, never fed");
+
+  // Park / adopt / release all route through the slot (one caller for pool
+  // mutation) and a re-admit of a resident tile is a pointer re-adopt.
+  ctl.enqueuePark(T(1, 1));
+  sched.run({});
+  check(ctl.stats.parks === 1 && poolC.mesh.getVisibleAt(0) === false, "park ran in W4");
+  check(ctl.onAdmit(T(1, 1)) === false, "re-admitting a RESIDENT tile records no bake");
+  sched.run({});
+  check(ctl.stats.adopts === 1 && poolC.mesh.getVisibleAt(0) === true, "re-adopt ran, zero fetch");
+  ctl.enqueueRelease(T(1, 1));
+  sched.run({});
+  check(ctl.stats.releases === 1 && reg.tiles.has(T(1, 1)) === false, "release ran in W4");
+
+  // The W2 upload drain is coalesced to one pending item.
+  uploads.enqueueTexture({ texture: { isTexture: true, __n: "z" }, rsId: 0x1234, bytes: 1 });
+  check(ctl.requestUploadDrain() === true, "an upload drain is requested");
+  check(ctl.requestUploadDrain() === false, "the W2 drain item is coalesced");
+  sched.run({});
+  check(stagedTex.includes("z"), "the drain staged through the slot");
+
+  const st = ctl.stats_();
+  check(typeof st.dispatch.depth === "number" && typeof st.feedsInFlight === "number", "controller stats shape");
 }
 
 // ── done ──────────────────────────────────────────────────────────────────
