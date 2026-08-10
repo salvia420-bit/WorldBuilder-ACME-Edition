@@ -23,8 +23,15 @@
 //        {type:'fetchEntitySurfacesPixelsBatch', id, flatDids, lens, basePals, flatSubs, tripleCounts, urgent?}
 //        {type:'datDecodeDiag', id}
 //        {type:'wasmMemCensus', id}
+//        {type:'tileBake', id, tile, lbs:[u32], placements:[...], axes:{...}}
+//          — ST9/T22 (pass-08 S3): resolve the tile's (placement × subset)
+//            members into a pass-07 S1 TilePlan OFF-THREAD. The main thread
+//            never derives a class (D-07.5). See `scene3d/tile_plan.js` for
+//            the format and for the named remainder (the worker-side wasm
+//            record → axis-record ladder; today the caller supplies `axes`).
 //   out: {type:'ready', id}
 //        {type:'result', id, kind:'modelMeshes'|'surfaces'|'entitySurfaces'|'entitySurfacesBatch', payload:[...], audit?}  (+ transferables)
+//        {type:'result', id, kind:'tilePlan', payload:<encodeTilePlan>, stats}  (+ one transferable)
 //        {type:'result', id, kind:'diag', payload: <dat_decode_diag() JSON string|null>}
 //        {type:'result', id, kind:'memCensus', payload: <hb_mem_census() JSON string|null>}
 //        {type:'error', id, message}
@@ -52,6 +59,8 @@ import init, {
 import * as __wasmNs from "../pkg/holtburger_web.js?v=wasmrev-20260803";
 import { installTextureOverrides } from "./tex_overrides.js";
 import { applyGfxReliefToWasm, GFX_RELIEF_FALLBACK } from "./gfx_relief.js";
+
+import { runTileBakeJob } from "./tile_plan.js";
 
 import {
   freeWasmHandles,
@@ -270,6 +279,18 @@ async function handleEntitySurfacesBatch(msg) {
   );
 }
 
+// ST9/T22 — TilePlan production (pass-07 S1 / D-07.5; pass-08 S3). Runs the
+// PURE builder (`scene3d/tile_plan.js`) in this worker, so class resolution,
+// world-matrix composition and per-class aggregation all leave the main
+// thread. NOT wasm-gated: the builder touches no decoder, so it works before
+// `init` and cannot be broken by a stale pkg/. The remainder that makes this
+// self-sufficient — resolving pack records into axis records in here instead
+// of taking them from the caller — is recorded in tile_plan.js's header.
+function handleTileBake(msg) {
+  const { message, transfer } = runTileBakeJob(msg);
+  self.postMessage(message, transfer);
+}
+
 self.onmessage = async (ev) => {
   const msg = ev.data;
   try {
@@ -288,6 +309,8 @@ self.onmessage = async (ev) => {
       case "fetchEntitySurfacesPixelsBatch":
         if (!ready) throw new Error("bake_worker: fetchEntitySurfacesPixelsBatch before init");
         return await handleEntitySurfacesBatch(msg);
+      case "tileBake":
+        return handleTileBake(msg);
       case "datDecodeDiag":
         // A07 §3.6 — expose THIS instance's decode counters + negative-cache
         // state (otherwise invisible from the main thread). Init-gated like

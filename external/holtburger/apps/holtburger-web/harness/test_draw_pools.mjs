@@ -41,6 +41,12 @@
 //             class set (`classesCreatedPostBoot`) counts every violation.
 //   PART 12 — the battery: a 36-tile ring at pool scale fed, parked,
 //             adopted, released; counters end clean, pools reaped to zero.
+//   PART 13 — the TilePlan contract (pass-07 S1): the pure off-thread
+//             builder (class resolution memoised per surface, shadow flags
+//             joined from the placement, band pairs as content-key pairs,
+//             per-class counts), the loud validator, the one-buffer transfer
+//             codec, the bake-worker `tileBake` job body, and a
+//             plan → encode → decode → registry FEED round-trip.
 //
 // Run:  node harness/test_draw_pools.mjs        (exit 0/1)
 
@@ -55,6 +61,10 @@ import {
   PoolRegistry, drawPoolsEnabled, checkDrawPoolsPrereqs, initDrawPools,
   drawPoolsActive, _resetDrawPoolsForTest, POOL_OPTIMIZE_FRAC,
 } from "../scene3d/pool_registry.js";
+import {
+  buildTilePlan, validateTilePlan, encodeTilePlan, decodeTilePlan,
+  runTileBakeJob, TILE_PLAN_RESULT_KIND,
+} from "../scene3d/tile_plan.js";
 import { getSurface } from "./lib/diag_schema.mjs";
 
 let passed = 0;
@@ -646,6 +656,115 @@ console.log("PART 12: ring-scale battery");
   check(end.errors.unresolvedGeometry === 0, "no unresolved geometry over the battery");
   check(end.classes.createdPostBoot === 0, "no post-boot class mints over the battery");
   reg.dispose();
+}
+
+// ── PART 13 — the TilePlan contract ───────────────────────────────────────
+
+console.log("PART 13: TilePlan contract (pass-07 S1)");
+{
+  // Two surfaces, four placements, two landblocks in different sectors, one
+  // banded (did_degrade) member and one envcell member.
+  const AXES = {
+    grass: rec({ texW: 400, texH: 400, alphaTest: 100 / 255 }),
+    wall: rec({ texW: 1024, texH: 1024 }),
+  };
+  let resolveCalls = 0;
+  const placements = [
+    { lbx: 1, lby: 1, modelId: 5, partId: 0, subsetIdx: 0, surfaceKey: "grass", matrix: new Float32Array(16), rsId: 0x06000001, castShadow: true, receiveShadow: true },
+    { lbx: 1, lby: 1, modelId: 5, partId: 0, subsetIdx: 0, surfaceKey: "grass", matrix: new Float32Array(16), rsId: 0x06000001, castShadow: true, receiveShadow: true },
+    { lbx: 9, lby: 1, modelId: 7, partId: 1, subsetIdx: 2, surfaceKey: "wall", matrix: new Float32Array(16), rsId: 0x06000002, castShadow: false, receiveShadow: true, degradeContentKey: "7|1|2:lo", band: 0, pos: { x: 0, y: 0, z: 0 } },
+    { lbx: 1, lby: 1, modelId: 9, partId: 0, subsetIdx: 0, surfaceKey: "wall", matrix: new Float32Array(16), rsId: 0x06000002, domain: "ec", cellId: 42 },
+  ];
+  const built = buildTilePlan({
+    tile: 0x0100,
+    lbs: [0x01010000, 0x09010000],
+    placements,
+    resolveAxes: (k) => { resolveCalls += 1; return AXES[k] || null; },
+  });
+  const p13 = built.plan;
+  check(p13.members.length === 4, `4 members, got ${p13.members.length}`);
+  check(resolveCalls === 2, `axis resolution MEMOISED per surface, got ${resolveCalls} calls`);
+  check(built.stats.placements === 4 && built.stats.surfaces === 2, "builder stats");
+  check(p13.members[0].classKey === p13.members[1].classKey, "same surface + flags ⇒ same class");
+  check(p13.members[0].sectorKey === "s0x0" && p13.members[2].sectorKey === "s2x0",
+    `sector from LB: ${p13.members[0].sectorKey} / ${p13.members[2].sectorKey}`);
+  check(p13.members[2].classKey !== p13.members[3].classKey,
+    "same SURFACE but domains st vs ec ⇒ different classes");
+  check(p13.members[2].bandGids.length === 2 && p13.members[2].bandGids[0] === "7|1|2",
+    "band pair is a CONTENT-key pair (both gids are the same class by construction)");
+  check(p13.members[3].cellId === 42, "envcell members carry their cell id");
+  check(p13.counts.members === 4 && p13.counts.sectors === 2, "counts aggregate");
+  check(Object.keys(p13.counts.byClass).length === 3, `3 distinct classes, got ${Object.keys(p13.counts.byClass).length}`);
+  check(p13.counts.byClass[p13.members[0].classKey] === 2, "byClass pre-aggregates for budget planning");
+
+  // Shadow flags are PLACEMENT facts joined into the key (D-07.6).
+  const shadowSplit = buildTilePlan({
+    tile: 1, placements: [
+      { ...placements[0], castShadow: true },
+      { ...placements[0], castShadow: false },
+    ], resolveAxes: (k) => AXES[k],
+  }).plan;
+  check(shadowSplit.members[0].classKey !== shadowSplit.members[1].classKey,
+    "castShadow splits the class (node flags become pool-uniform)");
+
+  // Unresolvable surfaces and non-pooled domains are COUNTED, never silent.
+  const dropped = buildTilePlan({
+    tile: 2, placements: [
+      { ...placements[0], surfaceKey: "missing" },
+      { ...placements[0], domain: "tr" },
+    ], resolveAxes: (k) => AXES[k] || null,
+  });
+  check(dropped.plan.members.length === 0, "nothing unresolved reaches the plan");
+  check(dropped.stats.unresolved === 1 && dropped.stats.unpooled === 1,
+    `drops counted: ${JSON.stringify(dropped.stats)}`);
+
+  // The validator is LOUD about every malformed shape.
+  check(validateTilePlan(p13).ok === true, "a built plan validates");
+  check(validateTilePlan(null).ok === false, "null plan rejected");
+  check(validateTilePlan({ tile: 1, members: [{}] }).errors.length >= 3, "a bare member names every missing field");
+  check(validateTilePlan({ tile: 1, members: [{ ...p13.members[0], domain: "tr" }] }).ok === false,
+    "a non-pooled domain in members is a validation error");
+  check(validateTilePlan({ tile: 1, members: [{ ...p13.members[0], matrix: new Float32Array(9) }] }).ok === false,
+    "a short matrix is a validation error");
+  check(validateTilePlan({ tile: 1, members: [], counts: { byClass: { ghost: 1 } } }).ok === false,
+    "counts referencing a class no member carries is a validation error");
+
+  // Transfer codec: ONE buffer for N matrices, views restored without copy.
+  const enc = encodeTilePlan(p13);
+  check(enc.transfer.length === 1 && enc.payload.matrices.length === 4 * 16,
+    "matrices pack into ONE transferable buffer");
+  check(enc.payload.members[0].matrix === undefined, "per-member matrices are not cloned twice");
+  const dec = decodeTilePlan(enc.payload);
+  check(dec.members.length === 4 && dec.members[3].matrix.length === 16, "decode restores 16-element views");
+  check(dec.members[0].classKey === p13.members[0].classKey && dec.tile === p13.tile,
+    "decode round-trips the plan");
+  check(validateTilePlan(dec).ok === true, "a decoded plan validates");
+  let threw = false;
+  try { decodeTilePlan({ v: 99 }); } catch (_) { threw = true; }
+  check(threw, "an unsupported payload version throws");
+
+  // The bake-worker job body (pass-08 S3) — pure, testable without a Worker.
+  const res = runTileBakeJob({ id: 7, tile: 0x0100, lbs: [], placements, axes: AXES });
+  check(res.message.type === "result" && res.message.kind === TILE_PLAN_RESULT_KIND && res.message.id === 7,
+    "tileBake result envelope matches the S3 vocabulary");
+  check(res.transfer.length === 1, "one transferable out");
+  let jobThrew = false;
+  try {
+    runTileBakeJob({ id: 8, tile: 1, placements: [{ ...placements[0], matrix: new Float32Array(3) }], axes: AXES });
+  } catch (_) { jobThrew = true; }
+  check(jobThrew, "a malformed plan throws in the worker instead of feeding half a tile");
+
+  // End-to-end: worker payload → decode → registry feed.
+  const { reg: r13 } = makeRegistry();
+  const gs13 = geomSource();
+  const fed = r13.feedTile(decodeTilePlan(res.message.payload), gs13);
+  check(fed.committed === true, "decoded plan feeds and commits");
+  const c13 = r13.census();
+  check(c13.classes.count === 3 && c13.pools.count === 3,
+    `3 classes over 2 sectors ⇒ 3 pools, got ${c13.pools.count}`);
+  check(c13.errors.unresolvedGeometry === 0 && c13.errors.unpooledMembers === 0,
+    "every planned member reached a pool");
+  check(r13.tiles.get(0x0100).size === 3, "membership records per (tile, pool)");
 }
 
 // ── done ──────────────────────────────────────────────────────────────────
