@@ -28,10 +28,12 @@ concurrent task owns the bake/transcode resample) and the whole ENVCELL domain
 | `docs/url-flags.md` | `d7a035ba` | §0 status row + §4 `drawPools` row restated |
 | `scene3d/pool_producer.js`, `scene3d/static_atlas.js` | `0b8d98e8` | **three live-arm fixes** (below); `static_atlas.js` gains one word (`export`) and no behaviour |
 | `scene3d/pool_producer.js`, `scene3d/pool_material.js`, battery | `4d9ddbd8` | **the TEXREF page stitch** (PAGE-RESAMPLE Handoff #2): pooled members key on the DECLARED page dims, `FULL_PAGE_DIMS` as authority; battery 396 → **413** |
+| `scene3d/pool_producer.js`, battery | `a48b05b2` | **the bit gates the whole gate** (orchestrator ruling on the ENVCELL-POOL finding): strict only when `FULL_PAGE_DIMS` is SET, pre-leg-6 permissive keying when clear; battery 413 → **430** |
 
-Seven bisectable commits, in producer order: `473c056b` → `52f8d82d` →
+Eight bisectable commits, in producer order: `473c056b` → `52f8d82d` →
 `cfd4bc1d` (statics) → `3340c79f` (buildings) → `d7a035ba` (wiring) →
-`0b8d98e8` (live-arm fixes) → `4d9ddbd8` (the TEXREF page stitch). Nothing pushed. The concurrent PAGE-RESAMPLE
+`0b8d98e8` (live-arm fixes) → `4d9ddbd8` (the TEXREF page stitch) →
+`a48b05b2` (the ruling: the bit gates the whole gate). Nothing pushed. The concurrent PAGE-RESAMPLE
 task's commits interleave; none of its files were staged by this task.
 
 **OFF-arm argument.** Every new call in a pre-existing production file is
@@ -156,22 +158,37 @@ allocates, or two members could share a class key while needing different
 do. Since a member is admitted only when its resident dims equal its declared
 dims, and the compressed-only arm's world materials are born BC7, this reads
 `true` in every admitted production case anyway.
-(b) `onPage === false` does not by itself route legacy; **DECLARED ≠ RESIDENT**
-does, whichever way the bit reads. That is the hazard the report actually names
-— a member whose dims will move when its full tier lands must not take a page
-layer now, or the refeed reads a dims mismatch and it keeps its preview texels
-for the session. Refusing on the bit alone would instead have collapsed the
-pooled world to ~0 on today's PRE-resample dist, where the bit is clear
-everywhere: it would have zeroed the 51-pool arm measured above. The trap the
-report warns about (a 1096² member whose byte rounds to a convincing 2048²) is
-closed either way, because the declared dims are read ONLY when the bit is set.
-The refusal has its own reason, `offPage`, so it is never conflated with the D2
-`needsResample` residue, and four counters (`producer.texRefPageKeyed /
-texRefOffPage / texRefAbsent / texRefDimsWillMove`) publish the populations —
-which is how a future page-dim dist will be seen to work. **NOT live-verified**:
-the one-browser budget was spent before this landed. On today's dist
-`texRefPageKeyed` is expected to be 0 and behaviour unchanged, which is what the
-neighbour suites show.
+(b) `onPage === false` did not by itself route legacy; **DECLARED ≠ RESIDENT**
+did, whichever way the bit read. **THIS HALF WAS WRONG AND IS SUPERSEDED — see
+D8.** The refusal keeps its own reason, `offPage`, so it is never conflated with
+the D2 `needsResample` residue, and four counters
+(`producer.texRefPageKeyed / texRefBitClear / texRefAbsent /
+texRefDimsWillMove`) publish the populations — which is how a future page-dim
+dist will be seen to work.
+
+**D8 — D7(b) is SUPERSEDED: the `FULL_PAGE_DIMS` bit now gates the whole gate**
+(commit `a48b05b2`; orchestrator ruling 2026-08-10, option (b), on the
+ENVCELL-POOL arm's blocking finding).
+D7(a) had already established that the declared dims are trusted ONLY when the
+bit is set — and then D7(b)'s DECLARED ≠ RESIDENT test compared against those
+same untrusted dims when the bit was CLEAR, which is precisely the pre-resample
+case. Under `?texCompressedOnly` world materials are PREVIEW-born, so live dims
+differ from the declared full-tier dims for essentially every member of a
+pre-page-dim dist. The ENVCELL-POOL live arm measured the consequence exactly:
+**1,852 of 1,852 offered surfaces refused `offPage`, `texRefDimsWillMove` 1852,
+`texRefPageKeyed` 0, pools 0** — `?drawPools` built an EMPTY world on today's
+dist. My own 51-pool Nanto arm predates leg 6, and this report already recorded
+that leg 6 was never live-verified; that is the gap this closes.
+`_axisRecordFor` now branches on the bit: SET ⇒ strict (declared dims key the
+record, DECLARED ≠ RESIDENT refuses); CLEAR ⇒ permissive, byte-for-byte the
+pre-leg-6 path (live dims, `texApprox`, nothing refused on page grounds, the
+`needsResample` gate decides), counted `texRefBitClear` — the old name
+`texRefOffPage` meant the opposite of what it said and is retired. The cost of
+the permissive arm is D7's own and is already counted:
+`classPages.layers.refeedDimMismatch`. Still **NOT live-verified** — the
+one-browser budget was spent before either leg landed — but the arm that found
+the defect is the sibling's, and the restored behaviour is the one my 51-pool
+arm did measure.
 
 **D6 — one out-of-scope edit.** `scene3d/static_atlas.js` gains the word
 `export` on `_atlasRefeedImpl` (live-arm fix 1). No behaviour changes; the
@@ -183,7 +200,7 @@ Node, from `apps/holtburger-web/`, all on this HEAD.
 
 | command | result |
 |---|---|
-| `node harness/test_draw_pools.mjs` | **413 passed, 0 failed** — DRAW-POOLS ✅ (20 PARTs; 333 → 413) |
+| `node harness/test_draw_pools.mjs` | **430 passed, 0 failed** — DRAW-POOLS ✅ (20 PARTs; 333 → 430) |
 | `node harness/test_diag_schema.mjs` | **69 passed, 0 failed** ✅ (the `evidence:` re-verification caught all 5 of my line drifts) |
 | `node harness/test_build_shell.mjs` | 56 passed, 0 failed ✅ (proves the new modules bundle) |
 | `node test_static_batch.mjs` / `test_static_batch_x.mjs` / `test_static_callpes.mjs` / `test_stat_batch_walk.mjs` / `test_dead_batch_skip.mjs` | 13/0 · 40/0 · 22/0 · 98/0 · 33/0 |
@@ -249,12 +266,19 @@ Taint: `nullRender=1` (mandatory headless — `harness/lib/boot.mjs`), SwiftShad
    migration's progress meter and needs no code change to read. Its CLIENT-side
    stitch is now landed (`4d9ddbd8`, D7): the feed keys on the TEXREF-declared
    page dims with `FULL_PAGE_DIMS` as authority, so the first page-dim dist will
-   show `producer.texRefPageKeyed` climbing off 0. PAGE-RESAMPLE's own
-   Handoff #3 (the preview-feed decision) is what still keeps `needsResample`
-   from reaching 0 from the bake alone; its option (b) — upsample the preview
-   into the member's FINAL page layer at transcode — is also what would drive
-   `texRefDimsWillMove` to 0 and let the pooled world cover preview-resident
-   members.
+   show `producer.texRefPageKeyed` climbing off 0 and `texRefBitClear` falling
+   toward it. PAGE-RESAMPLE's own Handoff #3 (the preview-feed decision) is what
+   still keeps `needsResample` from reaching 0 from the bake alone; its option
+   (b) — upsample the preview into the member's FINAL page layer at transcode —
+   is also what would drive `texRefDimsWillMove` to 0 and let the pooled world
+   cover preview-resident members on a page-dim dist. **Until then, on a
+   page-dim dist the strict arm refuses preview-born members `offPage` and they
+   are NOT re-offered**: `_holdOut` files only `REFUSE.BC7_PENDING`. The
+   ENVCELL-POOL report's Handoff 2 argues that RSID-MARKER's leg 1 has since
+   supplied the settle event (`upgradeMaterialToBc7` calls `atlasRefeed(rsId)`
+   on all three verdict outcomes), so filing `OFF_PAGE` into the same ledger
+   would now drain by construction. That extension was NOT in the orchestrator's
+   ruling and is not landed; it is the natural next line in this file.
 3. **`refused.bc7Pending = 363` is the biggest residue** and is NOT the D2 gate:
    it is `bc7AtlasShouldDefer`'s in-flight-verdict hold-out. The held-out nodes
    are re-offered by the pool `atlasRefeed` handler — but only when the material
