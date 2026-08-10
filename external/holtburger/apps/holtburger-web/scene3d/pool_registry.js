@@ -308,6 +308,12 @@ export class PoolRegistry {
     // Node-level culling KEPT (sector-bounded geometry, D-07.4 step 1).
     bm.frustumCulled = true;
     bm.matrixAutoUpdate = false;
+    // D-07.6: shadow flags are POOL-uniform — they are class-key axes, so every
+    // member of this pool agrees on them by construction. Taken from the first
+    // member (the producer swap carries them on the plan row); a member-less
+    // construction keeps three's defaults.
+    if (member && member.castShadow !== undefined) bm.castShadow = member.castShadow === true;
+    if (member && member.receiveShadow !== undefined) bm.receiveShadow = member.receiveShadow === true;
     if (cls.passClass === "opaque") {
       // D-07.4 step 2 — three's own early-out on every settled frame, every
       // camera, CSM included.

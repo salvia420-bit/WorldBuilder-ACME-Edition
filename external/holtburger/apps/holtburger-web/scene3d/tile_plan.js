@@ -170,6 +170,12 @@ export function buildTilePlan(input) {
       matrix: p.matrix,
       rsId: p.rsId >>> 0 || 0,
       layer: p.layer | 0,
+      // D-07.6: the node-level shadow flags become POOL-uniform. They are in
+      // the class key already, so carrying them on the member is redundant for
+      // identity — it exists so the registry can stamp the pool's own
+      // `castShadow`/`receiveShadow` without parsing the key string.
+      castShadow: cast,
+      receiveShadow: recv,
     };
     if (p.cellId != null) member.cellId = p.cellId;
     if (p.degradeContentKey != null) {
