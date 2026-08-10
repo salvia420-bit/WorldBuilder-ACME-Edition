@@ -79,6 +79,7 @@ export const REFUSE = Object.freeze({
   NEEDS_RESAMPLE: "needsResample",
   BC7_PENDING: "bc7Pending",
   DEFORMED: "deformed",
+  OFF_PAGE: "offPage",
   LAYER_FULL: "layerFull",
   LAYER_WRITE: "layerWriteFail",
   NO_PIXELS: "noPixels",
@@ -97,7 +98,7 @@ export class ClassMaterialRegistry {
       classes: 0,
       layerAllocs: 0, layerHits: 0, layerRecycles: 0, layerGrows: 0, layerGrowFails: 0,
       bc7Layers: 0, rgbaLayers: 0, nraLayers: 0, refeedDimMismatch: 0,
-      refused: { noTexture: 0, needsResample: 0, bc7Pending: 0, deformed: 0, layerFull: 0, layerWriteFail: 0, noPixels: 0 },
+      refused: { noTexture: 0, needsResample: 0, offPage: 0, bc7Pending: 0, deformed: 0, layerFull: 0, layerWriteFail: 0, noPixels: 0 },
       allocatedBytes: 0,
     };
   }
@@ -130,6 +131,13 @@ export class ClassMaterialRegistry {
     // A surface whose BC7 verdict is still in flight cannot be committed: the
     // page's format and dims are fixed by texStorage3D at allocation.
     if (bc7AtlasShouldDefer(material)) return this._refuse(REFUSE.BC7_PENDING);
+    // THE PAGE-RESAMPLE AUTHORITY. `rec.texOffPage` is stamped by the producer
+    // when TEXREF declares dims that differ from the ones currently on the
+    // GPU: such a member's dims WILL move when its full tier lands, so a page
+    // layer taken now pins it to the wrong page for the session. The
+    // `FULL_PAGE_DIMS` tier bit is the authority here — the dims byte alone
+    // cannot be (a 1096² member rounds to a convincing 2048²).
+    if (rec && rec.texOffPage === true) return this._refuse(REFUSE.OFF_PAGE);
     // THE D2 GATE. `rec` carries the page-tier facts the class key was built
     // from; a member off its page has no legal layer until the bake/transcode
     // resample lands.

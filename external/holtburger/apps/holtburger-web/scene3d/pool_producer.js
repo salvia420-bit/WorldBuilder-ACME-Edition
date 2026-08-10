@@ -61,7 +61,8 @@ import { buildTilePlan } from "./tile_plan.js";
 import { PoolStreamController } from "./pool_stream.js";
 import { tileOfLb, tileLbKeys } from "./residency_grid.js";
 import { frameWorkEnabled, getFrameWorkScheduler } from "./frame_work.js";
-import { registerAtlasRefeed } from "./bc7_textures.js";
+import { registerAtlasRefeed, texRefPageInfo } from "./bc7_textures.js";
+import { isBc7AtlasTexture } from "./static_atlas.js";
 import { _atlasRefeedImpl as atlasSideRefeed } from "./static_atlas.js";
 
 // ---------------------------------------------------------------------------
@@ -121,6 +122,7 @@ export function initPoolWorld({ THREE, group, search } = {}) {
       nodesIn: 0, pooled: 0, passthrough: 0, plans: 0, planErrors: 0,
       byDomain: { st: 0, ec: 0 },
       refusedNodes: 0, normFails: 0,
+      texRefPageKeyed: 0, texRefOffPage: 0, texRefAbsent: 0, texRefDimsWillMove: 0,
       parks: 0, adopts: 0, releases: 0,
       refeedCalls: 0, refeedLayers: 0, refeedRehomed: 0, refeedAtlasSide: 0,
     },
@@ -192,7 +194,7 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
     const surfaceKey = mat.uuid;
     let rec = recBySurface.get(surfaceKey);
     if (rec === undefined) {
-      rec = axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv });
+      rec = _axisRecordFor(mat, domain, cast, recv, w.stats);
       recBySurface.set(surfaceKey, rec);
     }
     // The class key `buildTilePlan` will build, from the SAME record composed
@@ -269,6 +271,70 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
   w.stats.byDomain[domain] += placements.length;
   w.stats.passthrough += passthrough.length;
   return { passthrough, pooled: placements.length };
+}
+
+/**
+ * Build the axis record, keyed on the TEXREF-DECLARED page dims whenever the
+ * bake declares the member IS at its page (PAGE-RESAMPLE, `FULL_PAGE_DIMS`).
+ *
+ * WHY THIS EXISTS (the stitch the PAGE-RESAMPLE task left open, its Handoff
+ * #2): without it the pooled arm keys on LIVE `material.map` dims, so a
+ * page-dim dist buys the pools NOTHING — the whole point of the bake-side
+ * resample is that class identity comes from the DECLARED dims and is
+ * therefore stable across preview → full (pass-5 D-05.6.2, pass-7 D-07.9's
+ * closed class set).
+ *
+ * THE BIT IS THE AUTHORITY, NEVER THE DIMS BYTE. `texRefPageInfo` decodes a
+ * 4-bit-per-axis `ceil(log2)` pair, so a non-pow2 member (1096² is in the
+ * shipped corpus) reads exactly like a real 2048² page; only the
+ * `FULL_PAGE_DIMS` tier bit distinguishes them, so the declared dims are
+ * trusted ONLY when `onPage` is true.
+ *
+ * TWO REFINEMENTS on the prescribed shape, both recorded in the report:
+ *
+ *  1. The format bit is taken from the LIVE texture, not asserted `true`.
+ *     The `f7|f8` axis must match what the class PAGE actually allocates
+ *     (`isBc7AtlasTexture` decides that), or two members could share a class
+ *     key while needing different `texStorage3D` internal formats — the one
+ *     thing D-07.2 says a class must never do.
+ *  2. `onPage === false` does not by itself force the legacy path; DECLARED ≠
+ *     RESIDENT does, whichever way the bit reads. That is the hazard that
+ *     actually bites: such a member's dims WILL move when its full tier
+ *     lands, so a page layer taken now pins it to the wrong page for the
+ *     session (the refeed would read a dims mismatch and it would keep its
+ *     preview texels forever). A member already AT its declared dims is
+ *     allocation-sound today — which is also what keeps the pooled world from
+ *     collapsing to ~0 on the pre-resample dist, where the bit is clear
+ *     everywhere.
+ */
+function _axisRecordFor(mat, domain, cast, recv, stats) {
+  const rsId = _rsIdOf(mat);
+  const info = rsId ? texRefPageInfo(rsId) : null;
+  const tex = mat && mat.map;
+  const liveW = (tex && tex.image && tex.image.width) | 0;
+  const liveH = (tex && tex.image && tex.image.height) | 0;
+  const texRef = info && info.onPage
+    ? { w: info.w, h: info.h, compressed: isBc7AtlasTexture(tex) }
+    : null;
+  const rec = axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv, texRef });
+  if (!info) {
+    stats.texRefAbsent += 1; // no TEXREF row ⇒ live dims, `texApprox: true`
+    return rec;
+  }
+  if (info.onPage) stats.texRefPageKeyed += 1;
+  else stats.texRefOffPage += 1;
+  if (liveW !== (info.w | 0) || liveH !== (info.h | 0)) {
+    // Declared ≠ resident: this member's dims are going to move.
+    rec.texOffPage = true;
+    stats.texRefDimsWillMove += 1;
+  }
+  return rec;
+}
+
+/** Test hook — the axis record exactly as the feed builds it. */
+export function _poolAxisRecordForTest(mat, { domain = "st", castShadow = false, receiveShadow = false } = {}) {
+  const stats = { texRefPageKeyed: 0, texRefOffPage: 0, texRefAbsent: 0, texRefDimsWillMove: 0 };
+  return { rec: _axisRecordFor(mat, domain, castShadow, receiveShadow, stats), stats };
 }
 
 function _rsIdOf(mat) {

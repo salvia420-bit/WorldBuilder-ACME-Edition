@@ -98,9 +98,13 @@ import { ClassMaterialRegistry, normalizeForPool } from "../scene3d/pool_materia
 import {
   initPoolWorld, poolWorldActive, poolWorldCensus, addSingletonsToPools,
   poolOnSlotState, poolOnTeleport, poolTickP4, poolAtlasRefeed,
-  _resetPoolWorldForTest,
+  _poolAxisRecordForTest, _resetPoolWorldForTest,
 } from "../scene3d/pool_producer.js";
 import { tileOfLb } from "../scene3d/residency_grid.js";
+import {
+  initTexCompressedOnly, _resetTexCompressedOnlyForTest,
+  TIER_BIT_FULL_PAGE_DIMS, TIER_BIT_FULL_XU7_PRESENT,
+} from "../scene3d/bc7_textures.js";
 
 let passed = 0;
 let failed = 0;
@@ -1416,6 +1420,98 @@ console.log("PART 19: pooled-world residency, anti-churn and the closed class se
   check(reg.geometryBytes().allocated === allocBefore && reg.census().geometry.adds === addsBefore,
     "park allocates nothing and adds no geometry (setVisibleAt only)");
 
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+}
+
+
+// ── PART 20 — the TEXREF page stitch (PAGE-RESAMPLE handoff #2) ───────────
+
+console.log("PART 20: axis records key on the TEXREF-declared page dims");
+{
+  // A stub `pack_texref` is all `texRefPageInfo` needs (it reads nothing else),
+  // and it leaves `texCompressedOnlyActive()` false — so arming it here cannot
+  // change any other behaviour under test.
+  const rows = new Map(); // rsId -> {tierBits, dimsByte}
+  const packTexref = (rsId) => {
+    const r = rows.get(rsId >>> 0);
+    return r === undefined ? -1 : ((r.tierBits << 8) | r.dimsByte);
+  };
+  const dimsByte = (logW, logH) => ((logW & 0xf) << 4) | (logH & 0xf);
+  const mkMat = (edge, rsId) => {
+    const m = new THREE.MeshStandardMaterial({ map: pageTex(edge) });
+    m.userData = { surfaceDid: 0x08000030, __pvwRsId: rsId };
+    return m;
+  };
+  const mkNode = (edge, rsId) => {
+    const n = new THREE.Mesh(triGeom(6), mkMat(edge, rsId));
+    n.castShadow = true;
+    return n;
+  };
+
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  _resetTexCompressedOnlyForTest();
+
+  // (a) SEAM UNARMED / no TEXREF row ⇒ FALL BACK to live dims, exactly today's
+  //     behaviour, and say so (`texApprox`).
+  const a = _poolAxisRecordForTest(mkMat(512, 0x06000030));
+  check(a.rec.texW === 512 && a.rec.texH === 512, "no TEXREF row ⇒ the axis record falls back to LIVE dims");
+  check(a.rec.texApprox === true, "…and stamps texApprox, so the approximation is visible");
+  check(a.stats.texRefAbsent === 1, "…and is COUNTED as an absent-TEXREF fallback");
+
+  // (b) TEXREF declares the member IS at its page ⇒ the DECLARED dims key it,
+  //     even while the live texture is still the preview. This is the whole
+  //     point of the stitch: class identity stable across preview → full.
+  rows.set(0x06000031, {
+    tierBits: TIER_BIT_FULL_PAGE_DIMS | TIER_BIT_FULL_XU7_PRESENT,
+    dimsByte: dimsByte(11, 11), // 2048²
+  });
+  initTexCompressedOnly({ wasmNs: { pack_texref: packTexref } });
+  const b = _poolAxisRecordForTest(mkMat(256, 0x06000031));
+  check(b.rec.texW === 2048 && b.rec.texH === 2048,
+    "an on-page TEXREF row keys the record on the DECLARED 2048² page, not the live 256²");
+  check(b.rec.texApprox !== true, "…so the record is no longer an approximation");
+  check(classKeyOf(b.rec).includes("x11"), `…and the class key carries tier 11: ${classKeyOf(b.rec)}`);
+  check(b.stats.texRefPageKeyed === 1, "page-keyed records are COUNTED");
+  check(b.stats.texRefDimsWillMove === 1,
+    "…and a member whose live dims have not reached the page yet is flagged as moving");
+
+  // (c) TEXREF row present, page bit CLEAR ⇒ the DIMS BYTE IS NOT TRUSTED (a
+  //     1096² member rounds to a convincing 2048²): the record keeps live dims.
+  rows.set(0x06000032, { tierBits: TIER_BIT_FULL_XU7_PRESENT, dimsByte: dimsByte(11, 11) });
+  const c = _poolAxisRecordForTest(mkMat(1024, 0x06000032));
+  check(c.rec.texW === 1024 && c.rec.texH === 1024,
+    "page bit CLEAR ⇒ the declared dims are NOT trusted (the bit is the authority, not the byte)");
+  check(c.stats.texRefOffPage === 1 && c.stats.texRefDimsWillMove === 1, "both off-page counters fire");
+  check(c.rec.texOffPage === true, "…and the record is marked as one whose dims will move");
+
+  // (d) declared == resident ⇒ allocation-sound today, nothing flagged.
+  rows.set(0x06000033, { tierBits: TIER_BIT_FULL_XU7_PRESENT, dimsByte: dimsByte(9, 9) });
+  const d = _poolAxisRecordForTest(mkMat(512, 0x06000033));
+  check(d.rec.texOffPage !== true && d.stats.texRefDimsWillMove === 0,
+    "a member already AT its declared dims is not flagged (this is what keeps the pre-resample dist poolable)");
+
+  // END TO END: a dims-will-move member takes the LEGACY path, counted with
+  // its own reason (distinct from the D2 needsResample residue).
+  _resetDrawPoolsForTest();
+  _resetPoolWorldForTest();
+  initPoolWorld({ THREE, group: new THREE.Group(), search: ARMED_PRE });
+  const nMove = mkNode(256, 0x06000031);
+  const rMove = addSingletonsToPools([nMove], {}, { domain: "st", lbKey: 0x40400000 });
+  check(rMove.pooled === 0 && rMove.passthrough[0] === nMove,
+    "a dims-will-move member RENDERS on the legacy path");
+  const cen = poolWorldCensus();
+  check(cen.classPages.refused.offPage === 1, "…refused with the offPage reason");
+  check(cen.classPages.refused.needsResample === 0, "…and NOT conflated with the D2 residue");
+  check(cen.producer.texRefPageKeyed === 1 && cen.producer.texRefDimsWillMove === 1,
+    "the producer census publishes the TEXREF stitch counters");
+
+  const nOk = mkNode(512, 0x06000033);
+  check(addSingletonsToPools([nOk], {}, { domain: "st", lbKey: 0x40400000 }).pooled === 1,
+    "a member at its declared dims still pools");
+
+  _resetTexCompressedOnlyForTest();
   _resetDrawPoolsForTest();
   _resetPoolWorldForTest();
 }
