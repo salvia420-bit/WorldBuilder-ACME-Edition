@@ -29,11 +29,13 @@ concurrent task owns the bake/transcode resample) and the whole ENVCELL domain
 | `scene3d/pool_producer.js`, `scene3d/static_atlas.js` | `0b8d98e8` | **three live-arm fixes** (below); `static_atlas.js` gains one word (`export`) and no behaviour |
 | `scene3d/pool_producer.js`, `scene3d/pool_material.js`, battery | `4d9ddbd8` | **the TEXREF page stitch** (PAGE-RESAMPLE Handoff #2): pooled members key on the DECLARED page dims, `FULL_PAGE_DIMS` as authority; battery 396 → **413** |
 | `scene3d/pool_producer.js`, battery | `a48b05b2` | **the bit gates the whole gate** (orchestrator ruling on the ENVCELL-POOL finding): strict only when `FULL_PAGE_DIMS` is SET, pre-leg-6 permissive keying when clear; battery 413 → **430** |
+| `scene3d/pool_producer.js`, battery | `83dcc266` | **`offPage` joins the hold-out ledger** + the drain-by-construction retire rule; battery 430 → **448** |
 
-Eight bisectable commits, in producer order: `473c056b` → `52f8d82d` →
+Nine bisectable commits, in producer order: `473c056b` → `52f8d82d` →
 `cfd4bc1d` (statics) → `3340c79f` (buildings) → `d7a035ba` (wiring) →
 `0b8d98e8` (live-arm fixes) → `4d9ddbd8` (the TEXREF page stitch) →
-`a48b05b2` (the ruling: the bit gates the whole gate). Nothing pushed. The concurrent PAGE-RESAMPLE
+`a48b05b2` (the ruling: the bit gates the whole gate) → `83dcc266` (the
+`offPage` hold-out ledger). Nothing pushed. The concurrent PAGE-RESAMPLE
 task's commits interleave; none of its files were staged by this task.
 
 **OFF-arm argument.** Every new call in a pre-existing production file is
@@ -166,6 +168,24 @@ the D2 `needsResample` residue, and four counters
 texRefDimsWillMove`) publish the populations — which is how a future page-dim
 dist will be seen to work.
 
+**D9 — the `offPage` hold-out ledger, and the rule that makes it drain**
+(commit `83dcc266`; approved remainder of leg 7).
+Filing `offPage` alongside `bc7Pending` is the easy half — RSID-MARKER leg 1
+supplies the event (`upgradeMaterialToBc7` fires `atlasRefeed(rsId)` when the
+verdict settles on landed, absent AND failed), which is exactly when a member's
+dims stop moving. The half that needed a RULE is the re-file: RSID-MARKER's
+re-offer deliberately re-files anything still refused, which is right for
+`bc7Pending` (another settle is owed) and WRONG for `offPage` (the settle just
+happened; the `map` is final; no future event can change the answer, so the
+entry would retain a node for the session and never drain — the leak
+RSID-MARKER's own D2 declined to create). The re-offer pass is therefore marked
+`__poolReoffer` and `_holdOut` refuses to re-file anything but `bc7Pending` on
+it; an `offPage` refusal seen there is RETIRED (`heldOutRetired`), renders on
+the legacy producer, and is counted. `heldOutByReason` / `reOfferedByReason`
+keep the two classes on separate rows. Battery PART 21 walks the whole
+lifecycle including both terminal branches. **Not live-verified** (no browser
+budget left); the first strict arm is the page-dim dist's own boot.
+
 **D8 — D7(b) is SUPERSEDED: the `FULL_PAGE_DIMS` bit now gates the whole gate**
 (commit `a48b05b2`; orchestrator ruling 2026-08-10, option (b), on the
 ENVCELL-POOL arm's blocking finding).
@@ -200,7 +220,7 @@ Node, from `apps/holtburger-web/`, all on this HEAD.
 
 | command | result |
 |---|---|
-| `node harness/test_draw_pools.mjs` | **430 passed, 0 failed** — DRAW-POOLS ✅ (20 PARTs; 333 → 430) |
+| `node harness/test_draw_pools.mjs` | **448 passed, 0 failed** — DRAW-POOLS ✅ (21 PARTs; 333 → 448) |
 | `node harness/test_diag_schema.mjs` | **69 passed, 0 failed** ✅ (the `evidence:` re-verification caught all 5 of my line drifts) |
 | `node harness/test_build_shell.mjs` | 56 passed, 0 failed ✅ (proves the new modules bundle) |
 | `node test_static_batch.mjs` / `test_static_batch_x.mjs` / `test_static_callpes.mjs` / `test_stat_batch_walk.mjs` / `test_dead_batch_skip.mjs` | 13/0 · 40/0 · 22/0 · 98/0 · 33/0 |
@@ -277,8 +297,7 @@ Taint: `nullRender=1` (mandatory headless — `harness/lib/boot.mjs`), SwiftShad
    ENVCELL-POOL report's Handoff 2 argues that RSID-MARKER's leg 1 has since
    supplied the settle event (`upgradeMaterialToBc7` calls `atlasRefeed(rsId)`
    on all three verdict outcomes), so filing `OFF_PAGE` into the same ledger
-   would now drain by construction. That extension was NOT in the orchestrator's
-   ruling and is not landed; it is the natural next line in this file.
+   would now drain by construction. **LANDED (leg 8, `83dcc266`) — see D9.**
 3. **`refused.bc7Pending = 363` is the biggest residue** and is NOT the D2 gate:
    it is `bc7AtlasShouldDefer`'s in-flight-verdict hold-out. The held-out nodes
    are re-offered by the pool `atlasRefeed` handler — but only when the material
