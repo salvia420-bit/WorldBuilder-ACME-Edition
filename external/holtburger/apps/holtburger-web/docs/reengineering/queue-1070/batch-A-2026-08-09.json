@@ -35,6 +35,11 @@
       "ts": "2026-08-09T20:15-02:30",
       "by": "orchestrator (owner-authorized execution: ultra quality + clouds=on + wxMap=nasa for real-render legs; muted off-screen; kill test chrome by --user-data-dir; taildrop artifacts to redmi)",
       "event": "ATTEMPT BLOCKED — 1070 offline (tailscale last-seen 2d, ping no-reply, ssh timeout). Laptop preflight COMPLETE and standing: serve.py :8765 up (full dist incl. packs/index tiers), wsbridge up, ACE up, release wasm sha 1f6f57c9…e173907 (6.33 MB), shell REBUILT fresh against HEAD (app-39481b35, 5 workers). Reachability watcher armed; batch runs when the box appears. E1 + P-ASSEMBLE remain prereq-blocked on T13 regardless. E4 sheets (Batch B, redmi) taildropped to redmi-note-13-5g ahead of schedule (36 sheets + README, 28.8 MB zip)."
+    },
+    {
+      "ts": "2026-08-10 (afternoon-evening)",
+      "by": "orchestrator (owner-directed: run the batch on the 1070; off-screen muted; cleanup after)",
+      "event": "BATCH EXECUTED on the 1070 (Chrome 150, GTX 1070 D3D11 verified, fusion-fix 864bc140 live, BAKE-3 v3 packs). COMPLETE: P-SUBTLE, E1 (CLEAN after same-day fracture fix; texture-tier finding filed to T15), P-ASSEMBLE, P-LIGHTBAKE, P-INITTEX, P-88MIB, BOOT-666-SHELL (cold arms tainted short-of-in-world; JS-class comparison valid), TEXWORKER-TAIL (route-pinned rerun after an invalid first pair), TEXWORKER-BOOTWARM. BLOCKED: MOVE-FIX-BASELINE (harness renderOnDemand boot-stall — to Batch B). Incidents: ACE crashed mid-batch (LandblockManager.Tick; restarted, FIFO-writer fix documented in handoff §-3); test Chrome died once (relaunched); one stale ssh -L forward (keepalives added). All eye artifacts + probe JSONs in the session scratchpad b1070/."
     }
   ],
   "items": [
@@ -198,7 +203,14 @@
         "6. Renderer handle: via the scene3d module scope or liveScene3d snapshot — note liveScene3d is a one-time init3D snapshot (stall_probe.js:430–435), stamped ~35 s after in-world; poll not-null."
       ],
       "expects": "texUploadMs(next frame) ≈ 0 on the initTexture arm; both arms' ms+bytes recorded",
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070 D3D11, in-world real render; synthetic BC7 CompressedArrayTexture 1024² layers)",
+        "initTextureOutsideRender": "8 MiB staged in 2.1 ms wall; next rendered frame carries no visible upload cost",
+        "uploadInsideRender": "same 8 MiB payload uploaded in-render: 51.9 ms frame bracket (upper bound — includes the frame wait)",
+        "caveat": "stall-probe cumulative GL counters were not readable in the driver's report shape (nulls) — verdict rests on wall-clock brackets, which are unambiguous at this magnitude",
+        "verdict": "PASS-shape CONFIRMED: renderer.initTexture stages CompressedArrayTexture uploads outside render() at ~2 ms for 8 MiB ⇒ texUpload on the next frame ≈ 0. GATE-POOLS upload staging (W2/stage-C) can rely on initTexture."
+      }
     },
     {
       "id": "P-88MIB",
@@ -216,7 +228,31 @@
         "5. ≥3 reps per arm (fresh texture objects each rep — re-staging an already-uploaded texture measures nothing)."
       ],
       "expects": "ms whole vs ms per 44 MiB half; verdict text: does the split fit under 250 ms per frame on the 1070",
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070 D3D11; 3 reps/arm, fresh texture objects per rep)",
+        "whole88MiB_ms": [
+          86.9,
+          86.9,
+          95.6
+        ],
+        "split44MiB_perFrame_ms": [
+          [
+            44.6,
+            42.7
+          ],
+          [
+            43.5,
+            42.0
+          ],
+          [
+            44.4,
+            42.3
+          ]
+        ],
+        "verdict": "Against the 250 ms F6 streaming-hitch line on the 1070: the WHOLE 88 MiB t1024-class pair stages in 87-96 ms (already under the line); the 44/44 split costs ~43-45 ms per frame — fits with 5× headroom. Split staging is the comfortable choice; even whole-pair staging never breaches F6 on this GPU.",
+        "gpu": "ANGLE (NVIDIA GeForce GTX 1070, Direct3D11)"
+      }
     },
     {
       "id": "P-ASSEMBLE",
@@ -237,7 +273,19 @@
         "4. Sanity bar (GATE-GEOM): ring-scale assembly total must be milliseconds-class, not a frame-budget item; anything >1 ms/model is a finding."
       ],
       "expects": "µs/model p50/p95 + ring total ms (+ envcell figures if available)",
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070, in-world Holtburg ring, chunked wasm-call timing N=32)",
+        "uniqueModelsInScene": 194,
+        "assembled": 87,
+        "missingToRuntimeFallback": 107,
+        "usPerModelP50": 28.1,
+        "usPerModelP95": 100,
+        "ringTotalMs": 9.8,
+        "bytesOut": 266800,
+        "envcellFigures": "see P-LIGHTBAKE result (same wasm entry; 30-55 µs/cell)",
+        "verdict": "GATE-GEOM sanity leg PASSES — ring-scale assembly is milliseconds-class (9.8 ms for 87 models), p95 100 µs/model, 10× under the 1 ms/model finding bar. NOTE the 107 'missing' include by-design absences (entity/equipment models never ride pack GEOM; scene-walk collected ALL userData.modelId) — counted fallback, not silent."
+      }
     },
     {
       "id": "P-LIGHTBAKE",
@@ -254,7 +302,35 @@
         "4. Report µs/cell p50 interior, µs/cell p90 interior, and LB totals; the number sizes whether envcell light bake stays a bake-worker job (96 MiB instance) or could fold main-side."
       ],
       "expects": "µs/cell for p50 and p90 interiors + LB totals, measurement labeled (decode-total vs isolated light-bake)",
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070; cold-enter per dungeon then 3 timed reps of assemble_envcell_geometry over the scene's resident cells)",
+        "p50Interior": {
+          "lb": "0x0163 Holtburg Redoubt",
+          "cells": 178,
+          "assembled": 178,
+          "msPerRep": [
+            9.3,
+            7.0,
+            5.4
+          ],
+          "usPerCellBest": 30.3
+        },
+        "p90Interior": {
+          "lb": "0x8904 Empyrean Facility",
+          "cellsSeen": 732,
+          "assembled": 420,
+          "missing": 312,
+          "msPerRep": [
+            43.5,
+            40.3,
+            43.3
+          ],
+          "usPerCellBest": 55.1
+        },
+        "measurementLabel": "DECODE-TOTAL per the queue's step-3 caveat: assemble = HBG1 parse + slot/DID resolve + vertex light bake + stream write; light bake is a share (pass-04 0.38× arithmetic), not isolated.",
+        "verdict": "Envcell assembly ~30-55 µs/cell ⇒ a p90-class LB ≈ 40 ms total — light bake does NOT need to stay a 96 MiB bake-worker job on these numbers; main-side is viable if chunked off the frame. Rep warm-up (9.3→5.4 ms) shows the decode memo working. FOLLOW-UP: 312/732 empyrean cells fell back to runtime decode (counted) — pack GEOM/interior-pack residency for large far-region dungeons after @teledungeon deserves a look (fetch-wave timing, not correctness)."
+      }
     },
     {
       "id": "BOOT-666-SHELL",
@@ -300,7 +376,44 @@
       "out": [
         "docs/RESULTS-shell-requests-1070-<date>.json"
       ],
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070, CDP Network log, fresh profile per arm-pair sh1/sh2; verdict EXPLORATORY per SPEC §2.2)",
+        "taxonomyNote": "classifier: shell-class = index*.html + /shell/*; app-js-other = unbundled scene3d/module tree (T11's P5 counts those as shell-class, so compare totals not labels). DEVIATION recorded: &renderOnDemand=1 dropped from the queue's normative URLs (it stalls the boot orchestrator pre-login; reproduced 2×; committed funnel smoke also omits it).",
+        "arms": {
+          "unbundled-cold": {
+            "requests": 512,
+            "wireMB": 28.2,
+            "jsClassRequests": 244,
+            "inWorld": false
+          },
+          "unbundled-warm": {
+            "requests": 1645,
+            "wireMB": 37.5,
+            "shellClass": "1 req / 0.19 MB",
+            "worldData": "1177 req / 32.8 MB",
+            "inWorld": true
+          },
+          "bundled-cold": {
+            "requests": 270,
+            "wireMB": 28.3,
+            "jsClassRequests": 52,
+            "shellClass": "2 req / 2.91 MB",
+            "inWorld": false
+          },
+          "bundled-warm": {
+            "requests": 1399,
+            "wireMB": 67.6,
+            "shellClass": "2 req / 0.02 MB",
+            "worldData": "1151 req / 32.8 MB",
+            "inWorld": true
+          }
+        },
+        "pluginLane": "96 (bundled) vs 146 (unbundled) requests, ~0.5 MB — arms-invariant per D4, recorded for the B2 ledger, NOT filed as a defect.",
+        "taint": "BOTH cold arms timed out short of in-world at the 150 s gate (world-data cold load dominates; the JS-class comparison is unaffected — it completes early in boot). Warm arms reached in-world.",
+        "verdict": "EXPLORATORY: the bundle collapses the cold JS fan-out ~5× (244→52 JS-class requests) and the warm shell to 2 conditional requests / ~0 bytes — T11's arithmetic shape reproduced at wire level on the 1070. The dominant cold/warm cost is the WORLD-DATA lane (1,100+ requests / ~33 MB), which is ST2 pack-migration territory, not shell work.",
+        "nosw": "?nosw=1 skips the SW by design — stated per the checklist."
+      }
     },
     {
       "id": "TEXWORKER-TAIL",
@@ -330,7 +443,34 @@
       "out": [
         "RESULTS-v2 + archived __stallReport rings, both arms"
       ],
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070, ultra, fresh profile per arm b1/b2, ROUTE-PINNED: @telepoi Holtburg then 7 westward @teleloc hops — position persists server-side, so the first unrouted pair was INVALID and discarded; sequential arms, not interleaved)",
+        "workerArm": {
+          "longFrames": 13,
+          "stallMassMs": 8890,
+          "worstMs": 3716,
+          "rankedTop": "texUploadMs 250 ms",
+          "texWorker": {
+            "jobs": 204,
+            "msTranscodeOffMain": 5276,
+            "maxQueueDepth": 20,
+            "fifoFallbacks": 0,
+            "fallbackEngagements": 0,
+            "jobErrors": 0
+          }
+        },
+        "fifoArm": {
+          "longFrames": 42,
+          "stallMassMs": 26750,
+          "worstMs": 8884,
+          "rankedTop": "xu7DecodeMs 3487 ms + completionMs 1018 ms (main-thread transcode dominates the tail)",
+          "texWorker": "state off, 0 jobs (correct explicit-FIFO semantics)"
+        },
+        "instrumentValidation": "D-10.5 partial: probe self-cost small (wrapOverhead 26/159 ms, sample cost ~1.3 s across the run); explained+residual ≠ Σ interval — residual dominates (8.6 s / 22.2 s), i.e. most long-frame mass sits OUTSIDE the instrumented GL classes (JS/bake work), per the probe's stated subtraction limits.",
+        "verdict": "GATE-TEXWORKER TAIL-ULTRA leg: worker arm tail is ~3× BETTER than FIFO on every tail statistic (13 vs 42 long frames, 8.9 s vs 26.7 s mass, 3.7 s vs 8.9 s worst) with zero counted fallbacks — the kill-row (worker worse than FIFO) does NOT trigger. Caveat: sequential not interleaved arms; a PC-7-strict interleaved re-run would harden this before the flip, but the margin is not noise-shaped.",
+        "raw": "session scratchpad b1070/texworker-{on,0}-routed.json (full __stallReport rings + __texWorkerStats)"
+      }
     },
     {
       "id": "TEXWORKER-BOOTWARM",
@@ -353,7 +493,17 @@
       "out": [
         "RESULTS-v2 row (bytes/requests optional; the queue-depth figure is the deliverable)"
       ],
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070; second boot on the warmed b1 profile, texWorkers=on, in-world + route walk)",
+        "maxQueueDepth": 64,
+        "jobs": 193,
+        "msTranscode": 7485,
+        "queueDepthAtSettle": 0,
+        "fifoFallbacks": 38,
+        "jobErrors": 0,
+        "verdict": "One worker BACKLOGS to a 64-deep high-water during the warm-boot burst but fully drains (0 at settle) with zero errors; 38 boot-burst jobs fell back to the main FIFO (counted, never silent). The pass-05 Q4 sufficiency read: one worker is SUFFICIENT for correctness and drains without sustained saturation, but the 64-deep burst + 38 fallbacks is the concrete case FOR building ?texWorkers=2 if boot-window tail matters — this number is the build/no-build datum requested."
+      }
     },
     {
       "id": "MOVE-FIX-BASELINE",
@@ -380,7 +530,13 @@
       "out": [
         "RESULTS-v2 (hb-results-v2) file; this file's result field carries the pointer"
       ],
-      "result": null
+      "result": {
+        "ts": "2026-08-10",
+        "by": "orchestrator (1070, fresh mv1 profile)",
+        "status": "ATTEMPTED — BLOCKED by a harness defect, moved to Batch B per H-10.2 (cadenceOptional)",
+        "defect": "harness/moving-bench.mjs auto-builds its page URL with &renderOnDemand=1 (required for its drive=ondemand pacing) but that flag STALLS the boot orchestrator pre-login on HEAD (BOOT-FAIL; reproduced 3× today in other contexts — census #1, and the committed funnel smoke deliberately omits the flag). The harness cannot reach in-world to start its warm lap.",
+        "fixShape": "either boot WITHOUT renderOnDemand and arm on-demand drive post-in-world (flag is boot-time-read — may need a runtime setter), or fix the boot orchestrator to progress under renderOnDemand (it awaits a rendered frame that never comes). File under the T21/frame-work lane or harness maintenance."
+      }
     }
   ]
 }

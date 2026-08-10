@@ -4,6 +4,41 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -3. 1070 BATCH-A EXECUTION 2026-08-10 (afternoon; owner-directed) — in flight
+
+BATCH COMPLETE (evening): 9 of 10 items executed and recorded in the queue file —
+P-SUBTLE, E1 (CLEAN; orchestrator-eye after the same-day fusion fix; texture-tier
+finding filed to T15), P-ASSEMBLE (28 µs/model p50 — GATE-GEOM sanity PASS),
+P-LIGHTBAKE (30/55 µs/cell p50/p90 — main-side light bake viable), P-INITTEX
+(initTexture stages 8 MiB in ~2 ms outside render — GATE-POOLS can rely on it),
+P-88MIB (whole 88 MiB = 87-96 ms, split 44/44 = ~44 ms/frame — both under F6 250 ms),
+BOOT-666 (bundle collapses cold JS fan-out ~5×; world-data lane dominates — ST2
+territory), TEXWORKER-TAIL (worker tail ~3× better than FIFO, kill-row clear),
+TEXWORKER-BOOTWARM (64-deep burst high-water, drains clean — the texWorkers=2
+datum). MOVE-FIX-BASELINE BLOCKED → Batch B: moving-bench auto-URL carries
+renderOnDemand=1 which stalls the boot orchestrator pre-login (harness defect
+filed in its queue row). CLEANUP DONE: test chrome killed (cdpwb-* only), WLS2
+task deleted, 1070 ssh tunnel + all three cloudflared quick tunnels closed
+(R9 290 session links now dead by design); serve.py/wsbridge/ACE left running.
+GATE-TEXWORKER: both legs now green (an interleaved PC-7-strict re-run would
+harden TAIL before the default flip — orchestrator's call per D-09.3.3).
+Operational notes for successors:
+- schtasks launch: per-profile bats C:\Temp\launch-<tag>.bat (arg-passing to a
+  shared bat via schtasks /tr proved unreliable); cycle via scratchpad
+  b1070/cycle-chrome.sh <tag> (kills cdpwb-* only, CIM query — no $_ quoting trap).
+- ssh tunnel needs ServerAliveInterval (a stale -L forward looked like "Chrome
+  died" mid-run once; box-side Test-NetConnection disambiguates).
+- ⚠ ACE CRASHED mid-batch (~11:00): LandblockManager.Tick unhandled exception —
+  plausibly poked by westward @teleloc hop-cadence walks (z mid-air over new LBs;
+  the §ace-admin memory note warns). RESTARTED with the ace-live.md recipe + ONE
+  REQUIRED FIX: the console FIFO needs a PERSISTENT WRITER or dotnet blocks on
+  open() before starting — `setsid bash -c 'exec sleep infinity > ~/ace_stdin.fifo' &`
+  first, then the setsid nohup dotnet line. (ace-live.md marks the recipe UNTESTED —
+  it is now tested-with-fix; owner: consider updating that memory file.)
+- renderOnDemand=1 STALLS the boot orchestrator pre-login — dropped from bench
+  URLs as a recorded deviation (the queue's normative strings carry it; the
+  committed funnel smoke does not).
+
 ## -2. R9 290 REMOTE EYE SESSION 2026-08-10 — E1 DIRTY (envcell fracture) + boot-time complaint
 
 Owner ran the Batch-A eye legs remotely (cloudflared tunnels: serve.py :8765 +
