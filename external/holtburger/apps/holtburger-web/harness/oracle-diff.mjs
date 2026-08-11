@@ -76,7 +76,29 @@ function norm360(d) {
  * `t` is in SECONDS for retail-pcap (pcap timestamps) and whatever the holt
  * dump used; both are converted to ms here.
  */
-export function normalize(records, { playerGuid = null } = {}) {
+/**
+ * @param records raw JSONL records
+ * @param playerGuid required to admit any s2c position into the player curve
+ * @param playerStream "c2s" (default) or "all"
+ *
+ * TWO TRAPS the first real capture walked straight into, both guarded here:
+ *
+ * 1. MIXED SOURCES. The client reports its own position upstream (c2s
+ *    MoveToState / AutonomousPosition) AND the server echoes it back (s2c
+ *    UpdatePosition) a few tens of ms later carrying the SAME coordinates.
+ *    Differentiating across the interleaved stream yields a real speed
+ *    followed by a 0.000, alternating — the median of which is ~0. So the
+ *    player curve is built from ONE source, and c2s is the right one: it is
+ *    the client's own physics output, which is what holtburger's local
+ *    integrator is being compared against.
+ *
+ * 2. UNFILTERED s2c. Every entity in view emits UpdatePosition. Without a
+ *    guid filter an NPC across the square lands in the player's curve; the
+ *    first real capture produced a 185 m/s "sample" exactly this way. s2c
+ *    positions are therefore admitted ONLY when an explicit playerGuid says
+ *    which ones are the player's.
+ */
+export function normalize(records, { playerGuid = null, playerStream = "c2s" } = {}) {
   const samples = [];
   const events = [];
   for (const r of records) {
@@ -110,7 +132,10 @@ export function normalize(records, { playerGuid = null } = {}) {
           events.push({ t: tms, type: "jump", extent: d.extent, vel: d.vel });
         }
       } else if (r.kind === "UpdatePosition" || r.kind === "PositionAndMovementEvent") {
-        if (playerGuid && r.guid !== playerGuid) continue;
+        // Trap 2: never admit an s2c position without an explicit player
+        // guid, and never mix the server echo into a c2s-sourced curve.
+        if (!playerGuid || r.guid !== playerGuid) continue;
+        if (playerStream === "c2s") continue;
         const p = r.pos ?? {};
         samples.push({
           t: tms,
