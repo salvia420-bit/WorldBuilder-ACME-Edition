@@ -134,7 +134,7 @@ async function run(args) {
 
     // The telemetry ring has been filling since boot; drop that history so the
     // capture starts at the scenario, not at login.
-    await page.evaluate(() => window.__hbWasmNs?.moveTelemetryDrain?.());
+    await page.evaluate(() => window.__hbWasm?.moveTelemetryDrain?.());
 
     const t0 = Date.now();
     for (const step of plan.steps) {
@@ -149,8 +149,8 @@ async function run(args) {
     }
     await page.waitForTimeout(plan.trail);
 
-    out = await page.evaluate(() => window.__hbWasmNs?.moveTelemetryDrain?.() ?? "");
-    const status = await page.evaluate(() => window.__hbWasmNs?.moveTelemetryStatus?.() ?? 0);
+    out = await page.evaluate(() => window.__hbWasm?.moveTelemetryDrain?.() ?? "");
+    const status = await page.evaluate(() => window.__hbWasm?.moveTelemetryStatus?.() ?? 0);
     console.error(`[oracle-run] drained ${out.split("\n").filter(Boolean).length} records (status ${status})`);
   } finally {
     await browser.close();

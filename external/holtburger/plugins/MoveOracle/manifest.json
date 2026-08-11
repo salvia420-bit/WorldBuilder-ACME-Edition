@@ -1,0 +1,9 @@
+{
+  "id": "MoveOracle",
+  "name": "MoveOracle",
+  "author": "holtburger contributors",
+  "entryfile": "MoveOracle.dll",
+  "version": "0.0.1-dev",
+  "description": "Per-frame retail movement/cast telemetry for the holtburger parity oracle. Writes JSONL consumed by harness/oracle-diff.mjs.",
+  "environments": [ "Client" ]
+}

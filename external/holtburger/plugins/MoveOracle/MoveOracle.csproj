@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    MoveOracle — Chorizite client plugin, per-frame retail movement telemetry.
+
+    Shape copied from external/chorizite/ACPlugin/AC.csproj, which is the
+    reference plugin:
+      * net8.0 — Chorizite.Core's TargetFramework. The host loads plugins into
+        its own .NET 8 runtime, so this must match.
+      * EnableDynamicLoading — emits the deps.json the
+        AssemblyPluginLoadContext needs to resolve dependencies.
+      * AppendTargetFrameworkToOutputPath=false — the plugin directory is flat;
+        the loader looks for manifest.json + EntryFile side by side.
+      * AllowUnsafeBlocks — the whole point of this plugin is reading retail's
+        live structs through ACBindings pointers.
+      * Every Chorizite/host package is referenced with ExcludeAssets="runtime"
+        so the plugin uses the HOST's copy rather than shipping a duplicate
+        that would load into a second, incompatible context.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AssemblyName>MoveOracle</AssemblyName>
+    <RootNamespace>MoveOracle</RootNamespace>
+    <!-- acclient.exe is a 32-bit process; the plugin loads into it. -->
+    <Platforms>x86</Platforms>
+    <PlatformTarget>x86</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The vendored Chorizite source is NEWER than the published 0.0.13
+         package (the package exposes IRenderInterface with no OnRender3D;
+         the vendored IRenderer has it). Build against the vendored source so
+         the plugin matches the tree it will be loaded by. -->
+    <ProjectReference Include="../../../chorizite/Chorizite/Chorizite.Core/Chorizite.Core.csproj" />
+    <PackageReference Include="Chorizite.Common" Version="1.0.3" ExcludeAssets="runtime" />
+    <PackageReference Include="Chorizite.ACProtocol" Version="1.0.1" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" ExcludeAssets="runtime" />
+    <PackageReference Include="Autofac" Version="8.4.0" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!--
+    ACBindings is consumed as a PROJECT reference to the vendored tree, not as
+    a cherry-picked file list and not as a package: it is generated,
+    offset-annotated code pinned to a specific acclient build, and the
+    vendored copy is the one those offsets were derived against. (Picking out
+    just CPhysicsObj/CMotionInterp/MovementManager does not compile — each
+    pulls in dozens of sibling types from the same namespace.)
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../../../chorizite/ACBindings/Chorizite.ACBindings.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="manifest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
