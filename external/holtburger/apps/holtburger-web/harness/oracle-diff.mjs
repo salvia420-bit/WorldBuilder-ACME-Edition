@@ -264,8 +264,9 @@ export function derive(samples) {
     const b = samples[i + 1] ?? s;
     const dt = (b.t - a.t) / 1000;
     if (dt * 1000 > gapMs && samples.length > 2) {
-      // Unmeasurable here. `null` is dropped by `resample`, so the window's
-      // metric comes back no-data instead of a fabricated zero.
+      // Unmeasurable here. Nulled so `resample` cannot USE it — and, since
+      // session 3, so `resample` cannot BRIDGE it either (see `samples.gapMs`
+      // below and the guard in `resample`).
       s.speed = null;
       s.stalled = true;
     } else if (dt > 0 && Number.isFinite(a.gx) && Number.isFinite(b.gx)) {
@@ -288,6 +289,10 @@ export function derive(samples) {
     }
   }
   if (samples.length && samples[0].speed == null) samples[0].speed = 0;
+  // Session 3 (2026-08-11): publish the stream's own gap threshold so
+  // `resample` can refuse to interpolate across a hole this size. Nulling the
+  // stalled SAMPLE was not enough — see that function's doc.
+  samples.gapMs = gapMs;
   return samples;
 }
 
@@ -313,19 +318,42 @@ export function alignToFirstMotion(samples, eps = MOTION_EPS) {
   const i = firstMotionIndex(samples, eps);
   const moved = i >= 0;
   const t0 = moved ? samples[i].t : samples[0].t;
-  return { samples: samples.map((s) => ({ ...s, t: s.t - t0 })), t0, moved };
+  const shifted = samples.map((s) => ({ ...s, t: s.t - t0 }));
+  // Carry the stream's gap threshold across the shift — `resample`'s
+  // bridge guard reads it, and losing it here silently restores the
+  // stall-bridging bug this array exists to survive (session 3).
+  shifted.gapMs = samples.gapMs;
+  return { samples: shifted, t0, moved };
 }
 
 /** Linear-interpolate a field onto a uniform ms grid over [t0,t1]. */
-export function resample(samples, field, t0, t1, gridMs = GRID_MS) {
+export function resample(samples, field, t0, t1, gridMs = GRID_MS, maxBridgeMs = samples.gapMs) {
   const pts = samples.filter((s) => Number.isFinite(s[field]));
   const out = [];
   if (!pts.length) return out;
+  const bridge = Number.isFinite(maxBridgeMs) ? maxBridgeMs : Infinity;
   let j = 0;
   for (let t = t0; t <= t1; t += gridMs) {
     while (j < pts.length - 1 && pts[j + 1].t < t) j++;
     const a = pts[j];
     const b = pts[Math.min(j + 1, pts.length - 1)];
+    // SESSION-3 FIX — do not bridge a stall.
+    //
+    // The stall guard in `normalize` nulls a stalled sample so it cannot be
+    // USED. That is only half the job: a nulled sample is simply absent from
+    // `pts`, so this loop then draws a straight line from the last sample
+    // BEFORE the stall to the first one AFTER it, and every grid point inside
+    // the hole gets a fabricated value — precisely the thing the guard was
+    // written to prevent. On the 2026-08-11 `run-hold-long` capture the
+    // release landed inside a 6.4 s stall, so the bridge ramped the steady
+    // window down toward zero and the report read 7.573 m/s for a run whose
+    // observed samples were a flat 7.883.
+    //
+    // Grid points strictly inside an over-wide hole are now OMITTED. The
+    // window's metric is then the median of what was actually observed, and
+    // `steadySpeed`'s `minSamples` guard still turns a wholly-unobserved
+    // window into `null`.
+    if (b !== a && b.t - a.t > bridge && t > a.t && t < b.t) continue;
     let v;
     if (b === a || b.t === a.t) {
       v = a[field];
@@ -913,6 +941,26 @@ function selftest() {
   check("a stalled sample is marked unmeasurable, not zero", sn.some((s) => s.stalled) && sn.every((s) => s.speed == null || s.speed > 3.9), `${sn.filter((s) => s.stalled).length} stalled`);
   check("a window inside the stall reports no-data", steadySpeed(alignToFirstMotion(sn).samples, [3000, 6000]) === null);
   check("a window with real samples still reports", Math.abs(steadySpeed(alignToFirstMotion(sn).samples, [200, 1500]) - 4) < 0.05);
+
+  // --- session 3: the stall must not be BRIDGED ---------------------------
+  // The shape that produced the wrong session-3 acceptance number: a steady
+  // run whose RELEASE lands inside the stall, so the samples on the far side
+  // are at rest. Nulling the stalled sample is not enough — without the
+  // `resample` bridge guard the window's grid gets a straight line from
+  // 4 m/s down to 0, and the median comes back well under the true speed.
+  const bridgeRecs = [];
+  for (let i = 0; i < 90; i++) bridgeRecs.push({ source: "holt", t: i * 33, speed: 4, pos: { lb: "0x7D640000", x: 4 * (i * 0.033), y: 0, z: 0, heading_deg: 0 } });
+  const parked = bridgeRecs[bridgeRecs.length - 1].pos.x;
+  // ...6.4 s of nothing, then the avatar is stopped where the stall left it.
+  for (let i = 0; i < 30; i++) bridgeRecs.push({ source: "holt", t: 90 * 33 + 6400 + i * 33, speed: 0, pos: { lb: "0x7D640000", x: parked, y: 0, z: 0, heading_deg: 0 } });
+  const bn = alignToFirstMotion(derive(normalize(bridgeRecs).samples)).samples;
+  const bridged = steadySpeed(bn, [500, 2900]);
+  check("a steady window ending at the stall reads the OBSERVED speed", Math.abs(bridged - 4) < 0.05, `got ${bridged?.toFixed(3)}`);
+  // Straddling the hole must still report only what was seen, never the ramp.
+  const straddle = steadySpeed(bn, [500, 8000]);
+  check("a window straddling the stall is not dragged toward zero", straddle > 3.9, `got ${straddle?.toFixed(3)}`);
+  // And a window wholly inside the hole is still no-data.
+  check("a window wholly inside the stall is still no-data", steadySpeed(bn, [3200, 8000]) === null);
 
   // --- malformed input ----------------------------------------------------
   const partial = parseJsonl('{"a":1}\n{"b":2\n{"c":3}\n');
