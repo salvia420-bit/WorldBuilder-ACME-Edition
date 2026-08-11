@@ -1,8 +1,23 @@
 # CARD — LB-CROSSING-STALL (filed 2026-08-11 by the §-11 orchestrator session)
 
-**Status: OPEN. Not reproduced this session — no live capture was run. What
-landed is the instrumentation that makes the prescribed first check
-answerable, because it was not.**
+**Status: OPEN, but NARROWED. §-12 ran the control arm §3 hypothesis 4 asks
+for — the first live capture this card has ever had.**
+
+**HYPOTHESIS 1 IS DELETED.** `fallbacks.total = 0` on all three snapshots of a
+travelling arm: the bake worker never fell back to the main thread, so the
+crash-backoff shape §-11 ranked first is not what is happening. That is exactly
+the outcome §5 said would be "a perfectly good outcome … it deletes hypothesis 1
+in one read".
+
+**NO STALL REPRODUCED WITHOUT A TELEPORT.** Max main-thread park over a 180 s
+held run was **236 ms** (two events), and **0 ms** over a second 180 s run —
+against the ~6.5 s this card is about. Details, and the honest limits of the
+read, in §6 below.
+
+*Superseded framing:* "Not reproduced this session — no live capture was run.
+What landed is the instrumentation that makes the prescribed first check
+answerable, because it was not." That was §-11. The instrumentation has now
+been used.
 
 Oracle open defect #3 (`impl/task-ORACLE-report.md` S3.7). `ORCHESTRATOR-HANDOFF.md`
 §-10 C says it "deserves a card" and that the first check is the bake worker.
@@ -102,7 +117,7 @@ counters.
 
 ---
 
-## 5. Explicitly NOT claimed
+## 5. Explicitly NOT claimed (as of §-11 — see §6 for what §-12 measured)
 
 * Nothing here reproduces the stall. No capture was run this session.
 * The crash-backoff hypothesis is **ranked first because it is cheap to check
@@ -110,3 +125,80 @@ counters.
   `fallbacks.total` may well read 0 on the first capture, and that is a
   perfectly good outcome — it deletes hypothesis 1 in one read, which is more
   than the last two sessions managed.
+
+---
+
+## 6. THE CONTROL ARM — RUN 2026-08-11 (§-12)
+
+The arm §3 hypothesis 4 asks for and §4 item 2 specifies: **cross without a
+preceding `@teleloc`.** Nobody had ever run it.
+
+**Setup.** T4, v4 dist, `agentp07`, oracle flag set exactly
+(`moveTelemetry=1&nosw=1&autoLogin=1&autoSpawn=first&agent=1&renderOnDemand=1&netDrainHz=30`)
+plus `bridge_url` for the tailnet ACE. **No `@teleloc` was issued at any point.**
+Spawned wherever the character last logged out, settled 65 s, then held `w`
+(run forward) for 180 s, released, then held `w` for another 180 s.
+
+Main-thread parks were measured with a 100 ms `setInterval` scheduling-lag
+watchdog installed in the page (records any fire delayed >200 ms). That
+instrument is mode-independent — unlike a rAF probe it still reads under
+`renderOnDemand=1`, which stops rendering.
+
+### Results
+
+| read | run 1 (180 s) | run 2 (180 s) |
+|---|---|---|
+| **max main-thread park** | **236 ms** (2 events: 232, 236) | **0 ms** (0 events) |
+| `bakeWorkerStats().fallbacks.total` | **0** | **0** |
+| `fallbacks.lastError` | null | null |
+| `byType.fetchSurfacesPixels.count` | 66 → 71 | 71 (no change) |
+| `byType.fetchEntitySurfacesPixels.count` | 30 → 49 | 49 (no change) |
+| `byType.*.failed` | all 0 | all 0 |
+| console errors | 3 (the known `terrain_bc7`/`pbr_terrain` 404s) | — |
+
+**Hypothesis 1 (bake worker in crash backoff): DELETED.** `fallbacks.total`
+read 0 before, between and after. The worker was alive and engaged the whole
+time — `fetchSurfacesPixels` and `fetchEntitySurfacesPixels` both advanced
+through the worker, and nothing was decoded on the main thread. The A/B claim
+that justified default-ON ("0 main-thread fallbacks, worker fully engaged") is
+re-checkable now and it re-checks green.
+
+**Hypothesis 2 (worker alive but saturated): not supported here.** `maxPending`
+32, `pendingNow` 0 at every snapshot, `failed` 0 across all four job types.
+
+**No ~6.5 s park occurred while travelling without a teleport.** The worst park
+in six minutes of held running was 236 ms.
+
+### What this arm does NOT establish — read before citing it
+
+1. **It cannot prove a landblock BOUNDARY was crossed.** The crossing detector
+   was to read `pos.lb` out of the movement telemetry ring, and
+   `window.__hbWasm.moveTelemetryDrain` **does not exist on this box's `pkg/`**
+   — the deployed wasm predates the oracle rider entirely (`moveTelemetryDrain`,
+   `moveTelemetryStatus` and `aug_joat` are all absent from
+   `pkg/holtburger_web_bg.wasm`, while older riders like `castArbitrationDiag`
+   are present). The precheck caught this before the run, so the run was allowed
+   to proceed as a plain 180 s traverse rather than being thrown away.
+   What IS established is that the avatar was **streaming new content** during
+   run 1 (`fetchEntitySurfacesPixels` +19, `fetchSurfacesPixels` +5), which does
+   not happen standing still in an already-resident neighbourhood.
+2. **Run 2 moved through nothing new** (every bake counter flat, zero lag
+   events). Most likely the avatar was against geometry or back over resident
+   ground. Its "0 ms" is therefore weak evidence, not a second independent trial.
+3. **It is not the paired experiment.** The clean read is the same arm run
+   twice, differing ONLY in a preceding `@teleloc`. The teleport half needs
+   Developer (`tailnet1`) and was not run here.
+
+### Where that leaves the ranking
+
+**Hypothesis 4 is now the leading candidate** — "teleport-then-cross" and
+"cross" do look like different defects, and the crossing alone did not park the
+main thread for anything close to 6.5 s. But the boundary-crossing proof is
+owed, and it is cheap once `pkg/` carries `moveTelemetryDrain`:
+
+1. rebuild `pkg/` (required anyway for oracle open #1 — see the §-12 handoff);
+2. re-run this exact arm with the `pos.lb` detector live, to timestamp real
+   crossings against the lag series;
+3. run the teleport half on `tailnet1` and diff the two.
+
+Hypotheses 2 and 3 stay open but unsupported by this capture.
