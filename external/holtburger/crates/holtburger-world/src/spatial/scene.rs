@@ -33,6 +33,24 @@ use web_time::Instant;
 /// layer ever converges the avatar. Retained for A/B comparison.
 const USE_LOCAL_FORCE_POSITION_CONSTRAINT: bool = true;
 
+/// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2) — kill path for the
+/// walkable/visible cell-graph split, in the same compile-time A/B shape
+/// as [`USE_LOCAL_FORCE_POSITION_CONSTRAINT`] above.
+///
+/// `true` (default): [`SpatialScene::insert_cell_visible_edge`] writes
+/// `visible_cells[]` PVS edges into the RENDER graph only, so
+/// physics/camera consumers reading [`SpatialScene::cell_adjacency`] see
+/// doorways and nothing else.
+///
+/// `false`: the PVS feed ALSO writes adjacency, which makes the two
+/// graphs edge-for-edge identical and restores the pre-2026-08-11
+/// behaviour exactly — every consumer walks the union again, as it did
+/// when both feeds shared `insert_cell_portal`. One const, no consumer
+/// edits, no re-plumbing of the wasm drain: that is the whole revert.
+/// Retained because the split changes where a body may travel, and the
+/// 1070 eye pass on interiors is the gate that has not run yet.
+const USE_PORTAL_GRAPH_SPLIT: bool = true;
+
 /// COL-27 (2026-07-28): is `cell_id` an ENVCELL (indoor) id? Outdoor land cells
 /// occupy the low words `1..=64` (an 8x8 grid per landblock); everything from
 /// `0x0100` up is an EnvCell stab, exactly the split retail's
@@ -1845,9 +1863,16 @@ impl SpatialScene {
     /// doorway is obviously visible — stays a single union edge and
     /// keeps its adjacency membership from the `insert_cell_portal`
     /// call. Order-independent: this never removes an adjacency edge.
+    ///
+    /// This is the ONE site [`USE_PORTAL_GRAPH_SPLIT`] gates — with the
+    /// const off the PVS feed lands in adjacency too and the two graphs
+    /// become identical again, i.e. the exact pre-split behaviour.
     pub fn insert_cell_visible_edge(&mut self, from: u32, to: u32) {
         self.bump_collision_rev();
         push_cell_edge(&mut self.cell_portal_graph, from, to);
+        if !USE_PORTAL_GRAPH_SPLIT {
+            push_cell_edge(&mut self.cell_adjacency, from, to);
+        }
     }
 
     /// Phase 6 step D: register a world-space AABB for an indoor cell.

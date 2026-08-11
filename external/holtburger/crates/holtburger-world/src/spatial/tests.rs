@@ -5048,3 +5048,408 @@ mod scenery_colliders {
         );
     }
 }
+
+/// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): `cell_portal_graph` is the
+/// UNION of real `CellPortal` edges and the DAT-baked `visible_cells[]` PVS;
+/// `cell_adjacency` carries the portal edges alone. These pin the split at the
+/// two ends that matter: no adjacency consumer may traverse a PVS-only edge,
+/// and the render set must be bit-for-bit what the merged graph produced.
+mod portal_graph_split {
+    use super::*;
+    use holtburger_common::{Aabb, Frustum};
+
+    const LB_HIGH: u32 = 0xA9B4_0000;
+    const ORIGIN_X: f32 = 169.0 * 192.0;
+    const ORIGIN_Y: f32 = 180.0 * 192.0;
+    const R: f32 = 0.4; // PLAYER_CAPSULE_RADIUS
+
+    /// World-space box centred on landblock-local `(lx, ly)`, half-extent
+    /// `half`, spanning a generous Z band (same shape `envcell_exit` uses).
+    fn cell_box(lx: f32, ly: f32, half: f32) -> Aabb {
+        let gx = ORIGIN_X + lx;
+        let gy = ORIGIN_Y + ly;
+        Aabb::new(
+            Vector3::new(gx - half, gy - half, -50.0),
+            Vector3::new(gx + half, gy + half, 50.0),
+        )
+    }
+
+    fn indoor_pose(cell_id: u32, lx: f32, ly: f32, lz: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(cell_id),
+            coords: Vector3::new(lx, ly, lz),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    /// A membership tree that is a single leaf: `point_inside_cell` /
+    /// `sphere_intersects_cell` short-circuit on a leaf, so membership
+    /// reduces to the broad-phase AABB reject and the fixtures below are
+    /// pure graph tests. Identity frame ⇒ world == local.
+    fn leaf_membership() -> CellMembership {
+        use holtburger_dat::physics::{BspLeaf, BspNode};
+        CellMembership {
+            tree: BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![],
+            }),
+            origin: Vector3::zero(),
+            orientation: Quaternion::identity(),
+        }
+    }
+
+    /// The room layout every test below shares.
+    ///
+    ///   A (0x0100) at local (50,50)  — where the player is
+    ///   B (0x0101) at local (58,50)  — a REAL doorway neighbour of A
+    ///   C (0x0102) at local (50,58)  — PVS-visible from A, NO doorway
+    ///
+    /// B and C sit the same distance from A and have identical boxes, so
+    /// nothing but the edge class can distinguish them. `split` selects the
+    /// post-split feed (C via `insert_cell_visible_edge`) or the pre-split
+    /// merged feed (C via `insert_cell_portal`, i.e. HEAD~ behaviour).
+    ///
+    /// Deliberately NO `cell_membership`: a single-leaf tree short-circuits
+    /// `point_inside_cell` to "yes" for every point, so the carried cell
+    /// would win `current_cell` step 1 unconditionally and hide the re-seat
+    /// these tests are about. Without membership, containment takes the
+    /// loose-AABB path — the same one a cell whose BSP has not baked yet
+    /// takes live.
+    fn three_room_scene(split: bool) -> (SpatialScene, u32, u32, u32) {
+        let (a, b, c) = (LB_HIGH | 0x0100, LB_HIGH | 0x0101, LB_HIGH | 0x0102);
+        let mut scene = SpatialScene::new();
+        for (id, lx, ly) in [(a, 50.0, 50.0), (b, 58.0, 50.0), (c, 50.0, 58.0)] {
+            scene.insert_cell_aabb(id, cell_box(lx, ly, 4.0));
+        }
+        scene.insert_cell_portal(a, b);
+        scene.insert_cell_portal(b, a);
+        if split {
+            scene.insert_cell_visible_edge(a, c);
+        } else {
+            scene.insert_cell_portal(a, c);
+        }
+        (scene, a, b, c)
+    }
+
+    #[test]
+    fn accessors_separate_walkable_from_visible() {
+        let (scene, a, b, c) = three_room_scene(true);
+        assert_eq!(
+            scene.cell_portal_neighbours(a),
+            &[b],
+            "adjacency carries the doorway and nothing else",
+        );
+        let mut vis = scene.cell_visibility_neighbours(a).to_vec();
+        vis.sort_unstable();
+        assert_eq!(vis, vec![b, c], "the union carries both classes");
+        // A PVS-only cell is a graph SOURCE for nothing: C has no outbound
+        // edges at all, so it must not appear as an adjacency key.
+        assert_eq!(scene.cell_adjacency_len(), 2, "A and B have doorways");
+        assert_eq!(scene.cell_portal_graph_len(), 2, "same two source cells");
+        assert!(
+            scene.cell_adjacency_len() <= scene.cell_portal_graph_len(),
+            "adjacency is a subset of the union, always",
+        );
+    }
+
+    #[test]
+    fn a_cell_in_both_feeds_keeps_its_adjacency_either_order() {
+        // The overwhelmingly common case: a real doorway is also listed in
+        // visible_cells[]. Whichever order the drain sees them in, the edge
+        // must stay WALKABLE and must not duplicate in the union.
+        let (a, b) = (LB_HIGH | 0x0100, LB_HIGH | 0x0101);
+        let mut portal_first = SpatialScene::new();
+        portal_first.insert_cell_portal(a, b);
+        portal_first.insert_cell_visible_edge(a, b);
+        let mut visible_first = SpatialScene::new();
+        visible_first.insert_cell_visible_edge(a, b);
+        visible_first.insert_cell_portal(a, b);
+        for scene in [&portal_first, &visible_first] {
+            assert_eq!(scene.cell_portal_neighbours(a), &[b], "stays walkable");
+            assert_eq!(scene.cell_visibility_neighbours(a), &[b], "deduped");
+        }
+    }
+
+    #[test]
+    fn current_cell_seam_rescue_will_not_reach_through_a_pvs_edge() {
+        // `current_cell`'s radius-aware seam-gap rescue (step 2b, the task-#12
+        // wedge fix) is the one place a NEIGHBOUR LIST alone decides the
+        // player's cell label: the pose is inside no hull at all, so the
+        // loose-AABB landblock scan finds nothing and only the walk can name a
+        // cell. Fixture: a 1 m stitch gap between A and C, wider than a capsule
+        // — the pose in it is 0.7 past A's wall (outside A's own rescue) and
+        // 0.3 short of C's (inside C's).
+        //
+        // Pre-split the walk included PVS cells, so a pose in a seam gap could
+        // be relabelled into a room it has no doorway to. That is a cur_cell
+        // teleport, and it wedges the faithful driver against the wrong cell's
+        // BSP in every direction — the 0x16E<->0x16A grocer class of bug the
+        // continuity rules were written to kill.
+        //
+        // The `false` arm doubles as the positive control: it feeds the SAME
+        // edge through `insert_cell_portal`, i.e. as a real doorway, and the
+        // rescue still fires. The split removes PVS reach, not the mechanism.
+        let (a, c) = (LB_HIGH | 0x0100, LB_HIGH | 0x0102);
+        let build = |split: bool| {
+            let mut scene = SpatialScene::new();
+            scene.insert_cell_aabb(a, cell_box(50.0, 50.0, 4.0)); // y <= 54
+            scene.insert_cell_aabb(c, cell_box(50.0, 59.0, 4.0)); // y >= 55
+            if split {
+                scene.insert_cell_visible_edge(a, c);
+            } else {
+                scene.insert_cell_portal(a, c);
+            }
+            scene
+        };
+        let in_gap = indoor_pose(a, 50.0, 54.7, 0.0);
+        assert_eq!(
+            build(false).current_cell(&in_gap),
+            c,
+            "control: a REAL portal neighbour still rescues a seam-gap pose",
+        );
+        assert_eq!(
+            build(true).current_cell(&in_gap),
+            a,
+            "a PVS-only neighbour must not win the seam-gap rescue — keep the \
+             carried cell (retail cur_cell continuity) instead",
+        );
+
+        // And with a doorway present, the ordinary bare-point re-seat still
+        // works: standing inside B relabels to B.
+        let (split_scene, ..) = three_room_scene(true);
+        let in_b = indoor_pose(a, 58.0, 50.0, 0.0);
+        assert_eq!(
+            split_scene.current_cell(&in_b),
+            LB_HIGH | 0x0101,
+            "a real portal neighbour still re-seats",
+        );
+    }
+
+    #[test]
+    fn interior_doorway_relaxation_ignores_pvs_neighbours() {
+        // `at_interior_doorway` relaxes the cell-AABB containment net. Before
+        // the split the ONLY thing keeping a PVS edge from relaxing it was the
+        // geometric near-test — which holds right up until a PVS-visible room's
+        // loose AABB happens to sit within a capsule radius, as C's does here.
+        let (split_scene, a, _b, _c) = three_room_scene(true);
+        let (merged_scene, ..) = three_room_scene(false);
+        // Straddling the A/C boundary: A's box ends at local y=54, C's starts
+        // there, so this pose is inside A and within R of C.
+        let at_ac_seam = indoor_pose(a, 50.0, 53.8, 0.0);
+        assert!(
+            merged_scene.at_interior_doorway(&at_ac_seam, a, R),
+            "pre-split control: the near-test alone lets the PVS edge relax the net",
+        );
+        assert!(
+            !split_scene.at_interior_doorway(&at_ac_seam, a, R),
+            "a PVS-only neighbour must not relax the containment net",
+        );
+        // The real doorway still relaxes — same geometry, different edge class.
+        let at_ab_seam = indoor_pose(a, 53.8, 50.0, 0.0);
+        assert!(
+            split_scene.at_interior_doorway(&at_ab_seam, a, R),
+            "a real doorway still relaxes the net",
+        );
+    }
+
+    #[test]
+    fn outdoor_exit_sentinel_must_arrive_by_portal_not_pvs() {
+        // `cell_has_outdoor_exit` answers "is there a door out of this room".
+        // Retail only writes the sentinel into a CellPortal record, so a
+        // sentinel arriving on a visibility edge is malformed data — and it
+        // must not be believed, because the B11 machinery relaxes the
+        // containment net on the strength of it.
+        let cell = LB_HIGH | 0x0100;
+        let mut by_portal = SpatialScene::new();
+        by_portal.insert_cell_portal(cell, LB_HIGH | 0xFFFF);
+        assert!(by_portal.cell_has_outdoor_exit(cell), "a real door counts");
+
+        let mut by_pvs = SpatialScene::new();
+        by_pvs.insert_cell_visible_edge(cell, LB_HIGH | 0xFFFF);
+        assert!(
+            !by_pvs.cell_has_outdoor_exit(cell),
+            "a sentinel on a visibility-only edge is not a door",
+        );
+        // …but the renderer still sees it: the outdoor branch of
+        // `compute_visibility_with_frustum` keys on the UNION deliberately, so
+        // an outdoor camera's cull behaviour is untouched by the split.
+        by_pvs.insert_cell_aabb(cell, cell_box(50.0, 50.0, 4.0));
+        let outdoor_here = LB_HIGH | 0x0019;
+        let everything = Frustum::from_view_projection_matrix(&WIDE_MVP);
+        assert!(
+            by_pvs
+                .compute_visibility_with_frustum(outdoor_here, &everything)
+                .contains(&cell),
+            "render-side outdoor-exit gate still reads the union",
+        );
+    }
+
+    #[test]
+    fn camera_clip_will_not_follow_a_pvs_edge_out_of_cell_space() {
+        // CAM-SEAM: `clip_segment_to_cell_space` re-seats the camera exactly
+        // like `current_cell`. Sweeping from inside A toward C's interior
+        // crosses the void between the two boxes; with only a PVS edge to C
+        // there is no doorway to follow, so the segment must clamp.
+        let (split_scene, a, _b, _c) = three_room_scene(true);
+        let (merged_scene, ..) = three_room_scene(false);
+        let start = Vector3::new(ORIGIN_X + 50.0, ORIGIN_Y + 50.0, 0.0);
+        let end = Vector3::new(ORIGIN_X + 50.0, ORIGIN_Y + 58.0, 0.0);
+        assert_eq!(
+            merged_scene.clip_segment_to_cell_space(a, start, end, R),
+            None,
+            "pre-split control: the camera walks the PVS edge unconstrained",
+        );
+        let t = split_scene
+            .clip_segment_to_cell_space(a, start, end, R)
+            .expect("no walkable continuation ⇒ the segment must be clamped");
+        assert!(
+            (0.0..1.0).contains(&t),
+            "clamp parameter {t} must be inside the segment",
+        );
+    }
+
+    #[test]
+    fn exit_bfs_cap_no_longer_trips_on_the_pvs_closure() {
+        // EXIT_INDOOR_BFS_MAX_CELLS = 64 is sized in ROOMS. Walking the union
+        // made it a PVS-closure bound instead, and the overflow arm returns
+        // None = STAY INDOORS — silently re-latching the B11 bug the cap was
+        // added to guard. Fixture: one real room the player has left, plus a
+        // 200-cell PVS fan-out (a dungeon's baked closure, well past the cap).
+        let exit_cell = LB_HIGH | 0x0100;
+        let build = |split: bool| {
+            let mut scene = SpatialScene::new();
+            scene.insert_cell_aabb(exit_cell, cell_box(50.0, 50.0, 4.0));
+            scene.insert_cell_membership(exit_cell, leaf_membership());
+            for i in 0..200u32 {
+                let pvs_cell = LB_HIGH | (0x0200 + i);
+                // Boxes far from the player so `still_inside` never fires —
+                // the cap, not geometry, is what is under test.
+                scene.insert_cell_aabb(pvs_cell, cell_box(150.0 + i as f32, 150.0, 1.0));
+                if split {
+                    scene.insert_cell_visible_edge(exit_cell, pvs_cell);
+                    scene.insert_cell_visible_edge(pvs_cell, exit_cell);
+                } else {
+                    scene.insert_cell_portal(exit_cell, pvs_cell);
+                    scene.insert_cell_portal(pvs_cell, exit_cell);
+                }
+            }
+            scene
+        };
+        // Walked out of the only real room: local (50, 90) is past its +Y wall.
+        let pose = indoor_pose(exit_cell, 50.0, 90.0, 0.0);
+
+        let merged = build(false);
+        assert_eq!(
+            merged.exited_envcell_to_outdoor(&pose, R),
+            None,
+            "pre-split control: the PVS closure overflows the cap and stays indoors",
+        );
+        assert_eq!(
+            merged.exit_bfs_overflow_count(),
+            1,
+            "…and that refusal is an overflow, not a geometric verdict",
+        );
+
+        let split = build(true);
+        let got = split
+            .exited_envcell_to_outdoor(&pose, R)
+            .expect("clear of every WALKABLE cell ⇒ flip outdoor");
+        assert_eq!(got & 0xFFFF_0000, LB_HIGH, "landblock high word preserved");
+        assert!(
+            !WorldPosition {
+                landblock_id: Guid(got),
+                coords: Vector3::zero(),
+                rotation: Quaternion::identity(),
+            }
+            .is_indoors(),
+            "flipped to an outdoor cell id",
+        );
+        assert_eq!(
+            split.exit_bfs_overflow_count(),
+            0,
+            "the cap must not trip on adjacency for a one-room structure",
+        );
+    }
+
+    /// Column-major uniform scale by 1e-5, w untouched. Gribb-Hartmann on it
+    /// gives axis-aligned planes at |x|,|y|,|z| <= 1e5 world metres, which
+    /// comfortably swallows Holtburg's ~32.5 km global coords — i.e. a
+    /// frustum that admits every fixture cell. That matters: these render-side
+    /// checks must not pass because the cull threw both sets away. A plain
+    /// identity MVP would do exactly that (it clips to the unit cube, and the
+    /// nearest fixture cell is 32,000 m out).
+    const WIDE_MVP: [f32; 16] = [
+        1e-5, 0.0, 0.0, 0.0, //
+        0.0, 1e-5, 0.0, 0.0, //
+        0.0, 0.0, 1e-5, 0.0, //
+        0.0, 0.0, 0.0, 1.0,
+    ];
+
+    #[test]
+    fn render_set_is_unchanged_by_the_split() {
+        // The acceptance bullet: the renderer must not be able to tell. Same
+        // fixture, both feeds, every source cell, several BFS depths.
+        let (split_scene, a, b, c) = three_room_scene(true);
+        let (merged_scene, ..) = three_room_scene(false);
+        for cell in [a, b, c, LB_HIGH | 0x0999 /* absent */] {
+            for depth in 0..=3u8 {
+                assert_eq!(
+                    split_scene.render_set(cell, depth),
+                    merged_scene.render_set(cell, depth),
+                    "render_set(0x{cell:08X}, {depth}) diverged across the split",
+                );
+            }
+            let frustum = Frustum::from_view_projection_matrix(&WIDE_MVP);
+            assert_eq!(
+                split_scene.compute_visibility_with_frustum(cell, &frustum),
+                merged_scene.compute_visibility_with_frustum(cell, &frustum),
+                "compute_visibility_with_frustum(0x{cell:08X}) diverged across the split",
+            );
+        }
+        // Specifically: the PVS neighbour is still rendered from A. If this
+        // ever fails, the 2026-05-25 visible_cells fix has been undone.
+        assert!(
+            split_scene.render_set(a, 1).contains(&c),
+            "BFS-1 from A must still reach the PVS-visible room",
+        );
+    }
+
+    #[test]
+    fn landblock_unload_prunes_both_graphs() {
+        let (mut scene, a, _b, c) = three_room_scene(true);
+        let other = 0x7777_0000u32;
+        scene.insert_cell_portal(other | 0x0100, other | 0x0101);
+        scene.insert_cell_visible_edge(other | 0x0100, a);
+
+        assert_eq!(scene.cell_adjacency_len(), 3);
+        assert_eq!(scene.cell_portal_graph_len(), 3);
+        scene.clear_cells_for_landblock(LB_HIGH);
+        assert_eq!(
+            scene.cell_portal_neighbours(a),
+            &[] as &[u32],
+            "unloaded source cell is gone from adjacency",
+        );
+        assert_eq!(
+            scene.cell_visibility_neighbours(other | 0x0100),
+            &[other | 0x0101],
+            "the cross-landblock PVS edge into A is pruned, the local one stays",
+        );
+        assert_eq!(scene.cell_adjacency_len(), 1);
+        assert_eq!(scene.cell_portal_graph_len(), 1);
+        let _ = c;
+
+        // The batched form must prune identically (it is a separate retain).
+        let (mut batched, ..) = three_room_scene(true);
+        batched.insert_cell_portal(other | 0x0100, other | 0x0101);
+        batched.insert_cell_visible_edge(other | 0x0100, a);
+        batched.clear_landblocks_collision(&[LB_HIGH]);
+        assert_eq!(batched.cell_adjacency_len(), 1);
+        assert_eq!(batched.cell_portal_graph_len(), 1);
+        assert_eq!(
+            batched.cell_visibility_neighbours(other | 0x0100),
+            &[other | 0x0101],
+        );
+    }
+}

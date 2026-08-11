@@ -16778,6 +16778,7 @@ thread_local! {
                 aabbs: Vec::new(),
                 seen_outside: Vec::new(),
                 portals: Vec::new(),
+                visible_edges: Vec::new(),
                 portal_polygons: Vec::new(),
             }) };
 
@@ -17011,6 +17012,13 @@ struct CellGraphPending {
     /// each TickMovement. See env_cell.rs:32 (the bit) + liveness.rs:137.
     seen_outside: Vec<(u32, bool)>,
     portals: Vec<(u32, u32)>,
+    /// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): `(from, to)` edges
+    /// sourced from `EnvCell.visible_cells[]` — the DAT-baked PVS — kept
+    /// in a SEPARATE queue from `portals` (real `CellPortal` records) so
+    /// the drain can route them to `insert_cell_visible_edge` and they
+    /// only ever reach the render union graph. Merging the two feeds is
+    /// what let physics and the camera walk visibility edges.
+    visible_edges: Vec<(u32, u32)>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world space (already transformed through the EnvCell's
     /// `position` frame). Drained alongside `portals` and `aabbs`
@@ -17365,17 +17373,33 @@ fn kick_entity_physics_geometry_loads(world: &holtburger_world::WorldState) {
 }
 
 /// Phase 6 step D: drain the pending cell-graph + cell-AABB pile
-/// into the spatial scene. Returns `(portals_inserted, aabbs_inserted)`.
+/// into the spatial scene. Returns
+/// `(portals_inserted, visible_edges_inserted, aabbs_inserted)`.
 /// Called from the same `TickMovement` arm as the building-AABB
 /// drain so the integrator and the per-frame visibility query both
 /// see the latest cells immediately after a landblock load.
+///
+/// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): the two edge queues
+/// drain through DIFFERENT inserters — `portals` (real `CellPortal`
+/// records) into both graphs, `visible_edges` (the `visible_cells[]`
+/// PVS) into the render union only. Portals drain FIRST so the
+/// adjacency membership of a cell listed in both feeds is settled
+/// before the PVS pass sees it; the inserters are order-independent
+/// anyway (the PVS one never removes anything), but draining in feed
+/// order keeps the console counts readable.
 #[cfg(target_arch = "wasm32")]
-fn drain_pending_cell_graph_into(scene: &mut holtburger_world::SpatialScene) -> (usize, usize) {
+fn drain_pending_cell_graph_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> (usize, usize, usize) {
     CELL_GRAPH_PENDING.with(|cell| {
         let mut buf = cell.borrow_mut();
         let portals = buf.portals.len();
         for (from, to) in buf.portals.drain(..) {
             scene.insert_cell_portal(from, to);
+        }
+        let visible_edges = buf.visible_edges.len();
+        for (from, to) in buf.visible_edges.drain(..) {
+            scene.insert_cell_visible_edge(from, to);
         }
         let aabbs = buf.aabbs.len();
         for (cell_id, aabb) in buf.aabbs.drain(..) {
@@ -17391,7 +17415,7 @@ fn drain_pending_cell_graph_into(scene: &mut holtburger_world::SpatialScene) -> 
         for (cell_id, poly) in buf.portal_polygons.drain(..) {
             scene.insert_cell_portal_polygon(cell_id, poly);
         }
-        (portals, aabbs)
+        (portals, visible_edges, aabbs)
     })
 }
 
@@ -21473,20 +21497,30 @@ pub async fn fetch_env_cells_in_landblock(
             // the full DAT-baked PVS — matching the
             // `pvs-visibility-snapshot` oracle.
             //
-            // `insert_cell_portal` dedupes (scene.rs:513), so duplicate
-            // edges (portal-direct + visible_cells overlap) are safe.
+            // Both inserters dedupe, so duplicate edges (portal-direct +
+            // visible_cells overlap — the common case, a doorway is
+            // obviously visible) are safe and order-independent.
             //
             // Does NOT fix the LandCell↔EnvCell gap — outdoor cells
             // still have no edges, so from outside a cottage BFS-1 still
             // returns {current_cell} only. That's a separate shortfall
             // documented in `docs/cell-portal-method.md` §"Known scope
             // gap".
+            //
+            // PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): these go to a
+            // SEPARATE queue that drains through
+            // `insert_cell_visible_edge`, so they reach the render union
+            // (`cell_portal_graph`) and never `cell_adjacency`. For four
+            // years' worth of commits' purposes nothing above this line
+            // changes: `render_set(cell, 1)` still returns the full
+            // DAT-baked PVS. What changes is that physics/camera no
+            // longer walk it — see scene.rs `cell_adjacency`.
             for &vis in &envcell.visible_cells {
                 let neighbour = landblock_high | (vis as u32);
                 if neighbour == 0 || neighbour == envcell.cell_id {
                     continue;
                 }
-                pending.portals.push((envcell.cell_id, neighbour));
+                pending.visible_edges.push((envcell.cell_id, neighbour));
             }
         });
 
@@ -53017,14 +53051,24 @@ async fn recv_loop(
                         // the building-AABB drain so the per-frame
                         // visibility query immediately after a
                         // landblock load can pick up fresh cells.
-                        let (drained_portals, drained_aabbs) =
+                        let (drained_portals, drained_visible, drained_aabbs) =
                             drain_pending_cell_graph_into(&mut w.scene);
-                        if drained_portals > 0 || drained_aabbs > 0 {
+                        if drained_portals > 0
+                            || drained_visible > 0
+                            || drained_aabbs > 0
+                        {
+                            // PORTAL-GRAPH-SPLIT (2026-08-11): the two edge
+                            // classes are counted apart, and the line reports
+                            // BOTH graph sizes — `adjacency <= union` is the
+                            // invariant, and the gap is how much pure
+                            // visibility the union carries.
                             console_log_str(&format!(
                                 "[phase6.D] drained {drained_portals} portal edges + \
-                                 {drained_aabbs} cell AABBs into scene (graph now {} cells, \
-                                 {} cell AABBs)",
+                                 {drained_visible} PVS edges + \
+                                 {drained_aabbs} cell AABBs into scene (union now {} cells, \
+                                 adjacency {} cells, {} cell AABBs)",
                                 w.scene.cell_portal_graph_len(),
+                                w.scene.cell_adjacency_len(),
                                 w.scene.cell_aabb_count(),
                             ));
                         }

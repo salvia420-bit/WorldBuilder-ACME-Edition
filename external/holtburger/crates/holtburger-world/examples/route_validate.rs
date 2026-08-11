@@ -1306,10 +1306,13 @@ fn build_scene_for_landblocks(portal: &DatDatabase, cell_dat: &DatDatabase, lbs:
                     scene.insert_cell_portal(cell_id, other);
                 }
             }
+            // PORTAL-GRAPH-SPLIT (2026-08-11): visible_cells[] is PVS —
+            // render union only, never the walkable adjacency the router's
+            // transit reads. Mirrors the production ingest.
             for &vc in &envcell.visible_cells {
                 let other = lb | vc as u32;
                 if vc != 0 && other != cell_id {
-                    scene.insert_cell_portal(cell_id, other);
+                    scene.insert_cell_visible_edge(cell_id, other);
                 }
             }
             let (parts, _polys, doors_skipped) = populate_cell_furniture(&mut scene, cell_id, &envcell, portal, lb_x, lb_y, &mut model_cache, door_policy);

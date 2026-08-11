@@ -222,7 +222,14 @@ fn build_scene() -> Option<SpatialScene> {
             ),
         );
 
-        // portal graph (portals + visible_cells; insert_cell_portal dedupes)
+        // Cell graphs, mirroring the production ingest exactly
+        // (PORTAL-GRAPH-SPLIT 2026-08-11): real `CellPortal` records feed
+        // BOTH the walkable adjacency and the render union;
+        // `visible_cells[]` is PVS and feeds the union only. Both
+        // inserters dedupe, so the overlap is safe. This routing is what
+        // makes these suites pin the split on REAL Holtburg data rather
+        // than a synthetic fixture — the faithful bridge under test
+        // resolves its transit neighbours from adjacency.
         for p in &envcell.portals {
             let other = 0xA9B4_0000 | p.other_cell_id as u32;
             if p.other_cell_id != 0 && other != cell_id {
@@ -232,7 +239,7 @@ fn build_scene() -> Option<SpatialScene> {
         for &vc in &envcell.visible_cells {
             let other = 0xA9B4_0000 | vc as u32;
             if vc != 0 && other != cell_id {
-                scene.insert_cell_portal(cell_id, other);
+                scene.insert_cell_visible_edge(cell_id, other);
             }
         }
     }
@@ -1005,4 +1012,71 @@ fn env840_grocer_seam_diagnosis() {
          (check AABB/frame/portal-graph wiring), not a real bug"
     );
     // Repro outcome is the deliverable, not an assertion.
+}
+
+/// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2) measured on REAL Holtburg data.
+///
+/// The synthetic fixtures in `spatial::tests::portal_graph_split` prove the two
+/// graphs behave differently; this proves the gap is not hypothetical on the
+/// shipped DATs. It reads the same five EnvCells the grocer-seam repro uses,
+/// through the same ingest the wasm bundle runs, and reports how many edges each
+/// graph carries plus how many cells are reachable from the vestibule by
+/// visibility but NOT by any doorway.
+///
+/// Asserts only the structural invariants (adjacency ⊆ union, every adjacency
+/// edge present in the union, the vestibule keeps its real portals). The counts
+/// are PRINTED — they are a property of the DAT, not of this code, and pinning
+/// them would make the suite a canary for Turbine's level data instead of ours.
+#[test]
+fn env840_pvs_edges_exceed_walkable_edges() {
+    let Some(scene) = build_scene() else {
+        eprintln!("SKIP env840_pvs_edges_exceed_walkable_edges: portal/cell dats unavailable");
+        return;
+    };
+    let cells: Vec<u32> = (0x016Au32..=0x016E).map(|low| 0xA9B4_0000 | low).collect();
+    let mut walkable_edges = 0usize;
+    let mut visible_edges = 0usize;
+    for &cell in &cells {
+        let adj = scene.cell_portal_neighbours(cell);
+        let vis = scene.cell_visibility_neighbours(cell);
+        walkable_edges += adj.len();
+        visible_edges += vis.len();
+        // Every walkable edge must also be a visibility edge — the union is a
+        // superset by construction, and a violation would mean the two feeds
+        // have drifted.
+        for n in adj {
+            assert!(
+                vis.contains(n),
+                "cell 0x{cell:08X}: adjacency edge to 0x{n:08X} missing from the union",
+            );
+        }
+        let pvs_only: Vec<u32> = vis.iter().copied().filter(|n| !adj.contains(n)).collect();
+        eprintln!(
+            "  cell 0x{cell:08X}: walkable={} visible={} pvs_only={:?}",
+            adj.len(),
+            vis.len(),
+            pvs_only.iter().map(|n| format!("0x{n:08X}")).collect::<Vec<_>>(),
+        );
+    }
+    eprintln!(
+        "  TOTAL over env840: walkable={walkable_edges} visible={visible_edges} \
+         (adjacency source cells {} of {} union source cells)",
+        scene.cell_adjacency_len(),
+        scene.cell_portal_graph_len(),
+    );
+    assert!(
+        walkable_edges <= visible_edges,
+        "adjacency ({walkable_edges}) must be a subset of the union ({visible_edges})",
+    );
+    assert!(
+        scene.cell_adjacency_len() <= scene.cell_portal_graph_len(),
+        "adjacency source-cell count must not exceed the union's",
+    );
+    // The vestibule really does have doorways — if this ever reads 0 the ingest
+    // has stopped feeding `portals[]` and every consumer above is walking an
+    // empty graph, which would look like "no regressions" in the worst way.
+    assert!(
+        !scene.cell_portal_neighbours(REPRO_CELL).is_empty(),
+        "the vestibule 0x{REPRO_CELL:08X} must carry real CellPortal edges",
+    );
 }
