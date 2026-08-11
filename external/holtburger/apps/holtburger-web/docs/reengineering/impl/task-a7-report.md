@@ -13,11 +13,13 @@ zero — a **field-name gap across the A11-S1 seam**.
 |---|---|
 | `24c0ce4e` | **The fix.** `?scriptHookTime` (DEFAULT ON, `=off` restores the collapsed arm) + `_decodePhysicsScriptHookEntry` carries `startTime`; `docs/url-flags.md` row + reader-index row + default-ON roster; `harness/test_script_hook_time.mjs` (47 checks); registered in `run-js-headless` TIER1. |
 | `0b8b5def` | **Comment-only.** `script_manager.js` header: retail's `PhysicsScript::length` **IS** `max(start_time)` — the "known JS-side approximation" note was wrong and the wasm getter it asked for is not owed. Also records the entry contract the defect walked through. |
+| `04849caa` | **This report** + re-anchoring the `script_manager.js` citations in `entities.js` / `url-flags.md` on symbol names. `24c0ce4e` cited `:134`/`:140`/`:183`, correct when written and stale one commit later once `0b8b5def` rewrote that file's header — self-inflicted, and exactly the "anchor symbols, never line numbers" rule. No behaviour change. |
+| `<this commit>` | Report table completed with the two commits that postdate its first draft. |
 
-Files touched (4 + 1): `scene3d/entities.js`, `scene3d/script_manager.js`,
+Files touched (5): `scene3d/entities.js`, `scene3d/script_manager.js`,
 `docs/url-flags.md`, `harness/test_script_hook_time.mjs` (new),
-`harness/run-js-headless.mjs` (one plan entry). Nothing in the particles /
-owner-registry lane; no wasm rebuild (JS-only, live on reload).
+`harness/run-js-headless.mjs` (one plan entry), plus this report. Nothing in the
+particles / owner-registry lane; no wasm rebuild (JS-only, live on reload).
 
 ---
 
