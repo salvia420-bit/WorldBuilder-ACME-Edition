@@ -188,40 +188,46 @@
           "gate": "root-cause fix for the stuck-walk bug (F1 JS guard is the stopgap)",
           "files": "crates/holtburger-core/src/client/movement/system.rs:2607-2619 (base-gait seed)",
           "recipe": "Derive the base gait from the interpreter's own persistent state (interp.hold_run != ui_toggles_run() -> Run/Walk), mirroring retail adjust_motion's fallback to RawMotionState::current_holdkey (acclient.c:343799), instead of inheriting gait from active_drive where a stray ManualHeld(run=false) persists it. Add retail_behavior_tests case: ManualHeld(run=false) then W edge still runs. cargo test -p holtburger-core after bake.",
-          "risk": "medium — shipped default lane (?cmdInterp=on)"
+          "risk": "medium — shipped default lane (?cmdInterp=on)",
+          "status": "LANDED 2026-08-11 (fanout-D a1, 62423506): base gait now derives from interp hold_run; agent found+fixed a SECOND identical seed in pump_cmd_interp_use_time. core 627/0 on-branch, 632/0 merged. Report impl/task-a1-report.md."
         },
         {
           "id": "MOVE-F3-ENABLE",
           "gate": "retail parity: CommandInterpreter::Enable (acclient.c:716912) re-asserts hold_run; our enable() (command_interpreter.rs:755) has zero callers",
           "recipe": "Wire enable() at world entry / control reclaim. Land AFTER MOVE-F2 (without it, enable re-asserts into the same transient field).",
-          "risk": "low once F2 lands"
+          "risk": "low once F2 lands",
+          "status": "LANDED 2026-08-11 (fanout-D a1, a74514e6): enable() wired at world entry; pre-fix failure demonstrated then pinned. Report impl/task-a1-report.md."
         },
         {
           "id": "MOVE-F6-SPEEDCAP",
           "gate": "retail global speed cap (get_state_velocity renormalizes at run_rate*4.0, acclient.c:343569-343589)",
           "files": "crates/holtburger-core/src/client/movement/common.rs:882-930 local_velocity_for_state",
-          "risk": "low, minor"
+          "risk": "low, minor",
+          "status": "LANDED 2026-08-11 (fanout-D a2, 75b73258) WITH DEVIATION D1: retail's renorm lives on the LAUNCH form, not local_velocity_for_state (parity suite pins would fail otherwise); capped fn staged #[allow(dead_code)] — wiring = Handoff 1 in impl/task-a2-report.md."
         },
         {
           "id": "PORTAL-GRAPH-SPLIT",
           "gate": "highest-value structural portal fix (C2): cell_portal_graph merges walkable portal edges with visible_cells PVS edges; physics/camera walk through visibility",
           "files": "crates/holtburger-world/src/spatial/scene.rs (cell_adjacency beside cell_portal_graph; consumers current_cell/clip_segment_to_cell_space/exited_envcell_to_outdoor/at_interior_doorway/cell_has_outdoor_exit -> adjacency only; render_set/compute_visibility stay on union), apps/holtburger-web/src/lib.rs:21456-21490 (route portals[] vs visible_cells[] separately)",
           "recipe": "Also fixes the EXIT_INDOOR_BFS_MAX_CELLS=64 overflow (cap sized for adjacency, silently returns stay-indoors on PVS closures). cargo test -p holtburger-world (366 spatial + env840/academy wedge suites pin the seams).",
-          "risk": "medium"
+          "risk": "medium",
+          "status": "LANDED 2026-08-11 (fanout-D a3, ea290916+dbc92844): cell_adjacency beside cell_portal_graph; walk consumers on adjacency, render on union; EXIT_INDOOR_BFS overflow fixed. world 687/0. Report impl/task-a3-report.md."
         },
         {
           "id": "PORTAL-FLAGS-DECODE",
           "gate": "C3: CellPortal.flags never decoded (bit0 exact_match, bit1 inverted portal_side, bit2 leads-outdoors); all outdoor-sentinel checks are >=0xFFFE value tests; no sidedness gate anywhere — why ?punchSidedness is parked",
           "files": "crates/holtburger-dat/src/file_type/env_cell.rs:62-68, lib.rs:21401-21409 + 21675-21723 (carry portal_side onto CellPortalPolygon), scene.rs sentinel tests, export via getVisiblePortalAperturesWithCellCenter so portal_clip.js apertureFacesAway uses real sidedness",
           "recipe": "cargo test -p holtburger-dat vs real client_cell.dat fixtures; validate_cell_portal_graph.cjs for symmetry. Retail: CCellPortal::UnPack acclient.c:362379; ACE PortalFlags.cs.",
-          "risk": "medium"
+          "risk": "medium",
+          "status": "LANDED 2026-08-11 (fanout-D a4, 2a34c7b2+871307b9+d1cc6a5a): flags decoded (bit1 INVERTED per acclient.c:362389), portal_side carried to getVisiblePortalAperturesWithSidedness, apertureFacesAway consumes real sidedness under ?punchSidedness=on (still DEFAULT-OFF; 15,186/15,186 parity in tests/cell_portal_flags_parity.rs). Agent was SIGTERMed (earlyoom) before writing its report — legs verified by orchestrator on the merged tree (dat 694 passed/1 pre-existing terrain_subdiv failure also on clean master). 1070 EYETEST OWED: ?punchSidedness=on arm at the E1/Yaraq vantages."
         },
         {
           "id": "BLDPORTAL-CONSUME",
           "gate": "C1 root fix: BuildInfo.portals (retail CBldPortal — THE outdoor<->interior link + stab lists) parsed then discarded; outdoor visibility of interiors is an AABB heuristic. DIRECTLY relevant to the Yaraq blacksmith terrain-over-subterranean-interior bug (owner-reported 2026-08-10): retail punches terrain depth via building portal polys (PView::DrawCells), which we cannot do without this data.",
           "files": "crates/holtburger-dat/src/landblock.rs:40-49 (keep stab_list), lib.rs building-load path ~:17802-17870 (push outdoor-cell->EnvCell edges + stab lists), scene.rs (landcell->building-portals index), then replace compute_visibility_with_frustum outdoor branch (~:3086-3100) with the retail walk",
           "recipe": "Largest portal change; land AFTER PORTAL-GRAPH-SPLIT and PORTAL-FLAGS-DECODE. Retail: CBuildingObj::find_building_transit_cells acclient.c:719068, CEnvCell::check_building_transit; ACE BuildingObj.cs/BldPortal.cs.",
-          "risk": "high (staged)"
+          "risk": "high (staged)",
+          "status": "DOSSIER READY 2026-08-11 (fanout-D a5, 494bf516): queued/BLDPORTAL-CONSUME-brief.md. F1 the aperture polys are ALREADY PARSED (BspPortal.portal_polys); F2 portal_index<->BuildInfo.portals is an exact world-wide bijection (5,464/5,464 buildings, probe in Appendix B); F3 the Yaraq courtyard aperture exists in the DAT. Implementation is now turnkey."
         },
         {
           "id": "PORTAL-SWIRL-RENDER",
@@ -238,7 +244,8 @@
             "start_trans 1.0 -> final_trans 0.4 IS retail: translucency, 1 = invisible (CMaterial::SetTranslucencySimple sets alpha = 1 - trans, acclient.c:360594; SetTranslucency(1.0) also sets the NODRAW draw_state bit, acclient.c:315499). So a portal particle spawns huge + invisible and converges as it shrinks and fades IN. Our setTranslucency in scene3d/particles/particle.js already matches.",
             "0x320002D6 never draws in RETAIL either (hw GfxObj 0). Rendering its software gfxObjId 0x010016C9 would be a DEVIATION, not a fix — left alone deliberately.",
             "The Yaraq town portal is a SERVER ENTITY (guid 0x77D6406A, wcid 43066, physicsScriptDid 0 -> Track B `fetchSetupDefaultScript(0x020001B3)` -> 0x3300067A), so the entity walker in entities.js is the path under test, NOT statics.js's V1 walker. The dais + obelisks around it are the baked static.",
-            "Side observation, NOT fixed here: a portal's per-guid ScriptManager was seen at scriptsCompleted ~7,000 in a ~400 s session (~17 Hz), far above the 1 iteration / 2.7 s the 0x330006DA loop should run at. Worth a look as its own item — it is a CPU/scheduling question, not a visual one, and the swirl is correct with it."
+            "Side observation, NOT fixed here: a portal's per-guid ScriptManager was seen at scriptsCompleted ~7,000 in a ~400 s session (~17 Hz), far above the 1 iteration / 2.7 s the 0x330006DA loop should run at. Worth a look as its own item — it is a CPU/scheduling question, not a visual one, and the swirl is correct with it.",
+            "SCRIPTMGR-RATE side observation RESOLVED 2026-08-11 (fanout-D a7, 24c0ce4e): a queued PhysicsScript lost its per-hook start_time so every hook fired same-tick (~17 Hz completions). Fixed behind ?scriptHookTime DEFAULT-ON (=off legacy); harness/test_script_hook_time.mjs 47/0; census: all 4,248 PhysicsScripts parsed, loop cadence now 1/2.7s. Report impl/task-a7-report.md."
           ],
           "followUp1070": "EYETEST (Lane-B, batched): Yaraq town portal + a colored Town-Network portal (0x330006FA/FB/FD family) on the GTX-1070 at quality=high, bare default URL + ?nosw=1. PASS = a bright additive purple swirl above the dais that persists indefinitely (not 3 loop iterations), on EVERY portal in view, and survives walking away and back (LOD respawn re-attaches). A/B reference arm: ?particleOwnerPending=off => bare pedestal. Also worth a glance while there: the other 40 mixed-emitter scripts (e.g. 0x33000A6B 5-live/1-inert, 0x33000A91 4-live/4-inert) should now keep their full emitter set."
         },
@@ -246,13 +253,15 @@
           "id": "TEXBC7-ALPHA-REBAKE",
           "gate": "PORTAL-BLACKBOX root cause (2026-08-10 eve session): the hires tex-bc7 archive ships rs 0x0600396B (and 0x060037A3) as 32x32 OPAQUE — the upscaler 4x'd retail's 8x8 fully-transparent DXT1 punch-through record and DROPPED ALPHA. Every portal color shares GfxObj 0x0100168B / Surface 0x08000157 with that texture => 2.82m opaque black box in every portal swirl. Client-side veto landed (062e5ce3, albedoFullyTransparent guard in _maybeUpgradeToBc7) so the client is immune, but the archive still ships wrong pixels.",
           "recipe": "Re-bake the holtburger/tex-bc7 (+ -pre/xu7 lanes) payloads for those rs ids with alpha preserved; make the hires upscaler (a) preserve alpha channel, (b) skip records that are fully transparent (no re-encode can improve zero information). Then AUDIT all alpha-bearing surfaces the same tool upscaled (clipmap/Base1ClipMap class especially). DAT source is fine (client_portal_hires_repaired.dat still has the correct 8x8 transparent record).",
-          "risk": "bake-tooling; blocked while BAKE-4 runs"
+          "risk": "bake-tooling; blocked while BAKE-4 runs",
+          "status": "BOX HALF LANDED 2026-08-11 (fanout-D a6): alpha-audit tool in apps/holtburger-tools (census + corpus verdicts, deterministic, provenance-stamped); tools 153/0 + 6/0 real-DAT. Found FIVE more fully-transparent records for the upscaler skip list (0x0600415F/61/63, 0x06004669, 0x06006E19). LAPTOP CORPUS RUN + re-bake still owed — invocation in impl/task-a6-report.md."
         },
         {
           "id": "PORTAL-SMALL",
           "gate": "C7+C8 cleanups riding along",
           "recipe": "is_envcell_id tighten to 0x100..=0xFFFD (scene.rs:41 + inline copies :2549/:2559 — 0xFFFF sentinel currently accepted); per-snapshot AABB map replacing the per-portal linear scan in getVisiblePortalApertures* (lib.rs:35437/35516).",
-          "risk": "low"
+          "risk": "low",
+          "status": "LANDED 2026-08-11 (fanout-D a3, d9953810): is_envcell_id 0x100..=0xFFFD (0xFFFF was passing — caught by test); per-snapshot AABB index in both aperture exports."
         }
       ]
     }

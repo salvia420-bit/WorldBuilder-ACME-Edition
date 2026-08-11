@@ -4,6 +4,39 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -9. FANOUT-D (2026-08-11) — 7-agent buildbox pass over postBakeCodeWork; ALL LANDED
+
+1070 still down, so the owner directed a buildbox fan-out (7 Opus-5 agents, git
+worktrees off origin/master, patches collected + orchestrator-merged/verified/landed).
+Everything in batch-D postBakeCodeWork except the laptop-bound TEXBC7 re-bake is now
+DONE — per-item status strings are in the queue JSON; reports in impl/task-a{1,2,3,6,7}-report.md
++ queued/BLDPORTAL-CONSUME-brief.md (a5). Headlines:
+- MOVE-F2/F3/F6 landed (a1/a2). a2's D1: retail's cap is on the LAUNCH form; wiring
+  the staged fn = its Handoff 1. a1 found a SECOND gait-seed site (use_time revival).
+- PORTAL-GRAPH-SPLIT + PORTAL-SMALL (a3) and PORTAL-FLAGS-DECODE (a4) landed;
+  ?punchSidedness now consumes REAL sidedness (still DEFAULT-OFF; 1070 eye owed).
+  a4 was SIGTERMed (earlyoom suspect) before writing its report — its 3 legs +
+  dirty validator fix recovered; orchestrator verified on the merged tree.
+- BLDPORTAL-CONSUME de-risked (a5 dossier): aperture polys ALREADY PARSED; exact
+  world-wide portal_index bijection (5,464/5,464); Yaraq courtyard aperture located.
+- SCRIPTMGR-RATE root-caused + fixed (a7): queued scripts lost per-hook start_time
+  → same-tick firing (~17 Hz); ?scriptHookTime DEFAULT-ON, 47/0 new harness suite.
+- TEXBC7 alpha-audit tool landed (a6); 5 NEW fully-transparent records for the
+  upscaler skip list; LAPTOP corpus run owed (one command, task-a6-report.md).
+MERGED-TREE VERIFY: core 632/0 · world 687/0 · dat 694/1 (the 1 =
+terrain_subdiv::triangle_corner_ring_matches_height_sampler, PRE-EXISTING — fails
+identically on clean 2946486d master on the box; nobody's file) · tools green ·
+release wasm rebuilt 6,439,027 B · JS: hook_time 47/0, script_manager 42/0,
+particle_owner 48/0 · both flag lints clean (3 presence-guard rows pre-date branch).
+OPS: buildbox OAuth was revoked → re-copied from laptop; disk hit 99% mid-run →
+pruned pages-encode (shipped), stale ~/holtburger/target, old ~/fanout,
+~/holtburger-dist, ~/rebake, ~/fullmap; git-LFS smudge 404s on
+pipeline_data/heightmaps → worktrees need GIT_LFS_SKIP_SMUDGE=1 (LFS remote is
+missing that object — fix someday); partially-tracked external/chorizite means
+worktrees also need per-CHILD symlinks, not per-dir.
+NEXT: 1070 batch-D session unchanged (add ?punchSidedness arm); laptop alpha-audit
+corpus run; Handoff-1 launch-cap wiring; BLDPORTAL-CONSUME is implementable now.
+
 ## -8. BAKE-4 DONE + DEPLOYED (2026-08-10 20:12) — v4 pack layer is the live one; BATCH D UNBLOCKED
 
 driver4.log: === DONE rc=0 at 18:49:08 (189m8s). 17,682 packs / 287.7 MB (+453.8 KB
