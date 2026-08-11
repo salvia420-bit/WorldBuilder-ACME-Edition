@@ -55,9 +55,22 @@ const USE_PORTAL_GRAPH_SPLIT: bool = true;
 /// occupy the low words `1..=64` (an 8x8 grid per landblock); everything from
 /// `0x0100` up is an EnvCell stab, exactly the split retail's
 /// `CellManager::UpdateLoadPoint` keys on (`(u16)objcell_id < 0x100`).
+///
+/// PORTAL-SMALL (2026-08-11, batch-D C7): the range is CLOSED at the top.
+/// `0xFFFE`/`0xFFFF` are the AC outdoor-exit SENTINELS a `CellPortal` carries
+/// in `other_cell_id` to mean "this door leads to the landscape" — every
+/// sentinel test in this file already reads `>= 0xFFFE` — and the block-only
+/// `lb|0xFFFF` marker `landblock_key`'s doc calls out for legacy/synthetic
+/// poses. Neither is a cell, and neither can ever have geometry, yet the old
+/// open-ended `>= 0x100` said yes to both. That mattered at exactly two live
+/// sites, both neighbour walks: `current_cell`'s re-seat and
+/// `clip_segment_to_cell_space`'s camera resolve would take the sentinel as a
+/// candidate cell, ask `cell_contains_point(lb|0xFFFF, …)` and get `false`
+/// from the absent-key arm — wasted work that reads as a real test, and one
+/// stray `insert_cell_aabb(lb|0xFFFF, …)` away from being a wrong answer.
 #[inline]
 pub(crate) fn is_envcell_id(cell_id: u32) -> bool {
-    (cell_id & 0xFFFF) >= 0x100
+    (0x100..=0xFFFD).contains(&(cell_id & 0xFFFF))
 }
 
 /// The LANDBLOCK part of an ObjCellID — `0xXXYY0000`.
@@ -2708,8 +2721,13 @@ impl SpatialScene {
         if self.cell_contains_point(carried, global) {
             return carried;
         }
+        // PORTAL-SMALL (2026-08-11): the two neighbour filters were inline
+        // copies of `is_envcell_id`'s OLD open-ended form, so they admitted the
+        // `0xFFFE`/`0xFFFF` outdoor sentinel as a candidate cell. Use the
+        // helper — one closed range, one definition, and the sentinel is
+        // rejected before the containment query instead of inside it.
         for &nb in self.cell_portal_neighbours(carried) {
-            if (nb & 0xFFFF) >= 0x100 && self.cell_contains_point(nb, global) {
+            if is_envcell_id(nb) && self.cell_contains_point(nb, global) {
                 return nb;
             }
         }
@@ -2719,7 +2737,7 @@ impl SpatialScene {
             return carried;
         }
         for &nb in self.cell_portal_neighbours(carried) {
-            if (nb & 0xFFFF) >= 0x100
+            if is_envcell_id(nb)
                 && self.cell_contains_sphere(nb, global, PLAYER_CAPSULE_RADIUS)
             {
                 return nb;
@@ -2729,9 +2747,18 @@ impl SpatialScene {
         // containment. EnvCells stack vertically so this is a 3D
         // point-in-AABB test, not an XY one — the Z component is what
         // disambiguates floors.
+        //
+        // PORTAL-SMALL (2026-08-11): the scan is EnvCell-keyed and had no
+        // predicate at all, so anything keyed into `cell_aabbs` under a
+        // sentinel low word could be returned as the player's cell label —
+        // the third site of the same class as the two neighbour filters
+        // above, and the only one where the wrong id would actually be
+        // RETURNED rather than merely queried. Outdoor cells are never in
+        // this map (see the `cell_aabbs` field doc), so the filter costs
+        // nothing real.
         let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
         for (&cell_id, aabb) in self.cell_aabbs.iter() {
-            if (cell_id & 0xFFFF_0000) != lb_high {
+            if (cell_id & 0xFFFF_0000) != lb_high || !is_envcell_id(cell_id) {
                 continue;
             }
             if aabb.is_empty() {
@@ -2833,8 +2860,12 @@ impl SpatialScene {
         }
         let lb_high = carried & 0xFFFF_0000;
         // Precise membership hulls first — the true geometric owner.
+        // PORTAL-SMALL (2026-08-11): both landblock scans below filtered with
+        // an inline `< 0x100`, i.e. the OPEN-ENDED half of `is_envcell_id`, so
+        // a sentinel-keyed entry passed. Same helper, same closed range as
+        // `current_cell`'s scan.
         for (&cell_id, m) in self.cell_membership.iter() {
-            if (cell_id & 0xFFFF_0000) != lb_high || (cell_id & 0xFFFF) < 0x100 {
+            if (cell_id & 0xFFFF_0000) != lb_high || !is_envcell_id(cell_id) {
                 continue;
             }
             if m.tree.point_inside_cell(&m.world_to_local(global)) {
@@ -2844,7 +2875,7 @@ impl SpatialScene {
         // Loose AABBs only for cells without a resident membership hull.
         for (&cell_id, aabb) in self.cell_aabbs.iter() {
             if (cell_id & 0xFFFF_0000) != lb_high
-                || (cell_id & 0xFFFF) < 0x100
+                || !is_envcell_id(cell_id)
                 || self.cell_membership.contains_key(&cell_id)
                 || aabb.is_empty()
             {

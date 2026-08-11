@@ -5453,3 +5453,95 @@ mod portal_graph_split {
         );
     }
 }
+
+/// PORTAL-SMALL (2026-08-11, batch-D C7): `is_envcell_id` is the crate's
+/// "is this an indoor cell" predicate and it used to be open-ended
+/// (`>= 0x100`), which said YES to the AC outdoor-exit sentinels
+/// `0xFFFE`/`0xFFFF` and to the block-only `lb|0xFFFF` marker.
+mod envcell_id_range {
+    use super::*;
+    use crate::spatial::scene::is_envcell_id;
+    use holtburger_common::Aabb;
+
+    const LB_HIGH: u32 = 0xA9B4_0000;
+
+    #[test]
+    fn range_is_closed_at_both_ends() {
+        assert!(!is_envcell_id(LB_HIGH), "block-only id is not a cell");
+        assert!(!is_envcell_id(LB_HIGH | 0x0001), "outdoor land cell 1");
+        assert!(!is_envcell_id(LB_HIGH | 0x0040), "outdoor land cell 64");
+        assert!(!is_envcell_id(LB_HIGH | 0x00FF), "still below the stab range");
+        assert!(is_envcell_id(LB_HIGH | 0x0100), "first EnvCell stab");
+        assert!(is_envcell_id(LB_HIGH | 0xFFFD), "last real EnvCell stab");
+        assert!(
+            !is_envcell_id(LB_HIGH | 0xFFFE),
+            "0xFFFE is an outdoor-exit sentinel, not a cell",
+        );
+        assert!(
+            !is_envcell_id(LB_HIGH | 0xFFFF),
+            "0xFFFF is the outdoor-exit sentinel / block-only marker, not a cell",
+        );
+    }
+
+    #[test]
+    fn camera_clip_refuses_a_sentinel_start_cell() {
+        // `clip_segment_to_cell_space` gates on `is_envcell_id(start_cell)`.
+        // A sentinel start is "the camera is outdoors" and must fail open
+        // (None = unconstrained), never engage the indoor cell-space walk.
+        let mut scene = SpatialScene::new();
+        let sentinel = LB_HIGH | 0xFFFF;
+        // Even with an AABB wrongly registered against the sentinel key — the
+        // one way the old predicate could have produced a WRONG answer rather
+        // than merely a wasted query — the gate must still refuse.
+        scene.insert_cell_aabb(
+            sentinel,
+            Aabb::new(
+                Vector3::new(-1000.0, -1000.0, -1000.0),
+                Vector3::new(1000.0, 1000.0, 1000.0),
+            ),
+        );
+        assert_eq!(
+            scene.clip_segment_to_cell_space(
+                sentinel,
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(10.0, 0.0, 0.0),
+                0.4,
+            ),
+            None,
+            "a sentinel start cell must not enter the indoor clip walk",
+        );
+    }
+
+    #[test]
+    fn current_cell_will_not_re_seat_onto_a_sentinel_neighbour() {
+        // A cell's outdoor door shows up in its adjacency as `lb|0xFFFF`. The
+        // neighbour walk must skip it: it is the outdoors, not a room, and the
+        // pose's own outdoor flip is `exited_envcell_to_outdoor`'s job.
+        let mut scene = SpatialScene::new();
+        let (room, sentinel) = (LB_HIGH | 0x0100, LB_HIGH | 0xFFFF);
+        scene.insert_cell_portal(room, sentinel);
+        // Room's own box is small and the pose sits outside it; the sentinel's
+        // is huge and would swallow the point if it were ever tested.
+        scene.insert_cell_aabb(
+            room,
+            Aabb::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 1.0)),
+        );
+        scene.insert_cell_aabb(
+            sentinel,
+            Aabb::new(
+                Vector3::new(-1e6, -1e6, -1e6),
+                Vector3::new(1e6, 1e6, 1e6),
+            ),
+        );
+        let pose = WorldPosition {
+            landblock_id: Guid(room),
+            coords: Vector3::new(90.0, 90.0, 50.0),
+            rotation: Quaternion::identity(),
+        };
+        assert_ne!(
+            scene.current_cell(&pose),
+            sentinel,
+            "the outdoor-exit sentinel must never be returned as a cell label",
+        );
+    }
+}

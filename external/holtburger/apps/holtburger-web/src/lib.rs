@@ -33067,6 +33067,21 @@ struct CellSceneSnapshot {
     /// runs at render frequency while AABB data refreshes only on
     /// landblock load/unload.
     cell_aabbs: Vec<(u32, [f32; 6])>,
+    /// PORTAL-SMALL (2026-08-11, batch-D C8): `cell_id → [min xyz, max xyz]`
+    /// index over `cell_aabbs`, built ONCE per snapshot (i.e. per
+    /// TickMovement, when the AABB set can actually change) instead of
+    /// re-scanned per lookup.
+    ///
+    /// The consumers are per-PORTAL, not per-cell: `getVisiblePortalApertures`
+    /// and its `WithCellCenter` twin walk every portal polygon in the
+    /// landblock and ask for the owning cell's AABB each time, and
+    /// `getRenderSetWithFrustum`'s indoor branch asks once per render-set
+    /// member. With ~140 cells and ~6 portals each that is ~140 × 840 element
+    /// comparisons per call per frame, for a table that is rebuilt only on
+    /// landblock load/unload. `cell_aabbs` is kept as the ordered Vec because
+    /// the outdoor render-set branch iterates it and a HashMap's order is not
+    /// stable across runs — the sorted output contract depends on it.
+    cell_aabb_index: std::collections::HashMap<u32, [f32; 6]>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world coords. Flat layout for cheap Clone:
     /// `(from_cell_id, to_cell_id, vertices_flat_x_y_z)`. Reconstructed
@@ -35466,18 +35481,16 @@ impl SessionHandle {
             return Vec::new();
         }
 
-        // cell_id → AABB (linear scan; ~140 entries), matching the
-        // get_render_set_with_frustum helper.
+        // PORTAL-SMALL (2026-08-11): cell_id → AABB through the snapshot's
+        // prebuilt index. This lookup runs once per PORTAL POLYGON in the
+        // landblock, so the old per-call linear scan of `cell_aabbs` was
+        // quadratic in a table that only changes on landblock load.
         let aabb_for = |cell_id: u32| -> Option<holtburger_common::Aabb> {
-            snap.cell_aabbs.iter().find_map(|(id, ext)| {
-                if *id == cell_id {
-                    Some(holtburger_common::Aabb::new(
-                        holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
-                        holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
-                    ))
-                } else {
-                    None
-                }
+            snap.cell_aabb_index.get(&cell_id).map(|ext| {
+                holtburger_common::Aabb::new(
+                    holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+                    holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+                )
             })
         };
 
@@ -35547,16 +35560,14 @@ impl SessionHandle {
             return Vec::new();
         }
 
+        // PORTAL-SMALL (2026-08-11): same prebuilt index as the v1 export —
+        // identical selection, so it must use an identical lookup.
         let aabb_for = |cell_id: u32| -> Option<holtburger_common::Aabb> {
-            snap.cell_aabbs.iter().find_map(|(id, ext)| {
-                if *id == cell_id {
-                    Some(holtburger_common::Aabb::new(
-                        holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
-                        holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
-                    ))
-                } else {
-                    None
-                }
+            snap.cell_aabb_index.get(&cell_id).map(|ext| {
+                holtburger_common::Aabb::new(
+                    holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+                    holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+                )
             })
         };
 
@@ -35632,17 +35643,17 @@ impl SessionHandle {
             return Vec::new();
         }
 
-        // Lookup helper: cell_id → AABB (linear scan; ~140 entries).
+        // Lookup helper: cell_id → AABB. PORTAL-SMALL (2026-08-11): the third
+        // copy of this closure, and the third per-item scan — the indoor
+        // branch below calls it once per render-set member. Same prebuilt
+        // snapshot index as the two aperture exports; the index exists now, so
+        // leaving an identical scan two functions away would be the odd choice.
         let aabb_for = |cell_id: u32| -> Option<holtburger_common::Aabb> {
-            snap.cell_aabbs.iter().find_map(|(id, ext)| {
-                if *id == cell_id {
-                    Some(holtburger_common::Aabb::new(
-                        holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
-                        holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
-                    ))
-                } else {
-                    None
-                }
+            snap.cell_aabb_index.get(&cell_id).map(|ext| {
+                holtburger_common::Aabb::new(
+                    holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+                    holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+                )
             })
         };
 
@@ -41784,6 +41795,7 @@ fn publish_cell_scene_snapshot(
         // outdoor / no-cell case (key absent) — acclient.c:146721/146746.
         seen_outside: world.scene.cell_seen_outside(current),
         render_set: render_vec,
+        cell_aabb_index: cell_aabbs.iter().copied().collect(),
         cell_aabbs,
         cell_portal_polygons,
         cell_seen_outside_map,
