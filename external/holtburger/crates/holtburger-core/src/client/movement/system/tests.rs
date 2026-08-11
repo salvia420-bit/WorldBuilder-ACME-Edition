@@ -9086,6 +9086,80 @@ async fn cmd_interp_hold_run_edge_installs_gait() {
     assert_eq!(gait, Gait::Run, "Shift release restores the run gait");
 }
 
+/// ORACLE session 2 (2026-08-11) — the parity telemetry must report the
+/// DERIVED gait, not the raw `hold_run` latch.
+///
+/// Session 1's first parity report labelled a genuine run `"walk"` because
+/// `?moveTelemetry=1` serialized `hold_run` as if it were the gait. Under
+/// the run-by-default option `hold_run == false` IS run
+/// (`hold_run XOR UITogglesRun`, acclient.c:716991), so the label was
+/// exactly inverted and the report's own "the two sides were in different
+/// gaits" caveat was itself wrong. This pins the telemetry to the same
+/// derivation the drive dispatches through, and pins the local composed
+/// drive mirror (`drive_*`) that replaced the always-null wire-lane
+/// motion-interp fields.
+#[tokio::test]
+async fn movement_telemetry_reports_derived_gait_and_local_drive() {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_012A);
+    world.seed_local_player_entity(
+        guid,
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W — run-by-default
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let t = movement.movement_telemetry(guid);
+    assert_eq!(t.hold_run, Some(false), "Shift is not held");
+    assert_eq!(
+        t.effective_gait,
+        Some("run"),
+        "hold_run=false is RUN under run-by-default — the session-1 inversion"
+    );
+    assert_eq!(t.drive_kind, Some("manual"));
+    assert_eq!(t.drive_gait, Some("run"));
+    assert_eq!(t.drive_forward, Some("forward"));
+    assert_eq!(t.drive_sidestep, None);
+
+    movement.enqueue_key_action(0x32, true); // Shift press → XOR → walk
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let t = movement.movement_telemetry(guid);
+    assert_eq!(t.hold_run, Some(true), "Shift held");
+    assert_eq!(t.effective_gait, Some("walk"));
+    assert_eq!(t.drive_gait, Some("walk"));
+
+    // Strafe axis lands in the sidestep mirror (MOVE-F6 / strafe-diagonal
+    // needs the driver to see BOTH axes installed, not infer them).
+    movement.enqueue_key_action(0x32, false); // Shift release
+    movement.enqueue_key_action(0x2C, true); // strafe right
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let t = movement.movement_telemetry(guid);
+    assert_eq!(t.effective_gait, Some("run"));
+    assert_eq!(t.drive_forward, Some("forward"));
+    assert!(
+        t.drive_sidestep.is_some(),
+        "the strafe axis must be visible in the drive mirror, got {:?}",
+        t.drive_sidestep
+    );
+}
+
 /// MOVE-F2-HOLDKEY (batch-D 2026-08-10) — THE STUCK-WALK ROOT CAUSE.
 ///
 /// A stray `ManualHeld(run=false)` from ANY non-interpreter installer (a

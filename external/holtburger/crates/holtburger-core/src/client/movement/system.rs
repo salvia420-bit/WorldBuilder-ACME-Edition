@@ -2079,9 +2079,34 @@ enum QueuedDriveCommand {
 /// the differ. `None` serializes to JSON `null`, which the differ skips.
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct MovementTelemetry {
-    /// Gait truth: the interpreter's hold-run, the single source a1/MOVE-F2
-    /// established. `true` = run.
+    /// The interpreter's RAW hold-run latch — the SHIFT key state, NOT the
+    /// gait. Under the run-by-default option ([`UI_TOGGLES_RUN`]) `false`
+    /// means RUN. Read [`Self::effective_gait`] for the gait; reading this
+    /// field as a gait is the exact inversion the first parity run made
+    /// (2026-08-11: `gait: "walk"` reported for a genuine run).
     pub hold_run: Option<bool>,
+    /// ORACLE session 2 — the DERIVED base gait, `"run"` | `"walk"`, from the
+    /// one `hold_run XOR UITogglesRun` law
+    /// ([`MovementSystem::gait_from_hold_run`], retail
+    /// `CommandInterpreter::SetHoldRun` acclient.c:716990-716991). This is
+    /// the field a parity driver must assert against a scenario's
+    /// `gait_expected`.
+    pub effective_gait: Option<&'static str>,
+    /// ORACLE session 2 — the LOCAL composed drive (`active_drive`), which is
+    /// where the local player's manual movement actually lives. The
+    /// `movement_managers` motion-interp fields below are populated from the
+    /// WIRE lane and stay `None` for the local player by construction, so
+    /// before these fields existed a local-player dump looked empty.
+    /// `"manual"` | `"autonomous"`, or `None` when no drive is installed.
+    pub drive_kind: Option<&'static str>,
+    /// Manual drive only: the gait actually installed on the drive.
+    pub drive_gait: Option<&'static str>,
+    /// Manual drive only: `"forward"` | `"backstep"`.
+    pub drive_forward: Option<&'static str>,
+    /// Manual drive only: `"left"` | `"right"` (strafe axis).
+    pub drive_sidestep: Option<&'static str>,
+    /// Manual drive only: `"left"` | `"right"` (turn axis).
+    pub drive_turning: Option<&'static str>,
     pub auto_run: Option<bool>,
     pub run_rate: Option<f32>,
     pub speed_factor: Option<f32>,
@@ -2899,18 +2924,30 @@ impl MovementSystem {
     /// still walks: `set_hold_run` writes `hold_run` BEFORE the seam
     /// re-derives (`minterp_set_hold_run`), so the derivation and the
     /// dispatch agree within the edge.
+    /// `SetHoldRun`'s XOR (acclient.c:716991) — `hold_run` is the SHIFT
+    /// latch, so under the run-by-default option (M7, [`UI_TOGGLES_RUN`])
+    /// `hold_run == false` reads **Run**.
+    ///
+    /// ONE source: [`Self::interp_base_drive`] dispatches through it and
+    /// [`MovementSystem::movement_telemetry`] reports through it, so the
+    /// oracle can never disagree with the drive about which gait was
+    /// installed. Session 1 of the oracle read `hold_run` directly as the
+    /// gait and mislabelled a genuine run as `"walk"` in the first parity
+    /// report — the exact failure this collapses.
+    fn gait_from_hold_run(hold_run: bool) -> crate::client::movement_types::Gait {
+        use crate::client::movement_types::Gait;
+        if hold_run != UI_TOGGLES_RUN {
+            Gait::Run
+        } else {
+            Gait::Walk
+        }
+    }
+
     fn interp_base_drive(
         &self,
         interp: &super::command_interpreter::CommandInterpreter,
     ) -> MotionState {
-        use crate::client::movement_types::Gait;
-        // `SetHoldRun`'s XOR (:716991) — hold_run is the SHIFT latch, so
-        // with the run-by-default option (M7) hold_run=false reads Run.
-        let gait = if interp.hold_run != UI_TOGGLES_RUN {
-            Gait::Run
-        } else {
-            Gait::Walk
-        };
+        let gait = Self::gait_from_hold_run(interp.hold_run);
         match self.active_drive {
             Some(ActiveDriveState {
                 intent: ActiveDriveIntent::Manual(state),
@@ -8309,11 +8346,52 @@ impl MovementSystem {
             .get(&local_guid)
             .and_then(|manager| manager.motion_interp_ref());
         let interp = self.command_interpreter.as_ref();
+        use crate::client::movement_types::{ForwardLocomotion, Gait, SidestepLocomotion, Turn};
+        // The LOCAL manual drive. `movement_managers`' motion-interp is fed by
+        // the WIRE lane (`unpack_movement`), so for the local player it is
+        // `None` unless the server has driven us — which is why every
+        // `minterp.*` field below reads null in a normal keyboard capture.
+        // `active_drive` is where the local composed drive actually lives.
+        let manual = match self.active_drive {
+            Some(ActiveDriveState {
+                intent: ActiveDriveIntent::Manual(state),
+                ..
+            }) => Some(state),
+            _ => None,
+        };
         MovementTelemetry {
-            // Gait truth is the interpreter's hold_run (a1/MOVE-F2 made this
-            // the single source; anything else re-introduces the stuck-walk
-            // bug the oracle is here to catch).
+            // RAW latch, NOT the gait — see `gait_from_hold_run`.
             hold_run: interp.map(|i| i.hold_run),
+            effective_gait: interp.map(|i| match Self::gait_from_hold_run(i.hold_run) {
+                Gait::Run => "run",
+                Gait::Walk => "walk",
+            }),
+            drive_kind: self.active_drive.as_ref().map(|d| match d.intent {
+                ActiveDriveIntent::Manual(_) => "manual",
+                ActiveDriveIntent::Autonomous(_) => "autonomous",
+            }),
+            drive_gait: manual.map(|s| match s.gait {
+                Gait::Run => "run",
+                Gait::Walk => "walk",
+            }),
+            drive_forward: manual.and_then(|s| {
+                s.forward.map(|f| match f {
+                    ForwardLocomotion::Forward => "forward",
+                    ForwardLocomotion::Backstep => "backstep",
+                })
+            }),
+            drive_sidestep: manual.and_then(|s| {
+                s.sidestep.map(|f| match f {
+                    SidestepLocomotion::StrafeLeft => "left",
+                    SidestepLocomotion::StrafeRight => "right",
+                })
+            }),
+            drive_turning: manual.and_then(|s| {
+                s.turning.map(|t| match t {
+                    Turn::Left => "left",
+                    Turn::Right => "right",
+                })
+            }),
             auto_run: interp.map(|i| i.auto_run),
             run_rate: minterp.map(|m| m.my_run_rate),
             speed_factor: minterp.map(|m| m.current_speed_factor),

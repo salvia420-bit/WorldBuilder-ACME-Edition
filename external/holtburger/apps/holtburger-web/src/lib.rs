@@ -53667,9 +53667,17 @@ async fn recv_loop(
                                         "grounded": !w.player.is_airborne,
                                         "airborne_secs": w.player.airborne_secs,
                                         "is_jumping": w.player.is_jumping,
-                                        // Gait from the interpreter's hold_run,
-                                        // never from a JS-side guess.
-                                        "gait": tele.hold_run.map(|r| if r { "run" } else { "walk" }),
+                                        // Gait from the movement system's OWN
+                                        // `hold_run XOR UITogglesRun`
+                                        // derivation, never from a JS-side
+                                        // guess and never from the raw latch.
+                                        // ORACLE session 2 FIX: this used to
+                                        // read `hold_run` directly, which is
+                                        // the SHIFT latch — under
+                                        // run-by-default `hold_run=false` IS
+                                        // run, so the first parity report
+                                        // labelled a genuine run `"walk"`.
+                                        "gait": tele.effective_gait,
                                         "cast": tele.cast_window_active,
                                         "movement": tele,
                                     });
