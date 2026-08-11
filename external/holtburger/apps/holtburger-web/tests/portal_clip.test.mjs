@@ -36,7 +36,10 @@ import {
   polygonPlane,
   apertureStraddlesViewer,
   apertureFacesAway,
+  apertureFacesAwayWithSide,
+  pickSidednessSource,
   SIDEDNESS_MIN_INWARD_M,
+  SIDEDNESS_PLANE_EPS_M,
   PUNCH_NEAR_MARGIN_M,
 } from "../scene3d/portal_clip.js";
 
@@ -526,6 +529,203 @@ t("a cell centre comfortably off the plane is still trusted", () => {
   const room = { x: 20 + SIDEDNESS_MIN_INWARD_M * 4, y: 0, z: 0 };
   assert.equal(apertureFacesAway(door, room, { x: 0, y: 0, z: 0 }), false, "outward keeps");
   assert.equal(apertureFacesAway(door, room, { x: 40, y: 0, z: 0 }), true, "inward drops");
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// §5 THE REAL SIDEDNESS GATE (PORTAL-FLAGS-DECODE, 2026-08-11)
+//
+// `apertureFacesAway` above infers "outward" from the room's AABB centre and
+// needs `SIDEDNESS_MIN_INWARD_M` to fail open when that inference is noise.
+// `apertureFacesAwayWithSide` takes retail's own `portal_side` — decoded from
+// `CellPortal.flags` bit 1, stored INVERTED (acclient.c:362389) — and needs no
+// guard.
+//
+// Fixture geometry, computed once so the expectations below are not magic:
+// `NEAR_DOOR` = [20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1] has Newell normal
+// (+1,0,0) and d = -20, so `dist(cam) = cam.x - 20`. A room on the +x side of
+// it therefore sits at retail Sidedness 0 ⇒ `portal_side === false`; a room on
+// the −x side sits at Sidedness 1 ⇒ `portal_side === true`.
+//
+// THE SIGN IS THE POINT. Retail KEEPS a portal when the viewer matches
+// `portal_side`, but retail's viewer is inside the room walking outward. The
+// punch is the opposite vantage, so it must DROP on a match. Flip either
+// half and the punch inverts: every visible doorway culled, every far-side
+// door punched through the near wall.
+// ─────────────────────────────────────────────────────────────────────────
+
+t("portal_side false = room on +x: outside keeps, inside drops", () => {
+  // portal_side false ⇒ retail Sidedness 0 ⇒ the room is where dist > 0.
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, false, { x: 0, y: 0, z: 0 }), false,
+    "viewer outside the room must KEEP (this is the punch's whole job)");
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, false, { x: 40, y: 0, z: 0 }), true,
+    "viewer inside the room must DROP");
+});
+
+t("portal_side true = room on -x: the verdicts mirror exactly", () => {
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, true, { x: 40, y: 0, z: 0 }), false);
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, true, { x: 0, y: 0, z: 0 }), true);
+});
+
+t("the on-plane band keeps, and the straddle gate is what covers it", () => {
+  // Retail classifies |dist| <= 2e-4 as Sidedness 2, which matches NEITHER
+  // side, so retail REJECTS the traversal. Negated for the punch, that means
+  // KEEP — deliberately: a viewer standing exactly in the doorway is handled
+  // by `apertureStraddlesViewer` (a 1.5 m band), not by a 0.2 mm one.
+  const onPlane = { x: 20, y: 0, z: 0 };
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, false, onPlane), false);
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, true, onPlane), false);
+  assert.equal(apertureStraddlesViewer(NEAR_DOOR, onPlane), true, "straddle catches it");
+  // …and a hair past the band on the room side does drop.
+  assert.equal(
+    apertureFacesAwayWithSide(NEAR_DOOR, false, { x: 20 + SIDEDNESS_PLANE_EPS_M * 10, y: 0, z: 0 }),
+    true,
+  );
+});
+
+t("marginM widens the KEEP side, matching apertureFacesAway's convention", () => {
+  const justInside = { x: 20.5, y: 0, z: 0 }; // 0.5 m onto the room side
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, false, justInside, 0), true);
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, false, justInside, 1.0), false,
+    "a 1 m margin must KEEP a viewer 0.5 m in, not drop them harder");
+});
+
+t("degenerate inputs never throw and never drop (fails OPEN)", () => {
+  assert.equal(apertureFacesAwayWithSide(null, false, VIEWER), false);
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, false, null), false);
+  assert.equal(apertureFacesAwayWithSide([0,0,0, 1,0,0, 2,0,0], false, VIEWER), false,
+    "a collinear polygon has no plane");
+  assert.equal(apertureFacesAwayWithSide(NEAR_DOOR, false, { x: NaN, y: 0, z: 0 }), false);
+});
+
+t("clipAperturesForPunch drops the far door when fed real portal_side", () => {
+  // v3 wire shape: [count, (nv, cx,cy,cz, side, x,y,z...) x count].
+  // Near door at x=20 with the room at x=25 → dist(+5) → Sidedness 0 → side 0.
+  // Far  door at x=30 with the same room   → dist(-5) → Sidedness 1 → side 1.
+  const flat = [2,
+    4, 25, 0, 0, 0,  20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1,
+    4, 25, 0, 0, 1,  30,-1,-1, 30,1,-1, 30,1,1, 30,-1,1,
+  ];
+  const res = clipAperturesForPunch(flat, MVP, {
+    nearPlane: makeNearPlane(VIEWER, { x: 1, y: 0, z: 0 }),
+    camAc: VIEWER,
+    withCellCenter: true,
+    withPortalSide: true,
+  });
+  assert.equal(res.dropped.backface, 1, "the far door must be rejected");
+  assert.equal(res.kept, 1, "the near door must survive");
+});
+
+t("THE ROUND-5 REGRESSION ITSELF: a wrong-signed AABB centre culls a doorway the flag keeps", () => {
+  // The reported failure: an L-shaped or multi-part cell whose AABB centre
+  // falls OUTSIDE the room — here at x=15, on the far side of a doorway at
+  // x=20 whose room is actually on the +x side. The heuristic reads that
+  // centre as "the room is at −x", flips the outward normal, and culls the
+  // doorway the player at x=0 is looking straight at. `SIDEDNESS_MIN_INWARD_M`
+  // cannot save it: the centre is 5 m off the plane, so the sign looks
+  // perfectly confident — it is just wrong.
+  const opts = {
+    nearPlane: makeNearPlane(VIEWER, { x: 1, y: 0, z: 0 }),
+    camAc: VIEWER,
+    withCellCenter: true,
+  };
+  const heuristic = clipAperturesForPunch(
+    [1, 4, 15, 0, 0, 20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1], MVP, opts,
+  );
+  assert.equal(heuristic.dropped.backface, 1, "the heuristic culls it — the regression");
+  assert.equal(heuristic.kept, 0);
+
+  // Same aperture, same bogus centre, plus the real flag (side 0 = room on
+  // +x, which is the truth). The doorway survives.
+  const flagged = clipAperturesForPunch(
+    [1, 4, 15, 0, 0, 0, 20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1], MVP,
+    { ...opts, withPortalSide: true },
+  );
+  assert.equal(flagged.dropped.backface, 0, "the flag keeps it");
+  assert.equal(flagged.kept, 1);
+});
+
+t("portal_side is read as a STRICT 1, so garbage cannot arm the gate", () => {
+  // A short/NaN buffer must read as `false`, not as a truthy drop. `false`
+  // means "the room is on the +x side", which for a viewer at x=0 KEEPS —
+  // the fail-open direction.
+  for (const side of [NaN, undefined, 0.9999, 2]) {
+    const res = clipAperturesForPunch(
+      [1, 4, 25, 0, 0, side, 20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1],
+      MVP,
+      {
+        nearPlane: makeNearPlane(VIEWER, { x: 1, y: 0, z: 0 }),
+        camAc: VIEWER,
+        withCellCenter: true,
+        withPortalSide: true,
+      },
+    );
+    assert.equal(res.kept, 1, `side=${side} must not drop the near door`);
+  }
+});
+
+t("withPortalSide OVERRIDES the cell centre when both are present", () => {
+  // v3 carries both. If the two ever disagree the FLAG must win, or the
+  // heuristic's failure modes leak back in through the export that was added
+  // to remove them. Cell centre says the room is on the -x side (x=15, so
+  // the heuristic would keep a viewer at x=0); the flag says +x (side 0),
+  // which for a viewer at x=40 must DROP.
+  const res = clipAperturesForPunch(
+    [1, 4, 15, 0, 0, 0, 20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1],
+    MVP,
+    {
+      nearPlane: makeNearPlane({ x: 40, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }),
+      camAc: { x: 40, y: 0, z: 0 },
+      withCellCenter: true,
+      withPortalSide: true,
+    },
+  );
+  assert.equal(res.dropped.backface, 1, "the flag, not the centre, decided");
+});
+
+t("pickSidednessSource: the feed and the parse can never disagree", () => {
+  // The whole point of the function: `withCellCenter`/`withPortalSide` are
+  // DERIVED from the same `source` that picks the export, so the two
+  // wire-shape mismatches found on 2026-08-11 are unrepresentable.
+  const table = [
+    // mode          hasV3  hasV2  → source        center  side
+    ["off",          true,  true,    "off",         false, false],
+    ["off",          false, false,   "off",         false, false],
+    ["on",           true,  true,    "flag",        true,  true ],
+    ["on",           true,  false,   "flag",        true,  true ],
+    ["on",           false, true,    "unavailable", false, false], // NOT heuristic
+    ["on",           false, false,   "unavailable", false, false],
+    ["heuristic",    true,  true,    "heuristic",   true,  false],
+    ["heuristic",    false, true,    "heuristic",   true,  false],
+    ["heuristic",    true,  false,   "unavailable", false, false],
+    [undefined,      true,  true,    "off",         false, false],
+  ];
+  for (const [mode, v3, v2, source, center, side] of table) {
+    const got = pickSidednessSource(mode, v3, v2);
+    assert.deepEqual(got, { source, withCellCenter: center, withPortalSide: side },
+      `mode=${mode} hasV3=${v3} hasV2=${v2}`);
+  }
+});
+
+t("pickSidednessSource: an armed-but-unavailable mode gates NOTHING", () => {
+  // Degrading to "off" (the confirmed-good arm) rather than to the heuristic
+  // (the arm the regression was reported against) is deliberate. Prove it
+  // end-to-end: the far door survives, because no gate ran.
+  const pick = pickSidednessSource("on", /* hasV3 */ false, /* hasV2 */ true);
+  const res = clipAperturesForPunch(
+    [2,
+      4, 20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1,
+      4, 30,-1,-1, 30,1,-1, 30,1,1, 30,-1,1,
+    ],
+    MVP,
+    {
+      nearPlane: makeNearPlane(VIEWER, { x: 1, y: 0, z: 0 }),
+      camAc: VIEWER,
+      withCellCenter: pick.withCellCenter,
+      withPortalSide: pick.withPortalSide,
+    },
+  );
+  assert.equal(res.dropped.backface, 0);
+  assert.equal(res.kept, 2);
 });
 
 t("the LOS cache returns the same verdicts as the uncached path", () => {

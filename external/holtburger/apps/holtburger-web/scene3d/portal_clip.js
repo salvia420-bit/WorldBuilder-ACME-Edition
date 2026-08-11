@@ -35,11 +35,16 @@
 // And the caller adds a fifth gate we also lacked — `PView::ConstructView`
 // (acclient.c:462507-462543) SIDEDNESS-rejects the portal before any of this:
 // it dots the camera against the portal plane and returns 0 unless the sign
-// matches `outside_portal->portal_side`. Our wire format
-// (`getVisiblePortalApertures`) does not carry `portal_side`, so we cannot
-// port that test verbatim; `terrainRayBlocked` below is the substitute that
-// covers the case the 2026-07-06 blackout actually reported ("an aperture
-// behind a hill").
+// matches `outside_portal->portal_side`.
+//
+// UPDATE 2026-08-11 (PORTAL-FLAGS-DECODE): the wire format DOES carry
+// `portal_side` now. `CellPortal.flags` was being parsed and never decoded —
+// bit 1, stored inverted (acclient.c:362389) — and the v3 export
+// `getVisiblePortalAperturesWithSidedness` brings it through. So this module
+// ports the fifth gate for real, in `facesAwayWithSide`, and the two
+// stand-ins it grew in the meantime (`terrainRayBlocked` for "an aperture
+// behind a hill", the round-5 AABB-centre inference in `facesAwayWithPlane`)
+// stay as the fallbacks for callers that do not supply it.
 //
 // ─────────────────────────────────────────────────────────────────────────
 // COORDINATES
@@ -86,6 +91,15 @@ export const SIDEDNESS_MIN_INWARD_M = 0.75;
  * the INWARD side before an aperture is dropped.
  */
 export const SIDEDNESS_DROP_MARGIN_M = 0.5;
+
+/**
+ * Retail's on-plane epsilon for the `Sidedness` classification, in metres:
+ * the literal `0.00019999999` in `PView::InitCell` (acclient.c:461681) and
+ * `PView::ConstructView` (acclient.c:462519). A viewpoint inside this band
+ * classifies as `Sidedness 2` (on the plane), which matches NEITHER side, so
+ * retail rejects the portal. `facesAwayWithSide` reproduces that.
+ */
+export const SIDEDNESS_PLANE_EPS_M = 0.0002;
 
 /** Samples taken along a camera→aperture ray by `terrainRayBlocked`. */
 export const TERRAIN_LOS_SAMPLES = 12;
@@ -600,6 +614,109 @@ function facesAwayWithPlane(pl, cellCenter, camAc, marginM) {
 }
 
 /**
+ * THE REAL SIDEDNESS GATE (PORTAL-FLAGS-DECODE, 2026-08-11) — retail's
+ * `portal_side`, not an inference from an AABB centre.
+ *
+ * `facesAwayWithPlane` above had to GUESS which face of a doorway is
+ * "outside", because `CellPortal.flags` was parsed and never decoded. The
+ * guess is the room's AABB centre, and it is wrong often enough to need the
+ * `SIDEDNESS_MIN_INWARD_M` fail-open guard: a doorway in a long wall puts
+ * that centre near the wall plane, and an L-shaped or multi-part cell can
+ * put it outside the room entirely.
+ *
+ * `portal_side` is retail's own `Sidedness` for the polygon's plane, off
+ * flags bit 1 (stored INVERTED — `acclient.c:362389`, and neither ACE's
+ * `PortalFlags.PortalSide = 0x2` nor DRW's `dats.xml:220` carries the
+ * inversion). It needs no confidence guard: measured over the retail
+ * baseline in holtburger-dat `tests/cell_portal_flags_parity.rs`, it names
+ * the owning room's INTERIOR on 15,186/15,186 outdoor-facing and
+ * 1,840,177/1,840,177 cell→cell portals, with zero on-plane and zero
+ * unresolved.
+ *
+ * ── THE SIGN, which is the whole subtlety ────────────────────────────────
+ * Retail's rule (`PView::InitCell` acclient.c:461691;
+ * `PView::ConstructView` acclient.c:462533) is KEEP when the viewer's
+ * `Sidedness` EQUALS `portal_side`. But retail's viewer in that rule is
+ * standing INSIDE the room, walking its own cell's portals outward. The
+ * punch is the opposite vantage: an OUTDOOR camera looking IN. Since
+ * `portal_side` names the room interior, an outward-looking consumer wants
+ * the NEGATION — drop the aperture exactly when the camera is on the
+ * `portal_side` side, i.e. when it is already in the room the doorway
+ * belongs to. That is also what the far-side-door case needs: for a door on
+ * the far wall, the room lies between it and the camera, so the camera is on
+ * that door's interior side and it is correctly dropped.
+ *
+ * The plane comes from `polygonPlane`, whose Newell accumulation has the
+ * same orientation as retail's `CPolygon::make_plane` (acclient.c:359628, a
+ * right-handed `Σ (v[k+1]-v0) × (v[k+2]-v0)` fan over the same vertex
+ * order), and the wasm→world transform is a proper rotation + translation,
+ * so the sign survives the trip. The parity test asserts that end to end
+ * against real DAT geometry.
+ *
+ * @param {number[]} pts flat [x,y,z, …] AC world-space aperture polygon
+ * @param {boolean} portalSide retail `portal_side` (true = negative halfspace)
+ * @param {{x,y,z}} camAc viewer position, AC world
+ * @param {number} [marginM=0] tolerance; positive keeps grazing apertures
+ * @returns {boolean} true when the viewer is INSIDE the owning room (drop it)
+ */
+export function apertureFacesAwayWithSide(pts, portalSide, camAc, marginM = 0) {
+  if (!pts || !camAc) return false;
+  return facesAwayWithSide(polygonPlane(pts), portalSide, camAc, marginM);
+}
+
+/**
+ * Pick which aperture export to fetch AND how to parse it, from ONE decision.
+ *
+ * This exists because the same bug was found twice on 2026-08-11, in both
+ * consumers, and both times it was a fetch and a parse chosen independently:
+ *   · `tickPortalStencil` fetched v2 (`…WithCellCenter`) and parsed v1, so
+ *     three cell-centre floats were read as vertex coordinates;
+ *   · `tickPortalPunch` fetched v1 and parsed v2 whenever `?punchSidedness=on`,
+ *     so the flag's own arm walked off the end of its buffer.
+ * Neither could have happened if the export and the reader flags came from a
+ * single source. Now they do, and it is a pure function so the table below is
+ * locked by tests instead of by a reviewer's attention.
+ *
+ * @param {"off"|"on"|"heuristic"} mode `?punchSidedness`
+ * @param {boolean} hasV3 `getVisiblePortalAperturesWithSidedness` present
+ * @param {boolean} hasV2 `getVisiblePortalAperturesWithCellCenter` present
+ * @returns {{source:"flag"|"heuristic"|"off"|"unavailable",
+ *            withCellCenter:boolean, withPortalSide:boolean}}
+ *   `source` also names the degraded case: an armed mode whose export is
+ *   missing (stale `pkg/`) reads `unavailable` and gates NOTHING — degrading
+ *   to "off", the confirmed-good arm, never to the heuristic, which is the
+ *   arm the round-5 regression was reported against.
+ */
+export function pickSidednessSource(mode, hasV3, hasV2) {
+  let source = "off";
+  if (mode === "on") source = hasV3 ? "flag" : "unavailable";
+  else if (mode === "heuristic") source = hasV2 ? "heuristic" : "unavailable";
+  return {
+    source,
+    // v3 carries the cell centre too, so the flag arm parses both fields.
+    withCellCenter: source === "flag" || source === "heuristic",
+    withPortalSide: source === "flag",
+  };
+}
+
+/** `apertureFacesAwayWithSide` with a caller-supplied plane. */
+function facesAwayWithSide(pl, portalSide, camAc, marginM) {
+  if (!pl || !camAc) return false;
+  const dist = pl.nx * camAc.x + pl.ny * camAc.y + pl.nz * camAc.z + pl.d;
+  if (!Number.isFinite(dist)) return false; // fail OPEN, as the heuristic does
+  // Orient so POSITIVE means "on the side `portal_side` names". retail
+  // `Sidedness`: 1 = the negative halfspace, 0 = the positive one.
+  const oriented = portalSide ? -dist : dist;
+  // Retail keeps the portal when `Sidedness == portal_side`, i.e. when
+  // `oriented` clears the on-plane band. That verdict is negated here (see
+  // above), so we DROP on the same condition. `marginM` raises the drop
+  // threshold, i.e. widens the KEEP side — the same direction it means in
+  // `facesAwayWithPlane`, where positive `oriented` is likewise the
+  // drop-ward side. At `marginM === 0` this is retail's test exactly.
+  return oriented > SIDEDNESS_PLANE_EPS_M + marginM;
+}
+
+/**
  * Does a baked buildings/statics scene node belong to landblock `lbKey`?
  *
  * Used by the `?indoorDepthSplit` re-layering (cells.js `_stampSplitLayers`) to
@@ -678,6 +795,12 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
     ? opts.straddleEpsM
     : APERTURE_STRADDLE_EPS_M;
   const withCellCenter = !!opts.withCellCenter;
+  // PORTAL-FLAGS-DECODE (2026-08-11): the v3 export
+  // (`getVisiblePortalAperturesWithSidedness`) appends retail's real
+  // `portal_side` after the cell centre. When present it REPLACES the
+  // AABB-centre inference — the centre floats are still parsed (v3 carries
+  // both) but no longer consulted.
+  const withPortalSide = !!opts.withPortalSide;
   // `?punchLosSunken` (cells.js owns the reader — this module stays DOM-free).
   // Absent → true, the fixed behaviour, which is what the unit tests exercise.
   const losSunkenExempt = opts.losSunkenExempt !== false;
@@ -718,6 +841,14 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
       cc = { x: flat[k], y: flat[k + 1], z: flat[k + 2] };
       k += 3;
     }
+    // v3 inserts `portal_side` (1.0 / 0.0) after the centre. Read as a
+    // strict `=== 1`: a NaN or a short buffer must not read as `true` and
+    // silently arm the gate on garbage.
+    let portalSide = null;
+    if (withPortalSide) {
+      portalSide = flat[k] === 1;
+      k += 1;
+    }
     const start = k;
     k += nv * 3;
     if (nv < 3 || k > flat.length) continue;
@@ -734,11 +865,20 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
 
     // 0. retail ConstructView sidedness reject — the viewer must be on the
     //    OUTWARD side of the aperture. Stops a far-side door being punched
-    //    through the near wall. Requires the cell centre; skipped without it.
-    //    Cheapest real gate, so it stays first: a handful of multiply-adds,
-    //    and in a town it rejects roughly half the offered apertures before
-    //    anything else in this loop touches them.
-    if (cc && camAc && facesAwayWithPlane(plane, cc, camAc, 0)) {
+    //    through the near wall. Cheapest real gate, so it stays first: a
+    //    handful of multiply-adds, and in a town it rejects roughly half the
+    //    offered apertures before anything else in this loop touches them.
+    //
+    //    Two implementations, and the caller picks by which export it fed
+    //    us. `portalSide` is retail's own flag (exact, no guard needed); the
+    //    cell centre is the round-5 inference that needs
+    //    `SIDEDNESS_MIN_INWARD_M` to fail open. Neither present → no gate,
+    //    which is the round-4 behaviour.
+    const facesAway =
+      portalSide !== null
+        ? camAc && facesAwayWithSide(plane, portalSide, camAc, 0)
+        : cc && camAc && facesAwayWithPlane(plane, cc, camAc, 0);
+    if (facesAway) {
       dropped.backface++;
       continue;
     }

@@ -46,6 +46,7 @@ import {
   makeLosCache,
   isCameraBelowTerrain,
   nodeInLandblock,
+  pickSidednessSource,
 } from "./portal_clip.js";
 import {
   meshToGeometryGroups,
@@ -181,15 +182,40 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 // fails OPEN when the sign is untrustworthy — but "outdoor punch works" is a
 // confirmed-good state and a speculative gate does not get to risk it by
 // default. `?punchSidedness=on` to A/B the far-side-door fix it was written for.
-const PUNCH_SIDEDNESS = (() => {
+//
+// ── PORTAL-FLAGS-DECODE (2026-08-11) — the flag is now THREE-VALUED ──────
+// The premise above ("we cannot know which face is outside, so we infer it
+// from the AABB centre") was false. `CellPortal.flags` bit 1 IS `portal_side`,
+// retail's own Sidedness for the polygon plane — it was simply never decoded,
+// because the bit is stored INVERTED (acclient.c:362389) and neither ACE nor
+// DRW carries the inversion. It is exact: measured over the retail baseline it
+// names the owning room's interior on 15,186/15,186 outdoor-facing portals,
+// none on-plane (holtburger-dat tests/cell_portal_flags_parity.rs).
+//
+//   absent / =off  DEFAULT — no sidedness gate. Byte-identical to the
+//                  round-4 arm the user confirmed working outdoors. The
+//                  kill path; unchanged by this task.
+//   =on            the REAL flag, via the v3 export. No confidence guard,
+//                  because there is nothing to be unconfident about.
+//   =heuristic     the round-5/7 AABB-centre inference, kept ONLY as the
+//                  A/B reference arm for the eye test.
+//
+// I7: the default does NOT move. `=on` is new behaviour and stays opt-in
+// until the 1070 eye test says otherwise.
+const PUNCH_SIDEDNESS_MODE = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location) {
-      return new URLSearchParams(globalThis.location.search || "")
-        .get("punchSidedness") === "on";
+      const v = new URLSearchParams(globalThis.location.search || "")
+        .get("punchSidedness")?.toLowerCase();
+      if (v === "on") return "on";
+      if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  return false;
+  return "off";
 })();
+
+/** Back-compat boolean for the diag lines: "is a sidedness gate armed at all". */
+const PUNCH_SIDEDNESS = PUNCH_SIDEDNESS_MODE !== "off";
 
 // `?punchLosSunken` (2026-08-10) — DEFAULT-ON, `=off` restores the round-7
 // terrain-LOS verdict. See `terrainRayBlocked` in portal_clip.js: a below-grade
@@ -231,11 +257,15 @@ try {
     build: INDOOR_SPLIT_BUILD,
     enabled: PORTAL_PUNCH_FLAG_ON,
     sidedness: PUNCH_SIDEDNESS,
+    // Which arm `?punchSidedness` selected: off | on | heuristic. The bare
+    // boolean above cannot distinguish the real flag from the round-5
+    // inference, and an eye test has to know which one it is looking at.
+    sidednessMode: PUNCH_SIDEDNESS_MODE,
   };
   if (PORTAL_PUNCH_FLAG_ON) {
     // eslint-disable-next-line no-console
     console.log(
-      `[portalPunch] build=${INDOOR_SPLIT_BUILD} enabled=true sidedness=${PUNCH_SIDEDNESS} ` +
+      `[portalPunch] build=${INDOOR_SPLIT_BUILD} enabled=true sidedness=${PUNCH_SIDEDNESS_MODE} ` +
       `— if you do not see this line, your bundle is STALE: add ?nosw=1`,
     );
   }
@@ -2454,6 +2484,9 @@ const _punchLosCache = makeLosCache();
 // 0.4 m). Drop any aperture with a vertex within the near plane so the punch only
 // covers well-formed, fully-in-front doorways; distant apertures (the actual
 // terrain-over-entrance reveal) are untouched. `clip.w` = view-forward metres.
+//
+// WIRE SHAPE: v1 ONLY (`[count, (nv, x,y,z ×nv) × count]`). Its caller must
+// therefore fetch the v1 export — see the note in `tickPortalStencil`.
 const _APERTURE_NEAR_CULL_M = 0.2; // > camera.near (0.1); margin for fp slop
 function nearPlaneCullApertures(flat, mvpArr) {
   if (!flat || flat.length < 1) return flat;
@@ -2538,15 +2571,19 @@ export function tickPortalStencil(scene3d, sessionHandle) {
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
 
-    // ROUND 5: prefer the export that carries the owning cell's AABB centre,
-    // which is what makes retail's ConstructView sidedness reject possible
-    // (fixes far-side doors being punched through the near wall). Typeof-guarded
-    // — a stale `pkg/` falls back to v1 and simply loses that one gate.
-    const hasV2 =
-      typeof sessionHandle.getVisiblePortalAperturesWithCellCenter === "function";
-    const flat = hasV2
-      ? sessionHandle.getVisiblePortalAperturesWithCellCenter(_psMvpArr, 0)
-      : sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+    // WIRE-SHAPE FIX (2026-08-11, PORTAL-FLAGS-DECODE). Round 5 switched this
+    // fetch to the v2 export "so retail's ConstructView sidedness reject is
+    // possible" — but this path never ran that reject, and the reader below
+    // (`nearPlaneCullApertures`) only ever parsed v1. So since 2026-08-04 the
+    // three cell-centre floats have been read as vertex coordinates, every
+    // aperture's vertex run has started three floats early, and the last one
+    // has run off the end of the buffer. `?portalStencil` is DEFAULT-OFF so
+    // no default arm was affected, but the flag's own arm was fed garbage.
+    //
+    // Fetch v1, which is the shape this path actually consumes. The stencil
+    // pass wants bare polygons; when it grows a sidedness gate it should take
+    // the v3 export and `clipAperturesForPunch`, as `tickPortalPunch` does.
+    const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
     pass.setApertures(nearPlaneCullApertures(flat, _psMvpArr));
 
     // Portal-visible interior cells (idx >= 0x100): PARK each on the portal-cell
@@ -2665,12 +2702,36 @@ export function tickPortalPunch(scene3d, sessionHandle) {
     _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
-    // Own typeof-guard — this used to read `hasV2` from tickPortalStencil's
+    // Own typeof-guards — these used to read `hasV2` from tickPortalStencil's
     // scope: a cross-function ReferenceError thrown EVERY frame and eaten by
     // the catch below, leaving the punch structurally dead with a frozen diag.
+    const hasV3 =
+      typeof sessionHandle.getVisiblePortalAperturesWithSidedness === "function";
     const hasV2 =
       typeof sessionHandle.getVisiblePortalAperturesWithCellCenter === "function";
-    const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+
+    // WIRE-SHAPE FIX (2026-08-11, PORTAL-FLAGS-DECODE). This fetched v1 and
+    // then told `clipAperturesForPunch` to parse v2 (`withCellCenter: hasV2
+    // && PUNCH_SIDEDNESS`). With `?punchSidedness=on` the reader consumed
+    // three vertex coordinates as a cell centre and walked off the end of the
+    // buffer — so the flag's arm was misparsing its own input, on top of the
+    // AABB-centre inference being unreliable. Both halves of "the round-5
+    // sidedness gate regressed the outdoor punch" are addressed here: the
+    // shape now MATCHES the export by construction (one `sidednessSource`
+    // decides both), and `=on` uses retail's real flag instead of a guess.
+    //
+    // `=on` with no v3 export (stale `pkg/`) degrades to "off", NOT to the
+    // heuristic: off is the confirmed-good arm and the heuristic is the known
+    // regressing one. `sidednessSource` names whichever happened, so a diag
+    // paste can never leave it ambiguous.
+    const pick = pickSidednessSource(PUNCH_SIDEDNESS_MODE, hasV3, hasV2);
+    const sidednessSource = pick.source;
+    const flat =
+      sidednessSource === "flag"
+        ? sessionHandle.getVisiblePortalAperturesWithSidedness(_psMvpArr, 0)
+        : sidednessSource === "heuristic"
+          ? sessionHandle.getVisiblePortalAperturesWithCellCenter(_psMvpArr, 0)
+          : sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
 
     // OVER-PUNCH FIX (2026-08-04) — the 2026-07-06 R9-290 blackout.
     //
@@ -2708,7 +2769,10 @@ export function tickPortalPunch(scene3d, sessionHandle) {
         nearPlane,
         camAc: _acCamVec,
         sampleHeight: heightSamplerFor(sessionHandle),
-        withCellCenter: hasV2 && PUNCH_SIDEDNESS,
+        // Straight off the SAME `pick` that chose the export above, so the
+        // parse can no longer disagree with the feed.
+        withCellCenter: pick.withCellCenter,
+        withPortalSide: pick.withPortalSide,
         // PERF (2026-08-04): the terrain-LOS gate is 11 `terrainHeightAt`
         // wasm calls PER SURVIVING APERTURE PER FRAME — in a town that is
         // several hundred boundary crossings every frame, re-deriving an
@@ -2733,8 +2797,14 @@ export function tickPortalPunch(scene3d, sessionHandle) {
         dropped: res.dropped,
         rect: res.rect,
         gates: {
-          sidedness: !!(hasV2 && PUNCH_SIDEDNESS),
-          sidednessExportPresent: hasV2,
+          sidedness: sidednessSource !== "off" && sidednessSource !== "unavailable",
+          // "flag" = retail portal_side (v3) · "heuristic" = the round-5
+          // AABB-centre inference (v2) · "off" = no gate · "unavailable" =
+          // the mode was armed but its export is missing (stale pkg/).
+          sidednessSource,
+          sidednessMode: PUNCH_SIDEDNESS_MODE,
+          sidednessExportPresent: hasV3,
+          cellCenterExportPresent: hasV2,
           terrainLos: true,
           losSunkenExempt: PUNCH_LOS_SUNKEN,
           straddle: true,
