@@ -75,7 +75,7 @@ export function domKey(key) {
   return k;
 }
 
-function buildUrl(base, scenario, account) {
+function buildUrl(base, _scenario, account) {
   const p = new URLSearchParams();
   p.set("moveTelemetry", "1");
   p.set("nosw", "1");
