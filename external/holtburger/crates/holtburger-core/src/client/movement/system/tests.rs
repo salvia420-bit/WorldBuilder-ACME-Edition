@@ -9185,6 +9185,111 @@ async fn cmd_interp_base_gait_ignores_a_stray_walk_manual_set() {
     assert_eq!(gait, Gait::Walk, "the HoldRun latch still owns the gait");
 }
 
+/// MOVE-F3-ENABLE (batch-D 2026-08-10) — `CommandInterpreter::Enable`
+/// (acclient.c:716912) had ZERO callers; retail runs it at the input
+/// system's attach, so holtburger runs it at WORLD ENTRY. The interpreter
+/// used to materialize lazily on the first key edge, which meant the lane
+/// had no interpreter — and therefore no `IsActive`, no `UseTime` pump —
+/// for a player who had not yet touched the keyboard.
+///
+/// The attach must be INERT beyond existing: it installs no drive (a
+/// lifecycle event must not stomp `active_drive`) and emits no renderer
+/// effects.
+#[tokio::test]
+async fn cmd_interp_enable_attaches_at_world_entry() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_012A),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    assert!(
+        movement.command_interpreter.is_none(),
+        "pre-tick: nothing has attached yet"
+    );
+
+    // One in-world tick. No key edges, no drive intents.
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    let interp = movement
+        .command_interpreter
+        .as_ref()
+        .expect("F3: world entry attached the interpreter without a key edge");
+    assert!(interp.is_enabled(), "F3: Enable ran (:716912)");
+    assert!(
+        interp.is_active(),
+        "F3: SetSmartBox ran too — IsActive == enabled && player (:717663)"
+    );
+    assert!(
+        !interp.hold_run,
+        "F3: Enable re-asserts the CURRENT hold_run, it does not invent one"
+    );
+    assert!(
+        movement.active_drive.is_none(),
+        "F3: the attach is a lifecycle event — it installs no drive, got {:?}",
+        movement.active_drive
+    );
+    assert!(
+        movement.take_cmd_interp_events().is_empty(),
+        "F3: the attach emits no renderer effects"
+    );
+
+    // …and the lane still works exactly as before off the attached
+    // interpreter: a W edge runs.
+    movement.enqueue_key_action(0x29, true); // W press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let gait = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state.gait,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(gait, Gait::Run, "the attached interpreter drives normally");
+}
+
+/// F3 negative: with the lane OFF (`?cmdInterp=off`) world entry attaches
+/// NOTHING — the legacy lane's kill path stays byte-identical.
+#[tokio::test]
+async fn cmd_interp_world_entry_attach_is_gated_by_the_flag() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_012A),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(false);
+
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        movement.command_interpreter.is_none(),
+        "?cmdInterp=off: no interpreter may exist"
+    );
+}
+
 // ── FU-3 (2026-07-20) — dynamic-entity collision arm for the LIVE faithful
 // driver (USE_FAITHFUL_ENTITY_COLLISION, default-OFF). ─────────────────────
 //

@@ -516,6 +516,10 @@ struct SinkSeams {
     latch: bool,
     fwd_slot: Option<u32>,
     log: Vec<Dispatch>,
+    /// Every `CMotionInterp::set_hold_run` the interpreter pushed through
+    /// the seam, as the EFFECTIVE gait (`hold_run XOR UITogglesRun`,
+    /// :716991). F3 pins `Enable`'s re-assert on it.
+    hold_run_asserts: Vec<bool>,
 }
 
 impl SinkSeams {
@@ -524,6 +528,7 @@ impl SinkSeams {
             latch: false,
             fwd_slot: None,
             log: Vec::new(),
+            hold_run_asserts: Vec::new(),
         }
     }
 
@@ -572,7 +577,9 @@ impl InterpreterSeams for SinkSeams {
     fn set_latch(&mut self) {
         self.latch = true; // :716946
     }
-    fn minterp_set_hold_run(&mut self, _on: bool) {}
+    fn minterp_set_hold_run(&mut self, on: bool) {
+        self.hold_run_asserts.push(on);
+    }
     fn minterp_is_standing_still(&self) -> bool {
         false
     }
@@ -1073,4 +1080,40 @@ mod fixtures {
         // UseTime re-drive is P08's cadence — ADJ-15 Q7).
         assert!(c.dispatches().is_empty());
     });
+
+    // --- Lifecycle: Enable re-asserts hold_run (:716912) ------------------
+    // REAL-only (the oracle has no enable/disable lifecycle — SC-20 models
+    // the key alphabet, not the attach sequence). MOVE-F3-ENABLE's pin:
+    // `v2 = this->hold_run; this->enabled = 1; vfptr[2].OnLoseFocus(v2)` —
+    // the read is BEFORE the flip, and the value re-asserted is the CURRENT
+    // latch, never a fresh 0.
+    #[test]
+    fn t_enable_reasserts_the_current_hold_run() {
+        let mut f = RealFixture::in_world();
+
+        // Shift down: hold_run = 1. The fixture seam's UITogglesRun is
+        // false, so the effective gait is Run (:716991 XOR).
+        f.set_hold_run(true);
+        assert!(f.interp.hold_run);
+        assert_eq!(f.sink.hold_run_asserts, vec![true]);
+
+        f.sink.hold_run_asserts.clear();
+        f.interp.disable(&mut f.sink); // :716893 — SetHoldRun(0) + enabled=0
+        assert!(!f.interp.is_enabled());
+        assert!(!f.interp.hold_run, "Disable drops the latch (:716902)");
+        assert_eq!(f.sink.hold_run_asserts, vec![false]);
+
+        // Re-arm the latch while disabled, then Enable: the re-assert must
+        // carry THAT value through, and enabled must come back true.
+        f.set_hold_run(true);
+        f.sink.hold_run_asserts.clear();
+        f.interp.enable(&mut f.sink); // :716912
+        assert!(f.interp.is_enabled(), "Enable flipped enabled");
+        assert!(f.interp.hold_run, "Enable does not clear the latch");
+        assert_eq!(
+            f.sink.hold_run_asserts,
+            vec![true],
+            "Enable pushed the CURRENT hold_run through SetHoldRun (flat 8)"
+        );
+    }
 }

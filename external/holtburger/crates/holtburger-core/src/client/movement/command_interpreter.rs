@@ -750,8 +750,13 @@ impl CommandInterpreter {
     }
 
     /// `Enable` — acclient.c:716912. Reads hold_run BEFORE flipping enabled,
-    /// then re-asserts it (flat 8).
-    #[allow(dead_code)] // staged: enable/disable lifecycle wiring
+    /// then re-asserts it (flat 8): `v2 = this->hold_run; this->enabled = 1;
+    /// vfptr[2].OnLoseFocus(v2)`.
+    ///
+    /// F3 (batch-D `MOVE-F3-ENABLE`) — WIRED at last: the system's
+    /// world-entry attach (`system.rs`
+    /// `attach_command_interpreter_at_world_entry`) is the caller. It had
+    /// none before, so the lane never ran the re-assert.
     pub(crate) fn enable(&mut self, seams: &mut dyn InterpreterSeams) {
         let hr = self.hold_run;
         self.enabled = true;

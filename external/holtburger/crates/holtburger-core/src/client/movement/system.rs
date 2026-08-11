@@ -2572,6 +2572,75 @@ impl MovementSystem {
     ///   seam's send methods are deferred no-ops, so the A/B has identical
     ///   send cadence; step 5 flips send ownership onto the interpreter's
     ///   `SendMovementEvent` + the M1 converter.
+    fn new_command_interpreter(&self) -> super::command_interpreter::CommandInterpreter {
+        let mut it = super::command_interpreter::CommandInterpreter::new(0.0);
+        // `SetSmartBox(box)` → `player = box->player` (acclient.c:716822-827).
+        // The interpreter only ever exists in-world, so both are present.
+        it.set_smartbox(true, true);
+        // Step 5 (verdict §3.3): the `?castMove`/`?slideCast` URL flags are
+        // ALIASES for the interpreter configs — seed them from the runtime
+        // carriers once at construction (both parse at boot, before world
+        // entry).
+        it.honor_autonomy_latch = self.cast_move_enabled();
+        it.slidecast_persist = self.slide_cast_enabled();
+        it
+    }
+
+    /// F3 (batch-D `MOVE-F3-ENABLE`) — the interpreter's WORLD-ENTRY
+    /// attach: retail's `SetSmartBox` (acclient.c:716822) → `Enable`
+    /// (:716912) pair, run on the first in-world tick of the
+    /// `?cmdInterp=on` lane instead of lazily on the first key edge.
+    ///
+    /// `Enable` reads `hold_run` BEFORE flipping `enabled`, then re-asserts
+    /// it through `SetHoldRun` (flat 8) — decomp-exact: `v2 =
+    /// this->hold_run; this->enabled = 1; vfptr[2].OnLoseFocus(v2)`. Our
+    /// [`super::command_interpreter::CommandInterpreter::enable`] had ZERO
+    /// callers, so the lane never ran the re-assert at all. Retail's own
+    /// call sites are vtable-dispatched and not recoverable by symbol grep
+    /// in the decomp — world entry is holtburger's chosen site, per the
+    /// queue card.
+    ///
+    /// Landing this AFTER MOVE-F2 is load-bearing: pre-F2 the persistent
+    /// gait was `active_drive`'s, so an Enable re-assert wrote into a field
+    /// the next edge overwrote anyway. Post-F2 `hold_run` IS the gait
+    /// truth ([`Self::interp_base_drive`]), so the re-assert establishes it
+    /// at world entry.
+    ///
+    /// The composed drive this produces is DELIBERATELY DISCARDED: attach
+    /// is a lifecycle event, not an input edge, and installing an idle
+    /// manual drive here would stomp whatever `active_drive` holds (an
+    /// autonomous steer, a server MoveTo). Nothing else in the sequence
+    /// reaches `self`/`world` — `SetHoldRun` under autonomy only calls
+    /// `minterp_set_hold_run`, which writes the seam's local drive
+    /// (asserted below).
+    fn attach_command_interpreter_at_world_entry(&mut self, now: Instant, world: &mut WorldState) {
+        if !self.cmd_interp_enabled() || self.command_interpreter.is_some() {
+            return;
+        }
+        if world.player.guid == Guid::NULL {
+            return; // not in world yet — retail attaches at NewPlayer
+        }
+        let mut interp = self.new_command_interpreter();
+        let base = self.interp_base_drive(&interp);
+        let mut seams = SystemInterpreterSeams {
+            system: self,
+            world,
+            now,
+            drive: base,
+            dispatched: false,
+        };
+        interp.enable(&mut seams); // :716912
+        debug_assert_eq!(
+            seams.drive, base,
+            "cmdInterp attach: Enable's hold_run re-assert changed the gait at world entry"
+        );
+        debug_assert!(
+            interp.effects.is_empty(),
+            "cmdInterp attach: Enable emitted renderer effects at world entry"
+        );
+        self.command_interpreter = Some(interp);
+    }
+
     fn ingest_key_edge(&mut self, action: u32, down: bool, now: Instant, world: &mut WorldState) {
         if !self.cmd_interp_enabled() {
             // JS only forwards actions under ?cmdInterp=on; a stray edge
@@ -2579,21 +2648,15 @@ impl MovementSystem {
             debug_assert!(false, "KeyEdge queued while ?cmdInterp off");
             return;
         }
-        // Step 5 (verdict §3.3): the `?castMove`/`?slideCast` URL flags
-        // are ALIASES for the interpreter configs — seed them from the
-        // runtime carriers once at construction (both parse at boot,
-        // before any key edge can arrive).
-        let honor_autonomy_latch = self.cast_move_enabled();
-        let slidecast_persist = self.slide_cast_enabled();
-        let mut interp = self.command_interpreter.take().unwrap_or_else(|| {
-            let mut it = super::command_interpreter::CommandInterpreter::new(0.0);
-            // Edges only arrive in-world: smartbox + player present
-            // (retail SetSmartBox/NewPlayer ran during login).
-            it.set_smartbox(true, true);
-            it.honor_autonomy_latch = honor_autonomy_latch;
-            it.slidecast_persist = slidecast_persist;
-            it
-        });
+        // F3: normally already attached at world entry
+        // (`attach_command_interpreter_at_world_entry`); the fallback
+        // construction stays for the paths that reach an edge without a
+        // tick in between (the direct-ingest tests, a flag flipped
+        // mid-tick).
+        let mut interp = self
+            .command_interpreter
+            .take()
+            .unwrap_or_else(|| self.new_command_interpreter());
         // The wire-side control grabs (MoveTo/TurnTo directives, interp
         // engagement) set the SCENE flag today (they call the legacy
         // lane's machinery, not interp.lose_control_to_server, until the
@@ -3785,6 +3848,10 @@ impl MovementSystem {
             "cmdInterp handover violation: KeyEdge and ManualSet in one tick (both lanes driving)"
         );
         let local_guid = world.player.guid;
+        // F3 — retail's world-entry attach (SetSmartBox → Enable). Runs
+        // BEFORE ingestion so a first key edge in this same tick already
+        // finds an enabled interpreter.
+        self.attach_command_interpreter_at_world_entry(now, world);
         for command in queued {
             if let QueuedDriveCommand::KeyEdge { action, down } = command {
                 // Interpreter lane — needs world access (TakeControl's
