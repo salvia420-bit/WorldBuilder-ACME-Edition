@@ -1158,6 +1158,18 @@ const USE_CAST_HOLD_RECLAIM: bool = false;
 /// legacy carriers stay intact until the post-flip cleanup wave.
 const USE_COMMAND_INTERPRETER: bool = true;
 
+/// M7 — `ACCmdInterp::UITogglesRun` (acclient.c:435818 = PlayerModule option
+/// bit 10). holtburger is run-by-default with Shift=walk, i.e. exactly
+/// `ToggleRun == true`; constant until a player-options store exists.
+///
+/// ONE source: both the seam read
+/// ([`SystemInterpreterSeams::ui_toggles_run`]) and the F2 base-gait
+/// derivation ([`MovementSystem::interp_base_drive`]) read this const, so
+/// the XOR that retail `CommandInterpreter::SetHoldRun` performs
+/// (`hold_run != UITogglesRun`, acclient.c:716991) can never be evaluated
+/// against two different options.
+const UI_TOGGLES_RUN: bool = true;
+
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just
 /// its home cell, so an off-center building can no longer be walked through from
@@ -2603,20 +2615,9 @@ impl MovementSystem {
 
         // Base drive: the current effective manual state — unchanged axes
         // carry (retail: an edge dispatches ONE axis; the others keep
-        // their last-applied slots).
-        let base = match self.active_drive {
-            Some(ActiveDriveState {
-                intent: ActiveDriveIntent::Manual(state),
-                ..
-            }) => state,
-            _ => MotionState {
-                // Fresh lane state: run-by-default (M7 — the seam's
-                // ui_toggles_run is constant-true; a Shift edge routes
-                // action 0x32 → SetHoldRun which re-derives the gait).
-                gait: crate::client::movement_types::Gait::Run,
-                ..MotionState::default()
-            },
-        };
+        // their last-applied slots), gait from the interpreter's own
+        // persistent hold_run (F2 — see `interp_base_drive`).
+        let base = self.interp_base_drive(&interp);
         let mut seams = SystemInterpreterSeams {
             system: self,
             world,
@@ -2736,16 +2737,7 @@ impl MovementSystem {
         // Same honor-gated control mirror as the edge ingest.
         interp.controlled_by_server =
             interp.honor_autonomy_latch && world.scene.local_server_controlled();
-        let base = match self.active_drive {
-            Some(ActiveDriveState {
-                intent: ActiveDriveIntent::Manual(state),
-                ..
-            }) => state,
-            _ => MotionState {
-                gait: crate::client::movement_types::Gait::Run,
-                ..MotionState::default()
-            },
-        };
+        let base = self.interp_base_drive(&interp);
         let mut seams = SystemInterpreterSeams {
             system: self,
             world,
@@ -2781,6 +2773,58 @@ impl MovementSystem {
             "cmdInterp handover violation: use_time set pending_take_control (row 2)"
         );
         self.command_interpreter = Some(interp);
+    }
+
+    /// F2 (batch-D `MOVE-F2-HOLDKEY`) — the base drive one interpreter
+    /// session composes onto. The AXES carry from the last installed
+    /// manual drive (retail: an edge dispatches ONE axis; the others keep
+    /// their last-applied slots) — but the GAIT IS NOT AN AXIS.
+    ///
+    /// Retail keeps the gait in the minterp's PERSISTENT
+    /// `raw_state.current_holdkey`: `CMotionInterp::adjust_motion`
+    /// (acclient.c:343746) falls back to it whenever the per-command
+    /// HoldKey is `HoldKey_Invalid` — `if (key == HoldKey_Invalid) v10 =
+    /// v4->raw_state.current_holdkey; if (v10 == HoldKey_Run)
+    /// apply_run_to_command(...)` (:343799-343804), and
+    /// `apply_raw_movement` passes exactly those per-axis holdkeys
+    /// (:344281-344294). The ONLY writer of that field is
+    /// `CMotionInterp::set_hold_run` (:344492-344497), fed by
+    /// `CommandInterpreter::SetHoldRun`'s `hold_run XOR UITogglesRun`
+    /// (:716990-716991). So the persistent gait truth is the
+    /// INTERPRETER's `hold_run`, never the last applied motion — which is
+    /// what this reproduces via [`UI_TOGGLES_RUN`].
+    ///
+    /// Pre-F2 the gait was inherited from `active_drive`, so ANY
+    /// non-interpreter drive installer poisoned it: one stray
+    /// `ManualHeld(run=false)` — a plugin/script `setMovementInput`, the
+    /// A14-I2 pursuit-end restore, the CLI lane — persisted Walk into
+    /// every later key edge, with no way back but a Shift tap. That is the
+    /// stuck-walk bug; the JS-side F1 guard is its stopgap. A Shift edge
+    /// still walks: `set_hold_run` writes `hold_run` BEFORE the seam
+    /// re-derives (`minterp_set_hold_run`), so the derivation and the
+    /// dispatch agree within the edge.
+    fn interp_base_drive(
+        &self,
+        interp: &super::command_interpreter::CommandInterpreter,
+    ) -> MotionState {
+        use crate::client::movement_types::Gait;
+        // `SetHoldRun`'s XOR (:716991) — hold_run is the SHIFT latch, so
+        // with the run-by-default option (M7) hold_run=false reads Run.
+        let gait = if interp.hold_run != UI_TOGGLES_RUN {
+            Gait::Run
+        } else {
+            Gait::Walk
+        };
+        match self.active_drive {
+            Some(ActiveDriveState {
+                intent: ActiveDriveIntent::Manual(state),
+                ..
+            }) => MotionState { gait, ..state },
+            _ => MotionState {
+                gait,
+                ..MotionState::default()
+            },
+        }
     }
 
     /// Row 3 mirror — the interpreter's three list heads as a raw
@@ -8834,7 +8878,8 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
     fn ui_toggles_run(&self) -> bool {
         // M7: holtburger is run-by-default with Shift=walk — exactly
         // ToggleRun==true; constant until a player-options store exists.
-        true
+        // ONE source with the F2 base-gait derivation (see the const).
+        UI_TOGGLES_RUN
     }
     fn use_mouse_turning(&self) -> bool {
         false // M4: no mouse-look consumer yet

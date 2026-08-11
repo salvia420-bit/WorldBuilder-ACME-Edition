@@ -9086,6 +9086,105 @@ async fn cmd_interp_hold_run_edge_installs_gait() {
     assert_eq!(gait, Gait::Run, "Shift release restores the run gait");
 }
 
+/// MOVE-F2-HOLDKEY (batch-D 2026-08-10) — THE STUCK-WALK ROOT CAUSE.
+///
+/// A stray `ManualHeld(run=false)` from ANY non-interpreter installer (a
+/// plugin/script `setMovementInput`, the A14-I2 pursuit-end restore, the
+/// CLI lane) used to poison the interpreter's base gait, because the base
+/// was inherited wholesale from `active_drive` — so every later key edge
+/// composed onto Walk and the player was stuck walking until a Shift tap.
+///
+/// Retail has no such channel: the gait lives in the minterp's PERSISTENT
+/// `raw_state.current_holdkey`, which `adjust_motion` falls back to
+/// (acclient.c:343799) and only `set_hold_run` writes (:344492-344497,
+/// fed by `SetHoldRun`'s XOR :716990-716991). Post-F2 the base gait comes
+/// from `interp.hold_run` — Shift is untouched, so the W edge RUNS.
+#[tokio::test]
+async fn cmd_interp_base_gait_ignores_a_stray_walk_manual_set() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_012A),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    // The stray walk-gait drive — a separate tick, so the KeyEdge/ManualSet
+    // one-tick handover assert is not what this test is exercising.
+    movement.enqueue_drive_intent(
+        PlayerDriveIntent::ManualHeld(MotionState::builder().walk().forward().build()),
+        now,
+    );
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let poisoned = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state.gait,
+        other => panic!("expected the stray manual drive to install, got {other:?}"),
+    };
+    assert_eq!(poisoned, Gait::Walk, "fixture precondition: Walk installed");
+
+    // …and now a plain W edge on the interpreter lane. hold_run was never
+    // touched, so the base gait is Run.
+    movement.enqueue_key_action(0x29, true); // W press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let gait = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state.gait,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        gait,
+        Gait::Run,
+        "F2: the base gait comes from interp.hold_run (:343799), not from the stray ManualHeld"
+    );
+
+    // The JS-facing stream agrees — the F1 stopgap's symptom is gone at the
+    // source, so the renderer sees a RUN drive too.
+    let events = movement.take_cmd_interp_events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            CmdInterpEvent::DriveApplied {
+                forward: 1,
+                run: true,
+                ..
+            }
+        )),
+        "F2: the installed drive reaches JS as run=true, got {events:?}"
+    );
+
+    // Shift still walks — the fix does not pin the gait to Run.
+    movement.enqueue_key_action(0x32, true); // Shift press → XOR → walk
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let gait = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state.gait,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(gait, Gait::Walk, "the HoldRun latch still owns the gait");
+}
+
 // ── FU-3 (2026-07-20) — dynamic-entity collision arm for the LIVE faithful
 // driver (USE_FAITHFUL_ENTITY_COLLISION, default-OFF). ─────────────────────
 //
