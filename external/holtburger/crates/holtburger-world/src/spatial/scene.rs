@@ -67,6 +67,20 @@ pub(crate) fn aabbs_overlap(a: &Aabb, b: &Aabb) -> bool {
         && a.max.z >= b.min.z
 }
 
+/// PORTAL-GRAPH-SPLIT (2026-08-11): append the directed edge `from → to`
+/// to one of the two cell graphs, deduping within the source cell's
+/// adjacency list. Shared by [`SpatialScene::insert_cell_portal`] (which
+/// writes both graphs) and [`SpatialScene::insert_cell_visible_edge`]
+/// (render graph only) so the two feeds cannot drift in dedup or COW
+/// behaviour.
+#[inline]
+fn push_cell_edge(graph: &mut Arc<HashMap<u32, Vec<u32>>>, from: u32, to: u32) {
+    let entry = Arc::make_mut(graph).entry(from).or_default();
+    if !entry.contains(&to) {
+        entry.push(to);
+    }
+}
+
 /// CAM-SEAM (2026-08-02): does the segment `a → b` pass through (or within
 /// `radius` of) the world-space polygon `verts`? Used by
 /// [`SpatialScene::clip_segment_to_cell_space`] to tell a legitimate doorway
@@ -359,6 +373,20 @@ const EPSILON: f32 = 1e-4;
 /// mansions are ~15 cells) so the cap only ever trips on a malformed or
 /// dungeon-scale graph, where "stay indoors, let the server correct" is
 /// the safe verdict.
+///
+/// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): that sizing is an
+/// ADJACENCY statement — "how many rooms can a building have" — and the
+/// BFS it bounded was walking the UNION graph, where every cell also
+/// carries its whole DAT-baked `visible_cells[]` PVS. One dungeon cell's
+/// PVS is routinely 17+ entries (the 2026-05-25 fix's own measurement on
+/// 0xA9B40100), so the transitive union closure blows past 64 in three
+/// hops of any real dungeon, and the overflow arm returns `None` = STAY
+/// INDOORS. That is the silent-latch half of the B11 bug the cap was
+/// added to protect against, reintroduced by the graph it was reading.
+/// With the BFS on [`SpatialScene::cell_adjacency`] the cap is once
+/// again sized for what it bounds; overflows are counted in
+/// [`SpatialScene::exit_bfs_overflow_count`] so a re-appearance is
+/// measurable rather than invisible.
 const EXIT_INDOOR_BFS_MAX_CELLS: usize = 64;
 
 #[derive(Debug, Clone)]
@@ -673,7 +701,41 @@ pub struct SpatialScene {
     /// Stairs are EnvCell-to-EnvCell portal connections — there is no
     /// special-cased stair logic; walking up shifts `current_cell`,
     /// which shifts the BFS frontier, which swaps the visible set.
+    ///
+    /// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): this is the UNION
+    /// graph — real `CellPortal` edges PLUS the DAT-baked
+    /// `visible_cells[]` PVS closure (both pushed by
+    /// `fetchEnvCellsInLandblock` since the 2026-05-25 visibility fix).
+    /// It is the RENDER graph and only the render graph. Anything that
+    /// asks "can the player/camera GO there" reads [`Self::cell_adjacency`].
     cell_portal_graph: Arc<HashMap<u32, Vec<u32>>>,
+    /// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): the WALKABLE cell
+    /// graph. One edge per real `CellPortal` record on the source
+    /// EnvCell — retail's `CEnvCell::portals` / `CCellPortal::
+    /// GetOtherCell` list (acclient.c:362341) — and nothing else.
+    ///
+    /// Why it exists: `cell_portal_graph` merges those edges with
+    /// `visible_cells[]`, which is a PVS (potentially-visible set), i.e.
+    /// the transitive closure Turbine's level-build tools baked so a
+    /// depth-1 BFS reaches everything the camera might see. A PVS edge
+    /// means "that cell is visible from here", NOT "there is a doorway
+    /// from here to there" — a dungeon cell's 17-entry VisibleCells
+    /// routinely lists rooms three walls away. Every physics/camera
+    /// consumer that walked the union was therefore free to re-seat the
+    /// player's cur_cell, relax the containment net, or refuse an
+    /// outdoor exit THROUGH A WALL. Those consumers
+    /// (`current_cell`, `clip_segment_to_cell_space`,
+    /// `exited_envcell_to_outdoor`, `at_interior_doorway`,
+    /// `cell_has_outdoor_exit`, and the faithful bridge's
+    /// `build_cell_inner` neighbour resolve) read this map;
+    /// `render_set` / `compute_visibility_*` keep the union.
+    ///
+    /// Same lifetime, same keying, same directedness as
+    /// `cell_portal_graph`; populated by [`Self::insert_cell_portal`]
+    /// (the PVS-only feed goes through
+    /// [`Self::insert_cell_visible_edge`], which does NOT touch this
+    /// map) and pruned by the same landblock-unload retains.
+    cell_adjacency: Arc<HashMap<u32, Vec<u32>>>,
     /// Phase 6 step D: world-space AABB for each cell, keyed by full
     /// 32-bit cell id. Used by `current_cell` to pick the indoor cell
     /// containing a position when several Z-stacked cells share the
@@ -865,6 +927,17 @@ pub struct SpatialScene {
     /// only; read through `__diag.collision`. Survives the per-tick
     /// `collision_scene` mirror clone (a `Cell<u64>` copies by value).
     scenery_narrow_hits: std::cell::Cell<u64>,
+    /// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): cumulative count of
+    /// [`Self::exited_envcell_to_outdoor`] BFS walks that hit
+    /// [`EXIT_INDOOR_BFS_MAX_CELLS`] and bailed with "stay indoors".
+    /// That arm is a REFUSAL to re-derive outdoor membership — the exact
+    /// shape of the B11 latch — and before this task it fired silently.
+    /// It should read 0 for the whole life of any real session; a
+    /// non-zero value means some structure's walkable graph exceeded 64
+    /// rooms (raise the cap) or an edge feed is putting non-portal edges
+    /// back into `cell_adjacency` (fix the feed). Same `Cell<u64>`
+    /// diagnostics shape as `scenery_narrow_hits`.
+    exit_bfs_overflows: std::cell::Cell<u64>,
     /// DAT-01 phase 2d/2e — REACHABILITY probe. Bumped once per movement
     /// slice at the scenery arm's site in
     /// `MovementSystem::advance_manual_slice_via_transition`,
@@ -1155,6 +1228,7 @@ impl SpatialScene {
             physics,
             building_aabb_index: Arc::new(HashMap::new()),
             cell_portal_graph: Arc::new(HashMap::new()),
+            cell_adjacency: Arc::new(HashMap::new()),
             cell_aabbs: Arc::new(HashMap::new()),
             cell_seen_outside: Arc::new(HashMap::new()),
             cell_physics_index: Arc::new(HashMap::new()),
@@ -1170,6 +1244,7 @@ impl SpatialScene {
             statics_physics_bsp: Arc::new(HashMap::new()),
             scenery_colliders: Arc::new(HashMap::new()),
             scenery_narrow_hits: std::cell::Cell::new(0),
+            exit_bfs_overflows: std::cell::Cell::new(0),
             scenery_arm_evals: std::cell::Cell::new(0),
             terrain_plane_frame_arm_evals: std::cell::Cell::new(0),
             envcell_static_overlap_arm_evals: std::cell::Cell::new(0),
@@ -1199,7 +1274,7 @@ impl SpatialScene {
     /// built-cell handle cache. MUST be called by every `&mut self` method
     /// that mutates a table `faithful_bridge`'s `build_cell_inner` /
     /// `build_outdoor_cell` / `get_landcell` reads: `cell_physics_bsp`,
-    /// `cell_static_physics_bsp`, `cell_membership`, `cell_portal_graph`,
+    /// `cell_static_physics_bsp`, `cell_membership`, `cell_adjacency`,
     /// `cell_aabbs`, `terrain_heights`, `terrain_water_codes`,
     /// `statics_physics_bsp`. Missing a call site ⇒ STALE collision geometry
     /// (walk-through / phantom walls); an extra call ⇒ only a spurious cache
@@ -1744,12 +1819,35 @@ impl SpatialScene {
     /// records on both sides), so the JS-side population path queues
     /// both directions. The graph itself is directed so test fixtures
     /// can synthesize asymmetric topologies if needed.
+    ///
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): a call here asserts a REAL
+    /// `CellPortal` record — a doorway you can walk through — so the
+    /// edge lands in BOTH [`Self::cell_adjacency`] (physics/camera) and
+    /// `cell_portal_graph` (render). Feed `visible_cells[]` PVS entries
+    /// through [`Self::insert_cell_visible_edge`] instead; those are
+    /// render-only and must never reach adjacency.
     pub fn insert_cell_portal(&mut self, from: u32, to: u32) {
         self.bump_collision_rev();
-        let entry = Arc::make_mut(&mut self.cell_portal_graph).entry(from).or_default();
-        if !entry.contains(&to) {
-            entry.push(to);
-        }
+        push_cell_edge(&mut self.cell_portal_graph, from, to);
+        push_cell_edge(&mut self.cell_adjacency, from, to);
+    }
+
+    /// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): register a directed
+    /// VISIBILITY-ONLY edge `from → to` — one `EnvCell.visible_cells[]`
+    /// entry, the DAT-baked PVS closure Turbine's level-build tools
+    /// authored. Lands in `cell_portal_graph` (so `render_set(cell, 1)`
+    /// still returns the full PVS, matching the `pvs-visibility-snapshot`
+    /// oracle the 2026-05-25 fix was written against) and NOT in
+    /// [`Self::cell_adjacency`].
+    ///
+    /// Deduped against whatever is already there, so a cell listed in
+    /// BOTH `portals[]` and `visible_cells[]` — the common case, a real
+    /// doorway is obviously visible — stays a single union edge and
+    /// keeps its adjacency membership from the `insert_cell_portal`
+    /// call. Order-independent: this never removes an adjacency edge.
+    pub fn insert_cell_visible_edge(&mut self, from: u32, to: u32) {
+        self.bump_collision_rev();
+        push_cell_edge(&mut self.cell_portal_graph, from, to);
     }
 
     /// Phase 6 step D: register a world-space AABB for an indoor cell.
@@ -1791,6 +1889,17 @@ impl SpatialScene {
             let before = edges.len();
             edges.retain(|to| (*to & 0xFFFF_0000) != lb_high);
             edges_removed += before - edges.len();
+            !edges.is_empty()
+        });
+        // PORTAL-GRAPH-SPLIT (2026-08-11): adjacency is a SUBSET of the
+        // union graph and shares its lifetime exactly — same retain, and
+        // its removals do NOT roll into `edges_removed` (that counter is
+        // the union's, and double-counting would break the drain log).
+        Arc::make_mut(&mut self.cell_adjacency).retain(|from, edges| {
+            if (*from & 0xFFFF_0000) == lb_high {
+                return false;
+            }
+            edges.retain(|to| (*to & 0xFFFF_0000) != lb_high);
             !edges.is_empty()
         });
         let aabbs_before = self.cell_aabbs.len();
@@ -1878,6 +1987,14 @@ impl SpatialScene {
     /// recv-loop drain to log progress.
     pub fn cell_portal_graph_len(&self) -> usize {
         self.cell_portal_graph.len()
+    }
+
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): count cells with at least one
+    /// outbound WALKABLE edge. Always `<=` [`Self::cell_portal_graph_len`];
+    /// the gap between the two is how much pure visibility the union
+    /// carries. Diagnostic only.
+    pub fn cell_adjacency_len(&self) -> usize {
+        self.cell_adjacency.len()
     }
 
     /// Phase 6 step D: count cells with cached world AABBs.
@@ -2483,7 +2600,28 @@ impl SpatialScene {
     /// the cell isn't in the graph (no EnvCell loaded yet, or an
     /// outdoor cell). Phase E may want an iterator; today the slice
     /// is plenty.
+    ///
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): reads [`Self::cell_adjacency`] —
+    /// the WALKABLE edges only. Every caller of this accessor is a
+    /// transit consumer (`current_cell`'s re-seat, the camera's
+    /// `clip_segment_to_cell_space` walk, and `faithful_bridge`'s
+    /// `build_cell_inner`, which is modelling retail's
+    /// `CCellPortal::GetOtherCell` list and therefore always meant
+    /// `portals[]` and never the PVS). Renderers want
+    /// [`Self::cell_visibility_neighbours`].
     pub fn cell_portal_neighbours(&self, cell_id: u32) -> &[u32] {
+        self.cell_adjacency
+            .get(&cell_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): visibility neighbours of
+    /// `cell_id` — the UNION of portal-direct edges and the DAT-baked
+    /// `visible_cells[]` PVS. This is what `render_set` walks; it is a
+    /// superset of [`Self::cell_portal_neighbours`] and must not be used
+    /// to decide where a body may travel.
+    pub fn cell_visibility_neighbours(&self, cell_id: u32) -> &[u32] {
         self.cell_portal_graph
             .get(&cell_id)
             .map(|v| v.as_slice())
@@ -2773,16 +2911,23 @@ impl SpatialScene {
     }
 
     /// Does this cell carry at least one outdoor-exit portal edge? True
-    /// when any neighbour in `cell_portal_graph` has the AC outdoor-exit
-    /// sentinel in its low 16 bits (`>= 0xFFFE`, typically `0xFFFF`).
-    /// This is the same predicate `compute_visibility_with_frustum`'s
-    /// outdoor path uses to decide a cell is reachable from outside — a
-    /// building's ground-floor exit room qualifies; an attic reachable
-    /// only through interior portals does not. The B11 exit machinery
-    /// uses it to relax the cell-AABB containment net at a building's
-    /// doorway (see `movement/system.rs`).
+    /// when any neighbour has the AC outdoor-exit sentinel in its low 16
+    /// bits (`>= 0xFFFE`, typically `0xFFFF`). A building's ground-floor
+    /// exit room qualifies; an attic reachable only through interior
+    /// portals does not. The B11 exit machinery uses it to relax the
+    /// cell-AABB containment net at a building's doorway (see
+    /// `movement/system.rs`).
+    ///
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): reads [`Self::cell_adjacency`] —
+    /// "is there a door out of this room" is a movement question. Retail
+    /// only ever writes the sentinel into a `CellPortal.other_cell_id`,
+    /// so on well-formed DAT data the adjacency and union answers agree;
+    /// asking adjacency makes that a guarantee instead of a hope. The
+    /// structurally identical test inside
+    /// `compute_visibility_with_frustum`'s OUTDOOR branch deliberately
+    /// stays on the union — that one is a render decision.
     pub fn cell_has_outdoor_exit(&self, cell_id: u32) -> bool {
-        self.cell_portal_graph
+        self.cell_adjacency
             .get(&cell_id)
             .map(|edges| edges.iter().any(|&n| (n & 0xFFFF) >= 0xFFFE))
             .unwrap_or(false)
@@ -2804,18 +2949,22 @@ impl SpatialScene {
     ///   (c) the capsule centre is within `radius` of that neighbour's AABB —
     ///       i.e. we are physically AT the shared doorway.
     ///
-    /// The geometric near-test (c) is the load-bearing safety differentiator
-    /// from a naive "any portal edge" check: `cell_portal_graph` MERGES true
-    /// portal-direct edges with `visible_cells[]` PVS edges (see
-    /// `insert_cell_portal`), so a bare edge does NOT prove a walkable
-    /// doorway. Requiring a loaded neighbour AABB within a capsule radius
-    /// restricts the relaxation to the doorway straddle — the only place the
-    /// AABB net would wrongly box the player — and the per-poly cell-wall
-    /// clamp remains the wall backstop everywhere.
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): the edge source is now
+    /// [`Self::cell_adjacency`], so a `visible_cells[]` PVS edge cannot
+    /// even be offered here. Before the split this walked the union, and
+    /// the geometric near-test (c) was the ONLY thing standing between a
+    /// PVS edge and a relaxed containment net — which held exactly as
+    /// long as no PVS-visible room happened to have its AABB within a
+    /// capsule radius of the player. That is a coincidence, not an
+    /// invariant: the loose cell AABBs of 45°-rotated dungeon cells
+    /// overlap heavily, and a room three walls away can easily sit
+    /// `radius` from a pose. Test (c) is retained — it is still what
+    /// restricts the relaxation to the doorway straddle rather than the
+    /// whole room — but it is no longer load-bearing for PVS safety.
     pub fn at_interior_doorway(&self, pose: &WorldPosition, cell_id: u32, radius: f32) -> bool {
         let lb_high = cell_id & 0xFFFF_0000;
         let global = pose.global_coords();
-        self.cell_portal_graph
+        self.cell_adjacency
             .get(&cell_id)
             .map(|edges| {
                 edges.iter().any(|&n| {
@@ -2861,10 +3010,16 @@ impl SpatialScene {
     /// Broad+narrow phase mirror the entry test, run in reverse:
     ///   - broad: still within the current cell's radius-padded AABB?
     ///   - narrow: the current cell's `cell_membership` BSP, plus a
-    ///     bounded BFS over `cell_portal_graph` indoor neighbours
+    ///     bounded BFS over [`Self::cell_adjacency`] indoor neighbours
     ///     (foyer-chain mansions hold several interior cells — you only
     ///     exit once you've left ALL of them). Outdoor-exit sentinel
     ///     edges (`>= 0xFFFE`) are NOT followed: they ARE the outdoors.
+    ///
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): that BFS used to run over the
+    /// UNION graph, which is what made [`EXIT_INDOOR_BFS_MAX_CELLS`]
+    /// misfire — see that constant's note. It also made the walk
+    /// semantically wrong: "have I left every room I could walk to" is
+    /// not "have I left every room I can see".
     ///
     /// Guard: returns `None` when the current cell has no
     /// `cell_membership` entry (indoor geometry not baked yet) so a
@@ -2932,17 +3087,19 @@ impl SpatialScene {
         if still_inside(current) {
             return None;
         }
-        // BFS the indoor portal neighbours. If the capsule is inside any
-        // reachable indoor cell, we merely crossed an interior portal —
-        // stay indoors (entry/`current_cell` own which cell). Skip
-        // outdoor-exit sentinels; cap the walk to protect against huge /
-        // malformed graphs (return None = stay indoors on overflow).
+        // BFS the WALKABLE indoor neighbours (PORTAL-GRAPH-SPLIT: adjacency,
+        // not the union — a PVS-visible room is not a room you were ever in).
+        // If the capsule is inside any reachable indoor cell, we merely
+        // crossed an interior portal — stay indoors (entry/`current_cell` own
+        // which cell). Skip outdoor-exit sentinels; cap the walk to protect
+        // against huge / malformed graphs (return None = stay indoors on
+        // overflow, counted in `exit_bfs_overflows` — never silent).
         let mut visited: HashSet<u32> = HashSet::new();
         visited.insert(current);
         let mut frontier: VecDeque<u32> = VecDeque::new();
         frontier.push_back(current);
         while let Some(cell_id) = frontier.pop_front() {
-            let neighbours = match self.cell_portal_graph.get(&cell_id) {
+            let neighbours = match self.cell_adjacency.get(&cell_id) {
                 Some(n) => n,
                 None => continue,
             };
@@ -2955,6 +3112,8 @@ impl SpatialScene {
                     continue;
                 }
                 if visited.len() > EXIT_INDOOR_BFS_MAX_CELLS {
+                    self.exit_bfs_overflows
+                        .set(self.exit_bfs_overflows.get().wrapping_add(1));
                     return None;
                 }
                 if still_inside(neighbour) {
@@ -3367,6 +3526,14 @@ impl SpatialScene {
         self.scenery_narrow_hits.get()
     }
 
+    /// PORTAL-GRAPH-SPLIT (2026-08-11): how many times the
+    /// [`Self::exited_envcell_to_outdoor`] BFS overflowed
+    /// [`EXIT_INDOOR_BFS_MAX_CELLS`] and stayed indoors. Expected 0; see
+    /// the field doc for what a non-zero reading means.
+    pub fn exit_bfs_overflow_count(&self) -> u64 {
+        self.exit_bfs_overflows.get()
+    }
+
     /// DAT-01 phase 2d/2e — record that the movement system reached the
     /// scenery arm's site this slice. Called UNCONDITIONALLY, outside the
     /// `USE_SCENERY_COLLISION` gate; see the `scenery_arm_evals` field doc
@@ -3705,6 +3872,16 @@ impl SpatialScene {
             let before = edges.len();
             edges.retain(|to| !in_set(*to));
             edges_removed += before - edges.len();
+            !edges.is_empty()
+        });
+        // PORTAL-GRAPH-SPLIT (2026-08-11): same batch retain for the
+        // walkable subset (counts stay on the union — see
+        // `clear_cells_for_landblock`).
+        Arc::make_mut(&mut self.cell_adjacency).retain(|from, edges| {
+            if in_set(*from) {
+                return false;
+            }
+            edges.retain(|to| !in_set(*to));
             !edges.is_empty()
         });
         let aabbs_before = self.cell_aabbs.len();
