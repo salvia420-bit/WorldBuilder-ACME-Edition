@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "generated": "2026-08-11T16:20:20.262Z",
+  "metric_defs": {
+    "steady_speed": {
+      "unit": "m/s",
+      "tolerance": 0.05,
+      "how": "median planar speed over the steady window (after the ramp, before release)"
+    },
+    "accel_t90": {
+      "unit": "ms",
+      "tolerance": 40,
+      "how": "time from the first non-zero speed sample to the first sample at >=90% of steady_speed"
+    },
+    "decel_t10": {
+      "unit": "ms",
+      "tolerance": 40,
+      "how": "time from key release to the first sample at <=10% of steady_speed"
+    },
+    "turn_rate": {
+      "unit": "deg/s",
+      "tolerance": 3,
+      "how": "median d(heading)/dt over the steady window, unwrapped across the 0/360 seam"
+    },
+    "jump_apex": {
+      "unit": "m",
+      "tolerance": 0.05,
+      "how": "max z minus z at launch"
+    },
+    "jump_airtime": {
+      "unit": "ms",
+      "tolerance": 50,
+      "how": "launch to the first grounded sample after apex"
+    },
+    "jump_distance": {
+      "unit": "m",
+      "tolerance": 0.1,
+      "how": "planar distance travelled between launch and land"
+    },
+    "cast_lock_ms": {
+      "unit": "ms",
+      "tolerance": 60,
+      "how": "from cast start to the first sample where movement input is honoured again"
+    },
+    "cast_speed_during": {
+      "unit": "m/s",
+      "tolerance": 0.05,
+      "how": "median planar speed while the cast window is active"
+    }
+  },
+  "scenarios": {
+    "run-hold": {
+      "steady_speed": {
+        "value": 7.400044350829442,
+        "tolerance": 0.05,
+        "unit": "m/s"
+      },
+      "release.steady_speed": {
+        "value": 2.65775699689213,
+        "tolerance": 0.05,
+        "unit": "m/s"
+      },
+      "accel_t90": {
+        "value": 1460,
+        "tolerance": 40,
+        "unit": "ms"
+      },
+      "decel_t10": {
+        "value": 1060,
+        "tolerance": 40,
+        "unit": "ms"
+      }
+    }
+  }
+}
