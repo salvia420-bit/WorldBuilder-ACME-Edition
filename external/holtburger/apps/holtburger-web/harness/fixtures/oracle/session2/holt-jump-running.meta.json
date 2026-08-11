@@ -1,0 +1,72 @@
+{
+  "scenario": "jump-running",
+  "generated": "2026-08-11T18:17:42.818Z",
+  "account": "agentp09",
+  "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?moveTelemetry=1&nosw=1&autoLogin=1&account=agentp09&password=agentp09&autoSpawn=first&agent=1&renderOnDemand=1&netDrainHz=30",
+  "capture_site": {
+    "$comment": [
+      "THE SITE IS PART OF THE MEASUREMENT. Both sides @teleloc here before",
+      "every scenario, so the two curves are taken over the same ground facing",
+      "the same way. Session 1 ran each side from wherever its character last",
+      "logged out; the holtburger run happened to be inside a dungeon with the",
+      "avatar pinned against a wall, reporting 7.787 m/s of intent while",
+      "actually travelling ~1.5 m/s.",
+      "",
+      "Samsur was chosen by measurement, not by eye: an 8-site survey",
+      "(2026-08-11, 4.5 s run-hold at each) scored realized/intent and the z",
+      "range over the run. Samsur returned realized 7.787 vs intent 7.787",
+      "(ratio 1.000) with a 0.00 m z range over ~35 m of travel — dead flat",
+      "and completely unobstructed. Yaraq (the character's own home town, and",
+      "where session 1 happened to be) has a 0.99 m z range; Beach Fort is",
+      "unrunnable (realized 0.000, the avatar is against something and only",
+      "the heading moves); Plateau drops 7.16 m over the same run.",
+      "",
+      "heading_deg becomes an explicit quaternion about Z in the @teleloc, so",
+      "the run direction is pinned too — the terrain profile depends entirely",
+      "on which way the avatar faces."
+    ],
+    "name": "Samsur",
+    "cell": "0x977B000C",
+    "x": 25.81,
+    "y": 73.85,
+    "z": 0,
+    "heading_deg": 0,
+    "settle_ms": 14000
+  },
+  "drain_status": 0,
+  "cadence_gate": {
+    "hz": 30,
+    "waited_s": 3,
+    "ok": true
+  },
+  "run_rate": {
+    "rate": 1.9467213153839111,
+    "inputs": null
+  },
+  "quality": {
+    "records": 216,
+    "sample_dt_ms": {
+      "min": 13.699999999953434,
+      "median": 33,
+      "max": 6541.0999999999185
+    },
+    "z_range_m": 0.35487446188926697,
+    "landblocks": [
+      "0x977B000C",
+      "0x977B000D"
+    ],
+    "realized_speed": 7.796084346460785,
+    "intent_speed": 7.786864757537842,
+    "realized_over_intent": 1.0011839924295614,
+    "span_ms": 13596,
+    "expected_span_ms": 9000
+  },
+  "gait": {
+    "ok": true,
+    "gait": "run",
+    "expected": "run",
+    "holds": 1,
+    "reason": "match"
+  },
+  "warnings": []
+}

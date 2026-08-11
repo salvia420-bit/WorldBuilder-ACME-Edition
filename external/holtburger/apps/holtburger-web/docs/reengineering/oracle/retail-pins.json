@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "generated": "2026-08-11T16:20:20.262Z",
+  "version": 2,
+  "generated": "2026-08-11T18:50:46.080Z",
   "metric_defs": {
     "steady_speed": {
       "unit": "m/s",
@@ -49,27 +49,83 @@
     }
   },
   "scenarios": {
+    "walk-hold": {
+      "steady_speed": {
+        "value": 1.848835614834144,
+        "tolerance": 0.05,
+        "unit": "m/s"
+      },
+      "$unresolvable_by_retail_sampling": [
+        "accel_t90"
+      ]
+    },
     "run-hold": {
       "steady_speed": {
-        "value": 7.400044350829442,
+        "value": 7.858644496415664,
         "tolerance": 0.05,
         "unit": "m/s"
       },
-      "release.steady_speed": {
-        "value": 2.65775699689213,
+      "$unresolvable_by_retail_sampling": [
+        "accel_t90",
+        "decel_t10"
+      ]
+    },
+    "run-hold-long": {
+      "steady_speed": {
+        "value": 7.884685612584375,
         "tolerance": 0.05,
         "unit": "m/s"
       },
-      "accel_t90": {
-        "value": 1460,
-        "tolerance": 40,
-        "unit": "ms"
-      },
-      "decel_t10": {
-        "value": 1060,
-        "tolerance": 40,
-        "unit": "ms"
+      "$unresolvable_by_retail_sampling": [
+        "decel_t10"
+      ]
+    },
+    "walk-edge-after-manualheld-walk": {
+      "second_hold.steady_speed": {
+        "value": 7.660424471113562,
+        "tolerance": 0.05,
+        "unit": "m/s"
       }
-    }
+    },
+    "strafe-diagonal": {
+      "steady_speed": {
+        "value": 7.767852921969959,
+        "tolerance": 0.05,
+        "unit": "m/s"
+      },
+      "heading_drift": {
+        "value": 0,
+        "tolerance": null,
+        "unit": null
+      }
+    },
+    "turn-while-run": {
+      "steady_speed": {
+        "value": 2.493251090863881,
+        "tolerance": 0.05,
+        "unit": "m/s"
+      },
+      "turn_rate": {
+        "value": 133.92395560247223,
+        "tolerance": 3,
+        "unit": "deg/s"
+      }
+    },
+    "jump-standing": {},
+    "jump-running": {
+      "flight.steady_speed": {
+        "value": 9.060605872467207,
+        "tolerance": 0.05,
+        "unit": "m/s"
+      },
+      "$unresolvable_by_retail_sampling": [
+        "jump_distance",
+        "jump_apex",
+        "jump_airtime"
+      ]
+    },
+    "cast-stationary": {},
+    "cast-while-moving": {},
+    "stance-switch": {}
   }
 }
