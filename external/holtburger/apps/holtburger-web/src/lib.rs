@@ -53691,11 +53691,36 @@ async fn recv_loop(
                                         use holtburger_world::context::{
                                             WorldContext, WorldContextExt,
                                         };
+                                        // ORACLE open defect #1 (2026-08-11):
+                                        // session 3 read `composed` at exactly
+                                        // the Run-105 rate on all 233 ticks
+                                        // while the login snapshot of the SAME
+                                        // struct reported the +5 augmentation.
+                                        // Four scalars could show the
+                                        // disagreement and not one input to it,
+                                        // so the whole `RunRateInputs` rides
+                                        // here now — including the two fields
+                                        // added for this defect,
+                                        // `aug_joat` (raw property read, null =
+                                        // absent from the bag) and
+                                        // `player_entity_present` (the bag
+                                        // itself: skills live on PlayerState
+                                        // and survive an entity the int
+                                        // properties do not).
+                                        let inputs = w.player_run_rate_inputs();
                                         serde_json::json!({
                                             "rate": w.player_run_rate(),
                                             "server": w.get_player_server_run_rate(),
                                             "composed": w.player_composed_run_rate(),
                                             "latched": w.player.server_run_rate,
+                                            "run_skill_wire": inputs.run_skill_wire,
+                                            "run_skill_used": inputs.run_skill_used,
+                                            "aug_bonus": inputs.run_skill_aug_bonus,
+                                            "aug_joat": inputs.aug_joat,
+                                            "player_entity_present":
+                                                inputs.player_entity_present,
+                                            "burden": inputs.burden,
+                                            "load_mod": inputs.load_mod,
                                         })
                                     };
                                     let record = serde_json::json!({

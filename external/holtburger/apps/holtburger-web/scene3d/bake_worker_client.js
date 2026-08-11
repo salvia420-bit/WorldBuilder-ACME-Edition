@@ -874,6 +874,34 @@ export class BakeWorkerClient {
     return this._readyPromise;
   }
 
+  /**
+   * ORACLE open defect #3 (2026-08-11) — count a main-thread fallback.
+   *
+   * Every fallback site logs `console.warn(... main-thread fallback ...)` and
+   * then runs the decode on the main thread. NOTHING counted it, and the two
+   * that matter most never even reach `_request`, so `byType[t].count` does
+   * not move either: `_ensureWorker()` REFUSES inside the post-crash cooldown
+   * (which doubles geometrically per consecutive crash), and it rejects a
+   * request dropped before dispatch. During such a window
+   * `bakeWorkerStats()` is indistinguishable from a healthy worker that
+   * happens to be idle — while every per-LB bake is parking the main thread.
+   *
+   * That is exactly the first check the ~6.5 s `0x977B000C -> 0x977B000D`
+   * landblock-crossing stall calls for ("did the bake worker fall back to the
+   * main thread?"), and it was unanswerable from the diag surface. It is
+   * answerable now, without a console.
+   */
+  _noteMainThreadFallback(type, error) {
+    try {
+      const s = this._stats || (this._stats = { byType: {}, maxPending: 0 });
+      const f = s.fallbacks || (s.fallbacks = { total: 0, byType: {}, lastError: null, lastAtMs: null });
+      f.total += 1;
+      f.byType[type] = (f.byType[type] || 0) + 1;
+      f.lastError = String((error && error.message) || error || "unknown");
+      f.lastAtMs = Math.round((typeof performance !== "undefined") ? performance.now() : Date.now());
+    } catch (_) { /* stats must never affect the request */ }
+  }
+
   _request(type, body) {
     const id = this._seq++;
     // Session 7 (1114 §3) — per-request latency + backlog depth, aggregated
@@ -1160,6 +1188,7 @@ export class BakeWorkerClient {
       });
       return reconstructModelMeshes(res.payload);
     } catch (e) {
+      this._noteMainThreadFallback("fetchModelMeshes", e);
       console.warn("[bake_worker_client] model-mesh worker failed; main-thread fallback:", e);
       return wasmExports.fetch_model_meshes(ids, urgent);
     }
@@ -1240,6 +1269,7 @@ export class BakeWorkerClient {
       });
       return applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit);
     } catch (e) {
+      this._noteMainThreadFallback("fetchSurfacesPixels", e);
       console.warn("[bake_worker_client] surface worker failed; main-thread fallback:", e);
       return wasmExports.fetch_surfaces_pixels(dids, urgent);
     }
@@ -1357,6 +1387,7 @@ export class BakeWorkerClient {
       });
       return applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit);
     } catch (e) {
+      this._noteMainThreadFallback("fetchEntitySurfacesPixels", e);
       console.warn(
         "[bake_worker_client] entity-surface worker failed; main-thread fallback:",
         e,
@@ -1492,6 +1523,7 @@ export class BakeWorkerClient {
       });
       return applySurfaceAudit(reconstructEntitySurfacesBatch(res.payload), res.audit);
     } catch (e) {
+      this._noteMainThreadFallback("fetchEntitySurfacesPixelsBatch", e);
       console.warn(
         "[bake_worker_client] entity-surface-batch worker failed; main-thread fallback:",
         e,
@@ -1587,7 +1619,14 @@ export function getBakeWorkerClient() {
             })),
           };
           const batchMax = _singleton?.batchMax ?? 0;
-          if (!s) return { active: !!_singleton?.active, batchMax, byType: {}, maxPending: 0, queue };
+          // ORACLE open defect #3 — main-thread fallbacks, counted. `total > 0`
+          // means bake decode ran ON THE MAIN THREAD; `lastError` names why.
+          // A crash-backoff window produces fallbacks with NO `byType.count`
+          // movement at all, which is why this cannot be derived from `failed`.
+          const fallbacks = s?.fallbacks
+            ? { ...s.fallbacks, byType: { ...s.fallbacks.byType } }
+            : { total: 0, byType: {}, lastError: null, lastAtMs: null };
+          if (!s) return { active: !!_singleton?.active, batchMax, byType: {}, maxPending: 0, queue, fallbacks };
           const byType = {};
           for (const [type, b] of Object.entries(s.byType)) {
             byType[type] = {
@@ -1604,7 +1643,7 @@ export function getBakeWorkerClient() {
               totalDepth: b.totalDepth,
             };
           }
-          return { active: !!_singleton?.active, batchMax, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType, queue };
+          return { active: !!_singleton?.active, batchMax, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType, queue, fallbacks };
         };
       }
     } catch (_) {}

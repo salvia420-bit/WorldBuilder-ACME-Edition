@@ -279,6 +279,31 @@ pub struct RunRateInputs {
     /// composed run skill ([`run_skill_augmentation_bonus`]). Reported so a
     /// capture can tell "we and ACE agree" from "we and ACE agree by luck".
     pub run_skill_aug_bonus: f32,
+    /// ORACLE open defect #1 (2026-08-11): the RAW
+    /// `AugmentationJackOfAllTrades` read, `None` when the property is not in
+    /// the bag. Session 3 measured `composed` at exactly the Run-105 rate on
+    /// all 233 ticks (1.9467213 — arithmetically `run_skill 105.000` with
+    /// `load_mod 1.0`) while the login-time snapshot of THIS SAME struct
+    /// reported `run_skill_aug_bonus: 5`. Same helper, same reads, two
+    /// answers, so something under the read changed — and
+    /// `run_skill_aug_bonus: 0` alone cannot say what. This does.
+    pub aug_joat: Option<i32>,
+    /// ORACLE open defect #1: whether the local player ENTITY exists at all.
+    /// This is the discriminator the last capture lacked. EVERY
+    /// `get_player_int_property` read goes through
+    /// `player_entity().properties`, while skills and attributes live on
+    /// `PlayerState` and survive independently — so an absent entity reads as
+    /// "no augmentations" while the Run skill keeps composing perfectly.
+    ///
+    /// * `false` ⇒ the entity is gone (the `@teleloc` remove-without-recreate
+    ///   shape; `upsert_entity_from_create` re-seeds from
+    ///   `player_description_properties` on a CREATE, but nothing re-seeds a
+    ///   delete that is never followed by one);
+    /// * `true` with `aug_joat: null` ⇒ the entity is live and the property
+    ///   itself is missing (never delivered, or removed by an update);
+    /// * `aug_joat: Some(n>0)` with `run_skill_aug_bonus: 0` ⇒ the helper is
+    ///   at fault, which nothing currently suggests.
+    pub player_entity_present: bool,
 }
 
 impl RunRateInputs {
@@ -290,11 +315,15 @@ impl RunRateInputs {
         fn ou(v: Option<u32>) -> String {
             v.map_or_else(|| "null".to_string(), |x| x.to_string())
         }
+        fn oi(v: Option<i32>) -> String {
+            v.map_or_else(|| "null".to_string(), |x| x.to_string())
+        }
         format!(
             "{{\"run_rate\":{},\"run_skill_used\":{},\"run_skill_source\":\"{}\",\
              \"run_skill_wire\":{},\"quickness\":{},\"burden\":{},\"load_mod\":{},\
              \"encumbrance\":{},\"capacity\":{},\"strength\":{},\"num_augs\":{},\
-             \"server_run_rate\":{},\"run_skill_aug_bonus\":{}}}",
+             \"server_run_rate\":{},\"run_skill_aug_bonus\":{},\
+             \"aug_joat\":{},\"player_entity_present\":{}}}",
             of(self.run_rate),
             of(self.run_skill_used),
             self.run_skill_source.as_str(),
@@ -308,6 +337,8 @@ impl RunRateInputs {
             self.num_augs,
             of(self.server_run_rate),
             self.run_skill_aug_bonus,
+            oi(self.aug_joat),
+            self.player_entity_present,
         )
     }
 }
@@ -607,6 +638,13 @@ pub trait WorldContextExt: WorldContext {
         // Quickness is still REPORTED for the capture diff, never consumed.
         let server_run_rate = self.get_player_server_run_rate();
         let run_skill_used = self.player_composed_run_skill();
+        // ORACLE open defect #1 — the two fields that make the NEXT capture
+        // decisive instead of suggestive. See the struct docs.
+        let aug_joat = self.get_player_int_property(PropertyInt::AugmentationJackOfAllTrades);
+        let player_entity_present = self
+            .get_player_guid()
+            .and_then(|guid| self.get_entity(guid))
+            .is_some();
         let run_skill_source = match (server_run_rate, run_skill_used) {
             (Some(_), _) => RunSkillSource::ServerRunRate,
             (None, Some(_)) => RunSkillSource::WireRunSkill,
@@ -637,6 +675,8 @@ pub trait WorldContextExt: WorldContext {
                     .unwrap_or(0),
                 self.get_player_skill_is_specialized(SkillType::Run),
             ),
+            aug_joat,
+            player_entity_present,
         }
     }
 
@@ -1433,6 +1473,82 @@ mod tests {
         assert_eq!(i.run_rate, None);
         assert_eq!(none.player_run_rate(), None);
         assert!(i.to_json().contains("\"run_rate\":null"));
+    }
+
+    /// ORACLE open defect #1 (2026-08-11) — the two fields that make the next
+    /// capture decisive.
+    ///
+    /// Session 3's per-tick provenance read `composed 1.9467213` on all 233
+    /// ticks of `run-hold-long` while the login-time snapshot of the same
+    /// `RunRateInputs` reported `run_skill_aug_bonus: 5`. 1.9467213 is
+    /// arithmetically `run_skill == 105.000` at `load_mod 1.0`
+    /// (`(1·(105/305·11)+4)/4`), so the augmentation term was EXACTLY zero at
+    /// run time — but four scalars could not say whether the property had gone
+    /// or the whole player entity had.
+    ///
+    /// The split that makes those different failures: skills and attributes
+    /// live on `PlayerState`, int properties live on the player ENTITY. An
+    /// entity that disappears therefore reads as "no augmentations" while the
+    /// Run skill keeps composing perfectly — the exact observed shape.
+    #[test]
+    fn run_rate_inputs_discriminate_absent_entity_from_absent_augmentation() {
+        let player_guid = Guid(0x5000_0001);
+        // Run 105 + Strength 100 + empty inventory = the oracle rig's char.
+        let rig = || TestWorld {
+            player_guid: Some(player_guid),
+            player_attributes: HashMap::from([(AttributeType::StrengthAttr, 100)]),
+            player_skills: HashMap::from([(SkillType::Run, 105)]),
+            ..Default::default()
+        };
+
+        // (a) The MEASURED state: no augmentation reaches the movement lane.
+        // Reproduces `composed` to the f32 bit.
+        let bare = rig();
+        let i = bare.player_run_rate_inputs();
+        assert_eq!(i.run_skill_used, Some(105.0));
+        assert_eq!(i.run_skill_aug_bonus, 0.0);
+        assert_eq!(i.aug_joat, None, "raw read says the property is ABSENT");
+        assert_eq!(
+            bare.player_composed_run_rate(),
+            Some(1.946_721_3),
+            "the exact number session 3 saw on all 233 ticks"
+        );
+
+        // (b) Property present on a live entity — what login measured.
+        let mut augmented = rig();
+        augmented.entities.insert(player_guid, entity(player_guid, "agentp09"));
+        augmented
+            .player_int_properties
+            .push((PropertyInt::AugmentationJackOfAllTrades, 1));
+        let i = augmented.player_run_rate_inputs();
+        assert_eq!(i.aug_joat, Some(1));
+        assert_eq!(i.run_skill_aug_bonus, 5.0);
+        assert_eq!(i.run_skill_used, Some(110.0));
+        assert!(i.player_entity_present);
+        assert!(i.to_json().contains("\"aug_joat\":1"));
+        assert!(i.to_json().contains("\"player_entity_present\":true"));
+
+        // (c) The two failure shapes are now TELLABLE APART. Both compose 105
+        // and both report `run_skill_aug_bonus: 0`; only these fields differ.
+        //   entity gone      → player_entity_present false
+        let gone = rig(); // no entity inserted
+        let i_gone = gone.player_run_rate_inputs();
+        assert!(!i_gone.player_entity_present);
+        assert_eq!(i_gone.aug_joat, None);
+        //   entity live, property not in the bag → present true, aug_joat null
+        let mut live_no_prop = rig();
+        live_no_prop
+            .entities
+            .insert(player_guid, entity(player_guid, "agentp09"));
+        let i_live = live_no_prop.player_run_rate_inputs();
+        assert!(i_live.player_entity_present);
+        assert_eq!(i_live.aug_joat, None);
+        assert!(i_live.to_json().contains("\"player_entity_present\":true"));
+        assert!(i_live.to_json().contains("\"aug_joat\":null"));
+        // ... and the thing they have in common is exactly what the last
+        // capture could see, which is why it could not choose between them.
+        assert_eq!(i_gone.run_skill_used, i_live.run_skill_used);
+        assert_eq!(i_gone.run_skill_aug_bonus, i_live.run_skill_aug_bonus);
     }
 
     /// AUG-CAP (2026-06-06): the augmentation carry-capacity bonus is capped at
