@@ -80,6 +80,11 @@ const TIER1 = [
   { flag: "hookDrain", file: "test_hook_fire_queue.mjs" },
   { flag: "surfaceUnified+surfaceParityV2", file: "test_f7_8_surface_bitfield.mjs" },
   { flag: "scriptQueue", file: "test_script_manager.mjs" },
+  // SCRIPTMGR-RATE (2026-08-11): the A11-S1 SEAM, which test_script_manager.mjs
+  // cannot see — it builds entries with `{startTime}` by hand, so it never
+  // exercised the `time`-vs-`startTime` gap that collapsed the real queue's
+  // schedule. This one lifts the shipped decoder out of entities.js.
+  { flag: "scriptHookTime", file: "harness/test_script_hook_time.mjs" },
   { flag: "particleOwner", file: "test_particle_owner.mjs" },
   { flag: "preCreateBuffer", file: "test_a8_m4_pre_create_buffer.mjs" },
   { flag: "retailRunKeys(JS)", file: "test_a14_i3_run_keys.mjs" },

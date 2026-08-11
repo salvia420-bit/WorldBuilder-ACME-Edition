@@ -1850,6 +1850,43 @@ const SCRIPT_QUEUE_ON = (() => {
     return false;
   }
 })();
+// SCRIPTMGR-RATE (2026-08-11) — `?scriptHookTime` (DEFAULT ON; `=off` restores
+// the legacy collapsed schedule). `_decodePhysicsScriptHookEntry` emits the
+// `AnimationHookJs` shape `_fireHook` reads, whose hook-offset field is named
+// `time`. `ScriptManager` keys its ENTIRE schedule off `entry.startTime`
+// (script_manager.js:134/140/183), so on the queue path every decoded entry
+// read `+undefined || 0` ⇒ 0: each script's `length` collapsed to 0 and every
+// hook armed at `script.startTime + 0`. A 0x33 chain therefore fired ALL its
+// hooks in the first `update()` that reached it, and a CallPES self-loop
+// re-armed with zero delay — one full loop iteration PER FRAME.
+// Measured against the real DAT (client_portal.dat 0x330006DA = SoundTweaked
+// @t=0 + CallPES(self, pause=0.0) @t=2.7): a 400 s session at 17.5 fps runs
+// `scriptsCompleted` to exactly 7,000 (the PORTAL-SWIRL-RENDER side
+// observation, reproduced arithmetically) instead of 400/2.7 ≈ 148 — a 47x
+// over-run that also replays the loop's SoundTweaked ~17x/s.
+// ON: the decoder additionally carries `startTime` (the SAME `+e.startTime||0`
+// it already computes for `time`), so the queue honors per-hook offsets like
+// retail `ScriptManager::NextHook` (acclient.c:329142-329187) and like the
+// legacy `?scriptQueue=off` walker's per-hook `setTimeout` delays. Nothing
+// else changes: `time` is still emitted for `_fireHook`, and the hook payload
+// decode is untouched. `=off` is the byte-identical legacy (collapsed) arm.
+// FOOTNOTE — the derived `length` is EXACT, not the approximation
+// script_manager.js's header calls it: retail `PhysicsScript::UnPack`
+// (acclient.c:336452-336528) qsorts `script_data` then assigns
+// `PhysicsScript::length` from the LAST entry's `start_time` (the two dwords
+// written at `v4+18`/`v4+19`, immediately past `num_in_array`), i.e. retail's
+// own `length` IS max(start_time). No wasm getter is needed.
+const SCRIPT_HOOK_TIME_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("scriptHookTime")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 
 // A5-P1 (2026-06-12, W3+ S5) — `?hookDrain` (DEFAULT-ON — `!== "off"`
 // reader; `=off` disables) routes the
@@ -13640,6 +13677,13 @@ export class EntityManager {
     // `?scriptQueue` flag's 'byte-identical / no drift' contract forbids. We do
     // NOT read `e.direction` at all (it stays a property of the wire entry only).
     const h = { hookType, time, direction: 0 };
+    // SCRIPTMGR-RATE (2026-08-11): `time` is the `_fireHook`/`AnimationHookJs`
+    // field name; `ScriptManager` schedules on `startTime`, which read
+    // `undefined` here from A11-S1 (2026-06-11) until today — collapsing every
+    // script to length 0 / all-hooks-at-t0 and turning a CallPES self-loop into
+    // a per-frame loop (see `SCRIPT_HOOK_TIME_ON` above for the arithmetic).
+    // Carry BOTH names — additive, so `_fireHook` is unaffected.
+    if (SCRIPT_HOOK_TIME_ON) h.startTime = time;
     switch (hookType) {
       case 1: // Sound — wave DID @0
         h.soundWaveId = u32(0);
