@@ -108,6 +108,62 @@ function setSearch(search) {
   globalThis.window.location = { search };
 }
 
+// ---------------------------------------------------------------------------
+// CTX-LOSS-MIRRORS (2026-08-11) — two doubles that used to be KINDER THAN THE
+// BROWSER, which is why this suite read 112/0 while the first live
+// context-loss arm on the T4 read `mirrorRestoreFailed=6, mirrorRestores=0`
+// and six "will render BLACK" console errors.
+//
+//   1. the mock worker ignored `postMessage`'s second argument, so nothing was
+//      ever transferred — but `_workerTranscodeXu7` (xu7_textures.js:943-948)
+//      transfers the whole-buffer view it is handed, which DETACHES it;
+//   2. the mock controller minted a FRESH ArrayBuffer per `need()`, but the
+//      real one LATCHES a settled entry and hands every later caller the SAME
+//      buffer (pack_fetch_controller.js:467-469 + 507-521).
+//
+// Put together in the browser and not in the suite: the boot-time upgrade
+// detaches the controller's latched buffer, and the rehydrate that follows a
+// context loss gets that detached buffer back. Both doubles are now faithful.
+// ---------------------------------------------------------------------------
+
+/** What `Worker.postMessage(msg, transfers)` does to its transfer list. Node
+ *  has no explicit detach; `structuredClone` with a transfer list performs the
+ *  same DetachArrayBuffer. */
+function detachTransfers(transfers) {
+  for (const t of transfers || []) {
+    try { structuredClone(t, { transfer: [t] }); } catch (_) { /* not transferable */ }
+  }
+}
+
+/**
+ * A `need()` with the REAL controller's latch semantics: one buffer per URL,
+ * handed out again on every later call for that URL (pack_fetch_controller.js
+ * `settleSuccess` never deletes a success entry). `forget(url)` drops the
+ * latch, exactly as the controller's does, so the next `need()` re-fetches.
+ */
+function makeLatchingController(bytesFor = () => new Uint8Array([1, 2, 3]).buffer) {
+  const latched = new Map();
+  const calls = [];
+  const fetches = [];
+  return {
+    armed: true,
+    need: async (url, opts = {}) => {
+      calls.push({ url, ...opts });
+      if (!latched.has(url)) {
+        fetches.push(url);
+        latched.set(url, bytesFor(url));
+      }
+      return latched.get(url);
+    },
+    forget: (url) => latched.delete(url),
+    // test-side views
+    _calls: calls,
+    _fetches: fetches,
+    _latched: latched,
+    _reset() { latched.clear(); calls.length = 0; fetches.length = 0; },
+  };
+}
+
 /** Build a valid HBC7 container with a FULL halving chain, deterministic
  *  per-level fill (level index + seed). */
 function makeHbc7(w, h, seed = 0) {
@@ -400,10 +456,13 @@ console.log("PART 7 — materials vertical: PVW build, lane-T upgrade, demote");
   });
 
   // Mock texture worker: answers any xu7 job with the FULL fixture chain
-  // (+ NRA rider when asked) — the T14 mock-worker pattern.
+  // (+ NRA rider when asked) — the T14 mock-worker pattern. It also DETACHES
+  // its transfer list, because a real `Worker.postMessage(msg, transfers)`
+  // does (see `detachTransfers`).
   class MockWorker {
     constructor() { this.onmessage = null; }
-    postMessage(msg) {
+    postMessage(msg, transfers) {
+      detachTransfers(transfers);
       if (msg.type === "init") {
         queueMicrotask(() => this.onmessage && this.onmessage({ data: { type: "ready" } }));
         return;
@@ -567,7 +626,8 @@ console.log("PART 8 — T15R: rehydrate-v3 full-tier mirror seam + demote rung")
 
   class MockWorker {
     constructor() { this.onmessage = null; }
-    postMessage(msg) {
+    postMessage(msg, transfers) {
+      detachTransfers(transfers);
       if (msg.type === "init") {
         queueMicrotask(() => this.onmessage && this.onmessage({ data: { type: "ready" } }));
         return;
@@ -605,12 +665,10 @@ console.log("PART 8 — T15R: rehydrate-v3 full-tier mirror seam + demote rung")
         : "",
   });
 
-  let laneNeeds = 0;
-  const controller = {
-    armed: true,
-    need: async () => { laneNeeds += 1; return new Uint8Array([1, 2, 3]).buffer; },
-  };
+  const controller = makeLatchingController();
+  const laneNeedCount = () => controller._calls.length;
   const armAll = (search = "?texCompressedOnly=on&texWorkers=on") => {
+    controller._reset();
     _resetBc7ForTest();
     _resetTexCompressedOnlyForTest();
     _resetTexWorkerForTest();
@@ -658,18 +716,53 @@ console.log("PART 8 — T15R: rehydrate-v3 full-tier mirror seam + demote rung")
   check("release is idempotent", releaseFullTierMirror(RS) === 0);
 
   // ---- rehydrate (source-keyed: re-fetch CAS → re-transcode) -------------
-  const needsBefore = laneNeeds;
+  const needsBefore = laneNeedCount();
+  const wireFetchesBefore = controller._fetches.length;
   const pass = await rehydrateReleasedTextures({ reason: "test", timeoutMs: 5000 });
   check("restore pass rehydrated the released mirror",
     pass.rehydrated === 1 && pass.failed === 0, JSON.stringify(pass));
   check("pixels are back at the right dims", textureHasPixels(fullTex) === true &&
     fullTex.mipmaps[0].data.byteLength === bc7LevelBytes(64, 64));
   check("rehydrator re-fetched the SOURCE (lane-T need fired again)",
-    laneNeeds === needsBefore + 1);
+    laneNeedCount() === needsBefore + 1);
+  // CTX-LOSS-MIRRORS: "need fired again" is NOT "the wire was read again" —
+  // a latched entry answers without a fetch. The upgrade consumes its payload
+  // (the worker transcode transfers it), so the latch must have been dropped
+  // and this second `need` must be a REAL re-fetch, or the rehydrator is
+  // handed a buffer somebody already ate.
+  check("...and that need was a REAL re-fetch, not a latched (consumed) buffer",
+    controller._fetches.length === wireFetchesBefore + 1,
+    `fetches ${wireFetchesBefore} -> ${controller._fetches.length}`);
   check("restore counted, zero misses",
     texStats().mirrors.release.restores === 1 && texStats().mirrors.release.restoreFailed === 0);
   check("restored mirror re-adopted into the budgeted record cache",
     (bc7Source()?.recordCacheStats().records ?? 0) >= 1);
+
+  // ---- TWO DIDs, ONE rsId (the same defect without a context loss) -------
+  // Retail shares one RenderSurface across many Surface DIDs, so the lane-T
+  // upgrade can run twice against ONE CAS url. Both calls latch the same
+  // entry; if the first consumes it, the second reads a corpse. This is the
+  // unforced half of the CTX-LOSS-MIRRORS defect and the standing candidate
+  // explanation for the T4 arm's unexplained `fullFailed = 18`.
+  {
+    const SHARED_DID2 = 0x08000057;
+    armAll();
+    const nsShared = makeNs();
+    nsShared.surface_meta_sync = (d) =>
+      (d === DID || d === SHARED_DID2 ? metaFor(d, RS) : "");
+    initTexCompressedOnly({ wasmNs: nsShared, controller });
+    const mcS = new MaterialCache();
+    const matS1 = await mcS.get(DID, async () => [null]);
+    await new Promise((r) => setTimeout(r, 50));
+    const matS2 = await mcS.get(SHARED_DID2, async () => [null]);
+    await new Promise((r) => setTimeout(r, 50));
+    check("both DIDs sharing one rsId reached the full tier",
+      bc7Stats().fullSwaps === 2 && matS1.map.image.width === 64 &&
+        matS2.map.image.width === 64,
+      `fullSwaps=${bc7Stats().fullSwaps} fullFailed=${bc7Stats().fullFailed}`);
+    check("no lane-T fetch failure on the second consumer of the same url",
+      bc7Stats().fullFailed === 0, `fullFailed=${bc7Stats().fullFailed}`);
+  }
 
   // ---- eviction drives the release (the D-05.7 identity) -----------------
   armAll("?texCompressedOnly=on&texWorkers=on&bc7RecordsMB=1");
