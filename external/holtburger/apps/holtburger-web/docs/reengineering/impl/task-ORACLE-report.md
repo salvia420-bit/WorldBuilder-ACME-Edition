@@ -426,3 +426,206 @@ measurement.
    `1.6 x run_rate` (1.6 x 1.94672 = 3.1148, matching 3.120 to 3 decimals),
    while retail's `apply_run_to_command` is documented to scale only the RUN
    arm. If that holds it is a second run-rate-shaped defect.
+
+---
+
+# task-ORACLE session 3 (2026-08-11) — the run rate, closed
+
+Session 2 established the number and named its cause. Session 3 implements the
+owner's directive, finds that the cause was one layer deeper than the card
+said, and — while measuring the result — finds two defects in the differ that
+had been quietly fabricating values on both sides of every stall.
+
+**`run-hold-long / steady_speed` goes from a −1.0% FAIL to a −0.1% PASS**, and
+the residual 0.1% is not a client difference at all: it is a Vitae
+enchantment on one of the two test characters.
+
+## S3.1 The directive, and what the decomp says about it
+
+> **Owner directive, 2026-08-11:** adopt the server-provided run rate for the
+> local player — retail-faithful.
+
+Implemented, default-on, `?serverRunRate=off` to restore the stage-1 order.
+The reversal is recorded as a DEVIATION block in the stage-1 decision doc
+(`docs/2026-06-11-unified-movement-pipeline/DESIGN.md` §2 defect 1).
+
+The directive's premise deserves a correction on the record, because the
+decomp does not support the "retail-faithful" half of it:
+
+| | |
+|---|---|
+| Retail DOES stamp the wire rate | `CMotionInterp::apply_interpreted_movement` — `if (interpreted_state.forward_command == 0x44000007) my_run_rate = interpreted_state.forward_speed` (acclient.c:344161-344162) |
+| …but only inside `unpack_movement` | and `CPhysics::SetObjectMovement` gates that on `autonomous == 0 \|\| !player_controlled` (:311186-311190) |
+| and every frame carrying the rate is autonomous | measured across all seven retail pcaps: `forward_command 7 → forward_speed 1.975806474685669`, `server_control 0`, `autonomous true`. Walk frames carry no `forward_speed` at all. |
+| so retail's LOCAL player never latches one | it re-derives per command through the weenie `InqRunRate` vfptr → `CACQualities::InqRunRate` (:443696-443770) — a LOCAL composition |
+
+Honouring retail's gate would have made the latch dead code. The directive is
+therefore implemented as a deliberate, documented departure, and the gate
+itself is encoded as an executable pin
+(`retail_behavior_tests::runrate_105::t_retail_skips_the_autonomous_self_echo`)
+so the deviation cannot rot into folklore.
+
+## S3.2 The root cause was one layer under the card
+
+The card said holtburger's recomputation "loses 5 points — either the skill
+value it reads is Base-like rather than ACE's `Current`, or the burden term is
+not 1.0." Neither. `ace_shard` says both characters carry
+**`AugmentationJackOfAllTrades = 1`**, and *both* retail and ACE add 5 for it:
+
+```
+retail  CACQualities::InqRunRate :443741   if (InqInt(0x146) > 0) runskill += 5
+ACE     CreatureSkill.GetAugBonus_Current  total += AugmentationJackOfAllTrades * 5
+us      derive_skill_value                 (nothing)
+```
+
+The stage-1 spec's own wording — "wire Run skill `Current` exactly as ACE
+composes it (formula base + init + ranks)" — is short by three terms
+(`LumAugAllSkills`, `AugmentationJackOfAllTrades`, `LumAugSkilledSpec`).
+`run_skill_augmentation_bonus` adds all three. Note that holtburger's OTHER
+skill implementation, `holtburger-core::client::skill_info::SkillInfo::current`
+(the retail `SkillInfo.cs` port that feeds the character sheet), has had them
+since it was written: the character panel showed 110 while the movement lane
+ran on 105.
+
+## S3.3 THE NUMBERS
+
+Both sides re-captured this session at the same Samsur site.
+Report: `docs/reengineering/oracle/third-parity-report.md`.
+Pins: `retail-pins.json` (run-hold-long + strafe-diagonal re-pinned).
+
+| scenario / metric | retail | holtburger | delta | verdict |
+|---|---:|---:|---:|---|
+| **run-hold-long / steady_speed** | **7.895 m/s** | **7.884 m/s** | **−0.011 (−0.1%)** | **PASS** (was −1.0% FAIL) |
+| strafe-diagonal / steady_speed | 8.468 | 8.362 | −0.106 (−1.3%) | FAIL — but now a REAL comparison, see S3.5 |
+
+The per-tick provenance block (S3.4) reports the same four values on all 233
+ticks of the measured run:
+
+```
+composed 1.9467213   server 1.9700646   latched 1.9700646   rate 1.9700646
+```
+
+Read that carefully, because it says three things at once:
+
+1. **Fix A is what is doing the work.** The latch fires, and the integrator
+   consumes the server's rate.
+2. **Fix B is not reaching the movement lane.** `composed` is still the
+   Run-105 rate at run time, even though the login-time stats snapshot
+   reports `run_skill_aug_bonus: 5` and `run_skill_used: 110`. The
+   augmentation property is visible to the stats publisher and not to the
+   movement lane's property read — an open defect (S3.7).
+3. **The server said 109, not 110.** `agentp09` carries a Vitae enchantment
+   (spell 666, ×0.99) and `agentp08` does not. ACE's `CreatureSkill.Current`
+   scales by vitae BEFORE adding the JackOfAllTrades +5: `105 × 0.99 + 5 =
+   108.95 → 109` → rate 1.9700646 → ground speed 7.880258, against the
+   measured intent of **7.880238**. The −0.1% residual in the table above IS
+   that vitae penalty. It is a character difference, not a client one.
+
+Which is the case for the directive, stated as a number: to match the server
+by composition the client would have to model vitae, three augmentation
+terms, and every enchantment multiplier and additive. The server's value is
+right by construction.
+
+## S3.4 Two more ways the differ was fabricating numbers
+
+Both found by disbelieving a result, and both would have produced a confident
+wrong answer for this session's headline.
+
+**(a) The stall guard did not guard.** Session 2 nulled a stalled sample's
+speed so `resample` could not USE it. But a nulled sample is simply absent
+from `resample`'s point list, so the grid loop drew a straight line from the
+last sample before the stall to the first one after it. On the first
+acceptance capture — whose release landed inside a 6.4 s stall — that ramp
+dragged the steady window down and the report read **7.573 m/s** for a run
+whose observed samples were a flat 7.883. With bridging refused: **7.884**.
+
+**(b) `resample` also extended past the end of the data.** A re-take whose
+stall landed in the PRE-ROLL pushed the whole hold to the end of the capture;
+60% of the steady window then sat past the last sample, filled by repeating
+the post-keyup at-rest value, and the report read a confident **0 m/s** — a
+−100% FAIL — for a run the same capture's quality block put at 7.88. With the
+end clamp: **7.873**.
+
+A `MIN_WINDOW_COVERAGE` floor (0.25) now rejects windows a stall almost
+entirely ate. The floor is low on purpose and the number is measured: a
+perfectly usable capture on this laptop keeps only ~47% of its steady window.
+A 0.5 floor threw that capture away.
+
+*Consequence for the record:* session 2's `-1.0%` and `7.806` were computed by
+the bridging differ, so they are not directly comparable to the numbers above.
+The bridge-independent statement of the same defect is the rate itself —
+**1.9467213 (Run 105) against the server's 1.9700646** — which is what the
+`?serverRunRate=off` arm still reports at run time today, and what the
+per-tick `composed` field shows.
+
+## S3.5 MOVE-F6 settled: retail's key map, from the client's own help file
+
+Session 2's retail strafe arm produced no `SIDESTEP_COMMAND` and the row was
+unreadable. The map is not a matter of opinion — the shipped client documents
+it in `helpcontent/MOVING WITH THE KEYBOARD.ksml`, one `cat` away on the rig:
+**W forward, X back, A/D TURN, Z/C SIDESTEP, Q auto-run, SPACE jump.**
+
+The old map (`a↔q`, `d↔e`) was right for the TURN axis by luck — which is why
+`turn-while-run` turned at 134 deg/s and the map looked verified — and sent
+the strafe axis into retail's **E, which is bound to nothing**. Worse, it sent
+holtburger's `a` to retail's **Q, which toggles AUTO-RUN**: a left-strafe
+scenario would have latched a run that outlived every subsequent keyup in the
+session. A selftest now asserts no scenario key can ever map onto Q.
+
+With `C`, the retail capture carries what it should:
+
+```
+s2c UpdateMotion 0x50000178  sidestep_command 15 (SIDESTEP_RIGHT)
+                             sidestep_speed 2.4658  forward_command 7  forward_speed 1.9758065
+```
+
+So MOVE-F6 has its first real comparison: **retail 8.468, holtburger 8.362**.
+Note the SIGN — a2's DEVIATION D1 predicted holtburger would be FASTER on the
+diagonal (an uncapped axis sum); it is slower, by more than the vitae
+difference accounts for (−1.3% measured, −0.29% explained). D1 is not
+confirmed and the row is now a live, measurable question rather than a
+stalemate.
+
+## S3.6 Test counts (all measured)
+
+| suite | command | before | after |
+|---|---|---|---|
+| movement core | `cargo test -p holtburger-core --lib` | 633 | **643 passed / 0 failed / 1 ignored** (+10 `runrate_105` pins) |
+| world | `cargo test -p holtburger-world --lib` | — | **687 passed / 0 failed** |
+| differ | `node harness/oracle-diff.mjs --selftest` | 27 | **33 passed / 0 failed** |
+| scenario driver | `node harness/oracle-run.mjs --selftest` | 23 | **32 passed / 0 failed** |
+| flag lint | `node scripts/lint-url-flags.mjs --strict` | 3 PRESENCE-GUARD | **unchanged, 0 undocumented** (the 3 are pre-existing; verified by stashing this session's edits) |
+| flag polarity | `node scripts/audit-flag-defaults.mjs` | exit 0 | **exit 0, 0 mismatches** |
+
+`cargo test -p holtburger-web --lib` has ONE pre-existing failure
+(`tests_substitution::resolve_static_placement_frame_orders`), confirmed
+pre-existing by stashing this session's `lib.rs` edit.
+
+## S3.7 The remainder (re-ranked)
+
+1. **The augmentation property does not reach the movement lane.** Fix B is
+   correct and unit-pinned, but at run time `player_composed_run_rate()` still
+   reads Run 105 while the stats publisher reads 110 — same world, same
+   helper. Likeliest suspect is the player ENTITY's property bag being rebuilt
+   (the `player_description_properties` re-seed path exists for exactly this
+   class) around the `@teleloc`. Today this is masked by fix A; it stops being
+   masked in the boot window before the first RunForward echo.
+2. **The client composition does not model vitae.** ACE scales
+   `CreatureSkill.Current` by it; we do not. Second-order while fix A is on,
+   and a second argument for keeping it on.
+3. **The ~6.5 s stall is per-scenario, not per-session.** Session 2 recorded
+   it as one-shot; measured this session it hit **all three attempts** of every
+   capture, always after the `@teleloc`, and always within a few seconds of
+   the run crossing into the next landblock (`0x977B000C → 0x977B000D`). That
+   shape — teleport-then-cross — points at landblock streaming/bake rather
+   than GC or swap. Worth a card of its own: on this hardware it is a capture
+   nuisance, but a 6.4 s main-thread park on a landblock crossing is a client
+   defect in its own right. First check should be whether the bake web worker
+   fell back to the main thread.
+4. **MOVE-F6's −1.3%, now that both sides really strafe** (S3.5).
+5. **Clear agentp09's vitae** before reading anything finer than ~0.3% out of
+   any pin.
+6. **T4 / MoveOracle injection** — unchanged: every ms-tolerance metric is
+   still `retail-unresolvable` from pcap alone.
+7. **No retail driver for `cast` / `stance`** — unchanged; four scenarios
+   still have no retail column.

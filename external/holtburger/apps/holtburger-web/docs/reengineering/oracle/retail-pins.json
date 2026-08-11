@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated": "2026-08-11T18:50:46.080Z",
+  "generated": "2026-08-11T20:16:28.227Z",
   "metric_defs": {
     "steady_speed": {
       "unit": "m/s",
@@ -72,7 +72,12 @@
     },
     "run-hold-long": {
       "steady_speed": {
-        "value": 7.884685612584375,
+        "value": 7.895045977901908,
+        "tolerance": 0.05,
+        "unit": "m/s"
+      },
+      "release.steady_speed": {
+        "value": 2.2223366052693594,
         "tolerance": 0.05,
         "unit": "m/s"
       },
@@ -89,7 +94,7 @@
     },
     "strafe-diagonal": {
       "steady_speed": {
-        "value": 7.767852921969959,
+        "value": 8.4679420638874,
         "tolerance": 0.05,
         "unit": "m/s"
       },
@@ -127,5 +132,19 @@
     "cast-stationary": {},
     "cast-while-moving": {},
     "stance-switch": {}
-  }
+  },
+  "$session3_note": [
+    "run-hold-long and strafe-diagonal re-pinned 2026-08-11 (session 3) from a",
+    "fresh retail capture at the same Samsur site, with the CORRECTED retail key",
+    "map (Z/C sidestep). The strafe pin is the first one taken from a retail run",
+    "that actually strafed: the session-2 capture contained no SIDESTEP_COMMAND",
+    "because the emitter sent holtburger's `d` to retail's `E`, which is unbound.",
+    "",
+    "CHARACTER CAVEAT: agentp08 (retail arm) has no Vitae; agentp09 (holtburger",
+    "arm) carries spell 666 at x0.99, so ACE gives it Run 109 against agentp08's",
+    "110 (CreatureSkill.Current scales by vitae BEFORE the JackOfAllTrades +5:",
+    "105*0.99+5 = 108.95 -> 109). That is 0.29% of ground speed and it is a",
+    "CHARACTER difference, not a client one. Clear the vitae on agentp09 before",
+    "reading anything finer than ~0.3% out of these pins."
+  ]
 }
