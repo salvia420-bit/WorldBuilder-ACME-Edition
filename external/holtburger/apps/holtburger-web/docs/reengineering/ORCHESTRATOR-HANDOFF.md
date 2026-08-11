@@ -120,7 +120,12 @@ minutes**, because a lint carrying six standing reds stops being read.
   -p holtburger-web` validates the wasm crate in ~1m40s without touching `pkg/`.
 - `/mnt/wbterminal2` does not exist on this box — `test_pack_fetch_region`,
   `test_xu7_transcode` and `harness/test_build_shell` cannot run here, and say so honestly.
-- Disk 15 G free. Nothing new was baked into the tree.
+- **Disk: 13 G free (90%) at session end**, down from 15 G — my Rust builds went into the
+  SHARED `external/holtburger/target`, which is now **39 GB**. I created no `target-*` of my
+  own, so there was nothing of mine to prune, and I did not `cargo clean` a shared tree on
+  someone else's behalf. But that 39 GB is the obvious lever the next time this box is
+  cornered on disk, and it is worth an owner decision before the next full bake. Nothing was
+  baked into the source tree.
 
 ### G. RANKED, FOR WHOEVER IS NEXT
 1. **The CTX-LOSS-MIRRORS live arm** (card §5) — cheapest close on the board, and it
