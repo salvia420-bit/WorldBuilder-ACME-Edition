@@ -3,6 +3,7 @@ pub mod boot_verify;
 pub mod dat2hba;
 pub mod dat_shard;
 pub mod error;
+pub mod oracle_pcap;
 pub mod pack_bake;
 pub mod pack_format;
 pub mod page_resample;

@@ -12,6 +12,12 @@ holtburger-dat = { path = "../../crates/holtburger-dat" }
 holtburger-event-bake = { workspace = true }
 holtburger-manifest = { workspace = true }
 holtburger-scenery-bake = { workspace = true }
+# ORACLE (pcap2jsonl): the retail-parity oracle decodes captured AC UDP
+# traffic. `holtburger-protocol` is a pure parsing crate (no networking), and
+# `holtburger-session` is needed only for its `optional_header` module — the
+# canonical optional-header ordering that says where fragments start.
+holtburger-protocol = { workspace = true }
+holtburger-session = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 anyhow = { workspace = true }
