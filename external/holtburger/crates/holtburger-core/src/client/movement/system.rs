@@ -2069,6 +2069,39 @@ enum QueuedDriveCommand {
     },
 }
 
+/// ORACLE (`?moveTelemetry=1`) — the movement system's own per-tick view,
+/// serialized into the parity oracle's JSONL alongside the pose/velocity the
+/// wasm arm reads off the world.
+///
+/// Every field is an `Option` because the interpreter and the local motion
+/// interp are both absent before world entry, and a telemetry dump that
+/// invents zeros for "not attached yet" would read as a real measurement in
+/// the differ. `None` serializes to JSON `null`, which the differ skips.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct MovementTelemetry {
+    /// Gait truth: the interpreter's hold-run, the single source a1/MOVE-F2
+    /// established. `true` = run.
+    pub hold_run: Option<bool>,
+    pub auto_run: Option<bool>,
+    pub run_rate: Option<f32>,
+    pub speed_factor: Option<f32>,
+    pub current_style: Option<u32>,
+    /// "walk" | "run" | "substate:0x…" — the interpreted forward slot.
+    pub forward_command: Option<String>,
+    /// Signed: negative is backstep.
+    pub forward_speed: Option<f32>,
+    /// Signed: negative is left.
+    pub sidestep_speed: Option<f32>,
+    pub turn_speed: Option<f32>,
+    pub raw_current_holdkey: Option<String>,
+    pub raw_forward_speed: Option<f32>,
+    pub raw_forward_holdkey: Option<String>,
+    pub pending_motions: usize,
+    pub cast_window_active: bool,
+    pub last_move_was_autonomous: bool,
+    pub tick_count: u32,
+}
+
 /// Wave-1 step 5 (PLAN rows 12-13) — the `?cmdInterp=on` lane's
 /// JS-facing event stream: what the renderer must react to now that the
 /// legacy sig-diff side-effects (W3.1 forward clip, anim-break cut,
@@ -8256,6 +8289,53 @@ impl MovementSystem {
         out |= (occ & 0x3) << 4;
         out |= (sub & 0xffff) << 16;
         out
+    }
+
+    /// ORACLE (`?moveTelemetry=1`): a per-tick snapshot of the movement
+    /// state, for the retail-parity oracle.
+    ///
+    /// This exists because the parity differ needs the INTERPRETER's own view
+    /// of the world, not JS's guess at it. `MovementSystem` is `pub(crate)`
+    /// and unreachable from the wasm bundle, and re-deriving gait/hold-key in
+    /// JS is precisely the class of duplication that MOVE-F2 was a bug in —
+    /// so the honest surface is one forwarder that hands back what the system
+    /// actually believes.
+    ///
+    /// Diagnostics-only: reads state, decides nothing, and is called only
+    /// when the flag is on.
+    pub(crate) fn movement_telemetry(&self, local_guid: Guid) -> MovementTelemetry {
+        let minterp = self
+            .movement_managers
+            .get(&local_guid)
+            .and_then(|manager| manager.motion_interp_ref());
+        let interp = self.command_interpreter.as_ref();
+        MovementTelemetry {
+            // Gait truth is the interpreter's hold_run (a1/MOVE-F2 made this
+            // the single source; anything else re-introduces the stuck-walk
+            // bug the oracle is here to catch).
+            hold_run: interp.map(|i| i.hold_run),
+            auto_run: interp.map(|i| i.auto_run),
+            run_rate: minterp.map(|m| m.my_run_rate),
+            speed_factor: minterp.map(|m| m.current_speed_factor),
+            current_style: minterp.map(|m| m.interpreted_state.current_style),
+            forward_command: minterp.and_then(|m| match m.interpreted_state.forward_command {
+                Some(InterpretedForwardCommand::WalkForward) => Some("walk".to_string()),
+                Some(InterpretedForwardCommand::RunForward) => Some("run".to_string()),
+                Some(InterpretedForwardCommand::Substate(c)) => Some(format!("substate:{c:#x}")),
+                None => None,
+            }),
+            forward_speed: minterp.map(|m| m.interpreted_state.forward_speed),
+            sidestep_speed: minterp.map(|m| m.interpreted_state.sidestep_speed),
+            turn_speed: minterp.map(|m| m.interpreted_state.turn_speed),
+            raw_current_holdkey: minterp.map(|m| format!("{:?}", m.raw_state.current_holdkey)),
+            raw_forward_speed: minterp.map(|m| m.raw_state.forward_speed),
+            raw_forward_holdkey: minterp.map(|m| format!("{:?}", m.raw_state.forward_holdkey)),
+            pending_motions: self.local_registry_pending_motions(local_guid),
+            cast_window_active: self.local_cast_window_active,
+            last_move_was_autonomous: self.last_move_was_autonomous,
+            // `tick_count` lives on the handle, not here; the forwarder fills it.
+            tick_count: 0,
+        }
     }
 
     /// A3-D3 test seam: registry view.

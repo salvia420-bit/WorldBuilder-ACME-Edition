@@ -80,6 +80,7 @@ const TIER1 = [
   { flag: "hookDrain", file: "test_hook_fire_queue.mjs" },
   { flag: "surfaceUnified+surfaceParityV2", file: "test_f7_8_surface_bitfield.mjs" },
   { flag: "scriptQueue", file: "test_script_manager.mjs" },
+  { flag: "moveTelemetry", file: "test_move_telemetry.mjs" },
   // SCRIPTMGR-RATE (2026-08-11): the A11-S1 SEAM, which test_script_manager.mjs
   // cannot see — it builds entries with `{startTime}` by hand, so it never
   // exercised the `time`-vs-`startTime` gap that collapsed the real queue's

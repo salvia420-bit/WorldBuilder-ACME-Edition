@@ -2463,6 +2463,18 @@
           ...(typeof __hbWasmNs?.castArbitrationDiag === "function"
             ? { castArbitrationDiag: () => __hbWasmNs.castArbitrationDiag() >>> 0 }
             : {}),
+          // ORACLE rider (2026-08-11; rides v6, no manifest bump): drain the
+          // per-tick movement telemetry ring as JSONL, plus a packed status
+          // (lo16 buffered / hi16 dropped-to-cap). Gated wasm-side by
+          // ?moveTelemetry=1 — with the flag off the ring stays empty and the
+          // drain returns "". Read by harness/oracle-run.mjs. typeof-guarded
+          // so a stale pkg/ yields `undefined` (F18-2).
+          ...(typeof __hbWasmNs?.moveTelemetryDrain === "function"
+            ? {
+                moveTelemetryDrain: () => __hbWasmNs.moveTelemetryDrain(),
+                moveTelemetryStatus: () => __hbWasmNs.moveTelemetryStatus() >>> 0,
+              }
+            : {}),
           // Soak-11 §5.1 observability rider (2026-07-20; rides v6, no
           // manifest bump): arrival-placement latch tally, packed
           // lo16=engaged / hi16=failed. Companion to the warn console line.

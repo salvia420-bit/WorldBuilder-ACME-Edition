@@ -511,6 +511,16 @@ impl MovementSystemHandle {
         self.inner.cast_arbitration_diag(local_guid)
     }
 
+    /// ORACLE (`?moveTelemetry=1`): per-tick movement-state snapshot for the
+    /// retail-parity oracle. Diagnostics-only — reads state, decides nothing.
+    /// `tick_count` is stamped here because it lives on the handle, not on
+    /// the system.
+    pub fn movement_telemetry(&self, local_guid: Guid) -> super::system::MovementTelemetry {
+        let mut t = self.inner.movement_telemetry(local_guid);
+        t.tick_count = self.tick_count;
+        t
+    }
+
     /// A14-I4 (W3+ S11) — press-time half of the retail jump charge
     /// clock (`ClientCombatSystem::CommenceJump`,
     /// acclient.c:408033-408078). `Err(JumpRefusal::Position)` mirrors

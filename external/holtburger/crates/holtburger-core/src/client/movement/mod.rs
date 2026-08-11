@@ -25,6 +25,9 @@ pub use jump_charge::{JumpOutcome, JumpRefusal};
 // Wave-1 step 5 (rows 12-13): the ?cmdInterp=on lane's JS-facing event
 // stream, drained by the wasm TickMovement arm (ClientEvent kind 61).
 pub use system::CmdInterpEvent;
+// ORACLE (?moveTelemetry=1): the per-tick movement snapshot the parity
+// oracle serializes; read by the wasm TickMovement arm.
+pub use system::MovementTelemetry;
 pub(super) use common::{HUGE_QUANTUM, MAX_QUANTUM};
 // F1 (COL-21): the server-controlled MoveToObject lane in
 // `client::simulation` resolves its approach speed through retail's own

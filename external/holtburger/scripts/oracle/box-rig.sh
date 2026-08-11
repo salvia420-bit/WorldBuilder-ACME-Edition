@@ -9,6 +9,7 @@
 # Subcommands:
 #   setup            install packages + create the 32-bit wine prefix
 #   install-client   drive the InstallShield base install, then overlay EoR
+#   prefs            write UserPreferences.ini (FullScreen=False) — REQUIRED
 #   xvfb             (re)start the headless X server the client renders into
 #   client           launch acclient.exe against the relay
 #   capture          tcpdump the relay's UDP leg to a pcap
@@ -121,7 +122,35 @@ cmd_install_client() {
   # The client WRITES to its dats unless -rodat on; make sure they are writable
   # (the installer marks some files read-only).
   chmod u+w "$AC_DIR"/*.dat 2>/dev/null
+  cmd_prefs
   log "EoR overlay applied ($n files); client ready at $AC_DIR"
+}
+
+# --------------------------------------------------------------------------
+# THE SINGLE MOST IMPORTANT LINE IN THIS FILE.
+#
+# AC defaults to FULLSCREEN. Its fullscreen path calls
+# RenderDeviceD3D::CheckDisplayModes, which walks the adapter's mode list for
+# a resolution+refresh-rate match. Xvfb exposes exactly ONE mode, so the match
+# fails, SelectBufferFormats bails to PlatformString::DisplayString(0x80,...)
+# (acclient.c:459429/459445), and you get the modal
+#   "The game encountered a fatal DirectX issue while attempting to start."
+# with the client alive but transmitting NOTHING. The windowed branch skips
+# CheckDisplayModes entirely and reuses the desktop format, so it proceeds.
+#
+# Measured A/B on this box with the ini as the only variable:
+#   with ini: 20 UDP packets to :9000 (retry every 2s)
+#   without : 0 packets
+#
+# Path: the client checks <cwd>\UserPreferences.ini FIRST (acclient.c:62177,
+# PSUtils::get_cwd + check_access) and only falls back to
+# SHGetSpecialFolderPathA(CSIDL_PERSONAL)\Asheron's Call\. Since we launch
+# with cwd = the client dir, the client-dir copy is the authoritative one.
+# CRLF because it is a Windows INI written by WritePrivateProfileStringA.
+cmd_prefs() {
+  [ -d "$AC_DIR" ] || die "no client dir at $AC_DIR"
+  printf '[Display]\r\nFullScreen=False\r\n' >"$AC_DIR/UserPreferences.ini"
+  log "wrote $AC_DIR/UserPreferences.ini (FullScreen=False)"
 }
 
 # --------------------------------------------------------------------------
@@ -162,6 +191,9 @@ cmd_client() {
   local host="${ORACLE_HOST:-127.0.0.1}"
   local port="${ORACLE_PORT:-9000}"
   [ -f "$AC_DIR/acclient.exe" ] || die "no client at $AC_DIR — run install-client"
+  # Absence of this file silently costs the whole run (fullscreen -> DirectX
+  # dialog -> zero packets), so assert rather than discover it in a pcap.
+  [ -f "$AC_DIR/UserPreferences.ini" ] || cmd_prefs
   cmd_xvfb
   pkill -f 'acclien[t]\.exe' 2>/dev/null
   sleep 2
@@ -211,10 +243,11 @@ cmd_stop() {
 case "${1:-status}" in
   setup)          shift; cmd_setup "$@" ;;
   install-client) shift; cmd_install_client "$@" ;;
+  prefs)          shift; cmd_prefs "$@" ;;
   xvfb)           shift; cmd_xvfb "$@" ;;
   client)         shift; cmd_client "$@" ;;
   capture)        shift; cmd_capture "$@" ;;
   status)         shift; cmd_status "$@" ;;
   stop)           shift; cmd_stop "$@" ;;
-  *) die "unknown subcommand '$1' (setup|install-client|xvfb|client|capture|status|stop)" ;;
+  *) die "unknown subcommand '$1' (setup|install-client|prefs|xvfb|client|capture|status|stop)" ;;
 esac

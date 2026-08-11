@@ -1,0 +1,235 @@
+{
+  "$comment": [
+    "Movement/combat parity scenarios: one timed input script, run identically",
+    "against the retail client (Wine rig) and holtburger, so oracle-diff.mjs can",
+    "put the two curves side by side.",
+    "",
+    "KEY MAP (holtburger, index.html ~:10967): w/s = forward axis, d/a = strafe",
+    "axis, e/q = turn axis, shift = WALK modifier. holtburger is run-by-default",
+    "and shift eases to walk; retail is the same convention. So 'walk-hold' is",
+    "W+Shift and 'run-hold' is W alone. A driver that gets this backwards will",
+    "produce a clean-looking report full of gait-swapped garbage, so both drivers",
+    "assert the gait they believe they requested against the telemetry's `gait`",
+    "field before any metric is computed.",
+    "",
+    "TIMEBASE: every `t` is milliseconds from scenario start (the first input",
+    "event, not process start). `settle_ms` is dead time before that zero point,",
+    "to let the avatar come to rest so a scenario never inherits the previous",
+    "one's velocity.",
+    "",
+    "METRICS: `expect` slots are DELIBERATELY EMPTY of values. This file is the",
+    "question, not the answer — retail supplies the numbers, and oracle-diff.mjs",
+    "writes them into retail-pins.json. Hardcoding guesses here would let a",
+    "wrong-but-plausible number become the pin and silently define parity as",
+    "whatever we already do. `unit` and `tolerance` ARE specified, because those",
+    "are decisions about what counts as a difference, not claims about behavior."
+  ],
+  "version": 1,
+  "timebase": "ms-from-first-input-event",
+  "defaults": {
+    "settle_ms": 2500,
+    "trail_ms": 1500,
+    "sample_hz": 30
+  },
+  "metric_defs": {
+    "steady_speed": {
+      "unit": "m/s",
+      "tolerance": 0.05,
+      "how": "median planar speed over the steady window (after the ramp, before release)"
+    },
+    "accel_t90": {
+      "unit": "ms",
+      "tolerance": 40,
+      "how": "time from the first non-zero speed sample to the first sample at >=90% of steady_speed"
+    },
+    "decel_t10": {
+      "unit": "ms",
+      "tolerance": 40,
+      "how": "time from key release to the first sample at <=10% of steady_speed"
+    },
+    "turn_rate": {
+      "unit": "deg/s",
+      "tolerance": 3.0,
+      "how": "median d(heading)/dt over the steady window, unwrapped across the 0/360 seam"
+    },
+    "jump_apex": {
+      "unit": "m",
+      "tolerance": 0.05,
+      "how": "max z minus z at launch"
+    },
+    "jump_airtime": {
+      "unit": "ms",
+      "tolerance": 50,
+      "how": "launch to the first grounded sample after apex"
+    },
+    "jump_distance": {
+      "unit": "m",
+      "tolerance": 0.1,
+      "how": "planar distance travelled between launch and land"
+    },
+    "cast_lock_ms": {
+      "unit": "ms",
+      "tolerance": 60,
+      "how": "from cast start to the first sample where movement input is honoured again"
+    },
+    "cast_speed_during": {
+      "unit": "m/s",
+      "tolerance": 0.05,
+      "how": "median planar speed while the cast window is active"
+    }
+  },
+  "scenarios": [
+    {
+      "id": "walk-hold",
+      "description": "Hold walk (W+Shift) in a straight line. Establishes the walk steady speed and the walk accel ramp.",
+      "gait_expected": "walk",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "shift" },
+        { "t": 50, "type": "keydown", "key": "w" },
+        { "t": 4000, "type": "keyup", "key": "w" },
+        { "t": 4050, "type": "keyup", "key": "shift" }
+      ],
+      "windows": { "steady": [1500, 3900], "release": [4000, 5500] },
+      "expect": { "steady_speed": null, "accel_t90": null, "decel_t10": null }
+    },
+    {
+      "id": "run-hold",
+      "description": "Hold run (W, no shift) in a straight line. The reference curve for run speed and ramp; also the T3 mission-bar scenario together with jump-running.",
+      "gait_expected": "run",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "w" },
+        { "t": 4000, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "steady": [1500, 3900], "release": [4000, 5500] },
+      "expect": { "steady_speed": null, "accel_t90": null, "decel_t10": null }
+    },
+    {
+      "id": "walk-edge-after-manualheld-walk",
+      "description": "The MOVE-F2 case. Install a walk drive, release it, then take a FRESH key edge with no shift held — which must come back as RUN. Before F2, ingest_key_edge seeded the composed drive from active_drive wholesale (gait included), so the earlier walk poisoned the gait and every later edge stayed stuck in walk. Retail re-derives the gait from the interpreter's hold_run, so retail's second hold is a run. This scenario is the regression pin for that.",
+      "gait_expected": "run",
+      "regression_for": "MOVE-F2-HOLDKEY (task-a1)",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "shift" },
+        { "t": 50, "type": "keydown", "key": "w" },
+        { "t": 1500, "type": "keyup", "key": "w" },
+        { "t": 1550, "type": "keyup", "key": "shift" },
+        { "t": 3000, "type": "keydown", "key": "w" },
+        { "t": 6000, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "first_hold": [600, 1400], "second_hold": [4500, 5900] },
+      "expect": {
+        "first_hold.steady_speed": null,
+        "second_hold.steady_speed": null,
+        "second_hold.gait": null
+      },
+      "assert": {
+        "second_hold_is_faster": "second_hold.steady_speed > first_hold.steady_speed * 1.5"
+      }
+    },
+    {
+      "id": "strafe-diagonal",
+      "description": "The MOVE-F6 case. W+D held together: both axes are issued as concurrent motions and summed, so the ground diagonal EXCEEDS the single-axis run speed. a2's DEVIATION D1 established that retail does NOT cap this on the ground path (get_state_velocity's only caller is get_leave_ground_velocity), so the diagonal running hot is CORRECT and this scenario pins how hot.",
+      "gait_expected": "run",
+      "regression_for": "MOVE-F6-SPEEDCAP (task-a2, D1)",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "w" },
+        { "t": 100, "type": "keydown", "key": "d" },
+        { "t": 4000, "type": "keyup", "key": "d" },
+        { "t": 4050, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "steady": [1600, 3900] },
+      "expect": { "steady_speed": null, "heading_drift": null },
+      "assert": {
+        "diagonal_exceeds_forward": "steady_speed > scenario('run-hold').steady_speed"
+      }
+    },
+    {
+      "id": "turn-while-run",
+      "description": "Hold W and E together: forward locomotion plus a turn command. Pins the turn rate under load and whether forward speed is reduced while turning.",
+      "gait_expected": "run",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "w" },
+        { "t": 500, "type": "keydown", "key": "e" },
+        { "t": 4000, "type": "keyup", "key": "e" },
+        { "t": 4050, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "steady": [1200, 3900] },
+      "expect": { "turn_rate": null, "steady_speed": null }
+    },
+    {
+      "id": "jump-standing",
+      "description": "Standing jump from rest, full charge. Pins apex and airtime with no horizontal component. Relevant to a2's Handoff 1: manual_intent_velocity hands back a GROUND vector for the charged launch, so a charged jump may launch hot; the standing case isolates the vertical term from that.",
+      "gait_expected": "run",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "space" },
+        { "t": 1000, "type": "keyup", "key": "space" }
+      ],
+      "windows": { "flight": [1000, 3000] },
+      "expect": { "jump_apex": null, "jump_airtime": null }
+    },
+    {
+      "id": "jump-running",
+      "description": "Jump while at steady run. Pins the airborne trajectory lock — retail freezes the launch velocity for the whole arc, so this is where a hot launch velocity shows up as a long jump. Second half of the T3 mission bar.",
+      "gait_expected": "run",
+      "relates_to": "MOVE-F6 Handoff 1 (uncapped manual_intent_velocity)",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "w" },
+        { "t": 2500, "type": "keydown", "key": "space" },
+        { "t": 2600, "type": "keyup", "key": "space" },
+        { "t": 5000, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "pre_jump": [1500, 2450], "flight": [2600, 4500] },
+      "expect": {
+        "pre_jump.steady_speed": null,
+        "jump_apex": null,
+        "jump_airtime": null,
+        "jump_distance": null
+      }
+    },
+    {
+      "id": "cast-stationary",
+      "description": "Cast from rest. Pins the movement-lock window: how long after cast start the avatar refuses movement input.",
+      "gait_expected": "run",
+      "events": [
+        { "t": 0, "type": "cast", "spell": "default" },
+        { "t": 500, "type": "keydown", "key": "w" },
+        { "t": 4000, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "cast": [0, 3000] },
+      "expect": { "cast_lock_ms": null, "cast_speed_during": null }
+    },
+    {
+      "id": "cast-while-moving",
+      "description": "Cast at steady run without releasing W. Pins whether the cast arrests movement, and for how long — the case where a lock that is too long or too short is most visible.",
+      "gait_expected": "run",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "w" },
+        { "t": 2000, "type": "cast", "spell": "default" },
+        { "t": 6000, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "pre_cast": [1200, 1950], "cast": [2000, 5000] },
+      "expect": {
+        "pre_cast.steady_speed": null,
+        "cast_speed_during": null,
+        "cast_lock_ms": null
+      }
+    },
+    {
+      "id": "stance-switch",
+      "description": "Toggle combat stance while holding run. Stance changes the motion style dword and can change the run animation and speed; this pins whether speed survives the switch.",
+      "gait_expected": "run",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "w" },
+        { "t": 2000, "type": "stance", "value": "combat" },
+        { "t": 5000, "type": "stance", "value": "peace" },
+        { "t": 7000, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "peace": [1200, 1950], "combat": [3000, 4900], "after": [6000, 6900] },
+      "expect": {
+        "peace.steady_speed": null,
+        "combat.steady_speed": null,
+        "after.steady_speed": null
+      }
+    }
+  ]
+}

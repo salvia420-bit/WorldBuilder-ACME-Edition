@@ -1515,6 +1515,98 @@ pub fn cast_arbitration_diag() -> u32 {
     CAST_ARBITRATION_DIAG.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// ORACLE (2026-08-11) — `?moveTelemetry=1`. DEFAULT-OFF, strict `=1` opt-in.
+///
+/// Per-tick movement-state JSONL for the retail-parity oracle: the same shape
+/// `pcap2jsonl` emits for a captured retail session, so `oracle-diff.mjs` can
+/// align the two curves and rank the divergences.
+///
+/// The dump is produced HERE rather than in JS on purpose. Pose, velocity and
+/// the interpreter's gait all live behind the wasm boundary, and re-deriving
+/// gait in JS is the exact duplication MOVE-F2 was a bug in — a JS guess at
+/// the gait would make the oracle agree with itself instead of measuring the
+/// system. Changes no movement decision; when the flag is off nothing is
+/// allocated and the tick arm does not call in.
+static MOVE_TELEMETRY_ON: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Ring capacity. At ~60 ticks/s this is ~2 minutes of history, comfortably
+/// longer than the longest scenario, and bounded so a forgotten flag cannot
+/// grow without limit.
+const MOVE_TELEMETRY_CAP: usize = 8192;
+
+thread_local! {
+    static MOVE_TELEMETRY_RING: std::cell::RefCell<std::collections::VecDeque<String>> =
+        std::cell::RefCell::new(std::collections::VecDeque::new());
+    /// Dropped-line count, so a drain can report truncation instead of
+    /// silently handing back a gap-ridden curve.
+    static MOVE_TELEMETRY_DROPPED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+fn parse_move_telemetry_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "moveTelemetry=1")
+}
+
+thread_local! {
+    /// Telemetry epoch. Timestamps are elapsed-ms from the first record, not
+    /// wall clock: the differ re-bases to the first-motion edge anyway, and a
+    /// monotonic source cannot be perturbed by a clock adjustment mid-capture.
+    static MOVE_TELEMETRY_EPOCH: std::cell::Cell<Option<web_time::Instant>> =
+        const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn telemetry_ms(now: web_time::Instant) -> f64 {
+    MOVE_TELEMETRY_EPOCH.with(|e| {
+        let start = match e.get() {
+            Some(s) => s,
+            None => {
+                e.set(Some(now));
+                now
+            }
+        };
+        now.saturating_duration_since(start).as_secs_f64() * 1000.0
+    })
+}
+
+pub(crate) fn move_telemetry_enabled() -> bool {
+    MOVE_TELEMETRY_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn move_telemetry_push(line: String) {
+    MOVE_TELEMETRY_RING.with(|r| {
+        let mut ring = r.borrow_mut();
+        if ring.len() >= MOVE_TELEMETRY_CAP {
+            ring.pop_front();
+            MOVE_TELEMETRY_DROPPED.with(|d| d.set(d.get().saturating_add(1)));
+        }
+        ring.push_back(line);
+    });
+}
+
+/// Drain the telemetry ring as JSONL (one record per line) and clear it.
+/// Returns an empty string when the flag is off or nothing has accumulated.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = moveTelemetryDrain)]
+pub fn move_telemetry_drain() -> String {
+    MOVE_TELEMETRY_RING.with(|r| {
+        let mut ring = r.borrow_mut();
+        let out = ring.iter().cloned().collect::<Vec<_>>().join("\n");
+        ring.clear();
+        out
+    })
+}
+
+/// How many records are buffered, and how many were dropped to the cap.
+/// Packed lo16 = buffered, hi16 = dropped (saturating).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = moveTelemetryStatus)]
+pub fn move_telemetry_status() -> u32 {
+    let buffered = MOVE_TELEMETRY_RING.with(|r| r.borrow().len()) as u32;
+    let dropped = MOVE_TELEMETRY_DROPPED.with(|d| d.get());
+    (buffered & 0xffff) | ((dropped & 0xffff) << 16)
+}
+
 /// Bug-A round-2 diag (2026-07-03): reclaim causes, packed
 /// lo16 = edge-driven TakeControl count, hi16 = use_time auto-reclaims.
 static RECLAIMS_EDGE_DIAG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -42583,6 +42675,13 @@ async fn recv_loop(
     // COL-DIAG (2026-08-04): `?fu3Diag=on` — console ground truth for the FU-3
     // entity clamp (see `parse_fu3_diag_flag`). Default OFF, zero cost when off.
     movement.set_fu3_diag(parse_fu3_diag_flag(&flag_search()));
+    // ORACLE: `?moveTelemetry=1` (default OFF, strict `=1` opt-in). Gates the
+    // per-tick JSONL dump the retail-parity oracle diffs against a captured
+    // retail session.
+    MOVE_TELEMETRY_ON.store(
+        parse_move_telemetry_flag(&flag_search()),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     // Phase 3 Phase D (2026-06-28): `?faithfulOutdoor=off` — roll the faithful
     // driver's OUTDOOR terrain path back to the approximate heightfield (default
     // ON). Read only when `?faithfulTransition` is also on; see
@@ -53539,6 +53638,45 @@ async fn recv_loop(
                                     movement.cast_arbitration_diag(w.player.guid),
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
+                                // ORACLE (?moveTelemetry=1): one JSONL record
+                                // per tick — pose + integrator velocity read
+                                // off the world, gait/hold-key/cast read off
+                                // the movement system. Off by default; the
+                                // whole block is skipped when the flag is
+                                // clear, so the shipped lane pays one atomic
+                                // load per tick and nothing else.
+                                if move_telemetry_enabled() {
+                                    let pose = w.local_player_runtime_pose();
+                                    let vel = w.player.current_planar_velocity;
+                                    let tele = movement.movement_telemetry(w.player.guid);
+                                    let record = serde_json::json!({
+                                        "source": "holt",
+                                        // ms since the wasm epoch; the differ
+                                        // re-bases to the first-motion edge, so
+                                        // only the deltas matter.
+                                        "t": telemetry_ms(now),
+                                        "pos": pose.as_ref().map(|p| serde_json::json!({
+                                            "lb": format!("{:#010X}", p.landblock_id.0),
+                                            "x": p.coords.x,
+                                            "y": p.coords.y,
+                                            "z": p.coords.z,
+                                            "heading_deg": p.rotation.to_heading().to_degrees().rem_euclid(360.0),
+                                        })),
+                                        "vel": { "x": vel.x, "y": vel.y, "z": w.player.vertical_velocity },
+                                        "speed": (vel.x * vel.x + vel.y * vel.y).sqrt(),
+                                        "grounded": !w.player.is_airborne,
+                                        "airborne_secs": w.player.airborne_secs,
+                                        "is_jumping": w.player.is_jumping,
+                                        // Gait from the interpreter's hold_run,
+                                        // never from a JS-side guess.
+                                        "gait": tele.hold_run.map(|r| if r { "run" } else { "walk" }),
+                                        "cast": tele.cast_window_active,
+                                        "movement": tele,
+                                    });
+                                    if let Ok(line) = serde_json::to_string(&record) {
+                                        move_telemetry_push(line);
+                                    }
+                                }
                                 // Wave-1 step 5 (?cmdInterp=on, rows
                                 // 12-13): forward the interpreter lane's
                                 // event stream to JS — kind 61 for the

@@ -15,6 +15,7 @@ pub use client::types::{
 };
 pub use client::{
     ClientRuntime, ClientRuntimeBuilder, CmdInterpEvent, JumpOutcome, JumpRefusal, MotionStyle,
+    MovementTelemetry,
     MovementSystemHandle, TickSpineHandle,
 };
 pub use soul_emote_motion::motion_command_for_soul_emote_pose;
