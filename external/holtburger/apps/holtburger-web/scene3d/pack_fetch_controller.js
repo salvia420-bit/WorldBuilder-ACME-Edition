@@ -281,6 +281,7 @@ export function createPackFetchController(opts = {}) {
     lanes: { U: laneRow(), B: laneRow(), R: laneRow(), T: laneRow() },
     verify: { engine: "subtle", ok: 0, mismatch: 0, msTotal: 0 },
     retries: 0,
+    forgotten: 0, // settled latches dropped by a consuming caller (`forget`)
     quarantined: [], // live tile keys (authoritative; residency never erases)
     quarantinedTotal: 0, // cumulative terminal quarantines (the gate counter)
     pinnedIndex: "",
@@ -538,6 +539,40 @@ export function createPackFetchController(opts = {}) {
     return entry.promise;
   }
 
+  /**
+   * Drop a SETTLED entry's latch, so a later `need()` for that url fetches
+   * again instead of re-handing the same ArrayBuffer.
+   *
+   * WHY THIS EXISTS (CTX-LOSS-MIRRORS, 2026-08-11). `settleSuccess` keeps a
+   * success entry in the map forever and every later `need()` resolves off
+   * that one settled promise — deliberate, and right for a payload several
+   * consumers read. It is wrong for a ONE-SHOT payload the caller consumes:
+   * the lane-T `texFull` upgrade hands its bytes to the texture worker, which
+   * TRANSFERS them (xu7_textures.js:943-948), so the latch is left holding a
+   * detached corpse that the next caller cannot read. Consuming callers copy
+   * (they do not own the shared buffer) and then call this, which keeps the
+   * payload from being pinned for the session as well.
+   *
+   * REFUSES a queued/in-flight entry: forgetting one would orphan every
+   * consumer already latched onto its promise and let a duplicate fetch start
+   * beside it (the D-03.4 dedupe this controller exists to guarantee).
+   *
+   * @param {string} url
+   * @returns {boolean} whether a settled entry was dropped.
+   */
+  function forget(url) {
+    const entry = entries.get(url);
+    if (!entry || entry.state !== "done") return false;
+    entries.delete(url);
+    // `resident` means "these bytes have been read off the wire and are
+    // held" — it gates the ring's re-fetch skip (notePlayerLandblock). A
+    // forgotten payload is no longer held, so saying so keeps the two views
+    // from disagreeing.
+    resident.delete(url);
+    diag.forgotten += 1;
+    return true;
+  }
+
   /** Backpressure (S2 rule 5): drop queued lane-R entries not in `keep`. */
   function dropQueuedOutside(keepUrls) {
     const q = queues.R;
@@ -787,6 +822,7 @@ export function createPackFetchController(opts = {}) {
     boot,
     bootCommons,
     need,
+    forget,
     needPack,
     notePlayerLandblock,
     /** Arm the wasm seam post-init_resource_source (page wiring). */

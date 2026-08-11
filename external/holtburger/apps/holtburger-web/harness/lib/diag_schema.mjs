@@ -102,7 +102,7 @@ export const REGISTRY = Object.freeze([
     name: "__bc7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1394",
+    evidence: "scene3d/bc7_textures.js:1412",
     availability: "in-world",
     note: "Module tally bc7Stats() (bc7_textures.js:843-855) + source residency. "
       + "Retained legacy surface; full-tier texture machinery re-homes at ST5.",
@@ -124,7 +124,7 @@ export const REGISTRY = Object.freeze([
     name: "__xu7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1395",
+    evidence: "scene3d/bc7_textures.js:1413",
     availability: "in-world",
     note: "xu7Stats() in scene3d/xu7_textures.js:142-211 (budgeted-FIFO tally). "
       + "decodeMs is cumulative main-thread transcode ms but NOT attribution-"
@@ -434,7 +434,7 @@ export const REGISTRY = Object.freeze([
     name: "__hbFetch",
     status: "current",
     reads: "object",
-    evidence: "scene3d/pack_fetch_controller.js:835",
+    evidence: "scene3d/pack_fetch_controller.js:871",
     spec: "pass-10 S3 (pass 3 S9 completed)",
     availability: "flag:?packSource=on",
     note: "PackFetchController surface. wireWaitEvents is THE C5 instrument "
@@ -456,6 +456,11 @@ export const REGISTRY = Object.freeze([
       "verify.mismatch": C("count"),
       "verify.msTotal": C("ms", null, { attribution: false, note: "async, not main-thread JS time (SPEC 1.1)" }),
       retries: C("count"),
+      // CTX-LOSS-MIRRORS (2026-08-11): settled latches dropped by a CONSUMING
+      // caller (`forget`). Non-zero is normal and expected on the lane-T
+      // texFull path — that payload is handed to the texture worker, which
+      // transfers it, so the latch must go with it.
+      forgotten: C("count"),
       quarantined: L("json", null, { note: "tileId list; authoritative, never erased by residency" }),
       pinnedIndex: L("string"),
       "milestones.inWorldMs": L("ms", ["in-world"]),
@@ -663,7 +668,7 @@ export const REGISTRY = Object.freeze([
     name: "__texStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:956",
+    evidence: "scene3d/bc7_textures.js:972",
     availability: "boot",
     note: "Texture tier/worker surface — LANDED at T15 (ST5, "
       + "`?texCompressedOnly`; texStats() in bc7_textures.js, window-installed "
@@ -681,6 +686,13 @@ export const REGISTRY = Object.freeze([
       "tiers.pvwHits": C("count"),
       "tiers.fullSwaps": C("count"),
       "tiers.fullFailed": C("count"),
+      // CTX-LOSS-MIRRORS (2026-08-11): the SUBSET of fullFailed that
+      // `_fetchFullTierParsed` could name, plus the newest reason. The whole
+      // point is that this path used to swallow a hard TypeError (a detached
+      // lane-T payload) as a bare `return null`, so from outside it read as an
+      // ordinary rehydrator miss for a whole live session.
+      "tiers.fullFetchMisses": C("count"),
+      "tiers.lastFullFetchError": L("string"),
       "tiers.demotions": C("count"),
       "tiers.nraAttached": C("count"),
       "tiers.chainWriteRejects": C("count"),

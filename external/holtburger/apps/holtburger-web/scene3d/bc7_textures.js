@@ -890,6 +890,10 @@ const _stats = {
                          // (bake invariant D-05.5.4; >0 = LOUD deploy skew)
   fullSwaps: 0,          // lane-T full-tier upgrades swapped in
   fullFailed: 0,         // lane-T fetch/transcode failures (stayed preview)
+  fullFetchMisses: 0,    // ... of which `_fetchFullTierParsed` NAMED a reason
+  lastFullFetchError: null, // and the newest such reason (CTX-LOSS-MIRRORS:
+                         // this path used to swallow a hard TypeError as a
+                         // bare `return null`, which cost a live session)
   demotions: 0,          // pressure demote-to-preview events
   nraAttached: 0,        // worker-derived NRA planes attached
   chainWriteRejects: 0,  // shallow payload refused by a chain array (loud)
@@ -947,6 +951,18 @@ export function _bumpBc7Stat(name, by = 1) {
 }
 
 /**
+ * Name a lane-T full-tier fetch failure instead of returning a bare null
+ * (CTX-LOSS-MIRRORS). Counted AND recorded: `fullFailed` already says "the
+ * upgrade did not land", but it cannot say why, and on the 2026-08-11 T4 arm
+ * the why was a swallowed `TypeError: ... detached ArrayBuffer` that read from
+ * the outside as an ordinary rehydrator miss.
+ */
+export function noteFullTierFetchMiss(reason) {
+  _stats.fullFetchMisses += 1;
+  _stats.lastFullFetchError = reason == null ? null : String(reason);
+}
+
+/**
  * ST5 — the merged texture-tier surface (pass 5 S8): `__bc7Stats`/
  * `__xu7Stats`/`__texWorkerStats` fold into `__texStats()` (the
  * same-name-successor edge the diag registry encodes at T14).
@@ -969,6 +985,8 @@ export function texStats() {
       pvwHits: _stats.pvwBuilds,
       fullSwaps: _stats.fullSwaps,
       fullFailed: _stats.fullFailed,
+      fullFetchMisses: _stats.fullFetchMisses,
+      lastFullFetchError: _stats.lastFullFetchError,
       demotions: _stats.demotions,
       nraAttached: _stats.nraAttached,
       chainWriteRejects: _stats.chainWriteRejects,
@@ -1461,6 +1479,7 @@ export function _resetBc7ForTest() {
     if (typeof _stats[k] === "number") _stats[k] = 0;
   }
   _stats.lastError = null;
+  _stats.lastFullFetchError = null;
   _flag = undefined;
   // 2026-08-05 — `_preFlag` was missing here, so a no-arg `texPreEnabled()`
   // memoised once and then silently decided every later case in the same

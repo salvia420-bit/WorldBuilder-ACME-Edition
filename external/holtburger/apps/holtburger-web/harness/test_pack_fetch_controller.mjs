@@ -225,6 +225,34 @@ await (async () => {
   fm.calls.length = 0;
   await ctl.need("http://x/shared", { lane: "R" });
   ok(fm.calls.length === 0, "settled entry re-served with zero fetches");
+
+  // forget(): the escape for a CONSUMING caller (CTX-LOSS-MIRRORS). The lane-T
+  // texFull upgrade hands its payload to the texture worker, which transfers
+  // it — a latch holding a detached buffer would serve a corpse to the next
+  // reader, and would pin the payload for the session besides.
+  ok(ctl.diag.forgotten === 0, "forgotten starts at 0");
+  ok(ctl.forget("http://x/shared") === true, "forget drops a settled latch");
+  ok(ctl.diag.forgotten === 1 && !ctl._entries.has("http://x/shared") &&
+     !ctl._resident.has("http://x/shared"), "forget clears the entry AND residency, counted");
+  ok(ctl.forget("http://x/shared") === false, "forget twice is a no-op, not a throw");
+  ok(ctl.forget("http://x/never-asked") === false, "forget on an unknown url is a no-op");
+  fm.calls.length = 0;
+  const refetched = await (async () => {
+    const q = ctl.need("http://x/shared", { lane: "T" });
+    await fm.flush();
+    return q;
+  })();
+  ok(fm.calls.length === 1 && new Uint8Array(refetched)[0] === 7,
+    "a forgotten url REFETCHES on the next need");
+
+  // ... but never at the cost of the in-flight dedupe D-03.4 guarantees:
+  // forgetting a queued/in-flight entry would orphan everyone latched to it.
+  fm.calls.length = 0;
+  fm.bodies.set("http://x/inflight", new Uint8Array([3]));
+  const pend = ctl.need("http://x/inflight", { lane: "B" });
+  ok(ctl.forget("http://x/inflight") === false, "forget REFUSES a queued/in-flight entry");
+  await fm.flush();
+  await pend;
 })();
 
 // ── PART 5: error unlatch + retry/backoff + 404 skew ───────────────────────

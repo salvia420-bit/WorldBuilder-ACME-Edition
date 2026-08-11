@@ -74,6 +74,8 @@ import {
   makeBc7Texture,
   bc7Source,
   _bumpBc7Stat,
+  // CTX-LOSS-MIRRORS — name a lane-T fetch failure instead of a bare null.
+  noteFullTierFetchMiss as _noteFullFetchMiss,
   atlasRefeed,
   // RSID-MARKER — the universal `__texRsId` stamp. Every surface-backed
   // material carries the RenderSurface id it was built from, so a producer
@@ -5947,6 +5949,20 @@ export class MaterialCache {
    * This is what makes the mirror seam source-keyed (D-05.7): the way back
    * from a released full-tier mirror is "re-fetch the xu7 CAS file and
    * re-transcode", not "re-decode SurfacePixels".
+   *
+   * OWNERSHIP (CTX-LOSS-MIRRORS, 2026-08-11 — the bug this comment is paid
+   * for). `controller.need` hands back a buffer the CONTROLLER owns and
+   * LATCHES: a settled entry stays in its map and every later `need()` for
+   * that url resolves off the same promise, with the same ArrayBuffer
+   * (pack_fetch_controller.js:467-469, :507-521). `transcodeXu7WithNra` ends
+   * at `_workerTranscodeXu7`, which TRANSFERS any whole-buffer view it is
+   * handed (xu7_textures.js:943-948) — so passing the latched buffer straight
+   * through detached it, and the NEXT reader of that url got a corpse. Two
+   * readers exist and both were hit on the 2026-08-11 T4 arm: the rehydrate
+   * after a context loss (six of six mirrors MISSed, "will render BLACK"),
+   * and a second Surface DID sharing one RenderSurface (the standing
+   * candidate for that arm's unexplained `fullFailed = 18`). So: COPY, then
+   * tell the controller to drop a latch nobody can use again.
    */
   async _fetchFullTierParsed(rs, wantNra = null) {
     const { wasmNs, controller } = texCompressedOnlyNs();
@@ -5965,15 +5981,37 @@ export class MaterialCache {
           component: "texFull",
           expectedHash: info.sha16 || undefined,
         });
-        return await transcodeXu7WithNra(new Uint8Array(buf), wantNra);
+        // A DETACHED buffer reads byteLength 0 and does NOT throw; it is
+        // `new Uint8Array(buf)` that throws on one. Check first so the
+        // failure is named instead of arriving as an anonymous TypeError in
+        // the catch below — that silence is what let this run a whole live
+        // session as "rehydrator returned false".
+        const n = buf ? buf.byteLength >>> 0 : 0;
+        if (!n) {
+          _noteFullFetchMiss(
+            buf ? `lane-T payload is empty or detached (${info.url})` : `lane-T need resolved nothing (${info.url})`
+          );
+          return null;
+        }
+        const src = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+        // `.slice()` — a copy we own, because the transcoder transfers it.
+        const owned = src.slice();
+        // One-shot payload: drop the latch so the session does not pin it and
+        // so the next reader gets a real re-fetch (the immutable-CAS url makes
+        // that an HTTP-cache hit). No-op on a controller without `forget`.
+        try { controller.forget?.(info.url); } catch (_) { /* fail-soft */ }
+        return await transcodeXu7WithNra(owned, wantNra);
       }
       if (typeof wasmNs.xu7_blocks === "function") {
         // Legacy record route (no CAS info): same bytes, legacy-lane
-        // concurrency share (D-03.10) instead of lane T.
+        // concurrency share (D-03.10) instead of lane T. `xu7_blocks` returns
+        // a FRESH copy out of wasm memory each call, so it is the caller's to
+        // transfer — no copy needed here.
         const b = await wasmNs.xu7_blocks(rs);
         if (b && b.length) return await transcodeXu7WithNra(b, wantNra);
       }
-    } catch (_) {
+    } catch (e) {
+      _noteFullFetchMiss(String(e?.message ?? e));
       return null;
     }
     return null;
