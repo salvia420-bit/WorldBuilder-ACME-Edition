@@ -1,6 +1,9 @@
 // COL-10 (2026-07-27): the walk body speed IS retail's `WalkAnimSpeed`
 // (`acclient.c:343561`) — see `forward_axis_speed`.
-use super::motion_interp::WALK_ANIM_SPEED;
+// MOVE-F6 (2026-08-11): `RunAnimSpeed` is BOTH the run body speed
+// (`:343565`) and the multiplier in retail's state-velocity ceiling
+// (`:343586`) — see `state_velocity_speed_cap`.
+use super::motion_interp::{RUN_ANIM_SPEED, WALK_ANIM_SPEED};
 use crate::client::movement_types::{
     ForwardLocomotion, Gait, MotionState, MotionStyle, MovementPacketMetadata, SidestepLocomotion,
     Turn, planar_velocity_for_heading,
@@ -879,6 +882,93 @@ fn sidestep_axis_speed(state: MotionState, capabilities: &SelfMovementCapabiliti
     }
 }
 
+/// MOVE-F6 — retail's state-velocity ceiling. `CMotionInterp::
+/// get_max_speed` (`acclient.c:343486-343509`) and the identical inline
+/// read inside `get_state_velocity` (`:343573-343586`) both resolve
+/// `run_rate × 4.0`, where the rate is the weenie's `InqRunRate` answer,
+/// else the interp's last-known `my_run_rate`, else `1.0`.
+/// `capabilities.run_rate_scalar` (`self_movement.rs:80`, composed by
+/// `player_run_rate()`) IS that already-resolved number, so the fallback
+/// ladder is upstream of us. ACE: `MotionInterp.cs:665-675,689-693`.
+fn state_velocity_speed_cap(capabilities: &SelfMovementCapabilities) -> f32 {
+    RUN_ANIM_SPEED * capabilities.run_rate_scalar
+}
+
+/// MOVE-F6 — the renormalize tail of `CMotionInterp::get_state_velocity`
+/// (`acclient.c:343586-343593`; ACE `MotionInterp.cs:694-698`):
+///
+/// ```text
+/// v9  = v8 * 4.0;
+/// v10 = sqrt(v4->x * v4->x + v4->y * v4->y + v4->z * v4->z);
+/// if ( v10 > v9 ) { v4->x = 1.0 / v10 * v4->x * v9;  ...y  ...z }
+/// ```
+///
+/// Three properties this pins, all of them load-bearing:
+///
+/// * **Strictly greater.** A vector sitting exactly ON the ceiling is
+///   returned untouched. Retail relies on it — run-forward alone
+///   composes `4.0 × forward_speed` against a `4.0 × run_rate` cap, and
+///   `forward_speed` IS `run_rate` after `apply_run_to_command`, so the
+///   common case must not take the divide.
+/// * **Direction preserved.** Every component takes the same `v9/v10`
+///   factor; the cap renormalizes, it never projects or per-axis clamps.
+/// * **Magnitude-only.** Rotation-invariant, so applying it to a
+///   world-frame vector is identical to retail's body-frame cap.
+///
+/// The operand order matches the decomp (`(1/|v|) · c · cap`, NOT
+/// `c · (cap/|v|)`) so the rounding is retail's too. The `> 0.0` term is
+/// a divide-by-zero guard for the unreachable negative-cap case and
+/// matches [`super::motion_interp::MotionInterp::get_state_velocity`],
+/// the interpreted-pipeline copy of this same tail.
+fn cap_state_velocity(velocity: Vector3, max_speed: f32) -> Vector3 {
+    let magnitude = velocity.length();
+    if magnitude > max_speed && magnitude > 0.0 {
+        let inv = 1.0 / magnitude;
+        Vector3::new(
+            inv * velocity.x * max_speed,
+            inv * velocity.y * max_speed,
+            inv * velocity.z * max_speed,
+        )
+    } else {
+        velocity
+    }
+}
+
+/// MOVE-F6 — the COMPLETE `CMotionInterp::get_state_velocity` port on
+/// the legacy axis-helper axis: [`local_velocity_for_state`]'s
+/// composition with retail's ceiling applied
+/// (`acclient.c:343539-343594`), in the world frame.
+///
+/// This is the LAUNCH form. Retail's only physics consumer of the capped
+/// closed form is `get_leave_ground_velocity` (`:343806-343842`, the sole
+/// `get_state_velocity` call site at `:343821`; ACE agrees —
+/// `MotionInterp.cs:656` is its only caller too), which pairs it with
+/// `get_jump_v_z`. On-ground translation does NOT go through it; see
+/// [`local_velocity_for_state`] for the uncapped ground contract and the
+/// four decomp anchors behind it.
+///
+/// Staged: the live launch sites are in `movement/system.rs`
+/// (`manual_intent_velocity` :7638, whose own doc already names
+/// `get_leave_ground_velocity` as the retail form it is standing in for,
+/// and whose BOTH arms currently hand back an uncapped GROUND vector).
+/// That file is another task's active scope — wiring is a one-line
+/// handoff, recorded in `impl/task-MOVE-F6-SPEEDCAP-report.md`. The
+/// interpreted-pipeline sibling is
+/// [`super::motion_interp::leave_ground_velocity_for_state`]; the
+/// equivalence of the two is pinned by
+/// `capped_composition_matches_the_interpreted_leave_ground_port`.
+#[allow(dead_code)] // staged: launch-site wiring is system.rs (see above)
+pub(super) fn local_state_velocity_for_state(
+    current_heading: f32,
+    state: MotionState,
+    capabilities: &SelfMovementCapabilities,
+) -> Vector3 {
+    cap_state_velocity(
+        local_velocity_for_state(current_heading, state, capabilities),
+        state_velocity_speed_cap(capabilities),
+    )
+}
+
 pub(super) fn local_velocity_for_state(
     current_heading: f32,
     state: MotionState,
@@ -899,6 +989,30 @@ pub(super) fn local_velocity_for_state(
     // at 1.0 = √2 m/s diagonal). This matches retail behaviour and ACE
     // tolerates the slightly faster diagonal because its position
     // reconciler operates on absolute pose, not motion-derived velocity.
+    //
+    // MOVE-F6 (2026-08-11) — and the sum stays UNCAPPED, on purpose. The
+    // retail ground chain, read end to end:
+    //   1. `apply_interpreted_movement` issues BOTH axes in one pass —
+    //      the forward command at `acclient.c:344177` and, when the slot
+    //      is occupied, the sidestep command at `:344182`. The retail
+    //      ground diagonal is real, not an artifact of our decomposition.
+    //   2. `add_motion` SETS the sequence velocity from the forward
+    //      cycle (`:337451`) and `combine_motion` ADDS the sidestep
+    //      (`:337501` → `CSequence::combine_physics` `:339716-339721`) —
+    //      a plain component-wise sum.
+    //   3. `CSequence::apply_physics` integrates it as
+    //      `origin += quantum × velocity` (`:339876-339881`).
+    // There is no magnitude test anywhere in 1–3.
+    //
+    // The `run_rate × 4.0` renormalize belongs to a DIFFERENT form:
+    // `CMotionInterp::get_state_velocity` (`:343586-343593`), whose only
+    // consumer is `get_leave_ground_velocity` (`:343821`; ACE
+    // `MotionInterp.cs:656` likewise). Capping here would slow the
+    // shipped ground diagonal below retail (18.39 → 18.00 m/s at
+    // run_rate 4.5) and split the two live ground producers — the DESIGN
+    // §1.4 identity between this and `motion_interp::ground_velocity`
+    // (also uncapped, and for the same reason) is what forbids it.
+    // The capped composition is [`local_state_velocity_for_state`].
     let mut velocity = Vector3::zero();
 
     let forward_speed = forward_axis_speed(state, capabilities);
@@ -1213,6 +1327,228 @@ mod tests {
             "run strafe @rr=4.5 expected 3.75 m/s (anim-rate cap 3.0 × 1.25), got {:.4}",
             v.length(),
         );
+    }
+
+    // -----------------------------------------------------------------
+    // MOVE-F6 — retail's state-velocity ceiling (`run_rate × 4.0`)
+    // -----------------------------------------------------------------
+
+    /// The maxed-run diagonal fixture: run forward (`4.0 × run_rate`)
+    /// plus run strafe (anim-rate-capped `3.0 × 1.25 = 3.75` at high
+    /// rates) — the composition MOVE-F6 exists for.
+    fn run_diagonal() -> MotionState {
+        MotionState::builder()
+            .run()
+            .forward()
+            .strafe_right()
+            .build()
+    }
+
+    /// Acceptance (a) — a composition UNDER the ceiling is returned
+    /// untouched, and the boundary is retail's STRICT `>`
+    /// (`acclient.c:343588`), so a vector sitting exactly ON the ceiling
+    /// is untouched too. Bit-identical, not epsilon-close: the cap must
+    /// not take the divide here. Retail leans on that — run-forward
+    /// ALONE composes `4.0 × forward_speed` (`:343565`) against a
+    /// `4.0 × run_rate` ceiling (`:343586`) and `forward_speed` IS
+    /// `run_rate` after `apply_run_to_command`, so the single commonest
+    /// input in the game lands exactly on the line.
+    #[test]
+    fn state_velocity_cap_leaves_under_and_at_the_ceiling_untouched() {
+        let capabilities = retail_walk_base_capabilities(1.0);
+        let cap = state_velocity_speed_cap(&capabilities);
+        assert_eq!(cap, 4.0);
+
+        // Walk forward ⊕ walk strafe = 3.12 ⊕ 1.56 ≈ 3.489 m/s.
+        let walk_diagonal = MotionState::builder()
+            .walk()
+            .forward()
+            .strafe_right()
+            .build();
+        let under = local_velocity_for_state(0.0, walk_diagonal, &capabilities);
+        assert!(
+            under.length() < cap,
+            "fixture must sit under the ceiling, got {:.4}",
+            under.length(),
+        );
+        assert_eq!(cap_state_velocity(under, cap), under);
+        // The composer passes it through byte-for-byte too.
+        assert_eq!(
+            local_state_velocity_for_state(0.0, walk_diagonal, &capabilities),
+            under,
+        );
+
+        // Exactly ON the ceiling — `>` must not fire.
+        let at = Vector3::new(0.0, cap, 0.0);
+        assert_eq!(cap_state_velocity(at, cap), at);
+
+        // Run-forward alone: on the line, untouched.
+        let run_forward = local_velocity_for_state(
+            0.0,
+            MotionState::builder().run().forward().build(),
+            &capabilities,
+        );
+        assert!((run_forward.length() - cap).abs() < 1e-5);
+        assert_eq!(cap_state_velocity(run_forward, cap), run_forward);
+    }
+
+    /// Acceptance (b) — an OVER-ceiling composition renormalizes to
+    /// EXACTLY the ceiling with direction preserved. Retail scales all
+    /// three components by the same `v9/v10` factor
+    /// (`acclient.c:343590-343592`): a renormalize, never a projection
+    /// and never a per-axis clamp.
+    #[test]
+    fn state_velocity_cap_renormalizes_over_ceiling_preserving_direction() {
+        // Maxed run rate: 18.0 forward ⊕ 3.75 strafe ≈ 18.386 m/s
+        // against an 18.0 ceiling.
+        let capabilities = retail_walk_base_capabilities(4.5);
+        let cap = state_velocity_speed_cap(&capabilities);
+        assert!((cap - 18.0).abs() < 1e-5, "ceiling expected 18.0, got {cap}");
+
+        let heading = 0.7_f32;
+        let raw = local_velocity_for_state(heading, run_diagonal(), &capabilities);
+        assert!(
+            raw.length() > cap,
+            "fixture must exceed the ceiling, got {:.4}",
+            raw.length(),
+        );
+
+        let capped = cap_state_velocity(raw, cap);
+        assert!(
+            (capped.length() - cap).abs() < 1e-4,
+            "expected exactly the ceiling {cap}, got {:.5}",
+            capped.length(),
+        );
+
+        // Direction preserved — unit vectors agree on every axis.
+        let (want, got) = (raw.normalize(), capped.normalize());
+        assert!(
+            (want.x - got.x).abs() < 1e-6
+                && (want.y - got.y).abs() < 1e-6
+                && (want.z - got.z).abs() < 1e-6,
+            "cap rotated the vector: {want:?} vs {got:?}",
+        );
+
+        // And it is ONE common factor, not per-axis work.
+        let factor = cap / raw.length();
+        assert!(
+            (capped.x - raw.x * factor).abs() < 1e-5
+                && (capped.y - raw.y * factor).abs() < 1e-5
+                && (capped.z - raw.z * factor).abs() < 1e-5,
+            "cap was not a uniform scale: {raw:?} × {factor} != {capped:?}",
+        );
+    }
+
+    /// Acceptance (c) — the ceiling SCALES with run_rate. It is
+    /// `run_rate × RunAnimSpeed` (`acclient.c:343580-343586`), not a
+    /// constant, so the same held keys land on a different ceiling for
+    /// every Run skill. Rates are the DESIGN §2 ladder: 1.0 (stamina-out
+    /// / no skill), 1.9167 (~runskill 100), 2.65, 4.5 (runskill 800, the
+    /// formula maximum — `acclient.c:713790-713803`).
+    #[test]
+    fn state_velocity_cap_scales_with_run_rate() {
+        for run_rate in [1.0_f32, 1.9166666, 2.65, 4.5] {
+            let capabilities = retail_walk_base_capabilities(run_rate);
+            let cap = state_velocity_speed_cap(&capabilities);
+            assert!(
+                (cap - 4.0 * run_rate).abs() < 1e-5,
+                "ceiling @rr={run_rate} expected {}, got {cap}",
+                4.0 * run_rate,
+            );
+
+            // The diagonal is over the ceiling at every rate, so the
+            // capped composition realizes the ceiling exactly.
+            let capped = local_state_velocity_for_state(0.7, run_diagonal(), &capabilities);
+            assert!(
+                (capped.length() - cap).abs() < 1e-4,
+                "capped diagonal @rr={run_rate} expected {cap}, got {:.5}",
+                capped.length(),
+            );
+        }
+    }
+
+    /// MOVE-F6 DEVIATION pin — the GROUND composition must stay
+    /// UNCAPPED. Retail's on-ground translation is the animation
+    /// sequence velocity: `apply_interpreted_movement` issues both axes
+    /// (`acclient.c:344177` + `:344182`), `add_motion` sets the forward
+    /// cycle (`:337451`) and `combine_motion` adds the sidestep
+    /// (`:337501` → `combine_physics` `:339716-339721`), and
+    /// `apply_physics` integrates `origin += quantum × velocity`
+    /// (`:339876-339881`) — no magnitude test anywhere in that chain.
+    /// The `run_rate × 4.0` renormalize is `get_state_velocity`'s
+    /// (`:343586-343593`) and its only consumer is
+    /// `get_leave_ground_velocity` (`:343821`).
+    #[test]
+    fn ground_composition_is_not_capped() {
+        let capabilities = retail_walk_base_capabilities(4.5);
+        let cap = state_velocity_speed_cap(&capabilities);
+
+        let ground = local_velocity_for_state(0.7, run_diagonal(), &capabilities);
+        assert!(
+            ground.length() > cap,
+            "the ground diagonal must exceed the launch ceiling as retail's does \
+             ({:.4} vs {cap}) — capping here would slow the shipped ground lane \
+             below retail and split it from `motion_interp::ground_velocity`",
+            ground.length(),
+        );
+        // Retail's numbers, spelled out: 4.0×4.5 forward ⊕ 3.0×1.25 strafe.
+        let expected = ((4.0_f32 * 4.5).powi(2) + 3.75_f32.powi(2)).sqrt();
+        assert!(
+            (ground.length() - expected).abs() < 1e-3,
+            "ground diagonal @rr=4.5 expected {expected:.4} m/s, got {:.4}",
+            ground.length(),
+        );
+    }
+
+    /// The capped composition IS retail's leave-ground form. Cross-check
+    /// [`local_state_velocity_for_state`] against
+    /// `motion_interp::leave_ground_velocity_for_state` — an INDEPENDENT
+    /// derivation of the same decomp function (raw state →
+    /// `apply_raw_movement` → `MotionInterp::get_state_velocity`, which
+    /// carries its own copy of the `:343586-343593` tail) over every
+    /// (gait, locomotion, run_rate, heading) cell. Two implementations
+    /// of one retail body cannot drift apart while this holds.
+    #[test]
+    fn capped_composition_matches_the_interpreted_leave_ground_port() {
+        use super::super::motion_interp::leave_ground_velocity_for_state;
+
+        // Idle is excluded deliberately: the leave-ground form falls
+        // back to the integrator velocity for a ~zero closed form
+        // (`acclient.c:343825-343841`), which this composition has no
+        // analogue for.
+        let states = [
+            MotionState::builder().forward().build(),
+            MotionState::builder().backstep().build(),
+            MotionState::builder().strafe_left().build(),
+            MotionState::builder().strafe_right().build(),
+            MotionState::builder().forward().strafe_right().build(),
+            MotionState::builder().backstep().strafe_left().build(),
+        ];
+        let fallback = Vector3::new(9.0, -9.0, 0.0); // must never be reached
+        for run_rate in [1.0_f32, 1.9166666, 2.65, 4.5] {
+            let capabilities = retail_walk_base_capabilities(run_rate);
+            for base in states {
+                for gait in [Gait::Walk, Gait::Run] {
+                    let state = MotionState { gait, ..base };
+                    for heading in [0.0_f32, 1.0, 2.5, -2.0] {
+                        let ours = local_state_velocity_for_state(heading, state, &capabilities);
+                        let port = leave_ground_velocity_for_state(
+                            heading,
+                            state,
+                            &capabilities,
+                            fallback,
+                        );
+                        assert!(
+                            (ours.x - port.x).abs() < 1e-4
+                                && (ours.y - port.y).abs() < 1e-4
+                                && (ours.z - port.z).abs() < 1e-4,
+                            "launch forms disagree at gait={gait:?} state={state:?} \
+                             run_rate={run_rate} heading={heading}: {ours:?} vs {port:?}",
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Wave 2 Phase 2.5 (2026-05-26) — `Turn::Left` emits the
