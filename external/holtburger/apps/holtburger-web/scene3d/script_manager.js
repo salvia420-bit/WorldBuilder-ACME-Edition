@@ -36,15 +36,33 @@
 //    next_hook_time)` execute the hook; on exhaustion pop `curr_data`,
 //    advance to `next_data`.
 //
-// === Known JS-side approximation ===
-// Retail's per-script `length` (ScriptData length, used for back-to-back
-// chaining) is not exported across the wasm boundary today (no per-script
-// length getter on `PhysicsScriptJs`; only per-entry `startTime`). We derive
-// `length` as the MAX entry `startTime` in the script — i.e. the time the
-// last hook fires. This is the best value available without a wasm rebuild
-// and is exact when the script's final hook is its terminal event (the common
-// shape for the scripts we run). If a future lib.rs addition exports the true
-// `length`, pass it as the optional 3rd arg to `addScript`.
+// === Derived `length` is EXACT — not an approximation (SCRIPTMGR-RATE 2026-08-11) ===
+// This note previously read "known JS-side approximation … the best value
+// available without a wasm rebuild", and flagged a `PhysicsScriptJs` length
+// getter as owed. Read-verified against the decomp: NO getter is owed, because
+// retail computes `length` the same way we do. `PhysicsScript::UnPack`
+// (acclient.c:336452-336528) reads the entries, qsorts `script_data` by
+// `start_time` (`PhysicsScriptData::Sort`), then copies the LAST entry's
+// `start_time` straight into `PhysicsScript::length` — the two dwords written
+// at `v4+18`/`v4+19`, i.e. the 8 bytes immediately past `num_in_array`, which
+// is exactly `length` per the struct (acclient.h:31801-31804). So retail's
+// `length` IS max(entry.start_time); there is no separate on-disk field. Our
+// derivation therefore reproduces `AddScriptInternal`'s back-to-back chain
+// (acclient.c:329090-329093) bit for bit, for EVERY script shape — not just
+// ones whose final hook is terminal. The optional `opts.length` override stays
+// for callers that synthesize scripts.
+//
+// === Entry contract (load-bearing) ===
+// An entry's schedule key is `startTime`, read in three places (the sort in
+// `addScript`, the `length` derivation, and `_armNextHook`). An entry that
+// omits it is not rejected — `+undefined || 0` silently reads 0, which arms
+// every hook at the script's start and derives length 0. That is exactly how
+// SCRIPTMGR-RATE happened: `entities.js#_decodePhysicsScriptHookEntry` emits
+// the `AnimationHookJs` shape, whose offset field is named `time`, and nothing
+// bridged the two names, so a CallPES self-loop re-armed with zero delay and
+// ran one iteration PER FRAME (~17 Hz on the portal, vs 1 per 2.7 s). Owners
+// that adapt hooks from another shape MUST map their offset onto `startTime`;
+// see `?scriptHookTime` and `harness/test_script_hook_time.mjs`.
 
 import { currentTime } from "./particles/time_rng.js";
 
