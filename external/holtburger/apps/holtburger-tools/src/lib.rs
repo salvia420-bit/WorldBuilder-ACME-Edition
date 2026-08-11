@@ -1,3 +1,4 @@
+pub mod alpha_audit;
 pub mod boot_verify;
 pub mod dat2hba;
 pub mod dat_shard;
