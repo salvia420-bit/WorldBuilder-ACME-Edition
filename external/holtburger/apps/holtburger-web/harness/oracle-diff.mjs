@@ -61,6 +61,16 @@ export const MOTION_EPS = 0.15;
 export const JUMP_ARC_SAMPLE_MS = 170;
 /** Resample grid period (ms). 20ms is finer than either source emits. */
 export const GRID_MS = 20;
+/**
+ * Session 3 — the fraction of a metric window that must have been OBSERVED
+ * before the window's median is reported at all. A stall omits grid points
+ * (`resample`), so this is the share of the window that survived. 0.5 is
+ * deliberately generous: measured, a usable `run-hold-long` capture on this
+ * laptop keeps only ~47% of its steady window (one 6.4 s stall inside a 7.8 s
+ * window) and its surviving samples are a flat, correct 7.884 — so the floor
+ * must reject "almost nothing was seen", not "a stall clipped this".
+ */
+export const MIN_WINDOW_COVERAGE = 0.25;
 
 // ---------------------------------------------------------------------------
 // loading + normalization
@@ -354,6 +364,16 @@ export function resample(samples, field, t0, t1, gridMs = GRID_MS, maxBridgeMs =
     // `steadySpeed`'s `minSamples` guard still turns a wholly-unobserved
     // window into `null`.
     if (b !== a && b.t - a.t > bridge && t > a.t && t < b.t) continue;
+    // SESSION-3 FIX — do not EXTEND past the ends of the data either.
+    //
+    // The same fabrication from the other direction. Before this, a window
+    // reaching past the last sample was filled by repeating that sample, so a
+    // capture that ended early reported the avatar's final state across the
+    // whole remainder. Measured: a `run-hold-long` re-take whose pre-roll
+    // stall pushed the hold to the very end of the capture had 60% of its
+    // steady window filled with the post-keyup at-rest value and reported a
+    // confident `0 m/s` for a run that was plainly at 7.88.
+    if (t < pts[0].t || t > pts[pts.length - 1].t) continue;
     let v;
     if (b === a || b.t === a.t) {
       v = a[field];
@@ -389,10 +409,22 @@ export function median(xs) {
  * stall (or the end of the capture) left empty, and the report shows a
  * confident number for a period nothing was observed.
  */
-export function steadySpeed(samples, [start, end], minSamples = 2) {
+export function steadySpeed(samples, [start, end], minSamples = 2, minCoverage = MIN_WINDOW_COVERAGE) {
   const inside = samples.filter((s) => s.t >= start && s.t <= end && Number.isFinite(s.speed));
   if (inside.length < minSamples) return null;
   const grid = resample(samples, "speed", start, end);
+  // Session 3 — COVERAGE, not just presence.
+  //
+  // `resample` omits grid points inside a stall (see its doc), so a window
+  // the stall mostly swallowed comes back sparse. Taking the median of
+  // whatever survived is only honest while most of the window was actually
+  // observed: on the 2026-08-11 `run-hold-long` re-take a 6.6 s stall covered
+  // the hold and left only the at-rest samples on either side, and the report
+  // read a confident `0` for a run — the same fabricated-number failure as
+  // the bridge, arriving from the other direction. Under-covered windows are
+  // `null`, which the report already renders as no-data.
+  const expected = Math.floor((end - start) / GRID_MS) + 1;
+  if (expected > 0 && grid.length / expected < minCoverage) return null;
   return median(grid.map((g) => g.v));
 }
 
@@ -956,11 +988,24 @@ function selftest() {
   const bn = alignToFirstMotion(derive(normalize(bridgeRecs).samples)).samples;
   const bridged = steadySpeed(bn, [500, 2900]);
   check("a steady window ending at the stall reads the OBSERVED speed", Math.abs(bridged - 4) < 0.05, `got ${bridged?.toFixed(3)}`);
-  // Straddling the hole must still report only what was seen, never the ramp.
-  const straddle = steadySpeed(bn, [500, 8000]);
-  check("a window straddling the stall is not dragged toward zero", straddle > 3.9, `got ${straddle?.toFixed(3)}`);
+  // A window that CLIPS the hole (still majority-observed) reports only what
+  // was seen, never the ramp the bridge used to draw.
+  const straddle = steadySpeed(bn, [500, 4500]);
+  check("a window clipping the stall is not dragged toward zero", straddle > 3.9, `got ${straddle?.toFixed(3)}`);
+  // A window that is ALMOST entirely stall is no-data even though samples
+  // exist at its edge — coverage, not presence. (A window that merely clips
+  // the stall keeps reporting; see MIN_WINDOW_COVERAGE for why the floor is
+  // low.)
+  check("a window almost entirely inside the stall is no-data", steadySpeed(bn, [2500, 9200]) === null, `${steadySpeed(bn, [2500, 9200])}`);
+  // The end-of-data clamp: a window reaching past the last sample must not be
+  // filled by repeating it.
+  const tailOnly = steadySpeed(bn, [9500, 20000]);
+  check("a window past the end of the capture is no-data", tailOnly === null, `${tailOnly}`);
   // And a window wholly inside the hole is still no-data.
   check("a window wholly inside the stall is still no-data", steadySpeed(bn, [3200, 8000]) === null);
+  // And a window the stall MOSTLY ate is no-data, not a confident number
+  // built from the handful of at-rest samples that survived at its edges.
+  check("an under-covered window is no-data, not a confident zero", steadySpeed(bn, [2600, 9800]) === null, `${steadySpeed(bn, [2600, 9800])}`);
 
   // --- malformed input ----------------------------------------------------
   const partial = parseJsonl('{"a":1}\n{"b":2\n{"c":3}\n');
