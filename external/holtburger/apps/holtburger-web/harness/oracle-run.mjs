@@ -123,21 +123,42 @@ export function telelocCommand(site) {
  * Map a scenario key to the RETAIL client's keyboard layout.
  *
  * Scenario keys are written in holtburger's layout and mean an AXIS, not a
- * keycap: `a`/`d` are the strafe axis and `q`/`e` the turn axis. Retail's
- * default binding is the other way round — `a`/`d` TURN and `q`/`e` STRAFE —
- * so the two sides need different keycaps to produce the same movement. The
- * swap preserves left/right: a<->q, d<->e.
+ * keycap: `a`/`d` are the strafe axis, `q`/`e` the turn axis, `s` backward.
+ * Retail binds those axes to different keycaps, so the two sides need
+ * different keys to produce the same movement.
  *
- * WINE-RIG.md §6 records the same fact in prose; this is the executable copy,
- * and it is the reason the retail plan is generated here instead of being
- * retyped into a shell script on the box.
+ * SOURCE (2026-08-11) — the shipped client's OWN help file,
+ * `helpcontent/MOVING WITH THE KEYBOARD.ksml` ("the default motion bindings
+ * for Asheron's Call"), read off the rig install:
+ *
+ * | action | retail default |
+ * |---|---|
+ * | run forward | UP or **W** (SHIFT+W = walk) |
+ * | walk backward | DOWN or **X** |
+ * | turn left / right | LEFT/RIGHT or **A** / **D** |
+ * | sidestep left / right | **Z** / **C** |
+ * | auto-run | **Q** |
+ * | jump | SPACE |
+ *
+ * CORRECTION — session 2 (and WINE-RIG.md §6 before this) claimed retail
+ * strafes on `Q`/`E` and walks backward on `S`. Both were wrong, and the
+ * error was VISIBLE in the captures without being recognised:
+ * `turn-while-run` (holtburger `e` -> retail `d`) turned correctly at 134
+ * deg/s, while `strafe-diagonal` (holtburger `d` -> retail `e`) produced no
+ * `SIDESTEP_COMMAND` in any raw motion state — because retail `E` is bound to
+ * nothing. The turn half of the old swap was right by luck; the strafe half
+ * sent the diagonal scenario into an unbound key, which is exactly the
+ * "clean-looking report full of axis-swapped garbage" this function exists to
+ * prevent. `Q` is especially treacherous: it is not unbound, it TOGGLES
+ * AUTO-RUN, so the old map's holtburger-`a` -> retail-`Q` would have started
+ * an autorun in the middle of a strafe scenario.
  */
 export function retailKey(key) {
   const map = {
-    w: "w",
-    s: "s",
-    a: "q", // holtburger strafe-left  -> retail strafe-left
-    d: "e", // holtburger strafe-right -> retail strafe-right
+    w: "w", // forward — the one key both layouts share
+    s: "x", // holtburger backward     -> retail walk-backward
+    a: "z", // holtburger strafe-left  -> retail sidestep-left
+    d: "c", // holtburger strafe-right -> retail sidestep-right
     q: "a", // holtburger turn-left    -> retail turn-left
     e: "d", // holtburger turn-right   -> retail turn-right
     shift: "shift",
@@ -261,7 +282,29 @@ export function captureQuality(records) {
   };
 }
 
-function buildUrl(base, account) {
+/**
+ * `--flags a=b,c=d` — extra URL params appended verbatim, for A/B arms.
+ *
+ * Added for MOVE-RUNRATE-105 (2026-08-11): the fix ships behind
+ * `?serverRunRate=off`, and the honest way to measure a default-on flag is to
+ * run BOTH arms in ONE browser session against the SAME capture site, so a
+ * difference cannot be a site or a stall. Anything a scenario needs that is
+ * not a scenario property belongs here rather than in a forked copy of
+ * `buildUrl`.
+ */
+export function parseExtraFlags(spec) {
+  if (!spec || spec === true) return [];
+  return String(spec)
+    .split(",")
+    .map((kv) => kv.trim())
+    .filter(Boolean)
+    .map((kv) => {
+      const i = kv.indexOf("=");
+      return i < 0 ? [kv, "1"] : [kv.slice(0, i), kv.slice(i + 1)];
+    });
+}
+
+function buildUrl(base, account, extraFlags = []) {
   const p = new URLSearchParams();
   p.set("moveTelemetry", "1");
   p.set("nosw", "1");
@@ -276,6 +319,7 @@ function buildUrl(base, account) {
   // `handle.tickMovement()`) at a fixed 30 Hz.
   p.set("renderOnDemand", "1");
   p.set("netDrainHz", "30");
+  for (const [k, v] of extraFlags) p.set(k, v);
   return `${base}?${p.toString()}`;
 }
 
@@ -484,7 +528,11 @@ async function run(args) {
   const pw = await import(pwPath);
   const chromium = pw.chromium ?? pw.default?.chromium;
   const account = args.account ?? "agentp09";
-  const url = buildUrl(args.base ?? "http://127.0.0.1:8765/apps/holtburger-web/index.html", account);
+  const url = buildUrl(
+    args.base ?? "http://127.0.0.1:8765/apps/holtburger-web/index.html",
+    account,
+    parseExtraFlags(args.flags),
+  );
   console.error(`[oracle-run] ${url}`);
 
   const browser = await chromium.launch({
@@ -605,10 +653,23 @@ function selftest() {
   check("a scenario with no forward hold does not false-fail", gNone.ok && gNone.gait === null);
 
   // --- session 2: the retail plan + key remap ----------------------------
-  check("retail remap swaps the strafe and turn pairs", retailKey("d") === "e" && retailKey("e") === "d" && retailKey("a") === "q" && retailKey("q") === "a");
+  // Retail bindings read off the rig install's own
+  // `helpcontent/MOVING WITH THE KEYBOARD.ksml` (2026-08-11).
+  check("retail strafe axis is Z/C, not Q/E", retailKey("a") === "z" && retailKey("d") === "c", `${retailKey("a")}/${retailKey("d")}`);
+  check("retail turn axis is A/D", retailKey("q") === "a" && retailKey("e") === "d", `${retailKey("q")}/${retailKey("e")}`);
+  check("retail walks backward on X, not S", retailKey("s") === "x", retailKey("s"));
   check("retail remap leaves the shared keys alone", retailKey("w") === "w" && retailKey("space") === "space");
+  // Q toggles AUTO-RUN in retail. No scenario key may ever map onto it — an
+  // accidental autorun would keep the avatar moving after every keyup and
+  // silently corrupt every metric that follows in the same session.
+  check("no scenario key maps onto retail's auto-run toggle",
+    ["w", "s", "a", "d", "q", "e", "shift", "space"].every((k) => retailKey(k) !== "q"));
   const f6plan = retailPlan(spec.scenarios.find((s) => s.id === "strafe-diagonal"), spec);
-  check("MOVE-F6 plan strafes with retail's E, not D", /down e$/m.test(f6plan) && !/ down d$/m.test(f6plan), f6plan.split("\n").filter((l) => /down/.test(l)).join(" | "));
+  // MOVE-F6's whole point: the diagonal must STRAFE, not turn. Retail's
+  // sidestep-right is C; D would turn, and E (session 2's map) is unbound.
+  check("MOVE-F6 plan strafes with retail's C — not D (turn), not E (unbound)",
+    / down c$/m.test(f6plan) && !/ down d$/m.test(f6plan) && !/ down e$/m.test(f6plan),
+    f6plan.split("\n").filter((l) => /down/.test(l)).join(" | "));
   check("retail plan carries the shared teleloc", f6plan.includes(`teleloc @teleloc ${spec.capture_site.cell}`));
   const turnplan = retailPlan(spec.scenarios.find((s) => s.id === "turn-while-run"), spec);
   check("turn-while-run turns with retail's D", /down d$/m.test(turnplan));
@@ -633,6 +694,18 @@ function selftest() {
   check("quality reports the z range", Math.abs(q.z_range_m - 0.2) < 1e-6, `${q.z_range_m}`);
   const qPinned = captureQuality(mkq(20, 1.5, 7.8, 0));
   check("a pinned avatar shows up as realized << intent", qPinned.realized_over_intent < 0.25, `${qPinned.realized_over_intent?.toFixed(3)}`);
+
+  // --- `--flags` A/B passthrough (MOVE-RUNRATE-105) ----------------------
+  check("no --flags is an empty list", parseExtraFlags(undefined).length === 0);
+  check("--flags with no value is an empty list", parseExtraFlags(true).length === 0);
+  const ff = parseExtraFlags("serverRunRate=off");
+  check("a single k=v parses", ff.length === 1 && ff[0][0] === "serverRunRate" && ff[0][1] === "off", JSON.stringify(ff));
+  const ff2 = parseExtraFlags(" a=1 , bare , c=x=y ");
+  check("comma list, bare keys default to 1, only the FIRST = splits",
+    JSON.stringify(ff2) === JSON.stringify([["a", "1"], ["bare", "1"], ["c", "x=y"]]), JSON.stringify(ff2));
+  const u = buildUrl("http://h/i.html", "agentp09", parseExtraFlags("serverRunRate=off"));
+  check("extra flags reach the URL", u.includes("serverRunRate=off"), u);
+  check("extra flags do not disturb the cadence flags", u.includes("netDrainHz=30") && u.includes("nosw=1"), u);
 
   console.log(`\n${p} passed, ${f} failed`);
   process.exit(f === 0 ? 0 : 1);
@@ -669,7 +742,7 @@ else if (args.list) {
     } else process.stdout.write(text);
   }
 } else if (!args.scenario && !args.all) {
-  console.error("usage: oracle-run.mjs --scenario <id> [--out f.jsonl] [--account agentp09]");
+  console.error("usage: oracle-run.mjs --scenario <id> [--out f.jsonl] [--account agentp09] [--flags k=v,k2=v2]");
   console.error("       oracle-run.mjs --all [--out-dir DIR]");
   console.error("       oracle-run.mjs --list | --selftest");
   process.exit(2);

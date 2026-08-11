@@ -285,11 +285,36 @@ input goes through the pointer-focus trick from §2.
 
 ### Retail's key map differs from holtburger's
 
-Retail AC default: `W`/`S` forward/back, `A`/`D` **turn**, `Q`/`E` **strafe**.
-holtburger: `w`/`s` forward, `a`/`d` **strafe**, `q`/`e` **turn**, `shift` =
-walk modifier. A driver that assumes one layout for both will produce a
-clean-looking report full of axis-swapped garbage. `scenarios.json` records the
-mapping per side; only `W` and `space` are common to both.
+**Source (session 3, 2026-08-11): the shipped client's OWN help file**,
+`helpcontent/MOVING WITH THE KEYBOARD.ksml` on the rig install — "the default
+motion bindings for Asheron's Call". Do not take this from memory; it is one
+`cat` away on the box.
+
+| action | retail default | holtburger |
+|---|---|---|
+| run forward | `UP` or **`W`** | `w` |
+| walk forward | `SHIFT`+`W` | `shift`+`w` |
+| walk backward | `DOWN` or **`X`** | `s` |
+| turn left / right | `LEFT`/`RIGHT` or **`A`** / **`D`** | `q` / `e` |
+| sidestep left / right | **`Z`** / **`C`** | `a` / `d` |
+| auto-run | **`Q`** | — |
+| jump | `SPACE` | `space` |
+
+So the emitter's remap is `s→x`, `a→z`, `d→c`, `q→a`, `e→d`
+(`oracle-run.mjs::retailKey`, unit tested); only `W`, `SHIFT` and `SPACE` are
+common to both.
+
+> **CORRECTION — sessions 1-2 had this wrong**, and it cost MOVE-F6. The old
+> claim was "`A`/`D` turn, `Q`/`E` strafe", so the emitter swapped `a↔q` and
+> `d↔e`. The turn half happened to be right (`turn-while-run` really did turn
+> at 134 deg/s), which made the map look verified; the strafe half sent
+> `strafe-diagonal` into retail's **`E`, which is bound to nothing** — hence
+> that capture's total absence of `SIDESTEP_COMMAND`, and hence session 2's
+> "MOVE-F6 disagrees, direction unknown". Worse, the old map sent
+> holtburger's `a` to retail's **`Q`, which TOGGLES AUTO-RUN**: a left-strafe
+> scenario would have latched an autorun that outlived every subsequent keyup
+> in the session. Any future claim about a binding gets read out of the
+> `.ksml` files or off the wire, never from prose.
 
 ---
 
@@ -313,12 +338,12 @@ millisecond clock, releases every key, and prints the pcap path.
 
 Two things live in the generated plan rather than in this script, deliberately:
 
-* **The key remap.** Retail `A`/`D` turn and `Q`/`E` strafe; holtburger is the
-  reverse. Scenario keys are written in holtburger's layout and mean an AXIS,
-  so the emitter swaps `a<->q` and `d<->e` (`oracle-run.mjs::retailKey`, unit
-  tested). A hand-typed retail script gets this wrong and produces a
-  clean-looking report full of axis-swapped garbage — MOVE-F6 in particular
-  would strafe with a key that turns.
+* **The key remap.** Scenario keys are written in holtburger's layout and mean
+  an AXIS, not a keycap, so the emitter rewrites them to retail's bindings
+  (`s→x`, `a→z`, `d→c`, `q→a`, `e→d`; `oracle-run.mjs::retailKey`, unit
+  tested — see the table in §6). A hand-typed retail script gets this wrong
+  and produces a clean-looking report full of axis-swapped garbage: MOVE-F6
+  spent a whole session strafing with a key retail does not bind.
 * **The capture site.** `scenarios.json.capture_site` becomes the `@teleloc`
   line of every plan, so both sides measure the same ground facing the same
   way. See that file's `$comment` for why Samsur and how it was chosen.
