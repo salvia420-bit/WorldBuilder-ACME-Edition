@@ -4,6 +4,136 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -11. 2026-08-11 (night) — CTX-LOSS-MIRRORS ROOT-CAUSED AND FIXED; TWO BLIND SPOTS INSTRUMENTED
+
+Unattended orchestrator session, owner away, owner-authorised to commit and push.
+Branch **`orch/s10-2026-08-11`**, four commits, all pushed, **master untouched** —
+the owner fast-forwards. Nothing owner-gated was resolved and no flag default moved.
+
+    e2f4f741  CTX-LOSS-MIRRORS reproduced in node (RED ON PURPOSE — the bisect marker)
+    725609ee  CTX-LOSS-MIRRORS fixed — the lane-T payload was never ours to transfer
+    185e4f6f  the card §-10 said was owed
+    5733701a  oracle open defects #1 and #3 made measurable (neither fixed)
+
+### A. WHAT I PICKED AND WHY
+§-10 B's ranked #1 said CTX-LOSS-MIRRORS "NEEDS ITS OWN CARD" and the agenda said
+fix it *if tractable and verifiable here*. It turned out to be both, entirely in
+node, so it got the session's weight. The two next-cheapest items (#1 augmentation,
+#3 the LB stall) were **not fixable blind** — so instead of guessing I made each one
+answerable in a single future capture. I deliberately did NOT run a live browser arm
+(see D).
+
+### B. CTX-LOSS-MIRRORS — root-caused, fixed, node-proven. THE LIVE ARM IS OWED.
+Report `impl/task-CTX-LOSS-MIRRORS-report.md`, card `queued/CTX-LOSS-MIRRORS-card.md`.
+Three mechanisms, each defensible alone, wrong composed:
+1. `controller.need()` **latches** a settled entry and re-serves the SAME ArrayBuffer;
+2. `_workerTranscodeXu7` **transfers** any whole-buffer view it is handed;
+3. `_fetchFullTierParsed` passed one straight to the other → **the latch was detached**,
+   so the second reader of a texFull url got a corpse.
+*Owning your whole buffer is not the same as being allowed to eat it.*
+- **There are exactly two second readers and the live arm hit BOTH.** The context-loss
+  rehydrate (the six MISSes) — and **a second Surface DID sharing one RenderSurface**,
+  ordinary in retail art and needing no context loss at all. That second one is the
+  standing candidate for §-10 B's *other* unexplained number, **`fullFailed = 18`**
+  (T4-EYES §3.5), and it is now demonstrated in a test (`fullSwaps=1 fullFailed=1`).
+- **Why it read as a soft miss:** `new Uint8Array(detached)` THROWS TypeError; the seam's
+  `catch (_) { return null }` swallowed it into "rehydrator returned false". The tell that
+  survived in the console is **`3ms`** — six CAS re-fetches plus six worker transcodes
+  cannot finish in three milliseconds. Nothing was fetched.
+- **Why a 112/0 suite never saw it:** BOTH doubles were kinder than the browser — the mock
+  worker dropped `postMessage`'s transfer list, the mock controller minted a fresh buffer
+  per `need()`. Either alone hides it. Both are faithful now. *A double more generous than
+  the thing it stands for cannot fail the way production fails.*
+- **Fix:** copy at the seam that does not own the bytes (unconditional, so the concurrent-
+  reader case goes too) + `controller.forget(url)` on a settled latch so a one-shot payload
+  is not pinned for the session (~1.3 MB × N against M4) — it REFUSES queued/in-flight
+  entries, which would orphan waiters and break the D-03.4 dedupe — + the miss is now NAMED
+  (`__texStats().tiers.fullFetchMisses`/`.lastFullFetchError`, `__hbFetch.forgotten`, all
+  registered). No SPEC deviation.
+- **STILL OWED — one headless T4 boot, ~15 min, no 1070.** Recipe/gates/traps in the card
+  §5; `restoreFailed` must read 0 with `restores === freed`, and read `fullFailed` on the
+  same boot to settle the 18. **The node proof is the mechanism, not the arm.**
+- Terrain's two rebuild paths were checked and are **CLEAN** (t1024 re-fetches raw, t128
+  copies). The queue row for this leg names `__terrainBc7Stats.mirrorRestoreFailed`, which
+  is **vacuous on the v4 dist** — the real gate is `__texStats().mirrors.release`.
+
+### C. THE TWO INSTRUMENTS (neither defect is fixed — do not read these as closed)
+- **Open #1, the augmentation.** Confirmed by computation that session 3's
+  `composed 1.9467213` is `run_skill == 105.000` at `load_mod 1.0` **to the f32 bit**, so
+  the aug term was exactly zero at run time. The four scalars could not say WHETHER THE
+  PROPERTY OR THE WHOLE PLAYER ENTITY had gone — and those are different bugs, because
+  skills live on `PlayerState` and survive while int properties live on
+  `player_entity().properties` and do not. An absent entity therefore reads as "no
+  augmentations" while Run composes perfectly: **exactly the observed shape.**
+  `RunRateInputs` gains `aug_joat` (raw read, null = not in the bag) and
+  `player_entity_present`, and the per-tick telemetry now carries the whole struct.
+  **RULED OUT while reading:** `upsert_entity_from_create` already merges the private
+  PlayerDescription dump under a re-created player, and `WorldObjectProperties::merge` is
+  key-wise `extend` — the ObjectCreate path does NOT drop the augmentation. Whatever this
+  is, it is not that.
+- **Open #3, the ~6.5 s LB-crossing stall.** §-10's prescribed first check had **no answer**:
+  every bake-worker fallback only `console.warn`s, and `byType[t].failed` cannot stand in,
+  because `_ensureWorker()`'s post-crash cooldown refusal and the dropped-before-dispatch
+  reject **never reach `_request`** — so `count` does not move either. A backoff window
+  (doubling per consecutive crash) looked identical to a healthy idle worker while every
+  per-LB bake parked the main thread. Now:
+  `__diag.bakeWorkerStats().fallbacks = {total, byType, lastError, lastAtMs}`.
+  Card `queued/LB-CROSSING-STALL-card.md` — four ranked hypotheses each with the read that
+  discriminates it, plus **the control arm nobody has run: cross WITHOUT a preceding
+  `@teleloc`.** "Teleport-then-cross" and "cross" may be two different defects.
+
+### D. WHAT I LEFT ALONE, ON PURPOSE
+No flag default flipped. Q75-ELECTION / E1-RATIFICATION / PREVIEW-FEED-REKEY untouched.
+The 13 T4 story frames remain **UNRATIFIED** and nothing here depends on them. No 1070.
+SPEC.md not edited. **No live browser arm and no live-ACE work** — `~/eyetest*` is fenced,
+and logging an agent into the owner's running server with him away is his call. Nothing
+self-arming was created: no daemon, no watcher, no cron, no autopush. `~/.keep-awake` is
+untouched and the box is still up.
+Also skipped: clearing agentp09's vitae (needs live ACE admin), the two 1070-bound benches,
+T128-INTERIM (still blocked on a `terrain_bc7` re-bake), E6 adjudication.
+
+### E. STATE / GATES
+Suites on this branch, all re-run here: core **643/0**, world **688/0** (687 baseline + my
+one new test), dat **694/1** — the 1 is still
+`terrain_subdiv::triangle_corner_ring_matches_height_sampler`, unchanged and not mine —
+and `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
+JS: tex_compressed_only **115/0** (was 112/0), pack_fetch_controller **99/0** (was 92/0),
+19 neighbour suites green. Both flag lints clean of these rows (the 3 PRESENCE-GUARDs
+pre-date the branch). No wasm rebuild — no Rust reached the shipped bundle from B, and I
+did not touch `pkg/`, so the 6,439,027 B reference still stands.
+`test_diag_schema` is back at its **6 pre-existing** failures — all evidence-line drift in
+files nobody touched (`__diag.pools/.residency/.textures/.wasmMem`, `__hbWasmMemory`,
+`__landblockLru.getStats`). Each is a one-line registry fix; **someone should spend the ten
+minutes**, because a lint carrying six standing reds stops being read.
+
+### F. THINGS THE NEXT SESSION WILL WANT AND WOULD OTHERWISE REDISCOVER
+- **`node_modules` was gone** (pruned in the disk squeeze), so every `three`-importing
+  harness suite died at module resolution *before asserting anything* — an exit-code reader
+  would have called that a pass. `npm install --no-save --no-package-lock three@0.184.0` in
+  `apps/holtburger-web` — 2 s, 39 MB, gitignored.
+- **The eye rig is warm.** `serve.py` is running on `127.0.0.1:8765` with
+  `HOLTBURGER_DIST=$HOME/holtburger-dist-v4`; `~/eyetest/arm.mjs` is the turnkey driver the
+  T4 session built (fenced for me, not necessarily for you). ACE's wsbridge answered on
+  both `100.116.47.66:8080` and a local `127.0.0.1:8080` listener all session.
+- Rust builds need the explicit toolchain PATH: `/opt/rust/toolchains/1.95.0-*/bin`. The
+  `wasm32-unknown-unknown` std IS installed, so `cargo check --target wasm32-unknown-unknown
+  -p holtburger-web` validates the wasm crate in ~1m40s without touching `pkg/`.
+- `/mnt/wbterminal2` does not exist on this box — `test_pack_fetch_region`,
+  `test_xu7_transcode` and `harness/test_build_shell` cannot run here, and say so honestly.
+- Disk 15 G free. Nothing new was baked into the tree.
+
+### G. RANKED, FOR WHOEVER IS NEXT
+1. **The CTX-LOSS-MIRRORS live arm** (card §5) — cheapest close on the board, and it
+   settles `fullFailed = 18` on the same boot.
+2. **One oracle capture with the new telemetry** — settles open #1 outright
+   (`player_entity_present` / `aug_joat`) and, with a `bakeWorkerStats()` snapshot either
+   side of the crossing, either indicts or exonerates the bake lane for open #3.
+3. **The LB-stall control arm** — cross without a `@teleloc`. Cheap, and nobody has.
+4. Clear agentp09's vitae (owner/ACE-admin) — nothing finer than ~0.3% is readable until.
+5. MOVE-F6's −1.3% strafe delta, sign opposite to DEVIATION D1.
+6. The controller's session-long payload retention (see B) — a wire-lane question,
+   plausibly material against M4, deliberately out of scope here.
+
 ## -10. 2026-08-11 (2nd half) — T4 BOX + FIRST GPU EYES + THE MOVEMENT ORACLE
 
 Everything below is on origin/master through `32afef1a`. Three threads: the buildbox
