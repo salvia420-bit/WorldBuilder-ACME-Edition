@@ -698,6 +698,29 @@ fn parse_combat_radii_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "combatRadii=off")
 }
 
+/// MOVE-RUNRATE-105 fix A (2026-08-11) — `?serverRunRate=off`. DEFAULT ON.
+///
+/// ON: the local player's run rate is the SERVER's published `my_run_rate`
+/// (latched from a RunForward self-motion's `forward_speed`,
+/// `PlayerState::latch_server_run_rate`), with the local skill+burden
+/// composition as the fallback until one has been seen. OFF: the stage-1
+/// order — composition only — i.e. the pre-2026-08-11 behaviour, kept as the
+/// A/B arm for the reversal recorded in DESIGN.md §2 defect 1.
+///
+/// Measured on the oracle rig (2026-08-11, `run-hold-long` at Samsur): ON →
+/// run_rate 1.9758065 (= ACE's, Run skill 110); OFF pre-fix-B → 1.9467213
+/// (Run skill 105, short the `AugmentationJackOfAllTrades` +5). With fix B
+/// landed the two arms agree, so this flag is now a provenance switch rather
+/// than a speed switch — keep it for exactly that.
+///
+/// Carrier: `WorldState::server_run_rate_enabled` (runtime switch, installed
+/// at world creation). Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_server_run_rate_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "serverRunRate=off")
+}
+
 /// (2026-07-02): parse `?castMove=off` (or `&castMove=off`). DEFAULT-ON
 /// off-escape shape: returns `true` UNLESS `castMove=off` is present. When
 /// on, a server-played Magic cast gesture (windup / cast, non-autonomous)
@@ -43007,6 +43030,15 @@ async fn recv_loop(
             "[combat-radii] ?combatRadii=off — melee standoffs fall back to the 0.0/0.0 CPartArray-null pair (player glues 0.3 m from the target's CENTRE)",
         );
     }
+    // MOVE-RUNRATE-105 (2026-08-11): `?serverRunRate=off` — the local
+    // player's run rate falls back to the stage-1 local composition only.
+    // Standalone flag, DEFAULT-ON; see `parse_server_run_rate_flag`.
+    let server_run_rate_on: bool = parse_server_run_rate_flag(&flag_search());
+    if !server_run_rate_on {
+        console_log_str(
+            "[runrate] ?serverRunRate=off — the local player's run rate is the client-side skill+burden composition only (stage-1 order); the server's my_run_rate is still probed but not consumed",
+        );
+    }
     // Physics-parity 2026-07-03 (dossier A F9/F14): `?retailLeash=on` —
     // the retail LOCAL position lattice. Standalone flag (no composite),
     // default OFF; see `parse_retail_leash_flag`.
@@ -44978,6 +45010,9 @@ async fn recv_loop(
                                 // COMBAT-RADII (2026-07-28): size-aware
                                 // standoffs (?combatRadii, default ON).
                                 new_world.set_combat_radii_enabled(combat_radii_on);
+                                // MOVE-RUNRATE-105 (2026-08-11): prefer the
+                                // server's my_run_rate (?serverRunRate, ON).
+                                new_world.set_server_run_rate_enabled(server_run_rate_on);
                                 // Physics-parity 2026-07-03: retail
                                 // LOCAL lattice (?retailLeash=on).
                                 new_world.set_local_retail_leash(retail_leash_on);
@@ -49502,6 +49537,9 @@ async fn recv_loop(
                             // COMBAT-RADII (2026-07-28): size-aware
                             // standoffs (?combatRadii, default ON).
                             new_world.set_combat_radii_enabled(combat_radii_on);
+                            // MOVE-RUNRATE-105 (2026-08-11): prefer the
+                            // server's my_run_rate (?serverRunRate, ON).
+                            new_world.set_server_run_rate_enabled(server_run_rate_on);
                             // Physics-parity 2026-07-03: retail LOCAL
                             // lattice (?retailLeash=on).
                             new_world.set_local_retail_leash(retail_leash_on);
@@ -53649,6 +53687,17 @@ async fn recv_loop(
                                     let pose = w.local_player_runtime_pose();
                                     let vel = w.player.current_planar_velocity;
                                     let tele = movement.movement_telemetry(w.player.guid);
+                                    let run_rate_provenance = {
+                                        use holtburger_world::context::{
+                                            WorldContext, WorldContextExt,
+                                        };
+                                        serde_json::json!({
+                                            "rate": w.player_run_rate(),
+                                            "server": w.get_player_server_run_rate(),
+                                            "composed": w.player_composed_run_rate(),
+                                            "latched": w.player.server_run_rate,
+                                        })
+                                    };
                                     let record = serde_json::json!({
                                         "source": "holt",
                                         // ms since the wasm epoch; the differ
@@ -53679,6 +53728,29 @@ async fn recv_loop(
                                         // labelled a genuine run `"walk"`.
                                         "gait": tele.effective_gait,
                                         "cast": tele.cast_window_active,
+                                        // MOVE-RUNRATE-105 (2026-08-11) — the
+                                        // run-rate PROVENANCE, live, per tick.
+                                        //
+                                        // The `playerRunRateInputs` probe the
+                                        // driver reads at the END of a capture
+                                        // is a CACHE refreshed by
+                                        // `publish_player_stats_snapshot`, so
+                                        // it cannot answer "what did the
+                                        // integrator consume DURING the run"
+                                        // — and on the session-3 A/B it
+                                        // reported a composition the realized
+                                        // speed plainly disagreed with. These
+                                        // three read the world HERE, on the
+                                        // same tick as the pose above:
+                                        // `run_rate` is what
+                                        // `resolve_self_movement_capabilities`
+                                        // resolves this tick,
+                                        // `server_run_rate` is the wire latch
+                                        // (`null` until a RunForward self-echo
+                                        // lands, or under `?serverRunRate=off`),
+                                        // and `composed_run_rate` is the
+                                        // client-side fallback beside it.
+                                        "run_rate": run_rate_provenance,
                                         "movement": tele,
                                     });
                                     if let Ok(line) = serde_json::to_string(&record) {

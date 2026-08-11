@@ -241,6 +241,62 @@ disagreement on the run_rate INPUT plus rig decoupling**, two concrete defects:
    the already-wired `playerRunRateInputs` probe (context.rs:335-366, lib.rs:28458,
    PROBE-RUNRATE.md) once the wasm is rebuilt (NOT this session).
 
+   > ### DEVIATION — MOVE-RUNRATE-105, 2026-08-11: the order is REVERSED
+   >
+   > **Owner directive (verbatim, task-ORACLE session 3):**
+   >
+   > > adopt the server-provided run rate for the local player — retail-faithful
+   >
+   > The "Fix shape" above made the client-side composition the PRIMARY source
+   > and `my_run_rate` the fallback. That order is now inverted for the local
+   > player: `WorldContextExt::player_run_rate` returns the server's published
+   > `my_run_rate` (`PlayerState::server_run_rate`, latched from a RunForward
+   > self-motion's `forward_speed`) when one has been seen, and only falls
+   > through to the composition otherwise. `?serverRunRate=off` restores this
+   > document's order without a rebuild.
+   >
+   > **Why the reversal was called for.** The composition was measurably wrong:
+   > the parenthetical "formula base + init + ranks" is short of ACE's
+   > `CreatureSkill.Current` by `GetAugBonus_Base` + `GetAugBonus_Current`, and
+   > on the oracle rig `AugmentationJackOfAllTrades = 1` put ACE at Run 110 and
+   > us at 105 — rate 1.9758065 vs 1.9467213, the whole `run-hold-long`
+   > −1.0% steady-speed FAIL (second-parity-report.md §S2.4).
+   >
+   > **What the decomp actually says** (recorded here because it contradicts
+   > the directive's "retail-faithful" premise, and a later reader deserves
+   > the evidence rather than the claim):
+   >
+   > * Retail DOES stamp the wire rate — `CMotionInterp::apply_interpreted_movement`,
+   >   `if (interpreted_state.forward_command == 0x44000007) my_run_rate =
+   >   interpreted_state.forward_speed` (acclient.c:344161-344162) — but only
+   >   inside `unpack_movement`.
+   > * `CPhysics::SetObjectMovement` (acclient.c:311186-311190) gates that
+   >   unpack on `autonomous == 0 || !player_controlled`. For the LOCAL player
+   >   (player-controlled) every autonomous frame is dropped before unpack.
+   > * Every ACE self-motion frame carrying the rate is `autonomous == true`
+   >   (measured: all seven retail pcaps, 2026-08-11 — `forward_command 7 →
+   >   forward_speed 1.975806474685669`, `server_control 0`).
+   > * So retail's local player never latches a rate this way. Its rate comes
+   >   from the weenie `InqRunRate` vfptr → `CACQualities::InqRunRate`
+   >   (:443696-443770), which is a LOCAL composition — one that includes the
+   >   three augmentation terms this document's parenthetical omits.
+   >
+   > In other words: retail composes locally and lands on the server's number
+   > because its composition is complete. **Both** repairs shipped, so the two
+   > lanes now agree instead of one covering for the other:
+   >
+   > * **Fix A (the directive)** — server value first
+   >   (`player_run_rate`, `?serverRunRate=off` escape).
+   > * **Fix B (the root cause)** — `run_skill_augmentation_bonus` folds the
+   >   `LumAugAllSkills` / `AugmentationJackOfAllTrades` / `LumAugSkilledSpec`
+   >   terms into the composition, mirroring `InqRunRate` and ACE alike. This
+   >   is a CONFORMANCE fix to this document's own stated intent ("exactly as
+   >   ACE composes it"), not a reversal.
+   >
+   > Pins: `holtburger-core .../movement/retail_behavior_tests.rs::runrate_105`
+   > (10 tests, incl. `t_retail_skips_the_autonomous_self_echo`, which encodes
+   > the retail gate we are NOT honouring so the deviation stays executable).
+
 2. **Rig decoupling (the stage-2 fix).** Retail scales the rig framerate by the same
    speed_mod that drives translation (add_motion acclient.c:337465). We instead have
    a JS keystate predictor (`_dispatchLocalRigMotion`, camera.js:1525-1567) + the B9

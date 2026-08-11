@@ -1331,6 +1331,19 @@
         // entities.js passes it into stateGroundSpeed as the run_rate arg. Same
         // plumb-through requirement (import here AND the init3D opts below).
         playerRunRate,
+        // MOVE-RUNRATE-105 (2026-08-11) — the run-rate PROVENANCE probe
+        // (`{run_rate, run_skill_used, run_skill_source, server_run_rate,
+        // run_skill_aug_bonus, burden, ...}` as a JSON string). The oracle
+        // driver reads it beside `playerRunRate()` so a steady-speed delta
+        // can be read next to the numbers that produced it.
+        //
+        // It was IMPORTED nowhere and listed in the init3D opts nowhere, so
+        // `wasmExports.playerRunRateInputs` was `undefined` and every capture
+        // recorded `inputs: null` — the same plumb-through miss the comments
+        // around here keep warning about. Reading it off the RAW wasm exports
+        // instead is not a workaround: the raw symbol returns a
+        // `[ptr, len]` pair, not a string.
+        playerRunRateInputs,
         // F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes.
         // ONE wasm call walks N setups in a single prefetch loop;
         // `scene3d/spawns.js` pre-warms the AnimationCache via this
@@ -5336,6 +5349,9 @@
             // wasmExports.playerRunRate() in _resolveStateGroundSpeed. Same
             // plumb-through requirement as stateGroundSpeed above.
             playerRunRate,
+            // MOVE-RUNRATE-105 (2026-08-11) — the provenance probe beside it;
+            // see the import for why it must be listed in BOTH places.
+            playerRunRateInputs,
             // Wave 7.4 (2026-05-24) — spawn-time entity LOD: read by
             // EntityManager._spawnImpl. Without this listed in init3D
             // opts the export is invisible to entities.js and every

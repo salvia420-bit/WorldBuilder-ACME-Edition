@@ -229,9 +229,11 @@ cmd_capture() {
 #
 # The plan is GENERATED on the laptop by
 # `oracle-run.mjs --emit-retail-plan <id>`, so the scenario definition and the
-# holtburger-vs-retail key remap (retail A/D turn + Q/E strafe against
-# holtburger's A/D strafe + Q/E turn) live in exactly one tested place.  The
-# box only replays directives:
+# holtburger-vs-retail key remap live in exactly one tested place.  Retail's
+# bindings come from the client's own `helpcontent/MOVING WITH THE
+# KEYBOARD.ksml`: W forward, X back, A/D TURN, Z/C SIDESTEP, Q auto-run,
+# SPACE jump (see WINE-RIG.md 6; sessions 1-2 had the strafe axis wrong).
+# The box only replays directives:
 #
 #   teleloc @teleloc <cell> <x> <y> <z> <qw> <qx> <qy> <qz>
 #   settle  <ms>
