@@ -121,6 +121,11 @@ export function installWebglContextRecovery({
   // `webglcontextrestored` for the same loss cannot start a second pass.
   let restoredEpoch = -1;
   let rehydrating = false;
+  // Set by the devtools-helper block below (no-op when `window` is absent, e.g.
+  // under node). A restore builds a NEW context, so the cached
+  // WEBGL_lose_context handle has to be re-taken on the way out of recovery or
+  // a SECOND lose/restore cycle in one session would drive a dead handle.
+  let _refreshLoseExt = null;
 
   function record(state, extra) {
     const ts = (typeof performance !== "undefined" && performance.now)
@@ -168,6 +173,11 @@ export function installWebglContextRecovery({
     }
     restoredEpoch = lossCount;
     const myEpoch = lossCount;
+    // The restore built a NEW GL context; re-take the WEBGL_lose_context
+    // handle off it while it is alive, so a SECOND verification cycle in the
+    // same session is drivable (the old handle belongs to the dead context,
+    // and getExtension() answers null once a context is lost).
+    try { _refreshLoseExt?.(); } catch (_) { /* never block a restore on this */ }
     const downMs = lostAtMs !== null
       ? ((performance?.now?.() ?? 0) - lostAtMs)
       : null;
@@ -297,16 +307,43 @@ export function installWebglContextRecovery({
     // cycle. The browser's spec says loseContext() fires
     // `webglcontextlost` synchronously; restoreContext() fires
     // `webglcontextrestored` on the next event-loop turn.
+    //
+    // THE HANDLE MUST BE CACHED WHILE THE CONTEXT IS ALIVE (2026-08-11).
+    // `gl.getExtension("WEBGL_lose_context")` returns **null** once the
+    // context is lost — measured on Chrome/ANGLE-EGL, headless T4:
+    // extension non-null before loseContext(), null immediately after,
+    // and restoreContext() off a handle captured BEFORE the loss restores
+    // normally (`webglcontextrestored` fires, isContextLost() -> false).
+    // So the old `__restoreContext()`, which re-fetched off the LOST
+    // context, could only ever return "unavailable" — the one call the
+    // whole verification cycle depends on was unreachable by construction,
+    // and an arm driving it read a rehydrate pass that never ran (zero
+    // restores, zero failures) as if it were a clean gate.
+    let _loseExt = null;
+    const _grabExt = () => {
+      try {
+        const gl = renderer.getContext();
+        if (gl && !gl.isContextLost()) {
+          const ext = gl.getExtension?.("WEBGL_lose_context");
+          if (ext) _loseExt = ext;
+        }
+      } catch (_) { /* context teardown races — keep the cached handle */ }
+      return _loseExt;
+    };
+    _grabExt();
+    // A restore builds a NEW context, so the cached handle is re-taken on
+    // the way out of every recovery (see _onRestored's tail).
+    _refreshLoseExt = _grabExt;
     window.__loseContext = () => {
-      const gl = renderer.getContext();
-      const ext = gl?.getExtension?.("WEBGL_lose_context");
+      const ext = _grabExt();
       if (!ext) return "WEBGL_lose_context extension unavailable";
       ext.loseContext();
       return "loseContext() called — webglcontextlost should have fired";
     };
     window.__restoreContext = () => {
-      const gl = renderer.getContext();
-      const ext = gl?.getExtension?.("WEBGL_lose_context");
+      // Deliberately NOT re-fetched off renderer.getContext(): that context
+      // is lost and getExtension() answers null. See the note above.
+      const ext = _loseExt || _grabExt();
       if (!ext) return "WEBGL_lose_context extension unavailable";
       ext.restoreContext();
       return "restoreContext() called — webglcontextrestored will fire on next turn";
