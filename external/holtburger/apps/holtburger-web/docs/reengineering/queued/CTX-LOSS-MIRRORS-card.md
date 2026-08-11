@@ -1,11 +1,23 @@
 # CARD — CTX-LOSS-MIRRORS (filed 2026-08-11 by the §-11 orchestrator session)
 
-**Status: root-caused and FIXED in node; the LIVE arm is still owed.**
+**Status: CLOSED 2026-08-11 by the §-12 session. Root-caused and fixed in node
+(§-11), then CONFIRMED LIVE on the T4.**
 Fix landed on `orch/s10-2026-08-11` — `e2f4f741` (reproduction, red on
 purpose) then `725609ee` (fix). This card exists because
 `ORCHESTRATOR-HANDOFF.md` §-10 B said the finding "NEEDS ITS OWN CARD" and
 because the *live* half of the gate cannot be closed by the work that closed
 the mechanism.
+
+**The live arm ran — see §5, which now carries the numbers.** Headline:
+`restoreFailed 0` with a rehydrate pass that ACTUALLY RAN
+(`attempted 15, rehydrated 15, failed 0, ms 3932`), zero "will render BLACK"
+lines, `fullFailed 0` where the pre-fix arm read 18. Report:
+`impl/task-CTX-LOSS-MIRRORS-LIVEARM-report.md`.
+
+⚠ **The first boot of that arm returned `restoreFailed: 0` while proving
+nothing** — the context never came back, so the pass never ran. §5's gate has
+gained a liveness clause because of it. Read it before running any
+context-loss arm.
 
 ---
 
@@ -147,21 +159,103 @@ shared-rsId arm reproduces `fullSwaps=1 fullFailed=1` where both should land.
 
 ---
 
-## 5. THE LIVE ARM STILL OWED (this is the runnable part of the card)
+## 5. THE LIVE ARM — RUN 2026-08-11 (§-12). RESULTS BELOW.
 
-One headless arm, ~15 min, no 1070 required — the T4 can do it.
+One headless arm, ~15 min, no 1070 required — the T4 did it. Recipe kept for
+re-runs; the measured results follow it.
 
-**Prereqs**
+### ⚠ FIRST, THE TRAP THIS ARM FOUND (added by §-12)
+
+**`restoreFailed === 0` is satisfiable by a boot in which nothing happened.**
+The first §-12 boot returned exactly the number this card asks for, alongside
+`rehydrate.passes 0`, `rehydrated 0` and `contextLost TRUE` sixty seconds after
+the restore was issued. Nothing was attempted, so nothing could fail.
+
+Cause: `window.__restoreContext()` re-fetched `WEBGL_lose_context` off the
+**lost** context, and `getExtension()` returns **null** once a context is lost
+(measured, Chrome/ANGLE gl-egl — `~/eyetest/probe-ctxrestore.mjs`). The helper
+could only ever return `"WEBGL_lose_context extension unavailable"`. Fixed in
+`639916e6` (cache the handle while the context is alive, re-take it in
+`_onRestored`).
+
+**So the gate is now three clauses, not one:**
+
+```
+rehydrate.passes            >= 1      <- THE PASS ACTUALLY RAN  (new)
+rehydrate.lastPass.attempted > 0      <- it had work to do      (new)
+mirrors.release.restoreFailed == 0    <- and none of it failed
+```
+
+Prefer `lastPass.attempted` vs `lastPass.rehydrated` over the two cumulative
+counters: `freed` keeps climbing after the pass as ordinary eviction continues,
+so `restores === freed` is a pass-scoped equality, not a session invariant.
+
+### Prereqs
 * release wasm current (`pkg/*.wasm` ≈ 4.5 MB) — no Rust changed in the fix, so
   the deployed wasm is fine, but `serve.py --check` will warn if pkg/ predates
   the last Rust-touching commit; that warning is not this card's business;
 * `?renderScale=1` is MANDATORY (adaptiveRes pins 448×280 otherwise);
+* `&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F` is MANDATORY on this box —
+  the client defaults to `ws://127.0.0.1:8080/` and ACE is on the laptop's
+  tailnet address; without it the boot dies at `connect failed after 1
+  attempts` having never sent a LoginRequest (§-12);
 * GPU proven inside the live page before judging anything — assert the renderer
   string reads `ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2)` **and**
   readPixels a drawn triangle. Never infer the GPU from a string alone;
 * same-account relogin inside ~3 min is fatal — budget one boot;
 * capture must `readPixels` INSIDE the render call. `page.screenshot()`
   photographs a BLACK world.
+
+### THE MEASURED RESULT (T4, v4 dist, agentp07, 2026-08-11)
+
+GPU proof from inside the page: `ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2,
+OpenGL ES 3.2)`, drawn triangle read back `[255, 0, 0, 255]`.
+ST5 armed: `pvwHits 49`, `fullSwaps 48`.
+
+| read | before loss | after restore | verdict |
+|---|---|---|---|
+| `mirrors.release.restoreFailed` | 0 | **0** | ✅ |
+| `mirrors.release.restores` | 0 | **15** | ✅ |
+| `mirrors.release.freed` | 15 | 22 | (7 evicted post-pass, registered) |
+| `rehydrate.passes` | 0 | **1** | ✅ the pass RAN |
+| `rehydrate.lastPass` | null | **attempted 15 · rehydrated 15 · failed 0 · 3932 ms** | ✅ |
+| `tiers.fullFetchMisses` | 0 | **0** | ✅ |
+| `tiers.lastFullFetchError` | null | **null** | ✅ |
+| `tiers.fullFailed` | 0 | **0** | ✅ vs the T4 arm's 18 |
+| `__hbFetch.forgotten` | 46 | **61** | ✅ > 0 |
+| `byComponent.texFull.requests` | 46 | **61** | ✅ +15 = one per mirror |
+| console `will render BLACK` | — | **0 lines** | ✅ (was 6) |
+
+**`3ms` → `3932ms`.** This card called `3ms` the load-bearing number — six CAS
+re-fetches plus six worker transcodes cannot finish in three milliseconds, so
+nothing was being fetched. The console now reads
+`[tex-rehydrate] pass OK in 3932ms (rehydrated=15 skipped=0 gcd=0)`. Fifteen
+re-fetches and transcodes in 3.93 s is real wire and real worker work.
+
+`__webglContextRecoveryHistory()`:
+`lost → restored (downMs 5162.6, rehydratePending 15) → rehydrated (ok 15, failed 0, ms 3932)`.
+Renderer recovered: `contextLost false`, terrain still 121 LBs.
+
+**`fullFailed = 18` — settled, with a caveat.** It read **0** on this boot,
+before and after the loss, where the pre-fix arm read 18. Consistent with the
+second-Surface-DID explanation, but this is the same arm on the same dist with
+the fix in — **not** an A/B with the shared-rsId count held constant. Nobody
+counted this boot's shared rsIds either. Strong corroboration; the node
+reproduction (`fullSwaps=1 fullFailed=1`) remains the mechanism evidence.
+
+### ANOTHER DEFECT THIS ARM SURFACED — open, not fixed
+`[webgl-recovery] onPause threw: ReferenceError: _releaseFrameDriverClaim is
+not defined`, on both boots (predates every §-12 change). Defined once at
+`scene3d/index.js:985` inside `preInit3D`; called at `:3616` (`stop()`) and
+`:5110` (`onPause`), both inside `init3D` — a different top-level function, and
+`preInitHandle` never exposes it. `window.__scene3dFrameDriverActive` is set at
+`:5114`/`:7201` and cleared only at `:988`, inside the unreachable helper. So
+the frame-driver claim is never released on a context-loss pause or on
+`stop()`, and the comment at `:5106` describes behaviour that does not happen.
+Recovery still completes (the throw is caught and warned).
+
+### The original recipe, for re-runs
+(Prereqs are the list above — it supersedes this section's original copy.)
 
 **Arm**
 `?renderScale=1&packSource=on&texCompressedOnly=on&texWorkers=on&terrainT1024=on`
@@ -179,8 +273,10 @@ __hbFetch.byComponent.texFull.requests → should now EXCEED the number of disti
 console                        → zero "will render BLACK" lines
 ```
 
-**Judgement**
-`restoreFailed === 0` with `restores === freed` closes the card. Anything else
+**Judgement** (superseded — use the three-clause gate at the top of §5)
+`restoreFailed === 0` with `restores === freed` was the original wording. It is
+NOT sufficient on its own: §-12 met it on a boot where the rehydrate never ran.
+Assert `rehydrate.passes >= 1` and `lastPass.attempted > 0` first. Anything else
 reports the counters and `lastFullFetchError` verbatim — that string exists
 precisely so the next failure does not cost another session.
 
