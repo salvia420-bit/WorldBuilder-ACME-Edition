@@ -1,269 +1,609 @@
 {
-  "schema": "hb-1070-queue-v1",
-  "batch": "D",
-  "created": "2026-08-10",
-  "owner": "salvia (or orchestrator-driven per the 2026-08-10 precedent)",
-  "preparedBy": "orchestrator (post-BAKE-4 handoff; supersedes the deferred legs scattered across batch A-C reports)",
-  "prereqGate": "BAKE-4 DEPLOYED — run-world-bake-4.sh rc=0 (driver4.log '=== DONE'), deploy-packs-v4 additive merge clean, serve.py --check OK. The v4 layer carries: page-dim full tier (--require-page-dims PASSED), GEOMR relief variants (--geom-relief 1.0), re-derived previews. NOTHING in this batch is valid against the v3 dist.",
-  "sessionRulesInline": [
-    "Inherit vistest-preamble-v1 (batch-A file) PLUS the 2026-08-10 learnings:",
-    "NEVER default --account=tailnet1 for automation (a person's Developer account) — bots: agentp07-p10 (password = account name). tailnet1 only for @tele* admin needs, coordinated with the owner.",
-    "Boot gates read __bootStateHistory + pose, never the bare scalar (ready/in-world share it; a late watchdog error can mask a good session). renderOnDemand does NOT stall boot — the 2026-08-10 stalls were stale-ACE-session refusals; moving-bench now retries (--loginRetries).",
-    "ssh tunnel: -o ServerAliveInterval=15 -o ServerAliveCountMax=4 (a stale -L forward mimics chrome death; disambiguate box-side with Test-NetConnection).",
-    "Chrome cycling: per-profile bats C:\\Temp\\launch-{a1,a2,a3,b1,b2,sh1,sh2,mv1}.bat via schtasks WLS2 + cycle-chrome.sh <tag>; kill by cdpwb-* CIM match only.",
-    "Outdoor eye shots: ?skytime=12 pin + terrain plateau gate (terrainBakedLbs stable across 2+ polls, >10), NEVER fixed waits; fixed-anchor __cam.orbit for arm-identical cameras (el>=60 near Holtburg's portal hill or the orbit lands inside the slope).",
-    "ACE crash recovery: FIFO needs a persistent writer first — `setsid bash -c 'exec sleep infinity > ~/ace_stdin.fifo' &` then the setsid nohup dotnet line (handoff §-3).",
-    "Serve.py runs with --compress-cache-mb 256 --bind 0.0.0.0."
-  ],
-  "suggestedOrder": [
-    "OFF-ARM-BOOT",
-    "E6",
-    "RELIEF-EYE",
-    "E1-TCO-ARM",
-    "T128-INTERIM-EYE",
-    "CTX-LOSS-MIRRORS",
-    "TEXWORKER-INTERLEAVE",
-    "MOVE-FIX-BASELINE"
-  ],
-  "items": [
-    {
-      "id": "OFF-ARM-BOOT",
-      "kind": "probe",
-      "gate": "belt-and-braces owed from T22P (suites+diff argument accepted per I9; this is the live half)",
-      "recipe": [
-        "Bare-default boot (?nosw=1 + login only, NO stage flags), in-world + plateau.",
-        "Assert: 0 console errors; window.__diag.geometry.relief absent-or-disarmed; no pool/pack/bundle diag surfaces armed; visual spot vs any E1 legacy screenshot (b1070/e1/day-off-*).",
-        "5 minutes total. This is the kill-path proof on the v4 dist."
-      ],
-      "result": null
+ "schema": "hb-1070-queue-v1",
+ "batch": "D",
+ "created": "2026-08-10",
+ "owner": "salvia (or orchestrator-driven per the 2026-08-10 precedent)",
+ "preparedBy": "orchestrator (post-BAKE-4 handoff; supersedes the deferred legs scattered across batch A-C reports)",
+ "prereqGate": "BAKE-4 DEPLOYED — run-world-bake-4.sh rc=0 (driver4.log '=== DONE'), deploy-packs-v4 additive merge clean, serve.py --check OK. The v4 layer carries: page-dim full tier (--require-page-dims PASSED), GEOMR relief variants (--geom-relief 1.0), re-derived previews. NOTHING in this batch is valid against the v3 dist.",
+ "sessionRulesInline": [
+  "Inherit vistest-preamble-v1 (batch-A file) PLUS the 2026-08-10 learnings:",
+  "NEVER default --account=tailnet1 for automation (a person's Developer account) — bots: agentp07-p10 (password = account name). tailnet1 only for @tele* admin needs, coordinated with the owner.",
+  "Boot gates read __bootStateHistory + pose, never the bare scalar (ready/in-world share it; a late watchdog error can mask a good session). renderOnDemand does NOT stall boot — the 2026-08-10 stalls were stale-ACE-session refusals; moving-bench now retries (--loginRetries).",
+  "ssh tunnel: -o ServerAliveInterval=15 -o ServerAliveCountMax=4 (a stale -L forward mimics chrome death; disambiguate box-side with Test-NetConnection).",
+  "Chrome cycling: per-profile bats C:\\Temp\\launch-{a1,a2,a3,b1,b2,sh1,sh2,mv1}.bat via schtasks WLS2 + cycle-chrome.sh <tag>; kill by cdpwb-* CIM match only.",
+  "Outdoor eye shots: ?skytime=12 pin + terrain plateau gate (terrainBakedLbs stable across 2+ polls, >10), NEVER fixed waits; fixed-anchor __cam.orbit for arm-identical cameras (el>=60 near Holtburg's portal hill or the orbit lands inside the slope).",
+  "ACE crash recovery: FIFO needs a persistent writer first — `setsid bash -c 'exec sleep infinity > ~/ace_stdin.fifo' &` then the setsid nohup dotnet line (handoff §-3).",
+  "Serve.py runs with --compress-cache-mb 256 --bind 0.0.0.0."
+ ],
+ "suggestedOrder": [
+  "OFF-ARM-BOOT",
+  "E6",
+  "RELIEF-EYE",
+  "E1-TCO-ARM",
+  "T128-INTERIM-EYE",
+  "CTX-LOSS-MIRRORS",
+  "TEXWORKER-INTERLEAVE",
+  "MOVE-FIX-BASELINE"
+ ],
+ "items": [
+  {
+   "id": "OFF-ARM-BOOT",
+   "kind": "probe",
+   "gate": "belt-and-braces owed from T22P (suites+diff argument accepted per I9; this is the live half)",
+   "recipe": [
+    "Bare-default boot (?nosw=1 + login only, NO stage flags), in-world + plateau.",
+    "Assert: 0 console errors; window.__diag.geometry.relief absent-or-disarmed; no pool/pack/bundle diag surfaces armed; visual spot vs any E1 legacy screenshot (b1070/e1/day-off-*).",
+    "5 minutes total. This is the kill-path proof on the v4 dist."
+   ],
+   "result": {
+    "verdict": "CLEAN",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+    "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+    "arm": "bare default: ?nosw=1 + autoLogin/autoSpawn/agent only, NO stage flags",
+    "counters": {
+     "bootStates": [
+      "form-shown",
+      "connecting",
+      "char-list-ready",
+      "spawning",
+      "ready",
+      "in-world"
+     ],
+     "terrainBakedLbs": 121,
+     "sceneMeshes": 3417,
+     "__diag.pools()": "{enabled:false} at settle AND +20s — kill path proven",
+     "geomBundles relief surface": "absent (bundle stats never installed; __diag.geometry is the gfxRelief gate object)",
+     "__portalPunch": {
+      "build": "2026-08-04-r5",
+      "enabled": true,
+      "sidedness": false,
+      "sidednessMode": "off"
+     },
+     "consoleErrors": "3 (all expected 404s, see knownBenign)",
+     "pageErrors": 0
     },
-    {
-      "id": "E6",
-      "kind": "eye",
-      "stage": "ST9",
-      "gate": "GATE-POOLS (the whole stage's eye)",
-      "prereqs": [
-        "BAKE-4 dist (page dims make the strict arm ADMIT; on v3 it refuses everything — ENVCELL report D5)",
-        "T22P leg 6-8 landed (bit-gated strict arm + offPage hold-out)"
-      ],
-      "urls": {
-        "on": "http://<origin>/apps/holtburger-web/index.html?nosw=1&skytime=12&camDebug=on&autoLogin=1&account=<bot>&password=<bot>&autoSpawn=first&packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on&slotGrid=on&frameWork=on&drawPools=on",
-        "off": "same minus drawPools (the K2 kill arm)"
+    "knownBenign": "3 console errors in EVERY arm are the same expected 404s — optional terrain assets absent from this dist: scene3d/assets/terrain_bc7/t1024/manifest.json, .../t512/manifest.json, scene3d/assets/pbr_terrain/manifest.json. No pageErrors in any arm.",
+    "shots": [
+     "box:~/eyetest/out/off-arm-boot-1.png",
+     "box:~/eyetest/out/off-arm-boot-2.png"
+    ],
+    "note": "This is the live half of the T22P belt-and-braces: on the v4 dist the bare default boots to in-world with no pool/pack/bundle surface armed and 0 unexpected errors."
+   }
+  },
+  {
+   "id": "E6",
+   "kind": "eye",
+   "stage": "ST9",
+   "gate": "GATE-POOLS (the whole stage's eye)",
+   "prereqs": [
+    "BAKE-4 dist (page dims make the strict arm ADMIT; on v3 it refuses everything — ENVCELL report D5)",
+    "T22P leg 6-8 landed (bit-gated strict arm + offPage hold-out)"
+   ],
+   "urls": {
+    "on": "http://<origin>/apps/holtburger-web/index.html?nosw=1&skytime=12&camDebug=on&autoLogin=1&account=<bot>&password=<bot>&autoSpawn=first&packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on&slotGrid=on&frameWork=on&drawPools=on",
+    "off": "same minus drawPools (the K2 kill arm)"
+   },
+   "counterAssertionsBeforeJudging": [
+    "__diag pools: classesCreatedPostBoot===0 after settle; parked poolMutationsPerFrame===0 (two reads)",
+    "classes <= ~63, pools <= ~300 (census bounds)",
+    "producer.heldOutNoRsId === 0 (else a material class missed the RSID stamp)",
+    "heldOutByReason.offPage CLIMBS then reOfferAdmitted FOLLOWS (strict-arm drain working); heldOutRetired small and stable",
+    "refeedFormatMismatch === 0 (a nonzero = the cached-record race is real — file it)",
+    "envcells.visible === containersVisible in a dungeon; refusedBakedMissing === 0"
+   ],
+   "vantages": "batch-C E6 vantage list (ClipMap item, depth-bias, shadowed-town receiveShadow, baked-light) PLUS holtburg-redoubt-interior (four judgements in the ENVCELL-POOL report; its checklist row stops you judging a legacy interior by mistake — check the pooled diag counts nonzero IN the dungeon first)",
+   "verdictSemantics": "CLEAN => ST9 promotion path opens; DIRTY => defect, never ship-and-tune",
+   "verdict": {
+    "verdict": "INCONCLUSIVE — counters mostly clean, 1 assertion NOT demonstrated + 1 unverifiable by name; NOT promoted to CLEAN",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+    "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+    "arms": {
+     "on": "packSource+geomBundles+texCompressedOnly+texWorkers+slotGrid+frameWork+drawPools",
+     "off": "same minus drawPools (K2 kill arm)"
+    },
+    "vantages": "Holtburg (@telepoi Holtburg, anchor = player world pos 32532/34567.1/94, arm-identical) + dungeon leg @telepoi Town Network (lb 0x70143)",
+    "counterAssertions": {
+     "classesCreatedPostBoot===0": "PASS — classes.createdPostBoot 0, classes.sealed true (town + dungeon)",
+     "poolMutationsPerFrame===0 (two reads)": "PASS — events.mutationsThisFrame 0 on three separate reads",
+     "classes<=~63": "PASS — 17",
+     "pools<=~300": "PASS — 46 town / 12 dungeon",
+     "producer.heldOutNoRsId===0": "PASS — 0",
+     "heldOutByReason.offPage CLIMBS then reOfferAdmitted FOLLOWS": "NOT DEMONSTRATED — offPage held-out 203->205 while reOfferAdmitted stayed flat at 32 and reOfferedByReason carried ONLY bc7Pending:192. No offPage re-offer was observed draining at these vantages. This is the one assertion that did not reproduce; it is why this item is not CLEAN.",
+     "heldOutRetired small and stable": "PASS — 46, unchanged across town and dungeon",
+     "refeedFormatMismatch===0": "PASS — 0 (classPages.layers.refeedFormatMismatch); the cached-record race did not fire",
+     "envcells.visible===containersVisible in a dungeon": "UNVERIFIABLE BY NAME — this census has no 'containersVisible' key. Actual envcells block, dungeon: {lbs:1, cells:114, visible:205, pending:0, cellsOffered:123, surfacesOffered:279, surfacesPooled:235, cellsPooled:114, refusedBakedMissing:0, feedErrors:0}",
+     "refusedBakedMissing===0": "PASS — 0"
+    },
+    "otherCounters": {
+     "classPages.refused": {
+      "needsResample": 8,
+      "offPage": 249,
+      "bc7Pending": 406,
+      "deformed": 164,
+      "layerFull": 0,
+      "noPixels": 0
+     },
+     "producer.texRefPageKeyed": 965,
+     "producer.texRefAbsent": 0,
+     "errors": {
+      "unresolvedGeometry": 0,
+      "unpooledMembers": 0,
+      "lastError": null
+     },
+     "killArm": "?drawPools absent => __diag.pools() {enabled:false} in town AND dungeon"
+    },
+    "shots": [
+     "box:~/eyetest/out/e6-on-{follow,closeup,closeup-N,street,overview,dungeon-follow,dungeon-S,dungeon-N}-gl.png",
+     "box:~/eyetest/out/e6-off-<same>-gl.png"
+    ],
+    "knownBenign": "3 console errors in EVERY arm are the same expected 404s — optional terrain assets absent from this dist: scene3d/assets/terrain_bc7/t1024/manifest.json, .../t512/manifest.json, scene3d/assets/pbr_terrain/manifest.json. No pageErrors in any arm.",
+    "nextStep": "Orchestrator/owner to adjudicate the offPage-drain expectation: either the strict-arm drain needs a vantage that forces page turnover, or the assertion is stale for this census version."
+   }
+  },
+  {
+   "id": "RELIEF-EYE",
+   "kind": "eye",
+   "stage": "post-ST3 (reliefBundles)",
+   "gate": "the ?reliefBundles DEFAULT-OFF -> ON path",
+   "trap": "assert __diag.geometry.relief.variantRowsResident > 0 BEFORE judging — a dist without GEOMR rows renders flat and false-CLEANs (RELIEF-BAKE report). Interiors are FLAT BY DESIGN (D2 — env variants not baked).",
+   "arms": {
+    "a": "packSource=on&geomBundles=on&reliefBundles=on (baked rails)",
+    "b": "packSource=on&geomBundles=on (relief-free bundles)",
+    "c": "legacy arm, ?gfxRelief=on (runtime rails — the parity reference)"
+   },
+   "checklist": [
+    "Tudor timber/brick coursing protrudes on arm a and c, flat on b",
+    "a vs c: rails visually identical (the differ says byte-parity of triangles; the eye confirms shading/shadow)",
+    "no cracks at material boundaries (weld rule)",
+    "shadow pass sane (rails cast; ~cost note in url-flags row)",
+    "0 console errors"
+   ],
+   "vantages": "Holtburg tudor walls close-up (street cam dist 4-6) + overview; skytime=12",
+   "verdict": {
+    "verdict": "CLEAN ON MEASUREMENT (arm ordering reproduces), EYE-IMPERCEPTIBLE at the vantages captured — owner ratification owed on a variant-bearing model",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+    "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+    "trapGate": "SATISFIED — arm a console: '[geomBundles] armed — statics/buildings/anim-scenery/cells consume HBG1 bundles (relief variants ON)' with NO '0 GEOMR rows resident' warning (geom_bundles.js warns loudly when variantRowsResident===0), so rows>0. NOTE: __diag.geometry.relief could NOT be read as the bundle object — diag/geometry.js installs its gfxRelief gate over geom_bundles' _stats, so __diag.geometry.relief is the gate FUNCTION in every arm. The console warning is the usable gate.",
+    "arms": {
+     "a": "packSource+geomBundles+reliefBundles=on (baked rails) — gfxRelief resolved enabled:true",
+     "b": "packSource+geomBundles (relief-free) — console '[geomBundles] forcing gfxRelief OFF', gfxRelief resolved enabled:false",
+     "c": "legacy runtime rails ?gfxRelief=on"
+    },
+    "vantages": "@telepoi Holtburg; anchor = player world pos (32532, 34567.1, 94), IDENTICAL in all three arms; shots at follow / 9m / 22m street / 60m el45 overview",
+    "pixelDifferential": "Numeric RGB diff of the arm-identical shots (the eye could not separate them, so they were measured). OVERVIEW: a-vs-c meanAbs 0.416 (1.60% px >8) | a-vs-b 1.266 (7.60%) | b-vs-c 1.362 (8.15%). STREET: a-vs-c 1.937 (13.6%) | a-vs-b 2.281 (18.0%) | b-vs-c 3.293 (21.6%). Both vantages give the SAME ordering: the two relief-bearing arms (a,c) are by far the closest pair and both stand off the flat arm (b) — which is exactly the checklist's 'protrudes on a and c, flat on b' + 'a vs c: rails visually identical'.",
+    "whyNoVisibleProtrusion": "Not a defect: per docs/url-flags.md, gfxSubdivLevel is 0 on EVERY tier (per-texel displacement retired 2026-07-30) and reliefBundles REFUSES to arm above level 0 — what ships is the OP1 convex-edge / OP3 material-boundary RAILS. Variant rows are SPARSE (83 of 796 distinct GfxObjs, +7,760 tris on the bounded region), so a randomly-chosen tudor wall most likely carries no variant at all.",
+    "interiorCheck": "A 4.5m interior close-up pair (wall-a-relief / wall-b-flat, both arms independently picking the SAME mesh 'surface-08000660' at 32555.5/34596/94) differs by only 0.18% of pixels — a positive confirmation of D2 'interiors are FLAT BY DESIGN' (ENV cellstructs are out of the bake's scope), not a miss.",
+    "checklist": {
+     "cracks at material boundaries": "none seen at any vantage",
+     "shadow pass": "sane, no artefacts seen",
+     "consoleErrors": "3 expected 404s only, 0 pageErrors"
+    },
+    "shots": [
+     "box:~/eyetest/out/relief-a-bundles-{follow,closeup,closeup-N,street,overview}-gl.png",
+     "box:~/eyetest/out/relief-b-flat-<same>-gl.png",
+     "box:~/eyetest/out/relief-c-legacy-<same>-gl.png",
+     "box:~/eyetest/out/wall-a-relief-W4-gl.png",
+     "box:~/eyetest/out/wall-b-flat-W4-gl.png"
+    ],
+    "nextStep": "To make this a human eye test rather than a differ, pick a close-up on a model KNOWN to carry a GEOMR variant row (the bake knows the 83 GfxObjs) and re-shoot a/b/c at 4-6m."
+   }
+  },
+  {
+   "id": "E1-TCO-ARM",
+   "kind": "eye",
+   "gate": "confirms/kills T15R's C1 (atlas hold-out class) as the E1 softness cause",
+   "recipe": [
+    "Third arm at the E1 day vantages: packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on; compare vs the archived day-on/day-off pairs (b1070/e1/).",
+    "Read __bc7Stats(): deferredNodes + singletonUpgrades on BOTH this arm and a plain pack arm; C1 predicts the tco arm re-atlases (deferred shrink) and sharpens.",
+    "On the v4 dist also read __texStats().mirrors + texRefPageKeyed>0 (first live page-keyed members)."
+   ],
+   "verdict": {
+    "verdict": "PARTIAL — C1's counter-prediction CONFIRMED; the softness eye itself is NOT closable on this box",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+    "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+    "arms": {
+     "tco": "packSource+geomBundles+texCompressedOnly+texWorkers (+terrainT1024=512)",
+     "plain": "packSource+geomBundles only"
+    },
+    "counters": {
+     "tco": {
+      "deferredNodes": 329,
+      "singletonUpgrades": 435,
+      "atlasLayers": 68,
+      "atlasBuckets": 20,
+      "texturesBuilt": 717,
+      "fullSwaps": 30,
+      "fullFailed": 18,
+      "texStats.active": true,
+      "mirrors.records": 274,
+      "mirrors.bytes": 128994796
+     },
+     "plain": {
+      "deferredNodes": 453,
+      "singletonUpgrades": 483,
+      "atlasLayers": 64,
+      "atlasBuckets": 20,
+      "texturesBuilt": 804,
+      "fullSwaps": 0,
+      "fullFailed": 0,
+      "texStats.active": false,
+      "mirrors.records": 346,
+      "mirrors.bytes": 266663272
+     }
+    },
+    "verdictDetail": "C1 predicted the tco arm re-atlases (deferred SHRINK). Measured: deferredNodes 329 vs 453 = -27%, singletonUpgrades 435 vs 483, atlasLayers 68 vs 64. Direction confirmed on the v4 dist.",
+    "v4Extras": {
+     "texRefPageKeyed": "965 (>0 — first live page-keyed members; read off the e6-on pools producer census, which is where this counter lives)",
+     "texRefAbsent": 0,
+     "__texStats().mirrors.records": 274
+    },
+    "notClosable": "The 'does it SHARPEN' half compares against archived 1070 pairs (b1070/e1/ day-on/day-off). Those are 1070 frames; a T4-vs-1070 sharpness comparison would be a cross-GPU eye and is not sound. Arm-identical tco-vs-plain T4 frames are archived instead.",
+    "flag": "fullFailed=18 on the tco arm (18 full-tier swaps failed) is non-zero and unexplained — worth a look independent of this gate.",
+    "shots": [
+     "box:~/eyetest/out/tco-{follow,closeup,closeup-N,street,overview}-gl.png",
+     "box:~/eyetest/out/plain-<same>-gl.png"
+    ]
+   }
+  },
+  {
+   "id": "T128-INTERIM-EYE",
+   "kind": "eye",
+   "stage": "ST5 terrain ladder",
+   "gate": "GATE-TEX terrain leg (T15R-TERRAIN report)",
+   "recipe": [
+    "?terrainT1024=512 (promote target) arm: the t128 interim is on screen for ~1-2s post-boot — eye it (nobody ever has): acceptable as a boot transient? Then promotion completes; confirm no visible pop/seam at the swap.",
+    "Chain onto the E1-TCO-ARM boot at no extra cost (T15R-TERRAIN report's recommended arm chain).",
+    "Also read __terrainBc7Stats: mode, promotion ms, mirrorsFreed, mirrorReleaseDeferred===0."
+   ],
+   "verdict": {
+    "verdict": "BLOCKED — the terrain BC7 ladder does not exist on this dist; there is no t128 interim to eye",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+    "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+    "evidence": {
+     "__terrainBc7Stats().ladder": {
+      "mode": "absent",
+      "armed": false,
+      "tier": null,
+      "fullTier": null,
+      "t128Ms": null,
+      "promoteStartMs": null,
+      "terrainT1024CompleteMs": null,
+      "promotions": 0
+     },
+     "__terrainBc7Stats().lastError": "scene3d/assets/terrain_bc7/t512: HTTP 404",
+     "errors": 2,
+     "http": "GET scene3d/assets/terrain_bc7/t1024/manifest.json -> 404, .../t512/manifest.json -> 404 (2 of the 3 per-arm 404s)"
+    },
+    "arm": "?terrainT1024=512 with packSource+geomBundles+texCompressedOnly+texWorkers",
+    "conclusion": "?terrainT1024 has nothing to promote because the v4 dist carries no scene3d/assets/terrain_bc7 tier. The 8-shot post-boot burst was captured anyway and shows no ladder swap. This is a DIST GAP, not a client defect — re-queue once a dist with the terrain_bc7 tier is staged.",
+    "shots": [
+     "box:~/eyetest/out/t128-burst-00..07-gl.png"
+    ]
+   }
+  },
+  {
+   "id": "CTX-LOSS-MIRRORS",
+   "kind": "probe",
+   "gate": "GATE-TEX terrain leg: mirrorRestoreFailed===0 across a forced context loss",
+   "recipe": [
+    "In a settled tco+t1024 arm: force GL context loss (WEBGL_lose_context extension: getExtension('WEBGL_lose_context').loseContext() then restoreContext()).",
+    "Assert: renderer recovers; __terrainBc7Stats.mirrorRestoreFailed===0; fullTierMirrorStats restore counters clean; world visually intact after ~30s.",
+    "This exercises the rehydrate path the mirrors exist for — first live test."
+   ],
+   "result": {
+    "verdict": "DIRTY — mirrorRestoreFailed = 6 (gate demands 0). First live exercise of the rehydrate path; it FAILED.",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item. A forced WEBGL_lose_context on T4/EGL may not reproduce a real-world loss exactly, but a rehydrator returning false for 6 of 6 released textures is a code path failing, not a GPU artefact.",
+    "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+    "method": "Settled tco+t1024 arm at Holtburg, then getExtension('WEBGL_lose_context').loseContext(), 5s, restoreContext(), 35s settle.",
+    "counters": {
+     "beforeLoss": {
+      "mirrorsArmed": 30,
+      "mirrorsFreed": 6,
+      "mirrorBytesFreed": 16973984,
+      "mirrorReleaseDeferred": 3,
+      "mirrorRestores": 0,
+      "mirrorRestoreFailed": 6
+     },
+     "afterRestore": "identical — mirrorRestores 0, mirrorRestoreFailed 6",
+     "__texStats().mirrors.release": {
+      "armed": 27,
+      "released": 6,
+      "everArmed": 30,
+      "freed": 6,
+      "bytesFreed": 16973984,
+      "releaseDeferred": 3,
+      "restores": 0,
+      "restoreFailed": 6
+     },
+     "recovery": {
+      "gl.isContextLost()": "true during, false after",
+      "sceneMeshes": 6866,
+      "terrainBakedLbs": 124
+     }
+    },
+    "consoleTrail": [
+     "[webgl-recovery] context LOST (loss #1); paused render loop, awaiting restore",
+     "THREE.WebGLRenderer: Context Restored.",
+     "[webgl-recovery] context RESTORED after 5092ms — rebuilding subsystem GPU state",
+     "[tex-rehydrate] context-restore #1: re-supplying pixels for 6 released texture(s) …",
+     "[tex-rehydrate] MISS 0x6003A66:texFull owner=texCompressedOnly:full — rehydrator returned false; this texture will render BLACK  (x6: 0x6003A66, 0x600392F, 0x6003931, 0x6006C6B, 0x6006C6C, 0x6006BC2)",
+     "[tex-rehydrate] pass finished with 6 MISS(es) in 3ms (rehydrated=0 skipped=0 gcd=0) — expect black textures"
+    ],
+    "alsoSeen": "mirrorReleaseDeferred = 3 (the recipe wants 0). Many 'WebGL: INVALID_OPERATION: delete: object does not belong to this context' warns during teardown (~30) — expected churn on a forced loss, listed for completeness.",
+    "scopeNote": "The literal gate names __terrainBc7Stats.mirrorRestoreFailed, which is VACUOUS here (terrain ladder absent, see T128-INTERIM-EYE). The failure is in the live full-tier mirror path: __bc7Stats().mirrorRestoreFailed / __texStats().mirrors.release.restoreFailed.",
+    "shots": [
+     "box:~/eyetest/out/ctxloss-after-restore-gl.png"
+    ]
+   }
+  },
+  {
+   "id": "TEXWORKER-INTERLEAVE",
+   "kind": "bench",
+   "gate": "GATE-TEXWORKER hardening before the default flip (D-09.3.3)",
+   "recipe": [
+    "PC-7-strict version of the 2026-08-10 route-pinned pair: arms interleaved off/on/off/on, FRESH profile each, identical route (telepoi Holtburg + 7 westward @teleloc hops, 10s apart), ultra quality.",
+    "Compare stall-mass/long-frames/worst tails per arm-pair; the sequential result was ~3x in the worker's favor (13 vs 42 long frames) — interleave must reproduce the direction.",
+    "If it holds: the orchestrator flips ?texWorkers default per the serialization policy (one flip, soak)."
+   ],
+   "result": {
+    "result": "SKIPPED — bench, 1070-baseline-bound",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "why": "This is a stall-mass/long-frame comparison whose acceptance argument is 'reproduce the direction of the 2026-08-10 route-pinned pair'. Frame timings on a GCE spot n1-standard-4 + T4 under headless ANGLE/EGL are not comparable to the 1070 baseline, and a bench verdict from a different GPU/CPU/driver would be worse than no verdict. Correctness eyes were run instead; this stays queued for the 1070."
+   }
+  },
+  {
+   "id": "PORTAL-P0-VALIDATE",
+   "kind": "eye+probe",
+   "gate": "validates the 2026-08-10 PORTAL-P0 commits (a591a444 envcellRing, 2a196c4d watchdog, 3961f943 direct seal, f74dbd45 punchLosSunken). NOT v4-gated — runs against the live JS tree on any dist; the Yaraq leg is the owner-priority bug (grass over the blacksmith's sunken interior, outdoor vantage only).",
+   "recipe": [
+    "A. YARAQ PUNCH (priority; 1070 — SwiftShader cannot render the punch): ?nosw=1&autoLogin=1&autoSpawn=first&agent=1; @telepoi Yaraq; stand OUTSIDE the blacksmith. Assert liveScene3d._portalPunchDiag.gates.losSunkenExempt===true and _portalPunchDiag.offered>0. A/B vs &punchLosSunken=off: ON arm must have strictly LOWER dropped.terrain and the grass patch gone (eye). If offered===0 at that vantage => no aperture polygon exists there (light-well/stairwell case) => the fix is BLDPORTAL-CONSUME (postBakeCodeWork), not this gate.",
+    "B. ENVCELL RING: ?nosw=1&autoLogin=1&autoSpawn=first&nullRender=1&agent=1 in a town; after ~10s assert liveScene3d.envCellLoadedLbs.size>1 and no '[scene3d.cells] PVS loadEnvCellsForLandblock failed' console lines; &envcellRing=off collapses size to player-LB count.",
+    "C. WATCHDOG: in a dungeon, liveScene3d.envCellLoadedLbs.delete(<lbId>); assert a '[cell-watchdog] ... NO EnvCell meshes' re-fire within ~3s and it stops after 5 attempts (no 2Hz storm).",
+    "D. DIRECT SEAL: ?nosw=1&wireframe=1&autoLogin=1&autoSpawn=first, go indoors below grade until liveScene3d._indoorSplitArmed===true; assert _directPortalSealPass!=null with .hasApertures===true and _portalSealDiag.kept>0. Eye arm on 1070 uses &atmosphere=off instead of wireframe: terrain through the doorway no longer overpainted by interior geometry.",
+    "Known fail-open (accepted, pinned as KNOWN FAIL-OPEN test): hill occluder + sunken target with no re-emergence now over-punches within the pass's scissor rect — note if visible in the wild."
+   ],
+   "result": {
+    "verdict": "MIXED — A: punch alive and Yaraq defect NOT reproduced on T4 | B: CLEAN | C: INCONCLUSIVE (test mis-targeted) | D: DIRTY-or-STALE-READ, yet the interior renders CLEAN",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+    "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+    "A_yaraq_punch": {
+     "status": "punch STRUCTURALLY ALIVE, gates as specified; the grass-over-sunken-interior defect did NOT reproduce at any outdoor vantage that rendered",
+     "asserts": {
+      "gates.losSunkenExempt": "true (every arm)",
+      "offered>0": "true — 9..47 depending on vantage/arm",
+      "punch banner": "build 2026-08-04-r5, enabled true"
+     },
+     "losSunkenAB": "punchLosSunken ON (default) vs =off, same vantages: dropped.terrain IDENTICAL (1 at the E vantage, 0 at W/NE/high/SW; 1 at follow, 0 at the parked smithy vantages). NO dropT differential — the SAME null result the 2026-08-10 laptop HD520 rig reported. The ON arm is not worse; it simply has nothing to rescue at these vantages.",
+     "eye": "Outdoor overview (45m el50) and high (35m el38) shots of the blacksmith complex show the open-top interior — forge, beehive oven, barrels, tables, NPCs — rendering correctly with NO grass drawn over it, in BOTH the default and sidedness arms. The owner-priority Yaraq defect is NOT visible on the T4 at these vantages.",
+     "vantageLimitation": "Low street-level orbits around the smithy (25-30m, el 18-25) put the camera INSIDE Yaraq's dense building block and rendered black (nonBlackPct 0) — 4 of 5 street azimuths were lost this way. Only elevated outdoor vantages (el>=38) are judged here. A true ground-level street vantage on the T4 is still owed."
+    },
+    "B_envcell_ring": {
+     "status": "CLEAN",
+     "on": "?nullRender=1 default: liveScene3d.envCellLoadedLbs.size = 7 then 9; keys are the neighbour ring around the player LB 0xa9b4 — 0xa8b30000, 0xa8b40000, 0xa8b50000, 0xa9b30000, 0xa9b50000, 0xaab30000, 0xaab40000",
+     "off": "&envcellRing=off: collapses to 0 then 1 (player-LB only) — exactly the predicted collapse",
+     "pvsFailures": "0 lines of '[scene3d.cells] PVS loadEnvCellsForLandblock failed' in either arm"
+    },
+    "C_watchdog": {
+     "status": "INCONCLUSIVE — my victim was wrong, not the code",
+     "what": "I deleted envCellLoadedLbs' first element, which was an OUTDOOR ring LB (0xa8b30000), not the player's indoor LB; no re-fire was expected or seen (size stayed 17).",
+     "positive": "One and only one '[cell-watchdog] indoor cell 0x7d640100 in unfetched LB 0x7d640000 — triggering EnvCell fetch' line fired naturally on entering the smithy. No 2Hz storm (1 line total), which is the half of the assertion that did hold.",
+     "redo": "Delete the PLAYER's own indoor LB id and assert the re-fire + the 5-attempt stop."
+    },
+    "D_direct_seal": {
+     "status": "ASSERTIONS FAIL, but the rendered result is CLEAN — needs adjudication",
+     "where": "@teleloc 0x7D640100 87.8 111.8 12.005 (Yaraq blacksmith sunken interior), &atmosphere=off",
+     "measured": {
+      "_indoorSplitArmed": "true (polled)",
+      "_directPortalSealPass": "NULL — the assertion wants non-null with hasApertures===true",
+      "_portalSealDiag": {
+       "kept": 0,
+       "dropped": {
+        "straddle": 4,
+        "boundary": 0,
+        "backface": 0,
+        "nearPlane": 0,
+        "project": 0,
+        "oversize": 0,
+        "terrain": 0
+       }
       },
-      "counterAssertionsBeforeJudging": [
-        "__diag pools: classesCreatedPostBoot===0 after settle; parked poolMutationsPerFrame===0 (two reads)",
-        "classes <= ~63, pools <= ~300 (census bounds)",
-        "producer.heldOutNoRsId === 0 (else a material class missed the RSID stamp)",
-        "heldOutByReason.offPage CLIMBS then reOfferAdmitted FOLLOWS (strict-arm drain working); heldOutRetired small and stable",
-        "refeedFormatMismatch === 0 (a nonzero = the cached-record race is real — file it)",
-        "envcells.visible === containersVisible in a dungeon; refusedBakedMissing === 0"
-      ],
-      "vantages": "batch-C E6 vantage list (ClipMap item, depth-bias, shadowed-town receiveShadow, baked-light) PLUS holtburg-redoubt-interior (four judgements in the ENVCELL-POOL report; its checklist row stops you judging a legacy interior by mistake — check the pooled diag counts nonzero IN the dungeon first)",
-      "verdictSemantics": "CLEAN => ST9 promotion path opens; DIRTY => defect, never ship-and-tune",
-      "verdict": null
+      "_portalPunchDiag": "{reason:'indoor(punch is outdoor-only)', offered:0} — expected indoors",
+      "envCellLoadedLbs": 18
+     },
+     "ambiguity": "_portalSealDiag IS being stamped (so the seal pass runs) while _directPortalSealPass reads null off liveScene3d. liveScene3d is a one-time init3D snapshot, so a late-stamped pass reference can read null forever — this may be a stale-read rather than a missing pass. Either way seal kept=0 with 4 straddle drops is real and does not match the '_portalSealDiag.kept>0' assertion.",
+     "eyeResult": "THE THIRD DATAPOINT THE QUEUE ASKED FOR: with the player INSIDE 0x7d640100 the interior renders CORRECTLY on the T4 — stone flagstones, wooden platforms, NPCs, walls, with outdoor grass visible ONLY through the doorway and wall opening. The 2026-08-10 laptop-HD520 'grass overpaints the interior floor' bleed is NOT reproduced. That agrees with the OWNER's rig and disagrees with the Mesa/Intel HD520 rig, so the indoor bleed looks GPU/driver-specific (Mesa Intel) rather than a client defect. Note it renders clean even though the direct seal kept 0 apertures, i.e. the seal pass is not load-bearing for this interior on this GPU."
+    },
+    "shots": [
+     "box:~/eyetest/out/punch-{off,on,heur,losoff}-{follow,smithy-S,smithy-SE,smithy-over}-gl.png",
+     "box:~/eyetest/out/yaraq-street-{losOn,losOff}-{E,W,NE,high,SW}-gl.png",
+     "box:~/eyetest/out/seal-indoor-{follow,A,B,floor}-gl.png"
+    ],
+    "knownBenign": "3 console errors in EVERY arm are the same expected 404s — optional terrain assets absent from this dist: scene3d/assets/terrain_bc7/t1024/manifest.json, .../t512/manifest.json, scene3d/assets/pbr_terrain/manifest.json. No pageErrors in any arm."
+   },
+   "laptopIgpuFindings2026-08-10": [
+    "RIG: laptop HD520 real-GPU headless chromium (--use-angle=gl-egl → 'Mesa Intel HD 520', NOT SwiftShader) against live tree; freecam __cam.set takes AC-WORLD FOLDED metres (lb 0x7D64 base = 24000,19200) — LB-local coords put the camera in the void.",
+    "KILLER BUG FOUND+FIXED (commit b97b9ee1): tickPortalPunch read hasV2 from tickPortalStencil's scope → ReferenceError EVERY frame, eaten by the bare catch → THE PUNCH WAS STRUCTURALLY DEAD (offered always 0, diag frozen on last stamp). Found via CDP Debugger.setPauseOnExceptions. Catch now stamps 'tick-threw:<msg>'. All prior punch eye-verdicts since the stencil/punch split are void — the pass never fed.",
+    "POST-FIX: punch feeds (Yaraq offered 12-28, kept most; terrain gate live, dropT differentials seen). punchLosSunken on/off showed NO dropT differential at the tested street vantages.",
+    "YARAQ SPOT NOT RESOLVED by the punch alone: with punch alive+kept>0, grass still draws over the sunken smithy courtyard from street vantages (player-outside). Interior cells ARE in the outdoor render set (7d640100 visible:true, 37/116 visible) — the courtyard region is simply covered by NO kept aperture polygon (open-top/courtyard boundary has no CellPortal poly to punch through) → this is the BLDPORTAL-CONSUME / aperture-export gap, exactly the postBakeCodeWork item.",
+    "INDOOR BLEED ON THIS RIG: player teleported into 0x7d640100 → indoorDepthSplit ARMED (relayered 97, path composer, seal kept 20) yet grass still overpaints the interior floor in view. Owner reports indoors clean on their rig — preset/GPU dependent? Suspect seal-aperture overreach (open-top courtyard 'aperture' re-protecting terrain over the whole floor) or hoist gap. VERIFY ON 1070 before chasing.",
+    "Freecam park does NOT disarm the punch (verified post-fix). @telepoi Yaraq lands at 0x7D64 spawn; blacksmith Buray ibn Tamsa interior cell 0x7D640100 local (87.8,111.8,12.005); @teleloc 0x7D640100 87.8 111.8 12.005 works headless.",
+    "Shots taildropped to redmi: yaraq-1-DEFECT-street (punch off = pre-fix state), yaraq-2-punchalive-street, yaraq-3-overview-fixed-arm, yaraq-4-player-inside."
+   ]
+  },
+  {
+   "id": "MOVE-FIX-BASELINE",
+   "kind": "bench",
+   "gate": "creates F3/F4 baselines (charter Q2); GATE-POOLS kill-row needs it",
+   "cmd": "node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 --anchor=25171,20344,42.0 --mode=orbit --frames=1800 --laps=1 --arm=default --account=<bot NOT tailnet1>",
+   "notes": [
+    "Harness fixed 2026-08-10 (classifyBoot + --loginRetries default 2; failure prints the page's own reason).",
+    "Fresh profile; sample same-session PARKED p50 BEFORE the rig; judged USABLE or re-run (never average a REJECT); label BASELINE-CREATING."
+   ],
+   "result": {
+    "result": "SKIPPED — bench, explicitly baseline-CREATING for the 1070",
+    "ranBy": "T4 eyes session 2026-08-11",
+    "why": "Its whole purpose is to create the F3/F4 PARKED/moving baselines that later 1070 runs are compared against. Creating that baseline on a T4 would poison the comparison. Stays queued for the 1070."
+   }
+  }
+ ],
+ "ownerItems": [
+  {
+   "id": "Q75-ELECTION",
+   "status": "OPEN",
+   "evidence": "BAKE-4's pack-report carries the world-scale full-tier size with page dims (region figure was +13.2% over pre-resample; T16's q75 projected ~69.6MB vs the <=65 gate). Decide q75 vs lossless for B4a AFTER reading the v4 world number; a q75 re-encode is a buildbox job (T16 pattern)."
+  },
+  {
+   "id": "E1-RATIFICATION",
+   "status": "OPEN",
+   "evidence": "2026-08-10 orchestrator-eye CLEAN awaits owner ratification per PR-8: pairs in session scratchpad b1070/e1/ (day-on/off town+street, final-*-el60, dungeon pair)."
+  },
+  {
+   "id": "PREVIEW-FEED-REKEY",
+   "status": "OPEN",
+   "evidence": "re-key 2026-08-09 S4 options a/b — until decided, classPages.refused.needsResample (85 on the T22P arm) cannot reach 0 from the bake alone. Orchestrator can brief either option as an agent task once elected."
+  }
+ ],
+ "postBakeCodeWork": [
+  {
+   "note": "Added 2026-08-10 by orchestrator per owner directive: all work slated for after BAKE-4 goes in this file. These are CODE items (wasm rebuild required — blocked while the bake owns the dev/builds cgroup), not 1070 eyetests. Sources: PORTAL investigation report + MOVEMENT decomp study (both 2026-08-10 opus agents, citations read-verified). Build with capped-build wasm-pack AFTER driver4.log shows === DONE; --release before any measurement.",
+   "items": [
+    {
+     "id": "MOVE-F2-HOLDKEY",
+     "gate": "root-cause fix for the stuck-walk bug (F1 JS guard is the stopgap)",
+     "files": "crates/holtburger-core/src/client/movement/system.rs:2607-2619 (base-gait seed)",
+     "recipe": "Derive the base gait from the interpreter's own persistent state (interp.hold_run != ui_toggles_run() -> Run/Walk), mirroring retail adjust_motion's fallback to RawMotionState::current_holdkey (acclient.c:343799), instead of inheriting gait from active_drive where a stray ManualHeld(run=false) persists it. Add retail_behavior_tests case: ManualHeld(run=false) then W edge still runs. cargo test -p holtburger-core after bake.",
+     "risk": "medium — shipped default lane (?cmdInterp=on)",
+     "status": "LANDED 2026-08-11 (fanout-D a1, 62423506): base gait now derives from interp hold_run; agent found+fixed a SECOND identical seed in pump_cmd_interp_use_time. core 627/0 on-branch, 632/0 merged. Report impl/task-a1-report.md."
     },
     {
-      "id": "RELIEF-EYE",
-      "kind": "eye",
-      "stage": "post-ST3 (reliefBundles)",
-      "gate": "the ?reliefBundles DEFAULT-OFF -> ON path",
-      "trap": "assert __diag.geometry.relief.variantRowsResident > 0 BEFORE judging — a dist without GEOMR rows renders flat and false-CLEANs (RELIEF-BAKE report). Interiors are FLAT BY DESIGN (D2 — env variants not baked).",
-      "arms": {
-        "a": "packSource=on&geomBundles=on&reliefBundles=on (baked rails)",
-        "b": "packSource=on&geomBundles=on (relief-free bundles)",
-        "c": "legacy arm, ?gfxRelief=on (runtime rails — the parity reference)"
+     "id": "MOVE-F3-ENABLE",
+     "gate": "retail parity: CommandInterpreter::Enable (acclient.c:716912) re-asserts hold_run; our enable() (command_interpreter.rs:755) has zero callers",
+     "recipe": "Wire enable() at world entry / control reclaim. Land AFTER MOVE-F2 (without it, enable re-asserts into the same transient field).",
+     "risk": "low once F2 lands",
+     "status": "LANDED 2026-08-11 (fanout-D a1, a74514e6): enable() wired at world entry; pre-fix failure demonstrated then pinned. Report impl/task-a1-report.md."
+    },
+    {
+     "id": "MOVE-F6-SPEEDCAP",
+     "gate": "retail global speed cap (get_state_velocity renormalizes at run_rate*4.0, acclient.c:343569-343589)",
+     "files": "crates/holtburger-core/src/client/movement/common.rs:882-930 local_velocity_for_state",
+     "risk": "low, minor",
+     "status": "LANDED 2026-08-11 (fanout-D a2, 75b73258) WITH DEVIATION D1: retail's renorm lives on the LAUNCH form, not local_velocity_for_state (parity suite pins would fail otherwise); capped fn staged #[allow(dead_code)] — wiring = Handoff 1 in impl/task-a2-report.md."
+    },
+    {
+     "id": "PORTAL-GRAPH-SPLIT",
+     "gate": "highest-value structural portal fix (C2): cell_portal_graph merges walkable portal edges with visible_cells PVS edges; physics/camera walk through visibility",
+     "files": "crates/holtburger-world/src/spatial/scene.rs (cell_adjacency beside cell_portal_graph; consumers current_cell/clip_segment_to_cell_space/exited_envcell_to_outdoor/at_interior_doorway/cell_has_outdoor_exit -> adjacency only; render_set/compute_visibility stay on union), apps/holtburger-web/src/lib.rs:21456-21490 (route portals[] vs visible_cells[] separately)",
+     "recipe": "Also fixes the EXIT_INDOOR_BFS_MAX_CELLS=64 overflow (cap sized for adjacency, silently returns stay-indoors on PVS closures). cargo test -p holtburger-world (366 spatial + env840/academy wedge suites pin the seams).",
+     "risk": "medium",
+     "status": "LANDED 2026-08-11 (fanout-D a3, ea290916+dbc92844): cell_adjacency beside cell_portal_graph; walk consumers on adjacency, render on union; EXIT_INDOOR_BFS overflow fixed. world 687/0. Report impl/task-a3-report.md."
+    },
+    {
+     "id": "PORTAL-FLAGS-DECODE",
+     "gate": "C3: CellPortal.flags never decoded (bit0 exact_match, bit1 inverted portal_side, bit2 leads-outdoors); all outdoor-sentinel checks are >=0xFFFE value tests; no sidedness gate anywhere — why ?punchSidedness is parked",
+     "files": "crates/holtburger-dat/src/file_type/env_cell.rs:62-68, lib.rs:21401-21409 + 21675-21723 (carry portal_side onto CellPortalPolygon), scene.rs sentinel tests, export via getVisiblePortalAperturesWithCellCenter so portal_clip.js apertureFacesAway uses real sidedness",
+     "recipe": "cargo test -p holtburger-dat vs real client_cell.dat fixtures; validate_cell_portal_graph.cjs for symmetry. Retail: CCellPortal::UnPack acclient.c:362379; ACE PortalFlags.cs.",
+     "risk": "medium",
+     "status": "LANDED 2026-08-11 (fanout-D a4, 2a34c7b2+871307b9+d1cc6a5a): flags decoded (bit1 INVERTED per acclient.c:362389), portal_side carried to getVisiblePortalAperturesWithSidedness, apertureFacesAway consumes real sidedness under ?punchSidedness=on (still DEFAULT-OFF; 15,186/15,186 parity in tests/cell_portal_flags_parity.rs). Agent was SIGTERMed (earlyoom) before writing its report — legs verified by orchestrator on the merged tree (dat 694 passed/1 pre-existing terrain_subdiv failure also on clean master). 1070 EYETEST OWED: ?punchSidedness=on arm at the E1/Yaraq vantages."
+    },
+    {
+     "id": "BLDPORTAL-CONSUME",
+     "gate": "C1 root fix: BuildInfo.portals (retail CBldPortal — THE outdoor<->interior link + stab lists) parsed then discarded; outdoor visibility of interiors is an AABB heuristic. DIRECTLY relevant to the Yaraq blacksmith terrain-over-subterranean-interior bug (owner-reported 2026-08-10): retail punches terrain depth via building portal polys (PView::DrawCells), which we cannot do without this data.",
+     "files": "crates/holtburger-dat/src/landblock.rs:40-49 (keep stab_list), lib.rs building-load path ~:17802-17870 (push outdoor-cell->EnvCell edges + stab lists), scene.rs (landcell->building-portals index), then replace compute_visibility_with_frustum outdoor branch (~:3086-3100) with the retail walk",
+     "recipe": "Largest portal change; land AFTER PORTAL-GRAPH-SPLIT and PORTAL-FLAGS-DECODE. Retail: CBuildingObj::find_building_transit_cells acclient.c:719068, CEnvCell::check_building_transit; ACE BuildingObj.cs/BldPortal.cs.",
+     "risk": "high (staged)",
+     "status": "DOSSIER READY 2026-08-11 (fanout-D a5, 494bf516): queued/BLDPORTAL-CONSUME-brief.md. F1 the aperture polys are ALREADY PARSED (BspPortal.portal_polys); F2 portal_index<->BuildInfo.portals is an exact world-wide bijection (5,464/5,464 buildings, probe in Appendix B); F3 the Yaraq courtyard aperture exists in the DAT. Implementation is now turnkey."
+    },
+    {
+     "id": "PORTAL-SWIRL-RENDER",
+     "gate": "OWNER VERDICT 2026-08-10: the 062e5ce3 veto only removed the black box — it did NOT restore the portal visual. A portal should show the retail swirl; the after-shot shows a bare pedestal. The quad texture being fully transparent is CORRECT retail behavior (retail portals are light + particle swirl only), so the remaining defect is the SWIRL PARTICLE EFFECT not rendering: Setup 0x020001B3 defaultScript 0x3300067A (purple; restricted variants 0x330006FA/FB/FD differ only in script+light). The before-shot (px2-SW.png) shows partial purple wisps, so SOME emitters fire — but nothing like the retail full swirl.",
+     "recipe": "Trace the portal defaultScript chain end-to-end: PhysicsScript 0x3300067A -> its emitter table (ParticleEmitterInfo, PDB typeid 15a69 for field offsets; DRW dats.xml <type name=\"ParticleEmitter\">) -> our decode (fetchPhysicsScript/fetchParticleEmitter/entityDefaultScript wasm exports, pkg d.ts) -> JS emitter playback (which emitters are created, particle counts, textures, blending additive?, lifetime/velocity params). Compare emitter-by-emitter against retail params from the decomp (SoundManager/ParticleManager lanes; rg CParticleEmitter:: in acclient.c). Check maxParticlesPerEmitter=64 quality clamp (low preset) and whether static-object default scripts even play for weenieType-7 portals (entityDefaultScript path vs live-entity-only). Rig recipe in laptopIgpuFindings2026-08-10; Yaraq town portal cell 0x7D640025 world (24103,19307).",
+     "risk": "particle-lane work, likely mixed JS+wasm; diagnose first",
+     "status": "FIXED 2026-08-10 (laptop-rig validated; 1070 eye-test queued below)",
+     "rootCause": "OWNER-REGISTRY SIBLING-PRUNE RACE in scene3d/particles/owner_registry.js (`?particleOwner`, DEFAULT-ON) — NOT the emitter decode, playback, blending, quality clamp, or the CallPES loop. `ParticleOwnerRegistry.addEmitter` takes the owner record BEFORE its `await`, and a create that FAILS calls `_pruneOwner`, which deletes the record when it finds it empty. Two CreateParticle hooks from ONE script in ONE tick therefore race: the slow create (real GfxObj -> fetchBuildingPlacement + material) enters first and awaits; the fast one fails instantly on retail's `hwGfxObjId === 0` destroy sentinel and prunes the SHARED record; the slow create then resolves, its `liveRec !== rec` test reads the pruned map, concludes the owner despawned, and DESTROYS a perfectly good emitter. PhysicsScript 0x3300067A (Setup 0x020001B3 default_script) is exactly that shape: CreateParticle 0x320002CD @t=0 (hw GfxObj 0x010016C8 = THE SWIRL; type 9 ParabolicLVLALR, 12 particles, birthrate 1/6 s, lifespan 2 s, scale 5.0->0.1, trans 1.0->0.4, surface 0x08000498 = Base1Image|Alpha|Additive, luminosity 1) and CreateParticle 0x320002D6 @t=0 (hw GfxObj 0 -> inert; it carries only a SOFTWARE gfxObjId 0x010016C9, and retail/ACE bail on hw==0 too — ParticleEmitter::SetInfo acclient.c:330930-330934, ACE ParticleEmitter.cs:106-110). So every town portal rolled a die on whether its own swirl survived its sibling's failure => the bare pedestal. 41 of the 4,248 PhysicsScripts in client_portal.dat have this >=2-CreateParticle-with-a-mix shape (all the portal family 0x3300067A / 0x330006FA-FE plus 35 others), so this was not portal-only.",
+     "chainVerified": "0x3300067A = 4 hooks: CreateParticle 0x320002CD, CreateParticle 0x320002D6, SoundTweaked 0x0A00038E (prob 1.0, vol 0.05), CallPES 0x330006DA @t=2.7 pause=0.0. CallPES target 0x330006DA is a SOUND-ONLY self-loop (SoundTweaked + CallPES back into itself at 2.7 s) — it carries NO CreateParticle, so the swirl is NOT sustained by the loop: the emitters are created once at t=0 and run forever (total_particles=0, total_seconds=0 => persistent). Colored variants 0x330006FA/FB/FC/FD/FE are identical in shape (emitters 0x320003B2/B4/B5/B7/B9/BA). Parsed straight from client_portal.dat (btree walk + ACE ParticleEmitterInfo/AnimationHook field order); WBT's chorizite-parse-dat-record elides hook payloads.",
+     "fix": "scene3d/particles/owner_registry.js — per-owner IN-FLIGHT CREATE COUNTER (`rec.pending`): incremented before the await, decremented on every resolve path, and `_pruneOwner` refuses to drop a record while it is non-zero. Real despawns are unaffected: `destroyAllForOwner` bumps the epoch unconditionally, and the EPOCH term of `ownerGone` still tombstones in-flight creates. New URL flag `?particleOwnerPending` (DEFAULT ON, `=off` restores the legacy prune) — same escape-hatch shape as `?callPesLoop`. Docs row added to docs/url-flags.md (Particles/VFX table + the reader index); lint-url-flags + audit-flag-defaults clean. Headless regression: test_particle_owner.mjs grew 6 `sibling-race:` checks (42 -> 48 passing), including 'despawn still tombstones an in-flight create'. JS-only — NO wasm rebuild needed, so the BAKE-4 build gate did not apply.",
+     "validation": "LAPTOP HD520 real-GL rig (headless chromium --use-angle=gl-egl -> 'ANGLE (Intel, Mesa Intel(R) HD Graphics 520)'), live ACE, tailnet1, @telepoi Yaraq + @teleloc 0x7D640025 103 100 12.0, freecam __cam.orbit(24103,19306.8,13.2,7,200,10). SAME page, SAME steps, A/B on the flag: `?particleOwnerPending=off` -> 3 portal entities present (0x77D64034/41/6A, all setup 0x020001B3, all _particleChainsAttached), 0 emitters carrying info 0x320002CD => BARE PEDESTAL. DEFAULT (ON) -> 3 emitters, the near one num=10-11 live / 10 visible, totalEmitted 306-547 => FULL PURPLE SWIRL. Reproduced twice on the default arm; two independent pre-fix boots both gave 0 emitters. Isolated deterministic repro of the race against the live module also captured (swirl emitter created then immediately destroyed). Shots: /mnt/wbterminal2/portal-swirl-2026-08-10/{before-portal.png (pre-fix code), BEFORE-flagoff-portal.png, AFTER-fix-portal.png}.",
+     "notes": [
+      "NOT the cause (each checked + ruled out): emitter decode (our ParticleEmitter struct matches ACE.DatLoader/ParticleEmitterInfo.cs field-for-field and the PDB offsets at typeid 15a69); the maxParticlesPerEmitter quality clamp (12 requested vs 64 on the LOW preset — never trips); additive blending (surface 0x08000498 is Base1Image|Alpha|Additive and materials.js already routes the 0x10000 bit to AdditiveBlending via getParticleUnlit); the CallPES self-loop (already fixed by ?callPesLoop 2026-08-04 and confirmed running); the 062e5ce3 albedoFullyTransparent veto (it only gates the BC7 upgrade, never particle quads).",
+      "start_trans 1.0 -> final_trans 0.4 IS retail: translucency, 1 = invisible (CMaterial::SetTranslucencySimple sets alpha = 1 - trans, acclient.c:360594; SetTranslucency(1.0) also sets the NODRAW draw_state bit, acclient.c:315499). So a portal particle spawns huge + invisible and converges as it shrinks and fades IN. Our setTranslucency in scene3d/particles/particle.js already matches.",
+      "0x320002D6 never draws in RETAIL either (hw GfxObj 0). Rendering its software gfxObjId 0x010016C9 would be a DEVIATION, not a fix — left alone deliberately.",
+      "The Yaraq town portal is a SERVER ENTITY (guid 0x77D6406A, wcid 43066, physicsScriptDid 0 -> Track B `fetchSetupDefaultScript(0x020001B3)` -> 0x3300067A), so the entity walker in entities.js is the path under test, NOT statics.js's V1 walker. The dais + obelisks around it are the baked static.",
+      "Side observation, NOT fixed here: a portal's per-guid ScriptManager was seen at scriptsCompleted ~7,000 in a ~400 s session (~17 Hz), far above the 1 iteration / 2.7 s the 0x330006DA loop should run at. Worth a look as its own item — it is a CPU/scheduling question, not a visual one, and the swirl is correct with it.",
+      "SCRIPTMGR-RATE side observation RESOLVED 2026-08-11 (fanout-D a7, 24c0ce4e): a queued PhysicsScript lost its per-hook start_time so every hook fired same-tick (~17 Hz completions). Fixed behind ?scriptHookTime DEFAULT-ON (=off legacy); harness/test_script_hook_time.mjs 47/0; census: all 4,248 PhysicsScripts parsed, loop cadence now 1/2.7s. Report impl/task-a7-report.md."
+     ],
+     "followUp1070": "EYETEST (Lane-B, batched): Yaraq town portal + a colored Town-Network portal (0x330006FA/FB/FD family) on the GTX-1070 at quality=high, bare default URL + ?nosw=1. PASS = a bright additive purple swirl above the dais that persists indefinitely (not 3 loop iterations), on EVERY portal in view, and survives walking away and back (LOD respawn re-attaches). A/B reference arm: ?particleOwnerPending=off => bare pedestal. Also worth a glance while there: the other 40 mixed-emitter scripts (e.g. 0x33000A6B 5-live/1-inert, 0x33000A91 4-live/4-inert) should now keep their full emitter set.",
+     "followUp1070Result": {
+      "verdict": "PASS — the 2026-08-10 owner-registry fix is confirmed on a real GPU",
+      "ranBy": "T4 eyes session 2026-08-11",
+      "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+      "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+      "method": "@telepoi Yaraq then @teleloc 0x7D640025 103 100 12.0; arm-identical parked camera __cam.orbit(24103,19306.8,13.2,14,180,12); A/B on ?particleOwnerPending.",
+      "armA_default": {
+       "emitters carrying info 0x320002CD": 3,
+       "nearEmitter": {
+        "liveParticles": 10,
+        "maxParticles": 12
+       },
+       "totalEmitted": "295 at t0 -> 484 at t+30s (still emitting)",
+       "eye": "bright additive purple swirl above the dais"
       },
-      "checklist": [
-        "Tudor timber/brick coursing protrudes on arm a and c, flat on b",
-        "a vs c: rails visually identical (the differ says byte-parity of triangles; the eye confirms shading/shadow)",
-        "no cracks at material boundaries (weld rule)",
-        "shadow pass sane (rails cast; ~cost note in url-flags row)",
-        "0 console errors"
+      "armB_off": {
+       "emitters carrying info 0x320002CD": 0,
+       "eye": "BARE PEDESTAL — crystals only, no swirl"
+      },
+      "persistence": "Second shot 30s later still swirling and the swirl has visibly ROTATED to a new phase.",
+      "reproducibility": "The 3-vs-0 emitter split reproduced on every one of 4 independent boots of the pair.",
+      "agreement": "Matches the 2026-08-10 laptop-HD520 validation (3 emitters vs 0) exactly, now on NVIDIA hardware.",
+      "shots": [
+       "box:~/eyetest/out/swirl-A-default-{follow,parked,parked-late,close}-gl.png",
+       "box:~/eyetest/out/swirl-B-off-{follow,parked,parked-late,close}-gl.png"
       ],
-      "vantages": "Holtburg tudor walls close-up (street cam dist 4-6) + overview; skytime=12",
-      "verdict": null
+      "consoleErrors": "3 expected 404s per arm, 0 pageErrors"
+     }
     },
     {
-      "id": "E1-TCO-ARM",
-      "kind": "eye",
-      "gate": "confirms/kills T15R's C1 (atlas hold-out class) as the E1 softness cause",
-      "recipe": [
-        "Third arm at the E1 day vantages: packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on; compare vs the archived day-on/day-off pairs (b1070/e1/).",
-        "Read __bc7Stats(): deferredNodes + singletonUpgrades on BOTH this arm and a plain pack arm; C1 predicts the tco arm re-atlases (deferred shrink) and sharpens.",
-        "On the v4 dist also read __texStats().mirrors + texRefPageKeyed>0 (first live page-keyed members)."
-      ],
-      "verdict": null
+     "id": "TEXBC7-ALPHA-REBAKE",
+     "gate": "PORTAL-BLACKBOX root cause (2026-08-10 eve session): the hires tex-bc7 archive ships rs 0x0600396B (and 0x060037A3) as 32x32 OPAQUE — the upscaler 4x'd retail's 8x8 fully-transparent DXT1 punch-through record and DROPPED ALPHA. Every portal color shares GfxObj 0x0100168B / Surface 0x08000157 with that texture => 2.82m opaque black box in every portal swirl. Client-side veto landed (062e5ce3, albedoFullyTransparent guard in _maybeUpgradeToBc7) so the client is immune, but the archive still ships wrong pixels.",
+     "recipe": "Re-bake the holtburger/tex-bc7 (+ -pre/xu7 lanes) payloads for those rs ids with alpha preserved; make the hires upscaler (a) preserve alpha channel, (b) skip records that are fully transparent (no re-encode can improve zero information). Then AUDIT all alpha-bearing surfaces the same tool upscaled (clipmap/Base1ClipMap class especially). DAT source is fine (client_portal_hires_repaired.dat still has the correct 8x8 transparent record).",
+     "risk": "bake-tooling; blocked while BAKE-4 runs",
+     "status": "BOX HALF LANDED 2026-08-11 (fanout-D a6): alpha-audit tool in apps/holtburger-tools (census + corpus verdicts, deterministic, provenance-stamped); tools 153/0 + 6/0 real-DAT. Found FIVE more fully-transparent records for the upscaler skip list (0x0600415F/61/63, 0x06004669, 0x06006E19). LAPTOP CORPUS RUN + re-bake still owed — invocation in impl/task-a6-report.md."
     },
     {
-      "id": "T128-INTERIM-EYE",
-      "kind": "eye",
-      "stage": "ST5 terrain ladder",
-      "gate": "GATE-TEX terrain leg (T15R-TERRAIN report)",
-      "recipe": [
-        "?terrainT1024=512 (promote target) arm: the t128 interim is on screen for ~1-2s post-boot — eye it (nobody ever has): acceptable as a boot transient? Then promotion completes; confirm no visible pop/seam at the swap.",
-        "Chain onto the E1-TCO-ARM boot at no extra cost (T15R-TERRAIN report's recommended arm chain).",
-        "Also read __terrainBc7Stats: mode, promotion ms, mirrorsFreed, mirrorReleaseDeferred===0."
-      ],
-      "verdict": null
-    },
-    {
-      "id": "CTX-LOSS-MIRRORS",
-      "kind": "probe",
-      "gate": "GATE-TEX terrain leg: mirrorRestoreFailed===0 across a forced context loss",
-      "recipe": [
-        "In a settled tco+t1024 arm: force GL context loss (WEBGL_lose_context extension: getExtension('WEBGL_lose_context').loseContext() then restoreContext()).",
-        "Assert: renderer recovers; __terrainBc7Stats.mirrorRestoreFailed===0; fullTierMirrorStats restore counters clean; world visually intact after ~30s.",
-        "This exercises the rehydrate path the mirrors exist for — first live test."
-      ],
-      "result": null
-    },
-    {
-      "id": "TEXWORKER-INTERLEAVE",
-      "kind": "bench",
-      "gate": "GATE-TEXWORKER hardening before the default flip (D-09.3.3)",
-      "recipe": [
-        "PC-7-strict version of the 2026-08-10 route-pinned pair: arms interleaved off/on/off/on, FRESH profile each, identical route (telepoi Holtburg + 7 westward @teleloc hops, 10s apart), ultra quality.",
-        "Compare stall-mass/long-frames/worst tails per arm-pair; the sequential result was ~3x in the worker's favor (13 vs 42 long frames) — interleave must reproduce the direction.",
-        "If it holds: the orchestrator flips ?texWorkers default per the serialization policy (one flip, soak)."
-      ],
-      "result": null
-    },
-    {
-      "id": "PORTAL-P0-VALIDATE",
-      "kind": "eye+probe",
-      "gate": "validates the 2026-08-10 PORTAL-P0 commits (a591a444 envcellRing, 2a196c4d watchdog, 3961f943 direct seal, f74dbd45 punchLosSunken). NOT v4-gated — runs against the live JS tree on any dist; the Yaraq leg is the owner-priority bug (grass over the blacksmith's sunken interior, outdoor vantage only).",
-      "recipe": [
-        "A. YARAQ PUNCH (priority; 1070 — SwiftShader cannot render the punch): ?nosw=1&autoLogin=1&autoSpawn=first&agent=1; @telepoi Yaraq; stand OUTSIDE the blacksmith. Assert liveScene3d._portalPunchDiag.gates.losSunkenExempt===true and _portalPunchDiag.offered>0. A/B vs &punchLosSunken=off: ON arm must have strictly LOWER dropped.terrain and the grass patch gone (eye). If offered===0 at that vantage => no aperture polygon exists there (light-well/stairwell case) => the fix is BLDPORTAL-CONSUME (postBakeCodeWork), not this gate.",
-        "B. ENVCELL RING: ?nosw=1&autoLogin=1&autoSpawn=first&nullRender=1&agent=1 in a town; after ~10s assert liveScene3d.envCellLoadedLbs.size>1 and no '[scene3d.cells] PVS loadEnvCellsForLandblock failed' console lines; &envcellRing=off collapses size to player-LB count.",
-        "C. WATCHDOG: in a dungeon, liveScene3d.envCellLoadedLbs.delete(<lbId>); assert a '[cell-watchdog] ... NO EnvCell meshes' re-fire within ~3s and it stops after 5 attempts (no 2Hz storm).",
-        "D. DIRECT SEAL: ?nosw=1&wireframe=1&autoLogin=1&autoSpawn=first, go indoors below grade until liveScene3d._indoorSplitArmed===true; assert _directPortalSealPass!=null with .hasApertures===true and _portalSealDiag.kept>0. Eye arm on 1070 uses &atmosphere=off instead of wireframe: terrain through the doorway no longer overpainted by interior geometry.",
-        "Known fail-open (accepted, pinned as KNOWN FAIL-OPEN test): hill occluder + sunken target with no re-emergence now over-punches within the pass's scissor rect — note if visible in the wild."
-      ],
-      "result": null,
-      "laptopIgpuFindings2026-08-10": [
-        "RIG: laptop HD520 real-GPU headless chromium (--use-angle=gl-egl → 'Mesa Intel HD 520', NOT SwiftShader) against live tree; freecam __cam.set takes AC-WORLD FOLDED metres (lb 0x7D64 base = 24000,19200) — LB-local coords put the camera in the void.",
-        "KILLER BUG FOUND+FIXED (commit b97b9ee1): tickPortalPunch read hasV2 from tickPortalStencil's scope → ReferenceError EVERY frame, eaten by the bare catch → THE PUNCH WAS STRUCTURALLY DEAD (offered always 0, diag frozen on last stamp). Found via CDP Debugger.setPauseOnExceptions. Catch now stamps 'tick-threw:<msg>'. All prior punch eye-verdicts since the stencil/punch split are void — the pass never fed.",
-        "POST-FIX: punch feeds (Yaraq offered 12-28, kept most; terrain gate live, dropT differentials seen). punchLosSunken on/off showed NO dropT differential at the tested street vantages.",
-        "YARAQ SPOT NOT RESOLVED by the punch alone: with punch alive+kept>0, grass still draws over the sunken smithy courtyard from street vantages (player-outside). Interior cells ARE in the outdoor render set (7d640100 visible:true, 37/116 visible) — the courtyard region is simply covered by NO kept aperture polygon (open-top/courtyard boundary has no CellPortal poly to punch through) → this is the BLDPORTAL-CONSUME / aperture-export gap, exactly the postBakeCodeWork item.",
-        "INDOOR BLEED ON THIS RIG: player teleported into 0x7d640100 → indoorDepthSplit ARMED (relayered 97, path composer, seal kept 20) yet grass still overpaints the interior floor in view. Owner reports indoors clean on their rig — preset/GPU dependent? Suspect seal-aperture overreach (open-top courtyard 'aperture' re-protecting terrain over the whole floor) or hoist gap. VERIFY ON 1070 before chasing.",
-        "Freecam park does NOT disarm the punch (verified post-fix). @telepoi Yaraq lands at 0x7D64 spawn; blacksmith Buray ibn Tamsa interior cell 0x7D640100 local (87.8,111.8,12.005); @teleloc 0x7D640100 87.8 111.8 12.005 works headless.",
-        "Shots taildropped to redmi: yaraq-1-DEFECT-street (punch off = pre-fix state), yaraq-2-punchalive-street, yaraq-3-overview-fixed-arm, yaraq-4-player-inside."
-      ]
-    },
-    {
-      "id": "MOVE-FIX-BASELINE",
-      "kind": "bench",
-      "gate": "creates F3/F4 baselines (charter Q2); GATE-POOLS kill-row needs it",
-      "cmd": "node harness/moving-bench.mjs --cdp=http://127.0.0.1:9333 --anchor=25171,20344,42.0 --mode=orbit --frames=1800 --laps=1 --arm=default --account=<bot NOT tailnet1>",
-      "notes": [
-        "Harness fixed 2026-08-10 (classifyBoot + --loginRetries default 2; failure prints the page's own reason).",
-        "Fresh profile; sample same-session PARKED p50 BEFORE the rig; judged USABLE or re-run (never average a REJECT); label BASELINE-CREATING."
-      ],
-      "result": null
+     "id": "PORTAL-SMALL",
+     "gate": "C7+C8 cleanups riding along",
+     "recipe": "is_envcell_id tighten to 0x100..=0xFFFD (scene.rs:41 + inline copies :2549/:2559 — 0xFFFF sentinel currently accepted); per-snapshot AABB map replacing the per-portal linear scan in getVisiblePortalApertures* (lib.rs:35437/35516).",
+     "risk": "low",
+     "status": "LANDED 2026-08-11 (fanout-D a3, d9953810): is_envcell_id 0x100..=0xFFFD (0xFFFF was passing — caught by test); per-snapshot AABB index in both aperture exports."
     }
+   ]
+  }
+ ],
+ "t4Session2026-08-11": {
+  "what": "GPU eye/probe session run on the reshaped buildbox (GCE spot n1-standard-4 + Tesla T4) while the 1070 was down. 24 arms, 102 GL frames, 343MB of evidence under box:~/eyetest/out/.",
+  "caveat": "T4-arm (GCE spot n1-standard-4 + Tesla T4, Debian 12 driver 550.54.15, Chrome 151 headless --use-angle=gl-egl) — NOT the 1070. OWNER RATIFICATION OWED; anything preset/GPU-dependent is flagged per item.",
+  "env": "renderer string read inside the live client: 'ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)'. v4 dist ~/holtburger-dist-v4, serve.py --check OK (scenery 65025 / spawns 38153 / events 80397 / shards 263 / packs 256), --allow-missing never passed. repo @917d1539. wasm 6.4MB release-shaped. Every arm: fresh --user-data-dir, ?nosw=1, ?renderScale=1, skytime=12, bots agentp07/agentp10 alternating.",
+  "executed": [
+   "OFF-ARM-BOOT",
+   "E6",
+   "RELIEF-EYE",
+   "E1-TCO-ARM",
+   "T128-INTERIM-EYE",
+   "CTX-LOSS-MIRRORS",
+   "PORTAL-P0-VALIDATE (A/B/C/D)",
+   "PORTAL-SWIRL-RENDER followUp1070",
+   "punchSidedness on/off/heuristic (PORTAL-FLAGS-DECODE eye)"
   ],
-  "ownerItems": [
-    {
-      "id": "Q75-ELECTION",
-      "status": "OPEN",
-      "evidence": "BAKE-4's pack-report carries the world-scale full-tier size with page dims (region figure was +13.2% over pre-resample; T16's q75 projected ~69.6MB vs the <=65 gate). Decide q75 vs lossless for B4a AFTER reading the v4 world number; a q75 re-encode is a buildbox job (T16 pattern)."
-    },
-    {
-      "id": "E1-RATIFICATION",
-      "status": "OPEN",
-      "evidence": "2026-08-10 orchestrator-eye CLEAN awaits owner ratification per PR-8: pairs in session scratchpad b1070/e1/ (day-on/off town+street, final-*-el60, dungeon pair)."
-    },
-    {
-      "id": "PREVIEW-FEED-REKEY",
-      "status": "OPEN",
-      "evidence": "re-key 2026-08-09 S4 options a/b — until decided, classPages.refused.needsResample (85 on the T22P arm) cannot reach 0 from the bake alone. Orchestrator can brief either option as an agent task once elected."
-    }
+  "skipped": [
+   "TEXWORKER-INTERLEAVE (bench, 1070-baseline-bound)",
+   "MOVE-FIX-BASELINE (bench, baseline-creating for the 1070)"
   ],
-  "postBakeCodeWork": [
-    {
-      "note": "Added 2026-08-10 by orchestrator per owner directive: all work slated for after BAKE-4 goes in this file. These are CODE items (wasm rebuild required — blocked while the bake owns the dev/builds cgroup), not 1070 eyetests. Sources: PORTAL investigation report + MOVEMENT decomp study (both 2026-08-10 opus agents, citations read-verified). Build with capped-build wasm-pack AFTER driver4.log shows === DONE; --release before any measurement.",
-      "items": [
-        {
-          "id": "MOVE-F2-HOLDKEY",
-          "gate": "root-cause fix for the stuck-walk bug (F1 JS guard is the stopgap)",
-          "files": "crates/holtburger-core/src/client/movement/system.rs:2607-2619 (base-gait seed)",
-          "recipe": "Derive the base gait from the interpreter's own persistent state (interp.hold_run != ui_toggles_run() -> Run/Walk), mirroring retail adjust_motion's fallback to RawMotionState::current_holdkey (acclient.c:343799), instead of inheriting gait from active_drive where a stray ManualHeld(run=false) persists it. Add retail_behavior_tests case: ManualHeld(run=false) then W edge still runs. cargo test -p holtburger-core after bake.",
-          "risk": "medium — shipped default lane (?cmdInterp=on)",
-          "status": "LANDED 2026-08-11 (fanout-D a1, 62423506): base gait now derives from interp hold_run; agent found+fixed a SECOND identical seed in pump_cmd_interp_use_time. core 627/0 on-branch, 632/0 merged. Report impl/task-a1-report.md."
-        },
-        {
-          "id": "MOVE-F3-ENABLE",
-          "gate": "retail parity: CommandInterpreter::Enable (acclient.c:716912) re-asserts hold_run; our enable() (command_interpreter.rs:755) has zero callers",
-          "recipe": "Wire enable() at world entry / control reclaim. Land AFTER MOVE-F2 (without it, enable re-asserts into the same transient field).",
-          "risk": "low once F2 lands",
-          "status": "LANDED 2026-08-11 (fanout-D a1, a74514e6): enable() wired at world entry; pre-fix failure demonstrated then pinned. Report impl/task-a1-report.md."
-        },
-        {
-          "id": "MOVE-F6-SPEEDCAP",
-          "gate": "retail global speed cap (get_state_velocity renormalizes at run_rate*4.0, acclient.c:343569-343589)",
-          "files": "crates/holtburger-core/src/client/movement/common.rs:882-930 local_velocity_for_state",
-          "risk": "low, minor",
-          "status": "LANDED 2026-08-11 (fanout-D a2, 75b73258) WITH DEVIATION D1: retail's renorm lives on the LAUNCH form, not local_velocity_for_state (parity suite pins would fail otherwise); capped fn staged #[allow(dead_code)] — wiring = Handoff 1 in impl/task-a2-report.md."
-        },
-        {
-          "id": "PORTAL-GRAPH-SPLIT",
-          "gate": "highest-value structural portal fix (C2): cell_portal_graph merges walkable portal edges with visible_cells PVS edges; physics/camera walk through visibility",
-          "files": "crates/holtburger-world/src/spatial/scene.rs (cell_adjacency beside cell_portal_graph; consumers current_cell/clip_segment_to_cell_space/exited_envcell_to_outdoor/at_interior_doorway/cell_has_outdoor_exit -> adjacency only; render_set/compute_visibility stay on union), apps/holtburger-web/src/lib.rs:21456-21490 (route portals[] vs visible_cells[] separately)",
-          "recipe": "Also fixes the EXIT_INDOOR_BFS_MAX_CELLS=64 overflow (cap sized for adjacency, silently returns stay-indoors on PVS closures). cargo test -p holtburger-world (366 spatial + env840/academy wedge suites pin the seams).",
-          "risk": "medium",
-          "status": "LANDED 2026-08-11 (fanout-D a3, ea290916+dbc92844): cell_adjacency beside cell_portal_graph; walk consumers on adjacency, render on union; EXIT_INDOOR_BFS overflow fixed. world 687/0. Report impl/task-a3-report.md."
-        },
-        {
-          "id": "PORTAL-FLAGS-DECODE",
-          "gate": "C3: CellPortal.flags never decoded (bit0 exact_match, bit1 inverted portal_side, bit2 leads-outdoors); all outdoor-sentinel checks are >=0xFFFE value tests; no sidedness gate anywhere — why ?punchSidedness is parked",
-          "files": "crates/holtburger-dat/src/file_type/env_cell.rs:62-68, lib.rs:21401-21409 + 21675-21723 (carry portal_side onto CellPortalPolygon), scene.rs sentinel tests, export via getVisiblePortalAperturesWithCellCenter so portal_clip.js apertureFacesAway uses real sidedness",
-          "recipe": "cargo test -p holtburger-dat vs real client_cell.dat fixtures; validate_cell_portal_graph.cjs for symmetry. Retail: CCellPortal::UnPack acclient.c:362379; ACE PortalFlags.cs.",
-          "risk": "medium",
-          "status": "LANDED 2026-08-11 (fanout-D a4, 2a34c7b2+871307b9+d1cc6a5a): flags decoded (bit1 INVERTED per acclient.c:362389), portal_side carried to getVisiblePortalAperturesWithSidedness, apertureFacesAway consumes real sidedness under ?punchSidedness=on (still DEFAULT-OFF; 15,186/15,186 parity in tests/cell_portal_flags_parity.rs). Agent was SIGTERMed (earlyoom) before writing its report — legs verified by orchestrator on the merged tree (dat 694 passed/1 pre-existing terrain_subdiv failure also on clean master). 1070 EYETEST OWED: ?punchSidedness=on arm at the E1/Yaraq vantages."
-        },
-        {
-          "id": "BLDPORTAL-CONSUME",
-          "gate": "C1 root fix: BuildInfo.portals (retail CBldPortal — THE outdoor<->interior link + stab lists) parsed then discarded; outdoor visibility of interiors is an AABB heuristic. DIRECTLY relevant to the Yaraq blacksmith terrain-over-subterranean-interior bug (owner-reported 2026-08-10): retail punches terrain depth via building portal polys (PView::DrawCells), which we cannot do without this data.",
-          "files": "crates/holtburger-dat/src/landblock.rs:40-49 (keep stab_list), lib.rs building-load path ~:17802-17870 (push outdoor-cell->EnvCell edges + stab lists), scene.rs (landcell->building-portals index), then replace compute_visibility_with_frustum outdoor branch (~:3086-3100) with the retail walk",
-          "recipe": "Largest portal change; land AFTER PORTAL-GRAPH-SPLIT and PORTAL-FLAGS-DECODE. Retail: CBuildingObj::find_building_transit_cells acclient.c:719068, CEnvCell::check_building_transit; ACE BuildingObj.cs/BldPortal.cs.",
-          "risk": "high (staged)",
-          "status": "DOSSIER READY 2026-08-11 (fanout-D a5, 494bf516): queued/BLDPORTAL-CONSUME-brief.md. F1 the aperture polys are ALREADY PARSED (BspPortal.portal_polys); F2 portal_index<->BuildInfo.portals is an exact world-wide bijection (5,464/5,464 buildings, probe in Appendix B); F3 the Yaraq courtyard aperture exists in the DAT. Implementation is now turnkey."
-        },
-        {
-          "id": "PORTAL-SWIRL-RENDER",
-          "gate": "OWNER VERDICT 2026-08-10: the 062e5ce3 veto only removed the black box — it did NOT restore the portal visual. A portal should show the retail swirl; the after-shot shows a bare pedestal. The quad texture being fully transparent is CORRECT retail behavior (retail portals are light + particle swirl only), so the remaining defect is the SWIRL PARTICLE EFFECT not rendering: Setup 0x020001B3 defaultScript 0x3300067A (purple; restricted variants 0x330006FA/FB/FD differ only in script+light). The before-shot (px2-SW.png) shows partial purple wisps, so SOME emitters fire — but nothing like the retail full swirl.",
-          "recipe": "Trace the portal defaultScript chain end-to-end: PhysicsScript 0x3300067A -> its emitter table (ParticleEmitterInfo, PDB typeid 15a69 for field offsets; DRW dats.xml <type name=\"ParticleEmitter\">) -> our decode (fetchPhysicsScript/fetchParticleEmitter/entityDefaultScript wasm exports, pkg d.ts) -> JS emitter playback (which emitters are created, particle counts, textures, blending additive?, lifetime/velocity params). Compare emitter-by-emitter against retail params from the decomp (SoundManager/ParticleManager lanes; rg CParticleEmitter:: in acclient.c). Check maxParticlesPerEmitter=64 quality clamp (low preset) and whether static-object default scripts even play for weenieType-7 portals (entityDefaultScript path vs live-entity-only). Rig recipe in laptopIgpuFindings2026-08-10; Yaraq town portal cell 0x7D640025 world (24103,19307).",
-          "risk": "particle-lane work, likely mixed JS+wasm; diagnose first",
-          "status": "FIXED 2026-08-10 (laptop-rig validated; 1070 eye-test queued below)",
-          "rootCause": "OWNER-REGISTRY SIBLING-PRUNE RACE in scene3d/particles/owner_registry.js (`?particleOwner`, DEFAULT-ON) — NOT the emitter decode, playback, blending, quality clamp, or the CallPES loop. `ParticleOwnerRegistry.addEmitter` takes the owner record BEFORE its `await`, and a create that FAILS calls `_pruneOwner`, which deletes the record when it finds it empty. Two CreateParticle hooks from ONE script in ONE tick therefore race: the slow create (real GfxObj -> fetchBuildingPlacement + material) enters first and awaits; the fast one fails instantly on retail's `hwGfxObjId === 0` destroy sentinel and prunes the SHARED record; the slow create then resolves, its `liveRec !== rec` test reads the pruned map, concludes the owner despawned, and DESTROYS a perfectly good emitter. PhysicsScript 0x3300067A (Setup 0x020001B3 default_script) is exactly that shape: CreateParticle 0x320002CD @t=0 (hw GfxObj 0x010016C8 = THE SWIRL; type 9 ParabolicLVLALR, 12 particles, birthrate 1/6 s, lifespan 2 s, scale 5.0->0.1, trans 1.0->0.4, surface 0x08000498 = Base1Image|Alpha|Additive, luminosity 1) and CreateParticle 0x320002D6 @t=0 (hw GfxObj 0 -> inert; it carries only a SOFTWARE gfxObjId 0x010016C9, and retail/ACE bail on hw==0 too — ParticleEmitter::SetInfo acclient.c:330930-330934, ACE ParticleEmitter.cs:106-110). So every town portal rolled a die on whether its own swirl survived its sibling's failure => the bare pedestal. 41 of the 4,248 PhysicsScripts in client_portal.dat have this >=2-CreateParticle-with-a-mix shape (all the portal family 0x3300067A / 0x330006FA-FE plus 35 others), so this was not portal-only.",
-          "chainVerified": "0x3300067A = 4 hooks: CreateParticle 0x320002CD, CreateParticle 0x320002D6, SoundTweaked 0x0A00038E (prob 1.0, vol 0.05), CallPES 0x330006DA @t=2.7 pause=0.0. CallPES target 0x330006DA is a SOUND-ONLY self-loop (SoundTweaked + CallPES back into itself at 2.7 s) — it carries NO CreateParticle, so the swirl is NOT sustained by the loop: the emitters are created once at t=0 and run forever (total_particles=0, total_seconds=0 => persistent). Colored variants 0x330006FA/FB/FC/FD/FE are identical in shape (emitters 0x320003B2/B4/B5/B7/B9/BA). Parsed straight from client_portal.dat (btree walk + ACE ParticleEmitterInfo/AnimationHook field order); WBT's chorizite-parse-dat-record elides hook payloads.",
-          "fix": "scene3d/particles/owner_registry.js — per-owner IN-FLIGHT CREATE COUNTER (`rec.pending`): incremented before the await, decremented on every resolve path, and `_pruneOwner` refuses to drop a record while it is non-zero. Real despawns are unaffected: `destroyAllForOwner` bumps the epoch unconditionally, and the EPOCH term of `ownerGone` still tombstones in-flight creates. New URL flag `?particleOwnerPending` (DEFAULT ON, `=off` restores the legacy prune) — same escape-hatch shape as `?callPesLoop`. Docs row added to docs/url-flags.md (Particles/VFX table + the reader index); lint-url-flags + audit-flag-defaults clean. Headless regression: test_particle_owner.mjs grew 6 `sibling-race:` checks (42 -> 48 passing), including 'despawn still tombstones an in-flight create'. JS-only — NO wasm rebuild needed, so the BAKE-4 build gate did not apply.",
-          "validation": "LAPTOP HD520 real-GL rig (headless chromium --use-angle=gl-egl -> 'ANGLE (Intel, Mesa Intel(R) HD Graphics 520)'), live ACE, tailnet1, @telepoi Yaraq + @teleloc 0x7D640025 103 100 12.0, freecam __cam.orbit(24103,19306.8,13.2,7,200,10). SAME page, SAME steps, A/B on the flag: `?particleOwnerPending=off` -> 3 portal entities present (0x77D64034/41/6A, all setup 0x020001B3, all _particleChainsAttached), 0 emitters carrying info 0x320002CD => BARE PEDESTAL. DEFAULT (ON) -> 3 emitters, the near one num=10-11 live / 10 visible, totalEmitted 306-547 => FULL PURPLE SWIRL. Reproduced twice on the default arm; two independent pre-fix boots both gave 0 emitters. Isolated deterministic repro of the race against the live module also captured (swirl emitter created then immediately destroyed). Shots: /mnt/wbterminal2/portal-swirl-2026-08-10/{before-portal.png (pre-fix code), BEFORE-flagoff-portal.png, AFTER-fix-portal.png}.",
-          "notes": [
-            "NOT the cause (each checked + ruled out): emitter decode (our ParticleEmitter struct matches ACE.DatLoader/ParticleEmitterInfo.cs field-for-field and the PDB offsets at typeid 15a69); the maxParticlesPerEmitter quality clamp (12 requested vs 64 on the LOW preset — never trips); additive blending (surface 0x08000498 is Base1Image|Alpha|Additive and materials.js already routes the 0x10000 bit to AdditiveBlending via getParticleUnlit); the CallPES self-loop (already fixed by ?callPesLoop 2026-08-04 and confirmed running); the 062e5ce3 albedoFullyTransparent veto (it only gates the BC7 upgrade, never particle quads).",
-            "start_trans 1.0 -> final_trans 0.4 IS retail: translucency, 1 = invisible (CMaterial::SetTranslucencySimple sets alpha = 1 - trans, acclient.c:360594; SetTranslucency(1.0) also sets the NODRAW draw_state bit, acclient.c:315499). So a portal particle spawns huge + invisible and converges as it shrinks and fades IN. Our setTranslucency in scene3d/particles/particle.js already matches.",
-            "0x320002D6 never draws in RETAIL either (hw GfxObj 0). Rendering its software gfxObjId 0x010016C9 would be a DEVIATION, not a fix — left alone deliberately.",
-            "The Yaraq town portal is a SERVER ENTITY (guid 0x77D6406A, wcid 43066, physicsScriptDid 0 -> Track B `fetchSetupDefaultScript(0x020001B3)` -> 0x3300067A), so the entity walker in entities.js is the path under test, NOT statics.js's V1 walker. The dais + obelisks around it are the baked static.",
-            "Side observation, NOT fixed here: a portal's per-guid ScriptManager was seen at scriptsCompleted ~7,000 in a ~400 s session (~17 Hz), far above the 1 iteration / 2.7 s the 0x330006DA loop should run at. Worth a look as its own item — it is a CPU/scheduling question, not a visual one, and the swirl is correct with it.",
-            "SCRIPTMGR-RATE side observation RESOLVED 2026-08-11 (fanout-D a7, 24c0ce4e): a queued PhysicsScript lost its per-hook start_time so every hook fired same-tick (~17 Hz completions). Fixed behind ?scriptHookTime DEFAULT-ON (=off legacy); harness/test_script_hook_time.mjs 47/0; census: all 4,248 PhysicsScripts parsed, loop cadence now 1/2.7s. Report impl/task-a7-report.md."
-          ],
-          "followUp1070": "EYETEST (Lane-B, batched): Yaraq town portal + a colored Town-Network portal (0x330006FA/FB/FD family) on the GTX-1070 at quality=high, bare default URL + ?nosw=1. PASS = a bright additive purple swirl above the dais that persists indefinitely (not 3 loop iterations), on EVERY portal in view, and survives walking away and back (LOD respawn re-attaches). A/B reference arm: ?particleOwnerPending=off => bare pedestal. Also worth a glance while there: the other 40 mixed-emitter scripts (e.g. 0x33000A6B 5-live/1-inert, 0x33000A91 4-live/4-inert) should now keep their full emitter set."
-        },
-        {
-          "id": "TEXBC7-ALPHA-REBAKE",
-          "gate": "PORTAL-BLACKBOX root cause (2026-08-10 eve session): the hires tex-bc7 archive ships rs 0x0600396B (and 0x060037A3) as 32x32 OPAQUE — the upscaler 4x'd retail's 8x8 fully-transparent DXT1 punch-through record and DROPPED ALPHA. Every portal color shares GfxObj 0x0100168B / Surface 0x08000157 with that texture => 2.82m opaque black box in every portal swirl. Client-side veto landed (062e5ce3, albedoFullyTransparent guard in _maybeUpgradeToBc7) so the client is immune, but the archive still ships wrong pixels.",
-          "recipe": "Re-bake the holtburger/tex-bc7 (+ -pre/xu7 lanes) payloads for those rs ids with alpha preserved; make the hires upscaler (a) preserve alpha channel, (b) skip records that are fully transparent (no re-encode can improve zero information). Then AUDIT all alpha-bearing surfaces the same tool upscaled (clipmap/Base1ClipMap class especially). DAT source is fine (client_portal_hires_repaired.dat still has the correct 8x8 transparent record).",
-          "risk": "bake-tooling; blocked while BAKE-4 runs",
-          "status": "BOX HALF LANDED 2026-08-11 (fanout-D a6): alpha-audit tool in apps/holtburger-tools (census + corpus verdicts, deterministic, provenance-stamped); tools 153/0 + 6/0 real-DAT. Found FIVE more fully-transparent records for the upscaler skip list (0x0600415F/61/63, 0x06004669, 0x06006E19). LAPTOP CORPUS RUN + re-bake still owed — invocation in impl/task-a6-report.md."
-        },
-        {
-          "id": "PORTAL-SMALL",
-          "gate": "C7+C8 cleanups riding along",
-          "recipe": "is_envcell_id tighten to 0x100..=0xFFFD (scene.rs:41 + inline copies :2549/:2559 — 0xFFFF sentinel currently accepted); per-snapshot AABB map replacing the per-portal linear scan in getVisiblePortalApertures* (lib.rs:35437/35516).",
-          "risk": "low",
-          "status": "LANDED 2026-08-11 (fanout-D a3, d9953810): is_envcell_id 0x100..=0xFFFD (0xFFFF was passing — caught by test); per-snapshot AABB index in both aperture exports."
-        }
-      ]
-    }
-  ]
+  "report": "apps/holtburger-web/docs/reengineering/impl/task-T4-EYES-report.md"
+ }
 }
