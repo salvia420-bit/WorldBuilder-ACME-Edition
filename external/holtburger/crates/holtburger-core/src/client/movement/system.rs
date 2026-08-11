@@ -2548,30 +2548,6 @@ impl MovementSystem {
         }
     }
 
-    /// Wave-1 step 4 — one input-action edge through the retail
-    /// interpreter (`?cmdInterp=on` only). The interpreter is moved OUT of
-    /// `self` for the call so the seam can borrow the rest of the system +
-    /// the world disjointly (the SC-15 borrow split).
-    ///
-    /// Ownership handover rows implemented here (PLAN table):
-    /// - row 1: the seam's `do_motion`/`stop_motion`/`set_latch` are the
-    ///   ONLY latch raisers on this lane (retail :317325/:317364/:716946);
-    ///   `note_server_authored_motion` stays the wire-side writer.
-    /// - row 2: `pending_take_control` is NEVER set here — the ported
-    ///   `TakeControlFromServer` runs its full FU-A tail synchronously
-    ///   (control return + leash drop through the seam + hold_run
-    ///   re-assert + all-three-heads re-apply); asserted below.
-    /// - row 3: `last_manual_drive` is re-derived from the interpreter's
-    ///   list heads after every edge — the CommandLists ARE held-keys
-    ///   truth; the mirror keeps the existing consumers (slideCast
-    ///   capture, jump standstill root, autorun restore) on one path.
-    /// - row 4: the composed per-axis drive REPLACES `merge_manual_edge`
-    ///   (unreachable on this lane — `ManualSet` never carries keyboard
-    ///   edges while the flag is on).
-    /// - row 9: sends stay with the tick's edge-detector this wave — the
-    ///   seam's send methods are deferred no-ops, so the A/B has identical
-    ///   send cadence; step 5 flips send ownership onto the interpreter's
-    ///   `SendMovementEvent` + the M1 converter.
     fn new_command_interpreter(&self) -> super::command_interpreter::CommandInterpreter {
         let mut it = super::command_interpreter::CommandInterpreter::new(0.0);
         // `SetSmartBox(box)` → `player = box->player` (acclient.c:716822-827).
@@ -2641,6 +2617,30 @@ impl MovementSystem {
         self.command_interpreter = Some(interp);
     }
 
+    /// Wave-1 step 4 — one input-action edge through the retail
+    /// interpreter (`?cmdInterp=on` only). The interpreter is moved OUT of
+    /// `self` for the call so the seam can borrow the rest of the system +
+    /// the world disjointly (the SC-15 borrow split).
+    ///
+    /// Ownership handover rows implemented here (PLAN table):
+    /// - row 1: the seam's `do_motion`/`stop_motion`/`set_latch` are the
+    ///   ONLY latch raisers on this lane (retail :317325/:317364/:716946);
+    ///   `note_server_authored_motion` stays the wire-side writer.
+    /// - row 2: `pending_take_control` is NEVER set here — the ported
+    ///   `TakeControlFromServer` runs its full FU-A tail synchronously
+    ///   (control return + leash drop through the seam + hold_run
+    ///   re-assert + all-three-heads re-apply); asserted below.
+    /// - row 3: `last_manual_drive` is re-derived from the interpreter's
+    ///   list heads after every edge — the CommandLists ARE held-keys
+    ///   truth; the mirror keeps the existing consumers (slideCast
+    ///   capture, jump standstill root, autorun restore) on one path.
+    /// - row 4: the composed per-axis drive REPLACES `merge_manual_edge`
+    ///   (unreachable on this lane — `ManualSet` never carries keyboard
+    ///   edges while the flag is on).
+    /// - row 9: sends stay with the tick's edge-detector this wave — the
+    ///   seam's send methods are deferred no-ops, so the A/B has identical
+    ///   send cadence; step 5 flips send ownership onto the interpreter's
+    ///   `SendMovementEvent` + the M1 converter.
     fn ingest_key_edge(&mut self, action: u32, down: bool, now: Instant, world: &mut WorldState) {
         if !self.cmd_interp_enabled() {
             // JS only forwards actions under ?cmdInterp=on; a stray edge
