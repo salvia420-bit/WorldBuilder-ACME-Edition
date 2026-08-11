@@ -1853,8 +1853,9 @@ const SCRIPT_QUEUE_ON = (() => {
 // SCRIPTMGR-RATE (2026-08-11) — `?scriptHookTime` (DEFAULT ON; `=off` restores
 // the legacy collapsed schedule). `_decodePhysicsScriptHookEntry` emits the
 // `AnimationHookJs` shape `_fireHook` reads, whose hook-offset field is named
-// `time`. `ScriptManager` keys its ENTIRE schedule off `entry.startTime`
-// (script_manager.js:134/140/183), so on the queue path every decoded entry
+// `time`. `ScriptManager` keys its ENTIRE schedule off `entry.startTime` — the
+// `addScript` sort comparator, its `length` derivation, and `_armNextHook`
+// (script_manager.js; symbol anchors, the line numbers move) — so every decoded entry
 // read `+undefined || 0` ⇒ 0: each script's `length` collapsed to 0 and every
 // hook armed at `script.startTime + 0`. A 0x33 chain therefore fired ALL its
 // hooks in the first `update()` that reached it, and a CallPES self-loop
