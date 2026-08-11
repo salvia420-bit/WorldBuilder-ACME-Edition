@@ -65,7 +65,7 @@ pub use degrade_info::{GfxObjDegradeInfo, GfxObjInfo};
 pub use did_mapper::DidMapper;
 pub use dual_did_mapper::DualDidMapper;
 pub use enum_mapper::{EnumMapper, NumberingType};
-pub use env_cell::EnvCell;
+pub use env_cell::{CellPortal, EnvCell};
 pub use environment::{CellStruct, Environment};
 pub use font::{Font, FontCharDesc};
 pub use game_time::{GameTime, Season, TimeOfDay};
