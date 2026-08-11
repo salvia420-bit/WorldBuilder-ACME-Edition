@@ -4698,6 +4698,11 @@ mod camera_cell_space_clip {
                     p(10.0, 7.0, 4.0),
                     p(10.0, 3.0, 4.0),
                 ],
+                // PORTAL-FLAGS-DECODE: this fixture predates the field
+                // and nothing it asserts reads sidedness; `false` is
+                // `CellPortal.flags` bit 1 SET, the wire default that
+                // 1,320,653 of the baseline's 1,867,699 portals carry.
+                portal_side: false,
             },
         );
         assert_eq!(

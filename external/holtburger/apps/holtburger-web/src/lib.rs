@@ -21429,7 +21429,17 @@ pub async fn fetch_env_cells_in_landblock(
             // The wire `other_cell_id` is u16; valid range is
             // [0x0100, 0xFFFD] — we keep it as-is rather than filter
             // here, JS can ignore zero / sentinel values if needed.
-            portal_cell_ids.push(landblock_high | (portal.other_cell_id as u32));
+            //
+            // PORTAL-FLAGS-DECODE (2026-08-11): via `resolved_other_cell_id`
+            // rather than open-coding the OR, because retail DISCARDS the
+            // wire id when flags bit 2 (leads-outdoors) is set
+            // (`acclient.c:362395-362398`) and composing it anyway can
+            // fabricate an edge to a real neighbouring room. On the retail
+            // baseline the two agree on all 1,867,699 portals (the wire id
+            // is always exactly 0xFFFF when bit 2 is set — measured in
+            // holtburger-dat `tests/cell_portal_flags_parity.rs`), so this
+            // is a no-op TODAY and a guard against a DAT where it isn't.
+            portal_cell_ids.push(portal.resolved_other_cell_id(landblock_high));
         }
 
         // Phase 6 step D: queue cell-graph edges + a world-space AABB
@@ -21742,8 +21752,19 @@ pub async fn fetch_env_cells_in_landblock(
                             if !all_ok || world_verts.len() < 3 {
                                 continue;
                             }
+                            // PORTAL-FLAGS-DECODE (2026-08-11): both of
+                            // these come off `CellPortal.flags`, which
+                            // was parsed and never read until now.
+                            // `resolved_other_cell_id` honours bit 2
+                            // (leads-outdoors) instead of composing a
+                            // wire id retail discards; `portal_side` is
+                            // bit 1, INVERTED on the wire, and is what
+                            // lets the JS punch gate run retail's real
+                            // sidedness reject instead of guessing
+                            // "outward" from an AABB centre.
                             let other_cell_id =
-                                landblock_high | (portal.other_cell_id as u32);
+                                portal.resolved_other_cell_id(landblock_high);
+                            let portal_side = portal.portal_side();
                             CELL_GRAPH_PENDING.with(|pending| {
                                 let mut pending = pending.borrow_mut();
                                 pending.portal_polygons.push((
@@ -21751,6 +21772,7 @@ pub async fn fetch_env_cells_in_landblock(
                                     holtburger_world::CellPortalPolygon {
                                         other_cell_id,
                                         vertices: world_verts,
+                                        portal_side,
                                     },
                                 ));
                             });
@@ -33084,12 +33106,17 @@ struct CellSceneSnapshot {
     cell_aabb_index: std::collections::HashMap<u32, [f32; 6]>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world coords. Flat layout for cheap Clone:
-    /// `(from_cell_id, to_cell_id, vertices_flat_x_y_z)`. Reconstructed
-    /// into a HashMap in `getRenderSetWithPView`. Typical size:
-    /// ~140 cells × ~6 portals × 4 verts × 12 bytes ≈ 40 KB. Cloned
-    /// per TickMovement; data only changes on landblock load/unload
-    /// so this could be cached by-LB-key in a future pass.
-    cell_portal_polygons: Vec<(u32, u32, Vec<f32>)>,
+    /// `(from_cell_id, to_cell_id, vertices_flat_x_y_z, portal_side)`.
+    /// Reconstructed into a HashMap in `getRenderSetWithPView`. Typical
+    /// size: ~140 cells × ~6 portals × 4 verts × 12 bytes ≈ 40 KB.
+    /// Cloned per TickMovement; data only changes on landblock
+    /// load/unload so this could be cached by-LB-key in a future pass.
+    ///
+    /// `portal_side` (PORTAL-FLAGS-DECODE, 2026-08-11) rides as a 4th
+    /// tuple element rather than a parallel `Vec<bool>` so it cannot
+    /// drift out of step with the polygon it describes. Consumers that
+    /// don't need it destructure with `..`.
+    cell_portal_polygons: Vec<(u32, u32, Vec<f32>, bool)>,
     /// 2026-07-05 (stablist / SeenOutside): per-cell SeenOutside bit, parallel
     /// to `cell_aabbs`, so the outdoor branch of `get_render_set_with_frustum`
     /// can admit building-interior cells (authored SeenOutside=true) from an
@@ -35366,7 +35393,7 @@ impl SessionHandle {
         // form. Cheap: ~140 cells × ~6 portals.
         let mut portal_map: std::collections::HashMap<u32, Vec<(u32, Vec<holtburger_common::Vector3>)>> =
             std::collections::HashMap::new();
-        for (from, to, flat) in &snap.cell_portal_polygons {
+        for (from, to, flat, ..) in &snap.cell_portal_polygons {
             if flat.len() < 9 || flat.len() % 3 != 0 {
                 continue;
             }
@@ -35469,6 +35496,31 @@ impl SessionHandle {
     /// Read-only; does not mutate snapshot state.
     #[wasm_bindgen(js_name = getVisiblePortalApertures)]
     pub fn get_visible_portal_apertures(&self, mvp: &[f32], _max_depth: u8) -> Vec<f32> {
+        self.visible_portal_apertures_flat(mvp, false, false)
+    }
+
+    /// The one selection + encoder behind all three `getVisiblePortal
+    /// Apertures*` exports (PORTAL-FLAGS-DECODE, 2026-08-11). They only
+    /// ever differed in which OPTIONAL fields ride between `nverts` and
+    /// the vertex run; the frustum walk, the outdoor-sentinel test, the
+    /// degenerate-polygon test and the AABB scan were three verbatim
+    /// copies, and a third copy for the sidedness export would have
+    /// made a divergence between them a matter of time.
+    ///
+    /// Emits, per surviving aperture, in this order:
+    ///   `nverts`
+    ///   `cx, cy, cz`   iff `with_cell_center`
+    ///   `portal_side`  iff `with_portal_side` (1.0 = true, 0.0 = false)
+    ///   `x0,y0,z0, …`  (`nverts` triples)
+    /// prefixed by the aperture count. Both optional fields are placed
+    /// BEFORE the vertex run so a reader can size the run from `nverts`
+    /// alone, whichever export it is parsing.
+    fn visible_portal_apertures_flat(
+        &self,
+        mvp: &[f32],
+        with_cell_center: bool,
+        with_portal_side: bool,
+    ) -> Vec<f32> {
         if mvp.len() != 16 {
             return Vec::new();
         }
@@ -35497,7 +35549,7 @@ impl SessionHandle {
         let mut out: Vec<f32> = Vec::new();
         out.push(0.0); // aperture_count placeholder (patched below)
         let mut count: u32 = 0;
-        for (from, to, flat) in &snap.cell_portal_polygons {
+        for (from, to, flat, portal_side) in &snap.cell_portal_polygons {
             // Outdoor-facing apertures only (doors/windows to the landscape).
             if (*to & 0xFFFF) < 0xFFFE {
                 continue;
@@ -35507,11 +35559,19 @@ impl SessionHandle {
             }
             // Only reveal rooms actually in view (the room = the portal's
             // owning cell `from`); skip off-screen buildings.
-            match aabb_for(*from) {
-                Some(aabb) if frustum.intersects_aabb(&aabb) => {}
+            let aabb = match aabb_for(*from) {
+                Some(aabb) if frustum.intersects_aabb(&aabb) => aabb,
                 _ => continue,
-            }
+            };
             out.push((flat.len() / 3) as f32);
+            if with_cell_center {
+                out.push((aabb.min.x + aabb.max.x) * 0.5);
+                out.push((aabb.min.y + aabb.max.y) * 0.5);
+                out.push((aabb.min.z + aabb.max.z) * 0.5);
+            }
+            if with_portal_side {
+                out.push(if *portal_side { 1.0 } else { 0.0 });
+            }
             out.extend_from_slice(flat);
             count += 1;
         }
@@ -35549,51 +35609,48 @@ impl SessionHandle {
         mvp: &[f32],
         _max_depth: u8,
     ) -> Vec<f32> {
-        if mvp.len() != 16 {
-            return Vec::new();
-        }
-        let mut mvp_arr = [0.0f32; 16];
-        mvp_arr.copy_from_slice(mvp);
-        let frustum = holtburger_common::Frustum::from_view_projection_matrix(&mvp_arr);
-        let snap = self.cell_scene_snapshot.borrow();
-        if snap.current_cell == 0 {
-            return Vec::new();
-        }
+        self.visible_portal_apertures_flat(mvp, true, false)
+    }
 
-        // PORTAL-SMALL (2026-08-11): same prebuilt index as the v1 export —
-        // identical selection, so it must use an identical lookup.
-        let aabb_for = |cell_id: u32| -> Option<holtburger_common::Aabb> {
-            snap.cell_aabb_index.get(&cell_id).map(|ext| {
-                holtburger_common::Aabb::new(
-                    holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
-                    holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
-                )
-            })
-        };
-
-        let mut out: Vec<f32> = Vec::new();
-        out.push(0.0);
-        let mut count: u32 = 0;
-        for (from, to, flat) in &snap.cell_portal_polygons {
-            if (*to & 0xFFFF) < 0xFFFE {
-                continue;
-            }
-            if flat.len() < 9 || flat.len() % 3 != 0 {
-                continue;
-            }
-            let aabb = match aabb_for(*from) {
-                Some(a) if frustum.intersects_aabb(&a) => a,
-                _ => continue,
-            };
-            out.push((flat.len() / 3) as f32);
-            out.push((aabb.min.x + aabb.max.x) * 0.5);
-            out.push((aabb.min.y + aabb.max.y) * 0.5);
-            out.push((aabb.min.z + aabb.max.z) * 0.5);
-            out.extend_from_slice(flat);
-            count += 1;
-        }
-        out[0] = count as f32;
-        out
+    /// Portal apertures with the REAL retail `portal_side`
+    /// (PORTAL-FLAGS-DECODE, 2026-08-11) — the v3 export.
+    ///
+    /// The round-5 v2 export above had to INFER which face of an
+    /// aperture is "outside" from the owning cell's AABB centre,
+    /// because `CellPortal.flags` was parsed and never decoded. That
+    /// inference is what parked `?punchSidedness`: for a doorway in a
+    /// long wall the AABB centre lands near the wall plane, and for an
+    /// L-shaped or multi-part cell it can fall outside the room
+    /// entirely, so the derived "outward" normal flips and the gate
+    /// drops the very doorway the player is looking at.
+    ///
+    /// `portal_side` is not an inference. It is retail's own
+    /// `Sidedness` for the polygon's plane, decoded from flags bit 1
+    /// (stored INVERTED — `acclient.c:362389`), and it names the owning
+    /// room's interior on 15,186/15,186 outdoor-facing portals in the
+    /// retail baseline with none on-plane (holtburger-dat
+    /// `tests/cell_portal_flags_parity.rs`). No confidence guard is
+    /// needed because there is nothing to be unconfident about.
+    ///
+    /// Wire shape — flat `Vec<f32>`:
+    ///   `[ count, (nverts, cx, cy, cz, side, x0,y0,z0, …) × count ]`
+    /// i.e. v2's layout with ONE float appended after the cell centre.
+    /// The centre is kept so JS can fall back to the v2 heuristic under
+    /// `?punchSidedness=heuristic` without a second wasm call, and so
+    /// the two arms compare on identical aperture sets.
+    ///
+    /// ADDITIVE under a NEW name, for the same reason v2 was: a stale
+    /// `pkg/` simply lacks it and the JS `typeof` ladder falls back to
+    /// v2 rather than mis-parsing a shape that grew a field.
+    ///
+    /// Read-only; does not mutate snapshot state.
+    #[wasm_bindgen(js_name = getVisiblePortalAperturesWithSidedness)]
+    pub fn get_visible_portal_apertures_with_sidedness(
+        &self,
+        mvp: &[f32],
+        _max_depth: u8,
+    ) -> Vec<f32> {
+        self.visible_portal_apertures_flat(mvp, true, true)
     }
 
     /// Phase 4 PView port (2026-05-25): frustum-aware visibility.
@@ -35700,7 +35757,7 @@ impl SessionHandle {
             // ANY of its portals has other_cell_id with low-16 ≥ 0xFFFE.
             let mut outdoor_exit_cells: std::collections::HashSet<u32> =
                 std::collections::HashSet::new();
-            for (from, to, _verts) in &snap.cell_portal_polygons {
+            for (from, to, _verts, ..) in &snap.cell_portal_polygons {
                 if (*to & 0xFFFF) >= 0xFFFE {
                     outdoor_exit_cells.insert(*from);
                 }
@@ -35815,7 +35872,7 @@ impl SessionHandle {
                     u32,
                     Vec<(u32, Vec<holtburger_common::Vector3>)>,
                 > = std::collections::HashMap::new();
-                for (from, to, flat) in &snap.cell_portal_polygons {
+                for (from, to, flat, ..) in &snap.cell_portal_polygons {
                     if flat.len() < 9 || flat.len() % 3 != 0 {
                         continue;
                     }
@@ -35941,7 +35998,7 @@ impl SessionHandle {
         }
         let lb_high = snap.current_cell & 0xFFFF_0000;
         let mut saw_dungeon_portal = false;
-        for (from, to, _flat) in &snap.cell_portal_polygons {
+        for (from, to, _flat, ..) in &snap.cell_portal_polygons {
             // Restrict to THIS dungeon's landblock: the snapshot can also
             // hold adjacent outdoor-landblock cells whose own exits are not
             // this dungeon's mouth.
@@ -41763,7 +41820,7 @@ fn publish_cell_scene_snapshot(
     // Phase 5 PView port (2026-05-25): snapshot every loaded portal
     // polygon flat-encoded for cheap clone. See
     // `compute_visibility_with_pview` for the consuming algorithm.
-    let mut cell_portal_polygons: Vec<(u32, u32, Vec<f32>)> = Vec::new();
+    let mut cell_portal_polygons: Vec<(u32, u32, Vec<f32>, bool)> = Vec::new();
     for (cell_id, polys) in world.scene.cell_portal_polygons_iter() {
         for poly in polys {
             let mut flat: Vec<f32> = Vec::with_capacity(poly.vertices.len() * 3);
@@ -41772,7 +41829,12 @@ fn publish_cell_scene_snapshot(
                 flat.push(v.y);
                 flat.push(v.z);
             }
-            cell_portal_polygons.push((cell_id, poly.other_cell_id, flat));
+            cell_portal_polygons.push((
+                cell_id,
+                poly.other_cell_id,
+                flat,
+                poly.portal_side,
+            ));
         }
     }
 

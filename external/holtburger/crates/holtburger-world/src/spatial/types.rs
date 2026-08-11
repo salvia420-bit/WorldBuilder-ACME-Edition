@@ -62,10 +62,27 @@ pub struct BuildingAabbEntry {
 /// array because portal polygons in AC are convex but not constrained
 /// to triangles — typical retail cottages have rectangular doorways
 /// (4 verts) but some dungeons have more complex portal shapes.
+///
+/// `portal_side` (PORTAL-FLAGS-DECODE, 2026-08-11) is retail's
+/// `Sidedness` for this polygon's plane, decoded from the INVERTED
+/// `CellPortal.flags` bit 1 (`holtburger_dat::file_type::env_cell::
+/// CellPortal::portal_side`; retail `acclient.c:362389`). `true` = the
+/// NEGATIVE halfspace.
+///
+/// Measured over the whole retail baseline (holtburger-dat
+/// `tests/cell_portal_flags_parity.rs`): it names the OWNING CELL's
+/// interior side, on 15,186/15,186 outdoor-facing and 1,840,177/
+/// 1,840,177 cell→cell portals, none on-plane. So a consumer looking
+/// INTO the room from outside — the `?portalPunch` aperture gate —
+/// keeps the aperture exactly when the viewer does NOT match
+/// `portal_side`: the negation of retail's own traversal rule
+/// (`PView::InitCell`, `acclient.c:461691`), because retail's viewer
+/// there is standing inside the room.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellPortalPolygon {
     pub other_cell_id: u32,
     pub vertices: Vec<Vector3>,
+    pub portal_side: bool,
 }
 
 /// Workstream C (3D camera collision, 2026-05-11): world-space AABB for
