@@ -312,6 +312,13 @@ impl PlayerState {
         self.server_control_sequence = data.server_control_sequence;
         self.instance_sequence = data.object_instance_sequence;
 
+        // MOVE-RUNRATE-105 fix A (2026-08-11) — latch the SERVER's run rate
+        // BEFORE the autonomous early-return. Retail's stamp lives inside
+        // `CMotionInterp::apply_interpreted_movement` (acclient.c:344161-344162);
+        // see [`Self::latch_server_run_rate`] for why we reach it on a lane
+        // retail does not.
+        self.latch_server_run_rate(data);
+
         if data.is_autonomous {
             // Self-echo of this client's own motion: sequence
             // bookkeeping only (acclient.c:311187-311190).
@@ -335,6 +342,57 @@ impl PlayerState {
             }
         }
         true
+    }
+
+    /// MOVE-RUNRATE-105 fix A (2026-08-11) — latch the server's own
+    /// `my_run_rate` for the local player off a RunForward interpreted
+    /// state.
+    ///
+    /// RETAIL SHAPE: `CMotionInterp::apply_interpreted_movement`
+    /// (acclient.c:344161-344162) stamps
+    /// `my_run_rate = interpreted_state.forward_speed` whenever the copied
+    /// interpreted state's `forward_command` is `RunForward` (0x44000007).
+    /// The `forward_speed` slot on a RUN carries the RATE, not a velocity —
+    /// walk envelopes carry no `forward_speed` at all (verified across all
+    /// seven retail pcaps, 2026-08-11: `forward_command 7 →
+    /// forward_speed 1.975806474685669`, `forward_command 5 → null`).
+    ///
+    /// DOCUMENTED DEVIATION — the lane, not the stamp. Retail reaches that
+    /// stamp only through `unpack_movement`, and
+    /// `CPhysics::SetObjectMovement` (acclient.c:311186-311190) gates the
+    /// unpack on `autonomous == 0 || !player_controlled`: a
+    /// player-controlled object's AUTONOMOUS echo is never unpacked, so
+    /// retail's local player never latches a rate this way (it re-derives
+    /// per-command through the weenie `InqRunRate` vfptr, :443696-443770).
+    /// Every ACE self-echo carrying the rate is `autonomous == true`
+    /// (measured: all seven retail captures), so honouring retail's gate
+    /// here would make this latch dead code. Owner directive 2026-08-11 —
+    /// "adopt the server-provided run rate for the local player" — resolves
+    /// that in favour of the server value; `?serverRunRate=off` hides the
+    /// latch again at the read side. The write is unconditional and cheap:
+    /// keeping it live under the escape flag means the probe
+    /// (`playerRunRateInputs.server_run_rate`) can always report what the
+    /// server said, even when the client is not consuming it.
+    fn latch_server_run_rate(&mut self, data: &MovementEventData) {
+        let holtburger_protocol::messages::movement::MovementTypeData::Invalid(invalid) =
+            &data.data
+        else {
+            return;
+        };
+        if invalid.state.forward_command
+            != Some(holtburger_protocol::messages::movement::InterpretedMotionCommand::RUN_FORWARD)
+        {
+            return;
+        }
+        // A non-finite or non-positive rate would multiply straight into
+        // the ground-speed clamp (`run_rate * 4.0`); refuse it and keep the
+        // last good value, exactly as an absent slot would.
+        if let Some(rate) = invalid.state.forward_speed
+            && rate.is_finite()
+            && rate > 0.0
+        {
+            self.server_run_rate = Some(rate);
+        }
     }
 
     pub fn update_motion_sequences(

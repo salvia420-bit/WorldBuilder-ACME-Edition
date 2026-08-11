@@ -150,6 +150,14 @@ impl WorldState {
         self.scene.set_remote_sticky_enabled(enabled);
     }
 
+    /// MOVE-RUNRATE-105 fix A (2026-08-11): flip the server-run-rate
+    /// preference (set once at world creation from `?serverRunRate`, which
+    /// is ON unless `=off`). See the field doc on
+    /// `WorldState::server_run_rate_enabled`.
+    pub fn set_server_run_rate_enabled(&mut self, enabled: bool) {
+        self.server_run_rate_enabled = enabled;
+    }
+
     /// COMBAT-RADII (2026-07-28): flip the scene's size-aware
     /// combat-standoff switch (set once at world creation from
     /// `?combatRadii`, which is ON unless `=off`). See the field doc on

@@ -66,6 +66,16 @@ pub struct WorldState {
     pub fellowship: Option<FellowshipState>,
     pub trade: Option<TradeState>,
     pub open_containers: std::collections::HashSet<Guid>,
+    /// MOVE-RUNRATE-105 fix A (2026-08-11) — runtime carrier of
+    /// `?serverRunRate` (`=off` is the only opt-out; DEFAULT ON). ON:
+    /// `WorldContextExt::player_run_rate` prefers the server's published
+    /// `my_run_rate` (`PlayerState::server_run_rate`) over the local
+    /// composition. OFF: the stage-1 order — composition only — which is
+    /// the A/B arm for the reversal recorded in
+    /// `docs/2026-06-11-unified-movement-pipeline/DESIGN.md`. Set once at
+    /// world creation by the wasm bundle; the native runtime keeps the
+    /// default.
+    pub(crate) server_run_rate_enabled: bool,
     /// Last PlayerDescription private property dump (lvl=0 soak bug,
     /// 2026-07-18). ACE sends the local player's Level/XP/etc. exactly once
     /// per login; any path that rebuilds the player entity from a public
@@ -517,6 +527,7 @@ impl WorldState {
             fellowship: None,
             trade: None,
             open_containers: std::collections::HashSet::new(),
+            server_run_rate_enabled: true,
             player_description_properties: None,
             terrain_heights: std::collections::HashMap::new(),
             terrain_water: std::collections::HashMap::new(),

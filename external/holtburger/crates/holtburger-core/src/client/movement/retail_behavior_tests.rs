@@ -1117,3 +1117,381 @@ mod fixtures {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// MOVE-RUNRATE-105 — the local player's run rate (2026-08-11).
+//
+// Defect card: `docs/reengineering/oracle/second-parity-report.md` —
+// `run-hold-long / steady_speed` retail 7.885 vs holtburger 7.806 m/s
+// (-1.0%). Ground speed is `4.0 x run_rate`, so that is a run-rate delta:
+// ACE read Run skill 110 (rate 1.9758065), we read 105 (rate 1.9467213).
+//
+// These pins are NOT dual-run: the SC-20 oracle models the key alphabet, not
+// the qualities layer. They pin the two independent fixes against the decomp
+// and against the values measured on the live rig.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod runrate_105 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::properties::{PropertyInt, WorldObjectPropertyAccessorsMut};
+    use holtburger_common::{Guid, Quaternion, Vector3};
+    use holtburger_world::context::{
+        RunSkillSource, WorldContextExt, run_rate_from_skill_and_burden,
+        run_skill_augmentation_bonus,
+    };
+    use holtburger_world::stats::{Attribute, AttributeType, Skill, SkillType, TrainingLevel};
+    use holtburger_protocol::messages::movement::{
+        InterpretedMotionCommand, MovementEventData, MovementInvalid, MovementType,
+        MovementTypeData,
+    };
+    use holtburger_protocol::messages::GameMessage;
+    use holtburger_world::WorldState;
+
+    /// `MovementSystem::GetRunRate(load=1.0, runskill=110, 1.0)` — the value
+    /// ACE published on the wire for both oracle characters, confirmed twice:
+    /// as `interpreted.forward_speed` on every s2c self-motion RunForward
+    /// echo, and as `4.0 x` the `Jump` GameAction's planar launch velocity
+    /// (7.903226 m/s).
+    const ACE_RUN_RATE_110: f32 = 1.975_806_5;
+    /// The pre-fix value: the same formula at Run skill 105 — the wire
+    /// `Current` WITHOUT the JackOfAllTrades augmentation.
+    const BUGGY_RUN_RATE_105: f32 = 1.946_721_3;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    // --- Fix B: the augmentation terms of the composition -----------------
+
+    /// Retail `CACQualities::InqRunRate` (acclient.c:443736-443758) folds
+    /// three augmentation terms into `runskill` before calling
+    /// `MovementSystem::GetRunRate`; ACE folds the same three into
+    /// `CreatureSkill.Current` (`GetAugBonus_Base` +
+    /// `GetAugBonus_Current`). The stage-1 spec's composition
+    /// ("formula base + init + ranks") is short by all three.
+    #[test]
+    fn t_aug_bonus_mirrors_inqrunrate_terms() {
+        // No augmentations: no bonus (the overwhelmingly common case, and
+        // the reason this went unnoticed).
+        assert_eq!(run_skill_augmentation_bonus(0, 0, 0, false), 0.0);
+        // int 0x146 AugmentationJackOfAllTrades -> +5 (retail's flat `+= 5`
+        // and ACE's `* 5` agree at the only legal value).
+        assert_eq!(run_skill_augmentation_bonus(0, 1, 0, false), 5.0);
+        // int 0x16D LumAugAllSkills -> straight add.
+        assert_eq!(run_skill_augmentation_bonus(7, 0, 0, false), 7.0);
+        // int 0x158 LumAugSkilledSpec -> 2x, SPECIALIZED only (retail
+        // `_sac == 3`, :443750-443757).
+        assert_eq!(run_skill_augmentation_bonus(0, 0, 4, false), 0.0);
+        assert_eq!(run_skill_augmentation_bonus(0, 0, 4, true), 8.0);
+        // Negative / absent property values are inert, never a debuff.
+        assert_eq!(run_skill_augmentation_bonus(-3, -1, -9, true), 0.0);
+        // All three at once.
+        assert_eq!(run_skill_augmentation_bonus(7, 1, 4, true), 20.0);
+    }
+
+    /// The exact rig arithmetic, both endpoints. This is the defect card's
+    /// number made executable.
+    #[test]
+    fn t_the_five_points_are_the_one_percent() {
+        let with_aug = 105.0 + run_skill_augmentation_bonus(0, 1, 0, false);
+        assert_eq!(with_aug, 110.0);
+        assert!(close(
+            run_rate_from_skill_and_burden(with_aug, 0.0),
+            ACE_RUN_RATE_110
+        ));
+        assert!(close(
+            run_rate_from_skill_and_burden(105.0, 0.0),
+            BUGGY_RUN_RATE_105
+        ));
+        // Ground speed is `4.0 x run_rate` — the steady-speed rows of the
+        // parity report, to the millimetre.
+        let retail_speed = 4.0 * ACE_RUN_RATE_110;
+        let buggy_speed = 4.0 * BUGGY_RUN_RATE_105;
+        assert!(close(retail_speed, 7.903_226));
+        assert!(close(buggy_speed, 7.786_885));
+        // -1.47% of rate; the report measured -1.0% of realized speed
+        // (position differentiation over ~10 s, so a little slower to
+        // separate than the intent figure).
+        let delta_pct = (buggy_speed - retail_speed) / retail_speed * 100.0;
+        assert!((-1.48..-1.46).contains(&delta_pct), "{delta_pct}");
+    }
+
+    // --- Fix A: the server value wins -------------------------------------
+
+    /// The oracle rig's character, as read out of `ace_shard` on
+    /// 2026-08-11: Quickness 100, Run `level_From_P_P` 5 / `init_Level` 0
+    /// (so the wire `Current` composes to 105), and
+    /// `AugmentationJackOfAllTrades = 1`.
+    fn rig_world() -> WorldState {
+        let mut world = WorldState::synthetic();
+        let guid = Guid(0x5000_017B);
+        world.seed_local_player_entity(
+            guid,
+            "Probe 3650",
+            WorldPosition {
+                landblock_id: Guid(0x977B_0000),
+                coords: Vector3::new(100.0, 100.0, 0.0),
+                rotation: Quaternion::from_heading(0.0),
+            },
+        );
+        // Strength 40 (the rig's) — `player_capacity` needs it, and without
+        // it `player_burden` degrades to 3.0 -> load_mod 0 -> rate 1.0.
+        world.player.attributes.insert(
+            AttributeType::StrengthAttr,
+            Attribute {
+                attr_type: AttributeType::StrengthAttr,
+                ranks: 0,
+                start: 40,
+                spent_xp: 0,
+                next_rank_xp: None,
+                base: 40,
+                current: 40,
+            },
+        );
+        world.player.skills.insert(
+            SkillType::Run,
+            Skill {
+                skill_type: SkillType::Run,
+                ranks: 5,
+                init: 0,
+                spent_xp: 526,
+                next_rank_xp: None,
+                base: 105,
+                current: 105,
+                training: TrainingLevel::Trained,
+                trained_cost: 0,
+                specialized_cost: 0,
+            },
+        );
+        if let Some(entity) = world.entities.get_mut(guid) {
+            entity
+                .properties
+                .set_int_prop(PropertyInt::AugmentationJackOfAllTrades, 1);
+        }
+        world
+    }
+
+    /// Fix B alone closes the gap: with no server rate seen yet, the
+    /// composition now lands on ACE's value instead of 105's.
+    #[test]
+    fn t_composition_alone_now_matches_ace() {
+        let world = rig_world();
+        assert_eq!(world.player.server_run_rate, None);
+        let rate = world.player_run_rate().expect("run skill is seeded");
+        assert!(close(rate, ACE_RUN_RATE_110), "{rate}");
+
+        let inputs = world.player_run_rate_inputs();
+        assert_eq!(inputs.run_skill_source, RunSkillSource::WireRunSkill);
+        assert_eq!(inputs.run_skill_wire, Some(105));
+        assert_eq!(inputs.run_skill_used, Some(110.0));
+        assert_eq!(inputs.run_skill_aug_bonus, 5.0);
+        assert_eq!(inputs.server_run_rate, None);
+    }
+
+    /// Fix A: once the server has published a rate, it wins outright —
+    /// the composition is not consulted at all. Owner directive 2026-08-11.
+    #[test]
+    fn t_server_run_rate_outranks_the_composition() {
+        let mut world = rig_world();
+        // Deliberately a value the composition CANNOT produce, so a pass
+        // cannot be an accident of the two agreeing.
+        world.player.server_run_rate = Some(2.5);
+        assert!(close(world.player_run_rate().unwrap(), 2.5));
+
+        let inputs = world.player_run_rate_inputs();
+        assert_eq!(inputs.run_skill_source, RunSkillSource::ServerRunRate);
+        assert_eq!(inputs.server_run_rate, Some(2.5));
+        // The composition is still REPORTED beside it — that is how a
+        // capture proves the two agree rather than assuming it.
+        assert_eq!(inputs.run_skill_used, Some(110.0));
+    }
+
+    /// `?serverRunRate=off` restores the stage-1 order (composition only)
+    /// without a rebuild — the A/B arm for the reversal.
+    #[test]
+    fn t_server_run_rate_off_restores_stage_one_order() {
+        let mut world = rig_world();
+        world.player.server_run_rate = Some(2.5);
+        world.set_server_run_rate_enabled(false);
+        assert!(close(world.player_run_rate().unwrap(), ACE_RUN_RATE_110));
+
+        let inputs = world.player_run_rate_inputs();
+        assert_eq!(inputs.run_skill_source, RunSkillSource::WireRunSkill);
+        // Still probed, just not consumed — the flag is a consumption
+        // switch, not an observation switch.
+        assert_eq!(inputs.server_run_rate, None);
+        assert_eq!(world.player.server_run_rate, Some(2.5));
+
+        world.set_server_run_rate_enabled(true);
+        assert!(close(world.player_run_rate().unwrap(), 2.5));
+    }
+
+    /// With NO run skill on the wire yet (the boot window), the server rate
+    /// is the only answer there is — and it is a good one. Pre-fix this
+    /// window resolved to `None` and the caller fell back to the flat
+    /// `run_rate_scalar = 1.0` capability override (4.0 m/s, half speed).
+    #[test]
+    fn t_server_rate_covers_the_pre_stats_window() {
+        let mut world = WorldState::synthetic();
+        world.seed_local_player_entity(
+            Guid(0x5000_017B),
+            "Probe 3650",
+            WorldPosition {
+                landblock_id: Guid(0x977B_0000),
+                coords: Vector3::new(0.0, 0.0, 0.0),
+                rotation: Quaternion::from_heading(0.0),
+            },
+        );
+        assert_eq!(world.player_run_rate(), None);
+        world.player.server_run_rate = Some(ACE_RUN_RATE_110);
+        assert!(close(world.player_run_rate().unwrap(), ACE_RUN_RATE_110));
+        assert_eq!(
+            world.player_run_rate_inputs().run_skill_source,
+            RunSkillSource::ServerRunRate
+        );
+    }
+
+    // --- Fix A: the wire latch --------------------------------------------
+
+    /// One s2c self-motion frame, shaped like the ones ACE actually sends:
+    /// `MovementType::Invalid` carrying an InterpretedMotionState.
+    /// `forward_speed` on a RunForward is the RATE (retail
+    /// `apply_interpreted_movement`, acclient.c:344161-344162), and walk
+    /// envelopes carry none at all.
+    fn self_motion(
+        guid: Guid,
+        seq: u16,
+        autonomous: bool,
+        forward_command: Option<InterpretedMotionCommand>,
+        forward_speed: Option<f32>,
+    ) -> GameMessage {
+        let mut invalid = MovementInvalid::default();
+        invalid.state.forward_command = forward_command;
+        invalid.state.forward_speed = forward_speed;
+        GameMessage::UpdateMotion(Box::new(MovementEventData {
+            guid,
+            object_instance_sequence: seq,
+            movement_sequence: seq,
+            server_control_sequence: seq,
+            is_autonomous: autonomous,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: 0,
+            data: MovementTypeData::Invalid(invalid),
+        }))
+    }
+
+    /// The measured shape: ACE publishes the rate on the player's OWN
+    /// autonomous echo (`forward_command 7 -> forward_speed 1.9758065` in
+    /// all seven retail captures), and on nothing else. Walk frames carry
+    /// `forward_speed: null` and must not disturb the latch.
+    #[test]
+    fn t_latch_takes_the_rate_off_a_runforward_self_echo() {
+        let mut world = rig_world();
+        let guid = world.player.guid;
+        assert_eq!(world.player.server_run_rate, None);
+
+        // The autonomous self echo — the frame retail's SetObjectMovement
+        // gate drops and we deliberately keep.
+        world.handle_message(&self_motion(
+            guid,
+            1,
+            true,
+            Some(InterpretedMotionCommand::RUN_FORWARD),
+            Some(ACE_RUN_RATE_110),
+        ));
+        assert_eq!(world.player.server_run_rate, Some(ACE_RUN_RATE_110));
+        assert!(close(world.player_run_rate().unwrap(), ACE_RUN_RATE_110));
+
+        // A walk envelope carries no rate: the latch HOLDS its last good
+        // value rather than clearing (retail's `my_run_rate` is a
+        // last-known, not a per-frame field).
+        world.handle_message(&self_motion(
+            guid,
+            2,
+            true,
+            Some(InterpretedMotionCommand::WALK_FORWARD),
+            None,
+        ));
+        assert_eq!(world.player.server_run_rate, Some(ACE_RUN_RATE_110));
+
+        // A stop (no forward command at all) likewise holds.
+        world.handle_message(&self_motion(guid, 3, true, None, None));
+        assert_eq!(world.player.server_run_rate, Some(ACE_RUN_RATE_110));
+    }
+
+    /// Garbage on the wire must never reach the `run_rate * 4.0` ground
+    /// clamp: a NaN would poison every subsequent pose, a zero would pin
+    /// the avatar.
+    #[test]
+    fn t_latch_refuses_a_nonsense_rate() {
+        let mut world = rig_world();
+        let guid = world.player.guid;
+        for bad in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            world.handle_message(&self_motion(
+                guid,
+                1,
+                true,
+                Some(InterpretedMotionCommand::RUN_FORWARD),
+                Some(bad),
+            ));
+            assert_eq!(world.player.server_run_rate, None, "accepted {bad}");
+            world.player.movement_sequence = 0;
+            world.player.server_control_sequence = 0;
+        }
+    }
+
+    /// A frame dropped by the sequence gates never reaches the latch —
+    /// the latch sits INSIDE `apply_self_update_motion`, after both gates
+    /// (retail `SetObjectMovement` :311158-311176 drops stale frames at
+    /// the message level, before any unpack).
+    #[test]
+    fn t_stale_frame_never_latches() {
+        let mut world = rig_world();
+        let guid = world.player.guid;
+        world.handle_message(&self_motion(
+            guid,
+            9,
+            true,
+            Some(InterpretedMotionCommand::RUN_FORWARD),
+            Some(ACE_RUN_RATE_110),
+        ));
+        assert_eq!(world.player.server_run_rate, Some(ACE_RUN_RATE_110));
+        // seq 4 < 9 -> stale.
+        world.handle_message(&self_motion(
+            guid,
+            4,
+            true,
+            Some(InterpretedMotionCommand::RUN_FORWARD),
+            Some(3.0),
+        ));
+        assert_eq!(world.player.server_run_rate, Some(ACE_RUN_RATE_110));
+    }
+
+    // --- The retail gate this fix deliberately does not honour ------------
+
+    /// `CPhysics::SetObjectMovement` (acclient.c:311186-311190) unpacks only
+    /// when `autonomous == 0 || !player_controlled`. Encoded as a predicate
+    /// so the DEVIATION is executable rather than prose: for the local
+    /// player (player-controlled) retail drops exactly the autonomous
+    /// echoes, which are the ONLY self-motion frames ACE puts the run rate
+    /// on (measured: all seven retail captures, 2026-08-11). Honouring it
+    /// here would make `latch_server_run_rate` dead code — which is why
+    /// the latch runs before our own autonomous early-return.
+    fn retail_unpacks(autonomous: bool, player_controlled: bool) -> bool {
+        !autonomous || !player_controlled
+    }
+
+    #[test]
+    fn t_retail_skips_the_autonomous_self_echo() {
+        // Remote entities: ACE-authored, non-autonomous -> unpacked. This
+        // is the lane holtburger already honoured, and where retail really
+        // does consume `my_run_rate` off the wire.
+        assert!(retail_unpacks(false, false));
+        // The local player's own echo -> retail drops it.
+        assert!(!retail_unpacks(true, true));
+        // A server DIRECTIVE to the local player (MoveTo/TurnTo) is not
+        // autonomous -> unpacked, by both retail and us.
+        assert!(retail_unpacks(false, true));
+    }
+}

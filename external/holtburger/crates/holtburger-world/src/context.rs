@@ -157,6 +157,53 @@ pub fn run_rate_from_skill_and_burden_with_edge(
     }
 }
 
+/// MOVE-RUNRATE-105 fix B (2026-08-11) — the augmentation terms retail's
+/// `CACQualities::InqRunRate` folds into its run-skill composition
+/// (acclient.c:443696-443770, the `runskill` local), and ACE folds into
+/// `CreatureSkill.Current` via `GetAugBonus_Base`/`GetAugBonus_Current`
+/// (`CreatureSkill.cs:197-243`):
+///
+/// | term | retail | ACE |
+/// |---|---|---|
+/// | `LumAugAllSkills` (int 0x16D/365) | `if v>0 { runskill += v }` | `GetAugBonus_Base` |
+/// | `AugmentationJackOfAllTrades` (int 0x146/326) | `if v>0 { runskill += 5 }` | `GetAugBonus_Current`, `v * 5` |
+/// | `LumAugSkilledSpec` (int 0x158/344) | `if v>0 && sac==3 { runskill += 2*v }` | `GetAugBonus_Current`, Specialized only |
+///
+/// Retail's JoAT arm adds a FLAT 5 where ACE multiplies; the two agree for
+/// every legal value (JackOfAllTrades is a one-shot augmentation: 0 or 1).
+/// We take ACE's multiplicative form because the ACE server is the position
+/// authority — matching it is what removes the snapback the stage-1 fix
+/// targeted.
+///
+/// WHY THIS EXISTS: the stage-1 spec said "wire Run skill `Current` exactly
+/// as ACE composes it (formula base + init + ranks)" — that parenthetical is
+/// short by exactly these three terms, and
+/// `holtburger_world::player::stats_calc::derive_skill_value` implements the
+/// parenthetical. Measured consequence on the oracle rig (2026-08-11):
+/// `AugmentationJackOfAllTrades = 1` on both agent characters, so ACE read
+/// Run 110 where we read 105 — the entire `run-hold-long` −1.0% steady-speed
+/// FAIL. (`holtburger-core`'s OTHER skill implementation,
+/// `client::skill_info::SkillInfo::current`, has had all three terms since it
+/// was ported from retail's `SkillInfo.cs`; only the world copy drifted.)
+pub fn run_skill_augmentation_bonus(
+    lum_aug_all_skills: i32,
+    jack_of_all_trades: i32,
+    lum_aug_skilled_spec: i32,
+    specialized: bool,
+) -> f32 {
+    let mut bonus = 0i32;
+    if lum_aug_all_skills > 0 {
+        bonus += lum_aug_all_skills;
+    }
+    if jack_of_all_trades > 0 {
+        bonus += jack_of_all_trades * 5;
+    }
+    if specialized && lum_aug_skilled_spec > 0 {
+        bonus += lum_aug_skilled_spec * 2;
+    }
+    bonus as f32
+}
+
 /// Provenance of the `run_skill` value fed into `run_rate_from_skill_and_burden`
 /// for the local player. ACE `Creature.GetRunRate` always uses
 /// `GetCreatureSkill(Skill.Run).Current`; since unified-pipeline STAGE 1
@@ -178,6 +225,10 @@ pub enum RunSkillSource {
     /// 1070 capture JSON (`"quickness_fallback"`) still diffs cleanly,
     /// but the probe can no longer produce it.
     QuicknessFallback,
+    /// MOVE-RUNRATE-105 fix A (2026-08-11): no skill was composed at all —
+    /// the rate came straight off the wire as the server's own
+    /// `my_run_rate` (`PlayerState::server_run_rate`). The default lane.
+    ServerRunRate,
 }
 
 impl RunSkillSource {
@@ -186,6 +237,7 @@ impl RunSkillSource {
             Self::Unavailable => "unavailable",
             Self::WireRunSkill => "wire_run_skill",
             Self::QuicknessFallback => "quickness_fallback",
+            Self::ServerRunRate => "server_run_rate",
         }
     }
 }
@@ -218,6 +270,15 @@ pub struct RunRateInputs {
     pub capacity: Option<f32>,
     pub strength: Option<u32>,
     pub num_augs: i32,
+    /// MOVE-RUNRATE-105 fix A: the server's own `my_run_rate` as last seen
+    /// on the wire (`PlayerState::server_run_rate`), independent of whether
+    /// it won. `None` = never observed, or the `?serverRunRate=off` escape
+    /// is engaged.
+    pub server_run_rate: Option<f32>,
+    /// MOVE-RUNRATE-105 fix B: the augmentation bonus folded into the
+    /// composed run skill ([`run_skill_augmentation_bonus`]). Reported so a
+    /// capture can tell "we and ACE agree" from "we and ACE agree by luck".
+    pub run_skill_aug_bonus: f32,
 }
 
 impl RunRateInputs {
@@ -232,7 +293,8 @@ impl RunRateInputs {
         format!(
             "{{\"run_rate\":{},\"run_skill_used\":{},\"run_skill_source\":\"{}\",\
              \"run_skill_wire\":{},\"quickness\":{},\"burden\":{},\"load_mod\":{},\
-             \"encumbrance\":{},\"capacity\":{},\"strength\":{},\"num_augs\":{}}}",
+             \"encumbrance\":{},\"capacity\":{},\"strength\":{},\"num_augs\":{},\
+             \"server_run_rate\":{},\"run_skill_aug_bonus\":{}}}",
             of(self.run_rate),
             of(self.run_skill_used),
             self.run_skill_source.as_str(),
@@ -244,6 +306,8 @@ impl RunRateInputs {
             of(self.capacity),
             ou(self.strength),
             self.num_augs,
+            of(self.server_run_rate),
+            self.run_skill_aug_bonus,
         )
     }
 }
@@ -272,7 +336,23 @@ pub trait WorldContext {
         None
     }
 
+    /// Retail `Skill::_sac == 3` (`CACQualities::InqRunRate`,
+    /// acclient.c:443750-443757) / ACE
+    /// `SkillAdvancementClass.Specialized` — gates the `LumAugSkilledSpec`
+    /// term of [`run_skill_augmentation_bonus`].
+    fn get_player_skill_is_specialized(&self, _skill: SkillType) -> bool {
+        false
+    }
+
     fn get_player_vital_current(&self, _vital: VitalType) -> Option<u32> {
+        None
+    }
+
+    /// MOVE-RUNRATE-105 fix A (2026-08-11): the run rate the SERVER last
+    /// published for the local player, or `None` when none has been seen
+    /// (or the `?serverRunRate=off` escape is engaged). See
+    /// [`WorldContextExt::player_run_rate`] for the whole decision.
+    fn get_player_server_run_rate(&self) -> Option<f32> {
         None
     }
 
@@ -319,6 +399,19 @@ impl WorldContext for WorldState {
 
     fn get_player_skill_current(&self, skill: SkillType) -> Option<u32> {
         self.player.skills.get(&skill).map(|skill| skill.current)
+    }
+
+    fn get_player_skill_is_specialized(&self, skill: SkillType) -> bool {
+        self.player
+            .skills
+            .get(&skill)
+            .is_some_and(|skill| skill.training == crate::stats::TrainingLevel::Specialized)
+    }
+
+    fn get_player_server_run_rate(&self) -> Option<f32> {
+        self.server_run_rate_enabled
+            .then(|| self.player.server_run_rate)
+            .flatten()
     }
 
     fn get_player_vital_current(&self, vital: VitalType) -> Option<u32> {
@@ -413,7 +506,32 @@ pub trait WorldContextExt: WorldContext {
         Some(encumbrance / capacity)
     }
 
+    /// MOVE-RUNRATE-105 fix A (2026-08-11) — the local player's run rate,
+    /// SERVER FIRST.
+    ///
+    /// Order: the server's published `my_run_rate`
+    /// ([`WorldContext::get_player_server_run_rate`]) when it has been seen,
+    /// else the local composition below. Owner directive 2026-08-11: "adopt
+    /// the server-provided run rate for the local player — retail-faithful",
+    /// reversing the stage-1 local-recompute decision (DESIGN.md §2 defect 1,
+    /// which now carries the DEVIATION block). `?serverRunRate=off` restores
+    /// the stage-1 order (composition only) without a rebuild.
+    ///
+    /// With fix B (the augmentation terms, [`run_skill_augmentation_bonus`])
+    /// the two arms AGREE on the oracle rig — both land on 1.9758065. That is
+    /// the point: the fallback is no longer a different answer, it is the same
+    /// answer derived without the wire.
     fn player_run_rate(&self) -> Option<f32> {
+        if let Some(server_rate) = self.get_player_server_run_rate() {
+            return Some(server_rate);
+        }
+        self.player_composed_run_rate()
+    }
+
+    /// The local composition — the stage-1 lane, now the FALLBACK for
+    /// [`Self::player_run_rate`] (and the whole answer under
+    /// `?serverRunRate=off`).
+    fn player_composed_run_rate(&self) -> Option<f32> {
         // STAGE 1 unified-movement-pipeline (2026-06-11, DESIGN.md §2
         // defect 1): the run-rate input must be the wire Run skill
         // `Current` EXACTLY as ACE composes it (`Creature.GetRunRate` →
@@ -427,17 +545,44 @@ pub trait WorldContextExt: WorldContext {
         // degrade to my_run_rate / the run_rate_scalar=1.0 capability
         // override (under-prediction → lag, self-correcting) — NEVER a
         // skill-synthesized rate ACE doesn't hold.
-        let run_skill = self.get_player_skill_current(SkillType::Run)? as f32;
+        let run_skill = self.player_composed_run_skill()?;
+        let burden = self.player_burden().unwrap_or(3.0);
+        Some(run_rate_from_skill_and_burden(run_skill, burden))
+    }
+
+    /// The run-SKILL value the composition feeds to the formula: the wire
+    /// `Current` plus [`run_skill_augmentation_bonus`] (MOVE-RUNRATE-105
+    /// fix B), folded through the gated exhaustion arm.
+    ///
+    /// The augmentation terms are added AFTER the wire `current` — which
+    /// already carries `derive_skill_value`'s enchantment multiplier — so
+    /// this reproduces ACE's `CreatureSkill.Current` ordering exactly for
+    /// the JackOfAllTrades and SkilledSpec terms (ACE adds both after the
+    /// multiplier too, `CreatureSkill.cs:180-185`). `LumAugAllSkills` is
+    /// ACE's `GetAugBonus_Base`, i.e. INSIDE the multiplier; we add it
+    /// outside, which differs only for a player who both holds that
+    /// luminance aug AND is under a multiplicative Run enchantment. Noted,
+    /// not modelled — nothing in the movement suite exercises it, and the
+    /// server-first lane above makes it moot whenever the wire is live.
+    fn player_composed_run_skill(&self) -> Option<f32> {
+        let run_skill = self.get_player_skill_current(SkillType::Run)? as f32
+            + run_skill_augmentation_bonus(
+                self.get_player_int_property(PropertyInt::LumAugAllSkills)
+                    .unwrap_or(0),
+                self.get_player_int_property(PropertyInt::AugmentationJackOfAllTrades)
+                    .unwrap_or(0),
+                self.get_player_int_property(PropertyInt::LumAugSkilledSpec)
+                    .unwrap_or(0),
+                self.get_player_skill_is_specialized(SkillType::Run),
+            );
         // A3-D2(a) exhaustion lane (2026-06-12): wire Stamina 0 →
         // exhausted rate 1.0, matching ACE's stamina==0 → runskill 0
         // chain (see [`USE_EXHAUSTION_RUN_RATE`]). Default-off.
-        let run_skill = if USE_EXHAUSTION_RUN_RATE {
+        Some(if USE_EXHAUSTION_RUN_RATE {
             exhausted_run_skill(run_skill, self.get_player_vital_current(VitalType::Stamina))
         } else {
             run_skill
-        };
-        let burden = self.player_burden().unwrap_or(3.0);
-        Some(run_rate_from_skill_and_burden(run_skill, burden))
+        })
     }
 
     /// Read-only provenance snapshot of every input to `player_run_rate()` —
@@ -456,27 +601,22 @@ pub trait WorldContextExt: WorldContext {
             .unwrap_or(0)
             .max(0);
 
-        // STAGE 1 (2026-06-11): mirrors the fallback-free `player_run_rate()`
-        // above — wire Run skill or nothing (Quickness is still REPORTED for
-        // the capture diff, but never consumed).
-        let (run_skill_used, run_skill_source) = match run_skill_wire {
-            Some(v) => (Some(v as f32), RunSkillSource::WireRunSkill),
-            None => (None, RunSkillSource::Unavailable),
+        // MOVE-RUNRATE-105 (2026-08-11): mirrors `player_run_rate()`'s order —
+        // server rate first, then the composition ([`player_composed_run_skill`],
+        // which folds the augmentation terms and the gated exhaustion arm).
+        // Quickness is still REPORTED for the capture diff, never consumed.
+        let server_run_rate = self.get_player_server_run_rate();
+        let run_skill_used = self.player_composed_run_skill();
+        let run_skill_source = match (server_run_rate, run_skill_used) {
+            (Some(_), _) => RunSkillSource::ServerRunRate,
+            (None, Some(_)) => RunSkillSource::WireRunSkill,
+            (None, None) => RunSkillSource::Unavailable,
         };
-        // A3-D2(a) (2026-06-12): mirror `player_run_rate()`'s gated
-        // exhaustion fold exactly, so the probe's `run_rate` keeps
-        // matching what the velScale path consumed.
-        let run_skill_used = run_skill_used.map(|s| {
-            if USE_EXHAUSTION_RUN_RATE {
-                exhausted_run_skill(s, self.get_player_vital_current(VitalType::Stamina))
-            } else {
-                s
-            }
-        });
 
         let burden = self.player_burden().unwrap_or(3.0);
         RunRateInputs {
-            run_rate: run_skill_used.map(|s| run_rate_from_skill_and_burden(s, burden)),
+            run_rate: server_run_rate
+                .or_else(|| run_skill_used.map(|s| run_rate_from_skill_and_burden(s, burden))),
             run_skill_used,
             run_skill_source,
             run_skill_wire,
@@ -487,6 +627,16 @@ pub trait WorldContextExt: WorldContext {
             capacity: self.player_capacity(),
             strength,
             num_augs,
+            server_run_rate,
+            run_skill_aug_bonus: run_skill_augmentation_bonus(
+                self.get_player_int_property(PropertyInt::LumAugAllSkills)
+                    .unwrap_or(0),
+                self.get_player_int_property(PropertyInt::AugmentationJackOfAllTrades)
+                    .unwrap_or(0),
+                self.get_player_int_property(PropertyInt::LumAugSkilledSpec)
+                    .unwrap_or(0),
+                self.get_player_skill_is_specialized(SkillType::Run),
+            ),
         }
     }
 

@@ -1378,6 +1378,20 @@ pub struct PlayerState {
     pub server_control_sequence: u16,
     /// Last non-zero server-reported motion stance/style cached for outbound movement packets.
     pub last_server_motion_style: Option<MotionStance>,
+    /// MOVE-RUNRATE-105 fix A (2026-08-11) — the SERVER's `my_run_rate`
+    /// for the local player, latched off the wire by
+    /// [`Self::apply_self_update_motion`] from a RunForward interpreted
+    /// state's `forward_speed`. Retail's stamp is
+    /// `CMotionInterp::apply_interpreted_movement` (acclient.c:344161-344162:
+    /// `if (interpreted_state.forward_command == 0x44000007)
+    /// my_run_rate = interpreted_state.forward_speed`).
+    ///
+    /// Consumed by `WorldContextExt::player_run_rate` ahead of the local
+    /// composition; `?serverRunRate=off` (`WorldState::server_run_rate_enabled`)
+    /// hides it again. `None` until a run has been observed — the very
+    /// first steps of a session therefore still run on the composition,
+    /// which is why fix B (the augmentation terms) matters independently.
+    pub server_run_rate: Option<f32>,
     /// Continuous airborne time in seconds, accumulated by the local-pose
     /// integrator and reset by [`Self::land`]. Drives the fell-through-world
     /// failsafe (a legitimate retail fall lasts a few seconds at most; a
@@ -1780,6 +1794,7 @@ impl PlayerState {
             instance_sequence: 0,
             server_control_sequence: 0,
             last_server_motion_style: None,
+            server_run_rate: None,
             airborne_secs: 0.0,
             teleport_sequence: 0,
             force_position_sequence: 0,
