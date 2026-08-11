@@ -24,8 +24,48 @@
     "whatever we already do. `unit` and `tolerance` ARE specified, because those",
     "are decisions about what counts as a difference, not claims about behavior."
   ],
-  "version": 1,
+  "version": 2,
   "timebase": "ms-from-first-input-event",
+  "capture_site": {
+    "$comment": [
+      "THE SITE IS PART OF THE MEASUREMENT. Both sides @teleloc here before",
+      "every scenario, so the two curves are taken over the same ground facing",
+      "the same way. Session 1 ran each side from wherever its character last",
+      "logged out; the holtburger run happened to be inside a dungeon with the",
+      "avatar pinned against a wall, reporting 7.787 m/s of intent while",
+      "actually travelling ~1.5 m/s.",
+      "",
+      "Samsur was chosen by measurement, not by eye: an 8-site survey",
+      "(2026-08-11, 4.5 s run-hold at each) scored realized/intent and the z",
+      "range over the run. Samsur returned realized 7.787 vs intent 7.787",
+      "(ratio 1.000) with a 0.00 m z range over ~35 m of travel — dead flat",
+      "and completely unobstructed. Yaraq (the character's own home town, and",
+      "where session 1 happened to be) has a 0.99 m z range; Beach Fort is",
+      "unrunnable (realized 0.000, the avatar is against something and only",
+      "the heading moves); Plateau drops 7.16 m over the same run.",
+      "",
+      "heading_deg becomes an explicit quaternion about Z in the @teleloc, so",
+      "the run direction is pinned too — the terrain profile depends entirely",
+      "on which way the avatar faces."
+    ],
+    "name": "Samsur",
+    "cell": "0x977B000C",
+    "x": 25.81,
+    "y": 73.85,
+    "z": 0.0,
+    "heading_deg": 0,
+    "settle_ms": 14000
+  },
+  "cast_spell": {
+    "$comment": [
+      "1708 = Wedding Bliss, a 3-windup SELF chain — the spell",
+      "probe_cast_matrix.cjs uses to validate slideCast, so its timing is",
+      "already characterised. A self-cast promotes to targeted-at-own-guid",
+      "client-side, so the driver needs no separate target."
+    ],
+    "id": 1708,
+    "mode": "self"
+  },
   "defaults": {
     "settle_ms": 2500,
     "trail_ms": 1500,
@@ -102,6 +142,17 @@
       ],
       "windows": { "steady": [1500, 3900], "release": [4000, 5500] },
       "expect": { "steady_speed": null, "accel_t90": null, "decel_t10": null }
+    },
+    {
+      "id": "run-hold-long",
+      "description": "A 10-second run hold. Exists ONLY because of retail's sampling rate: its c2s position heartbeat is ~1 Hz, so the 4 s run-hold yields two or three usable samples and its median carries no weight. Ten seconds yields ~10, which is enough to pin steady_speed. It measures nothing run-hold does not — it measures the same thing with an honest sample count.",
+      "gait_expected": "run",
+      "events": [
+        { "t": 0, "type": "keydown", "key": "w" },
+        { "t": 10000, "type": "keyup", "key": "w" }
+      ],
+      "windows": { "steady": [2000, 9800], "release": [10000, 11500] },
+      "expect": { "steady_speed": null, "decel_t10": null }
     },
     {
       "id": "walk-edge-after-manualheld-walk",

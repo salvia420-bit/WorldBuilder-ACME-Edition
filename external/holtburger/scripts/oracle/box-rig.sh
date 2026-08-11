@@ -13,6 +13,7 @@
 #   xvfb             (re)start the headless X server the client renders into
 #   client           launch acclient.exe against the relay
 #   capture          tcpdump the relay's UDP leg to a pcap
+#   scenario         teleport + replay a scenario plan while capturing
 #   status           what is up right now
 #   stop             tear down client + Xvfb (leaves the prefix alone)
 #
@@ -224,6 +225,94 @@ cmd_capture() {
 }
 
 # --------------------------------------------------------------------------
+# Replay a scenario plan into the live client while capturing.
+#
+# The plan is GENERATED on the laptop by
+# `oracle-run.mjs --emit-retail-plan <id>`, so the scenario definition and the
+# holtburger-vs-retail key remap (retail A/D turn + Q/E strafe against
+# holtburger's A/D strafe + Q/E turn) live in exactly one tested place.  The
+# box only replays directives:
+#
+#   teleloc @teleloc <cell> <x> <y> <z> <qw> <qx> <qy> <qz>
+#   settle  <ms>
+#   <atMs>  down|up  <xdotool-keysym>
+#   trail   <ms>
+#
+# `atMs` is measured from the START of the replay (settle included), matching
+# the holtburger driver's timebase; the differ re-bases both sides onto their
+# own first-motion edge anyway.
+#
+# INPUT FOCUS: there is no window manager, so `xdotool key --window` does
+# nothing (WINE-RIG.md §2).  What works is PointerRoot: park the pointer over
+# the viewport and the window under it receives the key events.  Hence the
+# mousemove before anything is typed.
+SCENARIO_POINTER_X="${ORACLE_POINTER_X:-512}"
+SCENARIO_POINTER_Y="${ORACLE_POINTER_Y:-400}"
+
+cmd_scenario() {
+  local plan="${1:?usage: scenario <plan-file> [out.pcap]}"
+  local out="${2:-$CAP_DIR/$(basename "${plan%.plan}")-$(date +%H%M%S).pcap}"
+  [ -f "$plan" ] || die "no plan at $plan"
+  pgrep -f 'acclien[t]\.exe' >/dev/null || die "client is not running — run 'client' first"
+  command -v xdotool >/dev/null || die "xdotool missing — run setup"
+
+  local teleloc settle trail total
+  teleloc=$(sed -n 's/^teleloc //p' "$plan" | head -1)
+  settle=$(sed -n 's/^settle //p' "$plan" | head -1); settle="${settle:-2500}"
+  trail=$(sed -n 's/^trail //p' "$plan" | head -1);   trail="${trail:-1500}"
+  total=$(sed -n 's/^# total_ms //p' "$plan" | head -1); total="${total:-15000}"
+
+  xdotool mousemove "$SCENARIO_POINTER_X" "$SCENARIO_POINTER_Y"
+  sleep 1
+
+  # Teleport to the shared capture site FIRST, outside the capture window, so
+  # the streaming burst it triggers is not part of the measured curve.
+  if [ -n "$teleloc" ]; then
+    log "teleport: $teleloc"
+    # AC's chat bar: Enter opens it, Enter sends.  `type` is used rather than
+    # per-key `key` so the '@' and '.' survive without keysym translation.
+    xdotool key Return; sleep 0.4
+    xdotool type --delay 40 "$teleloc"; sleep 0.4
+    xdotool key Return
+    log "waiting 15s for the destination landblock to load"
+    sleep 15
+  fi
+
+  # Capture for the whole replay plus slack for the trailing heartbeats.
+  local capsecs=$(( (total + trail + 6000) / 1000 ))
+  log "capturing ${capsecs}s -> $out"
+  sudo timeout "$capsecs" tcpdump -i lo -n -s 0 -w "$out" \
+    'udp port 9000 or udp port 9001' >/dev/null 2>&1 &
+  local tcpdump_wait=$!
+  sleep 2   # let tcpdump actually bind before the first keystroke
+
+  local start; start=$(date +%s%3N)
+  # Directives are replayed in file order; the emitter already sorts them.
+  while read -r at act key; do
+    case "$at" in ''|'#'*|teleloc|settle|trail) continue ;; esac
+    local now elapsed waitms
+    now=$(date +%s%3N); elapsed=$(( now - start )); waitms=$(( at - elapsed ))
+    [ "$waitms" -gt 0 ] && sleep "$(awk -v m="$waitms" 'BEGIN{printf "%.3f", m/1000}')"
+    case "$act" in
+      down) xdotool keydown "$key" ;;
+      up)   xdotool keyup   "$key" ;;
+      *) log "WARN: unknown directive '$act'" ;;
+    esac
+    log "  t+${at}ms $act $key"
+  done < "$plan"
+
+  # Never leave a key latched — the client would keep running into the next
+  # scenario and the following capture would start mid-motion.
+  for k in w s a d q e shift space; do xdotool keyup "$k" 2>/dev/null; done
+  wait "$tcpdump_wait" 2>/dev/null
+  sudo chown "$(id -un)" "$out" 2>/dev/null
+  local n; n=$(tcpdump -r "$out" 2>/dev/null | wc -l)
+  log "captured $n packets -> $out"
+  [ "$n" -gt 0 ] || log "WARN: empty capture — is the relay up and the client connected?"
+  echo "$out"
+}
+
+# --------------------------------------------------------------------------
 cmd_status() {
   echo "wine:      $(wine --version 2>/dev/null || echo MISSING)"
   echo "prefix:    $WINEPREFIX $([ -d "$WINEPREFIX" ] && echo OK || echo MISSING)"
@@ -247,6 +336,7 @@ case "${1:-status}" in
   xvfb)           shift; cmd_xvfb "$@" ;;
   client)         shift; cmd_client "$@" ;;
   capture)        shift; cmd_capture "$@" ;;
+  scenario)       shift; cmd_scenario "$@" ;;
   status)         shift; cmd_status "$@" ;;
   stop)           shift; cmd_stop "$@" ;;
   *) die "unknown subcommand '$1' (setup|install-client|prefs|xvfb|client|capture|status|stop)" ;;

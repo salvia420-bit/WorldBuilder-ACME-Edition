@@ -293,6 +293,46 @@ mapping per side; only `W` and `space` are common to both.
 
 ---
 
+## 6a. Playing a scenario (session 2)
+
+Do not type the scenario by hand. The plan is generated on the laptop and
+replayed on the box:
+
+```sh
+# laptop
+node harness/oracle-run.mjs --emit-retail-plan --out-dir /tmp/plans
+scp /tmp/plans/*.plan box:~/oracle-plans/
+
+# box
+ORACLE_DISPLAY=95 ./box-rig.sh scenario ~/oracle-plans/run-hold.plan out.pcap
+```
+
+`scenario` teleports to the shared capture site, waits for the destination to
+load, starts `tcpdump`, replays the plan's `down`/`up` directives on a
+millisecond clock, releases every key, and prints the pcap path.
+
+Two things live in the generated plan rather than in this script, deliberately:
+
+* **The key remap.** Retail `A`/`D` turn and `Q`/`E` strafe; holtburger is the
+  reverse. Scenario keys are written in holtburger's layout and mean an AXIS,
+  so the emitter swaps `a<->q` and `d<->e` (`oracle-run.mjs::retailKey`, unit
+  tested). A hand-typed retail script gets this wrong and produces a
+  clean-looking report full of axis-swapped garbage — MOVE-F6 in particular
+  would strafe with a key that turns.
+* **The capture site.** `scenarios.json.capture_site` becomes the `@teleloc`
+  line of every plan, so both sides measure the same ground facing the same
+  way. See that file's `$comment` for why Samsur and how it was chosen.
+
+### TRAP — the client starts wherever the character logged out
+
+The very first `agentp08` login of session 2 put the avatar in a corner facing
+a wall. A capture taken there measures the wall, not the movement code: the
+client keeps reporting a full-speed intent while the position barely changes.
+Always teleport first, and check the differ's `intent_speed` row against
+`steady_speed` afterwards — they should agree.
+
+---
+
 ## 7. Capturing
 
 ```sh
