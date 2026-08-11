@@ -97,7 +97,7 @@ Suites on this branch, all re-run here: core **643/0**, world **688/0** (687 bas
 one new test), dat **694/1** — the 1 is still
 `terrain_subdiv::triangle_corner_ring_matches_height_sampler`, unchanged and not mine —
 and `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
-JS: tex_compressed_only **115/0** (was 112/0), pack_fetch_controller **99/0** (was 92/0),
+JS: tex_compressed_only **115/0** (was 112/0), pack_fetch_controller **100/0** (was 93/0),
 19 neighbour suites green. Both flag lints clean of these rows (the 3 PRESENCE-GUARDs
 pre-date the branch). No wasm rebuild — no Rust reached the shipped bundle from B, and I
 did not touch `pkg/`, so the 6,439,027 B reference still stands.

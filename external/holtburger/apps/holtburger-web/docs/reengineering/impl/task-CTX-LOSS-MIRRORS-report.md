@@ -19,7 +19,7 @@ NOT done and is not claimed.** A second, previously unexplained live symptom
 | commit | contents |
 |---|---|
 | `e2f4f741` | reproduction — RED ON PURPOSE. Makes the two doubles in `harness/test_tex_compressed_only.mjs` faithful; suite goes 112/0 → 109/6, all six the defect. |
-| `725609ee` | the fix — `scene3d/materials.js`, `scene3d/bc7_textures.js`, `scene3d/pack_fetch_controller.js`, both suites, `harness/lib/diag_schema.mjs`, `docs/url-flags.md`. 115/0 + 99/0. |
+| `725609ee` | the fix — `scene3d/materials.js`, `scene3d/bc7_textures.js`, `scene3d/pack_fetch_controller.js`, both suites, `harness/lib/diag_schema.mjs`, `docs/url-flags.md`. 115/0 + 100/0. |
 | `185e4f6f` | `docs/reengineering/queued/CTX-LOSS-MIRRORS-card.md` — the card §-10 said was owed. |
 
 Files touched (all read-verified this session):
@@ -95,7 +95,7 @@ way production fails.**
 | suite | before | after |
 |---|---|---|
 | `harness/test_tex_compressed_only.mjs` | 112/0 (kind doubles) → **109/6** (faithful) | **115/0** |
-| `harness/test_pack_fetch_controller.mjs` | 92/0 | **99/0** |
+| `harness/test_pack_fetch_controller.mjs` | 93/0 | **100/0** |
 | `harness/test_diag_schema.mjs` | 63/6 | **63/6** — byte-identical failure set (6 pre-existing evidence-line drifts, all in files this task did not touch; my four drifted rows were re-pointed) |
 
 Neighbours, all green and all run this session: `draw_pools` 448/0 ·
