@@ -54,7 +54,12 @@ const WBT_DLL = process.env.WBT_DLL
 const DOTNET = process.env.DOTNET_ROOT
   ? path.join(process.env.DOTNET_ROOT, "dotnet")
   : "dotnet";
-const REPORT_ROOT = "/mnt/wbterminal1/holtburger-validator-reports/cell-portal";
+// `/mnt/wbterminal1` is the LAPTOP's scratch mount; the buildbox has
+// `/mnt/wbterminal2` and no `wbterminal1` at all, so this validator could not
+// run there — it died in `mkdirSync` before driving a single landblock
+// (PORTAL-FLAGS-DECODE, 2026-08-11). Env-overridable, default unchanged.
+const REPORT_ROOT = process.env.HB_VALIDATOR_REPORT_ROOT
+  || "/mnt/wbterminal1/holtburger-validator-reports/cell-portal";
 
 const EXPECTED_DAT_SHA = "6db0abf00fbceed62c3f1ee842ee7c1f423d732bed77a5b7c102ee89a52ab99e"; // client_cell_1.dat per [[feedback_base_dats_only_for_bake]]
 
