@@ -22,10 +22,22 @@
 //   includes login traffic before the scenario. Anchoring on "first sample
 //   whose speed crosses MOTION_EPS" makes the comparison independent of both.
 //
-// * Speed is taken from an explicit velocity field when the source carries
-//   one, else differentiated from position. Retail's UpdatePosition only
-//   carries velocity when the HAS_VELOCITY flag is set, so the fallback is
-//   the common path, not an edge case.
+// * ONE ESTIMATOR ON BOTH SIDES (session 2 fix). Speed is ALWAYS
+//   differentiated from position, for retail and for holtburger alike, and
+//   any velocity the source reports is kept separately as
+//   `reportedSpeed` / the `intent_speed` diagnostic row. Session 1 mixed the
+//   two: retail was differentiated from c2s positions while holtburger used
+//   the integrator's `current_planar_velocity`. Those are different
+//   quantities — the intent vector keeps reading full run speed while the
+//   avatar is pinned against a wall (measured 2026-08-11: 7.787 m/s reported
+//   against ~1.5 m/s realized, in a dungeon), so the "+5.2% fast" of the
+//   first report was partly an estimator mismatch, not behaviour.
+//
+// * POSITIONS ARE LANDBLOCK-LOCAL (session 2 fix). AC coordinates are
+//   0..192 within a landblock, and the landblock id carries the cell.
+//   Differentiating raw x/y makes every landblock crossing a ~192 m jump —
+//   a ~1000 m/s sample at retail's ~1 Hz cadence. Both sides are lifted to
+//   global metres via the lb id before anything is differentiated.
 //
 // * Heading is unwrapped across the 0/360 seam before any turn rate is
 //   taken. Without that, a turn through north reads as a ~-360 deg/s spike
@@ -39,9 +51,14 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { poseToGlobalXY, LANDBLOCK_M } from "./lib/movement_gate.mjs";
+
+export { LANDBLOCK_M };
 
 /** Speed (m/s) above which we consider the avatar to be moving. */
 export const MOTION_EPS = 0.15;
+/** Max sample interval that can resolve a ~500 ms jump arc (~3 samples in it). */
+export const JUMP_ARC_SAMPLE_MS = 170;
 /** Resample grid period (ms). 20ms is finer than either source emits. */
 export const GRID_MS = 20;
 
@@ -68,6 +85,24 @@ function norm360(d) {
   let x = d % 360;
   if (x < 0) x += 360;
   return x;
+}
+
+/**
+ * Lift a landblock-local (x,y) to global metres using the landblock id.
+ *
+ * An AC position is `landblock_id` + coordinates local to that landblock, so
+ * `x` wraps back to ~0 every 192 m of travel. The lift itself is
+ * `harness/lib/movement_gate.mjs::poseToGlobalXY`, already derived and
+ * confirmed against live poses by PHY-07-LIVE-RUN-2026-07-26 — this only
+ * adapts the telemetry's hex-string `lb` (the FULL cell id `0xXXYYCCCC`,
+ * whose low half-word is the cell and must not enter the arithmetic) to the
+ * numeric field that helper takes. Returns the input unchanged when there is
+ * no usable lb, so a synthetic fixture in plain metres still works.
+ */
+export function toGlobalXY(s) {
+  const lb = typeof s.lb === "string" ? Number.parseInt(s.lb, 16) : s.lb;
+  const g = poseToGlobalXY({ lb, x: s.x, y: s.y });
+  return g ?? { gx: s.x, gy: s.y };
 }
 
 /**
@@ -183,21 +218,60 @@ export function normalize(records, { playerGuid = null, playerStream = "c2s" } =
 }
 
 /**
- * Fill in derived speed (from position deltas) and unwrap heading.
- * Mutates and returns the sample array.
+ * Fill in derived speed and unwrap heading. Mutates and returns the array.
+ *
+ * SPEED IS ALWAYS DIFFERENTIATED FROM POSITION, on both sides, in GLOBAL
+ * metres, by CENTRAL difference. Three deliberate choices:
+ *
+ * * *Always*, never "only when the source omits a velocity" — see the
+ *   one-estimator note in the file header. Whatever the source reported is
+ *   preserved as `reportedSpeed` and surfaced as its own diagnostic row, so
+ *   an intent-vs-realized divergence is visible instead of silently deciding
+ *   which side means what.
+ * * *Global metres*, via `toGlobalXY` — landblock-local x/y wraps at 192 m.
+ * * *Central difference* — `|p[i+1] - p[i-1]| / (t[i+1] - t[i-1])`. A
+ *   backward difference labels the average speed over the PRECEDING interval
+ *   with the interval's END time, which at retail's ~1 Hz cadence shifts the
+ *   whole ramp half a sample late and inflates `accel_t90` by ~500 ms. Ends
+ *   fall back to the one-sided difference.
  */
 export function derive(samples) {
   let unwrapped = null;
   let prevRaw = null;
+  for (const s of samples) {
+    const g = toGlobalXY(s);
+    s.gx = g.gx;
+    s.gy = g.gy;
+    if (s.speed != null && s.reportedSpeed == null) s.reportedSpeed = s.speed;
+  }
+  // A stall is not a measurement. If the client's tick loop parks for seconds
+  // (a bake burst on the laptop) the pose freezes while the avatar keeps
+  // moving server-side, so differencing ACROSS the gap reports a near-zero
+  // speed that looks exactly like "stopped". MOVE-F2's second hold read
+  // 0.030 m/s this way while the capture plainly showed 7.787.
+  //
+  // The threshold is derived from the stream's OWN median interval rather
+  // than fixed: holtburger ticks at ~33 ms and retail's c2s heartbeat is
+  // ~1 s, so any constant would either accept holtburger stalls or reject
+  // every retail sample.
+  const dtsAll = [];
+  for (let i = 1; i < samples.length; i++) dtsAll.push(samples[i].t - samples[i - 1].t);
+  const medDt = median(dtsAll) ?? 0;
+  const gapMs = Math.max(400, 8 * medDt);
   for (let i = 0; i < samples.length; i++) {
     const s = samples[i];
-    // speed from position when not carried explicitly
-    if (s.speed == null && i > 0) {
-      const p = samples[i - 1];
-      const dt = (s.t - p.t) / 1000;
-      if (dt > 0 && Number.isFinite(s.x) && Number.isFinite(p.x)) {
-        s.speed = Math.hypot(s.x - p.x, s.y - p.y) / dt;
-      }
+    const a = samples[i - 1] ?? s;
+    const b = samples[i + 1] ?? s;
+    const dt = (b.t - a.t) / 1000;
+    if (dt * 1000 > gapMs && samples.length > 2) {
+      // Unmeasurable here. `null` is dropped by `resample`, so the window's
+      // metric comes back no-data instead of a fabricated zero.
+      s.speed = null;
+      s.stalled = true;
+    } else if (dt > 0 && Number.isFinite(a.gx) && Number.isFinite(b.gx)) {
+      s.speed = Math.hypot(b.gx - a.gx, b.gy - a.gy) / dt;
+    } else if (s.speed == null) {
+      s.speed = 0;
     }
     // heading unwrap: accumulate the shortest-arc delta so a turn through
     // north does not read as a -359 deg jump.
@@ -279,8 +353,17 @@ export function median(xs) {
 // metrics
 // ---------------------------------------------------------------------------
 
-/** Median speed over a [start,end] ms window (post-alignment). */
-export function steadySpeed(samples, [start, end]) {
+/**
+ * Median speed over a [start,end] ms window (post-alignment).
+ *
+ * Returns `null` when the window does not actually contain samples. Without
+ * this, `resample` happily extends the nearest sample across a window that a
+ * stall (or the end of the capture) left empty, and the report shows a
+ * confident number for a period nothing was observed.
+ */
+export function steadySpeed(samples, [start, end], minSamples = 2) {
+  const inside = samples.filter((s) => s.t >= start && s.t <= end && Number.isFinite(s.speed));
+  if (inside.length < minSamples) return null;
   const grid = resample(samples, "speed", start, end);
   return median(grid.map((g) => g.v));
 }
@@ -339,7 +422,9 @@ export function jumpMetrics(samples, [start, end]) {
       break;
     }
   }
-  const dist = Math.hypot(win[landIdx].x - win[0].x, win[landIdx].y - win[0].y);
+  // Global metres — a jump that crosses a landblock edge would otherwise
+  // read as a ~192 m long jump (see `toGlobalXY`).
+  const dist = Math.hypot(win[landIdx].gx - win[0].gx, win[landIdx].gy - win[0].gy);
   return {
     jump_apex: apex - z0,
     jump_airtime: win[landIdx].t - win[0].t,
@@ -386,12 +471,60 @@ export function computeMetrics(samples, scenario) {
   // the two sides were in different gaits, so this is surfaced not hidden.
   const gaits = new Set(samples.map((s) => s.gait).filter(Boolean));
   if (gaits.size) out.gait = [...gaits].join("|");
+  // Session 2 — the source's OWN reported velocity over the steady window,
+  // kept beside the realized (differentiated) speed rather than substituted
+  // for it. A large `intent_speed` over a small `steady_speed` means the
+  // avatar was commanded at full speed and did not get there: a slope, an
+  // obstacle, or a collision — i.e. the capture site is wrong, not the code.
+  const steadyWin = w.steady ?? w.second_hold ?? w.pre_jump ?? w.pre_cast;
+  if (steadyWin) {
+    const grid = resample(samples, "reportedSpeed", steadyWin[0], steadyWin[1]);
+    const m = median(grid.map((g) => g.v));
+    if (m != null) out.intent_speed = m;
+  }
   return out;
 }
 
 // ---------------------------------------------------------------------------
 // comparison + report
 // ---------------------------------------------------------------------------
+
+/**
+ * Can the RETAIL capture resolve this metric at all?
+ *
+ * Retail's curve is reconstructed from a ~1 Hz wire heartbeat. A steady-state
+ * speed survives that; a 40 ms accel threshold or a 500 ms jump arc does not —
+ * the whole event falls between two samples. Scoring those anyway is how the
+ * report ends up ranking `jump_apex — retail 0.000, holtburger 0.350 (delta
+ * 2347967668.8%)` at the top, which is not a defect, it is a sampling floor.
+ *
+ * So: a metric measured in MILLISECONDS needs a retail sample interval at
+ * least as fine as its own tolerance, and the jump metrics need at least
+ * three retail samples inside the flight window. Otherwise the row is marked
+ * `retail-unresolvable` and kept OUT of the ranked defect list. This is the
+ * concrete argument for the D2/MoveOracle in-process sampler (T4).
+ */
+export function retailResolves(metricKey, metricDefs, retailSamples, scenario) {
+  const base = metricKey.split(".").pop();
+  const def = metricDefs[base];
+  if (!def) return true;
+  const dts = [];
+  for (let i = 1; i < retailSamples.length; i++) dts.push(retailSamples[i].t - retailSamples[i - 1].t);
+  const medDt = median(dts);
+  if (medDt == null) return false;
+  if (def.unit === "ms") return medDt <= def.tolerance;
+  if (base.startsWith("jump_")) {
+    // A jump arc is ~500 ms end to end. Counting samples in the flight WINDOW
+    // is not enough — three 1 Hz samples spread over a 1.9 s window can all
+    // sit outside the arc, which is how `jump_apex` read 0.000 for a retail
+    // jump that plainly happened. The arc needs a sample interval well inside
+    // it, so require at least ~3 samples per arc.
+    const dts2 = [];
+    for (let i = 1; i < retailSamples.length; i++) dts2.push(retailSamples[i].t - retailSamples[i - 1].t);
+    return (median(dts2) ?? Infinity) <= JUMP_ARC_SAMPLE_MS;
+  }
+  return true;
+}
 
 export function compareScenario(scenario, retailSamples, holtSamples, metricDefs = {}) {
   const r = computeMetrics(retailSamples, scenario);
@@ -401,16 +534,18 @@ export function compareScenario(scenario, retailSamples, holtSamples, metricDefs
   for (const k of keys) {
     const rv = r[k];
     const hv = h[k];
+    const resolvable = retailResolves(k, metricDefs, retailSamples, scenario);
     if (typeof rv !== "number" || typeof hv !== "number") {
-      rows.push({ metric: k, retail: rv ?? null, holt: hv ?? null, delta: null, pct: null, verdict: "no-data" });
+      rows.push({ metric: k, retail: rv ?? null, holt: hv ?? null, delta: null, pct: null, verdict: "no-data", resolvable });
       continue;
     }
     const delta = hv - rv;
     const pct = rv !== 0 ? (delta / Math.abs(rv)) * 100 : null;
     const base = k.split(".").pop();
     const tol = metricDefs[base]?.tolerance;
-    const verdict = tol == null ? "no-tolerance" : Math.abs(delta) <= tol ? "PASS" : "FAIL";
-    rows.push({ metric: k, retail: rv, holt: hv, delta, pct, verdict });
+    let verdict = tol == null ? "no-tolerance" : Math.abs(delta) <= tol ? "PASS" : "FAIL";
+    if (verdict !== "PASS" && !resolvable) verdict = "retail-unresolvable";
+    rows.push({ metric: k, retail: rv, holt: hv, delta, pct, verdict, resolvable });
   }
   // Rank by |delta| relative to tolerance where we have one, else by |pct|,
   // so the report's first row is the worst real divergence rather than
@@ -443,6 +578,10 @@ export function renderReport(results, meta = {}) {
   lines.push("");
   lines.push(
     "Rows are ranked by |delta| relative to the metric's tolerance, so the first row of each table is the worst real divergence. `delta` is holtburger minus retail: positive means holtburger is faster/higher/slower-to-settle than retail.",
+    "",
+    "Verdicts: **PASS**/**FAIL** against the metric's tolerance. **no-data** — one side never produced samples in that window (a stall, or a scenario step with no driver hook). **retail-unresolvable** — the metric is finer than retail's ~1 Hz wire sampling can see (any ms-tolerance metric, and the ~500 ms jump arc); the holtburger figure may be perfectly good but there is nothing trustworthy to compare it against until the in-process sampler (T4/MoveOracle) lands. Only FAIL rows enter the ranked defect list.",
+    "",
+    "`intent_speed` is the source's OWN reported velocity over the steady window, beside the realized (position-differentiated) `steady_speed`. They should agree; `intent_speed` much larger than `steady_speed` means the avatar was commanded to a speed it never reached — a slope, an obstacle, or a collision at the capture site.",
   );
   lines.push("");
 
@@ -480,15 +619,30 @@ export function renderReport(results, meta = {}) {
 
 /** retail-pins.json: retail truth only, for future retail_behavior_tests. */
 export function renderPins(results, metricDefs) {
-  const pins = { version: 1, generated: new Date().toISOString(), metric_defs: metricDefs, scenarios: {} };
+  const pins = { version: 2, generated: new Date().toISOString(), metric_defs: metricDefs, scenarios: {} };
   for (const res of results) {
     const entry = {};
-    for (const [k, v] of Object.entries(res.retail)) {
-      if (typeof v === "number") {
-        const base = k.split(".").pop();
-        entry[k] = { value: v, tolerance: metricDefs[base]?.tolerance ?? null, unit: metricDefs[base]?.unit ?? null };
+    // ONLY metrics retail can actually resolve (see `retailResolves`). A pin
+    // is a claim about retail behaviour that future `retail_behavior_tests`
+    // will be held to, so pinning a number retail's ~1 Hz wire sampling
+    // cannot see would define parity as "whatever the sampling floor
+    // produced". The excluded keys are listed so their absence is visible
+    // rather than silent.
+    const unresolvable = [];
+    for (const row of res.rows) {
+      if (typeof row.retail !== "number") continue;
+      const base = row.metric.split(".").pop();
+      if (row.resolvable === false) {
+        unresolvable.push(row.metric);
+        continue;
       }
+      entry[row.metric] = {
+        value: row.retail,
+        tolerance: metricDefs[base]?.tolerance ?? null,
+        unit: metricDefs[base]?.unit ?? null,
+      };
     }
+    if (unresolvable.length) entry.$unresolvable_by_retail_sampling = unresolvable;
     pins.scenarios[res.scenario] = entry;
   }
   return pins;
@@ -526,25 +680,53 @@ function main(argv) {
   const spec = JSON.parse(readFileSync(scenPath, "utf8"));
   const metricDefs = spec.metric_defs ?? {};
 
-  if (!args.retail || !args.holt) {
-    console.error("usage: oracle-diff.mjs --retail <jsonl> --holt <jsonl> [--scenario <id>] [--out-report f.md] [--out-pins f.json]");
-    console.error("       oracle-diff.mjs --selftest");
-    process.exit(2);
+  let results;
+  let meta;
+  if (args.dir) {
+    // SUITE MODE: one capture pair per scenario, from a directory laid out as
+    // the two drivers write it (`retail-<id>.jsonl` + `holt-<id>.jsonl`). The
+    // single-file mode below compares every scenario against ONE pair of
+    // captures, which is right for one scenario and quietly wrong for ten —
+    // each scenario has its own run, and its windows are relative to that
+    // run's own first-motion edge.
+    const wanted = args.scenario ? spec.scenarios.filter((s) => s.id === args.scenario) : spec.scenarios;
+    results = [];
+    for (const s of wanted) {
+      const rf = path.join(args.dir, `retail-${s.id}.jsonl`);
+      const hf = path.join(args.dir, `holt-${s.id}.jsonl`);
+      let r = [];
+      let h = [];
+      try { r = loadSide(rf, { playerGuid: args.playerGuid ?? null }); } catch { /* absent side */ }
+      try { h = loadSide(hf, {}); } catch { /* absent side */ }
+      if (!r.length && !h.length) {
+        console.error(`  [skip] ${s.id}: neither side captured`);
+        continue;
+      }
+      if (!r.length) console.error(`  [warn] ${s.id}: no retail capture`);
+      if (!h.length) console.error(`  [warn] ${s.id}: no holtburger capture`);
+      results.push(compareScenario(s, r, h, metricDefs));
+    }
+    meta = { retailFile: `${args.dir}/retail-<scenario>.jsonl`, holtFile: `${args.dir}/holt-<scenario>.jsonl` };
+  } else {
+    if (!args.retail || !args.holt) {
+      console.error("usage: oracle-diff.mjs --retail <jsonl> --holt <jsonl> [--scenario <id>] [--out-report f.md] [--out-pins f.json]");
+      console.error("       oracle-diff.mjs --dir <captures/>   # one pair per scenario");
+      console.error("       oracle-diff.mjs --selftest");
+      process.exit(2);
+    }
+    const wanted = args.scenario ? spec.scenarios.filter((s) => s.id === args.scenario) : spec.scenarios;
+    if (!wanted.length) {
+      console.error(`no scenario matched '${args.scenario}'`);
+      process.exit(2);
+    }
+    const retailSamples = loadSide(args.retail, { playerGuid: args.playerGuid ?? null });
+    const holtSamples = loadSide(args.holt, {});
+    if (!retailSamples.length) console.error("WARNING: retail stream produced no samples");
+    if (!holtSamples.length) console.error("WARNING: holtburger stream produced no samples");
+    results = wanted.map((s) => compareScenario(s, retailSamples, holtSamples, metricDefs));
+    meta = { retailFile: args.retail, holtFile: args.holt };
   }
-
-  const wanted = args.scenario ? spec.scenarios.filter((s) => s.id === args.scenario) : spec.scenarios;
-  if (!wanted.length) {
-    console.error(`no scenario matched '${args.scenario}'`);
-    process.exit(2);
-  }
-
-  const retailSamples = loadSide(args.retail, { playerGuid: args.playerGuid ?? null });
-  const holtSamples = loadSide(args.holt, {});
-  if (!retailSamples.length) console.error("WARNING: retail stream produced no samples");
-  if (!holtSamples.length) console.error("WARNING: holtburger stream produced no samples");
-
-  const results = wanted.map((s) => compareScenario(s, retailSamples, holtSamples, metricDefs));
-  const report = renderReport(results, { retailFile: args.retail, holtFile: args.holt });
+  const report = renderReport(results, meta);
 
   if (args["out-report"]) {
     writeFileSync(args["out-report"], report);
@@ -648,7 +830,9 @@ function selftest() {
     const z = Math.max(0, 4.9 * t - 0.5 * 9.8 * t * t);
     jumpSamples.push({ t: tms, x: t * 4, y: 0, z, speed: 4, heading: 0 });
   }
-  const jm = jumpMetrics(jumpSamples, [0, 1200]);
+  // Through `derive`, because `jump_distance` is measured in the GLOBAL
+  // metres `derive` lifts positions into (session 2).
+  const jm = jumpMetrics(derive(jumpSamples), [0, 1200]);
   check("jump apex ~1.225 m", Math.abs(jm.jump_apex - 1.225) < 0.05, `got ${jm.jump_apex?.toFixed(3)}`);
   check("jump airtime ~1000 ms", Math.abs(jm.jump_airtime - 1000) < 60, `got ${jm.jump_airtime}`);
   check("jump distance ~4 m", Math.abs(jm.jump_distance - 4) < 0.2, `got ${jm.jump_distance?.toFixed(3)}`);
@@ -667,6 +851,68 @@ function selftest() {
   const pins = renderPins([res], metricDefs);
   check("pins carry retail truth only", Math.abs(pins.scenarios["run-hold"].steady_speed.value - 4) < 0.05);
   check("pins carry tolerance", pins.scenarios["run-hold"].steady_speed.tolerance === 0.05);
+
+  // --- session 2: landblock wrap ------------------------------------------
+  // 4 m/s east across a landblock boundary. Local x runs 188 -> 191.8, wraps
+  // to 0.2 in the next landblock east (lb high byte +1). Before the global
+  // lift this produced a single ~1900 m/s sample and a ruined median.
+  const wrapRecs = [];
+  for (let i = 0; i <= 100; i++) {
+    const tms = i * 100;
+    const gx = 0x7d * LANDBLOCK_M + 188 + 4 * (tms / 1000);
+    const lbx = Math.floor(gx / LANDBLOCK_M);
+    wrapRecs.push({
+      source: "holt",
+      t: tms,
+      pos: { lb: `0x${((lbx << 24) | (0x64 << 16) | 0x14).toString(16).toUpperCase()}`, x: gx - lbx * LANDBLOCK_M, y: 50, z: 0, heading_deg: 90 },
+    });
+  }
+  const wn = derive(normalize(wrapRecs).samples);
+  const wrapMax = Math.max(...wn.map((s) => s.speed));
+  check("landblock wrap does not spike the speed curve", wrapMax < 5, `max ${wrapMax.toFixed(2)} m/s`);
+  check("landblock wrap keeps the true speed", Math.abs(steadySpeed(wn, [1000, 9000]) - 4) < 0.05, `${steadySpeed(wn, [1000, 9000])?.toFixed(3)} m/s`);
+
+  // --- session 2: one estimator, reported velocity kept separate -----------
+  // A source that reports 7.8 m/s of INTENT while its positions only move at
+  // 1.5 m/s (pinned against a wall) must be scored on 1.5, with 7.8 visible.
+  const pinnedRecs = [];
+  for (let i = 0; i <= 60; i++) {
+    const tms = i * 100;
+    pinnedRecs.push({
+      source: "holt",
+      t: tms,
+      speed: 7.8,
+      pos: { lb: "0x7D640014", x: 10 + 1.5 * (tms / 1000), y: 50, z: 0, heading_deg: 0 },
+    });
+  }
+  const pn = derive(normalize(pinnedRecs).samples);
+  const pinnedScen = { id: "pinned", windows: { steady: [1000, 4000] }, expect: { steady_speed: null } };
+  const pm = computeMetrics(alignToFirstMotion(pn).samples, pinnedScen);
+  check("realized speed wins over the reported vector", Math.abs(pm.steady_speed - 1.5) < 0.05, `${pm.steady_speed?.toFixed(3)} m/s`);
+  check("reported vector survives as intent_speed", Math.abs(pm.intent_speed - 7.8) < 0.01, `${pm.intent_speed?.toFixed(3)} m/s`);
+
+  // --- session 2: retail's sampling floor is not a defect -----------------
+  const oneHz = Array.from({ length: 12 }, (_, i) => ({ t: i * 1000, speed: 4 }));
+  const thirtyHz = Array.from({ length: 300 }, (_, i) => ({ t: i * 33, speed: 4 }));
+  const defs = { accel_t90: { unit: "ms", tolerance: 40 }, steady_speed: { unit: "m/s", tolerance: 0.05 }, jump_apex: { unit: "m", tolerance: 0.05 } };
+  check("a ms-tolerance metric is unresolvable at retail's 1 Hz", !retailResolves("accel_t90", defs, oneHz, {}));
+  check("the same metric IS resolvable at 30 Hz", retailResolves("accel_t90", defs, thirtyHz, {}));
+  check("steady_speed stays resolvable at 1 Hz", retailResolves("steady_speed", defs, oneHz, {}));
+  check("jump metrics need 3 retail samples in the flight window", !retailResolves("jump_apex", defs, oneHz, { windows: { flight: [0, 500] } }));
+
+  // --- session 2: a mid-capture stall is no-data, not zero ----------------
+  // 30 Hz at 4 m/s, then the tick loop parks for 7 s while the pose freezes,
+  // then resumes. The frozen span must NOT read as "stopped": that is exactly
+  // how MOVE-F2's second hold reported 0.030 m/s from a capture that plainly
+  // showed 7.787.
+  const stallRecs = [];
+  for (let i = 0; i < 60; i++) stallRecs.push({ source: "holt", t: i * 33, speed: 4, pos: { lb: "0x7D640000", x: 4 * (i * 0.033), y: 0, z: 0, heading_deg: 0 } });
+  const froze = stallRecs[stallRecs.length - 1].pos.x;
+  for (let i = 0; i < 20; i++) stallRecs.push({ source: "holt", t: 7000 + 2000 + i * 33, speed: 4, pos: { lb: "0x7D640000", x: froze + 4 * (i * 0.033), y: 0, z: 0, heading_deg: 0 } });
+  const sn = derive(normalize(stallRecs).samples);
+  check("a stalled sample is marked unmeasurable, not zero", sn.some((s) => s.stalled) && sn.every((s) => s.speed == null || s.speed > 3.9), `${sn.filter((s) => s.stalled).length} stalled`);
+  check("a window inside the stall reports no-data", steadySpeed(alignToFirstMotion(sn).samples, [3000, 6000]) === null);
+  check("a window with real samples still reports", Math.abs(steadySpeed(alignToFirstMotion(sn).samples, [200, 1500]) - 4) < 0.05);
 
   // --- malformed input ----------------------------------------------------
   const partial = parseJsonl('{"a":1}\n{"b":2\n{"c":3}\n');
