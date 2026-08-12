@@ -114,7 +114,7 @@ export const PRESETS = {
         // it explicitly with ?gfxSubdivLevel=N to experiment.
         gfxRelief: false,
         gfxSubdivLevel: 0,
-        gfxReliefScale: 0.6,
+        gfxReliefScale: 2.0,
         pom: false,
         pomStepsPrimary: 0,
         pomStepsSelfShadow: 0,
@@ -262,7 +262,7 @@ export const PRESETS = {
         // both stop at 4x; 16x is an `ultra` opt-in.
         gfxRelief: true,
         gfxSubdivLevel: 0,
-        gfxReliefScale: 1.0,
+        gfxReliefScale: 2.0,
         // pom ON at mid (2026-07-30, second pass): EnvCell interiors and
         // non-atlased singletons — i.e. EVERY dungeon wall — are not atlas
         // members, so with `pom` off at mid they were the one surface class
@@ -365,7 +365,7 @@ export const PRESETS = {
         subdivLevel: 4,
         gfxRelief: true,
         gfxSubdivLevel: 0,
-        gfxReliefScale: 1.0,
+        gfxReliefScale: 2.0,
         pom: true,
         pomStepsPrimary: 16,
         pomStepsSelfShadow: 8,
@@ -456,7 +456,7 @@ export const PRESETS = {
         // the shadow-pass vertex bill here is always a deliberate opt-in.
         gfxRelief: true,
         gfxSubdivLevel: 0,
-        gfxReliefScale: 1.0,
+        gfxReliefScale: 2.0,
         pom: true,
         pomStepsPrimary: 24,
         pomStepsSelfShadow: 12,
