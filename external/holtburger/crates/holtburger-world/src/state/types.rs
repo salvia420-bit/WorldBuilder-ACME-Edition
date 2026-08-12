@@ -213,6 +213,18 @@ impl WorldState {
         self.add_entity(Entity::new(guid, name.into(), position));
     }
 
+    /// ORACLE open defect #1 (2026-08-12) — read side of
+    /// [`Self::player_description_properties`]'s stash, for the
+    /// `playerEntityProps` diagnostic. `RunRateInputs.aug_joat` can say a
+    /// property is ABSENT from the live bag; only a comparison against the
+    /// login dump can say whether the wire ever carried it. Read-only; the
+    /// upsert re-seed keeps owning the write side.
+    pub fn player_description_properties(
+        &self,
+    ) -> Option<&holtburger_common::properties::WorldObjectProperties> {
+        self.player_description_properties.as_ref()
+    }
+
     pub fn player_int_property(&self, property: PropertyInt) -> Option<i32> {
         self.player_properties()
             .and_then(|properties| properties.get_int_prop(property))
