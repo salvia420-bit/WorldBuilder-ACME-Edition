@@ -284,3 +284,20 @@ Commits are listed in the handoff section `## -12B.`
 | `s12-B-holtburg-roof-punchSidedness-AB.png` | the same roof, default vs fixed, 2-up |
 | `s12-B-holtburg-over-45-punchSidedness-off-1.png` | full frame, today's default |
 | `s12-B-holtburg-over-45-punchSidedness-on-1.png` | full frame, gate on, same camera |
+| `s12-B-holtburg-se-mid-punchSidedness-off-2.png` / `-on-2.png` | eye-level SE, the 31-of-31 camera |
+| `s12-B-holtburg-s-low-punchSidedness-off-3.png` / `-on-3.png` | ground S — pair that is SUPPOSED to differ (see §5) |
+| `s12-B-holtburg-over-hi-punchSidedness-off-4.png` / `-on-4.png` | high overhead, the 2.242%→0.143% camera |
+| `s12-B-holtburg-e-low-punchSidedness-off-5.png` / `-on-5.png` | ground E, second keep-the-feature pair |
+
+**12 files, sent 2026-08-12 00:2x UTC** (5 before/after pairs + 2 composites), all
+1280×800 except the composites (2572×982 AB, 3860×986 THREEWAY). `tailscale file
+cp` returned rc 0 for all 12; each emitted `warning: redmi-note-13-5g is not
+replying; trying anyway`, which is the handset asleep — Taildrop queues on the
+tailnet and delivers on wake. **Delivery to the phone is therefore not something
+this box can confirm; only that all 12 were accepted for transfer.**
+
+**Read the THREEWAY first.** In it the orange window aperture sits on the roof
+slates in the middle panel only; the left (`portalPunch=off`) and right
+(`punchSidedness=on`) panels have an unbroken roof. The left panel is what makes
+the right one mean something — it is the no-punch reference, so "right matches
+left" is the claim, not merely "right looks better than middle".

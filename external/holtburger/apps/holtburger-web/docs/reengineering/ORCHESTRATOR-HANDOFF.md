@@ -4,6 +4,82 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -12B. 2026-08-12 (night, lane B of 2) — THE OWNER'S PORTAL BLEED-THROUGH, ROOT-CAUSED; THE FIX IS A FLAG THAT IS ALREADY DEFAULT-OFF
+
+Branch **`orch/s12-portal`**, cut from `c53a4448`. Master untouched, no flag default
+moved, no client code changed by this lane. **This lane was SPOT-preempted twice**;
+everything below survived because it was pushed as it landed.
+
+    2d99ac76  the portal-bleed A/B harness — one camera rig, two flag arms, runtime anchors
+    e45c9821  the owner's portal bleed-through, root-caused
+    <report/handoff commit — see branch tip>
+
+### A. THE BUG IS REAL, REPRODUCED, AND `?punchSidedness=on` FIXES IT
+Owner: *"the sideportalpunch is making windows visible through roofs, walls etc."*
+Reproduced at Holtburg on the T4. Report `impl/task-PORTAL-BLEED-report.md`.
+
+**Root cause is structural, not tuning.** Retail's `PView::ConstructView` reaches its
+far-punch (`acclient.c:462557`) only past **three** rejects — sidedness
+(`:462519-462541`), `GetClip` + `if (!ppoly) return 0` (`:462542-462544`), and
+`CEnvCell::GetVisible` + `Render::copy_view` (`:462545-462554`). **We implement one of
+the three and it is default-OFF.** wasm selection is frustum-only
+(`src/lib.rs:35677-35680`) and the sole occlusion gate in the JS chain,
+`terrainRayBlocked` (`scene3d/portal_clip.js:323-408`), samples the terrain
+**heightfield** — *a roof is not terrain*. The punch material is `AlwaysDepth`
+(`scene3d/portal_punch.js:102`) writing `FAR_DEPTH` (`:38`/`:95`), so an aperture
+behind a roof overwrites that roof's DEPTH while its COLOUR stays, and the cells pass
+wins there.
+
+**The number that is the bug:** with the gate off, `_portalPunchDiag` shows **31 of 31**
+(se-mid) and **36 of 37** (over-45) apertures depth-punched with *zero* rejections.
+With it on, 46-of-62 and 51-of-72 are rejected backface — 63–75%, matching the
+"roughly half in a town" estimate already written at `portal_clip.js:869-870`.
+
+### B. THE CONTROL ARM IS WHAT MAKES THE EYE RESULT MEAN ANYTHING
+A third arm ran `?portalPunch=off` (`_portalPunchDiag` reads `"<absent>"` — the pass is
+not constructed), giving an artifact-free reference. Distance from it (`diffshots.py`,
+changed% = >16/255 luma): over-45 **2.225% → 0.115%**, over-hi **2.242% → 0.143%** —
+the gate collapses the difference from no-punch by ~16–19×. A diff overlay puts every
+changed pixel **on building roofs, terrain untouched**.
+- **Ground-level cameras KEEP a difference on purpose** and must not be read as residue.
+  The punch exists to reveal interiors through near-side doorways; driving `e-low`/`s-low`
+  to zero would mean the feature was off.
+- A wooden gable/truss on that roof appears in **all three arms including punch-off**, so
+  it is legitimate geometry, not bleed. Recorded because an eye-only pass would have
+  called it a residual bug.
+
+### C. WHAT THE ORCHESTRATOR/OWNER OWES — the flip, and its gate
+**I did not flip the default (I7 / PRE §7).** Recommended: `punchSidedness` → default
+`on`. It restores retail's own first reject from the real wire bit (measured
+15,186/15,186 and 1,840,177/1,840,177 parity, zero on-plane); the r5 regression that
+made people wary was the **AABB-centre `heuristic` arm**, which this does not touch.
+Gate it should pass first:
+1. **an owner-rig eye pass** — every verdict here is a **T4/Linux/EGL** arm, and §-10 B
+   records the Yaraq indoor bleed reproducing on the owner's rig and a Mesa/Intel laptop
+   but *not* on the T4. This needs his ratification, not mine.
+2. **a ground-level doorway-reveal check** — confirm the gate does not cull a near-side
+   doorway. I have no frame isolating a single doorway.
+3. `_portalPunchDiag.gates.sidednessSource` must read **`"flag"`**. If `pkg/` is stale it
+   reads `"unavailable"` and gates NOTHING — the flip would be a no-op that looks like a fix.
+
+**What the flip does NOT fix:** retail's other two rejects are still absent, so an
+aperture on the correct side but occluded by a *different* building can still punch. A
+full answer is a `PView` port — a redesign, not attempted.
+
+### D. SCREENSHOTS — 12 files taildropped to `redmi-note-13-5g`
+5 before/after pairs (`over-45`, `se-mid`, `s-low`, `over-hi`, `e-low`) + 2 composites.
+**Read `s12-B-holtburg-roof-THREEWAY.png` first**: punch=off | sidedness=off |
+sidedness=on on one roof — the orange window aperture sits on the slates in the middle
+panel only. `tailscale file cp` returned rc 0 for all 12, each warning
+`redmi-note-13-5g is not replying; trying anyway` (handset asleep; Taildrop queues).
+**This box cannot confirm delivery, only acceptance for transfer.**
+
+### E. NOT DONE, AND WHY
+Priorities 2 and 3 are recorded at the end of the report. The lane was preempted twice
+and PRIORITY 1's screenshots — the owner's explicit requirement — were spent first.
+
+---
+
 ## -11. 2026-08-11 (night) — CTX-LOSS-MIRRORS ROOT-CAUSED AND FIXED; TWO BLIND SPOTS INSTRUMENTED
 
 Unattended orchestrator session, owner away, owner-authorised to commit and push.
