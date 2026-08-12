@@ -4,6 +4,158 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -12. 2026-08-11/12 (overnight) — THREE LANES, TWO RETRACTIONS, ONE FLAG FLIPPED AND UNFLIPPED
+
+Owner-directed multi-agent night, run from a laptop orchestrator session. He was present
+early, went to bed at the end, and mid-run changed the standing policy: **"we should be
+commiting, pushing, merging to origin/master, defaulting as we go and as it makes sense,
+its hard to keep up with manually, as you can see stuff is default off that should be
+on."** So merges to master and earned default flips are now the orchestrator's to make.
+This section is written to that standard: the wins are here, and so are the two places
+tonight's own conclusions were overturned.
+
+**`origin/master` is `e8a94405`.** Everything below is merged into it; every branch was
+compile-checked and suite-verified before it landed.
+
+### A. THE HEADLINE THE OWNER ASKED FOR — portal bleed-through, root-caused
+He reported: *"the sideportalpunch is making windows visible through roofs, walls etc."*
+Root cause (lane B, `e45c9821`): retail's `PView::ConstructView` reaches its far-punch
+call past **THREE** rejects — sidedness (acclient.c:462519-462541), `GetClip` +
+`if (!ppoly) return 0` (:462542-462544), and `CEnvCell::GetVisible` + `Render::copy_view`
+(:462545-462554). **We implement ONE.** wasm selection is frustum-only; the sole
+occlusion gate in the JS chain is `terrainRayBlocked` (portal_clip.js:323-408), which
+samples the terrain HEIGHTFIELD — *and a roof is not terrain*. The punch material is
+`AlwaysDepth` (portal_punch.js:102) writing FAR_DEPTH, so an aperture behind a roof
+overwrites that roof's DEPTH while its COLOUR stays. **Structural, not tuning.**
+12 frames taildropped; the headline is `s12-B-holtburg-roof-THREEWAY.png` —
+`portalPunch=off | sidedness=off | sidedness=on` — where the aperture sits on the roof
+slates in the MIDDLE panel alone, so the claim is *"on matches no-punch"*, not the weaker
+*"on looks better than off"*.
+
+### B. ⚠ I FLIPPED `punchSidedness` DEFAULT-ON, THEN REVERTED IT THE SAME NIGHT
+`421cdf0a` flipped it; **`e8a94405` put it back to default-OFF.** Read both before
+touching this. The flip's reasoning was sound and still is: the gate stopped being
+speculative when PORTAL-FLAGS-DECODE showed `CellPortal.flags` bit 1 IS retail's
+`portal_side` (stored INVERTED, acclient.c:362389, which is why neither ACE nor DRW
+carries it), exact on **15,186/15,186** outdoor-facing portals.
+
+What killed it is what the flip itself recorded as a residual risk — the **converse**
+case, a ground-level doorway where the punch MUST happen — plus two things lane B then
+found **in its own prior data**:
+1. its earlier `n-low` row reads **8 offered / 0 kept / 8 BACKFACE** — a GROUND-LEVEL
+   camera where the gate culled EVERY aperture — and nothing adjudicates whether those 8
+   were legitimately far-side or a regression. *That row was already on disk when I
+   flipped, and I did not weigh it.*
+2. the 15,186/15,186 parity is measured in **DAT space**; the live gate applies the plane
+   in **AC WORLD space** after the wasm→world transform. **A reflection anywhere in that
+   link silently INVERTS the gate while DAT-space parity still reads perfect.** Unchecked.
+
+Neither proves the flip wrong; both prove it **unmeasured in the direction that matters**.
+An over-cull at ground level is worse and far more visible than the roof bleed it fixes,
+so with the owner asleep the default returned to the state he knows. `?punchSidedness=on`
+reproduces the fix in one param. **THIS IS THE NEXT SESSION'S FIRST JOB** — the
+instruments are already on master: `impl/portal-bleed-harness/{mkprobe,mkaudit}.mjs`.
+Note lane B's own methodological point: seven ORBIT cameras at elevation 18–62° all look
+DOWN at rooftops and **cannot** find a ground-level cull. Do not settle this with more of
+those frames.
+
+### C. ⚠ ORACLE DEFECT #1 IS OPEN AGAIN — the "proof" was reading a FOSSIL
+`6e87563b` claimed defect #1 PROVEN by reading both lanes "at the SAME millisecond, in
+the SAME session" (snapshot `aug_joat 1 / skill 110` vs per-tick `aug_joat null / skill
+105`, invariant over 99 ticks). **`5ae4efd6` retracts it.** `playerRunRateInputs`
+(lib.rs:40794) returns a thread_local `LATEST_RUN_RATE_INPUTS_JSON`, written in exactly
+one place (lib.rs:41176, inside `publish_player_stats_snapshot`) whose only two call sites
+(lib.rs:44523, :50680) both fire on `stats_changed`. The per-tick lane (lib.rs:53776)
+reads the world LIVE, and both reach the same `WorldState` through the same
+`Rc<RefCell<..>>`. **The two numbers were read at the same millisecond but never produced
+at the same millisecond** — the snapshot is a fossil of the last stats delta. The tell was
+in the row all along: `burden 0` vs `0.12216666`. It was flagged as "a second thread worth
+pulling"; it was actually the evidence the rows came from different moments.
+So: **entity-alive-vs-property-gone is NOT settled.** `5ae4efd6` lands the instrument that
+can name the culprit. Do not build on `6e87563b`'s conclusion.
+
+### D. GFXOBJ RELIEF — the owner's "we don't have our gfxobj textures working"
+**Answer: not armed. Nothing is broken.** Bare boot already has relief ON (`gfxRelief`,
+`mid` preset). But `?packSource=on&geomBundles=on` **forces gfxRelief OFF** (the client
+logs `[geomBundles] forcing gfxRelief OFF`), and `?reliefBundles=on` — DEFAULT-OFF per
+I7 — is what arms the BAKED variants (`variantRowsResident: 104`). **If you boot the
+hi-res BC7 migration arm (`?texCompressedOnly` structurally requires `?packSource`) you
+are looking at a deliberately flat world.**
+Census re-derived from pack BYTES, not `pack-report.json`: **1,417 of 7,498 models
+(18.9 %)**, 2,179 GEOMR rows, +252,740 triangles, and **153 of 162 buildings around
+Holtburg (94 %)** carry a variant — so the queue's "83/796 ≈ 10 %" describes the bounded
+bake, not this dist. The close-up nobody had done (cottage `0x0100082E`, 90→282 tris):
+the difference is **entirely thin lines** on eaves, ridges, corners; **wall faces are
+byte-identical**; 2.46 % of pixels at 22 m but **0.21 % at 6 m** — closer is LESS visible.
+What ships is a **6 cm × 5 cm bevel on convex edges** (`gfxSubdivLevel` is 0 on every
+tier; per-texel displacement retired). The expectation gap is real but it is a **design
+gap predating this work, not a bug** — and sparsity was never the main reason, the KIND
+of change is.
+Also fixed (`47d0c950`): `__diag.geometry.relief` could never be read — `geom_bundles.js`
+and `diag/geometry.js` both installed on `window.__diag.geometry` with WHOLE-OBJECT
+assignment, last write won, so a gate FUNCTION sat where the data field belonged (and,
+being a function, vanished silently from any JSON capture, taking `bundles.*`,
+`entityDecode.*` and `geomFallback.*` with it). They compose now; the gate is
+`reliefGate()`. `test_geom_bundles` 78 → 91.
+
+### E. ALSO LANDED
+- **CTX-LOSS-MIRRORS closed live on the T4**, and `__restoreContext()` fixed: it re-fetched
+  `WEBGL_lose_context` off the LOST context, so it could only ever take its
+  "extension unavailable" branch — **the one call the whole context-loss verification
+  cycle depends on was unreachable by construction.** The client's recovery path was
+  always fine; nothing was asking it to recover.
+- **LB-crossing hypothesis 1 DELETED** by the control arm nobody had run: crossing WITHOUT
+  a preceding `@teleloc` shows no stall. On the T4 the card's own crossing ran **2766 ms —
+  faster than steady state**, `maxLagMs 220`. A different signal exists: the landblock-
+  GROUP boundary `0x977b0010→0x977c0009` at ~5000 ms twice. ⚠ A 29,116 ms reading from
+  that hunt is a **known artifact** (the cell watchdog logs only on CHANGE, so its first
+  sample is not key-down) — flagged do-not-quote.
+- **Retention de-escalated**: `pack_fetch_controller` never deletes a settled success
+  entry, but it is gated behind `?packSource` (default OFF) and the module isn't even
+  imported on a default boot. Forced on: 11.37 → 11.44 MB over a teleport + 60 s walk. The
+  1.3 MB payloads are `pvw` and do NOT grow with movement; only `tiles` accumulate at
+  ~5.3 KB. ≈4 MB/hour of walking — order of magnitude off ONE 60 s sample, not a budget.
+- **diag-schema's six standing reds cleared** (63/6 → 69/0): all evidence-line drift of
+  +13…+25, surfaces never moved.
+
+### F. INFRASTRUCTURE — READ THIS BEFORE PLANNING A LONG RUN
+- **The buildbox is in `us-central1-b`, NOT `us-central1-a`.** Moved this night.
+  ⚠ `memory/fleet-runbooks.md` still says `-a` and is READ-ONLY to the orchestrator —
+  **the owner must fix it** or every future session is sent to an empty zone. Move recipe
+  and its gotchas are in the laptop project's `memory/buildbox-zone-move.md`.
+- **SPOT preempted the box FIVE times in ~5 hours** (four in `-a`, one within minutes of
+  the move to `-b`). The zone change did NOT fix it. **This is the dominant failure mode
+  and it killed the punchSidedness verdict.** Per-step commit-and-push is the only reason
+  nothing was lost — every lane recovered from its worktree or from GitHub. If overnight
+  runs matter more than ~$0.40/hr, **on-demand is the answer**; provisioning model is
+  immutable, so it needs another delete-and-recreate keeping the disk. A GPU step-down is
+  NOT the answer: P4 is *more* expensive than T4 (~$0.60 vs ~$0.35/hr on-demand), weaker,
+  and on the retirement path. `us-central1-c` was STOCKED OUT for T4 spot on the night.
+- A **kernel auto-upgrade** (6.1.0-49 → -52) left `nvidia-smi` dead after one restart;
+  fix is `apt install linux-headers-$(uname -r)` + `/usr/sbin/dkms autoinstall -k
+  $(uname -r)` (`dkms` lives in /usr/sbin, off the non-login PATH). A *zone move* does NOT
+  need this — the module survives it.
+- **`node_modules` going missing makes every `three`-importing suite die at module
+  resolution BEFORE asserting, which an exit-code reader scores as a PASS.** Always
+  confirm a suite's assertion count moved.
+- Three separate `pkill -f <pattern>` self-kills cost real time — the pattern matched the
+  killer's own command line. **Kill by PID**, or use the `orch-s1[2]` bracket trick.
+
+### G. STATE / RANKED NEXT
+Suites at `e8a94405`: diag-schema **69/0**, geom-bundles **91/0**, pack-fetch-controller
+**100/0**, tex-compressed-only **115/0**, cell-fusion **20/0**; `cargo check -p
+holtburger-web --target wasm32-unknown-unknown` clean (15 warnings).
+1. **Settle `punchSidedness`** (§B) — instruments on master; ground-level cameras, and
+   check the wasm→world transform for a reflection. Then re-flip or leave off, with the
+   converse case measured either way.
+2. **ORACLE #1 from scratch** (§C) — the fossil-vs-live distinction is the whole game.
+3. The `burden` 0 vs 0.12216666 discrepancy — same bug or different? Nobody knows.
+4. Owner decision: **relief is a 6 cm bevel** (§D). Is that the intended look? If not,
+   `gfxSubdivLevel`/`gfxReliefScale` are the levers and per-texel displacement was retired.
+5. The landblock-GROUP ~5 s boundary (§E).
+6. Still owner-gated and untouched: Q75-ELECTION, E1-RATIFICATION, PREVIEW-FEED-REKEY,
+   ratification of the 13 T4 frames, everything 1070.
+
 ## -12B. 2026-08-12 (night, lane B of 2) — THE OWNER'S PORTAL BLEED-THROUGH, ROOT-CAUSED; THE FIX IS A FLAG THAT IS ALREADY DEFAULT-OFF
 
 Branch **`orch/s12-portal`**, cut from `c53a4448`. Master untouched, no flag default
