@@ -169,7 +169,51 @@ pub struct WorldState {
     /// because each entry corresponds to exactly one live entity and is
     /// pruned on entity delete.
     pub(crate) prior_wielders: std::collections::HashMap<u32, u32>,
+    /// ORACLE open defect #1 (2026-08-12) — see [`AugTraceEntry`]. Append-only,
+    /// capped at [`AUG_TRACE_CAP`]; keeps the FIRST N transitions because the
+    /// loss is in the login window, not the steady state.
+    pub(crate) aug_trace: Vec<AugTraceEntry>,
+    pub(crate) aug_trace_seq: u32,
 }
+
+/// ORACLE open defect #1 (2026-08-12) — the trace that names the culprit.
+///
+/// `AugmentationJackOfAllTrades` is present in the login `PlayerDescription`
+/// dump and reads back ABSENT from `player_entity().properties` by the time
+/// the movement lane composes a run rate (measured: `aug_joat null` invariant
+/// over 423 ticks, `player_entity_present true` throughout). Every individual
+/// mutation path reads correct in isolation — `upsert_entity_from_create`
+/// merges the stash under a re-create, `WorldObjectProperties::merge` is
+/// key-wise `extend`, and the `PrivateRemove*Event` family is decoded then
+/// DISCARDED as `GameMessage::Unknown` — so static reading cannot name it and
+/// the defect must live in an interaction between paths.
+///
+/// Rather than guess a site, this records the transition at the SINGLE choke
+/// point every wire message passes through (`WorldState::handle_message`), so
+/// whichever path drops the property names ITSELF. `site` is the `GameMessage`
+/// variant that was being applied when the value changed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AugTraceEntry {
+    /// The `GameMessage` variant applied when the value changed.
+    pub site: String,
+    /// Bag value before / after the message. `None` = absent from the bag.
+    pub before: Option<i32>,
+    pub after: Option<i32>,
+    /// Whether `player_entity()` resolved before / after — distinguishes
+    /// "the entity went" from "the property went".
+    pub entity_before: bool,
+    pub entity_after: bool,
+    /// The login stash's value at the moment of the transition. The stash and
+    /// the bag are written by the same function, so `stash: Some(1)` beside
+    /// `after: None` is a client-side wipe with a named victim.
+    pub stash: Option<i32>,
+    /// Monotonic message index since world creation.
+    pub seq: u32,
+}
+
+/// Cap on [`WorldState::aug_trace`]. Small on purpose: this is a diagnostic
+/// on the shipped lane, and the login window is only a few dozen transitions.
+pub const AUG_TRACE_CAP: usize = 64;
 
 impl WorldState {
     pub fn player_entity(&self) -> Option<&Entity> {
@@ -390,8 +434,62 @@ impl WorldState {
     /// keeping routing separate from the state model itself.
     pub fn handle_message(&mut self, msg: &GameMessage) -> Vec<WorldEvent> {
         let mut events = Vec::new();
+        // ORACLE open defect #1 (2026-08-12) — probe the local player's
+        // augmentation across EVERY wire message. Two map lookups per message
+        // in the steady state; the (expensive) Debug format of the message
+        // only runs on an actual transition, of which a session has a handful.
+        let aug_before = self.aug_probe();
         crate::handlers::handle_message(self, msg, &mut events);
+        if self.aug_probe() != aug_before {
+            // Variant name only — `GameMessage`'s Debug carries the whole
+            // payload and we want a label, not a packet dump. Only formatted
+            // on an actual transition, of which a session has a handful.
+            let rendered = format!("{msg:?}");
+            let site = rendered.split(['(', ' ', '{']).next().unwrap_or("?");
+            self.note_aug_transition(site, aug_before);
+        }
         events
+    }
+
+    /// ORACLE open defect #1 — `(bag value, entity resolves)` for the local
+    /// player's `AugmentationJackOfAllTrades`. Reads the SAME funnel
+    /// `get_player_int_property` uses (`player_properties()`), so a `None`
+    /// here is exactly the `None` the run-rate composition saw.
+    pub(crate) fn aug_probe(&self) -> (Option<i32>, bool) {
+        (
+            self.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+            self.player_entity().is_some(),
+        )
+    }
+
+    /// Record a transition of the probe above. Callers check for movement
+    /// first so the (expensive) site label is only built when something moved.
+    pub(crate) fn note_aug_transition(&mut self, site: &str, before: (Option<i32>, bool)) {
+        let after = self.aug_probe();
+        self.aug_trace_seq = self.aug_trace_seq.wrapping_add(1);
+        if before == after || self.aug_trace.len() >= AUG_TRACE_CAP {
+            return;
+        }
+        let site: String = site.chars().take(48).collect();
+        let stash = self
+            .player_description_properties
+            .as_ref()
+            .and_then(|p| p.get_int_prop(PropertyInt::AugmentationJackOfAllTrades));
+        let seq = self.aug_trace_seq;
+        self.aug_trace.push(AugTraceEntry {
+            site,
+            before: before.0,
+            after: after.0,
+            entity_before: before.1,
+            entity_after: after.1,
+            stash,
+            seq,
+        });
+    }
+
+    /// ORACLE open defect #1 — read side of [`Self::aug_trace`].
+    pub fn aug_trace(&self) -> &[AugTraceEntry] {
+        &self.aug_trace
     }
 
     pub fn set_server_time_sync(
@@ -549,6 +647,8 @@ impl WorldState {
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
             prior_wielders: std::collections::HashMap::new(),
+            aug_trace: Vec::new(),
+            aug_trace_seq: 0,
         }
     }
 

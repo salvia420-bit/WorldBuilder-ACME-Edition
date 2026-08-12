@@ -40840,6 +40840,37 @@ pub fn player_entity_props_export() -> String {
         if s.is_empty() { "{}".to_string() } else { s.clone() }
     })
 }
+
+// ORACLE open defect #1 (2026-08-12): the trace that names the culprit.
+// `playerEntityProps` and `playerRunRateInputs` are both refreshed by
+// `publish_player_stats_snapshot`, i.e. on a stats delta — which is why the
+// s12A capture read `aug_joat 1` from the snapshot lane and `null` per tick at
+// the "same millisecond": the snapshot was a FOSSIL of the last delta (burden
+// 0, pre-inventory), not a simultaneous read of the same state. The trace below
+// is refreshed in the TICK, so it cannot lie about when.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static LATEST_AUG_TRACE_JSON: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
+    static LATEST_AUG_TRACE_LEN: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// ORACLE open defect #1 (2026-08-12) — free wasm export: every observed
+/// transition of the local player's `AugmentationJackOfAllTrades` in the LIVE
+/// entity bag, each tagged with the `GameMessage` variant that was being
+/// applied when it moved. JSON array of
+/// `{seq, site, before, after, entityBefore, entityAfter, stash}`.
+///
+/// Read it the same way as `playerRunRateInputs` — through
+/// `liveScene3d.entityManager.wasmExports`, NOT `window.__hbWasm`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = playerAugTrace)]
+pub fn player_aug_trace_export() -> String {
+    LATEST_AUG_TRACE_JSON.with(|c| {
+        let s = c.borrow();
+        if s.is_empty() { "[]".to_string() } else { s.clone() }
+    })
+}
 #[cfg(target_arch = "wasm32")]
 const RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.5;
 #[cfg(target_arch = "wasm32")]
@@ -53530,6 +53561,42 @@ async fn recv_loop(
                         *collision_scene.borrow_mut() = w.scene.clone();
                         *terrain_heights_shadow.borrow_mut() =
                             w.terrain_heights_snapshot();
+
+                        // ORACLE open defect #1 (2026-08-12): publish the
+                        // augmentation trace. UNCONDITIONAL (not gated on
+                        // `?moveTelemetry=1`) because the transition happens in
+                        // the login window, before any capture flag has been
+                        // read — but it re-serializes ONLY when the trace grew,
+                        // so the steady-state cost is a length compare. The
+                        // trace is capped at `AUG_TRACE_CAP` in the world crate,
+                        // so this cannot grow without bound.
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let trace = w.aug_trace();
+                            let grew = LATEST_AUG_TRACE_LEN
+                                .with(|c| c.get() != trace.len());
+                            if grew {
+                                LATEST_AUG_TRACE_LEN.with(|c| c.set(trace.len()));
+                                let rows: Vec<serde_json::Value> = trace
+                                    .iter()
+                                    .map(|e| {
+                                        serde_json::json!({
+                                            "seq": e.seq,
+                                            "site": e.site,
+                                            "before": e.before,
+                                            "after": e.after,
+                                            "entityBefore": e.entity_before,
+                                            "entityAfter": e.entity_after,
+                                            "stash": e.stash,
+                                        })
+                                    })
+                                    .collect();
+                                LATEST_AUG_TRACE_JSON.with(|c| {
+                                    *c.borrow_mut() = serde_json::to_string(&rows)
+                                        .unwrap_or_else(|_| "[]".to_string())
+                                });
+                            }
+                        }
 
                         // Workstream A (3D camera/game-feel fix): fan
                         // out the local player's authoritative pose to
