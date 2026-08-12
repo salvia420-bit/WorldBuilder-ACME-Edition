@@ -14,6 +14,7 @@ an INSTRUMENT story, and the defect verdict only makes sense after it.**
 | question | answer |
 |---|---|
 | Is ORACLE #1 real? | **YES — confirmed against the retail oracle with exact arithmetic**, not a fossil artifact. |
+| Where is the augmentation lost? | **NAMED AND FIXED.** The wasm recv loop replaces the populated player entity with a bare `Entity::new`. §3.1. |
 | Was the "same millisecond" proof (`6e87563b`) valid? | No. `5ae4efd6`'s retraction was right to kill it. |
 | Was the retraction's replacement instrument valid? | **No — it was blind.** It was hooked on a function the live client never calls, and it was not reachable from JS at all. Both fixed here. |
 | Is the `burden` discrepancy a second defect? | No — same staleness. But it exposes a **worse** property of that lane than "stale": see §4. |
@@ -138,15 +139,59 @@ the correct value independently.
 
 ## 3. What is NOT yet named, and one thing that is
 
-### 3.1 Still open: where the augmentation is lost
+### 3.1 NAMED — the wasm recv loop replaces the player entity
 
-The repaired trace had not run in a browser at the time of writing (§7).
-What is already excluded by measurement rather than reading:
+With the hook repaired and the wasm rebuilt, the trace **fires live** and
+holds exactly one entry:
 
-* Not the ObjectCreate path (§-11 §C, and `5ae4efd6`'s test).
-* Not "the entity went" — `player_entity_present` is true on every tick.
-* Not "the stash lost it" — `augJoatStash: 1`, and stash and live bag share
-  all 7 keys.
+```json
+{"seq":1,"site":"GameEvent","before":null,"after":1,
+ "entityBefore":false,"entityAfter":true,"stash":1}
+```
+
+The augmentation **arrives and is never removed by any wire message or by the
+sweep** — while the same tick's telemetry reads `aug_joat: null`. Those two
+facts together exclude every hooked path and point outside them. The culprit:
+
+```rust
+// apps/holtburger-web/src/lib.rs:45254-45263 (pre-fix)
+if !entity_seeded {
+    let entity = Entity::new(*player_guid, "LocalPlayer", pose);
+    w.add_entity(entity);          // <- wholesale REPLACE
+    entity_seeded = true;
+}
+```
+
+`add_entity` is `entities.insert` (`state/types.rs:1457`) is `HashMap::insert`
+(`entity.rs:1394-1396`) — a replace, with no merge and no re-seed from
+`player_description_properties`. The guard asks *"have I done this yet"*,
+never *"does the world already have a player entity"*. When the login
+`PlayerDescription` has already built the real entity, this drops the whole
+bag.
+
+**Every observed signature falls out of it**, which is the reason to believe
+it rather than merely to find it plausible:
+
+| observation | explained by |
+|---|---|
+| aug present, then absent, with **no** trace entry | runs in the recv loop — neither `routing::handle_message` nor the `tick()` sweep, the only two probe sites |
+| `player_entity_present: true` throughout | the entity is **replaced**, not removed. "Entity alive, property gone" was always the right shape; what was missing was a path that produces it |
+| `augJoatStash: 1` | `player_description_properties` is untouched here |
+| `run_skill_wire 105`, `quickness 100`, `burden 0.122` **all still correct in the same tick** | those live on `PlayerState`, not the entity bag. **Only entity-bag int properties die — and augmentations are entity-bag int properties.** |
+| `entityBefore: false -> true` on the seed | `PlayerDescription` created the entity FIRST, so the later `UpdatePosition` seed is a clobber, not a benign first write |
+
+That fourth row is what rules out the alternatives: a stale read, or two
+different worlds, would not spare *exactly* the non-bag fields.
+
+Also excluded, by measurement rather than reading: not the ObjectCreate path
+(§-11 §C and `5ae4efd6`'s test — and `upsert_entity_from_create`
+(`liveness.rs:399-428`) genuinely does fall back to the stash and merge, read
+this session); not "the entity went"; not "the stash lost it".
+
+**Fix (`34d55412`):** build an entity only when the world does not already
+have one; when it does, take the pose and keep the bag. The `entity_seeded`
+latch still arms, so the existing reconcile branch owns later
+`UpdatePosition`s unchanged.
 
 ### 3.2 The live lane and the snapshot lane call the SAME function
 
@@ -274,13 +319,30 @@ a live, bounded question, and I am not naming a constant I have not read.
 
 ## 7. What I could NOT verify
 
-* **Where the augmentation is lost.** Named nothing. The repaired trace's
-  first browser run is §8 (below); if that section is absent or empty, it did
-  not happen.
-* **`cargo test -p holtburger-core`** (the 643/0 movement gate) — not run.
+* **`cargo test -p holtburger-web --lib`** — not run. It carries one
+  pre-existing failure per the session-3 report; I did not re-confirm it.
 * `test_pack_fetch_region`, `test_xu7_transcode`, `harness/test_build_shell`
   — **cannot run here** (`/mnt/wbterminal2` absent). Not reported green.
 * **No retail client was launched this session.** Every retail number quoted
-  is from the committed session-3 capture, not re-measured.
+  is from the committed session-3 capture, not re-measured. The oracle rig
+  (Wine/Xvfb/relays) was never stood up — the retail side of this report is
+  documentary, not fresh measurement.
 * **No flag default was moved.**
 * The ~1 % diagonal residual (§5) is unexplained.
+* **MOVE-F6 was not re-measured after the fix.** The strafe delta in §5 was
+  taken with the augmentation missing on holtburger's side, so its
+  common-mode term will move once §3.1's fix is in a capture. The numbers in
+  §5 should be re-taken before anyone acts on the ~1 % residual.
+
+Suites re-run this session, counts confirmed moved rather than assumed:
+`holtburger-world` **690/0** (688 baseline + 1 from `5ae4efd6` + 1 added
+here), `holtburger-core --lib` **643 passed / 0 failed / 1 ignored**.
+`cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
+
+---
+
+## 8. Post-fix verification
+
+See the final commit on this branch. If this section says nothing below this
+line, the post-fix capture did not run and the fix in §3.1 is
+**reasoned-and-typechecked but not observed live** — treat it accordingly.
