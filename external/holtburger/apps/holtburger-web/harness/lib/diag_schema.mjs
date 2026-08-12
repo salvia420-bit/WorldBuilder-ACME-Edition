@@ -102,9 +102,9 @@ export const REGISTRY = Object.freeze([
     name: "__bc7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1412",
+    evidence: "scene3d/bc7_textures.js:1424",
     availability: "in-world",
-    note: "Module tally bc7Stats() (bc7_textures.js:843-855) + source residency. "
+    note: "Module tally bc7Stats() (bc7_textures.js:947-959) + source residency. "
       + "Retained legacy surface; full-tier texture machinery re-homes at ST5.",
     fields: {
       fetches: C("count"), hits: C("count"), absent: C("count"),
@@ -124,7 +124,7 @@ export const REGISTRY = Object.freeze([
     name: "__xu7Stats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:1413",
+    evidence: "scene3d/bc7_textures.js:1425",
     availability: "in-world",
     note: "xu7Stats() in scene3d/xu7_textures.js:142-211 (budgeted-FIFO tally). "
       + "decodeMs is cumulative main-thread transcode ms but NOT attribution-"
@@ -668,7 +668,7 @@ export const REGISTRY = Object.freeze([
     name: "__texStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/bc7_textures.js:972",
+    evidence: "scene3d/bc7_textures.js:983",
     availability: "boot",
     note: "Texture tier/worker surface — LANDED at T15 (ST5, "
       + "`?texCompressedOnly`; texStats() in bc7_textures.js, window-installed "

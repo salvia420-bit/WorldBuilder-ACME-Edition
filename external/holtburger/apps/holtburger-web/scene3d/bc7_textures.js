@@ -101,9 +101,21 @@ export function flagIsOff(v) {
 }
 
 let _flag;
-/** `?texBc7=on` — EXACT-MATCH opt-in (`on`/`1`/`true`/`yes`). Absent, empty,
- *  or any other value reads OFF. Pass `search` explicitly in worker context;
- *  defaults to the page's own query string. */
+/** `?texBc7=off` — DEFAULT-ON opt-OUT. Only `off`/`0`/`false`/`no` disable it;
+ *  absent, empty, and every other value (including `on`) read ON. Pass
+ *  `search` explicitly in worker context; defaults to the page's own query
+ *  string.
+ *
+ *  This docstring used to say "EXACT-MATCH opt-in ... absent reads OFF",
+ *  describing the pre-2026-07-30 behaviour — it was left stale by the
+ *  default-on flip below and contradicted the code 10 lines under it.
+ *  HANDOFF-relief-v2-2026-07-31 §1 then built its "everything low-res"
+ *  diagnosis on the stale text, blaming a missing `?texBc7=on` for unfetched
+ *  BC7 payloads, and two later investigations inherited the error. Measured
+ *  2026-08-12 on a T4 in the real page: absent=ON, `on`=ON, `1`=ON,
+ *  `banana`=ON, `off`=OFF. The 07-30 shots were starved by the stale
+ *  `bc7-webroot/.../dist` symlink 404ing every shard, which is a SERVING
+ *  fault; the URL never had anything to do with it. */
 export function bc7Enabled(search) {
   if (_flag !== undefined && search === undefined) return _flag;
   // DEFAULT-ON since 2026-07-30 (1070, Dryreach, quality=mid, 400 frames/arm:
