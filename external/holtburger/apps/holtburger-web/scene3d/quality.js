@@ -128,8 +128,22 @@ export const PRESETS = {
         pomStepsSelfShadow: 0,
         // statPom — the ATLAS-side parallax (static_atlas.js): marches the
         // per-surface seam-height field packed into the nra alpha channel.
-        // `low` exists to not pay per-fragment dependent-fetch loops.
-        statPom: false,
+        // `low` exists to not pay per-fragment dependent-fetch loops -- but statPom
+        // is ON here since 2026-08-12 (owner-directed: "all of this stuff should be
+        // default on"). Rationale, and the honest risk:
+        //   * the CONTENT-FOLLOWING relief (the "dents follow the art" fix, 05df3eb6)
+        //     does NOT depend on this -- it rides gfxRelief + normalMaps, both already
+        //     true on every tier. statPom adds the ray-marched DEPTH on top.
+        //   * the owner's own laptop probes to `low` (detectGpuTier deny-list), so with
+        //     this false he was the one user who never saw the parallax half.
+        //   * MEASURED on that exact class of silicon (Intel HD 520, live textured
+        //     client, quality pinned mid so statPom was ON): 9.40 fps vs 9.65 with
+        //     relief off -- it runs, on the weakest rig in the fleet.
+        // RESIDUAL RISK: this is the protective tier and POM is a per-fragment
+        // dependent-fetch march; 9.4 fps is already GPU-bound elsewhere, so that
+        // measurement is a weak instrument for the marginal cost. `?statPom=off` is the
+        // escape hatch and restores the previous behaviour exactly.
+        statPom: true,
         csm: false,
         bloom: false,
         vignette: false,
