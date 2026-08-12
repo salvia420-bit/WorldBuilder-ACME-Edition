@@ -45253,7 +45253,40 @@ async fn recv_loop(
                                 // and sequences to work with.
                                 if let Some(w) = world.borrow_mut().as_mut() {
                                     let pose = data.pos.pos;
-                                    if !entity_seeded {
+                                    // ORACLE open defect #1 (2026-08-12) — THE WIPE.
+                                    //
+                                    // `entity_seeded` is a local "have I done this
+                                    // once" latch, not a question about the world. If
+                                    // the login `PlayerDescription` already built the
+                                    // real player entity — properties and all —
+                                    // `add_entity` below REPLACED it with a bare
+                                    // `Entity::new`, because `add_entity` is
+                                    // `entities.insert` is `HashMap::insert`
+                                    // (`state/types.rs:1457`, `entity.rs:1394-1396`):
+                                    // a wholesale replace with no merge and no re-seed
+                                    // from `player_description_properties`.
+                                    //
+                                    // That is the whole defect. It drops every INT
+                                    // property on the player bag, `AugmentationJackOf-
+                                    // AllTrades` among them, which is why the movement
+                                    // lane composes Run 105 while retail composes 110.
+                                    // Skills/attributes/burden survive because they
+                                    // live on `PlayerState`, not in the entity bag —
+                                    // exactly the observed shape (`run_skill_wire 105`,
+                                    // `quickness 100`, `burden 0.122` all fine, only
+                                    // the augmentations gone).
+                                    //
+                                    // It is invisible to the aug trace because it runs
+                                    // HERE, in the wasm recv loop — neither
+                                    // `routing::handle_message` nor the `tick()` sweep,
+                                    // the two places the probes live. Measured: the
+                                    // live trace holds exactly one entry, the
+                                    // `null -> 1` seed, and never a `1 -> null`.
+                                    //
+                                    // So: only build an entity when the world does not
+                                    // already have one. When it does, the pose is all
+                                    // this branch was ever really contributing.
+                                    if !entity_seeded && !w.entities.contains(*player_guid) {
                                         let entity =
                                             holtburger_world::entity::Entity::new(
                                                 *player_guid,
@@ -45268,6 +45301,16 @@ async fn recv_loop(
                                             u32::from(pose.landblock_id),
                                             pose.coords.x, pose.coords.y, pose.coords.z,
                                         ));
+                                    } else if !entity_seeded {
+                                        // Entity already exists (the PlayerDescription
+                                        // path built it). Take the pose, keep the bag,
+                                        // and latch so the branch below owns subsequent
+                                        // UpdatePositions exactly as before.
+                                        let _ = w.set_local_player_runtime_pose(pose);
+                                        entity_seeded = true;
+                                        console_log_str(
+                                            "[step 3.6] player entity already present (PlayerDescription) — seeded pose only, property bag preserved",
+                                        );
                                     } else if !wire_state_packs_stage1_on {
                                         // A13-W1 (2026-06-11): this whole
                                         // reconcile branch is the legacy
