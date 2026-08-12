@@ -1,0 +1,56 @@
+{
+ "arm": "s12b-packsrc",
+ "url": "http://127.0.0.1:8772/apps/holtburger-web/index.html?nosw=1&autoLogin=1&autoSpawn=first&agent=1&renderScale=1&camDebug=on&packSource=on&account=agentp09&password=agentp09&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F",
+ "port": 9342,
+ "outDir": "/home/wbterminal/fanout-s12/B/eyetest-B/out",
+ "viewport": [
+  1280,
+  800
+ ],
+ "hardTimeoutMs": 900000,
+ "steps": [
+  {
+   "op": "plateau",
+   "minLbs": 10
+  },
+  {
+   "op": "eval",
+   "name": "censusBoot",
+   "expr": "(()=>{const f=window.__hbFetch;if(!f)return '<absent>';const lanes={};let bytes=0;for(const k in f.lanes){lanes[k]={done:f.lanes[k].done,bytes:f.lanes[k].bytes};bytes+=f.lanes[k].bytes;}const comp={};for(const k in f.byComponent){const c=f.byComponent[k];if(c.requests)comp[k]={requests:c.requests,mb:+(c.bytes/1048576).toFixed(2)};}return {totalMB:+(bytes/1048576).toFixed(2),forgotten:f.forgotten,retries:f.retries,lanes,comp};})()"
+  },
+  {
+   "op": "eval",
+   "name": "entryCensusBoot",
+   "expr": "(()=>{const f=globalThis.__hbFetch;if(!f)return '<absent>';return {keys:Object.keys(f)};})()"
+  },
+  {
+   "op": "chat",
+   "text": "@teleloc 0x977B000C 25.81 73.85 0.0",
+   "settleMs": 16000
+  },
+  {
+   "op": "plateau",
+   "minLbs": 5
+  },
+  {
+   "op": "key",
+   "action": "down",
+   "key": "w",
+   "ms": 60000
+  },
+  {
+   "op": "key",
+   "action": "up",
+   "key": "w"
+  },
+  {
+   "op": "wait",
+   "ms": 4000
+  },
+  {
+   "op": "eval",
+   "name": "censusAfter",
+   "expr": "(()=>{const f=window.__hbFetch;if(!f)return '<absent>';const lanes={};let bytes=0;for(const k in f.lanes){lanes[k]={done:f.lanes[k].done,bytes:f.lanes[k].bytes};bytes+=f.lanes[k].bytes;}const comp={};for(const k in f.byComponent){const c=f.byComponent[k];if(c.requests)comp[k]={requests:c.requests,mb:+(c.bytes/1048576).toFixed(2)};}return {totalMB:+(bytes/1048576).toFixed(2),forgotten:f.forgotten,retries:f.retries,lanes,comp};})()"
+  }
+ ]
+}

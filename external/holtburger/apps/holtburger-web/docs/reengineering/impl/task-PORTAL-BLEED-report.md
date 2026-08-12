@@ -301,3 +301,146 @@ slates in the middle panel only; the left (`portalPunch=off`) and right
 (`punchSidedness=on`) panels have an unbroken roof. The left panel is what makes
 the right one mean something — it is the no-punch reference, so "right matches
 left" is the claim, not merely "right looks better than middle".
+
+---
+
+## 10. PRIORITY 2 — the LB-crossing stall DID NOT REPRODUCE on this box
+
+Two live arms, both **teleport-then-cross** (the positive case for the card's
+hypothesis 4; §-12's control arm had already run the no-teleport case). Jobs
+`eyetest-B/s12b-lbcross.json` and `eyetest-B/s12b-motion.json`; raw at
+`out/arm-s12b-lbcross.json`, `out/arm-s12b-motion.json`.
+
+Both teleported to the card's own coordinates — `@teleloc 0x977B000C 25.81 73.85
+0.0`, and `poseAfterTeleport` confirmed `{cell:"0x977b000c", x:25.81, y:73.85,
+z:0}` — then walked north through the crossing under `w`.
+
+### 10.1 The card's crossing is not slow
+
+| transition | run 1 | run 2 |
+|---|---|---|
+| **`0x977b000c` → `0x977b000d`** (the card's crossing) | *uninstrumented, see 10.3* | **2766 ms** |
+| steady-state cell step | ~3000 ms | ~3000 ms |
+| `0x977b0010` → `0x977c0009` (landblock-group boundary) | **5002 ms** | **5021 ms** |
+
+**The named crossing took 2766 ms — FASTER than the ~3000 ms steady-state
+cadence.** There is no stall at it. The card's ~6.5 s does not appear anywhere
+in either trace.
+
+### 10.2 And the main thread never parked
+
+Run 2 sampled pose every 100 ms for 47.1 s (467 samples) with a lag watchdog
+armed across exactly the walk window (`__lag` reset immediately before key-down):
+
+* **`maxLagMs = 220`, ONE event** in run 2; `maxLagMs = 1032`, three events, in run 1.
+* The only no-forward-progress run ≥400 ms is `t=45133..47100` (1967 ms) — which
+  is **after key-up at t=45000**. That is the player stopping, not a defect.
+
+**Hypothesis 1 is re-exonerated, now on the teleport arm too.**
+`bakeWorkerStats().fallbacks` read `{total:0, byType:{}, lastError:null,
+lastAtMs:null}` **both before the teleport and after the crossing**, in both runs.
+`maxPending` was unchanged across the crossing in run 1 (31 → 31, `pendingNow:0`).
+The bake lane is not involved: it is not in backoff and the crossing did not
+enqueue a burst it had to be waited on.
+
+### 10.3 What IS reproducible — ~2 s excess at the LANDBLOCK boundary
+
+`0x977b0010 → 0x977c0009` cost **5002 ms and 5021 ms** across two independent
+runs against a ~3000 ms steady state — the same distance (23.4 units, y wraps
+168→0). That is the **landblock-group** boundary (`0x977b`→`0x977c`), not a cell
+step. It is ~1.7×, reproducible to within 19 ms, and **unaccompanied by any
+main-thread park** (maxLag 220 ms). So it is a movement/residency cost, not a
+stall — and it is ~2 s, not ~6.5 s. Recorded as the only real signal found; not
+claimed to be the card's defect.
+
+### 10.4 What I could NOT establish, and the trap that nearly cost a false positive
+
+Run 1 appeared to show the card's crossing taking **29,116 ms**. **That number is
+an artifact and must not be quoted.** Run 1's cell watchdog only logs on *change*,
+and its first sample (`at=95624`) is merely when a pose first became readable —
+not when key-down happened. Run 2 was built specifically to kill that ambiguity
+(t=0 stamped at sampler-arm, key-down immediately after) and shows the player
+moving by **t=154 ms** with y climbing continuously. There was never a hold.
+
+I am reporting a **negative**, and it is a **T4/Linux/EGL arm**. The card's 6.5 s
+was measured elsewhere. §-10 B records this box disagreeing with the owner's rig
+before (the Yaraq indoor bleed). **This does not close the card** — it removes
+hypotheses 1 and (on this hardware) 4, and says the remaining candidates must be
+chased on the rig where the stall was actually seen.
+
+---
+
+## 11. PRIORITY 3 — the retention leak is real in code and UNREACHABLE by default
+
+Characterisation only, per the card. **No redesign attempted, nothing landed.**
+
+`forget()` (`scene3d/pack_fetch_controller.js:563-574`) drops a settled entry and
+refuses a queued/in-flight one (`entry.state !== "done"` → `return false`),
+deliberately — forgetting one would orphan every consumer already latched onto its
+promise and permit a duplicate fetch beside it, which is the D-03.4 dedupe the
+controller exists to guarantee. The docstring at `:542-562` states the intent
+outright: `settleSuccess` "keeps a success entry in the map forever and every
+later `need()` resolves off that one settled promise — deliberate, and right for a
+payload several consumers read." So the pinning is a **design choice for shared
+payloads**, with `forget()` as the opt-out for one-shot consumers.
+
+**The scoping fact that changes the priority.** The controller is gated behind
+**`?packSource=on`, default OFF**, and on the OFF arm **the module is not even
+imported** — `index.html:2742-2747` reads the flag, and only inside `if (__psOn)`
+does it `await import("./scene3d/pack_fetch_controller.js")`, commented there as a
+"byte-identical legacy boot, the kill path". `getPackFetchController()`
+(`:867-875`) is what publishes `globalThis.__hbFetch`, so no controller means no
+diag surface.
+
+**Measured, not inferred:** on both default-arm live boots this session,
+`globalThis.__hbFetch` read **`"<absent>"`** — at boot *and* again after a
+multi-landblock walk. The singleton is never constructed in the default
+configuration, so **the session-long pinning cannot occur on the default arm at
+all.**
+
+### 11.1 Quantified against a real `?packSource=on` boot
+
+A third live arm (`eyetest-B/s12b-packsrc.json`, raw `out/arm-s12b-packsrc.json`)
+booted with the flag ON, teleported to `0x977B000C` and walked 60 s across ~5
+landblocks. `__hbFetch` was present this time. Census at boot vs after:
+
+| | boot | after teleport + 60 s walk | Δ |
+|---|---|---|---|
+| **total retained** | **11.37 MB** | **11.44 MB** | **+0.07 MB** |
+| `forgotten` | **0** | **0** | — |
+| `retries` | 0 | 0 | — |
+| lane B | 7 done / 7,013,560 B | 7 done / 7,013,560 B | unchanged |
+| lane R | 41 done / 4,907,240 B | 55 done / 4,981,328 B | +14 / +74,088 B |
+| `pvw` | 3 req / 4.70 MB | 3 req / 4.70 MB | unchanged |
+| `meta` | 6 req / 4.44 MB | 6 req / 4.44 MB | unchanged |
+| `tiles` | 36 req / 0.27 MB | 50 req / 0.34 MB | +14 / +0.07 MB |
+
+**`forgotten: 0` on both snapshots confirms the mechanism** — `forget()` is never
+called on this path, so nothing is ever released. The retention is real.
+
+**But it does not scale the way the concern assumed.** The ~1.3 MB payloads are
+`pvw` (4.70 MB / 3 = **1.57 MB each**) and `meta` (0.74 MB each) — and **both are
+fetched once at boot and did not grow at all during the walk.** What accumulates
+with movement is `tiles`, at **~5.3 KB per entry** (0.07 MB / 14). So the growth
+term is ~0.07 MB/min of walking, not 1.3 MB × N.
+
+### 11.2 Recommendation — leave it, and here is the honest cost
+
+**Do not patch it ahead of the wire lane.** Two reasons, both measured:
+
+1. On the arm the owner actually ships (`packSource` OFF) the controller is never
+   constructed, so **N is zero**.
+2. On the ON arm the fixed cost is ~11.4 MB set at boot, and the *growth* is
+   ~5 KB per landblock tile — extrapolating the one 60 s sample, **~4 MB/hour of
+   continuous walking**, unbounded because `forgotten` never moves.
+
+That unbounded growth is worth fixing eventually — a `forget()` on settled `tiles`
+entries the ring has already passed is the obvious shape, and `dropQueuedOutside`
+(`:577-584`) shows the ring already knows which urls it still wants. But it is a
+wire-lane design question, it is ~4 MB/hour not ~1.3 MB × N, and **§-11 scoped it
+out deliberately. Nothing was landed.**
+
+**Caveat on the extrapolation:** one 60 s sample over ~5 landblocks. A long
+session, a denser region, or a different route could change the per-minute term.
+The two *snapshot* numbers are measured; the /hour figure is arithmetic on a short
+sample and should be treated as an order of magnitude, not a budget.
