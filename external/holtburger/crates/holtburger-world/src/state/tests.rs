@@ -6453,3 +6453,107 @@ fn remote_vector_update_rejects_non_finite_wire_values() {
         .expect("player entity should exist");
     assert!(player.velocity.is_finite() && player.omega.is_finite());
 }
+
+/// ORACLE open defect #1 (2026-08-12) — the augmentation trace fires, and the
+/// self-ObjectCreate path does NOT drop the property.
+///
+/// Two assertions in one test on purpose: an instrument that never fires is
+/// indistinguishable from a defect that never happens, so the same test that
+/// exonerates the create path also proves the trace can see a wipe at all.
+#[test]
+fn test_aug_trace_records_wipe_and_self_create_preserves_augmentation() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x50000044);
+
+    let mut properties = WorldObjectProperties::default();
+    properties
+        .ints
+        .insert(PropertyInt::AugmentationJackOfAllTrades, 1);
+    properties.ints.insert(PropertyInt::Level, 1);
+    let player_description = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: player_guid,
+        sequence: 1,
+        event: GameEvent::PlayerDescription(Box::new(PlayerDescriptionEventData {
+            guid: player_guid,
+            sequence: 1,
+            name: "Player".to_string(),
+            wee_type: 1,
+            pos: Some(WorldPosition::default()),
+            properties,
+            positions: std::collections::BTreeMap::new(),
+            attributes: std::collections::BTreeMap::new(),
+            skills: std::collections::BTreeMap::new(),
+            enchantments: Vec::new(),
+            spells: std::collections::BTreeMap::new(),
+            has_health: true,
+            options1: CharacterOptions1::empty(),
+            options2: CharacterOptions2::empty(),
+            shortcuts: Vec::new(),
+            hotbar_spells: Vec::new(),
+            desired_comps: Vec::new(),
+            spellbook_filters: 0,
+            gameplay_options: Vec::new(),
+            inventory: Vec::new(),
+            equipped_objects: Vec::new(),
+        })),
+    }));
+    let _ = state.handle_message(&player_description);
+
+    // The login dump seeded BOTH the live bag and the stash.
+    assert_eq!(
+        state.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+        Some(1),
+        "PlayerDescription must seed the live bag"
+    );
+    // None -> Some(1) is itself a transition, so the trace has exactly one row.
+    assert_eq!(state.aug_trace().len(), 1, "the seed is a recorded transition");
+    assert_eq!(state.aug_trace()[0].before, None);
+    assert_eq!(state.aug_trace()[0].after, Some(1));
+    assert!(state.aug_trace()[0].site.contains("GameEvent"));
+
+    // A re-sent self ObjectCreate carrying only the public weenie baseline.
+    // This is the shape §-11 §C ruled out by reading; assert it, don't trust it.
+    let mut data = ObjectDescriptionData::with_guid(player_guid);
+    data.public_weenie_desc.name = Some("Player".to_string());
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(data)));
+
+    assert_eq!(
+        state.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+        Some(1),
+        "the self re-create must NOT drop the augmentation"
+    );
+    assert_eq!(
+        state.aug_trace().len(),
+        1,
+        "no second transition — the create path is clean"
+    );
+
+    // Now force a wipe through the REAL removal path. `ObjectDelete` only
+    // marks (handlers/inventory.rs) — the entity is not removed until a later
+    // `tick()` sweep, which is not a message handler at all. That is exactly
+    // why `tick()` carries its own probe; without it this wipe is invisible.
+    state.player_description_properties = None;
+    let _ = state.handle_message(&GameMessage::ObjectDelete(Box::new(ObjectDeleteData {
+        guid: player_guid,
+    })));
+    let _ = state.tick();
+
+    assert_eq!(
+        state.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+        None,
+        "control: the swept entity takes its int properties with it"
+    );
+    let wipe = state
+        .aug_trace()
+        .iter()
+        .find(|e| e.before == Some(1) && e.after.is_none())
+        .expect("the trace must catch a Some -> None wipe");
+    assert_eq!(
+        wipe.site, "tick/sweep",
+        "the sweep, not the message, is what actually removed it"
+    );
+    assert!(
+        !wipe.entity_after,
+        "this control is the ENTITY-went shape; the live defect is the other one"
+    );
+}

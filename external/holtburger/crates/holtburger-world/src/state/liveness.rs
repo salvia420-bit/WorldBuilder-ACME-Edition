@@ -379,8 +379,19 @@ impl WorldState {
     pub fn tick(&mut self) -> Vec<WorldEvent> {
         let mut events = Vec::new();
         let now = self.current_server_time();
+        // ORACLE open defect #1 (2026-08-12): the eviction sweep is NOT a
+        // message handler, so a wipe here is invisible to the probe in
+        // `handle_message`. It is also the only place the player entity is
+        // actually REMOVED — `ObjectDelete` merely calls
+        // `mark_entity_explicit_delete` (handlers/inventory.rs) and the removal
+        // lands on a later sweep — so leaving this uninstrumented would hide
+        // the single most plausible culprit.
+        let aug_before = self.aug_probe();
         self.sweep_eviction_queue(now, &mut events);
         self.maintain_visibility_prune_deadlines(now);
+        if self.aug_probe() != aug_before {
+            self.note_aug_transition("tick/sweep", aug_before);
+        }
 
         events
     }
