@@ -275,3 +275,196 @@ live: bare / geomBundles / geomBundles+reliefBundles arms — §1 table
 * **Not done / out of lane:** ENV interior variants (D2 remainder, unchanged); the
   `subdiv_level > 0` ladder (refused by design, needs a bakeable height source);
   any default flip (I7).
+
+---
+
+# APPENDIX B — "make it visible, and photograph the cottages"
+
+**Session:** 2026-08-11/12, second local agent, same OWNER'S LAPTOP, worktree
+`/home/wbterminal/wt-gfxobj`, branch `orch/s12-gfxobj` from `1c730c64`.
+Owner's ask, verbatim: *"make gfxobj relief visible and take screenshots with it
+on, but i also like what it did with the cottages. take specific shots of those
+buildings it changed."*
+
+**Everything below is the LIVE TEXTURED CLIENT on the real GPU** — not a CPU
+render. Probe server on `:8791` was not reused; mine ran on `:8793` over the
+owner's dist symlink and is stopped. Owner's `serve.py` on `:8765` and his ACE
+server were not touched. No flag default was moved (I7): every arm below is a
+URL parameter.
+
+## B0. RIG — and the first finding, which is about the rig
+
+| | |
+|---|---|
+| GPU | **`ANGLE (Intel, Vulkan 1.4.328 (Intel(R) HD Graphics 520 (SKL GT2)), Intel open-source Mesa driver)`** — the laptop's real iGPU, reached with headless chromium `--use-gl=angle --use-angle=vulkan` |
+| frame | 1248 x 440 canvas, `?renderScale=1&nosw=1&adaptiveRes=off` |
+| world | logged in to the owner's live ACE (`agentp07`), `@teleloc 0xA9B40036 150 128 70`, freecam via `?camDebug=on` `window.__cam.orbit(x,y,z,dist,az,el)` in AC world metres |
+| light | `?skytime=15` pinned, so every arm has the identical sun |
+
+**FINDING B0 — the "bare boot already has relief ON" line in §1 above is
+rig-dependent, and on this laptop's REAL GPU it is false.**
+
+* Under **SwiftShader** (what §1 measured, and what my own first three probes
+  also got by default) the GPU-tier probe abstains and the preset falls through
+  to **mid** — `scene3d/quality.js:895` — so relief resolves ON.
+* Under the **real Intel HD520** the probe hits the LOW deny-list and logs
+  `[quality] gpu-probe → low (renderer="…Intel(R) HD Graphics 520…")`
+  (`scene3d/quality.js:884-890`), and `PRESETS.low.gfxRelief = false`
+  (`scene3d/quality.js:115`). Read back live off `window.__gfxRelief` on a bare
+  boot on this machine:
+  `{enabled: false, subdivLevel: 0, scale: 0, requestedScale: 0.6, preset: "low"}`.
+
+So on the owner's laptop GPU a bare boot renders **completely flat** — not
+"on but imperceptible". That is a second, independent answer to *"i'm not
+noticing them"*, and it does not need the `?geomBundles` force-off leg to
+explain it. Every arm below therefore pins `?quality=mid` so that the relief
+knobs are the only variable.
+
+## B1. What the two knobs can and cannot do — read out of the source
+
+`?gfxReliefScale` is **NOT** a displacement multiplier in any useful sense; it is
+a **rail-size multiplier**, and it saturates:
+
+| dimension | default | at `gfxReliefScale=2` | where |
+|---|---|---|---|
+| OP1 rail setback `w()` | 0.06 m | 0.12 → **clamped 0.10 m** | `gfx_remodel.rs:97`, clamp at `:110-112` |
+| OP1 rail height `h()` | 0.05 m | **0.10 m** (exactly the ceiling) | `gfx_remodel.rs:98`, `:114-116` |
+| OP3 material rail `rw()` | 0.05 m | **0.10 m** | `gfx_remodel.rs:101`, `:118-120` |
+| OP3 material rail `rh()` | 0.03 m | **0.06 m** | `gfx_remodel.rs:102`, `:122-124` |
+| per-texel displacement amplitude | 0.10 m | 0.20 → **clamped 0.10 m** | `lib.rs:313`, `gfx_subdiv.rs:209/:230`, `MAX_AMPLITUDE_M` = 0.10 at `gfx_remodel.rs:54` / `gfx_subdiv.rs:72` |
+
+Two consequences, both measured live below:
+
+1. **`gfxReliefScale=2` roughly doubles the rail without adding a single
+   triangle** — the same edges are classified and the same 2-facet wedge is
+   emitted, only bigger. Measured: 573,620 → 573,624 tris/frame on the identical
+   camera. It is the free lever.
+2. **`?gfxReliefScale` is already at its ceiling at 2.0**, and 2.0 is the URL
+   clamp (`lib.rs:332`). Three of the four rail dimensions are at or clipped by
+   `MAX_AMPLITUDE_M`. **10 cm is the hard maximum relief this client can render
+   without a code change.** Anything the owner wants beyond a 10 cm proud edge
+   is a new task, not a knob.
+
+`?gfxSubdivLevel` drives a different, mostly-inert path: the per-texel
+displacement at `lib.rs:6592` (`relief_cfg.filter(|c| c.subdiv.level > 0)`), whose
+own module doc already says subdivision *"does not add relief on its own …
+what it buys is localisation"* (`gfx_subdiv.rs:111`).
+
+## B2. THE LADDER — measured live, cottage `0x0100082E`, identical camera
+
+Camera: `__cam.orbit(32602.06, 34692.70, 68.5, 8, 250, 4)` (8 m, sill beam).
+"changed" = fraction of pixels differing by >8/255 inside a **static-geometry-only
+crop** (x 600-1160, y 170-330 — no NPC, no foliage, no sky), against the
+`gfxRelief=off` arm.
+
+| arm | URL | tris/frame | fps | changed vs OFF |
+|---|---|---|---|---|
+| OFF (control) | `gfxRelief=off` | 560,987 | 9.65 | — |
+| **DEFAULT** | *(mid preset)* | 573,620 | 9.40 | **8.24 %** |
+| **SCALE 2** | `gfxReliefScale=2` | **573,624** | **9.40** | **14.90 %** |
+| subdiv 2 | `+gfxSubdivLevel=2` | 1,533,116 | 7.60 | 23.91 % |
+| subdiv 4 | `+gfxSubdivLevel=4` | 16,813,278 | 3.00 | 23.61 % |
+| subdiv 5 | `+gfxSubdivLevel=5` | — | — | **RENDERER CRASHED** |
+
+**The answer: `?gfxRelief=on&gfxReliefScale=2` (with `gfxSubdivLevel` left at 0).**
+It nearly doubles the changed-pixel count over the shipped default — 8.24 % →
+14.90 % — for **zero extra triangles and zero measurable frame cost**, and in the
+frame it turns the thin bright hairline on the cottage's sill beam into a wide,
+sunlit board face that reads as a real projecting timber. That is the whole
+usable range of this feature as it stands.
+
+**And the honest half.** The subdivision ladder is not worth taking:
+
+* **subdiv 2** costs **2.67x the triangles of the whole frame** and 19 % of the
+  frame rate (9.40 → 7.60 fps) and buys nothing a viewer can name — the extra
+  changed pixels are a slightly softer shading ramp on the corner post, not a
+  new shape.
+* **subdiv 4** costs **29x the triangles** (16.8 M/frame) and drops the frame to
+  **3.0 fps**, and is *pixel-identical to subdiv 2 within noise* (subdiv2 →
+  subdiv4 changes 2.09 % of the crop at >8, 0.49 % at >24). This reproduces on a
+  real GPU exactly what `quality.js:110-114` already records from the 1070: a
+  ~1 cm painted joint cannot exist on a ~15 cm vertex grid, so more vertices
+  change nothing.
+* **subdiv 5 crashes the renderer process.** The arm armed cleanly
+  (`{enabled:true, subdivLevel:5, scale:2}` read off `window.__gfxRelief`),
+  reached in-world, built 2,519 meshes, and then the tab died
+  (`page.evaluate: Target crashed`) with available RAM at ~730 MB. There is
+  **no ceiling guard and no graceful degradation** — the documented `[0,5]`
+  clamp lets a user author a level that reliably kills the tab on an 8 GB
+  machine. Worth a bounded-by-measurement gate if the knob stays reachable.
+
+## B3. THE BUILDINGS IT CHANGED — off vs on, identical camera
+
+Every model below is a **variant-bearing** GfxObj (it has a GEOMR row in the
+owner's dist) resolved through `scripts/relief/locate-variant-models.py`; all sit
+in Holtburg landblock **`0xA9B4`**. Frames are the live textured client; each
+composite stacks OFF / ON-default / ON-`gfxReliefScale=2` at the same camera.
+
+| model ID | what it is | world pos (AC m) | camera |
+|---|---|---|---|
+| **`0x0100082E`** | the cottage (90 → 282 tris baked) | 32602.06, 34692.70, 66 | 16 m and 8 m |
+| **`0x01000830`** | house, cottage row | 32552.50, 34695.50, 66 | 18 m |
+| **`0x01000C1E`** | cottage, timber-framed | 32532.09, 34691.54, 66 | 18 m |
+| **`0x01000827`** | cottage | 32505.50, 34693.50, 66 | 18 m |
+| — | the whole cottage row | 32550, 34700, 70 | 60 m |
+
+**Taildropped to `redmi-note-13-5g` (composites):**
+
+* `s12-gfxobj-cottage0100082E-LADDER-zoom.png` — 2x zoom on the sill beam,
+  five rows: off / default / scale2 / subdiv2 / subdiv4, each labelled with its
+  triangle and fps bill. **This is the one frame that settles the question.**
+* `s12-gfxobj-cottage0100082E-closeup-offVSonVScranked.png`
+* `s12-gfxobj-cottage0100082E-offVSonVScranked.png`
+* `s12-gfxobj-house-01000830-offVSonVScranked.png`
+* `s12-gfxobj-house-01000C1E-offVSonVScranked.png`
+* `s12-gfxobj-house-01000827-offVSonVScranked.png`
+* `s12-gfxobj-row-wide-offVSonVScranked.png`
+
+plus the raw single frames `s12-gfxobj-cottage-0100082E{,-closeup}-{off,default,scale2}.png`
+and `s12-gfxobj-house-{01000830,01000C1E,01000827}-scale2.png`,
+`s12-gfxobj-row-wide-scale2.png`.
+
+**Read them honestly:** at 16-18 m, even at `gfxReliefScale=2`, the difference is
+at the edge of what an eye will call a difference — the changed pixels are still
+a one-to-three-pixel highlight distributed along every silhouette. **At 8 m it
+plainly reads.** §5 of the main report stands; the scale knob widens the band it
+applies to, it does not change its kind.
+
+## B4. Method notes / what a repeat needs
+
+* Frames are the **canvas element's own pixels**, captured with
+  `canvas.toDataURL()` after forcing `preserveDrawingBuffer:true` in a Playwright
+  `addInitScript` — a harness-only WebGL context attribute. `page.screenshot()`
+  and `elementHandle.screenshot()` both fail here (black world / "element is not
+  stable" on an animating canvas).
+* `?camDebug=on`'s `__cam.orbit()` takes **AC world metres** (`camera.js:1177-1190`).
+* Per-frame triangle counts need `renderer.info.autoReset = false` + an explicit
+  `reset()`. Read naively, `info.render.triangles` reports the LAST pass of the
+  frame (the post-processing quad) and shows **1 triangle**.
+* **`@teleloc` outdoor cells are `0x…0001`-`0x…0040`, not `0x…0100+`.** Sending
+  `0xA9B40135` teleports "into" a nonexistent env cell: the client arms
+  `[indoorDepthSplit] ARMED (indoor-cell…) indoor=true` and **terrain stops
+  painting**, so buildings float over empty sky. That cost this session two
+  arms and looks exactly like a terrain bug.
+* Cross-session pixel diffs on WIDE frames are contaminated (NPCs walk, foliage
+  and water animate, the aerial-perspective pass differs slightly run to run).
+  Only the static-geometry crop numbers in B2 are trustworthy.
+* Same-account relogin inside ~3 min gets `[character-error] code=0x1 name=Logon`
+  or `code=0xd EnterGameCharacterInWorld` and yields an EMPTY world that still
+  screenshots successfully. Every arm here left ≥3 min and sent `/quit` first.
+
+## B5. Not verified / not done
+
+* **Not verified: user-visible delivery of the taildrops.** Every
+  `tailscale file cp` returned rc=0 with **no** `is not replying` warning, and
+  `tailscale status` shows `redmi-note-13-5g … active; direct`. That is
+  *accepted for transfer by a live, directly-connected peer* — I did not and
+  cannot confirm the files were opened on the phone.
+* `0x0100081C` (32580.5, 34714.0, 66) has an OFF and a DEFAULT frame only — its
+  `scale2` arm was lost to the renderer crash that also truncated the first OFF
+  run. Not re-shot.
+* `pkg/` is still the pre-`serve.py --check` wasm (`WARNING: pkg wasm predates
+  the last Rust-touching commit`). The relief exports are present and
+  `set_gfx_relief` applied cleanly in every arm (`applied.main.ok true`), so the
+  ladder above is sound; a rebuild is still owed on the buildbox.
+* No Rust built, no wasm rebuilt, no `--workspace`, no default flipped.
