@@ -200,7 +200,7 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 //   =heuristic     the round-5/7 AABB-centre inference, kept ONLY as the
 //                  A/B reference arm for the eye test.
 //
-// -- FLIPPED 2026-08-12, THEN REVERTED THE SAME NIGHT (unverified) --------
+// -- ON by DEFAULT 2026-08-12, after a flip / revert / measure / re-flip --
 // The paragraph above explains why this sat opt-in: a *speculative* gate does
 // not get to risk a confirmed-good outdoor punch. That reason is now void --
 // the gate is not speculative. It reads retail's own `portal_side` bit and
@@ -219,35 +219,43 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 // frame matches the `?portalPunch=off` reference -- the claim is "on matches
 // no-punch", not the weaker "on looks better than off".
 //
-// WHY IT WENT BACK OFF, hours later, before anyone slept on it. The flip shipped
-// with one unverified case: a ground-level doorway where the punch MUST happen.
-// Chasing it, s12 lane B found TWO reasons not to leave this on unattended:
-//   (1) its own earlier `n-low` row reads 8 offered / 0 kept / 8 BACKFACE -- a
-//       GROUND-LEVEL camera where the gate culled EVERYTHING -- and nothing in
-//       that run adjudicates whether those 8 were legitimately far-side or a
-//       regression;
-//   (2) the 15,186/15,186 `portal_side` parity that justified the flip is
-//       measured in DAT SPACE, while the live gate applies the plane in AC
-//       WORLD space after the wasm->world transform. A reflection anywhere in
-//       that link silently INVERTS the gate while DAT-space parity still reads
-//       perfect. Nobody has checked that link.
-// The verdict run was killed by the fifth SPOT preemption of the night before it
-// could answer either. An over-cull at ground level is a WORSE and far more
-// visible defect than the roof bleed it fixes, so the default returns to the
-// state the owner knows. THE FIX IS ONE PARAM AWAY: `?punchSidedness=on`
-// reproduces it instantly, and the roof evidence (s12-B-holtburg-roof-THREEWAY)
-// still stands. Re-flip once the converse case is measured -- instruments are
-// already on master (impl/portal-bleed-harness/{mkprobe,mkaudit}.mjs).
+// THE FULL HISTORY, because this default moved three times in one night and a
+// bisect will land in the middle of it: flipped ON (421cdf0a) -> reverted to OFF
+// (e8a94405, converse case unmeasured) -> MEASURED (26c7cd63) -> ON again, here.
+// The revert was conditional on exactly the measurement that then arrived; both
+// risks it named are closed:
+//   (1) DAT-space vs AC-WORLD-space. The 15,186/15,186 portal_side parity is a
+//       DAT-space number; the live gate applies the plane in world space after
+//       the wasm->world transform, where a reflection would invert it silently.
+//       mkprobe's census tests that link TWO-SIDED: per aperture it asks the
+//       SHIPPED gate for a verdict at the owning cell's AABB centre (inside ->
+//       must drop) AND at that point's mirror through the aperture plane
+//       (outside -> must allow); an inversion fails every case. 127 apertures,
+//       0 bad, 0 degenerate, 18 of them "strong" (centre >= 2.0 m off plane)
+//       and correct in BOTH directions.
+//   (2) the n-low 8 offered / 0 kept / 8 BACKFACE row. mkaudit re-ran that exact
+//       camera and classified every drop: 1 correctDrop, 0 SUSPICIOUS (the
+//       far-side regression signature), 7 near-plane weakWitness. suspicious is
+//       0 and offenders empty across all eight probe cameras.
+// And the punch still fires at ground level square-on, cameras derived from
+// geometry rather than from the gate: door1 3/5 kept, door2 3/4, door3 3/4,
+// door4 13/24, walls 26/46 and 13/58 -- with sidednessSource "flag" and the T4
+// renderer asserted in-page on every row.
+// HONEST LIMIT (the verdict's own words): 7 of the 8 n-low drops are weak
+// witnesses the audit alone cannot adjudicate; they are covered by the census's
+// weak bucket (109 cases, 0 bad). The claim is 0 proven-wrong out of 8 and
+// 127/127 two-sided agreement on the sign -- not 8 independently proven drops.
+// `?punchSidedness=off` remains the escape hatch, byte-identical to the old arm.
 const PUNCH_SIDEDNESS_MODE = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location) {
       const v = new URLSearchParams(globalThis.location.search || "")
         .get("punchSidedness")?.toLowerCase();
-      if (v === "on") return "on";
+      if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
       if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  return "off";
+  return "on";
 })();
 
 /** Back-compat boolean for the diag lines: "is a sidedness gate armed at all". */
