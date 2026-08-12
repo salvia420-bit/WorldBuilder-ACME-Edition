@@ -200,7 +200,7 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 //   =heuristic     the round-5/7 AABB-centre inference, kept ONLY as the
 //                  A/B reference arm for the eye test.
 //
-// -- DEFAULT FLIPPED 2026-08-12 (owner-directed) -------------------------
+// -- FLIPPED 2026-08-12, THEN REVERTED THE SAME NIGHT (unverified) --------
 // The paragraph above explains why this sat opt-in: a *speculative* gate does
 // not get to risk a confirmed-good outdoor punch. That reason is now void --
 // the gate is not speculative. It reads retail's own `portal_side` bit and
@@ -219,21 +219,35 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 // frame matches the `?portalPunch=off` reference -- the claim is "on matches
 // no-punch", not the weaker "on looks better than off".
 //
-// RESIDUAL RISK, stated rather than hidden: the converse case -- a ground-level
-// doorway where the punch SHOULD happen -- has NOT been photographed. The
-// exact flag makes a wrong suppression far less likely than the old heuristic
-// did, but it is unverified. `?punchSidedness=off` is the escape hatch and
-// stays byte-identical to the pre-flip arm.
+// WHY IT WENT BACK OFF, hours later, before anyone slept on it. The flip shipped
+// with one unverified case: a ground-level doorway where the punch MUST happen.
+// Chasing it, s12 lane B found TWO reasons not to leave this on unattended:
+//   (1) its own earlier `n-low` row reads 8 offered / 0 kept / 8 BACKFACE -- a
+//       GROUND-LEVEL camera where the gate culled EVERYTHING -- and nothing in
+//       that run adjudicates whether those 8 were legitimately far-side or a
+//       regression;
+//   (2) the 15,186/15,186 `portal_side` parity that justified the flip is
+//       measured in DAT SPACE, while the live gate applies the plane in AC
+//       WORLD space after the wasm->world transform. A reflection anywhere in
+//       that link silently INVERTS the gate while DAT-space parity still reads
+//       perfect. Nobody has checked that link.
+// The verdict run was killed by the fifth SPOT preemption of the night before it
+// could answer either. An over-cull at ground level is a WORSE and far more
+// visible defect than the roof bleed it fixes, so the default returns to the
+// state the owner knows. THE FIX IS ONE PARAM AWAY: `?punchSidedness=on`
+// reproduces it instantly, and the roof evidence (s12-B-holtburg-roof-THREEWAY)
+// still stands. Re-flip once the converse case is measured -- instruments are
+// already on master (impl/portal-bleed-harness/{mkprobe,mkaudit}.mjs).
 const PUNCH_SIDEDNESS_MODE = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location) {
       const v = new URLSearchParams(globalThis.location.search || "")
         .get("punchSidedness")?.toLowerCase();
-      if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+      if (v === "on") return "on";
       if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  return "on";
+  return "off";
 })();
 
 /** Back-compat boolean for the diag lines: "is a sidedness gate armed at all". */
