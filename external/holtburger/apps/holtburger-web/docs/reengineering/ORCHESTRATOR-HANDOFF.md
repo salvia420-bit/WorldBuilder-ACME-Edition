@@ -14,7 +14,7 @@ on."** So merges to master and earned default flips are now the orchestrator's t
 This section is written to that standard: the wins are here, and so are the two places
 tonight's own conclusions were overturned.
 
-**`origin/master` is `75e4f148`.** Everything below is merged into it; every branch was
+**`origin/master` is `1fc6fab4`.** Everything below is merged into it; every branch was
 compile-checked and suite-verified before it landed.
 
 ### A. THE HEADLINE THE OWNER ASKED FOR — portal bleed-through, root-caused
@@ -84,29 +84,57 @@ pulling"; it was actually the evidence the rows came from different moments.
 So: **entity-alive-vs-property-gone is NOT settled.** `5ae4efd6` lands the instrument that
 can name the culprit. Do not build on `6e87563b`'s conclusion.
 
-### D. GFXOBJ RELIEF — the owner's "we don't have our gfxobj textures working"
-**Answer: not armed. Nothing is broken.** Bare boot already has relief ON (`gfxRelief`,
-`mid` preset). But `?packSource=on&geomBundles=on` **forces gfxRelief OFF** (the client
-logs `[geomBundles] forcing gfxRelief OFF`), and `?reliefBundles=on` — DEFAULT-OFF per
-I7 — is what arms the BAKED variants (`variantRowsResident: 104`). **If you boot the
-hi-res BC7 migration arm (`?texCompressedOnly` structurally requires `?packSource`) you
-are looking at a deliberately flat world.**
-Census re-derived from pack BYTES, not `pack-report.json`: **1,417 of 7,498 models
-(18.9 %)**, 2,179 GEOMR rows, +252,740 triangles, and **153 of 162 buildings around
-Holtburg (94 %)** carry a variant — so the queue's "83/796 ≈ 10 %" describes the bounded
-bake, not this dist. The close-up nobody had done (cottage `0x0100082E`, 90→282 tris):
-the difference is **entirely thin lines** on eaves, ridges, corners; **wall faces are
-byte-identical**; 2.46 % of pixels at 22 m but **0.21 % at 6 m** — closer is LESS visible.
-What ships is a **6 cm × 5 cm bevel on convex edges** (`gfxSubdivLevel` is 0 on every
-tier; per-texel displacement retired). The expectation gap is real but it is a **design
-gap predating this work, not a bug** — and sparsity was never the main reason, the KIND
-of change is.
-Also fixed (`47d0c950`): `__diag.geometry.relief` could never be read — `geom_bundles.js`
-and `diag/geometry.js` both installed on `window.__diag.geometry` with WHOLE-OBJECT
-assignment, last write won, so a gate FUNCTION sat where the data field belonged (and,
-being a function, vanished silently from any JSON capture, taking `bundles.*`,
-`entityDecode.*` and `geomFallback.*` with it). They compose now; the gate is
-`reliefGate()`. `test_geom_bundles` 78 → 91.
+### D. GFXOBJ RELIEF — "we dont have our gfxobj textures working". NOW ON BY DEFAULT.
+Two answers, and the second one supersedes the first on the owner's own hardware.
+
+**First pass (laptop agent, SwiftShader):** not armed, nothing broken. Bare boot has
+relief ON via the `mid` preset, but `?packSource=on&geomBundles=on` **forces gfxRelief
+OFF** (`[geomBundles] forcing gfxRelief OFF`) and `?reliefBundles=on` — DEFAULT-OFF per
+I7 — is what arms the BAKED variants. **So booting the hi-res BC7 migration arm
+(`?texCompressedOnly` structurally requires `?packSource`) shows a deliberately flat
+world.** Still true, and still worth knowing.
+
+**Second pass (subagent, REAL GPU) corrected it:** on the owner's Intel HD520,
+`detectGpuTier` hits its deny-list and logs `[quality] gpu-probe -> low`
+(quality.js:884-890), and `PRESETS.low.gfxRelief` was **false**. **His bare boot rendered
+FLAT — not "on but imperceptible".** The first pass's "preset=mid" reading came from
+SwiftShader, where the probe ABSTAINS and falls through to mid (quality.js:895). Both
+true of their own rig; the wrong one got written down. *Lesson: a tier-probe verdict is a
+property of the RIG, not of the build — state which rig any preset claim came from.*
+
+**Owner-directed, both flipped (2026-08-12):**
+- `37ad540a` — **`gfxReliefScale` 1.0 (0.6 on low) -> 2.0 on every tier.** FREE:
+  +4 tris/frame, no measurable fps delta, because scale re-sizes the SAME rails rather
+  than emitting new ones. 8.24 % -> **14.90 %** of pixels changed vs OFF. ⚠ 2.0 is BOTH
+  the clamp ceiling and the SATURATION point — three of four rail dimensions hit
+  `MAX_AMPLITUDE_M` (10 cm) there. **More visible than this needs a CODE change.**
+- `1fc6fab4` — **`PRESETS.low.gfxRelief` false -> true.** The stated reason it was off
+  ("added tris are paid TWICE at any tier with shadows") never applied to `low`, which
+  sets `csm:false`. Measured ON low-tier silicon: 560,987 -> 573,620 tris, 9.65 -> 9.40
+  fps. **If a low-tier machine regresses, revert THIS one, not `37ad540a`.**
+
+**The shipped look, so nobody re-litigates it:** relief is a **6 cm x 5 cm bevel on convex
+edges** (rails; per-texel displacement was retired, `gfxSubdivLevel` 0 on every tier).
+Wall faces are byte-identical; the change is thin lines on eaves, ridges, corners.
+2.46 % of pixels at 22 m but **0.21 % at 6 m** — closer is LESS visible. Census
+re-derived from pack BYTES: **1,417 of 7,498 models (18.9 %)**, 2,179 GEOMR rows, and
+**153 of 162 buildings around Holtburg (94 %)**.
+
+**⚠ REAL DEFECT, UNFIXED: `?gfxSubdivLevel=5` KILLS THE RENDERER PROCESS.** It arms
+cleanly, reaches in-world, then the tab dies — no guard, no degradation. Level 4 is
+pixel-identical to level 2 within noise (2.09 % >8) for 11x the triangles and 3.0 fps, so
+the whole knob buys nothing. **Either clamp it to 2 or guard it.** Nobody has.
+
+**Method trap that cost two arms:** `@teleloc` OUTDOOR cells are `0x...0001`-`0x...0040`,
+NOT `0x...0100+`. Sending `0xA9B40135` arms `[indoorDepthSplit] indoor=true`, terrain
+stops painting, and buildings float over empty sky — it looks exactly like a terrain bug.
+
+Also fixed earlier (`47d0c950`): `__diag.geometry.relief` could never be read —
+`geom_bundles.js` and `diag/geometry.js` both installed on `window.__diag.geometry` with
+WHOLE-OBJECT assignment, last write won, so a gate FUNCTION sat where the data field
+belonged (and, being a function, vanished silently from any JSON capture, taking
+`bundles.*`, `entityDecode.*` and `geomFallback.*` with it). They compose now; the gate
+is `reliefGate()`. `test_geom_bundles` 78 -> 91.
 
 ### E. ALSO LANDED
 - **CTX-LOSS-MIRRORS closed live on the T4**, and `__restoreContext()` fixed: it re-fetched
@@ -157,8 +185,9 @@ Suites at `e8a94405`: diag-schema **69/0**, geom-bundles **91/0**, pack-fetch-co
 holtburger-web --target wasm32-unknown-unknown` clean (15 warnings).
 1. **ORACLE #1 from scratch** (§C) — the fossil-vs-live distinction is the whole game.
 2. The `burden` 0 vs 0.12216666 discrepancy — same bug or different? Nobody knows.
-3. Owner decision: **relief is a 6 cm bevel** (§D). Is that the intended look? If not,
-   `gfxSubdivLevel`/`gfxReliefScale` are the levers and per-texel displacement was retired.
+3. **`?gfxSubdivLevel=5` crashes the renderer** (§D) — clamp or guard it. And relief is
+   now maxed at the 10 cm rail ceiling: if the owner wants MORE than that, it is a code
+   change to `MAX_AMPLITUDE_M`/the rail geometry, not a knob.
 4. The landblock-GROUP ~5 s boundary (§E).
 5. Still owner-gated and untouched: Q75-ELECTION, E1-RATIFICATION, PREVIEW-FEED-REKEY,
    ratification of the 13 T4 frames, everything 1070.
