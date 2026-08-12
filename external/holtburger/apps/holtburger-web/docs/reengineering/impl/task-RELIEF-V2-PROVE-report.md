@@ -34,8 +34,15 @@ The doc says the shots missed `?texBc7=on`, "an EXACT-MATCH opt-in", leaving
 DEFAULT-ON. `bc7_textures.js:114` is `let on = true;` and `:122` is
 `on = !flagIsOff(...)`, where `flagIsOff` (`:97-101`) only returns true for
 `off|0|false|no`. The docstring immediately above at `:104` still claims
-exact-match opt-in — it is stale, and it is almost certainly what kept this
-belief alive across two sessions. `docs/url-flags.md:648` already has it right.
+exact-match opt-in — it is stale, and it is what kept this belief alive across
+two sessions. Fixed in `a8f69cf5`.
+
+`docs/url-flags.md:648` has it right *today* — and it records why the handoff
+did not: the cell says the flag is ON, "flipped 2026-07-30 …
+**this cell said 'off' until 2026-08-02**". The handoff was written **07-31**,
+inside that two-day window when the docstring *and* the flag table both still
+said off. The author had no correct source to read. This was a documentation
+lag, not carelessness, and it cost three sessions.
 
 Measured in-page on the T4 (`eyetest-B/out/arm-s13R-bc7.json`):
 
