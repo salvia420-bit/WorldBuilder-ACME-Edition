@@ -8806,10 +8806,44 @@ export class EntityManager {
           !!(c && (c.kind === "swing" || c.kind === "cast") && (c.resolvedCommand >>> 0) !== 0 && c.source === "wasm-link");
         this._castDiag("attempts");
         if (!willPlay) this._castDiag("linkOrStanceMiss");
-        this.setSwingMotion(g, motionU32, CAST_RELIABILITY
-          ? { speed: CAST_SPEED, stance: CAST_MAGIC_STANCE }
-          : { speed: CAST_SPEED });
-        if (CAST_SPEED !== 1.0 && willPlay) this.noteLocalSwingPrediction?.(motionU32);
+        // ── 2026-08-12: THE LOCAL CAST PREDICTION NO LONGER ANIMATES ──
+        // Retail's client plays NO cast animation of its own. Verified in the
+        // decomp: `ClientMagicSystem::FreeHandsAndCastSpell` (acclient.c:403775)
+        // is nine lines — MaybeStopCompletely, the CM_Magic send, a cursor bump
+        // — with no motion call; and the animation funnel is singular
+        // (`CPhysicsObj::DoMotion` has exactly ONE call site in 31 MB, inside
+        // `CommandInterpreter::MovePlayer`, :717999). A cast gesture can only
+        // reach `CSequence` via the server's 0xF74C action list at
+        // `CMotionInterp::move_to_interpreted_state:344410`.
+        //
+        // ACE sends us exactly that, and measurement confirmed it end-to-end
+        // (probe 2026-08-12, 3/3 casts): the COMPLETE windup chain arrives, one
+        // `UpdateMotion` per gesture, `movement_seq` strictly monotonic, order
+        // and identity matching this table exactly, at on-wire speed **2.0** —
+        // i.e. `Player_Magic.cs:603 CastSpeed = 2.0f`, the same number
+        // `CAST_SPEED` hardcodes. `EnqueueBroadcast` sends to the caster first
+        // (`WorldObject_Networking.cs:1376-1385`), and the spell VFX comes with
+        // it (`WorldObject_Magic.cs:358-359` broadcasts `CasterEffect` with
+        // `spell.Formula.Scale`), so nothing is lost by not fabricating it.
+        //
+        // Predicting locally forced a dedup to stop the server's authoritative
+        // motion "fighting" ours, and that dedup is a 500 ms wall-clock window
+        // (`noteLocalSwingPrediction`, :8506). Measured, the cast gesture's echo
+        // lands 584-756 ms after the local prediction, so it MISSES the window
+        // in 3/3 casts, `forceLocal` re-issues `setMotion`, and the gesture
+        // visibly re-plays. Widening the constant would be tuning a number to
+        // hide an architecture we know is inverted; removing the prediction
+        // deletes the whole class of bug instead.
+        //
+        // The unconsumed 4th echo animating is also the proof this is safe: a
+        // server echo demonstrably drives the local rig on its own.
+        //
+        // KEPT: classification `c` (WS11 still paces the chain's busy-window /
+        // CasterEffect timing off the MotionTable link length) and the diag
+        // counters. REMOVED: the gesture playback and its echo-suppression note.
+        // `playCastSequence` is local-player only — remote casters animate off
+        // the wire already — so remote behaviour is untouched.
+        this._castDiag("serverDrivenGesture");
         // WS11: prefer the MotionTable link length (== ACE GetAnimationLength ==
         // the on-screen gesture setSwingMotion just started) over the JSON
         // durationS. Only the single-throw CAST gesture actually diverges
@@ -9182,7 +9216,8 @@ export class EntityManager {
     );
     if (!seq) return false;
     if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
-    inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: entry?.hooks || null, lastHookTime: -1 };
+    inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: entry?.hooks || null, lastHookTime: -1,
+      speed: this._unifiedOneShotSpeed(inst) };
     return true;
   }
 
@@ -9248,6 +9283,33 @@ export class EntityManager {
   // anti-ice-skating velScale (actual ground speed / authored cycle speed,
   // clamped [0.25,4.0]) composed with the server per-motion speed + backstep
   // sign. When no base speed (idle / velScale-absent), plays at motionSpeed.
+  // One-shot playback tempo (2026-08-12). Retail scales an animation node's
+  // FRAMERATE by the motion's speed — `AnimSequenceNode::multiply_framerate`
+  // (acclient.c:340968-340979) is literally `framerate = multiplier * framerate`
+  // — so a server motion carrying speed 2.0 plays its clip twice as fast. With a
+  // fixed-dt playhead that is equivalent to advancing `dt * speed`.
+  //
+  // `inst._motionSpeed` is the broadcast `forward_speed` MAGNITUDE (set at the
+  // setMotion site above; the sign rides `_motionSpeedSign`), so it is always
+  // positive and safe to multiply by. It is captured at BUILD time, not read per
+  // tick, because the mixer path it replaces also read it once when the action
+  // started (`setEffectiveTimeScale`, the `swingSpeed` composition) — reading it
+  // every tick would let a LATER locomotion broadcast change the tempo of a
+  // swing already in flight. Assignment order makes this safe: `_motionSpeed` is
+  // set before `_tryPlayLink` / `_tryUnifiedCycleOneShot` run.
+  //
+  // Why this exists: the `_unifiedSeq` branch advanced at raw `dt` and ignored
+  // speed entirely, while its `_unifiedLoco` sibling scaled correctly. Measured
+  // in-world 2026-08-12 — ACE broadcasts every cast gesture at speed 2.0
+  // (`Player_Magic.cs:603 CastSpeed = 2.0f`), `inst._motionSpeed` read 2, and the
+  // one completed gesture still took 0.796-0.847 s against an authored 0.7917 s
+  // (0.93-0.99x) in 5/5 measurements — i.e. 1.0x, half the intended rate. This
+  // governs melee/missile/death/door one-shots too, not just casts.
+  _unifiedOneShotSpeed(inst) {
+    const s = +(inst?._motionSpeed);
+    return Number.isFinite(s) && s > 0 ? s : 1.0;
+  }
+
   _unifiedLocoGaitScale(inst, base) {
     let scale;
     if (base > 0) {
@@ -10148,7 +10210,8 @@ export class EntityManager {
             // deathHold:true → the CQ-06 guard at setMotion entry refuses any
             // non-revival motion from freeing this hold (retail: no links out
             // of the Dead substate — the corpse pose is sticky).
-            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, deathHold: true, hooks: entry?.hooks || null, lastHookTime: -1 };
+            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, deathHold: true, hooks: entry?.hooks || null, lastHookTime: -1,
+              speed: this._unifiedOneShotSpeed(inst) };
             // (2026-07-06) Stamp the REAL collapse length so loop.js `_armRemove`
             // holds the rig for exactly this creature's authored death animation
             // (they vary — tusker ~1.3s, others longer) instead of the flat
@@ -12301,7 +12364,8 @@ export class EntityManager {
           // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
           // clearOnDone: the one-shot swing hands the rig back to the mixer
           // (frozen cycle resumes) on completion.
-          inst._unifiedSeq = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1 };
+          inst._unifiedSeq = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
+            speed: this._unifiedOneShotSpeed(inst) };
           return true; // skip the mixer overlay; the tick drives the rig
         }
       }
@@ -14912,7 +14976,12 @@ export class EntityManager {
           // _unifiedLoco below (locomotion resumes); death (clearOnDone:false)
           // holds the clamped prone frame.
           const ua = inst._unifiedSeq;
-          ua.seq.advance(dt);
+          // Retail scales the node framerate by the motion speed
+          // (AnimSequenceNode::multiply_framerate, acclient.c:340977). `ua.speed`
+          // is that multiplier, captured when the one-shot was built. The `?? 1`
+          // keeps any older record (or a rebuilt-mid-flight one) at 1.0x rather
+          // than NaN-ing the playhead.
+          ua.seq.advance(dt * (ua.speed ?? 1));
           poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts);
           this._drainUnifiedHooks(inst, ua); // swoosh / chime / strike (Step 6)
           if (ua.seq.done && ua.clearOnDone) {

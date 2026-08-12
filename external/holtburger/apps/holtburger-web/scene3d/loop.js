@@ -3473,11 +3473,20 @@ function _armMotionAction(scene3d, em, upd) {
   const actionGuid = upd.guid >>> 0;
   const actionCmd = (upd.motionCommand ?? 0) >>> 0;
   const actionStance = (upd.motionStance ?? 0) >>> 0;
-  // D3 (Q3.2, ?dispatchParity=on, default-off): F6-2 swing-echo
-  // dedup, ported from the dead direct arm where it was inert in
-  // live mode. The note side (picking.js noteLocalSwingPrediction)
-  // fires on the DEFAULT live click path, so this port changes
-  // default-mode combat visuals — hence the gate.
+  // D3 (Q3.2, `?dispatchParity`, DEFAULT-ON — the reader at :373-382 is
+  // `!== "off"`, so an absent param reads ON; `=off` is the escape):
+  // F6-2 swing-echo dedup, ported from the dead direct arm where it was
+  // inert in live mode. The note side (picking.js
+  // noteLocalSwingPrediction) fires on the DEFAULT live click path, so
+  // this port changes default-mode combat visuals.
+  //
+  // ⚠ This comment previously read "default-off", contradicting both the
+  // reader and the authoritative comment at :362. It cost two 2026-08-12
+  // sessions a misdiagnosis apiece (orchestrator + probe agent, who each
+  // had to re-derive the true default from the reader). Measured live
+  // 2026-08-12: `__diag.cast.echoStats().consumedHit > 0` with NO flag
+  // set, which is only possible with this gate ON. Do not restate a flag
+  // default from memory — read the reader.
   if (DISPATCH_PARITY_ON && actionCmd !== 0 &&
       em.consumeLocalSwingEcho?.(actionGuid, actionCmd)) {
     // F6-2: optimistic local swing already played (picking.js

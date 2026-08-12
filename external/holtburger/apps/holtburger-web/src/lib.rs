@@ -8773,9 +8773,14 @@ fn classify_command_kind(cmd: u32) -> (&'static str, Option<&'static str>) {
 /// Pure-Rust core of the swing classifier. Builds the outer link key per
 /// spec §3.2 (`(stance & 0xFFFF) << 16 | 0x0003`), walks
 /// `MotionTable.links[outer]`, looks up the FULL 32-bit `command` key in
-/// the inner `MotionData` map, and returns the first anim (always
-/// `Anims[0]` per the 5,455-entry retail validation — every link has
-/// exactly 1 anim).
+/// the inner `MotionData` map, and reports the link's TOTAL duration
+/// summed over ALL its `AnimData` segments.
+///
+/// ⚠ The old docstring claimed "always `Anims[0]` … every link has exactly
+/// 1 anim", citing a 5,455-entry retail validation. That validation covered
+/// MELEE SWING links. **Magic windup links carry TWO segments** — a forward
+/// raise and a REVERSE-framerate lower — so taking `anims.first()` reported
+/// roughly half the real gesture length (2026-08-12).
 ///
 /// Returns `None` when:
 /// - the outer key has no link entry (stance has no swings — missile
@@ -8808,7 +8813,13 @@ fn classify_motion_link_for_swing(
     // Inner key: the FULL 32-bit command, NOT masked. See module comment
     // above. This is the W3.C load-bearing finding.
     let motion_data = inner_map.get(&command)?;
-    let anim = motion_data.anims.first()?;
+    // Defensive: a MotionData with no segments has no duration (never
+    // observed in retail data, but the old `anims.first()?` short-circuited
+    // here and callers rely on `None` rather than a 0.0 duration).
+    if motion_data.anims.is_empty() {
+        return None;
+    }
+    let anim = &motion_data.anims[0];
 
     // Duration: number of played frames / framerate. Spec §2.3:
     //   - melee swings use low=0, high=-1 (play to end of anim asset);
@@ -8818,13 +8829,54 @@ fn classify_motion_link_for_swing(
     //     if needed). Reported as 0.0 so JS can detect with `> 0`.
     //   - magic casts have explicit high_frame (15-43 frames).
     //
-    // Computing here: when high_frame >= 0 and framerate > 0, return
-    // `(high - low + 1) / framerate`. For high == -1, return 0.0.
-    let duration_sec = if anim.high_frame >= 0 && anim.framerate > 0.0 {
-        let frames = (anim.high_frame as f32 - anim.low_frame as f32 + 1.0).max(0.0);
-        frames / anim.framerate
-    } else {
-        0.0
+    // Computing here: SUM every segment, exactly as ACE's authoritative
+    // `MotionTable.GetAnimationLength(stance, motion, currentMotion)` does
+    // (`ACE.DatLoader/FileTypes/MotionTable.cs:151-160`):
+    //
+    //     length = 0; foreach (anim in animData) length += GetAnimationLength(anim);
+    //     GetAnimationLength(anim) = (highFrame - LowFrame) / Math.Abs(anim.Framerate)
+    //
+    // Three details, each of which was wrong before and each of which matters:
+    //
+    //  1. **ALL segments, not just the first.** A magic windup link is a raise
+    //     PLUS a reverse-framerate lower. Reporting only segment 0 made the
+    //     client's cast chain sleep ~HALF the real gesture, so its prediction
+    //     ran ahead of the server's cadence and the gap compounded per gesture.
+    //     Measured 2026-08-12: ~+188 ms drift per windup against a closed-form
+    //     prediction of +206.4 ms for an Iron scarab; over three windups the
+    //     accumulated error (619 ms measured / 619.3 ms predicted) exceeded the
+    //     500 ms echo-dedup window and the final gesture visibly re-played.
+    //     Derived across the whole spell table, 50.3% of spells breach that
+    //     window on a ZERO-latency link — this was never a network artifact.
+    //     The sibling clip-baking path already learned this: `T4 (2026-05-28)`
+    //     at `build_concatenated_motion_frames` concatenates ALL segments and
+    //     its comment literally reads "(was `anims.first()`)". That fix was
+    //     never applied here, so the baked CLIP and the reported DURATION have
+    //     disagreed with each other ever since.
+    //  2. **Exclusive `(high - low)`, not inclusive `+1`.** ACE does not add
+    //     the frame. The old inclusive form was ~1 frame (~21 ms at 48 fps
+    //     effective) long per segment, partially masking (1) on single-segment
+    //     melee links.
+    //  3. **`abs(framerate)`.** ~22% of retail AnimData are reverse-framerate;
+    //     the old `framerate > 0.0` guard scored every such segment as 0.0.
+    //
+    // `high_frame == -1` means "play to the end of the anim asset", whose
+    // length lives in the Animation DID we deliberately do not parse here (ACE
+    // reads it via `ReadFromDat<Animation>`). We cannot price that segment, so
+    // the whole link reports 0.0 and the caller falls back — preserving the
+    // existing `> 0` detection contract rather than silently under-reporting.
+    let duration_sec = {
+        let mut total = 0.0_f32;
+        let mut resolvable = true;
+        for seg in &motion_data.anims {
+            let fr = seg.framerate.abs();
+            if seg.high_frame < 0 || fr <= 0.0 {
+                resolvable = false;
+                break;
+            }
+            total += ((seg.high_frame as f32 - seg.low_frame as f32).max(0.0)) / fr;
+        }
+        if resolvable { total } else { 0.0 }
     };
 
     let (kind, height) = classify_command_kind(command);

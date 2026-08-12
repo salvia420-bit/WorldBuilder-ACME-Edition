@@ -2841,7 +2841,9 @@ function _onPlayEffect(evt) {
     return;
   }
 
-  _dispatchResolvedPlayEffect(targetGuid, scriptId, speed);
+  // Thread the live event's own epoch so the `_castLat` trace measures from
+  // when the PlayEffect actually arrived, not from dispatch entry.
+  _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0);
 }
 
 /**
@@ -2855,8 +2857,17 @@ function _onPlayEffect(evt) {
  * @param {number} targetGuid
  * @param {number} scriptId
  * @param {number} speed
+ * @param {number} [_t0] — cast-latency epoch for the `_castLat` trace. The
+ *   pre-B2 `_onPlayEffect` tail this body was extracted from had `_t0` as a
+ *   LOCAL (`const _t0 = _castLatNow()`); the extraction moved the body but
+ *   never threaded the binding, so every one of the five `_t0` reads below
+ *   threw `ReferenceError` and killed the whole dispatch — placeholder,
+ *   real-VFX resolver and all. Measured 2026-08-12: it throws on EVERY call
+ *   and took 19 entity spawns with it in one probe run. Defaulted rather
+ *   than required so the queue-replay caller (which has no epoch of its own)
+ *   still traces against a sane origin.
  */
-function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed) {
+function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0 = _castLatNow()) {
   // Wave 17 / Phase 51: try the REAL retail VFX chain FIRST. If the
   // resolver completes (table → pick → physics-script → emitters),
   // skip the placeholder fallthrough for this event. On any miss the
