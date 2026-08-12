@@ -192,26 +192,48 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 // names the owning room's interior on 15,186/15,186 outdoor-facing portals,
 // none on-plane (holtburger-dat tests/cell_portal_flags_parity.rs).
 //
-//   absent / =off  DEFAULT — no sidedness gate. Byte-identical to the
-//                  round-4 arm the user confirmed working outdoors. The
-//                  kill path; unchanged by this task.
-//   =on            the REAL flag, via the v3 export. No confidence guard,
-//                  because there is nothing to be unconfident about.
+//   =off           the kill path — no sidedness gate. Byte-identical to the
+//                  round-4 arm the user confirmed working outdoors.
+//   absent / =on   DEFAULT since 2026-08-12 — the REAL flag, via the v3
+//                  export. No confidence guard, because there is nothing to
+//                  be unconfident about.
 //   =heuristic     the round-5/7 AABB-centre inference, kept ONLY as the
 //                  A/B reference arm for the eye test.
 //
-// I7: the default does NOT move. `=on` is new behaviour and stays opt-in
-// until the 1070 eye test says otherwise.
+// -- DEFAULT FLIPPED 2026-08-12 (owner-directed) -------------------------
+// The paragraph above explains why this sat opt-in: a *speculative* gate does
+// not get to risk a confirmed-good outdoor punch. That reason is now void --
+// the gate is not speculative. It reads retail's own `portal_side` bit and
+// agrees with the retail baseline on 15,186/15,186 outdoor-facing portals.
+//
+// What moved it: the owner reported "the sideportalpunch is making windows
+// visible through roofs, walls etc". S12 lane B root-caused it -- retail's
+// PView::ConstructView clears THREE rejects before it punches (sidedness;
+// GetClip + `if (!ppoly) return 0`; CEnvCell::GetVisible + Render::copy_view)
+// and we implement ONE of the three. Our only occlusion gate is
+// terrainRayBlocked, which samples the terrain HEIGHTFIELD -- and a roof is
+// not terrain. The punch material is AlwaysDepth writing FAR_DEPTH, so an
+// aperture behind a roof overwrites that roof's DEPTH while its COLOUR stays.
+// Structural, not tuning. Measured on the T4 (s12-B-holtburg-roof-THREEWAY):
+// with the gate ON the aperture stops drawing through the slates and the
+// frame matches the `?portalPunch=off` reference -- the claim is "on matches
+// no-punch", not the weaker "on looks better than off".
+//
+// RESIDUAL RISK, stated rather than hidden: the converse case -- a ground-level
+// doorway where the punch SHOULD happen -- has NOT been photographed. The
+// exact flag makes a wrong suppression far less likely than the old heuristic
+// did, but it is unverified. `?punchSidedness=off` is the escape hatch and
+// stays byte-identical to the pre-flip arm.
 const PUNCH_SIDEDNESS_MODE = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location) {
       const v = new URLSearchParams(globalThis.location.search || "")
         .get("punchSidedness")?.toLowerCase();
-      if (v === "on") return "on";
+      if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
       if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  return "off";
+  return "on";
 })();
 
 /** Back-compat boolean for the diag lines: "is a sidedness gate armed at all". */
