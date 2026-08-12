@@ -170,7 +170,8 @@ const INDOOR_DEPTH_SPLIT = (() => {
 // itself the diagnosis: no banner ⇒ stale bundle ⇒ add `?nosw=1`.
 const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 
-// ?punchSidedness (2026-08-04 round 7) — DEFAULT OFF, and off is the RESTORED
+// ?punchSidedness (2026-08-04 round 7; default re-flipped OFF 2026-08-12 —
+// see the reader below for the full flip history and the trade-off) — DEFAULT OFF, and off is the RESTORED
 // round-4 behaviour the user confirmed working outdoors.
 //
 // The round-5 sidedness gate (`apertureFacesAway`) regressed the outdoor punch.
@@ -251,11 +252,32 @@ const PUNCH_SIDEDNESS_MODE = (() => {
     if (typeof globalThis !== "undefined" && globalThis.location) {
       const v = new URLSearchParams(globalThis.location.search || "")
         .get("punchSidedness")?.toLowerCase();
-      if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+      if (v === "on" || v === "1" || v === "true" || v === "yes") return "on";
       if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  return "on";
+  // ⚠ 2026-08-12 — DEFAULT FLIPPED BACK TO OFF, owner-directed.
+  //
+  // History, so nobody flips this a fifth time by accident: it went
+  // off -> on -> reverted -> measured -> re-flipped ON (handoff §-12B), and
+  // the comment block above at :173 has said "DEFAULT OFF, and off is the
+  // RESTORED default" that entire time — the reader disagreed with its own
+  // documentation, which is the third stale-default comment found today
+  // (`dispatchParity`, `multiAction`, this).
+  //
+  // The flip is a live HYPOTHESIS TEST, not a verdict: the owner reports black
+  // flicker near towns and suspects this gate. The competing explanation on
+  // the table is the `terrain-batch` program requesting 17 texture units on a
+  // 16-unit GPU (measured 4,945 warnings in 420 s, and — importantly — at its
+  // HIGHEST rate while parked and idle, which argues the overflow is constant
+  // rather than town-triggered). Both can be true; this arm isolates one.
+  //
+  // ⚠ TRADE-OFF, stated plainly: `=on` is the far-side-door / portal
+  // bleed-through fix (handoff §-12B §A). Turning it off may reintroduce
+  // bleed-through. If the flicker persists with this off, flip it back rather
+  // than leaving both defects live — `?punchSidedness=on` is the one-flag
+  // restore.
+  return "off";
 })();
 
 /** Back-compat boolean for the diag lines: "is a sidedness gate armed at all". */

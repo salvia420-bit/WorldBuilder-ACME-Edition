@@ -113,11 +113,22 @@ export function decideTradeskillCall(action, client) {
   if (action.kind !== "fire") {
     return { called: null, args: [], warn: null };
   }
-  // Visibility check (per task brief): detect missing export and log
-  // once. The fallback chain on `client?.player?.useWithTarget` covers
-  // both the facade form (api.js exposes player.useWithTarget) and the
-  // raw sessionHandle form (some callers pass the wasm handle direct).
-  if (typeof client?.player?.useWithTarget !== "function") {
+  // Resolve the receiver. ⚠ 2026-08-12: the comment that used to sit here
+  // claimed "the fallback chain … covers both the facade form and the raw
+  // sessionHandle form", but the check was ONLY `client?.player?.useWithTarget`
+  // — there was no chain. A caller passing the wasm handle directly (which
+  // exposes `useWithTarget` at top level, `pkg/holtburger_web.d.ts:6151`) has
+  // no `.player`, so the guard tripped and tradeskill dispatch died. The
+  // dispatch site then hardcoded `client.player.useWithTarget(...)` as well,
+  // so fixing only one half would not have helped.
+  //
+  // This is the THIRD instance in one day of a comment describing behaviour
+  // the code does not implement (`play_effect_vfx.js` "extracted verbatim"
+  // dropping `_t0`; `materials.js` "fail-soft" with no try/catch). This one is
+  // the worst of the three to find: the others THREW, which is how they
+  // surfaced. This fails soft, latches `warnedMissingExport`, prints one line,
+  // and the feature is silently dead for the rest of the session.
+  if (!resolveUseWithTargetReceiver(client)) {
     return {
       called: null,
       args: [],
@@ -129,6 +140,23 @@ export function decideTradeskillCall(action, client) {
     args: [action.sourceGuid >>> 0, action.targetGuid >>> 0],
     warn: null,
   };
+}
+
+/**
+ * Which object actually carries `useWithTarget` — `"facade"` (api.js's
+ * `client.player`), `"raw"` (the wasm SessionHandle passed direct, which
+ * exposes it at top level per pkg/holtburger_web.d.ts:6151), or `null`.
+ *
+ * Deliberately NOT returned from `decideTradeskillCall`: that function's
+ * return shape is pinned by a deep-equality assertion in `test_tradeskill.mjs`
+ * ([3] fire dispatch), and an implementation detail must not force a public
+ * contract change. Both the guard and the dispatch site call this instead, so
+ * there is exactly one source of truth for the answer.
+ */
+export function resolveUseWithTargetReceiver(client) {
+  if (typeof client?.player?.useWithTarget === "function") return "facade";
+  if (typeof client?.useWithTarget === "function") return "raw";
+  return null;
 }
 
 // ─── Manifest ────────────────────────────────────────────────────
@@ -248,7 +276,17 @@ export function mount(ctx) {
   }
   ensureStyles();
 
-  const client = ctx?.client ?? window.__pluginClient ?? null;
+  // ⚠ 2026-08-12: this used to bind `client` ONCE at mount. If the plugin
+  // mounted before the client existed it captured `null` and stayed null
+  // forever, so tradeskill was dead for the whole session with a single
+  // warn line. Every other plugin that needs the client late awaits
+  // `window.__pluginClientReady` (book-panel.js:549, combat-hud.js:1157,
+  // target-bar.js:755); read it live instead so a late client is picked up.
+  let client = ctx?.client ?? window.__pluginClient ?? null;
+  const liveClient = () => client ?? window.__pluginClient ?? null;
+  if (!client && window.__pluginClientReady?.then) {
+    window.__pluginClientReady.then((c) => { if (c) client = c; });
+  }
   const config = { ...DEFAULT_CONFIG, ...(ctx?.config || {}) };
 
   // Pending confirmation (only used when config.requireConfirm = true).
@@ -280,7 +318,7 @@ export function mount(ctx) {
   function fireUseWithTarget(sourceGuid, targetGuid) {
     const decision = decideTradeskillCall(
       { kind: "fire", sourceGuid: sourceGuid >>> 0, targetGuid: targetGuid >>> 0 },
-      client,
+      liveClient(),
     );
     if (decision.warn && !warnedMissingExport) {
       warnedMissingExport = true;
@@ -289,7 +327,12 @@ export function mount(ctx) {
     }
     if (decision.called === "useWithTarget") {
       try {
-        client.player.useWithTarget(...decision.args);
+        // Dispatch on the receiver `decideTradeskillCall` actually resolved —
+        // this used to hardcode the facade form, which is half of the bug
+        // described above.
+        const c = liveClient();
+        if (resolveUseWithTargetReceiver(c) === "raw") c.useWithTarget(...decision.args);
+        else c.player.useWithTarget(...decision.args);
       } catch (e) {
         console.warn("[tradeskill] useWithTarget failed:", e);
       }
