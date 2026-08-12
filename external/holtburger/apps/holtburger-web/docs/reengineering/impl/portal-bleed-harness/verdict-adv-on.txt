@@ -1,0 +1,34 @@
+[s12b-adv-on] launching chrome /tmp/cdp-s12b-adv-on-1786497404668
+[s12b-adv-on] navigating
+[s12b-adv-on] renderer: ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)
+[s12b-adv-on] boot attempt 0: IN-WORLD — in-world: guid=0x5000017B
+[s12b-adv-on] in-world
+[s12b-adv-on] liveScene3d= true cam= true
+[s12b-adv-on] step 0 plateau  ok 
+[s12b-adv-on] step 1 eval loadmod ok {"keys":24,"hasSide":true}
+[s12b-adv-on] step 2 chat  ok "sent"
+[s12b-adv-on] step 3 plateau  ok 
+[s12b-adv-on] step 4 wait  ok 
+[s12b-adv-on] step 5 eval worldPose ok {"lb":"0xa9b40019","wx":32532,"wy":34567.1,"wz":94}
+[s12b-adv-on] step 6 eval mvp ok "ok"
+[s12b-adv-on] step 7 eval decode ok {"count":43,"parsed":43}
+[s12b-adv-on] step 8 eval census ok {"parsed":43,"buckets":{"strong":{"ok":6,"bad":0},"weak":{"ok":37,"bad":0},"degenerate":0},"offenders":[]}
+[s12b-adv-on] step 9 eval gatesDiag ok {"reason":"ok","offered":43,"kept":3,"dropped":{"boundary":0,"backface":28,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":12},"rect":{"x0":0.33732253949431823,"y0":0.7698881964310056,"x1":0.7279169446673905,"y1":0.8479889332566344},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"l
+[s12b-adv-on] step 10 eval picks ok {"cands":8,"picks":[{"tag":"door1","eye":{"x":32536.34,"y":34691.54,"z":77.4},"at":{"x":32536.34,"y":34691.54,"z":71},"sz":12.38,"dz":23,"portalSide":false},{"tag":"door2","eye":{"x":32538.97,"y":34688.54,"z":77.4},"at":{"x":32538.97,"y":34688.54,"z":71},"sz":10.12,"dz":23,"portalSide":false},{"tag":"door3","eye":{"x":32538.97,"y":34694.54,"z":77.4},"at":{"x":32538.97,"y":34694.54,"z":71},"sz":10.
+[s12b-adv-on] step 11 eval cam-door1 ok {"tag":"door1","eye":{"x":32536.34,"y":34691.54,"z":77.4},"at":{"x":32536.34,"y":34691.54,"z":71},"sz":12.38,"dz":23,"portalSide":false}
+[s12b-adv-on] step 12 wait  ok 
+[s12b-adv-on] step 13 shot s12b-adv-on-door1 ok 
+[s12b-adv-on] step 14 eval diag-door1 ok {"reason":"ok","offered":5,"kept":3,"dropped":{"boundary":0,"backface":2,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":0},"rect":{"x0":0.14100844837351528,"y0":0,"x1":0.9445063490058281,"y1":1},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":true,"straddle":true}
+[s12b-adv-on] step 15 eval cam-door2 ok {"tag":"door2","eye":{"x":32538.97,"y":34688.54,"z":77.4},"at":{"x":32538.97,"y":34688.54,"z":71},"sz":10.12,"dz":23,"portalSide":false}
+[s12b-adv-on] step 16 wait  ok 
+[s12b-adv-on] step 17 shot s12b-adv-on-door2 ok 
+[s12b-adv-on] step 18 eval diag-door2 ok {"reason":"ok","offered":4,"kept":3,"dropped":{"boundary":0,"backface":1,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":0},"rect":{"x0":0,"y0":0.2971733711416764,"x1":0.7220072864097979,"y1":1},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":true,"straddle":true}}
+[s12b-adv-on] step 19 eval cam-door3 ok {"tag":"door3","eye":{"x":32538.97,"y":34694.54,"z":77.4},"at":{"x":32538.97,"y":34694.54,"z":71},"sz":10.12,"dz":23,"portalSide":false}
+[s12b-adv-on] step 20 wait  ok 
+[s12b-adv-on] step 21 shot s12b-adv-on-door3 ok 
+[s12b-adv-on] step 22 eval diag-door3 ok {"reason":"ok","offered":4,"kept":3,"dropped":{"boundary":0,"backface":1,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":0},"rect":{"x0":0,"y0":0,"x1":0.7220281964840094,"y1":0.7032541399605919},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":true,"straddle":true}}
+[s12b-adv-on] step 23 eval cam-door4 ok {"tag":"door4","eye":{"x":32504.47,"y":34716.37,"z":70.78},"at":{"x":32510.46,"y":34716.55,"z":69.95},"sz":4.35,"dz":24.05,"portalSide":true}
+[s12b-adv-on] step 24 wait  ok 
+[s12b-adv-on] step 25 shot s12b-adv-on-door4 ok 
+[s12b-adv-on] step 26 eval diag-door4 ok {"reason":"ok","offered":24,"kept":13,"dropped":{"boundary":0,"backface":10,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":1},"rect":{"x0":0.3944625227914098,"y0":0,"x1":0.9431704122414704,"y1":0.7854525564496884},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":tr
+[s12b-adv-on] chrome exited rc=0
