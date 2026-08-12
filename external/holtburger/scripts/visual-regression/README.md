@@ -125,3 +125,26 @@ L347-L360, teleloc dispatch at L583-L620) into the
 - Per-view masks — exclude HUD / chat overlay regions from the diff
   (currently the canvas-only screenshot already does this; revisit if
   HUD ever lands in the canvas).
+
+## ⚠ Capture staleness (2026-08-12) — read this before trusting any frame
+
+`page.screenshot()` / `elementHandle.screenshot()` go through CDP
+`Page.captureScreenshot`, and against a GPU-composited WebGL target that call
+can hand back a **stale** copy of the drawing surface. Seen live on the owner's
+attached real-GPU 1070: every capture returned the same near-black frame for
+over ten minutes while the app was rendering ~1,150 `render()` calls/s and the
+world was plainly lit on his monitor. The 2D HUD canvases (separate elements)
+*did* update in those captures, which is what makes the artifact convincing —
+it looks like a live capture of a broken renderer rather than a broken capture.
+
+`capture-all.cjs` now guards itself (`captureVerified`): it shoots twice, and
+only if the two PNGs are byte-identical does it ask `Page.startScreencast` for
+two frames. If those screencast frames differ from each other, the screenshot
+path was lying and the screencast frame is written instead, with a loud warning
+and `via=screencast` in the log line. A genuinely static scene yields identical
+screencast frames too, so the screenshot is kept — the guard cannot false-positive.
+
+If you are writing your own capture script (harness, fleet, one-off probe):
+**use `Page.startScreencast` for anything on a real GPU.** It delivers presented
+frames. Do not conclude anything about the renderer from a screenshot that has
+not been checked for liveness.

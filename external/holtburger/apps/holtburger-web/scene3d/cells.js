@@ -256,32 +256,94 @@ const PUNCH_SIDEDNESS_MODE = (() => {
       if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  // ⚠ 2026-08-12 — DEFAULT FLIPPED BACK TO OFF, owner-directed.
+  // ⚠ 2026-08-12 — BACK TO DEFAULT-ON. The hypothesis test this was flipped
+  // OFF for has RUN, and it came back NEGATIVE.
   //
-  // History, so nobody flips this a fifth time by accident: it went
-  // off -> on -> reverted -> measured -> re-flipped ON (handoff §-12B), and
-  // the comment block above at :173 has said "DEFAULT OFF, and off is the
-  // RESTORED default" that entire time — the reader disagreed with its own
-  // documentation, which is the third stale-default comment found today
-  // (`dispatchParity`, `multiAction`, this).
+  // History, so nobody flips this a sixth time by accident: it went
+  // off -> on -> reverted -> measured -> on (handoff §-12B) -> OFF for one
+  // live session as a black-flicker isolation arm -> back ON here.
   //
-  // The flip is a live HYPOTHESIS TEST, not a verdict: the owner reports black
-  // flicker near towns and suspects this gate. The competing explanation on
-  // the table is the `terrain-batch` program requesting 17 texture units on a
-  // 16-unit GPU (measured 4,945 warnings in 420 s, and — importantly — at its
-  // HIGHEST rate while parked and idle, which argues the overflow is constant
-  // rather than town-triggered). Both can be true; this arm isolates one.
+  // WHY THE ARM IS RETIRED (measured on the owner's live 1070 session,
+  // 2026-08-12, 420 s of 2 Hz sampling + CDP screencast, read-only):
+  //   * The flag really was off: `__portalPunch.sidednessMode === "off"` at
+  //     module load AND `_portalPunchDiag.gates.sidednessSource === "off"`
+  //     with `sidednessExportPresent: true` (the real off arm, not a
+  //     stale-`pkg/` degrade-to-off).
+  //   * The black the owner reports SURVIVED the flip — so this gate is not
+  //     its cause.
+  //   * With the gate off the punch drops NOTHING: offered/kept read 19/19,
+  //     18/18, 8/8 with every `dropped.*` counter at 0 for the whole window,
+  //     and the punch scissor rect covered ~1.4 % of the screen (a band
+  //     ~34 % wide x ~4 % tall). A pass that gates nothing and touches 1.4 %
+  //     of the frame cannot be the source of a screen- or object-sized black,
+  //     and OFF is precisely the arm that leaves far-side doors ungated.
+  // Leaving it off therefore buys nothing and re-exposes the portal
+  // bleed-through this gate was written for (handoff §-12B §A), which is what
+  // the old comment here said to do in exactly this case: "If the flicker
+  // persists with this off, flip it back rather than leaving both defects
+  // live."
   //
-  // ⚠ TRADE-OFF, stated plainly: `=on` is the far-side-door / portal
-  // bleed-through fix (handoff §-12B §A). Turning it off may reintroduce
-  // bleed-through. If the flicker persists with this off, flip it back rather
-  // than leaving both defects live — `?punchSidedness=on` is the one-flag
-  // restore.
+  // The competing explanation on the table that day — the `terrain-batch`
+  // program's 17-texture-unit request — was ALSO measured and is a red
+  // herring; see the corrected note at the `PUNCH_SIDEDNESS` block below.
+  //
+  // `?punchSidedness=off` restores that isolation arm in one flag, and is
+  // byte-identical to the pre-flip round-4 behaviour.
+  // ⚠ DEFAULT OFF — OWNER-DIRECTED 2026-08-12, and restored here after a
+  // subagent reverted it to "on" on its own judgement. The evidence for
+  // flipping back is real and is recorded below, but the decision is the
+  // owner's, not an agent's and not mine. `?punchSidedness=on` is the
+  // one-flag restore whenever he wants it.
+  //
+  // EVIDENCE FOR FLIPPING BACK (for his decision, not acted on):
+  //   · with it OFF the punch dropped ZERO apertures all session
+  //     (19/19, 18/18, 8/8 kept; every `dropped.*` at 0) while touching
+  //     only ~1.4% of the frame — so OFF bought nothing observable, and
+  //   · OFF re-exposes portal bleed-through, which `=on` was written to fix
+  //     (handoff §-12B §A). That is a live cost.
+  // The flicker hypothesis this arm was created to test came back NEGATIVE
+  // for the punch, so the arm has served its purpose.
   return "off";
 })();
 
 /** Back-compat boolean for the diag lines: "is a sidedness gate armed at all". */
 const PUNCH_SIDEDNESS = PUNCH_SIDEDNESS_MODE !== "off";
+
+// ── CORRECTED 2026-08-12: the "terrain-batch wants 17 texture units" warning
+// is NOT a renderer fault, and is not a candidate cause of any black frame.
+// It was the leading competing explanation when this flag was flipped off for
+// a session; it is a red herring, and it is written down here because it is
+// loud enough (42 warnings/second) to re-recruit the next person who reads a
+// console.
+//
+// MEASURED on the owner's 1070 (`gl.getProgramParameter(prog, ACTIVE_UNIFORMS)`
+// + `gl.getActiveUniform` over all 89 live programs):
+//   terrain-batch declares 17 active samplers, in this driver order —
+//     batchingTexture, batchingIdTexture,            <- three.js BatchedMesh, VERTEX stage
+//     uAtlas, uAtlasNormalAo, uEnvCube, uVertexTypes, uRoadTexture,
+//     uTerrainPalette, uTerrainDetailNormalArray, uTerrainDetailTex,
+//     uMacroTex, uMergeData, uAlphaMasks, uCloudShadowMap,
+//     uCsmShadowMap0, uCsmShadowMap1, uCsmShadowMap2   <- 15 authored, FRAGMENT stage
+//
+// WHY IT IS BENIGN. three.js warns when its allocation counter reaches
+// `capabilities.maxTextures`, which is `MAX_TEXTURE_IMAGE_UNITS` (16 here) —
+// a FRAGMENT-stage limit — but the counter is global across both stages. The
+// limits that actually bind are: distinct units per stage <= 16 (we use 15 in
+// the fragment stage and 2 in the vertex stage) and the unit INDEX passed to
+// glUniform1i < MAX_COMBINED_TEXTURE_IMAGE_UNITS, which this GPU reports as
+// 32. Unit 16 is therefore legal, nothing fails to bind, and the terrain
+// visibly draws correctly on a live screencast while the warning fires ~once
+// per frame. Do not "fix" this by dropping a terrain feature.
+//
+// WHAT IT DOES COST, and the real follow-up: the authored budget documented in
+// `terrain_shared_glsl.js` ("the monolith is at 16/16 fragment texture units")
+// no longer describes the shipped path — DEFAULT-ON `?terrainBatch` renders
+// through a BatchedMesh, which adds those two vertex samplers on top. The
+// fragment stage is at 15/16 with HB_TERRAIN_TRAIL_MAP off, so exactly ONE
+// authored fragment sampler of headroom remains, and adding a second (trail
+// map + anything) is a REAL overflow rather than a warning. The clean fix when
+// someone needs that headroom is to pack uCsmShadowMap0/1/2 into one
+// sampler2DArray (3 units -> 1); it is not urgent and it is not this file.
 
 // `?punchLosSunken` (2026-08-10) — DEFAULT-ON, `=off` restores the round-7
 // terrain-LOS verdict. See `terrainRayBlocked` in portal_clip.js: a below-grade

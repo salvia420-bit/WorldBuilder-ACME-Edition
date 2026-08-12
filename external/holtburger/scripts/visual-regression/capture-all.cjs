@@ -294,17 +294,108 @@ async function captureMockSessionView(view, preset, outRoot) {
   await page.waitForTimeout(1500);
 
   const canvasHandle = await page.$("#scene, canvas");
-  if (canvasHandle) {
-    await canvasHandle.screenshot({ path: fpath, type: "png" });
-  } else {
-    await page.screenshot({ path: fpath, type: "png" });
-  }
+  const capture = await captureVerified(page, canvasHandle || page, fpath);
 
-  console.log(`  screenshot -> ${fpath} (errors=${consoleErrors})`);
+  console.log(
+    `  screenshot -> ${fpath} (errors=${consoleErrors}, via=${capture.via}` +
+      (capture.stale ? ", STALE-SCREENSHOT-DETECTED" : "") +
+      `)`
+  );
   return { ok: true, fpath, consoleErrors, qualityPreset: probe.qualityPreset };
   } finally {
     await browser.close().catch(() => {});
   }
+}
+
+// ---------------------------------------------------------------------------
+// Capture staleness guard (2026-08-12)
+// ---------------------------------------------------------------------------
+// `page.screenshot()` / `elementHandle.screenshot()` both go through CDP
+// `Page.captureScreenshot`, and on a GPU-composited WebGL target that call can
+// return a STALE copy of the drawing surface. Observed on the owner's attached
+// real-GPU 1070 session: every capture came back as the same near-black frame
+// for over ten minutes while the app was running ~1,150 `render()` calls/s and
+// the world was visibly lit on his monitor. Only the 2D HUD canvases (separate
+// elements) updated in the capture, which is exactly the kind of partial
+// liveness that makes the artifact look like real evidence — a whole session's
+// worth of conclusions ("the world renders black") was nearly written off it.
+// `Page.startScreencast` delivers actually PRESENTED frames and does not have
+// the problem.
+//
+// The guard is deliberately conservative, because "two identical frames" is
+// also what a genuinely static headless scene looks like, and we must not swap
+// capture paths on that. So:
+//   1. shoot twice, a beat apart;
+//   2. if the two PNGs differ -> the screenshot path is live, keep it;
+//   3. if they are byte-identical -> ask the screencast for two frames.
+//      - screencast frames differ from each other  -> the screenshot path was
+//        LYING: write the screencast frame and warn loudly;
+//      - screencast gives <2 frames, or identical ones -> the scene really is
+//        static; keep the screenshot.
+// A false positive is therefore impossible-by-construction, and the failure it
+// catches is otherwise silent.
+async function screencastFrames(page, count, gapMs) {
+  let cdp = null;
+  const frames = [];
+  try {
+    cdp = await page.context().newCDPSession(page);
+  } catch (_) {
+    return frames; // non-chromium or no CDP — caller keeps the screenshot
+  }
+  const onFrame = async (e) => {
+    try {
+      frames.push(Buffer.from(e.data, "base64"));
+      await cdp.send("Page.screencastFrameAck", { sessionId: e.sessionId });
+    } catch (_) {}
+  };
+  try {
+    cdp.on("Page.screencastFrame", onFrame);
+    await cdp.send("Page.startScreencast", { format: "png", everyNthFrame: 1 });
+    await new Promise((r) => setTimeout(r, gapMs * (count + 1)));
+    await cdp.send("Page.stopScreencast").catch(() => {});
+  } catch (_) {
+  } finally {
+    try {
+      cdp.off("Page.screencastFrame", onFrame);
+    } catch (_) {}
+    await cdp.detach().catch(() => {});
+  }
+  return frames;
+}
+
+async function captureVerified(page, target, fpath) {
+  await target.screenshot({ path: fpath, type: "png" });
+  const first = fs.readFileSync(fpath);
+
+  const probePath = `${fpath}.liveprobe.png`;
+  let second = null;
+  try {
+    await page.waitForTimeout(250);
+    await target.screenshot({ path: probePath, type: "png" });
+    second = fs.readFileSync(probePath);
+  } catch (_) {
+  } finally {
+    try {
+      fs.unlinkSync(probePath);
+    } catch (_) {}
+  }
+
+  if (second && !first.equals(second)) return { via: "screenshot", stale: false };
+
+  const frames = await screencastFrames(page, 2, 250);
+  if (frames.length < 2 || frames[0].equals(frames[frames.length - 1])) {
+    // Scene is genuinely static (or no screencast available) — screenshot stands.
+    return { via: "screenshot", stale: false };
+  }
+
+  fs.writeFileSync(fpath, frames[frames.length - 1]);
+  console.warn(
+    `  ⚠ STALE SCREENSHOT: page.screenshot() returned an unchanging frame while ` +
+      `the compositor was presenting new ones. Wrote a Page.startScreencast frame ` +
+      `instead (full viewport, not the element crop). See the capture-staleness ` +
+      `guard in capture-all.cjs.`
+  );
+  return { via: "screencast", stale: true };
 }
 
 async function captureLiveAceView(view, preset, outRoot, args) {
