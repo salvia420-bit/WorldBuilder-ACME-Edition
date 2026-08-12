@@ -1,0 +1,47 @@
+{
+ "arm": "s12b-lbcross",
+ "url": "http://127.0.0.1:8772/apps/holtburger-web/index.html?nosw=1&autoLogin=1&autoSpawn=first&agent=1&renderScale=1&camDebug=on&account=agentp09&password=agentp09&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F",
+ "port": 9342,
+ "outDir": "/home/wbterminal/fanout-s12/B/eyetest-B/out",
+ "viewport": [1280, 800],
+ "hardTimeoutMs": 1500000,
+ "steps": [
+  { "op": "plateau", "minLbs": 10 },
+
+  { "op": "eval", "name": "riderPresent",
+    "expr": "({drain: typeof window.__hbWasm?.moveTelemetryDrain, status: typeof window.__hbWasm?.moveTelemetryStatus, poseFn: typeof window.liveScene3d?.sessionHandle?.getLocalPlayerPose})" },
+
+  { "op": "eval", "name": "packCensusBoot",
+    "expr": "(()=>{const f=window.__hbFetch;if(!f)return '<absent>';const lanes={};let bytes=0;for(const k in f.lanes){lanes[k]={done:f.lanes[k].done,bytes:f.lanes[k].bytes};bytes+=f.lanes[k].bytes;}const comp={};for(const k in f.byComponent){const c=f.byComponent[k];if(c.requests)comp[k]={requests:c.requests,mb:+(c.bytes/1048576).toFixed(2)};}return {totalMB:+(bytes/1048576).toFixed(2),forgotten:f.forgotten,retries:f.retries,lanes,comp};})()" },
+
+  { "op": "eval", "name": "bakeStatsBoot",
+    "expr": "(()=>{const s=window.__diag?.bakeWorkerStats?.();if(!s)return '<absent>';return {fallbacks:s.fallbacks,maxPending:s.maxPending??null,pendingNow:s.pendingNow??null};})()" },
+
+  { "op": "eval", "name": "installWatchdogs",
+    "expr": "(()=>{window.__lag=[];let last=performance.now();window.__lagTimer=setInterval(()=>{const n=performance.now();const d=n-last-100;if(d>200)window.__lag.push({at:Math.round(n),lagMs:Math.round(d)});last=n;},100);window.__lb=[];let prev=null;window.__lbTimer=setInterval(()=>{try{const p=window.liveScene3d?.sessionHandle?.getLocalPlayerPose?.();if(!p)return;const c=p.landblockId>>>0;const x=p.x,y=p.y;try{p.free?.()}catch(e){}if(c!==prev){window.__lb.push({at:Math.round(performance.now()),cell:'0x'+c.toString(16),x:+x.toFixed(1),y:+y.toFixed(1)});prev=c;}}catch(e){}},100);return 'installed';})()" },
+
+  { "op": "chat", "text": "@teleloc 0x977B000C 25.81 73.85 0.0", "settleMs": 16000 },
+  { "op": "plateau", "minLbs": 5 },
+
+  { "op": "eval", "name": "poseAfterTeleport",
+    "expr": "(()=>{const p=window.liveScene3d?.sessionHandle?.getLocalPlayerPose?.();if(!p)return '<no-pose>';const o={cell:'0x'+(p.landblockId>>>0).toString(16),x:+p.x.toFixed(2),y:+p.y.toFixed(2),z:+p.z.toFixed(2)};try{p.free?.()}catch(e){}return o;})()" },
+
+  { "op": "eval", "name": "lagResetPreRun", "expr": "(()=>{const n=window.__lag.length;window.__lag.length=0;return {clearedEvents:n};})()" },
+
+  { "op": "key", "action": "down", "key": "w", "ms": 90000 },
+  { "op": "key", "action": "up", "key": "w" },
+  { "op": "wait", "ms": 4000 },
+
+  { "op": "eval", "name": "crossSeries",
+    "expr": "({cells: window.__lb, lagEvents: window.__lag, maxLagMs: window.__lag.reduce((m,e)=>Math.max(m,e.lagMs),0)})" },
+
+  { "op": "eval", "name": "bakeStatsAfter",
+    "expr": "(()=>{const s=window.__diag?.bakeWorkerStats?.();if(!s)return '<absent>';return {fallbacks:s.fallbacks,maxPending:s.maxPending??null,pendingNow:s.pendingNow??null};})()" },
+
+  { "op": "eval", "name": "packCensusAfter",
+    "expr": "(()=>{const f=window.__hbFetch;if(!f)return '<absent>';const lanes={};let bytes=0;for(const k in f.lanes){lanes[k]={done:f.lanes[k].done,bytes:f.lanes[k].bytes};bytes+=f.lanes[k].bytes;}const comp={};for(const k in f.byComponent){const c=f.byComponent[k];if(c.requests)comp[k]={requests:c.requests,mb:+(c.bytes/1048576).toFixed(2)};}return {totalMB:+(bytes/1048576).toFixed(2),forgotten:f.forgotten,retries:f.retries,lanes,comp};})()" },
+
+  { "op": "eval", "name": "stopWatchdogs",
+    "expr": "(()=>{clearInterval(window.__lagTimer);clearInterval(window.__lbTimer);return 'stopped';})()" }
+ ]
+}

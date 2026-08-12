@@ -303,9 +303,15 @@ export function applyGfxReliefToWasm(wasmNs, cfg, label = "main") {
  * moment the wasm initialises (long before `init3D` installs `__diag`).
  *
  * The `__diag.gfxRelief` mirror below only fires if `__diag` already exists;
- * at boot it does not, so treat `__diag.geometry.relief()` as THE diag entry
- * point — it reads `window.__gfxRelief` + the worker ack and is installed by
- * `diag/geometry.js::attachGeometry`. Idempotent.
+ * at boot it does not, so treat `__diag.geometry.reliefGate()` as THE diag
+ * entry point — it reads `window.__gfxRelief` + the worker ack and is
+ * installed by `diag/geometry.js::attachGeometry`. Idempotent.
+ *
+ * NOT to be confused with `__diag.geometry.relief` (no parens): that is the
+ * RELIEF-IN-BAKE data field owned by `scene3d/geom_bundles.js` and reports
+ * whether the BAKED variant is being consumed. The gate was called `relief()`
+ * until 2026-08-11, when the collision was found to be shadowing the data
+ * field outright (task-T4-EYES-report.md §3.3).
  */
 export function installGfxReliefOnWindow(cfg) {
   if (typeof window === "undefined") return cfg;

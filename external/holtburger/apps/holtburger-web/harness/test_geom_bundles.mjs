@@ -633,6 +633,80 @@ for (const [v, want] of [
   gb._testDisarm();
 }
 
+// ---------------------------------------------------------------------------
+// PART 8 — DIAG-SHADOW: `__diag.geometry` is SHARED with diag/geometry.js
+//
+// Both modules install on the same key. Before 2026-08-11 each did it with a
+// whole-object assignment, so the loser's surface vanished — in practice the
+// geom-audit ran last and its `relief()` GATE FUNCTION sat where the
+// RELIEF-IN-BAKE `relief` DATA FIELD should be, which is why the T4 eye
+// session could not read `__diag.geometry.relief.variantRowsResident` in any
+// arm and had to match a console string instead (task-T4-EYES-report.md
+// §3.3). These checks pin the composition in BOTH install orders.
+// ---------------------------------------------------------------------------
+{
+  const { attachGeometry } = await import("../scene3d/diag/geometry.js");
+  const reliefWasm = {
+    assemble_model_geometry: () => null,
+    assemble_envcell_geometry: () => null,
+    assemble_model_geometry_relief: () => null,
+    geom_relief_rows_resident: () => 11,
+  };
+
+  // --- order A: the audit attaches FIRST, then the bundles arm.
+  globalThis.window.__diag = {};
+  attachGeometry(globalThis.window.__diag);
+  gb._testArm(reliefWasm, { relief: true });
+  let d = globalThis.window.__diag.geometry;
+  ok(d === gb.geomBundleStats(), "order A: __diag.geometry keeps the stats identity");
+  ok(
+    d.relief && typeof d.relief === "object" && typeof d.relief.armed === "boolean",
+    "order A: __diag.geometry.relief is the DATA field, not a function"
+  );
+  ok(d.relief.armed === true, "order A: relief.armed readable literally");
+  ok(typeof d.reliefGate === "function", "order A: the gfxRelief gate survives as reliefGate()");
+  ok(typeof d.audit === "function" && typeof d.summary === "function",
+    "order A: the geom-audit entry points survive");
+  ok(!!d.bundles && !!d.entityDecode && !!d.geomFallback,
+    "order A: the bundle counters survive");
+
+  // --- order B: the bundles arm FIRST, then the audit attaches.
+  globalThis.window.__diag = {};
+  gb._testArm(reliefWasm, { relief: true });
+  attachGeometry(globalThis.window.__diag);
+  d = globalThis.window.__diag.geometry;
+  ok(d === gb.geomBundleStats(), "order B: __diag.geometry keeps the stats identity");
+  ok(
+    d.relief && typeof d.relief === "object" && d.relief.armed === true,
+    "order B: the audit does NOT shadow the relief data field"
+  );
+  ok(typeof d.reliefGate === "function" && typeof d.audit === "function",
+    "order B: the audit entry points land on the shared object");
+  ok(!!d.bundles && !!d.entityDecode,
+    "order B: the audit does NOT wipe the bundle counters");
+
+  // The gate is still a working reader (it reads window.__gfxRelief).
+  globalThis.window.__gfxRelief = { enabled: true, subdivLevel: 0, scale: 1.0 };
+  const gate = d.reliefGate();
+  ok(gate && gate.config && gate.config.enabled === true,
+    "reliefGate() still reports the resolved gfxRelief config");
+  ok(
+    gate.config !== d.relief,
+    "reliefGate() and the relief data field are DIFFERENT surfaces"
+  );
+
+  // JSON-serialisable: a headless capture of __diag.geometry must carry the
+  // registered relief fields (a function would have been dropped silently).
+  const round = JSON.parse(JSON.stringify(d));
+  ok(
+    round.relief && round.relief.variantRowsResident === d.relief.variantRowsResident,
+    "relief fields survive JSON capture (a gate function would not)"
+  );
+
+  gb._testDisarm();
+  delete globalThis.window.__gfxRelief;
+}
+
 console.log(`geom-bundles: ${passed} passed, ${failed} failed`);
 console.log(failed === 0 ? "GEOM-BUNDLES ✅" : "GEOM-BUNDLES ❌");
 process.exit(failed === 0 ? 0 : 1);

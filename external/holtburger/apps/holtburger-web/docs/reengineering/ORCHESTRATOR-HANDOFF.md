@@ -4,6 +4,126 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -12B. 2026-08-12 (night, lane B of 2) — THE OWNER'S PORTAL BLEED-THROUGH, ROOT-CAUSED; THE FIX IS A FLAG THAT IS ALREADY DEFAULT-OFF
+
+Branch **`orch/s12-portal`**, cut from `c53a4448`. Master untouched, no flag default
+moved, no client code changed by this lane. **This lane was SPOT-preempted twice**;
+everything below survived because it was pushed as it landed.
+
+    2d99ac76  the portal-bleed A/B harness — one camera rig, two flag arms, runtime anchors
+    e45c9821  the owner's portal bleed-through, root-caused
+    <report/handoff commit — see branch tip>
+
+### A. THE BUG IS REAL, REPRODUCED, AND `?punchSidedness=on` FIXES IT
+Owner: *"the sideportalpunch is making windows visible through roofs, walls etc."*
+Reproduced at Holtburg on the T4. Report `impl/task-PORTAL-BLEED-report.md`.
+
+**Root cause is structural, not tuning.** Retail's `PView::ConstructView` reaches its
+far-punch (`acclient.c:462557`) only past **three** rejects — sidedness
+(`:462519-462541`), `GetClip` + `if (!ppoly) return 0` (`:462542-462544`), and
+`CEnvCell::GetVisible` + `Render::copy_view` (`:462545-462554`). **We implement one of
+the three and it is default-OFF.** wasm selection is frustum-only
+(`src/lib.rs:35677-35680`) and the sole occlusion gate in the JS chain,
+`terrainRayBlocked` (`scene3d/portal_clip.js:323-408`), samples the terrain
+**heightfield** — *a roof is not terrain*. The punch material is `AlwaysDepth`
+(`scene3d/portal_punch.js:102`) writing `FAR_DEPTH` (`:38`/`:95`), so an aperture
+behind a roof overwrites that roof's DEPTH while its COLOUR stays, and the cells pass
+wins there.
+
+**The number that is the bug:** with the gate off, `_portalPunchDiag` shows **31 of 31**
+(se-mid) and **36 of 37** (over-45) apertures depth-punched with *zero* rejections.
+With it on, 46-of-62 and 51-of-72 are rejected backface — 63–75%, matching the
+"roughly half in a town" estimate already written at `portal_clip.js:869-870`.
+
+### B. THE CONTROL ARM IS WHAT MAKES THE EYE RESULT MEAN ANYTHING
+A third arm ran `?portalPunch=off` (`_portalPunchDiag` reads `"<absent>"` — the pass is
+not constructed), giving an artifact-free reference. Distance from it (`diffshots.py`,
+changed% = >16/255 luma): over-45 **2.225% → 0.115%**, over-hi **2.242% → 0.143%** —
+the gate collapses the difference from no-punch by ~16–19×. A diff overlay puts every
+changed pixel **on building roofs, terrain untouched**.
+- **Ground-level cameras KEEP a difference on purpose** and must not be read as residue.
+  The punch exists to reveal interiors through near-side doorways; driving `e-low`/`s-low`
+  to zero would mean the feature was off.
+- A wooden gable/truss on that roof appears in **all three arms including punch-off**, so
+  it is legitimate geometry, not bleed. Recorded because an eye-only pass would have
+  called it a residual bug.
+
+### C. WHAT THE ORCHESTRATOR/OWNER OWES — the flip, and its gate
+**I did not flip the default (I7 / PRE §7).** Recommended: `punchSidedness` → default
+`on`. It restores retail's own first reject from the real wire bit (measured
+15,186/15,186 and 1,840,177/1,840,177 parity, zero on-plane); the r5 regression that
+made people wary was the **AABB-centre `heuristic` arm**, which this does not touch.
+Gate it should pass first:
+1. **an owner-rig eye pass** — every verdict here is a **T4/Linux/EGL** arm, and §-10 B
+   records the Yaraq indoor bleed reproducing on the owner's rig and a Mesa/Intel laptop
+   but *not* on the T4. This needs his ratification, not mine.
+2. **a ground-level doorway-reveal check** — confirm the gate does not cull a near-side
+   doorway. I have no frame isolating a single doorway.
+3. `_portalPunchDiag.gates.sidednessSource` must read **`"flag"`**. If `pkg/` is stale it
+   reads `"unavailable"` and gates NOTHING — the flip would be a no-op that looks like a fix.
+
+**What the flip does NOT fix:** retail's other two rejects are still absent, so an
+aperture on the correct side but occluded by a *different* building can still punch. A
+full answer is a `PView` port — a redesign, not attempted.
+
+### D. SCREENSHOTS — 12 files taildropped to `redmi-note-13-5g`
+5 before/after pairs (`over-45`, `se-mid`, `s-low`, `over-hi`, `e-low`) + 2 composites.
+**Read `s12-B-holtburg-roof-THREEWAY.png` first**: punch=off | sidedness=off |
+sidedness=on on one roof — the orange window aperture sits on the slates in the middle
+panel only. `tailscale file cp` returned rc 0 for all 12, each warning
+`redmi-note-13-5g is not replying; trying anyway` (handset asleep; Taildrop queues).
+**This box cannot confirm delivery, only acceptance for transfer.**
+
+### E. PRIORITY 2 — THE LB STALL DID NOT REPRODUCE HERE (a T4 negative, not a closure)
+Report §10. Two live **teleport-then-cross** arms (hypothesis 4's positive case; §-12
+had already run the no-teleport control), both from the card's own
+`@teleloc 0x977B000C 25.81 73.85 0.0`, pose confirmed on landing.
+- **The card's crossing `0x977b000c`→`0d` took 2766 ms — FASTER than the ~3000 ms
+  steady-state cell cadence.** The ~6.5 s appears nowhere in either trace.
+- **The main thread never parked**: `maxLagMs` **220** (one event) over a 47.1 s /
+  467-sample walk; 1032 ms in the other run. The only ≥400 ms no-progress run starts
+  *after* key-up.
+- **Hypothesis 1 re-exonerated on the teleport arm too** — `fallbacks` read
+  `{total:0, lastError:null}` before the teleport *and* after the crossing, both runs;
+  `maxPending` 31→31 across the crossing.
+- **The one reproducible signal:** the **landblock-group** boundary
+  `0x977b0010`→`0x977c0009` cost **5002 ms and 5021 ms** (two independent runs, same
+  23.4 units, ~3000 ms steady state) with **no main-thread park**. ~2 s, not ~6.5 s;
+  a movement/residency cost. Recorded, not claimed to be the card's defect.
+- **TRAP:** run 1 appeared to show that crossing taking **29,116 ms**. That is an
+  artifact — the cell watchdog logs only on *change* and its first sample is when a
+  pose first became readable, not key-down. Run 2 stamped t=0 at sampler-arm and shows
+  the player moving by **t=154 ms**. **Do not quote the 29 s.**
+- **This does not close the card.** It is a **T4/Linux/EGL** negative; the 6.5 s was
+  measured elsewhere and this box has disagreed with the owner's rig before. It removes
+  hypotheses 1 and (on this hardware) 4; the rest must be chased where it was seen.
+
+### F. PRIORITY 3 — characterised and quantified; recommend LEAVING IT
+Report §11. Write-up only, nothing landed, no redesign.
+- **The retention is real**: `forgotten: 0` at boot *and* after a walk — `forget()`
+  (`pack_fetch_controller.js:563-574`) is never called on this path.
+- **But the controller is gated behind `?packSource=on`, DEFAULT OFF, and on the OFF
+  arm the module is not even imported** (`index.html:2742-2747`, "byte-identical legacy
+  boot, the kill path"). `__hbFetch` read **`"<absent>"`** on both default-arm boots
+  this session. **On the arm the owner ships, N is zero.**
+- **On a real `packSource=on` boot**: 11.37 MB retained at boot → 11.44 MB after a
+  teleport + 60 s walk. **The ~1.3 MB payloads are `pvw` (1.57 MB each) and they do NOT
+  grow with movement** — only `tiles` accumulate, at ~5.3 KB each. So the growth term is
+  **~4 MB/hour of walking**, unbounded, *not* 1.3 MB × N.
+- Recommend leaving it to the wire lane as §-11 scoped. The eventual shape is a
+  `forget()` on settled `tiles` the ring has passed; `dropQueuedOutside` (`:577-584`)
+  already knows which urls are still wanted.
+
+### G. GATES RE-RUN THIS SESSION (post-reboot, node_modules symlink re-verified)
+`portal_clip.test.mjs` **59 assertion groups**, `test_diag_schema` **69/0**,
+`test_pack_fetch_controller` **100/0** — all printing real assertion counts, so the
+false-PASS mode the card warns about did not occur. `test_pack_fetch_region`,
+`test_xu7_transcode`, `harness/test_build_shell` **NOT run** — they need
+`/mnt/wbterminal2`, absent on this box. Rust suites not run and not claimed; this lane
+changed no Rust.
+
+---
+
 ## -11. 2026-08-11 (night) — CTX-LOSS-MIRRORS ROOT-CAUSED AND FIXED; TWO BLIND SPOTS INSTRUMENTED
 
 Unattended orchestrator session, owner away, owner-authorised to commit and push.

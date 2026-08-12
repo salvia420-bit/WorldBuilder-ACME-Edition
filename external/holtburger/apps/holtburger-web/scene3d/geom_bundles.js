@@ -97,10 +97,33 @@ const _stats = {
   relief: { armed: false, variantRowsResident: 0, modelsAssembled: 0 },
 };
 
+/**
+ * DIAG-SHADOW (2026-08-11, GFXOBJ-RELIEF). `scene3d/diag/geometry.js` uses the
+ * SAME `__diag.geometry` key for the geom-audit entry points, and both sides
+ * used to install with a whole-object assignment — so whichever module ran
+ * last won outright. In practice the audit ran last, its `relief()` GATE
+ * FUNCTION sat where this module's relief STATS object should be, and the
+ * RELIEF-IN-BAKE assertion `__diag.geometry.relief.variantRowsResident > 0`
+ * could not be read literally in any arm (task-T4-EYES-report.md §3.3 — the
+ * T4 session had to fall back to matching a console string).
+ *
+ * The two surfaces now COMPOSE. This module keeps ownership of the object
+ * IDENTITY (`__diag.geometry === geomBundleStats()`, the registry contract in
+ * `harness/lib/diag_schema.mjs`), and carries across anything the audit
+ * attached first; `attachGeometry` attaches ONTO this object rather than
+ * replacing it. The registered data fields keep the `relief` key; the gate
+ * function is `reliefGate()`. Order-independent in both directions.
+ */
 function _installDiag() {
   try {
     if (typeof window === "undefined") return;
     if (!window.__diag) window.__diag = {};
+    const prior = window.__diag.geometry;
+    if (prior && prior !== _stats) {
+      for (const k of Object.keys(prior)) {
+        if (!(k in _stats)) _stats[k] = prior[k];
+      }
+    }
     window.__diag.geometry = _stats;
   } catch (_) {}
 }

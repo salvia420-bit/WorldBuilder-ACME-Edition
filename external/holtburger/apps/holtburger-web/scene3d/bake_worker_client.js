@@ -1038,7 +1038,7 @@ export class BakeWorkerClient {
       // instance. Without this the diag reader can only see what the page
       // SENT, and a worker that silently baked flat (stale pkg/ in the worker's
       // module graph, or an init ordering slip) would be invisible.
-      // `__diag.geometry.relief().workerApplied` reads this.
+      // `__diag.geometry.reliefGate().workerApplied` reads this.
       if (msg.gfxRelief) globalThis.__hbGfxReliefWorkerAck = msg.gfxRelief;
       return entry.resolve(true);
     }
