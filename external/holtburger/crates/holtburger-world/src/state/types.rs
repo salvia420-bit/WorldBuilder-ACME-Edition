@@ -434,20 +434,15 @@ impl WorldState {
     /// keeping routing separate from the state model itself.
     pub fn handle_message(&mut self, msg: &GameMessage) -> Vec<WorldEvent> {
         let mut events = Vec::new();
-        // ORACLE open defect #1 (2026-08-12) — probe the local player's
-        // augmentation across EVERY wire message. Two map lookups per message
-        // in the steady state; the (expensive) Debug format of the message
-        // only runs on an actual transition, of which a session has a handful.
-        let aug_before = self.aug_probe();
+        // ORACLE open defect #1 (2026-08-12) — the augmentation probe used to
+        // sit HERE, and that was the bug in the instrument: the live wasm
+        // client bypasses this wrapper and calls
+        // `handlers::routing::handle_message` directly
+        // (`apps/holtburger-web/src/lib.rs:43647`), so the probe only ever ran
+        // under the unit test that exercised this method. It now lives in
+        // `routing::handle_message` — the function this line delegates to —
+        // which covers this caller and the direct one alike, exactly once.
         crate::handlers::handle_message(self, msg, &mut events);
-        if self.aug_probe() != aug_before {
-            // Variant name only — `GameMessage`'s Debug carries the whole
-            // payload and we want a label, not a packet dump. Only formatted
-            // on an actual transition, of which a session has a handful.
-            let rendered = format!("{msg:?}");
-            let site = rendered.split(['(', ' ', '{']).next().unwrap_or("?");
-            self.note_aug_transition(site, aug_before);
-        }
         events
     }
 

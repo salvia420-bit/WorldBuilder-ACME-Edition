@@ -6557,3 +6557,83 @@ fn test_aug_trace_records_wipe_and_self_create_preserves_augmentation() {
         "this control is the ENTITY-went shape; the live defect is the other one"
     );
 }
+
+/// ORACLE open defect #1 (2026-08-12) — the gap that made the trace useless in
+/// a browser.
+///
+/// The test above drives `WorldState::handle_message`, the inherent wrapper.
+/// The live wasm client does NOT call it: `apps/holtburger-web/src/lib.rs:43647`
+/// calls `holtburger_world::handlers::routing::handle_message` directly. While
+/// the probe sat on the wrapper, that made the trace structurally incapable of
+/// recording anything in a real session — and it produced an empty trace there,
+/// which reads exactly like the meaningful "no transition ever happened, so ACE
+/// never sent it" answer the instrument was built to give.
+///
+/// So this asserts the probe on the path PRODUCTION takes. It must call
+/// `routing::handle_message` directly; routing it through the wrapper would
+/// re-open the same blind spot without failing.
+#[test]
+fn test_aug_trace_records_via_direct_routing_call_the_live_client_uses() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x50000044);
+
+    let mut properties = WorldObjectProperties::default();
+    properties
+        .ints
+        .insert(PropertyInt::AugmentationJackOfAllTrades, 1);
+    let player_description = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: player_guid,
+        sequence: 1,
+        event: GameEvent::PlayerDescription(Box::new(PlayerDescriptionEventData {
+            guid: player_guid,
+            sequence: 1,
+            name: "Player".to_string(),
+            wee_type: 1,
+            pos: Some(WorldPosition::default()),
+            properties,
+            positions: std::collections::BTreeMap::new(),
+            attributes: std::collections::BTreeMap::new(),
+            skills: std::collections::BTreeMap::new(),
+            enchantments: Vec::new(),
+            spells: std::collections::BTreeMap::new(),
+            has_health: true,
+            options1: CharacterOptions1::empty(),
+            options2: CharacterOptions2::empty(),
+            shortcuts: Vec::new(),
+            hotbar_spells: Vec::new(),
+            desired_comps: Vec::new(),
+            spellbook_filters: 0,
+            gameplay_options: Vec::new(),
+            inventory: Vec::new(),
+            equipped_objects: Vec::new(),
+        })),
+    }));
+
+    // The production call shape, verbatim: the free function, not the method.
+    let mut events = Vec::new();
+    crate::handlers::routing::handle_message(&mut state, &player_description, &mut events);
+
+    assert_eq!(
+        state.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+        Some(1),
+        "the direct routing call must still seed the bag"
+    );
+    assert_eq!(
+        state.aug_trace().len(),
+        1,
+        "the probe must fire on the DIRECT routing call — this is the assertion \
+         that fails if the hook moves back onto WorldState::handle_message"
+    );
+    assert_eq!(state.aug_trace()[0].before, None);
+    assert_eq!(state.aug_trace()[0].after, Some(1));
+
+    // And exactly once: the inherent wrapper delegates into the same function,
+    // so a second probe there would double-record every transition.
+    let mut state2 = WorldState::synthetic();
+    let _ = state2.handle_message(&player_description);
+    assert_eq!(
+        state2.aug_trace().len(),
+        1,
+        "the wrapper must not double-record now that routing carries the probe"
+    );
+}
