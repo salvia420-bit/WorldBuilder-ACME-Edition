@@ -214,7 +214,7 @@ async function handleInit(msg) {
   }
   // `gfxRelief` echoes what THIS instance applied (incl. `applied["bake-worker"]
   // .wasmExportPresent`) so the page can prove the worker did not silently bake
-  // flat — see `__diag.geometry.relief().workerApplied`.
+  // flat — see `__diag.geometry.reliefGate().workerApplied`.
   self.postMessage({ type: "ready", id: msg.id, gfxRelief: gfxReliefAck });
 }
 

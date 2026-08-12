@@ -752,7 +752,15 @@ export const REGISTRY = Object.freeze([
       + "DT-11) and read ZERO until the entity-path instrumentation lands "
       + "(named T13 remainder). bytesOut = wasm->JS boundary bytes of "
       + "assembled bundles; geomFallback counts models served by the "
-      + "runtime decode under the armed flag (must trend to entity-only).",
+      + "runtime decode under the armed flag (must trend to entity-only). "
+      + "CO-TENANT (2026-08-11): scene3d/diag/geometry.js attaches the "
+      + "geom-audit entry points audit()/summary()/reliefGate() ONTO this "
+      + "same object. Both sides used to install with a whole-object "
+      + "assignment, so the loser's surface disappeared — the audit's old "
+      + "`relief()` gate shadowed the `relief` DATA fields below and made "
+      + "the RELIEF-IN-BAKE assertion unreadable in every T4 arm "
+      + "(task-T4-EYES-report.md 3.3). geom_bundles.js owns the object "
+      + "IDENTITY; the gfxRelief RESOLUTION gate is `reliefGate()`.",
     fields: {
       "bundles.assembled": C("count"),
       "bundles.bytesOut": C("bytes", ["staged"]),
