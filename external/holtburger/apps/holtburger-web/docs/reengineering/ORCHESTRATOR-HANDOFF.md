@@ -4,7 +4,7 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
-## -12. 2026-08-11/12 (overnight) — THREE LANES, TWO RETRACTIONS, ONE FLAG FLIPPED AND UNFLIPPED
+## -12. 2026-08-11/12 (overnight) — THREE LANES, TWO RETRACTIONS, AND A DEFAULT THAT MOVED THREE TIMES
 
 Owner-directed multi-agent night, run from a laptop orchestrator session. He was present
 early, went to bed at the end, and mid-run changed the standing policy: **"we should be
@@ -14,7 +14,7 @@ on."** So merges to master and earned default flips are now the orchestrator's t
 This section is written to that standard: the wins are here, and so are the two places
 tonight's own conclusions were overturned.
 
-**`origin/master` is `e8a94405`.** Everything below is merged into it; every branch was
+**`origin/master` is `75e4f148`.** Everything below is merged into it; every branch was
 compile-checked and suite-verified before it landed.
 
 ### A. THE HEADLINE THE OWNER ASKED FOR — portal bleed-through, root-caused
@@ -32,32 +32,42 @@ overwrites that roof's DEPTH while its COLOUR stays. **Structural, not tuning.**
 slates in the MIDDLE panel alone, so the claim is *"on matches no-punch"*, not the weaker
 *"on looks better than off"*.
 
-### B. ⚠ I FLIPPED `punchSidedness` DEFAULT-ON, THEN REVERTED IT THE SAME NIGHT
-`421cdf0a` flipped it; **`e8a94405` put it back to default-OFF.** Read both before
-touching this. The flip's reasoning was sound and still is: the gate stopped being
-speculative when PORTAL-FLAGS-DECODE showed `CellPortal.flags` bit 1 IS retail's
-`portal_side` (stored INVERTED, acclient.c:362389, which is why neither ACE nor DRW
-carries it), exact on **15,186/15,186** outdoor-facing portals.
+### B. `punchSidedness` — FLIPPED, REVERTED, MEASURED, RE-FLIPPED. It is DEFAULT-ON.
+This default moved three times in one night; a bisect will land in the middle of it, so
+here is the whole arc. `421cdf0a` ON → `e8a94405` OFF → `26c7cd63` measured → `75e4f148`
+**ON, final**. Each step was the honest answer to the evidence then available.
 
-What killed it is what the flip itself recorded as a residual risk — the **converse**
-case, a ground-level doorway where the punch MUST happen — plus two things lane B then
-found **in its own prior data**:
-1. its earlier `n-low` row reads **8 offered / 0 kept / 8 BACKFACE** — a GROUND-LEVEL
-   camera where the gate culled EVERY aperture — and nothing adjudicates whether those 8
-   were legitimately far-side or a regression. *That row was already on disk when I
-   flipped, and I did not weigh it.*
-2. the 15,186/15,186 parity is measured in **DAT space**; the live gate applies the plane
-   in **AC WORLD space** after the wasm→world transform. **A reflection anywhere in that
-   link silently INVERTS the gate while DAT-space parity still reads perfect.** Unchecked.
+The flip's basis was always sound: PORTAL-FLAGS-DECODE showed `CellPortal.flags` bit 1 IS
+retail's `portal_side` (stored INVERTED, acclient.c:362389, which is why neither ACE nor
+DRW carries it), exact on **15,186/15,186** outdoor-facing portals. What was missing was
+the **converse** case — a ground-level doorway where the punch MUST happen — plus two
+risks lane B found in its own prior data. Both are now closed by live T4 measurement:
 
-Neither proves the flip wrong; both prove it **unmeasured in the direction that matters**.
-An over-cull at ground level is worse and far more visible than the roof bleed it fixes,
-so with the owner asleep the default returned to the state he knows. `?punchSidedness=on`
-reproduces the fix in one param. **THIS IS THE NEXT SESSION'S FIRST JOB** — the
-instruments are already on master: `impl/portal-bleed-harness/{mkprobe,mkaudit}.mjs`.
-Note lane B's own methodological point: seven ORBIT cameras at elevation 18–62° all look
-DOWN at rooftops and **cannot** find a ground-level cull. Do not settle this with more of
-those frames.
+1. **DAT-space vs AC-WORLD-space: NO REFLECTION.** The parity number is DAT-space; the
+   live gate applies the plane in world space after the wasm→world transform, where a
+   reflection would invert it silently. `mkprobe`'s census tests that link **two-sided**:
+   per aperture it asks the SHIPPED gate for a verdict at the owning cell's AABB centre
+   (inside ⇒ must drop) AND at that point's mirror through the aperture plane (outside ⇒
+   must allow), so an inversion fails every case. **127 apertures, 0 bad, 0 degenerate,
+   offenders []**, with 18 "strong" (centre ≥ 2.0 m off plane) correct in BOTH directions.
+2. **The `n-low` 8 offered / 0 kept / 8 BACKFACE row is NOT a regression.** `mkaudit`
+   re-ran that exact camera and classified every drop: **1 correctDrop, 0 SUSPICIOUS**
+   (the far-side signature), 7 near-plane weakWitness. `suspicious` 0 and `offenders` []
+   across all eight probe cameras.
+3. **The punch still fires at ground level**, square-on, cameras derived from geometry
+   rather than from the gate: door1 3/5 kept, door2 3/4, door3 3/4, door4 13/24, walls
+   26/46 and 13/58 — `sidednessSource "flag"`, renderer asserted in-page every row.
+
+**HONEST LIMIT, carried from the verdict:** 7 of the 8 `n-low` drops are weak witnesses
+the audit alone cannot adjudicate; they are covered by the census's weak bucket (109
+cases, 0 bad). The claim is **0 proven-wrong out of 8 and 127/127 two-sided agreement on
+the sign** — NOT 8 independently proven drops.
+
+Methodological note worth keeping: lane B refused to settle this with more frames, because
+the prior rig's seven ORBIT cameras at elevation 18–62° all look DOWN at rooftops and
+**cannot** find a ground-level cull. It built instruments instead
+(`impl/portal-bleed-harness/{mkprobe,mkaudit}.mjs`, on master). Use them for the next
+sidedness question rather than shooting more beauty frames.
 
 ### C. ⚠ ORACLE DEFECT #1 IS OPEN AGAIN — the "proof" was reading a FOSSIL
 `6e87563b` claimed defect #1 PROVEN by reading both lanes "at the SAME millisecond, in
@@ -145,15 +155,12 @@ being a function, vanished silently from any JSON capture, taking `bundles.*`,
 Suites at `e8a94405`: diag-schema **69/0**, geom-bundles **91/0**, pack-fetch-controller
 **100/0**, tex-compressed-only **115/0**, cell-fusion **20/0**; `cargo check -p
 holtburger-web --target wasm32-unknown-unknown` clean (15 warnings).
-1. **Settle `punchSidedness`** (§B) — instruments on master; ground-level cameras, and
-   check the wasm→world transform for a reflection. Then re-flip or leave off, with the
-   converse case measured either way.
-2. **ORACLE #1 from scratch** (§C) — the fossil-vs-live distinction is the whole game.
-3. The `burden` 0 vs 0.12216666 discrepancy — same bug or different? Nobody knows.
-4. Owner decision: **relief is a 6 cm bevel** (§D). Is that the intended look? If not,
+1. **ORACLE #1 from scratch** (§C) — the fossil-vs-live distinction is the whole game.
+2. The `burden` 0 vs 0.12216666 discrepancy — same bug or different? Nobody knows.
+3. Owner decision: **relief is a 6 cm bevel** (§D). Is that the intended look? If not,
    `gfxSubdivLevel`/`gfxReliefScale` are the levers and per-texel displacement was retired.
-5. The landblock-GROUP ~5 s boundary (§E).
-6. Still owner-gated and untouched: Q75-ELECTION, E1-RATIFICATION, PREVIEW-FEED-REKEY,
+4. The landblock-GROUP ~5 s boundary (§E).
+5. Still owner-gated and untouched: Q75-ELECTION, E1-RATIFICATION, PREVIEW-FEED-REKEY,
    ratification of the 13 T4 frames, everything 1070.
 
 ## -12B. 2026-08-12 (night, lane B of 2) — THE OWNER'S PORTAL BLEED-THROUGH, ROOT-CAUSED; THE FIX IS A FLAG THAT IS ALREADY DEFAULT-OFF
