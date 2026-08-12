@@ -21,13 +21,27 @@
 // warns; cross-reference the console for the reason lines.
 //
 // Devtools entry points on `__diag.geometry`:
-//   audit()   — full sweep; returns { ok, entities, cells, summary }
-//   summary() — last audit's summary (runs one if never run)
+//   audit()      — full sweep; returns { ok, entities, cells, summary }
+//   summary()    — last audit's summary (runs one if never run)
+//   reliefGate() — the `?gfxRelief` RESOLUTION + both-wasm-instance echo
+//                  (renamed from `relief()` 2026-08-11: `__diag.geometry.relief`
+//                  is the registered RELIEF-IN-BAKE data field owned by
+//                  scene3d/geom_bundles.js — see attachGeometry's note)
 
 export function attachGeometry(diag) {
-  diag.geometry = {
-    lastResult: null,
-
+  // DIAG-SHADOW (2026-08-11, GFXOBJ-RELIEF): `scene3d/geom_bundles.js` owns
+  // the `__diag.geometry` OBJECT (its `_stats`, the shape registered in
+  // harness/lib/diag_schema.mjs). This audit adds ENTRY POINTS to that same
+  // surface, so it attaches onto whatever is already there instead of
+  // replacing it — a whole-object assignment here used to delete the
+  // bundle/relief counters (and its own `relief()` shadowed the registered
+  // `relief` data field, which is what made the RELIEF-IN-BAKE assertion
+  // unreadable in every T4 arm; see task-T4-EYES-report.md §3.3). The gate
+  // below is therefore named `reliefGate()`, NOT `relief()`.
+  if (!diag.geometry) diag.geometry = {};
+  const g = diag.geometry;
+  if (!("lastResult" in g)) g.lastResult = null;
+  Object.assign(g, {
     audit() {
       const s3d = window.liveScene3d;
       const out = {
@@ -158,7 +172,7 @@ export function attachGeometry(diag) {
      * live evidence that it reached both wasm instances and survived the
      * statics atlas. A headless session asserts on this rather than on eyes:
      *
-     *   const r = window.__diag.geometry.relief();
+     *   const r = window.__diag.geometry.reliefGate();
      *   r.config.enabled === true && r.config.subdivLevel === 1
      *   r.mainApplied.ok === true             // pkg/ is not stale
      *   r.workerApplied?.applied["bake-worker"].ok === true   // no split brain
@@ -167,8 +181,14 @@ export function attachGeometry(diag) {
      * `sampleVertexCounts` is the raw before/after signal: with relief ON the
      * per-mesh vertex counts of atlased statics should be ~4x (level 1) or
      * ~16x (level 2) the flag-off baseline for the same landblock.
+     *
+     * NAME (2026-08-11): `reliefGate()`, not `relief()` — `__diag.geometry.relief`
+     * is the RELIEF-IN-BAKE data field registered in diag_schema.mjs
+     * (`armed`/`variantRowsResident`/`modelsAssembled`, owned by
+     * scene3d/geom_bundles.js). This gate reports the `?gfxRelief` RESOLUTION,
+     * which is a different question from whether the BAKED variant is in use.
      */
-    relief() {
+    reliefGate() {
       const cfg =
         (typeof window !== "undefined" && window.__gfxRelief) || null;
       const out = {
@@ -227,5 +247,6 @@ export function attachGeometry(diag) {
       }
       return out;
     },
-  };
+  });
+  return g;
 }
