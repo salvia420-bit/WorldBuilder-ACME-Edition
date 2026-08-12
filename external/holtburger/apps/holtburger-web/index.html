@@ -1344,6 +1344,20 @@
         // instead is not a workaround: the raw symbol returns a
         // `[ptr, len]` pair, not a string.
         playerRunRateInputs,
+        // ORACLE open defect #1 (2026-08-12) — the two augmentation
+        // instruments from 4539c46b / 5ae4efd6. They compiled into the wasm
+        // (`playerAugTrace` / `playerEntityProps` are both in pkg's glue and
+        // the data section carries their JSON keys), and lib.rs's own doc
+        // comments say to read them through
+        // `liveScene3d.entityManager.wasmExports` — but neither was listed
+        // HERE or in the init3D opts, so both read `undefined` at exactly
+        // that documented site. That is the same plumb-through miss
+        // `playerRunRateInputs` hit directly above, and it is why the trace
+        // "has never run live": a probe guarded with `?? "[]"` cannot tell a
+        // MISSING export from an EMPTY trace, so the absent getter reads as
+        // a clean empty result and looks like evidence.
+        playerAugTrace,
+        playerEntityProps,
         // F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes.
         // ONE wasm call walks N setups in a single prefetch loop;
         // `scene3d/spawns.js` pre-warms the AnimationCache via this
@@ -5352,6 +5366,11 @@
             // MOVE-RUNRATE-105 (2026-08-11) — the provenance probe beside it;
             // see the import for why it must be listed in BOTH places.
             playerRunRateInputs,
+            // ORACLE open defect #1 (2026-08-12) — the augmentation trace and
+            // the stash-vs-bag dump; see the import block for why both must be
+            // listed in BOTH places.
+            playerAugTrace,
+            playerEntityProps,
             // Wave 7.4 (2026-05-24) — spawn-time entity LOD: read by
             // EntityManager._spawnImpl. Without this listed in init3D
             // opts the export is invisible to entities.js and every
