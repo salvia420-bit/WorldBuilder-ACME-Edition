@@ -242,6 +242,19 @@ unclassed path and reported "no change from v2".
   this box. Not run, not green.
 - The 07-30 showcase itself was never re-shot frame-for-frame; I compared
   pipeline variants rather than reproducing the original camera set.
+- **"pagoda/torii" is addressed by texture range, not by model.** I worked the
+  148 macro-allowed textures in `0x06004200-0x060044FF` (the Shoushi set, which
+  is where the handoff's named victims live) — I did not resolve which GfxObj
+  models are the pagoda and the torii and check their specific surfaces. If a
+  torii's planks happen to be one of the 9 weak textures, it will still read
+  vanilla and this report would not have singled it out. Resolving model → 0x08
+  surface → 0x06 texture for the named landmarks is the obvious next step and
+  needs no live client.
+- The 9 weak textures are diagnosed by measurement (`face−joint`) plus my
+  reading of the albedo; I did not instrument the seam operator itself to
+  confirm *why* it admits nothing on each one. "Smooth gradients rather than
+  narrow dark joints" is well supported for `0x06004381` by eye and by the
+  operator's documented kernel behaviour, but it is an inference, not a probe.
 
 ## Gates
 
