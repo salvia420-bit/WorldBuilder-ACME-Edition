@@ -40797,6 +40797,49 @@ pub fn player_run_rate_inputs_export() -> String {
         if s.is_empty() { "{}".to_string() } else { s.clone() }
     })
 }
+
+// ORACLE open defect #1 (2026-08-12): `RunRateInputs.aug_joat` answers "is
+// AugmentationJackOfAllTrades in the player's bag" with null, and
+// `player_entity_present` proved the ENTITY is alive — so the remaining
+// question is which of two things is true: the wire never carried the
+// property, or we carried it and lost it. Neither scalar can tell those
+// apart, because both read the same absent key. What discriminates them is
+// the BAG next to the LOGIN DUMP: `bootstrap_player_entity_from_description`
+// stashes the private PlayerDescription properties verbatim
+// (`state/mutations.rs::bootstrap_player_entity_from_description`), and every
+// rebuild path is supposed to re-seed from that stash. So: dump both, on the
+// same read. Stash has it + entity does not => a client-side wipe with a
+// named victim. Neither has it => ACE never sent it and the defect is
+// character data, not code.
+//
+// Written on the SAME trigger as LATEST_RUN_RATE_INPUTS_JSON (a stats
+// delta), not per tick — the bag only changes when a property update lands,
+// and a per-tick serialization of ~40 properties would be a real cost on the
+// shipped lane for a diagnostic nobody is reading.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static LATEST_PLAYER_PROPS_JSON: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
+}
+
+/// ORACLE open defect #1 (2026-08-12) — free wasm export: the local player
+/// entity's whole property bag beside the stashed login dump, as JSON:
+/// `{present, entity, stashPresent, stash, augJoatEntity, augJoatStash}`.
+/// `entity`/`stash` are `WorldObjectProperties` serialized with PROPERTY
+/// NAMES as keys (the same shape `getObjectAppraisal` returns). Returns
+/// `"{}"` until the first stats snapshot hydrates it.
+///
+/// NOT on the curated `window.__hbWasm` surface — like `playerRunRateInputs`,
+/// read it through `liveScene3d.entityManager.wasmExports` (the trap
+/// `harness/oracle-run.mjs` already documents at its own read site).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = playerEntityProps)]
+pub fn player_entity_props_export() -> String {
+    LATEST_PLAYER_PROPS_JSON.with(|c| {
+        let s = c.borrow();
+        if s.is_empty() { "{}".to_string() } else { s.clone() }
+    })
+}
 #[cfg(target_arch = "wasm32")]
 const RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.5;
 #[cfg(target_arch = "wasm32")]
@@ -41132,6 +41175,29 @@ fn publish_player_stats_snapshot(
     {
         let inputs_json = world.player_run_rate_inputs().to_json();
         LATEST_RUN_RATE_INPUTS_JSON.with(|c| *c.borrow_mut() = inputs_json);
+        // ORACLE open defect #1 (2026-08-12): the bag beside the login dump,
+        // on the same trigger. See `player_entity_props_export`.
+        {
+            use holtburger_common::properties::{PropertyInt, WorldObjectPropertyAccessors as _};
+            // `player_properties()` is the same `player_entity().map(&props)`
+            // read `player_int_property` funnels through (state/types.rs), so
+            // this bag IS the one `aug_joat` came back null from.
+            let entity_props = world.player_properties();
+            let stash_props = world.player_description_properties();
+            let props_json = serde_json::json!({
+                "present": entity_props.is_some(),
+                "entity": entity_props,
+                "stashPresent": stash_props.is_some(),
+                "stash": stash_props,
+                "augJoatEntity": entity_props
+                    .and_then(|p| p.get_int_prop(PropertyInt::AugmentationJackOfAllTrades)),
+                "augJoatStash": stash_props
+                    .and_then(|p| p.get_int_prop(PropertyInt::AugmentationJackOfAllTrades)),
+            });
+            LATEST_PLAYER_PROPS_JSON
+                .with(|c| *c.borrow_mut() = serde_json::to_string(&props_json)
+                    .unwrap_or_else(|_| "{}".to_string()));
+        }
     }
     // Wave D.1 follow-on (2026-05-27): pull `PropertyInt::AetheriaBitfield`
     // (322) straight off the player Entity for the JS paperdoll's
