@@ -746,8 +746,11 @@ export const REGISTRY = Object.freeze([
     evidence: "scene3d/geom_bundles.js:69",
     availability: "boot",
     note: "Geometry-bundle surface — LANDED at T13 (ST3, `?geomBundles`; "
-      + "installed by geom_bundles.js on module load, live counters when "
-      + "the flag arms). entityDecode counters gate the DORMANT "
+      + "installed by geom_bundles.js when initGeomBundles runs, live "
+      + "counters when the flag arms — NOT at module load: index.html "
+      + "does not import the module at all unless ?geomBundles is on, so "
+      + "on a bare boot this surface carries only diag/geometry.js's "
+      + "audit()/summary()/reliefGate() (corrected 2026-08-11, measured). entityDecode counters gate the DORMANT "
       + "substitution cache (enable-threshold = owner call on this data, "
       + "DT-11) and read ZERO until the entity-path instrumentation lands "
       + "(named T13 remainder). bytesOut = wasm->JS boundary bytes of "
