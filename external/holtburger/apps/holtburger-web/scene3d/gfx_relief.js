@@ -75,7 +75,7 @@ export const GFX_RELIEF_SCALE_MAX = 2;
 export const GFX_RELIEF_FALLBACK = Object.freeze({
   gfxRelief: false,
   gfxSubdivLevel: 1,
-  gfxReliefScale: 2.0,
+  gfxReliefScale: 1.0,
 });
 
 function clampInt(n, lo, hi) {
