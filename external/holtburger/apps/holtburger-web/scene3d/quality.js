@@ -105,14 +105,22 @@ export const PRESETS = {
         // The operation is PURELY ADDITIVE — no existing vertex moves, no draw
         // call is added (rails inherit their parent's surface subset), and the
         // model gate leaves ~87% of GfxObjs byte-identical.
-        // `low`: still off — added tris are paid TWICE at any tier with shadows
-        // and low is the tier that exists to not pay.
+        // `low`: ON since 2026-08-12 (owner-directed). The reason it was off —
+        // "added tris are paid TWICE at any tier with shadows" — does not apply
+        // to THIS tier: `low` sets csm:false a few lines down, so there is no
+        // shadow pass to pay twice. And the cost was finally measured ON
+        // low-tier silicon (Intel HD520): 560,987 -> 573,620 tris/frame and
+        // 9.65 -> 9.40 fps, i.e. +12,633 tris for ~2.6% at a framerate already
+        // GPU-bound elsewhere. The owner's own laptop probes to `low`
+        // (detectGpuTier deny-list -> `[quality] gpu-probe -> low`, :884-890),
+        // so with this false he saw a FLAT world on every bare boot and
+        // reported the feature as not working.
         //
         // gfxSubdivLevel is 0 on EVERY tier: the rails do not subdivide, and
         // per-texel displacement measured 0.211 mean-abs against undisplaced on
         // the 1070 (a ~1 cm joint cannot exist on a ~15 cm vertex grid). Raise
         // it explicitly with ?gfxSubdivLevel=N to experiment.
-        gfxRelief: false,
+        gfxRelief: true,
         gfxSubdivLevel: 0,
         gfxReliefScale: 2.0,
         pom: false,
