@@ -4,6 +4,64 @@ For the next orchestrator session. Governing docs: `IMPLEMENTATION.md` (binding 
 you enforce it, max 2 agents, disjoint scopes) and `SPEC.md` (authoritative spec).
 Read both before acting. This file is the volatile state those don't carry.
 
+## -13. 2026-08-12 — RELIEF SHIPS ON BY DEFAULT ON EVERY TIER; ORACLE #1 ROOT-CAUSED
+
+Closing state for the 08-11/12 run. `origin/master` = `bba2d59f`.
+
+### A. THE OWNER'S "gfxobj textures aren't working" IS ANSWERED AND SHIPPED
+He was right that something was off, and the cause was never the feature — it was
+**arming plus two documentation errors**. Now default-ON on **low/mid/high/ultra**:
+`gfxRelief`, `normalMaps`, `statPom`. `gfxSubdivLevel` stays **0** everywhere (per-texel
+displacement is RETIRED — a 5–10× Nyquist gap; `=5` CRASHES the renderer, still unguarded)
+and `gfxReliefScale` stays **1.0** (briefly 2.0, reverted: the GEOMR *rail* arm is not the
+feature he meant).
+
+**The content-following relief never needed `statPom`** — it rides `gfxRelief` +
+`normalMaps`, already true on all tiers. statPom adds ray-marched DEPTH. The reason it
+read as broken to HIM specifically: `detectGpuTier`'s deny-list puts his Intel HD 520 in
+`low`, where `statPom`/`pom` were false — he was the one user seeing no parallax.
+
+**Proven in-world on the T4** (`impl/task-S14-DENTS-SHOTS.md`, 5 frames in
+`docs/evidence/s14-shots/`): stone joints move **41.9 %** of pixels ON vs OFF, a second
+stone texture **65.4 %**, and the painted control's diff is **near-black at the same ×8
+gain** — so the fix DISCRIMINATES rather than roughening everything. Offline over 148
+textures: micro-dip vs the art's own dark detail **r = +0.901** (v2) vs **−0.001** (pre-v2).
+
+⚠ **The lever is NOT `window.__statPom`.** Only **28 of 1,697** static meshes carry
+`_statPomUniforms`; building surfaces sit on the legacy normal-map + POM path where
+`__statPom` is a no-op. Both vehicles are fed by the same v2 chain (`lib.rs:12238`), so
+`material.normalScale` is the live uniform that actually moves. Light dependence is large:
+same rock, sun-facing 8.5/255 vs grazing 16.9/255 — head-on it nearly vanishes.
+
+### B. OPEN, RANKED
+1. **ORACLE #1 root-caused, fix UNMERGED.** Branch `orch/s13-oracle` (6 commits) —
+   retail's `forward_speed 1.9758065` is `run_rate(110)` to seven digits while our live
+   lane composes 105. The wipe is the **wasm lane's own ObjectCreate**, whose victim is
+   fingerprinted as exactly the PUBLIC WEENIE int set. ⚠ That branch also RETRACTS an
+   earlier `entity_seeded` fix that typechecked and changed nothing measurable. **Needs a
+   compile check + suites before merge.**
+2. **9 near-vanilla textures** remain after classifier v2 — and `0x06004381`, the
+   relief-v2 handoff's OWN named victim, is the **worst of all 148** (face−joint 0.051 vs
+   ~1.0 for stone). It will photograph flat in any re-shoot.
+3. **`?gfxSubdivLevel=5` crashes the renderer** — clamp or guard it.
+4. **Classifier mislabel:** `0x06003E69` is class `B` (brick) but renders as a green
+   crystal pillar.
+5. `statPom` on `low` is measured only by a weak instrument (HD 520, 9.40 vs 9.65 fps).
+   If a low-tier rig regresses, revert **that** commit — it does not touch the
+   content-following relief.
+
+### C. INFRASTRUCTURE — THE THING THAT COST THE MOST
+**SPOT preempted the buildbox EIGHT times in ~24 h**, including within minutes of boot,
+in BOTH `us-central1-a` and `us-central1-b`. The zone move did not fix it. Per-step
+commit-and-push is the only reason nothing was lost. **If overnight runs matter, go
+on-demand** (immutable provisioning ⇒ delete-and-recreate keeping the disk). A GPU
+step-down is NOT the answer: P4 costs MORE than T4 and is on the retirement path.
+⚠ **The 1070 rebooted 2026-08-12 ~10:40 and sits at the Windows LOGIN SCREEN** — session 1
+has no `explorer.exe`, so `schtasks /it` cannot run and session-0 Chrome dies with
+GPU `exit_code=34`. **Someone must log into that desktop before it can render.**
+⚠ `memory/fleet-runbooks.md` still says `us-central1-a` and is READ-ONLY to the
+orchestrator — **the owner must update it** or sessions get sent to an empty zone.
+
 ## -12. 2026-08-11/12 (overnight) — THREE LANES, TWO RETRACTIONS, AND A DEFAULT THAT MOVED THREE TIMES
 
 Owner-directed multi-agent night, run from a laptop orchestrator session. He was present
