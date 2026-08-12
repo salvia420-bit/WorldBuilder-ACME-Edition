@@ -42,6 +42,11 @@ export class SuiteAssetSource {
     this._fetchImpl = opts.fetchImpl || null;
     this._cache = new Map();   // "type:0xDID" -> decoded | null(absent)
     this._inflight = new Set();
+    // Promise-per-key for `getByKeyAsync` (2026-08-12). Separate from
+    // `_inflight` (a bare Set used by the sync arm for "already kicked?")
+    // because the async arm needs the PROMISE, so concurrent askers for the
+    // same stem await one fetch instead of racing several.
+    this._inflightByKey = new Map();
     this.fetchCount = 0; this.hits = 0; this.absent = 0; this.errors = 0; this.lastError = null;
   }
   _key(did, type) { return `${type}:0x${(did >>> 0).toString(16).toUpperCase().padStart(8, "0")}`; }
@@ -90,6 +95,38 @@ export class SuiteAssetSource {
     return null;
   }
 
+  /**
+   * ASYNC twin of {@link getByKey} — resolves to the decoded artifact (or
+   * `null` when absent/failed) once the fetch lands, instead of returning
+   * `null` immediately.
+   *
+   * ⚠ 2026-08-12: `materials.js:_resolveRough` has called this since
+   * `54d00236` and **it did not exist**, so the cold arm threw
+   * `TypeError: …getByKeyAsync is not a function` on the FIRST ask for every
+   * texchan stem — i.e. always, since `getByKey` returns null and kicks the
+   * fetch on first ask by design. That throw unwound out of an unguarded
+   * `_attachRoughnessMap` call and aborted `_installFromPixels` before
+   * `_installCacheEntry` / `_reseatVariantsForDid` / `return mat`, so the
+   * caller got the grey `fallbackMaterial` and the clone was never re-seated
+   * — permanently untextured geometry (the "white trees"). Measured live on
+   * the 1070: ~774 aborted installs, one per texchan stem.
+   *
+   * Shares the `_inflight` set and `_cache` with the sync path, so a stem
+   * already kicked by `getByKey` is NOT re-fetched — concurrent askers await
+   * the same promise. Never rejects: a failed fetch resolves `null`, matching
+   * `getByKey`'s "never re-hammer a broken endpoint" contract.
+   */
+  getByKeyAsync(key, type) {
+    const k = `${type}:${key}`;
+    if (this._cache.has(k)) return Promise.resolve(this._cache.get(k));
+    let p = this._inflightByKey.get(k);
+    if (!p) {
+      p = this._beginFetchByKey(key, type, k);
+      this._inflightByKey.set(k, p);
+    }
+    return p;
+  }
+
   _beginFetchByKey(key, type, k) {
     this._inflight.add(k); this.fetchCount += 1;
     const bytesP = this._fetchImpl
@@ -107,6 +144,14 @@ export class SuiteAssetSource {
       // eslint-disable-next-line no-console
       console.warn(`[suite] fetch failed ${k}:`, e);
     }).finally(() => { this._inflight.delete(k); });
+    // Return the settled-to-value promise so `getByKeyAsync` can await it.
+    // `.then/.catch` above already normalised every outcome into `_cache`, so
+    // reading the cache here yields the same value the sync path would give,
+    // and this chain never rejects.
+    return bytesP
+      .then(() => (this._cache.has(k) ? this._cache.get(k) : null))
+      .catch(() => null)
+      .finally(() => { this._inflightByKey.delete(k); });
   }
 
   get cacheSize() { return this._cache.size; }

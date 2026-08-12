@@ -5619,7 +5619,29 @@ export class MaterialCache {
       hasPalette: hasPaletteB,
     };
     const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex, surfaceFloats);
-    this._attachRoughnessMap(mat, did); // Phase-5 baked roughness (gated; fail-soft)
+    // Phase-5 baked roughness (gated; fail-soft). ⚠ 2026-08-12: the "fail-soft"
+    // in this comment was ASPIRATIONAL — there was no guard, and
+    // `_resolveRough` threw `TypeError: …getByKeyAsync is not a function` on
+    // the FIRST ask for every texchan stem (`getByKey` returns null and kicks
+    // the fetch by design, so the cold arm ran every time). The throw unwound
+    // straight out of `_installFromPixels`, skipping `_installCacheEntry`,
+    // `_reseatVariantsForDid` and `return mat` below — so the caller fell back
+    // to the grey `fallbackMaterial` and, because the re-seat never ran, the
+    // clone stayed grey FOREVER. That is the "white trees". Measured live on
+    // the 1070: ~774 aborted installs, one per stem, plus three leaked
+    // DataTextures each.
+    // The missing accessor is now implemented (suite_assets.js), so this
+    // should no longer throw — but roughness is a POLISH map and must never be
+    // able to cost us a textured material again. Guard it for real this time.
+    try {
+      this._attachRoughnessMap(mat, did);
+    } catch (e) {
+      if (!this._roughWarned) {
+        this._roughWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[materials] roughness attach failed (material still installs):", e);
+      }
+    }
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),

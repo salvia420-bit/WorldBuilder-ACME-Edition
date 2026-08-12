@@ -8782,6 +8782,19 @@ fn classify_command_kind(cmd: u32) -> (&'static str, Option<&'static str>) {
 /// raise and a REVERSE-framerate lower — so taking `anims.first()` reported
 /// roughly half the real gesture length (2026-08-12).
 ///
+/// `anim_frames(anim_id) -> Option<u32>` is the caller-supplied resolver for
+/// an Animation's real `num_frames`, which ACE reads inline via
+/// `DatManager.PortalDat.ReadFromDat<Animation>(anim.AnimId)`. It is a
+/// parameter rather than a `global_source` reach so this stays a pure,
+/// host-unit-testable function (see `tests_o11_frame_clamp`). Returning
+/// `None` marks the segment — and therefore the whole link — unpriceable
+/// (`duration_sec == 0.0`), which is the caller's existing fallback signal.
+///
+/// `high_frame` in the returned struct is the DECLARED value, unclamped:
+/// it mirrors the C# oracle `MotionClassifySwing` that
+/// `validate_motion_pose.cjs --js-vs-cs` diffs us against, and it is what the
+/// DAT actually says. The clamp affects `duration_sec` only.
+///
 /// Returns `None` when:
 /// - the outer key has no link entry (stance has no swings — missile
 ///   stances always fall here)
@@ -8794,6 +8807,7 @@ fn classify_motion_link_for_swing(
     mtable: &holtburger_dat::file_type::MotionTable,
     stance: u32,
     command: u32,
+    anim_frames: impl Fn(u32) -> Option<u32>,
 ) -> Option<MotionLinkAnimInner> {
     // `stance == 0` → the MotionTable's `default_style`, mirroring the sibling
     // resolvers `motion_cycle_base_speed` / `try_resolve_link_frames`. Without
@@ -8822,12 +8836,12 @@ fn classify_motion_link_for_swing(
     let anim = &motion_data.anims[0];
 
     // Duration: number of played frames / framerate. Spec §2.3:
-    //   - melee swings use low=0, high=-1 (play to end of anim asset);
-    //     we report a duration of NaN/0 in this case since we don't
-    //     parse the Animation DID here (caller can resolve the
-    //     anim length via separate fetch_entity_animation_keyframes
-    //     if needed). Reported as 0.0 so JS can detect with `> 0`.
-    //   - magic casts have explicit high_frame (15-43 frames).
+    //   - melee swings use low=0, high=-1 ("play to the end of the anim
+    //     asset") — priced by substituting the Animation's real frame count,
+    //     exactly as ACE does. Unpriceable (0.0, caller falls back) only when
+    //     `anim_frames` can't answer.
+    //   - magic casts have explicit high_frame (15-75 frames), which the DAT
+    //     is allowed to OVER-declare (see the clamp below).
     //
     // Computing here: SUM every segment, exactly as ACE's authoritative
     // `MotionTable.GetAnimationLength(stance, motion, currentMotion)` does
@@ -8859,22 +8873,89 @@ fn classify_motion_link_for_swing(
     //     melee links.
     //  3. **`abs(framerate)`.** ~22% of retail AnimData are reverse-framerate;
     //     the old `framerate > 0.0` guard scored every such segment as 0.0.
+    //  4. **The FRAME CLAMP** (O11, 2026-08-12). ACE resolves each segment's
+    //     Animation and both SUBSTITUTES and CLAMPS against its real length
+    //     (`ACE.DatLoader/FileTypes/MotionTable.cs:162-182`,
+    //     `GetAnimationLength(AnimData anim)`):
     //
-    // `high_frame == -1` means "play to the end of the anim asset", whose
-    // length lives in the Animation DID we deliberately do not parse here (ACE
-    // reads it via `ReadFromDat<Animation>`). We cannot price that segment, so
-    // the whole link reports 0.0 and the caller falls back — preserving the
-    // existing `> 0` detection contract rather than silently under-reporting.
+    //         var highFrame = anim.HighFrame;
+    //         var animation = DatManager.PortalDat.ReadFromDat<Animation>(anim.AnimId);
+    //         if (anim.HighFrame == -1)           highFrame = (int)animation.NumFrames;
+    //         if (highFrame > animation.NumFrames) {
+    //             // magic windup for level 6 spells appears to be the only
+    //             // animation w/ bugged data
+    //             highFrame = (int)animation.NumFrames;
+    //         }
+    //         var numFrames = highFrame - anim.LowFrame;
+    //         return numFrames / Math.Abs(anim.Framerate);
+    //
+    //     Retail clamps the same way (`AnimSequenceNode::set_animation_id`,
+    //     acclient.c:341108-341127) and so does our own BAKE path
+    //     (`build_concatenated_motion_frames`, `.min(last)`) — this duration
+    //     path was the only site that trusted the declared number.
+    //     Exactly FOUR links in the player MotionTable 0x09000001 over-declare
+    //     (verified 2026-08-12 by scanning every from-Ready link of every
+    //     stance against each segment Animation's `num_frames`):
+    //       `0x10000077` MagicPowerUp09 — anim 0x030005A0, high 68 > 60
+    //       `0x10000078` MagicPowerUp10 — anim 0x030005A0, high 75 > 60
+    //       `0x10000133` / `0x10000134` — the purple variants, anim 0x03000848,
+    //                                      high 68 / 75 > 60
+    //     For MagicPowerUp10 (Pyreal) the clamp is worth 4.4408 s → 3.5526 s.
+    //     Measured on the 1070 (ledger I2): the server's windup cadence is
+    //     1790 ms mean vs 1776 ms clamped (+14) and 2220 ms unclamped — a
+    //     444 ms separation against ~30 ms run-to-run noise. Independently, the
+    //     baked clip for that gesture is 120 frames = 2×60 (the animation's
+    //     REAL length) where the AnimData declares 0-75, while a correctly
+    //     declared gesture (MagicPowerUp02) bakes 32 = 2×16 exactly as written.
+    //     ACE definitively paces on the clamped length.
+    //
+    // **When `anim_frames` can't answer, the whole link reports 0.0** (the
+    // caller's documented "unpriceable → fall back to the JSON `durationS`"
+    // contract, same as the pre-clamp code did for every `high_frame == -1`
+    // segment). Deliberate, and the one judgement call in this function:
+    // without the Animation we cannot tell an honest 0-75 from an
+    // over-declared one, and returning the declared value would silently ship
+    // a number we know is wrong for 4 links and unverifiable for the rest.
+    // Falling back is safe because per ledger G8 the JSON `durationS` is
+    // CORRECT for windups — which is exactly where the clamp bites (all four
+    // over-declaring links are windups). It is 1.7-3x long for the single CAST
+    // gesture, so a resolver miss there costs pacing accuracy but never
+    // correctness; the browser caller reads the Animation out of the SAME
+    // `eor/portal` source that just yielded the MotionTable, so a miss means
+    // the whole archive is absent, not one file.
+    //
+    // Deviation from ACE, deliberate: `.max(0)` on `(high - low)`. ACE lets a
+    // segment whose LowFrame sits past the clamped high contribute NEGATIVE
+    // time to the sum; we floor it at zero rather than let one segment shorten
+    // the link. No retail link in 0x09000001 exercises this (the clamp only
+    // ever raises `low <= high`), so it is a guard, not a behaviour change.
     let duration_sec = {
         let mut total = 0.0_f32;
         let mut resolvable = true;
         for seg in &motion_data.anims {
             let fr = seg.framerate.abs();
-            if seg.high_frame < 0 || fr <= 0.0 {
+            // fr == 0 is an authored HOLD (door/chest/lever/death freeze-frame);
+            // ACE would divide by zero here. Unpriceable, as before.
+            if fr <= 0.0 {
                 resolvable = false;
                 break;
             }
-            total += ((seg.high_frame as f32 - seg.low_frame as f32).max(0.0)) / fr;
+            let Some(num_frames) = anim_frames(seg.anim_id) else {
+                resolvable = false;
+                break;
+            };
+            let num_frames = num_frames as i32;
+            // ACE order: substitute on -1, THEN clamp. `high == num_frames` is
+            // legal (the subtraction below is exclusive), so the clamp is
+            // `> num_frames`, not `>=`.
+            let mut high = seg.high_frame;
+            if high == -1 {
+                high = num_frames;
+            }
+            if high > num_frames {
+                high = num_frames;
+            }
+            total += (high - seg.low_frame).max(0) as f32 / fr;
         }
         if resolvable { total } else { 0.0 }
     };
@@ -9091,7 +9172,14 @@ pub fn parse_motion_link_for_swing_bytes(
 ) -> Option<MotionLinkAnimJs> {
     use holtburger_dat::file_type::MotionTable;
     let mtable = MotionTable::read(&mut std::io::Cursor::new(bytes)).ok()?;
-    classify_motion_link_for_swing(&mtable, stance, command).map(inner_to_motion_link_anim_js)
+    // No resource source on this export — it is handed raw MotionTable bytes
+    // and nothing else — so no segment can be priced and every link reports
+    // `duration_sec == 0.0`. Its only caller (`validate_motion_pose.cjs
+    // --js-vs-cs`) compares `resolvedCommand` / `kind` / `height` / frame
+    // fields against the C# oracle and never reads `durationSec`, so this
+    // costs nothing there; the browser export below carries the real resolver.
+    classify_motion_link_for_swing(&mtable, stance, command, |_| None)
+        .map(inner_to_motion_link_anim_js)
 }
 
 /// Phase 4 step 6 Phase C: resolve the idle pose for a SetupModel by
@@ -39271,7 +39359,29 @@ impl SessionHandle {
             .get_file_by_key(ResourceKey::new("eor/portal", motion_table_id))
             .ok()?;
         let mtable = MotionTable::read(&mut std::io::Cursor::new(&bytes)).ok()?;
-        classify_motion_link_for_swing(&mtable, stance, command)
+        // O11 (2026-08-12): ACE's `GetAnimationLength(AnimData)` resolves each
+        // segment's Animation to substitute `HighFrame == -1` and to CLAMP an
+        // over-declared high frame. Read it from the SAME synchronous source
+        // that just yielded the MotionTable — animations live in the same
+        // `eor/portal` namespace, so if the table resolved the anim resolves
+        // too (a miss means the archive is absent, and the link then reports
+        // 0.0 and the JS caller falls back to the JSON `durationS`).
+        // Full `Animation::read` rather than a hand-rolled header peek: the
+        // bake path (`build_concatenated_motion_frames`) already parses these
+        // same records the same way, and duplicating the on-disk layout here
+        // would be a second place to get it wrong.
+        let anim_frames = |anim_id: u32| -> Option<u32> {
+            if (anim_id >> 24) != 0x03 {
+                return None;
+            }
+            let anim_bytes = source
+                .get_file_by_key(ResourceKey::new("eor/portal", anim_id))
+                .ok()?;
+            holtburger_dat::file_type::Animation::read(&mut std::io::Cursor::new(&anim_bytes))
+                .ok()
+                .map(|a| a.num_frames)
+        };
+        classify_motion_link_for_swing(&mtable, stance, command, anim_frames)
             .map(inner_to_motion_link_anim_js)
     }
 
@@ -63473,6 +63583,215 @@ mod tests_windup_action_order {
         let commands = vec![MotionItem::new(0x005Bu16, 41, false, 1.0)]; // SlashHigh
         let rows = motion_action_queue_rows(&commands, Some(41), GUID, 0x3D);
         assert!(rows.is_empty(), "the main path's own item must not re-queue");
+    }
+}
+
+// O11 (2026-08-12) — THE FRAME CLAMP. The regression guard this codebase
+// lacked: ledger G7 records that `tests/test_ws11_cast_gesture_timing_parity.mjs`
+// re-derives ground truth from its OWN DAT dump instead of calling the shipped
+// resolver, which is exactly why the duration path drifted from the bake path
+// for a month without a red test. These call `classify_motion_link_for_swing`
+// directly — the function the wasm export ships — over a synthetic MotionTable.
+#[cfg(test)]
+mod tests_o11_frame_clamp {
+    use super::{MOTION_LINK_FROM_READY, classify_motion_link_for_swing};
+    use holtburger_dat::file_type::MotionTable;
+    use holtburger_dat::file_type::motion_table::{AnimData, MotionData, MotionDataFlags};
+    use std::collections::HashMap;
+
+    /// Magic stance (low-16 `0x49`) — the stance every windup link lives under.
+    const MAGIC_STANCE: u32 = 0x0049;
+    /// `MotionCommand.MagicPowerUp10` — the Pyreal windup.
+    const MAGIC_POWER_UP_10: u32 = 0x1000_0078;
+    /// The real AnimData of `0x09000001` links[0x00490003][0x10000078],
+    /// read out of `/home/wbterminal/ac_base_dats/client_portal.dat`
+    /// 2026-08-12 via `parseMotionLinkForSwingBytes` + a raw read of the
+    /// Animation header: segment 0 is anim `0x030005A0`, low 0, **high 75**,
+    /// framerate 24 — while that Animation carries **60** frames.
+    const PYREAL_ANIM: u32 = 0x0300_05A0;
+    const PYREAL_DECLARED_HIGH: i32 = 75;
+    const PYREAL_REAL_FRAMES: u32 = 60;
+    /// The reverse-framerate "lower" segment. Its rate is recovered from the
+    /// shipped catalogue: `data/spell-cast-sequence.json` gives this gesture
+    /// `durationS == 4.4407895`, and `75/24 + 75/57 == 4.4407895` closes to 8
+    /// significant figures (ledger G6, five such closures).
+    const PYREAL_LOWER_RATE: f32 = -57.0;
+
+    fn table_with_link(stance_low16: u32, command: u32, anims: Vec<AnimData>) -> MotionTable {
+        let mut inner: HashMap<u32, MotionData> = HashMap::new();
+        inner.insert(
+            command,
+            MotionData {
+                bitfield: 0,
+                flags: MotionDataFlags::empty(),
+                anims,
+                velocity: None,
+                omega: None,
+            },
+        );
+        let mut links: HashMap<u32, HashMap<u32, MotionData>> = HashMap::new();
+        // Same outer key the resolver builds: `(stance & 0xFFFF) << 16 | 0x0003`.
+        links.insert(
+            ((stance_low16 & 0xFFFF) << 16) | (MOTION_LINK_FROM_READY & 0xFFFF),
+            inner,
+        );
+        MotionTable {
+            id: 0x0900_0001,
+            default_style: 0x003D,
+            style_defaults: HashMap::new(),
+            cycles: HashMap::new(),
+            modifiers: HashMap::new(),
+            links,
+        }
+    }
+
+    fn pyreal_windup() -> MotionTable {
+        table_with_link(
+            MAGIC_STANCE,
+            MAGIC_POWER_UP_10,
+            vec![
+                AnimData {
+                    anim_id: PYREAL_ANIM,
+                    low_frame: 0,
+                    high_frame: PYREAL_DECLARED_HIGH,
+                    framerate: 24.0,
+                },
+                AnimData {
+                    anim_id: PYREAL_ANIM,
+                    low_frame: 0,
+                    high_frame: PYREAL_DECLARED_HIGH,
+                    framerate: PYREAL_LOWER_RATE,
+                },
+            ],
+        )
+    }
+
+    /// THE REGRESSION GUARD. A segment may declare a `high_frame` past the end
+    /// of its Animation; ACE clamps it to `NumFrames`
+    /// (`ACE.DatLoader/FileTypes/MotionTable.cs:172-176`, "magic windup for
+    /// level 6 spells appears to be the only animation w/ bugged data") and so
+    /// does retail and so does our own bake path. Before this test existed the
+    /// duration path did not, and reported **4.4407895 s** for a gesture ACE
+    /// paces at **3.5526316 s** — a 888 ms error, halved to 444 ms on the wire
+    /// by `CastSpeed = 2.0`, against ~30 ms of measurement noise (ledger I2).
+    #[test]
+    fn over_declared_high_frame_is_clamped_to_the_animation_length() {
+        let mtable = pyreal_windup();
+        let got = classify_motion_link_for_swing(&mtable, MAGIC_STANCE, MAGIC_POWER_UP_10, |id| {
+            assert_eq!(id, PYREAL_ANIM, "the resolver is asked for the segment's own anim");
+            Some(PYREAL_REAL_FRAMES)
+        })
+        .expect("the link exists under (Magic, from-Ready)");
+
+        // ACE: (min(75, 60) - 0)/24 + (min(75, 60) - 0)/|-57|
+        let clamped = 60.0_f32 / 24.0 + 60.0_f32 / 57.0; // 3.5526316
+        assert!(
+            (got.duration_sec - clamped).abs() < 1e-4,
+            "expected the CLAMPED length {clamped}, got {}",
+            got.duration_sec
+        );
+
+        // And explicitly NOT the declared-frame sum — the pre-fix answer.
+        let unclamped = 75.0_f32 / 24.0 + 75.0_f32 / 57.0; // 4.4407895
+        assert!(
+            (got.duration_sec - unclamped).abs() > 0.5,
+            "reported the UNCLAMPED length {unclamped}; the frame clamp is gone"
+        );
+
+        // The declared frame numbers are reported verbatim — the C# oracle
+        // `MotionClassifySwing` that `validate_motion_pose.cjs --js-vs-cs`
+        // diffs us against reports what the DAT says, not what ACE plays.
+        assert_eq!(got.high_frame, PYREAL_DECLARED_HIGH);
+        assert_eq!(got.low_frame, 0);
+    }
+
+    /// ACE's other half: `HighFrame == -1` means "to the end of the asset" and
+    /// is priced by SUBSTITUTING `NumFrames` (`MotionTable.cs:169-170`). Every
+    /// melee swing is authored this way, and before O11 they all reported 0.0.
+    #[test]
+    fn negative_one_high_frame_substitutes_the_animation_length() {
+        let mtable = table_with_link(
+            0x003D, // NonCombat
+            0x1000_0063, // AttackHigh1
+            vec![AnimData {
+                anim_id: 0x0300_0100,
+                low_frame: 0,
+                high_frame: -1,
+                framerate: 30.0,
+            }],
+        );
+        let got = classify_motion_link_for_swing(&mtable, 0x003D, 0x1000_0063, |_| Some(45))
+            .expect("link exists");
+        assert!(
+            (got.duration_sec - 1.5).abs() < 1e-6,
+            "expected 45 frames / 30 fps = 1.5 s, got {}",
+            got.duration_sec
+        );
+    }
+
+    /// The deliberate choice recorded in the function's comment: an
+    /// unanswerable resolver makes the WHOLE link unpriceable (`0.0`), which is
+    /// the caller's `> 0` fallback signal, rather than silently shipping the
+    /// declared (possibly over-declared) number.
+    #[test]
+    fn unresolvable_animation_makes_the_link_unpriceable() {
+        let mtable = pyreal_windup();
+        let got = classify_motion_link_for_swing(&mtable, MAGIC_STANCE, MAGIC_POWER_UP_10, |_| None)
+            .expect("the link is still FOUND — only its duration is unknown");
+        assert_eq!(
+            got.duration_sec, 0.0,
+            "an unpriceable segment must zero the link so JS falls back to durationS"
+        );
+        assert_eq!(got.anim_id, PYREAL_ANIM, "the link itself still classifies");
+    }
+
+    /// A correctly-declared link must be BYTE-IDENTICAL to the pre-clamp
+    /// answer — the clamp is a no-op on 315 of the 319 links. Shape taken from
+    /// `MagicPowerUp02` (`0x10000070`): anim `0x030005A0`, low 0, high 15,
+    /// 24 fps forward + a reverse lower, over the same 60-frame animation.
+    #[test]
+    fn correctly_declared_link_is_untouched_by_the_clamp() {
+        let mtable = table_with_link(
+            MAGIC_STANCE,
+            0x1000_0070,
+            vec![
+                AnimData { anim_id: PYREAL_ANIM, low_frame: 0, high_frame: 15, framerate: 24.0 },
+                AnimData { anim_id: PYREAL_ANIM, low_frame: 0, high_frame: 15, framerate: -12.0 },
+            ],
+        );
+        let got = classify_motion_link_for_swing(&mtable, MAGIC_STANCE, 0x1000_0070, |_| {
+            Some(PYREAL_REAL_FRAMES)
+        })
+        .expect("link exists");
+        let expected = 15.0_f32 / 24.0 + 15.0_f32 / 12.0;
+        assert!(
+            (got.duration_sec - expected).abs() < 1e-6,
+            "expected {expected}, got {}",
+            got.duration_sec
+        );
+    }
+
+    /// A zero-framerate HOLD (door/chest/lever Off, creature Dead freeze-frame)
+    /// would divide by zero in ACE's form. Unpriceable here, exactly as before
+    /// the clamp landed — kept so O11 can't be blamed for a behaviour change it
+    /// did not make.
+    #[test]
+    fn zero_framerate_hold_stays_unpriceable() {
+        let mtable = table_with_link(
+            MAGIC_STANCE,
+            MAGIC_POWER_UP_10,
+            vec![AnimData {
+                anim_id: PYREAL_ANIM,
+                low_frame: 40,
+                high_frame: -1,
+                framerate: 0.0,
+            }],
+        );
+        let got = classify_motion_link_for_swing(&mtable, MAGIC_STANCE, MAGIC_POWER_UP_10, |_| {
+            Some(PYREAL_REAL_FRAMES)
+        })
+        .expect("link exists");
+        assert_eq!(got.duration_sec, 0.0);
     }
 }
 
