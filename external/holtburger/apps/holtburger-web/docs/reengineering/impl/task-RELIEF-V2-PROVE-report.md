@@ -287,3 +287,35 @@ No shipped code path was modified — the only addition is an example.
    vanilla (0.05 vs ~1.0) and would have caught this tail at bake time instead
    of in a showcase. `v2Span` would not have.
 4. Nothing here justifies a default flip, so none was made.
+
+---
+
+## ORCHESTRATOR CORRECTION (2026-08-12, added after the lane finished)
+
+**This report's "ACE was unreachable" premise is WRONG, and the live half was abandoned
+for a fault that did not exist.** Checked on the owner's laptop against `ACE_Log.txt`
+immediately after the lane returned:
+
+- ACE was **up and serving the whole session** (process alive 1d21h; UDP 9000/9001 bound;
+  log still being written minutes after the lane gave up).
+- **The sibling lane's account `agentp08` entered the world three times today** — 07:40,
+  07:46 and **08:08** — with character `+Funnel Probe Two`. So the server, the wsbridge on
+  `:8080`, and the Tailscale path were all healthy at the exact time this lane concluded
+  "hung listener".
+- **`agentp09` — this lane's own account — does not appear in today's log at all.** No
+  authentication attempt, no login request, nothing. Its last successful session was
+  2026-08-11 22:59 (character `+Probe`, clean logout 23:03).
+- The `Unsolicited Packet from 127.0.0.1:54088 with Id 0` spam is the SIBLING lane's
+  session tearing down, not a wedged listener.
+
+So the failure was client-side in this lane's own boot — a wrong bridge URL, a boot that
+died before the handshake, or giving up after a bare TCP probe without ever attempting
+login. **A TCP connect to `:8080` succeeding proves only that the wsbridge accepted a
+socket; it says nothing about ACE.** The next session should re-attempt the live frames
+rather than inheriting "ACE is down" as a fact — and should confirm reachability by
+reaching `__bootState === 'ready'` (or by finding its own account in `ACE_Log.txt`),
+never by a TCP probe alone.
+
+**Everything else in this report stands.** The cause-1 and cause-3 findings and the
+cause-2 residual are pipeline-level measurements over real DAT pixels and never needed a
+live client; only the in-world frames and the live `texBc7` A/B are still owed.
