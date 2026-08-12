@@ -1,0 +1,52 @@
+[s12b-audit-on] launching chrome /tmp/cdp-s12b-audit-on-1786498165741
+[s12b-audit-on] navigating
+[s12b-audit-on] renderer: ANGLE (NVIDIA Corporation, Tesla T4/PCIe/SSE2, OpenGL ES 3.2)
+[s12b-audit-on] boot attempt 0: IN-WORLD — in-world: guid=0x5000017B
+[s12b-audit-on] in-world
+[s12b-audit-on] liveScene3d= true cam= true
+[s12b-audit-on] step 0 plateau  ok 
+[s12b-audit-on] step 1 eval loadmod ok {"hasSide":true}
+[s12b-audit-on] step 2 chat  ok "sent"
+[s12b-audit-on] step 3 plateau  ok 
+[s12b-audit-on] step 4 wait  ok 
+[s12b-audit-on] step 5 eval worldPose ok {"lb":"0xa9b40019","wx":32532,"wy":34567.1,"wz":94}
+[s12b-audit-on] step 6 eval mvp ok "ok"
+[s12b-audit-on] step 7 eval census ok {"parsed":84,"buckets":{"strong":{"ok":12,"bad":0},"weak":{"ok":72,"bad":0},"degenerate":0},"offenders":[]}
+[s12b-audit-on] step 8 eval picks ok {"cands":5,"picks":[{"tag":"wall1","eye":{"x":32505.47,"y":34716.4,"z":70.31},"at":{"x":32510.46,"y":34716.55,"z":69.95},"w":1.93,"h":3.9,"portalSide":true},{"tag":"wall2","eye":{"x":32505.47,"y":34716.4,"z":70.31},"at":{"x":32510.46,"y":34716.55,"z":69.95},"w":1.93,"h":3.9,"portalSide":true},{"tag":"wall3","eye":{"x":32647.97,"y":34785.25,"z":31.37},"at":{"x":32642.97,"y":34785.25,"z":31.37},"w":
+[s12b-audit-on] step 9 eval cam-n-low ok {"pos":[32532,104.51,-34599.44],"fov":60,"parked":true,"mode":"follow","world":{"x":32532,"y":34567.09999990463,"z":94.00499725341797}}
+[s12b-audit-on] step 10 wait  ok 
+[s12b-audit-on] step 11 eval audit-n-low ok {"camAc":{"x":32532,"y":34599.4,"z":104.5},"total":8,"gateKept":0,"gateDropped":8,"correctDrop":1,"suspicious":0,"weakWitness":7,"offenders":[]}
+[s12b-audit-on] step 12 eval diag-n-low ok {"reason":"all-apertures-dropped","offered":8,"kept":0,"dropped":{"boundary":0,"backface":8,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":0},"rect":null,"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":true,"straddle":true}}
+[s12b-audit-on] step 13 eval cam-e-low ok {"pos":[32564.34,104.51,-34567.1],"fov":60,"parked":true,"mode":"follow","world":{"x":32532,"y":34567.09999990463,"z":94.00499725341797}}
+[s12b-audit-on] step 14 wait  ok 
+[s12b-audit-on] step 15 eval audit-e-low ok {"camAc":{"x":32564.3,"y":34567.1,"z":104.5},"total":6,"gateKept":2,"gateDropped":4,"correctDrop":0,"suspicious":0,"weakWitness":4,"offenders":[]}
+[s12b-audit-on] step 16 eval diag-e-low ok {"reason":"ok","offered":6,"kept":2,"dropped":{"boundary":0,"backface":4,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":0},"rect":{"x0":0.8798398262318197,"y0":0.512447458746899,"x1":0.9230979061828535,"y1":0.5792792349583018},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSun
+[s12b-audit-on] step 17 eval cam-s-low ok {"pos":[32532,104.51,-34534.76],"fov":60,"parked":true,"mode":"follow","world":{"x":32532,"y":34567.09999990463,"z":94.00499725341797}}
+[s12b-audit-on] step 18 wait  ok 
+[s12b-audit-on] step 19 eval audit-s-low ok {"camAc":{"x":32532,"y":34534.8,"z":104.5},"total":86,"gateKept":29,"gateDropped":57,"correctDrop":6,"suspicious":0,"weakWitness":51,"offenders":[]}
+[s12b-audit-on] step 20 eval diag-s-low ok {"reason":"ok","offered":86,"kept":10,"dropped":{"boundary":0,"backface":57,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":19},"rect":{"x0":0.3324789650278237,"y0":0.5900575760765051,"x1":0.6221876530730526,"y1":0.6629796889865281},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"l
+[s12b-audit-on] step 21 eval cam-w-low ok {"pos":[32499.66,104.51,-34567.1],"fov":60,"parked":true,"mode":"follow","world":{"x":32532,"y":34567.09999990463,"z":94.00499725341797}}
+[s12b-audit-on] step 22 wait  ok 
+[s12b-audit-on] step 23 eval audit-w-low ok {"camAc":{"x":32499.7,"y":34567.1,"z":104.5},"total":32,"gateKept":7,"gateDropped":25,"correctDrop":2,"suspicious":0,"weakWitness":23,"offenders":[]}
+[s12b-audit-on] step 24 eval diag-w-low ok {"reason":"ok","offered":32,"kept":7,"dropped":{"boundary":0,"backface":25,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":0},"rect":{"x0":0.14929638039459303,"y0":0.577042155016888,"x1":0.8988142142351248,"y1":0.8621793904158259},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"los
+[s12b-audit-on] step 25 eval cam-wall1 ok {"tag":"wall1","eye":{"x":32505.47,"y":34716.4,"z":70.31},"at":{"x":32510.46,"y":34716.55,"z":69.95},"w":1.93,"h":3.9,"portalSide":true}
+[s12b-audit-on] step 26 wait  ok 
+[s12b-audit-on] step 27 shot s12b-audit-on-wall1 ok 
+[s12b-audit-on] step 28 eval audit-wall1 ok {"camAc":{"x":32505.5,"y":34716.4,"z":70.3},"total":46,"gateKept":27,"gateDropped":19,"correctDrop":6,"suspicious":0,"weakWitness":13,"offenders":[]}
+[s12b-audit-on] step 29 eval diag-wall1 ok {"reason":"ok","offered":46,"kept":26,"dropped":{"boundary":0,"backface":19,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":1},"rect":{"x0":0.3672746383849873,"y0":0,"x1":0.9647550094999369,"y1":0.8382794926111943},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":tr
+[s12b-audit-on] step 30 eval cam-wall2 ok {"tag":"wall2","eye":{"x":32505.47,"y":34716.4,"z":70.31},"at":{"x":32510.46,"y":34716.55,"z":69.95},"w":1.93,"h":3.9,"portalSide":true}
+[s12b-audit-on] step 31 wait  ok 
+[s12b-audit-on] step 32 shot s12b-audit-on-wall2 ok 
+[s12b-audit-on] step 33 eval audit-wall2 ok {"camAc":{"x":32505.5,"y":34716.4,"z":70.3},"total":46,"gateKept":27,"gateDropped":19,"correctDrop":6,"suspicious":0,"weakWitness":13,"offenders":[]}
+[s12b-audit-on] step 34 eval diag-wall2 ok {"reason":"ok","offered":46,"kept":26,"dropped":{"boundary":0,"backface":19,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":1},"rect":{"x0":0.3672746383849873,"y0":0,"x1":0.9647550094999369,"y1":0.8382794926111943},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":tr
+[s12b-audit-on] step 35 eval cam-wall3 ok {"tag":"wall3","eye":{"x":32647.97,"y":34785.25,"z":31.37},"at":{"x":32642.97,"y":34785.25,"z":31.37},"w":2.62,"h":1.73,"portalSide":true}
+[s12b-audit-on] step 36 wait  ok 
+[s12b-audit-on] step 37 shot s12b-audit-on-wall3 ok 
+[s12b-audit-on] step 38 eval audit-wall3 ok {"camAc":{"x":32648,"y":34785.3,"z":31.4},"total":58,"gateKept":21,"gateDropped":37,"correctDrop":12,"suspicious":0,"weakWitness":25,"offenders":[]}
+[s12b-audit-on] step 39 eval diag-wall3 ok {"reason":"ok","offered":58,"kept":13,"dropped":{"boundary":0,"backface":37,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":8},"rect":{"x0":0.005596886467192919,"y0":0.3512341269068284,"x1":0.642374133319183,"y1":0.8492496220197062},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"l
+[s12b-audit-on] step 40 eval cam-wall4 ok {"tag":"wall4","eye":{"x":32505.3,"y":34716.39,"z":67.18},"at":{"x":32510.3,"y":34716.54,"z":67.11},"w":2.5,"h":1.79,"portalSide":true}
+[s12b-audit-on] step 41 wait  ok 
+[s12b-audit-on] step 42 shot s12b-audit-on-wall4 ok 
+[s12b-audit-on] step 43 eval audit-wall4 ok {"camAc":{"x":32505.3,"y":34716.4,"z":67.2},"total":46,"gateKept":27,"gateDropped":19,"correctDrop":6,"suspicious":0,"weakWitness":13,"offenders":[]}
+[s12b-audit-on] step 44 eval diag-wall4 ok {"reason":"ok","offered":46,"kept":26,"dropped":{"boundary":0,"backface":19,"straddle":0,"nearPlane":0,"project":0,"oversize":0,"terrain":1},"rect":{"x0":0.36422748646222397,"y0":0.34446596578742616,"x1":0.963060275743054,"y1":1},"gates":{"sidedness":true,"sidednessSource":"flag","sidednessMode":"on","sidednessExportPresent":true,"cellCenterExportPresent":true,"terrainLos":true,"losSunkenExempt":t
+[s12b-audit-on] chrome exited rc=0
