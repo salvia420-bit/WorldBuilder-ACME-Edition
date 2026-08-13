@@ -39,7 +39,6 @@ note: §L4b overlaps the INTEGRATOR's L4b baseline refresh — my edit replaces 
       above the baseline bullets and leaves every measured number untouched, so the two
       should merge cleanly.
 
-<<<<<<< HEAD
 ### LANE A (PORTAL-GATE) — 2026-08-14 — branch `lane/portal-gate-20260814`
 files: scene3d/atmosphere_pipeline.js, scene3d/index.js, scene3d/cells.js,
        tests/portal_punch_occlusion_gate.test.mjs, harness/portal-gate-probe.mjs,
@@ -57,11 +56,9 @@ note: declared overlap with LANE A, which is fixing the inert `?portalStencil` o
       `task-D-report.md` §"Shared lines touched" for hand-merge. I touch neither
       scene3d/portal_punch.js nor atmosphere_pipeline.js (Lane A's surface), and neither
       src/lib.rs nor pkg/ (Lane B's).
-=======
 ### LANE B / ORACLE — 2026-08-14 — branch `lane/oracle-20260814`
 files: src/lib.rs (apply_inventory_object_create + one new native test module),
        docs/reengineering/impl/task-B-report.md, docs/reengineering/impl/ACTIVE-LANES.md
 note: disjoint from lanes A and D (both in scene3d/ portal rendering). I am the only lane
       rebuilding wasm from source; I take the flock build lock for every build. No URL flag
       added, no flag default moved.
->>>>>>> lane/oracle-20260814
