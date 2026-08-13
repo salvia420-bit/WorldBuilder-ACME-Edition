@@ -970,6 +970,14 @@ import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
 // pose write (the one step that can't live in Rust). Default-OFF — enable with
 // ?unifiedMotion=attack (or =on).
 import { poseRigAt } from "./motion/motion_sequence.js";
+// J5 (PARITY-D, 2026-08-13) — retail's `MotionTableManager::pending_animations`
+// (acclient.h:31103). One playhead (`inst._unifiedSeq`), an ORDERED queue
+// behind it. See scene3d/motion_queue.js for the decomp transcription.
+import {
+  createMotionQueue, addToQueue, animationsDone, headMotion,
+} from "./motion_queue.js";
+// Pending one-shots kept behind the playhead (see `_enqueueUnifiedOneShot`).
+const _UNIFIED_QUEUE_MAX = 3;
 // Reused empties for the absent fields of MotionSequence.fromDescriptor.
 const EMPTY_F32 = new Float32Array(0);
 const EMPTY_U32 = new Uint32Array(0);
@@ -3511,6 +3519,12 @@ class EntityInstance {
     if (this._unifiedSeq) {
       try { this._unifiedSeq.seq.free(); } catch (_) {}
       this._unifiedSeq = null;
+    }
+    if (this._unifiedQueue) {
+      for (const n of this._unifiedQueue.list) {
+        if (n.payload) { try { n.payload.seq.free(); } catch (_) {} }
+      }
+      this._unifiedQueue = null; // J5: despawn drains pending_animations
     }
     if (this._unifiedLoco) {
       try { this._unifiedLoco.seq.free(); } catch (_) {}
@@ -9217,9 +9231,80 @@ export class EntityManager {
     );
     if (!seq) return false;
     if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
+    // J5: this door/missile one-shot is set directly on the playhead (it is not
+    // a MotionTable link gesture), so drop any pending tail rather than let it
+    // be promoted behind this one.
+    this._clearUnifiedQueue(inst);
     inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: entry?.hooks || null, lastHookTime: -1,
       speed: this._unifiedOneShotSpeed(inst) };
     return true;
+  }
+
+  // ---- J5: pending_animations (retail MotionTableManager) -----------------
+  // `inst._unifiedSeq` stays the SINGLE playhead; `inst._unifiedQueue` is the
+  // bookkeeping list that says what plays after it, exactly as retail keeps
+  // `pending_animations` alongside the one `CSequence`. There is no second
+  // advance loop — nothing here races the playhead.
+  //
+  // BEFORE (ledger J5): every new one-shot overwrote `_unifiedSeq` outright, so
+  // a gesture arriving mid-gesture silently cut the first one off — retail
+  // instead APPENDS and only retracts under `remove_redundant_links`.
+  //
+  // Deviation, deliberate: retail's queue is unbounded. A wire storm (or an
+  // echo the dedup window missed) would show up as visible animation lag with
+  // no ceiling, so `_UNIFIED_QUEUE_MAX` pending entries are kept and the oldest
+  // pending (never the in-flight head) is dropped past that. Recorded in the
+  // ledger under J5.
+  _enqueueUnifiedOneShot(inst, motion, numAnims, rec) {
+    if (!inst._unifiedQueue) inst._unifiedQueue = createMotionQueue();
+    const q = inst._unifiedQueue;
+    rec.numAnims = Math.max(1, numAnims | 0);
+    for (const dropped of addToQueue(q, motion >>> 0, rec.numAnims, rec)) {
+      try { dropped.seq.free(); } catch (_) { /* already freed */ }
+    }
+    while (q.list.length > _UNIFIED_QUEUE_MAX + 1) {
+      const victim = q.list.splice(1, 1)[0];
+      if (victim?.payload) { try { victim.payload.seq.free(); } catch (_) {} }
+    }
+    this._promoteUnifiedHead(inst);
+    return inst._unifiedSeq === rec;
+  }
+
+  // Put the queue head on the playhead if the playhead is free. Retires
+  // leading zero-anim nodes (retail: `num_anims <= animation_counter` pops
+  // them without their ever playing).
+  _promoteUnifiedHead(inst) {
+    const q = inst._unifiedQueue;
+    if (!q || inst._unifiedSeq) return;
+    while (q.list.length > 0 && !q.list[0].payload) animationsDone(q, 1);
+    const head = headMotion(q);
+    if (head?.payload) {
+      inst._unifiedSeq = head.payload;
+      q.started = true;
+    }
+  }
+
+  // The playhead finished the record it was given: retire it from the queue
+  // (retail `AnimationDone`, once per finished animation) and promote the next.
+  _unifiedOneShotFinished(inst, rec) {
+    const q = inst._unifiedQueue;
+    if (!q) return;
+    if (headMotion(q)?.payload === rec) animationsDone(q, rec?.numAnims || 1);
+    this._promoteUnifiedHead(inst);
+  }
+
+  // Anything that pre-empts the playhead outright (death, despawn, a new
+  // locomotion/stance command) drops the pending tail too — retail's
+  // `HandleExitWorld` / `Destroy` both drain `pending_animations` the same way.
+  _clearUnifiedQueue(inst) {
+    const q = inst._unifiedQueue;
+    if (!q) return;
+    for (const n of q.list) {
+      if (n.payload && n.payload !== inst._unifiedSeq) {
+        try { n.payload.seq.free(); } catch (_) { /* already freed */ }
+      }
+    }
+    inst._unifiedQueue = null;
   }
 
   // Whether door open/close should route through the Rust authority
@@ -9975,6 +10060,7 @@ export class EntityManager {
       try { inst._unifiedSeq.seq.free(); } catch (_) { /* already freed */ }
       inst._unifiedSeq = null;
     }
+    this._clearUnifiedQueue(inst); // J5: the pending tail goes with it
     // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
     // non-positive). Read by the locomotion timeScale composition below
     // and by the per-frame T11 velScale tick.
@@ -10207,6 +10293,8 @@ export class EntityManager {
           );
           if (seq) {
             if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
+            inst._unifiedSeq = null;
+            this._clearUnifiedQueue(inst); // J5: death pre-empts every pending gesture
             // clearOnDone:false → keep posing the clamped prone frame (held dead).
             // deathHold:true → the CQ-06 guard at setMotion entry refuses any
             // non-revival motion from freeing this hold (retail: no links out
@@ -12365,8 +12453,13 @@ export class EntityManager {
           // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
           // clearOnDone: the one-shot swing hands the rig back to the mixer
           // (frozen cycle resumes) on completion.
-          inst._unifiedSeq = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
+          const rec = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
             speed: this._unifiedOneShotSpeed(inst) };
+          // J5: APPEND to pending_animations rather than clobbering a gesture
+          // already on the playhead. `numAnims` is the link's AnimData segment
+          // count — retail's `num_anims` is exactly that (CMotionTable fills it
+          // in as it appends nodes to the CSequence).
+          this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec);
           return true; // skip the mixer overlay; the tick drives the rig
         }
       }
@@ -14988,6 +15081,9 @@ export class EntityManager {
           if (ua.seq.done && ua.clearOnDone) {
             try { ua.seq.free(); } catch (_) { /* already freed */ }
             inst._unifiedSeq = null;
+            // J5: retire it from pending_animations and promote the next
+            // queued gesture onto the SAME playhead (retail AnimationDone).
+            this._unifiedOneShotFinished(inst, ua);
           }
         } else if (inst._unifiedLoco) {
           // ?unifiedMotion=locomotion: drive the cyclic locomotion sequence with
