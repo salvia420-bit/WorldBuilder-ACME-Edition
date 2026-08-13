@@ -3095,6 +3095,76 @@ mod tests {
             vec![MotionTableEvent::MotionDone { motion: MOTION_READY, success: true }]
         );
     }
+
+    /// **O6 (parity ledger) — strafe-diagonal closed form.**
+    ///
+    /// The third parity report measured retail 8.468 m/s vs holtburger
+    /// 8.362 m/s for the run+strafe diagonal (the only FAIL), alongside
+    /// run-forward retail 7.895 vs holtburger 7.884. This test pins what
+    /// OUR OWN constants predict for that same cell, through BOTH live
+    /// velocity producers, so a future session can tell "the formula is
+    /// wrong" apart from "the formula never ran".
+    ///
+    /// Chain (`acclient.c:343746-343803` adjust, `:343439-343483` run
+    /// scaling, `:343539-343594` state velocity):
+    ///   forward = run_base(4.0) x run_rate
+    ///   sidestep = 1.25 x min(1.248 x run_rate, 3.0)
+    ///   diagonal = hypot(forward, sidestep)   [UNCAPPED on the ground]
+    #[test]
+    fn o6_strafe_diagonal_closed_form_matches_retail_capture() {
+        // Solve the capture's run_rate from the run-forward realization.
+        let run_rate = 7.884_f32 / 4.0; // = 1.971
+        let capabilities = authored_capabilities(run_rate);
+
+        let forward_only = interpreted_velocity_for_state(
+            0.0,
+            MotionState::builder().run().forward().build(),
+            &capabilities,
+        );
+        let diagonal = interpreted_velocity_for_state(
+            0.0,
+            MotionState::builder().run().forward().strafe_right().build(),
+            &capabilities,
+        );
+        let legacy_diagonal = crate::client::movement::common::local_velocity_for_state(
+            0.0,
+            MotionState::builder().run().forward().strafe_right().build(),
+            &capabilities,
+        );
+
+        // The two producers must agree (the stage-1 identity contract).
+        assert!(
+            (diagonal.length() - legacy_diagonal.length()).abs() < 1e-4,
+            "interpreted {} vs legacy {}",
+            diagonal.length(),
+            legacy_diagonal.length()
+        );
+
+        // Forward reproduces the capture exactly, by construction.
+        assert!((forward_only.length() - 7.884).abs() < 1e-3);
+
+        // The closed form predicts ~8.462 for that same run_rate.
+        let expected = ((4.0_f32 * run_rate).powi(2)
+            + (SIDESTEP_ANIM_SPEED
+                * (SIDESTEP_FACTOR * (WALK_ANIM_SPEED / SIDESTEP_ANIM_SPEED) * run_rate)
+                    .min(MAX_SIDESTEP_ANIM_RATE))
+            .powi(2))
+        .sqrt();
+        assert!(
+            (diagonal.length() - expected).abs() < 1e-3,
+            "diagonal {} != closed form {}",
+            diagonal.length(),
+            expected
+        );
+
+        // And that closed form is within tolerance of RETAIL's 8.468 —
+        // i.e. the FORMULA is not the O6 defect.
+        assert!(
+            (expected - 8.468).abs() < 0.05,
+            "closed form {expected} should track retail 8.468"
+        );
+    }
+
 }
 
 #[cfg(test)]
@@ -3287,4 +3357,6 @@ mod p13_tail_tests {
         // Head error wins over charge/posture (which would pass here).
         assert_eq!(mi.jump_is_allowed(0.5, &allow_env()), 71);
     }
+
+
 }
