@@ -1723,9 +1723,10 @@ const DYN_LOD_INTERVAL_S = 0.5;
 // `?runtimeObjScale=on` gate.
 const RUNTIME_OBJSCALE_ON = true;
 // ─────────────────────────────────────────────────────────────────
-// BUG-3 — `?appearanceUrgent=on` (DEFAULT OFF, strict `=== "on"` opt-in;
-// an absent param is OFF — see docs/url-flags.md on the `!== "off"`
-// footgun).
+// BUG-3 — `?appearanceUrgent=off` (DEFAULT ON since 2026-08-04,
+// user-verified live; docs/url-flags.md:481). The reader below is
+// `!== "off"`, so an absent param reads ON — DELIBERATE here, not the
+// memory-§4 flag-default footgun. `?appearanceUrgent=off` is the escape.
 //
 // SYMPTOM: equipping armour (or a spell landing on you) takes several
 // seconds to show on a settled scene.

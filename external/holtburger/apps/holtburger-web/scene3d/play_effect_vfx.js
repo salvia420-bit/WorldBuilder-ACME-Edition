@@ -2394,9 +2394,10 @@ const CAST_VFX_DEDUP_ON = (() => {
 })();
 const _CAST_VFX_DEDUP_MS = 2000;
 // ─────────────────────────────────────────────────────────────────
-// BUG-3 (2026-08-04) — `?castVfxUrgent=on` (DEFAULT OFF, strict `=== "on"`
-// opt-in; an absent param is OFF — see docs/url-flags.md on the `!== "off"`
-// footgun).
+// BUG-3 (2026-08-04) — `?castVfxUrgent=off` (DEFAULT ON since 2026-08-04;
+// docs/url-flags.md:482). The reader below is `!== "off"`, so an absent
+// param reads ON — DELIBERATE here, not the memory-§4 flag-default
+// footgun. `?castVfxUrgent=off` is the escape.
 //
 // SYMPTOM: a spell landing on you takes seconds to look right.
 //

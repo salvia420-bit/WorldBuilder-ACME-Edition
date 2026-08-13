@@ -974,9 +974,10 @@ let _mvpMatrixScratch = null;
 let _envCellBuildSeq = 0;
 
 // ─────────────────────────────────────────────────────────────────
-// `?envcellUrgent=on` — DEFAULT OFF. Strict `=== "on"` opt-in (an
-// absent param is OFF; see docs/url-flags.md on the `!== "off"`
-// footgun).
+// `?envcellUrgent=off` — DEFAULT ON since 2026-08-04 (user-verified
+// live; docs/url-flags.md:480). The reader below is `!== "off"`, so an
+// absent param reads ON — DELIBERATE here, not the memory-§4 flag-default
+// footgun. `?envcellUrgent=off` is the escape.
 //
 // BUG-2 (2026-08-04, interiors arrive minutes after the outdoors).
 // The 2026-07-02 "streamFix urgent lane" gave every OUTDOOR per-LB
