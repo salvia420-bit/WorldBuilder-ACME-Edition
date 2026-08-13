@@ -87,8 +87,13 @@ for d in "$REPO"/external/*/; do
     ln -sfn "$d" "$WT/external/$n"
   fi
 done
-# node_modules / pkg are gitignored build products; borrow them read-only rather than rebuild.
-for p in "$WEB/node_modules" "$WEB/pkg"; do
+# node_modules / pkg / pkg-node are gitignored build products; borrow them read-only rather
+# than rebuild. `pkg-node` is NOT optional: `tests/soa_aos_parity.test.cjs` does a plain
+# `require("../pkg-node/holtburger_web.js")`, so a worktree without it dies with
+# MODULE_NOT_FOUND and the suite reads 241/13 instead of the true 242/12 — a phantom
+# regression that is purely a provisioning gap (INTEGRATOR, 2026-08-13; this is exactly the
+# 241-vs-242 drift this script was blamed for finding).
+for p in "$WEB/node_modules" "$WEB/pkg" "$WEB/pkg-node"; do
   s="$REPO/external/holtburger/$p"
   [ -e "$s" ] && [ ! -e "$WT/external/holtburger/$p" ] && ln -sfn "$s" "$WT/external/holtburger/$p"
 done

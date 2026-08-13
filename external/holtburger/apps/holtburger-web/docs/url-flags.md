@@ -120,10 +120,22 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 >   completion (single playhead). Replaces the mixer `crossFadeTo` + the `CROSSFADE_S=0`/
 >   `RESUME_WINDOW` band-aids. The WORKING oracle — migrated LAST; in-world gait UNVERIFIED
 >   (no eye-test). Edge cases (true STOP, stance transitions) may need refinement post-eye-test.
->   **NOT in the W6 default** (§9 class-by-class ruling 2026-06-18): locomotion stays behind
->   explicit `?unifiedMotion=locomotion` / `=on` because enabling it by default exposes the
->   open **B-1** movement-integrator overshoot (Walk→Stop→Walk oscillation), which is an
->   upstream `MovementSystem`/`get_state_velocity` bug — fix B-1 first, then fold loco into the default.
+>   **NOW IN THE DEFAULT SET — DEC-18 (2026-08-13, PARITY-A), closing C7.** Every motion class
+>   is finally on ONE playhead. The escape is `?unifiedMotion=off`; no new flag was added.
+>   It had been held back ~2 months by the 2026-06-18 §9 ruling that enabling it exposed the
+>   open **B-1** movement-integrator overshoot (25 m/s vs 4.5, Walk→Stop→Walk oscillation).
+>   **B-1/O5 is REFUTED two ways** (ledger O5): the flag selects an ANIMATION DRIVER — its
+>   blast radius is three statements in the entity tick, touching no velocity and no
+>   `pose.coords` — and a live 3-arm A/B read median = max = 8.4830 in every arm, with no
+>   25 m/s anywhere. **O6 (strafe) is REFUTED with the mechanism named**: it was a run-rate
+>   SOURCE mismatch, not a strafe defect — the old 8.362 solves exactly to the client
+>   `composed` lane (1.9466) while the server lane is 1.9758, so the 2026-08-11 report
+>   compared a diagonal on one lane against a forward on another. Both scenarios PASS
+>   post-flip. (O6's own ledger text named `local_velocity_for_state`, but
+>   `USE_INTERPRETED_VELOCITY = true` at `crates/holtburger-core/src/client/movement/system.rs:695`
+>   means the live path is `interpreted_velocity_for_state` — the test it suggested would have
+>   exercised a function the client never calls.) Pinned by
+>   `o6_strafe_diagonal_closed_form_matches_retail_capture`.
 > **Logic-verified headlessly** (cargo `motion_sequence` 7/7 parity + one-shot completion + phase;
 > `test_motion_sequence.mjs` poser-vs-mixer maxErr 0; `test_motion_sequence_wasm_smoke.mjs`
 > drives the real compiled wasm 14/14). **In-world render UNVERIFIED** (no eye-test). Hooks
@@ -863,7 +875,7 @@ Values cell says only `off` really does ignore `=0`/`=false`.
 | `dismember` | `off` (escape) | **on** (2026-08-02 owner default-on, pre-1070-eyetest) | `!== "off"` | Phase-3 death-time dismemberment (2026-08-02): lazily imports scene3d/dismember.js + vendored `@dgreenheck/three-pinata` (vendor/dgreenheck/, MIT) and installs `__diag.dismember`. Slices a live entity part with a world plane: exact bit-equality weld across the part's surface buckets (reconstructs the watertight DAT topology; coincident back-face duplicates dropped), pinata slice with a module-owned flesh cap material, stump swapped into the part Group's children in place (mixer bindings untouched; originals stashed — `restore()` regrows the limb), severed piece + optional distal chain parts spawned as tumbling ballistic debris in `entitiesGroup` (−Z gravity, one damped bounce, 12 s TTL, 24-piece LRU). Diag-driven for now (`slice`, `audit`, `auditAll`, `restore`, `stats`); death-event automation queued in DISMEMBERMENT_HANDOFF.md. Off = module never loads. | scene3d/index.js:3505 (gate); scene3d/dismember.js |
 | `rootMotionObject` | `off` (escape) | **on** | `!== "off"` | Root-motion metadata drives the entity anchor (A5-P3). | scene3d/entities.js:251 |
 | `renderRootMotion` | `on` | off (in-place) | `=== "on"` opt-in | Restores baked root motion inside render clips (old behaviour) for A/B. | scene3d/animation.js:114 |
-| `unifiedMotion` | `off`/`shadow`/`attack`/`death`/`door`/`cast`/`missile`/`locomotion`/`on` | all classes EXCEPT locomotion (W6 flip) | enum(null→default) | Rust `CSequence` motion authority per class — full semantics in the W6 note at the top of this file. | scene3d/animation.js:72, scene3d/entities.js:615, scene3d/motion/motion_sequence.js:60 |
+| `unifiedMotion` | `off`/`shadow`/`attack`/`death`/`door`/`cast`/`missile`/`locomotion`/`on` | **ALL classes including locomotion** (DEC-18, 2026-08-13 — was "all EXCEPT locomotion" from the 2026-06-18 W6 flip until B-1/O5 and O6 were refuted; `?unifiedMotion=off` is the escape) | enum(null→default) | Rust `CSequence` motion authority per class — full semantics in the W6 note at the top of this file. | scene3d/animation.js:72, scene3d/entities.js:615, scene3d/motion/motion_sequence.js:60 |
 | `turnOmega` | `off` (escape) | **on** | `?.toLowerCase() !== "off"` | Retail turn-rate cap toward motion targets (KIND_POSITION heading stash clears the cap). | scene3d/entities.js:432 |
 | `turnOmegaBase` | N (rad/s) | 3.0 | numeric rad/s | Base turn rate for the `turnOmega` cap. | scene3d/entities.js:441 |
 | `serverSwing` | `off` (escape) | **on** | `!== "off"` (both sites) | Play the melee swing at the server-timed (post-MoveTo) echo instead of at click. | scene3d/loop.js:284, scene3d/picking.js:71 |

@@ -1065,14 +1065,57 @@ A/B is cheap and this project has misattributed before. **But re-measure the SAF
 > * **Announce your lane** in `ACTIVE-LANES.md` (same directory) before you start editing, so
 >   the next agent knows which dirty files are not theirs.
 
-* `harness/run-js-headless.mjs` — **242 passed, 12 failed, 1 missing (of 257)**, byte-identical
-  with and without the DEC-6/DEC-7/DEC-9 edits.
-* `tests/test_ws03_cast_overlay_guard.mjs` — **20 passed, 3 failed** on clean master (R7).
-* `cargo test -p holtburger-web --lib` — **230 passed, 1 failed, 4 ignored**;
-  `tests_substitution::resolve_static_placement_frame_orders` fails identically on pristine
-  `lib.rs` (A/B'd 2026-08-12). Pre-existing, unrelated to motion.
-* `cargo test -p holtburger-dat` — 694/1, `terrain_subdiv::triangle_corner_ring_matches_
-  height_sampler` fails identically on clean master (pre-existing, per the 08-11 handoff).
+### REFRESHED 2026-08-13 (INTEGRATOR) — measured in a QUIESCED WORKTREE, not the shared tree
+
+Ref A = `origin/master` (the 08-12 baseline tree). Ref B = `integ/all-20260813` (every one of
+today's six bodies of work composed: parity B/C/D/A + envcell + dist-diag). Both measured in a
+detached worktree with `node_modules`, `pkg` and `pkg-node` linked in, with NO agent writing.
+
+| suite | A: `origin/master` | B: `integ/all-20260813` |
+|---|---|---|
+| `harness/run-js-headless.mjs` | **242 passed, 12 failed, 1 missing** (of 257) | **243 passed, 12 failed, 1 missing** (of 258) |
+| `tests/test_ws03_cast_overlay_guard.mjs` | 20 passed, 3 failed | 20 passed, 3 failed |
+| `cargo test -p holtburger-web --lib` | — | **236 passed, 1 failed, 4 ignored** |
+| `cargo test -p holtburger-core` | — | **644 passed, 0 failed, 1 ignored** |
+| `cargo test -p holtburger-dat` | — | **694 passed, 1 failed** |
+| `cargo test -p holtburger-world` | — | **691 passed, 0 failed** |
+
+**Every failure named, and classified.** The JS FAIL set is BYTE-IDENTICAL between A and B —
+today's work introduced ZERO new failures and fixed one. All twelve are PRE-EXISTING:
+
+    test_move_telemetry.mjs            test_materials_paletted_lru.mjs
+    test_a14_i3_run_keys.mjs           test_sky_birds.mjs
+    test_a5_p3_root_motion.mjs         test_visfid_c4_program_cache_key.mjs
+    test_a14_i2_pursuit_monitor.mjs    test_visfid_p02_detail_material.mjs
+    test_motion_sequence.mjs           test_visfid_p11_normal_gate.mjs
+    test_a11_s5_default_script_spawn.mjs   test_visfid_p33_csm.mjs
+    (+ MISSING: test_p1_alias_split.mjs — absent at BOTH refs, never authored)
+
+Native, both PRE-EXISTING and both already recorded on 08-12:
+* `holtburger-web --lib` — `tests_substitution::resolve_static_placement_frame_orders`
+  (`lib.rs:56695`, `left: 0, right: 101`). The 230 -> 236 pass count is six tests ADDED today
+  (DEC-13 windup-order/speed, DEC-16 CMT collapse, DEC-18 O6 strafe), all green.
+* `holtburger-dat` — `terrain_subdiv::tests::triangle_corner_ring_matches_height_sampler`.
+* PARITY-B's report of a second `--lib` failure (`batch_helper_is_linear_in_setup_count`,
+  235/2) DID NOT REPRODUCE in three runs. It is load-sensitive, as they suspected — treat it
+  as noise on a loaded laptop, not a baseline entry.
+
+**THE ONE NEW FAILURE OF THE DAY, found and fixed.** `tests/combat_bar_skill_stride.test.mjs`
+PASSED at `647168d9` and FAILED after DEC-12: `plugins/combat-bar.js:27` gained
+`import { noteCombatModeRequest }` and `spliceModule` rightly refuses an imported symbol that
+is neither declared nor stubbed. Fixed with an EXPLICIT inert stub (`cf1e3ed7`) — 9/9. Not a
+behaviour regression; a harness stub the module outgrew.
+
+**THE 241-vs-242 DRIFT IS AN ARTIFACT — `parity-ab.sh` was under-provisioning, not lying.**
+HARDEN measured 241/13 at `origin/master` and the 13th failure was `tests/soa_aos_parity.test.cjs`.
+That test is CJS and does a plain `require("../pkg-node/holtburger_web.js")`. `pkg-node/` is a
+gitignored build product, so a fresh worktree lacks it and the test dies MODULE_NOT_FOUND —
+while in the real checkout it does 9 s of genuine work (169 LBs x 3 exports, all sha256 equal)
+and passes. Link `pkg-node` in and `origin/master` reads 242/12/1 exactly, as recorded on 08-12.
+`scripts/parity-ab.sh` now links `pkg-node` alongside `node_modules` and `pkg`. **Moral: when a
+worktree A/B disagrees with the shared tree, suspect the gitignored build products FIRST.**
+PARITY-A's inconclusive 242/13-vs-243/12 with byte-identical FAIL lists is the same story seen
+from the other side — the tree was moving under them and the 13th row was this same artifact.
 
 ## L5 — RIG STATE (2026-08-12)
 
