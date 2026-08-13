@@ -39,6 +39,7 @@ note: §L4b overlaps the INTEGRATOR's L4b baseline refresh — my edit replaces 
       above the baseline bullets and leaves every measured number untouched, so the two
       should merge cleanly.
 
+<<<<<<< HEAD
 ### LANE A (PORTAL-GATE) — 2026-08-14 — branch `lane/portal-gate-20260814`
 files: scene3d/atmosphere_pipeline.js, scene3d/index.js, scene3d/cells.js,
        tests/portal_punch_occlusion_gate.test.mjs, harness/portal-gate-probe.mjs,
@@ -46,3 +47,15 @@ files: scene3d/atmosphere_pipeline.js, scene3d/index.js, scene3d/cells.js,
 note: declared overlap with lane D at the punch-feed call site (cells.js `tickPortalPunch`).
       I keep my cells.js edits to that one function; D keeps to new files + one call site;
       hand-merge at integration, never revert.
+=======
+### LANE D (PORTAL-PASS2) — 2026-08-14 — branch `lane/portal-pass2-20260814`
+files: scene3d/portal_pass2.js (NEW), tests/portal_pass2.test.mjs (NEW),
+       harness/run-js-headless.mjs (one registration line),
+       docs/url-flags.md (one new `portalPass2` row),
+       scene3d/cells.js (SHARED — 4 small hunks, all inside/around `tickPortalPunch`)
+note: declared overlap with LANE A, which is fixing the inert `?portalStencil` occlusion gate in
+      the SAME punch path. My cells.js hunks are listed line-by-line in
+      `task-D-report.md` §"Shared lines touched" for hand-merge. I touch neither
+      scene3d/portal_punch.js nor atmosphere_pipeline.js (Lane A's surface), and neither
+      src/lib.rs nor pkg/ (Lane B's).
+>>>>>>> lane/portal-pass2-20260814

@@ -1126,3 +1126,30 @@ ACE alive on :9000/:9001. Buildbox is in **us-central1-b** (SPOT n1-standard-4 +
 `memory/fleet-runbooks.md` still says `us-central1-a` and is read-only to the orchestrator —
 **owner must fix.** Reverse tunnels laptop->box: `-R 8765` (serve.py), `-R 8080` (wsbridge).
 Bot accounts `agentp07..10` are all accessLevel 4 (Developer); `tailnet1` is the owner's, never use it.
+
+---
+
+### 2026-08-14 — LANE D — the outdoor portal Z-wipe does not exist (decomp correction)
+
+Standing project belief (repeated in `scene3d/portal_punch.js`, `docs/url-flags.md`, the
+O-P1 handoff and the LANE D card): retail can afford `DEPTHTEST_ALWAYS` on the OUTDOOR
+portal punch partly because `PView::DrawCells` wipes Z outright at `acclient.c:461484`.
+
+Read directly: that `Clear(4, …, 1.0)`, together with `LScape::draw` and
+`FlushAlphaList`, sits inside `if (this->outside_view.view_count)`
+(`acclient.c:461473-461487`). `outside_view` is populated only by the INDOOR-looking-out
+entry — `PView::DrawInside` (`:462590`) → `PView::DrawCells(this, /*from_outside=*/0)` —
+where the landscape is drawn through the doorways, Z is wiped, the exterior portal planes
+are re-stamped (`:461525-461545`), and the cells are drawn. The OUTDOOR entry
+(`PView::DrawPortal` `:462588` → `DrawCells(this, 1)`) has `view_count == 0` and reaches
+neither the landscape draw nor the wipe.
+
+What the outdoor punch actually rests on is `PView::ConstructView(CBldPortal*, CPolygon*,
+…)` (`:462507-462562`) — sidedness (`:462513`), non-empty `GetClip` (`:462545`),
+`GetVisible` + `copy_view` (`:462551`) — plus the per-building BSP nesting
+(`BSPNODE::build_draw_portals_only`, `:364428-364520`) that draws each portal's interior
+before the next portal is considered.
+
+Consequence for us: an outdoor Z-wipe is NOT a parity item and should not be added. Our
+wipe is correctly scoped to `?indoorDepthSplit`. Not a measurement — a reading of the
+decomp; anyone may re-derive it from the symbols cited.

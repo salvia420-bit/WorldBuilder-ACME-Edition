@@ -331,6 +331,7 @@ const TIER5 = [
   // …and the clip suite the punch FEED calls every frame (`clipAperturesForPunch`),
   // unregistered since it was written. 59 assertion groups, green.
   { tier: 5, flag: "portal_clip", file: "tests/portal_clip.test.mjs" },
+  { tier: 5, flag: "portalPass2", file: "tests/portal_pass2.test.mjs" },
   { tier: 5, flag: "quality_preset", file: "test_quality_preset.mjs" },
   { tier: 5, flag: "remote_buffs", file: "test_remote_buffs.mjs" },
   { tier: 5, flag: "retail_sun", file: "test_retail_sun.mjs" },
