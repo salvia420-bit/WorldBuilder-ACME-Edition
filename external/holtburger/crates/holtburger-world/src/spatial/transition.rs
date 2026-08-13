@@ -1386,11 +1386,46 @@ fn resolve_floor_for_step(
         let ceiling_for_floor_query = cell_aabb
             .map(|a| a.max.z + 1.0)
             .unwrap_or(pose.coords.z + 100.0);
-        let poly_floor_z = if !triangles.is_empty() {
+        let mut poly_floor_z = if !triangles.is_empty() {
             highest_floor_z_under(triangles, global.x, global.y, ceiling_for_floor_query)
         } else {
             None
         };
+        // ── DUNGEON MOUTH (2026-08-13) ────────────────────────────────────
+        // `CEnvCell::find_transit_cells`' check_outside branch
+        // (acclient.c:348296-348325) + its tail `CLandCell::add_all_outside_
+        // cells` (acclient.c:346729): when a moving sphere straddles the plane
+        // of a portal whose `other_cell_id == -1`, retail adds the OUTDOOR
+        // LandCells to the very same CELLARRAY, so the mover collides against
+        // the terrain heightfield while still assigned to the EnvCell.
+        //
+        // This branch had no analogue at all — indoors meant "cell polygons
+        // only" — which is the owner-reported fall-through at a surface
+        // dungeon entrance (Old Scratch's cave, 29.0S 26.6E): the entry flip
+        // latches you into the mouth cell while you are physically outside it,
+        // and jumping off the side of the entrance found no cell floor and no
+        // terrain. The faithful driver gets the same fix structurally, in
+        // `find_cell_list` (`CObjCell::wants_outside_cells`); this is the
+        // heightfield-sampler equivalent for the approximate pipeline, which
+        // is the live path whenever the begin landblock's collision geometry
+        // is not yet resident (i.e. exactly while streaming into a mouth).
+        //
+        // Terrain is a floor CANDIDATE, never a replacement: `max` keeps a
+        // genuine below-grade cave floor winning over the surface above it.
+        if scene.cell_straddles_exterior_portal(cell_id, global, object.radius) {
+            if let Some(tz) = env.terrain_height_at(global.x, global.y) {
+                let tz = if gates.water_collision {
+                    tz + env.water_depth_at(global.x, global.y)
+                } else {
+                    tz
+                };
+                poly_floor_z = Some(match poly_floor_z {
+                    Some(f) if f >= tz => f,
+                    _ => tz,
+                });
+            }
+        }
+        let poly_floor_z = poly_floor_z;
         let aabb_floor_z = cell_aabb.map(|a| a.min.z);
         if gates.ramp_floor_snap_fix {
             if let Some(floor) = poly_floor_z {

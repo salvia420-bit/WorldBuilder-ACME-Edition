@@ -194,6 +194,28 @@ pub trait CObjCell {
         cell_array: &mut dyn CellArrayApi,
         path: Option<&mut SpherePath>,
     );
+    /// `CEnvCell::find_transit_cells`' **check_outside** branch
+    /// (`acclient.c:348296-348325` sets `check_outside` when a moving sphere
+    /// straddles the plane of a portal whose `other_cell_id == -1`;
+    /// `acclient.c:346729` then runs
+    /// `CLandCell::add_all_outside_cells(p, num_sphere, sphere, cell_array)`).
+    ///
+    /// Our `find_transit_cells` signature carries no landscape handle, so the
+    /// decision and the action are split: the cell answers this predicate and
+    /// [`find_cell_list`] performs the `add_all_outside_cells` call, which is
+    /// idempotent (`CELLARRAY::added_outside`, `objcell.rs` ring guard) exactly
+    /// as retail's is.
+    ///
+    /// THIS IS WHAT KEEPS TERRAIN COLLISION AT A DUNGEON MOUTH. An object
+    /// assigned to an EnvCell whose exterior portal it straddles still collides
+    /// against the outdoor LandCells, so stepping/jumping off the lip of a cave
+    /// entrance cannot fall through the landblock heightfield.
+    ///
+    /// Base `CObjCell` (and every outdoor `CLandCell`, which seeds the ring
+    /// unconditionally) answers `false`.
+    fn wants_outside_cells(&self, _num_sphere: u32, _spheres: &[Sphere]) -> bool {
+        false
+    }
     /// Cell-level `find_collisions(transition)` (CEnvCell:347810 /
     /// CLandCell:354887). Runs environment/terrain collisions then
     /// `find_obj_collisions`. The concrete bodies live with the landscape/
@@ -362,6 +384,15 @@ pub fn find_cell_list(
                 // cloning the Rc releases the &cell_array borrow before the
                 // &mut cell_array call (decomp uses raw pointers).
                 cell.find_transit_cells(p, num_sphere, spheres, &mut *cell_array, path.as_deref_mut());
+                // acclient.c:346729 — the tail of `CEnvCell::find_transit_cells`:
+                // `if (check_outside) CLandCell::add_all_outside_cells(...)`.
+                // Appending here (rather than after the loop) is what retail
+                // does too: the loop re-reads `num_cells`, so the LandCells the
+                // ring adds are themselves visited and get their own transit
+                // pass (building portals → interior cells).
+                if cell.wants_outside_cells(num_sphere, spheres) {
+                    world.add_all_outside_cells(p, num_sphere, spheres, &mut *cell_array);
+                }
             }
             i += 1;
         }

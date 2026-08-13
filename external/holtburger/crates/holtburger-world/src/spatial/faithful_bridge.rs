@@ -193,6 +193,19 @@ pub struct SceneObjCell {
     /// OWN world frame (non-Euclidean-safe: portal connectivity, not spatial
     /// overlap — gmriggs/trevis).
     resolved_neighbours: Vec<(u32, ObjCellHandle, Option<Arc<CellMembership>>)>,
+    /// DUNGEON-MOUTH (2026-08-13): the WORLD-space planes of this cell's
+    /// EXTERIOR portals — the portals whose `other_cell_id` carries AC's
+    /// outdoor sentinel (`CCellPortal::UnPack`, `acclient.c:362396-362398`,
+    /// writes `-1` when flags bit 2 is set; our decoder maps that to a low
+    /// word `>= 0xFFFE`). Retail tests the moving spheres against exactly
+    /// these planes and, on a straddle, pulls the outdoor terrain ring into
+    /// the SAME cell array (`acclient.c:348296-348325` + `:346729`) — which is
+    /// why a retail player cannot fall through the heightfield at a cave
+    /// mouth. See [`SceneObjCell::wants_outside_cells`].
+    ///
+    /// Empty for cells with no exterior portal (a sealed dungeon room) and for
+    /// outdoor `CLandCell`s (which seed the ring unconditionally).
+    exterior_portal_planes: Vec<(Vector3, f32)>,
     /// Phase D / WS3: the OUTDOOR land cell's two collision triangles
     /// (`CLandCell::polygons`), in this cell's LANDBLOCK-local frame (WS2's
     /// [`cell_terrain_polys`]). `Some` ⇒ this is an outdoor `CLandCell` and
@@ -485,6 +498,53 @@ impl CObjCell for SceneObjCell {
         }
     }
 
+    /// `CEnvCell::find_transit_cells`' **check_outside** branch —
+    /// `acclient.c:348296-348325`:
+    ///
+    /// ```text
+    ///   if ( *(_DWORD *)v8 == -1 )              // portal leads OUTSIDE
+    ///     for each sphere:                      // plane test in cell-local space
+    ///       if ( -r < d && d < r ) check_outside = 1;
+    /// ```
+    ///
+    /// and then, at the tail (`acclient.c:346729`):
+    ///
+    /// ```text
+    ///   if ( check_outside )
+    ///     CLandCell::add_all_outside_cells(p, num_sphere, sphere, cell_array);
+    /// ```
+    ///
+    /// THE DUNGEON-MOUTH FIX (2026-08-13). Before this, an object assigned to
+    /// an EnvCell collided against that cell's environment BSP and nothing
+    /// else: the outdoor terrain ring was seeded ONLY by `find_cell_list`'s
+    /// `objcell_id < 0x100` branch. At a surface dungeon entrance (Old
+    /// Scratch's cave, 29.0S 26.6E) the entry flip latches the player into the
+    /// mouth EnvCell while they are still physically above the landblock
+    /// heightfield; jumping off the side of the entrance then found no cell
+    /// floor and no terrain, and the player fell straight through the world.
+    /// Retail never loses terrain there because the mouth cell's exterior
+    /// portal is straddled and the LandCells join the same CELLARRAY.
+    ///
+    /// Both the plane and the spheres are WORLD-space here (see
+    /// [`exterior_portal_planes`]); retail runs the identical test after
+    /// `Frame::globaltolocal` into the cell frame, which is a rigid transform
+    /// and preserves the signed distance.
+    fn wants_outside_cells(&self, num_sphere: u32, spheres: &[Sphere]) -> bool {
+        if self.exterior_portal_planes.is_empty() {
+            return false;
+        }
+        for s in spheres.iter().take(num_sphere as usize) {
+            for (n, d) in &self.exterior_portal_planes {
+                let dist = n.x * s.center.x + n.y * s.center.y + n.z * s.center.z + d;
+                // acclient.c:348320 — strict `-r < dist < r`.
+                if dist > -s.radius && dist < s.radius {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// `CEnvCell::find_collisions` (acclient.c:347816) — env collisions FIRST,
     /// then object/static collisions, and only when the env pass returned OK
     /// (decomp 347816-347818). A cell with no env BSP still runs its statics
@@ -679,6 +739,7 @@ impl<'a> SceneWorld<'a> {
             aabb,
             portal_neighbours,
             resolved_neighbours,
+            exterior_portal_planes: exterior_portal_planes(self.scene, cell_id),
             // E3.2: precise membership BSP for this cell (falls back to AABB if absent).
             membership: self.scene.cell_membership(cell_id).cloned(),
             // Indoor env cell — no terrain triangles (mutually exclusive with bsp).
@@ -941,6 +1002,63 @@ fn classify_cell_water(corner_codes: [u8; 4]) -> (WaterType, [bool; 4]) {
     (water_type, flags)
 }
 
+/// The WORLD-space planes of `cell_id`'s EXTERIOR portals (`other_cell_id`
+/// low word `>= 0xFFFE` — retail's `-1` outdoor sentinel,
+/// `CCellPortal::UnPack` acclient.c:362396-362398).
+///
+/// The plane is the Newell plane of the portal polygon, which is the same
+/// orientation retail's `CPolygon::make_plane` (acclient.c:359628) produces
+/// over the same vertex order. Only the |distance| is consumed
+/// (`wants_outside_cells`), so the sign convention is not load-bearing here.
+///
+/// Portal polygons are registered in the GLOBAL frame
+/// (`lib.rs` cell-portal bake: `cell_origin + orientation·local`, where
+/// `cell_origin` already carries the landblock origin), i.e. the same frame as
+/// `SpherePath::global_sphere`, so no rebase is needed.
+pub(crate) fn exterior_portal_planes(scene: &SpatialScene, cell_id: u32) -> Vec<(Vector3, f32)> {
+    let mut out = Vec::new();
+    for portal in scene.cell_portal_polygons_for(cell_id) {
+        if (portal.other_cell_id & 0xFFFF) < 0xFFFE {
+            continue;
+        }
+        if let Some(plane) = newell_plane(&portal.vertices) {
+            out.push(plane);
+        }
+    }
+    out
+}
+
+/// Newell normal + plane constant `d` (so `N·P + d` is the signed distance) for
+/// a polygon, or `None` when it is degenerate. Newell rather than one cross
+/// product because AC portal quads are not always exactly planar.
+pub(crate) fn newell_plane(verts: &[Vector3]) -> Option<(Vector3, f32)> {
+    let n = verts.len();
+    if n < 3 {
+        return None;
+    }
+    let mut nx = 0.0f32;
+    let mut ny = 0.0f32;
+    let mut nz = 0.0f32;
+    let mut c = Vector3::zero();
+    for i in 0..n {
+        let a = verts[i];
+        let b = verts[(i + 1) % n];
+        nx += (a.y - b.y) * (a.z + b.z);
+        ny += (a.z - b.z) * (a.x + b.x);
+        nz += (a.x - b.x) * (a.y + b.y);
+        c = Vector3::new(c.x + a.x, c.y + a.y, c.z + a.z);
+    }
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if !len.is_finite() || len < 1e-9 {
+        return None;
+    }
+    let normal = Vector3::new(nx / len, ny / len, nz / len);
+    let inv = 1.0 / n as f32;
+    let centroid = Vector3::new(c.x * inv, c.y * inv, c.z * inv);
+    let d = -(normal.x * centroid.x + normal.y * centroid.y + normal.z * centroid.z);
+    Some((normal, d))
+}
+
 fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> ObjCellHandle {
     let statics = scene.cell_static_physics_bsp(cell_id).to_vec();
 
@@ -1016,6 +1134,9 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         aabb: Some(aabb),
         portal_neighbours: Vec::new(),
         resolved_neighbours: Vec::new(),
+        // Outdoor CLandCell: the ring is seeded unconditionally by
+        // `find_cell_list`'s `< 0x100` branch, so it never asks for it again.
+        exterior_portal_planes: Vec::new(),
         // Outdoor land cells have no CellStruct.cell_bsp → AABB/terrain membership.
         membership: None,
         terrain_polys,
@@ -2087,6 +2208,7 @@ mod drift {
     };
     use crate::spatial::entity_collision::EntityCollider;
     use crate::spatial::scene::{CellPhysicsBsp, SpatialScene};
+    use crate::spatial::types::CellPortalPolygon;
     use crate::spatial::transition::{
         find_transitional_position, ObjectInfo, TransitionEnv, TransitionGates, TransitionInput,
         TransitionOutcome,
@@ -2285,6 +2407,138 @@ mod drift {
             floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
         );
         DriftEnv { scene }
+    }
+
+    // ── DUNGEON MOUTH (2026-08-13): terrain must stay in the cell array ──
+    //
+    // Owner report: "there will be env cells you can enter from the surface,
+    // they have like a dungeon mouth type thing. If you 'jump' off the side of
+    // the entrance you will fall through the world, through the top of the
+    // landblock terrain." Repro: Old Scratch's cave, 29.0S 26.6E.
+    //
+    // Root cause: `find_cell_list` seeded the outdoor terrain ring ONLY from
+    // its `objcell_id < 0x100` branch. Retail seeds it from the INDOOR branch
+    // too, via `CEnvCell::find_transit_cells`' `check_outside` →
+    // `CLandCell::add_all_outside_cells` (acclient.c:348296-348325 + :346729),
+    // whenever a moving sphere straddles the plane of a portal whose
+    // `other_cell_id == -1`.
+    //
+    // The fixture is the geometry of a cave mouth reduced to its essentials: an
+    // EnvCell whose floor covers only the INNER half, an exterior portal at the
+    // lip, and outdoor terrain below. The mover starts indoors on the lip and
+    // falls off the OPEN side, where the cell offers no floor at all.
+
+    /// Landblock-local x of the dungeon-mouth cell's exterior portal plane
+    /// (the cave lip). The cell floor covers x < this; beyond it there is
+    /// nothing but the outdoor heightfield.
+    const MOUTH_PORTAL_X: f32 = FCX + 2.0;
+    /// The flat outdoor terrain height under the whole fixture landblock.
+    const MOUTH_TERRAIN_Z: f32 = FLOOR_WZ - 3.0;
+
+    /// EnvCell = half a floor + an exterior portal quad at its open edge, with
+    /// flat outdoor terrain resident under the landblock.
+    fn dungeon_mouth_env(with_exterior_portal: bool) -> DriftEnv {
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        // Floor covering only cell-local x ∈ [-HE, +2] — the inner half.
+        polys.insert(
+            1u16,
+            poly(vec![
+                v(-HE, -HE, 0.0),
+                v(2.0, -HE, 0.0),
+                v(2.0, HE, 0.0),
+                v(-HE, HE, 0.0),
+            ]),
+        );
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        seed_common(&mut scene, Vec::new());
+        // Flat terrain across the whole landblock.
+        scene.populate_terrain_heights(LB_ID, [MOUTH_TERRAIN_Z; 81]);
+        if with_exterior_portal {
+            // A vertical portal quad in the plane x = MOUTH_PORTAL_X (WORLD
+            // coords, matching the cell-portal bake's frame). `other_cell_id`
+            // low word 0xFFFF is our decode of retail's `-1` sentinel.
+            let px = LB_BASE_X + MOUTH_PORTAL_X;
+            scene.insert_cell_portal_polygon(
+                CELL_ID,
+                CellPortalPolygon {
+                    other_cell_id: (LB_ID & 0xFFFF_0000) | 0xFFFF,
+                    vertices: vec![
+                        v(px, o.y - 3.0, FLOOR_WZ),
+                        v(px, o.y + 3.0, FLOOR_WZ),
+                        v(px, o.y + 3.0, FLOOR_WZ + 4.0),
+                        v(px, o.y - 3.0, FLOOR_WZ + 4.0),
+                    ],
+                    portal_side: false,
+                },
+            );
+        }
+        DriftEnv { scene }
+    }
+
+    /// A mover standing on the lip of a dungeon mouth and dropping off the open
+    /// side must be caught by the OUTDOOR terrain, not fall through it.
+    #[test]
+    fn dungeon_mouth_jump_off_the_side_lands_on_terrain() {
+        let env = dungeon_mouth_env(true);
+        // The mover has already cleared the lip: it is BESIDE the doorway,
+        // below the cell floor (so no cell polygon can catch it) and still
+        // within a capsule radius of the exterior portal's infinite plane —
+        // which is exactly the band retail tests (acclient.c:348320 works on
+        // `portal->plane`, not on the portal polygon's extent). This is the
+        // owner's "jump off the side of the entrance" pose.
+        let begin = pose_at(MOUTH_PORTAL_X - 0.1, FCY, FLOOR_WZ - 1.5);
+        // A gravity step that would take the feet well below the terrain.
+        let end = pose_at(MOUTH_PORTAL_X - 0.1, FCY, MOUTH_TERRAIN_Z - 2.0);
+        let mut input = input_for(begin, end);
+        input.airborne = true;
+
+        let out = faithful_find_transitional_position(&env, &input, true, true);
+
+        assert!(
+            out.pose.coords.z >= MOUTH_TERRAIN_Z - 0.05,
+            "fell through the landblock terrain at a dungeon mouth: z={} < terrain {}",
+            out.pose.coords.z,
+            MOUTH_TERRAIN_Z
+        );
+    }
+
+    /// The predicate itself, against the decomp's `-r < d < r` band
+    /// (acclient.c:348320): a sphere ON the exterior portal plane pulls the
+    /// outdoor ring in; one far from every exterior portal does not; and a cell
+    /// with NO exterior portal never does, whatever the sphere.
+    #[test]
+    fn wants_outside_cells_matches_retail_straddle_band() {
+        let env = dungeon_mouth_env(true);
+        let world = SceneWorld { scene: &env.scene };
+        let cell = world.build_cell(CELL_ID).expect("mouth cell builds");
+        let px = LB_BASE_X + MOUTH_PORTAL_X;
+        let o = cell_origin();
+        let r = 0.5;
+        let at = |x: f32| Sphere {
+            center: v(x, o.y, FLOOR_WZ + 1.0),
+            radius: r,
+        };
+        assert!(cell.wants_outside_cells(1, &[at(px)]), "on the plane straddles");
+        assert!(
+            cell.wants_outside_cells(1, &[at(px - r * 0.5)]),
+            "inside the band straddles"
+        );
+        assert!(
+            !cell.wants_outside_cells(1, &[at(px - r * 2.0)]),
+            "outside the band does not straddle"
+        );
+        // Retail's band is STRICT: |d| == r is not a straddle.
+        assert!(!cell.wants_outside_cells(1, &[at(px - r)]), "|d| == r excluded");
+
+        let sealed = dungeon_mouth_env(false);
+        let sealed_world = SceneWorld { scene: &sealed.scene };
+        let sealed_cell = sealed_world.build_cell(CELL_ID).expect("sealed cell builds");
+        assert!(
+            !sealed_cell.wants_outside_cells(1, &[at(px)]),
+            "a cell with no exterior portal never pulls in the outdoor ring"
+        );
     }
 
     fn wall_env() -> DriftEnv {

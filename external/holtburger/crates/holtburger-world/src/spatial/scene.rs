@@ -2966,6 +2966,38 @@ impl SpatialScene {
         None
     }
 
+    /// `CEnvCell::find_transit_cells`' **check_outside** predicate
+    /// (`acclient.c:348296-348325`): does a sphere of `radius` centred at
+    /// `global` straddle the plane of any EXTERIOR portal of `cell_id`
+    /// (`-r < N·P + d < r`)? When it does, retail pulls the outdoor terrain
+    /// ring into the same CELLARRAY (`acclient.c:346729`), which is why a
+    /// retail player standing at a dungeon mouth never loses terrain
+    /// collision.
+    ///
+    /// The faithful driver consults this through
+    /// [`super::faithful_bridge::SceneObjCell::wants_outside_cells`]; this
+    /// method is the same test for the APPROXIMATE pipeline, which resolves a
+    /// floor from a heightfield sampler rather than from a cell array.
+    ///
+    /// Retail tests the portal's PLANE, not the portal polygon's extent — so
+    /// falling straight down beside a cave mouth keeps terrain in the array
+    /// for the whole descent. That is deliberate and is what the "jump off the
+    /// side of the entrance" report needs.
+    pub fn cell_straddles_exterior_portal(
+        &self,
+        cell_id: u32,
+        global: holtburger_common::Vector3,
+        radius: f32,
+    ) -> bool {
+        for (n, d) in super::faithful_bridge::exterior_portal_planes(self, cell_id) {
+            let dist = n.x * global.x + n.y * global.y + n.z * global.z + d;
+            if dist > -radius && dist < radius {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Does this cell carry at least one outdoor-exit portal edge? True
     /// when any neighbour has the AC outdoor-exit sentinel in its low 16
     /// bits (`>= 0xFFFE`, typically `0xFFFF`). A building's ground-floor
