@@ -602,6 +602,34 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
 
 ## L2 — REFUTED / CORRECTED (do not resurrect without new evidence)
 
+### PROCESS INCIDENTS (same rule: never silently disappear)
+
+* **P1. 2026-08-13 — uncommitted work destroyed by a shared-tree A/B.** Four agents worked
+  the SAME working tree concurrently (`~/WorldBuilder-ACME-Edition` is the git root; every
+  `external/holtburger` path lives in it, so there is exactly one index and one worktree for
+  all of us). PARITY-D reported that its uncommitted `scene3d/entities.js` edits vanished
+  mid-session, and that *foreign* uncommitted edits to the same file vanished with them.
+  D re-applied and committed immediately, so D's own work survived.
+
+  **Cause (confirmed at the instruction level, inferred at the command level).** The old §L4b
+  told agents, verbatim: *"Re-measure with `git checkout --` before blaming yourself."* That
+  instruction is correct in a single-agent tree and destructive in a shared one — `git
+  checkout -- <path>` reverts that path for every owner at once, which is exactly the observed
+  signature (one file, all owners' edits, D's included). `git stash`/`git stash pop` has the
+  same tree-global effect. Verified: the git root is the outer repo, and §L4b did carry that
+  wording. NOT verified: which command actually ran. `git checkout --` leaves no reflog trace
+  at all, and `stash pop` deletes its own stash-reflog entry, so absence of evidence is not
+  evidence — `git reflog show stash` shows nothing newer than 2026-07-20, and the two
+  `reset: moving to HEAD` entries at 13:10 and 13:53 cannot be distinguished from harmless
+  mixed resets. **Whether any other agent lost work in that window is unknowable.**
+
+  **Fix landed:** §L4b rewritten to ban the tree-global commands and to point at
+  `external/holtburger/scripts/parity-ab.sh`, which answers the same question in a throwaway
+  worktree; plus commit-early/push-verified guidance and `ACTIVE-LANES.md`. Deliberately NOT
+  landed: any git hook, wrapper, or background watcher — the previous attempt at automation in
+  this repo was an autopush daemon that would have `git add -A`'d a sibling's in-flight edits.
+  A script agents call beats machinery that intercepts them.
+
 * **R12. "Multi-bit `W_AttackType` is handled downstream by `getCombatManeuver`'s
   IsThrustSlash branch."** FALSE — asserted in two comments in
   `ui/ac_attack_type_for_weapon.js` (the `inferAttackTypeForWeapon` docstring and the
@@ -872,8 +900,54 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
 
 ## L4b — REGRESSION BASELINE (established 2026-08-12, A/B against pristine files)
 
-Do NOT attribute these to a change you are making. Re-measure with `git checkout --` before
-blaming yourself; that A/B is cheap and this project has misattributed before.
+Do NOT attribute these to a change you are making. Re-measure before blaming yourself; that
+A/B is cheap and this project has misattributed before. **But re-measure the SAFE way:**
+
+> ### HOW TO A/B "is this failure pre-existing?" IN A SHARED TREE
+>
+> `~/WorldBuilder-ACME-Edition` is **ONE working tree shared by several concurrent agents.**
+> These commands are GLOBAL to that working tree and will silently destroy every other
+> agent's uncommitted work — they are BANNED in the shared checkout, no exceptions:
+>
+> * `git stash` / `git stash pop` — stashes the WHOLE tree, not your files
+> * `git checkout -- <path>` / `git restore <path>` — reverts that path for ALL owners
+> * `git reset --hard` — wipes everyone
+> * `git checkout <branch>` / `git clean` — also tree-global; leave branch switching to the
+>   integrator, and tell them before you need one
+>
+> (This is not hypothetical: the old wording of this very section told agents to
+> `git checkout --` before blaming themselves. See **L2 / P1** for the 2026-08-13 incident.)
+>
+> **Do this instead** — a throwaway worktree at a clean ref, nothing in-place:
+>
+> ```bash
+> external/holtburger/scripts/parity-ab.sh js-headless            # ref defaults to origin/master
+> external/holtburger/scripts/parity-ab.sh cargo-web  origin/master
+> external/holtburger/scripts/parity-ab.sh -- 'node harness/some_one_off.mjs'
+> ```
+>
+> It creates a detached worktree under `/mnt/wbterminal2/parity-ab/`, symlinks the untracked
+> `external/*` siblings in (with `external/chorizite`'s children linked individually, or cargo
+> can't find `protocol.xml`), runs the suite, prints the counts, and removes the worktree.
+> `KEEP=1` leaves it for inspection. Run the same suite in your dirty tree and compare the two
+> numbers: equal => pre-existing, not yours; different => yours. Record the verdict here.
+>
+> ### COMMIT EARLY, PUSH VERIFIED (owner policy, 2026-08-13)
+>
+> The real fix for a shared tree eating uncommitted work is **to stop carrying uncommitted
+> work.** Commit to your OWN branch as soon as a piece stands on its own — minutes, not the
+> end of the session — and push it once you have verified it.
+>
+> * **Stage only YOUR files.** `git add <your paths>`, never `git add -A`/`git commit -a` —
+>   those sweep a sibling's in-flight edits into your commit. PARITY-D's clean example:
+>   it staged exactly its five files and left the foreign edits alone.
+> * **Push only VERIFIED work.** A push is a claim that the suites were run honestly — which
+>   is why `parity-ab.sh` matters MORE now, not less.
+> * **Never force-push. Never rewrite pushed history.** Today's chain
+>   `parity-b-combat-20260813` -> `parity-c-melee-20260813` -> `parity-d-animation-20260813`
+>   is published on origin and is now immutable; build on top of it.
+> * **Announce your lane** in `ACTIVE-LANES.md` (same directory) before you start editing, so
+>   the next agent knows which dirty files are not theirs.
 
 * `harness/run-js-headless.mjs` — **242 passed, 12 failed, 1 missing (of 257)**, byte-identical
   with and without the DEC-6/DEC-7/DEC-9 edits.
