@@ -2926,6 +2926,11 @@ export function tickPortalPunch(scene3d, sessionHandle) {
         dropped: res.dropped,
         rect: res.rect,
         gates: {
+          // ?punchOcclusion (2026-08-14, LANE A) — is the MARK/PUNCH stencil
+          // occlusion gate actually armed on the pass this frame? Read off the
+          // pass, not off a flag, so "I passed the flag" and "the composer gave
+          // me a stencil attachment" can never be confused in a diag paste.
+          occlusionGated: pass.occlusionGated === true,
           sidedness: sidednessSource !== "off" && sidednessSource !== "unavailable",
           // "flag" = retail portal_side (v3) · "heuristic" = the round-5
           // AABB-centre inference (v2) · "off" = no gate · "unavailable" =

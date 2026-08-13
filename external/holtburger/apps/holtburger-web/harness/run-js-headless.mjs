@@ -320,6 +320,17 @@ const TIER5 = [
   { tier: 5, flag: "particles", file: "test_particles.mjs" },
   { tier: 5, flag: "phase7_5_camera", file: "test_phase7_5_camera.mjs" },
   { tier: 5, flag: "portal_stencil_alloc", file: "test_portal_stencil_alloc.mjs" },
+  // 2026-08-14 (LANE A). Both suites existed and NO runner invoked either, so
+  // the punch occlusion gate — the fix for "interiors visible through walls" —
+  // was protected by nothing while its default was being argued about. The
+  // GATE suite pins the MARK/PUNCH material invariants; the FLAG suite pins the
+  // wiring, i.e. that the DEFAULT path still allocates no stencil attachment
+  // and no packed depth-stencil texture (the 2026-08-13 distant-view blackout).
+  { tier: 5, flag: "portal_punch_occlusion_gate", file: "tests/portal_punch_occlusion_gate.test.mjs" },
+  { tier: 5, flag: "portal_punch_occlusion_flag", file: "tests/portal_punch_occlusion_flag.test.mjs" },
+  // …and the clip suite the punch FEED calls every frame (`clipAperturesForPunch`),
+  // unregistered since it was written. 59 assertion groups, green.
+  { tier: 5, flag: "portal_clip", file: "tests/portal_clip.test.mjs" },
   { tier: 5, flag: "quality_preset", file: "test_quality_preset.mjs" },
   { tier: 5, flag: "remote_buffs", file: "test_remote_buffs.mjs" },
   { tier: 5, flag: "retail_sun", file: "test_retail_sun.mjs" },

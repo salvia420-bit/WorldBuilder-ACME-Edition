@@ -38,3 +38,11 @@ files: docs/reengineering/impl/PARITY-LEDGER.md (§L2/P1 + §L4b only),
 note: §L4b overlaps the INTEGRATOR's L4b baseline refresh — my edit replaces only the prose
       above the baseline bullets and leaves every measured number untouched, so the two
       should merge cleanly.
+
+### LANE A (PORTAL-GATE) — 2026-08-14 — branch `lane/portal-gate-20260814`
+files: scene3d/atmosphere_pipeline.js, scene3d/index.js, scene3d/cells.js,
+       tests/portal_punch_occlusion_gate.test.mjs, harness/portal-gate-probe.mjs,
+       docs/url-flags.md, docs/reengineering/impl/task-A-report.md
+note: declared overlap with lane D at the punch-feed call site (cells.js `tickPortalPunch`).
+      I keep my cells.js edits to that one function; D keeps to new files + one call site;
+      hand-merge at integration, never revert.

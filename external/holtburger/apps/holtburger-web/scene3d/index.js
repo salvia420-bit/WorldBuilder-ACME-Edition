@@ -5544,6 +5544,25 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // sidedness gate stays behind `?punchSidedness=on` (see cells.js).
               portalPunch:
                 new URLSearchParams(window.location.search).get("portalPunch")?.toLowerCase() !== "off", // DEFAULT-ON 2026-08-04
+              // ?punchOcclusion=on (2026-08-14, LANE A) — DEFAULT OFF. Arms the
+              // portal punch's retail-reachability occlusion gate: the composer
+              // gets a stencil attachment (and, with it, the packed
+              // DepthStencilFormat depth texture) and PortalPunchPass MARKs the
+              // depth-visible aperture pixels before confining its far-Z punch
+              // to them, so a doorway behind a wall is no longer punched and
+              // drawn through it. Until today this could only be reached via
+              // `?portalStencil=on`, which ALSO instantiates the retired
+              // PortalStencilPass — and that scaffold parks every interior cell
+              // on layer 2, emptying the layer-1 cells pass the punch feeds, so
+              // the gate could never actually be exercised (HANDOFF-2026-08-13
+              // O-P1's "reachable but does nothing"). Absent this flag NOTHING
+              // is allocated: no stencil attachment, plain DepthFormat, the
+              // legacy unconditional punch — byte-identical to the pre-gate
+              // pipeline. The 2026-08-13 distant-town blackout was measured
+              // against the *allocation*, which is why it stays opt-in until
+              // the offending depth consumer is identified.
+              punchOcclusion:
+                new URLSearchParams(window.location.search).get("punchOcclusion")?.toLowerCase() === "on",
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // Expose the portal-stencil pass (null when the flag is off) so
