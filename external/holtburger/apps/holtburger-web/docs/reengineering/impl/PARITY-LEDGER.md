@@ -675,6 +675,20 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   mandatory; `loop.js`'s netWorker caveat near `:456` is stale.
 
 ---
+* **R10. B-1's movement-integrator claim (2026-06-18) is REFUTED.** "The movement integrator
+  overshoots the run target (25 m/s vs 4.5 m/s) and oscillates Walk->Stop->Walk sub-second when
+  the crossfade band-aids are bypassed." It blocked `UNIFIED_LOCO` for ~2 months. It is a
+  CATEGORY ERROR — `?unifiedMotion=locomotion` selects an animation driver and writes no
+  velocity at all (K1) — and it does not reproduce live in a three-arm A/B (K2). Whatever was
+  seen in June was an animation artifact of the pre-`MotionSequence` crossfade path, not an
+  integrator defect; the crossfade band-aids it named (`CROSSFADE_S`, `RESUME_WINDOW`) are
+  animation state too. Do not re-block on it without a NEW measurement naming a velocity.
+* **R11. "O6 is a 1.3% strafe-speed defect" is REFUTED as of 2026-08-13** — it was a run-rate
+  SOURCE mismatch between two captures, already fixed by MOVE-RUNRATE-105, and both scenarios
+  now PASS (K3). Do not "fix" `SIDESTEP_ADJUST_FACTOR`, `SIDESTEP_ANIM_SPEED` or the diagonal
+  composition: K4 pins them against retail to 0.18%, and the two constant copies
+  (`common.rs:796` hardcodes 1.248; `motion_interp.rs:345` derives
+  `0.5 x (3.1199999 / 1.25)`) differ only at the 8th significant figure.
 
 ## L3 — OPEN QUESTIONS (with what would settle each)
 
@@ -717,12 +731,16 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   Cast C's deltas are negative and non-monotonic (+89, -370, -566, -253), which latency alone
   cannot produce — a second mechanism is present in that run.
 
-* **O5. Does B-1 still reproduce?** The 2026-06-18 claim that the movement integrator
+* **O5. RESOLVED 2026-08-13 (PARITY-A) — NO, B-1 does not reproduce.** -> K1/K2, R10.
+  `UNIFIED_LOCO` is now DEFAULT-ON (DEC-13); C7 is closed. Original text kept below.
+  ~~Does B-1 still reproduce?~~ The 2026-06-18 claim that the movement integrator
   "overshoots the run target (25 m/s vs 4.5 m/s) and oscillates Walk->Stop->Walk sub-second"
   when the crossfade band-aids are bypassed. It is the sole blocker on `UNIFIED_LOCO` (C7) and
   it PREDATES MOVE-F2/F3/F6 and MOVE-RUNRATE-105. **Treat as STALE until re-measured.**
   Settleable at 60 Hz with `?moveTelemetry=1` + `?nullRender=1`, no GPU.
-* **O6. strafe-diagonal is 1.3% slow** (retail 8.468, holt 8.362 — the only FAIL in the
+* **O6. RESOLVED 2026-08-13 (PARITY-A) — does not reproduce; both scenarios PASS.** -> K3/K4,
+  R11. Mechanism was a run-rate lane mismatch, closed by MOVE-RUNRATE-105. Original text below.
+  ~~strafe-diagonal is 1.3% slow~~ (retail 8.468, holt 8.362 — the only FAIL in the
   third parity report). Orchestrator's closed-form from `common.rs` constants
   (`RUN_ANIM_SPEED*run_rate`, `SIDESTEP_ANIM_SPEED 1.25`, `SIDESTEP_ADJUST_FACTOR 1.248`,
   `MAX_SIDESTEP_ANIM_RATE 3.0`) predicts ~8.463 for our own run_rate — i.e. **our measured
@@ -731,8 +749,31 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   wrong" from "capabilities wrong" — the exact fix-A-masks-fix-B trap that already bit
   ORACLE #1).
 * **O7. RESOLVED 2026-08-12 -> promoted to C9.**
-* **O8. ORACLE #1 fix is unmerged** — branch `orch/s13-oracle`, 6 commits; augmentation
-  doesn't reach the movement lane. Needs a compile check + suites before merge.
+* **O8. DEFERRED 2026-08-13 (PARITY-A), with a reason — do not read this as "judged safe".**
+  Branch `orch/s13-oracle`, 6 commits. PARITY-A read the whole diff and reports:
+  - The substantive commit is `3f57d9ed`: `apply_inventory_object_create`
+    (`lib.rs:31630`) does a raw `world.entities.insert(entity)` (`:31837`) with NO local-player
+    guard, so ACE re-sending the local player's own ObjectCreate on a portal/visibility
+    transition REPLACES the player entity with the public-weenie baseline; the guard written for
+    exactly this (`state/liveness.rs:405-428 upsert_entity_from_create`) is bypassed. Its own
+    commit message says **"NOT VERIFIED: not yet rebuilt or observed live"**.
+  - `98b69fed`/`906db477` move the augmentation probe from the inherent
+    `WorldState::handle_message` wrapper (which the wasm client never calls) to
+    `handlers::routing::handle_message` (which it does) — diagnostic-only and clean.
+  - `34d55412`'s fix was already self-retracted by `3f57d9ed`.
+  **Why deferred rather than merged:** the branch modifies
+  `apps/holtburger-web/src/lib.rs`, and four agents worked that shared tree today —
+  PARITY-B landed an ABI change in the SAME file (`motion_action_queue_rows` 4->5 u32) on
+  `parity-b-combat-20260813`, which was the checked-out branch. Merging a 6-commit branch over a
+  tree carrying three other agents' in-flight `lib.rs` work is how you get a silent hand-merge
+  error in a wasm ABI, and PARITY-D independently reported uncommitted `entities.js` edits
+  VANISHING from this tree mid-session. **This wants a quiet tree and one owner, not a
+  concurrent merge.**
+  **It does NOT block the locomotion lane**: K3 shows the run rate now reads the server/latched
+  lane and both movement scenarios PASS, and the branch's own
+  `RUNRATE-SNAPSHOT-FOSSIL-card.md` states the fossil "does not corrupt the run rate itself"
+  (`burden_load_modifier` returns 1.0 for any `burden < 1.0`). Merge it for the PROVENANCE fix
+  it is, on a clean tree, and re-verify live — its own author never did.
 
 ---
 
@@ -833,6 +874,15 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   DEC-2 compliant (no combat-mode change); DEC-4 compliant (no new URL flag).
   Tests: `tests/cmt_attack_type_collapse.test.mjs` — 11/11 pass, transcribing the ACE
   branches case by case; the DAT evidence is `crates/holtburger-dat/examples/dump_cmt_attack_types.rs`.
+* **DEC-13 (2026-08-13, PARITY-A). LANDED: `UNIFIED_LOCO` is DEFAULT-ON.**
+  `entities.js` — `const UNIFIED_LOCO = UNIFIED_DEFAULT || UNIFIED_MODE === "locomotion" ||
+  UNIFIED_MODE === "on";`. Locomotion now joins attack/cast/death/door/missile on the Rust
+  `MotionSequence` authority, so **C7 is closed and every motion class is on one playhead.**
+  Justified by K1 (the path is animation-only, by source) + K2 (three-arm live A/B, velocity
+  identical to 4 dp) + K3 (both movement scenarios PASS against the retail pins post-flip).
+  **Adds no new flag** (DEC-4): `?unifiedMotion=off` still disables every class and the
+  per-class strings still select one. The 30-line comment at the constant carries the refutation
+  so the next reader does not re-block on B-1 from memory.
 * **DEC-5 (2026-08-12).** Fix order for casting: precondition (C1) -> re-measure -> only then
   reconsider the prediction layer (R5).
 

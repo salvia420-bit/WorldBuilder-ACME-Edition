@@ -1043,7 +1043,38 @@ function isDoorStateMotion(cmd) {
 // a CYCLIC MotionSequence with gait scaling + Rust phase carry across swaps.
 // A one-shot (_unifiedSeq) suppresses _unifiedLoco during a swing, then resumes
 // it on completion (single playhead — retail-faithful).
-const UNIFIED_LOCO = UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
+//
+// DEC-13 (2026-08-13, PARITY-A) — PROMOTED TO THE DEFAULT SET, joining
+// attack/cast/death/door/missile. It was held back for ~2 months by the
+// 2026-06-18 "B-1" claim that this path made the movement integrator overshoot
+// the run target (25 m/s vs 4.5) and oscillate Walk->Stop->Walk sub-second.
+// That claim is REFUTED (ledger O5), two independent ways:
+//
+//  1. CATEGORY ERROR, by source. This flag selects an ANIMATION DRIVER, never a
+//     velocity. Its whole blast radius is the `_unifiedLoco` arm of the tick
+//     (see `else if (inst._unifiedLoco)` below), which is a peer of
+//     `inst.mixer.update(dt)` and does exactly three things: advance a playhead,
+//     `poseRigAt` the skeleton, drain footfall hooks. It writes no velocity, no
+//     `pose.coords`, nothing the integrator reads. `_unifiedLocoGaitScale` READS
+//     `_resolveStateGroundSpeed` to scale the clip rate; it never writes back.
+//     The integrator is Rust (`crates/holtburger-core/.../movement/system.rs`)
+//     and this flag is not in its inputs. So a movement-integrator overshoot is
+//     not a thing this switch can cause.
+//  2. LIVE A/B, laptop rig 2026-08-13, `harness/oracle-run.mjs --scenario
+//     strafe-diagonal --account agentp07`, default arm vs
+//     `--flags unifiedMotion=locomotion`. Velocity was IDENTICAL to four
+//     decimals: median 8.4830 m/s both arms, max 8.4830 both (the max IS the
+//     target — no 25 m/s anywhere), min 7.9032 both (the forward-only phase),
+//     and the moving samples take exactly TWO distinct values, {7.9032, 8.4830}
+//     — a clean step function, not an oscillation. Drive-state transitions while
+//     moving: 2 in both arms, which are the scenario's own keydown/keyup
+//     boundaries. gait "run (OK)", realized/intent 1.000, 197 records.
+//
+// Escape hatch is the existing flag, so this adds no new one (DEC-4):
+// `?unifiedMotion=off` disables every class, and the per-class strings
+// (`attack`, `cast`, ...) still select a single class.
+const UNIFIED_LOCO =
+  UNIFIED_DEFAULT || UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
 // Missile rides with attack (both Step 1): an aim-level fire is a CYCLE
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
 const UNIFIED_MISSILE = UNIFIED_DEFAULT || UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
@@ -10060,7 +10091,6 @@ export class EntityManager {
       try { inst._unifiedSeq.seq.free(); } catch (_) { /* already freed */ }
       inst._unifiedSeq = null;
     }
-    this._clearUnifiedQueue(inst); // J5: the pending tail goes with it
     // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
     // non-positive). Read by the locomotion timeScale composition below
     // and by the per-frame T11 velScale tick.
