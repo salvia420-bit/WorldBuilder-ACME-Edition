@@ -524,9 +524,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   const msaaSamples = Number.isFinite(opts?.msaa) ? Math.max(0, Math.min(8, opts.msaa | 0)) : 0;
   const composer = new EffectComposer(renderer, {
     frameBufferType: THREE.HalfFloatType,
-    // Portal-stencil pass needs a stencil attachment. Off → pmndrs default
-    // (false) → byte-identical to the pre-feature composer.
-    stencilBuffer: !!portalStencil,
+    // Portal-stencil pass needs a stencil attachment. So does ?portalPunch as
+    // of 2026-08-13: its occlusion gate MARKs the unoccluded aperture pixels
+    // into stencil (depth-tested) and confines the far-Z punch to them, which
+    // is what stops a doorway BEHIND a wall being punched and drawn through it
+    // — retail gets the same result structurally, by only ever reaching a
+    // portal through PView::ConstructView's clipped flood fill
+    // (acclient.c:462423-462462). Both off → pmndrs default (false) →
+    // byte-identical to the pre-feature composer.
+    stencilBuffer: !!portalStencil || !!portalPunch,
     multisampling: msaaSamples,
   });
   composer.setSize(width, height);
@@ -590,7 +596,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (!stableDepthShare) {
     const _depthBufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
     sceneDepthTexture = new THREE.DepthTexture(_depthBufSize.x, _depthBufSize.y);
-    if (portalStencil) {
+    if (portalStencil || portalPunch) {
       // Depth + stencil must share ONE packed attachment when stencil is on;
       // a depth-only texture can't coexist with a stencil buffer. AerialPerspective
       // reads `.r`, which still returns the depth component of a packed texture.
@@ -722,7 +728,23 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // in preFrameSkySync only when outdoor + this pass hasApertures.
   let portalPunchPass = null;
   if (portalPunch) {
-    portalPunchPass = new PortalPunchPass(scene, camera);
+    // Arm the occlusion gate ONLY if the composer really got a stencil
+    // attachment. Read it back off the buffer rather than trusting the ctor
+    // option: with the gate armed against a missing stencil the MARK draw
+    // writes nowhere, the punch's EQUAL test fails everywhere and every
+    // interior disappears — the exact 2026-08-12 regression shape. False here
+    // degrades to the legacy unconditional punch (leak, but visible).
+    const _punchStencil = composer.inputBuffer?.stencilBuffer === true;
+    if (!_punchStencil) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[portalPunch] no stencil attachment — occlusion gate DISABLED, " +
+          "falling back to the unconditional punch (portals may show through walls).",
+      );
+    }
+    portalPunchPass = new PortalPunchPass(scene, camera, "punch", {
+      stencil: _punchStencil,
+    });
     composer.addPass(portalPunchPass);
   }
 

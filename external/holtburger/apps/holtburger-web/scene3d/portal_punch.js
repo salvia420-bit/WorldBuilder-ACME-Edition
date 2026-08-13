@@ -1,4 +1,4 @@
-// scene3d/portal_punch.js — retail-faithful per-aperture DEPTH PUNCH (no stencil).
+// scene3d/portal_punch.js — retail-faithful per-aperture DEPTH PUNCH.
 //
 // The minimal WebGL realization of retail acclient's
 // `D3DPolyRender::DrawPortalPolyInternal` (verified in the decomp): draw each
@@ -26,7 +26,14 @@
 // Interior cells stay on RENDER_LAYER_INDOOR (layer 1) the whole time — unlike
 // the stencil scaffold, this pass does NOT re-layer them.
 //
-// Gated by `?portalPunch` (default OFF). UNVALIDATED pending an R9 290 eye-test.
+// 2026-08-13 — that "one accepted tradeoff" turned out to have a second, worse
+// face: not just interior geometry overhanging the facade silhouette, but whole
+// doorways on the FAR side of an intervening wall being punched and drawn
+// through it. See the OCCLUSION GATE block below for the fix and its decomp
+// justification; the gate is armed by atmosphere_pipeline.js whenever the
+// composer really carries a stencil attachment.
+//
+// Gated by `?portalPunch` (DEFAULT-ON since 2026-08-04).
 
 import * as THREE from "three";
 import { Pass } from "postprocessing";
@@ -36,6 +43,111 @@ import { Pass } from "postprocessing";
 // (near→0, far→1), so this literal is a valid "far" written straight to
 // gl_FragDepth — any real interior geometry has a smaller gl_FragDepth and wins.
 const FAR_DEPTH = 0.99999899;
+
+// Single stencil ref for the occlusion gate (same value portal_stencil.js used).
+const STENCIL_REF = 1;
+
+// OCCLUSION GATE (2026-08-13) — the missing half of the punch.
+//
+// Retail never punches an unreachable portal. `PView::ConstructView`
+// (acclient.c:462423-462462) seeds `cell_todo_list` from the cell the camera
+// is IN and only ever grows it through `PView::ClipPortals` (:462461), so a
+// portal is reached solely by a chain of NON-EMPTY clipped apertures from the
+// viewpoint; and each building's punch + interior are drawn inside that
+// building's own back-to-front `InsCellTodoList`/`DrawCells` pass
+// (:461917-461925, :461567), so a nearer wall drawn afterwards overwrites any
+// leak.
+//
+// We have neither property: `visible_portal_apertures_flat`
+// (src/lib.rs) takes EVERY outdoor-facing portal of EVERY frustum-visible
+// EnvCell across ALL loaded landblocks — no reachability, and no occluder
+// beyond a terrain-heightfield LOS march that by construction ignores
+// buildings — and we run ONE punch pass for all of them AFTER the whole world
+// pass. With `depthFunc = Always` that punch writes far-Z into apertures that
+// are demonstrably behind a wall, and the cells pass then fills them: portals
+// visible THROUGH walls.
+//
+// The screen-space equivalent of retail's reachability, given that the world
+// pass has already laid down every opaque outdoor occluder's depth, is: punch
+// only where the aperture polygon itself passes the depth test. That is a
+// per-pixel test, so it cannot be expressed by the punch material alone — the
+// punch WRITES gl_FragDepth, and a written gl_FragDepth is also the value the
+// depth test compares, so flipping `depthFunc` to LessEqual would compare FAR
+// against the buffer and reject everywhere.
+//
+// So it is two draws of the same mesh, the technique proven in the retired
+// portal_stencil.js (whose MARK/RESET pair was always correct; what retired it
+// was its cell RE-LAYERING half, which this pass does not do):
+//
+//   (a) MARK  — depth-TESTED, depth-write OFF, colour OFF; stencil REPLACE on
+//               Z-PASS only. Marks exactly the aperture pixels that are not
+//               occluded by world-pass geometry. An aperture behind a wall
+//               fails the depth test → stencilZFail → KEEP → never marked.
+//   (b) PUNCH — the existing DEPTHTEST_ALWAYS far-Z stamp, now confined by
+//               stencil EQUAL REF (test only, writeMask 0).
+//
+// Net effect: identical to today inside genuinely visible doorways (the mark
+// passes, the punch runs unchanged), and a no-op for doorways a wall covers.
+// It can only ever punch a SUBSET of what it punches today, so it cannot make
+// a visible interior disappear — only an occluded one, which is the bug.
+//
+// WHY THIS DOES NOT CONTRADICT `DEPTHTEST_ALWAYS`. docs/url-flags.md's
+// `portalPunch` row states the punch is "deliberately NOT depth-tested against
+// the world pass … testing the aperture against that same buffer would reject
+// exactly the apertures that need punching", the case being a SUNKEN interior
+// that terrain wrongly wins depth over. That objection is about TERRAIN, and it
+// does not reach this gate, for two independent reasons:
+//
+//   * Terrain-occluded apertures never get here. `clipAperturesForPunch`
+//     (portal_clip.js) already runs a camera→aperture terrain line-of-sight
+//     cull and drops them upstream — that is the `dropped.terrain` counter on
+//     `_portalPunchDiag`. So the only occluders this depth test can NEWLY
+//     reject are the ones that are not terrain: walls, facades and statics —
+//     precisely the occluder class our aperture selection has never had, and
+//     precisely the class producing the reported artifact.
+//   * The gate tests the APERTURE POLYGON, which lies in the facade at the
+//     doorway, not the interior geometry behind it. Terrain winning depth over
+//     a sunken ROOM does not imply it wins over the DOORWAY, and where it does
+//     the doorway is genuinely not visible.
+//
+// Retail can skip the test only because it has the stronger property instead:
+// `PView::DrawCells` wipes Z outright (`Clear(4, …, 1.0)`, acclient.c:461484)
+// before stamping the portal planes, so at stamp time there is no terrain depth
+// left to lose to — and it can afford that wipe because reachability has
+// already guaranteed the portal is visible. We have the wipe's opposite (one
+// shared depth buffer, whole world already in it) and none of the
+// reachability, so the buffer is the only occlusion evidence available to us.
+// EYE-TEST OBLIGATION: a sunken/half-buried interior must still render. That is
+// the failure mode this gate would announce, and it is a positive item on the
+// 1070 shot list, not an assumption.
+//
+// Requires a stencil attachment on the composer's ping-pong buffers
+// (atmosphere_pipeline.js allocates one when `portalPunch` is on). If it is
+// absent the gate is DISABLED and the pass falls back to the legacy
+// unconditional punch — never to "mark nothing, punch nothing", which would
+// present as the 2026-08-12 "interiors vanish" regression.
+function makeMarkMaterial() {
+  // MeshBasicMaterial (not a bespoke ShaderMaterial) so three injects its
+  // logdepthbuf chunk when the renderer runs logarithmicDepthBuffer — the
+  // mark's gl_FragDepth must be encoded the same way terrain's is or the
+  // comparison is meaningless.
+  const m = new THREE.MeshBasicMaterial();
+  m.name = "portal-punch-mark";
+  m.colorWrite = false;
+  m.depthWrite = false; // never perturb depth; this draw only marks stencil
+  m.depthTest = true;
+  m.depthFunc = THREE.LessEqualDepth; // occluded doorway → Z-fail → no mark
+  m.side = THREE.DoubleSide;
+  m.stencilWrite = true;
+  m.stencilFunc = THREE.AlwaysStencilFunc;
+  m.stencilRef = STENCIL_REF;
+  m.stencilFuncMask = 0xff;
+  m.stencilWriteMask = 0xff;
+  m.stencilFail = THREE.KeepStencilOp;
+  m.stencilZFail = THREE.KeepStencilOp; // DEPTH fail (occluded) → do NOT mark
+  m.stencilZPass = THREE.ReplaceStencilOp; // visible → mark
+  return m;
+}
 
 // PUNCH material — reset depth to FAR inside the aperture. depthFunc=Always so it
 // writes unconditionally (retail DEPTHTEST_ALWAYS); depthTest stays ENABLED
@@ -81,7 +193,7 @@ function makeSealMaterial() {
   return m;
 }
 
-function makePunchMaterial() {
+function makePunchMaterial(stencilGate = false) {
   const m = new THREE.ShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: /* glsl */ `
@@ -102,6 +214,18 @@ function makePunchMaterial() {
   m.depthFunc = THREE.AlwaysDepth; // write regardless of what's already there
   m.depthWrite = true;
   m.side = THREE.DoubleSide;
+  if (stencilGate) {
+    // Confine the far-Z stamp to the pixels the MARK draw proved visible.
+    // Test only — writeMask 0 so the punch never edits the mark it reads.
+    m.stencilWrite = true;
+    m.stencilFunc = THREE.EqualStencilFunc;
+    m.stencilRef = STENCIL_REF;
+    m.stencilFuncMask = 0xff;
+    m.stencilWriteMask = 0x00;
+    m.stencilFail = THREE.KeepStencilOp;
+    m.stencilZFail = THREE.KeepStencilOp;
+    m.stencilZPass = THREE.KeepStencilOp;
+  }
   return m;
 }
 
@@ -110,9 +234,18 @@ export class PortalPunchPass extends Pass {
    * @param {THREE.Scene} _scene  unused (interiors are drawn by the cells pass)
    * @param {THREE.Camera} camera the main render camera
    */
-  constructor(_scene, camera, mode = "punch") {
+  constructor(_scene, camera, mode = "punch", opts = {}) {
     super(mode === "seal" ? "PortalSealPass" : "PortalPunchPass");
     this.mode = mode;
+    // Occlusion gate (see makeMarkMaterial). PUNCH mode only: the SEAL pass
+    // runs inside `PView::DrawCells`' own indoor sequence (acclient.c:461536)
+    // where the Z-wipe has just destroyed the depth it would test against, so
+    // gating it would be both meaningless and wrong.
+    // Caller must pass `stencil: true` ONLY when the composer really allocated
+    // a stencil attachment — with the gate armed against a missing buffer the
+    // MARK draw writes nowhere, the punch's EQUAL test fails everywhere, and
+    // every interior disappears. Default false = legacy unconditional punch.
+    this._stencilGate = mode !== "seal" && opts.stencil === true;
     // We render the aperture mesh into the composer's input buffer ourselves and
     // do not consume/produce a full-screen quad → keep buffers across the pass.
     this.needsSwap = false;
@@ -130,7 +263,9 @@ export class PortalPunchPass extends Pass {
     this.apertureGroup.rotation.x = -Math.PI / 2;
     this.apertureScene.add(this.apertureGroup);
 
-    this._punchMat = mode === "seal" ? makeSealMaterial() : makePunchMaterial();
+    this._punchMat =
+      mode === "seal" ? makeSealMaterial() : makePunchMaterial(this._stencilGate);
+    this._markMat = this._stencilGate ? makeMarkMaterial() : null;
     // PERSISTENT aperture mesh (2026-08-04 perf). `setApertures` runs EVERY
     // frame the punch is armed; the original implementation disposed the
     // BufferGeometry and built a fresh one + a fresh THREE.Mesh each call,
@@ -157,6 +292,11 @@ export class PortalPunchPass extends Pass {
     // bug here can never freeze the frame — interiors just fall back to the
     // default (occluded) world-pass draw, and preFrameSkySync stops splitting.
     this._errored = false;
+  }
+
+  /** True when the retail-reachability occlusion gate is armed (diag). */
+  get occlusionGated() {
+    return this._stencilGate === true;
   }
 
   get hasApertures() {
@@ -321,10 +461,25 @@ export class PortalPunchPass extends Pass {
       }
       renderer.autoClear = false;
       renderer.setRenderTarget(inputBuffer);
-      // Draw the aperture polygons: colorWrite off, depthFunc Always, write FAR.
-      // Punches the doorway depth to far in the shared buffer the cells pass then
-      // draws into. No color/depth/stencil CLEAR — we only stamp depth.
-      renderer.render(this.apertureScene, cam);
+      if (this._stencilGate && this._markMat) {
+        // Stencil is scratch space owned entirely by this pass, but nothing
+        // else clears it, so a mark left by the previous frame would let a
+        // now-occluded aperture punch. Clear first — the scissor set above is
+        // live on the bound target, so this only touches the doorway rects.
+        renderer.clearStencil();
+        // (a) MARK the pixels where the aperture is genuinely unoccluded.
+        this._apertureMesh.material = this._markMat;
+        renderer.render(this.apertureScene, cam);
+        // (b) PUNCH, confined to those pixels.
+        this._apertureMesh.material = this._punchMat;
+        renderer.render(this.apertureScene, cam);
+      } else {
+        // Legacy unconditional punch (no stencil attachment available).
+        // Draw the aperture polygons: colorWrite off, depthFunc Always, write
+        // FAR. Punches the doorway depth to far in the shared buffer the cells
+        // pass then draws into. No color/depth/stencil CLEAR.
+        renderer.render(this.apertureScene, cam);
+      }
     } catch (e) {
       this._errored = true;
       // eslint-disable-next-line no-console
@@ -348,6 +503,7 @@ export class PortalPunchPass extends Pass {
   dispose() {
     this._disposeApertureMesh();
     this._punchMat?.dispose();
+    this._markMat?.dispose();
     super.dispose?.();
   }
 }
