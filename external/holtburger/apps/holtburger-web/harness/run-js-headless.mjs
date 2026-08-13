@@ -191,6 +191,7 @@ const TIER5 = [
   { tier: 5, flag: "ws06_cast_facing", file: "tests/test_ws06_cast_facing.mjs" },
   { tier: 5, flag: "ws07_remote_cast_links", file: "tests/test_ws07_remote_cast_links.mjs" },
   { tier: 5, flag: "ws08_cast_reject", file: "tests/test_ws08_cast_reject.mjs" },
+  { tier: 5, flag: "c8_cast_combat_mode_gate", file: "tests/test_c8_cast_combat_mode_gate.mjs" },
   { tier: 5, flag: "ws09_formula_scale_parity", file: "tests/test_ws09_formula_scale_parity.mjs" },
   { tier: 5, flag: "ws09_play_effect_sound", file: "tests/test_ws09_play_effect_sound.mjs" },
   { tier: 5, flag: "ws10_projectile_impact_stop", file: "tests/test_ws10_projectile_impact_stop.mjs" },

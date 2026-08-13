@@ -45,6 +45,7 @@
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
+import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 
 /** gmToolbarUI — retail layout that drives the target-bar middle rows.
  *  Element-id map confirmed by target_bar_layout_dump 2026-05-24.
@@ -442,8 +443,13 @@ function build() {
     const next = inCombatNow ? COMBAT_MODE_NON_COMBAT : suggested;
     try {
       if (typeof handle.setCombatMode === "function") {
+        // C8 — see ui/ac_combat_mode_intent.js (ACE LastCombatMode mirror).
+        noteCombatModeRequest(next);
         handle.setCombatMode(next);
       } else if (typeof handle.toggleCombatMode === "function") {
+        // Untyped toggle: the server picks the mode, so record "unknown"
+        // (fail-open) rather than guessing.
+        noteCombatModeRequest(null);
         handle.toggleCombatMode();
       }
       // Optimistic flip; the 500ms poll will reconcile from

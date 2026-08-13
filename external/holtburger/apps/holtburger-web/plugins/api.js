@@ -121,6 +121,7 @@
 // that need component data should prefer this helper over rolling
 // their own inventory scan.
 import { selfTargetGuidFor } from "../ui/ac_cast_spell.js";
+import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 // P6.1 (2026-07-27): the two retail chat hooks (eatable buses backed by
 // the loader's createEatableBus — its first real consumers). Exposed as
@@ -519,6 +520,10 @@ export function createClient(sessionHandle, opts = {}) {
       host.RecallToLifestone();
     },
     toggleCombatMode() {
+      // C8 — untyped toggle: the resulting mode is the server's
+      // (`get_suggested_combat_mode`), so record "unknown" = fail-open in the
+      // cast gate. See ui/ac_combat_mode_intent.js.
+      noteCombatModeRequest(null);
       host.ToggleCombatMode();
     },
     attack(targetGuid, attackHeight = 2, powerLevel = 1.0) {

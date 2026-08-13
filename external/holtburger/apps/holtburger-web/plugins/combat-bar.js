@@ -24,6 +24,7 @@ import {
 } from "../ui/ac_spell_shape.js";
 import { setUseFastMissiles, setAutoRepeatAttacks, isCharacterOptionEnabled, CHARACTER_OPTION } from "../ui/ac_character_options.js";
 import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
+import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 import {
   wrongStanceForArmed,
@@ -1547,6 +1548,10 @@ function renderStanceHeader(bodyEl, client) {
         targetMode = suggestedCombatModeFromInventory(inv);
       }
       if (typeof handle?.setCombatMode === "function") {
+        // C8 — mirror ACE's `LastCombatMode` (Player_Combat.cs:762, stamped at
+        // REQUEST time) so the cast gate in ui/ac_cast_spell.js does not eat a
+        // cast the server would still accept during an in-flight mode change.
+        noteCombatModeRequest(targetMode);
         handle.setCombatMode(targetMode);
       } else if (typeof client?.player?.toggleCombatMode === "function") {
         // Fallback for older wasm bundles without setCombatMode —

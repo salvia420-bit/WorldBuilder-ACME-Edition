@@ -42325,8 +42325,9 @@ thread_local! {
 }
 
 /// HANDOFF-1070-vistest-2026-08-01 §A6 — build the flat side-channel rows for
-/// ONE `UpdateMotion`'s action `commands` list, 4 u32 per queued action
-/// (`[guid, command_low, packed_sequence, stance]`), in WIRE ORDER.
+/// ONE `UpdateMotion`'s action `commands` list, 5 u32 per queued action
+/// (`[guid, command_low, packed_sequence, stance, speed_bits]`), in WIRE ORDER.
+/// `speed_bits` is `f32::to_bits(MotionItem.speed)` (DEC-8 / C5).
 ///
 /// `main_path_sequence` is the 15-bit sequence of the item the main
 /// `KIND_MOTION_ACTION` emit already owns (`EntityMotionSnapshot::
@@ -42349,7 +42350,7 @@ fn motion_action_queue_rows(
     guid: u32,
     stance: u32,
 ) -> Vec<u32> {
-    let mut rows = Vec::with_capacity(commands.len() * 4);
+    let mut rows = Vec::with_capacity(commands.len() * MOTION_ACTION_ROW_U32);
     for item in commands {
         if Some(item.sequence()) == main_path_sequence {
             continue;
@@ -42358,13 +42359,35 @@ fn motion_action_queue_rows(
         rows.push(u32::from(item.command.raw()));
         rows.push(u32::from(item.packed_sequence));
         rows.push(stance);
+        // DEC-8 / ledger C5 (2026-08-13): carry the PER-ITEM wire speed.
+        // ACE writes a `float Speed` on EVERY MotionItem
+        // (`Network/Motion/MotionItem.cs` `PackedCommandExtensions.Write`:
+        // `writer.Write(mc.Speed)`), and `EnqueueMotionAction`
+        // (`WorldObject_Networking.cs:1230-1237`) passes its `speed` arg to
+        // `InterpretedMotionState.AddCommand(this, motionCommand, speed)` for
+        // EVERY command in the list — so a PK/FastTick caster's whole windup
+        // list rides at `Player_Magic.cs:603 CastSpeed = 2.0f`, not 1.0.
+        // The JS drain used to hardcode 1.0 (`scene3d/loop.js`
+        // `drainMotionActions`), a 2x duration error on gestures 2..N. Sent as
+        // raw f32 bits because the channel is a `Vec<u32>`; JS reinterprets
+        // through a shared ArrayBuffer view. Non-finite / non-positive speeds
+        // fall back to 1.0 on the JS side (defensive: a malformed wire float
+        // must not freeze a clip).
+        rows.push(item.speed.to_bits());
     }
     rows
 }
 
+/// u32 per queued action in the `pollMotionActions` side-channel
+/// (`[guid, command_low, packed_sequence, stance, speed_bits]`). The JS drain
+/// (`scene3d/loop.js` `drainMotionActions`) strides by this same number.
+#[cfg(any(target_arch = "wasm32", test))]
+const MOTION_ACTION_ROW_U32: usize = 5;
+
 /// Multi-action queue (2026-06-06) — drain the queued Action-class motion
-/// commands as a flat `Vec<u32>`, 4 per action: `[guid, command_low,
-/// packed_sequence, stance]`. JS: `for (let i = 0; i < a.length; i += 4) {…}`.
+/// commands as a flat `Vec<u32>`, 5 per action: `[guid, command_low,
+/// packed_sequence, stance, speed_bits]`. JS: `for (let i = 0; i < a.length;
+/// i += 5) {…}`, `speed = f32::from_bits(a[i+4])`.
 /// Empty in the steady state (most UpdateMotions carry no action list).
 /// Drain is `mem::take` — enqueue order is preserved end to end (§A6).
 #[cfg(target_arch = "wasm32")]
@@ -63537,15 +63560,24 @@ mod tests_windup_action_order {
         let stance = u32::from(event.current_style);
         let rows = motion_action_queue_rows(&commands, snapshot.action_sequence, GUID, stance);
 
-        // 3 remaining scarabs × 4 u32 per row.
-        assert_eq!(rows.len(), 12, "the main-path item must be skipped exactly once");
+        // 3 remaining scarabs × 5 u32 per row.
+        assert_eq!(rows.len(), 15, "the main-path item must be skipped exactly once");
 
         // Rebuild what the client actually plays this frame: the main-path
         // action, then the FIFO rows in drain order.
         let mut played: Vec<u16> = vec![(snapshot.action_command.unwrap() & 0xFFFF) as u16];
-        for row in rows.chunks_exact(4) {
+        for row in rows.chunks_exact(5) {
             assert_eq!(row[0], GUID, "every row carries the caster guid");
             assert_eq!(row[3], stance, "every row carries the Magic stance");
+            // DEC-8/C5: the per-item wire speed must survive the channel.
+            // ACE sends the WHOLE windup list at CastSpeed = 2.0f
+            // (Player_Magic.cs:603 → EnqueueMotionAction → AddCommand →
+            // MotionItem.Speed → PackedCommandExtensions.Write).
+            assert_eq!(
+                f32::from_bits(row[4]),
+                2.0,
+                "every queued windup must carry the wire speed, not 1.0"
+            );
             played.push(row[1] as u16);
         }
         assert_eq!(
@@ -63558,7 +63590,7 @@ mod tests_windup_action_order {
         // (`scene3d/loop.js:403` `actionStampIsNewer`) requires, and a
         // reversed drain would make every queued item look stale.
         let mut seqs: Vec<u16> = vec![snapshot.action_sequence.unwrap()];
-        for row in rows.chunks_exact(4) {
+        for row in rows.chunks_exact(5) {
             seqs.push((row[2] & 0x7FFF) as u16);
         }
         assert_eq!(seqs, SEQS, "played sequences must be ascending");
@@ -63571,8 +63603,32 @@ mod tests_windup_action_order {
     fn queue_rows_preserve_wire_order_with_no_main_path_item() {
         let (_, commands) = four_scarab_windup();
         let rows = motion_action_queue_rows(&commands, None, GUID, 0x49);
-        let played: Vec<u16> = rows.chunks_exact(4).map(|r| r[1] as u16).collect();
+        let played: Vec<u16> = rows.chunks_exact(5).map(|r| r[1] as u16).collect();
         assert_eq!(played, SCARABS, "no skip ⇒ pure FIFO");
+    }
+
+    /// DEC-8 / ledger C5 — the per-item speed and the autonomy bit both
+    /// survive the side-channel unmangled, per item (not per message).
+    /// A mixed list pins that the row is a straight copy of
+    /// `MotionItem.{command, packed_sequence, speed}` rather than anything
+    /// derived from the head item.
+    #[test]
+    fn queue_rows_carry_per_item_speed_and_autonomy_bit() {
+        let commands = vec![
+            MotionItem::new(0x006Fu16, 100, false, 2.0),
+            MotionItem::new(0x0070u16, 101, true, 1.0),
+            MotionItem::new(0x0071u16, 102, false, 0.5),
+        ];
+        let rows = motion_action_queue_rows(&commands, None, GUID, 0x49);
+        assert_eq!(rows.len(), 15);
+        let speeds: Vec<f32> = rows.chunks_exact(5).map(|r| f32::from_bits(r[4])).collect();
+        assert_eq!(speeds, vec![2.0f32, 1.0, 0.5]);
+        // bit 15 of packed_sequence is ACE's is_autonomous
+        // (`MotionItem.cs`: `IsAutonomous = (PackedSequence >> 15) == 1`).
+        let autonomous: Vec<bool> = rows.chunks_exact(5).map(|r| (r[2] >> 15) & 1 == 1).collect();
+        assert_eq!(autonomous, vec![false, true, false]);
+        let seqs: Vec<u16> = rows.chunks_exact(5).map(|r| (r[2] & 0x7FFF) as u16).collect();
+        assert_eq!(seqs, vec![100u16, 101, 102]);
     }
 
     /// The single-item case — every swing / eat / emote vanilla ACE sends —

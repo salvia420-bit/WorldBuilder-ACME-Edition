@@ -1,4 +1,5 @@
 import { castPrecheckMode, preCheckSpell } from "./ac_cast_precheck.js";
+import { castWouldBeSilentlyRejected } from "./ac_combat_mode_intent.js";
 
 // Spell-cast dispatcher (Rec #13, 2026-06-16). Tries the plugin-client
 // path first (window.__pluginClient.player.castSpell) and falls back to
@@ -70,6 +71,37 @@ export function castSpellViaHandle(spellId, targetGuid) {
       }
     }
   } catch (_) { /* a precheck fault never blocks the cast — fail-open */ }
+  // C8 (2026-08-13) — DO NOT SEND A CAST ACE WILL SILENTLY EAT.
+  // `Player_Magic.cs:83-94` (targeted) and `:275-283` (untargeted) reject a
+  // cast made out of Magic mode with a bare `SendUseDoneEvent()` — WeenieError
+  // `None`, no text, no motion, only a server-side WARN. The laptop's
+  // ACE_Log.txt is full of exactly that (`CombatMode mismatch NonCombat`). The
+  // melee/missile lanes have had a visible client-side gate for this since
+  // F11-5 (`scene3d/picking.js` `fireAttackOnSelectedTarget` — "You are not in
+  // melee or missile combat mode."); the cast lane did not, and the hotbar
+  // (`plugins/hotbar.js:739/754`) will happily fire a spell in Peace mode, so
+  // the action vanished with NO feedback whatsoever.
+  //
+  // The predicate is fail-OPEN and mirrors BOTH arms of ACE's check, including
+  // the `LastCombatMode` escape hatch — see `ac_combat_mode_intent.js`. It
+  // never CHANGES combat mode: retail never touches `SetCombatMode` on the
+  // cast path (ledger A5/DEC-2), so auto-switching here would be a non-retail
+  // invention.
+  try {
+    if (castWouldBeSilentlyRejected()) {
+      const bus = (typeof window !== "undefined") ? window.__pluginClient?.events : null;
+      const message = "You are not in magic combat mode.";
+      try { bus?.emit?.("clientActionRejected", { message }); } catch (_) {}
+      try {
+        bus?.emit?.("spellCastRejected", {
+          spellId: sid,
+          casterGuid: (window.getLocalPlayerGuid?.() ?? 0) >>> 0,
+          reason: message,
+        });
+      } catch (_) {}
+      return false;
+    }
+  } catch (_) { /* a faulting gate never blocks the cast — fail-open */ }
   try {
     const client = (typeof window !== "undefined") ? window.__pluginClient : null;
     if (typeof client?.player?.castSpell === "function") {

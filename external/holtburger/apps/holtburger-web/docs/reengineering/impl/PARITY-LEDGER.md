@@ -106,6 +106,7 @@ that a future session can see the claim was already tried and killed.
   `MULTI_ACTION_ON` is default-ON. Local guid is skipped (`loop.js:507`), so this bites
   REMOTE casters: gestures 2..N of a windup list play at 1.0 where the server said 2.0 — a
   2x duration error. **LIVE only if ACE ever packs >1 action into one UpdateMotion — see O3.**
+  **FIXED 2026-08-13 (DEC-13): the row is now 5 u32 and carries `MotionItem.speed`.**
 * **C6. `get_suggested_combat_mode()` is correct** — `context.rs:993-1007` returns `Magic`
   iff something wielded intersects `EquipMask::CASTER`. The mode machinery exists
   (`setCombatMode`, `toggleCombatMode`, `combatMode`); nothing on the cast path uses it.
@@ -118,7 +119,10 @@ that a future session can see the claim was already tried and killed.
   action whose combat mode does not match, identically in all three:
   `Player_Magic.cs:83-94` (Magic), `Player_Melee.cs:55-66` (Melee, `OnAttackDone(); return;`),
   `Player_Missile.cs` `HandleActionTargetedMissileAttack` (Missile, same shape). Each logs a
-  WARN and returns silently. **`ACE_Log.txt` already contains a real melee instance:**
+  WARN and returns silently. **STATUS 2026-08-13: melee + missile were already gated
+  client-side with visible feedback (K4); the CAST lane was not, and was reachable from
+  the hotbar (K5) — fixed by DEC-12.** **`ACE_Log.txt` already contains a real melee
+  instance:**
   `2026-08-02 16:41:59 +Tester2.HandleActionTargetedMeleeAttack(80002A65, 2, 1) - CombatMode
   mismatch NonCombat, LastCombatMode NonCombat`. So one precondition bug accounts for three of
   the four parity asks (casting, melee, missile).
@@ -184,7 +188,7 @@ that a future session can see the claim was already tried and killed.
 * **E9. Trap: gesture SHAPE != target CATEGORY.** A spell with `shape:"Self"` (=
   `MagicSelfHead`, a gesture) may have `flags.selfTargeted: false`. Round 3's untargeted casts
   animated fully, returned `UseDone(None)`, and applied nothing.
-* **E10. Data gap (unchased):** `data/spells-catalog.json` has `duration: 0` for **all 6266**
+* **E10. RESOLVED 2026-08-13 — see K7 / DEC-14.** Data gap (was unchased): `data/spells-catalog.json` has `duration: 0` for **all 6266**
   entries while the DAT carries the real value (e.g. 60 for spell 2639).
 
 ### F. Round-4 verification of DEC-6 (agent-measured, orchestrator-verified)
@@ -441,6 +445,73 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   strafing. **Design note: this is a real feature, not a bug to paper over; it is a PvP
   technique players will judge us on.**
 
+### K. Round-7 (PARITY-B, combat lane, 2026-08-13) — verified against re-read artifacts
+
+* **K1. R9's netWorker premise is FALSE — the side-channel thread_locals live on the
+  MAIN thread in BOTH modes.** `src/net_worker.rs`'s own module doc (`:18-28`): the worker
+  owns ONLY the raw wire I/O — `WsTransport` + the `holtburger_session::Session` state
+  machine (ISAAC crypto, packet/fragment sequencing, reassembly, ACK, keepalive ping) —
+  and "Everything else stays exactly where it is on the main thread: the recv loop, the
+  entire `GameMessage` dispatch `match`, …"; `:86-88` "`SessionCommand` / `ClientEvent` /
+  `EntityUpdate` never cross — they stay main-thread". Inbound crosses as RAW decrypted
+  game-message payload bytes (`RX_KIND_MESSAGE`, `scene3d/net_worker.js:52`) which
+  `net_proxy_push_inbound` (`net_worker.rs:256`) pushes into the MAIN-thread recv loop.
+  The `UpdateMotion` parse that fills `MOTION_ACTIONS` / `MOTION_AXES` therefore runs in
+  THIS page's wasm instance. **The `?netWorker=1` caveat at `scene3d/loop.js` (the
+  DRAIN-WIRING FIX block) was simply wrong, and it was the stated blocker on judging
+  DEC-6.** Comment corrected in place. Read directly by PARITY-B.
+* **K2. ACE puts the per-item `Speed` on the wire for EVERY MotionItem, at CastSpeed.**
+  `Network/Motion/MotionItem.cs` — the class carries `public float Speed`, its wire reader
+  does `Speed = reader.ReadSingle()` and `PackedCommandExtensions.Write` does
+  `writer.Write(mc.Speed)` as the third field after command + packed sequence.
+  `WorldObject_Networking.cs:1230-1237` `EnqueueMotionAction` passes its `speed` argument
+  to `InterpretedMotionState.AddCommand(this, motionCommand, speed)` for EVERY command in
+  the list, and `AddCommand` (`Network/Motion/InterpretedMotionState.cs:110-116`) builds
+  `new MotionItem(worldObject, motionCommand, speed)`. `DoWindupGestures` calls it with
+  `CastSpeed = 2.0f`. **So C5's hardcoded `1.0` was a real 2x duration error on gestures
+  2..N of a PK/FastTick caster's windup, not a cosmetic one.** Read directly by PARITY-B.
+* **K3. `MotionItem` bit 15 IS the autonomy flag, and it already rides the side-channel.**
+  `MotionItem.cs`: `PackedSequence` — "write: `(motionSequence & 0x7FFF) | (autonomous & 0x1
+  << 15)`", `IsAutonomous = (PackedSequence >> 15) == 1`. Our row already carries the FULL
+  `packed_sequence` (the JS drain masks `& 0x7fff` for the stamp), so E4's residual is a
+  CONSUMER gap, not a transport gap — nothing downstream of `drainMotionActions` keys off
+  autonomy. Pinned by a native test rather than papered over with an invented consumer.
+* **K4. C8 IS ALREADY CLOSED FOR MELEE AND MISSILE, from a normal player's controls.**
+  `scene3d/picking.js` `fireAttackOnSelectedTarget` gates on the server-confirmed stance
+  (`isInMeleeStance` / `isInRangedStance`) and, on a miss, logs and calls
+  `emitActionRejected("You are not in melee or missile combat mode.")` →
+  `clientActionRejected` → `plugins/rejection_feedback.js:331`, which renders it on the
+  shared toast surface. The gate is STRICTER than ACE's (ACE also accepts via
+  `LastCombatMode`), so it can never let a silently-eaten attack through. **E7's downgrade
+  holds for melee and missile.** Read directly by PARITY-B.
+* **K5. C8 WAS STILL OPEN FOR CASTING, and it was reachable from a normal control.**
+  `ui/ac_cast_spell.js` `castSpellViaHandle` had NO combat-mode gate, and
+  `plugins/hotbar.js:739/754` fires a hotbar spell at ANY stance (unlike the spell strip,
+  which `plugins/combat-bar.js` only displays when `__getCurrentStanceLow() === 0x49`).
+  A hotbar cast in Peace mode therefore vanished with zero feedback: ACE
+  `Player_Magic.cs:83-94` (targeted) / `:275-283` (untargeted) log a WARN and
+  `SendUseDoneEvent()` — WeenieError None, no text, no motion. **Fixed (DEC-12).**
+* **K6. ACE's `LastCombatMode` is stamped at REQUEST time, so `CombatMode` alone is NOT a
+  safe client-side predicate.** `Player_Combat.cs:762` `LastCombatMode = newCombatMode;`
+  runs inside `HandleActionChangeCombatMode` BEFORE `HandleActionChangeCombatMode_Inner`,
+  which is itself deferred behind `NextUseTime` on an ActionChain when the player is inside
+  the use-time window. All three lanes then read
+  `if (LastCombatMode == <mode>) CombatMode = <mode>;` as an escape hatch. **There is a real
+  window in which ACE accepts a cast that `CombatMode` says should fail — precisely the
+  "toggle to Magic then immediately cast" pattern in §H.** A naive `combatMode() !== 8`
+  gate would have EATEN those casts, i.e. traded one silent no-op for a worse one.
+  Read directly by PARITY-B.
+* **K7. E10 CONFIRMED AND FIXED — and the DAT says only 4,374 of the 6,266 should be
+  non-zero.** `ACE.DatLoader/Entity/SpellBase.cs:78-84` reads `Duration = reader.ReadDouble()`
+  for `SpellType.Enchantment` and `SpellType.FellowEnchantment` ONLY; every other
+  MetaSpellType has no duration field in the record at all (PortalSummon's `PortalLifetime`
+  is a different field and is NOT a duration). LSD carries the value at
+  `meta_spell.spell.duration`: spell 2639 Repulsion = **60.0**, exactly E10's figure.
+  Trap avoided: LSD ALSO reports a duration on 19 of the 21 `EnchantmentProjectile` (15)
+  rows, which the DAT reader does not read — gating on presence instead of on `sp_type`
+  would have shipped 19 values the retail record does not contain. **Fixed (DEC-14).**
+
+
 ---
 
 ## L2 — REFUTED / CORRECTED (do not resurrect without new evidence)
@@ -493,6 +564,13 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   DEAD in the net worker (`loop.js:456` — the thread_local lives in the worker's wasm
   instance). With a local prediction that player still saw their windups. **DEC-6's
   ARCHITECTURAL basis (A1/A2) is untouched; its symptom justification is withdrawn.**
+  **R9's netWorker HALF IS ITSELF REFUTED (2026-08-13, K1): the `pollMotionActions`
+  thread_local lives on the MAIN thread in worker mode too — `src/net_worker.rs:18-28`
+  and `:86-88` — so the side-channel was never dead under `?agent=1`. The stale
+  `loop.js` caveat that asserted otherwise has been corrected. What REMAINS true in R9
+  is only that the PK/FastTick windup tail rides that side-channel; it now also rides it
+  at the correct speed (DEC-13). With the channel proven live and its speed fixed, R9's
+  objection to DEC-6 is answered — see DEC-11/DEC-15.**
 * **R6. Brief errors worth remembering.** `@safecomps off` ENABLES consumption (the message is
   inverted from intuition); `?agent=1` silently forces `netWorker` ON
   (`net_worker_client.js:133`), moving the socket into a worker target;
@@ -521,7 +599,8 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   server's chain look like?** -> ROUND 3, in flight.
 * **O2. Per-action `speed` on the wire — is it 2.0 in practice?** -> Round 3. Never yet
   observed, only inferred from ACE source.
-* **O3. Is ACE's `FastTick` on?** Decides whether all windups arrive in ONE `commands` list
+* **O3. RESOLVED (E3 answered it; DEC-13 fixed the consequence 2026-08-13).**
+  Is ACE's `FastTick` on? Decides whether all windups arrive in ONE `commands` list
   (making C5's speed bug LIVE and the `drainMotionActions` local-guid skip load-bearing) or
   one message per gesture (C5 latent). -> Round 3. **Also settleable from the console string in C10.**
 * **O4. Was the combat-mode failure a PRODUCT bug or a HARNESS gap?** i.e. can a normal player
@@ -568,7 +647,7 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
 
 * **DEC-1 (2026-08-12).** Do NOT build a retail driver for cast/stance. Superseded by D2.
 * **DEC-2 (2026-08-12).** Do NOT auto-switch combat mode on cast. Non-retail (A5).
-* **DEC-3 (2026-08-12).** Do not touch C5's speed drop until O3 answers whether it is live.
+* **DEC-3 (2026-08-12). SUPERSEDED by DEC-13 (2026-08-13).** Do not touch C5's speed drop until O3 answers whether it is live. — O3 is answered (E3: FastTick => IsPKType, dormant for our NPK probe, live for a PK caster) and the fix landed on ACE-source evidence rather than a probe.
 * **DEC-4 (2026-08-12).** No new URL flags (owner directive). Flipping an existing default is
   not a new flag; adding one is.
 * **DEC-6 (2026-08-12). LANDED: the local cast prediction no longer ANIMATES.**
@@ -583,6 +662,10 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
 * **DEC-8 (2026-08-12).** C5 (hardcoded `1.0` speed on the multi-action drain) stays UNFIXED
   for now — E3 proves it is dormant for NPK and I will not land an unverifiable change. It
   becomes real for PK casters; fix it WITH a PK probe that exercises the branch.
+  **RESOLVED 2026-08-13 by DEC-13, WITHOUT a PK probe.** The premise — that the change is
+  unverifiable without one — was wrong: the branch's input is `MotionItem.Speed`, whose
+  value ACE fixes at the source (K2), so a native test over a synthetic multi-item list
+  pins the transport exactly. A PK probe would have re-observed a constant we can read.
 * **DEC-9 (2026-08-12). LANDED: one-shot playback now honours motion speed.**
   `entities.js` — new `_unifiedOneShotSpeed(inst)` helper; the three `_unifiedSeq` creation
   sites capture `speed`; the tick advances `dt * (ua.speed ?? 1)`.
@@ -599,6 +682,46 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
 * **DEC-11 (2026-08-12). DEC-6 IS ON PROBATION, NOT REVERTED.** It is uncommitted. Re-judge it
   AFTER DEC-10 is measured, and only once the PK/netWorker windup gap in R9 is closed.
   Reverting reflexively would be its own ping-pong; so would defending it reflexively.
+* **DEC-12 (2026-08-13). LANDED: the cast path no longer sends a cast ACE will silently
+  eat.** New `ui/ac_combat_mode_intent.js` mirrors ACE's `LastCombatMode` (stamped at
+  request time at every client site that sends a combat-mode change:
+  `plugins/combat-bar.js`, `plugins/target-bar.js`, `plugins/api.js` — an untyped
+  `toggleCombatMode()` records "unknown"), and `ui/ac_cast_spell.js` `castSpellViaHandle`
+  blocks + emits `clientActionRejected("You are not in magic combat mode.")` ONLY when
+  the confirmed combat mode, the confirmed stance, AND the last requested mode are all
+  positively non-Magic. **Fail-open everywhere else** (K6 — a stale `combatMode()` must
+  never cost a fastcaster a cast). **DEC-2 COMPLIANT: it never changes combat mode**;
+  there is an explicit negative-control test for that. Closes C8 for the magic lane;
+  K4 shows melee/missile were already closed. 10/10 new tests
+  (`tests/test_c8_cast_combat_mode_gate.mjs`, registered tier 5).
+* **DEC-13 (2026-08-13). LANDED: the multi-action side-channel carries the wire speed.**
+  Supersedes DEC-3/DEC-8's "wait for a PK probe". `motion_action_queue_rows`
+  (`src/lib.rs`) now emits **5** u32 per action —
+  `[guid, command_low, packed_sequence, stance, speed_f32_bits]` — and
+  `drainMotionActions` (`scene3d/loop.js`) reinterprets the bits through a shared
+  4-byte ArrayBuffer and passes the real speed to `em.setMotion` instead of a hardcoded
+  `1.0`, falling back to 1.0 only on a non-finite/non-positive float. **Justified by K2,
+  a re-read of ACE's own wire writer, not by a probe run** — the branch's INPUT is fully
+  determined by `MotionItem.Speed`, so a native test over a synthetic multi-item list
+  pins it exactly as a PK capture would, without needing a PK character. DEC-8 asked for
+  a probe because the fix was believed unverifiable; it is verifiable at the source.
+  4/4 `tests_windup_action_order` green, including a new mixed-speed/mixed-autonomy case.
+* **DEC-14 (2026-08-13). LANDED: E10 — spell durations are real.**
+  `scripts/build_spells_catalog.py` pulls `meta_spell.spell.duration` gated on
+  MetaSpellType Enchantment(1) / FellowEnchantment(12), mirroring
+  `ACE.DatLoader/Entity/SpellBase.cs:78-84`. Regenerated: **4,374 of 6,266** entries now
+  carry a real duration (was 0/6266); Repulsion 2639 = 60.0 s, matching E10's predicted
+  value; Lightning Bolt 4451 (a Projectile) correctly stays 0. Harness unchanged at
+  242 passed.
+* **DEC-15 (2026-08-13). DEC-6 IS COMMITTED, not reverted — DEC-11 resolved.** The two
+  conditions DEC-11 set are both met: DEC-10 has been measured (I2 — Iron windup gaps
+  549.7 ms vs ACE 540; Incantation 4484 windup 1823/1831 ms vs ACE 1838.2; every gesture
+  starting exactly once at the playhead, not by counter), and the R9 gap is closed —
+  its netWorker half was never real (K1) and its remaining half, the PK windup tail, now
+  plays at the correct wire speed (DEC-13). The architectural basis was never in doubt
+  (A1/A2/E1/E2/E6, F1 adversarially). Reverting would reintroduce the fabricated-animation
+  layer plus the dedup window that G4 shows breaches on 50.3% of spells at ZERO latency.
+  **Judged by PARITY-B on the evidence, per DEC-11's instruction not to leave it hanging.**
 * **DEC-5 (2026-08-12).** Fix order for casting: precondition (C1) -> re-measure -> only then
   reconsider the prediction layer (R5).
 

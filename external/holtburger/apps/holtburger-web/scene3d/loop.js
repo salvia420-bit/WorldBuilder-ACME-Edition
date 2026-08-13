@@ -453,11 +453,21 @@ function actionStampIsNewer(seq, stamp) {
 // A `SessionHandle` METHOD of the same name still wins if one ever exists, so a
 // future Rust move onto the handle needs no JS change here.
 //
-// CAVEAT (documented, not fixed here): under `?netWorker=1` the Session state
-// machine — and therefore the `MOTION_ACTIONS` / `MOTION_AXES` thread_locals —
-// lives in the net worker's wasm instance, so the main-thread poll returns empty.
-// That is unchanged from today (the drains were dead in both modes); routing the
-// side-channels across the worker port is a Rust/worker-side follow-on.
+// CORRECTION (2026-08-13, ledger R9): the previous note here claimed that under
+// `?netWorker=1` the `MOTION_ACTIONS` / `MOTION_AXES` thread_locals live in the
+// net worker's wasm instance and the main-thread poll returns empty. THAT IS
+// FALSE, and it cost a session's worth of reasoning (it was the stated blocker
+// on judging DEC-6). `src/net_worker.rs` says the opposite in its own module
+// doc (:18-28): the worker owns ONLY the raw wire I/O — `WsTransport` plus the
+// `holtburger_session::Session` state machine (crypto, sequencing, fragment
+// reassembly, ACK, keepalive). "Everything else stays exactly where it is on
+// the main thread: the recv loop, the entire `GameMessage` dispatch `match`, …"
+// and (:86-88) "`SessionCommand` / `ClientEvent` / `EntityUpdate` never cross —
+// they stay main-thread". Inbound crosses as RAW decrypted game-message payload
+// BYTES (`RX_KIND_MESSAGE`) which `net_proxy_push_inbound` (`net_worker.rs:256`)
+// feeds into the MAIN-thread recv loop; the UpdateMotion parse that fills these
+// thread_locals runs there, in this page's wasm instance. So both drains work
+// identically in direct and worker mode. No worker-port plumbing is needed.
 function resolveMotionPollFn(scene3d, sessionHandle, name) {
   const method = sessionHandle && sessionHandle[name];
   if (typeof method === "function") return () => method.call(sessionHandle);
@@ -466,8 +476,39 @@ function resolveMotionPollFn(scene3d, sessionHandle, name) {
   return null;
 }
 
-// Drain the wasm multi-action side-channel (`pollMotionActions`, flat 4-u32
-// groups: [guid, command_low, packed_sequence, stance]) and FIFO-play each NEW
+// DEC-8 / ledger C5 (2026-08-13) — THE MULTI-ACTION SPEED DROP, FIXED.
+// The side-channel row is 5 u32; the 5th is the raw IEEE-754 bit pattern of
+// `MotionItem.speed` (`src/lib.rs motion_action_queue_rows`). The channel is a
+// `Vec<u32>` so the float rides as bits and is reinterpreted here through a
+// shared 1-element ArrayBuffer (allocation-free, exact — no float math).
+//
+// WHY IT MATTERS: ACE writes a `float Speed` on EVERY MotionItem
+// (`Network/Motion/MotionItem.cs`, `PackedCommandExtensions.Write` →
+// `writer.Write(mc.Speed)`), and `EnqueueMotionAction`
+// (`WorldObject_Networking.cs:1230-1237`) hands its `speed` argument to
+// `InterpretedMotionState.AddCommand(this, motionCommand, speed)` for EVERY
+// command in the list — so a PK/PKLite ("FastTick") caster's entire windup
+// list arrives at `Player_Magic.cs:603 CastSpeed = 2.0f`. This drain used to
+// pass a hardcoded `1.0`, i.e. gestures 2..N of a remote PK caster's windup
+// played at HALF tempo (a 2x duration error) while gesture 1 — which goes out
+// the main `KIND_MOTION_ACTION` path, and does carry `motion_speed` — played
+// correctly. Dormant on an NPK-only shard (ledger E3: `FastTick => IsPKType`),
+// live the moment a PK caster is in view.
+//
+// Fallback: a non-finite or non-positive speed yields 1.0. A malformed wire
+// float must not stall a clip (speed 0) or run it backwards.
+const MOTION_ACTION_ROW_U32 = 5;
+const _speedBitsBuf = new ArrayBuffer(4);
+const _speedBitsU32 = new Uint32Array(_speedBitsBuf);
+const _speedBitsF32 = new Float32Array(_speedBitsBuf);
+function motionActionSpeed(bits) {
+  _speedBitsU32[0] = bits >>> 0;
+  const s = _speedBitsF32[0];
+  return Number.isFinite(s) && s > 0 ? s : 1.0;
+}
+
+// Drain the wasm multi-action side-channel (`pollMotionActions`, flat 5-u32
+// groups: [guid, command_low, packed_sequence, stance, speed_f32_bits]) and FIFO-play each NEW
 // action per entity. No-op only when `?multiAction=off` (default-ON). Plays via `em.setMotion`
 // (same path the single motion_command uses) — Action-class commands resolve to
 // their one-shot clip; unresolved ones no-op harmlessly. Local guid is skipped
@@ -499,10 +540,10 @@ function drainMotionActions(scene3d, sessionHandle) {
   } catch (_) {
     return;
   }
-  if (!flat || flat.length < 4) return;
+  if (!flat || flat.length < MOTION_ACTION_ROW_U32) return;
   const em = scene3d?.entityManager;
   if (!em) return;
-  for (let i = 0; i + 3 < flat.length; i += 4) {
+  for (let i = 0; i + (MOTION_ACTION_ROW_U32 - 1) < flat.length; i += MOTION_ACTION_ROW_U32) {
     const guid = flat[i] >>> 0;
     if (isLocalPlayerGuid(guid)) continue;
     const cmdLow = flat[i + 1] >>> 0;
@@ -511,7 +552,7 @@ function drainMotionActions(scene3d, sessionHandle) {
     const prev = _actionStamps.get(guid);
     if (prev !== undefined && !actionStampIsNewer(seq, prev)) continue;
     _actionStamps.set(guid, seq);
-    em.setMotion(guid, cmdLow, stance, 1.0);
+    em.setMotion(guid, cmdLow, stance, motionActionSpeed(flat[i + 4]));
   }
 }
 
