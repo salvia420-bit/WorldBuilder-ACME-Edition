@@ -524,15 +524,25 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   const msaaSamples = Number.isFinite(opts?.msaa) ? Math.max(0, Math.min(8, opts.msaa | 0)) : 0;
   const composer = new EffectComposer(renderer, {
     frameBufferType: THREE.HalfFloatType,
-    // Portal-stencil pass needs a stencil attachment. So does ?portalPunch as
-    // of 2026-08-13: its occlusion gate MARKs the unoccluded aperture pixels
-    // into stencil (depth-tested) and confines the far-Z punch to them, which
-    // is what stops a doorway BEHIND a wall being punched and drawn through it
-    // — retail gets the same result structurally, by only ever reaching a
-    // portal through PView::ConstructView's clipped flood fill
-    // (acclient.c:462423-462462). Both off → pmndrs default (false) →
-    // byte-identical to the pre-feature composer.
-    stencilBuffer: !!portalStencil || !!portalPunch,
+    // Portal-stencil pass needs a stencil attachment; ?portalPunch's occlusion
+    // gate (portal_punch.js) needs one too, but it does NOT get to ask for it
+    // by default.
+    //
+    // MEASURED ON THE 1070, 2026-08-13 — allocating stencil here flips the
+    // shared scene depth texture to the packed DepthStencilFormat /
+    // UnsignedInt248Type pair below, and SOME depth consumer downstream cannot
+    // read it: distant town views go BLACK (mean luma 2.3 vs 60-112 correct) in
+    // a stable, camera-reproducible way, while close views are unaffected. The
+    // punch pass is NOT the proximate cause — disabling it entirely with the
+    // allocation still in place leaves the frame black, and booting the same
+    // build with ?portalPunch=off (which skips the allocation) renders
+    // correctly. The offending consumer was not identified; until it is, the
+    // default must not pay this.
+    //
+    // So the gate rides ?portalStencil, which already implies "I want a stencil
+    // attachment and I accept the packed depth format". Absent it, portalPunch
+    // behaves exactly as it did before the gate existed.
+    stencilBuffer: !!portalStencil,
     multisampling: msaaSamples,
   });
   composer.setSize(width, height);
@@ -596,7 +606,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (!stableDepthShare) {
     const _depthBufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
     sceneDepthTexture = new THREE.DepthTexture(_depthBufSize.x, _depthBufSize.y);
-    if (portalStencil || portalPunch) {
+    if (portalStencil) {
       // Depth + stencil must share ONE packed attachment when stencil is on;
       // a depth-only texture can't coexist with a stencil buffer. AerialPerspective
       // reads `.r`, which still returns the depth component of a packed texture.
@@ -736,10 +746,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // degrades to the legacy unconditional punch (leak, but visible).
     const _punchStencil = composer.inputBuffer?.stencilBuffer === true;
     if (!_punchStencil) {
+      // Expected on a default boot (see the stencilBuffer note above) — info,
+      // not a warning, or every boot would cry wolf.
       // eslint-disable-next-line no-console
-      console.warn(
-        "[portalPunch] no stencil attachment — occlusion gate DISABLED, " +
-          "falling back to the unconditional punch (portals may show through walls).",
+      console.log(
+        "[portalPunch] occlusion gate OFF (no stencil attachment; add " +
+          "?portalStencil=on to arm it) — unconditional punch, portals can " +
+          "show through walls.",
       );
     }
     portalPunchPass = new PortalPunchPass(scene, camera, "punch", {
