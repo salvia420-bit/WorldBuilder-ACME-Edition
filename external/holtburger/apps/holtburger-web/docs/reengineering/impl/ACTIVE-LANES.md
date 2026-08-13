@@ -38,3 +38,14 @@ files: docs/reengineering/impl/PARITY-LEDGER.md (§L2/P1 + §L4b only),
 note: §L4b overlaps the INTEGRATOR's L4b baseline refresh — my edit replaces only the prose
       above the baseline bullets and leaves every measured number untouched, so the two
       should merge cleanly.
+
+### LANE D (PORTAL-PASS2) — 2026-08-14 — branch `lane/portal-pass2-20260814`
+files: scene3d/portal_pass2.js (NEW), tests/portal_pass2.test.mjs (NEW),
+       harness/run-js-headless.mjs (one registration line),
+       docs/url-flags.md (one new `portalPass2` row),
+       scene3d/cells.js (SHARED — 4 small hunks, all inside/around `tickPortalPunch`)
+note: declared overlap with LANE A, which is fixing the inert `?portalStencil` occlusion gate in
+      the SAME punch path. My cells.js hunks are listed line-by-line in
+      `task-D-report.md` §"Shared lines touched" for hand-merge. I touch neither
+      scene3d/portal_punch.js nor atmosphere_pipeline.js (Lane A's surface), and neither
+      src/lib.rs nor pkg/ (Lane B's).

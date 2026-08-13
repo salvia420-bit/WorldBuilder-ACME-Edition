@@ -320,6 +320,7 @@ const TIER5 = [
   { tier: 5, flag: "particles", file: "test_particles.mjs" },
   { tier: 5, flag: "phase7_5_camera", file: "test_phase7_5_camera.mjs" },
   { tier: 5, flag: "portal_stencil_alloc", file: "test_portal_stencil_alloc.mjs" },
+  { tier: 5, flag: "portalPass2", file: "tests/portal_pass2.test.mjs" },
   { tier: 5, flag: "quality_preset", file: "test_quality_preset.mjs" },
   { tier: 5, flag: "remote_buffs", file: "test_remote_buffs.mjs" },
   { tier: 5, flag: "retail_sun", file: "test_retail_sun.mjs" },
