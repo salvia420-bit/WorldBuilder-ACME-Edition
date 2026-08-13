@@ -1044,7 +1044,7 @@ function isDoorStateMotion(cmd) {
 // A one-shot (_unifiedSeq) suppresses _unifiedLoco during a swing, then resumes
 // it on completion (single playhead — retail-faithful).
 //
-// DEC-13 (2026-08-13, PARITY-A) — PROMOTED TO THE DEFAULT SET, joining
+// DEC-18 (2026-08-13, PARITY-A) — PROMOTED TO THE DEFAULT SET, joining
 // attack/cast/death/door/missile. It was held back for ~2 months by the
 // 2026-06-18 "B-1" claim that this path made the movement integrator overshoot
 // the run target (25 m/s vs 4.5) and oscillate Walk->Stop->Walk sub-second.

@@ -600,6 +600,72 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   collapse in both branches. J2/J3's "same-motion backward walk" is the walk inside
   `CMotionInterp`, a DIFFERENT walk — the two were being conflated.
 
+### N. LOCOMOTION — O5/O6 SETTLED ON THE LAPTOP RIG (PARITY-A, 2026-08-13)
+
+* **N1. `?unifiedMotion=locomotion` IS AN ANIMATION DRIVER AND CANNOT MOVE THE AVATAR.**
+  Read directly in `scene3d/entities.js`: the `else if (inst._unifiedLoco)` arm of the entity
+  tick is a PEER of `inst.mixer.update(dt)` in the same if/else chain, and its entire body is
+  three statements — `lo.seq.advance(dt * this._unifiedLocoGaitScale(inst, lo.base))`,
+  `poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts)`, `this._drainUnifiedHooks(inst, lo)`.
+  It writes a playhead, a skeleton pose and footfall hooks. It writes NO velocity, NO
+  `pose.coords`, nothing the integrator reads. `_unifiedLocoGaitScale` only READS
+  `_resolveStateGroundSpeed(inst)` to set a clip rate. The install site has the same shape: it
+  builds a `MotionSequence` and `return`s before `inst.mixer.clipAction(clip)`. The movement
+  integrator is Rust (`crates/holtburger-core/src/client/movement/system.rs`) and this flag is
+  not among its inputs. **Verified by PARITY-A reading `entities.js` at the tick arm and at the
+  install site.**
+
+* **N2. B-1 DOES NOT REPRODUCE — LIVE A/B, THREE ARMS, VELOCITY IDENTICAL TO FOUR DECIMALS.**
+  `harness/oracle-run.mjs --scenario strafe-diagonal --account agentp07`, laptop rig
+  (chromium/SwiftShader; ACE + serve.py + wsbridge all laptop-local, so **no WAN in the loop —
+  O9 does not apply to these numbers**):
+
+  | arm | recs | moving | median m/s | max m/s | distinct speeds | drive transitions while moving |
+  |---|---:|---:|---:|---:|---|---:|
+  | default (pre-flip, loco OFF) | 128 | 46 | 8.4830 | 8.4830 | {7.903, 8.483} | 2 |
+  | `--flags unifiedMotion=locomotion` | 197 | 76 | 8.4830 | 8.4830 | {7.903, 8.483} | 2 |
+  | default (post-flip, loco ON) | 178 | 57 | 8.4830 | 8.4830 | {7.903, 8.483} | 2 |
+
+  **The max IS the target** — there is no 25 m/s anywhere in any arm. The moving samples take
+  exactly TWO values (the forward-only phase, then the diagonal), i.e. a step function, not an
+  oscillation; the 2 drive-state transitions are the scenario's own keydown/keyup boundaries.
+  All three arms: `gait run (OK)`, `realized/intent 1.000`.
+  **B-1's "overshoots 25 m/s and oscillates Walk->Stop->Walk" is REFUTED (L2 R10).**
+
+* **N3. O6 IS FIXED AND THE MECHANISM IS NAMED — a run-rate SOURCE mismatch, not a formula bug.**
+  Post-flip, same rig: **strafe-diagonal 8.4830 vs the retail pin 8.4679 (delta +0.015, +0.18%,
+  tolerance 0.05 -> PASS)** and **run-hold-long 7.9032 vs the retail pin 7.895 (delta +0.008,
+  +0.10% -> PASS)**. The 2026-08-11 FAIL does not reproduce.
+  The telemetry carries all three run-rate lanes in one record:
+  `composed 1.9467 / latched 1.9758 / server 1.9758`, `run_skill_used 105`, `load_mod 1.0`.
+  Feed each into the closed form and the whole history reconciles arithmetically:
+  - `4.0 x 1.9758 = 7.9032` — EXACTLY today's run-hold-long, to 4 dp.
+  - `hypot(4.0 x 1.9758, 1.25 x min(1.248 x 1.9758, 3.0)) = 8.4830` — EXACTLY today's diagonal.
+  - the OLD 8.362 solves to run_rate **1.9466** = today's `composed` lane (1.94672) to 4 dp;
+    the old 7.884 solves to 1.971, a THIRD value.
+  So the third parity report compared a diagonal taken on the CLIENT-COMPOSED rate against a
+  forward taken on another rate. **MOVE-RUNRATE-105 (`?serverRunRate`, default-ON) moved the
+  live read onto the server/latched lane and closed it.** Nothing in the velocity formula was
+  ever wrong — see N4.
+
+* **N4. THE STRAFE CLOSED FORM IS CORRECT AND IS NOW PINNED BY A CARGO TEST.**
+  `motion_interp.rs::tests::o6_strafe_diagonal_closed_form_matches_retail_capture` (landed by
+  PARITY-A) calls the two LIVE velocity producers directly and asserts, in one test:
+  (a) `interpreted_velocity_for_state` and `local_velocity_for_state` agree — the stage-1
+  identity contract, which matters because `USE_INTERPRETED_VELOCITY = true`
+  (`system.rs:695`) means the LIVE path is the interpreted one, **NOT the
+  `local_velocity_for_state` that O6's own text named**;
+  (b) forward-only reproduces the captured run-forward;
+  (c) the diagonal equals `hypot(4.0 x rate, 1.25 x min(1.248 x rate, 3.0))`;
+  (d) that closed form lands within 0.05 of retail's 8.468.
+  **This is the "separate the formula from the plumbing" test O6 asked for, and it separated
+  them: formula clean, plumbing was the run-rate lane.** It also documents the near-miss —
+  O6's suggested test would have exercised a function the shipped client does not call.
+  Run 2026-08-13: `o6_strafe_diagonal_closed_form_matches_retail_capture ... ok`
+  (1 passed, 0 failed).
+
+---
+
 ## L2 — REFUTED / CORRECTED (do not resurrect without new evidence)
 
 * **R12. "Multi-bit `W_AttackType` is handled downstream by `getCombatManeuver`'s
@@ -679,14 +745,14 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   overshoots the run target (25 m/s vs 4.5 m/s) and oscillates Walk->Stop->Walk sub-second when
   the crossfade band-aids are bypassed." It blocked `UNIFIED_LOCO` for ~2 months. It is a
   CATEGORY ERROR — `?unifiedMotion=locomotion` selects an animation driver and writes no
-  velocity at all (K1) — and it does not reproduce live in a three-arm A/B (K2). Whatever was
+  velocity at all (N1) — and it does not reproduce live in a three-arm A/B (N2). Whatever was
   seen in June was an animation artifact of the pre-`MotionSequence` crossfade path, not an
   integrator defect; the crossfade band-aids it named (`CROSSFADE_S`, `RESUME_WINDOW`) are
   animation state too. Do not re-block on it without a NEW measurement naming a velocity.
 * **R11. "O6 is a 1.3% strafe-speed defect" is REFUTED as of 2026-08-13** — it was a run-rate
   SOURCE mismatch between two captures, already fixed by MOVE-RUNRATE-105, and both scenarios
-  now PASS (K3). Do not "fix" `SIDESTEP_ADJUST_FACTOR`, `SIDESTEP_ANIM_SPEED` or the diagonal
-  composition: K4 pins them against retail to 0.18%, and the two constant copies
+  now PASS (N3). Do not "fix" `SIDESTEP_ADJUST_FACTOR`, `SIDESTEP_ANIM_SPEED` or the diagonal
+  composition: N4 pins them against retail to 0.18%, and the two constant copies
   (`common.rs:796` hardcodes 1.248; `motion_interp.rs:345` derives
   `0.5 x (3.1199999 / 1.25)`) differ only at the 8th significant figure.
 
@@ -731,14 +797,14 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   Cast C's deltas are negative and non-monotonic (+89, -370, -566, -253), which latency alone
   cannot produce — a second mechanism is present in that run.
 
-* **O5. RESOLVED 2026-08-13 (PARITY-A) — NO, B-1 does not reproduce.** -> K1/K2, R10.
-  `UNIFIED_LOCO` is now DEFAULT-ON (DEC-13); C7 is closed. Original text kept below.
+* **O5. RESOLVED 2026-08-13 (PARITY-A) — NO, B-1 does not reproduce.** -> N1/N2, R10.
+  `UNIFIED_LOCO` is now DEFAULT-ON (DEC-18); C7 is closed. Original text kept below.
   ~~Does B-1 still reproduce?~~ The 2026-06-18 claim that the movement integrator
   "overshoots the run target (25 m/s vs 4.5 m/s) and oscillates Walk->Stop->Walk sub-second"
   when the crossfade band-aids are bypassed. It is the sole blocker on `UNIFIED_LOCO` (C7) and
   it PREDATES MOVE-F2/F3/F6 and MOVE-RUNRATE-105. **Treat as STALE until re-measured.**
   Settleable at 60 Hz with `?moveTelemetry=1` + `?nullRender=1`, no GPU.
-* **O6. RESOLVED 2026-08-13 (PARITY-A) — does not reproduce; both scenarios PASS.** -> K3/K4,
+* **O6. RESOLVED 2026-08-13 (PARITY-A) — does not reproduce; both scenarios PASS.** -> N3/N4,
   R11. Mechanism was a run-rate lane mismatch, closed by MOVE-RUNRATE-105. Original text below.
   ~~strafe-diagonal is 1.3% slow~~ (retail 8.468, holt 8.362 — the only FAIL in the
   third parity report). Orchestrator's closed-form from `common.rs` constants
@@ -769,7 +835,7 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   error in a wasm ABI, and PARITY-D independently reported uncommitted `entities.js` edits
   VANISHING from this tree mid-session. **This wants a quiet tree and one owner, not a
   concurrent merge.**
-  **It does NOT block the locomotion lane**: K3 shows the run rate now reads the server/latched
+  **It does NOT block the locomotion lane**: N3 shows the run rate now reads the server/latched
   lane and both movement scenarios PASS, and the branch's own
   `RUNRATE-SNAPSHOT-FOSSIL-card.md` states the fossil "does not corrupt the run rate itself"
   (`burden_load_modifier` returns 1.0 for any `burden < 1.0`). Merge it for the PROVENANCE fix
@@ -874,12 +940,12 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   DEC-2 compliant (no combat-mode change); DEC-4 compliant (no new URL flag).
   Tests: `tests/cmt_attack_type_collapse.test.mjs` — 11/11 pass, transcribing the ACE
   branches case by case; the DAT evidence is `crates/holtburger-dat/examples/dump_cmt_attack_types.rs`.
-* **DEC-13 (2026-08-13, PARITY-A). LANDED: `UNIFIED_LOCO` is DEFAULT-ON.**
+* **DEC-18 (2026-08-13, PARITY-A). LANDED: `UNIFIED_LOCO` is DEFAULT-ON.**
   `entities.js` — `const UNIFIED_LOCO = UNIFIED_DEFAULT || UNIFIED_MODE === "locomotion" ||
   UNIFIED_MODE === "on";`. Locomotion now joins attack/cast/death/door/missile on the Rust
   `MotionSequence` authority, so **C7 is closed and every motion class is on one playhead.**
-  Justified by K1 (the path is animation-only, by source) + K2 (three-arm live A/B, velocity
-  identical to 4 dp) + K3 (both movement scenarios PASS against the retail pins post-flip).
+  Justified by N1 (the path is animation-only, by source) + N2 (three-arm live A/B, velocity
+  identical to 4 dp) + N3 (both movement scenarios PASS against the retail pins post-flip).
   **Adds no new flag** (DEC-4): `?unifiedMotion=off` still disables every class and the
   per-class strings still select one. The 30-line comment at the constant carries the refutation
   so the next reader does not re-block on B-1 from memory.
