@@ -31763,6 +31763,62 @@ fn resolve_sound_table_did(stable_id: Option<u32>, setup_id: u32) -> u32 {
 /// `state.player.inventory` / `state.player.equipment` if the new
 /// entity is held / wielded by the local player.
 ///
+/// ORACLE open defect #1 (named 2026-08-12 in `3f57d9ed`, which was never
+/// verified and never merged; ported and covered by tests 2026-08-14).
+///
+/// THE DEFECT. `apply_inventory_object_create` built an entity from
+/// `data.public_weenie_desc` and did a raw `world.entities.insert(entity)`.
+/// `EntityManager::insert` is `HashMap::insert` — a WHOLESALE REPLACE with no
+/// merge. ACE re-sends the LOCAL PLAYER's own `ObjectCreate` on portal and
+/// visibility transitions, and that create carries only the public weenie
+/// baseline. So the player entity's property bag was replaced by
+/// `[Age, CloakStatus, ContainersCapacity, ItemType, ItemUseable,
+///   ItemsCapacity, PhysicsState, ShowableOnRadar]` and every
+/// PlayerDescription-only property (`AugmentationJackOfAllTrades`, `Level`,
+/// `CoinValue`, `HeritageGroup`, …) was dropped.
+///
+/// THE GUARD THAT NEVER FIRED. `WorldState::upsert_entity_from_create`
+/// (`holtburger-world/src/state/liveness.rs`) was written for exactly this
+/// case and does the rebase-and-merge. The wasm lane went around it: this
+/// path never enters `routing::handle_message` or the `tick()` sweep, which
+/// is also why the aug trace stayed quiet — the wipe is not on a hooked path.
+///
+/// THE FIX. Mirror liveness.rs's guard at the only insert site, so there is
+/// no raw `entities.insert` left in the ObjectCreate path. For
+/// `guid == world.player.guid` the incoming create is rebased on the live bag,
+/// or — when the entity has already been removed (explicit delete + recreate) —
+/// on the stashed login `PlayerDescription` dump, and merged. `merge` extends
+/// with `other`, so the FRESH create still wins on every property it actually
+/// carries; only properties the create does not mention are preserved.
+///
+/// `cfg(any(target_arch = "wasm32", test))` so `cargo test -p holtburger-web
+/// --lib` can drive it natively (`holtburger-world` is a dev-dependency with
+/// `test-support` for exactly this mirroring — see the Cargo.toml note on
+/// `tests_entity_bsp_door_collision`). Tests live in
+/// `mod tests_object_create_local_player_rebase` and include a reproduction of
+/// the raw-insert wipe, so the guard is not speculative.
+#[cfg(any(target_arch = "wasm32", test))]
+fn insert_object_create_entity(
+    world: &mut holtburger_world::WorldState,
+    mut entity: holtburger_world::entity::Entity,
+) {
+    use holtburger_common::properties::WorldObjectProperties;
+
+    let guid = entity.guid;
+    if guid != holtburger_common::Guid::NULL && guid == world.player.guid {
+        let base: Option<WorldObjectProperties> = world
+            .entities
+            .get(guid)
+            .map(|existing| existing.properties.clone())
+            .or_else(|| world.player_description_properties().cloned());
+        if let Some(mut merged) = base {
+            merged.merge(std::mem::take(&mut entity.properties));
+            entity.properties = merged;
+        }
+    }
+    world.entities.insert(entity);
+}
+
 /// Returns `true` if the entity is now owned by the player
 /// (caller flips `inventory_changed` so the snapshot publisher
 /// re-fires `kind=11`).
@@ -31974,7 +32030,11 @@ fn apply_inventory_object_create(
     // `reconcile_authoritative_body` (the spatial body work that
     // panics in the wasm bundle). The entity collection is what
     // `publish_player_inventory_snapshot` iterates against.
-    world.entities.insert(entity);
+    //
+    // ORACLE open defect #1: routed through the local-player rebase
+    // helper rather than a raw `entities.insert`, so a re-sent self
+    // ObjectCreate cannot replace the player with the public baseline.
+    insert_object_create_entity(world, entity);
 
     let held_by_player = container_id == Some(world.player.guid);
     let wielded_by_player = wielder_id == Some(world.player.guid);
@@ -63953,6 +64013,237 @@ mod tests_mem_census {
         assert!(
             live_after < 64 * 1024 * 1024 * 1024,
             "LIVE = {live_after} — realloc accounting underflowed"
+        );
+    }
+}
+
+/// ORACLE open defect #1 — the verification `3f57d9ed` was committed without.
+///
+/// `3f57d9ed`'s own message ends "NOT VERIFIED: not yet rebuilt or observed
+/// live." These tests are that verification, and they are deliberately built
+/// in two halves: `raw_entities_insert_...` REPRODUCES the wipe against the
+/// unguarded primitive, and the rest prove `insert_object_create_entity`
+/// stops it. Without the reproduction half the guard would be speculative —
+/// a passing test on a bug that was never there.
+///
+/// Native (`cargo test -p holtburger-web --lib`), not wasm: `holtburger-world`
+/// is a dev-dependency with `test-support`, and the helper is
+/// `cfg(any(target_arch = "wasm32", test))` for exactly this reason.
+#[cfg(test)]
+mod tests_object_create_local_player_rebase {
+    use holtburger_common::properties::{
+        PropertyInt, PropertyInt64, WorldObjectProperties, WorldObjectPropertyAccessors as _,
+    };
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{CharacterOptions1, CharacterOptions2, Guid};
+    use holtburger_protocol::messages::player::events::PlayerDescriptionEventData;
+    use holtburger_protocol::messages::{
+        GameEvent, GameEventMessage, GameMessage, ObjectDescriptionData,
+    };
+    use holtburger_world::entity::Entity;
+    use holtburger_world::WorldState;
+
+    const PLAYER: Guid = Guid(0x5000_0043);
+
+    /// A world whose local player has been hydrated by the login
+    /// `PlayerDescription`: the entity bag AND the private stash both hold the
+    /// PlayerDescription-only properties the public weenie never carries.
+    fn logged_in_world() -> WorldState {
+        let mut state = WorldState::synthetic();
+        state.player.guid = PLAYER;
+
+        let mut properties = WorldObjectProperties::default();
+        // The named victim from the live capture in `3f57d9ed`.
+        properties
+            .ints
+            .insert(PropertyInt::AugmentationJackOfAllTrades, 1);
+        properties.ints.insert(PropertyInt::Level, 42);
+        properties.int64s.insert(PropertyInt64::TotalExperience, 13);
+
+        let description = GameMessage::GameEvent(Box::new(GameEventMessage {
+            target: PLAYER,
+            sequence: 1,
+            event: GameEvent::PlayerDescription(Box::new(PlayerDescriptionEventData {
+                guid: PLAYER,
+                sequence: 1,
+                name: "Holtburger".to_string(),
+                wee_type: 1,
+                pos: Some(WorldPosition::default()),
+                properties,
+                positions: std::collections::BTreeMap::new(),
+                attributes: std::collections::BTreeMap::new(),
+                skills: std::collections::BTreeMap::new(),
+                enchantments: Vec::new(),
+                spells: std::collections::BTreeMap::new(),
+                has_health: true,
+                options1: CharacterOptions1::empty(),
+                options2: CharacterOptions2::empty(),
+                shortcuts: Vec::new(),
+                hotbar_spells: Vec::new(),
+                desired_comps: Vec::new(),
+                spellbook_filters: 0,
+                gameplay_options: Vec::new(),
+                inventory: Vec::new(),
+                equipped_objects: Vec::new(),
+            })),
+        }));
+        let _ = state.handle_message(&description);
+        assert_eq!(
+            state.player_int_property(PropertyInt::Level),
+            Some(42),
+            "fixture precondition: login must hydrate the player bag"
+        );
+        state
+    }
+
+    /// The entity `apply_inventory_object_create` builds out of a re-sent self
+    /// `ObjectCreate`: name and position from the wire, and a property bag
+    /// holding ONLY the public weenie ints — exactly the set the live capture
+    /// found on the player's bag after the wipe.
+    fn public_weenie_recreate() -> Entity {
+        let data = ObjectDescriptionData::with_guid(PLAYER);
+        let mut entity = Entity::new(
+            data.public_weenie_desc.guid,
+            "Holtburger".to_string(),
+            WorldPosition::default(),
+        );
+        entity.properties.ints.insert(PropertyInt::ItemType, 32);
+        entity.properties.ints.insert(PropertyInt::ItemUseable, 0);
+        entity
+            .properties
+            .ints
+            .insert(PropertyInt::ContainersCapacity, 7);
+        entity
+    }
+
+    /// REPRODUCTION. The unguarded primitive the wasm lane used to call
+    /// directly. If this test ever stops failing to preserve `Level`, the
+    /// defect is gone from `EntityManager::insert` itself and the guard could
+    /// be revisited — it does not currently.
+    #[test]
+    fn raw_entities_insert_wipes_the_local_player_bag() {
+        let mut world = logged_in_world();
+        world.entities.insert(public_weenie_recreate());
+
+        assert_eq!(
+            world.player_int_property(PropertyInt::Level),
+            None,
+            "reproduction: a raw HashMap insert of the public-weenie re-create \
+             must be shown to drop PlayerDescription-only properties — if it \
+             does not, the ORACLE #1 guard is speculative and must not land"
+        );
+        assert_eq!(
+            world.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+            None,
+            "reproduction: the named live victim (aug_joat 1 -> null)"
+        );
+    }
+
+    /// THE FIX. Same re-sent create, through the guarded insert.
+    #[test]
+    fn self_object_create_keeps_the_player_its_own_identity() {
+        let mut world = logged_in_world();
+        super::insert_object_create_entity(&mut world, public_weenie_recreate());
+
+        // Identity: still the same player, not the public weenie baseline.
+        assert_eq!(
+            world.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+            Some(1),
+            "aug_joat must survive a re-sent self ObjectCreate (the live 1 -> null wipe)"
+        );
+        assert_eq!(
+            world.player_int_property(PropertyInt::Level),
+            Some(42),
+            "Level must survive a re-sent self ObjectCreate"
+        );
+        assert_eq!(
+            world
+                .player_properties()
+                .and_then(|p| p.get_int64_prop(PropertyInt64::TotalExperience)),
+            Some(13),
+            "int64 PlayerDescription properties must survive too"
+        );
+
+        // The fresh create still wins on every property it actually carries.
+        assert_eq!(
+            world.player_int_property(PropertyInt::ItemType),
+            Some(32),
+            "merge must not discard the incoming create's own properties"
+        );
+
+        let entity = world
+            .entities
+            .get(PLAYER)
+            .expect("player entity must still exist after the guarded insert");
+        assert_eq!(entity.guid, PLAYER);
+    }
+
+    /// The second wipe path liveness.rs documents: the entity is GONE (explicit
+    /// delete then re-create), so the existing-entity merge has nothing to
+    /// merge from and the stashed login dump must re-seed.
+    #[test]
+    fn self_object_create_after_entity_removal_reseeds_from_the_stash() {
+        let mut world = logged_in_world();
+        world.entities.remove(PLAYER);
+        assert!(world.entities.get(PLAYER).is_none());
+
+        super::insert_object_create_entity(&mut world, public_weenie_recreate());
+
+        assert_eq!(
+            world.player_int_property(PropertyInt::Level),
+            Some(42),
+            "re-create after entity removal must re-seed from the stashed PlayerDescription"
+        );
+        assert_eq!(
+            world.player_int_property(PropertyInt::AugmentationJackOfAllTrades),
+            Some(1),
+        );
+    }
+
+    /// The guard must be local-player-only: an ObjectCreate for any other GUID
+    /// keeps replace semantics, so a recycled dynamic GUID cannot inherit the
+    /// previous occupant's property bag.
+    #[test]
+    fn other_guids_are_not_rebased() {
+        let mut world = logged_in_world();
+        let other = Guid(0x8000_0001);
+
+        let mut first = Entity::new(other, "Old Occupant".to_string(), WorldPosition::default());
+        first.properties.ints.insert(PropertyInt::Level, 99);
+        super::insert_object_create_entity(&mut world, first);
+
+        let second = Entity::new(other, "New Occupant".to_string(), WorldPosition::default());
+        super::insert_object_create_entity(&mut world, second);
+
+        let entity = world.entities.get(other).expect("entity present");
+        assert_eq!(
+            entity.properties.get_int_prop(PropertyInt::Level),
+            None,
+            "non-player ObjectCreate must stay a wholesale replace (GUID reuse)"
+        );
+    }
+
+    /// A create for the NULL guid before the player guid is known must not be
+    /// mistaken for the local player.
+    #[test]
+    fn null_guid_is_not_treated_as_the_local_player() {
+        let mut world = WorldState::synthetic();
+        assert_eq!(world.player.guid, Guid::NULL, "fixture: no player yet");
+
+        let mut seed = Entity::new(Guid::NULL, "Nobody".to_string(), WorldPosition::default());
+        seed.properties.ints.insert(PropertyInt::Level, 5);
+        world.entities.insert(seed);
+
+        super::insert_object_create_entity(
+            &mut world,
+            Entity::new(Guid::NULL, "Nobody".to_string(), WorldPosition::default()),
+        );
+
+        let entity = world.entities.get(Guid::NULL).expect("entity present");
+        assert_eq!(
+            entity.properties.get_int_prop(PropertyInt::Level),
+            None,
+            "NULL guid must not take the local-player rebase path"
         );
     }
 }
