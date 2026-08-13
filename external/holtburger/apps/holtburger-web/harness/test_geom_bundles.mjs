@@ -515,6 +515,7 @@ for (const [v, want] of [
   let reliefCalls = 0;
   let flatCalls = 0;
   let residentRows = 7;
+  let reliefAssembled = 0;
   const reliefWasm = {
     assemble_model_geometry: () => {
       flatCalls += 1;
@@ -522,7 +523,9 @@ for (const [v, want] of [
     },
     assemble_model_geometry_relief: () => {
       reliefCalls += 1;
-      return { buffer: new Uint8Array(0), descriptor: JSON.stringify({ models: [], assembled: 0, missing: 0, bytes: 0 }) };
+      // `assembled` is mutable: the deferred relief audit only speaks after a
+      // REAL assembly, so the 0-rows tests below need a non-zero assembly.
+      return { buffer: new Uint8Array(0), descriptor: JSON.stringify({ models: [], assembled: reliefAssembled, missing: 0, bytes: 0 }) };
     },
     assemble_envcell_geometry: () => {},
     geom_relief_rows_resident: () => residentRows,
@@ -601,11 +604,16 @@ for (const [v, want] of [
     "OFF arm calls the relief-FREE export (byte-identical legacy routing)"
   );
 
-  // A dist baked without --geom-relief: arms, but says so out loud.
+  // A dist baked without --geom-relief: arms, and says so out loud — but only
+  // AFTER a real assembly proves the packs were resident and STILL carried no
+  // GEOMR rows. Arming alone must be SILENT: it runs before any pack is
+  // resident, so a 0 read at that moment is boot order, not the bake. This is
+  // the 2026-08-13 false alarm (0 at arm, 128 moments later) being retired.
   residentRows = 0;
   const warns = [];
   const realWarn = console.warn;
   console.warn = (...a) => warns.push(a.join(" "));
+  gb._testResetReliefAudit();
   const armed0 = armWith({
     search: "?geomBundles=on&packSource=on&reliefBundles=on",
     hbFetch: { enabled: true },
@@ -614,14 +622,81 @@ for (const [v, want] of [
   });
   console.warn = realWarn;
   ok(armed0 === true, "0 resident variant rows still arms (defaults are relief-free)");
-  ok(
-    warns.some((w) => w.includes("0 GEOMR rows resident")),
-    "0 resident variant rows warns LOUDLY (never silent)"
-  );
+  ok(warns.length === 0, "arming NEVER warns about rows (residency post-dates arming)");
   ok(
     gb.geomBundleStats().relief.variantRowsResident === 0,
-    "variantRowsResident reports 0 for a relief-free dist"
+    "variantRowsResident reports 0 while nothing is resident"
   );
+  // LIVE READ: the same field, read again after packs land, reports the truth.
+  residentRows = 128;
+  ok(
+    gb.geomBundleStats().relief.variantRowsResident === 128,
+    "variantRowsResident is a LIVE read (128 after residency, not the boot 0)"
+  );
+  ok(
+    JSON.parse(JSON.stringify(gb.geomBundleStats())).relief.variantRowsResident === 128,
+    "the live accessor survives JSON.stringify (headless capture contract)"
+  );
+  // Rows present at assembly time → the warning must NOT fire.
+  reliefAssembled = 1;
+  const warns2 = [];
+  console.warn = (...a) => warns2.push(a.join(" "));
+  gb.assembleModels([0x01000001]);
+  console.warn = realWarn;
+  ok(
+    !warns2.some((w) => w.includes("--geom-relief")),
+    "no bad-bake warning when the dist DOES carry rows (false alarm retired)"
+  );
+  // Genuinely relief-free dist: rows still 0 after models assembled → warn.
+  residentRows = 0;
+  gb._testResetReliefAudit();
+  const warns3 = [];
+  console.warn = (...a) => warns3.push(a.join(" "));
+  gb.assembleModels([0x01000001]);
+  console.warn = realWarn;
+  ok(
+    warns3.some((w) => w.includes("--geom-relief")),
+    "a truly relief-free dist warns LOUDLY once models assembled (never silent)"
+  );
+
+  // ARMING-CHAIN surface: every leg readable from one place, first failure named.
+  residentRows = 7;
+  armWith({
+    search: "?geomBundles=on&packSource=on&reliefBundles=on",
+    hbFetch: { enabled: true },
+    relief: { enabled: true, subdivLevel: 0 },
+    wasm: reliefWasm,
+  });
+  const chainOk = gb.geomBundleStats().chain;
+  ok(
+    chainOk.evaluated === true && chainOk.armed === true &&
+      chainOk.reliefArmed === true && chainOk.firstUnmetLeg === null,
+    "chain: fully armed relief run reports no unmet leg"
+  );
+  armWith({
+    search: "?geomBundles=on&packSource=on&reliefBundles=on",
+    hbFetch: { enabled: true },
+    relief: { enabled: true, subdivLevel: 3 },
+    wasm: reliefWasm,
+  });
+  const chainBad = gb.geomBundleStats().chain;
+  ok(
+    chainBad.firstUnmetLeg === "gfxSubdivLevel0" &&
+      chainBad.legs.packSourceFlag === true && chainBad.reliefArmed === false,
+    "chain: names the FIRST unmet leg (gfxSubdivLevel0), rest still true"
+  );
+  armWith({
+    search: "?geomBundles=on&reliefBundles=on",
+    hbFetch: { enabled: true },
+    relief: { enabled: true, subdivLevel: 0 },
+    wasm: reliefWasm,
+  });
+  ok(
+    gb.geomBundleStats().chain.firstUnmetLeg === "packSourceFlag" &&
+      gb.geomBundleStats().chain.armed === false,
+    "chain: a missing packSource leg is named, not just console-logged"
+  );
+
   gb._testDisarm();
   ok(
     gb.reliefBundlesActive() === false,

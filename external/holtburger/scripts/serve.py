@@ -164,9 +164,20 @@ def ensure_dist_symlink(root: Path, allow_missing: bool) -> None:
     if DIST_LINK.is_symlink():
         if Path(os.readlink(DIST_LINK)) == root:
             return
+        # `dist` is a SHARED resource — other agents/browsers may be mid-run
+        # against the old target, and this repoint swaps the world under them.
+        # It is the intended self-heal, but it is never silent (2026-08-13:
+        # a `HOLTBURGER_DIST=<other> serve.py --check` quietly repointed the
+        # shared link and left it there).
+        was = os.readlink(DIST_LINK)
         os.remove(DIST_LINK)  # removes the link only, not its target
         os.symlink(root, DIST_LINK)
-        print(f"repaired dist symlink -> {root}", file=sys.stderr)
+        bar = "!" * 72
+        print(f"\n{bar}\n[serve] REPOINTED the SHARED dist symlink\n"
+              f"[serve]   from: {was}\n[serve]   to:   {root}\n"
+              f"[serve]   anyone measuring against the old target just had the world swapped.\n"
+              f"[serve]   Set HOLTBURGER_DIST to keep a different bake.\n{bar}\n",
+              file=sys.stderr)
         return
 
     if DIST_LINK.exists():
@@ -208,6 +219,9 @@ def build_health():
     """Inspect every layer through the dist link; return (health_dict, failures)."""
     layers: dict[str, dict] = {}
     failures: list[str] = []
+    # Non-fatal but LOUD findings (pack tree / relief presence, 2026-08-13):
+    # things that are legal to serve but silently change what the client can do.
+    warnings: list[str] = []
 
     f = DIST_LINK / "manifest.json"
     present = f.is_file()
@@ -336,11 +350,69 @@ def build_health():
             failures.append(
                 f"pack layer 'packs/' has no populated bucket directories at {packs_dir} "
                 "(manifest.json declares world_index — this dist promises packs)")
+    else:
+        # 2026-08-13 — THE PACK-LESS DIST, made loud.
+        #
+        # A dist with no `world_index` is a "legacy dist", and until now that was
+        # entirely silent here: no layer row, no warning, --check OK. That silence
+        # cost the 1070 relief eye-shot a whole run. The client presence-routes the
+        # same way, and the routing CASCADES:
+        #
+        #   no packs/index/world_index -> `?packSource=on` routes OFF
+        #     -> `?geomBundles` disarms (needs packSource)
+        #       -> `?reliefBundles` disarms (needs geomBundles)
+        #         -> the entire baked-relief path is dead and the world renders FLAT
+        #
+        # Every link in that chain "cleanly degrades", and the sum of four clean
+        # degradations is a silently wrong world. Not a hard failure — serving a
+        # legacy dist is a legitimate mode (UI-only work, old-bake bisects) — but
+        # it is never again something you can fail to notice.
+        packs_dir = DIST_LINK / "packs"
+        index_dir = DIST_LINK / "index"
+        layers["packs"] = {"present": False, "files": 0, "unit": "buckets",
+                           "note": "no world_index in manifest.json (legacy dist)"}
+        pack_tree_warning = (
+            "LEGACY DIST: manifest.json declares no `world_index`"
+            + (" (packs/ dir exists but is unlisted)" if packs_dir.is_dir() else " and there is no packs/")
+            + (" (index/ dir exists but is unlisted)" if index_dir.is_dir() else "")
+            + " — ?packSource presence-routes OFF, which disarms ?geomBundles, which"
+            + " disarms ?reliefBundles: the baked-relief path is DEAD and the world"
+            + " renders flat. Point HOLTBURGER_DIST at a pack bake if you meant to"
+            + " measure packs/relief."
+        )
+        warnings.append(pack_tree_warning)
+
+    layers_pack_tree = {
+        "world_index_declared": world_index is not None,
+        "packs_present": bool(layers.get("packs", {}).get("present")),
+    }
+    # GEOMR presence, cheaply: the bake writes its own counters to
+    # pack-report.json. This is the BAKE'S declaration, not a re-read of the
+    # pack bytes (a real census is `scripts/relief/dist-relief-census.py`, ~2 min
+    # over 51,953 packs — far too slow for every server start). Enough to answer
+    # "can ?reliefBundles possibly do anything against this dist" at a glance.
+    try:
+        with open(DIST_LINK / "pack-report.json") as f:
+            rep = json.load(f)
+        layers_pack_tree["geom_relief_rows_baked"] = int(rep.get("geom_relief_rows", 0))
+        layers_pack_tree["geom_relief_variant"] = rep.get("geom_relief_variant")
+    except (OSError, ValueError):
+        layers_pack_tree["geom_relief_rows_baked"] = None
+    if layers_pack_tree["world_index_declared"] and not layers_pack_tree.get("geom_relief_rows_baked"):
+        warnings.append(
+            "pack dist carries NO baked relief (pack-report.json geom_relief_rows is "
+            "0/absent) — ?reliefBundles=on will arm and serve relief-free defaults. "
+            "Re-bake with `dat-shard --emit-packs --geom-relief <SCALE>` to get GEOMR rows.")
 
     health = {
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "root": str(canonical_root()),
         "layers": layers,
+        # Pack/GEOMR presence, surfaced to the page's boot banner so a
+        # pack-less or relief-less dist is visible IN THE BROWSER too, not only
+        # in the terminal that started the server (2026-08-13).
+        "pack_tree": layers_pack_tree,
+        "warnings": warnings,
         "wasm": wasm_health(),
     }
     # `failures` is always the raw truth; --allow-missing is applied by the caller
@@ -768,6 +840,17 @@ def main() -> None:
         for name, info in health["layers"].items()
     )
     print(f"[serve] root={root}\n[serve] layers: {summary}", file=sys.stderr)
+
+    pt = health.get("pack_tree", {})
+    print(
+        f"[serve] pack tree: world_index={'yes' if pt.get('world_index_declared') else 'NO'}"
+        f"  packs={'yes' if pt.get('packs_present') else 'NO'}"
+        f"  geomr_rows_baked={pt.get('geom_relief_rows_baked')}",
+        file=sys.stderr,
+    )
+    for warn in health.get("warnings", []):
+        bar = "!" * 72
+        print(f"\n{bar}\n[serve] WARNING: {warn}\n{bar}\n", file=sys.stderr)
 
     w = health["wasm"]
     if w.get("present"):

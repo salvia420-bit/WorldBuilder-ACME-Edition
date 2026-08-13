@@ -95,7 +95,54 @@ const _stats = {
   // (0 on a dist baked without `--geom-relief` — the loud tell that the arm
   // has nothing to serve and every model reads its relief-free default).
   relief: { armed: false, variantRowsResident: 0, modelsAssembled: 0 },
+  // ARMING-CHAIN surface (2026-08-13). `reliefBundles` needs FOUR legs and any
+  // one of them silently leaves the T13-D3 rule in force; before this, the only
+  // record of WHICH leg failed was a console.error nobody captures headlessly.
+  // `legs` is the ordered truth table, `firstUnmetLeg` names the first false
+  // one, `reasons` is the same text the console printed. Populated by
+  // `initGeomBundles`; `evaluated:false` until it runs (install-on-arm).
+  chain: {
+    evaluated: false,
+    armed: false,
+    reliefArmed: false,
+    firstUnmetLeg: null,
+    legs: {},
+    reasons: [],
+  },
 };
+
+/**
+ * LIVE-READ (2026-08-13, relief-diag fix). `variantRowsResident` used to be
+ * sampled ONCE at the bottom of `initGeomBundles` and never refreshed. Arming
+ * happens BEFORE any pack is resident, so on a cold boot it latched 0 — and the
+ * "this dist was baked without --geom-relief" warning derived from that 0 fired
+ * against a dist that genuinely carried 2,179 GEOMR rows (the 2026-08-13 1070
+ * relief eye-shot read 128 off the wasm export moments later). The field is now
+ * an ENUMERABLE ACCESSOR that reads `geom_relief_rows_resident()` at read time,
+ * so it tracks residency instead of pre-dating it. Accessors are serialised by
+ * `JSON.stringify` (the getter is invoked), so the GFXOBJ-RELIEF §4 contract —
+ * `__diag.geometry === geomBundleStats()` AND the object survives a headless
+ * JSON round-trip — is preserved. Deliberately NOT latched to the maximum ever
+ * seen: the field is named `...Resident` and residency legitimately falls on
+ * eviction, so a latch would trade one lie for another. The "bad bake" question
+ * is answered by `_reliefAudit` (evidence-based), not by this number's floor.
+ */
+Object.defineProperty(_stats.relief, "variantRowsResident", {
+  enumerable: true,
+  configurable: true,
+  get: _reliefRowsLive,
+});
+
+/** Raw live read of the wasm export; 0 when unarmed or the export is absent. */
+function _reliefRowsLive() {
+  try {
+    const w = _state.wasmExports;
+    if (w && typeof w.geom_relief_rows_resident === "function") {
+      return w.geom_relief_rows_resident() | 0;
+    }
+  } catch (_) {}
+  return 0;
+}
 
 /**
  * DIAG-SHADOW (2026-08-11, GFXOBJ-RELIEF). `scene3d/diag/geometry.js` uses the
@@ -137,11 +184,29 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
   _installDiag();
   _state.armed = false;
   _state.reasons = [];
-  if (!geomBundlesEnabled()) return false;
+  const chain = _stats.chain;
+  chain.evaluated = true;
+  chain.armed = false;
+  chain.reliefArmed = false;
+  chain.firstUnmetLeg = null;
+  chain.legs = {};
+  chain.reasons = _state.reasons;
+  const leg = (name, ok) => {
+    chain.legs[name] = !!ok;
+    if (!ok && chain.firstUnmetLeg === null) chain.firstUnmetLeg = name;
+    return !!ok;
+  };
+  if (!geomBundlesEnabled()) {
+    leg("geomBundlesFlag", false);
+    return false;
+  }
+  leg("geomBundlesFlag", true);
   const reasons = _state.reasons;
   try {
     const ps = new URLSearchParams(window.location.search);
     const on = (v) => v === "on" || v === "1" || v === "true" || v === "yes";
+    leg("packSourceFlag", on(ps.get("packSource")));
+    leg("placementId", ps.get("placementId") !== "off");
     if (!on(ps.get("packSource"))) {
       reasons.push("?geomBundles=on requires ?packSource=on (SPEC §3 T13)");
     }
@@ -159,6 +224,7 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
       ? globalThis.__hbFetch
       : null);
   const ctlArmed = !!(ctl && (ctl.enabled === true || ctl.armed === true));
+  leg("packController", ctlArmed);
   if (!ctlArmed) {
     reasons.push("pack controller not armed (legacy dist or ?packSource off)");
   }
@@ -171,8 +237,19 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
     globalThis.__hbGfxRelief.enabled === true
   );
   let wantRelief = false;
+  leg("gfxReliefOn", reliefOn);
   if (reliefOn) {
     const reliefReasons = [];
+    leg("reliefBundlesFlag", reliefBundlesEnabled());
+    leg(
+      "reliefWasmExport",
+      !!(wasmExports &&
+        typeof wasmExports.assemble_model_geometry_relief === "function")
+    );
+    leg(
+      "gfxSubdivLevel0",
+      (((globalThis.__hbGfxRelief && globalThis.__hbGfxRelief.subdivLevel) | 0) === 0)
+    );
     if (!reliefBundlesEnabled()) {
       reliefReasons.push(
         "?reliefBundles=on not authored (DEFAULT-OFF until the eye pair passes)"
@@ -211,10 +288,12 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
     typeof wasmExports.assemble_model_geometry !== "function" ||
     typeof wasmExports.assemble_envcell_geometry !== "function"
   ) {
+    leg("wasmAssembleExports", false);
     reasons.push(
       "wasm assemble exports missing (stale pkg/ build — rebuild wasm)"
     );
   }
+  if (!("wasmAssembleExports" in chain.legs)) leg("wasmAssembleExports", true);
   if (reasons.length > 0) {
     // eslint-disable-next-line no-console
     console.error(
@@ -227,30 +306,46 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
   _state.armed = true;
   _state.relief = wantRelief;
   _stats.relief.armed = wantRelief;
-  if (wantRelief) {
-    let rows = 0;
-    try {
-      if (typeof wasmExports.geom_relief_rows_resident === "function") {
-        rows = wasmExports.geom_relief_rows_resident() | 0;
-      }
-    } catch (_) {}
-    _stats.relief.variantRowsResident = rows;
-    if (rows === 0) {
-      // Never silent: the arm is live but this dist was baked without
-      // `--geom-relief`, so every model reads its relief-free default.
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[geomBundles] relief variants armed but 0 GEOMR rows resident — " +
-          "this dist was baked without --geom-relief; geometry will be relief-free"
-      );
-    }
-  }
+  chain.armed = true;
+  chain.reliefArmed = wantRelief;
+  // NO boot-time row sample and NO warning here. Arming runs before the first
+  // pack is resident, so any reading taken now is structurally 0 and says
+  // nothing about the bake. `variantRowsResident` is a live accessor, and the
+  // "baked without --geom-relief" warning is deferred to `assembleModels`,
+  // where 0 rows AFTER a real assembly is genuine evidence (see `_reliefAudit`).
   // eslint-disable-next-line no-console
   console.log(
     "[geomBundles] armed — statics/buildings/anim-scenery/cells consume HBG1 bundles" +
       (wantRelief ? " (relief variants ON)" : "")
   );
   return true;
+}
+
+/**
+ * Deferred RELIEF-IN-BAKE audit. Runs after a real assembly, when the packs the
+ * assembly touched ARE resident — the only moment at which "0 GEOMR rows" is
+ * evidence about the bake rather than evidence about boot order. Fires at most
+ * once, and only when models were actually assembled (`assembled > 0`), so it
+ * cannot cry wolf on a dist that carries rows. Verified against the 2026-08-13
+ * eye-shot dist (2,179 GEOMR rows / 285 packs, `scripts/relief/dist-relief-census.py`).
+ */
+let _reliefAudited = false;
+function _reliefAudit(assembled) {
+  if (_reliefAudited || !_state.relief || (assembled | 0) <= 0) return;
+  _reliefAudited = true;
+  if (_reliefRowsLive() > 0) return;
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[geomBundles] relief variants armed and " +
+      (assembled | 0) +
+      " model(s) assembled, but geom_relief_rows_resident() is still 0 — " +
+      "this dist was baked without --geom-relief; geometry will be relief-free"
+  );
+}
+
+/** Test seam: re-arm the once-only relief audit. */
+export function _testResetReliefAudit() {
+  _reliefAudited = false;
 }
 
 export function geomBundlesActive() {
@@ -484,7 +579,10 @@ export function assembleModels(modelIds) {
   _stats.bundles.assembled += descriptor.assembled | 0;
   _stats.bundles.bytesOut += descriptor.bytes | 0;
   _stats.bundles.msAssemble += t1 - t0;
-  if (_state.relief) _stats.relief.modelsAssembled += descriptor.assembled | 0;
+  if (_state.relief) {
+    _stats.relief.modelsAssembled += descriptor.assembled | 0;
+    _reliefAudit(descriptor.assembled);
+  }
   const byModel = new Map();
   const missingIds = [];
   for (const m of descriptor.models) {
