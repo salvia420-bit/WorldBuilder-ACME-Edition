@@ -444,6 +444,10 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   same-motion backward walk with the `0xB0000000`-with-anims abort — NOT a special case for
   strafing. **Design note: this is a real feature, not a bug to paper over; it is a PvP
   technique players will judge us on.**
+  **UPDATE 2026-08-13 (PARITY-D) — the queue is LANDED; see DEC-17.** The precedence
+  described above is gone: a one-shot no longer clobbers an in-flight one-shot. What remains
+  open is the CMotionInterp side of H4 (the walk that snaps the playhead back onto the
+  locomotion cycle), not the queue structure.
 
 ### K. Round-7 (PARITY-B, combat lane, 2026-08-13) — verified against re-read artifacts
 
@@ -553,6 +557,49 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
 
 ---
 
+### M. Round-9 (PARITY-D, animation core, 2026-08-13) — verified against re-read artifacts
+
+* **M1. O11 WAS ALREADY LANDED — the ledger's L3 entry was STALE.** The frame clamp is
+  implemented at BOTH frame-resolution sites and committed:
+  (a) the DURATION path, `classify_motion_link_for_swing` (`src/lib.rs:8806`, clamp block at
+  `:8955-8969`: substitute on `high == -1`, then `if high > num_frames { high = num_frames }`,
+  `(high - low).max(0) / abs(framerate)` summed over ALL segments), with the resolver
+  `anim_frames` supplied for real by `SessionHandle::lookup_motion_link_for_swing`
+  (`src/lib.rs:39346`, closure at `:39376-39386`, reading `Animation::read(...).num_frames`
+  out of the same `eor/portal` source);
+  (b) the BAKE path, `build_concatenated_motion_frames` (`src/lib.rs:8388`, clamp at
+  `:8452-8462`). Commit `6dc18041` ("...plus O11 frame clamp"). **O11 is RESOLVED**; nothing
+  was left to do but say so.
+* **M2. RETAIL'S CLAMP, re-read directly (L1).** `AnimSequenceNode::set_animation_id`,
+  `acclient.c:341085`, body at `:341110-341123`:
+  `if (high_frame < 0) high_frame = num_frames - 1; if (low_frame >= num_frames) low_frame =
+  num_frames - 1; if (high_frame >= num_frames) high_frame = num_frames - 1; if (low_frame >
+  high_frame) high_frame = low_frame;`. **Retail clamps to `num_frames - 1` INCLUSIVE**; ACE
+  clamps to `num_frames` EXCLUSIVE and subtracts. Both name the same last playable frame — the
+  off-by-one is the inclusive/exclusive convention, not a disagreement. Our bake path follows
+  retail (inclusive `.min(last)`), our duration path follows ACE (exclusive), which is correct
+  because ACE is what paces the server we are driven by.
+* **M3. RETAIL'S `pending_animations`, re-read directly (L1).** `MotionTableManager` owns
+  `DLList<AnimNode> pending_animations` (`acclient.h:31103`); `AnimNode : DLListData
+  { unsigned motion; unsigned num_anims; }` (`acclient.h:57614-57618`). Four methods:
+  `add_to_queue(motion, num_anims, seq)` (`acclient.c:330149`) appends then ALWAYS calls
+  `remove_redundant_links`; `AnimationDone(success)` (`:329873`) `++animation_counter` then
+  pops every head whose `num_anims <= counter`, firing `CPhysicsObj::MotionDone` and
+  subtracting — so a `num_anims == 0` node retires WITHOUT EVER PLAYING;
+  `remove_redundant_links(seq)` (`:330079`) is the collapse; `truncate_animation_list(node,
+  seq)` (`:329842`) sums `num_anims` from the tail down to (excluding) `node`, ZEROES each
+  node's `num_anims` in place (the nodes stay, and still fire their MotionDone) and calls
+  `CSequence::remove_link_animations(seq, total)`.
+* **M4. THE COLLAPSE'S ACTUAL SELECTOR (corrects a J3-adjacent assumption).**
+  `remove_redundant_links` picks the tail node with `num_anims != 0` and branches on its
+  motion `m`: `if ((m & 0x40000000) && !(m & 0x20000000))` walk back to an earlier node with
+  the SAME motion and `num_anims != 0`, aborting on any anim-bearing node matching
+  `0xB0000000`; `else if (m & 0x80000000)` walk back to the same motion (num_anims ignored),
+  aborting on `0x70000000`; **otherwise no collapse at all.** `Motion_SideStepRight`
+  `0x6500000F` sets BOTH `0x40000000` and `0x20000000`, so a strafe is ineligible for THIS
+  collapse in both branches. J2/J3's "same-motion backward walk" is the walk inside
+  `CMotionInterp`, a DIFFERENT walk — the two were being conflated.
+
 ## L2 — REFUTED / CORRECTED (do not resurrect without new evidence)
 
 * **R12. "Multi-bit `W_AttackType` is handled downstream by `getCombatManeuver`'s
@@ -636,13 +683,11 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   animation path but not `TargetEffect` VFX, remote-observer rendering, or the PvP-visible
   rubberband of §H3. **Next: stand up a second god character (laptop-side headless client is
   cheapest) as the target.**
-* **O11. THE FRAME CLAMP IS STILL UNFIXED** (the last known cast defect). ACE clamps
-  `highFrame` to the Animation's real `NumFrames` (`MotionTable.cs GetAnimationLength(AnimData)`)
-  and also substitutes it when `HighFrame == -1`; our `classify_motion_link_for_swing` does
-  neither. Affects exactly 4 of 319 links (PowerUp09/10 + purple variants). Implementable:
-  `lookup_motion_link_for_swing` already holds a `global_source` and reads DAT files
-  synchronously, so it can resolve each segment's Animation — pass a `Fn(anim_id) -> Option<u32>`
-  resolver into the pure function so it stays unit-testable.
+* **O11. RESOLVED 2026-08-13 (PARITY-D) — the clamp was already landed; this entry was
+  stale.** See M1/M2 for the two implementing sites and the retail/ACE inclusive-vs-exclusive
+  reconciliation. No code change was needed. Kept here (rather than deleted) because two
+  successive agents deferred it as outstanding work that did not exist.
+
 * **O1. Does a properly set-up cast (wand wielded, Magic mode) succeed, and what does the
   server's chain look like?** -> ROUND 3, in flight.
 * **O2. Per-action `speed` on the wire — is it 2.0 in practice?** -> Round 3. Never yet
@@ -792,6 +837,38 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   reconsider the prediction layer (R5).
 
 ---
+
+* **DEC-17 (2026-08-13). LANDED: the retail `pending_animations` queue (J5).**
+  New `scene3d/motion_queue.js` transcribes `MotionTableManager`'s queue verbatim from the
+  decomp (line refs in M3/M4 and in the file header) as pure functions over an array;
+  `scene3d/entities.js` wires it BEHIND the existing single playhead — `inst._unifiedSeq` is
+  still the only thing that advances, `inst._unifiedQueue` only orders what follows it. **No
+  second advance loop exists**, which was the explicit non-negotiable (a queue racing the
+  playhead would be worse than the gap). Sites: the attack/cast one-shot build now calls
+  `_enqueueUnifiedOneShot(inst, toCmd, segmentCounts.length, rec)` instead of assigning
+  `_unifiedSeq`; the tick's completion arm calls `_unifiedOneShotFinished` (retail
+  `AnimationDone`) then promotes the next head; death, despawn, the door/missile direct
+  one-shot, and any new locomotion/stance command drain the pending tail
+  (`_clearUnifiedQueue`, retail `HandleExitWorld`/`Destroy`).
+  **TWO DELIBERATE DEVIATIONS, both documented in code:**
+  1. Retail's `truncate_animation_list` can retract frames from the LIVE sequence
+     (`CSequence::remove_link_animations`). We retract only PENDING entries; when the collapse
+     target is the in-flight head we drop the newcomer and let the head run. Same observable
+     outcome for a re-issue (it is invisible), NOT the same for a mid-link retraction.
+  2. Retail's queue is unbounded; ours caps pending entries at 3 (`_UNIFIED_QUEUE_MAX`),
+     dropping the OLDEST pending — never the head — past that, so a wire storm degrades into a
+     dropped gesture instead of unbounded animation lag.
+  **Verification:** `tests/motion_pending_queue.test.mjs`, 9 cases transcribed from the decomp
+  branches (append order; 0-anim node retires immediately; a 2-anim node needs 2
+  AnimationDones; ACTION-class re-issue collapses; `0xB0000000`-with-anims aborts the collapse;
+  a 0-anim node is transparent to the walk; strafe `0x6500000F` ineligible in both branches;
+  no target -> plain queue; the in-flight head is never spliced). 9/9 pass. Whole
+  `node --test tests/` suite: **63/63 pass** (`combat_bar_skill_stride` was failing in the
+  shared tree when this work started — A/B'd with `git stash` and confirmed pre-existing and
+  unrelated; another agent fixed it during the session). **Browser eye-test NOT done** — this
+  changes when a queued gesture plays, and the visible consequence (a second swing arriving
+  mid-swing now finishes the first) wants a live look before anyone calls it validated.
+  Branch `parity-d-animation-20260813`, commit `45f4a32d`.
 
 ## L4b — REGRESSION BASELINE (established 2026-08-12, A/B against pristine files)
 
