@@ -38,3 +38,10 @@ files: docs/reengineering/impl/PARITY-LEDGER.md (§L2/P1 + §L4b only),
 note: §L4b overlaps the INTEGRATOR's L4b baseline refresh — my edit replaces only the prose
       above the baseline bullets and leaves every measured number untouched, so the two
       should merge cleanly.
+
+### LANE B / ORACLE — 2026-08-14 — branch `lane/oracle-20260814`
+files: src/lib.rs (apply_inventory_object_create + one new native test module),
+       docs/reengineering/impl/task-B-report.md, docs/reengineering/impl/ACTIVE-LANES.md
+note: disjoint from lanes A and D (both in scene3d/ portal rendering). I am the only lane
+      rebuilding wasm from source; I take the flock build lock for every build. No URL flag
+      added, no flag default moved.
