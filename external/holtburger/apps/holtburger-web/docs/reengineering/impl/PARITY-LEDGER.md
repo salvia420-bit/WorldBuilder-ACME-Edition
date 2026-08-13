@@ -512,9 +512,57 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   would have shipped 19 values the retail record does not contain. **Fixed (DEC-14).**
 
 
+### L. Round-8 (PARITY-C, melee/missile lane, 2026-08-13) — verified against re-read artifacts
+
+* **L1-1. VERIFIED — retail CMT `0x30000000` is keyed on SINGLE-BIT `AttackType` only.**
+  All 102 maneuvers dumped directly from `~/ac_base_dats/client_portal.dat` by a new
+  example, `crates/holtburger-dat/examples/dump_cmt_attack_types.rs`:
+  `0x0001`x11 `0x0002`x12 `0x0004`x21 `0x0008`x3 `0x0010`x7 `0x0020`x9 `0x0040`x9
+  `0x0080`x6 `0x0100`x6 `0x0200`..`0x4000`x3 each — **zero multi-bit rows.**
+  SwordCombat rows for `Thrust|Slash = 0x06`: **0** (for `0x02`: 3, for `0x04`: 6).
+  And the lookup is an exact dictionary match, not a flag test —
+  `ACE.DatLoader/FileTypes/CombatManeuverTable.cs:75`
+  (`attackTypes.Table.TryGetValue(attackType, out var maneuvers)`), read directly.
+* **L1-2. VERIFIED — our melee swing prediction MISSED the CMT for most weapons in the game.**
+  `ui/ac_attack_type_for_weapon.js::inferAttackTypeForWeapon` returns the wire
+  `W_AttackType` **verbatim** ("Don't mask, don't AND"), which is multi-bit on most real
+  weapons (`Thrust|Slash = 0x06` swords, `DoubleSlash|DoubleThrust = 0xA0` daggers), and
+  `ui/ac_combat_maneuver.js::getCombatManeuver` keys the tree with an exact
+  `typeMap.get(attackType)`. By L1-1 that can never hit a row -> `motionCmd === null` ->
+  `picking.js` fell through to `em.setSwingPose(localGuid)`, the canned "vibe pose" arm
+  tween, instead of the real SlashMed/BackhandMed/ThrustLow clip. **Fixed (DEC-16).**
+* **L1-3. REFUTED IN PLACE — the in-file claim that `getCombatManeuver` resolves multi-bit
+  values "via the IsThrustSlash branch" was FALSE.** There is no such branch: `opts.isThrustSlash`
+  only picks `subdivision` (0.33 vs 0.66) AFTER the lookup has already succeeded, and
+  `picking.js` never passed `opts` at all, so `subdivision` was **always 0.33** even for
+  thrust/slash weapons where ACE uses 0.66 (`Player_Melee.cs:457-458`). Two stale comments
+  corrected in place. See L2/R12.
+* **L1-4. VERIFIED — ACE's server-side collapse is `WorldObject_Weapon.cs:1050-1161`
+  `GetAttackType(stance, powerLevel, offhand)`** with `ThrustThreshold = 0.33f`
+  (same file, line 1033), called from `Player_Melee.cs:456` inside `GetSwingAnimation()`,
+  which is the function whose result ACE broadcasts as the swing motion
+  (`Player_Melee.cs:406-424`). Read directly. Ported to JS (DEC-16).
+* **L1-5. VERIFIED — the missile aim-level ladder is already faithful.** ACE
+  `Creature_Missile.cs:435-465 GetAimLevel` computes `zAngle = normalize(velocity).Z * 90`
+  and buckets at `>=82.5 / 67.5 / 52.5 / 37.5 / 22.5 / 7.5`, then `> -7.5 / -22.5 / -37.5 /
+  -52.5 / -67.5 / -82.5`. `ui/ac_aim_level_for_velocity.js:129-147` matches term for term
+  INCLUDING the inclusive/exclusive asymmetry at the AimLevel band. No defect found;
+  nothing changed here. Also re-confirmed L1-1's corollary: the CMT has zero ranged-stance
+  rows, so the missile branch's CMT call is diag-only by design and its miss is not a bug.
+
+
 ---
 
 ## L2 — REFUTED / CORRECTED (do not resurrect without new evidence)
+
+* **R12. "Multi-bit `W_AttackType` is handled downstream by `getCombatManeuver`'s
+  IsThrustSlash branch."** FALSE — asserted in two comments in
+  `ui/ac_attack_type_for_weapon.js` (the `inferAttackTypeForWeapon` docstring and the
+  Wave-6 wire-path comment) since 2026-05-26. `getCombatManeuver` has no such branch;
+  it does an exact `typeMap.get(attackType)`, and `opts.isThrustSlash` only selects the
+  post-lookup power subdivision — and `picking.js` never passed `opts`. Refuted by
+  reading both functions plus the 102-row CMT dump (L1-1/L1-2). Both comments corrected
+  in place; the real collapse now lives in `resolveAttackTypeForStance` (DEC-16).
 
 * **R1. "`contact_allows_move` blocks casting."** FALSE. It is `vfptr[11] = IsCreature`, an
   AIRBORNE check (gravity + CONTACT_TS + ON_WALKABLE_TS). Claimed confidently by an earlier
@@ -722,6 +770,24 @@ ACE's implemented set; a cast failing this way is a DATA mismatch, not a client 
   (A1/A2/E1/E2/E6, F1 adversarially). Reverting would reintroduce the fabricated-animation
   layer plus the dedup window that G4 shows breaches on 50.3% of spells at ZERO latency.
   **Judged by PARITY-B on the evidence, per DEC-11's instruction not to leave it hanging.**
+* **DEC-16 (2026-08-13). LANDED: the melee CMT lookup collapses `W_AttackType` first.**
+  New `resolveAttackTypeForStance(rawAttackType, stance, powerLevel)` +
+  `isThrustSlashAttackType(raw)` in `ui/ac_attack_type_for_weapon.js` — a line-for-line
+  port of ACE `WorldObject_Weapon.cs:1050-1161` (DualWieldCombat / SwordShieldCombat /
+  SwordCombat branches, the Offhand-bit strip at 1057-1061, and the universal
+  `Thrust|Slash` collapse at 1154-1160, `ThrustThreshold = 0.33`). `scene3d/picking.js`'s
+  melee branch now calls it before `getCombatManeuver`, and passes
+  `{ isThrustSlash }` so `subdivision` is **0.66** for thrust/slash weapons per
+  `Player_Melee.cs:457-458` instead of always 0.33. Justified by L1-1..L1-4.
+  **Deliberately NOT ported: `GetOffhandAttackType`** (`WorldObject_Weapon.cs:1104+`),
+  which needs the per-swing `DualWieldAlternate` toggle (`Player_Melee.cs:442-445`) that
+  the client does not track — an offhand main-hand guess would predict a swing the server
+  did not choose. **Deliberately NOT invented: any client-only reduction for masks ACE
+  itself leaves multi-bit** (e.g. `Slash|DoubleSlash` in SwordShieldCombat) — the port
+  reproduces the miss, because a prediction the server would not make is worse than none.
+  DEC-2 compliant (no combat-mode change); DEC-4 compliant (no new URL flag).
+  Tests: `tests/cmt_attack_type_collapse.test.mjs` — 11/11 pass, transcribing the ACE
+  branches case by case; the DAT evidence is `crates/holtburger-dat/examples/dump_cmt_attack_types.rs`.
 * **DEC-5 (2026-08-12).** Fix order for casting: precondition (C1) -> re-measure -> only then
   reconsider the prediction layer (R5).
 

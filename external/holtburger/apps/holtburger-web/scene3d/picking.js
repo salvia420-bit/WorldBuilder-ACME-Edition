@@ -3,6 +3,8 @@ import { getCombatManeuver, loadCombatManeuverTable } from "../ui/ac_combat_mane
 import {
   ATTACK_TYPE,
   inferAttackTypeForWeapon,
+  resolveAttackTypeForStance,
+  isThrustSlashAttackType,
 } from "../ui/ac_attack_type_for_weapon.js";
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
@@ -1486,14 +1488,30 @@ export function setupClickPicking({
         powerLevel: slider,
         isDualWield: em?.isDualWield?.(localGuid) ?? false,
       });
-      const attackType = (inferredType === ATTACK_TYPE.Undef)
+      const rawAttackType = (inferredType === ATTACK_TYPE.Undef)
         ? ATTACK_TYPE_SLASH
         : inferredType;
+      // DEC-16 (PARITY-C 2026-08-13) — collapse the raw (possibly
+      // MULTI-BIT) `W_AttackType` to the single-bit key the CMT is
+      // actually indexed on, exactly as ACE does at
+      // `WorldObject_Weapon.cs:1050` before its own `CombatTable.GetMotion`
+      // call (`Player_Melee.cs:456`). Retail CMT 0x30000000 has ZERO
+      // multi-bit rows (all 102 verified — see
+      // `crates/holtburger-dat/examples/dump_cmt_attack_types.rs`), so
+      // before this the lookup MISSED for every Thrust|Slash sword and
+      // every DoubleSlash|DoubleThrust dagger and the local swing fell
+      // back to the canned vibe pose.
+      const attackType = resolveAttackTypeForStance(rawAttackType, stance, slider);
+      // `subdivision = 0.66` for thrust/slash weapons — ACE
+      // `Player_Melee.cs:457-458` + `WorldObject_Weapon.cs:1039`
+      // (`IsThrustSlash`). Computed off the RAW mask, not the collapsed
+      // one, because the collapse destroys the bit pair it tests.
+      const cmtOpts = { isThrustSlash: isThrustSlashAttackType(rawAttackType) };
       // Wave 2 Phase 4: feed `prevMeleeMotion` to the CMT picker so the
       // signature matches the ACE port in ac_combat_maneuver.js (the
       // arg is forward-compat for the retail alternation path; the
       // active picker uses power-bar threshold per ACE Player_Melee.cs).
-      const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider, prevMeleeMotion);
+      const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider, prevMeleeMotion, undefined, cmtOpts);
       if (motionCmd) prevMeleeMotion = (motionCmd >>> 0);
       // F10-3 — resolve the actual swing-clip length so the power meter can
       // track the real swing cadence instead of the pure-power heuristic

@@ -577,9 +577,15 @@ void EQUIP_MASK_SHIELD;
  * `ATTACK_TYPE` value. Single bits are the common CMT-row key
  * (`r.tree.get(stance).get(height).get(attackType)` per
  * `ACE.DatLoader/FileTypes/CombatManeuverTable.cs::Unpack`); multi-bit
- * values (Thrust|Slash, DoubleSlash|DoubleThrust) are handled by the
- * downstream `getCombatManeuver` lookup via the `IsThrustSlash`
- * branch.
+ * values (Thrust|Slash, DoubleSlash|DoubleThrust) must be collapsed by
+ * `resolveAttackTypeForStance` (bottom of this file) BEFORE the CMT
+ * lookup.
+ *
+ * CORRECTED 2026-08-13 (DEC-16): the note that used to sit here — that
+ * `getCombatManeuver` handles multi-bit via an IsThrustSlash branch —
+ * was FALSE. That function does an exact `typeMap.get(attackType)` and
+ * all 102 rows of retail CMT 0x30000000 are single-bit, so a multi-bit
+ * return MISSED and the swing fell back to the canned vibe pose.
  *
  * @param {EquippedWeapon | null | undefined} weapon
  * @param {InferAttackTypeOpts} [opts]  optional refinement inputs;
@@ -642,8 +648,9 @@ export function inferAttackTypeForWeapon(weapon, opts) {
   // the entity (non-zero bitmask), return it verbatim. Don't mask,
   // don't AND — multi-bit values like `Thrust|Slash = 0x06` (most
   // swords) and `DoubleSlash|DoubleThrust = 0xA0` (daggers) need to
-  // reach `getCombatManeuver` intact so its `IsThrustSlash` branch
-  // can resolve them at lookup time. Closes the Phase 13 two-handed
+  // reach `resolveAttackTypeForStance` INTACT — that port of ACE's
+  // `GetAttackType` needs the raw bit pairs to pick the single-bit CMT
+  // key (DEC-16). It, not `getCombatManeuver`, resolves them. Closes the Phase 13 two-handed
   // limitation: spears now resolve to `Thrust = 0x02` instead of
   // `Slash = 0x04`. Falls through to the EquipMask heuristic when
   // `attackType` is 0 (pre-property-arrival ObjectCreate, or
@@ -703,4 +710,133 @@ export function inferAttackTypeForWeapon(weapon, opts) {
   // — usually means the inventory snapshot caught the entity mid-
   // unequip and the slot mask hasn't refreshed yet).
   return ATTACK_TYPE.Undef;
+}
+
+// ---------------------------------------------------------------------
+// PARITY-C (2026-08-13) — DEC-16: multi-bit W_AttackType → single CMT key
+//
+// `inferAttackTypeForWeapon` returns the wire `W_AttackType` VERBATIM,
+// which for most real weapons is MULTI-BIT (`Thrust|Slash = 0x06` on
+// swords, `DoubleSlash|DoubleThrust = 0xA0` on daggers). The comment
+// above claiming "the downstream getCombatManeuver lookup handles
+// multi-bit via its IsThrustSlash branch" was WRONG — `getCombatManeuver`
+// keys the CMT tree with `typeMap.get(attackType)`, an exact match.
+//
+// L1 EVIDENCE (re-read, not inherited): retail CMT 0x30000000 has 102
+// maneuvers and EVERY row's `attack_type` is a single bit — dumped by
+// `crates/holtburger-dat/examples/dump_cmt_attack_types.rs`:
+//     0x0001 x11  0x0002 x12  0x0004 x21  0x0008 x3  0x0010 x7
+//     0x0020 x9   0x0040 x9   0x0080 x6   0x0100 x6  0x0200..0x4000 x3
+//     SwordCombat rows for 0x06: 0   for 0x02: 3   for 0x04: 6
+// So a multi-bit key can never hit a row: the melee prediction fell all
+// the way through to the canned `setSwingPose` vibe pose for every
+// Thrust|Slash weapon in the game.
+//
+// The fix is the collapse ACE already performs server-side before its
+// own `CombatTable.GetMotion` call:
+//   `~/ace-server/Source/ACE.Server/WorldObjects/WorldObject_Weapon.cs:1050-1161`
+//   `GetAttackType(MotionStance stance, float powerLevel, bool offhand)`
+//   with `ThrustThreshold = 0.33f` (same file line 1033), called from
+//   `Player_Melee.cs:456` inside `GetSwingAnimation()`.
+// Ported below line-for-line for the non-offhand case. Offhand
+// (`GetOffhandAttackType`) needs the per-swing `DualWieldAlternate`
+// toggle (`Player_Melee.cs:442-445`) which the client does not track;
+// it is deliberately NOT ported — see the ledger.
+
+/** ACE `WorldObject_Weapon.ThrustThreshold` (WorldObject_Weapon.cs:1033). */
+export const THRUST_THRESHOLD = 0.33;
+
+// Low-16 MotionStance codes. Callers pass `__getCurrentStanceLow()`, so
+// both sides are masked to 16 bits and a full `0x8000003E` also works.
+const STANCE_LOW_SWORD = 0x003e;
+const STANCE_LOW_SWORD_SHIELD = 0x0040;
+const STANCE_LOW_DUAL_WIELD = 0x0046;
+
+const has = (v, flags) => ((v & flags) >>> 0) === (flags >>> 0);
+
+/**
+ * ACE `WorldObject_Weapon.IsThrustSlash` (WorldObject_Weapon.cs:1039-1048).
+ * Drives `subdivision = 0.66` in `Player_Melee.GetSwingAnimation` (line 457).
+ * @param {number} rawAttackType raw multi-bit `W_AttackType`
+ */
+export function isThrustSlashAttackType(rawAttackType) {
+  const a = (rawAttackType ?? 0) >>> 0;
+  return (
+    has(a, ATTACK_TYPE.Slash | ATTACK_TYPE.Thrust) ||
+    has(a, ATTACK_TYPE.DoubleSlash | ATTACK_TYPE.DoubleThrust) ||
+    has(a, ATTACK_TYPE.TripleSlash | ATTACK_TYPE.TripleThrust) ||
+    has(a, ATTACK_TYPE.DoubleSlash) // stiletto
+  );
+}
+
+/**
+ * Port of ACE `GetAttackType(stance, powerLevel, offhand=false)`.
+ * Collapses a raw (possibly multi-bit) `W_AttackType` to the single-bit
+ * value the CombatManeuverTable is actually keyed on.
+ *
+ * @param {number} rawAttackType raw `W_AttackType` bitmask off the weapon
+ * @param {number} stance MotionStance (full u32 or low-16; masked here)
+ * @param {number} powerLevel 0..1 power bar
+ * @returns {number} single-bit `ATTACK_TYPE.*`
+ */
+export function resolveAttackTypeForStance(rawAttackType, stance, powerLevel) {
+  let a = (rawAttackType ?? 0) >>> 0;
+  if (a === 0) return ATTACK_TYPE.Undef;
+  const s = (stance >>> 0) & 0xffff;
+  const p = Math.max(0, Math.min(1, Number.isFinite(powerLevel) ? powerLevel : 0));
+
+  // ACE lines 1057-1061: Offhand bits never belong on a main-hand attack.
+  const OFFHAND_ANY =
+    ATTACK_TYPE.OffhandThrust | ATTACK_TYPE.OffhandSlash |
+    ATTACK_TYPE.OffhandDoubleSlash | ATTACK_TYPE.OffhandTripleSlash |
+    ATTACK_TYPE.OffhandDoubleThrust | ATTACK_TYPE.OffhandTripleThrust;
+  if ((a & OFFHAND_ANY) !== 0) a = (a & ~OFFHAND_ANY) >>> 0;
+
+  if (s === STANCE_LOW_DUAL_WIELD) {
+    // ACE lines 1063-1106
+    if (has(a, ATTACK_TYPE.TripleThrust | ATTACK_TYPE.TripleSlash)) {
+      a = p >= THRUST_THRESHOLD ? ATTACK_TYPE.TripleSlash : ATTACK_TYPE.TripleThrust;
+    } else if (has(a, ATTACK_TYPE.DoubleThrust | ATTACK_TYPE.DoubleSlash)) {
+      a = p >= THRUST_THRESHOLD ? ATTACK_TYPE.DoubleSlash : ATTACK_TYPE.DoubleThrust;
+    } else if (has(a, ATTACK_TYPE.DoubleThrust)) {
+      a = (p >= THRUST_THRESHOLD || !has(a, ATTACK_TYPE.Thrust))
+        ? ATTACK_TYPE.DoubleThrust : ATTACK_TYPE.Thrust;
+    } else if (has(a, ATTACK_TYPE.Thrust | ATTACK_TYPE.DoubleSlash)) {
+      a = p >= THRUST_THRESHOLD ? ATTACK_TYPE.DoubleSlash : ATTACK_TYPE.Thrust;
+    } else if (has(a, ATTACK_TYPE.Thrust | ATTACK_TYPE.TripleSlash)) {
+      a = p >= THRUST_THRESHOLD ? ATTACK_TYPE.TripleSlash : ATTACK_TYPE.Thrust;
+    }
+  } else if (s === STANCE_LOW_SWORD_SHIELD) {
+    // ACE lines 1108-1129 — force thrust with a shield + multi-strike.
+    if (has(a, ATTACK_TYPE.TripleThrust)) {
+      a = (p >= THRUST_THRESHOLD || !has(a, ATTACK_TYPE.Thrust))
+        ? ATTACK_TYPE.TripleThrust : ATTACK_TYPE.Thrust;
+    } else if (has(a, ATTACK_TYPE.DoubleThrust)) {
+      a = (p >= THRUST_THRESHOLD || !has(a, ATTACK_TYPE.Thrust))
+        ? ATTACK_TYPE.DoubleThrust : ATTACK_TYPE.Thrust;
+    } else if (
+      has(a, ATTACK_TYPE.Thrust) &&
+      (a & (ATTACK_TYPE.DoubleSlash | ATTACK_TYPE.TripleSlash)) !== 0
+    ) {
+      a = ATTACK_TYPE.Thrust;
+    }
+  } else if (s === STANCE_LOW_SWORD) {
+    // ACE lines 1131-1152 — force slash with no shield + multi-strike.
+    if (has(a, ATTACK_TYPE.TripleSlash)) {
+      a = (p >= THRUST_THRESHOLD || !has(a, ATTACK_TYPE.Thrust))
+        ? ATTACK_TYPE.TripleSlash : ATTACK_TYPE.Thrust;
+    } else if (has(a, ATTACK_TYPE.DoubleSlash)) {
+      a = (p >= THRUST_THRESHOLD || !has(a, ATTACK_TYPE.Thrust))
+        ? ATTACK_TYPE.DoubleSlash : ATTACK_TYPE.Thrust;
+    } else if (has(a, ATTACK_TYPE.DoubleThrust)) {
+      a = ATTACK_TYPE.Thrust;
+    }
+  }
+
+  // ACE lines 1154-1160 — universal Thrust|Slash collapse (also the ONLY
+  // reduction TwoHandedCombat gets; ACE has no two-handed branch).
+  if (has(a, ATTACK_TYPE.Thrust | ATTACK_TYPE.Slash)) {
+    a = p >= THRUST_THRESHOLD ? ATTACK_TYPE.Slash : ATTACK_TYPE.Thrust;
+  }
+  return a >>> 0;
 }
