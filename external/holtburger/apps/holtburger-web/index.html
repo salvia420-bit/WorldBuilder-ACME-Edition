@@ -2993,6 +2993,32 @@
                     !health.layers[k].present ||
                     health.layers[k].files < 100
                 );
+                // PACK/GEOMR presence (2026-08-13). serve.py records whether
+                // this dist declares `world_index` + carries packs, and how many
+                // GEOMR rows the bake wrote. A pack-less dist is LEGAL but makes
+                // ?packSource presence-route OFF, which cascades into
+                // ?geomBundles and ?reliefBundles disarming — a flat world with
+                // no single loud failure. Surface it in the browser too, so the
+                // terminal that started the server is not the only witness.
+                const pt = health.pack_tree;
+                if (pt) {
+                  if (!pt.world_index_declared || !pt.packs_present) {
+                    console.warn(
+                      "[health] LEGACY DIST (no world_index/packs) — ?packSource " +
+                        "routes OFF, disarming ?geomBundles and ?reliefBundles. " +
+                        "Baked-relief geometry is unavailable against this dist.",
+                      pt
+                    );
+                  } else {
+                    console.log(
+                      "[health] pack tree OK: packs present, geomr_rows_baked=" +
+                        pt.geom_relief_rows_baked
+                    );
+                  }
+                }
+                for (const w of health.warnings || []) {
+                  console.warn("[health] " + w);
+                }
                 if (!empty.length) {
                   console.log(
                     "[health] baked data layers OK:",
