@@ -107,6 +107,13 @@ const body = spliceModule(src, {
   label: "plugins/combat-bar.js",
   provided: [],
   stubs: {
+    // DEC-12 (2026-08-13, PARITY-B): `plugins/combat-bar.js` now imports
+    // `noteCombatModeRequest` from `../ui/ac_combat_mode_intent.js` to record
+    // the player's combat-mode intent before a cast. This test never drives
+    // that path (it exercises `readSkillTrainingLevel` only), so an explicit
+    // inert stub is correct — a catch-all proxy would make the assertions
+    // unfalsifiable, which is exactly what spliceModule refuses.
+    noteCombatModeRequest: INERT,
     getSpellBarSlots: "() => []",
     setSpellBarSlot: INERT,
     getActiveSpellBar: "() => 0",
