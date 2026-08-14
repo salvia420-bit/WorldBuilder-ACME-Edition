@@ -3090,7 +3090,7 @@ public class JsonCommandProcessor {
             new { name = "melt-reference",     args = "topic?",                              description = "Agent briefing for DEFERRED melt functionality (not implemented): topics dm-textures, id-migration, cache-converters, acedb-recipes. No topic = list; topic = full markdown section with melt file:line pointers. Read-only knowledge surface." },
             new { name = "compare-render-corners", args = "lbX, lbY, toleranceMetres?, includeAll?", description = "Compares full-quat vs yaw-only building corner placement for a landblock; failures[] when divergence > tolerance (default 0.05m); buildings[] null unless includeAll" },
             new { name = "obj-export",         args = "datId, outputPath",                     description = "Exports a GfxObj/Setup (datId accepts 0x hex or decimal) to a Wavefront .obj" },
-            new { name = "obj-import",         args = "objPath, surfaceDid, gfxObjId?, setupId?", description = "Imports a Wavefront .obj as a GfxObj/Setup (ids accept 0x hex or decimal)" },
+            new { name = "obj-import",         args = "objPath, surfaceDid, gfxObjId?, setupId?, overwrite?, preservePhysics?, gfxObjOnly?", description = "Imports a Wavefront .obj as a GfxObj/Setup (ids accept 0x hex or decimal); overwrite replaces an existing record, preservePhysics keeps the original's collision, gfxObjOnly skips the companion Setup" },
             new { name = "physics-jump-formula", args = "(jump inputs)",                        description = "Diagnostic: evaluates the jump-height formula for given inputs" },
             new { name = "physics-jump-formula-sweep", args = "caseCount?",                     description = "Diagnostic: sweeps the jump-height formula across caseCount cases (default 1000)" },
             new { name = "physics-replay-trace", args = "traceSubjectPath, probeScenarioPath, maxDriftOverride?", description = "Diagnostic: replays a recorded physics trace against a probe scenario and reports drift" },
@@ -4647,10 +4647,19 @@ public class JsonCommandProcessor {
         uint surfaceDid = ParseUintField(node, "surfaceDid");
         uint gfxObjId = node["gfxObjId"] != null ? ParseUintField(node, "gfxObjId") : 0;
         uint setupId = node["setupId"] != null ? ParseUintField(node, "setupId") : 0;
-        var r = _engine.ObjImport(objPath, surfaceDid, gfxObjId, setupId);
+        bool overwrite = node["overwrite"]?.GetValue<bool>() ?? false;
+        bool preservePhysics = node["preservePhysics"]?.GetValue<bool>() ?? false;
+        bool gfxObjOnly = node["gfxObjOnly"]?.GetValue<bool>() ?? false;
+        var r = _engine.ObjImport(objPath, surfaceDid, gfxObjId, setupId,
+            overwrite, preservePhysics, gfxObjOnly);
         return Serialize(new { success = r.Success, command = "obj-import",
-            gfxObjId = $"0x{r.GfxObjId:X8}", setupId = $"0x{r.SetupId:X8}",
+            gfxObjId = $"0x{r.GfxObjId:X8}",
+            setupId = r.GfxObjOnly ? null : $"0x{r.SetupId:X8}",
             triangleCount = r.TriangleCount, vertexCount = r.VertexCount,
+            overwrite = r.Overwrite, preservedPhysics = r.PreservedPhysics,
+            gfxObjOnly = r.GfxObjOnly,
+            sortCenterPreserved = r.SortCenterPreserved,
+            didDegradePreserved = r.DidDegradePreserved,
             error = r.Error });
     }
 

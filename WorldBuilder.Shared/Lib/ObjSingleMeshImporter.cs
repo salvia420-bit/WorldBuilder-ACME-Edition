@@ -183,7 +183,11 @@ namespace WorldBuilder.Shared.Lib {
                     PosSurface = (short)surfIdx,
                     NegSurface = -1,
                     PosUVIndices = new List<byte> { 0, 0, 0 },
-                    Stippling = StipplingType.Positive,
+                    // NoNeg is REQUIRED for a single-sided poly with no NegUVIndices: the wire
+                    // format (retail, ACE, and DRW's own Unpack) reads NumPts neg-UV bytes when
+                    // SidesType==Clockwise && !NoNeg, but DRW 2.1.2's Pack only writes what's in
+                    // the (empty) list — producing a record that desyncs 3 bytes per polygon.
+                    Stippling = StipplingType.Positive | StipplingType.NoNeg,
                     SidesType = CullMode.Clockwise,
                 };
                 polys[polyKey++] = poly;

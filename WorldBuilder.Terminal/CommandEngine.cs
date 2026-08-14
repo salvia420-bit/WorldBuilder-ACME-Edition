@@ -11600,7 +11600,7 @@ public partial class CommandEngine {
     /// <paramref name="setupId"/> is 0 the engine allocates a free ID in the 0x01FF.. / 0x02FF.. custom range.
     /// </summary>
     public ObjImportResult ObjImport(string objPath, uint surfaceDid, uint gfxObjId = 0, uint setupId = 0,
-            bool overwrite = false) {
+            bool overwrite = false, bool preservePhysics = false, bool gfxObjOnly = false) {
         RequireProject();
         var project = _projectManager.CurrentProject!;
         var dats = project.DocumentManager.Dats;
@@ -11618,7 +11618,7 @@ public partial class CommandEngine {
         if (gfxObjId != 0 && (gfxObjId >> 24) != 0x01)
             return new ObjImportResult(false, gfxObjId, setupId, 0, 0,
                 $"gfxObjId 0x{gfxObjId:X8} must be in the GfxObj namespace (0x01xxxxxx).");
-        if (setupId != 0 && (setupId >> 24) != 0x02)
+        if (!gfxObjOnly && setupId != 0 && (setupId >> 24) != 0x02)
             return new ObjImportResult(false, gfxObjId, setupId, 0, 0,
                 $"setupId 0x{setupId:X8} must be in the Setup namespace (0x02xxxxxx).");
 
@@ -11633,7 +11633,12 @@ public partial class CommandEngine {
             var existing = CollectExistingIds<GfxObj>(dats, portalDoc, 0x01000000);
             gfxObjId = ObjSingleMeshImporter.AllocateNextId(0x01000000, existing);
         }
-        if (setupId == 0) {
+        if (gfxObjOnly) {
+            // Replacing one part of a multi-part retail Setup — the retail Setup already
+            // references this GfxObj id. Never fabricate/stage a companion Setup.
+            setupId = 0;
+        }
+        else if (setupId == 0) {
             var existing = CollectExistingIds<Setup>(dats, portalDoc, 0x02000000);
             setupId = ObjSingleMeshImporter.AllocateNextId(0x02000000, existing);
         }
@@ -11653,7 +11658,7 @@ public partial class CommandEngine {
             if (dats.TryGet<GfxObj>(gfxObjId, out _) || portalDoc.HasEntry(gfxObjId))
                 return new ObjImportResult(false, gfxObjId, setupId, 0, 0,
                     $"gfxObjId 0x{gfxObjId:X8} already exists; pass overwrite:true to replace it.");
-            if (dats.TryGet<Setup>(setupId, out _) || portalDoc.HasEntry(setupId))
+            if (!gfxObjOnly && (dats.TryGet<Setup>(setupId, out _) || portalDoc.HasEntry(setupId)))
                 return new ObjImportResult(false, gfxObjId, setupId, 0, 0,
                     $"setupId 0x{setupId:X8} already exists; pass overwrite:true to replace it.");
         }
@@ -11661,12 +11666,53 @@ public partial class CommandEngine {
         // ObjSingleMeshImporter.BuildGfxObj already built the BSP (physics +
         // drawing trees); no second build here.
 
+        // On overwrite, carry pieces of the ORIGINAL record forward so we only touch what
+        // the caller intends. Project-staged entry wins over DAT-resident (same precedence
+        // as BspBuild).
+        bool preservedPhysics = false, sortCenterPreserved = false, didDegradePreserved = false;
+        if (overwrite) {
+            GfxObj? orig = null;
+            if (portalDoc.TryGetEntry<GfxObj>(gfxObjId, out var stagedOrig) && stagedOrig != null)
+                orig = stagedOrig;
+            else if (dats.TryGet<GfxObj>(gfxObjId, out var datOrig) && datOrig != null)
+                orig = datOrig;
+
+            if (orig != null) {
+                if (preservePhysics) {
+                    // Keep collision byte-identical: copy the original physics section verbatim
+                    // (or its absence) so client and server physics never diverge. Render
+                    // polygons/vertex array/DrawingBSP stay new.
+                    bool origHasPhysics = orig.Flags.HasFlag(DatReaderWriter.Enums.GfxObjFlags.HasPhysics);
+                    gfx.PhysicsPolygons = origHasPhysics ? orig.PhysicsPolygons : null;
+                    gfx.PhysicsBSP = origHasPhysics ? orig.PhysicsBSP : null;
+                    if (origHasPhysics)
+                        gfx.Flags |= DatReaderWriter.Enums.GfxObjFlags.HasPhysics;
+                    else
+                        gfx.Flags &= ~DatReaderWriter.Enums.GfxObjFlags.HasPhysics;
+                    preservedPhysics = true;
+                }
+
+                // BuildGfxObj zeroes SortCenter; the original's depth-sort pivot is authoritative.
+                gfx.SortCenter = orig.SortCenter;
+                sortCenterPreserved = true;
+
+                if (orig.Flags.HasFlag(DatReaderWriter.Enums.GfxObjFlags.HasDIDDegrade)) {
+                    gfx.DIDDegrade = orig.DIDDegrade;
+                    gfx.Flags |= DatReaderWriter.Enums.GfxObjFlags.HasDIDDegrade;
+                    didDegradePreserved = true;
+                }
+            }
+        }
+
         portalDoc.SetEntry(gfxObjId, gfx);
-        portalDoc.SetEntry(setupId, setup);
+        if (!gfxObjOnly)
+            portalDoc.SetEntry(setupId, setup);
 
         int triCount = gfx.Polygons?.Count ?? 0;
         int vtxCount = gfx.VertexArray?.Vertices?.Count ?? 0;
-        return new ObjImportResult(true, gfxObjId, setupId, triCount, vtxCount);
+        return new ObjImportResult(true, gfxObjId, setupId, triCount, vtxCount,
+            Overwrite: overwrite, PreservedPhysics: preservedPhysics, GfxObjOnly: gfxObjOnly,
+            SortCenterPreserved: sortCenterPreserved, DidDegradePreserved: didDegradePreserved);
     }
 
     /// <summary>

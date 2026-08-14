@@ -1241,7 +1241,12 @@ public record ObjImportResult(
     bool Success,
     uint GfxObjId, uint SetupId,
     int TriangleCount, int VertexCount,
-    string? Error = null);
+    string? Error = null,
+    bool Overwrite = false,
+    bool PreservedPhysics = false,
+    bool GfxObjOnly = false,
+    bool SortCenterPreserved = false,
+    bool DidDegradePreserved = false);
 
 public record BspBuildResult(
     uint GfxObjId, string HexId,
