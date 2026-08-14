@@ -279,6 +279,7 @@ public class JsonCommandProcessor {
             ["obj-export"] = CmdObjExport,
             ["gfxobj-region-summary"] = CmdGfxObjRegionSummary,
             ["obj-import"] = CmdObjImport,
+            ["relief-plan-apply"] = CmdReliefPlanApply,
             ["bsp-build"] = CmdBspBuild,
             ["weenie-snapshot"] = CmdWeenieSnapshot,
             ["weenie-template-list"] = CmdWeenieTemplateList,
@@ -3093,6 +3094,7 @@ public class JsonCommandProcessor {
             new { name = "obj-export",         args = "datId, outputPath",                     description = "Exports a GfxObj/Setup (datId accepts 0x hex or decimal) to a Wavefront .obj" },
             new { name = "gfxobj-region-summary", args = "datId, outputPath, thumbnails?, thumbDir?, maxThumbDim?", description = "Exports a per-model region summary JSON for a GfxObj (or one per distinct Setup part): coplanar same-material regions with outer/hole boundary loops, plane + planarity, UV affine fits, region adjacency (convex/concave/coplanar dihedrals), physics-vs-render hull comparison, and a material table with downscaled texture thumbnails (default <name>_thumbs/, maxThumbDim 128)" },
             new { name = "obj-import",         args = "objPath, surfaceDid, gfxObjId?, setupId?, overwrite?, preservePhysics?, gfxObjOnly?", description = "Imports a Wavefront .obj as a GfxObj/Setup (ids accept 0x hex or decimal); overwrite replaces an existing record, preservePhysics keeps the original's collision, gfxObjOnly skips the companion Setup" },
+            new { name = "relief-plan-apply",  args = "summaryPath, planPath, objPath, outObjPath, import?, checksReport?", description = "Deterministic relief-plan generator + validation gate: consumes a gfxobj-region-summary JSON and a declarative plan (ops: plinth, opening_surround, belt_course), appends validated additive geometry to the model's obj-export OBJ (original bytes preserved as an exact prefix, UV-continuous folds, no T-junctions), runs an 18-check gate, and with import:true re-imports over the retail GfxObj id (overwrite+preservePhysics+gfxObjOnly). On gate failure only the checks report is written" },
             new { name = "physics-jump-formula", args = "(jump inputs)",                        description = "Diagnostic: evaluates the jump-height formula for given inputs" },
             new { name = "physics-jump-formula-sweep", args = "caseCount?",                     description = "Diagnostic: sweeps the jump-height formula across caseCount cases (default 1000)" },
             new { name = "physics-replay-trace", args = "traceSubjectPath, probeScenarioPath, maxDriftOverride?", description = "Diagnostic: replays a recorded physics trace against a probe scenario and reports drift" },
@@ -4679,6 +4681,28 @@ public class JsonCommandProcessor {
             sortCenterPreserved = r.SortCenterPreserved,
             didDegradePreserved = r.DidDegradePreserved,
             error = r.Error });
+    }
+
+    private string CmdReliefPlanApply(System.Text.Json.Nodes.JsonNode node) {
+        var summaryPath = node["summaryPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'summaryPath' field");
+        var planPath = node["planPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'planPath' field");
+        var objPath = node["objPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'objPath' field");
+        var outObjPath = node["outObjPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outObjPath' field");
+        bool import = node["import"]?.GetValue<bool>() ?? false;
+        string? checksReport = node["checksReport"]?.GetValue<string>();
+        var r = _engine.ReliefPlanApply(summaryPath, planPath, objPath, outObjPath, import, checksReport);
+        return Serialize(new { success = r.Success, command = "relief-plan-apply",
+            gfxObj = r.GfxObj, addedTris = r.AddedTris, totalTris = r.TotalTris,
+            checksPassed = r.ChecksPassed, checksFailed = r.ChecksFailed,
+            outObjPath = r.OutObjPath, checksReportPath = r.ChecksReportPath,
+            imported = r.Imported, importTriCount = r.ImportTriCount,
+            importPreservedPhysics = r.ImportPreservedPhysics,
+            planErrors = r.PlanErrors, failedChecks = r.FailedChecks,
+            warnings = r.Warnings, error = r.Error });
     }
 
     private string CmdBspBuild(System.Text.Json.Nodes.JsonNode node) {
