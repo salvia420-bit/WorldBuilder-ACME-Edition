@@ -38,3 +38,27 @@ files: docs/reengineering/impl/PARITY-LEDGER.md (§L2/P1 + §L4b only),
 note: §L4b overlaps the INTEGRATOR's L4b baseline refresh — my edit replaces only the prose
       above the baseline bullets and leaves every measured number untouched, so the two
       should merge cleanly.
+
+### LANE A (PORTAL-GATE) — 2026-08-14 — branch `lane/portal-gate-20260814`
+files: scene3d/atmosphere_pipeline.js, scene3d/index.js, scene3d/cells.js,
+       tests/portal_punch_occlusion_gate.test.mjs, harness/portal-gate-probe.mjs,
+       docs/url-flags.md, docs/reengineering/impl/task-A-report.md
+note: declared overlap with lane D at the punch-feed call site (cells.js `tickPortalPunch`).
+      I keep my cells.js edits to that one function; D keeps to new files + one call site;
+      hand-merge at integration, never revert.
+### LANE D (PORTAL-PASS2) — 2026-08-14 — branch `lane/portal-pass2-20260814`
+files: scene3d/portal_pass2.js (NEW), tests/portal_pass2.test.mjs (NEW),
+       harness/run-js-headless.mjs (one registration line),
+       docs/url-flags.md (one new `portalPass2` row),
+       scene3d/cells.js (SHARED — 4 small hunks, all inside/around `tickPortalPunch`)
+note: declared overlap with LANE A, which is fixing the inert `?portalStencil` occlusion gate in
+      the SAME punch path. My cells.js hunks are listed line-by-line in
+      `task-D-report.md` §"Shared lines touched" for hand-merge. I touch neither
+      scene3d/portal_punch.js nor atmosphere_pipeline.js (Lane A's surface), and neither
+      src/lib.rs nor pkg/ (Lane B's).
+### LANE B / ORACLE — 2026-08-14 — branch `lane/oracle-20260814`
+files: src/lib.rs (apply_inventory_object_create + one new native test module),
+       docs/reengineering/impl/task-B-report.md, docs/reengineering/impl/ACTIVE-LANES.md
+note: disjoint from lanes A and D (both in scene3d/ portal rendering). I am the only lane
+      rebuilding wasm from source; I take the flock build lock for every build. No URL flag
+      added, no flag default moved.

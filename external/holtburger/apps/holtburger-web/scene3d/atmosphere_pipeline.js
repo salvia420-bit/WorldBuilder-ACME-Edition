@@ -429,6 +429,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     lensFlare: lensFlareOpt = false,
     portalStencil = false,
     portalPunch = false,
+    punchOcclusion = false,
   } = opts ?? {};
   if (!atmosphereRuntime) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
@@ -539,10 +540,18 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // correctly. The offending consumer was not identified; until it is, the
     // default must not pay this.
     //
-    // So the gate rides ?portalStencil, which already implies "I want a stencil
-    // attachment and I accept the packed depth format". Absent it, portalPunch
-    // behaves exactly as it did before the gate existed.
-    stencilBuffer: !!portalStencil,
+    // So the gate rides a flag, and NOT the default. Two flags reach it:
+    //
+    //   ?punchOcclusion=on  — 2026-08-14, LANE A. The gate's OWN flag: allocate
+    //     the stencil attachment, arm PortalPunchPass's MARK/PUNCH pair, and
+    //     change NOTHING else. This is the arm to measure.
+    //   ?portalStencil=on   — the historical spelling, kept working. It also
+    //     instantiates the RETIRED PortalStencilPass, which is why it could
+    //     never exercise the gate (see the `portalStencilPass` block below).
+    //
+    // Both absent (the default) → no stencil attachment, plain DepthFormat,
+    // legacy unconditional punch: byte-identical to the pre-gate pipeline.
+    stencilBuffer: !!portalStencil || !!punchOcclusion,
     multisampling: msaaSamples,
   });
   composer.setSize(width, height);
@@ -606,7 +615,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (!stableDepthShare) {
     const _depthBufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
     sceneDepthTexture = new THREE.DepthTexture(_depthBufSize.x, _depthBufSize.y);
-    if (portalStencil) {
+    if (portalStencil || punchOcclusion) {
       // Depth + stencil must share ONE packed attachment when stencil is on;
       // a depth-only texture can't coexist with a stencil buffer. AerialPerspective
       // reads `.r`, which still returns the depth component of a packed texture.
@@ -723,10 +732,34 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // slot and fxPass. Feed via portalStencilPass.setApertures(flat) each frame
   // (cells.js). Only added when the flag is on → the composer's pass list is
   // byte-identical when off.
+  //
+  // 2026-08-14 (LANE A) — WHY THIS PASS COULD NEVER TEST THE PUNCH GATE. Until
+  // today `?portalStencil=on` was the only way to get a stencil attachment, so
+  // it was also the only way to arm PortalPunchPass's occlusion gate — and it
+  // arms this scaffold in the same breath. The scaffold's `tickPortalStencil`
+  // (cells.js) PARKS every visible interior cell container on
+  // RENDER_LAYER_PORTAL_CELL (layer 2) and draws them itself, flat-shaded,
+  // through its own MARK/RESET punch. The punch's mechanism is the world/cells
+  // layer split (`preFrameSkySync` `punchActive`), whose cells pass renders
+  // INDOOR_ONLY = layer 1 — which the scaffold has just emptied. So with
+  // `?portalStencil=on` the punch pass could arm, feed and draw and still
+  // change nothing anyone could see: its consumer had no geometry left.
+  // That is the "gate is reachable but does nothing" of HANDOFF-2026-08-13 O-P1.
+  // `?punchOcclusion=on` is the separation: stencil attachment + gate, no
+  // scaffold, cells stay on layer 1.
   let portalStencilPass = null;
   if (portalStencil) {
     portalStencilPass = new PortalStencilPass(scene, camera);
     composer.addPass(portalStencilPass);
+    if (portalPunch) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[portalStencil] the retired stencil scaffold is ON: it moves interior " +
+          "cells to layer 2, so ?portalPunch's cells pass (layer 1) has nothing " +
+          "to draw and the punch cannot be judged in this arm. Use " +
+          "?punchOcclusion=on to exercise the punch occlusion gate.",
+      );
+    }
   }
 
   // Portal-punch pass (2026-07-05, ?portalPunch, default OFF). Runs right after

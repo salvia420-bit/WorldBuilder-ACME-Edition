@@ -48,6 +48,10 @@ import {
   nodeInLandblock,
   pickSidednessSource,
 } from "./portal_clip.js";
+// LANE-D `?portalPass2` (default OFF). Import only — nothing here runs, and no
+// GPU resource is created, unless PORTAL_PASS2 is true. See scene3d/portal_pass2.js.
+import { readPortalPass2Flag, portalPass2Filter, portalPass2DisarmedDiag } from "./portal_pass2.js";
+const PORTAL_PASS2 = readPortalPass2Flag(null);
 import {
   meshToGeometryGroups,
   meshToFusedGeometry,
@@ -374,6 +378,10 @@ const PORTAL_PUNCH_FLAG_ON = (() => {
   return false;
 })();
 
+/** Last `?portalPass2` verdict, module-scoped so `__portalPass2.last()` works
+ *  regardless of which scene3d instance is live. */
+let _portalPass2Last = null;
+
 // Boot banner + flag mirror (round 7). `_portalPunchDiag === undefined` cost a
 // round-trip because it could mean "flag off", "stale bundle", or "the tick
 // never ran". `window.__portalPunch` is stamped at MODULE LOAD, so its absence
@@ -390,6 +398,24 @@ try {
     // inference, and an eye test has to know which one it is looking at.
     sidednessMode: PUNCH_SIDEDNESS_MODE,
   };
+  // LANE-D diag surface. Stamped at MODULE LOAD for the same reason
+  // `__portalPunch` is: absent === STALE BUNDLE, and nothing else.
+  // `last()` returns the per-BUILDING breakdown (offered/kept/droppedOccluded
+  // per group, in back-to-front draw order) from the most recent armed tick —
+  // the "armed vs unarmed" tell the next session needs.
+  globalThis.__portalPass2 = {
+    enabled: PORTAL_PASS2,
+    // Read from a module-scoped stamp, NOT from `liveScene3d`: that global is a
+    // one-time init snapshot, so a late-stamped field on it reads null forever.
+    last: () => _portalPass2Last,
+  };
+  if (PORTAL_PASS2) {
+    // eslint-disable-next-line no-console
+    console.log(
+      "[portalPass2] ARMED (default is OFF) — per-building grouping + " +
+      "back-to-front order + nearer-building occluder; read __portalPass2.last()",
+    );
+  }
   if (PORTAL_PUNCH_FLAG_ON) {
     // eslint-disable-next-line no-console
     console.log(
@@ -2893,8 +2919,25 @@ export function tickPortalPunch(scene3d, sessionHandle) {
       ? makeNearPlane(_acCamVec, _acFwdVec)
       : null;
     if (!nearPlane) _punchDiag(scene3d, "no-near-plane(degenerate camera)");
+    // LANE-D `?portalPass2` — retail reachability + per-building grouping +
+    // back-to-front order + nearer-building occluder, applied to the SAME wire
+    // stream before the existing clip. OFF by default: `feedFlat === flat`, no
+    // call, no allocation.
+    let feedFlat = flat;
+    if (PORTAL_PASS2) {
+      const p2 = portalPass2Filter(flat, _psMvpArr, {
+        camAc: _acCamVec,
+        withCellCenter: pick.withCellCenter,
+        withPortalSide: pick.withPortalSide,
+      });
+      feedFlat = p2.flat;
+      scene3d._portalPass2Diag = p2.diag;
+      _portalPass2Last = p2.diag;
+    } else if (scene3d._portalPass2Diag === undefined) {
+      scene3d._portalPass2Diag = portalPass2DisarmedDiag();
+    }
     if (nearPlane) {
-      const res = clipAperturesForPunch(flat, _psMvpArr, {
+      const res = clipAperturesForPunch(feedFlat, _psMvpArr, {
         nearPlane,
         camAc: _acCamVec,
         sampleHeight: heightSamplerFor(sessionHandle),
@@ -2921,11 +2964,17 @@ export function tickPortalPunch(scene3d, sessionHandle) {
       // running, so a single paste is self-describing.
       scene3d._portalPunchDiag = {
         reason: res.kept > 0 ? "ok" : "all-apertures-dropped",
-        offered: (flat && flat.length ? flat[0] | 0 : 0),
+        offered: (feedFlat && feedFlat.length ? feedFlat[0] | 0 : 0),
+        pass2: scene3d._portalPass2Diag ?? null,
         kept: res.kept,
         dropped: res.dropped,
         rect: res.rect,
         gates: {
+          // ?punchOcclusion (2026-08-14, LANE A) — is the MARK/PUNCH stencil
+          // occlusion gate actually armed on the pass this frame? Read off the
+          // pass, not off a flag, so "I passed the flag" and "the composer gave
+          // me a stencil attachment" can never be confused in a diag paste.
+          occlusionGated: pass.occlusionGated === true,
           sidedness: sidednessSource !== "off" && sidednessSource !== "unavailable",
           // "flag" = retail portal_side (v3) · "heuristic" = the round-5
           // AABB-centre inference (v2) · "off" = no gate · "unavailable" =
