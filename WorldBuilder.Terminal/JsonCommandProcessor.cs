@@ -277,6 +277,7 @@ public class JsonCommandProcessor {
             ["extract-retail-heightmaps"] = CmdExtractRetailHeightmaps,
             ["compute-vanilla-baseline"] = CmdComputeVanillaBaseline,
             ["obj-export"] = CmdObjExport,
+            ["gfxobj-region-summary"] = CmdGfxObjRegionSummary,
             ["obj-import"] = CmdObjImport,
             ["bsp-build"] = CmdBspBuild,
             ["weenie-snapshot"] = CmdWeenieSnapshot,
@@ -3090,6 +3091,7 @@ public class JsonCommandProcessor {
             new { name = "melt-reference",     args = "topic?",                              description = "Agent briefing for DEFERRED melt functionality (not implemented): topics dm-textures, id-migration, cache-converters, acedb-recipes. No topic = list; topic = full markdown section with melt file:line pointers. Read-only knowledge surface." },
             new { name = "compare-render-corners", args = "lbX, lbY, toleranceMetres?, includeAll?", description = "Compares full-quat vs yaw-only building corner placement for a landblock; failures[] when divergence > tolerance (default 0.05m); buildings[] null unless includeAll" },
             new { name = "obj-export",         args = "datId, outputPath",                     description = "Exports a GfxObj/Setup (datId accepts 0x hex or decimal) to a Wavefront .obj" },
+            new { name = "gfxobj-region-summary", args = "datId, outputPath, thumbnails?, thumbDir?, maxThumbDim?", description = "Exports a per-model region summary JSON for a GfxObj (or one per distinct Setup part): coplanar same-material regions with outer/hole boundary loops, plane + planarity, UV affine fits, region adjacency (convex/concave/coplanar dihedrals), physics-vs-render hull comparison, and a material table with downscaled texture thumbnails (default <name>_thumbs/, maxThumbDim 128)" },
             new { name = "obj-import",         args = "objPath, surfaceDid, gfxObjId?, setupId?, overwrite?, preservePhysics?, gfxObjOnly?", description = "Imports a Wavefront .obj as a GfxObj/Setup (ids accept 0x hex or decimal); overwrite replaces an existing record, preservePhysics keeps the original's collision, gfxObjOnly skips the companion Setup" },
             new { name = "physics-jump-formula", args = "(jump inputs)",                        description = "Diagnostic: evaluates the jump-height formula for given inputs" },
             new { name = "physics-jump-formula-sweep", args = "caseCount?",                     description = "Diagnostic: sweeps the jump-height formula across caseCount cases (default 1000)" },
@@ -4639,6 +4641,22 @@ public class JsonCommandProcessor {
             datId = r.HexId, datType = r.DatType, found = r.Found,
             outputPath = r.OutputPath, partCount = r.PartCount,
             triangleCount = r.TriangleCount, error = r.Error });
+    }
+
+    private string CmdGfxObjRegionSummary(System.Text.Json.Nodes.JsonNode node) {
+        uint datId = ParseUintField(node, "datId");
+        var outputPath = node["outputPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outputPath' field");
+        bool thumbnails = node["thumbnails"]?.GetValue<bool>() ?? true;
+        string? thumbDir = node["thumbDir"]?.GetValue<string>();
+        int maxThumbDim = node["maxThumbDim"]?.GetValue<int>() ?? 128;
+        var r = _engine.GfxObjRegionSummary(datId, outputPath, thumbnails, thumbDir, maxThumbDim);
+        return Serialize(new { success = r.Success, command = "gfxobj-region-summary",
+            datId = r.DatId, datType = r.DatType, outputPath = r.OutputPath,
+            modelCount = r.ModelCount, regionCount = r.RegionCount,
+            materialCount = r.MaterialCount, thumbnailCount = r.ThumbnailCount,
+            unstructuredModels = r.UnstructuredModels,
+            warnings = r.Warnings, error = r.Error });
     }
 
     private string CmdObjImport(System.Text.Json.Nodes.JsonNode node) {
