@@ -1,0 +1,12 @@
+{
+  "gfxObj": "0x0100082E",
+  "features": [
+    {"op": "plinth", "regions": ["R9", "R22", "R26", "R12", "R27", "R15", "R8", "R10"],
+     "proud": 0.10, "height": 0.35, "material": "inherit", "breakAtGroundHoles": true},
+    {"op": "opening_surround", "opening": 1, "band": 0.16, "proud": 0.09,
+     "reveal": true, "material": "inherit"},
+    {"op": "belt_course", "regions": ["R6", "R23", "R28", "R29"],
+     "zRange": [11.55, 11.95], "proud": 0.12, "material": "inherit"}
+  ],
+  "budget": {"maxTris": 150, "maxOffset": 0.20}
+}

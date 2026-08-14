@@ -1,0 +1,52 @@
+{
+  "success": false,
+  "gfxObj": "0x0100082E",
+  "plan": "/tmp/claude-1000/-home-wbterminal/94a02f09-ac53-481f-a837-f8637f0b22f9/scratchpad/reliefgen/bad_plan.json",
+  "planErrors": [
+    {
+      "feature": 0,
+      "op": "opening_surround",
+      "code": "bad-opening-index",
+      "message": "opening index 99 out of range; the summary has 4 openings (0..3)",
+      "data": {
+        "requested": 99,
+        "available": [
+          {
+            "index": 0,
+            "attachedRegion": "R9"
+          },
+          {
+            "index": 1,
+            "attachedRegion": "R9"
+          },
+          {
+            "index": 2,
+            "attachedRegion": "R8"
+          },
+          {
+            "index": 3,
+            "attachedRegion": "R4"
+          }
+        ]
+      }
+    },
+    {
+      "feature": 1,
+      "op": "belt_course",
+      "code": "zrange-outside-model",
+      "message": "zRange [50, 51] lies outside the model bbox z [0, 12.4832]",
+      "data": {
+        "zRange": [
+          50,
+          51
+        ],
+        "modelZ": [
+          0,
+          12.4832
+        ]
+      }
+    }
+  ],
+  "checks": [],
+  "warnings": []
+}

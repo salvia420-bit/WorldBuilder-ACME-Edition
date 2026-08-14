@@ -1,0 +1,137 @@
+{
+  "success": true,
+  "gfxObj": "0x0100082E",
+  "plan": "/tmp/claude-1000/-home-wbterminal/94a02f09-ac53-481f-a837-f8637f0b22f9/scratchpad/reliefgen/cottage_plan.json",
+  "addedTris": 102,
+  "totalTris": 192,
+  "planErrors": [],
+  "warnings": [],
+  "checks": [
+    {
+      "name": "prefix-identity",
+      "pass": true,
+      "detail": "original 18865 bytes preserved as an exact prefix; 17943 bytes appended",
+      "value": null,
+      "limit": null
+    },
+    {
+      "name": "index-ranges",
+      "pass": true,
+      "detail": "v=576 vt=576 vn=576; all new face indices in range: True",
+      "value": null,
+      "limit": null
+    },
+    {
+      "name": "full-triplets-finite",
+      "pass": true,
+      "detail": "triangles with full v/vt/vn triplets: True; all coordinates finite: True",
+      "value": null,
+      "limit": null
+    },
+    {
+      "name": "faces-under-existing-usemtl",
+      "pass": true,
+      "detail": "new-face materials: surface_0x08000371 \u002B surface_0x080001A5; all pre-existing: True",
+      "value": null,
+      "limit": null
+    },
+    {
+      "name": "vertex-budget",
+      "pass": true,
+      "detail": "318 unique (pos,normal,uv) vertices, cap 32767",
+      "value": 318,
+      "limit": 32767
+    },
+    {
+      "name": "no-degenerate-tris",
+      "pass": true,
+      "detail": "smallest new tri 0.0072 sq-units, largest 1.698",
+      "value": 0.007199999999999995,
+      "limit": 1E-06
+    },
+    {
+      "name": "normals-match-winding",
+      "pass": true,
+      "detail": "0 corner normals disagree with face winding",
+      "value": 0,
+      "limit": 0
+    },
+    {
+      "name": "outward-facing",
+      "pass": true,
+      "detail": "all 102 new faces look out of the original solid (ray-parity oracle, 98 tris incl. portal fillers)",
+      "value": 0,
+      "limit": 0
+    },
+    {
+      "name": "no-vertex-inside-solid",
+      "pass": true,
+      "detail": "all new vertices lie on or outside the original surface",
+      "value": 0,
+      "limit": 0
+    },
+    {
+      "name": "added-shell-edge-manifold",
+      "pass": true,
+      "detail": "179 edges; 0 shared by \u003E2 added faces",
+      "value": 0,
+      "limit": 0
+    },
+    {
+      "name": "borders-on-original-surface",
+      "pass": true,
+      "detail": "52 border edges; worst endpoint distance to an original plane 0; 0 endpoints off-surface",
+      "value": 0,
+      "limit": 0.0005
+    },
+    {
+      "name": "no-feature-self-overlap",
+      "pass": true,
+      "detail": "no coplanar overlap between faces of the same feature",
+      "value": 0,
+      "limit": 0
+    },
+    {
+      "name": "uv-fold-seam-continuity",
+      "pass": true,
+      "detail": "81 same-projection seams, worst delta 0.0e0; 46 corner seams (projection axis flips, like retail corners), worst du 3.917",
+      "value": 0,
+      "limit": 1.5E-06
+    },
+    {
+      "name": "uv-registration",
+      "pass": true,
+      "detail": "max deviation vs parent region map 0.0333 uv (co-located vert on plinth-capB6); 13 vertices co-located with the original mesh",
+      "value": 0.033333999999999975,
+      "limit": 0.05
+    },
+    {
+      "name": "texel-density",
+      "pass": true,
+      "detail": "worst density deviation 0% vs parent region (srd-soffit)",
+      "value": 1.4086044301198086E-05,
+      "limit": 0.15
+    },
+    {
+      "name": "max-offset",
+      "pass": true,
+      "detail": "max vertex offset from the feature\u0027s parent planes 0.1195 (at belt-face0), budget 0.2",
+      "value": 0.11950953768799999,
+      "limit": 0.2
+    },
+    {
+      "name": "no-added-t-junctions",
+      "pass": true,
+      "detail": "no added vertex lands mid-edge on another added edge",
+      "value": 0,
+      "limit": 0
+    },
+    {
+      "name": "tri-budget",
+      "pass": true,
+      "detail": "102 triangles added (90 \u2192 192), budget 150",
+      "value": 102,
+      "limit": 150
+    }
+  ]
+}
