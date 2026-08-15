@@ -1,5 +1,87 @@
 # HANDOFF — dat-patch: texture-driven 4× displacement is REAL (session 2026-08-15)
 
+## 0. ADDENDUM — session 2 (2026-08-15 PM): the LEGIBILITY BAKE cracked the A/B problem
+
+Owner verdict: **"ok im actually happy with this now."** What changed and what it supersedes:
+
+- **Why every A/B looked identical (diagnosis, settled):** the ladder optimized pixel-diff %,
+  which rewards high-frequency change human vision discards; people judge by silhouette,
+  low-frequency shading structure, sharpness, hue. The §3c cavity bake was darken-only ×
+  micro-frequency-only (= exposure change + dirt = the gloom direction), and the study
+  renderer presented flat-on orthographic crops at ambient 0.30 on near-black. The Remacri
+  statics are 2048² vs retail 256² and had never been shown at a magnification where it reads.
+- **The legibility bake** (`/mnt/wbterminal2/dat-patch-legibility/`, REPORT.md + legibility.py):
+  signed TWO-BAND directional emboss into the Remacri albedo from a fixed top-left UV-space
+  convention light — micro band (seam detail) + structure band (timbers/brick courses,
+  sigma≈8/128·min(W,H)) + small signed AO term. Gains g_hi 0.35 / g_lo 0.50 / a0 0.15,
+  emboss tanh-limited, shade clamped ±0.60 (unclamped = black blotches on masonry).
+  **Mean-luminance anchor 1.15× retail** (not 1.02×: arm C's sculpted normals alone cost
+  3.5–5.5 % frame luminance; at 1.02× the result came out DARKER than today). All 9 framings
+  brighter (+2.4 %–17.4 %). **This replaces §3c's "cavity floor 0.60" in TODO #1**: the texture
+  lane bakes the legibility recipe pre-DXT-encode.
+- **Per-class de-rates:** saturated/DeepBump-routed height fields (e.g. 0x080006E8 Plank)
+  re-draw their own dark streaks as shading — gain 0.45, no AO. The emboss sharpens AC's
+  2×2 mirror tiling (cottage chimney) — acceptable, note for the eyeball pass.
+- **Presentation standard (use for ALL future owner A/Bs):** identical sunny daylight both
+  panels (ambient ≈0.55, warm sun, light-sky bg), three framings (¾ silhouette / window-scale
+  close crop / grazing wall), 1080-wide portrait boards stacking TODAY over PATCHED with mean
+  luminance printed, plus an 800 ms before/after toggle GIF. Judge by EYE at phone scale;
+  pixel-diff % is deprecated as a target metric. Delivery: `tailscale file cp … redmi-note-13-5g:`.
+- **Decimator/UV bug FIXED + pilot regenerated on recipe C — 16/16 green.** True root cause
+  (measured, supersedes the "cross-polygon merge" hypothesis): `relief3d.finalize` recovered
+  UVs/normals by projecting the DISPLACED position back into the source triangle frame, but
+  displacement runs along the interpolated authored normal (gfx_subdiv doctrine) and has a
+  real in-plane component at smoothed corners/weld rings — texture slides ∝ amplitude
+  (0x01002232 @ 0.20 m: 18.4 % of fine faces out-of-frame BEFORE decimation; decimation
+  amplified it, worst face 158× source-tri area). Fix in canonical
+  `/mnt/wbterminal2/dpc-work/relief3d.py`+`pipeline.py` (synced byte-identical to starkness/
+  legibility copies): per-vertex parametric barycentrics carried through collapses (convex
+  blend ⇒ registration exact at any amplitude), frames(u)⊆frames(v) collapse guard,
+  area-weighted smoothed normals, per-source-tri budget floor (share 0.75). Proof renders
+  `/mnt/wbterminal2/dat-patch-decimator/out/` (owner-eyeball-verified: wedges gone). Open in
+  DEFECTS.md: faint Gouraud shading strip on 0x01002232 from re-triangulating a wall with
+  differing authored corner normals (persists at normal gain 0.0 — not a pipeline bug).
+  Pilot: recipe C (amp 0.20 wall classes, smoothstep plinth ramp → 0.11 m at ground, gain
+  2.5), validate.py 16/16 green (physics drift 0.0, PORT identical, carries byte-identical),
+  2,096 → 8,377 tris (3.99–4.00×). Deployable: `dat-patch-pilot-holtburg/export/` (arm-A
+  build preserved as `export.armA/`). Still outstanding: 1070 eyeball pass (TODO #3).
+- **Generalizability:** the bake is per-TEXTURE, so every user of a surface — the ~10,700
+  skipped small props, dungeon Environments, everything — inherits it for FREE through the
+  shared textures. The small-prop "Remacri-only" lane is unchanged and now much stronger.
+- **LANDED → reports/client-headroom-dossier.md** (846 lines, read-verified citations).
+  Verdict: patching mostly UNNECESSARY. Shipped EOR acclient.exe **already has LAA set**
+  (COFF 0x012E; community belief wrong — measure, don't bank: crashes reported near 1.6–2 GB
+  anyway). No texture caps: MaxTextureWidth/Height written but never read, no pow2/square
+  checks on world textures, DXT passthrough. Geometry: 16-bit index cap 65,535 vs heaviest
+  retail GfxObj 1,446 → 12× ≈ 26 % of cap. THREE REAL HAZARDS: (a) boot default
+  `EnvironmentTextureDetail=2` (set by Render::Startup BEFORE prefs load) halves every object
+  texture on upload AND forces 2-entry SurfaceTextures to the low-detail entry — defeat via
+  `Render.EnvironmentTextureDetail = 0` + single-entry records (surface-texture-collapse
+  exists); (b) **degrade trap**: replacing a GfxObj that carries GfxObjDegradeInfo is
+  COMPLETELY INVISIBLE (LoadGfxObjArray never inserts the root mesh; band 0 usually a
+  different object; 4,131 records, 68 % real swaps) — bake-time data fix required; (c) the
+  **2 GiB DAT ceiling** (bit 31 of block offsets = free-block flag; DiskDev::SyncRead signed-32
+  seek) fails SILENTLY and is not byte-patchable. Highest-value patch: **trevis's
+  one-instruction DAT-compression fix** (DiskController::Decompress zeroes m_iVersion →
+  AsyncCache::SerializeFromCachePack gate) — measured 49.97 % portal.dat saving, turns
+  194 MiB margin into ~636 MiB; patch-and-diff harness exists at /mnt/wbterminal2/ac-eor-patch/.
+  ⚠ acclient.c and acclient.map are DIFFERENT BUILDS (~0x60 apart in the DAT region, exe
+  matches neither) — locate all patches by byte-signature, never quoted address.
+- **Community cross-check LANDED → reports/discord-headroom-crosscheck.md** (Discord
+  archive sweep + local PE verification). CORRECTIONS to the dossier: retail did NOT ship
+  LAA (paradox: "we didn't during retail") — our ac_base_dats/acclient.exe is an
+  already-4GB-patched copy (COFF 0x012E verified this session; checksum validation can't
+  detect ntcore-style patches). trevis's compression fix fully corroborated WITH the
+  author's measured numbers — but whole-set saving is **40.2 %** (cell_1 only 10.8 %),
+  zlib must be 1.2.2, paradox warns the m_iVersion zeroing may be a deliberate workaround
+  for another bug, and no patch bytes were ever published (derive by byte-signature;
+  Yonneh's release_client.exe.map attachment is the offset goldmine). New decomp leads
+  from the community: `Render::ShouldDropHighDetail()` gates ImgTex::GetSurfaceDID, and
+  **ImgTex::CreateD3DTexture caps mips at 4 levels**. Degrade invisibility trap: nobody
+  has ever hit it — we'd be first; keep the bake-time degrade fix mandatory. OOM band
+  1.6–1.8 GB is leak-driven (icon-gen unfixed; palette leak fixed by notan; D3DXMesh
+  suspected) — 4GB flag helps dats headroom but measure, don't bank.
+
 Supersedes the ordered TODO in `HANDOFF-dat-patch-2026-08-14.md` (whose §0 course
 correction this session executed). State: **the pilot is done and validated** — a
 patched portal.dat with 16 Holtburg buildings at 4.00× texture-driven relief, physics
