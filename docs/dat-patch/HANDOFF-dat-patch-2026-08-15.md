@@ -48,6 +48,22 @@ Owner verdict: **"ok im actually happy with this now."** What changed and what i
 - **Generalizability:** the bake is per-TEXTURE, so every user of a surface — the ~10,700
   skipped small props, dungeon Environments, everything — inherits it for FREE through the
   shared textures. The small-prop "Remacri-only" lane is unchanged and now much stronger.
+- **WORLD GEOMETRY TRANCHE RAN — 439/447 green (buildbox, 2026-08-15 PM).** The full
+  static-architecture lane executed on the buildbox (resized to n1-standard-16 on-demand-speed
+  for the run, ~10 min wall at --jobs 15; GPU irrelevant — pure-CPU numpy). Enumerate:
+  1,921 candidates → **447 displace / 1,040 skip-small / 429 skip-gate / 5 skip-degrade
+  (guard fired correctly) / 0 errors**. validate.py: **439/447 green**; the 8 non-green are
+  `shellDisplacedOk`-only (sub-0.02 m weak-seam surfaces, DeepBump off on box — benign, not
+  corruption). ALL 447: physVertexPos/NrmDrift = 0.0, PORT counts equal, origPolys carried
+  byte-identical. Global: portal.dat +18.7 MB (~42 KB/building → 903 MB total, vastly under
+  the 2 GiB ceiling), cell dat 0 unexplained. Deployable set pulled to
+  `/mnt/wbterminal2/dat-patch-world-export/` (export dats + validation.json + logs). This is
+  the GEOMETRY lane world-wide; the texture/legibility lane ships separately atop it. Two
+  documented follow-ups for full coverage (README): ship DeepBump to the box for the ~8
+  weak-seam records, or router-demote sub-threshold surfaces to skip-gate. Tooling: the
+  headroom-knob planner (`budget_planner.py`) + tranche runner + degrade guard are the
+  vendored, committed path (`tools/dat-patch/`); a server with custom dats scales by pointing
+  the planner at its own dats.
 - **LANDED → reports/client-headroom-dossier.md** (846 lines, read-verified citations).
   Verdict: patching mostly UNNECESSARY. Shipped EOR acclient.exe **already has LAA set**
   (COFF 0x012E; community belief wrong — measure, don't bank: crashes reported near 1.6–2 GB
