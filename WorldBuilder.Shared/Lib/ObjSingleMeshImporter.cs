@@ -32,7 +32,7 @@ namespace WorldBuilder.Shared.Lib {
         }
 
         public static bool TryBuild(string objText, uint surfaceDid, uint gfxObjId, uint setupId,
-            out GfxObj? gfxObj, out Setup? setup, out string? error) {
+            out GfxObj? gfxObj, out Setup? setup, out string? error, bool buildBsp = true) {
 
             gfxObj = null;
             setup = null;
@@ -61,7 +61,7 @@ namespace WorldBuilder.Shared.Lib {
             }
 
             try {
-                gfxObj = BuildGfxObj(gfxObjId, surfaceDid, flatPos, flatNorm, flatUv, flatFaces, flatSurfaceDids);
+                gfxObj = BuildGfxObj(gfxObjId, surfaceDid, flatPos, flatNorm, flatUv, flatFaces, flatSurfaceDids, buildBsp);
                 var (sphereOrigin, sphereRadius) = ComputeBoundingSphere(flatPos);
                 setup = BuildSinglePartSetup(setupId, gfxObjId, sphereOrigin, sphereRadius);
                 return true;
@@ -107,7 +107,8 @@ namespace WorldBuilder.Shared.Lib {
         static GfxObj BuildGfxObj(uint gfxObjId, uint fallbackSurfaceDid,
             List<Vector3> pos, List<Vector3> norm, List<Vector2> uv,
             List<(int i0, int i1, int i2)> triFaces,
-            List<uint>? perFaceSurfaceDids = null) {
+            List<uint>? perFaceSurfaceDids = null,
+            bool buildBsp = true) {
 
             // Build an ordered surface list from the per-face DIDs (or use the single fallback).
             var surfaceList = new List<uint>();
@@ -200,7 +201,11 @@ namespace WorldBuilder.Shared.Lib {
             gfx.Polygons = polys;
             gfx.SortCenter = Vector3.Zero;
 
-            BspGenerator.Build(gfx);
+            // Skippable: on an overwrite that carries the original physics AND drawing
+            // BSPs verbatim, both generated trees are discarded — the build (the dominant
+            // cost of a large import) would be pure waste.
+            if (buildBsp)
+                BspGenerator.Build(gfx);
 
             return gfx;
         }

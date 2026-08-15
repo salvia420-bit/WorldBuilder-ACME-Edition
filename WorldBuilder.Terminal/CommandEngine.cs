@@ -11647,10 +11647,43 @@ public partial class CommandEngine {
         try { objText = File.ReadAllText(objPath); }
         catch (Exception ex) { return new ObjImportResult(false, 0, 0, 0, 0, ex.Message); }
 
+        var warnings = new List<string>();
+
+        // Resolve the overwrite carry source BEFORE building the mesh: (a) the skip-BSP
+        // fast path below needs to know whether both generated trees will be discarded;
+        // (b) the carry source must be the BASE dat record, never the project-staged
+        // (already-merged) entry — otherwise a second overwrite of the same id carries
+        // the first import's appended geometry as "original" and the record grows by a
+        // full import per iteration. A staged entry is the source only when the id does
+        // not exist in the base dat at all (a custom id being iterated on).
+        GfxObj? orig = null;
+        if (overwrite) {
+            bool hasStaged = portalDoc.TryGetEntry<GfxObj>(gfxObjId, out var stagedOrig) && stagedOrig != null;
+            if (dats.TryGet<GfxObj>(gfxObjId, out var datOrig) && datOrig != null) {
+                orig = datOrig;
+                if (hasStaged)
+                    warnings.Add($"prior staged import for 0x{gfxObjId:X8} discarded; overwrite carries from the base dat record.");
+            }
+            else if (hasStaged) {
+                orig = stagedOrig;
+            }
+        }
+
+        // When the overwrite will carry BOTH original BSPs verbatim (physics via
+        // preservePhysics, drawing via CarryOriginalDrawingGeometry), the importer's BSP
+        // build is discarded wholesale — skip it. Mirrors the carry gates exactly.
+        bool origHasPhysics = orig != null && orig.Flags.HasFlag(DatReaderWriter.Enums.GfxObjFlags.HasPhysics);
+        bool willRebase = preservePhysics && origHasPhysics && orig?.VertexArray?.Vertices is { Count: > 0 };
+        bool skipBsp = willRebase && orig!.Polygons is { Count: > 0 } && orig.DrawingBSP != null;
+
         if (!ObjSingleMeshImporter.TryBuild(objText, surfaceDid, gfxObjId, setupId,
-                out var gfx, out var setup, out var error) || gfx == null || setup == null) {
+                out var gfx, out var setup, out var error, buildBsp: !skipBsp) || gfx == null || setup == null) {
             return new ObjImportResult(false, gfxObjId, setupId, 0, 0, error ?? "OBJ build failed.");
         }
+
+        // The imported mesh's own triangle count — reported as triangleCount, distinct
+        // from the merged record's total once original geometry is carried.
+        int importedTris = gfx.Polygons?.Count ?? 0;
 
         // Refuse to silently overwrite an existing record (DAT-resident or already
         // staged in the portal document) unless the caller opted in.
@@ -11667,22 +11700,16 @@ public partial class CommandEngine {
         // drawing trees); no second build here.
 
         // On overwrite, carry pieces of the ORIGINAL record forward so we only touch what
-        // the caller intends. Project-staged entry wins over DAT-resident (same precedence
-        // as BspBuild).
+        // the caller intends (carry source resolved above; base dat wins over staged).
         bool preservedPhysics = false, sortCenterPreserved = false, didDegradePreserved = false;
+        bool drawingCarried = false, rebased = false;
+        int duplicatesDropped = 0;
         if (overwrite) {
-            GfxObj? orig = null;
-            if (portalDoc.TryGetEntry<GfxObj>(gfxObjId, out var stagedOrig) && stagedOrig != null)
-                orig = stagedOrig;
-            else if (dats.TryGet<GfxObj>(gfxObjId, out var datOrig) && datOrig != null)
-                orig = datOrig;
-
             if (orig != null) {
                 if (preservePhysics) {
                     // Keep collision byte-identical: copy the original physics section verbatim
                     // (or its absence) so client and server physics never diverge. Render
-                    // polygons/vertex array/DrawingBSP stay new.
-                    bool origHasPhysics = orig.Flags.HasFlag(DatReaderWriter.Enums.GfxObjFlags.HasPhysics);
+                    // polygons/vertex array/DrawingBSP stay new. (origHasPhysics hoisted above.)
                     gfx.PhysicsPolygons = origHasPhysics ? orig.PhysicsPolygons : null;
                     gfx.PhysicsBSP = origHasPhysics ? orig.PhysicsBSP : null;
                     if (origHasPhysics)
@@ -11702,6 +11729,7 @@ public partial class CommandEngine {
                         var err2 = RebaseVertexArrayOnOriginal(gfx, orig);
                         if (err2 != null)
                             return new ObjImportResult(false, gfxObjId, setupId, 0, 0, err2);
+                        rebased = true;
                     }
                 }
 
@@ -11709,6 +11737,38 @@ public partial class CommandEngine {
                 // physics-era slots are not dropped and slot order is stable for tools that
                 // index it. Render polygons are remapped by DID.
                 CarryOriginalSurfaceTable(gfx, orig);
+
+                // Carry the ORIGINAL drawing geometry verbatim: every original render
+                // polygon at its original key, plus the original drawing BSP; imported
+                // triangles are appended at fresh keys. The BSP's PORT nodes are
+                // load-bearing at runtime — CGfxObj::InitLoad keeps exactly them
+                // (BSPTREE::RemoveNonPortalNodes) and they reference polygon keys
+                // (NoPos portal-filler quads + in-cell polygon lists). A rebuilt BSP has
+                // no PORT nodes, which kills seeing into building interiors through
+                // doors/windows, and dropping the NoPos fillers turns the openings into
+                // drawn (white) quads. Appended triangles need no BSP membership: retail
+                // renders from the flat polygon dictionary. Ordering: after
+                // CarryOriginalSurfaceTable (imported polys are remapped onto the carried
+                // table, whose prefix is the original — so original polys' surface
+                // indices stay valid untouched) and gated on the vertex-array rebase
+                // (original vertex ids intact, so carried polygons resolve to their
+                // exact retail vertices).
+                if (rebased && orig.Polygons is { Count: > 0 }) {
+                    var err3 = CarryOriginalDrawingGeometry(gfx, orig, out duplicatesDropped);
+                    if (err3 != null)
+                        return new ObjImportResult(false, gfxObjId, setupId, 0, 0, err3);
+                    drawingCarried = true;
+                }
+                else {
+                    // Not carrying: the record ships the importer's generated drawing BSP,
+                    // which is structurally PORT-less. Never do that silently when the
+                    // original tree had PORT nodes.
+                    int origPorts = CountPortNodes(orig.DrawingBSP);
+                    if (origPorts > 0)
+                        warnings.Add($"original drawing BSP with {origPorts} PORT node(s) replaced by a " +
+                            "generated PORT-less tree; interior visibility through openings will break. " +
+                            "Use overwrite with preservePhysics:true to carry the original drawing geometry.");
+                }
 
                 // BuildGfxObj zeroes SortCenter; the original's depth-sort pivot is authoritative.
                 gfx.SortCenter = orig.SortCenter;
@@ -11722,15 +11782,25 @@ public partial class CommandEngine {
             }
         }
 
+        // A record flagged HasDrawing but holding a null DrawingBSP is unserializable:
+        // Pack throws, PortalDatDocument.SetEntry swallows the exception and persists a
+        // ZERO-BYTE entry — the record would be destroyed on disk under a success:true.
+        if (gfx.Flags.HasFlag(DatReaderWriter.Enums.GfxObjFlags.HasDrawing) && gfx.DrawingBSP == null)
+            return new ObjImportResult(false, gfxObjId, setupId, 0, 0,
+                "internal: HasDrawing set with null DrawingBSP; refusing to stage an unserializable record.");
+
         portalDoc.SetEntry(gfxObjId, gfx);
         if (!gfxObjOnly)
             portalDoc.SetEntry(setupId, setup);
 
-        int triCount = gfx.Polygons?.Count ?? 0;
+        int totalDrawn = gfx.Polygons?.Count ?? 0;
         int vtxCount = gfx.VertexArray?.Vertices?.Count ?? 0;
-        return new ObjImportResult(true, gfxObjId, setupId, triCount, vtxCount,
+        return new ObjImportResult(true, gfxObjId, setupId, importedTris, vtxCount,
             Overwrite: overwrite, PreservedPhysics: preservedPhysics, GfxObjOnly: gfxObjOnly,
-            SortCenterPreserved: sortCenterPreserved, DidDegradePreserved: didDegradePreserved);
+            SortCenterPreserved: sortCenterPreserved, DidDegradePreserved: didDegradePreserved,
+            DrawingCarried: drawingCarried, TotalDrawnPolygons: totalDrawn,
+            DuplicatesDropped: duplicatesDropped,
+            Warnings: warnings.Count > 0 ? warnings : null);
     }
 
     /// <summary>
@@ -11749,11 +11819,7 @@ public partial class CommandEngine {
             return null;
 
         var final = new Dictionary<ushort, DatReaderWriter.Types.SWVertex>(origVerts.Count + newVerts.Count);
-        ushort next = 0;
-        foreach (var (id, v) in origVerts) {
-            final[id] = v;
-            if (id >= next) next = (ushort)(id + 1);
-        }
+        int next = SeedMergedFromOriginal(origVerts, final);
 
         // importer id -> (final id, uv slot)
         var map = new Dictionary<ushort, (ushort Id, byte Slot)>(newVerts.Count);
@@ -11774,10 +11840,10 @@ public partial class CommandEngine {
                 if (hit != null) break;
             }
             if (hit == null) {
-                if (next > short.MaxValue)
-                    return "vertex-array rebase overflows 32767 vertices (original + new render vertices).";
-                final[next] = nv;
-                hit = (next, (byte)0);
+                if (!KeyRangeFits(next, 1, short.MaxValue))
+                    return "vertex-array rebase overflows the 32767 vertex-id cap (original + new render vertices).";
+                final[(ushort)next] = nv;
+                hit = ((ushort)next, (byte)0);
                 next++;
             }
             map[nid] = hit.Value;
@@ -11795,6 +11861,156 @@ public partial class CommandEngine {
         }
         gfx.VertexArray!.Vertices = final;
         return null;
+    }
+
+    /// <summary>
+    /// Merge the ORIGINAL drawing geometry into an importer-built GfxObj: original render
+    /// polygons keep their exact keys and bytes (vertex ids valid after
+    /// <see cref="RebaseVertexArrayOnOriginal"/>, surface indices valid against the carried
+    /// table prefix), imported polygons are re-keyed after the original maximum, and the
+    /// original drawing BSP replaces the rebuilt one so its PORT (portal) nodes keep
+    /// resolving. Returns an error string, or null on success.
+    /// </summary>
+    private static string? CarryOriginalDrawingGeometry(GfxObj gfx, GfxObj orig, out int duplicatesDropped) {
+        duplicatesDropped = 0;
+        var origPolys = orig.Polygons;
+        if (origPolys == null || origPolys.Count == 0)
+            return null;
+
+        var merged = new Dictionary<ushort, DatReaderWriter.Types.Polygon>(
+            origPolys.Count + (gfx.Polygons?.Count ?? 0));
+        int next = SeedMergedFromOriginal(origPolys, merged);
+
+        if (gfx.Polygons is { Count: > 0 }) {
+            // Imported faces that re-state a carried original are dropped: the primary
+            // producers (relief-plan-apply, obj-export→edit→reimport) keep the original
+            // faces verbatim in the OBJ, and appending them again doubles coverage and
+            // record size, double-darkens translucent surfaces, and leaves ghost retail
+            // geometry when an original face was edited or deleted. Matching is at the
+            // level obj-export actually emits and the importer re-encodes: the FORWARD
+            // fan triangles of each original polygon — (vid, pos-UV slot) corners, fan
+            // (0, i−1, i), same surface — because the vertex rebase maps exactly-matching
+            // corners back to original vertex ids/slots and the surface carry maps
+            // surface indices onto the original table prefix. (The reversed pass of a
+            // double-sided export re-imports with negated normals, so its corners never
+            // match original vertices — it stays appended, the pre-existing lossy
+            // double-sided round-trip behavior.)
+            var verts = gfx.VertexArray?.Vertices;
+            var seen = new HashSet<string>();
+            foreach (var poly in origPolys.Values)
+                foreach (var key in ForwardFanTriangleKeys(poly, verts))
+                    seen.Add(key);
+
+            var appended = new List<DatReaderWriter.Types.Polygon>(gfx.Polygons.Count);
+            foreach (var poly in gfx.Polygons.Values) {
+                bool dup = false;
+                if (poly.VertexIds?.Count == 3) {
+                    foreach (var key in ForwardFanTriangleKeys(poly, verts)) { dup = seen.Contains(key); break; }
+                }
+                if (dup) { duplicatesDropped++; continue; }
+                appended.Add(poly);
+            }
+            if (!KeyRangeFits(next, appended.Count, ushort.MaxValue))
+                return "polygon dictionary overflows the 65535 key cap (original + imported polygons).";
+            foreach (var poly in appended)
+                merged[(ushort)next++] = poly;
+        }
+        gfx.Polygons = merged;
+
+        // Null-BSP guard: a HasDrawing record with a null DrawingBSP is unserializable
+        // (Pack throws; SetEntry would swallow it into a zero-byte entry). Keep the
+        // importer-generated tree when the original has none, and only flag HasDrawing
+        // when a tree actually exists.
+        if (orig.DrawingBSP != null)
+            gfx.DrawingBSP = orig.DrawingBSP;
+        if (gfx.DrawingBSP != null)
+            gfx.Flags |= DatReaderWriter.Enums.GfxObjFlags.HasDrawing;
+        else
+            gfx.Flags &= ~DatReaderWriter.Enums.GfxObjFlags.HasDrawing;
+        return null;
+    }
+
+    /// <summary>
+    /// Seed a merged ushort-keyed dictionary with the ORIGINAL entries at their exact keys
+    /// and return the first free key after the original maximum. Single home for the
+    /// merge-original-then-append key-allocation idiom (vertex rebase + drawing carry).
+    /// </summary>
+    private static int SeedMergedFromOriginal<T>(Dictionary<ushort, T> orig, Dictionary<ushort, T> merged) {
+        int next = 0;
+        foreach (var (key, value) in orig) {
+            merged[key] = value;
+            if (key >= next) next = key + 1;
+        }
+        return next;
+    }
+
+    /// <summary>
+    /// True iff <paramref name="count"/> sequential keys starting at <paramref name="nextKey"/>
+    /// all fit at or below <paramref name="maxKeyInclusive"/> (the last assigned key is
+    /// nextKey + count − 1).
+    /// </summary>
+    private static bool KeyRangeFits(int nextKey, int count, int maxKeyInclusive) =>
+        (long)nextKey + count <= (long)maxKeyInclusive + 1;
+
+    /// <summary>
+    /// Count PORT nodes in a drawing BSP — the runtime-load-bearing portal chain
+    /// (CGfxObj::InitLoad keeps exactly these via BSPTREE::RemoveNonPortalNodes).
+    /// </summary>
+    private static int CountPortNodes(DatReaderWriter.Types.DrawingBSPTree? tree) =>
+        CountPortNodes(tree?.Root);
+
+    private static int CountPortNodes(DatReaderWriter.Types.DrawingBSPNode? node) {
+        if (node == null) return 0;
+        int n = node.Type == DatReaderWriter.Enums.BSPNodeType.Portal ? 1 : 0;
+        return n + CountPortNodes(node.PosNode) + CountPortNodes(node.NegNode);
+    }
+
+    /// <summary>
+    /// Forward-pass fan-triangle signatures of a render polygon, mirroring
+    /// WavefrontMeshExport.EmitFace exactly: corners are (vertex id, pos-UV slot with the
+    /// exporter's missing-slot fallback of 0), the fan is (0, i−1, i), and each triangle
+    /// is rotated to its winding-preserving lexicographic minimum. Prefixed with the
+    /// positive surface index so faces only match within a surface.
+    /// </summary>
+    private static IEnumerable<string> ForwardFanTriangleKeys(DatReaderWriter.Types.Polygon p,
+            Dictionary<ushort, DatReaderWriter.Types.SWVertex>? verts) {
+        int n = p.VertexIds?.Count ?? 0;
+        if (n < 3) yield break;
+        var c = new string[n];
+        for (int i = 0; i < n; i++) {
+            int slot = p.PosUVIndices != null && i < p.PosUVIndices.Count ? p.PosUVIndices[i] : 0;
+            c[i] = $"{p.VertexIds![i]}:{CanonicalUVSlot(verts, p.VertexIds[i], slot)}";
+        }
+        for (int i = 2; i < n; i++)
+            yield return $"{p.PosSurface}|{CanonicalTriangle(c[0], c[i - 1], c[i])}";
+    }
+
+    /// <summary>
+    /// Retail vertices can carry duplicate UV entries; the vertex rebase reuses the FIRST
+    /// slot whose value matches, while an original polygon may reference a later identical
+    /// slot. Canonicalise to the first slot holding the same value so both spellings of
+    /// the same corner compare equal. Also mirrors the exporter's out-of-range clamp to 0.
+    /// </summary>
+    private static int CanonicalUVSlot(
+            Dictionary<ushort, DatReaderWriter.Types.SWVertex>? verts, short vid, int slot) {
+        if (verts == null || vid < 0 || !verts.TryGetValue((ushort)vid, out var v) || v.UVs == null)
+            return slot;
+        if (slot >= v.UVs.Count) slot = 0;
+        if (slot <= 0 || slot >= v.UVs.Count) return slot;
+        var uv = v.UVs[slot];
+        for (int k = 0; k < slot; k++)
+            if (v.UVs[k].U == uv.U && v.UVs[k].V == uv.V)
+                return k;
+        return slot;
+    }
+
+    /// <summary>Winding-preserving minimal rotation of a corner triple.</summary>
+    private static string CanonicalTriangle(string a, string b, string c) {
+        string r0 = $"{a},{b},{c}", r1 = $"{b},{c},{a}", r2 = $"{c},{a},{b}";
+        string best = r0;
+        if (string.CompareOrdinal(r1, best) < 0) best = r1;
+        if (string.CompareOrdinal(r2, best) < 0) best = r2;
+        return best;
     }
 
     /// <summary>
@@ -11865,6 +12081,13 @@ public partial class CommandEngine {
             return new BspBuildResult(gfxObjId, hexId, true, false, polyCount,
                 $"GfxObj {hexId} has no polygons/vertices to build a BSP from.");
 
+        // BspGenerator emits only BPIN/Leaf nodes — it structurally cannot produce PORT
+        // nodes, and CGfxObj::InitLoad keeps exactly the PORT chain at runtime (interior
+        // visibility through openings). Rebuilding a retail building's tree destroys
+        // them, so never do it silently.
+        // TODO: teach BspGenerator to preserve (or emit) PORT chains instead of warning.
+        int origPortNodes = CountPortNodes(gfx.DrawingBSP);
+
         try {
             BspGenerator.Build(gfx);
         }
@@ -11876,8 +12099,13 @@ public partial class CommandEngine {
             return new BspBuildResult(gfxObjId, hexId, true, false, gfx.Polygons?.Count ?? 0,
                 $"GfxObj {hexId} produced no BSP (all polygon planes degenerate); not staged.");
 
+        string? warning = origPortNodes > 0
+            ? $"rebuild discarded {origPortNodes} PORT node(s) from the original drawing BSP; " +
+              "interior visibility through openings will break."
+            : null;
+
         portalDoc.SetEntry(gfxObjId, gfx);
-        return new BspBuildResult(gfxObjId, hexId, true, true, gfx.Polygons?.Count ?? 0);
+        return new BspBuildResult(gfxObjId, hexId, true, true, gfx.Polygons?.Count ?? 0, Warning: warning);
     }
 
     // ═══════════════════════════════════════════════════════════

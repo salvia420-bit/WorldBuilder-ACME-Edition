@@ -1246,13 +1246,18 @@ public record ObjImportResult(
     bool PreservedPhysics = false,
     bool GfxObjOnly = false,
     bool SortCenterPreserved = false,
-    bool DidDegradePreserved = false);
+    bool DidDegradePreserved = false,
+    bool DrawingCarried = false,
+    int TotalDrawnPolygons = 0,
+    int DuplicatesDropped = 0,
+    IReadOnlyList<string>? Warnings = null);
 
 public record BspBuildResult(
     uint GfxObjId, string HexId,
     bool Found, bool Built,
     int PolygonCount = 0,
-    string? Error = null);
+    string? Error = null,
+    string? Warning = null);
 
 // ── compare-to-retail (subprocesses scripts/.../compare_world_to_retail.py) ──
 public record CompareRegionBbox(

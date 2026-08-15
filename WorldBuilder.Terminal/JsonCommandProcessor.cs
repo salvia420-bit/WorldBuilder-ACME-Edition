@@ -4676,10 +4676,14 @@ public class JsonCommandProcessor {
             gfxObjId = $"0x{r.GfxObjId:X8}",
             setupId = r.GfxObjOnly ? null : $"0x{r.SetupId:X8}",
             triangleCount = r.TriangleCount, vertexCount = r.VertexCount,
+            totalDrawnPolygons = r.TotalDrawnPolygons,
             overwrite = r.Overwrite, preservedPhysics = r.PreservedPhysics,
             gfxObjOnly = r.GfxObjOnly,
             sortCenterPreserved = r.SortCenterPreserved,
             didDegradePreserved = r.DidDegradePreserved,
+            drawingCarried = r.DrawingCarried,
+            duplicatesDropped = r.DuplicatesDropped,
+            warnings = r.Warnings,
             error = r.Error });
     }
 
@@ -4710,7 +4714,7 @@ public class JsonCommandProcessor {
         var r = _engine.BspBuild(gfxObjId);
         return Serialize(new { success = r.Built, command = "bsp-build",
             gfxObjId = r.HexId, found = r.Found, built = r.Built,
-            polygonCount = r.PolygonCount, error = r.Error });
+            polygonCount = r.PolygonCount, warning = r.Warning, error = r.Error });
     }
 
     // ════════════════════════════════════════════════════
