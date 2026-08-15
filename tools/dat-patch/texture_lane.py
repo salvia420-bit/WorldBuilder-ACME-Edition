@@ -164,6 +164,120 @@ def prep_dat(path, blocks):
     return dict(blocks=blocks, blockSize=bs, arena_start=arena, new_size=new)
 
 
+def fixup_dat(path, compact=True):
+    """Post-write structural fixup for a DRW-written dat; run AFTER all imports,
+    BEFORE shipping. Makes the file retail-client conformant (decomp-verified
+    2026-08-15 against acclient.c BTree::Search / CLBlockAllocator):
+
+    1. Chorizite/DRW writes 0xCDCDCDCD into unused leaf-node branch slots. The
+       retail client's ONLY leaf test is NextNode_[0] != 0, so a sentinel leaf
+       is mis-read as an internal node: every lookup MISS in that leaf seeks to
+       a negative offset and poisons the 100-slot node cache, and any tree
+       enumeration recurses into garbage. Hits are unaffected, which is why the
+       bug survives tooling round-trips. Zero every sentinel branch word.
+       (Same fix as WorldBuilder.Shared DatExportFixer.FixLeafBranchSentinels,
+       which the WBT project-export path runs but direct DRW writes bypass.)
+    2. Compacts the dead free arena prep_dat appended: if the whole tail
+       [freeHead, fileSize) is free per the header AND nothing references a
+       block in it, truncate and set freeHead=freeTail=fileSize, freeCount=0
+       (the DatExportFixer.PatchFreeBlocksBeforeExport convention; the retail
+       READ path never consults these fields, this keeps write-tooling safe)."""
+    HDR, SENT = 320, 0xCDCDCDCD
+    objsize = 4 * 0x3E + 4 + 24 * 0x3D
+    f = open(path, "r+b")
+    f.seek(HDR)
+    magic, bs, fs, typ, sub, ffb, lfb, fbc, root = struct.unpack("<9i", f.read(36))
+    if magic != 0x5442:
+        raise SystemExit("fixup: bad magic 0x%x" % magic)
+    maxblk = 0
+
+    def chain(off, need):
+        nonlocal maxblk
+        blocks, have, cur = [], 0, off
+        while have < need and cur > 0:
+            if cur % bs or cur + bs > fs or cur in blocks:
+                return None
+            blocks.append(cur)
+            maxblk = max(maxblk, cur)
+            have += bs - 4
+            if have >= need:
+                break
+            f.seek(cur)
+            cur = struct.unpack("<i", f.read(4))[0]
+        return blocks
+
+    def read_chain(blocks, need):
+        out = bytearray()
+        for b in blocks:
+            f.seek(b + 4)
+            out += f.read(min(bs - 4, need - len(out)))
+        return out
+
+    def write_chain(blocks, data):
+        off = 0
+        for b in blocks:
+            n = min(bs - 4, len(data) - off)
+            f.seek(b + 4)
+            f.write(data[off:off + n])
+            off += n
+
+    fixed, entries, seen = 0, [], set()
+    stack = [root]
+    while stack:
+        off = stack.pop()
+        if off <= 0 or off >= fs or off in seen:
+            continue
+        seen.add(off)
+        blocks = chain(off, objsize)
+        if not blocks:
+            continue
+        node = read_chain(blocks, objsize)
+        cnt = struct.unpack_from("<I", node, 62 * 4)[0]
+        if cnt > 61:
+            continue
+        branches = list(struct.unpack_from("<62I", node, 0))
+        for i in range(cnt):
+            _bf, oid, foff, fsz = struct.unpack_from("<4I", node, 62 * 4 + 4 + i * 24)
+            entries.append((foff, fsz))
+        dirty = False
+        for i, b in enumerate(branches):
+            if b == SENT:
+                struct.pack_into("<I", node, i * 4, 0)
+                dirty = True
+            elif 0 < b < fs:
+                stack.append(b)
+        if dirty:
+            write_chain(blocks, node)
+            fixed += 1
+    print("fixup: zeroed sentinel branches in %d leaf node(s); %d entries" % (fixed, len(entries)))
+
+    for foff, fsz in entries:
+        cur, rem = foff, fsz
+        while cur > 0 and rem > 0:
+            maxblk = max(maxblk, cur)
+            f.seek(cur)
+            cur = struct.unpack("<i", f.read(4))[0]
+            rem -= bs - 4
+
+    if compact and fbc > 0 and ffb > 0 and fbc * bs == fs - ffb and maxblk + bs <= ffb:
+        f.seek(HDR + 8)
+        f.write(struct.pack("<i", ffb))
+        f.seek(HDR + 20)
+        f.write(struct.pack("<3i", ffb, ffb, 0))
+        f.flush()
+        os.fsync(f.fileno())
+        f.truncate(ffb)
+        print("fixup: compacted free arena %d -> %d bytes (-%.1f MiB)"
+              % (fs, ffb, (fs - ffb) / 2 ** 20))
+    elif compact:
+        print("fixup: compaction skipped (maxblk=%d freeHead=%d freeCount=%d span=%d)"
+              % (maxblk, ffb, fbc, (fs - ffb) // bs))
+    f.flush()
+    os.fsync(f.fileno())
+    f.close()
+    return dict(leaves_fixed=fixed, max_block=maxblk)
+
+
 # ----- WorldBuilder.Terminal driver -----------------------------------------
 def wbt(run, cmds, timeout=1800):
     """run = argv list for `dotnet WBT.dll --stdin`; cmds = list of dicts.
@@ -769,7 +883,7 @@ def assemble_results(root, patched_portal):
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for c in ("probe", "derive", "slice", "allids", "prep", "run", "board", "results"):
+    for c in ("probe", "derive", "slice", "allids", "prep", "fixup", "run", "board", "results"):
         s = sub.add_parser(c)
         s.add_argument("--root", default=os.getcwd())
         s.add_argument("--base", required=True)
@@ -809,6 +923,8 @@ def main():
         all_ids(a.root)
     elif a.cmd == "prep":
         prep_dat(a.patched, a.blocks)
+    elif a.cmd == "fixup":
+        fixup_dat(a.patched)
     elif a.cmd == "results":
         assemble_results(a.root, a.patched)
     elif a.cmd == "run":

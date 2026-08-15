@@ -112,6 +112,9 @@ full)
     ;;
 package)
     log "=== package ==="
+    log "package: structural fixup (leaf sentinels + arena compaction)"
+    "$PYTHON" "$TOOLS/texture_lane.py" fixup --root "$ROOT" --base "$BASE_PORTAL" \
+        --patched "$PATCHED" 2>&1 | tee -a "$LOG" || die "fixup"
     log "package: assemble results.json"
     "$PYTHON" "$TOOLS/texture_lane.py" results --root "$ROOT" --base "$BASE_PORTAL" \
         --patched "$PATCHED" 2>&1 | tee -a "$LOG" || die "results"
