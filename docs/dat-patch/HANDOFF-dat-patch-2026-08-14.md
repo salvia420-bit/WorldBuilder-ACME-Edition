@@ -1,5 +1,43 @@
 # HANDOFF — dat-patch: retail-DAT triangles & textures (session 2026-08-14)
 
+## 0. COURSE CORRECTION 2026-08-15 — texture-driven displacement at 4× (supersedes §3/§4 priorities)
+
+Owner reviewed two Opus 5 concept rounds (reports: `reports/concepts-r1-REPORT.md`,
+`reports/concepts-r2-REPORT.md`; boards on `/mnt/wbterminal2/dat-patch-concepts{,-r2}-2026-08-14/`).
+Verdict: subdivision without displacement is invisible under Gouraud ("a flat wall is still a
+flat wall"); target is now **4× triangles, texture-aware placement** — the (fixed, final)
+Remacri textures are the reference for where triangles go, and geometry must synergize with
+them. Physics stays untouched.
+
+**The assembled method (round 2, working prototype in `/mnt/wbterminal2/dpc-work/`)**:
+surface gate (vetoes → curated class table `/mnt/wbterminal2/gfx-material-agent/table.json`)
+→ height field (`seam` operator from `relief_op.py` on the BASE texture — "base for height,
+Remacri for pixels"; DeepBump ONNX fallback when seam carves <0.08) → subdivide 12–16 seg/edge,
+displace outward along authored normals, boundary-edge clamp (gfx_subdiv.rs doctrine)
+→ QEM-decimate to ~4× with original vertices locked → UVs recomputed in the source triangle's
+frame (texture registration by construction). Gate-refused objects: PN tessellation
+(needs a max-deviation guard — inflated the lifestone 0.18 m) or facet op.
+Measured: image delta saturates ~25 grey levels from 2× through 64× — **4× is the knee,
+not a compromise**. Spend on dungeons (735k EnvCell instances), architecture, creature PN;
+skip the ~10,700-record ≤50-tri long tail.
+
+**Blocking fixes before batch**: (a) seam `PRE_BLUR` must scale with resolution
+(`sigma = 0.6·min(w,h)/128`) — fixed constant saturates on 512²/Remacri and carves blank
+walls; (b) 6% of GfxObj records ship all-zero SWVertex normals (causeway modules 100%) —
+writer must synthesize+store normals; (c) r2 also fixed a CullMode parse bug
+(NegUVIndices read on None=1 vs Clockwise=2 — was failing 84/772 Environment records).
+
+**Server-spawn question answered (r1, decomp-verified)**: DAT-side mesh upgrades reach
+server-spawned objects automatically (client resolves SetupTableId from its own portal.dat);
+deploy patched dats to both client and server, never touch physics/Height/Radius.
+⚠ r1 also found both proven patch outputs contain a 1.81 GB `client_cell_1.dat` inflated
+5.2× with byte-identical content — export-path bug, must be fixed before bulk patching.
+
+**Next step (in flight)**: PRE_BLUR fix + normal synthesis → pilot batch of Holtburg
+buildings through the pipeline into a patched portal.dat via obj-import
+overwrite/preservePhysics + A/B gallery; dungeon Environment write path as stretch
+(melt datFile tools).
+
 **Mission**: translate holtburger-web's graphics gains (GEOMR relief triangles, Remacri
 upscaled textures) into patched retail `.dat` files, so vanilla-ACE servers and the stock
 retail client get the improvement with zero client/server code changes. Fable = engineer,
