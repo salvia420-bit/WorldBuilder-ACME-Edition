@@ -108,6 +108,62 @@ def decode_rs(dat, rsid):
     return None, h["fmtname"]
 
 
+def b64_to_rgba(fmt_name, w, h, b64):
+    """Decode a WBT chorizite-parse sourceData base64 payload to RGBA uint8."""
+    import base64
+    import numpy as np
+    from PIL import Image
+    if not b64 or not w or not h:
+        return None
+    data = base64.b64decode(b64)
+    if fmt_name in ("DXT1", "DXT3", "DXT5"):
+        fourcc = {"DXT1": b"DXT1", "DXT3": b"DXT3", "DXT5": b"DXT5"}[fmt_name]
+        im = Image.open(io.BytesIO(_dds(fourcc, w, h, data)))
+        return np.asarray(im.convert("RGBA"), np.uint8)
+    if fmt_name == "A8R8G8B8":
+        a = np.frombuffer(data, np.uint8).reshape(h, w, 4)
+        return a[:, :, [2, 1, 0, 3]].copy()
+    if fmt_name == "R8G8B8":
+        a = np.frombuffer(data, np.uint8).reshape(h, w, 3)
+        return np.dstack([a[:, :, 2], a[:, :, 1], a[:, :, 0],
+                          np.full((h, w), 255, np.uint8)])
+    return None
+
+
+# ----- allocator prep (bake/scripts/prep_dat.py, generalised in place) -------
+def prep_dat(path, blocks):
+    """Append a ZEROED free arena at EOF and repoint the header free list at it,
+    so DatReaderWriter 2.1.2's contiguous ReserveBlockCore never hands out a live
+    block.  Header @0x140: magic,blockSize,fileSize,type,subset,firstFreeBlock,
+    lastFreeBlock,freeBlockCount,root."""
+    HDR = 320
+    disk = os.path.getsize(path)
+    with open(path, "r+b") as f:
+        f.seek(HDR)
+        magic, bs, fs, typ, sub, ffb, lfb, fbc, root = struct.unpack("<9i", f.read(36))
+        arena = fs if fs == disk else (disk - (disk % bs))
+        new = arena + blocks * bs
+        if new >= 2 ** 31:
+            raise SystemExit("prep: arena would push fileSize past int32 (2 GiB)")
+        f.seek(arena)
+        CH = 4096
+        zeros = bytes(CH * bs)
+        left = blocks
+        while left > 0:
+            n = min(CH, left)
+            f.write(zeros[:n * bs])
+            left -= n
+        f.seek(HDR + 8)
+        f.write(struct.pack("<i", new))
+        f.seek(HDR + 20)
+        f.write(struct.pack("<3i", arena, new - bs, blocks))
+        f.flush()
+        os.fsync(f.fileno())
+    print("prep: appended %d blocks (%d bytes) arena@%d -> fileSize %d"
+          % (blocks, blocks * bs, arena, new))
+    return dict(blocks=blocks, blockSize=bs, arena_start=arena, new_size=new)
+
+
 # ----- WorldBuilder.Terminal driver -----------------------------------------
 def wbt(run, cmds, timeout=1800):
     """run = argv list for `dotnet WBT.dll --stdin`; cmds = list of dicts.
@@ -320,45 +376,60 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
     res["portal_ceiling_mib"] = 2048
     res["portal_under_ceiling"] = portal_after < 2000 * 1024 * 1024
 
-    # ---- round-trip: re-read every imported RenderSurface from the PATCHED dat
-    print("round-trip: re-reading %d records from the patched dat ..." % len(plan))
-    pat_dat = gfxlib.datlib.Dat(patched_portal)
-    rt_pass = rt_fail = 0
-    rt_details = []
-    for pl in plan:
-        rs_int = int(pl["rs"], 16)
-        hdr = rs_header(pat_dat, rs_int)
-        ok = (hdr is not None and hdr["fmtname"] == pl["fmt"]
-              and hdr["w"] == pl["w"] and hdr["h"] == pl["h"] and hdr["dlen"] > 0)
-        if ok:
-            rt_pass += 1
-        else:
-            rt_fail += 1
-            rt_details.append(dict(rs=pl["rs"], want=pl["fmt"], wantWH=[pl["w"], pl["h"]],
-                                   got=(hdr and hdr["fmtname"]),
-                                   gotWH=(hdr and [hdr["w"], hdr["h"]])))
-    res["roundtrip_pass"] = rt_pass
-    res["roundtrip_fail"] = rt_fail
-    res["roundtrip_fail_details"] = rt_details[:20]
+    # ---- integrity: the whole RenderSurface tree must still enumerate for DRW,
+    # with the SAME record count as the base dat (no records lost/overlapped).
+    # datlib's naive full-walk chokes on the rewritten b-tree, so use DRW.
+    print("integrity: enumerating RenderSurface records in base + patched ...")
+    lo, _ = wbt(wbt_run, [
+        dict(command="chorizite-list-dat-records", datPath=base_portal, typeName="RenderSurface"),
+        dict(command="chorizite-list-dat-records", datPath=patched_portal, typeName="RenderSurface")])
+    counts = [o.get("recordCount") for o in lo
+              if o.get("command") == "chorizite-list-dat-records"]
+    base_n = counts[0] if len(counts) > 0 else None
+    pat_n = counts[1] if len(counts) > 1 else None
+    res["integrity"] = dict(base_rs_count=base_n, patched_rs_count=pat_n,
+                            equal=(base_n is not None and base_n == pat_n))
 
-    # ---- WBT authoritative re-parse on a sample ----
-    sample = plan[:8]
+    # ---- round-trip: DRW re-parse a spread SAMPLE straight out of the patched
+    # dat; each imported record was ALSO read back inside render-surface-import
+    # (writtenBytes), so writtenCount is itself a per-record round-trip.
+    n_sample = min(24, len(plan))
+    step = max(1, len(plan) // n_sample) if plan else 1
+    sample = plan[::step][:n_sample]
     parse_cmds = [dict(command="chorizite-parse-dat-record", datPath=patched_portal,
                        idHex=pl["rs"], typeName="RenderSurface") for pl in sample]
+    rt_pass = rt_fail = 0
+    rt_details = []
     if parse_cmds:
         pouts, _ = wbt(wbt_run, parse_cmds)
-        wbt_samples = []
+        by_id = {}
         for o in pouts:
             if o.get("command") != "chorizite-parse-dat-record":
                 continue
             f = o.get("fields") or {}
-            fmt = (f.get("format") or "").replace("PFID_", "")
-            wbt_samples.append(dict(id=o.get("idHex"),
-                                    width=f.get("width"), height=f.get("height"),
-                                    format=fmt, err=o.get("errorMessage")))
-        res["wbt_reparse_sample"] = wbt_samples
-
+            by_id[int(o.get("idHex"), 16)] = dict(
+                w=f.get("width"), h=f.get("height"),
+                fmt=(f.get("format") or "").replace("PFID_", ""),
+                err=o.get("errorMessage"))
+        for pl in sample:
+            g = by_id.get(int(pl["rs"], 16))
+            ok = (g is not None and not g["err"] and g["fmt"] == pl["fmt"]
+                  and g["w"] == pl["w"] and g["h"] == pl["h"])
+            if ok:
+                rt_pass += 1
+            else:
+                rt_fail += 1
+                rt_details.append(dict(rs=pl["rs"], want=[pl["fmt"], pl["w"], pl["h"]],
+                                       got=g))
+    res["roundtrip_sampled"] = len(sample)
+    res["roundtrip_pass"] = rt_pass
+    res["roundtrip_fail"] = rt_fail
+    res["roundtrip_fail_details"] = rt_details[:20]
     res["collapse_count"] = len(collapses)
+    res["gate_ok"] = bool(
+        res.get("import_result") and res["import_result"].get("failCount") == 0
+        and not res.get("collapse_fails")
+        and res["integrity"]["equal"] and rt_fail == 0 and res["portal_under_ceiling"])
     res["plan"] = plan
     return res, plan
 
@@ -432,8 +503,16 @@ def make_board(root, base_portal, patched_portal, gid, wbt_run=None):
     import pipeline
     import relief3d
     import render3
-    import ladder
     import legibility
+    # ladder -> r2lib does a module-level makedirs() under a hardcoded
+    # /mnt/wbterminal2 path that does not exist on the buildbox; neutralise
+    # makedirs for the duration of the import so the constants still load.
+    _orig_makedirs = os.makedirs
+    os.makedirs = lambda *a, **k: None
+    try:
+        import ladder
+    finally:
+        os.makedirs = _orig_makedirs
 
     SUN_C = (1.00, 0.965, 0.895); FILL_C = (0.62, 0.74, 1.00)
     AMB_C = (0.94, 0.965, 1.00); AMBIENT = 0.55; DIFFUSE = 0.62; FILL_AMT = 0.22
@@ -555,15 +634,27 @@ def make_board(root, base_portal, patched_portal, gid, wbt_run=None):
     src, metas, h_full, resC = ladder.build_arm(rec, "C")
     keysA = pipeline.face_surface(src, resC["poly"])
 
-    # AFTER textures: decode straight out of the PATCHED dat, keyed by Surface id
-    pat_dat = gfxlib.datlib.Dat(patched_portal)
+    # AFTER textures: DRW-decode straight out of the PATCHED dat (one batched
+    # WBT call), keyed by Surface id.  datlib's naive walk chokes on the
+    # rewritten b-tree, so read through DRW/WBT which is the client's own reader.
+    rs_of = {sid: m.get("rsId") for sid, m in metas.items() if m.get("rsId")}
+    uniq = sorted(set(rs_of.values()))
+    parse = [dict(command="chorizite-parse-dat-record", datPath=patched_portal,
+                  idHex=rs, typeName="RenderSurface") for rs in uniq]
+    decoded = {}
+    if parse and wbt_run:
+        outs, _ = wbt(wbt_run, parse)
+        for o in outs:
+            if o.get("command") != "chorizite-parse-dat-record":
+                continue
+            f = o.get("fields") or {}
+            fmt = (f.get("format") or "").replace("PFID_", "")
+            arr = b64_to_rgba(fmt, f.get("width"), f.get("height"), f.get("sourceData"))
+            decoded[int(o.get("idHex"), 16)] = arr
     texA = {}
     for sid, m in metas.items():
         rs = m.get("rsId")
-        if not rs:
-            texA[sid] = None
-            continue
-        arr, fmt = decode_rs(pat_dat, int(rs, 16))
+        arr = decoded.get(int(rs, 16)) if rs else None
         texA[sid] = (arr.astype(np.float32) / 255.0) if arr is not None else None
 
     cams = cameras(srcA)
@@ -608,7 +699,7 @@ def make_board(root, base_portal, patched_portal, gid, wbt_run=None):
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for c in ("probe", "derive", "slice", "allids", "run", "board"):
+    for c in ("probe", "derive", "slice", "allids", "prep", "run", "board"):
         s = sub.add_parser(c)
         s.add_argument("--root", default=os.getcwd())
         s.add_argument("--base", required=True)
@@ -618,6 +709,7 @@ def main():
         s.add_argument("--gid", default=None)
         s.add_argument("--board", default="")
         s.add_argument("--tag", default="run")
+        s.add_argument("--blocks", type=int, default=450000)
         s.add_argument("--out", default=None)
         s.add_argument("--wbt", default=None, help="path to WorldBuilder.Terminal.dll")
     a = ap.parse_args()
@@ -645,6 +737,8 @@ def main():
         pick_slice(a.root, a.base)
     elif a.cmd == "allids":
         all_ids(a.root)
+    elif a.cmd == "prep":
+        prep_dat(a.patched, a.blocks)
     elif a.cmd == "run":
         board_gids = [int(x, 16) for x in a.board.split(",") if x.strip()]
         res, plan = run_lane(a.root, a.base, a.patched, a.ids_file, wbt_run,

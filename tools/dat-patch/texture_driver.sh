@@ -40,20 +40,28 @@ die() { log "FATAL: $*"; exit 1; }
 
 PHASE="${1:-prep}"
 BOARDS="${BOARDS:-}"        # optional override "0xGID,0xGID"
+ARENA_BLOCKS="${ARENA_BLOCKS:-600000}"   # zeroed free arena for the allocator prep
+                                         # (~614 MB; full-set consumption est. <240k blocks)
 
-case "$PHASE" in
-prep)
-    log "=== prep: copy tranche export dats into $ROOT/export (working copies) ==="
+fresh_and_prep() {
+    log "fresh_and_prep: copy tranche export dats into $ROOT/export (working copies)"
     mkdir -p "$ROOT/export"
     for f in client_portal.dat client_cell_1.dat client_highres.dat client_local_English.dat; do
         if [ -f "$TRANCHE/export/$f" ]; then
             cp -f "$TRANCHE/export/$f" "$ROOT/export/$f" || die "copy $f"
         elif [ -f "$BASE_DATS/$f" ]; then
-            log "prep: $f absent in tranche export, taking base copy"
+            log "  $f absent in tranche export, taking base copy"
             cp -f "$BASE_DATS/$f" "$ROOT/export/$f" || die "copy base $f"
         fi
     done
-    log "prep: portal copy $(du -h "$PATCHED" | cut -f1)"
+    log "fresh_and_prep: portal copy $(du -h "$PATCHED" | cut -f1); prep arena=$ARENA_BLOCKS blocks"
+    "$PYTHON" "$TOOLS/texture_lane.py" prep --base "$BASE_PORTAL" \
+        --patched "$PATCHED" --blocks "$ARENA_BLOCKS" 2>&1 | tee -a "$LOG" || die "prep"
+}
+
+case "$PHASE" in
+prep)
+    fresh_and_prep
     for j in build_stats.json models.json; do
         [ -f "$TRANCHE/$j" ] && cp -f "$TRANCHE/$j" "$ROOT/$j"
     done
@@ -85,19 +93,20 @@ slice)
     for g in ${BG//,/ }; do
         log "slice: board $g"
         "$PYTHON" "$TOOLS/texture_lane.py" board --root "$ROOT" --base "$BASE_PORTAL" \
-            --patched "$PATCHED" --gid "$g" 2>&1 | tee -a "$LOG" || log "board $g FAILED"
+            --patched "$PATCHED" --gid "$g" --wbt "$WBT_DLL" 2>&1 | tee -a "$LOG" || log "board $g FAILED"
     done
     log "slice: done -> $ROOT/run_slice.json + $ROOT/boards/"
     ;;
 full)
-    log "=== full: bake+import+collapse+roundtrip the whole matched set ==="
+    log "=== full: FRESH copy+prep, then bake+import+collapse+roundtrip the whole matched set ==="
+    fresh_and_prep
     BG="${BOARDS:-$("$PYTHON" -c "import json;print(','.join(json.load(open('$ROOT/slice.json'))['board_gids']))")}"
     "$PYTHON" "$TOOLS/texture_lane.py" run --root "$ROOT" --base "$BASE_PORTAL" \
         --patched "$PATCHED" --ids-file "$ROOT/all_ids.txt" --board "$BG" \
         --tag full --wbt "$WBT_DLL" 2>&1 | tee -a "$LOG" || die "full run"
     for g in ${BG//,/ }; do
         "$PYTHON" "$TOOLS/texture_lane.py" board --root "$ROOT" --base "$BASE_PORTAL" \
-            --patched "$PATCHED" --gid "$g" 2>&1 | tee -a "$LOG" || log "board $g FAILED"
+            --patched "$PATCHED" --gid "$g" --wbt "$WBT_DLL" 2>&1 | tee -a "$LOG" || log "board $g FAILED"
     done
     log "full: done -> $ROOT/run_full.json"
     ;;
