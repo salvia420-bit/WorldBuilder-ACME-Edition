@@ -54,6 +54,10 @@ prep)
         fi
     done
     log "prep: portal copy $(du -h "$PATCHED" | cut -f1)"
+    for j in build_stats.json models.json; do
+        [ -f "$TRANCHE/$j" ] && cp -f "$TRANCHE/$j" "$ROOT/$j"
+    done
+    [ -f "$ROOT/build_stats.json" ] || die "no build_stats.json in $TRANCHE"
     log "prep: derive matched surface set"
     "$PYTHON" "$TOOLS/texture_lane.py" derive --root "$ROOT" --base "$BASE_PORTAL" || die "derive"
     log "prep: pick validation slice"
