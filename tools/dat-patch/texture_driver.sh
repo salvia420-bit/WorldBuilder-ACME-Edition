@@ -112,6 +112,9 @@ full)
     ;;
 package)
     log "=== package ==="
+    log "package: assemble results.json"
+    "$PYTHON" "$TOOLS/texture_lane.py" results --root "$ROOT" --base "$BASE_PORTAL" \
+        --patched "$PATCHED" 2>&1 | tee -a "$LOG" || die "results"
     TGZ="$ROOT/texture.tgz"
     rm -f "$TGZ" "$TGZ.sha256"
     ( cd "$ROOT" && tar czf "$TGZ" export results.json \

@@ -708,10 +708,68 @@ def make_board(root, base_portal, patched_portal, gid, wbt_run=None):
     return p, lum_pairs
 
 
+def assemble_results(root, patched_portal):
+    import glob
+    import hashlib
+    def load(p):
+        return json.load(open(p)) if os.path.exists(p) else None
+    slc = load(os.path.join(root, "run_slice.json"))
+    full = load(os.path.join(root, "run_full.json"))
+    sl = load(os.path.join(root, "slice.json")) or {}
+    surf = load(os.path.join(root, "surfaces.json")) or {}
+    def sha(p):
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            for c in iter(lambda: f.read(1 << 22), b""):
+                h.update(c)
+        return h.hexdigest()
+    boards = sorted(glob.glob(os.path.join(root, "boards", "*.png")))
+    size = os.path.getsize(patched_portal)
+
+    def block(d):
+        if not d:
+            return None
+        return dict(surfaces_requested=d["requested"], encoded=d["encoded"],
+                    skipped_palette=d["skipped_palette"], skipped_nondxt=d["skipped_nondxt"],
+                    skipped_nobase=d["skipped_nobase"], skipped_other=d["skipped_other"],
+                    import_result=d.get("import_result"), collapse_result=d.get("collapse_result"),
+                    integrity=d.get("integrity"), roundtrip_sampled=d.get("roundtrip_sampled"),
+                    roundtrip_pass=d.get("roundtrip_pass"), roundtrip_fail=d.get("roundtrip_fail"),
+                    portal_after_mib=d.get("portal_after_mib"),
+                    gate_ok=d.get("gate_ok"),
+                    verdict=("PASS" if d.get("gate_ok") else "FAIL"))
+    res = dict(
+        lane="texture-legibility",
+        recipe="legibility mid (g_hi=0.35 g_lo=0.50 a0=0.15), mean-lum 1.15x, "
+               "seam height, DXT1(opaque)/DXT5(alpha), SurfaceTexture collapse",
+        base_portal="~/ac_base_dats/client_portal.dat",
+        patched_base="~/tranche-run/export/client_portal.dat (geometry tranche, 447 GfxObjs)",
+        matched_surface_set=dict(
+            patched_gfxObjs=(surf.get("gfxObjCount")),
+            surfaces_total=(surf.get("surfaceCount")),
+            with_render_surface=(surf.get("withRenderSurface"))),
+        slice_board_gids=sl.get("board_gids"),
+        slice=block(slc),
+        full=block(full),
+        portal_after_bytes=size, portal_after_mib=round(size / 1048576, 1),
+        portal_ceiling_mib=2048, portal_under_ceiling=size < 2000 * 1048576,
+        portal_note="file includes the zeroed free-arena appended by the allocator "
+                    "prep (dead space, harmless, under the 2 GiB ceiling)",
+        boards=boards,
+        slice_gate_verdict=("PASS" if (slc and slc.get("gate_ok")) else "FAIL"),
+        full_verdict=("PASS" if (full and full.get("gate_ok")) else "FAIL"),
+        portal_sha256=sha(patched_portal))
+    json.dump(res, open(os.path.join(root, "results.json"), "w"), indent=1)
+    print("results.json: slice=%s full=%s portal=%s MiB under_ceiling=%s"
+          % (res["slice_gate_verdict"], res["full_verdict"],
+             res["portal_after_mib"], res["portal_under_ceiling"]))
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for c in ("probe", "derive", "slice", "allids", "prep", "run", "board"):
+    for c in ("probe", "derive", "slice", "allids", "prep", "run", "board", "results"):
         s = sub.add_parser(c)
         s.add_argument("--root", default=os.getcwd())
         s.add_argument("--base", required=True)
@@ -751,6 +809,8 @@ def main():
         all_ids(a.root)
     elif a.cmd == "prep":
         prep_dat(a.patched, a.blocks)
+    elif a.cmd == "results":
+        assemble_results(a.root, a.patched)
     elif a.cmd == "run":
         board_gids = [int(x, 16) for x in a.board.split(",") if x.strip()]
         res, plan = run_lane(a.root, a.base, a.patched, a.ids_file, wbt_run,
