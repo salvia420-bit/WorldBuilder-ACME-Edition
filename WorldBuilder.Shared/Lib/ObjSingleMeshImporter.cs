@@ -182,14 +182,19 @@ namespace WorldBuilder.Shared.Lib {
                 var poly = new Polygon {
                     VertexIds = new List<short> { (short)ida, (short)idb, (short)idc },
                     PosSurface = (short)surfIdx,
-                    NegSurface = -1,
+                    // Single-sided draw polygon, matching what retail architecture data uses
+                    // (sides_type 0). SidesType==Clockwise(2) means TWO-sided-with-distinct-
+                    // surfaces to the retail renderer: D3DPolyRender::ConstructMesh then
+                    // dereferences surfaces[NegSurface] with NO bounds check, so Clockwise +
+                    // NegSurface=-1 access-violates in-client (proven on the 1070 2026-08-15,
+                    // fault 0x59e560; every tooling parser round-trips it fine, only the
+                    // renderer crashes). Stippling must be None: any nonzero value pushes the
+                    // surface onto the stippled/alpha render path (isStippledOrAlphaedMask).
+                    // Wire note: with SidesType 0 no neg-UV array is read regardless of NoNeg.
+                    NegSurface = 0,
                     PosUVIndices = new List<byte> { 0, 0, 0 },
-                    // NoNeg is REQUIRED for a single-sided poly with no NegUVIndices: the wire
-                    // format (retail, ACE, and DRW's own Unpack) reads NumPts neg-UV bytes when
-                    // SidesType==Clockwise && !NoNeg, but DRW 2.1.2's Pack only writes what's in
-                    // the (empty) list — producing a record that desyncs 3 bytes per polygon.
-                    Stippling = StipplingType.Positive | StipplingType.NoNeg,
-                    SidesType = CullMode.Clockwise,
+                    Stippling = StipplingType.None,
+                    SidesType = CullMode.Landblock,
                 };
                 polys[polyKey++] = poly;
             }

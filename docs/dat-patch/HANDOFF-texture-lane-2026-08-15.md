@@ -1,5 +1,50 @@
 # HANDOFF — texture legibility lane (COMPLETED autonomous on buildbox, 2026-08-15 PM)
 
+## ⚑ ADDENDUM 2026-08-15 EVE — §BLOCKER root-caused, FIXED, dat compacted (read this first)
+
+The §BLOCKER below is RESOLVED at the structural level; the file that ships is now
+`/mnt/wbterminal2/dat-patch-texture-lane/export/client_portal.dat`
+(sha256 013c5968…, **902.4 MiB** — 585.3 MiB dead arena compacted away). Details in
+`/mnt/wbterminal2/dat-patch-texture-lane/FIXUP-NOTE.md`. Summary:
+
+- **datlib's choke was a TRUE POSITIVE.** DRW wrote 0xCDCDCDCD (MSVC heap filler) into
+  the 62 branch words of the **165 b-tree leaf nodes it rewrote**. Decomp proof
+  (BTree::Search/FindNode/Build_Id_List): retail's ONLY leaf test is `NextNode_[0]!=0`,
+  and lookup **hits** never read branch words (why every tooling round-trip passed) but
+  every lookup **MISS** in a tainted leaf dereferences 0xCDCDCDCD — negative seek + node-
+  cache poisoning — and tree enumerations recurse into garbage. The retail client would
+  have broken on this dat in normal play (miss-path probes are routine). Fixed with the
+  repo's existing `DatExportFixer.FixLeafBranchSentinels` (the WBT export path runs it;
+  the box lane's direct-DRW writes bypassed it).
+- **The free-arena hack itself is read-path benign** (decomp: mount validates only magic
+  0x5442 @0x140 + transaction magic @0x100; fileSize/freeHead/Tail/Count are never
+  consulted on read) — latent WRITE hazard only, and moot: the arena was proven
+  unreferenced (max used block + blockSize == freeHead exactly) and truncated off.
+- **Validation is now 3-family independent:** ACE.DatLoader full walk + raw read of all
+  79,694 entries (0 fail; 1,701 changed vs base ≈ 768 textures + 523 collapsed
+  SurfaceTextures + 447 geometry GfxObjs; the 79 "empty" textures are identical in the
+  pristine base), python datlib walk clean, WBT parse clean. Cell/highres/local exports
+  had no tainted nodes.
+- **Tooling landed (commit 198a73eb):** `texture_lane.py fixup` (sentinel-zero + arena
+  compaction; proven byte-identical to the applied fix) now runs in texture_driver.sh's
+  package phase — future lane runs can't ship this bug class again.
+- **1070 in-client gate found a SECOND real defect (same evening) — FIXED.** Every world
+  entry access-violated ~3s in: fault 0x59e560 = `D3DPolyRender::ConstructMesh`, which for
+  `sides_type==2` dereferences `surfaces[neg_surface]` with NO bounds check. obj-import had
+  written ALL 332,137 appended drawn polygons as SidesType=Clockwise(2) + NegSurface=-1 +
+  Stippling=Positive|NoNeg — retail semantics: sides 2 = two-sided-DISTINCT (neg_surface is
+  live), and any nonzero stippling diverts the surface to the alpha/stipple path. Every
+  tooling parser round-trips this fine; only the renderer executes it — which is why the
+  in-client gate is irreplaceable. Fixes: `tools/dat-patch/polyfix.py` (in-place, byte-layout-
+  invariant: stip:=0, sides:=0, neg:=0 on matching polys; applied to the texture-lane AND
+  geometry-only exports, both re-audited clean + ACE-revalidated) and the durable default in
+  `WorldBuilder.Shared/Lib/ObjSingleMeshImporter.cs` (Landblock/None/0). Full ConstructMesh
+  data-invariant checklist (10 items — surface idx bounds, uv-vs-vertmap bounds, num_pts>=3,
+  parser-desync flags rule, etc.) lives in the session transcript and polyfix.py docstring;
+  fold into validate.py as a follow-up. NOTE: base-dat physics polys natively carry
+  pos/neg=-1 — physics polys never feed ConstructMesh; don't "fix" those.
+- 1070 retail-client in-client gate: see the addendum at the END of this file for status.
+
 **Read this first when you return.** The lane ran to completion while you were away and
 the visual result is VERIFIED (orchestrator eyeballed the A/B boards). BUT there is ONE
 real deployment blocker (§BLOCKER) — the combined dat's on-disk structure is validated
