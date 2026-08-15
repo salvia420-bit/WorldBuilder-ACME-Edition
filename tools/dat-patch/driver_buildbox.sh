@@ -38,7 +38,18 @@ LOG="$ROOT/driver.log"
 STAMPS="$ROOT/stamps"
 SENTINEL="${SENTINEL:-$HOME/TRANCHE_DONE}"
 
-mkdir -p "$ROOT" "$STAMPS" || exit 1
+# ---- vendored/box-local data paths for the Python modules ------------------
+# tranche.py sets DATPATCH_PORTAL/CELL/HCACHE itself; the rest default to the
+# laptop's /mnt/wbterminal2 tree and MUST be redirected on a box without it.
+# TEX_BASE (base-texture PNGs the seam operator reads) is the one bulk data
+# dependency the caller must provision; the gate table ships in the repo.
+# DeepBump is deliberately left unset -> matlib's graceful seam-only fallback.
+export DATPATCH_CURATED_JSON="${DATPATCH_CURATED_JSON:-$TOOLS/data/table.json}"
+export DATPATCH_TEX_BASE="${DATPATCH_TEX_BASE:-$HOME/tex-reexport-2026-07-30/}"
+export DATPATCH_HCACHE="${DATPATCH_HCACHE:-$ROOT/hcache/}"
+export DATPATCH_DBCACHE="${DATPATCH_DBCACHE:-$ROOT/dbcache/}"
+
+mkdir -p "$ROOT" "$STAMPS" "$DATPATCH_HCACHE" "$DATPATCH_DBCACHE" || exit 1
 
 # ---------------------------------------------------------------- detach once
 if [ "${TRANCHE_CHILD:-0}" != "1" ]; then
@@ -77,10 +88,19 @@ fi
 if phase_done wbt; then
     log "phase wbt: already done"
 else
-    if [ -f "$WBT_DLL" ]; then
-        log "phase wbt: DLL present ($WBT_DLL)"
+    # Staleness-aware: rebuild if the DLL is absent OR any *.cs is newer than it
+    # (a checked-out branch ships fresh source but a gitignored, stale build
+    # artifact -- the obj-import drawing-carry fix lives in source only).
+    stale=""
+    if [ ! -f "$WBT_DLL" ]; then
+        stale="absent"
+    elif [ -n "$(find "$REPO/WorldBuilder.Terminal" -name '*.cs' -newer "$WBT_DLL" -print -quit 2>/dev/null)" ]; then
+        stale="source newer than DLL"
+    fi
+    if [ -z "$stale" ]; then
+        log "phase wbt: DLL current ($WBT_DLL)"
     else
-        log "phase wbt: building WorldBuilder.Terminal (single project only)"
+        log "phase wbt: building WorldBuilder.Terminal ($stale; single project only)"
         ( cd "$REPO" && DOTNET_ROLL_FORWARD=LatestMajor "$DOTNET" build \
               WorldBuilder.Terminal -c Release ) || die "WBT build failed"
         [ -f "$WBT_DLL" ] || die "WBT built but $WBT_DLL is missing"
