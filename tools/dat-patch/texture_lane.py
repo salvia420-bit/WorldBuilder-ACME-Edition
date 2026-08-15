@@ -352,10 +352,10 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
             if o.get("command") != "chorizite-parse-dat-record":
                 continue
             f = o.get("fields") or {}
+            fmt = (f.get("format") or "").replace("PFID_", "")
             wbt_samples.append(dict(id=o.get("idHex"),
-                                    fields={k: f.get(k) for k in
-                                            ("Width", "Height", "Format")},
-                                    err=o.get("errorMessage")))
+                                    width=f.get("width"), height=f.get("height"),
+                                    format=fmt, err=o.get("errorMessage")))
         res["wbt_reparse_sample"] = wbt_samples
 
     res["collapse_count"] = len(collapses)
@@ -637,7 +637,7 @@ def main():
                                          datPath=a.base, idHex=a.rsid, typeName="RenderSurface")])
             o = next((x for x in outs if x.get("command") == "chorizite-parse-dat-record"), None)
             f = (o or {}).get("fields") or {}
-            print("wbt:", json.dumps({k: f.get(k) for k in ("Width", "Height", "Format")}),
+            print("wbt:", json.dumps({k: f.get(k) for k in ("width", "height", "format")}),
                   "err:", (o or {}).get("errorMessage"))
     elif a.cmd == "derive":
         derive(a.root, a.base)
