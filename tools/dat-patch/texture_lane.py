@@ -184,6 +184,16 @@ def wbt(run, cmds, timeout=1800):
     return outs, p
 
 
+def set_caches(root):
+    """Pin matlib's height/deepbump caches under the run root (its module
+    defaults point at /mnt/wbterminal2 which does not exist on the buildbox)."""
+    import matlib
+    matlib.CACHE = os.path.join(root, "hcache") + "/"
+    matlib.DBCACHE = os.path.join(root, "dbcache") + "/"
+    os.makedirs(matlib.CACHE, exist_ok=True)
+    os.makedirs(matlib.DBCACHE, exist_ok=True)
+
+
 # ----- matched surface set ---------------------------------------------------
 def derive(root, base_portal):
     import gfxlib
@@ -269,6 +279,7 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
     import gfxlib
     from PIL import Image
     os.environ.setdefault("DATPATCH_PORTAL", base_portal)
+    set_caches(root)
 
     surfaces = json.load(open(os.path.join(root, "surfaces.json")))["surfaces"]
     want = [l.strip() for l in open(ids_file) if l.strip()]
@@ -513,6 +524,7 @@ def make_board(root, base_portal, patched_portal, gid, wbt_run=None):
         import ladder
     finally:
         os.makedirs = _orig_makedirs
+    set_caches(root)
 
     SUN_C = (1.00, 0.965, 0.895); FILL_C = (0.62, 0.74, 1.00)
     AMB_C = (0.94, 0.965, 1.00); AMBIENT = 0.55; DIFFUSE = 0.62; FILL_AMT = 0.22
