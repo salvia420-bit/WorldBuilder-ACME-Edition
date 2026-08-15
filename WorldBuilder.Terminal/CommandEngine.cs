@@ -11690,7 +11690,25 @@ public partial class CommandEngine {
                     else
                         gfx.Flags &= ~DatReaderWriter.Enums.GfxObjFlags.HasPhysics;
                     preservedPhysics = true;
+
+                    // Physics polygons index into the SHARED VertexArray by id. The importer
+                    // assigns ids in corner-encounter order, so a rebuilt mesh reorders them and
+                    // the carried polygons silently resolve to the wrong positions (measured
+                    // 17.7 m drift on the first patched record). Rebase: the final VertexArray is
+                    // the ORIGINAL array verbatim (ids stable, physics valid by construction)
+                    // with the new render vertices appended; render polygons are remapped onto
+                    // it, reusing an original vertex + UV slot when one matches exactly.
+                    if (origHasPhysics && orig.VertexArray?.Vertices is { Count: > 0 }) {
+                        var err2 = RebaseVertexArrayOnOriginal(gfx, orig);
+                        if (err2 != null)
+                            return new ObjImportResult(false, gfxObjId, setupId, 0, 0, err2);
+                    }
                 }
+
+                // Carry the original surface table verbatim (new DIDs appended) so unused /
+                // physics-era slots are not dropped and slot order is stable for tools that
+                // index it. Render polygons are remapped by DID.
+                CarryOriginalSurfaceTable(gfx, orig);
 
                 // BuildGfxObj zeroes SortCenter; the original's depth-sort pivot is authoritative.
                 gfx.SortCenter = orig.SortCenter;
@@ -11713,6 +11731,104 @@ public partial class CommandEngine {
         return new ObjImportResult(true, gfxObjId, setupId, triCount, vtxCount,
             Overwrite: overwrite, PreservedPhysics: preservedPhysics, GfxObjOnly: gfxObjOnly,
             SortCenterPreserved: sortCenterPreserved, DidDegradePreserved: didDegradePreserved);
+    }
+
+    /// <summary>
+    /// Rebase an importer-built GfxObj onto the ORIGINAL record's VertexArray: the final
+    /// array is the original verbatim (every id stable, so carried PhysicsPolygons resolve
+    /// to the exact retail hull) with new render vertices appended. Render polygons are
+    /// remapped, reusing an original vertex + UV slot on an exact (pos, normal, uv) match.
+    /// Safe after BspGenerator.Build: BSP nodes hold planes/spheres/polygon keys, never
+    /// vertex ids, and positions are unchanged by the remap.
+    /// Returns an error string, or null on success.
+    /// </summary>
+    private static string? RebaseVertexArrayOnOriginal(GfxObj gfx, GfxObj orig) {
+        var origVerts = orig.VertexArray?.Vertices;
+        var newVerts = gfx.VertexArray?.Vertices;
+        if (origVerts == null || origVerts.Count == 0 || newVerts == null)
+            return null;
+
+        var final = new Dictionary<ushort, DatReaderWriter.Types.SWVertex>(origVerts.Count + newVerts.Count);
+        ushort next = 0;
+        foreach (var (id, v) in origVerts) {
+            final[id] = v;
+            if (id >= next) next = (ushort)(id + 1);
+        }
+
+        // importer id -> (final id, uv slot)
+        var map = new Dictionary<ushort, (ushort Id, byte Slot)>(newVerts.Count);
+        foreach (var (nid, nv) in newVerts) {
+            var t = nv.UVs is { Count: > 0 } ? nv.UVs[0] : new DatReaderWriter.Types.Vec2Duv { U = 0f, V = 0f };
+            (ushort Id, byte Slot)? hit = null;
+            foreach (var (oid, ov) in origVerts) {
+                if (Vector3.DistanceSquared(ov.Origin, nv.Origin) >= 1e-10f) continue;
+                if (Vector3.DistanceSquared(ov.Normal, nv.Normal) >= 1e-8f) continue;
+                var uvs = ov.UVs;
+                if (uvs == null) continue;
+                for (int k = 0; k < uvs.Count && k < 256; k++) {
+                    if (MathF.Abs(uvs[k].U - t.U) < 1e-5f && MathF.Abs(uvs[k].V - t.V) < 1e-5f) {
+                        hit = (oid, (byte)k);
+                        break;
+                    }
+                }
+                if (hit != null) break;
+            }
+            if (hit == null) {
+                if (next > short.MaxValue)
+                    return "vertex-array rebase overflows 32767 vertices (original + new render vertices).";
+                final[next] = nv;
+                hit = (next, (byte)0);
+                next++;
+            }
+            map[nid] = hit.Value;
+        }
+
+        if (gfx.Polygons != null) {
+            foreach (var poly in gfx.Polygons.Values) {
+                for (int c = 0; c < poly.VertexIds.Count; c++) {
+                    var m = map[(ushort)poly.VertexIds[c]];
+                    poly.VertexIds[c] = (short)m.Id;
+                    if (poly.PosUVIndices != null && c < poly.PosUVIndices.Count)
+                        poly.PosUVIndices[c] = m.Slot;
+                }
+            }
+        }
+        gfx.VertexArray!.Vertices = final;
+        return null;
+    }
+
+    /// <summary>
+    /// Carry the ORIGINAL surface table verbatim (order + unused slots preserved), append
+    /// any new DIDs the import introduced, and remap render polygons' surface indices by DID.
+    /// </summary>
+    private static void CarryOriginalSurfaceTable(GfxObj gfx, GfxObj? orig) {
+        if (orig?.Surfaces == null || orig.Surfaces.Count == 0 || gfx.Surfaces == null || gfx.Surfaces.Count == 0)
+            return;
+        var final = new List<DatReaderWriter.Types.QualifiedDataId<DatReaderWriter.DBObjs.Surface>>(orig.Surfaces.Count);
+        var index = new Dictionary<uint, short>();
+        foreach (var q in orig.Surfaces) {
+            if (!index.ContainsKey(q.DataId)) index[q.DataId] = (short)final.Count;
+            final.Add(q);
+        }
+        var remap = new short[gfx.Surfaces.Count];
+        for (int i = 0; i < gfx.Surfaces.Count; i++) {
+            uint did = gfx.Surfaces[i].DataId;
+            if (!index.TryGetValue(did, out var fi)) {
+                fi = (short)final.Count;
+                index[did] = fi;
+                final.Add(gfx.Surfaces[i]);
+            }
+            remap[i] = fi;
+        }
+        if (gfx.Polygons != null) {
+            foreach (var poly in gfx.Polygons.Values) {
+                if (poly.PosSurface >= 0 && poly.PosSurface < remap.Length)
+                    poly.PosSurface = remap[poly.PosSurface];
+                if (poly.NegSurface >= 0 && poly.NegSurface < remap.Length)
+                    poly.NegSurface = remap[poly.NegSurface];
+            }
+        }
+        gfx.Surfaces = final;
     }
 
     /// <summary>

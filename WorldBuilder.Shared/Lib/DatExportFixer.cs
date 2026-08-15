@@ -115,9 +115,12 @@ namespace WorldBuilder.Shared.Lib {
                 int nodeOffset = stack.Pop();
                 if (nodeOffset <= 0 || nodeOffset >= fs.Length || !visited.Add(nodeOffset)) continue;
 
+                List<int>? chain;
                 try {
+                    chain = GetChainBlocks(fs, blockSize, nodeOffset, nodeDataSize);
+                    if (chain == null) continue; // garbage/out-of-bounds chain: never touch it
                     Array.Clear(nodeBuf);
-                    ReadBlockChain(fs, blockSize, nodeOffset, nodeBuf, nodeDataSize);
+                    ReadBlockChain(fs, blockSize, chain, nodeBuf, nodeDataSize);
                 }
                 catch {
                     continue;
@@ -167,7 +170,7 @@ namespace WorldBuilder.Shared.Lib {
 
                 if (needsFixup) {
                     try {
-                        WriteBlockChain(fs, blockSize, nodeOffset, nodeBuf, nodeDataSize);
+                        WriteBlockChain(fs, blockSize, chain, nodeBuf, nodeDataSize);
                         nodesFixed++;
                     }
                     catch {
@@ -183,54 +186,64 @@ namespace WorldBuilder.Shared.Lib {
             }
         }
 
-        private static void ReadBlockChain(FileStream fs, int blockSize, int startBlock,
-            byte[] buffer, int bytesToRead) {
+        /// <summary>
+        /// Resolves a node's block chain to a list of validated block offsets, or null if any
+        /// link is out of bounds or unaligned. A cell dat's node chains can cross blocks whose
+        /// next-pointers are garbage (the same taint family this fixer exists to clean); an
+        /// unvalidated chain-follow previously let WriteBlockChain seek past EOF on a garbage
+        /// pointer and zero-extend the file by gigabytes (measured: 348 MB → 1.81 GB with all-
+        /// zero growth). Reads AND writes must go only to validated offsets.
+        /// </summary>
+        private static List<int>? GetChainBlocks(FileStream fs, int blockSize, int startBlock,
+            int bytesNeeded) {
+            var blocks = new List<int>();
             int currentBlock = startBlock;
-            int bufferOffset = 0;
-            var ptrBuf = new byte[4];
+            int have = 0;
             int dataPerBlock = blockSize - 4;
+            var ptrBuf = new byte[4];
 
-            while (bufferOffset < bytesToRead && currentBlock > 0) {
+            while (have < bytesNeeded && currentBlock > 0) {
+                if (currentBlock % blockSize != 0
+                    || currentBlock + blockSize > fs.Length
+                    || !ChainGuardVisit(blocks, currentBlock)) {
+                    return null;
+                }
+                blocks.Add(currentBlock);
+                have += dataPerBlock;
+                if (have >= bytesNeeded) break;
+
+                fs.Position = currentBlock;
+                fs.ReadExactly(ptrBuf, 0, 4);
+                currentBlock = BinaryPrimitives.ReadInt32LittleEndian(ptrBuf);
+            }
+            return blocks;
+        }
+
+        private static bool ChainGuardVisit(List<int> seen, int block) => !seen.Contains(block);
+
+        private static void ReadBlockChain(FileStream fs, int blockSize, List<int> blocks,
+            byte[] buffer, int bytesToRead) {
+            int bufferOffset = 0;
+            int dataPerBlock = blockSize - 4;
+            foreach (var block in blocks) {
+                if (bufferOffset >= bytesToRead) break;
                 int toRead = Math.Min(dataPerBlock, bytesToRead - bufferOffset);
-
-                fs.Position = currentBlock + 4;
-                int read = fs.Read(buffer, bufferOffset, toRead);
-                bufferOffset += read;
-                if (read < toRead) break;
-
-                if (bufferOffset < bytesToRead) {
-                    fs.Position = currentBlock;
-                    fs.ReadExactly(ptrBuf, 0, 4);
-                    currentBlock = BinaryPrimitives.ReadInt32LittleEndian(ptrBuf);
-                }
-                else {
-                    break;
-                }
+                fs.Position = block + 4;
+                fs.ReadExactly(buffer, bufferOffset, toRead);
+                bufferOffset += toRead;
             }
         }
 
-        private static void WriteBlockChain(FileStream fs, int blockSize, int startBlock,
+        private static void WriteBlockChain(FileStream fs, int blockSize, List<int> blocks,
             byte[] buffer, int bytesToWrite) {
-            int currentBlock = startBlock;
             int bufferOffset = 0;
-            var ptrBuf = new byte[4];
             int dataPerBlock = blockSize - 4;
-
-            while (bufferOffset < bytesToWrite && currentBlock > 0) {
+            foreach (var block in blocks) {
+                if (bufferOffset >= bytesToWrite) break;
                 int toWrite = Math.Min(dataPerBlock, bytesToWrite - bufferOffset);
-
-                fs.Position = currentBlock + 4;
+                fs.Position = block + 4;
                 fs.Write(buffer, bufferOffset, toWrite);
                 bufferOffset += toWrite;
-
-                if (bufferOffset < bytesToWrite) {
-                    fs.Position = currentBlock;
-                    fs.ReadExactly(ptrBuf, 0, 4);
-                    currentBlock = BinaryPrimitives.ReadInt32LittleEndian(ptrBuf);
-                }
-                else {
-                    break;
-                }
             }
         }
     }
