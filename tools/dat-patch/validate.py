@@ -19,25 +19,38 @@ Global:
      the header free-chain patch or a 0xCDCDCDCD -> 0 sentinel fix
   G. portal.dat size delta sane
 """
+import argparse
 import json
 import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, "/mnt/wbterminal2/dpc-work")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gfxlib  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASE_P = os.path.join(HERE, "proj/dats/base/client_portal.dat")
-BASE_C = os.path.join(HERE, "proj/dats/base/client_cell_1.dat")
-EXP_P = os.path.join(HERE, "export/client_portal.dat")
-EXP_C = os.path.join(HERE, "export/client_cell_1.dat")
+_ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+_ap.add_argument("--root", default=HERE,
+                 help="run directory holding proj/dats/base, export/ and "
+                      "build_stats.json (default: this script's directory, "
+                      "i.e. the original in-place pilot layout)")
+_ap.add_argument("--stats", default=None, help="build_stats.json override")
+_ap.add_argument("--out", default=None, help="validation.json override")
+_A = _ap.parse_args()
+
+ROOT = os.path.abspath(_A.root)
+BASE_P = os.path.join(ROOT, "proj/dats/base/client_portal.dat")
+BASE_C = os.path.join(ROOT, "proj/dats/base/client_cell_1.dat")
+EXP_P = os.path.join(ROOT, "export/client_portal.dat")
+EXP_C = os.path.join(ROOT, "export/client_cell_1.dat")
+STATS = _A.stats or os.path.join(ROOT, "build_stats.json")
+OUT = _A.out or os.path.join(ROOT, "validation.json")
 
 report = dict(models={}, globalChecks={})
 base = gfxlib.Portal(BASE_P)
 pat = gfxlib.Portal(EXP_P)
-stats = json.load(open(os.path.join(HERE, "build_stats.json")))
+stats = json.load(open(STATS))
 
 fail = 0
 for gid_h in sorted(stats):
@@ -164,7 +177,7 @@ report["globalChecks"]["portalDat"] = dict(
     delta=os.path.getsize(EXP_P) - os.path.getsize(BASE_P))
 report["failures"] = fail
 
-with open(os.path.join(HERE, "validation.json"), "w") as f:
+with open(OUT, "w") as f:
     json.dump(report, f, indent=1)
 
 print(json.dumps(report["globalChecks"], indent=1))
@@ -178,3 +191,6 @@ for g, m in report["models"].items():
              m.get("origPolysCarried"), m.get("noPosFillers"),
              m.get("portNodes"), m.get("maxShellDisp", -1),
              "OK" if m.get("OK") else "FAIL"))
+
+# Exit code so a batch driver can gate on the contract (green = 0).
+sys.exit(1 if fail else 0)

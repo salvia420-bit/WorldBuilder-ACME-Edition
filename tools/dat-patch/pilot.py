@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, "/mnt/wbterminal2/dpc-work")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import datlib          # noqa: E402
 import gfxlib          # noqa: E402
 import pipeline        # noqa: E402

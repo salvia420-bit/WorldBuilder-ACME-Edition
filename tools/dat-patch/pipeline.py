@@ -6,6 +6,8 @@ honest output of looking at the texture: the curated table was seeded from
 exterior building surfaces and mislabels dungeon rock, and the kNN corpus
 misses thatch.
 """
+import os
+
 import numpy as np
 
 import datlib
@@ -24,13 +26,30 @@ OVERRIDES = {
 
 P = gfxlib.Portal()
 
+# Per-Surface memo for the gate.  The height FIELD is already cached on disk per
+# RenderSurface (matlib.height_for), but a batch run re-reads and re-routes the
+# same surface once per record -- and a tranche of ~900 buildings shares a few
+# hundred surfaces (HANDOFF TODO #5: "fields are per-texture, not per-record").
+# Off by default so single-record callers behave exactly as before.
+memo_enabled = False
+_meta_memo = {}
+
 
 def surface_meta(sids, prefer_remacri=False, max_side=512, amp_scale=1.0,
                  force=None, allow_ml=True):
     """Gate + height field for a set of Surface ids.  Returns
-    {sid: dict(cls, why, amp, h, rsId, carved, src)}."""
+    {sid: dict(cls, why, amp, h, rsId, carved, src)}.
+
+    Callers MUTATE the returned dicts (recipe C rewrites `amp`, bandlimit
+    replaces `h`), so the memo always hands out a fresh shallow copy."""
     out = {}
     for sid in sids:
+        if memo_enabled and not force:
+            key = (sid, prefer_remacri, max_side, amp_scale, allow_ml)
+            hit = _meta_memo.get(key)
+            if hit is not None:
+                out[sid] = dict(hit)
+                continue
         s = P.surface(sid)
         cls, why = matlib.classify(sid, s)
         if force and sid in force:
@@ -47,8 +66,12 @@ def surface_meta(sids, prefer_remacri=False, max_side=512, amp_scale=1.0,
             h, op, cf, src = matlib.height_route(rs, cls, prefer_remacri, max_side,
                                                  allow_ml=allow_ml)
         amp = matlib.amp_for(cls) * amp_scale if h is not None else 0.0
-        out[sid] = dict(cls=cls, why=why, amp=amp, h=h, rsId=rs, op=op,
-                        carved=cf, src=src, surf=s)
+        m = dict(cls=cls, why=why, amp=amp, h=h, rsId=rs, op=op,
+                 carved=cf, src=src, surf=s)
+        if memo_enabled and not force:
+            _meta_memo[(sid, prefer_remacri, max_side, amp_scale, allow_ml)] = m
+            m = dict(m)
+        out[sid] = m
     return out
 
 
@@ -218,7 +241,8 @@ def original(src):
 
 
 # ------------------------------------------------------------------ dungeon
-CELLDAT = "/mnt/wbterminal2/dpc-work/proj/dats/base/client_cell_1.dat"
+CELLDAT = os.environ.get(
+    "DATPATCH_CELL", "/mnt/wbterminal2/dpc-work/proj/dats/base/client_cell_1.dat")
 _cell = None
 
 

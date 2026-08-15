@@ -17,9 +17,16 @@ exist only for Clockwise(2).  datlib therefore over-read `numpts` bytes on every
 CullMode.None polygon, which is why 84/772 Environment records failed to parse
 in round 1.  Fixed here; all 772 now parse.
 """
+import os
 import struct
 
 import datlib
+
+# Default base portal.dat.  Overridable with DATPATCH_PORTAL so the same
+# vendored modules run on a box that has no /mnt/wbterminal2 (the buildbox).
+DEFAULT_PORTAL = os.environ.get(
+    "DATPATCH_PORTAL",
+    "/mnt/wbterminal2/dpc-work/proj/dats/base/client_portal.dat")
 
 CULL_LANDBLOCK, CULL_NONE, CULL_CW, CULL_CCW = 0, 1, 2, 3
 STIP_NOPOS, STIP_NONEG = 0x4, 0x8
@@ -224,6 +231,28 @@ def parse_environment(data):
     return eid, cells
 
 
+# ------------------------------------------------------- degrade / LOD info
+def parse_degrade_info(data):
+    """GfxObjDegradeInfo (0x11xxxxxx) -> list of bands, nearest FIRST.
+
+    Ground truth: ACE.DatLoader FileTypes/GfxObjDegradeInfo.cs + Entity/
+    GfxObjInfo.cs (uint id, uint numDegrades, then numDegrades x
+    {uint gfxObjId, uint degradeMode, float min, float ideal, float max}).
+
+    WHY THIS MATTERS (client-headroom-dossier.md section 5a): when a GfxObj
+    carries a degrade record, CPhysicsPart::LoadGfxObjArray populates the draw
+    array EXCLUSIVELY from these band ids -- the root GfxObj is never inserted
+    at any index, including 0.  Patching a carrier whose band 0 is a different
+    object is therefore COMPLETELY INVISIBLE at every distance.
+    """
+    n = struct.unpack_from("<I", data, 4)[0]
+    out = []
+    for i in range(n):
+        gid, mode, mn, idl, mx = struct.unpack_from("<IIfff", data, 8 + 20 * i)
+        out.append(dict(id=gid, mode=mode, min=mn, ideal=idl, max=mx))
+    return out
+
+
 # --------------------------------------------------------------- surfaces
 SURF_BASE1SOLID, SURF_BASE1IMAGE, SURF_BASE1CLIPMAP = 0x1, 0x2, 0x4
 SURF_TRANSLUCENT, SURF_LUMINOUS = 0x10, 0x40
@@ -254,11 +283,27 @@ def parse_surface_texture(data):
 class Portal:
     """Cached accessor over client_portal.dat."""
 
-    def __init__(self, path="/mnt/wbterminal2/dpc-work/proj/dats/base/client_portal.dat"):
-        self.dat = datlib.Dat(path)
+    def __init__(self, path=None):
+        self.path = path or DEFAULT_PORTAL
+        self.dat = datlib.Dat(self.path)
         self._gfx = {}
         self._env = {}
         self._surf = {}
+        self._deg = {}
+
+    def degrade(self, gid):
+        """-> list of degrade bands for GfxObj `gid`, or [] when it carries no
+        GfxObjDegradeInfo (== the loader's "root mesh at every distance" path)."""
+        if gid in self._deg:
+            return self._deg[gid]
+        did = self.gfx(gid).get("degrade") or 0
+        bands = []
+        if did:
+            raw = self.dat.get(did)
+            if raw is not None:
+                bands = parse_degrade_info(raw)
+        self._deg[gid] = bands
+        return bands
 
     def gfx(self, gid):
         if gid not in self._gfx:

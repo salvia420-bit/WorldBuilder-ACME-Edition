@@ -212,6 +212,58 @@ two-surface-sheet exclusion in consumers — un-pin explicitly (or importer shou
    props; texture lane budget after geometry: ~970 MiB.
 7. **Regenerate or retire the collision-corrupt r1 dat sets** (`/mnt/wbterminal2/dat-patch-{opus,reliefgen,smoke}`).
 
+### 4a. ADDENDUM — the TRANCHE RUNNER exists (2026-08-15, session 3)
+
+`tools/dat-patch/tranche.py` + `driver_buildbox.sh` productionise TODO #5/#6 for
+the **static-architecture lane**; `tools/dat-patch/README.md` has the usage.  The
+geometry recipe is unchanged (recipe C is *imported* from `pilot.py`, one copy).
+
+- **The tranche, measured.** `enumerate` walks all **5,346** LandBlockInfo
+  records and takes both static lists — `buildings[]` (398 models / 6,979
+  placements) and `objects[]` (1,475 / 42,942) — resolving Setups to parts:
+  **1,921 distinct GfxObjs**, i.e. r2 §6.3's "~2,000 large statics" exactly.
+  **881** clear the ≤50-tri long-tail cut; the surface gate and the degrade guard
+  cut from there.  Per-record multiplier is r2's 4–6× band, ramped on the vertex
+  spacing 4× would buy (>1.5 m → 6×, >0.9 m → 5×, else 4×).
+- **v1 DEGRADE POLICY (mandatory, dossier §5a).** No degrade record → patch.
+  Degrade record whose **band 0 is this record** → patch (the nearest band
+  resolves to it; bands 1+ stay retail, which is the intended LOD).  Band 0 a
+  **different** object → **EXCLUDE** and write it to `degrade_deferred.json` with
+  its band object ids, for a follow-up lane that patches band objects directly.
+  Re-checked inside `build` so a hand-edited manifest cannot slip one through.
+  Over the tranche: **1,310 carriers, 1,301 of them their own band 0, 9
+  deferred** — the guard is nearly free and the 9 would have been invisible bytes.
+  (It also explains why the pilot was visible: all 16 are band-0-self carriers.)
+- **NEW IMPORTER BUG found and fixed by the tranche smoke** (`CommandEngine.cs`,
+  obj-import): the original-drawing carry was gated on `rebased`, which was
+  gated on the record HAVING PHYSICS.  **388 of the 881 candidates (44 %) ship
+  drawn polygons with no physics section at all** — on those, every original
+  drawn polygon was dropped and the record came back as the displaced shell
+  alone (holes wherever the gate refused a surface), under `success:true` with
+  `drawingCarried:false`.  The rebase now runs whenever the original has a
+  vertex array; `validate.py` check H catches this class, and did.
+- **Throughput/plumbing:** `--jobs N` (spawned pool — forked workers share the
+  dat fd and race on `seek`), per-**RenderSurface** height warm-up before the
+  fan-out (TODO #5), resumable `build` (sha256 over base record bytes + every
+  recipe knob in `state/<gid>.json`; `imports.jsonl` rebuilt from state so a
+  killed run still emits a complete batch), `--plan plan.json` byte budget at
+  106 B/added-tri that stops cleanly and lists every dropped record in
+  `budget_dropped.json`.  `validate.py` now takes `--root` and **exits non-zero**
+  on contract failures; all external paths in `matlib`/`gfxlib`/`pipeline` are
+  env-overridable so the modules run on a box with no `/mnt/wbterminal2`.
+- **Smoke (this laptop, `--jobs 1`, `/mnt/wbterminal2/tranche-smoke/`):**
+  enumerate over the Holtburg window → 108 candidates, 27 displace, 66
+  long-tail, 15 gate-refused, 0 deferred; a second enumerate over LBs 47–48,2C–2E
+  exercised the exclusion path (3 deferred, band objects listed).  Build of
+  exactly 2 records — `0x01000F68` (no degrade, no physics) and `0x0100081C`
+  (degrade carrier, band 0 == self) — imported through WBT and `validate.py`
+  green on both after the importer fix.
+- **Still unfinished:** no full-world run has been executed (that is the
+  buildbox driver's job — budget ~60 CPU-h in Python per TODO #5); the
+  degrade-deferred follow-up lane (patch band objects directly) is not built;
+  `tranche.py` covers architecture only — dungeons (TODO #4) and creatures still
+  need their own lanes.
+
 ## 5. REPRO
 
 `/mnt/wbterminal2/dat-patch-pilot-holtburg/`: `pilot.py enumerate` → `pilot.py build` →

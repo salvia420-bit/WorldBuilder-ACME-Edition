@@ -17,13 +17,21 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
 
-TEX_BASE = "/mnt/wbterminal2/tex-reexport-2026-07-30/"
-REMACRI = ["/mnt/wbterminal2/upscale-corpus/out/statics-remacri/",
-           "/mnt/wbterminal2/upscale-corpus/out/tranche1-remacri/"]
-CLASSES_JSON = ("/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/"
-                "data/tex-relief-classes.compact.json")
-CURATED_JSON = "/mnt/wbterminal2/gfx-material-agent/table.json"
-CACHE = "/mnt/wbterminal2/dpc-work/hcache/"
+# Every external path is env-overridable so the same vendored modules run on a
+# box without /mnt/wbterminal2 (the buildbox).  Defaults unchanged.
+TEX_BASE = os.environ.get("DATPATCH_TEX_BASE",
+                          "/mnt/wbterminal2/tex-reexport-2026-07-30/")
+REMACRI = [d for d in os.environ.get(
+    "DATPATCH_REMACRI",
+    "/mnt/wbterminal2/upscale-corpus/out/statics-remacri/:"
+    "/mnt/wbterminal2/upscale-corpus/out/tranche1-remacri/").split(":") if d]
+CLASSES_JSON = os.environ.get(
+    "DATPATCH_CLASSES_JSON",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/"
+    "data/tex-relief-classes.compact.json")
+CURATED_JSON = os.environ.get("DATPATCH_CURATED_JSON",
+                              "/mnt/wbterminal2/gfx-material-agent/table.json")
+CACHE = os.environ.get("DATPATCH_HCACHE", "/mnt/wbterminal2/dpc-work/hcache/")
 
 # ---- height_seam.rs constants (the SHIPPED tuning; relief_op.py's 0.25 full
 # was superseded by 0.12).  Global and absolute: never per-texture normalised.
@@ -282,9 +290,11 @@ def carved_fraction(h):
 
 
 # ------------------------------------------------------- DeepBump (ML) lane
-DBCACHE = "/mnt/wbterminal2/dpc-work/dbcache/"
-DBPY = "/mnt/wbterminal2/deepbump-eval/venv/bin/python"
-DBSCRIPT = "/mnt/wbterminal2/dpc-work/db_height.py"
+DBCACHE = os.environ.get("DATPATCH_DBCACHE", "/mnt/wbterminal2/dpc-work/dbcache/")
+DBPY = os.environ.get("DATPATCH_DBPY",
+                      "/mnt/wbterminal2/deepbump-eval/venv/bin/python")
+DBSCRIPT = os.environ.get("DATPATCH_DBSCRIPT",
+                          "/mnt/wbterminal2/dpc-work/db_height.py")
 SEAM_WEAK = 0.08          # carved fraction below which "seam found no network"
 
 
@@ -303,7 +313,10 @@ def deepbump_height(rs, invert=False):
     import subprocess
     p = DBCACHE + rs + ".npy"
     if not os.path.exists(p):
-        subprocess.run([DBPY, DBSCRIPT, rs], capture_output=True)
+        try:
+            subprocess.run([DBPY, DBSCRIPT, rs], capture_output=True)
+        except OSError:
+            return None      # no ONNX venv on this box: seam-only lane
     if not os.path.exists(p):
         return None
     h = np.load(p)

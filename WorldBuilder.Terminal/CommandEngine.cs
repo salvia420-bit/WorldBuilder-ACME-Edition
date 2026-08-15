@@ -11725,7 +11725,15 @@ public partial class CommandEngine {
                     // the ORIGINAL array verbatim (ids stable, physics valid by construction)
                     // with the new render vertices appended; render polygons are remapped onto
                     // it, reusing an original vertex + UV slot when one matches exactly.
-                    if (origHasPhysics && orig.VertexArray?.Vertices is { Count: > 0 }) {
+                    //
+                    // Run this whenever the original has a vertex array, NOT only when it
+                    // has physics: the rebase is also the precondition for carrying the
+                    // original DRAWING geometry below, and 388 of the 881 static-architecture
+                    // tranche records (44%) ship drawn polygons with no physics section at
+                    // all. Gating on physics dropped every original drawn polygon on those
+                    // records — the mesh came back as the displaced shell alone, i.e. holes
+                    // wherever the gate refused a surface — under a success:true.
+                    if (orig.VertexArray?.Vertices is { Count: > 0 }) {
                         var err2 = RebaseVertexArrayOnOriginal(gfx, orig);
                         if (err2 != null)
                             return new ObjImportResult(false, gfxObjId, setupId, 0, 0, err2);
