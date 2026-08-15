@@ -77,6 +77,24 @@ Setups to parts, and routes each GfxObj:
 
 Measured on the retail dats: 5,346 LBInfo records → 1,921 distinct static
 GfxObjs → 881 over 50 tris → the gate and the degrade guard cut from there.
+(World-wide degrade-deferred: 5.)
+
+### Buildbox validation run (2026-08-15, Holtburg window A6-AC,B1-B7)
+First end-to-end box run (us-central1-b, seam-only lane — DeepBump venv not
+shipped, matlib's graceful fallback): 108 candidates → 27 displace / 66
+skip-small / 15 skip-gate / 0 deferred / 0 errors. `validate.py`: **25/27 green**;
+all 27 pass the correctness invariants (physVertexPosDrift/NrmDrift = 0.0, PORT
+counts equal, origPolysCarried byte-identical), cell dat size-identical with
+**0 unexplained words**, portal +768 KB. The 2 non-green are `shellDisplacedOk`
+only — maxShellDisp 0.013 / 0.017 m, just under the 0.02 m "meaningful
+displacement" guard: weak-seam surfaces whose relief needs DeepBump (off on the
+box) or should be gate-skipped rather than spent. NOT corruption. Two v1
+refinements this exposes for the world run: (a) ship the DeepBump venv to the box
+for ML-fallback parity with the pilot, or (b) have the router demote a surface to
+skip-gate when seam's carved fraction predicts sub-threshold displacement, so no
+triangles are spent on an invisible carve. The GPU is irrelevant to this lane
+(pure-CPU numpy); a full `WINDOW=world` run is ~60 CPU-h (≈20 h wall at --jobs 3
+on n1-standard-4), preemption-resumable via phase + `state/<gid>.json` stamps.
 
 `build` runs recipe C per record, emits `obj/<gid>.obj` + `imports.jsonl` +
 `build_stats.json`, and is **resumable** — `state/<gid>.json` records a sha256
