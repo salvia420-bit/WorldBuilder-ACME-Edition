@@ -153,3 +153,82 @@ investigation first. Deliver via taildrop for owner cut/approval before posting.
   permission-blocked in-session).
 - The pre-remacri gate artifacts (fixed base-res portal, sha `9fb73e1b…`) remain in
   `/mnt/wbterminal2/dat-patch-texture-lane/export/` as the rollback tier.
+
+---
+## ADDENDUM 2026-08-16 — LANE 1 (TERRAIN) BUILT + TOOLING-VALIDATED; in-client gate in progress
+
+- **Decomp recon changed the lane's shape.** TexMerge::FillTempTexBuffer allocates its merge
+  buffer once as `4*Region.baseTexSize²` (acclient.c:305935) and ImgTex::TileCSI (:365513)
+  raw-DWORD-copies with `src_width == composite/texTiling` assumed EXACTLY, from a LOCKED
+  surface (32-bit uncompressed assumed — DXT sources would be read as garbage). With retail
+  Region (baseTexSize 1024, tiling 2) terrain sources are **structurally pinned to 512²
+  A8R8G8B8**. A 4× terrain up-res requires Region.baseTexSize=4096 → composite land
+  surfaces upload UNCOMPRESSED per terrain-combo (CreateLScapeTexture) → quadratic
+  address-space cost on a 32-bit client. That is a separately-gated EXPERIMENT (baseTexSize
+  2048 + 1024² sources is the plausible middle step), NOT the ship lane.
+- **Shipped design**: 29 base terrain RS rebuilt as Remacri 2048² supersampled → 512²
+  Lanczos + exposure anchor (1.15×; water STs kept 1.0×), format-preserving A8R8G8B8,
+  alpha verbatim, size unchanged. **Emboss OFF for terrain — board-proven**: the low-band+AO
+  paints broad diagonal blotches that repeat with the tile (boards 0x06006D3F/42/6F).
+  Blend masks + 3 detail textures untouched. Base terrain STs are single-entry (verified) —
+  no collapse step exists in this lane.
+- **Tooling committed** (2ea956f8): `tools/dat-patch/terrain_lane.py` (derive/bake/board/run)
+  + `tools/dat-patch/AceDatWalk` (durable ACE.DatLoader full-walk + byte-diff validator).
+- **Export**: `/mnt/wbterminal2/dat-patch-terrain/export/client_portal.dat` sha `c9ba5061…`
+  (1114.9 MiB, same size as remacri tier — in-place). 3-family validation ALL CLEAN:
+  ACE 79,694/79,694 read + diff vs retail base exactly 1,730 changed (1,701 prior + 29
+  terrain), strict python walk CLEAN, WBT roundtrip 29/29 formatPreserved. fixup zeroed 4
+  fresh DRW sentinel leaves (load-bearing every run, again).
+- **DDD iteration byte-identical (2073)** between remacri and terrain exports — ACE can
+  serve the terrain export with zero disruption to remacri-dat clients.
+- **State as of this addendum**: laptop ACE serves the terrain export
+  (`Config.js.pre-terrain-gate-bak` = restore to remacri). 1070 test kit portal swapped
+  (remacri tier kept as `client_portal.dat.remacri.bak`). In-client gate: world entry OK,
+  DDD accepted, stability soak + daylight terrain tour (`acdttour6`, Holtburg/Eastham/
+  Yaraq ground pans) pending Dereth dawn.
+
+## ADDENDUM 2026-08-16 ~01:00 — TERRAIN GATE PASSED; DOORS BUILT+VALIDATED; PROPS WAVE-1 IN FLIGHT
+
+- **TERRAIN IN-CLIENT GATE: PASSED** (1070, daylight 3-town tour Holtburg/Eastham/Yaraq,
+  session held, no crash; stills in `dat-patch-terrain/gate-1070/shots/`). Terrain tier
+  (`c9ba5061…`) is now the gated rollback tier above remacri. ACE serves it.
+  Two operational finds: (a) **watcher PrintWindow shots WORK** (1030×797, full color —
+  the runbook's "PrintWindow is black" no longer holds; OBS WGC records black for
+  RE-launched clients, cause unknown — use shots for eyeballs); (b) mid-gate the laptop
+  MariaDB died from memory pressure (a runaway `bfs`/find of mine; earlyoom) → ACE
+  "connection lost" mid-tour once — restart: `sudo /etc/init.d/mariadb start`. Char-select:
+  slot order did NOT drift; stale sessions were the real cause of failed entries —
+  fresh acdtgate (schtasks /end first! /run on a live task no-ops) then click ladder.
+- **DOORS LANE (lane 2, doors-first) BUILT + 3-FAMILY VALIDATED, gate pending**:
+  census 423 wcids/26,348 instances → 53 setups → 104 RS. 30 already patched; 59 baked
+  (44 plain + 15 INDEX16 palette-converted to DXT); 14 deferred (no corpus → buildbox
+  batch); 1 EXCLUDED (0x060037A3 palettized+ClothingTable-recolored house doors 0x02000C07–0D).
+  Recolor safety = ClothingTable raw byte scan + ACE weenie palette/texture rows (all zero
+  for doors). Export `dat-patch-doors/export/` sha `96f89e37…` 1136.4 MiB, ACE walk
+  79,694/0 fail (1,825 changed = 1,730 + 59 RS + 36 collapses), strict walk CLEAN,
+  polyfix audit clean. Staged on the 1070 as `client_portal.dat.doors`; gate at next
+  Dereth dawn (~02:05): swap box portal + ACE DatFilesDirectory → doors export, tour5
+  (building close-ups show doors) + tour6.
+  NOTE the A/B board renderer draws the PATCHED door as flat grey — board-tooling
+  artifact only (dat readback of 0x06006DF9 verified correct DXT1 1024² wood); don't
+  chase it as a dat bug.
+- **Tooling landed** (75bda16d): `pallib.py` (P8/INDEX16 palette decode per
+  holtburger-dat texture.rs semantics: override-else-default palette, clipmap idx<8
+  transparent per ImgTex::CopyIntoData :365958); texture_lane PFID fix (real ids 41/101,
+  old {1,65} was hex/decimal confusion — its palette skip never fired); **base-alpha
+  transplant in the bake** (corpus upscales of palettized sources are opaque; door
+  0x06003966's transparent window would have shipped opaque red); ConstructMesh
+  10-invariant checklist as `polyfix.constructmesh_check` + validate.py check K (flags
+  the historical sides=2/neg=-1 AV on the pre-polyfix export 50/50, clean on shipped).
+- **PROPS CENSUS (full)**: 788 placed non-creature setups → 1,378 GfxObjs → 1,109 unique
+  RS; 195 already patched; TODO 914 = 260 plain corpus-covered + 6 plain missing +
+  648 palettized. ClothingTable scan: 224 prop setups recolor-live → 396 palettized RS
+  UNSAFE (skip; refinement: check placed weenies' PaletteTemplate to reclaim some),
+  252 safe (174 corpus-covered, 78 need upscale). **Wave-1 bake+import RUNNING** (434 RS =
+  260+174) into `dat-patch-props/export/` (copy of doors export — tier: terrain(gated) →
+  doors(candidate) → props-wave1(candidate)). **Buildbox micro-batch needed: 98 textures**
+  (78 pal + 6 plain + 14 doors) — lists in scratchpad `props_wave1.json` (copy into the
+  lane dir!) — then wave-2.
+- Scratchpad census artifacts copied to `/mnt/wbterminal2/dat-patch-props/` and
+  `/mnt/wbterminal2/dat-patch-doors/` (door_census, props_todo, props_pal_safety,
+  props_wave1, door_p8_plan) — do that copy if missing.
