@@ -54,6 +54,24 @@ The §BLOCKER below is RESOLVED at the structural level; the file that ships is 
   interactive tasks, message-driven Keystone UI vs DirectInput keymap actions, SendInput +
   user-idle guard, char-select click-enter feedback loop): scripts in C:\Temp on the 1070 +
   this session's scratchpad; distilled into docs/dat-patch/1070-acclient-driving.md.
+- **THIRD finding + fix (same night): the box lane never shipped the up-res.** Owner
+  in-client inspection read "textures not reaching"; audit showed every patched
+  RenderSurface byte-count UNCHANGED vs base — `bake_one` had `prefer_remacri=False`
+  hardcoded (the box has no Remacri corpus), so only the legibility emboss shipped, at
+  retail resolution. Laptop rerun with the new `--remacri` flag
+  (`/mnt/wbterminal2/dat-patch-texture-remacri/`, base pngs re-extracted via WBT):
+  **571/768 surfaces re-encoded at Remacri 4x resolution** (196 palettized-source sids keep
+  the base-res bake pending an INDEX16 converter; corpus coverage was 564/566 non-palette).
+  Portal: **1114.9 MiB** (sha256 7d2745e9…), fixup re-run (81 fresh DRW sentinel leaves —
+  the fixer is load-bearing every run), polyfix-audit clean, ACE full-walk green (same
+  1,701 changed records). **In-client PROVEN on the 1070 (daylight, 2026-08-15 ~22:50):**
+  world entry + close-up wall scans of known-patched Holtburg buildings show the Remacri
+  masonry/timber/plaster clearly (tour5 video; A/B boards in dat-patch-texture-remacri/boards/).
+  ACE now serves the remacri export (Config.js repointed; vanilla restore =
+  Config.js.pre-texture-gate-bak, dats /home/wbterminal/ac_base_dats/).
+  Owner-confirmed expected gaps, NOT bugs: terrain (no terrain lane yet — upscale-corpus
+  HAS terrain-remacri/ultrasharp/x4plus corpora ready), doors/props (weenie objects outside
+  the 447 static set), and the ~10,700 small props (share-inherit only).
 - 1070 retail-client in-client gate: see the addendum at the END of this file for status.
 
 **Read this first when you return.** The lane ran to completion while you were away and
