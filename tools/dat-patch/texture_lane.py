@@ -447,6 +447,17 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
     collapses = []        # WBT collapses[] specs (st 0x05, keepDid rs)
     plan = []             # per-surface plan for roundtrip
 
+    # Terrain RenderSurfaces MUST stay 512^2 A8R8G8B8 (ImgTex::MergeTexture locks +
+    # composites them; a DXT/2048^2 overwrite -> OOB alpha read -> VeryHigh crash,
+    # root-caused 2026-08-16 when the dungeon lane clobbered 0x06006D4B/50). REFUSE
+    # to bake any protected RS here so no wave can collide with terrain again.
+    protected_rs = set()
+    prot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "terrain_protected_rs.txt")
+    if os.path.exists(prot_path):
+        protected_rs = {int(l, 16) for l in open(prot_path)
+                        if l.strip() and not l.startswith("#")}
+
     t0 = time.time()
     for i, sid_hex in enumerate(want):
         rec = surfaces.get(sid_hex)
@@ -455,6 +466,11 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
             res["skips"].append(dict(sid=sid_hex, why="no rsId"))
             continue
         rs_hex = rec["renderSurface"]
+        if int(rs_hex, 16) in protected_rs:
+            res["skipped_other"] += 1
+            res["skips"].append(dict(sid=sid_hex, rs=rs_hex,
+                                     why="terrain-protected RS (MergeTexture-locked)"))
+            continue
         st_hex = rec["surfaceTexture"]
         rs_int = int(rs_hex, 16)
         st_int = int(st_hex, 16) if st_hex else 0

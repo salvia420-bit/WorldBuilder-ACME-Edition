@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DatRestore</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.2" />
+  </ItemGroup>
+</Project>
