@@ -327,6 +327,7 @@ public class JsonCommandProcessor {
             ["ui-element-edit"]   = CmdUiElementEdit,
             ["ui-image-replace"]  = CmdUiImageReplace,
             ["render-surface-import"]    = CmdRenderSurfaceImport,
+            ["environment-append-geometry"] = CmdEnvironmentAppendGeometry,
             ["surface-texture-collapse"] = CmdSurfaceTextureCollapse,
             ["ui-pack-export"]    = CmdUiPackExport,
             // PR-V Skills view backing dump — see CommandEngine.SkillTableDump.cs
@@ -856,6 +857,31 @@ public class JsonCommandProcessor {
             writtenCount = r.WrittenCount,
             failCount = r.FailCount,
             records = r.Records,
+        });
+    }
+
+    private string CmdEnvironmentAppendGeometry(System.Text.Json.Nodes.JsonNode node) {
+        string datPath = node["datPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'datPath' field (a portal-DAT COPY — writes to ~/ac_base_dats are refused)");
+        uint envId = ParseUIntFlexible(node["envIdHex"] ?? node["envId"], "envIdHex");
+        uint cellStructIndex = node["cellStructIndex"]?.GetValue<uint>()
+            ?? throw new ArgumentException("Missing 'cellStructIndex' field (key into the Environment's CellStructs)");
+        string objPath = node["objPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'objPath' field");
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+
+        var r = _engine.EnvironmentAppendGeometry(datPath, envId, cellStructIndex, objPath, dryRun);
+        return Serialize(new {
+            success = true,
+            command = "environment-append-geometry",
+            datPath = r.DatPath,
+            envId = $"0x{r.EnvId:X8}",
+            cellStructIndex = r.CellStructIndex,
+            dryRun = r.DryRun,
+            appendedVertices = r.AppendedVertices,
+            appendedPolys = r.AppendedPolys,
+            newVertexCount = r.NewVertexCount,
+            newPolyCount = r.NewPolyCount,
         });
     }
 
@@ -3117,6 +3143,7 @@ public class JsonCommandProcessor {
             new { name = "ui-image-replace",   args = "datPath, replacements[{did, pngPath}] | fromDir, dryRun?, allowCreate?", description = "Write PNGs into a portal-DAT COPY as RenderSurfaces (format preserved for R8G8B8/A8R8G8B8; batch via a dir of 0x06XXXXXX.png)" },
             new { name = "ui-pack-export",     args = "outDir, layoutIds?, datPath?, includeImages?", description = "Export an AC_UI_Asset_Builder-compatible reference_pack.json + images/ (panels, nodes, widget kinds, state image sets, usage cross-ref)" },
             new { name = "render-surface-import", args = "datPath, idHex, pngPath, format?, allowResize?, dryRun?, allowCreate? | imports[{idHex,pngPath,format?,allowResize?}] | fromDir", description = "Import a PNG into a portal-DAT COPY as a RenderSurface with the record's own PixelFormat PRESERVED by default (DXT1 stays DXT1 via the in-tree BCnEncoder path) or an explicit format (DXT1/A8R8G8B8/...); allowResize (default true) takes the new dims from the image. Reports old/new dims+format, bytes and blocks used. PREP THE TARGET COPY with bake/scripts/prep_dat.py (zeroed free arena) until the DatReaderWriter contiguous-free-list allocator bug is fixed upstream. Writes to ~/ac_base_dats refused" },
+            new { name = "environment-append-geometry", args = "datPath, envIdHex, cellStructIndex, objPath, dryRun?", description = "Append OBJ render geometry to one CellStruct of an Environment (0x0D) record in a portal-DAT COPY (the dungeon-geometry lane). Appends DRAWN polys + vertices only with ConstructMesh-safe defaults (Stippling=None, SidesType=Landblock, NegSurface=0); physics polys, Portals and all BSPs carried verbatim (no rebuild — the in-client-proven obj-import template). 'usemtl surf<N>' in the OBJ selects the CELL-LOCAL surface index (each EnvCell maps it through its own surface array). Writes to ~/ac_base_dats refused" },
             new { name = "surface-texture-collapse", args = "datPath, idHex, keepDid?, dryRun? | collapses[{idHex,keepDid?}]", description = "Rewrite a SurfaceTexture (0x05) texture list to a single entry (default keepDid = the LAST entry = the base-detail level that ships in client_portal.dat), so retail ImgTex::GetSurfaceDID takes the m_num==1 branch and cannot fall back to the client_highres.dat index-0 original. Same DAT-copy prep + ~/ac_base_dats refusal as render-surface-import" },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };

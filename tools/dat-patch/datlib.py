@@ -172,11 +172,16 @@ def _poly(r):
     pos = struct.unpack_from('<h', r.b, r.o)[0]; r.o += 2
     neg = struct.unpack_from('<h', r.b, r.o)[0]; r.o += 2
     vids = list(struct.unpack_from('<%dh' % numpts, r.b, r.o)); r.o += 2 * numpts
+    uvi = []
     if not (stip & 0x4):             # NoPos
+        uvi = list(r.b[r.o:r.o + numpts]); r.o += numpts
+    # NegUV presence: SidesType == CullMode.Clockwise (2) && !NoNeg — per ACE
+    # Entity/Polygon.cs:41 (the original `sides == 1` here was wrong; CullMode
+    # None = 1, Clockwise = 2).
+    if sides == 2 and not (stip & 0x8):
         r.o += numpts
-    if sides == 1 and not (stip & 0x8):   # Clockwise && !NoNeg
-        r.o += numpts
-    return dict(n=numpts, stip=stip, sides=sides, pos=pos, neg=neg, v=vids)
+    return dict(n=numpts, stip=stip, sides=sides, pos=pos, neg=neg, v=vids,
+                uvi=uvi or [0] * numpts)
 
 
 def _vertex_array(r):
@@ -184,18 +189,20 @@ def _vertex_array(r):
     nv = r.u32()
     P = []
     N = []
+    UV = []
     idx = {}
     for i in range(nv):
         key = struct.unpack_from('<H', r.b, r.o)[0]; r.o += 2
         m = struct.unpack_from('<H', r.b, r.o)[0]; r.o += 2
         P.append(struct.unpack_from('<3f', r.b, r.o)); r.o += 12
         N.append(struct.unpack_from('<3f', r.b, r.o)); r.o += 12
+        UV.append([struct.unpack_from('<2f', r.b, r.o + 8 * j) for j in range(m)])
         r.o += 8 * m
         idx[key] = i
-    return P, N, idx
+    return P, N, UV, idx
 
 
-def parse_environment(data):
+def parse_environment(data, strict=False):
     r = R(data)
     eid = r.u32()
     ncells = r.u32()
@@ -203,22 +210,31 @@ def parse_environment(data):
     for _ in range(ncells):
         key = r.u32()
         npoly = r.u32(); nphys = r.u32(); nport = r.u32()
-        P, N, idx = _vertex_array(r)
+        P, N, UV, idx = _vertex_array(r)
         polys = []
         for _ in range(npoly):
-            r.o += 2                 # ushort key
-            polys.append(_poly(r))
-        r.o += 2 * nport
+            pk = struct.unpack_from('<H', r.b, r.o)[0]; r.o += 2
+            p = _poly(r)
+            p['key'] = pk
+            polys.append(p)
+        portals = list(struct.unpack_from('<%dH' % nport, r.b, r.o)); r.o += 2 * nport
         r.align()
         _bsp(r, 'cell')
+        phys = []
         for _ in range(nphys):
-            r.o += 2
-            _poly(r)
+            pk = struct.unpack_from('<H', r.b, r.o)[0]; r.o += 2
+            pp = _poly(r)
+            pp['key'] = pk
+            phys.append(pp)
         _bsp(r, 'physics')
         if r.u32() != 0:
             _bsp(r, 'drawing')
         r.align()
-        cells[key] = dict(P=P, N=N, idx=idx, polys=polys, nphys=nphys, nport=nport)
+        cells[key] = dict(P=P, N=N, UV=UV, idx=idx, polys=polys, phys=phys,
+                          portals=portals, nphys=nphys, nport=nport)
+    if strict and len(data) - r.o != 0:
+        raise ValueError("environment 0x%08X not fully consumed (tail=%d)"
+                         % (eid, len(data) - r.o))
     return eid, cells
 
 
