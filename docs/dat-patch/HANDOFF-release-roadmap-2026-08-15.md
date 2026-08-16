@@ -315,3 +315,33 @@ serves it)**. Census artifacts copied into the lane dir. tour7 script deployed
 on the 1070 (acdttour7). Remaining in lane 3: the geometry sub-lane (scoped
 above). Then creatures (lane 4) — reuse `clothing_rs_global.json` as the
 recolor wall, expect most creature textures recolor-live.
+
+## ADDENDUM 2026-08-16 ~04:40 — LANE 4 (CREATURES) + DUNGEON-GEOMETRY PILOT: BUILT + GATED (r4)
+
+- **Creatures texture wave GATED** (251 RS: 141 plain + 110 palettized incl. buildbox
+  batch3 of 56; census by a fork agent — 6,801 spawnable wcids → 1,343 RS, of which
+  **811 are recolor-live** via ClothingBase/PaletteTemplate/generator-forced palettes:
+  real monsters stay untouched until a palette-composition-aware design exists; the
+  wave's visible wins are statue/monolith/painting-type creatures). PaletteTemplate
+  reclaim on props: dead end (2/396) — census closed.
+- **Dungeon geometry machinery BUILT + GATED** (commit 966e50cc): WBT
+  `environment-append-geometry` (fork-agent implementation, obj-import template,
+  physics/Portals/BSPs verbatim) + `env_geo.py` (dominant-slot census over 735k
+  EnvCells, shells for >=90%-dominant wall-class slots only, portal polys pinned)
+  + datlib env-parser fixes (ACE-correct NegUV rule, UV capture, strict mode; all
+  772 environments strict-parse). Pilot: 7 shells (envs 0x0223/0x02C8) applied,
+  in-client PASS inside the appended room (no z-fight/holes/AV). ⚠ One grown
+  Environment write taints ~2,000 DRW leaves — fixup mandatory per append run.
+- **The geometry go/no-go is now an OWNER DECISION**, machinery-complete: shared-prefab
+  eligibility is thin (~36% cell-weighted); real dungeon relief needs the
+  environment-VARIANT design (new 0x0D records + EnvCell repointing = cell-dat edits).
+  See dat-patch-creatures/GATE-STATUS.md "honest verdict".
+- **Tier ladder: remacri → terrain → doors → props → dungeons → r4 creatures+envgeo
+  (GATED, sha af470f32…, 3,815 records changed, 1540 MiB — 500 MiB ceiling headroom).**
+  Packages r1–r4 exist per-lane via release.sh. ACE + the 1070 kit run r4.
+- Remaining roadmap: §5.6 QA passes (mip-cap slow pan, z-fight far pan — batch with
+  the next 1070 window), showcase video in REAL daylight (§6, taildrop to owner),
+  distribution norms note (§5.7), creature-monster textures pending a
+  palette-composition design (bake per DEFAULT palette only was rejected as
+  recolor-breaking; a future INDEX16-preserving up-res would need palette-resolution
+  at 4× which changes index width — research item), environment-variant design.
