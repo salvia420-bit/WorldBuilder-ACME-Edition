@@ -33,12 +33,17 @@ git push origin master
   textures at 1920x1080, authed + entered world. dat-decompress (NOP je @ box
   file 0x17878) works end-to-end. Phase-2 headroom is real. Resolution +
   VeryHigh detail also confirmed live. (ac-eor-patch/COMPRESSION-PATCH-FINDINGS.md)
-- **r6 scenery tier FAILS the gate**: crashes the retail client on Holtburg
-  load — access violation at RVA 0x13EA26 (ImgTex::CopyIntoData, the
-  palettized/clipmap upload path). Isolated: reproduces on STOCK client +
-  UNCOMPRESSED r6, so it's an r6 audit-fix REBAKE bug, not compression/patches.
-  r6 is NOT shippable until fixed; bisect the texture_lane audit fixes.
-  (dat-patch-scenery/GATE-STATUS.md)
+- **The gate crash is a TERRAIN VeryHigh bug, NOT r6/scenery** (corrected via
+  fork bisect + disasm of our exe): fault RVA 0x13EA26 = ImgTex::**MergeTexture**
+  (terrain alpha-compositor), not CopyIntoData (earlier id was a different-build
+  map error). r6 touched only 340 scenery RS; every terrain input is
+  byte-identical r5->r6; all 340 scenery records are well-formed DXT. None of
+  the 8 audit fixes is implicated. Trigger = the INI: first-ever run at
+  LandscapeDetailTextures=True/VeryHigh exercised a terrain-lane alpha path that
+  was always VeryLow before. Tier-independent (r5+VeryHigh predicted to crash
+  identically). The blocker is the TERRAIN lane (suspect: undersized alpha map
+  upscaled at VeryHigh -> MergeTexture OOB read), separable from r6 and from the
+  audit fixes. (dat-patch-scenery/GATE-STATUS.md)
 - **Merge status unchanged**: still gated. The audit-fix commits (1ee63103) +
   r6 need the CopyIntoData bug fixed and re-gated before master. Everything
   ELSE on integ/all-20260813 (through r5, shipped+gated) remains FF-clean.
