@@ -88,7 +88,11 @@ def _emboss(band, limit=1.0):
     etched" failure the owner rejects.  tanh caps the tail without touching
     the body of the distribution.
     """
-    gv, gu = np.gradient(band.astype(np.float32))
+    # wrap-aware gradient: np.gradient's one-sided border differences put a
+    # 1-texel bright/dark pipe on every tile edge (up to ~35% of SHADE_SPAN)
+    p = np.pad(band.astype(np.float32), 1, mode="wrap")
+    gv, gu = np.gradient(p)
+    gv, gu = gv[1:-1, 1:-1], gu[1:-1, 1:-1]
     e = -(gu * L_UV[0] + gv * L_UV[1])
     s = float(np.percentile(np.abs(e), 98.0))
     if s < 1e-8:

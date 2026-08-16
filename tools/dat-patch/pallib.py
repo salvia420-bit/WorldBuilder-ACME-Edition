@@ -68,6 +68,15 @@ def decode_paletted_rs(dat, rsid, clipmap=False, palette_override=0):
                          % (rsid, int(idx.max()), len(colors), pal_id))
     out = pal[idx].reshape(h, w, 4).copy()
     if clipmap:
-        out[(idx < 8).reshape(h, w)] = 0
+        # Alpha goes to 0, but the RGB underneath must be COLOUR-BLED, not
+        # black: DXT block fitting and the client's box mips filter RGB
+        # independently of alpha, so black backing rings every cutout edge
+        # dark (audit finding).  Bleed the nearest opaque colour outward.
+        m = (idx < 8).reshape(h, w)
+        if m.any() and not m.all():
+            from scipy import ndimage as ndi
+            _, near = ndi.distance_transform_edt(m, return_indices=True)
+            out[..., :3] = out[..., :3][tuple(near)]
+        out[m, 3] = 0
     return out, dict(w=w, h=h, fmt=fmt, palette=pal_id,
                      default_palette=default_pal, clipmap=clipmap)

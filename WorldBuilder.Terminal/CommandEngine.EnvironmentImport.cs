@@ -207,8 +207,13 @@ public partial class CommandEngine {
                 case "v":
                     pos.Add(new Vector3(float.Parse(tok[1], ci), float.Parse(tok[2], ci), float.Parse(tok[3], ci)));
                     break;
+
                 case "vn":
-                    norm.Add(new Vector3(float.Parse(tok[1], ci), float.Parse(tok[2], ci), float.Parse(tok[3], ci)));
+                    // Normalize at parse: the dedupe below compares against the
+                    // already-normalized stored normal, so a non-unit vn (any
+                    // DCC export, or a gain-scaled tool) would never match and
+                    // the vertex count explodes until the importer throws.
+                    norm.Add(Vector3.Normalize(new Vector3(float.Parse(tok[1], ci), float.Parse(tok[2], ci), float.Parse(tok[3], ci))));
                     break;
                 case "vt":
                     uv.Add(new Vector2(float.Parse(tok[1], ci), float.Parse(tok[2], ci)));

@@ -479,7 +479,9 @@ namespace DatReaderWriter.Extensions.DBObjs {
 
                     var encoder = new BcEncoder();
                     encoder.OutputOptions.GenerateMipMaps = false;
-                    encoder.OutputOptions.Quality = CompressionQuality.Balanced;
+                    // Offline one-shot bake: BestQuality is the single biggest
+                    // free DXT endpoint-fit lever (banding on flat gradients).
+                    encoder.OutputOptions.Quality = CompressionQuality.BestQuality;
                     encoder.OutputOptions.Format = compressionFormat;
                     encoder.OutputOptions.FileFormat = OutputFileFormat.Dds;
 

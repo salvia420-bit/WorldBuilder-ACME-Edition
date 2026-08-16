@@ -892,7 +892,10 @@ def finalize(V, faces, srctri, tri_data, smooth=True, normal_gain=1.0,
             g = acc.get((poly_of[fi], F[fi][k]), gn[fi]) if smooth else gn[fi]
             gl = np.linalg.norm(g)
             g = g / gl if gl > 1e-14 else gn[fi]
-            n = an[k] + (g - fr.plane_n)
+            # normal_gain was DEAD until 2026-08-16 (audit): the multiplier
+            # never made it from the docstring into the body, so recipe C's
+            # "sculpted normals, gain 2.5" shipped as gain 1.0 in every lane.
+            n = an[k] + float(normal_gain) * (g - fr.plane_n)
             nl = np.linalg.norm(n)
             NRs[fi, k] = n / nl if nl > 1e-9 else g
     surf = np.array([tri_data[t]["poly"] for t in srctri])

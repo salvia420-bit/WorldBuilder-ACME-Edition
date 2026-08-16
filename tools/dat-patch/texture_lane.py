@@ -371,19 +371,46 @@ def bake_one(sid_int, base_portal):
     rs = m.get("rsId")
     if not rs:
         return None, "no rsId"
-    arr, src = matlib.load_tex_full(rs, prefer_remacri=PREFER_REMACRI, max_side=4096)
+    # DATPATCH_BAKE_MAX_SIDE caps the encoded size (scenery lane ships 1024 —
+    # small-footprint objects don't earn 2048^2 and the portal ceiling is real).
+    max_side = int(os.environ.get("DATPATCH_BAKE_MAX_SIDE", "4096"))
+    arr, src = matlib.load_tex_full(rs, prefer_remacri=PREFER_REMACRI,
+                                    max_side=max_side)
     if arr is None:
         return None, "no base png"
+    if src == "remacri":
+        # ESRGAN pads its input at the borders, so upscaled edges break
+        # tileability (measured: wrap error rises ~55% abs / >2x relative on
+        # retail-seamless tiles => hairline grid on tiled walls).  Stopgap
+        # until the corpus is re-upscaled wrap-padded: cross-fade the outer
+        # texels toward their wrap partner so col0/colN meet again.
+        E = 4
+        for axis in (0, 1):
+            a0 = np.moveaxis(arr, axis, 0)
+            lo, hi = a0[:E].copy(), a0[-E:].copy()
+            for i in range(E):
+                t = 0.5 * (1.0 - (i + 0.5) / E)
+                a0[i] = (1 - t) * lo[i] + t * hi[E - 1 - i]
+                a0[-1 - i] = (1 - t) * hi[E - 1 - i] + t * lo[i]
     h_full = {sid_int: m["h"]} if m.get("h") is not None else {}
     tex_after = {sid_int: arr}
-    tex_base = {sid_int: arr}
+    # The luminance anchor must be RETAIL, not the upscale itself, or the
+    # 1.15x target degenerates into a blanket brightener that also ships any
+    # corpus drift (audit finding: lum_after/lum_base == 1.1500 on all 572).
+    base_arr, _ = matlib.load_tex_full(rs, prefer_remacri=False,
+                                       max_side=max_side)
+    tex_base = {sid_int: base_arr if base_arr is not None else arr}
     G = legibility.GAINSETS["mid"]
     out, infos = legibility.bake_all(tex_after, tex_base, metas, h_full,
                                      G["g_hi"], G["g_lo"], G["a0"])
     a = out.get(sid_int)
     if a is None:
         return None, "bake returned None"
-    u8 = (np.clip(a, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+    # +-0.5 LSB deterministic noise before the 8-bit cast: kills contour
+    # banding from the low-frequency AO term on large flat faces.
+    rng = np.random.default_rng(sid_int & 0xFFFFFFFF)
+    u8 = np.clip(a * 255.0 + rng.random(a.shape) - 0.5 + 0.5,
+                 0.0, 255.0).astype(np.uint8)
     info = infos.get(sid_int, {})
     info["cls"] = m.get("cls")
     info["amp"] = m.get("amp")
@@ -469,12 +496,21 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
         # shipped as opaque red without this) — always carry base alpha,
         # upscaled to the baked size.
         base_a = np.asarray(Image.open(base_png).convert("RGBA"), np.uint8)[:, :, 3]
+        binary_src = bool(np.isin(base_a, (0, 255)).all())
         if base_a.shape != u8.shape[:2]:
             base_a = np.asarray(Image.fromarray(base_a).resize(
-                (u8.shape[1], u8.shape[0]), Image.BILINEAR), np.uint8)
+                (u8.shape[1], u8.shape[0]), Image.LANCZOS), np.uint8)
+        if binary_src:
+            # Clipmap/cutout truth is BINARY.  Converting to DXT moves the
+            # client's alpha-test ref from 100 (palettized) to 200
+            # (D3DPolyRender::s_256AlphaTestRef/s_ddsAlphaTestRef) — a soft
+            # upscaled ramp erodes the silhouette at ref 200.  Re-binarize at
+            # retail's own 100 cut so coverage is identical under either ref.
+            base_a = ((base_a > 100).astype(np.uint8)) * 255
         u8[:, :, 3] = base_a
         H, W = u8.shape[:2]
-        alpha = has_alpha(u8)
+        clipmap_surface = bool((surfaces.get(sid_hex) or {}).get("surfaceType", 0) & 0x4)
+        alpha = has_alpha(u8) or clipmap_surface
         fmt = "DXT5" if alpha else "DXT1"
         if W % 4 or H % 4:
             res["skipped_nondxt"] += 1
