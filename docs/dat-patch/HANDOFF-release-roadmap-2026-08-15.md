@@ -275,3 +275,43 @@ investigation first. Deliver via taildrop for owner cut/approval before posting.
   (2) PaletteTemplate refinement to reclaim part of the 396 recolor-live prop RS;
   (3) creatures (last); (4) showcase video in real daylight + before/after intercut;
   (5) distribution (r2-props package is the current best candidate).
+
+## ADDENDUM 2026-08-16 — DUNGEONS LANE (lane 3)
+
+### Census (2 min of laptop time — datlib parses EnvCell/Environment/Setup directly, no WBT needed)
+734,976 EnvCells walked (cell dat b-tree walk = 5s): **804 unique Surfaces → 712 unique RS,
+769 Environments**. 237 RS already patched by prior tiers (28% of the 3.1M cell-surface
+refs). TODO was 475 = 460 plain corpus-covered + 15 palettized (ALL corpus-covered, ALL
+recolor-safe) + 0 missing. Recolor safety now uses a GLOBAL clothing-reachable RS set
+(1,975 setups extracted from all 1,917 ClothingTables → 1,624 RS, `clothing_rs_global.json`)
+— reuse this for creatures. Dungeon interiors keep the FULL legibility bake including
+emboss (walls are seen like building walls, not tiled like ground).
+
+### Geometry sub-lane (environment-import) — SCOPED, not built
+- Template confirmed: ObjSingleMeshImporter carries original physics/drawing BSPs
+  VERBATIM while appending displaced render polys (in-client proven on 447 buildings);
+  the same append pattern applies to CellStruct (physics polys + CellPortal polys pinned,
+  polyfix-safe defaults for appended polys).
+- ⚠ THE WRINKLE the building lane didn't have: CellStruct polygon surface indices index
+  into EACH EnvCell's OWN surface array — the same Environment renders as stone in one
+  dungeon and ice in another. Per-texture displacement heights therefore CANNOT be baked
+  into shared geometry from one cell's textures. Options: (a) dominant-texture per
+  (environment, surface-index) across the 735k-cell census; (b) conservative
+  class-agnostic amplitude; (c) skip polys with high texture diversity. Decide with a
+  single-dungeon pilot + in-client A/B before any tranche.
+- Dungeon-specific gate risks: z-fighting of the displaced shell in tight corridors,
+  portal-opening flicker — soak inside small rooms, not just big halls.
+
+### DUNGEON TEXTURE LANE: BUILT + GATED (same night, ~03:19)
+475 RS imported (460 plain + 15 pal-safe, full legibility bake WITH emboss),
+365 collapses, portal 1449.4 MiB, all structural gates clean (3,482 changed vs
+retail), **in-client gate PASSED** — tour7 through undead catacomb / olthoi
+tunnels / drudge dungeon via exact creature-spawn @teleloc + @attackable off;
+mossy stone, brick, and carved-panel interiors all read dramatically sharper,
+zero crashes. Details + the tiny-source-hallucination watch item:
+`dat-patch-dungeons/GATE-STATUS.md`. Package: `acme-dats-r3-dungeons.tgz`.
+Tier ladder now: remacri → terrain → doors → props → **dungeons (GATED, ACE
+serves it)**. Census artifacts copied into the lane dir. tour7 script deployed
+on the 1070 (acdttour7). Remaining in lane 3: the geometry sub-lane (scoped
+above). Then creatures (lane 4) — reuse `clothing_rs_global.json` as the
+recolor wall, expect most creature textures recolor-live.
