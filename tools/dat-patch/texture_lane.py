@@ -213,7 +213,9 @@ def fixup_dat(path, compact=True):
                 break
             f.seek(cur)
             cur = struct.unpack("<i", f.read(4))[0]
-        return blocks
+        # a stale branch can point at a free block whose chain ends early
+        # (seen on the cell dat) — a short node is not a node
+        return blocks if have >= need else None
 
     def read_chain(blocks, need):
         out = bytearray()

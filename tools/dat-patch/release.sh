@@ -32,13 +32,31 @@ python3 /mnt/wbterminal2/btree-fix-agent/strict_btree_walk.py "$PORTAL" | tail -
     || { echo "strict walk NOT CLEAN" >&2; exit 1; }
 echo "VERDICT         : CLEAN"
 
+# Cell-dat legs (variant lane: envcell-retarget writes the CELL dat — first
+# lane where it differs from base). Same fixup + walks; polyfix is portal-only
+# (EnvCell records hold no polygons).
+CELL="$EXPORT/client_cell_1.dat"
+BASE_CELL="${BASE_CELL:-$HOME/ac_base_dats/client_cell_1.dat}"
+if [ -f "$CELL" ] && ! cmp -s "$CELL" "$BASE_CELL"; then
+    echo "== cell dat: fixup =="
+    python3 -c "import sys; sys.path.insert(0,'$HERE'); import texture_lane; texture_lane.fixup_dat('$CELL')"
+    echo "== cell dat: ACE.DatLoader full walk + byte-diff vs retail base =="
+    DOTNET_ROLL_FORWARD=LatestMajor dotnet "$HERE/AceDatWalk/bin/Release/net8.0/AceDatWalk.dll" \
+        "$CELL" "$BASE_CELL" | tail -2
+    echo "== cell dat: strict python b-tree walk =="
+    python3 /mnt/wbterminal2/btree-fix-agent/strict_btree_walk.py "$CELL" | tail -1 | grep -q CLEAN \
+        || { echo "cell strict walk NOT CLEAN" >&2; exit 1; }
+    echo "VERDICT (cell)  : CLEAN"
+fi
+
 echo "== package =="
 SIZE=$(stat -c%s "$PORTAL")
 [ "$SIZE" -lt $((2000*1024*1024)) ] || { echo "portal over 2 GiB ceiling" >&2; exit 1; }
 ( cd "$EXPORT" && sha256sum client_portal.dat > client_portal.dat.sha256 )
+[ -f "$CELL" ] && ( cd "$EXPORT" && sha256sum client_cell_1.dat > client_cell_1.dat.sha256 )
 PKG="$EXPORT/../acme-dats-$TAG.tgz"
 tar czf "$PKG" -C "$EXPORT" client_portal.dat client_portal.dat.sha256 \
-    $( [ -f "$EXPORT/client_cell_1.dat" ] && echo client_cell_1.dat )
+    $( [ -f "$EXPORT/client_cell_1.dat" ] && echo client_cell_1.dat client_cell_1.dat.sha256 )
 sha256sum "$PKG" > "$PKG.sha256"
 cat > "$EXPORT/../RELEASE-$TAG-README.txt" << EOF
 ACME dat patch $TAG

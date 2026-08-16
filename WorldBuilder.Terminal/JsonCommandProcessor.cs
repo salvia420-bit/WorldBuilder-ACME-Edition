@@ -328,6 +328,10 @@ public class JsonCommandProcessor {
             ["ui-image-replace"]  = CmdUiImageReplace,
             ["render-surface-import"]    = CmdRenderSurfaceImport,
             ["environment-append-geometry"] = CmdEnvironmentAppendGeometry,
+            // Environment-variant pair (dungeon relief despite shared prefabs) —
+            // see CommandEngine.EnvironmentVariant.cs
+            ["environment-clone"] = CmdEnvironmentClone,
+            ["envcell-retarget"]  = CmdEnvCellRetarget,
             ["surface-texture-collapse"] = CmdSurfaceTextureCollapse,
             ["ui-pack-export"]    = CmdUiPackExport,
             // PR-V Skills view backing dump — see CommandEngine.SkillTableDump.cs
@@ -882,6 +886,94 @@ public class JsonCommandProcessor {
             appendedPolys = r.AppendedPolys,
             newVertexCount = r.NewVertexCount,
             newPolyCount = r.NewPolyCount,
+        });
+    }
+
+    private string CmdEnvironmentClone(System.Text.Json.Nodes.JsonNode node) {
+        string datPath = node["datPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'datPath' field (a portal-DAT COPY — writes to ~/ac_base_dats are refused)");
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+
+        var specs = new List<CommandEngine.EnvironmentCloneSpec>();
+        if (node["sourceIdHex"] != null || node["sourceId"] != null) {
+            specs.Add(new CommandEngine.EnvironmentCloneSpec(
+                SourceId: ParseUIntFlexible(node["sourceIdHex"] ?? node["sourceId"], "sourceIdHex"),
+                NewId: ParseUIntFlexible(node["newIdHex"] ?? node["newId"], "newIdHex")));
+        }
+        if (node["clones"] is System.Text.Json.Nodes.JsonArray arr) {
+            foreach (var e in arr) {
+                if (e == null) continue;
+                specs.Add(new CommandEngine.EnvironmentCloneSpec(
+                    SourceId: ParseUIntFlexible(e["sourceIdHex"] ?? e["sourceId"], "clones[].sourceIdHex"),
+                    NewId: ParseUIntFlexible(e["newIdHex"] ?? e["newId"], "clones[].newIdHex")));
+            }
+        }
+
+        var r = _engine.EnvironmentClone(datPath, specs, dryRun);
+        return Serialize(new {
+            success = true,
+            command = "environment-clone",
+            datPath = r.DatPath,
+            dryRun = r.DryRun,
+            requestedCount = r.RequestedCount,
+            clonedCount = r.ClonedCount,
+            failCount = r.FailCount,
+            records = r.Records,
+        });
+    }
+
+    private string CmdEnvCellRetarget(System.Text.Json.Nodes.JsonNode node) {
+        string datPath = node["datPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'datPath' field (a CELL-dat COPY — writes to ~/ac_base_dats are refused)");
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+        string? portalPath = node["portalPath"]?.GetValue<string>();
+
+        // environmentIdHex accepts a bare u16 (0x8001) or the full file id
+        // (0x0D008001) — anything else in the high bits is a caller bug.
+        static ushort ParseEnv16(System.Text.Json.Nodes.JsonNode? n, string field) {
+            uint v = ParseUIntFlexible(n, field);
+            if (v > 0xFFFF && (v & 0xFFFF0000u) != 0x0D000000u)
+                throw new ArgumentException($"{field} 0x{v:X8} is neither a u16 nor a 0x0D00XXXX Environment id.");
+            return (ushort)(v & 0xFFFF);
+        }
+        static CommandEngine.EnvCellRetargetSpec ParseSpec(System.Text.Json.Nodes.JsonNode e, string ctx) {
+            var csNode = e["cellStructure"];
+            return new CommandEngine.EnvCellRetargetSpec(
+                CellId: ParseUIntFlexible(e["cellIdHex"] ?? e["cellId"], ctx + ".cellIdHex"),
+                EnvironmentId: ParseEnv16(e["environmentIdHex"] ?? e["environmentId"], ctx + ".environmentIdHex"),
+                CellStructure: csNode == null ? null : (ushort)ParseUIntFlexible(csNode, ctx + ".cellStructure"));
+        }
+
+        var specs = new List<CommandEngine.EnvCellRetargetSpec>();
+        if (node["retargets"] is System.Text.Json.Nodes.JsonArray arr) {
+            foreach (var e in arr) {
+                if (e == null) continue;
+                specs.Add(ParseSpec(e, "retargets[]"));
+            }
+        }
+        if (node["jsonlPath"]?.GetValue<string>() is string jsonlPath) {
+            if (!System.IO.File.Exists(jsonlPath))
+                throw new FileNotFoundException($"jsonlPath not found: {jsonlPath}");
+            foreach (var raw in System.IO.File.ReadLines(jsonlPath)) {
+                var line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                var e = System.Text.Json.Nodes.JsonNode.Parse(line)
+                    ?? throw new ArgumentException($"jsonlPath line is not a JSON object: {line}");
+                specs.Add(ParseSpec(e, "jsonl"));
+            }
+        }
+
+        var r = _engine.EnvCellRetarget(datPath, specs, portalPath, dryRun);
+        return Serialize(new {
+            success = true,
+            command = "envcell-retarget",
+            datPath = r.DatPath,
+            dryRun = r.DryRun,
+            requestedCount = r.RequestedCount,
+            retargetedCount = r.RetargetedCount,
+            unchangedCount = r.UnchangedCount,
+            failCount = r.FailCount,
+            failRecords = r.FailRecords,
         });
     }
 
@@ -3144,6 +3236,8 @@ public class JsonCommandProcessor {
             new { name = "ui-pack-export",     args = "outDir, layoutIds?, datPath?, includeImages?", description = "Export an AC_UI_Asset_Builder-compatible reference_pack.json + images/ (panels, nodes, widget kinds, state image sets, usage cross-ref)" },
             new { name = "render-surface-import", args = "datPath, idHex, pngPath, format?, allowResize?, dryRun?, allowCreate? | imports[{idHex,pngPath,format?,allowResize?}] | fromDir", description = "Import a PNG into a portal-DAT COPY as a RenderSurface with the record's own PixelFormat PRESERVED by default (DXT1 stays DXT1 via the in-tree BCnEncoder path) or an explicit format (DXT1/A8R8G8B8/...); allowResize (default true) takes the new dims from the image. Reports old/new dims+format, bytes and blocks used. PREP THE TARGET COPY with bake/scripts/prep_dat.py (zeroed free arena) until the DatReaderWriter contiguous-free-list allocator bug is fixed upstream. Writes to ~/ac_base_dats refused" },
             new { name = "environment-append-geometry", args = "datPath, envIdHex, cellStructIndex, objPath, dryRun?", description = "Append OBJ render geometry to one CellStruct of an Environment (0x0D) record in a portal-DAT COPY (the dungeon-geometry lane). Appends DRAWN polys + vertices only with ConstructMesh-safe defaults (Stippling=None, SidesType=Landblock, NegSurface=0); physics polys, Portals and all BSPs carried verbatim (no rebuild — the in-client-proven obj-import template). 'usemtl surf<N>' in the OBJ selects the CELL-LOCAL surface index (each EnvCell maps it through its own surface array). Writes to ~/ac_base_dats refused" },
+            new { name = "environment-clone", args = "datPath, sourceIdHex, newIdHex, dryRun? | clones[{sourceIdHex,newIdHex}]", description = "Clone an Environment (0x0D) record to a FREE id in a portal-DAT COPY (the environment-variant lane): record copied verbatim (CellStructs/physics/portals/BSPs identical), so cells retargeted at the clone keep byte-identical collision. New id must be free (0x0D000000–0x0D00FFFF). Writes to ~/ac_base_dats refused" },
+            new { name = "envcell-retarget", args = "datPath, retargets[{cellIdHex,environmentIdHex,cellStructure?}] | jsonlPath, portalPath?, dryRun?", description = "Batch-rewrite EnvCell.EnvironmentId (+optional CellStructure) in a CELL-dat COPY — points texture-cluster cells at their relief variant env. In-place u16 rewrite (record size unchanged; only the b-tree churns). environmentIdHex accepts u16 or full 0x0D00XXXX. jsonlPath = file of one retarget object per line (big batches). With portalPath, each target env+cellstruct is validated against that portal dat incl. PosSurface-vs-cell-surface-count bounds (catches a retarget at the wrong variant). Returns counts + first 100 failures. Writes to ~/ac_base_dats refused" },
             new { name = "surface-texture-collapse", args = "datPath, idHex, keepDid?, dryRun? | collapses[{idHex,keepDid?}]", description = "Rewrite a SurfaceTexture (0x05) texture list to a single entry (default keepDid = the LAST entry = the base-detail level that ships in client_portal.dat), so retail ImgTex::GetSurfaceDID takes the m_num==1 branch and cannot fall back to the client_highres.dat index-0 original. Same DAT-copy prep + ~/ac_base_dats refusal as render-surface-import" },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };

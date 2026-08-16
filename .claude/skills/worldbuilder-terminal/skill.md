@@ -284,6 +284,8 @@ Pull live data from a connected ACE world database into JSON gazetteers/indexes 
 | `obj-import` | `objPath, surfaceDid, gfxObjId?, setupId?` | `.obj` → GfxObj+Setup; auto-allocates `0x01FF…` / `0x02FF…` IDs and rebuilds BSP. |
 | `bsp-build` | `gfxObjId` | Rebuild Physics + Drawing BSP trees on a GfxObj (e.g. after manual mesh edits). |
 | `environment-append-geometry` | `datPath, envIdHex, cellStructIndex, objPath, dryRun?` | Append OBJ render geometry to one CellStruct of an Environment (`0x0D…`) in a portal-DAT COPY — the dungeon-geometry lane. `usemtl surf<N>` = CELL-LOCAL surface index; physics polys, Portals and all BSPs carried verbatim (no rebuild). Run `tools/dat-patch/texture_lane.py fixup` after EVERY append run (a grown env record taints ~2k b-tree leaves). Refuses `~/ac_base_dats`. |
+| `environment-clone` | `datPath, sourceIdHex, newIdHex, dryRun?` \| `clones[{sourceIdHex,newIdHex}]` | Clone an Environment record verbatim to a FREE id (`0x0D000000–0x0D00FFFF`) in a portal-DAT COPY — the variant lane's minting step. CellStructs/physics/portals/BSPs identical (byte-verbatim mod 2 align-padding bytes), so retargeted cells keep exact collision. Refuses existing ids and `~/ac_base_dats`. |
+| `envcell-retarget` | `datPath, retargets[{cellIdHex,environmentIdHex,cellStructure?}]` \| `jsonlPath, portalPath?, dryRun?` | Batch-rewrite `EnvCell.EnvironmentId` (u16 in-place; zero growth) in a CELL-dat COPY — points texture-cluster cells at their relief variant. `environmentIdHex` = u16 or full `0x0D00XXXX`; `jsonlPath` = one retarget object per line for big batches. With `portalPath` each target env+cellstruct is validated incl. PosSurface bounds vs the cell's surface count (catches wrong-variant retargets). Returns counts + first 100 failures. Run the fixup on the CELL dat afterward too (retarget writes taint its leaves the same way). Refuses `~/ac_base_dats`. |
 
 ### Bulk export / training data
 | name | args | what it does |
@@ -395,16 +397,17 @@ After `transact` runs, tiles that overlap a mutated LB are flagged dirty.
 
 The retail-dat patching lanes (docs/dat-patch/) drive these commands directly
 with `--stdin` and NO project (datPath-taking commands: `chorizite-parse-dat-record`,
-`render-surface-import`, `surface-texture-collapse`, `environment-append-geometry`).
+`render-surface-import`, `surface-texture-collapse`, `environment-append-geometry`,
+`environment-clone`, `envcell-retarget`).
 For MEANINGFUL dungeon relief the plan is the environment-VARIANT design —
 full spec + sizing in `docs/dat-patch/HANDOFF-env-variant-design-2026-08-16.md`:
 
 1. Python plans clusters per (env, cellstruct) over all 735k EnvCells
-   (`tools/dat-patch/env_geo.py`) and builds per-cluster displaced shells.
-2. `clone-dat` → copies; `environment-clone` (TO BUILD: DRW SetEntry under a
-   free 16-bit id) → variant records; `environment-append-geometry` → shells;
-   `envcell-retarget` (TO BUILD: batch EnvironmentId u16 rewrite on a CELL-dat
-   copy; DRW CellDatabase write + EnvCell round-trip tests already exist).
+   (`tools/dat-patch/env_geo.py cluster` → `variant-build` → `variant-apply`)
+   and builds per-cluster displaced shells.
+2. `clone-dat` → copies; `environment-clone` → variant records;
+   `environment-append-geometry` → shells; `envcell-retarget` → cluster cells
+   point at their variant (batch via `jsonlPath`, validate via `portalPath`).
 3. Validate with THIS skill's loop: `validate-dungeon` per touched landblock,
    `cell-portal-graph-sweep`, chorizite re-parses, then
    `tools/dat-patch/release.sh` (fixup is mandatory — env writes churn the
