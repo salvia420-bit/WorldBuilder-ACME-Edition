@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 3-family validation, family #3: ACE.DatLoader (the server's own reader)
+       full b-tree walk + raw read of EVERY entry, with optional byte-diff vs a
+       base dat. References the running server's compiled DLL so the validator
+       is exactly the code that serves players. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>AceDatWalk</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="ACE.DatLoader">
+      <HintPath>/home/wbterminal/ace-server/Source/ACE.Server/bin/Release/net10.0/ACE.DatLoader.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>
