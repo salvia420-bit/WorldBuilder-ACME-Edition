@@ -33,14 +33,21 @@ r5 env-variants (GATED, shipped) → **r6 scenery (gate pending)**.
 Packages r1–r5 exist per-lane via `release.sh`. ACE + 1070 kit run r5.
 
 ## Related open threads (so they don't get lost either)
-- **Phase-2 exe patches** — CORRECTED 2026-08-16 (see ac-eor-patch/PATCHES.md +
-  PATCH-NOTES.md). The pre-existing 6-NOP patch is notan's texture LEAK fix,
-  NOT DAT compression (my earlier note was an unverified assumption). Built:
-  `acclient.eor.leakfix+mip16.exe` = leak fix + mip-cap 4→16 only. **The
-  COMPRESSION patch does NOT exist yet** — trevis's fix is at
-  AsyncCache::SerializeFromCachePack (RVA 0x16AC0), still to be located by
-  byte-signature and derived. The ~40% headroom the phase-2 plan assumes is
-  therefore UNPROVEN until that patch is found AND load-tested on the 1070.
+- **Phase-2 exe patches** — compression patch DERIVED + VERIFIED 2026-08-16
+  (ac-eor-patch/: patch_client.py harness, COMPRESSION-PATCH-FINDINGS.md).
+  The pre-existing 6-NOP patch is notan's texture LEAK fix, not compression.
+  trevis's DAT-decompression fix is now located by byte-signature: NOP the
+  `je` at file 0x017B28 (VA 0x417B28) in `AsyncCache::SerializeFromCachePack`
+  — the `m_iVersion != 0` guard that rejects decompressed records (Decompress
+  zeroes m_iVersion; the GetCoreSDK stub is const-2 so only this test gates).
+  `74 71 -> 90 90`, unique + disasm-confirmed in OUR exe. Registry key
+  `dat-decompress` (enabled=False, candidate). Test exe built:
+  `acclient.eor.compress-TEST.exe` (leak-fix + mip16 + decompress, checksum
+  fixed). ~40-50% portal saving. STILL GATED: (a) build a DRW-compressed
+  portal (texture 0x06 records only, so ACE's non-inflating loader is
+  untouched); (b) 1070 load + real-client ROUND-TRIP byte-compare (paradox
+  caveat: FIX A papers over the lost version — verify objects deserialize
+  identically vs the uncompressed baseline before trusting the headroom).
 - **Owner decision** teed up: full-frequency dungeon relief (area-based
   budget, ~+300 MiB) fits once phase-2 headroom lands — build toward 600 MiB,
   don't right-size textures twice.
