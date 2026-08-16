@@ -1,0 +1,155 @@
+# HANDOFF — dat-patch release roadmap: terrain, props/doors, dungeons, creatures, shipping to users (2026-08-15 late)
+
+Owner verdict on the combined dat, in-client on the 1070: **"the textures on buildings look
+amazing and i can see the triangles too, no one has been able to do this before."** Expected
+adoption on release: ~500–1000 players. This handoff is the plan to finish the world and ship.
+
+## 0. WHAT IS PROVEN AND WHERE IT LIVES (tonight's state)
+
+- **The deliverable**: `/mnt/wbterminal2/dat-patch-texture-remacri/export/` —
+  `client_portal.dat` sha256 `7d2745e9…`, **1114.9 MiB** (ceiling 2048): 4× displaced
+  geometry (447 architecture GfxObjs, physics byte-identical) + Remacri 4× textures with
+  the legibility bake (571/768 surfaces; 196 palettized-source sids still base-res bake)
+  + collapsed single-entry SurfaceTextures. Cell dat = content-identical to base.
+  **In-client proven**: world entry, 310s+ stability, 5-town tour, daylight close-ups
+  (videos in `/mnt/wbterminal2/dat-patch-texture-lane/gate-1070/`, A/B boards in
+  `…texture-remacri/boards/`).
+- **Three crash/correctness classes found by the in-client gate and fixed forever**:
+  (1) DRW b-tree leaf sentinels (`texture_lane.py fixup`, runs in the driver package phase);
+  (2) appended polys sides=2/neg=-1/stip=9 → ConstructMesh AV (`polyfix.py` +
+  `ObjSingleMeshImporter.cs` now writes Landblock(0)/None/neg=0);
+  (3) base-res bake (`--remacri` flag; box has no corpus — Remacri passes run on the laptop).
+  Lesson burned in: **tooling round-trips prove structure, only the retail client proves
+  render semantics — the in-client gate is mandatory per lane.**
+- **Automation**: full 1070 driving stack (`docs/dat-patch/1070-acclient-driving.md`) —
+  isolated client at `D:\ac-dat-test`, schtasks tasks `acdtgate/acdtclick1/acdttour4/5`,
+  OBS profile `acdt`, idle-guard + mid-tour human detection. ACE currently serves the
+  remacri export (`Config.js`; vanilla restore = `Config.js.pre-texture-gate-bak`).
+- Commits through `8d2213d2` on `integ/all-20260813` (pushed).
+
+## 1. LANE: TERRAIN (owner's top gap; SMALL and fully covered — do first)
+
+Recon done tonight: Region `0x13000000` → `terrainInfo.landSurfaces.texMerge.terrainDesc`
+(33 entries, 30 unique SurfaceTextures) → **29 unique RenderSurfaces; corpus coverage
+29/29** across `upscale-corpus/out/terrain-{remacri,ultrasharp,x4plus,hat-l}`. Plus 8
+blend maps (cornerTerrainMaps 4, sideTerrainMaps 1, roadMaps 3) — **those are alpha/blend
+MASKS: import untouched or up-res WITHOUT the legibility bake; never emboss a mask.**
+
+Recipe: the texture-lane machinery applies verbatim — build a terrain surfaces.json
+(ST→RS from the Region record), bake with `--remacri` (consider `terrain-ultrasharp` vs
+`remacri` A/B on one texture first — pick per-texture winner by eyeball board), import +
+collapse, fixup, in-client gate. Client side already handled: `LandscapeTextureDetail=0`
+is in the test INI (ship-config item, §5). Watch: terrain tiles 2×–4× (`texTiling`), so
+seams matter more than on buildings — the bake's tanh-limited emboss is seam-safe by
+construction, but eyeball a tiled grass expanse for grid artifacts. Budget: trivially
+small (~30 textures ≈ 15–30 MB).
+
+## 2. LANE: DOORS / PROPS / BARRELS (weenie objects — high visibility, medium size)
+
+These are server-spawned WorldObjects; the client renders their Setups/GfxObjs from
+portal.dat, so **DAT patches reach them for free** (r1 decomp-proved). Two sub-lanes:
+
+- **Textures** (the big visible win, do first): census = enumerate the GfxObjs/surfaces
+  actually spawned near players: (a) ACE world DB `landblock_instances` → weenie →
+  `PropertyDataId.Setup` → Setup parts → GfxObjs → surfaces → RS (WBT `ace-db-*` connects;
+  creds in `$ACERT/Config.js`), or (b) LSD `spawnMaps/` + `weenie_summary.jsonl` setupDid
+  column for the same offline. Then diff the RS set against the PNG corpora
+  (statics-remacri + tranche1 = 4,041 RS) and the holtburger BC7 archive (owner: complete
+  coverage incl. monsters — use it as the authority for what CAN be covered; transcode
+  BC7→PNG only where no PNG exists, it's a lossy-source fallback). Missing ones: the
+  upscale runner is proven (`upscale-corpus/corpus-ledger.jsonl` format) — batch what's
+  missing. Then the standard bake→import→collapse→fixup→gate.
+  **Doors first**: small id set, the owner specifically noticed them next to patched
+  walls; likely a handful of Setups shared world-wide — outsized win per byte.
+- **Geometry**: 1,040 statics were skip-small (≤50 tris) and ~434 candidates cleared the
+  cut but weren't in the 447 displace set — re-run the tranche with the budget planner
+  targeting the next tier (hero props: wells, carts, signs, barrels). The importer fix
+  means new imports are retail-safe out of the box; `polyfix.py audit` is the regression
+  net. Also close out `degrade_deferred.json` (the 5–9 band-object records).
+
+Palettized trap for props/creatures: many object textures are INDEX16 + palette because
+**the palette-swap system (clothing/skin recolor) depends on them** — naive de-palettizing
+to RGB breaks recoloring. For STATIC props with fixed palettes an RGB conversion is safe;
+for clothing/creature-tint textures it is NOT. The 196 skipped sids from the building lane
+are the same family. An INDEX16-aware converter (resolve palette → RGBA → bake → DXT)
+covers statics; recolorables need a design decision (skip, or up-res the index map +
+palette-resolution at bake per DEFAULT palette only).
+
+## 3. LANE: DUNGEONS (Environment 0x0D — players live indoors; the Academy was the
+owner's first frame)
+
+Main-handoff TODO #4, unchanged and next after props: build `environment-import` on the
+fixed obj-import template (772 Environment records = 6 MiB source, 735k EnvCell instances,
+best value-per-byte; CellPortal polys stay pinned; DRW packs Environment/CellStruct;
+`PortalDatDocument.SetEntry<T>` stages). Interior surfaces mostly SHARE the building
+texture corpus — run the census first; a big fraction of dungeon walls may already be
+covered by tonight's 571. The r2 cave A/B was the owner's standout — expect this lane to
+be the most visible after terrain.
+
+## 4. LANE: CREATURES/MONSTERS (last; hardest)
+
+Textures: same census→corpus→bake pipeline (BC7 archive says coverage exists), but the
+palette/recolor trap above applies at full force (creature tinting). Geometry: PN-tess
+with max-deviation guard was gate-refused in r2 — revisit only after everything else ships.
+
+## 5. RELEASE ENGINEERING (500–1000 users will not run WBT)
+
+1. **Package** = `client_portal.dat` (+`client_cell_1.dat` when it starts differing) +
+   README + sha256 + version tag. Bump the iteration on every release (DDD uses it).
+2. **The texture-detail pref is NOT optional**: boot default `EnvironmentTextureDetail=2`
+   halves every upload and **no in-game preset reaches 0** (dossier §3/§4). Ship a
+   `UserPreferences.ini` **snippet + one-paragraph instruction** (merge `[Render]
+   EnvironmentTextureDetail=0` + `LandscapeTextureDetail=0` into the install-dir or
+   Documents INI) — or a 20-line installer script that does the merge. Do NOT ship a whole
+   INI (it would clobber user keybinds/audio).
+3. **Server story**: ACE servers must run the same dats (`Config.js DatFilesDirectory`)
+   or clients get booted by DDD ("newer DATs than server"). Document both paths for server
+   ops: adopt the dats server-side (also gives servers the correct physics view — ours is
+   byte-identical to retail so nothing changes for them) or leave DDD default and require
+   matched versions. ACE.DatLoader reads the patched dat clean (validated) — no server
+   code changes needed.
+4. **Headroom**: 1114.9 of 2048 MiB used. Terrain+doors fit easily; props+dungeons+
+   creatures at 4× will approach the ceiling → **trevis's DAT-compression client patch**
+   (author-measured 40.2% whole-set) graduates from optional to scheduled: derive by
+   byte-signature (never quoted addresses — build drift), zlib 1.2.2, soak-test, and note
+   paradox's "may be a deliberate workaround" caveat. Harness at
+   `/mnt/wbterminal2/ac-eor-patch/`. Fallback: per-class resolution caps (512² tier for
+   low-importance surfaces).
+5. **Repeatable pipeline**: everything is now scripted — enumerate→geometry
+   tranche→`--remacri` texture pass→`fixup`→`polyfix audit`→3-family validation→in-client
+   gate→package. Fold into ONE driver (`tools/dat-patch/release.sh`) so a release is one
+   command + one 1070 eyeball. Fold the ConstructMesh 10-invariant checklist (polyfix.py
+   docstring) into `validate.py` so it exits non-zero on any of them.
+6. **Known-open QA items**: mip-cap check (client caps 4 mip levels — verify no distant
+   shimmer on 1024² textures in a slow pan; if bad, 512² cap per class), z-fighting soak
+   on the 6mm shell at distance (tour5 showed none; do one deliberate far-pan pass), the
+   8 weak-seam DeepBump records, 2 corpus-missing RS, forced 800×600 window (fine for
+   automation; for the showcase investigate whether in-game res options apply post-boot).
+7. **Distribution note**: AI-upscaled derivatives of Turbine assets — same community
+   status as the dats themselves; follow prevailing emu-community norms (no retail
+   assets beyond what players already have; ship as a patch requiring an existing install).
+
+## 6. SHOWCASE VIDEO (the announcement asset)
+
+OBS pipeline is ready. Next day-window (Dereth day = ~79 real min per 2.1h cycle; poll
+`time` via the ACE console FIFO): scripted shot list — sunrise grazing light on the
+Holtburg cottage row, 45° step-turns with 2.5s pauses, walk-ins to walls, then an
+**intercut before/after**: run the identical teleloc+scan path once on base dats and once
+on patched (two client sessions; ACE must serve matching dats per arm — or use the
+`retailvanquish` spare dat folder trick client-side with `-rodat` while ACE keeps DDD off
+for one arm). 800×600 is acceptable for Reddit if upscaled 2×; try the res-options
+investigation first. Deliver via taildrop for owner cut/approval before posting.
+
+## 7. ENVIRONMENT STATE (as left tonight)
+
+- ACE on this laptop serves `/mnt/wbterminal2/dat-patch-texture-remacri/export/`
+  (restore: `Config.js.pre-texture-gate-bak`, then `stop-now` → relaunch per
+  memory/ace-live.md).
+- 1070: test kit `D:\ac-dat-test` (remacri portal sha-verified), tasks + scripts in
+  `C:\Temp`, watcher auto-kills the test client at lifetime end. Original install and the
+  user's own files untouched.
+- buildbox: STOPPED, n1-standard-4 (no cost accruing).
+- Leftover to delete at leisure: `/mnt/wbterminal2/tmp-fixup-test/` (946 MB, rm was
+  permission-blocked in-session).
+- The pre-remacri gate artifacts (fixed base-res portal, sha `9fb73e1b…`) remain in
+  `/mnt/wbterminal2/dat-patch-texture-lane/export/` as the rollback tier.
