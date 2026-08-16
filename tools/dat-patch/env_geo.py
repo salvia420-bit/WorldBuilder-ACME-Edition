@@ -413,12 +413,33 @@ def cluster(root, top=300, min_cells=8):
     return stats
 
 
-def variant_build(root, limit=None, shard=None):
+def _obj_complete(path):
+    """A finished shell OBJ ends with a newline-terminated face line; a
+    process killed mid-write truncates mid-line. Returns the face count
+    (>0) if complete, else 0."""
+    try:
+        data = open(path, "rb").read()
+    except OSError:
+        return 0
+    if not data.endswith(b"\n"):
+        return 0
+    last = data[data.rfind(b"\n", 0, len(data) - 1) + 1:]
+    if not last.startswith(b"f "):
+        return 0
+    return data.count(b"\nf ") + data.startswith(b"f ")
+
+
+def variant_build(root, limit=None, shard=None, skip_existing=False):
     """Variant lane step 2: displaced shell per variant (source geometry +
     the CLUSTER's textures) -> obj/, variant_imports.jsonl, retargets.jsonl.
     --shard i/n takes every n-th variant starting at i and suffixes the three
     output files with .shard<i> (concatenate/merge after a fan-out); OBJs are
-    keyed by variant id so shards never collide in obj/."""
+    keyed by variant id so shards never collide in obj/.
+    --skip-existing = resume: a variant whose complete OBJ already exists is
+    not rebuilt, but its imports/retargets rows are still emitted (they are
+    fully derivable from variants.json) -- so a full unsharded resume pass
+    after a killed fan-out finishes stragglers AND writes the unsuffixed
+    jsonls in one go."""
     import datlib
     os.environ.setdefault("DATPATCH_PORTAL", PORTAL)
     pdat = datlib.Dat(PORTAL)
@@ -442,8 +463,12 @@ def variant_build(root, limit=None, shard=None):
             new_id = int(v["newEnvIdHex"], 16)
             cs = v["cs"]
             objp = os.path.join(objd, "%08X_%d.obj" % (new_id, cs))
-            r = _shell(pdat, src_id, cs,
-                       {int(i): sid for i, sid in v["slots"].items()}, objp)
+            nf0 = _obj_complete(objp) if skip_existing else 0
+            if nf0:
+                r = dict(ok=True, resumed=True, srcTris=None, shellTris=nf0)
+            else:
+                r = _shell(pdat, src_id, cs,
+                           {int(i): sid for i, sid in v["slots"].items()}, objp)
             r["newEnvIdHex"] = v["newEnvIdHex"]
             r["sourceEnvIdHex"] = v["sourceEnvIdHex"]
             r["cs"] = cs
@@ -461,9 +486,9 @@ def variant_build(root, limit=None, shard=None):
                 rf.write(json.dumps(dict(cellIdHex=c, environmentIdHex=env16))
                          + "\n")
                 n_ret += 1
-            print("  %s cs%d (%d cells): src %d tris -> shell %d"
+            print("  %s cs%d (%d cells): src %s tris -> shell %d%s"
                   % (v["newEnvIdHex"], cs, v["cellCount"], r["srcTris"],
-                     r["shellTris"]))
+                     r["shellTris"], " (resumed)" if r.get("resumed") else ""))
     json.dump(stats, open(os.path.join(root, "variant_build_stats.json" + sfx),
                           "w"), indent=1)
     with open(os.path.join(root, "variant_imports.jsonl" + sfx), "w") as f:
@@ -544,6 +569,9 @@ def main():
     ap.add_argument("--min-cells", type=int, default=8)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--shard", default=None, help="i/n slice for fan-out")
+    ap.add_argument("--skip-existing", action="store_true",
+                    help="variant-build resume: keep complete OBJs, only "
+                         "rebuild missing ones (rows still emitted)")
     ap.add_argument("--patched-portal")
     ap.add_argument("--patched-cell")
     a = ap.parse_args()
@@ -557,7 +585,7 @@ def main():
     elif a.cmd == "cluster":
         cluster(a.root, a.top, a.min_cells)
     elif a.cmd == "variant-build":
-        variant_build(a.root, a.limit, a.shard)
+        variant_build(a.root, a.limit, a.shard, a.skip_existing)
     elif a.cmd == "variant-apply":
         assert a.patched_portal and a.patched_cell and a.wbt
         variant_apply(a.root, a.patched_portal, a.patched_cell, a.wbt)
