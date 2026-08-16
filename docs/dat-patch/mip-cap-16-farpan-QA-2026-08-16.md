@@ -102,7 +102,28 @@ AND box builds.
 render visibly cleaner (real minification mips instead of aliased 256²
 sampling). Frames `mipqa/armD-minmip/`.
 
-Status: **stays a candidate pair** — static render QA passed; the shimmer
-claim it exists to fix is temporal, so give it a far-pan MOTION QA (OBS video
-pan on the 1070) before promoting to the shipped set. It also restores the
-"TRUE 4x" rider for phase-2 step 2 if promoted.
+## MOTION QA (same evening, arms M1/M2) — no regression, slight win, owner eyeball invited
+
+1080p OBS window-capture on the 1070 (canvas was 800×600 — fixed in the acdt
+profile), scripted identical 12s-left + 12s-right pans at Holtburg under
+`/day`, NOMIP exe vs MINMIP exe:
+
+- `mipqa/motion/mpan_M1-nomip.mkv` vs `mpan_M2-minmip.mkv` (+ matched stills).
+- Ground-half temporal flicker (mean |frame diff| over the pan, luma-
+  normalized to be fair to the different sky/game-clock): **M1 20.4 vs
+  M2 19.1** — ~6% less flicker with the min-dim mip chain. Raw textures
+  intact throughout (third clean render pass for the pair).
+- The strongest visible win remains arm D's static one: distant dungeon
+  floors resolve cleanly instead of aliasing.
+
+Verdict: the pair is **safe** (three clean passes: arm D tour, M2 pan, all
+textures correct) and **directionally better** on the shimmer metric. Promotion
+to the shipped set is an owner call — eyeball the two mkvs side by side; if
+promoted, the "TRUE 4x" rider for phase-2 step 2 is restored. New 1070 tooling:
+`C:\Temp\acdt-mpan.ps1` + task `acdtmpan` (tag via `C:\Temp\acdt\mpan-tag.txt`),
+OBS acdt profile now records 1920×1080.
+
+Ops trap re-confirmed twice tonight: after killing an IN-WORLD client, the
+server session lingers past 45 s — relaunching too soon triggers the
+Account-In-Use double-boot and the new client dies at login. Kill, wait for the
+server-side boot (or ~2 min), then relaunch.

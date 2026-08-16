@@ -78,9 +78,25 @@ Continues HANDOFF-2026-08-16-PM-phase2-ready.md. Branch integ/all-20260813.
    buildbox session: run the proven wrap-pad driver (upscale-batch4/up_batch4.py
    pattern) over the staging set → new corpus `out/` for the step-2 rebuild.
 
+## LATE SESSION 2 (~20:15–21:00, owner present)
+- **mip-min MOTION QA RUN** — new 1070 tooling (`acdt-mpan.ps1` + `acdtmpan`
+  task; OBS acdt profile fixed to 1920×1080): identical scripted Holtburg pans,
+  NOMIP vs MINMIP. No regression, ~6% lower luma-normalized ground flicker
+  with the pair. Videos + stills in `mipqa/motion/`. **Promotion = owner
+  eyeball of the two mkvs.**
+- **Wrap-padded corpus re-upscale EXECUTING** on the buildbox T4 (detached,
+  self-reaping driver `~/rewrap/rewrap-driver.sh`; ~4,041 imgs at ~0.8s each;
+  output collects to `upscale-corpus/rewrap-out.tgz` + REWRAP_DONE sentinel,
+  keep-awake self-removed at the end so the box idle-stops).
+
 ## Still open
-- Wrap-padded corpus re-upscale EXECUTION (staged above; ~45 min of T4).
-- mip-min pair far-pan MOTION QA (OBS video pan) → promotion decision.
-- Full-frequency dungeon relief REBUILD with the new area-based lane (code
-  ready; judge under a torch-model rig, not the daylight board).
-- r5-relief ON vs OFF A/B at VeryHigh — needs a no-relief dat set baked.
+- Collect `rewrap-out.tgz` when REWRAP_DONE appears (if this session didn't).
+- mip-min pair promotion decision (owner) → if shipped, TRUE-4x rider restored.
+- Full-frequency dungeon relief REBUILD with the area-based lane — code ready,
+  constants (0.3 m spacing) chosen; needs the owner's step-2/3 scope call
+  before burning the bake hours. Judge under a torch-model rig.
+- r5-relief ON vs OFF A/B: **downgraded to moot** — the current r5 relief is at
+  the WRONG frequency (that's the finding that spawned the area lane), so
+  measuring its contribution wouldn't answer the budget question for the new
+  lane. Re-raise only if the area rebuild's value is in doubt after its own
+  gate.
