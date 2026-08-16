@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""env_geo.py -- DUNGEON GEOMETRY pilot (lane 3, geometry sub-lane).
+"""env_geo.py -- DUNGEON GEOMETRY: pilot (lane 3) + environment-variant lane.
 
 The wrinkle vs the building lane: CellStruct polygon surface indices resolve
 through EACH EnvCell's OWN surface array -- the same prefab renders as stone in
 one dungeon and ice in another.  Cell-weighted, only ~36% of slot usages have a
->=90%-dominant texture (env_idx census).  So this lane displaces ONLY dominant
-slots: per (environment, cellStruct, surfaceIndex) with one texture on >=DOM_MIN
-of its cells AND a wall relief class, displace with THAT texture's height field;
-everything else (diverse slots, portal polys, NoPos fillers, double-sided) is
-left untouched.  Minority cells (<10%) elsewhere wear the dominant texture's
-relief under a different albedo -- accepted for the pilot, judged in-client.
+>=90%-dominant texture (env_idx census).
+
+PILOT (plan/build/apply, r4-shipped): displace ONLY dominant slots in the
+SHARED record -- honest but limited to the 7-shell subset.
+
+VARIANT LANE (cluster/variant-build/variant-apply, per
+docs/dat-patch/HANDOFF-env-variant-design-2026-08-16.md): mint variant
+Environment records per texture-cluster and retarget each cluster's EnvCells
+to the variant whose relief matches their textures.  Every variant is an exact
+clone of its source (physics/portals/BSPs verbatim -- environment-clone) plus
+an appended displaced shell built with THAT cluster's textures; EnvCells are
+then re-pointed via envcell-retarget (in-place u16 rewrite).
 
 Subcommands:
-  plan   --root R [--lb 0x0189]   census + slot eligibility -> plan.json
-  build  --root R                 displaced shell OBJs + imports.jsonl
-  apply  --root R --patched DAT --wbt DLL   drive environment-append-geometry
+  plan          --root R [--lb 0x0189]   pilot: census -> plan.json
+  build         --root R                 pilot: displaced shells + imports.jsonl
+  apply         --root R --patched DAT --wbt DLL
+  cluster       --root R [--top 300] [--min-cells 8]   -> variants.json
+  variant-build --root R [--limit N]     -> obj/, variant_imports.jsonl,
+                                            retargets.jsonl
+  variant-apply --root R --patched-portal P --patched-cell C --wbt DLL
 """
 import argparse
 import json
@@ -109,14 +119,56 @@ def _env_rec(cells, cs, slot_sids):
                 surfaces=surfaces, polys=polys)
 
 
-def build(root):
-    import numpy as np
+def _shell(pdat, src_env_id, cs, slot_sids, objp):
+    """Shared displaced-shell path (pilot build + variant-build): parse the
+    SOURCE env record, displace its eligible slots with slot_sids' textures,
+    write the OBJ.  slot_sids = {int idx: '0x08......'}.  Returns a stats dict
+    with ok True/False."""
     import datlib
     import pipeline
     import pilot
     import relief3d
+    eid, cells = datlib.parse_environment(pdat.get(src_env_id), strict=True)
+    if cs not in cells:
+        return dict(ok=False, why="cellstruct absent")
+    rec = _env_rec(cells, cs, slot_sids)
+    sids = {s for s in rec["surfaces"] if s}
+    metas = pipeline.surface_meta(sids)
+    for m in metas.values():
+        if m["cls"] in pilot.WALL_CLASSES and m.get("h") is not None:
+            m["amp"] = pilot.AMP_WALL
+    src = relief3d.SourceMesh.from_record(rec, metas)
+    n0 = src.tri_count()
+    target = int(round(n0 * (MULT - 1.0)))
+    pipeline.bandlimit(src, metas, target, verbose=False)
+    carve_fans = sum(len(p["v"]) - 2 for p in src.polys
+                     if p.get("h") is not None and p.get("amp", 0) > 0
+                     and not p.get("excluded") and not p.get("invisible"))
+    if carve_fans == 0:
+        return dict(ok=False, why="no carveable polys")
+    segs = MAX_SEGMENTS
+    while segs > 4 and carve_fans * segs * segs > pilot.FINE_BUDGET:
+        segs -= 2
+    old_max = relief3d.MAX_AMPLITUDE_M
+    relief3d.MAX_AMPLITUDE_M = max(old_max, pilot.AMP_WALL)
+    try:
+        res = pipeline.run(src, segments=segs, mult=MULT, target_tris=target,
+                           carved_only=True, floor_m=pilot.FLOOR_M,
+                           verbose=False, normal_gain=pilot.NORMAL_GAIN)
+    finally:
+        relief3d.MAX_AMPLITUDE_M = old_max
+    # emit OBJ grouped by surface INDEX (usemtl surfN, the append command's
+    # contract) -- map each face's source poly back to its pos index.
+    sid2idx = {int(v, 16): int(i) for i, v in slot_sids.items()}
+    nf = _write_obj(objp, src_env_id, cs, res, src, sid2idx)
+    if nf == 0:
+        return dict(ok=False, why="no shell faces")
+    return dict(ok=True, srcTris=n0, shellTris=nf, segments=segs)
+
+
+def build(root):
+    import datlib
     os.environ.setdefault("DATPATCH_PORTAL", PORTAL)
-    P = pipeline.P
     pdat = datlib.Dat(PORTAL)
     planj = json.load(open(os.path.join(root, "plan.json")))
     objd = os.path.join(root, "obj")
@@ -127,51 +179,16 @@ def build(root):
         env16, cs = pair.split(":")
         env_id = 0x0D000000 | int(env16, 16)
         cs = int(cs)
-        eid, cells = datlib.parse_environment(pdat.get(env_id), strict=True)
-        if cs not in cells:
-            stats.append(dict(pair=pair, ok=False, why="cellstruct absent"))
-            continue
         slot_sids = {int(i): v["sid"] for i, v in slots.items()}
-        rec = _env_rec(cells, cs, slot_sids)
-        sids = {s for s in rec["surfaces"] if s}
-        metas = pipeline.surface_meta(sids)
-        for m in metas.values():
-            if m["cls"] in pilot.WALL_CLASSES and m.get("h") is not None:
-                m["amp"] = pilot.AMP_WALL
-        src = relief3d.SourceMesh.from_record(rec, metas)
-        n0 = src.tri_count()
-        target = int(round(n0 * (MULT - 1.0)))
-        pipeline.bandlimit(src, metas, target, verbose=False)
-        carve_fans = sum(len(p["v"]) - 2 for p in src.polys
-                         if p.get("h") is not None and p.get("amp", 0) > 0
-                         and not p.get("excluded") and not p.get("invisible"))
-        if carve_fans == 0:
-            stats.append(dict(pair=pair, ok=False, why="no carveable polys"))
-            continue
-        segs = MAX_SEGMENTS
-        while segs > 4 and carve_fans * segs * segs > pilot.FINE_BUDGET:
-            segs -= 2
-        old_max = relief3d.MAX_AMPLITUDE_M
-        relief3d.MAX_AMPLITUDE_M = max(old_max, pilot.AMP_WALL)
-        try:
-            res = pipeline.run(src, segments=segs, mult=MULT, target_tris=target,
-                               carved_only=True, floor_m=pilot.FLOOR_M,
-                               verbose=False, normal_gain=pilot.NORMAL_GAIN)
-        finally:
-            relief3d.MAX_AMPLITUDE_M = old_max
-        # emit OBJ grouped by surface INDEX (usemtl surfN, the append command's
-        # contract) -- map each face's source poly back to its pos index.
-        sid2idx = {int(v["sid"], 16): int(i) for i, v in slots.items()}
         objp = os.path.join(objd, "%08X_%d.obj" % (env_id, cs))
-        nf = _write_obj(objp, env_id, cs, res, src, sid2idx)
-        if nf == 0:
-            stats.append(dict(pair=pair, ok=False, why="no shell faces"))
+        r = _shell(pdat, env_id, cs, slot_sids, objp)
+        r["pair"] = pair
+        stats.append(r)
+        if not r["ok"]:
             continue
         imports.append(dict(envIdHex="0x%08X" % env_id, cellStructIndex=cs,
                             objPath=objp))
-        stats.append(dict(pair=pair, ok=True, srcTris=n0, shellTris=nf,
-                          segments=segs))
-        print("  %s: src %d tris -> shell %d" % (pair, n0, nf))
+        print("  %s: src %d tris -> shell %d" % (pair, r["srcTris"], r["shellTris"]))
     json.dump(stats, open(os.path.join(root, "build_stats.json"), "w"), indent=1)
     with open(os.path.join(root, "imports.jsonl"), "w") as f:
         for i in imports:
@@ -252,13 +269,278 @@ def apply(root, patched, wbt):
               open(os.path.join(root, "apply_results.json"), "w"), indent=1)
 
 
+def cluster(root, top=300, min_cells=8):
+    """Variant lane step 1: group wall-cells of the --top (env,cs) pairs by
+    their exact wall-slot surface tuple; every surviving cluster becomes one
+    variant Environment to mint.  All-or-none per landblock: a LB ships only
+    if EVERY wall-cell in it lands in a surviving cluster (else relief seams
+    at cell boundaries -- handoff section 4).
+
+    FUTURE OPT (not v1): within a pair the largest cluster could keep the
+    ORIGINAL env id (relief onto the source record, no clone/retarget) -- but
+    only when every OTHER user of that env world-wide is retargeted away,
+    which needs global analysis.  v1 keeps it simple and safe: every cluster
+    gets a fresh id; source records are never displaced."""
+    from collections import Counter, defaultdict
+    os.environ.setdefault("DATPATCH_PORTAL", PORTAL)
+    import datlib
+    import pipeline
+    import pilot
+    os.makedirs(root, exist_ok=True)
+
+    # pass 1: distinct sid16s -> wall eligibility (cls + usable height field).
+    # Memo off + one-at-a-time so ~800 height fields don't accumulate in RAM;
+    # we only keep the boolean.
+    sids16 = set()
+    for _oid, _env, _cs, surfs in _cell_walk():
+        sids16.update(surfs)
+    saved_memo = pipeline.memo_enabled
+    pipeline.memo_enabled = False
+    wall16 = set()
+    try:
+        for s in sorted(sids16):
+            m = pipeline.surface_meta({0x08000000 | s})[0x08000000 | s]
+            if m["cls"] in pilot.WALL_CLASSES and m.get("h") is not None:
+                wall16.add(s)
+    finally:
+        pipeline.memo_enabled = saved_memo
+    print("cluster: %d/%d distinct cell surfaces wall-eligible"
+          % (len(wall16), len(sids16)))
+
+    # pass 1.5: carve-slot sets per (env16, cs) over ALL Environment records —
+    # slot i carves iff some DRAWN, non-portal, non-NoPos polygon uses it as
+    # its pos surface.  Signatures below only include carving slots, so a
+    # slot that never carves can neither mint a variant ("no carveable
+    # polys") nor block a landblock's all-or-none coverage.
+    pdat = datlib.Dat(PORTAL)
+    carve_slots = {}
+    for eoid in pdat.files:
+        if not (0x0D000000 <= eoid <= 0x0D00FFFF):
+            continue
+        _eid, ecells = datlib.parse_environment(pdat.get(eoid))
+        for ecs, c in ecells.items():
+            portal_keys = set(c["portals"])
+            carve_slots[(eoid & 0xFFFF, ecs)] = {
+                p["pos"] for p in c["polys"]
+                if p["key"] not in portal_keys and not (p["stip"] & 0x4)
+                and p["pos"] >= 0}
+    print("cluster: carve slots computed for %d (env,cs) cellstructs"
+          % len(carve_slots))
+
+    # pass 2: per-cell wall signature (slot index, sid16) tuples, interned;
+    # wall-eligible AND carving for this cell's (env,cs)
+    sigs = {}
+    sig_list = []
+    wall_cells = []                     # (oid, env, cs, sig id)
+    empty_carve = set()
+    for oid, env, cs, surfs in _cell_walk():
+        cset = carve_slots.get((env, cs), empty_carve)
+        sig = tuple((i, s) for i, s in enumerate(surfs)
+                    if s in wall16 and i in cset)
+        if not sig:
+            continue
+        g = sigs.get(sig)
+        if g is None:
+            g = sigs[sig] = len(sig_list)
+            sig_list.append(sig)
+        wall_cells.append((oid, env, cs, g))
+
+    pair_count = Counter((env, cs) for _o, env, cs, _g in wall_cells)
+    selected = {p for p, _n in pair_count.most_common(top)}
+    clusters = defaultdict(list)        # (env, cs, sigid) -> [oid]
+    for oid, env, cs, g in wall_cells:
+        if (env, cs) in selected:
+            clusters[(env, cs, g)].append(oid)
+    surviving = {k: v for k, v in clusters.items() if len(v) >= min_cells}
+
+    covered = set()
+    for v in surviving.values():
+        covered.update(v)
+    lb_ok = {}
+    for oid, _env, _cs, _g in wall_cells:
+        lb = oid >> 16
+        if oid not in covered:
+            lb_ok[lb] = False
+        elif lb not in lb_ok:
+            lb_ok[lb] = True
+
+    variants = []
+    retargets = 0
+    for (env, cs, g), oids in sorted(surviving.items(),
+                                     key=lambda kv: (-len(kv[1]), kv[0])):
+        keep = [o for o in oids if lb_ok[o >> 16]]
+        if keep:
+            variants.append((env, cs, g, keep))
+            retargets += len(keep)
+
+    used = {oid & 0xFFFF for oid in pdat.files
+            if 0x0D000000 <= oid <= 0x0D00FFFF}
+    nxt = max(used) + 1
+    out = []
+    for env, cs, g, keep in variants:
+        while nxt in used:
+            nxt += 1
+        if nxt > 0xFFFF:
+            raise SystemExit("env id space exhausted (needed %d variants)"
+                             % len(variants))
+        out.append(dict(newEnvIdHex="0x%08X" % (0x0D000000 | nxt),
+                        sourceEnvIdHex="0x%08X" % (0x0D000000 | env),
+                        cs=cs,
+                        slots={str(i): "0x%08X" % (0x08000000 | s)
+                               for i, s in sig_list[g]},
+                        cellCount=len(keep),
+                        cells=["0x%08X" % o for o in sorted(keep)]))
+        nxt += 1
+
+    lbs_full = sum(1 for ok in lb_ok.values() if ok)
+    stats = dict(wallCells=len(wall_cells), wallSids=len(wall16),
+                 distinctSigs=len(sig_list), pairsSelected=len(selected),
+                 clustersRaw=len(clusters), clustersSurviving=len(surviving),
+                 coveredWallCells=len(covered),
+                 lbsTouched=len(lb_ok), lbsFullyCovered=lbs_full,
+                 variants=len(out), retargets=retargets)
+    json.dump(dict(params=dict(top=top, minCells=min_cells),
+                   stats=stats, variants=out),
+              open(os.path.join(root, "variants.json"), "w"), indent=1)
+    print("cluster: %d wall-cells, %d selected pairs -> %d clusters "
+          "(>=%d cells) covering %d cells" % (len(wall_cells), len(selected),
+                                              len(surviving), min_cells,
+                                              len(covered)))
+    print("  LB all-or-none: %d/%d LBs fully covered -> %d variants, "
+          "%d retargets (%.0f%% of wall-cells) -> %s/variants.json"
+          % (lbs_full, len(lb_ok), len(out), retargets,
+             100.0 * retargets / max(1, len(wall_cells)), root))
+    return stats
+
+
+def variant_build(root, limit=None, shard=None):
+    """Variant lane step 2: displaced shell per variant (source geometry +
+    the CLUSTER's textures) -> obj/, variant_imports.jsonl, retargets.jsonl.
+    --shard i/n takes every n-th variant starting at i and suffixes the three
+    output files with .shard<i> (concatenate/merge after a fan-out); OBJs are
+    keyed by variant id so shards never collide in obj/."""
+    import datlib
+    os.environ.setdefault("DATPATCH_PORTAL", PORTAL)
+    pdat = datlib.Dat(PORTAL)
+    vj = json.load(open(os.path.join(root, "variants.json")))
+    objd = os.path.join(root, "obj")
+    os.makedirs(objd, exist_ok=True)
+    vs = vj["variants"]
+    sfx = ""
+    if shard:
+        i, n = (int(x) for x in shard.split("/"))
+        vs = vs[i::n]
+        sfx = ".shard%d" % i
+    if limit:
+        vs = vs[:limit]
+    imports = []
+    stats = []
+    n_ret = 0
+    with open(os.path.join(root, "retargets.jsonl" + sfx), "w") as rf:
+        for v in vs:
+            src_id = int(v["sourceEnvIdHex"], 16)
+            new_id = int(v["newEnvIdHex"], 16)
+            cs = v["cs"]
+            objp = os.path.join(objd, "%08X_%d.obj" % (new_id, cs))
+            r = _shell(pdat, src_id, cs,
+                       {int(i): sid for i, sid in v["slots"].items()}, objp)
+            r["newEnvIdHex"] = v["newEnvIdHex"]
+            r["sourceEnvIdHex"] = v["sourceEnvIdHex"]
+            r["cs"] = cs
+            r["cells"] = v["cellCount"]
+            stats.append(r)
+            if not r["ok"]:
+                # no shell -> no clone/retarget; those cells keep the source
+                # env (today's flat look, never a dangling reference)
+                continue
+            imports.append(dict(sourceIdHex=v["sourceEnvIdHex"],
+                                newEnvIdHex=v["newEnvIdHex"],
+                                cellStructIndex=cs, objPath=objp))
+            env16 = "0x%04X" % (new_id & 0xFFFF)
+            for c in v["cells"]:
+                rf.write(json.dumps(dict(cellIdHex=c, environmentIdHex=env16))
+                         + "\n")
+                n_ret += 1
+            print("  %s cs%d (%d cells): src %d tris -> shell %d"
+                  % (v["newEnvIdHex"], cs, v["cellCount"], r["srcTris"],
+                     r["shellTris"]))
+    json.dump(stats, open(os.path.join(root, "variant_build_stats.json" + sfx),
+                          "w"), indent=1)
+    with open(os.path.join(root, "variant_imports.jsonl" + sfx), "w") as f:
+        for i in imports:
+            f.write(json.dumps(i) + "\n")
+    ok = sum(1 for s in stats if s.get("ok"))
+    print("variant-build: %d/%d variants -> OBJs; %d retargets; "
+          "variant_imports.jsonl + retargets.jsonl written"
+          % (ok, len(stats), n_ret))
+
+
+def variant_apply(root, patched_portal, patched_cell, wbt):
+    """Variant lane step 3: clone -> append -> retarget through WBT."""
+    imports = [json.loads(l)
+               for l in open(os.path.join(root, "variant_imports.jsonl"))]
+    if not imports:
+        raise SystemExit("no variant imports -- run variant-build first")
+    cmds = [dict(command="environment-clone", datPath=patched_portal,
+                 clones=[dict(sourceIdHex=i["sourceIdHex"],
+                              newIdHex=i["newEnvIdHex"]) for i in imports])]
+    for i in imports:
+        cmds.append(dict(command="environment-append-geometry",
+                         datPath=patched_portal, envIdHex=i["newEnvIdHex"],
+                         cellStructIndex=i["cellStructIndex"],
+                         objPath=i["objPath"]))
+    cmds.append(dict(command="envcell-retarget", datPath=patched_cell,
+                     jsonlPath=os.path.join(root, "retargets.jsonl")))
+    inp = "\n".join(json.dumps(c) for c in cmds) + "\n"
+    p = subprocess.run("DOTNET_ROLL_FORWARD=LatestMajor dotnet %s --stdin" % wbt,
+                       shell=True, input=inp.encode(), capture_output=True,
+                       timeout=14400)
+    per = {}
+    fails = []
+    for line in p.stdout.decode(errors="replace").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        cmd = o.get("command")
+        if cmd not in ("environment-clone", "environment-append-geometry",
+                       "envcell-retarget"):
+            continue
+        d = per.setdefault(cmd, dict(ok=0, fail=0))
+        bad = (not o.get("success")) or o.get("failCount", 0) > 0
+        d["fail" if bad else "ok"] += 1
+        if bad:
+            fails.append(o)
+    for cmd, d in per.items():
+        print("  %s: %d ok, %d fail" % (cmd, d["ok"], d["fail"]))
+    for f_ in fails[:5]:
+        print("  FAIL", json.dumps(f_)[:300])
+    json.dump(dict(per=per, fails=fails[:20]),
+              open(os.path.join(root, "variant_apply_results.json"), "w"),
+              indent=1)
+    total_fail = sum(d["fail"] for d in per.values())
+    print("variant-apply: %s (%d command responses, %d with failures)"
+          % ("OK" if total_fail == 0 else "FAILURES",
+             sum(d["ok"] + d["fail"] for d in per.values()), total_fail))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["plan", "build", "apply"])
+    ap.add_argument("cmd", choices=["plan", "build", "apply", "cluster",
+                                    "variant-build", "variant-apply"])
     ap.add_argument("--root", required=True)
     ap.add_argument("--lb", default=None)
     ap.add_argument("--patched")
     ap.add_argument("--wbt")
+    ap.add_argument("--top", type=int, default=300)
+    ap.add_argument("--min-cells", type=int, default=8)
+    ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--shard", default=None, help="i/n slice for fan-out")
+    ap.add_argument("--patched-portal")
+    ap.add_argument("--patched-cell")
     a = ap.parse_args()
     if a.cmd == "plan":
         plan(a.root, int(a.lb, 16) if a.lb else None)
@@ -267,6 +549,13 @@ def main():
     elif a.cmd == "apply":
         assert a.patched and a.wbt
         apply(a.root, a.patched, a.wbt)
+    elif a.cmd == "cluster":
+        cluster(a.root, a.top, a.min_cells)
+    elif a.cmd == "variant-build":
+        variant_build(a.root, a.limit, a.shard)
+    elif a.cmd == "variant-apply":
+        assert a.patched_portal and a.patched_cell and a.wbt
+        variant_apply(a.root, a.patched_portal, a.patched_cell, a.wbt)
 
 
 if __name__ == "__main__":
