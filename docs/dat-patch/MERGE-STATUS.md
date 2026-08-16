@@ -33,11 +33,14 @@ r5 env-variants (GATED, shipped) → **r6 scenery (gate pending)**.
 Packages r1–r5 exist per-lane via `release.sh`. ACE + 1070 kit run r5.
 
 ## Related open threads (so they don't get lost either)
-- **Phase-2 exe patches** ready + documented: `/mnt/wbterminal2/ac-eor-patch/
-  PATCH-NOTES.md` (`acclient.eor.compress+mip16.exe`, sha 38a7e4d2…) —
-  DAT compression (~40%, texture-records-only so ACE's non-inflating loader
-  is untouched) + mip-cap 4→16. Gating unknown for the "4× everywhere + full
-  area-based dungeon relief" plan; prove it loads on the 1070 first.
+- **Phase-2 exe patches** — CORRECTED 2026-08-16 (see ac-eor-patch/PATCHES.md +
+  PATCH-NOTES.md). The pre-existing 6-NOP patch is notan's texture LEAK fix,
+  NOT DAT compression (my earlier note was an unverified assumption). Built:
+  `acclient.eor.leakfix+mip16.exe` = leak fix + mip-cap 4→16 only. **The
+  COMPRESSION patch does NOT exist yet** — trevis's fix is at
+  AsyncCache::SerializeFromCachePack (RVA 0x16AC0), still to be located by
+  byte-signature and derived. The ~40% headroom the phase-2 plan assumes is
+  therefore UNPROVEN until that patch is found AND load-tested on the 1070.
 - **Owner decision** teed up: full-frequency dungeon relief (area-based
   budget, ~+300 MiB) fits once phase-2 headroom lands — build toward 600 MiB,
   don't right-size textures twice.
