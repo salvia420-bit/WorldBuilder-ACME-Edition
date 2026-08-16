@@ -19,10 +19,21 @@ output in `C:\Temp\acdt\`; isolated client copy in `D:\ac-dat-test\`.
   `UserPreferences::FindDefaultFile`). Keys that matter: `[Display] FullScreen=False`
   (fullscreen would seize the user's display), `[Sound] SoundVolume=0.00
   AmbientSoundVolume=0.00 InterfaceSoundVolume=0.00` (+ the *Disabled bools; volumes are
-  polarity-proof), `[Render] EnvironmentTextureDetail=VeryLow LandscapeTextureDetail=VeryLow`
-  (the boot default half-reses every texture upload — REQUIRED for texture-lane eyeballs,
-  dossier §3/§4). The client saves prefs on clean exit — redeploy the INI before each fresh
-  launch if the previous client exited cleanly.
+  polarity-proof), `[Render] EnvironmentTextureDetail=VeryHigh LandscapeTextureDetail=VeryHigh`.
+  ⚠ **THE OLD `=0` RECIPE WAS BACKWARDS (found 2026-08-16 PM):** numeric values on choice
+  prefs are treated as a CHOICE INDEX, and the choice arrays run worst-first:
+  names {VeryLow,Low,Medium,High,VeryHigh} ↔ values {4,3,2,1,0}
+  (`Render_EnvironmentTextureDetail_Values` acclient.c:41518). So `=0` selected index 0 =
+  **VeryLow = value 4** — the WORST detail, worse than the boot default 2/Medium. Every
+  gate eyeball and tour video through tour9 ran with quarter-detail textures; the dossier's
+  "defeat via 0" intent is spelled `VeryHigh`. Full showcase INI (deployed on the box +
+  scratch UserPreferences.showcase.ini): both details VeryHigh, TextureFiltering=Anisotropic,
+  Landscape/BuildingDetailTextures=True, LandscapeDrawDistance=VeryHigh (mid_radius 15 vs
+  Medium's 8; `Render::SetOverallGraphicsQuality` acclient.c:378743 shows the bundles),
+  SceneryDrawDistance=High, Resolution=1920x1080. The GraphicsPerformance float is DERIVED
+  from the individual prefs (`DetermineOverallGraphicsQuality`) — set individuals, not it.
+  The client saves prefs on clean exit — redeploy the INI before each fresh launch if the
+  previous client exited cleanly.
 - **RESOLUTION (solved 2026-08-16): `[Display] Resolution=1920x1080`** — choice prefs
   serialize by CHOICE NAME, never number ("WxH", `RefreshRate=Auto`,
   `EnvironmentTextureDetail=VeryLow`; a client-authored INI from a clean exit is the
