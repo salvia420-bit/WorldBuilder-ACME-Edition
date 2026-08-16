@@ -41,6 +41,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# --remacri: bake onto the Remacri 4x upscales (owner-approved recipe) instead
+# of the retail-res base textures. The 2026-08-15 box run shipped base-res
+# bakes because the box has no Remacri corpus — set this on a laptop rerun.
+PREFER_REMACRI = False
+
 # ----- PixelFormat numeric ids (retail D3DFMT / FourCC values) --------------
 PF = {
     1: "INDEX16", 65: "P8",
@@ -360,7 +365,7 @@ def bake_one(sid_int, base_portal):
     rs = m.get("rsId")
     if not rs:
         return None, "no rsId"
-    arr, src = matlib.load_tex_full(rs, prefer_remacri=False, max_side=4096)
+    arr, src = matlib.load_tex_full(rs, prefer_remacri=PREFER_REMACRI, max_side=4096)
     if arr is None:
         return None, "no base png"
     h_full = {sid_int: m["h"]} if m.get("h") is not None else {}
@@ -896,7 +901,12 @@ def main():
         s.add_argument("--blocks", type=int, default=450000)
         s.add_argument("--out", default=None)
         s.add_argument("--wbt", default=None, help="path to WorldBuilder.Terminal.dll")
+        s.add_argument("--remacri", action="store_true",
+                       help="bake onto Remacri 4x upscales (needs the corpus mounted)")
     a = ap.parse_args()
+    if getattr(a, "remacri", False):
+        global PREFER_REMACRI
+        PREFER_REMACRI = True
     wbt_run = None
     if a.wbt:
         wbt_run = ["dotnet", a.wbt, "--stdin"]
