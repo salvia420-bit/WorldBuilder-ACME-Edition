@@ -58,6 +58,63 @@ def drawn_poly_offsets(data):
     return out
 
 
+def constructmesh_check(data):
+    """ConstructMesh data-invariant checklist over one GfxObj record's DRAWN
+    polygons (the renderer executes these with no bounds checks — decomp
+    D3DPolyRender::ConstructMesh @0x59dfa0).  Returns a list of violation
+    strings; [] = record is ConstructMesh-safe.
+
+    Checks: (1) record parses AND is fully consumed (parser desync = the
+    layout-flags rule); (2) num_pts >= 3; (3) every vertex id resolves in the
+    keyed vertex table; (4) pos_surface in [0, nsurf); (5) sides_type==2 =>
+    neg_surface in [0, nsurf) (the proven 0x59e560 AV); (6) pos UV indices
+    (when !(stip&4)) each < that vertex's UV count; (7) stippling limited to
+    the known bit set {NoPos=4, NoNeg=8, Positive=1, Negative=2}."""
+    out = []
+    r = gfxlib.Rdr(data)
+    r.u32(); flags = r.u32()
+    nsurf = r.compressed()
+    for _ in range(nsurf):
+        r.u32()
+    P, N, UV, idx = gfxlib.read_vertex_array(r)
+    if flags & 0x1:
+        n = r.compressed()
+        for _ in range(n):
+            r.u16(); gfxlib.read_polygon(r)
+        gfxlib._bsp(r, "physics")
+    r.vec3()
+    if flags & 0x2:
+        n = r.compressed()
+        for i in range(n):
+            key = r.u16()
+            p = gfxlib.read_polygon(r)
+            tag = "poly[%d key=%d]" % (i, key)
+            if p["n"] < 3:
+                out.append("%s num_pts=%d < 3" % (tag, p["n"]))
+            if not (0 <= p["pos"] < nsurf):
+                out.append("%s pos_surface %d not in [0,%d)" % (tag, p["pos"], nsurf))
+            if p["sides"] == 2 and not (0 <= p["neg"] < nsurf):
+                out.append("%s sides=2 neg_surface %d not in [0,%d)"
+                           % (tag, p["neg"], nsurf))
+            if p["stip"] & ~0x0F:
+                out.append("%s stippling 0x%X outside known bits" % (tag, p["stip"]))
+            bad_v = [v for v in p["v"] if v not in idx]
+            if bad_v:
+                out.append("%s vertex keys %s unresolved" % (tag, bad_v[:4]))
+            elif not (p["stip"] & 4):
+                for v, u in zip(p["v"], p["uvi"]):
+                    if u >= len(UV[idx[v]]):
+                        out.append("%s uv index %d >= vertex %d uv count %d"
+                                   % (tag, u, v, len(UV[idx[v]])))
+                        break
+        gfxlib._bsp(r, "drawing")
+    if flags & 0x8:
+        r.u32()
+    if len(data) - r.o != 0:
+        out.append("record not fully consumed (tail=%d)" % (len(data) - r.o))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["audit", "fix"])

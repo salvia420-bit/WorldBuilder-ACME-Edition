@@ -47,8 +47,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 PREFER_REMACRI = False
 
 # ----- PixelFormat numeric ids (retail D3DFMT / FourCC values) --------------
+# NOTE: palettized ids fixed 2026-08-16 — retail/ACE PFID_P8 = 41 and
+# PFID_INDEX16 = 101 (0x65); the original {1: INDEX16, 65: P8} was a
+# hex/decimal confusion, so the palette skip below never matched (palettized
+# records were skipped by the no-base-png check instead — same outcome).
 PF = {
-    1: "INDEX16", 65: "P8",
+    101: "INDEX16", 41: "P8",
     20: "R8G8B8", 21: "A8R8G8B8", 23: "R5G6B5", 26: "A4R4G4B4", 28: "A8",
     827611204: "DXT1",   # b'DXT1' little-endian
     861165636: "DXT3",   # b'DXT3'
@@ -57,7 +61,7 @@ PF = {
 }
 NAME2PF = {v: k for k, v in PF.items()}
 DXT1, DXT3, DXT5 = 827611204, 861165636, 894720068
-PALETTED = {1, 65}
+PALETTED = {41, 101}
 
 
 # ----- raw RenderSurface header from the dat (datlib) -----------------------
@@ -430,7 +434,14 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
             res["skipped_nobase"] += 1
             res["skips"].append(dict(sid=sid_hex, rs=rs_hex, why="rs absent in base"))
             continue
-        if hdr["fmt"] in PALETTED:
+        if hdr["fmt"] in PALETTED and not os.path.exists(
+                os.path.join(os.environ["DATPATCH_TEX_BASE"], rs_hex + ".png")):
+            # Palettized source with no palette-resolved base PNG: skip (the
+            # community palette trap).  WITH a base PNG the caller has already
+            # palette-resolved it (pallib) and vetted recolor safety (census:
+            # ClothingTable scan + weenie palette rows) — conversion to DXT is
+            # then deliberate: the record's format changes and its default
+            # palette is baked in.
             res["skipped_palette"] += 1
             res["skips"].append(dict(sid=sid_hex, rs=rs_hex,
                                      why="palettized " + hdr["fmtname"]))
@@ -450,6 +461,16 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
             res["skipped_other"] += 1
             res["skips"].append(dict(sid=sid_hex, rs=rs_hex, why="bake: %s" % info))
             continue
+        # Alpha transplant: the BASE decode's alpha is retail truth (clipmap
+        # transparency, cutouts).  Corpus upscales of palettized sources come
+        # back opaque (found on door 0x06003966: transparent window center
+        # shipped as opaque red without this) — always carry base alpha,
+        # upscaled to the baked size.
+        base_a = np.asarray(Image.open(base_png).convert("RGBA"), np.uint8)[:, :, 3]
+        if base_a.shape != u8.shape[:2]:
+            base_a = np.asarray(Image.fromarray(base_a).resize(
+                (u8.shape[1], u8.shape[0]), Image.BILINEAR), np.uint8)
+        u8[:, :, 3] = base_a
         H, W = u8.shape[:2]
         alpha = has_alpha(u8)
         fmt = "DXT5" if alpha else "DXT1"

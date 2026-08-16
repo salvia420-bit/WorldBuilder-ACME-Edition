@@ -127,10 +127,20 @@ for gid_h in sorted(stats):
         r["maxShellDisp"] = 0.0
     r["shellDisplacedOk"] = r["maxShellDisp"] > 0.02
 
+    # K: ConstructMesh data-invariant checklist (roadmap §5.5) — the renderer
+    # executes drawn polys with no bounds checks; polyfix.constructmesh_check
+    # is the codified list (num_pts, surface/vertex/uv index bounds, sides=2
+    # neg rule, stip bits, full-consumption).
+    import polyfix
+    viol = polyfix.constructmesh_check(rp)
+    r["constructMeshViolations"] = viol[:10]
+    r["constructMeshOk"] = not viol
+
     ok = (fields_ok and pos_drift == 0.0 and nrm_drift == 0.0
           and r["surfacesPrefixOk"] and r["vertexCapOk"]
           and r["origPolysCarriedOk"] and r["noPosFillersOk"]
-          and r["portNodesOk"] and r["shellDisplacedOk"])
+          and r["portNodesOk"] and r["shellDisplacedOk"]
+          and r["constructMeshOk"])
     r["OK"] = ok
     if not ok:
         fail += 1
