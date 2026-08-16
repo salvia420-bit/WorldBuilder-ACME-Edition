@@ -283,6 +283,7 @@ Pull live data from a connected ACE world database into JSON gazetteers/indexes 
 | `obj-export` | `datId, outputPath` | GfxObj (`0x01…`) or Setup (`0x02…`) → Wavefront `.obj`. |
 | `obj-import` | `objPath, surfaceDid, gfxObjId?, setupId?` | `.obj` → GfxObj+Setup; auto-allocates `0x01FF…` / `0x02FF…` IDs and rebuilds BSP. |
 | `bsp-build` | `gfxObjId` | Rebuild Physics + Drawing BSP trees on a GfxObj (e.g. after manual mesh edits). |
+| `environment-append-geometry` | `datPath, envIdHex, cellStructIndex, objPath, dryRun?` | Append OBJ render geometry to one CellStruct of an Environment (`0x0D…`) in a portal-DAT COPY — the dungeon-geometry lane. `usemtl surf<N>` = CELL-LOCAL surface index; physics polys, Portals and all BSPs carried verbatim (no rebuild). Run `tools/dat-patch/texture_lane.py fixup` after EVERY append run (a grown env record taints ~2k b-tree leaves). Refuses `~/ac_base_dats`. |
 
 ### Bulk export / training data
 | name | args | what it does |
@@ -389,6 +390,25 @@ After `transact` runs, tiles that overlap a mutated LB are flagged dirty.
 - **Output paths.** Everything that writes to disk takes an explicit `outputPath` / `outDir`. The terminal does not rewrite project state from a write command unless the description says so (e.g. `apply:true` on `worldgen`, `generate-world`, `import-heightmap`).
 - **Throttling.** Heavy renderers (`generate-object-sprites`, `emit-tile-pyramid`, `emit-static-site`) accept `throttleMs` to drop process priority — useful when an ML training job is sharing the box.
 - **Dispatch vs help.** 16 commands exist in the dispatch table but not in the published `help` output (`bsp-build`, `compare-render-corners`, `describe-floor`, `emit-static-site`, `emit-tile-pyramid`, `extract-cell-footprints`, `generate-object-sprites`, `obj-export`, `obj-import`, `render-dungeon`, `weenie-snapshot`, `weenie-template-apply`, `weenie-template-list`, `worldgen`, `worldgen-analyze-buildings`, `worldgen-scan-retail-towns`). They're stable; just unadvertised. This skill catalogs them in their proper categories above.
+
+## Recipe — dungeon relief via environment variants (dat-patch lane 3 geometry)
+
+The retail-dat patching lanes (docs/dat-patch/) drive these commands directly
+with `--stdin` and NO project (datPath-taking commands: `chorizite-parse-dat-record`,
+`render-surface-import`, `surface-texture-collapse`, `environment-append-geometry`).
+For MEANINGFUL dungeon relief the plan is the environment-VARIANT design —
+full spec + sizing in `docs/dat-patch/HANDOFF-env-variant-design-2026-08-16.md`:
+
+1. Python plans clusters per (env, cellstruct) over all 735k EnvCells
+   (`tools/dat-patch/env_geo.py`) and builds per-cluster displaced shells.
+2. `clone-dat` → copies; `environment-clone` (TO BUILD: DRW SetEntry under a
+   free 16-bit id) → variant records; `environment-append-geometry` → shells;
+   `envcell-retarget` (TO BUILD: batch EnvironmentId u16 rewrite on a CELL-dat
+   copy; DRW CellDatabase write + EnvCell round-trip tests already exist).
+3. Validate with THIS skill's loop: `validate-dungeon` per touched landblock,
+   `cell-portal-graph-sweep`, chorizite re-parses, then
+   `tools/dat-patch/release.sh` (fixup is mandatory — env writes churn the
+   b-tree hard) and the 1070 in-client gate.
 
 ## When to use this skill
 

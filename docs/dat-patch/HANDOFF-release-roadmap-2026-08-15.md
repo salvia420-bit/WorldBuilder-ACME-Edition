@@ -345,3 +345,9 @@ recolor wall, expect most creature textures recolor-live.
   palette-composition design (bake per DEFAULT palette only was rejected as
   recolor-breaking; a future INDEX16-preserving up-res would need palette-resolution
   at 4× which changes index width — research item), environment-variant design.
+
+## POINTER 2026-08-16: the environment-variant design (meaningful dungeon relief) is fully
+specified — pipeline over WorldBuilder.Terminal commands per the worldbuilder-terminal
+skill, sizing measured (4.3k variants / 248k in-place cell retargets for 80% wall-cell
+coverage; only TWO small commands to build), risks, and ALL other open items consolidated:
+**docs/dat-patch/HANDOFF-env-variant-design-2026-08-16.md** — read that first next session.
