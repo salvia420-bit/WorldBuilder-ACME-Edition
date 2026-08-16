@@ -82,8 +82,29 @@ def main():
                                      err="%d -> %d" % (len(s["polys"]), len(c["polys"]))))
             max_pos[(vid & 0xFFFF, k)] = max([p["pos"] for p in c["polys"]] + [-1])
 
-    missing_built = [v["newEnvIdHex"] for v in variants
-                     if int(v["newEnvIdHex"], 16) not in pdat.files]
+    # A variant absent from the portal is only a finding if something needs it:
+    # variant-build records legitimate skips (e.g. "no carveable polys") in
+    # variant_build_stats.json, and a skipped variant that no retargets.jsonl
+    # row references was never applied — waive it (r5: 4 such, all benign).
+    known_failed = set()
+    stats_path = os.path.join(a.root, "variant_build_stats.json")
+    if os.path.exists(stats_path):
+        known_failed = {int(s["newEnvIdHex"], 16)
+                        for s in json.load(open(stats_path)) if not s.get("ok")}
+    referenced16 = {v & 0xFFFF for v in retargets.values()}
+    missing_built = []
+    waived_missing = []
+    for v in variants:
+        vid = int(v["newEnvIdHex"], 16)
+        if vid in pdat.files:
+            continue
+        if vid in known_failed and (vid & 0xFFFF) not in referenced16:
+            waived_missing.append(v["newEnvIdHex"])
+        else:
+            missing_built.append(v["newEnvIdHex"])
+    if waived_missing:
+        print("  waived %d unreferenced known-failed variant(s): %s"
+              % (len(waived_missing), ",".join(waived_missing[:10])))
     if missing_built:
         findings.append(dict(kind="variant-missing", count=len(missing_built),
                              err=",".join(missing_built[:10])))

@@ -1,5 +1,21 @@
 # HANDOFF — meaningful dungeon relief via WorldBuilder.Terminal (environment-variant design) + all open items (2026-08-16)
 
+## 0. ADDENDUM (2026-08-16 AM): r5-envvariants SHIPPED — 1070 GATE PASSED
+The full-scale run (not the top-300 v1 cut — all 3,928 planned variants) built,
+applied, validated, packaged (`acme-dats-r5-envvariants.tgz`), and passed the
+1070 in-client gate the same morning. 3,924 built / 306,010 retargets landed /
+2,193 LBs; 4 unbuildable variants waived (no carveable polys, zero references).
+Full numbers + eyeball verdict: `/mnt/wbterminal2/dat-patch-envgeo/GATE-STATUS.md`.
+Tour9 video (towns + Cave of Alabree, Underground Passage, Braid Mansion,
+Muggy Guruk finale) taildropped to the owner as reddit raw material.
+Gate-tooling hardening landed in this commit: variant_release.sh sweeps now
+BASELINE orphan/asymmetric counts against the retail base dat (retail ships
+thousands; absolute-zero failed every release), and variant_verify.py waives
+known-failed variants that no retarget references. ACE (laptop) now serves the
+r5 pair (`ace-r5-dats/`, restore via Config.js.pre-r5-bak); 1070 kit has r5
+live with r4 as `*.r4.bak`. §5.1's go/no-go is answered; remaining opens
+below are unchanged except the gate item.
+
 ## 0. THE QUESTION THIS ANSWERS
 Can the worldbuilder-terminal skill + WBT's JSON command surface carry the
 environment-variant design (real per-texture dungeon relief despite shared

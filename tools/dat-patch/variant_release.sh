@@ -48,30 +48,43 @@ EOF
 echo "== variant_verify (strict parses, source-prefix match, retargets landed, LB list) =="
 python3 "$HERE/variant_verify.py" --root "$ROOT" --portal "$PORTAL" --cell "$CELL"
 
-echo "== cell-portal-graph-sweep over affected LBs =="
-python3 - "$ROOT" "$CELL" "$WBT" <<'EOF'
+echo "== cell-portal-graph-sweep over affected LBs (baselined vs retail base) =="
+# Retail cell data already contains thousands of orphaned cells and asymmetric
+# portals (r5 lesson: 3,902 orphans / 506 asymmetric over 2,193 LBs, byte-identical
+# to base), so an absolute clean flag fails every release. The gate is: patched
+# counts must EQUAL the base dat's counts per batch, and unresolved targets = 0.
+python3 - "$ROOT" "$CELL" "${BASE_CELL:-$HOME/ac_base_dats/client_cell_1.dat}" "$WBT" <<'EOF'
 import json, subprocess, sys
-root, cell, wbt = sys.argv[1:4]
+root, cell, base, wbt = sys.argv[1:5]
 lbs = json.load(open(root + "/lbids.json"))["lbIds"]
-cmds = []
-for i in range(0, len(lbs), 200):
-    cmds.append(json.dumps(dict(command="cell-portal-graph-sweep", datPath=cell,
-                                lbIds=lbs[i:i + 200])))
-p = subprocess.run("DOTNET_ROLL_FORWARD=LatestMajor dotnet %s --stdin" % wbt,
-                   shell=True, input=("\n".join(cmds) + "\n").encode(),
-                   capture_output=True, timeout=7200)
-clean = dirty = 0
-for line in p.stdout.decode(errors="replace").splitlines():
-    line = line.strip()
-    if not (line.startswith("{") and '"cell-portal-graph-sweep"' in line):
-        continue
-    o = json.loads(line)
-    if o.get("success") and o.get("clean"):
-        clean += 1
-    else:
+
+def sweep(dat):
+    cmds = [json.dumps(dict(command="cell-portal-graph-sweep", datPath=dat,
+                            lbIds=lbs[i:i + 200]))
+            for i in range(0, len(lbs), 200)]
+    p = subprocess.run("DOTNET_ROLL_FORWARD=LatestMajor dotnet %s --stdin" % wbt,
+                       shell=True, input=("\n".join(cmds) + "\n").encode(),
+                       capture_output=True, timeout=7200)
+    rows = []
+    for line in p.stdout.decode(errors="replace").splitlines():
+        line = line.strip()
+        if line.startswith("{") and '"cell-portal-graph-sweep"' in line:
+            o = json.loads(line)
+            rows.append((o.get("success"), o.get("envCellCount"), o.get("portalCount"),
+                         o.get("orphanedCellCount"), o.get("asymmetricPortalCount"),
+                         o.get("unresolvedTargetCount")))
+    return rows
+
+pat, bas = sweep(cell), sweep(base)
+dirty = 0
+for i, (p_, b_) in enumerate(zip(pat, bas)):
+    if not p_[0] or p_[5] != 0 or p_[1:] != b_[1:]:
         dirty += 1
-        print("  DIRTY batch:", json.dumps(o)[:400])
-print("sweep: %d/%d batches clean over %d LBs" % (clean, clean + dirty, len(lbs)))
+        print("  DIRTY batch %d: patched=%s base=%s" % (i, p_, b_))
+if len(pat) != len(bas) or not pat:
+    dirty += 1
+    print("  DIRTY: batch count mismatch or empty sweep (patched=%d base=%d)" % (len(pat), len(bas)))
+print("sweep: %d/%d batches match base over %d LBs" % (len(pat) - dirty, len(pat), len(lbs)))
 sys.exit(1 if dirty else 0)
 EOF
 
