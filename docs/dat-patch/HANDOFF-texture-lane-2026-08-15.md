@@ -43,6 +43,17 @@ The §BLOCKER below is RESOLVED at the structural level; the file that ships is 
   parser-desync flags rule, etc.) lives in the session transcript and polyfix.py docstring;
   fold into validate.py as a follow-up. NOTE: base-dat physics polys natively carry
   pos/neg=-1 — physics polys never feed ConstructMesh; don't "fix" those.
+- **1070 IN-CLIENT GATE: PASSED (2026-08-15 ~21:00).** After both fixes, the retail client
+  (the owner's D:\ EoR install exe, isolated copy at D:\ac-dat-test with the fixed dats +
+  a prefs INI forcing windowed/muted/EnvironmentTextureDetail=0) entered the world against
+  the laptop ACE (temporarily repointed at the patched dats — DDD "no update required",
+  iterations portal 2073/cell 982), stayed STABLE 310s+ hands-off at the location that
+  previously crashed in <4s, and completed a 5-town SendInput teleport tour (Holtburg,
+  Rithwic, Cragstone, Eastham, Yaraq) with camera orbits, OBS-recorded. Pre-polyfix the
+  same entry access-violated deterministically (2× same offset). Driving recipe (schtasks
+  interactive tasks, message-driven Keystone UI vs DirectInput keymap actions, SendInput +
+  user-idle guard, char-select click-enter feedback loop): scripts in C:\Temp on the 1070 +
+  this session's scratchpad; distilled into docs/dat-patch/1070-acclient-driving.md.
 - 1070 retail-client in-client gate: see the addendum at the END of this file for status.
 
 **Read this first when you return.** The lane ran to completion while you were away and
