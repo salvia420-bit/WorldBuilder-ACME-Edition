@@ -11,13 +11,13 @@ set — are all **0 commits ahead of master**. Nothing unique is stranded on
 them; they are stale/absorbed. Ignore them for the merge.
 
 ## Merge is OWED (deferred by owner: "when it makes sense, after the agents")
-Do NOT merge to master until the tail of this branch passes its **1070
-in-client gate**. Everything through r5 is gated; the pending-proof part is:
-- commit `1ee63103` — the Opus-artist audit fixes (dead `normal_gain`,
-  texture alpha/tileability/anchor/dither, pallib color-bleed, C# BestQuality)
-  — **tooling-validated only**.
-- the **r6 scenery tier** (dat-patch-scenery/) — built with those fixes,
-  gate pending.
+**UPDATE 2026-08-16 PM: the r6 gate PASSED** (VeryHigh/1920x1080, full 5-stop
+tour, zero crashes — dat-patch-scenery/GATE-STATUS.md) after the terrain
+cross-lane collision was root-caused (dungeon lane had DXT/2048'd two shared
+terrain base textures; `ImgTex::MergeTexture` overran) and fixed via
+`DatRestore` in r5 AND r6, with `terrain_protected_rs.txt` now enforced by
+texture_lane. The audit-fix commits (1ee63103) are validated in-client via the
+gated r6 build. **Merge is now gated only on final owner sign-off.**
 
 ## The merge, once the gate is green
 ```
@@ -50,8 +50,10 @@ git push origin master
 
 ## Tier ladder (rollback order, newest last)
 remacri → terrain → doors → props → dungeons → r4 creatures+envgeo →
-r5 env-variants (GATED, shipped) → **r6 scenery (gate pending)**.
-Packages r1–r5 exist per-lane via `release.sh`. ACE + 1070 kit run r5.
+r5 env-variants (terrain-FIXED) → **r6 scenery (terrain-FIXED, VeryHigh-GATED)**.
+Packages r1–r6 exist per-lane via `release.sh` (fixed r6 repackaged 2026-08-16
+17:32, `acme-dats-r6-scenery.tgz` + sha, both dats verified CLEAN).
+ACE serves `dat-patch-scenery/ace-r6-dats/`; the 1070 kit runs terrain-fixed r6.
 
 ## Related open threads (so they don't get lost either)
 - **Phase-2 exe patches** — compression patch DERIVED + VERIFIED 2026-08-16
@@ -64,11 +66,28 @@ Packages r1–r5 exist per-lane via `release.sh`. ACE + 1070 kit run r5.
   `74 71 -> 90 90`, unique + disasm-confirmed in OUR exe. Registry key
   `dat-decompress` (enabled=False, candidate). Test exe built:
   `acclient.eor.compress-TEST.exe` (leak-fix + mip16 + decompress, checksum
-  fixed). ~40-50% portal saving. STILL GATED: (a) build a DRW-compressed
-  portal (texture 0x06 records only, so ACE's non-inflating loader is
-  untouched); (b) 1070 load + real-client ROUND-TRIP byte-compare (paradox
-  caveat: FIX A papers over the lost version — verify objects deserialize
-  identically vs the uncompressed baseline before trusting the headroom).
+  fixed). ~40-50% portal saving. **GATE CLEARED 2026-08-16**: DatCompress'd r6
+  portal (45% texture saving, realCorruption=0 inflate-identical) loaded,
+  entered world, rendered correctly on the 1070 (gate-shot13.png).
+  **`dat-decompress` PROMOTED TO SHIPPED 2026-08-16 PM**: registry
+  enabled=True; `acclient.eor.patched.exe` rebuilt = palette-leak ×2 +
+  dat-decompress (md5 cb58167..., checksum 0x004A19DA; prior artifact kept as
+  `.pre-decompress-20260816.bak`). paradox caveat stands for NON-texture
+  records only.
+- **mip-cap-16 REJECTED by far-pan QA 2026-08-16 evening** — with the raised
+  clamp, every large upscaled DXT world texture renders white/untextured at
+  all distances (A/B evidence `mipqa/`; full writeup
+  `docs/dat-patch/mip-cap-16-farpan-QA-2026-08-16.md`). Compression was
+  re-validated decompress-ONLY the same evening (clean, crash-free, pixel-
+  equivalent to uncompressed) so the shipped patch set is untainted. Phase-2
+  step 2's "mip-cap makes 4x correct" rider is void — 4x re-encode +
+  compression can proceed, distance mips stay retail-capped until the fill
+  path gets its own RE.
+- **Upstream DRW Decompress truncation bug** — fix staged (local commit
+  `7436a17` in external/DatReaderWriter, NOT pushed) + ready-to-post PR body in
+  `docs/dat-patch/upstream-drw-decompress-fix.md`. Until upstream ships it, DRW
+  nuget consumers (WB.Terminal included) cannot reliably READ compressed
+  records — use raw bytes + manual inflate (as DatCompress's verifier does).
 - **Owner decision** teed up: full-frequency dungeon relief (area-based
   budget, ~+300 MiB) fits once phase-2 headroom lands — build toward 600 MiB,
   don't right-size textures twice.

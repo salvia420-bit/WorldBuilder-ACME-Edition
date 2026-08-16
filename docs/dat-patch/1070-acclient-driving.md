@@ -76,6 +76,19 @@ output in `C:\Temp\acdt\`; isolated client copy in `D:\ac-dat-test\`.
   --multi` from its bin dir, move ITS window off-screen too, WM_CLOSE (may need force-kill;
   mkv survives). The client's own `Device::SaveScreenshot` exists (writes
   ScreenShot%05d.jpg next to the prefs file) but its keybind never fired for us.
+- **Idle-guard interplay (learned 2026-08-16 evening, running 3 tours back-to-back)**:
+  `acdt-shots.ps1` refuses to run unless user-idle ≥ 15 min — and its OWN
+  SendInput chat resets the idle clock, so back-to-back tours must be spaced
+  ≥ 15 min apart or the second aborts `ABORT-USER-ACTIVE` (a self-inflicted
+  false positive; confirm no human with two `acdtidle` probes — idle climbing
+  1:1 with wall-clock = nobody there). The click-loop (`acdtclick1`) and the
+  watcher use PostMessage only and do NOT reset idle, so launch + char-select
+  can proceed during the cooldown. Char slot for +AttrProbe88259 landed at
+  y=230 all three times (list order = last-login DESC). Windows `type` output
+  carries CRs — `tr -d '\r'` before integer-comparing idle values on the laptop.
+- **Account-in-use trap (re-confirmed)**: relaunching within ~25 s of killing
+  the previous client boots BOTH sessions ("Account In Use"), leaving the new
+  client dead at login. Kill, wait 40 s, then relaunch.
 - **Crash forensics**: watcher records `EXITED code=...`; Windows keeps
   `Get-WinEvent Application/Application Error` records with fault offset (how the
   ConstructMesh sides_type=2/neg=-1 crash was pinned to 0x59e560 = d3dpolyrender.cpp:1242).
