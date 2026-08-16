@@ -232,3 +232,20 @@ investigation first. Deliver via taildrop for owner cut/approval before posting.
 - Scratchpad census artifacts copied to `/mnt/wbterminal2/dat-patch-props/` and
   `/mnt/wbterminal2/dat-patch-doors/` (door_census, props_todo, props_pal_safety,
   props_wave1, door_p8_plan) — do that copy if missing.
+
+## ADDENDUM 2026-08-16 ~01:15 — DOORS GATE PASSED; PROPS WAVE-1 BUILT, GATE PENDING
+
+- **DOORS IN-CLIENT GATE: PASSED** (~01:05, tour5 building close-ups, session held,
+  no crash; `dat-patch-doors/gate-1070/door_60.png` = patched plank+iron-strap door
+  crisp at 1024² beside remacri masonry; video tour5-doors.mkv). Tier ladder now:
+  remacri → terrain(GATED) → doors(GATED) → props-wave1(candidate). ACE serves doors.
+- **PROPS WAVE-1 BUILT + TOOLING-VALIDATED** (sha `d37cda9a…`, 1283.8 MiB): 434 RS
+  (260 plain + 174 recolor-safe palettized→DXT; clipmap alpha verified in-dat).
+  2,470 total changed vs retail. Staged on the 1070 as `client_portal.dat.props`;
+  gate next Dereth dawn per `dat-patch-props/GATE-STATUS.md`.
+- OBS note: the black-capture was transient — later tours recorded fine (102 MB
+  daylight terrain video `dat-patch-terrain/gate-1070/tour6-daylight.mkv` is
+  SHOWCASE-GRADE raw material: 3 towns, ground pans, step-turns, daylight).
+- Remaining for lane 2 completion: buildbox 98-texture upscale micro-batch, wave-2
+  bake, PaletteTemplate refinement to reclaim some of the 396 recolor-live RS.
+  Then dungeons (lane 3).
