@@ -15,14 +15,34 @@ output in `C:\Temp\acdt\`; isolated client copy in `D:\ac-dat-test\`.
   did not — char select needs the click loop below). Client must be launched via
   `schtasks /create ... /it` + `/run` (interactive session; GPU + window handles are
   invisible to plain ssh sessions).
-- **UserPreferences.ini in the client dir wins** (cwd file beats Documents). Keys that
-  matter: `[Display] FullScreen=False` (forces windowed 800x600; fullscreen would seize
-  the user's display), `[Sound] SoundVolume=0.00 AmbientSoundVolume=0.00
-  InterfaceSoundVolume=0.00` (+ the *Disabled bools; volumes are polarity-proof),
-  `[Render] EnvironmentTextureDetail=0 LandscapeTextureDetail=0` (the boot default 2
-  half-reses every texture upload — REQUIRED for texture-lane eyeballs, dossier §3/§4).
-  The client saves prefs on clean exit — redeploy the INI before each fresh launch if the
-  previous client exited cleanly.
+- **UserPreferences.ini in the client dir wins** (cwd file beats Documents;
+  `UserPreferences::FindDefaultFile`). Keys that matter: `[Display] FullScreen=False`
+  (fullscreen would seize the user's display), `[Sound] SoundVolume=0.00
+  AmbientSoundVolume=0.00 InterfaceSoundVolume=0.00` (+ the *Disabled bools; volumes are
+  polarity-proof), `[Render] EnvironmentTextureDetail=VeryLow LandscapeTextureDetail=VeryLow`
+  (the boot default half-reses every texture upload — REQUIRED for texture-lane eyeballs,
+  dossier §3/§4). The client saves prefs on clean exit — redeploy the INI before each fresh
+  launch if the previous client exited cleanly.
+- **RESOLUTION (solved 2026-08-16): `[Display] Resolution=1920x1080`** — choice prefs
+  serialize by CHOICE NAME, never number ("WxH", `RefreshRate=Auto`,
+  `EnvironmentTextureDetail=VeryLow`; a client-authored INI from a clean exit is the
+  canonical reference, kept at scratch `UserPreferences.canonical.ini` and live on the box).
+  The mode must be in the adapter's D3D9 fullscreen mode list even for windowed — on the
+  1070's 1080p monitor 1600x1200 is NOT enumerated and gets silently dropped (falls back
+  800x600). Login/char-select is ALWAYS 800x600 by design: `gmClient::Init` calls
+  `Device::ForceDisplayResolution(1,800,600)`; the `gmGamePlayUI` ctor releases it at world
+  entry, so the pref applies IN-WORLD ONLY — measure there (`acdtrect` task writes
+  `C:\Temp\acdt\rect.txt`). Measured: client area 1920x1071 in-world (window clamped to the
+  work area; effectively native). Resizing the window externally (acdtresize) is useless —
+  WM_SIZE only handles minimize, no swap-chain reset, you get a stretched 800x600 buffer.
+  Kit INI now ships 1920x1080.
+- **Always Daylight Outdoors == `/day`** (decomp: `ClientCommunicationSystem::DoDay` sets
+  the same `PersistentAtDay` character option as the options-panel checkbox; persists on
+  the character). It overrides LIGHTING only (`CRegionDesc::GetLighting(0.5,…)` = noon,
+  clamped to `min_ambient`); the SKY DOME stays on the game clock — no hidden full-daylight
+  switch exists, the trailer still needs a real Dereth day window for the sky. ACE's
+  `/config PersistentAtDay on` is the server-side twin (needs `player_config_command`
+  bool, currently disabled in ace_shard.config_properties_boolean — moot).
 - **Two input planes.** Keystone UI (chat text entry, char-select clicks, WM_CLOSE) is
   message-driven: `PostMessage` WM_KEYDOWN/WM_CHAR/WM_LBUTTON* works from an interactive
   task with a prior fake-activation (`WM_ACTIVATEAPP 1` + `WM_ACTIVATE 1` — wndproc calls
