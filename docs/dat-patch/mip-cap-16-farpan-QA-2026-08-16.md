@@ -116,10 +116,15 @@ profile), scripted identical 12s-left + 12s-right pans at Holtburg under
 - The strongest visible win remains arm D's static one: distant dungeon
   floors resolve cleanly instead of aliasing.
 
-Verdict: the pair is **safe** (three clean passes: arm D tour, M2 pan, all
-textures correct) and **directionally better** on the shimmer metric. Promotion
-to the shipped set is an owner call — eyeball the two mkvs side by side; if
-promoted, the "TRUE 4x" rider for phase-2 step 2 is restored. New 1070 tooling:
+Verdict (settled with the owner, same evening): **park it — do not ship now.**
+The pair is safe (three clean passes) and correctly derived, but the shimmer
+it fixes is mostly theoretical at TODAY'S content scales: dungeon sightlines
+rarely exceed the 8:1 minification where the truncated chain runs out,
+anisotropic filtering covers much of the rest, the metric delta was only ~6%,
+and the owner sees nothing in real viewing. Re-evaluate after the TRUE-4x
+re-encode (double the minification range = when a full chain starts paying) —
+and judge it live on a monitor, not via compressed taildropped video, which
+smooths away exactly this artifact class. New 1070 tooling:
 `C:\Temp\acdt-mpan.ps1` + task `acdtmpan` (tag via `C:\Temp\acdt\mpan-tag.txt`),
 OBS acdt profile now records 1920×1080.
 
