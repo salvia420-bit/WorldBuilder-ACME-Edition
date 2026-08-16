@@ -27,6 +27,22 @@ git merge --ff-only integ/all-20260813
 git push origin master
 ```
 
+## 1070 GATE 2026-08-16 — compression PROVEN, r6 has a content bug (both block the merge differently)
+- **Compression patch VALIDATED in-client**: the patched box client loaded a
+  fully-compressed r6 portal (45% texture saving), rendered decompressed
+  textures at 1920x1080, authed + entered world. dat-decompress (NOP je @ box
+  file 0x17878) works end-to-end. Phase-2 headroom is real. Resolution +
+  VeryHigh detail also confirmed live. (ac-eor-patch/COMPRESSION-PATCH-FINDINGS.md)
+- **r6 scenery tier FAILS the gate**: crashes the retail client on Holtburg
+  load — access violation at RVA 0x13EA26 (ImgTex::CopyIntoData, the
+  palettized/clipmap upload path). Isolated: reproduces on STOCK client +
+  UNCOMPRESSED r6, so it's an r6 audit-fix REBAKE bug, not compression/patches.
+  r6 is NOT shippable until fixed; bisect the texture_lane audit fixes.
+  (dat-patch-scenery/GATE-STATUS.md)
+- **Merge status unchanged**: still gated. The audit-fix commits (1ee63103) +
+  r6 need the CopyIntoData bug fixed and re-gated before master. Everything
+  ELSE on integ/all-20260813 (through r5, shipped+gated) remains FF-clean.
+
 ## Tier ladder (rollback order, newest last)
 remacri → terrain → doors → props → dungeons → r4 creatures+envgeo →
 r5 env-variants (GATED, shipped) → **r6 scenery (gate pending)**.
