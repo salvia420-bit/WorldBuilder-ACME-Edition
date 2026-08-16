@@ -249,3 +249,29 @@ investigation first. Deliver via taildrop for owner cut/approval before posting.
 - Remaining for lane 2 completion: buildbox 98-texture upscale micro-batch, wave-2
   bake, PaletteTemplate refinement to reclaim some of the 396 recolor-live RS.
   Then dungeons (lane 3).
+
+## ADDENDUM 2026-08-16 ~02:05 — PROPS WAVE-1+2 GATED. THREE LANES SHIPPED IN ONE NIGHT.
+
+- **PROPS IN-CLIENT GATE: PASSED** (tour5 + tour6 on the props dat, session held, zero
+  crashes). Tier ladder: remacri → terrain(GATED) → doors(GATED) → **props-wave1+2(GATED,
+  sha `095c8ea9…`, 1289.6 MiB, 2,644 records changed vs retail)**. ACE + the 1070 kit
+  both run it. Evidence + per-tier notes: GATE-STATUS.md in each lane dir.
+- **`/day` kills the dawn-scheduling problem** (owner's tip): client chat command →
+  DoDay → LScape::SetDay(AlwaysDaylight). Lights the landscape (sky stays night —
+  fine for gates; the SHOWCASE should still film in real daylight for the sky). Both
+  tour scripts send it on start now.
+- **Buildbox 98-texture Remacri batch DONE** (T4, ~40s of GPU): corpus dir
+  `upscale-corpus/out/batch2-remacri/` + ledger. Runner rebuilt at box
+  `~/upscale-batch2/upscale_batch2.py` (spandrel; ⚠ pin torch==2.5.1+cu121 — bare
+  `pip install spandrel` drags in torch cu130 which the 550 driver refuses; also
+  `--no-cache-dir`, the 128 GB disk is ~90% full). Box is STOPPED again.
+- **`tools/dat-patch/release.sh` landed** (4aa27336): one command = fixup → polyfix
+  audit → ACE walk+diff → strict walk → ceiling check → tgz + sha + user README
+  (with the mandatory UserPreferences.ini merge note). Smoke-proven on both gated
+  tiers: `acme-dats-r1-doors.tgz` (dat-patch-doors/) and `acme-dats-r2-props.tgz`
+  (dat-patch-props/) exist and are the first release-shaped artifacts.
+- **Remaining, in order**: (1) dungeons lane (Environment 0x0D — the census machinery
+  is all reusable; interior surfaces largely covered by the 571 building corpus);
+  (2) PaletteTemplate refinement to reclaim part of the 396 recolor-live prop RS;
+  (3) creatures (last); (4) showcase video in real daylight + before/after intercut;
+  (5) distribution (r2-props package is the current best candidate).
