@@ -484,11 +484,16 @@ def variant_apply(root, patched_portal, patched_cell, wbt):
     cmds = [dict(command="environment-clone", datPath=patched_portal,
                  clones=[dict(sourceIdHex=i["sourceIdHex"],
                               newIdHex=i["newEnvIdHex"]) for i in imports])]
-    for i in imports:
+    # batch appends (one portal open per chunk -- a per-append open of the
+    # 1.6 GB dat dominates a 4k-shell run)
+    CHUNK = 500
+    for c0 in range(0, len(imports), CHUNK):
         cmds.append(dict(command="environment-append-geometry",
-                         datPath=patched_portal, envIdHex=i["newEnvIdHex"],
-                         cellStructIndex=i["cellStructIndex"],
-                         objPath=i["objPath"]))
+                         datPath=patched_portal,
+                         appends=[dict(envIdHex=i["newEnvIdHex"],
+                                       cellStructIndex=i["cellStructIndex"],
+                                       objPath=i["objPath"])
+                                  for i in imports[c0:c0 + CHUNK]]))
     cmds.append(dict(command="envcell-retarget", datPath=patched_cell,
                      jsonlPath=os.path.join(root, "retargets.jsonl")))
     inp = "\n".join(json.dumps(c) for c in cmds) + "\n"

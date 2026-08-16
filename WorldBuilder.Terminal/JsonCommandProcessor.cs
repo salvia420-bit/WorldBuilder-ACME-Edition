@@ -867,6 +867,32 @@ public class JsonCommandProcessor {
     private string CmdEnvironmentAppendGeometry(System.Text.Json.Nodes.JsonNode node) {
         string datPath = node["datPath"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'datPath' field (a portal-DAT COPY — writes to ~/ac_base_dats are refused)");
+
+        if (node["appends"] is System.Text.Json.Nodes.JsonArray appendArr) {
+            bool batchDryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+            var specs = new List<CommandEngine.EnvironmentAppendSpec>();
+            foreach (var e in appendArr) {
+                if (e == null) continue;
+                specs.Add(new CommandEngine.EnvironmentAppendSpec(
+                    EnvId: ParseUIntFlexible(e["envIdHex"] ?? e["envId"], "appends[].envIdHex"),
+                    CellStructIndex: e["cellStructIndex"]?.GetValue<uint>()
+                        ?? throw new ArgumentException("Missing 'appends[].cellStructIndex'"),
+                    ObjPath: e["objPath"]?.GetValue<string>()
+                        ?? throw new ArgumentException("Missing 'appends[].objPath'")));
+            }
+            var b = _engine.EnvironmentAppendGeometryBatch(datPath, specs, batchDryRun);
+            return Serialize(new {
+                success = true,
+                command = "environment-append-geometry",
+                datPath = b.DatPath,
+                dryRun = b.DryRun,
+                requestedCount = b.RequestedCount,
+                appendedCount = b.AppendedCount,
+                failCount = b.FailCount,
+                records = b.Records,
+            });
+        }
+
         uint envId = ParseUIntFlexible(node["envIdHex"] ?? node["envId"], "envIdHex");
         uint cellStructIndex = node["cellStructIndex"]?.GetValue<uint>()
             ?? throw new ArgumentException("Missing 'cellStructIndex' field (key into the Environment's CellStructs)");
@@ -3235,7 +3261,7 @@ public class JsonCommandProcessor {
             new { name = "ui-image-replace",   args = "datPath, replacements[{did, pngPath}] | fromDir, dryRun?, allowCreate?", description = "Write PNGs into a portal-DAT COPY as RenderSurfaces (format preserved for R8G8B8/A8R8G8B8; batch via a dir of 0x06XXXXXX.png)" },
             new { name = "ui-pack-export",     args = "outDir, layoutIds?, datPath?, includeImages?", description = "Export an AC_UI_Asset_Builder-compatible reference_pack.json + images/ (panels, nodes, widget kinds, state image sets, usage cross-ref)" },
             new { name = "render-surface-import", args = "datPath, idHex, pngPath, format?, allowResize?, dryRun?, allowCreate? | imports[{idHex,pngPath,format?,allowResize?}] | fromDir", description = "Import a PNG into a portal-DAT COPY as a RenderSurface with the record's own PixelFormat PRESERVED by default (DXT1 stays DXT1 via the in-tree BCnEncoder path) or an explicit format (DXT1/A8R8G8B8/...); allowResize (default true) takes the new dims from the image. Reports old/new dims+format, bytes and blocks used. PREP THE TARGET COPY with bake/scripts/prep_dat.py (zeroed free arena) until the DatReaderWriter contiguous-free-list allocator bug is fixed upstream. Writes to ~/ac_base_dats refused" },
-            new { name = "environment-append-geometry", args = "datPath, envIdHex, cellStructIndex, objPath, dryRun?", description = "Append OBJ render geometry to one CellStruct of an Environment (0x0D) record in a portal-DAT COPY (the dungeon-geometry lane). Appends DRAWN polys + vertices only with ConstructMesh-safe defaults (Stippling=None, SidesType=Landblock, NegSurface=0); physics polys, Portals and all BSPs carried verbatim (no rebuild — the in-client-proven obj-import template). 'usemtl surf<N>' in the OBJ selects the CELL-LOCAL surface index (each EnvCell maps it through its own surface array). Writes to ~/ac_base_dats refused" },
+            new { name = "environment-append-geometry", args = "datPath, envIdHex, cellStructIndex, objPath, dryRun? | appends[{envIdHex,cellStructIndex,objPath}]", description = "Append OBJ render geometry to one CellStruct of an Environment (0x0D) record in a portal-DAT COPY (the dungeon-geometry lane). Appends DRAWN polys + vertices only with ConstructMesh-safe defaults (Stippling=None, SidesType=Landblock, NegSurface=0); physics polys, Portals and all BSPs carried verbatim (no rebuild — the in-client-proven obj-import template). 'usemtl surf<N>' in the OBJ selects the CELL-LOCAL surface index (each EnvCell maps it through its own surface array). Writes to ~/ac_base_dats refused" },
             new { name = "environment-clone", args = "datPath, sourceIdHex, newIdHex, dryRun? | clones[{sourceIdHex,newIdHex}]", description = "Clone an Environment (0x0D) record to a FREE id in a portal-DAT COPY (the environment-variant lane): record copied verbatim (CellStructs/physics/portals/BSPs identical), so cells retargeted at the clone keep byte-identical collision. New id must be free (0x0D000000–0x0D00FFFF). Writes to ~/ac_base_dats refused" },
             new { name = "envcell-retarget", args = "datPath, retargets[{cellIdHex,environmentIdHex,cellStructure?}] | jsonlPath, portalPath?, dryRun?", description = "Batch-rewrite EnvCell.EnvironmentId (+optional CellStructure) in a CELL-dat COPY — points texture-cluster cells at their relief variant env. In-place u16 rewrite (record size unchanged; only the b-tree churns). environmentIdHex accepts u16 or full 0x0D00XXXX. jsonlPath = file of one retarget object per line (big batches). With portalPath, each target env+cellstruct is validated against that portal dat incl. PosSurface-vs-cell-surface-count bounds (catches a retarget at the wrong variant). Returns counts + first 100 failures. Writes to ~/ac_base_dats refused" },
             new { name = "surface-texture-collapse", args = "datPath, idHex, keepDid?, dryRun? | collapses[{idHex,keepDid?}]", description = "Rewrite a SurfaceTexture (0x05) texture list to a single entry (default keepDid = the LAST entry = the base-detail level that ships in client_portal.dat), so retail ImgTex::GetSurfaceDID takes the m_num==1 branch and cannot fall back to the client_highres.dat index-0 original. Same DAT-copy prep + ~/ac_base_dats refusal as render-surface-import" },

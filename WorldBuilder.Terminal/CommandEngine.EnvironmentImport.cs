@@ -37,10 +37,60 @@ public partial class CommandEngine {
         string DatPath, uint EnvId, uint CellStructIndex, bool DryRun,
         int AppendedVertices, int AppendedPolys, int NewVertexCount, int NewPolyCount);
 
+    public sealed record EnvironmentAppendSpec(uint EnvId, uint CellStructIndex, string ObjPath);
+
+    public sealed record EnvironmentAppendBatchResult(
+        string DatPath, bool DryRun, int RequestedCount, int AppendedCount, int FailCount,
+        List<Dictionary<string, object?>> Records);
+
     public EnvironmentAppendResult EnvironmentAppendGeometry(
         string datPath, uint envId, uint cellStructIndex, string objPath, bool dryRun) {
 
         var resolved = GuardWritableDatCopy(datPath);
+        using var portal = new DRW.PortalDatabase(resolved,
+            dryRun ? DRW.Options.DatAccessType.Read : DRW.Options.DatAccessType.ReadWrite);
+        return AppendOneCore(portal, resolved, envId, cellStructIndex, objPath, dryRun);
+    }
+
+    /// <summary>Batch form: ONE portal open for the whole list (the variant
+    /// lane appends ~4k shells — a per-append open of a 1.6 GB dat dominates
+    /// the run). Per-spec failures are recorded, not thrown.</summary>
+    public EnvironmentAppendBatchResult EnvironmentAppendGeometryBatch(
+        string datPath, IReadOnlyList<EnvironmentAppendSpec> specs, bool dryRun) {
+
+        if (specs == null || specs.Count == 0)
+            throw new ArgumentException("No appends given.");
+        var resolved = GuardWritableDatCopy(datPath);
+        using var portal = new DRW.PortalDatabase(resolved,
+            dryRun ? DRW.Options.DatAccessType.Read : DRW.Options.DatAccessType.ReadWrite);
+
+        var records = new List<Dictionary<string, object?>>();
+        int ok = 0, failed = 0;
+        foreach (var spec in specs) {
+            var rec = new Dictionary<string, object?> {
+                ["envId"] = $"0x{spec.EnvId:X8}",
+                ["cellStructIndex"] = spec.CellStructIndex,
+            };
+            try {
+                var r = AppendOneCore(portal, resolved, spec.EnvId, spec.CellStructIndex, spec.ObjPath, dryRun);
+                rec["ok"] = true;
+                rec["appendedVertices"] = r.AppendedVertices;
+                rec["appendedPolys"] = r.AppendedPolys;
+                ok++;
+            } catch (Exception ex) {
+                rec["ok"] = false;
+                rec["error"] = ex.Message;
+                failed++;
+            }
+            records.Add(rec);
+        }
+        return new EnvironmentAppendBatchResult(resolved, dryRun, specs.Count, ok, failed, records);
+    }
+
+    private EnvironmentAppendResult AppendOneCore(
+        DRW.PortalDatabase portal, string resolved,
+        uint envId, uint cellStructIndex, string objPath, bool dryRun) {
+
         if ((envId >> 24) != 0x0D)
             throw new ArgumentException($"0x{envId:X8} is not an Environment id (expected the 0x0D prefix).");
         if (!File.Exists(objPath))
@@ -49,9 +99,6 @@ public partial class CommandEngine {
         var (faces, positions, normals, uvs) = ParseObjForAppend(File.ReadAllText(objPath));
         if (faces.Count == 0)
             throw new InvalidOperationException("OBJ has no faces.");
-
-        using var portal = new DRW.PortalDatabase(resolved,
-            dryRun ? DRW.Options.DatAccessType.Read : DRW.Options.DatAccessType.ReadWrite);
 
         if (!portal.TryGet<DRW.DBObjs.Environment>(envId, out var env) || env == null)
             throw new InvalidOperationException($"Environment 0x{envId:X8} not found in {Path.GetFileName(resolved)}.");
