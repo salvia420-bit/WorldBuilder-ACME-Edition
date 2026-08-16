@@ -72,3 +72,37 @@ DatCompress'd **terrain-FIXED** r6 portal (20,662 records compressed,
 **The `dat-decompress` patch is therefore validated on its own, untainted** —
 the earlier gate-shot13 concern is closed. The shipped EoR patch set
 (palette-leak ×2 + dat-decompress) stands.
+
+## THE CORRECT MIP PATCH — derived, built, render-QA'd the same evening (arm D)
+
+RE of the fill path (acclient.c 053EDB0 + the 2013 bndb) explains the white-out
+and yields the right fix:
+
+- The chain is FILLED by generating: level 0 comes from the RenderSurface via
+  `D3DXLoadSurfaceFromSurface`, the rest from `D3DXFilterTexture` — which for
+  DXT formats fails once a generated level's dimension drops below 4px. On
+  failure the whole create path bails → NULL texture bound → white.
+- Retail counts levels from **max(w,h)** and clamps at 4 — 4 is exactly the
+  largest constant that keeps every ≥32px texture's smallest level at ≥4px.
+  That's WHY retail picked 4; any bigger constant breaks some size class.
+- The correct per-texture rule is `levels = log2(min(w,h)) − 1` (floor 1):
+  the deepest chain whose smallest level keeps a 4px minimum dimension.
+  2048² → 10 levels (smallest 4²); 32² → 4 levels (= retail); non-square
+  strips stay safe because the count uses the MIN dimension.
+
+Implemented as a two-site candidate pair in `patch_client.py`
+(`mip-min-flip`: 1 byte, `ja`→`jbe` so the count loop uses min(w,h);
+`mip-min-floor`: 21-byte rewrite of the clamp block to `levels = max(F−2,1)`,
+edi-liveness disasm-verified). Both located by unique signatures in the EoR
+AND box builds.
+
+**Arm D (1070, box exe = arm A + the pair, uncompressed fixed r6)**: full
+5-stop tour crash-free, all textures intact, mean |pixel diff| vs arm A 8–21
+(pose-drift range; arm B's white-out was 78–117). Distant dungeon floors
+render visibly cleaner (real minification mips instead of aliased 256²
+sampling). Frames `mipqa/armD-minmip/`.
+
+Status: **stays a candidate pair** — static render QA passed; the shimmer
+claim it exists to fix is temporal, so give it a far-pan MOTION QA (OBS video
+pan on the 1070) before promoting to the shipped set. It also restores the
+"TRUE 4x" rider for phase-2 step 2 if promoted.

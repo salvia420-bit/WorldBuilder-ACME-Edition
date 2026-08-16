@@ -201,17 +201,19 @@ def bandlimit(src, metas, target_faces, verbose=True):
 
 def run(src, segments=12, mult=4.0, verbose=True, max_error=None,
         carved_only=False, floor_m=0.0, target_tris=None, normal_gain=1.0,
-        amp_fn=None, area_share=0.75):
+        amp_fn=None, area_share=0.75, segs_fn=None):
     """subdivide+displace -> decimate to mult x source triangles.
     target_tris overrides the n0*mult budget (used for shell-only emission,
     where the carried originals already count toward the drawn total).
     normal_gain: sculpted-normal exaggeration (recipe C ships 2.5).
     amp_fn: callable(pos) -> amplitude scale, e.g. recipe C's plinth ramp.
-    area_share: fair-share budget floor per source triangle (0 disables)."""
+    area_share: fair-share budget floor per source triangle (0 disables).
+    segs_fn: callable(poly_index, poly) -> per-polygon segment count (the
+    area-based lane); overrides `segments` for carving polys."""
     n0 = src.tri_count()
     fine = relief3d.build_displaced(src, segments=segments,
                                     carved_only=carved_only, floor_m=floor_m,
-                                    amp_fn=amp_fn)
+                                    amp_fn=amp_fn, segs_fn=segs_fn)
     nfine = len(fine["faces"])
     target = int(round(n0 * mult)) if target_tris is None else int(target_tris)
     dec = relief3d.Decimator(fine["V"], fine["faces"], fine["srctri"],

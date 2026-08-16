@@ -40,6 +40,13 @@ PORTAL = "/home/wbterminal/ac_base_dats/client_portal.dat"
 DOM_MIN = 0.90
 MULT = 4.0
 MAX_SEGMENTS = 12
+# Area-based budget (phase-2 step 3): target FINE vertex spacing in metres.
+# The pre-2026-08-16 lane subdivided every carving polygon by a uniform
+# segment count, so the wavelength scaled with polygon SIZE (~3 m on big
+# dungeon-room polys vs 32 cycles/screen on buildings).  DATPATCH_SPACING=0
+# restores the legacy count-based behavior.
+SPACING_M = float(os.environ.get("DATPATCH_SPACING", "0.3"))
+MAX_SEGMENTS_AREA = 32
 
 
 def _cell_walk():
@@ -139,22 +146,65 @@ def _shell(pdat, src_env_id, cs, slot_sids, objp):
             m["amp"] = pilot.AMP_WALL
     src = relief3d.SourceMesh.from_record(rec, metas)
     n0 = src.tri_count()
-    target = int(round(n0 * (MULT - 1.0)))
-    pipeline.bandlimit(src, metas, target, verbose=False)
-    carve_fans = sum(len(p["v"]) - 2 for p in src.polys
-                     if p.get("h") is not None and p.get("amp", 0) > 0
-                     and not p.get("excluded") and not p.get("invisible"))
-    if carve_fans == 0:
+    # per-carving-poly geometry census (fans, area, longest fan edge)
+    import math as _math
+    import numpy as _np
+    carve = []
+    for _pi, p in enumerate(src.polys):
+        if p.get("h") is None or p.get("amp", 0) <= 0 \
+           or p.get("excluded") or p.get("invisible"):
+            continue
+        v = p["v"]
+        area_p = 0.0
+        emax = 0.0
+        for k in range(1, len(v) - 1):
+            a = _np.array(src.P[v[0]])
+            b = _np.array(src.P[v[k]])
+            c = _np.array(src.P[v[k + 1]])
+            area_p += 0.5 * float(_np.linalg.norm(_np.cross(b - a, c - a)))
+            emax = max(emax, float(_np.linalg.norm(b - a)),
+                       float(_np.linalg.norm(c - b)),
+                       float(_np.linalg.norm(a - c)))
+        carve.append((_pi, len(v) - 2, area_p, emax))
+    if not carve:
         return dict(ok=False, why="no carveable polys")
-    segs = MAX_SEGMENTS
-    while segs > 4 and carve_fans * segs * segs > pilot.FINE_BUDGET:
-        segs -= 2
+    segs_fn = None
+    if SPACING_M > 0:
+        # AREA-BASED (phase-2 step 3): segments per polygon target SPACING_M
+        # metres of fine vertex pitch; over-budget rescales the SPACING (the
+        # frequency degrades gracefully) instead of a global segment cut.
+        spacing = SPACING_M
+
+        def _fine_est(sp):
+            return sum(f * min(MAX_SEGMENTS_AREA,
+                               max(2, _math.ceil(e / sp))) ** 2
+                       for _i, f, _a, e in carve)
+
+        while _fine_est(spacing) > pilot.FINE_BUDGET:
+            spacing *= 1.25
+        segmap = {i: min(MAX_SEGMENTS_AREA, max(2, _math.ceil(e / spacing)))
+                  for i, _f, _a, e in carve}
+        segs_fn = lambda i, _p: segmap.get(i, 2)
+        segs = max(segmap.values())
+        carve_area = sum(a for _i, _f, a, _e in carve)
+        # decimation target = one ~spacing*sqrt(2) grid cell pair per spacing^2
+        # of carved area (half the fine density -> real decimator headroom)
+        target = max(int(carve_area / (spacing * spacing)), n0)
+    else:
+        # LEGACY count-based budget (pre-2026-08-16 behavior)
+        target = int(round(n0 * (MULT - 1.0)))
+        carve_fans = sum(f for _i, f, _a, _e in carve)
+        segs = MAX_SEGMENTS
+        while segs > 4 and carve_fans * segs * segs > pilot.FINE_BUDGET:
+            segs -= 2
+    pipeline.bandlimit(src, metas, target, verbose=False)
     old_max = relief3d.MAX_AMPLITUDE_M
     relief3d.MAX_AMPLITUDE_M = max(old_max, pilot.AMP_WALL)
     try:
         res = pipeline.run(src, segments=segs, mult=MULT, target_tris=target,
                            carved_only=True, floor_m=pilot.FLOOR_M,
-                           verbose=False, normal_gain=pilot.NORMAL_GAIN)
+                           verbose=False, normal_gain=pilot.NORMAL_GAIN,
+                           segs_fn=segs_fn)
     finally:
         relief3d.MAX_AMPLITUDE_M = old_max
     # emit OBJ grouped by surface INDEX (usemtl surfN, the append command's
@@ -163,7 +213,10 @@ def _shell(pdat, src_env_id, cs, slot_sids, objp):
     nf = _write_obj(objp, src_env_id, cs, res, src, sid2idx)
     if nf == 0:
         return dict(ok=False, why="no shell faces")
-    return dict(ok=True, srcTris=n0, shellTris=nf, segments=segs)
+    out = dict(ok=True, srcTris=n0, shellTris=nf, segments=segs)
+    if segs_fn is not None:
+        out["spacing_m"] = round(spacing, 3)
+    return out
 
 
 def build(root):

@@ -208,7 +208,7 @@ class SourceMesh:
 
 # --------------------------------------------------------- build fine mesh
 def build_displaced(src, segments=12, scale=1.0, subdiv_flat=False,
-                    carved_only=False, floor_m=0.0, amp_fn=None):
+                    carved_only=False, floor_m=0.0, amp_fn=None, segs_fn=None):
     """Subdivide + displace.  Returns dict(V, faces, srctri, kind, chain,
     vframe, srctri_data, stats).
 
@@ -283,6 +283,10 @@ def build_displaced(src, segments=12, scale=1.0, subdiv_flat=False,
         if carved_only and not carving:
             continue
         segs = segments if (carving or subdiv_flat) else 1
+        # segs_fn(poly_index, poly) -> per-polygon segment count (area-based
+        # lane); uniform within the polygon so fan diagonals weld exactly.
+        if segs_fn is not None and segs > 1:
+            segs = max(2, int(segs_fn(pi, poly)))
 
         for k in range(1, nv - 1):
             corners = (0, k, k + 1)
