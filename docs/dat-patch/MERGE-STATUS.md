@@ -1,5 +1,12 @@
 # dat-patch — branch & merge status (keep current; the "don't forget" doc)
 
+## ✅ MERGED TO MASTER 2026-08-16 ~22:00 (owner sign-off granted)
+`git merge --ff-only integ/all-20260813` → master = `2de9401c`, pushed to
+origin (master AND the integ branch). Everything below this line is the
+historical record of how it got there. New work continues on
+integ/all-20260813 (kept in lockstep with master via ff-merges).
+**Next lane: r7 TRUE-4x rebake (green-lit same evening).**
+
 ## Where the work lives
 **All** ACME dat-patch work is on ONE branch: **`integ/all-20260813`**.
 As of 2026-08-16 it is **42 commits ahead of `origin/master`, ZERO divergence**

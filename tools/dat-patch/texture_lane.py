@@ -378,12 +378,14 @@ def bake_one(sid_int, base_portal):
                                     max_side=max_side)
     if arr is None:
         return None, "no base png"
-    if src == "remacri":
+    if src == "remacri" and os.environ.get("DATPATCH_WRAPPED_CORPUS", "0") != "1":
         # ESRGAN pads its input at the borders, so upscaled edges break
         # tileability (measured: wrap error rises ~55% abs / >2x relative on
         # retail-seamless tiles => hairline grid on tiled walls).  Stopgap
-        # until the corpus is re-upscaled wrap-padded: cross-fade the outer
-        # texels toward their wrap partner so col0/colN meet again.
+        # for the ORIGINAL corpus only — the 2026-08-16 wrap-padded re-upscale
+        # (upscale-corpus/rewrap-out, 92.8% tileability improvement) makes it
+        # unnecessary AND harmful (it would soften correct edges); set
+        # DATPATCH_WRAPPED_CORPUS=1 when baking from that corpus.
         E = 4
         for axis in (0, 1):
             a0 = np.moveaxis(arr, axis, 0)
