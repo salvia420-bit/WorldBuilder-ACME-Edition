@@ -89,8 +89,23 @@ Continues HANDOFF-2026-08-16-PM-phase2-ready.md. Branch integ/all-20260813.
   output collects to `upscale-corpus/rewrap-out.tgz` + REWRAP_DONE sentinel,
   keep-awake self-removed at the end so the box idle-stops).
 
+- **Wrap-padded corpus re-upscale DONE + COLLECTED + VALIDATED** (~21:30):
+  all 4,041 inputs re-upscaled with 16px torus padding (one spot preemption,
+  resumed cleanly), `upscale-corpus/rewrap-out/` (out/ + ledger + sha-verified
+  tgz). Tileability metric (seam energy at the wrap edge ÷ own gradient):
+  median 3.84 → 2.25, **92.8% of textures improved**, many perfect-tiling
+  wins; the 34 nominal regressions are near-flat dark textures where the
+  normalization amplifies noise (spot-checked; list in
+  `rewrap-out/seam-report.json`). This corpus REPLACES `out/` as the input for
+  the step-2 4x re-encode; the ESRGAN edge cross-fade stopgap in texture_lane
+  can be retired when the lanes rebake from it.
+- **mip-min pair PARKED (owner call, same evening)** — safe and correctly
+  derived, but the shimmer it fixes is mostly theoretical at current content
+  scales (dungeon sightlines rarely reach 8:1 minification; owner sees nothing
+  in real viewing; metric delta only ~6%). Re-evaluate after TRUE-4x.
+
 ## Still open
-- Collect `rewrap-out.tgz` when REWRAP_DONE appears (if this session didn't).
+- ~~Collect rewrap-out.tgz~~ done (above).
 - mip-min pair promotion decision (owner) → if shipped, TRUE-4x rider restored.
 - Full-frequency dungeon relief REBUILD with the area-based lane — code ready,
   constants (0.3 m spacing) chosen; needs the owner's step-2/3 scope call
