@@ -4,9 +4,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>DatCompress</AssemblyName>
+    <AssemblyName>DatCompact</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Local DRW source (not the 2.1.2 NuGet): needed to debug/fix the write-path
+         corruption found 2026-08-17 (phantom-offset write on record grow). -->
     <ProjectReference Include="../../../external/DatReaderWriter/DatReaderWriter/DatReaderWriter.csproj" />
   </ItemGroup>
 </Project>

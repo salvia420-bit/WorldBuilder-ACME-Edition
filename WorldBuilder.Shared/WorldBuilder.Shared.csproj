@@ -16,7 +16,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.2" />
+		<ProjectReference Include="..\external\DatReaderWriter\DatReaderWriter\DatReaderWriter.csproj" />
 		<PackageReference Include="MemoryPack" Version="1.21.4" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.9" />
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
