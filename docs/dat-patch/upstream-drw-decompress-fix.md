@@ -1,6 +1,6 @@
 # Upstream DRW bug: `DatDatabase.Decompress` truncates large compressed records
 
-Status: **patch staged, not yet posted.** Local commit `7436a17` in
+Status: **POSTED as Chorizite/DatReaderWriter#70 (2026-08-16)** from the salvia420-bit fork, branch fix/decompress-short-read. Local commit `7436a17` in
 `external/DatReaderWriter` (vendored sparse checkout, origin =
 github.com/Chorizite/DatReaderWriter — DO NOT PUSH from the vendored copy;
 open a proper fork/PR). Found 2026-08-16 while building the phase-2
