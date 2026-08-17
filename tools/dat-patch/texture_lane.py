@@ -498,34 +498,44 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
             res["skipped_nobase"] += 1
             res["skips"].append(dict(sid=sid_hex, rs=rs_hex, why="no base png"))
             continue
-        try:
-            u8, info = bake_one(int(sid_hex, 16), base_portal)
-        except Exception as e:
-            res["skipped_other"] += 1
-            res["skips"].append(dict(sid=sid_hex, rs=rs_hex, why="bake error: %s" % e))
-            continue
-        if u8 is None:
-            res["skipped_other"] += 1
-            res["skips"].append(dict(sid=sid_hex, rs=rs_hex, why="bake: %s" % info))
-            continue
-        # Alpha transplant: the BASE decode's alpha is retail truth (clipmap
-        # transparency, cutouts).  Corpus upscales of palettized sources come
-        # back opaque (found on door 0x06003966: transparent window center
-        # shipped as opaque red without this) — always carry base alpha,
-        # upscaled to the baked size.
-        base_a = np.asarray(Image.open(base_png).convert("RGBA"), np.uint8)[:, :, 3]
-        binary_src = bool(np.isin(base_a, (0, 255)).all())
-        if base_a.shape != u8.shape[:2]:
-            base_a = np.asarray(Image.fromarray(base_a).resize(
-                (u8.shape[1], u8.shape[0]), Image.LANCZOS), np.uint8)
-        if binary_src:
-            # Clipmap/cutout truth is BINARY.  Converting to DXT moves the
-            # client's alpha-test ref from 100 (palettized) to 200
-            # (D3DPolyRender::s_256AlphaTestRef/s_ddsAlphaTestRef) — a soft
-            # upscaled ramp erodes the silhouette at ref 200.  Re-binarize at
-            # retail's own 100 cut so coverage is identical under either ref.
-            base_a = ((base_a > 100).astype(np.uint8)) * 255
-        u8[:, :, 3] = base_a
+        cache_png = os.path.join(baked_dir, rs_hex + ".png")
+        if os.environ.get("DATPATCH_BAKE_CACHE", "0") == "1" \
+                and os.path.exists(cache_png):
+            # Resume path (2026-08-17): the saved baked PNG is the FINAL
+            # artifact (alpha already transplanted/re-binarized) — reuse it
+            # instead of re-baking.  Interrupted lanes become resumable.
+            u8 = np.asarray(Image.open(cache_png).convert("RGBA"),
+                            np.uint8).copy()
+            info = dict(cached=True)
+        else:
+            try:
+                u8, info = bake_one(int(sid_hex, 16), base_portal)
+            except Exception as e:
+                res["skipped_other"] += 1
+                res["skips"].append(dict(sid=sid_hex, rs=rs_hex, why="bake error: %s" % e))
+                continue
+            if u8 is None:
+                res["skipped_other"] += 1
+                res["skips"].append(dict(sid=sid_hex, rs=rs_hex, why="bake: %s" % info))
+                continue
+            # Alpha transplant: the BASE decode's alpha is retail truth (clipmap
+            # transparency, cutouts).  Corpus upscales of palettized sources come
+            # back opaque (found on door 0x06003966: transparent window center
+            # shipped as opaque red without this) — always carry base alpha,
+            # upscaled to the baked size.
+            base_a = np.asarray(Image.open(base_png).convert("RGBA"), np.uint8)[:, :, 3]
+            binary_src = bool(np.isin(base_a, (0, 255)).all())
+            if base_a.shape != u8.shape[:2]:
+                base_a = np.asarray(Image.fromarray(base_a).resize(
+                    (u8.shape[1], u8.shape[0]), Image.LANCZOS), np.uint8)
+            if binary_src:
+                # Clipmap/cutout truth is BINARY.  Converting to DXT moves the
+                # client's alpha-test ref from 100 (palettized) to 200
+                # (D3DPolyRender::s_256AlphaTestRef/s_ddsAlphaTestRef) — a soft
+                # upscaled ramp erodes the silhouette at ref 200.  Re-binarize at
+                # retail's own 100 cut so coverage is identical under either ref.
+                base_a = ((base_a > 100).astype(np.uint8)) * 255
+            u8[:, :, 3] = base_a
         H, W = u8.shape[:2]
         clipmap_surface = bool((surfaces.get(sid_hex) or {}).get("surfaceType", 0) & 0x4)
         alpha = has_alpha(u8) or clipmap_surface
