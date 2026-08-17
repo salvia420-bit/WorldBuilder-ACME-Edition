@@ -7,6 +7,6 @@
     <AssemblyName>DatCompress</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../external/DatReaderWriter/DatReaderWriter/DatReaderWriter.csproj" />
+    <PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.8" />
   </ItemGroup>
 </Project>

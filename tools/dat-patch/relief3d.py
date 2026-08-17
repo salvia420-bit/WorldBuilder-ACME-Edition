@@ -25,11 +25,40 @@ height field is what makes triangles do work.
 """
 import heapq
 import math
+import os
 
 import numpy as np
 
 MAX_AMPLITUDE_M = 0.10
 BOUNDARY_RAMP_M = 0.03
+
+# ------------------------------------------------------- orientation gate
+# Displacement runs OUTWARD along the authored normal and physics is left
+# verbatim, so an UP-FACING polygon carves the drawn floor up to AMP_WALL above
+# the collision plane the player actually stands on -- the r5 feet-sink
+# (TASKLIST-2026-08-17 C1/C2; audit_carve_orientation measured 28.0 % of shipped
+# variant shell AREA and 22.9 % of its polys up-facing).  Eligibility upstream is
+# texture-class only, and stone/brick floors wear wall textures, so the veto has
+# to live here, in the displacement machinery itself.
+#
+# One-sided by design: a DOWN-facing polygon (ceiling) carves away from the
+# walkable volume and nobody sinks into it, so ceilings stay eligible.
+#
+#   "veto"  -- up-facing polygons do not carve at all (default).  Also the
+#              cheapest: their shell is never emitted, so the record loses those
+#              triangles entirely.
+#   "clamp" -- they carve at most UP_CLAMP_M (the z-fight floor), i.e. the shell
+#              is still spent but the sink is under a centimetre.
+#   "off"   -- pre-C2 behaviour.
+#
+# The test is the polygon's own area-weighted FACET normal, the same quantity
+# audit_carve_orientation.py measures (the authored vertex normals steer the
+# displacement, but the facet is what a player stands on).  Normals are
+# env-local for dungeon cellstructs; the C1 audit confirmed dungeon EnvCells
+# place yaw-only 11,133/11,133, so env-local z is world z.
+UP_NZ = float(os.environ.get("DATPATCH_UP_NZ", "0.7"))
+UP_MODE = os.environ.get("DATPATCH_UP_MODE", "veto")      # veto | clamp | off
+UP_CLAMP_M = float(os.environ.get("DATPATCH_UP_CLAMP", "0.006"))   # = pilot.FLOOR_M
 
 KIND_FREE, KIND_CHAIN, KIND_CORNER = 0, 1, 2
 
@@ -45,6 +74,28 @@ def _n3(v):
 def smoothstep01(x):
     t = 0.0 if x < 0 else (1.0 if x > 1 else x)
     return t * t * (3.0 - 2.0 * t)
+
+
+def facet_area_nz(P, vids):
+    """(area, unit facet normal z) of one polygon, fan-summed and area-weighted
+    -- the orientation test audit_carve_orientation.py uses.  (0.0, None) when
+    the polygon is degenerate."""
+    if len(vids) < 3:
+        return 0.0, None
+    ax, ay, az = P[vids[0]]
+    nx = ny = nz = 0.0
+    for k in range(1, len(vids) - 1):
+        bx, by, bz = P[vids[k]]
+        cx, cy, cz = P[vids[k + 1]]
+        ux, uy, uz = bx - ax, by - ay, bz - az
+        vx, vy, vz = cx - ax, cy - ay, cz - az
+        nx += uy * vz - uz * vy
+        ny += uz * vx - ux * vz
+        nz += ux * vy - uy * vx
+    l = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if l < 1e-12:
+        return 0.0, None
+    return 0.5 * l, nz / l
 
 
 def sample_height(h, u, v):
@@ -73,9 +124,11 @@ class SourceMesh:
         self.polys = []      # dicts: v[], uv[], surf, cls, amp, hfield, excluded
 
     @staticmethod
-    def from_record(rec, surfaces_meta, xform=None):
+    def from_record(rec, surfaces_meta, xform=None, orientation=None):
         """rec: gfxlib.parse_gfxobj / one CellStruct.  surfaces_meta: sid -> dict
-        with keys cls, amp, h (height field or None).  xform: (3x3 R, t)."""
+        with keys cls, amp, h (height field or None).  xform: (3x3 R, t).
+        orientation: UP_MODE override for the floor veto ("veto"/"clamp"/"off"),
+        or a dict of apply_orientation_gate kwargs; None = module defaults."""
         m = SourceMesh()
         P = rec["P"]
         N = rec["N"]
@@ -109,7 +162,53 @@ class SourceMesh:
                                 amp=0.0 if excluded else meta.get("amp", 0.0),
                                 h=None if excluded else meta.get("h")))
         m.substituted_normals = m._fix_zero_normals()
+        if isinstance(orientation, dict):
+            m.orientation_gate = m.apply_orientation_gate(**orientation)
+        else:
+            m.orientation_gate = m.apply_orientation_gate(mode=orientation)
         return m
+
+    def apply_orientation_gate(self, mode=None, up_nz=None, clamp_m=None):
+        """The floor veto (C2).  Up-facing carving polygons stop carving (or
+        clamp to `clamp_m`); everything else is untouched.  Runs on the mesh in
+        its own space -- with an xform that is world space, without it the
+        record's authored space, which for dungeon cellstructs is yaw-only away
+        from world.  Returns a stats dict (also stored as .orientation_gate)."""
+        mode = UP_MODE if mode is None else mode
+        thr = UP_NZ if up_nz is None else float(up_nz)
+        clamp = UP_CLAMP_M if clamp_m is None else float(clamp_m)
+        st = dict(mode=mode, up_nz=thr, clamp_m=clamp, polys=0, area=0.0)
+        if mode == "off":
+            return st
+        if mode not in ("veto", "clamp"):
+            raise ValueError("orientation gate mode: veto | clamp | off, not %r"
+                             % (mode,))
+        for p in self.polys:
+            if p["h"] is None or p["amp"] <= 0 or p["excluded"] or p["invisible"]:
+                continue
+            area, nz = facet_area_nz(self.P, p["v"])
+            if nz is None or nz <= thr:
+                continue
+            p["up_facing"] = True
+            # amp_cap bounds the emitted vertex displacement itself, not just
+            # the face amplitude: a gated polygon's corners also inherit the
+            # WELDED amplitude of the walls around it (weld_amplitudes +
+            # BOUNDARY_RAMP), which is how a "clamped" floor still rose 9.5 cm
+            # at its wall joints before this cap existed (measured on
+            # 0x0D000AFC).  Vetoed polys carve nothing at all, so their cap is
+            # 0; they are also skipped outright by a carved_only shell build.
+            if mode == "clamp":
+                p["amp_cap"] = clamp
+                if p["amp"] <= clamp:
+                    continue
+                p["amp"] = clamp
+            else:
+                p["amp_cap"] = 0.0
+                p["amp"] = 0.0
+                p["h"] = None
+            st["polys"] += 1
+            st["area"] += area
+        return st
 
     def _fix_zero_normals(self):
         """Some records ship ZERO SWVertex normals (measured: 6% of GfxObj
@@ -301,7 +400,8 @@ def build_displaced(src, segments=12, scale=1.0, subdiv_flat=False,
             ti = len(tri_data)
             tri_data.append(dict(p=tp, uv=tuv, n=tn, poly=pi, gi=gi, bnd=bnd))
             _emit_patch(ti, tri_data[ti], segs, amp, h, amp_w, add_vertex,
-                        faces, srctri, floor_m, ti, amp_fn)
+                        faces, srctri, floor_m, ti, amp_fn,
+                        poly.get("amp_cap"))
             if segs > 1:
                 n_sub += 1
             else:
@@ -314,7 +414,7 @@ def build_displaced(src, segments=12, scale=1.0, subdiv_flat=False,
 
 
 def _emit_patch(ti, td, n, face_amp, hfield, amp_w, add_vertex, faces, srctri,
-                floor_m=0.0, frame_id=-1, amp_fn=None):
+                floor_m=0.0, frame_id=-1, amp_fn=None, amp_cap=None):
     p0, p1, p2 = td["p"]
     u0, u1, u2 = td["uv"]
     n0, n1, n2 = td["n"]
@@ -358,6 +458,13 @@ def _emit_patch(ti, td, n, face_amp, hfield, amp_w, add_vertex, faces, srctri,
                 a *= amp_fn(pos)
             if floor_m > 0.0 and a < floor_m:
                 a = floor_m
+            # orientation gate's per-polygon ceiling, applied LAST so neither
+            # the welded corner amplitude, the plinth ramp nor the z-fight
+            # floor can push a gated (up-facing) surface back up.  Keep
+            # UP_CLAMP_M >= the lane's floor_m or the clamp wins and the shell
+            # sits coplanar with the carried original.
+            if amp_cap is not None and a > amp_cap:
+                a = amp_cap
             un = _n3(nv)
             if un is not None and a > 0:
                 pos = (pos[0] + un[0] * a, pos[1] + un[1] * a, pos[2] + un[2] * a)

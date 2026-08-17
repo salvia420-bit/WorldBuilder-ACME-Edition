@@ -38,6 +38,13 @@ FINE_BUDGET = 220_000    # max fine-mesh faces before decimation (RAM/time guard
 #   * sculpted shading normals, gain 2.5 (retail lights from STORED normals, so
 #     this is free contrast);
 #   * the 4x triangle budget is unchanged.
+# Eligibility here is TEXTURE CLASS only.  Orientation is gated one layer down,
+# in relief3d (UP_MODE/UP_NZ/UP_CLAMP_M): stone and brick FLOORS wear wall
+# textures, and carving one upward over verbatim physics is the r5 feet-sink
+# (TASKLIST-2026-08-17 C1/C2).  The veto is on by default and applies to this
+# recipe too, so up-facing building surfaces (roof slabs, ledges) stop carving
+# as well -- pass orientation="clamp"/"off" to SourceMesh.from_record for a lane
+# that wants them back.
 WALL_CLASSES = {"Brick", "Stone", "Plank", "Timber"}
 AMP_WALL = 0.20          # metres, at/above plinth height
 GROUND_SCALE = 0.55      # 0.55 * 0.20 = 0.11 m at ground level (spec 0.10-0.12)

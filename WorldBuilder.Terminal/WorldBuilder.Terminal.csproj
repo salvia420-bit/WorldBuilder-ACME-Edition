@@ -16,7 +16,7 @@
 	</PropertyGroup>
 
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'!='true'">
-		<ProjectReference Include="..\external\DatReaderWriter\DatReaderWriter\DatReaderWriter.csproj" />
+		<PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.8" />
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
 		<!-- Required to use Encoding.GetEncoding(1252) in chorizite-hash-string. -->
 		<PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />

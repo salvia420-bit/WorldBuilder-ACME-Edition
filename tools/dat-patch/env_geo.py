@@ -144,6 +144,9 @@ def _shell(pdat, src_env_id, cs, slot_sids, objp):
     for m in metas.values():
         if m["cls"] in pilot.WALL_CLASSES and m.get("h") is not None:
             m["amp"] = pilot.AMP_WALL
+    # relief3d's orientation gate has already stopped the up-facing (floor)
+    # polygons carving -- see src.orientation_gate, reported per variant below
+    # so a lane run records how much floor it refused.
     src = relief3d.SourceMesh.from_record(rec, metas)
     n0 = src.tri_count()
     # per-carving-poly geometry census (fans, area, longest fan edge)
@@ -166,8 +169,9 @@ def _shell(pdat, src_env_id, cs, slot_sids, objp):
                        float(_np.linalg.norm(c - b)),
                        float(_np.linalg.norm(a - c)))
         carve.append((_pi, len(v) - 2, area_p, emax))
+    gate = getattr(src, "orientation_gate", None)
     if not carve:
-        return dict(ok=False, why="no carveable polys")
+        return dict(ok=False, why="no carveable polys", gate=gate)
     segs_fn = None
     if SPACING_M > 0:
         # AREA-BASED (phase-2 step 3): segments per polygon target SPACING_M
@@ -212,8 +216,8 @@ def _shell(pdat, src_env_id, cs, slot_sids, objp):
     sid2idx = {int(v, 16): int(i) for i, v in slot_sids.items()}
     nf = _write_obj(objp, src_env_id, cs, res, src, sid2idx)
     if nf == 0:
-        return dict(ok=False, why="no shell faces")
-    out = dict(ok=True, srcTris=n0, shellTris=nf, segments=segs)
+        return dict(ok=False, why="no shell faces", gate=gate)
+    out = dict(ok=True, srcTris=n0, shellTris=nf, segments=segs, gate=gate)
     if segs_fn is not None:
         out["spacing_m"] = round(spacing, 3)
     return out
