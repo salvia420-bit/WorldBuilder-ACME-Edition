@@ -1,0 +1,226 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1010" viewBox="0 0 1400 1010" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <radialGradient id="hubGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3a2b26"/>
+      <stop offset="65%" stop-color="#20242b"/>
+      <stop offset="100%" stop-color="#171c22"/>
+    </radialGradient>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7f8c9b"/>
+    </marker>
+    <marker id="ard" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5d6975"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="1010" fill="#0f1216"/>
+
+  <!-- header -->
+  <text x="30" y="36" fill="#e6edf3" font-size="21" font-weight="700">Asheron's Call Preservation Workspace &#8212; Connectivity Map</text>
+  <text x="30" y="58" fill="#8d9aa8" font-size="12.5">Claude sits at the hub and roots through every pathway: editor/oracle, web client, live server, protocol tables, DAT formats, research corpora, GPU test fleet, enhancement lanes.</text>
+
+  <!-- ================= SPOKES (Claude -> cluster) ================= -->
+  <g stroke="#7f8c9b" stroke-width="1.7" fill="none" marker-end="url(#ar)" opacity="0.85">
+    <line x1="639" y1="451" x2="290" y2="203"/>
+    <line x1="700" y1="430" x2="700" y2="215"/>
+    <line x1="761" y1="451" x2="1110" y2="203"/>
+    <line x1="797" y1="513" x2="1105" y2="470"/>
+    <line x1="768" y1="601" x2="1108" y2="800"/>
+    <line x1="700" y1="630" x2="700" y2="835"/>
+    <line x1="632" y1="601" x2="292" y2="800"/>
+    <line x1="603" y1="513" x2="295" y2="470"/>
+  </g>
+
+  <!-- ================= PERIMETER EDGES (subsystem <-> subsystem) ================= -->
+  <g stroke="#5d6975" stroke-width="1.4" stroke-dasharray="6 5" fill="none" marker-end="url(#ard)" marker-start="url(#ard)" opacity="0.9">
+    <line x1="340" y1="150" x2="560" y2="150"/>
+    <line x1="840" y1="150" x2="1060" y2="150"/>
+    <line x1="1215" y1="240" x2="1240" y2="405"/>
+    <line x1="1248" y1="535" x2="1200" y2="765"/>
+    <line x1="1055" y1="838" x2="840" y2="880"/>
+    <line x1="560" y1="898" x2="345" y2="862"/>
+    <line x1="200" y1="765" x2="157" y2="535"/>
+    <line x1="158" y1="405" x2="196" y2="240"/>
+  </g>
+
+  <!-- ================= CLAUDE HUB ================= -->
+  <circle cx="700" cy="530" r="100" fill="url(#hubGlow)" stroke="#d97757" stroke-width="2.4"/>
+  <circle cx="700" cy="530" r="112" fill="none" stroke="#d97757" stroke-width="0.8" opacity="0.35"/>
+  <text x="700" y="512" text-anchor="middle" fill="#f0dcd3" font-size="24" font-weight="700">Claude</text>
+  <text x="700" y="533" text-anchor="middle" fill="#c0a396" font-size="11.5">agent at the hub</text>
+  <text x="700" y="554" text-anchor="middle" fill="#8d9aa8" font-size="10.5">reads every corpus &#183; drives</text>
+  <text x="700" y="569" text-anchor="middle" fill="#8d9aa8" font-size="10.5">every tool &#183; verifies both ways</text>
+
+  <!-- ================= CLUSTER 1: EDITOR / ORACLE ================= -->
+  <rect x="65" y="115" width="270" height="120" rx="10" fill="#171c22" stroke="#7aa2f7" stroke-width="1.6"/>
+  <rect x="65" y="115" width="5" height="120" rx="2.5" fill="#7aa2f7"/>
+  <text x="82" y="140" fill="#cddcf7" font-size="14.5" font-weight="700">Editor / Oracle &#183; C#</text>
+  <text x="82" y="161" fill="#93a3b5" font-size="11">WorldBuilder.Terminal &#183; .Shared &#183; GUI</text>
+  <text x="82" y="179" fill="#93a3b5" font-size="11">223 JSON-stdin dispatch commands</text>
+  <text x="82" y="197" fill="#93a3b5" font-size="11">17 chorizite-* &#183; 10 ace-db-* bridges</text>
+  <text x="82" y="215" fill="#93a3b5" font-size="11">34 validator codes &#183; 3 observation channels</text>
+
+  <!-- ================= CLUSTER 2: PROTOCOL & BINDINGS ================= -->
+  <rect x="565" y="90" width="270" height="125" rx="10" fill="#171c22" stroke="#9d7cd8" stroke-width="1.6"/>
+  <rect x="565" y="90" width="5" height="125" rx="2.5" fill="#9d7cd8"/>
+  <text x="582" y="115" fill="#ddd0f2" font-size="14.5" font-weight="700">Protocol &amp; Bindings</text>
+  <text x="582" y="136" fill="#93a3b5" font-size="11">Chorizite.ACProtocol generated tables</text>
+  <text x="582" y="154" fill="#93a3b5" font-size="11">92 S2C &#183; 15 C2S &#183; 156 GameAction</text>
+  <text x="582" y="172" fill="#93a3b5" font-size="11">100 GameEvent &#183; 369 WeenieError</text>
+  <text x="582" y="190" fill="#93a3b5" font-size="11">ACBindings: 9,474 retail offsets / 937 files</text>
+  <text x="582" y="208" fill="#93a3b5" font-size="11">30 typed WorldObject classes (ACPlugin)</text>
+
+  <!-- ================= CLUSTER 3: WEB CLIENT ================= -->
+  <rect x="1065" y="115" width="270" height="120" rx="10" fill="#171c22" stroke="#7dcfff" stroke-width="1.6"/>
+  <rect x="1065" y="115" width="5" height="120" rx="2.5" fill="#7dcfff"/>
+  <text x="1082" y="140" fill="#cfeeff" font-size="14.5" font-weight="700">Browser Client</text>
+  <text x="1082" y="161" fill="#93a3b5" font-size="11">JS + three.js r184 &#183; Rust/wasm session core</text>
+  <text x="1082" y="179" fill="#93a3b5" font-size="11">15 Rust crates &#183; 52 DAT file_type modules</text>
+  <text x="1082" y="197" fill="#93a3b5" font-size="11">245 wasm session methods &#183; 206 free fns</text>
+  <text x="1082" y="215" fill="#93a3b5" font-size="11">42 __diag surfaces &#183; 12 validate_*.cjs</text>
+
+  <!-- ================= CLUSTER 4: LIVE SERVER ================= -->
+  <rect x="1110" y="410" width="270" height="125" rx="10" fill="#171c22" stroke="#9ece6a" stroke-width="1.6"/>
+  <rect x="1110" y="410" width="5" height="125" rx="2.5" fill="#9ece6a"/>
+  <text x="1127" y="435" fill="#d6ecc0" font-size="14.5" font-weight="700">Live Server + DB</text>
+  <text x="1127" y="456" fill="#93a3b5" font-size="11">Vanilla ACE emulator, kept unmodified</text>
+  <text x="1127" y="474" fill="#93a3b5" font-size="11">MySQL world / shard / auth databases</text>
+  <text x="1127" y="492" fill="#93a3b5" font-size="11">204 ACE.Entity enum files as parity oracle</text>
+  <text x="1127" y="510" fill="#93a3b5" font-size="11">51 DatLoader parser classes (cross-ref truth)</text>
+  <text x="1127" y="528" fill="#93a3b5" font-size="11">in-game admin commands drive headless nav</text>
+
+  <!-- ================= CLUSTER 5: ENHANCEMENT LANES ================= -->
+  <rect x="1060" y="770" width="270" height="125" rx="10" fill="#171c22" stroke="#e0af68" stroke-width="1.6"/>
+  <rect x="1060" y="770" width="5" height="125" rx="2.5" fill="#e0af68"/>
+  <text x="1077" y="795" fill="#f2ddb6" font-size="14.5" font-weight="700">Enhancement Lanes</text>
+  <text x="1077" y="816" fill="#93a3b5" font-size="11">4&#215; textures + displaced geometry, new DATs</text>
+  <text x="1077" y="834" fill="#93a3b5" font-size="11">tier ladder r1..r6: terrain &#8594; doors &#8594; props</text>
+  <text x="1077" y="852" fill="#93a3b5" font-size="11">&#8594; dungeons &#8594; creatures+envgeo &#8594; scenery</text>
+  <text x="1077" y="870" fill="#93a3b5" font-size="11">exe byte-patch lane: 6-byte palette-leak fix</text>
+  <text x="1077" y="888" fill="#93a3b5" font-size="11">1-instruction DAT-compression fix (~45% saved)</text>
+
+  <!-- ================= CLUSTER 6: TEST FLEET ================= -->
+  <rect x="565" y="840" width="270" height="120" rx="10" fill="#171c22" stroke="#f7768e" stroke-width="1.6"/>
+  <rect x="565" y="840" width="5" height="120" rx="2.5" fill="#f7768e"/>
+  <text x="582" y="865" fill="#fbd0d8" font-size="14.5" font-weight="700">GPU Test Fleet</text>
+  <text x="582" y="886" fill="#93a3b5" font-size="11">spot cloud GPU box: batch upscales, agent fan-out</text>
+  <text x="582" y="904" fill="#93a3b5" font-size="11">Windows GPU box: retail client, headless tours</text>
+  <text x="582" y="922" fill="#93a3b5" font-size="11">CDP-driven browser eye-tests &#38; A/B boards</text>
+  <text x="582" y="940" fill="#93a3b5" font-size="11">laptop runs a memory-capped build jail</text>
+
+  <!-- ================= CLUSTER 7: RESEARCH CORPORA ================= -->
+  <rect x="70" y="770" width="275" height="125" rx="10" fill="#171c22" stroke="#bb9af7" stroke-width="1.6"/>
+  <rect x="70" y="770" width="5" height="125" rx="2.5" fill="#bb9af7"/>
+  <text x="87" y="795" fill="#e2d5fb" font-size="14.5" font-weight="700">Research Corpora</text>
+  <text x="87" y="816" fill="#93a3b5" font-size="11">retail client decompilation, 3 build vintages</text>
+  <text x="87" y="834" fill="#93a3b5" font-size="11">indexed dev Discord archive: ~478k msgs / 79 ch</text>
+  <text x="87" y="852" fill="#93a3b5" font-size="11">community wiki snapshot: 37,571 indexed titles</text>
+  <text x="87" y="870" fill="#93a3b5" font-size="11">partial content dump: 19,686 weenies / 1,162 maps</text>
+  <text x="87" y="888" fill="#93a3b5" font-size="11">melt &#183; GDL &#183; ParticleViewer: read-only references</text>
+
+  <!-- ================= CLUSTER 8: DATA-FORMAT TRUTH ================= -->
+  <rect x="20" y="410" width="272" height="125" rx="10" fill="#171c22" stroke="#73daca" stroke-width="1.6"/>
+  <rect x="20" y="410" width="5" height="125" rx="2.5" fill="#73daca"/>
+  <text x="37" y="435" fill="#c7f0e8" font-size="14.5" font-weight="700">Data-Format Truth</text>
+  <text x="37" y="456" fill="#93a3b5" font-size="11">DatReaderWriter dats.xml: canonical schema</text>
+  <text x="37" y="474" fill="#93a3b5" font-size="11">52 DBObj file types &#183; 205 struct definitions</text>
+  <text x="37" y="492" fill="#93a3b5" font-size="11">55 pixel formats &#183; DBObj id-range rules</text>
+  <text x="37" y="510" fill="#93a3b5" font-size="11">DatReaderWriter.Extensions: pixel decode</text>
+  <text x="37" y="528" fill="#93a3b5" font-size="11">reconciled 3 ways: decomp &#8594; ACE &#8594; dats.xml</text>
+
+  <!-- ================= SPOKE LABELS ================= -->
+  <g font-size="11.2">
+    <!-- 1 Editor -->
+    <rect x="345" y="330" width="215" height="42" rx="6" fill="#0f1216" stroke="#7aa2f7" stroke-width="1" opacity="0.97"/>
+    <text x="452" y="346" text-anchor="middle" fill="#cddcf7">drives the JSON-stdin agent loop</text>
+    <text x="452" y="362" text-anchor="middle" fill="#8d9aa8">223 commands, one object per line</text>
+
+    <!-- 2 Protocol -->
+    <rect x="593" y="318" width="215" height="42" rx="6" fill="#0f1216" stroke="#9d7cd8" stroke-width="1" opacity="0.97"/>
+    <text x="700" y="334" text-anchor="middle" fill="#ddd0f2">looks up opcodes &amp; wire fields</text>
+    <text x="700" y="350" text-anchor="middle" fill="#8d9aa8">732 generated enum entries total</text>
+
+    <!-- 3 Web -->
+    <rect x="843" y="330" width="215" height="42" rx="6" fill="#0f1216" stroke="#7dcfff" stroke-width="1" opacity="0.97"/>
+    <text x="950" y="346" text-anchor="middle" fill="#cfeeff">reads the diagnostic surface</text>
+    <text x="950" y="362" text-anchor="middle" fill="#8d9aa8">42 __diag probes, headless</text>
+
+    <!-- 4 Server -->
+    <rect x="868" y="479" width="212" height="42" rx="6" fill="#0f1216" stroke="#9ece6a" stroke-width="1" opacity="0.97"/>
+    <text x="974" y="495" text-anchor="middle" fill="#d6ecc0">queries live world/shard SQL</text>
+    <text x="974" y="511" text-anchor="middle" fill="#8d9aa8">10 ace-db-* ingest commands</text>
+
+    <!-- 5 Lanes -->
+    <rect x="843" y="656" width="215" height="42" rx="6" fill="#0f1216" stroke="#e0af68" stroke-width="1" opacity="0.97"/>
+    <text x="950" y="672" text-anchor="middle" fill="#f2ddb6">authors + audits patched DATs</text>
+    <text x="950" y="688" text-anchor="middle" fill="#8d9aa8">under the format's 2 GiB ceiling</text>
+
+    <!-- 6 Fleet -->
+    <rect x="593" y="694" width="215" height="42" rx="6" fill="#0f1216" stroke="#f7768e" stroke-width="1" opacity="0.97"/>
+    <text x="700" y="710" text-anchor="middle" fill="#fbd0d8">fans out to remote GPU boxes</text>
+    <text x="700" y="726" text-anchor="middle" fill="#8d9aa8">real-GPU eyes the laptop can't give</text>
+
+    <!-- 7 Research -->
+    <rect x="345" y="656" width="215" height="42" rx="6" fill="#0f1216" stroke="#bb9af7" stroke-width="1" opacity="0.97"/>
+    <text x="452" y="672" text-anchor="middle" fill="#e2d5fb">mines corpora for dev intent</text>
+    <text x="452" y="688" text-anchor="middle" fill="#8d9aa8">full-text search over decades of chat</text>
+
+    <!-- 8 Formats -->
+    <rect x="320" y="479" width="215" height="42" rx="6" fill="#0f1216" stroke="#73daca" stroke-width="1" opacity="0.97"/>
+    <text x="427" y="495" text-anchor="middle" fill="#c7f0e8">resolves field order &amp; widths</text>
+    <text x="427" y="511" text-anchor="middle" fill="#8d9aa8">52 file types, 205 structs</text>
+  </g>
+
+  <!-- ================= PERIMETER EDGE LABELS ================= -->
+  <g font-size="10.6">
+    <!-- 1-2 -->
+    <rect x="352" y="130" width="196" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="450" y="145" text-anchor="middle" fill="#b6c2cf">C# absorption layer</text>
+    <text x="450" y="159" text-anchor="middle" fill="#7f8c9b">terminal hosts the parsers</text>
+
+    <!-- 2-3 -->
+    <rect x="852" y="130" width="196" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="950" y="145" text-anchor="middle" fill="#b6c2cf">opcode parity</text>
+    <text x="950" y="159" text-anchor="middle" fill="#7f8c9b">372 Rust &#8596; 363 C# constants</text>
+
+    <!-- 3-4 -->
+    <rect x="1130" y="303" width="200" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="1230" y="318" text-anchor="middle" fill="#b6c2cf">live handshake</text>
+    <text x="1230" y="332" text-anchor="middle" fill="#7f8c9b">UDP &#8596; WebSocket bridge</text>
+
+    <!-- 4-5 -->
+    <rect x="1130" y="631" width="200" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="1230" y="646" text-anchor="middle" fill="#b6c2cf">server serves patched DATs</text>
+    <text x="1230" y="660" text-anchor="middle" fill="#7f8c9b">same tier the gate client runs</text>
+
+    <!-- 5-6 -->
+    <rect x="850" y="820" width="200" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="950" y="835" text-anchor="middle" fill="#b6c2cf">mandatory in-client gate</text>
+    <text x="950" y="849" text-anchor="middle" fill="#7f8c9b">only retail proves render semantics</text>
+
+    <!-- 6-7 -->
+    <rect x="354" y="861" width="200" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="454" y="876" text-anchor="middle" fill="#b6c2cf">soak capture &#8594; decomp read</text>
+    <text x="454" y="890" text-anchor="middle" fill="#7f8c9b">27 h dump located the leak</text>
+
+    <!-- 7-8 -->
+    <rect x="78" y="631" width="200" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="178" y="646" text-anchor="middle" fill="#b6c2cf">decomp validates the schema</text>
+    <text x="178" y="660" text-anchor="middle" fill="#7f8c9b">54 DB_TYPE constants vs 52 types</text>
+
+    <!-- 8-1 -->
+    <rect x="78" y="303" width="200" height="38" rx="5" fill="#0f1216" stroke="#3a4551" stroke-width="1"/>
+    <text x="178" y="318" text-anchor="middle" fill="#b6c2cf">terrain algorithm parity</text>
+    <text x="178" y="332" text-anchor="middle" fill="#7f8c9b">split constant 1813693831 matched</text>
+  </g>
+
+  <!-- ================= LEGEND ================= -->
+  <g>
+    <rect x="28" y="912" width="300" height="76" rx="8" fill="#141920" stroke="#2b3540" stroke-width="1"/>
+    <line x1="44" y1="936" x2="86" y2="936" stroke="#7f8c9b" stroke-width="1.7" marker-end="url(#ar)"/>
+    <text x="98" y="940" fill="#9aa7b4" font-size="10.6">Claude reaches into the subsystem</text>
+    <line x1="44" y1="960" x2="86" y2="960" stroke="#5d6975" stroke-width="1.4" stroke-dasharray="6 5" marker-end="url(#ard)" marker-start="url(#ard)"/>
+    <text x="98" y="964" fill="#9aa7b4" font-size="10.6">subsystem &#8596; subsystem pathway</text>
+    <text x="44" y="982" fill="#6f7c8a" font-size="9.8">Counts verified by direct source counts; corpora described abstractly.</text>
+  </g>
+</svg>
