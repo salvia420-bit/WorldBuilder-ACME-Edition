@@ -29,7 +29,58 @@ and `docs/dat-patch/reports/`.
 - Planner: `budget_planner.py` — headroom knobs (measure target dats;
   budget = ceiling − measured − reserve; default reserve 300 MiB).  Run this
   against the SERVER'S dats, never assume base sizes.
+- Tripwires: `walk_check.py` (client-semantics b-tree/free-chain walk) and
+  `fix_degrade_chains.py` (the F1 degrade-chain invariant + its fixup — see
+  below).  Both are read-only by default and exit nonzero on violation, so a
+  driver can call them after every portal-mutating step.
 - `data/table.json` — the surface-class gate table.
+
+## The degrade-chain invariant (`fix_degrade_chains.py`)
+
+A SurfaceTexture (0x05) is a *degrade chain* of RenderSurface (0x06) ids,
+highest detail first; `RenderTexture::DropUnwantedLevels` (acclient.c:137195)
+drops the leading levels per the "Environment texture detail level" preference
+and is a **no-op once the chain has ≤ 1 entry**.  So every chain that names a
+baked 0x06 must be collapsed to exactly that one id, or a retail-detail sibling
+can still top the stack on an install that mounts a real `client_highres.dat`.
+
+    for every 0x05 whose chain contains a baked 0x06:  len(chain) == 1
+
+r7 shipped **one** violation (`0x05000ECE`) — the importer keyed its collapse
+list on the *SurfaceTexture*, and two 0x05s shared one retail chain, so the twin
+was missed (`docs/dat-patch/reports/degrade-chain-audit-2026-08-17.md` §4).
+`fix_degrade_chains.py` therefore groups every 0x05 **by its exact chain tuple**
+and acts on the whole group; a shared chain cannot be half-fixed again.
+
+```sh
+FDC=$REPO/tools/dat-patch/fix_degrade_chains.py
+# driver fixup stage, after the lanes, BEFORE the final compress/compact
+python3 $FDC $PORTAL --fix --retail $BASE --wbt $WBT --json $R7/degrade-fix.json \
+  || { echo "DEGRADE-CHAIN FIXUP FAILED"; exit 8; }
+# ship gate: read-only, on the final packaged portal
+python3 $FDC $PORTAL --check --retail $BASE \
+  || { echo "DEGRADE-CHAIN TRIPWIRE FAILED"; exit 8; }
+```
+
+Placement, not decoration: run the fix *after* every lane has written (the
+baked set is only complete then) and *before* the final `compress`/`compact`,
+so the block churn from the rewrite is absorbed by the compact.  Then re-check
+the packaged file.  Unlike `walk_check.py` this is **not** cheap enough to run
+after literally every step on a spindle — a cold `--check` over the 1.5 GB r7
+portal is ~1.4 s of CPU but ~10 min of wall, all of it seeks — so two calls per
+take (fixup + ship gate) is the intended cadence.  `--baked-ids` skips the
+retail compare entirely and makes a check take seconds, but a list dumped
+before the lanes ran is **stale by construction**; only reuse one that was
+dumped from the same dat you are checking.
+
+The rewrite is delegated to WBT's `surface-texture-collapse` (DatReaderWriter
+2.1.8 `TryWriteFile`) — the same write path the lanes already use for the 1,400
+chains they *do* collapse; this tool only fixes the selection.  "Baked" is
+derived by byte-comparing the patched 0x06 records against retail; by default
+only the ids named by multi-entry chains are resolved (a few thousand, with an
+uncompressed-size shortcut before any inflate) because the invariant can never
+depend on the rest.  `--full-baked` reproduces the audit's whole 2,412-id set,
+`--baked-ids FILE` accepts a precomputed list, `--dump-baked FILE` writes one.
 
 ## External data (NOT vendored)
 - Base dats: `~/ac_base_dats/` (read-only; on buildbox too).

@@ -27,11 +27,53 @@ masks must never be baked, and the 3 detail textures have no corpus.
 Base terrain SurfaceTextures are single-entry in retail (verified) -- no
 collapse step exists in this lane.
 
+THE 2x LANE (--size 1024, D1/D2 of TASKLIST-2026-08-17 section D)
+-----------------------------------------------------------------
+`bake --size 1024` drops the final downsample one stop (2048 rewrap ->
+1024 instead of 512) and `alpha --size 1024` upscales the 8 blend masks to
+match.  Both are INERT until Region 0x13000000 baseTexSize is patched
+1024 -> 2048 (tools/dat-patch/patch_region_basetexsize.py); the three sizes
+are locked together by the retail merge path:
+
+    base_tex_size (Region)  = dest composite edge  = 2048
+    base terrain RS edge    = base_tex_size / texTiling(2)   = 1024
+    blend/road alpha edge   = base terrain RS edge            = 1024
+
+The second identity is ImgTex::TileCSI (acclient.c:365513): it copies
+src_width x src_height DWORDs `tiling` times in each axis into a
+dest_width-pitch buffer, so src_edge * tiling must equal dest_edge exactly.
+The third is ImgTex::MergeTexture (:365632): the alpha cursor's ROW stride
+is `v8` = the BASE texture's width (the rot switch at the top builds all
+four rotation walks out of the base's width/height, never the alpha's), and
+the column loop advances the cursor once per `dest_width/alpha_width`
+texels.  A full pass therefore touches alpha_width * base_width bytes --
+in bounds only when alpha_edge == base_edge.  Alpha smaller than the base
+(e.g. leaving the masks at 512 under a 1024 base) walks off the end of a
+262,144-byte record: that is the r6-clobber OOB, not a cosmetic mismatch.
+
+Lane fold (r7.1 / take-5 driver), in this order and BEFORE the compress step
+-- all three must land together or the client walks off the alpha record:
+
+  python3 terrain_lane.py bake  --root <lane> --size 1024 \
+      --corpus /mnt/wbterminal2/upscale-corpus/rewrap-out/out \
+      --out    /mnt/wbterminal2/terrain-2x/base-1024
+  python3 terrain_lane.py alpha --out /mnt/wbterminal2/terrain-2x/alpha-2x --size 1024
+  render-surface-import  the 29 bases (A8R8G8B8) + 8 masks (LSCAPE_ALPHA),
+      allowResize=true          [terrain_lane.py run --size 1024 does the bases]
+  surface-texture-collapse the 8 blend STs to their portal entry (they are
+      2-entry: index 0 is a 0x060073Ax client_highres.dat id, and
+      ImgTex::GetSurfaceDID takes index 0 first -- a reachable 512 sibling
+      under a 1024 base IS the OOB)
+  python3 patch_region_basetexsize.py patch --dat <portal> --value 2048 --apply
+
 Subcommands:
   derive  --root R --base DAT            Region -> terrain ST/RS mapping json
   bake    --root R [--variants]          29 baked 512 PNGs (+ board variants)
+          [--size N --corpus DIR --out DIR]      ... or 29 baked N^2 PNGs
+  alpha   --out DIR [--size N]           8 blend/road masks upscaled to N^2
   board   --root R [--rs 0x06..]         tiled A/B/C boards per texture
   run     --root R --patched DAT         import into patched dat + roundtrip
+          [--size N --baked DIR]
 """
 import argparse
 import json
@@ -127,7 +169,22 @@ def _load(root):
     return d, rs2use
 
 
-def bake(root, variants=False):
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def bake(root, variants=False, size=None, corpus=None, outdir=None):
+    """size=None -> the shipping 512 lane (retail dims, unchanged).
+    size=N      -> the 2x lane: supersample the rewrap 2048 down to N and
+                   carry the retail alpha channel up by NEAREST replication
+                   (integer factor, so every retail alpha byte survives --
+                   no resampler invents a value in a channel the merge path
+                   never blends)."""
     import numpy as np
     from PIL import Image
     import matlib
@@ -135,7 +192,8 @@ def bake(root, variants=False):
     d, rs2use = _load(root)
     water = set(d["waterRs"])
     G = legibility.GAINSETS["mid"]
-    bdir = os.path.join(root, "baked")
+    src_corpus = corpus or CORPUS
+    bdir = outdir or os.path.join(root, "baked" if not size else "baked-%d" % size)
     vdir = os.path.join(root, "variants")
     os.makedirs(bdir, exist_ok=True)
     if variants:
@@ -144,13 +202,26 @@ def bake(root, variants=False):
     for rs in sorted(rs2use):
         base = np.asarray(Image.open(os.path.join(root, "tex-base", rs + ".png")),
                           np.uint8)
-        rp = os.path.join(CORPUS, rs + ".png")
+        rp = os.path.join(src_corpus, rs + ".png")
         if not os.path.exists(rp):
             res.append(dict(rs=rs, status="SKIP", why="no corpus png"))
             continue
-        rem = Image.open(rp).convert("RGB")
-        ss = np.asarray(rem.resize(base.shape[1::-1], Image.LANCZOS), np.uint8)
-        ssf = np.dstack([ss, base[:, :, 3]]).astype(np.float32) / 255.0
+        rem = Image.open(rp)
+        src_wh = rem.size
+        rem = rem.convert("RGB")
+        tgt = (size, size) if size else base.shape[1::-1]
+        ss = np.asarray(rem.resize(tgt, Image.LANCZOS), np.uint8)
+        if size and (size, size) != base.shape[1::-1]:
+            bh, bw = base.shape[:2]
+            assert size % bw == 0 and size % bh == 0, (
+                "%s: %d is not an integer multiple of the retail %dx%d"
+                % (rs, size, bw, bh))
+            alpha_ch = np.asarray(
+                Image.fromarray(base[:, :, 3], "L").resize(tgt, Image.NEAREST),
+                np.uint8)
+        else:
+            alpha_ch = base[:, :, 3]
+        ssf = np.dstack([ss, alpha_ch]).astype(np.float32) / 255.0
         basef = base.astype(np.float32) / 255.0
         is_water = rs in water
         lum_t = 1.0 if is_water else legibility.LUM_TARGET
@@ -164,25 +235,164 @@ def bake(root, variants=False):
         out, info = legibility.bake_texture(ssf, basef, h, G["g_hi"], G["g_lo"],
                                             G["a0"], lum_target=lum_t)
         u8 = (np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8)
-        u8[:, :, 3] = base[:, :, 3]          # alpha verbatim from retail
-        Image.fromarray(u8, "RGBA").save(os.path.join(bdir, rs + ".png"))
+        u8[:, :, 3] = alpha_ch               # alpha verbatim from retail
+        op = os.path.join(bdir, rs + ".png")
+        Image.fromarray(u8, "RGBA").save(op)
         if variants:
             ss_only, _ = legibility.bake_texture(ssf.copy(), basef, None,
                                                  0, 0, 0, lum_target=lum_t)
             v8 = (np.clip(ss_only, 0, 1) * 255 + 0.5).astype(np.uint8)
-            v8[:, :, 3] = base[:, :, 3]
+            v8[:, :, 3] = alpha_ch
             Image.fromarray(v8, "RGBA").save(os.path.join(vdir, rs + "_ss.png"))
         res.append(dict(rs=rs, status="OK", uses=sorted(set(rs2use[rs]))[:3],
                         water=is_water, embossed=h is not None,
                         carved=round(cf, 3), lum_target=lum_t,
                         lum_base=round(info["lum_base"], 4),
-                        lum_after=round(info["lum_after"], 4)))
-        print("%s %-4s water=%d emboss=%d carved=%.2f  %s"
-              % (rs, res[-1]["status"], is_water, h is not None, cf,
-                 ",".join(res[-1]["uses"])))
-    json.dump(res, open(os.path.join(root, "bake_results.json"), "w"), indent=1)
+                        lum_after=round(info["lum_after"], 4),
+                        # --- 2x-lane ledger fields -----------------------
+                        retailW=int(base.shape[1]), retailH=int(base.shape[0]),
+                        srcPng=rp, srcW=src_wh[0], srcH=src_wh[1],
+                        srcSha256=_sha256(rp),
+                        outPng=op, outW=int(u8.shape[1]), outH=int(u8.shape[0]),
+                        outSha256=_sha256(op),
+                        alphaFromRetail=("verbatim" if alpha_ch.shape == base.shape[:2]
+                                         else "nearest-x%d"
+                                              % (alpha_ch.shape[1] // base.shape[1])),
+                        # decimating the upscaled alpha by the same integer
+                        # factor must reproduce the retail bytes exactly
+                        alphaRetailExact=bool(np.array_equal(
+                            alpha_ch[::alpha_ch.shape[0] // base.shape[0],
+                                  ::alpha_ch.shape[1] // base.shape[1]],
+                            base[:, :, 3])),
+                        targetFormat="PFID_A8R8G8B8",
+                        expectPayloadBytes=int(u8.shape[0] * u8.shape[1] * 4),
+                        expectRecordBytes=int(u8.shape[0] * u8.shape[1] * 4 + 24)))
+        print("%s %-4s %dx%d water=%d emboss=%d carved=%.2f  %s"
+              % (rs, res[-1]["status"], res[-1]["outW"], res[-1]["outH"],
+                 is_water, h is not None, cf, ",".join(res[-1]["uses"])))
+    lp = os.path.join(root, "bake_results.json" if not size
+                      else "bake_results_%d.json" % size)
+    json.dump(res, open(lp, "w"), indent=1)
     ok = sum(1 for r in res if r["status"] == "OK")
-    print("bake: %d/%d ok -> %s" % (ok, len(res), bdir))
+    print("bake: %d/%d ok -> %s (ledger %s)" % (ok, len(res), bdir, lp))
+
+
+ALPHA_HEADER = 24                   # Id + DataCategory + W + H + Format + len
+ALPHA_FORMAT = 0xF4                 # PFID_CUSTOM_LSCAPE_ALPHA, 1 byte/texel
+
+
+def _read_alpha_rs(dat, rs_id):
+    """Raw LSCAPE_ALPHA record -> (w, h, uint8 HxW).  Read straight out of the
+    record instead of via an image exporter: the mask bytes ARE the payload
+    (one byte per texel, no palette), so any decode step in between is a
+    chance to lose a value."""
+    import struct
+    import numpy as np
+    b = dat.get(rs_id)
+    if b is None:
+        return None
+    _id, _cat, w, h, fmt, ln = struct.unpack_from("<6I", b, 0)
+    assert fmt == ALPHA_FORMAT, "0x%08X is format 0x%X, not LSCAPE_ALPHA" % (rs_id, fmt)
+    assert ln == w * h, "0x%08X length %d != %dx%d" % (rs_id, ln, w, h)
+    assert len(b) == ALPHA_HEADER + ln, "0x%08X record %d bytes" % (rs_id, len(b))
+    return w, h, np.frombuffer(b, np.uint8, count=ln,
+                               offset=ALPHA_HEADER).reshape(h, w).copy()
+
+
+def alpha(out, size=1024, portal=BASE_PORTAL):
+    """D2: the 4 corner + 1 side + 3 road blend masks, upscaled to `size`.
+
+    Method = BICUBIC on the single mask channel, then clamp to [0,255].
+    Justification: these are not photographs and not hard stencils -- 52-95%
+    of each mask is saturated 0/255 with an anti-aliased transition band that
+    uses the full 0..255 range.  Bicubic keeps that band monotone and one
+    band wide; Lanczos' longer kernel rings on the saturated plateaus (a
+    ring in a BLEND WEIGHT prints as a halo of the wrong terrain along every
+    transition, and clamping only hides half of it); bilinear widens the band
+    and shifts the 50% contour.  An AI upscaler is wrong by construction --
+    it hallucinates texture detail into a weight field.
+    A NEAREST arm is written to <out>/nearest/ as the zero-risk fallback: at
+    an integer factor it reproduces exactly what the retail client already
+    does today (scale_up_alpha replication in ImgTex::MergeTexture), so it
+    changes the blend geometry by nothing at all."""
+    import numpy as np
+    from PIL import Image
+    import datlib
+    os.makedirs(out, exist_ok=True)
+    ndir = os.path.join(out, "nearest")
+    os.makedirs(ndir, exist_ok=True)
+    outs = wbt([dict(command="chorizite-parse-dat-record", datPath=portal,
+                     idHex="0x%08X" % REGION_ID, typeName="Region")])
+    reg = next(o for o in outs if o.get("typeName") == "Region")
+    tm = reg["fields"]["terrainInfo"]["landSurfaces"]["texMerge"]
+    kinds = [("corner", "cornerTerrainMaps"), ("side", "sideTerrainMaps"),
+             ("road", "roadMaps")]
+    sts = [(kind, "0x%08X" % m["textureId"]["dataId"])
+           for kind, key in kinds for m in tm[key]]
+    st_outs = {o.get("idHex"): o for o in
+               wbt([dict(command="chorizite-parse-dat-record", datPath=portal,
+                         idHex=st, typeName="SurfaceTexture")
+                    for _k, st in sts])}
+    dat = datlib.Dat(portal)
+    res = []
+    for kind, st in sts:
+        o = st_outs.get(st) or {}
+        texs = (o.get("fields") or {}).get("textures") or []
+        dids = [(t.get("dataId") if isinstance(t, dict) else t) for t in texs]
+        # ImgTex::GetSurfaceDID (acclient.c:366232): m_num==1 -> entry 0;
+        # m_num==2 -> entry 0 unless Render::ShouldDropHighDetail().  The
+        # index-0 sibling of every blend ST is a 0x060073Ax id that does NOT
+        # live in client_portal.dat (it is a client_highres.dat record), so
+        # the mask actually merged is the LAST entry.  A 2x lane that leaves
+        # that highres sibling reachable ships a 512 alpha under a 1024 base
+        # == the OOB read; see the module docstring.  Collapse the ST.
+        present = [x for x in dids if dat.files.get(x) is not None]
+        assert len(present) == 1, "%s: %d portal-resident entries" % (st, len(present))
+        rs = present[0]
+        w, h, px = _read_alpha_rs(dat, rs)
+        assert size % w == 0 and size % h == 0, \
+            "0x%08X %dx%d does not divide %d" % (rs, w, h, size)
+        f = size // w
+        im = Image.fromarray(px, "L")
+        bic = np.clip(np.asarray(im.resize((size, size), Image.BICUBIC),
+                                 np.float32), 0, 255).astype(np.uint8)
+        nn = np.asarray(im.resize((size, size), Image.NEAREST), np.uint8)
+        bp = os.path.join(out, "0x%08X.png" % rs)
+        np_ = os.path.join(ndir, "0x%08X.png" % rs)
+        Image.fromarray(bic, "L").save(bp)
+        Image.fromarray(nn, "L").save(np_)
+        res.append(dict(kind=kind, st=st, stEntries=["0x%08X" % x for x in dids],
+                        highresSiblingAbsent=["0x%08X" % x for x in dids
+                                              if dat.files.get(x) is None],
+                        rs="0x%08X" % rs, retailW=w, retailH=h,
+                        retailFormat="PFID_CUSTOM_LSCAPE_ALPHA",
+                        retailRecordBytes=ALPHA_HEADER + w * h,
+                        outW=size, outH=size, factor=f, method="bicubic+clamp",
+                        outPng=bp, outSha256=_sha256(bp),
+                        nearestPng=np_, nearestSha256=_sha256(np_),
+                        expectPayloadBytes=size * size,
+                        expectRecordBytes=ALPHA_HEADER + size * size,
+                        retailMean=round(float(px.mean()), 3),
+                        outMean=round(float(bic.mean()), 3),
+                        outMin=int(bic.min()), outMax=int(bic.max()),
+                        # nearest decimates back to the retail bytes exactly;
+                        # bicubic must at least keep every saturated plateau
+                        # texel saturated at the plateau's own centres
+                        nearestRetailExact=bool(np.array_equal(nn[::f, ::f], px)),
+                        satPreserved=round(float(
+                            (bic[::f, ::f][px == 255] == 255).mean()
+                            if (px == 255).any() else 1.0), 4),
+                        zeroPreserved=round(float(
+                            (bic[::f, ::f][px == 0] == 0).mean()
+                            if (px == 0).any() else 1.0), 4)))
+        print("%-6s %s ST %s  %dx%d -> %dx%d  mean %.1f -> %.1f  nnExact=%s"
+              % (kind, res[-1]["rs"], st, w, h, size, size,
+                 res[-1]["retailMean"], res[-1]["outMean"],
+                 res[-1]["nearestRetailExact"]))
+    lp = os.path.join(out, "alpha_ledger_%d.json" % size)
+    json.dump(res, open(lp, "w"), indent=1)
+    print("alpha: %d masks -> %s (ledger %s)" % (len(res), out, lp))
+    return res
 
 
 def board(root, only=None):
@@ -217,15 +427,20 @@ def board(root, only=None):
     print("boards -> %s" % bdir)
 
 
-def run(root, patched):
+def run(root, patched, size=None, baked=None):
     """Import all baked PNGs into `patched` (format-preserving -> A8R8G8B8),
     then fixup + integrity + roundtrip.  No collapse: base terrain STs are
-    single-entry in retail."""
+    single-entry in retail.
+
+    size=None keeps the 512 lane's pin (allowResize=False -> the record's own
+    retail dims).  size=N is the 2x lane: the record MUST grow to NxN, so
+    allowResize goes true and the roundtrip asserts NxN."""
     import texture_lane as TL
     d, rs2use = _load(root)
-    bdir = os.path.join(root, "baked")
+    bdir = baked or os.path.join(root, "baked" if not size else "baked-%d" % size)
+    exp = size or 512
     imports = [dict(idHex=rs, pngPath=os.path.join(bdir, rs + ".png"),
-                    allowResize=False)
+                    allowResize=bool(size))
                for rs in sorted(rs2use)
                if os.path.exists(os.path.join(bdir, rs + ".png"))]
     print("importing %d terrain RenderSurfaces (format-preserving) ..."
@@ -256,8 +471,8 @@ def run(root, patched):
     rt_bad = []
     for o in checks:
         f = o.get("fields") or {}
-        if (not o.get("success") or f.get("width") != 512
-                or f.get("height") != 512
+        if (not o.get("success") or f.get("width") != exp
+                or f.get("height") != exp
                 or "A8R8G8B8" not in str(f.get("format"))):
             rt_bad.append(dict(id=o.get("idHex"), err=o.get("errorMessage"),
                                fmt=str(f.get("format")), w=f.get("width")))
@@ -276,7 +491,9 @@ def run(root, patched):
                           and res["importResult"].get("failCount") == 0
                           and res["formatPreservedAll"]
                           and not rt_bad and res["integrity"]["equal"])
-    json.dump(res, open(os.path.join(root, "run_results.json"), "w"), indent=1)
+    json.dump(res, open(os.path.join(root, "run_results.json" if not size
+                                    else "run_results_%d.json" % size), "w"),
+              indent=1)
     print(json.dumps({k: res[k] for k in
                       ("importResult", "formatPreservedAll", "integrity",
                        "portal_mib", "gate_ok")}, indent=1))
@@ -285,21 +502,32 @@ def run(root, patched):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["derive", "bake", "board", "run"])
-    ap.add_argument("--root", required=True)
+    ap.add_argument("cmd", choices=["derive", "bake", "alpha", "board", "run"])
+    ap.add_argument("--root")
     ap.add_argument("--patched")
     ap.add_argument("--variants", action="store_true")
     ap.add_argument("--rs", action="append")
+    ap.add_argument("--size", type=int,
+                    help="2x lane: bake/import at NxN instead of the retail "
+                         "512 (needs the Region baseTexSize patch to 2*N)")
+    ap.add_argument("--corpus", help="override the upscale corpus dir")
+    ap.add_argument("--out", help="output dir (bake: PNGs; alpha: masks)")
+    ap.add_argument("--baked", help="run: baked PNG dir override")
+    ap.add_argument("--portal", default=BASE_PORTAL,
+                    help="alpha: dat to read the retail masks from (read-only)")
     a = ap.parse_args()
     if a.cmd == "derive":
         derive(a.root)
     elif a.cmd == "bake":
-        bake(a.root, a.variants)
+        bake(a.root, a.variants, size=a.size, corpus=a.corpus, outdir=a.out)
+    elif a.cmd == "alpha":
+        assert a.out, "--out required"
+        alpha(a.out, size=a.size or 1024, portal=a.portal)
     elif a.cmd == "board":
         board(a.root, a.rs)
     elif a.cmd == "run":
         assert a.patched, "--patched required"
-        run(a.root, a.patched)
+        run(a.root, a.patched, size=a.size, baked=a.baked)
 
 
 if __name__ == "__main__":

@@ -108,12 +108,23 @@ def amp_for(cls):
 
 
 # ------------------------------------------------------------------ textures
+# Deblock pre-stage (block-artifact report 2026-08-17): when a directory of
+# deblock.py-filtered sources is supplied, it outranks the raw re-export so
+# every consumer (height pass included) sees the grid-free source.  Populate
+# with `python3 deblock.py batch ... --out $DATPATCH_DEBLOCK_BASE`.
+DEBLOCK_BASE = os.environ.get("DATPATCH_DEBLOCK_BASE", "")
+
+
 def tex_path(rs, prefer_remacri=True):
     if prefer_remacri:
         for d in REMACRI:
             p = d + rs + ".png"
             if os.path.exists(p):
                 return p, "remacri"
+    if DEBLOCK_BASE:
+        p = os.path.join(DEBLOCK_BASE, rs + ".png")
+        if os.path.exists(p):
+            return p, "deblock"
     p = TEX_BASE + rs + ".png"
     if os.path.exists(p):
         return p, "base"
