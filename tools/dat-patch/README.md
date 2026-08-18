@@ -29,10 +29,15 @@ and `docs/dat-patch/reports/`.
 - Planner: `budget_planner.py` — headroom knobs (measure target dats;
   budget = ceiling − measured − reserve; default reserve 300 MiB).  Run this
   against the SERVER'S dats, never assume base sizes.
-- Tripwires: `walk_check.py` (client-semantics b-tree/free-chain walk) and
+- Tripwires: `walk_check.py` (client-semantics b-tree/free-chain walk),
   `fix_degrade_chains.py` (the F1 degrade-chain invariant + its fixup — see
-  below).  Both are read-only by default and exit nonzero on violation, so a
-  driver can call them after every portal-mutating step.
+  below) and `color_ledger.py` (the I8 colour tripwire vs retail — see below).
+  All are read-only by default and exit nonzero on violation, so a driver can
+  call them after every portal-mutating step.
+- Take driver: `r7_take5.sh` — the r7.1 take-5 driver (deblock rebake + colour
+  anchor + colour ledger + degrade-chain fold).  Takes 1–4 live in
+  `/mnt/wbterminal2/dat-patch-r7/r7_driver{,2,3,4}.sh` for provenance; take 5
+  onwards is versioned here.
 - `data/table.json` — the surface-class gate table.
 
 ## The degrade-chain invariant (`fix_degrade_chains.py`)
@@ -65,7 +70,9 @@ python3 $FDC $PORTAL --check --retail $BASE \
 Placement, not decoration: run the fix *after* every lane has written (the
 baked set is only complete then) and *before* the final `compress`/`compact`,
 so the block churn from the rewrite is absorbed by the compact.  Then re-check
-the packaged file.  Unlike `walk_check.py` this is **not** cheap enough to run
+the packaged file.  Both calls are wired into `r7_take5.sh` (stages 4 and 5);
+the fix is idempotent — an already-collapsed chain reports `ALREADY-SINGLE`,
+and `--fix` re-analyses after writing and exits nonzero on any residue.  Unlike `walk_check.py` this is **not** cheap enough to run
 after literally every step on a spindle — a cold `--check` over the 1.5 GB r7
 portal is ~1.4 s of CPU but ~10 min of wall, all of it seeks — so two calls per
 take (fixup + ship gate) is the intended cadence.  `--baked-ids` skips the
@@ -81,6 +88,45 @@ only the ids named by multi-entry chains are resolved (a few thousand, with an
 uncompressed-size shortcut before any inflate) because the invariant can never
 depend on the rest.  `--full-baked` reproduces the audit's whole 2,412-id set,
 `--baked-ids FILE` accepts a precomputed list, `--dump-baked FILE` writes one.
+
+## The colour anchor and its ledger (`color_ledger.py`, I8)
+
+Every baked RenderSurface is exposure-anchored to RETAIL inside
+`legibility.bake_texture`: `mean_lum(shipped) = LUM_TARGET (1.15) ×
+mean_lum(retail)`.  Three rules keep that guarantee real:
+
+1. **The reference is retail, never a processed source.**  `matlib.tex_path`
+   takes `allow_deblock=False` for the anchor's base load, so a mounted
+   `DATPATCH_DEBLOCK_BASE` filters the *shipped albedo and the height pass*
+   without ever becoming the thing we measure against.
+2. **Both sides are averaged over the same texels.**  The Remacri corpus comes
+   back fully opaque with the cutout filled by whatever the upscaler painted;
+   the real alpha is transplanted back only after the bake.  Averaging the
+   reference over its cutout and the candidate over the whole frame is what
+   shipped 160 of r7's 2,192 bakes outside a ±15% band (0x060066B8 went out as
+   a pure-white silhouette at a solved gain of 16.45×).  The reference's alpha
+   now defines the population for both.
+3. **`DATPATCH_COLOR_ANCHOR`** selects the anchor: `lum` (r7 semantics),
+   `rgb` (per-channel means), `rgb+sat` (adds a chroma scale matching retail's
+   mean saturation).  r7.1 ships `rgb+sat`.
+
+```sh
+CL=$REPO/tools/dat-patch/color_ledger.py
+# gate stage: after the lanes bake, BEFORE anything is imported/compacted
+python3 $CL --baked $R7/dungeons/baked,$R7/doors/baked,... \
+  --retail-dir $DATPATCH_TEX_BASE --jobs 3 --json $R7/color-ledger.json \
+  --gate --min-records 1500 --sat-median-lo 0.95 --cast-p99 0.05 \
+  || { echo "COLOUR LEDGER TRIPWIRE FAILED"; exit 7; }
+```
+
+Defaults are calibrated against the shipped r7 corpus and the raw A-arm (see
+`docs/dat-patch/reports/color-anchor-2026-08-18.md`).  Placement matters: a
+colour regression is a *bake* fault, so the ledger runs on the bake artefacts —
+catching it there costs a re-bake, catching it at the eye-test costs the take.
+
+`texture_lane.py` also refuses to reuse a `baked/` directory stamped with a
+different corpus/anchor (`bake-config.json`); `DATPATCH_BAKE_CACHE=1` over a
+warm dir from a previous take would otherwise ship the old pixels silently.
 
 ## External data (NOT vendored)
 - Base dats: `~/ac_base_dats/` (read-only; on buildbox too).

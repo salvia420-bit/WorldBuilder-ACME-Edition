@@ -396,11 +396,14 @@ def bake_one(sid_int, base_portal):
                 a0[-1 - i] = (1 - t) * hi[E - 1 - i] + t * lo[i]
     h_full = {sid_int: m["h"]} if m.get("h") is not None else {}
     tex_after = {sid_int: arr}
-    # The luminance anchor must be RETAIL, not the upscale itself, or the
-    # 1.15x target degenerates into a blanket brightener that also ships any
+    # The luminance/colour anchor must be RETAIL, not the upscale itself, or
+    # the 1.15x target degenerates into a blanket brightener that also ships any
     # corpus drift (audit finding: lum_after/lum_base == 1.1500 on all 572).
+    # allow_deblock=False: a mounted DATPATCH_DEBLOCK_BASE is a *source* filter
+    # for the shipped albedo and the height pass — it must never become the
+    # anchor's reference, or the anchor stops measuring retail (I8, 2026-08-18).
     base_arr, _ = matlib.load_tex_full(rs, prefer_remacri=False,
-                                       max_side=max_side)
+                                       max_side=max_side, allow_deblock=False)
     tex_base = {sid_int: base_arr if base_arr is not None else arr}
     G = legibility.GAINSETS["mid"]
     out, infos = legibility.bake_all(tex_after, tex_base, metas, h_full,
@@ -426,6 +429,51 @@ def has_alpha(u8):
     return bool((u8[..., 3] < 250).mean() > 0.001)
 
 
+# ----- bake-cache provenance guard -------------------------------------------
+# DATPATCH_BAKE_CACHE=1 reuses baked/<rs>.png verbatim.  That is the resume
+# path, and it is also the single loudest silent-staleness trap in this lane:
+# point DATPATCH_REMACRI at a NEW corpus (the r7.1 deblocked A-arm) over a warm
+# baked/ dir and the "rebake" is a no-op — the take ships the OLD pixels while
+# every log line says it re-encoded.  So the cache carries a stamp of every
+# input that decides its bytes, and a mismatch is fatal, not a warning.
+BAKE_CONFIG_KEYS = ("DATPATCH_REMACRI", "DATPATCH_DEBLOCK_BASE",
+                    "DATPATCH_TEX_BASE", "DATPATCH_WRAPPED_CORPUS",
+                    "DATPATCH_BAKE_MAX_SIDE", "DATPATCH_COLOR_ANCHOR")
+
+
+def bake_config_sig():
+    import legibility
+    sig = {k: os.environ.get(k, "") for k in BAKE_CONFIG_KEYS}
+    sig["prefer_remacri"] = bool(PREFER_REMACRI)
+    sig["lum_target"] = legibility.LUM_TARGET
+    sig["gainset"] = "mid"
+    return sig
+
+
+def bake_config_guard(baked_dir):
+    p = os.path.join(baked_dir, "bake-config.json")
+    cur = bake_config_sig()
+    if os.path.exists(p):
+        try:
+            old = json.load(open(p))
+        except Exception:
+            old = None
+        if old is not None and old != cur:
+            diff = {k: (old.get(k), cur.get(k)) for k in set(old) | set(cur)
+                    if old.get(k) != cur.get(k)}
+            msg = ("STALE BAKE CACHE: %s was produced under a different bake "
+                   "configuration.  Differences (old -> new): %s\n"
+                   "  Re-baking with DATPATCH_BAKE_CACHE=1 over this directory "
+                   "would silently ship the OLD pixels.\n"
+                   "  Fix: bake into a fresh --root, or `rm -rf %s`, or set "
+                   "DATPATCH_BAKE_CACHE_FORCE=1 if you truly mean to reuse it."
+                   % (p, json.dumps(diff, sort_keys=True), baked_dir))
+            if os.environ.get("DATPATCH_BAKE_CACHE_FORCE", "0") != "1":
+                raise SystemExit(msg)
+            print("WARNING (forced): " + msg)
+    json.dump(cur, open(p, "w"), indent=1, sort_keys=True)
+
+
 # ----- full run --------------------------------------------------------------
 def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
              tag):
@@ -441,6 +489,7 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
 
     baked_dir = os.path.join(root, "baked")
     os.makedirs(baked_dir, exist_ok=True)
+    bake_config_guard(baked_dir)
     res = dict(tag=tag, requested=len(want), processed=0, encoded=0,
                skipped_palette=0, skipped_nondxt=0, skipped_nobase=0,
                skipped_other=0, imports=[], skips=[])
@@ -553,7 +602,11 @@ def run_lane(root, base_portal, patched_portal, ids_file, wbt_run, board_gids,
         plan.append(dict(sid=sid_hex, rs=rs_hex, st=st_hex, fmt=fmt,
                          w=W, h=H, srcFmt=hdr["fmtname"],
                          cls=info.get("cls"), embossed=info.get("embossed"),
-                         lum_after=info.get("lum_after"), lum_base=info.get("lum_base")))
+                         lum_after=info.get("lum_after"), lum_base=info.get("lum_base"),
+                         colorAnchor=info.get("color_anchor"),
+                         satGain=info.get("sat_gain"),
+                         exposureGain=info.get("exposure_gain"),
+                         cached=bool(info.get("cached"))))
         res["encoded"] += 1
         res["processed"] += 1
         if (i + 1) % 25 == 0:

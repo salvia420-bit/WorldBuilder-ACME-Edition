@@ -209,11 +209,20 @@ def encode_raw(rgba, fmt):
     raise ValueError("no raw encoder for PixelFormat %d" % fmt)
 
 
-def encode_paletted(rgba, fmt, palette_argb):
+def encode_paletted(rgba, fmt, palette_argb, allowed=None):
     """THE PALETTE PATH.  RGBA -> nearest palette index, keeping the record
     INDEX16/P8 against its own DefaultPaletteId.  Never DXT: converting a
     palettized record freezes its colours and breaks ClothingTable subpalette
-    recolours (pallib.py RECOLOR SAFETY)."""
+    recolours (pallib.py RECOLOR SAFETY).
+
+    `allowed`: optional iterable of palette indices the search may return.
+    Retail records use a small subset of their 2048-colour palette (median
+    422), and indices <8 are clipmap-transparency sentinels -- an
+    unconstrained nearest search hands upscaled pixels to unused entries and
+    can punch NEW transparent holes into clipmap surfaces (the 2026-08-18
+    bake-prep census: 7/10 sampled sentinel-free records gained sentinel
+    pixels).  Restricting to the SOURCE record's own used set makes
+    'no new palette entries, no new holes' an invariant."""
     import numpy as np
     pal = np.zeros((len(palette_argb), 4), np.int16)
     a = np.asarray(palette_argb, np.uint32)
@@ -221,6 +230,12 @@ def encode_paletted(rgba, fmt, palette_argb):
     pal[:, 1] = (a >> 8) & 0xFF
     pal[:, 2] = a & 0xFF
     pal[:, 3] = (a >> 24) & 0xFF
+    remap = None
+    if allowed is not None:
+        remap = np.unique(np.asarray(list(allowed), np.int64))
+        if remap.size == 0 or remap.min() < 0 or remap.max() >= len(pal):
+            raise ValueError("allowed index set empty or out of palette range")
+        pal = pal[remap]
     px = rgba.reshape(-1, 4).astype(np.int16)
     # chunked nearest-neighbour so a 2048^2 x 2048-colour palette never
     # materialises a 8-billion-element distance matrix
@@ -229,6 +244,8 @@ def encode_paletted(rgba, fmt, palette_argb):
     for i in range(0, px.shape[0], step):
         d = px[i:i + step, None, :] - pal[None, :, :]
         out[i:i + step] = (d.astype(np.int32) ** 2).sum(2).argmin(1)
+    if remap is not None:
+        out = remap[out]
     if fmt == PF_INDEX16:
         return out.astype("<u2").tobytes()
     if out.max(initial=0) > 255:
@@ -440,9 +457,15 @@ def _encode_from_png(png, src, tw, th, portal):
     if fmt in PALETTED:
         if portal is None:
             raise ValueError("palette route needs --portal for the Palette record")
+        import numpy as np
         import pallib
         colors = pallib.palette_colors(portal, src["palette"])
-        data = encode_paletted(rgba, fmt, colors)
+        # the SOURCE record's own used-index set (all mip levels) -- see
+        # encode_paletted: candidates are restricted so the upscale can never
+        # introduce palette entries (or clipmap sentinels) retail never used.
+        src_idx = np.frombuffer(src["data"],
+                                "<u2" if fmt == PF_INDEX16 else np.uint8)
+        data = encode_paletted(rgba, fmt, colors, allowed=np.unique(src_idx))
     elif fmt in DXT_BLOCK_BYTES:
         data = encode_dxt(rgba, fmt)
     else:

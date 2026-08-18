@@ -115,13 +115,25 @@ def amp_for(cls):
 DEBLOCK_BASE = os.environ.get("DATPATCH_DEBLOCK_BASE", "")
 
 
-def tex_path(rs, prefer_remacri=True):
+def tex_path(rs, prefer_remacri=True, allow_deblock=True):
+    """Resolve a RenderSurface id to a source PNG.
+
+    `allow_deblock=False` forces the RETAIL re-export even when a deblocked
+    corpus is mounted.  That flag exists for exactly one caller — the
+    legibility bake's *exposure/colour anchor reference* (texture_lane.
+    bake_one).  The anchor's contract is "mean lum = LUM_TARGET x RETAIL mean"
+    (legibility.py:142); if DATPATCH_DEBLOCK_BASE silently substituted the
+    filtered source here the anchor would be measuring against a processed
+    image and would ship whatever exposure the filter drifted (small on the
+    2026-08-17 seed-gated filter, but unbounded for any future pre-stage).
+    Anchors reference retail, always.
+    """
     if prefer_remacri:
         for d in REMACRI:
             p = d + rs + ".png"
             if os.path.exists(p):
                 return p, "remacri"
-    if DEBLOCK_BASE:
+    if DEBLOCK_BASE and allow_deblock:
         p = os.path.join(DEBLOCK_BASE, rs + ".png")
         if os.path.exists(p):
             return p, "deblock"
@@ -134,14 +146,14 @@ def tex_path(rs, prefer_remacri=True):
 _texcache = {}
 
 
-def load_tex(rs, prefer_remacri=True, max_side=512):
+def load_tex(rs, prefer_remacri=True, max_side=512, allow_deblock=True):
     """RGBA float array in [0,1]; downsampled to <= max_side for the height
     pass (the operator's radii are FRACTIONS of the tile, so the field is
     resolution independent -- but a 2048^2 morphology pass is not free)."""
-    k = (rs, prefer_remacri, max_side)
+    k = (rs, prefer_remacri, max_side, allow_deblock)
     if k in _texcache:
         return _texcache[k]
-    p, src = tex_path(rs, prefer_remacri)
+    p, src = tex_path(rs, prefer_remacri, allow_deblock)
     if p is None:
         return None, None
     im = Image.open(p).convert("RGBA")
@@ -154,9 +166,9 @@ def load_tex(rs, prefer_remacri=True, max_side=512):
     return a, src
 
 
-def load_tex_full(rs, prefer_remacri=True, max_side=1024):
+def load_tex_full(rs, prefer_remacri=True, max_side=1024, allow_deblock=True):
     """For RENDERING (not the height pass): keep it big-ish but bounded."""
-    p, src = tex_path(rs, prefer_remacri)
+    p, src = tex_path(rs, prefer_remacri, allow_deblock)
     if p is None:
         return None, None
     im = Image.open(p).convert("RGBA")
@@ -280,7 +292,12 @@ def relief_height(rgba):
 def height_for(rs, prefer_remacri=True, max_side=512):
     """Cached height field for a RenderSurface id.  Returns (h, src) or (None, src)."""
     os.makedirs(CACHE, exist_ok=True)
-    tag = "%s_%s_%d" % (rs, "rem" if prefer_remacri else "base", max_side)
+    # The deblock pre-stage changes the SOURCE the height operator sees, so it
+    # must change the cache key too -- otherwise a warm hcache from a non-
+    # deblocked run is silently reused and the "deblocked corpus" run measures
+    # the old field (staleness trap class, memory/MEMORY.md §staleness-rebuild).
+    tag = "%s_%s_%d%s" % (rs, "rem" if prefer_remacri else "base", max_side,
+                          "_db" if (DEBLOCK_BASE and not prefer_remacri) else "")
     p = CACHE + tag + ".npy"
     ps = CACHE + tag + ".src"
     if os.path.exists(p):
