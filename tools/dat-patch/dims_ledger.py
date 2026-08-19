@@ -58,6 +58,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("candidate")
     ap.add_argument("--previous", required=True, help="previous release portal.dat")
+    ap.add_argument("--candidate-highres",
+                    help="candidate client_highres.dat: overlay its 0x06 headers over "
+                         "the candidate portal's (client precedence — CLCache probes "
+                         "slot 3 first). REQUIRED to gate an r8 HIFI-split pair, where "
+                         "the portal no longer carries the moved records.")
+    ap.add_argument("--previous-highres",
+                    help="previous release highres, overlaid the same way (r8+ baselines)")
     ap.add_argument("--json", help="write the full ledger here")
     ap.add_argument("--gate", action="store_true", help="exit 1 on violation")
     ap.add_argument("--allow", help="file of hex ids allowed to downscale/reformat")
@@ -71,7 +78,11 @@ def main():
                 allow.add(int(line, 16))
 
     cand = tex_headers(datlib.Dat(args.candidate))
+    if args.candidate_highres:
+        cand.update(tex_headers(datlib.Dat(args.candidate_highres)))
     prev = tex_headers(datlib.Dat(args.previous))
+    if args.previous_highres:
+        prev.update(tex_headers(datlib.Dat(args.previous_highres)))
 
     downscales, upscales, fmt_changes = [], [], []
     missing = sorted(set(prev) - set(cand))

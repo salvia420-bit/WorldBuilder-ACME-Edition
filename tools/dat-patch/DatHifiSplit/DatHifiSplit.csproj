@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DatHifiSplit</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Local DRW source (not the 2.1.2 NuGet): needed to debug/fix the write-path
+         corruption found 2026-08-17 (phantom-offset write on record grow). -->
+    <PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.8" />
+  </ItemGroup>
+</Project>
