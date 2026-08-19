@@ -170,6 +170,7 @@ def open_dat(path, preload=None):
     d.filetype, d.blocksize, d.filesize, d.dataset, d.subset = h[:5]
     d.freehead, d.freetail, d.freecount, d.btree = h[5:9]
     d.files = {}
+    d.flags = {}
     d._read_dir(d.btree)
     return d
 
