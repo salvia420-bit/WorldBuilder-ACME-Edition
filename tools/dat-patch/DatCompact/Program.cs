@@ -25,10 +25,14 @@ using DatReaderWriter.Lib.IO.BlockAllocators;
 if (args.Length < 3) { Console.Error.WriteLine("usage: DatCompact <source.dat> <seed.dat> <out.dat> [--verify] [--prune-seed-extra]"); return 2; }
 string srcPath = args[0], seedPath = args[1], outPath = args[2];
 bool verify = args.Contains("--verify");
-// --prune-seed-extra: r8 HIFI split — the trimmed portal legitimately LACKS the
-// ids DatHifiSplit moved to the highres, while the dense retail seed still has
-// them. Delete the seed-only ids from the out instead of refusing (exit 3).
-bool pruneSeedExtra = args.Contains("--prune-seed-extra");
+// --prune-seed-extra is DEAD: it rode on Tree.TryDelete, which corrupted the
+// b-tree at scale on 2026-08-19 (169/213 requested deletes landed, 3 innocent
+// records lost, 1 phantom id). A split-trimmed portal is built by
+// RECONSTRUCTION in DatHifiSplit instead (fresh InitNew + copy-all-but).
+if (args.Contains("--prune-seed-extra")) {
+    Console.Error.WriteLine("--prune-seed-extra is disabled: DRW Tree.TryDelete corrupts at scale (2026-08-19). Use DatHifiSplit reconstruction.");
+    return 2;
+}
 
 string baseDats = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "ac_base_dats");
 if (Path.GetFullPath(outPath).StartsWith(Path.GetFullPath(baseDats))) {
@@ -54,18 +58,10 @@ var srcIds = srcEntries.Select(e => e.Id).ToHashSet();
 var seedOnly = dst.Tree.GetFilesInRange(0x00000000u, 0xFFFFFFFFu)
                   .Select(f => f.Id).Where(id => !srcIds.Contains(id)).ToList();
 Console.WriteLine($"source records: {srcEntries.Count}; seed-only records: {seedOnly.Count}");
-if (seedOnly.Count > 0 && !pruneSeedExtra) {
-    foreach (var id in seedOnly.Take(10)) Console.Error.WriteLine($"  seed-only: 0x{id:X8}");
-    Console.Error.WriteLine("seed has records the source lacks — wrong seed for this source (or pass --prune-seed-extra for a split-trimmed source)");
-    return 3;
-}
 if (seedOnly.Count > 0) {
-    int pruned = 0;
-    foreach (var id in seedOnly) {
-        if (dst.Tree.TryDelete(id, out _)) pruned++;
-        else { Console.Error.WriteLine($"  prune FAILED: 0x{id:X8}"); return 3; }
-    }
-    Console.WriteLine($"pruned {pruned} seed-only records (their blocks recycle into the copy)");
+    foreach (var id in seedOnly.Take(10)) Console.Error.WriteLine($"  seed-only: 0x{id:X8}");
+    Console.Error.WriteLine("seed has records the source lacks — wrong seed for this source");
+    return 3;
 }
 
 int copied = 0, unchanged = 0, failed = 0, flagDrift = 0;
