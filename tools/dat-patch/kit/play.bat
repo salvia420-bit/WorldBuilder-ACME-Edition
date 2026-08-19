@@ -26,9 +26,20 @@ for /f "usebackq tokens=1,2 delims=|" %%A in ("kit-manifest.txt") do (
 )
 
 if defined BAD (
-  powershell -NoProfile -Command "[void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms');[System.Windows.Forms.MessageBox]::Show('This install is incomplete — the game will NOT start:'+[char]10+[char]10+'%BAD%'+[char]10+'Re-download the kit or restore the named file(s).','ACME kit — missing DAT files',0,16)"
+  rem ACME_KIT_CHECK_SILENT=1: headless gate mode — same refusal path, console
+  rem message instead of the blocking MessageBox (used by the box gate over ssh).
+  if defined ACME_KIT_CHECK_SILENT (
+    echo LOUD-FAIL: %BAD%
+  ) else (
+    powershell -NoProfile -Command "[void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms');[System.Windows.Forms.MessageBox]::Show('This install is incomplete — the game will NOT start:'+[char]10+[char]10+'%BAD%'+[char]10+'Re-download the kit or restore the named file(s).','ACME kit — missing DAT files',0,16)"
+  )
   exit /b 1
 )
 
+rem ACME_KIT_CHECK_ONLY=1: verify the manifest and report, never launch (gate/CI).
+if defined ACME_KIT_CHECK_ONLY (
+  echo KIT-OK
+  exit /b 0
+)
 start "" acclient.exe %*
 exit /b 0
