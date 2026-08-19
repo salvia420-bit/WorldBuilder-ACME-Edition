@@ -1,6 +1,7 @@
 """Minimal read-only AC .dat reader (port of ACE.DatLoader's DatReader/DatDirectory)
 plus a Setup (0x02) parser sufficient to recover PlacementFrames."""
 import struct
+import zlib
 
 
 class Dat:
@@ -11,6 +12,7 @@ class Dat:
         self.filetype, self.blocksize, self.filesize, self.dataset, self.subset = h[:5]
         self.freehead, self.freetail, self.freecount, self.btree = h[5:9]
         self.files = {}
+        self.flags = {}          # b-tree entry bitflags; bit 0 = IsCompressed
         self._read_dir(self.btree)
 
     def read_raw(self, offset, size):
@@ -38,18 +40,29 @@ class Dat:
         base = 62 * 4 + 4
         entries = []
         for i in range(cnt):
-            _bf, oid, foff, fsize, date, itr = struct.unpack_from("<6I", b, base + i * 24)
+            bf, oid, foff, fsize, date, itr = struct.unpack_from("<6I", b, base + i * 24)
             entries.append((oid, foff, fsize, itr))
             self.files[oid] = (foff, fsize, itr)
+            self.flags[oid] = bf
         if branches[0] != 0:
             for i in range(cnt + 1):
                 self._read_dir(branches[i])
 
     def get(self, oid):
+        """Record bytes, transparently inflated when the b-tree entry carries
+        the IsCompressed flag (stored form: u32 uncompressedSize + zlib)."""
         if oid not in self.files:
             return None
         off, size, _ = self.files[oid]
-        return self.read_raw(off, size)
+        raw = self.read_raw(off, size)
+        if self.flags.get(oid, 0) & 0x1:
+            usize = struct.unpack_from("<I", raw, 0)[0]
+            out = zlib.decompress(raw[4:])
+            if len(out) != usize:
+                raise ValueError("0x%08X: inflated %d != header %d"
+                                 % (oid, len(out), usize))
+            return out
+        return raw
 
 
 class R:

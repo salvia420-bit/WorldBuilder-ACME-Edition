@@ -149,6 +149,20 @@ walk
 compress
 compact     # ship file dense
 
+# ---- STAGE 4b: DIMS LEDGER (resolution tripwire, 2026-08-18) ---------------
+# Compare every shipped 0x06 header against the PREVIOUS RELEASE: any
+# downscale or format change fails the take.  Added after take 5 shipped 711
+# textures at 4x lower resolution than r7 when the adopted deblock corpus
+# (1,630 files) silently missed ids the r7 rewrap corpus (4,041) served —
+# reports/eyetest-ab-review-2026-08-18.md.  Whitelist deliberate changes via
+# DATPATCH_DIMS_ALLOW (hex ids, one per line).
+log "== dims ledger vs previous release =="
+PREV_RELEASE="${DATPATCH_PREV_RELEASE:-/mnt/wbterminal2/dat-patch-r7/degrade-fix-proof/client_portal.dat}"
+DL_ARGS="$PORTAL --previous $PREV_RELEASE --json $R7/dims-ledger.json --gate"
+[ -n "${DATPATCH_DIMS_ALLOW:-}" ] && DL_ARGS="$DL_ARGS --allow $DATPATCH_DIMS_ALLOW"
+# shellcheck disable=SC2086
+python3 "$TOOLS/dims_ledger.py" $DL_ARGS || { log "DIMS LEDGER TRIPWIRE FAILED"; exit 7; }
+
 # ---- STAGE 5: final validation ---------------------------------------------
 log "== final validation =="
 python3 - "$PORTAL" "$EXPECT_ENTRIES" <<'EOF'
