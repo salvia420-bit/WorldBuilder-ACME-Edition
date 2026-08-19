@@ -94,7 +94,12 @@ RECONSTRUCTION.
     absent-file path graceful (the hidden file stays unlocked), DDD passes,
     world entry OK, NO CRASH, FAULTS=0 through a full documentation tour —
     a launcher-bypassing player gets a running world with the 2,412 moved
-    textures missing, not a crash. Video kept for the owner.
+    textures missing, not a crash. The documentation VIDEO of this arm was
+    NOT captured: its tour aborted `ABORT-USER-ACTIVE (idle ms=0)` at
+    17:19:25 — a real input event, treated as the human returning to the
+    1070; all box work stopped immediately (test client killed, highres
+    restored, no test processes left). The bypass conclusions above were
+    already established headlessly before the abort.
   - One harness re-learn: killing the previous arm's client process does NOT
     free the ACE session — the next login inside ~110 s trips Account-In-Use
     and boots BOTH (client exits code=0 at login). Respect the ≥130 s gap
@@ -109,3 +114,17 @@ RECONSTRUCTION.
   stack parked on the buildbox, which is SPOT-preempting every 8–40 min. It
   slots into any r8 respin unchanged (9 small ids, list in
   reports/eyetest-ab-review-2026-08-18.md).
+
+## Artifacts
+- /mnt/wbterminal2/dat-patch-r8/split/ — work-portal.dat (THE r8 portal,
+  sha `c0073025…`) + r8-client_highres.dat (THE r8 highres, sha `e7c82c33…`)
+  + ours-ids.txt + ours-summary.json + split-run2.log +
+  split-run-DELETE-CORRUPTION.log + highres-compact.log + r8-pair.sha256.
+- /mnt/wbterminal2/r8-gate-2026-08-19/ — r8-mount-tour.mkv, frames/ (68),
+  dims-ledger-r8.json, ace-session-extract.log, split/compact logs.
+- Taildropped to the redmi: r8-mount-tour.mkv + 4 key frames
+  (Holtburg/Alabree/Shoushi/Muggy).
+- 1070 left state: D:\ac-dat-test holds the r8 pair live (r7.2 + WBT-DXT
+  kept as .r72-bak/.wbtdxt-bak), SAFEPAL-FMCAP exe as acclient.exe, play.bat
+  + kit-manifest.txt staged, sha256 stamp files current. r8-arm acdt logs
+  remain in C:\Temp\acdt\. No test processes left running.
