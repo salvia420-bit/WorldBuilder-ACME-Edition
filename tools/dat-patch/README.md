@@ -39,6 +39,23 @@ and `docs/dat-patch/reports/`.
   `/mnt/wbterminal2/dat-patch-r7/r7_driver{,2,3,4}.sh` for provenance; take 5
   onwards is versioned here.
 - `data/table.json` — the surface-class gate table.
+- Kit (`kit/`) — everything the PLAYER touches, added 2026-08-19 for r8:
+  `assemble_kit.sh` builds a shippable kit dir from built dats (sha-verifies every
+  copy, generates `kit-manifest.txt` + `SHA256SUMS.txt` + `README.txt`, self-gates
+  with play.bat's own rule, packages the tgz); `acme-patch-client.ps1` +
+  `patch-my-client.bat` patch the player's OWN `acclient.exe` (the kit ships no
+  client bytes — community-norms.md); `play.bat` is the fresh-install loud-fail
+  launcher; `check_ps1_table.py` gates the patcher's table against the (untracked)
+  `patch_client.py` registry AND proves the result is byte-identical to the
+  in-client-gated exe — `assemble_kit.sh` refuses to run without it; `kit-gate.ps1`
+  is the 14-arm headless Windows gate for both mechanisms.
+  ⚠ `play.bat` deliberately avoids parentheses in message text and does every file
+  test in a subroutine: cmd parses a whole `( … )` block at once, so a `)` inside
+  an expanded variable silently mangles the block (that defect let a truncated dat
+  pass as OK — reports/r8-kit-assembly-2026-08-19.md).
+- `DatDeleteRepro/` — synthetic repro for DRW's `Tree.TryDelete` b-tree corruption
+  (upstream-drw-btree-delete-fix.md). **No tool in this lane may call TryDelete**;
+  DatHifiSplit builds by reconstruction instead.
 
 ## The degrade-chain invariant (`fix_degrade_chains.py`)
 

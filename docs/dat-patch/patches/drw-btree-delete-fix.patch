@@ -1,0 +1,98 @@
+From 694c4ac927537afdee59d11537b8fa145d3d7a92 Mon Sep 17 00:00:00 2001
+From: wbterminal <salvia420@gmail.com>
+Date: Wed, 19 Aug 2026 22:39:03 -0230
+Subject: [PATCH] Fix b-tree delete: left-sibling separator off-by-one +
+ successor pulled from the wrong child
+
+Tree.TryDelete corrupted the tree once deletes hit internal nodes (a portal-scale
+tree, ~800+ entries): requested deletes silently refused, innocent records lost,
+phantom ids, and TryGetFile misses on records an in-order walk still returns.
+
+Four sites, all in the rebalance path:
+ * DeleteKeyFromSubtree, borrow-from-left: the separator between leftSibling and
+   childNode is Files[subtreeIndexInNode - 1], not Files[subtreeIndexInNode].
+ * DeleteKeyFromSubtree, merge-with-left: same off-by-one, in both the key that
+   sinks into the merged node and the one removed from the parent.
+ * DeleteKeyFromNode: DeleteSuccessor was called on predecessorChild (the LEFT
+   child) instead of successorChild.
+ * DeleteSuccessor: the non-leaf path recursed into DeletePredecessor, returning
+   the rightmost key of the leftmost subtree instead of the leftmost key.
+
+Repro (synthetic, no retail dats): insert N sparse ids, delete every 8th
+ascending, then assert (1) requested keys gone, (2) all other keys present and
+findable, (3) in-order walk sorted with no ids that were never inserted. Before:
+corrupt from N=800 up. After: clean for N up to 20,000 across strides 1..13,
+three seeds, ascending and shuffled delete order.
+---
+ .../Lib/IO/DatBTree/DatBTreeReaderWriter.cs   | 25 +++++++++++++------
+ 1 file changed, 17 insertions(+), 8 deletions(-)
+
+diff --git a/DatReaderWriter/Lib/IO/DatBTree/DatBTreeReaderWriter.cs b/DatReaderWriter/Lib/IO/DatBTree/DatBTreeReaderWriter.cs
+index 659f389..ff85c39 100644
+--- a/DatReaderWriter/Lib/IO/DatBTree/DatBTreeReaderWriter.cs
++++ b/DatReaderWriter/Lib/IO/DatBTree/DatBTreeReaderWriter.cs
+@@ -895,8 +895,11 @@ namespace DatReaderWriter.Lib.IO.DatBTree {
+                 if (leftSibling is not null && leftSibling.FileCount > Degree - 1) {
+                     // left sibling has a node to spare, so this moves one node from left sibling 
+                     // into parent's node and one node from parent into this current node ("child")
+-                    childNode.InsertFile(0, parentNode.Files[subtreeIndexInNode]);
+-                    parentNode.Files[subtreeIndexInNode] = leftSibling.Files[leftSibling.FileCount - 1];
++                    // The separator between leftSibling and childNode is Files[leftIndex]
++                    // (= subtreeIndexInNode - 1), NOT Files[subtreeIndexInNode], which separates
++                    // childNode from its RIGHT sibling.
++                    childNode.InsertFile(0, parentNode.Files[leftIndex]);
++                    parentNode.Files[leftIndex] = leftSibling.Files[leftSibling.FileCount - 1];
+                     leftSibling.RemoveFileAt(leftSibling.FileCount - 1);
+ 
+                     if (!leftSibling.IsLeaf) {
+@@ -927,7 +930,10 @@ namespace DatReaderWriter.Lib.IO.DatBTree {
+                 else {
+                     // this block merges either left or right sibling into the current node "child"
+                     if (leftSibling != null) {
+-                        childNode.InsertFile(0, parentNode.Files[subtreeIndexInNode]);
++                        // Same off-by-one as the borrow case: the key that separates
++                        // leftSibling from childNode is Files[leftIndex], and that is the
++                        // one that must sink into the merged node and then be removed.
++                        childNode.InsertFile(0, parentNode.Files[leftIndex]);
+                         // Prepend leftSibling's files before childNode's existing files
+                         // We need: leftSibling.Files + [parentFile] + childNode.Files
+                         // childNode already has parentFile at position 0, so we prepend leftSibling
+@@ -937,7 +943,7 @@ namespace DatReaderWriter.Lib.IO.DatBTree {
+                         }
+ 
+                         parentNode.RemoveBranchAt(leftIndex);
+-                        parentNode.RemoveFileAt(subtreeIndexInNode);
++                        parentNode.RemoveFileAt(leftIndex);
+ 
+                         WriteNode(childNode);
+                         WriteNode(parentNode);
+@@ -999,7 +1005,8 @@ namespace DatReaderWriter.Lib.IO.DatBTree {
+                 }
+ 
+                 if (successorChild.FileCount >= Degree) {
+-                    var successor = DeleteSuccessor(predecessorChild);
++                    // the successor of the deleted key lives in the RIGHT child
++                    var successor = DeleteSuccessor(successorChild);
+                     node.Files[keyIndexInNode] = successor;
+                     WriteNode(node);
+                 }
+@@ -1054,11 +1061,13 @@ namespace DatReaderWriter.Lib.IO.DatBTree {
+                 return result;
+             }
+ 
+-            if (!TryGetNode(node.Branches[0], out var predecessor)) {
+-                throw new Exception($"Failed to look up predecessor");
++            if (!TryGetNode(node.Branches[0], out var successor)) {
++                throw new Exception($"Failed to look up successor");
+             }
+ 
+-            return DeletePredecessor(predecessor);
++            // recurse on the SUCCESSOR path (leftmost), not DeletePredecessor, which
++            // would return the rightmost key of the leftmost subtree
++            return DeleteSuccessor(successor);
+         }
+ 
+         /// <inheritdoc/>
+-- 
+2.47.3
+

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DatDeleteRepro</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- the VENDORED DRW source, not the NuGet: this tool exists to characterise
+         (and to test a fix for) Tree.TryDelete's b-tree corruption. -->
+    <ProjectReference Include="../../../external/DatReaderWriter/DatReaderWriter/DatReaderWriter.csproj" />
+  </ItemGroup>
+</Project>
