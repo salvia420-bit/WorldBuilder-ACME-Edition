@@ -78,10 +78,10 @@ Fallbacks, decided in advance:
 | F3 | GPU tier A | DONE | faster than planned: **16,922 records in ~30 min** on the T4 (all tiers, not just A) |
 | F4 | GPU tiers B+D | DONE | included in F3 |
 | F5 | GPU tier C icons | DONE (not shipped) | baked and parked on the box; see the routing decision |
-| F6 | bake + import | bake DONE (1,746 DXT + 3,122 palette, 13 terrain-protected refusals, 0 failures); landing in progress | |
-| F7 | gates | colour ledger PASS on the baked sample (lum 1.1540, cast p99 0.058) | |
-| F8 | kit + zip | pending | |
-| F9 | 1070 in-client arm | pending | |
+| F6 | bake + import | DONE (session 2) | ALL 4,868 landed: 1,746/1,746 DXT (the 5 4096-side fails re-baked at 2048 after the root-cause fix) + 3,122/3,122 palette (readback-verified byte-identical); dat compacted 2.00 GiB -> 1.45 GiB final |
+| F7 | gates | DONE | walk_check OK (entries=9,575); dims ledger vs r8: added 4,868, 0 downscales / format changes / missing; coverage 4,706 -> 9,574 highres 0x06 (2,412 -> 7,280 of 20,684 retail); colour ledger PASS on the baked sample (lum 1.1540, cast p99 0.058); degrade chains untouched by design (fill is additive to highres only) |
+| F8 | kit + zip | DONE (session 2) | acme-r9 kit assembled with .tgz + .zip; patcher-table gate PASS |
+| F9 | 1070 in-client arm | pending | the one mandatory gate left before announcing |
 
 ### Things that bit, and the fixes
 - **SPOT preempted the box mid-session.** The upscale driver skips existing
@@ -98,3 +98,55 @@ Fallbacks, decided in advance:
   of raw DXT, which would cross the 2 GiB HARD ceiling before the final compress
   could reclaim it. The landing driver now compresses BETWEEN the two write
   stages, not only at the end.
+
+### Session 2 (recovery, same day) — the finisher died at the ceiling
+- **Compress-then-insert was not enough: DatCompress LEAKS its savings.** DRW's
+  `WriteBlock` reuses an overwritten record's chain head but never returns the
+  freed tail blocks to the free chain (header FreeBlockCount stayed 0 all
+  night), so every compress pass strands its savings as dead blocks and every
+  new insert appends at EOF. The palette inserts therefore hit the 2^31 hard
+  ceiling at 1,012/3,122 records (`AllocateEmptyBlocks` int-overflow throw),
+  and the finisher died after the dims ledger with no kit, no RESULTS.md.
+- **Recovery = DatCompact** (source = the 2.00 GiB stuck dat, seed = the dense
+  r8 kit highres): 7,460/7,460 records copied, verify sets clean, 2.00 GiB ->
+  1.33 GiB (~715 MB of dead blocks reclaimed).
+- **The 5 DXT failures root-caused**: DRW's typed `TryWriteFile` packs into a
+  fixed 5 MB rented buffer (its own TODO admits it); the five 4096-side bakes
+  (8.4-16.8 MB records) overran it -> bare ArgumentOutOfRangeException. Two
+  fixes: WBT now routes records >4.5 MB through a right-sized buffer +
+  `TryWriteFileBytes` (proven: 4096^2 DXT1 imports and reads back), and the
+  lane policy caps the DXT route at 2048-side (`fill_import.py --max-side`,
+  last session's uncommitted intent) — the 5 records ship at 2048/1024 from
+  Lanczos-downscaled bakes.
+- **DatRecordInsert grew `--compress`**: palette records now land zlib-compressed
+  at insert time (IsCompressed flag), so no post-insert compress pass — and no
+  leaked tail blocks — is needed for the remaining 2,110 palettes.
+
+### Session 2 continued — owner: "fill the free space in the two dats"
+Icons landed and the portal-side plan items audited against what actually shipped:
+- **Tier C+D icons: LANDED.** 13,301 remaining fill ids: 12,951 DXT (WBT import,
+  0 failures) + 350 palette (`--compress`, readback-verified) + 13
+  terrain-protected refusals. The 117 upscales missing from the box corpus were
+  Remacri'd on the T4 in one 6-second pass (all P8/INDEX16 icons). Highres
+  1.56 -> 1.78 GiB before final compress+compact.
+- **4.P1 scenery aa+ab: ALREADY SHIPPED — the plan entry was stale.** All 340
+  surfaces' RS records are in the r8 highres (take-5 landed both chunks;
+  the split moved them) and their 0x05 collapses are already in the r8 portal
+  (collapse pass reports all "unchanged"). Verified, no bytes owed.
+- **Statics tranche: ALREADY RAN — "no full-world run" was stale too.** Fresh
+  full-world enumerate (60 s, warm hcache) reproduces the dossier numbers
+  (1,921 -> 881 -> 438 displace); 437 of 438 are already upgraded in the r8
+  portal. The one straggler 0x010040E9 was built (228 -> 912 tris, 4.00x) and
+  landed via obj-import into the r9 portal (validate.py green: physDrift 0,
+  drawing carried, +51,200 bytes).
+- **4.P2 band-object lane: clean NEGATIVE result.** All 5 degrade-deferred
+  carriers' band-0 objects (0x01003AF2/5/7/8/9) are gate-refused — no carving
+  surface (no height field / zero amp on every poly). The same gate every lane
+  obeys; nothing can be displaced. Deferral closed as no-op.
+- **4.P3 env re-cut: NOT turnkey — needs its own staged session.** The
+  orientation veto (C2) IS wired into relief3d/env_geo since r7, but
+  variant_release.sh requires the PRE-envgeo portal (re-cloning on the shipped
+  r8 portal double-shells). A re-cut therefore means restaging the portal
+  lineage; parked with this note.
+- **4.P4 creature-subdiv spike: not attempted this session** (timeboxed
+  research; queue next).

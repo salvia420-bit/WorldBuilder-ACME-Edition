@@ -63,6 +63,9 @@ def main():
     ap.add_argument('--anchor', default='rgb+sat')
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--jobs', type=int, default=3)
+    ap.add_argument('--max-side', type=int, default=2048,
+                    help='cap the DXT route (WBT refuses 4096-side inputs: '
+                         '"Specified argument was out of the range of valid values")')
     ap.add_argument('--shard', type=int, default=0)
     ap.add_argument('--shard-count', type=int, default=1)
     a = ap.parse_args()
@@ -166,6 +169,17 @@ def main():
                 inserts.append(dict(id=hexid, path=os.path.join(idxd, hexid + '.bin')))
                 stats['palette'] += 1
             else:
+                # WBT's importer throws "argument out of range" on 4096-side
+                # inputs (found on the r9 fill: the five 1024^2 sources whose 4x
+                # bake is 4096^2 were the only DXT imports that failed). Cap the
+                # long side; the client's own mip chain never reaches that size
+                # anyway.
+                if max(u8.shape[0], u8.shape[1]) > a.max_side:
+                    sc = a.max_side / float(max(u8.shape[0], u8.shape[1]))
+                    nw = max(4, int(round(u8.shape[1] * sc)) & ~3)
+                    nh = max(4, int(round(u8.shape[0] * sc)) & ~3)
+                    u8 = np.asarray(Image.fromarray(u8, 'RGBA').resize((nw, nh), Image.LANCZOS),
+                                    np.uint8)
                 H, W = u8.shape[:2]
                 if W % 4 or H % 4:
                     stats['skipped_dims'] += 1

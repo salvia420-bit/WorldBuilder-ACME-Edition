@@ -182,9 +182,29 @@ public partial class CommandEngine {
                 rec["onDiskBytes"] = blocks * blockSize;
 
                 if (!dryRun) {
-                    var result = portal.TryWriteFile(surface);
-                    if (!result.Success) {
-                        throw new InvalidOperationException($"TryWriteFile failed: {result.Error}");
+                    bool writeOk;
+                    string? writeErr;
+                    if (recordBytes <= 4_500_000) {
+                        var result = portal.TryWriteFile(surface);
+                        writeOk = result.Success;
+                        writeErr = result.Error;
+                    } else {
+                        // DRW's typed TryWriteFile packs into a fixed 5 MB rented
+                        // buffer, and a 4096-wide DXT record overruns it with a
+                        // bare ArgumentOutOfRangeException. Pack into a
+                        // right-sized buffer and take the raw-bytes path.
+                        var packBuf = new byte[recordBytes + 1024];
+                        var packWriter = new DRW.Lib.IO.DatBinWriter(packBuf, portal);
+                        surface.Pack(packWriter);
+                        int iteration = portal.Tree.TryGetFile(spec.Did, out var prevEntry)
+                            ? prevEntry.Iteration : 0;
+                        var result = portal.TryWriteFileBytes(
+                            spec.Did, packBuf, packWriter.Offset, iteration);
+                        writeOk = result.Success;
+                        writeErr = result.Error;
+                    }
+                    if (!writeOk) {
+                        throw new InvalidOperationException($"TryWriteFile failed: {writeErr}");
                     }
                     // Read the record straight back out of the b-tree so the
                     // reported byte count is measured, not modelled.

@@ -9,7 +9,11 @@
 // (docs/dat-patch/upstream-drw-btree-delete-fix.md) — this tool only ever
 // writes, and refuses if a target id already exists unless --overwrite.
 //
-// usage: DatRecordInsert <dat> <manifest.json> [--overwrite] [--dry-run]
+// usage: DatRecordInsert <dat> <manifest.json> [--overwrite] [--dry-run] [--compress]
+//   --compress: store each record zlib-compressed (IsCompressed b-tree flag)
+//   at insert time. Landing compressed matters on a large fill: an uncompressed
+//   insert followed by DatCompress leaks the freed tail blocks (DRW's WriteBlock
+//   never returns them to the free chain), so the file only ever grows.
 //   manifest.json: {"inserts":[{"id":"0x06001234","path":"/…/0x06001234.bin"}, …]}
 using System.Text.Json;
 using DatReaderWriter;
@@ -23,6 +27,7 @@ if (args.Length < 2) {
 }
 string datPath = args[0], manifestPath = args[1];
 bool overwrite = args.Contains("--overwrite"), dry = args.Contains("--dry-run");
+bool compress = args.Contains("--compress");
 
 string baseDats = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "ac_base_dats");
 if (Path.GetFullPath(datPath).StartsWith(Path.GetFullPath(baseDats))) {
@@ -48,7 +53,9 @@ long bytes = 0;
         if (dat.Tree.TryGetFile(id, out _) && !overwrite) { skippedExisting++; continue; }
         var raw = File.ReadAllBytes(path);
         if (dry) { written++; bytes += raw.Length; continue; }
-        var res = dat.TryWriteFileBytes(id, raw, raw.Length, 1);   // iteration 1: a fresh record
+        var res = compress
+            ? dat.TryWriteCompressedBytes(id, raw, raw.Length, 1)  // iteration 1: a fresh record
+            : dat.TryWriteFileBytes(id, raw, raw.Length, 1);
         if (!res.Success) { Console.Error.WriteLine($"  0x{id:X8} write failed: {res.Error}"); failed++; continue; }
         written++; bytes += raw.Length;
         if (written % 500 == 0) Console.WriteLine($"  ... {written} written");
