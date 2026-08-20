@@ -222,6 +222,18 @@ if [ "$PACKAGE" = 1 ]; then
   tar -I "$TARZ" -cf "$PKG" -C "$OUT" "acme-$TAG"
   sha256sum "$PKG" > "$PKG.sha256"
   ls -l "$PKG"; cat "$PKG.sha256"
+  # .zip alongside the .tgz: the kit is Windows-first now (play.bat, the .ps1
+  # patcher), and Windows has no built-in tgz. -1 because the payload is dats
+  # that are already compressed inside.
+  if command -v zip >/dev/null; then
+    ZPKG="$OUT/acme-$TAG.zip"
+    echo "== package -> $ZPKG"
+    ( cd "$OUT" && zip -1 -r -q "acme-$TAG.zip" "acme-$TAG" )
+    sha256sum "$ZPKG" > "$ZPKG.sha256"
+    ls -l "$ZPKG"; cat "$ZPKG.sha256"
+  else
+    echo "   zip not installed - skipping the .zip (tgz written)" >&2
+  fi
 fi
 
 echo

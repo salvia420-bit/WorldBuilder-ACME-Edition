@@ -1,0 +1,100 @@
+# Phase 4 fill — measured task list (2026-08-20)
+
+Owner directive: fill the r8 runway this session, intelligently, per
+PLAN-2026-08-18. Every number below is MEASURED, not guessed: sizes come from an
+empirical model built on the 2,412 records we already ship (their retail source
+format/dims -> their actual stored bytes in the r8 highres dat), applied to the
+retail records we do not yet cover.
+
+## Where the space is, and what it costs to fill
+
+| | records | est. added bytes |
+|---|---|---|
+| retail 0x06 records total | 20,684 | — |
+| covered by r8 today | 2,412 (11.7 %) | 597 MB shipped |
+| **uncovered** | **18,193** | **969 MB to cover ALL of it** |
+
+| tier | records | est MB | have a Remacri PNG already | need new GPU |
+|---|---|---|---|---|
+| **A — world surfaces ≥128²** (INDEX16 2,496 · R8G8B8 567 · DXT1 519 · A8R8G8B8 194) | 3,967 | **911** | 1,381 | 2,586 |
+| B — mid 64² | 925 | 17 | 318 | 607 |
+| C — icons/UI 32² (A8R8G8B8 12,488) | 12,933 | 41 | 100 | 12,833 |
+| D — tiny <32² | 368 | 1 | 18 | 350 |
+
+**The headline: tier A is the fill.** It is 94 % of the bytes, it is where the
+plan's rank-#4 spend lives (2,496 INDEX16 = creature/monster/clothing surfaces,
+the highest-exposure surfaces still at retail quality), and it lands the highres
+dat at ~1.75 GiB of its 2.00 GiB ceiling. All four tiers = ~1.81 GiB, inside the
+lane's 2.04 GB ceiling guard with ~100 MB of margin.
+
+Second finding: **1,815 records already have a Remacri upscale on disk that was
+never shipped** (`/mnt/wbterminal2/upscale-corpus/rewrap-out/out`, 4,041 PNGs vs
+2,412 shipped). They are pre-deblock, so they get re-baked from deblocked inputs
+rather than shipped as-is (deblock A/B: severe quilting 272 -> 57).
+
+## What this does NOT touch
+- **The portal stays as it is.** The fill is purely additive to
+  `client_highres.dat`, which the client already prefers over the portal — so no
+  re-split, no reconstruction, no TryDelete anywhere. Portal keeps its 1.48 GiB
+  of runway for the geometry lanes (4.P1–4.P4), which are CPU-hours and do not
+  fit in this session.
+- **INDEX16 records are never converted to DXT.** They take `highres_lane.py`'s
+  palette path (upscaled indices, nearest within the record's OWN used palette
+  subset), so ClothingTable subpalette recolours keep working and no new
+  clipmap-transparency sentinels appear. This is the recolour wall, and the
+  tooling already solves it.
+
+## Tasks, in execution order
+
+| # | task | cost | blocking on |
+|---|---|---|---|
+| F0 | Free buildbox disk (99 % full, 2.5 GB free) — prune artefacts that exist locally | ~15 min | — |
+| F1 | Deblock tier-A retail inputs locally (CPU, `deblock.py`) | ~30 min | — |
+| F2 | Prove the round trip on a small batch: deblock -> Remacri -> import into a COPY of the r8 highres -> read back + walk | ~20 min | F0, F1 |
+| F3 | GPU: Remacri 4× tier A (2,586 new + 1,381 rebakes) — resumable, per-chunk sentinels (SPOT preempts every 8–40 min) | ~2 h GPU | F0–F2 |
+| F4 | GPU: tiers B + D (957 records, small) | ~15 min GPU | F3 |
+| F5 | GPU: tier C icons (12,833 × 32²->128², fast) — ship only if the UI eye-test is clean | ~20 min GPU | F4 |
+| F6 | Import: DXT/RGB via WBT `render-surface-import`, INDEX16 via the palette path; ceiling guard after every chunk | ~45 min | F3+ |
+| F7 | Gates: colour ledger vs retail, dims ledger vs r8 (no downscales), walk_check, degrade-chain --check, VmSize note | ~20 min | F6 |
+| F8 | Re-assemble the kit (portal + NEW highres + cell), **+ .zip alongside the .tgz** (owner request), re-run kit gates | ~30 min | F7 |
+| F9 | 1070 in-client arm: mount + tour + eyeball the new coverage | ~40 min | F8 |
+
+Fallbacks, decided in advance:
+- SPOT preempts mid-run → chunked driver resumes from its own sentinels; whatever
+  tiers completed still ship (tier A is ordered first for exactly this reason).
+- Estimate overshoots the 2.04 GB guard → drop tier C (41 MB, lowest value).
+- Icons look wrong in the UI eye-test → drop tier C, keep A/B/D.
+
+
+---
+
+## Execution log (live)
+
+| # | task | status | actual |
+|---|---|---|---|
+| F0 | free buildbox disk | DONE | 2.5 GB -> 13 GB (pruned artefacts verified byte-identical locally) |
+| F1 | deblock DXT-sourced inputs | DONE | 607 records, grid excess +42.0 % -> -0.4 %, detail kept 103 % mean |
+| F2 | prove the round trip | DONE | DXT via WBT `allowCreate` + palette via `DatRecordInsert`, both readback-verified |
+| F3 | GPU tier A | DONE | faster than planned: **16,922 records in ~30 min** on the T4 (all tiers, not just A) |
+| F4 | GPU tiers B+D | DONE | included in F3 |
+| F5 | GPU tier C icons | DONE (not shipped) | baked and parked on the box; see the routing decision |
+| F6 | bake + import | bake DONE (1,746 DXT + 3,122 palette, 13 terrain-protected refusals, 0 failures); landing in progress | |
+| F7 | gates | colour ledger PASS on the baked sample (lum 1.1540, cast p99 0.058) | |
+| F8 | kit + zip | pending | |
+| F9 | 1070 in-client arm | pending | |
+
+### Things that bit, and the fixes
+- **SPOT preempted the box mid-session.** The upscale driver skips existing
+  outputs, so the restart lost nothing; the *download* was the casualty and was
+  re-done as sha-verified 200 MB chunks with per-part retries.
+- **The palette solve was the bottleneck** (pixels x palette-entries: ~40 s for a
+  1024^2 record against a 600-colour used set). Replaced with a k-d tree solve
+  that resolves exact ties back to the lowest palette index — **verified
+  bit-identical** to the reference solve, 3-7x faster on the expensive class.
+- **The laptop went to swap** with 3 bake workers at ~1 GB RSS each. Added resume
+  (skip a record whose output already exists) so workers can be killed and
+  restarted freely, which is also what made the k-d tree swap-in cheap.
+- **WBT writes imported records UNCOMPRESSED.** On a fill this size that is ~1 GB
+  of raw DXT, which would cross the 2 GiB HARD ceiling before the final compress
+  could reclaim it. The landing driver now compresses BETWEEN the two write
+  stages, not only at the end.
