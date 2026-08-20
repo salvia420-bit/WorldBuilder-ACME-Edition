@@ -42,6 +42,7 @@ import json, os, subprocess, sys
 hr, wbt = sys.argv[1], sys.argv[2]
 roots = sys.argv[3:]
 imports = []
+fails = []
 for r in roots:
     m = json.load(open(os.path.join(r, 'fill-manifest.json')))
     imports += m['imports']
@@ -58,9 +59,23 @@ for i in range(0, len(imports), CH):
     if not res or not res.get("success"):
         print("CHUNK FAILED:", (p.stdout or p.stderr)[-400:]); sys.exit(1)
     written += res.get("writtenCount", 0); failed += res.get("failCount", 0)
+    for r in res.get("records", []):
+        if r.get("status") == "FAIL" or r.get("error"):
+            fails.append({k: r.get(k) for k in ("didHex", "pngPath", "status", "error",
+                                                "width", "height", "dstFormat")})
     print(f"  {i+len(chunk)}/{len(imports)}  written={written} failed={failed}", flush=True)
 print(f"DXT import done: written={written} failed={failed}")
-if failed: sys.exit(1)
+if fails:
+    # name the casualties: a bare count means the next session has to diff the
+    # manifest against the dat to find out which records did not land.
+    json.dump(fails, open(os.path.join(os.path.dirname(hr), "import-fails.json"), "w"), indent=1)
+    for f in fails[:20]:
+        print("  FAIL", f.get("didHex"), f.get("error") or f.get("status"))
+    print(f"  ({len(fails)} failures -> import-fails.json)")
+# a handful of casualties out of thousands must not throw away the whole landing;
+# they are recorded and re-runnable. A large fraction failing is a real fault.
+if failed > max(20, len(imports) // 100):
+    print("too many import failures - refusing to continue"); sys.exit(1)
 PY
 guard
 
