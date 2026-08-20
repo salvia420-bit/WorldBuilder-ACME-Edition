@@ -1,5 +1,20 @@
 # HANDOFF — 2026-08-20 EOD (r9 gate crash+fix in flight, AcmeRedline built, roadmap researched)
 
+> **RESOLVED 2026-08-20 late evening — the r9 gate is GREEN, but the fix below
+> was NOT sufficient on its own.** The world-only dat this handoff prescribed
+> ALSO crashed (same 0x420a0): the "world" tier was classified by SIZE, which
+> let 493 large UI surfaces through (320x480 char-gen portraits, banners,
+> backgrounds — CPU-blitted like icons). The real rule is REACHABILITY: a 0x06
+> may ship re-encoded only if referenced by an 0x05 SurfaceTexture (or in the
+> retail EoR highres id set). `tools/dat-patch/surftex_reach.py` is the gate;
+> `DatCompact --exclude` cut the 493 by reconstruction. Final highres:
+> 1,332,324,352 B, 9,081 records, sha c68fb079… — survived char-select,
+> entered the world, stable to the full watcher lifetime on the 1070.
+> Corrected story + gates in reports/phase4-fill-RESULTS.md. Kit rebuilt at
+> /mnt/wbterminal2/dat-patch-r9/kit-r9b/. The creature-subdiv in-client
+> eye-test (step 5 below) is still owed — it needs the scratch portal staged
+> on box+ACE plus a chat-capable second client to @create; session-sized.
+
 Continues HANDOFF-2026-08-20-fill.md. Three parallel tracks this session: (1) the
 r9 kit's 1070 in-client gate found a client crash and I'm mid-fix; (2) a new
 in-game annotation plugin **AcmeRedline** was designed+built end-to-end across 3

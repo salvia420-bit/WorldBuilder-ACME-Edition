@@ -22,9 +22,29 @@ using DatReaderWriter.Options;
 using DatReaderWriter.Lib.IO.DatBTree;
 using DatReaderWriter.Lib.IO.BlockAllocators;
 
-if (args.Length < 3) { Console.Error.WriteLine("usage: DatCompact <source.dat> <seed.dat> <out.dat> [--verify] [--prune-seed-extra]"); return 2; }
-string srcPath = args[0], seedPath = args[1], outPath = args[2];
+// --exclude <ids.txt>: skip these source ids entirely (one 0x-hex id per line).
+// Safe by construction: the seed-only check below rejects a seed that carries an
+// excluded id (it would otherwise survive via the seed copy), and --verify's
+// "extra" check rejects an excluded id that reaches the output.
+string? excludePath = null;
+var positional = new List<string>();
+for (int ai = 0; ai < args.Length; ai++) {
+    if (args[ai] == "--exclude") {
+        if (ai + 1 >= args.Length) { Console.Error.WriteLine("--exclude needs a file"); return 2; }
+        excludePath = args[++ai];
+    } else if (!args[ai].StartsWith("--")) positional.Add(args[ai]);
+}
+if (positional.Count < 3) { Console.Error.WriteLine("usage: DatCompact <source.dat> <seed.dat> <out.dat> [--verify] [--exclude ids.txt]"); return 2; }
+string srcPath = positional[0], seedPath = positional[1], outPath = positional[2];
 bool verify = args.Contains("--verify");
+var excludeSet = new HashSet<uint>();
+if (excludePath != null) {
+    foreach (var l in File.ReadAllLines(excludePath)) {
+        var t = l.Trim();
+        if (t.Length > 0) excludeSet.Add(Convert.ToUInt32(t, 16));
+    }
+    Console.WriteLine($"exclude ids: {excludeSet.Count}");
+}
 // --prune-seed-extra is DEAD: it rode on Tree.TryDelete, which corrupted the
 // b-tree at scale on 2026-08-19 (169/213 requested deletes landed, 3 innocent
 // records lost, 1 phantom id). A split-trimmed portal is built by
@@ -54,6 +74,15 @@ using var dst = new PortalDatabase(
     new StreamBlockAllocator(new DatDatabaseOptions { FilePath = outPath, AccessType = DatAccessType.ReadWrite }));
 
 var srcEntries = src.Tree.GetFilesInRange(0x00000000u, 0xFFFFFFFFu).ToList();
+if (excludeSet.Count > 0) {
+    int found = srcEntries.Count(e => excludeSet.Contains(e.Id));
+    if (found != excludeSet.Count) {
+        Console.Error.WriteLine($"exclude list: only {found}/{excludeSet.Count} ids present in source — wrong list");
+        return 3;
+    }
+    srcEntries = srcEntries.Where(e => !excludeSet.Contains(e.Id)).ToList();
+    Console.WriteLine($"excluded {found} records; {srcEntries.Count} remain");
+}
 var srcIds = srcEntries.Select(e => e.Id).ToHashSet();
 var seedOnly = dst.Tree.GetFilesInRange(0x00000000u, 0xFFFFFFFFu)
                   .Select(f => f.Id).Where(id => !srcIds.Contains(id)).ToList();
