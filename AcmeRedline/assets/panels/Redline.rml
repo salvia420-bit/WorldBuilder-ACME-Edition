@@ -1,0 +1,145 @@
+<rml>
+<head>
+  <title>Redline</title>
+  <style>
+    body {
+      font-size: 13px;
+      font-family: Tahoma;
+      color: #d8d8dd;
+      width: 340px;
+      background-color: #14141a;
+      padding: 8px 8px 8px 8px;
+    }
+
+    h1 {
+      font-size: 14px;
+      font-weight: bold;
+      color: #ff6a6a;
+      margin-bottom: 6px;
+    }
+
+    .row { display: block; margin-bottom: 6px; }
+    .muted { color: #8a8a95; font-size: 11px; }
+
+    #selection-summary {
+      display: block;
+      padding: 4px 6px 4px 6px;
+      background-color: #1d1d26;
+      margin-bottom: 6px;
+    }
+
+    #guard-warning {
+      display: none;
+      padding: 4px 6px 4px 6px;
+      background-color: #4a2f10;
+      color: #ffce7a;
+      margin-bottom: 6px;
+    }
+    #guard-warning.visible { display: block; }
+
+    textarea, input.text {
+      width: 100%;
+      background-color: #0d0d12;
+      color: #e6e6ea;
+      border: 1px #33333f;
+      padding: 4px 4px 4px 4px;
+    }
+    textarea { height: 64px; }
+
+    .tags { display: block; margin-bottom: 6px; }
+    button.tag {
+      display: inline-block;
+      padding: 2px 6px 2px 6px;
+      margin: 0px 4px 4px 0px;
+      background-color: #23232e;
+      color: #b9b9c4;
+      border: 1px #33333f;
+    }
+    button.tag.on { background-color: #3a2a5e; color: #ffffff; border: 1px #6a55a8; }
+
+    .sev { display: block; margin-bottom: 8px; }
+    button.sevbtn {
+      display: inline-block;
+      width: 30px;
+      padding: 2px 0px 2px 0px;
+      margin-right: 4px;
+      background-color: #23232e;
+      color: #b9b9c4;
+      border: 1px #33333f;
+    }
+    button.sevbtn.on { background-color: #6a2020; color: #ffffff; border: 1px #b04040; }
+
+    button.primary {
+      display: block;
+      width: 100%;
+      padding: 5px 0px 5px 0px;
+      background-color: #7a2020;
+      color: #ffffff;
+      border: 1px #b04040;
+    }
+    button.secondary {
+      display: inline-block;
+      padding: 3px 8px 3px 8px;
+      margin-top: 6px;
+      background-color: #23232e;
+      color: #b9b9c4;
+      border: 1px #33333f;
+    }
+
+    hr { display: block; height: 1px; background-color: #2a2a35; margin: 8px 0px 8px 0px; }
+
+    #reports { display: block; max-height: 180px; overflow-y: auto; }
+    .report { display: block; padding: 3px 4px 3px 4px; margin-bottom: 2px; background-color: #1a1a22; }
+    .report .dot { display: inline-block; width: 8px; height: 8px; margin-right: 5px; }
+    .report .when { color: #7c7c88; font-size: 11px; }
+  </style>
+</head>
+
+<!--
+  Plain <body>, matching external/chorizite/ACPlugin/assets/panels/Indicators.rml:77 and
+  Tooltip.rml:20. The only templates RmlUiPlugin registers are "modal" and "tabpanel"
+  (external/chorizite/RmlUiPlugin/RmlUiPlugin.cs:95-96); there is no "window" template, so
+  this panel does not claim one.
+-->
+<body>
+  <h1>Redline</h1>
+
+  <!-- Live selection, refreshed by RedlinePanel.RefreshSelectionUi -->
+  <div id="selection-summary" class="muted">nothing selected</div>
+  <div id="guard-warning"></div>
+
+  <div class="row">
+    <textarea id="prompt" placeholder="What is wrong with this? e.g. this texture is too blurry, should look like weathered granite"></textarea>
+  </div>
+
+  <!-- Quick tags. data-tag is read back by the click handler. -->
+  <div class="tags" id="tags">
+    <button class="tag" id="tag-too-blurry"    data-tag="too-blurry">too-blurry</button>
+    <button class="tag" id="tag-wrong-material" data-tag="wrong-material">wrong-material</button>
+    <button class="tag" id="tag-seam"          data-tag="seam">seam</button>
+    <button class="tag" id="tag-silhouette"    data-tag="silhouette">silhouette</button>
+    <button class="tag" id="tag-remove-detail" data-tag="remove-detail">remove-detail</button>
+    <button class="tag" id="tag-recolor"       data-tag="recolor">recolor</button>
+    <button class="tag" id="tag-other"         data-tag="other">other</button>
+  </div>
+
+  <div class="sev">
+    <span class="muted">severity</span>
+    <button class="sevbtn" id="sev-1" data-sev="1">1</button>
+    <button class="sevbtn" id="sev-2" data-sev="2">2</button>
+    <button class="sevbtn" id="sev-3" data-sev="3">3</button>
+  </div>
+
+  <button class="primary" id="submit">Submit redline</button>
+  <button class="secondary" id="clear-selection">Clear selection</button>
+  <button class="secondary" id="tex-in-view">All of this texture in view</button>
+  <button class="secondary" id="toggle-status">Status overlay</button>
+
+  <hr />
+
+  <div class="muted">my reports</div>
+  <div id="reports"></div>
+
+  <div class="muted" id="footer"></div>
+</body>
+</rml>

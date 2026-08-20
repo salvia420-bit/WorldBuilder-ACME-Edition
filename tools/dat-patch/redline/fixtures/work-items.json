@@ -1,0 +1,1614 @@
+{
+ "generatedBy": "tools/dat-patch/redline/queue_worker.py",
+ "schemaVersion": 1,
+ "queue": "/home/wbterminal/WorldBuilder-ACME-Edition/tools/dat-patch/redline/fixtures/redline.jsonl",
+ "portal": "/home/wbterminal/ac_base_dats/client_portal.dat",
+ "cell": null,
+ "statusLog": null,
+ "counts": {
+  "entriesRead": 6,
+  "valid": 6,
+  "invalid": 0,
+  "skippedFixed": 0,
+  "workItems": 5,
+  "blocked": 2
+ },
+ "lanes": {
+  "geometry-degrade-deferred": 1,
+  "geometry-displace": 1,
+  "terrain-lane-only": 1,
+  "texture-legibility-rebake": 1,
+  "texture-palette-fill": 1
+ },
+ "invalidEntries": [],
+ "skippedFixed": [],
+ "workItems": [
+  {
+   "workItemId": "wi-rendersurface-0x06003c97",
+   "target": {
+    "kind": "renderSurface",
+    "id": "0x06003C97"
+   },
+   "lanes": [
+    "texture-legibility-rebake"
+   ],
+   "entryIds": [
+    "rl-20260820-101500-a1c3",
+    "rl-20260820-101812-7f2b"
+   ],
+   "reports": 2,
+   "reporters": [
+    "Tolwen",
+    "Rhineholt"
+   ],
+   "severityMax": 3,
+   "tags": [
+    "too-blurry",
+    "seam"
+   ],
+   "prompts": [
+    {
+     "entryId": "rl-20260820-101500-a1c3",
+     "author": "Tolwen",
+     "text": "The plaster/stone on the front of this Holtburg house is a smear at conversation distance. You can stand right next to it and there is no detail at all."
+    },
+    {
+     "entryId": "rl-20260820-101812-7f2b",
+     "author": "Rhineholt",
+     "text": "Same wall texture as the house near the smithy -- and where it tiles you can see a hairline grid running along the join."
+    }
+   ],
+   "cameras": [
+    {
+     "entryId": "rl-20260820-101500-a1c3",
+     "world": {
+      "landblock": "0xA9B4001C",
+      "pos": [
+       95.3,
+       42.1,
+       46.0
+      ],
+      "heading": 214.5
+     },
+     "camera": {
+      "pos": [
+       97.9,
+       45.6,
+       47.8
+      ],
+      "lookAt": [
+       93.1,
+       40.2,
+       46.4
+      ],
+      "fovDeg": 63.0
+     },
+     "attachments": [
+      {
+       "path": "shots/rl-20260820-101500-a1c3-view.png",
+       "exists": true
+      },
+      {
+       "path": "shots/rl-20260820-101500-a1c3-mask.png",
+       "exists": true
+      }
+     ]
+    },
+    {
+     "entryId": "rl-20260820-101812-7f2b",
+     "world": {
+      "landblock": "0xA9B40013",
+      "pos": [
+       61.0,
+       128.4,
+       44.2
+      ],
+      "heading": 18.0
+     },
+     "camera": {
+      "pos": [
+       59.4,
+       124.9,
+       45.9
+      ],
+      "lookAt": [
+       62.2,
+       131.0,
+       44.6
+      ],
+      "fovDeg": 63.0
+     },
+     "attachments": [
+      {
+       "path": "shots/rl-20260820-101812-7f2b-view.png",
+       "exists": false
+      }
+     ]
+    }
+   ],
+   "attachments": [],
+   "resolved": {
+    "objects": [
+     {
+      "gfxObjId": "0x01000827",
+      "exists": true,
+      "recordBytes": 25780,
+      "recordSha256": "fed0325ccf7136887f19009d9e8eef50aa683cef1e8c060276d6b0f6c5adfedd",
+      "compressed": false,
+      "triCountAll": 242,
+      "triCountDrawn": 226,
+      "polyCount": 137,
+      "physPolyCount": 126,
+      "vertCount": 146,
+      "surfaces": [
+       "0x080006B0",
+       "0x08000660",
+       "0x08000724",
+       "0x080001A5",
+       "0x08000371",
+       "0x0800032A",
+       "0x080007EC",
+       "0x080007E3",
+       "0x080007E2",
+       "0x0800074E",
+       "0x080006E6",
+       "0x080007D6",
+       "0x0800074F",
+       "0x080007ED",
+       "0x080007EE",
+       "0x080007EF",
+       "0x080007F0",
+       "0x080007F1"
+      ],
+      "degradeId": "0x110004EF",
+      "degradeBands": [
+       {
+        "id": "0x01000827",
+        "mode": 1,
+        "min": 18.0,
+        "ideal": 24.0,
+        "max": 48.0
+       },
+       {
+        "id": "0x0100090B",
+        "mode": 1,
+        "min": 24.0,
+        "ideal": 48.0,
+        "max": 64.0
+       },
+       {
+        "id": "0x0100090C",
+        "mode": 1,
+        "min": 192.0,
+        "ideal": 390.0,
+        "max": 390.0
+       },
+       {
+        "id": "0x00000000",
+        "mode": 1,
+        "min": 3.4028234663852886e+38,
+        "ideal": 3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38
+       }
+      ],
+      "band0Self": true,
+      "band0": "0x01000827",
+      "belowMinTris": false,
+      "objectId": "0x7000A31C",
+      "instances": null
+     }
+    ],
+    "renderSurface": {
+     "rsId": "0x06003C97",
+     "exists": true,
+     "id": 100678807,
+     "dcat": 8,
+     "w": 128,
+     "h": 128,
+     "fmt": 827611204,
+     "fmtName": "DXT1",
+     "dataLen": 8192,
+     "recordBytes": 8216,
+     "paletted": false,
+     "terrainProtected": false,
+     "dimsMult4": true
+    },
+    "surface": {
+     "surfaceId": "0x08000371",
+     "exists": true,
+     "type": 2,
+     "base1Solid": false,
+     "base1Image": true,
+     "base1ClipMap": false,
+     "translucency": 0.0,
+     "luminosity": 0.0,
+     "diffuse": 1.0,
+     "surfaceTextureId": "0x050026F1",
+     "paletteId": null,
+     "resolvedRsId": "0x06003C97",
+     "hasHighresEntry": false,
+     "reliefClassVeto": null,
+     "reliefClassNote": "no record-level veto; the material CLASS still comes from matlib.classify's curated/kNN tables (matlib.py:83, DATPATCH_CLASSES_JSON + DATPATCH_CURATED_JSON) which this worker does not load -- run tranche.py enumerate for the class"
+    },
+    "uvRegion": {
+     "uvBBox": [
+      0.18,
+      0.22,
+      0.61,
+      0.77
+     ],
+     "pointCount": 4,
+     "texelBBox": [
+      23,
+      28,
+      79,
+      99
+     ],
+     "texelBBoxNote": "v is used as stored in the DAT (no flip applied) -- confirm orientation on the mask attachment before cropping"
+    }
+   },
+   "guards": [],
+   "actions": [
+    {
+     "action": "rebake-upscale",
+     "lane_module": "tools/dat-patch/texture_lane.py",
+     "argv": [
+      "python3",
+      "tools/dat-patch/texture_lane.py",
+      "run",
+      "--root",
+      "$RUN_ROOT",
+      "--base",
+      "$BASE_PORTAL",
+      "--patched",
+      "$PATCHED_PORTAL",
+      "--ids-file",
+      "<file containing the SURFACE id 0x08000371>",
+      "--wbt",
+      "$WBT_DLL",
+      "--remacri"
+     ],
+     "sourceDims": [
+      128,
+      128
+     ],
+     "sourceFormat": "DXT1",
+     "sourceDataBytes": 8192,
+     "suggestedTargetDims": [
+      512,
+      512
+     ],
+     "suggestedFormat": "DXT1",
+     "formatWhy": "DXT5 when the surface is Base1ClipMap or the baked alpha is non-opaque, else DXT1 (texture_lane.py:588-591)",
+     "knobs": {
+      "DATPATCH_BAKE_MAX_SIDE": 512,
+      "DATPATCH_TEX_BASE": "<dir of retail re-export PNGs, <rsId>.png>",
+      "DATPATCH_REMACRI": "<upscale corpus dirs, colon separated>",
+      "DATPATCH_WRAPPED_CORPUS": "1 if the corpus is the wrap-padded re-upscale (texture_lane.py:381-390)",
+      "DATPATCH_DEBLOCK_BASE": "<deblock.py output dir, optional>",
+      "gainset": "mid"
+     },
+     "wbtCommands": [
+      {
+       "command": "render-surface-import",
+       "datPath": "$PATCHED_PORTAL",
+       "imports": [
+        {
+         "idHex": "0x06003C97",
+         "pngPath": "$RUN_ROOT/baked/0x06003C97.png",
+         "format": "DXT1",
+         "allowResize": true
+        }
+       ]
+      },
+      {
+       "command": "surface-texture-collapse",
+       "datPath": "$PATCHED_PORTAL",
+       "collapses": [
+        {
+         "idHex": "0x050026F1",
+         "keepDid": "0x06003C97"
+        }
+       ]
+      }
+     ],
+     "why": "Reported too-blurry at 128x128 DXT1. The 4x bake target is capped at 2048/side because WBT's importer throws on 4096-side inputs (fill_import.py:66-69).",
+     "alsoBecause": [
+      "Reported seam/too-blurry at 128x128 DXT1. The 4x bake target is capped at 2048/side because WBT's importer throws on 4096-side inputs (fill_import.py:66-69)."
+     ]
+    }
+   ],
+   "notes": [
+    "Resume trap: DATPATCH_BAKE_CACHE=1 over a warm baked/ dir ships the OLD pixels. texture_lane.bake_config_guard (texture_lane.py:439-474) makes a config change fatal -- do not set DATPATCH_BAKE_CACHE_FORCE=1 to get past it.",
+    "'seam' on a tiled wall is usually TILEABILITY, not sharpness: ESRGAN pads its input at the borders, so an un-wrapped upscale breaks the wrap and shows a hairline grid. Bake from the wrap-padded corpus with DATPATCH_WRAPPED_CORPUS=1 (texture_lane.py:381-390)."
+   ],
+   "clientReleases": [
+    "acme-r9"
+   ],
+   "instanceExposure": null,
+   "priority": 2,
+   "priorityFormula": "reports(2) x instanceExposure(1 (unknown: no --cell, or the record is not a LandBlockInfo static)) = 2",
+   "blocked": false,
+   "lane": "texture-legibility-rebake"
+  },
+  {
+   "workItemId": "wi-gfxobj-0x01000827",
+   "target": {
+    "kind": "gfxObj",
+    "id": "0x01000827"
+   },
+   "lanes": [
+    "geometry-displace"
+   ],
+   "entryIds": [
+    "rl-20260820-102401-9d44"
+   ],
+   "reports": 1,
+   "reporters": [
+    "Tolwen"
+   ],
+   "severityMax": 3,
+   "tags": [
+    "remove-detail"
+   ],
+   "prompts": [
+    {
+     "entryId": "rl-20260820-102401-9d44",
+     "author": "Tolwen",
+     "text": "The bumps on the walls of this house are too strong -- the stone courses look like they are floating off the wall when the sun is low. Please flatten these faces back down."
+    }
+   ],
+   "cameras": [
+    {
+     "entryId": "rl-20260820-102401-9d44",
+     "world": {
+      "landblock": "0xA9B4001C",
+      "pos": [
+       95.3,
+       42.1,
+       46.0
+      ],
+      "heading": 214.5
+     },
+     "camera": {
+      "pos": [
+       101.2,
+       49.0,
+       52.0
+      ],
+      "lookAt": [
+       93.0,
+       39.5,
+       47.5
+      ],
+      "fovDeg": 63.0
+     },
+     "attachments": [
+      {
+       "path": "shots/rl-20260820-102401-9d44-view.png",
+       "exists": false
+      },
+      {
+       "path": "shots/rl-20260820-102401-9d44-mask.png",
+       "exists": false
+      }
+     ]
+    }
+   ],
+   "attachments": [],
+   "resolved": {
+    "objects": [
+     {
+      "gfxObjId": "0x01000827",
+      "exists": true,
+      "recordBytes": 25780,
+      "recordSha256": "fed0325ccf7136887f19009d9e8eef50aa683cef1e8c060276d6b0f6c5adfedd",
+      "compressed": false,
+      "triCountAll": 242,
+      "triCountDrawn": 226,
+      "polyCount": 137,
+      "physPolyCount": 126,
+      "vertCount": 146,
+      "surfaces": [
+       "0x080006B0",
+       "0x08000660",
+       "0x08000724",
+       "0x080001A5",
+       "0x08000371",
+       "0x0800032A",
+       "0x080007EC",
+       "0x080007E3",
+       "0x080007E2",
+       "0x0800074E",
+       "0x080006E6",
+       "0x080007D6",
+       "0x0800074F",
+       "0x080007ED",
+       "0x080007EE",
+       "0x080007EF",
+       "0x080007F0",
+       "0x080007F1"
+      ],
+      "degradeId": "0x110004EF",
+      "degradeBands": [
+       {
+        "id": "0x01000827",
+        "mode": 1,
+        "min": 18.0,
+        "ideal": 24.0,
+        "max": 48.0
+       },
+       {
+        "id": "0x0100090B",
+        "mode": 1,
+        "min": 24.0,
+        "ideal": 48.0,
+        "max": 64.0
+       },
+       {
+        "id": "0x0100090C",
+        "mode": 1,
+        "min": 192.0,
+        "ideal": 390.0,
+        "max": 390.0
+       },
+       {
+        "id": "0x00000000",
+        "mode": 1,
+        "min": 3.4028234663852886e+38,
+        "ideal": 3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38
+       }
+      ],
+      "band0Self": true,
+      "band0": "0x01000827",
+      "belowMinTris": false,
+      "objectId": "0x7000A31C",
+      "instances": null
+     }
+    ],
+    "gfxObj": {
+     "gfxObjId": "0x01000827",
+     "exists": true,
+     "recordBytes": 25780,
+     "recordSha256": "fed0325ccf7136887f19009d9e8eef50aa683cef1e8c060276d6b0f6c5adfedd",
+     "compressed": false,
+     "triCountAll": 242,
+     "triCountDrawn": 226,
+     "polyCount": 137,
+     "physPolyCount": 126,
+     "vertCount": 146,
+     "surfaces": [
+      "0x080006B0",
+      "0x08000660",
+      "0x08000724",
+      "0x080001A5",
+      "0x08000371",
+      "0x0800032A",
+      "0x080007EC",
+      "0x080007E3",
+      "0x080007E2",
+      "0x0800074E",
+      "0x080006E6",
+      "0x080007D6",
+      "0x0800074F",
+      "0x080007ED",
+      "0x080007EE",
+      "0x080007EF",
+      "0x080007F0",
+      "0x080007F1"
+     ],
+     "degradeId": "0x110004EF",
+     "degradeBands": [
+      {
+       "id": "0x01000827",
+       "mode": 1,
+       "min": 18.0,
+       "ideal": 24.0,
+       "max": 48.0
+      },
+      {
+       "id": "0x0100090B",
+       "mode": 1,
+       "min": 24.0,
+       "ideal": 48.0,
+       "max": 64.0
+      },
+      {
+       "id": "0x0100090C",
+       "mode": 1,
+       "min": 192.0,
+       "ideal": 390.0,
+       "max": 390.0
+      },
+      {
+       "id": "0x00000000",
+       "mode": 1,
+       "min": 3.4028234663852886e+38,
+       "ideal": 3.4028234663852886e+38,
+       "max": 3.4028234663852886e+38
+      }
+     ],
+     "band0Self": true,
+     "band0": "0x01000827",
+     "belowMinTris": false,
+     "instances": null
+    },
+    "triangles": {
+     "gfxObjId": "0x01000827",
+     "requestedIndices": [
+      16,
+      17,
+      163,
+      210,
+      211,
+      229
+     ],
+     "currentRecordSha256": "fed0325ccf7136887f19009d9e8eef50aa683cef1e8c060276d6b0f6c5adfedd",
+     "reportedRecordSha256": "fed0325ccf7136887f19009d9e8eef50aa683cef1e8c060276d6b0f6c5adfedd",
+     "stale": false,
+     "triCountAll": 242,
+     "triCountDrawn": 226,
+     "polyCount": 137,
+     "effectiveIndices": [
+      16,
+      17,
+      163,
+      210,
+      211,
+      229
+     ],
+     "sourcePolygons": [
+      {
+       "polyIndex": 8,
+       "stip": 1,
+       "sides": 0,
+       "surfaceId": "0x08000660",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        16
+       ]
+      },
+      {
+       "polyIndex": 9,
+       "stip": 1,
+       "sides": 0,
+       "surfaceId": "0x08000660",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        17
+       ]
+      },
+      {
+       "polyIndex": 85,
+       "stip": 1,
+       "sides": 0,
+       "surfaceId": "0x080007E3",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        163
+       ]
+      },
+      {
+       "polyIndex": 118,
+       "stip": 1,
+       "sides": 0,
+       "surfaceId": "0x08000660",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        210,
+        211
+       ]
+      },
+      {
+       "polyIndex": 128,
+       "stip": 1,
+       "sides": 0,
+       "surfaceId": "0x08000660",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        229
+       ]
+      }
+     ],
+     "sourcePolyIndices": [
+      8,
+      9,
+      85,
+      118,
+      128
+     ],
+     "selectedAreaM2": 140.9711,
+     "reportedAreaM2": 140.971,
+     "triangleFacts": [
+      {
+       "index": 16,
+       "poly": 8,
+       "areaM2": 17.2325,
+       "normal": [
+        0.8269,
+        0.0,
+        0.5623
+       ],
+       "centroid": [
+        -0.8333,
+        0.3667,
+        9.6667
+       ],
+       "upFacing": false
+      },
+      {
+       "index": 17,
+       "poly": 9,
+       "areaM2": 17.901,
+       "normal": [
+        0.803,
+        0.014,
+        0.5958
+       ],
+       "centroid": [
+        0.3667,
+        -1.3333,
+        8.0
+       ],
+       "upFacing": false
+      },
+      {
+       "index": 163,
+       "poly": 85,
+       "areaM2": 17.5,
+       "normal": [
+        0.0,
+        -1.0,
+        0.0
+       ],
+       "centroid": [
+        -1.3333,
+        -6.4,
+        7.1667
+       ],
+       "upFacing": false
+      },
+      {
+       "index": 210,
+       "poly": 118,
+       "areaM2": 34.465,
+       "normal": [
+        -0.8269,
+        0.0,
+        0.5623
+       ],
+       "centroid": [
+        -3.6667,
+        -2.6,
+        7.1667
+       ],
+       "upFacing": false
+      },
+      {
+       "index": 211,
+       "poly": 118,
+       "areaM2": 34.465,
+       "normal": [
+        -0.8269,
+        0.0,
+        0.5623
+       ],
+       "centroid": [
+        -2.5333,
+        1.2,
+        8.8333
+       ],
+       "upFacing": false
+      },
+      {
+       "index": 229,
+       "poly": 128,
+       "areaM2": 19.4077,
+       "normal": [
+        0.8115,
+        0.0,
+        0.5843
+       ],
+       "centroid": [
+        1.0,
+        -4.3,
+        7.1667
+       ],
+       "upFacing": false
+      }
+     ],
+     "upFacingCount": 0,
+     "surfaceIds": [
+      "0x08000660",
+      "0x080007E3"
+     ]
+    }
+   },
+   "guards": [],
+   "actions": [
+    {
+     "action": "per-poly-exclusion",
+     "knob": "relief3d.SourceMesh poly['excluded'] = True",
+     "appliedAt": "tools/dat-patch/relief3d.py:152-163 (set at from_record) / :287-304 (amplitudes pinned to zero)",
+     "polygons": [
+      8,
+      9,
+      85,
+      118,
+      128
+     ],
+     "triangles": [
+      16,
+      17,
+      163,
+      210,
+      211,
+      229
+     ],
+     "why": "Excluding a source polygon removes its shell entirely and welds its vertex amplitudes to zero, so neighbours ramp down into it over BOUNDARY_RAMP_M=0.03 m instead of opening a slit.",
+     "todo": "NOT VERIFIED: there is no per-polygon override FILE in the shipped tranche today -- exclusion is derived from the record's own stip/sides. Landing this needs a small per-record override input to tranche.py/pilot.recipe_c_source and a RECIPE_VERSION bump (tranche.py:111)."
+    },
+    {
+     "action": "amp-override-down",
+     "knob": "pilot.AMP_WALL / matlib.CLASS_AMP[<class>]",
+     "currentDefaults": {
+      "AMP_WALL": 0.2,
+      "GROUND_SCALE": 0.55,
+      "CLASS_AMP": {
+       "Brick": 0.06,
+       "Stone": 0.07,
+       "Timber": 0.08,
+       "Plank": 0.055,
+       "Shingle": 0.07
+      },
+      "MAX_AMPLITUDE_M": 0.1
+     },
+     "appliedAt": [
+      "tools/dat-patch/pilot.py:48-58",
+      "tools/dat-patch/matlib.py:66-69",
+      "tools/dat-patch/relief3d.py:32"
+     ],
+     "why": "A softer read without losing the triangles: amplitude is clamped to MAX_AMPLITUDE_M=0.10 m in relief3d, and pilot temporarily raises that ceiling to AMP_WALL for recipe C (tranche.py:474-476). Lowering AMP is a per-CLASS change, so it hits every record wearing that material -- prefer the per-poly exclusion for a single-record complaint."
+    },
+    {
+     "action": "class-veto",
+     "knob": "pilot.WALL_CLASSES / matlib.classify override",
+     "currentDefaults": {
+      "WALL_CLASSES": [
+       "Brick",
+       "Stone",
+       "Plank",
+       "Timber"
+      ],
+      "MACRO_OK": [
+       "Stone",
+       "Brick",
+       "Timber",
+       "Plank",
+       "Shingle"
+      ]
+     },
+     "appliedAt": [
+      "tools/dat-patch/pilot.py:48",
+      "tools/dat-patch/matlib.py:62",
+      "tools/dat-patch/pipeline.py:38-75 (OVERRIDES / force=)"
+     ],
+     "surfaces": [
+      "0x08000660",
+      "0x080007E3"
+     ],
+     "why": "If the complaint is really 'this MATERIAL should not be carved anywhere', veto the class rather than the record: pipeline.surface_meta accepts force={sid: (cls, why)} and pipeline.OVERRIDES is the shipped precedent."
+    },
+    {
+     "action": "rebuild-this-record",
+     "argv": [
+      "python3",
+      "tools/dat-patch/tranche.py",
+      "build",
+      "--root",
+      "$RUN_ROOT",
+      "--only",
+      "0x01000827",
+      "--portal",
+      "$BASE_PORTAL",
+      "--cell",
+      "$BASE_CELL"
+     ],
+     "why": "--only takes a comma-separated hex list and refuses ids that are not route=displace in models.json (tranche.py:533-539). The resume hash covers the base record bytes AND every recipe knob, so any knob change above must bump RECIPE_VERSION (currently C-2026-08-15) or the stale OBJ is reused (tranche.py:440-450).",
+     "emits": "obj/<gid>.obj + imports.jsonl (obj-import, overwrite=True, preservePhysics=True, gfxObjOnly=True) -- physics polygons are never touched (tranche.py:606-609)"
+    }
+   ],
+   "notes": [],
+   "clientReleases": [
+    "acme-r9"
+   ],
+   "instanceExposure": null,
+   "priority": 1,
+   "priorityFormula": "reports(1) x instanceExposure(1 (unknown: no --cell, or the record is not a LandBlockInfo static)) = 1",
+   "blocked": false,
+   "lane": "geometry-displace"
+  },
+  {
+   "workItemId": "wi-rendersurface-0x06004232",
+   "target": {
+    "kind": "renderSurface",
+    "id": "0x06004232"
+   },
+   "lanes": [
+    "texture-palette-fill"
+   ],
+   "entryIds": [
+    "rl-20260820-103355-b2d9"
+   ],
+   "reports": 1,
+   "reporters": [
+    "Rhineholt"
+   ],
+   "severityMax": 1,
+   "tags": [
+    "recolor"
+   ],
+   "prompts": [
+    {
+     "entryId": "rl-20260820-103355-b2d9",
+     "author": "Rhineholt",
+     "text": "The trim on this door is a muddy brown that clashes with everything else on the building -- can it be pulled back toward the timber colour?"
+    }
+   ],
+   "cameras": [
+    {
+     "entryId": "rl-20260820-103355-b2d9",
+     "world": {
+      "landblock": "0xA9B40009",
+      "pos": [
+       40.2,
+       66.7,
+       44.9
+      ],
+      "heading": 95.0
+     },
+     "camera": {
+      "pos": [
+       37.9,
+       64.1,
+       46.2
+      ],
+      "lookAt": [
+       42.0,
+       68.8,
+       45.1
+      ],
+      "fovDeg": 63.0
+     },
+     "attachments": [
+      {
+       "path": "shots/rl-20260820-103355-b2d9-view.png",
+       "exists": false
+      }
+     ]
+    }
+   ],
+   "attachments": [],
+   "resolved": {
+    "objects": [
+     {
+      "gfxObjId": "0x01001050",
+      "exists": true,
+      "recordBytes": 16160,
+      "recordSha256": "56ebda1b830b1c69c6a760b51e136fd4cf05328e8b1c0624e64a5771afebfb4f",
+      "compressed": false,
+      "triCountAll": 128,
+      "triCountDrawn": 121,
+      "polyCount": 73,
+      "physPolyCount": 85,
+      "vertCount": 86,
+      "surfaces": [
+       "0x08000741",
+       "0x08000742",
+       "0x08000371",
+       "0x080001A5",
+       "0x0800032A",
+       "0x080006E8",
+       "0x08000139",
+       "0x08000743",
+       "0x08000744"
+      ],
+      "degradeId": "0x11000495",
+      "degradeBands": [
+       {
+        "id": "0x01001050",
+        "mode": 1,
+        "min": 18.0,
+        "ideal": 24.0,
+        "max": 48.0
+       },
+       {
+        "id": "0x01001051",
+        "mode": 1,
+        "min": 24.0,
+        "ideal": 48.0,
+        "max": 64.0
+       },
+       {
+        "id": "0x01001052",
+        "mode": 1,
+        "min": 48.0,
+        "ideal": 96.0,
+        "max": 192.0
+       },
+       {
+        "id": "0x01001053",
+        "mode": 1,
+        "min": 192.0,
+        "ideal": 390.0,
+        "max": 390.0
+       },
+       {
+        "id": "0x00000000",
+        "mode": 1,
+        "min": 3.4028234663852886e+38,
+        "ideal": 3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38
+       }
+      ],
+      "band0Self": true,
+      "band0": "0x01001050",
+      "belowMinTris": false,
+      "objectId": "0x7000AA14",
+      "instances": null
+     }
+    ],
+    "renderSurface": {
+     "rsId": "0x06004232",
+     "exists": true,
+     "id": 100680242,
+     "dcat": 8,
+     "w": 128,
+     "h": 128,
+     "fmt": 101,
+     "fmtName": "INDEX16",
+     "dataLen": 32768,
+     "recordBytes": 32796,
+     "defaultPaletteId": "0x04000E5A",
+     "paletted": true,
+     "terrainProtected": false,
+     "dimsMult4": true
+    },
+    "surface": {
+     "surfaceId": "0x08000743",
+     "exists": true,
+     "type": 2,
+     "base1Solid": false,
+     "base1Image": true,
+     "base1ClipMap": false,
+     "translucency": 0.0,
+     "luminosity": 0.0,
+     "diffuse": 0.5,
+     "surfaceTextureId": "0x05000BCD",
+     "paletteId": null,
+     "resolvedRsId": "0x06004232",
+     "hasHighresEntry": false,
+     "reliefClassVeto": null,
+     "reliefClassNote": "no record-level veto; the material CLASS still comes from matlib.classify's curated/kNN tables (matlib.py:83, DATPATCH_CLASSES_JSON + DATPATCH_CURATED_JSON) which this worker does not load -- run tranche.py enumerate for the class"
+    },
+    "uvRegion": {
+     "uvBBox": [
+      0.4,
+      0.1,
+      0.86,
+      0.55
+     ],
+     "pointCount": 4,
+     "texelBBox": [
+      51,
+      12,
+      111,
+      71
+     ],
+     "texelBBoxNote": "v is used as stored in the DAT (no flip applied) -- confirm orientation on the mask attachment before cropping"
+    }
+   },
+   "guards": [
+    {
+     "guard": "palette-route",
+     "blocking": false,
+     "why": "0x06004232 is INDEX16. Converting it to DXT would freeze its colours and break every ClothingTable subpalette recolour (most of the creature/clothing corpus). It stays palettized: 2x upscale, indices re-solved against the record's OWN DefaultPalette (0x04000E5A) and its OWN used index subset.",
+     "enforcedAt": [
+      "tools/dat-patch/fill_import.py:13-19",
+      "tools/dat-patch/fill_import.py:150-170",
+      "tools/dat-patch/texture_lane.py:533-544"
+     ]
+    },
+    {
+     "guard": "guard-drift",
+     "blocking": false,
+     "why": "entry.guards disagrees with the dats: {\"paletteRoute\": {\"dat\": true, \"plugin\": false}}. The plugin's acme-meta.json is probably from a different kit than --portal."
+    }
+   ],
+   "actions": [
+    {
+     "action": "palette-route-rebake",
+     "tool": "tools/dat-patch/fill_import.py",
+     "argv": [
+      "python3",
+      "tools/dat-patch/fill_import.py",
+      "--ids",
+      "<file containing 0x06004232>",
+      "--upscales",
+      "$UPSCALE_DIR",
+      "--out-root",
+      "$OUT_ROOT",
+      "--portal",
+      "$BASE_PORTAL"
+     ],
+     "targetDims": [
+      256,
+      256
+     ],
+     "sourceDims": [
+      128,
+      128
+     ],
+     "sourceFormat": "INDEX16",
+     "keepFormat": "INDEX16",
+     "defaultPaletteId": "0x04000E5A",
+     "why": "2x (fill_import.py:152) keeping INDEX16; the record's own palette and used-index subset are the only allowed colours.",
+     "insertedBy": "the palette route's records are NOT written by render-surface-import -- fill_import emits raw record bytes to idx/<id>.bin for DatRecordInsert (fill_import.py:24-26,166-169)"
+    }
+   ],
+   "notes": [
+    "recolor/wrong-material on a palettized record: the fix is a PALETTE edit or a source-art replacement, not a rebake. Check pallib.py RECOLOR SAFETY and the ClothingTable census before touching the palette -- a shared palette recolours other weenies too."
+   ],
+   "clientReleases": [
+    "acme-r9"
+   ],
+   "instanceExposure": null,
+   "priority": 1,
+   "priorityFormula": "reports(1) x instanceExposure(1 (unknown: no --cell, or the record is not a LandBlockInfo static)) = 1",
+   "blocked": false,
+   "lane": "texture-palette-fill"
+  },
+  {
+   "workItemId": "wi-gfxobj-0x0100004b",
+   "target": {
+    "kind": "gfxObj",
+    "id": "0x0100004B"
+   },
+   "lanes": [
+    "geometry-degrade-deferred"
+   ],
+   "entryIds": [
+    "rl-20260820-104102-c7aa"
+   ],
+   "reports": 1,
+   "reporters": [
+    "Sarael"
+   ],
+   "severityMax": 2,
+   "tags": [
+    "silhouette"
+   ],
+   "prompts": [
+    {
+     "entryId": "rl-20260820-104102-c7aa",
+     "author": "Sarael",
+     "text": "The edge of this piece is a hard polygon outline against the light -- it reads as a cut gem with three facets instead of a rounded shape."
+    }
+   ],
+   "cameras": [
+    {
+     "entryId": "rl-20260820-104102-c7aa",
+     "world": {
+      "landblock": "0xC6A9011E",
+      "pos": [
+       18.0,
+       22.4,
+       -24.0
+      ],
+      "heading": 270.0
+     },
+     "camera": {
+      "pos": [
+       19.6,
+       24.9,
+       -23.2
+      ],
+      "lookAt": [
+       17.1,
+       21.0,
+       -24.2
+      ],
+      "fovDeg": 63.0
+     },
+     "attachments": [
+      {
+       "path": "shots/rl-20260820-104102-c7aa-view.png",
+       "exists": false
+      }
+     ]
+    }
+   ],
+   "attachments": [],
+   "resolved": {
+    "objects": [
+     {
+      "gfxObjId": "0x0100004B",
+      "exists": true,
+      "recordBytes": 476,
+      "recordSha256": "db32995ffdf0f7acab3c91ae1bf2b9b03ca5507ea0efc09e70d83dbc04e93df8",
+      "compressed": false,
+      "triCountAll": 6,
+      "triCountDrawn": 6,
+      "polyCount": 6,
+      "physPolyCount": 0,
+      "vertCount": 5,
+      "surfaces": [
+       "0x08000B00"
+      ],
+      "degradeId": "0x110006CA",
+      "degradeBands": [
+       {
+        "id": "0x01001791",
+        "mode": 1,
+        "min": 0.0,
+        "ideal": 2.0,
+        "max": 6.0
+       },
+       {
+        "id": "0x0100004B",
+        "mode": 1,
+        "min": 2.0,
+        "ideal": 4.0,
+        "max": 8.0
+       },
+       {
+        "id": "0x00000000",
+        "mode": 1,
+        "min": 3.4028234663852886e+38,
+        "ideal": 3.4028234663852886e+38,
+        "max": 3.4028234663852886e+38
+       }
+      ],
+      "band0Self": false,
+      "band0": "0x01001791",
+      "belowMinTris": true,
+      "objectId": "0x8004C110",
+      "setup": {
+       "setupId": "0x02000001",
+       "exists": true,
+       "parts": [
+        "0x0100004E",
+        "0x0100004F",
+        "0x0100004D",
+        "0x0100004C",
+        "0x0100004B",
+        "0x01000053",
+        "0x01000051",
+        "0x01000050",
+        "0x01000052",
+        "0x01000054",
+        "0x01000055",
+        "0x01000056",
+        "0x01000058",
+        "0x01000057",
+        "0x01000059",
+        "0x0100005B",
+        "0x0100005A",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC",
+        "0x010001EC"
+       ],
+       "partCount": 34
+      },
+      "instances": null
+     }
+    ],
+    "gfxObj": {
+     "gfxObjId": "0x0100004B",
+     "exists": true,
+     "recordBytes": 476,
+     "recordSha256": "db32995ffdf0f7acab3c91ae1bf2b9b03ca5507ea0efc09e70d83dbc04e93df8",
+     "compressed": false,
+     "triCountAll": 6,
+     "triCountDrawn": 6,
+     "polyCount": 6,
+     "physPolyCount": 0,
+     "vertCount": 5,
+     "surfaces": [
+      "0x08000B00"
+     ],
+     "degradeId": "0x110006CA",
+     "degradeBands": [
+      {
+       "id": "0x01001791",
+       "mode": 1,
+       "min": 0.0,
+       "ideal": 2.0,
+       "max": 6.0
+      },
+      {
+       "id": "0x0100004B",
+       "mode": 1,
+       "min": 2.0,
+       "ideal": 4.0,
+       "max": 8.0
+      },
+      {
+       "id": "0x00000000",
+       "mode": 1,
+       "min": 3.4028234663852886e+38,
+       "ideal": 3.4028234663852886e+38,
+       "max": 3.4028234663852886e+38
+      }
+     ],
+     "band0Self": false,
+     "band0": "0x01001791",
+     "belowMinTris": true,
+     "instances": null
+    },
+    "triangles": {
+     "gfxObjId": "0x0100004B",
+     "requestedIndices": [
+      0,
+      3,
+      5
+     ],
+     "currentRecordSha256": "db32995ffdf0f7acab3c91ae1bf2b9b03ca5507ea0efc09e70d83dbc04e93df8",
+     "reportedRecordSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+     "stale": true,
+     "triCountAll": 6,
+     "triCountDrawn": 6,
+     "polyCount": 6,
+     "footprintRelocatedIndices": [
+      0,
+      3,
+      5
+     ],
+     "footprintMaxResidualM": 0.0006,
+     "footprintNote": "baseRecordSha256 no longer matches the record in this dat (stale-selection): the stored triangle indices are NOT trustworthy. Indices above were re-derived by nearest centroid from selection.triangles.footprint; residual 0.0006 m. Confirm on a before-shot before acting.",
+     "effectiveIndices": [
+      0,
+      3,
+      5
+     ],
+     "sourcePolygons": [
+      {
+       "polyIndex": 0,
+       "stip": 0,
+       "sides": 0,
+       "surfaceId": "0x08000B00",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        0
+       ]
+      },
+      {
+       "polyIndex": 3,
+       "stip": 0,
+       "sides": 0,
+       "surfaceId": "0x08000B00",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        3
+       ]
+      },
+      {
+       "polyIndex": 5,
+       "stip": 0,
+       "sides": 0,
+       "surfaceId": "0x08000B00",
+       "noPosFiller": false,
+       "alreadyExcludedByRecipe": false,
+       "excludedWhy": null,
+       "triangles": [
+        5
+       ]
+      }
+     ],
+     "sourcePolyIndices": [
+      0,
+      3,
+      5
+     ],
+     "selectedAreaM2": 0.0123,
+     "reportedAreaM2": 0.012,
+     "triangleFacts": [
+      {
+       "index": 0,
+       "poly": 0,
+       "areaM2": 0.0025,
+       "normal": [
+        -0.1305,
+        0.5834,
+        -0.8016
+       ],
+       "centroid": [
+        0.0237,
+        0.0159,
+        0.0046
+       ],
+       "upFacing": false
+      },
+      {
+       "index": 3,
+       "poly": 3,
+       "areaM2": 0.0031,
+       "normal": [
+        0.514,
+        -0.4131,
+        0.7518
+       ],
+       "centroid": [
+        0.0319,
+        -0.0265,
+        -0.0063
+       ],
+       "upFacing": true
+      },
+      {
+       "index": 5,
+       "poly": 5,
+       "areaM2": 0.0066,
+       "normal": [
+        0.0886,
+        -0.2328,
+        0.9685
+       ],
+       "centroid": [
+        -0.0053,
+        -0.0184,
+        0.0056
+       ],
+       "upFacing": true
+      }
+     ],
+     "upFacingCount": 2,
+     "surfaceIds": [
+      "0x08000B00"
+     ]
+    }
+   },
+   "guards": [
+    {
+     "guard": "stale-selection",
+     "blocking": false,
+     "why": "baseRecordSha256 0000000000000000 != current db32995ffdf0f7ac. The record changed between the report and now (another lane patched it, or the reporter was on a different kit). Triangle indices are re-derived from the stored footprint; residual 0.0006 m.",
+     "fallback": "baseRecordSha256 no longer matches the record in this dat (stale-selection): the stored triangle indices are NOT trustworthy. Indices above were re-derived by nearest centroid from selection.triangles.footprint; residual 0.0006 m. Confirm on a before-shot before acting."
+    },
+    {
+     "guard": "band0-not-self",
+     "blocking": true,
+     "why": "cannot displace root: degrade band 0 of 0x0100004B is 0x01001791, not the record itself. CPhysicsPart::LoadGfxObjArray fills the draw array EXCLUSIVELY from the degrade bands, so the root mesh is never drawn at ANY distance and patching it is invisible bytes.",
+     "enforcedAt": [
+      "tools/dat-patch/tranche.py:309-330",
+      "tools/dat-patch/tranche.py:458-464",
+      "tools/dat-patch/gfxlib.py:235-253"
+     ],
+     "deferTo": {
+      "bandObjects": [
+       "0x01001791",
+       "0x0100004B",
+       "0x00000000"
+      ],
+      "lane": "degrade-deferred band-object lane (degrade_deferred.json; PLAN-2026-08-18 4.P2)"
+     }
+    }
+   ],
+   "actions": [
+    {
+     "action": "retarget-to-band-object",
+     "why": "Re-run the selection against 0x01001791 (band 0). The reporter is looking at that mesh, not this one.",
+     "candidateTargets": [
+      "0x01001791",
+      "0x0100004B",
+      "0x00000000"
+     ]
+    }
+   ],
+   "notes": [
+    "2 selected triangle(s) are up-facing (nz >= 0.70). The orientation veto (DATPATCH_UP_MODE=veto, the default) already stops them carving, because displacing a walkable surface upward over untouched physics is the r5 feet-sink (relief3d.py:38-61)."
+   ],
+   "clientReleases": [
+    "acme-r8"
+   ],
+   "instanceExposure": null,
+   "priority": 1,
+   "priorityFormula": "reports(1) x instanceExposure(1 (unknown: no --cell, or the record is not a LandBlockInfo static)) = 1",
+   "blocked": true,
+   "lane": "geometry-degrade-deferred"
+  },
+  {
+   "workItemId": "wi-rendersurface-0x06006d51",
+   "target": {
+    "kind": "renderSurface",
+    "id": "0x06006D51"
+   },
+   "lanes": [
+    "terrain-lane-only"
+   ],
+   "entryIds": [
+    "rl-20260820-103012-4e01"
+   ],
+   "reports": 1,
+   "reporters": [
+    "Sarael"
+   ],
+   "severityMax": 2,
+   "tags": [
+    "wrong-material"
+   ],
+   "prompts": [
+    {
+     "entryId": "rl-20260820-103012-4e01",
+     "author": "Sarael",
+     "text": "This ground blend looks like wet clay where it should be grass. Wrong material entirely."
+    }
+   ],
+   "cameras": [
+    {
+     "entryId": "rl-20260820-103012-4e01",
+     "world": {
+      "landblock": "0x9B04002A",
+      "pos": [
+       132.0,
+       88.0,
+       12.5
+      ],
+      "heading": 301.0
+     },
+     "camera": {
+      "pos": [
+       134.8,
+       91.4,
+       14.1
+      ],
+      "lookAt": [
+       130.1,
+       85.9,
+       12.0
+      ],
+      "fovDeg": 63.0
+     },
+     "attachments": [
+      {
+       "path": "shots/rl-20260820-103012-4e01-view.png",
+       "exists": false
+      }
+     ]
+    }
+   ],
+   "attachments": [],
+   "resolved": {
+    "objects": [
+     {
+      "gfxObjId": "0x010044F9",
+      "exists": true,
+      "recordBytes": 11446,
+      "recordSha256": "d923bb6404dd80869958be251b3ad9d807da4001bd8c31cee2b820352ad81776",
+      "compressed": false,
+      "triCountAll": 57,
+      "triCountDrawn": 57,
+      "polyCount": 57,
+      "physPolyCount": 58,
+      "vertCount": 32,
+      "surfaces": [
+       "0x08001655"
+      ],
+      "degradeId": null,
+      "degradeBands": [],
+      "band0Self": true,
+      "band0": null,
+      "belowMinTris": false,
+      "objectId": "0x7101B44C",
+      "instances": null
+     }
+    ],
+    "renderSurface": {
+     "rsId": "0x06006D51",
+     "exists": true,
+     "id": 100691281,
+     "dcat": 2,
+     "w": 512,
+     "h": 512,
+     "fmt": 21,
+     "fmtName": "A8R8G8B8",
+     "dataLen": 1048576,
+     "recordBytes": 1048600,
+     "paletted": false,
+     "terrainProtected": true,
+     "dimsMult4": true
+    },
+    "surface": {
+     "surfaceId": "0x08001655",
+     "exists": true,
+     "type": 2,
+     "base1Solid": false,
+     "base1Image": true,
+     "base1ClipMap": false,
+     "translucency": 0.0,
+     "luminosity": 0.0,
+     "diffuse": 1.0,
+     "surfaceTextureId": "0x050014A7",
+     "paletteId": null,
+     "resolvedRsId": "0x06006D51",
+     "hasHighresEntry": false,
+     "reliefClassVeto": null,
+     "reliefClassNote": "no record-level veto; the material CLASS still comes from matlib.classify's curated/kNN tables (matlib.py:83, DATPATCH_CLASSES_JSON + DATPATCH_CURATED_JSON) which this worker does not load -- run tranche.py enumerate for the class"
+    },
+    "uvRegion": {
+     "uvBBox": [
+      0.3,
+      0.3,
+      0.7,
+      0.7
+     ],
+     "pointCount": 4,
+     "texelBBox": [
+      153,
+      153,
+      359,
+      359
+     ],
+     "texelBBoxNote": "v is used as stored in the DAT (no flip applied) -- confirm orientation on the mask attachment before cropping"
+    }
+   },
+   "guards": [
+    {
+     "guard": "terrain-protected-rs",
+     "blocking": true,
+     "why": "0x06006D51 is in tools/dat-patch/terrain_protected_rs.txt: the retail client REQUIRES it at 512x512 A8R8G8B8. ImgTex::MergeTexture locks and composites terrain RSs; a DXT/2048 overwrite reads out of bounds and crashes at LandscapeTextureDetail=VeryHigh (root-caused 2026-08-16).",
+     "enforcedAt": [
+      "tools/dat-patch/texture_lane.py:505-524",
+      "tools/dat-patch/fill_import.py:77-101"
+     ]
+    }
+   ],
+   "actions": [
+    {
+     "action": "route-to-terrain-lane",
+     "tool": "tools/dat-patch/terrain_lane.py",
+     "why": "Any improvement to this texture has to come from the terrain lane, which respects the 512^2 A8R8G8B8 contract, or from the detail-texture route (PLAN-2026-08-18 rank 6, D5 DetailTextureId) which dodges the composite entirely.",
+     "todo": "NOT VERIFIED by this worker: terrain_lane.py's CLI was not read for this deliverable. Read its argparse before scheduling."
+    }
+   ],
+   "notes": [],
+   "clientReleases": [
+    "acme-r9"
+   ],
+   "instanceExposure": null,
+   "priority": 1,
+   "priorityFormula": "reports(1) x instanceExposure(1 (unknown: no --cell, or the record is not a LandBlockInfo static)) = 1",
+   "blocked": true,
+   "lane": "terrain-lane-only"
+  }
+ ]
+}

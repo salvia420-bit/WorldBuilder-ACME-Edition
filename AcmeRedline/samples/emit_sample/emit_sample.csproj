@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Self-test harness for AcmeRedline. NOT part of the shipped plugin (the plugin csproj
+    excludes samples/**). It emits schema-v1 redline entries from realistic, dat-grounded
+    selection state — using the plugin's OWN emit code (RedlineJson + Model +
+    SelectionService.BuildFanTrianglePayload) — and validates every line against the pipeline's
+    contract at tools/dat-patch/redline/schema_v1.json.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\AcmeRedline.csproj" />
+    <PackageReference Include="NJsonSchema" Version="11.5.1" />
+    <PackageReference Include="Chorizite.DatReaderWriter" Version="1.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" />
+  </ItemGroup>
+</Project>

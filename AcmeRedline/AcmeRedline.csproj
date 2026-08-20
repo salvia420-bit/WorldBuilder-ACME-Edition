@@ -1,0 +1,93 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Chorizite plugin project.
+
+    Convention verified against the two real in-tree plugins:
+      external/chorizite/ACPlugin/AC.csproj
+      external/chorizite/RmlUiPlugin/RmlUi.csproj
+    Both set EnableDynamicLoading, flatten OutputPath, ship manifest.json + assets
+    next to the entry dll, and reference the framework with ExcludeAssets="runtime"
+    (the host already has those assemblies loaded; a plugin must not ship its own copy).
+
+    Per the task brief we bind to the VENDORED sources where a vendored csproj exists
+    (Chorizite.Core, Chorizite.ACBindings) and fall back to the published packages for
+    the parts that are not vendored as buildable projects in a compatible shape
+    (see README.md -> "Build contracts and why some refs stay on NuGet").
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(TargetFramework)\</OutputPath>
+    <IntermediateOutputPath>obj\$(TargetFramework)\</IntermediateOutputPath>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>pdbonly</DebugType>
+    <AssemblyName>AcmeRedline</AssemblyName>
+    <RootNamespace>AcmeRedline</RootNamespace>
+    <!-- ACBindings is a raw memory-layout binding surface; its docs are sparse. -->
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Vendored framework projects.
+    Private=false + ExcludeAssets=runtime => compile against them, never copy them
+    into the plugin output (the Chorizite host owns those assemblies at runtime).
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\external\chorizite\Chorizite\Chorizite.Core\Chorizite.Core.csproj"
+                      Private="false" ExcludeAssets="runtime" />
+    <ProjectReference Include="..\external\chorizite\ACBindings\Chorizite.ACBindings.csproj"
+                      Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!--
+    Host-provided packages. Same versions/ExcludeAssets the real plugins use.
+    NOTE: DatReaderWriter is intentionally NOT referenced directly - it arrives
+    transitively as `Chorizite.DatReaderWriter` via Chorizite.Core, and
+    IDatReaderInterface.Portal/Cell are typed against exactly that assembly.
+    Adding external/DatReaderWriter as a second ProjectReference would produce two
+    DatReaderWriter.dll identities and break the Portal/Cell types. See README.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Chorizite.Plugins.RmlUi" Version="0.0.10" ExcludeAssets="runtime" />
+    <PackageReference Include="Chorizite.Plugins.AC" Version="0.0.5" ExcludeAssets="runtime" />
+    <!-- "native" as well as "runtime": otherwise RmlUiNative.dll is copied here, duplicating
+         the copy the RmlUi plugin itself ships (external/chorizite/RmlUiPlugin/RmlUi.csproj). -->
+    <PackageReference Include="RmlUi.Net" Version="1.0.1" ExcludeAssets="runtime;native" />
+    <!--
+      Versions must MATCH what the vendored Chorizite.Core project pulls (Autofac 8.4.0,
+      Logging.Abstractions 9.0.9). The published plugins pin the older 8.2.0/9.0.0 because they
+      compile against the Chorizite.Core *package* 0.0.13; against the vendored project those
+      pins are a NuGet downgrade (NU1605).
+    -->
+    <PackageReference Include="Autofac" Version="8.4.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!-- The self-test harness under samples/ is its own project; keep its sources out of the
+       plugin's default **/*.cs glob so the plugin dll never carries harness code. -->
+  <ItemGroup>
+    <Compile Remove="samples\**\*.cs" />
+    <None Remove="samples\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="manifest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="assets\panels\Redline.rml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="README.md">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

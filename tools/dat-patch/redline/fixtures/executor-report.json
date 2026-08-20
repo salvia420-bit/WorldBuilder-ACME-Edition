@@ -1,0 +1,164 @@
+{
+ "generatedBy": "tools/dat-patch/redline/executor.py",
+ "mode": "dry-run",
+ "base": "/home/wbterminal/ac_base_dats/client_portal.dat",
+ "workDir": "/mnt/wbterminal2/redline-exec/20260820-175009",
+ "maxRecords": 1,
+ "recordsWritten": 0,
+ "capHit": false,
+ "counts": {
+  "planned": 1,
+  "blocked": 3,
+  "needs-manual": 1
+ },
+ "items": [
+  {
+   "workItemId": "wi-rendersurface-0x06003c97",
+   "target": {
+    "kind": "renderSurface",
+    "id": "0x06003C97"
+   },
+   "lane": "texture-legibility-rebake",
+   "tags": [
+    "too-blurry",
+    "seam"
+   ],
+   "entryIds": [
+    "rl-20260820-101500-a1c3",
+    "rl-20260820-101812-7f2b"
+   ],
+   "dispatcher": "texture_rebake",
+   "planReason": "drivable: texture_lane.py run -> WBT import",
+   "disposition": "planned",
+   "wouldDo": "would rebake 0x08000371 (RS 0x06003C97) via texture_lane.py run into the DatCompress-freed pool",
+   "commands": [
+    "# free pool prepared ONCE per run by DatCompress on the scratch (main -> prepare_free_pool); NOT texture_lane.py prep (zeroed arena corrupts >~65-block records -- detail_texture_lane.py:271-276)",
+    "# surfaces.json + ids.txt (the lane's `run` inputs)",
+    "python3 /home/wbterminal/WorldBuilder-ACME-Edition/tools/dat-patch/texture_lane.py run --root /mnt/wbterminal2/redline-exec/20260820-175009/wi-rendersurface-0x06003c97 --base /home/wbterminal/ac_base_dats/client_portal.dat --patched /mnt/wbterminal2/redline-exec/20260820-175009/client_portal.dat --ids-file /mnt/wbterminal2/redline-exec/20260820-175009/wi-rendersurface-0x06003c97/ids.txt --tag redline"
+   ]
+  },
+  {
+   "workItemId": "wi-gfxobj-0x01000827",
+   "target": {
+    "kind": "gfxObj",
+    "id": "0x01000827"
+   },
+   "lane": "geometry-displace",
+   "tags": [
+    "remove-detail"
+   ],
+   "entryIds": [
+    "rl-20260820-102401-9d44"
+   ],
+   "dispatcher": "geometry_remove_detail",
+   "planReason": "needs the per-poly-exclusion knob (not in the shipped lane)",
+   "disposition": "blocked",
+   "wouldDo": "'remove-detail' needs per-polygon exclusion, which the shipped lane cannot express: exclusion is derived only from the record's own stip/sides (relief3d.py:152). Refusing to edit core lane code (pipeline is live). See the PROPOSAL.",
+   "commands": [],
+   "proposal": {
+    "title": "per-poly-exclusion override knob for the displace lane",
+    "why": "remove-detail on a specific record needs to exclude named source polygons from carving. Today relief3d.SourceMesh.from_record derives `excluded` ONLY from the polygon's own stip/sides (relief3d.py:152, 157) -- there is no per-record override, so a single-record complaint cannot be honoured without touching every record of that material.",
+    "proposedChange": [
+     {
+      "file": "tools/dat-patch/relief3d.py",
+      "function": "SourceMesh.from_record",
+      "at": "relief3d.py:127 (signature) / :152-163 (per-poly flag build)",
+      "change": "add an optional `exclude_polys=None` arg (a set of source polygon indices in record order); when a polygon's index is in it, force excluded=True and amp=0.0 exactly as the stip/sides path already does, so the existing weld-to-zero (relief3d.py:287-304) needs no change."
+     },
+     {
+      "file": "tools/dat-patch/pilot.py",
+      "function": "recipe_c_source",
+      "at": "pilot.py:237-254",
+      "change": "thread an `exclude_polys` through to SourceMesh.from_record; source it from a new optional per-record override file."
+     },
+     {
+      "file": "tools/dat-patch/tranche.py",
+      "function": "cmd_build / _build_one",
+      "at": "tranche.py:453-499 (_build_one) + :521 (cmd_build)",
+      "change": "read an optional <root>/redline_overrides.json {gid_hex: {excludePolys: [int,...]}} and pass the list into recipe_c_source for that gid."
+     },
+     {
+      "file": "tools/dat-patch/tranche.py",
+      "constant": "RECIPE_VERSION",
+      "at": "tranche.py:111",
+      "change": "BUMP it (e.g. 'C-2026-08-15' -> 'C-redline-excl-1'); the resume hash (_recipe_hash, tranche.py:440-450) folds RECIPE_VERSION, so a bump forces a rebuild of any record whose override set changed -- without it a stale OBJ is reused."
+     }
+    ],
+    "targetGfxObj": "0x01000827",
+    "excludePolysForThisItem": [
+     8,
+     9,
+     85,
+     118,
+     128
+    ],
+    "note": "PROPOSAL ONLY -- not applied. The dat pipeline is running live; core lane code must not be edited from the redline tooling."
+   }
+  },
+  {
+   "workItemId": "wi-rendersurface-0x06004232",
+   "target": {
+    "kind": "renderSurface",
+    "id": "0x06004232"
+   },
+   "lane": "texture-palette-fill",
+   "tags": [
+    "recolor"
+   ],
+   "entryIds": [
+    "rl-20260820-103355-b2d9"
+   ],
+   "dispatcher": "texture_palette",
+   "planReason": "palette route records are inserted by DatRecordInsert, not a single headless dat-writing entrypoint",
+   "disposition": "needs-manual",
+   "wouldDo": "INDEX16/P8 palette route: fill_import.py emits raw record bytes to idx/<id>.bin for DatRecordInsert (fill_import.py:150-170) -- there is no single headless entrypoint that both bakes AND writes the dat, so this is a two-command manual sequence.",
+   "commands": [
+    "python3 tools/dat-patch/fill_import.py --ids <file with 0x06004232> --upscales <UPSCALE_DIR> --out-root <R> --portal <BASE>",
+    "# then apply the idx/<id>.bin records with the DatRecordInsert tool (tools/dat-patch/DatRecordInsert) into the scratch dat"
+   ]
+  },
+  {
+   "workItemId": "wi-gfxobj-0x0100004b",
+   "target": {
+    "kind": "gfxObj",
+    "id": "0x0100004B"
+   },
+   "lane": "geometry-degrade-deferred",
+   "tags": [
+    "silhouette"
+   ],
+   "entryIds": [
+    "rl-20260820-104102-c7aa"
+   ],
+   "dispatcher": "guard-passthrough",
+   "planReason": "blocking guard(s): band0-not-self",
+   "disposition": "blocked",
+   "wouldDo": "guard-blocked, passed through unexecuted: cannot displace root: degrade band 0 of 0x0100004B is 0x01001791, not the record itself. CPhysicsPart::LoadGfxObjArray fills the draw array EXCLUSIVELY from the degrade bands, so the root mesh is never drawn at ANY distance and patching it is invisible bytes.",
+   "commands": [],
+   "retargetCandidates": [
+    "0x01001791",
+    "0x0100004B",
+    "0x00000000"
+   ]
+  },
+  {
+   "workItemId": "wi-rendersurface-0x06006d51",
+   "target": {
+    "kind": "renderSurface",
+    "id": "0x06006D51"
+   },
+   "lane": "terrain-lane-only",
+   "tags": [
+    "wrong-material"
+   ],
+   "entryIds": [
+    "rl-20260820-103012-4e01"
+   ],
+   "dispatcher": "guard-passthrough",
+   "planReason": "blocking guard(s): terrain-protected-rs",
+   "disposition": "blocked",
+   "wouldDo": "guard-blocked, passed through unexecuted: 0x06006D51 is in tools/dat-patch/terrain_protected_rs.txt: the retail client REQUIRES it at 512x512 A8R8G8B8. ImgTex::MergeTexture locks and composites terrain RSs; a DXT/2048 overwrite reads out of bounds and crashes at LandscapeTextureDetail=VeryHigh (root-caused 2026-08-16).",
+   "commands": []
+  }
+ ]
+}

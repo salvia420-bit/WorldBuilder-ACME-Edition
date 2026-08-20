@@ -1,0 +1,7 @@
+{"entryId":"rl-20260820-101500-a1c3","at":"2026-08-20T10:15:00Z","state":"queued","note":"seeded by the plugin on submit","by":"AcmeRedline.plugin"}
+{"entryId":"rl-20260820-101812-7f2b","at":"2026-08-20T10:18:12Z","state":"queued","note":"seeded by the plugin on submit","by":"AcmeRedline.plugin"}
+{"entryId":"rl-20260820-102401-9d44","at":"2026-08-20T10:24:01Z","state":"queued","note":"seeded by the plugin on submit","by":"AcmeRedline.plugin"}
+{"entryId":"rl-20260820-103012-4e01","at":"2026-08-20T10:30:12Z","state":"queued","note":"seeded by the plugin on submit","by":"AcmeRedline.plugin"}
+{"entryId":"rl-20260820-103355-b2d9","at":"2026-08-20T10:33:55Z","state":"queued","note":"seeded by the plugin on submit","by":"AcmeRedline.plugin"}
+{"entryId":"rl-20260820-104102-c7aa","at":"2026-08-20T10:41:02Z","state":"queued","note":"seeded by the plugin on submit","by":"AcmeRedline.plugin"}
+{"entryId":"rl-20260820-101500-a1c3","at":"2026-08-20T11:02:40Z","state":"in-progress","release":"acme-r10","note":"picked up: texture-legibility-rebake on 0x06003C97","by":"agent:texture-lane"}

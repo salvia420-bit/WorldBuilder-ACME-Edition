@@ -150,3 +150,31 @@ Icons landed and the portal-side plan items audited against what actually shippe
   lineage; parked with this note.
 - **4.P4 creature-subdiv spike: not attempted this session** (timeboxed
   research; queue next).
+
+### Session 2 — 1070 in-client gate FOUND A CRASH; root-caused
+Running the mandatory 1070 gate on the r9 kit exposed a client crash the offline
+gates could not see:
+- **Symptom**: DDD interrogation PASSES ("no update required" — dats accepted,
+  force-mount works), then a deterministic 0xC0000005 (access violation) at
+  fault offset 0x420a0 at the CHARACTER-SELECT screen, ~5 s in, before world
+  entry. 2013-map neighbourhood of 0x420a0 = `SurfaceWindow::LegacyBlit` (the
+  CPU-side 2D UI blit).
+- **Bisect**: r9-portal + r8-highres survives 60 s+; r9-portal + r9-highres
+  crashes. The fault is in the highres fill.
+- **First red herring**: 70 records were oversize (>2048 side) — the 4x upscale
+  multiplied retail dims past the client's 2048 texture cap (r8 had ZERO
+  oversize). Real defect, capped all 70 to <=2048 — but the crash was BYTE-FOR-
+  BYTE identical (same 0x420a0). Not the cause.
+- **ROOT CAUSE**: 13,967 added records went retail-UNCOMPRESSED -> our-DXT
+  (12,664 A8R8G8B8->DXT5 alone). These are this session's tier C+D **icons/UI**
+  surfaces. Retail stores UI icons uncompressed because the client BLITS them on
+  the CPU via SurfaceWindow (DXT is a GPU block format the 2D blit path can't
+  decode -> AV at LegacyBlit). World surfaces go through the GPU 3D pipeline
+  where DXT is fine — which is why r8 (world-only, no icons) gated clean and why
+  PLAN-2026-08-18 deliberately DEFERRED icons ("71% of records for 4% of bytes,
+  least world-visible"). Shipping them DXT-encoded this session was the regression.
+- **FIX**: drop this session's 13,301 icon/UI additions; ship highres =
+  r8 + session-1 world fill (1,746 DXT + 3,122 palette, oversize capped) =
+  9,574 records. Re-gate in-client. Icons cannot ship as DXT (CPU-blit) and
+  A8R8G8B8 icons would blow the runway (~810 MB) for the least-visible class, so
+  they stay deferred exactly as the plan intended.

@@ -1,0 +1,232 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://acme.local/redline/schema_v1.json",
+  "title": "AcmeRedline queue entry + status event, v1",
+  "description": "Two top-level schemas live here: #/definitions/entry (one line of redline.jsonl) and #/definitions/statusEvent (one line of redline-status.jsonl). The entry shape is FROZEN: the Chorizite in-game plugin emits exactly this. Consumers: tools/dat-patch/redline/queue_worker.py, status_writer.py.",
+  "oneOf": [
+    {"$ref": "#/definitions/entry"},
+    {"$ref": "#/definitions/statusEvent"}
+  ],
+
+  "definitions": {
+
+    "hex32": {
+      "type": "string",
+      "pattern": "^0x[0-9A-Fa-f]{1,8}$",
+      "description": "A DAT object id, hex, 0x-prefixed."
+    },
+    "gfxObjId":   {"type": "string", "pattern": "^0x01[0-9A-Fa-f]{6}$"},
+    "setupId":    {"type": "string", "pattern": "^0x02[0-9A-Fa-f]{6}$"},
+    "surfaceTextureId": {"type": "string", "pattern": "^0x05[0-9A-Fa-f]{6}$"},
+    "renderSurfaceId":  {"type": "string", "pattern": "^0x06[0-9A-Fa-f]{6}$"},
+    "surfaceId":  {"type": "string", "pattern": "^0x08[0-9A-Fa-f]{6}$"},
+    "sha256":     {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+    "isoUtc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "vec3": {
+      "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3
+    },
+    "vec2": {
+      "type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2
+    },
+    "quatWXYZ": {
+      "type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4,
+      "description": "w, x, y, z -- matches datlib.R.quat()'s storage order in the DATs (datlib.py:91)."
+    },
+
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "v", "createdAt", "author", "clientRelease", "world",
+                   "camera", "selection", "prompt", "tags", "severity",
+                   "attachments", "guards", "status"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^rl-[0-9]{8}-[0-9]{6}-[0-9a-fA-F]{4}$",
+          "description": "rl-<utc yyyymmdd>-<hhmmss>-<4 hex>. Stable primary key; the status log references it."
+        },
+        "v": {"type": "integer", "const": 1},
+        "createdAt": {"$ref": "#/definitions/isoUtc"},
+        "author": {"type": "string", "minLength": 1, "maxLength": 64,
+                   "description": "Account name of the reporter. Untrusted free text."},
+
+        "clientRelease": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kitTag", "portalSha256"],
+          "properties": {
+            "kitTag": {"type": "string", "pattern": "^acme-r[0-9]+(\\.[0-9]+)?$",
+                       "description": "Matches assemble_kit.sh --tag (tools/dat-patch/kit/assemble_kit.sh:27)."},
+            "portalSha256": {"$ref": "#/definitions/sha256"},
+            "highresSha256": {"anyOf": [{"$ref": "#/definitions/sha256"}, {"type": "null"}]}
+          }
+        },
+
+        "world": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["landblock", "pos"],
+          "properties": {
+            "landblock": {"type": "string", "pattern": "^0x[0-9A-Fa-f]{8}$",
+                          "description": "Cell id / pose.landblockId: (x<<24)|(y<<16)|cell."},
+            "pos": {"$ref": "#/definitions/vec3"},
+            "heading": {"type": "number", "minimum": -360, "maximum": 360}
+          }
+        },
+
+        "camera": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pos", "lookAt"],
+          "properties": {
+            "pos": {"$ref": "#/definitions/vec3"},
+            "lookAt": {"$ref": "#/definitions/vec3"},
+            "fovDeg": {"type": "number", "minimum": 1, "maximum": 179}
+          },
+          "description": "The reporter's eye. Re-shot verbatim by the verification loop -- see docs/redline/DESIGN.md section 7."
+        },
+
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {"type": "string", "enum": ["texture", "triangles", "object"]},
+
+            "objects": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["objectId", "gfxObjId"],
+                "properties": {
+                  "objectId": {"$ref": "#/definitions/hex32",
+                               "description": "Server object GUID of the instance clicked in-game."},
+                  "setupId": {"anyOf": [{"$ref": "#/definitions/setupId"}, {"type": "null"}],
+                              "description": "OPTIONAL: retail static architecture is placed as a bare 0x01 GfxObj model id in LandBlockInfo (pilot.py:94 resolve_gfx), so a building selection legitimately has no Setup."},
+                  "gfxObjId": {"$ref": "#/definitions/gfxObjId"},
+                  "worldFrame": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["pos", "quat"],
+                    "properties": {
+                      "pos": {"$ref": "#/definitions/vec3"},
+                      "quat": {"$ref": "#/definitions/quatWXYZ"}
+                    }
+                  }
+                }
+              }
+            },
+
+            "renderSurfaces": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["rsId"],
+                "properties": {
+                  "rsId": {"$ref": "#/definitions/renderSurfaceId"},
+                  "surfaceId": {"anyOf": [{"$ref": "#/definitions/surfaceId"}, {"type": "null"}]},
+                  "surfaceTextureId": {"anyOf": [{"$ref": "#/definitions/surfaceTextureId"}, {"type": "null"}]},
+                  "uvHints": {
+                    "type": "array",
+                    "items": {"$ref": "#/definitions/vec2"},
+                    "description": "UV coordinates inside the reported texture, 0..1. Their bbox is the region the reporter meant."
+                  }
+                }
+              }
+            },
+
+            "triangles": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["gfxObjId", "indices"],
+              "properties": {
+                "gfxObjId": {"$ref": "#/definitions/gfxObjId"},
+                "indices": {
+                  "type": "array",
+                  "items": {"type": "integer", "minimum": 0},
+                  "description": "Indices into the record's FAN-TRIANGULATED draw-triangle stream over EVERY polygon in CGfxObj record (positional) order -- NOT drawn-only, NOT polygon keys. Polygon pi (0-based record order) contributes len(v)-2 triangles emitted (v[0],v[k],v[k+1]) for k=1..n-2; stippled/NoPos filler polys (Stippling & 0x4) stay IN the stream so an index is a stable address. This is the plugin's FROZEN contract (AcmeRedline/Services/SelectionService.cs:639-699 BuildFanStreamStatic + BuildFanTrianglePayload; decomp Render::GfxObjUnderSelectionRay ac-headers/acclient.c:379997 iterates mesh->polygons positionally over num_polygons). The basis is carried by MATCHING it exactly, NOT by an in-entry field. queue_worker maps each triangle to its source polygon, the granularity every displace knob works at."
+                },
+                "footprint": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "centroids": {"type": "array", "items": {"$ref": "#/definitions/vec3"}},
+                    "normals": {"type": "array", "items": {"$ref": "#/definitions/vec3"}},
+                    "areaM2": {"type": "number", "minimum": 0}
+                  },
+                  "description": "Model-space geometry of the selected triangles. The FALLBACK when baseRecordSha256 no longer matches: the worker re-locates the selection by nearest centroid."
+                },
+                "baseRecordSha256": {"$ref": "#/definitions/sha256",
+                                     "description": "sha256 of the GfxObj record bytes as read by datlib.Dat.get() (datlib.py:51, post-inflate) at report time."}
+              }
+            },
+
+            "screenLasso": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["points", "viewport"],
+              "properties": {
+                "points": {"type": "array", "items": {"$ref": "#/definitions/vec2"}},
+                "viewport": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
+              }
+            }
+          }
+        },
+
+        "prompt": {"type": "string", "maxLength": 4000,
+                   "description": "Free text from the reporter. UNTRUSTED: never executed, never interpolated into a shell command."},
+        "tags": {
+          "type": "array",
+          "items": {"type": "string",
+                    "enum": ["too-blurry", "wrong-material", "seam", "silhouette",
+                             "remove-detail", "recolor", "other"]}
+        },
+        "severity": {"type": "integer", "minimum": 1, "maximum": 5},
+        "attachments": {"type": "array", "items": {"type": "string", "maxLength": 512},
+                        "description": "Paths RELATIVE to the queue file's directory. Never absolute, never containing '..' -- queue_worker refuses those."},
+
+        "guards": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "terrainProtected": {"type": "boolean"},
+            "paletteRoute": {"type": "boolean"}
+          },
+          "description": "The plugin's OPTIMISTIC pre-flight from acme-meta.json (gen_kit_meta.py). Advisory only: queue_worker re-derives both from the dats and reports a disagreement as guard-drift."
+        },
+
+        "status": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {
+            "state": {"type": "string", "enum": ["queued", "in-progress", "fixed"]}
+          },
+          "description": "Seed state only. The AUTHORITY is redline-status.jsonl: derived state = last event for this entryId."
+        }
+      }
+    },
+
+    "statusEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryId", "at", "state"],
+      "properties": {
+        "entryId": {"type": "string", "pattern": "^rl-[0-9]{8}-[0-9]{6}-[0-9a-fA-F]{4}$"},
+        "at": {"$ref": "#/definitions/isoUtc"},
+        "state": {"type": "string", "enum": ["queued", "in-progress", "fixed"]},
+        "release": {"anyOf": [{"type": "string", "pattern": "^acme-r[0-9]+(\\.[0-9]+)?$"},
+                              {"type": "null"}],
+                    "description": "The kit tag the fix ships in. Required by convention for state=fixed."},
+        "note": {"type": "string", "maxLength": 2000},
+        "by": {"type": "string", "maxLength": 128,
+               "description": "agent or tool that wrote the event, e.g. 'queue_worker.py' or 'agent:texture-lane'."}
+      }
+    }
+  }
+}

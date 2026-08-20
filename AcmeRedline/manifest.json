@@ -1,0 +1,10 @@
+{
+  "id": "AcmeRedline",
+  "name": "ACME Redline",
+  "author": "ACME Edition",
+  "version": "0.1.0-dev",
+  "description": "In-game art-annotation tool. Select textures / triangles / objects, describe what's wrong, and queue a structured redline entry for the dat-patching AI pipeline.",
+  "entryfile": "AcmeRedline.dll",
+  "dependencies": [ "RmlUi@0.0.10", "AC@0.0.5" ],
+  "environments": [ "Client" ]
+}
