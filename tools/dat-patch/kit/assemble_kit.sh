@@ -73,7 +73,7 @@ copy_in "$PORTAL" client_portal.dat
 [ -n "$CELL" ] && copy_in "$CELL" client_cell_1.dat
 
 echo "== launcher + patcher"
-for f in play.bat patch-my-client.bat acme-patch-client.ps1; do
+for f in play.bat patch-my-client.bat acme-patch-client.ps1 acme-patch-client.py; do
   cp -f "$HERE/$f" "$KIT/$f"
   echo "-- $f"
 done
@@ -85,14 +85,6 @@ for name in client_portal.dat client_highres.dat client_cell_1.dat; do
   printf '%s|%s\r\n' "$name" "$(stat -c%s "$KIT/$name")" >> "$KIT/kit-manifest.txt"
 done
 sed -e 's/\r$//' "$KIT/kit-manifest.txt" | sed 's/^/   /'
-
-echo "== SHA256SUMS.txt"
-( cd "$KIT" && sha256sum client_portal.dat \
-    $( [ -f client_highres.dat ] && echo client_highres.dat ) \
-    $( [ -f client_cell_1.dat ] && echo client_cell_1.dat ) \
-    play.bat patch-my-client.bat acme-patch-client.ps1 kit-manifest.txt \
-    > SHA256SUMS.txt )
-cut -c1-8,66- "$KIT/SHA256SUMS.txt" | sed 's/^/   /'
 
 # The exe the player ends up with (we ship the delta, not the binary) — quoted in
 # the README so anyone can audit their patched client against the gated artifact.
@@ -117,10 +109,11 @@ WHAT'S IN THE BOX
   client_portal.dat        $(numfmt --to=iec --format='%.1f' "$PSZ") ($PSZ bytes)
   client_highres.dat       $(numfmt --to=iec --format='%.1f' "$HSZ") ($HSZ bytes)   <- REQUIRED, see below
   client_cell_1.dat        $(numfmt --to=iec --format='%.1f' "$CSZ") ($CSZ bytes)
-  play.bat                 start the game (checks the install first)
-  patch-my-client.bat      one-time client patch (run once)
-  acme-patch-client.ps1    the patch itself - plain text, auditable
-  kit-manifest.txt         file sizes play.bat verifies
+  play.bat                 start the game, checks the install first  [Windows]
+  patch-my-client.bat      one-time client patch, run once           [Windows]
+  acme-patch-client.ps1    the patch itself - plain text, auditable  [Windows]
+  acme-patch-client.py     the same patch + install check            [Linux/wine]
+  kit-manifest.txt         file sizes the launcher verifies
   SHA256SUMS.txt           checksums for everything above
 
 INSTALL
@@ -135,6 +128,21 @@ INSTALL
          LandscapeTextureDetail=0
      The boot default halves every texture - without this you see half the patch.
   5. Start the game with play.bat (not acclient.exe directly).
+
+ON LINUX / macOS / WINE
+  Steps 1, 2 and 4 are the same. Instead of steps 3 and 5:
+     python3 acme-patch-client.py              patches your acclient.exe once
+     python3 acme-patch-client.py --check-kit  before you play: verifies the
+                                               dats and the client patch
+  then launch acclient.exe through wine the way you normally do.
+
+IF YOU USE ANOTHER LAUNCHER (ThwargLauncher, Decal, a shortcut...)
+  Those start acclient.exe directly, so the install check never runs. The game
+  will still start - but if client_highres.dat is missing or the client is not
+  patched, textures are silently absent instead of erroring. Run play.bat, or
+  acme-patch-client.py --check-kit, once after installing to confirm the kit is
+  complete - and again after any client re-install or file verification, which
+  will overwrite your patched acclient.exe.
 
 WHY client_highres.dat IS REQUIRED
   This release moves the upgraded textures out of client_portal.dat into
@@ -163,6 +171,7 @@ SERVERS
 ROLLBACK
   Restore your backed-up client_portal.dat / client_cell_1.dat, delete
   client_highres.dat, and copy acclient.exe.acme-orig.bak back over acclient.exe.
+  Both patchers keep that backup the first time they run.
 
 Each ACME release is self-contained - you can install it over retail or over an
 earlier ACME release; it is not a delta.
@@ -179,6 +188,14 @@ assert not bad, f"non-ASCII left in README: {bad}"
 open(p, "wb").write(d.replace("\r\n", "\n").replace("\n", "\r\n").encode("ascii"))
 PY
 sed 's/^/   | /' "$KIT/README.txt" | head -12
+
+echo "== SHA256SUMS.txt"
+( cd "$KIT" && sha256sum client_portal.dat \
+    $( [ -f client_highres.dat ] && echo client_highres.dat ) \
+    $( [ -f client_cell_1.dat ] && echo client_cell_1.dat ) \
+    play.bat patch-my-client.bat acme-patch-client.ps1 acme-patch-client.py kit-manifest.txt \
+    README.txt > SHA256SUMS.txt )
+cut -c1-8,66- "$KIT/SHA256SUMS.txt" | sed 's/^/   /'
 
 # --- self-gate: play.bat's own rule, run here so a broken kit never ships ----
 if [ "$VERIFY" = 1 ]; then

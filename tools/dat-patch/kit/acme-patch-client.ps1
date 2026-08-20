@@ -1,16 +1,16 @@
 <#
-  acme-patch-client.ps1 — ACME r8 kit client patcher (Windows PowerShell 5.1+).
+  acme-patch-client.ps1 - ACME r8 kit client patcher (Windows PowerShell 5.1+).
 
   Patches YOUR OWN retail End-of-Retail acclient.exe (2015-06-12 build 6096)
-  in place.  The ACME kit ships NO client executable — the community norm is
-  patch-over-your-own-install — so this script carries only the byte deltas.
+  in place.  The ACME kit ships NO client executable - the community norm is
+  patch-over-your-own-install - so this script carries only the byte deltas.
 
   Doctrine (mirrors the lane's patch_client.py, /mnt/wbterminal2/ac-eor-patch):
     * every site is located by a UNIQUE byte SIGNATURE (invariant context
       around the needle), never by a quoted address;
     * a signature that is missing, or found more than once, REFUSES;
-    * idempotent — a site already carrying the replacement is a no-op;
-    * fail-loud — nothing is written unless every enabled patch resolves;
+    * idempotent - a site already carrying the replacement is a no-op;
+    * fail-loud - nothing is written unless every enabled patch resolves;
     * the PE checksum is recomputed so the on-disk artifact is correct.
 
   Usage:
@@ -18,7 +18,7 @@
     .\acme-patch-client.ps1 -Verify         report patch state, write nothing
     .\acme-patch-client.ps1 -Exe <path> [-Out <path>] [-NoBackup] [-Quiet]
 
-  Exit codes: 0 ok / already patched · 1 refused (nothing written) · 2 usage.
+  Exit codes: 0 ok / already patched | 1 refused (nothing written) | 2 usage.
 #>
 [CmdletBinding()]
 param(

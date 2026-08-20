@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""check_ps1_table.py — gate the kit patcher's embedded byte table.
+"""check_ps1_table.py — gate the kit patchers' embedded byte tables.
 
-The kit ships acme-patch-client.ps1 (players patch their OWN retail exe; the
-kit redistributes no client bytes).  Its patch table is a hand-carried copy of
-the lane registry, so it needs a machine gate, not an eyeball:
+The kit ships acme-patch-client.ps1 (Windows) and acme-patch-client.py
+(Linux/macOS/wine); players patch their OWN retail exe, the kit redistributes no
+client bytes.  Both carry a hand-copied table of the lane registry, so they need
+a machine gate, not an eyeball:
 
-  1. table parity  — every enabled patch in patch_client.py appears in the ps1
-     with identical sig / needle_at / needle / replace, and the ps1 carries
-     nothing extra (a stray candidate would ship an ungated byte change).
-  2. artifact parity — applying the ps1's OWN table to the pristine retail exe
+  1. table parity  — every enabled patch in patch_client.py appears in BOTH
+     shipped patchers with identical sig / needle_at / needle / replace, and
+     they carry nothing extra (a stray candidate would ship an ungated byte
+     change), and the two tables agree with each other.
+  2. artifact parity — applying the shipped table to the pristine retail exe
      reproduces the SHIPPING exe byte-for-byte (PE checksum included).
 
 Usage: check_ps1_table.py [--ps1 …] [--registry …] [--orig …] [--shipped …]
@@ -17,6 +19,7 @@ Exit 0 = both gates green.
 import argparse, hashlib, importlib.util, re, struct, sys
 
 DEF_PS1 = "/home/wbterminal/WorldBuilder-ACME-Edition/tools/dat-patch/kit/acme-patch-client.ps1"
+DEF_PY = "/home/wbterminal/WorldBuilder-ACME-Edition/tools/dat-patch/kit/acme-patch-client.py"
 DEF_REG = "/mnt/wbterminal2/ac-eor-patch/patch_client.py"
 DEF_ORIG = "/mnt/wbterminal2/ac-eor-patch/acclient.eor.orig.exe"
 DEF_SHIP = "/mnt/wbterminal2/ac-eor-patch/acclient.eor.patched.exe"
@@ -33,6 +36,20 @@ def parse_ps1(path):
         key, sig, at, needle, replace = m.groups()
         out.append(dict(key=key, sig=sig, at=int(at), needle=needle, replace=replace))
     return out
+
+
+def parse_py(path):
+    """Pull the (key, title, sig, needle_at, needle, replace) tuples."""
+    import ast
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "PATCHES":
+            out = []
+            for elt in node.value.elts:
+                key, _title, sig, at, needle, replace = [ast.literal_eval(v) for v in elt.elts]
+                out.append(dict(key=key, sig=sig, at=at, needle=needle, replace=replace))
+            return out
+    raise SystemExit(f"no PATCHES list found in {path}")
 
 
 def load_registry(path):
@@ -88,15 +105,18 @@ def locate(buf, ent):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ps1", default=DEF_PS1)
+    ap.add_argument("--py", default=DEF_PY)
     ap.add_argument("--registry", default=DEF_REG)
     ap.add_argument("--orig", default=DEF_ORIG)
     ap.add_argument("--shipped", default=DEF_SHIP)
     a = ap.parse_args()
 
     ps1 = parse_ps1(a.ps1)
+    py = parse_py(a.py)
     pc = load_registry(a.registry)
     reg = {p.key: p for p in pc.PATCHES if p.enabled}
     print(f"ps1 table   : {len(ps1)} patches")
+    print(f"py table    : {len(py)} patches")
     print(f"registry    : {len(reg)} enabled patches")
 
     bad = 0
@@ -119,35 +139,53 @@ def main():
         if k not in seen:
             print(f"  MISSING  {k}: enabled in the registry, absent from the ps1")
             bad += 1
+
+    # the two shipped patchers must also agree with each other, entry for entry
+    if [(e["key"], e["sig"], e["at"], e["needle"], e["replace"]) for e in ps1] != \
+       [(e["key"], e["sig"], e["at"], e["needle"], e["replace"]) for e in py]:
+        keys_ps1 = {e["key"] for e in ps1}
+        keys_py = {e["key"] for e in py}
+        for k in sorted(keys_ps1 ^ keys_py):
+            print(f"  MISMATCH {k}: present in only one of the two patchers")
+        for a_, b_ in zip(ps1, py):
+            if a_ != b_:
+                print(f"  MISMATCH {a_['key']}: ps1 and py tables differ")
+        bad += 1
     print("GATE 1 table parity : " + ("PASS" if bad == 0 else f"FAIL ({bad})"))
 
-    orig = bytearray(open(a.orig, "rb").read())
+    pristine = open(a.orig, "rb").read()
     ship = open(a.shipped, "rb").read()
-    print(f"orig        : {len(orig):,} bytes  sha256 {hashlib.sha256(orig).hexdigest()[:8]}…")
-    for e in ps1:
-        hits = locate(orig, e)
-        if len(hits) != 1:
-            print(f"  {e['key']}: {len(hits)} matches — REFUSE")
-            bad += 1
-            continue
-        off = hits[0]
-        cur = bytes(orig[off:off + len(e["needle"]) // 2])
-        state = "orig" if cur == bytes.fromhex(e["needle"]) else "patched"
-        print(f"  [{e['key']:<22}] 0x{off:06X} {state}")
-        orig[off:off + len(cur)] = bytes.fromhex(e["replace"])
-    off = pe_csum_off(orig)
-    struct.pack_into("<I", orig, off, 0)
-    struct.pack_into("<I", orig, off, pe_checksum(orig, off))
+    want = hashlib.sha256(ship).hexdigest()
+    print(f"orig        : {len(pristine):,} bytes  sha256 {hashlib.sha256(pristine).hexdigest()[:8]}…")
 
-    got, want = hashlib.sha256(orig).hexdigest(), hashlib.sha256(ship).hexdigest()
-    same = got == want
-    print(f"rebuilt     : sha256 {got}")
+    # GATE 2 runs for EACH shipped patcher's own table — a table that parses but
+    # doesn't rebuild the gated exe must not reach players.
+    for label, table in (("ps1", ps1), ("py", py)):
+        orig = bytearray(pristine)
+        for e in table:
+            hits = locate(orig, e)
+            if len(hits) != 1:
+                print(f"  [{label}] {e['key']}: {len(hits)} matches — REFUSE")
+                bad += 1
+                continue
+            off = hits[0]
+            cur = bytes(orig[off:off + len(e["needle"]) // 2])
+            state = "orig" if cur == bytes.fromhex(e["needle"]) else "patched"
+            if label == "ps1":
+                print(f"  [{e['key']:<22}] 0x{off:06X} {state}")
+            orig[off:off + len(cur)] = bytes.fromhex(e["replace"])
+        off = pe_csum_off(orig)
+        struct.pack_into("<I", orig, off, 0)
+        struct.pack_into("<I", orig, off, pe_checksum(orig, off))
+        got = hashlib.sha256(orig).hexdigest()
+        same = got == want
+        print(f"rebuilt via {label:<3}: sha256 {got}  {'==' if same else '!='} shipping exe")
+        if not same:
+            diffs = [i for i in range(min(len(orig), len(ship))) if orig[i] != ship[i]]
+            print(f"  {len(diffs)} differing bytes, first at 0x{diffs[0]:X}" if diffs else "  length differs")
+            bad += 1
     print(f"shipping exe: sha256 {want}")
-    print("GATE 2 artifact parity : " + ("PASS (byte-identical to the gated exe)" if same else "FAIL"))
-    if not same:
-        diffs = [i for i in range(min(len(orig), len(ship))) if orig[i] != ship[i]]
-        print(f"  {len(diffs)} differing bytes, first at 0x{diffs[0]:X}" if diffs else "  length differs")
-        bad += 1
+    print("GATE 2 artifact parity : " + ("PASS (both patchers rebuild the gated exe byte-for-byte)" if bad == 0 else "FAIL"))
     return 0 if bad == 0 else 1
 
 

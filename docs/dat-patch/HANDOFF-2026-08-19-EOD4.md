@@ -7,7 +7,8 @@ reports/r8-kit-assembly-2026-08-19.md and upstream-drw-btree-delete-fix.md.
 ## HEADLINE 1 — the r8 kit is assembled, and its two player-facing mechanisms are GATED
 `/mnt/wbterminal2/dat-patch-r8/kit/acme-r8/` = r8 portal (530 MiB) + r8 highres
 (922 MiB) + cell (331 MiB) + README + manifest + SHA256SUMS + `play.bat` +
-`patch-my-client.bat` + `acme-patch-client.ps1`, packaged as `acme-r8.tgz`.
+`patch-my-client.bat` + `acme-patch-client.ps1` + `acme-patch-client.py`,
+packaged as `acme-r8.tgz` — 1,284,983,820 B (1.20 GiB), sha256 `539a8120…`.
 Built by `tools/dat-patch/kit/assemble_kit.sh`, which sha256-verifies every copy,
 self-gates the manifest with play.bat's own rule, and refuses to assemble at all
 if the patcher's table has drifted from the registry.
@@ -20,6 +21,8 @@ patched client. So the delta ships instead, as `acme-patch-client.ps1`:
 the 8 shipped patches as signature-located byte edits applied to the player's own
 `acclient.exe`, plain readable text, PowerShell 5.1+, refuses on any unknown
 build, idempotent, keeps `acclient.exe.acme-orig.bak`.
+Wine/Linux players get `acme-patch-client.py` — the same table, plus
+`--check-kit` (the play.bat check) since they launch acclient.exe directly.
 **Proof it is the same client we gated**: applying the ps1's own table to the
 pristine retail exe reproduces the shipping exe byte-for-byte —
 sha256 `6c3232ea…` (= md5 `34b68dea…`, the FMCAP/r8-tour exe). The kit's exe
@@ -27,13 +30,20 @@ delivery therefore inherits the in-client gates instead of needing new ones.
 
 ## GATES THIS SESSION
 - **Laptop** `tools/dat-patch/kit/check_ps1_table.py`: table parity vs
-  `patch_client.py` (8/8, nothing extra) + artifact parity (byte-identical exe).
-  Now a hard precondition inside `assemble_kit.sh`.
+  `patch_client.py` (8/8, nothing extra) for BOTH patchers, the two tables
+  agreeing with each other, and artifact parity — each table rebuilds the gated
+  exe byte-for-byte. Negative-tested. Now a hard precondition inside
+  `assemble_kit.sh`. The py patcher also has 6 local arms (patch / idempotent /
+  --check-kit ok / missing dat / wrong size / unpatched exe / foreign file).
 - **1070, headless** `tools/dat-patch/kit/kit-gate.ps1`: **14/14 PASS** — patcher
   arms (patch / idempotent re-run / verify both ways / refuse a foreign file,
   backup kept and correct) and play.bat arms (complete → KIT-OK; missing dat,
   short dat, oversized dat, unpatched exe → LOUD-FAIL rc 1 with no launch;
   re-patched → KIT-OK). No client launched, no display touched, box left clean.
+- **The shipped tarball**, extracted clean and checked as a player receives it:
+  tgz sha OK, all 9 SHA256SUMS entries OK, manifest matches, and the shipped
+  Python patcher run inside the extracted kit produces `6c3232ea…` then reports
+  `KIT-OK`.
 - **Real artifacts**: `D:\ac-dat-test` (the live r8 pair + FMCAP exe, 1.87 GB) →
   KIT-OK on the real sizes; LOUD-FAIL with the real 967 MB highres renamed away,
   restored immediately.

@@ -17,7 +17,7 @@ first instruction, package + sha256 + rollback stated up front.
 Upscaled, re-encoded textures for the retail client — towns, dungeons,
 props, creatures, terrain — derived from your own install's assets.
 
-- Package: `acme-r8.tgz` — sha256 `<TGZ_SHA>` (`<TGZ_SIZE>`)
+- Package: `acme-r8.tgz` — sha256 `539a8120f09f960eaf392957a6d3d14f9806e8ab9f6f2a93f11fa8a33183717e` (`1,284,983,820 bytes / 1.20 GiB`)
 - Patches over: any retail install, or any earlier ACME release. Each release
   is self-contained, not a delta.
 - Needs: your own retail `acclient.exe` (the kit patches it for you, in place,
@@ -31,7 +31,8 @@ ceiling and leaves room for the next content passes. Your server still sees
 the same three dats retail does, and answers "no update required".
 
 Install: back up, copy in, run `patch-my-client.bat` once, start with
-`play.bat`. `play.bat` checks the install before every launch and refuses to
+`play.bat`. Linux/wine: `python3 acme-patch-client.py`, then
+`python3 acme-patch-client.py --check-kit` before you play. `play.bat` checks the install before every launch and refuses to
 start on a missing or truncated dat or an unpatched client — a half-installed
 kit fails loudly instead of quietly rendering untextured walls.
 
@@ -46,10 +47,10 @@ contains no retail files.
 
 | file | size | sha256 |
 |---|---|---|
-| `client_portal.dat` | `<PORTAL_SIZE>` | `<PORTAL_SHA>` |
-| `client_highres.dat` | `<HIGHRES_SIZE>` | `<HIGHRES_SHA>` |
-| `client_cell_1.dat` | `<CELL_SIZE>` | `<CELL_SHA>` |
-| `play.bat`, `patch-my-client.bat`, `acme-patch-client.ps1`, `kit-manifest.txt`, `SHA256SUMS.txt`, `README.txt` | — | see `SHA256SUMS.txt` |
+| `client_portal.dat` | 556,033,024 (530 MiB) | `c0073025c9fa9d398763c1775eb04474a548a657013b3f5ca28b1d5c315cdeb9` |
+| `client_highres.dat` | 967,217,152 (922 MiB) | `e7c82c33aacf3addb60dfd6afb26abe279e44febe5640e6cac42b88d5296e4bb` |
+| `client_cell_1.dat` | 347,298,304 (331 MiB) | `2eaf2a84f4f8b4e54b9304a41631647b234cd2303b38084151b3fff826c8dda6` |
+| `play.bat`, `patch-my-client.bat`, `acme-patch-client.ps1`, `acme-patch-client.py`, `kit-manifest.txt`, `SHA256SUMS.txt`, `README.txt` | — | see `SHA256SUMS.txt` |
 
 **The split, and why the client patch is required.** Retail's portal dat is
 capped at 2 GiB by its own format. Stacking high-res copies on top of the
@@ -77,7 +78,10 @@ unconditionally. Consequences worth stating plainly:
 
 The patcher locates every site by a unique byte signature, refuses if a
 signature is missing or ambiguous, is safe to run twice, and keeps
-`acclient.exe.acme-orig.bak`. It does not touch anything else.
+`acclient.exe.acme-orig.bak`. It does not touch anything else. Windows players
+use the PowerShell version via `patch-my-client.bat`; Linux/macOS/wine players
+use `acme-patch-client.py`, which carries the same eight deltas and a
+`--check-kit` mode that runs the same install check `play.bat` does.
 
 **Server operators**: serve these same dats, or turn DDD off. The portal keeps
 retail's iteration record, so a vanilla server answers "no update required".
@@ -92,7 +96,9 @@ delete `client_highres.dat`, restore `acclient.exe.acme-orig.bak`.
 
 1. Where does this get posted, and under what name/handle?
 2. Hosting for a ~1.3 GB package (the previous tiers were never publicly hosted).
-3. Ship a `.zip` alongside the `.tgz`? Windows players will find tgz awkward.
+3. Ship a `.zip` alongside the `.tgz`? Windows players will find tgz awkward
+   (the kit is now the Windows-first artifact, so this matters more than it did
+   for r1-r7).
 4. Do we say anything about the earlier tiers that were rendered/toured with the
    known-broken 2-site palette exe (HANDOFF-2026-08-19-EOD)? Nothing was
    publicly distributed, so the honest answer is probably "nothing to say".

@@ -20,6 +20,11 @@ change as a **patcher** instead of a binary:
   (a player can audit every change), Windows PowerShell 5.1+, no other
   dependency.
 - `patch-my-client.bat` — double-clickable wrapper, run once.
+- `acme-patch-client.py` — the same table for **Linux / macOS / wine players**,
+  who have no PowerShell. It also carries `--check-kit`, the play.bat check
+  (dat sizes + exe patch state) for people who launch acclient.exe under wine
+  directly. Without it the kit would have been Windows-only, which a large part
+  of the emu community is not.
 
 Same doctrine as the lane's `patch_client.py`: unique byte signature per site,
 refuse on missing/ambiguous signature or unexpected file size, idempotent
@@ -37,23 +42,34 @@ by a later owner decision.
 | client_portal.dat | 556,033,024 | `c0073025…` |
 | client_highres.dat | 967,217,152 | `e7c82c33…` |
 | client_cell_1.dat | 347,298,304 | `2eaf2a84…` |
-| play.bat / patch-my-client.bat / acme-patch-client.ps1 | — | in SHA256SUMS.txt |
+| play.bat / patch-my-client.bat / acme-patch-client.ps1 / acme-patch-client.py | — | in SHA256SUMS.txt |
 | kit-manifest.txt / SHA256SUMS.txt / README.txt | — | generated |
 
 `assemble_kit.sh` sha256-verifies every copy as it lands, generates the
 manifest from the copied files' actual sizes, writes README.txt (install /
 UserPreferences.ini / server / rollback), then **self-gates**: it re-runs
 play.bat's own name+size rule in bash and `sha256sum -c` over the kit before
-it will package. Package: `acme-r8.tgz` + `.sha256`.
+it will package.
 
-## GATE 1 (laptop) — the patcher's table and artifact parity
-`tools/dat-patch/kit/check_ps1_table.py`, both green:
-- **table parity**: the ps1's 8 entries are byte-identical (sig / needle_at /
-  needle / replace) to `patch_client.py`'s enabled set, and the ps1 carries
-  nothing extra — a stray candidate in the kit would ship an ungated byte
-  change to players.
-- **artifact parity**: applying the ps1's OWN table to the pristine retail exe
-  (`bca95bbe…`) reproduces the SHIPPING exe **byte-for-byte**, PE checksum
+**Package**: `acme-r8.tgz` — 1,284,983,820 bytes (1.20 GiB), sha256
+`539a8120f09f960eaf392957a6d3d14f9806e8ab9f6f2a93f11fa8a33183717e`.
+
+## GATE 3 — the shipped tarball, verified end to end
+Extracted into a clean directory and checked as a player receives it:
+`.tgz.sha256` OK; all 9 `SHA256SUMS.txt` entries OK after extraction; all three
+dats match `kit-manifest.txt`; **the shipped `acme-patch-client.py`, run inside
+the extracted kit against a pristine retail exe, produces `6c3232ea…`** and then
+`--check-kit` reports `KIT-OK`. Text files land as ASCII with CRLF (README,
+manifest, both .bat) — no mojibake in a non-UTF-8 console or old Notepad.
+
+## GATE 1 (laptop) — the patchers' tables and artifact parity
+`tools/dat-patch/kit/check_ps1_table.py`, both green, covering BOTH patchers:
+- **table parity**: each patcher's 8 entries are byte-identical (sig / needle_at
+  / needle / replace) to `patch_client.py`'s enabled set, neither carries
+  anything extra — a stray candidate in the kit would ship an ungated byte
+  change to players — and the two tables agree with each other entry for entry.
+- **artifact parity**: applying EACH patcher's OWN table to the pristine retail
+  exe (`bca95bbe…`) reproduces the SHIPPING exe **byte-for-byte**, PE checksum
   included: sha256 `6c3232ea7496cb743f591a03f887d9e46b1f8260b1ee67770ee3adceadbd5f37`
   (= md5 `34b68dea…`, the exe that passed the FMCAP in-client gate and the r8
   mount/tour gate). The kit's exe delivery therefore inherits those gates
@@ -61,6 +77,14 @@ it will package. Package: `acme-r8.tgz` + `.sha256`.
   Sites resolve at 0x13EFFE / 0x13F19C / 0x13ED75 / 0x271C78 / 0x0FAFA9 /
   0x0FB051 / 0x06128D / 0x063D94 — matching the addresses quoted across the
   lane reports.
+
+Negative-tested: a one-byte edit to a copy of the py table is reported as a
+ps1/py mismatch AND fails artifact parity (rc 1).
+
+The Python patcher was additionally gated on this laptop (6 arms, all pass):
+patch pristine → `6c3232ea…` with PE checksum `0x004A1974`; idempotent re-run;
+`--check-kit` OK on a complete stand-in kit; refuses a missing dat, a
+wrong-sized dat, and an unpatched exe; refuses a foreign file without writing.
 
 ## GATE 2 (1070, headless) — 14 arms, ALL PASS
 `tools/dat-patch/kit/kit-gate.ps1`, run over ssh in `C:\Temp\kitgate`. No
@@ -85,7 +109,10 @@ exercised without moving 1.8 GB:
 
 Arm C — the REAL artifacts, run in `D:\ac-dat-test` (the live r8 pair + the
 FMCAP exe, 1.87 GB in place): `KIT-OK` on the real sizes, and LOUD-FAIL with
-the real 967 MB highres renamed away, restored immediately after.
+the real 967 MB highres renamed away, restored immediately after. **Launch cost
+of the whole check on the real kit: 508 ms** (measured on the 1070), including
+the PowerShell exe verify — the patcher's Add-Type compile is lazy precisely so
+this path never pays for a csc invocation.
 
 ## ⚠ TWO DEFECTS THE GATE CAUGHT (both in the EOD3 play.bat, now fixed)
 The first play.bat built its failure text inside an `if defined BAD ( … )`
@@ -120,7 +147,10 @@ asserting the refusal.
 
 ## Artifacts
 - Kit: `/mnt/wbterminal2/dat-patch-r8/kit/acme-r8/` (+ `acme-r8.tgz`,
-  `.sha256`), build log `/mnt/wbterminal2/dat-patch-r8/kit-assemble.log`.
+  `.sha256`), build log `/mnt/wbterminal2/dat-patch-r8/kit-assemble.log`,
+  extract-verify log `kit-verify.log` (extraction under `kit-verify3/`;
+  `kit-verify1/`, `kit-verify2/` are abandoned earlier extractions, ~5 GB, safe
+  to delete).
 - In repo: `tools/dat-patch/kit/{assemble_kit.sh, acme-patch-client.ps1,
   patch-my-client.bat, play.bat, kit-gate.ps1, check_ps1_table.py}`.
 - Announce draft (NOT posted): `docs/dat-patch/ANNOUNCE-r8-DRAFT.md`.
