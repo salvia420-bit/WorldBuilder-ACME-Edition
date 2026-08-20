@@ -45,6 +45,49 @@ log "== compress: the DXT records WBT just wrote (they land uncompressed) =="
 dotnet "$TOOLS/DatCompress/bin/Release/net8.0/DatCompress.dll" "$HR" --verify 2>&1 | tail -4
 guard
 
+# TOP-UP: the DXT stage may not have landed every record — WBT writes them
+# UNCOMPRESSED, so a long import walks the file toward the 2 GiB ceiling and the
+# tail chunk can fail or be cut short. Now that the file has been compressed and
+# has room again, re-import whatever the manifests list but the dat does not hold.
+log "== top-up: import any DXT records that did not land =="
+python3 - "$HR" "$WBT" "$FILL"/bake-s0 "$FILL"/bake-s1 "$FILL"/bake-s2 <<'PY'
+import json, os, subprocess, sys
+sys.path.insert(0, '/home/wbterminal/WorldBuilder-ACME-Edition/tools/dat-patch')
+import datlib
+hr, wbt = sys.argv[1], sys.argv[2]
+imports = []
+for r in sys.argv[3:]:
+    imports += json.load(open(os.path.join(r, 'fill-manifest.json')))['imports']
+have = set(datlib.Dat(hr).files)
+todo = [i for i in imports if int(i['idHex'], 16) not in have]
+print("manifest %d, missing from the dat: %d" % (len(imports), len(todo)))
+if not todo:
+    sys.exit(0)
+CH, written, failed, fails = 200, 0, 0, []
+for i in range(0, len(todo), CH):
+    chunk = todo[i:i+CH]
+    cmd = dict(command="render-surface-import", datPath=hr, allowCreate=True, imports=chunk)
+    p = subprocess.run(["dotnet", wbt, "--stdin"], input=json.dumps(cmd) + "\n",
+                       capture_output=True, text=True, timeout=7200)
+    out = [json.loads(l) for l in p.stdout.splitlines() if l.startswith("{")]
+    res = next((o for o in out if o.get("command") == "render-surface-import"), None)
+    if not res or not res.get("success"):
+        print("TOP-UP CHUNK FAILED:", (p.stdout or p.stderr)[-300:]); break
+    written += res.get("writtenCount", 0); failed += res.get("failCount", 0)
+    for r in res.get("records", []):
+        if r.get("status") == "FAIL" or r.get("error"):
+            fails.append({k: r.get(k) for k in ("didHex", "status", "error")})
+    print("  top-up %d/%d written=%d failed=%d" % (i+len(chunk), len(todo), written, failed), flush=True)
+if fails:
+    json.dump(fails, open(os.path.join(os.path.dirname(hr), "import-fails.json"), "w"), indent=1)
+    print("  failures -> import-fails.json")
+PY
+guard
+
+log "== compress: the top-up records =="
+dotnet "$TOOLS/DatCompress/bin/Release/net8.0/DatCompress.dll" "$HR" --verify 2>&1 | tail -3
+guard
+
 log "== palette inserts =="
 python3 - "$FILL/r9/palette-manifest.json" "$FILL"/bake-s0 "$FILL"/bake-s1 "$FILL"/bake-s2 <<'PY'
 import json, os, sys
