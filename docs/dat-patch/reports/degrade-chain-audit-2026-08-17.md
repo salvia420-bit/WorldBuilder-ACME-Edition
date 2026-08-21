@@ -187,3 +187,23 @@ already drop entry[0] wherever we bake.
   mechanism references and cost numbers).
 - Scratch scripts: `/mnt/wbterminal2/dat-patch-r7/degrade-scratch/`
   (`inv.py`, `prefix.py`, `full_cmp.py`, `audit.py`, `classify2.py`, `final.py`).
+
+---
+
+## Re-run on SHIPPED r9 (2026-08-21) — CLOSED
+
+`fix_degrade_chains.py --check` on the shipped r9 kit portal
+(`/mnt/wbterminal2/dat-patch-r9/kit-r9b/acme-r9/client_portal.dat`):
+7,221 SurfaceTextures, 7,211 distinct chains, 1,623 multi-entry (histogram
+{1: 5,598, 2: 1,623}), **degrade-chain violations = 0** (report:
+scratchpad/degrade-check-r9.json). The single r7 leak (`0x05000ECE`) is gone.
+
+**This closes the "8 blend-ST collapse (entry[0]=highres) remains MANDATORY
+regardless" note** from terrain-d4b-high-2026-08-18.md:44-45 /
+TASKLIST-2026-08-17.md:408. That mandate was a terrain-2x prerequisite (the
+2-entry blend STs must resolve to the collapsed sibling, not a reachable
+highres sibling). terrain-2x is DEAD (D4b hard fail), and independently the
+shipped r9 portal has ZERO multi-entry-chain violations — every reachable
+entry is the correct one — and gated GREEN through full world entry on the
+1070. Nothing owed for the r9/r10 ship. (F7's `--check` was the planned
+verification; it is now run and green.)

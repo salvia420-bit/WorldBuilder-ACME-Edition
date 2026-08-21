@@ -3237,7 +3237,7 @@ public class JsonCommandProcessor {
             new { name = "compare-render-corners", args = "lbX, lbY, toleranceMetres?, includeAll?", description = "Compares full-quat vs yaw-only building corner placement for a landblock; failures[] when divergence > tolerance (default 0.05m); buildings[] null unless includeAll" },
             new { name = "obj-export",         args = "datId, outputPath",                     description = "Exports a GfxObj/Setup (datId accepts 0x hex or decimal) to a Wavefront .obj" },
             new { name = "gfxobj-region-summary", args = "datId, outputPath, thumbnails?, thumbDir?, maxThumbDim?", description = "Exports a per-model region summary JSON for a GfxObj (or one per distinct Setup part): coplanar same-material regions with outer/hole boundary loops, plane + planarity, UV affine fits, region adjacency (convex/concave/coplanar dihedrals), physics-vs-render hull comparison, and a material table with downscaled texture thumbnails (default <name>_thumbs/, maxThumbDim 128)" },
-            new { name = "obj-import",         args = "objPath, surfaceDid, gfxObjId?, setupId?, overwrite?, preservePhysics?, gfxObjOnly?", description = "Imports a Wavefront .obj as a GfxObj/Setup (ids accept 0x hex or decimal); overwrite replaces an existing record, preservePhysics keeps the original's collision, gfxObjOnly skips the companion Setup" },
+            new { name = "obj-import",         args = "objPath, surfaceDid, gfxObjId?, setupId?, overwrite?, preservePhysics?, gfxObjOnly?, replaceDrawing?", description = "Imports a Wavefront .obj as a GfxObj/Setup (ids accept 0x hex or decimal); overwrite replaces an existing record, preservePhysics keeps the original's collision, gfxObjOnly skips the companion Setup, replaceDrawing drops the original drawn polygons so the imported mesh alone is the drawn geometry" },
             new { name = "relief-plan-apply",  args = "summaryPath, planPath, objPath, outObjPath, import?, checksReport?", description = "Deterministic relief-plan generator + validation gate: consumes a gfxobj-region-summary JSON and a declarative plan (ops: plinth, opening_surround, belt_course), appends validated additive geometry to the model's obj-export OBJ (original bytes preserved as an exact prefix, UV-continuous folds, no T-junctions), runs an 18-check gate, and with import:true re-imports over the retail GfxObj id (overwrite+preservePhysics+gfxObjOnly). On gate failure only the checks report is written" },
             new { name = "physics-jump-formula", args = "(jump inputs)",                        description = "Diagnostic: evaluates the jump-height formula for given inputs" },
             new { name = "physics-jump-formula-sweep", args = "caseCount?",                     description = "Diagnostic: sweeps the jump-height formula across caseCount cases (default 1000)" },
@@ -4817,8 +4817,9 @@ public class JsonCommandProcessor {
         bool overwrite = node["overwrite"]?.GetValue<bool>() ?? false;
         bool preservePhysics = node["preservePhysics"]?.GetValue<bool>() ?? false;
         bool gfxObjOnly = node["gfxObjOnly"]?.GetValue<bool>() ?? false;
+        bool replaceDrawing = node["replaceDrawing"]?.GetValue<bool>() ?? false;
         var r = _engine.ObjImport(objPath, surfaceDid, gfxObjId, setupId,
-            overwrite, preservePhysics, gfxObjOnly);
+            overwrite, preservePhysics, gfxObjOnly, replaceDrawing);
         return Serialize(new { success = r.Success, command = "obj-import",
             gfxObjId = $"0x{r.GfxObjId:X8}",
             setupId = r.GfxObjOnly ? null : $"0x{r.SetupId:X8}",
@@ -4829,6 +4830,7 @@ public class JsonCommandProcessor {
             sortCenterPreserved = r.SortCenterPreserved,
             didDegradePreserved = r.DidDegradePreserved,
             drawingCarried = r.DrawingCarried,
+            replaceDrawing = r.ReplaceDrawing,
             duplicatesDropped = r.DuplicatesDropped,
             warnings = r.Warnings,
             error = r.Error });

@@ -2,9 +2,17 @@
 """4.P4 full scale-out orchestrator — all route=candidate parts with tris>=31,
 exposure-ranked, in sequential batches of 200 through the POC WBT project.
 Per batch: tessellate (pn level 1) -> WBT batch obj-import+export -> verify POC
-invariants vs BASE -> DatRecordInsert --overwrite --compress into the r10 work
+invariants vs BASE -> DatRecordInsert --overwrite into the r10 work
 portal -> walk_check. Stops hard on any failure. Stamps in batches/NN/DONE make
 reruns resume. Never serves or ships the export tree.
+
+NEVER --compress GfxObj (or any server-read type) inserts: vanilla ACE has no
+record decompression (ACE.DatLoader reads raw zlib bytes as the record ->
+CVertexArray.Unpack NotImplementedException -> server dies at boot when any
+compressed 0x01 is reachable as a landblock static). --compress is safe ONLY
+for types the server never reads (0x06/0x05 texture family). Found 2026-08-21:
+the first scale-out landed all 1,209 parts compressed and killed ACE seconds
+after "World is now open"; fixed by re-inserting uncompressed (acefix).
 """
 import json, os, subprocess, sys
 
@@ -109,7 +117,7 @@ def run_batch(bi, cands):
         raise SystemExit('[batch %03d] %d invariant failures' % (bi, len(fails)))
     mp = os.path.join(bd, 'insert.json')
     json.dump({'inserts': inserts}, open(mp, 'w'))
-    r = subprocess.run([DOTNET, DRI_DLL, R10, mp, '--overwrite', '--compress'],
+    r = subprocess.run([DOTNET, DRI_DLL, R10, mp, '--overwrite'],
                        capture_output=True, text=True, timeout=1800)
     open(os.path.join(bd, 'insert.log'), 'w').write(r.stdout + r.stderr)
     if r.returncode != 0 or 'mismatch=0' not in r.stdout:

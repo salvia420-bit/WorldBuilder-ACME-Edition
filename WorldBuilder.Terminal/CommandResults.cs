@@ -1250,6 +1250,7 @@ public record ObjImportResult(
     bool DrawingCarried = false,
     int TotalDrawnPolygons = 0,
     int DuplicatesDropped = 0,
+    bool ReplaceDrawing = false,
     IReadOnlyList<string>? Warnings = null);
 
 public record BspBuildResult(

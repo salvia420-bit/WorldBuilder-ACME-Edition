@@ -1,5 +1,14 @@
 # dat-patch — branch & merge status (keep current; the "don't forget" doc)
 
+> **STATUS 2026-08-21:** active branch `integ/all-20260813` is **25 commits
+> ahead of `origin/master`, ZERO divergence** (clean ff-merge available), and
+> fully pushed (`origin/integ/all-20260813` == local, 0/0). master is at
+> `e32f24f2` (2026-08-17); integ tip `bc5b1946` (2026-08-21, pre this
+> session's uncommitted work). Nothing is stranded — the r8/r9/r10 lanes all
+> live on integ. Merge to master stays OWED (owner defers until a natural
+> stopping point); no risk of loss meanwhile since integ is on origin. The
+> "42 commits / 2de9401c" numbers below are the 08-16 snapshot, historical.
+
 ## ✅ MERGED TO MASTER 2026-08-16 ~22:00 (owner sign-off granted)
 `git merge --ff-only integ/all-20260813` → master = `2de9401c`, pushed to
 origin (master AND the integ branch). Everything below this line is the

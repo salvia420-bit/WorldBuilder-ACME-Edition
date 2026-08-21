@@ -14,6 +14,12 @@
 //   at insert time. Landing compressed matters on a large fill: an uncompressed
 //   insert followed by DatCompress leaks the freed tail blocks (DRW's WriteBlock
 //   never returns them to the free chain), so the file only ever grows.
+//   ⚠ --compress is CLIENT-ONLY: vanilla ACE has no record decompression
+//   (ACE.DatLoader parses the raw zlib bytes as the record and dies), so it is
+//   refused for any type the server reads. Only the texture family (0x05/0x06)
+//   is server-safe compressed; --force-compress overrides for a client-only dat
+//   that ACE will never serve. Found 2026-08-21 (1,209 compressed 0x01s killed
+//   ACE at boot).
 //   manifest.json: {"inserts":[{"id":"0x06001234","path":"/…/0x06001234.bin"}, …]}
 using System.Text.Json;
 using DatReaderWriter;
@@ -27,7 +33,8 @@ if (args.Length < 2) {
 }
 string datPath = args[0], manifestPath = args[1];
 bool overwrite = args.Contains("--overwrite"), dry = args.Contains("--dry-run");
-bool compress = args.Contains("--compress");
+bool compress = args.Contains("--compress") || args.Contains("--force-compress");
+bool forceCompress = args.Contains("--force-compress");
 
 string baseDats = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "ac_base_dats");
 if (Path.GetFullPath(datPath).StartsWith(Path.GetFullPath(baseDats))) {
@@ -38,6 +45,21 @@ if (Path.GetFullPath(datPath).StartsWith(Path.GetFullPath(baseDats))) {
 using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
 var inserts = doc.RootElement.GetProperty("inserts");
 Console.WriteLine($"manifest: {inserts.GetArrayLength()} records -> {datPath}");
+
+// vanilla ACE cannot decompress records; a compressed record of any type the
+// server reads (GfxObj, Setup, Environment, ...) kills it at load. Only the
+// texture family is known server-safe compressed.
+if (compress && !forceCompress) {
+    var unsafeIds = inserts.EnumerateArray()
+        .Select(e => Convert.ToUInt32(e.GetProperty("id").GetString()!.Replace("0x", ""), 16))
+        .Where(id => (id >> 24) != 0x05 && (id >> 24) != 0x06)
+        .ToList();
+    if (unsafeIds.Count > 0) {
+        Console.Error.WriteLine($"refusing --compress: {unsafeIds.Count} record(s) outside the server-safe 0x05/0x06 texture family (first: 0x{unsafeIds[0]:X8}).");
+        Console.Error.WriteLine("vanilla ACE has no record decompression and dies serving these; use --force-compress only for a client-only dat ACE never serves.");
+        return 2;
+    }
+}
 
 static PortalDatabase Open(string path, DatAccessType access) => new PortalDatabase(
     o => { o.FilePath = path; o.AccessType = access; },

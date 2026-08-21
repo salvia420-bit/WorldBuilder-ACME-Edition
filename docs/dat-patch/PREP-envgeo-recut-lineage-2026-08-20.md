@@ -1,5 +1,14 @@
 # PREP — 4.P3 env-variant re-cut: the pre-envgeo portal lineage (2026-08-20)
 
+> **⚠ CORRECTED 2026-08-21 — step 2 as originally written called the DRW
+> b-tree delete path (`Tree.TryDelete`), which corrupts the b-tree at scale
+> (docs/dat-patch/upstream-drw-btree-delete-fix.md: 2,412 deletes → 3 innocent
+> records lost) and is banned lane-wide ("No tool in this lane may call
+> TryDelete"). The clone-strip must be done by RECONSTRUCTION instead:
+> `DatCompact --exclude clone_ids.txt` — the exact mechanism the r9 gate fix
+> used to cut the 493 UI surfaces. Step 2 and §5 below are rewritten
+> accordingly; do not resurrect the delete-driver idea.
+
 Resolves the "single highest-risk staging question" the geometry-lanes research
 flagged for 4.P3 (`research/geometry-lanes-research.md` §2b step 1): **does a
 usable PRE-envgeo portal exist on disk, or must the shipped variants be
@@ -65,11 +74,12 @@ cp ~/ac_base_dats/client_cell_1.dat <export>/client_cell_1.dat
 # 1. enumerate the 3,928 clone ids from the shipped variants.json
 python3 -c 'import json;print("\n".join(v["newEnvIdHex"] for v in
     json.load(open("<r5 variants.json>"))["variants"]))' > clone_ids.txt
-# 2. DELETE those 0x0D clone records from <export>/client_portal.dat
-#    (use the existing delete tool: tools/dat-patch/DatDeleteRepro or the
-#     DRW b-tree delete path; NEW small driver over clone_ids.txt — NOT a
-#     core-lane edit).  Then DatCompact the portal (delete frees blocks; the
-#     size win lands at compact).
+# 2. STRIP the 0x0D clones by RECONSTRUCTION — never by delete (TryDelete is
+#    banned; see the 2026-08-21 banner above):
+#      DatCompact <r9 portal> <seed> <export>/client_portal.dat \
+#          --verify --exclude clone_ids.txt
+#    (same mechanism the r9 gate fix used for the 493 UI surfaces; --verify's
+#     "extra" check proves no excluded id reaches the output).
 # 3. SANITY: census env0D == 772 and a sampled source env is byte-identical base.
 
 # --- the re-cut itself (unchanged existing lane; research §2d) ---
@@ -99,7 +109,7 @@ yield under the veto) is the coverage expansion, bounded by the env-id space
 pre-envgeo staging.
 
 ## 5. Left as a proposal (no core-lane edit made)
-A small **clone-delete driver** over `clone_ids.txt` (step 2) is the only new code the
-staging needs — it reuses the existing DRW b-tree delete + DatCompact tooling; it does
-NOT edit `env_geo.py`/`variant_release.sh`/any core lane. Recommend writing it as a
-new file `tools/dat-patch/strip_envgeo_clones.py`.
+~~A small clone-delete driver~~ **(superseded 2026-08-21 — see banner)**: no new
+code is needed at all. Step 2 is a single `DatCompact --verify --exclude
+clone_ids.txt` invocation; the only artifact to produce is `clone_ids.txt` from
+the shipped `variants.json` (step 1). Do NOT write a delete driver.

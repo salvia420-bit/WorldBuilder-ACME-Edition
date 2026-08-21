@@ -11598,9 +11598,15 @@ public partial class CommandEngine {
     /// Reads a Wavefront .obj and stores the resulting GfxObj+Setup in <see cref="PortalDatDocument"/>.
     /// They get persisted on the next project export. If <paramref name="gfxObjId"/> or
     /// <paramref name="setupId"/> is 0 the engine allocates a free ID in the 0x01FF.. / 0x02FF.. custom range.
+    /// <paramref name="replaceDrawing"/> makes an overwrite REPLACE the drawn geometry instead of
+    /// adding to it: the original render polygons and drawing BSP are dropped, so the imported mesh
+    /// alone is what the record draws. Physics (polygons + BSP) is still carried verbatim by
+    /// <paramref name="preservePhysics"/>. Use it for replacement-style ops (subdivision/retopo,
+    /// which restate the whole surface) — the default additive carry is for shell-over-original ops.
     /// </summary>
     public ObjImportResult ObjImport(string objPath, uint surfaceDid, uint gfxObjId = 0, uint setupId = 0,
-            bool overwrite = false, bool preservePhysics = false, bool gfxObjOnly = false) {
+            bool overwrite = false, bool preservePhysics = false, bool gfxObjOnly = false,
+            bool replaceDrawing = false) {
         RequireProject();
         var project = _projectManager.CurrentProject!;
         var dats = project.DocumentManager.Dats;
@@ -11672,9 +11678,10 @@ public partial class CommandEngine {
         // When the overwrite will carry BOTH original BSPs verbatim (physics via
         // preservePhysics, drawing via CarryOriginalDrawingGeometry), the importer's BSP
         // build is discarded wholesale — skip it. Mirrors the carry gates exactly.
+        // replaceDrawing keeps the drawing tree, so the build is NOT discarded there.
         bool origHasPhysics = orig != null && orig.Flags.HasFlag(DatReaderWriter.Enums.GfxObjFlags.HasPhysics);
         bool willRebase = preservePhysics && origHasPhysics && orig?.VertexArray?.Vertices is { Count: > 0 };
-        bool skipBsp = willRebase && orig!.Polygons is { Count: > 0 } && orig.DrawingBSP != null;
+        bool skipBsp = willRebase && !replaceDrawing && orig!.Polygons is { Count: > 0 } && orig.DrawingBSP != null;
 
         if (!ObjSingleMeshImporter.TryBuild(objText, surfaceDid, gfxObjId, setupId,
                 out var gfx, out var setup, out var error, buildBsp: !skipBsp) || gfx == null || setup == null) {
@@ -11761,7 +11768,16 @@ public partial class CommandEngine {
                 // indices stay valid untouched) and gated on the vertex-array rebase
                 // (original vertex ids intact, so carried polygons resolve to their
                 // exact retail vertices).
-                if (rebased && orig.Polygons is { Count: > 0 }) {
+                //
+                // replaceDrawing opts out of exactly this carry: the imported mesh alone
+                // becomes the drawn geometry (no original render polygons seeded, the
+                // importer's freshly built drawing BSP kept) while physics polygons, the
+                // physics BSP and the vertex rebase that keeps their ids valid stay
+                // untouched above. That is the replacement model a subdivision/retopo op
+                // wants — it restates the whole surface, so carrying the originals just
+                // buries a low-poly copy inside the new one (and can poke through a
+                // concave shell).
+                if (rebased && !replaceDrawing && orig.Polygons is { Count: > 0 }) {
                     var err3 = CarryOriginalDrawingGeometry(gfx, orig, out duplicatesDropped);
                     if (err3 != null)
                         return new ObjImportResult(false, gfxObjId, setupId, 0, 0, err3);
@@ -11775,7 +11791,9 @@ public partial class CommandEngine {
                     if (origPorts > 0)
                         warnings.Add($"original drawing BSP with {origPorts} PORT node(s) replaced by a " +
                             "generated PORT-less tree; interior visibility through openings will break. " +
-                            "Use overwrite with preservePhysics:true to carry the original drawing geometry.");
+                            (replaceDrawing
+                                ? "replaceDrawing:false carries the original drawing geometry."
+                                : "Use overwrite with preservePhysics:true to carry the original drawing geometry."));
                 }
 
                 // BuildGfxObj zeroes SortCenter; the original's depth-sort pivot is authoritative.
@@ -11807,7 +11825,7 @@ public partial class CommandEngine {
             Overwrite: overwrite, PreservedPhysics: preservedPhysics, GfxObjOnly: gfxObjOnly,
             SortCenterPreserved: sortCenterPreserved, DidDegradePreserved: didDegradePreserved,
             DrawingCarried: drawingCarried, TotalDrawnPolygons: totalDrawn,
-            DuplicatesDropped: duplicatesDropped,
+            DuplicatesDropped: duplicatesDropped, ReplaceDrawing: replaceDrawing,
             Warnings: warnings.Count > 0 ? warnings : null);
     }
 
