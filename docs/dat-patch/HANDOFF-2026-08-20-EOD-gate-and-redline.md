@@ -12,8 +12,11 @@
 > entered the world, stable to the full watcher lifetime on the 1070.
 > Corrected story + gates in reports/phase4-fill-RESULTS.md. Kit rebuilt at
 > /mnt/wbterminal2/dat-patch-r9/kit-r9b/. The creature-subdiv in-client
-> eye-test (step 5 below) is still owed — it needs the scratch portal staged
-> on box+ACE plus a chat-capable second client to @create; session-sized.
+> eye-test (step 5 below) is DONE — **PASS 2026-08-21** on the buildbox T4
+> wine rig (which also re-proved the full kit stack on a second GPU/OS):
+> reports/phase4-P4-eyetest-2026-08-21.md. ⚠ Its "scratch portal" trap is
+> documented there — vanilla ACE crashes serving it (missing custom 0x0D);
+> eye-test portals must be r9-lineage.
 
 Continues HANDOFF-2026-08-20-fill.md. Three parallel tracks this session: (1) the
 r9 kit's 1070 in-client gate found a client crash and I'm mid-fix; (2) a new

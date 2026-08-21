@@ -89,9 +89,10 @@ Gates on the final artifacts, all PASS:
 
 - **4.P3 env-variant re-cut** — staged portal-lineage session
   (PREP-envgeo-recut-lineage-2026-08-20.md).
-- **4.P4 creature subdiv** — POC 9/9 invariants green; in-client eye-test
-  still owed (needs the scratch portal staged on box+ACE plus a second
-  chat-capable client to @create — session-sized, deferred).
+- **4.P4 creature subdiv** — POC 9/9 invariants green; **in-client eye-test
+  PASS 2026-08-21** (buildbox T4 wine rig, close-range walk+attack, no
+  detach/lag/invert/poke-through — reports/phase4-P4-eyetest-2026-08-21.md).
+  Lane clear to scale out.
 - **4.H2 detail textures** — shipped to scratch, needs landing + gate.
 - **4.H4 selective 4096²** — yellow, view-distance input missing.
 - **4.H3 terrain-2x** — red (TexMerge VmSize AV, twice).
