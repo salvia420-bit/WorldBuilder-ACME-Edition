@@ -48,12 +48,29 @@ def all_cands():
     return cands
 
 
+BULGE_TOL = 0.10   # mirrors creature_tranche.BULGE_TOL (big-heads guard)
+
+
+def drawn_spans(r):
+    """Bbox spans of the verts used by DRAWN polys (the visible shell)."""
+    used = set()
+    for q in r['polys']:
+        if not (q['stip'] & 0x4):
+            used.update(q['v'])
+    if not used:
+        return (0.0, 0.0, 0.0)
+    pts = [r['P'][i] for i in used]
+    return tuple(max(p[a] for p in pts) - min(p[a] for p in pts)
+                 for a in range(3))
+
+
 def sig(recbytes):
     r = gfxlib.parse_gfxobj(recbytes)
     drawn = sum(len(q['v']) - 2 for q in r['polys'] if not (q['stip'] & 0x4))
     physsig = [(p['n'], p['sides'], tuple(p['v'])) for p in r['phys']]
     return dict(id=r['id'], drawnTris=drawn, physSig=physsig, sort=r['sort'],
-                degrade=r['degrade'], surfaces=list(r['surfaces']))
+                degrade=r['degrade'], surfaces=list(r['surfaces']),
+                spans=drawn_spans(r))
 
 
 def run_batch(bi, cands):
@@ -102,10 +119,14 @@ def run_batch(bi, cands):
         gid = int(g, 16)
         b, e = base.get(gid), exp.get(gid)
         sb, se = sig(b), sig(e)
+        # bulge invariant (big-heads regression 2026-08-21): the exported
+        # drawn shell must not grow the base bbox > BULGE_TOL on any axis
+        no_bulge = all(a1 <= a0 * (1.0 + BULGE_TOL) + 1e-6
+                       for a0, a1 in zip(sb['spans'], se['spans']))
         ok = (sb['id'] == se['id'] == gid and se['drawnTris'] > sb['drawnTris']
               and sb['physSig'] == se['physSig'] and sb['sort'] == se['sort']
               and sb['degrade'] == se['degrade']
-              and sb['surfaces'] == se['surfaces'] and b != e)
+              and sb['surfaces'] == se['surfaces'] and b != e and no_bulge)
         if ok:
             p = os.path.join(bindir, '%s.bin' % g)
             open(p, 'wb').write(e)

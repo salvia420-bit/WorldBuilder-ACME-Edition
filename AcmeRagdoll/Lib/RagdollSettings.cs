@@ -11,6 +11,16 @@ namespace AcmeRagdoll.Lib {
         /// <summary>Master switch. When false the plugin loads but installs no hooks.</summary>
         [JsonPropertyName("enabled")]
         public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// When true (default), the CPhysicsObj::DoInterpretedMotion detour arms a ragdoll the
+        /// INSTANT the Dead motion begins (ragdoll from the death hit). When false that detour
+        /// no-ops its arm and behavior reverts to today's: the canned death animation plays and
+        /// the corpse ragdolls when it finishes (MotionDone). The hook itself stays installed
+        /// either way; only the arming is gated.
+        /// </summary>
+        [JsonPropertyName("armOnDeathStart")]
+        public bool ArmOnDeathStart { get; set; } = true;
     }
 
     /// <summary>

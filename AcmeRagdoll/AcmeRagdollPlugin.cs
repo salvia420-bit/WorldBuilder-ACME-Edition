@@ -61,14 +61,87 @@ namespace AcmeRagdoll {
                 return;
             }
 
+            // Eagerly load Chorizite.ACBindings NOW, on the managed plugin thread where assembly
+            // loading is legal. NativeHooks uses `nint` at the ABI boundary (never touching an
+            // ACBindings type), so nothing else forces the assembly to load until RagdollRegistry
+            // first dereferences a CPhysicsObj* -- and that first touch happens INSIDE the native
+            // MotionDone detour, where a lazy assembly load throws FileLoadException "operation is
+            // not legal in the current state" (0x80131509) and the ragdoll never arms. Referencing
+            // the types here loads the assembly ahead of the detour; PrepareMethod additionally JITs
+            // the hot path now so no JIT-time metadata load happens on the native thread either.
+            // (The sibling AcmeSky doesn't need this: constructing SkyRenderer at init already pulls
+            // ACBindings in via ClientState.)
+            WarmupAcBindings();
+
             _hooks = new NativeHooks(_log);
             _registry = new RagdollRegistry(_hooks.SetUpdatePartsEnabled, _log);
-            _hooks.Install(_registry);
+            _hooks.Install(_registry, _settings.ArmOnDeathStart);
 
             if (_hooks.Installed)
                 _log.LogInformation("ragdoll: ready. Creatures will ragdoll on death.");
             else
                 _log.LogWarning("ragdoll: hooks did not install; ragdolls unavailable this session.");
+        }
+
+        /// <summary>
+        /// Force Chorizite.ACBindings to load and the ragdoll hot path to JIT on this (managed,
+        /// load-legal) thread, so neither happens lazily inside the native MotionDone/UpdateParts
+        /// detour (where it fails with 0x80131509). Best-effort: touching the types is the load-
+        /// bearing part; PrepareMethod is extra insurance and is allowed to no-op if reflection on
+        /// the unsafe-pointer signatures is unavailable.
+        /// </summary>
+        private void WarmupAcBindings() {
+            try {
+                // Touch the exact ACBindings types RagdollRegistry dereferences -> loads the assembly.
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(
+                    typeof(global::ACBindings.Internal.CPhysicsObj).TypeHandle);
+                _ = typeof(global::ACBindings.Internal.CPartArray).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.CSetup).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.CPhysicsPart).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.Frame).TypeHandle;
+                // Corpse-handoff correlation additionally reads the object's placement (Position) and the
+                // setup's DAT DataID (SerializeUsingPackDBObj -> DBObj -> IDClass); touch those too so no
+                // ACBindings assembly/type load is triggered lazily on the native detour thread.
+                _ = typeof(global::ACBindings.Internal.Position).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.SerializeUsingPackDBObj).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.DBObj).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.IDClass____tagDataID).TypeHandle;
+                // The airborne-death world-fall additionally reads the terrain under the corpse via the
+                // client's own CLandCell::find_terrain_poly (returning a CPolygon whose Plane gives Z),
+                // reached from the object's CObjCell*. Touch those types so no ACBindings assembly/type
+                // load is triggered lazily on the native detour thread.
+                _ = typeof(global::ACBindings.Internal.CObjCell).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.CLandCell).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.CPolygon).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.Plane).TypeHandle;
+                _ = typeof(global::ACBindings.Internal.AC1Legacy.Vector3).TypeHandle;
+
+                // Pre-JIT the registry methods that resolve those types, so the JIT's metadata work
+                // is done here rather than on the native detour thread. Includes the corpse-handoff
+                // methods the detours reach (any NEW registry method a detour can reach must be added
+                // here, or it risks the 0x80131509 lazy-load failure on the native thread).
+                foreach (var name in new[] {
+                    "OnMotionDone", "OnUpdateParts", "Seed", "WriteParts",
+                    "ResolveWorldFall", "TryGetTerrainZ",
+                    "ArmCorpseHandoff", "ResolvePending", "GiveUpPending",
+                    "CreateRecord", "UpdateRecord", "TryMatchRecord",
+                    "SweepStale", "HashParents", "SetupDidOf", "ReadPos", "PosValid",
+                }) {
+                    var mi = typeof(RagdollRegistry).GetMethod(name,
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Static |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic);
+                    if (mi != null) {
+                        try { System.Runtime.CompilerServices.RuntimeHelpers.PrepareMethod(mi.MethodHandle); }
+                        catch { /* pointer-signature PrepareMethod is best-effort */ }
+                    }
+                }
+                _log.LogInformation("ragdoll: ACBindings warmed up (assembly + hot path pre-JITed)");
+            }
+            catch (Exception ex) {
+                _log.LogError(ex, "ragdoll: ACBindings warmup failed; deaths may not arm");
+            }
         }
 
         /// <inheritdoc/>

@@ -86,8 +86,8 @@ namespace AcmeRagdoll.Lib {
     }
 
     /// <summary>
-    /// The two client functions AcmeRagdoll detours, with their proven shipped-exe VAs (from
-    /// Chorizite.ACBindings) and a place to drop a verified sig-scan pattern once one is captured on
+    /// The client functions AcmeRagdoll detours, with their proven shipped-exe VAs (from
+    /// Chorizite.ACBindings / acclient.map) and a place to drop a verified sig-scan pattern once one is captured on
     /// a live client.  Cross-referenced to the decomp for provenance (acclient.c line numbers are the
     /// decomp's, NOT shipped-exe offsets - only the VAs are shipped-exe truth).
     /// </summary>
@@ -103,5 +103,14 @@ namespace AcmeRagdoll.Lib {
         //   Death signal: filter motion == MotionCommand.Dead (0x40000011) to arm a ragdoll.
         public const nint MotionDone_VA = 0x00510880;
         public const string? MotionDone_Sig = "PLACEHOLDER: capture prologue bytes at 0x00510880 on the 1070";
+
+        // int __thiscall CPhysicsObj::DoInterpretedMotion(CPhysicsObj* this, unsigned int motion,
+        //                                                 MovementParameters* params)
+        //   acclient.map (VA = 0x401000 + RVA) -> 0x0050F540; same shipped-exe basis as MotionDone.
+        //   The universal motion-INITIATION choke point (fires for every motion on every physics
+        //   object). Death-start signal: filter motion == MotionCommand.Dead (0x40000011) to arm a
+        //   ragdoll the instant the Dead motion BEGINS, not when its animation finishes.
+        public const nint DoInterpretedMotion_VA = 0x0050F540;
+        public const string? DoInterpretedMotion_Sig = "PLACEHOLDER: capture prologue bytes at 0x0050F540 on the 1070";
     }
 }

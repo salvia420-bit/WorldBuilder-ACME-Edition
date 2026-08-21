@@ -39,6 +39,47 @@ import pilot           # noqa: E402  (write_obj reused verbatim)
 import pipeline        # noqa: E402
 import relief3d        # noqa: E402
 
+# BULGE GUARD (2026-08-21, the "big heads" regression).  PN tessellation
+# trusts the AUTHORED normals; on silhouette-convex / coarse creature parts
+# (Lich head 0x010007EE: 59 tris, X-span 0.187) those normals fan far off the
+# facet planes, so the cubic patches balloon OUTWARD past the authored
+# silhouette (shipped head X-span 0.398 = 2.1x).  204 of the 1,657 scaled-out
+# parts did this.  Guard: if the PN result grows the drawn bbox by more than
+# BULGE_TOL on any axis, fall back to facet_op (planar, edge-preserving --
+# silhouette exact by construction); if even facet exceeds the tolerance,
+# refuse the part entirely (SystemExit -> scale-out logs it as a skip).
+BULGE_TOL = 0.10
+
+
+def _bbox_spans(pts):
+    """[(x,y,z)...] -> (xspan, yspan, zspan); (0,0,0) when empty."""
+    if len(pts) == 0:
+        return (0.0, 0.0, 0.0)
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    zs = [p[2] for p in pts]
+    return (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+
+
+def bulge_axes(src, V, tol=BULGE_TOL):
+    """Axes on which the op result V grows the source drawn bbox by > tol.
+
+    Compares against the bbox of the vertices actually used by VISIBLE source
+    polys (the drawn shell -- what the player sees), mirroring the regression
+    analysis that flagged the 204 bulged parts.  Returns a list like
+    ['x0.398/0.187'] -- empty means the silhouette is preserved."""
+    used = set()
+    for poly in src.polys:
+        if not poly.get("invisible"):
+            used.update(poly["v"])
+    s0 = _bbox_spans([src.P[i] for i in sorted(used)])
+    s1 = _bbox_spans([tuple(p) for p in V])
+    out = []
+    for ax, a0, a1 in zip("xyz", s0, s1):
+        if a1 > a0 * (1.0 + tol) + 1e-6:
+            out.append("%s%.4f/%.4f" % (ax, a1, a0))
+    return out
+
 
 def subdiv_part(gid, op="pn", level=2):
     """Return (res, src, rec, metas, stats).  res is the pilot.write_obj dict."""
@@ -55,14 +96,27 @@ def subdiv_part(gid, op="pn", level=2):
     # orientation="off": no floor-sink veto for a creature part (research 1d)
     src = relief3d.SourceMesh.from_record(rec, metas, orientation="off")
     n0 = src.tri_count()
+    pn_bulge, fell_back = [], False
     if op == "pn":
         V, F, UV, NR, PO = relief3d.pn_tessellate(src, level=level)
+        pn_bulge = bulge_axes(src, V)
+        if pn_bulge:
+            # PN ballooned the silhouette -> planar fallback (see BULGE_TOL)
+            fell_back = True
+            op = "facet"
+            V, F, UV, NR, PO = relief3d.facet_op(src, rounds=max(1, level))
     elif op == "facet":
         V, F, UV, NR, PO = relief3d.facet_op(src, rounds=max(1, level))
     else:
         raise SystemExit("--op must be pn|facet")
+    final_bulge = bulge_axes(src, V)
+    if final_bulge:
+        raise SystemExit("BULGE GUARD: 0x%08X %s op grows drawn bbox > %d%% on "
+                         "%s -- refusing (silhouette would visibly balloon)"
+                         % (gid, op, int(BULGE_TOL * 100), final_bulge))
     res = dict(V=V, F=F, UV=UV, NR=NR, poly=PO)
     stats = dict(gfxObj="0x%08X" % gid, op=op, level=level, srcTris=n0,
+                 pnBulgeAxes=pn_bulge, pnFellBackToFacet=fell_back,
                  drawnTris=int(len(F)), mult=round(len(F) / max(n0, 1), 3),
                  surfaces=len(sids), degradeBands=len(bands),
                  degradeBand0Self=bool(bands),

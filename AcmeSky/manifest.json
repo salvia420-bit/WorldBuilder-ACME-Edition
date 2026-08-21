@@ -1,0 +1,10 @@
+{
+  "id": "AcmeSky",
+  "name": "ACME Sky",
+  "author": "ACME Edition",
+  "version": "0.1.0-dev",
+  "description": "Replaces the retail Asheron's Call sky with a baked NASA/takram sky rendered on the client's own fixed-function D3D9 device: suppresses GameSky::Draw, then draws a palette-driven atmosphere dome, layered cloud domes, and a night star dome with correct world/terrain occlusion.",
+  "entryfile": "AcmeSky.dll",
+  "dependencies": [],
+  "environments": [ "Client" ]
+}

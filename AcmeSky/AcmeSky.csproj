@@ -1,0 +1,112 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    AcmeSky - Chorizite plugin that replaces the retail Asheron's Call sky with a baked
+    NASA/takram sky rendered on the client's own fixed-function D3D9 device.
+
+    Scaffold mirrors the shipped AcmeRedline plugin (../AcmeRedline/AcmeRedline.csproj),
+    which itself was verified against the two in-tree plugins
+      external/chorizite/ACPlugin/AC.csproj
+      external/chorizite/RmlUiPlugin/RmlUi.csproj
+    EnableDynamicLoading, flattened OutputPath, ship manifest.json + assets next to the
+    entry dll, compile against the framework with ExcludeAssets="runtime" (the Chorizite
+    host already has those assemblies loaded; a plugin must not ship its own copy).
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(TargetFramework)\</OutputPath>
+    <IntermediateOutputPath>obj\$(TargetFramework)\</IntermediateOutputPath>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>pdbonly</DebugType>
+    <AssemblyName>AcmeSky</AssemblyName>
+    <RootNamespace>AcmeSky</RootNamespace>
+    <!-- ACBindings is a raw memory-layout binding surface; its docs are sparse. -->
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Vendored framework projects. Private=false + ExcludeAssets=runtime => compile against
+    them, never copy them into the plugin output (the Chorizite host owns those assemblies).
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\external\chorizite\Chorizite\Chorizite.Core\Chorizite.Core.csproj"
+                      Private="false" ExcludeAssets="runtime" />
+    <!-- ACBindings is NOT host-owned (unlike Core/Reloaded/Autofac): the Chorizite host never
+         loads Chorizite.ACBindings, so it must ship WITH the plugin and be listed in the plugin's
+         .deps.json, or the plugin ALC's AssemblyDependencyResolver refuses to load it at runtime
+         (FileNotFoundException even though the dll sits in the folder). Ship it (Private=true,
+         runtime assets included). Core stays host-owned below. -->
+    <ProjectReference Include="..\external\chorizite\ACBindings\Chorizite.ACBindings.csproj"
+                      Private="true" />
+  </ItemGroup>
+
+  <!--
+    Host-provided packages.
+
+    Reloaded.Hooks 4.3.3 + Reloaded.Hooks.Definitions are the inline-detour engine the
+    Chorizite native bootstrapper already loads into the acclient process
+    (external/chorizite/.../Chorizite.NativeClientBootstrapper.csproj references exactly
+    4.3.3). We compile against them and mark ExcludeAssets="runtime" so we bind to the copy
+    already resident in the process rather than shipping a second hooking engine (the same
+    engine that installs Chorizite's own client-function detours). Version MUST match the
+    bootstrapper's so the in-process assembly satisfies our reference.
+
+    Versions of Autofac / Logging.Abstractions must MATCH what the vendored Chorizite.Core
+    project pulls, exactly as AcmeRedline documents (Autofac 8.4.0, Logging.Abstractions
+    9.0.9); the published-package pins would be a NuGet downgrade against the vendored source.
+  -->
+  <ItemGroup>
+    <!-- runtime;native;build: bind to the host's resident Reloaded.Hooks + its FASM assembler,
+         don't duplicate its managed dll OR its native FASM.DLL/targets into the plugin output. -->
+    <!-- Exclude only the managed runtime dll (bind to the host's resident Reloaded.Hooks) but DO
+         ship the native FASM assembler (FASM.DLL/FASMX64.DLL): Reloaded's x86 hook engine assembles
+         its trampoline with FASM, and matching AcmeRagdoll (which ships FASM and installs cleanly)
+         is the proven config. Excluding native left AcmeSky's folder without FASM and the hook
+         install threw. -->
+    <PackageReference Include="Reloaded.Hooks" Version="4.3.3" ExcludeAssets="runtime" />
+    <PackageReference Include="Autofac" Version="8.4.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!--
+    MILESTONE 0 (live in-process sky compositor) needs its OWN Direct3D 11 device inside the
+    client process. Vortice.Windows is the managed D3D11/DXGI/D3DCompiler binding.
+
+    These are NOT host-owned (the Chorizite host ships nothing like Chorizite.ACBindings above):
+    they MUST ship WITH the plugin and appear in AcmeSky.deps.json, or the plugin ALC's
+    AssemblyDependencyResolver refuses to load them at runtime (FileNotFoundException even though
+    the dll sits next to the plugin, the exact failure we already hit with Chorizite.ACBindings).
+    So: Private="true" (copy to output plus list in deps.json), NOT ExcludeAssets="runtime".
+
+    Transitive deps (Vortice.DirectX, Vortice.Mathematics, SharpGen.Runtime[.COM]) are copied and
+    listed automatically. The net8.0 (cross-platform) assets are picked at build time; at runtime on
+    Windows they P/Invoke the system d3d11.dll / dxgi.dll / d3dcompiler_47.dll.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" Private="true" />
+    <PackageReference Include="Vortice.DXGI" Version="3.6.2" Private="true" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" Private="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="manifest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- Baked sky assets ship next to the dll and are read at runtime by TextureLoader/SkyPalette. -->
+    <None Update="assets\sky\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="README.md">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

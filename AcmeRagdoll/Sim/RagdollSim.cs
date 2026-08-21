@@ -319,6 +319,35 @@ namespace AcmeRagdoll.Sim {
 
         public int PartCount => _n;
 
+        // ---------------------------------------------------------------- state transfer (handoff)
+        //
+        // The corpse-continuation handoff (RagdollRegistry) needs the EVOLVED verlet state - the live
+        // positions, the previous positions (which carry velocity), and the accumulated sim time - so a
+        // fresh sim built from the SAME construction inputs (parent/startPos/startQuats/seed/direction/
+        // floorZ, which regenerate identical constraints + braces + give schedule) can be advanced to
+        // the exact instant the creature's ragdoll had reached, then continue or hold from there. Both
+        // copy in/out so neither side aliases the other's buffers across frames.
+
+        /// <summary>Copy the live verlet state (positions, previous positions, sim clock) OUT into
+        /// caller-owned buffers of length <see cref="PartCount"/>*3 (and *3). No-op-safe if a buffer is
+        /// too small.</summary>
+        public void ExportState(float[] posOut, float[] prevOut, out float t) {
+            t = _t;
+            int len = _n * 3;
+            if (posOut != null && posOut.Length >= len) Array.Copy(_pos, posOut, len);
+            if (prevOut != null && prevOut.Length >= len) Array.Copy(_prev, prevOut, len);
+        }
+
+        /// <summary>Overwrite this sim's live verlet state from caller buffers (the inverse of
+        /// <see cref="ExportState"/>). The constraints/braces were already rebuilt identically by the
+        /// constructor; this just fast-forwards the evolving state to the recorded instant.</summary>
+        public void RestoreState(float[] posIn, float[] prevIn, float t) {
+            int len = _n * 3;
+            if (posIn != null && posIn.Length >= len) Array.Copy(posIn, _pos, len);
+            if (prevIn != null && prevIn.Length >= len) Array.Copy(prevIn, _prev, len);
+            _t = t;
+        }
+
         // ------------------------------------------------------------------ builders
 
         private bool ValidParent(uint p) => p != ROOT && p < (uint)_n;

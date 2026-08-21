@@ -209,11 +209,53 @@ def encode_raw(rgba, fmt):
     raise ValueError("no raw encoder for PixelFormat %d" % fmt)
 
 
-def encode_paletted(rgba, fmt, palette_argb, allowed=None):
-    """THE PALETTE PATH.  RGBA -> nearest palette index, keeping the record
-    INDEX16/P8 against its own DefaultPaletteId.  Never DXT: converting a
-    palettized record freezes its colours and breaks ClothingTable subpalette
-    recolours (pallib.py RECOLOR SAFETY).
+def upscale_paletted_nearest(src, tw, th):
+    """THE ONLY sanctioned upscale for INDEX16/P8 records: per-index nearest
+    replication in the stored encoding (synth_highres.upscale2 doubling until
+    the target dims).  Every output pixel carries an index the source record
+    already had at that location, so the distinct-index set, the sentinel
+    (transparency) pixel FRACTION, and ClothingTable subpalette recolours are
+    all preserved EXACTLY.
+
+    Added 2026-08-21 after the r9/r10 regression: the PNG route RGBA-resampled
+    paletted records and re-quantized them back through encode_paletted, which
+    (a) exploded ClipMap index-0 transparency (Shallows Destroyer RenderSurface
+    0x06006111: 3.1%% -> 38.8%% sentinel pixels -> holes in the hide) and
+    (b) collapsed the distinct-index count on ~176 clothing textures
+    (0x060070B0: 163 -> 30 indices), so subpalette recolours land on the wrong
+    rows -> muddy town-NPC robes.  Requantization of a paletted record is now
+    forbidden in this lane -- see the guard in _encode_from_png."""
+    data, cw, ch = src["data"], src["w"], src["h"]
+    if tw % cw or th % ch or (tw // cw) != (th // ch):
+        raise ValueError("paletted replication needs an integer uniform scale "
+                         "(%dx%d -> %dx%d)" % (cw, ch, tw, th))
+    scale = tw // cw
+    if scale & (scale - 1):
+        raise ValueError("paletted replication needs a power-of-two scale, "
+                         "got %d" % scale)
+    while (cw, ch) != (tw, th):
+        data = upscale2(data, cw, ch, src["fmt"])
+        cw, ch = cw * 2, ch * 2
+    exp = rs_expected_length(src["fmt"], tw, th)
+    if len(data) != exp:
+        raise ValueError("replication gave %d bytes, want %d" % (len(data), exp))
+    return build_rs(src["id"], src["dcat"], tw, th, src["fmt"], data,
+                    palette=src["palette"]), scale
+
+
+def encode_paletted(rgba, fmt, palette_argb, allowed=None,
+                    allow_requantize=False):
+    """RGBA -> nearest palette index, keeping the record INDEX16/P8 against
+    its own DefaultPaletteId.  Never DXT: converting a palettized record
+    freezes its colours and breaks ClothingTable subpalette recolours
+    (pallib.py RECOLOR SAFETY).
+
+    !! GUARDED (2026-08-21): requantizing an EXISTING paletted record is what
+    corrupted the r9/r10 highres (ClipMap transparency holes + distinct-index
+    collapse -> broken recolours).  The upscale lane must use
+    upscale_paletted_nearest instead; this encoder refuses to run unless the
+    caller passes allow_requantize=True (legitimate only for NEW art that has
+    no source index grid, never for upscales of retail records).
 
     `allowed`: optional iterable of palette indices the search may return.
     Retail records use a small subset of their 2048-colour palette (median
@@ -223,6 +265,13 @@ def encode_paletted(rgba, fmt, palette_argb, allowed=None):
     bake-prep census: 7/10 sampled sentinel-free records gained sentinel
     pixels).  Restricting to the SOURCE record's own used set makes
     'no new palette entries, no new holes' an invariant."""
+    if not allow_requantize:
+        raise ValueError(
+            "encode_paletted: refusing to re-quantize a paletted record -- "
+            "RGBA-resample+requantize corrupts index semantics (transparency "
+            "sentinels, recolour rows).  Upscales must use "
+            "upscale_paletted_nearest; pass allow_requantize=True only for "
+            "new art with no source index grid.")
     import numpy as np
     pal = np.zeros((len(palette_argb), 4), np.int16)
     a = np.asarray(palette_argb, np.uint32)
@@ -382,6 +431,18 @@ def cmd_run(args):
             if row["route"] == ROUTE_PASSTHROUGH:
                 body, how = raw, "passthrough-retail-bytes"
                 counts["passthrough"] += 1
+            elif src["fmt"] in PALETTED:
+                # 4.H1 RULE: paletted (INDEX16/P8) records upscale by
+                # per-index nearest replication ONLY -- a baked PNG for the
+                # id is deliberately IGNORED (see upscale_paletted_nearest;
+                # the PNG requantize path is what broke ClipMap transparency
+                # and clothing recolours in r9/r10).
+                tw, th = (int(x) for x in row["target_dim"].split("x"))
+                body, scale = upscale_paletted_nearest(src, tw, th)
+                how = "paletted-index-replication-%dx" % scale
+                if _find_png(args.baked, hid):
+                    how += " (baked png ignored: paletted)"
+                counts["paletted_nearest"] = counts.get("paletted_nearest", 0) + 1
             else:
                 tw, th = (int(x) for x in row["target_dim"].split("x"))
                 png = _find_png(args.baked, hid)
@@ -455,18 +516,16 @@ def _encode_from_png(png, src, tw, th, portal):
                          % (os.path.basename(png), rgba.shape[1], rgba.shape[0], tw, th))
     fmt = src["fmt"]
     if fmt in PALETTED:
-        if portal is None:
-            raise ValueError("palette route needs --portal for the Palette record")
-        import numpy as np
-        import pallib
-        colors = pallib.palette_colors(portal, src["palette"])
-        # the SOURCE record's own used-index set (all mip levels) -- see
-        # encode_paletted: candidates are restricted so the upscale can never
-        # introduce palette entries (or clipmap sentinels) retail never used.
-        src_idx = np.frombuffer(src["data"],
-                                "<u2" if fmt == PF_INDEX16 else np.uint8)
-        data = encode_paletted(rgba, fmt, colors, allowed=np.unique(src_idx))
-    elif fmt in DXT_BLOCK_BYTES:
+        # HARD GUARD (2026-08-21): the PNG->requantize path corrupted every
+        # INDEX16 record it touched in r9/r10 (transparency-sentinel explosion
+        # on ClipMaps, distinct-index collapse on recolour-live clothing).
+        # Paletted records are routed to upscale_paletted_nearest in cmd_run
+        # and must NEVER reach this encoder.
+        raise ValueError(
+            "paletted record 0x%08X reached the PNG requantize path -- "
+            "forbidden; use upscale_paletted_nearest (per-index replication)"
+            % src["id"])
+    if fmt in DXT_BLOCK_BYTES:
         data = encode_dxt(rgba, fmt)
     else:
         data = encode_raw(rgba, fmt)

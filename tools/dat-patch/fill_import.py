@@ -113,6 +113,39 @@ def main():
                                 format='DXT5' if (al < 250).mean() > 0.001 else 'DXT1',
                                 allowResize=True))
             continue
+        hdr0 = rs_header(portal, oid)
+        if hdr0 is not None and hdr0['fmt'] in (PF_P8, PF_INDEX16):
+            # PALETTE ROUTE (rewritten 2026-08-21, the INDEX16 regression):
+            # per-index nearest 2x replication of the PORTAL record's own
+            # index grid -- NEVER an RGBA bake + re-quantize.  The old
+            # LANCZOS-resize + nearest-palette solve corrupted every INDEX16
+            # record it touched in r9/r10: ClipMap index-0 transparency
+            # sentinels exploded (0x06006111: 3.1% -> 38.8% -> holes in the
+            # Shallows Destroyer) and distinct-index counts collapsed
+            # (0x060070B0: 163 -> 30 -> ClothingTable subpalette recolours
+            # land on the wrong rows -> muddy town-NPC clothing).
+            # Replication keeps the distinct-index set, sentinel fraction and
+            # recolour semantics EXACTLY; it needs no upscale PNG at all.
+            import synth_highres as SH
+            pal_id = default_palette(portal, oid)
+            if not pal_id:
+                stats['failed'] += 1
+                continue
+            raw0 = hdr0['data'][24:24 + hdr0['length']]
+            tw, th = hdr0['w'] * 2, hdr0['h'] * 2
+            data = SH.upscale2(raw0, hdr0['w'], hdr0['h'], hdr0['fmt'])
+            assert len(data) == tw * th * (2 if hdr0['fmt'] == PF_INDEX16 else 1), \
+                'replication size mismatch for %s' % hexid
+            rec = struct.pack('<6I', oid, 0, tw, th, hdr0['fmt'], len(data)) + data \
+                + struct.pack('<I', pal_id)
+            bp2 = os.path.join(idxd, hexid + '.bin')
+            # RESUME-safe: an existing bin from a pre-fix (requantize) run is
+            # detected by byte-compare and REBUILT, never reused.
+            if not os.path.exists(bp2) or open(bp2, 'rb').read() != rec:
+                open(bp2, 'wb').write(rec)
+            inserts.append(dict(id=hexid, path=bp2))
+            stats['palette'] += 1
+            continue
         if os.path.exists(os.path.join(idxd, hexid + '.bin')):
             stats['palette'] += 1
             inserts.append(dict(id=hexid, path=os.path.join(idxd, hexid + '.bin')))
@@ -148,26 +181,14 @@ def main():
             u8[:, :, 3] = base_a
 
             if hdr['fmt'] in (PF_P8, PF_INDEX16):
-                # PALETTE ROUTE: 2x, indices against the record's own palette.
-                tw, th = hdr['w'] * 2, hdr['h'] * 2
-                small = np.asarray(Image.fromarray(u8, 'RGBA').resize((tw, th), Image.LANCZOS), np.uint8)
-                pal_id = default_palette(portal, oid)
-                if not pal_id:
-                    stats['failed'] += 1
-                    continue
-                colors = pallib.palette_colors(portal, pal_id)
-                # the record's OWN used index set: never invent palette entries
-                raw = hdr['data'][24:24 + hdr['length']]
-                if hdr['fmt'] == PF_INDEX16:
-                    used = sorted(set(np.frombuffer(raw, '<u2').tolist()))
-                else:
-                    used = sorted(set(np.frombuffer(raw, 'u1').tolist()))
-                idx = legibility_encode_paletted(small, hdr['fmt'], colors, used)
-                rec = struct.pack('<6I', oid, 0, tw, th, hdr['fmt'], len(idx)) + idx \
-                    + struct.pack('<I', pal_id)
-                open(os.path.join(idxd, hexid + '.bin'), 'wb').write(rec)
-                inserts.append(dict(id=hexid, path=os.path.join(idxd, hexid + '.bin')))
-                stats['palette'] += 1
+                # HARD GUARD (2026-08-21): a paletted record must never reach
+                # the RGBA bake -- requantization is what corrupted the r9/r10
+                # INDEX16 records (transparency-sentinel explosion + distinct-
+                # index collapse).  Paletted records are handled above by
+                # per-index replication, before any PNG is opened.
+                raise RuntimeError('paletted record %s reached the RGBA bake '
+                                   'path -- forbidden (use the replication '
+                                   'route)' % hexid)
             else:
                 # WBT's importer throws "argument out of range" on 4096-side
                 # inputs (found on the r9 fill: the five 1024^2 sources whose 4x
@@ -211,6 +232,12 @@ def legibility_encode_paletted(rgba_u8, fmt, colors, used):
     """Nearest-palette index solve, identical in result to
     highres_lane.encode_paletted(allowed=used) but solved over the image's
     UNIQUE colours instead of every texel.
+
+    !! DO NOT use this to upscale an EXISTING paletted record (the 2026-08-21
+    r9/r10 regression): requantization breaks ClipMap transparency sentinels
+    and ClothingTable recolour rows.  Upscales replicate indices instead (see
+    the palette route in main / highres_lane.upscale_paletted_nearest).  Kept
+    only for genuinely NEW paletted art with no source index grid.
 
     An upscaled palettized texture has far fewer distinct colours than pixels
     (a 1024^2 creature skin: tens of thousands, not a million), and the cost of

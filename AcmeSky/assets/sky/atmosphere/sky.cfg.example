@@ -1,0 +1,38 @@
+# AcmeSky live sky tuning -- COPY THIS TO  C:\Temp\acdt\sky.cfg  on the client box.
+# Edited live: the plugin re-reads it once per second, so changes take effect in-game
+# WITHOUT a restart and WITHOUT environment variables (the acclient does not inherit the
+# launcher .bat's env). Lines are `key = value`; '#' or ';' starts a comment.
+
+# --- ray reconstruction variant (fixes a rolled sky) -----------------------------------
+# The sky is rolled ~90deg; matrix transposes (1-3) do NOT change it (they only rescale
+# z/w, leaving the ray azimuth alone). 4-9 manipulate the NDC screen axes, which DO
+# rotate/flip the reconstructed ray -- cycle these with output=4 until BLUE is at the TOP.
+#   0 = row-vector both (baseline)      1 = transpose invProj    2 = transpose invView
+#   3 = transpose both                  4 = swap NDC x<->y       5 = negate NDC y
+#   6 = negate NDC x                    7 = swap + negate-x      8 = swap + negate-y
+#   9 = build NDC from SV_Position/resolution instead of uv
+# For a 90deg roll, the most likely fixes are 4, 7, or 8.
+raymode = 0
+
+# --- AC(E,N,U) -> shader(y-up) axis map. Each of the 3 output comps = +/-{x,y,z} of the
+#     AC vector (AC: x=east, y=north, z=up). Default assumes AC render-space is Z-up.
+#   x,z,-y  = AC z-up -> shader y-up (default, matches the baked dome which is Z-up)
+#   x,y,z   = identity (try if the sky is rolled 90 deg: assumes render-space already y-up)
+#   x,y,-z  /  -z,y,x  /  x,-z,y  = other 90-deg candidates to A/B
+axis = x,z,-y
+
+# --- output / debug ---------------------------------------------------------------------
+#   0 = AgX + sRGB (final look)      1 = AgX linear
+#   2 = raw exposure (no AgX)        3 = exposure + sRGB, no AgX
+#   4 = RAY DIRECTION debug (AC space)  -> R=east G=north B=up. A CORRECT basis shows
+#       BLUE increasing toward the TOP of the screen and NO vertical seam.
+#   5 = ray direction debug (shader space) -> GREEN(+Y) should increase toward the top.
+output = 4
+
+# --- look / model -----------------------------------------------------------------------
+exposure = 5        # AgX exposure (holtburger uses 5)
+time     = -1       # 0..1 forced time-of-day; -1 = game clock (noon fallback while clock reads 0)
+sunang   = 0.03     # sun disc angular radius
+moonang  = 0.025    # moon disc angular radius
+lunar    = 1        # moon disc brightness scale (0 = off)
+lutflipv = 0        # 0/1 flip LUT V sampling (only if the gradient looks inverted)

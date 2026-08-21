@@ -1,0 +1,397 @@
+{
+  "class": "scattered",
+  "source": "Bruneton transmittance+irradiance EXR (real LUT); fog analytic",
+  "keyframes": [
+    {
+      "time": 0.0,
+      "sun_elevation_deg": -14.0,
+      "dir_color": [
+        0.5536,
+        0.6201,
+        0.8386
+      ],
+      "dir_bright": 0.0,
+      "amb_color": [
+        0.3049,
+        0.3999,
+        0.6659
+      ],
+      "amb_bright": 0.048,
+      "fog_color": [
+        0.3719,
+        0.4498,
+        0.6379
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.02,
+      "sun_elevation_deg": -13.0,
+      "dir_color": [
+        0.5536,
+        0.6201,
+        0.8386
+      ],
+      "dir_bright": 0.0,
+      "amb_color": [
+        0.3049,
+        0.3999,
+        0.6659
+      ],
+      "amb_bright": 0.048,
+      "fog_color": [
+        0.3719,
+        0.4498,
+        0.6379
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.1,
+      "sun_elevation_deg": -9.0,
+      "dir_color": [
+        0.5536,
+        0.6201,
+        0.8386
+      ],
+      "dir_bright": 0.0,
+      "amb_color": [
+        0.3049,
+        0.3999,
+        0.6659
+      ],
+      "amb_bright": 0.048,
+      "fog_color": [
+        0.3719,
+        0.4498,
+        0.6379
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.16,
+      "sun_elevation_deg": -6.0,
+      "dir_color": [
+        0.5536,
+        0.6201,
+        0.8386
+      ],
+      "dir_bright": 0.0,
+      "amb_color": [
+        0.3049,
+        0.3999,
+        0.6659
+      ],
+      "amb_bright": 0.048,
+      "fog_color": [
+        0.3719,
+        0.4498,
+        0.6379
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.175,
+      "sun_elevation_deg": 3.74,
+      "dir_color": [
+        0.9972,
+        0.9326,
+        0.8941
+      ],
+      "dir_bright": 0.9173,
+      "amb_color": [
+        0.4222,
+        0.6574,
+        0.9815
+      ],
+      "amb_bright": 0.0363,
+      "fog_color": [
+        0.6685,
+        0.696,
+        0.802
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.19,
+      "sun_elevation_deg": 7.47,
+      "dir_color": [
+        0.9997,
+        0.9933,
+        0.9778
+      ],
+      "dir_bright": 0.9552,
+      "amb_color": [
+        0.315,
+        0.5816,
+        0.9777
+      ],
+      "amb_bright": 0.0627,
+      "fog_color": [
+        0.6094,
+        0.6783,
+        0.8204
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.21,
+      "sun_elevation_deg": 12.4,
+      "dir_color": [
+        0.9999,
+        0.9976,
+        0.9918
+      ],
+      "dir_bright": 0.9581,
+      "amb_color": [
+        0.2611,
+        0.5305,
+        0.9753
+      ],
+      "amb_bright": 0.0908,
+      "fog_color": [
+        0.5298,
+        0.6153,
+        0.7925
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.27,
+      "sun_elevation_deg": 26.58,
+      "dir_color": [
+        1.0,
+        0.9995,
+        0.9979
+      ],
+      "dir_bright": 0.9591,
+      "amb_color": [
+        0.217,
+        0.4812,
+        0.973
+      ],
+      "amb_bright": 0.1442,
+      "fog_color": [
+        0.3261,
+        0.4496,
+        0.7061
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.42,
+      "sun_elevation_deg": 53.69,
+      "dir_color": [
+        1.0,
+        1.0,
+        0.9995
+      ],
+      "dir_bright": 0.9595,
+      "amb_color": [
+        0.2002,
+        0.4607,
+        0.9721
+      ],
+      "amb_bright": 0.2063,
+      "fog_color": [
+        0.3261,
+        0.4496,
+        0.7061
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.55,
+      "sun_elevation_deg": 62.0,
+      "dir_color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "dir_bright": 0.9595,
+      "amb_color": [
+        0.1983,
+        0.4586,
+        0.972
+      ],
+      "amb_bright": 0.2187,
+      "fog_color": [
+        0.3261,
+        0.4496,
+        0.7061
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.72,
+      "sun_elevation_deg": 48.03,
+      "dir_color": [
+        1.0,
+        1.0,
+        0.9995
+      ],
+      "dir_bright": 0.9595,
+      "amb_color": [
+        0.2017,
+        0.4624,
+        0.9722
+      ],
+      "amb_bright": 0.196,
+      "fog_color": [
+        0.3261,
+        0.4496,
+        0.7061
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.84,
+      "sun_elevation_deg": 24.3,
+      "dir_color": [
+        1.0,
+        0.9995,
+        0.9973
+      ],
+      "dir_bright": 0.9591,
+      "amb_color": [
+        0.2205,
+        0.4852,
+        0.9732
+      ],
+      "amb_bright": 0.1372,
+      "fog_color": [
+        0.3374,
+        0.4588,
+        0.711
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.895,
+      "sun_elevation_deg": 11.18,
+      "dir_color": [
+        0.9999,
+        0.9971,
+        0.9901
+      ],
+      "dir_bright": 0.9577,
+      "amb_color": [
+        0.2703,
+        0.5398,
+        0.9757
+      ],
+      "amb_bright": 0.0845,
+      "fog_color": [
+        0.5496,
+        0.6312,
+        0.8003
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.915,
+      "sun_elevation_deg": 6.23,
+      "dir_color": [
+        0.9995,
+        0.9902,
+        0.9673
+      ],
+      "dir_bright": 0.9525,
+      "amb_color": [
+        0.3401,
+        0.6027,
+        0.9787
+      ],
+      "amb_bright": 0.0545,
+      "fog_color": [
+        0.6294,
+        0.6931,
+        0.8237
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.94,
+      "sun_elevation_deg": -11.0,
+      "dir_color": [
+        0.5536,
+        0.6201,
+        0.8386
+      ],
+      "dir_bright": 0.0,
+      "amb_color": [
+        0.3049,
+        0.3999,
+        0.6659
+      ],
+      "amb_bright": 0.048,
+      "fog_color": [
+        0.3719,
+        0.4498,
+        0.6379
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.96,
+      "sun_elevation_deg": -12.0,
+      "dir_color": [
+        0.5536,
+        0.6201,
+        0.8386
+      ],
+      "dir_bright": 0.0,
+      "amb_color": [
+        0.3049,
+        0.3999,
+        0.6659
+      ],
+      "amb_bright": 0.048,
+      "fog_color": [
+        0.3719,
+        0.4498,
+        0.6379
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    },
+    {
+      "time": 0.999,
+      "sun_elevation_deg": -13.95,
+      "dir_color": [
+        0.5536,
+        0.6201,
+        0.8386
+      ],
+      "dir_bright": 0.0,
+      "amb_color": [
+        0.3049,
+        0.3999,
+        0.6659
+      ],
+      "amb_bright": 0.048,
+      "fog_color": [
+        0.3719,
+        0.4498,
+        0.6379
+      ],
+      "fog_min": 140,
+      "fog_max": 2200
+    }
+  ]
+}
