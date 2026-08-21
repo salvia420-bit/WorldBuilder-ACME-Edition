@@ -129,3 +129,18 @@ lane; offer the capture-companion (C) as an enthusiast add-on for near-real
 takram; the DLL route (B, Strategy 3) is a middle option if we want baked
 in-client sky without a companion. A live volumetric takram sky *inside* the
 retail renderer is not possible — the client has no shaders.
+
+---
+
+## DECISION 2026-08-21 — PLUGIN route chosen; client is plain D3D9 (verified)
+
+`rg -a 'Direct3DCreate9Ex|Direct3DCreate9' acclient.c` → only `Direct3DCreate9` (no
+D3D9Ex). Consequence: an in-process D3D11 side-context rendering the REAL live takram
+raymarched clouds cannot use a GPU shared surface (needs D3D9Ex) — it would fall back
+to a per-frame GPU→CPU→GPU readback (slow, ~halves fps). So live-volumetric-in-client
+is NOT worth it. **Chosen path: the `AcmeSky` plugin** hooks `GameSky::Draw` (suppress
+retail sky, verified still present) and draws BAKED NASA/takram cloud domes on the
+client's own fixed-function device — real multi-layer depth + parallax + day/night +
+weather, opt-in, no Region editing (no ACE-crash risk). The data-only
+`sky-holtburger-quality-plan.md` is SUPERSEDED/archived. The buildbox-rendered assets
+(`/mnt/wbterminal2/dat-patch-sky/`) feed `AcmeSky`.

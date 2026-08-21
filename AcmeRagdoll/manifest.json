@@ -1,0 +1,10 @@
+{
+  "id": "AcmeRagdoll",
+  "name": "ACME Ragdoll",
+  "author": "ACME Edition",
+  "version": "0.1.0-dev",
+  "description": "Runtime physics ragdoll deaths for every creature, by inline-detouring the retail client's per-part pose pipeline (CPartArray::UpdateParts) and death signal (CPhysicsObj::MotionDone). No DAT or emote dependency.",
+  "entryfile": "AcmeRagdoll.dll",
+  "dependencies": [],
+  "environments": [ "Client" ]
+}

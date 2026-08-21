@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    AcmeRagdoll - Chorizite plugin: runtime physics ragdoll deaths for retail AC.
+
+    Build conventions are COPIED verbatim from the shipped sibling plugin
+    ../AcmeRedline/AcmeRedline.csproj (which was in turn validated against the two
+    in-tree plugins external/chorizite/ACPlugin and external/chorizite/RmlUiPlugin):
+      * EnableDynamicLoading + flattened OutputPath;
+      * vendored framework projects referenced with Private=false ExcludeAssets=runtime
+        (compile against them, never ship a second copy - the Chorizite host owns them);
+      * host-provided NuGet packages pinned to the versions the *vendored* Chorizite.Core
+        pulls (Autofac 8.4.0, Logging.Abstractions 9.0.9) to avoid an NU1605 downgrade.
+
+    THE ONE NEW DEPENDENCY vs AcmeRedline:  Reloaded.Hooks 4.3.3.
+    AcmeRedline deliberately avoided Reloaded.Hooks and hand-rolled a D3D9 vtable swap,
+    because for its job (a device-vtable overlay) a second hooking engine would have been
+    a footgun.  AcmeRagdoll's job is the OPPOSITE: it must place INLINE TRAMPOLINE DETOURS
+    on client C++ functions (CPartArray::UpdateParts, CPhysicsObj::MotionDone), which have
+    no vtable to swap - exactly what Reloaded.Hooks does, and exactly how Chorizite's own
+    bootstrapper hooks client functions
+    (external/chorizite/.../Hooks/ACClientHooks.cs, DirectXHooks.cs, HookBase.cs).
+
+    Reloaded.Hooks is referenced ExcludeAssets="runtime" so we compile against it but bind
+    at runtime to the SINGLE copy the Chorizite bootstrapper already loaded
+    (external/chorizite/Chorizite/Chorizite.NativeClientBootstrapper.csproj
+     -> <PackageReference Include="Reloaded.Hooks" Version="4.3.3" />).  Sharing that one
+    assembly identity is what keeps ReloadedHooks.Instance a single process-wide hooking
+    engine rather than a competing second one.  See README.md "Reloaded.Hooks sharing".
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(TargetFramework)\</OutputPath>
+    <IntermediateOutputPath>obj\$(TargetFramework)\</IntermediateOutputPath>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>pdbonly</DebugType>
+    <AssemblyName>AcmeRagdoll</AssemblyName>
+    <RootNamespace>AcmeRagdoll</RootNamespace>
+    <!-- ACBindings is a raw memory-layout binding surface; its docs are sparse. -->
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\external\chorizite\Chorizite\Chorizite.Core\Chorizite.Core.csproj"
+                      Private="false" ExcludeAssets="runtime" />
+    <ProjectReference Include="..\external\chorizite\ACBindings\Chorizite.ACBindings.csproj"
+                      Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Inline-detour hooking engine. Host-provided; must not be copied into the plugin. -->
+    <PackageReference Include="Reloaded.Hooks" Version="4.3.3" ExcludeAssets="runtime" />
+    <!-- Match what the vendored Chorizite.Core pulls (see AcmeRedline.csproj rationale). -->
+    <PackageReference Include="Autofac" Version="8.4.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="manifest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="README.md">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

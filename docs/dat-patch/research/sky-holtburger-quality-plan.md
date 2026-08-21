@@ -1,5 +1,19 @@
 # Holtburger-quality sky in the retail client — buildable design (2026-08-21)
 
+> **⚠ SUPERSEDED / ARCHIVED 2026-08-21 — we pivoted to the PLUGIN route (`AcmeSky`).**
+> This document is the DATA-ONLY (patcher / DAT-baked) sky design. We chose NOT to
+> ship it as the primary sky: instead a Chorizite plugin (`AcmeSky/`) hooks
+> `GameSky::Draw` and renders baked cloud domes on the client's own device — which
+> gives real multi-layer depth + parallax (impossible data-only), is opt-in/optional,
+> and avoids editing the server-read Region record (the ACE-crash hazard). See
+> `takram-sky-in-retail-research.md` (the D3D9-not-D3D9Ex finding) and the `AcmeSky`
+> plugin. Kept for reference / the "free-floor palette recolor" idea only.
+> **Do NOT build the data-only multi-layer sky from this plan.** The offline render
+> ASSETS (NASA plates, Bruneton palette JSONs, star texture) in
+> `/mnt/wbterminal2/dat-patch-sky/` are NOT archived — `AcmeSky` reuses them. Only the
+> data-only `client_portal.skytest.dat` is the superseded artifact (archived scratch).
+
+
 Data-only (route A of `takram-sky-in-retail-research.md`): one modified
 `client_portal.dat`, no DLL, ships to every kit user. This doc turns the
 verified constraints into a concrete build: a multi-layer NASA-derived cloud
