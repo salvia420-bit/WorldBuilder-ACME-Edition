@@ -9,6 +9,23 @@
 > used to cut the 493 UI surfaces. Step 2 and §5 below are rewritten
 > accordingly; do not resurrect the delete-driver idea.
 
+> **STAGED + VERIFIED 2026-08-21** — the pre-envgeo portal is BUILT and
+> gate-passed at `/mnt/wbterminal2/dat-patch-envgeo-prep/` (see
+> `PREP-ENVGEO-STAGED.md` there; sha `50b0d325…`, 77,282 recs, 0x0D census
+> 772, zero clones ≥0x640, Recipe B proven safe: all 772 retail source envs
+> byte-identical base-vs-r9). Three corrections to this doc from that run:
+> (1) the retail 0x0D boundary is NOT "≤0x0D000627" — 772 retail envs run to
+> **max 0x0D00063F** (753 ≤0x627 + 19 in a 0x628–0x63F gap band); the correct
+> gate is "env0D=772, max ≤0x63F, zero ≥0x640", and clone_ids.txt uses the
+> ≥0x640 boundary. (2) variants.json minted 3,928 but only **3,924** clones
+> exist in the portal (4 r5 build failures: 0x0D000D9A/0x0D0011F4/0x0D001448/
+> 0x0D001449) — the portal is truth. (3) **the retail base is NOT a valid
+> DatCompact seed** — it has 2,412 records r9 lacks (0x06 surfaces the HIFI
+> split moved out) → seed-only check trips. Use a FRESH EMPTY portal as seed
+> (the run built one via a MakeEmptyPortal helper mirroring the r9 header).
+> Everything below documents the analysis that led here; the next step is the
+> re-cut itself (STAGED doc §5).
+
 Resolves the "single highest-risk staging question" the geometry-lanes research
 flagged for 4.P3 (`research/geometry-lanes-research.md` §2b step 1): **does a
 usable PRE-envgeo portal exist on disk, or must the shipped variants be
