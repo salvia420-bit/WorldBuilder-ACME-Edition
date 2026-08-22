@@ -69,12 +69,13 @@ namespace AcmeLights {
             _mgr = new LightManager(_log, _cfg);
             _bloom = new BloomCompositor(_log, _cfg);
             // Compile bloom shaders NOW on the managed thread — loading Vortice.D3DCompiler from the
-            // native EndFrame detour throws 0x80131509 (ALC-load fault). The detour only creates the
-            // device pixel-shader objects from this cached bytecode.
+            // native render thread throws 0x80131509 (ALC-load fault). The render-thread callback only
+            // creates the device pixel-shader objects from this cached bytecode.
             _bloom.PrecompileShaders();
+            RenderCallback.Configure(_bloom, _cfg, _log);
             _dump = new DumpService(_log, _cfg);
             _hooks = new NativeHooks(_log);
-            _hooks.Install(_mgr, _bloom, _dump, _cfg);
+            _hooks.Install(_mgr, _dump, _cfg);
 
             if (_hooks.Installed)
                 _log.LogInformation("acmelights: initialized (cfg='{Cfg}' maxStatic={MS} maxDynamic={MD} " +
@@ -95,6 +96,7 @@ namespace AcmeLights {
         }
 
         protected override void Dispose() {
+            RenderCallback.Uninstall();   // clear the SmartBox slot before the compositor goes away
             _hooks?.Dispose();
             _hooks = null;
             _bloom?.Dispose();

@@ -32,9 +32,10 @@ namespace AcmeLights.Services {
         [Function(CallingConventions.MicrosoftThiscall)]
         private delegate void SetAmbientFn(nint self, float intensity, uint color);
 
-        // void __cdecl SceneTool::EndFrame(bool bDrawUI) -- post-3D / pre-UI boundary for bloom.
-        [Function(CallingConventions.Cdecl)]
-        private delegate void EndFrameFn(byte bDrawUI);
+        // NOTE (2026-08-22): there is deliberately NO SceneTool::EndFrame detour. The cdecl(byte)
+        // trampoline on it destabilized the client (faulted ~1s in even with the detour body doing
+        // nothing beyond the pipeline that ran frame 1 clean). Bloom instead runs from the zero-detour
+        // SmartBox::m_renderingCallback slot -- see RenderCallback.cs.
 
         // void __thiscall RenderDeviceD3D::EndScene(RenderDeviceD3D* this) -- scene-closed dump point.
         [Function(CallingConventions.MicrosoftThiscall)]
@@ -42,10 +43,8 @@ namespace AcmeLights.Services {
 
         private static IHook<UpdateLightsFn>? _updateLights;
         private static IHook<SetAmbientFn>? _setAmbient;
-        private static IHook<EndFrameFn>? _endFrame;
         private static IHook<EndSceneFn>? _endScene;
         private static LightManager? _mgr;
-        private static BloomCompositor? _bloom;
         private static DumpService? _dump;
         private static LightsConfig? _cfg;
         private static ILogger? _log;
@@ -56,15 +55,15 @@ namespace AcmeLights.Services {
         public NativeHooks(ILogger log) { _ilog = log; _log = log; }
         public bool Installed => _installed;
 
-        public void Install(LightManager mgr, BloomCompositor bloom, DumpService dump, LightsConfig cfg) {
+        public void Install(LightManager mgr, DumpService dump, LightsConfig cfg) {
             if (_installed || _disposed) return;
-            _mgr = mgr; _bloom = bloom; _dump = dump; _cfg = cfg;
+            _mgr = mgr; _dump = dump; _cfg = cfg;
 
             nint updAddr = AddressResolver.Resolve("PrimD3DRender::UpdateLightsInternal",
                 ClientFunctions.UpdateLightsInternal_Sig, ClientFunctions.UpdateLightsInternal_VA);
             nint ambAddr = AddressResolver.Resolve("SmartBox::SetWorldAmbientLight",
                 ClientFunctions.SetWorldAmbientLight_Sig, ClientFunctions.SetWorldAmbientLight_VA);
-            float extra = cfg.ExtraHooks;   // 0 none | 1 endscene | 2 endscene+endframe
+            float extra = cfg.ExtraHooks;   // 0 none | >=1 endscene (capture)
 
             try {
                 _updateLights = ReloadedHooks.Instance
@@ -100,21 +99,7 @@ namespace AcmeLights.Services {
                 }
             }
 
-            if (extra >= 2f) {
-                nint efAddr = AddressResolver.Resolve("SceneTool::EndFrame",
-                    ClientFunctions.EndFrame_Sig, ClientFunctions.EndFrame_VA);
-                try {
-                    _endFrame = ReloadedHooks.Instance
-                        .CreateHook<EndFrameFn>(typeof(NativeHooks), nameof(EndFrameImpl), (long)efAddr)
-                        .Activate();
-                    _ilog.LogInformation("acmelights: hook installed  SceneTool::EndFrame @ {A:X8}", (long)efAddr);
-                }
-                catch (Exception ex) {
-                    _ilog.LogError(ex, "acmelights: hook FAILED  SceneTool::EndFrame @ {A:X8}", (long)efAddr);
-                }
-            }
-
-            _installed = _updateLights != null || _setAmbient != null || _endFrame != null || _endScene != null;
+            _installed = _updateLights != null || _setAmbient != null || _endScene != null;
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
@@ -122,6 +107,10 @@ namespace AcmeLights.Services {
             _updateLights!.OriginalFunction(self);
             try { _mgr?.OnUpdateLights(); }
             catch (Exception ex) { LogSafe(ex, "UpdateLights"); }
+            // Re-assert the bloom rendering-callback slot every frame: SmartBox::Reset zeroes it on
+            // teleport/relog. This heartbeat runs during the 3D pass, before the slot fires at the
+            // tail of RenderNormalMode, on the same thread.
+            RenderCallback.EnsureInstalled();
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
@@ -154,20 +143,6 @@ namespace AcmeLights.Services {
             catch (Exception ex) { LogSafe(ex, "SetAmbient"); }
         }
 
-        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void EndFrameImpl(byte bDrawUI) {
-            // Run bloom BEFORE the UI is drawn (this function draws the 2D UI then EndScene/Flip).
-            try {
-                if (_bloom != null) {
-                    var vp = AcmeLights.Lib.ClientState.GetViewport();
-                    if (vp.Valid && vp.OpenScene)
-                        _bloom.Frame(AcmeLights.Lib.ClientState.GetDevicePointer(), in vp);
-                }
-            }
-            catch (Exception ex) { LogSafe(ex, "EndFrame"); }
-            _endFrame!.OriginalFunction(bDrawUI);
-        }
-
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
         private static void EndSceneImpl(nint self) {
             _endScene!.OriginalFunction(self);   // let the client close the scene first
@@ -175,7 +150,9 @@ namespace AcmeLights.Services {
             catch (Exception ex) { LogSafe(ex, "EndScene"); }
         }
 
-        private static long _lastErr = long.MinValue;
+        // -1_000_000, NOT long.MinValue: `now - long.MinValue` overflows negative and the throttle
+        // suppresses every log forever (the DumpService/AcmeSky bug).
+        private static long _lastErr = -1_000_000;
         private static void LogSafe(Exception ex, string stage) {
             long now = Environment.TickCount64;
             if (now - _lastErr < 1000) return;
@@ -188,7 +165,6 @@ namespace AcmeLights.Services {
             _disposed = true;
             try { _updateLights?.Disable(); } catch { }
             try { _setAmbient?.Disable(); } catch { }
-            try { _endFrame?.Disable(); } catch { }
             try { _endScene?.Disable(); } catch { }
             _installed = false;
         }

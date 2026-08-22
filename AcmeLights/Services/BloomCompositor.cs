@@ -8,8 +8,10 @@ using Vortice.D3DCompiler;
 namespace AcmeLights.Services {
     /// <summary>
     /// MILESTONE P5 (AcmeBloom) — the luminance/bloom post-process, run on the CLIENT'S OWN
-    /// IDirect3DDevice9 from the <c>SceneTool::EndFrame</c> entry detour (after the full 3D world,
-    /// before the 2D UI; BeginScene open, backbuffer bound, pure fixed-function state).
+    /// IDirect3DDevice9 from the zero-detour <c>SmartBox::m_renderingCallback</c> slot (see
+    /// RenderCallback.cs) at the tail of RenderNormalMode — after the full 3D world, before the 2D
+    /// UI; BeginScene open, backbuffer bound, pure fixed-function state. (The original
+    /// SceneTool::EndFrame detour is gone: its cdecl trampoline destabilized the client.)
     ///
     /// Pipeline each frame (all fullscreen XYZRHW+TEX1 quads, our own ps_2_0 shaders):
     ///   StretchRect backbuffer(viewport rect) -> sceneTex (full-res)
@@ -28,7 +30,7 @@ namespace AcmeLights.Services {
         private readonly ILogger _log;
         private readonly LightsConfig _cfg;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
-        private long _lastErrTicks = long.MinValue;
+        private long _lastErrTicks = -Stopwatch.Frequency;   // NOT long.MinValue (overflow mutes the throttle)
         private bool _firstOk;
 
         // device-owned resources (all D3DPOOL_DEFAULT / shaders)
@@ -84,7 +86,7 @@ namespace AcmeLights.Services {
             return blob.Span.ToArray();
         }
 
-        /// <summary>Called from the EndFrame detour. dev = client device; vp = current 3D viewport.</summary>
+        /// <summary>Called from the m_renderingCallback slot. dev = client device; vp = current 3D viewport.</summary>
         public void Frame(IntPtr devPtr, in ClientState.Viewport vp) {
             if (_cfg.Bloom <= 0.5f) return;
             if (devPtr == IntPtr.Zero || !vp.Valid || !vp.OpenScene) return;

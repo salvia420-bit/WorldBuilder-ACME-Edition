@@ -31,9 +31,10 @@ namespace AcmeLights.Lib {
         public float DungeonAmbient = -1f;  // dungeonambient: -1 = retail (0.2), else 0..1 level
         public uint DungeonAmbientColor = 0xFFFFFF; // dungeonambientcolor: hex RGB (retail white)
 
-        // --- P5 bloom (luminance post-process) ---
+        // --- P5 bloom (luminance post-process, via the SmartBox::m_renderingCallback slot) ---
         // Default OFF: opt-in via lights.cfg until the D3D9 path is live-validated (a per-frame
-        // device call on a wrong vtable slot would crash the client). Flip to 1 in cfg to enable.
+        // device call on a wrong vtable slot would crash the client). Flip to 1 in cfg to enable;
+        // it live-toggles (the heartbeat installs/clears the callback slot on the next frame).
         public float Bloom = 0f;            // bloom: 0/1 master
         public float BloomThreshold = 0.80f;// bloomthreshold: luminance knee center (0..2)
         public float BloomKnee = 0.30f;     // bloomknee: soft-knee half-width
@@ -43,11 +44,12 @@ namespace AcmeLights.Lib {
         // --- diagnostics / capture ---
         public float LogLights = 1f;      // loglights: 0/1 throttled enumeration log
         public float Dump = 0f;           // dump: 1 = write framedump-N.bmp (backbuffer) 1/sec (EndScene readback)
-        // Gate the experimental per-frame detours (SceneTool::EndFrame for bloom, RenderDeviceD3D::
-        // EndScene for capture). The two P0-P2 hooks (UpdateLightsInternal, SetWorldAmbientLight) are
-        // proven stable (19k frames); these extra ones are under bring-up. 0 = don't install them
-        // (safe default), 1 = EndScene only (capture), 2 = EndScene + EndFrame (bloom).
-        public float ExtraHooks = 0f;     // extrahooks: 0 none | 1 endscene | 2 endscene+endframe
+        // Gate the RenderDeviceD3D::EndScene capture detour. The two P0-P2 hooks (UpdateLightsInternal,
+        // SetWorldAmbientLight) are proven stable (19k frames); EndScene is proven too but stays gated
+        // as capture is a diagnostic. 0 = don't install (safe default), >=1 = EndScene (capture).
+        // (2 used to also add the SceneTool::EndFrame bloom detour — REMOVED 2026-08-22, its cdecl
+        // trampoline destabilized the client; bloom now uses the m_renderingCallback slot instead.)
+        public float ExtraHooks = 0f;     // extrahooks: 0 none | >=1 endscene (capture)
 
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;

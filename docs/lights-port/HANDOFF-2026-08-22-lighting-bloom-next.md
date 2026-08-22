@@ -1,5 +1,25 @@
 # HANDOFF — AcmeLights next phase: dynamic lights (P3), selection (P4), bloom redesign (P5)
 
+## UPDATE 2026-08-22 (later) — P5 BLOOM SHIPPED + LIVE-VALIDATED (zero-detour redesign)
+
+The bloom redesign is DONE and eye-validated on the 1070. The fix was neither (A) nor (B): the
+research doc's "zero-detour option" won — `SmartBox::m_renderingCallback`, the client's own
+`void(__cdecl*)()` slot at **SmartBox+276** (instance via ACBindings static `SmartBox::smartbox`
+@0x0083DA58), invoked at the tail of RenderNormalMode right after the final FlushAlphaList: the
+exact post-3D/pre-UI boundary, scene open, 3D viewport current — and NO trampoline at all.
+`Services/RenderCallback.cs` owns the slot; the UpdateLightsInternal heartbeat re-asserts the
+pointer once per frame (SmartBox::Reset zeroes it on teleport/relog), and `bloom=0/1` live-toggles
+install/clear. The unchanged BloomCompositor pipeline (StretchRect + bright/blur/composite inside
+the open scene) runs indefinitely — the old ~1s fault really was the EndFrame cdecl trampoline
+itself. Validated live: dungeon torch bloom + Holtburg portal glow, UI unbloomed, stable through
+teleports (Reset re-assert proven), toggle returns byte-identical-modulo-flicker frames. A/B
+captures taildropped to the owner. The `extrahooks=2` EndFrame mode is REMOVED from the code.
+Also fixed two more `long.MinValue` throttle-overflow bugs (NativeHooks.LogSafe, BloomCompositor).
+Bloom stays default-off in lights.cfg pending the owner's aesthetic verdict; knobs proven live
+(threshold 0.55 / intensity 2.0 / radius 3 reads clearly at night; tune outdoors by day).
+Remaining lanes: **P3** (torch-on quick win → object enumeration → spell/portal/glow lights),
+**P4** (importance-ranked slot selection), env-geo 4.P3 walk eye-test.
+
 Written 2026-08-22. Continues `PLAN-2026-08-22-acmelights.md` + the two research reports in
 this dir (`research-holtburger-lighting.md`, `research-retail-light-machinery.md`,
 `research-bloom-hook-point.md`). All work is on `integ/all-20260813`.
