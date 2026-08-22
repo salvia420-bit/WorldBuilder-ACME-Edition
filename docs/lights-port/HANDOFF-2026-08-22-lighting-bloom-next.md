@@ -20,6 +20,40 @@ Bloom stays default-off in lights.cfg pending the owner's aesthetic verdict; kno
 Remaining lanes: **P3** (torch-on quick win → object enumeration → spell/portal/glow lights),
 **P4** (importance-ranked slot selection), env-geo 4.P3 walk eye-test.
 
+## UPDATE 2026-08-22 (evening) — P3 torch-on BUILT + walk live-verified; lit-lantern eye-shot pending
+
+`Services/TorchLights.cs` (cfg `torchlights`: 0 off · 1 light-unlit · 2 extinguish-diagnostic; default
+0): a 4 Hz scan from the rendering callback walks **CObjectMaint::object_table** (the intrusive
+LongHash of every live CPhysicsObj — chain via node+4, CPhysicsObj IS the node) and calls
+`CPhysicsObj::set_lights(obj,1,0)` @0x005107C0 on anything whose CSetup has `num_lights` but
+PhysicsState 0x800 unset. Live-verified at Holtburg: `torch-on scan 100 objs, 2 with setup lights,
+lit 0` — walk + offsets correct, everything in view already lit. Hard-won facts:
+- **SmartBox::num_objects/objects is VESTIGIAL** (only zeroed in Reset, never appended). Do not
+  enumerate from it. m_pObjMaint is SmartBox+172; object_table at CObjectMaint+132; HashBase
+  {table_mask@4, key_shift@8, buckets@12, table_size@16}. CPartArray: setup@84, lights@112
+  (the research doc's +0x2C sketch was WRONG — PDB wins).
+- **PrimD3DRender::UpdateLightsInternal STALLS when the scene's light set is static** (observed:
+  a near-lightless cell froze it for minutes while EndScene kept firing). Anything that must run
+  per-frame (cfg reload, slot re-assert) now ALSO lives in the rendering callback, which fires
+  every in-world frame unconditionally.
+- **ACE defaults `LightsStatus ?? false`** (WorldObject_Networking.cs:646): weenies lacking the
+  bool AND the 0x800 bit in their PhysicsState int ship DARK even with setup lights. Confirmed
+  candidates: Lantern wcid 42227/42236/42245 (setup 0x020001BC: warm 250/215/156 light,
+  intensity 100, falloff 3), spawned in Society Stronghold Basement (8A03).
+- **8A03 Society Stronghold Basement renders BLACK on the D:\ac-dat-test client** — the cell never
+  draws (RenderNormalMode's callback never fires there, so neither bloom nor the scan run; likely
+  the env-geo test dats lack the cell). The chat rig still works there — that's how we escaped.
+  Don't use it for eye-tests; the char logs back in wherever it was left.
+- **The remaining P3-quick-win validation** (one command, blocked when the owner went active at
+  ~10:18): at Holtburg with `torchlights=1`, `@create 42227` via the chat rig → the log should
+  say `lit 1` and the framedump should show a warm lantern glow. `torchlights=2` should then
+  extinguish Holtburg's two lit lamps (symmetric proof). Rig gotcha: `acdt-schat.ps1` ABORTS
+  when the box user is active (ABORT-USER-ACTIVE in schat.log) — always check schat.log, and
+  probe idle first via `schtasks /run /tn acdtidleq` → `C:\Temp\acdt\idle.txt`.
+- Sequence bring-up cost: every plugin change = taskkill acclient → deploy DLL → **wait ~150 s**
+  for ACE to drop the session → acdtinject → 45 s → acdtvclick2 (clicks ENTER at char select;
+  the client auto-selects the last character) → refresh pid.txt.
+
 Written 2026-08-22. Continues `PLAN-2026-08-22-acmelights.md` + the two research reports in
 this dir (`research-holtburger-lighting.md`, `research-retail-light-machinery.md`,
 `research-bloom-hook-point.md`). All work is on `integ/all-20260813`.
