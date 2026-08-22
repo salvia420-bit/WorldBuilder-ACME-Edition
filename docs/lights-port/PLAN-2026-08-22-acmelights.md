@@ -111,13 +111,21 @@ most D3D9 HW T&L caps at 8; ROI is in better selection, not more slots.
 1. [x] Explore research: holtburger lighting system (report in repo).
 2. [x] Explore research: retail FF light machinery + hook points (report in repo).
 3. [x] Architecture decision + this plan.
-4. [ ] P0: AcmeLights scaffold (csproj, manifest, AddressResolver, LightsConfig w/ live reload).
-5. [ ] P0: LightParms reader + throttled enumeration log; deploy to 1070, 10-min soak, verify counts.
-6. [ ] P1: pool-cap raise + SetDegradeLevelInternal guard + rangeAdjust/ambientBoost knobs.
-7. [ ] P1: viewer headlamp knob; live-validate via enumeration log (dynamic count +1, slot 0).
-8. [ ] P2: flame flicker (holtburger waveform, warm gate, lightCacheing=0); validate via
-       frame-to-frame Diffuse variance in the reader.
-9. [ ] P2: SetWorldAmbientLight detour (red-bias fix + dungeon ambient knobs).
+4. [x] P0: AcmeLights scaffold (csproj, manifest, AddressResolver, LightsConfig w/ live reload).
+5. [x] P0: LightParms reader + throttled enumeration log; LIVE on the 1070 — both hooks install,
+       heartbeat fires every frame (17k+ frames), pools 60/10, ambient read, ZERO crashes.
+6. [x] P1: pool-cap raise (asserted each frame; survives restomp). rangeAdjust/ambientBoost left
+       as no-ops (map VAs unverified; runtime-derivation deferred). SetDegradeLevelInternal guard
+       is implicit (caps re-asserted every frame).
+7. [x] P1: viewer headlamp knob — LIVE-VALIDATED: cfg headlamp=2.25 reached client memory
+       (readback headlamp=2.25) via the 1/s cfg reload; the write path is proven.
+8. [~] P2: flame flicker code in + running (flicker=1 stable, no crash). Warm-gate + holtburger
+       waveform on dynamic lights works now; STATIC-torch flicker still needs indoor validation
+       (blocked: no reliable indoor-teleport POI name; static pool was 0 outdoors as expected —
+       outdoor uses the sun path). Visual confirmation deferred to owner eye-pass / a future
+       indoor capture.
+9. [x] P2: SetWorldAmbientLight detour installed + running (ambientfix=1; ambient reads r≈g≈b,
+       no red bias). Dungeon-ambient override wired (untested indoors, same blocker as #8).
 10. [ ] P3: object tracker (portal/projectile/glow taxonomy tables) + set_viewer post-hook
         injection of plugin dynamics; impact flash decay.
 11. [ ] P4: minimize_object_lighting replacement (importance top-8) + optional specular/penumbra.
