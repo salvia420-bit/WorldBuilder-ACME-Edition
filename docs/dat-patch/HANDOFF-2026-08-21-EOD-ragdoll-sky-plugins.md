@@ -208,8 +208,15 @@ working_directory, EntryPointParameters* {version=1,flags=0,dll_path=injector,en
 
 ### Plugins (this workstream)
 1. ~~**AcmeSky sky fixes (§2.4)**~~ ✅ DONE (world swizzle; live-validated on the 1070).
-2. **AcmeSky M2/M3** — port takram clouds (M2) and Yale stars (M3) per the porting spec. NOW the
-   front of this workstream; pre-validate with `AcmeSky/Tools/skysim_replica.py` before box time.
+2. **AcmeSky M2 clouds** — port takram clouds per the porting spec (the one remaining big sky
+   milestone; ~1000-line raymarcher + 5 prebaked assets). Pre-validate with
+   `AcmeSky/Tools/skysim_replica.py`-style CPU replication before box time.
+   ~~M3 stars~~ ✅ DONE same session (spec's Phase-2-before-clouds order): takram stars.bin
+   9,096-star PointList, Pogson mags, sidereal Rz(-GMST) on the 11.34× game date, night fade;
+   sun/moon discs no longer leak below the horizon. Live-validated eyes-free on the 1070 via the
+   new `bright=` counter (night baseline 0 → stars=1 → 2 → stars=8 → 13; day = full count).
+   Owner eye-pass on the night sky still worthwhile (star SIZE is 1px; if too subtle on a real
+   monitor, `stars=` scales it).
 3. ~~**AcmeSky clock**~~ ✅ DONE (`present_time_of_day`, live-ticking; `timeofs` phase knob added).
    Remaining nice-to-have: an owner eye-pass on day/night phase alignment (does fraction 0 look
    like midnight in Dereth) — `timeofs` calibrates if not.
