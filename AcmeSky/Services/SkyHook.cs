@@ -58,7 +58,9 @@ namespace AcmeSky.Services {
         // can confirm GameSky::Draw is actually being intercepted without spamming the client log.
         private static readonly System.Diagnostics.Stopwatch _fireClock = System.Diagnostics.Stopwatch.StartNew();
         private static long _fireCount;
-        private static long _lastFireLogTicks = long.MinValue;
+        // NOT long.MinValue: `now - long.MinValue` overflows negative and the once-per-second
+        // branch never fires (the recurring throttle-overflow bug; see LiveSkyCompositor note).
+        private static long _lastFireLogTicks = -System.Diagnostics.Stopwatch.Frequency;
 
         /// <summary>
         /// When true (default) the detour suppresses the retail sky by not calling the original.

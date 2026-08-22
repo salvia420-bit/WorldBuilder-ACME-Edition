@@ -122,6 +122,24 @@ namespace AcmeSky.Services.LiveSky {
             RebuildAxisIfChanged();
         }
 
+        /// <summary>The D3D11 side is alive (device created, at minimum the M0 shaders compiled).</summary>
+        public bool Usable => _dev is not null && !_d3d11Failed;
+
+        /// <summary>
+        /// Eagerly create the D3D11 device, compile ALL shaders, and load the LUT/cloud/star assets.
+        /// MUST be called on the MANAGED plugin thread (Initialize), never from the native detour:
+        /// loading Vortice assemblies / running D3DCompile on a native detour thread throws
+        /// 0x80131509 "operation is not legal in the current state" (the plugin-ALC-load-on-native-
+        /// thread fault AcmeLights hit with the same compiler and fixed the same way). The detour
+        /// then only does per-frame work against already-created objects. D3D11 is free-threaded, so
+        /// creating OUR device off the render thread is legal; only the D3D9 side must stay on the
+        /// client's render thread (it stays lazy in Frame).
+        /// </summary>
+        public bool Warmup() {
+            EnsureD3D11();
+            return Usable;
+        }
+
         /// <summary>Rebuild the AC->shader matrix only when the axis spec string actually changes.</summary>
         private void RebuildAxisIfChanged() {
             if (_cfg.Axis == _acToShaderAxis) return;

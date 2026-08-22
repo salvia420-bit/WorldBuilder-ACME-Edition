@@ -107,6 +107,24 @@ namespace AcmeSky.Services {
             _log.LogInformation(
                 "acmesky: SkyRenderer built (assetDir={Dir}, palettesLoaded={PL}, classes={Cls}, testGradient={TG}, diag={DG}, live={LV})",
                 _assetDir, _palette.Loaded, string.Join(",", _palette.Classes), TestGradient, DiagFrameLog, Live);
+
+            // Live compositor is created + warmed HERE, on the managed Initialize thread — NOT lazily
+            // in Render (the native detour thread), where the Vortice assembly load / D3DCompile
+            // throws 0x80131509 and the silent SkyHook catch turned that into a permanently BLACK sky
+            // (retail suppressed, nothing drawn, nothing logged). If warmup fails, Render falls back
+            // to the baked dome path so the sky is never black.
+            if (Live) {
+                try {
+                    _live = new LiveSkyCompositor(_log, _assetDir);
+                    bool ok = _live.Warmup();
+                    _log.LogInformation("acmesky: live compositor warmup on managed thread -> {S}",
+                        ok ? "READY" : "FAILED (will fall back to baked domes)");
+                }
+                catch (Exception ex) {
+                    _log.LogError(ex, "acmesky: live compositor warmup threw; falling back to baked domes");
+                    _live = null;
+                }
+            }
         }
 
         /// <summary>
@@ -191,14 +209,19 @@ namespace AcmeSky.Services {
             var cam = ClientState.GetCamera();
             if (!cam.Valid) { FirstFrameOnce($"camera invalid (dev={devPtr.ToInt64():X8}) - render aborted"); return; }
 
-            // MILESTONE 0: when ACMESKY_LIVE=1, the after==0 backdrop slot is drawn by the live
-            // compositor (own D3D11 device -> readback -> D3D9 dynamic texture -> fullscreen quad) and
-            // we RETURN, skipping the baked dome draws entirely. The retail sky is already suppressed by
-            // the hook, so the composite occupies the same free-occlusion backdrop position.
-            if (Live) {
-                _live ??= new LiveSkyCompositor(_log, _assetDir);
-                _live.Frame(device, devPtr, in cam);
-                return;
+            // When ACMESKY_LIVE=1 and the (Initialize-warmed) live compositor is healthy, the after==0
+            // backdrop slot is drawn by it (own D3D11 device -> readback -> D3D9 dynamic texture ->
+            // fullscreen quad) and we RETURN. If it is missing/dead, FALL THROUGH to the baked dome
+            // path — the sky must never be black just because the live path died. Never construct or
+            // warm the compositor here: this is the native detour thread (see ctor note, 0x80131509).
+            if (Live && _live is not null && _live.Usable) {
+                try {
+                    _live.Frame(device, devPtr, in cam);
+                    return;
+                }
+                catch (Exception ex) {
+                    LogErrThrottled(ex, "live-frame");   // fall through to baked this frame
+                }
             }
 
             EnsureGeometry();

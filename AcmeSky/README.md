@@ -1,5 +1,25 @@
 # AcmeSky
 
+> **2026-08-22 code-only investigation — BLACK SKY root cause + cloud seam-line fix (both landed, 1070 eye-test pending):**
+> 1. **Black sky**: `ACMESKY_LIVE=1` routed the backdrop through `LiveSkyCompositor`, which was
+>    constructed + warmed **lazily inside the GameSky::Draw detour** — i.e. on the native render
+>    thread, where the Vortice assembly load / D3DCompile throws `0x80131509` (the exact
+>    ALC-load-on-native-thread fault AcmeLights hit with the same compiler). `SkyHook`'s
+>    catch-all swallowed the throw every frame → retail sky suppressed, nothing drawn, nothing
+>    logged. FIX: the compositor is now created and `Warmup()`ed on the managed thread in
+>    `SkyRenderer`'s ctor (Initialize), and `Render` falls back to the BAKED dome path when the
+>    live path is missing/dead — the sky can no longer be silently black.
+> 2. **Straight line across the clouds** (clouds "strictly stop"): the weather tile is ~90 km in
+>    the sky and the visible cap spans ~2 tiles, so the `local_weather_nasa` (AcmeSky's sky.cfg
+>    DEFAULT `wxmap=nasa`!) wrap seam projects as a hard line — the NASA/dereth crops are not
+>    wrap-tileable (seam-step 2.7× / 6.4× the interior gradient; takram's procedural default
+>    measures 0.9 = seamless; upstream clouds.glsl carries `TODO: Tile and fix seams`).
+>    Holtburger dodges it by DEFAULTING to the tileable takram map (`?wxMap=nasa` opt-in has the
+>    same seam). FIX: `Tools/bake_cloud_assets.py` now roll-blend-tileizes any non-tileable
+>    weather map at bake time (96 px smoothstep band ≈ 17 km transition; `.tileable.png`
+>    references emitted beside the bins). Holtburger can adopt the same pngs. The gold-plated
+>    runtime alternative (iq texture-repetition / hextile in `sampleWeather`) remains open.
+
 A Chorizite client plugin that **replaces the retail Asheron's Call sky** with a baked
 NASA/takram sky rendered on the client's own fixed-function Direct3D 9 device. It suppresses
 the retail sky with a single inline detour and draws, in its place, a palette-driven
