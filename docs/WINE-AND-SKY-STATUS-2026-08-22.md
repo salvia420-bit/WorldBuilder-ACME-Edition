@@ -1,5 +1,53 @@
 # Wine + Chorizite feasibility, and the DAT-sky reset question — 2026-08-22
 
+## UPDATE (Vulkan/DXVK) — the T4 renders the client on HARDWARE; volumetric compositor initializes on-GPU then crashes in readback
+
+The "wine = software GL, hopeless for real rendering" conclusion was **wrong** — that was WineD3D
+over 32-bit software GL. **DXVK (D3D9/D3D11 → Vulkan) runs the 32-bit AC client on the Tesla T4
+in hardware.** Proven on the buildbox:
+- `/etc/vulkan/icd.d/nvidia_icd.json` registers `libGLX_nvidia.so.0`; both i386 and x86_64
+  `libGLX_nvidia.so.550.54.15` + the i386 Vulkan loader are present. 64-bit `vulkaninfo` sees
+  `Tesla T4` (Vulkan 1.3.277).
+- Staging DXVK 2.4.1 `d3d9.dll` next to acclient + `WINEDLLOVERRIDES="d3d9=n"`: DXVK logs
+  `DXVK: v2.4.1`, `Skipping CPU adapter: llvmpipe`, `Device : Tesla T4` — the client renders
+  char-select + world on the T4 via `winevulkan.dll` → NVIDIA. (Kit already had this `d3d9.dll` +
+  `dxvk.conf`; ref repo github.com/mrmackdaddy79-a11y/AC-Vulkan-Reshade-NoCrash-Fix — AC+DXVK on
+  Windows, main gotcha is a texture-leak OOM fixed by DXVK memory mgmt + a 4GB/LAA patch; no
+  dxvk.conf/registry tweaks needed.)
+
+**The volumetric AcmeSky live path reaches the GPU too, then crashes.** With DXVK 2.4.1
+`d3d11.dll`+`dxgi.dll` staged + `WINEDLLOVERRIDES=...,d3d11=n,dxgi=n` and the **native Microsoft
+`d3dcompiler_47`** installed (winetricks standalone — wine's builtin vkd3d-shader HLSL compiler
+choked with `E5005: Function "frac" is not defined`), the compositor fully initialized:
+`LIVE D3D11 device created (adapter='NVIDIA Tesla T4', featureLevel=Level_11_0)`, `LIVE clouds
+ready`, `LIVE atmosphere ready`, `warmup -> READY`. But once `LiveSkyCompositor.Frame()` runs
+in-world, the client dies with a **native access violation** (`Unhandled page fault on write
+access to 233CB000 at 656DB910`) — no managed exception, so the compositor's try/catch can't
+catch it. Per the takram agent, this readback→upload path (`RenderAndUpload`: D3D11 CopyResource
+→ Map(Read) → memcpy into a DXVK D3D9 `Dynamic`/`Default` dynamic texture via LockRect →
+fullscreen quad) has very likely never actually executed before, so this is its first run. The
+write fault points at the **D3D9 upload memcpy** (`LiveSkyCompositor.cs` ~617-652): a DXVK D3D9
+dynamic-texture `LockRect` pitch/pointer that doesn't match the assumed `w*4` row size would
+overflow. **Confirmed the crash is in the COMMON readback path, not the clouds:** re-run with
+`sky.cfg clouds=0` (atmosphere-only) still faults at the **identical instruction `656DB910`**
+(only the write target varies — 233CB000 then 3324E000), so it is one specific memcpy/copy in
+`RenderAndUpload`, independent of the cloud pass. Next-debug (needs a rebuild): log
+`staging RowPitch` and the D3D9 `locked.Pitch` vs `w*4` right before the row-copy loop, clamp the
+per-row copy to `min(srcPitch, dstPitch, w*4)`, and confirm the D3D9 upload texture create
+(`Dynamic`/`Default`, A8R8G8B8) round-trips under DXVK d3d9 (DXVK may hand back a differently
+pitched/sized lock than WineD3D did in the never-run-before path). Half-res readback (the takram
+Rank-1) is the other lever and would shrink the copy footprint.
+
+**Significance:** DXVK unlocks real-GPU validation of the takram volumetric path **on the buildbox
+T4** — no 1070 needed for the takram Rank-0. The environment is preserved on the box (DXVK dlls in
+`D:\ac-dat-test` + wine system32, native d3dcompiler_47 in the prefix, launch script
+`/tmp/inject-dxvk.sh`); a follow-up restarts and resumes. Baked AcmeSky + AcmeLights + torch-on
+all still work under DXVK (the client's D3D9 is DXVK's; the Chorizite inline hooks are
+device-independent).
+
+---
+
+
 ## UPDATE (later same day) — INJECTION NOW WORKS under wine (base-aware injector)
 
 The base-aware injector was built (`AcmeInject/`, x86 .NET 8) and **proven on the buildbox T4**.
