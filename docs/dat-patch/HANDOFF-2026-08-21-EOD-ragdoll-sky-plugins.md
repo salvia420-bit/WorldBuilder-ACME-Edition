@@ -208,9 +208,15 @@ working_directory, EntryPointParameters* {version=1,flags=0,dll_path=injector,en
 
 ### Plugins (this workstream)
 1. ~~**AcmeSky sky fixes (§2.4)**~~ ✅ DONE (world swizzle; live-validated on the 1070).
-2. **AcmeSky M2 clouds** — port takram clouds per the porting spec (the one remaining big sky
-   milestone; ~1000-line raymarcher + 5 prebaked assets). Pre-validate with
-   `AcmeSky/Tools/skysim_replica.py`-style CPU replication before box time.
+2. ~~**AcmeSky M2 clouds**~~ ✅ PORTED + live-validated eyes-free (2026-08-21/22 late session,
+   commit 2f930a8d): full takram three-clouds raymarcher in HLSL (holtburger FAIR layers,
+   coverage 0.5, medium preset, aerial perspective via a GetSkyRadianceToPoint port), half-res
+   RT + premultiplied composite, assets baked via Tools/bake_cloud_assets.py. ~118 fps at 1080p
+   on the 1070. Documented drops: Beer Shadow Map, temporal reprojection, depth clamp, haze.
+   REMAINING for the sky workstream: (a) the OWNER LOOK PASS — clouds + stars + day/night on a
+   real monitor (sky.cfg knobs: cloudcover/clouditers/cloudres/exposure; debug outputs 6-9);
+   (b) optional M2.1 polish: HDR pipeline (tonemap after composite), BSM for distant
+   self-shadowing, storm look on the weather signal, temporal upscale if perf ever matters.
    ~~M3 stars~~ ✅ DONE same session (spec's Phase-2-before-clouds order): takram stars.bin
    9,096-star PointList, Pogson mags, sidereal Rz(-GMST) on the 11.34× game date, night fade;
    sun/moon discs no longer leak below the horizon. Live-validated eyes-free on the 1070 via the
