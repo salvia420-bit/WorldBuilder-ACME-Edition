@@ -105,5 +105,11 @@ namespace AcmeLights.Lib {
         // ambient funnel. ACBindings SmartBox.cs 'n(float,uint) @0x004530E0'.
         public const nint SetWorldAmbientLight_VA = 0x004530E0;
         public const string? SetWorldAmbientLight_Sig = "PLACEHOLDER: prologue at 0x004530E0";
+
+        // SceneTool::EndFrame(bool bDrawUI) (CDECL) -- the post-3D / pre-UI boundary, where the
+        // bloom composite runs (BeginScene open, backbuffer bound). ACBindings SceneTool.cs
+        // 'EndFrame(byte) @0x0043FCD0'. (research-bloom-hook-point.md)
+        public const nint EndFrame_VA = 0x0043FCD0;
+        public const string? EndFrame_Sig = "PLACEHOLDER: prologue at 0x0043FCD0";
     }
 }

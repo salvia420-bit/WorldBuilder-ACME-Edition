@@ -30,6 +30,7 @@ namespace AcmeLights {
         private LightsConfig? _cfg;
         private NativeHooks? _hooks;
         private LightManager? _mgr;
+        private BloomCompositor? _bloom;
 
         JsonTypeInfo<LightsSettings> ISerializeSettings<LightsSettings>.TypeInfo =>
             LightsJsonContext.Default.LightsSettings;
@@ -65,8 +66,9 @@ namespace AcmeLights {
             _cfg = new LightsConfig();
             _cfg.Reload();
             _mgr = new LightManager(_log, _cfg);
+            _bloom = new BloomCompositor(_log, _cfg);
             _hooks = new NativeHooks(_log);
-            _hooks.Install(_mgr, _cfg);
+            _hooks.Install(_mgr, _bloom, _cfg);
 
             if (_hooks.Installed)
                 _log.LogInformation("acmelights: initialized (cfg='{Cfg}' maxStatic={MS} maxDynamic={MD} " +
@@ -89,6 +91,8 @@ namespace AcmeLights {
         protected override void Dispose() {
             _hooks?.Dispose();
             _hooks = null;
+            _bloom?.Dispose();
+            _bloom = null;
             Instance = null;
         }
     }

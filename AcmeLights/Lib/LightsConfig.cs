@@ -31,6 +31,15 @@ namespace AcmeLights.Lib {
         public float DungeonAmbient = -1f;  // dungeonambient: -1 = retail (0.2), else 0..1 level
         public uint DungeonAmbientColor = 0xFFFFFF; // dungeonambientcolor: hex RGB (retail white)
 
+        // --- P5 bloom (luminance post-process) ---
+        // Default OFF: opt-in via lights.cfg until the D3D9 path is live-validated (a per-frame
+        // device call on a wrong vtable slot would crash the client). Flip to 1 in cfg to enable.
+        public float Bloom = 0f;            // bloom: 0/1 master
+        public float BloomThreshold = 0.80f;// bloomthreshold: luminance knee center (0..2)
+        public float BloomKnee = 0.30f;     // bloomknee: soft-knee half-width
+        public float BloomIntensity = 1.0f; // bloomintensity: additive scale (0..4)
+        public float BloomRadius = 2f;      // bloomradius: separable blur H/V passes (1..4)
+
         // --- diagnostics ---
         public float LogLights = 1f;      // loglights: 0/1 throttled enumeration log
 
@@ -81,6 +90,11 @@ namespace AcmeLights.Lib {
                 case "ambientfix": if (F(val, out var af)) AmbientFix = Math.Clamp(af, 0f, 1f); break;
                 case "dungeonambient": if (F(val, out var da)) DungeonAmbient = Math.Clamp(da, -1f, 1f); break;
                 case "dungeonambientcolor": if (Hex(val, out var dc)) DungeonAmbientColor = dc; break;
+                case "bloom": if (F(val, out var bl)) Bloom = Math.Clamp(bl, 0f, 1f); break;
+                case "bloomthreshold": if (F(val, out var bt)) BloomThreshold = Math.Clamp(bt, 0f, 2f); break;
+                case "bloomknee": if (F(val, out var bk)) BloomKnee = Math.Clamp(bk, 0.001f, 1f); break;
+                case "bloomintensity": if (F(val, out var bi)) BloomIntensity = Math.Clamp(bi, 0f, 4f); break;
+                case "bloomradius": if (F(val, out var br)) BloomRadius = Math.Clamp(br, 1f, 4f); break;
                 case "loglights": if (F(val, out var ll)) LogLights = Math.Clamp(ll, 0f, 1f); break;
             }
         }

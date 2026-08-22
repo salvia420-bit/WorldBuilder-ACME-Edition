@@ -66,6 +66,10 @@
     <!-- Match what the vendored Chorizite.Core pulls (see AcmeRedline.csproj rationale). -->
     <PackageReference Include="Autofac" Version="8.4.0" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" ExcludeAssets="runtime" />
+    <!-- P5 bloom compiles ps_2_0 HLSL at runtime for the client's own D3D9 device. Vortice.D3DCompiler
+         is the managed D3DCompile binding; ship it + its native d3dcompiler (Private=true), same as
+         AcmeSky. We do NOT touch D3D11/DXGI here (bloom is on the client D3D9 device). -->
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" Private="true" />
   </ItemGroup>
 
   <ItemGroup>

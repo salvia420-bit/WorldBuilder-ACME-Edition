@@ -32,9 +32,15 @@ namespace AcmeLights.Services {
         [Function(CallingConventions.MicrosoftThiscall)]
         private delegate void SetAmbientFn(nint self, float intensity, uint color);
 
+        // void __cdecl SceneTool::EndFrame(bool bDrawUI) -- post-3D / pre-UI boundary for bloom.
+        [Function(CallingConventions.Cdecl)]
+        private delegate void EndFrameFn(byte bDrawUI);
+
         private static IHook<UpdateLightsFn>? _updateLights;
         private static IHook<SetAmbientFn>? _setAmbient;
+        private static IHook<EndFrameFn>? _endFrame;
         private static LightManager? _mgr;
+        private static BloomCompositor? _bloom;
         private static LightsConfig? _cfg;
         private static ILogger? _log;
 
@@ -44,14 +50,16 @@ namespace AcmeLights.Services {
         public NativeHooks(ILogger log) { _ilog = log; _log = log; }
         public bool Installed => _installed;
 
-        public void Install(LightManager mgr, LightsConfig cfg) {
+        public void Install(LightManager mgr, BloomCompositor bloom, LightsConfig cfg) {
             if (_installed || _disposed) return;
-            _mgr = mgr; _cfg = cfg;
+            _mgr = mgr; _bloom = bloom; _cfg = cfg;
 
             nint updAddr = AddressResolver.Resolve("PrimD3DRender::UpdateLightsInternal",
                 ClientFunctions.UpdateLightsInternal_Sig, ClientFunctions.UpdateLightsInternal_VA);
             nint ambAddr = AddressResolver.Resolve("SmartBox::SetWorldAmbientLight",
                 ClientFunctions.SetWorldAmbientLight_Sig, ClientFunctions.SetWorldAmbientLight_VA);
+            nint efAddr = AddressResolver.Resolve("SceneTool::EndFrame",
+                ClientFunctions.EndFrame_Sig, ClientFunctions.EndFrame_VA);
 
             try {
                 _updateLights = ReloadedHooks.Instance
@@ -73,7 +81,17 @@ namespace AcmeLights.Services {
                 _ilog.LogError(ex, "acmelights: hook FAILED  SetWorldAmbientLight @ {A:X8}", (long)ambAddr);
             }
 
-            _installed = _updateLights != null || _setAmbient != null;
+            try {
+                _endFrame = ReloadedHooks.Instance
+                    .CreateHook<EndFrameFn>(typeof(NativeHooks), nameof(EndFrameImpl), (long)efAddr)
+                    .Activate();
+                _ilog.LogInformation("acmelights: hook installed  SceneTool::EndFrame @ {A:X8}", (long)efAddr);
+            }
+            catch (Exception ex) {
+                _ilog.LogError(ex, "acmelights: hook FAILED  SceneTool::EndFrame @ {A:X8}", (long)efAddr);
+            }
+
+            _installed = _updateLights != null || _setAmbient != null || _endFrame != null;
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
@@ -113,6 +131,20 @@ namespace AcmeLights.Services {
             catch (Exception ex) { LogSafe(ex, "SetAmbient"); }
         }
 
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void EndFrameImpl(byte bDrawUI) {
+            // Run bloom BEFORE the UI is drawn (this function draws the 2D UI then EndScene/Flip).
+            try {
+                if (_bloom != null) {
+                    var vp = AcmeLights.Lib.ClientState.GetViewport();
+                    if (vp.Valid && vp.OpenScene)
+                        _bloom.Frame(AcmeLights.Lib.ClientState.GetDevicePointer(), in vp);
+                }
+            }
+            catch (Exception ex) { LogSafe(ex, "EndFrame"); }
+            _endFrame!.OriginalFunction(bDrawUI);
+        }
+
         private static long _lastErr = long.MinValue;
         private static void LogSafe(Exception ex, string stage) {
             long now = Environment.TickCount64;
@@ -126,6 +158,7 @@ namespace AcmeLights.Services {
             _disposed = true;
             try { _updateLights?.Disable(); } catch { }
             try { _setAmbient?.Disable(); } catch { }
+            try { _endFrame?.Disable(); } catch { }
             _installed = false;
         }
     }
