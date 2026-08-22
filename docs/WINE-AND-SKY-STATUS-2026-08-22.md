@@ -1,5 +1,59 @@
 # Wine + Chorizite feasibility, and the DAT-sky reset question — 2026-08-22
 
+## UPDATE (later same day) — INJECTION NOW WORKS under wine (base-aware injector)
+
+The base-aware injector was built (`AcmeInject/`, x86 .NET 8) and **proven on the buildbox T4**.
+It replaces the prebuilt `AcmeInject.exe`: instead of calling the injector DLL's `Bootstrap` at
+its *local* address, it reads the injector's *remote* base from the `LoadLibraryW` thread exit
+code and calls `Bootstrap` at `remoteBase + BootstrapRVA` (RVA parsed from the export table).
+Result: `Injector remote base: 0x10000000 -> Bootstrap 0x10004E9E; Bootstrap returned 0; Client
+resumed.` — no fault. In acclient the injector loads at its preferred 0x10000000 (free in the
+sparse client); the base-aware call lands correctly.
+
+Two more wine-only environment gaps had to be fixed before the ACME plugins would load and run:
+1. **`%TEMP%\chorizite` must exist** — Chorizite's `AssemblyPluginLoadContext` ctor does
+   `Directory.GetDirectories(Path.GetTempPath() + "chorizite")` (Chorizite.Core .../AssemblyLoader/
+   AssemblyPluginLoadContext.cs:36), which throws `DirectoryNotFoundException` under wine (a real
+   Windows install has it). `mkdir ~/acwine/drive_c/users/<user>/Temp/chorizite` fixes it — every
+   plugin failed to load without it.
+2. **Plugin asset dirs need the execute/traverse bit** — the Chorizite tree was shipped as a
+   Windows `Compress-Archive` zip; `unzip` gave directories mode `drw-` (no `x`), so wine couldn't
+   traverse into `plugins/AcmeSky/assets/` → `palettesLoaded=False` → black sky. `find … -type d
+   -exec chmod u+rwx` fixes it. Also the AcmeSky `assets/sky/**` tree (palettes + textures) was
+   **missing from the 1070 zip entirely** and had to be shipped from the repo.
+
+With those, on the buildbox under wine: **AcmeLights runs fully** (per-frame light pool,
+flicker, ambient fix — `frame#17629 static=38/60 … flicker=1`), **AcmeRagdoll arms** (`ready.
+Creatures will ragdoll on death`), and **AcmeSky loads + installs its GameSky::Draw hook and
+suppresses the retail sky** (`palettesLoaded=True`, detour firing both phases). The Chorizite UI
+stack (RmlUi/Lua/PluginManagerUI/AC) still fails to load under wine on a separate path issue, but
+the three ACME plugins don't depend on it.
+
+**AcmeSky baked sky — FIXED (was black under wine).** Instrumenting `SkyRenderer.Render` with a
+logging guard revealed the exact throw: `System.IO.FileLoadException: Could not load … 'Chorizite.
+ACBindings' … operation is not legal in the current state (0x80131509)`. `ClientState` (device
+ptr / camera / time) dereferences ACBindings statics from inside the `GameSky::Draw` detour on the
+client's native render thread, and a **lazy** ACBindings assembly/ALC load there throws
+0x80131509 — the identical fault AcmeLights/AcmeRagdoll already avoid with `WarmupAcBindings`,
+which AcmeSky was missing. SkyHook's catch-all swallowed it, so Render bailed every frame: retail
+sky suppressed, nothing drawn → black. Invisible on Windows (another plugin had already loaded
+ACBindings); under wine AcmeSky's detour was first to touch it. Fix: `WarmupAcBindings()` in
+`AcmeSkyPlugin.Initialize` (commit 9e625712), plus the pre-draw logging guard so a future silent
+bail is diagnosable. **PROVEN**: AcmeSky now draws its baked blue daytime sky + cloud layers
+in-world under wine (`frame after=0 time=0.500 sunEl=58.8 dayness=1.00 atmoDrawn=1`), forced to
+noon via `ACMESKY_SKY_TIME=0.5`. The full stack — base-aware inject + AcmeLights + AcmeRagdoll +
+AcmeSky, all rendering — works end to end under wine on the T4.
+
+Note this is likely the same class of bug behind the user's original "acmeskies appear black"
+report even on the 1070 whenever AcmeSky's detour wins the race to touch ACBindings first; the
+warmup makes it deterministic everywhere.
+
+The recipe below (the pre-injection assessment) still stands; the base-aware injector removes its
+blocker #2, and the temp-dir + asset-perms fixes are new prerequisites.
+
+---
+
+
 Code-only + buildbox-hands-on session. Two questions were owed:
 1. Can the injected Chorizite client (AcmeLights/AcmeSky) run under wine on the buildbox T4?
    (Needed anyway; would also fulfil the owed lantern test + gauge AcmeSky.)
