@@ -1,0 +1,10 @@
+{
+  "id": "AcmeLights",
+  "name": "ACME Lights",
+  "author": "ACME Edition",
+  "version": "0.1.0-dev",
+  "description": "holtburger-tier lighting for the retail client: drives the client's own fixed-function light pipeline (flame flicker, raised pools, viewer headlamp, ambient fixes, dynamic spell/portal lights) via inline detours; luminance bloom post-process in later phases.",
+  "entryfile": "AcmeLights.dll",
+  "dependencies": [],
+  "environments": [ "Client" ]
+}
