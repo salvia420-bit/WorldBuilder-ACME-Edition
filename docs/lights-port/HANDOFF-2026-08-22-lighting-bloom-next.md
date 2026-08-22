@@ -1,0 +1,126 @@
+# HANDOFF — AcmeLights next phase: dynamic lights (P3), selection (P4), bloom redesign (P5)
+
+Written 2026-08-22. Continues `PLAN-2026-08-22-acmelights.md` + the two research reports in
+this dir (`research-holtburger-lighting.md`, `research-retail-light-machinery.md`,
+`research-bloom-hook-point.md`). All work is on `integ/all-20260813`.
+
+## Where things stand (do not redo)
+
+- **AcmeLights P0–P2 SHIPPED + live-validated on the 1070** (plugin `AcmeLights/`): two inline
+  detours — `PrimD3DRender::UpdateLightsInternal` @0x0059BEE0 (per-frame heartbeat) and
+  `SmartBox::SetWorldAmbientLight` @0x004530E0 (ambient funnel). Working, default-on:
+  raised pools (max_static 60 / max_dynamic 10), holtburger flame-flicker on warm point lights,
+  retail ambient red-bias fix, dungeon-ambient override, viewer headlamp (cfg `headlamp`).
+  19k+ frames, zero crashes. Live config `C:\Temp\acdt\lights.cfg` (1/s reload; keys in
+  `Lib/LightsConfig.cs`). All addresses via ACBindings statics (map-build-correct).
+- **P5 bloom BUILT but SHELVED (default off)** — see the bloom section below for the exact blocker.
+- **P3 / P4 NOT STARTED.**
+- **env-geo 4.P3** is a separate lane, automated gates all green (see
+  `docs/dat-patch/reports/envgeo-recut-2026-08-22.md`); its only open gate is the 1070 walk eye-test.
+
+## The validation rig now available (owner-confirmed 2026-08-22)
+
+- **1070 is free to use** for full-screen, real-GPU sessions (not just off-screen).
+- **Teleport to exact coords**: `@teleloc <cell> <x> <y> <z> [qw qx qy qz]` (same number order as
+  `@loc`; cell hex ±0x). `@telepoi <POI|list>` for named towns/dungeons. Driven via the chat rig:
+  write the line to `C:\Temp\acdt\chat.txt`, refresh `C:\Temp\acdt\pid.txt` with the live acclient
+  PID (schat reads it; it goes stale across sessions — this bit us), then `schtasks /run /tn acdtschat`
+  (focus + SendInput). tailnet1 = Developer so admin commands work.
+- **First-person camera**: the `.` key toggles first person — send it via a key-hold task
+  (`C:\Temp\acdt-tilt.ps1` pattern, or a one-shot SendInput of VK_OEM_PERIOD 0xBE). Reason about
+  where the character stands relative to the phenomenon (torch on a wall, portal, caster) and
+  teleport so it's in frame; first-person removes the third-person avatar from the shot.
+- **Taildrop to the owner's redmi**: `tailscale file cp <files> redmi-note-13-5g:` (device is on the
+  tailnet; PNG works). Convert BMP→PNG with PIL first.
+- **Capture is the open problem**: GDI screenshots return a FROZEN backbuffer for a D3D9 client
+  (memory §chrome/1070). AcmeSky solved this by reading back its OWN D3D11 RT. AcmeLights changes
+  the CLIENT's render, so a capture must read back the client backbuffer. **The safe readback point
+  is a `RenderDeviceD3D::Flip` @0x005A0F60 ENTRY hook** (scene already EndScene'd in EndFrame, so
+  `GetRenderTargetData(backbuffer → D3DPOOL_SYSTEMMEM surface)` is legal there — unlike inside the
+  open scene). Add a `dump=1` cfg that, on the Flip hook, GetRenderTargetData's the backbuffer to a
+  cached sysmem surface, LockRect, and writes a rotating BMP to `C:\Temp\acdt`. This same hook is
+  ALSO the natural home for the bloom redesign (see below).
+
+## P5 bloom — the blocker and the redesign
+
+**What's built** (`AcmeLights/Services/BloomCompositor.cs`, `BloomShaders.cs`, `Lib/D3D9.cs`,
+`Lib/Device.cs`, `Lib/ClientState.cs`): hook `SceneTool::EndFrame(bool)` @0x0043FCD0 (cdecl, entry —
+post-3D, pre-UI); ps_2_0 bright-pass + separable-gaussian blur + additive composite; runtime HLSL
+compile via Vortice.D3DCompiler. Two real bugs already fixed and worth remembering:
+1. **0x80131509 ALC-load fault** — Vortice.D3DCompiler cannot be *loaded* on the native detour
+   thread. FIXED by precompiling the shader bytecode on the managed thread in `Initialize()`
+   (`BloomCompositor.PrecompileShaders`), detour only calls `CreatePixelShader(bytes)`.
+2. **Pixel-shader vtable slots were off by one** — correct D3D9: CreatePixelShader=106,
+   SetPixelShader=107, SetPixelShaderConstantF=109 (105 is GetIndices). Fixed in `Lib/D3D9.cs`.
+
+**The blocker**: the pipeline executes ONE frame correctly (trace: CreateStateBlock → StretchRect
+hr=0 → bright → composite → "RenderBloom returned ok", client alive through frame 1), then the
+client faults within ~1 s — through BOTH manual state restore AND a full `D3DSBT_ALL` StateBlock
+apply. Because a complete state restore does not help, the fault is **not** render-state. Leading
+suspect: **`StretchRect` (backbuffer→texture) is illegal inside the client's open
+`BeginScene`/`EndScene` pair** — `hr=0` at call time, but the driver faults at `Present`. At
+`SceneTool::EndFrame` entry the scene is still open (BeginScene ran in `StartFrame`; EndScene runs
+near the *end* of EndFrame).
+
+**Redesign options (pick one, validate with the dump rig + eyes):**
+- **(A, recommended) Move the whole pass to a `RenderDeviceD3D::EndScene`-adjacent point where the
+  scene is closed.** Hook EndScene @0x005A0E10 (same one Chorizite overlays at) at ENTRY: at that
+  moment the world+? — CAUTION: EndScene in this client runs AFTER the UI (RenderUI::RenderObjects
+  is earlier in EndFrame), so bloom there would bloom the UI too. To bloom only the 3D scene you
+  need a closed-scene readback of the world BEFORE the UI. So: **hook EndFrame entry only to
+  `GetRenderTargetData`/StretchRect-free CAPTURE is still in-scene** → same restriction.
+  The clean fix is to **`EndScene()` yourself at EndFrame entry, do the bloom passes (scene closed →
+  StretchRect legal), then `BeginScene()` again** before calling OriginalFunction (which draws the
+  UI and its own EndScene). Test that an extra EndScene/BeginScene pair is tolerated (it usually is).
+- **(B) Render-to-texture from the start**: hook `SceneTool::BeginScene`/`StartFrame`, redirect RT0
+  to a plugin texture for the whole 3D pass, then at EndFrame composite it back with bloom and let
+  the UI draw to the real backbuffer. More invasive; most correct; avoids StretchRect entirely.
+- **(C) Use `GetRenderTargetData` to a sysmem surface + upload to a texture** instead of StretchRect
+  — but GetRenderTargetData has the same in-scene caveat; only helps if paired with (A)'s closed scene.
+
+Ship bloom default-off until one of these is eye-validated. Knobs already wired: `bloom`,
+`bloomthreshold`, `bloomknee`, `bloomintensity`, `bloomradius`. The `Trace()` crash-surviving file
+(`C:\Temp\acdt\bloomtrace.txt`, first 4 frames) is invaluable for the next attempt — keep it.
+
+## P3 — dynamic lights for spells / portals / projectiles / glowing creatures (the headline)
+
+Neither retail nor holtburger creates lights for these (they use emissive + bloom). So P3 is NEW
+content. The retail machinery to use (all in `research-retail-light-machinery.md`):
+- **Inject via a `SmartBox::set_viewer` @0x00452C80 POST-hook** — it runs after the per-frame
+  dynamic-light wipe+refill, so appending `Render::add_dynamic_light(&LIGHTINFO, cellId, &frame)`
+  per tracked object survives exactly one frame and re-adds cleanly (correct lifetime, no leak).
+  Raise `max_dynamic_lights` (already done, =10) to budget them. `Frame::cache()` on every
+  injected LIGHTINFO is MANDATORY (see CreatureMode::AddLight reference).
+- **Object enumeration is the missing research** — the next session must map how to walk the
+  client's visible-object set and classify: portals (setup-id table; purple ~0x8060FF), war-spell
+  projectiles in flight (missile/spell-projectile setups; color by school), spell impacts
+  (brief 300–500 ms decaying light on PlayScript/impact), glowing creatures (wisps/Virindi/Shadow
+  fragments by setup id). Start from CObjectMaint / the physics-object hash; cross-ref
+  `research-retail-light-machinery.md` §4 (PhysicsState 0x800 LIGHTS_ON, SetLightHook) and the
+  wcid/setup tables in `$LSD`. **This needs an Explore pass + live eye-tuning** (do the colors and
+  associations look right) — exactly what the freed 1070 + first-person capture rig is for now.
+- Cheapest first win to prove the path: **turn on existing wall-torch DAT lights** that ship unlit —
+  `CPhysicsObj::set_lights(obj,1,0)` @0x005107C0 (or PhysicsState |= 0x800). Instantly lights every
+  torch whose Setup has num_lights, with zero new content, and validates the whole add-light loop.
+
+## P4 — better per-draw selection (optional, after P3)
+
+Replace `Render::minimize_object_lighting` @0x0054E090 (clean `void()` cdecl) with importance-ranked
+top-8 (score = attenuated intensity at object center) instead of first-8-overlap; optionally enable
+per-light specular + spot penumbra via a `config_hardware_light` @0x0059BD40 post-hook. Static
+wall-torch FLICKER also lands here (owning the slot selection lets us drop the carryOver bit so the
+per-frame Diffuse edits reach D3D without needing the unverified `lightCacheing` global).
+
+## First concrete steps for the next session
+1. Add the `dump=1` Flip-hook backbuffer capture (safe, closed-scene GetRenderTargetData) — unblocks
+   ALL visual validation and gives taildrop media.
+2. Capture P0–P2 working (teleport to a torch-lit dungeon, `.` first-person, dump, taildrop) to
+   confirm flicker + ambient look right — the one validation still owed on the shipped features.
+3. Bloom redesign (A): EndScene/BeginScene-bracket the passes at EndFrame entry; capture; taildrop.
+4. P3: torch-on quick win → object-enumeration Explore pass → spell/portal/glow taxonomy → tune.
+
+## Key files
+`AcmeLights/AcmeLightsPlugin.cs`, `Services/{LightManager,NativeHooks,BloomCompositor,BloomShaders}.cs`,
+`Lib/{LightsConfig,LightsSettings,AddressResolver,D3D9,Device,ClientState}.cs`. Deploy set +
+config in `AcmeLights/README.md`. Chat/teleport rig tasks on the 1070: `acdtinject`, `acdtvclick2`,
+`acdtschat` (+ `acdt-schat.ps1`, needs fresh `pid.txt`), `acdttilt` (`acdt-tilt.ps1`, key-hold).
