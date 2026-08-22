@@ -30,6 +30,7 @@ namespace AcmeLights.Lib {
             public const int GetViewport = 48;
             public const int SetRenderState = 57;
             public const int GetRenderState = 58;
+            public const int CreateStateBlock = 59;   // HRESULT(D3DSTATEBLOCKTYPE, IDirect3DStateBlock9**)
             public const int GetTexture = 64;
             public const int SetTexture = 65;
             public const int SetTextureStageState = 67;
@@ -39,9 +40,11 @@ namespace AcmeLights.Lib {
             public const int SetVertexShader = 92;
             public const int SetVertexDeclaration = 87;
             public const int SetFVF = 89;
-            public const int CreatePixelShader = 105;
-            public const int SetPixelShader = 106;
-            public const int SetPixelShaderConstantF = 108;
+            // (100 SetStreamSource,101 Get,102 SetFreq,103 GetFreq,104 SetIndices,105 GetIndices,
+            //  106 CreatePixelShader,107 SetPixelShader,108 GetPixelShader,109 SetPixelShaderConstantF)
+            public const int CreatePixelShader = 106;
+            public const int SetPixelShader = 107;
+            public const int SetPixelShaderConstantF = 109;
         }
 
         /// <summary>IDirect3DTexture9 vtable slots.</summary>

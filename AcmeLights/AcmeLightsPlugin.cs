@@ -67,6 +67,10 @@ namespace AcmeLights {
             _cfg.Reload();
             _mgr = new LightManager(_log, _cfg);
             _bloom = new BloomCompositor(_log, _cfg);
+            // Compile bloom shaders NOW on the managed thread — loading Vortice.D3DCompiler from the
+            // native EndFrame detour throws 0x80131509 (ALC-load fault). The detour only creates the
+            // device pixel-shader objects from this cached bytecode.
+            _bloom.PrecompileShaders();
             _hooks = new NativeHooks(_log);
             _hooks.Install(_mgr, _bloom, _cfg);
 

@@ -75,6 +75,19 @@ namespace AcmeLights.Lib {
             if (fn != null) fixed (D3DViewport9* p = &vp) fn(Ptr, p);
         }
 
+        // ---- state block (D3DSBT_ALL=1 captures current state at creation) ----
+        public IntPtr CreateStateBlock(int type) {
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, int, IntPtr*, int>)V(D3D9.Slot.CreateStateBlock);
+            if (fn == null) return IntPtr.Zero;
+            IntPtr sb = IntPtr.Zero;
+            return fn(Ptr, type, &sb) >= 0 ? sb : IntPtr.Zero;
+        }
+        /// <summary>IDirect3DStateBlock9::Apply (vtable slot 5).</summary>
+        public static void StateBlockApply(IntPtr sb) {
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, int>)D3D9.GetVTableEntry(sb, 5);
+            if (fn != null) fn(sb);
+        }
+
         // ---- resource creation ----
         public IntPtr CreateTexture(uint w, uint h, uint levels, uint usage, int format, int pool) {
             var fn = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, uint, uint, int, int, IntPtr*, IntPtr*, int>)

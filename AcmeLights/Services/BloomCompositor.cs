@@ -40,25 +40,68 @@ namespace AcmeLights.Services {
         private int _fullW, _fullH, _halfW, _halfH;
         private bool _resourcesFailed;
 
+        // Shader BYTECODE precompiled on the MANAGED plugin thread (Initialize), never on the native
+        // EndFrame detour thread: the plugin ALC throws 0x80131509 "operation is not legal in the
+        // current state" when Vortice.D3DCompiler is first loaded from the native thread (the same
+        // trap WarmupAcBindings avoids for ACBindings). The detour only calls CreatePixelShader(bytes).
+        private byte[]? _bcBright, _bcBlur, _bcComposite;
+        public bool ShadersPrecompiled => _bcBright != null && _bcBlur != null && _bcComposite != null;
+
         [StructLayout(LayoutKind.Sequential)]
         private struct QuadVert { public float X, Y, Z, Rhw, U, V; }
 
+        // Crash-surviving stage trace: a native access violation loses the buffered Chorizite log,
+        // so during bring-up we append+flush each stage to its own file. First few frames only.
+        private int _traceFrames;
+        private static void Trace(string s) {
+            try { System.IO.File.AppendAllText(@"C:\Temp\acdt\bloomtrace.txt",
+                DateTime.UtcNow.ToString("HH:mm:ss.fff") + " " + s + "\r\n"); } catch { }
+        }
+
         public BloomCompositor(ILogger log, LightsConfig cfg) { _log = log; _cfg = cfg; }
+
+        /// <summary>Compile the three pixel shaders to bytecode on the MANAGED thread (call from the
+        /// plugin's Initialize). This loads + JITs Vortice.D3DCompiler here, so the native EndFrame
+        /// detour never triggers the 0x80131509 ALC-load fault. Safe to call before any device exists
+        /// (D3DCompile is device-independent). Never throws.</summary>
+        public void PrecompileShaders() {
+            try {
+                _bcBright = CompileBytecode(BloomShaders.PsBrightPass, "PsBrightPass");
+                _bcBlur = CompileBytecode(BloomShaders.PsBlur, "PsBlur");
+                _bcComposite = CompileBytecode(BloomShaders.PsComposite, "PsComposite");
+                _log.LogInformation("acmelights: bloom shaders precompiled (bright={B} blur={L} composite={C} bytes)",
+                    _bcBright?.Length ?? -1, _bcBlur?.Length ?? -1, _bcComposite?.Length ?? -1);
+            }
+            catch (Exception ex) {
+                _log.LogError(ex, "acmelights: bloom shader precompile FAILED; bloom disabled");
+                _bcBright = _bcBlur = _bcComposite = null;
+            }
+        }
+
+        private static byte[] CompileBytecode(string hlsl, string entry) {
+            var blob = Compiler.Compile(hlsl, "main", entry + ".hlsl", "ps_2_0",
+                ShaderFlags.OptimizationLevel3, EffectFlags.None);
+            return blob.Span.ToArray();
+        }
 
         /// <summary>Called from the EndFrame detour. dev = client device; vp = current 3D viewport.</summary>
         public void Frame(IntPtr devPtr, in ClientState.Viewport vp) {
             if (_cfg.Bloom <= 0.5f) return;
             if (devPtr == IntPtr.Zero || !vp.Valid || !vp.OpenScene) return;
+            bool trace = _traceFrames < 4;
+            if (trace) { _traceFrames++; Trace($"--- frame {_traceFrames} enter dev=0x{devPtr:X} vp={vp.W}x{vp.H} open={vp.OpenScene}"); }
             try {
                 var dev = new Device(devPtr);
-                if (!EnsureResources(dev, devPtr, vp.W, vp.H)) return;
-                RenderBloom(dev, in vp);
+                if (!EnsureResources(dev, devPtr, vp.W, vp.H, trace)) { if (trace) Trace("ensure returned false"); return; }
+                if (trace) Trace("ensure ok -> RenderBloom");
+                RenderBloom(dev, in vp, trace);
+                if (trace) Trace("RenderBloom returned ok");
             }
-            catch (Exception ex) { LogErr(ex, "frame"); }
+            catch (Exception ex) { if (trace) Trace("EXC frame: " + ex); LogErr(ex, "frame"); }
         }
 
         // ---- resource lifecycle ----
-        private bool EnsureResources(Device dev, IntPtr devPtr, int w, int h) {
+        private bool EnsureResources(Device dev, IntPtr devPtr, int w, int h, bool trace = false) {
             if (devPtr == _dev && w == _fullW && h == _fullH && _sceneTex != IntPtr.Zero && !_resourcesFailed)
                 return true;
             if (devPtr != _dev || w != _fullW || h != _fullH) {
@@ -71,9 +114,12 @@ namespace AcmeLights.Services {
             _halfW = Math.Max(1, w / 2); _halfH = Math.Max(1, h / 2);
 
             try {
-                if (_psBright == IntPtr.Zero) _psBright = CompilePs(BloomShaders.PsBrightPass, "PsBrightPass");
-                if (_psBlur == IntPtr.Zero) _psBlur = CompilePs(BloomShaders.PsBlur, "PsBlur");
-                if (_psComposite == IntPtr.Zero) _psComposite = CompilePs(BloomShaders.PsComposite, "PsComposite");
+                if (!ShadersPrecompiled) { if (trace) Trace("shaders not precompiled -> disable"); _resourcesFailed = true; return false; }
+                if (trace) Trace("create pixel shaders from cached bytecode");
+                if (_psBright == IntPtr.Zero) _psBright = dev.CreatePixelShader(_bcBright!);
+                if (_psBlur == IntPtr.Zero) _psBlur = dev.CreatePixelShader(_bcBlur!);
+                if (_psComposite == IntPtr.Zero) _psComposite = dev.CreatePixelShader(_bcComposite!);
+                if (trace) Trace($"PS bright=0x{_psBright:X} blur=0x{_psBlur:X} composite=0x{_psComposite:X}; create RTs");
 
                 _sceneTex = dev.CreateTexture((uint)w, (uint)h, 1, D3D9.Usage.RenderTarget, D3D9.Fmt.A8R8G8B8, D3D9.Pool.Default);
                 _brightTex = dev.CreateTexture((uint)_halfW, (uint)_halfH, 1, D3D9.Usage.RenderTarget, D3D9.Fmt.A8R8G8B8, D3D9.Pool.Default);
@@ -82,9 +128,11 @@ namespace AcmeLights.Services {
                     _psBright == IntPtr.Zero || _psBlur == IntPtr.Zero || _psComposite == IntPtr.Zero)
                     throw new InvalidOperationException("bloom resource creation returned null");
 
+                if (trace) Trace($"RTs scene=0x{_sceneTex:X} bright=0x{_brightTex:X} blur=0x{_blurTex:X}; get surfaces");
                 _sceneSurf = new Texture9(_sceneTex).GetSurfaceLevel(0);
                 _brightSurf = new Texture9(_brightTex).GetSurfaceLevel(0);
                 _blurSurf = new Texture9(_blurTex).GetSurfaceLevel(0);
+                if (trace) Trace($"surfaces scene=0x{_sceneSurf:X} bright=0x{_brightSurf:X} blur=0x{_blurSurf:X}");
                 if (_sceneSurf == IntPtr.Zero || _brightSurf == IntPtr.Zero || _blurSurf == IntPtr.Zero)
                     throw new InvalidOperationException("bloom GetSurfaceLevel returned null");
 
@@ -92,18 +140,13 @@ namespace AcmeLights.Services {
                 return true;
             }
             catch (Exception ex) {
+                if (trace) Trace("EXC ensure: " + ex.GetType().Name + ": " + ex.Message +
+                                 (ex.InnerException != null ? " | inner: " + ex.InnerException.Message : ""));
                 LogErr(ex, "ensure");
                 _resourcesFailed = true;
                 ReleaseResources();
                 return false;
             }
-        }
-
-        private IntPtr CompilePs(string hlsl, string entry) {
-            var blob = Compiler.Compile(hlsl, "main", entry + ".hlsl", "ps_2_0",
-                ShaderFlags.OptimizationLevel3, EffectFlags.None);
-            var bytes = blob.Span.ToArray();
-            return new Device(_dev).CreatePixelShader(bytes);
         }
 
         private void ReleaseResources() {
@@ -129,22 +172,18 @@ namespace AcmeLights.Services {
         }
 
         // ---- the pass ----
-        private void RenderBloom(Device dev, in ClientState.Viewport vp) {
-            // --- save state we touch ---
+        private void RenderBloom(Device dev, in ClientState.Viewport vp, bool trace = false) {
+            // Capture ALL device state up-front (D3DSBT_ALL) and Apply() it on the way out — the
+            // robust restore the client depends on (it never re-sets RT/shader/FVF itself, and a
+            // single mis-restored state crashes its subsequent UI draw). Same pattern as Chorizite's
+            // own overlay. StateBlock does NOT cover render targets, so RT/DS/viewport are restored
+            // manually too. If CreateStateBlock is disallowed here, skip bloom (safe).
+            if (trace) Trace("CreateStateBlock(ALL)");
+            IntPtr sb = dev.CreateStateBlock(1 /*D3DSBT_ALL*/);
+            if (sb == IntPtr.Zero) { if (trace) Trace("CreateStateBlock null -> skip"); return; }
             IntPtr origRt = dev.GetRenderTarget(0);
             IntPtr origDs = dev.GetDepthStencilSurface();
             D3DViewport9 origVp = dev.GetViewport();
-            uint sZ = dev.GetRenderState(D3D9.Rs.ZEnable);
-            uint sZW = dev.GetRenderState(D3D9.Rs.ZWriteEnable);
-            uint sAB = dev.GetRenderState(D3D9.Rs.AlphaBlendEnable);
-            uint sSB = dev.GetRenderState(D3D9.Rs.SrcBlend);
-            uint sDB = dev.GetRenderState(D3D9.Rs.DestBlend);
-            uint sAT = dev.GetRenderState(D3D9.Rs.AlphaTestEnable);
-            uint sCull = dev.GetRenderState(D3D9.Rs.CullMode);
-            uint sLit = dev.GetRenderState(D3D9.Rs.Lighting);
-            uint sFog = dev.GetRenderState(D3D9.Rs.FogEnable);
-            uint sCW = dev.GetRenderState(D3D9.Rs.ColorWriteEnable);
-            uint sSrgb = dev.GetRenderState(D3D9.Rs.SrgbWriteEnable);
 
             try {
                 // Common state for all our fullscreen passes.
@@ -166,14 +205,22 @@ namespace AcmeLights.Services {
                 dev.SetSamplerState(0, D3D9.Samp.SrgbTexture, 0);
 
                 // (0) copy the 3D viewport region of the backbuffer into sceneTex (full-res 0..W).
-                if (origRt == IntPtr.Zero) return;
-                Rect src = new Rect { Left = vp.X, Top = vp.Y, Right = vp.X + vp.W, Bottom = vp.Y + vp.H };
-                Rect dst = new Rect { Left = 0, Top = 0, Right = _fullW, Bottom = _fullH };
-                if (dev.StretchRect(origRt, &src, _sceneSurf, &dst, D3D9.Filter.Linear) < 0) return;
+                if (origRt == IntPtr.Zero) { if (trace) Trace("origRt null"); return; }
 
-                // (1) bright-pass: sceneTex -> brightTex (half-res)
+                // Unbind the backbuffer as RT0 BEFORE using it as a StretchRect SOURCE — several
+                // drivers fault when StretchRect's source is the currently-bound render target.
+                if (trace) Trace("bind brightSurf then StretchRect");
                 dev.SetRenderTarget(0, _brightSurf);
                 SetViewport(dev, _halfW, _halfH);
+
+                Rect src = new Rect { Left = vp.X, Top = vp.Y, Right = vp.X + vp.W, Bottom = vp.Y + vp.H };
+                Rect dst = new Rect { Left = 0, Top = 0, Right = _fullW, Bottom = _fullH };
+                int srHr = dev.StretchRect(origRt, &src, _sceneSurf, &dst, D3D9.Filter.Linear);
+                if (trace) Trace($"StretchRect hr={srHr}");
+                if (srHr < 0) return;
+
+                // (1) bright-pass: sceneTex -> brightTex (half-res) -- RT already bound above.
+                if (trace) Trace("bright pass");
                 dev.SetRenderState(D3D9.Rs.AlphaBlendEnable, 0);
                 dev.SetPixelShader(_psBright);
                 float knee = Math.Max(1e-4f, _cfg.BloomKnee);
@@ -201,6 +248,7 @@ namespace AcmeLights.Services {
                 }
 
                 // (3) composite ADDITIVELY over the backbuffer, in the 3D viewport rect.
+                if (trace) Trace("composite");
                 dev.SetRenderTarget(0, origRt);
                 dev.SetViewport(origVp);
                 dev.SetRenderState(D3D9.Rs.AlphaBlendEnable, 1);
@@ -214,23 +262,13 @@ namespace AcmeLights.Services {
                 if (!_firstOk) { _firstOk = true; _log.LogInformation("acmelights: bloom first composite ok"); }
             }
             finally {
-                // --- restore everything we touched ---
-                dev.SetPixelShader(IntPtr.Zero);   // client never nulls PS itself -> mandatory
-                dev.SetTexture(0, IntPtr.Zero);
+                // Apply the captured state block (restores render/sampler/texture-stage/shader/FVF/
+                // viewport), then restore render targets manually (not covered by a state block).
+                Device.StateBlockApply(sb);
                 dev.SetRenderTarget(0, origRt);
                 dev.SetDepthStencilSurface(origDs);
                 dev.SetViewport(origVp);
-                dev.SetRenderState(D3D9.Rs.ZEnable, sZ);
-                dev.SetRenderState(D3D9.Rs.ZWriteEnable, sZW);
-                dev.SetRenderState(D3D9.Rs.AlphaBlendEnable, sAB);
-                dev.SetRenderState(D3D9.Rs.SrcBlend, sSB);
-                dev.SetRenderState(D3D9.Rs.DestBlend, sDB);
-                dev.SetRenderState(D3D9.Rs.AlphaTestEnable, sAT);
-                dev.SetRenderState(D3D9.Rs.CullMode, sCull);
-                dev.SetRenderState(D3D9.Rs.Lighting, sLit);
-                dev.SetRenderState(D3D9.Rs.FogEnable, sFog);
-                dev.SetRenderState(D3D9.Rs.ColorWriteEnable, sCW);
-                dev.SetRenderState(D3D9.Rs.SrgbWriteEnable, sSrgb);
+                D3D9.ReleaseCom(sb);
                 if (origRt != IntPtr.Zero) D3D9.ReleaseCom(origRt);   // GetRenderTarget AddRef'd it
                 if (origDs != IntPtr.Zero) D3D9.ReleaseCom(origDs);
             }
