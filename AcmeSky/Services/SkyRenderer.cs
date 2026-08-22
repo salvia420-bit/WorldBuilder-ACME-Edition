@@ -94,6 +94,25 @@ namespace AcmeSky.Services {
         public static bool Live =
             string.Equals(Environment.GetEnvironmentVariable("ACMESKY_LIVE"), "1", StringComparison.Ordinal);
 
+        /// <summary>
+        /// Forced time-of-day (0..1) for the BAKED path, from ACMESKY_SKY_TIME (the same env the LIVE
+        /// path's SkyConfig honors). &lt;0 = use the client clock. This exists because the client's
+        /// present_time_of_day read comes back pinned at 0.0 in some sessions (the known stuck-clock
+        /// quirk) — which rendered a dead-BLACK midnight sky over a daylit world (indoorSun=1). The
+        /// baked renderer used to ignore this override entirely (only the live compositor read it), so
+        /// a baked-path user had no way to escape the black sky. Now: if set, it wins; and a raw clock
+        /// read of exactly 0.0 is treated as "not ready" and falls back to midday, mirroring the
+        /// live path's treatment of a 0 read.
+        /// </summary>
+        public static float ForcedTime = ParseForcedTime();
+        private static float ParseForcedTime() {
+            var s = Environment.GetEnvironmentVariable("ACMESKY_SKY_TIME");
+            return !string.IsNullOrEmpty(s) &&
+                   float.TryParse(s, System.Globalization.NumberStyles.Float,
+                                  System.Globalization.CultureInfo.InvariantCulture, out var v)
+                   ? v : -1f;
+        }
+
         /// <summary>Lazily created live compositor (Milestone 0). Null until the first Live frame.</summary>
         private LiveSkyCompositor? _live;
 
@@ -231,9 +250,18 @@ namespace AcmeSky.Services {
             }
 
             // --- Resolve time / weather / palette (guarded; must never blank the sky) -------------
-            float time = ClientState.GetTimeOfDay();
-            bool haveClock = time >= 0f;
-            if (!haveClock) time = 0.5f;   // no clock yet -> assume midday
+            // Priority: ACMESKY_SKY_TIME override -> client clock -> midday fallback. A raw clock read
+            // of exactly 0.0 is the known stuck-clock value (present_time_of_day never advanced); we
+            // treat it as "not ready" and use midday, so the baked sky is never a black midnight over
+            // a daylit world. Set ACMESKY_SKY_TIME to force any time (e.g. 0.5 = noon, 0.0 = true night).
+            float time;
+            bool haveClock;
+            if (ForcedTime >= 0f) { time = ForcedTime % 1f; haveClock = true; }
+            else {
+                time = ClientState.GetTimeOfDay();
+                haveClock = time > 0.00001f;                       // <0 (no clock) or ==0 (stuck) -> fallback
+                if (!haveClock) time = 0.5f;                       // assume midday
+            }
             bool weatherOn = ClientState.IsWeatherEnabled();
             var sample = _palette.Sample(WeatherClass, time);
 

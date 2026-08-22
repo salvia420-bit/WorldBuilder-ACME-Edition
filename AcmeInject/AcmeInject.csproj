@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Base-aware Chorizite injector — a from-scratch replacement for the previous prebuilt
+    AcmeInject.exe (which P/Invoked Chorizite.Injector.dll!LaunchInjected). That path assumed the
+    injector DLL loads at the SAME base in the launcher and in acclient, and called its Bootstrap
+    export at the LOCAL address. Under wine the .NET launcher's CLR occupies the injector's
+    preferred base (0x10000000) and it relocates to e.g. 0x072E0000, while acclient maps it
+    elsewhere — so the remote thread ran at garbage and faulted at <base>+0x4E9E.
+
+    This injector fixes exactly that: after the remote LoadLibraryW of Chorizite.Injector.dll it
+    reads the thread exit code (= the injector's REMOTE base in acclient) and calls Bootstrap at
+    remoteBase + BootstrapRVA. Everything else (CreateProcess-suspended, kernel32!LoadLibraryW
+    remote thread, ResumeThread) mirrors the original.
+
+    x86 by construction: it CreateRemoteThreads into the 32-bit acclient, so the injector process
+    must also be 32-bit (a native same-arch inject; no Wow64 cross-arch trampoline needed).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Platforms>x86</Platforms>
+    <PlatformTarget>x86</PlatformTarget>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>AcmeInject</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>
