@@ -40,8 +40,14 @@ namespace AcmeLights.Lib {
         public float BloomIntensity = 1.0f; // bloomintensity: additive scale (0..4)
         public float BloomRadius = 2f;      // bloomradius: separable blur H/V passes (1..4)
 
-        // --- diagnostics ---
+        // --- diagnostics / capture ---
         public float LogLights = 1f;      // loglights: 0/1 throttled enumeration log
+        public float Dump = 0f;           // dump: 1 = write framedump-N.bmp (backbuffer) 1/sec (EndScene readback)
+        // Gate the experimental per-frame detours (SceneTool::EndFrame for bloom, RenderDeviceD3D::
+        // EndScene for capture). The two P0-P2 hooks (UpdateLightsInternal, SetWorldAmbientLight) are
+        // proven stable (19k frames); these extra ones are under bring-up. 0 = don't install them
+        // (safe default), 1 = EndScene only (capture), 2 = EndScene + EndFrame (bloom).
+        public float ExtraHooks = 0f;     // extrahooks: 0 none | 1 endscene | 2 endscene+endframe
 
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
@@ -96,6 +102,8 @@ namespace AcmeLights.Lib {
                 case "bloomintensity": if (F(val, out var bi)) BloomIntensity = Math.Clamp(bi, 0f, 4f); break;
                 case "bloomradius": if (F(val, out var br)) BloomRadius = Math.Clamp(br, 1f, 4f); break;
                 case "loglights": if (F(val, out var ll)) LogLights = Math.Clamp(ll, 0f, 1f); break;
+                case "dump": if (F(val, out var du)) Dump = Math.Clamp(du, 0f, 1f); break;
+                case "extrahooks": if (F(val, out var eh)) ExtraHooks = Math.Clamp(eh, 0f, 2f); break;
             }
         }
 

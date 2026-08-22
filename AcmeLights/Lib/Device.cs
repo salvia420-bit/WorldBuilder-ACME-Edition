@@ -64,6 +64,18 @@ namespace AcmeLights.Lib {
             var fn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, Rect*, IntPtr, Rect*, int, int>)V(D3D9.Slot.StretchRect);
             return fn == null ? -1 : fn(Ptr, src, srcRect, dst, dstRect, filter);
         }
+        /// <summary>Copy a render-target surface to a SYSTEMMEM surface (legal outside a scene).</summary>
+        public int GetRenderTargetData(IntPtr srcRt, IntPtr dstSysmem) {
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, int>)V(D3D9.Slot.GetRenderTargetData);
+            return fn == null ? -1 : fn(Ptr, srcRt, dstSysmem);
+        }
+        public IntPtr CreateOffscreenPlainSurface(uint w, uint h, int format, int pool) {
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int, int, IntPtr*, IntPtr*, int>)
+                V(D3D9.Slot.CreateOffscreenPlainSurface);
+            if (fn == null) return IntPtr.Zero;
+            IntPtr s = IntPtr.Zero;
+            return fn(Ptr, w, h, format, pool, &s, null) >= 0 ? s : IntPtr.Zero;
+        }
 
         // ---- viewport ----
         public D3DViewport9 GetViewport() {
@@ -152,4 +164,34 @@ namespace AcmeLights.Lib {
     }
 
     public unsafe struct D3DLockedRect { public int Pitch; public void* pBits; }
+
+    /// <summary>D3DSURFACE_DESC: Format, Type, Usage, Pool, MSType, MSQuality, Width, Height (8 DWORDs).</summary>
+    public struct D3DSurfaceDesc {
+        public uint Format, Type, Usage, Pool, MultiSampleType, MultiSampleQuality, Width, Height;
+    }
+
+    /// <summary>IDirect3DSurface9 wrapper (GetDesc/LockRect/UnlockRect/Release).</summary>
+    public readonly unsafe struct Surface9 {
+        public readonly IntPtr Ptr;
+        public Surface9(IntPtr ptr) { Ptr = ptr; }
+        public bool IsValid => Ptr != IntPtr.Zero;
+        public D3DSurfaceDesc GetDesc() {
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, D3DSurfaceDesc*, int>)
+                D3D9.GetVTableEntry(Ptr, D3D9.SurfSlot.GetDesc);
+            D3DSurfaceDesc d = default; if (fn != null) fn(Ptr, &d); return d;
+        }
+        public bool LockRect(out D3DLockedRect locked, uint flags) {
+            locked = default;
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, D3DLockedRect*, void*, uint, int>)
+                D3D9.GetVTableEntry(Ptr, D3D9.SurfSlot.LockRect);
+            if (fn == null) return false;
+            D3DLockedRect lr; if (fn(Ptr, &lr, null, flags) < 0) return false;
+            locked = lr; return true;
+        }
+        public void UnlockRect() {
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, int>)D3D9.GetVTableEntry(Ptr, D3D9.SurfSlot.UnlockRect);
+            if (fn != null) fn(Ptr);
+        }
+        public uint Release() => D3D9.ReleaseCom(Ptr);
+    }
 }

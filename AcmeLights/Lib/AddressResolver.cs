@@ -111,5 +111,10 @@ namespace AcmeLights.Lib {
         // 'EndFrame(byte) @0x0043FCD0'. (research-bloom-hook-point.md)
         public const nint EndFrame_VA = 0x0043FCD0;
         public const string? EndFrame_Sig = "PLACEHOLDER: prologue at 0x0043FCD0";
+
+        // RenderDeviceD3D::EndScene(this) (thiscall) -- scene-closed capture point (pre-Present).
+        // ACBindings RenderDeviceD3D.cs EndScene @0x005A0E10.
+        public const nint EndScene_VA = 0x005A0E10;
+        public const string? EndScene_Sig = "PLACEHOLDER: prologue at 0x005A0E10";
     }
 }

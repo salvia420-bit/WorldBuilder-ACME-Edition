@@ -31,6 +31,7 @@ namespace AcmeLights {
         private NativeHooks? _hooks;
         private LightManager? _mgr;
         private BloomCompositor? _bloom;
+        private DumpService? _dump;
 
         JsonTypeInfo<LightsSettings> ISerializeSettings<LightsSettings>.TypeInfo =>
             LightsJsonContext.Default.LightsSettings;
@@ -71,8 +72,9 @@ namespace AcmeLights {
             // native EndFrame detour throws 0x80131509 (ALC-load fault). The detour only creates the
             // device pixel-shader objects from this cached bytecode.
             _bloom.PrecompileShaders();
+            _dump = new DumpService(_log, _cfg);
             _hooks = new NativeHooks(_log);
-            _hooks.Install(_mgr, _bloom, _cfg);
+            _hooks.Install(_mgr, _bloom, _dump, _cfg);
 
             if (_hooks.Installed)
                 _log.LogInformation("acmelights: initialized (cfg='{Cfg}' maxStatic={MS} maxDynamic={MD} " +
@@ -97,6 +99,8 @@ namespace AcmeLights {
             _hooks = null;
             _bloom?.Dispose();
             _bloom = null;
+            _dump?.Dispose();
+            _dump = null;
             Instance = null;
         }
     }

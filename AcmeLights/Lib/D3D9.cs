@@ -17,7 +17,9 @@ namespace AcmeLights.Lib {
             public const int GetBackBuffer = 18;
             public const int CreateTexture = 23;
             public const int CreateRenderTarget = 28;
+            public const int GetRenderTargetData = 32;   // HRESULT(IDirect3DSurface9* src, IDirect3DSurface9* dst)
             public const int StretchRect = 34;
+            public const int CreateOffscreenPlainSurface = 36; // HRESULT(W,H,Format,Pool,IDirect3DSurface9**,HANDLE*)
             public const int SetRenderTarget = 37;
             public const int GetRenderTarget = 38;
             public const int SetDepthStencilSurface = 39;
@@ -57,6 +59,14 @@ namespace AcmeLights.Lib {
 
         /// <summary>IDirect3DSurface9 / IDirect3DPixelShader9 / IDirect3DVertexShader9 Release.</summary>
         public const int IUnknownRelease = 2;
+
+        /// <summary>IDirect3DSurface9 vtable slots (: IDirect3DResource9 : IUnknown).</summary>
+        public static class SurfSlot {
+            public const int Release = 2;
+            public const int GetDesc = 12;
+            public const int LockRect = 13;
+            public const int UnlockRect = 14;
+        }
 
         public static class Rs {
             public const int ZEnable = 7;
