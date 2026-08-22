@@ -108,18 +108,25 @@ namespace AcmeSky {
         }
 
         protected override void Dispose() {
-            // Disable the detour first so nothing re-enters the renderer, then release GPU resources
-            // on the render thread (the device's thread).
+            // Tear down SYNCHRONOUSLY, exactly as Install() runs synchronously in Initialize.
+            // The old _backend.Invoke(...) route enqueued teardown onto the client backend's
+            // _invokeQueue, which is NOT drained in the injected client (the same reason Install
+            // was moved off it) — so the callback never ran: the GameSky::Draw inline trampoline
+            // stayed patched while this plugin's AssemblyLoadContext unloaded, and the next
+            // GameSky::Draw jumped into the collected managed stub -> native acclient crash (and
+            // every GPU resource leaked). SkyHook.Dispose()->Disable() restores the original call
+            // path immediately; do it FIRST so no frame can re-enter the renderer, then free GPU.
             try {
-                var hook = _hook;
-                var renderer = _renderer;
-                _backend.Invoke(() => {
-                    hook?.Dispose();
-                    renderer?.ReleaseGpu();
-                });
+                _hook?.Dispose();
             }
             catch (Exception ex) {
-                _log.LogWarning(ex, "acmesky: teardown could not be marshalled to the render thread");
+                _log.LogWarning(ex, "acmesky: error disabling the GameSky::Draw hook on unload");
+            }
+            try {
+                _renderer?.ReleaseGpu();
+            }
+            catch (Exception ex) {
+                _log.LogWarning(ex, "acmesky: error releasing GPU resources on unload");
             }
 
             _hook = null;

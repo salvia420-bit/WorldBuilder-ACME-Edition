@@ -117,6 +117,15 @@ namespace AcmeSky.Services {
             d.SetTransform(D3D9.Ts.Texture0, _tex0);
             d.SetFVF(_fvf);
             d.SetTexture(0, _tex);
+            // GetTexture (in Capture) AddRef'd the client's stage-0 texture; SetTexture takes its
+            // own reference, so we MUST Release ours or we leak one ref on the client's texture
+            // every frame (~3,600/min at 60fps). A leaked ref on a D3DPOOL_DEFAULT surface also
+            // makes the client's next IDirect3DDevice9::Reset fail (D3DERR_INVALIDCALL), so a
+            // device-lost (fullscreen alt-tab) could never recover.
+            if (_tex != System.IntPtr.Zero) {
+                new Lib.Texture9(_tex).Release();
+                _tex = System.IntPtr.Zero;
+            }
         }
     }
 }

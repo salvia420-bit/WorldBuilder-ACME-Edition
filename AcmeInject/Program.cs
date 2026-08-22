@@ -121,7 +121,18 @@ namespace AcmeInject {
 
                 IntPtr hThread = CreateRemoteThread(hProc, IntPtr.Zero, 0, loadLibraryW, remoteBuf, 0, out _);
                 if (hThread == IntPtr.Zero) { err = Marshal.GetLastWin32Error(); return IntPtr.Zero; }
-                WaitForSingleObject(hThread, 30_000);
+                // MUST require WAIT_OBJECT_0: a timeout (WAIT_TIMEOUT) leaves the load thread
+                // running, and GetExitCodeThread then returns STILL_ACTIVE (259) — a nonzero value
+                // the caller would treat as the injector's remote base and inject into garbage,
+                // while the finally below frees the path buffer out from under the live thread.
+                // Under wine/cold-disk/AV the DLL's DllMain can genuinely exceed 30 s, so fail
+                // loud rather than trust 259.
+                uint wait = WaitForSingleObject(hThread, 30_000);
+                if (wait != WAIT_OBJECT_0) {
+                    err = wait == WAIT_TIMEOUT ? (int)WAIT_TIMEOUT : unchecked((int)0xFFFFFFFF);
+                    CloseHandle(hThread);
+                    return IntPtr.Zero;
+                }
                 GetExitCodeThread(hThread, out uint rc);   // low 32 bits of the HMODULE (32-bit target)
                 CloseHandle(hThread);
                 return (IntPtr)rc;
@@ -211,6 +222,7 @@ namespace AcmeInject {
         // ---- interop ----
         private const uint CREATE_SUSPENDED = 0x4;
         private const uint MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000;
+        private const uint WAIT_OBJECT_0 = 0x0, WAIT_TIMEOUT = 0x102;
         private const uint PAGE_READWRITE = 0x4;
 
         [StructLayout(LayoutKind.Sequential)]

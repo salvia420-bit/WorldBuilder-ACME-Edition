@@ -577,8 +577,15 @@ namespace AcmeSky.Services.LiveSky {
                 new Texture9(_d3d9tex).Release();
                 _d3d9tex = IntPtr.Zero;
             }
-            _d3d9tex = d9.CreateTexture((uint)w, (uint)h, 1u, D3D9.Usage.Dynamic,
-                                        D3D9.Fmt.A8R8G8B8, D3D9.Pool.Default);
+            // D3DPOOL_MANAGED (like the baked path / TextureLoader), NOT DYNAMIC+DEFAULT.
+            // A DEFAULT-pool resource held across frames makes the client's next
+            // IDirect3DDevice9::Reset fail with D3DERR_INVALIDCALL (fullscreen toggle / resize),
+            // and this plugin has no Reset hook — only a device-POINTER change is detected, which
+            // a Reset does not trip — so the client could never recover. MANAGED survives Reset
+            // (the runtime re-uploads from its sysmem copy). Trade: a per-frame full-res upload to
+            // MANAGED is costlier than to a DYNAMIC surface, but the LIVE path is experimental
+            // (default off) and correctness beats speed here.
+            _d3d9tex = d9.CreateTexture((uint)w, (uint)h, D3D9.Fmt.A8R8G8B8, D3D9.Pool.Managed);
             _texW = w; _texH = h;
             if (_d3d9tex == IntPtr.Zero)
                 LogErrThrottled(new InvalidOperationException("CreateTexture returned null"), "d3d9-tex-create");
@@ -704,7 +711,7 @@ namespace AcmeSky.Services.LiveSky {
                 MaybeDumpFrame(s, srcPitch, w, h);
 
                 var tex = new Texture9(_d3d9tex);
-                if (tex.LockRect(0, out var locked, D3D9.Lock.Discard)) {
+                if (tex.LockRect(0, out var locked, 0u)) {   // 0, not DISCARD: DISCARD requires DYNAMIC; this pool is MANAGED
                     int bytesPerRow = w * 4; // BGRA8 both sides
                     byte* d = (byte*)locked.pBits;
                     for (int y = 0; y < h; y++) {

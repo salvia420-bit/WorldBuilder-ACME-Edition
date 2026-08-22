@@ -198,7 +198,22 @@ namespace AcmeRagdoll.Services {
         /// recently-recorded creature ragdoll.</summary>
         public void OnMotionDone(CPhysicsObj* obj, uint motion) {
             if (_down || obj == null) return;
-            if (motion != DeadMotion) return;
+            if (motion != DeadMotion) {
+                // FINDING 1 (event-driven disarm): a ragdoll is armed only on DeadMotion but was never
+                // disarmed when the SAME object later leaves the dead state. A player who dies then
+                // releases to the lifestone is the same CPhysicsObj/CPartArray, so its entry still
+                // matches and WriteParts keeps overwriting the live, running body with the settled
+                // corpse pose until the HoldMillis backstop (up to 15 min). Any non-Dead motion on a
+                // tracked owner means it is alive again: drop its entry (and its handoff record) so
+                // WriteParts stops. A genuine corpse object never plays a live motion, so this leaves
+                // the corpse-handoff behaviour untouched; the cap remains only as a backstop.
+                uint liveId = ObjIdOf(obj);
+                if (liveId != 0 && _live.TryGetValue(liveId, out Entry? le) && le != null && le.Obj == obj) {
+                    if (le.Rec != null) _records.Remove(le.Rec);
+                    Remove(liveId);
+                }
+                return;
+            }
 
             SweepStale();
 
@@ -244,7 +259,7 @@ namespace AcmeRagdoll.Services {
                 return;
             }
 
-            HandoffRecord? rec = TryMatchRecord(numParts, objcell, px, py, now,
+            HandoffRecord? rec = TryMatchRecord(numParts, parentHash, objcell, px, py, now,
                                                 out float matchDist, out long matchAge);
             if (rec != null) {
                 ArmCorpseHandoff(id, obj, pa, rec, now,
@@ -391,7 +406,7 @@ namespace AcmeRagdoll.Services {
             uint numParts = pa->num_parts;
             uint parentHash = HashParents(setup, numParts);
             uint setupDid = SetupDidOf(setup);
-            HandoffRecord? rec = TryMatchRecord(numParts, objcell, px, py, now,
+            HandoffRecord? rec = TryMatchRecord(numParts, parentHash, objcell, px, py, now,
                                                 out float matchDist, out long matchAge);
             e.Pending = false;
 
@@ -554,7 +569,7 @@ namespace AcmeRagdoll.Services {
         }
 
         /// <summary>Find a record this arming object continues, or null. Also drops expired records.</summary>
-        private HandoffRecord? TryMatchRecord(uint numParts, uint objcell, float x, float y, long now,
+        private HandoffRecord? TryMatchRecord(uint numParts, uint parentHash, uint objcell, float x, float y, long now,
                                               out float bestDist, out long bestAge) {
             bestDist = float.MaxValue; bestAge = 0;
             HandoffRecord? best = null;
@@ -564,6 +579,14 @@ namespace AcmeRagdoll.Services {
                 if (age > HandoffRecordTtl) { _records.RemoveAt(i); continue; }
                 if (age > HandoffWindowMillis) continue;
                 if (r.NumParts != numParts) continue;
+                // FINDING 3 (skeleton-signature match): the handoff record exists to key on the skeleton,
+                // but the match previously filtered only on part count + cell + distance + age - never
+                // the signature it was built to carry. Two creatures with the same part count dying a few
+                // yards apart inside the window would cross records: the second snaps into the first's
+                // evolved verlet pose (wrong bones -> contorted limbs) and the first re-crumples with no
+                // record (the double-crumple the handoff exists to prevent). Require the ParentIndex-graph
+                // hash to agree so only the SAME skeleton continues a record.
+                if (r.ParentHash != parentHash) continue;
                 if (RequireSameCell) { if (r.Objcell != objcell) continue; }
                 else if ((r.Objcell & 0xFFFF0000u) != (objcell & 0xFFFF0000u)) continue;   // same landblock
                 float dx = r.X - x, dy = r.Y - y;
@@ -787,8 +810,17 @@ namespace AcmeRagdoll.Services {
         /// used (together with num_parts) to tell whether a corpse shares the creature's skeleton.</summary>
         private static uint HashParents(CSetup* setup, uint n) {
             uint h = 2166136261u;   // FNV-1a
+            if (setup == null) return h;
             uint* p = setup->parent_index;
             if (p == null) return h;
+            // FINDING 2 (native OOB read): parent_index is allocated for setup->num_parts, but callers
+            // pass pa->num_parts, which can be LARGER on a partially-built / mid-morph part array (Seed
+            // itself guards on exactly this mismatch: 'pose not ready - retry'). Walking to the caller's
+            // n would read past the native allocation -> garbage hash or an uncatchable AccessViolation
+            // inside the MotionDone detour. Clamp to the array we are actually indexing (both cited call
+            // sites, OnMotionDone and ResolvePending, are covered here).
+            uint sn = setup->num_parts;
+            if (n > sn) n = sn;
             for (uint i = 0; i < n; i++) {
                 uint v = p[i];
                 h = (h ^ (v & 0xFF)) * 16777619u;

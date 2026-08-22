@@ -216,8 +216,14 @@ namespace AcmeRedline {
         /// <summary>
         /// Redline picking is modal: it only steals the mouse while the panel is open, so normal
         /// play is untouched when the tool is closed.
+        ///
+        /// FINDING 2: gate on the panel's actual VISIBILITY, not merely on it existing. The panel is
+        /// created unconditionally in Initialize and only nulled in Dispose, and OverlayEnabled
+        /// defaults true — so the old "_panel is not null" test left picking armed for every click
+        /// during ordinary play. RedlinePanel.IsOpen reflects _panel.IsVisible.
         /// </summary>
-        private bool PickingActive => _panel is not null && _settings.OverlayEnabled;
+        private bool PickingActive =>
+            _panel is not null && _panel.IsOpen && _settings.OverlayEnabled;
 
         private void HandleMouseDown(object? sender, MouseDownEventArgs e) {
             if (!PickingActive || _selection is null) return;

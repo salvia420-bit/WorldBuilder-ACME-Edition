@@ -93,6 +93,14 @@ namespace AcmeRedline.UI {
             RefreshAll();
         }
 
+        /// <summary>
+        /// True only while the panel exists AND is actually shown. Picking is modal to this
+        /// (finding 2): existence alone is not enough, because the panel is created once in
+        /// Initialize and lives until Dispose, so gating on existence left picking armed during
+        /// ordinary play. Mirrors the same _panel.IsVisible check <see cref="Toggle"/> uses.
+        /// </summary>
+        public bool IsOpen => _panel is not null && _panel.IsVisible;
+
         /// <summary>Hide the panel without destroying it.</summary>
         public void Hide() => _panel?.Hide();
 

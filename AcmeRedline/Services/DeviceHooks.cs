@@ -816,8 +816,12 @@ namespace AcmeRedline.Services {
             return 0;
         }
 
-        // Saved fixed-function state, restored by EndTintState.
-        private static uint _sAlphaBlend, _sSrcBlend, _sDstBlend, _sZWrite, _sZFunc,
+        // Saved fixed-function state, restored by EndTintState. Every render state BeginTintState
+        // writes MUST have a matching saved slot here and a restore in EndTintState — a leaked state
+        // corrupts the client's own draws for the rest of the frame (see finding 1: ZEnable was
+        // being forced on without save/restore, and because the client caches render state it then
+        // skipped the redundant reset, breaking later z-off passes for the session).
+        private static uint _sAlphaBlend, _sSrcBlend, _sDstBlend, _sZEnable, _sZWrite, _sZFunc,
                             _sTexFactor, _sLighting, _sFog, _sDepthBias, _sAlphaTest,
                             _sColorOp, _sColorArg1, _sAlphaOp, _sAlphaArg1;
 
@@ -850,6 +854,7 @@ namespace AcmeRedline.Services {
             fixed (uint* pAb = &_sAlphaBlend) get(device, D3D9.Rs.AlphaBlendEnable, pAb);
             fixed (uint* p = &_sSrcBlend) get(device, D3D9.Rs.SrcBlend, p);
             fixed (uint* p = &_sDstBlend) get(device, D3D9.Rs.DestBlend, p);
+            fixed (uint* p = &_sZEnable) get(device, D3D9.Rs.ZEnable, p);
             fixed (uint* p = &_sZWrite) get(device, D3D9.Rs.ZWriteEnable, p);
             fixed (uint* p = &_sZFunc) get(device, D3D9.Rs.ZFunc, p);
             fixed (uint* p = &_sTexFactor) get(device, D3D9.Rs.TextureFactor, p);
@@ -900,6 +905,7 @@ namespace AcmeRedline.Services {
             set(device, D3D9.Rs.AlphaBlendEnable, _sAlphaBlend);
             set(device, D3D9.Rs.SrcBlend, _sSrcBlend);
             set(device, D3D9.Rs.DestBlend, _sDstBlend);
+            set(device, D3D9.Rs.ZEnable, _sZEnable);
             set(device, D3D9.Rs.ZWriteEnable, _sZWrite);
             set(device, D3D9.Rs.ZFunc, _sZFunc);
             set(device, D3D9.Rs.TextureFactor, _sTexFactor);

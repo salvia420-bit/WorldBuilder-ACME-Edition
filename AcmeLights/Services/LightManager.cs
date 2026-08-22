@@ -94,13 +94,21 @@ namespace AcmeLights.Services {
             LightParms* wl = Render.world_lights;
             if (wl == null) return;
             float t = (float)_clock.Elapsed.TotalSeconds;
-            FlickerPool(wl->static_lights, wl->num_static_lights, t);
-            FlickerPool(wl->dynamic_lights, wl->num_dynamic_lights, t);
+            // FINDING 3: clamp each call to the ACTUAL array length, never a shared 60. The pools
+            // are fixed-size arrays — static_lights[60], dynamic_lights[10] (acclient.h:46634) — so
+            // a num_*_lights that transiently over-reports (mid-recompute during set_viewer, a
+            // raised-cap regression, or corruption) must not let FlickerPool write past the end.
+            FlickerPool(wl->static_lights, wl->num_static_lights, StaticLightsCapacity, t);
+            FlickerPool(wl->dynamic_lights, wl->num_dynamic_lights, DynamicLightsCapacity, t);
         }
 
-        private void FlickerPool(RenderLight* pool, int n, float t) {
+        // Fixed capacities of the LightParms light arrays (acclient.h:46634).
+        private const int StaticLightsCapacity = 60;
+        private const int DynamicLightsCapacity = 10;
+
+        private void FlickerPool(RenderLight* pool, int n, int maxCap, float t) {
             if (pool == null || n <= 0) return;
-            n = Math.Clamp(n, 0, 60);
+            n = Math.Clamp(n, 0, maxCap);
             for (int i = 0; i < n; i++) {
                 RenderLight* rl = pool + i;
                 // POINT only, warm gate on the AUTHORED color (r>=0.30, r>=0.92g, r>1.25b),
