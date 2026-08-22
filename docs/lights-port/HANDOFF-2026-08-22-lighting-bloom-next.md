@@ -4,6 +4,37 @@ Written 2026-08-22. Continues `PLAN-2026-08-22-acmelights.md` + the two research
 this dir (`research-holtburger-lighting.md`, `research-retail-light-machinery.md`,
 `research-bloom-hook-point.md`). All work is on `integ/all-20260813`.
 
+## UPDATE 2026-08-22 (late) — capture rig proven, bloom crash isolated, P0-P2 seen live
+
+Live session on the freed 1070 produced key findings (folded into the sections below):
+- **P0-P2 VISUALLY CONFIRMED** in a dungeon (Krau Li's Labyrinth): static torch pool populates
+  (4 then 15 wall-torch lights), dungeon ambient 0.20, `indoorSun` flips to 0 indoors, flame
+  flicker active. Two 1080p torch-lit-corridor captures taildropped to the owner.
+- **The backbuffer CAPTURE RIG WORKS** and is committed (`Services/DumpService.cs`): a
+  `RenderDeviceD3D::EndScene` @0x005A0E10 POST-hook does `GetRenderTargetData(backbuffer ->
+  D3DPOOL_SYSTEMMEM surface)` -> 32bpp BMP to `C:\Temp\acdt\framedump-N.bmp`. The scene is
+  CLOSED at EndScene so the readback is legal. Enable with `dump=1` + `extrahooks=1`. Pull with
+  scp, convert BMP->PNG, `tailscale file cp ... redmi-note-13-5g:`.
+- **The bloom crash is the `SceneTool::EndFrame` cdecl(byte) DETOUR itself**, not the StretchRect
+  and not state restore. Proof: `extrahooks=0` (P0-P2 only) is stable indefinitely; `extrahooks=1`
+  (adds only the EndScene thiscall detour) is ALSO stable and drives the capture every frame;
+  bloom (which adds the EndFrame detour) dies ~1s after frame 1. So the EndScene thiscall trampoline
+  is fine but the EndFrame cdecl-with-byte-arg trampoline destabilizes the client. **Redirect the
+  bloom redesign: run the bloom passes from the EndScene hook (scene closed -> StretchRect legal
+  too), NOT EndFrame.** But note EndScene runs AFTER the UI in this client, so to bloom only the 3D
+  scene, capture the world at EndScene of the WORLD pass, or bracket your own EndScene/BeginScene —
+  see the bloom section, option (A), now the clear front-runner.
+- **Ops lessons**: (1) the DumpService throttle used `long.MinValue` init -> `now - MinValue`
+  overflows negative -> throttle never passes -> silent no-op (same bug fixed in AcmeSky; use
+  `-Stopwatch.Frequency`). (2) Repeated force-kill injects leave MULTIPLE zombie acclient
+  processes AND ACE ghost sessions -> "Cannot have two accounts logged on". Fix: `taskkill /im
+  acclient.exe /f` (kills ALL), verify zero, wait ~150s for ACE to drop the ghosts, then ONE
+  inject. Refresh `C:\Temp\acdt\pid.txt` with the live PID before the chat rig. (3) `@telepoi`
+  names must be exact (`Green Mire Grave` was rejected); `@teleloc <cell> <x> <y> <z> [q]` from an
+  LSD spawnMap coordinate is reliable (LSD `spawnMaps/*.json` -> `value.weenies[].pos`).
+  (4) first-person `.` toggle via SendInput needs ext=false (the acdt-tilt.ps1 hardcodes ext=true
+  for PageUp; it did not toggle — fix the scancode/ext for a first-person shot).
+
 ## Where things stand (do not redo)
 
 - **AcmeLights P0–P2 SHIPPED + live-validated on the 1070** (plugin `AcmeLights/`): two inline
