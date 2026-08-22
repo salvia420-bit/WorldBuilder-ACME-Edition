@@ -41,6 +41,8 @@ Texture3D<float>  shapeDetailTex  : register(t6);
 Texture3D<float>  stbnTex         : register(t7);
 Texture2D<float4> cloudBufTex     : register(t8);
 Texture2D<float4> turbulenceTex   : register(t9);
+Texture2D<float4> cloudVelTex     : register(t10);  // M2.2: frontDepth + reprojection velocity
+Texture2D<float4> cloudHistTex    : register(t11);  // M2.2: previous resolved frame (history)
 SamplerState samWrap : register(s1);
 
 static const float RECIPROCAL_PI  = 0.3183098861837907;
@@ -194,8 +196,15 @@ float4 shapeAlteringFunction(float4 heightFraction, float4 bias) {
 WeatherSample sampleWeatherC(float2 uv, float height, float mipLevel) {
     WeatherSample weather;
     weather.heightFraction = remapC4(float4(height, height, height, height), g_minLH, g_maxLH);
+    // V NEGATED: holtburger loads this map via THREE.TextureLoader (flipY=true, V=0 =
+    // image BOTTOM); our D3D bake uploads rows top-first (V=0 = TOP). Sampling at -v
+    // (== 1-v under wrap) makes the weather GEOGRAPHY + drift byte-match holtburger's.
+    // Verified numerically 2026-08-22: at a matched camera/offset the un-flipped read
+    // was R=1.0 (full deck) where holtburger reads R=0.0 (clear).
+    float2 wuv = uv * localWeatherRepeat + cloudWeatherOfs;
+    wuv.y = -wuv.y;
     float4 localWeather = pow(max(localWeatherTex.SampleLevel(
-        samWrap, uv * localWeatherRepeat + cloudWeatherOfs, mipLevel), 0.0), g_wExp);
+        samWrap, wuv, mipLevel), 0.0), g_wExp);
     float4 heightScale = shapeAlteringFunction(weather.heightFraction, g_bias);
     float4 factor = 1.0 - cloudCoverage * heightScale;
     weather.density = remapC4(
@@ -221,7 +230,9 @@ MediaSample sampleMediaC(WeatherSample weather, float3 position, float2 uv,
     // TURBULENCE (takram: displaces the shape/detail sample position near cloud bases).
     float3 turbulence = float3(0.0, 0.0, 0.0);
     if (cloudTurb > 0.5) {
+        // Same V negation as the weather sample (turbulence.png is also flipY-loaded there).
         float2 turbulenceUv = uv * localWeatherRepeat * turbulenceRepeat;
+        turbulenceUv.y = -turbulenceUv.y;
         turbulence = turbulenceDisplacement *
             (turbulenceTex.SampleLevel(samWrap, turbulenceUv, 0.0).rgb * 2.0 - 1.0) *
             dot(density, remapC4(weather.heightFraction,
@@ -609,7 +620,14 @@ float2 getCloudRayNearFar(float3 cameraECEFm, float3 rayDirection, float cameraH
 }
 
 // ---------------- pixel shaders ----------------
-float4 PSClouds(VSOut i) : SV_TARGET {
+struct PSCloudsOut {
+    float4 color    : SV_Target0;   // premultiplied HDR radiance + alpha
+    float4 depthVel : SV_Target1;   // frontDepth (m), reprojection velocity uv, 0
+};
+
+PSCloudsOut PSClouds(VSOut i) {
+    PSCloudsOut o;
+    o.depthVel = float4(0.0, 0.0, 0.0, 0.0);   // takram: vec3(0) when no clouds hit
     selectLayers(cloudStorm > 0.5);
 
     // Camera ray -- identical reconstruction to PSAtmosphere (baseline raymode).
@@ -624,7 +642,13 @@ float4 PSClouds(VSOut i) : SV_TARGET {
     float3 camPosAc = swz ? cameraPosAC.xzy : cameraPosAC;
 
     float3 dirShader = normalize(mul(float4(dirAC, 0.0), acToShader).xyz);
-    float3 camShader = mul(float4(camPosAc, 1.0), acToShader).xyz;
+    // GLOBAL camera for all ECEF/weather math: the client view matrix (and therefore
+    // cameraPosAC) is LANDBLOCK-LOCAL (Render::update_viewpoint does Frame::globaltolocal),
+    // which pinned getGlobeUv at the pole = the weather tile CORNER, drawing the wrap seam
+    // as a permanent razor line overhead. Ray DIRECTIONS stay in the local frame (axes are
+    // parallel; pure translation).
+    float3 camPosGlobalAc = camPosAc + cameraLbOffsetAC;
+    float3 camShader = mul(float4(camPosGlobalAc, 1.0), acToShader).xyz;
     float3 sunShader = normalize(mul(float4(sunDirAC, 0.0), acToShader).xyz);
 
     float3 cameraECEFm = camShader + float3(0.0, bottomRadiusM, 0.0);
@@ -653,7 +677,10 @@ float4 PSClouds(VSOut i) : SV_TARGET {
     if (marchable) {
         float3 rayOrigin = rayNearFar.x * dirShader + cameraECEFm;
         float2 globeUv = getGlobeUv(rayOrigin);
-        float mipLevel = getMipLevelCloud(globeUv * localWeatherRepeat);
+        // ×0.25 = takram's mipLevelScale UNIFORM at the call site (holtburger live value),
+        // ON TOP of the 0.1 constant inside getMipLevel — the port dropped it, giving 4×
+        // coarser weather mips whose level transitions band across thin veils.
+        float mipLevel = getMipLevelCloud(globeUv * localWeatherRepeat) * 0.25;
         mipLevel = lerp(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / g_maxH));
 
         // Sun/sky irradiance at the cloud min/max heights (non-accurate fallback path).
@@ -681,13 +708,27 @@ float4 PSClouds(VSOut i) : SV_TARGET {
                                                         frontPosition * meterToUnit,
                                                         sunShader, apTransmittance);
             // AP debug bisection: 7 = inscatter only, 8 = transmittance only, 9 = front depth.
-            if (outputMode > 6.5 && outputMode < 7.5) return float4(inscatter, 1.0);
-            if (outputMode > 7.5 && outputMode < 8.5) return float4(apTransmittance, 1.0);
-            if (outputMode > 8.5) return float4(frontDepth.xxx / cloudMaxRayDistance, 1.0);
+            if (outputMode > 6.5 && outputMode < 7.5) { o.color = float4(inscatter, 1.0); return o; }
+            if (outputMode > 7.5 && outputMode < 8.5) { o.color = float4(apTransmittance, 1.0); return o; }
+            if (outputMode > 8.5) { o.color = float4(frontDepth.xxx / cloudMaxRayDistance, 1.0); return o; }
             color.rgb = color.rgb * apTransmittance + inscatter * color.a;
 
             // Clamp the haze ray at the cloud front (reference: lerp by alpha).
             hazeNearFar.y = lerp(hazeNearFar.y, min(frontDepth, hazeNearFar.y), color.a);
+
+            // M2.2 velocity for the temporal resolve (takram clouds.frag: reproject the
+            // cloud-front point with LAST frame's unjittered view-proj).
+            float3 acFront = mul(float4(frontPosition - float3(0.0, bottomRadiusM, 0.0), 1.0),
+                                 shaderToAc).xyz;
+            // ECEF is GLOBAL AC now; prevWorldToClip expects PREV-frame landblock-LOCAL coords.
+            acFront -= prevCameraLbOffsetAC;
+            float3 rwFront = swz ? acFront.xzy : acFront;
+            float4 prevClip = mul(float4(rwFront, 1.0), prevWorldToClip);
+            if (prevClip.w > 1e-4) {
+                float2 prevNdc = prevClip.xy / prevClip.w;
+                float2 prevUv = float2(prevNdc.x * 0.5 + 0.5, 0.5 - prevNdc.y * 0.5);
+                o.depthVel = float4(frontDepth, i.uv - prevUv, 0.0);
+            }
         }
     }
 
@@ -699,7 +740,64 @@ float4 PSClouds(VSOut i) : SV_TARGET {
         color.rgb = lerp(color.rgb, haze.rgb, haze.a);
         color.a = color.a * (1.0 - haze.a) + haze.a;
     }
-    return color;   // premultiplied HDR radiance + alpha, into the cloud RT
+    o.color = color;   // premultiplied HDR radiance + alpha, into the cloud RT
+    return o;
+}
+
+// ---------------- M2.2 temporal resolve (takram cloudsResolve.frag, TAA path) ----------------
+// Full-res-per-frame variant (no bayer upscale): variance-clip the reprojected history
+// against the current frame's 5-sample neighborhood, then blend by temporalAlpha.
+// varianceClipping/clipAABB reference: playdeadgames/temporal + NVIDIA variance clipping.
+static const int2 varOffsets[4] = { int2(1, 0), int2(0, -1), int2(0, 1), int2(-1, 0) };
+
+float4 clipAABBC(float4 current, float4 history, float4 minColor, float4 maxColor) {
+    float3 pClip = 0.5 * (maxColor.rgb + minColor.rgb);
+    float3 eClip = 0.5 * (maxColor.rgb - minColor.rgb) + 1e-7;
+    float4 vClip = history - float4(pClip, current.a);
+    float3 vUnit = vClip.xyz / eClip;
+    float3 aUnit = abs(vUnit);
+    float maUnit = max(aUnit.x, max(aUnit.y, aUnit.z));
+    if (maUnit > 1.0) return float4(pClip, current.a) + vClip / maUnit;
+    return history;
+}
+
+float4 varianceClipC(int2 coord, int2 maxCoord, float4 current, float4 history, float gamma) {
+    float4 m1 = current;
+    float4 m2 = current * current;
+    [unroll] for (int k = 0; k < 4; ++k) {
+        int2 c = clamp(coord + varOffsets[k], int2(0, 0), maxCoord);
+        float4 nb = cloudBufTex.Load(int3(c, 0));
+        m1 += nb; m2 += nb * nb;
+    }
+    float4 mean = m1 / 5.0;
+    float4 dev = sqrt(max(m2 / 5.0 - mean * mean, 0.0)) * gamma;
+    float4 minColor = mean - dev;
+    float4 maxColor = mean + dev;
+    return clipAABBC(clamp(mean, minColor, maxColor), history, minColor, maxColor);
+}
+
+float4 PSCloudResolve(VSOut i) : SV_TARGET {
+    int2 coord = int2(i.pos.xy);
+    int2 maxCoord = int2(cloudRes) - int2(1, 1);
+    float4 current = cloudBufTex.Load(int3(coord, 0));
+    if (cloudHistValid < 0.5) return current;
+
+    // Closest-fragment velocity over 3x3 (takram getClosestFragment; miss pixels carry
+    // depth 0 / velocity 0 and legitimately win the min — sky has no parallax).
+    float4 best = float4(1e7, 0.0, 0.0, 0.0);
+    [unroll] for (int y = -1; y <= 1; ++y) {
+        [unroll] for (int x = -1; x <= 1; ++x) {
+            int2 c = clamp(coord + int2(x, y), int2(0, 0), maxCoord);
+            float4 nb = cloudVelTex.Load(int3(c, 0));
+            if (nb.r < best.r) best = nb;
+        }
+    }
+    float2 prevUv = i.uv - best.gb;
+    if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) return current;
+
+    float4 history = cloudHistTex.SampleLevel(samLUT, prevUv, 0.0);
+    float4 clipped = varianceClipC(coord, maxCoord, current, history, cloudTaaGamma);
+    return lerp(clipped, current, cloudTaaAlpha);
 }
 
 // Composite the cloud RT over the sky (premultiplied-over blend state is set by the host).
@@ -710,7 +808,7 @@ float4 PSCloudComposite(VSOut i) : SV_TARGET {
     if (outputMode > 5.5) return float4(FinalColor(c.rgb), 1.0); // 6: clouds-only (black bg)
     float lum = max(c.r, max(c.g, c.b));
     if (c.a < 0.05 || lum < 0.02) { clip(-1.0); }
-    return float4(FinalColor(c.rgb), c.a);
+    return float4(DitherColor(FinalColor(c.rgb), i.pos.xy), c.a);
 }
 ";
     }

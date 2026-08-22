@@ -42,15 +42,25 @@ namespace AcmeSky.Lib {
             catch (Exception) { return IntPtr.Zero; }
         }
 
+        /// <summary>Viewer objcell_id global written by Render::update_viewpoint @ 0x0054CDD0
+        /// (decomp dword_81EF04). ⚠ The retail world-to-view transform is LANDBLOCK-LOCAL:
+        /// update_viewpoint runs Frame::globaltolocal on the viewer frame, so invView's
+        /// translation is the 0..192 m cell-local offset within THIS cell's landblock, not a
+        /// global position. Any consumer doing global-world math (the cloud system's ECEF /
+        /// weather sampling) must add ((cell>>24)&amp;0xFF)*192 east, ((cell>>16)&amp;0xFF)*192 north.</summary>
+        private const uint ViewerCellIdAddr = 0x0081EF04;
+
         /// <summary>A self-consistent snapshot of the camera for one frame.</summary>
         public readonly struct Camera {
             public readonly Matrix4x4 WorldToView;
             public readonly Matrix4x4 ViewToClip;
             public readonly Vector3 WorldPos;
             public readonly int ViewportW, ViewportH;
+            public readonly uint CellId;    // viewer objcell_id: the landblock WorldPos is local to
             public readonly bool Valid;
-            public Camera(Matrix4x4 wv, Matrix4x4 vc, Vector3 pos, int w, int h, bool valid) {
-                WorldToView = wv; ViewToClip = vc; WorldPos = pos; ViewportW = w; ViewportH = h; Valid = valid;
+            public Camera(Matrix4x4 wv, Matrix4x4 vc, Vector3 pos, int w, int h, uint cellId, bool valid) {
+                WorldToView = wv; ViewToClip = vc; WorldPos = pos; ViewportW = w; ViewportH = h;
+                CellId = cellId; Valid = valid;
             }
         }
 
@@ -68,10 +78,28 @@ namespace AcmeSky.Lib {
                 Matrix4x4 vc = ToNumerics(&rd->m_GState.ViewToClipMatrix);
 
                 // Camera world position = translation of the inverse view matrix (view-origin -> world).
+                // ⚠ LANDBLOCK-LOCAL (see ViewerCellIdAddr note) — pair it with CellId for global math.
                 Vector3 camPos = Vector3.Zero;
                 if (Matrix4x4.Invert(wv, out var viewToWorld)) camPos = viewToWorld.Translation;
 
-                return new Camera(wv, vc, camPos, w, h, valid: true);
+                // Viewer cell: SmartBox::viewer is the stable WORLD viewpoint. The
+                // Render::update_viewpoint global (ViewerCellIdAddr) is unusable at our hook
+                // point — update_viewpoint also runs for the character-panel 3D preview, which
+                // renders LAST and leaves the global at its synthetic cell (measured live:
+                // 0xFFFF0002 stuck through in-world frames). Fall back to the global only if
+                // SmartBox is unreadable, and treat 0xFFFF____ landblocks as "no offset".
+                uint cellId = 0;
+                try {
+                    SmartBox** sbpp = SmartBox.smartbox;
+                    if (sbpp != null && *sbpp != null) cellId = (*sbpp)->viewer.objcell_id;
+                }
+                catch { }
+                if (cellId == 0) {
+                    try { cellId = *(uint*)ViewerCellIdAddr; } catch { }
+                }
+                if ((cellId >> 16) == 0xFFFF) cellId = 0;   // synthetic/UI space: no landblock
+
+                return new Camera(wv, vc, camPos, w, h, cellId, valid: true);
             }
             catch (Exception) { return default; }
         }

@@ -63,6 +63,22 @@ namespace AcmeSky.Services.LiveSky {
         private ID3D11RenderTargetView? _cloudRtv;
         private ID3D11ShaderResourceView? _cloudSrv;
         private int _cloudW, _cloudH;
+        // --- M2.2 temporal resolve: velocity MRT + resolved/history ping-pong ---
+        private ID3D11PixelShader? _psCloudResolve;
+        private ID3D11Texture2D? _cloudVelRt;
+        private ID3D11RenderTargetView? _cloudVelRtv;
+        private ID3D11ShaderResourceView? _cloudVelSrv;
+        private readonly ID3D11Texture2D?[] _cloudResolveRt = new ID3D11Texture2D?[2];
+        private readonly ID3D11RenderTargetView?[] _cloudResolveRtv = new ID3D11RenderTargetView?[2];
+        private readonly ID3D11ShaderResourceView?[] _cloudResolveSrv = new ID3D11ShaderResourceView?[2];
+        private int _cloudResolveIdx;
+        private bool _cloudHistValid;
+        private Matrix4x4 _prevWorldToClip = Matrix4x4.Identity;
+        private bool _prevWorldToClipValid;
+        private Vector3 _prevLbOffset;
+        private bool _prevLbOffsetValid;
+        private uint _lastCellId;
+        private Vector3 _lastGlobalCam;
         private bool _cloudsUsable;
         private long _cloudFrameIndex;
         private Vector2 _weatherOfs;                  // wind-accumulated local weather offset
@@ -177,6 +193,12 @@ namespace AcmeSky.Services.LiveSky {
             public Vector2 CloudRes; public float CloudIters; public float Pad9;                                            // 16
             public float CloudMinStep; public float CloudSunSteps; public float CloudGroundSteps; public float CloudAccurate; // 16
             public float CloudTurb; public float CloudStorm; public float CloudHazeDensity; public float PadA;                // 16
+            // --- M2.2 temporal resolve ---
+            public Matrix4x4 PrevWorldToClip;  // 64  LAST frame's sky-camera AC-world -> clip
+            public Matrix4x4 ShaderToAc;       // 64  inverse(AcToShader)
+            public float CloudTaa; public float CloudTaaGamma; public float CloudTaaAlpha; public float CloudHistValid;       // 16
+            public Vector3 CameraLbOffsetAC; public float PadB;      // 16  local AC -> global AC translation
+            public Vector3 PrevCameraLbOffsetAC; public float PadC;  // 16  last frame's offset
         }
 
         /// <summary>Screen-space textured quad vertex: D3DFVF_XYZRHW | D3DFVF_TEX1 (stride 24).</summary>
@@ -419,6 +441,9 @@ namespace AcmeSky.Services.LiveSky {
                 var pcb = Compiler.Compile(CloudShader.Hlsl, "PSCloudComposite", "acmesky_clouds.hlsl", "ps_5_0",
                     ShaderFlags.OptimizationLevel3, EffectFlags.None);
                 _psCloudComposite = _dev.CreatePixelShader(pcb.Span, null);
+                var prb = Compiler.Compile(CloudShader.Hlsl, "PSCloudResolve", "acmesky_clouds.hlsl", "ps_5_0",
+                    ShaderFlags.OptimizationLevel3, EffectFlags.None);
+                _psCloudResolve = _dev.CreatePixelShader(prb.Span, null);
 
                 // Weather map source (sky.cfg `wxmap`, init-time): nasa = NASA Blue Marble crop
                 // (A = real storm cores — the owner's holtburger rig), dereth = biome-anchored.
@@ -461,6 +486,7 @@ namespace AcmeSky.Services.LiveSky {
                 _log.LogWarning(ex, "acmesky: LIVE clouds init failed; clouds disabled");
                 _psClouds?.Dispose(); _psClouds = null;
                 _psCloudComposite?.Dispose(); _psCloudComposite = null;
+                _psCloudResolve?.Dispose(); _psCloudResolve = null;
                 _texWeather?.Dispose(); _texWeather = null;
                 _texShape?.Dispose(); _texShape = null;
                 _texShapeDetail?.Dispose(); _texShapeDetail = null;
@@ -522,6 +548,23 @@ namespace AcmeSky.Services.LiveSky {
             _cloudRt = _dev!.CreateTexture2D(in desc);
             _cloudRtv = _dev.CreateRenderTargetView(_cloudRt, null);
             _cloudSrv = _dev.CreateShaderResourceView(_cloudRt);
+
+            // M2.2: velocity MRT + resolved/history ping-pong, same size/format as the cloud RT.
+            _cloudVelSrv?.Dispose(); _cloudVelSrv = null;
+            _cloudVelRtv?.Dispose(); _cloudVelRtv = null;
+            _cloudVelRt?.Dispose(); _cloudVelRt = null;
+            _cloudVelRt = _dev.CreateTexture2D(in desc);
+            _cloudVelRtv = _dev.CreateRenderTargetView(_cloudVelRt, null);
+            _cloudVelSrv = _dev.CreateShaderResourceView(_cloudVelRt);
+            for (int k = 0; k < 2; k++) {
+                _cloudResolveSrv[k]?.Dispose(); _cloudResolveSrv[k] = null;
+                _cloudResolveRtv[k]?.Dispose(); _cloudResolveRtv[k] = null;
+                _cloudResolveRt[k]?.Dispose(); _cloudResolveRt[k] = null;
+                _cloudResolveRt[k] = _dev.CreateTexture2D(in desc);
+                _cloudResolveRtv[k] = _dev.CreateRenderTargetView(_cloudResolveRt[k], null);
+                _cloudResolveSrv[k] = _dev.CreateShaderResourceView(_cloudResolveRt[k]);
+            }
+            _cloudHistValid = false;   // resize/first-use -> resolve passes current through
         }
 
         // ==================================================================
@@ -592,9 +635,9 @@ namespace AcmeSky.Services.LiveSky {
                 (p.OutputMode < 3.5f || p.OutputMode > 5.5f)) {
                 EnsureCloudTarget(Math.Max(64, (int)p.CloudRes.X), Math.Max(36, (int)p.CloudRes.Y));
 
-                // pass A: raymarch at reduced res
+                // pass A: raymarch at reduced res (MRT: color + frontDepth/velocity)
                 _ctx.RSSetViewport(0f, 0f, _cloudW, _cloudH, 0f, 1f);
-                _ctx.OMSetRenderTargets(_cloudRtv!, null);
+                _ctx.OMSetRenderTargets(new[] { _cloudRtv!, _cloudVelRtv! }, null);
                 _ctx.PSSetShader(_psClouds);
                 _ctx.PSSetSampler(1, _samplerWrap);
                 _ctx.PSSetShaderResources(4, new[] {
@@ -603,12 +646,30 @@ namespace AcmeSky.Services.LiveSky {
                 _ctx.PSSetShaderResource(9, _texTurbulence!.Srv!);
                 _ctx.Draw(3, 0);
 
+                // pass R (M2.2): temporal resolve into the ping-pong target; the other half
+                // is this frame's history. cfg cloudtaa=0 falls back to the raw march RT.
+                bool taa = _cfg.CloudTaa > 0.5f && _psCloudResolve is not null;
+                ID3D11ShaderResourceView compositeSrc = _cloudSrv!;
+                if (taa) {
+                    int cur = _cloudResolveIdx, prev = 1 - _cloudResolveIdx;
+                    _ctx.OMSetRenderTargets(_cloudResolveRtv[cur]!, null);
+                    _ctx.PSSetShader(_psCloudResolve);
+                    _ctx.PSSetShaderResource(8, _cloudSrv!);
+                    _ctx.PSSetShaderResource(10, _cloudVelSrv!);
+                    _ctx.PSSetShaderResource(11, _cloudResolveSrv[prev]!);
+                    _ctx.Draw(3, 0);
+                    _ctx.PSSetShaderResources(10, new ID3D11ShaderResourceView[] { null!, null! }); // t10,t11
+                    compositeSrc = _cloudResolveSrv[cur]!;
+                    _cloudResolveIdx = prev;
+                    _cloudHistValid = true;
+                }
+
                 // pass B: composite over the main sky RT
                 _ctx.RSSetViewport(0f, 0f, w, h, 0f, 1f);
                 _ctx.OMSetRenderTargets(_rtv!, null);
                 _ctx.OMSetBlendState(_blendPremul, null, uint.MaxValue);
                 _ctx.PSSetShader(_psCloudComposite);
-                _ctx.PSSetShaderResource(8, _cloudSrv!);
+                _ctx.PSSetShaderResource(8, compositeSrc);
                 _ctx.Draw(3, 0);
                 _ctx.OMSetBlendState(null, null, uint.MaxValue);
                 _ctx.PSSetShaderResources(8, new ID3D11ShaderResourceView[] { null! });   // unbind: RT is written again next frame
@@ -771,6 +832,28 @@ namespace AcmeSky.Services.LiveSky {
             cb.CloudAccurate = _cfg.CloudAccurate;
             cb.CloudTurb = _cfg.CloudTurb;
             cb.CloudHazeDensity = _cfg.CloudHaze > 0f ? (storm ? 3e-4f : 3e-5f) : 0f;
+            // M2.2 temporal resolve inputs: last frame's sky-camera VP for reprojection
+            // velocity, the shader->AC rotation, and the TAA knobs.
+            cb.ShaderToAc = Matrix4x4.Invert(_acToShader, out var s2a) ? s2a : Matrix4x4.Transpose(_acToShader);
+            cb.PrevWorldToClip = _prevWorldToClipValid ? _prevWorldToClip : cb.WorldToClip;
+            _prevWorldToClip = cb.WorldToClip;
+            _prevWorldToClipValid = true;
+            cb.CloudTaa = _cfg.CloudTaa;
+            cb.CloudTaaGamma = _cfg.CloudTaaGamma;
+            cb.CloudTaaAlpha = _cfg.CloudTaaAlpha;
+            cb.CloudHistValid = _cloudHistValid ? 1f : 0f;
+            // Landblock-local camera fix: the client view matrix is local to the viewer's
+            // landblock (Render::update_viewpoint does Frame::globaltolocal), so the cloud
+            // ECEF/weather math needs the global translation ((lbx,lby)*192, z is already
+            // global). CellId 0 (no viewer yet) degrades to the old pole-locked behavior.
+            uint cell = cam.CellId;
+            cb.CameraLbOffsetAC = new Vector3(
+                ((cell >> 24) & 0xFF) * 192f, ((cell >> 16) & 0xFF) * 192f, 0f);
+            cb.PrevCameraLbOffsetAC = _prevLbOffsetValid ? _prevLbOffset : cb.CameraLbOffsetAC;
+            _prevLbOffset = cb.CameraLbOffsetAC;
+            _prevLbOffsetValid = true;
+            _lastCellId = cell;
+            _lastGlobalCam = new Vector3(cam.WorldPos.X, cam.WorldPos.Z, cam.WorldPos.Y) + cb.CameraLbOffsetAC;
 
             // Time-driven sun/moon. sky.cfg `time=` (0..1) overrides the client clock -- used to force a
             // time of day for evaluation/tuning (and as a fallback while the client's
@@ -858,12 +941,14 @@ namespace AcmeSky.Services.LiveSky {
                 _log.LogInformation(
                     "acmesky: LIVE frame #{N} vp={W}x{H} atmosphere rayMode={Ray} swz={Swz} output={Out} axis='{Axis}' " +
                     "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg stars={Stars} clouds={Clouds} storm={Storm} " +
-                    "samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA) bright={B}]",
+                    "samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA) bright={B}] " +
+                    "cell=0x{Cell:X8} gcam=({GX:F0},{GY:F0},{GZ:F0})",
                     n, w, h, _cfg.RayMode, _cfg.WorldSwizzle, _cfg.Output, _cfg.Axis,
                     _lastTimeOfDay, ClientState.GetTimeOfDay(), _lastSunPitchDeg,
                     _starCount > 0 ? _cfg.Stars : -1f,
                     _cloudsUsable ? _cfg.Clouds : -1f, _lastStorm ? 1 : 0,
-                    _sampZenith, _sampMid, _sampHorizon, _sampBright);
+                    _sampZenith, _sampMid, _sampHorizon, _sampBright,
+                    _lastCellId, _lastGlobalCam.X, _lastGlobalCam.Y, _lastGlobalCam.Z);
             } else {
                 _log.LogInformation(
                     "acmesky: LIVE frame #{N} vp={W}x{H} test pattern composited", n, w, h);
@@ -919,9 +1004,21 @@ namespace AcmeSky.Services.LiveSky {
             _cloudSrv?.Dispose(); _cloudSrv = null;
             _cloudRtv?.Dispose(); _cloudRtv = null;
             _cloudRt?.Dispose(); _cloudRt = null;
+            _cloudVelSrv?.Dispose(); _cloudVelSrv = null;
+            _cloudVelRtv?.Dispose(); _cloudVelRtv = null;
+            _cloudVelRt?.Dispose(); _cloudVelRt = null;
+            for (int k = 0; k < 2; k++) {
+                _cloudResolveSrv[k]?.Dispose(); _cloudResolveSrv[k] = null;
+                _cloudResolveRtv[k]?.Dispose(); _cloudResolveRtv[k] = null;
+                _cloudResolveRt[k]?.Dispose(); _cloudResolveRt[k] = null;
+            }
+            _cloudHistValid = false;
+            _prevWorldToClipValid = false;
+            _prevLbOffsetValid = false;
             _cloudW = _cloudH = 0;
             _psClouds?.Dispose(); _psClouds = null;
             _psCloudComposite?.Dispose(); _psCloudComposite = null;
+            _psCloudResolve?.Dispose(); _psCloudResolve = null;
             _texWeather?.Dispose(); _texWeather = null;
             _texShape?.Dispose(); _texShape = null;
             _texShapeDetail?.Dispose(); _texShapeDetail = null;

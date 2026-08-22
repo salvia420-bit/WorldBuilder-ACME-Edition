@@ -61,6 +61,13 @@ cbuffer SkyParams : register(b0) {
     float2 cloudRes;         float cloudIters;    float _pad9;        // cloud RT resolution, primary march iteration cap
     float cloudMinStep; float cloudSunSteps; float cloudGroundSteps; float cloudAccurate; // quality (takram preset knobs)
     float cloudTurb;    float cloudStorm;    float cloudHazeDensity; float _padA;         // turbulence, storm look, haze
+    // --- M2.2 temporal resolve (takram cloudsResolve.frag TAA path) ---
+    row_major float4x4 prevWorldToClip;  // LAST frame's forward AC-world -> clip (sky camera, campitch included)
+    row_major float4x4 shaderToAc;       // inverse(acToShader) (pure rotation -> transpose)
+    float cloudTaa; float cloudTaaGamma; float cloudTaaAlpha; float cloudHistValid;  // resolve on/off, variance gamma, blend alpha, history validity
+    // --- landblock-local camera fix (Render::update_viewpoint is Frame::globaltolocal) ---
+    float3 cameraLbOffsetAC;     float _padB;  // (lbx*192, lby*192, 0): local AC -> GLOBAL AC
+    float3 prevCameraLbOffsetAC; float _padC;  // last frame's offset (velocity reprojection)
 };
 
 // ==========================================================================
@@ -326,6 +333,15 @@ float3 linearToSrgb(float3 c) {
     return lerp(lo, hi, useHi);
 }
 
+// Output dithering (holtburger parity: takram DitheringEffect = three.js
+// <dithering_pars_fragment>, applied AFTER tone mapping). Kills the concentric /
+// radial banding the smooth spherical sky gradient shows once quantized to 8-bit.
+float3 DitherColor(float3 color, float2 pix) {
+    float g = frac(sin(dot(pix, float2(12.9898, 78.233))) * 43758.5453);
+    float3 shift = float3(0.25 / 255.0, -0.25 / 255.0, 0.25 / 255.0);
+    return saturate(color + lerp(2.0 * shift, -2.0 * shift, g));
+}
+
 // Shared tonemap tail (atmosphere + stars must match exactly).
 float3 FinalColor(float3 radiance) {
     float3 color = radiance * exposure;
@@ -427,8 +443,9 @@ float4 PSAtmosphere(VSOut i) : SV_TARGET {
         }
     }
 
-    // Tonemap: exposure then AgX (holtburger: toneMappingExposure = 5, AGX final pass).
-    return float4(FinalColor(radiance), 1.0);
+    // Tonemap: exposure then AgX (holtburger: toneMappingExposure = 5, AGX final pass),
+    // then output dithering (holtburger DitheringEffect parity).
+    return float4(DitherColor(FinalColor(radiance), i.pos.xy), 1.0);
 }
 
 // ==========================================================================
@@ -496,7 +513,7 @@ float4 PSStars(StarVSOut i) : SV_TARGET {
     float3 radiance = GetSkyRadiance(cameraKm, dirShader, sunShader, transmittance);
     radiance *= SKY_RAD_TO_LUM;
     radiance += transmittance * i.color;
-    return float4(FinalColor(radiance), 1.0);
+    return float4(DitherColor(FinalColor(radiance), i.pos.xy), 1.0);
 }
 ";
     }

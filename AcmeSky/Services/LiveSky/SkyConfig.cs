@@ -41,12 +41,18 @@ namespace AcmeSky.Services.LiveSky {
         public float CloudCoverStorm = 0.55f; // coverage under the STORM look (cloud_storm_look.js)
         public float CloudIters = 500f; // primary raymarch iteration cap (takram high preset)
         public float CloudRes = 1f;     // cloud RT resolution scale (of the main viewport)
-        public float CloudMinStep = 50f;   // primary march min step (m); 10 = takram ultra
+        public float CloudMinStep = 10f;   // takram ULTRA (owner default 2026-08-22; measured free vs 50 on the 1070)
         public float CloudSunSteps = 2f;   // secondary sun march iterations
         public float CloudGroundSteps = 3f;// ground-bounce march iterations (0 = off)
         public float CloudAccurate = 1f;   // 1 = ACCURATE_SUN_SKY_LIGHT (per-sample irradiance)
         public float CloudTurb = 1f;       // 1 = TURBULENCE displacement
         public float CloudHaze = 1f;       // 1 = takram haze (3e-5 fair / 3e-4 storm)
+        public float CloudTaa = 0f;        // 1 = temporal resolve (takram cloudsResolve TAA path).
+                                           // DEFAULT OFF 2026-08-22: the resolve shows vertical slab
+                                           // sections through cumulus (reprojection velocity bug, live
+                                           // A/B vs the raw march) — fix the velocity before re-enabling.
+        public float CloudTaaGamma = 1f;   // variance-clipping gamma (takram TAA default 1)
+        public float CloudTaaAlpha = 0.1f; // current-frame blend weight (holtburger temporalAlpha)
         public string WxMap = "nasa";      // local weather map: default | nasa | dereth (init-time)
         public float Storm = -1f;          // -1 = auto (client weather flag), 0 = force fair, 1 = force storm
         public float Dump;                 // >0: write one skydump-N.bmp per second (rotating 8) to C:\Temp\acdt
@@ -138,6 +144,9 @@ namespace AcmeSky.Services.LiveSky {
                 case "cloudaccurate": if (F(val, out var ca)) CloudAccurate = Math.Clamp(ca, 0f, 1f); break;
                 case "cloudturb": if (F(val, out var ct)) CloudTurb = Math.Clamp(ct, 0f, 1f); break;
                 case "cloudhaze": if (F(val, out var ch)) CloudHaze = Math.Clamp(ch, 0f, 1f); break;
+                case "cloudtaa": if (F(val, out var cta)) CloudTaa = Math.Clamp(cta, 0f, 1f); break;
+                case "cloudtaagamma": if (F(val, out var ctg)) CloudTaaGamma = Math.Clamp(ctg, 0.1f, 64f); break;
+                case "cloudtaaalpha": if (F(val, out var ctl)) CloudTaaAlpha = Math.Clamp(ctl, 0.01f, 1f); break;
                 case "wxmap": WxMap = val.ToLowerInvariant(); break;   // default | nasa | dereth (init-time)
                 case "storm": if (F(val, out var sm)) Storm = Math.Clamp(sm, -1f, 1f); break;
                 case "dump": if (F(val, out var dp)) Dump = Math.Clamp(dp, 0f, 1f); break;

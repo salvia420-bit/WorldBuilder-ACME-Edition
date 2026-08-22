@@ -95,12 +95,15 @@ def main():
         cur = np.asarray(img, dtype=np.uint8)
         r = seam_ratio(cur)
         if r > 1.3:   # non-tileable source (NASA/dereth crops); takram's own map passes at ~0.9
-            cur = tileize(cur)
-            # NB: the post-tileize ratio can legitimately stay >1 — the wrap now lands on a REAL
-            # adjacent-source-pixel edge (continuous by construction), which the crude mean-step
-            # metric can't tell from a chop. The eye test is the 2x2 tiled preview.
-            print(f"  {name_png}: wrap seam ratio {r:.1f} -> roll-blend tileized (band 96px, structurally continuous)")
-            Image.fromarray(cur, "RGBA").save(os.path.join(out, name_png.replace(".png", ".tileable.png")))
+            # 2026-08-22 TILEIZE DISABLED — holtburger-parity decision. The roll-blend
+            # rewrote the outer 96 texels of the weather map, which (a) GUTTED real deck
+            # content there (measured: raw G=0.45-0.60 vs tileized G=0.07 at the matched
+            # 1070 test spot, which sampled rows 19-27) and (b) imprinted a dead-straight
+            # content boundary at the band edge that projects as a razor line across the
+            # sky (the "hemisphere line" seen live). Holtburger samples the RAW map,
+            # hard wrap seam and all, and shows no line — so we ship the raw bytes for
+            # byte-parity and accept the same soft seam holtburger has.
+            print(f"  {name_png}: wrap seam ratio {r:.1f} -> left RAW (tileize disabled for holtburger parity)")
         cur = np.ascontiguousarray(cur)
         levels.append(cur.tobytes())
         a = cur.astype(np.float32)
