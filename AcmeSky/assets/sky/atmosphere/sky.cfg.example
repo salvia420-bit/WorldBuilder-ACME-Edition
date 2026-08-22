@@ -44,10 +44,29 @@ stars    = 1        # star-field base intensity (0 = off). Night fade applies on
                     # full at the -14deg night floor. Field = takram stars.bin (9,096 stars),
                     # sidereal rotation on the AC 11.34x game clock.
 
-# --- M2 volumetric clouds (takram three-clouds port, holtburger FAIR look) --------------
+# --- M2 volumetric clouds (takram three-clouds port; the owner's holtburger rig:
+#     ?quality=ultra&clouds=on&wxMap=nasa with cloudWeather on) ---------------------------
 clouds     = 1      # 0 = off
-cloudcover = 0.5    # takram coverage (holtburger FAIR = 0.5; storm look used 0.7)
-clouditers = 300    # primary raymarch iteration cap (200 low / 300 default / 500 high)
-cloudres   = 0.5    # cloud RT resolution as a fraction of the viewport (0.1..1)
+wxmap      = nasa   # weather map (INIT-TIME): default | nasa (Blue Marble, A = real storm
+                    # cores) | dereth (biome-anchored). nasa gets the ~25 km/h linear drift.
+cloudcover = 0.5    # takram coverage under the FAIR look
+cloudcoverstorm = 0.55  # coverage under the STORM look
+storm      = -1     # -1 = AUTO (client weather flag = the retail is_storm signal switches
+                    # FAIR <-> STORM: 600 m deck + cumulonimbus tower + 10x haze), 0/1 force
+clouditers = 500    # primary raymarch cap (takram high preset; 200 = low)
+cloudres   = 1      # cloud RT resolution fraction (1 = full; ~75 fps on the 1070 at 1080p)
+cloudminstep = 50   # primary march min step, metres (50 = takram high, 10 = ultra)
+cloudsunsteps = 2   # secondary sun march iterations
+cloudgroundsteps = 3 # ground-bounce march iterations (0 = off)
+cloudaccurate = 1   # 1 = ACCURATE_SUN_SKY_LIGHT (per-sample Bruneton irradiance)
+cloudturb  = 1      # 1 = TURBULENCE displacement (350 m, repeat 20)
+cloudhaze  = 1      # 1 = takram haze (3e-5 fair / 3e-4 storm)
+# NOT ported (the one remaining takram gap): Beer Shadow Map + light shafts.
 # debug outputs (see `output` above): 6 = clouds-only (tonemapped over black),
 # 7 = aerial-perspective inscatter raw, 8 = AP transmittance raw, 9 = cloud front depth.
+
+# --- capture aids ------------------------------------------------------------------------
+dump     = 0        # 1 = write the composited backdrop as C:\Temp\acdt\skydump-N.bmp once
+                    # per second (rotating 8) — ground-truth frames, immune to stale GDI.
+campitch = 0        # deg: pitch the SKY camera up for captures (game camera ignores
+                    # injected keys); affects the in-game backdrop while set — reset after.

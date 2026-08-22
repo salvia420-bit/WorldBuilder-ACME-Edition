@@ -2,27 +2,28 @@ namespace AcmeSky.Services.LiveSky {
     /// <summary>
     /// MILESTONE 2 -- HLSL port of the takram three-clouds volumetric raymarcher
     /// (vendor/takram-three-clouds/src/shaders/{clouds.frag,types.glsl,clouds.glsl,parameters.glsl}),
-    /// specialised to the holtburger configuration:
+    /// at the OWNER'S HOLTBURGER RIG (?quality=ultra&amp;clouds=on&amp;wxMap=nasa, cloudWeather on):
     ///
-    ///   - Quality: takram "medium" preset (SHAPE_DETAIL on, TURBULENCE off, lightShafts off,
-    ///     accurateSunSkyLight off, 8 multi-scattering octaves, dual-lobe HG (0.7,-0.2,mix .5),
-    ///     POWDER (0.8/150), GROUND_BOUNCE 1 step, sun march 2 steps).
-    ///   - Layers: holtburger FAIR look (cloud_storm_look.js 2026-08-01): cumulus r 750/650/.2,
-    ///     stratus g 1000/1200/.2, cirrus b 7500/500/.003, alto a 3500/600/.004; coverage 0.5.
-    ///   - DROPPED vs reference (documented simplifications): Beer Shadow Map (secondary sun
-    ///     march only -- distant self-shadowing is softer), temporal reprojection/upscaling
-    ///     (we march at a reduced-res RT every frame; STBN jitter carries the banding load),
-    ///     scene-depth clamp (depth-unaware composite, terrain overdraws the backdrop anyway),
-    ///     HAZE (holtburger FAIR haze is near-invisible at 3e-5).
+    ///   - Quality (2026-08-22, "heaviest settings here"): takram HIGH/default preset — 500
+    ///     primary iterations, minStepSize 50 (10 = takram ultra, via sky.cfg), SHAPE_DETAIL,
+    ///     TURBULENCE (displacement 350, repeat 20), ACCURATE_SUN_SKY_LIGHT (per-sample Bruneton
+    ///     irradiance), 8 multi-scattering octaves, dual-lobe HG (0.7,-0.2,mix .5), POWDER
+    ///     (0.8/150), GROUND_BOUNCE 3 steps, sun march 2 steps, HAZE (3e-5 fair / 3e-4 storm).
+    ///   - Weather: local_weather_nasa (NASA Blue Marble crop, A = real storm cores) with the
+    ///     ~25 km/h linear drift; STORM-reactive look (cloud_storm_look.js FAIR/STORM verbatim,
+    ///     incl. the cumulonimbus tower on channel A with the inverted dense-base density
+    ///     profile) switched by the CLIENT'S OWN weather flag (GameSky::s_weatherEnabled) — the
+    ///     retail analog of holtburger's DayGroup is_storm signal.
+    ///   - STILL DROPPED vs the full takram stack (the one remaining gap): the Beer Shadow Map
+    ///     + light shafts (a cascaded shadow-pass subsystem) and temporal reprojection. Distant
+    ///     cloud self-shadowing is carried by the secondary sun march alone.
     ///
     /// The string is COMPILED APPENDED to AtmosphereShader.Hlsl: it reuses the SkyParams cbuffer,
-    /// samLUT (clamp), the Bruneton LUTs t0-t2 and every runtime function already ported there
-    /// (GetCombinedScattering has both ground branches, which GetSkyRadianceToPoint needs).
-    /// New resources: t4 local weather (RGBA8+mips), t5 shape 128^3 R8, t6 shape detail 32^3 R8,
-    /// t7 STBN 128x128x64 R8, t8 the cloud RT for the composite pass, s1 wrap sampler.
+    /// samLUT (clamp), the Bruneton LUTs t0-t2 and every runtime function already ported there.
+    /// Resources: t4 local weather (RGBA8+mips), t5 shape 128^3 R8, t6 shape detail 32^3 R8,
+    /// t7 STBN 128x128x64 R8, t8 cloud RT (composite pass), t9 turbulence (RGBA8+mips), s1 wrap.
     ///
-    /// Radiance is LUMINANCE-scaled exactly like the sky path (the reference's
-    /// GetSunAndSkyScalarIlluminance / GetSkyLuminanceToPoint wrappers).
+    /// Radiance is LUMINANCE-scaled exactly like the sky path.
     /// </summary>
     internal static class CloudShader {
 
@@ -39,45 +40,70 @@ Texture3D<float>  shapeTex        : register(t5);
 Texture3D<float>  shapeDetailTex  : register(t6);
 Texture3D<float>  stbnTex         : register(t7);
 Texture2D<float4> cloudBufTex     : register(t8);
+Texture2D<float4> turbulenceTex   : register(t9);
 SamplerState samWrap : register(s1);
 
 static const float RECIPROCAL_PI  = 0.3183098861837907;
 static const float RECIPROCAL_PI2 = 0.15915494309189535;
 static const float RECIPROCAL_PI4 = 0.07957747154594767;
 
-// --- holtburger FAIR layers (cloud_storm_look.js) ---
-static const float4 minLayerHeights = float4(750.0, 1000.0, 7500.0, 3500.0);
-static const float4 maxLayerHeights = float4(1400.0, 2200.0, 8000.0, 4100.0);
-// Gaps between merged layer spans [750,2200],[3500,4100],[7500,8000] (packIntervalHeights):
-static const float3 minIntervalHeights = float3(2200.0, 4100.0, 0.0);
-static const float3 maxIntervalHeights = float3(3500.0, 7500.0, 0.0);
-static const float4 densityScales = float4(0.2, 0.2, 0.003, 0.004);
-static const float4 shapeAmounts = float4(1.0, 1.0, 0.4, 0.5);
-static const float4 shapeDetailAmounts = float4(1.0, 1.0, 0.0, 0.0);
-static const float4 weatherExponents = float4(1.0, 1.0, 1.0, 1.0);
-static const float4 shapeAlteringBiases = float4(0.35, 0.35, 0.35, 0.35);
-static const float4 coverageFilterWidths = float4(0.6, 0.6, 0.5, 0.5);
-static const float cloudMinHeight = 750.0;
-static const float cloudMaxHeight = 8000.0;
-static const float shadowTopHeight = 2200.0;   // top of the shadow-flagged layers (r,g)
-// DensityProfile DEFAULT (0, 0, 0.75, 0.25) per layer:
-static const float4 profExpTerms = float4(0.0, 0.0, 0.0, 0.0);
-static const float4 profExponents = float4(0.0, 0.0, 0.0, 0.0);
-static const float4 profLinearTerms = float4(0.75, 0.75, 0.75, 0.75);
-static const float4 profConstantTerms = float4(0.25, 0.25, 0.25, 0.25);
+// --- cloud looks (cloud_storm_look.js FAIR_LAYERS / STORM_LAYERS, verbatim) ---
+// Selected per frame into mutable statics by selectLayers(cloudStorm) — SM5 static
+// globals are per-invocation, so this is just a uniform-driven constant swap.
+static float4 g_minLH, g_maxLH, g_densS, g_shpA, g_shpDA, g_wExp, g_bias, g_cfw;
+static float3 g_minInt, g_maxInt;
+static float  g_minH, g_maxH, g_shadowTop;
+static float4 g_profLin, g_profConst;   // exp/exponent terms are 0 in both looks
 
-// --- participating medium + march parameters (takram 'medium' preset) ---
+void selectLayers(bool storm) {
+    if (storm) {
+        // STORM: cumulus deck at 600/850 m (cfw 0.35), cirrus unchanged, channel A =
+        // cumulonimbus tower 600 m -> 6.6 km, densityScale 0.05 (soft-alpha ceiling),
+        // weatherExponent 1.2, bias 0.4, cfw 0.2, INVERTED dense-base density profile
+        // (const 1.0, linear -0.55) for the dark underside + soft top.
+        g_minLH = float4(600.0, 850.0, 7500.0, 600.0);
+        g_maxLH = float4(1250.0, 2050.0, 8000.0, 6600.0);
+        g_densS = float4(0.2, 0.2, 0.003, 0.05);
+        g_shpA  = float4(1.0, 1.0, 0.4, 1.0);
+        g_shpDA = float4(1.0, 1.0, 0.0, 1.0);
+        g_wExp  = float4(1.0, 1.0, 1.0, 1.2);
+        g_bias  = float4(0.35, 0.35, 0.35, 0.4);
+        g_cfw   = float4(0.35, 0.35, 0.5, 0.2);
+        // merged spans [600,6600] u [7500,8000] -> single gap:
+        g_minInt = float3(6600.0, 0.0, 0.0);
+        g_maxInt = float3(7500.0, 0.0, 0.0);
+        g_minH = 600.0; g_maxH = 8000.0; g_shadowTop = 6600.0;
+        g_profLin   = float4(0.75, 0.75, 0.75, -0.55);
+        g_profConst = float4(0.25, 0.25, 0.25, 1.0);
+    } else {
+        // FAIR: takram DEFAULT cumulus/stratus/cirrus + the alto deck on channel A.
+        g_minLH = float4(750.0, 1000.0, 7500.0, 3500.0);
+        g_maxLH = float4(1400.0, 2200.0, 8000.0, 4100.0);
+        g_densS = float4(0.2, 0.2, 0.003, 0.004);
+        g_shpA  = float4(1.0, 1.0, 0.4, 0.5);
+        g_shpDA = float4(1.0, 1.0, 0.0, 0.0);
+        g_wExp  = float4(1.0, 1.0, 1.0, 1.0);
+        g_bias  = float4(0.35, 0.35, 0.35, 0.35);
+        g_cfw   = float4(0.6, 0.6, 0.5, 0.5);
+        // merged spans [750,2200] u [3500,4100] u [7500,8000] -> two gaps:
+        g_minInt = float3(2200.0, 4100.0, 0.0);
+        g_maxInt = float3(3500.0, 7500.0, 0.0);
+        g_minH = 750.0; g_maxH = 8000.0; g_shadowTop = 2200.0;
+        g_profLin   = float4(0.75, 0.75, 0.75, 0.75);
+        g_profConst = float4(0.25, 0.25, 0.25, 0.25);
+    }
+}
+
+// --- participating medium + march parameters (takram high/default preset;
+//     minStep + secondary counts + toggles come from the cbuffer / sky.cfg) ---
 static const float scatteringCoefficient = 1.0;
 static const float absorptionCoefficient = 0.0;
-static const float minDensity = 1e-4;
-static const float minExtinction = 1e-4;
+static const float minDensity = 1e-5;
+static const float minExtinction = 1e-5;
 static const float minTransmittanceC = 1e-2;
-static const float minStepSize = 100.0;
 static const float maxStepSize = 1000.0;
-static const float cloudMaxRayDistance = 1e5;
+static const float cloudMaxRayDistance = 2e5;
 static const float perspectiveStepScale = 1.01;
-static const int   maxIterationCountToSun = 2;
-static const int   maxIterationCountToGround = 1;
 static const float minSecondaryStepSize = 100.0;
 static const float secondaryStepScale = 2.0;
 static const float cloudCameraNear = 10.0;
@@ -91,10 +117,17 @@ static const float groundBounceScale = 1.0;
 static const float powderScale = 0.8;
 static const float powderExponent = 150.0;
 
+// --- haze (takram CloudsMaterial defaults; density from cbuffer, 0 = off) ---
+static const float hazeExponent = 1e-3;
+static const float hazeScatteringCoefficient = 0.9;
+static const float hazeAbsorptionCoefficient = 0.5;
+
 // --- shape / weather mapping ---
 static const float2 localWeatherRepeat = float2(100.0, 100.0);
 static const float3 shapeRepeat = float3(0.0003, 0.0003, 0.0003);
 static const float3 shapeDetailRepeat = float3(0.006, 0.006, 0.006);
+static const float2 turbulenceRepeat = float2(20.0, 20.0);
+static const float turbulenceDisplacement = 350.0;
 
 // ---------------- helpers (three-geospatial core/math + raySphereIntersection) ----------------
 float remapC1(float x, float a, float b) { return saturate((x - a) / (b - a)); }
@@ -144,8 +177,8 @@ float getMipLevelCloud(float2 uv) {
 }
 
 bool insideLayerIntervals(float height) {
-    bool3 gt = height > minIntervalHeights;
-    bool3 lt = height < maxIntervalHeights;
+    bool3 gt = height > g_minInt;
+    bool3 lt = height < g_maxInt;
     return (gt.x && lt.x) || (gt.y && lt.y) || (gt.z && lt.z);
 }
 
@@ -160,21 +193,19 @@ float4 shapeAlteringFunction(float4 heightFraction, float4 bias) {
 
 WeatherSample sampleWeatherC(float2 uv, float height, float mipLevel) {
     WeatherSample weather;
-    weather.heightFraction = remapC4(float4(height, height, height, height),
-                                     minLayerHeights, maxLayerHeights);
+    weather.heightFraction = remapC4(float4(height, height, height, height), g_minLH, g_maxLH);
     float4 localWeather = pow(max(localWeatherTex.SampleLevel(
-        samWrap, uv * localWeatherRepeat + cloudWeatherOfs, mipLevel), 0.0), weatherExponents);
-    float4 heightScale = shapeAlteringFunction(weather.heightFraction, shapeAlteringBiases);
+        samWrap, uv * localWeatherRepeat + cloudWeatherOfs, mipLevel), 0.0), g_wExp);
+    float4 heightScale = shapeAlteringFunction(weather.heightFraction, g_bias);
     float4 factor = 1.0 - cloudCoverage * heightScale;
     weather.density = remapC4(
-        lerp(localWeather, float4(1.0, 1.0, 1.0, 1.0), coverageFilterWidths),
-        factor, factor + coverageFilterWidths);
+        lerp(localWeather, float4(1.0, 1.0, 1.0, 1.0), g_cfw),
+        factor, factor + g_cfw);
     return weather;
 }
 
 float4 getLayerDensity(float4 heightFraction) {
-    return profExpTerms * exp(profExponents * heightFraction) +
-           profLinearTerms * heightFraction + profConstantTerms;
+    return g_profLin * heightFraction + g_profConst;   // exp terms are 0 in both looks
 }
 
 struct MediaSample { float density; float4 weight; float scattering; float extinction; };
@@ -187,23 +218,33 @@ MediaSample sampleMediaC(WeatherSample weather, float3 position, float2 uv,
     float localWeatherSpeed = length(cloudWeatherOfs);
     float3 evolution = -surfaceNormal * localWeatherSpeed * 2e4;
 
-    float3 shapePosition = (position + evolution) * shapeRepeat;
+    // TURBULENCE (takram: displaces the shape/detail sample position near cloud bases).
+    float3 turbulence = float3(0.0, 0.0, 0.0);
+    if (cloudTurb > 0.5) {
+        float2 turbulenceUv = uv * localWeatherRepeat * turbulenceRepeat;
+        turbulence = turbulenceDisplacement *
+            (turbulenceTex.SampleLevel(samWrap, turbulenceUv, 0.0).rgb * 2.0 - 1.0) *
+            dot(density, remapC4(weather.heightFraction,
+                                 float4(0.3, 0.3, 0.3, 0.3), float4(0.0, 0.0, 0.0, 0.0)));
+    }
+
+    float3 shapePosition = (position + evolution + turbulence) * shapeRepeat;
     float shape = shapeTex.SampleLevel(samWrap, shapePosition, 0.0);
-    density = remapC4(density, (1.0 - shape) * shapeAmounts, float4(1.0, 1.0, 1.0, 1.0));
+    density = remapC4(density, (1.0 - shape) * g_shpA, float4(1.0, 1.0, 1.0, 1.0));
 
     // SHAPE_DETAIL
     if (mipLevel * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
-        float3 detailPosition = position * shapeDetailRepeat;
+        float3 detailPosition = (position + turbulence) * shapeDetailRepeat;
         float detail = shapeDetailTex.SampleLevel(samWrap, detailPosition, 0.0);
         float4 modifier = lerp(
             float4(pow(detail, 6.0).xxxx),
             float4((1.0 - detail).xxxx),
             remapC4(weather.heightFraction, float4(0.2, 0.2, 0.2, 0.2), float4(0.4, 0.4, 0.4, 0.4)));
-        modifier = lerp(float4(0.0, 0.0, 0.0, 0.0), modifier, shapeDetailAmounts);
+        modifier = lerp(float4(0.0, 0.0, 0.0, 0.0), modifier, g_shpDA);
         density = remapC4(density * 2.0, modifier * 0.5, float4(1.0, 1.0, 1.0, 1.0));
     }
 
-    density = saturate(density * densityScales * getLayerDensity(weather.heightFraction));
+    density = saturate(density * g_densS * getLayerDensity(weather.heightFraction));
 
     MediaSample media;
     float densitySum = density.x + density.y + density.z + density.w;
@@ -266,6 +307,17 @@ float3 GetSunAndSkyScalarIrradianceLum(float3 pointKm, float3 sunDir, out float3
     float mu_s = dot(pointKm, sunDir) / r;
     skyIrradiance = GetIrradianceLum(r, mu_s) * (2.0 * PI) * SKY_RAD_TO_LUM;
     return solar_irradiance * GetTransmittanceToSunB(r, mu_s) * SUN_RAD_TO_LUM;
+}
+
+// GetSunAndSkyIlluminance (with surface normal — the ACCURATE ground-bounce path).
+float3 GetSunAndSkyIrradianceLum(float3 pointKm, float3 normal, float3 sunDir,
+                                 out float3 skyIrradiance) {
+    float r = max(length(pointKm), bottom_radius);
+    float mu_s = dot(pointKm, sunDir) / r;
+    skyIrradiance = GetIrradianceLum(r, mu_s) * (1.0 + dot(normal, pointKm) / r) * 0.5
+                    * SKY_RAD_TO_LUM;
+    return solar_irradiance * GetTransmittanceToSunB(r, mu_s) *
+           max(dot(normal, sunDir), 0.0) * SUN_RAD_TO_LUM;
 }
 
 bool RayIntersectsGroundB(float r, float mu) {
@@ -351,7 +403,6 @@ float3 GetSkyRadianceToPointLum(float3 cameraKm, float3 pointKm, float3 sunDir,
 
     scattering = scattering - transmittance * scattering_p;
     single_mie = single_mie - transmittance * single_mie_p;
-    // COMBINED_SCATTERING_TEXTURES re-extrapolation
     single_mie = GetExtrapolatedSingleMieScattering(float4(scattering, single_mie.r));
     single_mie = single_mie * smoothstep(0.0, 0.01, mu_s);
 
@@ -382,12 +433,18 @@ float marchOpticalDepthC(float3 rayOrigin, float3 rayDirection, int maxIter,
 }
 
 float3 approximateRadianceFromGroundC(float3 position, float3 surfaceNormal, float height,
-                                      float mipLevel, float jitter, float3 sunShaderDir) {
+                                      float mipLevel, float jitter, float3 sunShaderDir,
+                                      float3 gndSun, float3 gndSky) {
     float opticalDepthToGround = marchOpticalDepthC(position, -surfaceNormal,
-                                                    maxIterationCountToGround, mipLevel, jitter);
-    float3 skyIrradiance;
-    float3 sunIrradiance = GetSunAndSkyScalarIrradianceLum(
-        (position - surfaceNormal * height) * meterToUnit, sunShaderDir, skyIrradiance);
+                                                    (int)cloudGroundSteps, mipLevel, jitter);
+    float3 skyIrradiance; float3 sunIrradiance;
+    if (cloudAccurate > 0.5) {
+        sunIrradiance = GetSunAndSkyIrradianceLum(
+            (position - surfaceNormal * height) * meterToUnit, surfaceNormal, sunShaderDir,
+            skyIrradiance);
+    } else {
+        skyIrradiance = gndSky; sunIrradiance = gndSun;
+    }
     const float groundAlbedo = 0.3;
     float3 groundIrradiance = skyIrradiance + (1.0 - cloudCoverage) * sunIrradiance;
     float3 bouncedRadiance = groundAlbedo * RECIPROCAL_PI * groundIrradiance;
@@ -399,6 +456,7 @@ float4 marchCloudsC(float3 rayOrigin, float3 rayDirection, float2 rayNearFar, fl
                     float jitter, float rayStartTexelsPerPixel, float3 sunShaderDir,
                     float3 cloudsIrrMinSun, float3 cloudsIrrMinSky,
                     float3 cloudsIrrMaxSun, float3 cloudsIrrMaxSky,
+                    float3 gndSun, float3 gndSky,
                     out float frontDepth) {
     float3 radianceIntegral = float3(0.0, 0.0, 0.0);
     float transmittanceIntegral = 1.0;
@@ -406,7 +464,7 @@ float4 marchCloudsC(float3 rayOrigin, float3 rayDirection, float2 rayNearFar, fl
     float transmittanceSum = 0.0;
 
     float maxRayDist = rayNearFar.y - rayNearFar.x;
-    float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;
+    float stepSize = cloudMinStep + (perspectiveStepScale - 1.0) * rayNearFar.x;
     float rayDistance = stepSize * jitter * 2.0;
     int iters = (int)cloudIters;
 
@@ -435,23 +493,29 @@ float4 marchCloudsC(float3 rayOrigin, float3 rayDirection, float2 rayNearFar, fl
         MediaSample media = sampleMediaC(weather, position, uv, mipLevel, jitter);
 
         if (media.extinction > minExtinction) {
-            // Sun+sky irradiance at this height (non-accurate path: lerp of precomputed
-            // min/max-height values, computed once in the PS prologue).
-            float alpha = remapC1(height, cloudMinHeight, cloudMaxHeight);
-            float3 skyIrradiance = lerp(cloudsIrrMinSky, cloudsIrrMaxSky, alpha);
-            float3 sunIrradiance = lerp(cloudsIrrMinSun, cloudsIrrMaxSun, alpha);
+            float3 skyIrradiance; float3 sunIrradiance;
+            if (cloudAccurate > 0.5) {
+                // ACCURATE_SUN_SKY_LIGHT: per-sample Bruneton irradiance.
+                sunIrradiance = GetSunAndSkyScalarIrradianceLum(
+                    position * meterToUnit, sunShaderDir, skyIrradiance);
+            } else {
+                float alpha = remapC1(height, g_minH, g_maxH);
+                skyIrradiance = lerp(cloudsIrrMinSky, cloudsIrrMaxSky, alpha);
+                sunIrradiance = lerp(cloudsIrrMinSun, cloudsIrrMaxSun, alpha);
+            }
             float3 surfaceNormal = normalize(position);
 
             float opticalDepth = marchOpticalDepthC(position, sunShaderDir,
-                                                    maxIterationCountToSun, mipLevel, jitter);
+                                                    (int)cloudSunSteps, mipLevel, jitter);
             // (Beer Shadow Map contribution dropped -- see class doc.)
 
             float3 radiance = sunIrradiance * approximateMultipleScattering(opticalDepth, cosTheta);
 
             // GROUND_BOUNCE
-            if (height < shadowTopHeight && mipLevel < 0.5) {
+            if (height < g_shadowTop && mipLevel < 0.5 && cloudGroundSteps > 0.5) {
                 float3 groundRadiance = approximateRadianceFromGroundC(
-                    position, surfaceNormal, height, mipLevel, jitter, sunShaderDir);
+                    position, surfaceNormal, height, mipLevel, jitter, sunShaderDir,
+                    gndSun, gndSky);
                 radiance += groundRadiance * RECIPROCAL_PI4 * groundBounceScale;
             }
 
@@ -485,33 +549,69 @@ float4 marchCloudsC(float3 rayOrigin, float3 rayDirection, float2 rayNearFar, fl
                   remapC1(transmittanceIntegral, 1.0, minTransmittanceC));
 }
 
+// ---------------- haze (clouds.frag approximateHaze; shadowLength = 0) ----------------
+float4 approximateHazeC(float3 rayOrigin, float3 rayDirection, float maxRayDistance,
+                        float cosTheta, float cameraHeight, float3 gndSun, float3 gndSky) {
+    float modulation = remapC1(cloudCoverage, 0.2, 0.4);
+    float density = modulation * cloudHazeDensity * exp(-cameraHeight * hazeExponent);
+    if (density < 1e-7) return float4(0.0, 0.0, 0.0, 0.0);
+
+    float3 normalAtOrigin = normalize(rayOrigin);
+    float3 normalAtHorizon = (rayOrigin - dot(rayOrigin, rayDirection) * rayDirection) / bottomRadiusM;
+    float alpha = remapC1(dot(normalAtOrigin, normalAtHorizon), 0.9, 1.0);
+    float3 normal = lerp(normalAtOrigin, normalAtHorizon, alpha);
+
+    float angle = max(dot(normal, rayDirection), 1e-5);
+    float exponent = angle * hazeExponent;
+    float linearTerm = density / hazeExponent / angle;
+
+    float expTerm = 1.0 - exp(-maxRayDistance * exponent);
+    float opticalDepth = expTerm * linearTerm;
+    float transmittance = saturate(1.0 - exp(-opticalDepth));
+
+    float3 inscatter = gndSun * cloudPhase(cosTheta, 1.0) * transmittance;
+    inscatter += gndSky * RECIPROCAL_PI4 * skyLightScale * transmittance;
+    inscatter *= hazeScatteringCoefficient / (hazeAbsorptionCoefficient + hazeScatteringCoefficient);
+    return float4(inscatter, transmittance);
+}
+
 // ---------------- ray setup (clouds.frag main) ----------------
 float2 getCloudRayNearFar(float3 cameraECEFm, float3 rayDirection, float cameraHeight,
-                          bool hitsGroundC) {
+                          bool hitsGroundC, out float2 hazeNearFar) {
     float4 first, second;
     raySphereIntersections4(cameraECEFm, rayDirection,
-        bottomRadiusM + float4(0.0, cloudMinHeight, cloudMaxHeight, shadowTopHeight),
+        bottomRadiusM + float4(0.0, g_minH, g_maxH, g_shadowTop),
         first, second);
     float2 nearFar;
-    if (cameraHeight < cloudMinHeight) {
+    if (cameraHeight < g_minH) {
         if (hitsGroundC) {
             nearFar = float2(-1.0, -1.0);
         } else {
             nearFar = float2(second.y, second.z);
             nearFar.y = min(nearFar.y, cloudMaxRayDistance);
         }
-    } else if (cameraHeight < cloudMaxHeight) {
+    } else if (cameraHeight < g_maxH) {
         nearFar = hitsGroundC ? float2(cloudCameraNear, first.y)
                               : float2(cloudCameraNear, second.z);
     } else {
         nearFar = float2(first.z, second.z);
         if (hitsGroundC) nearFar.y = first.y;
     }
+    // haze near/far (reference getHazeRayNearFar)
+    if (cameraHeight < g_maxH) {
+        hazeNearFar = hitsGroundC ? float2(cloudCameraNear, first.x)
+                                  : float2(cloudCameraNear, second.z);
+    } else {
+        hazeNearFar = float2(cloudCameraNear, second.z);
+        if (hitsGroundC) hazeNearFar.y = first.x;
+    }
     return nearFar;
 }
 
 // ---------------- pixel shaders ----------------
 float4 PSClouds(VSOut i) : SV_TARGET {
+    selectLayers(cloudStorm > 0.5);
+
     // Camera ray -- identical reconstruction to PSAtmosphere (baseline raymode).
     float2 ndc = float2(i.uv.x * 2.0 - 1.0, 1.0 - i.uv.y * 2.0);
     float4 clipP = float4(ndc, 1.0, 1.0);
@@ -536,47 +636,70 @@ float4 PSClouds(VSOut i) : SV_TARGET {
     bool hitsGroundC = muE < 0.0 &&
         rE * rE * (muE * muE - 1.0) + bottomRadiusM * bottomRadiusM >= 0.0;
 
-    float2 rayNearFar = getCloudRayNearFar(cameraECEFm, dirShader, cameraHeight, hitsGroundC);
-    if (rayNearFar.x < 0.0 || rayNearFar.y < 0.0 || rayNearFar.y <= rayNearFar.x)
-        return float4(0.0, 0.0, 0.0, 0.0);
+    float2 hazeNearFar;
+    float2 rayNearFar = getCloudRayNearFar(cameraECEFm, dirShader, cameraHeight, hitsGroundC,
+                                           hazeNearFar);
+
+    // Ground/sky irradiance at the camera (haze + non-accurate fallbacks).
+    float3 gndSky;
+    float3 gndSun = GetSunAndSkyScalarIrradianceLum(cameraECEFm * meterToUnit, sunShader, gndSky);
 
     // STBN jitter (takram stbn.bin: 128x128 xy, 64 frame slices).
     float stbn = stbnTex.SampleLevel(samWrap,
         float3(i.pos.xy, fmod(cloudFrame, 64.0)) / float3(128.0, 128.0, 64.0), 0.0);
 
-    float3 rayOrigin = rayNearFar.x * dirShader + cameraECEFm;
-    float2 globeUv = getGlobeUv(rayOrigin);
-    float mipLevel = getMipLevelCloud(globeUv * localWeatherRepeat);
-    mipLevel = lerp(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / cloudMaxHeight));
+    float4 color = float4(0.0, 0.0, 0.0, 0.0);
+    bool marchable = rayNearFar.x >= 0.0 && rayNearFar.y > rayNearFar.x;
+    if (marchable) {
+        float3 rayOrigin = rayNearFar.x * dirShader + cameraECEFm;
+        float2 globeUv = getGlobeUv(rayOrigin);
+        float mipLevel = getMipLevelCloud(globeUv * localWeatherRepeat);
+        mipLevel = lerp(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / g_maxH));
 
-    // Per-pixel sun/sky irradiance at the cloud min/max heights (clouds.vert
-    // sampleSunSkyIrradiance -- effectively constant across the fullscreen quad).
-    float3 surfaceNormalCam = normalize(cameraECEFm);
-    float2 radiiKm = (bottomRadiusM + float2(cloudMinHeight, cloudMaxHeight)) * meterToUnit;
-    float3 irrMinSky, irrMaxSky;
-    float3 irrMinSun = GetSunAndSkyScalarIrradianceLum(surfaceNormalCam * radiiKm.x, sunShader, irrMinSky);
-    float3 irrMaxSun = GetSunAndSkyScalarIrradianceLum(surfaceNormalCam * radiiKm.y, sunShader, irrMaxSky);
+        // Sun/sky irradiance at the cloud min/max heights (non-accurate fallback path).
+        float3 surfaceNormalCam = normalize(cameraECEFm);
+        float2 radiiKm = (bottomRadiusM + float2(g_minH, g_maxH)) * meterToUnit;
+        float3 irrMinSky = float3(0.0, 0.0, 0.0), irrMaxSky = float3(0.0, 0.0, 0.0);
+        float3 irrMinSun = float3(0.0, 0.0, 0.0), irrMaxSun = float3(0.0, 0.0, 0.0);
+        if (cloudAccurate < 0.5) {
+            irrMinSun = GetSunAndSkyScalarIrradianceLum(surfaceNormalCam * radiiKm.x, sunShader, irrMinSky);
+            irrMaxSun = GetSunAndSkyScalarIrradianceLum(surfaceNormalCam * radiiKm.y, sunShader, irrMaxSky);
+        }
 
-    float frontDepthM;
-    float4 color = marchCloudsC(rayOrigin, dirShader, rayNearFar, cosTheta, stbn,
-                                pow(2.0, mipLevel), sunShader,
-                                irrMinSun, irrMinSky, irrMaxSun, irrMaxSky, frontDepthM);
+        float frontDepthM;
+        color = marchCloudsC(rayOrigin, dirShader, rayNearFar, cosTheta, stbn,
+                             pow(2.0, mipLevel), sunShader,
+                             irrMinSun, irrMinSky, irrMaxSun, irrMaxSky,
+                             gndSun, gndSky, frontDepthM);
 
-    if (frontDepthM >= 0.0) {
-        // Aerial perspective between the camera and the cloud front.
-        float frontDepth = rayNearFar.x + frontDepthM;
-        float3 frontPosition = cameraECEFm + frontDepth * dirShader;
-        float3 apTransmittance;
-        float3 inscatter = GetSkyRadianceToPointLum(cameraECEFm * meterToUnit,
-                                                    frontPosition * meterToUnit,
-                                                    sunShader, apTransmittance);
-        // AP debug bisection: 7 = inscatter only, 8 = transmittance only, 9=front depth.
-        if (outputMode > 6.5 && outputMode < 7.5) return float4(inscatter, 1.0);
-        if (outputMode > 7.5 && outputMode < 8.5) return float4(apTransmittance, 1.0);
-        if (outputMode > 8.5) return float4(frontDepth.xxx / cloudMaxRayDistance, 1.0);
-        color.rgb = color.rgb * apTransmittance + inscatter * color.a;
+        if (frontDepthM >= 0.0) {
+            // Aerial perspective between the camera and the cloud front.
+            float frontDepth = rayNearFar.x + frontDepthM;
+            float3 frontPosition = cameraECEFm + frontDepth * dirShader;
+            float3 apTransmittance;
+            float3 inscatter = GetSkyRadianceToPointLum(cameraECEFm * meterToUnit,
+                                                        frontPosition * meterToUnit,
+                                                        sunShader, apTransmittance);
+            // AP debug bisection: 7 = inscatter only, 8 = transmittance only, 9 = front depth.
+            if (outputMode > 6.5 && outputMode < 7.5) return float4(inscatter, 1.0);
+            if (outputMode > 7.5 && outputMode < 8.5) return float4(apTransmittance, 1.0);
+            if (outputMode > 8.5) return float4(frontDepth.xxx / cloudMaxRayDistance, 1.0);
+            color.rgb = color.rgb * apTransmittance + inscatter * color.a;
+
+            // Clamp the haze ray at the cloud front (reference: lerp by alpha).
+            hazeNearFar.y = lerp(hazeNearFar.y, min(frontDepth, hazeNearFar.y), color.a);
+        }
     }
-    return color;   // premultiplied HDR radiance + alpha, into the half-res cloud RT
+
+    // HAZE (cloudHazeDensity = 0 disables; storm look raises it 10x).
+    if (cloudHazeDensity > 0.0 && hazeNearFar.y > hazeNearFar.x) {
+        float4 haze = approximateHazeC(cloudCameraNear * dirShader + cameraECEFm, dirShader,
+                                       hazeNearFar.y - hazeNearFar.x, cosTheta, cameraHeight,
+                                       gndSun, gndSky);
+        color.rgb = lerp(color.rgb, haze.rgb, haze.a);
+        color.a = color.a * (1.0 - haze.a) + haze.a;
+    }
+    return color;   // premultiplied HDR radiance + alpha, into the cloud RT
 }
 
 // Composite the cloud RT over the sky (premultiplied-over blend state is set by the host).

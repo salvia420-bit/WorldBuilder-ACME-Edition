@@ -51,20 +51,26 @@ def main():
         assert len(raw) == w * h * d, (name, len(raw))
         write_bin(os.path.join(out, name), raw, w, h, d, 1, 1)
 
-    # --- local weather: RGBA8 + box-filtered mip chain ---
-    img = Image.open(os.path.join(src, "local_weather.png")).convert("RGBA")
-    assert img.size == (512, 512), img.size
-    levels = []
-    cur = np.asarray(img, dtype=np.uint8)
-    levels.append(cur.tobytes())
-    a = cur.astype(np.float32)
-    size = 512
-    while size > 1:
-        size //= 2
-        a = (a[0::2, 0::2] + a[0::2, 1::2] + a[1::2, 0::2] + a[1::2, 1::2]) * 0.25
-        levels.append(a.astype(np.uint8).tobytes())
-    payload = b"".join(levels)
-    write_bin(os.path.join(out, "local_weather.bin"), payload, 512, 512, 1, 4, 1, mips=len(levels))
+    # --- 2D RGBA maps: RGBA8 + box-filtered mip chain ---
+    def bake_png(name_png, name_bin, expect=None):
+        img = Image.open(os.path.join(src, name_png)).convert("RGBA")
+        if expect: assert img.size == expect, (name_png, img.size)
+        w, h = img.size
+        levels = []
+        cur = np.asarray(img, dtype=np.uint8)
+        levels.append(cur.tobytes())
+        a = cur.astype(np.float32)
+        size = min(w, h)
+        while size > 1:
+            size //= 2
+            a = (a[0::2, 0::2] + a[0::2, 1::2] + a[1::2, 0::2] + a[1::2, 1::2]) * 0.25
+            levels.append(a.astype(np.uint8).tobytes())
+        write_bin(os.path.join(out, name_bin), b"".join(levels), w, h, 1, 4, 1, mips=len(levels))
+
+    bake_png("local_weather.png", "local_weather.bin", (512, 512))
+    bake_png("local_weather_nasa.png", "local_weather_nasa.bin", (512, 512))
+    bake_png("local_weather_dereth.png", "local_weather_dereth.bin", (512, 512))
+    bake_png("turbulence.png", "turbulence.bin", (128, 128))
     print("done.")
 
 

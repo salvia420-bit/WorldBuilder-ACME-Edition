@@ -38,8 +38,19 @@ namespace AcmeSky.Services.LiveSky {
         public float Stars = 1f;   // star-field base intensity (0 = off); night fade applies on top
         public float Clouds = 1f;      // volumetric clouds on/off
         public float CloudCover = 0.5f; // takram coverage (holtburger FAIR = 0.5)
-        public float CloudIters = 300f; // primary raymarch iteration cap
-        public float CloudRes = 0.5f;   // cloud RT resolution scale (of the main viewport)
+        public float CloudCoverStorm = 0.55f; // coverage under the STORM look (cloud_storm_look.js)
+        public float CloudIters = 500f; // primary raymarch iteration cap (takram high preset)
+        public float CloudRes = 1f;     // cloud RT resolution scale (of the main viewport)
+        public float CloudMinStep = 50f;   // primary march min step (m); 10 = takram ultra
+        public float CloudSunSteps = 2f;   // secondary sun march iterations
+        public float CloudGroundSteps = 3f;// ground-bounce march iterations (0 = off)
+        public float CloudAccurate = 1f;   // 1 = ACCURATE_SUN_SKY_LIGHT (per-sample irradiance)
+        public float CloudTurb = 1f;       // 1 = TURBULENCE displacement
+        public float CloudHaze = 1f;       // 1 = takram haze (3e-5 fair / 3e-4 storm)
+        public string WxMap = "nasa";      // local weather map: default | nasa | dereth (init-time)
+        public float Storm = -1f;          // -1 = auto (client weather flag), 0 = force fair, 1 = force storm
+        public float Dump;                 // >0: write one skydump-N.bmp per second (rotating 8) to C:\Temp\acdt
+        public float CamPitch;             // deg: extra camera pitch applied to the SKY matrices (capture aid; 0 = off)
 
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
@@ -118,8 +129,19 @@ namespace AcmeSky.Services.LiveSky {
                 case "stars": if (F(val, out var st)) Stars = Math.Clamp(st, 0f, 10f); break;
                 case "clouds": if (F(val, out var cl)) Clouds = Math.Clamp(cl, 0f, 1f); break;
                 case "cloudcover": if (F(val, out var cc)) CloudCover = Math.Clamp(cc, 0f, 1f); break;
+                case "cloudcoverstorm": if (F(val, out var cs2)) CloudCoverStorm = Math.Clamp(cs2, 0f, 1f); break;
                 case "clouditers": if (F(val, out var ci)) CloudIters = Math.Clamp(ci, 0f, 500f); break;
                 case "cloudres": if (F(val, out var cr)) CloudRes = Math.Clamp(cr, 0.1f, 1f); break;
+                case "cloudminstep": if (F(val, out var cm)) CloudMinStep = Math.Clamp(cm, 5f, 500f); break;
+                case "cloudsunsteps": if (F(val, out var cu)) CloudSunSteps = Math.Clamp(cu, 0f, 4f); break;
+                case "cloudgroundsteps": if (F(val, out var cg)) CloudGroundSteps = Math.Clamp(cg, 0f, 4f); break;
+                case "cloudaccurate": if (F(val, out var ca)) CloudAccurate = Math.Clamp(ca, 0f, 1f); break;
+                case "cloudturb": if (F(val, out var ct)) CloudTurb = Math.Clamp(ct, 0f, 1f); break;
+                case "cloudhaze": if (F(val, out var ch)) CloudHaze = Math.Clamp(ch, 0f, 1f); break;
+                case "wxmap": WxMap = val.ToLowerInvariant(); break;   // default | nasa | dereth (init-time)
+                case "storm": if (F(val, out var sm)) Storm = Math.Clamp(sm, -1f, 1f); break;
+                case "dump": if (F(val, out var dp)) Dump = Math.Clamp(dp, 0f, 1f); break;
+                case "campitch": if (F(val, out var cp)) CamPitch = Math.Clamp(cp, -89f, 89f); break;
             }
         }
 

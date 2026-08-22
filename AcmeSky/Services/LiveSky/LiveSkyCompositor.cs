@@ -56,7 +56,7 @@ namespace AcmeSky.Services.LiveSky {
         // --- M2 clouds ---
         private ID3D11PixelShader? _psClouds;         // raymarch into the half-res cloud RT
         private ID3D11PixelShader? _psCloudComposite; // premultiplied-over composite onto the sky
-        private SkyLut? _texWeather, _texShape, _texShapeDetail, _texStbn;
+        private SkyLut? _texWeather, _texShape, _texShapeDetail, _texStbn, _texTurbulence;
         private ID3D11SamplerState? _samplerWrap;
         private ID3D11BlendState? _blendPremul;
         private ID3D11Texture2D? _cloudRt;
@@ -101,6 +101,7 @@ namespace AcmeSky.Services.LiveSky {
         private long _frameCount;
         private float _lastSunPitchDeg;
         private float _lastTimeOfDay = -1f;   // resolved 0..1 used for the sun (post-fallback/ofs)
+        private bool _lastStorm;              // client weather flag as of the last frame
         // last-read sample pixels (post-tonemap BGRA), for the throttled diagnostic line.
         private uint _sampZenith, _sampMid, _sampHorizon;
         // sparse bright-pixel count (every 8th px of every 8th row, any channel > 96):
@@ -156,6 +157,8 @@ namespace AcmeSky.Services.LiveSky {
             // --- M2 clouds ---
             public Vector2 CloudWeatherOfs; public float CloudCoverage; public float CloudFrame;                            // 16
             public Vector2 CloudRes; public float CloudIters; public float Pad9;                                            // 16
+            public float CloudMinStep; public float CloudSunSteps; public float CloudGroundSteps; public float CloudAccurate; // 16
+            public float CloudTurb; public float CloudStorm; public float CloudHazeDensity; public float PadA;                // 16
         }
 
         /// <summary>Screen-space textured quad vertex: D3DFVF_XYZRHW | D3DFVF_TEX1 (stride 24).</summary>
@@ -399,10 +402,20 @@ namespace AcmeSky.Services.LiveSky {
                     ShaderFlags.OptimizationLevel3, EffectFlags.None);
                 _psCloudComposite = _dev.CreatePixelShader(pcb.Span, null);
 
-                _texWeather = SkyLut.Load(_dev, Path.Combine(_cloudDir, "local_weather.bin"));
+                // Weather map source (sky.cfg `wxmap`, init-time): nasa = NASA Blue Marble crop
+                // (A = real storm cores — the owner's holtburger rig), dereth = biome-anchored.
+                string wxFile = _cfg.WxMap switch {
+                    "nasa" => "local_weather_nasa.bin",
+                    "dereth" => "local_weather_dereth.bin",
+                    _ => "local_weather.bin",
+                };
+                string wxPath = Path.Combine(_cloudDir, wxFile);
+                if (!File.Exists(wxPath)) wxPath = Path.Combine(_cloudDir, "local_weather.bin");
+                _texWeather = SkyLut.Load(_dev, wxPath);
                 _texShape = SkyLut.Load(_dev, Path.Combine(_cloudDir, "shape.bin"));
                 _texShapeDetail = SkyLut.Load(_dev, Path.Combine(_cloudDir, "shape_detail.bin"));
                 _texStbn = SkyLut.Load(_dev, Path.Combine(_cloudDir, "stbn.bin"));
+                _texTurbulence = SkyLut.Load(_dev, Path.Combine(_cloudDir, "turbulence.bin"));
 
                 var blendDesc = new BlendDescription();
                 blendDesc.RenderTarget[0] = new RenderTargetBlendDescription {
@@ -419,9 +432,11 @@ namespace AcmeSky.Services.LiveSky {
 
                 _cloudsUsable = true;
                 _log.LogInformation(
-                    "acmesky: LIVE clouds ready — weather {WW}x{WH} (mips), shape {S}^3, detail {D}^3, stbn {BW}x{BH}x{BD}",
-                    _texWeather.Width, _texWeather.Height, _texShape.Width, _texShapeDetail.Width,
-                    _texStbn.Width, _texStbn.Height, _texStbn.Depth);
+                    "acmesky: LIVE clouds ready — wx='{Wx}' ({WW}x{WH}, mips), shape {S}^3, detail {D}^3, " +
+                    "stbn {BW}x{BH}x{BD}, turbulence {TW}x{TH}",
+                    _texWeather.Name, _texWeather.Width, _texWeather.Height, _texShape.Width,
+                    _texShapeDetail.Width, _texStbn.Width, _texStbn.Height, _texStbn.Depth,
+                    _texTurbulence.Width, _texTurbulence.Height);
             }
             catch (Exception ex) {
                 _cloudsUsable = false;
@@ -432,6 +447,7 @@ namespace AcmeSky.Services.LiveSky {
                 _texShape?.Dispose(); _texShape = null;
                 _texShapeDetail?.Dispose(); _texShapeDetail = null;
                 _texStbn?.Dispose(); _texStbn = null;
+                _texTurbulence?.Dispose(); _texTurbulence = null;
                 _blendPremul?.Dispose(); _blendPremul = null;
             }
         }
@@ -566,6 +582,7 @@ namespace AcmeSky.Services.LiveSky {
                 _ctx.PSSetShaderResources(4, new[] {
                     _texWeather!.Srv!, _texShape!.Srv!, _texShapeDetail!.Srv!, _texStbn!.Srv!,
                 });
+                _ctx.PSSetShaderResource(9, _texTurbulence!.Srv!);
                 _ctx.Draw(3, 0);
 
                 // pass B: composite over the main sky RT
@@ -602,6 +619,11 @@ namespace AcmeSky.Services.LiveSky {
                 }
                 _sampBright = bright;
 
+                // sky.cfg `dump=1`: write the EXACT composited backdrop (this readback) as a
+                // BMP once per second — ground-truth 1070-rendered frames through the live
+                // game camera, immune to the stale-GDI screenshot problem.
+                MaybeDumpFrame(s, srcPitch, w, h);
+
                 var tex = new Texture9(_d3d9tex);
                 if (tex.LockRect(0, out var locked, D3D9.Lock.Discard)) {
                     int bytesPerRow = w * 4; // BGRA8 both sides
@@ -627,6 +649,42 @@ namespace AcmeSky.Services.LiveSky {
             finally {
                 _ctx.Unmap(_staging!, 0);
             }
+        }
+
+        private long _lastDumpTicks = -Stopwatch.Frequency;
+        private int _dumpIndex;
+
+        /// <summary>Write the readback buffer as a 32bpp BMP (rotating skydump-0..7.bmp).</summary>
+        private unsafe void MaybeDumpFrame(byte* s, int pitch, int w, int h) {
+            if (_cfg.Dump <= 0f) return;
+            long now = _clock.ElapsedTicks;
+            if (now - _lastDumpTicks < Stopwatch.Frequency) return;
+            _lastDumpTicks = now;
+            string path = $@"C:\Temp\acdt\skydump-{_dumpIndex++ % 8}.bmp";
+            try {
+                int rowBytes = w * 4;
+                var file = new byte[14 + 40 + rowBytes * h];
+                int size = file.Length;
+                file[0] = (byte)'B'; file[1] = (byte)'M';
+                BitConverter.GetBytes(size).CopyTo(file, 2);
+                BitConverter.GetBytes(54).CopyTo(file, 10);          // pixel data offset
+                BitConverter.GetBytes(40).CopyTo(file, 14);          // BITMAPINFOHEADER
+                BitConverter.GetBytes(w).CopyTo(file, 18);
+                BitConverter.GetBytes(h).CopyTo(file, 22);           // positive = bottom-up
+                BitConverter.GetBytes((short)1).CopyTo(file, 26);
+                BitConverter.GetBytes((short)32).CopyTo(file, 28);
+                BitConverter.GetBytes(rowBytes * h).CopyTo(file, 34);
+                fixed (byte* dst = file) {
+                    for (int y = 0; y < h; y++) {
+                        Buffer.MemoryCopy(s + (long)y * pitch,
+                                          dst + 54 + (long)(h - 1 - y) * rowBytes,
+                                          rowBytes, rowBytes);
+                    }
+                }
+                File.WriteAllBytes(path, file);
+                _log.LogInformation("acmesky: frame dumped -> {Path}", path);
+            }
+            catch (Exception ex) { LogErrThrottled(ex, "dump"); }
         }
 
         private static unsafe uint SamplePixel(byte* s, int pitch, int x, int y) {
@@ -655,10 +713,16 @@ namespace AcmeSky.Services.LiveSky {
             if (!atmo) return cb;
 
             // Inverse projection/view (row-vector: world = clip * invProj * invView).
+            // sky.cfg `campitch` (deg) pitches the SKY camera up — a capture aid for headless
+            // shots (the game camera itself ignores injected keys); everything (atmosphere,
+            // stars, clouds) stays consistent because it edits the one view matrix they share.
+            Matrix4x4 wv = cam.WorldToView;
+            if (_cfg.CamPitch != 0f)
+                wv = wv * Matrix4x4.CreateRotationX(_cfg.CamPitch * MathF.PI / 180f);
             if (!Matrix4x4.Invert(cam.ViewToClip, out cb.InvProj)) cb.InvProj = Matrix4x4.Identity;
-            if (!Matrix4x4.Invert(cam.WorldToView, out cb.InvView)) cb.InvView = Matrix4x4.Identity;
+            if (!Matrix4x4.Invert(wv, out cb.InvView)) cb.InvView = Matrix4x4.Identity;
             cb.CameraPosAC = cam.WorldPos;
-            cb.WorldToClip = cam.WorldToView * cam.ViewToClip;   // forward, for the star points
+            cb.WorldToClip = wv * cam.ViewToClip;   // forward, for the star points
             cb.EciToShader = SkySunModel.EciToShader();
             cb.StarMagMin = -2f; cb.StarMagMax = 8f;
 
@@ -672,11 +736,23 @@ namespace AcmeSky.Services.LiveSky {
             }
             _lastWindSeconds = nowS;
             cb.CloudWeatherOfs = _weatherOfs;
-            cb.CloudCoverage = _cfg.CloudCover;
+            // STORM-reactive look: the client's own weather flag (GameSky::s_weatherEnabled)
+            // is the retail analog of holtburger's DayGroup is_storm signal. sky.cfg `storm`
+            // overrides for testing (-1 = auto).
+            bool storm = _cfg.Storm < -0.5f ? ClientState.IsWeatherEnabled() : _cfg.Storm > 0.5f;
+            _lastStorm = storm;
+            cb.CloudStorm = storm ? 1f : 0f;
+            cb.CloudCoverage = storm ? _cfg.CloudCoverStorm : _cfg.CloudCover;
             cb.CloudFrame = (++_cloudFrameIndex) % 64;
             float scale = Math.Clamp(_cfg.CloudRes, 0.1f, 1f);
             cb.CloudRes = new Vector2(MathF.Max(64f, w * scale), MathF.Max(36f, h * scale));
             cb.CloudIters = _cfg.Clouds > 0f ? _cfg.CloudIters : 0f;
+            cb.CloudMinStep = _cfg.CloudMinStep;
+            cb.CloudSunSteps = _cfg.CloudSunSteps;
+            cb.CloudGroundSteps = _cfg.CloudGroundSteps;
+            cb.CloudAccurate = _cfg.CloudAccurate;
+            cb.CloudTurb = _cfg.CloudTurb;
+            cb.CloudHazeDensity = _cfg.CloudHaze > 0f ? (storm ? 3e-4f : 3e-5f) : 0f;
 
             // Time-driven sun/moon. sky.cfg `time=` (0..1) overrides the client clock -- used to force a
             // time of day for evaluation/tuning (and as a fallback while the client's
@@ -763,12 +839,12 @@ namespace AcmeSky.Services.LiveSky {
             if (atmo) {
                 _log.LogInformation(
                     "acmesky: LIVE frame #{N} vp={W}x{H} atmosphere rayMode={Ray} swz={Swz} output={Out} axis='{Axis}' " +
-                    "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg stars={Stars} clouds={Clouds} " +
+                    "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg stars={Stars} clouds={Clouds} storm={Storm} " +
                     "samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA) bright={B}]",
                     n, w, h, _cfg.RayMode, _cfg.WorldSwizzle, _cfg.Output, _cfg.Axis,
                     _lastTimeOfDay, ClientState.GetTimeOfDay(), _lastSunPitchDeg,
                     _starCount > 0 ? _cfg.Stars : -1f,
-                    _cloudsUsable ? _cfg.Clouds : -1f,
+                    _cloudsUsable ? _cfg.Clouds : -1f, _lastStorm ? 1 : 0,
                     _sampZenith, _sampMid, _sampHorizon, _sampBright);
             } else {
                 _log.LogInformation(
@@ -832,6 +908,7 @@ namespace AcmeSky.Services.LiveSky {
             _texShape?.Dispose(); _texShape = null;
             _texShapeDetail?.Dispose(); _texShapeDetail = null;
             _texStbn?.Dispose(); _texStbn = null;
+            _texTurbulence?.Dispose(); _texTurbulence = null;
             _blendPremul?.Dispose(); _blendPremul = null;
             _samplerWrap?.Dispose(); _samplerWrap = null;
             _cloudsUsable = false;

@@ -59,6 +59,8 @@ cbuffer SkyParams : register(b0) {
     // --- M2 clouds ---
     float2 cloudWeatherOfs;  float cloudCoverage; float cloudFrame;   // wind-accumulated weather offset, coverage, frame idx (STBN z)
     float2 cloudRes;         float cloudIters;    float _pad9;        // cloud RT resolution, primary march iteration cap
+    float cloudMinStep; float cloudSunSteps; float cloudGroundSteps; float cloudAccurate; // quality (takram preset knobs)
+    float cloudTurb;    float cloudStorm;    float cloudHazeDensity; float _padA;         // turbulence, storm look, haze
 };
 
 // ==========================================================================
