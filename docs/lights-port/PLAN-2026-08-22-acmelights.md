@@ -127,10 +127,22 @@ most D3D9 HW T&L caps at 8; ROI is in better selection, not more slots.
 9. [x] P2: SetWorldAmbientLight detour installed + running (ambientfix=1; ambient reads r≈g≈b,
        no red bias). Dungeon-ambient override wired (untested indoors, same blocker as #8).
 10. [ ] P3: object tracker (portal/projectile/glow taxonomy tables) + set_viewer post-hook
-        injection of plugin dynamics; impact flash decay.
-11. [ ] P4: minimize_object_lighting replacement (importance top-8) + optional specular/penumbra.
-12. [ ] P5: pre-UI hook point research + bloom chain (bright-pass, blur, resolve) + knobs.
-13. [ ] P6: frame-dump validation harness + captures + taildrop set + handoff/commit.
+        injection of plugin dynamics; impact flash decay. NOT STARTED — needs an object-enumeration
+        research pass (which client object tables list visible portals/projectiles/glowing creatures
+        + their per-frame world positions + a setup-id→color taxonomy) AND live eye-tuning. This is
+        the user's headline "portals/war-spells/fragments glow" ask; it is a real sub-project best
+        done with the owner able to see results, not blind on their box.
+11. [ ] P4: minimize_object_lighting replacement (importance top-8). NOT STARTED — exact
+        memory-patching; must be eye-validated indoors before shipping.
+12. [~] P5: bloom — hook point RESEARCHED (research-bloom-hook-point.md), shaders + compositor +
+        interop BUILT, pipeline executes ONE frame correctly live. BLOCKED: client faults after
+        frame 1 through both manual and full-StateBlock restore -> leading suspect is StretchRect
+        called inside the client's open BeginScene/EndScene (documented D3D9 restriction; fault
+        surfaces at Present). Needs a capture method that doesn't StretchRect in-scene (e.g. hook
+        RenderDeviceD3D::EndScene-adjacent AFTER the client's EndScene but before Flip and Begin
+        a private pass, or render the world into a plugin RT from a BeginScene hook) — a design
+        change to validate with a debugger/eyes. Bloom ships DEFAULT OFF. Do NOT set bloom=1.
+13. [ ] P6: validation harness + captures + taildrop. Pending P3/P5 completion.
 14. [ ] Mission wrap-up (non-lights, from the /loop directive): AcmeRagdoll death-variety
         pass; icon probe (designed, unrun); remaining EOD-handoff DAT-line items that are
         autonomously completable; BSM/light-shafts noted as the last sky gap.
