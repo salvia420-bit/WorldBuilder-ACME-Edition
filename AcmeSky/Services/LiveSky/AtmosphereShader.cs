@@ -18,6 +18,15 @@ namespace AcmeSky.Services.LiveSky {
     /// Coordinate convention (documented so the client can be corrected if the sky is
     /// upside-down / sideways):
     ///   AC world space is X=east, Y=north, Z=up (right-handed, z-up).
+    ///   ⚠ BUT the client's D3D RENDER world (what WorldToView/ViewToClip actually transform)
+    ///   is that world with y and z SWAPPED (Y-up). Decomp proof: Render::update_viewpoint
+    ///   builds the view matrix with columns (Xaxis, Zaxis, Yaxis) / translation (p.x,p.z,p.y),
+    ///   and PrimD3DRender::ScreenToViewTransform (the client's own pick-ray unproject) assigns
+    ///   its output components to dir->x, dir->z, dir->y. The pixel shader therefore swizzles
+    ///   the reconstructed ray and camera .xzy back to AC (E,N,U) before <c>acToShader</c>
+    ///   (worldSwizzle knob, default ON). This was the "sky rolled 90°, up points north" bug —
+    ///   and its horizon sliced the screen vertically, which is what looked like a separate
+    ///   "scattering seam" (CPU replica: tools shipped in scratch skysim reproduced both).
     ///   The shader/three.js space is y-up ECEF; the canonical AC->three map is
     ///   (x,y,z)_ac -> (x, z, -y)_three  (east->x, up->y, north->-z), matching
     ///   scene3d/sun_direction.js. That is <c>acToShader</c> mode 0 (the default).
@@ -42,7 +51,7 @@ cbuffer SkyParams : register(b0) {
     float2 resolution;    float time; float exposure;
     float bottomRadiusM;  float meterToUnit; float sunAngRadius;  float sunAngRadiusPhys;
     float moonAngRadius;  float lunarScale;  float lutFlipV;      float outputMode;
-    float rayMode;        float _pad3; float _pad4; float _pad5;
+    float rayMode;        float worldSwizzle; float _pad4; float _pad5;
 };
 
 // ==========================================================================
@@ -337,10 +346,19 @@ float4 PSAtmosphere(VSOut i) : SV_TARGET {
     float4 vpos = tProj ? mul(invProj, clip) : mul(clip, invProj);
     vpos /= vpos.w;
     float4 wp = tView ? mul(invView, float4(vpos.xyz, 1.0)) : mul(float4(vpos.xyz, 1.0), invView);
-    float3 dirAC = normalize(wp.xyz - cameraPosAC);
+    // The client's D3D pipeline runs in a Y-UP render world: the AC world with y and z SWAPPED.
+    // Proof: PrimD3DRender::ScreenToViewTransform (acclient.c, the client's own pick-ray
+    // unproject) assigns the three unprojected components to dir->x, dir->z, dir->y, and
+    // Render::update_viewpoint builds WorldToView with columns (Xaxis, Zaxis, Yaxis) and
+    // translation (p.x, p.z, p.y). So wp/cameraPosAC here are (E, U, N); swizzle .xzy maps them
+    // back to AC (E, N, U). worldSwizzle (sky.cfg) = escape hatch, default ON.
+    float3 dirRW = normalize(wp.xyz - cameraPosAC);
+    bool swz = worldSwizzle > 0.5;
+    float3 dirAC = swz ? dirRW.xzy : dirRW;
+    float3 camPosAc = swz ? cameraPosAC.xzy : cameraPosAC;
 
     // AC (E,N,U) -> shader y-up space, then ECEF translate + metre->km.
-    float3 camShader = mul(float4(cameraPosAC, 1.0), acToShader).xyz;
+    float3 camShader = mul(float4(camPosAc, 1.0), acToShader).xyz;
     float3 dirShader = normalize(mul(float4(dirAC, 0.0), acToShader).xyz);
     float3 sunShader = normalize(mul(float4(sunDirAC, 0.0), acToShader).xyz);
     float3 moonShader = normalize(mul(float4(moonDirAC, 0.0), acToShader).xyz);

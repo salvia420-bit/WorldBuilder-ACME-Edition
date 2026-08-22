@@ -95,7 +95,25 @@ pattern on compile/LUT failure rather than crashing). It DOES render a blue dayt
 
 Porting bible (for M2 clouds / M3 stars): **`docs/sky-port/holtburger-sky-porting-spec.md`**.
 
-### 2.4 ⚠ THE TWO OUTSTANDING SKY BUGS (start here next session)
+### 2.4 ✅ RESOLVED 2026-08-21 late session — both "bugs" were ONE bug, fixed + live-validated
+> **The client's D3D render world is the AC world with y and z SWAPPED (Y-up).** Decomp proof:
+> `PrimD3DRender::ScreenToViewTransform` (the client's own pick-ray unproject) assigns its
+> unprojected components to `dir->x, dir->z, dir->y`; `Render::update_viewpoint` builds the view
+> matrix with columns (Xaxis, **Z**axis, **Y**axis) and translation `(p.x, p.z, p.y)`. So the
+> reconstructed "AC" ray had y=up/z=north → up read as north (bug 1), and the atmosphere's
+> horizon sliced the screen vertically — which is what looked like a scattering-math seam
+> (bug 2). No NDC raymode could ever fix a world-side swizzle. Fix: swizzle ray+camera `.xzy`
+> after reconstruction (`worldswizzle=1` in sky.cfg, default ON; raymode 0 is correct).
+> Validated OFFLINE first with a CPU replica of the full shader+LUT pipeline
+> (`AcmeSky/Tools/skysim_replica.py` — reproduced both symptoms and the correct sky), then LIVE
+> on the 1070 via the sample-pixel log: ray-viz up-component falls monotonically down the screen
+> (+0.07/−0.29/−0.61), noon gradient zenith-blue→horizon-milky. Also fixed the same session:
+> throttle timestamps were `long.MinValue` → `now - MinValue` overflows negative → the per-frame
+> log AND the sky.cfg live-reload never fired (this is why no `LIVE frame` lines existed); and
+> the clock (§2.6) — see below. AcmeRedline is NOT contradicted: its verified path reads
+> ModelToWorld during a draw, where the swap is already baked in.
+
+### (historical) the two outstanding sky bugs as diagnosed at EOD
 Diagnosed live on the 1070 with the owner's eyes (screenshots are useless mid-session — see §5):
 
 1. **Ray basis rotated — "up" conflated with world-NORTH, not screen-top.** In the AC ray-viz
@@ -123,7 +141,15 @@ live-reload from **`C:\Temp\acdt\sky.cfg`** once/second (template
 `x,z,-y`), `time` (0..1), `exposure` (default 5). The per-frame `acmesky: LIVE frame …` log prints
 live rayMode/output/axis + sample pixels read from the actual RT (use it, not screenshots).
 
-### 2.6 Client clock is stuck → sky forced to noon
+### 2.6 ✅ RESOLVED — clock fixed: wrong FIELD, not wrong offset
+> `present_time_in_day_unit` is the fraction within the current named time-of-day SEGMENT
+> (Morningtide…), only refreshed at segment boundaries — reading ~0 was correct behavior for
+> the wrong field. The true 0..1 day fraction is `present_time_of_day` (@72), recomputed every
+> `GameTime::UseTime` tick (decomp acclient.c:463395). Live-validated: `clock=0.4970→0.5050`
+> ticking on ACE. sky.cfg gained `timeofs` (phase shift, default 0) in case day-fraction 0 is
+> not midnight on some region calendar. `time=-1` (live clock) is now the deployed default.
+
+### (historical) client clock is stuck → sky forced to noon
 `ClientState.GetTimeOfDay()` reads `present_time_in_day_unit` and returns 0 (offset unresolved),
 pinning the real clock at midnight. Code falls back to midday (`t<=0 → 0.5`) so the atmosphere is
 daytime. Real day/night needs the GameTime offset fixed (or set `time=` in sky.cfg). Not blocking.
@@ -181,16 +207,21 @@ working_directory, EntryPointParameters* {version=1,flags=0,dll_path=injector,en
 ## 4. Remaining work (this workstream + the DAT line)
 
 ### Plugins (this workstream)
-1. **AcmeSky sky fixes (§2.4)** — the up-axis rotation AND the scattering seam. Highest priority
-   to make the atmosphere shippable.
-2. **AcmeSky M2/M3** — port takram clouds (M2) and Yale stars (M3) per the porting spec, after the
-   atmosphere is correct.
-3. **AcmeSky clock** — fix `GetTimeOfDay` (`present_time_in_day_unit` offset) for a real day/night
-   cycle (currently forced to noon).
+1. ~~**AcmeSky sky fixes (§2.4)**~~ ✅ DONE (world swizzle; live-validated on the 1070).
+2. **AcmeSky M2/M3** — port takram clouds (M2) and Yale stars (M3) per the porting spec. NOW the
+   front of this workstream; pre-validate with `AcmeSky/Tools/skysim_replica.py` before box time.
+3. ~~**AcmeSky clock**~~ ✅ DONE (`present_time_of_day`, live-ticking; `timeofs` phase knob added).
+   Remaining nice-to-have: an owner eye-pass on day/night phase alignment (does fraction 0 look
+   like midnight in Dereth) — `timeofs` calibrates if not.
 4. **AcmeRagdoll variety** — the ~25-deaths-per-class pass (deferred by owner).
 
 ### DAT line (from HANDOFF-2026-08-21-r10.md §"Loose ends" + hedonic PLAN §Phase 4)
-- **4.P4 sample eye-test STILL PENDING** — the r10 subdiv-creature close-range check on
+- ⚠ STALE ITEM: the 4.P4 note below was written without seeing HANDOFF-2026-08-21-r10-gate.md —
+  the sample eye-test **PASSED on the 1070** that same day (60 frames, Drudge/Mosswart/Mukkir;
+  Grievver is a CombatPet and refuses @create), and an ACE blocker (compressed GfxObjs) was
+  found+fixed there. r10 is CLEAR for kit assembly from the acefix lineage. Read r10-gate.md's
+  priority list; do not redo the eye-test.
+- ~~**4.P4 sample eye-test STILL PENDING**~~ — the r10 subdiv-creature close-range check on
   `@create 7` Drudge / `@create 8` Mosswart / `@create 49051` Grievver. NOTE: those first two are
   exactly the creatures killed for ragdoll this session, so IF the 1070's
   `D:\ac-dat-test\client_portal.dat` was the r10 portal, the subdiv parts were incidentally on

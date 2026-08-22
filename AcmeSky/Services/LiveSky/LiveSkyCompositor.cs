@@ -69,14 +69,19 @@ namespace AcmeSky.Services.LiveSky {
         private readonly SkyConfig _cfg;
         private Matrix4x4 _acToShader;
         private string _acToShaderAxis = "";
-        private long _lastCfgReloadTicks = long.MinValue;
+        // ⚠ throttle timestamps must NOT be long.MinValue: `now - long.MinValue` overflows
+        // NEGATIVE (x - MinValue == x + MinValue unchecked), so `< Frequency` is always true and
+        // the throttled action never fires — this silently disabled BOTH the per-frame log and
+        // the sky.cfg live reload in the 2026-08-21 build. -Frequency fires immediately, no wrap.
+        private long _lastCfgReloadTicks = -Stopwatch.Frequency;
 
         // --- diagnostics ---
         private bool _firstCompositeLogged;
-        private long _lastFrameLogTicks = long.MinValue;
-        private long _lastErrTicks = long.MinValue;
+        private long _lastFrameLogTicks = -Stopwatch.Frequency;   // see _lastCfgReloadTicks note
+        private long _lastErrTicks = -Stopwatch.Frequency;
         private long _frameCount;
         private float _lastSunPitchDeg;
+        private float _lastTimeOfDay = -1f;   // resolved 0..1 used for the sun (post-fallback/ofs)
         // last-read sample pixels (post-tonemap BGRA), for the throttled diagnostic line.
         private uint _sampZenith, _sampMid, _sampHorizon;
 
@@ -117,7 +122,7 @@ namespace AcmeSky.Services.LiveSky {
             public Vector2 Resolution;  public float Time; public float Exposure;              // 16
             public float BottomRadiusM; public float MeterToUnit; public float SunAngRadius; public float SunAngRadiusPhys; // 16
             public float MoonAngRadius; public float LunarScale; public float LutFlipV; public float OutputMode;            // 16
-            public float RayMode; public float Pad3; public float Pad4; public float Pad5;                                 // 16
+            public float RayMode; public float WorldSwizzle; public float Pad4; public float Pad5;                          // 16
         }
 
         /// <summary>Screen-space textured quad vertex: D3DFVF_XYZRHW | D3DFVF_TEX1 (stride 24).</summary>
@@ -413,6 +418,7 @@ namespace AcmeSky.Services.LiveSky {
                 LutFlipV = _cfg.LutFlipV,
                 OutputMode = _cfg.Output,
                 RayMode = _cfg.RayMode,
+                WorldSwizzle = _cfg.WorldSwizzle,
             };
             if (!atmo) return cb;
 
@@ -427,12 +433,14 @@ namespace AcmeSky.Services.LiveSky {
             // client clock.
             float t = _cfg.ForcedTime;
             if (t < 0f) {
-                t = ClientState.GetTimeOfDay();
-                // The client's present_time_in_day_unit read currently returns 0 (offset unresolved),
-                // which pins the sky at midnight. Until that clock read is fixed, treat a zero/invalid
-                // read as MIDDAY so the atmosphere shows daytime rather than a permanent dark night.
-                if (t <= 0f) t = 0.5f;
+                t = ClientState.GetTimeOfDay();   // present_time_of_day: true 0..1 day fraction
+                if (t < 0f) t = 0.5f;             // no GameTime object yet -> midday
+                else {
+                    t = (t + _cfg.TimeOfs) % 1f;  // optional phase calibration (sky.cfg timeofs)
+                    if (t < 0f) t += 1f;
+                }
             }
+            _lastTimeOfDay = t;
             SkySunModel.SunHeadingPitch(t, out float headDeg, out float pitchDeg);
             _lastSunPitchDeg = pitchDeg;
             cb.SunDirAC = SkySunModel.DirAc(headDeg, pitchDeg);
@@ -502,9 +510,11 @@ namespace AcmeSky.Services.LiveSky {
             _lastFrameLogTicks = now;
             if (atmo) {
                 _log.LogInformation(
-                    "acmesky: LIVE frame #{N} vp={W}x{H} atmosphere rayMode={Ray} output={Out} axis='{Axis}' " +
-                    "sunPitch={Pitch:F1}deg samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA)]",
-                    n, w, h, _cfg.RayMode, _cfg.Output, _cfg.Axis, _lastSunPitchDeg,
+                    "acmesky: LIVE frame #{N} vp={W}x{H} atmosphere rayMode={Ray} swz={Swz} output={Out} axis='{Axis}' " +
+                    "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg " +
+                    "samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA)]",
+                    n, w, h, _cfg.RayMode, _cfg.WorldSwizzle, _cfg.Output, _cfg.Axis,
+                    _lastTimeOfDay, ClientState.GetTimeOfDay(), _lastSunPitchDeg,
                     _sampZenith, _sampMid, _sampHorizon);
             } else {
                 _log.LogInformation(

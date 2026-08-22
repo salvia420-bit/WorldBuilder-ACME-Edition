@@ -33,6 +33,8 @@ namespace AcmeSky.Services.LiveSky {
         public float Exposure;
         public float SunAng, MoonAng, Lunar, LutFlipV;
         public float ForcedTime;   // <0 => use game clock
+        public float WorldSwizzle; // 1 = swizzle reconstructed ray/camera .xzy (render world is Y-up)
+        public float TimeOfs;      // phase shift added to the CLOCK-derived time (mod 1); not applied to forced time
 
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
@@ -40,12 +42,14 @@ namespace AcmeSky.Services.LiveSky {
         /// <summary>Seed from the corrected defaults, then env-var overrides (dev box only).</summary>
         public static SkyConfig FromDefaultsAndEnv() {
             var c = new SkyConfig {
-                // raymode 0 = row-vector both, the convention AcmeRedline/Lib/Projection.cs VERIFIES for
-                // AC's forward transform (clip = [x y z 1]*WorldToView*ViewToClip). The 90-degrees-rolled
-                // sky is NOT a matrix transpose -- it is the acToShader up-axis (below). Keep raymode 0.
+                // raymode 0 = row-vector both — CORRECT (CPU-replica-verified 2026-08-21). The
+                // 90-degrees-rolled sky + the "scattering seam" were BOTH the missing world
+                // swizzle: the client's D3D render world is the AC world with y/z swapped
+                // (PrimD3DRender::ScreenToViewTransform). worldswizzle=1 fixes both.
                 RayMode = 0f,
+                WorldSwizzle = 1f,
                 Axis = Environment.GetEnvironmentVariable("ACMESKY_SKY_AXIS") ?? "x,z,-y",
-                Output = 4f,              // ray-dir debug: default for this diagnostic build
+                Output = 0f,              // real atmosphere (AgX + sRGB)
                 Exposure = SkySunModel.EnvFloat("ACMESKY_SKY_EXPOSURE", 5f, 0.01f, 100f),
                 SunAng = SkySunModel.EnvFloat("ACMESKY_SKY_SUNANG", 0.03f, 0.0005f, 0.5f),
                 MoonAng = SkySunModel.EnvFloat("ACMESKY_SKY_MOONANG", 0.025f, 0.0005f, 0.5f),
@@ -104,6 +108,8 @@ namespace AcmeSky.Services.LiveSky {
                 case "moonang": if (F(val, out var ma)) MoonAng = Math.Clamp(ma, 0.0005f, 0.5f); break;
                 case "lunar": if (F(val, out var l)) Lunar = Math.Clamp(l, 0f, 100f); break;
                 case "lutflipv": if (F(val, out var lf)) LutFlipV = Math.Clamp(lf, 0f, 1f); break;
+                case "worldswizzle": if (F(val, out var ws)) WorldSwizzle = Math.Clamp(ws, 0f, 1f); break;
+                case "timeofs": if (F(val, out var to)) TimeOfs = Math.Clamp(to, -1f, 1f); break;
             }
         }
 

@@ -76,12 +76,20 @@ namespace AcmeSky.Lib {
             catch (Exception) { return default; }
         }
 
-        /// <summary>Current time of day as a 0..1 fraction (0/1 = deep night, ~0.5 = noon), or -1.</summary>
+        /// <summary>Current time of day as a 0..1 day fraction, or -1.
+        ///
+        /// FIELD CHOICE (decomp GameTime::UseTime, acclient.c:463395): present_time_of_day is
+        /// <c>(time - time_of_day_begin) / day_length</c>, recomputed EVERY UseTime tick — the
+        /// true 0..1 day fraction. present_time_in_day_unit (what this read before) is the
+        /// fraction within the current named time-of-day SEGMENT (Morningtide etc.), only
+        /// refreshed when a segment boundary passes — reading ~0 was correct behavior for the
+        /// wrong field, not a bad offset. Where fraction 0 sits in the day (midnight vs dawn)
+        /// depends on the region calendar; sky.cfg `timeofs` shifts the phase if needed.</summary>
         public static float GetTimeOfDay() {
             try {
                 GameTime** pp = GameTime.current_game_time;
                 if (pp == null || *pp == null) return -1f;
-                float t = (*pp)->present_time_in_day_unit;
+                float t = (*pp)->present_time_of_day;
                 if (float.IsNaN(t) || float.IsInfinity(t)) return -1f;
                 // Guard against odd values; wrap into [0,1).
                 t %= 1f;
