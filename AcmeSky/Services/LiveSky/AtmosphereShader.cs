@@ -56,6 +56,9 @@ cbuffer SkyParams : register(b0) {
     row_major float4x4 worldToClip;   // forward render-world -> clip (WorldToView * ViewToClip)
     row_major float4x4 eciToShader;   // star ECI unit dir -> shader y-up space (sidereal rotation)
     float starIntensity;  float starMagMin; float starMagMax; float _pad7;
+    // --- M2 clouds ---
+    float2 cloudWeatherOfs;  float cloudCoverage; float cloudFrame;   // wind-accumulated weather offset, coverage, frame idx (STBN z)
+    float2 cloudRes;         float cloudIters;    float _pad9;        // cloud RT resolution, primary march iteration cap
 };
 
 // ==========================================================================

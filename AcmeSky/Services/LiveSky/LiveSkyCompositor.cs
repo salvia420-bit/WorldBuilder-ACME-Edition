@@ -53,6 +53,20 @@ namespace AcmeSky.Services.LiveSky {
         private ID3D11Buffer? _starBuf;        // StructuredBuffer<StarVert>, immutable
         private ID3D11ShaderResourceView? _starSrv;
         private int _starCount;
+        // --- M2 clouds ---
+        private ID3D11PixelShader? _psClouds;         // raymarch into the half-res cloud RT
+        private ID3D11PixelShader? _psCloudComposite; // premultiplied-over composite onto the sky
+        private SkyLut? _texWeather, _texShape, _texShapeDetail, _texStbn;
+        private ID3D11SamplerState? _samplerWrap;
+        private ID3D11BlendState? _blendPremul;
+        private ID3D11Texture2D? _cloudRt;
+        private ID3D11RenderTargetView? _cloudRtv;
+        private ID3D11ShaderResourceView? _cloudSrv;
+        private int _cloudW, _cloudH;
+        private bool _cloudsUsable;
+        private long _cloudFrameIndex;
+        private Vector2 _weatherOfs;                  // wind-accumulated local weather offset
+        private double _lastWindSeconds = -1;
         private ID3D11Buffer? _cb;
         private ID3D11SamplerState? _sampler;
         private SkyLut? _lutTransmittance, _lutScattering, _lutIrradiance;
@@ -94,9 +108,12 @@ namespace AcmeSky.Services.LiveSky {
         // live check that the M3 star pass actually drew (stars=0 -> ~0).
         private int _sampBright;
 
+        private readonly string _cloudDir;
+
         public LiveSkyCompositor(ILogger log, string skyAssetDir) {
             _log = log;
             _atmoDir = Path.Combine(skyAssetDir, "atmosphere");
+            _cloudDir = Path.Combine(skyAssetDir, "clouds");
 
             _forceTest = string.Equals(Environment.GetEnvironmentVariable("ACMESKY_TESTPATTERN"), "1", StringComparison.Ordinal);
             _cfg = SkyConfig.FromDefaultsAndEnv();
@@ -136,6 +153,9 @@ namespace AcmeSky.Services.LiveSky {
             public Matrix4x4 WorldToClip;   // 64  forward render-world -> clip (WV * VC)
             public Matrix4x4 EciToShader;   // 64  sidereal star rotation
             public float StarIntensity; public float StarMagMin; public float StarMagMax; public float Pad7;               // 16
+            // --- M2 clouds ---
+            public Vector2 CloudWeatherOfs; public float CloudCoverage; public float CloudFrame;                            // 16
+            public Vector2 CloudRes; public float CloudIters; public float Pad9;                                            // 16
         }
 
         /// <summary>Screen-space textured quad vertex: D3DFVF_XYZRHW | D3DFVF_TEX1 (stride 24).</summary>
@@ -236,6 +256,12 @@ namespace AcmeSky.Services.LiveSky {
                 };
                 _sampler = _dev.CreateSamplerState(sampDesc);
 
+                var wrapDesc = sampDesc;
+                wrapDesc.AddressU = TextureAddressMode.Wrap;
+                wrapDesc.AddressV = TextureAddressMode.Wrap;
+                wrapDesc.AddressW = TextureAddressMode.Wrap;
+                _samplerWrap = _dev.CreateSamplerState(wrapDesc);
+
                 _log.LogInformation(
                     "acmesky: LIVE D3D11 device created (adapter='{Adapter}', featureLevel={FL}, bgra=1); " +
                     "VS+testPS+cbuffer({CB}B)+sampler ready", adapterName, fl, Marshal.SizeOf<SkyCb>());
@@ -266,6 +292,7 @@ namespace AcmeSky.Services.LiveSky {
                 _lutIrradiance = SkyLut.Load(_dev, Path.Combine(_atmoDir, "irradiance.bin"));
 
                 TryInitStars();   // never fatal: atmosphere works without stars
+                TryInitClouds();  // never fatal: atmosphere works without clouds
 
                 _atmoUsable = _psAtmo is not null &&
                               _lutTransmittance?.Srv is not null &&
@@ -360,6 +387,55 @@ namespace AcmeSky.Services.LiveSky {
             }
         }
 
+        /// <summary>M2: compile the cloud raymarch + composite shaders and load the four cloud
+        /// assets (local_weather RGBA8+mips, shape 128^3 R8, shape_detail 32^3 R8, STBN
+        /// 128x128x64 R8). Failure just disables clouds.</summary>
+        private void TryInitClouds() {
+            try {
+                var psb = Compiler.Compile(CloudShader.Hlsl, "PSClouds", "acmesky_clouds.hlsl", "ps_5_0",
+                    ShaderFlags.OptimizationLevel3, EffectFlags.None);
+                _psClouds = _dev!.CreatePixelShader(psb.Span, null);
+                var pcb = Compiler.Compile(CloudShader.Hlsl, "PSCloudComposite", "acmesky_clouds.hlsl", "ps_5_0",
+                    ShaderFlags.OptimizationLevel3, EffectFlags.None);
+                _psCloudComposite = _dev.CreatePixelShader(pcb.Span, null);
+
+                _texWeather = SkyLut.Load(_dev, Path.Combine(_cloudDir, "local_weather.bin"));
+                _texShape = SkyLut.Load(_dev, Path.Combine(_cloudDir, "shape.bin"));
+                _texShapeDetail = SkyLut.Load(_dev, Path.Combine(_cloudDir, "shape_detail.bin"));
+                _texStbn = SkyLut.Load(_dev, Path.Combine(_cloudDir, "stbn.bin"));
+
+                var blendDesc = new BlendDescription();
+                blendDesc.RenderTarget[0] = new RenderTargetBlendDescription {
+                    BlendEnable = true,
+                    SourceBlend = Blend.One,                    // premultiplied over
+                    DestinationBlend = Blend.InverseSourceAlpha,
+                    BlendOperation = BlendOperation.Add,
+                    SourceBlendAlpha = Blend.One,
+                    DestinationBlendAlpha = Blend.InverseSourceAlpha,
+                    BlendOperationAlpha = BlendOperation.Add,
+                    RenderTargetWriteMask = ColorWriteEnable.All,
+                };
+                _blendPremul = _dev.CreateBlendState(blendDesc);
+
+                _cloudsUsable = true;
+                _log.LogInformation(
+                    "acmesky: LIVE clouds ready — weather {WW}x{WH} (mips), shape {S}^3, detail {D}^3, stbn {BW}x{BH}x{BD}",
+                    _texWeather.Width, _texWeather.Height, _texShape.Width, _texShapeDetail.Width,
+                    _texStbn.Width, _texStbn.Height, _texStbn.Depth);
+            }
+            catch (Exception ex) {
+                _cloudsUsable = false;
+                _log.LogWarning(ex, "acmesky: LIVE clouds init failed; clouds disabled");
+                _psClouds?.Dispose(); _psClouds = null;
+                _psCloudComposite?.Dispose(); _psCloudComposite = null;
+                _texWeather?.Dispose(); _texWeather = null;
+                _texShape?.Dispose(); _texShape = null;
+                _texShapeDetail?.Dispose(); _texShapeDetail = null;
+                _texStbn?.Dispose(); _texStbn = null;
+                _blendPremul?.Dispose(); _blendPremul = null;
+            }
+        }
+
         // ==================================================================
         // Target (re)creation on size change
         // ==================================================================
@@ -391,6 +467,27 @@ namespace AcmeSky.Services.LiveSky {
                 MiscFlags = ResourceOptionFlags.None,
             };
             _staging = _dev.CreateTexture2D(in stDesc);
+        }
+
+        /// <summary>(Re)create the half-float cloud RT at the requested reduced resolution.</summary>
+        private void EnsureCloudTarget(int w, int h) {
+            if (_cloudRt is not null && w == _cloudW && h == _cloudH) return;
+            _cloudSrv?.Dispose(); _cloudSrv = null;
+            _cloudRtv?.Dispose(); _cloudRtv = null;
+            _cloudRt?.Dispose(); _cloudRt = null;
+            _cloudW = w; _cloudH = h;
+            var desc = new Texture2DDescription {
+                Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1,
+                Format = Format.R16G16B16A16_Float,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+                CPUAccessFlags = CpuAccessFlags.None,
+                MiscFlags = ResourceOptionFlags.None,
+            };
+            _cloudRt = _dev!.CreateTexture2D(in desc);
+            _cloudRtv = _dev.CreateRenderTargetView(_cloudRt, null);
+            _cloudSrv = _dev.CreateShaderResourceView(_cloudRt);
         }
 
         // ==================================================================
@@ -451,6 +548,35 @@ namespace AcmeSky.Services.LiveSky {
                 _ctx.PSSetShader(_psStars);
                 _ctx.Draw((uint)_starCount, 0);
                 _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+                _ctx.VSSetShader(_vs);
+            }
+
+            // M2 clouds: raymarch into the reduced-res HDR cloud RT, then composite
+            // premultiplied-over onto the sky (tonemapped in the composite PS). Runs in the
+            // real-sky outputs (0-3) and in the clouds-only debug view (output=6).
+            if (atmo && _cloudsUsable && p.CloudIters > 0f &&
+                (p.OutputMode < 3.5f || p.OutputMode > 5.5f)) {
+                EnsureCloudTarget(Math.Max(64, (int)p.CloudRes.X), Math.Max(36, (int)p.CloudRes.Y));
+
+                // pass A: raymarch at reduced res
+                _ctx.RSSetViewport(0f, 0f, _cloudW, _cloudH, 0f, 1f);
+                _ctx.OMSetRenderTargets(_cloudRtv!, null);
+                _ctx.PSSetShader(_psClouds);
+                _ctx.PSSetSampler(1, _samplerWrap);
+                _ctx.PSSetShaderResources(4, new[] {
+                    _texWeather!.Srv!, _texShape!.Srv!, _texShapeDetail!.Srv!, _texStbn!.Srv!,
+                });
+                _ctx.Draw(3, 0);
+
+                // pass B: composite over the main sky RT
+                _ctx.RSSetViewport(0f, 0f, w, h, 0f, 1f);
+                _ctx.OMSetRenderTargets(_rtv!, null);
+                _ctx.OMSetBlendState(_blendPremul, null, uint.MaxValue);
+                _ctx.PSSetShader(_psCloudComposite);
+                _ctx.PSSetShaderResource(8, _cloudSrv!);
+                _ctx.Draw(3, 0);
+                _ctx.OMSetBlendState(null, null, uint.MaxValue);
+                _ctx.PSSetShaderResources(8, new ID3D11ShaderResourceView[] { null! });   // unbind: RT is written again next frame
             }
 
             // --- copy RT -> staging and read back to CPU ---
@@ -535,6 +661,22 @@ namespace AcmeSky.Services.LiveSky {
             cb.WorldToClip = cam.WorldToView * cam.ViewToClip;   // forward, for the star points
             cb.EciToShader = SkySunModel.EciToShader();
             cb.StarMagMin = -2f; cb.StarMagMax = 8f;
+
+            // M2 clouds: wind-accumulated weather offset (holtburger: localWeatherVelocity =
+            // SPEED*(0.8,0.6), SPEED = 7.7e-5 weather-tiles/s ≈ 25 km/h at repeat 100).
+            double nowS = _clock.Elapsed.TotalSeconds;
+            if (_lastWindSeconds >= 0) {
+                float dt = (float)Math.Clamp(nowS - _lastWindSeconds, 0.0, 1.0);
+                const float windSpeed = 7.7e-5f;
+                _weatherOfs += new Vector2(windSpeed * 0.8f, windSpeed * 0.6f) * dt;
+            }
+            _lastWindSeconds = nowS;
+            cb.CloudWeatherOfs = _weatherOfs;
+            cb.CloudCoverage = _cfg.CloudCover;
+            cb.CloudFrame = (++_cloudFrameIndex) % 64;
+            float scale = Math.Clamp(_cfg.CloudRes, 0.1f, 1f);
+            cb.CloudRes = new Vector2(MathF.Max(64f, w * scale), MathF.Max(36f, h * scale));
+            cb.CloudIters = _cfg.Clouds > 0f ? _cfg.CloudIters : 0f;
 
             // Time-driven sun/moon. sky.cfg `time=` (0..1) overrides the client clock -- used to force a
             // time of day for evaluation/tuning (and as a fallback while the client's
@@ -621,11 +763,12 @@ namespace AcmeSky.Services.LiveSky {
             if (atmo) {
                 _log.LogInformation(
                     "acmesky: LIVE frame #{N} vp={W}x{H} atmosphere rayMode={Ray} swz={Swz} output={Out} axis='{Axis}' " +
-                    "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg stars={Stars} " +
+                    "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg stars={Stars} clouds={Clouds} " +
                     "samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA) bright={B}]",
                     n, w, h, _cfg.RayMode, _cfg.WorldSwizzle, _cfg.Output, _cfg.Axis,
                     _lastTimeOfDay, ClientState.GetTimeOfDay(), _lastSunPitchDeg,
                     _starCount > 0 ? _cfg.Stars : -1f,
+                    _cloudsUsable ? _cfg.Clouds : -1f,
                     _sampZenith, _sampMid, _sampHorizon, _sampBright);
             } else {
                 _log.LogInformation(
@@ -679,6 +822,19 @@ namespace AcmeSky.Services.LiveSky {
             _vsStars?.Dispose(); _vsStars = null;
             _psStars?.Dispose(); _psStars = null;
             _starCount = 0;
+            _cloudSrv?.Dispose(); _cloudSrv = null;
+            _cloudRtv?.Dispose(); _cloudRtv = null;
+            _cloudRt?.Dispose(); _cloudRt = null;
+            _cloudW = _cloudH = 0;
+            _psClouds?.Dispose(); _psClouds = null;
+            _psCloudComposite?.Dispose(); _psCloudComposite = null;
+            _texWeather?.Dispose(); _texWeather = null;
+            _texShape?.Dispose(); _texShape = null;
+            _texShapeDetail?.Dispose(); _texShapeDetail = null;
+            _texStbn?.Dispose(); _texStbn = null;
+            _blendPremul?.Dispose(); _blendPremul = null;
+            _samplerWrap?.Dispose(); _samplerWrap = null;
+            _cloudsUsable = false;
             _psAtmo?.Dispose(); _psAtmo = null;
             _psTest?.Dispose(); _psTest = null;
             _vs?.Dispose(); _vs = null;

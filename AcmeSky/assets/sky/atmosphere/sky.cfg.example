@@ -43,3 +43,11 @@ stars    = 1        # star-field base intensity (0 = off). Night fade applies on
                     # stars appear as the sun drops below ~ -6deg (sun-alt band +-0.10),
                     # full at the -14deg night floor. Field = takram stars.bin (9,096 stars),
                     # sidereal rotation on the AC 11.34x game clock.
+
+# --- M2 volumetric clouds (takram three-clouds port, holtburger FAIR look) --------------
+clouds     = 1      # 0 = off
+cloudcover = 0.5    # takram coverage (holtburger FAIR = 0.5; storm look used 0.7)
+clouditers = 300    # primary raymarch iteration cap (200 low / 300 default / 500 high)
+cloudres   = 0.5    # cloud RT resolution as a fraction of the viewport (0.1..1)
+# debug outputs (see `output` above): 6 = clouds-only (tonemapped over black),
+# 7 = aerial-perspective inscatter raw, 8 = AP transmittance raw, 9 = cloud front depth.

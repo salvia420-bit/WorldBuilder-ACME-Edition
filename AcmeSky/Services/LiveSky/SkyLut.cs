@@ -37,15 +37,20 @@ namespace AcmeSky.Services.LiveSky {
             int depth = BitConverter.ToInt32(raw, 16);
             int channels = BitConverter.ToInt32(raw, 20);
             int bpc = BitConverter.ToInt32(raw, 24);
-            if (channels != 4 || bpc != 2)
-                throw new InvalidDataException($"{path}: expected RGBA16F (ch={channels}, bpc={bpc})");
+            int mipCount = Math.Max(1, BitConverter.ToInt32(raw, 28));   // reserved field = mips (2D only)
+
+            // Format from (channels, bytesPerChannel): RGBA16F LUTs, R8 noise volumes,
+            // RGBA8 weather map (M2 cloud assets share this container).
+            Format fmt = (channels, bpc) switch {
+                (4, 2) => Format.R16G16B16A16_Float,
+                (4, 1) => Format.R8G8B8A8_UNorm,
+                (1, 1) => Format.R8_UNorm,
+                _ => throw new InvalidDataException($"{path}: unsupported ch={channels}, bpc={bpc}"),
+            };
 
             const int headerBytes = 32;
-            long rowPitch = (long)width * channels * bpc;          // 8 bytes / texel
+            long rowPitch = (long)width * channels * bpc;
             long slicePitch = rowPitch * height;
-            long need = headerBytes + slicePitch * Math.Max(1, depth);
-            if (raw.Length < need)
-                throw new InvalidDataException($"{path}: truncated (have {raw.Length}, need {need})");
 
             var lut = new SkyLut {
                 Width = width, Height = height, Depth = depth,
@@ -57,21 +62,34 @@ namespace AcmeSky.Services.LiveSky {
                 IntPtr dataPtr = handle.AddrOfPinnedObject() + headerBytes;
                 if (depth <= 1) {
                     var desc = new Texture2DDescription {
-                        Width = (uint)width, Height = (uint)height, MipLevels = 1, ArraySize = 1,
-                        Format = Format.R16G16B16A16_Float,
+                        Width = (uint)width, Height = (uint)height, MipLevels = (uint)mipCount, ArraySize = 1,
+                        Format = fmt,
                         SampleDescription = new SampleDescription(1, 0),
                         Usage = ResourceUsage.Immutable,
                         BindFlags = BindFlags.ShaderResource,
                         CPUAccessFlags = CpuAccessFlags.None,
                         MiscFlags = ResourceOptionFlags.None,
                     };
-                    var sub = new SubresourceData(dataPtr, (uint)rowPitch, (uint)slicePitch);
-                    lut.Tex2D = dev.CreateTexture2D(in desc, new[] { sub });
+                    // Mip levels are appended sequentially in the payload (each halves w/h).
+                    var subs = new SubresourceData[mipCount];
+                    long ofs = 0; int mw = width, mh = height;
+                    for (int m = 0; m < mipCount; m++) {
+                        long mPitch = (long)mw * channels * bpc;
+                        subs[m] = new SubresourceData(dataPtr + (nint)ofs, (uint)mPitch, (uint)(mPitch * mh));
+                        ofs += mPitch * mh;
+                        mw = Math.Max(1, mw / 2); mh = Math.Max(1, mh / 2);
+                    }
+                    if (raw.Length < headerBytes + ofs)
+                        throw new InvalidDataException($"{path}: truncated (have {raw.Length}, need {headerBytes + ofs})");
+                    lut.Tex2D = dev.CreateTexture2D(in desc, subs);
                     lut.Srv = dev.CreateShaderResourceView(lut.Tex2D);
                 } else {
+                    long need = headerBytes + slicePitch * depth;
+                    if (raw.Length < need)
+                        throw new InvalidDataException($"{path}: truncated (have {raw.Length}, need {need})");
                     var desc = new Texture3DDescription {
                         Width = (uint)width, Height = (uint)height, Depth = (uint)depth, MipLevels = 1,
-                        Format = Format.R16G16B16A16_Float,
+                        Format = fmt,
                         Usage = ResourceUsage.Immutable,
                         BindFlags = BindFlags.ShaderResource,
                         CPUAccessFlags = CpuAccessFlags.None,

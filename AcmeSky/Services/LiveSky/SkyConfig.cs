@@ -36,6 +36,10 @@ namespace AcmeSky.Services.LiveSky {
         public float WorldSwizzle; // 1 = swizzle reconstructed ray/camera .xzy (render world is Y-up)
         public float TimeOfs;      // phase shift added to the CLOCK-derived time (mod 1); not applied to forced time
         public float Stars = 1f;   // star-field base intensity (0 = off); night fade applies on top
+        public float Clouds = 1f;      // volumetric clouds on/off
+        public float CloudCover = 0.5f; // takram coverage (holtburger FAIR = 0.5)
+        public float CloudIters = 300f; // primary raymarch iteration cap
+        public float CloudRes = 0.5f;   // cloud RT resolution scale (of the main viewport)
 
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
@@ -59,7 +63,7 @@ namespace AcmeSky.Services.LiveSky {
                 ForcedTime = SkySunModel.EnvFloat("ACMESKY_SKY_TIME", -1f, -1f, 1f),
             };
             c.RayMode = SkySunModel.EnvFloat("ACMESKY_SKY_RAYMODE", c.RayMode, 0f, 9f);
-            c.Output = SkySunModel.EnvFloat("ACMESKY_SKY_OUTPUT", c.Output, 0f, 5f);
+            c.Output = SkySunModel.EnvFloat("ACMESKY_SKY_OUTPUT", c.Output, 0f, 9f);
             return c;
         }
 
@@ -102,7 +106,7 @@ namespace AcmeSky.Services.LiveSky {
             switch (key) {
                 case "axis": Axis = val; break;
                 case "raymode": if (F(val, out var rm)) RayMode = Math.Clamp(rm, 0f, 9f); break;
-                case "output": if (F(val, out var o)) Output = Math.Clamp(o, 0f, 5f); break;
+                case "output": if (F(val, out var o)) Output = Math.Clamp(o, 0f, 9f); break;   // 6 = clouds-only, 7 AP-inscatter, 8 AP-transmittance, 9 front-depth
                 case "exposure": if (F(val, out var e)) Exposure = Math.Clamp(e, 0.01f, 100f); break;
                 case "time": if (F(val, out var t)) ForcedTime = Math.Clamp(t, -1f, 1f); break;
                 case "sunang": if (F(val, out var sa)) SunAng = Math.Clamp(sa, 0.0005f, 0.5f); break;
@@ -112,6 +116,10 @@ namespace AcmeSky.Services.LiveSky {
                 case "worldswizzle": if (F(val, out var ws)) WorldSwizzle = Math.Clamp(ws, 0f, 1f); break;
                 case "timeofs": if (F(val, out var to)) TimeOfs = Math.Clamp(to, -1f, 1f); break;
                 case "stars": if (F(val, out var st)) Stars = Math.Clamp(st, 0f, 10f); break;
+                case "clouds": if (F(val, out var cl)) Clouds = Math.Clamp(cl, 0f, 1f); break;
+                case "cloudcover": if (F(val, out var cc)) CloudCover = Math.Clamp(cc, 0f, 1f); break;
+                case "clouditers": if (F(val, out var ci)) CloudIters = Math.Clamp(ci, 0f, 500f); break;
+                case "cloudres": if (F(val, out var cr)) CloudRes = Math.Clamp(cr, 0.1f, 1f); break;
             }
         }
 
