@@ -31,6 +31,10 @@ namespace AcmeLights.Lib {
         public float DungeonAmbient = -1f;  // dungeonambient: -1 = retail (0.2), else 0..1 level
         public uint DungeonAmbientColor = 0xFFFFFF; // dungeonambientcolor: hex RGB (retail white)
 
+        // --- P3 quick win: light DAT objects that ship with setup lights but LIGHTS_ON unset ---
+        public float TorchLights = 0f;      // torchlights: 0 off | 1 light unlit setup-light objects
+                                            //   | 2 DIAGNOSTIC: extinguish lit ones (proves the path)
+
         // --- P5 bloom (luminance post-process, via the SmartBox::m_renderingCallback slot) ---
         // Default OFF: opt-in via lights.cfg until the D3D9 path is live-validated (a per-frame
         // device call on a wrong vtable slot would crash the client). Flip to 1 in cfg to enable;
@@ -98,6 +102,7 @@ namespace AcmeLights.Lib {
                 case "ambientfix": if (F(val, out var af)) AmbientFix = Math.Clamp(af, 0f, 1f); break;
                 case "dungeonambient": if (F(val, out var da)) DungeonAmbient = Math.Clamp(da, -1f, 1f); break;
                 case "dungeonambientcolor": if (Hex(val, out var dc)) DungeonAmbientColor = dc; break;
+                case "torchlights": if (F(val, out var tl)) TorchLights = Math.Clamp(tl, 0f, 2f); break;
                 case "bloom": if (F(val, out var bl)) Bloom = Math.Clamp(bl, 0f, 1f); break;
                 case "bloomthreshold": if (F(val, out var bt)) BloomThreshold = Math.Clamp(bt, 0f, 2f); break;
                 case "bloomknee": if (F(val, out var bk)) BloomKnee = Math.Clamp(bk, 0.001f, 1f); break;

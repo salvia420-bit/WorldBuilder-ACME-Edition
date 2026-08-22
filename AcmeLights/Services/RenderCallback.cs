@@ -32,6 +32,8 @@ namespace AcmeLights.Services {
         private static ILogger? _log;
         private static nint _prev;          // foreign callback found in the slot (chained; usually 0)
         private static bool _loggedInstall;
+        private static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+        private static long _lastReload = -System.Diagnostics.Stopwatch.Frequency;
 
         public static void Configure(BloomCompositor bloom, LightsConfig cfg, ILogger log) {
             _bloom = bloom; _cfg = cfg; _log = log;
@@ -48,7 +50,8 @@ namespace AcmeLights.Services {
         }
 
         /// <summary>Called once per frame from the UpdateLightsInternal detour (render thread).
-        /// Installs/reasserts the slot while bloom is enabled, clears it when disabled. Never throws.</summary>
+        /// Installs/reasserts the slot while any consumer (bloom, torch-on) is enabled, clears it
+        /// when all are disabled. Never throws.</summary>
         public static void EnsureInstalled() {
             try {
                 var cfg = _cfg;
@@ -56,7 +59,8 @@ namespace AcmeLights.Services {
                 nint* slot = Slot;
                 if (slot == null) return;
                 nint ours = OurPtr;
-                if (cfg.Bloom <= 0.5f) {                 // live-toggle off: put back what we found
+                bool want = cfg.Bloom > 0.5f || cfg.TorchLights > 0.5f;
+                if (!want) {                             // live-toggle off: put back what we found
                     if (*slot == ours) *slot = _prev;
                     return;
                 }
@@ -86,6 +90,18 @@ namespace AcmeLights.Services {
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
         private static void RenderingCallbackImpl() {
             try {
+                var cfg = _cfg;
+                // Own 1/s cfg reload: the UpdateLightsInternal heartbeat (which also reloads) STALLS
+                // when the scene's light set is static (observed in a near-lightless dungeon cell),
+                // and this callback fires every in-world frame regardless — so knobs stay live here.
+                if (cfg != null) {
+                    long now = _clock.ElapsedTicks;
+                    if (now - _lastReload >= System.Diagnostics.Stopwatch.Frequency) {
+                        _lastReload = now;
+                        cfg.Reload();
+                    }
+                    TorchLights.OnPostWorldRender(cfg, _log);
+                }
                 var bloom = _bloom;
                 if (bloom != null) {
                     var vp = ClientState.GetViewport();
