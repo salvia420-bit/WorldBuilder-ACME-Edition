@@ -35,6 +35,7 @@ namespace AcmeSky.Services.LiveSky {
         public float ForcedTime;   // <0 => use game clock
         public float WorldSwizzle; // 1 = swizzle reconstructed ray/camera .xzy (render world is Y-up)
         public float TimeOfs;      // phase shift added to the CLOCK-derived time (mod 1); not applied to forced time
+        public float Stars = 1f;   // star-field base intensity (0 = off); night fade applies on top
 
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
@@ -110,6 +111,7 @@ namespace AcmeSky.Services.LiveSky {
                 case "lutflipv": if (F(val, out var lf)) LutFlipV = Math.Clamp(lf, 0f, 1f); break;
                 case "worldswizzle": if (F(val, out var ws)) WorldSwizzle = Math.Clamp(ws, 0f, 1f); break;
                 case "timeofs": if (F(val, out var to)) TimeOfs = Math.Clamp(to, -1f, 1f); break;
+                case "stars": if (F(val, out var st)) Stars = Math.Clamp(st, 0f, 10f); break;
             }
         }
 

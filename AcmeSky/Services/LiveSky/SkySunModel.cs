@@ -79,6 +79,53 @@ namespace AcmeSky.Services.LiveSky {
             }
         }
 
+        // ==================================================================
+        // M3 stars — synthetic game date + sidereal ECI->shader rotation.
+        // ==================================================================
+
+        /// <summary>AC launch, 1999-11-02 00:00:00 UTC (holtburger sky.rs AC_LAUNCH_UNIX_EPOCH).</summary>
+        public const double AcLaunchUnixEpoch = 941_500_800.0;
+        /// <summary>One game-day = 7620 real seconds; game time runs 86400/7620 ≈ 11.34× wall clock.</summary>
+        public const double AcTimeCompression = 86400.0 / 7620.0;
+
+        /// <summary>Unix seconds of the synthetic game date (holtburger gameDateNow): wall time
+        /// re-anchored at AC launch and compressed 11.34× so the star sphere + moon stay visually
+        /// correlated with the AC day instead of drifting at real pace.</summary>
+        public static double GameDateUnix() {
+            double nowUnix = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+            return AcLaunchUnixEpoch + (nowUnix - AcLaunchUnixEpoch) * AcTimeCompression;
+        }
+
+        /// <summary>Greenwich Mean Sidereal Time (IAU 1982) in radians for a unix time.
+        /// Matches astronomy-engine's SiderealTime within ~0.004 deg over 2000-2026.</summary>
+        public static double GmstRadians(double unixSeconds) {
+            double jd = unixSeconds / 86400.0 + 2440587.5;
+            double d = jd - 2451545.0;
+            double t = d / 36525.0;
+            double deg = 280.46061837 + 360.98564736629 * d + 0.000387933 * t * t - t * t * t / 38710000.0;
+            deg %= 360.0;
+            if (deg < 0) deg += 360.0;
+            return deg * Math.PI / 180.0;
+        }
+
+        /// <summary>ECI -> shader-space (three y-up) star rotation for the synthetic game date.
+        /// Validated against @takram getECIToECEFRotationMatrix (astronomy-engine): the net vector
+        /// map is Rz(-GMST) — precession (~0.003 rad here) deliberately dropped. Row-vector
+        /// convention: HLSL <c>mul(float4(eci,0), eciToShader)</c>.</summary>
+        public static Matrix4x4 EciToShader() {
+            float theta = (float)GmstRadians(GameDateUnix());
+            return Matrix4x4.CreateRotationZ(-theta);
+        }
+
+        /// <summary>Star-visibility fraction from the sky sun pitch (deg): 1 at full night, 0 at
+        /// day, linear across sun-altitude [-0.10, +0.10] (holtburger nightFractionFromSunAltitude;
+        /// our pitch is already night-ramped to the -14 deg floor).</summary>
+        public static float NightFraction(float sunPitchDeg) {
+            float sunAlt = MathF.Sin(sunPitchDeg * Deg2Rad);
+            float t = (sunAlt + 0.10f) / 0.20f;
+            return 1f - Math.Clamp(t, 0f, 1f);
+        }
+
         /// <summary>Parse a float env var with a default and optional clamp.</summary>
         public static float EnvFloat(string name, float def, float lo = float.MinValue, float hi = float.MaxValue) {
             var s = Environment.GetEnvironmentVariable(name);

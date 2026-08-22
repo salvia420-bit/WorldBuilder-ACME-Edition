@@ -39,3 +39,7 @@ sunang   = 0.03     # sun disc angular radius
 moonang  = 0.025    # moon disc angular radius
 lunar    = 1        # moon disc brightness scale (0 = off)
 lutflipv = 0        # 0/1 flip LUT V sampling (verified correct at 0)
+stars    = 1        # star-field base intensity (0 = off). Night fade applies on top:
+                    # stars appear as the sun drops below ~ -6deg (sun-alt band +-0.10),
+                    # full at the -14deg night floor. Field = takram stars.bin (9,096 stars),
+                    # sidereal rotation on the AC 11.34x game clock.

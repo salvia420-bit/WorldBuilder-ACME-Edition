@@ -52,6 +52,10 @@ cbuffer SkyParams : register(b0) {
     float bottomRadiusM;  float meterToUnit; float sunAngRadius;  float sunAngRadiusPhys;
     float moonAngRadius;  float lunarScale;  float lutFlipV;      float outputMode;
     float rayMode;        float worldSwizzle; float _pad4; float _pad5;
+    // --- M3 stars ---
+    row_major float4x4 worldToClip;   // forward render-world -> clip (WorldToView * ViewToClip)
+    row_major float4x4 eciToShader;   // star ECI unit dir -> shader y-up space (sidereal rotation)
+    float starIntensity;  float starMagMin; float starMagMax; float _pad7;
 };
 
 // ==========================================================================
@@ -317,6 +321,20 @@ float3 linearToSrgb(float3 c) {
     return lerp(lo, hi, useHi);
 }
 
+// Shared tonemap tail (atmosphere + stars must match exactly).
+float3 FinalColor(float3 radiance) {
+    float3 color = radiance * exposure;
+    if (outputMode < 1.5) {
+        color = agxToneMapping(color);
+        if (outputMode < 0.5) color = linearToSrgb(color);
+    } else if (outputMode < 2.5) {
+        color = saturate(color);
+    } else {
+        color = saturate(linearToSrgb(color));
+    }
+    return color;
+}
+
 // ==========================================================================
 //  Atmosphere pixel shader.
 // ==========================================================================
@@ -376,17 +394,24 @@ float4 PSAtmosphere(VSOut i) : SV_TARGET {
     float3 radiance = GetSkyRadiance(cameraKm, dirShader, sunShader, transmittance);
     radiance *= SKY_RAD_TO_LUM;
 
+    // Sun/moon discs are skipped when the view ray hits the ground (reference behavior;
+    // without this the sun disc leaks through the below-horizon sky, which terrain
+    // normally overdraws but sea/cliff sightlines would reveal).
+    float rG = length(cameraKm);
+    float muG = dot(cameraKm, dirShader) / rG;
+    bool hitsGround = muG < 0.0 && rG * rG * (muG * muG - 1.0) + bottom_radius * bottom_radius >= 0.0;
+
     // Analytic sun disc.
     float fragAngle = length(ddx(dirShader) + ddy(dirShader)) / max(length(dirShader), 1e-6);
     float viewDotSun = dot(dirShader, sunShader);
-    if (viewDotSun > cos(sunAngRadius)) {
+    if (!hitsGround && viewDotSun > cos(sunAngRadius)) {
         float angle = acos(clamp(viewDotSun, -1.0, 1.0));
         float aa = smoothstep(sunAngRadius, sunAngRadius - fragAngle, angle);
         radiance += transmittance * GetSolarRadiance() * aa;
     }
 
     // Moon disc (subtle).
-    if (lunarScale > 0.0) {
+    if (!hitsGround && lunarScale > 0.0) {
         float isect = intersectSphere(dirShader, moonShader, moonAngRadius);
         if (isect > 0.0) {
             float3 nrm = normalize(moonShader - dirShader * isect);
@@ -398,16 +423,75 @@ float4 PSAtmosphere(VSOut i) : SV_TARGET {
     }
 
     // Tonemap: exposure then AgX (holtburger: toneMappingExposure = 5, AGX final pass).
-    float3 color = radiance * exposure;
-    if (outputMode < 1.5) {
-        color = agxToneMapping(color);          // outputMode 0/1: AgX
-        if (outputMode < 0.5) color = linearToSrgb(color);  // 0: + sRGB OETF (default)
-    } else if (outputMode < 2.5) {
-        color = saturate(color);                // 2: raw exposure (debug)
+    return float4(FinalColor(radiance), 1.0);
+}
+
+// ==========================================================================
+//  M3 stars -- takram StarsMaterial (stars.vert/stars.frag) ported.
+//  Drawn as a 9,096-vertex PointList AFTER the atmosphere quad, into the SAME
+//  RT with no blending: each 1px star recomputes sky radiance at its pixel and
+//  adds transmittance * starColor, exactly like the reference (BACKGROUND path).
+//  Star data reaches the VS as a StructuredBuffer decoded host-side from
+//  stars.bin (int16[3] ECI dir, u8 mag, u8[3] rgb per star).
+// ==========================================================================
+struct StarVert { float4 posMag; float4 rgb; };   // posMag.xyz = ECI unit dir, .w = mag 0..1
+StructuredBuffer<StarVert> stars : register(t3);
+
+struct StarVSOut {
+    float4 pos : SV_POSITION;
+    float3 dirShader : TEXCOORD0;   // shader-space (y-up) star direction
+    float3 color : TEXCOORD1;       // Pogson-scaled linear color
+};
+
+StarVSOut VSStars(uint vid : SV_VertexID) {
+    StarVSOut o;
+    StarVert s = stars[vid];
+
+    // ECI -> shader y-up (sidereal rotation, host-computed per frame).
+    float3 dirShader = normalize(mul(float4(s.posMag.xyz, 0.0), eciToShader).xyz);
+    o.dirShader = dirShader;
+
+    // Pogson magnitude ramp (stars.vert): m stored 0..1 across magnitudeRange.
+    float m = lerp(starMagMin, starMagMax, s.posMag.w);
+    float3 v = pow(float3(10.0, 10.0, 10.0),
+                   -float3(starMagMin, starMagMax, m) / 2.5);
+    o.color = starIntensity * s.rgb.xyz * saturate((v.z - v.y) / (v.x - v.y));
+
+    // Project the DIRECTION through the client camera: shader -> AC (inverse of
+    // acToShader = its transpose = HLSL mul(matrix, vector)) -> render world
+    // (the y/z swizzle, matching PSAtmosphere) -> forward worldToClip with w=0
+    // (point at infinity; xy/w is distance-independent). Depth is forced to
+    // mid-range: we have no depth buffer, but the rasterizer still clips z.
+    float3 dirAC = mul(acToShader, float4(dirShader, 0.0)).xyz;
+    float3 dirRW = worldSwizzle > 0.5 ? dirAC.xzy : dirAC;
+    float4 clip = mul(float4(dirRW, 0.0), worldToClip);
+    if (clip.w <= 1e-6) {
+        o.pos = float4(0.0, 0.0, -2.0, 1.0);   // behind the camera -> clipped away
     } else {
-        color = saturate(linearToSrgb(color));  // 3: exposure + sRGB, no AgX (debug)
+        o.pos = float4(clip.x, clip.y, 0.5 * clip.w, clip.w);
     }
-    return float4(color, 1.0);
+    return o;
+}
+
+float4 PSStars(StarVSOut i) : SV_TARGET {
+    // Camera in ECEF km -- identical prologue to PSAtmosphere.
+    float3 camPosAc = worldSwizzle > 0.5 ? cameraPosAC.xzy : cameraPosAC;
+    float3 camShader = mul(float4(camPosAc, 1.0), acToShader).xyz;
+    float3 cameraKm = (camShader + float3(0.0, bottomRadiusM, 0.0)) * meterToUnit;
+    float3 dirShader = normalize(i.dirShader);
+    float3 sunShader = normalize(mul(float4(sunDirAC, 0.0), acToShader).xyz);
+
+    // stars.frag: discard when the ray hits the ground (star below horizon).
+    float r = length(cameraKm);
+    float mu = dot(cameraKm, dirShader) / r;
+    float disc = r * r * (mu * mu - 1.0) + bottom_radius * bottom_radius;
+    if (mu < 0.0 && disc >= 0.0) { clip(-1.0); }
+
+    float3 transmittance;
+    float3 radiance = GetSkyRadiance(cameraKm, dirShader, sunShader, transmittance);
+    radiance *= SKY_RAD_TO_LUM;
+    radiance += transmittance * i.color;
+    return float4(FinalColor(radiance), 1.0);
 }
 ";
     }

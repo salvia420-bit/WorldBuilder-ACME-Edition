@@ -48,6 +48,11 @@ namespace AcmeSky.Services.LiveSky {
         private ID3D11VertexShader? _vs;
         private ID3D11PixelShader? _psTest;    // M0 test pattern
         private ID3D11PixelShader? _psAtmo;    // M1 atmosphere
+        private ID3D11VertexShader? _vsStars;  // M3 stars (PointList)
+        private ID3D11PixelShader? _psStars;
+        private ID3D11Buffer? _starBuf;        // StructuredBuffer<StarVert>, immutable
+        private ID3D11ShaderResourceView? _starSrv;
+        private int _starCount;
         private ID3D11Buffer? _cb;
         private ID3D11SamplerState? _sampler;
         private SkyLut? _lutTransmittance, _lutScattering, _lutIrradiance;
@@ -84,6 +89,10 @@ namespace AcmeSky.Services.LiveSky {
         private float _lastTimeOfDay = -1f;   // resolved 0..1 used for the sun (post-fallback/ofs)
         // last-read sample pixels (post-tonemap BGRA), for the throttled diagnostic line.
         private uint _sampZenith, _sampMid, _sampHorizon;
+        // sparse bright-pixel count (every 8th px of every 8th row, any channel > 96):
+        // by day it counts the whole sky (huge); at night it counts STARS — the eyes-free
+        // live check that the M3 star pass actually drew (stars=0 -> ~0).
+        private int _sampBright;
 
         public LiveSkyCompositor(ILogger log, string skyAssetDir) {
             _log = log;
@@ -123,6 +132,10 @@ namespace AcmeSky.Services.LiveSky {
             public float BottomRadiusM; public float MeterToUnit; public float SunAngRadius; public float SunAngRadiusPhys; // 16
             public float MoonAngRadius; public float LunarScale; public float LutFlipV; public float OutputMode;            // 16
             public float RayMode; public float WorldSwizzle; public float Pad4; public float Pad5;                          // 16
+            // --- M3 stars ---
+            public Matrix4x4 WorldToClip;   // 64  forward render-world -> clip (WV * VC)
+            public Matrix4x4 EciToShader;   // 64  sidereal star rotation
+            public float StarIntensity; public float StarMagMin; public float StarMagMax; public float Pad7;               // 16
         }
 
         /// <summary>Screen-space textured quad vertex: D3DFVF_XYZRHW | D3DFVF_TEX1 (stride 24).</summary>
@@ -252,6 +265,8 @@ namespace AcmeSky.Services.LiveSky {
                 _lutScattering = SkyLut.Load(_dev, Path.Combine(_atmoDir, "scattering.bin"));
                 _lutIrradiance = SkyLut.Load(_dev, Path.Combine(_atmoDir, "irradiance.bin"));
 
+                TryInitStars();   // never fatal: atmosphere works without stars
+
                 _atmoUsable = _psAtmo is not null &&
                               _lutTransmittance?.Srv is not null &&
                               _lutScattering?.Srv is not null &&
@@ -276,6 +291,72 @@ namespace AcmeSky.Services.LiveSky {
                 _lutTransmittance?.Dispose(); _lutTransmittance = null;
                 _lutScattering?.Dispose(); _lutScattering = null;
                 _lutIrradiance?.Dispose(); _lutIrradiance = null;
+            }
+        }
+
+        /// <summary>M3: compile the star shaders and upload stars.bin (9,096 × 10 B records:
+        /// int16[3] ECI dir (normalized /32767), u8 magnitude, u8[3] rgb) as a
+        /// StructuredBuffer&lt;float4 posMag; float4 rgb&gt;. Failure just disables stars.</summary>
+        private void TryInitStars() {
+            try {
+                string path = Path.Combine(_atmoDir, "stars.bin");
+                if (!File.Exists(path)) {
+                    _log.LogInformation("acmesky: LIVE stars.bin not found ({Path}); stars disabled", path);
+                    return;
+                }
+                byte[] raw = File.ReadAllBytes(path);
+                int n = raw.Length / 10;
+                var verts = new float[n * 8];
+                for (int i = 0; i < n; i++) {
+                    int o = i * 10, v = i * 8;
+                    verts[v + 0] = BitConverter.ToInt16(raw, o + 0) / 32767f;
+                    verts[v + 1] = BitConverter.ToInt16(raw, o + 2) / 32767f;
+                    verts[v + 2] = BitConverter.ToInt16(raw, o + 4) / 32767f;
+                    verts[v + 3] = raw[o + 6] / 255f;                 // magnitude 0..1
+                    verts[v + 4] = raw[o + 7] / 255f;                 // r
+                    verts[v + 5] = raw[o + 8] / 255f;                 // g
+                    verts[v + 6] = raw[o + 9] / 255f;                 // b
+                    verts[v + 7] = 0f;
+                }
+
+                var vsb = Compiler.Compile(AtmosphereShader.Hlsl, "VSStars", "acmesky_sky.hlsl", "vs_5_0",
+                    ShaderFlags.OptimizationLevel3, EffectFlags.None);
+                _vsStars = _dev!.CreateVertexShader(vsb.Span, null);
+                var psb = Compiler.Compile(AtmosphereShader.Hlsl, "PSStars", "acmesky_sky.hlsl", "ps_5_0",
+                    ShaderFlags.OptimizationLevel3, EffectFlags.None);
+                _psStars = _dev.CreatePixelShader(psb.Span, null);
+
+                var desc = new BufferDescription {
+                    ByteWidth = (uint)(verts.Length * sizeof(float)),
+                    BindFlags = BindFlags.ShaderResource,
+                    Usage = ResourceUsage.Immutable,
+                    CPUAccessFlags = CpuAccessFlags.None,
+                    MiscFlags = ResourceOptionFlags.BufferStructured,
+                    StructureByteStride = 32,
+                };
+                unsafe {
+                    fixed (float* p = verts) {
+                        var init = new SubresourceData((IntPtr)p);
+                        _starBuf = _dev.CreateBuffer(in desc, init);
+                    }
+                }
+                var srvDesc = new ShaderResourceViewDescription {
+                    Format = Format.Unknown,
+                    ViewDimension = Vortice.Direct3D.ShaderResourceViewDimension.Buffer,
+                };
+                srvDesc.Buffer.FirstElement = 0;
+                srvDesc.Buffer.NumElements = (uint)n;
+                _starSrv = _dev.CreateShaderResourceView(_starBuf, srvDesc);
+                _starCount = n;
+                _log.LogInformation("acmesky: LIVE stars ready — {N} stars from {Path}", n, path);
+            }
+            catch (Exception ex) {
+                _log.LogWarning(ex, "acmesky: LIVE stars init failed; stars disabled");
+                _vsStars?.Dispose(); _vsStars = null;
+                _psStars?.Dispose(); _psStars = null;
+                _starSrv?.Dispose(); _starSrv = null;
+                _starBuf?.Dispose(); _starBuf = null;
+                _starCount = 0;
             }
         }
 
@@ -358,6 +439,20 @@ namespace AcmeSky.Services.LiveSky {
             }
             _ctx.Draw(3, 0);
 
+            // M3 stars: 1px PointList over the finished sky, same RT, no blending — each
+            // star pixel recomputes sky radiance + transmittance*starColor (takram BACKGROUND
+            // path). Skipped in debug outputs and when fully faded by daylight.
+            if (atmo && _vsStars is not null && _psStars is not null && _starSrv is not null &&
+                p.StarIntensity > 0f && p.OutputMode < 3.5f) {
+                _ctx.IASetPrimitiveTopology(PrimitiveTopology.PointList);
+                _ctx.VSSetShader(_vsStars);
+                _ctx.VSSetConstantBuffer(0, _cb);
+                _ctx.VSSetShaderResource(3, _starSrv);
+                _ctx.PSSetShader(_psStars);
+                _ctx.Draw((uint)_starCount, 0);
+                _ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+            }
+
             // --- copy RT -> staging and read back to CPU ---
             _ctx.CopyResource(_staging!, _rt!);
             var map = _ctx.Map(_staging!, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
@@ -369,6 +464,17 @@ namespace AcmeSky.Services.LiveSky {
                 _sampZenith = SamplePixel(s, srcPitch, w / 2, h / 8);
                 _sampMid = SamplePixel(s, srcPitch, w / 2, h / 2);
                 _sampHorizon = SamplePixel(s, srcPitch, w / 2, (7 * h) / 8);
+                // Every 8th row at FULL x resolution so 1px stars are countable; threshold 24
+                // sits above the night-sky background (<10) and below most star pixels.
+                int bright = 0;
+                for (int y = 0; y < h; y += 8) {
+                    byte* row = s + (long)y * srcPitch;
+                    for (int x = 0; x < w; x++) {
+                        byte* px = row + (long)x * 4;
+                        if (px[0] > 24 || px[1] > 24 || px[2] > 24) bright++;
+                    }
+                }
+                _sampBright = bright;
 
                 var tex = new Texture9(_d3d9tex);
                 if (tex.LockRect(0, out var locked, D3D9.Lock.Discard)) {
@@ -426,6 +532,9 @@ namespace AcmeSky.Services.LiveSky {
             if (!Matrix4x4.Invert(cam.ViewToClip, out cb.InvProj)) cb.InvProj = Matrix4x4.Identity;
             if (!Matrix4x4.Invert(cam.WorldToView, out cb.InvView)) cb.InvView = Matrix4x4.Identity;
             cb.CameraPosAC = cam.WorldPos;
+            cb.WorldToClip = cam.WorldToView * cam.ViewToClip;   // forward, for the star points
+            cb.EciToShader = SkySunModel.EciToShader();
+            cb.StarMagMin = -2f; cb.StarMagMax = 8f;
 
             // Time-driven sun/moon. sky.cfg `time=` (0..1) overrides the client clock -- used to force a
             // time of day for evaluation/tuning (and as a fallback while the client's
@@ -445,6 +554,7 @@ namespace AcmeSky.Services.LiveSky {
             _lastSunPitchDeg = pitchDeg;
             cb.SunDirAC = SkySunModel.DirAc(headDeg, pitchDeg);
             cb.MoonDirAC = SkySunModel.DirAc(headDeg + 180f, -pitchDeg);
+            cb.StarIntensity = _cfg.Stars * SkySunModel.NightFraction(pitchDeg);
             return cb;
         }
 
@@ -511,11 +621,12 @@ namespace AcmeSky.Services.LiveSky {
             if (atmo) {
                 _log.LogInformation(
                     "acmesky: LIVE frame #{N} vp={W}x{H} atmosphere rayMode={Ray} swz={Swz} output={Out} axis='{Axis}' " +
-                    "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg " +
-                    "samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA)]",
+                    "t={T:F4} (clock={Clock:F4}) sunPitch={Pitch:F1}deg stars={Stars} " +
+                    "samples[zenith=0x{Z:X8} mid=0x{M:X8} horizon=0x{H2:X8} (BGRA) bright={B}]",
                     n, w, h, _cfg.RayMode, _cfg.WorldSwizzle, _cfg.Output, _cfg.Axis,
                     _lastTimeOfDay, ClientState.GetTimeOfDay(), _lastSunPitchDeg,
-                    _sampZenith, _sampMid, _sampHorizon);
+                    _starCount > 0 ? _cfg.Stars : -1f,
+                    _sampZenith, _sampMid, _sampHorizon, _sampBright);
             } else {
                 _log.LogInformation(
                     "acmesky: LIVE frame #{N} vp={W}x{H} test pattern composited", n, w, h);
@@ -563,6 +674,11 @@ namespace AcmeSky.Services.LiveSky {
             _lutIrradiance?.Dispose(); _lutIrradiance = null;
             _sampler?.Dispose(); _sampler = null;
             _cb?.Dispose(); _cb = null;
+            _starSrv?.Dispose(); _starSrv = null;
+            _starBuf?.Dispose(); _starBuf = null;
+            _vsStars?.Dispose(); _vsStars = null;
+            _psStars?.Dispose(); _psStars = null;
+            _starCount = 0;
             _psAtmo?.Dispose(); _psAtmo = null;
             _psTest?.Dispose(); _psTest = null;
             _vs?.Dispose(); _vs = null;
