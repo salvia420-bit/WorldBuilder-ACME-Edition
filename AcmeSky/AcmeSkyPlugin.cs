@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
+using ACBindings.Internal;
+using AcmeSky.Lib;
 using AcmeSky.Services;
 using Chorizite.Core;
 using Chorizite.Core.Backend;
@@ -51,6 +54,16 @@ namespace AcmeSky {
                 return;
             }
 
+            // Eager-load Chorizite.ACBindings on the MANAGED thread before any native detour touches
+            // it. ClientState (device ptr, camera matrices, time-of-day) dereferences ACBindings
+            // statics from inside the GameSky::Draw detour on the client's render thread, where a LAZY
+            // assembly/ALC load throws 0x80131509 "operation is not legal in the current state" — which
+            // SkyHook's catch swallowed, so SkyRenderer.Render bailed every frame and the sky was BLACK
+            // (retail suppressed, nothing drawn). This was invisible on Windows because another plugin
+            // had already loaded ACBindings; under wine AcmeSky's detour was first to touch it. Same
+            // fix AcmeLights/AcmeRagdoll already apply (WarmupAcBindings).
+            WarmupAcBindings();
+
             string skyDir = Path.Combine(AssemblyDirectory, "assets", "sky");
 
             _palette = new SkyPalette(_log);
@@ -77,6 +90,21 @@ namespace AcmeSky {
             catch (Exception ex) {
                 _log.LogError(ex, "acmesky: hook install threw; retail sky remains");
             }
+        }
+
+        /// <summary>Force Chorizite.ACBindings to load + JIT the detour hot path off the native thread.
+        /// Touches the exact statics ClientState reads and pre-JITs its methods. Never throws.</summary>
+        private void WarmupAcBindings() {
+            try {
+                unsafe {
+                    _ = RenderDevice.render_device;
+                    _ = GameTime.current_game_time;
+                }
+                RuntimeHelpers.PrepareMethod(typeof(ClientState).GetMethod("GetDevicePointer")!.MethodHandle);
+                RuntimeHelpers.PrepareMethod(typeof(ClientState).GetMethod("GetCamera")!.MethodHandle);
+                RuntimeHelpers.PrepareMethod(typeof(ClientState).GetMethod("GetTimeOfDay")!.MethodHandle);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "acmesky: ACBindings warmup incomplete"); }
         }
 
         protected override void Dispose() {

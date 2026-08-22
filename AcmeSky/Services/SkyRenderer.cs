@@ -219,7 +219,14 @@ namespace AcmeSky.Services {
         public void Render(int after) {
             if (!Enabled) return;
             if (after != 0) return; // after=1 (front weather) reserved; suppressed but not drawn yet
+            // Outer guard: the pre-draw section (device/camera/geometry/palette) used to be protected
+            // only by SkyHook's SILENT catch, so any throw there produced a black sky with no clue.
+            // Log it (throttled) so a broken frame is diagnosable instead of invisible.
+            try { RenderInner(after); }
+            catch (Exception ex) { LogErrThrottled(ex, "render-outer"); }
+        }
 
+        private void RenderInner(int after) {
             IntPtr devPtr = ClientState.GetDevicePointer();
             if (devPtr == IntPtr.Zero) { FirstFrameOnce("device pointer is NULL - render aborted"); return; }
             if (devPtr != _device) OnDeviceChanged(devPtr);
