@@ -447,6 +447,19 @@ namespace AcmeRagdoll.Services {
         private readonly ILogger _log;
         private volatile bool _down;
 
+        /// <summary>PACING: reusable per-part scratch for <see cref="ComputeBodyMetrics"/>, which is
+        /// retried every frame until a body's pose is fully readable. Only ever touched under
+        /// <see cref="_gate"/>, and it only ever grows.</summary>
+        private float[] _metricsX = Array.Empty<float>();
+        private float[] _metricsY = Array.Empty<float>();
+        private float[] _metricsZ = Array.Empty<float>();
+        private void EnsureMetricsScratch(int n) {
+            if (_metricsX.Length >= n) return;
+            _metricsX = new float[n];
+            _metricsY = new float[n];
+            _metricsZ = new float[n];
+        }
+
         /// <summary>C3: the ragdoll.cfg reader. Polled (never on a timer, never on a thread) from the
         /// three paths this layer already runs on; see the class doc.</summary>
         private readonly LiveMotionConfig _cfg;
@@ -518,10 +531,14 @@ namespace AcmeRagdoll.Services {
         /// and say so once, so a fight between the two writers is visible in the log rather than only
         /// on screen. Caller holds <see cref="_gate"/>.</summary>
         private void RetireForDeath(LiveEntry e, uint id) {
-            _log.LogInformation(
-                "livemotion YIELD id=0x{Id:X8} reason=death-owned hits={H} wrote={W} " +
-                "(single-writer: the death ragdoll owns this body)",
-                id, e.HitCount, e.WroteOnce);
+            // PACING: fires on the render thread under _gate for essentially every kill, alongside
+            // the death ragdoll's own ARM/handoff lines — the async sink keeps the story without
+            // putting three file writes into the frame where a body just started falling.
+            AsyncLog.Post(
+                "livemotion YIELD id=0x" + id.ToString("X8") +
+                " reason=death-owned hits=" + e.HitCount.ToString() +
+                " wrote=" + e.WroteOnce.ToString() +
+                " (single-writer: the death ragdoll owns this body)");
             Remove(id);
         }
 
@@ -885,7 +902,7 @@ namespace AcmeRagdoll.Services {
                     e.Armed = !e.IsPlayer;
                     if (e.IsPlayer) {
                         e.PendingCount = 0;   // never arm on a player object
-                        _log.LogDebug("livemotion SKIP id=0x{Id:X8} reason=BF_PLAYER", id);
+                        AsyncLog.Post("livemotion SKIP id=0x" + id.ToString("X8") + " reason=BF_PLAYER");
                     }
                 }
 
@@ -1053,13 +1070,24 @@ namespace AcmeRagdoll.Services {
                 float band = HeightBandCenter(imp.Height);
 
                 // The tuning loop's one line per hit (C3 watches these while editing the cfg).
-                _log.LogDebug(
-                    "livemotion HIT id=0x{Id:X8} script=0x{S:X2} h={H} dir=({DX:F2},{DY:F2},{DZ:F2}) " +
-                    "dmg%={DP:F3} crit={C}x{M:F1} enriched={E} energy={EN:F3} pool={P:F3}/{PC:F2} " +
-                    "v0={V:F3}yd/s latency={L}ms hits={N}",
-                    id, imp.ScriptType, imp.Height, dx, dy, dz,
-                    dp, imp.Critical, mul, imp.Enriched, energy, e.Pool, e.PoolCap,
-                    v0, now - imp.Tick, e.HitCount);
+                // PACING (2026-08-23): this used to be an ILogger call — i.e. a Console.Write plus a
+                // full file open/append/close — ON THE RENDER THREAD, WHILE HOLDING _gate, once per
+                // landed hit per body. A group @smite turned that into a burst of file writes in a
+                // single frame. Same line, same content; it now goes to the async sink, and the
+                // params-array + 16 boxes of the structured call are gone with it.
+                AsyncLog.Post(
+                    "livemotion HIT id=0x" + id.ToString("X8") +
+                    " script=0x" + imp.ScriptType.ToString("X2") +
+                    " h=" + imp.Height.ToString() +
+                    " dir=(" + dx.ToString("F2") + "," + dy.ToString("F2") + "," + dz.ToString("F2") + ")" +
+                    " dmg%=" + dp.ToString("F3") +
+                    " crit=" + imp.Critical.ToString() + "x" + mul.ToString("F1") +
+                    " enriched=" + imp.Enriched.ToString() +
+                    " energy=" + energy.ToString("F3") +
+                    " pool=" + e.Pool.ToString("F3") + "/" + e.PoolCap.ToString("F2") +
+                    " v0=" + v0.ToString("F3") + "yd/s" +
+                    " latency=" + (now - imp.Tick).ToString() + "ms" +
+                    " hits=" + e.HitCount.ToString());
 
                 for (int i = 0; i < n; i++) {
                     // extremities take the whole kick, the core takes coreImpulseFrac of it
@@ -1238,9 +1266,15 @@ namespace AcmeRagdoll.Services {
 
             if (written > 0 && !e.WroteOnce) {
                 e.WroteOnce = true;
-                _log.LogDebug(
-                    "livemotion REACT id=0x{Id:X8} parts={N}/{T} pool={P:F3} gain={G:F2} maxOff={M:F4}yd hits={H}",
-                    id, written, n, e.Pool, gain, e.MaxOffset, e.HitCount);
+                // PACING: once per entry, but that "once" is the FIRST FRAME OF A REACTION — the
+                // frame that least wants a synchronous file write. Async sink.
+                AsyncLog.Post(
+                    "livemotion REACT id=0x" + id.ToString("X8") +
+                    " parts=" + written.ToString() + "/" + n.ToString() +
+                    " pool=" + e.Pool.ToString("F3") +
+                    " gain=" + gain.ToString("F2") +
+                    " maxOff=" + e.MaxOffset.ToString("F4") + "yd" +
+                    " hits=" + e.HitCount.ToString());
             }
         }
 
@@ -1285,10 +1319,14 @@ namespace AcmeRagdoll.Services {
 
             if (!e.IdleLoggedOnce) {
                 e.IdleLoggedOnce = true;
-                _log.LogDebug(
-                    "livemotion IDLE id=0x{Id:X8} archetype={A} parts={N} amp={Amp:F4}yd hz={Hz:F2} " +
-                    "sway={S} radius={R:F2}yd",
-                    id, e.Archetype, e.PartCount, amp, t.IdleHz, e.IdleSway != null, e.Radius);
+                AsyncLog.Post(
+                    "livemotion IDLE id=0x" + id.ToString("X8") +
+                    " archetype=" + e.Archetype.ToString() +
+                    " parts=" + e.PartCount.ToString() +
+                    " amp=" + amp.ToString("F4") + "yd" +
+                    " hz=" + t.IdleHz.ToString("F2") +
+                    " sway=" + (e.IdleSway != null).ToString() +
+                    " radius=" + e.Radius.ToString("F2") + "yd");
             }
         }
 
@@ -1360,11 +1398,15 @@ namespace AcmeRagdoll.Services {
 
             if (!e.GaitLoggedOnce) {
                 e.GaitLoggedOnce = true;
-                _log.LogDebug(
-                    "livemotion GAIT id=0x{Id:X8} setupDid=0x{Did:X8} parts={N} amp={Amp:F4}yd " +
-                    "cadence={Hz:F2}Hz speed={S:F2}yd/s({V}) radius={R:F2}yd",
-                    id, GaitMotion.TargetSetupDid, e.PartCount, amp, hz, e.GaitSpeed,
-                    e.GaitSpeedValid ? "measured" : "knob", e.Radius);
+                AsyncLog.Post(
+                    "livemotion GAIT id=0x" + id.ToString("X8") +
+                    " setupDid=0x" + GaitMotion.TargetSetupDid.ToString("X8") +
+                    " parts=" + e.PartCount.ToString() +
+                    " amp=" + amp.ToString("F4") + "yd" +
+                    " cadence=" + hz.ToString("F2") + "Hz" +
+                    " speed=" + e.GaitSpeed.ToString("F2") + "yd/s(" +
+                    (e.GaitSpeedValid ? "measured" : "knob") + ")" +
+                    " radius=" + e.Radius.ToString("F2") + "yd");
             }
         }
 
@@ -1473,9 +1515,12 @@ namespace AcmeRagdoll.Services {
             float ooy = objFrame->m_fOrigin.BaseClass_Vector3.y;
             float ooz = objFrame->m_fOrigin.BaseClass_Vector3.z;
 
-            var lx = new float[n];
-            var ly = new float[n];
-            var lz = new float[n];
+            // PACING (2026-08-23): these were three fresh float[n] per CALL — and the call is retried
+            // EVERY FRAME until the pose is readable (the `part == null` / non-finite bails below),
+            // so an unready body threw away three arrays per frame for as long as it stayed unready.
+            // Reused scratch instead; the whole method runs under _gate on the render thread.
+            EnsureMetricsScratch(n);
+            float[] lx = _metricsX, ly = _metricsY, lz = _metricsZ;
             float cx = 0f, cy = 0f, cz = 0f;
 
             for (int i = 0; i < n; i++) {

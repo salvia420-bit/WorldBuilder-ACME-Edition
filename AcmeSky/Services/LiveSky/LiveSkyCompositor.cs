@@ -190,7 +190,9 @@ namespace AcmeSky.Services.LiveSky {
             long now = _clock.ElapsedTicks;
             if (now - _lastCfgReloadTicks < Stopwatch.Frequency) return;
             _lastCfgReloadTicks = now;
-            if (_cfg.Reload()) RebuildAxisIfChanged();
+            // PACING: mtime-gated (see SkyConfig.ReloadIfChanged) — one stat per second instead of a
+            // full read + parse + rebuild-check on the render thread.
+            if (_cfg.ReloadIfChanged()) RebuildAxisIfChanged();
         }
 
         // cbuffer payload -- MUST match cbuffer SkyParams in AtmosphereShader.Hlsl EXACTLY (288 bytes).
@@ -1037,8 +1039,14 @@ namespace AcmeSky.Services.LiveSky {
 
         private void LogFrameThrottled(int w, int h, bool atmo) {
             long n = ++_frameCount;
+            // PACING (2026-08-23): an ILogger call is a synchronous Console.Write + Directory.Exists
+            // + File open/append/close (Chorizite.Core/Logging/ChoriziteLogger.cs) ON THE RENDER
+            // THREAD, so this heartbeat put a file write in one frame per second — at 100 fps that
+            // IS the 1% frame. It is a diagnostic, so it now honours `diag` (it never did) and beats
+            // once per 10 s. `diag=1` + the 10 s line still proves the live path is alive.
+            if (_cfg.Diag < 0.5f) return;
             long now = _clock.ElapsedTicks;
-            if (now - _lastFrameLogTicks < Stopwatch.Frequency) return;
+            if (now - _lastFrameLogTicks < Stopwatch.Frequency * 10) return;
             _lastFrameLogTicks = now;
             if (atmo) {
                 _log.LogInformation(

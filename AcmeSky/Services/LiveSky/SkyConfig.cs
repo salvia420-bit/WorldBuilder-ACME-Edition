@@ -194,6 +194,29 @@ namespace AcmeSky.Services.LiveSky {
             };
         }
 
+        // ── PACING (2026-08-23) ──────────────────────────────────────────────────────────────────
+        // Reload() is File.Exists over the candidates + File.ReadAllLines + a Trim/Substring/
+        // ToLowerInvariant per line, and LiveSkyCompositor calls it ONCE A SECOND ON THE RENDER
+        // THREAD. That is a file read plus ~50 string allocations landing in one frame out of every
+        // ~60-100 — i.e. it lands squarely in the 1% lows. Same 1 Hz responsiveness, but a second now
+        // costs ONE stat unless sky.cfg actually changed.
+        private string? _activePath;
+        private DateTime _activeStamp;
+
+        /// <summary>Re-read only if the loaded file's mtime moved. Returns true when values were
+        /// actually re-applied (so the caller's rebuild work also stops running every second).
+        /// Never throws.</summary>
+        public bool ReloadIfChanged() {
+            string? p = _activePath;
+            if (p != null) {
+                DateTime t;
+                try { t = File.GetLastWriteTimeUtc(p); }
+                catch { t = default; }
+                if (t == _activeStamp) return false;
+            }
+            return Reload();
+        }
+
         /// <summary>Re-read the config file over the current values. Returns true if a file was read
         /// (whether or not values changed). Never throws.</summary>
         public bool Reload() {
@@ -212,10 +235,13 @@ namespace AcmeSky.Services.LiveSky {
                         Apply(key, val);
                     }
                     LoadedFrom = path;
+                    _activePath = path;
+                    try { _activeStamp = File.GetLastWriteTimeUtc(path); } catch { _activeStamp = default; }
                     return true;
                 }
                 catch { /* keep current values */ }
             }
+            _activePath = null;
             return false;
         }
 

@@ -374,10 +374,12 @@ namespace AcmeRagdoll.Services {
                 if (liveId != 0 && _live.TryGetValue(liveId, out Entry? le) && le != null && le.Obj == obj
                     && IsReviveMotion(motion) && !le.IsCorpse && !le.Pending && le.ActiveLeft <= 0
                     && Environment.TickCount64 - le.ArmedTick > ReviveGraceMillis) {
-                    _log.LogInformation(
-                        "ragdoll RELEASE id=0x{Id:X8} motion=0x{M:X8} class=REVIVE-locomotion " +
-                        "(alive again after {Ms}ms; entry + handoff record dropped)",
-                        liveId, motion, Environment.TickCount64 - le.ArmedTick);
+                    AsyncLog.Post(
+                        "ragdoll RELEASE id=0x" + liveId.ToString("X8") +
+                        " motion=0x" + motion.ToString("X8") +
+                        " class=REVIVE-locomotion (alive again after " +
+                        (Environment.TickCount64 - le.ArmedTick).ToString() +
+                        "ms; entry + handoff record dropped)");
                     if (le.Rec != null) _records.Remove(le.Rec);
                     Remove(liveId);
                 }
@@ -427,10 +429,8 @@ namespace AcmeRagdoll.Services {
                     ObjId = id, Obj = obj, Parts = null, Seeded = false, Pending = true, IsCorpse = false,
                     ActiveLeft = 0, ArmedTick = now, LastTouchTick = now,
                 });
-                _log.LogInformation(
-                    "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} cell=0x{Cell:X8} xy=({X:F1},{Y:F1}) " +
-                    "posValid=False class=PENDING-nopos (deferred; will classify when positioned)",
-                    id, setupDid, numParts, objcell, px, py);
+                AsyncLog.Post(ArmLine(id, setupDid, numParts, objcell, px, py) +
+                              " posValid=False class=PENDING-nopos (deferred; will classify when positioned)");
                 return;
             }
 
@@ -497,12 +497,13 @@ namespace AcmeRagdoll.Services {
             rec.MatchCount++;
 
             bool parentMatch = parentHash == rec.ParentHash;
-            _log.LogInformation(
-                "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} cell=0x{Cell:X8} xy=({X:F1},{Y:F1}) " +
-                "posValid=True class=CORPSE-handoff matched(creatureSetupDid=0x{CDid:X8} dist={Dist:F2} age={Age}ms " +
-                "parentHashMatch={PM} activeLeftRemaining={AL})",
-                id, setupDid, numParts, objcell, px, py,
-                rec.SetupDid, matchDist, matchAge, parentMatch, rec.ActiveLeftRemaining);
+            AsyncLog.Post(ArmLine(id, setupDid, numParts, objcell, px, py) +
+                          " posValid=True class=CORPSE-handoff matched(creatureSetupDid=0x" +
+                          rec.SetupDid.ToString("X8") +
+                          " dist=" + matchDist.ToString("F2") +
+                          " age=" + matchAge.ToString() + "ms" +
+                          " parentHashMatch=" + parentMatch.ToString() +
+                          " activeLeftRemaining=" + rec.ActiveLeftRemaining.ToString() + ")");
         }
 
         /// <summary>
@@ -618,12 +619,13 @@ namespace AcmeRagdoll.Services {
                 rec.MatchCount++;   // SHARED handoff, not one-shot — see ArmCorpseHandoff for why.
 
                 bool parentMatch = parentHash == rec.ParentHash;
-                _log.LogInformation(
-                    "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} cell=0x{Cell:X8} xy=({X:F1},{Y:F1}) " +
-                    "posValid=True deferred=True class=CORPSE-handoff matched(creatureSetupDid=0x{CDid:X8} dist={Dist:F2} " +
-                    "age={Age}ms parentHashMatch={PM} activeLeftRemaining={AL})",
-                    e.ObjId, setupDid, numParts, objcell, px, py,
-                    rec.SetupDid, matchDist, matchAge, parentMatch, rec.ActiveLeftRemaining);
+                AsyncLog.Post(ArmLine(e.ObjId, setupDid, numParts, objcell, px, py) +
+                              " posValid=True deferred=True class=CORPSE-handoff matched(creatureSetupDid=0x" +
+                              rec.SetupDid.ToString("X8") +
+                              " dist=" + matchDist.ToString("F2") +
+                              " age=" + matchAge.ToString() + "ms" +
+                              " parentHashMatch=" + parentMatch.ToString() +
+                              " activeLeftRemaining=" + rec.ActiveLeftRemaining.ToString() + ")");
                 return true;
             }
 
@@ -640,18 +642,19 @@ namespace AcmeRagdoll.Services {
             // Still nothing after the grace: a genuinely fresh creature death whose position was late.
             // Crumple from the (now valid) live pose - Seed() runs below and creates its own record.
             e.Seeded = false; e.IsCorpse = false; e.ActiveLeft = RagdollSim.FallFrames;
-            _log.LogInformation(
-                "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} cell=0x{Cell:X8} xy=({X:F1},{Y:F1}) " +
-                "posValid=True deferred=True class=CREATURE-crumple",
-                e.ObjId, setupDid, numParts, objcell, px, py);
+            AsyncLog.Post(ArmLine(e.ObjId, setupDid, numParts, objcell, px, py) +
+                          " posValid=True deferred=True class=CREATURE-crumple");
             return true;
         }
 
         /// <summary>Give up on a deferred entry that never positioned.</summary>
         private void GiveUpPending(Entry e, uint setupDid, uint numParts, string why) {
-            _log.LogInformation(
-                "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} posValid=False class=SKIP-nopos (gave up: {Why} after {F} frames)",
-                e.ObjId, setupDid, numParts, why, e.PendingFrames);
+            AsyncLog.Post(
+                "ragdoll ARM id=0x" + e.ObjId.ToString("X8") +
+                " setupDid=0x" + setupDid.ToString("X8") +
+                " nparts=" + numParts.ToString() +
+                " posValid=False class=SKIP-nopos (gave up: " + why +
+                " after " + e.PendingFrames.ToString() + " frames)");
             Remove(e.ObjId);
         }
 
@@ -674,6 +677,14 @@ namespace AcmeRagdoll.Services {
             float isx = Math.Abs(sx) > 1e-6f ? 1f / sx : 1f;
             float isy = Math.Abs(sy) > 1e-6f ? 1f / sy : 1f;
             float isz = Math.Abs(sz) > 1e-6f ? 1f / sz : 1f;
+
+            // PACING (2026-08-23): the only way out of the loop below is a null part ("pose not ready
+            // — retry next frame"), and Seed is retried for up to SeedAttemptsMax frames. Allocating
+            // three arrays first meant every retry frame produced garbage for the GC to collect
+            // during a death. Pre-scan for readiness with pointer reads; then allocate once, for the
+            // attempt that will actually succeed. (These arrays are handed to the sim, so unlike the
+            // metrics scratch they cannot be reused.)
+            for (int i = 0; i < n; i++) if (parts[i] == null) return false;
 
             var parent = new uint[n];
             var startPos = new float[n * 3];
@@ -853,7 +864,10 @@ namespace AcmeRagdoll.Services {
             // can never escape the native detour (the outer detour also try/catches).
             float fall;
             try { fall = ResolveWorldFall(e, owner, sim, n, parts, oq, ooz, sx, sy, sz); }
-            catch (Exception ex) { _log.LogError(ex, "ragdoll: world-fall failed id=0x{Id:X8}", e.ObjId); fall = e.FallOffset; }
+            // PACING: this is inside WriteParts, i.e. per ragdoll per frame. An exception that
+            // repeats (a bad terrain call on one body) used to mean a synchronous file write EVERY
+            // FRAME — a permanent frame-time floor. Throttled to one line per second.
+            catch (Exception ex) { LogWorldFallFailed(ex, e.ObjId); fall = e.FallOffset; }
 
             // ANTI-SINK CLAMP. The verlet sim settles parts onto its own model-space floor, but the
             // scaled world transform + odd rest poses can drop the lowest part BELOW the real surface
@@ -954,9 +968,11 @@ namespace AcmeRagdoll.Services {
                     e.BasisY += dy;
                     if (!e.BasisRebasedLogged) {
                         e.BasisRebasedLogged = true;
-                        _log.LogInformation(
-                            "ragdoll BASIS id=0x{Id:X8} rebased cell 0x{From:X8} -> 0x{To:X8} d=({DX:F1},{DY:F1})yd",
-                            e.ObjId, e.BasisCell, cell, dx, dy);
+                        AsyncLog.Post(
+                            "ragdoll BASIS id=0x" + e.ObjId.ToString("X8") +
+                            " rebased cell 0x" + e.BasisCell.ToString("X8") +
+                            " -> 0x" + cell.ToString("X8") +
+                            " d=(" + dx.ToString("F1") + "," + dy.ToString("F1") + ")yd");
                     }
                 }
                 e.BasisCell = cell;
@@ -1027,9 +1043,12 @@ namespace AcmeRagdoll.Services {
                 e.Airborne = gap0 > AirborneEps;
                 e.FallDecided = true;
                 if (e.Airborne)
-                    _log.LogInformation(
-                        "ragdoll FALL id=0x{Id:X8} class=AIRBORNE restZ={Rz:F2} terrainZ={Tz:F2} drop~={Gap:F2} src=find_terrain_poly corpse={C}",
-                        e.ObjId, lowWorldZ, e.GroundZ, gap0, e.IsCorpse);
+                    AsyncLog.Post(
+                        "ragdoll FALL id=0x" + e.ObjId.ToString("X8") +
+                        " class=AIRBORNE restZ=" + lowWorldZ.ToString("F2") +
+                        " terrainZ=" + e.GroundZ.ToString("F2") +
+                        " drop~=" + gap0.ToString("F2") +
+                        " src=find_terrain_poly corpse=" + e.IsCorpse.ToString());
                 if (!e.Airborne) return 0f;
             }
             if (!e.Airborne) return 0f;
@@ -1050,9 +1069,11 @@ namespace AcmeRagdoll.Services {
                     e.FallOffset = target;
                     e.FallVel = 0f;
                     e.Landed = true;
-                    _log.LogInformation(
-                        "ragdoll FALL id=0x{Id:X8} class=LANDED terrainZ={Tz:F2} drop={Drop:F2} corpse={C}",
-                        e.ObjId, e.GroundZ, e.FallOffset, e.IsCorpse);
+                    AsyncLog.Post(
+                        "ragdoll FALL id=0x" + e.ObjId.ToString("X8") +
+                        " class=LANDED terrainZ=" + e.GroundZ.ToString("F2") +
+                        " drop=" + e.FallOffset.ToString("F2") +
+                        " corpse=" + e.IsCorpse.ToString());
                 }
             }
             return e.FallOffset;
@@ -1240,10 +1261,31 @@ namespace AcmeRagdoll.Services {
             heading = obj->m_position.frame.qw;
         }
 
+        /// <summary>PACING (2026-08-23): every ARM/handoff/RELEASE line fires on the render thread on
+        /// the frame a body dies — several per death, and a synchronous ILogger call is a
+        /// Console.Write plus a full file open/append/close each. They all go through the async sink
+        /// now (same text, same log.txt); <see cref="ArmLine"/> builds the shared prefix once.</summary>
+        /// <summary>One line per second at most, for the one error path that can repeat every frame
+        /// (see the ResolveWorldFall guard). -1_000_000 rather than long.MinValue: `now - MinValue`
+        /// overflows negative and would suppress every line forever.</summary>
+        private long _lastWorldFallErr = -1_000_000;
+        private void LogWorldFallFailed(Exception ex, uint id) {
+            long now = Environment.TickCount64;
+            if (now - _lastWorldFallErr < 1000) return;
+            _lastWorldFallErr = now;
+            try { _log.LogError(ex, "ragdoll: world-fall failed id=0x{Id:X8}", id); } catch { }
+        }
+
+        private static string ArmLine(uint id, uint setupDid, uint numParts, uint objcell, float x, float y) =>
+            "ragdoll ARM id=0x" + id.ToString("X8") +
+            " setupDid=0x" + setupDid.ToString("X8") +
+            " nparts=" + numParts.ToString() +
+            " cell=0x" + objcell.ToString("X8") +
+            " xy=(" + x.ToString("F1") + "," + y.ToString("F1") + ")";
+
         private void LogArm(string cls, uint id, uint setupDid, uint numParts, uint objcell, float x, float y) {
-            _log.LogInformation(
-                "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} cell=0x{Cell:X8} xy=({X:F1},{Y:F1}) posValid=True class={Cls}",
-                id, setupDid, numParts, objcell, x, y, cls);
+            AsyncLog.Post(ArmLine(id, setupDid, numParts, objcell, x, y) +
+                          " posValid=True class=" + cls);
         }
 
         /// <summary>True once the object's world placement is set: a non-zero cell and a non-origin XY.

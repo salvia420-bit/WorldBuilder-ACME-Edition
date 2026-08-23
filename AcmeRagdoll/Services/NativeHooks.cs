@@ -245,8 +245,19 @@ namespace AcmeRagdoll.Services {
             catch (Exception ex) { LogSafe(ex, "UpdateParts/live"); }
         }
 
+        // PACING (2026-08-23): UpdateParts runs per part-array PER FRAME, so a recurring detour
+        // exception used to mean a synchronous Console.Write + file open/append/close for every
+        // rendered object of every frame — a hitch source that only shows up when something is
+        // already wrong. One line per second is enough to tell that story.
+        // -1_000_000, NOT long.MinValue: `now - long.MinValue` overflows negative and would suppress
+        // every line forever (the same trap AcmeLights' NativeHooks documents).
+        private static long _lastLogSafe = -1_000_000;
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void LogSafe(Exception ex, string where) {
+            long now = Environment.TickCount64;
+            if (now - _lastLogSafe < 1000) return;
+            _lastLogSafe = now;
             try { _log?.LogError(ex, "ragdoll: {Where} detour threw (swallowed)", where); }
             catch { /* never let logging unwind into native code */ }
         }

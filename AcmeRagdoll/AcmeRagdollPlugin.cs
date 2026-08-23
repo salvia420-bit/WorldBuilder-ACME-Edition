@@ -77,6 +77,15 @@ namespace AcmeRagdoll {
                 return;
             }
 
+            // PACING (2026-08-23): stand up the off-render-thread log sink before anything that can
+            // log from a detour. Chorizite's ILogger does Console.Write + Directory.Exists + a full
+            // File open/append/close PER LINE, synchronously — and this plugin's noisiest lines
+            // (`livemotion HIT` per landed hit, the per-death ARM/handoff/YIELD block) fire from
+            // inside the render-thread detours, on exactly the frames that are already busiest.
+            // One-shot lifecycle lines keep the synchronous logger (in-game console + immediate
+            // durability); everything per-frame/per-event goes through AsyncLog.
+            AsyncLog.Start(_log);
+
             // Eagerly load Chorizite.ACBindings NOW, on the managed plugin thread where assembly
             // loading is legal. NativeHooks uses `nint` at the ABI boundary (never touching an
             // ACBindings type), so nothing else forces the assembly to load until RagdollRegistry
@@ -457,6 +466,7 @@ namespace AcmeRagdoll {
             _liveMotion?.Shutdown();
             _liveMotion = null;
 
+            AsyncLog.Stop();        // flush whatever the sink still holds, then stop the writer
             Instance = null;
         }
 

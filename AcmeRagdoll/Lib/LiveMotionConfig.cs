@@ -268,6 +268,11 @@ namespace AcmeRagdoll.Lib {
         private int _reloading;
 
         // What the currently-loaded snapshot was parsed from; the "did it change" test.
+        /// <summary>How often the FULL candidate list is walked (a newly created higher-priority cfg
+        /// appears within this long); in between, only the loaded file is re-stat'd. See ReloadCore.</summary>
+        private const int FullScanIntervalMs = 10_000;
+        private long _lastFullScanMs = -FullScanIntervalMs;
+
         private string? _stampPath;
         private DateTime _stampUtc;
         private long _stampLen = -1;
@@ -333,6 +338,22 @@ namespace AcmeRagdoll.Lib {
             string? path = null;
             DateTime utc = default;
             long len = 0;
+
+            // PACING (2026-08-23): this runs on the RENDER THREAD once a second (Poll is called from
+            // the top of OnUpdateParts). Re-stat only the file we are already loaded from — one stat
+            // instead of up to three, and one FileInfo instead of three — and fall back to the full
+            // candidate walk only every FullScanIntervalMs, which is what would notice a
+            // higher-priority candidate appearing mid-session.
+            long nowMs = Environment.TickCount64;
+            if (_stampPath != null && nowMs - _lastFullScanMs < FullScanIntervalMs) {
+                try {
+                    var known = new FileInfo(_stampPath);
+                    if (known.Exists && known.LastWriteTimeUtc == _stampUtc && known.Length == _stampLen)
+                        return;                                  // unchanged — no read, no parse
+                }
+                catch { /* fall through to the full scan */ }
+            }
+            _lastFullScanMs = nowMs;
 
             foreach (string candidate in CandidatePaths) {
                 if (string.IsNullOrEmpty(candidate)) continue;
