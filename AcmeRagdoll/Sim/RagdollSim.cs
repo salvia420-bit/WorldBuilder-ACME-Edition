@@ -42,6 +42,25 @@ namespace AcmeRagdoll.Sim {
         private const float PIVOT_LEAD = 0.18f;
         private const float BRACE_STIFF = 1.0f;
 
+        // ---- orientation commit (see the ctor's ORIENTATION COMMIT block) ----
+        //   * ORIENT_FALL_K    - the topple window, in units of sqrt(hCoM/g): how long the fall has to
+        //                        run before the body is on the ground. 2.5 puts a drudge's window at
+        //                        ~0.62 s, which is what its fall actually measures. Raise it and the
+        //                        correction assumes a longer fall, so it grows; safe range ~2..3.
+        //   * ORIENT_NAT_CAP   - hard ceiling on the seeded topple rate in units of sqrt(g/height) (the
+        //                        natural pole-topple rate). 1.25 => a body can never be seeded to rotate
+        //                        90 deg faster than ~0.45 s: the fall still READS. Safe range ~1..1.5.
+        //   * ORIENT_SPEED_FRAC- the same ceiling expressed against the anti-fly cap: the fastest node's
+        //                        seeded speed stays below this fraction of the body's own MaxSpeed. The
+        //                        two ceilings are min()ed, so BOTH hold. Safe range ~0.4..0.6; never
+        //                        raise it to 1 (that would hand the whole anti-fly budget to the seed).
+        private const float ORIENT_FALL_K = 2.5f;
+        private const float ORIENT_NAT_CAP = 1.25f;
+        private const float ORIENT_SPEED_FRAC = 0.55f;
+        /// <summary>Upper bound on the caller's commit scalar - a mistyped cfg cannot make the
+        /// correction arbitrarily large (the rate ceilings above bound the OUTCOME regardless).</summary>
+        private const float ORIENT_COMMIT_MAX = 6.0f;
+
         // Everything else (impulse, topple, twist, give schedule, caps, damping, friction, fall
         // length, direction bias) is PER BODY and lives in RagdollParams, chosen at seed time from
         // the creature's Setup DataID. RagdollParams.Default holds the exact values those consts
@@ -105,8 +124,13 @@ namespace AcmeRagdoll.Sim {
         /// <param name="direction">Topple direction in the model XY plane, radians.</param>
         /// <param name="floorZ">Model-space Z of the foot/ground plane.</param>
         /// <param name="prm">This body's tuning (null =&gt; <see cref="RagdollParams.Default"/>).</param>
+        /// <param name="orientCommit">How hard this death commits to <paramref name="direction"/>
+        /// against its own center-of-mass bias (0 = not at all, the shipped behaviour; ~1 = the
+        /// measured bias is cancelled once). Per-death, from <see cref="DeathVariety"/>; MUST be
+        /// carried through the corpse handoff alongside <paramref name="direction"/>.</param>
         public RagdollSim(uint[] parent, float[] startPos, Quat[] startQuats,
-                          uint seed, float direction, float floorZ, RagdollParams prm) {
+                          uint seed, float direction, float floorZ, RagdollParams prm,
+                          float orientCommit = 0f) {
             _p = prm ?? RagdollParams.Default;
             _n = parent.Length;
             _parent = parent;
@@ -136,14 +160,14 @@ namespace AcmeRagdoll.Sim {
             _restDir = BuildRestDirs(_pos, _boneChild);
 
             // ---- seed velocities: topple (omega x r) + twist + shove + jitter ----
-            float zmin = float.MaxValue, zmax = float.MinValue, cx = 0, cy = 0;
+            float zmin = float.MaxValue, zmax = float.MinValue, cx = 0, cy = 0, cz = 0;
             for (int i = 0; i < _n; i++) {
                 float z = _pos[i * 3 + 2];
                 if (z < zmin) zmin = z;
                 if (z > zmax) zmax = z;
-                cx += _pos[i * 3]; cy += _pos[i * 3 + 1];
+                cx += _pos[i * 3]; cy += _pos[i * 3 + 1]; cz += z;
             }
-            cx /= _n; cy /= _n;
+            cx /= _n; cy /= _n; cz /= _n;
             float height = Math.Max(0.25f, zmax - zmin);
 
             float ang = direction + ((float)rand() - 0.5f) * _p.DirJitter;
@@ -151,19 +175,116 @@ namespace AcmeRagdoll.Sim {
             float rate = Math.Min((_p.Impulse / height) * _p.ToppleGain,
                                   _p.ToppleRateCap * (float)Math.Sqrt(GRAVITY / height))
                          * (0.7f + 0.6f * (float)rand());
-            float ox = -dy * rate, oy = dx * rate;
             float twist = _p.Twist * (rand() < 0.5 ? -1f : 1f) * (0.35f + 0.65f * (float)rand());
 
-            // pivot: centroid of the lowest quarter, nudged toward the fall direction.
+            // pivot: centroid of the lowest quarter (the FOOT pivot; the lead nudge comes after the
+            // orientation commit below, which may turn the fall direction).
             float lowBand = zmin + 0.25f * height;
             float px = 0, py = 0; int nsel = 0;
             for (int i = 0; i < _n; i++) {
                 if (_pos[i * 3 + 2] <= lowBand) { px += _pos[i * 3]; py += _pos[i * 3 + 1]; nsel++; }
             }
             if (nsel > 0) { px /= nsel; py /= nsel; } else { px = cx; py = cy; }
+            float pz = zmin;
+
+            // ================================ ORIENTATION COMMIT ================================
+            // WHY. The seeded topple already points the body's top at `direction`, and `direction` is
+            // already an even azimuth - yet a FRONT-HEAVY body (drudge: hunched, arms hung forward) lands
+            // prone every single time. The cause is a bias the seed never accounts for: its center of
+            // mass sits AHEAD of its feet, so from frame 0 gravity applies a constant forward torque
+            // about the foot contact. Over the ~0.6 s the fall lasts that torque accumulates more
+            // rotation than the seeded impulse does, so every heading collapses into the same face-plant.
+            //
+            // WHAT. Measure that bias from THIS death pose (foot pivot -> CoM, horizontal), work out how
+            // much rotation gravity will steal over the fall window, and add the OPPOSITE rotation to the
+            // seed as a feed-forward correction. Everything here is angular VELOCITY - the body still
+            // starts standing and rotates over ~0.5-1 s, so the fall reads as a fall (this is the whole
+            // difference from the rejected pre-lean, which tipped the POSE past its balance point and
+            // snapped the body flat in two frames).
+            //
+            // HOW. Work in "topple-direction space", where a horizontal vector IS the topple (its
+            // direction = where the top goes, its length = the rate; the omega vector is the same thing
+            // turned 90 deg, which is exactly how ox/oy are built below):
+            //     topple = rate * heading  -  wCancel * overhangDir
+            // then never let the heading component drop BELOW the base rate (so a fall already headed the
+            // way the body leans keeps its natural speed instead of being braked, and an opposed fall
+            // gets the whole correction added). The result is capped by two independent ceilings and its
+            // pivot-lead uplift is compensated out, so it cannot launch the body.
+            //
+            // Falls out for free: overhang ~ 0 (a balanced skeleton) => wCancel ~ 0 => untouched; commit
+            // 0 (deathvariety off) => the entire block is skipped and the death is bit-for-bit the old
+            // one. NO rand() DRAWS HAPPEN HERE - the give schedule below keeps its exact sequence.
+            float upliftFix = 0f;
+            if (orientCommit > 0f) {
+                float commit = orientCommit > ORIENT_COMMIT_MAX ? ORIENT_COMMIT_MAX : orientCommit;
+                float ex = cx - px, ey = cy - py;                 // foot pivot -> CoM, horizontal
+                float overhang = (float)Math.Sqrt(ex * ex + ey * ey);
+                float hcom = Math.Max(0.05f, cz - pz);
+                if (overhang > 1e-4f) {
+                    float ux = ex / overhang, uy = ey / overhang;  // the direction the body leans
+                    float axx = -uy, axy = ux;                     // horizontal axis it topples about
+                    // Inertia about that axis through the foot pivot, and the farthest node from the
+                    // pivot (unit mass per part - the same uniform-mass model the centroid above uses).
+                    float inertia = 0f, rTopSq = 0f;
+                    for (int i = 0; i < _n; i++) {
+                        float rx = _pos[i * 3] - px, ry = _pos[i * 3 + 1] - py, rz = _pos[i * 3 + 2] - pz;
+                        float adr = axx * rx + axy * ry;
+                        float rr = rx * rx + ry * ry + rz * rz;
+                        inertia += rr - adr * adr;                 // |r perpendicular to the axis|^2
+                        if (rr > rTopSq) rTopSq = rr;
+                    }
+                    if (inertia > 1e-6f) {
+                        // Angular acceleration gravity applies about that axis (torque n*g*overhang).
+                        float aPar = _n * GRAVITY * overhang / inertia;
+                        // How long the fall has to run, and how much rotation the seed still has left
+                        // after the verlet damping has eaten at it for that long: velocity is retained
+                        // by Damping per SUBSTEP, i.e. e^(-beta t) per second, so a unit seeded rate
+                        // buys (1 - e^(-beta*t))/beta radians of travel over the window.
+                        float tFall = ORIENT_FALL_K * (float)Math.Sqrt(hcom / GRAVITY);
+                        float damp = _p.Damping;
+                        if (damp > 0.999999f) damp = 0.999999f; else if (damp < 1e-6f) damp = 1e-6f;
+                        float beta = -(float)Math.Log(damp) * (FPS * SUBSTEPS);
+                        float travel = beta > 1e-4f
+                            ? (1f - (float)Math.Exp(-beta * tFall)) / beta
+                            : tFall;
+                        // Rotation gravity will steal over the window, converted back into the seed rate
+                        // that would have produced it, times the commit scalar.
+                        float wCancel = commit * (0.5f * aPar * tFall * tFall) / Math.Max(1e-4f, travel);
+
+                        float tx = dx * rate - ux * wCancel;
+                        float ty = dy * rate - uy * wCancel;
+                        float along = tx * dx + ty * dy;
+                        if (along < rate) { tx += (rate - along) * dx; ty += (rate - along) * dy; }
+
+                        float mag = (float)Math.Sqrt(tx * tx + ty * ty);
+                        float rTop = (float)Math.Sqrt(rTopSq);
+                        // TWO ceilings, both live: the fall must stay readable (natural topple rate) and
+                        // the fastest node's seeded speed must stay well inside the body's anti-fly cap.
+                        float cap = Math.Min(ORIENT_NAT_CAP * (float)Math.Sqrt(GRAVITY / height),
+                                             ORIENT_SPEED_FRAC * _p.MaxSpeed / Math.Max(0.2f, rTop));
+                        // ...but never BELOW the rate this death would have had anyway. On a big body
+                        // with a low MaxSpeed the speed ceiling can land under the profile's own topple
+                        // rate; clamping to it there would make the fall slower than the shipped one,
+                        // which is a regression, not a safety property. The correction may only ever add.
+                        if (cap < rate) cap = rate;
+                        if (mag > cap) { float sc = cap / mag; tx *= sc; ty *= sc; mag = cap; }
+                        if (mag > 1e-6f) {
+                            dx = tx / mag; dy = ty / mag;
+                            // A faster topple about a pivot that has been nudged FORWARD lifts the whole
+                            // body (the lead turns rotation into a hop of rate*PIVOT_LEAD*height). Take
+                            // the increment straight back out of every node's vertical velocity so the
+                            // correction buys rotation only, never altitude.
+                            upliftFix = (mag - rate) * PIVOT_LEAD * height;
+                            rate = mag;
+                        }
+                    }
+                }
+            }
+            // ============================== end ORIENTATION COMMIT ==============================
+
+            float ox = -dy * rate, oy = dx * rate;
             px += dx * PIVOT_LEAD * height;
             py += dy * PIVOT_LEAD * height;
-            float pz = zmin;
 
             float shove = _p.LinearFrac * _p.Impulse;
             float jitter = _p.Jitter * (0.3f + _p.Impulse / _p.Impulse);
@@ -178,6 +299,7 @@ namespace AcmeRagdoll.Sim {
                 vx += dx * shove + ((float)rand() - 0.5f) * jitter;
                 vy += dy * shove + ((float)rand() - 0.5f) * jitter;
                 vz += ((float)rand() - 0.5f) * jitter;
+                vz -= upliftFix;               // 0 unless the orientation commit raised the rate
                 _prev[i3] = _pos[i3] - vx * DT;
                 _prev[i3 + 1] = _pos[i3 + 1] - vy * DT;
                 _prev[i3 + 2] = _pos[i3 + 2] - vz * DT;
@@ -520,57 +642,6 @@ namespace AcmeRagdoll.Sim {
             double d = (double)to - from;
             d -= Math.Floor((d + Math.PI) / TwoPi) * TwoPi;
             return (float)d;
-        }
-
-        /// <summary>
-        /// Pre-lean a death pose toward its fall heading so gravity COMMITS the fall to that heading.
-        /// Rotates every model-space part origin about the foot pivot (centroid of the lowest quarter,
-        /// at floor Z), about the horizontal axis perpendicular to <paramref name="directionRad"/>, by
-        /// <paramref name="leanRad"/> so the body's top tips toward the heading. This moves the center of
-        /// mass past the pivot in that direction, so a front-heavy creature (drudge, gharu'ndim — arms
-        /// hung forward) no longer face-plants regardless of the seeded topple: an even spread of fall
-        /// headings becomes an even spread of prone / supine / on-side landings.
-        ///
-        /// Called by the registry ON THE START POSE (before the sim is built and before it is stored in
-        /// the handoff record), so the corpse rebuilds from the same leaned pose and continues the exact
-        /// same fall. A no-op when <paramref name="leanRad"/> is 0 (the deathvariety-off path), which is
-        /// what keeps the default death bit-identical. Operates in place on <paramref name="pos"/>
-        /// (length n*3, xyz per part); allocation-free.
-        /// </summary>
-        public static void ApplyDeathLean(float[] pos, int n, float directionRad, float leanRad) {
-            if (leanRad == 0f || n <= 0 || pos == null || pos.Length < n * 3) return;
-
-            float dx = (float)Math.Cos(directionRad), dy = (float)Math.Sin(directionRad);
-            // Unit horizontal axis A perpendicular to the heading: tilting the top toward (dx,dy).
-            float ax = -dy, ay = dx;   // az = 0, |(dx,dy)| = 1 so A is already unit.
-
-            // Foot pivot: centroid of the lowest quarter, at the floor (lowest Z).
-            float zmin = float.MaxValue, zmax = float.MinValue;
-            for (int i = 0; i < n; i++) { float z = pos[i * 3 + 2]; if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
-            float height = Math.Max(0.25f, zmax - zmin);
-            float lowBand = zmin + 0.25f * height;
-            float px = 0, py = 0; int nsel = 0;
-            for (int i = 0; i < n; i++) {
-                if (pos[i * 3 + 2] <= lowBand) { px += pos[i * 3]; py += pos[i * 3 + 1]; nsel++; }
-            }
-            if (nsel > 0) { px /= nsel; py /= nsel; }
-            else { for (int i = 0; i < n; i++) { px += pos[i * 3]; py += pos[i * 3 + 1]; } px /= n; py /= n; }
-            float pz = zmin;
-
-            float c = (float)Math.Cos(leanRad), s = (float)Math.Sin(leanRad);
-            float omc = 1f - c;
-            for (int i = 0; i < n; i++) {
-                int i3 = i * 3;
-                float rx = pos[i3] - px, ry = pos[i3 + 1] - py, rz = pos[i3 + 2] - pz;
-                // Rodrigues about unit horizontal axis A=(ax,ay,0): P' = r*c + (A x r)*s + A*(A.r)*(1-c)
-                float adr = ax * rx + ay * ry;               // A . r  (az = 0)
-                float crx = ay * rz;                         // (A x r).x = ay*rz - 0*ry
-                float cry = -ax * rz;                        // (A x r).y = 0*rx - ax*rz
-                float crz = ax * ry - ay * rx;               // (A x r).z
-                pos[i3]     = px + rx * c + crx * s + ax * adr * omc;
-                pos[i3 + 1] = py + ry * c + cry * s + ay * adr * omc;
-                pos[i3 + 2] = pz + rz * c + crz * s;         // A.z = 0 => no third term on Z
-            }
         }
 
         /// <summary>mulberry32, matching ragdoll_bake.py / ragdoll.js bit-for-bit.</summary>

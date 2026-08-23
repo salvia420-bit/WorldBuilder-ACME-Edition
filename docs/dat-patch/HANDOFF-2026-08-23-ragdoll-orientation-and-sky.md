@@ -4,12 +4,13 @@
 
 Two things the owner still wants fixed, plus one fix that landed and should be kept:
 
-1. **Death-orientation variety (OPEN, needs rework).** Creatures — especially front-heavy
-   ones like drudges — always fall face-first (prone). The attempt this session (a per-death
-   **pre-lean** of the death pose toward a sampled heading) was **rejected by the owner**: it
-   made bodies *snap from standing straight to flat on the ground with no fall animation*. It is
-   now **disabled** (no-op) but the scaffolding is left in place. Your job: get prone/supine/
-   on-side variety **without** killing the fall animation. See §1.
+1. **Death-orientation variety (IMPLEMENTED, awaiting a live motion check).** Creatures —
+   especially front-heavy ones like drudges — always fell face-first (prone). The first attempt (a
+   per-death **pre-lean** of the death pose) was **rejected by the owner**: it made bodies *snap
+   from standing straight to flat with no fall animation*. It has been **deleted** and replaced by
+   an **angular-velocity ORIENTATION COMMIT** in the sim's seed, which cancels the body's measured
+   centre-of-mass bias instead of moving its pose — so the topple still takes ~0.5–1 s. Offline it
+   turns the drudge's 83% prone into ~48/46/6 prone/supine/side. **Verify in motion.** See §1.
 2. **AcmeSky takram clouds (OPEN, aesthetic).** AcmeSky was never deployed; it's deployed now
    and its baked clouds *do* render under DXVK — but the owner says they "don't appear at all
    like they do in the retail version." Your job: make the clouds look right. See §3.
@@ -43,7 +44,21 @@ Do NOT `dotnet build` the whole solution on the laptop (OOMs). Output: `AcmeRagd
 
 ---
 
-## §1 Death-orientation variety (the main open task)
+## §1 Death-orientation variety — IMPLEMENTED 2026-08-23 (needs a live MOTION check)
+
+> **Status update (same day, later).** The angular-velocity idea below was implemented as the
+> **ORIENTATION COMMIT** in `RagdollSim`'s ctor, and the pre-lean (`ApplyDeathLean`, `LeanBase`) was
+> **deleted**. `DeathVariety.Perturb` now outputs `orientCommit` (was `leanRad`); it flows through
+> `HandoffRecord.OrientCommit` exactly like `Direction`, so corpse handoffs continue the same fall.
+> New live cfg key **`deathorientgain`** (default 1.4, clamp 0–4) multiplies `deathvarietystrength`.
+> Measured offline against a faithful Python port of the shipped sim, driven by the real
+> `0x020007DD` part origins: drudge **83% prone → 48% prone / 46% supine / 6% side** at
+> strength 0.7, with the fall's flat-by frame unchanged (p50 15 frames = 0.5 s, so no snap), CoM
+> rise +0.014 yd vs baseline (no launch) and settle drift 0.90 yd mean / 1.17 yd max.
+> **Still unverified in-client — watch the motion, not stills.** The rest of this section is the
+> original problem statement, kept because the diagnosis is still the right one.
+
+### Original brief
 
 ### Why they always face-plant
 `RagdollRegistry.Seed()` already gives each death an **even random heading**
@@ -160,7 +175,7 @@ in a diagnostic gradient mode, not the real cloud rendering. Start there.
 - **Account-in-use ghost:** ACE holds the `tailnet1` session ~150 s after the client dies. After
   `pkill acclient`, **wait ~150 s** before relaunching or you get kicked back to char-select.
 - **Live cfg:** `~/acwine/drive_c/Temp/acdt/ragdoll.cfg` == `C:\Temp\acdt\ragdoll.cfg`. Keys:
-  `livemotion=1`, `deathvariety=1`, `deathvarietystrength=0.7` (0–1.5). Hot-reloaded by the config
+  `livemotion=1`, `deathvariety=1`, `deathvarietystrength=0.7` (0–1.5), `deathorientgain=1.4` (0–4). Hot-reloaded by the config
   poller each frame in-world (no relaunch needed for cfg changes; DLL changes DO need a relaunch).
 - **Capture scripts on the box** (I wrote these; `@` is typed via shift-hold because xdotool
   mistypes `@`→`2`): `~/capshots.sh <wcid> <name> <n>` (spawn n, smite, direct screenshots at

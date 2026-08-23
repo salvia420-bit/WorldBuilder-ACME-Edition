@@ -199,6 +199,15 @@ namespace AcmeRagdoll.Lib {
         /// eigen-sigmas. 0 = none, ~0.6 = tasteful, &gt;1 = wild. Clamped [0,1.5].</summary>
         public float DeathVarietyStrength = 0.6f;
 
+        /// <summary><c>deathorientgain</c>. Gain on the death-fall ORIENTATION commit: how hard a death
+        /// cancels the body's own centre-of-mass bias so it lands along its sampled heading
+        /// (prone/supine/on-side) instead of face-planting. Multiplied by
+        /// <see cref="DeathVarietyStrength"/>; 1.0 cancels the measured bias once, 1.4 (default) is what
+        /// gives a drudge a roughly even prone/supine mix at strength 0.7. 0 = orientation untouched
+        /// (parameter variety still applies). Clamped [0,4]; the sim's own rate ceilings bound the
+        /// outcome, so a large value cannot launch a body — it just saturates.</summary>
+        public float DeathOrientGain = 1.4f;
+
         // ---------------------------------------------------------------- plumbing
 
         /// <summary>The shipped defaults. Published as <see cref="LiveMotionConfig.Current"/> whenever
@@ -340,6 +349,7 @@ namespace AcmeRagdoll.Lib {
                     _current = LiveMotionTuning.Defaults;
                     AcmeRagdoll.Sim.DeathVariety.Enabled = _current.DeathVariety;
                     AcmeRagdoll.Sim.DeathVariety.Strength = _current.DeathVarietyStrength;
+                    AcmeRagdoll.Sim.DeathVariety.OrientGain = _current.DeathOrientGain;
                     _log.LogInformation("livemotion cfg: file gone; reverted to shipped defaults");
                 }
                 return;
@@ -357,16 +367,19 @@ namespace AcmeRagdoll.Lib {
             // Strength at seed time; it does not hold a cfg reference of its own).
             AcmeRagdoll.Sim.DeathVariety.Enabled = next.DeathVariety;
             AcmeRagdoll.Sim.DeathVariety.Strength = next.DeathVarietyStrength;
+            AcmeRagdoll.Sim.DeathVariety.OrientGain = next.DeathOrientGain;
 
             _log.LogInformation(
                 "livemotion cfg: loaded {Path} (livemotion={On} springK={K:F0} damp={C:F1} ampFrac={A:F3} " +
                 "poolCap={P:F2} halfLife={H:F2}s knee={N:F2} crit={X:F1}x/{R}ms atk={T:F2} " +
-                "idle={I}/amp={IA:F4}/hz={IH:F2}/linger={IL:F0}s gait={G}/amp={GA:F3}/cad={GC:F2}Hz)",
+                "idle={I}/amp={IA:F4}/hz={IH:F2}/linger={IL:F0}s gait={G}/amp={GA:F3}/cad={GC:F2}Hz " +
+                "deathvariety={DV}/str={DS:F2}/orientgain={DO:F2})",
                 path, next.Enabled ? 1 : 0, next.SpringK, next.SpringDamp, next.AmplitudeFrac,
                 next.PoolCap, next.PoolHalfLifeSec, next.PoolGainKnee, next.CritImpulseMult,
                 next.CritRefractoryMillis, next.AttackAttenuation,
                 next.IdleMotion ? 1 : 0, next.IdleAmp, next.IdleHz, next.IdleLingerSec,
-                next.Gait ? 1 : 0, next.GaitAmp, next.GaitCadenceHz);
+                next.Gait ? 1 : 0, next.GaitAmp, next.GaitCadenceHz,
+                next.DeathVariety ? 1 : 0, next.DeathVarietyStrength, next.DeathOrientGain);
             if (prev.Enabled != next.Enabled)
                 _log.LogInformation("livemotion cfg: layer {State} by cfg", next.Enabled ? "ENABLED" : "DISABLED");
         }
@@ -402,7 +415,8 @@ namespace AcmeRagdoll.Lib {
                 PoolKnee = 10, CritMult = 11, CritRefractory = 12, SettleDown = 13, HeightBias = 14,
                 AmpFrac = 15, AttackAtten = 16, DefaultDmg = 17,
                 IdleMotion = 18, IdleAmp = 19, IdleHz = 20, Gait = 21, IdleLinger = 22,
-                GaitAmp = 23, GaitCadence = 24, DeathVariety = 25, DeathVarietyStr = 26;
+                GaitAmp = 23, GaitCadence = 24, DeathVariety = 25, DeathVarietyStr = 26,
+                DeathOrientGain = 27;
         }
 
         /// <summary>One key. Ranges are the documented clamps; <c>ampfrac</c>'s upper bound is a real
@@ -455,6 +469,7 @@ namespace AcmeRagdoll.Lib {
                 // ---- per-death variety (PCA death-manifold sampler) ----
                 case "deathvariety": SetB(ref t.DeathVariety, val, last.DeathVariety, KeyBit.DeathVariety, key); break;
                 case "deathvarietystrength": SetF(ref t.DeathVarietyStrength, val, last.DeathVarietyStrength, 0f, 1.5f, KeyBit.DeathVarietyStr, key); break;
+                case "deathorientgain": SetF(ref t.DeathOrientGain, val, last.DeathOrientGain, 0f, 4f, KeyBit.DeathOrientGain, key); break;
 
                 // unknown key: ignored, deliberately and silently (a cfg written for a later stage
                 // must not spam a client running an earlier one).

@@ -15,9 +15,9 @@ namespace AcmeRagdoll.Sim {
     /// One algorithm, all 693 bodies: the manifold is universal (built from every profile); a body only
     /// contributes its own center point (its profile) and inherits the shared spread (the eigenvalues).
     ///
-    /// HANDOFF: the varied params + direction produced here are stored verbatim in the creature's
-    /// <c>HandoffRecord</c> (Params/Direction) and the corpse rebuilds from those, so the corpse
-    /// continues the EXACT same sampled death — the draw counter advances once per creature death, not
+    /// HANDOFF: the varied params + direction + orientation commit produced here are stored verbatim in
+    /// the creature's <c>HandoffRecord</c> (Params/Direction/OrientCommit) and the corpse rebuilds from
+    /// those, so the corpse continues the EXACT same sampled death — the counter advances per death, not
     /// per corpse. DISABLED (cfg <c>deathvariety=0</c>, the default): <see cref="Perturb"/> returns the
     /// base profile and leaves the direction untouched, so behaviour is byte-for-byte the prior death.
     /// </summary>
@@ -27,6 +27,12 @@ namespace AcmeRagdoll.Sim {
         /// <summary>How far a death may wander along the manifold, in eigen-sigmas (cfg
         /// <c>deathvarietystrength</c>). 0 = none; ~0.6 = tasteful; &gt;1 = wild. Clamped [0,1.5].</summary>
         internal static float Strength = 0.6f;
+        /// <summary>Gain on the orientation commit (cfg <c>deathorientgain</c>), the correction that
+        /// stops a front-heavy body from face-planting whatever heading it drew — see
+        /// <see cref="OrientBase"/> and RagdollSim's ORIENTATION COMMIT block. Multiplied by
+        /// <see cref="Strength"/>, so the owner can tune the fall variety with one knob and the
+        /// orientation lever with the other. Clamped [0,4] by the config reader.</summary>
+        internal static float OrientGain = 1.4f;
 
         // Global monotone draw index. A death samples the next quasi-random point; the result flows to
         // the corpse via the handoff record, so only NEW creature deaths advance it.
@@ -49,22 +55,26 @@ namespace AcmeRagdoll.Sim {
         // R4 sequence's 5th additive constant (frac(phi^-5), phi^5 = phi+1) for the killing-blow azimuth.
         private const double Alpha5 = 0.4614027427763899;
 
-        /// <summary>Base pre-lean toward the fall heading, in radians, at full strength. The registry
-        /// rotates the death pose this far about the foot pivot so gravity COMMITS the body to the
-        /// sampled heading (see <see cref="RagdollSim.ApplyDeathLean"/>) — the lever that turns the
-        /// already-even azimuth into an even spread of prone / supine / on-side landings instead of the
-        /// front-heavy face-plant every body defaulted to. ~26° at full strength; scaled by
-        /// <see cref="Strength"/> and dithered per-death. Tune here if falls under/over-commit.</summary>
-        private const float LeanBase = 0.46f;
+        /// <summary>Per-death dither on the orientation commit, as a fraction of it: a death commits
+        /// somewhere in [1-OrientDither, 1+OrientDither] times the nominal amount, coherently from the
+        /// object id. Keeps a crowd of simultaneous deaths from all committing identically (a few still
+        /// face-plant, which is what a real pile looks like) without changing the average.</summary>
+        private const float OrientDither = 0.2f;
+
+        /// <summary>Nominal orientation commit at strength 1 and gain 1: exactly ONE cancellation of the
+        /// body's measured center-of-mass bias over the fall window. Everything about how much rotation
+        /// that actually is is measured per death pose inside RagdollSim; this is only the scalar.</summary>
+        private const float OrientBase = 1.0f;
 
         /// <summary>Return this death's varied parameters, set <paramref name="direction"/> to the
-        /// per-death topple azimuth, and output <paramref name="leanRad"/> — the pre-lean the caller
-        /// applies to the death pose so the body actually falls along <paramref name="direction"/>
-        /// (prone/supine/side variety) rather than always face-planting. When disabled, returns
-        /// <paramref name="baseP"/>, leaves direction unchanged, and outputs leanRad=0 (bit-identical
-        /// default). Allocation-free (stack spans); safe on the native detour thread.</summary>
-        public static RagdollParams Perturb(RagdollParams baseP, uint objId, ref float direction, out float leanRad) {
-            leanRad = 0f;
+        /// per-death topple azimuth, and output <paramref name="orientCommit"/> — how hard the sim
+        /// should fight this body's own center-of-mass bias to actually fall along
+        /// <paramref name="direction"/> (the prone/supine/on-side lever; see RagdollSim's ORIENTATION
+        /// COMMIT block). When disabled, returns <paramref name="baseP"/>, leaves direction unchanged
+        /// and outputs orientCommit=0 (bit-identical default, and the sim skips the block entirely).
+        /// Allocation-free (stack spans); safe on the native detour thread.</summary>
+        public static RagdollParams Perturb(RagdollParams baseP, uint objId, ref float direction, out float orientCommit) {
+            orientCommit = 0f;
             if (!Enabled) return baseP;
 
             int K = DeathVarietyModel.K, P = DeathVarietyModel.P;
@@ -94,18 +104,17 @@ namespace AcmeRagdoll.Sim {
             // Killing-blow azimuth from a 5th low-discrepancy dimension (0..2pi).
             direction = (float)(2.0 * Math.PI * Frac(0.5 + n * Alpha5));
 
-            // PRE-LEAN DISABLED (2026-08-23). The intent was to commit the fall to its sampled azimuth so
-            // bodies land prone/supine/on-side instead of always face-planting. It "worked" in stills but
-            // ruined the MOTION: leaning the pose past the foot-pivot balance point makes gravity collapse
-            // the body almost instantly, so on screen it reads as a snap from standing straight to flat on
-            // the ground with no fall animation in between. Left as leanRad=0 (no-op) so deaths animate as
-            // before; the mechanism (LeanBase, ApplyDeathLean) is kept for the next attempt. See the
-            // handoff doc (docs/dat-patch/HANDOFF-2026-08-23-ragdoll-orientation-and-sky.md) for the
-            // alternatives to try (much smaller lean, angular-velocity impulse instead of a static pose
-            // rotation, more FallFrames / softer braces so the topple reads, or blending to a retail
-            // death-anim orientation rather than physics-only).
-            _ = LeanBase;   // keep referenced
-            leanRad = 0f;
+            // ORIENTATION COMMIT (2026-08-23, replaces the rejected pre-lean). A sampled azimuth is
+            // worthless on a front-heavy body: gravity's own forward torque out-rotates the seeded
+            // topple and it face-plants anyway. This scalar tells the sim how hard to cancel that bias
+            // with ANGULAR VELOCITY, which keeps the fall an actual visible fall — unlike the pre-lean,
+            // which tipped the pose past its balance point and snapped the body flat in two frames
+            // (owner-rejected; RagdollSim.ApplyDeathLean is gone with it). 1.0 = cancel the measured
+            // bias exactly once over the fall window; the sim caps what that can become so it can never
+            // launch the body. Dithered per-corpse so a pile is not uniform.
+            orientCommit = strength * OrientGain * OrientBase
+                           * (1f + (Hash01(objId, 0xB1A5u) - 0.5f) * 2f * OrientDither);
+            if (orientCommit < 0f) orientCommit = 0f;
 
             return RagdollParams.FromVarietyVector(p, baseP.DirBiasDeg);
         }

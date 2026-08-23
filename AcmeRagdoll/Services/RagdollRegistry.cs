@@ -99,6 +99,12 @@ namespace AcmeRagdoll.Services {
             public uint Seed;
             public float Direction;
             public float FloorZ;
+            /// <summary>This death's orientation commit (how hard the sim fights the body's own
+            /// center-of-mass bias to fall along <see cref="Direction"/>). Sampled ONCE per creature
+            /// death; carried here for exactly the same reason Direction is — the corpse must rebuild
+            /// with it or its seeded velocities, and therefore the restored verlet state, would not
+            /// match the creature's and the fall would visibly jump at handoff.</summary>
+            public float OrientCommit;
             /// <summary>This body's per-setupDid tuning (pure value data, so it is safe here). The
             /// corpse MUST rebuild with the same params or its constraints/give schedule - and hence
             /// the restored verlet state - would not match the creature's.</summary>
@@ -316,7 +322,7 @@ namespace AcmeRagdoll.Services {
             RagdollSim sim;
             try {
                 sim = new RagdollSim(rec.Parent, rec.StartPos0, rec.StartQuats0,
-                                     rec.Seed, rec.Direction, rec.FloorZ, rec.Params);
+                                     rec.Seed, rec.Direction, rec.FloorZ, rec.Params, rec.OrientCommit);
                 sim.RestoreState(rec.Pos, rec.Prev, rec.T);   // copies in - no aliasing with rec buffers
             }
             catch (Exception ex) {
@@ -453,7 +459,7 @@ namespace AcmeRagdoll.Services {
                 RagdollSim sim;
                 try {
                     sim = new RagdollSim(rec.Parent, rec.StartPos0, rec.StartQuats0,
-                                         rec.Seed, rec.Direction, rec.FloorZ, rec.Params);
+                                         rec.Seed, rec.Direction, rec.FloorZ, rec.Params, rec.OrientCommit);
                     sim.RestoreState(rec.Pos, rec.Prev, rec.T);
                 }
                 catch (Exception ex) {
@@ -570,16 +576,16 @@ namespace AcmeRagdoll.Services {
             // killing blow. No-op (returns the profile, leaves direction) when cfg deathvariety=0, so the
             // default death is unchanged. The varied prm+direction flow into BOTH the sim below and the
             // handoff record, so the corpse replays this exact sampled death.
-            prm = DeathVariety.Perturb(prm, e.ObjId, ref direction, out float leanRad);
+            // ORIENTATION COMMIT. The third output is how hard this death fights the body's own
+            // center-of-mass bias so it actually falls along the sampled heading instead of face-planting
+            // (a front-heavy body's gravity torque otherwise out-rotates the seeded topple whatever
+            // azimuth it drew). It is a seeding-time ANGULAR VELOCITY correction inside the sim, so the
+            // body still starts standing and topples over ~0.5-1 s — unlike the rejected pre-lean, which
+            // moved the POSE and snapped it flat. 0 when deathvariety is off => the sim skips the block
+            // and the death is bit-identical.
+            prm = DeathVariety.Perturb(prm, e.ObjId, ref direction, out float orientCommit);
 
-            // Commit the fall to its sampled heading: pre-lean the death pose about the foot pivot so
-            // gravity carries the body to that heading (prone/supine/on-side variety) instead of the
-            // front-heavy face-plant. Applied to startPos IN PLACE, before the sim is built and before
-            // startPos is copied into the handoff record below, so the corpse continues the same fall.
-            // leanRad is 0 when deathvariety is off => startPos untouched, death bit-identical.
-            RagdollSim.ApplyDeathLean(startPos, n, direction, leanRad);
-
-            e.Sim = new RagdollSim(parent, startPos, startQuats, seed, direction, floorZ, prm);
+            e.Sim = new RagdollSim(parent, startPos, startQuats, seed, direction, floorZ, prm, orientCommit);
             e.Scratch = new Quat[n];
             e.Parts = pa;
             e.Seeded = true;
@@ -592,7 +598,7 @@ namespace AcmeRagdoll.Services {
 
             // Create this creature's handoff record now that we have the construction inputs. It will be
             // refreshed every frame (UpdateRecord) with the evolving verlet state.
-            if (!e.IsCorpse) e.Rec = CreateRecord(e, pa, setup, parent, startPos, startQuats, seed, direction, floorZ, prm);
+            if (!e.IsCorpse) e.Rec = CreateRecord(e, pa, setup, parent, startPos, startQuats, seed, direction, floorZ, prm, orientCommit);
 
             return true;
         }
@@ -601,7 +607,8 @@ namespace AcmeRagdoll.Services {
 
         private HandoffRecord CreateRecord(Entry e, CPartArray* pa, CSetup* setup,
                                            uint[] parent, float[] startPos, Quat[] startQuats,
-                                           uint seed, float direction, float floorZ, RagdollParams prm) {
+                                           uint seed, float direction, float floorZ, RagdollParams prm,
+                                           float orientCommit) {
             int n = parent.Length;
             var rec = new HandoffRecord {
                 NumParts = (uint)n,
@@ -613,6 +620,7 @@ namespace AcmeRagdoll.Services {
                 Seed = seed,
                 Direction = direction,
                 FloorZ = floorZ,
+                OrientCommit = orientCommit,   // same reason as Direction: the corpse must re-seed identically
                 Params = prm,             // value data - the corpse rebuilds with the SAME tuning
                 Pos = new float[n * 3],
                 Prev = new float[n * 3],

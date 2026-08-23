@@ -212,11 +212,27 @@ namespace AcmeRagdoll {
                     bool wasOn = AcmeRagdoll.Sim.DeathVariety.Enabled;
                     AcmeRagdoll.Sim.DeathVariety.Enabled = true;
                     float dir = 0f;
-                    _ = AcmeRagdoll.Sim.DeathVariety.Perturb(AcmeRagdoll.Sim.RagdollParams.Default, 1u, ref dir, out float _lean);
-                    // JIT the lean transform on this thread too (it runs from the same native detour).
-                    var _warm = new float[9]; _warm[2] = 0.1f; _warm[5] = 0.2f; _warm[8] = 0.3f;
-                    AcmeRagdoll.Sim.RagdollSim.ApplyDeathLean(_warm, 3, dir, _lean != 0f ? _lean : 0.1f);
+                    var _wp = AcmeRagdoll.Sim.DeathVariety.Perturb(
+                        AcmeRagdoll.Sim.RagdollParams.Default, 1u, ref dir, out float _commit);
                     AcmeRagdoll.Sim.DeathVariety.Enabled = wasOn;
+                    // Build and step a throwaway 4-part ragdoll HERE so the whole seed path - the
+                    // RagdollSim constructor (including the ORIENTATION COMMIT block's Log/Exp/Sqrt),
+                    // the constraint/brace builders, StepFrame and DeriveQuats - is JITted on the
+                    // managed thread. PrepareMethod does not prepare callees, and Seed's call to the
+                    // ctor is exactly such a callee, so this real construction is what covers it.
+                    {
+                        var wParent = new uint[] { 0xFFFFFFFF, 0u, 1u, 1u };
+                        var wPos = new float[] { 0f, 0f, 0f,  0f, 0.05f, 0.4f,  0.1f, 0.12f, 0.75f,  -0.1f, 0.12f, 0.75f };
+                        var wQ = new AcmeRagdoll.Sim.Quat[4];
+                        for (int wi = 0; wi < wQ.Length; wi++) wQ[wi] = new AcmeRagdoll.Sim.Quat(1f, 0f, 0f, 0f);
+                        var wSim = new AcmeRagdoll.Sim.RagdollSim(
+                            wParent, wPos, wQ, 1u, dir, 0f, _wp,
+                            _commit > 0f ? _commit : 1f);
+                        wSim.StepFrame();
+                        wSim.DeriveQuats(new AcmeRagdoll.Sim.Quat[4]);
+                        wSim.ExportState(new float[12], new float[12], out float _wt);
+                        wSim.RestoreState(new float[12], new float[12], _wt);
+                    }
                 }
                 // A real lookup on this thread JITs Dictionary.TryGetValue for that instantiation too
                 // (PrepareMethod does not prepare callees). Setup DataID 0 is never a real body.
