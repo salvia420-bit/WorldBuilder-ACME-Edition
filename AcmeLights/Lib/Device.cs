@@ -100,6 +100,16 @@ namespace AcmeLights.Lib {
             if (fn != null) fn(sb);
         }
 
+        /// <summary>IDirect3DStateBlock9::Capture (vtable slot 4 — QueryInterface/AddRef/Release/
+        /// GetDevice/Capture/Apply). Re-records the CURRENT value of every state already in the
+        /// block, which is what lets one D3DSBT_ALL block be created once and reused every frame:
+        /// CreateStateBlock builds a fresh token stream and allocates driver-side, Capture does not.
+        /// Returns the HRESULT so the caller can drop a block the device no longer accepts.</summary>
+        public static int StateBlockCapture(IntPtr sb) {
+            var fn = (delegate* unmanaged[Stdcall]<IntPtr, int>)D3D9.GetVTableEntry(sb, 4);
+            return fn == null ? -1 : fn(sb);
+        }
+
         // ---- resource creation ----
         public IntPtr CreateTexture(uint w, uint h, uint levels, uint usage, int format, int pool) {
             var fn = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, uint, uint, int, int, IntPtr*, IntPtr*, int>)

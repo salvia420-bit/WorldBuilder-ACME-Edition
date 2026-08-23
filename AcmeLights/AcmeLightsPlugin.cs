@@ -65,6 +65,15 @@ namespace AcmeLights {
             // load throws 0x80131509. Touch a type + JIT the hot path now.
             WarmupAcBindings();
 
+            // PACING (2026-08-23): stand up the off-render-thread log sink BEFORE anything that logs
+            // from a detour. Chorizite's ILogger does Console.Write + Directory.Exists + a full
+            // File open/append/close PER LINE, synchronously, on the calling thread — from inside a
+            // detour that is the render thread, and it was the dominant frame-time spike in the 1070
+            // session (9 MB of log in an hour). Everything periodic now goes through AsyncLog; the
+            // one-shot lifecycle lines below deliberately keep the synchronous logger so they also
+            // reach the in-game console and are on disk before the next line is even queued.
+            AsyncLog.Start(_log);
+
             _cfg = new LightsConfig();
             _cfg.Reload();
             _mgr = new LightManager(_log, _cfg);
@@ -92,10 +101,12 @@ namespace AcmeLights {
 
             if (_hooks.Installed)
                 _log.LogInformation("acmelights: initialized (cfg='{Cfg}' maxStatic={MS} maxDynamic={MD} " +
-                    "headlamp={HL} flicker={FK} selection={SEL} selbudget={SB} selhyst={SH})",
+                    "headlamp={HL} flicker={FK} selection={SEL} selbudget={SB} selhyst={SH} " +
+                    "asynclog={AL} glowlog={GL} loglights={LL})",
                     _cfg.LoadedFrom ?? "(defaults)",
                     _cfg.MaxStatic, _cfg.MaxDynamic, _cfg.Headlamp, _cfg.Flicker,
-                    _cfg.Selection, _cfg.SelBudget, _cfg.SelHysteresis);
+                    _cfg.Selection, _cfg.SelBudget, _cfg.SelHysteresis,
+                    AsyncLog.Ready ? 1 : 0, _cfg.GlowLog, _cfg.LogLights);
             else
                 _log.LogWarning("acmelights: no hooks installed");
         }
@@ -125,6 +136,7 @@ namespace AcmeLights {
             _bloom = null;
             _dump?.Dispose();
             _dump = null;
+            AsyncLog.Stop();              // flush whatever the sink still holds, then stop the writer
             Instance = null;
         }
     }

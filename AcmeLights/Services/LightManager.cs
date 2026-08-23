@@ -27,11 +27,11 @@ namespace AcmeLights.Services {
         private readonly LightsConfig _cfg;
         private LightSelection? _sel;   // P4; set once in Initialize, read-only afterwards
         private readonly Stopwatch _clock = Stopwatch.StartNew();
-        private long _lastCfgReloadTicks = -Stopwatch.Frequency;
         private long _lastLogTicks = -Stopwatch.Frequency;
         private long _frame;
         private bool _headlampCleared;
         private long _lastSelDraws;   // P4: previous LightSelection.Draws, for a per-interval delta
+        private long _lastSelRebuilds;// P4: ditto Rebuilds — the snapshot-thrash tell (see LogThrottled)
 
         // NOTE on lightCacheing (Render global, build-A 0x0081EFD8, map addr unverified so we do NOT
         // poke it): with caching on, enable_active_lights skips SetLight for a slot whose
@@ -57,7 +57,7 @@ namespace AcmeLights.Services {
 
         /// <summary>Called every viewpoint from the UpdateLightsInternal post-detour.</summary>
         public void OnUpdateLights() {
-            ReloadThrottled();
+            _cfg.MaybeReload();     // 1 Hz stat; a read+parse only when lights.cfg actually changed
             AssertPoolCaps();
             AssertHeadlamp();
             if (_cfg.Flicker > 0.5f) ApplyFlicker();
@@ -68,13 +68,6 @@ namespace AcmeLights.Services {
             }
             LogThrottled();
             _frame++;
-        }
-
-        private void ReloadThrottled() {
-            long now = _clock.ElapsedTicks;
-            if (now - _lastCfgReloadTicks < Stopwatch.Frequency) return;
-            _lastCfgReloadTicks = now;
-            _cfg.Reload();
         }
 
         // ---- P1: pool caps ----
@@ -178,33 +171,52 @@ namespace AcmeLights.Services {
         }
 
         // ---- P0: enumeration log ----
+        // PACING (2026-08-23): every ILogger call is a synchronous Console.Write + Directory.Exists
+        // + File open/append/close on THIS (render) thread, so a 1 Hz heartbeat put a file write in
+        // one frame out of every ~60-100 — i.e. it WAS the 1% low. Two changes: the default cadence
+        // drops to 5 s (`loglights=2` restores 1 Hz for live triage), and the line goes to the async
+        // sink so even at 1 Hz it costs a string plus a list append.
         private void LogThrottled() {
             if (_cfg.LogLights < 0.5f) return;
             long now = _clock.ElapsedTicks;
-            if (now - _lastLogTicks < Stopwatch.Frequency) return;
+            long period = _cfg.LogLights >= 1.5f ? Stopwatch.Frequency : Stopwatch.Frequency * 5;
+            if (now - _lastLogTicks < period) return;
             _lastLogTicks = now;
             LightParms* wl = Render.world_lights;
-            if (wl == null) { _log.LogInformation("acmelights: world_lights null"); return; }
+            // world_lights null is a genuine "something is wrong" breadcrumb and happens at most
+            // once per heartbeat, so it keeps the synchronous logger (in-game console + log.txt).
+            if (wl == null) { _log.LogWarning("acmelights: world_lights null"); return; }
             var amb = wl->ambient_color;
             var sel = _sel;
             // P4 counters. `sel draws` is per-DRAW work since the last line (indoors only --
             // RenderDeviceD3D::DrawMeshInternal calls minimize_object_lighting only when
             // !Render::useSunlight, acclient.c:456975), so a 0 outdoors is expected and correct.
-            long selDraws = 0, selBail = 0; int selCand = 0, selPick = 0, selBudget = 0;
+            long selDraws = 0, selBail = 0, selRebuilds = 0;
+            int selCand = 0, selPick = 0, selBudget = 0;
             if (sel != null) {
                 selDraws = sel.Draws - _lastSelDraws; _lastSelDraws = sel.Draws;
                 selBail = sel.Bailouts;
+                // PACING DIAGNOSTIC: rebuilds-per-interval. Rebuild() re-gathers all 70 candidates
+                // out of the client's RenderLight structs; it is supposed to run ONCE PER VIEWPOINT.
+                // If this number ever approaches `seldraws` the snapshot is thrashing per draw and
+                // that is a real per-frame cost — this line is how the next live test says so.
+                selRebuilds = sel.Rebuilds - _lastSelRebuilds; _lastSelRebuilds = sel.Rebuilds;
                 selCand = sel.LastCandidates; selPick = sel.LastPicked; selBudget = sel.LastBudget;
             }
-            _log.LogInformation(
-                "acmelights: frame#{F} static={S}/{MS} dynamic={D}/{MD} ambient=({R:F2},{G:F2},{B:F2}) " +
-                "headlamp={HL:F2} flicker={FK} indoorSun={SUN} sel={SEL} seldraws={SD} " +
-                "selcand={SC} selpick={SP}/{SB} selbail={SX}",
-                _frame, wl->num_static_lights, *Render.max_static_lights,
-                wl->num_dynamic_lights, *Render.max_dynamic_lights,
-                amb.r, amb.g, amb.b, *SmartBox.s_fViewerLightIntensity,
-                _cfg.Flicker > 0.5f ? 1 : 0, *Render.useSunlight,
-                _cfg.Selection > 0.5f ? 1 : 0, selDraws, selCand, selPick, selBudget, selBail);
+            AsyncLog.Post(
+                "acmelights: frame#" + _frame.ToString() +
+                " static=" + wl->num_static_lights.ToString() + "/" + (*Render.max_static_lights).ToString() +
+                " dynamic=" + wl->num_dynamic_lights.ToString() + "/" + (*Render.max_dynamic_lights).ToString() +
+                " ambient=(" + amb.r.ToString("F2") + "," + amb.g.ToString("F2") + "," + amb.b.ToString("F2") + ")" +
+                " headlamp=" + (*SmartBox.s_fViewerLightIntensity).ToString("F2") +
+                " flicker=" + (_cfg.Flicker > 0.5f ? "1" : "0") +
+                " indoorSun=" + (*Render.useSunlight).ToString() +
+                " sel=" + (_cfg.Selection > 0.5f ? "1" : "0") +
+                " seldraws=" + selDraws.ToString() +
+                " selcand=" + selCand.ToString() +
+                " selpick=" + selPick.ToString() + "/" + selBudget.ToString() +
+                " selrebuilds=" + selRebuilds.ToString() +
+                " selbail=" + selBail.ToString());
         }
     }
 }

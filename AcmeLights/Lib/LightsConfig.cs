@@ -107,10 +107,16 @@ namespace AcmeLights.Lib {
         public float GlowImpactMs = 400f;     // glowimpactms: impact-flash duration (0 = no impact flashes)
         public float GlowImpactBoost = 2f;    // glowimpactboost: peak multiplier of the projectile's intensity
         public float GlowImpactFalloff = 10f; // glowimpactfalloff
-        public float GlowLog = 1f;            // glowlog: 0/1 per-classification + heartbeat log
+        public float GlowLog = 0f;            // glowlog: 0 = the 30 s breadcrumb only (DEFAULT since
+                                              //   2026-08-23 pacing pass: at glowlog=1 the scan block
+                                              //   was ~16 lines/s and the log hit 9 MB in an hour)
+                                              //   | 1 = the full per-emitter + per-reason REJECT block
+                                              //   at 1 Hz. Both go through the async sink now, so the
+                                              //   cost is buffer writes, not render-thread file I/O.
 
         // --- diagnostics / capture ---
-        public float LogLights = 1f;      // loglights: 0/1 throttled enumeration log
+        public float LogLights = 1f;      // loglights: 0 off | 1 the pool/selection heartbeat every 5 s
+                                          //   (DEFAULT) | 2 the same line at 1 Hz (live triage)
         public float Dump = 0f;           // dump: 1 = write framedump-N.bmp (backbuffer) 1/sec (EndScene readback)
         // Gate the RenderDeviceD3D::EndScene capture detour. The two P0-P2 hooks (UpdateLightsInternal,
         // SetWorldAmbientLight) are proven stable (19k frames); EndScene is proven too but stays gated
@@ -141,6 +147,35 @@ namespace AcmeLights.Lib {
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
 
+        // ── PACING (2026-08-23): reload throttle + change detection ──────────────────────────
+        // Reload() is 3x File.Exists + File.ReadAllLines + ~60 Trim/Substring/ToLowerInvariant
+        // allocations, and it used to run on the RENDER THREAD twice a second (the
+        // UpdateLightsInternal heartbeat AND the rendering-callback both drove their own 1 Hz
+        // throttle). Live tuning still has to feel instant, so the cadence stays 1 Hz — but a
+        // second now costs ONE stat syscall unless the file actually changed.
+        private readonly System.Diagnostics.Stopwatch _cfgClock = System.Diagnostics.Stopwatch.StartNew();
+        private long _lastCheckTicks = long.MinValue / 2;
+        private string? _activePath;
+        private DateTime _activeStamp;
+
+        /// <summary>Render-thread entry point: at most one stat per second, a full read+parse only
+        /// when the file's mtime moved. Both the UpdateLightsInternal heartbeat and the
+        /// rendering-callback call this, so the work happens once no matter how many callers there
+        /// are. Returns true when values were actually re-applied. Never throws.</summary>
+        public bool MaybeReload() {
+            long now = _cfgClock.ElapsedTicks;
+            if (now - _lastCheckTicks < System.Diagnostics.Stopwatch.Frequency) return false;
+            _lastCheckTicks = now;
+            string? p = _activePath;
+            if (p != null) {
+                DateTime t;
+                try { t = File.GetLastWriteTimeUtc(p); }
+                catch { t = default; }
+                if (t == _activeStamp) return false;    // unchanged — no read, no parse, no alloc
+            }
+            return Reload();
+        }
+
         private static string[] BuildCandidatePaths() {
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             return new[] {
@@ -164,10 +199,13 @@ namespace AcmeLights.Lib {
                         Apply(s.Substring(0, eq).Trim().ToLowerInvariant(), s.Substring(eq + 1).Trim());
                     }
                     LoadedFrom = path;
+                    _activePath = path;
+                    try { _activeStamp = File.GetLastWriteTimeUtc(path); } catch { _activeStamp = default; }
                     return true;
                 }
                 catch { /* keep current values */ }
             }
+            _activePath = null;
             return false;
         }
 
@@ -191,7 +229,7 @@ namespace AcmeLights.Lib {
                 case "bloomknee": if (F(val, out var bk)) BloomKnee = Math.Clamp(bk, 0.001f, 1f); break;
                 case "bloomintensity": if (F(val, out var bi)) BloomIntensity = Math.Clamp(bi, 0f, 4f); break;
                 case "bloomradius": if (F(val, out var br)) BloomRadius = Math.Clamp(br, 1f, 4f); break;
-                case "loglights": if (F(val, out var ll)) LogLights = Math.Clamp(ll, 0f, 1f); break;
+                case "loglights": if (F(val, out var ll)) LogLights = Math.Clamp(ll, 0f, 2f); break;
                 case "dump": if (F(val, out var du)) Dump = Math.Clamp(du, 0f, 1f); break;
                 case "extrahooks": if (F(val, out var eh)) ExtraHooks = Math.Clamp(eh, 0f, 2f); break;
                 // --- P4 selection ---

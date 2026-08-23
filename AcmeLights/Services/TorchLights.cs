@@ -43,13 +43,20 @@ namespace AcmeLights.Services {
         private static long _lastLog = -Stopwatch.Frequency * 5;
         private static long _lastScan = -Stopwatch.Frequency;
         private static int _litTotal;
+        private static bool _phased;      // see the half-period offset in OnPostWorldRender
 
         /// <summary>Called from the rendering-callback slot (render thread — the client is
         /// single-threaded, so the object table is quiescent here). Scans at 4 Hz. Never throws.</summary>
         public static void OnPostWorldRender(LightsConfig cfg, ILogger? log) {
             if (cfg.TorchLights <= 0.5f) return;
             long now = _clock.ElapsedTicks;
-            if (now - _lastScan < Stopwatch.Frequency / 4) return;
+            long period = Stopwatch.Frequency / 4;
+            // PACING (2026-08-23): this scan and the GlowLights scan both run at 4 Hz from the SAME
+            // rendering-callback, so before this offset both object-table walks landed on the same
+            // frame four times a second — one frame paying double. Skipping the first tick puts this
+            // walk half a period out of phase with the glow scan for the rest of the session.
+            if (!_phased) { _phased = true; _lastScan = now - period / 2; return; }
+            if (now - _lastScan < period) return;
             _lastScan = now;
             try {
                 ACBindings.Internal.SmartBox** pp = ACBindings.Internal.SmartBox.smartbox;
@@ -79,11 +86,16 @@ namespace AcmeLights.Services {
                 _litTotal += lit;
                 // Log immediately when something new lit; otherwise a 10s heartbeat proves the walk
                 // runs and shows the candidate counts (offset sanity: withLights>0 near any torch).
+                // PACING: the same line, but through the async sink (an ILogger call here is a
+                // synchronous file open/append/close on the render thread) and with the idle
+                // heartbeat stretched 10 s -> 30 s. A scan that actually lit something still says so
+                // within a second, which is the line that carries the story.
                 if ((lit > 0 && now - _lastLog >= Stopwatch.Frequency) ||
-                    now - _lastLog >= Stopwatch.Frequency * 10) {
+                    now - _lastLog >= Stopwatch.Frequency * 30) {
                     _lastLog = now;
-                    log?.LogInformation("acmelights: torch-on scan {N} objs, {W} with setup lights, lit {L} now ({T} total)",
-                        seen, withLights, lit, _litTotal);
+                    AsyncLog.Post("acmelights: torch-on scan " + seen.ToString() + " objs, " +
+                                  withLights.ToString() + " with setup lights, lit " + lit.ToString() +
+                                  " now (" + _litTotal.ToString() + " total)");
                 }
             }
             catch { /* never unwind into the client */ }

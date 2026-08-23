@@ -32,8 +32,6 @@ namespace AcmeLights.Services {
         private static ILogger? _log;
         private static nint _prev;          // foreign callback found in the slot (chained; usually 0)
         private static bool _loggedInstall;
-        private static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
-        private static long _lastReload = -System.Diagnostics.Stopwatch.Frequency;
 
         public static void Configure(BloomCompositor bloom, LightsConfig cfg, ILogger log) {
             _bloom = bloom; _cfg = cfg; _log = log;
@@ -91,15 +89,13 @@ namespace AcmeLights.Services {
         private static void RenderingCallbackImpl() {
             try {
                 var cfg = _cfg;
-                // Own 1/s cfg reload: the UpdateLightsInternal heartbeat (which also reloads) STALLS
-                // when the scene's light set is static (observed in a near-lightless dungeon cell),
-                // and this callback fires every in-world frame regardless — so knobs stay live here.
+                // Cfg reload: the UpdateLightsInternal heartbeat (which also reloads) STALLS when the
+                // scene's light set is static (observed in a near-lightless dungeon cell), and this
+                // callback fires every in-world frame regardless — so knobs stay live here too.
+                // The 1 Hz throttle AND the mtime gate now live inside LightsConfig.MaybeReload, so
+                // the two call sites cost one stat per second between them, not two file reads.
                 if (cfg != null) {
-                    long now = _clock.ElapsedTicks;
-                    if (now - _lastReload >= System.Diagnostics.Stopwatch.Frequency) {
-                        _lastReload = now;
-                        cfg.Reload();
-                    }
+                    cfg.MaybeReload();
                     TorchLights.OnPostWorldRender(cfg, _log);
                     GlowLights.OnPostWorldRender(cfg, _log);   // P3: classify/track scan (4 Hz)
                 }

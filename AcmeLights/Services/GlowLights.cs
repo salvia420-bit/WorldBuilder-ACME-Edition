@@ -246,6 +246,21 @@ namespace AcmeLights.Services {
         private static long _lastScan = -Stopwatch.Frequency;
         private static long _lastLog = -Stopwatch.Frequency * 5;
 
+        /// <summary>PACING: the scan's log block is built into this ONE reused builder and posted as
+        /// a single line batch (see the emit site in Scan). Touched only from the render thread at
+        /// ≤1 Hz, so no synchronisation is needed.</summary>
+        private static readonly System.Text.StringBuilder _sb = new System.Text.StringBuilder(2048);
+
+        /// <summary>PACING: cap on how many NEW CSetups may be walked per scan. Classification is
+        /// memoised forever per setup DID, so the only cost that ever repeats is the first sight of
+        /// a setup — but on a teleport into a fresh landblock that is EVERY object at once, and one
+        /// walk is up to nParts x nSurfaces x 256 palette entries. Spreading the first-sight work
+        /// over consecutive 4 Hz scans turns a single multi-millisecond spike into ~32 setups/s of
+        /// flat background cost; the visible consequence is that a newly-streamed emitter can take
+        /// an extra fraction of a second to light, never that it fails to.</summary>
+        private const int ClassifyBudgetPerScan = 8;
+        private static int _lastNewClassified;
+
         private static LightsConfig? _cfg;
         private static ILogger? _log;
 
@@ -312,6 +327,17 @@ namespace AcmeLights.Services {
             try {
                 var adl = typeof(Render).GetMethod("add_dynamic_light");
                 if (adl != null) RuntimeHelpers.PrepareMethod(adl.MethodHandle);
+            }
+            catch { }
+            // PACING: the scan's log block is formatted into _sb and handed to AsyncLog from the
+            // native render thread, so exercise both HERE (0x80131509 discipline: a first-touch JIT
+            // or type load on the render thread is exactly what that fault is).
+            try {
+                _sb.Clear();
+                _sb.Append("acmelights: glowlights warm ").Append(0).Append(' ')
+                   .Append(0f.ToString("F1")).Append(' ').Append(0u.ToString("X8"));
+                _sb.Clear();
+                RuntimeHelpers.PrepareMethod(typeof(AsyncLog).GetMethod("Post")!.MethodHandle);
             }
             catch { }
 
@@ -554,6 +580,7 @@ namespace AcmeLights.Services {
             // Gather reject diagnostics only when a log burst could plausibly follow — the emit
             // condition below is stricter, and an unused gather costs 8 struct writes.
             bool gather = cfg.GlowLog > 0.5f && now - _lastLog >= Stopwatch.Frequency;
+            int classifyBudget = ClassifyBudgetPerScan;
             _nRejects = 0;
             for (int i = 0; i < NReasons; i++) _rejCount[i] = 0;
 
@@ -593,8 +620,8 @@ namespace AcmeLights.Services {
                     // the "prop" branch and was never even evaluated, let alone logged.
                     uint did = *(uint*)(setup + SetupDid);
                     if (did == 0) continue;
-                    int slot = VerdictFor(did, setup, pa);
-                    if (slot < 0) continue;
+                    int slot = VerdictFor(did, setup, pa, ref classifyBudget);
+                    if (slot < 0) continue;   // cached "no" / graphics not resident / budget spent
 
                     bool isMissile = (state & StMissile) != 0;
                     bool isStatic = (state & StStatic) != 0;
@@ -682,31 +709,63 @@ namespace AcmeLights.Services {
                 }
             }
 
-            if (cfg.GlowLog > 0.5f && (now - _lastLog >= Stopwatch.Frequency * 10 ||
-                                       (_nTracked != prevCount && now - _lastLog >= Stopwatch.Frequency))) {
+            // ── PACING (2026-08-23) ──────────────────────────────────────────────────────────
+            // This used to emit up to 16 SEPARATE ILogger calls per second, and each one is a
+            // synchronous Console.Write + Directory.Exists + File open/append/close on the render
+            // thread (Chorizite.Core/Logging/ChoriziteLogger.cs). That is the 9 MB/hour log AND a
+            // multi-millisecond stall landing in one frame per second. Now: the whole block is
+            // built into ONE reused StringBuilder and handed to the async sink, and the verbose
+            // form is opt-in (`glowlog=1`) — the default keeps a 30 s breadcrumb so a crash log
+            // still shows what the classifier was tracking.
+            _lastNewClassified = ClassifyBudgetPerScan - classifyBudget;
+
+            bool verbose = cfg.GlowLog > 0.5f;
+            bool changed = _nTracked != prevCount;
+            long since = now - _lastLog;
+            bool emit = verbose
+                ? (since >= Stopwatch.Frequency * 10 || (changed && since >= Stopwatch.Frequency))
+                : (since >= Stopwatch.Frequency * 30 || (changed && since >= Stopwatch.Frequency * 5));
+            if (emit) {
                 _lastLog = now;
+                var line = _sb;
+                line.Clear();
                 // The player origin is in the heartbeat because the 2026-08-23 range defect was a
                 // bad distance REFERENCE POINT, and the tracked-only log made that expensive to
                 // localize: if playerOrg reads (0,0,0) here, distances are from the block corner.
-                log?.LogInformation(
-                    "acmelights: glowlights scan {S} objs -> {CL} classed, {VF} lum/frac-reject, {RF} range-reject, {C} candidates, tracking {T} " +
-                    "(inject {I}/frame, {F} lit frames, impacts {M}) player cell=0x{PC:X8} org=({PX:F1},{PY:F1},{PZ:F1})",
-                    seen, classed, verdictFail, rangeFail, cand, _nTracked, _lastInjected, _litFrames, _nImpacts,
-                    playerCell,
-                    playerOrg != null ? playerOrg[0] : float.NaN,
-                    playerOrg != null ? playerOrg[1] : float.NaN,
-                    playerOrg != null ? playerOrg[2] : float.NaN);
-                for (int i = 0; i < _nTracked && i < 6; i++)
-                    log?.LogInformation(
-                        "acmelights: glowlights id=0x{Id:X8} wcid={W} class={K} color=0x{C:X6} i={I:F0} f={F:F1} dist={D:F1}",
-                        _tracked[i].Id, _tracked[i].Wcid, KindName(_tracked[i].Kind), _tracked[i].Color,
-                        _tracked[i].Inten, _tracked[i].Fall, MathF.Sqrt(_tracked[i].DistSq));
-                for (int i = 0; i < _nRejects; i++)
-                    log?.LogInformation(
-                        "acmelights: glowlights REJECT {R} id=0x{Id:X8} wcid={W} setup=0x{S:X8} lum={L:F2} frac={FR:F2} dist={D:F1}",
-                        RejectName(_rejects[i].Why),
-                        _rejects[i].Id, _rejects[i].Wcid, _rejects[i].Did,
-                        _rejects[i].Lum, _rejects[i].Frac, _rejects[i].Dist);
+                line.Append("acmelights: glowlights scan ").Append(seen)
+                  .Append(" objs -> ").Append(classed).Append(" classed, ")
+                  .Append(verdictFail).Append(" lum/frac-reject, ")
+                  .Append(rangeFail).Append(" range-reject, ")
+                  .Append(cand).Append(" candidates, tracking ").Append(_nTracked)
+                  .Append(" (inject ").Append(_lastInjected).Append("/frame, ")
+                  .Append(_litFrames).Append(" lit frames, impacts ").Append(_nImpacts)
+                  .Append(", newclass ").Append(_lastNewClassified)
+                  .Append(") player cell=0x").Append(playerCell.ToString("X8"))
+                  .Append(" org=(").Append((playerOrg != null ? playerOrg[0] : float.NaN).ToString("F1"))
+                  .Append(',').Append((playerOrg != null ? playerOrg[1] : float.NaN).ToString("F1"))
+                  .Append(',').Append((playerOrg != null ? playerOrg[2] : float.NaN).ToString("F1"))
+                  .Append(')');
+                if (verbose) {
+                    for (int i = 0; i < _nTracked && i < 6; i++)
+                        line.Append("\n[AcmeLights:Information] acmelights: glowlights id=0x")
+                          .Append(_tracked[i].Id.ToString("X8"))
+                          .Append(" wcid=").Append(_tracked[i].Wcid)
+                          .Append(" class=").Append(KindName(_tracked[i].Kind))
+                          .Append(" color=0x").Append(_tracked[i].Color.ToString("X6"))
+                          .Append(" i=").Append(_tracked[i].Inten.ToString("F0"))
+                          .Append(" f=").Append(_tracked[i].Fall.ToString("F1"))
+                          .Append(" dist=").Append(MathF.Sqrt(_tracked[i].DistSq).ToString("F1"));
+                    for (int i = 0; i < _nRejects; i++)
+                        line.Append("\n[AcmeLights:Information] acmelights: glowlights REJECT ")
+                          .Append(RejectName(_rejects[i].Why))
+                          .Append(" id=0x").Append(_rejects[i].Id.ToString("X8"))
+                          .Append(" wcid=").Append(_rejects[i].Wcid)
+                          .Append(" setup=0x").Append(_rejects[i].Did.ToString("X8"))
+                          .Append(" lum=").Append(_rejects[i].Lum.ToString("F2"))
+                          .Append(" frac=").Append(_rejects[i].Frac.ToString("F2"))
+                          .Append(" dist=").Append(_rejects[i].Dist.ToString("F1"));
+                }
+                AsyncLog.Post(line.ToString());
             }
         }
 
@@ -852,15 +911,19 @@ namespace AcmeLights.Services {
         // ── Setup-verdict cache ───────────────────────────────────────────────────────────────
         // Open-addressed uint->slot. Surface inspection runs ONCE per CSetup DID, never per frame.
 
-        private static int VerdictFor(uint did, byte* setup, byte* pa) {
+        private static int VerdictFor(uint did, byte* setup, byte* pa, ref int classifyBudget) {
             uint h = did * 2654435761u;
             int idx = (int)(h & (VCap - 1));
             int free = -1;
             for (int p = 0; p < VProbe; p++) {
                 int i = (idx + p) & (VCap - 1);
-                if (_v[i].Key == did) return i;
+                if (_v[i].Key == did) return i;      // the steady state: one probe, no work at all
                 if (_v[i].Key == 0) { free = i; break; }
             }
+            // PACING: first sight of this setup — the expensive path. Spend at most
+            // ClassifyBudgetPerScan of them per scan; the rest are simply retried 250 ms later.
+            if (classifyBudget <= 0) return -1;
+            classifyBudget--;
             // Table crowded: reclaim the home slot rather than growing (no allocation on this path).
             if (free < 0) free = idx;
             // A verdict is only CACHED when the object's graphics were actually resident. A

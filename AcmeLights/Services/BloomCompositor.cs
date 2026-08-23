@@ -39,6 +39,7 @@ namespace AcmeLights.Services {
         private IntPtr _sceneTex, _sceneSurf;
         private IntPtr _brightTex, _brightSurf;
         private IntPtr _blurTex, _blurSurf;
+        private IntPtr _stateBlock;   // D3DSBT_ALL, created once per device/size, re-Captured per frame
         private int _fullW, _fullH, _halfW, _halfH;
         private bool _resourcesFailed;
 
@@ -159,6 +160,8 @@ namespace AcmeLights.Services {
             if (_sceneTex != IntPtr.Zero) { D3D9.ReleaseCom(_sceneTex); _sceneTex = IntPtr.Zero; }
             if (_brightTex != IntPtr.Zero) { D3D9.ReleaseCom(_brightTex); _brightTex = IntPtr.Zero; }
             if (_blurTex != IntPtr.Zero) { D3D9.ReleaseCom(_blurTex); _blurTex = IntPtr.Zero; }
+            // The cached D3DSBT_ALL block belongs to the device it was created on.
+            if (_stateBlock != IntPtr.Zero) { D3D9.ReleaseCom(_stateBlock); _stateBlock = IntPtr.Zero; }
             // Shaders survive a device Reset in D3D9 (not pool-bound), so keep them unless the device
             // pointer itself changed. Cheap to keep; only freed on full dispose.
             _fullW = _fullH = 0;
@@ -180,9 +183,28 @@ namespace AcmeLights.Services {
             // single mis-restored state crashes its subsequent UI draw). Same pattern as Chorizite's
             // own overlay. StateBlock does NOT cover render targets, so RT/DS/viewport are restored
             // manually too. If CreateStateBlock is disallowed here, skip bloom (safe).
-            if (trace) Trace("CreateStateBlock(ALL)");
-            IntPtr sb = dev.CreateStateBlock(1 /*D3DSBT_ALL*/);
-            if (sb == IntPtr.Zero) { if (trace) Trace("CreateStateBlock null -> skip"); return; }
+            //
+            // PACING (2026-08-23): the block is created ONCE per device/size and re-Captured each
+            // frame. `CreateStateBlock` is documented as an expensive call — it builds a fresh token
+            // stream and allocates driver-side (and under DXVK a whole capture object) — and doing
+            // it plus a Release every single frame is exactly the kind of driver-side allocation
+            // that shows up as a frame-time spike rather than as average cost. `Capture` re-records
+            // the same state set into the block we already own. Identical restore semantics.
+            if (_stateBlock == IntPtr.Zero) {
+                if (trace) Trace("CreateStateBlock(ALL)");
+                _stateBlock = dev.CreateStateBlock(1 /*D3DSBT_ALL*/);
+                if (_stateBlock == IntPtr.Zero) { if (trace) Trace("CreateStateBlock null -> skip"); return; }
+            }
+            IntPtr sb = _stateBlock;
+            int capHr = Device.StateBlockCapture(sb);
+            if (capHr < 0) {
+                // The device no longer accepts this block (a Reset we did not see). Drop it and let
+                // the next frame create a fresh one; skipping one frame of bloom is invisible.
+                if (trace) Trace($"StateBlockCapture hr={capHr} -> drop block");
+                D3D9.ReleaseCom(sb);
+                _stateBlock = IntPtr.Zero;
+                return;
+            }
             IntPtr origRt = dev.GetRenderTarget(0);
             IntPtr origDs = dev.GetDepthStencilSurface();
             D3DViewport9 origVp = dev.GetViewport();
@@ -270,7 +292,8 @@ namespace AcmeLights.Services {
                 dev.SetRenderTarget(0, origRt);
                 dev.SetDepthStencilSurface(origDs);
                 dev.SetViewport(origVp);
-                D3D9.ReleaseCom(sb);
+                // NOTE: `sb` is the cached block — it is NOT released here (see the Capture comment
+                // above); ReleaseResources/Dispose own its lifetime.
                 if (origRt != IntPtr.Zero) D3D9.ReleaseCom(origRt);   // GetRenderTarget AddRef'd it
                 if (origDs != IntPtr.Zero) D3D9.ReleaseCom(origDs);
             }
