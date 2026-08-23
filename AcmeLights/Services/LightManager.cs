@@ -25,11 +25,13 @@ namespace AcmeLights.Services {
     internal sealed unsafe class LightManager {
         private readonly ILogger _log;
         private readonly LightsConfig _cfg;
+        private LightSelection? _sel;   // P4; set once in Initialize, read-only afterwards
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private long _lastCfgReloadTicks = -Stopwatch.Frequency;
         private long _lastLogTicks = -Stopwatch.Frequency;
         private long _frame;
         private bool _headlampCleared;
+        private long _lastSelDraws;   // P4: previous LightSelection.Draws, for a per-interval delta
 
         // NOTE on lightCacheing (Render global, build-A 0x0081EFD8, map addr unverified so we do NOT
         // poke it): with caching on, enable_active_lights skips SetLight for a slot whose
@@ -47,12 +49,23 @@ namespace AcmeLights.Services {
 
         private const uint FlameFlickerSeedA = 73856093u, FlameFlickerSeedB = 19349663u, FlameFlickerSeedC = 83492791u;
 
+        /// <summary>P4: hand the manager the selection engine so the per-viewpoint heartbeat can
+        /// invalidate its snapshot (this detour runs immediately after retail recomputes every
+        /// LIGHTINFO.viewerspace_location — acclient.c:453398 — so the snapshot is stale by
+        /// definition) and drive the one-shot device-caps query off the hot path.</summary>
+        public void AttachSelection(LightSelection sel) => _sel = sel;
+
         /// <summary>Called every viewpoint from the UpdateLightsInternal post-detour.</summary>
         public void OnUpdateLights() {
             ReloadThrottled();
             AssertPoolCaps();
             AssertHeadlamp();
             if (_cfg.Flicker > 0.5f) ApplyFlicker();
+            var sel = _sel;
+            if (sel != null) {
+                sel.QueryDeviceBudgetOnce();   // no-ops after the first success; never per draw
+                sel.Invalidate();
+            }
             LogThrottled();
             _frame++;
         }
@@ -113,9 +126,10 @@ namespace AcmeLights.Services {
                 RenderLight* rl = pool + i;
                 // POINT only, warm gate on the AUTHORED color (r>=0.30, r>=0.92g, r>1.25b),
                 // matching holtburger flameFlicker.isFlameLight so portals/ice never flicker.
-                if (rl->d3dLight.Type != _D3DLIGHTTYPE.D3DLIGHT_POINT) continue;
+                // The predicate lives in LightSelection so P4's carryOver-clear (which decides which
+                // slots get re-uploaded to D3D) can never select a different set than we flicker.
+                if (!LightSelection.IsFlameLight(rl)) continue;
                 float cr = rl->info.color.r, cg = rl->info.color.g, cb = rl->info.color.b;
-                if (!(cr >= 0.30f && cr >= cg * 0.92f && cr > cb * 1.25f)) continue;
 
                 float mul = FlickerMul(t, FlickerPhase(rl));
                 float inten = rl->info.intensity;
@@ -172,13 +186,25 @@ namespace AcmeLights.Services {
             LightParms* wl = Render.world_lights;
             if (wl == null) { _log.LogInformation("acmelights: world_lights null"); return; }
             var amb = wl->ambient_color;
+            var sel = _sel;
+            // P4 counters. `sel draws` is per-DRAW work since the last line (indoors only --
+            // RenderDeviceD3D::DrawMeshInternal calls minimize_object_lighting only when
+            // !Render::useSunlight, acclient.c:456975), so a 0 outdoors is expected and correct.
+            long selDraws = 0, selBail = 0; int selCand = 0, selPick = 0, selBudget = 0;
+            if (sel != null) {
+                selDraws = sel.Draws - _lastSelDraws; _lastSelDraws = sel.Draws;
+                selBail = sel.Bailouts;
+                selCand = sel.LastCandidates; selPick = sel.LastPicked; selBudget = sel.LastBudget;
+            }
             _log.LogInformation(
                 "acmelights: frame#{F} static={S}/{MS} dynamic={D}/{MD} ambient=({R:F2},{G:F2},{B:F2}) " +
-                "headlamp={HL:F2} flicker={FK} indoorSun={SUN}",
+                "headlamp={HL:F2} flicker={FK} indoorSun={SUN} sel={SEL} seldraws={SD} " +
+                "selcand={SC} selpick={SP}/{SB} selbail={SX}",
                 _frame, wl->num_static_lights, *Render.max_static_lights,
                 wl->num_dynamic_lights, *Render.max_dynamic_lights,
                 amb.r, amb.g, amb.b, *SmartBox.s_fViewerLightIntensity,
-                _cfg.Flicker > 0.5f ? 1 : 0, *Render.useSunlight);
+                _cfg.Flicker > 0.5f ? 1 : 0, *Render.useSunlight,
+                _cfg.Selection > 0.5f ? 1 : 0, selDraws, selCand, selPick, selBudget, selBail);
         }
     }
 }

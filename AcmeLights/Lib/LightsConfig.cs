@@ -59,6 +59,25 @@ namespace AcmeLights.Lib {
         // trampoline destabilized the client; bloom now uses the m_renderingCallback slot instead.)
         public float ExtraHooks = 0f;     // extrahooks: 0 none | >=1 endscene (capture)
 
+        // --- P4: importance-ranked per-draw light selection (Services/LightSelection.cs) ---
+        // Default ON per the house rule (validated gates ship default-on). `selection=0` restores
+        // retail bit-for-bit: read at startup it means "never install the detour" (zero footprint),
+        // and read live it makes the installed detour chain straight to the original.
+        public float Selection = 1f;        // selection: 0 retail first-8-overlap | 1 importance-ranked
+        public float SelBudget = 8f;        // selbudget: HW lights per draw, 1..8 (8 is structural:
+                                            //   Render::curLightUsage is an 8 x 12-byte table)
+        public float SelHysteresis = 1.15f; // selhysteresis: incumbent score margin, 1.0..2.0
+                                            //   (1.0 = none; holtburger's equivalent is 0.8x distance)
+        public float SelRange = 1.5f;       // selrange: scoring range = falloff * this. 1.5 = retail
+                                            //   `rangeAdjust` (acclient.c:45742), the same multiplier
+                                            //   config_hardware_light writes into D3DLIGHT9.Range,
+                                            //   so score 0 == a light the device would clip.
+        public float SelFlicker = 1f;       // selflicker: 1 = clear the curLightUsage carryOver byte on
+                                            //   flame slots so P2's per-frame Diffuse edits reach D3D
+                                            //   (this is what makes STATIC wall torches flicker).
+        public float SelCaps = 1f;          // selcaps: 1 = read D3DCAPS9.MaxActiveLights once and clamp
+                                            //   the budget down to it if the driver reports fewer.
+
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
 
@@ -115,6 +134,13 @@ namespace AcmeLights.Lib {
                 case "loglights": if (F(val, out var ll)) LogLights = Math.Clamp(ll, 0f, 1f); break;
                 case "dump": if (F(val, out var du)) Dump = Math.Clamp(du, 0f, 1f); break;
                 case "extrahooks": if (F(val, out var eh)) ExtraHooks = Math.Clamp(eh, 0f, 2f); break;
+                // --- P4 selection ---
+                case "selection": if (F(val, out var sn)) Selection = Math.Clamp(sn, 0f, 1f); break;
+                case "selbudget": if (F(val, out var sb)) SelBudget = Math.Clamp(sb, 1f, 8f); break;
+                case "selhysteresis": if (F(val, out var sh)) SelHysteresis = Math.Clamp(sh, 1f, 2f); break;
+                case "selrange": if (F(val, out var sr)) SelRange = Math.Clamp(sr, 0.5f, 4f); break;
+                case "selflicker": if (F(val, out var sf)) SelFlicker = Math.Clamp(sf, 0f, 1f); break;
+                case "selcaps": if (F(val, out var sc)) SelCaps = Math.Clamp(sc, 0f, 1f); break;
             }
         }
 

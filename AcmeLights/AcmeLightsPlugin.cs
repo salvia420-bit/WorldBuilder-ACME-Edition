@@ -32,6 +32,7 @@ namespace AcmeLights {
         private LightManager? _mgr;
         private BloomCompositor? _bloom;
         private DumpService? _dump;
+        private LightSelection? _selection;   // P4 importance-ranked per-draw selection
 
         JsonTypeInfo<LightsSettings> ISerializeSettings<LightsSettings>.TypeInfo =>
             LightsJsonContext.Default.LightsSettings;
@@ -74,13 +75,22 @@ namespace AcmeLights {
             _bloom.PrecompileShaders();
             RenderCallback.Configure(_bloom, _cfg, _log);
             _dump = new DumpService(_log, _cfg);
+            // P4: build + warm the selection engine on THIS (managed) thread before any detour can
+            // reach it. Warmup() dry-runs the hot ranking loop and pre-JITs every method the native
+            // detour touches, including the UnmanagedCallersOnly body -- the 0x80131509 discipline.
+            _selection = new LightSelection(_log, _cfg);
+            _selection.Warmup();
+            _mgr.AttachSelection(_selection);
             _hooks = new NativeHooks(_log);
             _hooks.Install(_mgr, _dump, _cfg);
+            _hooks.InstallSelection(_selection, _cfg);
 
             if (_hooks.Installed)
                 _log.LogInformation("acmelights: initialized (cfg='{Cfg}' maxStatic={MS} maxDynamic={MD} " +
-                    "headlamp={HL} flicker={FK})", _cfg.LoadedFrom ?? "(defaults)",
-                    _cfg.MaxStatic, _cfg.MaxDynamic, _cfg.Headlamp, _cfg.Flicker);
+                    "headlamp={HL} flicker={FK} selection={SEL} selbudget={SB} selhyst={SH})",
+                    _cfg.LoadedFrom ?? "(defaults)",
+                    _cfg.MaxStatic, _cfg.MaxDynamic, _cfg.Headlamp, _cfg.Flicker,
+                    _cfg.Selection, _cfg.SelBudget, _cfg.SelHysteresis);
             else
                 _log.LogWarning("acmelights: no hooks installed");
         }
@@ -97,8 +107,10 @@ namespace AcmeLights {
 
         protected override void Dispose() {
             RenderCallback.Uninstall();   // clear the SmartBox slot before the compositor goes away
-            _hooks?.Dispose();
+            _hooks?.Dispose();            // disables the P4 detour before its buffers are freed
             _hooks = null;
+            _selection?.Dispose();        // P4: frees the NativeMemory candidate block
+            _selection = null;
             _bloom?.Dispose();
             _bloom = null;
             _dump?.Dispose();

@@ -41,6 +41,19 @@ namespace AcmeLights.Services {
         [Function(CallingConventions.MicrosoftThiscall)]
         private delegate void EndSceneFn(nint self);
 
+        // ===================== P4 LIGHT SELECTION — BEGIN (LightSelection.cs) =====================
+        // void __cdecl Render::minimize_object_lighting() -- the per-draw slot chooser. NO arguments
+        // and no return, so the trampoline has nothing to marshal; this is NOT the cdecl(byte)
+        // shape that destabilized the client on SceneTool::EndFrame. Full replacement detour: the
+        // impl reproduces retail's eligibility test exactly and drives the same three native
+        // primitives, only ranking the candidates by attenuated contribution at the lit object.
+        [Function(CallingConventions.Cdecl)]
+        private delegate void MinimizeObjectLightingFn();
+
+        private static IHook<MinimizeObjectLightingFn>? _minObjLight;
+        private static LightSelection? _sel;
+        // ====================== P4 LIGHT SELECTION — END =========================================
+
         private static IHook<UpdateLightsFn>? _updateLights;
         private static IHook<SetAmbientFn>? _setAmbient;
         private static IHook<EndSceneFn>? _endScene;
@@ -101,6 +114,51 @@ namespace AcmeLights.Services {
 
             _installed = _updateLights != null || _setAmbient != null || _endScene != null;
         }
+
+        // ===================== P4 LIGHT SELECTION — BEGIN (LightSelection.cs) =====================
+
+        /// <summary>Install the importance-ranked per-draw selection detour. Separate from
+        /// <see cref="Install"/> so P4 stays a self-contained block. With `selection = 0` in the cfg
+        /// at startup NOTHING is installed at all — the client keeps retail's own
+        /// minimize_object_lighting, bit for bit. Once installed, a live `selection = 0` still gives
+        /// bit-identical retail behaviour by chaining straight to OriginalFunction.</summary>
+        public void InstallSelection(LightSelection sel, LightsConfig cfg) {
+            if (_disposed || _minObjLight != null) return;
+            _sel = sel;
+            if (cfg.Selection < 0.5f) {
+                _ilog.LogInformation("acmelights: P4 selection disabled by cfg (selection=0); minimize_object_lighting left untouched");
+                return;
+            }
+            nint addr = AddressResolver.Resolve("Render::minimize_object_lighting",
+                null, LightSelection.MinimizeObjectLighting_VA);
+            try {
+                _minObjLight = ReloadedHooks.Instance
+                    .CreateHook<MinimizeObjectLightingFn>(typeof(NativeHooks), nameof(MinimizeObjectLightingImpl), (long)addr)
+                    .Activate();
+                _installed = true;
+                _ilog.LogInformation("acmelights: hook installed  Render::minimize_object_lighting @ {A:X8} (P4 selection)", (long)addr);
+            }
+            catch (Exception ex) {
+                _ilog.LogError(ex, "acmelights: hook FAILED  minimize_object_lighting @ {A:X8}", (long)addr);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void MinimizeObjectLightingImpl() {
+            LightSelection? sel = _sel;
+            if (sel != null && sel.Enabled) {
+                try {
+                    // Run() returns false when it declined (null pools, impossible counts, no
+                    // candidates); either way falling through to the original is always safe --
+                    // retail's body is a complete reset + rebuild + enable of its own.
+                    if (sel.Run()) return;
+                }
+                catch (Exception ex) { LogSafe(ex, "MinimizeObjectLighting"); }
+            }
+            _minObjLight!.OriginalFunction();
+        }
+
+        // ====================== P4 LIGHT SELECTION — END =========================================
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
         private static void UpdateLightsImpl(nint self) {
@@ -166,6 +224,7 @@ namespace AcmeLights.Services {
             try { _updateLights?.Disable(); } catch { }
             try { _setAmbient?.Disable(); } catch { }
             try { _endScene?.Disable(); } catch { }
+            try { _minObjLight?.Disable(); } catch { }   // P4 selection
             _installed = false;
         }
     }
