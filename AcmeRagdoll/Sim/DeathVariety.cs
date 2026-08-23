@@ -94,11 +94,18 @@ namespace AcmeRagdoll.Sim {
             // Killing-blow azimuth from a 5th low-discrepancy dimension (0..2pi).
             direction = (float)(2.0 * Math.PI * Frac(0.5 + n * Alpha5));
 
-            // Pre-lean magnitude: commit the fall to that azimuth. Scaled by strength, dithered per body
-            // (0.75..1.25x) so successive corpses don't topple in lockstep. This is what breaks the
-            // face-plant monotony — a decisive lean past the foot pivot lets gravity carry the body to
-            // whichever heading was sampled.
-            leanRad = LeanBase * strength * (0.75f + 0.5f * Hash01(objId, 0x51EAu));
+            // PRE-LEAN DISABLED (2026-08-23). The intent was to commit the fall to its sampled azimuth so
+            // bodies land prone/supine/on-side instead of always face-planting. It "worked" in stills but
+            // ruined the MOTION: leaning the pose past the foot-pivot balance point makes gravity collapse
+            // the body almost instantly, so on screen it reads as a snap from standing straight to flat on
+            // the ground with no fall animation in between. Left as leanRad=0 (no-op) so deaths animate as
+            // before; the mechanism (LeanBase, ApplyDeathLean) is kept for the next attempt. See the
+            // handoff doc (docs/dat-patch/HANDOFF-2026-08-23-ragdoll-orientation-and-sky.md) for the
+            // alternatives to try (much smaller lean, angular-velocity impulse instead of a static pose
+            // rotation, more FallFrames / softer braces so the topple reads, or blending to a retail
+            // death-anim orientation rather than physics-only).
+            _ = LeanBase;   // keep referenced
+            leanRad = 0f;
 
             return RagdollParams.FromVarietyVector(p, baseP.DirBiasDeg);
         }
