@@ -14,7 +14,12 @@ Two things the owner still wants fixed, plus one fix that landed and should be k
 2. **AcmeSky takram clouds (OPEN, aesthetic).** AcmeSky was never deployed; it's deployed now
    and its baked clouds *do* render under DXVK — but the owner says they "don't appear at all
    like they do in the retail version." Your job: make the clouds look right. See §3.
-3. **Double-ragdoll under simultaneous deaths (FIXED — keep).** A second ragdoll used to appear
+3. **Two animations fighting on death (FIXED 2026-08-23, needs a live check).** The owner reported
+   two animations playing over each other on every death. Three writers were fighting the death
+   ragdoll: the live-motion flinch armed by the killing blow's own splatter, the canned Dead
+   animation's root motion (which was moving the very frame the ragdoll composes onto), and the
+   FINDING-1 eviction cancelling the ragdoll mid-fall. Now single-writer. See §2b for what to watch.
+4. **Double-ragdoll under simultaneous deaths (FIXED — keep).** A second ragdoll used to appear
    after the first settled when several creatures died at once (`@smite`). Root-caused and fixed
    (shared handoff records + a match-retry grace). No complaint from the owner. See §2.
 
@@ -129,6 +134,101 @@ after settle. The occasional lone `deferred=True class=CREATURE-crumple` in the 
 position-late *living* creature crumpling correctly, not a post-settle double. Verify with:
 `grep 'ragdoll ARM' inject.log | tail -40` and count `CORPSE-handoff` vs `CREATURE-crumple`; watch
 that no corpse re-falls after settling.
+
+---
+
+## §2b Two animations fight on death — SINGLE-WRITER OWNERSHIP (IMPLEMENTED, needs a live check)
+
+**Owner symptom:** when a creature dies, *two* animations play over each other. There must be
+exactly ONE: the ragdoll armed at the death hit, playing out uninterrupted until the body becomes
+the corpse (the handoff continues the same sim).
+
+### Diagnosed — the fighting writers (all code-confirmed)
+
+1. **Live-motion hit layer vs the death ragdoll (part level).** The killing blow's splatter
+   (`0xF755`) arms a `LiveMotionRegistry` flinch on the *same* object that the same hit's Dead
+   motion arms the ragdoll on. `NativeHooks.UpdatePartsImpl` runs the death layer, then the live
+   layer, so every frame the flinch spring (plus idle/gait) **added offsets on top of** the ragdoll
+   pose until its energy pool decayed. "Live layer = living bodies only" was documented, never
+   enforced.
+2. **The canned Dead animation's root motion (root level).** We deliberately still call the original
+   `DoInterpretedMotion` for Dead (the client's state machine and the MotionDone fallback need it),
+   so the canned animation runs underneath and keeps driving `m_position.frame` — the exact frame
+   `WriteParts` composed the sim pose onto. Part poses were overwritten, but the **basis they were
+   written in was being animated by a second animation**: the whole ragdoll slid, dropped and
+   rotated with the canned root. Same again on the corpse, whose own Dead arm plays under the
+   handoff sim.
+3. **The FINDING-1 eviction race.** `OnMotionDone`'s non-Dead branch dropped the entry *and its
+   handoff record* for ANY non-Dead motion completion on a tracked owner — silently, no log. A
+   motion queued before the killing blow (interrupted swing, flinch, server-sent motion) completing
+   a few frames after the death-start arm therefore cancelled the ragdoll **mid-fall**: the canned
+   animation took over, and the corpse then found no record and crumpled fresh = a restarted second
+   death animation. Exactly "the ragdoll is not allowed to play out until it becomes the corpse".
+
+### Changed
+
+`AcmeRagdoll/Services/RagdollRegistry.cs`
+- **Ownership publication.** Every owned object id is published into a fixed `uint[64]`
+  (`OwnPublish`/`OwnRelease`, mirrored count `_ownedCount`), read by the new lock-free
+  `IsDeathOwned(uint)`. No lock on either side (so no ordering cycle with the live layer's `_gate`),
+  no allocation, `Volatile` reads. All four arm sites now go through one `AddLive(id, entry)`.
+- **Frozen composition basis** (`ResolveBasis`). The object frame is captured on the entry's first
+  write and used for the rest of its life, so canned root motion cannot move or turn the ragdoll.
+  `m_position.frame` origins are **landblock-local** — verified against retail
+  `LandDefs::get_block_offset` (returns 0 when the two cell ids share their high 16 bits, else
+  8 cells × 24 yd = **192 yd per landblock step**) — so a cell change inside the landblock needs
+  nothing and a landblock change rebases by 192 yd/step (`BlockOffset`, logs `ragdoll BASIS`).
+  The corpse inherits the creature's frozen **orientation** via `HandoffRecord.BasisQ` (the restored
+  verlet state was evolved in that rotational frame) but keeps **its own origin**, so the shared
+  records of a simultaneous death do not stack every corpse on one spot.
+- **FINDING-1 rescoped** to a genuinely-alive-again body: locomotion-class motion only
+  (`ReviveRanges`, duplicated from the live layer on purpose — `LiveMotionRegistry` is never
+  class-constructed when `liveMotion=false`), never a corpse, not while `Pending`, not while
+  `ActiveLeft > 0`, and not inside `ReviveGraceMillis` (6 s, past the longest authored 130-frame
+  fall). **It now logs `ragdoll RELEASE`** — previously invisible, which is why the race was never
+  seen in the ARM logs.
+
+`AcmeRagdoll/Services/LiveMotionRegistry.cs`
+- `BindDeathOwnership(Func<uint,bool>)` + `DeathOwns(id)`, checked at the **arming door**
+  (`OnPlayScriptType`, before the impulse is pushed) and the **write door** (`OnUpdateParts`, before
+  any part is touched → `RetireForDeath` drops the entry and logs `livemotion YIELD`).
+
+`AcmeRagdoll/AcmeRagdollPlugin.cs`
+- Binds the gate on the managed thread; adds every new detour/callback-reachable method to the
+  PreJit lists, runs `RagdollRegistry`'s class constructor (the new revive table) and realises the
+  `Func<uint,bool>` instantiation in the warmup harness — the 0x80131509 discipline.
+
+Invariants kept: `deathvariety=0` consumes no extra RNG; `liveMotion=false` still constructs and
+subscribes nothing; shared (non-consumed) handoff records + `MatchRetry` grace untouched; anti-sink
+clamp untouched (it now clamps against the *frozen* floor Z, which is if anything more stable).
+
+### Live validation for the next T4 session
+
+1. **Deploy** (the running client never hot-reloads DLLs):
+   `cp AcmeRagdoll/bin/net8.0/AcmeRagdoll.dll ~/acwine/drive_c/Games/Chorizite/plugins/AcmeRagdoll/`,
+   then `pkill acclient`, **wait ~150 s** (ACE session ghost), `bash ~/inject-dxvk.sh` +
+   `bash ~/prep-outdoor.sh`.
+2. **Stale-build check** (this build's new symbols). Method names are ASCII in the metadata, but C#
+   string literals are UTF-16 — so use both forms:
+   `strings <dll> | grep -E 'IsDeathOwned|ResolveBasis|OwnPublish'` (3 hits) and
+   `strings -el <dll> | grep -E 'YIELD|RELEASE|BASIS'` (3 hits). The boot log must then show
+   `ragdoll: ready`.
+3. **Capture:** `~/capab.sh drudge` (spawn 6 + smite + 9 s @ 60 fps) and `~/capshots.sh 7 drudge 6`.
+   Watch the MOTION, not stills (the stills lied once already):
+   - ONE continuous fall per body: hit → topple → settle, no flinch-jitter overlay riding on the
+     falling body, no mid-fall snap to the canned pose, no re-fall after settling;
+   - **no root sliding/turning** — the body must not drift or rotate as a whole during the fall;
+   - the settled pile must be **identical at t=2 s and t=7 s** (the §2 regression test);
+   - no visible re-orientation at the creature→corpse handoff.
+4. **Log checks** (`inject.log`):
+   - `grep -c 'livemotion YIELD'` ≥ 1 per melee kill (the flinch handing the body over);
+   - `grep 'ragdoll RELEASE'` should be **empty** for creature deaths (it is the resurrection path);
+     any hit here means a dying body was still being evicted — report the motion id;
+   - `grep 'ragdoll ARM'` should still show `CORPSE-handoff` dominating `CREATURE-crumple`;
+   - `ragdoll BASIS ... rebased` should be rare-to-never (a death on a landblock boundary).
+5. If a corpse ever ends up visibly offset from where the creature fell, the suspect is the
+   corpse's own origin (deliberately not inherited); the fix is to inherit the record's origin too,
+   guarded on `MatchCount == 0` so clustered corpses do not stack.
 
 ---
 

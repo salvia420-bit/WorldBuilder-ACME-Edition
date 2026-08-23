@@ -101,8 +101,18 @@ namespace AcmeRagdoll {
             // when the master toggle is on: with it off nothing is built, nothing is subscribed, and
             // NativeHooks receives a null registry so the UpdateParts post-detour dispatches to the
             // death registry alone -> bit-identical client behaviour (runbook C1 invariant).
+            // Realise the death registry's single-writer gate HERE, on the managed thread: the first
+            // caller is otherwise a native-originated stack (the UpdateParts detour or a net callback).
+            _ = _registry.IsDeathOwned(0u);
+
             if (_settings.LiveMotion) {
                 _liveMotion = new LiveMotionRegistry(_hooks.SetUpdatePartsEnabledLive, _log);
+                // SINGLE-WRITER OWNERSHIP: the live (hit-reaction) layer animates LIVING bodies only.
+                // Binding the death registry's lock-free owned-id check here is what makes that contract
+                // enforced rather than merely documented - the live layer refuses to arm, and retires
+                // what it holds, for any body the death ragdoll owns. The method group allocates its
+                // delegate on THIS thread, which is also the 0x80131509 discipline.
+                _liveMotion.BindDeathOwnership(_registry.IsDeathOwned);
                 // C3: read ragdoll.cfg once, HERE, on the managed thread - so the first hit already
                 // runs on the file's values and so the file/parse path is JITed where assembly loading
                 // is legal. After this the layer re-reads it at most once a second, from its own hot
@@ -248,6 +258,11 @@ namespace AcmeRagdoll {
                 // is done here rather than on the native detour thread. Includes the corpse-handoff
                 // methods the detours reach (any NEW registry method a detour can reach must be added
                 // here, or it risks the 0x80131509 lazy-load failure on the native thread).
+                // The registry's own class constructor builds the revive-motion lookup table used by the
+                // (rescoped) FINDING-1 eviction, which is reached from the MotionDone detour - so run it
+                // here, on the managed thread, exactly like the live layer's range tables.
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(
+                    typeof(RagdollRegistry).TypeHandle);
                 PreJit(typeof(RagdollRegistry), new[] {
                     "OnMotionDone", "OnUpdateParts", "Seed", "WriteParts",
                     "ResolveWorldFall", "TryGetTerrainZ",
@@ -255,6 +270,11 @@ namespace AcmeRagdoll {
                     "CreateRecord", "UpdateRecord", "TryMatchRecord",
                     "SweepStale", "MaybeSweepStale",
                     "HashParents", "SetupDidOf", "ReadPos", "PosValid",
+                    // Single-writer ownership + the frozen composition basis + the revive rescope: every
+                    // one of these is reached from a native detour (MotionDone / DoInterpretedMotion /
+                    // UpdateParts) or, for IsDeathOwned, from the live layer's net callback.
+                    "IsDeathOwned", "OwnPublish", "OwnRelease", "AddLive",
+                    "IsReviveMotion", "ResolveBasis", "BlockOffset", "Remove",
                 });
                 // The profile lookups the seed path (For) and the live-motion looseness resolver
                 // (PartWeights) call, on their own type.
@@ -338,6 +358,9 @@ namespace AcmeRagdoll {
                 // C5: the procedural-gait path, all of it reached from the UpdateParts detour, plus
                 // IsLocomotionMotion which is reached from the DoInterpretedMotion detour.
                 "GaitActive", "ComputeGait", "ResolveGait", "UpdateGaitSpeed", "IsLocomotionMotion",
+                // Single-writer gate: DeathOwns is reached from the net handler (OnPlayScriptType) AND
+                // from the UpdateParts detour; RetireForDeath from the detour.
+                "BindDeathOwnership", "DeathOwns", "RetireForDeath",
             });
             // C4's math lives in a pure static of its own; the detour calls straight into it, so it
             // gets its class constructor and its methods realised here like everything else.
@@ -378,6 +401,10 @@ namespace AcmeRagdoll {
         private static unsafe void WarmupLiveMotion(ILogger log) {
             var warm = new LiveMotionRegistry(_ => { }, log);
             try {
+                // Bind the single-writer gate on the throwaway too, so WarmupJit's DeathOwns(1u) call
+                // actually goes THROUGH a Func<uint, bool> and JITs that instantiation's Invoke stub on
+                // this thread. The lambda answers "never owned", so the harness drives the C4 path.
+                warm.BindDeathOwnership(static _ => false);
                 // C3: read the cfg for real (file IO, stat, parse, snapshot publish) on THIS thread,
                 // then drive the correlation/entry internals with the tuning forced to defaults - see
                 // LiveMotionRegistry.WarmupJit for why the handler calls below are not sufficient once

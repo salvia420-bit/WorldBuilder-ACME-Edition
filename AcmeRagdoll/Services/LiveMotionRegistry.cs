@@ -461,6 +461,24 @@ namespace AcmeRagdoll.Services {
         /// <c>_live.Count</c>, written under <see cref="_gate"/>, read without it.</summary>
         private volatile int _workCount;
 
+        /// <summary>
+        /// SINGLE-WRITER GATE. "Does the DEATH registry own this object id?" - bound once, on the
+        /// managed Initialize() thread, to <see cref="RagdollRegistry.IsDeathOwned"/> (null only in the
+        /// warmup harness and in unit-style drives).
+        ///
+        /// A dying body must be animated by exactly ONE writer: the ragdoll armed at the death hit,
+        /// from the hit through topple, settle and the corpse handoff. This layer was the other writer -
+        /// the killing blow's own splatter (0xF755) arms a flinch entry like any other hit, and its
+        /// spring/idle/gait offsets were then ADDED on top of the ragdoll pose every frame until the
+        /// pool decayed. The "live layer = LIVING bodies only" contract was documented but unenforced;
+        /// this delegate enforces it, at both the arming door and the write door.
+        ///
+        /// It is a delegate rather than a field/registry reference so this layer stays independent of
+        /// the death registry (and so the death registry keeps its no-lock hot path): the callee takes
+        /// no lock of its own, which is what makes it safe to call while <see cref="_gate"/> is held.
+        /// </summary>
+        private Func<uint, bool>? _deathOwns;
+
         private long _lastSweepTick;
         private int _netThreadId;
         private int _simThreadId;
@@ -479,6 +497,33 @@ namespace AcmeRagdoll.Services {
         /// <summary>Bodies currently tracked by the live layer (armed or awaiting their first frame).
         /// This is the live layer's half of the hot detour's arm/disarm OR.</summary>
         public int LiveCount => _workCount;
+
+        /// <summary>
+        /// Bind the single-writer gate (see <see cref="_deathOwns"/>). Called once from the plugin's
+        /// Initialize(), on the managed thread, so the delegate object and its generic instantiation
+        /// exist before any native-originated stack can reach them.
+        /// </summary>
+        public void BindDeathOwnership(Func<uint, bool> deathOwns) => _deathOwns = deathOwns;
+
+        /// <summary>The gate itself: true when the death ragdoll owns this body and this layer must not
+        /// arm it, must not write it and must retire whatever it is holding for it. Allocation-free and
+        /// lock-free on both sides - the callee takes no lock, so calling it under <see cref="_gate"/>
+        /// cannot deadlock. Unbound (warmup harness) reads as "not owned", i.e. C4 behaviour.</summary>
+        private bool DeathOwns(uint id) {
+            Func<uint, bool>? f = _deathOwns;
+            return f != null && f(id);
+        }
+
+        /// <summary>Yield a body to the death ragdoll: drop the entry (which drops this layer's vote)
+        /// and say so once, so a fight between the two writers is visible in the log rather than only
+        /// on screen. Caller holds <see cref="_gate"/>.</summary>
+        private void RetireForDeath(LiveEntry e, uint id) {
+            _log.LogInformation(
+                "livemotion YIELD id=0x{Id:X8} reason=death-owned hits={H} wrote={W} " +
+                "(single-writer: the death ragdoll owns this body)",
+                id, e.HitCount, e.WroteOnce);
+            Remove(id);
+        }
 
         // ------------------------------------------------------------------ C3: live tuning
 
@@ -576,6 +621,14 @@ namespace AcmeRagdoll.Services {
                 if (objId == 0) return;
                 // Cheap ACE-only prefilter; BF_PLAYER below is the authority.
                 if (UsePlayerGuidPrefilter && (objId >> 28) == 5u) return;
+
+                // SINGLE-WRITER, ARMING DOOR. The KILLING BLOW sends a splatter like any other hit, and
+                // the same hit arms the death ragdoll - so without this the last swing of every fight
+                // put a flinch spring on a body that is already being animated by the death sim, and
+                // the two writers fought for the length of the fall. A death-owned body takes no
+                // impulses at all: not this one, and not the next one either (a corpse still gets
+                // splatters while it is being hacked at).
+                if (DeathOwns(objId)) return;
 
                 DecodeSplatter(script, out float dirX, out float dirY, out byte height);
 
@@ -802,6 +855,13 @@ namespace AcmeRagdoll.Services {
                 MaybeSweep(now);
 
                 if (!_live.TryGetValue(id, out LiveEntry? e) || e == null) return;
+
+                // SINGLE-WRITER, WRITE DOOR. The arming door above cannot be the whole answer: an entry
+                // can already exist from the hits BEFORE the killing blow, and the death arm happens
+                // inside the same frame as this dispatch (NativeHooks calls the death registry first).
+                // So re-ask every frame, for the handful of bodies this layer actually tracks, and hand
+                // the body over the instant it starts dying - before this frame writes a single part.
+                if (DeathOwns(id)) { RetireForDeath(e, id); return; }
 
                 // First sighting: capture the owner/part array and run the player test.
                 if (e.Obj == null) {
@@ -1803,6 +1863,11 @@ namespace AcmeRagdoll.Services {
         internal void WarmupJit() {
             long now = Environment.TickCount64;
             LiveMotionTuning t = LiveMotionTuning.Defaults;
+            // The single-writer gate is reached from BOTH the net handler and the UpdateParts detour, so
+            // it is realised here for real rather than merely PrepareMethod'ed: the Func<uint, bool>
+            // instantiation and its Invoke stub must exist before a native-originated stack calls one.
+            // (The plugin binds the throwaway harness instance to a real delegate for exactly this.)
+            _ = DeathOwns(1u);
             var imp = new PendingImpulse {
                 Seq = ++_seq, ScriptType = SplatterMin, DirX = 0.7071f, DirY = -0.7071f,
                 Height = 1, Speed = 1f, DamagePercent = t.DefaultDamagePercent, Tick = now,

@@ -64,6 +64,20 @@ not apply here — inline detours are required.
 All part pointers are **re-resolved from the live `CPartArray` every frame and null-checked**;
 no `CPhysicsPart*` is ever cached across frames (corpses despawn — the #1 lifetime trap).
 
+### Single-writer ownership of a dying body (2026-08-23)
+
+A dying body must be animated by **exactly one** writer — the ragdoll armed at the death hit —
+from the hit through topple, settle and the corpse handoff. Three writers used to fight it:
+
+| Fighting writer | Enforcement |
+| --- | --- |
+| The live-motion flinch armed by the **killing blow's own splatter** (it adds spring/idle/gait offsets on top of the ragdoll pose for the whole fall) | `RagdollRegistry.IsDeathOwned(id)` — a lock-free published set of owned ids. `LiveMotionRegistry` consults it at the **arming door** (`OnPlayScriptType`) and the **write door** (`OnUpdateParts`, which retires the entry and logs `livemotion YIELD`). |
+| The **canned Dead animation's root motion**, which keeps moving/rotating `m_position.frame` — the very frame `WriteParts` composes onto — for the whole death sequence (and again on the corpse) | The composition basis is **frozen** at the entry's first write (`ResolveBasis`) instead of re-read every frame. Origins are landblock-local (retail `LandDefs::get_block_offset`), so only a landblock change rebases it (192 yd/step). A corpse inherits the creature's frozen **orientation** through the handoff record (its own origin, so clustered corpses stay apart). |
+| The **revive eviction** (`OnMotionDone`, non-Dead): any queued motion completing on a dying creature used to silently cancel the ragdoll mid-fall and drop its handoff record, so the corpse re-crumpled = a second death animation | Scoped to a genuinely-alive-again body: **locomotion-class motions only**, never a corpse, never while `Pending` or still falling, past a 6 s grace — and it now logs `ragdoll RELEASE`. |
+
+Known, deliberate gaps (the canned pose still shows, briefly): `PENDING` frames before a corpse's
+position turns valid, and seed-retry frames. No sim pose exists yet in either case.
+
 ### Why it's render-only-safe
 
 Creature setups have **no per-part physics BSP** (`CSetup::has_physics_bsp == 0`, which the

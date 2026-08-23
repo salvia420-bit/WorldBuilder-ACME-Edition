@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using ACBindings.Internal;
 using AcmeRagdoll.Lib;
 using AcmeRagdoll.Sim;
@@ -10,6 +11,27 @@ namespace AcmeRagdoll.Services {
     /// Owns the set of currently-ragdolling creatures and does the per-frame work: seed a sim from
     /// the live model-space pose the first frame after death, then each subsequent frame step the sim
     /// (or hold the settled pose) and overwrite each owned part's world Frame.
+    ///
+    /// SINGLE-WRITER OWNERSHIP (2026-08-23).  A dying body must be animated by EXACTLY ONE writer -
+    /// the ragdoll armed at the death hit - from the hit through topple, settle and the corpse
+    /// handoff.  Three other writers used to fight it, and all three are shut out here:
+    ///   * THE LIVE-MOTION LAYER.  The killing blow's splatter arms a <see cref="LiveMotionRegistry"/>
+    ///     flinch on the same object, which then ADDS spring/idle/gait offsets on top of the ragdoll
+    ///     pose every frame until its pool decays.  Every object id this registry owns is published
+    ///     into a lock-free <see cref="IsDeathOwned"/> set that the live layer consults before it
+    ///     arms one and before it writes one; a death-owned body is retired from that layer outright.
+    ///   * THE CANNED DEAD ANIMATION'S ROOT MOTION.  We deliberately still call the original
+    ///     DoInterpretedMotion (the client's Dead state machine and the MotionDone fallback depend on
+    ///     it), so the canned animation keeps running underneath and keeps moving/rotating
+    ///     <c>m_position.frame</c> - the very frame <see cref="WriteParts"/> composed the sim pose
+    ///     onto, which dragged and rotated the whole ragdoll.  The composition basis is now FROZEN at
+    ///     seed time (<see cref="ResolveBasis"/>) so root motion cannot move the body; only a
+    ///     landblock change rebases it (origins are landblock-local, LandDefs::get_block_offset).
+    ///   * THE REVIVE EVICTION.  A non-Dead MotionDone on a tracked owner used to drop the entry
+    ///     silently, so any queued motion completing on a dying creature cancelled the ragdoll
+    ///     mid-fall and let the canned animation take over (and the corpse then re-crumpled).  That
+    ///     eviction is now scoped to a genuinely-alive-again body: locomotion-class only, never a
+    ///     corpse, never during the fall window, and it logs.
     ///
     /// CORPSE CONTINUATION (the "one continuous ragdoll" behaviour).  In AC a dying creature is
     /// replaced by a SEPARATE corpse object (its own object id) that spawns at the death location and
@@ -77,6 +99,25 @@ namespace AcmeRagdoll.Services {
             public float FallVel;          // current fall speed (yd/s)
             public float GroundZ;          // terrain Z under the corpse XY (m_position basis)
             public bool GroundZValid;      // GroundZ has been resolved from the client terrain
+
+            // ---- frozen composition basis (single-writer, root-motion neutralisation) ----
+            // WriteParts composes the model-space sim pose onto the object frame. Re-reading the LIVE
+            // frame every frame let the canned Dead animation's root motion (its per-anim drop, ground
+            // travel and rotation sweep - real nonzero values) drag and rotate the entire ragdoll, and
+            // did the same to a corpse whose own Dead motion plays under the handoff sim. So the basis
+            // is captured ONCE, on the entry's first write, and used for the rest of its life.
+            // m_position origins are LANDBLOCK-local (LandDefs::get_block_offset returns 0 whenever the
+            // two cells share their high 16 bits), so a cell change inside the landblock needs nothing
+            // and a landblock change is rebased by 192 yd per block step.
+            public bool BasisFrozen;
+            public Quat BasisQ;
+            public float BasisX, BasisY, BasisZ;
+            public uint BasisCell;
+            /// <summary>Corpse handoff only: <see cref="BasisQ"/> was inherited from the creature's
+            /// record and must be used instead of the corpse's own spawn orientation (the sim state we
+            /// restore was evolved in the creature's rotational frame).</summary>
+            public bool BasisQInherited;
+            public bool BasisRebasedLogged;
         }
 
         /// <summary>
@@ -124,6 +165,15 @@ namespace AcmeRagdoll.Services {
             public bool Landed;
             public float FallOffset;
             public float FallVel;
+
+            /// <summary>The creature's FROZEN composition orientation. The corpse rebuilds the sim from
+            /// this record's verlet state, which was evolved in the creature's rotational frame - so it
+            /// must compose with the creature's orientation or the settled pile visibly re-orients at
+            /// handoff (a "second animation" in its own right). The ORIGIN is deliberately NOT carried:
+            /// records are SHARED between the clustered corpses of a simultaneous death, and giving them
+            /// all one origin would stack every body on one spot; each corpse keeps its own.</summary>
+            public Quat BasisQ;
+            public bool BasisValid;
 
             // How many corpses have continued this record (shared handoff — see ArmCorpseHandoff). Kept
             // for diagnostics; the record's lifetime is bounded by the window/TTL, not by this count.
@@ -212,6 +262,22 @@ namespace AcmeRagdoll.Services {
         private readonly ILogger _log;
         private volatile bool _down;
 
+        // ------------------------------------------------------------------ ownership publication
+        //
+        // The set of object ids this registry owns, published so ANOTHER writer can ask "is this body
+        // mine?" without touching _live. It exists because _live is a plain Dictionary mutated on the
+        // client's sim thread with no lock (see THREADING above), while the live-motion layer's arming
+        // path runs from a NET callback whose thread identity is not proven - reading the Dictionary
+        // from there would be a genuine data race. A fixed uint[] of slots, written only on the sim
+        // thread and read with Volatile.Read, is race-free by construction (a uint write is atomic, so
+        // the worst a concurrent reader can see is a one-frame-stale answer, which costs at most one
+        // frame of flinch overlay), allocation-free on both sides, and takes NO LOCK AT ALL - so it
+        // cannot participate in a lock-ordering cycle with the live layer's own gate.
+        private readonly uint[] _ownedIds = new uint[MaxLive];
+        /// <summary>Mirror of <see cref="_live"/>.Count, so the overwhelmingly common "nothing is
+        /// dying" answer costs one volatile int read instead of a 64-slot scan.</summary>
+        private volatile int _ownedCount;
+
         /// <param name="setUpdatePartsHook">Enables (true) / disables (false) the UpdateParts detour.
         /// Called only when the live count crosses 0 so the hot-path detour is armed only while at
         /// least one ragdoll is active.</param>
@@ -223,22 +289,95 @@ namespace AcmeRagdoll.Services {
 
         public int LiveCount => _live.Count;
 
+        /// <summary>
+        /// Is this object id currently owned by a death ragdoll (armed, pending, seeding, falling,
+        /// settled or handed off to a corpse)? THE SINGLE-WRITER GATE: any other layer that would
+        /// animate a body must ask this first and yield.
+        ///
+        /// Callable from any thread and takes no lock (see <see cref="_ownedIds"/>). Allocation-free,
+        /// and pre-JITed by the plugin warmup like every other detour/net-callback-reachable method.
+        /// </summary>
+        public bool IsDeathOwned(uint id) {
+            if (id == 0) return false;
+            if (_ownedCount == 0) return false;          // volatile read; the common case
+            uint[] ids = _ownedIds;
+            for (int i = 0; i < ids.Length; i++)
+                if (Volatile.Read(ref ids[i]) == id) return true;
+            return false;
+        }
+
+        /// <summary>Publish an owned id. Sim thread only, paired with <see cref="OwnRelease"/>.</summary>
+        private void OwnPublish(uint id) {
+            if (id == 0) return;
+            uint[] ids = _ownedIds;
+            for (int i = 0; i < ids.Length; i++) {
+                if (Volatile.Read(ref ids[i]) == id) return;      // already published
+                if (ids[i] == 0) { Volatile.Write(ref ids[i], id); _ownedCount = _ownedCount + 1; return; }
+            }
+            // No free slot: _live is capped at MaxLive == slot count, so this is unreachable unless the
+            // two drift apart. Fail LOUD-ish but harmlessly - the body still ragdolls, it just is not
+            // protected from the live layer this death.
+            _log.LogWarning("ragdoll: ownership table full; id=0x{Id:X8} unprotected", id);
+        }
+
+        /// <summary>Retract an owned id. Sim thread only.</summary>
+        private void OwnRelease(uint id) {
+            if (id == 0) return;
+            uint[] ids = _ownedIds;
+            for (int i = 0; i < ids.Length; i++) {
+                if (Volatile.Read(ref ids[i]) != id) continue;
+                Volatile.Write(ref ids[i], 0u);
+                int c = _ownedCount - 1;
+                _ownedCount = c < 0 ? 0 : c;
+                return;
+            }
+        }
+
+        /// <summary>The one place an entry enters <see cref="_live"/>: registers it, publishes its
+        /// ownership and arms the hot detour on the 0 -&gt; 1 transition.</summary>
+        private void AddLive(uint id, Entry e) {
+            _live[id] = e;
+            OwnPublish(id);
+            if (_live.Count == 1) ArmUpdateParts(true);
+        }
+
         /// <summary>Death signal. Arms a ragdoll for an object whose Dead motion just began/finished.
         /// Classifies the object as either a fresh CREATURE crumple or the CORPSE continuation of a
         /// recently-recorded creature ragdoll.</summary>
         public void OnMotionDone(CPhysicsObj* obj, uint motion) {
             if (_down || obj == null) return;
             if (motion != DeadMotion) {
-                // FINDING 1 (event-driven disarm): a ragdoll is armed only on DeadMotion but was never
-                // disarmed when the SAME object later leaves the dead state. A player who dies then
-                // releases to the lifestone is the same CPhysicsObj/CPartArray, so its entry still
-                // matches and WriteParts keeps overwriting the live, running body with the settled
-                // corpse pose until the HoldMillis backstop (up to 15 min). Any non-Dead motion on a
-                // tracked owner means it is alive again: drop its entry (and its handoff record) so
-                // WriteParts stops. A genuine corpse object never plays a live motion, so this leaves
-                // the corpse-handoff behaviour untouched; the cap remains only as a backstop.
+                // FINDING 1 (event-driven disarm), RESCOPED 2026-08-23.
+                //
+                // The original rule was "ANY non-Dead MotionDone on a tracked owner means it is alive
+                // again - drop the entry". Its purpose is real: a player who dies and releases to the
+                // lifestone is the same CPhysicsObj/CPartArray, so without a disarm WriteParts keeps
+                // overwriting a live, running body with its settled corpse pose until the 15-minute
+                // HoldMillis backstop.
+                //
+                // But it also fired on a body that was merely DYING. A motion queued before the killing
+                // blow (an interrupted swing, a hit flinch, a server-sent motion) completes a few frames
+                // AFTER the death-start arm, and the old rule cancelled the ragdoll mid-fall: the canned
+                // Dead animation visibly took over, the handoff record went with it, and the corpse then
+                // matched nothing and crumpled FRESH - i.e. a second death animation. It did all of that
+                // with no log line, which is why it was never seen in the ARM logs.
+                //
+                // Rescoped to a body that is genuinely alive again, and it now LOGS:
+                //   * the completed motion must be LOCOMOTION-class (walk/run/turn/sidestep/hover). A
+                //     corpse never walks; a resurrected player does within a step or two. Attack-class
+                //     is deliberately NOT a trigger - an interrupted attack completing is exactly the
+                //     race above.
+                //   * never a corpse entry (a corpse object is never alive again),
+                //   * never while the entry is still PENDING classification or still actively falling,
+                //   * and not until the fall window has demonstrably passed (ReviveGraceMillis).
                 uint liveId = ObjIdOf(obj);
-                if (liveId != 0 && _live.TryGetValue(liveId, out Entry? le) && le != null && le.Obj == obj) {
+                if (liveId != 0 && _live.TryGetValue(liveId, out Entry? le) && le != null && le.Obj == obj
+                    && IsReviveMotion(motion) && !le.IsCorpse && !le.Pending && le.ActiveLeft <= 0
+                    && Environment.TickCount64 - le.ArmedTick > ReviveGraceMillis) {
+                    _log.LogInformation(
+                        "ragdoll RELEASE id=0x{Id:X8} motion=0x{M:X8} class=REVIVE-locomotion " +
+                        "(alive again after {Ms}ms; entry + handoff record dropped)",
+                        liveId, motion, Environment.TickCount64 - le.ArmedTick);
                     if (le.Rec != null) _records.Remove(le.Rec);
                     Remove(liveId);
                 }
@@ -284,15 +423,14 @@ namespace AcmeRagdoll.Services {
             // CPartArray::UpdateParts fires every frame. ContainsKey above dedupes the corpse's repeated
             // create-time Dead arms into this single pending entry.
             if (!PosValid(objcell, px, py)) {
-                _live[id] = new Entry {
+                AddLive(id, new Entry {
                     ObjId = id, Obj = obj, Parts = null, Seeded = false, Pending = true, IsCorpse = false,
                     ActiveLeft = 0, ArmedTick = now, LastTouchTick = now,
-                };
+                });
                 _log.LogInformation(
                     "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} cell=0x{Cell:X8} xy=({X:F1},{Y:F1}) " +
                     "posValid=False class=PENDING-nopos (deferred; will classify when positioned)",
                     id, setupDid, numParts, objcell, px, py);
-                if (_live.Count == 1) ArmUpdateParts(true);
                 return;
             }
 
@@ -306,12 +444,11 @@ namespace AcmeRagdoll.Services {
 
             // No match: a fresh creature death. Crumple from the hit exactly as before; the record is
             // created on the first UpdateParts (Seed), where the live model-space pose is available.
-            _live[id] = new Entry {
+            AddLive(id, new Entry {
                 ObjId = id, Obj = obj, Parts = null, Seeded = false, IsCorpse = false,
                 ActiveLeft = RagdollSim.FallFrames, ArmedTick = now, LastTouchTick = now,
-            };
+            });
             LogArm("CREATURE-crumple", id, setupDid, numParts, objcell, px, py);
-            if (_live.Count == 1) ArmUpdateParts(true);
         }
 
         /// <summary>Corpse path: rebuild the creature's sim from the record, fast-forward it to the
@@ -328,24 +465,27 @@ namespace AcmeRagdoll.Services {
             catch (Exception ex) {
                 // If the rebuild fails for any reason, fall back to a normal crumple rather than nothing.
                 _log.LogError(ex, "ragdoll: corpse handoff rebuild failed id=0x{Id:X8}; falling back to crumple", id);
-                _live[id] = new Entry {
+                AddLive(id, new Entry {
                     ObjId = id, Obj = obj, Parts = null, Seeded = false, IsCorpse = false,
                     ActiveLeft = RagdollSim.FallFrames, ArmedTick = now, LastTouchTick = now,
-                };
-                if (_live.Count == 1) ArmUpdateParts(true);
+                });
                 return;
             }
 
             int n = (int)numParts;
             if (n > sim.PartCount) n = sim.PartCount;
-            _live[id] = new Entry {
+            AddLive(id, new Entry {
                 ObjId = id, Obj = obj, Parts = pa, Sim = sim, Scratch = new Quat[n],
                 Seeded = true, IsCorpse = true,
                 ActiveLeft = rec.ActiveLeftRemaining, ArmedTick = now, LastTouchTick = now,
                 // inherit the creature's world-fall progress; recompute terrain for the corpse's own XY.
                 Airborne = rec.Airborne, FallDecided = rec.FallDecided, Landed = rec.Landed,
                 FallOffset = rec.FallOffset, FallVel = rec.FallVel, GroundZValid = false,
-            };
+                // ...and the creature's composition ORIENTATION (see HandoffRecord.BasisQ): the restored
+                // verlet state was evolved in that rotational frame. The origin is the corpse's own,
+                // frozen on its first write, so clustered corpses sharing one record stay apart.
+                BasisQ = rec.BasisQ, BasisQInherited = rec.BasisValid,
+            });
             // SHARED handoff (NOT one-shot). When several identical creatures die together (@smite, an
             // AoE), their corpses spawn clustered and race for records; consuming a record on the first
             // match left the losers with none, so they re-seeded a FRESH ragdoll — the "second ragdoll
@@ -363,8 +503,6 @@ namespace AcmeRagdoll.Services {
                 "parentHashMatch={PM} activeLeftRemaining={AL})",
                 id, setupDid, numParts, objcell, px, py,
                 rec.SetupDid, matchDist, matchAge, parentMatch, rec.ActiveLeftRemaining);
-
-            if (_live.Count == 1) ArmUpdateParts(true);
         }
 
         /// <summary>
@@ -475,6 +613,8 @@ namespace AcmeRagdoll.Services {
                 // inherit the creature's world-fall progress; recompute terrain for the corpse's own XY.
                 e.Airborne = rec.Airborne; e.FallDecided = rec.FallDecided; e.Landed = rec.Landed;
                 e.FallOffset = rec.FallOffset; e.FallVel = rec.FallVel; e.GroundZValid = false;
+                // ...and the creature's composition orientation (see ArmCorpseHandoff).
+                e.BasisQ = rec.BasisQ; e.BasisQInherited = rec.BasisValid; e.BasisFrozen = false;
                 rec.MatchCount++;   // SHARED handoff, not one-shot — see ArmCorpseHandoff for why.
 
                 bool parentMatch = parentHash == rec.ParentHash;
@@ -649,6 +789,11 @@ namespace AcmeRagdoll.Services {
             rec.Landed = e.Landed;
             rec.FallOffset = e.FallOffset;
             rec.FallVel = e.FallVel;
+            // ...and the frozen composition orientation, so the corpse continues in the same rotational
+            // frame the restored verlet state was evolved in (UpdateRecord runs AFTER WriteParts, so by
+            // the first refresh the basis is always frozen).
+            rec.BasisQ = e.BasisQ;
+            rec.BasisValid = e.BasisFrozen;
             ReadPos(owner, out uint cell, out float x, out float y, out float _);
             if (PosValid(cell, x, y)) { rec.Objcell = cell; rec.X = x; rec.Y = y; }   // keep last-good on a transient zero
             rec.UpdatedTick = now;
@@ -695,10 +840,11 @@ namespace AcmeRagdoll.Services {
             CPhysicsPart** parts = pa->parts;
             if (parts == null) return;
 
-            Quat oq = QMath.Norm(new Quat(objFrame->qw, objFrame->qx, objFrame->qy, objFrame->qz));
-            float oox = objFrame->m_fOrigin.BaseClass_Vector3.x;
-            float ooy = objFrame->m_fOrigin.BaseClass_Vector3.y;
-            float ooz = objFrame->m_fOrigin.BaseClass_Vector3.z;
+            // SINGLE-WRITER, ROOT LEVEL. Compose against the FROZEN basis, not the live object frame:
+            // the canned Dead animation is still running underneath (we deliberately still call the
+            // original DoInterpretedMotion) and its root motion would otherwise translate and rotate the
+            // whole ragdoll every frame. See ResolveBasis.
+            ResolveBasis(e, owner, objFrame, out Quat oq, out float oox, out float ooy, out float ooz);
             float sx = pa->scale.BaseClass_Vector3.x, sy = pa->scale.BaseClass_Vector3.y, sz = pa->scale.BaseClass_Vector3.z;
 
             // Airborne-death world fall. Returns 0 for a grounded death (output unchanged); for an
@@ -757,6 +903,85 @@ namespace AcmeRagdoll.Services {
                 // discipline). Client leaf thiscall via ACBindings.
                 part->pos.frame.cache();
             }
+        }
+
+        // ------------------------------------------------------------------ frozen composition basis
+
+        /// <summary>
+        /// The object frame this entry composes its model-space sim pose onto, FROZEN at the entry's
+        /// first write and held for the rest of its life.
+        ///
+        /// WHY. <c>UpdateParts</c> is handed <c>&amp;CPhysicsObj::m_position.frame</c> (verified:
+        /// CPhysicsObj::UpdatePartsInternal -&gt; CPartArray::SetFrame(&amp;this-&gt;m_position.frame)),
+        /// and the client's canned Dead animation keeps driving that frame for the whole death sequence
+        /// - a per-animation root drop, some ground travel and a rotation sweep, all measurably nonzero.
+        /// Re-reading it every frame meant the ragdoll was written in a basis a SECOND animation was
+        /// moving: the body slid and turned under its own settled pose, and a corpse got the same
+        /// treatment from its own Dead motion arm. Freezing the basis makes the death-hit ragdoll the
+        /// only thing that moves the body, which is the whole point of this pass.
+        ///
+        /// THE CELL CAVEAT. <c>m_position.frame</c> origins are LANDBLOCK-local: the retail
+        /// <c>LandDefs::get_block_offset</c> returns the zero vector whenever two cell ids share their
+        /// high 16 bits, and 24 yd per cell step * 8 cells = 192 yd per landblock step otherwise. So a
+        /// cell change WITHIN the landblock needs nothing at all, and a landblock change - which root
+        /// motion can only cause for a body that died within a yard or two of the boundary - is rebased
+        /// by that same 192 yd/step so the frozen origin keeps meaning the same world point. Z is
+        /// absolute in both bases, which is also why the world-fall/anti-sink comparisons against
+        /// terrain Z stay valid.
+        /// </summary>
+        private void ResolveBasis(Entry e, CPhysicsObj* owner, Frame* objFrame,
+                                  out Quat oq, out float oox, out float ooy, out float ooz) {
+            uint cell = owner != null ? owner->m_position.objcell_id : 0u;
+
+            if (!e.BasisFrozen) {
+                // Creature: this is the frame Seed() just built the model-space pose from, i.e. the
+                // death-hit pose. Corpse handoff: its first frame, but with the CREATURE's orientation
+                // when the record carried one (the restored verlet state lives in that rotational
+                // frame), so the pile does not visibly re-orient at handoff.
+                e.BasisQ = e.BasisQInherited
+                    ? QMath.Norm(e.BasisQ)
+                    : QMath.Norm(new Quat(objFrame->qw, objFrame->qx, objFrame->qy, objFrame->qz));
+                e.BasisX = objFrame->m_fOrigin.BaseClass_Vector3.x;
+                e.BasisY = objFrame->m_fOrigin.BaseClass_Vector3.y;
+                e.BasisZ = objFrame->m_fOrigin.BaseClass_Vector3.z;
+                e.BasisCell = cell;
+                e.BasisFrozen = true;
+            }
+            else if (cell != 0 && cell != e.BasisCell) {
+                if ((cell >> 16) != (e.BasisCell >> 16) && e.BasisCell != 0) {
+                    BlockOffset(cell, e.BasisCell, out float dx, out float dy);
+                    e.BasisX += dx;
+                    e.BasisY += dy;
+                    if (!e.BasisRebasedLogged) {
+                        e.BasisRebasedLogged = true;
+                        _log.LogInformation(
+                            "ragdoll BASIS id=0x{Id:X8} rebased cell 0x{From:X8} -> 0x{To:X8} d=({DX:F1},{DY:F1})yd",
+                            e.ObjId, e.BasisCell, cell, dx, dy);
+                    }
+                }
+                e.BasisCell = cell;
+            }
+
+            oq = e.BasisQ;
+            oox = e.BasisX;
+            ooy = e.BasisY;
+            ooz = e.BasisZ;
+        }
+
+        /// <summary>
+        /// Retail <c>LandDefs::get_block_offset</c> (acclient.c), XY only - the vector that expresses a
+        /// point recorded in <paramref name="cellTo"/>'s basis in <paramref name="cellFrom"/>'s basis.
+        /// Zero within one landblock; otherwise 192 yd (8 cells * 24 yd) per landblock step, X from
+        /// bits 24-31 of the cell id and Y from bits 16-23. Z is never offset.
+        /// </summary>
+        private static void BlockOffset(uint cellFrom, uint cellTo, out float dx, out float dy) {
+            dx = 0f; dy = 0f;
+            if (cellFrom == 0 || cellTo == 0) return;
+            if ((cellFrom >> 16) == (cellTo >> 16)) return;
+            int fx = (int)((cellFrom >> 24) & 0xFFu), fy = (int)((cellFrom >> 16) & 0xFFu);
+            int tx = (int)((cellTo >> 24) & 0xFFu), ty = (int)((cellTo >> 16) & 0xFFu);
+            dx = (tx - fx) * 192f;
+            dy = (ty - fy) * 192f;
         }
 
         // ------------------------------------------------------------------ world-space fall (airborne)
@@ -874,7 +1099,9 @@ namespace AcmeRagdoll.Services {
         }
 
         private void Remove(uint id) {
-            if (_live.Remove(id) && _live.Count == 0) ArmUpdateParts(false);
+            if (!_live.Remove(id)) return;
+            OwnRelease(id);   // the body stops being death-owned the instant we stop writing it
+            if (_live.Count == 0) ArmUpdateParts(false);
         }
 
         /// <summary>Rate limiter for the sweep driven off the (very frequent) non-Dead MotionDone
@@ -915,12 +1142,59 @@ namespace AcmeRagdoll.Services {
             _down = true;
             _live.Clear();
             _records.Clear();
+            Array.Clear(_ownedIds, 0, _ownedIds.Length);
+            _ownedCount = 0;
         }
 
         // ------------------------------------------------------------------ helpers
 
         /// <summary>MotionCommand.Dead (Chorizite.Common/Enums/MotionCommand.cs:24).</summary>
         private const uint DeadMotion = 0x40000011;
+
+        // ------------------------------------------------------------------ revive classification
+        //
+        // The eviction trigger for FINDING 1 (see OnMotionDone). LOCOMOTION-class only - the one class
+        // a dead body can never produce and a body that is alive again produces within a step or two.
+        // The ranges are the low 16 bits of MotionCommand (the high byte is the command class), and are
+        // the same set LiveMotionRegistry.LocomotionRanges carries, deliberately DUPLICATED rather than
+        // shared: LiveMotionRegistry is never even class-constructed when RagdollSettings.liveMotion is
+        // false, and touching it from here would both break that bit-identity guarantee and risk running
+        // its class constructor on the native detour thread (the 0x80131509 rule).
+        //   0x0001..0x0002  HoldRun / HoldSidestep;
+        //   0x0005..0x0007  WalkForward / WalkBackwards / RunForward;
+        //   0x000A          Hover;
+        //   0x000D..0x0010  TurnRight / TurnLeft / SideStepRight / SideStepLeft.
+        private static readonly ushort[] ReviveRanges = {
+            0x0001, 0x0002,
+            0x0005, 0x0007,
+            0x000A, 0x000A,
+            0x000D, 0x0010,
+        };
+
+        /// <summary>Dense O(1) form of <see cref="ReviveRanges"/>, built by the class constructor (which
+        /// the plugin warmup runs on the managed thread, never in a detour).</summary>
+        private static readonly bool[] ReviveLow16 = BuildReviveTable();
+
+        private static bool[] BuildReviveTable() {
+            int max = 0;
+            for (int i = 1; i < ReviveRanges.Length; i += 2) if (ReviveRanges[i] > max) max = ReviveRanges[i];
+            var t = new bool[max + 1];
+            for (int i = 0; i + 1 < ReviveRanges.Length; i += 2)
+                for (int v = ReviveRanges[i]; v <= ReviveRanges[i + 1]; v++) t[v] = true;
+            return t;
+        }
+
+        private static bool IsReviveMotion(uint motion) {
+            uint low = motion & 0xFFFFu;
+            return low < (uint)ReviveLow16.Length && ReviveLow16[low];
+        }
+
+        /// <summary>A tracked entry is immune to the revive eviction for at least this long after it
+        /// armed. The primary guard is <c>ActiveLeft &lt;= 0</c> (the fall is literally still running);
+        /// this is the wall-clock backstop for it, set past the longest authored fall - 130 FallFrames
+        /// in ragdoll_profiles.json = 4.3 s at 30 fps - plus the corpse handoff. A body that is
+        /// genuinely alive again has been dead far longer than this.</summary>
+        private const long ReviveGraceMillis = 6_000;
 
         private static uint ObjIdOf(CPhysicsObj* obj) =>
             obj->BaseClass_LongHashData.BaseClass_HashBaseData.id;
