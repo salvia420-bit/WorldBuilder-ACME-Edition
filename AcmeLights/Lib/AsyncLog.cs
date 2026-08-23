@@ -125,7 +125,18 @@ namespace AcmeLights.Lib {
             try { DrainOnce(); } catch { }
         }
 
+        /// <summary>Single-flight. The writer thread is the only normal caller, but Stop() also
+        /// drains after a Join that can time out, and two concurrent drains would both own the
+        /// swapped-out list. A skipped drain loses nothing: the lines stay queued for the next one.</summary>
+        private static int _draining01;
+
         private static void DrainOnce() {
+            if (Interlocked.CompareExchange(ref _draining01, 1, 0) != 0) return;
+            try { DrainOnceCore(); }
+            finally { Volatile.Write(ref _draining01, 0); }
+        }
+
+        private static void DrainOnceCore() {
             List<string> batch;
             int dropped;
             lock (_gate) {
