@@ -209,3 +209,43 @@ per-frame Diffuse edits reach D3D without needing the unverified `lightCacheing`
 `Lib/{LightsConfig,LightsSettings,AddressResolver,D3D9,Device,ClientState}.cs`. Deploy set +
 config in `AcmeLights/README.md`. Chat/teleport rig tasks on the 1070: `acdtinject`, `acdtvclick2`,
 `acdtschat` (+ `acdt-schat.ps1`, needs fresh `pid.txt`), `acdttilt` (`acdt-tilt.ps1`, key-hold).
+
+## UPDATE 2026-08-23 — P3 + P4 SHIPPED + live-validated on the buildbox (wine/DXVK, T4)
+
+Integrated on `integ/all-20260813`: `c2035d0a` (bloom + torchlights DEFAULT ON, owner-proven
+night knobs as defaults), `a0d346bd` (P4 importance-ranked selection — see
+`P4-SELECTION-2026-08-23.md`), `f1aff127` + `2c294006` + the round-2 classification fixup
+(P3 glow dynamic lights — see `P3-GLOWLIGHTS-2026-08-23.md`). All live-validated headless on
+the buildbox via the xdotool chat rig (NOT the 1070).
+
+Live results at bare cfg defaults:
+- **Bloom under DXVK works** (first time proven off the 1070's real D3D9): composites every
+  frame, UI unbloomed, portal/lifestone/torch glow reads. Client stable across teleports,
+  dungeon transitions and hours of uptime.
+- **P4**: `Render::minimize_object_lighting` detour live — seldraws ~17k/s in Holtburg
+  Redoubt, selcand 28, selbail 0, no visual regression vs `selection=0`, fps unchanged
+  (~500+ under DXVK indoors).
+- **P3**: Holtburg drop point tracks 3 emitters out of the box — lifestone 0x7A9B404F
+  (wcid 509, ITEM_TYPE self-evident, blue 0x4FA8FF, 5.4 m), a second lifestone at 70 m,
+  Portal to Town Network at 86.3 m — all injecting every frame. Spawned Ethereal Wisp
+  (wcid 1535) classifies via the luminosity pair (peak 1.0 / frac 1.0) and casts its pale
+  light; in Holtburg Redoubt its light crossed the CLOSED entry doors **only through the
+  physical gap between them** (screenshot taildropped), with zero wall bleed — the
+  visible-cell containment behaving exactly as designed.
+
+**Owed eye-tests for a future session** (all small):
+1. The containment NEGATIVE: an indoor emitter in a cell OUTSIDE the viewer's
+   visible_cell_table must inject nothing (`glowcontain=0` should then reproduce the
+   holtburger bleed). Blind xdotool navigation defeated this session; do it with a known
+   dungeon cell map or on the 1070 with a human at the keys.
+2. Outdoor-emitter-vs-indoor-viewer: spawn a wisp outside a Holtburg house, stand inside,
+   confirm no interior wash.
+3. Bloom daytime-outdoor knob pass (defaults are the owner's night values).
+4. P4 Gate 2 A/B in a >8-candidate room (the entry hall only exercises ~2 picks/draw).
+5. `glowstatics=1` (lampposts) remains default-off and unvalidated.
+
+**Buildbox rig notes learned this session** (extends the §ops above): `@teledungeon <name>`
+works headless (e.g. `teledungeon holtburg redoubt`); movement is ARROW KEYS (not WASD) and
+needs chat unfocused first; Escape TOGGLES the game menu — never press it to "clear" focus,
+click the 3D viewport instead; `@attackable off` before spawning aggro creatures; the say()
+helper leaves keyboard focus in the chat box until you click the viewport.
