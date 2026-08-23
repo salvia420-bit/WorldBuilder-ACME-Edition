@@ -265,17 +265,54 @@ primary.
 > (Also from that session: wcid 42858 "Wisp" is a wall-banner housing item, not a creature — not a
 > tuning target.)
 
-A "glowing" verdict is required for **every** class, so a *destroyed* portal (setup `0x020019E4` —
-no authored light, no luminous surface) correctly stays dark.
+### 3.2b Self-evident classes — and a claim I got wrong
+
+> **CORRECTION 2026-08-23 (second live session).** The first cut required a glowing verdict from
+> **every** class, and defended it with "a *destroyed* portal (setup `0x020019E4`) correctly stays
+> dark". **That was wrong on both the fact and the principle.** `0x020019E4` is not a destroyed
+> portal — the live ACE world DB says it is wcid 11960 `portalredspire-xp`, a perfectly real,
+> walk-through portal standing in Holtburg (landblock `0xA9B4`, 145 m from the drop point). Its
+> setup has 9 surfaces, **0 luminous**, and **no authored light** — so the rule I was defending
+> left a real portal dark. It is not an outlier either: only **21 of the 47** portal setups in the
+> LSD dump author a light.
+
+**Portals and lifestones are now taken on trust: the ITEM_TYPE *is* the evidence.** Measured:
+
+| setup | what it really is | authored lights | peak lum | luminous frac | old verdict |
+|---|---|---|---|---|---|
+| `0x020001B3` | Holtburg town/allegiance portals (3 of 4) | **1** (`#C800C8` i100 f6) | 0 | 0.00 | lit ✓ |
+| `0x020019E4` | **Red Spire portal** (wcid 11960) | 0 | 0.00 | 0.00 | **dark ✗** |
+| `0x020002EE` | **Lifestone** (wcid 509) | 0 | 0.75 | **0.14** | **dark ✗** |
+| `0x0200059A` | Ethereal Wisp (wcid 1535) | 0 | 1.00 | 1.00 | lit ✓ |
+| `0x02000A0B` | `rithwiclugiangemseller` NPC | 0 | 0.00 | 0.00 | dark ✓ |
+
+The lifestone is the instructive one. It is a glowing blue crystal on a stone plinth: **one** lit
+surface of seven, at 0.75. It fails *both* thresholds — and structurally it is the same shape as
+the glowing-eye false positives (Olthoi Worker: 1 of 28) that the fraction test exists to reject.
+Lowering `glowlum`/`glowlumfrac` to catch it would reopen those. Giving two closed, unambiguous
+ITEM_TYPEs their own branch does not cost a single false positive.
+
+**MISSILE deliberately stays evidence-based.** Arrows and atlatl darts are `MISSILE_PS` too, and
+only the DAT can say which missiles are meant to glow.
 
 ### 3.3 Class → policy
 
-| Class | Test | Colour | Notes |
+`pwd` is at weenie+152, `_type` at weenie+208, `_wcid` at +164 (PDB fieldlists `0x13834`
+ACCWeenieObject / `0x1364d` PublicWeenieDesc, verified directly), guarded by the `_phys_obj`
+back-pointer at +148. ITEM_TYPE is tested by **bitmask**, not equality — `TYPE_PORTAL_MAGIC_TARGET`
+is `0x10010000`, which an `== TYPE_PORTAL` test would miss.
+
+| Class | Test | Needs a glow verdict? | Colour |
 |---|---|---|---|
-| `portal` | `ACCWeenieObject.pwd._type == TYPE_PORTAL (0x10000)` | authored, or `glowportalcolor` | `pwd` is at weenie+152, `_type` at weenie+208, `_wcid` at +164; guarded by the `_phys_obj` back-pointer at +148 |
-| `projectile` | `PhysicsState & MISSILE_PS (0x40)` | authored, then the school table (§4) | tracked per frame from the live physics object, never a stale position |
-| `glow` | `pwd._type == TYPE_CREATURE (0x10)` (or any object at `glowcreatures=2`) | authored, else derived from the luminous surfaces | |
-| impact | a tracked projectile disappears from `CObjectMaint::object_table` | inherits the projectile's colour | 300–500 ms, quadratic ease-out |
+| `portal` | `_type & TYPE_PORTAL (0x10000)` | **no — self-evident** | authored, else derived, else `#C800C8`; `glowportalcolor` overrides |
+| `lifestone` | `_type & TYPE_LIFESTONE (0x10000000)` | **no — self-evident** | derived from its 0.75 crystal surface, else `#4FA8FF` |
+| `projectile` | `PhysicsState & MISSILE_PS (0x40)` | yes | authored, then the school table (§4) |
+| `glow` | `_type & TYPE_CREATURE (0x10)`, or `STATIC_PS` at `glowstatics=1`, or any object at `glowcreatures=2` | yes | authored, else derived from the luminous surfaces |
+| impact | a tracked projectile disappears from `CObjectMaint::object_table` | n/a | inherits the projectile's colour |
+
+Note `DColor` is accumulated from **every** surface with `luminosity > 0`, independently of the
+thresholds — so a self-evident emitter still gets its *real* colour whenever it has any luminous
+surface at all, and only falls back to the class default when it has none.
 
 `STATIC_PS` objects are excluded by default (`glowstatics=0`): outdoor lampposts hit the same
 retail gap, but a town has many and they would crowd the 10-slot pool. Knob provided; P4 owns
@@ -375,6 +412,7 @@ installed (so the knob live-toggles like `bloom`/`torchlights`) and forwards imm
 | `glowportals` | 1 | `TYPE_PORTAL` objects |
 | `glowprojectiles` | 1 | `MISSILE_PS` objects |
 | `glowcreatures` | 1 | `0` off · `1` luminous creatures · `2` also luminous props |
+| `glowlifestones` | 1 | `TYPE_LIFESTONE` objects (self-evident, §3.2b) |
 | `glowstatics` | 0 | also re-donate `STATIC_PS` world props (outdoor lampposts) |
 | `glowintensity` | 1.0 | **multiplier** on the emitted intensity |
 | `glowfalloffscale` | 1.0 | **multiplier** on the emitted falloff (D3D `Range = falloff × 1.5`) |
@@ -385,7 +423,7 @@ installed (so the knob live-toggles like `bloom`/`torchlights`) and forwards imm
 | `glowlum` | 0.90 | peak surface luminosity required with no authored light |
 | `glowlumfrac` | 0.25 | min luminous fraction of the object's surfaces |
 | `glowmax` | 6 | max glow lights injected per frame (dynamic pool is 10) |
-| `glowrange` | 45 | metres from the player worth tracking (0 = no cap) |
+| `glowrange` | **0 (uncapped)** | metres worth tracking — see below |
 | `glowscanhz` | 4 | classify/track scan rate |
 | **`glowcontain`** | **1** | **1 = no through-wall bleed** (retail's PVS rule). `0` = off — the A/B |
 | `glowportalboost` | 1.0 | intensity multiplier for portals |
@@ -414,9 +452,28 @@ measured from the corner — that is the 2026-08-23 defect-1 signature. Distance
 from `SmartBox::convert_to_player_space`, which resolves `this->player` internally and is immune to
 that offset, so a bad `player org=` no longer breaks ranging — it just tells you the offset is wrong.
 
-The two `REJECT` lines are the classifier's confession: `lum/frac` means the setup has no authored
-light and failed the luminosity test (the numbers say by how much); `range` means it classified fine
-and only `glowrange` dropped it.
+The `REJECT` lines are the classifier's confession, in three flavours:
+* `class-gate` — the setup **would** have glowed but its class is switched off (the verdict is
+  resolved *before* the class gate purely so this line can exist; it is a cached hash probe, so it
+  is free). This is the line that would have found the Holtburg lifestone immediately.
+* `lum/frac` — no authored light, and it failed the luminosity test; the numbers say by how much.
+* `range` — it classified fine and only `glowrange` dropped it.
+
+Slots are **quota'd per reason** (3 each). In the first live run 28 `lum/frac` rejects starved the
+single `range` reject out of a flat 8-slot ring, and its reason had to be recovered by A/B-ing
+`glowrange` live — a rare reason must never be crowded out by a common one.
+
+### Why `glowrange` defaults to 0 (uncapped)
+
+The four portals in Holtburg's landblock sit at 81.7 m, 86.3 m, 145.8 m and 153.5 m from the
+drop point (ACE `landblock_instance`, measured against the player at `(84.0, 7.1, 94.0)`). A 45 m
+cap hid **all four**: the player looks across town at an unlit portal, and the light pops in as
+they walk up — precisely the "judge by what a player can actually see, even in the distance"
+artefact we are told to avoid. The cap also buys almost nothing: the object walk happens regardless,
+the tracked list is already bounded to the nearest 24 by an insertion sort, injection is capped at
+the nearest `glowmax` (6), and retail's own `Render::insert_light` distance-sorts and drops anything
+that does not fit the 10-slot pool. Three independent bounds already exist; a fourth that is wrong
+about visibility is not worth having. Keep the knob for perf triage only.
 
 ---
 
@@ -433,12 +490,25 @@ person. **Check `schat.log` for `ABORT-USER-ACTIVE` before every batch.**
 lights.cfg:  glowlights=1  glowlog=1  bloom=1
 @telepoi Holtburg
 ```
-Expect within 10 s: a `glowlights scan …` heartbeat with `tracking >= 1` if a portal is in range.
-`@create 2358` (Surface Portal, setup `0x020001B3`) spawns a stationary ethereal purple portal.
-**Pass:** a purple pool of light on the ground under it, `class=portal color=0xC800C8 i=100 f=6.0`
-in the log, ≥60 fps. This is the outdoor gap being filled — retail casts nothing here.
+**At the Holtburg drop point the expected tracked set is already known** (ACE
+`landblock_instance`, landblock `0xA9B4`, player `(84.0, 7.1, 94.0)`), so this doubles as a
+regression fixture — with `glowrange=0` all five should appear, nearest first:
+
+| dist | id | wcid | what | expected class |
+|---|---|---|---|---|
+| 5.4 m | `0x7A9B404F` | 509 | lifestone | `lifestone` (**new**) |
+| 81.7 m | `0x7A9B4051` | 6096 | Allegiance Hall portal | `portal`, authored `#C800C8` i100 f6 |
+| 86.3 m | `0x7A9B4080` | 43065 | Portal to Town Network | `portal`, authored `#C800C8` i100 f6 |
+| 145.8 m | `0x7A9B405B` | 11960 | Red Spire portal | `portal`, **synthesised** (setup `0x020019E4` authors nothing) |
+| 153.5 m | `0x7A9B404A` | 19717 | Low-statue dungeon portal | `portal`, authored |
+
+**Pass:** the lifestone glows blue at your feet, `class=lifestone` in the log; all four portals
+tracked; ≥60 fps. This is the outdoor gap being filled — retail casts nothing for any of them.
+`@create 2358` (Surface Portal, setup `0x020001B3`) adds a stationary purple one at arm's length.
 
 A/B: `glowlights=0` → the glow disappears within one frame; `glowlights=1` → it returns.
+Also `glowrange=45` → the four portals vanish from `tracking` and reappear as `REJECT range`
+lines; that is the regression this default protects against.
 
 ### 7.2 Colour spread — the authored per-portal palette
 
@@ -546,16 +616,44 @@ outdoor gap really is filled. That also proves `InqItemType`/`InqWcid` (the ACCW
 `pwd._type`/`_wcid` reads at +208/+164 behind the `_phys_obj` guard) are correct, and that
 `Emit`'s world anchor (`obj+80`) places the light correctly.
 
-**Two defects, both fixed in the fixup commit:**
+**Two defects reported, one real:**
 
-1. **Distance reference point** — every distance was measured from the landblock corner, so the
-   default `glowrange=45` rejected every candidate (`tracking 0, inject 0`); `glowrange=0` made it
-   work. Fixed by replacing the hand-rolled rebase with `SmartBox::convert_to_player_space`
-   @`0x00452DE0` (§5), plus the `player org=` heartbeat field and the `REJECT range` line so the
-   same class of defect announces itself next time.
+1. **Distance reference point** — every candidate was rejected at the default `glowrange=45`
+   (`tracking 0, inject 0`); `glowrange=0` made it work. Diagnosed at the time as a broken origin
+   read. **The second session disproved that** (see below): the distances were correct all along
+   and the real fault was the 45 m default itself. Reworked to
+   `SmartBox::convert_to_player_space` @`0x00452DE0` anyway (§5) — a better implementation for
+   other reasons — plus the `player org=` heartbeat field and the `REJECT range` line.
 2. **Ethereal Wisp (wcid 1535) never classified** — the surface type-bit gate (§3.2 fixup box).
+   This one was a genuine bug.
 
 **Not a defect but a wart, also fixed:** `glowstatics=1` alone did nothing (§3.3 fixup box).
+
+### Second session (after the first fixup)
+
+**Ethereal Wisp 1535 now classifies and lights**: `class=glow color=0xD0E0FF i=100 f=4.0 dist=5.0`,
+injecting every frame, stable. And the distance rework was **vindicated in reverse** —
+`convert_to_player_space` returns `dist=86.3` for portal `0x7A9B4080`, *identical* to the old
+arithmetic, and the ACE `landblock_instance` row for that portal `(14.4, 55.6, 78.2)` against the
+player at `(84.0, 7.1, 94.0)` computes to exactly 86.3. **The original DistSq was never wrong**; the
+"≈ player corner distance" reading was a numerical coincidence, and the heartbeat now shows the
+player origin reading true in-block coords. The native call stays because it is the better
+implementation (no hand-rolled rebase, immune to the `SmartBox::player` offset), not because the old
+one was broken. **Offsets vindicated: `ObjOrigin`/`ObjPosFrame`/`SbPlayer` are all correct.**
+
+Three findings from that session, all addressed here:
+
+1. **The object reported as a misclassified portal is an NPC.** `id=0x7A9B404E wcid=9423` is
+   `rithwiclugiangemseller` — ACE world DB: `weenieType 12` (Vendor), `itemType 16`
+   (`TYPE_CREATURE`), setup `0x02000A0B` (21 parts, 26 surfaces, **0 luminous**, no authored
+   light). The classifier read it correctly and rejected it correctly; **not a defect.** Worth
+   noting *why* the reject line was misread as a class-gate failure: the `lum/frac` reject fires
+   after the class gate for **every** class, including portals, so its presence never implied the
+   creature branch. The new `class-gate` reason removes that ambiguity.
+2. **The actual glowing blue thing near the drop point is the LIFESTONE** — `0x7A9B404F`, wcid 509,
+   `itemType 0x10000000` (`TYPE_LIFESTONE`), 5.4 m away, `PhysicsState 0x410` (no `LightingOn`).
+   There is no portal within 80 m. It now has its own self-evident class (§3.2b).
+3. **`glowrange` 45 → 0** and **reject slots quota'd per reason** (§6).
 
 ---
 
@@ -569,13 +667,20 @@ outdoor gap really is filled. That also proves `InqItemType`/`InqWcid` (the ACCW
 3. **Flame Bolt I–VII reads white** (§4). Needs a spell→object association the client does not
    expose.
 4. **Virindi / Shadows / Liches are not caught** (§3.3) — no authored light, no luminous surface.
-   A wcid allowlist would fix it but would be invented content.
+   A wcid allowlist would fix it but would be invented content. Note the §3.2b escape hatch does
+   NOT apply: unlike portals and lifestones there is no ITEM_TYPE that means "this creature glows",
+   so trusting a class is not available here.
+4b. **Other self-evident classes are unexamined.** `TYPE_PORTAL_MAGIC_TARGET` (`0x10010000`) is now
+   caught by the portal bitmask, but nobody has surveyed whether e.g. `TYPE_GEM` or
+   `TYPE_MANASTONE` deserve the same treatment. Do it from the DAT, not from intuition.
 5. **Outdoor `STATIC_PS` props** (lampposts) hit the same retail gap and are off by default
    (`glowstatics=1` to try). They could crowd the 10-slot pool in a town; P4's per-draw ranking is
    the right home for that.
 6. **One verdict per setup DID.** Two objects sharing a setup but differing by palette (recoloured
    creatures) share a derived colour. Authored lights are unaffected.
-7. **A projectile culled at range** (rather than actually hitting) still produces an impact flash.
-   Bounded by `glowrange` (45 m) and 400 ms; cosmetic.
+7. **A projectile culled from the object table** (rather than actually hitting) still produces an
+   impact flash. Now that `glowrange` defaults to uncapped, the only bounds are the 400 ms decay,
+   the containment gate and `glowmax`; cosmetic, but if stray flashes show up at distance, a
+   modest `glowrange` is the mitigation.
 8. **P4 interaction.** This phase produces well-scoped *sources* and caps itself at
    `glowmax=6` of 10 so it cannot starve retail's own lights. Ranking them per draw is P4's job.

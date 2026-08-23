@@ -81,8 +81,13 @@ FF dynamic lights. Full design + the cell-scoping proof + the live-validation sc
   block) — runs after the client's dynamic wipe+refill, so injected lights live exactly one frame.
   Per-frame cost is proportional to tracked emitters (usually under 10), not to all objects; the
   4 Hz classify scan rides the existing `m_renderingCallback` slot.
+- **Self-evident classes**: portals and lifestones are trusted on ITEM_TYPE and need no luminosity
+  evidence — 26 of 47 portal setups author no light and have no luminous surface (the Red Spire
+  portal is one), and the lifestone is 1 lit surface of 7 at 0.75, the same shape as the
+  glowing-eye false positives the fraction test exists to reject. Missiles stay evidence-based
+  (arrows are `MISSILE_PS` too).
 - Knobs: `glowlights` (master, 0 = frame bit-identical) · `glowportals` `glowprojectiles`
-  `glowcreatures` `glowstatics` · `glowintensity` `glowfalloffscale` `glowsynthintensity`
+  `glowcreatures` `glowlifestones` `glowstatics` · `glowintensity` `glowfalloffscale` `glowsynthintensity`
   `glowsynthfalloff` `glowlift` `glowpulse` · `glowlum` `glowlumfrac` · `glowmax` `glowrange`
   `glowscanhz` · **`glowcontain`** · `glowportalboost` `glowportalcolor` `glowprojectileboost`
   `glowschool` · `glowimpactms` `glowimpactboost` `glowimpactfalloff` · `glowlog`.

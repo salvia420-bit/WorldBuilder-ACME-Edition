@@ -146,10 +146,13 @@ namespace AcmeLights.Services {
                            StLightsOn = 0x800, StHidden = 0x4000, StCloaked = 0x100000;
         // SurfaceType bits (acclient.h:5820)
         private const uint SfBase1Solid = 0x1, SfLuminous = 0x40, SfAdditive = 0x10000;
-        // ITEM_TYPE (acclient.h:3300)
-        private const uint TypeCreature = 0x10, TypePortal = 0x10000;
+        // ITEM_TYPE (acclient.h:3300). Bitmask tests, not equality: TYPE_PORTAL_MAGIC_TARGET is
+        // 0x10010000 (PORTAL | LIFESTONE-adjacent bit), so an `== TYPE_PORTAL` test would miss it.
+        // The three bits are mutually exclusive in practice (all 1939 Portal weenies in the LSD
+        // dump report itemType exactly 0x10000).
+        private const uint TypeCreature = 0x10, TypePortal = 0x10000, TypeLifestone = 0x10000000;
 
-        private const byte KPortal = 1, KProjectile = 2, KCreature = 3;
+        private const byte KPortal = 1, KProjectile = 2, KCreature = 3, KLifestone = 4;
 
         private const int MaxTracked = 24;
         private const int MaxImpacts = 8;
@@ -200,12 +203,18 @@ namespace AcmeLights.Services {
         private static readonly Verdict[] _v = new Verdict[VCap];
 
         /// <summary>Diagnostic ring for classifier misses — the 2026-08-23 live session had to
-        /// bisect a silent range defect from a tracked-only log, which was expensive.</summary>
+        /// bisect a silent range defect from a tracked-only log, which was expensive.
+        /// Slots are QUOTA'D PER REASON: in the first live run 28 lum/frac rejects starved the
+        /// single range reject out of an 8-slot flat ring, and its reason had to be recovered by
+        /// A/B-ing glowrange. A rare reason must never be crowded out by a common one.</summary>
         private struct Reject {
             public byte Why; public uint Id, Wcid, Did; public float Lum, Frac, Dist;
         }
-        private const int MaxRejects = 8;
+        private const int NReasons = 4;              // index 0 unused; RjClass/RjLum/RjRange = 1..3
+        private const int MaxPerReason = 3;
+        private const int MaxRejects = (NReasons - 1) * MaxPerReason;
         private static readonly Reject[] _rejects = new Reject[MaxRejects];
+        private static readonly int[] _rejCount = new int[NReasons];
         private static int _nRejects;
 
         /// <summary>Per-school colour for war-spell projectile setups whose AUTHORED light is a
@@ -289,6 +298,7 @@ namespace AcmeLights.Services {
             for (int i = 0; i < MaxTracked; i++) _tracked[i] = default;
             for (int i = 0; i < MaxImpacts; i++) _impacts[i] = default;
             for (int i = 0; i < MaxRejects; i++) _rejects[i] = default;
+            for (int i = 0; i < NReasons; i++) _rejCount[i] = 0;
 
             foreach (var m in typeof(GlowLights).GetMethods(
                          System.Reflection.BindingFlags.Static |
@@ -494,6 +504,7 @@ namespace AcmeLights.Services {
         private static float KindBoost(LightsConfig cfg, byte kind) => kind switch {
             KPortal => cfg.GlowPortalBoost,
             KProjectile => cfg.GlowProjectileBoost,
+            KLifestone => cfg.GlowPortalBoost,   // same "world fixture" idiom as a portal
             _ => 1f,
         };
 
@@ -535,6 +546,7 @@ namespace AcmeLights.Services {
             bool wantCreatures = cfg.GlowCreatures > 0.5f;
             bool wantProps = cfg.GlowCreatures >= 1.5f;
             bool wantStatics = cfg.GlowStatics > 0.5f;
+            bool wantLifestones = cfg.GlowLifestones > 0.5f;
 
             int prevCount = _nTracked;
             _nTracked = 0;
@@ -543,6 +555,7 @@ namespace AcmeLights.Services {
             // condition below is stricter, and an unused gather costs 8 struct writes.
             bool gather = cfg.GlowLog > 0.5f && now - _lastLog >= Stopwatch.Frequency;
             _nRejects = 0;
+            for (int i = 0; i < NReasons; i++) _rejCount[i] = 0;
 
             for (uint b = 0; b < tableSize; b++) {
                 for (byte* o = buckets[b]; o != null && seen < 100_000; o = *(byte**)(o + ObjHashNext)) {
@@ -572,26 +585,58 @@ namespace AcmeLights.Services {
                     bool setupLit = *(uint*)(setup + SetupNumLights) != 0;
                     if (setupLit && (state & StLightsOn) != 0 && (cell & 0xFFFF) >= 0x100) continue;
 
-                    bool isMissile = (state & StMissile) != 0;
-                    bool isStatic = (state & StStatic) != 0;
-                    uint itemType = InqItemType(o);
-                    bool isPortal = itemType == TypePortal;
-                    bool isCreature = itemType == TypeCreature;
-
-                    // 2026-08-23 FIXUP: statics get their own branch. `glowstatics=1` used to be
-                    // necessary-but-not-sufficient — a lamppost is TYPE_MISC, so it also needed
-                    // glowcreatures=2, which is why glowstatics=1 alone changed nothing live.
-                    byte kind;
-                    if (isMissile) { if (!wantProjectiles) continue; kind = KProjectile; }
-                    else if (isPortal) { if (!wantPortals) continue; kind = KPortal; }
-                    else if (isStatic) { if (!wantStatics) continue; kind = KCreature; }
-                    else if (isCreature) { if (!wantCreatures) continue; kind = KCreature; }
-                    else { if (!wantCreatures || !wantProps) continue; kind = KCreature; }
-
+                    // The verdict is resolved BEFORE the class gate (it is a cached hash probe, so
+                    // this costs nothing) purely so a class-gate rejection can report whether the
+                    // object WOULD have glowed. Without that, an emitter dropped by the class gate
+                    // vanishes silently — which is how the Holtburg lifestone hid: at the default
+                    // glowcreatures=1 it is neither creature nor static nor portal, so it fell into
+                    // the "prop" branch and was never even evaluated, let alone logged.
                     uint did = *(uint*)(setup + SetupDid);
                     if (did == 0) continue;
                     int slot = VerdictFor(did, setup, pa);
                     if (slot < 0) continue;
+
+                    bool isMissile = (state & StMissile) != 0;
+                    bool isStatic = (state & StStatic) != 0;
+                    uint itemType = InqItemType(o);
+                    bool isPortal = (itemType & TypePortal) != 0;
+                    bool isLifestone = (itemType & TypeLifestone) != 0;
+                    bool isCreature = (itemType & TypeCreature) != 0;
+
+                    // "Would this have lit if its class were enabled?" — self-evidence counts, or
+                    // turning glowportals off would silently hide the very portals that need no
+                    // luminosity evidence.
+                    bool couldGlow = _v[slot].Authored != 0 || isPortal || isLifestone ||
+                                     (_v[slot].Lum >= cfg.GlowLum && _v[slot].Frac >= cfg.GlowLumFrac);
+
+                    // SELF-EVIDENT CLASSES. A portal and a lifestone do not have to prove they
+                    // glow: the ITEM_TYPE *is* the evidence. That matters because most of them
+                    // cannot prove it — 26 of the 47 portal setups in the LSD dump author no light
+                    // at all, and their surfaces are Luminosity 0 (e.g. 0x020019E4, the Red Spire
+                    // portal live in Holtburg: 9 surfaces, 0 luminous, 0 lights), while the
+                    // lifestone setup 0x020002EE is 1 luminous surface of 7 at 0.75 — it fails BOTH
+                    // thresholds because structurally it is "a glowing crystal on a stone plinth",
+                    // the same shape as the glowing-eye false positives the fraction test exists to
+                    // reject. Lowering the thresholds to catch it would reopen those; giving the
+                    // two closed, unambiguous ITEM_TYPEs their own branch does not.
+                    // MISSILE deliberately stays evidence-based: arrows and atlatl darts are
+                    // MISSILE_PS too, and only the DAT can say which missiles are meant to glow.
+                    //
+                    // Statics also get their own branch: `glowstatics=1` used to be
+                    // necessary-but-not-sufficient — a lamppost is TYPE_MISC, so it also needed
+                    // glowcreatures=2, which is why glowstatics=1 alone changed nothing live.
+                    byte kind; bool pass, selfEvident = false;
+                    if (isMissile) { pass = wantProjectiles; kind = KProjectile; }
+                    else if (isPortal) { pass = wantPortals; kind = KPortal; selfEvident = true; }
+                    else if (isLifestone) { pass = wantLifestones; kind = KLifestone; selfEvident = true; }
+                    else if (isStatic) { pass = wantStatics; kind = KCreature; }
+                    else if (isCreature) { pass = wantCreatures; kind = KCreature; }
+                    else { pass = wantCreatures && wantProps; kind = KCreature; }
+                    if (!pass) {
+                        if (gather && couldGlow)
+                            PushReject(RjClass, id, InqWcid(o), did, _v[slot].Lum, _v[slot].Frac, 0f);
+                        continue;
+                    }
                     classed++;
 
                     uint color; float inten, fall, ox, oy, oz;
@@ -602,13 +647,18 @@ namespace AcmeLights.Services {
                         ox = _v[slot].AX; oy = _v[slot].AY; oz = _v[slot].AZ;
                     }
                     else {
-                        // No authored light: only a genuinely luminous BODY qualifies (peak AND
-                        // area fraction — see the classification note in the class remarks).
-                        if (_v[slot].Lum < cfg.GlowLum || _v[slot].Frac < cfg.GlowLumFrac) {
+                        // No authored light: a self-evident class is taken on trust; anything else
+                        // must be a genuinely luminous BODY (peak AND area fraction — see above).
+                        if (!selfEvident &&
+                            (_v[slot].Lum < cfg.GlowLum || _v[slot].Frac < cfg.GlowLumFrac)) {
                             verdictFail++;
                             if (gather) PushReject(RjLum, id, InqWcid(o), did, _v[slot].Lum, _v[slot].Frac, 0f);
                             continue;
                         }
+                        // DColor is accumulated from every surface with luminosity > 0 regardless of
+                        // the thresholds, so a self-evident emitter still gets its REAL colour when
+                        // it has any luminous surface at all (the lifestone's 0.75 crystal), and
+                        // falls back to the class default only when it has none.
                         color = _v[slot].DColor;
                         inten = cfg.GlowSynthIntensity;
                         fall = cfg.GlowSynthFalloff;
@@ -654,17 +704,22 @@ namespace AcmeLights.Services {
                 for (int i = 0; i < _nRejects; i++)
                     log?.LogInformation(
                         "acmelights: glowlights REJECT {R} id=0x{Id:X8} wcid={W} setup=0x{S:X8} lum={L:F2} frac={FR:F2} dist={D:F1}",
-                        _rejects[i].Why == RjLum ? "lum/frac" : "range",
+                        RejectName(_rejects[i].Why),
                         _rejects[i].Id, _rejects[i].Wcid, _rejects[i].Did,
                         _rejects[i].Lum, _rejects[i].Frac, _rejects[i].Dist);
             }
         }
 
-        private const byte RjLum = 1, RjRange = 2;
+        private const byte RjClass = 1, RjLum = 2, RjRange = 3;
+
+        private static string RejectName(byte why) =>
+            why == RjClass ? "class-gate" : why == RjLum ? "lum/frac" : "range";
 
         private static void PushReject(byte why, uint id, uint wcid, uint did,
                                        float lum, float frac, float dist) {
             if (_nRejects >= MaxRejects) return;
+            if (why >= NReasons || _rejCount[why] >= MaxPerReason) return;   // per-reason quota
+            _rejCount[why]++;
             _rejects[_nRejects].Why = why;
             _rejects[_nRejects].Id = id;
             _rejects[_nRejects].Wcid = wcid;
@@ -676,7 +731,8 @@ namespace AcmeLights.Services {
         }
 
         private static string KindName(byte k) =>
-            k == KPortal ? "portal" : k == KProjectile ? "projectile" : "glow";
+            k == KPortal ? "portal" : k == KProjectile ? "projectile"
+            : k == KLifestone ? "lifestone" : "glow";
 
         /// <summary>Distance-ordered bounded insert; the nearest MaxTracked win, and the per-frame
         /// GlowMax cap then takes the nearest of those.</summary>
@@ -786,6 +842,9 @@ namespace AcmeLights.Services {
             return kind switch {
                 KPortal => 0xC800C8u,       // the swirling-purple gateway (setup 0x020001B3's own light)
                 KProjectile => 0xC8D8FFu,   // neutral white-blue when nothing else is readable
+                KLifestone => 0x4FA8FFu,    // the blue crystal (only reached if it has NO luminous
+                                            // surface at all; 0x020002EE has one, so its real
+                                            // palette-derived colour normally wins)
                 _ => 0xD0E0FFu,
             };
         }

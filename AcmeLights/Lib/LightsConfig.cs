@@ -64,6 +64,10 @@ namespace AcmeLights.Lib {
         public float GlowProjectiles = 1f;    // glowprojectiles: 0/1 — PhysicsState MISSILE_PS 0x40
         public float GlowCreatures = 1f;      // glowcreatures: 0 off | 1 luminous creatures
                                               //   | 2 ALSO luminous props (fragments, gems, braziers)
+        public float GlowLifestones = 1f;     // glowlifestones: 0/1 — ITEM_TYPE TYPE_LIFESTONE (0x10000000).
+                                              //   Self-evident like portals: the blue crystal glows by
+                                              //   definition and cannot pass the luminosity test
+                                              //   (setup 0x020002EE is 1 lit surface of 7 at 0.75).
         public float GlowStatics = 0f;        // glowstatics: 0/1 — also re-donate STATIC_PS world props
                                               //   whose light the outdoor path drops (lampposts). Off by
                                               //   default: a town has many and they'd crowd the pool.
@@ -81,7 +85,13 @@ namespace AcmeLights.Lib {
                                               //   on 19% (glowing eyes and gems). See the P3 doc §3.
         public float GlowLumFrac = 0.25f;     // glowlumfrac: min luminous fraction of the object's surfaces
         public float GlowMax = 6f;            // glowmax: max glow lights injected per frame (pool is 10)
-        public float GlowRange = 45f;         // glowrange: metres from the player to bother tracking (0 = no cap)
+        public float GlowRange = 0f;          // glowrange: metres from the player worth tracking.
+                                              //   DEFAULT 0 = UNCAPPED. 45 hid the Holtburg town portal
+                                              //   (86.3 m) until you walked up to it — a light popping in
+                                              //   as you approach is exactly the artefact to avoid. The
+                                              //   bounded nearest-24 list + nearest-6 injection already do
+                                              //   the rationing, and the range test never saved the object
+                                              //   walk anyway. Set a value only for perf triage.
         public float GlowScanHz = 4f;         // glowscanhz: classify/track scan rate
         public float GlowContain = 1f;        // glowcontain: 1 = NO THROUGH-WALL BLEED (retail's own PVS
                                               //   rule: indoor emitter must be in CEnvCell::visible_cell_table).
@@ -196,6 +206,7 @@ namespace AcmeLights.Lib {
                 case "glowportals": if (F(val, out var gp)) GlowPortals = Math.Clamp(gp, 0f, 1f); break;
                 case "glowprojectiles": if (F(val, out var gj)) GlowProjectiles = Math.Clamp(gj, 0f, 1f); break;
                 case "glowcreatures": if (F(val, out var gc)) GlowCreatures = Math.Clamp(gc, 0f, 2f); break;
+                case "glowlifestones": if (F(val, out var gt)) GlowLifestones = Math.Clamp(gt, 0f, 1f); break;
                 case "glowstatics": if (F(val, out var gs)) GlowStatics = Math.Clamp(gs, 0f, 1f); break;
                 case "glowintensity": if (F(val, out var gi)) GlowIntensity = Math.Clamp(gi, 0f, 20f); break;
                 case "glowfalloffscale": if (F(val, out var gf)) GlowFalloffScale = Math.Clamp(gf, 0.05f, 10f); break;
