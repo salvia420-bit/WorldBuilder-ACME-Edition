@@ -24,8 +24,20 @@ namespace AcmeSky.Model {
         /// </summary>
         public float ParallaxFactor = 0f;
 
-        /// <summary>Overall opacity multiplier applied via D3DRS_TEXTUREFACTOR alpha (0..1).</summary>
+        /// <summary>Overall opacity multiplier, applied through the per-vertex diffuse alpha (0..1).
+        /// This is the layer's COVERAGE knob: the weather class picks it (clear = a faint cirrus
+        /// veil, storm = a near-solid deck).</summary>
         public float BaseAlpha = 1f;
+
+        /// <summary>
+        /// Cloud-plane tile size: uv units per unit of plane distance (see
+        /// <c>DomeMesh.BuildCloudPlane</c>). Smaller = bigger, slower, higher-looking clouds.
+        /// </summary>
+        public float UvScale = 0.28f;
+
+        /// <summary>Multiplier on the palette-derived lit colour. &lt;1 darkens the deck (the
+        /// underside of a thick overcast/storm layer); 1 = fully sunlit.</summary>
+        public float TintScale = 1f;
 
         /// <summary>Additive blend (One/One) instead of alpha blend (SrcAlpha/InvSrcAlpha).</summary>
         public bool Additive = false;

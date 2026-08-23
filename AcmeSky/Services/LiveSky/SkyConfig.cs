@@ -14,6 +14,17 @@ namespace AcmeSky.Services.LiveSky {
     /// (also honoured on the dev box via the ACMESKY_SKY_CONFIG path, or ~/.acdt/sky.cfg).
     ///
     /// Format: `key = value`, one per line, '#' or ';' comments. Keys (case-insensitive):
+    ///   live      0/1    MASTER PATH SELECT. 1 (default) = the takram volumetric compositor;
+    ///                    0 = the primitive baked-dome fallback. This used to be an ENV-ONLY
+    ///                    knob (ACMESKY_LIVE=1) which the injected client never inherited, so
+    ///                    every deployed build silently ran the fallback.
+    ///   testgradient 0/1 baked path only: 1 draws a hardcoded orange/blue diagnostic band
+    ///                    instead of the palette. Default 0 (it used to default ON).
+    ///   skytimeoverride  0..1 forced time-of-day, -1 = live game clock. Alias: `time`.
+    ///                    Hot-reloaded on BOTH paths (the vanilla ACE clock cannot be set, so
+    ///                    this is the only way to screenshot noon/dusk/night on demand).
+    ///   skyweatheroverride  clear|scattered|broken|overcast|rain|storm, or `auto` (default).
+    ///                    Picks the baked palette AND forces the live path's FAIR/STORM look.
     ///   raymode   0..3   ray reconstruction convention (see AtmosphereShader):
     ///                    0 row-vector both, 1 transpose invProj [default], 2 transpose invView, 3 both
     ///   axis      e.g. x,z,-y   AC(E,N,U)->shader map (each of 3 out comps = +/-{x,y,z})
@@ -26,7 +37,17 @@ namespace AcmeSky.Services.LiveSky {
     /// Defaults are the corrected out-of-the-box values; env vars (ACMESKY_SKY_*) still override
     /// defaults on the dev box, and the file overrides everything.
     /// </summary>
-    internal sealed class SkyConfig {
+    public sealed class SkyConfig {
+        // --- master path select + diagnostics (were ENV-ONLY; see the class remarks) ---------
+        /// <summary>1 = takram volumetric live compositor (the real sky), 0 = baked-dome fallback.</summary>
+        public float LiveMode = 1f;
+        /// <summary>1 = baked path draws the hardcoded diagnostic gradient instead of the palette.</summary>
+        public float TestGradient;
+        /// <summary>1 = throttled per-second frame logging.</summary>
+        public float Diag = 1f;
+        /// <summary>Weather-class override for the palette / FAIR-vs-STORM look; "" or "auto" = live.</summary>
+        public string WeatherClass = "";
+
         public float RayMode;
         public string Axis = "x,z,-y";
         public float Output;
@@ -81,8 +102,86 @@ namespace AcmeSky.Services.LiveSky {
             };
             c.RayMode = SkySunModel.EnvFloat("ACMESKY_SKY_RAYMODE", c.RayMode, 0f, 9f);
             c.Output = SkySunModel.EnvFloat("ACMESKY_SKY_OUTPUT", c.Output, 0f, 9f);
+            // Path/diag knobs: env is still honoured on the dev box, but the DEFAULTS are now the
+            // shipping ones (live on, test gradient off) because the injected client inherits no env.
+            c.LiveMode = EnvBool("ACMESKY_LIVE", c.LiveMode);
+            c.TestGradient = EnvBool("ACMESKY_TESTGRADIENT", c.TestGradient);
+            c.Diag = EnvBool("ACMESKY_DIAG", c.Diag);
+            c.WeatherClass = Environment.GetEnvironmentVariable("ACMESKY_WEATHER") ?? c.WeatherClass;
             return c;
         }
+
+        /// <summary>Env override for a 0/1 knob: "0"/"off"/"false" =&gt; 0, "1"/"on"/"true" =&gt; 1,
+        /// anything else (including unset) keeps <paramref name="dflt"/>.</summary>
+        private static float EnvBool(string name, float dflt) {
+            var s = Environment.GetEnvironmentVariable(name);
+            if (string.IsNullOrEmpty(s)) return dflt;
+            s = s.Trim().ToLowerInvariant();
+            if (s is "0" or "off" or "false" or "no") return 0f;
+            if (s is "1" or "on" or "true" or "yes") return 1f;
+            return dflt;
+        }
+
+        /// <summary>The six baked palette classes, in increasing overcast order.</summary>
+        public static readonly string[] WeatherClasses =
+            { "clear", "scattered", "broken", "overcast", "rain", "storm" };
+
+        /// <summary>True when <paramref name="cls"/> is a recognised palette class name.</summary>
+        public static bool IsWeatherClass(string cls) =>
+            Array.IndexOf(WeatherClasses, cls) >= 0;
+
+        /// <summary>
+        /// Resolve the effective weather class. Priority: `skyweatheroverride` -&gt; the explicit
+        /// `storm` knob -&gt; the client's own weather flag (GameSky::s_weatherEnabled, which the
+        /// retail sky uses as its is_storm signal).
+        /// </summary>
+        public string ResolveWeatherClass(bool clientWeatherFlag) {
+            if (IsWeatherClass(WeatherClass)) return WeatherClass;
+            if (Storm > 0.5f) return "storm";
+            if (Storm >= -0.5f) return "clear";        // storm = 0 forces fair
+            return clientWeatherFlag ? "storm" : "clear";
+        }
+
+        /// <summary>The FAIR/STORM boolean the live cloud shader wants, from the resolved class.</summary>
+        public bool ResolveStorm(bool clientWeatherFlag) {
+            string cls = ResolveWeatherClass(clientWeatherFlag);
+            return cls is "overcast" or "rain" or "storm";
+        }
+
+        /// <summary>
+        /// The writable scratch dir the ACME plugins share on the client box
+        /// (<c>C:\Temp\acdt</c>, the same place sky.cfg / ragdoll.cfg / skydump-N.bmp live).
+        /// Falls back to the user profile when that path is not creatable (e.g. a dev-box run).
+        /// </summary>
+        public static string AcdtDir() {
+            try {
+                const string acdt = @"C:\Temp\acdt";
+                if (Directory.Exists(acdt)) return acdt;
+                Directory.CreateDirectory(acdt);
+                return acdt;
+            }
+            catch {
+                try {
+                    string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                    string dir = Path.Combine(home, ".acdt");
+                    Directory.CreateDirectory(dir);
+                    return dir;
+                }
+                catch { return Path.GetTempPath(); }
+            }
+        }
+
+        /// <summary>
+        /// Crash sentinel for the LIVE path. The D3D11 -&gt; CPU readback -&gt; D3D9 upload sequence has a
+        /// history of faulting NATIVELY under DXVK (2026-08-22: "page fault on write access ... at
+        /// 656DB910"), which no managed catch can intercept -- the client just dies. Since `live` now
+        /// defaults ON, an unfixed fault there would be a boot-crash LOOP. So the compositor drops
+        /// this file before its first upload and removes it once it has survived a few hundred
+        /// composites; if it is still present at the next startup, the previous run died inside the
+        /// live path and we boot into the baked fallback instead. Delete it (or set `live = 1`
+        /// explicitly after fixing the cause) to re-arm.
+        /// </summary>
+        public static string LiveProbePath() => Path.Combine(AcdtDir(), "acmesky-live-crashed.flag");
 
         private static string[] BuildCandidatePaths() {
             string? envPath = Environment.GetEnvironmentVariable("ACMESKY_SKY_CONFIG");
@@ -108,7 +207,8 @@ namespace AcmeSky.Services.LiveSky {
                         int eq = s.IndexOf('=');
                         if (eq <= 0) continue;
                         string key = s.Substring(0, eq).Trim().ToLowerInvariant();
-                        string val = s.Substring(eq + 1).Trim();
+                        string val = StripInlineComment(s.Substring(eq + 1));
+                        if (val.Length == 0) continue;
                         Apply(key, val);
                     }
                     LoadedFrom = path;
@@ -119,8 +219,51 @@ namespace AcmeSky.Services.LiveSky {
             return false;
         }
 
+        /// <summary>
+        /// Trim a TRAILING '#' / ';' comment off a value.
+        ///
+        /// THE 2026-08-23 "sky.cfg does nothing" BUG. This used to be a bare <c>.Trim()</c>, so
+        /// <c>skytimeoverride = 0.5    # 0..1 forced time of day</c> produced the value
+        /// <c>"0.5    # 0..1 forced time of day"</c>; every numeric key runs through
+        /// <see cref="F"/> =&gt; <c>float.TryParse</c>, which fails on that, and <see cref="Apply"/>
+        /// then does NOTHING -- silently, with no log. Since sky.cfg.example documents every key
+        /// with exactly that inline-comment style, a config copied from it had EVERY key ignored:
+        /// the plugin ran on defaults while appearing to be configured. (It is why `live` came up
+        /// 1 -- the new default -- rather than from the file, and why `skytimeoverride = 0.5` did
+        /// not force noon.) String keys (`axis`, `wxmap`, `skyweatheroverride`) were corrupted the
+        /// same way, just without a parse to fail loudly.
+        /// </summary>
+        private static string StripInlineComment(string raw) {
+            int c = raw.IndexOfAny(CommentChars);
+            return (c >= 0 ? raw.Substring(0, c) : raw).Trim();
+        }
+        private static readonly char[] CommentChars = { '#', ';' };
+
+        /// <summary>The hot keys, as a compact string, so a caller can log ONLY when a reload
+        /// actually changed something the viewer would see.</summary>
+        public string HotSignature() =>
+            $"live={LiveMode:0.##} testgradient={TestGradient:0.##} diag={Diag:0.##} " +
+            $"time={ForcedTime:0.###} weather={(string.IsNullOrEmpty(WeatherClass) ? "auto" : WeatherClass)} " +
+            $"storm={Storm:0.##} clouds={Clouds:0.##} cover={CloudCover:0.##} iters={CloudIters:0} " +
+            $"res={CloudRes:0.##} minstep={CloudMinStep:0.#} exposure={Exposure:0.##} stars={Stars:0.##}";
+
         private void Apply(string key, string val) {
             switch (key) {
+                // --- master path select / diagnostics ---
+                case "live": if (F(val, out var lv)) LiveMode = Math.Clamp(lv, 0f, 1f); break;
+                case "testgradient": if (F(val, out var tg)) TestGradient = Math.Clamp(tg, 0f, 1f); break;
+                case "diag": if (F(val, out var dg)) Diag = Math.Clamp(dg, 0f, 1f); break;
+                // --- screenshot overrides (the ACE clock cannot be set, so these are the only lever) ---
+                case "skytimeoverride": if (F(val, out var sto)) ForcedTime = Math.Clamp(sto, -1f, 1f); break;
+                case "skyweatheroverride":
+                case "weather": {
+                    // First whitespace-delimited token only, so a stray trailing word cannot turn
+                    // the value into an unrecognised class that silently falls back to auto.
+                    string v = val.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                                  is { Length: > 0 } parts ? parts[0].ToLowerInvariant() : "";
+                    WeatherClass = (v is "" or "auto" or "-1" or "live" or "off") ? "" : v;
+                    break;
+                }
                 case "axis": Axis = val; break;
                 case "raymode": if (F(val, out var rm)) RayMode = Math.Clamp(rm, 0f, 9f); break;
                 case "output": if (F(val, out var o)) Output = Math.Clamp(o, 0f, 9f); break;   // 6 = clouds-only, 7 AP-inscatter, 8 AP-transmittance, 9 front-depth

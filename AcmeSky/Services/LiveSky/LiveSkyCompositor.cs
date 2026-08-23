@@ -127,14 +127,21 @@ namespace AcmeSky.Services.LiveSky {
 
         private readonly string _cloudDir;
 
-        public LiveSkyCompositor(ILogger log, string skyAssetDir) {
+        /// <param name="log">Plugin logger.</param>
+        /// <param name="skyAssetDir">assets/sky root (holds atmosphere/ and clouds/).</param>
+        /// <param name="cfg">The SkyRenderer's already-loaded config, SHARED so both halves of the
+        /// plugin agree on time/weather/mode. Null builds a private one (defaults + env + file).</param>
+        public LiveSkyCompositor(ILogger log, string skyAssetDir, SkyConfig? cfg = null) {
             _log = log;
             _atmoDir = Path.Combine(skyAssetDir, "atmosphere");
             _cloudDir = Path.Combine(skyAssetDir, "clouds");
 
             _forceTest = string.Equals(Environment.GetEnvironmentVariable("ACMESKY_TESTPATTERN"), "1", StringComparison.Ordinal);
-            _cfg = SkyConfig.FromDefaultsAndEnv();
-            _cfg.Reload();                                   // pick up C:\Temp\acdt\sky.cfg if present
+            if (cfg is null) {
+                cfg = SkyConfig.FromDefaultsAndEnv();
+                cfg.Reload();                                // pick up C:\Temp\acdt\sky.cfg if present
+            }
+            _cfg = cfg;
             RebuildAxisIfChanged();
         }
 
@@ -155,6 +162,21 @@ namespace AcmeSky.Services.LiveSky {
             EnsureD3D11();
             return Usable;
         }
+
+        /// <summary>
+        /// Takram coverage for an EXPLICIT sky.cfg `skyweatheroverride` class, expressed as an offset
+        /// from the two owner-tuned bases so the auto path is untouched. Higher coverage = more deck.
+        /// clear/scattered thin the deck out; overcast/rain thicken it past the storm base.
+        /// </summary>
+        private static float CoverageForClass(string cls, float fair, float storm) => cls switch {
+            "clear" => Math.Clamp(fair - 0.18f, 0.05f, 1f),
+            "scattered" => Math.Clamp(fair - 0.08f, 0.05f, 1f),
+            "broken" => fair,
+            "overcast" => Math.Clamp(storm + 0.05f, 0.05f, 1f),
+            "rain" => Math.Clamp(storm + 0.09f, 0.05f, 1f),
+            "storm" => storm,
+            _ => fair,
+        };
 
         /// <summary>Rebuild the AC->shader matrix only when the axis spec string actually changes.</summary>
         private void RebuildAxisIfChanged() {
@@ -689,34 +711,62 @@ namespace AcmeSky.Services.LiveSky {
                 int srcPitch = (int)map.RowPitch;
                 byte* s = (byte*)map.DataPointer;
 
-                // Sample three pixels (post-tonemap BGRA) for the diagnostic line.
-                _sampZenith = SamplePixel(s, srcPitch, w / 2, h / 8);
-                _sampMid = SamplePixel(s, srcPitch, w / 2, h / 2);
-                _sampHorizon = SamplePixel(s, srcPitch, w / 2, (7 * h) / 8);
-                // Every 8th row at FULL x resolution so 1px stars are countable; threshold 24
-                // sits above the night-sky background (<10) and below most star pixels.
-                int bright = 0;
-                for (int y = 0; y < h; y += 8) {
-                    byte* row = s + (long)y * srcPitch;
-                    for (int x = 0; x < w; x++) {
-                        byte* px = row + (long)x * 4;
-                        if (px[0] > 24 || px[1] > 24 || px[2] > 24) bright++;
+                // Diagnostic sampling for the once-per-SECOND log line. It used to run on EVERY
+                // frame: every 8th row at full x resolution is ~259k single-byte CPU reads at
+                // 1920x1080 (plus cache pressure on an 8 MB readback buffer) purely to fill a log
+                // field printed 60x less often. Gate it on the frames that actually log.
+                if (_clock.ElapsedTicks - _lastFrameLogTicks >= Stopwatch.Frequency) {
+                    // Three pixels (post-tonemap BGRA).
+                    _sampZenith = SamplePixel(s, srcPitch, w / 2, h / 8);
+                    _sampMid = SamplePixel(s, srcPitch, w / 2, h / 2);
+                    _sampHorizon = SamplePixel(s, srcPitch, w / 2, (7 * h) / 8);
+                    // Every 8th row at FULL x resolution so 1px stars are countable; threshold 24
+                    // sits above the night-sky background (<10) and below most star pixels.
+                    int bright = 0;
+                    for (int y = 0; y < h; y += 8) {
+                        byte* row = s + (long)y * srcPitch;
+                        for (int x = 0; x < w; x++) {
+                            byte* px = row + (long)x * 4;
+                            if (px[0] > 24 || px[1] > 24 || px[2] > 24) bright++;
+                        }
                     }
+                    _sampBright = bright;
                 }
-                _sampBright = bright;
 
                 // sky.cfg `dump=1`: write the EXACT composited backdrop (this readback) as a
                 // BMP once per second — ground-truth 1070-rendered frames through the live
                 // game camera, immune to the stale-GDI screenshot problem.
                 MaybeDumpFrame(s, srcPitch, w, h);
 
+                ArmCrashProbe();
+
                 var tex = new Texture9(_d3d9tex);
                 if (tex.LockRect(0, out var locked, 0u)) {   // 0, not DISCARD: DISCARD requires DYNAMIC; this pool is MANAGED
-                    int bytesPerRow = w * 4; // BGRA8 both sides
+                    // PITCH SAFETY (the 2026-08-22 DXVK page fault). This row loop used to copy a
+                    // hardcoded w*4 bytes per row into `pBits + y*locked.Pitch` with no validation.
+                    // If the runtime hands back a SHORTER pitch or a null pointer -- which the
+                    // never-before-executed DXVK D3D9 path did, faulting natively on write where no
+                    // managed catch can help -- that walks straight off the end of the surface.
+                    // Clamp the per-row copy to what BOTH sides actually provide, and if the
+                    // destination cannot hold a full row, refuse the upload and fall back to the
+                    // baked domes instead of corrupting memory.
                     byte* d = (byte*)locked.pBits;
+                    int dstPitch = locked.Pitch;
+                    int bytesPerRow = w * 4;                       // BGRA8 both sides
+                    if (d == null || dstPitch <= 0 || srcPitch < bytesPerRow) {
+                        tex.UnlockRect(0);
+                        _d3d11Failed = true;                       // Usable => false => baked fallback
+                        ClearCrashProbe();                         // handled cleanly; do not blame the next boot
+                        LogErrThrottled(new InvalidOperationException(
+                            $"unsafe D3D9 lock (pBits={(d == null ? "null" : "ok")} dstPitch={dstPitch} " +
+                            $"srcPitch={srcPitch} need={bytesPerRow}); live sky disabled, baked domes take over"),
+                            "d3d9-lock-pitch");
+                        return;
+                    }
+                    int copyBytes = Math.Min(bytesPerRow, dstPitch);
                     for (int y = 0; y < h; y++) {
-                        Buffer.MemoryCopy(s + (long)y * srcPitch, d + (long)y * locked.Pitch,
-                                          bytesPerRow, bytesPerRow);
+                        Buffer.MemoryCopy(s + (long)y * srcPitch, d + (long)y * dstPitch,
+                                          copyBytes, copyBytes);
                     }
                     tex.UnlockRect(0);
 
@@ -724,8 +774,8 @@ namespace AcmeSky.Services.LiveSky {
                         _firstCompositeLogged = true;
                         _log.LogInformation(
                             "acmesky: LIVE first composite -- vp={W}x{H} mode={Mode} d3d11Fmt=B8G8R8A8_UNORM " +
-                            "d3d9Fmt=A8R8G8B8(21) stagingRowPitch={SP} d3d9Pitch={DP}",
-                            w, h, atmo ? "atmosphere" : "testpattern", srcPitch, locked.Pitch);
+                            "d3d9Fmt=A8R8G8B8(21) stagingRowPitch={SP} d3d9Pitch={DP} copyBytesPerRow={CB}",
+                            w, h, atmo ? "atmosphere" : "testpattern", srcPitch, dstPitch, copyBytes);
                     }
                 }
                 else {
@@ -735,6 +785,47 @@ namespace AcmeSky.Services.LiveSky {
             finally {
                 _ctx.Unmap(_staging!, 0);
             }
+        }
+
+        // --- live-path crash sentinel (see SkyConfig.LiveProbePath) ---
+        private bool _probeArmed;
+        private bool _probeCleared;
+        private int _uploadsSurvived;
+        /// <summary>Composites that must complete before we declare the live path healthy (~5 s).</summary>
+        private const int ProbeClearAfterUploads = 300;
+
+        /// <summary>Drop the sentinel before the first D3D9 upload, and remove it once the readback
+        /// path has survived <see cref="ProbeClearAfterUploads"/> composites. If the process dies in
+        /// between (a native AV no managed catch can see), the file survives and the NEXT startup
+        /// boots into the baked fallback instead of crash-looping.</summary>
+        private void ArmCrashProbe() {
+            if (_probeCleared) return;
+            try {
+                if (!_probeArmed) {
+                    _probeArmed = true;
+                    File.WriteAllText(SkyConfig.LiveProbePath(),
+                        "AcmeSky live sky readback/upload was in progress when this file was written.\r\n" +
+                        "Its presence at startup means the previous session died there; the plugin then\r\n" +
+                        "boots the baked dome fallback. Delete this file to re-arm the live compositor.\r\n");
+                    return;
+                }
+                if (++_uploadsSurvived >= ProbeClearAfterUploads) {
+                    _probeCleared = true;
+                    File.Delete(SkyConfig.LiveProbePath());
+                    _log.LogInformation("acmesky: LIVE readback path healthy after {N} composites; crash sentinel cleared",
+                        _uploadsSurvived);
+                }
+            }
+            catch { /* the sentinel is best-effort; never let it break a frame */ }
+        }
+
+        /// <summary>Remove the sentinel after a CONTROLLED exit from the live path (a clean plugin
+        /// unload, or our own decision to disable it) -- those are not crashes, so the next startup
+        /// must be free to try again.</summary>
+        public void ClearCrashProbe() {
+            if (!_probeArmed || _probeCleared) return;
+            _probeCleared = true;
+            try { File.Delete(SkyConfig.LiveProbePath()); } catch { }
         }
 
         private long _lastDumpTicks = -Stopwatch.Frequency;
@@ -823,12 +914,17 @@ namespace AcmeSky.Services.LiveSky {
             _lastWindSeconds = nowS;
             cb.CloudWeatherOfs = _weatherOfs;
             // STORM-reactive look: the client's own weather flag (GameSky::s_weatherEnabled)
-            // is the retail analog of holtburger's DayGroup is_storm signal. sky.cfg `storm`
-            // overrides for testing (-1 = auto).
-            bool storm = _cfg.Storm < -0.5f ? ClientState.IsWeatherEnabled() : _cfg.Storm > 0.5f;
+            // is the retail analog of holtburger's DayGroup is_storm signal. sky.cfg
+            // `skyweatheroverride` (a named palette class) and `storm` (-1 = auto) override it,
+            // so a screenshot sweep can pin each look. Coverage is interpolated across the six
+            // named classes so `skyweatheroverride = scattered|broken|overcast` are visibly
+            // different decks, not just fair-vs-storm.
+            bool storm = _cfg.ResolveStorm(ClientState.IsWeatherEnabled());
             _lastStorm = storm;
             cb.CloudStorm = storm ? 1f : 0f;
-            cb.CloudCoverage = storm ? _cfg.CloudCoverStorm : _cfg.CloudCover;
+            cb.CloudCoverage = SkyConfig.IsWeatherClass(_cfg.WeatherClass)
+                ? CoverageForClass(_cfg.WeatherClass, _cfg.CloudCover, _cfg.CloudCoverStorm)
+                : (storm ? _cfg.CloudCoverStorm : _cfg.CloudCover);   // auto: unchanged owner-tuned look
             cb.CloudFrame = (++_cloudFrameIndex) % 64;
             float scale = Math.Clamp(_cfg.CloudRes, 0.1f, 1f);
             cb.CloudRes = new Vector2(MathF.Max(64f, w * scale), MathF.Max(36f, h * scale));
@@ -978,6 +1074,7 @@ namespace AcmeSky.Services.LiveSky {
         /// the D3D9 upload texture is Release()d only if it still belongs to that device.
         /// </summary>
         public void ReleaseGpu(IntPtr currentDevPtr) {
+            ClearCrashProbe();   // a clean unload is not a crash
             if (_d3d9tex != IntPtr.Zero) {
                 bool alive = _d3d9dev != IntPtr.Zero && currentDevPtr == _d3d9dev;
                 if (alive) new Texture9(_d3d9tex).Release();

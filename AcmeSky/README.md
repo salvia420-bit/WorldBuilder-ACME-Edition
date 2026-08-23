@@ -1,5 +1,25 @@
 # AcmeSky
 
+> **2026-08-23 — "the clouds look nothing like retail" root cause: the plugin was stuck in
+> DIAGNOSTIC MODE, and nobody could get it out.**
+>
+> `Live`, `TestGradient`, `DiagFrameLog` and the time override were **environment-variable-only**
+> statics (`ACMESKY_LIVE=1`, `ACMESKY_TESTGRADIENT=0`, …). The injected acclient inherits **no**
+> environment from the launcher — that is the documented reason `SkyConfig` / `sky.cfg` exists in
+> the first place — so every deployed build booted with the env defaults
+> `testGradient=True diag=True live=False`, i.e.:
+> * the **takram volumetric compositor was OFF** (the whole M1/M2/M3 sky nobody ever saw in the
+>   deployed client), and
+> * the primitive baked fallback painted a **hardcoded orange/blue diagnostic band** instead of
+>   the time-of-day palette.
+> `sky.cfg` had **no key** for any of them, so it could not be fixed without a rebuild.
+>
+> All four are now `sky.cfg` keys, hot-reloaded once per second, shipping as
+> **`live = 1`, `testgradient = 0`, `diag = 1`**, plus two new screenshot overrides
+> (`skytimeoverride`, `skyweatheroverride`) because the in-game clock belongs to the vanilla ACE
+> server and cannot be set. The baked fallback was rebuilt against the retail decomp at the same
+> time — see *Baked cloud path* below.
+
 > **2026-08-22 code-only investigation — BLACK SKY root cause + cloud seam-line fix (both landed, 1070 eye-test pending):**
 > 1. **Black sky**: `ACMESKY_LIVE=1` routed the backdrop through `LiveSkyCompositor`, which was
 >    constructed + warmed **lazily inside the GameSky::Draw detour** — i.e. on the native render
@@ -191,6 +211,73 @@ Loaded at runtime from beside the dll. Two kinds:
 Source of the bakes: `/mnt/wbterminal2/dat-patch-sky/` (`PROVENANCE.txt`, `weather_manifest.json`).
 Textures are created in **D3DPOOL_MANAGED** so a plain device Reset restores them automatically;
 a *changed* device pointer (full re-create) is detected and triggers a reload.
+
+---
+
+## Runtime configuration (`C:\Temp\acdt\sky.cfg`)
+
+**The injected acclient inherits no environment variables.** Everything tunable therefore lives in
+a plain `key = value` file that the plugin re-reads **once per second**, so it can be edited while
+the client is running. Copy `assets/sky/atmosphere/sky.cfg.example` to `C:\Temp\acdt\sky.cfg`
+(the same dir AcmeRagdoll reads `ragdoll.cfg` from). Search order:
+`%ACMESKY_SKY_CONFIG%` → `C:\Temp\acdt\sky.cfg` → `C:\Temp\acdt\skyaxis.txt` → `~/.acdt/sky.cfg`.
+
+The four that decide *what you actually see*:
+
+| key | default | meaning |
+|---|---|---|
+| `live` | `1` | `1` = takram volumetric clouds + Bruneton atmosphere (D3D11 → readback → D3D9). `0` = the baked-dome fallback. Read at plugin init (the D3D11 device must be created on the managed thread), so changing it needs a relaunch. |
+| `testgradient` | `0` | Baked path only. `1` paints a hardcoded orange/blue diagnostic band instead of the palette. |
+| `skytimeoverride` | `-1` | `0..1` forced time-of-day (`0.25` sunrise, `0.5` noon, `0.75` sunset), `-1` = the game clock. Hot. Alias `time`. **This is the only way to choose the sky's time**: the clock comes from the vanilla ACE server and must not be modified. |
+| `skyweatheroverride` | `auto` | `clear\|scattered\|broken\|overcast\|rain\|storm` — pins the baked palette + cloud stack *and* the live path's coverage/FAIR-vs-STORM look. `auto` follows the client's `GameSky::s_weatherEnabled`. Hot. |
+
+Everything else (`exposure`, `cloudcover`, `cloudminstep`, `stars`, `dump`, …) is documented inline
+in `sky.cfg.example`.
+
+**Live-path crash sentinel.** The D3D11→CPU→D3D9 readback has a history of faulting *natively*
+under DXVK, which no managed `catch` can intercept. Since `live` now defaults on, the compositor
+drops `C:\Temp\acdt\acmesky-live-crashed.flag` before its first upload and deletes it after ~300
+good composites (or on a clean unload). If that file is present at startup, the previous session
+died in the live path and the plugin boots the **baked fallback** instead of crash-looping. Delete
+it to re-arm.
+
+---
+
+## Baked cloud path — retail-derived (fallback renderer)
+
+Reworked 2026-08-23 against the retail decomp after the live path proved to have never been
+running in the deployed client. What retail actually does (`acclient.c`; symbols to verify):
+
+- `GameSky::Draw` sets `zfar*4`, `DEPTHTEST_ALWAYS` + no z-write, and draws DAT-authored sky
+  objects as ordinary `CPhysicsObj`s. There is **no procedural sky code at all**.
+- The cloud layer is gfxobj **`0x01004C36`**: a 9-vertex / 12-triangle drooping canopy — apex
+  `(0,0,+780)` uv `(2.5,2.5)`, inner ring `(±5044.63, ±5044.63, +487.5)`, outer rim
+  `(±10087.7, ±10087.7, −400)`, uv `0.482…4.518`. That is a **256² plate tiled ~4× over 20175
+  units** on a plane ~780 above the eye ⇒ tile ≈ 5000 units ⇒ **`uvScale = 780/5000 = 0.156`**,
+  which is `SkyRenderer.RetailUvScale`. The rim bottoms out at −1.6° elevation and bounds the UV
+  density there — reproduced by `HorizonCapDeg = 4.4` + a fade over −2°…6°.
+- Scroll is **translation only** (`CPhysics::UpdateTexVelocity` → `CGfxObj::TexVelocity` →
+  `D3DPolyRender::RenderMeshSubset` pushing `D3DTS_TEXTURE0` with `D3DTTFF_COUNT3`); retail never
+  rotates cloud UVs. Dereth DayGroup 0's cloud `tex_velocity` is `(−0.013, +0.013)` uv/s — used
+  verbatim for the low deck.
+- Blending comes from the DAT `SurfaceType` via `D3DPolyRender::SetSurface`: normal clouds are
+  `BASE1_IMAGE|ALPHA` ⇒ `SRCALPHA/INVSRCALPHA` with `TEXADDRESS_WRAP` (the storm cloud
+  `0x01004C35` adds `ADDITIVE` ⇒ `SRCALPHA/ONE`).
+- Time-of-day tint is **material state, not vertex colour**: `Emissive = luminosity/100`,
+  `Diffuse = max_bright/100`, `alpha = 1 − transparent/100`, lerped between the two bracketing
+  `SkyTimeOfDay` records by `SkyDesc::GetSky`. At Dereth's midnight record the cloud object has
+  `transparent = 100`, and `CPhysicsPart::SetTranslucency` special-cases `1.0` by setting
+  `draw_state |= 1` ⇒ `CPhysicsPart::Draw` **skips the part**. **Retail draws no clouds at
+  night.** We fade the deck out on the same schedule.
+- Weather = `SkyDesc::CalcPresentDayGroup`, a deterministic hash of the calendar date over the
+  region's DayGroups (Dereth: Sunny ×6 / Clear ×3 / Cloudy ×3 / Rainy ×8). No server packet.
+
+What that changed here: the deck now uses a **cloud-plane projection** (`DomeMesh.BuildCloudPlane`)
+instead of the equirect star mapping — the old mapping wrapped a whole 360° of azimuth into one
+texture width and collapsed it to a point at the zenith, which is what turned a 512px plate into
+continent-sized wedges; per-vertex diffuse carries a palette-derived lit colour and the horizon
+fade instead of a flat grey `TEXTUREFACTOR`; and the layer stack varies per weather class instead
+of drawing one hardcoded overcast deck under every palette.
 
 ---
 

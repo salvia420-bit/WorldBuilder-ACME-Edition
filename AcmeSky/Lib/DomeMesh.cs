@@ -16,6 +16,15 @@ namespace AcmeSky.Lib {
         public uint Color;
     }
 
+    /// <summary>Fixed-function vertex: position + diffuse ARGB + one 2D texcoord.
+    /// FVF = XYZ|DIFFUSE|TEX1, stride 24. D3D9 requires that exact member order.</summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct VertexPCT {
+        public float X, Y, Z;
+        public uint Color;
+        public float U, V;
+    }
+
     /// <summary>
     /// A generated sky dome as an expanded triangle list, ready for DrawPrimitiveUP.
     ///
@@ -43,6 +52,42 @@ namespace AcmeSky.Lib {
         private DomeMesh(VertexPT[] textured, float[] elevation) {
             Textured = textured;
             Elevation = elevation;
+        }
+
+        /// <summary>
+        /// CLOUD-PLANE (a.k.a. sky-plane) projection of this dome, as XYZ|DIFFUSE|TEX1 vertices with
+        /// a placeholder white colour the renderer rewrites per frame.
+        ///
+        /// WHY NOT THE EQUIRECT UV. <see cref="Textured"/> carries the equirect mapping
+        /// (u = az/2pi, v = 0.5 - el/pi), which is right for the star plate and WRONG for a cloud
+        /// deck: it wraps the whole 360 degrees of azimuth into one texture width and collapses it
+        /// to a point at the zenith, so a 512px plate becomes a handful of continent-sized wedges
+        /// smeared radially out of the top of the sky -- exactly the "enormous amorphous blobs"
+        /// the plugin was drawing. Retail (and every flight sim since) instead projects the view
+        /// ray onto a horizontal PLANE at a fixed altitude: for a unit direction d the plane hit is
+        /// <c>t = 1 / max(d.z, sin(minEl))</c> and <c>uv = d.xy * t * scale</c>. That gives a tiled
+        /// deck straight overhead which converges and compresses toward the horizon -- the classic
+        /// cloud-layer perspective -- and makes UV scroll a real horizontal wind drift.
+        /// </summary>
+        /// <param name="uvScale">Tile size: uv units per unit of plane distance. Smaller = larger,
+        /// slower-looking clouds. ~0.28 puts roughly one tile across the overhead sky.</param>
+        /// <param name="horizonCapDeg">Elevation at which the projection stops diverging. Below it
+        /// the deck is pinned (and the renderer fades it out), which is what keeps the horizon from
+        /// smearing into infinite-frequency aliasing.</param>
+        public VertexPCT[] BuildCloudPlane(float uvScale = 0.28f, float horizonCapDeg = 5f) {
+            float zMin = MathF.Sin(Math.Max(0.5f, horizonCapDeg) * MathF.PI / 180f);
+            var outv = new VertexPCT[Textured.Length];
+            for (int i = 0; i < Textured.Length; i++) {
+                var p = Textured[i];
+                float t = 1f / MathF.Max(p.Z, zMin);
+                outv[i] = new VertexPCT {
+                    X = p.X, Y = p.Y, Z = p.Z,
+                    Color = 0xFFFFFFFF,
+                    U = p.X * t * uvScale,
+                    V = p.Y * t * uvScale,
+                };
+            }
+            return outv;
         }
 
         /// <summary>

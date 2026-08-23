@@ -200,6 +200,9 @@ namespace AcmeSky.Lib {
             public const uint XyzDiffuse = Xyz | Diffuse;      // 0x042
             /// <summary>Position + one 2D texcoord set (textured cloud / star dome). Stride 20.</summary>
             public const uint XyzTex1 = Xyz | Tex1;            // 0x102
+            /// <summary>Position + diffuse + one 2D texcoord set (cloud deck: per-vertex tint and
+            /// horizon fade modulated onto the plate). Stride 24. D3DFVF_XYZ|DIFFUSE|TEX1.</summary>
+            public const uint XyzDiffuseTex1 = Xyz | Diffuse | Tex1;   // 0x142
             /// <summary>Pre-transformed (screen-space) position + rhw. D3DFVF_XYZRHW.</summary>
             public const uint XyzRhw = 0x004;
             /// <summary>Screen-space quad + one 2D texcoord set (fullscreen composite). Stride 24.

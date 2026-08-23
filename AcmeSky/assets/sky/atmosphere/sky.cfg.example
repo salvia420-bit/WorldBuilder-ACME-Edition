@@ -2,6 +2,37 @@
 # Edited live: the plugin re-reads it once per second, so changes take effect in-game
 # WITHOUT a restart and WITHOUT environment variables (the acclient does not inherit the
 # launcher .bat's env). Lines are `key = value`; '#' or ';' starts a comment.
+#
+# A trailing comment on the SAME line as a value is now stripped correctly. Before
+# 2026-08-23 it was not -- the parser kept "0.5   # noon" as the value, float.TryParse
+# failed, and the key was silently DROPPED, so a config copied from this file had every
+# key ignored while looking perfectly configured. If you are running an older plugin dll,
+# put values on their own lines.
+#
+# HOW TO TELL IT WORKED: every edit that lands prints one line to the client log,
+#   acmesky: sky.cfg [C:\Temp\acdt\sky.cfg] -> live=1 ... time=0.5 weather=auto ...
+# If your edit prints nothing, the plugin did not see it.
+
+# --- MASTER PATH SELECT (read this first) ------------------------------------------------
+# `live` chooses WHICH sky renderer draws. This was an ENV-ONLY switch (ACMESKY_LIVE=1) until
+# 2026-08-23, and the injected acclient inherits no env -- so every deployed build silently ran
+# the primitive baked-dome fallback with a hardcoded diagnostic gradient. That is why the sky
+# "looked nothing like retail". Both are now file keys and both now ship correct by default.
+live         = 1    # 1 = takram volumetric clouds + Bruneton atmosphere (THE real sky)
+                    # 0 = baked-dome fallback (2 alpha cloud plates + a palette gradient)
+testgradient = 0    # baked path only: 1 = hardcoded orange/blue diagnostic bands (was the
+                    # accidental default). Leave 0 unless you are proving the draw path.
+diag         = 1    # throttled once-per-second frame log lines
+
+# --- screenshot overrides (the in-game clock is the vanilla ACE server's; it CANNOT be set) --
+# Hot-reloaded like everything else, so a whole day can be swept without relaunching.
+# 0..1 forced time of day, or -1 for the live game clock.
+#   0.0 midnight   0.25 sunrise   0.5 noon   0.75 sunset
+skytimeoverride = -1
+# auto | clear | scattered | broken | overcast | rain | storm
+# Picks the baked palette AND the live path's coverage/FAIR-vs-STORM look, so each of the six
+# weather classes can be verified on demand.
+skyweatheroverride = auto
 
 # --- world swizzle (THE 2026-08-21 fix; leave ON) ---------------------------------------
 # The client's D3D render world is the AC world with y and z SWAPPED (Y-up). Decomp proof:
@@ -33,7 +64,9 @@ output = 0
 
 # --- look / model -----------------------------------------------------------------------
 exposure = 5        # AgX exposure (holtburger uses 5)
-time     = -1       # 0..1 forced time-of-day; -1 = game clock (GameTime.present_time_of_day)
+# `time` is an ALIAS of skytimeoverride (set near the top of this file). Do NOT set it here
+# as well: keys are applied top-to-bottom, so a second assignment silently overrides the
+# first -- a `time = -1` line down here would undo `skytimeoverride = 0.5` up there.
 timeofs  = 0        # phase shift added to the CLOCK time (mod 1) if fraction 0 != midnight
 sunang   = 0.03     # sun disc angular radius
 moonang  = 0.025    # moon disc angular radius
@@ -64,6 +97,20 @@ cloudhaze  = 1      # 1 = takram haze (3e-5 fair / 3e-4 storm)
 # NOT ported (the one remaining takram gap): Beer Shadow Map + light shafts.
 # debug outputs (see `output` above): 6 = clouds-only (tonemapped over black),
 # 7 = aerial-perspective inscatter raw, 8 = AP transmittance raw, 9 = cloud front depth.
+
+# --- PERF PRESET (uncomment as a block) ---------------------------------------------------
+# The defaults above are the OWNER-TUNED 1070 rig (~65 fps there). The buildbox T4 under DXVK
+# measures ~19.6 fps at those defaults vs ~84 on the baked path -- DXVK's D3D11 plus the
+# full-res CPU readback costs far more than native. Biggest levers, in order:
+#   cloudres     quarters the raymarched pixel count at 0.5 -- by far the cheapest win, and
+#                the cloud RT is already lower-frequency than the sky, so it costs little.
+#   cloudminstep 50 is takram HIGH (10 is ULTRA and is what ships); 5x coarser primary march.
+#   clouditers   250 halves the iteration cap (200 = takram low preset).
+# Do NOT make these the shipped defaults -- the 1070 is the perf baseline and it does not
+# need them. Use them for capture sessions on the T4.
+# cloudres     = 0.5
+# cloudminstep = 50
+# clouditers   = 250
 
 # --- capture aids ------------------------------------------------------------------------
 dump     = 0        # 1 = write the composited backdrop as C:\Temp\acdt\skydump-N.bmp once
