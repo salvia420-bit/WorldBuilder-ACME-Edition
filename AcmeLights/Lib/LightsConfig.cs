@@ -158,6 +158,22 @@ namespace AcmeLights.Lib {
         public float GlowContain = 1f;        // glowcontain: 1 = NO THROUGH-WALL BLEED (retail's own PVS
                                               //   rule: indoor emitter must be in CEnvCell::visible_cell_table).
                                               //   0 = off — the A/B that makes the difference visible.
+        // ── P3b THE OUTDOOR ENABLE (Services/GlowLights.OnLandscapeDraw) ─────────────────────────
+        // Outdoors the client leaves the active hardware-light set at exactly {the sun}:
+        // DrawMeshInternal only calls the per-draw chooser when !Render::useSunlight
+        // (acclient.c:456974) and RenderNormalMode's outdoor branch runs useSunlightSet(1) first
+        // (:144905), which disables slots 1..7 (:380646). So P3 injected outdoor glow lights that
+        // were then never switched on. A pre-detour on LScape::draw @0x00506D90 re-adds them with
+        // retail's own add_active_light/enable_active_lights — the same pair
+        // Render::minimize_envcell_lighting drives for every EnvCell the client draws.
+        //
+        // DEFAULT ON, and `glowoutdoor=0` is a REAL escape hatch: read at startup it means the
+        // detour is never installed at all (zero footprint, exactly like `selection=0`); read live
+        // it makes the installed detour's body return before touching anything.
+        public float GlowOutdoor = 1f;        // glowoutdoor: 0 off | 1 enable glow dynamics outdoors
+        public float GlowOutdoorBudget = 6f;  // glowoutdoorbudget: hardware slots the outdoor pass may
+                                              //   take, 1..7 (slot 0 of the 8-entry curLightUsage
+                                              //   table is the sun and is never touched)
         public float GlowPortalBoost = 1f;    // glowportalboost: intensity multiplier for portals
         public uint GlowPortalColor = 0u;     // glowportalcolor: hex RGB override (0 = the DAT's authored
                                               //   colour, which is per-portal: purple/red/green/blue/…).
@@ -334,6 +350,8 @@ namespace AcmeLights.Lib {
                 case "glowrange": if (F(val, out var gr)) GlowRange = Math.Clamp(gr, 0f, 300f); break;
                 case "glowscanhz": if (F(val, out var gh)) GlowScanHz = Math.Clamp(gh, 0.25f, 30f); break;
                 case "glowcontain": if (F(val, out var gn)) GlowContain = Math.Clamp(gn, 0f, 1f); break;
+                case "glowoutdoor": if (F(val, out var go)) GlowOutdoor = Math.Clamp(go, 0f, 1f); break;
+                case "glowoutdoorbudget": if (F(val, out var gob)) GlowOutdoorBudget = Math.Clamp(gob, 1f, 7f); break;
                 case "glowportalboost": if (F(val, out var pb)) GlowPortalBoost = Math.Clamp(pb, 0f, 20f); break;
                 case "glowportalcolor": if (Hex(val, out var pc)) GlowPortalColor = pc & 0xFFFFFF; break;
                 case "glowprojectileboost": if (F(val, out var jb)) GlowProjectileBoost = Math.Clamp(jb, 0f, 20f); break;

@@ -268,6 +268,9 @@ namespace AcmeLights.Services {
         private static nint _pGetObjectA;   // CObjectMaint::GetObjectA(uint) -> CPhysicsObj*  (thiscall)
         private static nint _pGetVisible;   // CEnvCell::GetVisible(uint) -> CEnvCell*         (cdecl)
         private static nint _pToPlayerSpace;// SmartBox::convert_to_player_space(obj, &vec)->int (thiscall)
+        // P3b outdoor enable: Render::enable_active_lights() — the same primitive P4 drives, and the
+        // one half of minimize_envcell_lighting we reproduce. cdecl, no args.
+        private static delegate* unmanaged[Cdecl]<void> _pEnableActiveLights;
 
         // Unmanaged scratch: the LIGHTINFO handed to add_dynamic_light (Render::insert_light COPIES
         // it — Frame::combine + field copies — so one reused buffer is correct), plus a Frame used
@@ -277,6 +280,8 @@ namespace AcmeLights.Services {
         private static float* _vec3;        // out-param scratch for convert_to_player_space
 
         private static int _litFrames, _lastInjected;
+        // P3b outdoor enable diagnostics (plain ints; folded into the existing 1/s glow heartbeat).
+        private static int _outdoorFrames, _lastOutdoorEnabled, _outdoorDeclines;
 
         /// <summary>Managed-thread init: allocate the unmanaged scratch, resolve addresses, commit
         /// the cache arrays and pre-JIT every method reachable from the detours. MUST be called
@@ -306,6 +311,10 @@ namespace AcmeLights.Services {
                 ClientFunctions.GetVisible_Sig, ClientFunctions.GetVisible_VA);
             _pToPlayerSpace = AddressResolver.Resolve("SmartBox::convert_to_player_space",
                 ClientFunctions.ConvertToPlayerSpace_Sig, ClientFunctions.ConvertToPlayerSpace_VA);
+            // P3b: the same VA P4 already resolves and calls every draw indoors (acclient.map RVA
+            // 0x0014BC90 + image base 0x00401000). Shared constant so there is exactly one truth.
+            _pEnableActiveLights = (delegate* unmanaged[Cdecl]<void>)AddressResolver.Resolve(
+                "Render::enable_active_lights", null, LightSelection.EnableActiveLights_VA);
             if (_vec3 == null) _vec3 = (float*)NativeMemory.AllocZeroed(12);
 
             // Touch the arrays so their storage is committed before any detour runs.
@@ -327,6 +336,9 @@ namespace AcmeLights.Services {
             try {
                 var adl = typeof(Render).GetMethod("add_dynamic_light");
                 if (adl != null) RuntimeHelpers.PrepareMethod(adl.MethodHandle);
+                // P3b outdoor enable calls this one from the LScape::draw pre-detour.
+                var aal = typeof(Render).GetMethod("add_active_light");
+                if (aal != null) RuntimeHelpers.PrepareMethod(aal.MethodHandle);
             }
             catch { }
             // PACING: the scan's log block is formatted into _sb and handed to AsyncLog from the
@@ -555,6 +567,117 @@ namespace AcmeLights.Services {
         };
 
         // ══════════════════════════════════════════════════════════════════════════════════════
+        //  P3b — THE OUTDOOR ENABLE.  Pre-detour on LScape::draw @0x00506D90.
+        // ══════════════════════════════════════════════════════════════════════════════════════
+        //
+        // ── THE SECOND OUTDOOR GAP ───────────────────────────────────────────────────────────
+        // P3 fixed the DONATION half: outdoors the per-frame refill only asks EnvCells, so an
+        // object light never entered Render::world_lights at all. Getting it into the pool is not
+        // enough, because NOTHING SWITCHES IT ON OUTDOORS:
+        //
+        //   RenderDeviceD3D::DrawMeshInternal      acclient.c:456974
+        //       if ( !Render::useSunlight ) Render::minimize_object_lighting();   // the ONLY
+        //                                                                        // per-draw chooser
+        //   SmartBox::RenderNormalMode (outdoor)   acclient.c:144903-144906
+        //       Render::update_viewpoint(); Render::set_default_view();
+        //       Render::useSunlightSet(1);          // <- then LScape::draw(lscape)
+        //   Render::useSunlightSet                 acclient.c:380646
+        //       Render::reset_active_lights_state();            // all 8 slots -> -1 (:379424)
+        //       Render::add_active_light(-1, 0);                // slot = the sun
+        //       Render::enable_active_lights();                 // 1..7 explicitly DISABLED
+        //
+        // So every outdoor draw ran with an active set of exactly {sun}: the Holtburg lifestone
+        // was injected, sorted and ignored. Indoors is unaffected — PView::draw does
+        // useSunlightSet(0) + restore_all_lighting (:461554) and DrawEnvCell calls
+        // minimize_envcell_lighting (:456892), which enables every dynamic light.
+        //
+        // ── WHY LScape::draw AND NOT useSunlightSet ──────────────────────────────────────────
+        // Hooking useSunlightSet(int) would be the literal inverse, but it is a cdecl-WITH-ARG
+        // trampoline (the shape that destabilized the client on SceneTool::EndFrame, never root
+        // caused) AND it also fires in the creature-mode paperdoll path (acclient.c:143938-143941)
+        // where the very next statements zero both pools. LScape::draw is a plain
+        // `void __thiscall(LScape*)` — the proven trampoline shape of all four existing hooks — and
+        // it is THE landscape pass itself, so it fires exactly where the sunlight active-set is
+        // live and nowhere else. It covers both callers for free: RenderNormalMode's outdoor branch
+        // (:144906) and PView::draw's outside-view (:461480, looking out of a dungeon mouth), and
+        // in the latter case retail tears our additions down again at :461554 before the EnvCell
+        // pass — exactly the scoping we would have had to hand-write.
+        //
+        // ── SAFE BY CONSTRUCTION ─────────────────────────────────────────────────────────────
+        //   * It calls ONLY retail's own two primitives, in the same order and with the same
+        //     arguments as Render::minimize_envcell_lighting (acclient.c:379652), which the client
+        //     itself runs for every EnvCell it draws: mark dynamic_light_used[i], add_active_light
+        //     (i, DYNAMIC), enable_active_lights. No new state is invented and nothing is written
+        //     to client memory that retail does not write itself every frame indoors.
+        //   * add_active_light self-allocates slots and REFUSES past the end of the 8-entry
+        //     Render::curLightUsage table (acclient.c:379548), so the sun cannot be evicted (it is
+        //     relocated to a free slot at worst, retail's own behaviour) and we cannot overrun.
+        //   * The state we set has a ONE-PASS lifetime: the next useSunlightSet / minimize_* call
+        //     resets it, exactly like retail's own per-draw selection.
+        //   * It is inert unless GlowLights is actually tracking an emitter, so a player with no
+        //     glow source nearby gets a frame identical to today's.
+        //   * No allocation, no logging and no managed collection on the path; the detour body is
+        //     try/catch and a decline just means "this frame looks like stock retail".
+        // Escape hatch: `glowoutdoor=0` in the cfg AT STARTUP means the detour is never installed
+        // (zero footprint, exactly like P4's `selection=0`); live it makes the body return at once.
+
+        /// <summary>Called from the LScape::draw PRE-detour, i.e. after useSunlightSet(1) has left
+        /// the active set as {sun} and before the first landscape/object draw.</summary>
+        public static void OnLandscapeDraw() {
+            LightsConfig? cfg = _cfg;
+            if (cfg == null || cfg.GlowLights < 0.5f || cfg.GlowOutdoor < 0.5f) return;
+            if (_nTracked == 0 && _nImpacts == 0) return;   // nothing of ours to light with
+            if (_pEnableActiveLights == null) return;
+            try { EnableDynamicsForSunlitPass(cfg); }
+            catch { /* never unwind into the client */ }
+        }
+
+        /// <summary>The dynamic half of Render::minimize_envcell_lighting, applied to the sunlit
+        /// pass. Nearest-first: `sorted_dynamic_lights` is distance-sorted by
+        /// Render::insert_light, and `add_active_light`'s index argument indexes THAT array
+        /// (acclient.c:379622), so taking the first N takes the N nearest.</summary>
+        private static void EnableDynamicsForSunlitPass(LightsConfig cfg) {
+            // Only act in sunlight mode — that is precisely the broken case, and it keeps us out of
+            // the way if this ever runs in a context where retail already chose the active set.
+            int* sun = Render.useSunlight;
+            if (sun == null || *sun == 0) { _outdoorDeclines++; return; }
+
+            LightParms* wl = Render.world_lights;
+            if (wl == null) { _outdoorDeclines++; return; }
+            int nd = wl->num_dynamic_lights;
+            // Defensive: a transiently over-reported count must never index past dynamic_lights[10].
+            if (nd <= 0 || nd > DynamicCapacity) { _outdoorDeclines++; return; }
+
+            // Slot 0 of the 8-entry table is the sun; never ask for more than the remaining 7.
+            int budget = (int)cfg.GlowOutdoorBudget;
+            if (budget < 1) budget = 1; else if (budget > HwSlotsForDynamics) budget = HwSlotsForDynamics;
+
+            int* usedD = (int*)Render.dynamic_light_used;
+            int added = 0;
+            for (int i = 0; i < nd && added < budget; i++) {
+                RenderLight* rl = wl->sorted_dynamic_lights[i];
+                if (rl == null) continue;
+                // Skip a light that cannot contribute — above all retail's own viewer_light, which
+                // set_viewer adds EVERY frame at distance 0 (so it sorts first) and which carries
+                // intensity 0 unless `headlamp` is on. Spending a hardware slot on a black light
+                // would cost us the nearest real glow.
+                if (!(rl->info.intensity > 0f)) continue;
+                if (usedD != null) usedD[i] = 1;
+                Render.add_active_light(i, ClassDynamic);
+                added++;
+            }
+
+            if (added == 0) { _outdoorDeclines++; return; }
+            _pEnableActiveLights();
+            _lastOutdoorEnabled = added;
+            _outdoorFrames++;
+        }
+
+        private const int DynamicCapacity = 10;      // acclient.h:46634 RenderLight dynamic_lights[10]
+        private const int HwSlotsForDynamics = 7;    // Render::curLightUsage is 8 x 12 bytes, minus the sun
+        private const int ClassDynamic = 2;          // add_active_light lightClass for the dynamic pool
+
+        // ══════════════════════════════════════════════════════════════════════════════════════
         //  CLASSIFY + TRACK — 4 Hz, from the rendering-callback slot.
         // ══════════════════════════════════════════════════════════════════════════════════════
 
@@ -760,6 +883,13 @@ namespace AcmeLights.Services {
                   .Append(" (inject ").Append(_lastInjected).Append("/frame, ")
                   .Append(_litFrames).Append(" lit frames, impacts ").Append(_nImpacts)
                   .Append(", newclass ").Append(_lastNewClassified)
+                  // P3b: `outdoor N/frame` is the whole live test for the outdoor enable — it is the
+                  // number of glow dynamics switched on for the last sunlit pass. A non-zero
+                  // `tracking` with `outdoor 0/frame` while standing outside means the enable
+                  // declined (see outdeclined), which is the pre-P3b behaviour.
+                  .Append(", outdoor ").Append(_lastOutdoorEnabled).Append("/frame, ")
+                  .Append(_outdoorFrames).Append(" sunlit passes, ")
+                  .Append(_outdoorDeclines).Append(" outdeclined")
                   .Append(") player cell=0x").Append(playerCell.ToString("X8"))
                   .Append(" org=(").Append((playerOrg != null ? playerOrg[0] : float.NaN).ToString("F1"))
                   .Append(',').Append((playerOrg != null ? playerOrg[1] : float.NaN).ToString("F1"))

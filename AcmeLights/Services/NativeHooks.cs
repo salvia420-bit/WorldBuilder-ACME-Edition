@@ -60,6 +60,24 @@ namespace AcmeLights.Services {
         // plugin's glow lights, so they live exactly one frame and re-add cleanly next frame.
         [Function(CallingConventions.MicrosoftThiscall)]
         private delegate void SetViewerFn(nint self, nint newViewer, int setSoughtPosition);
+
+        // P3b THE OUTDOOR ENABLE — void __thiscall LScape::draw(LScape*) @0x00506D90 (ACBindings
+        // LScape.cs emits exactly this VA). PRE-detour: at entry, SmartBox::RenderNormalMode (or
+        // PView::draw for the outside view) has just run Render::useSunlightSet(1), which leaves the
+        // active hardware-light set as {the sun} and slots 1..7 disabled — so this is the one moment
+        // where re-adding the tracked glow dynamics reaches every landscape/object draw that
+        // follows. Same `void __thiscall(self)` trampoline shape as UpdateLightsInternal/EndScene,
+        // NOT the cdecl-with-arg shape that destabilized the client on SceneTool::EndFrame.
+        // Installed only when `glowoutdoor >= 1` at startup (see InstallOutdoor).
+        [Function(CallingConventions.MicrosoftThiscall)]
+        private delegate void LScapeDrawFn(nint self);
+
+        private static IHook<LScapeDrawFn>? _lscapeDraw;
+
+        /// <summary>LScape::draw — ACBindings Generated/LScape.cs `draw()` thunk address; the map's
+        /// LScape block does not export it, so ACBindings is the single source of truth here (its
+        /// neighbours in that block match the map where the map does list them).</summary>
+        public const nint LScapeDraw_VA = 0x00506D90;
         // ─── P3 glowlights: END ──────────────────────────────────────────────────────────────
 
         private static IHook<UpdateLightsFn>? _updateLights;
@@ -139,9 +157,46 @@ namespace AcmeLights.Services {
             }
             // ─── P3 glowlights: END ──────────────────────────────────────────────────────────
 
+            InstallOutdoor(cfg);
+
             _installed = _updateLights != null || _setAmbient != null || _endScene != null
-                         || _setViewer != null;
+                         || _setViewer != null || _lscapeDraw != null;
         }
+
+        // ─── P3b outdoor enable: BEGIN ───────────────────────────────────────────────────────
+        /// <summary>Install the LScape::draw pre-detour that switches the glow dynamics on for the
+        /// sunlit pass. Startup-gated the same way P4's selection is: with `glowoutdoor = 0` in the
+        /// cfg at startup NOTHING is installed — no trampoline is written into the client at all, so
+        /// the knob is a genuine escape hatch for the detour itself and not only for its body.
+        /// Once installed, a live `glowoutdoor = 0` still makes every frame stock (the body returns
+        /// before touching any client state).</summary>
+        private void InstallOutdoor(LightsConfig cfg) {
+            if (cfg.GlowOutdoor < 0.5f) {
+                _ilog.LogInformation("acmelights: P3b outdoor enable disabled by cfg (glowoutdoor=0); LScape::draw left untouched");
+                return;
+            }
+            nint addr = AddressResolver.Resolve("LScape::draw", null, LScapeDraw_VA);
+            try {
+                _lscapeDraw = ReloadedHooks.Instance
+                    .CreateHook<LScapeDrawFn>(typeof(NativeHooks), nameof(LScapeDrawImpl), (long)addr)
+                    .Activate();
+                _ilog.LogInformation("acmelights: hook installed  LScape::draw @ {A:X8} (P3b outdoor glow enable)", (long)addr);
+            }
+            catch (Exception ex) {
+                _ilog.LogError(ex, "acmelights: hook FAILED  LScape::draw @ {A:X8}", (long)addr);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+        private static void LScapeDrawImpl(nint self) {
+            // PRE: the active-light set is {sun} right now and every following draw in this pass
+            // inherits it. GlowLights.OnLandscapeDraw is self-guarding, allocation-free and does not
+            // log; it returns immediately when there is nothing tracked.
+            try { GlowLights.OnLandscapeDraw(); }
+            catch (Exception ex) { LogSafe(ex, "LScapeDraw"); }
+            _lscapeDraw!.OriginalFunction(self);
+        }
+        // ─── P3b outdoor enable: END ─────────────────────────────────────────────────────────
 
         // ===================== P4 LIGHT SELECTION — BEGIN (LightSelection.cs) =====================
 
@@ -272,6 +327,7 @@ namespace AcmeLights.Services {
             try { _endScene?.Disable(); } catch { }
             try { _minObjLight?.Disable(); } catch { }   // P4 selection
             try { _setViewer?.Disable(); } catch { }   // P3 glowlights
+            try { _lscapeDraw?.Disable(); } catch { }  // P3b outdoor enable
             _installed = false;
         }
     }

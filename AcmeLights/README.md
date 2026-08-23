@@ -17,6 +17,7 @@ Research + plan: `../docs/lights-port/` (PLAN + two Explore reports).
 - PrimD3DRender::UpdateLightsInternal @0x0059BEE0 — per-viewpoint heartbeat
 - SmartBox::SetWorldAmbientLight @0x004530E0 — ambient red-bias + dungeon fix
 - RenderDeviceD3D::EndScene @0x005A0E10 — POST-detour backbuffer dump (extrahooks>=1, dump=1)
+- LScape::draw @0x00506D90 — PRE-detour, P3b outdoor glow enable (install gated on `glowoutdoor`)
 - SmartBox::m_renderingCallback (SmartBox+276, ZERO-detour pointer slot) — bloom passes at the
   post-3D/pre-UI boundary; re-asserted per frame from the heartbeat (SmartBox::Reset zeroes it).
   Replaces the SceneTool::EndFrame detour, whose cdecl trampoline destabilized the client.
@@ -128,11 +129,36 @@ FF dynamic lights. Full design + the cell-scoping proof + the live-validation sc
   The `glowlog` tracked lines now print `effi=`/`efff=`/`reach=` — the values actually emitted
   after the gains, and the metre distance at which the light stops existing.
 
-> ⚠ **OUTDOORS, NOTHING ENABLES A DYNAMIC LIGHT AT ALL** (found 2026-08-23 while sizing the gain;
-> not fixed here). `RenderDeviceD3D::DrawMeshInternal` calls the per-draw slot chooser only when
-> `!Render::useSunlight` (acclient.c:456974), and the outdoor branch of `SmartBox::RenderNormalMode`
-> runs `Render::useSunlightSet(1)` before `LScape::draw` (:144905) — which does
-> `reset_active_lights_state(); add_active_light(-1, 0); enable_active_lights()` (:380646), i.e.
-> **slot 0 = the sun, slots 1..7 disabled** for every outdoor draw. So P3 fills the *donation* gap
-> outdoors but the light is still never switched on out there; the gains below are only visible
-> indoors and in building interiors drawn through `DrawEnvCell`. See the P3 doc §9.
+## P3b — the outdoor enable (`GlowLights.OnLandscapeDraw`, default ON)
+
+**Outdoors, nothing switched a dynamic light on at all** (found 2026-08-23 while sizing the gain).
+`RenderDeviceD3D::DrawMeshInternal` calls the per-draw slot chooser only when
+`!Render::useSunlight` (acclient.c:456974), and the outdoor branch of `SmartBox::RenderNormalMode`
+runs `Render::useSunlightSet(1)` before `LScape::draw` (:144905) — which does
+`reset_active_lights_state(); add_active_light(-1, 0); enable_active_lights()` (:380646), i.e.
+**slot 0 = the sun, slots 1..7 explicitly disabled** for every outdoor draw. P3 had fixed only the
+*donation* half of the outdoor gap: the Holtburg lifestone was injected, sorted — and ignored.
+
+- **New hook: `LScape::draw` @0x00506D90 PRE-detour** (`void __thiscall(self)`, the proven shape;
+  ACBindings `LScape.cs` is the address source — the map's LScape block does not export `draw`,
+  and the build-A→shipped delta is regional, `+0xA60` here vs `+0xC10` for the `Render::` block).
+  Chosen over `Render::useSunlightSet` @0x0054E060, which is a cdecl-**with-arg** trampoline (the
+  `SceneTool::EndFrame` shape) and also fires in the creature-mode paperdoll path. At `LScape::draw`
+  entry the active set is `{sun}`; both callers are covered (outdoor branch + `PView::draw`'s
+  outside-view, where retail tears our additions down again at :461554 before its EnvCell pass).
+- **Body = the dynamic half of `Render::minimize_envcell_lighting`** (:379652), the routine the
+  client runs for every EnvCell it draws: `dynamic_light_used[i]=1`, `add_active_light(i, DYNAMIC)`
+  nearest-first over the distance-sorted `sorted_dynamic_lights`, then `enable_active_lights()`.
+  Lights with `intensity == 0` are skipped — retail's own `viewer_light` is added every frame at
+  distance 0 (so it sorts first) and is dark unless `headlamp` is on; it would otherwise eat the
+  nearest real glow's slot.
+- **Safe by construction**: retail's own primitives only; `add_active_light` self-allocates and
+  refuses past the 8-entry `curLightUsage` table, so the sun is relocated at worst, never lost;
+  one-pass lifetime (the next `useSunlightSet`/`minimize_*` resets it); inert when nothing is
+  tracked; no allocation/LINQ/logging on the path. **Live-validated: NOT YET** — that half of the
+  house rule is owed.
+- cfg: `glowoutdoor` (**1**) — read at startup, `0` means the detour is *never installed*
+  (zero footprint, like `selection=0`); read live it makes the body return at once.
+  `glowoutdoorbudget` (**6**) — hardware slots the outdoor pass may take, 1..7.
+- Heartbeat gains `outdoor N/frame`, `N sunlit passes`, `N outdeclined`. **PASS = `outdoor` is
+  non-zero outdoors while `tracking` is non-zero.** See the P3 doc §10 for the full live script.

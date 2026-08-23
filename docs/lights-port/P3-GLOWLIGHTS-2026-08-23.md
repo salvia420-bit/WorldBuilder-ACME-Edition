@@ -727,15 +727,7 @@ This is consistent with everything observed: the Redoubt (indoor) wisp light was
 and correctly contained, while the Holtburg (outdoor) lifestone was "not that noticeable" at 5.4 m.
 It also matches P4's own note that `seldraws` reads 0 outdoors — the same call that never happens.
 
-**Not fixed in the gain pass** (it is a mechanism change, not a value change). The minimal design
-if someone takes it: a POST-detour on `Render::useSunlightSet` (`void __cdecl(int)`, build-A
-`0x0054D450`) that, when called with 1 and when GlowLights has tracked emitters, re-adds them with
-`Render::add_active_light(i, 2)` + `Render::enable_active_lights()` — retail's own primitives, the
-same ones `minimize_envcell_lighting` uses, still gated by `CellAllowed`. Risks to weigh first:
-(a) it is a cdecl-with-an-argument trampoline, the shape that destabilized the client on
-`SceneTool::EndFrame` (never root-caused; the cdecl(void) `minimize_object_lighting` detour is
-fine, so the arg may be irrelevant); (b) slot 0 must stay the sun; (c) outdoor draws would then
-pay per-frame light state they never paid before. Ship it default-OFF behind its own knob.
+**FIXED 2026-08-23 (P3b) — owner-approved. See §10.**
 
 ### 9.2 Intensity is saturated; RANGE is the lever
 
@@ -767,3 +759,112 @@ Shipped defaults: `glowgain 1.6`, `glowrangegain 1.6`; lifestone `1.25 / 1.4` (�
 **reach 13.4 m**), portal `1.0 / 1.25`, creature `1.0 / 1.2`, projectile `1.0 / 1.15`; impacts
 inherit both globals. The `glowlog` tracked line now prints `effi=`/`efff=`/`reach=` so the emitted
 values and the metre cutoff can be read live instead of inferred.
+
+---
+
+## 10. P3b — THE OUTDOOR ENABLE (implemented 2026-08-23, owner-approved, DEFAULT ON)
+
+Fixes §9.1. `Services/GlowLights.OnLandscapeDraw` + the `LScape::draw` pre-detour in
+`Services/NativeHooks.cs` (its own delimited block, like P3/P4).
+
+### 10.1 Hook point — and why not `useSunlightSet`
+
+| | `Render::useSunlightSet(int)` | **`LScape::draw(LScape*)`** ← chosen |
+|---|---|---|
+| address | map RVA `0x0014D060` → VA `0x0054E060` | **`0x00506D90`** (ACBindings `LScape.cs`; the map's LScape block does not export `draw`) |
+| shape | `void __cdecl(int)` — a cdecl **with an argument**, the shape that destabilized the client on `SceneTool::EndFrame` (never root-caused) | `void __thiscall(self)` — the **proven** shape of all four existing AcmeLights hooks |
+| scope | also fires in the creature-mode paperdoll path (acclient.c:143938-143941), whose very next statements zero both light pools | fires **only** on the landscape pass itself |
+| coverage | — | both callers for free: `RenderNormalMode`'s outdoor branch (:144906) **and** `PView::draw`'s outside-view (:461480, looking out of a dungeon mouth) |
+
+At `LScape::draw` **entry**, `useSunlightSet(1)` has just run, so the active set is exactly
+`{sun}` and every landscape/object draw that follows inherits whatever we leave. In the
+`PView::draw` case retail tears our additions down again at `:461554`
+(`useSunlightSet(0)` + `restore_all_lighting`) before its EnvCell pass — the scoping we would
+otherwise have had to hand-write.
+
+The build-A → shipped delta is **not** a global constant, so the address could not be guessed:
+the three `Render::` neighbours all move by `+0xC10` (`enable_active_lights` `0x0054C080`→
+`0x0054CC90`, `minimize_object_lighting` `0x0054D480`→`0x0054E090`, `useSunlightSet`
+`0x0054D450`→`0x0054E060`, each confirmed against the map), while `LScape::draw` moves by
+`+0xA60` (`0x00506330`→`0x00506D90`). ACBindings is the source of truth for it.
+
+### 10.2 What it does
+
+The dynamic half of `Render::minimize_envcell_lighting` (acclient.c:379652) — the routine the
+client itself runs for **every EnvCell it draws** — applied to the sunlit pass:
+
+```csharp
+if (*Render.useSunlight == 0) return;                  // only the broken case
+for (i = 0; i < num_dynamic_lights && added < budget; i++) {
+    rl = sorted_dynamic_lights[i];                     // distance-sorted => nearest first
+    if (!(rl->info.intensity > 0)) continue;           // skip the dormant viewer_light
+    dynamic_light_used[i] = 1;
+    Render.add_active_light(i, /*DYNAMIC*/ 2);
+}
+Render::enable_active_lights();
+```
+
+`add_active_light`'s index argument indexes `sorted_dynamic_lights` (acclient.c:379622), which
+`Render::insert_light` keeps sorted by distance to the player — so the first `budget` are the
+nearest `budget`. The `intensity > 0` skip matters because `set_viewer` adds retail's own
+`viewer_light` every frame at distance 0 (it therefore sorts **first**) with intensity 0 unless
+`headlamp` is on: without the skip it would eat the nearest real glow's slot.
+
+### 10.3 Safety argument (this is the bar that was met)
+
+* **Retail's own primitives, in retail's own order.** `add_active_light` + `enable_active_lights`,
+  the exact pair `minimize_envcell_lighting` drives every frame indoors. No new state is invented;
+  the only client memory written is `dynamic_light_used[i] = 1`, which retail itself `memset32`s to
+  1 in `restore_all_lighting` (:379700).
+* **Cannot overrun and cannot evict the sun.** `add_active_light` self-allocates slots and returns
+  without adding once the 8-entry `Render::curLightUsage` table is full (:379548). If it reuses the
+  sun's slot via the `prevLightUsage` match, it *relocates* the sun to a free slot — retail's own
+  behaviour. `glowoutdoorbudget` is clamped to 1..7 on top of that.
+* **One-pass lifetime.** The next `useSunlightSet` / `minimize_*` call resets the table, exactly
+  like retail's own per-draw selection. Nothing accumulates across frames.
+* **Inert when idle.** Returns before touching anything unless GlowLights is tracking an emitter,
+  so a player with no glow source nearby gets a frame identical to today's.
+* **Stale-index exposure is nil.** `sorted_dynamic_lights[]` entries are pointers into the fixed
+  `dynamic_lights[10]` array, valid for the process lifetime; a pool wipe between our
+  `enable_active_lights` and a later draw can at worst re-upload a stale light, never dereference
+  freed memory. Retail carries the identical exposure through its own `carryOver` mechanism.
+* **Pacing.** No allocation, no LINQ, no logging on the path; counters are plain ints folded into
+  the existing 1 Hz glow heartbeat, which goes through `AsyncLog`.
+
+**Which bar was met: safe-by-construction ✅, live-validated ❌.** The house rule ("validated gates
+ship default-on") is met on the safety half only — this has never executed once. It ships DEFAULT
+ON because the owner's complaint is precisely that outdoor glow is invisible, and because
+`glowoutdoor=0` **read at startup means the detour is never installed at all** (zero footprint,
+exactly like `selection=0`) — a real escape hatch for the trampoline itself, not only for its body.
+
+### 10.4 Knobs
+
+| key | default | meaning |
+|---|---|---|
+| `glowoutdoor` | **1** | 0 = off. At startup: the `LScape::draw` detour is never installed. Live: the body returns before touching client state |
+| `glowoutdoorbudget` | **6** | hardware slots the outdoor pass may take, 1..7 (slot 0 is the sun) |
+
+### 10.5 Live test — what to watch
+
+Bare defaults, `@telepoi Holtburg`, stand at the drop point (the lifestone is 5.4 m away).
+
+```
+acmelights: hook installed  LScape::draw @ 00506D90 (P3b outdoor glow enable)
+acmelights: glowlights scan N objs -> ... tracking 3 (inject 3/frame, ... ,
+            outdoor 3/frame, 41210 sunlit passes, 0 outdeclined) player cell=0xA9B4001C ...
+```
+
+* **PASS** = `outdoor N/frame` is non-zero **and** the lifestone visibly tints the ground blue.
+  `tracking 3` with `outdoor 0/frame` while standing outside is the pre-P3b behaviour — read
+  `outdeclined`, which counts every early return (`useSunlight` was 0, a null pool, an impossible
+  count, or every dynamic had intensity 0).
+* **A/B:** `glowoutdoor=0` live → the outdoor tint disappears within one frame and `outdoor`
+  drops to 0, while `tracking`/`inject` are unchanged (proof it is the *enable* doing the work,
+  not the injection). `glowoutdoor=1` → it returns.
+* **Slot starvation check:** with several emitters in view, confirm retail's own lights (torches on
+  a nearby building) do not go dark. If they do, lower `glowoutdoorbudget` to 3-4.
+* **Perf gate:** the detour is once per landscape pass (~once per frame), and the body is ≤ 7
+  native calls. Walk Holtburg 60 s with `glowoutdoor=1` then `0`; expect no measurable delta.
+* **Stability gate (the real one):** this is a NEW detour. 10 min outdoors + several
+  indoor/outdoor transitions and teleports with no crash. If the client faults at world entry,
+  `glowoutdoor=0` in `lights.cfg` before launch means the trampoline is never written.
