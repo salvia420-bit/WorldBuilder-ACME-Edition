@@ -24,6 +24,29 @@ Research + plan: `../docs/lights-port/` (PLAN + two Explore reports).
 Build: `DOTNET_ROLL_FORWARD=LatestMajor dotnet build AcmeLights/AcmeLights.csproj -c Release`.
 Deploy: scp AcmeLights.dll + deps.json + ACBindings/FASM/manifest to the 1070 plugins dir.
 
+## P5b — DAY/NIGHT bloom scaling (`Lib/SkyState.cs`, default ON)
+
+Owner's live-GPU verdict 2026-08-23: *"bloom outdoors by day is much too weak — could be much
+higher outdoors."* The shipped `bloomthreshold` 0.55 / `bloomintensity` 2.0 / `bloomradius` 3 are
+the **owner-proven NIGHT values and do not move**; by day the plugin blends toward a second set.
+
+- **The signal is the ambient funnel we already detour.** `SmartBox::SetWorldAmbientLight`'s
+  `intensity` argument is, outdoors, `|LScape::sunlight|*0.2 + LScape::ambient_level` written by
+  `LScape::set_landscape_lighting` (acclient.c:307003) from `CRegionDesc::GetLighting(
+  GameTime::present_time_of_day)` → `SkyDesc::GetLighting` (:301485), i.e. the region's authored
+  `SkyTimeOfDay` keyframes interpolated by time of day. Indoors it is the flat
+  `LSCAPE_LIGHT_MINIMUM` 0.2 (:146742) — and **outdoor midnight is floored at the same 0.2**
+  (`LScape::min_ambient`, :307024), so one scalar answers "day?" for both cases and night+indoor
+  are bit-identical to what was signed off. No AcmeSky dependency, no new hook.
+- `SkyState.Day` = `clamp((amb − bloomnightamb) / (bloomdayamb − bloomnightamb), 0, 1)`,
+  exponentially smoothed (τ 1.25 s) on the per-frame rendering callback, because the funnel only
+  fires on cell change and on the ~3 s landscape light tick. A >1 s gap (teleport) snaps.
+- Effective knobs = `lerp(night, day, SkyState.Day)`; the blur pass count is rounded, not truncated.
+- cfg: `bloomday` (1, master/escape hatch) · `bloomdaythreshold` (0.38) · `bloomdayintensity`
+  (3.2) · `bloomdayradius` (4) · `bloomnightamb` (0.20) · `bloomdayamb` (0.62).
+  **`bloomdayamb` is a guess** — the noon ambient is region DATA, not a code constant. The
+  heartbeat log now prints `amb=` and `day=`: read `amb=` at noon and set `bloomdayamb` to it.
+
 ## P4 — importance-ranked per-draw light selection (`Services/LightSelection.cs`)
 
 Full detour on `Render::minimize_object_lighting` @0x0054E090 (clean `void __cdecl()`), replacing
@@ -86,8 +109,30 @@ FF dynamic lights. Full design + the cell-scoping proof + the live-validation sc
   portal is one), and the lifestone is 1 lit surface of 7 at 0.75, the same shape as the
   glowing-eye false positives the fraction test exists to reject. Missiles stay evidence-based
   (arrows are `MISSILE_PS` too).
+- **System-wide gain (2026-08-23)** — the owner's live-GPU verdict was "lifestone not that
+  noticeable … do it system wide". `config_hardware_light` (acclient.c:453119) is the whole
+  LIGHTINFO→D3D mapping: `Diffuse = colour*intensity`, `Range = falloff*rangeAdjust(1.5)`,
+  `Atten0/1/2 = 0/1/0` ⇒ **atten = 1/d and a HARD cutoff at Range**. At the shipped lifestone
+  values (i=100 f=4) the reach was 6.0 m, so the owner standing at 5.4 m was at the very edge —
+  while the near field was already 18× past saturation, i.e. **intensity alone buys almost
+  nothing and RANGE is the lever**. Hence a global `glowgain` (intensity) + `glowrangegain`
+  (falloff) with per-class trims. No new lights, no reclassification, containment untouched.
 - Knobs: `glowlights` (master, 0 = frame bit-identical) · `glowportals` `glowprojectiles`
   `glowcreatures` `glowlifestones` `glowstatics` · `glowintensity` `glowfalloffscale` `glowsynthintensity`
   `glowsynthfalloff` `glowlift` `glowpulse` · `glowlum` `glowlumfrac` · `glowmax` `glowrange`
-  `glowscanhz` · **`glowcontain`** · `glowportalboost` `glowportalcolor` `glowprojectileboost`
-  `glowschool` · `glowimpactms` `glowimpactboost` `glowimpactfalloff` · `glowlog`.
+  `glowscanhz` · **`glowcontain`** · **`glowgain` (1.6) `glowrangegain` (1.6)** ·
+  `glowportalboost` `glowportalrange` (1.25) `glowportalcolor` · `glowlifestoneboost` (1.25)
+  `glowlifestonerange` (1.4) · `glowcreatureboost` (1.0) `glowcreaturerange` (1.2) ·
+  `glowprojectileboost` `glowprojectilerange` (1.15) `glowschool` ·
+  `glowimpactms` `glowimpactboost` `glowimpactfalloff` · `glowlog`.
+  The `glowlog` tracked lines now print `effi=`/`efff=`/`reach=` — the values actually emitted
+  after the gains, and the metre distance at which the light stops existing.
+
+> ⚠ **OUTDOORS, NOTHING ENABLES A DYNAMIC LIGHT AT ALL** (found 2026-08-23 while sizing the gain;
+> not fixed here). `RenderDeviceD3D::DrawMeshInternal` calls the per-draw slot chooser only when
+> `!Render::useSunlight` (acclient.c:456974), and the outdoor branch of `SmartBox::RenderNormalMode`
+> runs `Render::useSunlightSet(1)` before `LScape::draw` (:144905) — which does
+> `reset_active_lights_state(); add_active_light(-1, 0); enable_active_lights()` (:380646), i.e.
+> **slot 0 = the sun, slots 1..7 disabled** for every outdoor draw. So P3 fills the *donation* gap
+> outdoors but the light is still never switched on out there; the gains below are only visible
+> indoors and in building interiors drawn through `DrawEnvCell`. See the P3 doc §9.

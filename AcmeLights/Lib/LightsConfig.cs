@@ -44,10 +44,36 @@ namespace AcmeLights.Lib {
         // hatch and live-toggles (the heartbeat installs/clears the callback slot on the next frame).
         // Daytime-outdoor tuning is still owed; adjust via cfg, not here, until eye-verified.
         public float Bloom = 1f;            // bloom: 0/1 master
-        public float BloomThreshold = 0.55f;// bloomthreshold: luminance knee center (0..2)
-        public float BloomKnee = 0.30f;     // bloomknee: soft-knee half-width
-        public float BloomIntensity = 2.0f; // bloomintensity: additive scale (0..4)
-        public float BloomRadius = 3f;      // bloomradius: separable blur H/V passes (1..4)
+        public float BloomThreshold = 0.55f;// bloomthreshold: luminance knee center (0..2)  ** NIGHT **
+        public float BloomKnee = 0.30f;     // bloomknee: soft-knee half-width (shared day+night)
+        public float BloomIntensity = 2.0f; // bloomintensity: additive scale (0..4)          ** NIGHT **
+        public float BloomRadius = 3f;      // bloomradius: separable blur H/V passes (1..4)  ** NIGHT **
+
+        // --- P5b bloom DAY/NIGHT scaling (2026-08-23, owner live-GPU feedback: "bloom outdoors by
+        // day is much too weak — could be much higher outdoors") ---------------------------------
+        // The three knobs above are the owner-PROVEN NIGHT values and must not move. Outdoors by day
+        // the same settings read weak for two compounding reasons: (a) a daylit AC scene sits mostly
+        // just BELOW luma 0.55, so the bright pass keeps almost nothing, and (b) what it does keep is
+        // added over an already-bright frame, where a fixed additive delta is far less visible
+        // (Weber). So by day we lower the threshold (let more of the scene bloom) AND raise the
+        // additive scale and the blur width.
+        //
+        // The blend factor is SkyState.Day, derived from the ambient funnel the plugin already
+        // detours — see Lib/SkyState.cs for the decomp chain. It is 0 in a dungeon and at outdoor
+        // midnight (both floored at LSCAPE_LIGHT_MINIMUM 0.2), so NIGHT AND INDOOR BEHAVIOUR IS
+        // BIT-FOR-BIT WHAT THE OWNER SIGNED OFF; only a brightening sky moves it.
+        //   effective = lerp(night, day, SkyState.Day)
+        // `bloomday=0` disables the whole path (night values everywhere) — the A/B escape hatch.
+        public float BloomDay = 1f;             // bloomday: 0/1 master for day/night bloom scaling
+        public float BloomDayThreshold = 0.38f; // bloomdaythreshold: luminance knee center by day
+        public float BloomDayIntensity = 3.2f;  // bloomdayintensity: additive scale by day (0..4)
+        public float BloomDayRadius = 4f;       // bloomdayradius: blur passes by day (1..4)
+        // The two ends of the ambient->day mapping. 0.2 is the client's hard floor (dungeon AND
+        // outdoor midnight); the noon value is REGION DATA, not a code constant, so 0.62 is a
+        // starting estimate — the heartbeat log prints the live `amb=` so the owner can read their
+        // region's real noon number and set bloomdayamb to it.
+        public float BloomNightAmb = 0.20f;     // bloomnightamb: ambient intensity mapping to day=0
+        public float BloomDayAmb = 0.62f;       // bloomdayamb:   ambient intensity mapping to day=1
 
         // ─── P3 glow dynamic lights (Services/GlowLights.cs) ────────────────────────────────
         // Portals, war-spell projectiles in flight, their impact flashes and glowing creatures get
@@ -73,6 +99,42 @@ namespace AcmeLights.Lib {
                                               //   default: a town has many and they'd crowd the pool.
         public float GlowIntensity = 1f;      // glowintensity: MULTIPLIER on the emitted intensity
         public float GlowFalloffScale = 1f;   // glowfalloffscale: MULTIPLIER on the emitted falloff
+
+        // ── SYSTEM-WIDE GLOW GAIN (2026-08-23, owner live-GPU feedback: "lifestone not that
+        // noticeable … you should do it system wide") ─────────────────────────────────────────────
+        // WHICH LEVER, AND WHY. PrimD3DRender::config_hardware_light (acclient.c:453119) is the whole
+        // mapping from a LIGHTINFO to D3D:
+        //     D3DLIGHT9.Diffuse = color * intensity          (colour is 0..1, intensity ~100)
+        //     D3DLIGHT9.Range   = falloff * rangeAdjust      (rangeAdjust = 1.5)
+        //     Attenuation0 = 0, Attenuation1 = 1, Attenuation2 = 0   =>  atten = 1/d
+        // So a light contributes `color*intensity/d * N·L` up to `falloff*1.5` metres and EXACTLY
+        // ZERO beyond that — a hard clip, not a tail. At the shipped lifestone values (i=100 f=4)
+        // the reach is 6.0 m: the owner standing 5.4 m away was at the very edge of the light, and
+        // one step further it vanished. Meanwhile the near field is already past saturation
+        // (100/5.4 = 18x colour, clamped at 1.0 by the rasteriser), so INTENSITY ALONE BUYS ALMOST
+        // NOTHING — it only lifts grazing-angle surfaces where N·L is small.
+        //   => RANGE is the primary lever (glowrangegain), intensity the secondary one (glowgain).
+        // Both are pure multipliers on values the DAT/synth path already produced: no new lights,
+        // no change to which objects are classed, containment untouched.
+        public float GlowGain = 1.6f;         // glowgain: GLOBAL intensity multiplier over every glow
+                                              //   class (on top of glowintensity). Helps oblique and
+                                              //   far surfaces; the near field is already saturated.
+        public float GlowRangeGain = 1.6f;    // glowrangegain: GLOBAL falloff multiplier (on top of
+                                              //   glowfalloffscale). THE lever that makes a glow
+                                              //   "tint its surroundings" — D3D Range = falloff*1.5.
+        // Per-class trims, multiplied by the two globals. Colours are NOT touched by any of these.
+        public float GlowLifestoneBoost = 1.25f; // glowlifestoneboost: lifestone intensity trim.
+                                                 //   (Was silently sharing glowportalboost; it now has
+                                                 //   its own knob — set both if you tuned via that.)
+        public float GlowLifestoneRange = 1.4f;  // glowlifestonerange: lifestone falloff trim. With the
+                                                 //   defaults: 4 * 1.6 * 1.4 = 8.96 => 13.4 m of reach,
+                                                 //   so it reads as a blue pool at conversational range
+                                                 //   instead of dying at 6 m.
+        public float GlowPortalRange = 1.25f;    // glowportalrange: portal falloff trim (authored f6
+                                                 //   => 12.0 => 18 m; portals are town landmarks)
+        public float GlowCreatureRange = 1.2f;   // glowcreaturerange: wisp/glowing-creature falloff trim
+        public float GlowCreatureBoost = 1f;     // glowcreatureboost: ditto intensity trim
+        public float GlowProjectileRange = 1.15f;// glowprojectilerange: war-spell projectile falloff trim
         public float GlowSynthIntensity = 100f; // glowsynthintensity: absolute intensity for a luminous
                                               //   object with NO authored light (DAT idiom: i100 f4)
         public float GlowSynthFalloff = 4f;   // glowsynthfalloff: ditto falloff (D3D Range = this*1.5)
@@ -229,6 +291,12 @@ namespace AcmeLights.Lib {
                 case "bloomknee": if (F(val, out var bk)) BloomKnee = Math.Clamp(bk, 0.001f, 1f); break;
                 case "bloomintensity": if (F(val, out var bi)) BloomIntensity = Math.Clamp(bi, 0f, 4f); break;
                 case "bloomradius": if (F(val, out var br)) BloomRadius = Math.Clamp(br, 1f, 4f); break;
+                case "bloomday": if (F(val, out var bd)) BloomDay = Math.Clamp(bd, 0f, 1f); break;
+                case "bloomdaythreshold": if (F(val, out var bdt)) BloomDayThreshold = Math.Clamp(bdt, 0f, 2f); break;
+                case "bloomdayintensity": if (F(val, out var bdi)) BloomDayIntensity = Math.Clamp(bdi, 0f, 4f); break;
+                case "bloomdayradius": if (F(val, out var bdr)) BloomDayRadius = Math.Clamp(bdr, 1f, 4f); break;
+                case "bloomnightamb": if (F(val, out var bna)) BloomNightAmb = Math.Clamp(bna, 0f, 4f); break;
+                case "bloomdayamb": if (F(val, out var bda)) BloomDayAmb = Math.Clamp(bda, 0f, 4f); break;
                 case "loglights": if (F(val, out var ll)) LogLights = Math.Clamp(ll, 0f, 2f); break;
                 case "dump": if (F(val, out var du)) Dump = Math.Clamp(du, 0f, 1f); break;
                 case "extrahooks": if (F(val, out var eh)) ExtraHooks = Math.Clamp(eh, 0f, 2f); break;
@@ -248,6 +316,14 @@ namespace AcmeLights.Lib {
                 case "glowstatics": if (F(val, out var gs)) GlowStatics = Math.Clamp(gs, 0f, 1f); break;
                 case "glowintensity": if (F(val, out var gi)) GlowIntensity = Math.Clamp(gi, 0f, 20f); break;
                 case "glowfalloffscale": if (F(val, out var gf)) GlowFalloffScale = Math.Clamp(gf, 0.05f, 10f); break;
+                case "glowgain": if (F(val, out var gg2)) GlowGain = Math.Clamp(gg2, 0f, 20f); break;
+                case "glowrangegain": if (F(val, out var grg)) GlowRangeGain = Math.Clamp(grg, 0.05f, 10f); break;
+                case "glowlifestoneboost": if (F(val, out var lsb)) GlowLifestoneBoost = Math.Clamp(lsb, 0f, 20f); break;
+                case "glowlifestonerange": if (F(val, out var lsr)) GlowLifestoneRange = Math.Clamp(lsr, 0.05f, 10f); break;
+                case "glowportalrange": if (F(val, out var por)) GlowPortalRange = Math.Clamp(por, 0.05f, 10f); break;
+                case "glowcreaturerange": if (F(val, out var ccr)) GlowCreatureRange = Math.Clamp(ccr, 0.05f, 10f); break;
+                case "glowcreatureboost": if (F(val, out var ccb)) GlowCreatureBoost = Math.Clamp(ccb, 0f, 20f); break;
+                case "glowprojectilerange": if (F(val, out var pjr)) GlowProjectileRange = Math.Clamp(pjr, 0.05f, 10f); break;
                 case "glowsynthintensity": if (F(val, out var gy)) GlowSynthIntensity = Math.Clamp(gy, 0f, 1000f); break;
                 case "glowsynthfalloff": if (F(val, out var gz)) GlowSynthFalloff = Math.Clamp(gz, 0f, 60f); break;
                 case "glowlift": if (F(val, out var gv)) GlowLift = Math.Clamp(gv, -4f, 8f); break;

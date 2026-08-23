@@ -203,6 +203,10 @@ namespace AcmeLights.Services {
                 selRebuilds = sel.Rebuilds - _lastSelRebuilds; _lastSelRebuilds = sel.Rebuilds;
                 selCand = sel.LastCandidates; selPick = sel.LastPicked; selBudget = sel.LastBudget;
             }
+            // amb = the raw SetWorldAmbientLight intensity (0.2 in a dungeon and at outdoor
+            // midnight; the region's SkyTimeOfDay curve by day). READ THIS AT NOON to set
+            // `bloomdayamb` — the noon value is region DATA, not a constant we can derive.
+            // day = the smoothed 0..1 factor the bloom pass blends its knobs with.
             AsyncLog.Post(
                 "acmelights: frame#" + _frame.ToString() +
                 " static=" + wl->num_static_lights.ToString() + "/" + (*Render.max_static_lights).ToString() +
@@ -216,7 +220,9 @@ namespace AcmeLights.Services {
                 " selcand=" + selCand.ToString() +
                 " selpick=" + selPick.ToString() + "/" + selBudget.ToString() +
                 " selrebuilds=" + selRebuilds.ToString() +
-                " selbail=" + selBail.ToString());
+                " selbail=" + selBail.ToString() +
+                " amb=" + SkyState.Ambient.ToString("F2") +
+                " day=" + SkyState.Day.ToString("F2"));
         }
     }
 }

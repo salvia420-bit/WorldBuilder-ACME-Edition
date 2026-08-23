@@ -684,3 +684,86 @@ Three findings from that session, all addressed here:
    modest `glowrange` is the mitigation.
 8. **P4 interaction.** This phase produces well-scoped *sources* and caps itself at
    `glowmax=6` of 10 so it cannot starve retail's own lights. Ranking them per draw is P4's job.
+
+---
+
+## 9. ★ 2026-08-23 (evening) — THE SECOND OUTDOOR GAP, and what the gain pass can/cannot fix
+
+Written while sizing the system-wide intensity pass the owner asked for after the 1070 human test
+("lifestone not that noticeable… you should do it system wide"). Two findings; the first changes
+what §1 claims.
+
+### 9.1 Outdoors, a dynamic light is never *enabled*, only never *donated*
+
+§1 proved the donation half: outdoors the per-frame refill only asks EnvCells, so the light never
+enters `Render::world_lights`. P3 fixes that. But there is a **second, independent** outdoor gap
+downstream, and it is still open:
+
+```c
+// RenderDeviceD3D::DrawMeshInternal            acclient.c:456974
+  if ( !Render::useSunlight )
+      Render::minimize_object_lighting();       // <- the ONLY per-draw slot chooser
+
+// SmartBox::RenderNormalMode, outdoor branch   acclient.c:144903-144906
+  Render::update_viewpoint(&viewer); Render::set_default_view();
+  Render::useSunlightSet(1);                    // <- outdoors, unconditionally
+  LScape::draw(lscape);
+
+// Render::useSunlightSet                       acclient.c:380646
+  Render::useSunlight = use_sunlight;
+  Render::reset_active_lights_state();          // all 8 slots -> -1 (disabled), :379424
+  if ( use_sunlight ) { Render::add_active_light(-1, 0); Render::enable_active_lights(); }
+                                                // slot 0 = world_lights.m_Sunlight, :379630
+```
+
+> **So for every outdoor draw the active-light set is exactly {the sun}. `minimize_object_lighting`
+> is not called, `enable_active_lights` disables slots 1..7, and an injected dynamic light —
+> however bright, however long its range — contributes NOTHING outdoors.** The indoor paths are
+> unaffected: `PView::draw` does `useSunlightSet(0); restore_all_lighting()` (:461554) before its
+> EnvCell pass and `DrawEnvCell` calls `minimize_envcell_lighting` (:456892), which enables every
+> dynamic light.
+
+This is consistent with everything observed: the Redoubt (indoor) wisp light was clearly visible
+and correctly contained, while the Holtburg (outdoor) lifestone was "not that noticeable" at 5.4 m.
+It also matches P4's own note that `seldraws` reads 0 outdoors — the same call that never happens.
+
+**Not fixed in the gain pass** (it is a mechanism change, not a value change). The minimal design
+if someone takes it: a POST-detour on `Render::useSunlightSet` (`void __cdecl(int)`, build-A
+`0x0054D450`) that, when called with 1 and when GlowLights has tracked emitters, re-adds them with
+`Render::add_active_light(i, 2)` + `Render::enable_active_lights()` — retail's own primitives, the
+same ones `minimize_envcell_lighting` uses, still gated by `CellAllowed`. Risks to weigh first:
+(a) it is a cdecl-with-an-argument trampoline, the shape that destabilized the client on
+`SceneTool::EndFrame` (never root-caused; the cdecl(void) `minimize_object_lighting` detour is
+fine, so the arg may be irrelevant); (b) slot 0 must stay the sun; (c) outdoor draws would then
+pay per-frame light state they never paid before. Ship it default-OFF behind its own knob.
+
+### 9.2 Intensity is saturated; RANGE is the lever
+
+`PrimD3DRender::config_hardware_light` (acclient.c:453119) is the entire LIGHTINFO→D3D mapping:
+
+```c
+  Diffuse   = color * intensity;            // color 0..1, DAT idiom intensity = 100
+  Range     = falloff * rangeAdjust;        // rangeAdjust = 1.5
+  Attenuation0 = 0; Attenuation1 = 1; Attenuation2 = 0;   =>  atten = 1/d
+```
+
+and `Render::enable_active_lights` hands that `RenderLight` to D3D untouched (:379594). So a point
+light contributes `colour·intensity/d·N·L`, clamped at 1.0 by the rasteriser, and **exactly zero
+past `falloff × 1.5` — a hard clip, not a tail.**
+
+For the Holtburg lifestone (synth `i=100 f=4`): reach `= 6.0 m`. The owner at 5.4 m was standing
+at the edge of the light's existence, and one step back it was gone entirely. Meanwhile the term
+at 5.4 m is `100/5.4 = 18.5 ×` colour — already ~18× past saturation. **Raising intensity there
+changes nothing visible; only grazing-angle surfaces (small N·L) and the newly-reachable far field
+respond to it.** Hence the gain pass is primarily a *range* pass:
+
+| lever | knob | effect |
+|---|---|---|
+| falloff → `Range` | `glowrangegain` × per-class `glow*range` | how far the tint reaches (**primary**) |
+| intensity → `Diffuse` | `glowgain` × per-class `glow*boost` | oblique + far-field brightness (secondary) |
+| synth light height | `glowlift` (0.6, unchanged) | `N·L` on the ground: lift 0.6→1.5 is ~2.4× at 5 m (**untouched third lever**, noted for a future pass) |
+
+Shipped defaults: `glowgain 1.6`, `glowrangegain 1.6`; lifestone `1.25 / 1.4` (→ `i=200 f=8.96`,
+**reach 13.4 m**), portal `1.0 / 1.25`, creature `1.0 / 1.2`, projectile `1.0 / 1.15`; impacts
+inherit both globals. The `glowlog` tracked line now prints `effi=`/`efff=`/`reach=` so the emitted
+values and the metre cutoff can be read live instead of inferred.

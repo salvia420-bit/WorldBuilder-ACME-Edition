@@ -96,6 +96,11 @@ namespace AcmeLights.Services {
                 // the two call sites cost one stat per second between them, not two file reads.
                 if (cfg != null) {
                     cfg.MaybeReload();
+                    // Advance the smoothed day/night factor once per in-world frame. The ambient
+                    // funnel that feeds it only fires on cell change and on the ~3 s landscape light
+                    // tick, so the smoothing has to live on a per-frame beat — this one. Two floats
+                    // and an exp(); no allocation, cannot throw.
+                    SkyState.Tick(cfg);
                     TorchLights.OnPostWorldRender(cfg, _log);
                     GlowLights.OnPostWorldRender(cfg, _log);   // P3: classify/track scan (4 Hz)
                 }
