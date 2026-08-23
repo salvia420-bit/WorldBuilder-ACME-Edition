@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using ACBindings.Internal;
+using AcmeRagdoll.Lib;
 using AcmeRagdoll.Sim;
 using Microsoft.Extensions.Logging;
 
@@ -97,6 +98,10 @@ namespace AcmeRagdoll.Services {
             public uint Seed;
             public float Direction;
             public float FloorZ;
+            /// <summary>This body's per-setupDid tuning (pure value data, so it is safe here). The
+            /// corpse MUST rebuild with the same params or its constraints/give schedule - and hence
+            /// the restored verlet state - would not match the creature's.</summary>
+            public RagdollParams Params = RagdollParams.Default;
 
             // evolving verlet state (refreshed each frame from the live sim)
             public float[] Pos = Array.Empty<float>();
@@ -138,6 +143,12 @@ namespace AcmeRagdoll.Services {
         //   * MaxFallSpeed - terminal fall speed cap (yd/s); stops a very high death tunnelling through
         //                    the ground in a single frame before the per-frame contact clamp catches it.
         private const float AirborneEps = 0.5f;
+        //   * FloorMargin  - the anti-sink clamp keeps the lowest part's world origin at least this far
+        //                    (yd) ABOVE the surface the body rests on, so no part dips into the floor.
+        //                    Small and positive per the "bottom of any part above floor Z" rule; a part's
+        //                    mesh hangs a little below its origin, so a hair of margin keeps the visible
+        //                    geometry off the floor without the corpse looking like it hovers.
+        private const float FloorMargin = 0.03f;
         private const float WorldGravity = 9.8f;
         private const float WorldDt = 1.0f / RagdollSim.FPS;   // one rendered frame
         private const float MaxFallSpeed = 40.0f;
@@ -212,6 +223,13 @@ namespace AcmeRagdoll.Services {
                     if (le.Rec != null) _records.Remove(le.Rec);
                     Remove(liveId);
                 }
+                // HARDENING: SweepStale used to run ONLY on a Dead arm, so if a corpse despawned and
+                // nothing else died afterwards its entry (and the hot UpdateParts hook it keeps armed)
+                // stayed live indefinitely. Non-Dead MotionDone fires constantly for every animating
+                // object, so piggy-back a THROTTLED sweep on it - at most once every SweepThrottleMillis,
+                // and skipped outright when there is nothing to sweep, so the common path is a couple of
+                // count checks and no allocation.
+                MaybeSweepStale();
                 return;
             }
 
@@ -285,7 +303,7 @@ namespace AcmeRagdoll.Services {
             RagdollSim sim;
             try {
                 sim = new RagdollSim(rec.Parent, rec.StartPos0, rec.StartQuats0,
-                                     rec.Seed, rec.Direction, rec.FloorZ);
+                                     rec.Seed, rec.Direction, rec.FloorZ, rec.Params);
                 sim.RestoreState(rec.Pos, rec.Prev, rec.T);   // copies in - no aliasing with rec buffers
             }
             catch (Exception ex) {
@@ -414,7 +432,7 @@ namespace AcmeRagdoll.Services {
                 RagdollSim sim;
                 try {
                     sim = new RagdollSim(rec.Parent, rec.StartPos0, rec.StartQuats0,
-                                         rec.Seed, rec.Direction, rec.FloorZ);
+                                         rec.Seed, rec.Direction, rec.FloorZ, rec.Params);
                     sim.RestoreState(rec.Pos, rec.Prev, rec.T);
                 }
                 catch (Exception ex) {
@@ -508,14 +526,28 @@ namespace AcmeRagdoll.Services {
 
             uint seed = e.ObjId != 0 ? e.ObjId : 0x9E3779B9u;
             float direction = (float)(2.0 * Math.PI * Frac(seed * 0.6180339887));
-            e.Sim = new RagdollSim(parent, startPos, startQuats, seed, direction, floorZ);
+
+            // PER-BODY TUNING. This creature body's profile (keyed by the Setup DataID) decides how it
+            // falls; a body with no profile gets RagdollParams.Default, whose values are exactly the
+            // constants the sim shipped with, so its death is unchanged. The table is a plain
+            // Dictionary loaded at plugin init on the managed thread - this lookup allocates nothing
+            // and loads nothing, which is what makes it legal on the native detour thread.
+            RagdollParams prm = RagdollProfiles.For(SetupDidOf(setup));
+
+            e.Sim = new RagdollSim(parent, startPos, startQuats, seed, direction, floorZ, prm);
             e.Scratch = new Quat[n];
             e.Parts = pa;
             e.Seeded = true;
+            // The profile owns the active-fall length. Seed runs on the FIRST UpdateParts frame of an
+            // entry and nothing decrements ActiveLeft before it (OnUpdateParts returns early while
+            // !Seeded), so overwriting the arm-time RagdollSim.FallFrames placeholder here loses no
+            // frames and is the single spot that needs to know the profile. Corpse entries never reach
+            // Seed - they carry ActiveLeftRemaining from the record instead.
+            e.ActiveLeft = prm.FallFrames;
 
             // Create this creature's handoff record now that we have the construction inputs. It will be
             // refreshed every frame (UpdateRecord) with the evolving verlet state.
-            if (!e.IsCorpse) e.Rec = CreateRecord(e, pa, setup, parent, startPos, startQuats, seed, direction, floorZ);
+            if (!e.IsCorpse) e.Rec = CreateRecord(e, pa, setup, parent, startPos, startQuats, seed, direction, floorZ, prm);
 
             return true;
         }
@@ -524,7 +556,7 @@ namespace AcmeRagdoll.Services {
 
         private HandoffRecord CreateRecord(Entry e, CPartArray* pa, CSetup* setup,
                                            uint[] parent, float[] startPos, Quat[] startQuats,
-                                           uint seed, float direction, float floorZ) {
+                                           uint seed, float direction, float floorZ, RagdollParams prm) {
             int n = parent.Length;
             var rec = new HandoffRecord {
                 NumParts = (uint)n,
@@ -536,6 +568,7 @@ namespace AcmeRagdoll.Services {
                 Seed = seed,
                 Direction = direction,
                 FloorZ = floorZ,
+                Params = prm,             // value data - the corpse rebuilds with the SAME tuning
                 Pos = new float[n * 3],
                 Prev = new float[n * 3],
                 ActiveLeftRemaining = e.ActiveLeft,
@@ -623,15 +656,39 @@ namespace AcmeRagdoll.Services {
             try { fall = ResolveWorldFall(e, owner, sim, n, parts, oq, ooz, sx, sy, sz); }
             catch (Exception ex) { _log.LogError(ex, "ragdoll: world-fall failed id=0x{Id:X8}", e.ObjId); fall = e.FallOffset; }
 
+            // ANTI-SINK CLAMP. The verlet sim settles parts onto its own model-space floor, but the
+            // scaled world transform + odd rest poses can drop the lowest part BELOW the real surface
+            // the body rests on, so corpses visibly sink into the ground (worst on golems/skeletons
+            // whose "assembled" rest pose sits low). Guarantee the lowest part's world origin stays a
+            // hair ABOVE the floor: pre-scan every part's world Z (with the airborne fall applied),
+            // and if the minimum dips below floorZ + FloorMargin, lift the WHOLE body uniformly by the
+            // deficit (rigid lift - preserves the settled pose, just raises it). floorZ is the terrain
+            // under the corpse when known (outdoor / after an airborne landing), else the object's own
+            // ground position ooz (indoor EnvCell floor - the creature died standing on it). This runs
+            // every frame so a still-settling body never pops below the floor mid-fall either.
+            float floorZ = e.GroundZValid ? e.GroundZ : ooz;
+            float minWz = float.MaxValue;
+            for (int i = 0; i < n; i++) {
+                CPhysicsPart* p2 = parts[i];
+                if (p2 == null) continue;
+                sim.GetPos(i, out float mx2, out float my2, out float mz2);
+                QMath.Rotate(oq, sx * mx2, sy * my2, sz * mz2, out float _, out float _, out float rz2);
+                float wz2 = ooz + rz2 - fall;
+                if (wz2 < minWz) minWz = wz2;
+            }
+            float lift = (minWz != float.MaxValue && minWz < floorZ + FloorMargin)
+                ? (floorZ + FloorMargin - minWz) : 0f;
+
             for (int i = 0; i < n; i++) {
                 CPhysicsPart* part = parts[i];
                 if (part == null) continue;   // never cache/deref a missing part
 
                 sim.GetPos(i, out float mx, out float my, out float mz);
                 // world = objOrigin + Rotate(objQuat, scale (x) modelOrigin)   [client scaled combine],
-                // then translated straight down by the world-space fall offset (0 for grounded deaths).
+                // then translated straight down by the world-space fall offset (0 for grounded deaths),
+                // then lifted by the anti-sink clamp so nothing rests below the floor.
                 QMath.Rotate(oq, sx * mx, sy * my, sz * mz, out float rx, out float ry, out float rz);
-                float wx = oox + rx, wy = ooy + ry, wz = ooz + rz - fall;
+                float wx = oox + rx, wy = ooy + ry, wz = ooz + rz - fall + lift;
                 Quat wq = QMath.Norm(QMath.Mul(oq, q[i]));
 
                 part->pos.frame.qw = wq.W;
@@ -765,6 +822,22 @@ namespace AcmeRagdoll.Services {
 
         private void Remove(uint id) {
             if (_live.Remove(id) && _live.Count == 0) ArmUpdateParts(false);
+        }
+
+        /// <summary>Rate limiter for the sweep driven off the (very frequent) non-Dead MotionDone
+        /// path. Static because the plugin owns exactly one registry per client process; the value is
+        /// only ever read/written on the client's single simulation thread.</summary>
+        private static long _lastSweepTick;
+        private const long SweepThrottleMillis = 5_000;
+
+        /// <summary>Allocation-free early-outs first (nothing to sweep / swept recently), then the
+        /// real sweep. Safe to call from the hot non-Dead motion path.</summary>
+        private void MaybeSweepStale() {
+            if (_live.Count == 0 && _records.Count == 0) return;
+            long now = Environment.TickCount64;
+            if (now - _lastSweepTick < SweepThrottleMillis) return;
+            _lastSweepTick = now;
+            SweepStale();
         }
 
         /// <summary>Drop entries whose corpse has despawned (no UpdateParts touch for a while), and

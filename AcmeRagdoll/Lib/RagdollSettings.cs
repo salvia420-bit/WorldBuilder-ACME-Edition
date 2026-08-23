@@ -21,6 +21,20 @@ namespace AcmeRagdoll.Lib {
         /// </summary>
         [JsonPropertyName("armOnDeathStart")]
         public bool ArmOnDeathStart { get; set; } = true;
+
+        /// <summary>
+        /// Master switch for the LIVE-MOTION layer (hit reactions on living creatures), separate from
+        /// the death ragdoll above. When true the plugin subscribes to the two S2C combat signals
+        /// (Effects_PlayScriptType / Combat_HandleAttackerNotificationEvent) and runs
+        /// <see cref="AcmeRagdoll.Services.LiveMotionRegistry"/> alongside the death registry.
+        ///
+        /// INVARIANT (runbook C1): false =&gt; bit-identical client behaviour. No network subscription
+        /// is made, no LiveMotionRegistry is constructed, and the UpdateParts dispatcher short-
+        /// circuits to the death registry only - the live layer contributes nothing to the hot
+        /// detour's arm/disarm decision and never touches a part.
+        /// </summary>
+        [JsonPropertyName("liveMotion")]
+        public bool LiveMotion { get; set; } = true;
     }
 
     /// <summary>

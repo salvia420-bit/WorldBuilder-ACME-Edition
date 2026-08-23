@@ -23,6 +23,10 @@ namespace AcmeRagdoll.Services {
     ///     RagdollSettings.ArmOnDeathStart is true, arms the SAME registry path so creatures
     ///     ragdoll from the instant of the death hit rather than after the death animation.
     ///     MotionDone stays installed as a harmless fallback (registry dedupe prevents double-arm).
+    ///     It ALSO feeds <see cref="LiveMotionRegistry.OnMotion"/> - the live layer needs to know
+    ///     when a body it is shaking starts an attack, and this is the one detour that sees every
+    ///     motion start; the feed is gated on the live layer having work, so a client with no hit
+    ///     reactions in flight pays a null check and an int read.
     ///   * CPartArray::UpdateParts  - the per-part pose writer, HOT. Created disabled and armed only
     ///     while at least one ragdoll is live (registry drives <see cref="SetUpdatePartsEnabled"/>).
     ///     Post-detour: forward the original, then overwrite the owned parts.
@@ -63,6 +67,12 @@ namespace AcmeRagdoll.Services {
         private static IHook<MotionDoneFn>? _motionDone;
         private static IHook<DoInterpretedMotionFn>? _doInterp;
         private static RagdollRegistry? _registry;
+        /// <summary>The live-motion (hit-reaction) registry, or NULL when RagdollSettings.LiveMotion is
+        /// false. Null is the whole of the "disabled => bit-identical" guarantee on the hot path: the
+        /// UpdateParts post-detour dispatches to the death registry and nothing else, and the live
+        /// layer never votes to arm the detour, so with no ragdoll live the detour is not even
+        /// installed-and-enabled.</summary>
+        private static LiveMotionRegistry? _liveMotion;
         private static ILogger? _log;
 
         // Death-start arming toggle (RagdollSettings.ArmOnDeathStart), bound in Install the same way
@@ -87,9 +97,12 @@ namespace AcmeRagdoll.Services {
         /// <param name="registry">The ragdoll registry the detours arm/drive.</param>
         /// <param name="armOnDeathStart">When true, the DoInterpretedMotion detour arms a ragdoll at
         /// death-motion START; when false it no-ops (MotionDone-only behavior).</param>
-        public void Install(RagdollRegistry registry, bool armOnDeathStart) {
+        /// <param name="liveMotion">The live-motion registry, or null when the layer is disabled by
+        /// settings. Null means the UpdateParts post-detour dispatches to the death registry ONLY.</param>
+        public void Install(RagdollRegistry registry, bool armOnDeathStart, LiveMotionRegistry? liveMotion) {
             if (_installed || _disposed) return;
             _registry = registry;
+            _liveMotion = liveMotion;
             _armOnDeathStart = armOnDeathStart;
 
             nint updatePartsAddr = AddressResolver.Resolve(
@@ -150,11 +163,38 @@ namespace AcmeRagdoll.Services {
             }
         }
 
-        /// <summary>Registry callback: arm/disarm the hot UpdateParts detour with the live count.</summary>
+        // ------------------------------------------------------------------ UpdateParts arm arbitration
+        //
+        // TWO registries now share the one hot detour, and each one only knows its OWN live count. The
+        // detour must be enabled while EITHER has work and disabled only when BOTH are idle, so each
+        // registry VOTES here (keeping the existing Action<bool> "enabled = my live count > 0"
+        // contract, unchanged from the death registry's point of view) and the OR of the votes drives
+        // the single Enable/Disable. Reloaded's Enable/Disable are not counted, so calling Enable on an
+        // already-enabled hook - which the OR would otherwise do constantly - is avoided by tracking
+        // the applied state.
+        private bool _voteDeath;
+        private bool _voteLive;
+        private bool _updatePartsOn;
+
+        /// <summary>Death-registry vote (the original <see cref="RagdollRegistry"/> contract).</summary>
         public void SetUpdatePartsEnabled(bool enabled) {
+            _voteDeath = enabled;
+            ApplyUpdatePartsVotes();
+        }
+
+        /// <summary>Live-motion-registry vote.</summary>
+        public void SetUpdatePartsEnabledLive(bool enabled) {
+            _voteLive = enabled;
+            ApplyUpdatePartsVotes();
+        }
+
+        private void ApplyUpdatePartsVotes() {
             var h = _updateParts;
             if (h == null) return;
-            if (enabled) h.Enable(); else h.Disable();
+            bool want = _voteDeath || _voteLive;
+            if (want == _updatePartsOn) return;
+            _updatePartsOn = want;
+            if (want) h.Enable(); else h.Disable();
         }
 
         // ------------------------------------------------------------------ detours
@@ -178,6 +218,16 @@ namespace AcmeRagdoll.Services {
                     _registry?.OnMotionDone((CPhysicsObj*)self, motion);
             }
             catch (Exception ex) { LogSafe(ex, "DoInterpretedMotion"); }
+            // LIVE-MOTION current-motion feed. This detour is the universal motion-initiation choke
+            // point, so it is also the cheapest place to learn that a body the hit layer is shaking
+            // has begun an attack (-> attenuate, keep the telegraph readable). Gated on the layer
+            // having ANY live entry so the common case - which is every motion of every object in the
+            // world - is one null check plus one volatile int read, with no dereference of `self`.
+            try {
+                var lm = _liveMotion;
+                if (lm != null && lm.LiveCount > 0) lm.OnMotion((CPhysicsObj*)self, motion);
+            }
+            catch (Exception ex) { LogSafe(ex, "DoInterpretedMotion/live"); }
             return r;
         }
 
@@ -185,8 +235,14 @@ namespace AcmeRagdoll.Services {
         private static void UpdatePartsImpl(nint self, nint frame) {
             // Forward the real per-part pose update FIRST, then overwrite the parts we own.
             _updateParts!.OriginalFunction(self, frame);
+            // Death layer first: a body it owns is a corpse whose pose it fully replaces. The live
+            // layer (hit reactions on LIVING bodies) runs second and, from C2, adds its offsets on
+            // top of the freshly animated pose. When the layer is off _liveMotion is null and this is
+            // one predictable null check - no allocation, no call, no client-visible difference.
             try { _registry?.OnUpdateParts((CPartArray*)self, (Frame*)frame); }
             catch (Exception ex) { LogSafe(ex, "UpdateParts"); }
+            try { _liveMotion?.OnUpdateParts((CPartArray*)self, (Frame*)frame); }
+            catch (Exception ex) { LogSafe(ex, "UpdateParts/live"); }
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -198,6 +254,8 @@ namespace AcmeRagdoll.Services {
         // ------------------------------------------------------------------ teardown
 
         private void SafeDisable() {
+            _voteDeath = _voteLive = false;
+            _updatePartsOn = false;
             try { _updateParts?.Disable(); } catch { }
             try { _motionDone?.Disable(); } catch { }
             try { _doInterp?.Disable(); } catch { }
@@ -211,6 +269,7 @@ namespace AcmeRagdoll.Services {
             // Leave the registry reference intact for any in-flight detour to no-op through _down,
             // then drop it; the plugin calls RagdollRegistry.Shutdown() before this.
             _registry = null;
+            _liveMotion = null;
         }
     }
 }

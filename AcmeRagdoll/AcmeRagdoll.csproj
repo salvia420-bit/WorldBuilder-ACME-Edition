@@ -63,6 +63,13 @@
   <ItemGroup>
     <!-- Inline-detour hooking engine. Host-provided; must not be copied into the plugin. -->
     <PackageReference Include="Reloaded.Hooks" Version="4.3.3" ExcludeAssets="runtime" />
+    <!-- Typed S2C message classes for the live-motion hit signals (Effects_PlayScriptType,
+         Combat_HandleAttackerNotificationEvent). Chorizite.Core already pulls this transitively for
+         compile, but naming the types warrants an explicit reference; pinned to the SAME 1.0.1 the
+         vendored Chorizite.Core binds (Chorizite.Core.csproj:81). ExcludeAssets="runtime" for the
+         usual reason: the Chorizite host has already loaded that assembly and a second shipped copy
+         would give us a different assembly identity than the NetworkParser we subscribe to. -->
+    <PackageReference Include="Chorizite.ACProtocol" Version="1.0.1" ExcludeAssets="runtime" />
     <!-- Match what the vendored Chorizite.Core pulls (see AcmeRedline.csproj rationale). -->
     <PackageReference Include="Autofac" Version="8.4.0" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" ExcludeAssets="runtime" />
@@ -70,6 +77,9 @@
 
   <ItemGroup>
     <None Update="manifest.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="ragdoll_profiles.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="README.md">

@@ -33,30 +33,28 @@ namespace AcmeRagdoll.Sim {
     /// Step()/DeriveQuats() pair is safe to run inside the UpdateParts native detour.
     /// </summary>
     internal sealed class RagdollSim {
-        // ---- sim tunables (carried over from ragdoll_bake.py unless noted) ----
+        // ---- sim tunables that are NOT per-body (structural, carried over from ragdoll_bake.py) ----
         private const float GRAVITY = 9.8f;
-        private const float DAMPING = 0.985f;
-        private const float FLOOR_FRICTION = 0.55f;
         private const float NODE_RADIUS = 0.06f;
         private const int ITERATIONS = 3;
         private const int ITERATIONS_RIGID = 5;
-        private const float IMPULSE = 2.2f;
         private const float BEND_RIGID = 1.0f;
-        private const float GIVE_MIN = 0.30f;
-        private const float GIVE_SPAN = 0.95f;
-        private const float GIVE_RAMP = 0.45f;
-        private const float CORE_BIAS = 0.55f;
-        private const float TOPPLE_GAIN = 1.0f;
-        private const float TOPPLE_RATE_CAP = 0.6f;
-        private const float TWIST = 2.2f;
-        private const float DIR_JITTER = 0.9f;
         private const float PIVOT_LEAD = 0.18f;
-        private const float LINEAR_FRAC = 0.25f;
-        private const float JITTER = 0.12f;
-        private const float BOUNCE_MAX = 0.35f;
-        private const float MAX_SPEED = 8.0f;
-        private const float MAX_UP_SPEED = 3.0f;
         private const float BRACE_STIFF = 1.0f;
+
+        // Everything else (impulse, topple, twist, give schedule, caps, damping, friction, fall
+        // length, direction bias) is PER BODY and lives in RagdollParams, chosen at seed time from
+        // the creature's Setup DataID. RagdollParams.Default holds the exact values those consts
+        // had, so a body with no profile falls bit-for-bit as it did before parameterization.
+        private readonly RagdollParams _p;
+
+        /// <summary>The bias angle convention: <see cref="RagdollParams.DirBiasDeg"/> is documented
+        /// as model-space degrees measured FROM +Y (forward) TOWARD +X (atan2(dx, dy) — the same
+        /// convention the anim-metrics extractor used), while this sim's topple angle is a standard
+        /// atan2 angle in the model XY plane (0 = +X, CCW, cos/sin below). Conversion is therefore
+        /// theta = DIR_BIAS_ZERO - radians(dirBiasDeg): 0° maps to +Y, 90° to +X, 180° to -Y.</summary>
+        private const float DIR_BIAS_ZERO = (float)(System.Math.PI / 2.0);
+        private const float DEG_TO_RAD = (float)(System.Math.PI / 180.0);
 
         public const float FPS = 30.0f;
         public const int SUBSTEPS = 4;                 // sim substeps per rendered frame (dt = 1/120 s)
@@ -87,9 +85,18 @@ namespace AcmeRagdoll.Sim {
         private readonly float _bounce;
         private float _t;
 
-        /// <summary>How many rendered frames of active fall this ragdoll should simulate before it
-        /// holds its settled pose. 3 s at 30 fps is well past settle for a creature-scale body.</summary>
-        public const int FallFrames = 90;
+        /// <summary>How many rendered frames of active fall a ragdoll simulates before it holds its
+        /// settled pose, for a body with NO profile. The value actually used by this instance is
+        /// <see cref="FallFramesParam"/> (its profile's), which the registry reads at seed time.</summary>
+        public const int FallFrames = RagdollParams.DefaultFallFrames;
+
+        /// <summary>This body's active-fall length in rendered frames (its profile's fallFrames).</summary>
+        public int FallFramesParam => _p.FallFrames;
+
+        /// <summary>Compat overload: the shipped (unprofiled) parameters.</summary>
+        public RagdollSim(uint[] parent, float[] startPos, Quat[] startQuats,
+                          uint seed, float direction, float floorZ)
+            : this(parent, startPos, startQuats, seed, direction, floorZ, RagdollParams.Default) { }
 
         /// <param name="parent">Setup.ParentIndex, one entry per part (0xFFFFFFFF = root).</param>
         /// <param name="startPos">n*3 model-space part origins at the moment of death.</param>
@@ -97,8 +104,10 @@ namespace AcmeRagdoll.Sim {
         /// <param name="seed">Deterministic per-death seed (e.g. the object id ^ a salt).</param>
         /// <param name="direction">Topple direction in the model XY plane, radians.</param>
         /// <param name="floorZ">Model-space Z of the foot/ground plane.</param>
+        /// <param name="prm">This body's tuning (null =&gt; <see cref="RagdollParams.Default"/>).</param>
         public RagdollSim(uint[] parent, float[] startPos, Quat[] startQuats,
-                          uint seed, float direction, float floorZ) {
+                          uint seed, float direction, float floorZ, RagdollParams prm) {
+            _p = prm ?? RagdollParams.Default;
             _n = parent.Length;
             _parent = parent;
             _pos = (float[])startPos.Clone();
@@ -108,6 +117,17 @@ namespace AcmeRagdoll.Sim {
             _swing = new Quat[_n];
             _hasSwing = new bool[_n];
             _floorZ = floorZ;
+
+            // Per-body direction bias: pull the seed-derived topple direction CIRCULARLY toward the
+            // profile's preferred fall direction (a body whose retail death animation always slumps
+            // backward keeps doing so, while the seed still supplies the per-corpse variation).
+            // Strength 0 = untouched, 1 = exactly on the bias. No PRNG draw happens here, and the
+            // whole block is skipped when DirBiasDeg is null (always so for RagdollParams.Default),
+            // which is what keeps the default path bit-identical to the shipped behaviour.
+            if (_p.DirBiasDeg.HasValue) {
+                float target = DIR_BIAS_ZERO - _p.DirBiasDeg.Value * DEG_TO_RAD;
+                direction += _p.DirBiasStrength * ShortestAngleDelta(direction, target);
+            }
 
             var rand = Mulberry32(seed);
 
@@ -126,13 +146,13 @@ namespace AcmeRagdoll.Sim {
             cx /= _n; cy /= _n;
             float height = Math.Max(0.25f, zmax - zmin);
 
-            float ang = direction + ((float)rand() - 0.5f) * DIR_JITTER;
+            float ang = direction + ((float)rand() - 0.5f) * _p.DirJitter;
             float dx = (float)Math.Cos(ang), dy = (float)Math.Sin(ang);
-            float rate = Math.Min((IMPULSE / height) * TOPPLE_GAIN,
-                                  TOPPLE_RATE_CAP * (float)Math.Sqrt(GRAVITY / height))
+            float rate = Math.Min((_p.Impulse / height) * _p.ToppleGain,
+                                  _p.ToppleRateCap * (float)Math.Sqrt(GRAVITY / height))
                          * (0.7f + 0.6f * (float)rand());
             float ox = -dy * rate, oy = dx * rate;
-            float twist = TWIST * (rand() < 0.5 ? -1f : 1f) * (0.35f + 0.65f * (float)rand());
+            float twist = _p.Twist * (rand() < 0.5 ? -1f : 1f) * (0.35f + 0.65f * (float)rand());
 
             // pivot: centroid of the lowest quarter, nudged toward the fall direction.
             float lowBand = zmin + 0.25f * height;
@@ -145,8 +165,8 @@ namespace AcmeRagdoll.Sim {
             py += dy * PIVOT_LEAD * height;
             float pz = zmin;
 
-            float shove = LINEAR_FRAC * IMPULSE;
-            float jitter = JITTER * (0.3f + IMPULSE / IMPULSE);
+            float shove = _p.LinearFrac * _p.Impulse;
+            float jitter = _p.Jitter * (0.3f + _p.Impulse / _p.Impulse);
             for (int i = 0; i < _n; i++) {
                 int i3 = i * 3;
                 float rx = _pos[i3] - px, ry = _pos[i3 + 1] - py, rz = _pos[i3 + 2] - pz;
@@ -174,8 +194,8 @@ namespace AcmeRagdoll.Sim {
                 c.Rest = Dist(c.A, c.B);
                 if (c.Kind == KIND_BEND) {
                     float coreness = 1.0f - (float)depth[c.A] / maxDepth;
-                    c.T0 = GIVE_MIN + GIVE_SPAN * (CORE_BIAS * coreness + (1 - CORE_BIAS) * (float)rand());
-                    c.T1 = c.T0 + GIVE_RAMP * (0.6f + 0.8f * (float)rand());
+                    c.T0 = _p.GiveMin + _p.GiveSpan * (_p.CoreBias * coreness + (1 - _p.CoreBias) * (float)rand());
+                    c.T1 = c.T0 + _p.GiveRamp * (0.6f + 0.8f * (float)rand());
                 }
             }
             _braces = BuildBraces(rand, depth, maxDepth);
@@ -184,7 +204,7 @@ namespace AcmeRagdoll.Sim {
             for (int i = 0; i < _braces.Length; i++) if (_braces[i].T1 > end) end = _braces[i].T1;
             for (int i = 0; i < _cons.Length; i++) if (_cons[i].T1 > end) end = _cons[i].T1;
             _braceEnd = end;
-            _bounce = BOUNCE_MAX * (float)rand() * (float)rand();
+            _bounce = _p.BounceMax * (float)rand() * (float)rand();
             _t = 0f;
         }
 
@@ -201,9 +221,9 @@ namespace AcmeRagdoll.Sim {
             for (int i = 0; i < _n; i++) {
                 int ix = i * 3;
                 float x = _pos[ix], y = _pos[ix + 1], z = _pos[ix + 2];
-                float vx = (x - _prev[ix]) * DAMPING;
-                float vy = (y - _prev[ix + 1]) * DAMPING;
-                float vz = (z - _prev[ix + 2]) * DAMPING;
+                float vx = (x - _prev[ix]) * _p.Damping;
+                float vy = (y - _prev[ix + 1]) * _p.Damping;
+                float vz = (z - _prev[ix + 2]) * _p.Damping;
                 _prev[ix] = x; _prev[ix + 1] = y; _prev[ix + 2] = z;
                 _pos[ix] = x + vx;
                 _pos[ix + 1] = y + vy;
@@ -241,15 +261,15 @@ namespace AcmeRagdoll.Sim {
             for (int i = 0; i < _n; i++) {
                 int ix = i * 3;
                 if (_push[i] <= 0f && _pos[ix + 2] > floorMin + 1e-6f) continue;
-                _prev[ix] = _pos[ix] - (_pos[ix] - _prev[ix]) * FLOOR_FRICTION;
-                _prev[ix + 1] = _pos[ix + 1] - (_pos[ix + 1] - _prev[ix + 1]) * FLOOR_FRICTION;
+                _prev[ix] = _pos[ix] - (_pos[ix] - _prev[ix]) * _p.FloorFriction;
+                _prev[ix + 1] = _pos[ix + 1] - (_pos[ix + 1] - _prev[ix + 1]) * _p.FloorFriction;
                 float vz = _pos[ix + 2] - _prev[ix + 2] - _push[i];
                 _prev[ix + 2] = _pos[ix + 2] - (vz < 0f ? -vz * _bounce : vz);
             }
 
             // per-node speed / up-speed caps (the fly-away fix) + NaN scrub.
-            float maxStep = MAX_SPEED * DT;
-            float maxUp = MAX_UP_SPEED * DT;
+            float maxStep = _p.MaxSpeed * DT;
+            float maxUp = _p.MaxUpSpeed * DT;
             for (int i = 0; i < _n; i++) {
                 int ix = i * 3;
                 float vx = _pos[ix] - _prev[ix];
@@ -433,16 +453,16 @@ namespace AcmeRagdoll.Sim {
                 for (int j = i + 1; j < anchors.Length; j++) {
                     float rest = Dist(anchors[i], anchors[j]);
                     if (rest <= 1e-4f) continue;
-                    Window(rand, 1.0f, GIVE_SPAN * 0.25f, out float t0, out float t1);
+                    Window(rand, 1.0f, _p.GiveSpan * 0.25f, out float t0, out float t1);
                     list.Add(new Brace { A = anchors[i], B = anchors[j], Rest = rest, T0 = t0, T1 = t1 });
                 }
             return list.ToArray();
         }
 
-        private static void Window(Func<double> rand, float coreness, float extraHold,
-                                   out float t0, out float t1) {
-            t0 = GIVE_MIN + GIVE_SPAN * (CORE_BIAS * coreness + (1 - CORE_BIAS) * (float)rand()) + extraHold;
-            t1 = t0 + GIVE_RAMP * (0.6f + 0.8f * (float)rand());
+        private void Window(Func<double> rand, float coreness, float extraHold,
+                            out float t0, out float t1) {
+            t0 = _p.GiveMin + _p.GiveSpan * (_p.CoreBias * coreness + (1 - _p.CoreBias) * (float)rand()) + extraHold;
+            t1 = t0 + _p.GiveRamp * (0.6f + 0.8f * (float)rand());
         }
 
         private int[] BuildBoneChildren(float[] pos) {
@@ -491,6 +511,16 @@ namespace AcmeRagdoll.Sim {
         }
 
         private static bool IsFinite(float v) => !float.IsNaN(v) && !float.IsInfinity(v);
+
+        /// <summary>Signed shortest angular distance from <paramref name="from"/> to
+        /// <paramref name="to"/>, wrapped into (-pi, pi] - so blending toward a bias never takes the
+        /// long way round the circle.</summary>
+        private static float ShortestAngleDelta(float from, float to) {
+            const double TwoPi = 2.0 * Math.PI;
+            double d = (double)to - from;
+            d -= Math.Floor((d + Math.PI) / TwoPi) * TwoPi;
+            return (float)d;
+        }
 
         /// <summary>mulberry32, matching ragdoll_bake.py / ragdoll.js bit-for-bit.</summary>
         private static Func<double> Mulberry32(uint seed) {
