@@ -54,6 +54,7 @@ namespace AcmeRagdoll.Services {
             public bool IsCorpse;          // classified as a corpse-handoff (for logging / no re-record)
             public bool Pending;           // armed Dead but world position not yet valid; classify later
             public int PendingFrames;      // frames spent waiting for a valid position
+            public int MatchRetries;       // frames a positioned corpse has waited for a handoff record
             public int SeedAttempts;
             public int ActiveLeft;         // frames of active fall remaining
             public long ArmedTick;         // for the hold cap
@@ -117,6 +118,10 @@ namespace AcmeRagdoll.Services {
             public bool Landed;
             public float FallOffset;
             public float FallVel;
+
+            // How many corpses have continued this record (shared handoff — see ArmCorpseHandoff). Kept
+            // for diagnostics; the record's lifetime is bounded by the window/TTL, not by this count.
+            public int MatchCount;
 
             public long UpdatedTick;
         }
@@ -186,6 +191,14 @@ namespace AcmeRagdoll.Services {
         // frame or two; these are generous so a slow corpse still resolves.
         private const int PendingFramesMax = 30;        // ~1 s at 30 fps
         private const long PendingTimeoutMillis = 2_000;
+
+        // A corpse that positions before its creature's handoff record has been created (a timing race
+        // under simultaneous @smite/AoE deaths) finds no record and would re-seed a FRESH ragdoll — the
+        // residual "second ragdoll" the shared-handoff change does not cover. Give a positioned entry
+        // that found no record this many frames to wait for one to appear before falling back to a fresh
+        // crumple. ~6 frames = 0.2 s: invisible for the rare genuinely-fresh nopos creature, ample for
+        // the record (created the same tick the creature's own death is processed) to show up.
+        private const int MatchRetryMax = 6;
 
         private readonly Dictionary<uint, Entry> _live = new(MaxLive);
         private readonly List<HandoffRecord> _records = new(8);
@@ -327,7 +340,15 @@ namespace AcmeRagdoll.Services {
                 Airborne = rec.Airborne, FallDecided = rec.FallDecided, Landed = rec.Landed,
                 FallOffset = rec.FallOffset, FallVel = rec.FallVel, GroundZValid = false,
             };
-            _records.Remove(rec);   // one-shot: consume the record so no later object re-matches it
+            // SHARED handoff (NOT one-shot). When several identical creatures die together (@smite, an
+            // AoE), their corpses spawn clustered and race for records; consuming a record on the first
+            // match left the losers with none, so they re-seeded a FRESH ragdoll — the "second ragdoll
+            // after it settled" double. Clustered same-signature creatures fall identically, so letting
+            // every corpse continue the same nearby record is correct and removes the double. The record
+            // still expires on its own (HandoffWindowMillis / HandoffRecordTtl in TryMatchRecord), so it
+            // cannot be re-matched indefinitely; a genuinely later same-type death at the same spot would
+            // just continue an equivalent fall, which is visually indistinguishable.
+            rec.MatchCount++;
 
             bool parentMatch = parentHash == rec.ParentHash;
             _log.LogInformation(
@@ -448,7 +469,7 @@ namespace AcmeRagdoll.Services {
                 // inherit the creature's world-fall progress; recompute terrain for the corpse's own XY.
                 e.Airborne = rec.Airborne; e.FallDecided = rec.FallDecided; e.Landed = rec.Landed;
                 e.FallOffset = rec.FallOffset; e.FallVel = rec.FallVel; e.GroundZValid = false;
-                _records.Remove(rec);   // one-shot
+                rec.MatchCount++;   // SHARED handoff, not one-shot — see ArmCorpseHandoff for why.
 
                 bool parentMatch = parentHash == rec.ParentHash;
                 _log.LogInformation(
@@ -460,8 +481,18 @@ namespace AcmeRagdoll.Services {
                 return true;
             }
 
-            // No matching record: this is a fresh creature death whose position was simply late. Crumple
-            // from the (now valid) live pose - Seed() runs below and creates its own handoff record.
+            // No record yet. Under simultaneous deaths a corpse can position a few frames BEFORE its
+            // creature's record is created; crumpling now would re-seed a fresh ragdoll (a second fall on
+            // an already-dead body). Wait a handful of frames for a record to appear before giving up.
+            if (e.MatchRetries < MatchRetryMax) {
+                e.MatchRetries++;
+                e.Pending = true;          // stay pending; ResolvePending retries the match next frame
+                e.LastTouchTick = now;     // keep the despawn sweep from reaping a still-waiting entry
+                return false;
+            }
+
+            // Still nothing after the grace: a genuinely fresh creature death whose position was late.
+            // Crumple from the (now valid) live pose - Seed() runs below and creates its own record.
             e.Seeded = false; e.IsCorpse = false; e.ActiveLeft = RagdollSim.FallFrames;
             _log.LogInformation(
                 "ragdoll ARM id=0x{Id:X8} setupDid=0x{Did:X8} nparts={N} cell=0x{Cell:X8} xy=({X:F1},{Y:F1}) " +
@@ -539,7 +570,14 @@ namespace AcmeRagdoll.Services {
             // killing blow. No-op (returns the profile, leaves direction) when cfg deathvariety=0, so the
             // default death is unchanged. The varied prm+direction flow into BOTH the sim below and the
             // handoff record, so the corpse replays this exact sampled death.
-            prm = DeathVariety.Perturb(prm, e.ObjId, ref direction);
+            prm = DeathVariety.Perturb(prm, e.ObjId, ref direction, out float leanRad);
+
+            // Commit the fall to its sampled heading: pre-lean the death pose about the foot pivot so
+            // gravity carries the body to that heading (prone/supine/on-side variety) instead of the
+            // front-heavy face-plant. Applied to startPos IN PLACE, before the sim is built and before
+            // startPos is copied into the handoff record below, so the corpse continues the same fall.
+            // leanRad is 0 when deathvariety is off => startPos untouched, death bit-identical.
+            RagdollSim.ApplyDeathLean(startPos, n, direction, leanRad);
 
             e.Sim = new RagdollSim(parent, startPos, startQuats, seed, direction, floorZ, prm);
             e.Scratch = new Quat[n];

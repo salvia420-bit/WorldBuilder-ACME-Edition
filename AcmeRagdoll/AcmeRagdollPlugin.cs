@@ -212,7 +212,10 @@ namespace AcmeRagdoll {
                     bool wasOn = AcmeRagdoll.Sim.DeathVariety.Enabled;
                     AcmeRagdoll.Sim.DeathVariety.Enabled = true;
                     float dir = 0f;
-                    _ = AcmeRagdoll.Sim.DeathVariety.Perturb(AcmeRagdoll.Sim.RagdollParams.Default, 1u, ref dir);
+                    _ = AcmeRagdoll.Sim.DeathVariety.Perturb(AcmeRagdoll.Sim.RagdollParams.Default, 1u, ref dir, out float _lean);
+                    // JIT the lean transform on this thread too (it runs from the same native detour).
+                    var _warm = new float[9]; _warm[2] = 0.1f; _warm[5] = 0.2f; _warm[8] = 0.3f;
+                    AcmeRagdoll.Sim.RagdollSim.ApplyDeathLean(_warm, 3, dir, _lean != 0f ? _lean : 0.1f);
                     AcmeRagdoll.Sim.DeathVariety.Enabled = wasOn;
                 }
                 // A real lookup on this thread JITs Dictionary.TryGetValue for that instantiation too

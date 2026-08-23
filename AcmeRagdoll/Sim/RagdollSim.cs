@@ -522,6 +522,57 @@ namespace AcmeRagdoll.Sim {
             return (float)d;
         }
 
+        /// <summary>
+        /// Pre-lean a death pose toward its fall heading so gravity COMMITS the fall to that heading.
+        /// Rotates every model-space part origin about the foot pivot (centroid of the lowest quarter,
+        /// at floor Z), about the horizontal axis perpendicular to <paramref name="directionRad"/>, by
+        /// <paramref name="leanRad"/> so the body's top tips toward the heading. This moves the center of
+        /// mass past the pivot in that direction, so a front-heavy creature (drudge, gharu'ndim — arms
+        /// hung forward) no longer face-plants regardless of the seeded topple: an even spread of fall
+        /// headings becomes an even spread of prone / supine / on-side landings.
+        ///
+        /// Called by the registry ON THE START POSE (before the sim is built and before it is stored in
+        /// the handoff record), so the corpse rebuilds from the same leaned pose and continues the exact
+        /// same fall. A no-op when <paramref name="leanRad"/> is 0 (the deathvariety-off path), which is
+        /// what keeps the default death bit-identical. Operates in place on <paramref name="pos"/>
+        /// (length n*3, xyz per part); allocation-free.
+        /// </summary>
+        public static void ApplyDeathLean(float[] pos, int n, float directionRad, float leanRad) {
+            if (leanRad == 0f || n <= 0 || pos == null || pos.Length < n * 3) return;
+
+            float dx = (float)Math.Cos(directionRad), dy = (float)Math.Sin(directionRad);
+            // Unit horizontal axis A perpendicular to the heading: tilting the top toward (dx,dy).
+            float ax = -dy, ay = dx;   // az = 0, |(dx,dy)| = 1 so A is already unit.
+
+            // Foot pivot: centroid of the lowest quarter, at the floor (lowest Z).
+            float zmin = float.MaxValue, zmax = float.MinValue;
+            for (int i = 0; i < n; i++) { float z = pos[i * 3 + 2]; if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
+            float height = Math.Max(0.25f, zmax - zmin);
+            float lowBand = zmin + 0.25f * height;
+            float px = 0, py = 0; int nsel = 0;
+            for (int i = 0; i < n; i++) {
+                if (pos[i * 3 + 2] <= lowBand) { px += pos[i * 3]; py += pos[i * 3 + 1]; nsel++; }
+            }
+            if (nsel > 0) { px /= nsel; py /= nsel; }
+            else { for (int i = 0; i < n; i++) { px += pos[i * 3]; py += pos[i * 3 + 1]; } px /= n; py /= n; }
+            float pz = zmin;
+
+            float c = (float)Math.Cos(leanRad), s = (float)Math.Sin(leanRad);
+            float omc = 1f - c;
+            for (int i = 0; i < n; i++) {
+                int i3 = i * 3;
+                float rx = pos[i3] - px, ry = pos[i3 + 1] - py, rz = pos[i3 + 2] - pz;
+                // Rodrigues about unit horizontal axis A=(ax,ay,0): P' = r*c + (A x r)*s + A*(A.r)*(1-c)
+                float adr = ax * rx + ay * ry;               // A . r  (az = 0)
+                float crx = ay * rz;                         // (A x r).x = ay*rz - 0*ry
+                float cry = -ax * rz;                        // (A x r).y = 0*rx - ax*rz
+                float crz = ax * ry - ay * rx;               // (A x r).z
+                pos[i3]     = px + rx * c + crx * s + ax * adr * omc;
+                pos[i3 + 1] = py + ry * c + cry * s + ay * adr * omc;
+                pos[i3 + 2] = pz + rz * c + crz * s;         // A.z = 0 => no third term on Z
+            }
+        }
+
         /// <summary>mulberry32, matching ragdoll_bake.py / ragdoll.js bit-for-bit.</summary>
         private static Func<double> Mulberry32(uint seed) {
             uint a = seed != 0 ? seed : 0x9E3779B9;

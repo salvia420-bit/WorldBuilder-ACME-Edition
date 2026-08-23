@@ -49,10 +49,22 @@ namespace AcmeRagdoll.Sim {
         // R4 sequence's 5th additive constant (frac(phi^-5), phi^5 = phi+1) for the killing-blow azimuth.
         private const double Alpha5 = 0.4614027427763899;
 
-        /// <summary>Return this death's varied parameters and set <paramref name="direction"/> to the
-        /// per-death topple azimuth. When disabled, returns <paramref name="baseP"/> and leaves
-        /// direction unchanged. Allocation-free (stack spans); safe on the native detour thread.</summary>
-        public static RagdollParams Perturb(RagdollParams baseP, uint objId, ref float direction) {
+        /// <summary>Base pre-lean toward the fall heading, in radians, at full strength. The registry
+        /// rotates the death pose this far about the foot pivot so gravity COMMITS the body to the
+        /// sampled heading (see <see cref="RagdollSim.ApplyDeathLean"/>) — the lever that turns the
+        /// already-even azimuth into an even spread of prone / supine / on-side landings instead of the
+        /// front-heavy face-plant every body defaulted to. ~26° at full strength; scaled by
+        /// <see cref="Strength"/> and dithered per-death. Tune here if falls under/over-commit.</summary>
+        private const float LeanBase = 0.46f;
+
+        /// <summary>Return this death's varied parameters, set <paramref name="direction"/> to the
+        /// per-death topple azimuth, and output <paramref name="leanRad"/> — the pre-lean the caller
+        /// applies to the death pose so the body actually falls along <paramref name="direction"/>
+        /// (prone/supine/side variety) rather than always face-planting. When disabled, returns
+        /// <paramref name="baseP"/>, leaves direction unchanged, and outputs leanRad=0 (bit-identical
+        /// default). Allocation-free (stack spans); safe on the native detour thread.</summary>
+        public static RagdollParams Perturb(RagdollParams baseP, uint objId, ref float direction, out float leanRad) {
+            leanRad = 0f;
             if (!Enabled) return baseP;
 
             int K = DeathVarietyModel.K, P = DeathVarietyModel.P;
@@ -81,6 +93,13 @@ namespace AcmeRagdoll.Sim {
 
             // Killing-blow azimuth from a 5th low-discrepancy dimension (0..2pi).
             direction = (float)(2.0 * Math.PI * Frac(0.5 + n * Alpha5));
+
+            // Pre-lean magnitude: commit the fall to that azimuth. Scaled by strength, dithered per body
+            // (0.75..1.25x) so successive corpses don't topple in lockstep. This is what breaks the
+            // face-plant monotony — a decisive lean past the foot pivot lets gravity carry the body to
+            // whichever heading was sampled.
+            leanRad = LeanBase * strength * (0.75f + 0.5f * Hash01(objId, 0x51EAu));
+
             return RagdollParams.FromVarietyVector(p, baseP.DirBiasDeg);
         }
 
