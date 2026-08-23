@@ -32,18 +32,22 @@ namespace AcmeLights.Lib {
         public uint DungeonAmbientColor = 0xFFFFFF; // dungeonambientcolor: hex RGB (retail white)
 
         // --- P3 quick win: light DAT objects that ship with setup lights but LIGHTS_ON unset ---
-        public float TorchLights = 0f;      // torchlights: 0 off | 1 light unlit setup-light objects
+        // Default ON since 2026-08-23: live-validated on the 1070 (lantern wcid 42227 lit, entered
+        // the dynamic pool). cfg `torchlights=0` is the escape hatch.
+        public float TorchLights = 1f;      // torchlights: 0 off | 1 light unlit setup-light objects
                                             //   | 2 DIAGNOSTIC: extinguish lit ones (proves the path)
 
         // --- P5 bloom (luminance post-process, via the SmartBox::m_renderingCallback slot) ---
-        // Default OFF: opt-in via lights.cfg until the D3D9 path is live-validated (a per-frame
-        // device call on a wrong vtable slot would crash the client). Flip to 1 in cfg to enable;
-        // it live-toggles (the heartbeat installs/clears the callback slot on the next frame).
-        public float Bloom = 0f;            // bloom: 0/1 master
-        public float BloomThreshold = 0.80f;// bloomthreshold: luminance knee center (0..2)
+        // Default ON since 2026-08-23 (owner verdict): the zero-detour callback-slot design is
+        // live-validated (dungeon torch bloom + Holtburg portal glow, UI unbloomed, teleport-stable),
+        // and the knob defaults below are the owner-proven night values. cfg `bloom=0` is the escape
+        // hatch and live-toggles (the heartbeat installs/clears the callback slot on the next frame).
+        // Daytime-outdoor tuning is still owed; adjust via cfg, not here, until eye-verified.
+        public float Bloom = 1f;            // bloom: 0/1 master
+        public float BloomThreshold = 0.55f;// bloomthreshold: luminance knee center (0..2)
         public float BloomKnee = 0.30f;     // bloomknee: soft-knee half-width
-        public float BloomIntensity = 1.0f; // bloomintensity: additive scale (0..4)
-        public float BloomRadius = 2f;      // bloomradius: separable blur H/V passes (1..4)
+        public float BloomIntensity = 2.0f; // bloomintensity: additive scale (0..4)
+        public float BloomRadius = 3f;      // bloomradius: separable blur H/V passes (1..4)
 
         // --- diagnostics / capture ---
         public float LogLights = 1f;      // loglights: 0/1 throttled enumeration log
