@@ -352,7 +352,12 @@ namespace AcmeLights.Services {
 
             bool landscapeVisible = LandscapeVisible(sb, viewerCell);
             float t = (float)_clock.Elapsed.TotalSeconds;
-            float gi = cfg.GlowIntensity, gf = cfg.GlowFalloffScale;
+            // SYSTEM-WIDE GAIN. `glowgain`/`glowrangegain` ride on top of the per-emitter knobs so
+            // every class — authored or synthesised, portal or wisp — moves together; the per-class
+            // trims below then shape the spread. See LightsConfig for the intensity-vs-range
+            // reasoning (Range = falloff*1.5 is a HARD clip; atten = 1/d; the near field saturates).
+            float gi = cfg.GlowIntensity * cfg.GlowGain;
+            float gf = cfg.GlowFalloffScale * cfg.GlowRangeGain;
             int cap = (int)cfg.GlowMax;
             if (cap < 1) cap = 1; else if (cap > MaxTracked) cap = MaxTracked;
             int injected = 0;
@@ -388,7 +393,7 @@ namespace AcmeLights.Services {
                     inten *= 1f + cfg.GlowPulse * MathF.Sin(a);
                 }
 
-                Emit(_tracked[i].Color, inten, _tracked[i].Fall * gf,
+                Emit(_tracked[i].Color, inten, _tracked[i].Fall * gf * KindRange(cfg, kind),
                      _tracked[i].Ox, _tracked[i].Oy, _tracked[i].Oz,
                      cell, (Frame*)(o + ObjPosFrame));
                 injected++;
@@ -501,11 +506,26 @@ namespace AcmeLights.Services {
             _nImpacts = w;
         }
 
+        /// <summary>Per-class INTENSITY trim (multiplied by the global `glowgain`). Intensity is the
+        /// secondary lever: D3D's atten is 1/d with Diffuse = colour*intensity, so at the retail
+        /// idiom (i≈100) everything inside a few metres is already past 1.0 and clamps — a gain here
+        /// only shows on grazing-angle (small N·L) and far surfaces. Colours are never touched.</summary>
         private static float KindBoost(LightsConfig cfg, byte kind) => kind switch {
             KPortal => cfg.GlowPortalBoost,
             KProjectile => cfg.GlowProjectileBoost,
-            KLifestone => cfg.GlowPortalBoost,   // same "world fixture" idiom as a portal
-            _ => 1f,
+            KLifestone => cfg.GlowLifestoneBoost,  // its own knob since 2026-08-23 (was glowportalboost)
+            _ => cfg.GlowCreatureBoost,            // wisps/elementals + STATIC_PS props ride this
+        };
+
+        /// <summary>Per-class FALLOFF trim (multiplied by the global `glowrangegain`). This is the
+        /// PRIMARY lever: config_hardware_light writes `Range = falloff * rangeAdjust(1.5)` and D3D
+        /// contributes exactly nothing past Range, so falloff sets how far the tint reaches — which
+        /// is what "noticeable at conversational distance" actually means.</summary>
+        private static float KindRange(LightsConfig cfg, byte kind) => kind switch {
+            KPortal => cfg.GlowPortalRange,
+            KProjectile => cfg.GlowProjectileRange,
+            KLifestone => cfg.GlowLifestoneRange,
+            _ => cfg.GlowCreatureRange,
         };
 
         // ══════════════════════════════════════════════════════════════════════════════════════
@@ -696,11 +716,21 @@ namespace AcmeLights.Services {
                     playerOrg != null ? playerOrg[0] : float.NaN,
                     playerOrg != null ? playerOrg[1] : float.NaN,
                     playerOrg != null ? playerOrg[2] : float.NaN);
-                for (int i = 0; i < _nTracked && i < 6; i++)
+                for (int i = 0; i < _nTracked && i < 6; i++) {
+                    // i=/f= are the SOURCE values (DAT-authored or synthesised); effi=/efff= are what
+                    // is actually emitted after glowgain/glowrangegain and the per-class trims, and
+                    // reach= is the D3D cutoff (Range = falloff * rangeAdjust 1.5) — the number that
+                    // answers "will this tint the ground where I'm standing?".
+                    byte k = _tracked[i].Kind;
+                    float effI = _tracked[i].Inten * cfg.GlowIntensity * cfg.GlowGain * KindBoost(cfg, k);
+                    float effF = _tracked[i].Fall * cfg.GlowFalloffScale * cfg.GlowRangeGain * KindRange(cfg, k);
                     log?.LogInformation(
-                        "acmelights: glowlights id=0x{Id:X8} wcid={W} class={K} color=0x{C:X6} i={I:F0} f={F:F1} dist={D:F1}",
-                        _tracked[i].Id, _tracked[i].Wcid, KindName(_tracked[i].Kind), _tracked[i].Color,
-                        _tracked[i].Inten, _tracked[i].Fall, MathF.Sqrt(_tracked[i].DistSq));
+                        "acmelights: glowlights id=0x{Id:X8} wcid={W} class={K} color=0x{C:X6} i={I:F0} f={F:F1} " +
+                        "effi={EI:F0} efff={EF:F1} reach={R:F1}m dist={D:F1}",
+                        _tracked[i].Id, _tracked[i].Wcid, KindName(k), _tracked[i].Color,
+                        _tracked[i].Inten, _tracked[i].Fall, effI, effF, effF * 1.5f,
+                        MathF.Sqrt(_tracked[i].DistSq));
+                }
                 for (int i = 0; i < _nRejects; i++)
                     log?.LogInformation(
                         "acmelights: glowlights REJECT {R} id=0x{Id:X8} wcid={W} setup=0x{S:X8} lum={L:F2} frac={FR:F2} dist={D:F1}",

@@ -199,12 +199,17 @@ namespace AcmeLights.Services {
             _log.LogInformation(
                 "acmelights: frame#{F} static={S}/{MS} dynamic={D}/{MD} ambient=({R:F2},{G:F2},{B:F2}) " +
                 "headlamp={HL:F2} flicker={FK} indoorSun={SUN} sel={SEL} seldraws={SD} " +
-                "selcand={SC} selpick={SP}/{SB} selbail={SX}",
+                "selcand={SC} selpick={SP}/{SB} selbail={SX} amb={AMB:F2} day={DAY:F2}",
                 _frame, wl->num_static_lights, *Render.max_static_lights,
                 wl->num_dynamic_lights, *Render.max_dynamic_lights,
                 amb.r, amb.g, amb.b, *SmartBox.s_fViewerLightIntensity,
                 _cfg.Flicker > 0.5f ? 1 : 0, *Render.useSunlight,
-                _cfg.Selection > 0.5f ? 1 : 0, selDraws, selCand, selPick, selBudget, selBail);
+                _cfg.Selection > 0.5f ? 1 : 0, selDraws, selCand, selPick, selBudget, selBail,
+                // amb = the raw SetWorldAmbientLight intensity (0.2 in a dungeon and at outdoor
+                // midnight; the region's SkyTimeOfDay curve by day). READ THIS AT NOON to set
+                // `bloomdayamb` — the noon value is region DATA, not a constant we can derive.
+                // day = the smoothed 0..1 factor the bloom pass blends its knobs with.
+                SkyState.Ambient, SkyState.Day);
         }
     }
 }

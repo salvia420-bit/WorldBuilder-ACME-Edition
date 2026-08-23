@@ -205,6 +205,13 @@ namespace AcmeLights.Services {
             // enclosed cells. Swap in the cfg values before the original runs so downstream state
             // (game_ambient_level/color) is consistent too.
             var cfg = _cfg;
+            // THE DAY/NIGHT SIGNAL. Record the CLIENT'S OWN ambient intensity before the optional
+            // dungeonambient override rewrites it: outdoors this argument is
+            // |LScape::sunlight|*0.2 + LScape::ambient_level, i.e. the region's interpolated
+            // SkyTimeOfDay curve (acclient.c:307003/301485); indoors it is the flat 0.2 floor.
+            // Lib/SkyState turns it into the 0..1 factor the bloom pass blends with. Cheap, no
+            // allocation, and it cannot throw (a bad float is filtered inside NoteAmbient).
+            SkyState.NoteAmbient(intensity);
             if (cfg != null && cfg.DungeonAmbient >= 0f &&
                 MathF.Abs(intensity - 0.2f) < 1e-4f && color == 0xFFFFFFFF) {
                 intensity = cfg.DungeonAmbient;

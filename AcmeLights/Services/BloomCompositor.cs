@@ -221,18 +221,28 @@ namespace AcmeLights.Services {
                 if (trace) Trace($"StretchRect hr={srHr}");
                 if (srHr < 0) return;
 
+                // DAY/NIGHT BLEND (2026-08-23). SkyState.Day is 0 in a dungeon and at outdoor
+                // midnight — both are pinned to the client's LSCAPE_LIGHT_MINIMUM 0.2 ambient — so
+                // at night and indoors these three resolve EXACTLY to the owner-proven night knobs
+                // and the frame is unchanged. Only a brightening sky moves them (see Lib/SkyState).
+                float bThreshold = SkyState.Blend(_cfg.BloomThreshold, _cfg.BloomDayThreshold);
+                float bIntensity = SkyState.Blend(_cfg.BloomIntensity, _cfg.BloomDayIntensity);
+                float bRadius = SkyState.Blend(_cfg.BloomRadius, _cfg.BloomDayRadius);
+
                 // (1) bright-pass: sceneTex -> brightTex (half-res) -- RT already bound above.
                 if (trace) Trace("bright pass");
                 dev.SetRenderState(D3D9.Rs.AlphaBlendEnable, 0);
                 dev.SetPixelShader(_psBright);
                 float knee = Math.Max(1e-4f, _cfg.BloomKnee);
-                SetPsConst(dev, 0, _cfg.BloomThreshold, knee, 1.0f, 0f);
+                SetPsConst(dev, 0, bThreshold, knee, 1.0f, 0f);
                 SetPsConst(dev, 1, 1f / _fullW, 1f / _fullH, 0f, 0f);
                 dev.SetTexture(0, _sceneTex);
                 DrawQuad(dev, 0, 0, _halfW, _halfH);
 
                 // (2..) separable blur, ping-pong bright<->blur, radiusPasses times.
-                int passes = Math.Clamp((int)_cfg.BloomRadius, 1, 4);
+                // Pass count is discrete, so round the blend rather than truncating it (truncation
+                // would sit on the night value for most of the ramp).
+                int passes = Math.Clamp((int)MathF.Round(bRadius), 1, 4);
                 for (int p = 0; p < passes; p++) {
                     // H: brightTex -> blurTex
                     dev.SetRenderTarget(0, _blurSurf);
@@ -257,7 +267,7 @@ namespace AcmeLights.Services {
                 dev.SetRenderState(D3D9.Rs.SrcBlend, (uint)D3D9.Blend.One);
                 dev.SetRenderState(D3D9.Rs.DestBlend, (uint)D3D9.Blend.One);
                 dev.SetPixelShader(_psComposite);
-                SetPsConst(dev, 0, _cfg.BloomIntensity, 0f, 0f, 0f);
+                SetPsConst(dev, 0, bIntensity, 0f, 0f, 0f);
                 dev.SetTexture(0, _brightTex);
                 DrawQuad(dev, vp.X, vp.Y, vp.X + vp.W, vp.Y + vp.H);
 

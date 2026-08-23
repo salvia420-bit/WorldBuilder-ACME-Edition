@@ -74,6 +74,10 @@ namespace AcmeLights {
             // creates the device pixel-shader objects from this cached bytecode.
             _bloom.PrecompileShaders();
             RenderCallback.Configure(_bloom, _cfg, _log);
+            // Day/night bloom scaling: pre-JIT the tiny SkyState helpers here — they are reached
+            // from the SetWorldAmbientLight detour and the rendering-callback slot, both native
+            // threads (0x80131509 discipline).
+            SkyState.Warmup(_cfg);
             // P3 glow lights: allocate the unmanaged LIGHTINFO/Frame scratch, resolve
             // CObjectMaint::GetObjectA + CEnvCell::GetVisible, and pre-JIT EVERY GlowLights method
             // here on the managed thread — the set_viewer detour calls straight into them on the
