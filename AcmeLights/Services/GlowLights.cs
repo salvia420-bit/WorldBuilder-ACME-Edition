@@ -639,6 +639,10 @@ namespace AcmeLights.Services {
         private static void EnableDynamicsForSunlitPass(LightsConfig cfg) {
             // Only act in sunlight mode — that is precisely the broken case, and it keeps us out of
             // the way if this ever runs in a context where retail already chose the active set.
+            // Every executed pass reports its own truth: a decline must not leave the previous
+            // pass's count standing in the heartbeat, or the live test reads a stale PASS.
+            _lastOutdoorEnabled = 0;
+
             int* sun = Render.useSunlight;
             if (sun == null || *sun == 0) { _outdoorDeclines++; return; }
 
@@ -667,9 +671,9 @@ namespace AcmeLights.Services {
                 added++;
             }
 
+            _lastOutdoorEnabled = added;
             if (added == 0) { _outdoorDeclines++; return; }
             _pEnableActiveLights();
-            _lastOutdoorEnabled = added;
             _outdoorFrames++;
         }
 
