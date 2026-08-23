@@ -199,6 +199,15 @@ namespace AcmeLights.Services {
         private static int _nImpacts;
         private static readonly Verdict[] _v = new Verdict[VCap];
 
+        /// <summary>Diagnostic ring for classifier misses — the 2026-08-23 live session had to
+        /// bisect a silent range defect from a tracked-only log, which was expensive.</summary>
+        private struct Reject {
+            public byte Why; public uint Id, Wcid, Did; public float Lum, Frac, Dist;
+        }
+        private const int MaxRejects = 8;
+        private static readonly Reject[] _rejects = new Reject[MaxRejects];
+        private static int _nRejects;
+
         /// <summary>Per-school colour for war-spell projectile setups whose AUTHORED light is a
         /// featureless white — the DAT only bothered to colour Acid and Lightning. Every value is
         /// grounded in the DATs (see docs/lights-port/P3-GLOWLIGHTS-2026-08-23.md §4). The generic
@@ -234,12 +243,14 @@ namespace AcmeLights.Services {
         // Resolved client entry points (managed-thread resolution; VA fallback like the hooks).
         private static nint _pGetObjectA;   // CObjectMaint::GetObjectA(uint) -> CPhysicsObj*  (thiscall)
         private static nint _pGetVisible;   // CEnvCell::GetVisible(uint) -> CEnvCell*         (cdecl)
+        private static nint _pToPlayerSpace;// SmartBox::convert_to_player_space(obj, &vec)->int (thiscall)
 
         // Unmanaged scratch: the LIGHTINFO handed to add_dynamic_light (Render::insert_light COPIES
         // it — Frame::combine + field copies — so one reused buffer is correct), plus a Frame used
         // as the world anchor for impact flashes (live objects donate their own m_position.frame).
         private static LIGHTINFO* _li;
         private static Frame* _impFrame;
+        private static float* _vec3;        // out-param scratch for convert_to_player_space
 
         private static int _litFrames, _lastInjected;
 
@@ -269,11 +280,15 @@ namespace AcmeLights.Services {
                 ClientFunctions.GetObjectA_Sig, ClientFunctions.GetObjectA_VA);
             _pGetVisible = AddressResolver.Resolve("CEnvCell::GetVisible",
                 ClientFunctions.GetVisible_Sig, ClientFunctions.GetVisible_VA);
+            _pToPlayerSpace = AddressResolver.Resolve("SmartBox::convert_to_player_space",
+                ClientFunctions.ConvertToPlayerSpace_Sig, ClientFunctions.ConvertToPlayerSpace_VA);
+            if (_vec3 == null) _vec3 = (float*)NativeMemory.AllocZeroed(12);
 
             // Touch the arrays so their storage is committed before any detour runs.
             for (int i = 0; i < VCap; i++) _v[i] = default;
             for (int i = 0; i < MaxTracked; i++) _tracked[i] = default;
             for (int i = 0; i < MaxImpacts; i++) _impacts[i] = default;
+            for (int i = 0; i < MaxRejects; i++) _rejects[i] = default;
 
             foreach (var m in typeof(GlowLights).GetMethods(
                          System.Reflection.BindingFlags.Static |
@@ -290,14 +305,16 @@ namespace AcmeLights.Services {
             }
             catch { }
 
-            log.LogInformation("acmelights: glowlights warm (GetObjectA=0x{A:X8} GetVisible=0x{B:X8})",
-                (long)_pGetObjectA, (long)_pGetVisible);
+            log.LogInformation(
+                "acmelights: glowlights warm (GetObjectA=0x{A:X8} GetVisible=0x{B:X8} toPlayerSpace=0x{C:X8})",
+                (long)_pGetObjectA, (long)_pGetVisible, (long)_pToPlayerSpace);
         }
 
         public static void Dispose() {
             _nTracked = 0; _nImpacts = 0;
             if (_li != null) { NativeMemory.Free(_li); _li = null; }
             if (_impFrame != null) { NativeMemory.Free(_impFrame); _impFrame = null; }
+            if (_vec3 != null) { NativeMemory.Free(_vec3); _vec3 = null; }
             _cfg = null;
         }
 
@@ -521,7 +538,11 @@ namespace AcmeLights.Services {
 
             int prevCount = _nTracked;
             _nTracked = 0;
-            int seen = 0, cand = 0;
+            int seen = 0, cand = 0, classed = 0, verdictFail = 0, rangeFail = 0;
+            // Gather reject diagnostics only when a log burst could plausibly follow — the emit
+            // condition below is stricter, and an unused gather costs 8 struct writes.
+            bool gather = cfg.GlowLog > 0.5f && now - _lastLog >= Stopwatch.Frequency;
+            _nRejects = 0;
 
             for (uint b = 0; b < tableSize; b++) {
                 for (byte* o = buckets[b]; o != null && seen < 100_000; o = *(byte**)(o + ObjHashNext)) {
@@ -531,7 +552,8 @@ namespace AcmeLights.Services {
 
                     uint state = *(uint*)(o + ObjState);
                     if ((state & (StNoDraw | StHidden | StCloaked)) != 0) continue;
-                    if ((state & StStatic) != 0 && !wantStatics) continue;
+                    // (STATIC_PS is NOT fast-rejected here: the class gate below decides, so a
+                    // hypothetical static portal or missile is still classified on its own terms.)
 
                     uint cell = *(uint*)(o + ObjPosCellId);
                     if (cell == 0) continue;
@@ -551,23 +573,26 @@ namespace AcmeLights.Services {
                     if (setupLit && (state & StLightsOn) != 0 && (cell & 0xFFFF) >= 0x100) continue;
 
                     bool isMissile = (state & StMissile) != 0;
+                    bool isStatic = (state & StStatic) != 0;
                     uint itemType = InqItemType(o);
                     bool isPortal = itemType == TypePortal;
                     bool isCreature = itemType == TypeCreature;
 
+                    // 2026-08-23 FIXUP: statics get their own branch. `glowstatics=1` used to be
+                    // necessary-but-not-sufficient — a lamppost is TYPE_MISC, so it also needed
+                    // glowcreatures=2, which is why glowstatics=1 alone changed nothing live.
                     byte kind;
                     if (isMissile) { if (!wantProjectiles) continue; kind = KProjectile; }
                     else if (isPortal) { if (!wantPortals) continue; kind = KPortal; }
-                    else {
-                        if (!wantCreatures) continue;
-                        if (!isCreature && !wantProps) continue;
-                        kind = KCreature;
-                    }
+                    else if (isStatic) { if (!wantStatics) continue; kind = KCreature; }
+                    else if (isCreature) { if (!wantCreatures) continue; kind = KCreature; }
+                    else { if (!wantCreatures || !wantProps) continue; kind = KCreature; }
 
                     uint did = *(uint*)(setup + SetupDid);
                     if (did == 0) continue;
                     int slot = VerdictFor(did, setup, pa);
                     if (slot < 0) continue;
+                    classed++;
 
                     uint color; float inten, fall, ox, oy, oz;
                     if (_v[slot].Authored != 0) {
@@ -579,7 +604,11 @@ namespace AcmeLights.Services {
                     else {
                         // No authored light: only a genuinely luminous BODY qualifies (peak AND
                         // area fraction — see the classification note in the class remarks).
-                        if (_v[slot].Lum < cfg.GlowLum || _v[slot].Frac < cfg.GlowLumFrac) continue;
+                        if (_v[slot].Lum < cfg.GlowLum || _v[slot].Frac < cfg.GlowLumFrac) {
+                            verdictFail++;
+                            if (gather) PushReject(RjLum, id, InqWcid(o), did, _v[slot].Lum, _v[slot].Frac, 0f);
+                            continue;
+                        }
                         color = _v[slot].DColor;
                         inten = cfg.GlowSynthIntensity;
                         fall = cfg.GlowSynthFalloff;
@@ -589,8 +618,14 @@ namespace AcmeLights.Services {
                     if (inten <= 0f || fall <= 0f) continue;
 
                     cand++;
-                    float distSq = DistSq(playerCell, playerOrg, cell, (float*)(o + ObjOrigin));
-                    if (maxDistSq > 0f && distSq > maxDistSq) continue;
+                    float distSq = DistSqToPlayer(sb, o, playerCell, playerOrg, cell,
+                                                  (float*)(o + ObjOrigin));
+                    if (maxDistSq > 0f && distSq > maxDistSq) {
+                        rangeFail++;
+                        if (gather) PushReject(RjRange, id, InqWcid(o), did,
+                                               _v[slot].Lum, _v[slot].Frac, MathF.Sqrt(distSq));
+                        continue;
+                    }
 
                     Insert(id, InqWcid(o), kind, color, inten, fall, ox, oy, oz,
                            distSq, cell, (float*)(o + ObjOrigin));
@@ -600,15 +635,44 @@ namespace AcmeLights.Services {
             if (cfg.GlowLog > 0.5f && (now - _lastLog >= Stopwatch.Frequency * 10 ||
                                        (_nTracked != prevCount && now - _lastLog >= Stopwatch.Frequency))) {
                 _lastLog = now;
+                // The player origin is in the heartbeat because the 2026-08-23 range defect was a
+                // bad distance REFERENCE POINT, and the tracked-only log made that expensive to
+                // localize: if playerOrg reads (0,0,0) here, distances are from the block corner.
                 log?.LogInformation(
-                    "acmelights: glowlights scan {S} objs, {C} candidates, tracking {T} (inject {I}/frame, {F} lit frames), impacts {M}",
-                    seen, cand, _nTracked, _lastInjected, _litFrames, _nImpacts);
+                    "acmelights: glowlights scan {S} objs -> {CL} classed, {VF} lum/frac-reject, {RF} range-reject, {C} candidates, tracking {T} " +
+                    "(inject {I}/frame, {F} lit frames, impacts {M}) player cell=0x{PC:X8} org=({PX:F1},{PY:F1},{PZ:F1})",
+                    seen, classed, verdictFail, rangeFail, cand, _nTracked, _lastInjected, _litFrames, _nImpacts,
+                    playerCell,
+                    playerOrg != null ? playerOrg[0] : float.NaN,
+                    playerOrg != null ? playerOrg[1] : float.NaN,
+                    playerOrg != null ? playerOrg[2] : float.NaN);
                 for (int i = 0; i < _nTracked && i < 6; i++)
                     log?.LogInformation(
                         "acmelights: glowlights id=0x{Id:X8} wcid={W} class={K} color=0x{C:X6} i={I:F0} f={F:F1} dist={D:F1}",
                         _tracked[i].Id, _tracked[i].Wcid, KindName(_tracked[i].Kind), _tracked[i].Color,
                         _tracked[i].Inten, _tracked[i].Fall, MathF.Sqrt(_tracked[i].DistSq));
+                for (int i = 0; i < _nRejects; i++)
+                    log?.LogInformation(
+                        "acmelights: glowlights REJECT {R} id=0x{Id:X8} wcid={W} setup=0x{S:X8} lum={L:F2} frac={FR:F2} dist={D:F1}",
+                        _rejects[i].Why == RjLum ? "lum/frac" : "range",
+                        _rejects[i].Id, _rejects[i].Wcid, _rejects[i].Did,
+                        _rejects[i].Lum, _rejects[i].Frac, _rejects[i].Dist);
             }
+        }
+
+        private const byte RjLum = 1, RjRange = 2;
+
+        private static void PushReject(byte why, uint id, uint wcid, uint did,
+                                       float lum, float frac, float dist) {
+            if (_nRejects >= MaxRejects) return;
+            _rejects[_nRejects].Why = why;
+            _rejects[_nRejects].Id = id;
+            _rejects[_nRejects].Wcid = wcid;
+            _rejects[_nRejects].Did = did;
+            _rejects[_nRejects].Lum = lum;
+            _rejects[_nRejects].Frac = frac;
+            _rejects[_nRejects].Dist = dist;
+            _nRejects++;
         }
 
         private static string KindName(byte k) =>
@@ -644,10 +708,47 @@ namespace AcmeLights.Services {
             return (h & 0xFFFFFF) / (float)0x1000000;
         }
 
-        /// <summary>Distance² between two cells' frame origins, using retail's own cross-landblock
-        /// rebase (LandDefs::get_block_offset — zero within a landblock, 192 units per block step,
-        /// acclient.c:123110). Ordering only; never used for containment.</summary>
-        private static float DistSq(uint cellA, float* a, uint cellB, float* b) {
+        /// <summary>Distance² from the player to an object, via the CLIENT'S OWN
+        /// SmartBox::convert_to_player_space @0x00452DE0 → Position::localtolocal. It guards
+        /// player/object/object->cell itself and handles cross-cell and cross-landblock correctly.
+        ///
+        /// 2026-08-23 FIXUP: this used to be hand-rolled arithmetic over m_position.frame.m_fOrigin
+        /// plus a landblock rebase. Live at Holtburg it reported dist=86.3 for a portal ~10-15 m
+        /// away — 86.3 ≈ |player in-block coords (84.5, 12)| — i.e. one of the two origins was
+        /// reading zero, so every distance was measured from the landblock corner and the default
+        /// glowrange=45 rejected every candidate (tracking 0, inject 0).
+        ///
+        /// The offsets are NOT the bug as far as the PDB can tell: Position{BCLASS@0, objcell_id@4,
+        /// frame@8} (fieldlist 0x647d) and Frame{qw@0..qz@12, m_fl2gv@16, m_fOrigin@52} (0x6168)
+        /// give m_fOrigin = obj + 72 + 8 + 52 = obj + 132, exactly what ObjOrigin says — and the
+        /// SAME chain at ObjPosFrame (obj+80) is what Emit hands add_dynamic_light, which demonstrably
+        /// places the light correctly (550+ lit frames live). The remaining suspect is therefore the
+        /// *player pointer*, SmartBox::player @+248.
+        ///
+        /// So the fix routes around it entirely: convert_to_player_space takes the SmartBox and
+        /// resolves `this->player` ITSELF, so it does not depend on our SbPlayer offset at all. The
+        /// arithmetic survives only as a fallback for when the native call declines (no player, or
+        /// object->cell null), and the scan heartbeat now prints the player cell+origin so one live
+        /// line says whether SbPlayer reads sane values.
+        ///
+        /// Ordering/range only; never used for containment.</summary>
+        private static float DistSqToPlayer(byte* sb, byte* o, uint playerCell, float* playerOrg,
+                                            uint cell, float* org) {
+            if (_pToPlayerSpace != 0 && _vec3 != null) {
+                _vec3[0] = 0f; _vec3[1] = 0f; _vec3[2] = 0f;
+                int ok = ((delegate* unmanaged[Thiscall]<nint, nint, float*, int>)_pToPlayerSpace)
+                             ((nint)sb, (nint)o, _vec3);
+                if (ok != 0) {
+                    float x = _vec3[0], y = _vec3[1], z = _vec3[2];
+                    if (IsFinite(x) && IsFinite(y) && IsFinite(z)) return x * x + y * y + z * z;
+                }
+            }
+            return DistSqFallback(playerCell, playerOrg, cell, org);
+        }
+
+        /// <summary>Geometric fallback: LandDefs::get_block_offset semantics (zero within a
+        /// landblock, 192 units per block step — acclient.c:123110).</summary>
+        private static float DistSqFallback(uint cellA, float* a, uint cellB, float* b) {
             if (a == null || b == null || cellA == 0 || cellB == 0) return 0f;
             float ox = 0f, oy = 0f;
             if ((cellA >> 16) != (cellB >> 16)) {
@@ -779,7 +880,17 @@ namespace AcmeLights.Services {
                     total++;
                     uint type = *(uint*)(sf + SfType);
                     float lum = *(float*)(sf + SfLuminosity);
-                    if (!(lum > 0f) || (type & (SfLuminous | SfAdditive)) == 0) continue;
+                    // 2026-08-23 FIXUP: `luminosity > 0` ALONE is the test. This used to also
+                    // require SurfaceType LUMINOUS(0x40)|ADDITIVE(0x10000), which was wrong twice
+                    // over: (a) D3DPolyRender::SetSurface (acclient.c:454452) reads
+                    // `surface->luminosity` into Render::luminosity UNCONDITIONALLY, with no type
+                    // test, and CSurface::InitEnd (:358128) never ORs those bits in — the runtime
+                    // `type` is verbatim the DAT value; (b) the false-positive statistics this
+                    // classifier is tuned against were measured from luminosity values alone, so
+                    // the extra gate was never accounted for. It rejected the Ethereal Wisp
+                    // (wcid 1535 → setup 0x0200059A → GfxObj 0x0100193F → Surface 0x080003E4:
+                    // type = Base1ClipMap (0x4) ONLY, luminosity 1.0) and every other clipmap glow.
+                    if (!(lum > 0f)) continue;
                     lit++;
                     if (lum > v.Lum) v.Lum = lum;
                     uint rgb = SurfaceColor(sf, type);

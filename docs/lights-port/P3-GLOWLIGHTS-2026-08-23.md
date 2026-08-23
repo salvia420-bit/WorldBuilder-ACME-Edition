@@ -245,6 +245,26 @@ GfxObj 0x01000ECB → Surface 0x08000102, lum 0; the coloured family → 0x08000
 luminosity-only classifier would have missed 100% of portals. This is why the authored path is
 primary.
 
+> **FIXUP 2026-08-23 (defect 2).** The luminous test is `luminosity > 0` **alone**. The first cut
+> also required `SurfaceType & (LUMINOUS 0x40 | ADDITIVE 0x10000)`, which was wrong twice over and
+> rejected the Ethereal Wisp live even at `glowcreatures=2, glowrange=0`:
+> * `D3DPolyRender::SetSurface` (acclient.c:454452) reads `surface->luminosity` into
+>   `Render::luminosity` **unconditionally** — no type test anywhere — and `CSurface::InitEnd`
+>   (:358128) never ORs those bits in, so the runtime `type` is verbatim the DAT value.
+> * The false-positive statistics in the table above were measured from **luminosity values alone**,
+>   so the extra gate was never part of what the thresholds were tuned against. Removing it makes
+>   the code match the numbers it was tuned to, rather than being quietly stricter than them.
+>
+> Evidence: wcid 1535 Ethereal Wisp → setup `0x0200059A` (`lights: {}`, 1 part) → GfxObj
+> `0x0100193F` → Surface `0x080003E4` = `{ type: Base1ClipMap (0x4) ONLY, luminosity: 1.0,
+> diffuse: 1.0, colorValue: null }`. Peak 1.0 ≥ 0.9 and fraction 1/1 ≥ 0.25, so it now classifies —
+> and so does every other clipmap glow, which is most of them. `BASE1_SOLID` is still consulted, but
+> only as a *colour* source; the wisp is textured (`0x050015D7`) so its colour comes from the
+> palette average, falling back to the `glow` class default `#D0E0FF` if the palette is unreadable.
+>
+> (Also from that session: wcid 42858 "Wisp" is a wall-banner housing item, not a creature — not a
+> tuning target.)
+
 A "glowing" verdict is required for **every** class, so a *destroyed* portal (setup `0x020019E4` —
 no authored light, no luminous surface) correctly stays dark.
 
@@ -260,6 +280,12 @@ no authored light, no luminous surface) correctly stays dark.
 `STATIC_PS` objects are excluded by default (`glowstatics=0`): outdoor lampposts hit the same
 retail gap, but a town has many and they would crowd the 10-slot pool. Knob provided; P4 owns
 per-draw ranking.
+
+> **FIXUP 2026-08-23.** `glowstatics=1` was necessary but *not sufficient* — a lamppost is
+> `TYPE_MISC`, not `TYPE_CREATURE`, so it also fell into the "prop" branch and silently needed
+> `glowcreatures=2` as well. That is why setting `glowstatics=1` live at Holtburg left candidates
+> at 1. Statics now have their own branch in the class gate and `glowstatics=1` alone is enough.
+> Still default off, and still unvalidated live.
 
 **Virindi are not caught** by either signal (setup `0x02000041`: 0/15 luminous surfaces, empty
 `lights`, no default script) — same for Shadows (`0x0200071B`), Undead/Lich (`0x02000197`) and
@@ -315,6 +341,11 @@ expose; it is an honest open item, not a bug to paper over.
 
   With `glowmax = 6` that is ≤ 18 native calls and zero allocation per frame.
 
+  Ranging is **not** on that path: `SmartBox::convert_to_player_space` @`0x00452DE0` (→
+  `Position::localtolocal`) runs once per *candidate* on the 4 Hz scan. It resolves `this->player`
+  itself, so the plugin does not hand-roll a landblock rebase and does not depend on its own
+  `SmartBox::player` offset for distances.
+
 **`Frame::cache` is called once, at warmup.** `Frame::cache` (acclient.c:356984) reads **only the
 quaternion** — it fills `m_fl2gv[9]` from `qw/qx/qy/qz` and never touches `m_fOrigin`. So one
 identity-quaternion `LIGHTINFO` whose `offset.m_fOrigin` is rewritten per emit is correct and
@@ -366,12 +397,26 @@ installed (so the knob live-toggles like `bloom`/`torchlights`) and forwards imm
 | `glowimpactfalloff` | 10 | |
 | `glowlog` | 1 | per-classification + 10 s heartbeat log |
 
-Log lines to audit against:
+Log lines to audit against (`glowlog=1`, throttled to ≥1 s, 10 s heartbeat):
 
 ```
-acmelights: glowlights scan 214 objs, 3 candidates, tracking 3 (inject 3/frame, 8210 lit frames), impacts 0
-acmelights: glowlights id=0x8000ABCD wcid=2358 class=portal color=0xC800C8 i=100 f=6.0 dist=7.4
+acmelights: glowlights scan 214 objs -> 7 classed, 3 lum/frac-reject, 1 range-reject, 4 candidates,
+            tracking 3 (inject 3/frame, 8210 lit frames, impacts 0)
+            player cell=0xA9B4001C org=(84.5,12.0,42.1)
+acmelights: glowlights id=0x7A9B4080 wcid=43065 class=portal color=0xC800C8 i=100 f=6.0 dist=7.4
+acmelights: glowlights REJECT lum/frac id=0x80001234 wcid=192 setup=0x020007DD lum=0.00 frac=0.00 dist=0.0
+acmelights: glowlights REJECT range   id=0x80005678 wcid=1535 setup=0x0200059A lum=1.00 frac=1.00 dist=61.3
 ```
+
+**`player org=` is the first thing to read.** If it prints `(0.0,0.0,0.0)` while you are plainly not
+at the landblock corner, `SmartBox::player` (+248) is not resolving and every fallback distance is
+measured from the corner — that is the 2026-08-23 defect-1 signature. Distances themselves now come
+from `SmartBox::convert_to_player_space`, which resolves `this->player` internally and is immune to
+that offset, so a bad `player org=` no longer breaks ranging — it just tells you the offset is wrong.
+
+The two `REJECT` lines are the classifier's confession: `lum/frac` means the setup has no authored
+light and failed the luminosity test (the numbers say by how much); `range` means it classified fine
+and only `glowrange` dropped it.
 
 ---
 
@@ -422,6 +467,12 @@ Then `glowportalcolor=8060FF` → all three go the owner's violet. Revert to `0`
 ```
 **Pass:** wisps/elemental appear in the log as `class=glow`; the three controls never do. If the
 Olthoi shows up, `glowlumfrac` is not being applied.
+
+**wcid 1535 is the defect-2 regression target** — it failed to classify on 2026-08-23 and must now
+appear. If it does not, read its `REJECT lum/frac` line: `lum=1.00 frac=1.00` means the thresholds
+are fine and something later dropped it; `lum=0.00` means the surface walk is not reaching
+`Surface 0x080003E4` (check `CPhysicsPart+196 surfaces` / `(*gfxobj)->num_surfaces`).
+Do **not** use wcid 42858 "Wisp" — it is a wall-banner housing item, not a creature.
 
 ### 7.4 Projectiles + impact flash
 
@@ -486,11 +537,32 @@ new detour and this is its stability gate.
 
 ---
 
+## 7b. Live session 2026-08-23 (buildbox, wine/DXVK, Holtburg outdoor) — what it found
+
+**Good:** the `set_viewer` POST-detour is **stable under wine/DXVK** — 550+ consecutive lit frames,
+no crash. The Holtburg portal classified exactly as designed: `id=0x7A9B4080 wcid=43065
+class=portal color=0xC800C8 i=100 f=6.0`, i.e. the authored-DAT path works end to end and the
+outdoor gap really is filled. That also proves `InqItemType`/`InqWcid` (the ACCWeenieObject
+`pwd._type`/`_wcid` reads at +208/+164 behind the `_phys_obj` guard) are correct, and that
+`Emit`'s world anchor (`obj+80`) places the light correctly.
+
+**Two defects, both fixed in the fixup commit:**
+
+1. **Distance reference point** — every distance was measured from the landblock corner, so the
+   default `glowrange=45` rejected every candidate (`tracking 0, inject 0`); `glowrange=0` made it
+   work. Fixed by replacing the hand-rolled rebase with `SmartBox::convert_to_player_space`
+   @`0x00452DE0` (§5), plus the `player org=` heartbeat field and the `REJECT range` line so the
+   same class of defect announces itself next time.
+2. **Ethereal Wisp (wcid 1535) never classified** — the surface type-bit gate (§3.2 fixup box).
+
+**Not a defect but a wart, also fixed:** `glowstatics=1` alone did nothing (§3.3 fixup box).
+
+---
+
 ## 8. Open risks / not done
 
-1. **The `set_viewer` detour is new.** It is the same thiscall shape as the proven
-   `SetWorldAmbientLight` detour (not the cdecl-with-byte `EndFrame` shape that destabilized the
-   client on 2026-08-22), but it has never run live. §7.7 is its gate.
+1. **The `set_viewer` detour is new.** ~~Never run live.~~ **Cleared 2026-08-23**: stable under
+   wine/DXVK for 550+ lit frames on the buildbox. Still owed a long-session dungeon soak (§7.7).
 2. **Defaults are DAT-authored, not eye-tuned.** Intensity 100 / falloff 6–8 is retail's own idiom
    and what a wall torch uses, so it should read correctly — but `glowintensity` /
    `glowfalloffscale` exist precisely because nobody has looked at it yet.

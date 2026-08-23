@@ -139,5 +139,14 @@ namespace AcmeLights.Lib {
         // ACBindings Dats/DBObjs/CEnvCell.cs 'GetVisible(uint) @0x0052E870'.
         public const nint GetVisible_VA = 0x0052E870;
         public const string? GetVisible_Sig = "PLACEHOLDER: prologue at 0x0052E870";
+
+        // SmartBox::convert_to_player_space(CPhysicsObj*, AC1Legacy::Vector3&) -> int (thiscall)
+        // The client's OWN player-relative vector: guards player/object/object->cell, then
+        // Position::localtolocal(&player->m_position, &result, &object->m_position, {0,0,0})
+        // (acclient.c:143995 region, body at :144045). Handles cross-cell and cross-landblock
+        // correctly, so GlowLights does not hand-roll the rebase. acclient.map RVA 0x00051DE0;
+        // ACBindings Game/SmartBox/SmartBox.cs 'convert_to_player_space @0x00452DE0'.
+        public const nint ConvertToPlayerSpace_VA = 0x00452DE0;
+        public const string? ConvertToPlayerSpace_Sig = "PLACEHOLDER: prologue at 0x00452DE0";
     }
 }
