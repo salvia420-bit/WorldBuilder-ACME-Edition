@@ -74,6 +74,11 @@ namespace AcmeLights {
             // creates the device pixel-shader objects from this cached bytecode.
             _bloom.PrecompileShaders();
             RenderCallback.Configure(_bloom, _cfg, _log);
+            // P3 glow lights: allocate the unmanaged LIGHTINFO/Frame scratch, resolve
+            // CObjectMaint::GetObjectA + CEnvCell::GetVisible, and pre-JIT EVERY GlowLights method
+            // here on the managed thread — the set_viewer detour calls straight into them on the
+            // native render thread, where a lazy JIT/assembly load throws 0x80131509.
+            GlowLights.Warmup(_cfg, _log);
             _dump = new DumpService(_log, _cfg);
             // P4: build + warm the selection engine on THIS (managed) thread before any detour can
             // reach it. Warmup() dry-runs the hot ranking loop and pre-JITs every method the native
@@ -101,13 +106,18 @@ namespace AcmeLights {
                 unsafe { _ = Render.world_lights; _ = SmartBox.s_fViewerLightIntensity; }
                 RuntimeHelpers.PrepareMethod(
                     typeof(LightManager).GetMethod("OnUpdateLights")!.MethodHandle);
+                // P3: the set_viewer detour builds a LIGHTINFO/Frame and calls Render.add_dynamic_light,
+                // so realise those ACBindings types here, off the native thread. (GlowLights.Warmup
+                // then PrepareMethods every GlowLights method, which JITs the call sites themselves.)
+                unsafe { _ = sizeof(LIGHTINFO); _ = sizeof(Frame); }
             }
             catch (Exception ex) { _log.LogWarning(ex, "acmelights: ACBindings warmup incomplete"); }
         }
 
         protected override void Dispose() {
             RenderCallback.Uninstall();   // clear the SmartBox slot before the compositor goes away
-            _hooks?.Dispose();            // disables the P4 detour before its buffers are freed
+            _hooks?.Dispose();            // detours off BEFORE P4/P3 free their unmanaged scratch
+            GlowLights.Dispose();
             _hooks = null;
             _selection?.Dispose();        // P4: frees the NativeMemory candidate block
             _selection = null;

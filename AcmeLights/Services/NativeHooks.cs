@@ -54,9 +54,18 @@ namespace AcmeLights.Services {
         private static LightSelection? _sel;
         // ====================== P4 LIGHT SELECTION — END =========================================
 
+        // ─── P3 glowlights: BEGIN (Services/GlowLights.cs owns the body) ─────────────────────
+        // void __thiscall SmartBox::set_viewer(SmartBox*, const Position*, int) @0x00452C80.
+        // The per-frame dynamic-light wipe+refill (acclient.c:143995). POST-detour appends the
+        // plugin's glow lights, so they live exactly one frame and re-add cleanly next frame.
+        [Function(CallingConventions.MicrosoftThiscall)]
+        private delegate void SetViewerFn(nint self, nint newViewer, int setSoughtPosition);
+        // ─── P3 glowlights: END ──────────────────────────────────────────────────────────────
+
         private static IHook<UpdateLightsFn>? _updateLights;
         private static IHook<SetAmbientFn>? _setAmbient;
         private static IHook<EndSceneFn>? _endScene;
+        private static IHook<SetViewerFn>? _setViewer;   // P3 glowlights
         private static LightManager? _mgr;
         private static DumpService? _dump;
         private static LightsConfig? _cfg;
@@ -112,7 +121,26 @@ namespace AcmeLights.Services {
                 }
             }
 
-            _installed = _updateLights != null || _setAmbient != null || _endScene != null;
+            // ─── P3 glowlights: BEGIN ────────────────────────────────────────────────────────
+            // Installed unconditionally so `glowlights` live-toggles like bloom/torchlights; the
+            // detour body returns immediately when the master knob is 0, so a disabled build is
+            // frame-identical to stock. Same thiscall shape as the proven SetWorldAmbientLight
+            // trampoline (NOT the cdecl(byte) EndFrame shape that destabilized the client).
+            nint svAddr = AddressResolver.Resolve("SmartBox::set_viewer",
+                ClientFunctions.SetViewer_Sig, ClientFunctions.SetViewer_VA);
+            try {
+                _setViewer = ReloadedHooks.Instance
+                    .CreateHook<SetViewerFn>(typeof(NativeHooks), nameof(SetViewerImpl), (long)svAddr)
+                    .Activate();
+                _ilog.LogInformation("acmelights: hook installed  SmartBox::set_viewer @ {A:X8}", (long)svAddr);
+            }
+            catch (Exception ex) {
+                _ilog.LogError(ex, "acmelights: hook FAILED  SmartBox::set_viewer @ {A:X8}", (long)svAddr);
+            }
+            // ─── P3 glowlights: END ──────────────────────────────────────────────────────────
+
+            _installed = _updateLights != null || _setAmbient != null || _endScene != null
+                         || _setViewer != null;
         }
 
         // ===================== P4 LIGHT SELECTION — BEGIN (LightSelection.cs) =====================
@@ -201,6 +229,17 @@ namespace AcmeLights.Services {
             catch (Exception ex) { LogSafe(ex, "SetAmbient"); }
         }
 
+        // ─── P3 glowlights: BEGIN ────────────────────────────────────────────────────────────
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+        private static void SetViewerImpl(nint self, nint newViewer, int setSoughtPosition) {
+            // Let the client wipe (num_dynamic_lights = 0), re-add viewer_light and refill from
+            // CObjCell::add_dynamic_lights() FIRST — then append ours to the same pool.
+            _setViewer!.OriginalFunction(self, newViewer, setSoughtPosition);
+            try { GlowLights.OnSetViewer(); }
+            catch (Exception ex) { LogSafe(ex, "SetViewer"); }
+        }
+        // ─── P3 glowlights: END ──────────────────────────────────────────────────────────────
+
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
         private static void EndSceneImpl(nint self) {
             _endScene!.OriginalFunction(self);   // let the client close the scene first
@@ -225,6 +264,7 @@ namespace AcmeLights.Services {
             try { _setAmbient?.Disable(); } catch { }
             try { _endScene?.Disable(); } catch { }
             try { _minObjLight?.Disable(); } catch { }   // P4 selection
+            try { _setViewer?.Disable(); } catch { }   // P3 glowlights
             _installed = false;
         }
     }

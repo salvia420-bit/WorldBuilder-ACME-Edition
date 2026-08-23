@@ -116,5 +116,28 @@ namespace AcmeLights.Lib {
         // ACBindings RenderDeviceD3D.cs EndScene @0x005A0E10.
         public const nint EndScene_VA = 0x005A0E10;
         public const string? EndScene_Sig = "PLACEHOLDER: prologue at 0x005A0E10";
+
+        // ─── P3 glow dynamic lights (Services/GlowLights.cs) ───────────────────────────────
+        // SmartBox::set_viewer(const Position&, int) (thiscall) -- the per-frame dynamic-light
+        // wipe+refill (acclient.c:143995: num_dynamic_lights = 0; add viewer_light;
+        // CObjCell::add_dynamic_lights()). POST-detour here appends the plugin's glow lights with
+        // exactly-one-frame lifetime. acclient.map RVA 0x00051C80 + 0x401000; ACBindings
+        // Game/SmartBox/SmartBox.cs 'set_viewer(Position*,int) @0x00452C80'.
+        public const nint SetViewer_VA = 0x00452C80;
+        public const string? SetViewer_Sig = "PLACEHOLDER: prologue at 0x00452C80";
+
+        // CObjectMaint::GetObjectA(unsigned int) -> CPhysicsObj* (thiscall) -- O(1) validated
+        // lookup in the live object hash; the per-frame liveness check that lets GlowLights track
+        // objects by ID instead of holding a pointer across frames. ACBindings CObjectMaint.cs.
+        public const nint GetObjectA_VA = 0x00508890;
+        public const string? GetObjectA_Sig = "PLACEHOLDER: prologue at 0x00508890";
+
+        // CEnvCell::GetVisible(unsigned int) -> CEnvCell* (CDECL) -- pure hash membership test on
+        // CEnvCell::visible_cell_table, the dungeon PVS. Side-effect free (unlike
+        // CEnvCell::add_visible_cell, which loads a cell, and CObjCell::GetVisible, which can
+        // allocate for outdoor ids). THE no-through-wall gate. acclient.map RVA 0x0012D870;
+        // ACBindings Dats/DBObjs/CEnvCell.cs 'GetVisible(uint) @0x0052E870'.
+        public const nint GetVisible_VA = 0x0052E870;
+        public const string? GetVisible_Sig = "PLACEHOLDER: prologue at 0x0052E870";
     }
 }

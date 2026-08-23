@@ -55,3 +55,34 @@ decomp citations and the live-validation script: `../docs/lights-port/P4-SELECTI
 cfg keys: `selection` (1), `selbudget` (8), `selhysteresis` (1.15), `selrange` (1.5),
 `selflicker` (1), `selcaps` (1). **`selection=0` restores retail exactly** — at startup the detour
 is never installed; live it chains straight to `OriginalFunction`.
+## P3 — glow dynamic lights (`Services/GlowLights.cs`, default ON)
+
+Portals, war-spell projectiles in flight, their impact flashes and glowing creatures cast real
+FF dynamic lights. Full design + the cell-scoping proof + the live-validation script:
+`../docs/lights-port/P3-GLOWLIGHTS-2026-08-23.md`.
+
+- **The gap** is not "retail never lights these" — portals and projectiles ship `LIGHTING_ON`
+  (0x800) on setups with an authored `lights` block. It is that the per-frame refill
+  (`CObjCell::add_dynamic_lights` → `CEnvCell::add_dynamic_lights`, acclient.c:349094) walks
+  `CEnvCell::visible_cell_table`, which holds **EnvCells only** — so **outdoors every object
+  dynamic light in the world is silently dropped**. P3 re-donates those, and synthesises one for
+  luminous objects that were never authored a light (the classic wisps).
+- **Classification** is memoised per `CSetup` DID: authored `CSetup::lights[0]` (colour/intensity/
+  falloff/offset straight from the DAT) first; else peak surface `Luminosity >= glowlum` (0.9)
+  **and** luminous-surface fraction `>= glowlumfrac` (0.25). The fraction test is load-bearing —
+  a bare `>0` fires on 19% of creature setups (glowing eyes), the pair on 5.9% and on none of ten
+  mundane controls.
+- **No through-wall bleed**: `add_dynamic_light`'s `cellId` provides ZERO containment (it only
+  feeds `LandDefs::get_block_offset` for the distance sort, and that reads only the landblock).
+  Retail's containment is the PVS donor set, so GlowLights applies the same rule with retail's own
+  test — indoor emitters must satisfy `CEnvCell::GetVisible(cellId) != 0`. `glowcontain=0` is the
+  A/B that reproduces the bleed on demand.
+- New hook: **SmartBox::set_viewer @0x00452C80 POST-detour** (`NativeHooks`, its own delimited
+  block) — runs after the client's dynamic wipe+refill, so injected lights live exactly one frame.
+  Per-frame cost is proportional to tracked emitters (usually under 10), not to all objects; the
+  4 Hz classify scan rides the existing `m_renderingCallback` slot.
+- Knobs: `glowlights` (master, 0 = frame bit-identical) · `glowportals` `glowprojectiles`
+  `glowcreatures` `glowstatics` · `glowintensity` `glowfalloffscale` `glowsynthintensity`
+  `glowsynthfalloff` `glowlift` `glowpulse` · `glowlum` `glowlumfrac` · `glowmax` `glowrange`
+  `glowscanhz` · **`glowcontain`** · `glowportalboost` `glowportalcolor` `glowprojectileboost`
+  `glowschool` · `glowimpactms` `glowimpactboost` `glowimpactfalloff` · `glowlog`.

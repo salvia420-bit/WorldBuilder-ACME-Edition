@@ -49,6 +49,56 @@ namespace AcmeLights.Lib {
         public float BloomIntensity = 2.0f; // bloomintensity: additive scale (0..4)
         public float BloomRadius = 3f;      // bloomradius: separable blur H/V passes (1..4)
 
+        // ─── P3 glow dynamic lights (Services/GlowLights.cs) ────────────────────────────────
+        // Portals, war-spell projectiles in flight, their impact flashes and glowing creatures get
+        // real FF dynamic lights, injected from the SmartBox::set_viewer post-hook. Ships DEFAULT
+        // ON (house rule: validated gates ship default-on); `glowlights=0` is the escape hatch and
+        // makes the detour forward immediately — no LIGHTINFO built, no add_dynamic_light call,
+        // frame bit-identical to stock. Intensity/falloff defaults are deliberately MODEST and are
+        // the owner's eye-pass to tune; every knob live-reloads at 1 Hz.
+        // Colour/intensity/falloff come from the DAT (CSetup::lights) wherever the setup authors a
+        // light — so the defaults below are MULTIPLIERS of 1.0 and the out-of-the-box look is
+        // retail-authored, not invented (portal 0x020001B3 => RGB(200,0,200) i100 f6).
+        public float GlowLights = 1f;         // glowlights: 0 off | 1 on (master)
+        public float GlowPortals = 1f;        // glowportals: 0/1 — ITEM_TYPE TYPE_PORTAL objects
+        public float GlowProjectiles = 1f;    // glowprojectiles: 0/1 — PhysicsState MISSILE_PS 0x40
+        public float GlowCreatures = 1f;      // glowcreatures: 0 off | 1 luminous creatures
+                                              //   | 2 ALSO luminous props (fragments, gems, braziers)
+        public float GlowStatics = 0f;        // glowstatics: 0/1 — also re-donate STATIC_PS world props
+                                              //   whose light the outdoor path drops (lampposts). Off by
+                                              //   default: a town has many and they'd crowd the pool.
+        public float GlowIntensity = 1f;      // glowintensity: MULTIPLIER on the emitted intensity
+        public float GlowFalloffScale = 1f;   // glowfalloffscale: MULTIPLIER on the emitted falloff
+        public float GlowSynthIntensity = 100f; // glowsynthintensity: absolute intensity for a luminous
+                                              //   object with NO authored light (DAT idiom: i100 f4)
+        public float GlowSynthFalloff = 4f;   // glowsynthfalloff: ditto falloff (D3D Range = this*1.5)
+        public float GlowLift = 0.6f;         // glowlift: local +Z offset for a SYNTHESISED light only
+                                              //   (authored lights carry their own DAT offset)
+        public float GlowPulse = 0.10f;       // glowpulse: portal/creature breathing amplitude (0 = steady)
+        public float GlowLum = 0.90f;         // glowlum: peak surface luminosity required with no authored
+                                              //   light. 0.9 + glowlumfrac 0.25 fires on 5.9% of creature
+                                              //   setups and none of ten mundane controls; a bare >0 fires
+                                              //   on 19% (glowing eyes and gems). See the P3 doc §3.
+        public float GlowLumFrac = 0.25f;     // glowlumfrac: min luminous fraction of the object's surfaces
+        public float GlowMax = 6f;            // glowmax: max glow lights injected per frame (pool is 10)
+        public float GlowRange = 45f;         // glowrange: metres from the player to bother tracking (0 = no cap)
+        public float GlowScanHz = 4f;         // glowscanhz: classify/track scan rate
+        public float GlowContain = 1f;        // glowcontain: 1 = NO THROUGH-WALL BLEED (retail's own PVS
+                                              //   rule: indoor emitter must be in CEnvCell::visible_cell_table).
+                                              //   0 = off — the A/B that makes the difference visible.
+        public float GlowPortalBoost = 1f;    // glowportalboost: intensity multiplier for portals
+        public uint GlowPortalColor = 0u;     // glowportalcolor: hex RGB override (0 = the DAT's authored
+                                              //   colour, which is per-portal: purple/red/green/blue/…).
+                                              //   Set 8060FF for the owner's reference violet.
+        public float GlowProjectileBoost = 1f;// glowprojectileboost
+        public float GlowSchool = 1f;         // glowschool: 0/1 — recolour war-spell projectiles whose
+                                              //   authored light is a featureless white, per the DAT-grounded
+                                              //   school table (fire orange, frost pale blue, …).
+        public float GlowImpactMs = 400f;     // glowimpactms: impact-flash duration (0 = no impact flashes)
+        public float GlowImpactBoost = 2f;    // glowimpactboost: peak multiplier of the projectile's intensity
+        public float GlowImpactFalloff = 10f; // glowimpactfalloff
+        public float GlowLog = 1f;            // glowlog: 0/1 per-classification + heartbeat log
+
         // --- diagnostics / capture ---
         public float LogLights = 1f;      // loglights: 0/1 throttled enumeration log
         public float Dump = 0f;           // dump: 1 = write framedump-N.bmp (backbuffer) 1/sec (EndScene readback)
@@ -141,6 +191,32 @@ namespace AcmeLights.Lib {
                 case "selrange": if (F(val, out var sr)) SelRange = Math.Clamp(sr, 0.5f, 4f); break;
                 case "selflicker": if (F(val, out var sf)) SelFlicker = Math.Clamp(sf, 0f, 1f); break;
                 case "selcaps": if (F(val, out var sc)) SelCaps = Math.Clamp(sc, 0f, 1f); break;
+                // --- P3 glow dynamic lights ---
+                case "glowlights": if (F(val, out var gl)) GlowLights = Math.Clamp(gl, 0f, 1f); break;
+                case "glowportals": if (F(val, out var gp)) GlowPortals = Math.Clamp(gp, 0f, 1f); break;
+                case "glowprojectiles": if (F(val, out var gj)) GlowProjectiles = Math.Clamp(gj, 0f, 1f); break;
+                case "glowcreatures": if (F(val, out var gc)) GlowCreatures = Math.Clamp(gc, 0f, 2f); break;
+                case "glowstatics": if (F(val, out var gs)) GlowStatics = Math.Clamp(gs, 0f, 1f); break;
+                case "glowintensity": if (F(val, out var gi)) GlowIntensity = Math.Clamp(gi, 0f, 20f); break;
+                case "glowfalloffscale": if (F(val, out var gf)) GlowFalloffScale = Math.Clamp(gf, 0.05f, 10f); break;
+                case "glowsynthintensity": if (F(val, out var gy)) GlowSynthIntensity = Math.Clamp(gy, 0f, 1000f); break;
+                case "glowsynthfalloff": if (F(val, out var gz)) GlowSynthFalloff = Math.Clamp(gz, 0f, 60f); break;
+                case "glowlift": if (F(val, out var gv)) GlowLift = Math.Clamp(gv, -4f, 8f); break;
+                case "glowpulse": if (F(val, out var gu)) GlowPulse = Math.Clamp(gu, 0f, 0.8f); break;
+                case "glowlum": if (F(val, out var gm)) GlowLum = Math.Clamp(gm, 0f, 4f); break;
+                case "glowlumfrac": if (F(val, out var gq)) GlowLumFrac = Math.Clamp(gq, 0f, 1f); break;
+                case "glowmax": if (F(val, out var gx)) GlowMax = Math.Clamp(gx, 1f, 24f); break;
+                case "glowrange": if (F(val, out var gr)) GlowRange = Math.Clamp(gr, 0f, 300f); break;
+                case "glowscanhz": if (F(val, out var gh)) GlowScanHz = Math.Clamp(gh, 0.25f, 30f); break;
+                case "glowcontain": if (F(val, out var gn)) GlowContain = Math.Clamp(gn, 0f, 1f); break;
+                case "glowportalboost": if (F(val, out var pb)) GlowPortalBoost = Math.Clamp(pb, 0f, 20f); break;
+                case "glowportalcolor": if (Hex(val, out var pc)) GlowPortalColor = pc & 0xFFFFFF; break;
+                case "glowprojectileboost": if (F(val, out var jb)) GlowProjectileBoost = Math.Clamp(jb, 0f, 20f); break;
+                case "glowschool": if (F(val, out var gw)) GlowSchool = Math.Clamp(gw, 0f, 1f); break;
+                case "glowimpactms": if (F(val, out var im)) GlowImpactMs = Math.Clamp(im, 0f, 5000f); break;
+                case "glowimpactboost": if (F(val, out var ib)) GlowImpactBoost = Math.Clamp(ib, 0f, 20f); break;
+                case "glowimpactfalloff": if (F(val, out var if_)) GlowImpactFalloff = Math.Clamp(if_, 0f, 60f); break;
+                case "glowlog": if (F(val, out var gg)) GlowLog = Math.Clamp(gg, 0f, 1f); break;
             }
         }
 
