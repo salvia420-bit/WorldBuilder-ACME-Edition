@@ -200,6 +200,21 @@ namespace AcmeRagdoll {
                     typeof(AcmeRagdoll.Sim.RagdollParams).TypeHandle);
                 System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(
                     typeof(AcmeRagdoll.Lib.RagdollProfiles).TypeHandle);
+                // The per-death variety sampler + its baked PCA model are reached from Seed on the native
+                // detour thread; build their static arrays here and run one real Perturb (with Enabled
+                // forced on so the whole math path - InvNorm, the basis loop, FromVarietyVector - JITs
+                // now, not lazily on the native thread).
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(
+                    typeof(AcmeRagdoll.Sim.DeathVarietyModel).TypeHandle);
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(
+                    typeof(AcmeRagdoll.Sim.DeathVariety).TypeHandle);
+                {
+                    bool wasOn = AcmeRagdoll.Sim.DeathVariety.Enabled;
+                    AcmeRagdoll.Sim.DeathVariety.Enabled = true;
+                    float dir = 0f;
+                    _ = AcmeRagdoll.Sim.DeathVariety.Perturb(AcmeRagdoll.Sim.RagdollParams.Default, 1u, ref dir);
+                    AcmeRagdoll.Sim.DeathVariety.Enabled = wasOn;
+                }
                 // A real lookup on this thread JITs Dictionary.TryGetValue for that instantiation too
                 // (PrepareMethod does not prepare callees). Setup DataID 0 is never a real body.
                 _ = AcmeRagdoll.Lib.RagdollProfiles.For(0u);

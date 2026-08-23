@@ -189,6 +189,16 @@ namespace AcmeRagdoll.Lib {
         /// rate without jumping the legs.</summary>
         public float GaitCadenceHz = 1.6f;
 
+        /// <summary><c>deathvariety</c>. Per-death parameter variety: sample the PCA death-manifold so
+        /// each death of a body differs coherently and in-character (see
+        /// <see cref="AcmeRagdoll.Sim.DeathVariety"/>). DEFAULT OFF: a death is exactly its authored
+        /// profile until this is switched on. Read at seed time; pushed to the DeathVariety statics.</summary>
+        public bool DeathVariety = false;
+
+        /// <summary><c>deathvarietystrength</c>. How far a death may wander along the manifold, in
+        /// eigen-sigmas. 0 = none, ~0.6 = tasteful, &gt;1 = wild. Clamped [0,1.5].</summary>
+        public float DeathVarietyStrength = 0.6f;
+
         // ---------------------------------------------------------------- plumbing
 
         /// <summary>The shipped defaults. Published as <see cref="LiveMotionConfig.Current"/> whenever
@@ -328,6 +338,8 @@ namespace AcmeRagdoll.Lib {
                 if (_stampPath != null) {
                     _stampPath = null; _stampLen = -1; LoadedFrom = null;
                     _current = LiveMotionTuning.Defaults;
+                    AcmeRagdoll.Sim.DeathVariety.Enabled = _current.DeathVariety;
+                    AcmeRagdoll.Sim.DeathVariety.Strength = _current.DeathVarietyStrength;
                     _log.LogInformation("livemotion cfg: file gone; reverted to shipped defaults");
                 }
                 return;
@@ -341,6 +353,10 @@ namespace AcmeRagdoll.Lib {
             LoadedFrom = path;
             LiveMotionTuning prev = _current;
             _current = next;                                   // <- the atomic publish
+            // Push the death-variety knobs to their statics (the death path reads DeathVariety.Enabled/
+            // Strength at seed time; it does not hold a cfg reference of its own).
+            AcmeRagdoll.Sim.DeathVariety.Enabled = next.DeathVariety;
+            AcmeRagdoll.Sim.DeathVariety.Strength = next.DeathVarietyStrength;
 
             _log.LogInformation(
                 "livemotion cfg: loaded {Path} (livemotion={On} springK={K:F0} damp={C:F1} ampFrac={A:F3} " +
@@ -386,7 +402,7 @@ namespace AcmeRagdoll.Lib {
                 PoolKnee = 10, CritMult = 11, CritRefractory = 12, SettleDown = 13, HeightBias = 14,
                 AmpFrac = 15, AttackAtten = 16, DefaultDmg = 17,
                 IdleMotion = 18, IdleAmp = 19, IdleHz = 20, Gait = 21, IdleLinger = 22,
-                GaitAmp = 23, GaitCadence = 24;
+                GaitAmp = 23, GaitCadence = 24, DeathVariety = 25, DeathVarietyStr = 26;
         }
 
         /// <summary>One key. Ranges are the documented clamps; <c>ampfrac</c>'s upper bound is a real
@@ -435,6 +451,10 @@ namespace AcmeRagdoll.Lib {
                 // 0 freezes the sine at a constant offset rather than stopping it, so GaitActive
                 // treats 0 as "off" - the same rule idlehz follows.
                 case "gaitcadence": SetF(ref t.GaitCadenceHz, val, last.GaitCadenceHz, 0f, 10f, KeyBit.GaitCadence, key); break;
+
+                // ---- per-death variety (PCA death-manifold sampler) ----
+                case "deathvariety": SetB(ref t.DeathVariety, val, last.DeathVariety, KeyBit.DeathVariety, key); break;
+                case "deathvarietystrength": SetF(ref t.DeathVarietyStrength, val, last.DeathVarietyStrength, 0f, 1.5f, KeyBit.DeathVarietyStr, key); break;
 
                 // unknown key: ignored, deliberately and silently (a cfg written for a later stage
                 // must not spam a client running an earlier one).

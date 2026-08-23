@@ -534,6 +534,13 @@ namespace AcmeRagdoll.Services {
             // and loads nothing, which is what makes it legal on the native detour thread.
             RagdollParams prm = RagdollProfiles.For(SetupDidOf(setup));
 
+            // PER-DEATH VARIETY. Sample the PCA "death manifold" (low-discrepancy) so each death of this
+            // body differs coherently and in-character, and take a per-death topple azimuth for the
+            // killing blow. No-op (returns the profile, leaves direction) when cfg deathvariety=0, so the
+            // default death is unchanged. The varied prm+direction flow into BOTH the sim below and the
+            // handoff record, so the corpse replays this exact sampled death.
+            prm = DeathVariety.Perturb(prm, e.ObjId, ref direction);
+
             e.Sim = new RagdollSim(parent, startPos, startQuats, seed, direction, floorZ, prm);
             e.Scratch = new Quat[n];
             e.Parts = pa;

@@ -776,14 +776,18 @@ namespace AcmeRagdoll.Services {
         /// </summary>
         public void OnUpdateParts(CPartArray* pa, Frame* objFrame) {
             if (_down || pa == null || objFrame == null) return;
-            if (_workCount == 0) return;   // lock-free fast out; the detour is disarmed at 0 anyway
 
             // C3: THE 1/s CFG POLL LIVES HERE - the top of the UpdateParts detour tail, the only
-            // per-frame path this plugin owns, and reached only when the layer already has work (so a
-            // quiet client polls nothing). It is deliberately OUTSIDE _gate: a flip of `livemotion`
-            // takes that lock itself, and file IO must never happen with the sim lock held.
+            // per-frame path this plugin owns. It sits ABOVE the no-work return so a pure DEATH ragdoll
+            // (which arms this detour and reaches this dispatched call with no live-motion work of its
+            // own) still refreshes the cfg every second - that keeps the death-variety knobs (read at
+            // seed time by the death path, which holds no cfg of its own) live-tunable without any
+            // combat. The poll is internally throttled to 1/s, so it is an int compare on other frames.
+            // It is deliberately OUTSIDE _gate: a flip of `livemotion` takes that lock itself, and file
+            // IO must never happen with the sim lock held.
             long now = Environment.TickCount64;
             LiveMotionTuning tune = PollConfig(now);
+            if (_workCount == 0) return;   // no live-motion work; the death path is handled elsewhere
             if (!tune.Enabled) return;     // the transition already retired every entry
 
             CPhysicsObj* owner = pa->owner;

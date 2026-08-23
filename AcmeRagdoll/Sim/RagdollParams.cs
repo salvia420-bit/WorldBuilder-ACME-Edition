@@ -124,5 +124,21 @@ namespace AcmeRagdoll.Sim {
             DirBiasDeg = dirBiasDeg;
             DirBiasStrength = dirBiasStrength;
         }
+
+        /// <summary>Write the 18 continuous params into <paramref name="v"/> in the canonical order
+        /// the DeathVariety PCA model uses (dirBiasDeg, an angle, is not part of the manifold and is
+        /// carried separately). FallFrames is written as a float.</summary>
+        public void ToVarietyVector(System.Span<float> v) {
+            v[0] = Impulse; v[1] = ToppleGain; v[2] = ToppleRateCap; v[3] = Twist; v[4] = DirJitter;
+            v[5] = LinearFrac; v[6] = Jitter; v[7] = BounceMax; v[8] = MaxSpeed; v[9] = MaxUpSpeed;
+            v[10] = Damping; v[11] = FloorFriction; v[12] = GiveMin; v[13] = GiveSpan; v[14] = GiveRamp;
+            v[15] = CoreBias; v[16] = FallFrames; v[17] = DirBiasStrength;
+        }
+
+        /// <summary>Rebuild from an 18-vector in the canonical order (FallFrames rounded to int),
+        /// preserving the caller's dirBiasDeg.</summary>
+        public static RagdollParams FromVarietyVector(System.ReadOnlySpan<float> v, float? dirBiasDeg) =>
+            new RagdollParams(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11],
+                              v[12], v[13], v[14], v[15], (int)System.MathF.Round(v[16]), dirBiasDeg, v[17]);
     }
 }
