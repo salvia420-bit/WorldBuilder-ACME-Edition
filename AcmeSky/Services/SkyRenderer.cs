@@ -125,6 +125,7 @@ namespace AcmeSky.Services {
         private readonly SkyConfig _cfg;
         private long _lastCfgReloadTicks = -Stopwatch.Frequency;
         private string _lastCfgSignature = "";
+        private bool _cfgSignatureLogged;   // see ReloadConfigThrottled: the first pass always logs
 
         /// <summary>Baked path: draw a fixed BRIGHT gradient instead of the palette sample (a
         /// known-good "is anything reaching the screen?" probe). sky.cfg `testgradient = 1`.</summary>
@@ -360,7 +361,15 @@ namespace AcmeSky.Services {
             if (now - _lastCfgReloadTicks < Stopwatch.Frequency) return;
             _lastCfgReloadTicks = now;
 
-            bool found = _cfg.Reload();
+            // PACING (2026-08-23): mtime-gated (SkyConfig.ReloadIfChanged) — this runs on the render
+            // thread, and a full read+parse plus the HotSignature() string every second is exactly
+            // the kind of once-a-second cost that lands in the 1% lows. When nothing was re-read the
+            // signature cannot have changed either, so both are skipped. The FIRST call still falls
+            // through (no signature yet) so the startup line still prints.
+            bool changed = _cfg.ReloadIfChanged();
+            if (!changed && _cfgSignatureLogged) return;
+            _cfgSignatureLogged = true;
+            bool found = _cfg.LoadedFrom != null;
             // Log ONLY when an edit actually landed. Without this a mis-parsed sky.cfg is invisible
             // -- which is exactly how the inline-comment bug (see SkyConfig.StripInlineComment) hid
             // for so long: the file was being read, every key was being thrown away, and nothing
