@@ -210,20 +210,13 @@ namespace AcmeRagdoll.Services {
         /// of a human-scale body's clamp, so "quiet" really is zero client writes.</summary>
         private const float WriteEpsilonYd = 0.0008f;
 
-        /// <summary>Energy floor: the pool snaps to exactly zero below this, so a body that is left
-        /// alone ends at a clean 0 rather than an ever-shrinking denormal. It is NOT the retirement
-        /// threshold - retirement asks whether the pool can still produce a visible offset (see
-        /// <see cref="OnUpdateParts"/>), which is the same question expressed in yards.</summary>
-        private const float PoolEpsilon = 0.005f;
+        // The pool's energy floor moved with the pool math: SpringMotion.PoolEpsilon.
 
         /// <summary>Rest thresholds: a part below both is settled. 0.5 mm and 1 cm/s.</summary>
         private const float OffsetEpsilonYd = 0.0005f;
         private const float VelEpsilonYdS = 0.01f;
 
-        /// <summary>Integrator substep cap, seconds. The explicit-position/implicit-velocity pair used
-        /// here is stable for dt &lt; 2/omega_n; the stiffest part we author is omega_n ~ 26.5 rad/s
-        /// (dt &lt; 75 ms), so 1/60 s substeps leave a 4.5x margin at any client frame rate.</summary>
-        private const float SubstepMaxSec = 1f / 60f;
+        // The integrator's substep cap moved with the integrator: SpringMotion.SubstepMaxSec.
 
         /// <summary>Whole-frame dt clamp, seconds. A hitch (alt-tab, zone load) must not be integrated
         /// as one enormous step; 1/15 s caps it at 4 substeps and the reaction simply continues.</summary>
@@ -931,6 +924,11 @@ namespace AcmeRagdoll.Services {
                 e.MaxOffset = ClampFor(e.Radius, tune);
                 e.PoolCap = tune.PoolCap;
 
+                // The spring/energy scalars of this frame's snapshot, as the pure stack struct
+                // Sim/SpringMotion.cs runs on (the math itself lives there since the 2026-08-24
+                // extraction; this copy is a handful of moves, zero allocation).
+                SpringMotion.Tuning st = SpringOf(tune);
+
                 // Frame dt from the wall clock, so the spring is frame-rate independent. A first frame
                 // (or two frames inside the same millisecond) integrates nothing but still writes.
                 float dt = 0f;
@@ -943,8 +941,8 @@ namespace AcmeRagdoll.Services {
                 }
                 e.LastFrameTick = now;
 
-                DecayPool(e, now, tune);
-                DrainImpulses(e, now, id, tune);
+                SpringMotion.DecayPool(ref e.Pool, ref e.PoolDecayTick, now, in st);
+                DrainImpulses(e, now, id, in st);
 
                 // C4: this frame's idle micro-motion, into its OWN buffer (the springs must still be
                 // able to settle to zero). Computed BEFORE the rest test because a body that is
@@ -966,8 +964,12 @@ namespace AcmeRagdoll.Services {
                 // lookup, one exp and one rest scan per frame - no part touched, nothing cached.
                 bool atRest = IsAtRest(e);
                 if (!atRest || idle || gait) {
-                    if (!atRest && dt > 0f) Integrate(e, dt, tune);
-                    WriteOffsets(e, pa, objFrame, VisualGain(e, tune), id, idle, gait);
+                    if (!atRest && dt > 0f)
+                        SpringMotion.Integrate(e.Offsets!, e.OffsetVel!, e.Looseness!, e.PartCount,
+                                               dt, e.MaxOffset, in st);
+                    WriteOffsets(e, pa, objFrame,
+                                 SpringMotion.VisualGain(e.Pool, e.PoolCap, e.AttenuateAttack, in st),
+                                 id, idle, gait);
                     atRest = IsAtRest(e);
                 }
 
@@ -989,7 +991,7 @@ namespace AcmeRagdoll.Services {
                 // C5 adds NOTHING here, deliberately: the gait prototype must not be able to keep a
                 // body on the hot path one frame longer than C4 already does. It rides the entries
                 // the idle linger keeps alive and retires with them.
-                if (atRest && PoolGain(e, tune) * e.MaxOffset < WriteEpsilonYd
+                if (atRest && SpringMotion.PoolGain(e.Pool, e.PoolCap, in st) * e.MaxOffset < WriteEpsilonYd
                     && !IdleMotion.Lingering(now, e.LastHitTick, tune.IdleMotion, e.IdleEligible,
                                              tune.IdleLingerSec))
                     Remove(id);
@@ -998,41 +1000,28 @@ namespace AcmeRagdoll.Services {
 
         // ------------------------------------------------------------------ C2: the hit-reaction physics
 
-        /// <summary>
-        /// Wall-clock exponential decay of the reaction energy, half-life
-        /// <see cref="LiveMotionTuning.PoolHalfLifeSec"/>. Driven off <see cref="LiveEntry.PoolDecayTick"/> rather than
-        /// the frame dt so energy parked between frames (impulses arrive on the net path, not this
-        /// one) decays by the right amount, and so a frame-rate change never changes the settle time.
-        /// </summary>
-        private static void DecayPool(LiveEntry e, long now, LiveMotionTuning t) {
-            long dms = now - e.PoolDecayTick;
-            e.PoolDecayTick = now;
-            if (dms <= 0 || e.Pool <= 0f) return;
-            // 0.6931472 = ln 2; pool *= 2^(-dt/halfLife).
-            float k = (dms * 0.001f) * (0.6931472f / t.PoolHalfLifeSec);
-            e.Pool *= MathF.Exp(-k);
-            if (e.Pool < PoolEpsilon) e.Pool = 0f;
-        }
+        /// <summary>The spring/energy scalars of one tuning snapshot, copied into the pure stack
+        /// struct <see cref="SpringMotion"/> runs on. The math itself (pool decay, impulse shaping,
+        /// the PD integrator, the smoothstep gain) lives in <c>Sim/SpringMotion.cs</c> since the
+        /// 2026-08-24 extraction, bit-identical, so the offline harness and the z-z patcher preview
+        /// drive the shipped file.</summary>
+        private static SpringMotion.Tuning SpringOf(LiveMotionTuning t) => new SpringMotion.Tuning(
+            t.SpringK, t.SpringDamp, t.CoreStiffMul, t.EdgeStiffMul, t.CoreImpulseFrac,
+            t.EnergyPerDamagePercent, t.ImpulseVelPerEnergy, t.PoolHalfLifeSec, t.PoolGainKnee,
+            t.CritImpulseMult, t.CritRefractoryMillis, t.SettleDown, t.HeightBias,
+            t.AttackAttenuation);
 
         /// <summary>
         /// Turn every pending hit into pool energy and per-part velocity. Runs on the sim thread with
         /// <see cref="_gate"/> held, so the net handlers cannot be appending while we drain.
         ///
-        /// ENERGY: <c>e = EnergyPerDamagePercent * DamagePercent * critMul</c>, added to the pool and
-        /// HARD CAPPED. A hit that arrives at a full pool therefore adds no energy but still refreshes
-        /// the decay (<see cref="DecayPool"/> restarts from this instant at the cap) and still lands
-        /// its own velocity kick - "refresh, don't grow", which is what makes a 10-attacker swarm
-        /// saturate instead of explode.
-        ///
-        /// CRIT: the multiplier is applied to the whole impulse, but only ONCE per
-        /// <see cref="LiveMotionTuning.CritRefractoryMillis"/> per body. A crit inside the refractory still delivers
-        /// its full BASE impulse - the refractory gates the extra, never the hit.
-        ///
-        /// DIRECTION: the splatter's decoded quadrant (object-local, already "away from the attacker")
-        /// plus a small downward settle, normalised. <c>Effects_PlayScriptType.Speed</c> is
-        /// deliberately NOT used: it is the particle script's playback rate, not a hit magnitude.
+        /// The per-impulse math (energy/cap/"refresh, don't grow", the crit refractory, direction +
+        /// settle, the core/height-shaped kick) is <see cref="SpringMotion.ApplyHit"/> - extracted
+        /// verbatim, its rationale comments with it. This wrapper owns what is NOT pure: the pending
+        /// ring, and the tuning loop's one log line per landed hit. <c>Effects_PlayScriptType.Speed</c>
+        /// is deliberately NOT used: it is the particle script's playback rate, not a hit magnitude.
         /// </summary>
-        private void DrainImpulses(LiveEntry e, long now, uint id, LiveMotionTuning t) {
+        private void DrainImpulses(LiveEntry e, long now, uint id, in SpringMotion.Tuning t) {
             if (e.PendingCount == 0) return;
             float[] vel = e.OffsetVel!;
             float[] loose = e.Looseness!;
@@ -1042,32 +1031,11 @@ namespace AcmeRagdoll.Services {
             for (int p = 0; p < e.PendingCount; p++) {
                 ref PendingImpulse imp = ref e.Pending[p];
 
-                float dp = imp.DamagePercent;
-                if (!(dp > 0f)) dp = 0f;             // also rejects NaN
-                if (dp > 1f) dp = 1f;
-
-                float mul = 1f;
-                if (imp.Critical && now - e.LastCritTick >= t.CritRefractoryMillis) {
-                    mul = t.CritImpulseMult;
-                    e.LastCritTick = now;
-                }
-
-                float energy = t.EnergyPerDamagePercent * dp * mul;
-                if (energy <= 0f) continue;
-
-                e.Pool += energy;
-                if (e.Pool > e.PoolCap) e.Pool = e.PoolCap;
-                e.PoolDecayTick = now;               // the "refresh" half of refresh-don't-grow
-
-                // Unit impulse direction: away from the attacker, sagging slightly downward.
-                float dx = imp.DirX, dy = imp.DirY, dz = -t.SettleDown;
-                float len = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-                if (len < 1e-6f) continue;
-                float inv = 1f / len;
-                dx *= inv; dy *= inv; dz *= inv;
-
-                float v0 = t.ImpulseVelPerEnergy * energy;
-                float band = HeightBandCenter(imp.Height);
+                if (!SpringMotion.ApplyHit(imp.DamagePercent, imp.Critical, now, ref e.LastCritTick,
+                                           ref e.Pool, e.PoolCap, ref e.PoolDecayTick,
+                                           imp.DirX, imp.DirY, imp.Height,
+                                           vel, loose, hgt, n, in t, out SpringMotion.HitResult r))
+                    continue;
 
                 // The tuning loop's one line per hit (C3 watches these while editing the cfg).
                 // PACING (2026-08-23): this used to be an ILogger call — i.e. a Console.Write plus a
@@ -1079,117 +1047,23 @@ namespace AcmeRagdoll.Services {
                     "livemotion HIT id=0x" + id.ToString("X8") +
                     " script=0x" + imp.ScriptType.ToString("X2") +
                     " h=" + imp.Height.ToString() +
-                    " dir=(" + dx.ToString("F2") + "," + dy.ToString("F2") + "," + dz.ToString("F2") + ")" +
-                    " dmg%=" + dp.ToString("F3") +
-                    " crit=" + imp.Critical.ToString() + "x" + mul.ToString("F1") +
+                    " dir=(" + r.Dx.ToString("F2") + "," + r.Dy.ToString("F2") + "," + r.Dz.ToString("F2") + ")" +
+                    " dmg%=" + r.DamagePercent.ToString("F3") +
+                    " crit=" + imp.Critical.ToString() + "x" + r.Mul.ToString("F1") +
                     " enriched=" + imp.Enriched.ToString() +
-                    " energy=" + energy.ToString("F3") +
+                    " energy=" + r.Energy.ToString("F3") +
                     " pool=" + e.Pool.ToString("F3") + "/" + e.PoolCap.ToString("F2") +
-                    " v0=" + v0.ToString("F3") + "yd/s" +
+                    " v0=" + r.V0.ToString("F3") + "yd/s" +
                     " latency=" + (now - imp.Tick).ToString() + "ms" +
                     " hits=" + e.HitCount.ToString());
-
-                for (int i = 0; i < n; i++) {
-                    // extremities take the whole kick, the core takes coreImpulseFrac of it
-                    float w = t.CoreImpulseFrac + (1f - t.CoreImpulseFrac) * loose[i];
-                    // ...and parts near the struck height take more of it than the far rows
-                    float hw = 1f - t.HeightBias * MathF.Abs(hgt[i] - band);
-                    if (hw < 0f) hw = 0f;
-                    float s = v0 * w * hw;
-                    int b = i * 3;
-                    vel[b] += dx * s;
-                    vel[b + 1] += dy * s;
-                    vel[b + 2] += dz * s;
-                }
             }
             e.PendingCount = 0;
         }
 
-        /// <summary>Normalised body height a splatter band refers to: 0 = the body's lowest part,
-        /// 1 = its highest. Low/Mid/Up are the attacker's AttackHeight (C0 report §4.3).</summary>
-        private static float HeightBandCenter(byte height) => height switch {
-            0 => 0.20f,   // Low
-            2 => 0.85f,   // Up
-            _ => 0.50f,   // Mid (and any value we do not recognise)
-        };
-
-        /// <summary>
-        /// The PD spring, per part, per axis, exactly as specified:
-        /// <c>offset += vel*dt; vel += (-k*offset - c*vel)*dt</c> (position first, so the velocity
-        /// update sees the NEW offset - the semi-implicit form, which is stable for
-        /// <c>dt &lt; 2/omega_n</c> instead of unconditionally divergent).
-        ///
-        /// Substepped at <see cref="SubstepMaxSec"/> (a compiled-in stability limit, not a knob) so a
-        /// 15 fps client and a 144 fps client integrate
-        /// the same trajectory, and the stiffest authored part keeps a 4.5x stability margin.
-        /// Per-part stiffness comes from looseness (core stiff, extremity loose) and the damping is
-        /// scaled by sqrt(kScale) so every part keeps the SAME damping ratio - a limb rings longer
-        /// because it is softer, not because it is less damped.
-        ///
-        /// The offset is clamped to <see cref="LiveEntry.MaxOffset"/> inside the loop, not just at
-        /// write time, so no amount of stacked impulses can leave the state itself unbounded; a
-        /// clamped part also loses half its velocity, which is what stops it from sitting pinned
-        /// against the clamp.
-        /// </summary>
-        private static void Integrate(LiveEntry e, float dt, LiveMotionTuning t) {
-            int steps = (int)MathF.Ceiling(dt / SubstepMaxSec);
-            if (steps < 1) steps = 1;
-            float h = dt / steps;
-
-            float[] off = e.Offsets!;
-            float[] vel = e.OffsetVel!;
-            float[] loose = e.Looseness!;
-            int n = e.PartCount;
-            float maxOff = e.MaxOffset;
-            float maxOff2 = maxOff * maxOff;
-
-            for (int i = 0; i < n; i++) {
-                float kScale = t.CoreStiffMul + (t.EdgeStiffMul - t.CoreStiffMul) * loose[i];
-                float k = t.SpringK * kScale;
-                float c = t.SpringDamp * MathF.Sqrt(kScale);
-                int b = i * 3;
-                float ox = off[b], oy = off[b + 1], oz = off[b + 2];
-                float vx = vel[b], vy = vel[b + 1], vz = vel[b + 2];
-
-                for (int s = 0; s < steps; s++) {
-                    ox += vx * h; oy += vy * h; oz += vz * h;
-                    vx += (-k * ox - c * vx) * h;
-                    vy += (-k * oy - c * vy) * h;
-                    vz += (-k * oz - c * vz) * h;
-
-                    float m2 = ox * ox + oy * oy + oz * oz;
-                    if (m2 > maxOff2) {
-                        float scale = maxOff / MathF.Sqrt(m2);
-                        ox *= scale; oy *= scale; oz *= scale;
-                        vx *= 0.5f; vy *= 0.5f; vz *= 0.5f;
-                    }
-                }
-
-                off[b] = ox; off[b + 1] = oy; off[b + 2] = oz;
-                vel[b] = vx; vel[b + 1] = vy; vel[b + 2] = vz;
-            }
-        }
-
-        /// <summary>
-        /// The visible amplitude multiplier: a smoothstep of the reaction energy, times the
-        /// attack-motion attenuation. Smoothstep (not a linear ramp) so the tail of a reaction eases
-        /// out instead of stopping, and the knee is well below the cap so an ordinary hit is shown at
-        /// full authored amplitude rather than being double-attenuated for being small.
-        /// </summary>
-        private static float VisualGain(LiveEntry e, LiveMotionTuning t) =>
-            e.AttenuateAttack ? PoolGain(e, t) * t.AttackAttenuation : PoolGain(e, t);
-
-        /// <summary>The energy half of <see cref="VisualGain"/>, without the attack attenuation.
-        /// Retirement tests THIS: an entry must not retire early merely because the body happens to be
-        /// mid-swing, and it must not be kept alive by an attenuation that will lift next motion.</summary>
-        private static float PoolGain(LiveEntry e, LiveMotionTuning t) {
-            float cap = e.PoolCap * t.PoolGainKnee;
-            if (cap <= 0f) return 0f;
-            float x = e.Pool / cap;      // smoothstep parameter
-            if (x <= 0f) return 0f;
-            if (x > 1f) x = 1f;
-            return x * x * (3f - 2f * x);
-        }
+        // The PD spring integrator and the pool's smoothstep visual gain live in
+        // Sim/SpringMotion.cs (Integrate / VisualGain / PoolGain), with their rationale comments -
+        // extracted 2026-08-24 so the offline harness and the z-z patcher preview drive the shipped
+        // file. The frame loop above calls them directly.
 
         /// <summary>
         /// THE ONE WRITE PATH - hit springs, C4 idle micro-motion and the C5 gait overlay ALL land

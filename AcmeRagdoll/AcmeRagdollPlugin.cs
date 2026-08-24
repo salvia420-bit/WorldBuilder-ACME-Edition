@@ -355,8 +355,10 @@ namespace AcmeRagdoll {
                 "LogThreadIdOnce", "LogSafe",
                 // C2: the hit-reaction physics, all reachable from the UpdateParts detour, plus
                 // OnMotion / IsAttackMotion which are reached from the DoInterpretedMotion detour.
-                "DecayPool", "DrainImpulses", "HeightBandCenter", "Integrate", "VisualGain",
-                "WriteOffsets", "PoolGain", "IsAtRest", "ComputeBodyMetrics", "ResolveLooseness",
+                // (The pure spring math moved to Sim/SpringMotion.cs - PreJit'd below with the
+                // other pure statics; SpringOf is the per-frame snapshot copy that feeds it.)
+                "DrainImpulses", "SpringOf",
+                "WriteOffsets", "IsAtRest", "ComputeBodyMetrics", "ResolveLooseness",
                 "OnMotion", "IsAttackMotion", "BuildRangeTable", "IsFinite", "SetupDidOf",
                 // C3: the 1/s cfg poll and the runtime enable/disable transition, both reached from
                 // the UpdateParts detour tail and from the two net callbacks.
@@ -370,6 +372,14 @@ namespace AcmeRagdoll {
                 // Single-writer gate: DeathOwns is reached from the net handler (OnPlayScriptType) AND
                 // from the UpdateParts detour; RetireForDeath from the detour.
                 "BindDeathOwnership", "DeathOwns", "RetireForDeath",
+            });
+            // C2's spring math lives in a pure static of its own (the 2026-08-24 extraction); the
+            // detour calls straight into it, so it gets its class constructor and its methods
+            // realised here like everything else on those paths.
+            System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(
+                typeof(AcmeRagdoll.Sim.SpringMotion).TypeHandle);
+            PreJit(typeof(AcmeRagdoll.Sim.SpringMotion), new[] {
+                "DecayPool", "ApplyHit", "HeightBandCenter", "Integrate", "VisualGain", "PoolGain",
             });
             // C4's math lives in a pure static of its own; the detour calls straight into it, so it
             // gets its class constructor and its methods realised here like everything else.
