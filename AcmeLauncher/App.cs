@@ -15,6 +15,10 @@ namespace AcmeLauncher {
     public sealed class App : Application {
         [DllImport("kernel32.dll")] private static extern bool AttachConsole(int pid);
         private const int ATTACH_PARENT_PROCESS = -1;
+        [DllImport("kernel32.dll")] private static extern IntPtr GetStdHandle(int n);
+        [DllImport("kernel32.dll")] private static extern uint GetFileType(IntPtr h);
+        private const int STD_OUTPUT_HANDLE = -11;
+        private const uint FILE_TYPE_UNKNOWN = 0;
 
         [STAThread]
         public static int Main(string[] argv) {
@@ -25,7 +29,20 @@ namespace AcmeLauncher {
             // default — a CLI invocation would print nowhere. Attach to the parent
             // console for the scriptable paths so `AcmeLauncher.exe --list` etc.
             // actually print. Harmless if there is no parent console.
-            if (argv.Length > 0) { try { AttachConsole(ATTACH_PARENT_PROCESS); } catch { } }
+            if (argv.Length > 0) {
+                // A WPF WinExe has no console. If the caller REDIRECTED our output
+                // (`AcmeLauncher --list > out.txt` or a pipe), stdout is already a real file/pipe
+                // handle — do NOT AttachConsole, which would clobber it and swallow the output. Only
+                // attach the parent's console when we have no usable stdout (interactive run). Either
+                // way, rebind Console to the resulting OS handles so WriteLine lands correctly.
+                IntPtr outH = GetStdHandle(STD_OUTPUT_HANDLE);
+                bool redirected = outH != IntPtr.Zero && outH != new IntPtr(-1) && GetFileType(outH) != FILE_TYPE_UNKNOWN;
+                if (!redirected) { try { AttachConsole(ATTACH_PARENT_PROCESS); } catch { } }
+                try {
+                    Console.SetOut(new System.IO.StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+                    Console.SetError(new System.IO.StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+                } catch { }
+            }
 
             // ---- scriptable, headless paths ----
             if (HasFlag(argv, "--list")) {
