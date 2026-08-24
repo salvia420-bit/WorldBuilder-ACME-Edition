@@ -1,5 +1,5 @@
 @echo off
-rem play.bat - ACME r8 kit launcher (fresh-install loud-fail, mechanism B -
+rem play.bat - ACME kit launcher (fresh-install loud-fail, mechanism B -
 rem DESIGN-fresh-install-loud-fail-2026-08-19.md). client_highres.dat is
 rem LOAD-BEARING after the HIFI split: the portal no longer carries the
 rem superseded texture copies, and the client's absent-file mount path is a

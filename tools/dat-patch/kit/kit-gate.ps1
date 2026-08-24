@@ -1,5 +1,5 @@
 <#
-  kit-gate.ps1 — headless Windows gate for the ACME r8 kit's two player-facing
+  kit-gate.ps1 — headless Windows gate for the ACME kit's two player-facing
   mechanisms. Runs entirely on files in its own folder: it never launches the
   client, never touches the display, and is safe to run with a person at the box.
 

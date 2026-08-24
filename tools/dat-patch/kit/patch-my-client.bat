@@ -1,5 +1,5 @@
 @echo off
-rem patch-my-client.bat - one-time client patch for the ACME r8 kit.
+rem patch-my-client.bat - one-time client patch for the ACME kit.
 rem
 rem The kit ships NO client executable (community norm: patch over your own
 rem install). This applies the ACME byte patches to YOUR acclient.exe, keeping

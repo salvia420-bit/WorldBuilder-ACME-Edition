@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""acme-patch-client.py - ACME r8 kit client patcher (Linux / macOS / wine players).
+"""acme-patch-client.py - ACME kit client patcher (Linux / macOS / wine players).
 
 The Windows path is patch-my-client.bat -> acme-patch-client.ps1; this is the
 same 8 byte-deltas for people who run Asheron's Call under wine, where no

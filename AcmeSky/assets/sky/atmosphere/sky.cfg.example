@@ -105,7 +105,7 @@ cloudtaaalpha = 0.1 # TAA current-frame blend weight (holtburger temporalAlpha; 
 # 7 = aerial-perspective inscatter raw, 8 = AP transmittance raw, 9 = cloud front depth.
 
 # --- PERF PRESET (uncomment as a block) ---------------------------------------------------
-# The defaults above are the OWNER-TUNED 1070 rig (~65 fps there). The buildbox T4 under DXVK
+# The defaults above are the OWNER-TUNED 1070 rig (~65 fps there). A Tesla T4 under DXVK
 # measures ~19.6 fps at those defaults vs ~84 on the baked path -- DXVK's D3D11 plus the
 # full-res CPU readback costs far more than native. Biggest levers, in order:
 #   cloudres     quarters the raymarched pixel count at 0.5 -- by far the cheapest win, and

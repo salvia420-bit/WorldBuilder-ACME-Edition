@@ -1,5 +1,5 @@
 ﻿<#
-  acme-patch-client.ps1 - ACME r8 kit client patcher (Windows PowerShell 5.1+).
+  acme-patch-client.ps1 - ACME kit client patcher (Windows PowerShell 5.1+).
 
   Patches YOUR OWN retail End-of-Retail acclient.exe (2015-06-12 build 6096)
   in place.  The ACME kit ships NO client executable - the community norm is
@@ -298,5 +298,5 @@ Say ("  PE checksum 0x{0:X8} (was 0x{1:X8})" -f $val, $stored)
 Say ""
 Say "PATCHED: $Target"
 Say "  sha256 $sha"
-Say "  (expected for the ACME r8 shipping set: see kit-manifest.txt)"
+Say "  (expected for the ACME shipping set: see kit-manifest.txt)"
 exit 0

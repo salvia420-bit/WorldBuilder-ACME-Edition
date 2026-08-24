@@ -418,8 +418,8 @@ Save/Load buttons and `--save-profile`/`--load-profile`.
 
 For whoever maintains this after the fact:
 
-- Reference Windows machine: GTX 1070, install at `D:\ac-dat-test` (dats + exe),
-  plugin runtime at `C:\Games\Chorizite`, launch rig `C:\Temp\acdt-inject.bat`
+- Reference Windows machine: GTX 1070, game install (dats + exe) in its own
+  folder, plugin runtime at `C:\Games\Chorizite`, launch rig a small `.bat`
   (`ACMEINJECT_ARGS=-h <dev-server> -p 9000 -a <dev-account> -v <dev-password> -rodat 1`).
   Dev server = a vanilla ACE (master @a8ff29f + entity-cache mod) serving the
   matching dat pair.
