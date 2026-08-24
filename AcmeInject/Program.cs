@@ -44,9 +44,24 @@ namespace AcmeInject {
                 }
                 Console.WriteLine($"Injector:   {injectorFull}");
                 Console.WriteLine($"Bootstrap:  RVA 0x{bootstrapRva:X8}");
+
+                // --attach <pid>: inject into an ALREADY-RUNNING client (the multi-box /
+                // ThwargLauncher / Decal posture — we don't own the launch). Same LoadLibraryW +
+                // base-aware Bootstrap as the spawn path, minus CreateProcess/Resume. The live
+                // render loop is NOT suspended, so this exercises the patch-while-running path
+                // that spawn-injection avoids — the exact thing under test.
+                string? attachStr = Arg(argv, "--attach");
+                if (attachStr != null) {
+                    if (!int.TryParse(attachStr, out int pid) || pid <= 0) {
+                        Console.Error.WriteLine($"AcmeInject: bad --attach pid '{attachStr}'");
+                        return 4;
+                    }
+                    Console.WriteLine($"Attach:     pid {pid} (running client)");
+                    return InjectAttach(pid, injectorFull, bootstrapRva);
+                }
+
                 Console.WriteLine($"Launching:  {client} {args}");
                 Console.WriteLine($"workdir:    {workdir}");
-
                 return Inject(client, args, workdir, injectorFull, bootstrapRva);
             }
             catch (Exception ex) {
@@ -95,6 +110,41 @@ namespace AcmeInject {
             }
             finally {
                 CloseHandle(hThread);
+                CloseHandle(hProc);
+            }
+        }
+
+        /// <summary>Attach path: OpenProcess an existing client, remote-LoadLibraryW the injector,
+        /// call Bootstrap at its remote base. No suspend/resume — the client keeps running, so
+        /// Chorizite arms its hooks against a LIVE render loop.</summary>
+        private static int InjectAttach(int pid, string injectorFull, uint bootstrapRva) {
+            IntPtr hProc = OpenProcess(PROCESS_ALL_ACCESS, false, (uint)pid);
+            if (hProc == IntPtr.Zero) {
+                Console.Error.WriteLine($"AcmeInject: OpenProcess({pid}) failed, err={Marshal.GetLastWin32Error()} "
+                    + "(is the client running? does its integrity level match ours? AV blocking?)");
+                return 20;
+            }
+            try {
+                IntPtr remoteBase = RemoteLoadLibrary(hProc, injectorFull, out int llErr);
+                if (remoteBase == IntPtr.Zero) {
+                    Console.Error.WriteLine($"AcmeInject: remote LoadLibraryW failed (err={llErr})");
+                    return 21;
+                }
+                IntPtr remoteBootstrap = (IntPtr)((long)remoteBase + bootstrapRva);
+                Console.WriteLine($"Injector remote base: 0x{(long)remoteBase:X8}  -> Bootstrap 0x{(long)remoteBootstrap:X8}");
+                IntPtr hBoot = CreateRemoteThread(hProc, IntPtr.Zero, 0, remoteBootstrap, IntPtr.Zero, 0, out _);
+                if (hBoot == IntPtr.Zero) {
+                    Console.Error.WriteLine($"AcmeInject: CreateRemoteThread(Bootstrap) failed, err={Marshal.GetLastWin32Error()}");
+                    return 22;
+                }
+                WaitForSingleObject(hBoot, 60_000);
+                GetExitCodeThread(hBoot, out uint bootRc);
+                CloseHandle(hBoot);
+                Console.WriteLine($"Bootstrap returned {bootRc}");
+                Console.WriteLine("Attached (client not resumed — it was already running).");
+                return 0;
+            }
+            finally {
                 CloseHandle(hProc);
             }
         }
@@ -224,6 +274,10 @@ namespace AcmeInject {
         private const uint MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000;
         private const uint WAIT_OBJECT_0 = 0x0, WAIT_TIMEOUT = 0x102;
         private const uint PAGE_READWRITE = 0x4;
+        private const uint PROCESS_ALL_ACCESS = 0x1F0FFF;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public uint dwProcessId, dwThreadId; }

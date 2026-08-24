@@ -1,0 +1,62 @@
+--- a/Chorizite/Chorizite.NativeClientBootstrapper/Hooks/DirectXHooks.cs
++++ b/Chorizite/Chorizite.NativeClientBootstrapper/Hooks/DirectXHooks.cs
+@@ -59,6 +59,13 @@
+ 
+         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+         private unsafe static void RenderDeviceD3D_EndSceneImpl(IntPtr a) {
++            // Attach support: when Chorizite is injected into an ALREADY-RUNNING client (multi-box /
++            // ThwargLauncher / Decal), the device-mode-change event that normally drives first-init
++            // has already fired before injection, so Startup would never run. EndScene fires every
++            // frame regardless, so drive the one-time init from here too. The _didInit guard makes
++            // this a no-op in the normal spawn path (OnDeviceDisplayModeChange gets there first), so
++            // spawn behavior is unchanged.
++            if (!_didInit) { TryFirstInit(a); }
+             if (_count > 60) {
+                 StandaloneLoader.Render?.Render2D();
+             }
+@@ -68,6 +75,27 @@
+             _renderDeviceD3D_EndSceneHook!.OriginalFunction.Invoke(a);
+         }
+ 
++        /// <summary>One-time bring-up: capture the device + window, install the WndProc hook, and
++        /// run StandaloneLoader.Startup (which loads the plugins). Idempotent via _didInit. Runs on
++        /// the render thread in both the spawn (OnDeviceDisplayModeChange) and attach (EndScene)
++        /// paths — the same context Startup already ran in.</summary>
++        private unsafe static void TryFirstInit(IntPtr a) {
++            if (_didInit) return;
++            _didInit = true;
++            try {
++                var windowProc = (int)Native.GetWindowLong(HWND, Native.GWL.GWL_WNDPROC);
++                _windowProcHook = CreateHook<WndProc>(typeof(DirectXHooks), nameof(WndProcImpl), windowProc);
++
++                _unmanagedD3DPtr = *(int*)(a + 1128 /* :) TODO: fix RenderDeviceD3D */);
++                D3Ddevice = new Device(_unmanagedD3DPtr);
++
++                StandaloneLoader.Log.LogWarning($"Created device 0x{_unmanagedD3DPtr:X8} for window {HWND}");
++
++                StandaloneLoader.Startup(_unmanagedD3DPtr);
++            }
++            catch (Exception ex) { StandaloneLoader.Log.LogError(ex, "TryFirstInit failed"); }
++        }
++
+         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+         private unsafe static void RenderDeviceD3D_OnDeviceDisplayModeChangeImpl(IntPtr a) {
+             try {
+@@ -82,16 +110,7 @@
+                 }
+ 
+                 if (!_didInit) {
+-                    _didInit = true;
+-                    var windowProc = (int)Native.GetWindowLong(HWND, Native.GWL.GWL_WNDPROC);
+-                    _windowProcHook = CreateHook<WndProc>(typeof(DirectXHooks), nameof(WndProcImpl), windowProc);
+-
+-                    _unmanagedD3DPtr = *(int*)(a + 1128 /* :) TODO: fix RenderDeviceD3D */);
+-                    D3Ddevice = new Device(_unmanagedD3DPtr);
+-
+-                    StandaloneLoader.Log.LogWarning($"Created device 0x{_unmanagedD3DPtr:X8} for window {HWND}");
+-
+-                    StandaloneLoader.Startup(_unmanagedD3DPtr);
++                    TryFirstInit(a);
+                 }
+             }
+             catch (Exception ex) { StandaloneLoader.Log.LogError(ex, "Failed to reset graphics"); }

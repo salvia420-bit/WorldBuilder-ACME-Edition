@@ -219,6 +219,50 @@ add an `--attach <pid>` path to AcmeInject, launch a client the plain way
 without crashing the render loop. That single test closes risk 1 and tells us
 whether the "just works" bar is met as-is or needs the thread-suspend refinement.
 
+### ✅ PROTOTYPE BUILT AND PROVEN ON THE 1070 (2026-08-24)
+
+Added `AcmeInject --attach <pid>` (`OpenProcess` + the existing LoadLibraryW /
+base-aware Bootstrap; no suspend/resume) and ran it against a **live, in-world,
+plain-launched** client (pid launched the ordinary way, no injection — mimicking
+TL/Decal). Two findings:
+
+1. **Risk 1 (live-patch race) is SAFE — proven, not assumed.** Attaching armed
+   Chorizite's `EndScene`/device-reset hooks against a live render loop in 377 ms
+   with **zero crash** and a stable client. On the fixed re-test, *all* of
+   AcmeLights' detours installed too — including the mirror-diet
+   `ImgTex::GetD3DTexture` hook, which is per-draw and was **being called by the
+   render thread at the moment it was patched** — and still no crash. Reloaded's
+   live-patch is safe here; no thread-suspend refinement needed.
+2. **One real gap, root-caused and FIXED.** First attach armed Chorizite core but
+   the plugins never loaded — `StandaloneLoader.Startup` (plugin load) was gated
+   behind `RenderDeviceD3D::OnDeviceDisplayModeChange`'s first fire, a
+   device-setup event that in spawn happens *after* injection but in attach had
+   *already passed*. Fix (`DirectXHooks.cs`, ~15 lines): also drive the one-time
+   init from the per-frame `EndScene` hook (which does fire on attach), guarded by
+   the existing `_didInit` so **the spawn path is byte-for-byte unchanged**. Both
+   `HWND` (a static global read `*0x008381A4`) and the device pointer (from the
+   `RenderDeviceD3D` arg) are available in `EndScene`, so no other state is
+   startup-gated — the fix is complete, not partial.
+
+**Re-test with the fix = full parity with spawn injection:** PluginManager
+started all 8 manifests; AcmeLights (all 7 hooks incl. diet + governor),
+AcmeRagdoll, and AcmeSky (live D3D11 sky on the GTX 1070) all loaded; the diet
+actively freed **402 MB** of mirrors on the attached client; frametimes were
+smooth (19.4 ms avg / 23 ms p99, no hitch from the attach); client stable
+50 s+. The only errors were the *same* pre-existing plugin failures (Lua, RmlUi,
+PluginManagerUI) that fail identically on a normal spawn boot — not
+attach-related.
+
+**Verdict: option 3 clears the owner's "it has to actually just work" bar.**
+Attaching mid-flight into any running client — however it was launched (TL,
+Decal, a shortcut) — brings up the full plugin stack with no crash and full
+function, given the small committed Chorizite fix. Residual risk 2 (AV/EDR
+blocking injection) remains environmental and unchanged, and degrades to
+"full visual upgrade, no plugins," never a broken game. Code landed:
+`AcmeInject/Program.cs` (`--attach`) + `DirectXHooks.cs` (EndScene-driven
+first-init). Still to build for a shippable v1: the PID picker, an idempotency
+guard (don't double-attach one client), and per-PID logging.
+
 ### ThwargLauncher launch mechanics (verified against source, 2026-08-24)
 
 Vendored read-only at `/mnt/wbterminal2/vendor/ThwargLauncher`
