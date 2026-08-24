@@ -26,6 +26,7 @@ Provenance of the shipped patch set is in PATCHES below and in PATCHES.md.
 """
 
 import argparse
+import re
 import struct
 import sys
 from pathlib import Path
@@ -101,6 +102,87 @@ class Patch:
         if cur == self.replace:
             return "patched", off
         return "unknown", off
+
+    def apply(self, buf):
+        """Rewrite the needle at the located site; returns bytes changed."""
+        off = self.find(buf)
+        buf[off:off + len(self.needle)] = self.replace
+        return len(self.needle)
+
+
+class AlignIdiomPatch:
+    """The many-site DAT-parser alignment patch (dat-align-lfa, 2026-08-23).
+
+    Retail's archive/cache 4-byte alignment idiom computes `(signed int)ptr % 4`,
+    which MSVC compiles as `and r32, 0x80000003` followed by a sign fixup
+    (`jns +5; dec r; or r,-4; inc r`) and a `mov r32,4 / sub` pad computation.
+    acclient is large-address-aware (PE char 0x012E): once the process exceeds
+    2 GB, buffer pointers >= 0x80000000 are NEGATIVE as signed ints, the modulo
+    returns the wrong pad, the read cursor desyncs, and a later read walks off
+    the buffer (AV).  The fix clears the sign bit of the immediate at every
+    idiom site: `and r32, 0x80000003` -> `and r32, 0x00000003` (unsigned & 3),
+    byte-identical behavior for every sub-2GB pointer.
+
+    Unlike Patch, this is NOT one unique signature: every occurrence of the
+    idiom is patched, located per-site by (a) the imm32 dword 0x80000003 (or
+    its patched form 0x00000003), (b) an AND opcode immediately before it
+    (`25` = and eax,imm32, or `81 /4` = and r32,imm32), and (c) the fixup
+    bytes in the following window (`.. 04 00 00 00` mov r32,4 AND
+    `83 c8..cf fc` or r32,-4 — both required; this filter is what skips the
+    file's 2 non-idiom uses of the constant).  The scan must find EXACTLY
+    `expect_sites` sites of exactly one form or it refuses (fail-loud).
+    """
+
+    _IMM_ORIG = b"\x03\x00\x00\x80"     # and r32, 0x80000003  (signed % 4)
+    _IMM_LFA = b"\x03\x00\x00\x00"      # and r32, 0x00000003  (unsigned & 3)
+    _OR_MINUS4 = re.compile(rb"\x83[\xc8-\xcf]\xfc")   # or r32, -4 (sign fixup)
+    _WINDOW = 28                        # fixup bytes live within this many bytes
+
+    def __init__(self, key, title, expect_sites, why, source, enabled=True):
+        self.key = key
+        self.title = title
+        self.expect_sites = expect_sites
+        self.why = why
+        self.source = source
+        self.enabled = enabled
+
+    def _scan(self, buf, imm):
+        hits = []
+        j = -1
+        while True:
+            j = buf.find(imm, j + 1)
+            if j < 0:
+                break
+            if not (buf[j - 1] == 0x25 or
+                    (buf[j - 2] == 0x81 and 0xE0 <= buf[j - 1] <= 0xE7)):
+                continue
+            w = bytes(buf[j + 4:j + 4 + self._WINDOW])
+            if b"\x04\x00\x00\x00" not in w:
+                continue
+            if not self._OR_MINUS4.search(w):
+                continue
+            hits.append(j)
+        return hits
+
+    def state(self, buf):
+        """'orig' | 'patched' at the idiom sites; any other census refuses."""
+        o = self._scan(buf, self._IMM_ORIG)
+        p = self._scan(buf, self._IMM_LFA)
+        if len(o) == self.expect_sites and not p:
+            return "orig", o[0]
+        if len(p) == self.expect_sites and not o:
+            return "patched", p[0]
+        raise LookupError(
+            f"{self.key}: found {len(o)} orig + {len(p)} patched idiom sites, "
+            f"expected exactly {self.expect_sites} of one form — refusing "
+            f"(wrong build, or a partial/foreign patch)")
+
+    def apply(self, buf):
+        """Clear the imm sign byte at every site; returns bytes changed."""
+        sites = self._scan(buf, self._IMM_ORIG)
+        for j in sites:
+            buf[j + 3] = 0x00
+        return len(sites)
 
 
 # --- The shipped patch set -------------------------------------------------
@@ -666,6 +748,30 @@ PATCHES = [
                "has no defect; only 4 `74`->`eb` bytes, no stack accounting involved).",
         enabled=True,
     ),
+    AlignIdiomPatch(
+        key="dat-align-lfa",
+        title="DAT-parser pointer-alignment fix for >2GB (LAA) buffers "
+              "(189x signed %4 -> unsigned &3)",
+        expect_sites=189,
+        why="acclient is large-address-aware; under dense-dat residency the "
+            "process exceeds 2 GB and archive/cache buffers land at addresses "
+            ">= 0x80000000, where retail's signed `% 4` alignment idiom "
+            "computes the wrong pad count -> cursor desync -> AV in the DAT "
+            "parsers (AnimData::UnPack et al).  Clearing the imm sign bit "
+            "makes it an unsigned `& 3`: byte-identical for sub-2GB pointers, "
+            "correct above.  Applies identically under wine (pure x86 ALU; "
+            "wine honors the LAA PE flag, and a 32-bit LAA process on a 64-bit "
+            "linux kernel gets ~4GB of address space, so high pointers are MORE "
+            "likely there, e.g. the T4 buildbox wine/DXVK stack).",
+        source="Minidump root-cause 2026-08-23 (acclient.exe.18236.dmp: AV at "
+               "0x9A049000 in AnimData::UnPack+0x16 from MotionData::UnPack, "
+               "align idiom at VA 0x5271A6; record 0x09000068 byte-identical "
+               "to retail base — parser math, not data).  See HANDOFF-2026-08-"
+               "23-crash-investigation.md.  Owner-verified on the 1070: Sawato "
+               "portal (2x prior crashes) + TN/Arwic clean.  Registry entry "
+               "reproduces the hand-patched acclient.eor.patched.lfa.exe "
+               "(sha256 f2880d6c…75a40730) byte-for-byte.",
+    ),
 ]
 
 
@@ -749,8 +855,8 @@ def cmd_apply(args):
             continue
         st, off = p.state(buf)
         if st == "orig":
-            buf[off:off + len(p.needle)] = p.replace
-            applied.append((p, off))
+            nb = p.apply(buf)
+            applied.append((p, off, nb))
         elif st == "patched":
             already.append((p, off))
         else:
@@ -767,14 +873,18 @@ def cmd_apply(args):
     print(f"input   {src}  (md5 {src_md5})")
     print(f"output  {dst}  (md5 {_md5(buf)})")
     print(f"PE checksum: {chk_note}")
-    for p, off in applied:
-        print(f"  applied  {p.key:16s} @ 0x{off:06X}  "
-              f"{p.needle.hex()} -> {p.replace.hex()}")
+    for p, off, nb in applied:
+        if hasattr(p, "needle"):
+            print(f"  applied  {p.key:16s} @ 0x{off:06X}  "
+                  f"{p.needle.hex()} -> {p.replace.hex()}")
+        else:
+            print(f"  applied  {p.key:16s} @ 0x{off:06X}  "
+                  f"({p.expect_sites} sites, {nb} bytes)")
     for p, off in already:
         print(f"  present  {p.key:16s} @ 0x{off:06X}  (already patched)")
     if not applied and not already:
         print("  (no patches enabled?)")
-    print(f"total code bytes changed: {sum(len(p.needle) for p,_ in applied)}")
+    print(f"total code bytes changed: {sum(nb for _, _, nb in applied)}")
 
 
 def cmd_verify(args):
@@ -803,8 +913,12 @@ def cmd_list(args):
     for p in PATCHES:
         tag = "shipped" if p.enabled else "candidate (not auto-applied)"
         print(f"[{p.key}] {p.title}   <{tag}>")
-        print(f"    sig     {p.sig.hex()}  (needle @ +{p.needle_at})")
-        print(f"    change  {p.needle.hex()} -> {p.replace.hex()}")
+        if hasattr(p, "sig"):
+            print(f"    sig     {p.sig.hex()}  (needle @ +{p.needle_at})")
+            print(f"    change  {p.needle.hex()} -> {p.replace.hex()}")
+        else:
+            print(f"    sites   {p.expect_sites} (idiom-scan; imm "
+                  f"{p._IMM_ORIG.hex()} -> {p._IMM_LFA.hex()} per site)")
         print(f"    why     {p.why}")
         print(f"    source  {p.source}")
 

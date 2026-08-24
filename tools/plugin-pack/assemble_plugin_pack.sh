@@ -158,6 +158,7 @@ mirror_dir() { # <src-dir> <dst-dir>   (top-level files + recurse subdirs, honou
 # 3a. pack root: zzpatcher + sample inject bat + our licence
 copy_in "$ZZP" "$PACK/zzpatcher.exe"
 copy_in "$REPO/LICENSE.md" "$PACK/LICENSE.md"
+copy_in "$REPO/LICENSE.md" "$PACK/licenses/LICENSE-ACME.md"   # audit's licenses/ layout (row 11)
 cat > "$PACK/acdt-inject.bat" <<'BAT'
 @echo off
 REM ── ACME plugin launch (attach-by-injection) ─────────────────────────────
@@ -217,7 +218,27 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 MIT
-echo "   licenses/: LGPL-3.0, GPL-3.0, Apache-2.0, MIT, FASM, dotnet LICENSE + THIRD-PARTY-NOTICES"
+# Zlib: canonical text (FontStashSharp family — audit row 6; not in common-licenses).
+cat > "$PACK/licenses/Zlib.txt" <<'ZLIB'
+The zlib License
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+ZLIB
+echo "   licenses/: LICENSE-ACME, LGPL-3.0, GPL-3.0, Apache-2.0, MIT, Zlib, FASM, dotnet LICENSE + THIRD-PARTY-NOTICES"
 
 # 3e. NOTICES.txt  (per audit §5 rows 1-8 + §7 asset credits)
 cat > "$PACK/NOTICES.txt" <<'NOTICES'
@@ -353,6 +374,12 @@ done < <(find "$PACK" -name FASM.DLL -print0)
 if find "$PACK" -name acclient.map | grep -q .; then echo "   ✗ acclient.map present (must be excluded)"; FAIL=1; fi
 # no pdb/xml
 if find "$PACK" \( -name '*.pdb' -o -name '*.xml' \) | grep -q .; then echo "   ✗ pdb/xml leaked into pack"; FAIL=1; fi
+# the audit's full licenses/ file set (LICENSE-AUDIT §"Minimum notice set")
+for lic in LICENSE-ACME.md LGPL-3.0.txt GPL-3.0.txt Apache-2.0.txt MIT.txt Zlib.txt FASM-LICENSE.TXT dotnet-LICENSE.TXT dotnet-THIRD-PARTY-NOTICES.TXT; do
+  [ -f "$PACK/licenses/$lic" ] || { echo "   ✗ licenses/$lic missing (audit minimum set)"; FAIL=1; }
+done
+# the split-licence wording rule applies to BOTH shipped text docs
+if grep -qi 'Split License' "$PACK/THIRD-PARTY-PROVENANCE.md"; then echo "   ✗ THIRD-PARTY-PROVENANCE.md names the Six Labors Split License (granted-license-only wording required)"; FAIL=1; fi
 # NOTICES names Apache-2.0 and NEVER the split licence
 grep -q 'Apache-2.0' "$PACK/NOTICES.txt" || { echo "   ✗ NOTICES.txt does not name Apache-2.0"; FAIL=1; }
 if grep -qi 'Split License' "$PACK/NOTICES.txt"; then echo "   ✗ NOTICES.txt names the Six Labors Split License (must reference Apache-2.0 only)"; FAIL=1; fi

@@ -1078,3 +1078,73 @@ server-side dat change.
   loop leaves the *mount* untouched — the code paths are independent by
   inspection (the mount happens at `acclient.c:293792`, before the loop at
   `:293812`), but the `/proc` fd check on arm D is what proves it.
+
+## `dat-align-lfa` — DAT-parser pointer alignment for >2GB (LAA) buffers (SHIPPED 2026-08-23; owner-verified same day)
+
+189 sites: `and r32, 0x80000003` → `and r32, 0x00000003` (one byte per site —
+the imm sign byte). Registered as an `AlignIdiomPatch` (idiom-scan, not a
+single unique signature): each site is located by the imm32 dword plus an AND
+opcode immediately before it (`25` = and eax,imm32 or `81 /4`) plus BOTH fixup
+markers in the following 28-byte window (`04 00 00 00` from `mov r32,4` and
+`83 c8..cf fc` = `or r32,-4`). The window filter is what skips the exe's 2
+non-idiom uses of the constant. The scan must census EXACTLY 189 sites of one
+form or it refuses.
+
+### Root cause (minidump-proven 2026-08-23)
+
+acclient is large-address-aware (PE characteristics 0x012E). Under dense-dat
+residency (r9) the process exceeds 2 GB, so cache/archive buffers land at
+addresses ≥ 0x80000000. Retail's archive 4-byte alignment idiom computes
+`(signed int)cursor % 4`; a pointer ≥ 0x80000000 is negative as a signed int,
+the modulo returns the wrong pad count, the read cursor desyncs from the real
+record layout, and a later read walks off the buffer → AV. Proof: dump
+`acclient.exe.18236.dmp` faulted reading `0x9A049000` in `AnimData::UnPack+0x16`
+from `MotionData::UnPack`, whose align idiom at VA 0x5271A6 is exactly this
+pattern; the record being parsed (MotionTable 0x09000068) is byte-identical to
+retail base — parser math, not data. Full narrative:
+`WorldBuilder-ACME-Edition/docs/lights-port/HANDOFF-2026-08-23-crash-investigation.md`.
+
+### Correctness
+
+For any pointer < 2 GB, `(signed)p % 4` and `p & 3` produce identical results
+(the value is non-negative, so the `jns` skips the fixup either way and the
+AND result is unchanged by clearing the imm sign bit — that bit only reports
+sign for negative inputs). The patched `and r32,3` always yields 0..3, so the
+`jns` fixup branch (`dec; or r,-4; inc`) is never taken: the sub-2GB path is
+byte-behavior-identical, and the ≥2GB path becomes correct instead of wrong.
+
+### Wine / linux (T4 buildbox) validity — static analysis 2026-08-23
+
+The patch is pure x86 integer ALU with no OS interaction, so it behaves
+identically under wine. Wine honors the LAA PE flag, and a 32-bit process on a
+64-bit linux kernel has no 2 GB kernel split — an LAA process there gets ~4 GB
+of address space, and wine/DXVK's own in-process allocations (shader caches,
+staging buffers) push the heap high sooner. High pointers are therefore MORE
+likely under the wine/T4 stack than on Windows, i.e. this fix is REQUIRED
+there, not merely compatible. Wine does not validate PE checksums for
+executables (only drivers), and the checksum is recomputed anyway.
+⚠ The buildbox `~/ac_client` kit was staged before this patch existed — redeploy
+`acclient.eor.patched.exe` from this directory on next boot before any wine gate.
+
+### Verification chain
+
+- Hand-patched build `acclient.eor.patched.lfa.exe`
+  (sha256 f2880d6c…75a40730) deployed to `D:\ac-dat-test\acclient.exe` on the
+  1070 (hash-confirmed on-box 2026-08-23). **Owner-verified: Sawato portal
+  (2 prior crashes) now clean; TN/Arwic clean.**
+- Registry entry byte-reproduces the hand patch: `apply --only dat-align-lfa`
+  over the pre-lfa canonical → sha256-identical to the hand-patched exe.
+- Full-stack reproduction: `apply` from pristine `acclient.eor.orig.exe` with
+  the shipped set (now including dat-align-lfa) → sha256-identical again
+  (canonical `acclient.eor.patched.exe` regenerated 2026-08-23; pre-lfa
+  canonical kept as `acclient.eor.patched.pre-lfa-20260823.bak`).
+- The 189-site census was cross-checked against the actual binary diff of the
+  hand-patched exe (exact offset-set equality, zero false positives in either
+  direction, both scan forms, all three exes).
+
+### Not fixed by this
+
+Crash family B (heap exhaustion at ~2.6 GB standing in Yaraq) is a different
+bug: this patch lets the parser SURVIVE high pointers; it does nothing about
+actually running out of address space. Footprint reduction (r9 content diet /
+residency governor) is the open lane.

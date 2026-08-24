@@ -157,7 +157,7 @@ WHY client_highres.dat IS REQUIRED
   silently with textures absent. So: both dats, and the client patch. play.bat
   checks all three and refuses to start rather than let you play a broken install.
 
-WHAT THE CLIENT PATCH DOES (8 sites, all documented in the .ps1)
+WHAT THE CLIENT PATCH DOES (9 logical patches, all documented in the .ps1)
   * palette leak + double-free fix (3 sites) - the community leak fix plus the
     mandatory third site; without it the client corrupts its heap at world entry.
   * DAT version-preserve - lets the client read compressed dat records.
@@ -165,6 +165,8 @@ WHAT THE CLIENT PATCH DOES (8 sites, all documented in the .ps1)
     advertise it to servers that never asked for it (your server sees the same
     three dats retail does, so it will not try to patch you).
   * 4K resolution unlock (2 sites) - UI resize clamps removed.
+  * DAT parser alignment (dat-align-lfa, 189 sites, one logical patch) - fixes
+    the client's unaligned DAT reads so dat files past 2 GB parse correctly.
   Retail acclient.exe   sha256 $RETAIL_SHA
   After patching        sha256 $PATCHED_SHA
 
