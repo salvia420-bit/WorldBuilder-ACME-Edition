@@ -39,7 +39,7 @@ if defined BAD (
 rem --- exe patch state -------------------------------------------------------
 rem The ACME kit redistributes no client bytes: acme-patch-client.ps1 patches
 rem the player's own retail acclient.exe. -Verify -Quiet reports rc 0 only when
-rem all 8 sites are present - idempotent, so an already-patched exe passes.
+rem all patch sites are present - idempotent, so an already-patched exe passes.
 if exist acme-patch-client.ps1 (
   if not exist acclient.exe (
     set MSG=acclient.exe is missing - copy the ACME kit files into your Asheron's Call install folder, don't run them from the download folder.

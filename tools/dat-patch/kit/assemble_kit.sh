@@ -122,11 +122,16 @@ INSTALL
   2. Copy every file from this archive into your Asheron's Call install folder.
   3. Run patch-my-client.bat once. It patches YOUR acclient.exe in place and
      refuses to touch anything if it doesn't recognise the file.
-  4. Merge this into your UserPreferences.ini (install folder or Documents):
+  4. In your UserPreferences.ini (install folder or Documents), set these two
+     keys in the [Render] section - spell the words out, do NOT use numbers:
          [Render]
-         EnvironmentTextureDetail=0
-         LandscapeTextureDetail=0
-     The boot default halves every texture - without this you see half the patch.
+         EnvironmentTextureDetail=VeryHigh
+         LandscapeTextureDetail=VeryHigh
+     A NUMBER here is read as a worst-first list index: =0 selects VeryLow
+     (quarter detail), the opposite of what it looks like. The boot default is
+     only Medium - without VeryHigh you see a fraction of the patch. Edit the
+     two keys in your existing ini; do not replace the whole file (it holds your
+     keybinds and audio).
   5. Start the game with play.bat (not acclient.exe directly).
 
 ON LINUX / macOS / WINE
