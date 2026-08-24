@@ -198,21 +198,6 @@ def _write_frame(f):
     return struct.pack("<7f", x, y, z, qw, qx, qy, qz)
 
 
-# hook sizes, from ACE.DatLoader/Entity/AnimationHooks/*.cs. Every hook starts
-# with u32 HookType + i32 Direction; the payload follows.
-_HOOK_FIXED = {
-    0x01: 4,           # Sound          : u32 gid
-    0x02: 4,           # SoundTable     : u32 soundType
-    0x03: 8,           # Attack         : f32 leftRight, f32 hi/lo (2 floats)
-    0x04: 8,           # AnimationDone? -> see below (unused)
-    0x05: 8,           # ReplaceObject  : AnimationPartChange (u16 partIdx,u32 partId) -> 6+pad
-    0x06: 4,           # Ethereal       : i32
-    0x07: 4,           # TransparentPart
-    0x08: 0,           # Luminous
-    0x09: 0,
-}
-
-
 def _skip_hook(r):
     """Only needed to walk retail animations; the baker emits zero hooks."""
     htype = r.u32()
@@ -230,9 +215,11 @@ def _sk(nbytes):
 
 
 def _sk_partchange(r):
-    r.o += 2  # part index u16
-    r.o += 4  # part id u32
-    r.align()
+    # ACE ReplaceObjectHook: u16 PartIndex, then a PACKED DataID (ReadAsDataIDOfKnownType):
+    # u16, high bit set -> a second u16 follows. Variable length, no alignment.
+    r.o += 2                                   # part index u16
+    tag = struct.unpack_from("<H", r.b, r.o)[0]
+    r.o += 4 if (tag & 0x8000) else 2          # packed 0x01-range DID
 
 
 def _sk_texchange(r):
@@ -248,18 +235,43 @@ def _sk_scale(r):
 
 
 def _sk_create_particle(r):
-    r.o += 4 * 4 + 28  # emitterId, partIndex, offset Frame(28), emitterInfoId
+    # ACE CreateParticleHook: EmitterInfoId u32, PartIndex u32, Offset Frame(28), EmitterId u32
+    r.o += 4 + 4 + 28 + 4
 
 
+# Payload sizes after the common (u32 HookType + i32 Direction) prefix, one entry per
+# ACE.DatLoader/Entity/AnimationHooks/*.cs Unpack (AnimationHookType 2026-08-24) — the whole
+# retail range 0x00..0x1A. Validated by parse+re-encode byte-identity over every 0x03 record
+# in retail client_portal.dat (see the sweep note in the git log); a wrong size here cannot
+# hide, it desyncs the walk and fails that roundtrip.
 _HOOK_SKIP = {
+    0x00: _sk(0),          # NoOp
     0x01: _sk(4),          # Sound            : u32 GID
     0x02: _sk(4),          # SoundTable       : u32 SoundType
-    0x03: _sk(8),          # Attack           : f32 LeftRight, f32 unk? (2 f32)
-    0x04: _sk(8),          # ReplaceObject    : see below (overwritten)
-    0x05: _sk(4),          # Ethereal         : i32
-    0x06: _sk(4),          # TransparentPart
-    0x07: _sk(4),          # Luminous
-    0x08: _sk(4),
+    0x03: _sk(28),         # Attack           : AttackCone (PartIndex u32 + 6 f32)
+    0x04: _sk(0),          # AnimationDone    : no payload
+    0x05: _sk_partchange,  # ReplaceObject    : AnimationPartChange
+    0x06: _sk(4),          # Ethereal         : i32
+    0x07: _sk(16),         # TransparentPart  : Part u32 + Start/End/Time f32
+    0x08: _sk(12),         # Luminous         : Start/End/Time f32
+    0x09: _sk(16),         # LuminousPart     : Part u32 + Start/End/Time f32
+    0x0A: _sk(12),         # Diffuse          : Start/End/Time f32
+    0x0B: _sk(16),         # DiffusePart      : Part u32 + Start/End/Time f32
+    0x0C: _sk(8),          # Scale            : End/Time f32
+    0x0D: _sk_create_particle,   # CreateParticle
+    0x0E: _sk(4),          # DestroyParticle  : u32 EmitterId
+    0x0F: _sk(4),          # StopParticle     : u32 EmitterId
+    0x10: _sk(4),          # NoDraw           : u32
+    0x11: _sk(0),          # DefaultScript    : no payload
+    0x12: _sk(4),          # DefaultScriptPart: u32 PartIndex
+    0x13: _sk(8),          # CallPES          : u32 PES + f32 Pause
+    0x14: _sk(12),         # Transparent      : Start/End/Time f32
+    0x15: _sk(16),         # SoundTweaked     : u32 SoundID + Priority/Probability/Volume f32
+    0x16: _sk(12),         # SetOmega         : Vector3
+    0x17: _sk(8),          # TextureVelocity  : USpeed/VSpeed f32
+    0x18: _sk(12),         # TextureVelocityPart : u32 PartIndex + USpeed/VSpeed f32
+    0x19: _sk(4),          # SetLight         : i32 LightsOn
+    0x1A: _sk_create_particle,   # CreateBlockingParticle : CreateParticleHook subclass
 }
 
 
