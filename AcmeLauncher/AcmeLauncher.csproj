@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ACME launcher-configurator. A THIN WPF shell over the proven CLI backbone:
+    it never injects or enumerates itself — it shells out to AcmeInject.exe and
+    reads/writes lights.cfg + the per-PID logs. The backbone stays the single
+    source of truth.
+
+    Code-only WPF (no .xaml): the WPF XAML markup compiler does not run on
+    Linux, so the whole UI tree is built in C#. This keeps the project
+    build-verifiable on the dev box while still producing a real WPF app on
+    Windows. It also matches the "simple, just works" ethos — no XAML data
+    binding to misfire.
+
+    net8.0-windows so a player needs no separate runtime when published
+    self-contained single-file (see publish.props note below).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <StartupObject>AcmeLauncher.App</StartupObject>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>AcmeLauncher</AssemblyName>
+    <RootNamespace>AcmeLauncher</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    Player-friendly publish, PINNED so `dotnet publish -c Release` can't regress
+    to a framework-dependent build: one self-contained AcmeLauncher.exe with no
+    .NET prerequisite. This is deliberate — the Install tab's own .NET-runtime
+    check implies the runtime may be absent, so the tool that tells you to
+    install .NET must not itself require .NET. (`dotnet build` stays a normal
+    framework build for fast dev iteration; only `publish` self-contains.)
+  -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true' or '$(PublishSingleFile)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+</Project>
