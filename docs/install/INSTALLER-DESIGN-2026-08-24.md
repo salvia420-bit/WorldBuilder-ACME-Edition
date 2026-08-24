@@ -153,9 +153,71 @@ This yields a clean two-layer split:
      the real "plugins for whatever you launched" answer; it needs a PID-picker
      and per-PID logging, and turns the launcher into an optional background
      helper for that use only.
-  Recommendation: **v1 ships options 1 (if TL allows) + 2; option 3 is the
-  v1.5 stretch.** Multi-boxers are never blocked — they always get the universal
-  layer; plugins are the enthusiast add-on.
+  **DECISION (owner, 2026-08-24): option 3 only — one mechanism that covers
+  everyone (single-box, multi-box, ThwargLauncher, Decal), because three parallel
+  paths breed "it's not working" confusion.** The bar the owner set: it has to
+  *actually* just work — "works sometimes" is worse than offering clear choices.
+  See the attach-viability assessment below; it clears the critical architectural
+  bar but has two residual risks to close before we bank on it.
+
+### Attach-by-PID viability (assessed against Chorizite source, 2026-08-24)
+
+**The critical unknown — does Chorizite tolerate attach to a running client, or
+was it built to load at startup? — resolves in favor of attach.**
+`Chorizite.NativeClientBootstrapper/StandaloneLoader.Init` →
+`DirectXHooks.Init` (`Hooks/DirectXHooks.cs:53-55`) installs its hooks on
+`RenderDeviceD3D::EndScene` and `…OnDeviceDisplayModeChange` **by byte
+signature** (`CreateHook<…>(…, "## 56 8B F1 …")`), i.e. on static client code
+that exists from process start and is called every frame — it does **NOT**
+intercept `Direct3DCreate9`/`CreateDevice` (a one-time startup event). The D3D
+device pointer is captured *lazily* from the first `EndScene` after init
+(`StandaloneLoader.Startup(unmanagedD3DPtr)`), and the WndProc hook installs
+lazily on that first frame too (`DirectXHooks.cs:87`). Our own AcmeLights hooks
+are the same shape (Reloaded.Hooks, signature/VA-located, on repeatedly-called
+static functions). **So attaching to an already-running client initializes
+Chorizite + the plugins on the next rendered frame, with the live device — no
+startup event is missed.** This is what makes "one mechanism for everyone" real.
+
+The code change is small: AcmeInject already does the hard part (LoadLibraryW +
+base-aware Bootstrap via `CreateRemoteThread`). Attach swaps
+`CreateProcessW(CREATE_SUSPENDED)` for `OpenProcess(<existing pid>)`; the
+remote-thread injection is identical.
+
+**Two residual risks decide "just works" vs "works sometimes" — neither is a
+showstopper, but both must be closed before committing:**
+
+1. **Live-patch race (TESTABLE — the make-or-break, must test before we bank on
+   it).** Spawn-injection installs every prologue detour while the client's main
+   thread is *suspended* (zero race). Attach installs ~10 detours (Chorizite's +
+   ours) into a **live** render loop — patching a function prologue while the
+   render thread is executing that function crashes. Whether Reloaded.Hooks
+   patches safely on a live thread (it can suspend threads around the write) is
+   the one thing we must **verify by testing an actual attach**, not assume. If
+   Reloaded's live-patch isn't safe, the fix is known (suspend the render thread
+   around hook install, or install from a hook-driven safe point), but we need
+   the test to know whether that work is needed. This is the exact "does it just
+   work" question and it is answerable on the fleet.
+2. **AV/EDR blocking (ENVIRONMENTAL — inherent to all injection, can't be fully
+   eliminated).** `OpenProcess`+`WriteProcessMemory`+`CreateRemoteThread` is the
+   textbook injection signature; some players' security software will block it.
+   This is true of the *current* spawn-injector too (attaching to a running
+   foreign process is marginally more flagged than spawning your own child).
+   Mitigations: code-sign the injector, and document an AV allowlist step. Honest
+   bar: this will not be 100% on every machine — but it is the same exposure the
+   plugin pack already has, not new to attach. The universal dats+patches layer
+   has zero injection and is unaffected, so a blocked inject degrades to
+   "full visual upgrade, no plugins," never to "broken game."
+
+Also required (solvable, not risks): an **idempotency guard** (double-inject =
+Chorizite loaded twice = crash; gate on a named mutex or a check that the
+injector module isn't already present), and **per-PID logging** so multi-box
+plugin logs don't interleave.
+
+**Recommended next step before committing code:** a minimal attach prototype —
+add an `--attach <pid>` path to AcmeInject, launch a client the plain way
+(mimicking TL/Decal), attach, and confirm it initializes cleanly and repeatably
+without crashing the render loop. That single test closes risk 1 and tells us
+whether the "just works" bar is met as-is or needs the thread-suspend refinement.
 
 ### ThwargLauncher launch mechanics (verified against source, 2026-08-24)
 
