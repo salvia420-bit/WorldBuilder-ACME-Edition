@@ -129,3 +129,80 @@ Full details: `docs/lights-port/P3-GLOWLIGHTS-2026-08-23.md` §9–§10, `P4-SEL
    don't starve; 10-min stability with transitions).
 4. **Calibrate `bloomdayamb`** from the live `amb=` at noon outdoors.
 5. Ragdoll death retest (owner hadn't gotten to it).
+
+## UPDATE 2026-08-23 (late) — bloom reverted, LFA patch registered + wine-validated, town tour clean
+
+- **Bloom reverted to pre-adjustment behavior**: `bloomday=0` appended to `C:\Temp\acdt\lights.cfg`
+  (the code's documented escape hatch — owner-proven night knobs 0.55/2.0/3 everywhere; day
+  scaling off). Glow gains and outdoor enable left as shipped.
+- **`dat-align-lfa` folded into `patch_client.py`** (the OWED item): new `AlignIdiomPatch` class
+  (per-site idiom scan, exact-189 census, fail-loud), entry shipped/enabled, PATCHES.md section
+  added. Registry entry reproduces the hand-patched exe byte-for-byte, and a full `apply` from
+  pristine orig now regenerates the canonical `acclient.eor.patched.exe` sha256-identical to the
+  deployed 1070 exe (pre-lfa canonical kept as `.pre-lfa-20260823.bak`).
+- **Wine/T4 validity (static, code-only — buildbox not touched)**: the fix is pure x86 ALU, wine
+  honors the LAA flag (confirmed intact, 0x012E), and a 32-bit LAA process on a 64-bit linux
+  kernel gets ~4GB — plus DXVK's in-process allocations — so high pointers are MORE likely under
+  wine: the fix is required there, not merely compatible. ⚠ The buildbox `~/ac_client` kit exe
+  predates the fix — redeploy the regenerated canonical on next boot before any wine gate.
+- **Crash tour on the 1070 (headless, box idle, sound verified muted)**: 2 loops ×
+  {Holtburg, Cragstone, Sawato, Hebian-To, Shoushi, Zaikhal, precise Yaraq crash spot
+  (@teleloc 0x7D64000D 31.90 105.93 11.84)}, run-ahead segments at every stop.
+  **14/14 stops clean, zero crashes, no new dumps.** VM peaked at 2,950MB (loop-2 Holtburg) and
+  the client SURVIVED — 300MB above the 2.65GB that killed it pre-LFA — with the degrade
+  mitigations reclaiming to ~2.3-2.5GB after each hop. Family B (heap exhaustion) remains the
+  open ship blocker: headroom is thin, footprint reduction still needed. Tour rig:
+  `D:\Temp\acdt-crashtour.ps1` (task `acdtcrashtour`; log `D:\Temp\crashtour.log`).
+  Rig gotcha for reruns: the rig's own SendInput resets the box idle timer — the tour's start
+  guard is 2 min for that reason, and QuietCheck must only count the post-keyup sleep.
+- Client left RUNNING (pid 1100) parked at the Yaraq crash spot, bloom-reverted build live.
+
+## UPDATE 2026-08-23 (night) — family-B root-caused (fragmentation) + residency governor built
+
+- **Dump forensics** (fork A, `ANALYSIS-2026-08-23-familyB-yaraq-dump.md`): family B =
+  address-space FRAGMENTATION, not exhaustion. Largest free block 1.11MB at crash (priv only
+  1363MB); heap sprawled 466MB/235 segments into the high half; fault = RtlFreeHeap coalesce
+  into a decommitted heap-segment interior during CPhysicsObj/ParticleEmitter teardown. LFA
+  patch confirmed live in the dump (family A ≠ B). ⚠ RTSSHooks.dll (RivaTuner overlay) pins
+  52.6MB of low VA on the 1070 — recommend removing; exclude from shipping player boxes.
+- **Residency governor** (fork B research `RESEARCH-2026-08-23-residency-governor.md`, impl
+  `AcmeLights/Services/MemoryGovernor.cs`): Tier 1 rightsizes the 2005-era DBOCache freelist
+  budgets (dead-object COUNTS: textures 400→64 each, gfxobj 200→80, land/lbi/cell 144→48,
+  surface 200→64, scene 100→40) — FreelistAdd self-enforces nMaxSize on retail's own path, so
+  the caps work during portal loads too. Tier 2 flushes all freelists
+  (DBCache::FlushFreeObjects(0) @0x4144E0) when committed-private > memlowmb (1100) OR
+  low-2GB largest-free-block < memfragmb (16). Tier 3 (priv > 1350 or lfree < 6):
+  KeepFreeObjects(false,0) + UnloadCellData until recovery. Layout probe at init self-disables
+  on mismatch; memgov=0 = zero footprint; live off restores retail budgets. Knobs:
+  memgov/memlowmb/memhighmb/memfragmb/memcritmb/memcritfragmb/memtrimcooldown/memlog/
+  memcaptex/memcapgfx/memcapsurf/memcapland/memcapscene. Telemetry (memlog=1): 5s line
+  `memgov priv= lfree=` + per-cache free/total — answers "which cache holds the r9 bulk" live.
+- Bloom set to a moderate day middle (bloomday=1, 0.45/2.6/3) per owner.
+- All four DBCache VAs, struct offsets (fieldlist 0x4e44), conventions, FreelistAdd overflow
+  self-enforcement, and KeepFreeObjects' m_fCanKeepFreeObjs gating re-verified in decomp/PDB/map
+  before implementation.
+
+## UPDATE 2026-08-23 (night, 2) — governor gauntlet: 14/14 clean, footprint down ~300MB
+
+Second 14-stop gauntlet (same 2×7 towns + runs) on the governor build (retuned live:
+memlowmb=1300 memhighmb=1200 memcritmb=1700 memcritfragmb=5): **zero crashes, no new dumps.**
+Client killed cleanly at tour end (owner request).
+
+- Peaks vs pre-governor run: Holtburg loop-2 priv 2060MB (was 2344), VM peak 2708 (was 2950);
+  Yaraq rest priv ~1430-1470 (was ~1600). ~200-300MB reclaimed per dense town.
+- **The entire run stayed in Tier-3 crit-hold** (boot was into Yaraq at lfree=7MB; the recovery
+  gate — priv<memhighmb AND lfree>2×memfragmb — never passed inside r9 towns). Every freelist
+  0/N throughout = zero dead-pin, the max-aggression mode. Effectively: with the r9 dats, dense
+  towns run with freelist caching disabled BY DESIGN until the content diet lands. Escape is
+  automatic in light areas (dungeon/wilderness where priv<1200 + lfree>32).
+- **lfree hit 0MB during several town loads and the client survived every time** — the LFA fix
+  makes high-half heap growth work, and the governor bounds the sprawl. But lfree=0 transitions
+  show the IN-USE r9 footprint (live rsurf ~610-650, stex ~250-290 per town — untouchable by
+  freelist caps) is the fragmenter: the content diet on the 0x06 bulk remains the root fix for
+  comfortable headroom; the governor is the backstop that makes current r9 shippable.
+- Watch item for the owner's next live session: crit-hold disables freelist reuse → possible
+  hitching from re-loads on scenery churn (memlog=1 is left on in lights.cfg — 1 line/5s;
+  `memgov=0` restores retail behavior entirely, hot).
+- Code NOT yet committed (branch `integ/lights-0823-followup` has the working tree changes:
+  MemoryGovernor.cs + LightsConfig/RenderCallback/AddressResolver/Plugin wiring + 3 docs +
+  patch_client.py lane on /mnt/wbterminal2).
