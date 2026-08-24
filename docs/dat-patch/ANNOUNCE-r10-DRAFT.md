@@ -46,9 +46,9 @@ installed over your own files:
   re-encoded through the same DXT path the client uses. No third-party art.
 - **Dungeon relief**: 3,924 sculpted wall-environment variants across 2,193
   landblocks — flat dungeon walls gain real displaced geometry.
-- **Creatures**: 1,163 creature models re-meshed at 4× subdivision (with the
-  proportions kept honest — the pass that bulged some heads was caught and
-  reverted before ship).
+- **Creatures**: 1,005 creature model parts re-meshed at 4× subdivision (with
+  the proportions kept honest — the pass that bulged 204 heads was caught and
+  those reverted to retail before ship).
 - **Correctness**: this release also repairs 3,414 palettized texture records a
   build-pipeline bug had corrupted in earlier internal tiers (wrong palette
   rows = muddy NPC clothing). Nothing corrupted was ever publicly shipped.

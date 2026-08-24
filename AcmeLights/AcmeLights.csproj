@@ -76,6 +76,9 @@
     <None Update="manifest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="lights.cfg.example">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="README.md">
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </None>

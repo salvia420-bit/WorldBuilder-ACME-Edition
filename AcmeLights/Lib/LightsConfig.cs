@@ -305,7 +305,7 @@ namespace AcmeLights.Lib {
                         if (s.Length == 0 || s[0] == '#' || s[0] == ';') continue;
                         int eq = s.IndexOf('=');
                         if (eq <= 0) continue;
-                        Apply(s.Substring(0, eq).Trim().ToLowerInvariant(), s.Substring(eq + 1).Trim());
+                        Apply(s.Substring(0, eq).Trim().ToLowerInvariant(), StripInlineComment(s.Substring(eq + 1)));
                     }
                     LoadedFrom = path;
                     _activePath = path;
@@ -413,5 +413,15 @@ namespace AcmeLights.Lib {
             float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v);
         private static bool Hex(string s, out uint v) =>
             uint.TryParse(s.TrimStart('#'), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v);
+
+        /// <summary>Strip a trailing `# ...` / `; ...` comment from a value — ported verbatim
+        /// from AcmeSky's SkyConfig (the 2026-08-23 fix: an inline comment made float.TryParse
+        /// fail and the key was silently DROPPED, so a cfg copied from the example file had
+        /// every commented key ignored while looking perfectly configured).</summary>
+        private static string StripInlineComment(string raw) {
+            int c = raw.IndexOfAny(CommentChars);
+            return (c >= 0 ? raw.Substring(0, c) : raw).Trim();
+        }
+        private static readonly char[] CommentChars = { '#', ';' };
     }
 }

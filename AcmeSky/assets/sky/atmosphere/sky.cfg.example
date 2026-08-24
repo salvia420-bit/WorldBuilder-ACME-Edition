@@ -33,6 +33,7 @@ skytimeoverride = -1
 # Picks the baked palette AND the live path's coverage/FAIR-vs-STORM look, so each of the six
 # weather classes can be verified on demand.
 skyweatheroverride = auto
+# (`weather` is an accepted ALIAS of skyweatheroverride -- same last-key-wins rule as time.)
 
 # --- world swizzle (THE 2026-08-21 fix; leave ON) ---------------------------------------
 # The client's D3D render world is the AC world with y and z SWAPPED (Y-up). Decomp proof:
@@ -88,12 +89,17 @@ storm      = -1     # -1 = AUTO (client weather flag = the retail is_storm signa
                     # FAIR <-> STORM: 600 m deck + cumulonimbus tower + 10x haze), 0/1 force
 clouditers = 500    # primary raymarch cap (takram high preset; 200 = low)
 cloudres   = 1      # cloud RT resolution fraction (1 = full; ~75 fps on the 1070 at 1080p)
-cloudminstep = 50   # primary march min step, metres (50 = takram high, 10 = ultra)
+cloudminstep = 10   # primary march min step, metres (10 = takram ultra, THE shipped default; 50 = high)
 cloudsunsteps = 2   # secondary sun march iterations
 cloudgroundsteps = 3 # ground-bounce march iterations (0 = off)
 cloudaccurate = 1   # 1 = ACCURATE_SUN_SKY_LIGHT (per-sample Bruneton irradiance)
 cloudturb  = 1      # 1 = TURBULENCE displacement (350 m, repeat 20)
 cloudhaze  = 1      # 1 = takram haze (3e-5 fair / 3e-4 storm)
+cloudtaa   = 0      # 1 = temporal resolve (takram cloudsResolve TAA). DEFAULT OFF
+                    # 2026-08-22: the resolve shows vertical slab artifacts on the 1070;
+                    # spatial-only is the shipped look. Range 0..1.
+cloudtaagamma = 1   # TAA variance-clipping gamma (takram default 1; range 0.1..64)
+cloudtaaalpha = 0.1 # TAA current-frame blend weight (holtburger temporalAlpha; 0.01..1)
 # NOT ported (the one remaining takram gap): Beer Shadow Map + light shafts.
 # debug outputs (see `output` above): 6 = clouds-only (tonemapped over black),
 # 7 = aerial-perspective inscatter raw, 8 = AP transmittance raw, 9 = cloud front depth.
@@ -104,7 +110,7 @@ cloudhaze  = 1      # 1 = takram haze (3e-5 fair / 3e-4 storm)
 # full-res CPU readback costs far more than native. Biggest levers, in order:
 #   cloudres     quarters the raymarched pixel count at 0.5 -- by far the cheapest win, and
 #                the cloud RT is already lower-frequency than the sky, so it costs little.
-#   cloudminstep 50 is takram HIGH (10 is ULTRA and is what ships); 5x coarser primary march.
+#   cloudminstep 50 is takram HIGH (the shipped default above is 10 = ULTRA); 5x coarser primary march.
 #   clouditers   250 halves the iteration cap (200 = takram low preset).
 # Do NOT make these the shipped defaults -- the 1070 is the perf baseline and it does not
 # need them. Use them for capture sessions on the T4.

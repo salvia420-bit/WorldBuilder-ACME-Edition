@@ -51,7 +51,8 @@ if [ "$VERIFY" = 1 ]; then
 fi
 
 KIT="$OUT/acme-$TAG"
-echo "== kit dir: $KIT"
+echo "== kit dir: $KIT (fresh)"
+rm -rf "$KIT"
 mkdir -p "$KIT"
 
 copy_in() {   # <src> <dest-name>
@@ -73,10 +74,17 @@ copy_in "$PORTAL" client_portal.dat
 [ -n "$CELL" ] && copy_in "$CELL" client_cell_1.dat
 
 echo "== launcher + patcher"
-for f in play.bat patch-my-client.bat acme-patch-client.ps1 acme-patch-client.py; do
+for f in play.bat play.sh patch-my-client.bat acme-patch-client.ps1 acme-patch-client.py; do
   cp -f "$HERE/$f" "$KIT/$f"
   echo "-- $f"
 done
+
+# Player-facing patch documentation ships with the kit. The internal registry doc
+# (ac-eor-patch/PATCHES.md: buildbox paths, backup ledger, TODOs) stays in-repo;
+# CLIENT-PATCHES.md is the derived player/auditor version.
+cp -f "$HERE/CLIENT-PATCHES.md" "$KIT/CLIENT-PATCHES.md"
+echo "-- CLIENT-PATCHES.md (what the 9 client patches do)"
+chmod +x "$KIT/play.sh" 2>/dev/null || true
 
 echo "== kit-manifest.txt (play.bat reads this: <file>|<exact size>)"
 : > "$KIT/kit-manifest.txt"
@@ -113,6 +121,8 @@ WHAT'S IN THE BOX
   patch-my-client.bat      one-time client patch, run once           [Windows]
   acme-patch-client.ps1    the patch itself - plain text, auditable  [Windows]
   acme-patch-client.py     the same patch + install check            [Linux/wine]
+  play.sh                  start the game via wine, checks first     [Linux/wine]
+  CLIENT-PATCHES.md        what the 9 client patches do and why
   kit-manifest.txt         file sizes the launcher verifies
   SHA256SUMS.txt           checksums for everything above
 
@@ -139,7 +149,9 @@ ON LINUX / macOS / WINE
      python3 acme-patch-client.py              patches your acclient.exe once
      python3 acme-patch-client.py --check-kit  before you play: verifies the
                                                dats and the client patch
-  then launch acclient.exe through wine the way you normally do.
+  then launch with  ./play.sh -h <server> -p 9000 -a <account> -v <password>
+  (it re-runs the install check first, like play.bat), or launch acclient.exe
+  through wine the way you normally do.
 
 IF YOU USE ANOTHER LAUNCHER (ThwargLauncher, Decal, a shortcut...)
   Those start acclient.exe directly, so the install check never runs. The game
@@ -200,9 +212,16 @@ echo "== SHA256SUMS.txt"
 ( cd "$KIT" && sha256sum client_portal.dat \
     $( [ -f client_highres.dat ] && echo client_highres.dat ) \
     $( [ -f client_cell_1.dat ] && echo client_cell_1.dat ) \
-    play.bat patch-my-client.bat acme-patch-client.ps1 acme-patch-client.py kit-manifest.txt \
+    play.bat play.sh patch-my-client.bat acme-patch-client.ps1 acme-patch-client.py CLIENT-PATCHES.md kit-manifest.txt \
     README.txt > SHA256SUMS.txt )
 cut -c1-8,66- "$KIT/SHA256SUMS.txt" | sed 's/^/   /'
+
+# --- internal-leak gate: no dev paths/hostnames in any shipped text file --------
+echo "== internal-leak gate (shipped text files)"
+if grep -rlEI '/mnt/|/home/|buildbox|wbterminal' "$KIT" --include='*.txt' --include='*.md' --include='*.bat' --include='*.sh' --include='*.ps1' --include='*.py'; then
+  echo "INTERNAL PATH/HOST LEAKED into shipped text (files above)" >&2; exit 1
+fi
+echo "   clean"
 
 # --- self-gate: play.bat's own rule, run here so a broken kit never ships ----
 if [ "$VERIFY" = 1 ]; then
@@ -227,7 +246,7 @@ if [ "$PACKAGE" = 1 ]; then
   echo "== package -> $PKG"
   TARZ="gzip -1"; command -v pigz >/dev/null && TARZ="pigz -1"
   tar -I "$TARZ" -cf "$PKG" -C "$OUT" "acme-$TAG"
-  sha256sum "$PKG" > "$PKG.sha256"
+  sha256sum "$PKG" | sed "s#$OUT/##" > "$PKG.sha256"
   ls -l "$PKG"; cat "$PKG.sha256"
   # .zip alongside the .tgz: the kit is Windows-first now (play.bat, the .ps1
   # patcher), and Windows has no built-in tgz. -1 because the payload is dats
@@ -236,7 +255,7 @@ if [ "$PACKAGE" = 1 ]; then
     ZPKG="$OUT/acme-$TAG.zip"
     echo "== package -> $ZPKG"
     ( cd "$OUT" && zip -1 -r -q "acme-$TAG.zip" "acme-$TAG" )
-    sha256sum "$ZPKG" > "$ZPKG.sha256"
+    sha256sum "$ZPKG" | sed "s#$OUT/##" > "$ZPKG.sha256"
     ls -l "$ZPKG"; cat "$ZPKG.sha256"
   else
     echo "   zip not installed - skipping the .zip (tgz written)" >&2

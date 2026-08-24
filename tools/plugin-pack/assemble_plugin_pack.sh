@@ -187,6 +187,36 @@ for pl in AcmeLights AcmeSky AcmeRagdoll AcmeRedline; do
   echo "   plugins/$pl/: $(find "$PACK/Chorizite/plugins/$pl" -type f | wc -l) files"
 done
 
+# 3c2. published Chorizite patches (S2): the provenance/NOTICES docs promise the
+# "published patches" for our modified MIT runtime build — ship them in the pack.
+mkdir -p "$PACK/chorizite-patches"
+for f in dx-attach-init.patch per-pid-log.patch; do
+  copy_in "$REPO/tools/chorizite-patches/$f" "$PACK/chorizite-patches/$f"
+done
+# player-facing README (the repo's dev README documents internal workflow; this one
+# documents what a player/auditor needs: what the patches do + how to apply them).
+cat > "$PACK/chorizite-patches/README.md" <<'CPREADME'
+# Chorizite patches (published sources of our runtime modifications)
+
+The `Chorizite\` runtime in this pack is the open-source Chorizite plugin
+runtime (MIT, https://github.com/Chorizite) built with the two small patches in
+this folder. Shipping the patches is what makes our modified build auditable:
+apply them to the upstream source at the pinned revision and you can rebuild
+byte-equivalent assemblies yourself.
+
+| patch | what it does |
+|---|---|
+| `dx-attach-init.patch` | lets the runtime finish its one-time plugin startup when it is injected into an ALREADY-RUNNING client (the attach path this pack uses), by also driving startup from the per-frame EndScene hook. The normal launch path is unchanged. |
+| `per-pid-log.patch` | each client writes its own `log-<pid>.txt` instead of every client interleaving into one shared `log.txt` (matters when you multi-box). |
+
+Apply to a Chorizite source checkout with:
+
+    git apply dx-attach-init.patch per-pid-log.patch
+
+Full per-file provenance (versions, licence, shas): `..\THIRD-PARTY-PROVENANCE.md`.
+CPREADME
+echo "   chorizite-patches/: player README + the two published patches"
+
 # 3d. licenses/  (canonical texts from /usr/share/common-licenses; cache copies where exact)
 copy_in "$COMMON_LIC/LGPL-3"    "$PACK/licenses/LGPL-3.0.txt"
 copy_in "$COMMON_LIC/GPL-3"     "$PACK/licenses/GPL-3.0.txt"
@@ -362,6 +392,13 @@ PROV_DST="$PACK/THIRD-PARTY-PROVENANCE.md"
   # tail after the placeholder line, if any
   awk 'f{print} /<!-- shas appended at packaging -->/{f=1}' "$PROV_SRC"
 } > "$PROV_DST"
+# M2: the repo doc points at tools/chorizite-patches/ -- in the SHIPPED copy the
+# patches sit beside this document; phrase it so it is true in the standalone pack
+# AND inside the release archive (acme-plugins/).
+sed -i 's#tools/chorizite-patches/#chorizite-patches/#g' "$PROV_DST"
+grep -q 'tools/chorizite-patches' "$PROV_DST" && die "provenance path rewrite incomplete"
+# one clarifying line under the title so both contexts read true
+sed -i '1a\\n> The `chorizite-patches/` folder referenced below ships in this pack, beside this document.' "$PROV_DST"
 echo "   SHA256SUMS.txt + THIRD-PARTY-PROVENANCE.md (per-file table) written"
 
 # ── 5. Verify pass ──────────────────────────────────────────────────────────
@@ -384,6 +421,47 @@ if grep -qi 'Split License' "$PACK/THIRD-PARTY-PROVENANCE.md"; then echo "   ✗
 # NOTICES names Apache-2.0 and NEVER the split licence
 grep -q 'Apache-2.0' "$PACK/NOTICES.txt" || { echo "   ✗ NOTICES.txt does not name Apache-2.0"; FAIL=1; }
 if grep -qi 'Split License' "$PACK/NOTICES.txt"; then echo "   ✗ NOTICES.txt names the Six Labors Split License (must reference Apache-2.0 only)"; FAIL=1; fi
+# S2: the published patches must ship
+for f in README.md dx-attach-init.patch per-pid-log.patch; do
+  [ -f "$PACK/chorizite-patches/$f" ] || { echo "   ✗ chorizite-patches/$f missing"; FAIL=1; }
+done
+# S7/S8: the three cfg example files must ship with their plugins
+[ -f "$PACK/Chorizite/plugins/AcmeSky/assets/sky/atmosphere/sky.cfg.example" ] || { echo "   ✗ sky.cfg.example missing from AcmeSky"; FAIL=1; }
+[ -f "$PACK/Chorizite/plugins/AcmeLights/lights.cfg.example" ] || { echo "   ✗ lights.cfg.example missing from AcmeLights"; FAIL=1; }
+[ -f "$PACK/Chorizite/plugins/AcmeRagdoll/ragdoll.cfg.example" ] || { echo "   ✗ ragdoll.cfg.example missing from AcmeRagdoll"; FAIL=1; }
+# S8: the generated examples must be CURRENT vs Knobs.Generated. Regenerate into a
+# TEMP dir and diff -- verify must NEVER write the tracked tree (a self-healing
+# in-tree regenerate would mask a stale commit).
+TMPEX=$(mktemp -d)
+python3 "$REPO/tools/plugin-pack/gen_cfg_examples.py" "$TMPEX" >/dev/null 2>&1 || { echo "   ✗ gen_cfg_examples.py failed"; FAIL=1; }
+cmp -s "$TMPEX/lights.cfg.example" "$PACK/Chorizite/plugins/AcmeLights/lights.cfg.example" || { echo "   ✗ lights.cfg.example is stale vs Knobs.Generated"; FAIL=1; }
+cmp -s "$TMPEX/ragdoll.cfg.example" "$PACK/Chorizite/plugins/AcmeRagdoll/ragdoll.cfg.example" || { echo "   ✗ ragdoll.cfg.example is stale vs Knobs.Generated"; FAIL=1; }
+rm -rf "$TMPEX"
+# B3 gate: every UNcommented key=value in the shipped sky.cfg.example must equal
+# the Knobs.Generated default (the hand-maintained file must not drift from ship).
+python3 - "$PACK/Chorizite/plugins/AcmeSky/assets/sky/atmosphere/sky.cfg.example" "$REPO/AcmeLauncher/Knobs.Generated.cs" <<'SKYGATE' || { echo "   ✗ sky.cfg.example drifts from Knobs.Generated defaults"; FAIL=1; }
+import re, sys
+ex, gen = sys.argv[1], sys.argv[2]
+defaults = {m.group(1): m.group(2) for m in re.finditer(
+    r'new KnobDef\("Sky", "sky", "[^"]*", "([^"]*)", KnobType\.\w+, "([^"]*)"', open(gen).read())}
+bad = []
+for raw in open(ex):
+    line = raw.split('#', 1)[0].split(';', 1)[0].strip()
+    if not line or '=' not in line: continue
+    k, v = (t.strip() for t in line.split('=', 1))
+    if k not in defaults: bad.append(f"{k}: not a knob"); continue
+    d = defaults[k]
+    if k == "skyweatheroverride":
+        # the plugin normalises the auto family to "" (SkyConfig.cs:290)
+        norm = lambda x: "" if x.lower() in ("", "auto", "-1", "live", "off") else x.lower()
+        same = norm(v) == norm(d)
+    else:
+        try: same = abs(float(v) - float(d)) < 1e-9
+        except ValueError: same = v == d
+    if not same: bad.append(f"{k}: example={v} default={d}")
+for b in bad: print("   sky-example drift:", b)
+sys.exit(1 if bad else 0)
+SKYGATE
 # SHA256SUMS re-verifies
 ( cd "$PACK" && sha256sum -c SHA256SUMS.txt >/tmp/pp-shacheck.log 2>&1 ) || { echo "   ✗ SHA256SUMS re-verify failed"; tail -5 /tmp/pp-shacheck.log; FAIL=1; }
 [ "$FAIL" = 0 ] || die "verify pass FAILED — pack is not shippable"

@@ -27,6 +27,9 @@ def norm_default(default, typ):
     only Color/String stay blank when unknown."""
     if default is None: return "0" if typ in ("Toggle", "Float", "Integer") else ""
     d = default.strip()
+    # string knob: the decl default is a quoted literal ("nasa") -- ship it bare
+    if typ == "String" and len(d) >= 2 and d[0] == '"' and d[-1] == '"':
+        return d[1:-1]
     if typ == "Color":
         d = d.replace("0x", "").replace("0X", "").rstrip("uU")
         return d if d else "0"
@@ -38,14 +41,23 @@ def norm_default(default, typ):
 def fields(text):
     """field name -> (default_literal, description, decl_type) from a same-line // comment (not ///)."""
     out = {}
-    for m in re.finditer(r'public\s+(float|uint|int|bool|long)\s+(\w+)\s*=\s*([^;]+);(?:\s*//(?!/)\s*(.*))?', text):
+    for m in re.finditer(r'public\s+(float|uint|int|bool|long|string)\s+(\w+)\s*=\s*([^;]+);(?:\s*//(?!/)\s*(.*))?', text):
         dtype, name, default, comment = m.group(1), m.group(2), m.group(3).strip(), (m.group(4) or "").strip()
         desc = re.sub(r'^[a-z0-9]+:\s*', '', comment)
         if desc.lstrip().startswith('---'): desc = ''
         out[name] = (default, desc, dtype)
     return out
 
-def infer_type(default_lit, mn, mx, is_color, is_bool):
+# Continuous float knobs whose whole-number defaults+bounds would otherwise snap to
+# Integer (review 2026-08-25): documented working values are non-integer (headlamp
+# 2.25, rangeadjust retail 1.5, the intensity/boost multipliers) -- an Integer
+# slider would make those values unreachable in the Tune tab.
+FLOAT_KNOBS = {"rangeadjust", "ambientboost", "headlamp", "headlampfalloff",
+               "glowintensity", "glowportalboost", "glowprojectileboost",
+               "glowcreatureboost", "glowimpactboost"}
+
+def infer_type(default_lit, mn, mx, is_color, is_bool, knob=None):
+    if knob in FLOAT_KNOBS: return "Float"
     if is_color: return "Color"
     if is_bool: return "Toggle"
     d, lo, hi = num(default_lit), num(mn), num(mx)
@@ -99,7 +111,7 @@ def parse_lights_sky(path, group_fn, env_defaults=None):
         edef, ebool = env_defaults.get(field, (None, None))
         default = edef if edef is not None else fdef
         is_bool = bool(ebool) or dtype == "bool"
-        typ = infer_type(default, mn, mx, is_color, is_bool)
+        typ = infer_type(default, mn, mx, is_color, is_bool, knob=knob)
         if not cm and not is_color: typ = "String"
         knobs.append(dict(knob=knob, group=group_fn(knob), type=typ,
                           default=norm_default(default, typ),

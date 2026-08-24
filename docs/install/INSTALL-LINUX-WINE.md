@@ -93,6 +93,8 @@ dats overwrite, the patcher keeps its own `acclient.exe.acme-orig.bak`):
 cd ~/ac              # <- YOUR retail install folder (has acclient.exe + the base DLLs)
 cp ~/Downloads/acme-kit/client_*.dat .
 cp ~/Downloads/acme-kit/acme-patch-client.py .
+cp ~/Downloads/acme-kit/kit-manifest.txt .   # --check-kit and play.sh verify against this
+cp ~/Downloads/acme-kit/play.sh .            # the check-then-launch script (step 6)
 python3 acme-patch-client.py            # patches your acclient.exe in place, keeps a backup
 python3 acme-patch-client.py --check-kit   # verifies dats + patched exe; prints KIT-OK
 ```
@@ -120,7 +122,9 @@ Replace `<server-address>`, `<account>`, `<password>` with your own. The game
 starts windowed, shows the character screen, and you double-click your character
 to enter the world. That's it.
 
-> Tip: put step 6 in a small `play.sh` script so it's one command from now on.
+> Tip: the archive ships `play.sh` — it re-runs the install check (dat sizes +
+> client patch) and then launches through wine:
+> `./play.sh -h <server-address> -p 9000 -a <account> -v <password>`
 
 ---
 
@@ -420,6 +424,18 @@ plain client is the known-good fallback.
 
 ---
 
+## Where the plugin pack lives in the archive
+
+The release is ONE archive: the dat kit files sit at the archive root (those
+are what you copy into your install folder), and the optional plugin pack is
+the `acme-plugins/` subfolder (copy it wherever you like; `acme-plugins/
+Chorizite/` is the runtime). zzpatcher's dat-side commands — `--check-dats`,
+`--rollback`, `--verify-exe`, `--patch-exe` — operate on the INSTALL folder
+(where the kit files landed), which you point it at once with
+`--set-install-dir <path>` (or the Install tab on Windows).
+
+---
+
 ## The z-z patcher tool under Wine
 
 The release's plugin-manager/tuner GUI (`zzpatcher.exe`) does **not** run under
@@ -513,4 +529,4 @@ For whoever maintains this after a hiatus:
   `-rodat`, win32-vs-win64 prefix, esync, audio, DXVK-vs-WineD3D, oversized
   record inflates): `docs/dat-patch/HANDOFF-2026-08-17-EOD.md` §"THE open
   blocker" — resolved by the `palette-double-free` patch, see
-  `/mnt/wbterminal2/ac-eor-patch/PATCHES.md` provenance table.
+  `CLIENT-PATCHES.md` (shipped in the archive root next to the dats).

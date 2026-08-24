@@ -22,15 +22,21 @@ that if something breaks, you can diagnose and fix it yourself.
 - About **4 GB of free disk** for the new dats.
 - An account on a server that runs the matching ACME dats (ask your server
   operator — see "DAT files are incomplete" in Troubleshooting for why this matters).
+- Optional: the plugin pack (§4) additionally needs the **.NET 8 Desktop
+  Runtime** for the in-client plugins (`zzpatcher.exe` itself is self-contained
+  and needs nothing).
 
 ## 2. Quick install
 
 1. **BACK UP** these files from your Asheron's Call folder somewhere safe:
    `client_portal.dat`, `client_cell_1.dat`, `client_highres.dat` (if present),
    and `acclient.exe`.
-2. **Copy every file** from the ACME release archive into your Asheron's Call
-   install folder (the folder that contains `acclient.exe`). Don't run anything
-   from the download folder.
+2. **Copy the top-level kit files** from the ACME release archive (the dats,
+   `play.bat`, the patcher files, `kit-manifest.txt` — everything at the archive
+   root) into your Asheron's Call install folder (the folder that contains
+   `acclient.exe`). Don't run anything from the download folder. The
+   `acme-plugins` folder is the OPTIONAL plugin pack — it does **not** go into
+   the game folder (see §4).
 3. Run **`patch-my-client.bat`** once. It patches *your own* `acclient.exe` in
    place, keeps a backup (`acclient.exe.acme-orig.bak`), and refuses to touch
    the file if it doesn't recognise it.
@@ -82,6 +88,8 @@ that if something breaks, you can diagnose and fix it yourself.
 | `patch-my-client.bat` | one-time client patch, run once |
 | `acme-patch-client.ps1` | the patch itself — plain readable PowerShell, auditable |
 | `acme-patch-client.py` | the same patcher + install check for Linux/wine users |
+| `play.sh` | the same check-then-launch for Linux/wine users |
+| `CLIENT-PATCHES.md` | what the 9 client patches do and why |
 | `kit-manifest.txt` | exact file sizes `play.bat` verifies |
 | `SHA256SUMS.txt` | checksums for everything |
 | `README.txt` | short version of this document |
@@ -109,6 +117,13 @@ you launch with `play.bat`, you never touch any of this. With it you get:
 | **AcmeRagdoll** | creatures ragdoll on death, per-body individualized |
 | **AcmeRedline** | in-game art-annotation: point at wrong-looking art, describe it, and queue a structured report (`redline.jsonl` + screenshot) for the fix pipeline — experimental |
 
+In the release archive the pack is the `acme-plugins/` subfolder (the dat kit
+files sit at the archive root). Copy `acme-plugins/` wherever you like — the
+shape below mirrors the reference machine — and note zzpatcher's dat-side
+commands (`--check-dats`, `--rollback`, `--verify-exe`, `--patch-exe`) operate
+on the INSTALL folder where the kit files landed: point the tool at it once via
+the Install tab or `--set-install-dir <path>`.
+
 Install shape (this mirrors the reference machine the pack was developed on):
 
 ```
@@ -116,6 +131,7 @@ C:\Games\Chorizite\                      the runtime (AcmeInject.exe, Chorizite.
 C:\Games\Chorizite\plugins\AcmeLights\   each plugin in its own folder
 C:\Games\Chorizite\plugins\AcmeSky\
 C:\Games\Chorizite\plugins\AcmeRagdoll\
+C:\Games\Chorizite\plugins\AcmeRedline\
 C:\Games\Chorizite\data\logs\log.txt     THE log file (see §10)
 C:\Temp\acdt\lights.cfg                  AcmeLights settings (plain text, hot-reloads while playing)
 ```
@@ -192,8 +208,8 @@ experiments — one of which, `mip-cap-16`, is recorded as REJECTED because it
 whites out large textures). If someone hands you an exe with extras, `-Verify`
 will show exactly which sites differ.
 
-Full provenance, signatures, and per-patch history: `PATCHES.md` in the
-`ac-eor-patch` lane of the ACME repo.
+What each patch does and why: `CLIENT-PATCHES.md` in the archive root; the
+full byte-level before/after is in the patcher scripts themselves.
 
 ## 7. Why `client_highres.dat` is load-bearing (and the loud-fail launcher)
 
@@ -421,8 +437,9 @@ For whoever maintains this after the fact:
   registry/patcher), `docs/dat-patch/` (the full content-lane history and every
   gate report), `docs/lights-port/` (the plugin lane; the memory work is
   `HANDOFF-2026-08-24-mirror-diet-design.md`), `AcmeLights/Lib/LightsConfig.cs`
-  (the authoritative knob list — every `case "<knob>"` line), kit smoke artifacts
-  at the `redline-kit-smoke` lane (play.bat/manifest reference copies).
+  (the authoritative knob list — every `case "<knob>"` line), the shipped
+  `play.bat`/`play.sh`/`kit-manifest.txt` in the archive root are the loud-fail
+  launch/verify reference copies.
 - Ship-gate evidence: 14-town gauntlets with 20 s sprint legs on the reference
   machine (zero crashes with `diet=3`, worst-town priv 1.28 GB on the tour /
   748 MB–1.13 GB on the sprint tour) and a **plain client, no plugin pack**

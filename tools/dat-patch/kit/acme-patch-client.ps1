@@ -1,11 +1,11 @@
-<#
+﻿<#
   acme-patch-client.ps1 - ACME r8 kit client patcher (Windows PowerShell 5.1+).
 
   Patches YOUR OWN retail End-of-Retail acclient.exe (2015-06-12 build 6096)
   in place.  The ACME kit ships NO client executable - the community norm is
   patch-over-your-own-install - so this script carries only the byte deltas.
 
-  Doctrine (mirrors the lane's patch_client.py, /mnt/wbterminal2/ac-eor-patch):
+  Doctrine (mirrors the ACME repo's patch registry, tools/dat-patch/ac-eor-patch):
     * every site is located by a UNIQUE byte SIGNATURE (invariant context
       around the needle), never by a quoted address;
     * a signature that is missing, or found more than once, REFUSES;
