@@ -41,15 +41,15 @@ namespace AcmeLauncher {
             var root = new DockPanel { Margin = new Thickness(8) };
 
             var intro = new TextBlock {
-                Text = "Launch Asheron's Call the way you always do (ThwargLauncher, Decal, a shortcut). "
+                Text = "Launch Asheron's Call the way you always do (ThwargLauncher, a shortcut, etc). "
                      + "This tool adds the ACME plugins to a client that's ALREADY running — pick it below and click Enable. "
                      + "It never logs in or launches the game itself.",
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 2, 8), Foreground = Brushes.DimGray
             };
             DockPanel.SetDock(intro, Dock.Top); root.Children.Add(intro);
 
-            var plug = new TextBlock { Margin = new Thickness(2, 0, 2, 6), Foreground = Brushes.DimGray, Text = "Installed plugins: " + PluginPresence(s) };
-            DockPanel.SetDock(plug, Dock.Top); root.Children.Add(plug);
+            var avail = BuildAvailablePlugins(s);
+            DockPanel.SetDock(avail, Dock.Top); root.Children.Add(avail);
 
             var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             var status = new TextBlock { Margin = new Thickness(2, 4, 2, 4), TextWrapping = TextWrapping.Wrap };
@@ -130,13 +130,80 @@ namespace AcmeLauncher {
             return root;
         }
 
-        private static string PluginPresence(Settings s) {
-            var dir = string.IsNullOrEmpty(s.ChoriziteDir) ? @"C:\Games\Chorizite" : s.ChoriziteDir!;
-            var plugins = Path.Combine(dir, "plugins");
-            var found = new List<string>();
-            foreach (var name in new[] { "AcmeLights", "AcmeSky", "AcmeRagdoll" })
-                if (Directory.Exists(Path.Combine(plugins, name))) found.Add(name);
-            return found.Count == 0 ? "none found (plugin pack not installed)" : string.Join(", ", found);
+        /// <summary>The "Available Plugins" box: each plugin with an enabled checkbox (ticking moves
+        /// its folder between plugins\ and plugins-disabled\), plus Install / Uninstall. Rebuilds
+        /// itself after any change.</summary>
+        private static UIElement BuildAvailablePlugins(Settings s) {
+            var box = new GroupBox { Header = "Available plugins", Margin = new Thickness(0, 0, 0, 6) };
+            var outer = new StackPanel();
+            box.Content = outer;
+
+            void Rebuild() {
+                outer.Children.Clear();
+                var dir = string.IsNullOrEmpty(s.ChoriziteDir) ? @"C:\Games\Chorizite" : s.ChoriziteDir!;
+                if (!Directory.Exists(dir)) {
+                    outer.Children.Add(new TextBlock { Text = "Plugin runtime folder not found — set it on the Install tab.", Foreground = Brushes.DimGray, Margin = new Thickness(2) });
+                    return;
+                }
+                var plugins = PluginMgmt.Enumerate(dir);
+                var listPanel = new StackPanel();
+                if (plugins.Count == 0) {
+                    listPanel.Children.Add(new TextBlock { Text = "No plugins installed yet.", Foreground = Brushes.DimGray, Margin = new Thickness(2) });
+                }
+                foreach (var p in plugins) {
+                    var cap = p;   // capture
+                    var cb = new CheckBox {
+                        Content = $"{p.Name}" + (p.Enabled ? "" : "  (disabled)"),
+                        IsChecked = p.Enabled, Margin = new Thickness(2, 1, 2, 1),
+                        ToolTip = $"Folder: {p.Folder}. Checked = loaded on next injection; unchecked = held aside. Takes effect the next time you enable plugins on a client (already-running clients keep what they loaded)."
+                    };
+                    cb.Click += (_, __) => {
+                        bool want = cb.IsChecked == true;
+                        if (!want && PluginMgmt.IsCrashProtection(cap)) {
+                            if (MessageBox.Show($"'{cap.Name}' also carries the memory-crash protection (the governor + mirror diet). "
+                                + "Disabling it removes that protection and towns may crash on the high-res dats.\n\nDisable anyway?",
+                                "Disable crash protection?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) {
+                                cb.IsChecked = true; return;
+                            }
+                        }
+                        try { PluginMgmt.SetEnabled(dir, cap.Folder, want); }
+                        catch (Exception ex) { MessageBox.Show(ex.Message, "Couldn't change plugin", MessageBoxButton.OK, MessageBoxImage.Error); }
+                        Rebuild();
+                    };
+                    listPanel.Children.Add(cb);
+                }
+                outer.Children.Add(listPanel);
+
+                var btns = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
+                var selName = new ComboBox { Width = 160, Margin = new Thickness(2), IsEditable = false };
+                foreach (var p in plugins) selName.Items.Add(p.Folder);
+                if (selName.Items.Count > 0) selName.SelectedIndex = 0;
+                btns.Children.Add(Btn("Install plugin…", (_, __) => {
+                    var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Pick a plugin .zip (or its manifest.json)", Filter = "Plugin zip or manifest|*.zip;manifest.json|all|*.*" };
+                    if (dlg.ShowDialog() != true) return;
+                    var src = dlg.FileName;
+                    if (Path.GetFileName(src).Equals("manifest.json", StringComparison.OrdinalIgnoreCase)) src = Path.GetDirectoryName(src)!;   // folder-install: pick its manifest
+                    try { var name = PluginMgmt.Install(dir, src); MessageBox.Show($"Installed '{name}'. Enable plugins on a client to load it.", "Installed"); }
+                    catch (Exception ex) { MessageBox.Show(ex.Message, "Install failed", MessageBoxButton.OK, MessageBoxImage.Error); }
+                    Rebuild();
+                }));
+                btns.Children.Add(new TextBlock { Text = "  Uninstall:", VerticalAlignment = VerticalAlignment.Center });
+                btns.Children.Add(selName);
+                btns.Children.Add(Btn("Uninstall", (_, __) => {
+                    if (selName.SelectedItem is not string folder) return;
+                    if (folder.Equals("AcmeLights", StringComparison.OrdinalIgnoreCase) &&
+                        MessageBox.Show("AcmeLights carries the memory-crash protection (the governor + mirror diet). "
+                            + "Deleting it removes that protection permanently. Uninstall anyway?",
+                            "Remove crash protection?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+                    if (MessageBox.Show($"Delete the plugin folder '{folder}'? This removes it from disk.", "Uninstall", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+                    try { PluginMgmt.Uninstall(dir, folder); }
+                    catch (Exception ex) { MessageBox.Show(ex.Message, "Uninstall failed", MessageBoxButton.OK, MessageBoxImage.Error); }
+                    Rebuild();
+                }));
+                outer.Children.Add(btns);
+            }
+            Rebuild();
+            return box;
         }
 
         // ─────────────────────────────── TUNE ───────────────────────────────
@@ -154,22 +221,13 @@ namespace AcmeLauncher {
             var resync = new List<Action>();
             void ResyncAll() { ReloadCurrent(); foreach (var a in resync) a(); }
 
-            var info = new TextBlock { Text = $"{Cfgs.All.Count} variables across lights.cfg / sky.cfg / ragdoll.cfg. Edits apply live (~1s). \"Default\" is each plugin's built-in value.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(2) };
+            var info = new TextBlock { Text = $"{Cfgs.All.Count} variables, split by the config file that holds them. Edits apply live (~1s). \"Default\" is each plugin's built-in value.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(2) };
             DockPanel.SetDock(info, Dock.Top); root.Children.Add(info);
 
-            var searchRow = new DockPanel { Margin = new Thickness(2, 2, 2, 4) };
-            var slbl = new TextBlock { Text = "Filter:  ", VerticalAlignment = VerticalAlignment.Center };
-            var search = new TextBox { };
-            DockPanel.SetDock(slbl, Dock.Left); searchRow.Children.Add(slbl); searchRow.Children.Add(search);
-            DockPanel.SetDock(searchRow, Dock.Top); root.Children.Add(searchRow);
-
-            var buttons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            // Global actions (span all three cfgs): recommended profile + profile save/load.
+            var buttons = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) };
             buttons.Children.Add(Btn("Load Recommended", (_, __) => {
                 foreach (var (cfg, key, val) in Cfgs.Recommended) Cfgs.WriteKnob(cfgPath[cfg], key, val);
-                ResyncAll();
-            }));
-            buttons.Children.Add(Btn("Reset all to defaults", (_, __) => {
-                foreach (var k in Cfgs.All) Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, k.Default);
                 ResyncAll();
             }));
             buttons.Children.Add(Btn("Save profile…", (_, __) => {
@@ -200,17 +258,8 @@ namespace AcmeLauncher {
             }));
             DockPanel.SetDock(buttons, Dock.Top); root.Children.Add(buttons);
 
-            var panel = new StackPanel();
-            var rowVis = new List<(FrameworkElement el, string hay)>();
-            var sectionHeaders = new List<FrameworkElement>();
-            string lastSection = "";
-            foreach (var k in Cfgs.All) {
-                string section = k.Plugin + " · " + k.Group;
-                if (section != lastSection) {
-                    lastSection = section;
-                    var hdr = new TextBlock { Text = section, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 8, 0, 2), Foreground = Brushes.SteelBlue };
-                    sectionHeaders.Add(hdr); panel.Children.Add(hdr);
-                }
+            // Build one knob row (shared by all three cfg views); registers its reread in `resync`.
+            (FrameworkElement grid, string hay) BuildRow(KnobDef k) {
                 var g = new Grid { Margin = new Thickness(2, 1, 2, 1) };
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -269,17 +318,69 @@ namespace AcmeLauncher {
                 reset.Padding = new Thickness(4, 0, 4, 0); reset.Margin = new Thickness(2, 0, 2, 0);
                 Grid.SetColumn(reset, 3); g.Children.Add(reset);
 
-                panel.Children.Add(g);
-                rowVis.Add((g, (k.Name + " " + k.Desc + " " + k.Group + " " + k.Plugin).ToLowerInvariant()));
+                return (g, (k.Name + " " + k.Desc + " " + k.Group + " " + k.Plugin).ToLowerInvariant());
             }
 
-            search.TextChanged += (_, __) => {
-                var q = search.Text.Trim().ToLowerInvariant();
-                foreach (var h in sectionHeaders) h.Visibility = q.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-                foreach (var (el, hay) in rowVis) el.Visibility = (q.Length == 0 || hay.Contains(q)) ? Visibility.Visible : Visibility.Collapsed;
-            };
+            // One per-cfg view: a PREVIEW SEAM (a separate agent builds the live preview here later),
+            // its own filter + reset-all, then this cfg's knobs grouped by section.
+            UIElement BuildCfgView(string cfgName, string previewLabel) {
+                var v = new DockPanel();
 
-            root.Children.Add(new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+                // ── preview seam ─────────────────────────────────────────────
+                // Reserved region for the live preview of THIS cfg's settings. Kept as a clean,
+                // self-contained container so the preview agent can drop a control in without
+                // touching the knob logic. Modest by default; delete/replace when the real preview
+                // lands.
+                var previewSeam = new Border {
+                    BorderBrush = Brushes.Gainsboro, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3),
+                    Background = Brushes.WhiteSmoke, Height = 96, Margin = new Thickness(2, 2, 2, 6),
+                    Child = new TextBlock {
+                        Text = previewLabel, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DarkGray,
+                        HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center
+                    }
+                };
+                DockPanel.SetDock(previewSeam, Dock.Top); v.Children.Add(previewSeam);
+
+                var filterRow = new DockPanel { Margin = new Thickness(2, 0, 2, 4) };
+                var flbl = new TextBlock { Text = "Filter:  ", VerticalAlignment = VerticalAlignment.Center };
+                var search = new TextBox { };
+                var resetAll = Btn($"Reset all to defaults", (_, __) => {
+                    foreach (var k in Cfgs.All) if (k.Cfg == cfgName) Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, k.Default);
+                    ResyncAll();
+                });
+                DockPanel.SetDock(flbl, Dock.Left); DockPanel.SetDock(resetAll, Dock.Right);
+                filterRow.Children.Add(flbl); filterRow.Children.Add(resetAll); filterRow.Children.Add(search);
+                DockPanel.SetDock(filterRow, Dock.Top); v.Children.Add(filterRow);
+
+                var panel = new StackPanel();
+                var rowVis = new List<(FrameworkElement el, string hay)>();
+                var sectionHeaders = new List<FrameworkElement>();
+                string lastSection = "";
+                foreach (var k in Cfgs.All) {
+                    if (k.Cfg != cfgName) continue;
+                    if (k.Group != lastSection) {
+                        lastSection = k.Group;
+                        var hdr = new TextBlock { Text = k.Group, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 8, 0, 2), Foreground = Brushes.SteelBlue };
+                        sectionHeaders.Add(hdr); panel.Children.Add(hdr);
+                    }
+                    var (grid, hay) = BuildRow(k);
+                    panel.Children.Add(grid);
+                    rowVis.Add((grid, hay));
+                }
+                search.TextChanged += (_, __) => {
+                    var q = search.Text.Trim().ToLowerInvariant();
+                    foreach (var h in sectionHeaders) h.Visibility = q.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+                    foreach (var (el, hay) in rowVis) el.Visibility = (q.Length == 0 || hay.Contains(q)) ? Visibility.Visible : Visibility.Collapsed;
+                };
+                v.Children.Add(new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+                return v;
+            }
+
+            var inner = new TabControl { Margin = new Thickness(0) };
+            inner.Items.Add(new TabItem { Header = "Lights (lights.cfg)", Content = BuildCfgView("lights", "Live preview of the lighting (torches, portals, glow) will appear here.") });
+            inner.Items.Add(new TabItem { Header = "Sky (sky.cfg)", Content = BuildCfgView("sky", "Live preview of the sky and clouds will appear here.") });
+            inner.Items.Add(new TabItem { Header = "Ragdoll (ragdoll.cfg)", Content = BuildCfgView("ragdoll", "Live preview of the death ragdoll (skeleton) will appear here.") });
+            root.Children.Add(inner);
             return root;
         }
 
