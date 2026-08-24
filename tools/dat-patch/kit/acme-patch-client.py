@@ -25,6 +25,7 @@ exit: 0 ok / already patched | 1 refused (nothing written) | 2 usage
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import struct
 import sys
@@ -64,6 +65,59 @@ PATCHES = [
 def die(msg):
     print("\nREFUSED: " + msg, file=sys.stderr)
     sys.exit(1)
+
+
+# --- dat-align-lfa: the many-site DAT-parser alignment patch ----------------
+# Retail's archive/cache 4-byte alignment idiom computes `(signed int)ptr % 4`
+# (`and r32, 0x80000003` + sign fixup).  acclient is large-address-aware, so
+# above 2 GB buffer pointers are negative as signed ints, the modulo returns
+# the wrong pad, the read cursor desyncs, and the DAT parsers AV.  The fix
+# clears the sign bit of the immediate at EVERY idiom site (signed %4 ->
+# unsigned &3) — byte-identical behavior for all sub-2GB pointers.  Ported
+# from the lane registry's AlignIdiomPatch (patch_client.py); the site filter
+# (AND opcode before the imm + mov r32,4 + or r32,-4 within 28 bytes) is what
+# skips the file's non-idiom uses of the constant.  Fail-loud: exactly
+# ALIGN_SITES sites of exactly one form, or nothing is written.
+ALIGN_KEY = "dat-align-lfa"
+ALIGN_SITES = 189
+_ALIGN_IMM_ORIG = b"\x03\x00\x00\x80"
+_ALIGN_IMM_LFA = b"\x03\x00\x00\x00"
+_ALIGN_OR_MINUS4 = re.compile(rb"\x83[\xc8-\xcf]\xfc")
+_ALIGN_WINDOW = 28
+
+
+def align_scan(buf, imm):
+    hits, j = [], -1
+    while True:
+        j = buf.find(imm, j + 1)
+        if j < 0:
+            break
+        if j < 2:
+            continue
+        if not (buf[j - 1] == 0x25 or
+                (buf[j - 2] == 0x81 and 0xE0 <= buf[j - 1] <= 0xE7)):
+            continue
+        w = bytes(buf[j + 4:j + 4 + _ALIGN_WINDOW])
+        if b"\x04\x00\x00\x00" not in w:
+            continue
+        if not _ALIGN_OR_MINUS4.search(w):
+            continue
+        hits.append(j)
+    return hits
+
+
+def align_state(buf):
+    """('orig'|'patched', sites) or die — any other census means wrong build."""
+    o = align_scan(buf, _ALIGN_IMM_ORIG)
+    p = align_scan(buf, _ALIGN_IMM_LFA)
+    if len(o) == ALIGN_SITES and not p:
+        return "orig", o
+    if len(p) == ALIGN_SITES and not o:
+        return "patched", p
+    die(f"[{ALIGN_KEY}] found {len(o)} original + {len(p)} patched alignment-idiom "
+        f"sites, expected exactly {ALIGN_SITES} of one form. This is not the retail "
+        "End-of-Retail acclient.exe (or another tool partially changed it). "
+        "Nothing was written.")
 
 
 def locate(buf, sig_hex, at, needle_hex, replace_hex, key):
@@ -173,7 +227,12 @@ def main():
         sites.append((key, off, state, replace))
         say(f"  [{key:<22}] 0x{off:06X}  {state}")
 
+    a_state, a_sites = align_state(buf)
+    sites.append((ALIGN_KEY, a_sites[0], a_state, None))
+    say(f"  [{ALIGN_KEY:<22}] 0x{a_sites[0]:06X}  {a_state} ({len(a_sites)} idiom sites)")
+
     todo = [s for s in sites if s[2] == "orig"]
+    n_all = len(sites)
     if a.verify or a.check_kit:
         if todo:
             if a.check_kit:
@@ -183,11 +242,11 @@ def main():
             say(f"\nVERIFY: {len(todo)} of {len(sites)} sites still original - "
                 "run this script without --verify to patch.")
             return 1
-        say("\n" + ("KIT-OK" if a.check_kit else "VERIFY: fully patched (8/8 sites)."))
+        say("\n" + ("KIT-OK" if a.check_kit else f"VERIFY: fully patched ({n_all}/{n_all} patches)."))
         return 0
 
     if not todo:
-        say("\nAlready patched (8/8 sites) - nothing to do.")
+        say(f"\nAlready patched ({n_all}/{n_all} patches) - nothing to do.")
         return 0
 
     target = a.out or a.exe
@@ -200,6 +259,11 @@ def main():
             say(f"  backup already exists -> {bak} (kept)")
     for key, off, state, replace in sites:
         if state == "patched":
+            continue
+        if key == ALIGN_KEY:
+            for j in a_sites:
+                buf[j + 3] = 0x00
+            say(f"  applied [{key}] at {len(a_sites)} idiom sites (1 byte each)")
             continue
         rep = bytes.fromhex(replace)
         buf[off:off + len(rep)] = rep

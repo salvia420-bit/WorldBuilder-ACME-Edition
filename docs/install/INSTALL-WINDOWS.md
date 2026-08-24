@@ -155,7 +155,10 @@ Reference hashes for the *pristine* retail exe you supply:
 
 The patched exe's hash changes whenever the patch set changes between releases,
 so the ps1 `-Verify` (which checks the actual byte sites) is the authoritative
-check, not an md5 table.
+check, not an md5 table. For this release the kit patcher reproduces the
+reference exe exactly — patched md5 `061106ec1cb6248204a63be2147b5bca`,
+sha256 `f2880d6c…75a40730` — so you *can* compare, but a mismatch only means
+"different retail source exe or different release", not "broken".
 
 ## 6. What the client patch actually changes
 
@@ -171,7 +174,7 @@ idempotent (safe to re-run). The shipped set:
 | `highres-force-mount` | the client only mounts `client_highres.dat` when a server tells it to; this makes it mount unconditionally. Without it, most ACME textures silently never load |
 | `highres-advertise-cap` | the patched client does *not* advertise the extra dat to servers — your server sees the same three files retail does and won't try to "repair" you |
 | `res-4k-unlock` + `res-4k-unlock-2` | UI resize clamps lifted for 4K displays |
-| `dat-align-lfa` | large-address-aware alignment fix — on 64-bit Windows the client gets a 4 GB address space instead of 2 GB. This is a major crash-headroom patch for the high-res content |
+| `dat-align-lfa` | DAT-parser pointer-alignment fix. The exe is *already* large-address-aware; above 2 GB retail's signed `%4` alignment math returns the wrong pad count → read-cursor desync → access violation in the DAT parsers. Applied at 189 idiom sites (fixes a distinct crash family from the town-memory one) |
 
 The registry also carries **candidate** patches that are deliberately NOT in
 player builds (`allow-multiclient`, headless-bot render bypasses, mip-chain
@@ -233,12 +236,12 @@ listed in the file uses the built-in default. The load-bearing knobs:
 | `memlog` | 0 | 1 = a memory heartbeat line every 5 s in the log |
 | `framelog` | 1 | frame-time stats line every 5 s (see §10) — cheap, leave on; it's how you prove a stutter |
 | `bloom` / `bloomthreshold` / `bloomintensity` / `bloomradius` | on / 0.55 / 2.0 / 3 | night bloom pass |
-| `bloomday` / `bloomdaythreshold` / `bloomdayintensity` / `bloomdayradius` | on / 0.45 / 2.6 / 3 | day bloom variant |
+| `bloomday` / `bloomdaythreshold` / `bloomdayintensity` / `bloomdayradius` | on / 0.38 / 3.2 / 4 (reference machine: 0.45 / 2.6 / 3) | day bloom variant |
 | `torchlights` | 1 | unlit torch/lantern objects get real lights |
 | `glowlights` family (`glowmax`, `glowrange`, `glowoutdoor`, per-class colors/boosts…) | on | dynamic glow lights: portals, lifestones, projectiles, spell impacts, creatures |
 | `selection` / `selbudget` | 1 / 8 | importance-ranked light selection (best-N per draw instead of retail's first-N) |
 | `flicker` / `ambientfix` | 1 / 1 | torch flicker; fixes retail's red-biased ambient bug |
-| `dungeonambient` | off | override the hard-coded 0.2 dungeon ambient |
+| `dungeonambient` | `-1` (= leave retail's 0.2) | override the hard-coded dungeon ambient. Set `0`..`1` to change it — note `0` is pitch black, not "off"; `-1` is the off value |
 
 Escape hatch logic: **startup-gated** features (`diet`, `selection`,
 `glowoutdoor`) install nothing at all when 0 at boot — set to 0 and restart for
@@ -252,17 +255,21 @@ runs on defaults (`ragdoll_profiles.json` beside the plugin is optional).
 
 The high-res content made the 32-bit client exhaust and fragment its address
 space in dense towns — crashes with `priv` around 1.3–1.9 GB, worst right after
-teleporting (double-residency spikes). Three layers now stand between you and that:
+teleporting (double-residency spikes). Two layers now stand between you and that:
 
-1. **`dat-align-lfa`** (exe patch): 4 GB address space on 64-bit Windows.
-2. **The memory governor** (`memgov=1`): right-sizes the client's 2005-era
+1. **The memory governor** (`memgov=1`): right-sizes the client's 2005-era
    cache budgets and trims under pressure.
-3. **The mirror diet** (`diet=3`): the client keeps a permanent CPU copy of every
+2. **The mirror diet** (`diet=3`): the client keeps a permanent CPU copy of every
    texture purely as device-loss insurance; the diet frees them once the GPU
    copy exists (zero pixels change — the mirror is never what's rendered) and
    the client rebuilds from the dats in the rare case it's needed. In stress
-   testing this took worst-town memory from ~1.9 GB to ~1.1 GB and eliminated
+   testing this took worst-town memory from ~1.9 GB to ~1.28 GB on the 14-stop
+   tour (and 748 MB–1.13 GB on the harder 20-second-sprint tour) and eliminated
    the town crashes entirely.
+
+(The `dat-align-lfa` exe patch fixes a *separate* crash family — a DAT-parser
+alignment bug above 2 GB — not this address-space one. It's in your patched exe
+regardless; §6.)
 
 If you still crash in towns: first confirm `diet=3` and `memgov=1` are set,
 then collect a dump (below) and report it.
@@ -288,8 +295,9 @@ acmelights: frametime lb=0xA9B4 n=277 avg=18.0ms p99=49ms max=51.4ms >33ms=5 >10
 ```
 Frame-time stats every 5 s: `lb` = the landblock you're standing in, `avg/p99/max`
 frame times, `>33ms/>100ms` = hitch counts this window, `cum` = totals since
-launch, `gaps` = loading screens (not counted as frames). ~17–20 ms avg is
-60 fps; p99 spiking to 45+ with normal avg = stutter, and the `lb` tells you where.
+launch, `gaps` = loading screens (not counted as frames). ~16–17 ms avg is
+60 fps (20 ms ≈ 50 fps); p99 spiking to 45+ with a normal avg = stutter, and
+the `lb` tells you where.
 
 ```
 acmelights: memgov priv=892MB lfree=62MB gfx:1/1158 stex:17/269 ...
@@ -359,17 +367,26 @@ For whoever maintains this after the fact:
   (`ACMEINJECT_ARGS=-h <dev-server> -p 9000 -a <dev-account> -v <dev-password> -rodat 1`).
   Dev server = a vanilla ACE (master @a8ff29f + entity-cache mod) serving the
   matching dat pair.
-- Current lineage at time of writing (r10work): portal 572,314,624 B (2026-08-21),
-  highres 1,332,631,552 B (2026-08-21), cell 347,298,304 B; canonical patched
-  exe md5 `061106ec1cb6248204a63be2147b5bca` (12 shipped sites incl. LFA).
+- Current lineage at time of writing (r10work): portal 572,314,624 B, cell
+  347,298,304 B, highres ~1.33 GB (the exact highres size is lineage-specific —
+  the shipping `kit-manifest.txt`/`SHA256SUMS.txt` is authoritative, not this
+  note). Canonical patched exe: md5 `061106ec1cb6248204a63be2147b5bca`,
+  sha256 `f2880d6c…75a40730` — **9 shipped patches** (`palette-leak` ×2,
+  `palette-double-free`, `dat-version-preserve`, `highres-force-mount`,
+  `highres-advertise-cap`, `res-4k-unlock` ×2, `dat-align-lfa`; the last is a
+  189-site idiom scan, one logical patch). The kit patchers
+  (`acme-patch-client.ps1`/`.py`) reproduce this exact artifact byte-for-byte
+  from a pristine retail exe — gated by `tools/dat-patch/kit/check_ps1_table.py`.
 - Repo landmarks: `ac-eor-patch/PATCHES.md` + `patch_client.py` (patch
   registry/patcher), `docs/dat-patch/` (the full content-lane history and every
   gate report), `docs/lights-port/` (the plugin lane; the memory work is
   `HANDOFF-2026-08-24-mirror-diet-design.md`), `AcmeLights/Lib/LightsConfig.cs`
   (the authoritative knob list — every `case "<knob>"` line), kit smoke artifacts
   at the `redline-kit-smoke` lane (play.bat/manifest reference copies).
-- Ship-gate evidence for this configuration: 14-town gauntlets with 20 s sprint
-  legs on the reference machine (zero crashes with `diet=3`, worst-town
-  priv 1.28 GB) and under wine on a Tesla T4 (14/14, zero faults) — reports in
+- Ship-gate evidence: 14-town gauntlets with 20 s sprint legs on the reference
+  machine (zero crashes with `diet=3`, worst-town priv 1.28 GB on the tour /
+  748 MB–1.13 GB on the sprint tour) and a **plain client, no plugin pack**
+  under wine on a Tesla T4 (14/14, zero faults — that arm evidences the exe +
+  dats, not the diet) — reports in
   `docs/lights-port/HANDOFF-2026-08-24-mirror-diet-design.md` and
   `docs/dat-patch/REPORT-2026-08-24-wine-ship-gate.md`.

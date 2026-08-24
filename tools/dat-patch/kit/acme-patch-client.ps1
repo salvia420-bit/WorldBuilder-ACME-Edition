@@ -188,10 +188,60 @@ foreach ($p in $PATCHES) {
   $sites += @{ p = $p; off = $off; state = $state }
 }
 
+# --- dat-align-lfa: the many-site DAT-parser alignment patch ---------------
+# Retail's archive 4-byte alignment idiom computes `(signed int)ptr % 4`
+# (`and r32, 0x80000003` + sign fixup).  acclient is large-address-aware, so
+# above 2 GB the modulo returns the wrong pad, the read cursor desyncs, and
+# the DAT parsers AV.  Fix: clear the imm sign bit at EVERY idiom site
+# (signed %4 -> unsigned &3).  Ported from the lane registry AlignIdiomPatch;
+# the site filter (AND opcode before the imm + `mov r32,4` + `or r32,-4`
+# within 28 bytes) skips the file's non-idiom uses of the constant.
+# Fail-loud: exactly $ALIGN_SITES sites of one form, or nothing is written.
+$ALIGN_KEY   = 'dat-align-lfa'
+$ALIGN_SITES = 189
+function AlignScan([string]$t, [string]$imm) {
+  $hits = New-Object System.Collections.Generic.List[int]
+  $movFour = HexToStr '04000000'
+  $j = 1   # need 2 bytes of lookbehind
+  while ($true) {
+    $j = $t.IndexOf($imm, $j + 1, [StringComparison]::Ordinal)
+    if ($j -lt 0) { break }
+    if ($j -lt 2) { continue }
+    $b1 = [int][char]$t[$j - 1]
+    $b2 = [int][char]$t[$j - 2]
+    if (-not ($b1 -eq 0x25 -or ($b2 -eq 0x81 -and $b1 -ge 0xE0 -and $b1 -le 0xE7))) { continue }
+    $wStart = $j + 4
+    $wLen = [Math]::Min(28, $t.Length - $wStart)
+    if ($wLen -lt 3) { continue }
+    $w = $t.Substring($wStart, $wLen)
+    if ($w.IndexOf($movFour, [StringComparison]::Ordinal) -lt 0) { continue }
+    $fix = $false
+    for ($k = 0; $k -le $w.Length - 3; $k++) {
+      $c1 = [int][char]$w[$k + 1]
+      if ([int][char]$w[$k] -eq 0x83 -and $c1 -ge 0xC8 -and $c1 -le 0xCF -and [int][char]$w[$k + 2] -eq 0xFC) { $fix = $true; break }
+    }
+    if (-not $fix) { continue }
+    [void]$hits.Add($j)
+  }
+  return ,$hits
+}
+$alignOrig = AlignScan $text (HexToStr '03000080')
+$alignLfa  = AlignScan $text (HexToStr '03000000')
+if ($alignOrig.Count -eq $ALIGN_SITES -and $alignLfa.Count -eq 0) {
+  $alignState = 'orig'; $alignSites = $alignOrig
+} elseif ($alignLfa.Count -eq $ALIGN_SITES -and $alignOrig.Count -eq 0) {
+  $alignState = 'patched'; $alignSites = $alignLfa
+} else {
+  Die ("[{0}] found {1} original + {2} patched alignment-idiom sites, expected exactly {3} of one form. This is not the retail End-of-Retail acclient.exe (or another tool partially changed it). Nothing was written." -f $ALIGN_KEY, $alignOrig.Count, $alignLfa.Count, $ALIGN_SITES)
+}
+$sites += @{ p = @{ key = $ALIGN_KEY }; off = $alignSites[0]; state = $alignState; align = $true }
+
 # --- report ----------------------------------------------------------------
 $todo = @($sites | Where-Object { $_.state -eq "orig" })
+$nAll = $sites.Count
 foreach ($s in $sites) {
-  Say ("  [{0,-22}] 0x{1:X6}  {2}" -f $s.p.key, $s.off, $s.state)
+  if ($s.align) { Say ("  [{0,-22}] 0x{1:X6}  {2} ({3} idiom sites)" -f $s.p.key, $s.off, $s.state, $alignSites.Count) }
+  else { Say ("  [{0,-22}] 0x{1:X6}  {2}" -f $s.p.key, $s.off, $s.state) }
 }
 $csumOff = PeChecksumOffset $bytes
 $stored  = [BitConverter]::ToUInt32($bytes, $csumOff)
@@ -203,7 +253,7 @@ if ($Verify) {
     $correct = PeChecksum $bytes $csumOff
     Say ("  PE checksum stored 0x{0:X8} / computed 0x{1:X8}{2}" -f $stored, $correct, $(if ($stored -eq $correct) { "" } else { " (STALE)" }))
   }
-  if ($todo.Count -eq 0) { Say ""; Say "VERIFY: fully patched (8/8 sites)."; exit 0 }
+  if ($todo.Count -eq 0) { Say ""; Say ("VERIFY: fully patched ({0}/{0} patches)." -f $nAll); exit 0 }
   Say ""
   Say ("VERIFY: {0} of {1} sites still original - run this script without -Verify to patch." -f $todo.Count, $sites.Count)
   exit 1
@@ -211,7 +261,7 @@ if ($Verify) {
 
 if ($todo.Count -eq 0) {
   Say ""
-  Say "Already patched (8/8 sites) - nothing to do."
+  Say ("Already patched ({0}/{0} patches) - nothing to do." -f $nAll)
   exit 0
 }
 
@@ -228,6 +278,11 @@ if (-not $Out -and -not $NoBackup) {
 }
 foreach ($s in $sites) {
   if ($s.state -eq "patched") { continue }
+  if ($s.align) {
+    foreach ($j in $alignSites) { $bytes[$j + 3] = 0 }
+    Say ("  applied [{0}] at {1} idiom sites (1 byte each)" -f $s.p.key, $alignSites.Count)
+    continue
+  }
   $rep = HexToBytes $s.p.replace
   [Array]::Copy($rep, 0, $bytes, $s.off, $rep.Length)
   Say ("  applied [{0}] at 0x{1:X6} ({2} bytes)" -f $s.p.key, $s.off, $rep.Length)

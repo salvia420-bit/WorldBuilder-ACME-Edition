@@ -114,10 +114,14 @@ def main():
     ps1 = parse_ps1(a.ps1)
     py = parse_py(a.py)
     pc = load_registry(a.registry)
-    reg = {p.key: p for p in pc.PATCHES if p.enabled}
+    # Two shapes in the registry: unique-signature Patch entries (mirrored as
+    # table rows in both kit patchers) and AlignIdiomPatch (the many-site
+    # dat-align-lfa scan, mirrored as CODE in both kit patchers).
+    reg = {p.key: p for p in pc.PATCHES if p.enabled and isinstance(p, pc.Patch)}
+    reg_align = [p for p in pc.PATCHES if p.enabled and not isinstance(p, pc.Patch)]
     print(f"ps1 table   : {len(ps1)} patches")
     print(f"py table    : {len(py)} patches")
-    print(f"registry    : {len(reg)} enabled patches")
+    print(f"registry    : {len(reg)} enabled table patches + {len(reg_align)} align patches")
 
     bad = 0
     seen = set()
@@ -151,6 +155,23 @@ def main():
             if a_ != b_:
                 print(f"  MISMATCH {a_['key']}: ps1 and py tables differ")
         bad += 1
+    # align-patch parity: both kit patchers must carry the scan CODE with the
+    # registry's key and site count (the byte truth is gate 2's job).
+    kit_spec = importlib.util.spec_from_file_location("kitpy", a.py)
+    kitpy = importlib.util.module_from_spec(kit_spec)
+    kit_spec.loader.exec_module(kitpy)
+    ps1_txt = open(a.ps1, encoding="utf-8").read()
+    for p in reg_align:
+        if getattr(kitpy, "ALIGN_KEY", None) != p.key or \
+           getattr(kitpy, "ALIGN_SITES", None) != p.expect_sites:
+            print(f"  MISMATCH {p.key}: kit py ALIGN_KEY/ALIGN_SITES != registry "
+                  f"({getattr(kitpy, 'ALIGN_KEY', None)}/{getattr(kitpy, 'ALIGN_SITES', None)} "
+                  f"vs {p.key}/{p.expect_sites})")
+            bad += 1
+        if not re.search(r"\$ALIGN_KEY\s*=\s*'" + re.escape(p.key) + "'", ps1_txt) or \
+           not re.search(r"\$ALIGN_SITES\s*=\s*" + str(p.expect_sites) + r"\b", ps1_txt):
+            print(f"  MISMATCH {p.key}: ps1 $ALIGN_KEY/$ALIGN_SITES don't match the registry")
+            bad += 1
     print("GATE 1 table parity : " + ("PASS" if bad == 0 else f"FAIL ({bad})"))
 
     pristine = open(a.orig, "rb").read()
@@ -174,6 +195,26 @@ def main():
             if label == "ps1":
                 print(f"  [{e['key']:<22}] 0x{off:06X} {state}")
             orig[off:off + len(cur)] = bytes.fromhex(e["replace"])
+        # align patches: py arm uses the SHIPPED kit code's own scan; ps1 arm
+        # uses the registry implementation (the ps1 port is code, exercised by
+        # the on-box Windows run — see the kit gate notes).
+        for p in reg_align:
+            if label == "py":
+                st, sites_ = kitpy.align_state(orig)
+                if st != "orig":
+                    print(f"  [{label}] {p.key}: unexpected state {st} on pristine — REFUSE")
+                    bad += 1
+                    continue
+                for j in sites_:
+                    orig[j + 3] = 0x00
+                n = len(sites_)
+            else:
+                n = p.apply(orig)
+            if n != p.expect_sites:
+                print(f"  [{label}] {p.key}: applied {n} sites, expected {p.expect_sites} — REFUSE")
+                bad += 1
+            if label == "ps1":
+                print(f"  [{p.key:<22}] {n} idiom sites")
         off = pe_csum_off(orig)
         struct.pack_into("<I", orig, off, 0)
         struct.pack_into("<I", orig, off, pe_checksum(orig, off))
