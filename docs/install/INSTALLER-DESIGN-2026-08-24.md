@@ -89,19 +89,93 @@ manifest existing in the archive.
   release. The criticism is about opacity — show the player the name, source, and
   hash of everything before it lands.
 
-### Suggested surface (one program, four modes; active only when the player is
+### Suggested surface (one program, four tabs; active only when the player is
 using it, never while they play)
 
-| mode | does | when |
+Tab order (owner, 2026-08-24): **Play first** (used daily), then **Tune**, then
+**Fix**, then **Install last** (used once).
+
+| tab | does | when |
 |---|---|---|
-| install | verify kit (manifest + shas), patch the player's own exe, optional all-in-one convenience path (dependency fetch with consent) | once |
-| play | plain vs injected launch, per-plugin toggles (folder presence), green-light panel from the log tail | at launch |
+| play | pick which install(s) to launch, plain vs injected, per-plugin toggles, a per-PID status list (see multi-client below) | daily / at launch |
 | tune | live `lights.cfg` knob editor, named profiles, "shipped defaults" / "stock" one-clicks | optional, live |
 | fix | the doc troubleshooting ladder as runnable checks (exe verify, dat sizes, ini polarity, renderer string, log-tail with known-bad patterns) + rollback | when broken |
+| install | verify kit (manifest + shas), patch the player's own exe(s), optional all-in-one convenience path (dependency fetch with consent) | once |
 
 Windows: arg-driven so every mode is scriptable. Linux: the same operations as
 shell + the Python patcher (already `--verify` / `--check-kit` / `--quiet` /
 exit-code driven).
+
+## Multi-client / ThwargLauncher (owner requirement: adapt to existing setups,
+don't force a change)
+
+Ground truth (2026-08-24): the exe byte-patches are a **static file patch** —
+once an `acclient.exe` is patched it is patched for *every* launcher (a shortcut,
+ThwargLauncher, our program). `AcmeInject.exe` is **spawn-injection**
+(`CreateProcessW(CREATE_SUSPENDED)` → LoadLibraryW/Bootstrap via
+`CreateRemoteThread` → `ResumeThread`), one client per invocation, taking
+`--args`/`ACMEINJECT_ARGS` + client path; there is **no attach-to-running** path
+today. `lights.cfg` resolves `ACMELIGHTS_CONFIG` → `C:\Temp\acdt\lights.cfg` →
+`~/.acdt/lights.cfg` — a shared default with a per-instance env override already
+available. Chorizite's `log.txt` is a **single shared file**.
+
+This yields a clean two-layer split:
+
+- **Universal layer = dats + exe patches. Launch-agnostic, so multi-boxing
+  already "just works" with ThwargLauncher and every other tool** — because a
+  patched exe stays patched no matter who launches it. Our program's only job
+  here is *patch every `acclient.exe` the person uses*. The Install tab must:
+  - accept **multiple install directories** (the redundant-dir topology) and
+    patch each one's exe, and equally support **one install launched N times**;
+  - offer to **read ThwargLauncher's configured install list** and patch each
+    (opt-in), so a TL user changes nothing;
+  - never assume a single canonical install path.
+  This layer is the shipping-critical part and is fully compatible today.
+
+- **Plugin layer = the only thing that needs the launch.** Because injection
+  owns process creation, plugins reach only clients *we* (or AcmeInject) launch.
+  A ThwargLauncher-launched client gets the full visual upgrade (dats + 4K +
+  patches) but **not** plugins, unless one of:
+  1. **Point ThwargLauncher at `AcmeInject.exe` instead of `acclient.exe`**
+     (AcmeInject then spawns+injects the real client with TL's pass-through
+     args). Adapts to their setup, least engineering — *gated on verifying TL
+     can launch a custom client exe and how it passes `-h/-p/-a/-v`* (untested
+     here). This is the preferred integration path if TL supports it.
+  2. **Our launcher multi-boxes injected clients itself** by invoking AcmeInject
+     N times (each spawns its own). Works today; competes with TL rather than
+     adapting to it — offer it, don't force it.
+  3. **Attach-by-PID injection** (v1.5): add an attach path to AcmeInject
+     (`OpenProcess` an existing client + the same LoadLibraryW/Bootstrap remote
+     thread) so plugins can attach to a client launched by *anything*. This is
+     the real "plugins for whatever you launched" answer; it needs a PID-picker
+     and per-PID logging, and turns the launcher into an optional background
+     helper for that use only.
+  Recommendation: **v1 ships options 1 (if TL allows) + 2; option 3 is the
+  v1.5 stretch.** Multi-boxers are never blocked — they always get the universal
+  layer; plugins are the enthusiast add-on.
+
+Multi-client hygiene items (regardless of the above):
+
+- **Per-PID logging.** The shared `log.txt` interleaves and corrupts the
+  green-light-from-log-tail approach with >1 injected client. Give each injected
+  client its own log (PID in the filename) or prefix every line with the PID.
+  Only matters for multi-box **with plugins**; plain multi-box writes no plugin
+  log.
+- **Status keyed off PID, not a single log.** The Play tab enumerates running
+  `acclient.exe` processes and shows one row each: which install dir, patched?,
+  injected?, diet active?/MB freed. For v1-without-attach the launcher knows the
+  PIDs it launched injected; a plugin-published status (named pipe / shared
+  memory / per-PID status file) generalizes it.
+- **Shared `lights.cfg` is the right default** (tune once, all clients hot-reload
+  within ~1 s). The existing `ACMELIGHTS_CONFIG` env already allows a
+  per-instance profile (e.g. a bright "combat box" vs a minimal "crafting box");
+  expose that in Tune as an advanced option, don't require it.
+- **The memory diet is a multi-box SELLING POINT, not an afterthought.** N
+  clients each carry ~1 GB working set; on a 1070-class 8 GB card the diet
+  freeing ~400–500 MB *per client* is what makes 3–4-boxing viable. A 5090 user
+  brute-forces it; the ~70% on 1070-or-better-but-not-5090 hardware are exactly
+  who benefits. Surface "diet active, N MB reclaimed across M clients" in the
+  status list.
 
 ## Non-negotiables carried from the crash/diet work
 
