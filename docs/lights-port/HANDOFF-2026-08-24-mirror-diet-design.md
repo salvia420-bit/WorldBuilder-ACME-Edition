@@ -210,3 +210,29 @@ do.ps1). `cmd`'s `echo x=0>> file` eats the `0` (fd redirect) — use PowerShell
 cfg edits. Chorizite log did NOT rotate between same-morning sessions — slice by the
 last "acmelights: initialized" line. score_frametime.py + all arm logs:
 /mnt/wbterminal2/crashdump-12356/analysis-0824/.
+
+## 2026-08-24 late-morning: eye pass + stress gauntlet → diet=3 SHIPPED ON
+
+- **Owner eye pass PASSED**: a 60 s tour video (15 passive PrintWindow bursts across the
+  14 stops, assembled on-box with the D:\Temp\ffmpeg static build) taildropped to the
+  redmi; owner: "looks fine". Pipeline for future eye passes: `acdtdietburst` (tag via
+  D:\Temp\burst-tag.txt → D:\Temp\vid\*.jpg) → D:\Temp\assemble_send.ps1 (ffmpeg concat
+  + `tailscale file cp … redmi-note-13-5g:`).
+- **Stress gauntlet PASSED**: 14 stops × 20 s W-hold sprints (D:\Temp\acdt-stresstour.ps1,
+  task `acdtstresstour`) — zero crashes, per-town priv **748–1,130 MB**, avg 21.7 ms,
+  12.6 >33ms/kframe under far heavier streaming than the tours that crashed the
+  pre-diet client at 1,3xx–1,9xx. Brief CRITs at teleport double-residency (lfree dips
+  to 1–4 MB) each recovered — diet holds the baseline, governor absorbs spikes.
+  Lifetime this client: 13,523 mirrors / 10.9 GB churn freed, zero sweep faults.
+- **lights.cfg now ships `diet=3`** (+ memlog=1, framelog default-on) — per owner
+  ("default those on, ship soon"). Escape: `diet=0` at boot = detour not installed.
+- Login lore (owner): "Account In Use" = relog inside the ~8 s logout-animation window
+  — wait ≥8 s after a kick/kill before char select.
+- ⚠ activation gotcha (cost ~40 min): a client launched while another window holds
+  foreground boots DEACTIVATED — AC throttles to exactly 100 ms/frame and DirectInput
+  never acquires, so SendInput chat silently goes nowhere while the tour logs
+  "focused". Fix = `acdtdietfocus` task (D:\Temp\dietfocus.ps1: restore + move to
+  0,0@1926×1100 + REAL mouse click at the computed window centre). Run it after char
+  select, before any tour; do.ps1's hardcoded (960,540) click misses small windows.
+- Still owed (nice-to-have, not shipping blockers per owner): controlled same-frame
+  pixel A/B; resolution-change/device-reset live pass.
