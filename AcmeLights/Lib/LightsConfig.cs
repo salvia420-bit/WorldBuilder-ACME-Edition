@@ -239,6 +239,12 @@ namespace AcmeLights.Lib {
         public float FrameLog = 1f;         // framelog: 1 = 5 s frame-time stats line (avg/p99/max dt,
                                             //   >33ms/>100ms hitch counts + cumulative). Independent of
                                             //   memgov/memlog so BOTH gauntlet A/B arms report.
+
+        // --- RGBA-mirror diet (Services/MirrorDiet.cs) — zero-quality-loss memory fix ---
+        // STARTUP-GATED: diet=0 at boot installs nothing (no GetD3DTexture detour, stock client).
+        // 1 = probe (inventory log only) · 2 = free mirrors of DAT-id textures ·
+        // 3 = also runtime-generated (TexMerge merges + palette-combined outputs).
+        public float Diet = 0f;             // diet: default OFF until the 1070 gauntlet + eye pass
         // Freelist caps (dead-object COUNTS; retail's 2005 budgets pin r9-sized assets).
         // 0 = leave that group at the retail budget.
         public float MemCapTex = 64f;       // memcaptex: SURFACETEXTURE + RENDERSURFACE (retail 400 each)
@@ -386,6 +392,7 @@ namespace AcmeLights.Lib {
                 case "memtrimcooldown": if (F(val, out var mtc)) MemTrimCooldown = Math.Clamp(mtc, 1f, 300f); break;
                 case "memlog": if (F(val, out var mlg)) MemLog = Math.Clamp(mlg, 0f, 1f); break;
                 case "framelog": if (F(val, out var flg)) FrameLog = Math.Clamp(flg, 0f, 1f); break;
+                case "diet": if (F(val, out var dt)) Diet = Math.Clamp(dt, 0f, 3f); break;
                 case "memcaptex": if (F(val, out var mct)) MemCapTex = Math.Clamp(mct, 0f, 400f); break;
                 case "memcapgfx": if (F(val, out var mcg)) MemCapGfx = Math.Clamp(mcg, 0f, 200f); break;
                 case "memcapsurf": if (F(val, out var mcs)) MemCapSurf = Math.Clamp(mcs, 0f, 200f); break;

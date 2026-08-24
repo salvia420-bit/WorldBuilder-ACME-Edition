@@ -80,6 +80,18 @@ namespace AcmeLights.Services {
         public const nint LScapeDraw_VA = 0x00506D90;
         // ─── P3 glowlights: END ──────────────────────────────────────────────────────────────
 
+        // ─── RGBA-mirror diet: BEGIN (Services/MirrorDiet.cs owns the logic) ─────────────────
+        // IDirect3DTexture9* __thiscall ImgTex::GetD3DTexture(ImgTex*) @0x0053F310 (ACBindings).
+        // Called per texture fetch on the draw path — the impl does two pointer reads and chains
+        // in the common case; the fast path only fires for mirrors this plugin freed (a state
+        // stock code never produces), where it returns the healthy DEFAULT-pool texture that
+        // retail's own body would wrongly tear down (acclient.c :365416 LABEL_20).
+        [Function(CallingConventions.MicrosoftThiscall)]
+        private delegate nint GetD3DTexFn(nint self);
+
+        private static IHook<GetD3DTexFn>? _getD3DTex;
+        // ─── RGBA-mirror diet: END ───────────────────────────────────────────────────────────
+
         private static IHook<UpdateLightsFn>? _updateLights;
         private static IHook<SetAmbientFn>? _setAmbient;
         private static IHook<EndSceneFn>? _endScene;
@@ -158,9 +170,10 @@ namespace AcmeLights.Services {
             // ─── P3 glowlights: END ──────────────────────────────────────────────────────────
 
             InstallOutdoor(cfg);
+            InstallDiet(cfg);
 
             _installed = _updateLights != null || _setAmbient != null || _endScene != null
-                         || _setViewer != null || _lscapeDraw != null;
+                         || _setViewer != null || _lscapeDraw != null || _getD3DTex != null;
         }
 
         // ─── P3b outdoor enable: BEGIN ───────────────────────────────────────────────────────
@@ -197,6 +210,41 @@ namespace AcmeLights.Services {
             _lscapeDraw!.OriginalFunction(self);
         }
         // ─── P3b outdoor enable: END ─────────────────────────────────────────────────────────
+
+        // ─── RGBA-mirror diet: BEGIN ─────────────────────────────────────────────────────────
+        /// <summary>Install the ImgTex::GetD3DTexture detour. Startup-gated like P4 selection:
+        /// `diet = 0` in the cfg at boot installs NOTHING — no trampoline touches the client and
+        /// the whole lane has zero footprint. Once installed, the fast path stays active even if
+        /// diet is live-toggled to 0 (freed mirrors must keep resolving); only the sweep stops.</summary>
+        private void InstallDiet(LightsConfig cfg) {
+            if (cfg.Diet < 0.5f) {
+                _ilog.LogInformation("acmelights: mirror diet disabled by cfg (diet=0); ImgTex::GetD3DTexture left untouched");
+                return;
+            }
+            const nint addr = 0x0053F310;   // MirrorDiet.GetD3DTexture_VA (ACBindings-verified)
+            try {
+                _getD3DTex = ReloadedHooks.Instance
+                    .CreateHook<GetD3DTexFn>(typeof(NativeHooks), nameof(GetD3DTexImpl), (long)addr)
+                    .Activate();
+                _ilog.LogInformation("acmelights: hook installed  ImgTex::GetD3DTexture @ {A:X8} (mirror diet)", (long)addr);
+            }
+            catch (Exception ex) {
+                _ilog.LogError(ex, "acmelights: hook FAILED  ImgTex::GetD3DTexture @ {A:X8}", (long)addr);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+        private static nint GetD3DTexImpl(nint self) {
+            // Two pointer reads decide; only a diet-freed mirror diverges from stock. No logging,
+            // no allocation — this is the draw path.
+            try {
+                nint fast = MirrorDiet.TryFastPath(self);
+                if (fast != 0) return fast;
+            }
+            catch { /* fall through to retail */ }
+            return _getD3DTex!.OriginalFunction(self);
+        }
+        // ─── RGBA-mirror diet: END ───────────────────────────────────────────────────────────
 
         // ===================== P4 LIGHT SELECTION — BEGIN (LightSelection.cs) =====================
 
@@ -328,6 +376,10 @@ namespace AcmeLights.Services {
             try { _minObjLight?.Disable(); } catch { }   // P4 selection
             try { _setViewer?.Disable(); } catch { }   // P3 glowlights
             try { _lscapeDraw?.Disable(); } catch { }  // P3b outdoor enable
+            // Mirror diet: the GetD3DTexture detour is deliberately NOT disabled here — freed
+            // mirrors make the fast path load-bearing, and Reloaded leaves the trampoline memory
+            // alive. Disabling it with dieted textures in the scene would resurrect retail's
+            // NULL-mirror teardown and blank them.
             _installed = false;
         }
     }

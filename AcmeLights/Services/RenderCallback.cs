@@ -58,7 +58,7 @@ namespace AcmeLights.Services {
                 if (slot == null) return;
                 nint ours = OurPtr;
                 bool want = cfg.Bloom > 0.5f || cfg.TorchLights > 0.5f || cfg.GlowLights > 0.5f
-                            || cfg.MemGov > 0.5f || cfg.FrameLog > 0.5f;
+                            || cfg.MemGov > 0.5f || cfg.FrameLog > 0.5f || cfg.Diet > 0.5f;
                 if (!want) {                             // live-toggle off: put back what we found
                     if (*slot == ours) *slot = _prev;
                     return;
@@ -106,6 +106,7 @@ namespace AcmeLights.Services {
                     TorchLights.OnPostWorldRender(cfg, _log);
                     GlowLights.OnPostWorldRender(cfg, _log);   // P3: classify/track scan (4 Hz)
                     MemoryGovernor.OnPostWorldRender(cfg, _log); // family-B residency governor (1 Hz)
+                    MirrorDiet.OnPostWorldRender(cfg, _log);     // RGBA-mirror diet sweep (1 Hz)
                 }
                 var bloom = _bloom;
                 if (bloom != null) {
