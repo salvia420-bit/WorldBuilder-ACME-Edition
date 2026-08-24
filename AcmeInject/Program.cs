@@ -12,17 +12,84 @@ namespace AcmeInject {
     /// that faulted the prebuilt injector under wine.
     /// </summary>
     internal static unsafe class Program {
-        // ---- config (overridable; defaults match the proven wine/1070 setup) ----
-        // Order of resolution per key: CLI arg -> env -> inject.cfg -> default.
-        private const string DefClient = @"D:\ac-dat-test\acclient.exe";
-        private const string DefArgs = "-h 100.116.47.66 -p 9000 -a tailnet1 -v tailnet1 -rodat off";
+        // ---- config ----
+        // Order of resolution per key: CLI arg -> env -> inject.cfg. There is deliberately NO
+        // fallback for the client path or the client arguments.
+        //
+        // An earlier build baked a developer's client path and a literal launch line (server
+        // address + test account + `-rodat off`) in as defaults. That shipped: .NET stores string
+        // literals as UTF-16LE, so the release's ASCII-only leak grep never saw them, and running
+        // the shipped AcmeInject.exe with no arguments dialled a private server with those
+        // credentials — and with the exact `-rodat off` that INSTALL-WINDOWS §4 forbids because
+        // the client's dat self-repair can then corrupt the ACME dats.
+        //
+        // So: no client path, no server address, no credentials, no `-rodat` value may ever be
+        // compiled in here. If the client path is not supplied, we print usage and exit nonzero.
+        // Guessing one is worse than failing.
         private const string DefInjector = @"Chorizite.Injector.dll"; // resolved against CWD (the Chorizite dir)
-        private static readonly string[] CfgPaths = {
-            @"C:\Temp\acdt\inject.cfg",
-        };
+
+        /// <summary>inject.cfg search order; the first file that EXISTS wins. Beside-the-exe is
+        /// the shipped location (the pack's Chorizite\ folder); ACMEINJECT_CFG overrides.</summary>
+        private static string[] CfgPaths() {
+            var v = Env("ACMEINJECT_CFG");
+            var list = new System.Collections.Generic.List<string>();
+            if (v != null) list.Add(v);
+            try { list.Add(Path.Combine(AppContext.BaseDirectory, "inject.cfg")); } catch { }
+            list.Add(Path.Combine(Environment.CurrentDirectory, "inject.cfg"));
+            list.Add(@"C:\Temp\acdt\inject.cfg");   // legacy dev-rig location, kept last
+            return list.ToArray();
+        }
+
+        private static void Usage(TextWriter w) {
+            w.WriteLine(@"AcmeInject - injects the Chorizite plugin runtime into Asheron's Call.
+
+USAGE
+  AcmeInject.exe --list                enumerate running acclient.exe processes and
+                                       whether each already has Chorizite injected
+  AcmeInject.exe --attach-all          attach to every running client not already injected
+  AcmeInject.exe --attach <pid>        attach to one running client (--force overrides the
+                                       'already injected / state unknown' safety refusal)
+  AcmeInject.exe --client <path> ...   LAUNCH that client suspended, inject, then resume
+
+The attach modes need no client path: you start the game however you normally do
+(ThwargLauncher, a shortcut, Decal), then attach. That is the supported posture.
+
+LAUNCH MODE - you must supply the client path yourself. AcmeInject never guesses
+one and ships with no server address or account baked in. Any ONE of:
+  --client <path-to-acclient.exe>       on the command line
+  set ACMEINJECT_CLIENT=<path>          environment
+  client=<path>                         in inject.cfg
+
+The client's own arguments come from, in the same order:
+  --args ""...""                          on the command line
+  set ACMEINJECT_ARGS=...               environment  (the documented way - INSTALL-WINDOWS §4)
+  args=...                              in inject.cfg
+Typically:  -h <server-address> -p 9000 -a <account> -v <password> -rodat 1
+`-rodat 1` is REQUIRED with the injector: it keeps the dats read-only, without
+which the client's dat-repair machinery can corrupt the ACME dats.
+
+OTHER KEYS (same CLI -> env -> inject.cfg order)
+  --injector <path>  / ACMEINJECT_INJECTOR   default: Chorizite.Injector.dll beside the CWD
+  --workdir <path>   / (cfg workdir)         default: the client exe's own folder
+  ACMEINJECT_CFG=<path>                      inject.cfg location override
+
+inject.cfg is `key=value` per line ('#' or ';' comments); searched beside this
+exe, then in the current directory.
+
+EXAMPLE (Windows .bat, the INSTALL-WINDOWS §4 recipe)
+  cd /d C:\Games\Chorizite
+  set ACMEINJECT_ARGS=-h <server-address> -p 9000 -a <account> -v <password> -rodat 1
+  set ACMEINJECT_CLIENT=<your-install-folder>\acclient.exe
+  AcmeInject.exe");
+        }
 
         private static int Main(string[] argv) {
             try {
+                if (HasFlag(argv, "--help") || HasFlag(argv, "-?") || HasFlag(argv, "/?")) {
+                    Usage(Console.Out);
+                    return 0;
+                }
+
                 // --list: enumerate running clients and their inject state. Needs no injector, so
                 // handle it before any injector resolution. This is the GUI's discovery backbone.
                 if (HasFlag(argv, "--list")) {
@@ -30,10 +97,22 @@ namespace AcmeInject {
                 }
 
                 var cfg = LoadCfg();
-                string client = Arg(argv, "--client") ?? Env("ACMEINJECT_CLIENT") ?? cfg.Get("client") ?? DefClient;
-                string args = Arg(argv, "--args") ?? Env("ACMEINJECT_ARGS") ?? cfg.Get("args") ?? DefArgs;
+                string? client = Arg(argv, "--client") ?? Env("ACMEINJECT_CLIENT") ?? cfg.Get("client");
+                string? args = Arg(argv, "--args") ?? Env("ACMEINJECT_ARGS") ?? cfg.Get("args");
                 string injector = Arg(argv, "--injector") ?? Env("ACMEINJECT_INJECTOR") ?? cfg.Get("injector") ?? DefInjector;
-                string workdir = Arg(argv, "--workdir") ?? cfg.Get("workdir") ?? Path.GetDirectoryName(client) ?? Environment.CurrentDirectory;
+
+                // The attach modes never launch anything, so they need no client path. The LAUNCH
+                // path does — and with nothing configured we print usage and fail rather than
+                // invent a path (which is how the r10 credential leak shipped). Checked BEFORE the
+                // injector is resolved so a bare double-click gets usage, not "injector not found".
+                bool attaching = HasFlag(argv, "--attach-all") || Arg(argv, "--attach") != null;
+                if (!attaching && string.IsNullOrWhiteSpace(client)) {
+                    Usage(Console.Error);
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine("AcmeInject: no client path configured and no attach mode requested "
+                        + "(--list / --attach-all / --attach <pid> need none). Nothing to do.");
+                    return 5;
+                }
 
                 // The injector path Bootstrap will GetModuleFileNameW itself from — must be the real
                 // on-disk file so Bootstrap finds runtimeconfig + NativeClientBootstrapper beside it.
@@ -87,9 +166,19 @@ namespace AcmeInject {
                     return InjectAttach(pid, injectorFull, bootstrapRva);
                 }
 
+                string workdir = Arg(argv, "--workdir") ?? cfg.Get("workdir")
+                                 ?? Path.GetDirectoryName(client!) ?? Environment.CurrentDirectory;
+                if (string.IsNullOrWhiteSpace(args)) {
+                    // Not fatal (a client could be configured elsewhere), but almost always a
+                    // mistake — and silence here is what let the baked default go unnoticed.
+                    Console.Error.WriteLine("AcmeInject: WARNING - no client arguments configured "
+                        + "(--args / ACMEINJECT_ARGS / inject.cfg 'args'). The client normally needs "
+                        + "-h <server-address> -p 9000 -a <account> -v <password> -rodat 1.");
+                    args = "";
+                }
                 Console.WriteLine($"Launching:  {client} {args}");
                 Console.WriteLine($"workdir:    {workdir}");
-                return Inject(client, args, workdir, injectorFull, bootstrapRva);
+                return Inject(client!, args, workdir, injectorFull, bootstrapRva);
             }
             catch (Exception ex) {
                 Console.Error.WriteLine("AcmeInject: fatal: " + ex);
@@ -430,7 +519,7 @@ namespace AcmeInject {
         }
         private static Cfg LoadCfg() {
             var c = new Cfg();
-            foreach (var path in CfgPaths) {
+            foreach (var path in CfgPaths()) {
                 try {
                     if (!File.Exists(path)) continue;
                     foreach (var line in File.ReadAllLines(path)) {
