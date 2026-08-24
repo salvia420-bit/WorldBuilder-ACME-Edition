@@ -217,7 +217,9 @@ namespace AcmeLauncher {
 
             string CurRaw(KnobDef k) => current[k.Cfg].TryGetValue(k.Name, out var v) ? v : k.Default;
             void ReloadCurrent() { foreach (var c in cfgNames) current[c] = Cfgs.Read(cfgPath[c]); }
-            void WriteAndCache(KnobDef k, string val) { Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, val); current[k.Cfg][k.Name] = val; }
+            AcmeLauncher.Preview.RagdollPreview? ragPrev = null;   // live ragdoll preview (mounted below)
+            void PushPreview(string cfg) { if (cfg == "ragdoll") ragPrev?.SetKnobs(current["ragdoll"]); }
+            void WriteAndCache(KnobDef k, string val) { Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, val); current[k.Cfg][k.Name] = val; PushPreview(k.Cfg); }
             var resync = new List<Action>();
             void ResyncAll() { ReloadCurrent(); foreach (var a in resync) a(); }
 
@@ -339,6 +341,18 @@ namespace AcmeLauncher {
                         HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center
                     }
                 };
+                // Ragdoll: mount the live skeleton preview into the seam (design §2). Lights/Sky
+                // keep the placeholder until their previews land.
+                if (cfgName == "ragdoll") {
+                    ragPrev = new AcmeLauncher.Preview.RagdollPreview();
+                    previewSeam.Height = 300;
+                    previewSeam.Background = Brushes.White;
+                    previewSeam.Child = ragPrev.View;
+                    ragPrev.SetKnobs(current["ragdoll"]);
+                    resync.Add(() => ragPrev.SetKnobs(current["ragdoll"]));
+                    v.Loaded += (_, __) => ragPrev.Start();
+                    v.Unloaded += (_, __) => ragPrev.Stop();
+                }
                 DockPanel.SetDock(previewSeam, Dock.Top); v.Children.Add(previewSeam);
 
                 var filterRow = new DockPanel { Margin = new Thickness(2, 0, 2, 4) };

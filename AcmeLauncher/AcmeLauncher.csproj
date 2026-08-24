@@ -43,4 +43,19 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
+
+  <!-- Ragdoll preview: compile the plugin's PURE sim in UNCHANGED so the preview runs the
+       identical death-fall equations (design §2.3). No plugin dependency at runtime; these
+       files depend only on System. Do NOT add Lib/LiveMotionConfig (pulls MS.Extensions.Logging). -->
+  <ItemGroup>
+    <Compile Include="..\AcmeRagdoll\Sim\RagdollSim.cs"        Link="Preview\Sim\RagdollSim.cs" />
+    <Compile Include="..\AcmeRagdoll\Sim\RagdollParams.cs"     Link="Preview\Sim\RagdollParams.cs" />
+    <Compile Include="..\AcmeRagdoll\Sim\QMath.cs"             Link="Preview\Sim\QMath.cs" />
+    <Compile Include="..\AcmeRagdoll\Sim\IdleMotion.cs"        Link="Preview\Sim\IdleMotion.cs" />
+    <Compile Include="..\AcmeRagdoll\Sim\GaitMotion.cs"        Link="Preview\Sim\GaitMotion.cs" />
+    <Compile Include="..\AcmeRagdoll\Sim\DeathVariety.cs"      Link="Preview\Sim\DeathVariety.cs" />
+    <Compile Include="..\AcmeRagdoll\Sim\DeathVarietyModel.cs" Link="Preview\Sim\DeathVarietyModel.cs" />
+    <EmbeddedResource Include="preview_skeletons.json" />
+  </ItemGroup>
+
 </Project>
