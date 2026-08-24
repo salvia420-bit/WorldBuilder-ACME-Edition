@@ -29,7 +29,7 @@ own build, with our delta published and provenance listed below.
 
 **Project license:** the ACME work itself is **AGPL-3.0-only** (repo root
 `LICENSE.md`). This is what qualifies the bundle for the free Apache-2.0 branch
-of the Six Labors Split License and what makes the LGPL-3.0 dependencies
+of the Six Labors licensing¹ and what makes the LGPL-3.0 dependencies
 straightforward — see the audit, §0.
 
 ## 2. Per-component provenance
@@ -37,7 +37,7 @@ straightforward — see the audit, §0.
 Columns: **Component** = the file or file group as it appears in the archive ·
 **Version** = the pinned version (from `.deps.json` / `.csproj`) ·
 **Upstream** = canonical source · **License** = SPDX, or the granted branch where
-split · **Role** = why it is in the bundle.
+**Role** = why it is in the bundle.
 
 ### 2a. Ours (this project) — AGPL-3.0
 
@@ -50,10 +50,13 @@ split · **Role** = why it is in the bundle.
 | `plugins/AcmeRagdoll/AcmeRagdoll.dll` + `ragdoll_profiles.json` | _(build)_ | this repo, `AcmeRagdoll/` | AGPL-3.0-only | Chorizite plugin: physics ragdoll deaths. |
 | `Chorizite.NativeClientBootstrapper.dll` | vendored + patched | github.com/Chorizite/Chorizite | MIT (modified work) | Chorizite's bootstrapper **patched by us** (`dx-attach-init.patch`, `per-pid-log.patch`). Modified MIT work; patches published in `tools/chorizite-patches/`. |
 
-> **Sky asset provenance.** `plugins/AcmeSky/assets/sky/**` are baked from
-> NASA/takram sky source data. Confirm the specific source dataset + its terms
-> here before packaging — it is content, not code, and is not covered by any
-> row in §2d.
+> **Sky asset provenance** (traced 2026-08-24, audit §7): weather masks derive
+> from **NASA Blue Marble** imagery (public domain; credit in NOTICES); the star
+> field from the **Yale Bright Star Catalog** (factual astronomical data) via
+> @takram's MIT `stars.bin`; the sky palettes sample **Bruneton
+> precomputed-scattering LUTs** (BSD-3-Clause reference, consumed through the
+> MIT @takram/three-atmosphere ports our shaders cite in-file). All credited in
+> `NOTICES.txt`.
 
 ### 2b. Chorizite project — MIT (© 2024 Chorizite)
 
@@ -68,9 +71,9 @@ commit in §4). `Chorizite.DatReaderWriter` is © 2024 ACClientLib, also MIT.
 | `Chorizite.ACBindings.dll` | vendored | MIT | Retail client memory-layout bindings. **Ships inside each plugin folder** (not host-owned — the plugin ALC's resolver requires it beside the plugin). |
 | `DatReaderWriter.dll` | 1.0.0 (pkg) | MIT | DAT file reader used by the host. |
 | `SigScan.dll` | vendored binary | MIT per Chorizite repo license | Prebuilt **native** signature scanner, P/Invoked by `Lib/SigScanner.cs`. ⚠ **No upstream source located in-tree** — listed explicitly rather than shipped anonymously (audit §4b). |
-| `acclient.map` | vendored data | ⚠ **not an OSS license question** | Link map of the retail Turbine `acclient.exe`, shipped by Chorizite.Core. Derived from a proprietary third-party binary; see audit §4a — owner judgement, not a license clearance. |
+| `acclient.map` | vendored data | ⚠ **EXCLUDED from the archive** | Link map of the retail Turbine `acclient.exe` in Chorizite.Core's build output. Its only runtime reader is disabled in the vendored build (audit §7), so packaging drops it — the row stays here so the exclusion is a recorded decision, not an accident. |
 
-### 2c. Copyleft / split-licensed — notice obligations apply
+### 2c. Copyleft / footnoted — notice obligations apply
 
 These are the two dependencies the pre-ship checklist flagged. Both cleared; both
 require notices the archive must carry (audit §3, §5).
@@ -82,18 +85,18 @@ require notices the archive must carry (audit §3, §5).
 | `Reloaded.Memory.dll` | 7.0.0 | github.com/Reloaded-Project/Reloaded.Memory | **LGPL-3.0-or-later** | Memory primitives used by the hook engine. |
 | `Reloaded.Memory.Buffers.dll` | 2.0.0 | github.com/Reloaded-Project/Reloaded.Memory.Buffers | **LGPL-3.0-or-later** | Near-target buffer allocation for trampolines. |
 | `Reloaded.Assembler.dll` | 1.0.14-mem-buffers-2.0 | github.com/Reloaded-Project/Reloaded.Assembler | **LGPL-3.0-or-later** | Managed wrapper over FASM; assembles trampoline stubs. |
-| `SixLabors.ImageSharp.dll` | **3.1.11** | github.com/SixLabors/ImageSharp | Six Labors Split License v1.0 → **Apache-2.0 granted** | Image decode/encode for the host's UI/texture path. Transitive via Chorizite. |
-| `SixLabors.ImageSharp.Drawing.dll` | 2.1.7 | github.com/SixLabors/ImageSharp.Drawing | Six Labors Split License v1.0 → **Apache-2.0 granted** | Drawing primitives over ImageSharp. |
-| `SixLabors.Fonts.dll` | 2.1.3 | github.com/SixLabors/Fonts | Six Labors Split License v1.0 → **Apache-2.0 granted** | Font loading/shaping for the above. |
+| `SixLabors.ImageSharp.dll` | **3.1.11** | github.com/SixLabors/ImageSharp | **Apache-2.0**¹ | Image decode/encode for the host's UI/texture path. Transitive via Chorizite. |
+| `SixLabors.ImageSharp.Drawing.dll` | 2.1.7 | github.com/SixLabors/ImageSharp.Drawing | **Apache-2.0**¹ | Drawing primitives over ImageSharp. |
+| `SixLabors.Fonts.dll` | 2.1.3 | github.com/SixLabors/Fonts | **Apache-2.0**¹ | Font loading/shaping for the above. |
 
 > **Reloaded reaches into the plugin folders.** `Reloaded.Assembler` pulls the
 > native FASM binaries (§2d) into `plugins/AcmeLights`, `plugins/AcmeSky` and
 > `plugins/AcmeRagdoll` as well as the host directory. The LGPL notice covers
 > **all four** directories, not just `Chorizite/`.
 >
-> **Say "Apache-2.0", not "split".** The Six Labors license requires that, once
-> granted, "You must reference the granted license only in all documentation."
-> NOTICES must name Apache-2.0 for the three SixLabors components.
+> ¹ The SixLabors packages reach us under an **Apache-2.0** grant; per its terms,
+> Apache-2.0 is the license this documentation references. The grant basis is
+> recorded in the project's internal license audit (not shipped).
 
 ### 2d. Permissive transitive dependencies (redistributed as-is)
 
@@ -193,10 +196,8 @@ License audit (was blocking — now cleared, see `LICENSE-AUDIT-2026-08-24.md`):
 - [x] **Reloaded.*** — **LGPL-3.0-or-later** (not GPL), versions pinned in §2c.
       Compatible with our AGPL-3.0; shipped unmodified as separate DLLs.
       Obligation: LGPL + GPL texts, notice, upstream source pointer.
-- [x] **SixLabors.ImageSharp** — ships **3.1.11** under the Six Labors Split
-      License v1.0; we qualify for the **Apache-2.0** branch on two independent
-      grounds (AGPL open-source consumption; transitive dependency). No version
-      change needed.
+- [x] **SixLabors.ImageSharp** — ships **3.1.11** under **Apache-2.0**¹ (see
+      §2c). No version change needed.
 
 Remaining before packaging:
 
