@@ -6,8 +6,8 @@ using System.Windows;
 namespace AcmeLauncher {
     /// <summary>
     /// z-z patcher entry point. No arguments opens the window; a scriptable action
-    /// (<c>--list</c>, <c>--attach &lt;pid&gt;</c>, <c>--attach-all</c>, <c>--tune k=v …</c>)
-    /// runs headless and exits with a code. The tool never launches the game and never
+    /// (<c>--list</c>, <c>--attach &lt;pid&gt;</c>, <c>--attach-all</c>, <c>--tune k=v …</c>,
+    /// <c>--fix-wine [--apply [--dxvk]]</c>) runs headless and exits with a code. The tool never launches the game and never
     /// handles a login — players start Asheron's Call with their own launcher; this only
     /// manages the ACME plugin layer on already-running clients, and tunes the cfgs.
     /// </summary>
@@ -81,9 +81,28 @@ namespace AcmeLauncher {
                 return bad == 0 && n > 0 ? 0 : 2;
             }
 
+            if (HasFlag(argv, "--fix-wine")) {
+                // The Wine checklist (INSTALL-LINUX-WINE.md), headless. This is the supported
+                // Linux surface: the WPF GUI does not run under Wine (wine 8.0, WPF stack
+                // overflow — fleet-tested 2026-08-24), the CLI does.
+                if (!Platform.IsWine) { Console.WriteLine("not running under Wine — nothing to do"); return 0; }
+                var rows = HasFlag(argv, "--apply")
+                    ? WineFixes.ApplyAll(settings, createDxvk: HasFlag(argv, "--dxvk"), Console.WriteLine)
+                    : WineFixes.CheckAll(settings);
+                bool allOk = true;
+                foreach (var r in rows) {
+                    // Advisory rows (dxvk.conf without DXVK, the plugin temp dir on a plain-client
+                    // install) are situational: visibly distinct, and NOT an exit-code failure.
+                    var verdict = r.Ok || !r.Advisory ? r.Verdict : "ADVISORY-" + r.Verdict;
+                    Console.WriteLine($"WINEFIX {r.Name} {verdict} {r.Detail}");
+                    allOk &= r.Ok || r.Advisory;
+                }
+                return allOk ? 0 : 1;
+            }
+
             if (argv.Length > 0) {
                 Console.Error.WriteLine("Unknown option. Usage: zzpatcher "
-                    + "[--list | --attach <pid> | --attach-all | --tune k=v ...]  "
+                    + "[--list | --attach <pid> | --attach-all | --tune k=v ... | --fix-wine [--apply [--dxvk]]]  "
                     + "(no arguments launches the GUI). This tool does not log in or launch the game.");
                 return 2;
             }

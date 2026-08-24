@@ -411,10 +411,43 @@ find ~/path/to/Chorizite/plugins -type d -exec chmod u+rwx {} +
 ```
 
 Known-broken: the AcmeSky **live** volumetric compositor's D3D11→D3D9 readback
-faults under DXVK — do **not** set `ACMESKY_LIVE` under Wine. AcmeSky's **baked**
-sky (the default) is proven working under Wine. None of the plugin stack is
+faults under DXVK — and note the live sky **defaults ON**, so under Wine you must
+turn it off: set `live = 0` in `sky.cfg` (the cfg file is the last word — it
+outranks any `ACMESKY_LIVE` env), or just run `--fix-wine --apply` (next
+section). AcmeSky's **baked** sky (`live = 0`) is proven working under Wine. None of the plugin stack is
 gate-tested for shipping on Linux; you are in experimental territory, and the
 plain client is the known-good fallback.
+
+---
+
+## The z-z patcher tool under Wine
+
+The release's plugin-manager/tuner GUI (`zzpatcher.exe`) does **not** run under
+Wine — WPF dies with a stack overflow during startup (tested wine 8.0; don't
+re-tread it). Its **headless commands run fine**, and they automate this doc:
+
+```sh
+cd /path/to/Chorizite
+WINEPREFIX=~/acwine wine zzpatcher.exe --fix-wine           # CHECK the Wine checklist
+WINEPREFIX=~/acwine wine zzpatcher.exe --fix-wine --apply   # apply the safe fixes
+```
+
+`--fix-wine` checks the four Wine items this guide describes by hand — the
+`VideoMemorySize=2048` registry cap, `dxvk.conf`'s required
+`d3d9.textureMemory = 0`, the plugin runtime's `Temp\chorizite` dir, and that
+AcmeSky is in baked (not live) mode — printing one
+`WINEFIX <name> <verdict> <detail>` line each. Verdicts: `OK`, `MISSING`/`WRONG`
+(a real problem), or `ADVISORY-MISSING`/`ADVISORY-WRONG` for the situational
+rows — `dxvk.conf` when you don't use DXVK, the plugin temp dir on a
+plain-client install. **Exit 0 = nothing blocking** (advisory rows don't fail
+the exit code). With `--apply` it performs the fixes that are plain
+file/registry writes (`applied:` / `apply-FAILED:` lines) and re-reports; it
+will patch an existing `dxvk.conf` but only *creates* one when you also pass
+`--dxvk` (creating it unasked would mislead non-DXVK users). The sky fix writes
+`live = 0` into the cfg, which outranks any `ACMESKY_LIVE` env the plugin sees.
+Plugin cfg tuning works headlessly the same way:
+`wine zzpatcher.exe --tune sky.cloudcover=0.4`. The exe/dat patching itself
+stays native (`python3 acme-patch-client.py`), as above.
 
 ---
 

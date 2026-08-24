@@ -441,15 +441,127 @@ namespace AcmeLauncher {
             void Clear() => outp.Clear();
 
             var buttons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            buttons.Children.Add(Btn("Verify exe patched", (_, __) => { Clear(); FixVerifyExe(s, Log); }));
+            // Wine's powershell.exe is a stub, so the ps1-based verify can't run there —
+            // the Wine group below shows the doc's native-Linux command instead.
+            if (!Platform.IsWine)
+                buttons.Children.Add(Btn("Verify exe patched", (_, __) => { Clear(); FixVerifyExe(s, Log); }));
             buttons.Children.Add(Btn("Check dat sizes", (_, __) => { Clear(); FixDatSizes(s, Log); }));
-            buttons.Children.Add(Btn("Check texture-detail", (_, __) => { Clear(); FixTextureDetail(s, Log); }));
+            buttons.Children.Add(Btn("Check UserPreferences", (_, __) => { Clear(); FixUserPrefs(s, Log); }));
             buttons.Children.Add(Btn("Tail plugin log", (_, __) => { Clear(); FixTailLog(s, Log); }));
             buttons.Children.Add(Btn("Rollback…", (_, __) => { FixRollback(s, Log, Clear); }));
             DockPanel.SetDock(buttons, Dock.Top); root.Children.Add(buttons);
+
+            if (Platform.IsWine) {
+                var wine = BuildWineFixes(s, Log, Clear);
+                DockPanel.SetDock(wine, Dock.Top); root.Children.Add(wine);
+            }
+
+            var explain = new Expander {
+                Header = "Explain common errors", IsExpanded = false, Margin = new Thickness(0, 0, 0, 6),
+                Content = new TextBlock { Text = CommonErrorsText(), TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(6, 4, 2, 2) },
+            };
+            DockPanel.SetDock(explain, Dock.Top); root.Children.Add(explain);
+
             root.Children.Add(outp);
             return root;
         }
+
+        /// <summary>The documented dialog/symptom explanations, condensed from the install
+        /// guides (INSTALL-WINDOWS.md §11 ladder; INSTALL-LINUX-WINE.md "Troubleshooting
+        /// dialogs and errors"). Text only — these are the fixes that are a decision, not a
+        /// button.</summary>
+        private static string CommonErrorsText() {
+            var t =
+                "\"DAT files are incomplete\" at login — the SERVER's message, not a client check: " +
+                "its dat-version handshake (DDD) doesn't match your dats. Use exactly the dat set " +
+                "shipped for your server — all files from the same release, no mixing.\n\n" +
+                "\"Cannot have two accounts logged on at the same time\" — you reconnected too fast. " +
+                "After a crash or killed client the ghost session lingers ~110–150 s: wait 2–3 minutes " +
+                "and retry. After a clean logout a few seconds is enough.\n\n" +
+                "Error box mentioning corestrings.dll / message text shows as placeholder IDs — the " +
+                "client couldn't load corestrings.dll: you launched from a bare or overlay-only folder. " +
+                "Run from your full retail install folder (it supplies corestrings.dll and ~37 other base DLLs).\n\n" +
+                "Client exits instantly with no window — usually the wrong working directory; the client " +
+                "finds its dats and DLLs by working directory, so start it from the game folder.\n\n" +
+                "Game runs but many surfaces are untextured/white — incomplete install reached the world: " +
+                "client_highres.dat missing/truncated, exe not patched, or a client \"repair\" restored a " +
+                "stock exe. Run play.bat (or the kit check) once — it names which.\n\n" +
+                "Exactly ~10 fps, constant — the window-activation throttle: the client deactivated. " +
+                "Click in the game window; script launches need a real activation, not just visibility.";
+            if (Platform.IsWine) t +=
+                "\n\nBlack window / nothing renders but UI or sound works — (Wine) almost always the " +
+                "missing 32-bit GL driver: the game is 32-bit and needs your distro's :i386 / lib32 " +
+                "driver package. Check the renderer string in a WINEDEBUG=+fps log — llvmpipe/softpipe/" +
+                "SWRast means software rendering.";
+            return t;
+        }
+
+        // ─────────────────────────── FIX: Wine group ────────────────────────
+        /// <summary>The Wine-only checklist from INSTALL-LINUX-WINE.md, as check+fix rows —
+        /// a thin view over <see cref="WineFixes"/> (the same code the headless
+        /// <c>--fix-wine</c> command runs; that CLI is the supported Linux surface, since the
+        /// WPF GUI itself does not run under Wine).</summary>
+        private static UIElement BuildWineFixes(Settings s, Action<string> log, Action clear) {
+            var panel = new StackPanel();
+            var rows = new List<(TextBlock status, Func<WineFixes.Row> check)>();
+
+            void AddRow(Func<WineFixes.Row> check, string fixLabel, Func<string?> fix) {
+                var row = new DockPanel { Margin = new Thickness(0, 1, 0, 1) };
+                var status = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+                var b = Btn(fixLabel, (_, __) => {
+                    var err = fix();
+                    if (err != null) MessageBox.Show(err, "Fix failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                    RefreshAll();
+                });
+                DockPanel.SetDock(b, Dock.Right); row.Children.Add(b);
+                row.Children.Add(status);
+                rows.Add((status, check));
+                panel.Children.Add(row);
+            }
+            void RefreshAll() {
+                foreach (var (status, check) in rows) {
+                    var r = check();
+                    status.Text = r.Ok ? r.Detail + " — ok." : r.Detail;
+                    status.Foreground = r.Ok ? Brushes.Green : r.Advisory ? Brushes.Orange : Brushes.Red;
+                }
+            }
+
+            AddRow(WineFixes.CheckVideoMemory, "Set to 2048", WineFixes.FixVideoMemory);
+            AddRow(() => WineFixes.CheckDxvkConf(s), "Create dxvk.conf", () => WineFixes.FixDxvkConf(s));
+            AddRow(WineFixes.CheckChoriziteTemp, "Create", WineFixes.FixChoriziteTemp);
+            AddRow(WineFixes.CheckLiveSky, "Set live=0", WineFixes.FixLiveSky);
+
+            RefreshAll();
+
+            var crib = new TextBox {
+                IsReadOnly = true, FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0),
+                Text = "# This same checklist, headless (the supported Linux surface):\n" +
+                       "wine zzpatcher.exe --fix-wine          # check\n" +
+                       "wine zzpatcher.exe --fix-wine --apply  # fix\n" +
+                       "# These run on the LINUX side (a real terminal), not inside the prefix:\n" +
+                       "# verify exe patches + dat sizes (KIT-OK = all good):\n" +
+                       "python3 acme-patch-client.py --check-kit\n" +
+                       "# capture a crash log:\n" +
+                       "WINEPREFIX=~/acwine WINEDEBUG=+seh wine acclient.exe -h <server> -p 9000 -a <acct> -v <pw> -rodat > ~/ac-crash.log 2>&1",
+            };
+
+            var inner = new StackPanel();
+            inner.Children.Add(new TextBlock {
+                Text = "Wine " + Platform.WineVersion + " detected. The checks below are the Wine checklist from INSTALL-LINUX-WINE.md. " +
+                       "Note: this GUI itself is unsupported under Wine (WPF does not run there) — the headless " +
+                       "`--fix-wine` / `--tune` commands are the supported Linux surface.",
+                TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 4),
+            });
+            inner.Children.Add(panel);
+            inner.Children.Add(crib);
+            var refresh = Btn("Re-check", (_, __) => RefreshAll());
+            refresh.HorizontalAlignment = HorizontalAlignment.Left;
+            inner.Children.Add(refresh);
+
+            return new GroupBox { Header = "Wine", Content = inner, Margin = new Thickness(0, 0, 0, 6), Padding = new Thickness(4) };
+        }
+
 
         private static void FixVerifyExe(Settings s, Action<string> log) {
             var dir = s.InstallDir;
@@ -481,7 +593,11 @@ namespace AcmeLauncher {
             log(ok ? "\nAll dats present at their manifest sizes." : "\nSome dats are wrong/missing — re-copy the kit. A missing highres silently renders untextured surfaces.");
         }
 
-        private static void FixTextureDetail(Settings s, Action<string> log) {
+        /// <summary>UserPreferences.ini sanity: the numeric texture-detail trap (a numeric
+        /// value is a WORST-first index — =0 means VeryLow) and the FullScreen posture
+        /// (windowed is the best-tested configuration and avoids alt-tab device-loss). Both
+        /// from INSTALL-WINDOWS.md §8.</summary>
+        private static void FixUserPrefs(Settings s, Action<string> log) {
             var dir = s.InstallDir;
             string? ini = null;
             if (!string.IsNullOrEmpty(dir) && File.Exists(Path.Combine(dir!, "UserPreferences.ini"))) ini = Path.Combine(dir!, "UserPreferences.ini");
@@ -502,8 +618,14 @@ namespace AcmeLauncher {
                         else log($"ok {key}={v}");
                     }
                 }
+                if (line.Contains('=') &&
+                    line.Substring(0, line.IndexOf('=')).Trim().Equals("FullScreen", StringComparison.OrdinalIgnoreCase)) {
+                    var v = line.Substring(line.IndexOf('=') + 1).Trim();
+                    if (v.Equals("False", StringComparison.OrdinalIgnoreCase)) log("ok FullScreen=False (windowed — the best-tested configuration; avoids alt-tab device-loss).");
+                    else { log($"note FullScreen={v} — windowed (False) is the best-tested configuration and avoids device-loss on alt-tab entirely."); warned = true; }
+                }
             }
-            if (!warned) log("\nTexture-detail lines look fine (spelled-out names). VeryHigh = full detail.");
+            if (!warned) log("\nUserPreferences looks fine (spelled-out texture detail, windowed). VeryHigh = full detail.");
         }
 
         private static void FixTailLog(Settings s, Action<string> log) {
@@ -522,7 +644,9 @@ namespace AcmeLauncher {
                     for (int i = start; i < all.Length; i++) {
                         var l = all[i].TrimEnd('\r');
                         if (l.Length == 0) continue;
-                        if (l.Contains("FAULT") || l.Contains("Error") || l.Contains("CRITICAL")) log("!! " + l);
+                        // The §10 "lines that matter": diet FAULT (self-disabled), memgov CRIT,
+                        // hook FAILED, plus generic errors.
+                        if (l.Contains("FAULT") || l.Contains("Error") || l.Contains("CRIT") || l.Contains("hook FAILED")) log("!! " + l);
                         else log("   " + l);
                     }
                 }
@@ -550,6 +674,21 @@ namespace AcmeLauncher {
 
             root.Children.Add(new TextBlock { Text = "One-time setup. Point the launcher at your install, patch your exe, and you're done.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2) });
 
+            if (Platform.IsWine) {
+                // Honest posture per INSTALL-LINUX-WINE.md: the supported Linux posture is the
+                // plain client; plugins are experimental; the exe patcher runs NATIVELY (Wine's
+                // powershell is a stub, so the ps1 path can't run here).
+                root.Children.Add(new TextBlock {
+                    Text = "Running under Wine " + Platform.WineVersion + ". The supported Linux posture is the plain client " +
+                           "(see INSTALL-LINUX-WINE.md); plugins are experimental. The exe patcher runs natively, in a real terminal:",
+                    TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DarkOrange, Margin = new Thickness(2, 6, 2, 2),
+                });
+                root.Children.Add(new TextBox {
+                    IsReadOnly = true, FontFamily = new FontFamily("Consolas"),
+                    Text = "python3 acme-patch-client.py --check-kit", Margin = new Thickness(2, 0, 2, 4),
+                });
+            }
+
             // paths
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -568,16 +707,20 @@ namespace AcmeLauncher {
                 Log("Saved. Install: " + s.InstallDir + "  Chorizite: " + s.ChoriziteDir);
             }));
             b.Children.Add(Btn("Verify kit", (_, __) => { s.InstallDir = tbInstall.Text.Trim(); s.Save(); FixDatSizes(s, Log); }));
-            b.Children.Add(Btn("Patch my client", (_, __) => {
-                s.InstallDir = tbInstall.Text.Trim(); s.Save();
-                var dir = s.InstallDir;
-                var ps1 = string.IsNullOrEmpty(dir) ? null : Path.Combine(dir!, "acme-patch-client.ps1");
-                if (ps1 == null || !File.Exists(ps1)) { Log("acme-patch-client.ps1 not in the install folder."); return; }
-                var r = RunCapture("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\" -Exe \"{Path.Combine(dir!, "acclient.exe")}\"", dir);
-                Log(r.output.Trim());
-                Log(r.code == 0 ? "Patched." : "Patcher refused — see message above.");
-            }));
-            b.Children.Add(Btn("Check .NET runtime", (_, __) => InstallCheckDotnet(Log)));
+            // Both of these shell to binaries Wine doesn't have (powershell/dotnet are stubs) —
+            // the Wine banner above shows the native command instead.
+            if (!Platform.IsWine) {
+                b.Children.Add(Btn("Patch my client", (_, __) => {
+                    s.InstallDir = tbInstall.Text.Trim(); s.Save();
+                    var dir = s.InstallDir;
+                    var ps1 = string.IsNullOrEmpty(dir) ? null : Path.Combine(dir!, "acme-patch-client.ps1");
+                    if (ps1 == null || !File.Exists(ps1)) { Log("acme-patch-client.ps1 not in the install folder."); return; }
+                    var r = RunCapture("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\" -Exe \"{Path.Combine(dir!, "acclient.exe")}\"", dir);
+                    Log(r.output.Trim());
+                    Log(r.code == 0 ? "Patched." : "Patcher refused — see message above.");
+                }));
+                b.Children.Add(Btn("Check .NET runtime", (_, __) => InstallCheckDotnet(Log)));
+            }
             root.Children.Add(b);
 
             root.Children.Add(new TextBlock {
@@ -592,6 +735,8 @@ namespace AcmeLauncher {
             // The plugin pack (Chorizite) is managed .NET; the injected CLR needs a
             // .NET desktop runtime present. Report, and OFFER the official source —
             // never fetch/bundle silently.
+            log("(This check is about the PLUGIN runtime that loads inside the game client — " +
+                "z-z patcher itself is self-contained and needs nothing.)");
             var r = RunCapture("dotnet", "--list-runtimes", null);
             if (r.code == 0 && r.output.Contains("Microsoft.WindowsDesktop.App")) {
                 log("Found a .NET desktop runtime:\n" + r.output.Trim());

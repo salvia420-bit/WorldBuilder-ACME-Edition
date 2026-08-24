@@ -50,14 +50,17 @@ namespace AcmeLauncher {
         };
 
         /// <summary>Same order each plugin uses: env override → C:\Temp\acdt\&lt;cfg&gt;.cfg →
-        /// %USERPROFILE%\.acdt\&lt;cfg&gt;.cfg. Read = first existing; write = first existing else
-        /// the env override (if set) else the user-profile path (always writable).</summary>
+        /// (sky ONLY: C:\Temp\acdt\skyaxis.txt — SkyConfig.BuildCandidatePaths has this legacy
+        /// 3rd candidate; lights/ragdoll do not) → %USERPROFILE%\.acdt\&lt;cfg&gt;.cfg. Read =
+        /// first existing; write = first existing else the env override (if set) else the
+        /// user-profile path (always writable).</summary>
         public static string ResolvePath(string cfg, bool forWrite) {
             var env = EnvVar(cfg) is var ev && ev.Length > 0 ? Environment.GetEnvironmentVariable(ev) : null;
             string file = cfg + ".cfg";
             var candidates = new List<string>();
             if (!string.IsNullOrEmpty(env)) candidates.Add(env!);
             candidates.Add(Path.Combine(@"C:\Temp\acdt", file));
+            if (cfg == "sky") candidates.Add(@"C:\Temp\acdt\skyaxis.txt");
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             candidates.Add(Path.Combine(home, ".acdt", file));
             foreach (var c in candidates) if (File.Exists(c)) return c;
