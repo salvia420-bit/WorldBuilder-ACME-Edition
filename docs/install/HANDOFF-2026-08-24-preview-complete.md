@@ -74,3 +74,20 @@ math means only load/arming was at risk, but the fleet-video session should show
 3. Chorizite runtime refresh on the 1070 (per-pid-log build) before the next multi-box run.
 4. Preview polish backlog (explicitly deferred, small): Δ-ghost death overlay (§2.5),
    Lights-domain placeholder says "in-game only" — fine as shipped.
+
+## Addendum (same session): Fix/Install tabs + Wine — DONE (`4835f994`)
+
+Owner asked about the two under-loved tabs and Wine coverage. Both resolved:
+- Tabs built out (common-errors panel, UserPreferences/log-tail fixes, platform gating);
+  full detail in the commit message.
+- **Wine verdict, tested on the wine gate box (T4, wine 8.0, fresh win64 prefix): the
+  zzpatcher GUI does NOT run (WPF stack overflow at media-context init — do not re-tread);
+  the headless CLI DOES.** Linux surface = `wine zzpatcher.exe --fix-wine [--apply]
+  [--dxvk]` + `--tune`, sharing one `WineFixes` implementation with the GUI's Wine-only
+  section (validated via ZZPATCHER_FAKE_WINE). Full check/apply/env-conflict/exit-0 matrix
+  proven under real Wine. INSTALL-LINUX-WINE.md updated (incl. correcting the stale
+  "baked sky is the default" line — live defaults ON).
+- Box note: `~/zzwine` (win64 prefix) left on the buildbox for future zzpatcher wine runs;
+  wine64 confirmed installed; box powered off after.
+- Owed additions to the earlier list: FAKE_WINE GUI eyeball on the 1070 can join the
+  batched eyetest session (item 1).
