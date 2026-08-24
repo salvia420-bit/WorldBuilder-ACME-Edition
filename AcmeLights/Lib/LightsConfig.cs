@@ -222,6 +222,28 @@ namespace AcmeLights.Lib {
         public float SelCaps = 1f;          // selcaps: 1 = read D3DCAPS9.MaxActiveLights once and clamp
                                             //   the budget down to it if the driver reports fewer.
 
+        // --- Residency governor (Services/MemoryGovernor.cs) — crash family B ---
+        // Default ON per the house rule; `memgov=0` at boot = the governor never touches a native
+        // or a budget (zero footprint); live 1→0 restores the saved retail budgets.
+        // Triggers read COMMITTED-PRIVATE MB and the LOW-2GB LARGEST-FREE-BLOCK MB (the two
+        // resources that actually die — ANALYSIS-2026-08-23-familyB-yaraq-dump.md: Yaraq crashed
+        // at priv=1363MB with largest-free 1.11MB while a fresh session survived priv=2344MB).
+        public float MemGov = 1f;           // memgov: 0/1 master
+        public float MemLowMb = 1100f;      // memlowmb: committed-private MB → flush every freelist
+        public float MemHighMb = 950f;      // memhighmb: hysteresis re-arm level (priv below this = calm)
+        public float MemFragMb = 16f;       // memfragmb: largest-free-low-2GB MB → same flush
+        public float MemCritMb = 1350f;     // memcritmb: priv emergency → freelisting OFF + cells unloaded
+        public float MemCritFragMb = 6f;    // memcritfragmb: largest-free emergency, same response
+        public float MemTrimCooldown = 15f; // memtrimcooldown: min seconds between un-rearmed trims
+        public float MemLog = 0f;           // memlog: 1 = 5 s telemetry line (avail + per-cache free/total)
+        // Freelist caps (dead-object COUNTS; retail's 2005 budgets pin r9-sized assets).
+        // 0 = leave that group at the retail budget.
+        public float MemCapTex = 64f;       // memcaptex: SURFACETEXTURE + RENDERSURFACE (retail 400 each)
+        public float MemCapGfx = 80f;       // memcapgfx: GFXOBJ (retail 200)
+        public float MemCapSurf = 64f;      // memcapsurf: SURFACE (retail 200)
+        public float MemCapLand = 48f;      // memcapland: LAND_BLOCK + LBI + CELL (retail 144 each)
+        public float MemCapScene = 40f;     // memcapscene: SCENE (retail 100)
+
         private static readonly string[] CandidatePaths = BuildCandidatePaths();
         public string? LoadedFrom;
 
@@ -352,6 +374,19 @@ namespace AcmeLights.Lib {
                 case "glowcontain": if (F(val, out var gn)) GlowContain = Math.Clamp(gn, 0f, 1f); break;
                 case "glowoutdoor": if (F(val, out var go)) GlowOutdoor = Math.Clamp(go, 0f, 1f); break;
                 case "glowoutdoorbudget": if (F(val, out var gob)) GlowOutdoorBudget = Math.Clamp(gob, 1f, 7f); break;
+                case "memgov": if (F(val, out var mg)) MemGov = Math.Clamp(mg, 0f, 1f); break;
+                case "memlowmb": if (F(val, out var mlo)) MemLowMb = Math.Clamp(mlo, 256f, 3072f); break;
+                case "memhighmb": if (F(val, out var mhi)) MemHighMb = Math.Clamp(mhi, 256f, 3072f); break;
+                case "memfragmb": if (F(val, out var mfr)) MemFragMb = Math.Clamp(mfr, 2f, 512f); break;
+                case "memcritmb": if (F(val, out var mcr)) MemCritMb = Math.Clamp(mcr, 256f, 3584f); break;
+                case "memcritfragmb": if (F(val, out var mcf)) MemCritFragMb = Math.Clamp(mcf, 1f, 256f); break;
+                case "memtrimcooldown": if (F(val, out var mtc)) MemTrimCooldown = Math.Clamp(mtc, 1f, 300f); break;
+                case "memlog": if (F(val, out var mlg)) MemLog = Math.Clamp(mlg, 0f, 1f); break;
+                case "memcaptex": if (F(val, out var mct)) MemCapTex = Math.Clamp(mct, 0f, 400f); break;
+                case "memcapgfx": if (F(val, out var mcg)) MemCapGfx = Math.Clamp(mcg, 0f, 200f); break;
+                case "memcapsurf": if (F(val, out var mcs)) MemCapSurf = Math.Clamp(mcs, 0f, 200f); break;
+                case "memcapland": if (F(val, out var mcl)) MemCapLand = Math.Clamp(mcl, 0f, 144f); break;
+                case "memcapscene": if (F(val, out var mcc)) MemCapScene = Math.Clamp(mcc, 0f, 100f); break;
                 case "glowportalboost": if (F(val, out var pb)) GlowPortalBoost = Math.Clamp(pb, 0f, 20f); break;
                 case "glowportalcolor": if (Hex(val, out var pc)) GlowPortalColor = pc & 0xFFFFFF; break;
                 case "glowprojectileboost": if (F(val, out var jb)) GlowProjectileBoost = Math.Clamp(jb, 0f, 20f); break;

@@ -148,5 +148,16 @@ namespace AcmeLights.Lib {
         // ACBindings Game/SmartBox/SmartBox.cs 'convert_to_player_space @0x00452DE0'.
         public const nint ConvertToPlayerSpace_VA = 0x00452DE0;
         public const string? ConvertToPlayerSpace_Sig = "PLACEHOLDER: prologue at 0x00452DE0";
+
+        // ─── Residency governor (Services/MemoryGovernor.cs) ──────────────────────────────
+        // The DBCache statics — the process-wide cache levers. acclient.map RVAs (+0x401000):
+        // 00013590 GetDBOCache(ulong) __cdecl; 000134E0 FlushFreeObjects(ulong) __stdcall
+        // (0 = every cache; touches only refcount-0 freelist members); 00013620
+        // KeepFreeObjects(bool,ulong) __stdcall (retail calls (false,0) in
+        // ThreadedCache::SetShutdown); 000133F0 UnloadCellData() (no args).
+        public const nint DBCacheGetDBOCache_VA = 0x00414590;
+        public const nint DBCacheFlushFreeObjects_VA = 0x004144E0;
+        public const nint DBCacheKeepFreeObjects_VA = 0x00414620;
+        public const nint DBCacheUnloadCellData_VA = 0x004143F0;
     }
 }

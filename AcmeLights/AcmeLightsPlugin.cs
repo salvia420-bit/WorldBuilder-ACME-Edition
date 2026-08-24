@@ -130,6 +130,7 @@ namespace AcmeLights {
         }
 
         protected override void Dispose() {
+            MemoryGovernor.Shutdown(_log); // restore retail budgets + freelisting before we detach
             RenderCallback.Uninstall();   // clear the SmartBox slot before the compositor goes away
             _hooks?.Dispose();            // detours off BEFORE P4/P3 free their unmanaged scratch
             GlowLights.Dispose();
