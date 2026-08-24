@@ -236,6 +236,9 @@ namespace AcmeLights.Lib {
         public float MemCritFragMb = 6f;    // memcritfragmb: largest-free emergency, same response
         public float MemTrimCooldown = 15f; // memtrimcooldown: min seconds between un-rearmed trims
         public float MemLog = 0f;           // memlog: 1 = 5 s telemetry line (avail + per-cache free/total)
+        public float FrameLog = 1f;         // framelog: 1 = 5 s frame-time stats line (avg/p99/max dt,
+                                            //   >33ms/>100ms hitch counts + cumulative). Independent of
+                                            //   memgov/memlog so BOTH gauntlet A/B arms report.
         // Freelist caps (dead-object COUNTS; retail's 2005 budgets pin r9-sized assets).
         // 0 = leave that group at the retail budget.
         public float MemCapTex = 64f;       // memcaptex: SURFACETEXTURE + RENDERSURFACE (retail 400 each)
@@ -382,6 +385,7 @@ namespace AcmeLights.Lib {
                 case "memcritfragmb": if (F(val, out var mcf)) MemCritFragMb = Math.Clamp(mcf, 1f, 256f); break;
                 case "memtrimcooldown": if (F(val, out var mtc)) MemTrimCooldown = Math.Clamp(mtc, 1f, 300f); break;
                 case "memlog": if (F(val, out var mlg)) MemLog = Math.Clamp(mlg, 0f, 1f); break;
+                case "framelog": if (F(val, out var flg)) FrameLog = Math.Clamp(flg, 0f, 1f); break;
                 case "memcaptex": if (F(val, out var mct)) MemCapTex = Math.Clamp(mct, 0f, 400f); break;
                 case "memcapgfx": if (F(val, out var mcg)) MemCapGfx = Math.Clamp(mcg, 0f, 200f); break;
                 case "memcapsurf": if (F(val, out var mcs)) MemCapSurf = Math.Clamp(mcs, 0f, 200f); break;

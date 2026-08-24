@@ -58,7 +58,7 @@ namespace AcmeLights.Services {
                 if (slot == null) return;
                 nint ours = OurPtr;
                 bool want = cfg.Bloom > 0.5f || cfg.TorchLights > 0.5f || cfg.GlowLights > 0.5f
-                            || cfg.MemGov > 0.5f;
+                            || cfg.MemGov > 0.5f || cfg.FrameLog > 0.5f;
                 if (!want) {                             // live-toggle off: put back what we found
                     if (*slot == ours) *slot = _prev;
                     return;
@@ -96,6 +96,7 @@ namespace AcmeLights.Services {
                 // The 1 Hz throttle AND the mtime gate now live inside LightsConfig.MaybeReload, so
                 // the two call sites cost one stat per second between them, not two file reads.
                 if (cfg != null) {
+                    FrameStats.OnFrame(cfg);                   // hitch gate: frame-dt histogram (framelog)
                     cfg.MaybeReload();
                     // Advance the smoothed day/night factor once per in-world frame. The ambient
                     // funnel that feeds it only fires on cell change and on the ~3 s landscape light

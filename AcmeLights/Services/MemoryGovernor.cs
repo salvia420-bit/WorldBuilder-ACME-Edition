@@ -284,7 +284,10 @@ namespace AcmeLights.Services {
                 sb.Append(' ').Append(TelemetryNames[i]).Append(':')
                   .Append(*(int*)(p + OffNFree)).Append('/').Append(*(int*)(p + OffNTotal));
             }
-            log?.LogInformation("{Line}", sb.ToString());
+            // Periodic line → async sink (the sync ChoriziteLogger's per-line open/append/close on
+            // the render thread is itself a hitch source; state transitions above stay sync — they
+            // are rare and belong in the crash story immediately).
+            AsyncLog.Post(sb.ToString());
         }
     }
 }
