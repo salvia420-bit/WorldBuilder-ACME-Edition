@@ -68,9 +68,15 @@ namespace AcmeLauncher {
             return candidates[0];
         }
 
-        /// <summary>Parse a cfg into key→raw-string-value (last wins, like the plugin).</summary>
+        /// <summary>Parse a cfg into key→raw-string-value (last wins, like the plugin).
+        /// A missing file is EXPECTED (fresh install, cfg not written yet) and returns the
+        /// empty dict via the File.Exists guard — never the exception path. (Wine matrix
+        /// 2026-08-24: first-chance file exceptions under Wine stalled the read verbs for
+        /// 40s+; the guard removes the throw entirely, which is also the codebase's own
+        /// style everywhere else.)</summary>
         public static Dictionary<string, string> Read(string path) {
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!File.Exists(path)) return d;
             try {
                 foreach (var raw in File.ReadAllLines(path)) {
                     var line = raw.Trim();

@@ -375,7 +375,29 @@ Work top to bottom; each step names its cause.
     `acclient.exe.acme-orig.bak` (rename to `acclient.exe`), delete/skip the
     Chorizite folder. You're back to bone-stock retail.
 
-## 12. Appendix — developer/reference values
+## 12. Scriptable command line
+
+Everything the four tabs do is also a command — same exe, no separate tool.
+Handy for batch files, multi-box setups, or fixing a machine over remote help:
+
+```bat
+zzpatcher.exe --help                        rem the full command table
+zzpatcher.exe --list                        rem running clients + plugin state (tab-separated)
+zzpatcher.exe --status                      rem per-client health lights + summaries
+zzpatcher.exe --attach-all                  rem enable plugins on every plain client
+zzpatcher.exe --knobs ragdoll               rem knob catalogue with current values
+zzpatcher.exe --tune sky.cloudcover=0.8 lights.bloom=1
+zzpatcher.exe --save-profile mine.zzp       rem snapshot; --load-profile restores (validated like --tune)
+zzpatcher.exe --check-dats > report.txt     rem output redirects like any console tool
+```
+
+Exit codes are script-friendly: `0` ok, `1` a check found problems, `2` bad
+arguments, `4` a destructive command (`--rollback`, `--uninstall-plugin`) was
+run without `--yes`, plus the injector's own statuses (23 = already injected,
+24 = no clients). Profiles (`.zzp`) are interchangeable between the GUI's
+Save/Load buttons and `--save-profile`/`--load-profile`.
+
+## 13. Appendix — developer/reference values
 
 For whoever maintains this after the fact:
 

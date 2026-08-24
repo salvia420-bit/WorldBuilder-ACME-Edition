@@ -445,9 +445,50 @@ file/registry writes (`applied:` / `apply-FAILED:` lines) and re-reports; it
 will patch an existing `dxvk.conf` but only *creates* one when you also pass
 `--dxvk` (creating it unasked would mislead non-DXVK users). The sky fix writes
 `live = 0` into the cfg, which outranks any `ACMESKY_LIVE` env the plugin sees.
-Plugin cfg tuning works headlessly the same way:
-`wine zzpatcher.exe --tune sky.cloudcover=0.4`. The exe/dat patching itself
-stays native (`python3 acme-patch-client.py`), as above.
+
+`--fix-wine` is one command of many: **the entire GUI is scriptable**, and under
+Wine the CLI is the whole tool. `wine zzpatcher.exe --help` prints the full
+table, grouped the way the GUI's tabs are. The short version:
+
+```sh
+# Tune — all 147 knobs across lights/sky/ragdoll:
+wine zzpatcher.exe --knobs sky                  # catalogue: KNOB <cfg> <name> <current> <default> <min>..<max> <type>
+wine zzpatcher.exe --tune sky.cloudcover=0.4 ragdoll.springk=280
+wine zzpatcher.exe --get springk                # read one back
+wine zzpatcher.exe --reset springk              # a knob's code default
+wine zzpatcher.exe --reset-all sky              # one cfg (or: all)
+wine zzpatcher.exe --recommended                # the reference-machine profile
+wine zzpatcher.exe --save-profile my.zzp        # snapshot / restore — files are
+wine zzpatcher.exe --load-profile my.zzp        #   interchangeable with the GUI's
+
+# Plugins — list clients, enable the pack, manage the plugin folders:
+wine zzpatcher.exe --list
+wine zzpatcher.exe --status                     # per-client health: STATUS <pid> <grey|green|amber|red> <summary>
+wine zzpatcher.exe --attach <pid>               # or --attach-all
+wine zzpatcher.exe --plugins                    # tab-separated; a "no-manifest" field marks a folder Chorizite won't load
+wine zzpatcher.exe --disable-plugin AcmeSky     # or --enable-plugin
+wine zzpatcher.exe --install-plugin some.zip
+wine zzpatcher.exe --uninstall-plugin Name --yes   # destructive ops need --yes
+
+# Fix / Install — checks and paths:
+wine zzpatcher.exe --check-dats                 # dat sizes vs kit-manifest.txt
+wine zzpatcher.exe --check-prefs                # UserPreferences sanity
+wine zzpatcher.exe --tail-log                   # plugin log(s) of injected clients
+wine zzpatcher.exe --paths
+wine zzpatcher.exe --set-install-dir 'C:\Games\AC'
+```
+
+Three commands are Windows-only and exit 3 under Wine, pointing you at the
+native path instead: `--verify-exe`, `--patch-exe` (Wine's `powershell` is a
+stub) and `--check-dotnet`. The exe/dat patching itself stays native
+(`python3 acme-patch-client.py`), as above; `--rollback --yes` (restore the
+pre-patch exe backup) does work under Wine — it is a plain file copy.
+
+One Wine-specific consequence of the bulk knob writes: `--reset-all sky` /
+`--reset-all all` and a profile load restore `live` to its code default (**1**,
+live sky ON — resetting to defaults is correct behavior), which re-arms the
+live-sky path that faults under Wine. The tool prints a stderr `note:` when
+that happens; follow it with `--fix-wine --apply`.
 
 ---
 

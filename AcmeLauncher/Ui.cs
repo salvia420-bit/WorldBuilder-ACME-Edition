@@ -154,15 +154,15 @@ namespace AcmeLauncher {
                 foreach (var p in plugins) {
                     var cap = p;   // capture
                     var cb = new CheckBox {
-                        Content = $"{p.Name}" + (p.Enabled ? "" : "  (disabled)"),
+                        Content = $"{p.Name}" + (p.Enabled ? "" : "  (disabled)") + (p.HasManifest ? "" : "  (no manifest.json — won't load)"),
                         IsChecked = p.Enabled, Margin = new Thickness(2, 1, 2, 1),
                         ToolTip = $"Folder: {p.Folder}. Checked = loaded on next injection; unchecked = held aside. Takes effect the next time you enable plugins on a client (already-running clients keep what they loaded)."
                     };
                     cb.Click += (_, __) => {
                         bool want = cb.IsChecked == true;
                         if (!want && PluginMgmt.IsCrashProtection(cap)) {
-                            if (MessageBox.Show($"'{cap.Name}' also carries the memory-crash protection (the governor + mirror diet). "
-                                + "Disabling it removes that protection and towns may crash on the high-res dats.\n\nDisable anyway?",
+                            // Shared wording with the CLI's --disable-plugin stderr warning.
+                            if (MessageBox.Show(Actions.LightsDisableWarning + "\n\nDisable anyway?",
                                 "Disable crash protection?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) {
                                 cb.IsChecked = true; return;
                             }
@@ -193,8 +193,7 @@ namespace AcmeLauncher {
                 btns.Children.Add(Btn("Uninstall", (_, __) => {
                     if (selName.SelectedItem is not string folder) return;
                     if (folder.Equals("AcmeLights", StringComparison.OrdinalIgnoreCase) &&
-                        MessageBox.Show("AcmeLights carries the memory-crash protection (the governor + mirror diet). "
-                            + "Deleting it removes that protection permanently. Uninstall anyway?",
+                        MessageBox.Show(Actions.LightsUninstallWarning + " Uninstall anyway?",
                             "Remove crash protection?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
                     if (MessageBox.Show($"Delete the plugin folder '{folder}'? This removes it from disk.", "Uninstall", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
                     try { PluginMgmt.Uninstall(dir, folder); }
@@ -214,10 +213,14 @@ namespace AcmeLauncher {
             string[] cfgNames = { "lights", "sky", "ragdoll" };
             var cfgPath = new Dictionary<string, string>();
             var current = new Dictionary<string, Dictionary<string, string>>();
-            foreach (var c in cfgNames) { cfgPath[c] = Cfgs.ResolvePath(c, forWrite: true); current[c] = Cfgs.Read(cfgPath[c]); }
 
             string CurRaw(KnobDef k) => current[k.Cfg].TryGetValue(k.Name, out var v) ? v : k.Default;
-            void ReloadCurrent() { foreach (var c in cfgNames) current[c] = Cfgs.Read(cfgPath[c]); }
+            // RE-RESOLVE the write path on every reload, not just at window build: the CLI
+            // is a co-resident writer now, and a higher-priority candidate file
+            // (C:\Temp\acdt\*, skyaxis.txt) appearing while the window is open must not
+            // leave the sliders writing a different file than Actions.* does.
+            void ReloadCurrent() { foreach (var c in cfgNames) { cfgPath[c] = Cfgs.ResolvePath(c, forWrite: true); current[c] = Cfgs.Read(cfgPath[c]); } }
+            ReloadCurrent();
             // The shared preview pane (design §1.1): one host beside the knob list, auto-following
             // the cfg being tuned. Every knob edit funnels through WriteAndCache -> the host.
             var host = new AcmeLauncher.Preview.PreviewHost(s);
@@ -230,33 +233,29 @@ namespace AcmeLauncher {
 
             // Global actions (span all three cfgs): recommended profile + profile save/load.
             var buttons = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) };
+            // Global actions delegate to Actions.* — the SAME implementations the headless
+            // CLI runs (--recommended / --save-profile / --load-profile), so GUI and CLI
+            // cannot drift; the GUI's extra job is only dialogs + ResyncAll.
             buttons.Children.Add(Btn("Load Recommended", (_, __) => {
-                foreach (var (cfg, key, val) in Cfgs.Recommended) Cfgs.WriteKnob(cfgPath[cfg], key, val);
+                Actions.LoadRecommended();
                 ResyncAll();
             }));
             buttons.Children.Add(Btn("Save profile…", (_, __) => {
                 var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "zzpatcher profile|*.zzp", FileName = "profile.zzp" };
                 if (dlg.ShowDialog() == true) {
-                    try {
-                        ReloadCurrent();
-                        var lines = new List<string> { "# z-z patcher tuning profile (cfg.knob=value)" };
-                        foreach (var k in Cfgs.All) lines.Add($"{k.Cfg}.{k.Name}={CurRaw(k)}");
-                        File.WriteAllLines(dlg.FileName, lines);
-                    } catch (Exception ex) { MessageBox.Show(ex.Message); }
+                    try { Actions.SaveProfile(dlg.FileName); }
+                    catch (Exception ex) { MessageBox.Show(ex.Message); }
                 }
             }));
             buttons.Children.Add(Btn("Load profile…", (_, __) => {
                 var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "zzpatcher profile|*.zzp|all|*.*" };
                 if (dlg.ShowDialog() == true) {
                     try {
-                        foreach (var raw in File.ReadAllLines(dlg.FileName)) {
-                            var line = raw.Trim(); if (line.Length == 0 || line[0] == '#') continue;
-                            int dot = line.IndexOf('.'), eq = line.IndexOf('=');
-                            if (dot <= 0 || eq <= dot) continue;
-                            var cfg = line.Substring(0, dot); var key = line.Substring(dot + 1, eq - dot - 1); var val = line.Substring(eq + 1);
-                            if (cfgPath.ContainsKey(cfg)) Cfgs.WriteKnob(cfgPath[cfg], key, val);
-                        }
-                    } catch (Exception ex) { MessageBox.Show(ex.Message); }
+                        var warns = new List<string>();
+                        var (applied, skipped) = Actions.LoadProfile(dlg.FileName, warns.Add);
+                        if (skipped > 0) MessageBox.Show($"Applied {applied}, skipped {skipped}:\n" + string.Join("\n", warns), "Profile loaded with skips");
+                    }
+                    catch (Exception ex) { MessageBox.Show(ex.Message); }
                     ResyncAll();
                 }
             }));
@@ -340,7 +339,7 @@ namespace AcmeLauncher {
                 var flbl = new TextBlock { Text = "Filter:  ", VerticalAlignment = VerticalAlignment.Center };
                 var search = new TextBox { };
                 var resetAll = Btn($"Reset all to defaults", (_, __) => {
-                    foreach (var k in Cfgs.All) if (k.Cfg == cfgName) Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, k.Default);
+                    Actions.ResetAll(cfgName);   // same implementation as the CLI's --reset-all
                     ResyncAll();
                 });
                 DockPanel.SetDock(flbl, Dock.Left); DockPanel.SetDock(resetAll, Dock.Right);
@@ -536,7 +535,8 @@ namespace AcmeLauncher {
             var crib = new TextBox {
                 IsReadOnly = true, FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 4, 0, 0),
-                Text = "# This same checklist, headless (the supported Linux surface):\n" +
+                Text = "# This same checklist, headless (the supported Linux surface — see --help\n" +
+                       "# for the FULL command set: knobs, plugins, checks, paths):\n" +
                        "wine zzpatcher.exe --fix-wine          # check\n" +
                        "wine zzpatcher.exe --fix-wine --apply  # fix\n" +
                        "# These run on the LINUX side (a real terminal), not inside the prefix:\n" +
@@ -550,7 +550,7 @@ namespace AcmeLauncher {
             inner.Children.Add(new TextBlock {
                 Text = "Wine " + Platform.WineVersion + " detected. The checks below are the Wine checklist from INSTALL-LINUX-WINE.md. " +
                        "Note: this GUI itself is unsupported under Wine (WPF does not run there) — the headless " +
-                       "`--fix-wine` / `--tune` commands are the supported Linux surface.",
+                       "commands are the supported Linux surface, and they cover the whole GUI (run --help).",
                 TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 4),
             });
             inner.Children.Add(panel);
@@ -563,107 +563,22 @@ namespace AcmeLauncher {
         }
 
 
-        private static void FixVerifyExe(Settings s, Action<string> log) {
-            var dir = s.InstallDir;
-            if (string.IsNullOrEmpty(dir)) { log("Install folder not set (Install tab)."); return; }
-            var ps1 = Path.Combine(dir!, "acme-patch-client.ps1");
-            if (!File.Exists(ps1)) { log("acme-patch-client.ps1 not in the install folder — copy the kit files there."); return; }
-            var r = RunCapture("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\" -Verify -Exe \"{Path.Combine(dir!, "acclient.exe")}\"", dir);
-            log(r.output.Trim());
-            log(r.code == 0 ? "\nOK: exe is fully patched." : "\nNOT fully patched — run the patcher on the Install tab. Without it, most textures won't load.");
-        }
+        // The Fix actions live in Actions.* — the SAME implementations the headless CLI
+        // runs (--verify-exe / --check-dats / --check-prefs / --tail-log / --rollback), so
+        // the two surfaces cannot drift. The GUI adds only dialogs and the output box.
+        private static void FixVerifyExe(Settings s, Action<string> log) => Actions.VerifyExe(s, log);
 
-        private static void FixDatSizes(Settings s, Action<string> log) {
-            var dir = s.InstallDir;
-            if (string.IsNullOrEmpty(dir)) { log("Install folder not set (Install tab)."); return; }
-            var manifest = Path.Combine(dir!, "kit-manifest.txt");
-            if (!File.Exists(manifest)) { log("kit-manifest.txt not found — can't verify dat sizes."); return; }
-            bool ok = true;
-            foreach (var raw in File.ReadAllLines(manifest)) {
-                var line = raw.Trim(); if (line.Length == 0) continue;
-                var parts = line.Split('|');
-                if (parts.Length < 2) continue;
-                var name = parts[0]; var want = parts[1];
-                var p = Path.Combine(dir!, name);
-                if (!File.Exists(p)) { log($"MISSING  {name}"); ok = false; continue; }
-                var have = new FileInfo(p).Length.ToString(CultureInfo.InvariantCulture);
-                if (have != want) { log($"WRONG    {name}  have {have}  want {want}"); ok = false; }
-                else log($"ok       {name}  {have}");
-            }
-            log(ok ? "\nAll dats present at their manifest sizes." : "\nSome dats are wrong/missing — re-copy the kit. A missing highres silently renders untextured surfaces.");
-        }
+        private static void FixDatSizes(Settings s, Action<string> log) => Actions.CheckDats(s, log);
 
-        /// <summary>UserPreferences.ini sanity: the numeric texture-detail trap (a numeric
-        /// value is a WORST-first index — =0 means VeryLow) and the FullScreen posture
-        /// (windowed is the best-tested configuration and avoids alt-tab device-loss). Both
-        /// from INSTALL-WINDOWS.md §8.</summary>
-        private static void FixUserPrefs(Settings s, Action<string> log) {
-            var dir = s.InstallDir;
-            string? ini = null;
-            if (!string.IsNullOrEmpty(dir) && File.Exists(Path.Combine(dir!, "UserPreferences.ini"))) ini = Path.Combine(dir!, "UserPreferences.ini");
-            else {
-                var docs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Asheron's Call", "UserPreferences.ini");
-                if (File.Exists(docs)) ini = docs;
-            }
-            if (ini == null) { log("UserPreferences.ini not found (install folder or Documents\\Asheron's Call)."); return; }
-            log("ini: " + ini);
-            bool warned = false;
-            foreach (var raw in File.ReadAllLines(ini)) {
-                var line = raw.Trim();
-                foreach (var key in new[] { "EnvironmentTextureDetail", "LandscapeTextureDetail" }) {
-                    if (line.StartsWith(key, StringComparison.OrdinalIgnoreCase) && line.Contains('=')) {
-                        var v = line.Substring(line.IndexOf('=') + 1).Trim();
-                        bool numeric = float.TryParse(v, out _);
-                        if (numeric) { log($"⚠ {key}={v} — NUMERIC values are a worst-first index; =0 means VeryLow (quarter detail). Use =VeryHigh."); warned = true; }
-                        else log($"ok {key}={v}");
-                    }
-                }
-                if (line.Contains('=') &&
-                    line.Substring(0, line.IndexOf('=')).Trim().Equals("FullScreen", StringComparison.OrdinalIgnoreCase)) {
-                    var v = line.Substring(line.IndexOf('=') + 1).Trim();
-                    if (v.Equals("False", StringComparison.OrdinalIgnoreCase)) log("ok FullScreen=False (windowed — the best-tested configuration; avoids alt-tab device-loss).");
-                    else { log($"note FullScreen={v} — windowed (False) is the best-tested configuration and avoids device-loss on alt-tab entirely."); warned = true; }
-                }
-            }
-            if (!warned) log("\nUserPreferences looks fine (spelled-out texture detail, windowed). VeryHigh = full detail.");
-        }
+        private static void FixUserPrefs(Settings s, Action<string> log) => Actions.CheckPrefs(s, log);
 
-        private static void FixTailLog(Settings s, Action<string> log) {
-            var back = new Backbone(s);
-            var clients = back.ListClients();
-            if (clients.Count == 0) { log("No running clients to read a log from."); return; }
-            foreach (var c in clients) {
-                if (c.Injected != true) continue;   // only confirmed-injected clients have a plugin log
-                var path = Status.LogPath(s, c.Pid);
-                log($"── pid {c.Pid}: {path} ──");
-                try {
-                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    using var sr = new StreamReader(fs);
-                    var all = sr.ReadToEnd().Split('\n');
-                    int start = Math.Max(0, all.Length - 40);
-                    for (int i = start; i < all.Length; i++) {
-                        var l = all[i].TrimEnd('\r');
-                        if (l.Length == 0) continue;
-                        // The §10 "lines that matter": diet FAULT (self-disabled), memgov CRIT,
-                        // hook FAILED, plus generic errors.
-                        if (l.Contains("FAULT") || l.Contains("Error") || l.Contains("CRIT") || l.Contains("hook FAILED")) log("!! " + l);
-                        else log("   " + l);
-                    }
-                }
-                catch (Exception ex) { log("  (unreadable: " + ex.Message + ")"); }
-            }
-        }
+        private static void FixTailLog(Settings s, Action<string> log) => Actions.TailLog(s, log, pid: null);
 
         private static void FixRollback(Settings s, Action<string> log, Action clear) {
             if (MessageBox.Show("Restore your original acclient.exe and stop using the ACME dats?\n\nThis puts back acclient.exe.acme-orig.bak. Restore your own dat backups manually.",
                 "Rollback", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             clear();
-            var dir = s.InstallDir;
-            if (string.IsNullOrEmpty(dir)) { log("Install folder not set."); return; }
-            var bak = Path.Combine(dir!, "acclient.exe.acme-orig.bak");
-            if (!File.Exists(bak)) { log("No acclient.exe.acme-orig.bak found — nothing to restore."); return; }
-            try { File.Copy(bak, Path.Combine(dir!, "acclient.exe"), true); log("Restored original acclient.exe. Restore your backed-up dats manually to go fully stock."); }
-            catch (Exception ex) { log("Restore failed: " + ex.Message); }
+            Actions.Rollback(s, log);
         }
 
         // ────────────────────────────── INSTALL ─────────────────────────────
@@ -703,6 +618,10 @@ namespace AcmeLauncher {
 
             var b = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
             b.Children.Add(Btn("Save paths", (_, __) => {
+                // Same rule as the CLI's --set-*-dir (that rationale won): a typo'd path
+                // silently saved poisons every later check — validate, refuse, same message.
+                foreach (var (label, p) in new[] { ("install", tbInstall.Text.Trim()), ("chorizite", tbChoriz.Text.Trim()) })
+                    if (p.Length > 0 && !Directory.Exists(p)) { Log($"no such directory: {p} (not saved)"); return; }
                 s.InstallDir = tbInstall.Text.Trim(); s.ChoriziteDir = tbChoriz.Text.Trim(); s.Save();
                 Log("Saved. Install: " + s.InstallDir + "  Chorizite: " + s.ChoriziteDir);
             }));
@@ -712,12 +631,7 @@ namespace AcmeLauncher {
             if (!Platform.IsWine) {
                 b.Children.Add(Btn("Patch my client", (_, __) => {
                     s.InstallDir = tbInstall.Text.Trim(); s.Save();
-                    var dir = s.InstallDir;
-                    var ps1 = string.IsNullOrEmpty(dir) ? null : Path.Combine(dir!, "acme-patch-client.ps1");
-                    if (ps1 == null || !File.Exists(ps1)) { Log("acme-patch-client.ps1 not in the install folder."); return; }
-                    var r = RunCapture("powershell", $"-NoProfile -ExecutionPolicy Bypass -File \"{ps1}\" -Exe \"{Path.Combine(dir!, "acclient.exe")}\"", dir);
-                    Log(r.output.Trim());
-                    Log(r.code == 0 ? "Patched." : "Patcher refused — see message above.");
+                    Actions.PatchExe(s, Log);   // same implementation as the CLI's --patch-exe
                 }));
                 b.Children.Add(Btn("Check .NET runtime", (_, __) => InstallCheckDotnet(Log)));
             }
@@ -732,20 +646,9 @@ namespace AcmeLauncher {
         }
 
         private static void InstallCheckDotnet(Action<string> log) {
-            // The plugin pack (Chorizite) is managed .NET; the injected CLR needs a
-            // .NET desktop runtime present. Report, and OFFER the official source —
-            // never fetch/bundle silently.
-            log("(This check is about the PLUGIN runtime that loads inside the game client — " +
-                "z-z patcher itself is self-contained and needs nothing.)");
-            var r = RunCapture("dotnet", "--list-runtimes", null);
-            if (r.code == 0 && r.output.Contains("Microsoft.WindowsDesktop.App")) {
-                log("Found a .NET desktop runtime:\n" + r.output.Trim());
-                return;
-            }
-            log(".NET desktop runtime not detected.");
-            log("The plugin pack needs the .NET 8 Desktop Runtime.");
-            log("Download it from Microsoft's official page:");
-            log("  https://dotnet.microsoft.com/download/dotnet/8.0");
+            // The report half is Actions.CheckDotnet (shared with the CLI's --check-dotnet;
+            // it never downloads). The GUI adds the offer to open the official page.
+            if (Actions.CheckDotnet(log) == 0) return;
             if (MessageBox.Show("Open Microsoft's official .NET 8 download page in your browser?\n\n(The launcher never downloads or bundles it for you — you get it from Microsoft directly.)",
                     ".NET runtime", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes) {
                 try { Process.Start(new ProcessStartInfo("https://dotnet.microsoft.com/download/dotnet/8.0") { UseShellExecute = true }); }
@@ -783,25 +686,6 @@ namespace AcmeLauncher {
             Grid.SetRow(browse, row); Grid.SetColumn(browse, 2); g.Children.Add(browse);
         }
 
-        private static (int code, string output) RunCapture(string exe, string args, string? workDir) {
-            try {
-                var psi = new ProcessStartInfo {
-                    FileName = exe, Arguments = args, UseShellExecute = false, CreateNoWindow = true,
-                    RedirectStandardOutput = true, RedirectStandardError = true,
-                    WorkingDirectory = workDir ?? Environment.CurrentDirectory,
-                };
-                using var p = Process.Start(psi);
-                if (p == null) return (-1, "could not start " + exe);
-                // Async concurrent reads — avoids the both-streams-ReadToEnd deadlock (the patcher
-                // can be chatty on both stdout and stderr).
-                var oT = p.StandardOutput.ReadToEndAsync();
-                var eT = p.StandardError.ReadToEndAsync();
-                p.WaitForExit(120_000);
-                string o = oT.GetAwaiter().GetResult() + eT.GetAwaiter().GetResult();
-                return (p.ExitCode, o);
-            }
-            catch (Exception ex) { return (-1, ex.Message); }
-        }
     }
 
 }

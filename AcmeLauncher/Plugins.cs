@@ -18,6 +18,7 @@ namespace AcmeLauncher {
             public string Folder = "";     // on-disk folder name
             public string Name = "";       // manifest "name" (falls back to folder)
             public bool Enabled;           // true = in plugins\, false = in plugins-disabled\
+            public bool HasManifest;       // false = Chorizite will NOT load it (no manifest.json)
         }
 
         private const string EnabledSub = "plugins";
@@ -41,8 +42,12 @@ namespace AcmeLauncher {
             if (!Directory.Exists(dir)) return;
             foreach (var folder in Directory.GetDirectories(dir)) {
                 var manifest = Path.Combine(folder, "manifest.json");
-                if (!File.Exists(manifest)) continue;   // not a plugin
-                into.Add(new Info { Folder = Path.GetFileName(folder), Name = ReadName(manifest, Path.GetFileName(folder)), Enabled = enabled });
+                // A folder WITHOUT a manifest is listed too, marked: Chorizite won't load it,
+                // but silently hiding it made a botched manual install invisible while the
+                // enable/disable/uninstall verbs (which act on folder names) still saw it —
+                // the two surfaces must agree on what exists (Wine matrix 2026-08-24).
+                bool has = File.Exists(manifest);
+                into.Add(new Info { Folder = Path.GetFileName(folder), Name = has ? ReadName(manifest, Path.GetFileName(folder)) : Path.GetFileName(folder), Enabled = enabled, HasManifest = has });
             }
         }
 
