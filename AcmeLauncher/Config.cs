@@ -114,6 +114,7 @@ namespace AcmeLauncher {
         public string? InstallDir { get; set; }     // holds acclient.exe + the dats
         public string? ChoriziteDir { get; set; }   // holds AcmeInject.exe + the runtime
         public string? InjectorPath { get; set; }   // explicit AcmeInject.exe override
+        public bool PreviewExpanded { get; set; } = true;   // Tune tab knob-preview pane (design §1.1 rule 5)
 
         private static string Dir =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "zzpatcher");

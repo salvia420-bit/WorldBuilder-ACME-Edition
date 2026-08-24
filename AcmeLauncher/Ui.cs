@@ -24,7 +24,8 @@ namespace AcmeLauncher {
         public static Window Build(Settings settings, Backbone back) {
             var win = new Window {
                 Title = "z-z patcher",
-                Width = 720, Height = 560,
+                // §1.1 rule 5: the Tune preview pane persists expanded/collapsed and wants ~1080 wide.
+                Width = settings.PreviewExpanded ? 1080 : 720, Height = 560,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
             };
             var tabs = new TabControl { Margin = new Thickness(6) };
@@ -217,11 +218,12 @@ namespace AcmeLauncher {
 
             string CurRaw(KnobDef k) => current[k.Cfg].TryGetValue(k.Name, out var v) ? v : k.Default;
             void ReloadCurrent() { foreach (var c in cfgNames) current[c] = Cfgs.Read(cfgPath[c]); }
-            AcmeLauncher.Preview.RagdollPreview? ragPrev = null;   // live ragdoll preview (mounted below)
-            void PushPreview(string cfg) { if (cfg == "ragdoll") ragPrev?.SetKnobs(current["ragdoll"]); }
-            void WriteAndCache(KnobDef k, string val) { Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, val); current[k.Cfg][k.Name] = val; PushPreview(k.Cfg); }
+            // The shared preview pane (design §1.1): one host beside the knob list, auto-following
+            // the cfg being tuned. Every knob edit funnels through WriteAndCache -> the host.
+            var host = new AcmeLauncher.Preview.PreviewHost(s);
+            void WriteAndCache(KnobDef k, string val) { Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, val); current[k.Cfg][k.Name] = val; host.OnKnobTouched(k.Cfg, current[k.Cfg]); }
             var resync = new List<Action>();
-            void ResyncAll() { ReloadCurrent(); foreach (var a in resync) a(); }
+            void ResyncAll() { ReloadCurrent(); foreach (var a in resync) a(); foreach (var c in cfgNames) host.Push(c, current[c]); }
 
             var info = new TextBlock { Text = $"{Cfgs.All.Count} variables, split by the config file that holds them. Edits apply live (~1s). \"Default\" is each plugin's built-in value.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(2) };
             DockPanel.SetDock(info, Dock.Top); root.Children.Add(info);
@@ -273,10 +275,14 @@ namespace AcmeLauncher {
                 Action reread;
                 if (k.Type == KnobType.Toggle) {
                     var cb = new CheckBox { VerticalAlignment = VerticalAlignment.Center, IsChecked = ParseF(CurRaw(k), k.DefaultF) >= 0.5f };
-                    cb.Checked += (_, __) => WriteAndCache(k, "1");
-                    cb.Unchecked += (_, __) => WriteAndCache(k, "0");
+                    // Same re-entrancy guard the slider rows have: without it, a programmatic
+                    // reread() flips IsChecked and fires Checked/Unchecked -> a redundant second
+                    // write (and a spurious preview auto-follow) per toggle on every resync.
+                    bool tguard = false;
+                    cb.Checked += (_, __) => { if (!tguard) WriteAndCache(k, "1"); };
+                    cb.Unchecked += (_, __) => { if (!tguard) WriteAndCache(k, "0"); };
                     Grid.SetColumn(cb, 1); g.Children.Add(cb);
-                    reread = () => cb.IsChecked = ParseF(CurRaw(k), k.DefaultF) >= 0.5f;
+                    reread = () => { tguard = true; cb.IsChecked = ParseF(CurRaw(k), k.DefaultF) >= 0.5f; tguard = false; };
                 }
                 else if ((k.Type == KnobType.Float || k.Type == KnobType.Integer) && k.HasRange) {
                     var box = new DockPanel();
@@ -316,44 +322,19 @@ namespace AcmeLauncher {
                     Text = (k.HasRange ? $"{k.Min}–{k.Max}  " : "") + (k.Default.Length > 0 ? $"def {k.Default}" : "") };
                 Grid.SetColumn(meta, 2); g.Children.Add(meta);
 
-                var reset = Btn("reset", (_, __) => { Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, k.Default); current[k.Cfg][k.Name] = k.Default; reread(); });
+                // Through WriteAndCache, NOT Cfgs.WriteKnob directly — the preview must hear about
+                // the reset too (a direct write left the pane lying about the on-disk state).
+                var reset = Btn("reset", (_, __) => { WriteAndCache(k, k.Default); reread(); });
                 reset.Padding = new Thickness(4, 0, 4, 0); reset.Margin = new Thickness(2, 0, 2, 0);
                 Grid.SetColumn(reset, 3); g.Children.Add(reset);
 
                 return (g, (k.Name + " " + k.Desc + " " + k.Group + " " + k.Plugin).ToLowerInvariant());
             }
 
-            // One per-cfg view: a PREVIEW SEAM (a separate agent builds the live preview here later),
-            // its own filter + reset-all, then this cfg's knobs grouped by section.
-            UIElement BuildCfgView(string cfgName, string previewLabel) {
+            // One per-cfg view: its own filter + reset-all, then this cfg's knobs grouped by
+            // section. (The old in-view preview seam moved to the shared PreviewHost column.)
+            UIElement BuildCfgView(string cfgName) {
                 var v = new DockPanel();
-
-                // ── preview seam ─────────────────────────────────────────────
-                // Reserved region for the live preview of THIS cfg's settings. Kept as a clean,
-                // self-contained container so the preview agent can drop a control in without
-                // touching the knob logic. Modest by default; delete/replace when the real preview
-                // lands.
-                var previewSeam = new Border {
-                    BorderBrush = Brushes.Gainsboro, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3),
-                    Background = Brushes.WhiteSmoke, Height = 96, Margin = new Thickness(2, 2, 2, 6),
-                    Child = new TextBlock {
-                        Text = previewLabel, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DarkGray,
-                        HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center
-                    }
-                };
-                // Ragdoll: mount the live skeleton preview into the seam (design §2). Lights/Sky
-                // keep the placeholder until their previews land.
-                if (cfgName == "ragdoll") {
-                    ragPrev = new AcmeLauncher.Preview.RagdollPreview();
-                    previewSeam.Height = 300;
-                    previewSeam.Background = Brushes.White;
-                    previewSeam.Child = ragPrev.View;
-                    ragPrev.SetKnobs(current["ragdoll"]);
-                    resync.Add(() => ragPrev.SetKnobs(current["ragdoll"]));
-                    v.Loaded += (_, __) => ragPrev.Start();
-                    v.Unloaded += (_, __) => ragPrev.Stop();
-                }
-                DockPanel.SetDock(previewSeam, Dock.Top); v.Children.Add(previewSeam);
 
                 var filterRow = new DockPanel { Margin = new Thickness(2, 0, 2, 4) };
                 var flbl = new TextBlock { Text = "Filter:  ", VerticalAlignment = VerticalAlignment.Center };
@@ -391,11 +372,63 @@ namespace AcmeLauncher {
             }
 
             var inner = new TabControl { Margin = new Thickness(0) };
-            inner.Items.Add(new TabItem { Header = "Lights (lights.cfg)", Content = BuildCfgView("lights", "Live preview of the lighting (torches, portals, glow) will appear here.") });
-            inner.Items.Add(new TabItem { Header = "Sky (sky.cfg)", Content = BuildCfgView("sky", "Live preview of the sky and clouds will appear here.") });
-            inner.Items.Add(new TabItem { Header = "Ragdoll (ragdoll.cfg)", Content = BuildCfgView("ragdoll", "Live preview of the death ragdoll (skeleton) will appear here.") });
+            inner.Items.Add(new TabItem { Header = "Lights (lights.cfg)", Content = BuildCfgView("lights") });
+            inner.Items.Add(new TabItem { Header = "Sky (sky.cfg)", Content = BuildCfgView("sky") });
+            inner.Items.Add(new TabItem { Header = "Ragdoll (ragdoll.cfg)", Content = BuildCfgView("ragdoll") });
+            inner.SelectionChanged += (_, e) => {   // auto-follow the active cfg tab (§1.1 rule 1)
+                if (!ReferenceEquals(e.OriginalSource, inner)) return;   // knob-row events bubble here too
+                if (inner.SelectedIndex >= 0 && inner.SelectedIndex < cfgNames.Length)
+                    host.OnCfgTabSelected(cfgNames[inner.SelectedIndex]);
+            };
             root.Children.Add(inner);
-            return root;
+
+            // ── the preview column: [knob list | splitter | PreviewHost] (design §1.1) ──
+            var ragPrev = new AcmeLauncher.Preview.RagdollPreview();
+            var skyPrev = new AcmeLauncher.Preview.SkyPreview();
+            host.Register("lights", "Lights", null,
+                "Lighting preview coming — the 2.5-D dungeon-corridor lightmap (design §4). Lights knobs are in-game only for now.");
+            host.Register("sky", "Sky", skyPrev);
+            host.Register("ragdoll", "Ragdoll", ragPrev);
+            foreach (var c in cfgNames) host.Push(c, current[c]);
+
+            var outer = new Grid();
+            outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 320 });
+            outer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var previewCol = new ColumnDefinition();
+            outer.ColumnDefinitions.Add(previewCol);
+            Grid.SetColumn(root, 0); outer.Children.Add(root);
+
+            var splitter = new GridSplitter { Width = 5, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch, Background = Brushes.Gainsboro };
+            Grid.SetColumn(splitter, 1); outer.Children.Add(splitter);
+
+            var paneDock = new DockPanel();
+            var expandBtn = new Button { Padding = new Thickness(2, 6, 2, 6), Margin = new Thickness(2, 2, 0, 2), VerticalAlignment = VerticalAlignment.Top };
+            DockPanel.SetDock(expandBtn, Dock.Left);
+            var hostView = new ContentControl { Content = host.View };
+            paneDock.Children.Add(expandBtn);
+            paneDock.Children.Add(hostView);
+            Grid.SetColumn(paneDock, 2); outer.Children.Add(paneDock);
+
+            // Remembered per-state window widths, so toggling restores what the user actually had
+            // rather than stomping their sizing with hard constants.
+            double expandedWidth = 1080, collapsedWidth = 740;
+            void ApplyExpanded(bool init) {
+                bool exp = s.PreviewExpanded;
+                expandBtn.Content = exp ? "▸" : "◂";
+                expandBtn.ToolTip = exp ? "Collapse the preview pane" : "Expand the preview pane";
+                hostView.Visibility = exp ? Visibility.Visible : Visibility.Collapsed;
+                splitter.Visibility = exp ? Visibility.Visible : Visibility.Collapsed;
+                previewCol.Width = exp ? new GridLength(380) : GridLength.Auto;
+                previewCol.MinWidth = exp ? 340 : 0;    // §1.1: min ~340 px when expanded
+                if (init) return;                        // window sizing only on user toggles
+                var win = Window.GetWindow(outer);
+                if (win == null) return;                 // §1.1 rule 5: widen ~1080 expanded
+                if (exp) { collapsedWidth = win.Width; win.Width = Math.Min(Math.Max(expandedWidth, win.Width), SystemParameters.WorkArea.Width); }
+                else { expandedWidth = win.Width; win.Width = Math.Min(collapsedWidth, SystemParameters.WorkArea.Width); }
+            }
+            expandBtn.Click += (_, __) => { host.SetExpanded(!s.PreviewExpanded); ApplyExpanded(init: false); };
+            ApplyExpanded(init: true);
+            return outer;
         }
 
         private static float ParseF(string s, float fb) => float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : fb;

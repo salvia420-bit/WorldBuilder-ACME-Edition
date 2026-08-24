@@ -60,4 +60,11 @@
     <EmbeddedResource Include="preview_skeletons.json" />
   </ItemGroup>
 
+  <!-- Sky preview: the sun/moon/night model is likewise pure (System + System.Numerics only), so
+       the preview links THE SHIPPED FILE (design §3.1) instead of transcribing it. Do NOT add
+       SkyConfig.cs (it does file IO on the plugin's own paths). -->
+  <ItemGroup>
+    <Compile Include="..\AcmeSky\Services\LiveSky\SkySunModel.cs" Link="Preview\Sky\SkySunModel.cs" />
+  </ItemGroup>
+
 </Project>
