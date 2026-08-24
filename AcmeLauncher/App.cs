@@ -5,12 +5,11 @@ using System.Windows;
 
 namespace AcmeLauncher {
     /// <summary>
-    /// Entry point. With no action flags it opens the window; with a scriptable
-    /// action (<c>--list</c>, <c>--play</c>, <c>--play-plugins</c>,
-    /// <c>--attach &lt;pid&gt;</c>, <c>--attach-all</c>, <c>--tune k=v …</c>) it
-    /// runs headless and exits with a code — so the same program automates as
-    /// well as it clicks. Every action is a thin wrapper over the same backbone
-    /// the GUI uses.
+    /// z-z patcher entry point. No arguments opens the window; a scriptable action
+    /// (<c>--list</c>, <c>--attach &lt;pid&gt;</c>, <c>--attach-all</c>, <c>--tune k=v …</c>)
+    /// runs headless and exits with a code. The tool never launches the game and never
+    /// handles a login — players start Asheron's Call with their own launcher; this only
+    /// manages the ACME plugin layer on already-running clients, and tunes the cfgs.
     /// </summary>
     public sealed class App : Application {
         [DllImport("kernel32.dll")] private static extern bool AttachConsole(int pid);
@@ -25,16 +24,10 @@ namespace AcmeLauncher {
             var settings = Settings.Load();
             var back = new Backbone(settings);
 
-            // This is a WinExe, so it isn't attached to the caller's console by
-            // default — a CLI invocation would print nowhere. Attach to the parent
-            // console for the scriptable paths so `AcmeLauncher.exe --list` etc.
-            // actually print. Harmless if there is no parent console.
             if (argv.Length > 0) {
-                // A WPF WinExe has no console. If the caller REDIRECTED our output
-                // (`AcmeLauncher --list > out.txt` or a pipe), stdout is already a real file/pipe
-                // handle — do NOT AttachConsole, which would clobber it and swallow the output. Only
-                // attach the parent's console when we have no usable stdout (interactive run). Either
-                // way, rebind Console to the resulting OS handles so WriteLine lands correctly.
+                // WinExe has no console. If output is REDIRECTED (> file / pipe), stdout is already a
+                // real handle — do NOT AttachConsole (it would clobber it). Only attach the parent's
+                // console for an interactive run. Then rebind Console to the OS handles either way.
                 IntPtr outH = GetStdHandle(STD_OUTPUT_HANDLE);
                 bool redirected = outH != IntPtr.Zero && outH != new IntPtr(-1) && GetFileType(outH) != FILE_TYPE_UNKNOWN;
                 if (!redirected) { try { AttachConsole(ATTACH_PARENT_PROCESS); } catch { } }
@@ -57,42 +50,41 @@ namespace AcmeLauncher {
                 if (!int.TryParse(attach, out int pid)) { Console.Error.WriteLine("bad --attach pid"); return 2; }
                 return Report(back.AttachPid(pid));
             }
-            if (HasFlag(argv, "--play") || HasFlag(argv, "--play-plugins")) {
-                var exe = AcclientPath(settings);
-                if (exe == null) { Console.Error.WriteLine("install folder / acclient.exe not set"); return 2; }
-                var args = ClientArgs(settings);
-                return Report(HasFlag(argv, "--play-plugins") ? back.PlayWithPlugins(exe, args) : back.PlayPlain(exe, args));
-            }
             var tuneIdx = IndexOf(argv, "--tune");
             if (tuneIdx >= 0) {
-                var path = Knobs.ResolveCfgPath(forWrite: true);
                 int n = 0, bad = 0;
                 for (int i = tuneIdx + 1; i < argv.Length; i++) {
                     var kv = argv[i];
                     int eq = kv.IndexOf('=');
                     if (eq <= 0) break;   // stop at the first non key=val token
-                    var key = kv.Substring(0, eq);
-                    if (!float.TryParse(kv.Substring(eq + 1), NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) {
-                        Console.Error.WriteLine($"--tune: bad value in '{kv}'"); bad++; continue;
+                    var key = kv.Substring(0, eq).Trim();
+                    var rawVal = kv.Substring(eq + 1).Trim();
+                    var knob = FindKnob(key, out string? findErr);
+                    if (knob == null) { Console.Error.WriteLine("--tune: " + findErr); bad++; continue; }
+                    string outVal = rawVal;
+                    if (knob.Type == KnobType.Float || knob.Type == KnobType.Integer || knob.Type == KnobType.Toggle) {
+                        if (!float.TryParse(rawVal, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) {
+                            Console.Error.WriteLine($"--tune: bad value in '{kv}'"); bad++; continue;
+                        }
+                        if (knob.HasRange) {
+                            float cv = Math.Clamp(v, knob.MinF, knob.MaxF);
+                            if (cv != v) Console.Error.WriteLine($"--tune: {key} {v} clamped to {cv} (range {knob.Min}..{knob.Max})");
+                            v = cv;
+                        }
+                        outVal = Cfgs.FormatFloat(v);
                     }
-                    // Validate against the known knobs and clamp to the plugin's own range, so the
-                    // scriptable path keeps the "clamped to the plugin's ranges" promise the UI makes.
-                    var knob = System.Array.Find(Knobs.All, k => k.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
-                    if (knob == null) { Console.Error.WriteLine($"--tune: unknown knob '{key}'"); bad++; continue; }
-                    float cv = Math.Clamp(v, knob.Min, knob.Max);
-                    if (cv != v) Console.Error.WriteLine($"--tune: {key} {v} clamped to {cv} (range {knob.Min}..{knob.Max})");
-                    Knobs.WriteKnob(path, knob.Name, cv);
+                    var path = Cfgs.ResolvePath(knob.Cfg, forWrite: true);
+                    Cfgs.WriteKnob(path, knob.Name, outVal);
                     n++;
                 }
-                Console.WriteLine($"wrote {n} knob(s) to {path}");
+                Console.WriteLine($"wrote {n} knob(s)");
                 return bad == 0 && n > 0 ? 0 : 2;
             }
 
-            // Any leftover args didn't match a headless verb — don't silently pop the GUI.
             if (argv.Length > 0) {
-                Console.Error.WriteLine("Unknown option. Usage: AcmeLauncher "
-                    + "[--list | --play | --play-plugins | --attach <pid> | --attach-all | --tune k=v ...]  "
-                    + "(no arguments launches the GUI)");
+                Console.Error.WriteLine("Unknown option. Usage: zzpatcher "
+                    + "[--list | --attach <pid> | --attach-all | --tune k=v ...]  "
+                    + "(no arguments launches the GUI). This tool does not log in or launch the game.");
                 return 2;
             }
 
@@ -102,26 +94,27 @@ namespace AcmeLauncher {
             return app.Run(win);
         }
 
-        internal static string? AcclientPath(Settings s) {
-            if (!string.IsNullOrEmpty(s.InstallDir)) {
-                var p = System.IO.Path.Combine(s.InstallDir!, "acclient.exe");
-                if (System.IO.File.Exists(p)) return p;
+        /// <summary>Resolve a --tune key, accepting a cfg-qualified form "cfg.knob" (e.g.
+        /// "sky.dump") to disambiguate a name that exists in more than one cfg (only "dump" today,
+        /// in both lights.cfg and sky.cfg). A bare ambiguous name is refused rather than silently
+        /// writing the wrong file.</summary>
+        private static KnobDef? FindKnob(string key, out string? err) {
+            err = null;
+            string? cfg = null, name = key;
+            int dot = key.IndexOf('.');
+            if (dot > 0) { cfg = key.Substring(0, dot); name = key.Substring(dot + 1); }
+            var matches = new System.Collections.Generic.List<KnobDef>();
+            foreach (var k in Cfgs.All)
+                if (k.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                    && (cfg == null || k.Cfg.Equals(cfg, StringComparison.OrdinalIgnoreCase)))
+                    matches.Add(k);
+            if (matches.Count == 0) { err = $"unknown knob '{key}'"; return null; }
+            if (matches.Count > 1) {
+                var cfgs = string.Join(", ", System.Array.ConvertAll(matches.ToArray(), m => m.Cfg + "." + m.Name));
+                err = $"'{name}' exists in more than one cfg — qualify it (e.g. {cfgs})";
+                return null;
             }
-            return null;
-        }
-
-        internal static string ClientArgs(Settings s) {
-            var server = s.Server ?? "";
-            var acct = s.Account ?? "";
-            var rodat = s.Rodat ? "on" : "off";
-            // Match the ACE convention: -h <server> -a <account> -rodat on. Password
-            // is deliberately NOT persisted; the login screen takes it (or the
-            // player types it). This mirrors what ThwargLauncher generates.
-            var a = "";
-            if (server.Length > 0) a += $"-h {server} ";
-            if (acct.Length > 0) a += $"-a {acct} ";
-            a += $"-rodat {rodat}";
-            return a.Trim();
+            return matches[0];
         }
 
         private static int Report(Backbone.RunResult r) {

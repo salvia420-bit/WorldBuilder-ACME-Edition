@@ -12,7 +12,9 @@ using System.Windows.Threading;
 namespace AcmeLauncher {
     /// <summary>
     /// The four-tab window, built entirely in code (no XAML — see the csproj note).
-    /// Tab order is deliberate: Play (daily) · Tune (live) · Fix · Install (once).
+    /// Tab order is deliberate: Plugins (daily) · Tune · Fix · Install (once). The tool
+    /// does no login and never launches the game — it manages the ACME plugin layer on
+    /// clients the player launched themselves, and tunes the plugin cfgs.
     /// Every action delegates to <see cref="Backbone"/> or a file read/write; the
     /// window holds no injection or enumeration logic of its own.
     /// </summary>
@@ -21,12 +23,12 @@ namespace AcmeLauncher {
 
         public static Window Build(Settings settings, Backbone back) {
             var win = new Window {
-                Title = "ACME Launcher",
+                Title = "z-z patcher",
                 Width = 720, Height = 560,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
             };
             var tabs = new TabControl { Margin = new Thickness(6) };
-            tabs.Items.Add(new TabItem { Header = "Play",    Content = BuildPlay(settings, back) });
+            tabs.Items.Add(new TabItem { Header = "Plugins", Content = BuildPlugins(settings, back) });
             tabs.Items.Add(new TabItem { Header = "Tune",    Content = BuildTune(settings) });
             tabs.Items.Add(new TabItem { Header = "Fix",     Content = BuildFix(settings, back) });
             tabs.Items.Add(new TabItem { Header = "Install", Content = BuildInstall(settings, back) });
@@ -34,92 +36,77 @@ namespace AcmeLauncher {
             return win;
         }
 
-        // ─────────────────────────────── PLAY ───────────────────────────────
-        private static UIElement BuildPlay(Settings s, Backbone back) {
+        // ────────────────────────────── PLUGINS ─────────────────────────────
+        private static UIElement BuildPlugins(Settings s, Backbone back) {
             var root = new DockPanel { Margin = new Thickness(8) };
 
-            // connection fields (top)
-            var top = new Grid();
-            for (int i = 0; i < 2; i++) top.ColumnDefinitions.Add(new ColumnDefinition { Width = i == 0 ? GridLength.Auto : new GridLength(1, GridUnitType.Star) });
-            for (int i = 0; i < 3; i++) top.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var tbServer = new TextBox { Text = s.Server ?? "", Margin = new Thickness(2) };
-            var tbAccount = new TextBox { Text = s.Account ?? "", Margin = new Thickness(2) };
-            var cbRodat = new CheckBox { Content = "Read-only dats (-rodat on) — keep this on", IsChecked = s.Rodat, Margin = new Thickness(2) };
-            AddRow(top, 0, "Server:", tbServer);
-            AddRow(top, 1, "Account:", tbAccount);
-            Grid.SetRow(cbRodat, 2); Grid.SetColumn(cbRodat, 1); top.Children.Add(cbRodat);
-            DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
+            var intro = new TextBlock {
+                Text = "Launch Asheron's Call the way you always do (ThwargLauncher, Decal, a shortcut). "
+                     + "This tool adds the ACME plugins to a client that's ALREADY running — pick it below and click Enable. "
+                     + "It never logs in or launches the game itself.",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 2, 8), Foreground = Brushes.DimGray
+            };
+            DockPanel.SetDock(intro, Dock.Top); root.Children.Add(intro);
 
-            void Persist() {
-                s.Server = tbServer.Text.Trim(); s.Account = tbAccount.Text.Trim(); s.Rodat = cbRodat.IsChecked == true; s.Save();
-            }
+            var plug = new TextBlock { Margin = new Thickness(2, 0, 2, 6), Foreground = Brushes.DimGray, Text = "Installed plugins: " + PluginPresence(s) };
+            DockPanel.SetDock(plug, Dock.Top); root.Children.Add(plug);
 
-            // action buttons
-            var actions = new WrapPanel { Margin = new Thickness(0, 6, 0, 6) };
+            var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
             var status = new TextBlock { Margin = new Thickness(2, 4, 2, 4), TextWrapping = TextWrapping.Wrap };
             var list = new StackPanel();
             int selectedPid = 0;
+            bool selectedIsPlain = false;
+            bool refreshing = false;
+            Button btnEnable = null!, btnEnableAll = null!;
 
             async Task Do(string label, Func<Backbone.RunResult> act) {
-                Persist();
                 status.Text = label + "…";
                 foreach (var b in actions.Children) if (b is Button bb) bb.IsEnabled = false;
                 var r = await Task.Run(act);
                 foreach (var b in actions.Children) if (b is Button bb) bb.IsEnabled = true;
                 status.Text = (r.Ran ? $"[{r.ExitCode}] " : "[failed] ") + r.Message.Trim();
+                Refresh();
             }
 
-            var btnPlay = Btn("Play", async (_, __) => {
-                var exe = App.AcclientPath(s);
-                if (exe == null) { status.Text = "Set your install folder on the Install tab first."; return; }
-                await Do("Launching", () => back.PlayPlain(exe, App.ClientArgs(s)));
+            btnEnable = Btn("Enable plugins on selected", async (_, __) => {
+                if (selectedPid == 0) { status.Text = "Click a running client in the list first."; return; }
+                await Do($"Enabling plugins on {selectedPid}", () => back.AttachPid(selectedPid));
             });
-            var btnPlugins = Btn("Play with plugins", async (_, __) => {
-                var exe = App.AcclientPath(s);
-                if (exe == null) { status.Text = "Set your install folder on the Install tab first."; return; }
-                await Do("Launching with plugins", () => back.PlayWithPlugins(exe, App.ClientArgs(s)));
-            });
-            var btnAttach = Btn("Attach selected", async (_, __) => {
-                if (selectedPid == 0) { status.Text = "Select a running client below first."; return; }
-                await Do($"Attaching to {selectedPid}", () => back.AttachPid(selectedPid));
-            });
-            var btnAttachAll = Btn("Attach all", async (_, __) => await Do("Attaching all", () => back.AttachAll()));
-            foreach (var b in new[] { btnPlay, btnPlugins, btnAttach, btnAttachAll }) actions.Children.Add(b);
+            btnEnable.ToolTip = "Injects the ACME plugins into the client you launched (the one selected below).";
+            btnEnableAll = Btn("Enable on all", async (_, __) => await Do("Enabling plugins on all clients", () => back.AttachAll()));
+            btnEnableAll.ToolTip = "Injects the ACME plugins into every running client that doesn't already have them.";
+            actions.Children.Add(btnEnable);
+            actions.Children.Add(btnEnableAll);
+            actions.Children.Add(Btn("Refresh", (_, __) => Refresh()));
             DockPanel.SetDock(actions, Dock.Top); root.Children.Add(actions);
             DockPanel.SetDock(status, Dock.Top); root.Children.Add(status);
 
-            // plugin presence
-            var plug = new TextBlock { Margin = new Thickness(2, 0, 2, 6), Foreground = Brushes.DimGray };
-            plug.Text = "Plugins: " + PluginPresence(s);
-            DockPanel.SetDock(plug, Dock.Top); root.Children.Add(plug);
-
-            // client list header
-            var lh = new TextBlock { Text = "Running clients (click to select):", FontWeight = FontWeights.Bold, Margin = new Thickness(2) };
+            var lh = new TextBlock { Text = "Running clients (click one to select):", FontWeight = FontWeights.Bold, Margin = new Thickness(2) };
             DockPanel.SetDock(lh, Dock.Top); root.Children.Add(lh);
             root.Children.Add(new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
 
-            bool refreshing = false;
+            void SyncButtons() { btnEnable.IsEnabled = selectedPid != 0 && selectedIsPlain; }
+
             async void Refresh() {
-                if (refreshing) return;   // don't pile up if a tick fires mid-gather
+                if (refreshing) return;
                 refreshing = true;
                 try {
-                    // Gather OFF the UI thread: --list spawns AcmeInject and Status.Read opens a
-                    // log file per client. Doing this on the UI thread hitches every tick and would
-                    // freeze the whole window if AcmeInject ever stalled.
-                    var gathered = await System.Threading.Tasks.Task.Run(() => {
+                    var gathered = await Task.Run(() => {
                         var cs = back.ListClients();
                         var err = back.LastListError;
-                        var rows = new System.Collections.Generic.List<(Backbone.Client c, Status.Health h)>();
+                        var rows = new List<(Backbone.Client c, Status.Health h)>();
                         foreach (var c in cs) rows.Add((c, Status.Read(s, c.Pid, c.Injected)));
                         return (rows, err);
                     });
-                    // Build WPF controls ON the UI thread (we're back on it after the await).
                     list.Children.Clear();
+                    selectedIsPlain = false;
                     if (gathered.rows.Count == 0) {
-                        list.Children.Add(new TextBlock { Text = gathered.err ?? "  (none running)", Foreground = Brushes.DimGray, Margin = new Thickness(2) });
+                        list.Children.Add(new TextBlock { Text = gathered.err ?? "  (no clients running — start Asheron's Call first)", Foreground = Brushes.DimGray, Margin = new Thickness(2) });
+                        SyncButtons();
                         return;
                     }
                     foreach (var (c, h) in gathered.rows) {
+                        if (c.Pid == selectedPid) selectedIsPlain = c.Injected == false;
                         var row = new Border { Padding = new Thickness(4), Margin = new Thickness(1), Background = c.Pid == selectedPid ? Brushes.WhiteSmoke : Brushes.Transparent };
                         var dp = new DockPanel();
                         var dot = MakeDot(h.Light);
@@ -131,10 +118,10 @@ namespace AcmeLauncher {
                         row.MouseLeftButtonUp += (_, __) => { selectedPid = pid; Refresh(); };
                         list.Children.Add(row);
                     }
+                    SyncButtons();
                 }
                 finally { refreshing = false; }
             }
-            actions.Children.Add(Btn("Refresh", (_, __) => Refresh()));
 
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
             timer.Tick += (_, __) => Refresh();
@@ -155,87 +142,148 @@ namespace AcmeLauncher {
         // ─────────────────────────────── TUNE ───────────────────────────────
         private static UIElement BuildTune(Settings s) {
             var root = new DockPanel { Margin = new Thickness(8) };
-            string cfgPath = Knobs.ResolveCfgPath(forWrite: true);
-            var pathLabel = new TextBlock { Text = "lights.cfg: " + cfgPath, Foreground = Brushes.DimGray, Margin = new Thickness(2) };
-            DockPanel.SetDock(pathLabel, Dock.Top); root.Children.Add(pathLabel);
 
-            var note = new TextBlock { Text = "Changes apply live (~1 second) — no restart. Numbers are clamped to the plugin's own ranges.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 2, 6) };
-            DockPanel.SetDock(note, Dock.Top); root.Children.Add(note);
+            string[] cfgNames = { "lights", "sky", "ragdoll" };
+            var cfgPath = new Dictionary<string, string>();
+            var current = new Dictionary<string, Dictionary<string, string>>();
+            foreach (var c in cfgNames) { cfgPath[c] = Cfgs.ResolvePath(c, forWrite: true); current[c] = Cfgs.Read(cfgPath[c]); }
+
+            string CurRaw(KnobDef k) => current[k.Cfg].TryGetValue(k.Name, out var v) ? v : k.Default;
+            void ReloadCurrent() { foreach (var c in cfgNames) current[c] = Cfgs.Read(cfgPath[c]); }
+            void WriteAndCache(KnobDef k, string val) { Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, val); current[k.Cfg][k.Name] = val; }
+            var resync = new List<Action>();
+            void ResyncAll() { ReloadCurrent(); foreach (var a in resync) a(); }
+
+            var info = new TextBlock { Text = $"{Cfgs.All.Count} variables across lights.cfg / sky.cfg / ragdoll.cfg. Edits apply live (~1s). \"Default\" is each plugin's built-in value.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(2) };
+            DockPanel.SetDock(info, Dock.Top); root.Children.Add(info);
+
+            var searchRow = new DockPanel { Margin = new Thickness(2, 2, 2, 4) };
+            var slbl = new TextBlock { Text = "Filter:  ", VerticalAlignment = VerticalAlignment.Center };
+            var search = new TextBox { };
+            DockPanel.SetDock(slbl, Dock.Left); searchRow.Children.Add(slbl); searchRow.Children.Add(search);
+            DockPanel.SetDock(searchRow, Dock.Top); root.Children.Add(searchRow);
 
             var buttons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            var panel = new StackPanel();
-
-            var current = Knobs.Read(cfgPath);
-            var controls = new Dictionary<string, Action>();   // re-sync from file/defaults
-
-            void SetKnob(Knob k, float v) {
-                v = Math.Clamp(v, k.Min, k.Max);
-                Knobs.WriteKnob(cfgPath, k.Name, v);
-            }
-
-            string lastGroup = "";
-            foreach (var k in Knobs.All) {
-                if (k.Group != lastGroup) {
-                    lastGroup = k.Group;
-                    panel.Children.Add(new TextBlock { Text = k.Group, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 8, 0, 2) });
-                }
-                float val = current.TryGetValue(k.Name, out var cv) ? cv : k.Default;
-                val = Math.Clamp(val, k.Min, k.Max);
-
-                var rowGrid = new Grid { Margin = new Thickness(2, 1, 2, 1) };
-                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(200) });
-                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });
-                var lbl = new TextBlock { Text = k.Label, VerticalAlignment = VerticalAlignment.Center, ToolTip = k.Help.Length > 0 ? k.Help : null };
-                Grid.SetColumn(lbl, 0); rowGrid.Children.Add(lbl);
-
-                if (k.Toggle) {
-                    var cb = new CheckBox { IsChecked = val >= 0.5f, VerticalAlignment = VerticalAlignment.Center };
-                    cb.Checked += (_, __) => SetKnob(k, 1f);
-                    cb.Unchecked += (_, __) => SetKnob(k, 0f);
-                    Grid.SetColumn(cb, 1); rowGrid.Children.Add(cb);
-                    controls[k.Name] = () => { var c = Knobs.Read(cfgPath); cb.IsChecked = (c.TryGetValue(k.Name, out var x) ? x : k.Default) >= 0.5f; };
-                }
-                else {
-                    var slider = new Slider { Minimum = k.Min, Maximum = k.Max, Value = val, VerticalAlignment = VerticalAlignment.Center, TickFrequency = k.Integer ? 1 : 0.01, IsSnapToTickEnabled = k.Integer };
-                    var valTxt = new TextBlock { Text = Knobs.FormatValue(val), VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right };
-                    slider.ValueChanged += (_, e) => {
-                        float v = k.Integer ? (float)Math.Round(e.NewValue) : (float)e.NewValue;
-                        valTxt.Text = Knobs.FormatValue(v);
-                        SetKnob(k, v);
-                    };
-                    Grid.SetColumn(slider, 1); rowGrid.Children.Add(slider);
-                    Grid.SetColumn(valTxt, 2); rowGrid.Children.Add(valTxt);
-                    controls[k.Name] = () => { var c = Knobs.Read(cfgPath); slider.Value = Math.Clamp(c.TryGetValue(k.Name, out var x) ? x : k.Default, k.Min, k.Max); };
-                }
-                panel.Children.Add(rowGrid);
-            }
-
-            void ResyncAll() { foreach (var a in controls.Values) a(); }
-
-            buttons.Children.Add(Btn("Shipped defaults", (_, __) => {
-                foreach (var k in Knobs.All) SetKnob(k, k.Default);
-                // ship diet=3 + memlog defaults are the deployed posture; diet default here is 0
-                // (LightsConfig field), so nudge the two the reference machine ships on:
-                Knobs.WriteKnob(cfgPath, "diet", 3f);
+            buttons.Children.Add(Btn("Load Recommended", (_, __) => {
+                foreach (var (cfg, key, val) in Cfgs.Recommended) Cfgs.WriteKnob(cfgPath[cfg], key, val);
                 ResyncAll();
             }));
-            buttons.Children.Add(Btn("Stock (all off)", (_, __) => {
-                foreach (var k in Knobs.All) if (k.Toggle || k.Name == "diet") SetKnob(k, 0f);
+            buttons.Children.Add(Btn("Reset all to defaults", (_, __) => {
+                foreach (var k in Cfgs.All) Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, k.Default);
                 ResyncAll();
             }));
             buttons.Children.Add(Btn("Save profile…", (_, __) => {
-                var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "cfg|*.cfg", FileName = "profile.cfg" };
-                if (dlg.ShowDialog() == true) try { File.Copy(cfgPath, dlg.FileName, true); } catch (Exception ex) { MessageBox.Show(ex.Message); }
+                var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "zzpatcher profile|*.zzp", FileName = "profile.zzp" };
+                if (dlg.ShowDialog() == true) {
+                    try {
+                        ReloadCurrent();
+                        var lines = new List<string> { "# z-z patcher tuning profile (cfg.knob=value)" };
+                        foreach (var k in Cfgs.All) lines.Add($"{k.Cfg}.{k.Name}={CurRaw(k)}");
+                        File.WriteAllLines(dlg.FileName, lines);
+                    } catch (Exception ex) { MessageBox.Show(ex.Message); }
+                }
             }));
             buttons.Children.Add(Btn("Load profile…", (_, __) => {
-                var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "cfg|*.cfg" };
-                if (dlg.ShowDialog() == true) { try { File.Copy(dlg.FileName, cfgPath, true); } catch (Exception ex) { MessageBox.Show(ex.Message); } ResyncAll(); }
+                var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "zzpatcher profile|*.zzp|all|*.*" };
+                if (dlg.ShowDialog() == true) {
+                    try {
+                        foreach (var raw in File.ReadAllLines(dlg.FileName)) {
+                            var line = raw.Trim(); if (line.Length == 0 || line[0] == '#') continue;
+                            int dot = line.IndexOf('.'), eq = line.IndexOf('=');
+                            if (dot <= 0 || eq <= dot) continue;
+                            var cfg = line.Substring(0, dot); var key = line.Substring(dot + 1, eq - dot - 1); var val = line.Substring(eq + 1);
+                            if (cfgPath.ContainsKey(cfg)) Cfgs.WriteKnob(cfgPath[cfg], key, val);
+                        }
+                    } catch (Exception ex) { MessageBox.Show(ex.Message); }
+                    ResyncAll();
+                }
             }));
             DockPanel.SetDock(buttons, Dock.Top); root.Children.Add(buttons);
+
+            var panel = new StackPanel();
+            var rowVis = new List<(FrameworkElement el, string hay)>();
+            var sectionHeaders = new List<FrameworkElement>();
+            string lastSection = "";
+            foreach (var k in Cfgs.All) {
+                string section = k.Plugin + " · " + k.Group;
+                if (section != lastSection) {
+                    lastSection = section;
+                    var hdr = new TextBlock { Text = section, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 8, 0, 2), Foreground = Brushes.SteelBlue };
+                    sectionHeaders.Add(hdr); panel.Children.Add(hdr);
+                }
+                var g = new Grid { Margin = new Thickness(2, 1, 2, 1) };
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(52) });
+                var name = new TextBlock { Text = k.Name, VerticalAlignment = VerticalAlignment.Center, ToolTip = k.Desc.Length > 0 ? k.Desc : null };
+                Grid.SetColumn(name, 0); g.Children.Add(name);
+
+                Action reread;
+                if (k.Type == KnobType.Toggle) {
+                    var cb = new CheckBox { VerticalAlignment = VerticalAlignment.Center, IsChecked = ParseF(CurRaw(k), k.DefaultF) >= 0.5f };
+                    cb.Checked += (_, __) => WriteAndCache(k, "1");
+                    cb.Unchecked += (_, __) => WriteAndCache(k, "0");
+                    Grid.SetColumn(cb, 1); g.Children.Add(cb);
+                    reread = () => cb.IsChecked = ParseF(CurRaw(k), k.DefaultF) >= 0.5f;
+                }
+                else if ((k.Type == KnobType.Float || k.Type == KnobType.Integer) && k.HasRange) {
+                    var box = new DockPanel();
+                    var num = new TextBox { Width = 64, VerticalAlignment = VerticalAlignment.Center, Text = CurRaw(k), TextAlignment = TextAlignment.Right };
+                    var slider = new Slider { Minimum = k.MinF, Maximum = k.MaxF, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 6, 0),
+                        TickFrequency = k.Type == KnobType.Integer ? 1 : 0.001, IsSnapToTickEnabled = k.Type == KnobType.Integer,
+                        Value = Math.Clamp(ParseF(CurRaw(k), k.DefaultF), k.MinF, k.MaxF) };
+                    bool guard = false;
+                    slider.ValueChanged += (_, e) => {
+                        if (guard) return; guard = true;
+                        float v = k.Type == KnobType.Integer ? (float)Math.Round(e.NewValue) : (float)e.NewValue;
+                        num.Text = Cfgs.FormatFloat(v); WriteAndCache(k, Cfgs.FormatFloat(v)); guard = false;
+                    };
+                    void CommitBox() {
+                        if (guard) return;
+                        if (float.TryParse(num.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) {
+                            v = Math.Clamp(v, k.MinF, k.MaxF); guard = true; slider.Value = v; num.Text = Cfgs.FormatFloat(v); WriteAndCache(k, Cfgs.FormatFloat(v)); guard = false;
+                        }
+                    }
+                    num.LostKeyboardFocus += (_, __) => CommitBox();
+                    num.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) CommitBox(); };
+                    DockPanel.SetDock(num, Dock.Right); box.Children.Add(num); box.Children.Add(slider);
+                    Grid.SetColumn(box, 1); g.Children.Add(box);
+                    reread = () => { guard = true; float v = Math.Clamp(ParseF(CurRaw(k), k.DefaultF), k.MinF, k.MaxF); slider.Value = v; num.Text = Cfgs.FormatFloat(v); guard = false; };
+                }
+                else {
+                    var tb = new TextBox { VerticalAlignment = VerticalAlignment.Center, Text = CurRaw(k) };
+                    void Commit() => WriteAndCache(k, tb.Text.Trim());
+                    tb.LostKeyboardFocus += (_, __) => Commit();
+                    tb.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) Commit(); };
+                    Grid.SetColumn(tb, 1); g.Children.Add(tb);
+                    reread = () => tb.Text = CurRaw(k);
+                }
+                resync.Add(reread);
+
+                var meta = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.Gray, FontSize = 11,
+                    Text = (k.HasRange ? $"{k.Min}–{k.Max}  " : "") + (k.Default.Length > 0 ? $"def {k.Default}" : "") };
+                Grid.SetColumn(meta, 2); g.Children.Add(meta);
+
+                var reset = Btn("reset", (_, __) => { Cfgs.WriteKnob(cfgPath[k.Cfg], k.Name, k.Default); current[k.Cfg][k.Name] = k.Default; reread(); });
+                reset.Padding = new Thickness(4, 0, 4, 0); reset.Margin = new Thickness(2, 0, 2, 0);
+                Grid.SetColumn(reset, 3); g.Children.Add(reset);
+
+                panel.Children.Add(g);
+                rowVis.Add((g, (k.Name + " " + k.Desc + " " + k.Group + " " + k.Plugin).ToLowerInvariant()));
+            }
+
+            search.TextChanged += (_, __) => {
+                var q = search.Text.Trim().ToLowerInvariant();
+                foreach (var h in sectionHeaders) h.Visibility = q.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+                foreach (var (el, hay) in rowVis) el.Visibility = (q.Length == 0 || hay.Contains(q)) ? Visibility.Visible : Visibility.Collapsed;
+            };
+
             root.Children.Add(new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             return root;
         }
+
+        private static float ParseF(string s, float fb) => float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : fb;
 
         // ─────────────────────────────── FIX ────────────────────────────────
         private static UIElement BuildFix(Settings s, Backbone back) {
@@ -430,11 +478,6 @@ namespace AcmeLauncher {
             return b;
         }
 
-        private static void AddRow(Grid g, int row, string label, UIElement field) {
-            var l = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2) };
-            Grid.SetRow(l, row); Grid.SetColumn(l, 0); g.Children.Add(l);
-            Grid.SetRow(field, row); Grid.SetColumn(field, 1); g.Children.Add(field);
-        }
         private static void AddPathRow(Grid g, int row, string label, TextBox field) {
             var l = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2) };
             Grid.SetRow(l, row); Grid.SetColumn(l, 0); g.Children.Add(l);

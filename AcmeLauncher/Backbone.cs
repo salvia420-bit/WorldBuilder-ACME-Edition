@@ -87,24 +87,6 @@ namespace AcmeLauncher {
         public RunResult AttachPid(int pid) => RunInjector($"--attach {pid}");
         public RunResult AttachAll() => RunInjector("--attach-all");
 
-        /// <summary>Plain launch of the (already-patched) client — no plugins.
-        /// The launcher does not inject here; it just starts acclient.exe.</summary>
-        public RunResult PlayPlain(string exePath, string args) {
-            if (!File.Exists(exePath))
-                return new RunResult { Ran = false, StdOut = "acclient.exe not found — set your install folder on the Install tab." };
-            return StartDetached(exePath, args, Path.GetDirectoryName(exePath));
-        }
-
-        /// <summary>Spawn-inject: AcmeInject creates+injects the client itself.</summary>
-        public RunResult PlayWithPlugins(string exePath, string args) {
-            var exe = FindInjector();
-            if (exe == null)
-                return new RunResult { Ran = false, StdOut = "AcmeInject.exe not found — set its location on the Install tab." };
-            // AcmeInject takes --client / --args; forward the exe + the client args.
-            var q = "\"" + exePath + "\"";
-            return Run(exe, $"--client {q} --args \"{args}\"", Path.GetDirectoryName(exe));
-        }
-
         // ---- process helpers ----
 
         /// <summary>Result of a stream read that may not have finished (timeout/kill path);
@@ -140,19 +122,5 @@ namespace AcmeLauncher {
             }
         }
 
-        private static RunResult StartDetached(string exe, string args, string? workDir) {
-            try {
-                var psi = new ProcessStartInfo {
-                    FileName = exe, Arguments = args,
-                    UseShellExecute = false,
-                    WorkingDirectory = workDir ?? Environment.CurrentDirectory,
-                };
-                var p = Process.Start(psi);
-                return new RunResult { Ran = true, ExitCode = 0, StdOut = p != null ? $"launched pid {p.Id}" : "launched" };
-            }
-            catch (Exception ex) {
-                return new RunResult { Ran = false, StdOut = ex.Message };
-            }
-        }
     }
 }

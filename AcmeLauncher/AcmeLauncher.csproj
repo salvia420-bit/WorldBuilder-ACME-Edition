@@ -23,7 +23,7 @@
     <StartupObject>AcmeLauncher.App</StartupObject>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <AssemblyName>AcmeLauncher</AssemblyName>
+    <AssemblyName>zzpatcher</AssemblyName>
     <RootNamespace>AcmeLauncher</RootNamespace>
   </PropertyGroup>
 
