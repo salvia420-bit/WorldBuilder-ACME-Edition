@@ -63,9 +63,11 @@ that if something breaks, you can diagnose and fix it yourself.
 **Two quick things worth knowing on day one:**
 
 - If you log out (or crash) and reconnect immediately, you may get
-  **"Cannot have two accounts logged on at the same time."** Your character
-  takes ~8 seconds to finish its logout animation server-side (an old anti-PvP-escape
-  rule). Wait 10 seconds and log in again. Nothing is broken.
+  **"Cannot have two accounts logged on at the same time."** After a *clean*
+  logout the server holds your character only a few seconds. After a **crash or
+  a killed client** — the usual cause of this dialog — the ghost session lingers
+  ~110–150 seconds. Wait **~2–3 minutes** and log in again; retrying inside that
+  window just re-triggers it. Nothing is broken.
 - If the game suddenly runs at exactly ~10 fps: the window has lost focus
   ("background throttle"). Click inside the game window once.
 
@@ -89,9 +91,10 @@ archive, and verify the archive checksum from the release post before unpacking.
 
 ## 4. Optional: the Acme plugin pack (lighting, sky, ragdolls, stability)
 
-Separate download, entirely optional, and **more experimental than the dats** —
-it injects a plugin runtime (Chorizite) into the client. The dats work fine
-without it. With it you get:
+Included in the release archive but **entirely optional to install**, and more
+experimental than the dats — it injects a plugin runtime (Chorizite) into the
+client. The dats work fine without it: if you don't copy the plugin folder and
+you launch with `play.bat`, you never touch any of this. With it you get:
 
 | plugin | what it does |
 |---|---|
@@ -334,7 +337,8 @@ Work top to bottom; each step names its cause.
    upscales — visible up close, genuinely invisible at distance (the mip chain
    samples them back down). That's expected, not a broken install.
 4. **"Cannot have two accounts logged on at the same time."** You reconnected
-   inside the ~8 s logout-animation window. Wait 10 s, retry.
+   too fast after a crash/kill. Wait ~2–3 minutes (the ghost session lingers
+   ~110–150 s), then retry. After a clean logout a few seconds is enough.
 5. **"DAT files are incomplete" dialog at login.** The server's dat-version
    handshake (DDD) doesn't match your dats — you're on a server that serves a
    different dat lineage. This is a server-pairing problem, not an install
