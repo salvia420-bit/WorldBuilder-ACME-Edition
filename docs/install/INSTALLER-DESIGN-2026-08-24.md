@@ -138,9 +138,12 @@ This yields a clean two-layer split:
   patches) but **not** plugins, unless one of:
   1. **Point ThwargLauncher at `AcmeInject.exe` instead of `acclient.exe`**
      (AcmeInject then spawns+injects the real client with TL's pass-through
-     args). Adapts to their setup, least engineering — *gated on verifying TL
-     can launch a custom client exe and how it passes `-h/-p/-a/-v`* (untested
-     here). This is the preferred integration path if TL supports it.
+     args). **VERIFIED viable 2026-08-24** against the TL source vendored at
+     `/mnt/wbterminal2/vendor/ThwargLauncher` — see "ThwargLauncher launch
+     mechanics (verified)" below. Adapts to their setup, least engineering. Needs
+     a small AcmeInject change + is **mutually exclusive with TL's Decal
+     injection** (both want process creation). The preferred path for non-Decal
+     multi-boxers.
   2. **Our launcher multi-boxes injected clients itself** by invoking AcmeInject
      N times (each spawns its own). Works today; competes with TL rather than
      adapting to it — offer it, don't force it.
@@ -153,6 +156,57 @@ This yields a clean two-layer split:
   Recommendation: **v1 ships options 1 (if TL allows) + 2; option 3 is the
   v1.5 stretch.** Multi-boxers are never blocked — they always get the universal
   layer; plugins are the enthusiast add-on.
+
+### ThwargLauncher launch mechanics (verified against source, 2026-08-24)
+
+Vendored read-only at `/mnt/wbterminal2/vendor/ThwargLauncher`
+(`ThwargLauncher/ThwargLauncher/GameLaunching/GameLauncher.cs`,
+`MainWindow/MainWindow.xaml`):
+
+- **TL has a single user-set "AC Client File Location" field**
+  (`ClientFileLocation`, a free path chosen via a file-browse dialog —
+  `MainWindowViewModel.cs:670 ClientFileLocation = dlg.FileName`). It defaults to
+  `acclient.exe` but the user can point it at **any exe**. So option 1 is
+  genuinely available — no TL modification needed.
+- **How TL launches** (`GameLauncher.cs:130-157`): `ProcessStartInfo` with
+  `FileName = <ClientFileLocation>`, `Arguments = <generated>`,
+  `WorkingDirectory = Path.GetDirectoryName(FileName)`. For an **ACE** server the
+  generated args are exactly `-a <account> -v <password> -h <address> -rodat
+  on|off` (`GameLauncher.cs:101`). (GDLE differs: `-h <ip> -p <port> -a
+  <acct>:<pw> -rodat …`.)
+- **The change AcmeInject needs** (currently `Program.cs` reads client args only
+  from `--args`/`ACMEINJECT_ARGS`/cfg/`DefArgs` and ignores single-dash argv, and
+  `DefClient` is a hardcoded dev path):
+  1. **Pass-through argv** — treat any argv tokens that aren't AcmeInject's own
+     `--`-flags as the client args to forward, so TL's `-a … -v … -h … -rodat …`
+     reaches the real client. Clean split: AcmeInject flags are `--client
+     --args --injector --workdir`; client flags are single-dash.
+  2. **Default the client to `acclient.exe` next to AcmeInject's own exe** (or
+     the working dir TL sets), not the `D:\ac-dat-test\...` dev default — so
+     dropping `AcmeInject.exe` into the AC install folder "just works."
+  3. **Resolve the Chorizite injector + runtime relative to AcmeInject's own
+     directory** (`AppContext.BaseDirectory`), not the CWD — because TL sets CWD
+     to the exe's folder, and the runtime must be found regardless of who
+     launched.
+- **Decal conflict (the real limitation):** TL can *itself* inject Decal
+  (`GameLauncher.cs:145-155`, `ShouldWeUseDecal` → `LaunchInjected(… "DecalStartup")`).
+  If a user has Decal enabled AND points ClientFileLocation at AcmeInject.exe, TL
+  injects Decal into the *.NET injector process*, not the client — broken. So the
+  point-TL-at-AcmeInject path **requires Decal OFF in TL**. Since a large share
+  of AC players run Decal (mag-tools/Virindi/etc.), this makes **attach-by-PID
+  injection (option 3) the right general answer for the Decal crowd**: let TL
+  launch `acclient.exe` with Decal as usual, then attach our Chorizite plugins by
+  PID afterward (native Decal + managed Chorizite coexist — different mechanisms).
+- **`-rodat` gotcha for TL users:** TL's ACE branch emits `-rodat on` **or**
+  `-rodat off` from the user's per-server setting. `-rodat off` is the
+  writable-dat / DDD-repair bug we fixed by forcing read-only (see
+  crash-investigation handoff). **TL users must set rodat to On.** (`-rodat on`
+  should be equivalent to the `-rodat 1` our injector testing used; worth a
+  confirm.)
+
+Net: **option 1 is real for non-Decal multi-boxers** (small AcmeInject change,
+no TL change); **option 3 (attach) is the general answer** and is the only way to
+serve the Decal-using multi-box majority without making them drop Decal.
 
 Multi-client hygiene items (regardless of the above):
 
