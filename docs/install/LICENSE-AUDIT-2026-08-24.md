@@ -394,3 +394,27 @@ plugin folders — an MSBuild build asset with no runtime role in a player archi
 - [ ] Record the pinned Chorizite upstream commit this build derives from.
 - [ ] Re-validate `dx-attach-init` + `per-pid-log` patches (`git apply --check`).
 - [ ] Owner decision on `acclient.map` (§4a).
+
+---
+
+## 7. Post-audit resolutions (orchestrator, same day)
+
+- **`acclient.map` → EXCLUDE from the archive (evidence, not judgement).** Its only
+  reader is `SymbolResolver.ResolveACClientSymbol` (crash-log symbolication), and the
+  crash-handler registration that reaches it is **commented out** in the vendored build
+  (`Chorizite/Chorizite.Core/Chorizite.cs:79`); the read is also try/caught → "unknown".
+  Excluding the file costs nothing but symbol names in a code path that never runs.
+  Remove it from the runtime folder at packaging; keep it out of SHA256SUMS.
+- **AcmeSky baked assets → SHIP with credits (provenance traced,
+  `/mnt/wbterminal2/dat-patch-sky/PROVENANCE.txt`):**
+  - weather masks: **NASA Blue Marble** crop (`local_weather_nasa`) — NASA imagery is
+    public domain; add credit line "Cloud coverage derived from NASA Blue Marble
+    imagery" to NOTICES (no endorsement implication).
+  - stars: **Yale Bright Star Catalog** (9,096 stars, via takram `stars.bin`) — factual
+    astronomical catalog, freely redistributable; credit line suffices.
+  - palettes: sampled from **Bruneton precomputed-scattering LUTs** — reference
+    implementation BSD-3-Clause (Eric Bruneton), consumed via **@takram/three-atmosphere
+    / three-clouds (MIT)**, whose ports our shaders cite in-file. Add both to NOTICES:
+    MIT text for takram, BSD-3 attribution for Bruneton.
+- These close §6's "Owner decision on acclient.map" and the audit's sky-assets open
+  item; the remaining unchecked boxes are the packaging-time mechanical steps.
