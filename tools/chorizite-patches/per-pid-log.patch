@@ -1,0 +1,14 @@
+--- a/Chorizite/Chorizite.Core/Logging/ChoriziteLogger.cs
++++ b/Chorizite/Chorizite.Core/Logging/ChoriziteLogger.cs
+@@ -83,7 +83,10 @@
+                 if (!System.IO.Directory.Exists(LogDirectory)) {
+                     System.IO.Directory.CreateDirectory(LogDirectory);
+                 }
+-                var logPath = System.IO.Path.Combine(LogDirectory, $"log.txt");
++                // Per-PID log filename so multi-boxed clients don't interleave into one file
++                // (the ACME launcher reads log-<pid>.txt per client). AcmeLights' AsyncLog uses
++                // the identical name, so both sets of lines land in the same file for one client.
++                var logPath = System.IO.Path.Combine(LogDirectory, $"log-{System.Environment.ProcessId}.txt");
+                 System.IO.File.AppendAllText(logPath, msg);
+             } catch { }
+         }

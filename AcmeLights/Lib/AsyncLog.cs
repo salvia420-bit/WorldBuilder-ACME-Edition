@@ -55,7 +55,7 @@ namespace AcmeLights.Lib {
         public static bool Ready { get; private set; }
 
         /// <summary>Prefix that makes our lines indistinguishable from ChoriziteLogger's own, so
-        /// existing `rg 'acmelights:'` workflows over log.txt keep working.</summary>
+        /// existing `rg 'acmelights:'` workflows over the per-PID log-*.txt keep working.</summary>
         private const string LinePrefix = "[AcmeLights:Information] ";
 
         /// <summary>Start the sink. MUST be called from the managed plugin thread (Initialize):
@@ -67,7 +67,10 @@ namespace AcmeLights.Lib {
                 string? dir = ResolveLogDirectory(log);
                 if (string.IsNullOrEmpty(dir)) return;      // Ready stays false -> ILogger fallback
                 Directory.CreateDirectory(dir!);
-                _path = Path.Combine(dir!, "log.txt");
+                // Per-PID log so multi-boxed clients don't interleave into one file. Matches
+                // ChoriziteLogger's own per-PID filename (patched identically), so our lines and
+                // Chorizite's land in the same log-<pid>.txt. `rg 'acmelights:'` over log-*.txt.
+                _path = Path.Combine(dir!, $"log-{Environment.ProcessId}.txt");
                 _wake = new AutoResetEvent(false);
                 _stop = false;
                 _thread = new Thread(DrainLoop) {
