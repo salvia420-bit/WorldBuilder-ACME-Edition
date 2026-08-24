@@ -107,6 +107,7 @@ you launch with `play.bat`, you never touch any of this. With it you get:
 | **AcmeLights** | modern lighting: bloom, day/night bloom scaling, glow lights on portals/lifestones/projectiles, torch flicker, importance-ranked light selection — plus two *stability* services: a memory governor and the "mirror diet" (both exist because the high-res content made the 32-bit client run out of address space in towns; see §9) |
 | **AcmeSky** | volumetric sky: real clouds, star field, atmosphere — replaces the retail sky |
 | **AcmeRagdoll** | creatures ragdoll on death, per-body individualized |
+| **AcmeRedline** | in-game art-annotation: point at wrong-looking art, describe it, and queue a structured report (`redline.jsonl` + screenshot) for the fix pipeline — experimental |
 
 Install shape (this mirrors the reference machine the pack was developed on):
 

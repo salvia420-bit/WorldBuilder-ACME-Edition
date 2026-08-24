@@ -95,6 +95,7 @@ if [ "$BUILD" = 1 ]; then
   build_proj AcmeLights
   build_proj AcmeSky
   build_proj AcmeRagdoll
+  build_proj AcmeRedline
 else
   say "skip build (--no-build); using existing Release output"
 fi
@@ -181,7 +182,7 @@ done
 echo "   Chorizite/: runtime ($(find "$PACK/Chorizite" -maxdepth 1 -type f | wc -l) files) + AcmeInject"
 
 # 3c. the three plugins (minus exclusions; assets + profiles ride along via mirror_dir)
-for pl in AcmeLights AcmeSky AcmeRagdoll; do
+for pl in AcmeLights AcmeSky AcmeRagdoll AcmeRedline; do
   mirror_dir "$REPO/$pl/bin/net8.0" "$PACK/Chorizite/plugins/$pl"
   echo "   plugins/$pl/: $(find "$PACK/Chorizite/plugins/$pl" -type f | wc -l) files"
 done

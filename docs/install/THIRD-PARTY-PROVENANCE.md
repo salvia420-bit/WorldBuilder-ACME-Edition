@@ -48,6 +48,7 @@ Columns: **Component** = the file or file group as it appears in the archive ·
 | `plugins/AcmeLights/AcmeLights.dll` | _(build)_ | this repo, `AcmeLights/` | AGPL-3.0-only | Chorizite plugin: lighting + P5 bloom on the client D3D9 device. |
 | `plugins/AcmeSky/AcmeSky.dll` + `assets/sky/**` | _(build)_ | this repo, `AcmeSky/` | AGPL-3.0-only | Chorizite plugin: baked sky compositor (own D3D11 device). |
 | `plugins/AcmeRagdoll/AcmeRagdoll.dll` + `ragdoll_profiles.json` | _(build)_ | this repo, `AcmeRagdoll/` | AGPL-3.0-only | Chorizite plugin: physics ragdoll deaths. |
+| `plugins/AcmeRedline/AcmeRedline.dll` + `assets/**`, `manifest.json` | _(build)_ | this repo, `AcmeRedline/` | AGPL-3.0-only | Chorizite plugin: in-game art-annotation / redline queue (experimental). |
 | `Chorizite.NativeClientBootstrapper.dll` | vendored + patched | github.com/Chorizite/Chorizite | MIT (modified work) | Chorizite's bootstrapper **patched by us** (`dx-attach-init.patch`, `per-pid-log.patch`). Modified MIT work; patches published in `tools/chorizite-patches/`. |
 
 > **Sky asset provenance** (traced 2026-08-24, audit §7): weather masks derive

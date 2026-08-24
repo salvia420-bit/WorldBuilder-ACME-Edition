@@ -43,8 +43,10 @@
   <ItemGroup>
     <ProjectReference Include="..\external\chorizite\Chorizite\Chorizite.Core\Chorizite.Core.csproj"
                       Private="false" ExcludeAssets="runtime" />
-    <ProjectReference Include="..\external\chorizite\ACBindings\Chorizite.ACBindings.csproj"
-                      Private="false" ExcludeAssets="runtime" />
+    <!-- ACBindings is NOT host-owned: the plugin ALC's resolver requires it BESIDE the
+         plugin dll (the other three Acme plugins all ship it in their folder). Private
+         default (copy) — the earlier Private="false" made the plugin fail to load. -->
+    <ProjectReference Include="..\external\chorizite\ACBindings\Chorizite.ACBindings.csproj" />
   </ItemGroup>
 
   <!--
