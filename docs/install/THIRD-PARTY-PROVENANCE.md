@@ -1,12 +1,16 @@
-# Third-party provenance — ACME plugin pack
+# Third-party provenance — ACME release bundle
 
-The plugin pack in the ACME release archive bundles the **Chorizite** plugin
-runtime and its dependencies. This document exists so that bundling is
-*transparent*, not opaque — the exact thing the preservation community objects to
-is a mystery binary with no stated origin, and the answer to that is provenance,
-not omission.
+The ACME release archive bundles the **Chorizite** plugin runtime and its
+dependencies. This document exists so that bundling is *transparent*, not opaque
+— the exact thing the preservation community objects to is a mystery binary with
+no stated origin, and the answer to that is provenance, not omission.
 
-## Why we bundle (and why it's defensible)
+**Status:** the license audit that gated this document is complete —
+see [`LICENSE-AUDIT-2026-08-24.md`](./LICENSE-AUDIT-2026-08-24.md). No blockers.
+The tables below are the packaging-time manifest; per-file SHA-256 digests are
+appended at packaging (§4).
+
+## 1. Why we bundle (and why it's defensible)
 
 - **We must.** The pack requires a *modified* Chorizite build (our attach-init
   fix, `tools/chorizite-patches/dx-attach-init.patch`, needed so plugins load
@@ -23,48 +27,156 @@ not omission.
 This is the opposite of the opaque-DLL pattern: an MIT open-source runtime, our
 own build, with our delta published and provenance listed below.
 
-## Binary inventory (grouped by origin)
+**Project license:** the ACME work itself is **AGPL-3.0-only** (repo root
+`LICENSE.md`). This is what qualifies the bundle for the free Apache-2.0 branch
+of the Six Labors Split License and what makes the LGPL-3.0 dependencies
+straightforward — see the audit, §0.
 
-Ours (this project):
-- `AcmeInject.exe` / `.dll` — our base-aware injector (`AcmeInject/`).
-- `plugins/AcmeLights`, `plugins/AcmeSky`, `plugins/AcmeRagdoll` — our plugins.
-- `Chorizite.NativeClientBootstrapper.dll` — Chorizite's, **patched by us**
-  (`dx-attach-init.patch`, and the per-PID log patch) — a modified MIT work.
+## 2. Per-component provenance
 
-Chorizite project (MIT, confirmed):
-- `Chorizite.Core/Common/ACProtocol/Injector/Launcher/NativeClientBootstrapper/
-  DocGen*.dll`, `Chorizite.ACBindings` (in a plugin).
+Columns: **Component** = the file or file group as it appears in the archive ·
+**Version** = the pinned version (from `.deps.json` / `.csproj`) ·
+**Upstream** = canonical source · **License** = SPDX, or the granted branch where
+split · **Role** = why it is in the bundle.
 
-Transitive dependencies (Chorizite's own NuGet deps, redistributed as-is):
-- Microsoft.Extensions.*, System.*, Newtonsoft.Json, Autofac, NJsonSchema,
-  Namotion.Reflection — established permissive (MIT / MIT-like). 
-- Vortice.*, SharpDX.*, SharpGen.Runtime — MIT (Amer Koleci / SharpDX).
-- Iced, StbImageSharp, StbTrueTypeSharp, FontStashSharp, Cyotek.* — permissive.
-- NAudio — MIT. SDL2 / SDL2-CS — zlib / MIT.
-- FASM.DLL / FASMX64.DLL — flat assembler (custom permissive license).
+### 2a. Ours (this project) — AGPL-3.0
 
-## ⚠ Pre-release license-audit checklist (DO NOT SHIP until cleared)
+| Component | Version | Upstream | License | Role in the bundle |
+|---|---|---|---|---|
+| `zzpatcher.exe` | _(GitVersion at build)_ | this repo, `AcmeLauncher/` | AGPL-3.0-only | Player-facing launcher/configurator. Self-contained single-file WPF publish; **zero third-party NuGet dependencies** (embeds the .NET runtime — see 2e). |
+| `AcmeInject.exe` + `.dll` | _(build)_ | this repo, `AcmeInject/` | AGPL-3.0-only | Base-aware x86 injector: CreateProcess-suspended → remote `LoadLibraryW` of the Chorizite bootstrapper → `Bootstrap` at `remoteBase + RVA`. **Zero third-party NuGet dependencies.** |
+| `plugins/AcmeLights/AcmeLights.dll` | _(build)_ | this repo, `AcmeLights/` | AGPL-3.0-only | Chorizite plugin: lighting + P5 bloom on the client D3D9 device. |
+| `plugins/AcmeSky/AcmeSky.dll` + `assets/sky/**` | _(build)_ | this repo, `AcmeSky/` | AGPL-3.0-only | Chorizite plugin: baked sky compositor (own D3D11 device). |
+| `plugins/AcmeRagdoll/AcmeRagdoll.dll` + `ragdoll_profiles.json` | _(build)_ | this repo, `AcmeRagdoll/` | AGPL-3.0-only | Chorizite plugin: physics ragdoll deaths. |
+| `Chorizite.NativeClientBootstrapper.dll` | vendored + patched | github.com/Chorizite/Chorizite | MIT (modified work) | Chorizite's bootstrapper **patched by us** (`dx-attach-init.patch`, `per-pid-log.patch`). Modified MIT work; patches published in `tools/chorizite-patches/`. |
 
-Two dependencies have non-obvious licenses that a redistributed archive must
-confirm — flagged here rather than guessed:
+> **Sky asset provenance.** `plugins/AcmeSky/assets/sky/**` are baked from
+> NASA/takram sky source data. Confirm the specific source dataset + its terms
+> here before packaging — it is content, not code, and is not covered by any
+> row in §2d.
 
-- [ ] **Reloaded.* (Reloaded.Hooks / Memory / Assembler, by Sewer56)** — verify
-      the exact license and version. Some Reloaded components have used copyleft
-      terms; a copyleft dependency in a redistributed archive has obligations
-      (source offer / license inclusion). Pin the version and record it.
-- [ ] **SixLabors.ImageSharp (+ .Drawing, SixLabors.Fonts)** — ImageSharp moved
-      to the "Six Labors Split License" at v2+/v3 (free for OSS/small use,
-      commercial license otherwise). Confirm the bundled version's terms permit
-      this redistribution, or pin an Apache-2.0-era version.
+### 2b. Chorizite project — MIT (© 2024 Chorizite)
 
-General checklist before packaging:
-- [ ] Generate per-file `sha256` for every bundled binary into `SHA256SUMS.txt`.
-- [ ] Include each dependency's LICENSE text (or a NOTICES file) in the archive.
-- [ ] Record the pinned Chorizite upstream commit/version this build derives from.
-- [ ] Confirm the `dx-attach-init` + per-PID-log patches still apply to that
-      pinned Chorizite (re-validate via `git apply --check`).
+Upstream for all: `https://github.com/Chorizite/Chorizite` (record the pinned
+commit in §4). `Chorizite.DatReaderWriter` is © 2024 ACClientLib, also MIT.
 
-## Antivirus / EDR (must be surfaced to players)
+| Component | Version | License | Role in the bundle |
+|---|---|---|---|
+| `Chorizite.Core.dll` | vendored | MIT | Plugin host: DI container, plugin ALC, DAT access, UI. |
+| `Chorizite.Common.dll` | 1.0.3 (pkg) | MIT | Shared primitives for Core/ACProtocol. |
+| `Chorizite.ACProtocol.dll` | 1.0.1 (pkg) | MIT | Typed AC network message classes; AcmeRagdoll subscribes to its parser. |
+| `Chorizite.ACBindings.dll` | vendored | MIT | Retail client memory-layout bindings. **Ships inside each plugin folder** (not host-owned — the plugin ALC's resolver requires it beside the plugin). |
+| `DatReaderWriter.dll` | 1.0.0 (pkg) | MIT | DAT file reader used by the host. |
+| `SigScan.dll` | vendored binary | MIT per Chorizite repo license | Prebuilt **native** signature scanner, P/Invoked by `Lib/SigScanner.cs`. ⚠ **No upstream source located in-tree** — listed explicitly rather than shipped anonymously (audit §4b). |
+| `acclient.map` | vendored data | ⚠ **not an OSS license question** | Link map of the retail Turbine `acclient.exe`, shipped by Chorizite.Core. Derived from a proprietary third-party binary; see audit §4a — owner judgement, not a license clearance. |
+
+### 2c. Copyleft / split-licensed — notice obligations apply
+
+These are the two dependencies the pre-ship checklist flagged. Both cleared; both
+require notices the archive must carry (audit §3, §5).
+
+| Component | Version | Upstream | License | Role in the bundle |
+|---|---|---|---|---|
+| `Reloaded.Hooks.dll` | 4.3.3 | github.com/Reloaded-Project/Reloaded.Hooks | **LGPL-3.0-or-later** | Inline trampoline detour engine. The Chorizite bootstrapper hooks client C++ functions with it; all three ACME plugins bind to that single resident copy. |
+| `Reloaded.Hooks.Definitions.dll` | 1.15.0 | github.com/Reloaded-Project/Reloaded.Hooks | **LGPL-3.0-or-later** | Interfaces/attributes for the above. |
+| `Reloaded.Memory.dll` | 7.0.0 | github.com/Reloaded-Project/Reloaded.Memory | **LGPL-3.0-or-later** | Memory primitives used by the hook engine. |
+| `Reloaded.Memory.Buffers.dll` | 2.0.0 | github.com/Reloaded-Project/Reloaded.Memory.Buffers | **LGPL-3.0-or-later** | Near-target buffer allocation for trampolines. |
+| `Reloaded.Assembler.dll` | 1.0.14-mem-buffers-2.0 | github.com/Reloaded-Project/Reloaded.Assembler | **LGPL-3.0-or-later** | Managed wrapper over FASM; assembles trampoline stubs. |
+| `SixLabors.ImageSharp.dll` | **3.1.11** | github.com/SixLabors/ImageSharp | Six Labors Split License v1.0 → **Apache-2.0 granted** | Image decode/encode for the host's UI/texture path. Transitive via Chorizite. |
+| `SixLabors.ImageSharp.Drawing.dll` | 2.1.7 | github.com/SixLabors/ImageSharp.Drawing | Six Labors Split License v1.0 → **Apache-2.0 granted** | Drawing primitives over ImageSharp. |
+| `SixLabors.Fonts.dll` | 2.1.3 | github.com/SixLabors/Fonts | Six Labors Split License v1.0 → **Apache-2.0 granted** | Font loading/shaping for the above. |
+
+> **Reloaded reaches into the plugin folders.** `Reloaded.Assembler` pulls the
+> native FASM binaries (§2d) into `plugins/AcmeLights`, `plugins/AcmeSky` and
+> `plugins/AcmeRagdoll` as well as the host directory. The LGPL notice covers
+> **all four** directories, not just `Chorizite/`.
+>
+> **Say "Apache-2.0", not "split".** The Six Labors license requires that, once
+> granted, "You must reference the granted license only in all documentation."
+> NOTICES must name Apache-2.0 for the three SixLabors components.
+
+### 2d. Permissive transitive dependencies (redistributed as-is)
+
+Pulled in by the vendored Chorizite host or by the ACME plugins. Full
+determination method per package is in the audit, §2.
+
+| Component | Version | Upstream | License | Role in the bundle |
+|---|---|---|---|---|
+| `FASM.DLL`, `FASMX64.DLL` | 1.73 | flatassembler.net (© Tomasz Grysztar) | custom permissive (BSD-2-like) | Native assembler backing `Reloaded.Assembler`. **`FASM-LICENSE.TXT` already ships beside them** in every plugin folder. |
+| `Iced.dll` | 1.17.0 | github.com/icedland/iced | MIT | x86/x64 disassembler used by the hook engine. |
+| `Autofac.dll` | 8.4.0 | autofac.org | MIT | DI container for the Chorizite host. |
+| `Newtonsoft.Json.dll` | 13.0.3 | newtonsoft.com/json | MIT | JSON for host config/schema. |
+| `NJsonSchema.dll`, `NJsonSchema.Annotations.dll` | 11.5.1 | njsonschema.org | MIT | Plugin-manifest schema validation. |
+| `Namotion.Reflection.dll` | 3.4.3 | github.com/RicoSuter/Namotion.Reflection | MIT | Reflection helper for NJsonSchema. |
+| `NAudio.dll`, `.Core`, `.Asio`, `.Midi`, `.Wasapi`, `.WinMM` | 2.2.1 | github.com/naudio/NAudio | MIT (© 2020 Mark Heath) | Audio playback in the bootstrapper. |
+| `SharpDX.dll`, `SharpDX.Direct3D9.dll` | 4.2.0 | github.com/sharpdx/SharpDX | MIT (© 2010-2016 Alexandre Mutel) | D3D9 interop for the bootstrapper's client-device hooks. *(Package `licenseUrl` is dead; MIT confirmed upstream.)* |
+| `SharpGen.Runtime.dll`, `SharpGen.Runtime.COM.dll` | 2.2.0-**beta** | github.com/SharpGenTools/SharpGenTools | MIT | COM interop runtime under Vortice. ⚠ prerelease pin (stability note, not a license issue). |
+| `Vortice.Direct3D11.dll`, `Vortice.DXGI.dll`, `Vortice.D3DCompiler.dll`, `Vortice.DirectX.dll` | 3.6.2 | github.com/amerkoleci/Vortice.Windows | MIT | Managed D3D11/DXGI/D3DCompile bindings. **Ship inside the plugin folders** (AcmeSky's own D3D11 device; AcmeLights' runtime HLSL compile). |
+| `Vortice.Mathematics.dll` | 1.9.2 | github.com/amerkoleci/Vortice.Mathematics | MIT | Math types for the above. |
+| `FontStashSharp.dll`, `.Base`, `.Rasterizers.StbTrueTypeSharp` | 1.3.10 / 1.1.9 | github.com/FontStashSharp/FontStashSharp | **Zlib** | Font atlas/rendering for the host UI. |
+| `StbImageSharp.dll` | 2.30.15 | github.com/StbSharp/StbImageSharp | **Public Domain or MIT** (our choice) | stb_image port. *(Package carries no license metadata; terms from the upstream repo.)* |
+| `StbTrueTypeSharp.dll` | 1.26.12 | github.com/StbSharp/StbTrueTypeSharp | Public Domain or MIT (our choice) | stb_truetype port, backing FontStashSharp. *(No package metadata; terms from upstream.)* |
+| `Cyotek.Drawing.BitmapFont.dll` | 2.0.4 | github.com/cyotek/Cyotek.Drawing.BitmapFont | MIT | Bitmap-font parsing. |
+| `Medo.PcapRW.dll` | 1.2.0 | github.com/medo64/Medo.PcapRW | MIT (© 2020 Josip Medved) | pcap read/write for ACProtocol capture tooling. |
+| `Microsoft.Diagnostics.Runtime.dll` (ClrMD) | 3.1.512801 | github.com/microsoft/clrmd | MIT | CLR introspection in the host. |
+| `Microsoft.Diagnostics.NETCore.Client.dll` | 0.2.410101 | github.com/dotnet/diagnostics | MIT | Diagnostics IPC client. |
+| `Microsoft.Extensions.Logging.Abstractions.dll`, `Microsoft.Extensions.DependencyInjection.Abstractions.dll` | 9.0.9 / 9.0.0 | github.com/dotnet/runtime | MIT | Logging/DI abstractions shared by host and plugins. |
+| `Microsoft.Extensions.Configuration*.dll`, `.Logging.dll`, `.Options.dll`, `.Primitives.dll` | 2.1.1 | github.com/aspnet | **Apache-2.0** | Host configuration stack. |
+| `Microsoft.Bcl.AsyncInterfaces.dll` | 1.1.0 / 9.0.0 | github.com/dotnet/runtime | MIT | Async interface polyfill. |
+| `System.*.dll` (Text.Json, Collections.Immutable, Reflection.Metadata, IO.Pipelines, CodeDom, Diagnostics.DiagnosticSource, Text.Encodings.Web, Memory, Buffers, Numerics.Vectors, Runtime.CompilerServices.Unsafe, Threading.Tasks.Extensions) | 4.x – 9.0.9 | github.com/dotnet/runtime | MIT | BCL out-of-band packages carried by the host. |
+
+**Build-only, does NOT ship:** `GitVersion.MsBuild` (6.1.0/6.3.0/6.4.0, MIT) —
+build-time versioning task with no runtime assembly in the archive.
+
+**Correction to earlier drafts:** `SDL2` / `SDL2-CS` are **not** in this bundle.
+They belong to `Chorizite.OpenGLSDLBackend`, which the release archive does not
+ship. Do not carry an SDL notice.
+
+### 2e. Embedded .NET runtime (inside `zzpatcher.exe`)
+
+| Component | Version | Upstream | License | Role in the bundle |
+|---|---|---|---|---|
+| `Microsoft.NETCore.App` + `Microsoft.WindowsDesktop.App` (WPF) | **8.0.26** | github.com/dotnet/runtime, github.com/dotnet/wpf | MIT (© .NET Foundation and Contributors) | `zzpatcher.exe` is a self-contained single-file publish, so the runtime (238 assemblies + `createdump.exe` + satellite resources) is embedded in the executable. Deliberate: the Install tab's own .NET-runtime check means the tool that tells you to install .NET must not itself require .NET. |
+
+Ship the runtime pack's `LICENSE.TXT` **and** `THIRD-PARTY-NOTICES.TXT`.
+
+## 3. Required license/notice files in the archive
+
+Per the audit's minimum notice set (§5 there):
+
+```
+licenses/
+  LICENSE-ACME.md                  # our AGPL-3.0 (repo root LICENSE.md)
+  LGPL-3.0.txt                     # required by Reloaded.* (LGPL §4(b))
+  GPL-3.0.txt                      # required: LGPLv3 incorporates GPLv3
+  Apache-2.0.txt                   # SixLabors (granted branch) + MS.Extensions 2.1.1
+  MIT.txt                          # consolidated MIT text
+  Zlib.txt                         # FontStashSharp family
+  FASM-LICENSE.TXT                 # already emitted by the build
+  dotnet-LICENSE.TXT               # .NET 8.0.26 runtime
+  dotnet-THIRD-PARTY-NOTICES.TXT   # .NET 8.0.26 runtime
+NOTICES.txt                        # per-package attributions + granted-license statements
+```
+
+## 4. Build pin and per-file digests
+
+Filled in by the packaging step. Do not hand-edit the digest block.
+
+- Chorizite upstream commit this build derives from: `TBD-AT-PACKAGING`
+- Patches applied: `tools/chorizite-patches/dx-attach-init.patch`,
+  `tools/chorizite-patches/per-pid-log.patch`
+  (re-validate with `git apply --check` against the pinned commit)
+- Build host / SDK: `TBD-AT-PACKAGING`
+- Archive name + version: `TBD-AT-PACKAGING`
+
+### SHA-256 manifest
+
+Every binary in the archive, one line per file, `<sha256>  <archive-relative path>`.
+Mirrors `SHA256SUMS.txt` shipped alongside.
+
+<!-- shas appended at packaging -->
+
+## 5. Antivirus / EDR (must be surfaced to players)
 
 The plugin pack injects code into the running client (`OpenProcess` +
 `CreateRemoteThread` — the same technique all AC plugin loaders, incl. Decal,
@@ -73,3 +185,27 @@ install guides' troubleshooting. Mitigations: code-sign the injector before
 release, and document an AV-allowlist step. A blocked injection degrades to
 "full visual upgrade from the dats + exe patch, no plugins" — never a broken
 game (the dats/patch layer does no injection).
+
+## 6. Pre-ship checklist
+
+License audit (was blocking — now cleared, see `LICENSE-AUDIT-2026-08-24.md`):
+
+- [x] **Reloaded.*** — **LGPL-3.0-or-later** (not GPL), versions pinned in §2c.
+      Compatible with our AGPL-3.0; shipped unmodified as separate DLLs.
+      Obligation: LGPL + GPL texts, notice, upstream source pointer.
+- [x] **SixLabors.ImageSharp** — ships **3.1.11** under the Six Labors Split
+      License v1.0; we qualify for the **Apache-2.0** branch on two independent
+      grounds (AGPL open-source consumption; transitive dependency). No version
+      change needed.
+
+Remaining before packaging:
+
+- [ ] Assemble `licenses/` + `NOTICES.txt` per §3.
+- [ ] Generate per-file `sha256` into §4 and `SHA256SUMS.txt`.
+- [ ] Record the pinned Chorizite upstream commit/version in §4.
+- [ ] Re-validate `dx-attach-init` + `per-pid-log` patches (`git apply --check`).
+- [ ] Owner decision on `acclient.map` (audit §4a) — drop it, or record a knowing
+      acceptance.
+- [ ] Confirm the AcmeSky baked-sky asset source + its terms (§2a note).
+- [ ] Housekeeping: strip `Reloaded.Assembler.targets` from the three plugin
+      folders (MSBuild build asset, no runtime role).
