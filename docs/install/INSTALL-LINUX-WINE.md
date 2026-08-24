@@ -386,11 +386,15 @@ WineD3D registry key is probably missing.
 
 ## Advanced: plugins (Chorizite) under Wine — experimental
 
-The Windows build ships with an optional plugin stack (Chorizite + the Acme
+The release ships an optional plugin stack (the open-source **Chorizite** runtime,
+MIT-licensed and bundled — see `THIRD-PARTY-PROVENANCE.md` — plus the Acme
 plugins: lighting/bloom, sky, ragdolls, and a memory governor). The **supported
 Linux posture is the plain client** — that is what the shipping gauntlet
 validated, and under 64-bit Wine the plain client doesn't need the memory
-plugins at all (they exist for Windows' 32-bit 2 GB ceiling).
+plugins at all (they exist for Windows' 32-bit 2 GB ceiling). Note the plugin
+runtime injects into the client, which some AV (or, rarely, Wine security
+wrappers) may interfere with; the plain client does no injection and is
+unaffected.
 
 For tinkerers: injection itself works under Wine — the release's `AcmeInject`
 is a base-aware injector written specifically because the stock injection method

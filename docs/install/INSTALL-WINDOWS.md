@@ -92,7 +92,13 @@ archive, and verify the archive checksum from the release post before unpacking.
 ## 4. Optional: the Acme plugin pack (lighting, sky, ragdolls, stability)
 
 Included in the release archive but **entirely optional to install**, and more
-experimental than the dats — it injects a plugin runtime (Chorizite) into the
+experimental than the dats. It bundles the open-source **Chorizite** plugin
+runtime (MIT-licensed; we ship a patched build because the plugins need a fix
+that isn't upstream — full provenance and the published patches are in
+`THIRD-PARTY-PROVENANCE.md`). Note it **injects code into the running client**
+(the same technique Decal and every AC plugin loader use), so **some antivirus/EDR
+may flag or block it** — see the troubleshooting note. It injects a plugin
+runtime (Chorizite) into the
 client. The dats work fine without it: if you don't copy the plugin folder and
 you launch with `play.bat`, you never touch any of this. With it you get:
 
@@ -358,7 +364,14 @@ Work top to bottom; each step names its cause.
    `selection=0`+restart, `flicker=0`. Sky wrong → remove/rename
    `plugins\AcmeSky`. Death animations wrong → remove `plugins\AcmeRagdoll`.
    Each plugin folder is independent.
-10. **Total rollback.** Restore your backed-up dats and
+10. **Plugins don't load / your antivirus warned about `acclient.exe` or the
+    injector.** The plugin pack injects into the running client (as Decal and
+    all AC plugin tools do), which AV/EDR can block. If you want the plugins,
+    add an exclusion for the game folder and the injector in your AV; if you
+    don't, ignore it — the dats + exe patch (the visual upgrade) do **no**
+    injection and work regardless, so a blocked injector just means "no plugins",
+    not a broken game. Only add exclusions you understand.
+11. **Total rollback.** Restore your backed-up dats and
     `acclient.exe.acme-orig.bak` (rename to `acclient.exe`), delete/skip the
     Chorizite folder. You're back to bone-stock retail.
 
