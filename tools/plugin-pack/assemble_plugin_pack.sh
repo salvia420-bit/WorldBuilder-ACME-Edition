@@ -71,18 +71,26 @@ python3 "$REPO/AcmeLauncher/tools/gen_knobs.py" >/dev/null || die "gen_knobs.py 
 echo "   gen_knobs.py OK (84/35/28)"
 
 # ── 2. Build Release ────────────────────────────────────────────────────────
+# PathMap rewrites the build-machine paths the compiler bakes into every assembly
+# (the RSDS debug-directory entry that names the .pdb, and the source paths in it)
+# to a neutral "/_/". Without it every DLL we ship carries the developer's home
+# directory and repo layout — a real disclosure, and one the leak gate below now
+# refuses to ship. Applied to every build AND to the zzpatcher publish so the
+# single-file bundle's embedded assemblies are clean too.
+PATHMAP="-p:PathMap=$REPO/=/_/"
+
 build_proj() { # <project-dir-or-csproj> <extra-args...>
   local p="$1"; shift
   echo "   build $p"
-  dotnet build "$REPO/$p" -c Release -p:EnableWindowsTargeting=true --nologo "$@" >/tmp/pp-build.log 2>&1 \
+  dotnet build "$REPO/$p" -c Release -p:EnableWindowsTargeting=true "$PATHMAP" --nologo "$@" >/tmp/pp-build.log 2>&1 \
     || { tail -25 /tmp/pp-build.log >&2; die "build failed: $p"; }
 }
 
 if [ "$BUILD" = 1 ]; then
-  say "build (Release, single-project, EnableWindowsTargeting)"
+  say "build (Release, single-project, EnableWindowsTargeting, PathMap)"
   # zzpatcher: self-contained single-file publish
   echo "   publish AcmeLauncher (zzpatcher, self-contained single file)"
-  dotnet publish "$REPO/AcmeLauncher" -c Release --nologo >/tmp/pp-build.log 2>&1 \
+  dotnet publish "$REPO/AcmeLauncher" -c Release "$PATHMAP" --nologo >/tmp/pp-build.log 2>&1 \
     || { tail -25 /tmp/pp-build.log >&2; die "publish AcmeLauncher failed"; }
   build_proj AcmeInject
   # Chorizite runtime: the Launcher project is the full runtime; NativeClientBootstrapper
@@ -359,8 +367,8 @@ no endorsement implied). The star field is derived from the Yale Bright Star
 Catalog (a factual astronomical catalog) via the takram three-atmosphere/three-
 clouds project (MIT). Sky palettes are sampled from Eric Bruneton's precomputed
 atmospheric-scattering reference implementation (BSD-3-Clause), consumed through
-the takram MIT ports. Provenance: docs/install/LICENSE-AUDIT §7 and
-/mnt/wbterminal2/dat-patch-sky/PROVENANCE.txt in the source tree.
+the takram MIT ports. Provenance: docs/install/LICENSE-AUDIT §7 and the sky
+asset PROVENANCE.txt kept with the bake inputs in the source tree.
 NOTICES
 echo "   NOTICES.txt written"
 
@@ -462,6 +470,27 @@ for raw in open(ex):
 for b in bad: print("   sky-example drift:", b)
 sys.exit(1 if bad else 0)
 SKYGATE
+# --- internal-leak gate: every shipped file, ASCII *and* UTF-16LE ---------------
+# The r10 pack shipped AcmeInject.dll with a dev client path, a server address and
+# test credentials compiled in. The old gate was an ASCII grep over text files
+# only, and .NET stores string literals as UTF-16LE, so it saw nothing. This one
+# scans the raw bytes of every file in both encodings.
+python3 "$REPO/tools/leak_scan.py" --label "plugin pack $TAG" "$PACK" || FAIL=1
+
+# ...and the ONE thing that scan is structurally blind to: zzpatcher.exe is a
+# self-contained single-file publish whose embedded assemblies are COMPRESSED, so
+# string-scanning the bundle proves nothing about what is inside it. Scan the
+# PRE-BUNDLE publish input directory instead — the loose managed DLLs the bundler
+# eats (zzpatcher.dll is ours; the rest is the .NET runtime it embeds).
+ZZP_PREBUNDLE="$REPO/AcmeLauncher/bin/Release/net8.0-windows/win-x64"
+if [ -d "$ZZP_PREBUNDLE" ]; then
+  python3 "$REPO/tools/leak_scan.py" \
+    --label "zzpatcher PRE-BUNDLE inputs (single-file bundle is compressed - unscannable)" \
+    "$ZZP_PREBUNDLE" || FAIL=1
+else
+  echo "   ✗ zzpatcher pre-bundle input dir absent ($ZZP_PREBUNDLE) — the bundle's contents cannot be gated"; FAIL=1
+fi
+
 # SHA256SUMS re-verifies
 ( cd "$PACK" && sha256sum -c SHA256SUMS.txt >/tmp/pp-shacheck.log 2>&1 ) || { echo "   ✗ SHA256SUMS re-verify failed"; tail -5 /tmp/pp-shacheck.log; FAIL=1; }
 [ "$FAIL" = 0 ] || die "verify pass FAILED — pack is not shippable"

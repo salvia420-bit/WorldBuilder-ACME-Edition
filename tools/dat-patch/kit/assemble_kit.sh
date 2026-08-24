@@ -216,12 +216,15 @@ echo "== SHA256SUMS.txt"
     README.txt > SHA256SUMS.txt )
 cut -c1-8,66- "$KIT/SHA256SUMS.txt" | sed 's/^/   /'
 
-# --- internal-leak gate: no dev paths/hostnames in any shipped text file --------
-echo "== internal-leak gate (shipped text files)"
-if grep -rlEI '/mnt/|/home/|buildbox|wbterminal' "$KIT" --include='*.txt' --include='*.md' --include='*.bat' --include='*.sh' --include='*.ps1' --include='*.py'; then
-  echo "INTERNAL PATH/HOST LEAKED into shipped text (files above)" >&2; exit 1
-fi
-echo "   clean"
+# --- internal-leak gate: no dev paths/hosts/credentials in ANY shipped file -----
+# This used to be an ASCII `grep` over a fixed extension list. That is exactly how
+# the r10 credential leak shipped: .NET stores literals as UTF-16LE, so an
+# ASCII grep over a binary sees nothing. leak_scan.py searches every pattern in
+# BOTH encodings over every shipped file (dats excluded — opaque payload; the
+# release wrapper's --deep-leak-scan covers those).
+echo "== internal-leak gate (every shipped file, ASCII + UTF-16LE)"
+python3 "$HERE/../../leak_scan.py" --label "kit $TAG" "$KIT" \
+  || { echo "INTERNAL PATH/HOST/CREDENTIAL LEAKED into the kit (hits above)" >&2; exit 1; }
 
 # --- self-gate: play.bat's own rule, run here so a broken kit never ships ----
 if [ "$VERIFY" = 1 ]; then

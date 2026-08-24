@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # make-release-archive.sh — combine the dat kit + the plugin pack into THE release archive.
 #
-#   make-release-archive.sh --kit <kit-dir> --plugins <pack-dir> --tag <tag> --out <dir> [--package]
+#   make-release-archive.sh --kit <kit-dir> --plugins <pack-dir> --tag <tag> --out <dir> [--package] [--deep-leak-scan]
 #
 # Layout (the single archive players download):
 #   <out>/acme-<tag>/
@@ -22,7 +22,7 @@
 # and its provenance doc references its internal sums.
 set -euo pipefail
 
-KIT=""; PLUGINS=""; TAG=""; OUT=""; PACKAGE=0
+KIT=""; PLUGINS=""; TAG=""; OUT=""; PACKAGE=0; DEEP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --kit) KIT="$2"; shift 2;;
@@ -30,11 +30,12 @@ while [ $# -gt 0 ]; do
     --tag) TAG="$2"; shift 2;;
     --out) OUT="$2"; shift 2;;
     --package) PACKAGE=1; shift;;
+    --deep-leak-scan) DEEP=1; shift;;   # also scan the dats (slow)
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
 [ -n "$KIT" ] && [ -n "$PLUGINS" ] && [ -n "$TAG" ] && [ -n "$OUT" ] || {
-  echo "usage: make-release-archive.sh --kit <kit-dir> --plugins <pack-dir> --tag <tag> --out <dir> [--package]" >&2; exit 2; }
+  echo "usage: make-release-archive.sh --kit <kit-dir> --plugins <pack-dir> --tag <tag> --out <dir> [--package] [--deep-leak-scan]" >&2; exit 2; }
 [ -d "$KIT" ] || { echo "no such kit dir: $KIT" >&2; exit 2; }
 [ -d "$PLUGINS" ] || { echo "no such plugin-pack dir: $PLUGINS" >&2; exit 2; }
 HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
@@ -93,11 +94,15 @@ grep -q "VeryHigh" "$ARCH/README.txt" || die "archive README lost the VeryHigh r
 grep -q "acme-plugins" "$ARCH/README.txt" || die "archive README lacks the plugin-pack note"
 echo "   kit README preserved + plugin-pack section appended (VeryHigh + acme-plugins verified)"
 
-echo "== internal-leak gate (archive root text files)"
-if grep -lEI '/mnt/|/home/|buildbox|wbterminal' "$ARCH"/*.md "$ARCH"/*.txt 2>/dev/null; then
-  die "internal path/host leaked into archive-root text (files above)"
-fi
-echo "   clean"
+# --- internal-leak gate over the WHOLE archive ---------------------------------
+# Was: an ASCII grep over `$ARCH/*.md $ARCH/*.txt` — archive root only, text only.
+# It therefore saw neither acme-plugins/ nor any binary, which is how AcmeInject.dll
+# shipped a dev client path + server address + test credentials as UTF-16LE
+# literals. Now the whole tree, every file, both encodings. --deep-leak-scan
+# additionally sweeps the dats (slow; used for the final pre-announce check).
+echo "== internal-leak gate (whole archive, ASCII + UTF-16LE${DEEP:+ + dats})"
+python3 "$REPO/tools/leak_scan.py" ${DEEP:+--all-files} --label "archive acme-$TAG" "$ARCH" \
+  || die "internal path/host/credential leaked into the archive (hits above)"
 
 echo "== unified SHA256SUMS.txt (root, over everything)"
 ( cd "$ARCH" && find . -type f ! -path ./SHA256SUMS.txt -print0 | sort -z \
