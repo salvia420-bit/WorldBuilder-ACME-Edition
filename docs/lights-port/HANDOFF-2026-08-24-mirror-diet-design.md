@@ -1,4 +1,13 @@
-# HANDOFF 2026-08-24 (2) — mirror-diet design: research synthesis, hitch telemetry, A/B gauntlet
+# HANDOFF 2026-08-24 (2) — mirror diet: research, telemetry, gauntlet — AND THE SHIPPED IMPLEMENTATION
+
+**TL;DR (end of session): the diet is IMPLEMENTED (`Services/MirrorDiet.cs`, commit
+521fde94), deployed to the 1070 (113,152 B DLL, default-OFF), and live-proven: with
+`diet=3` the full 14-stop gauntlet ran ZERO crashes (arm A crashed twice), worst-town
+priv 1,276 MB vs 1,939 (most towns 900–1,250), hitch rate 9.3/kframe ≈ the
+governor-off arm's 8.5 (vs 27.7 in crit-hold), lfree steady 62 MB vs 3, the governor
+recovering from CRIT for the first time ever, 8,170 mirrors / 6.2 GB freed across the
+tour, world rendering verified correct by screenshot. Owner gates left: the controlled
+pixel A/B and a device-reset (resolution-change) pass — protocol at the bottom.**
 
 Continues: `HANDOFF-2026-08-24-rgba-mirror-diet.md` (the lane charter). Research quartet
 (committed together, cross-checked, key anchors re-verified by hand):
@@ -127,3 +136,77 @@ Scorer: `score_frametime.py` (per-landblock aggregate) — copy in
   now eats low VA at boot (suspects: r10work dat pair, AcmeSky D3D11 assets, RTSSHooks
   52.6 MB). The diet shrinks the heap either way, but a 3 MB floor makes every
   frag-based trigger latch from frame one.
+
+## THE IMPLEMENTATION (same session — Services/MirrorDiet.cs, commit 521fde94)
+
+Corrections to the sketch above, discovered while building (trust these over the fork
+claims where they differ):
+- `m_pSystemMemTexture` is at **ImgTex+128** (m_pRenderTexture +124) — PDB fieldlist
+  0x7972; the palette fork's "+276" was wrong. DBObj = 48 bytes; the GraphicsResource
+  subobject sits at +48 (m_bIsLost +56, m_TimeUsed +64, m_ListIndex +84).
+- The decomp (2013 build) and the deployed exe DISAGREE by 0xD60 in the ImgTex code
+  region — the map/ACBindings are the address authority: `ImgTex::GetD3DTexture` =
+  **0x0053F310** (not the 0x0053E310 written earlier in this doc), Get2DTextureD3D =
+  0x006968D0, `DBObj::Release` = 0x00415400, `GraphicsResource::s_Resources` =
+  0x008398C4, `ImgTex::custom_texture_table` = 0x0081FA80.
+- No FASM needed: a Reloaded managed thiscall detour (the proven per-draw
+  minimize_object_lighting shape) carries the fast path — two pointer reads then chain.
+- Only `GetD3DTexture` and `CreateD3DTexture` ever touch the mirror (read-verified
+  sweep of every `m_pSystemMemTexture` reference); CreateD3DTexture is null-safe, and
+  `m_pD3DTexture` (+120) is vestigial (only ever released/zeroed).
+- Sweep identifies ImgTexes in s_Resources by GR-subobject vfptr, CALIBRATED AT RUNTIME
+  from custom_texture_table and validated by round-tripping m_ListIndex — no vtable
+  constants; a failed probe permanently self-disables before anything is freed.
+- Frees use retail's own `DBObj::Release` (runtime mirror has no maintainer →
+  refcount + virtual destroy — byte-identical to GetD3DTexture's own teardown).
+- Deliberately NOT disabled on plugin unload and NOT knob-gated in the detour body:
+  once mirrors are freed the fast path is load-bearing; it is unreachable in stock
+  state (mirror and render texture are only ever null together there).
+- Known accepted gap (v1): no self-heal if VRAM pressure discards a dieted texture's
+  DEFAULT copy outside a device reset (null texture until relog). Unreachable on 8 GB
+  VRAM; revisit only if seen.
+
+## Live smoke + gauntlet arm D (diet=3, 2026-08-24 morning, all headless)
+
+- Probe (diet=1) at Yaraq spawn: **1,754 ImgTexes, 1,710 with mirrors = 782 MB**
+  (1,466 runtime-generated) — bigger than the dump estimate (782 counts DXT/alpha
+  mirrors too, not just RGBA-opaque).
+- diet=2 (DAT-id only): 146 freed / 64 MB, priv 1280→1231. diet=3: **cum 665 freed /
+  387 MB, priv → 892 MB**, world renders correctly (screenshot at the Yaraq wall:
+  clothing recolors, wall art, terrain, UI all intact), frametime p99 21–23 ms.
+- Full crashtour with diet=3: **14/14 stops, zero crashes** (the same tour crashed
+  arm A at stop 3 and again at stop 10, arm B at stop 4). Per-town priv 894–1,276 MB.
+  Governor: two brief CRITs at teleport double-residency spikes (1,746 MB / lfree 1)
+  followed by REAL recoveries (866–1,190 MB, lfree 56–62) — recovery had never fired
+  before today. Freelisting stayed ON almost throughout → hitch profile 9.3/kframe,
+  p99 22–43 ms per town. Cumulative diet churn across the tour: 8,170 mirrors /
+  6,249 MB (mirrors are recreated per teleport and re-freed next sweep). Steady-state
+  remainder: ~950 mirrors / 380 MB = textures with no DEFAULT copy yet (never drawn)
+  — correctly skipped, shrinks as the camera sees them.
+- Deployed state at session end: DLL 113,152 B live in plugins\AcmeLights (backups
+  .bak-0824 = this morning's pre-diet build, .bak-0823* = older); `lights.cfg`
+  restored to owner defaults, **no diet line → diet=0 → the detour is not even
+  installed** (zero footprint). Client killed; box clean. New reusable tasks:
+  `acdtdietshot` (passive PrintWindow shot → D:\Temp\dietshot.png, no focus steal, no
+  idle guard needed), `acdtdietresize` (set outer window 1926×1100). Scripts in
+  D:\Temp (owner: temp/staging lives on D:).
+
+## Owner gates before default-ON (then set `diet=3` in lights.cfg)
+
+1. **Pixel A/B** (the "zero pixels changed" constraint — guaranteed by construction,
+   the mirror is never the rendered copy, but prove it): flicker=0 bloom=0 bloomday=0,
+   AcmeSky fixed time (ACMESKY_SKY_TIME already pins it in acdt-inject.bat), same
+   spawn spot, shot with diet=0 → relaunch diet=3 → shot → byte-diff. My two diet-on
+   shots were pixel-stable; the diet-off comparison hit the Account-In-Use ghost
+   session (needs ~1 min gap after kill before relaunch — runbook says so).
+2. **Device-reset pass**: in-world resolution change + UAC prompt with diet=3 —
+   decomp says ChangePresentation runs the full purge/restore (valid-DID from DAT,
+   merges via ResetDetailTexturing re-merge), live-untested.
+3. Then the 1%‑low victory lap: arm-D tour vs arm A on the frametime lines.
+
+Notes for the next session: acdt-do.ps1's CHAT did not reach the game today (tour
+SChat works; do.ps1 focus+type silently lost — cost an hour, use the tour or fix
+do.ps1). `cmd`'s `echo x=0>> file` eats the `0` (fd redirect) — use PowerShell for
+cfg edits. Chorizite log did NOT rotate between same-morning sessions — slice by the
+last "acmelights: initialized" line. score_frametime.py + all arm logs:
+/mnt/wbterminal2/crashdump-12356/analysis-0824/.
