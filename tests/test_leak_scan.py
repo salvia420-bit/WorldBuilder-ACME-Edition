@@ -358,6 +358,43 @@ class TestThirdPartyNoiseSuppression(ScanCase):
                          name="vendor-THIRD-PARTY-NOTICES.TXT")
 
 
+class TestMangledNamesAreNotAddresses(ScanCase):
+    """
+    A C++/CLI mangled name contains a perfect e-mail shape. Microsoft's own
+    System.Printing.dll (pulled in by WPF, scanned as a zzpatcher pre-bundle
+    input) carries seven of them. The sweep must ignore those WITHOUT going
+    blind to a real address in any of the forms one actually appears in.
+    """
+
+    MANGLED = "??__E?A0x132e1b53@vc.cppcli.attributes@SA_Yes@@YMXXZ"
+
+    def test_cppcli_mangled_name_is_not_a_hit(self):
+        self.assertClean(self.MANGLED)
+
+    def test_mangled_name_in_utf16_is_not_a_hit(self):
+        self.assertClean(self.MANGLED, encoding="utf-16-le")
+
+    def test_dollar_prefixed_mangling_is_not_a_hit(self):
+        self.assertClean("$A0x99ffee@vc.cppcli.attributes")
+
+    # --- the paired must-still-fail cases, one per real-world shape ---
+
+    def test_address_after_whitespace_still_leaks(self):
+        self.assertLeaks("contact salvia420@gmail.com today")
+
+    def test_address_in_angle_brackets_still_leaks(self):
+        self.assertLeaks("write to <bob.smith@example.co.uk> please")
+
+    def test_address_after_equals_still_leaks(self):
+        self.assertLeaks("mail=jane+tag@sub.domain.org")
+
+    def test_address_at_start_of_file_still_leaks(self):
+        self.assertLeaks("owner@example.com is the owner")
+
+    def test_address_in_utf16_still_leaks(self):
+        self.assertLeaks("contact salvia420@gmail.com", encoding="utf-16-le")
+
+
 class TestScannerFileHygiene(unittest.TestCase):
     """
     The scanner must stay auditable with the tools people audit it with.

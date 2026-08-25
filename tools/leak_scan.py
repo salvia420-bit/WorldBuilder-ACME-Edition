@@ -117,7 +117,17 @@ def _email_rx(wide):
     tld = ch(r"[a-z]", "{2,24}")
     # Boundary guards. Fixed width (1 byte narrow / 2 bytes wide), which is all
     # Python's lookbehind supports, and all that is needed.
-    before = f"(?<!{ch(r'[A-Za-z0-9._%+@-]')})"
+    # '?' and '$' are in the exclusion set for PRECISION, not politeness: a C++/CLI
+    # mangled name is a dense run of them, and Microsoft's own System.Printing.dll
+    # (pulled in by WPF, and therefore scanned as a zzpatcher pre-bundle input)
+    # contains "??__E?A0x132e1b53@vc.cppcli.attributes@SA_Yes@@YMXXZ" seven times.
+    # The middle of that parses as local="A0x132e1b53", labels="vc.cppcli.",
+    # tld="attributes" - a perfect e-mail shape that is not an address. Every such
+    # run is preceded by '?' or '$', and a REAL address never is: prose puts a
+    # space or '<' there, a URL query puts '=', a binary puts a NUL or a length
+    # byte. Excluding them kills the whole mangled-name class without weakening
+    # the sweep - "?" before an address is not a thing that happens.
+    before = f"(?<!{ch(r'[A-Za-z0-9._%+@?$-]')})"
     # Only an alphanumeric may not follow: a trailing "." or "-" is prose or
     # punctuation ("write to bob@example.com."), and excluding those here would
     # turn the single most common way an address appears into a false negative.
