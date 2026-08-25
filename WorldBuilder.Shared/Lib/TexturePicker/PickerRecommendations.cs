@@ -8,8 +8,8 @@ using System.Text.Json.Serialization;
 namespace WorldBuilder.Shared.Lib.TexturePicker {
     /// <summary>
     /// X-track texture-picker input contract — <c>picker-recommendations.json</c>, produced by the
-    /// Python ranking pipeline (X-track task #2) at
-    /// <c>/mnt/wbterminal2/pbr-terrain/picker/picker-recommendations.json</c>.
+    /// Python ranking pipeline (X-track task #2) and read from the picker directory
+    /// (<see cref="TexturePickerPaths.PickerDirectory"/>).
     ///
     /// Every member is a PROPERTY, never a field: System.Text.Json silently drops public fields
     /// unless <c>IncludeFields</c> is set, which would round-trip every score/repeat factor to 0

@@ -23,8 +23,12 @@ namespace WorldBuilder.Shared.Lib.TexturePicker {
     /// deliberately NOT implemented here (v0 is offline / no network).
     /// </summary>
     public class CandidateImageResolver {
-        /// <summary>Default root of the locally downloaded CC0 sets (ambientCG only).</summary>
-        public const string DefaultSetsRoot = "/mnt/wbterminal2/pbr-terrain/statics-x3/sets";
+        /// <summary>
+        /// Default root of the locally downloaded CC0 sets (ambientCG only), resolved at run time
+        /// by <see cref="TexturePickerPaths.SetsRoot"/>. Deliberately NOT a <c>const</c>: a const
+        /// path is baked into every consuming assembly's string heap and shipped to users.
+        /// </summary>
+        public static string DefaultSetsRoot => TexturePickerPaths.SetsRoot;
 
         /// <summary>The <c>source</c> value the ranking pipeline writes for ambientCG assets.</summary>
         public const string SourceAmbientCg = "ambientcg";

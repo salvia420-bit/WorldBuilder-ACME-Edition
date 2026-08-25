@@ -13,8 +13,12 @@ namespace WorldBuilder.Shared.Lib.TexturePicker {
     /// observable wrapper: it owns Bitmaps and PropertyChanged, this owns the decisions.
     /// </summary>
     public class TexturePickerSession {
-        /// <summary>Canonical picker data directory for the X-track.</summary>
-        public const string DefaultPickerDirectory = "/mnt/wbterminal2/pbr-terrain/picker";
+        /// <summary>
+        /// Canonical picker data directory for the X-track, resolved at run time by
+        /// <see cref="TexturePickerPaths.PickerDirectory"/>. Deliberately NOT a <c>const</c>:
+        /// a const path is baked into every consuming assembly's string heap and shipped to users.
+        /// </summary>
+        public static string DefaultPickerDirectory => TexturePickerPaths.PickerDirectory;
         public const string RecommendationsFileName = "picker-recommendations.json";
         public const string PicksFileName = "picker-picks.json";
 

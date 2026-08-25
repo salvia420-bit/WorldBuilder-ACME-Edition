@@ -653,3 +653,10 @@ fleet-out/
 # tools/bc1ref — build outputs (sources committed; see tools/bc1ref/build.sh)
 tools/bc1ref/bin/
 tools/bc1ref/obj/
+
+# Machine-local texture-picker data roots (WorldBuilder.Shared/Lib/TexturePicker/
+# TexturePickerPaths.cs). These paths used to be `const string` absolutes that
+# compiled straight into the shipped WorldBuilder.Shared.dll; they now come from
+# the environment or from this file, which must never be committed.
+texturepicker.local.json
+**/texturepicker.local.json

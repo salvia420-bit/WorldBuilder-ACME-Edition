@@ -8,7 +8,8 @@ using System.Text.Json.Serialization;
 namespace WorldBuilder.Shared.Lib.TexturePicker {
     /// <summary>
     /// X-track texture-picker output contract — <c>picker-picks.json</c>, the human's decisions,
-    /// canonically at <c>/mnt/wbterminal2/pbr-terrain/picker/picker-picks.json</c>.
+    /// written as <c>picker-picks.json</c> in the picker directory
+    /// (<see cref="TexturePickerPaths.PickerDirectory"/>).
     ///
     /// Keyed by retail RenderSurface DID ("0x06003C25"). A SKIP is recorded as an entry with
     /// <see cref="PickerPick.Skipped"/> = true and a null <see cref="PickerPick.AssetId"/>, so the

@@ -465,8 +465,9 @@ public class TexturePickerTests {
 
     /// <summary>
     /// The contract is only worth anything if it parses the file the Python pipeline actually
-    /// writes. This is the one test that reads /mnt/wbterminal2 — when that mount is not present
-    /// (a fresh checkout, CI) it self-skips rather than failing for an unrelated reason.
+    /// writes. This is the one test that reads the real picker data volume — when it is not
+    /// configured/mounted (a fresh checkout, CI) it self-skips rather than failing for an
+    /// unrelated reason.
     /// </summary>
     [Fact]
     public void RealRecommendationsFile_ParsesWithTheFullContract() {
@@ -512,7 +513,7 @@ public class TexturePickerTests {
     private const string NullAxisJson = """
     {
       "version": 1,
-      "pool": "/mnt/wbterminal2/pbr-terrain/cc0-pool",
+      "pool": "pbr-terrain/cc0-pool",
       "rows": [
         {
           "rsId": "0x06003CB9",
