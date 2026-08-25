@@ -353,7 +353,33 @@ namespace AcmeRedline {
             if (_settings.OverlayEnabled == on) return;
             _settings.OverlayEnabled = on;
             ApplyEnabled(on);
+            PersistSettings();
             _log.LogInformation("redline: {State} by {Source}", on ? "enabled" : "disabled", source);
+        }
+
+        /// <summary>
+        /// Write settings.json NOW rather than waiting for unload.
+        ///
+        /// Chorizite persists ISerializeSettings only on a clean unload
+        /// (AssemblyPluginInstance.cs:104 -> TrySerializeSettings -> TrySerializeType, which
+        /// writes DataDirectory/settings.json using this same JsonTypeInfo). That is exactly
+        /// the wrong moment for a master OFF switch: the likeliest reason someone types
+        /// /redline off is that something is going wrong, and if the client then dies the
+        /// choice is lost and the tool comes back on. Same file, same serializer, so the
+        /// eager write cannot diverge from the unload write — it only happens sooner.
+        /// </summary>
+        private void PersistSettings() {
+            try {
+                var dir = DataDirectory;
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, "settings.json"),
+                    System.Text.Json.JsonSerializer.Serialize(
+                        _settings, RedlineJsonContext.Default.RedlineSettings));
+            }
+            catch (Exception ex) {
+                // Not fatal: the unload path will still write it.
+                _log.LogDebug(ex, "redline: could not persist settings.json immediately");
+            }
         }
 
         /// <summary>
@@ -565,6 +591,7 @@ namespace AcmeRedline {
                         return;
                     }
                     _settings.Author = rest;
+                    PersistSettings();
                     _panel?.RefreshAll();
                     Say($"redline: reports will be filed as \"{rest}\".");
                     return;
