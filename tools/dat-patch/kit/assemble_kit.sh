@@ -150,8 +150,11 @@ ON LINUX / macOS / WINE
      python3 acme-patch-client.py --check-kit  before you play: verifies the
                                                dats and the client patch
   then launch with  ./play.sh -h <server> -p 9000 -a <account> -v <password>
-  (it re-runs the install check first, like play.bat), or launch acclient.exe
-  through wine the way you normally do.
+  (it re-runs the install check first, like play.bat, adds -rodat, and sets the
+  KeystoneIMEUI Wine DLL override that world entry needs). If you launch
+  acclient.exe through wine yourself instead, set that override too --
+  WINEDLLOVERRIDES="KeystoneIMEUI=" -- or clicking ENTER at character select
+  fails with "Could not initialize Direct3D". See INSTALL-LINUX-WINE.md.
 
 IF YOU USE ANOTHER LAUNCHER (ThwargLauncher, Decal, a shortcut...)
   Those start acclient.exe directly, so the install check never runs. The game

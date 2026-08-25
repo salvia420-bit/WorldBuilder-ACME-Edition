@@ -4,12 +4,14 @@
 # acclient.exe carrying the ACME patch set - an unpatched exe never mounts
 # client_highres.dat, which after the HIFI split means silently missing textures.
 # Run from your Asheron's Call install folder:
-#   ./play.sh -h <server> -p 9000 -a <account> -v <password> -rodat
-# ALL arguments are passed to acclient.exe verbatim (play.bat behaviour; add
-# -rodat yourself as the install guide shows). Env:
+#   ./play.sh -h <server> -p 9000 -a <account> -v <password>
+# Your arguments are passed to acclient.exe verbatim, plus two things this script
+# adds for you unless you override them (see below): -rodat, and a Wine DLL
+# override that keeps the client's own IME hook from breaking world entry. Env:
 #   WINEPREFIX  wine prefix       (default: ~/acwine)
 #   WINE        wine binary       (default: wine)
 #   ACME_KIT_CHECK_ONLY=1  verify and print KIT-OK, never launch (gate/CI mode)
+#   WINEDLLOVERRIDES  extra overrides; ours is PREPENDED, yours still apply
 set -eu
 cd "$(dirname "$0")"
 
@@ -62,4 +64,32 @@ if [ "${ACME_KIT_CHECK_ONLY:-}" = "1" ]; then
 fi
 WINEPREFIX="${WINEPREFIX:-$HOME/acwine}"
 export WINEPREFIX
+
+# The client's own KeystoneIMEUI.dll (its input-method-editor hook, shipped with
+# retail alongside acclient.exe) breaks IDirect3DDevice9::Reset() under Wine.
+# Entering the world resets the device; the reset fails with D3DPOOL_DEFAULT
+# resources still alive and the client shows "Could not initialize Direct3D.
+# Please ensure that DirectX 9.0 or higher is installed." Character select renders
+# fine beforehand, so it reads like a login fault. An EMPTY override tells Wine
+# never to load the module - the file stays on disk, so the same install still
+# works if you boot it on Windows. Bisected across all 17 retail support DLLs on
+# 2026-08-25; UserPreferences.ini's UseIME=False does NOT avoid it.
+# Prepended, never clobbered: a user's own WINEDLLOVERRIDES still applies.
+if [ -n "${WINEDLLOVERRIDES:-}" ]; then
+    WINEDLLOVERRIDES="KeystoneIMEUI=;$WINEDLLOVERRIDES"
+else
+    WINEDLLOVERRIDES="KeystoneIMEUI="
+fi
+export WINEDLLOVERRIDES
+
+# -rodat opens the dats read-only: it is what lets several clients share one dat
+# set, and it stops a server's DDD "repair" from overwriting your patched dats.
+# The install guide's launch line shows it, so add it when the caller did not -
+# and never twice, since an explicit "-rodat off" must still win.
+HAS_RODAT=0
+for a in "$@"; do
+    case "$a" in -rodat) HAS_RODAT=1; break;; esac
+done
+[ "$HAS_RODAT" = "1" ] || set -- "$@" -rodat
+
 exec "${WINE:-wine}" acclient.exe "$@"
