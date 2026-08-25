@@ -116,7 +116,7 @@ separate exe):
 
 ```sh
 cd ~/ac
-WINEPREFIX=~/acwine wine acclient.exe -h <server-address> -p 9000 -a <account> -v <password> -rodat
+WINEPREFIX=~/acwine WINEDLLOVERRIDES="KeystoneIMEUI=" wine acclient.exe -h <server-address> -p 9000 -a <account> -v <password> -rodat
 ```
 
 Replace `<server-address>`, `<account>`, `<password>` with your own. The game
@@ -127,17 +127,22 @@ to enter the world. That's it.
 > client patch) and then launches through wine:
 > `./play.sh -h <server-address> -p 9000 -a <account> -v <password>`
 >
-> Two things to know about `play.sh` (observed 2026-08-25): it does **not** add
-> `-rodat`, while the raw command above does — pass it yourself if you want the
-> dats opened read-only. And its `KIT-OK` line does not survive a shell
+> `play.sh` adds two things to whatever you pass it, so you don't have to:
+> `-rodat` (unless you already passed a `-rodat` of your own), and the
+> `KeystoneIMEUI` Wine DLL override that world entry needs — see
+> [Troubleshooting](#troubleshooting-dialogs-and-errors). Your own
+> `WINEDLLOVERRIDES` still applies; ours is prepended, not substituted.
+>
+> One wrinkle (observed 2026-08-25): its `KIT-OK` line does not survive a shell
 > redirect (`> log 2>&1` captures only the client's ALSA chatter), so read the
 > check result on screen, or run `python3 acme-patch-client.py --check-kit`
 > separately when you need it in a log.
 
 If character select appears but clicking ENTER gives **"Could not initialize
-Direct3D"**, see that entry under
-[Troubleshooting](#troubleshooting-dialogs-and-errors) — on the DXVK path it is a
-one-line `dxvk.conf` fix.
+Direct3D"**, you are launching without that override — `play.sh` sets it,
+`wine zzpatcher.exe --fix-wine --apply` sets it permanently, and the full
+explanation is under
+[Troubleshooting](#troubleshooting-dialogs-and-errors).
 
 ---
 
@@ -295,21 +300,57 @@ common "I only copied the exe and dats" mistake.
 **"Could not initialize Direct3D. Please ensure that DirectX 9.0 or higher is
 installed."** — appears in a *Game Error* box the moment you click ENTER at
 character select; the login screen and character list worked fine, so it looks
-like a server problem. It isn't. On entering the world the client calls
-`IDirect3DDevice9::Reset()` while three `D3DPOOL_DEFAULT` resources are still
-alive. Windows drivers tolerate that; DXVK by default refuses the reset and logs
-`Device reset failed because device still has alive losable resources: … Remaining
-resources: 3`, and the client reports it as the message above. **Fix:** add
+like a server problem. It isn't, and it is not your GPU either.
+
+The cause is one of the retail client's **own** support DLLs:
+`KeystoneIMEUI.dll`, its input-method-editor hook, which sits next to
+`acclient.exe` in every full retail install. Entering the world makes the client
+call `IDirect3DDevice9::Reset()`; with that DLL loaded the reset fails with
+`D3DPOOL_DEFAULT` resources still alive, and the client reports it as the message
+above. Setting `UseIME=False` in `UserPreferences.ini` does **not** avoid it —
+the DLL does its damage just by being loaded.
+
+**Fix — tell Wine not to load it.** Your file is left alone on disk, so the same
+install still works if you boot it on Windows.
+
+`play.sh` already does this for you; if you launch that way there is nothing to
+do. Otherwise, either run:
+
+```sh
+wine zzpatcher.exe --fix-wine --apply
+```
+
+or set it yourself, for one launch:
+
+```sh
+WINEDLLOVERRIDES="KeystoneIMEUI=" wine acclient.exe -h <server> -p 9000 -a <account> -v <password> -rodat
+```
+
+or permanently in the prefix — an **empty** value means "never load this":
+
+```sh
+WINEPREFIX=~/acwine wine reg add 'HKCU\Software\Wine\DllOverrides' /v KeystoneIMEUI /t REG_SZ /d "" /f
+```
+
+(The same thing via the GUI: `winecfg` → *Libraries* → type `KeystoneIMEUI` →
+**Add** → select it → **Edit** → **Disable**.)
+
+Verified 2026-08-25 by bisecting all 17 retail support DLLs on the shipped r10
+archive: holding back only `KeystoneIMEUI.dll` reaches the world, putting it back
+fails, and the override reaches the world with all 17 files present.
+
+*If you are on the DXVK backend*, there is a second, independent way to hit the
+same dialog — DXVK is stricter than WineD3D about that reset and logs `Device
+reset failed because device still has alive losable resources: … Remaining
+resources: 3`. Add
 
 ```ini
 d3d9.countLosableResources = False
 ```
 
 to the `dxvk.conf` next to your `acclient.exe` (full file contents in
-[Advanced: DXVK](#advanced-dxvk-vulkan-as-an-alternate-renderer)), or run
-`wine zzpatcher.exe --fix-wine --apply`. Verified 2026-08-25: with the key the
-same build reaches the world; without it, it does not. This key is a DXVK
-setting — it applies to the DXVK path only, and has no WineD3D equivalent.
+[Advanced: DXVK](#advanced-dxvk-vulkan-as-an-alternate-renderer)). That key is a
+DXVK setting with no WineD3D equivalent; `--fix-wine --apply` sets it too.
 
 **Client exits instantly with no window**: usually the wrong working directory —
 `cd` into the game folder first (the client finds its dats and DLLs by working
@@ -329,7 +370,7 @@ Direct3D entry in Troubleshooting above):
 
 ```sh
 cd ~/ac
-WINEPREFIX=~/acwine WINEDEBUG=+seh wine acclient.exe -h <server> -p 9000 -a <acct> -v <pw> -rodat > ~/ac-crash.log 2>&1
+WINEPREFIX=~/acwine WINEDLLOVERRIDES="KeystoneIMEUI=" WINEDEBUG=+seh wine acclient.exe -h <server> -p 9000 -a <acct> -v <pw> -rodat > ~/ac-crash.log 2>&1
 ```
 
 `+seh` logs every Windows-side exception. After the crash:
@@ -408,7 +449,7 @@ DXVK selecting the real GPU and skipping the software adapter):
 3. Launch with the override:
 
 ```sh
-WINEPREFIX=~/acwine WINEDLLOVERRIDES=d3d9=n wine acclient.exe -h <server> -p 9000 -a <acct> -v <pw> -rodat
+WINEPREFIX=~/acwine WINEDLLOVERRIDES="KeystoneIMEUI=;d3d9=n" wine acclient.exe -h <server> -p 9000 -a <acct> -v <pw> -rodat
 ```
 
 `d3d9=n` means "use the native (DXVK) d3d9.dll". Remove the override to go back
@@ -492,7 +533,10 @@ Chorizite/` is the runtime). zzpatcher's dat-side commands — `--check-dats`,
 
 The release's plugin-manager/tuner GUI (`zzpatcher.exe`) does **not** run under
 Wine — WPF dies with a stack overflow during startup (tested wine 8.0; don't
-re-tread it). Its **headless commands run fine**, and they automate this doc:
+re-tread it). Because of that, running it with **no arguments under Wine prints
+the command table** rather than trying to open a window (on Windows, no arguments
+still opens the GUI as normal). Its **headless commands run fine**, and they
+automate this doc:
 
 ```sh
 cd /path/to/Chorizite
@@ -500,8 +544,9 @@ WINEPREFIX=~/acwine wine zzpatcher.exe --fix-wine           # CHECK the Wine che
 WINEPREFIX=~/acwine wine zzpatcher.exe --fix-wine --apply   # apply the safe fixes
 ```
 
-`--fix-wine` checks the four Wine items this guide describes by hand — the
-`VideoMemorySize=2048` registry cap, `dxvk.conf`'s required
+`--fix-wine` checks the five Wine items this guide describes by hand — the
+`VideoMemorySize=2048` registry cap, the `KeystoneIMEUI` DLL override that world
+entry needs, `dxvk.conf`'s required
 `d3d9.textureMemory = 0` **and `d3d9.countLosableResources = False`**, the plugin
 runtime's `Temp\chorizite` dir, and that
 AcmeSky is in baked (not live) mode — printing one
@@ -580,19 +625,32 @@ For whoever maintains this after a hiatus:
   this counter is a WineD3D facility: under DXVK use `DXVK_HUD=fps` instead.
 - 2026-08-25 re-test against the **shipped r10 archive** (fresh prefix, exe patched
   from pristine retail by the kit patcher, the 17-DLL retail support set): install,
-  `--check-kit` KIT-OK, login and character list all passed; world entry failed on
-  WineD3D and succeeded on DXVK 2.4.1 once `d3d9.countLosableResources = False`
-  was set. No fps was captured in that session, so the table above is still the
+  `--check-kit` KIT-OK, login and character list all passed; world entry initially
+  failed. No fps was captured in that session, so the table above is still the
   only measured performance data.
-- **Open question, do not guess at it:** the 08-24 gauntlet entered the world on
-  WineD3D; the 08-25 re-test did not. At least three things differ and none has
-  been isolated: the prefix (`~/acwine`, which also carries a
-  `*d3dcompiler_47=native` override, vs a fresh one), the exe (the box's canonical
-  `acclient.eor.patched.exe` vs one produced by the shipped `acme-patch-client.py`
-  from pristine retail), and the enter-world input (the gate scripts
-  double-clicked the character at `975,731` *and then* clicked Enter at
-  `1222,903`; the re-test single-clicked Enter only). Whoever picks this up should
-  vary one at a time.
+- **Resolved 2026-08-25 — `KeystoneIMEUI.dll` breaks world entry under Wine.**
+  Why the 08-24 gauntlet passed and the 08-25 re-test did not: the gauntlet ran
+  from a directory holding only `acclient.exe` and the dats, with **none** of the
+  retail support DLLs present. A real player patches over a real retail install,
+  which has all ~38 of them — so the passing gate tested a configuration no player
+  has. Bisected by holding DLLs back one group at a time, each arm a full launch +
+  ENTER + screenshot (a >2 MB screenshot is the rendered world, ~870 KB is the
+  error dialog):
+  all 17 present → fail · all 17 removed → world · `dbghelp`+`avicap32` held →
+  fail · the five MSVC runtimes held → fail · `Keystone`+`KeystoneIMEUI` held →
+  world · **only `KeystoneIMEUI` held → world** · all 17 present with
+  `WINEDLLOVERRIDES="KeystoneIMEUI="` → **world**.
+  Killed along the way, so nobody re-treads them: the patched exe (byte-identical
+  to the box's canonical `acclient.eor.patched.exe`, md5 `061106ec…`), the prefix
+  (a run in `~/acwine` itself still failed, so `*d3dcompiler_47=native` is not it),
+  the enter-world input (the gate's `975,731` double-click + `1222,903` Enter
+  failed too), texture detail, and the dat set (the older 08-23/08-21 box dat pair
+  failed the same way — and, worth noting, reached character select fine against a
+  server serving *different* dats, which is `highres-advertise-cap` + `-rodat`
+  working as designed).
+  The fix ships three ways: `play.sh` sets the override, `--fix-wine --apply`
+  writes it to the prefix registry, and the Troubleshooting entry above tells a
+  manual user how.
 - History of the Wine-specific crash hunt (killed hypotheses list, so nobody
   re-treads them: VA exhaustion, d3d9 format/pitch mismatch, detail level,
   `-rodat`, win32-vs-win64 prefix, esync, audio, DXVK-vs-WineD3D, oversized
