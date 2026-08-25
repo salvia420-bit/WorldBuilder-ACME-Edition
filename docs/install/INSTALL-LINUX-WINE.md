@@ -9,11 +9,12 @@ the deep sections exist so that if something breaks, you can fix it yourself.
 - **A full, working retail Asheron's Call install** (the 2015 End-of-Retail
   client). This is the critical bit: the ACME kit is a *patch over your own
   install*, not a whole game. Your install folder must already contain
-  `acclient.exe` **and its ~38 support DLLs** (`corestrings.dll`, `Keystone.dll`,
-  `MSVCP71.dll`, `chatclient.dll`, …). If you only have `acclient.exe` and the
-  dats in a bare folder, the client starts but shows placeholder text everywhere
-  (see the `corestrings.dll` note in Troubleshooting) — get a complete install
-  first.
+  `acclient.exe` **and its support DLLs** (`corestrings.dll`, `Keystone.dll`,
+  `MSVCP71.dll`, `chatclient.dll`, …) — a full retail install carries ~38 of them,
+  and a 17-file set was enough to reach the world in the 2026-08-25 test. If you
+  only have `acclient.exe` and the dats in a bare folder, the client starts but
+  shows placeholder text everywhere (see the `corestrings.dll` note in
+  Troubleshooting) — get a complete install first.
 - The ACME kit you downloaded. It ships **three** dats (`client_portal.dat`,
   `client_highres.dat`, `client_cell_1.dat`), the client patcher
   (`acme-patch-client.py`), and `play.bat`/README — **no game executable and no
@@ -125,6 +126,18 @@ to enter the world. That's it.
 > Tip: the archive ships `play.sh` — it re-runs the install check (dat sizes +
 > client patch) and then launches through wine:
 > `./play.sh -h <server-address> -p 9000 -a <account> -v <password>`
+>
+> Two things to know about `play.sh` (observed 2026-08-25): it does **not** add
+> `-rodat`, while the raw command above does — pass it yourself if you want the
+> dats opened read-only. And its `KIT-OK` line does not survive a shell
+> redirect (`> log 2>&1` captures only the client's ALSA chatter), so read the
+> check result on screen, or run `python3 acme-patch-client.py --check-kit`
+> separately when you need it in a log.
+
+If character select appears but clicking ENTER gives **"Could not initialize
+Direct3D"**, see that entry under
+[Troubleshooting](#troubleshooting-dialogs-and-errors) — on the DXVK path it is a
+one-line `dxvk.conf` fix.
 
 ---
 
@@ -144,7 +157,13 @@ completion with **zero crashes and zero page faults** on this exact setup (plain
 client, no plugin pack — that's the tested Linux posture). Per-town fps ranged
 62–295. If your numbers are wildly below this (especially outdoors), go to
 [Low fps outdoors](#low-fps-outdoors--the-checklist) below — it is almost always
-one of two fixable environment problems.
+one of two fixable environment problems. (Source:
+`docs/dat-patch/REPORT-2026-08-24-wine-ship-gate.md`; the run used the long-lived
+`~/acwine` prefix and the box's canonical patched exe.)
+
+> Note: these are numbers from that specific 2026-08-24 run — a long-lived prefix
+> and the dev box's own patched exe. Treat them as a reference point for a healthy
+> setup, not a guarantee for every machine.
 
 Memory: the client uses 2.6–3.2 GB in towns. The retail exe is *already*
 large-address-aware, and 64-bit Wine gives a 32-bit LAA process ~4 GB — this is
@@ -273,6 +292,25 @@ folder. Run from your **full retail install folder**, which supplies
 `corestrings.dll` and ~37 other base DLLs (see "What you need"). This is the most
 common "I only copied the exe and dats" mistake.
 
+**"Could not initialize Direct3D. Please ensure that DirectX 9.0 or higher is
+installed."** — appears in a *Game Error* box the moment you click ENTER at
+character select; the login screen and character list worked fine, so it looks
+like a server problem. It isn't. On entering the world the client calls
+`IDirect3DDevice9::Reset()` while three `D3DPOOL_DEFAULT` resources are still
+alive. Windows drivers tolerate that; DXVK by default refuses the reset and logs
+`Device reset failed because device still has alive losable resources: … Remaining
+resources: 3`, and the client reports it as the message above. **Fix:** add
+
+```ini
+d3d9.countLosableResources = False
+```
+
+to the `dxvk.conf` next to your `acclient.exe` (full file contents in
+[Advanced: DXVK](#advanced-dxvk-vulkan-as-an-alternate-renderer)), or run
+`wine zzpatcher.exe --fix-wine --apply`. Verified 2026-08-25: with the key the
+same build reaches the world; without it, it does not. This key is a DXVK
+setting — it applies to the DXVK path only, and has no WineD3D equivalent.
+
 **Client exits instantly with no window**: usually the wrong working directory —
 `cd` into the game folder first (the client finds its dats and DLLs by working
 directory).
@@ -284,8 +322,10 @@ directory).
 
 ## Crashes: how to capture something useful
 
-The shipped configuration ran the full stress tour crash-free, so a crash on
-your machine is most likely environmental — but capture it so it can be fixed:
+The 2026-08-24 configuration ran the full stress tour crash-free, so a crash on
+your machine is most likely environmental — but capture it so it can be fixed
+(if you cannot get *into* the world at all, that is a different problem: see the
+Direct3D entry in Troubleshooting above):
 
 ```sh
 cd ~/ac
@@ -356,7 +396,9 @@ doesn't recognise.
 The measured-good default is Wine's built-in D3D9→OpenGL (everything above). If
 that path misbehaves on your driver — or you just want to try Vulkan — DXVK's
 D3D9 is a well-trodden community path for this client and is proven to
-hardware-accelerate it (validated on the dev T4 with DXVK 2.4.1):
+hardware-accelerate it (validated on the dev T4 with DXVK 2.4.1, and re-confirmed
+2026-08-25 entering the world against the shipped r10 kit on a fresh prefix, with
+DXVK selecting the real GPU and skipping the software adapter):
 
 1. Install 32-bit Vulkan drivers (`lib32-vulkan-icd-loader` + your GPU's 32-bit
    Vulkan package on Arch; `mesa-vulkan-drivers:i386` on Debian/Ubuntu;
@@ -372,15 +414,25 @@ WINEPREFIX=~/acwine WINEDLLOVERRIDES=d3d9=n wine acclient.exe -h <server> -p 900
 `d3d9=n` means "use the native (DXVK) d3d9.dll". Remove the override to go back
 to WineD3D.
 
-**Required for the DXVK path:** a `dxvk.conf` next to the exe containing
+**Required for the DXVK path:** a `dxvk.conf` next to the exe containing **both**
+of these lines
 
 ```ini
 d3d9.textureMemory = 0
+d3d9.countLosableResources = False
 ```
 
-Without it the game **crashes outdoors** under DXVK (32-bit texture-paging tmpfs
-exhaustion). Keep this line. Optionally add `d3d9.samplerAnisotropy = 16` in the
-same file for sharper ground textures at grazing angles.
+`d3d9.textureMemory = 0` stops the game **crashing outdoors** (32-bit
+texture-paging tmpfs exhaustion). `d3d9.countLosableResources = False` is what
+lets you **enter the world at all**: the client calls `Reset()` with three
+`D3DPOOL_DEFAULT` resources still alive, and DXVK's default is to refuse that
+reset — which surfaces as "Could not initialize Direct3D" right after you click
+ENTER (see Troubleshooting). Keep both lines. Optionally add
+`d3d9.samplerAnisotropy = 16` in the same file for sharper ground textures at
+grazing angles.
+
+`wine zzpatcher.exe --fix-wine --apply` writes both keys for you (add `--dxvk` if
+the file does not exist yet).
 
 The `VideoMemorySize` registry key is a WineD3D setting and does not affect DXVK,
 so DXVK can double as a cross-check: if DXVK is fine and WineD3D is slow, your
@@ -450,7 +502,8 @@ WINEPREFIX=~/acwine wine zzpatcher.exe --fix-wine --apply   # apply the safe fix
 
 `--fix-wine` checks the four Wine items this guide describes by hand — the
 `VideoMemorySize=2048` registry cap, `dxvk.conf`'s required
-`d3d9.textureMemory = 0`, the plugin runtime's `Temp\chorizite` dir, and that
+`d3d9.textureMemory = 0` **and `d3d9.countLosableResources = False`**, the plugin
+runtime's `Temp\chorizite` dir, and that
 AcmeSky is in baked (not live) mode — printing one
 `WINEFIX <name> <verdict> <detail>` line each. Verdicts: `OK`, `MISSING`/`WRONG`
 (a real problem), or `ADVISORY-MISSING`/`ADVISORY-WRONG` for the situational
@@ -523,7 +576,23 @@ For whoever maintains this after a hiatus:
   `docs/dat-patch/HANDOFF-2026-08-17-EOD.md`, and the fleet runbook.
 - fps was measured with `WINEDEBUG=+fps` (WineD3D prints an `approx N fps` line
   per present interval to stderr) — useful for any player-side perf report too:
-  add `,+fps` to the `WINEDEBUG` value in the crash-capture command above.
+  add `,+fps` to the `WINEDEBUG` value in the crash-capture command above. Note
+  this counter is a WineD3D facility: under DXVK use `DXVK_HUD=fps` instead.
+- 2026-08-25 re-test against the **shipped r10 archive** (fresh prefix, exe patched
+  from pristine retail by the kit patcher, the 17-DLL retail support set): install,
+  `--check-kit` KIT-OK, login and character list all passed; world entry failed on
+  WineD3D and succeeded on DXVK 2.4.1 once `d3d9.countLosableResources = False`
+  was set. No fps was captured in that session, so the table above is still the
+  only measured performance data.
+- **Open question, do not guess at it:** the 08-24 gauntlet entered the world on
+  WineD3D; the 08-25 re-test did not. At least three things differ and none has
+  been isolated: the prefix (`~/acwine`, which also carries a
+  `*d3dcompiler_47=native` override, vs a fresh one), the exe (the box's canonical
+  `acclient.eor.patched.exe` vs one produced by the shipped `acme-patch-client.py`
+  from pristine retail), and the enter-world input (the gate scripts
+  double-clicked the character at `975,731` *and then* clicked Enter at
+  `1222,903`; the re-test single-clicked Enter only). Whoever picks this up should
+  vary one at a time.
 - History of the Wine-specific crash hunt (killed hypotheses list, so nobody
   re-treads them: VA exhaustion, d3d9 format/pitch mismatch, detail level,
   `-rodat`, win32-vs-win64 prefix, esync, audio, DXVK-vs-WineD3D, oversized
