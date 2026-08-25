@@ -1,5 +1,29 @@
 <Project>
   <PropertyGroup>
     <AvaloniaVersion>11.2.7</AvaloniaVersion>
+
+    <!--
+      Do not ship the build machine's directory layout.
+
+      Roslyn embeds the absolute path of every compiled source file in the assembly's RSDS debug
+      directory (and in any embedded/portable PDB reference), so a local build of this repo baked
+      the developer's real home directory into every single .dll and .exe we publish. PathMap
+      rewrites that prefix to "/_/" — the same placeholder the .NET SDK's own CI uses — which makes
+      the output disclose nothing about who built it.
+
+      $(MSBuildThisFileDirectory) is the directory holding THIS file, with a trailing separator, so
+      the mapping is repo-root-relative and works the same on every machine and in CI.
+
+      Deterministic=true is what makes that rewrite complete and reproducible: without it the
+      compiler is free to emit machine- and time-varying data, and two builds of the same source
+      would not agree. (It is the SDK default for most projects; setting it explicitly here means
+      the guarantee does not depend on a project-level override.)
+
+      tools/leak_scan.py is the gate that proves this held — it scans published binaries for
+      internal paths in both ASCII and UTF-16LE, and the release workflows run it between
+      `dotnet publish` and `makensis`.
+    -->
+    <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
+    <Deterministic>true</Deterministic>
   </PropertyGroup>
 </Project>
