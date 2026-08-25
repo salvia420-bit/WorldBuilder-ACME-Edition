@@ -600,8 +600,9 @@ granularity — see §5 stubs.)
 
 ### 4. My-reports + double-submit guard — **implemented**
 
-The panel's "my reports" list filters `QueueWriter.ReadOwnEntries` to the logged-in account
-(`AC.ACPlugin.Game.AccountName`) and shows each entry's derived status. `HandleSubmit` computes a
+The panel's "my reports" list filters `QueueWriter.ReadOwnEntries` to the configured reporter
+(`RedlineSettings.Author`, set with `/redline author <name>`; it used to come from
+`AC.ACPlugin.Game.AccountName`, see §7) and shows each entry's derived status. `HandleSubmit` computes a
 signature — kind + sorted target ids + trimmed prompt — and refuses a second identical submission in
 the same session (`_submittedSignatures`), so a double-click can't double-file.
 
@@ -757,12 +758,21 @@ csproj equivalents** wherever one exists in a compatible shape:
 
 The remaining three stay on NuGet, for concrete reasons:
 
-* **`Chorizite.Plugins.RmlUi`** — the vendored `RmlUiPlugin/RmlUi.csproj` sets
+* **`Chorizite.Plugins.RmlUi`** — compile-only, and as of 2026-08-25 an **optional** runtime
+  dependency (`manifest.json`: `"RmlUi@0.0.10?"`). It is resolved late, in `Initialize`, via
+  `IPluginManager.GetPlugin("RmlUi")` rather than by constructor injection, because
+  `AssemblyPluginInstance.ResolveParameter:236-243` throws for an `IPluginCore` parameter it
+  cannot satisfy — which would abort the plugin instead of degrading it. Every RmlUi type
+  reference lives behind `UI/RedlinePanelFactory.Create` (`[MethodImpl(NoInlining)]`), so with
+  no RmlUi installed the plugin runs HUD-only. The vendored `RmlUiPlugin/RmlUi.csproj` sets
   `GeneratePackageOnBuild=True` and runs a post-build `DeleteFiles` target, i.e. building it writes
   `.nupkg` and deletes files inside `external/`. It also `PackageReference`s `Chorizite.Core 0.0.13`,
   which would sit alongside the vendored Chorizite.Core project.
-* **`Chorizite.Plugins.AC`** — same shape (`ACPlugin/AC.csproj`), used only for
-  `Game.AccountName`.
+* **`Chorizite.Plugins.AC`** — **removed 2026-08-25.** It was referenced only for
+  `Game.AccountName`, and in exchange the AC plugin takes over the retail client's own UI:
+  `ACPlugin.cs:78-93` registers its own CharSelect and DatPatch screens and hooks tooltips, and
+  `:104-110` claims the client's `Indicators` root element. The reporter identity is now
+  `RedlineSettings.Author`.
 * **`Chorizite.DatReaderWriter`** — arrives transitively; see limitation 7 above.
 
 NuGet resolves the vendored **project** reference over the transitive **package** of the same name
@@ -797,7 +807,13 @@ For live-reload development, drop a `manifest.dev.json` beside `manifest.json`
 
 ## 9. Using it
 
-* **F8** toggles the panel.
+* **F8** — or **`/redline`** typed in the chat box — opens and closes the tool.
+* **`/redline on|off|toggle`** is the master switch: `off` hides the panel *and* drops the
+  overlay, the picking hooks and the D3D vtable detours, and the choice persists. `on` always
+  works, including on an install with no RmlUi, so the off switch can never strand you.
+* **`/redline status`** reports the state; **`/redline author <name>`** sets who reports are
+  filed under (default `unknown`).
+* The panel's title bar carries the same on/off switch and a close (`x`).
 * **Click** a surface to pick it (object + polygon + texture chain in one go).
 * **Shift-click** adds another texture to the selection; **shift-drag** draws a lasso.
 * **Ctrl-click** removes a target.
@@ -824,7 +840,8 @@ Persisted through `ISerializeSettings<RedlineSettings>`:
 |---|---|---|
 | `queueDir` | `""` → `<StorageDirectory>/AcmeRedline/redline` | Where `redline.jsonl`, `redline-status.jsonl` and `shots/` live. |
 | `kitMetaPath` | `""` → probe | Explicit path to `acme-meta.json`. |
-| `overlayEnabled` | `true` | Draw the overlay and enable picking. |
+| `author` | `"unknown"` | Who reports are filed as, and the key "my reports" filters on. Set in game with `/redline author <name>`. Replaces the old `AC.ACPlugin.Game.AccountName` read. |
+| `overlayEnabled` | `true` | **Master on/off.** Written by the panel's title-bar switch and by `/redline on\|off`. `false` = inert plugin: no picking, no overlay, no device hooks, no panel. |
 | `statusOverlayEnabled` | `false` | Tint by pipeline status. |
 | `worldHighlightEnabled` | `true` | Enable the IDirect3DDevice9 vtable hooks that draw the world-space highlight. Separate from `overlayEnabled` on purpose — a user chasing a graphics problem can turn just the hooks off without losing picking. |
 | `defaultSeverity` | `2` | Pre-selected severity. |
