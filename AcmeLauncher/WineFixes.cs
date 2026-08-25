@@ -137,7 +137,7 @@ namespace AcmeLauncher {
         //                                      resources") and the client shows "Could not
         //                                      initialize Direct3D". Character select works,
         //                                      so it looks like a server/login problem.
-        //                                      Verified on buildbox 2026-08-25.
+        //                                      Verified on a Tesla T4 Wine box, 2026-08-25.
         // Harmless when not using DXVK.
         private const string DxvkKey = "d3d9.textureMemory";
         private const string DxvkLosableKey = "d3d9.countLosableResources";
