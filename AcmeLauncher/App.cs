@@ -325,6 +325,14 @@ namespace AcmeLauncher {
                 return 2;
             }
 
+            // Under Wine there is NO GUI to fall back to: the WPF stack does not run
+            // (wine 8.0), so a bare `wine zzpatcher.exe` would fail to open a window and
+            // leave the user staring at nothing — and under Wine the CLI is the whole
+            // tool. Print the command table instead, which is what they need.
+            // Windows behaviour is deliberately unchanged: no arguments still opens the
+            // GUI, exactly as the help text and both install guides describe.
+            if (Platform.IsWine) { PrintHelp(); return 0; }
+
             // ---- GUI ----
             var app = new App();
             var win = Ui.Build(settings, back);
@@ -356,7 +364,8 @@ namespace AcmeLauncher {
 
         private static void PrintHelp() {
             Console.WriteLine(@"z-z patcher — plugin control panel + tuner + patcher for Asheron's Call (ACME).
-No arguments opens the GUI. Every GUI action is also a command below. ONE command
+No arguments opens the GUI on Windows; under Wine there is no GUI, so it prints
+this table. Every GUI action is also a command below. ONE command
 per run (two commands = exit 2); modifiers: --yes --apply --dxvk.
 The tool never logs in and never launches the game.
 
