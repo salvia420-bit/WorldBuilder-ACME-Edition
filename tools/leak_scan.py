@@ -47,12 +47,82 @@ LITERALS = [
     "100.116.47.66",
     # dev-box hostnames, users and paths
     "wbterminal",
-    "buildbox",
     "ac-dat-test",
     # the original ASCII text-gate patterns
     "/mnt/",
     "/home/",
+    # Windows and macOS home directories. The Linux "/home/" above only ever
+    # caught half the problem: a Windows build (the installer is built on
+    # Windows-targeting runners, and the launcher is a Windows app) bakes
+    # "C:\\Users\\<name>\\..." into project/publish paths, and a macOS build bakes
+    # "/Users/<name>/...". Both disclose a real person's account name.
+    # ":\\Users\\" rather than "C:\\Users\\" on purpose: it is drive-letter agnostic,
+    # so a D:/E: checkout is caught too, and it cannot match anything else -
+    # a colon immediately followed by \\Users\\ is a Windows absolute path, whatever
+    # its case, so this one is safe to fold.
+    ":\\Users\\",
 ]
+
+# Literals matched CASE-SENSITIVELY. Everything above is folded, which is right
+# for a path or a credential but wrong for a short lowercase word that is also a
+# legal fragment of an identifier: "buildbox" folded matches the metadata name
+# `BuildBoxGeometry` (WorldBuilder/Editors/Landscape/TransformGizmo.cs), so every
+# build of the editor tripped the gate on a method name. The dev box is spelled
+# `buildbox` in lower case everywhere it actually appears - hostnames, ssh
+# targets, paths - so matching case exactly keeps the coverage and drops the
+# false positive. Add to this list, not to LITERALS, whenever a pattern is a
+# short lowercase word rather than a structured path/credential.
+CASE_SENSITIVE_LITERALS = [
+    "buildbox",
+    # The macOS home prefix. Case-folded it matches the "/users/" path segment of
+    # any REST URL or JSON pointer ("https://api.example.com/v1/users/42"), which
+    # is common enough in shipped text and metadata to make the gate unpassable.
+    # macOS spells the real directory "/Users" with a capital U, always, so an
+    # exact-case match loses nothing.
+    "/Users/",
+]
+
+# ---- regex sweeps -----------------------------------------------------------
+# Some leaks have no fixed literal. An e-mail address is the one that matters
+# here: the repo owner's personal address appeared in a committed .patch file and
+# in a shell script, and no literal list can anticipate every address a future
+# script might embed. This is deliberately the ONLY regex, and it is tuned for
+# PRECISION, because the gate is fatal and also runs with --all-files over dats
+# and images, where random bytes readily look like "x@y.z":
+#   * local part 3-64 of the RFC-ish safe set, so single-character noise misses;
+#   * at least one 2-63 char domain label;
+#   * a LOWERCASE 2-24 letter TLD - mixed-case tails are the signature of binary
+#     noise, and a real address's domain is lower-case in every file we ship;
+#   * boundary guards on both ends so it cannot fire inside a longer token.
+# Nothing is case-folded here (unlike LITERALS), for exactly that reason.
+def _email_rx(wide):
+    r"""The e-mail sweep, compiled for ASCII/UTF-8 or for UTF-16LE raw bytes.
+
+    Both encodings come from ONE definition: in the wide form every single
+    character becomes `(?:<class>\x00)`, which is what a UTF-16LE literal looks
+    like on disk for any character in the ASCII range - and an e-mail address in
+    a .NET string literal is exactly that.
+
+    (This docstring is a RAW string on purpose. A plain "\x00" here would embed
+    an actual NUL byte in this file, and ripgrep skips NUL-containing files
+    during a directory walk - the scanner would then be invisible to the greps
+    people use to audit it.)
+    """
+    def ch(cls, quant=""):
+        return (f"(?:{cls}\\x00)" if wide else cls) + quant
+
+    local = ch(r"[A-Za-z0-9._%+\-]", "{3,64}")
+    at = ch(r"@")
+    label = "(?:" + ch(r"[A-Za-z0-9\-]", "{2,63}") + ch(r"\.") + ")+"
+    tld = ch(r"[a-z]", "{2,24}")
+    # Boundary guards. Fixed width (1 byte narrow / 2 bytes wide), which is all
+    # Python's lookbehind supports, and all that is needed.
+    before = f"(?<!{ch(r'[A-Za-z0-9._%+@-]')})"
+    # Only an alphanumeric may not follow: a trailing "." or "-" is prose or
+    # punctuation ("write to bob@example.com."), and excluding those here would
+    # turn the single most common way an address appears into a false negative.
+    after = f"(?!{ch(r'[A-Za-z0-9]')})"
+    return re.compile((before + local + at + label + tld + after).encode("ascii"))
 
 # The tailscale CGNAT range 100.64.0.0/10 gets its own anchored scan rather than
 # 64 more alternatives: `mm.find` on the 4-byte anchor "100." runs at memchr
@@ -72,6 +142,15 @@ ALLOWLIST = [
     # must not rely on this: the assemblers build them with -p:PathMap so they
     # embed /_/ instead of a real path.
     "/home/runner/work/",
+    # Same category, different upstream build machines. These are paths belonging
+    # to the AUTHORS of NuGet packages we consume, baked into THEIR shipped
+    # assemblies' RSDS debug directory. We do not compile these, cannot rebuild
+    # them with -p:PathMap, and they disclose nothing about us or our users.
+    # Verified against WorldBuilder.Windows/bin/Release/net8.0/win-x64/publish/:
+    #   MicroCom.Runtime.dll  (Avalonia's COM interop generator)
+    "/home/kekekeks/Projects/",
+    #   NAudio.dll, NAudio.Asio/Core/Midi/Wasapi/WinMM.dll  (audio stack)
+    "C:\\Users\\markh\\",
 ]
 
 BINARY_EXT = {".dll", ".exe", ".so", ".dylib", ".node", ".bin"}
@@ -96,6 +175,23 @@ _ASCII_RX = re.compile(
 _WIDE_RX = re.compile(
     b"(?:" + b"|".join(re.escape(s.encode("utf-16-le")) for s in LITERALS) + b")",
     re.IGNORECASE)
+
+_CS_ASCII_RX = re.compile(
+    b"(?:" + b"|".join(re.escape(s.encode("ascii"))
+                       for s in CASE_SENSITIVE_LITERALS) + b")")
+_CS_WIDE_RX = re.compile(
+    b"(?:" + b"|".join(re.escape(s.encode("utf-16-le"))
+                       for s in CASE_SENSITIVE_LITERALS) + b")")
+
+# The e-mail sweep, one per encoding, built once alongside the literal ones.
+_EMAIL_ASCII_RX = _email_rx(False)
+_EMAIL_WIDE_RX = _email_rx(True)
+
+# Every pattern that applies to a given encoding, in one place.
+_RX_BY_ENCODING = {
+    False: (_ASCII_RX, _CS_ASCII_RX, _EMAIL_ASCII_RX),
+    True: (_WIDE_RX, _CS_WIDE_RX, _EMAIL_WIDE_RX),
+}
 
 
 def _ts_hits(mm, wide):
@@ -167,8 +263,10 @@ def scan_file(path, all_files=False):
         return []
     with open(path, "rb") as fh:
         with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-            for rx, wide in ((_ASCII_RX, False), (_WIDE_RX, True)):
-                spans = [(m.start(), m.end()) for m in rx.finditer(mm)]
+            for wide in (False, True):
+                spans = []
+                for rx in _RX_BY_ENCODING[wide]:
+                    spans += [(m.start(), m.end()) for m in rx.finditer(mm)]
                 spans += list(_ts_hits(mm, wide))
                 for s, e in sorted(spans):
                     if _allowed(mm, s, e, wide):
@@ -220,8 +318,9 @@ def main():
         return 1
     if not args.quiet:
         print(f"   leak gate clean: {nfiles} files scanned in {what} "
-              f"(ASCII + UTF-16LE, {len(LITERALS)} literals + the "
-              f"100.{TAILSCALE_LO}.0.0/10 sweep)")
+              f"(ASCII + UTF-16LE, "
+              f"{len(LITERALS) + len(CASE_SENSITIVE_LITERALS)} literals + the "
+              f"100.{TAILSCALE_LO}.0.0/10 and e-mail-address sweeps)")
     return 0
 
 
