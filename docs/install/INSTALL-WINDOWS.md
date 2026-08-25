@@ -115,7 +115,13 @@ you launch with `play.bat`, you never touch any of this. With it you get:
 | **AcmeLights** | modern lighting: bloom, day/night bloom scaling, glow lights on portals/lifestones/projectiles, torch flicker, importance-ranked light selection — plus two *stability* services: a memory governor and the "mirror diet" (both exist because the high-res content made the 32-bit client run out of address space in towns; see §9) |
 | **AcmeSky** | volumetric sky: real clouds, star field, atmosphere — replaces the retail sky |
 | **AcmeRagdoll** | creatures ragdoll on death, per-body individualized |
-| **AcmeRedline** | in-game art-annotation: point at wrong-looking art, describe it, and queue a structured report (`redline.jsonl` + screenshot) for the fix pipeline — experimental |
+| **AcmeRedline** | in-game art-annotation: point at wrong-looking art, describe it, and queue a structured report (`redline.jsonl` + screenshot) for the fix pipeline — experimental. **Press F8 or type `/redline` in game to open it**; see §4a |
+
+The pack also contains two **stock Chorizite plugins**, `RmlUi` and `Lua`. They are
+not ours — they are the unmodified upstream releases (RmlUi 0.0.10, Lua 0.0.13),
+and AcmeRedline's window is drawn by RmlUi, which in turn needs Lua. Nothing else
+in the pack uses them. Delete both folders and AcmeRedline still runs, just without
+its window (see §4a).
 
 In the release archive the pack is the `acme-plugins/` subfolder (the dat kit
 files sit at the archive root). Copy `acme-plugins/` wherever you like — the
@@ -132,6 +138,8 @@ C:\Games\Chorizite\plugins\AcmeLights\   each plugin in its own folder
 C:\Games\Chorizite\plugins\AcmeSky\
 C:\Games\Chorizite\plugins\AcmeRagdoll\
 C:\Games\Chorizite\plugins\AcmeRedline\
+C:\Games\Chorizite\plugins\RmlUi\      stock upstream — draws AcmeRedline's window
+C:\Games\Chorizite\plugins\Lua\        stock upstream — RmlUi needs it
 C:\Games\Chorizite\data\logs\log.txt     THE log file (see §10)
 C:\Temp\acdt\lights.cfg                  AcmeLights settings (plain text, hot-reloads while playing)
 ```
@@ -150,6 +158,39 @@ without it the client's own dat-repair machinery can corrupt the ACME dats).
 
 Every visual feature has an off switch in `lights.cfg` (see §8) and each plugin
 can be removed by deleting its folder — the client runs fine with any subset.
+
+### 4a. Opening and closing the redline tool
+
+AcmeRedline is the only plugin in the pack with a window, and it starts closed.
+Two ways in, both in game:
+
+| | |
+|---|---|
+| **F8** | opens and closes the redline window. No chat box needed. |
+| **`/redline`** | same thing, typed into the chat box. The command is swallowed by the plugin — it is never sent to the server. |
+
+While the window is open, clicking in the world **picks** what you click (that is
+the point of the tool), so close it when you want to play normally.
+
+The window has a title bar with an **on/off switch** and a **close (x)**. The
+switch is a real master off, not a hide: it drops the overlay, the mouse picking
+and the Direct3D hooks the world highlight uses, and it is remembered across
+restarts. Full command list:
+
+```
+/redline                 open / close the window (same as F8)
+/redline on              enable the tool
+/redline off             disable it completely
+/redline toggle          flip enabled / disabled
+/redline status          what state is it in, and where is the queue
+/redline author <name>   who your reports are filed under (default "unknown")
+/redline help            the above
+```
+
+`/redline on` works even when the tool is switched off and even if you deleted the
+`RmlUi` and `Lua` folders, so you can never lock yourself out. Without `RmlUi` there
+is no window, but the on-screen overlay, the picking and the report queue all still
+work — the plugin says so once in the log when it starts.
 
 ---
 ---
@@ -380,7 +421,11 @@ Work top to bottom; each step names its cause.
    restart needed: `bloom=0`, `bloomday=0`, `glowlights=0`, `torchlights=0`,
    `selection=0`+restart, `flicker=0`. Sky wrong → remove/rename
    `plugins\AcmeSky`. Death animations wrong → remove `plugins\AcmeRagdoll`.
-   Each plugin folder is independent.
+   The four `Acme*` folders are independent of each other. The one dependency in
+   the pack is AcmeRedline's window: it is drawn by `plugins\RmlUi`, which needs
+   `plugins\Lua`. Remove those two and AcmeRedline keeps working without its
+   window; remove `plugins\AcmeRedline` and nothing else notices. AcmeRedline
+   also has an in-game off switch that needs no restart — `/redline off` (§4a).
 10. **Plugins don't load / your antivirus warned about `acclient.exe` or the
     injector.** The plugin pack injects into the running client (as Decal and
     all AC plugin tools do), which AV/EDR can block. If you want the plugins,
