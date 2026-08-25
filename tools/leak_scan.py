@@ -158,7 +158,30 @@ ALLOWLIST = [
     #   folder -- verified by scanning both trees in both encodings -- and it is as
     #   narrow as an allowlist entry can be: the full directory prefix, not ":\\Users\\".
     "C:\\Users\\Jonathan\\Desktop\\Z\\zzzproject\\",
+    # SigScan.dll (upstream Chorizite runtime component). Its VERSIONINFO
+    # LegalCopyright field reads "Copyright (C) 2009 Aikar@Windower.net" -- the
+    # ORIGINAL AUTHOR'S own attribution, which is exactly what a copyright notice
+    # is for. It is a third party's contact address, not ours, we do not build
+    # this binary, and stripping another author's credit would be wrong even if we
+    # could. Narrow: the full address, never a bare domain or "@".
+    "Aikar@Windower.net",
 ]
+
+# ---- per-file exemption from the E-MAIL SWEEP ONLY --------------------------
+# A third-party attribution notices file is the one place where e-mail addresses
+# are supposed to appear: upstream licences name their authors, and several
+# require that the notice travel verbatim with the binary. Chasing those
+# addresses means either editing someone else's licence text (not acceptable) or
+# re-allowlisting every address each time a dependency bumps.
+#
+# So these filenames are exempt from the e-mail regex AND NOTHING ELSE. They are
+# still scanned, in both encodings, for every literal: our hostnames, our
+# credentials, our tailnet range, ":\\Users\\". A leak of OURS in one of these
+# files still fails the gate. Match is on the basename, case-insensitively.
+EMAIL_EXEMPT_BASENAMES = {
+    "dotnet-third-party-notices.txt",
+    "third-party-notices.txt",
+}
 
 BINARY_EXT = {".dll", ".exe", ".so", ".dylib", ".node", ".bin"}
 # .pdb is deliberately in the skip set. A portable PDB carries a SourceLink
@@ -228,6 +251,36 @@ def _ts_hits(mm, wide):
 _ALLOW_ENC = [(s.encode("ascii"), s.encode("utf-16-le")) for s in ALLOWLIST]
 
 
+_USERS_ENC = {False: b":\\Users\\", True: ":\\Users\\".encode("utf-16-le")}
+
+
+def _is_bare_users_template(buf, start, end, wide):
+    """True for a ":\\Users\\" hit with NO account name after it.
+
+    Chorizite.Injector.dll builds its symbol-cache path from two separate string
+    literals -- "C:\\Users\\" and "\\AppData\\Local\\Temp\\SymbolCache" -- and fills the
+    account name in at run time. Verified by reading the bytes: the first literal
+    is followed immediately by its NUL terminator, so no person's name is in the
+    file at all. A REAL leak is ":\\Users\\<name>\\...", which still fires: this
+    only suppresses the hit when the very next character cannot begin a name.
+
+    Deliberately NOT an allowlist entry: allowlisting the string "C:\\Users\\"
+    would suppress every genuine Windows home-directory path and gut the check.
+    """
+    a = _USERS_ENC[wide]
+    if end - start != len(a) or bytes(buf[start:end]).lower() != a.lower():
+        return False
+    step = 2 if wide else 1
+    nxt = bytes(buf[end:end + step])
+    if len(nxt) < step:
+        return True                      # end of file: nothing follows
+    if wide and nxt[1:2] != b"\x00":
+        return False                     # not a plain ASCII char in UTF-16LE
+    ch = nxt[0:1]
+    # A name cannot start with a terminator, a separator, or a quote.
+    return ch in (b"\x00", b"\\", b"/", b'"', b"'", b"\r", b"\n", b"\t", b" ")
+
+
 def _allowed(buf, start, end, wide):
     """True when the hit lies inside an allowlisted string at this very offset."""
     for asc, wid in _ALLOW_ENC:
@@ -270,13 +323,18 @@ def scan_file(path, all_files=False):
         return []
     with open(path, "rb") as fh:
         with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            email_exempt = (os.path.basename(path).lower()
+                            in EMAIL_EXEMPT_BASENAMES)
             for wide in (False, True):
                 spans = []
-                for rx in _RX_BY_ENCODING[wide]:
+                lit_rx, cs_rx, email_rx = _RX_BY_ENCODING[wide]
+                for rx in (lit_rx, cs_rx) if email_exempt else (lit_rx, cs_rx, email_rx):
                     spans += [(m.start(), m.end()) for m in rx.finditer(mm)]
                 spans += list(_ts_hits(mm, wide))
                 for s, e in sorted(spans):
                     if _allowed(mm, s, e, wide):
+                        continue
+                    if _is_bare_users_template(mm, s, e, wide):
                         continue
                     hits.append(("utf-16le" if wide else "ascii",
                                  s, _context(mm, s, e, wide)))

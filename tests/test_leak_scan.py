@@ -292,6 +292,72 @@ class TestCliContract(ScanCase):
         self.assertEqual("", r.stdout.strip())
 
 
+class TestThirdPartyNoiseSuppression(ScanCase):
+    """
+    The gate exists to stop OUR identity shipping. Three upstream artifacts in
+    the plugin pack tripped it while disclosing nothing about us, and each is
+    handled as narrowly as it can be. These tests pin the narrowness: every
+    suppression here is paired with a case that must still FAIL.
+    """
+
+    # --- ":\\Users\\" with no account name after it is a path TEMPLATE ---
+
+    def test_bare_users_prefix_is_a_template_not_a_leak(self):
+        # Chorizite.Injector.dll: "C:\Users\" and the rest of the path are two
+        # separate literals; the name is filled in at run time.
+        self.assertClean("C:\\Users\\\x00\\AppData\\Local\\Temp\\SymbolCache")
+
+    def test_users_prefix_with_a_real_name_still_leaks(self):
+        self.assertLeaks("C:\\Users\\young\\Desktop\\notes.txt")
+
+    def test_users_prefix_with_a_name_in_utf16_still_leaks(self):
+        self.assertLeaks("C:\\Users\\young\\AppData", encoding="utf-16-le")
+
+    def test_bare_users_template_in_utf16_is_clean(self):
+        self.assertClean("C:\\Users\\\x00", encoding="utf-16-le")
+
+    def test_other_drive_letters_are_still_gated(self):
+        self.assertLeaks("D:\\Users\\someone\\src")
+
+    # --- the third-party author's own attribution ---
+
+    def test_upstream_author_contact_is_allowlisted(self):
+        self.assertClean("Copyright (C) 2009 Aikar@Windower.net")
+
+    def test_a_different_address_at_the_same_domain_still_leaks(self):
+        self.assertLeaks("someoneelse@Windower.net")
+
+    # --- notices files are exempt from the E-MAIL SWEEP ONLY ---
+
+    def test_notices_file_may_carry_upstream_attribution_addresses(self):
+        self.assertClean("jloup@gzip.org  madler@alumni.caltech.edu",
+                         name="dotnet-THIRD-PARTY-NOTICES.TXT")
+
+    def test_notices_exemption_is_case_insensitive_on_the_basename(self):
+        self.assertClean("dotnet@microsoft.com",
+                         name="DOTNET-third-party-NOTICES.txt")
+
+    def test_notices_file_still_fails_on_OUR_identifiers(self):
+        # The exemption is e-mail only. Our hostnames/credentials/range must
+        # still fail the gate inside a notices file.
+        self.assertLeaks("built on buildbox by tailnet1",
+                         name="dotnet-THIRD-PARTY-NOTICES.TXT")
+
+    def test_notices_file_still_fails_on_our_tailnet_address(self):
+        self.assertLeaks("server 100.116.47.66",
+                         name="dotnet-THIRD-PARTY-NOTICES.TXT")
+
+    def test_notices_file_still_fails_on_a_windows_home_path(self):
+        self.assertLeaks("C:\\Users\\young\\build",
+                         name="dotnet-THIRD-PARTY-NOTICES.TXT")
+
+    def test_the_exemption_does_not_generalise_to_other_filenames(self):
+        # Exact basenames only - no suffix matching, or any file could opt out
+        # of the e-mail sweep by renaming itself.
+        self.assertLeaks("jloup@gzip.org",
+                         name="vendor-THIRD-PARTY-NOTICES.TXT")
+
+
 class TestScannerFileHygiene(unittest.TestCase):
     """
     The scanner must stay auditable with the tools people audit it with.
