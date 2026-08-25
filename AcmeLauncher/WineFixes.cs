@@ -44,7 +44,7 @@ namespace AcmeLauncher {
             if (!CheckVideoMemory().Ok) Run("VideoMemorySize=2048", FixVideoMemory);
             if (!CheckDxvkConf(s).Ok && !string.IsNullOrEmpty(s.InstallDir)) {
                 bool exists = File.Exists(Path.Combine(s.InstallDir!, "dxvk.conf"));
-                if (exists || createDxvk) Run("dxvk.conf d3d9.textureMemory = 0", () => FixDxvkConf(s));
+                if (exists || createDxvk) Run("dxvk.conf " + DxvkKey + " = 0, " + DxvkLosableKey + " = False", () => FixDxvkConf(s));
             }
             if (!CheckChoriziteTemp().Ok) Run("created " + ChoriziteTempPath(), FixChoriziteTemp);
             if (!CheckLiveSky().Ok) Run("sky live=0", FixLiveSky);
@@ -76,62 +76,101 @@ namespace AcmeLauncher {
             catch (Exception ex) { return "VideoMemorySize write failed: " + ex.Message; }
         }
 
-        // ---- 2. dxvk.conf (INSTALL-LINUX-WINE.md:371-379) --------------------------------
-        // Required when DXVK's native d3d9.dll is in use; without it the game crashes
-        // outdoors (32-bit texture-paging exhaustion). Harmless when not using DXVK.
+        // ---- 2. dxvk.conf (INSTALL-LINUX-WINE.md, "Advanced: DXVK") ----------------------
+        // Required when DXVK's native d3d9.dll is in use. TWO keys, both load-bearing:
+        //   d3d9.textureMemory = 0             without it the game crashes outdoors
+        //                                      (32-bit texture-paging exhaustion).
+        //   d3d9.countLosableResources = False without it WORLD ENTRY fails. The client
+        //                                      calls IDirect3DDevice9::Reset() with 3
+        //                                      D3DPOOL_DEFAULT resources still alive; DXVK
+        //                                      refuses the reset ("Device reset failed
+        //                                      because device still has alive losable
+        //                                      resources") and the client shows "Could not
+        //                                      initialize Direct3D". Character select works,
+        //                                      so it looks like a server/login problem.
+        //                                      Verified on buildbox 2026-08-25.
+        // Harmless when not using DXVK.
         private const string DxvkKey = "d3d9.textureMemory";
+        private const string DxvkLosableKey = "d3d9.countLosableResources";
+
+        /// <summary>The dxvk.conf settings this release requires, with the symptom each prevents.</summary>
+        private static readonly (string Key, string Value, string Symptom)[] DxvkRequired = {
+            (DxvkKey,        "0",     "the game crashes outdoors under DXVK"),
+            (DxvkLosableKey, "False", "world entry fails with \"Could not initialize Direct3D\" (character select works)"),
+        };
         public static Row CheckDxvkConf(Settings s) {
             var dir = s.InstallDir;
             if (string.IsNullOrEmpty(dir))
                 return new Row { Name = "dxvk-conf", Verdict = "MISSING", Advisory = true, Detail = "install folder not set (Settings.InstallDir in %APPDATA%\\zzpatcher\\settings.json) — cannot locate dxvk.conf" };
             var p = Path.Combine(dir!, "dxvk.conf");
             if (!File.Exists(p))
-                return new Row { Name = "dxvk-conf", Verdict = "MISSING", Advisory = true, Detail = p + " absent — only needed with DXVK's native d3d9.dll, but WITH DXVK and without \"d3d9.textureMemory = 0\" the game crashes outdoors" };
+                return new Row { Name = "dxvk-conf", Verdict = "MISSING", Advisory = true, Detail = p + " absent — only needed with DXVK's native d3d9.dll, but WITH DXVK it must set \"" + DxvkKey + " = 0\" and \"" + DxvkLosableKey + " = False\", or the game crashes outdoors / cannot enter the world" };
             try {
-                foreach (var raw in File.ReadAllLines(p)) {
-                    var line = raw.Trim();
-                    if (line.StartsWith("#") || !line.Contains('=')) continue;
-                    if (!line.Substring(0, line.IndexOf('=')).Trim().Equals(DxvkKey, StringComparison.OrdinalIgnoreCase)) continue;
-                    var val = line.Substring(line.IndexOf('=') + 1).Trim();
-                    return val == "0"
-                        ? new Row { Name = "dxvk-conf", Verdict = "OK", Detail = p + ": d3d9.textureMemory = 0" }
-                        : new Row { Name = "dxvk-conf", Verdict = "WRONG", Detail = $"{p}: d3d9.textureMemory = {val} — must be 0 or the game crashes outdoors under DXVK" };
+                var have = ReadDxvkKeys(p);
+                foreach (var req in DxvkRequired) {
+                    if (!have.TryGetValue(req.Key, out var val))
+                        return new Row { Name = "dxvk-conf", Verdict = "WRONG", Detail = $"{p} exists but lacks \"{req.Key} = {req.Value}\" — required under DXVK or {req.Symptom}" };
+                    if (!val.Equals(req.Value, StringComparison.OrdinalIgnoreCase))
+                        return new Row { Name = "dxvk-conf", Verdict = "WRONG", Detail = $"{p}: {req.Key} = {val} — must be {req.Value} or {req.Symptom}" };
                 }
-                return new Row { Name = "dxvk-conf", Verdict = "WRONG", Detail = p + " exists but lacks \"d3d9.textureMemory = 0\" — required under DXVK" };
+                return new Row { Name = "dxvk-conf", Verdict = "OK", Detail = $"{p}: {DxvkKey} = 0, {DxvkLosableKey} = False" };
             }
             catch (Exception ex) { return new Row { Name = "dxvk-conf", Verdict = "WRONG", Detail = "unreadable: " + ex.Message, Advisory = true }; }
+        }
+
+        /// <summary>Parse dxvk.conf into key/value pairs. First uncommented occurrence of a key
+        /// wins, matching the behaviour this check has always had.</summary>
+        private static Dictionary<string, string> ReadDxvkKeys(string path) {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var raw in File.ReadAllLines(path)) {
+                var line = raw.Trim();
+                if (line.StartsWith("#") || !line.Contains('=')) continue;
+                var k = line.Substring(0, line.IndexOf('=')).Trim();
+                if (k.Length == 0 || d.ContainsKey(k)) continue;
+                d[k] = line.Substring(line.IndexOf('=') + 1).Trim();
+            }
+            return d;
         }
         public static string? FixDxvkConf(Settings s) {
             var dir = s.InstallDir;
             if (string.IsNullOrEmpty(dir)) return "install folder not set — cannot write dxvk.conf";
             var p = Path.Combine(dir!, "dxvk.conf");
             try {
-                if (!File.Exists(p)) { File.WriteAllText(p, DxvkKey + " = 0\n"); return null; }
-                // Patch/append the one key, preserving the file's other lines, the replaced
-                // line's leading whitespace, and the file's DOMINANT line ending.
+                if (!File.Exists(p)) {
+                    var fresh = new System.Text.StringBuilder();
+                    foreach (var req in DxvkRequired) fresh.Append(req.Key).Append(" = ").Append(req.Value).Append('\n');
+                    File.WriteAllText(p, fresh.ToString());
+                    return null;
+                }
+                // Patch/append each required key, preserving the file's other lines, each
+                // replaced line's leading whitespace, and the file's DOMINANT line ending.
                 var text = File.ReadAllText(p);
                 int crlf = 0, lfAll = 0;
                 for (int i = 0; i < text.Length; i++)
                     if (text[i] == '\n') { lfAll++; if (i > 0 && text[i - 1] == '\r') crlf++; }
                 string eol = crlf > 0 && crlf >= lfAll - crlf ? "\r\n" : "\n";
                 var lines = new List<string>(text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None));
-                bool found = false;
-                for (int i = 0; i < lines.Count; i++) {
-                    var t = lines[i].Trim();
-                    if (t.StartsWith("#") || !t.Contains('=')) continue;
-                    if (t.Substring(0, t.IndexOf('=')).Trim().Equals(DxvkKey, StringComparison.OrdinalIgnoreCase)) {
-                        string lead = lines[i].Substring(0, lines[i].Length - lines[i].TrimStart().Length);
-                        lines[i] = lead + DxvkKey + " = 0"; found = true; break;
-                    }
-                }
-                if (!found) {
-                    if (lines.Count > 0 && lines[lines.Count - 1].Length == 0) lines.Insert(lines.Count - 1, DxvkKey + " = 0");
-                    else lines.Add(DxvkKey + " = 0");
-                }
+                foreach (var req in DxvkRequired) SetDxvkLine(lines, req.Key, req.Value);
                 File.WriteAllText(p, string.Join(eol, lines));
                 return null;
             }
             catch (Exception ex) { return "dxvk.conf write failed: " + ex.Message; }
+        }
+
+        /// <summary>Set one key in a dxvk.conf line list: patch the first uncommented occurrence
+        /// in place (keeping its indent), else append. Mirrors the check's first-wins parse.</summary>
+        private static void SetDxvkLine(List<string> lines, string key, string value) {
+            for (int i = 0; i < lines.Count; i++) {
+                var t = lines[i].Trim();
+                if (t.StartsWith("#") || !t.Contains('=')) continue;
+                if (t.Substring(0, t.IndexOf('=')).Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) {
+                    string lead = lines[i].Substring(0, lines[i].Length - lines[i].TrimStart().Length);
+                    lines[i] = lead + key + " = " + value;
+                    return;
+                }
+            }
+            if (lines.Count > 0 && lines[lines.Count - 1].Length == 0) lines.Insert(lines.Count - 1, key + " = " + value);
+            else lines.Add(key + " = " + value);
         }
 
         // ---- 3. plugin temp dir (INSTALL-LINUX-WINE.md:407-408) --------------------------
