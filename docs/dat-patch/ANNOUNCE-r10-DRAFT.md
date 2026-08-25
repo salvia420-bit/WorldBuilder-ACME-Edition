@@ -22,7 +22,7 @@ derived from your own install's assets, plus sculpted dungeon-wall relief,
 4× creature models, and an optional plugin pack (modern lighting, volumetric
 sky, ragdoll deaths).
 
-- Package: `acme-r10.tgz` / `.zip` — sha256 ⟨archive-sha⟩ (⟨archive-size⟩)
+- Package: `acme-r10.tgz` — sha256 `360afafdc46cdf579dc2f40c70e4224a5d1b24a1c47d9bb9a1601b7d98ed2e17` (1,853,169,421 bytes / 1.73 GiB); `acme-r10.zip` — sha256 `0f17689d46729c43e99900a532e94f69cccbd2c6223e8280ed7ccf0fc8894a50` (1,853,154,176 bytes / 1.73 GiB)
 - Patches over: any retail install, or any earlier ACME state. Self-contained,
   not a delta.
 - Needs: your own retail `acclient.exe` — the kit patches it for you, in place,
@@ -60,11 +60,11 @@ installed over your own files:
 
 | file | size | sha256 |
 |---|---|---|
-| `client_portal.dat` | 572,314,624 (546 MiB) | ⟨portal-sha⟩ |
-| `client_highres.dat` | ⟨highres-size⟩ | ⟨highres-sha⟩ |
-| `client_cell_1.dat` | 347,298,304 (331 MiB) | ⟨cell-sha⟩ |
+| `client_portal.dat` | 572,314,624 (546 MiB) | `1c773046594e0c8a07b062a866abd615ac85a4f5769172b726319da2f107a3f6` |
+| `client_highres.dat` | 1,333,604,352 (1.24 GiB) | `b2706d830d9767d12e7dcd017578f30adbd8d662c70699c51f39a1c792fcf5e0` |
+| `client_cell_1.dat` | 347,298,304 (331 MiB) | `2eaf2a84f4f8b4e54b9304a41631647b234cd2303b38084151b3fff826c8dda6` |
 | `play.bat`, `patch-my-client.bat`, `acme-patch-client.ps1`, `acme-patch-client.py`, `kit-manifest.txt`, `INSTALL-WINDOWS.md`, `INSTALL-LINUX-WINE.md`, `SHA256SUMS.txt`, `README.txt` | — | see `SHA256SUMS.txt` |
-| `acme-plugins/` (optional; see below) | ~117 MB | see `SHA256SUMS.txt` |
+| `acme-plugins/` (optional; see below) | 124,258,172 (118 MiB) | see `SHA256SUMS.txt` |
 
 **The split, and why the client patch is required.** Retail's portal dat is
 capped at 2 GiB by its own format. Our high-res records live in
