@@ -27,7 +27,7 @@ namespace AcmeLauncher {
         }
 
         public static List<Row> CheckAll(Settings s) => new List<Row> {
-            CheckVideoMemory(), CheckDxvkConf(s), CheckChoriziteTemp(), CheckLiveSky(),
+            CheckVideoMemory(), CheckKeystoneIme(), CheckDxvkConf(s), CheckChoriziteTemp(), CheckLiveSky(),
         };
 
         /// <summary>Apply every safe fix whose check is non-OK; returns the re-checked rows.
@@ -42,6 +42,7 @@ namespace AcmeLauncher {
                 log?.Invoke(err == null ? "applied: " + success : "apply-FAILED: " + err);
             }
             if (!CheckVideoMemory().Ok) Run("VideoMemorySize=2048", FixVideoMemory);
+            if (!CheckKeystoneIme().Ok) Run(KeystoneImeDll + " disabled (world entry)", FixKeystoneIme);
             if (!CheckDxvkConf(s).Ok && !string.IsNullOrEmpty(s.InstallDir)) {
                 bool exists = File.Exists(Path.Combine(s.InstallDir!, "dxvk.conf"));
                 if (exists || createDxvk) Run("dxvk.conf " + DxvkKey + " = 0, " + DxvkLosableKey + " = False", () => FixDxvkConf(s));
@@ -76,7 +77,55 @@ namespace AcmeLauncher {
             catch (Exception ex) { return "VideoMemorySize write failed: " + ex.Message; }
         }
 
-        // ---- 2. dxvk.conf (INSTALL-LINUX-WINE.md, "Advanced: DXVK") ----------------------
+        // ---- 2. KeystoneIMEUI (the retail client's own IME hook) -------------------------
+        // The retail client ships ~17 support DLLs next to acclient.exe. ONE of them,
+        // KeystoneIMEUI.dll (Keystone's input-method-editor hook), breaks
+        // IDirect3DDevice9::Reset() under Wine: the client enters the world by resetting
+        // the device, the reset fails with 3 D3DPOOL_DEFAULT resources still alive, and
+        // the client puts up "Could not initialize Direct3D. Please ensure that DirectX
+        // 9.0 or higher is installed." Character select renders perfectly first, so it
+        // reads as a login/server fault rather than a graphics one.
+        //
+        // Bisected on the Linux validation box 2026-08-25 across all 17 DLLs: holding back ONLY
+        // KeystoneIMEUI.dll (the other 16 present, Keystone.dll included) enters the world;
+        // putting it back fails. UserPreferences.ini already carries UseIME=False and the
+        // DLL still breaks it, so the pref is NOT a workaround.
+        //
+        // The fix is deliberately NON-DESTRUCTIVE: an empty DllOverrides entry tells Wine
+        // never to load the module, and the user's file stays on disk untouched. That
+        // matters because it is THEIR retail install, not ours to delete from — and the
+        // same install has to keep working if they boot it on Windows.
+        //
+        // Why every Linux user hits this and our own gate did not: the 2026-08-24 wine
+        // ship gate ran from a directory holding only the exe and the dats, with none of
+        // the retail support DLLs. A real user patches over a real install, which has them.
+        private const string KeystoneImeDll = "KeystoneIMEUI";
+        private const string WineDllOverridesKey = @"Software\Wine\DllOverrides";
+
+        public static Row CheckKeystoneIme() {
+            try {
+                using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(WineDllOverridesKey);
+                var v = k?.GetValue(KeystoneImeDll) as string;
+                if (v != null && v.Length == 0)
+                    return new Row { Name = "keystone-ime", Verdict = "OK", Detail = $"HKCU\\{WineDllOverridesKey} {KeystoneImeDll}=\"\" — the IME hook is disabled, so world entry can reset the device" };
+                if (v == null)
+                    return new Row { Name = "keystone-ime", Verdict = "MISSING", Detail = $"{KeystoneImeDll}.dll is not disabled — world entry fails with \"Could not initialize Direct3D\" (character select works first, so it looks like a login problem). Sets {KeystoneImeDll}=\"\" in HKCU\\{WineDllOverridesKey}; your DLL file is left alone" };
+                return new Row { Name = "keystone-ime", Verdict = "WRONG", Detail = $"{KeystoneImeDll}={v} — must be the EMPTY string (disabled) or world entry fails with \"Could not initialize Direct3D\"" };
+            }
+            catch (Exception ex) { return new Row { Name = "keystone-ime", Verdict = "WRONG", Detail = "registry unreadable: " + ex.Message, Advisory = true }; }
+        }
+
+        /// <returns>null on success, else the error message.</returns>
+        public static string? FixKeystoneIme() {
+            try {
+                using var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(WineDllOverridesKey);
+                k.SetValue(KeystoneImeDll, "", Microsoft.Win32.RegistryValueKind.String);
+                return null;
+            }
+            catch (Exception ex) { return KeystoneImeDll + " override write failed: " + ex.Message; }
+        }
+
+        // ---- 3. dxvk.conf (INSTALL-LINUX-WINE.md, "Advanced: DXVK") ----------------------
         // Required when DXVK's native d3d9.dll is in use. TWO keys, both load-bearing:
         //   d3d9.textureMemory = 0             without it the game crashes outdoors
         //                                      (32-bit texture-paging exhaustion).
@@ -173,7 +222,7 @@ namespace AcmeLauncher {
             else lines.Add(key + " = " + value);
         }
 
-        // ---- 3. plugin temp dir (INSTALL-LINUX-WINE.md:407-408) --------------------------
+        // ---- 4. plugin temp dir (INSTALL-LINUX-WINE.md:407-408) --------------------------
         // Wine-only plugin prerequisite #1: the runtime's temp dir must exist or every
         // plugin fails to load. Plain client (the supported posture) doesn't need it.
         public static string ChoriziteTempPath() {
@@ -192,7 +241,7 @@ namespace AcmeLauncher {
             catch (Exception ex) { return "mkdir failed: " + ex.Message; }
         }
 
-        // ---- 4. live-sky guard (INSTALL-LINUX-WINE.md:413-415) ---------------------------
+        // ---- 5. live-sky guard (INSTALL-LINUX-WINE.md:413-415) ---------------------------
         // AcmeSky's LIVE volumetric compositor's D3D11→D3D9 readback faults under Wine/DXVK;
         // the baked sky (live=0) is the proven configuration. Precedence mirrors the plugin
         // EXACTLY (SkyConfig.FromDefaultsAndEnv + Reload): code default live=1 → ACMESKY_LIVE

@@ -526,6 +526,7 @@ namespace AcmeLauncher {
             }
 
             AddRow(WineFixes.CheckVideoMemory, "Set to 2048", WineFixes.FixVideoMemory);
+            AddRow(WineFixes.CheckKeystoneIme, "Disable it", WineFixes.FixKeystoneIme);
             AddRow(() => WineFixes.CheckDxvkConf(s), "Create dxvk.conf", () => WineFixes.FixDxvkConf(s));
             AddRow(WineFixes.CheckChoriziteTemp, "Create", WineFixes.FixChoriziteTemp);
             AddRow(WineFixes.CheckLiveSky, "Set live=0", WineFixes.FixLiveSky);
@@ -543,7 +544,7 @@ namespace AcmeLauncher {
                        "# verify exe patches + dat sizes (KIT-OK = all good):\n" +
                        "python3 acme-patch-client.py --check-kit\n" +
                        "# capture a crash log:\n" +
-                       "WINEPREFIX=~/acwine WINEDEBUG=+seh wine acclient.exe -h <server> -p 9000 -a <acct> -v <pw> -rodat > ~/ac-crash.log 2>&1",
+                       "WINEPREFIX=~/acwine WINEDLLOVERRIDES=\"KeystoneIMEUI=\" WINEDEBUG=+seh wine acclient.exe -h <server> -p 9000 -a <acct> -v <pw> -rodat > ~/ac-crash.log 2>&1",
             };
 
             var inner = new StackPanel();
