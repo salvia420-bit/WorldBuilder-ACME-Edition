@@ -1,4 +1,4 @@
-; Expects VERSION and BUILDPATH variables passed in
+; Expects VERSION and BUILDPATH passed in; OUTDIR is optional (see below)
 ;
 ; Include Modern UI and required libraries
 !include MUI2.nsh
@@ -8,7 +8,8 @@
 
 !define PRODUCT "ACME WorldBuilder"
 !define INSTALLER_NAME "ACME-WorldBuilderInstall"
-; Logo at repo root (same as WorldBuilder.Windows ApplicationIcon)
+; Logo lives next to this script (same file WorldBuilder.Windows uses as its
+; ApplicationIcon, via ..\installer\acme-wblogo.ico)
 !define ICON "acme-wblogo.ico"
 !define COMPANY "ACME"
 !define MUI_ICON "${ICON}"
@@ -17,7 +18,17 @@
 ;-------------------------------- ; General Information
 
 Name "${PRODUCT}"
-OutFile "${INSTALLER_NAME}-${VERSION}.exe"
+
+; Where to write the installer. makensis chdirs to this script's own directory
+; before compiling, so a bare relative OutFile lands in installer/ — while the
+; workflows that consume it (`cp ./ACME-WorldBuilderInstall-*.exe appcast/` and
+; the release upload) look for it at the repo root. The workflows pass
+; -DOUTDIR="${{ github.workspace }}"; the default below keeps a hand-run
+; `makensis installer/Installer.nsi` behaving as it always did.
+!ifndef OUTDIR
+  !define OUTDIR "."
+!endif
+OutFile "${OUTDIR}\${INSTALLER_NAME}-${VERSION}.exe"
 InstallDir "$PROGRAMFILES64\${PRODUCT}"
 InstallDirRegKey HKLM "Software${PRODUCT}" "Install_Dir"
 RequestExecutionLevel admin

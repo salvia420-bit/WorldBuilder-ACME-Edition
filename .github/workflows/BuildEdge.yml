@@ -43,8 +43,44 @@ jobs:
         echo "APP_VERSION=${{ steps.gitversion.outputs.majorMinorPatch }}+${{ steps.gitversion.outputs.commitsSinceVersionSource }}" >> $GITHUB_ENV
 
     - name: Build
-      run: dotnet publish WorldBuilder.Windows/WorldBuilder.Windows.csproj -r win-x64 -p:InformationalVersion=${{ env.APP_VERSION }} -p:Version=${{ env.APP_VERSION }} -p:AssemblyVersion=${{ env.ASSEMBLY_VERSION }}
+      # -p:DebugType=none is a SHIPPING requirement, not a size tweak.
+      #
+      # Two separate leaks come out of debug symbols here:
+      #   1. Installer.nsi packs `File "${BUILDPATH}\*.*"`, unfiltered, so every
+      #      .pdb in the publish directory was installed onto the user's disk.
+      #      A portable PDB carries the full source-document path table.
+      #   2. Directory.Build.props sets PathMap so assemblies embed /_/ instead
+      #      of a real path, and that works for every project EXCEPT the two
+      #      Avalonia ones: Avalonia's XAML compiler rewrites WorldBuilder.dll
+      #      and WorldBuilder.Windows.dll after Roslyn and regenerates their
+      #      RSDS debug directory from the real on-disk .pdb path, undoing the
+      #      mapping. DebugType=none removes that record entirely.
+      #
+      # Cost: no line numbers in release stack traces. Verified: with this flag
+      # the leak gate below passes over the whole publish directory.
+      run: dotnet publish WorldBuilder.Windows/WorldBuilder.Windows.csproj -r win-x64 -p:DebugType=none -p:InformationalVersion=${{ env.APP_VERSION }} -p:Version=${{ env.APP_VERSION }} -p:AssemblyVersion=${{ env.ASSEMBLY_VERSION }}
     
+    # ---------------------------------------------------------------------
+    # Internal-leak gate. Runs on the PUBLISH OUTPUT, between `dotnet publish`
+    # and `makensis`, because that directory is exactly what Installer.nsi packs
+    # (`File "${BUILDPATH}\*.*"` — the whole dir, unfiltered) and therefore
+    # exactly what a user ends up with on disk.
+    #
+    # It is FATAL on purpose. WorldBuilder.Shared.dll shipped a developer's data
+    # mount as UTF-16LE `const string` literals, and WorldBuilder.dll carried the
+    # build machine's home directory in its RSDS debug directory; neither is
+    # visible to an ASCII `grep`, and nothing in this pipeline looked. The
+    # scanner reads raw bytes in both encodings. See tools/leak_scan.py.
+    #
+    # It runs BEFORE the release-mutating steps below (which delete and re-create
+    # the `latest` release), so a leak fails the job without disturbing whatever
+    # is already published.
+    - name: Internal-leak gate (publish output)
+      run: |
+        python3 tools/leak_scan.py \
+          --label "WorldBuilder.Windows win-x64 publish output" \
+          "${{ github.workspace }}/WorldBuilder.Windows/bin/Release/net8.0/win-x64/publish/"
+
     - name: Get Latest Release Tag
       id: get_latest_release
       run: |
@@ -92,9 +128,14 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    # The script lives at installer/Installer.nsi — it was moved there in
+    # 10da18f1 and this line was never updated, so every `Build Edge` run since
+    # has died here. OUTDIR is passed explicitly because makensis chdirs to the
+    # script's directory, which would otherwise drop the .exe in installer/
+    # while the steps below look for it at the workspace root.
     - name: Build installer
       run: |
-          makensis -DVERSION="${{ env.APP_VERSION }}" -DBUILDPATH="${{ github.workspace }}/WorldBuilder.Windows/bin/Release/net8.0/win-x64/publish/" "${{ github.workspace }}/Installer.nsi"
+          makensis -DVERSION="${{ env.APP_VERSION }}" -DOUTDIR="${{ github.workspace }}" -DBUILDPATH="${{ github.workspace }}/WorldBuilder.Windows/bin/Release/net8.0/win-x64/publish/" "${{ github.workspace }}/installer/Installer.nsi"
     
     - name: Generate updated appcast
       run: |
